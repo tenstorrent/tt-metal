@@ -17,8 +17,9 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
+from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensorAssigner
 from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions
-from models.demos.deepseek_v3_b1.weights.cache import CacheConfig, CacheContext, TensorCache
+from models.demos.deepseek_v3_b1.weights.cache import BspmVariant, CacheConfig, CacheContext, TensorCache
 from models.demos.deepseek_v3_b1.weights.prepare import (
     _MTP_LAYER_IDX,
     NUM_ROUTED_EXPERTS,
@@ -35,6 +36,7 @@ from models.demos.deepseek_v3_b1.weights.prepare import (
     prepare_mtp_weights,
     prepare_spec_weights,
 )
+from models.demos.deepseek_v3_b1.weights.transforms.sram_experts import SramExpertCoreGrids, SramHotExpertConfig
 from models.demos.deepseek_v3_b1.weights.upload import Uploadable, two_phase_upload
 
 
@@ -223,6 +225,13 @@ class CacheWeightProvider:
         hf_model_id: str | None = None,
         hf_revision: str = "local",
         schema_version: int = 1,
+        sram_hot_experts: SramHotExpertConfig | None = None,
+        sram_core_grids: SramExpertCoreGrids | None = None,
+        sram_assigner: CompressedTensorAssigner | None = None,
+        worker_l1_size: int | None = None,
+        bspm_dir: Path | None = None,
+        bspm_variant: BspmVariant | str = BspmVariant.B,
+        bspm_budget: float = 3.5,
     ) -> None:
         cache_path = Path(cache_path)
         model_path = Path(model_path)
@@ -233,6 +242,13 @@ class CacheWeightProvider:
         self._schema_version = schema_version
         self._hf_model_id = hf_model_id or model_path.name
         self._hf_revision = hf_revision
+        self._sram_hot_experts = sram_hot_experts
+        self._sram_core_grids = sram_core_grids
+        self._sram_assigner = sram_assigner
+        self._worker_l1_size = worker_l1_size
+        self._bspm_dir = Path(bspm_dir) if bspm_dir is not None else None
+        self._bspm_variant = BspmVariant(bspm_variant)
+        self._bspm_budget = bspm_budget
 
     def _cache_config(self, device: ttnn.MeshDevice) -> CacheConfig:
         context = CacheContext(
@@ -244,10 +260,16 @@ class CacheWeightProvider:
         return CacheConfig(cache=self._cache, context=context)
 
     def _upload_prepared_weights(self, device: ttnn.MeshDevice, host_weights: Uploadable):
+        """Two-phase upload: FD-batched H2D for the FD grid, SD writes for the rest.
+
+        Used by ``load_moe_layer`` / ``load_dense_layer`` after host-staging
+        weights via ``prepare_*_weights(move_to_device=False)``. Tensors
+        already on device (e.g. attn L1 lockstep tensors uploaded eagerly
+        to seed the SRAM hot-expert trim) are passed through unchanged.
+        """
         return two_phase_upload(device, host_weights)
 
     def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
-        # TODO: Re-enable two-phase upload here after fast-dispatch lifecycle is managed globally.
         return prepare_embedding_weights(
             self._state_dict,
             device,
@@ -264,22 +286,37 @@ class CacheWeightProvider:
         )
 
     def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
+        # Iteration 1 (correctness baseline): inline upload (move_to_device=True).
+        # Two-phase upload for routed-DRAM CTs is currently disabled here while
+        # we restore correctness; iteration 2 will re-enable it via deferred
+        # ``ttnn.from_torch(... device=mesh, mesh_mapper=...)`` inside the lockstep
+        # multi-device path (avoids the cache-rewrite Hazards A/B and the
+        # ``allocate + copy_host_to_device_tensor`` byte-equivalence risk).
         host_weights = prepare_moe_layer_weights(
             device,
             self._state_dict,
             layer_id,
             num_routed_experts=NUM_ROUTED_EXPERTS,
-            move_to_device=False,
+            move_to_device=True,
             cache_config=self._cache_config(device),
+            sram_hot_experts=self._sram_hot_experts,
+            sram_core_grids=self._sram_core_grids,
+            sram_assigner=self._sram_assigner,
+            worker_l1_size=self._worker_l1_size,
+            bspm_dir=self._bspm_dir,
+            bspm_variant=self._bspm_variant,
+            bspm_budget=self._bspm_budget,
+            compressed_tp8=True,
         )
         return self._upload_prepared_weights(device, host_weights)
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
+        # See load_moe_layer for iteration-1 rationale.
         host_weights = prepare_dense_layer_weights(
             device,
             self._state_dict,
             layer_id,
-            move_to_device=False,
+            move_to_device=True,
             cache_config=self._cache_config(device),
         )
         return self._upload_prepared_weights(device, host_weights)
@@ -305,6 +342,25 @@ class CacheWeightProvider:
 
 class SyntheticWeightProvider:
     """Create deterministic synthetic embedding and LM head weights in place (no cache)."""
+
+    def __init__(
+        self,
+        *,
+        sram_hot_experts: SramHotExpertConfig | None = None,
+        sram_core_grids: SramExpertCoreGrids | None = None,
+        sram_assigner: CompressedTensorAssigner | None = None,
+        worker_l1_size: int | None = None,
+        bspm_dir: Path | None = None,
+        bspm_variant: BspmVariant | str = BspmVariant.B,
+        bspm_budget: float = 3.5,
+    ) -> None:
+        self._sram_hot_experts = sram_hot_experts
+        self._sram_core_grids = sram_core_grids
+        self._sram_assigner = sram_assigner
+        self._worker_l1_size = worker_l1_size
+        self._bspm_dir = Path(bspm_dir) if bspm_dir is not None else None
+        self._bspm_variant = BspmVariant(bspm_variant)
+        self._bspm_budget = bspm_budget
 
     def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
         g = torch.Generator().manual_seed(42)
@@ -332,7 +388,19 @@ class SyntheticWeightProvider:
     def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
         sd = _build_synthetic_moe_state_dict(layer_id, num_routed_experts=NUM_ROUTED_EXPERTS)
         return prepare_moe_layer_weights(
-            device, sd, layer_id, num_routed_experts=NUM_ROUTED_EXPERTS, move_to_device=True
+            device,
+            sd,
+            layer_id,
+            num_routed_experts=NUM_ROUTED_EXPERTS,
+            move_to_device=True,
+            sram_hot_experts=self._sram_hot_experts,
+            sram_core_grids=self._sram_core_grids,
+            sram_assigner=self._sram_assigner,
+            worker_l1_size=self._worker_l1_size,
+            bspm_dir=self._bspm_dir,
+            bspm_variant=self._bspm_variant,
+            bspm_budget=self._bspm_budget,
+            compressed_tp8=True,
         )
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
@@ -351,11 +419,29 @@ class SyntheticWeightProvider:
 class StateDictWeightProvider:
     """Load real HF safetensors via LazyStateDict and prepare weights at runtime (no tensorbin cache)."""
 
-    def __init__(self, model_path: Path) -> None:
+    def __init__(
+        self,
+        model_path: Path,
+        *,
+        sram_hot_experts: SramHotExpertConfig | None = None,
+        sram_core_grids: SramExpertCoreGrids | None = None,
+        sram_assigner: CompressedTensorAssigner | None = None,
+        worker_l1_size: int | None = None,
+        bspm_dir: Path | None = None,
+        bspm_variant: BspmVariant | str = BspmVariant.B,
+        bspm_budget: float = 3.5,
+    ) -> None:
         model_path = Path(model_path)
         assert model_path.exists(), f"Model path does not exist: {model_path}"
         assert model_path.is_dir(), f"Model path is not a directory: {model_path}"
         self._state_dict = LazyStateDict(model_path)
+        self._sram_hot_experts = sram_hot_experts
+        self._sram_core_grids = sram_core_grids
+        self._sram_assigner = sram_assigner
+        self._worker_l1_size = worker_l1_size
+        self._bspm_dir = Path(bspm_dir) if bspm_dir is not None else None
+        self._bspm_variant = BspmVariant(bspm_variant)
+        self._bspm_budget = bspm_budget
 
     def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
         return prepare_embedding_weights(self._state_dict, device, move_to_device=True)
@@ -374,6 +460,14 @@ class StateDictWeightProvider:
             layer_id,
             num_routed_experts=NUM_ROUTED_EXPERTS,
             move_to_device=True,
+            sram_hot_experts=self._sram_hot_experts,
+            sram_core_grids=self._sram_core_grids,
+            sram_assigner=self._sram_assigner,
+            worker_l1_size=self._worker_l1_size,
+            bspm_dir=self._bspm_dir,
+            bspm_variant=self._bspm_variant,
+            bspm_budget=self._bspm_budget,
+            compressed_tp8=True,
         )
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:

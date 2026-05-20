@@ -89,7 +89,28 @@ enum class SfpuType : std::uint32_t
     square,
     sigmoid,
     silu,
-    abs
+    abs,
+    fill,
+    swiglu,
+    where,
+    unused,
+    lt,
+    gt,
+    le,
+    ge,
+    lt_int,
+    gt_int,
+    le_int,
+    ge_int,
+    mul_int,
+};
+
+enum class BinaryOp : std::uint8_t
+{
+    ADD,
+    SUB,
+    MUL,
+    DIV,
 };
 
 enum class DstSync : std::uint8_t
@@ -112,6 +133,13 @@ enum class StochRndType : std::uint8_t
     Fpu  = 1,
     Pack = 2,
     All  = 3,
+};
+
+enum class PackMode : std::uint8_t
+{
+    Default  = 0,
+    Untilize = 1,
+    Tilize   = 2,
 };
 
 // Packer ReLU modes; encoding matches RELU_MODE (2 bits) in HW.

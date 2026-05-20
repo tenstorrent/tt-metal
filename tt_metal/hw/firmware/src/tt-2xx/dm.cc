@@ -102,7 +102,7 @@ void deassert_trisc() {
 }
 
 thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS] __attribute__((used));
-RemapperAPI g_remapper_configurator __attribute__((used));
+overlay::RemapperAPI g_remapper_configurator __attribute__((used));
 volatile TxnDFBDescriptor g_txn_dfb_descriptor[32] __attribute__((used));
 volatile KernelBarrier g_kernel_barrier __attribute__((used));
 
@@ -211,7 +211,6 @@ extern "C" uint32_t _start1() {
     if (hartid > 0) {
         signal_subordinate_completion();
     } else {  // This is DM0
-        DEVICE_PRINT_INITIALIZE_LOCK();
         risc_init();
         noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
         thread_sync_init();
@@ -320,12 +319,14 @@ extern "C" uint32_t _start1() {
                 }
                 start_subordinate_kernel_run_early(enables);
 
+                // DM0 needs to setup DFBs to program implicit synchronization regardless of whether it runs a kernel or not.
+                uint32_t num_local_dfbs = launch_msg_address->kernel_config.local_cb_mask;
+                setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
+
                 // Run the kernel
-                WAYPOINT("R");
                 int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
+                WAYPOINT("R");
                 if (enables & (1u << index)) {
-                    uint32_t num_local_dfbs = launch_msg_address->kernel_config.local_cb_mask;
-                    setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
                     uint32_t kernel_lma =
                         (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
                     asm("FENCE.i");

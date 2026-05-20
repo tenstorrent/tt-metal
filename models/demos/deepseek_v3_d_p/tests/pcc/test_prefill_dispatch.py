@@ -15,6 +15,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.common.utility_functions import is_wormhole_b0
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
@@ -31,6 +32,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     assert_output_shape,
     validate_dispatch_buffer,
+    validate_dispatch_buffer_pcc,
     validate_dispatch_metadata,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
@@ -93,7 +95,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
     "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
     [
         pytest.param(32, 7168, 16, 4, 4, True, id="pcc"),
-        pytest.param(3200, 7168, 64, 2, 2, False, id="perf_no_pcc"),
+        pytest.param(3200, 7168, 64, 2, 8, False, id="perf_no_pcc"),
     ],
 )
 @pytest.mark.parametrize(
@@ -107,6 +109,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
     [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     ids=["tile", "row_major"],
 )
+@pytest.mark.parametrize("use_fp8_output", [False, True], ids=["bf16_out", "fp8_out"])
 @pytest.mark.parametrize("verbose", [False])
 def test_ttnn_dispatch(
     mesh_device,
@@ -119,6 +122,7 @@ def test_ttnn_dispatch(
     topology,
     use_predictable_data,
     input_layout,
+    use_fp8_output,
     verbose,
     run_pcc_check,
 ):
@@ -126,6 +130,18 @@ def test_ttnn_dispatch(
     num_devices = mesh_device.get_num_devices()
     if num_devices >= 8 and not run_pcc_check and use_predictable_data:
         pytest.skip("8-chip perf only runs with random data")
+
+    # Predictable inputs are torch.arange(...), which produces values up to ~1.8M and
+    # overflows fp8_e4m3fn's ±448 range — overflow encodes as NaN, breaking PCC.
+    # Only exercise the fp8 path with random (N(0,1)) data that fits in range.
+    if use_fp8_output and use_predictable_data:
+        pytest.skip("predictable inputs overflow fp8_e4m3fn range; run fp8 with random data")
+
+    if use_fp8_output and is_wormhole_b0():
+        pytest.skip("fp8 output not supported on Wormhole hardware")
+
+    if use_fp8_output and input_layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("fp8 output not supported with row_major input layout")
 
     torch.manual_seed(42)
 
@@ -182,6 +198,13 @@ def test_ttnn_dispatch(
             num_dispatch_groups=num_dispatch_groups,
         )
         logger.debug("Using RANDOM test data")
+
+    # Clamp inputs to fp8_e4m3fn's finite range so any future scale/seed change can't push
+    # values into the overflow→NaN region. randn(0,1) is already well inside ±448, so this
+    # is a no-op for the current data and a guardrail for later.
+    if use_fp8_output:
+        fp8_info = torch.finfo(torch.float8_e4m3fn)
+        x = x.clamp(min=fp8_info.min, max=fp8_info.max)
 
     logger.debug(f"Input shapes: {x.shape=}, {weights.shape=}, {indices.shape=}")
 
@@ -245,6 +268,7 @@ def test_ttnn_dispatch(
         cluster_axis=sp_axis,
         num_links=num_links,
         topology=topology,
+        fp8_output=use_fp8_output,
     )
 
     # Compute gate outputs (offsets and token counts) before dispatch
@@ -276,7 +300,13 @@ def test_ttnn_dispatch(
 
     # Convert TTNN outputs to torch for comparison
     mesh_composer = get_ep_mesh_composer(mesh_device)
-    tt_out_dispatched = ttnn.to_torch(tt_dispatched, mesh_composer=mesh_composer, dtype=torch.float32)
+    if use_fp8_output:
+        # Device returned uint8 bytes that decode as float8_e4m3fn — widen to fp32 for PCC.
+        tt_out_dispatched = ttnn.to_torch(tt_dispatched, mesh_composer=mesh_composer)
+        assert tt_out_dispatched.dtype == torch.uint8, f"expected uint8 fp8 output, got {tt_out_dispatched.dtype}"
+        tt_out_dispatched = tt_out_dispatched.view(torch.float8_e4m3fn).to(torch.float32)
+    else:
+        tt_out_dispatched = ttnn.to_torch(tt_dispatched, mesh_composer=mesh_composer, dtype=torch.float32)
     tt_out_metadata = ttnn.to_torch(tt_metadata, mesh_composer=mesh_composer)
 
     assert_output_shape(tt_out_dispatched, num_dispatch_groups, dispatch_group_size, "dispatched buffer")
@@ -290,18 +320,32 @@ def test_ttnn_dispatch(
         logger.debug(f"{expert_token_counts.shape=}, {expert_token_counts=}")
         logger.debug(f"{expert_offsets.shape=}, {expert_offsets=}")
 
-    # Verify dispatched data matches reference (each EP rank against its torch reference)
-    buffer_result = validate_dispatch_buffer(
-        torch_dispatched,
-        tt_out_dispatched,
-        expert_region_offsets,
-        expert_token_counts,
-        expert_dispatch_table,
-        num_dispatch_groups,
-        dispatch_group_size,
-        experts_per_chip,
-        verbose=verbose,
-    )
+    # Verify dispatched data matches reference (each EP rank against its torch reference).
+    # FP8 path quantizes the buffer (~3-bit mantissa), so allclose is too tight — use PCC.
+    if use_fp8_output:
+        buffer_result = validate_dispatch_buffer_pcc(
+            torch_dispatched,
+            tt_out_dispatched,
+            expert_region_offsets,
+            expert_token_counts,
+            expert_dispatch_table,
+            num_dispatch_groups,
+            dispatch_group_size,
+            experts_per_chip,
+            verbose=verbose,
+        )
+    else:
+        buffer_result = validate_dispatch_buffer(
+            torch_dispatched,
+            tt_out_dispatched,
+            expert_region_offsets,
+            expert_token_counts,
+            expert_dispatch_table,
+            num_dispatch_groups,
+            dispatch_group_size,
+            experts_per_chip,
+            verbose=verbose,
+        )
 
     metadata_result = validate_dispatch_metadata(
         torch_metadata,

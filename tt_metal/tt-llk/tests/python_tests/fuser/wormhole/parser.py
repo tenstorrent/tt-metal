@@ -16,8 +16,10 @@ from helpers.llk_params import (
     DestSync,
     EltwiseBinaryReuseDestType,
     EnforceFP32Accumulation,
+    L1Accumulation,
     MathFidelity,
     MathOperation,
+    PackerReluType,
     ReduceDimension,
     ReducePool,
     Transpose,
@@ -34,14 +36,19 @@ from pydantic import (
 from .fpu.datacopy import DatacopyFpu
 from .fpu.eltwise import EltwiseFpu
 from .fpu.matmul import MatmulFpu
+from .fpu.matmul_no_mop import MatmulNoMopFpu
 from .fpu.reduce import ReduceFpu
 from .fpu.reduce_block_max import ReduceBlockMaxFpu
+from .fpu.reduce_block_max_runtime import ReduceBlockMaxRuntimeFpu
+from .fpu.sub_bcast_col_custom import SubBcastColCustomFpu
 from .packer.packer import Packer
 from .sfpu.binary import BinarySfpu
 from .sfpu.unary import UnarySfpu
 from .unpacker.matmul import MatmulUnpacker
 from .unpacker.reduce import ReduceUnpacker
 from .unpacker.reduce_block_max import ReduceBlockMaxUnpacker
+from .unpacker.reduce_block_max_runtime import ReduceBlockMaxRuntimeUnpacker
+from .unpacker.sub_bcast_col_custom import SubBcastColCustomUnpacker
 from .unpacker.tilize_a import UnpackerTilizeA
 from .unpacker.unpack_a import UnpackerA
 from .unpacker.unpack_ab import UnpackerAB
@@ -54,6 +61,8 @@ class UnpackerEnum(Enum):
     MatmulUnpacker = MatmulUnpacker
     ReduceUnpacker = ReduceUnpacker
     ReduceBlockMaxUnpacker = ReduceBlockMaxUnpacker
+    ReduceBlockMaxRuntimeUnpacker = ReduceBlockMaxRuntimeUnpacker
+    SubBcastColCustomUnpacker = SubBcastColCustomUnpacker
 
     def to_runtime(self) -> Type:
         return self.value
@@ -72,8 +81,11 @@ class FpuOperationEnum(str, Enum):
     Elwsub = "Elwsub"
     Datacopy = "Datacopy"
     Matmul = "Matmul"
+    MatmulNoMop = "MatmulNoMop"
     Reduce = "Reduce"
     ReduceBlockMax = "ReduceBlockMax"
+    ReduceBlockMaxRuntime = "ReduceBlockMaxRuntime"
+    SubBcastColCustom = "SubBcastColCustom"
 
     def is_eltwise(self) -> bool:
         return self in {
@@ -179,7 +191,10 @@ class FpuMathSchema(BaseModel):
         if self.operation == FpuOperationEnum.Reduce and self.reduce_dim is None:
             raise ValueError(f"Reduce operations require reduce_dim: {ReduceDimension}")
 
-        if self.operation == FpuOperationEnum.ReduceBlockMax:
+        if self.operation in (
+            FpuOperationEnum.ReduceBlockMax,
+            FpuOperationEnum.ReduceBlockMaxRuntime,
+        ):
             if self.reduce_dim is None:
                 self.reduce_dim = ReduceDimension.Row
             elif self.reduce_dim != ReduceDimension.Row:
@@ -223,6 +238,21 @@ class FpuMathSchema(BaseModel):
                 if self.unpacker != UnpackerEnum.ReduceBlockMaxUnpacker:
                     raise ValueError(
                         f"ReduceBlockMax: unpacker must be ReduceBlockMaxUnpacker, got '{self.unpacker.value}'"
+                    )
+            elif self.operation == FpuOperationEnum.ReduceBlockMaxRuntime:
+                if self.unpacker != UnpackerEnum.ReduceBlockMaxRuntimeUnpacker:
+                    raise ValueError(
+                        f"ReduceBlockMaxRuntime: unpacker must be ReduceBlockMaxRuntimeUnpacker, got '{self.unpacker.value}'"
+                    )
+            elif self.operation == FpuOperationEnum.MatmulNoMop:
+                if self.unpacker != UnpackerEnum.MatmulUnpacker:
+                    raise ValueError(
+                        f"MatmulNoMop: unpacker must be MatmulUnpacker, got '{self.unpacker.value}'"
+                    )
+            elif self.operation == FpuOperationEnum.SubBcastColCustom:
+                if self.unpacker != UnpackerEnum.SubBcastColCustomUnpacker:
+                    raise ValueError(
+                        f"SubBcastColCustom: unpacker must be SubBcastColCustomUnpacker, got '{self.unpacker.value}'"
                     )
 
         if self.unpacker == UnpackerEnum.UnpackerTilizeA:
@@ -283,7 +313,7 @@ class FpuMathSchema(BaseModel):
         src_b = operands.get(self.src_b)
 
         if (
-            self.operation == FpuOperationEnum.Matmul
+            self.operation in (FpuOperationEnum.Matmul, FpuOperationEnum.MatmulNoMop)
             and src_a.dimensions[1] != src_b.dimensions[0]
         ):
             raise ValueError("Matmul: incompatible dimensions for src_a and src_b")
@@ -306,8 +336,14 @@ class FpuMathSchema(BaseModel):
             fpu = DatacopyFpu()
         elif self.operation == FpuOperationEnum.Matmul:
             fpu = MatmulFpu()
+        elif self.operation == FpuOperationEnum.MatmulNoMop:
+            fpu = MatmulNoMopFpu()
         elif self.operation == FpuOperationEnum.ReduceBlockMax:
             fpu = ReduceBlockMaxFpu()
+        elif self.operation == FpuOperationEnum.ReduceBlockMaxRuntime:
+            fpu = ReduceBlockMaxRuntimeFpu()
+        elif self.operation == FpuOperationEnum.SubBcastColCustom:
+            fpu = SubBcastColCustomFpu()
         else:
             raise ValueError(f"Unknown FPU operation: {self.operation}")
 
@@ -350,16 +386,16 @@ class FpuMathSchema(BaseModel):
         src_a = operands.get(self.src_a).dimensions
         src_b = operands.get(self.src_b).dimensions
 
-        if self.operation == FpuOperationEnum.Matmul:
+        if self.operation in (FpuOperationEnum.Matmul, FpuOperationEnum.MatmulNoMop):
             return (src_a[0], src_b[1])
 
-        elif self.operation == FpuOperationEnum.Datacopy:
-            return src_a
-
-        elif self.operation == FpuOperationEnum.Reduce:
-            return src_a
-
-        elif self.operation == FpuOperationEnum.ReduceBlockMax:
+        elif self.operation in (
+            FpuOperationEnum.Datacopy,
+            FpuOperationEnum.Reduce,
+            FpuOperationEnum.ReduceBlockMax,
+            FpuOperationEnum.ReduceBlockMaxRuntime,
+            FpuOperationEnum.SubBcastColCustom,
+        ):
             return src_a
 
         elif self.operation.is_eltwise():
@@ -434,6 +470,9 @@ class OperationSchema(BaseModel):
     packer: PackerEnum = PackerEnum.Packer
     dest_sync: Optional[DestSync] = None
     block_size: Annotated[List[int], Field(min_length=2, max_length=2)] = [32, 32]
+    pack_relu: PackerReluType = PackerReluType.NoRelu
+    relu_threshold: float = 0.0
+    pack_l1_accumulation: L1Accumulation = L1Accumulation.No
 
     @field_validator("packer", mode="before")
     @classmethod
@@ -466,11 +505,23 @@ class OperationSchema(BaseModel):
                 f"Block size {self.block_size} exceeds output dimensions {output.dimensions}"
             )
 
+        if (
+            self.pack_l1_accumulation == L1Accumulation.Yes
+            and not output.data_format.supports_l1_accumulation()
+        ):
+            raise ValueError(f"{output.data_format} does not support L1 accumulation")
+
         kwargs = {}
         if self.dest_sync:
             kwargs["dest_sync"] = self.dest_sync
         if self.block_size:
             kwargs["block_size"] = self.block_size
+        if self.pack_relu:
+            kwargs["pack_relu"] = self.pack_relu
+        if self.relu_threshold:
+            kwargs["relu_threshold"] = self.relu_threshold
+        if self.pack_l1_accumulation:
+            kwargs["pack_l1_accumulation"] = self.pack_l1_accumulation
 
         return FusedOperation(
             math=ComputePipeline(math_ops, self.packer.to_runtime()),

@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_uniform ${LIB_TYPE})
 add_library(TTNN::Ops::Uniform ALIAS ttnn_op_uniform)
 
@@ -27,9 +29,7 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        device/uniform_device_operation.cpp
-        device/uniform_program_factory.cpp
-        uniform.cpp
+        ${TTNN_OP_UNIFORM_SRCS}
 )
 
 target_include_directories(ttnn_op_uniform PRIVATE ${FixmeOpIncDirs})

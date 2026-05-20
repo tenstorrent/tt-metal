@@ -81,7 +81,6 @@ def create_single_galaxy_deepseek_pipeline_configuration(
     def stage_0(device: ttnn.MeshDevice) -> StageKind:
         return EmbeddingStage(
             weight_provider.load_embedding(device),
-            forward_metadata=True,
             host_loopback=host_loopback,
         )
 
@@ -162,7 +161,7 @@ def create_single_pod_pipeline_configuration(
     fwd_payload = PassthroughPayload.ACTIVATION_W_TOKEN_META if enable_mtp else PassthroughPayload.TOKEN
 
     def stage_0(device: ttnn.MeshDevice) -> StageKind:
-        return EmbeddingStage(weight_provider.load_embedding(device), forward_metadata=True)
+        return EmbeddingStage(weight_provider.load_embedding(device))
 
     def stage_14(device: ttnn.MeshDevice) -> StageKind:
         mtp_weights = weight_provider.load_mtp(device) if enable_mtp else None
@@ -179,7 +178,6 @@ def create_single_pod_pipeline_configuration(
         return lambda d: DenseDecoderStage(
             weights=weight_provider.load_dense_layer(layer_id=layer_id, device=d),
             layer_idx=layer_id,
-            forward_metadata=True,
         )
 
     def _decoder_stage(
@@ -191,7 +189,6 @@ def create_single_pod_pipeline_configuration(
         return lambda d: MoEDecoderStage(
             weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d),
             layer_idx=layer_id,
-            forward_metadata=True,
             upstream_fifo_pages=upstream_fifo_pages,
             downstream_fifo_pages=downstream_fifo_pages,
         )
@@ -208,10 +205,6 @@ def create_single_pod_pipeline_configuration(
         14: stage_14,
         15: lambda d: PassthroughStage(fwd_payload),
     }
-    if enable_mtp:
-        stage_factories[13] = _decoder_stage(
-            moe_layer_id if moe_layer_id is not None else 12,
-        )
     return PipelineConfiguration(stage_factories)
 
 
@@ -221,6 +214,7 @@ def create_single_pod_spec_decode_pipeline_configuration(
     fp32_dest_acc_en: bool = True,
     persistent_mode: bool = True,
     enable_mtp: bool = False,
+    enable_speculative_decode: bool = True,
     dense_layer_id_override: int | None = None,
     moe_layer_id_override: int | None = None,
     num_slots: int = 64,
@@ -237,7 +231,9 @@ def create_single_pod_spec_decode_pipeline_configuration(
             embedding_weights=weight_provider.load_embedding(device),
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
-            spec_weights=weight_provider.load_spec(device),
+            spec_weights=weight_provider.load_spec(device)
+            if enable_speculative_decode
+            else weight_provider.load_lm_head(device),
         )
 
     def stage_14(device: ttnn.MeshDevice) -> StageKind:
@@ -251,12 +247,14 @@ def create_single_pod_spec_decode_pipeline_configuration(
             embedding_weights=weight_provider.load_embedding(device),
         )
 
+    def passthrough_stage(device: ttnn.MeshDevice) -> StageKind:
+        return PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
+
     def _dense_stage(layer_id: int):
         return lambda d: DenseDecoderStage(
             weights=weight_provider.load_dense_layer(layer_id=layer_id, device=d),
             layer_idx=layer_id,
             num_slots=num_slots,
-            forward_metadata=True,
         )
 
     def _decoder_stage(
@@ -269,7 +267,6 @@ def create_single_pod_spec_decode_pipeline_configuration(
             weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d),
             layer_idx=layer_id,
             num_slots=num_slots,
-            forward_metadata=True,
             upstream_fifo_pages=upstream_fifo_pages,
             downstream_fifo_pages=downstream_fifo_pages,
         )
@@ -283,11 +280,15 @@ def create_single_pod_spec_decode_pipeline_configuration(
         2: _dense_stage(dense_ids[1]),
         3: _dense_stage(dense_ids[2]),
         **{i: _decoder_stage(moe_layer_id if moe_layer_id is not None else i - 1) for i in range(4, 14)},
-        14: stage_14,
-        15: _decoder_stage(61),
     }
     if enable_mtp:
         stage_factories[13] = _decoder_stage(moe_layer_id if moe_layer_id is not None else 12)
+    if enable_speculative_decode:
+        stage_factories[14] = stage_14
+        stage_factories[15] = _decoder_stage(61)
+    else:
+        stage_factories[14] = passthrough_stage
+        stage_factories[15] = passthrough_stage
     return PipelineConfiguration(stage_factories)
 
 
@@ -344,6 +345,7 @@ def create_sp4_pipeline_configuration(
     fp32_dest_acc_en: bool = True,
     persistent_mode: bool = True,
     enable_mtp: bool = False,
+    enable_speculative_decode: bool = True,
     dense_layer_id_override: int | None = None,
     moe_layer_id_override: int | None = None,
     num_slots: int = 64,
@@ -360,7 +362,9 @@ def create_sp4_pipeline_configuration(
             embedding_weights=weight_provider.load_embedding(device),
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
-            spec_weights=weight_provider.load_spec(device),
+            spec_weights=weight_provider.load_spec(device)
+            if enable_speculative_decode
+            else weight_provider.load_lm_head(device),
         )
 
     def stage_62(device: ttnn.MeshDevice) -> StageKind:
@@ -374,12 +378,14 @@ def create_sp4_pipeline_configuration(
             embedding_weights=weight_provider.load_embedding(device),
         )
 
+    def passthrough_stage(device: ttnn.MeshDevice) -> StageKind:
+        return PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
+
     def _dense_stage(layer_id: int):
         return lambda d: DenseDecoderStage(
             weights=weight_provider.load_dense_layer(layer_id=layer_id, device=d),
             layer_idx=layer_id,
             num_slots=num_slots,
-            forward_metadata=True,
         )
 
     def _decoder_stage(
@@ -392,7 +398,6 @@ def create_sp4_pipeline_configuration(
             weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d),
             layer_idx=layer_id,
             num_slots=num_slots,
-            forward_metadata=True,
             upstream_fifo_pages=upstream_fifo_pages,
             downstream_fifo_pages=downstream_fifo_pages,
         )
@@ -406,11 +411,15 @@ def create_sp4_pipeline_configuration(
         2: _dense_stage(dense_ids[1]),
         3: _dense_stage(dense_ids[2]),
         **{i: _decoder_stage(moe_layer_id if moe_layer_id is not None else i - 1) for i in range(4, 62)},
-        62: stage_62,
-        63: _decoder_stage(61),
     }
     if enable_mtp:
         stage_factories[61] = _decoder_stage(60)
+    if enable_speculative_decode:
+        stage_factories[62] = stage_62
+        stage_factories[63] = _decoder_stage(61)
+    else:
+        stage_factories[62] = passthrough_stage
+        stage_factories[63] = passthrough_stage
     return PipelineConfiguration(stage_factories)
 
 
@@ -421,6 +430,7 @@ def create_pipeline_configuration_from_num_procs(
     fp32_dest_acc_en: bool = True,
     persistent_mode: bool = True,
     enable_mtp: bool = False,
+    enable_speculative_decode: bool = True,
     dense_layer_id_override: int | None = None,
     moe_layer_id_override: int | None = None,
     num_slots: int = 64,
@@ -434,12 +444,14 @@ def create_pipeline_configuration_from_num_procs(
             enable_mtp=enable_mtp,
         )
     if num_procs == 16:
-        assert enable_mtp, "16-proc pipeline currently requires enable_mtp=True and uses the spec decode topology"
+        if enable_speculative_decode:
+            assert enable_mtp, "16-proc pipeline currently requires enable_mtp=True and uses the spec decode topology"
         return create_single_pod_spec_decode_pipeline_configuration(
             weight_provider,
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
             enable_mtp=enable_mtp,
+            enable_speculative_decode=enable_speculative_decode,
             dense_layer_id_override=dense_layer_id_override,
             moe_layer_id_override=moe_layer_id_override,
             num_slots=num_slots,
@@ -450,6 +462,7 @@ def create_pipeline_configuration_from_num_procs(
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
             enable_mtp=enable_mtp,
+            enable_speculative_decode=enable_speculative_decode,
             dense_layer_id_override=dense_layer_id_override,
             moe_layer_id_override=moe_layer_id_override,
             num_slots=num_slots,

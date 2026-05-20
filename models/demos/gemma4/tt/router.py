@@ -2,13 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Gemma4 Router: RMSNorm -> scale -> linear -> softmax -> topk -> normalize -> per_expert_scale -> scatter
+Gemma4 Router: RMSNorm -> scale -> linear -> softmax -> topk -> sum-normalize -> per_expert_scale -> scatter
 
 Fully on-device, trace-compatible. Returns dense routing weights [1,1,S,E] on device for sparse_matmul.
-Gemma4 uses softmax-THEN-topk (opposite of GPT-OSS).
-
-Following gpt_oss topk.py pattern: normalize via softmax on top-k subset,
-scatter into dense tensor on device, per_expert_scale via broadcast mul.
+Gemma4 uses softmax-THEN-topk (opposite of GPT-OSS), and sum-normalizes the
+top-k weights linearly (NOT a second softmax — that would diverge from HF).
 """
 
 
@@ -19,7 +17,7 @@ from models.demos.gemma4.utils.substate import substate
 
 
 class Gemma4Router:
-    def __init__(self, mesh_device, hf_config, state_dict, tensor_cache_path=None):
+    def __init__(self, mesh_device, hf_config, state_dict, tensor_cache_path=None, dtype=ttnn.bfloat16):
         self.mesh_device = mesh_device
         self.num_experts = hf_config.num_experts
         self.top_k = hf_config.top_k_experts
@@ -46,6 +44,14 @@ class Gemma4Router:
         is_mesh = hasattr(mesh_device, "shape")
         replicate_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
 
+        # Tag the router proj cache filename with its dtype so flipping
+        # ``router`` precision in precision_overrides.json doesn't reuse a
+        # stale cache. ``scale`` and ``per_expert_scale`` are tiny and stay
+        # at bfloat16 — no dtype suffix needed.
+        from models.demos.gemma4.tt.precision import dtype_to_str
+
+        dtype_suffix = f"_{dtype_to_str(dtype)}"
+
         self.scale = ttnn.as_tensor(
             scale_weight,
             device=mesh_device,
@@ -59,10 +65,10 @@ class Gemma4Router:
         self.proj_weight = ttnn.as_tensor(
             proj_weight,
             device=mesh_device,
-            dtype=ttnn.bfloat16,
+            dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=replicate_mapper,
-            cache_file_name=get_cache_file_name(tensor_cache_path, "proj.weight"),
+            cache_file_name=get_cache_file_name(tensor_cache_path, f"proj.weight{dtype_suffix}"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
@@ -109,8 +115,12 @@ class Gemma4Router:
         # 5. TopK — on device → values [1,1,S,k], indices [1,1,S,k]
         top_k_values, top_k_indices = ttnn.topk(router_probs, k=self.top_k, dim=-1)
 
-        # 6. Normalize top-k weights via softmax on the subset (gpt_oss pattern)
-        top_k_values = ttnn.softmax(top_k_values, dim=-1)
+        # 6. Sum-normalize top-k weights so they sum to 1 per token. HF Gemma4
+        # divides by the sum here; a second softmax would compress the
+        # distribution nonlinearly and diverge from the reference.
+        top_k_sum = ttnn.sum(top_k_values, dim=-1, keepdim=True)
+        top_k_values = ttnn.div(top_k_values, top_k_sum)
+        top_k_sum.deallocate(True)
 
         # 7. Scatter into dense [1,1,S,E] — fully on device
         dense_routing = ttnn.scatter(

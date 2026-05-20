@@ -24,7 +24,7 @@
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/arch.hpp>
 #include "impl/kernels/kernel.hpp"
-#include <tt-metalium/experimental/host_api.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher waypoints.
@@ -55,9 +55,6 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    Program program = Program();
-    workload.add_program(device_range, std::move(program));
-    auto& program_ = workload.get_programs().at(device_range);
     auto* device = mesh_device->get_devices()[0];
     const auto& hal = MetalContext::instance().hal();
     const bool is_quasar = hal.get_arch() == tt::ARCH::QUASAR;
@@ -89,80 +86,116 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     uint32_t delay_cycles = clk_mhz * 3000000;  // 3 seconds - enough for watcher to capture waypoint
     const std::vector<uint32_t> active_eth_args = {delay_cycles};
 
-    // Create kernels for TENSIX cores
+    bool has_eth_cores = !device->get_active_ethernet_cores(true).empty();
+    bool has_idle_eth_cores = fixture->IsSlowDispatch() && !device->get_inactive_ethernet_cores().empty();
+
+    Program program = Program();
+
+    constexpr const char* DM_KERNEL_NAME = "wp_dm";
+    constexpr const char* COMPUTE_KERNEL_NAME = "wp_compute";
+
     if (is_quasar) {
-        auto num_dms = hal.get_processor_types_count(HalProgrammableCoreType::TENSIX, 0);
-        auto dm_kid = tt::tt_metal::experimental::quasar::CreateKernel(
-            program_,
-            kernel_path,
-            CoreRange(xy_start, xy_end),
-            tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = num_dms});
-        auto compute_kid = tt::tt_metal::experimental::quasar::CreateKernel(
-            program_,
-            kernel_path,
-            CoreRange(xy_start, xy_end),
-            tt::tt_metal::experimental::quasar::QuasarComputeConfig{.num_threads_per_cluster = 4});
-        SetCommonRuntimeArgs(program_, dm_kid, tensix_args);
-        SetCommonRuntimeArgs(program_, compute_kid, tensix_args);
+        // On Quasar, kernel runs on the 6 user DMs (DM2..DM7). DM0/DM1 are reserved for internal use.
+        constexpr uint32_t kQuasarUserDmCores = 6;
+        auto core_range = CoreRange(xy_start, xy_end);
+        experimental::metal2_host_api::KernelSpec dm_spec{
+            .unique_id = DM_KERNEL_NAME,
+            .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel_path},
+            .num_threads = kQuasarUserDmCores,
+            .runtime_arguments_schema = {.named_common_runtime_args = {"sync_flag_addr"}},
+            .config_spec =
+                experimental::metal2_host_api::DataMovementConfiguration{
+                    .gen2_data_movement_config =
+                        experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        };
+        experimental::metal2_host_api::KernelSpec compute_spec{
+            .unique_id = COMPUTE_KERNEL_NAME,
+            .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel_path},
+            .num_threads = 4,
+            .runtime_arguments_schema = {.named_common_runtime_args = {"sync_flag_addr"}},
+            .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+        };
+        experimental::metal2_host_api::WorkUnitSpec wu{
+            .unique_id = "main",
+            .kernels = {DM_KERNEL_NAME, COMPUTE_KERNEL_NAME},
+            .target_nodes = experimental::metal2_host_api::NodeRange{core_range},
+        };
+        experimental::metal2_host_api::ProgramSpec spec{
+            .program_id = "watcher_waypoints",
+            .kernels = {dm_spec, compute_spec},
+            .work_units = {wu},
+        };
+        program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+
+        experimental::metal2_host_api::ProgramRunParams params;
+        params.kernel_run_params = {
+            {.kernel_spec_name = DM_KERNEL_NAME, .named_common_runtime_args = {{"sync_flag_addr", tensix_sync_addr}}},
+            {.kernel_spec_name = COMPUTE_KERNEL_NAME,
+             .named_common_runtime_args = {{"sync_flag_addr", tensix_sync_addr}}},
+        };
+        experimental::metal2_host_api::SetProgramRunParameters(program, params);
+        workload.add_program(device_range, std::move(program));
     } else {
         auto brisc_kid = CreateKernel(
-            program_,
+            program,
             kernel_path,
             CoreRange(xy_start, xy_end),
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
         auto ncrisc_kid = CreateKernel(
-            program_,
+            program,
             kernel_path,
             CoreRange(xy_start, xy_end),
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
-        auto trisc_kid = CreateKernel(program_, kernel_path, CoreRange(xy_start, xy_end), ComputeConfig{});
-        SetCommonRuntimeArgs(program_, brisc_kid, tensix_args);
-        SetCommonRuntimeArgs(program_, ncrisc_kid, tensix_args);
-        SetCommonRuntimeArgs(program_, trisc_kid, tensix_args);
-    }
+        auto trisc_kid = CreateKernel(program, kernel_path, CoreRange(xy_start, xy_end), ComputeConfig{});
+        SetCommonRuntimeArgs(program, brisc_kid, tensix_args);
+        SetCommonRuntimeArgs(program, ncrisc_kid, tensix_args);
+        SetCommonRuntimeArgs(program, trisc_kid, tensix_args);
 
-    // Create kernels for ethernet cores
-    bool has_eth_cores = !device->get_active_ethernet_cores(true).empty();
-    bool has_idle_eth_cores = fixture->IsSlowDispatch() && !device->get_inactive_ethernet_cores().empty();
+        if (has_eth_cores) {
+            std::set<CoreRange> ranges;
+            for (const auto& core : device->get_active_ethernet_cores(true)) {
+                ranges.insert(CoreRange(core, core));
+            }
+            // Active ERISC: pass delay_cycles for timed wait (can't block forever due to tunneling)
+            auto kid =
+                CreateKernel(program, kernel_path, ranges, tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});
+            SetCommonRuntimeArgs(program, kid, active_eth_args);
+        }
 
-    if (has_eth_cores) {
-        std::set<CoreRange> ranges;
-        for (const auto& core : device->get_active_ethernet_cores(true)) {
-            ranges.insert(CoreRange(core, core));
+        if (has_idle_eth_cores) {
+            std::set<CoreRange> ranges;
+            const std::vector<uint32_t> idle_eth_args = {idle_eth_sync_addr};
+            for (const auto& core : device->get_inactive_ethernet_cores()) {
+                ranges.insert(CoreRange(core, core));
+                tt::tt_metal::detail::WriteToDeviceL1(device, core, idle_eth_sync_addr, zero_data, CoreType::ETH);
+            }
+            // Create kernel for each idle ETH processor (use HAL to get count)
+            uint32_t num_idle_eth_processors = hal.get_num_risc_processors(HalProgrammableCoreType::IDLE_ETH);
+            for (uint32_t proc_id = 0; proc_id < num_idle_eth_processors; proc_id++) {
+                auto processor = (proc_id == 0) ? DataMovementProcessor::RISCV_0 : DataMovementProcessor::RISCV_1;
+                auto kid = CreateKernel(
+                    program,
+                    kernel_path,
+                    ranges,
+                    tt_metal::EthernetConfig{
+                        .eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .processor = processor});
+                SetCommonRuntimeArgs(program, kid, idle_eth_args);
+            }
         }
-        // Active ERISC: pass delay_cycles for timed wait (can't block forever due to tunneling)
-        auto kid = CreateKernel(program_, kernel_path, ranges, tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});
-        SetCommonRuntimeArgs(program_, kid, active_eth_args);
-    }
-
-    if (has_idle_eth_cores) {
-        std::set<CoreRange> ranges;
-        const std::vector<uint32_t> idle_eth_args = {idle_eth_sync_addr};
-        for (const auto& core : device->get_inactive_ethernet_cores()) {
-            ranges.insert(CoreRange(core, core));
-            tt::tt_metal::detail::WriteToDeviceL1(device, core, idle_eth_sync_addr, zero_data, CoreType::ETH);
-        }
-        // Create kernel for each idle ETH processor (use HAL to get count)
-        uint32_t num_idle_eth_processors = hal.get_num_risc_processors(HalProgrammableCoreType::IDLE_ETH);
-        for (uint32_t proc_id = 0; proc_id < num_idle_eth_processors; proc_id++) {
-            auto processor = (proc_id == 0) ? DataMovementProcessor::RISCV_0 : DataMovementProcessor::RISCV_1;
-            auto kid = CreateKernel(
-                program_,
-                kernel_path,
-                ranges,
-                tt_metal::EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .processor = processor});
-            SetCommonRuntimeArgs(program_, kid, idle_eth_args);
-        }
+        workload.add_program(device_range, std::move(program));
     }
 
     // Dispatch non-blocking: kernels post waypoint then spin on sync flag
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 
-    // Build poll patterns and wait for waypoints to appear
+    // Build poll patterns and wait for waypoints to appear.
+    // On Quasar, slots 0/1 (reserved DM0/DM1) post a non-AAAA status (e.g. " NTW,  W1,") before
+    // the first user AAAA. Glob between ": " and the waypoint absorbs that prefix; it matches
+    // empty on non-Quasar where AAAA is the very first status field.
     std::vector<std::string> poll_strings;
     for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
-            poll_strings.push_back(fmt::format("worker core(x={:2},y={:2})*: {}", x, y, waypoint));
+            poll_strings.push_back(fmt::format("worker core(x={:2},y={:2})*: *{}", x, y, waypoint));
         }
     }
     if (has_eth_cores) {
@@ -202,27 +235,38 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     }
     distributed::Finish(mesh_device->mesh_command_queue());
 
-    // Get processor counts from HAL and build expected waypoint strings
+    // Get processor counts from HAL and build expected waypoint strings.
+    // On Quasar, DM0/DM1 are reserved for internal use and don't post a user waypoint,
+    // so the expected per-tensix waypoint count drops by 2.
     uint32_t num_tensix = hal.get_num_risc_processors(HalProgrammableCoreType::TENSIX);
+    if (is_quasar) {
+        num_tensix -= 2;
+    }
     uint32_t num_idle_eth = hal.get_num_risc_processors(HalProgrammableCoreType::IDLE_ETH);
     std::string tensix_waypoints = build_waypoint_string(num_tensix);
     std::string idle_eth_waypoints = build_waypoint_string(num_idle_eth);
 
     log_info(tt::LogTest, "Verifying: {} waypoints/TENSIX, 1/active ETH, {}/idle ETH", num_tensix, num_idle_eth);
 
-    // Verify waypoints with device ID and virtual coordinates
+    // Verify waypoints with device ID and virtual coordinates.
+    // On Quasar, the first two 4-wide status fields belong to the reserved DM0/DM1 (e.g. " NTW",
+    // "  W1") and do not show the AAAA waypoint. Use four '?' wildcards per reserved slot to
+    // skip them and anchor the literal AAAA waypoints right after.
+    const std::string tensix_status_prefix = is_quasar ? "????,????," : "";
     auto check_core = [&](const CoreCoord& logical_core,
                           const CoreCoord& virtual_core,
                           const std::string& type,
-                          const std::string& wp) {
+                          const std::string& wp,
+                          const std::string& status_prefix) {
         std::string expected = fmt::format(
-            "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {}*rmsg:*",
+            "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {}{}*rmsg:*",
             device->id(),
             type,
             logical_core.x,
             logical_core.y,
             virtual_core.x,
             virtual_core.y,
+            status_prefix,
             wp);
         bool found = FileContainsAllStringsInOrder(fixture->log_file_name, {expected});
         EXPECT_TRUE(found) << "Missing waypoint log for " << type << " core (" << logical_core.x << ","
@@ -233,19 +277,19 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
             CoreCoord logical_core = {x, y};
             CoreCoord virtual_core = device->worker_core_from_logical_core(logical_core);
-            check_core(logical_core, virtual_core, "worker", tensix_waypoints);
+            check_core(logical_core, virtual_core, "worker", tensix_waypoints, tensix_status_prefix);
         }
     }
     if (has_eth_cores) {
         for (const auto& core : device->get_active_ethernet_cores(true)) {
             CoreCoord virtual_core = device->ethernet_core_from_logical_core(core);
-            check_core(core, virtual_core, "acteth", waypoint);
+            check_core(core, virtual_core, "acteth", waypoint, "");
         }
     }
     if (has_idle_eth_cores) {
         for (const auto& core : device->get_inactive_ethernet_cores()) {
             CoreCoord virtual_core = device->ethernet_core_from_logical_core(core);
-            check_core(core, virtual_core, "idleth", idle_eth_waypoints);
+            check_core(core, virtual_core, "idleth", idle_eth_waypoints, "");
         }
     }
 }

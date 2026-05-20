@@ -63,7 +63,6 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
     static constexpr std::uint32_t unpack_srcb = TT_OP_UNPACR(SrcB, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr std::uint32_t unpack_srca_transpose =
         TT_OP_UNPACR(SrcA, 0b10 /*This is an inc of 2, which is meant to be num_faces_c_dim*/, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    [[maybe_unused]] const std::uint32_t srca_end_op = TT_OP_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 1, 0b0001);
 
     const std::uint32_t outerloop = transpose_of_faces ? num_faces_c_dim : num_faces_r_dim;
     const std::uint32_t innerloop = transpose_of_faces ? num_faces_r_dim : num_faces_c_dim;
@@ -205,12 +204,46 @@ inline void _llk_unpack_AB_uninit_(const ckernel::TensorShape unpA_tensor_shape,
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @param address_a: L1 memory address of source A tile
  * @param address_b: L1 memory address of source B tile
+ * @param bcast_row_idx: Row index within source B tile for ROW broadcast
+ * @param srcb_format: Source B data format used to calculate ROW broadcast address offset
  */
 
 template <BroadcastType BType = BroadcastType::NONE>
-inline void _llk_unpack_AB_(const std::uint32_t address_a, const std::uint32_t address_b)
+inline void _llk_unpack_AB_(
+    const std::uint32_t address_a,
+    std::uint32_t address_b,
+    [[maybe_unused]] const std::uint32_t bcast_row_idx = 0,
+    [[maybe_unused]] const std::uint32_t srcb_format   = 0)
 {
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111); // reset counters
+
+    if constexpr (BType == BroadcastType::ROW)
+    {
+        if (bcast_row_idx > 0)
+        {
+            // Row broadcast reads a full 32-element row, which spans two faces:
+            //   Row 0: Face0 row 0 (cols 0-15) + Face1 row 0 (cols 16-31)
+            //   Row 31: Face2 row 15 (cols 0-15) + Face3 row 15 (cols 16-31)
+            //
+            // Within each face, rows are stored contiguously.
+            const std::uint32_t bytes_per_row_in_face = SCALE_DATUM_SIZE(srcb_format, FACE_WIDTH);
+            const std::uint32_t bytes_per_face        = SCALE_DATUM_SIZE(srcb_format, FACE_WIDTH * FACE_HEIGHT);
+
+            std::uint32_t row_offset_bytes;
+            if (bcast_row_idx < FACE_HEIGHT)
+            {
+                // Rows 0-15 are in Face 0/1. Offset to the row within Face 0.
+                row_offset_bytes = bcast_row_idx * bytes_per_row_in_face;
+            }
+            else
+            {
+                // Rows 16-31 are in Face 2/3. Skip first two faces, then offset to the row within Face 2.
+                row_offset_bytes = 2 * bytes_per_face + (bcast_row_idx - FACE_HEIGHT) * bytes_per_row_in_face;
+            }
+
+            address_b += row_offset_bytes >> 4;
+        }
+    }
 
     // Program srcA and srcB base addresses
     volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer(); // get pointer to registers for current state ID

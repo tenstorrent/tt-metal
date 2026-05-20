@@ -5,13 +5,28 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #ifdef ARCH_QUASAR
-#include "experimental/dataflow_buffer.h"
-#include "experimental/endpoints.h"
-#include "experimental/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc.h"
+#include "experimental/kernel_args.h"
 #endif
 
 void kernel_main() {
-    uint32_t src0_addr            = get_arg_val<uint32_t>(0);
+#ifdef ARCH_QUASAR
+    uint32_t src0_addr = get_arg(args::src0_addr);
+    uint32_t src0_dram_bank_id = get_arg(args::src0_dram_bank_id);
+    uint32_t src1_addr = get_arg(args::src1_addr);
+    uint32_t src1_dram_bank_id = get_arg(args::src1_dram_bank_id);
+    uint32_t num_blocks = get_arg(args::num_blocks);
+
+    uint32_t in0_block_tile_cnt = get_arg(args::in0_block_tile_cnt);
+    uint32_t in1_block_tile_cnt = get_arg(args::in1_block_tile_cnt);
+    uint32_t in0_block_size_bytes = get_arg(args::in0_block_size_bytes);
+    uint32_t in1_block_size_bytes = get_arg(args::in1_block_size_bytes);
+
+    uint32_t with_bias = get_arg(args::with_bias);
+#else
+    uint32_t src0_addr = get_arg_val<uint32_t>(0);
     uint32_t src0_dram_bank_id = get_arg_val<uint32_t>(1);
     uint32_t src1_addr = get_arg_val<uint32_t>(2);
     uint32_t src1_dram_bank_id = get_arg_val<uint32_t>(3);
@@ -23,6 +38,7 @@ void kernel_main() {
     uint32_t in1_block_size_bytes = get_arg_val<uint32_t>(8);
 
     uint32_t with_bias = get_arg_val<uint32_t>(9);
+#endif
     uint32_t src2_addr;
     uint32_t src2_dram_bank_id;
     uint32_t in2_block_tile_cnt;
@@ -40,12 +56,10 @@ void kernel_main() {
     }
 
 #ifdef ARCH_QUASAR
-    constexpr uint32_t dfb_in0_id = get_compile_time_arg_val(0);
-    constexpr uint32_t dfb_in1_id = get_compile_time_arg_val(1);
-    experimental::DataflowBuffer dfb_in0(dfb_in0_id);
-    experimental::DataflowBuffer dfb_in1(dfb_in1_id);
-    experimental::Noc noc;
-    experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dram;
+    DataflowBuffer dfb_in0(dfb::in0);
+    DataflowBuffer dfb_in1(dfb::in1);
+    Noc noc;
+    AllocatorBank<AllocatorBankType::DRAM> dram;
 #else
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;

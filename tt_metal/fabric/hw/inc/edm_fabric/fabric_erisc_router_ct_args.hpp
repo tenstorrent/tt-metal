@@ -124,6 +124,7 @@ constexpr uint32_t SWITCH_INTERVAL =
 #endif
 constexpr bool fuse_receiver_flush_and_completion_ptr = NAMED_CT_ARG("FUSE_RECEIVER_FLUSH_AND_COMPLETION_PTR");
 constexpr bool enable_deadlock_avoidance = NAMED_CT_ARG("ENABLE_DEADLOCK_AVOIDANCE");
+constexpr bool enable_speedy_vc0 = NAMED_CT_ARG("ENABLE_SPEEDY_VC0") != 0;
 constexpr bool is_intermesh_router = NAMED_CT_ARG("IS_INTERMESH_ROUTER");
 constexpr bool is_handshake_sender = NAMED_CT_ARG("IS_HANDSHAKE_SENDER") != 0;
 constexpr size_t handshake_addr = NAMED_CT_ARG("HANDSHAKE_ADDR");
@@ -675,5 +676,10 @@ constexpr uint32_t SENDER_CREDIT_AMORTIZATION_FREQUENCY =
     get_named_compile_time_arg_val("SENDER_CREDIT_AMORTIZATION_FREQUENCY");
 constexpr uint32_t RECEIVER_CREDIT_AMORTIZATION_FREQUENCY =
     get_named_compile_time_arg_val("RECEIVER_CREDIT_AMORTIZATION_FREQUENCY");
-constexpr bool super_speedy_mode =
-    SENDER_CREDIT_AMORTIZATION_FREQUENCY > 0 && RECEIVER_CREDIT_AMORTIZATION_FREQUENCY > 0;
+constexpr bool super_speedy_mode = enable_speedy_vc0;
+static_assert(
+    !super_speedy_mode || SENDER_CREDIT_AMORTIZATION_FREQUENCY > 0,
+    "super_speedy_mode requires sender credit amortization to be enabled");
+static_assert(
+    !super_speedy_mode || RECEIVER_CREDIT_AMORTIZATION_FREQUENCY > 0,
+    "super_speedy_mode requires receiver credit amortization to be enabled");
