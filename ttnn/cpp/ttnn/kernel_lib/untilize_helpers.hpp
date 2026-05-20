@@ -43,6 +43,13 @@ enum class WaitMode : uint8_t {
     NoWait        // Caller manages synchronization externally
 };
 
+// Controls whether BH untilize configures DEST remap during init.
+// Use AssumeConfigured only when the caller configured remap once before entering a hot loop.
+enum class RemapMode : uint8_t {
+    Configure,        // Default: init configures remap
+    AssumeConfigured  // Caller already configured remap for this kernel
+};
+
 }  // namespace untilize_config
 
 // Standalone init/uninit wrappers for manual lifecycle control.
@@ -53,7 +60,11 @@ enum class WaitMode : uint8_t {
 // untilize() reconfig_mode — use NoReconfigure or PackReconfigure only.
 // If you need unpacker reconfiguration, call unpacker and packer reconfiguration manually
 // before untilize_init(), or use the unified untilize() which handles it automatically.
-template <uint32_t block_width_tiles, uint32_t input_cb, uint32_t output_cb>
+template <
+    uint32_t block_width_tiles,
+    uint32_t input_cb,
+    uint32_t output_cb,
+    untilize_config::RemapMode remap_mode = untilize_config::RemapMode::Configure>
 ALWI void untilize_init();
 
 template <uint32_t block_width_tiles, uint32_t input_cb, uint32_t output_cb>
@@ -136,7 +147,8 @@ template <
     untilize_config::InitUninitMode init_uninit_mode = untilize_config::InitUninitMode::InitAndUninit,
     untilize_config::WaitMode wait_mode = untilize_config::WaitMode::WaitBlock,
     untilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
-        untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>
+        untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
+    untilize_config::RemapMode remap_mode = untilize_config::RemapMode::Configure>
 ALWI void untilize(uint32_t num_blocks);
 
 }  // namespace compute_kernel_lib

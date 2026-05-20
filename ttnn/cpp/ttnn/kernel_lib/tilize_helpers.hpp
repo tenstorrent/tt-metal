@@ -53,6 +53,13 @@ enum class Fp32Mode : uint8_t {
     Lossless  // Forces standard tilize path for fp32 data (exact, no truncation)
 };
 
+// Controls whether BH fast tilize configures DEST remap during init.
+// Use AssumeConfigured only when the caller configured remap once before entering a hot loop.
+enum class RemapMode : uint8_t {
+    Configure,        // Default: init configures remap when the selected tilize path needs it
+    AssumeConfigured  // Caller already configured remap for this kernel
+};
+
 }  // namespace tilize_config
 
 /**
@@ -149,7 +156,8 @@ template <
     tilize_config::WaitMode wait_mode = tilize_config::WaitMode::WaitBlock,
     tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
         tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
-    tilize_config::Fp32Mode fp32_mode = tilize_config::Fp32Mode::Fast>
+    tilize_config::Fp32Mode fp32_mode = tilize_config::Fp32Mode::Fast,
+    tilize_config::RemapMode remap_mode = tilize_config::RemapMode::Configure>
 ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages = std::nullopt);
 
 }  // namespace compute_kernel_lib

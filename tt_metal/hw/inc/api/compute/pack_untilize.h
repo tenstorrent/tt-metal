@@ -61,14 +61,16 @@ template <
     uint32_t full_ct_dim = block_ct_dim,
     bool narrow_row = false,
     std::uint32_t row_num_datums = TILE_C_DIM,
-    bool dense = false>
+    bool dense = false,
+    bool configure_remap = true>
 ALWI void pack_untilize_dest_init(
     uint32_t ocb, uint32_t face_r_dim = 16, uint32_t num_faces = 4, uint32_t call_line = __builtin_LINE()) {
 #ifndef ARCH_QUASAR
     state_configure<Operand::PACK>(ocb, call_line);
 #ifdef ARCH_BLACKHOLE
-    // Needed for setting swizzle_32b:
-    MATH((llk_math_reconfig_remap(true)));
+    if constexpr (configure_remap) {
+        configure_dest_remap();
+    }
 #endif  // TODO NC: A workaround for tt-metal#17132. Should be addressed more systematically in tt-llk#989
     PACK((llk_pack_reconfig_data_format_disaggregated<DST_ACCUM_MODE>(ocb, face_r_dim, num_faces)));
     PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim, false, narrow_row, row_num_datums, dense>(
@@ -78,6 +80,18 @@ ALWI void pack_untilize_dest_init(
     LLK_ASSERT(narrow_row == false, "narrow_row not supported on Quasar");
     PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim>(ocb)));
 #endif
+}
+
+template <
+    uint32_t block_ct_dim = 8,
+    uint32_t full_ct_dim = block_ct_dim,
+    bool narrow_row = false,
+    std::uint32_t row_num_datums = TILE_C_DIM,
+    bool dense = false>
+ALWI void pack_untilize_dest_init_skip_remap(
+    uint32_t ocb, uint32_t face_r_dim = 16, uint32_t num_faces = 4, uint32_t call_line = __builtin_LINE()) {
+    pack_untilize_dest_init<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense, false>(
+        ocb, face_r_dim, num_faces, call_line);
 }
 
 // clang-format off
@@ -107,7 +121,7 @@ ALWI void pack_untilize_dest_init(
  * | Function   | ocb          | Output circular buffer identifier          | uint32_t  | 0 to 31                   | True                    |
  */
 // clang-format on
-template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
+template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim, bool configure_remap = true>
 ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
 #ifndef ARCH_QUASAR
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
@@ -118,7 +132,7 @@ ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __
     UNPACK((llk_unpack_A_init</*TRANSPOSE_EN=*/false, DST_ACCUM_MODE>(icb)));
     MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE>(icb)));
 #endif
-    pack_untilize_dest_init<block_ct_dim, full_ct_dim>(ocb);
+    pack_untilize_dest_init<block_ct_dim, full_ct_dim, false, TILE_C_DIM, false, configure_remap>(ocb);
 }
 
 // clang-format off
