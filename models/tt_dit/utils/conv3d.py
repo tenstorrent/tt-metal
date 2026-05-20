@@ -280,8 +280,8 @@ _BLOCKINGS = {
     # Stage 3 (cur_T=64, no temporal upsample)
     (4, 8, 96, 96, (3, 3, 3), 66, 184, 160): (96, 96, 8, 4, 8),  # up3_res — 11980us
     (4, 8, 96, 3, (3, 3, 3), 66, 184, 160): (96, 32, 3, 16, 2),  # conv_out — 8887us
-    # BH Loud Box 2x4, 480p, vae_t_chunk_size=7. conv_out is intentionally
-    # absent — the swept blocking (T_out_block=4) caused a frame-24-25 artifact;
+    # BH Loud Box 2x4, 480p, vae_t_chunk_size=7. conv_out is disabled (commented
+    # out below) — the swept blocking T_out_block=4 caused a frame-24-25 artifact;
     # falling back to _DEFAULT_BLOCKINGS sidesteps it pending a clean re-sweep.
     (2, 4, 32, 384, (3, 3, 3), 9, 30, 26): (32, 128, 7, 2, 2),  # conv_in
     (2, 4, 384, 384, (3, 3, 3), 9, 30, 26): (96, 96, 1, 32, 4),  # lat_mid_res
@@ -294,6 +294,7 @@ _BLOCKINGS = {
     (2, 4, 192, 192, (3, 3, 3), 30, 120, 104): (96, 96, 7, 4, 8),  # up2_res
     (2, 4, 192, 96, (1, 3, 3), 28, 240, 208): (192, 96, 1, 4, 16),  # up2_spatial
     (2, 4, 96, 96, (3, 3, 3), 30, 240, 208): (96, 96, 7, 2, 16),  # up3_res
+    # (2, 4, 96, 3, (3, 3, 3), 30, 240, 208): (96, 32, 4, 16, 2),  # conv_out — disabled (frame-24-25 artifact)
     # ===================================================================
     # BH Galaxy 4x8, 720p image encoder, T=33 output frames
     # h_factor=4, w_factor=8. Per-device H/W are unpadded output dims.
