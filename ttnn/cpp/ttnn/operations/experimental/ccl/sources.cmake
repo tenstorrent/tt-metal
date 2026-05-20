@@ -25,6 +25,9 @@ set(TTNN_OP_EXPERIMENTAL_CCL_SRCS
     all_gather_async/device/all_gather_async_default_program_factory.cpp
     all_gather_async/device/all_gather_async_llama_sharded_program_factory.cpp
     all_gather_async/device/all_gather_via_broadcast_factory.cpp
+    all_gather/all_gather.cpp
+    all_gather/device/all_gather_device_operation.cpp
+    all_gather/device/all_gather_factory.cpp
     llama_all_gather_matmul_async/llama_all_gather_matmul_async.cpp
     llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_device_operation.cpp
     llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_program_factory.cpp
@@ -96,6 +99,10 @@ set(TTNN_OP_EXPERIMENTAL_CCL_API_HEADERS
     all_gather_async/device/all_gather_async_llama_sharded_program_factory.hpp
     all_gather_async/device/all_gather_via_broadcast_factory.hpp
     all_gather_async/device/all_gather_async_device_operation_types.hpp
+    all_gather/all_gather.hpp
+    all_gather/device/all_gather_device_operation.hpp
+    all_gather/device/all_gather_factory.hpp
+    all_gather/device/all_gather_device_operation_types.hpp
     composite_common.hpp
     reduce_scatter_common/reduce_scatter_validate_utils.hpp
     reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation.hpp

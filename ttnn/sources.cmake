@@ -338,6 +338,7 @@ set(TTNN_SRC_PYBIND
 set(CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND
     cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/llama_all_gather_matmul_async_nanobind.cpp
     cpp/ttnn/operations/experimental/ccl/all_gather_async/all_gather_async_nanobind.cpp
+    cpp/ttnn/operations/experimental/ccl/all_gather/all_gather_nanobind.cpp
     cpp/ttnn/operations/experimental/ccl/strided_all_gather_async/strided_all_gather_async_nanobind.cpp
     cpp/ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/all_gather_concat_nanobind.cpp
     cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter_matmul/rs_matmul_nanobind.cpp

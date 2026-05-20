@@ -15,6 +15,7 @@ set_target_properties(
 
 file(
     GLOB_RECURSE kernels
+    all_gather/device/kernels/*
     all_gather_async/device/kernels/*
     all_gather_concat_heads_fused/device/kernels/*
     all_reduce_async/device/kernels/*
