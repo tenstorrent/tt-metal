@@ -17,7 +17,6 @@ from bug_checker.github_client import (
     fetch_pr_info,
 )
 
-
 DIFF_SINGLE_HUNK = """\
 diff --git a/foo/bar.cpp b/foo/bar.cpp
 index abc..def 100644
@@ -160,6 +159,7 @@ def test_fetch_pr_info_uses_gh_fields_supported_by_older_clients(mock_gh):
             "title": "Test PR",
             "labels": [{"name": "area:ops"}],
             "files": [{"path": "ttnn/foo.cpp"}],
+            "commits": [{"oid": "base"}, {"oid": "head"}],
         }
     )
     diff = "diff --git a/ttnn/foo.cpp b/ttnn/foo.cpp\n@@ -1 +1 @@\n+new\n"
@@ -169,7 +169,7 @@ def test_fetch_pr_info_uses_gh_fields_supported_by_older_clients(mock_gh):
 
     assert pr_info.title == "Test PR"
     assert pr_info.base_sha == ""
-    assert pr_info.head_sha == ""
+    assert pr_info.head_sha == "head"
     assert pr_info.changed_files == ["ttnn/foo.cpp"]
     assert pr_info.labels == ["area:ops"]
     assert pr_info.diff == diff
@@ -180,7 +180,7 @@ def test_fetch_pr_info_uses_gh_fields_supported_by_older_clients(mock_gh):
         "--repo",
         "tenstorrent/tt-metal",
         "--json",
-        "title,labels,files",
+        "title,labels,files,commits",
     )
 
 

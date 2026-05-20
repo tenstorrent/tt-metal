@@ -11,6 +11,7 @@ from .llm import Finding
 from .logger import logger
 
 REPO = os.environ.get("GITHUB_REPOSITORY", "tenstorrent/tt-metal")
+DEFAULT_RULE_REF = "main"
 
 
 # --- SARIF ---
@@ -145,6 +146,16 @@ def print_findings(findings: list[Finding]) -> None:
         )
 
 
+def print_failure(message: str, failed_rules: list[str] | None = None) -> None:
+    """Print a CLI failure message without implying analysis passed."""
+    logger.opt(colors=True).error("<red><bold>[FAILED]</bold></red> {message}", message=message)
+    if failed_rules:
+        logger.opt(colors=True).error(
+            "<red>Failed rule(s):</red> {rules}",
+            rules=", ".join(failed_rules),
+        )
+
+
 # --- PR Comments ---
 
 
@@ -167,7 +178,18 @@ def _format_rule_label(rule_id: str, rule_path: str | None = None) -> str:
         return f"`{rule_id}`"
 
     quoted_path = quote(rule_path, safe="/")
-    return f"[`{rule_id}`](https://github.com/{REPO}/blob/main/{quoted_path})"
+    quoted_ref = quote(_rule_link_ref(), safe="")
+    return f"[`{rule_id}`](https://github.com/{REPO}/blob/{quoted_ref}/{quoted_path})"
+
+
+def _rule_link_ref() -> str:
+    """Return the Git ref used in rule definition links."""
+    return (
+        os.environ.get("BUG_CHECKER_RULE_REF")
+        or os.environ.get("GITHUB_SHA")
+        or os.environ.get("GITHUB_REF_NAME")
+        or DEFAULT_RULE_REF
+    )
 
 
 def format_summary_comment(

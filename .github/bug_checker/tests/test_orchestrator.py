@@ -131,8 +131,14 @@ def test_run_bug_check_fails_closed_when_llm_rule_errors(mock_load, mock_select,
         labels=[],
     )
 
-    with pytest.raises(BugCheckFailed):
-        run_bug_check(pr, post_comments=True)
+    with patch("bug_checker.orchestrator.print_failure") as mock_print_failure:
+        with pytest.raises(BugCheckFailed):
+            run_bug_check(pr, post_comments=True)
+
+    mock_print_failure.assert_called_once_with(
+        "Bug Checker failed because one or more LLM analyses did not complete",
+        ["test-rule"],
+    )
 
     mock_post.assert_called_once()
     body = mock_post.call_args[1]["body"]

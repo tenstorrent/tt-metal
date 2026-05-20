@@ -12,6 +12,7 @@ from .logger import logger
 from .output import (
     format_pr_comment,
     format_summary_comment,
+    print_failure,
     print_findings,
     write_sarif,
 )
@@ -38,6 +39,7 @@ def run_bug_check(
         List of all findings.
     """
     all_rules = load_rules()
+    rule_paths = _rule_paths(all_rules)
     matched_rules = select_rules(all_rules, pr_info.changed_files, pr_info.labels)
 
     if not matched_rules:
@@ -60,12 +62,12 @@ def run_bug_check(
     except Exception as e:
         failed_rules = [rule.id for rule in matched_rules]
         logger.exception("Bug Checker failed during LLM setup")
-        print_findings([])
+        print_failure("Bug Checker failed during LLM setup", failed_rules)
         if sarif_path:
             write_sarif([], failed_rules, sarif_path)
             logger.info(f"SARIF output written to {sarif_path}")
         if post_comments:
-            _post_findings_as_comments(pr_info, [], failed_rules, [])
+            _post_findings_as_comments(pr_info, [], failed_rules, [], rule_paths)
         raise BugCheckFailed("Bug Checker failed during LLM setup") from e
 
     all_findings: list[Finding] = []
@@ -114,7 +116,12 @@ def run_bug_check(
         )
 
     # Output: CLI
-    print_findings(all_findings)
+    if all_findings:
+        print_findings(all_findings)
+    elif failed_rules:
+        print_failure("Bug Checker failed because one or more LLM analyses did not complete", failed_rules)
+    else:
+        print_findings([])
 
     # Output: SARIF
     if sarif_path:
@@ -123,7 +130,7 @@ def run_bug_check(
 
     # Output: PR comments
     if post_comments:
-        _post_findings_as_comments(pr_info, all_findings, failed_rules, truncated_rules)
+        _post_findings_as_comments(pr_info, all_findings, failed_rules, truncated_rules, rule_paths)
 
     if failed_rules:
         raise BugCheckFailed(
@@ -188,6 +195,7 @@ def check_rule_command(
 ) -> list[Finding]:
     """Run a single named rule against the PR. Error if rule not found."""
     all_rules = load_rules()
+    rule_paths = _rule_paths(all_rules)
     rule = next((r for r in all_rules if r.id == rule_id), None)
     if rule is None:
         available = ", ".join(r.id for r in all_rules)
@@ -206,12 +214,12 @@ def check_rule_command(
         LLMSession()  # Preflight check
     except Exception as e:
         logger.exception("Bug Checker failed during LLM setup")
-        print_findings([])
+        print_failure("Bug Checker failed during LLM setup", [rule.id])
         if sarif_path:
             write_sarif([], [rule.id], sarif_path)
             logger.info(f"SARIF output written to {sarif_path}")
         if post_comments:
-            _post_findings_as_comments(pr_info, [], [rule.id], [])
+            _post_findings_as_comments(pr_info, [], [rule.id], [], rule_paths)
         raise BugCheckFailed("Bug Checker failed during LLM setup") from e
 
     filtered_diff = _filter_diff_for_rule(pr_info.diff, pr_info.changed_files, rule)
@@ -233,19 +241,19 @@ def check_rule_command(
         )
     except Exception as e:
         logger.exception(f"Rule {rule.id} failed")
-        print_findings([])
+        print_failure(f"Bug Checker failed while running rule {rule.id}", [rule.id])
         if sarif_path:
             write_sarif([], [rule.id], sarif_path)
             logger.info(f"SARIF output written to {sarif_path}")
         if post_comments:
-            _post_findings_as_comments(pr_info, [], [rule.id], [])
+            _post_findings_as_comments(pr_info, [], [rule.id], [], rule_paths)
         raise BugCheckFailed(f"Bug Checker failed while running rule {rule.id}") from e
 
     print_findings(findings)
     if sarif_path:
         write_sarif(findings, [rule.id], sarif_path)
     if post_comments:
-        _post_findings_as_comments(pr_info, findings, [], [])
+        _post_findings_as_comments(pr_info, findings, [], [], rule_paths)
 
     return findings
 
@@ -329,15 +337,20 @@ def _format_dry_run(
     return "\n".join(lines)
 
 
+def _rule_paths(rules: list[Rule]) -> dict[str, str]:
+    """Return rule-id to markdown path links for PR comments."""
+    return {rule.id: f".github/bug_checker/rules/{rule.file}" for rule in rules}
+
+
 def _post_findings_as_comments(
     pr_info: PRInfo,
     findings: list[Finding],
     failed_rules: list[str],
     truncated_rules: list[str],
+    rule_paths: dict[str, str],
 ) -> None:
     """Post findings as PR comments (inline where valid, general otherwise) plus a summary."""
     valid_diff_lines = diff_line_numbers(pr_info.diff)
-    rule_paths = {rule.id: f".github/bug_checker/rules/{rule.file}" for rule in load_rules()}
 
     inline_posted = 0
     general_posted = 0

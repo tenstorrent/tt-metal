@@ -86,7 +86,7 @@ def fetch_pr_info(pr_number: int) -> PRInfo:
         "--repo",
         REPO,
         "--json",
-        "title,labels,files",
+        "title,labels,files,commits",
     )
     pr_data = json.loads(pr_json)
 
@@ -94,6 +94,8 @@ def fetch_pr_info(pr_number: int) -> PRInfo:
     diff = _gh("pr", "diff", str(pr_number), "--repo", REPO)
     changed_files = [f["path"] for f in pr_data.get("files", [])]
     labels = [l["name"] for l in pr_data.get("labels", [])]
+    commits = pr_data.get("commits") or []
+    head_sha = commits[-1].get("oid", "") if commits else ""
 
     diff, truncated_files = _truncate_diff(diff, changed_files)
     if truncated_files:
@@ -107,7 +109,7 @@ def fetch_pr_info(pr_number: int) -> PRInfo:
         number=pr_number,
         title=pr_data.get("title", ""),
         base_sha=pr_data.get("baseRefOid", ""),
-        head_sha=pr_data.get("headRefOid", ""),
+        head_sha=head_sha,
         diff=diff,
         changed_files=changed_files,
         labels=labels,

@@ -73,7 +73,10 @@ def test_format_pr_comment():
     assert "Something is wrong" in comment
 
 
-def test_format_pr_comment_links_rule_path():
+def test_format_pr_comment_links_rule_path(monkeypatch):
+    monkeypatch.delenv("BUG_CHECKER_RULE_REF", raising=False)
+    monkeypatch.delenv("GITHUB_SHA", raising=False)
+    monkeypatch.delenv("GITHUB_REF_NAME", raising=False)
     finding = _make_finding(rule_id="reshape-dim-check")
     comment = format_pr_comment(
         finding,
@@ -81,6 +84,20 @@ def test_format_pr_comment_links_rule_path():
     )
     expected_link = (
         "[`reshape-dim-check`](https://github.com/tenstorrent/tt-metal/blob/main/"
+        ".github/bug_checker/rules/reshape-dim-check.md)"
+    )
+    assert expected_link in comment
+
+
+def test_format_pr_comment_links_rule_path_with_configured_ref(monkeypatch):
+    monkeypatch.setenv("BUG_CHECKER_RULE_REF", "release/1.0")
+    finding = _make_finding(rule_id="reshape-dim-check")
+    comment = format_pr_comment(
+        finding,
+        rule_path=".github/bug_checker/rules/reshape-dim-check.md",
+    )
+    expected_link = (
+        "[`reshape-dim-check`](https://github.com/tenstorrent/tt-metal/blob/release%2F1.0/"
         ".github/bug_checker/rules/reshape-dim-check.md)"
     )
     assert expected_link in comment
