@@ -6,28 +6,37 @@
 // fused-Welford fp32 layernorm path.
 //
 // The bug: when fp32_dest_acc_en=true and DstSync::SyncHalf is used (block
-// size = 4 tiles in dst), a binary_dest_reuse_tiles<ELWMUL, DEST_TO_SRCB>
-// reading a CB whose primary buffer index is in Default (Tf32) unpack mode
-// silently produces wrong output IF some prior copy_tile took the
-// UnpackToDestFp32 path through a SECOND buffer index that aliases the SAME
-// L1 allocation as the primary index. On Blackhole the same code is correct.
+// size = 4 tiles in dst), the sequence (UnpackToDestFp32 read; e.g.
+// copy_tile of a Float32 CB whose unpack_to_dest_mode is UnpackToDestFp32)
+// -> (sub_tiles_bcast_cols populating dst[i]) -> (binary_dest_reuse_tiles
+// <ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>) silently produces
+// wrong output. On Blackhole the same sequence is correct.
 //
 // This test runs the same compute kernel twice with the same data and the
 // same expected math, differing only in the CB layout:
 //
-//   Case A (control): cb_primary and cb_alias have SEPARATE L1 allocations.
-//                     Expected to pass on both WH and BH.
+//   Case A: cb_primary and cb_alias have SEPARATE L1 allocations.
+//   Case B: cb_primary and cb_alias share ONE L1 allocation via two
+//           CBFormatDescriptors on a single CBDescriptor.
 //
-//   Case B (repro):   cb_primary and cb_alias share ONE L1 allocation via two
-//                     CBFormatDescriptors on a single CBDescriptor. Expected
-//                     to fail on WH (striped pattern, see below) and pass on
-//                     BH.
+// On WH both cases fail identically (striped pattern described below).
+// On BH both cases pass identically (small TF32 SrcA rounding only).
+// The Case A vs Case B contrast empirically proves that multi-buffer-index
+// CB aliasing is NOT a required trigger condition.
 //
-// Expected failure shape on WH for Case B (from the originating layernorm
-// regression): output of even-indexed SyncHalf blocks scales by ~(1+b)/b
-// instead of just b (i.e. (1+rsqrt)*(x-bcast) instead of rsqrt*(x-bcast));
-// output of odd-indexed blocks is mostly zero, sometimes with the first tile
-// of the block carrying data.
+// Observed failure shape on WH (both cases): output stripes by SyncHalf
+// block (block_size=4 with fp32_dest_acc):
+//   - even-indexed blocks: tile 0 has correct output; tiles 1-3 are zero.
+//   - odd-indexed blocks:  all four tiles over-scaled by ~(1+b)/b.
+//     With b=0.7 used here, the over-scale ratio is ~2.4286.
+//
+// The over-scaling matches dst = dst + b*dst (i.e. a missed ZEROACC on
+// dst[i] which was holding (x - bcast_a) from sub_tiles_bcast_cols, then
+// the math op accumulated b*dst onto it instead of overwriting). The
+// zeroed half is consistent with move_d2b reading dst[i] AFTER ZEROACC
+// ran, so SrcB=0 and math writes b*0=0. The two manifestations alternate
+// with the SyncHalf DST half-ping-pong; whether one or the other or both
+// occur per half is what the LLK fix needs to disentangle.
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -348,9 +357,11 @@ bool run_case(
     uint32_t printed_mismatches = 0;
 
     // Per-tile ratio summary: pick the element at (row=0, col=0) of each tile
-    // (face 0) and report actual/expected. For Case B on WH we expect:
-    //   - even-indexed blocks (block 0, 2): ratio ~= (1+b)/b = ~2.4286
-    //   - odd-indexed blocks (block 1, 3): actual ~= 0 (most tiles)
+    // (face 0) and report actual/expected. On WH (both cases) we expect:
+    //   - even-indexed blocks (block 0, 2): tile 0 ratio ~= 1 (correct);
+    //                                       tiles 1-3 actual ~= 0
+    //   - odd-indexed blocks  (block 1, 3): all four tiles ratio ~= (1+b)/b
+    //                                       = ~2.4286 with b=0.7
     fmt::print("Per-tile sample (row=0,col=0): expected vs actual (ratio = actual/expected)\n");
     fmt::print("  tile | block | expected | actual    | ratio\n");
     fmt::print("  -----+-------+----------+-----------+-------\n");
@@ -419,8 +430,9 @@ bool run_case(
         fmt::print("\n--- FAILURE DIAGNOSTICS (Case {}) ---\n", case_name);
 
         // Per-tile classification of the (0,0) element. Helps spot the alternating
-        // block pattern characteristic of the WH bug (correct/zero per even block,
-        // all over-scaled per odd block, or vice versa).
+        // block pattern characteristic of the WH bug: even-indexed blocks have
+        // tile 0 correct and tiles 1-3 zeroed; odd-indexed blocks have all four
+        // tiles over-scaled by ~(1+b)/b.
         fmt::print("Per-tile classification at (row=0, col=0):\n");
         fmt::print("  tile | block | expected | actual    | ratio    | class\n");
         fmt::print("  -----+-------+----------+-----------+----------+------------\n");

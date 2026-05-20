@@ -5,14 +5,16 @@
 // Minimal repro for a Wormhole-B0-only LLK bug seen with:
 //   - fp32_dest_acc_en = true
 //   - DstSync::SyncHalf (block_size = 4 with fp32 dest acc)
-//   - A CB whose primary buffer index is read by a binary dest-reuse op AFTER an
-//     UnpackToDest fp32 copy_tile from another buffer index. The buggy case is
-//     when those two buffer indices alias the SAME L1 allocation; the working
-//     case is when they live in separate L1 allocations.
+//   - An UnpackToDest fp32 copy_tile (from any CB in UnpackToDestFp32 mode)
+//     followed by sub_tiles_bcast_cols + binary_dest_reuse_tiles<ELWMUL,
+//     DEST_TO_SRCB> on a CB whose primary buffer index is in Default (Tf32)
+//     unpack mode.
 //
-// The kernel intentionally does the same compute sequence in both cases. The
-// only thing that differs between Case A (control) and Case B (bug repro) is
-// the host-side CB layout: same L1 for primary+alias (B) vs. distinct (A).
+// The kernel intentionally does the same compute sequence in both Case A
+// (cb_primary and cb_alias have SEPARATE L1 allocations) and Case B
+// (cb_primary and cb_alias share ONE L1 allocation via two CBFormatDescriptors).
+// Both cases fail identically on WH and pass identically on BH, which
+// proves multi-buffer-index CB aliasing is NOT a required trigger condition.
 
 #include <cstdint>
 
