@@ -944,7 +944,10 @@ def gen_sparse_buffer_and_indices(
     else:
         num_dispatch_devices = num_devices
 
-    experts_per_device = experts // num_devices
+    # Cluster-axis-aware: experts are partitioned across num_dispatch_devices only.
+    # On 2x4 cax=1 (num_devices=8, num_dispatch_devices=4) using num_devices would
+    # collapse experts_per_device by 2x and mis-target the sparse_buffer below.
+    experts_per_device = experts // num_dispatch_devices
 
     # Total tokens in sparse buffer = tokens_per_device * num_dispatch_devices
     total_tokens = tokens_per_device * num_dispatch_devices
@@ -1014,7 +1017,8 @@ def compute_selective_tilize_golden(
     selected_experts_k = expert_indices.shape[2]
     hidden_size = sparse_buffer.shape[2]
     experts = expert_mapping.shape[1]
-    experts_per_device = experts // num_devices
+    # Cluster-axis-aware: see gen_sparse_buffer_and_indices for rationale.
+    experts_per_device = experts // num_dispatch_devices
 
     # Total possible tokens that could be sent to any expert
     total_tokens = tokens_per_device * num_dispatch_devices
@@ -1081,7 +1085,8 @@ def compute_expert_activation_golden(expert_indices, expert_scores, expert_mappi
     tokens_per_device = expert_indices.shape[1]
     selected_experts_k = expert_indices.shape[2]
     experts = expert_mapping.shape[1]
-    experts_per_device = experts // num_devices
+    # Cluster-axis-aware: see gen_sparse_buffer_and_indices for rationale.
+    experts_per_device = experts // num_dispatch_devices
 
     # Build activation rows for each device
     # golden_activation[device] = list of (token_id, k_indices, scores)
@@ -1147,7 +1152,8 @@ def compute_e_t_golden(expert_indices, expert_mapping, mesh_shape, cluster_axis)
     tokens_per_device = expert_indices.shape[1]
     selected_experts_k = expert_indices.shape[2]
     experts = expert_mapping.shape[1]
-    experts_per_device = experts // num_devices
+    # Cluster-axis-aware: see gen_sparse_buffer_and_indices for rationale.
+    experts_per_device = experts // num_dispatch_devices
 
     # Build e_t lists for each device and each local expert
     # golden_e_t[device][local_expert] = [token_id_0, token_id_1, ...]
@@ -1305,7 +1311,11 @@ def compute_combine_golden(
     cluster_axis,
 ):
     cluster_factor, cluster_size, devices = get_cluster_dims(cluster_axis, mesh_shape)
-    experts_per_device = experts // devices
+    # Cluster-axis-aware: cluster_size == num_dispatch_devices (mesh_shape[cluster_axis]),
+    # not the full device count. On 2x4 cax=1 cluster_size=4 vs devices=8; using devices
+    # would collapse experts_per_device to 1 and the (e, dense_token_index) indexing into
+    # matmul_goldens would walk off the expert axis.
+    experts_per_device = experts // cluster_size
 
     output_ref_tensor = torch.zeros(layers, select_experts_k, tokens * cluster_factor, hidden_size).bfloat16()
     output_data_map = torch.zeros(output_ref_tensor.shape[:-1])
@@ -1463,7 +1473,12 @@ def run_moe_compute_test(
     num_replicated_devices = num_devices // num_dispatch_devices
     total_tokens = tokens_per_device * num_dispatch_devices
     experts_per_cluster = experts // num_replicated_devices
-    experts_per_device = experts // num_devices
+    # Cluster-axis-aware: experts are partitioned along the cluster axis, not the full mesh.
+    # For 1xN topologies this equals experts // num_devices (legacy behavior).
+    # For multi-axis meshes (e.g. 2x4 BH single LB with cluster_axis=1) it correctly
+    # divides experts among the 4 dispatch devices instead of all 8 — otherwise the
+    # weight/golden creation below shape-mismatches the post-fix op output.
+    experts_per_device = experts // num_dispatch_devices
 
     logger.info(f"Test configuration:")
     logger.info(f"  mesh_shape: {mesh_shape}")

@@ -274,9 +274,13 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const uint32_t num_devices_total = mesh_view.num_devices();
     const bool double_buffer_source = compute_cores_by_ring_id.has_value();
 
+    // Cluster-axis-aware: experts are partitioned along the cluster axis (the dispatch line),
+    // not the full mesh. axis is mandatory on this op (validated at Full-path entry in
+    // moe_compute_device_operation.cpp).
+    const uint32_t num_devices_cluster = (axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
     // NOTE: shared experts are slightly delicate since they show up as an additional entry in the mapping tensor the
     // result is fractional experts per device so div_up is required to get the right value here.
-    const uint32_t experts_per_device = tt::div_up(experts, num_devices_total);
+    const uint32_t experts_per_device = tt::div_up(experts, num_devices_cluster);
 
     const auto input_dtype = input_tensor.dtype();
     const auto& dense_token_maps_tensor_spec = dense_token_maps_tensor.tensor_spec();

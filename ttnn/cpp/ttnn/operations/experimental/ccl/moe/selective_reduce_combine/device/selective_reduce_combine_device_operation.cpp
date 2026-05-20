@@ -19,14 +19,19 @@ void SelectiveReduceCombineDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& token_activations_tensor = tensor_args.dense_activations_tensor;
 
-    const auto num_devices = token_activations_tensor.device()->get_view().num_devices();
+    // Cluster-axis-aware: experts are partitioned along the cluster axis, never the full mesh.
+    // Mirrors compute_output_specs:62 (same op) and the host code in moe_compute. Without this,
+    // 2D meshes (e.g. BH single LB 2x4 cax=1) compute the wrong stride for activation tensor
+    // validation.
+    const auto& mesh_view = token_activations_tensor.device()->get_view();
+    const auto num_devices_cluster = (operation_attributes.axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
     const auto experts = operation_attributes.experts;
     const auto batch_size = operation_attributes.batch_size;
     const auto seq_size = operation_attributes.seq_size;
     const auto total_tokens = batch_size * seq_size;
 
-    const auto experts_per_device = experts / num_devices;
+    const auto experts_per_device = tt::div_up(experts, num_devices_cluster);
 
     const uint32_t activations_stride_elm = token_activations_tensor.logical_shape()[-1] / total_tokens;
 

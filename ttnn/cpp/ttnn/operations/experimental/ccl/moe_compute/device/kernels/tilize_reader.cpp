@@ -438,16 +438,19 @@ void kernel_main() {
     // Constants
     constexpr uint32_t one_page = 1;
 
-    constexpr uint32_t experts_per_device = (experts + num_devices - 1) / num_devices;
-
-    // Size of e_t buffer for all experts (for multicast)
-    constexpr uint32_t e_t_buffer_total_size = experts_per_device * (tokens + 1) * e_t_entry_size;
-
     constexpr ReplicateGroup axis = ReplicateGroup(cluster_axis);
     constexpr uint32_t dispatch_devices = axis == ReplicateGroup::COLS ? mesh_rows : mesh_cols;
     constexpr uint32_t dispatch_index =
         axis == ReplicateGroup::COLS ? linearized_mesh_coord / mesh_cols : linearized_mesh_coord % mesh_cols;
     constexpr uint32_t tokens_per_device = tokens / dispatch_devices;
+
+    // experts_per_device must divide by cluster-axis device count (dispatch_devices), not full mesh
+    // num_devices, otherwise host and kernel disagree on 2D meshes with off-axis dim > 1
+    // (e.g. BH single-LB 2x4 cax=1: host uses 4, kernel would use 8 → CB/array undersized).
+    constexpr uint32_t experts_per_device = (experts + dispatch_devices - 1) / dispatch_devices;
+
+    // Size of e_t buffer for all experts (for multicast)
+    constexpr uint32_t e_t_buffer_total_size = experts_per_device * (tokens + 1) * e_t_entry_size;
 
     // Aligned row size for expert_activation buffer (in bytes)
     constexpr uint32_t aligned_activation_row_bytes =

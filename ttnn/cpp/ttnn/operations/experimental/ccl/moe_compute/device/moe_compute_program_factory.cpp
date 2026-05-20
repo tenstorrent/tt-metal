@@ -471,9 +471,16 @@ MoEComputeMeshWorkloadFactory::create_at(
     uint32_t experts = tilize_mapping_shape[-1];
     uint32_t selected_experts_k = tilize_indices_shape[-1];
 
+    // Cluster-axis-aware experts_per_device — must match compute_output_specs in the device op
+    // so kernel CT-args and output specs stay consistent. ComputeOnly mode has no cluster axis
+    // and falls back to the full mesh size.
+    const auto cluster_axis_opt = args.cluster_axis();
+    const uint32_t cluster_devices = cluster_axis_opt.has_value()
+                                         ? ((*cluster_axis_opt == 0) ? mesh_view.num_rows() : mesh_view.num_cols())
+                                         : num_devices;
     // NOTE: shared experts are slightly delicate since they show up as an additional entry in the mapping tensor the
     // result is fractional experts per device so div_up is required to get the right value here.
-    uint32_t experts_per_device = tt::div_up(experts, num_devices);
+    uint32_t experts_per_device = tt::div_up(experts, cluster_devices);
 
     // Output/Combine input core dims, for core selection. These are top-level (lifted) so they
     // remain valid even when combine_params is nullopt (ComputeOnly mode).

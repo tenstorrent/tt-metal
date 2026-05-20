@@ -223,7 +223,12 @@ void kernel_main() {
     constexpr uint32_t one_page = 1;
     constexpr uint32_t TILE_HEIGHT = 32;
     constexpr uint32_t TILE_WIDTH = 32;
-    constexpr uint32_t experts_per_device = (experts + num_devices - 1) / num_devices;
+    constexpr ReplicateGroup axis = ReplicateGroup(cluster_axis);
+    constexpr uint32_t dispatch_devices = axis == ReplicateGroup::COLS ? mesh_rows : mesh_cols;
+    constexpr uint32_t tokens_per_device = tokens / dispatch_devices;
+    // experts_per_device must divide by cluster-axis device count (dispatch_devices), not full mesh
+    // num_devices, otherwise host and kernel disagree on 2D meshes with off-axis dim > 1.
+    constexpr uint32_t experts_per_device = (experts + dispatch_devices - 1) / dispatch_devices;
     constexpr uint32_t element_size = tilize_output_page_size / (TILE_HEIGHT * TILE_WIDTH);
     constexpr uint32_t tile_width_bytes = TILE_WIDTH * element_size;
 
@@ -231,9 +236,6 @@ void kernel_main() {
     // Note: These are computed at runtime based on core_token_start/end in Step 3
     constexpr uint32_t brisc_token_start = tokens / 2;
     constexpr uint32_t brisc_token_end = tokens;
-    constexpr ReplicateGroup axis = ReplicateGroup(cluster_axis);
-    constexpr uint32_t dispatch_devices = axis == ReplicateGroup::COLS ? mesh_rows : mesh_cols;
-    constexpr uint32_t tokens_per_device = tokens / dispatch_devices;
 
     // Compute width tile offset for this core
     uint32_t global_tile_offset = global_subtoken_offset / tile_width_bytes;
