@@ -284,7 +284,9 @@ KernelSpec consumer{ /* ... */
 };
 ```
 
-Advanced features (aliased DFBs, borrowed-memory DFBs, remote DFBs spanning nodes) are described in `dataflow_buffer_spec.hpp`, but are not yet supported by Metal 2.0.
+**Borrowed-memory DFBs.** A DFB can be built on top of an existing `Buffer`'s memory rather than allocating its own L1 storage — the Metal 2.0 form of the legacy "dynamic circular buffer." Set `DataflowBufferSpec::borrowed_from` to the name of a `TensorParameter` whose buffer backs the DFB; the DFB's L1 address resolves at runtime from the corresponding `TensorArg` in `ProgramRunParams::tensor_args`.
+
+Other advanced features (aliased DFBs, remote DFBs spanning nodes) are described in `dataflow_buffer_spec.hpp` but are not yet supported.
 
 > **`tile_format_metadata` (the legacy `format_descriptors[i].tile` field).** `DataflowBufferSpec` carries a second optional metadata field, `std::optional<tt::tt_metal::Tile> tile_format_metadata`, that mirrors the legacy `CBFormatDescriptor::tile`. It is load-bearing for non-default tile geometry — tiny tiles, non-32x32, transposed-face, narrow-tile configurations (introduced for matmul tiny tiles in PR #12908). The value threads through the JIT path into per-CB `constexpr uint8_t unpack_tile_r_dim[]` / `unpack_tile_c_dim[]` / `unpack_num_faces[]` (and pack-side equivalents) inside the compute kernel's generated `chlkc_descriptors.h`, where LLK unpacker / packer init reads it.
 >
@@ -483,9 +485,7 @@ WorkUnitSpec wu_halo{
 `ProgramRunParams` describes the mutable properties of the Program. These parameters are specified anew with each Program enqueue:
  - Kernel runtime arguments
  - Kernel common runtime arguments
- - Tensor arguments (`tensor_args`) — one `MeshTensor` per declared `TensorParameter`. See [TensorParameter](#tensorparameter).
- - (optional) DFB size + entry size (not yet supported)
- - (optional) DFB borrowed memory (not yet supported)
+ - Tensor arguments (`tensor_args`) — one `MeshTensor` per declared `TensorParameter`. See [TensorParameter](#tensorparameter). Borrowed-memory DFBs draw their backing L1 address from the corresponding `tensor_args` entry automatically; they don't require a separate `dfb_run_params` entry.
 
 All kernel arguments are named arguments in Metal 2.0. For kernels that accept a variable number of arguments, the API additionally provides an  "varargs" mechanism.
 
