@@ -3,7 +3,6 @@
 
 import pytest
 import torch
-import ttnn
 from loguru import logger
 
 from tests.ttnn.utils_for_testing import check_with_pcc
@@ -13,6 +12,13 @@ from models.experimental.seamless_m4t_v2_large.reference.torch_text_encoder impo
     load_pretrained_text_encoder,
 )
 from models.experimental.seamless_m4t_v2_large.scripts.download_weights import ensure_seamless_m4t_v2_large_weights
+from models.experimental.seamless_m4t_v2_large.tt.common import to_torch_replicated_first_shard
+from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import (
+    MESH_DEVICE_PARAMETRIZE_TEXT,
+    from_torch_bfloat16_tile,
+    from_torch_uint32_rm,
+    mesh_default_device,
+)
 from models.experimental.seamless_m4t_v2_large.tt.model_preprocessing import create_text_encoder_parameters
 from models.experimental.seamless_m4t_v2_large.tt.tt_text_encoder import TTSeamlessM4Tv2Encoder
 
@@ -42,8 +48,8 @@ def _create_position_ids_from_input_ids(
     return incremental_indices.long() + padding_idx
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-def test_seamless_m4t_v2_text_encoder_pcc(device, reset_seeds):
+def _run_text_encoder_pcc(device) -> None:
+    """Shared PCC body; mesh-safe readback via ``to_torch_replicated_first_shard``."""
     try:
         weights_dir = ensure_seamless_m4t_v2_large_weights()
     except ImportError as e:
@@ -78,31 +84,13 @@ def test_seamless_m4t_v2_text_encoder_pcc(device, reset_seeds):
         hidden_size=cfg.hidden_size,
     )
 
-    input_ids_tt = ttnn.from_torch(
-        input_ids.to(torch.int32),
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    position_ids_tt = ttnn.from_torch(
-        position_ids.to(torch.int32),
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    bidir_tt = ttnn.from_torch(
-        bidir_mask.to(torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    input_ids_tt = from_torch_uint32_rm(device, input_ids)
+    position_ids_tt = from_torch_uint32_rm(device, position_ids)
+    bidir_tt = from_torch_bfloat16_tile(device, bidir_mask)
 
     out_tt = tt_enc.forward(input_ids_tt, position_ids_tt, bidir_tt)
     tt_cpu = (
-        ttnn.to_torch(ttnn.from_device(out_tt)).to(torch.bfloat16).reshape(batch, seq, cfg.hidden_size).contiguous()
+        to_torch_replicated_first_shard(out_tt).to(torch.bfloat16).reshape(batch, seq, cfg.hidden_size).contiguous()
     )
 
     ok, msg = check_with_pcc(ref, tt_cpu, pcc=PCC_THRESHOLD)
@@ -113,3 +101,11 @@ def test_seamless_m4t_v2_text_encoder_pcc(device, reset_seeds):
         logger.warning("SeamlessM4Tv2 text encoder PCC check failed.")
 
     assert ok, msg
+
+
+@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
+def test_seamless_m4t_v2_text_encoder_pcc(mesh_device, device_params, reset_seeds):
+    _ = reset_seeds
+    _ = device_params
+    with mesh_default_device(mesh_device):
+        _run_text_encoder_pcc(mesh_device)
