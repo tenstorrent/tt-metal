@@ -152,12 +152,13 @@ class WanPipelineSVI(WanPipelineI2VLora):
             ]
             shift = self.COMFYUI_FLOW_SHIFT if sigma_shift is None else float(sigma_shift)
             if "scheduler" not in kwargs:
-                from diffusers.schedulers import UniPCMultistepScheduler
+                from models.tt_dit.solvers import WanDPMSolverSDEScheduler
 
-                # Upstream uses k-diffusion dpm++_sde with Karras-fixed sigmas;
-                # tt-metal has no DPMSolverSDESolver yet, so we approximate
-                # with UniPC at the same flow_shift. Not bit-exact.
-                kwargs["scheduler"] = UniPCMultistepScheduler(
+                # ComfyUI WanVideoSampler uses k-diffusion dpm++_sde with
+                # 'fixed' sigmas at flow_shift=8. WanDPMSolverSDEScheduler
+                # produces the doubled flow-sigma schedule that the matching
+                # DPMSolverSDESolver consumes.
+                kwargs["scheduler"] = WanDPMSolverSDEScheduler(
                     use_flow_sigmas=True,
                     prediction_type="flow_prediction",
                     flow_shift=shift,
@@ -216,10 +217,20 @@ class WanPipelineSVI(WanPipelineI2VLora):
         if prev_last_latent is None:
             prev_last_latent = getattr(self, "_svi_prev_last_latent", None)
 
-        if anchor_image is None:
-            raise ValueError(
-                "WanPipelineSVI requires an anchor_image. Call "
-                "generate_long_video(...) or pass anchor_image= to __call__."
+        # WanPipelineI2V.__init__ → warmup_buffers → run_single_prompt → __call__
+        # invokes us during pipeline construction with a blank Image and no SVI
+        # state. Defer to the base I2V prepare_latents in that case.
+        if anchor_image is None and prev_last_latent is None:
+            return super().prepare_latents(
+                batch_size=batch_size,
+                image_prompt=image_prompt,
+                num_channels_latents=num_channels_latents,
+                height=height,
+                width=width,
+                num_frames=num_frames,
+                dtype=dtype,
+                device=device,
+                latents=latents,
             )
 
         anchor_pil = anchor_image if anchor_image is not None else _unwrap_image(image_prompt)

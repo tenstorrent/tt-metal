@@ -31,7 +31,7 @@ from ...models.transformers.wan2_2.transformer_wan import WanTransformer3DModel
 from ...models.vae.vae_wan2_1 import WanDecoder
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VaeHWParallelConfig
 from ...parallel.manager import CCLManager
-from ...solvers import EulerSolver, UniPCSolver
+from ...solvers import DPMSolverSDESolver, EulerSolver, UniPCSolver, WanDPMSolverSDEScheduler
 from ...utils import cache, tensor
 from ...utils.conv3d import conv3d_blocking_hash
 from ...utils.tensor import (
@@ -297,7 +297,17 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         scheduler = scheduler or UniPCMultistepScheduler.from_pretrained(
             checkpoint_name, subfolder="scheduler", flow_shift=12.0
         )
-        if isinstance(scheduler, FlowMatchEulerDiscreteScheduler):
+        if isinstance(scheduler, WanDPMSolverSDEScheduler):
+            # Stochastic DPM-Solver++(2S) for ComfyUI dpm++_sde parity.
+            # Needs mesh layout to upload per-step Gaussian noise.
+            sp_axis = parallel_config.sequence_parallel.mesh_axis
+            self._solver = DPMSolverSDESolver(
+                scheduler=scheduler,
+                mesh_device=mesh_device,
+                mesh_axes=[None, None, sp_axis, None],
+                dtype=ttnn.bfloat16,
+            )
+        elif isinstance(scheduler, FlowMatchEulerDiscreteScheduler):
             self._solver = EulerSolver(scheduler=scheduler)
         else:
             self._solver = UniPCSolver(scheduler=scheduler)
@@ -926,7 +936,9 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         prepared_prompts = [False, False]
 
         sp_axis = self.transformer_states[0].model.parallel_config.sequence_parallel.mesh_axis
-        with self.progress_bar(total=num_inference_steps) as progress_bar:
+        # Use len(timesteps) (not num_inference_steps) so the progress bar
+        # also tracks doubled schedules (e.g. DPM++ SDE 2nd-order).
+        with self.progress_bar(total=len(timesteps)) as progress_bar:
             for i, t in enumerate(timesteps):
                 warmup_t2 = i == 1 and len(timesteps) == 2  # Ensure transformer_2 is also warmed up
 
