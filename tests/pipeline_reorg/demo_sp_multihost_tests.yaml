@@ -12,6 +12,29 @@
 # For max allowed timeout refer to .github/time_budget.yaml (scaleout -> e2e)
 
 # ============================================================================
+# BH Single Galaxy Tests
+# ============================================================================
+
+- name: "Single Galaxy - Host I/O Loopback (DeepSeek V3 B1)"
+  cmd: |
+    TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_ALLOCATOR_MODE_HYBRID=1 mpirun \
+      --hostfile /ci/ttrun/hostfile \
+      -np 1 \
+      --map-by slot \
+      --bind-to none \
+      --tag-output \
+      --wdir /home/user/tt-metal \
+      pytest -svv 'models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io.py::test_host_io_loopback[blackhole-H2DMode.HOST_PUSH-64-128-512]' \
+        --tb=short \
+        --timeout=1200
+  skus:
+    bh_sp_single_galaxy:
+      timeout: 20
+  owner_id: U08E1JCMAJF
+  team: scaleout
+  sp_config: sp_single_galaxy
+
+# ============================================================================
 # BH SP1 Multihost Pipeline Tests (4 connected galaxies)
 # ============================================================================
 
