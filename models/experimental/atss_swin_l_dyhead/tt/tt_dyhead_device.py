@@ -248,10 +248,10 @@ class TtGroupNorm:
         C_per_G = self.C_per_G
 
         # Pick memory config based on per-tensor size.
-        # The fp32 NHWC tensor is N*H*W*C*4 bytes. Five of these live concurrently inside this
-        # GN call (x_fp32, centered, squared, normalized, out_5d). With other resident L1 stuff
-        # in the inference (DCN's mask_expanded = 29 MB at P3 → ~450 KB/bank), the biggest
-        # spatial sizes won't fit. P4 (40×40×256×4 = 1.6 MB total ≈ 25 KB/bank) is comfortable.
+        # Old impl held 5 fp32 tensors of N*H*W*C*4 bytes concurrently (x_fp32, centered,
+        # squared, normalized, out_5d). New impl folds (x-mean)*inv_std*gamma+beta as
+        # x*scale+shift with scale/shift computed per-group (small), reducing the big-tensor
+        # ops from 4 to 2 (the `x²` for variance via E[x²]-mean², and the final addcmul).
         big_bytes = N * H * W * C * 4
         big_mem = ttnn.L1_MEMORY_CONFIG if big_bytes <= 4 * 1024 * 1024 else ttnn.DRAM_MEMORY_CONFIG
         small_mem = ttnn.L1_MEMORY_CONFIG  # reductions / scalars always fit in L1
@@ -266,24 +266,32 @@ class TtGroupNorm:
         # Reshape to (N, H, W, G, C/G).
         x_5d = ttnn.reshape(x_fp32, (N, H, W, G, C_per_G))
 
-        # Per-group mean and variance, reduced over (H, W, C/G).
-        mean = ttnn.mean(x_5d, dim=(1, 2, 4), keepdim=True, memory_config=small_mem)
-        centered = ttnn.subtract(x_5d, mean, memory_config=big_mem)
-        var = ttnn.mean(
-            ttnn.multiply(centered, centered, memory_config=big_mem),
-            dim=(1, 2, 4),
-            keepdim=True,
-            memory_config=small_mem,
-        )
+        # Variance via E[x²] - mean² instead of mean((x-mean)²): avoids materializing the
+        # large `centered` fp32 tensor. One big multiply for x², two reductions on small
+        # tensors after that.
+        mean_x = ttnn.mean(x_5d, dim=(1, 2, 4), keepdim=True, memory_config=small_mem)
+        x_sq = ttnn.multiply(x_5d, x_5d, memory_config=big_mem)
+        mean_x_sq = ttnn.mean(x_sq, dim=(1, 2, 4), keepdim=True, memory_config=small_mem)
+        ttnn.deallocate(x_sq)
+        var = ttnn.subtract(mean_x_sq, ttnn.multiply(mean_x, mean_x, memory_config=small_mem), memory_config=small_mem)
+
         inv_std = ttnn.rsqrt(
             ttnn.add(var, self.epsilon, memory_config=small_mem),
             fast_and_approximate_mode=True,
             memory_config=small_mem,
         )
-        normalized = ttnn.multiply(centered, inv_std, memory_config=big_mem)
-        # Fused mul+add: addcmul(a, b, c) = a + b*c. Saves one elementwise op vs separate
-        # multiply+add across 78 GN calls/inference.
-        out_5d = ttnn.addcmul(self.beta_5d, normalized, self.gamma_5d, memory_config=big_mem)
+        # Fold affine into x: y = x*scale + shift  where
+        #   scale = inv_std * gamma
+        #   shift = beta - mean * scale
+        # Both scale and shift are small (1,1,1,G,C/G) per-group tensors.
+        scale = ttnn.multiply(inv_std, self.gamma_5d, memory_config=small_mem)
+        shift = ttnn.subtract(
+            self.beta_5d,
+            ttnn.multiply(mean_x, scale, memory_config=small_mem),
+            memory_config=small_mem,
+        )
+        # One large fp32 op: y = x*scale + shift. addcmul(a,b,c) = a + b*c, so addcmul(shift, x, scale).
+        out_5d = ttnn.addcmul(shift, x_5d, scale, memory_config=big_mem)
         # Reshape back, cast to bf16 (next ops expect bf16).
         out_4d = ttnn.reshape(out_5d, (N, H, W, C))
         return ttnn.typecast(out_4d, ttnn.bfloat16, memory_config=big_mem)
