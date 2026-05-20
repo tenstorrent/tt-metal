@@ -42,7 +42,7 @@ sys.modules["transformers.models.siglip.check"] = _fake
 REPO_ROOT = "/home/tt-admin/sdawle/pi0/tt-metal"
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
-LIBERO_REPO = "/storage/sdawle/libero_repo"
+LIBERO_REPO = os.environ.get("LIBERO_REPO_PATH", "/storage/sdawle/libero_repo")
 if LIBERO_REPO not in sys.path:
     sys.path.insert(0, LIBERO_REPO)
 os.environ.setdefault("MUJOCO_GL", "osmesa")
