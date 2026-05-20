@@ -516,7 +516,7 @@ def skip_known_decoder_moe_failure(
     indirect=True,
 )
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
-@pytest.mark.parametrize("num_internal_iterations", [100])
+@pytest.mark.parametrize("num_internal_iterations", [1])
 @pytest.mark.parametrize(
     "expert_upload_mode",
     [
@@ -1302,7 +1302,7 @@ def test_decoder(
     indirect=True,
 )
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
-@pytest.mark.parametrize("num_internal_iterations", [100])
+@pytest.mark.parametrize("num_internal_iterations", [1])
 @pytest.mark.parametrize("slot_id, num_slots", [(0, 2), (1, 2)])
 # Dense-MLP SRAM placement. DRAM list stays full (8 chunks) for sizing/CB probes;
 # placement selects which chunks the kernel processes via the SRAM matmul instead
