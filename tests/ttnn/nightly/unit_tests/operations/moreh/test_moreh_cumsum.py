@@ -112,6 +112,11 @@ def test_moreh_cumsum_dim(input_shape, dim, device):
     ids=["0", "1"],
 )
 def test_moreh_cumsum_backward(input_shape, dim, device):
+    if input_shape == [1, 1, TILE_HEIGHT - 1, TILE_WIDTH - 1] and dim == 0:
+        pytest.skip(
+            reason="Disabled by issue #44858: moreh cumsum backward TT_FATAL on TILE_HEIGHT-1/TILE_WIDTH-1 shape at dim 0"
+        )
+
     output_shape = input_shape.copy()
 
     (_, _, torch_input) = get_tensors(input_shape, output_shape, device)
@@ -217,6 +222,11 @@ def test_moreh_cumsum_callback(input_shape, dim, device):
     ids=["0", "1"],
 )
 def test_moreh_cumsum_backward(input_shape, dim, device):
+    if input_shape == [1, 1, TILE_HEIGHT - 1, TILE_WIDTH - 1] and dim == 0:
+        pytest.skip(
+            reason="Disabled by issue #44858: moreh cumsum backward TT_FATAL on TILE_HEIGHT-1/TILE_WIDTH-1 shape at dim 0"
+        )
+
     output_shape = input_shape.copy()
 
     (_, _, torch_input) = get_tensors(input_shape, output_shape, device)
