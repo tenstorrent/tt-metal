@@ -549,3 +549,131 @@ void write_block_sync_granular_split(
     }
     noc_async_writes_flushed();
 }
+
+/**
+ * Staggered defer-write index used by both dm_in0_sender and dm_in1_sender_out: each core picks
+ * a k-block index for its deferred output write so that the writes spread across the next
+ * output block's K-loop (latency hiding). Clamp to the last K iter — without this, K-axis
+ * OffsetsRoles that shrink K at runtime can leave the check never firing, deadlocking
+ * cb_id_out once M_blocks_per_core * N_blocks_per_core - 1 exceeds the CB depth.
+ */
+FORCE_INLINE uint32_t compute_defer_write_k_block(uint32_t core_y_index, uint32_t y_axis_cores, uint32_t K_num_blocks) {
+    const uint32_t k_blocks_per_axis_core = (K_num_blocks + y_axis_cores - 1U) / y_axis_cores;
+    uint32_t defer_write_k_block = core_y_index * k_blocks_per_axis_core;
+    if (K_num_blocks > 0U) {
+        defer_write_k_block = std::min(defer_write_k_block, K_num_blocks - 1U);
+    }
+    return defer_write_k_block;
+}
+
+/**
+ * Wait on the output CB, write the previously-deferred block to DRAM, and pop. Dispatches
+ * between single-output and split-output writers based on N_chunks. The non-split variant
+ * supports an output row-offset; the split variant does not.
+ */
+template <
+    uint32_t M_block_tiles,
+    uint32_t N_block_tiles,
+    uint32_t N_chunks,
+    uint32_t N_tiles_per_chunk,
+    bool UseOutOffset,
+    typename OutputsTuple>
+FORCE_INLINE void do_deferred_block_write(
+    const OutputsTuple& outputs_tuple,
+    const TensorShape2D& out_shape,
+    const TensorShape2D& out0_shape,
+    uint32_t cb_id_out,
+    uint32_t out_tile_size,
+    uint32_t defer_write_m_tile,
+    uint32_t defer_write_m_tile_end,
+    uint32_t defer_write_n_tile,
+    uint32_t defer_write_n_tile_end,
+    uint32_t out_row_offset_tiles) {
+    constexpr uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
+    cb_wait_front(cb_id_out, out_block_num_tiles);
+    const uint32_t out_read_ptr = get_read_ptr(cb_id_out);
+    if constexpr (N_chunks == 1) {
+        write_block_sync<M_block_tiles, N_block_tiles, UseOutOffset>(
+            std::get<0>(outputs_tuple),
+            out_shape,
+            out_read_ptr,
+            out_tile_size,
+            defer_write_m_tile,
+            defer_write_m_tile_end,
+            defer_write_n_tile,
+            defer_write_n_tile_end,
+            out_row_offset_tiles);
+    } else {
+        write_block_sync_split<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk>(
+            outputs_tuple,
+            out0_shape,
+            out_read_ptr,
+            out_tile_size,
+            defer_write_m_tile,
+            defer_write_m_tile_end,
+            defer_write_n_tile,
+            defer_write_n_tile_end);
+    }
+    cb_pop_front(cb_id_out, out_block_num_tiles);
+}
+
+/**
+ * Final (non-deferred) output block write at the end of an N-block iteration: granular variant
+ * pops the output CB tile-by-tile to overlap compute and write. Dispatches between single-output
+ * and split-output writers based on N_chunks. The non-split variant supports an output row-offset.
+ */
+template <
+    uint32_t M_block_tiles,
+    uint32_t N_block_tiles,
+    uint32_t N_chunks,
+    uint32_t N_tiles_per_chunk,
+    bool UseOutOffset,
+    typename OutputsTuple>
+FORCE_INLINE void do_final_block_write(
+    const OutputsTuple& outputs_tuple,
+    const TensorShape2D& out_shape,
+    const TensorShape2D& out0_shape,
+    uint32_t cb_id_out,
+    uint32_t out_tile_size,
+    uint32_t m_tile,
+    uint32_t m_tile_end,
+    uint32_t n_tile,
+    uint32_t n_tile_end,
+    uint32_t out_row_offset_tiles) {
+    if constexpr (N_chunks == 1) {
+        write_block_sync_granular<M_block_tiles, N_block_tiles, UseOutOffset>(
+            std::get<0>(outputs_tuple),
+            out_shape,
+            cb_id_out,
+            out_tile_size,
+            m_tile,
+            m_tile_end,
+            n_tile,
+            n_tile_end,
+            out_row_offset_tiles);
+    } else {
+        write_block_sync_granular_split<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk>(
+            outputs_tuple, out0_shape, cb_id_out, out_tile_size, m_tile, m_tile_end, n_tile, n_tile_end);
+    }
+}
+
+/**
+ * Read N_block_tiles bias tiles for the current N-block into cb_id_in2. Used by FUSE_BIAS in
+ * both dm_in0_sender and dm_in1_sender_out (the non-writer kernel performs the read).
+ */
+template <uint32_t N_block_tiles, typename TensorAccessorType>
+FORCE_INLINE void read_bias_block_sync(
+    const TensorAccessorType& in2_reader,
+    uint32_t cb_id_in2,
+    uint32_t in2_tile_size,
+    uint32_t n_tile,
+    uint32_t n_tile_end) {
+    cb_reserve_back(cb_id_in2, N_block_tiles);
+    uint32_t l1_write_addr_in2 = get_write_ptr(cb_id_in2);
+    for (uint32_t n_tile_id = n_tile; n_tile_id < n_tile_end; n_tile_id++) {
+        noc_async_read_tile(n_tile_id, in2_reader, l1_write_addr_in2);
+        l1_write_addr_in2 += in2_tile_size;
+    }
+    noc_async_read_barrier();
+    cb_push_back(cb_id_in2, N_block_tiles);
+}

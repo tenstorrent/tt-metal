@@ -230,19 +230,8 @@ void kernel_main() {
     const TensorShape2D out0_shape(M_tiles, N_tiles_per_chunk, padded_M_tiles, N_tiles_per_chunk);
 
     const uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
-    // Compute defer_write_k_block from runtime K_num_blocks. Stagger across Y_AXIS_CORES so
-    // deferred output writes from different cores spread across the next block's K loop
-    // (latency hiding). Clamp to the last K iter — without this, K-axis OffsetsRoles that
-    // shrink K at runtime can leave the check never firing, deadlocking cb_id_out (cap 2)
-    // once M_blocks_per_core * N_blocks_per_core - 1 >= 3.
-    constexpr uint32_t kYAxisCores = Y_AXIS_CORES;
-    const uint32_t k_blocks_per_axis_core = (K_num_blocks + kYAxisCores - 1U) / kYAxisCores;
-    uint32_t defer_write_k_block = core_y_index * k_blocks_per_axis_core;
-    if (K_num_blocks > 0U) {
-        defer_write_k_block = std::min(defer_write_k_block, K_num_blocks - 1U);
-    }
+    const uint32_t defer_write_k_block = compute_defer_write_k_block(core_y_index, Y_AXIS_CORES, K_num_blocks);
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
-    constexpr uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_id_out = tt::CBIndex::c_2;
@@ -334,34 +323,22 @@ void kernel_main() {
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
-                        cb_wait_front(cb_id_out, out_block_num_tiles);
-                        uint32_t out_read_ptr = get_read_ptr(cb_id_out);
-
-                        // write_block_sync_split is more generic (support multiple output tensors)
-                        // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync should be faster
-                        if constexpr (N_chunks == 1) {
-                            write_block_sync<M_block_tiles, N_block_tiles, use_out_offset>(
-                                std::get<0>(outputs_tuple),
-                                out_shape,
-                                out_read_ptr,
-                                out_tile_size,
-                                defer_write_m_tile,
-                                defer_write_m_tile_end,
-                                defer_write_n_tile,
-                                defer_write_n_tile_end,
-                                out_row_offset_tiles);
-                        } else {
-                            write_block_sync_split<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk>(
-                                outputs_tuple,
-                                out0_shape,
-                                out_read_ptr,
-                                out_tile_size,
-                                defer_write_m_tile,
-                                defer_write_m_tile_end,
-                                defer_write_n_tile,
-                                defer_write_n_tile_end);
-                        }
-                        cb_pop_front(cb_id_out, out_block_num_tiles);
+                        do_deferred_block_write<
+                            M_block_tiles,
+                            N_block_tiles,
+                            N_chunks,
+                            N_tiles_per_chunk,
+                            use_out_offset>(
+                            outputs_tuple,
+                            out_shape,
+                            out0_shape,
+                            cb_id_out,
+                            out_tile_size,
+                            defer_write_m_tile,
+                            defer_write_m_tile_end,
+                            defer_write_n_tile,
+                            defer_write_n_tile_end,
+                            out_row_offset_tiles);
                     }
                 }
 
@@ -432,16 +409,7 @@ void kernel_main() {
             }
 #ifdef FUSE_BIAS
             if constexpr (!is_output_writer) {
-                cb_reserve_back(cb_id_in2, N_block_tiles);
-
-                uint32_t l1_write_addr_in2 = get_write_ptr(cb_id_in2);
-                for (uint32_t n_tile_id = n_tile; n_tile_id < n_tile_end; n_tile_id++) {
-                    noc_async_read_tile(n_tile_id, in2_reader, l1_write_addr_in2);
-                    l1_write_addr_in2 += in2_tile_size;
-                }
-                noc_async_read_barrier();
-
-                cb_push_back(cb_id_in2, N_block_tiles);
+                read_bias_block_sync<N_block_tiles>(in2_reader, cb_id_in2, in2_tile_size, n_tile, n_tile_end);
             }
 #endif
 
@@ -486,30 +454,17 @@ void kernel_main() {
 
             if (!defer_write) {
                 if constexpr (is_output_writer) {
-                    // write_block_sync_granular_split is more generic (support multiple output tensors)
-                    // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync_granular should be faster
-                    if constexpr (N_chunks == 1) {
-                        write_block_sync_granular<M_block_tiles, N_block_tiles, use_out_offset>(
-                            std::get<0>(outputs_tuple),
-                            out_shape,
-                            cb_id_out,
-                            out_tile_size,
-                            m_tile,
-                            m_tile_end,
-                            n_tile,
-                            n_tile_end,
-                            out_row_offset_tiles);
-                    } else {
-                        write_block_sync_granular_split<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk>(
-                            outputs_tuple,
-                            out0_shape,
-                            cb_id_out,
-                            out_tile_size,
-                            m_tile,
-                            m_tile_end,
-                            n_tile,
-                            n_tile_end);
-                    }
+                    do_final_block_write<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk, use_out_offset>(
+                        outputs_tuple,
+                        out_shape,
+                        out0_shape,
+                        cb_id_out,
+                        out_tile_size,
+                        m_tile,
+                        m_tile_end,
+                        n_tile,
+                        n_tile_end,
+                        out_row_offset_tiles);
                 }
             }
         }
