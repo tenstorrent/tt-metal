@@ -2,20 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "api/compute/bcast.h"
 #include "api/compute/cb_api.h"
 #include "api/compute/compute_kernel_api.h"
-#include "api/compute/eltwise_binary.h"
-#include "api/compute/eltwise_binary_sfpu.h"
-#include "api/compute/eltwise_unary/binop_with_scalar.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/fill.h"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/tilize.h"
 #include "api/compute/transpose_wh.h"
-#include "api/compute/untilize.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
 void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
