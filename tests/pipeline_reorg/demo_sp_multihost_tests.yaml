@@ -17,21 +17,15 @@
 
 - name: "Stress Test (DeepSeek V3 B1 Supercluster 4 aka Superpod 1)"
   cmd: |
-    echo "============= SP1 superpod: copy ttrun.py and rank files ============="
-    wget https://raw.githubusercontent.com/tenstorrent/tt-metal/main/ttnn/ttnn/distributed/ttrun.py
-    # todo)) download the rank bindings from the main branch once this PR is merged: https://github.com/tenstorrent/tt-metal/pull/44608
-    wget https://raw.githubusercontent.com/tenstorrent/tt-metal/gongyu/fix_sp1_sp4_tests/models/demos/deepseek_v3_b1/scaleout_configs/rev_c/rev_c_rank_binding_single_pod.yaml
-    wget https://raw.githubusercontent.com/tenstorrent/tt-metal/gongyu/fix_sp1_sp4_tests/models/demos/deepseek_v3_b1/scaleout_configs/rev_c/rev_c_rank_file_single_pod
-    echo "============= SP1 superpod: downloaded rank bindings ============="
-    for file in rev_c_rank_binding_single_pod.yaml rev_c_rank_file_single_pod; do
-      echo "----- file: $file -----"
-      ls -la "$file"
-      cat "$file"
-    done
+    echo "============= SP1 superpod: using branch ttrun.py and rank files ============="
+    TTRUN_PY=/ci/tt-metal/ttnn/ttnn/distributed/ttrun.py
+    SCALEOUT_CONFIG_DIR=/ci/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/rev_c
+    cp "${SCALEOUT_CONFIG_DIR}/rev_c_rank_binding_single_pod.yaml" .
+    cp "${SCALEOUT_CONFIG_DIR}/rev_c_rank_file_single_pod" .
 
     # todo)) add proper stress test that can run for 2 hours -- repeat batches?
     PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
-    TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 ./ttrun.py \
+    TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
       --mpi-args "--host $PIPELINE_HOSTS --map-by rankfile:file=rev_c_rank_file_single_pod --bind-to hwt:overload-allowed --tag-output --wdir /home/user/tt-metal" \
       --rank-binding rev_c_rank_binding_single_pod.yaml \
@@ -54,17 +48,15 @@
 
 - name: "Teacher Forcing Test (DeepSeek V3 B1 Supercluster 16 aka Superpod 4)"
   cmd: |
-    echo "============= SP4 superpod: downloading rank bindings ============="
-    # todo)) download the rank bindings from the main branch once this PR is merged: https://github.com/tenstorrent/tt-metal/pull/44608
-    wget https://raw.githubusercontent.com/tenstorrent/tt-metal/gongyu/fix_sp1_sp4_tests/models/demos/deepseek_v3_b1/scaleout_configs/rev_c/rev_c_rank_binding_superpod.yaml
-    wget https://raw.githubusercontent.com/tenstorrent/tt-metal/gongyu/fix_sp1_sp4_tests/models/demos/deepseek_v3_b1/scaleout_configs/rev_c/rev_c_rank_file_superpod
-
-    echo "============= SP4 superpod: running tt-run ============="
-    wget https://raw.githubusercontent.com/tenstorrent/tt-metal/main/ttnn/ttnn/distributed/ttrun.py
+    echo "============= SP4 superpod: using branch ttrun.py and rank files ============="
+    TTRUN_PY=/ci/tt-metal/ttnn/ttnn/distributed/ttrun.py
+    SCALEOUT_CONFIG_DIR=/ci/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/rev_c
+    cp "${SCALEOUT_CONFIG_DIR}/rev_c_rank_binding_superpod.yaml" .
+    cp "${SCALEOUT_CONFIG_DIR}/rev_c_rank_file_superpod" .
 
     echo "============= SP4 superpod: setting PIPELINE_HOSTS ============="
     PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
-    TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 ./ttrun.py \
+    TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
       --mpi-args "--host $PIPELINE_HOSTS --map-by rankfile:file=rev_c_rank_file_superpod --bind-to hwt:overload-allowed --tag-output --wdir /home/user/tt-metal" \
       --rank-binding rev_c_rank_binding_superpod.yaml \
