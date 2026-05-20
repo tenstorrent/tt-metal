@@ -1,7 +1,12 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""TTNN [`SeamlessM4Tv2Decoder`] with prefill and KV-cache decode."""
+"""TTNN [`SeamlessM4Tv2Decoder`] with prefill and KV-cache decode.
+
+DRAM width-sharded linears (Stage 2): prefill QKV, FFN fc1/fc2, self/cross ``out_proj``,
+cross ``q_proj``. Decode self-attn QKV uses interleaved ``qkv_decode`` weights (L1 matmul)
+for KV-cache PCC; all other sharded linears use the DRAM path in ``_linear``.
+"""
 
 from __future__ import annotations
 
@@ -13,7 +18,15 @@ import torch
 import ttnn
 
 from models.common.utility_functions import is_blackhole, nearest_32
-from models.experimental.seamless_m4t_v2_large.tt.common import build_ln_sharded_config, core_grid, sdpa_program_config
+from models.experimental.seamless_m4t_v2_large.tt.common import (
+    build_ln_sharded_config,
+    core_grid,
+    dram_linear_input_mem_config,
+    dram_matmul_program_config,
+    is_dram_width_sharded,
+    sdpa_program_config,
+    TILE,
+)
 
 
 def _num_to_corerange(batch: int) -> ttnn.CoreRange:
@@ -365,6 +378,8 @@ class TTSeamlessM4Tv2Decoder:
         )
         self._ln_sharded_cache: dict = {}
         self._projection_pc_cache: dict = {}
+        self._dram_matmul_pc_cache: dict = {}
+        self._tile_padded_batch_rows = TILE * ((max_batch_size + TILE - 1) // TILE)
         # Same rationale for SDPA chunk schedules: ``forward`` / greedy decode revisit the same
         # ``(seq_q, seq_k, large_chunks)`` keys many times (24 layers × steps); reuse one object.
         self._sdpa_pc_cache: dict = {}
@@ -509,6 +524,28 @@ class TTSeamlessM4Tv2Decoder:
         self._projection_pc_cache[key] = result
         return result
 
+    def _linear_m_rows(self, x: ttnn.Tensor, *, is_decode: bool) -> int:
+        if len(x.shape) == 3:
+            rows = int(x.shape[0]) * int(x.shape[1])
+        elif len(x.shape) == 2:
+            rows = int(x.shape[0])
+        else:
+            rows = int(x.shape[-2])
+        if is_decode and rows <= self.max_batch_size:
+            return self._tile_padded_batch_rows
+        return rows
+
+    def _dram_matmul_program_config_cached(
+        self, m: int, k: int, n: int
+    ) -> ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig:
+        key = (m, k, n)
+        cached = self._dram_matmul_pc_cache.get(key)
+        if cached is not None:
+            return cached
+        cached = dram_matmul_program_config(self.device, m, k, n)
+        self._dram_matmul_pc_cache[key] = cached
+        return cached
+
     def _linear(
         self,
         x: ttnn.Tensor,
@@ -519,8 +556,36 @@ class TTSeamlessM4Tv2Decoder:
         memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
         program_config=None,
         activation: Optional[str] = None,
+        is_decode: bool = False,
     ) -> ttnn.Tensor:
         ck = compute_cfg if compute_cfg is not None else self._linear_ln_compute_cfg
+        if is_dram_width_sharded(weight):
+            k = int(weight.shape[-2])
+            n = int(weight.shape[-1])
+            m = self._linear_m_rows(x, is_decode=is_decode)
+            dram_pc = self._dram_matmul_program_config_cached(m, k, n)
+            x_in = (
+                x if ttnn.is_sharded(x) else ttnn.to_memory_config(x, dram_linear_input_mem_config(self.device, m, k))
+            )
+            out = ttnn.linear(
+                x_in,
+                weight,
+                bias=None,
+                program_config=dram_pc,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                compute_kernel_config=ck,
+            )
+            if x_in is not x:
+                ttnn.deallocate(x_in)
+            out_mem = memory_config
+            if memory_config == ttnn.L1_MEMORY_CONFIG:
+                out = ttnn.sharded_to_interleaved(out, ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
+                out_mem = ttnn.L1_MEMORY_CONFIG
+            if bias is not None:
+                out = ttnn.add(out, bias, memory_config=out_mem)
+            if activation == "relu":
+                out = ttnn.relu(out, memory_config=out_mem)
+            return out
         if program_config is not None:
             return ttnn.linear(
                 x,
@@ -599,10 +664,11 @@ class TTSeamlessM4Tv2Decoder:
         """Single-token self-attention with KV cache (decode head ops + ``sdpa_decode``)."""
         seq_q = 1
         padded_batch = nearest_32(self.max_batch_size)
+        qkv_w = attn_module.qkv_decode
         qkv = self._linear(
             hidden_states,
-            attn_module.qkv.weight,
-            attn_module.qkv.bias,
+            qkv_w.weight,
+            qkv_w.bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             program_config=pc_qkv,
         )
@@ -654,6 +720,7 @@ class TTSeamlessM4Tv2Decoder:
             attn_module.out_proj.bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             program_config=pc_out,
+            is_decode=True,
         )
         ttnn.deallocate(merged)
         return proj
@@ -687,6 +754,7 @@ class TTSeamlessM4Tv2Decoder:
                 attn_module.q_proj.bias,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 program_config=pc_q,
+                is_decode=True,
             )
             qh = self._heads(q, batch, seq_q, num_heads, head_dim)
             ttnn.deallocate(q)
@@ -698,6 +766,7 @@ class TTSeamlessM4Tv2Decoder:
                 attn_module.q_proj.bias,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 program_config=pc_q,
+                is_decode=True,
             )
             assert pc_kv_enc is not None
             kv_packed = self._linear(
@@ -744,6 +813,7 @@ class TTSeamlessM4Tv2Decoder:
             attn_module.out_proj.bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             program_config=pc_out,
+            is_decode=True,
         )
         ttnn.deallocate(merged)
         return proj
@@ -1121,9 +1191,10 @@ class TTSeamlessM4Tv2Decoder:
                 layer.ffn.fc1.weight,
                 layer.ffn.fc1.bias,
                 compute_cfg=self._ffn_fc1_compute_cfg,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 program_config=pc_ffn_fc1,
                 activation="relu",
+                is_decode=is_decode,
             )
             ttnn.deallocate(normed)
             ff_in = ff
@@ -1134,6 +1205,7 @@ class TTSeamlessM4Tv2Decoder:
                 compute_cfg=ffn_fc2_cfg,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 program_config=pc_ffn_fc2,
+                is_decode=is_decode,
             )
             ttnn.deallocate(ff_in)
             residual = hidden

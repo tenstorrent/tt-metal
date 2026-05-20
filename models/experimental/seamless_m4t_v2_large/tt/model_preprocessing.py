@@ -11,6 +11,7 @@ import torch
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight, make_parameter_dict
 
 from models.experimental.seamless_m4t_v2_large.reference.torch_text_decoder import embed_scale_for_config
+from models.experimental.seamless_m4t_v2_large.tt.common import create_dram_sharded_mem_config
 
 
 def _conv1d_weight(conv: torch.nn.Conv1d, *, device: ttnn.Device) -> ttnn.Tensor:
@@ -116,6 +117,51 @@ def _linear_pair(
     }
 
 
+def _linear_pair_dram_sharded(
+    linear: torch.nn.Linear,
+    *,
+    device: ttnn.Device,
+    weight_dtype: ttnn.DataType = ttnn.bfloat16,
+) -> dict:
+    w_torch = linear.weight.detach().T.contiguous()
+    k, n = int(w_torch.shape[0]), int(w_torch.shape[1])
+    mem_config, padded_n = create_dram_sharded_mem_config(device, k, n)
+    if padded_n > n:
+        w_torch = torch.nn.functional.pad(w_torch, (0, padded_n - n))
+    weight = ttnn.from_torch(
+        w_torch,
+        dtype=weight_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=mem_config,
+    )
+    b = preprocess_linear_bias(linear.bias.detach(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    return {"weight": weight, "bias": ttnn.to_device(b, device)}
+
+
+def _fused_linear_weight_dram_sharded(
+    weight: torch.Tensor,
+    bias: torch.Tensor,
+    *,
+    device: ttnn.Device,
+    weight_dtype: ttnn.DataType,
+) -> dict:
+    w_torch = weight.T.contiguous()
+    k, n = int(w_torch.shape[0]), int(w_torch.shape[1])
+    mem_config, padded_n = create_dram_sharded_mem_config(device, k, n)
+    if padded_n > n:
+        w_torch = torch.nn.functional.pad(w_torch, (0, padded_n - n))
+    w = ttnn.from_torch(
+        w_torch,
+        dtype=weight_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=mem_config,
+    )
+    b = preprocess_linear_bias(bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    return {"weight": w, "bias": ttnn.to_device(b, device)}
+
+
 def _fused_qkv_pair(
     q_proj: torch.nn.Linear,
     k_proj: torch.nn.Linear,
@@ -150,6 +196,25 @@ def _fused_qkv_pair(
         "weight": ttnn.to_device(w, device),
         "bias": ttnn.to_device(b, device),
     }
+
+
+def _fused_qkv_pair_dram_sharded(
+    q_proj: torch.nn.Linear,
+    k_proj: torch.nn.Linear,
+    v_proj: torch.nn.Linear,
+    *,
+    device: ttnn.Device,
+    weight_dtype: ttnn.DataType = ttnn.bfloat16,
+    q_scale: float = 1.0,
+) -> dict:
+    q_w = q_proj.weight.detach()
+    q_b = q_proj.bias.detach()
+    if q_scale != 1.0:
+        q_w = (q_w * q_scale).to(q_w.dtype)
+        q_b = (q_b * q_scale).to(q_b.dtype)
+    qkv_weight = torch.cat([q_w, k_proj.weight.detach(), v_proj.weight.detach()], dim=0).contiguous()
+    qkv_bias = torch.cat([q_b, k_proj.bias.detach(), v_proj.bias.detach()], dim=0).contiguous()
+    return _fused_linear_weight_dram_sharded(qkv_weight, qkv_bias, device=device, weight_dtype=weight_dtype)
 
 
 def _fused_kv_pair(
@@ -216,14 +281,24 @@ def create_text_decoder_parameters(decoder, *, device: ttnn.Device) -> dict:
             # Fused self-attn Q|K|V; cross-attn K|V fused (see ``cross_attention``).
             # Attention linear weights in bfloat8_b (bandwidth; biases stay bf16) — encoder pattern.
             "self_attn": {
-                "qkv": _fused_qkv_pair(
+                # Prefill: DRAM WIDTH-sharded QKV. Decode: interleaved (``qkv_decode``) for KV-cache PCC.
+                "qkv": _fused_qkv_pair_dram_sharded(
                     layer.self_attn.q_proj,
                     layer.self_attn.k_proj,
                     layer.self_attn.v_proj,
                     device=device,
                     weight_dtype=ttnn.bfloat8_b,
                 ),
-                "out_proj": _linear_pair(layer.self_attn.out_proj, device=device, weight_dtype=ttnn.bfloat8_b),
+                "qkv_decode": _fused_qkv_pair(
+                    layer.self_attn.q_proj,
+                    layer.self_attn.k_proj,
+                    layer.self_attn.v_proj,
+                    device=device,
+                    weight_dtype=ttnn.bfloat8_b,
+                ),
+                "out_proj": _linear_pair_dram_sharded(
+                    layer.self_attn.out_proj, device=device, weight_dtype=ttnn.bfloat8_b
+                ),
             },
             "cross_attention_layer_norm": {
                 "weight": _ln_to_device(layer.cross_attention_layer_norm.weight, device=device),
@@ -231,24 +306,26 @@ def create_text_decoder_parameters(decoder, *, device: ttnn.Device) -> dict:
             },
             # Fused K|V over encoder hidden states (one matmul vs two; Q stays separate).
             "cross_attention": {
-                "q_proj": _linear_pair(layer.cross_attention.q_proj, device=device, weight_dtype=ttnn.bfloat8_b),
+                "q_proj": _linear_pair_dram_sharded(
+                    layer.cross_attention.q_proj, device=device, weight_dtype=ttnn.bfloat8_b
+                ),
                 "kv": _fused_kv_pair(
                     layer.cross_attention.k_proj,
                     layer.cross_attention.v_proj,
                     device=device,
                     weight_dtype=ttnn.bfloat8_b,
                 ),
-                "out_proj": _linear_pair(layer.cross_attention.out_proj, device=device, weight_dtype=ttnn.bfloat8_b),
+                "out_proj": _linear_pair_dram_sharded(
+                    layer.cross_attention.out_proj, device=device, weight_dtype=ttnn.bfloat8_b
+                ),
             },
             "ffn_layer_norm": {
                 "weight": _ln_to_device(layer.ffn_layer_norm.weight, device=device),
                 "bias": _ln_to_device(layer.ffn_layer_norm.bias, device=device),
             },
             "ffn": {
-                # FFN matmul weights in block-float8. Biases stay bf16;
-                # activations remain bf16; compute configs unchanged (HiFi2 fc1, LoFi fc2).
-                "fc1": _linear_pair(layer.ffn.fc1, device=device, weight_dtype=ttnn.bfloat8_b),
-                "fc2": _linear_pair(layer.ffn.fc2, device=device, weight_dtype=ttnn.bfloat8_b),
+                "fc1": _linear_pair_dram_sharded(layer.ffn.fc1, device=device, weight_dtype=ttnn.bfloat8_b),
+                "fc2": _linear_pair_dram_sharded(layer.ffn.fc2, device=device, weight_dtype=ttnn.bfloat8_b),
             },
         }
         layers.append(make_parameter_dict(layer_dict))
