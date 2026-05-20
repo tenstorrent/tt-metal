@@ -46,7 +46,7 @@ void kernel_main() {
         copy_tile(cb_grad_out, 0, 0);
         copy_tile(cb_input, 0, 1);
         copy_tile(cb_input, 0, 2);  // tile[2] = x
-        copy_tile(cb_input, 0, 8);  // tile[8] = x
+        copy_tile(cb_input, 0, 5);  // tile[5] = x
 
         // tile[1] = x^3
         square_tile(1);
@@ -93,7 +93,7 @@ void kernel_main() {
         mul_binary_tile(2, 3, 2);
 
         // tile[2] = x * pdf term
-        copy_dest_values(8, 3);
+        copy_dest_values(5, 3);
         mul_binary_tile(2, 3, 2);
 
         // result: tile[1] = grad * (cdf_term + x * pdf_term)
