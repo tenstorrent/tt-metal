@@ -13,6 +13,7 @@ from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinearLLamaIColShardedWAllReducedFusedGateUp,
     TTNNLinearLLamaIColShardedWRowSharded,
     _dp_matmul_program_config,
+    _maybe_decode_l1_sharded_linear,
     _tp_requires_ccl,
     _tp_mesh_mapper,
     _linear_mesh_num_devices,
@@ -135,16 +136,30 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
         # Fuse bias into the matmul kernel on single-device (no CCL would scale
         # the bias by num_devices). Saves one BinaryNg per layer when bias is set.
         fused_bias = None if needs_ccl else self.tt_bias
-        tt_output = ttnn.linear(
+        tt_output = _maybe_decode_l1_sharded_linear(
+            self,
             input_tensor,
-            self.tt_weight,
+            input_shape,
             bias=fused_bias,
             dtype=ttnn.bfloat8_b,
-            memory_config=matmul_mc,
             compute_kernel_config=self.compute_kernel_config,
-            program_config=_dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
         )
+        if tt_output is None:
+            tt_output = ttnn.linear(
+                input_tensor,
+                self.tt_weight,
+                bias=fused_bias,
+                dtype=ttnn.bfloat8_b,
+                memory_config=matmul_mc,
+                compute_kernel_config=self.compute_kernel_config,
+                program_config=_dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
+            )
         if needs_ccl:
+            if tt_output.memory_config().buffer_type != ttnn.BufferType.DRAM:
+                tt_output_dram = ttnn.to_memory_config(tt_output, ttnn.DRAM_MEMORY_CONFIG)
+                if tt_output_dram is not tt_output:
+                    ttnn.deallocate(tt_output)
+                tt_output = tt_output_dram
             tt_output = ttnn.reduce_scatter(
                 tt_output,
                 dim=3,
@@ -200,16 +215,30 @@ class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
         needs_ccl = _linear_mesh_num_devices(self.device) > 1 and _tp_requires_ccl(self.device)
         fused_bias = None if needs_ccl else self.tt_bias
         matmul_mc = ttnn.DRAM_MEMORY_CONFIG if needs_ccl else (output_memory_config or ttnn.DRAM_MEMORY_CONFIG)
-        tt_output = ttnn.linear(
+        tt_output = _maybe_decode_l1_sharded_linear(
+            self,
             input_tensor,
-            self.tt_weight,
+            input_shape,
             bias=fused_bias,
             dtype=ttnn.bfloat8_b,
-            memory_config=matmul_mc,
             compute_kernel_config=self.compute_kernel_config,
-            program_config=_dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
         )
+        if tt_output is None:
+            tt_output = ttnn.linear(
+                input_tensor,
+                self.tt_weight,
+                bias=fused_bias,
+                dtype=ttnn.bfloat8_b,
+                memory_config=matmul_mc,
+                compute_kernel_config=self.compute_kernel_config,
+                program_config=_dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
+            )
         if needs_ccl:
+            if tt_output.memory_config().buffer_type != ttnn.BufferType.DRAM:
+                tt_output_dram = ttnn.to_memory_config(tt_output, ttnn.DRAM_MEMORY_CONFIG)
+                if tt_output_dram is not tt_output:
+                    ttnn.deallocate(tt_output)
+                tt_output = tt_output_dram
             tt_output = ttnn.reduce_scatter(
                 tt_output,
                 dim=3,
@@ -261,6 +290,7 @@ class TTNNDotsOCRMLP(TTNNModule):
         tt_module.up_proj = None
 
         tt_module.down_proj = TTNNDotsOCRRowShardedNoAllGather.from_torch(torch_mlp.down_proj)
+        tt_module.down_proj.use_decode_l1_sharded_matmul = False
         return tt_module
 
     def set_weight_dtype(self, dtype):
