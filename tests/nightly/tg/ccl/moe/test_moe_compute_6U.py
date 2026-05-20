@@ -36,6 +36,7 @@ MESH_GRAPH_DESC_1x16 = (
 MESH_GRAPH_DESC_1x8 = (
     "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x8_torus_graph_descriptor.textproto"
 )
+MESH_GRAPH_DESC_WH_QB = "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto"
 # FYI: These tests also work in a MESH_GRAPH_DESC_1x4 setting (~1 minute to set up), but not in a 1x2 setting.
 
 
@@ -52,6 +53,13 @@ MOE_DEVICE_PARAMS = {
     "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
     "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
     "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+    "trace_region_size": 500000,
+}
+# WH QuietBox (T3K) has MESH topology (no wraparound) — use FABRIC_1D, not FABRIC_1D_RING.
+MOE_DEVICE_PARAMS_WH_QB = {
+    "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+    "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+    "fabric_config": ttnn.FabricConfig.FABRIC_1D,
     "trace_region_size": 500000,
 }
 
@@ -71,29 +79,56 @@ class MoEModelConfig:
     tokens_per_device: int = 32
     output_height_shard_dim: int = 4
     marks: tuple = ()
+    enable_trace_values: tuple = False
+    num_links: int | None = None
 
 
-def _expand_model_configs(configs):
-    """Expand each model config into pytest.param entries for every (test_mode, has_bias, experts_per_device, activation) combo."""
+@dataclasses.dataclass(frozen=True)
+class MeshConfig:
+    name: str
+    mesh_graph_desc: str
+    mesh_shape: tuple
+    device_params: dict
+
+
+def _expand_mesh_model_configs(mesh_and_models):
+    """Expand (MeshConfig, list[MoEModelConfig]) pairs into flat pytest.param entries.
+
+    Each entry encodes: device_params (indirect), mesh_shape, mesh_device (indirect),
+    model_cfg, test_mode, has_bias, experts_per_device, activation_type, enable_trace.
+    Per-mesh skip marks and per-model xfail marks are both attached.
+    """
     expanded = []
-    for cfg in configs:
-        for test_mode in cfg.test_modes:
-            for has_bias in cfg.has_bias_values:
-                for epd in cfg.experts_per_device_values:
-                    for act in cfg.activation_types:
-                        bias_tag = "bias" if has_bias else "no_bias"
-                        act_tag = act.name.lower()
-                        expanded.append(
-                            pytest.param(
-                                cfg,
-                                test_mode,
-                                has_bias,
-                                epd,
-                                act,
-                                id=f"{cfg.name}-{test_mode}-{bias_tag}-{epd}experts_per_device-{act_tag}",
-                                marks=cfg.marks,
-                            )
-                        )
+    for mesh_cfg, models in mesh_and_models:
+        rows, cols = mesh_cfg.mesh_shape
+        skip_mark = pytest.mark.skipif(
+            not is_mesh_graph_descriptor_set(mesh_cfg.mesh_graph_desc),
+            reason=f"Requires TT_MESH_GRAPH_DESC_PATH={mesh_cfg.mesh_graph_desc}",
+        )
+        for cfg in models:
+            for test_mode in cfg.test_modes:
+                for has_bias in cfg.has_bias_values:
+                    for epd in cfg.experts_per_device_values:
+                        for act in cfg.activation_types:
+                            for enable_trace in cfg.enable_trace_values:
+                                bias_tag = "bias" if has_bias else "no_bias"
+                                act_tag = act.name.lower()
+                                trace_tag = "trace" if enable_trace else "notrace"
+                                expanded.append(
+                                    pytest.param(
+                                        mesh_cfg.device_params,
+                                        mesh_cfg.mesh_shape,
+                                        mesh_cfg.mesh_shape,
+                                        cfg,
+                                        test_mode,
+                                        has_bias,
+                                        epd,
+                                        act,
+                                        enable_trace,
+                                        id=f"{rows}x{cols}-{cfg.name}-{test_mode}-{bias_tag}-{epd}epd-{act_tag}-{trace_tag}",
+                                        marks=[skip_mark, *cfg.marks],
+                                    )
+                                )
     return expanded
 
 
@@ -106,7 +141,7 @@ _MODELS_1x16 = [
     MoEModelConfig("qwen35_397b",         N=1024, hidden_size=4096, selected_experts_k=10),
     MoEModelConfig("glm_47",              N=1536, hidden_size=5120, selected_experts_k=8),
     MoEModelConfig("glm5",                N=2048, hidden_size=6144, selected_experts_k=8),
-    MoEModelConfig("deepseek_v3",         N=2048, hidden_size=7168, selected_experts_k=8, has_bias_values=(False, True), test_modes=("perf", "correctness")),
+    MoEModelConfig("deepseek_v3",         N=2048, hidden_size=7168, selected_experts_k=8, has_bias_values=(False, True), test_modes=("perf", "correctness"), enable_trace_values=(False, True)),
     MoEModelConfig("kimi_k25",            N=2048, hidden_size=7168, selected_experts_k=8, experts_per_device_values=(6,), num_layers=3, num_iterations=2),
     MoEModelConfig("deepseek_v4_flash",   N=2048, hidden_size=4096, selected_experts_k=6),
     MoEModelConfig("deepseek_v4_pro",     N=3072, hidden_size=7168, selected_experts_k=6, experts_per_device_values=(6,), num_layers=3, num_iterations=2,
@@ -120,12 +155,37 @@ _MODELS_1x16 = [
 _MODELS_1x8 = [
     MoEModelConfig("deepseek_ocr", N=896,  hidden_size=1280, selected_experts_k=6),
     MoEModelConfig("gemma_4_26b",  N=704,  hidden_size=2816, selected_experts_k=8, activation_types=(MoEActivationFunction.GELU,)),
-    MoEModelConfig("gpt_oss",      N=2880, hidden_size=2880, selected_experts_k=4, experts_per_device_values=(4,), has_bias_values=(True,), test_modes=("perf", "correctness"), activation_types=(MoEActivationFunction.SWIGLU,)),
+    MoEModelConfig("gpt_oss",      N=2880, hidden_size=2880, selected_experts_k=4, experts_per_device_values=(4,), has_bias_values=(True,), test_modes=("perf", "correctness"), activation_types=(MoEActivationFunction.SWIGLU,), enable_trace_values=(False, True)),
 ]
 # fmt: on
 
-MODELS_1x16 = _expand_model_configs(_MODELS_1x16)
-MODELS_1x8 = _expand_model_configs(_MODELS_1x8)
+_MODELS_WH_QB = [
+    # Bring-up config based on gpt_oss parameters, adapted for a 2x4 mesh.
+    # cluster_axis=1 dispatches to 4 column-devices; 2 row-devices are idle replicas.
+    MoEModelConfig(
+        "gpt_oss",
+        N=2880,
+        hidden_size=2880,
+        selected_experts_k=4,
+        experts_per_device_values=(2,),
+        has_bias_values=(False,),
+        activation_types=(MoEActivationFunction.SILU,),
+        num_layers=1,
+        num_iterations=2,
+        tokens_per_device=8,
+        output_height_shard_dim=4,
+        enable_trace_values=(False,),
+        num_links=2,  # T3K has 2 Ethernet channels per adjacent-chip link
+    ),
+]
+
+_MESH_AND_MODELS = [
+    (MeshConfig("1x16", MESH_GRAPH_DESC_1x16, (1, 16), MOE_DEVICE_PARAMS), _MODELS_1x16),
+    (MeshConfig("1x8", MESH_GRAPH_DESC_1x8, (1, 8), MOE_DEVICE_PARAMS), _MODELS_1x8),
+    (MeshConfig("wh_qb", MESH_GRAPH_DESC_WH_QB, (2, 4), MOE_DEVICE_PARAMS_WH_QB), _MODELS_WH_QB),
+]
+
+ALL_MESH_MODEL_CONFIGS = _expand_mesh_model_configs(_MESH_AND_MODELS)
 
 
 def _run_model_test(
@@ -157,6 +217,7 @@ def _run_model_test(
         enable_trace=enable_trace,
         activation_type=activation_type,
         has_bias=has_bias,
+        num_links=model_cfg.num_links,
     )
 
 
@@ -752,6 +813,55 @@ def get_linearized_mesh_coord(num_replicated_devices, cluster_axis, expert_id, e
         return expert_id // experts_per_device
 
 
+def validate_off_axis_devices_idle(
+    mesh_device,
+    mesh_shape,
+    cluster_axis,
+    output_tensor,
+    *,
+    tensor_name,
+    idle_value=0,
+):
+    """Assert that devices on the off-cluster (replicated) mesh axis produce idle output.
+
+    Only meaningful on multi-axis meshes (num_replicated_devices > 1). The test's
+    gen_expert_mapping routes experts exclusively to the cluster-axis devices, so
+    off-axis devices should produce no output. This check closes the coverage gap
+    left by the data validators, which silently skip positions where the golden is empty.
+    """
+    rows, cols = mesh_shape
+    dispatch_devices = cols if cluster_axis == 1 else rows
+    replicated_devices = rows // dispatch_devices if cluster_axis == 1 else cols // dispatch_devices
+
+    if replicated_devices <= 1:
+        logger.info(f"[{tensor_name}] No off-axis devices to validate (mesh {mesh_shape} cax={cluster_axis})")
+        return True
+
+    all_passed = True
+    shards = [ttnn.to_torch(s, mesh_composer=None) for s in ttnn.get_device_tensors(output_tensor)]
+
+    for dev_idx, shard in enumerate(shards):
+        row = dev_idx // cols
+        col = dev_idx % cols
+        dispatch_idx = col if cluster_axis == 1 else row
+        is_off_axis = dispatch_idx >= dispatch_devices
+
+        if not is_off_axis:
+            continue
+
+        if not torch.all(shard == idle_value):
+            nonzero_count = (shard != idle_value).sum().item()
+            logger.warning(
+                f"[{tensor_name}] Off-axis device ({row},{col}) dev_idx={dev_idx}: "
+                f"{nonzero_count} non-idle elements (expected all {idle_value})"
+            )
+            all_passed = False
+        else:
+            logger.info(f"[{tensor_name}] Off-axis device ({row},{col}) idle PASSED")
+
+    return all_passed
+
+
 def gen_expert_mapping(
     num_devices, num_replicated_devices, cluster_axis, experts, experts_per_cluster, experts_per_device
 ):
@@ -808,7 +918,7 @@ def gen_sparse_buffer_and_indices(
     else:
         num_dispatch_devices = num_devices
 
-    experts_per_device = experts // num_devices
+    experts_per_device = experts // num_dispatch_devices
 
     # Total tokens in sparse buffer = tokens_per_device * num_dispatch_devices
     total_tokens = tokens_per_device * num_dispatch_devices
@@ -878,7 +988,7 @@ def compute_selective_tilize_golden(
     selected_experts_k = expert_indices.shape[2]
     hidden_size = sparse_buffer.shape[2]
     experts = expert_mapping.shape[1]
-    experts_per_device = experts // num_devices
+    experts_per_device = experts // num_dispatch_devices
 
     # Total possible tokens that could be sent to any expert
     total_tokens = tokens_per_device * num_dispatch_devices
@@ -945,7 +1055,7 @@ def compute_expert_activation_golden(expert_indices, expert_scores, expert_mappi
     tokens_per_device = expert_indices.shape[1]
     selected_experts_k = expert_indices.shape[2]
     experts = expert_mapping.shape[1]
-    experts_per_device = experts // num_devices
+    experts_per_device = experts // num_dispatch_devices
 
     # Build activation rows for each device
     # golden_activation[device] = list of (token_id, k_indices, scores)
@@ -1011,7 +1121,7 @@ def compute_e_t_golden(expert_indices, expert_mapping, mesh_shape, cluster_axis)
     tokens_per_device = expert_indices.shape[1]
     selected_experts_k = expert_indices.shape[2]
     experts = expert_mapping.shape[1]
-    experts_per_device = experts // num_devices
+    experts_per_device = experts // num_dispatch_devices
 
     # Build e_t lists for each device and each local expert
     # golden_e_t[device][local_expert] = [token_id_0, token_id_1, ...]
@@ -1120,7 +1230,7 @@ def compute_combine_golden(
     cluster_axis,
 ):
     cluster_factor, cluster_size, devices = get_cluster_dims(cluster_axis, mesh_shape)
-    experts_per_device = experts // devices
+    experts_per_device = experts // cluster_size
 
     output_ref_tensor = torch.zeros(layers, select_experts_k, tokens * cluster_factor, hidden_size).bfloat16()
     output_data_map = torch.zeros(output_ref_tensor.shape[:-1])
@@ -1258,6 +1368,8 @@ def run_moe_compute_test(
     enable_trace,
     activation_type,
     has_bias,
+    topology=None,
+    num_links=None,
 ):
     """
     Core test execution helper function.
@@ -1276,7 +1388,9 @@ def run_moe_compute_test(
     num_replicated_devices = num_devices // num_dispatch_devices
     total_tokens = tokens_per_device * num_dispatch_devices
     experts_per_cluster = experts // num_replicated_devices
-    experts_per_device = experts // num_devices
+    # Cluster-axis-aware: experts are partitioned along the cluster axis, not the full mesh.
+    # For 1xN topologies this equals experts // num_devices (legacy behavior).
+    experts_per_device = experts // num_dispatch_devices
 
     logger.info(f"Test configuration:")
     logger.info(f"  mesh_shape: {mesh_shape}")
@@ -1668,6 +1782,8 @@ def run_moe_compute_test(
             intermediate_size=N,
             has_bias=has_bias,
             cluster_axis=cluster_axis,
+            topology=topology,
+            num_links=num_links,
             mux_core_range_set=mux_core_range_set,
             optional_output_tensor=tt_combine_output_tensors[layer_id],
             optional_cross_device_semaphore=combine_barrier_semaphore,
@@ -1754,6 +1870,7 @@ def run_moe_compute_test(
     e_t_all_passed = True
     matmul_all_passed = True
     combine_all_passed = True
+    replicated_axis_all_passed = True
     for i in range(num_iterations):
         for layer_id in range(num_layers):
             (
@@ -1821,6 +1938,18 @@ def run_moe_compute_test(
             ):
                 combine_all_passed = False
 
+            # Only meaningful on multi-axis meshes where some devices are replicated.
+            if num_replicated_devices > 1:
+                if not validate_off_axis_devices_idle(
+                    mesh_device,
+                    mesh_shape,
+                    cluster_axis,
+                    combine_output_tensor,
+                    tensor_name="combine_output",
+                    idle_value=0,
+                ):
+                    replicated_axis_all_passed = False
+
     # Asserts
     logger.info(f"\n========== Asserts ==========")
     logger.info(f"\nPer Expert Total Tokens Verification: {'PASSED' if per_expert_tokens_all_passed else 'FAILED'}")
@@ -1828,50 +1957,32 @@ def run_moe_compute_test(
     logger.info(f"\nE-T Tensor Verification: {'PASSED' if e_t_all_passed else 'FAILED'}")
     logger.info(f"\nMatmul Output Tensor Verification: {'PASSED' if matmul_all_passed else 'FAILED'}")
     logger.info(f"\nCombine Output Tensor Verification: {'PASSED' if combine_all_passed else 'FAILED'}")
+    logger.info(f"\nOff-axis Devices Idle Check: {'PASSED' if replicated_axis_all_passed else 'FAILED'}")
 
     assert per_expert_tokens_all_passed, "Per expert total tokens tensor verification failed!"
     assert activation_all_passed, "Expert activation tensor verification failed!"
     assert e_t_all_passed, "E-T tensor verification failed!"
     assert matmul_all_passed, "Matmul output tensor verification failed!"
     assert combine_all_passed, "Combine output tensor verification failed!"
+    assert replicated_axis_all_passed, "Off-axis devices were not uniformly idle as expected!"
 
 
 # ---------------------------------------------------------------------------
-# Parametrized model tests (1x16 mesh)
+# Parametrized model tests (all mesh configs: 1x16, 1x8, WH QuietBox 2x4)
 # ---------------------------------------------------------------------------
-@pytest.mark.skipif(
-    not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16),
-    reason=f"1x16 model tests require TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x16}",
-)
-@pytest.mark.parametrize("device_params", [MOE_DEVICE_PARAMS], indirect=True)
-@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 16), (1, 16))], indirect=["mesh_device"])
+# Per-mesh skip conditions and per-model xfail marks are embedded in each
+# pytest.param entry inside ALL_MESH_MODEL_CONFIGS via _expand_mesh_model_configs.
+# WH QuietBox (T3K) notes:
+#   - 2x4 mesh: num_dispatch_devices=4, num_replicated_devices=2
+#   - FABRIC_1D (not FABRIC_1D_RING): T3K has MESH topology, not TORUS_XY
+#   - num_links=2: T3K has 2 Ethernet channels per adjacent-chip link
 @pytest.mark.parametrize(
-    "enable_trace", [pytest.param(False, id="disable_trace"), pytest.param(True, id="enable_trace")]
+    "device_params, mesh_shape, mesh_device, model_cfg, test_mode, has_bias, experts_per_device, activation_type, enable_trace",
+    ALL_MESH_MODEL_CONFIGS,
+    indirect=["device_params", "mesh_device"],
 )
-@pytest.mark.parametrize("model_cfg, test_mode, has_bias, experts_per_device, activation_type", MODELS_1x16)
-def test_moe_compute_1x16(
-    mesh_device, mesh_shape, enable_trace, model_cfg, test_mode, has_bias, experts_per_device, activation_type
-):
-    _run_model_test(
-        mesh_device, mesh_shape, enable_trace, model_cfg, test_mode, has_bias, experts_per_device, activation_type
-    )
-
-
-# ---------------------------------------------------------------------------
-# Parametrized model tests (1x8 mesh)
-# ---------------------------------------------------------------------------
-@pytest.mark.skipif(
-    not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x8),
-    reason=f"1x8 model tests require TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x8}",
-)
-@pytest.mark.parametrize("device_params", [MOE_DEVICE_PARAMS], indirect=True)
-@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 8), (1, 8))], indirect=["mesh_device"])
-@pytest.mark.parametrize(
-    "enable_trace", [pytest.param(False, id="disable_trace"), pytest.param(True, id="enable_trace")]
-)
-@pytest.mark.parametrize("model_cfg, test_mode, has_bias, experts_per_device, activation_type", MODELS_1x8)
-def test_moe_compute_1x8(
-    mesh_device, mesh_shape, enable_trace, model_cfg, test_mode, has_bias, experts_per_device, activation_type
+def test_moe_compute(
+    mesh_device, mesh_shape, model_cfg, test_mode, has_bias, experts_per_device, activation_type, enable_trace
 ):
     _run_model_test(
         mesh_device, mesh_shape, enable_trace, model_cfg, test_mode, has_bias, experts_per_device, activation_type

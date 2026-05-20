@@ -5,6 +5,7 @@
 #include "ttnn/operations/ccl/common/host/moe_core_placement.hpp"
 #include "kernels/moe_ring_common.h"
 #include "moe_compute_device_operation.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/selective_reduce_combine_device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
@@ -149,7 +150,13 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
     uint32_t num_devices = mesh_view.num_devices();
 
     uint32_t experts = tilize_mapping_shape[-1];
-    uint32_t experts_per_device = tt::div_up(experts, num_devices);
+    // Cluster-axis-aware: experts are partitioned along the cluster axis on the Full path
+    // (e.g. on a 2x4 BH single Loudbox with cluster_axis=1, divide by 4 not 8).
+    const auto cluster_axis_opt = args.cluster_axis();
+    const uint32_t cluster_devices = cluster_axis_opt.has_value()
+                                         ? ((*cluster_axis_opt == 0) ? mesh_view.num_rows() : mesh_view.num_cols())
+                                         : num_devices;
+    uint32_t experts_per_device = tt::div_up(experts, cluster_devices);
     uint32_t total_tokens =
         tilize_input_shape[0] *
         tilize_input_shape[1];  // tokens_per_device from input, total tokens across all dispatch devices
@@ -316,7 +323,7 @@ std::vector<ttnn::Tensor> moe_compute(
     const uint32_t output_height_shard_dim,
     const uint32_t intermediate_size,
     const bool has_bias,
-    uint32_t cluster_axis,
+    const std::optional<uint32_t>& cluster_axis,
     const std::optional<tt::tt_fabric::Topology>& topology,
     const std::optional<uint32_t>& num_links,
     const std::optional<CoreRangeSet>& mux_core_range_set,
@@ -354,6 +361,8 @@ std::vector<ttnn::Tensor> moe_compute(
         hidden_size,
         mux_core_range_set.value_or(CoreRangeSet{}));
 
+    TT_FATAL(cluster_axis.has_value(), "moe_compute requires cluster_axis to be provided");
+
     ttnn::experimental::prim::SelectiveReduceCombineParams combine_params{
         .hidden_size = hidden_size,
         .batch_size = 1,
@@ -361,8 +370,13 @@ std::vector<ttnn::Tensor> moe_compute(
         .select_experts_k = select_experts_k,
         .experts = experts,
         .num_links = num_links.value_or(4),
-        .axis = cluster_axis,
-        .topology = topology.value_or(tt::tt_fabric::Topology::Ring),
+        .axis = cluster_axis.value(),
+        // Auto-downgrade Ring → Linear when the mesh can't close a ring (e.g. BH single
+        // Loudbox p150_x8, which is 2x4 LINE/LINE). Without this, downstream writers run
+        // ring-shaped multicast paths on a line and index into never-opened fabric_connections
+        // slots — undefined behavior. See the kernel-side `Topology` template guard in
+        // fabric_multicast_bidirectional_atomic_inc_ring_1d (moe_utils.hpp).
+        .topology = ttnn::ccl::get_usable_topology(tilize_input_tensor, topology, cluster_axis),
         .num_token_parallel_cores = num_token_parallel_cores,
         .num_data_parallel_cores = num_data_parallel_cores,
         .worker_cores = combine_cores,
