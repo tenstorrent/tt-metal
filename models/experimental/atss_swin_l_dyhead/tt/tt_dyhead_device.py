@@ -247,38 +247,46 @@ class TtGroupNorm:
         G = self.num_groups
         C_per_G = self.C_per_G
 
+        # Pick memory config based on per-tensor size.
+        # The fp32 NHWC tensor is N*H*W*C*4 bytes. Five of these live concurrently inside this
+        # GN call (x_fp32, centered, squared, normalized, out_5d). With other resident L1 stuff
+        # in the inference (DCN's mask_expanded = 29 MB at P3 → ~450 KB/bank), the biggest
+        # spatial sizes won't fit. P4 (40×40×256×4 = 1.6 MB total ≈ 25 KB/bank) is comfortable.
+        big_bytes = N * H * W * C * 4
+        big_mem = ttnn.L1_MEMORY_CONFIG if big_bytes <= 4 * 1024 * 1024 else ttnn.DRAM_MEMORY_CONFIG
+        small_mem = ttnn.L1_MEMORY_CONFIG  # reductions / scalars always fit in L1
+
         # Cast bf16 → fp32, ensure TILE layout for reductions.
         if x_nhwc.dtype != ttnn.float32:
-            x_fp32 = ttnn.typecast(x_nhwc, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            x_fp32 = ttnn.typecast(x_nhwc, ttnn.float32, memory_config=big_mem)
         else:
             x_fp32 = x_nhwc
         if x_fp32.layout != ttnn.TILE_LAYOUT:
-            x_fp32 = ttnn.to_layout(x_fp32, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            x_fp32 = ttnn.to_layout(x_fp32, ttnn.TILE_LAYOUT, memory_config=big_mem)
         # Reshape to (N, H, W, G, C/G).
         x_5d = ttnn.reshape(x_fp32, (N, H, W, G, C_per_G))
 
         # Per-group mean and variance, reduced over (H, W, C/G).
-        mean = ttnn.mean(x_5d, dim=(1, 2, 4), keepdim=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        centered = ttnn.subtract(x_5d, mean, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        mean = ttnn.mean(x_5d, dim=(1, 2, 4), keepdim=True, memory_config=small_mem)
+        centered = ttnn.subtract(x_5d, mean, memory_config=big_mem)
         var = ttnn.mean(
-            ttnn.multiply(centered, centered, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            ttnn.multiply(centered, centered, memory_config=big_mem),
             dim=(1, 2, 4),
             keepdim=True,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=small_mem,
         )
         inv_std = ttnn.rsqrt(
-            ttnn.add(var, self.epsilon, memory_config=ttnn.DRAM_MEMORY_CONFIG),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.add(var, self.epsilon, memory_config=small_mem),
+            fast_and_approximate_mode=True,
+            memory_config=small_mem,
         )
-        normalized = ttnn.multiply(centered, inv_std, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        out_5d = ttnn.add(
-            ttnn.multiply(normalized, self.gamma_5d, memory_config=ttnn.DRAM_MEMORY_CONFIG),
-            self.beta_5d,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        normalized = ttnn.multiply(centered, inv_std, memory_config=big_mem)
+        # Fused mul+add: addcmul(a, b, c) = a + b*c. Saves one elementwise op vs separate
+        # multiply+add across 78 GN calls/inference.
+        out_5d = ttnn.addcmul(self.beta_5d, normalized, self.gamma_5d, memory_config=big_mem)
         # Reshape back, cast to bf16 (next ops expect bf16).
         out_4d = ttnn.reshape(out_5d, (N, H, W, C))
-        return ttnn.typecast(out_4d, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.typecast(out_4d, ttnn.bfloat16, memory_config=big_mem)
 
 
 # ---------------------------------------------------------------------------
