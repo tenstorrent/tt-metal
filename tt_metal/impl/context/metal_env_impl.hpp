@@ -72,6 +72,9 @@ public:
     // --- Control plane ---
     tt::tt_fabric::ControlPlane& get_control_plane();
     void initialize_control_plane();
+    // Non-lazy check: returns true if control plane is currently constructed (not reset).
+    // Safe to call without triggering lazy initialization.
+    bool is_control_plane_initialized() const noexcept;
 
     // --- Custom topology ---
     // Need to call set_fabric_config to reinit the control plane after calling this
@@ -121,7 +124,7 @@ private:
     bool force_reinit_ = false;
 
     // --- Control plane / system mesh ---
-    std::mutex control_plane_mutex_;
+    mutable std::mutex control_plane_mutex_;
     std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
     std::unique_ptr<distributed::SystemMesh> system_mesh_;
 

@@ -266,7 +266,13 @@ void MetalEnvImpl::teardown_fabric_config() {
     this->fabric_config_ = tt_fabric::FabricConfig::DISABLED;
     this->get_cluster().configure_ethernet_cores_for_fabric_routers(this->fabric_config_);
     this->num_fabric_active_routing_planes_ = 0;
-    this->get_control_plane().clear_fabric_context();
+
+    // getter will lazily create a control plane if one doesn't exist,
+    // which leads to topology mapper failures on t3k
+    std::lock_guard lock{control_plane_mutex_};
+    if (control_plane_) {
+        control_plane_->clear_fabric_context();
+    }
 }
 
 void MetalEnvImpl::initialize_fabric_config() {
@@ -314,6 +320,11 @@ tt::tt_fabric::ControlPlane& MetalEnvImpl::get_control_plane() {
 void MetalEnvImpl::initialize_control_plane() {
     std::lock_guard<std::mutex> lock(control_plane_mutex_);
     initialize_control_plane_impl();
+}
+
+bool MetalEnvImpl::is_control_plane_initialized() const noexcept {
+    std::lock_guard<std::mutex> lock(control_plane_mutex_);
+    return control_plane_ != nullptr;
 }
 
 void MetalEnvImpl::initialize_control_plane_impl() {
