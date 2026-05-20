@@ -109,26 +109,24 @@ Tensor reduce(
         /*default_fp32_acc=*/true));
     ttnn::verify_numerical_configuration(arch, compute_kernel_config);
 
-    // Dense row-major reduce: require 4D [N,C,H,W], W or H dim, BF16/FLOAT32.
-    // Supported ops: mean (AVG) and sum (SUM) for both dims; max (MAX) for H only.
-    // MAX is excluded from the W-reduce RM path: the kernel accumulates intermediate
-    // tile maxima with Accumulate::at (REDUCE_ROW), but the hardware's pack-reduce edge
-    // mask drops the face-row-0 state that GMPOOL needs between chunks, so the running
-    // max is lost. MAX + W-reduce falls back to tilize + tile reduce instead.
-    // Interleaved I/O is always eligible. Sharded I/O is eligible only for the matching
-    // sharding orientation: HEIGHT_SHARDED for W-reduce, WIDTH_SHARDED for H-reduce.
-    // All other ROW_MAJOR cases (min, HW, other dtypes, or mismatched sharding)
-    // fall back to tilize + tile reduce.
+    // Dense row-major reduce: a fast path that consumes ROW_MAJOR input directly (no host tilize)
+    // and is currently restricted to mean (AVG) / sum (SUM) on 4D BF16/FLOAT32 tensors with
+    // interleaved I/O on both sides. Anything else — MAX/MIN, HW reduce, other dtypes, sharded
+    // input or output — falls back to the standard tilize + tile-reduce path.
+    //
+    // MAX/MIN are excluded because the RM compute kernel accumulates partial reductions via
+    // Accumulate::at across chunks, and the cross-chunk fold uses SUM semantics. Wiring MAX
+    // accumulation through that pipeline is doable but not yet done; for now they tilize.
+    const bool both_interleaved =
+        input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
+        output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
     const bool rm_base_eligible =
         input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR && input_tensor.logical_shape().rank() == 4 &&
+        both_interleaved &&
         (input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
          input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32) &&
-        (reduce_math == tt::tt_metal::ReduceOpMath::AVG || reduce_math == tt::tt_metal::ReduceOpMath::SUM ||
-         reduce_math == tt::tt_metal::ReduceOpMath::MAX);
-    // W-reduce: MAX is excluded: REDUCE_ROW chunked accumulation does not support MAX (see comment above).
+        (reduce_math == tt::tt_metal::ReduceOpMath::AVG || reduce_math == tt::tt_metal::ReduceOpMath::SUM);
     const bool use_rm_dense_w = rm_base_eligible && reduce_dim == tt::tt_metal::ReduceOpDim::W;
-    // H-reduce: MAX is supported here
-    // (REDUCE_COL accumulation is compatible with MAX).
     const bool use_rm_dense_h = rm_base_eligible && reduce_dim == tt::tt_metal::ReduceOpDim::H;
     const bool use_rm_dense = use_rm_dense_w || use_rm_dense_h;
 
