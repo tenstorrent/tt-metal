@@ -235,7 +235,14 @@ void compute_grad_attn_weights(
 
     tile_regs_wait();
     cb_reserve_back(cb_grad_attn_weights, onetile);
-    pack_reconfig_data_format(cb_grad_attn_weights);
+    // 2-arg pack_reconfig_data_format(X, X): the LLK compares pack_dst_format[old] vs
+    // pack_dst_format[new] — same CB on both sides ⇒ formats match ⇒ skip the reconfig.
+    // The 1-arg variant unconditionally reprograms PACK, which triggers an implicit
+    // SFPU pipeline drain (~3.5 µs on Medium). Safe because every PACK target in the
+    // K-loop (cb_attention_weights, cb_grad_attn_weights, cb_grad_scores,
+    // cb_grad_query_accum) is Float32 in the program factory, so the previously-
+    // configured PACK format always matches Float32.
+    pack_reconfig_data_format(cb_grad_attn_weights, cb_grad_attn_weights);
     pack_tile(0, cb_grad_attn_weights);
     tile_regs_release();
 
@@ -283,7 +290,9 @@ void compute_grad_scores(
 
     tile_regs_wait();
     cb_reserve_back(cb_grad_scores, onetile);
-    pack_reconfig_data_format(cb_grad_scores);
+    // 2-arg pack_reconfig: cb_grad_scores is Float32, same as previous PACK target — skip.
+    // See compute_grad_attn_weights for the full rationale.
+    pack_reconfig_data_format(cb_grad_scores, cb_grad_scores);
     pack_tile(grad_reg, cb_grad_scores);
     tile_regs_release();
     cb_push_back(cb_grad_scores, onetile);
@@ -301,7 +310,9 @@ void update_grad_query(
     const bool do_accumulate = false) {
     cb_wait_front(cb_grad_scores, onetile);
 
-    pack_reconfig_data_format(cb_grad_query_accum);
+    // 2-arg pack_reconfig: cb_grad_query_accum is Float32, same as previous PACK target — skip.
+    // See compute_grad_attn_weights for the full rationale.
+    pack_reconfig_data_format(cb_grad_query_accum, cb_grad_query_accum);
     // First iteration: reserve space for result
     // Subsequent iterations: enable L1 accumulation to add to existing values
     if (!do_accumulate) {
