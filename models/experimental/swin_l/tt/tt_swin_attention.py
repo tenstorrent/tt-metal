@@ -109,6 +109,8 @@ class TtSwinAttention:
             ttnn.transpose(ttnn.reshape(input_tensor, (B, nH, wH, nW, wW, C)), 2, 3), (B * num_windows, wH * wW, C)
         )
 
+        seq_len = wH * wW
+
         qkv = ttnn.linear(
             ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG),
             self.parameters["qkv"]["weight"],
@@ -121,10 +123,27 @@ class TtSwinAttention:
         )
         ttnn.deallocate(input_tensor)
 
-        q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
-            qkv, num_heads=self.num_heads, transpose_key=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
+        qkv = ttnn.to_layout(qkv, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        q = ttnn.slice(qkv, [0, 0, 0], [B * num_windows, seq_len, C])
+        k = ttnn.slice(qkv, [0, 0, C], [B * num_windows, seq_len, 2 * C])
+        v = ttnn.slice(qkv, [0, 0, 2 * C], [B * num_windows, seq_len, 3 * C])
         ttnn.deallocate(qkv)
+
+        q = ttnn.to_layout(
+            ttnn.transpose(ttnn.reshape(q, (B * num_windows, seq_len, self.num_heads, self.head_dim)), 1, 2),
+            ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        k = ttnn.to_layout(
+            ttnn.transpose(ttnn.reshape(k, (B * num_windows, seq_len, self.num_heads, self.head_dim)), 1, 2),
+            ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        v = ttnn.to_layout(
+            ttnn.transpose(ttnn.reshape(v, (B * num_windows, seq_len, self.num_heads, self.head_dim)), 1, 2),
+            ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
         if self._sdpa_mask is None:
             self._prepare_sdpa_mask(num_windows)
