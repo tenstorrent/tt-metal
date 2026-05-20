@@ -77,6 +77,26 @@ struct DataflowBufferImpl {
     // Flag to track if this DFB uses remapper (set during finalization)
     bool use_remapper = false;
 
+    // Set by set_borrowed_memory_base_addr()
+    uint32_t borrowed_addr_ = 0;
+
+    bool borrows_memory() const { return config.borrows_memory; }
+
+    void set_borrowed_memory_base_addr(uint32_t new_addr) {
+        TT_FATAL(borrows_memory(), "Cannot set borrowed address on DFB {} that does not borrow memory", id);
+        borrowed_addr_ = new_addr;
+        // If allocate_dataflow_buffers() has already run, update the live tables so that
+        // a subsequent run picks up the new address.
+        for (auto& group : groups) {
+            for (auto& [core, addr] : group.l1_by_core) {
+                addr = new_addr;
+            }
+        }
+        for (auto& [core, pair] : core_lookup_) {
+            pair.second = new_addr;
+        }
+    }
+
     uint32_t total_size() const { return config.entry_size * config.num_entries; }
     uint32_t serialized_size() const;
     std::vector<uint8_t> serialize_for_core(const CoreCoord& core) const;

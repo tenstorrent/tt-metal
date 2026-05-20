@@ -323,7 +323,7 @@ class TtMoe(LightweightModule):
             cluster_axis=0,
             num_links=self.row_num_links,
             topology=self.row_topology,
-            init_zeros=True,
+            init_zeros=False,
         )
 
         # Build (group, chip, local_expert) -> global expert id table, sharded

@@ -1,4 +1,4 @@
-name: (triage) Auto Triage
+name: (triage) Regression Analysis
 
 on:
   workflow_dispatch:
@@ -34,7 +34,7 @@ on:
 
 
 jobs:
-  auto-triage:
+  regression-analysis:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -47,8 +47,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Run auto triage
-        uses: tenstorrent/tt-auto-triage/.github/actions/auto-triage@main
+      - name: Run regression analysis
+        uses: tenstorrent/tt-auto-triage/.github/actions/regression-analysis@main
         with:
           workflow-name: ${{ inputs.workflow_name }}
           job-name: ${{ inputs.job_name }}
