@@ -15,22 +15,28 @@ Slow dispatch only (the DRAM-core prefetcher doesn't run under fast dispatch yet
 trace replay isn't an option). SubDevice managers also don't work under slow dispatch,
 so the worker-core case runs senders + receivers on the default sub-device.
 
-Shape: K=512, N=1024, bf16, ring=8 (matches the proven `ff_widest` case from
-`test_prefetcher_BH_dram_core_large`). Llama-3.1-8B's FF1 shape doesn't fit per-receiver
-L1 at ring=8; production runs it at ring=24+.
+Shape is env-parameterized: BENCH_K, BENCH_N, BENCH_DTYPE, BENCH_RECV_PER_BANK control
+the matmul dims and ring topology (ring = 8 * BENCH_RECV_PER_BANK; BH has 8 DRAM banks).
+Use scripts/run_llama_matmul_sweep.sh to drive a sweep across Llama-3.1-8B shapes.
+
+Llama-3.1-8B on single Blackhole uses ring=64 (8 banks * 8 recv/bank) for the prefetcher
+matmuls. The DRAM-core path covers FF1, O, and QKV at this ring size. FF2 (K=14336)
+exceeds the worker-side L1 budget on the prefetcher path; production uses a DRAM-sharded
+matmul variant (no prefetcher) for FF2 instead.
 
 Use BENCH_REPEATS to set the repeat count (default 1000). For useful asymptotic numbers,
 1000+ is recommended.
 
-Measured (M=32, K=512, N=1024, ring=8, bf16, BH):
-                    DRAM-core           Worker-core
-  N=10:    188us, 0.18 TFLOP/s     190us, 0.18 TFLOP/s
-  N=100:    29us, 1.17 TFLOP/s      25us, 1.34 TFLOP/s
-  N=1000:   12us, 2.70 TFLOP/s     8.5us, 3.96 TFLOP/s
-  N=10000:  11us, 3.10 TFLOP/s     6.8us, 4.95 TFLOP/s
+Measured at production ring=64 (BENCH_REPEATS=1000):
 
-Worker-core is ~60% faster at the asymptote on this shape. Op-launch overhead per
-invocation is ~1.8 ms for both paths (the per-matmul cost at N=10 vs N=10000).
+  Shape                      DRAM-core              Worker-core
+  K=4096 N=14336 bf8_b (FF1) 253us, 14.84 TFLOP/s   627us, 5.99 TFLOP/s   (DRAM 2.48x)
+  K=4096 N=12288 bf8_b (QKV) 225us, 14.29 TFLOP/s   537us, 6.00 TFLOP/s   (DRAM 2.38x)
+  K=4096 N=4096  bf8_b (O)   120us,  8.96 TFLOP/s   192us, 5.60 TFLOP/s   (DRAM +60%)
+
+Smaller shapes (KV proj at ring=16, ff_widest at ring=8) favor worker-core by ~10-20%.
+The crossover is at the boundary where push BW becomes the matmul bottleneck — see
+docs/dram_core_prefetcher_bw_measurements.md for the full picture.
 """
 
 import math
