@@ -20,7 +20,8 @@ class TtSwinMLP:
         self.dim = dim
 
     def __call__(self, input_tensor):
-        # fc1 + GELU
+        # fc1 + GELU. Output dtype=bfloat8_b halves the (B*nW, S, 4*C) write/read
+        # bandwidth for fc2 — same trick ViT uses on every linear in the encoder.
         output = ttnn.linear(
             input_tensor,
             self.parameters["fc1"]["weight"],
@@ -33,6 +34,7 @@ class TtSwinMLP:
             ),
             core_grid=ttnn.CoreGrid(y=8, x=8),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat8_b,
         )
 
         # fc2
@@ -47,4 +49,5 @@ class TtSwinMLP:
             ),
             core_grid=ttnn.CoreGrid(y=8, x=8),
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat8_b,
         )
