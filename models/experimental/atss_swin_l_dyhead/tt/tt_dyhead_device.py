@@ -70,11 +70,15 @@ class TtScaleAttnNHWC:
         pooled = ttnn.mean(feat_nhwc, dim=(-3, -2), keepdim=True, memory_config=ttnn.L1_MEMORY_CONFIG)
         pooled = ttnn.reshape(pooled, (B, C))
 
-        out = ttnn.matmul(
-            pooled, self.weight, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=self._compute_config
+        # Fused linear (matmul + bias + relu) — saves 2 dispatches per call.
+        out = ttnn.linear(
+            pooled,
+            self.weight,
+            bias=self.bias,
+            activation="relu",
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            compute_kernel_config=self._compute_config,
         )
-        out = ttnn.add(out, self.bias, memory_config=ttnn.L1_MEMORY_CONFIG)
-        out = ttnn.relu(out, memory_config=ttnn.L1_MEMORY_CONFIG)
         out = ttnn.hardsigmoid(out, memory_config=ttnn.L1_MEMORY_CONFIG)
         out = ttnn.reshape(out, (B, 1, 1, 1))
         return out
@@ -119,16 +123,23 @@ class TtDyReLUNHWC:
         pooled = ttnn.mean(feat_nhwc, dim=(-3, -2), keepdim=True, memory_config=ttnn.L1_MEMORY_CONFIG)
         pooled = ttnn.reshape(pooled, (B, C))
 
-        h = ttnn.matmul(
-            pooled, self.weight1, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=self._compute_config
+        # Fused matmul + bias + relu in one dispatch (was 3 ops).
+        h = ttnn.linear(
+            pooled,
+            self.weight1,
+            bias=self.bias1,
+            activation="relu",
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            compute_kernel_config=self._compute_config,
         )
-        h = ttnn.add(h, self.bias1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        h = ttnn.relu(h, memory_config=ttnn.L1_MEMORY_CONFIG)
-
-        coeffs = ttnn.matmul(
-            h, self.weight2, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=self._compute_config
+        # Fused matmul + bias in one dispatch (was 2 ops).
+        coeffs = ttnn.linear(
+            h,
+            self.weight2,
+            bias=self.bias2,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            compute_kernel_config=self._compute_config,
         )
-        coeffs = ttnn.add(coeffs, self.bias2, memory_config=ttnn.L1_MEMORY_CONFIG)
         coeffs = ttnn.hardsigmoid(coeffs, memory_config=ttnn.L1_MEMORY_CONFIG)
         coeffs = ttnn.add(coeffs, -0.5, memory_config=ttnn.L1_MEMORY_CONFIG)
 
@@ -207,66 +218,131 @@ def _run_conv2d_nhwc(
 
 
 class TtGroupNorm:
-    """Custom GroupNorm on NHWC input, computed in **float32** on device.
+    """GroupNorm on NHWC input, using ttnn.group_norm with use_welford=True.
 
-    ttnn.group_norm hard-asserts bf16 input/output. Empirically (see
-    OPTIMIZATION_REPORT.md §7.6), that bf16 quantization is the dominant
-    per-block precision-loss source — replacing ttnn.group_norm with this fp32
-    custom impl recovers PCC from ~0.8 (at deep blocks) to 0.99+.
+    Welford's algorithm gives stable mean/variance accumulation, recovering most
+    of the precision the previous fp32 custom path provided. Replaces ~12 device
+    ops with ~3 (reshape + group_norm + reshape), saving ~700 ops/inference of
+    dispatch overhead at ~100 us each.
 
-    Uses 5D reshape (N, H, W, G, C/G) + per-group mean/var reductions in fp32,
-    then casts back to bf16 for the next op. Trace-safe: only ttnn ops + cached
-    gamma/beta. ~10 device ops per call vs 1 for ttnn.group_norm.
+    Per-spatial-size reciprocals tensors are precomputed at __init__ so the hot
+    path stays trace-safe.
     """
 
-    def __init__(self, device, weight: torch.Tensor, bias: torch.Tensor, num_groups: int):
+    @staticmethod
+    def _pick_grid(H: int, W: int, max_y: int = 8, max_x: int = 8) -> "ttnn.CoreGrid":
+        """Largest core grid where grid_y divides ceil(H*W/32) (= Ht). Required by ttnn.group_norm."""
+        Ht = (H * W + 31) // 32
+        for gy in range(min(max_y, Ht), 0, -1):
+            if Ht % gy == 0:
+                return ttnn.CoreGrid(y=gy, x=max_x)
+        return ttnn.CoreGrid(y=1, x=1)
+
+    def __init__(
+        self,
+        device,
+        weight: torch.Tensor,
+        bias: torch.Tensor,
+        num_groups: int,
+        level_shapes: List[Tuple[int, int]],
+    ):
         self.device = device
         self.num_groups = num_groups
         self.C = weight.shape[0]
         assert self.C % num_groups == 0, f"C={self.C} not divisible by num_groups={num_groups}"
         self.C_per_G = self.C // num_groups
-        # gamma, beta in 5D shape (1, 1, 1, G, C_per_G) for direct broadcast against (N, H, W, G, C/G).
-        self.gamma_5d = ttnn.from_torch(
+
+        # Per (H, W): pick a core_grid that fits ttnn.group_norm's divisibility constraint,
+        # then prepare the matching gamma/beta/input_mask/reciprocals for that grid.
+        self.params: dict = {}
+        for H, W in set(level_shapes):
+            grid = self._pick_grid(H, W)
+            [gamma_t, beta_t], input_mask = ttnn.dram_group_norm_params_from_torch(
+                [weight, bias], self.C, num_groups, device, core_grid=grid, return_mask=True, dtype=ttnn.bfloat16
+            )
+            recip_torch = ttnn.create_group_norm_reciprocals(1, self.C, H, W, num_groups, grid)
+            recip_dram = ttnn.from_torch(
+                recip_torch,
+                dtype=ttnn.float32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            sharded_mem_cfg = ttnn.create_sharded_memory_config(
+                shape=recip_dram.shape,
+                core_grid=grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            )
+            recip = ttnn.to_memory_config(recip_dram, sharded_mem_cfg)
+            ttnn.deallocate(recip_dram)
+            self.params[(H, W)] = (grid, gamma_t, beta_t, input_mask, recip)
+
+        self.epsilon = 1e-5
+        self._compute_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi3,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+            math_approx_mode=False,
+        )
+
+        # fp32 gamma/beta for the small-spatial-size custom GN fallback (P6, P7).
+        self._gamma_5d = ttnn.from_torch(
             weight.reshape(1, 1, 1, num_groups, self.C_per_G).contiguous(),
             dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        self.beta_5d = ttnn.from_torch(
+        self._beta_5d = ttnn.from_torch(
             bias.reshape(1, 1, 1, num_groups, self.C_per_G).contiguous(),
             dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        self.epsilon = 1e-5
 
     def __call__(self, x_nhwc):
         N, H, W, C = x_nhwc.shape
+        # ttnn.group_norm only takes BFLOAT16 input; for small spatial sizes (<=100
+        # elements like P6 10x10 and P7 5x5) the bf16 quantization + welford reduction
+        # compounds badly across 6 DyHead blocks (cent PCC at P7 drops to ~0.92).
+        # Fall back to the custom fp32 path for those sizes; use welford for everything
+        # bigger where the precision holds and the op-count savings dominate.
+        if H * W < 200:
+            return self._custom_fp32_gn(x_nhwc)
+        grid, gamma_t, beta_t, input_mask, recip = self.params[(H, W)]
+        x_4d = ttnn.reshape(x_nhwc, (N, 1, H * W, C))
+        if x_4d.layout != ttnn.TILE_LAYOUT:
+            x_4d = ttnn.to_layout(x_4d, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.group_norm(
+            x_4d,
+            num_groups=self.num_groups,
+            input_mask=input_mask,
+            weight=gamma_t,
+            bias=beta_t,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            core_grid=grid,
+            inplace=False,
+            epsilon=self.epsilon,
+            use_welford=True,
+            reciprocals=recip,
+            compute_kernel_config=self._compute_config,
+        )
+        return ttnn.reshape(out, (N, H, W, C))
+
+    def _custom_fp32_gn(self, x_nhwc):
+        """fp32 5D-reshape path, used for small spatial sizes where welford precision is poor."""
+        N, H, W, C = x_nhwc.shape
         G = self.num_groups
         C_per_G = self.C_per_G
-
-        # Pick memory config based on per-tensor size.
-        # The fp32 NHWC tensor is N*H*W*C*4 bytes. Five of these live concurrently inside this
-        # GN call (x_fp32, centered, squared, normalized, out_5d). With other resident L1 stuff
-        # in the inference (DCN's mask_expanded = 29 MB at P3 → ~450 KB/bank), the biggest
-        # spatial sizes won't fit. P4 (40×40×256×4 = 1.6 MB total ≈ 25 KB/bank) is comfortable.
         big_bytes = N * H * W * C * 4
         big_mem = ttnn.L1_MEMORY_CONFIG if big_bytes <= 4 * 1024 * 1024 else ttnn.DRAM_MEMORY_CONFIG
-        small_mem = ttnn.L1_MEMORY_CONFIG  # reductions / scalars always fit in L1
-
-        # Cast bf16 → fp32, ensure TILE layout for reductions.
-        if x_nhwc.dtype != ttnn.float32:
-            x_fp32 = ttnn.typecast(x_nhwc, ttnn.float32, memory_config=big_mem)
-        else:
-            x_fp32 = x_nhwc
+        small_mem = ttnn.L1_MEMORY_CONFIG
+        x_fp32 = ttnn.typecast(x_nhwc, ttnn.float32, memory_config=big_mem)
         if x_fp32.layout != ttnn.TILE_LAYOUT:
             x_fp32 = ttnn.to_layout(x_fp32, ttnn.TILE_LAYOUT, memory_config=big_mem)
-        # Reshape to (N, H, W, G, C/G).
         x_5d = ttnn.reshape(x_fp32, (N, H, W, G, C_per_G))
-
-        # Per-group mean and variance, reduced over (H, W, C/G).
         mean = ttnn.mean(x_5d, dim=(1, 2, 4), keepdim=True, memory_config=small_mem)
         centered = ttnn.subtract(x_5d, mean, memory_config=big_mem)
         var = ttnn.mean(
@@ -281,10 +357,7 @@ class TtGroupNorm:
             memory_config=small_mem,
         )
         normalized = ttnn.multiply(centered, inv_std, memory_config=big_mem)
-        # Fused mul+add: addcmul(a, b, c) = a + b*c. Saves one elementwise op vs separate
-        # multiply+add across 78 GN calls/inference.
-        out_5d = ttnn.addcmul(self.beta_5d, normalized, self.gamma_5d, memory_config=big_mem)
-        # Reshape back, cast to bf16 (next ops expect bf16).
+        out_5d = ttnn.addcmul(self._beta_5d, normalized, self._gamma_5d, memory_config=big_mem)
         out_4d = ttnn.reshape(out_5d, (N, H, W, C))
         return ttnn.typecast(out_4d, ttnn.bfloat16, memory_config=big_mem)
 
@@ -498,18 +571,28 @@ class TtDyHeadBlockDevice:
             else:
                 self.dcn_high.append(None)
 
-        # GroupNorms (one per conv role; weights shared across all levels)
+        # GroupNorms (one per conv role; weights shared across all levels).
+        # Pass all level_shapes so the welford reciprocals can be precomputed at __init__.
         self.gn_mid = TtGroupNorm(
-            device, pt_block.spatial_conv_mid.norm.weight.data, pt_block.spatial_conv_mid.norm.bias.data, num_groups=16
+            device,
+            pt_block.spatial_conv_mid.norm.weight.data,
+            pt_block.spatial_conv_mid.norm.bias.data,
+            num_groups=16,
+            level_shapes=level_shapes,
         )
         self.gn_low = TtGroupNorm(
-            device, pt_block.spatial_conv_low.norm.weight.data, pt_block.spatial_conv_low.norm.bias.data, num_groups=16
+            device,
+            pt_block.spatial_conv_low.norm.weight.data,
+            pt_block.spatial_conv_low.norm.bias.data,
+            num_groups=16,
+            level_shapes=level_shapes,
         )
         self.gn_high = TtGroupNorm(
             device,
             pt_block.spatial_conv_high.norm.weight.data,
             pt_block.spatial_conv_high.norm.bias.data,
             num_groups=16,
+            level_shapes=level_shapes,
         )
 
         # scale_attn (one Conv 256→1) and task_attn (DyReLU)
