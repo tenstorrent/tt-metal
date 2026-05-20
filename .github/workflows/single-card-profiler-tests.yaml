@@ -92,3 +92,4 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.compute-skus.outputs.enabled-skus }}
       test-selection: ${{ inputs.post-commit-only == 'true' && 'post-commit' || 'all' }}
+      
