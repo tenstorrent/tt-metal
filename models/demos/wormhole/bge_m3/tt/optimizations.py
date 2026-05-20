@@ -35,6 +35,7 @@ class MLPOptimizations:
     wi_prg_config: object | None = None
     wo_prg_config: object | None = None
     wi_minimal_config: object | None = None
+    wo_minimal_config: object | None = None
 
 
 @dataclass
@@ -134,6 +135,13 @@ class Optimizations:
             if tuned_b1
             else None
         )
+        wo_minimal = _mlp_wo_minimal_matmul_config(
+            mesh_device,
+            max_seq_len,
+            max_batch,
+            hidden_size=hidden_size,
+            intermediate_size=intermediate_size,
+        )
 
         mlp_opts = MLPOptimizations(
             wi_compute_kernel_cfg=mlp_wi_compute_kernel_config(mesh_device, max_seq_len, max_batch, dtype=dtype),
@@ -143,8 +151,9 @@ class Optimizations:
             activation_memcfg=act_mem,
             core_grid=core_grid,
             wi_prg_config=wi_prg,
-            wo_prg_config=wo_prg_tuned,
+            wo_prg_config=None if wo_minimal is not None else wo_prg_tuned,
             wi_minimal_config=wi_minimal,
+            wo_minimal_config=wo_minimal,
         )
 
         # ── Attention ────────────────────────────────────────────────────
@@ -309,8 +318,11 @@ def mlp_wi_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=N
 
 def mlp_wo_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=None, dtype=None):
     max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
-    if max_seq_len == 512 and max_batch in (1, 32):
+    if max_seq_len == 512 and max_batch == 1:
         return _make_compute_kernel(mesh_device, ttnn.MathFidelity.LoFi, max_seq_len, max_batch)
+    if max_seq_len == 512 and max_batch == 32:
+        # fp32_dest_acc_en=False for MinimalMatmul subblock 8x1 (h*w=8 > 4 cap).
+        return _make_compute_kernel(mesh_device, ttnn.MathFidelity.LoFi, max_seq_len, max_batch, fp32_dest_acc_en=False)
     return matmul_compute_kernel_config(mesh_device, max_seq_len, max_batch)
 
 
@@ -441,6 +453,28 @@ def _mlp_wi_minimal_matmul_config(mesh_device, max_seq_len, max_batch_size, *, h
     )
 
 
+def _mlp_wo_minimal_matmul_config(mesh_device, max_seq_len, max_batch_size, *, hidden_size, intermediate_size):
+    max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
+    if max_seq_len != 512 or max_batch != 32:
+        return None
+    if hidden_size != 1024 or intermediate_size != 4096:
+        return None
+    if mesh_device is None or not ttnn_is_blackhole(mesh_device):
+        return None
+    grid_x, grid_y = 11, 10
+    device_grid = mesh_device.compute_with_storage_grid_size()
+    if device_grid.x < grid_x or device_grid.y < grid_y:
+        return None
+    return ttnn.MinimalMatmulConfig(
+        M_block_size=8,
+        K_block_size=8,
+        N_block_size=8,
+        subblock_h=8,
+        subblock_w=1,
+        compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
+    )
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Attention program config helpers
 # ══════════════════════════════════════════════════════════════════════════════
@@ -494,11 +528,13 @@ def _attention_output_program_config(max_seq_len, max_batch_size, hidden_size, m
             return None
     except Exception:
         return None
+    # Manual tune: ibw=4 + sub=1x8 (h*w=8, only allowed with fp32_dest=False)
+    # saves ~150 us wall vs sub=1x4 (-7us/call x 24).
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(11, 10),
-        in0_block_w=2,
+        in0_block_w=4,
         out_subblock_h=1,
-        out_subblock_w=4,
+        out_subblock_w=8,
         per_core_M=5,
         per_core_N=32,
         fuse_batch=True,

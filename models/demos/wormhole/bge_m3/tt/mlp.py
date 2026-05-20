@@ -40,6 +40,7 @@ class BgeM3MLPConfig:
     wi_compute_kernel_cfg: object | None = None
     wo_compute_kernel_cfg: object | None = None
     wi_minimal_config: object | None = None
+    wo_minimal_config: object | None = None
     core_grid: ttnn.CoreGrid | None = None
     max_seq_len: int | None = None
     max_batch_size: int | None = None
@@ -125,16 +126,28 @@ class BgeM3MLP(LightweightModule):
             )
 
         wo_core_grid = None if self.config.wo_prg_config is not None else self.config.core_grid
-        output = ttnn.linear(
-            activated,
-            self.wo_weight,
-            memory_config=self.config.wo_memcfg,
-            dtype=self.config.wo_dtype,
-            bias=self.wo_bias,
-            program_config=self.config.wo_prg_config,
-            compute_kernel_config=self.config.wo_compute_kernel_cfg,
-            core_grid=wo_core_grid,
-        )
+        if self.config.wo_minimal_config is not None and self.config.wo_prg_config is None:
+            output = ttnn.experimental.minimal_matmul(
+                input_tensor=activated,
+                weight_tensor=self.wo_weight,
+                bias_tensor=self.wo_bias,
+                fused_activation=None,
+                config=self.config.wo_minimal_config,
+                memory_config=self.config.wo_memcfg,
+                dtype=self.config.wo_dtype,
+                compute_kernel_config=self.config.wo_compute_kernel_cfg,
+            )
+        else:
+            output = ttnn.linear(
+                activated,
+                self.wo_weight,
+                memory_config=self.config.wo_memcfg,
+                dtype=self.config.wo_dtype,
+                bias=self.wo_bias,
+                program_config=self.config.wo_prg_config,
+                compute_kernel_config=self.config.wo_compute_kernel_cfg,
+                core_grid=wo_core_grid,
+            )
         ttnn.deallocate(activated)
         return output
 

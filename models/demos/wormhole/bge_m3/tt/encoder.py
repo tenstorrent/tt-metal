@@ -203,6 +203,7 @@ def _build_mlp_config(args, mlp_weights, mesh_device, dtype, max_seq_len, max_ba
             wi_prg_config=mlp_opts.wi_prg_config,
             wo_prg_config=mlp_opts.wo_prg_config,
             wi_minimal_config=mlp_opts.wi_minimal_config,
+            wo_minimal_config=mlp_opts.wo_minimal_config,
         )
     return config
 
