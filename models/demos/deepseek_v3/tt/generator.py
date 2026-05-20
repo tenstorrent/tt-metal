@@ -892,14 +892,39 @@ class DeepseekGenerator(WarmupForwardMixin):
         seed_params = format_sampling_params(sampling_params, max_batch_size=batch_size)
         seed = getattr(seed_params, "seed", None)
         if seed is not None:
-            user_ids = list(range(batch_size))
-            self.sampling_generator.seed_manager.reset_seed(seed, user_ids)
+            seed_slots = self._sampling_device_seed_slots(seed, batch_size)
+            self.sampling_generator.seed_manager.reset_seed(seed_slots, list(range(len(seed_slots))))
         self.sampling_generator.apply_decode_state(
             sampling_param_chunks,
             reset_batch=True,
             prompt_tokens=torch.zeros((batch_size_per_row, 1), dtype=torch.int64),
             output_tokens=torch.zeros((batch_size_per_row, 1), dtype=torch.int64),
         )
+
+    def _sampling_device_slot(self, user_id: int) -> int:
+        row = int(user_id) // self.batch_size_per_row
+        local_user_id = int(user_id) % self.batch_size_per_row
+        sampling_batch_size = self.sampling_generator.tt_sampling.max_batch_size
+        sampling_dp = self.sampling_generator.tt_sampling._sampling_dp
+        if row < 0 or row >= sampling_dp:
+            raise ValueError(f"Sampling user id {user_id} maps to row {row}, outside sampling dp {sampling_dp}")
+        if local_user_id >= sampling_batch_size:
+            raise ValueError(
+                f"Sampling local user id {local_user_id} exceeds padded sampling batch size {sampling_batch_size}"
+            )
+        return row * sampling_batch_size + local_user_id
+
+    def _sampling_device_slots(self, user_slots: list[int] | None) -> list[int] | None:
+        if user_slots is None:
+            return None
+        return [self._sampling_device_slot(user_id) for user_id in user_slots]
+
+    def _sampling_device_seed_slots(self, seeds: list[int | None], batch_size: int) -> list[int | None]:
+        seed_slot_count = self.sampling_generator.seed_manager.max_batch_size
+        seed_slots = [None] * seed_slot_count
+        for user_id in range(batch_size):
+            seed_slots[self._sampling_device_slot(user_id)] = seeds[user_id]
+        return seed_slots
 
     def _sample_tokens_device(
         self,
@@ -948,7 +973,7 @@ class DeepseekGenerator(WarmupForwardMixin):
             else:
                 sampling_logits = padded_logits
 
-        self.sampling_generator.seed_manager.get_new_values(user_slots)
+        self.sampling_generator.seed_manager.get_new_values(self._sampling_device_slots(user_slots))
         self.sampling_generator.enable_internal_trace = enable_trace
         try:
             tt_out = self.sampling_generator.sample(sampling_logits, enable_trace=enable_trace)
@@ -2068,9 +2093,11 @@ class DeepseekGenerator(WarmupForwardMixin):
                                 prefill_logits, user_slots=[user_id]
                             )
                             prefill_logits_sampled_host = self._tokens_from_device(
-                                prefill_logits_sampled_device, self.mesh_device, batch_size_per_row=1
+                                prefill_logits_sampled_device,
+                                self.mesh_device,
+                                batch_size_per_row=self.batch_size_per_row,
                             )
-                            pred_token = int(prefill_logits_sampled_host[0].item())
+                            pred_token = int(prefill_logits_sampled_host[user_id].item())
                             ttnn.deallocate(prefill_logits)
                             ttnn.deallocate(prefill_logits_sampled_device)
                         else:
