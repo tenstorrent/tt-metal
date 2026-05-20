@@ -253,7 +253,7 @@
 # --- deepseek_prefill ---
 - id: bh-lb-deepseek-prefill
   name: bh_lb_DeepSeek_PREFILL
-  model-name: deepseek
+  model-name: deepseek_prefill
   cmd: |
     exit_code=0
     pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc and not perf-host-64" --timeout 1800 || exit_code=$?
@@ -287,7 +287,7 @@
 
 - id: bh-qb-deepseek-prefill
   name: bh_qb_DeepSeek_PREFILL
-  model-name: deepseek
+  model-name: deepseek_prefill
   cmd: |
     pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc and not perf-host-64" --timeout 1800
     pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py -k '2x2 and pcc_check' -vvv --tb=short

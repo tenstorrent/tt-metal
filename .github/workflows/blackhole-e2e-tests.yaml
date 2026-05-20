@@ -31,7 +31,7 @@ on:
         type: choice
         options:
           - all
-          - deepseek
+          - deepseek_prefill
       test-selection:
         description: 'Select e2e tests to run: all tests, all SDPA tests, or one test id'
         required: false
