@@ -10,6 +10,8 @@ This folder contains an experimental Tenstorrent (`ttnn`) port of **Mistral [Dev
 
 **Maximum context length:** 4K tokens (prompt + generation combined) for the TT demos and on-device stack.
 
+**Traced decode** is enabled for TT generation; **1540×1540** multimodal images are supported via `--vision-square-pixels 1540`.
+
 ## Prerequisites
 
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
@@ -45,7 +47,7 @@ pytest models/experimental/devstarl2_small/tests/test_ministralattn.py -k pcc
 
 ## Demos
 
-Run from repo root on BH-QB (P150×4, `--mesh-width 4`).
+Run from repo root on BH-QB or P150.
 
 ### Execution
 
@@ -53,16 +55,16 @@ Run from repo root on BH-QB (P150×4, `--mesh-width 4`).
 |------|--------|-------------|---------|
 | Image + text | `demo/tt_image_demo.py` | One-shot image Q&A on TT (vision → projector → text LM). Default prompt: `resource/sample.jpeg`. | `python3 -m models.experimental.devstarl2_small.demo.tt_image_demo --backend tt --image models/experimental/devstarl2_small/resource/sample.jpeg --vision-square-pixels 1540 --mesh-width 4 --max-new-tokens 100` |
 | Text LM | `demo/tt_text_demo.py` | Text-only TT prefill/decode + LM head. Default Fibonacci prompt; override with `--prompt`. | `python models/experimental/devstarl2_small/demo/tt_text_demo.py --mesh-width 4` |
-| Interactive agent | `demo/tt_demo_agent.py` | Multi-turn coding REPL on TT; `/image PATH [question…]` for multimodal. | `python models/experimental/devstarl2_small/demo/tt_demo_agent.py --vision-square-pixels 1540 ` |
+| Interactive agent | `demo/tt_demo_agent.py` | Multi-turn coding REPL on TT; `/image PATH [question…]` for multimodal. | `python models/experimental/devstarl2_small/demo/tt_demo_agent.py --vision-square-pixels 1540` |
 
 ### Performance
-
-Representative BH-QB (P150×4) runs; each demo prints a traced-decode timing table to stdout after generation.
 
 | Demo | System | Mesh | New tokens | t/s/u | t/s (e2e) | TTFT (ms) |
 |:-----|:-------|:-----|----------:|------:|----------:|----------:|
 | Image + text | BH-QB | 1x4 | 100 | 15.8 | 14.9 | 875 |
+| Image + text | P150 | 1x4 | 100 | 2.4 | 2.3 | 6585 |
 | Text LM | BH-QB | 1x4 | 200 | 17.5 | 17.1 | 198 |
+| Text LM | P150 | 1x4 | 200 | 2.8 | 2.8 | 533 |
 
 ## Resources
 
@@ -80,7 +82,7 @@ Representative BH-QB (P150×4) runs; each demo prints a traced-decode timing tab
 
 - `multimodal_demo_helpers.py` — mesh open/close, TT prefill padding, LM head helpers, traced decode buffers, multimodal scatter prefill.
 - `fp8_dequantize_compat.py` — HF FP8 scalar-scale shim for Devstral checkpoints across `transformers` versions.
-- `pixtral_seq_chunk.py` — vision matmul sequence chunk sizing (`pixtral_vision_seq_chunk_len`; env `PIXTRAL_VISION_MM_SEQ_CHUNK*`).
+- `pixtral_seq_chunk.py` — vision matmul sequence chunk sizing (`pixtral_vision_seq_chunk_len`, `pixtral_effective_mm_seq_len`, pad/trim helpers; env `PIXTRAL_VISION_MM_SEQ_CHUNK*`).
 - `dram_sharded_matmul.py` — DRAM-sharded decode matmul helpers (width-sharded L1 linear, weight build, core grids).
 
 ## Details
@@ -105,3 +107,24 @@ Representative BH-QB (P150×4) runs; each demo prints a traced-decode timing tab
 
 - Submodule tests under `tests/` validate individual TT ops against HF on Devstral weights (often layer 0, partial safetensors, or full `ModelArgs.load_state_dict()` where noted).
 - Pipeline tests under `tests/pipeline_tests/` validate the vision tower, multimodal projector, text stack, and projected image features.
+
+## Optimizations
+
+The following optimizations were applied across the vision tower, projector, and text stack to improve throughput and memory use on Tenstorrent devices:
+
+- **L1 placement** — Moved tensors that previously lived in DRAM into L1, including an L1 interleaved memory configuration where it improves bandwidth and locality.
+- **Kernel precision** — Converted HiFi2 kernels to LoFi where accuracy allows, reducing compute cost.
+- **Reduced-precision weights** — Converted bfloat16 tensors to bfloat8 where supported to cut memory footprint and data movement.
+- **Fused QKV projection** — Combined query, key, and value projections into a single fused matmul instead of three separate passes.
+- **Vision MLP (FF1/FF3)** — Applied FF1/FF3 projection optimizations on the vision feed-forward path and fused W1 + W3 matmul input weights so the gate and up projections share one input read.
+- **Fused SwiGLU** — Vision MLP uses a single multiply with SiLU fused on the activation (`input_tensor_a_activations=[SILU]`) instead of separate SiLU and multiply ops, matching patterns used on other Ministral/Qwen-VL ports.
+- **Parallelism** — Increased core count on key ops for better device parallelism.
+- **DRAM sharing** — Applied DRAM sharing optimizations on decode and sharded matmul paths to reuse buffers across steps.
+- **Tensor lifetime** — Deallocated intermediate activations and gather buffers as soon as each stage finishes (QKV split, SDPA output, MLP gate/up paths, patch merger tiles, decode buffers) to lower peak device memory on long vision runs and multi-step decode.
+- **Pure TTNN path** — Migrated remaining PyTorch operations to TTNN so inference stays on-device end to end.
+- **Fused rotary embedding** — Replaced rotate-half style RoPE with a fused rotate-embedding implementation.
+- **In-place residuals** — Attention and MLP blocks add residuals in place (`output_tensor=residual`) so the same op count avoids extra allocation and memory traffic.
+- **Long-sequence vision matmul** — Restored pad → batched matmul → trim for long vision sequences instead of chunking and concatenating along the sequence axis.
+- **Scaled dot-product attention (SDPA)** — Program config is chosen from sequence length: below 2048 tokens, 128×128 chunks (aligned with Mistral vision, PCC-safe); at 2048 and above, chunks scale up to 256×256 with matmul batch count. `PIXTRAL_SDPA_Q_CHUNK` and `PIXTRAL_SDPA_K_CHUNK` environment variables can override chunk sizes. The SDPA grid uses the device `max_grid_size`, and SDPA runs with an explicit DRAM memory config. Redundant `to_memory_config` after head concatenation was removed.
+- **Async collectives (multi-chip)** — Replaced synchronous `all_gather` with `all_gather_async` on mesh paths (vision attention output gather, text MLP/decoder collectives where applicable). Tuned `chunks_per_sync`, `num_workers_per_link`, `num_buffers_per_channel`, and `num_links` per cluster axis (e.g. higher sync chunking and four workers per link on vision attention gather; two links and smaller chunks on text prefill/decode) for better fabric overlap and throughput.
+- **Matmul batching and tiles** — On the 1024-token PCC path, matmul tile size increases from 512 to 1024 with batch fusion enabled. For 1540×1540 vision inputs (~12k tokens), the number of batches per matmul is roughly halved compared to the prior chunk-concat approach.

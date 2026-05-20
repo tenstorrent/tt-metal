@@ -60,13 +60,14 @@ class TtPixtralAttentionLayer(LightweightModule):
         residual = hidden_states
         x = self.attention_norm(hidden_states)
         x = self.attention(x, position_embeddings=position_embeddings)
-        x = ttnn.add(residual, x)
+        ttnn.add(residual, x, output_tensor=residual, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(x)
 
-        residual = x
-        x = self.ffn_norm(x)
+        x = self.ffn_norm(residual)
         x = self.mlp(x)
-        x = ttnn.add(residual, x)
-        return x
+        ttnn.add(residual, x, output_tensor=residual, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(x)
+        return residual
 
 
 __all__ = ["TtPixtralAttentionLayer"]

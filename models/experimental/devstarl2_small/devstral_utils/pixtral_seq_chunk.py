@@ -18,13 +18,26 @@ def pixtral_vision_seq_chunk_len(configuration) -> int:
     if force is not None and str(force).strip() != "":
         chunk = max(32, nearest_32(int(force)))
     else:
-        cap_raw = os.environ.get("PIXTRAL_VISION_MM_SEQ_CHUNK_CAP", "512")
+        cap_raw = os.environ.get("PIXTRAL_VISION_MM_SEQ_CHUNK_CAP", "1024")
         cap = max(32, nearest_32(int(cap_raw)))
         cfg_chunk = getattr(configuration, "VISION_MAX_MM_SEQ", cap)
         if cfg_chunk is None:
             cfg_chunk = cap
         chunk = max(32, min(int(cfg_chunk), int(cap)))
 
+    return chunk
+
+
+def pixtral_effective_mm_seq_len(configuration, seq_len: int) -> int:
+    """Matmul M: one kernel over full ``seq_len`` when it fits L1, else ``pixtral_vision_seq_chunk_len``."""
+    chunk = pixtral_vision_seq_chunk_len(configuration)
+    force = os.environ.get("PIXTRAL_VISION_MM_FULL_SEQ_CAP")
+    if force is not None and str(force).strip() != "":
+        full_cap = max(32, nearest_32(int(force)))
+    else:
+        full_cap = max(chunk, 1024)
+    if seq_len <= full_cap:
+        return seq_len
     return chunk
 
 
