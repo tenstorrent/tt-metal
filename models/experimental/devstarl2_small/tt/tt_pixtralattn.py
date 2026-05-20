@@ -20,23 +20,18 @@ def _pixtral_sdpa_qk_chunk_sizes() -> tuple[int, int]:
     return q, k
 
 
-def rotate_half(x):
-    last_dim = x.shape[-1]
-    half = last_dim // 2
-
-    x1 = ttnn.slice(x, (0, 0, 0, 0), (x.shape[0], x.shape[1], x.shape[2], half))
-    x2 = ttnn.slice(x, (0, 0, 0, half), (x.shape[0], x.shape[1], x.shape[2], last_dim))
-
-    neg_x2 = ttnn.mul(x2, -1)
-    return ttnn.concat([neg_x2, x1], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
-
-
 def apply_rotary_pos_emb_vision_tt(q, k, cos, sin):
+    seq_len = q.shape[2]
     cos = ttnn.unsqueeze(cos, 0)
     sin = ttnn.unsqueeze(sin, 0)
 
-    q_embed = ttnn.add(ttnn.mul(q, cos), ttnn.mul(rotate_half(q), sin))
-    k_embed = ttnn.add(ttnn.mul(k, cos), ttnn.mul(rotate_half(k), sin))
+    q_embed = ttnn.experimental.rotary_embedding(q, cos, sin)
+    k_embed = ttnn.experimental.rotary_embedding(k, cos, sin)
+
+    if q_embed.shape[2] != seq_len:
+        q_embed = q_embed[:, :, :seq_len, :]
+    if k_embed.shape[2] != seq_len:
+        k_embed = k_embed[:, :, :seq_len, :]
     return q_embed, k_embed
 
 
@@ -301,28 +296,33 @@ class TtMistralImageAttention(LightweightModule):
         ttnn.deallocate(attn_output_11SH)
 
         if self.num_devices > 1:
-            # Keep all-gather input on-chip to avoid DRAM-interleaved in0 stalls.
-            output_11SH = ttnn.to_memory_config(output_11SH, memory_config=ttnn.L1_MEMORY_CONFIG)
-            num_links = 2
+            cluster_axis = 1
             dense_out_gathered = ttnn.experimental.all_gather_async(
                 output_11SH,
                 persistent_output_buffer=None,
                 dim=1,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                num_links=num_links,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+                num_links=self.tt_ccl.get_num_links(cluster_axis),
+                cluster_axis=cluster_axis,
                 topology=ttnn.Topology.Linear,
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                chunks_per_sync=20,
-                num_workers_per_link=2,
-                num_buffers_per_channel=2,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+                chunks_per_sync=40,
+                num_workers_per_link=4,
+                num_buffers_per_channel=4,
             )
             output_11SH.deallocate(True)
             dense_out_reduced = ttnn.experimental.fast_reduce_nc(
-                dense_out_gathered, dims=[1], output=None, compute_kernel_config=None
+                dense_out_gathered,
+                dims=[1],
+                output=None,
+                compute_kernel_config=None,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             dense_out_reduced = dense_out_reduced[:, :, : dense_out_gathered.shape[-2], :]
+            ttnn.deallocate(dense_out_gathered)
             return dense_out_reduced
         return output_11SH
 
 
-__all__ = ["TtMistralImageAttention", "apply_rotary_pos_emb_vision_tt", "rotate_half"]
+__all__ = ["TtMistralImageAttention", "apply_rotary_pos_emb_vision_tt"]

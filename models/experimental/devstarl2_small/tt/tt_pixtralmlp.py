@@ -7,7 +7,11 @@ import torch
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.devstarl2_small.devstral_utils.pixtral_seq_chunk import pixtral_vision_seq_chunk_len
+from models.experimental.devstarl2_small.devstral_utils.pixtral_seq_chunk import (
+    pad_seq_to_chunk_multiple,
+    pixtral_vision_seq_chunk_len,
+    trim_seq_dim2,
+)
 
 
 class MistralTTVisionMLP(LightweightModule):
@@ -44,11 +48,8 @@ class MistralTTVisionMLP(LightweightModule):
         w3_t = get_weight("w3")
         if w1_t.shape != w3_t.shape:
             raise ValueError(f"w1 and w3 must match for fused SwiGLU matmul; got {w1_t.shape} vs {w3_t.shape}")
-        w1_tt = as_tensor(w1_t, dtype)
-        w3_tt = as_tensor(w3_t, dtype)
-        self.w1_w3 = ttnn.concat([w1_tt, w3_tt], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(w1_tt)
-        ttnn.deallocate(w3_tt)
+        # Fuse on host so weight load does not emit per-layer ConcatDeviceOperation on device.
+        self.w1_w3 = as_tensor(torch.cat([w1_t, w3_t], dim=-1), dtype)
         self.w2 = as_tensor(get_weight("w2"), dtype)
 
         self.compute_kernel_config = args.compute_kernel_config_hifi2
@@ -58,7 +59,6 @@ class MistralTTVisionMLP(LightweightModule):
         x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         seq_len = int(x.shape[-2])
         chunk = pixtral_vision_seq_chunk_len(self.args)
-        hidden_w = int(x.shape[-1])
 
         def run_chunk(xc: ttnn.Tensor) -> ttnn.Tensor:
             fused = ttnn.linear(
@@ -87,30 +87,16 @@ class MistralTTVisionMLP(LightweightModule):
             ttnn.deallocate(w2_in)
             return w2_out
 
+        original_seq_len = seq_len
+        x, seq_len, original_seq_len = pad_seq_to_chunk_multiple(x, seq_len, chunk)
+
         if seq_len <= chunk:
-            return run_chunk(x)
+            return trim_seq_dim2(run_chunk(x), original_seq_len)
 
-        # Fast path: when sequence chunks exactly, avoid per-chunk concat by batching chunk axis.
-        if seq_len % chunk == 0:
-            x_batched = ttnn.reshape(x, [1, seq_len // chunk, chunk, -1])
-            out_batched = run_chunk(x_batched)
-            return ttnn.reshape(out_batched, [1, 1, seq_len, -1])
-
-        parts: list[ttnn.Tensor] = []
-        start = 0
-        while start < seq_len:
-            end = min(start + chunk, seq_len)
-            xc = ttnn.slice(x, (0, 0, start, 0), (1, 1, end, hidden_w))
-            parts.append(run_chunk(xc))
-            ttnn.deallocate(xc)
-            start = end
-
-        if len(parts) == 1:
-            return parts[0]
-        out = ttnn.concat(parts, dim=2)
-        for p in parts:
-            ttnn.deallocate(p)
-        return out
+        x_batched = ttnn.reshape(x, [1, seq_len // chunk, chunk, -1])
+        out_batched = run_chunk(x_batched)
+        out = ttnn.reshape(out_batched, [1, 1, seq_len, -1])
+        return trim_seq_dim2(out, original_seq_len)
 
 
 __all__ = ["MistralTTVisionMLP"]
