@@ -118,6 +118,7 @@ class TtDeepSeekPrefillPipeline:
             shared_expert_activations_dtype=self.config.shared_expert_activations_dtype,
             shared_expert_weights_dtype=self.config.shared_expert_weights_dtype,
             weight_cache_path=self.config.weight_cache_path,
+            lm_head_is_column_parallel=True,
         )
         self.model_built = True
 

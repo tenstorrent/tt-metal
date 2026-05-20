@@ -661,6 +661,7 @@ def load_and_compute_layer_by_layer(
             emb_dim=config.hidden_size,
             mesh_device=mesh_device,
             cache_path=weight_cache_path,
+            is_column_parallel=True,
         )
 
     for k in lm_head_sd.keys():
