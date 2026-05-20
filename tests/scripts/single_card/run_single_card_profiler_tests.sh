@@ -25,15 +25,15 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --post-commit)
             MODE="post_commit"
-            shift
+            break
             ;;
         --full)
             MODE="full"
-            shift
+            break
             ;;
         --include-skip-post-commit)
             MODE="full"
-            shift
+            break
             ;;
         -h|--help)
             usage
@@ -97,10 +97,10 @@ main() {
         source python_env/bin/activate
     fi
 
-    # If a function name is provided as first argument, run that function
-    if [[ -n "$1" ]] && [[ "$(type -t "$1")" == "function" ]]; then
-        echo "Running function: $1"
-        "$@"
+    # If a function name is provided as last argument, run that function
+    if [[ -n "${!#}" ]] && [[ "$(type -t "${!#}")" == "function" ]]; then
+        echo "Running function: ${!#}"
+        "${!#}"
     else
         # Otherwise run all tests
         run_profiling_test
