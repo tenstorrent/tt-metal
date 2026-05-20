@@ -78,6 +78,11 @@ on:
         type: string
         default: ""
         description: "Pre-built wheel artifact name (skips build if provided)"
+      use-artifacts-from-run:
+        required: false
+        type: string
+        default: ""
+        description: "Workflow run ID to reuse pre-built artifacts (skips rebuild)"
       enable-llk-asserts:
         required: false
         type: boolean
@@ -163,6 +168,11 @@ on:
         default: false
         type: boolean
         description: "Enable LLK asserts"
+      use-artifacts-from-run:
+        required: false
+        type: string
+        default: ""
+        description: "Workflow run ID to reuse pre-built artifacts (skips rebuild)"
   schedule:
     - cron: "0 */4 * * *"
     - cron: "0 7 * * *"  # Every day at 7:00 UTC
@@ -253,6 +263,7 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-umd-tests: true
       enable-lto: ${{ inputs.enable-lto || false }}
+      use-artifacts-from-run: ${{ inputs.use-artifacts-from-run || '' }}
 
   resolve-artifacts:
     runs-on: ubuntu-latest
