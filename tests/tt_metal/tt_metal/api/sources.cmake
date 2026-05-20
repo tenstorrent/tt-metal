@@ -63,6 +63,7 @@ set(UNIT_TESTS_API_SOURCES
     test_descriptor_patching.cpp
     test_duplicate_kernel.cpp
     test_core_local_mem_api.cpp
+    
     test_alignment_writes.cpp
     test_cb_leak.cpp
     test_cb_pages.cpp
@@ -76,5 +77,6 @@ set(UNIT_TESTS_API_SOURCES
     test_valid_mem_wrong_alloc.cpp
     test_write_beyond_res_pages.cpp
     test_write_outside_tensor.cpp
+    
     disaggregation/test_kv_chunk_address_table.cpp
 )

@@ -559,7 +559,26 @@ static std::string get_jit_cache_dir() {
     if (const char* dir = std::getenv("TT_EMULE_JIT_CACHE_DIR")) {
         return dir;
     }
-    return "/tmp/tt_emule_jit_cache_" + std::to_string(getuid());
+    // Bake a fingerprint of all JIT headers into the directory name. Any header
+    // change produces a new directory, automatically invalidating the entire
+    // cache without relying on per-file mtime comparisons at lookup time.
+    static const std::string dir_path = [] {
+        uint64_t max_ns = 0;
+        std::error_code ec;
+        for (auto& e : std::filesystem::recursive_directory_iterator(TT_EMULE_JIT_INCLUDE_DIR, ec)) {
+            if (!e.is_regular_file()) {
+                continue;
+            }
+            auto t = static_cast<uint64_t>(e.last_write_time().time_since_epoch().count());
+            if (t > max_ns) {
+                max_ns = t;
+            }
+        }
+        char hex[17];
+        std::snprintf(hex, sizeof(hex), "%016lx", max_ns);
+        return "/tmp/tt_emule_jit_cache_" + std::to_string(getuid()) + "_" + hex;
+    }();
+    return dir_path;
 }
 
 // dlopen a previously cached .so and return the kernel entry function.
@@ -598,12 +617,21 @@ static std::function<void()> disk_cache_lookup(const std::string& cache_key, con
         return nullptr;
     }
 
+    auto so_mtime = std::filesystem::last_write_time(so_path);
+
     // Invalidate if kernel source file is newer than cached .so
     // (skip for inline sources — their content is hashed into the cache key)
     if (!src_path.empty() && std::filesystem::exists(src_path)) {
-        auto so_mtime = std::filesystem::last_write_time(so_path);
-        auto src_mtime = std::filesystem::last_write_time(src_path);
-        if (src_mtime > so_mtime) {
+        if (std::filesystem::last_write_time(src_path) > so_mtime) {
+            return nullptr;
+        }
+    }
+
+    // Invalidate if any JIT header is newer than the cached .so. The cache
+    // key only covers kernel source content and compile flags; header edits
+    // (e.g. dataflow_api.h) would otherwise silently serve stale binaries.
+    for (auto& entry : std::filesystem::recursive_directory_iterator(TT_EMULE_JIT_INCLUDE_DIR)) {
+        if (entry.is_regular_file() && entry.last_write_time() > so_mtime) {
             return nullptr;
         }
     }
