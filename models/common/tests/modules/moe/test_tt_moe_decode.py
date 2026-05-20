@@ -14,6 +14,7 @@ Parametrized over every YAML model config in `models/common/modules/moe/configs/
 
 from __future__ import annotations
 
+import faulthandler
 import random
 from pathlib import Path
 
@@ -31,6 +32,9 @@ from models.demos.deepseek_v3.tests.fused_op_unit_tests.moe.test_optimized_moe_d
     verify_output,
 )
 from tests.nightly.tg.ccl.moe.test_moe_compute_6U import _swiglu_reference
+
+faulthandler.enable()
+faulthandler.dump_traceback_later(30, repeat=True)  # dump tracebacks every 30s
 
 # ---------------------------------------------------------------------------
 # torch reference helpers
@@ -234,16 +238,20 @@ def test_tt_moe_decode(
     print("Created inputs")
 
     # --- build module ---
-    decode = TTMoEDecode(
-        mesh_device=mesh_device,
-        config=config,
-        torch_w0=torch_w0,
-        torch_w1=torch_w1,
-        torch_w2=torch_w2,
-        torch_b0=torch_b0,
-        torch_b1=torch_b1,
-        torch_b2=torch_b2,
-    )
+    try:
+        decode = TTMoEDecode(
+            mesh_device=mesh_device,
+            config=config,
+            torch_w0=torch_w0,
+            torch_w1=torch_w1,
+            torch_w2=torch_w2,
+            torch_b0=torch_b0,
+            torch_b1=torch_b1,
+            torch_b2=torch_b2,
+        )
+    except Exception as e:
+        logger.exeption(e)
+        raise
 
     logger.info("Module Setup complete")
 
@@ -312,14 +320,18 @@ def test_tt_moe_decode(
     logger.info("Running forward iterations")
     tt_outputs = []
     for it in range(num_iterations):
-        tt_outputs.append(
-            decode.forward(
-                tt_x=tt_dispatch_inputs[it],
-                tt_scores=tt_dispatch_scores[it],
-                tt_indices=tt_dispatch_indices[it],
-                layer_id=0,
+        try:
+            tt_outputs.append(
+                decode.forward(
+                    tt_x=tt_dispatch_inputs[it],
+                    tt_scores=tt_dispatch_scores[it],
+                    tt_indices=tt_dispatch_indices[it],
+                    layer_id=0,
+                )
             )
-        )
+        except Exception as e:
+            logger.exception(e)
+            raise
         logger.info(f"Op iteration {it} complete")
 
     ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])

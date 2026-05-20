@@ -6,6 +6,16 @@ from __future__ import annotations
 
 import torch
 from loguru import logger
+from ttnn.experimental.moe_compute_utils import (
+    add_shared_expert_weights,
+    get_weight_core_shard_maps,
+    get_weight_mem_configs,
+    map_shared_experts,
+    prepare_w0_w1_tensor_for_moe_compute,
+    prepare_w0_w1_tensor_with_bias,
+    prepare_w2_tensor_for_moe_compute,
+    prepare_w2_tensor_with_bias,
+)
 
 import ttnn
 from models.common.modules.moe.tt_moe_decode_config import TTMoEDecodeConfig
@@ -30,32 +40,28 @@ class _TTMoEDecodeExpertState:
         # TODO
         pass
 
+    @staticmethod
     def _init_expert_mapping(torch_expert_mapping: "torch.Tensor", mesh_device: ttnn.MeshDevice):
         expert_mapping_dtype = ttnn.uint16
+        print("Expert mapping to device")
         return ttnn.from_torch(
             torch_expert_mapping,
             device=mesh_device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=expert_mapping_dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensorToMesh(
-                mesh_device,
-                dim=0,
-            ),
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
         )
 
     @staticmethod
-    @torch.no_grad()
     def _device_map_reorder_weights(
-        torch_w0: "torch.Tensor", torch_w1: "torch.Tensor", torch_w2: "torch.Tensor", expert_mapping: list[int]
+        torch_w0: "torch.Tensor",
+        torch_w1: "torch.Tensor",
+        torch_w2: "torch.Tensor",
+        torch_expert_mapping: "torch.Tensor",
     ):
-        for t in (torch_w0, torch_w1, torch_w2):
-            assert len(expert_mapping) == t.shape[1]
+        return tuple([t[:, torch_expert_mapping, :, :] for t in (torch_w0, torch_w1, torch_w2)])
 
-        ind = torch.Tensor([expert_mapping])
-        return tuple([t[:, ind, :, :] for t in (torch_w0, torch_w1, torch_w2)])
-
-    @torch.no_grad()
     def __init__(
         self,
         mesh_device: ttnn.MeshDevice,
@@ -79,19 +85,18 @@ class _TTMoEDecodeExpertState:
     ):
         print("init expert state")
 
-        self._validate()
+        # self._validate()
 
-        mapped_torch_w0, mapped_torch_w1, mapped_torch_w2 = (
-            torch_w0,
-            torch_w1,
-            torch_w2,
-        )  # self._device_map_reorder_weights(
-        #    torch_w0, torch_w1, torch_w2, expert_mapping
-        # )
+        torch_expert_mapping = torch.tensor(expert_mapping, dtype=torch.int)
+
+        mapped_torch_w0, mapped_torch_w1, mapped_torch_w2 = self._device_map_reorder_weights(
+            torch_w0, torch_w1, torch_w2, torch_expert_mapping
+        )
 
         logger.info("reordered weights")
 
         if shared_expert_ids_to_devices is not None:
+            logger.info("Adding shared expert weights")
             total_torch_w0, total_torch_w1, total_torch_w2 = add_shared_expert_weights(
                 mapped_torch_w0,
                 mapped_torch_w1,
@@ -100,16 +105,16 @@ class _TTMoEDecodeExpertState:
                 shared_id_to_torch_w1,
                 shared_id_to_torch_w2,
                 shared_expert_ids_to_devices,
-                mesh_device.num_devices(),
+                mesh_device.get_num_devices(),
             )
-
+            logger.info("Adding shared expert mapping")
             total_expert_mapping = map_shared_experts(
-                expert_mapping, shared_expert_ids_to_devices, mesh_shape, cluster_axis
+                torch_expert_mapping, shared_expert_ids_to_devices, mesh_shape, cluster_axis
             )
 
         else:
             total_torch_w0, total_torch_w1, total_torch_w2 = mapped_torch_w0, mapped_torch_w1, mapped_torch_w2
-            total_expert_mapping = expert_mapping
+            total_expert_mapping = torch_expert_mapping
 
         self.tt_expert_mapping = self._init_expert_mapping(total_expert_mapping, mesh_device)
 
@@ -165,6 +170,7 @@ class _TTMoEDecodeExpertState:
                 intermediate_size,
                 w0_w1_shard_map,
             )
+            print(f"Built w0w1")
 
             torch_w2_reordered = prepare_w2_tensor_with_bias(
                 torch_w2,
@@ -176,6 +182,7 @@ class _TTMoEDecodeExpertState:
                 w2_shard_map,
                 w0_w1_shard_map,
             )
+            print(f"Built w2")
 
         else:
             torch_w0_w1_reordered = prepare_w0_w1_tensor_for_moe_compute(
