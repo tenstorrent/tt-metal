@@ -126,7 +126,11 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     // M extent of the input — independent of K offsets. parent_M is the input's stored M
     // dimension (matmul-M = stored inner when transpose_a, stored outer otherwise).
     uint32_t parent_M = transpose_a ? in0_tensor_shape[-1] : in0_tensor_shape[-2];
-    uint32_t parent_M_tiles = parent_M / tt::constants::TILE_HEIGHT;
+    // Non-tile-aligned logical M is supported (matches minimal_matmul / ttnn::matmul). The
+    // TILE-layout physical storage already rounds up to a multiple of TILE_HEIGHT; we
+    // ceil-div here so the partial last tile is counted in actual_M_tiles. The dataflow
+    // writer's per-tile bounds check clips writes back to the logical tile count.
+    uint32_t parent_M_tiles = tt::div_up(parent_M, tt::constants::TILE_HEIGHT);
 
     // effective_M_tiles overrides for offset-read mode; otherwise process the whole input.
     uint32_t actual_M_tiles =
