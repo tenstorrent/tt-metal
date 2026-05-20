@@ -19,6 +19,7 @@ emitting the same style of **loguru** / model logs as the official CLI. DiT samp
   :func:`models.tt_transformers.tt.common.create_tt_model`. Disable with
   ``--no-experimental-5hz-ttnn-causal-lm`` (falls back to host PyTorch HF Qwen 1.7B forward).
 
+
 Use ``--fast-preprocess`` to skip the LM and use the lightweight path (tokenizer + TTNN ``Qwen3Model``
 embedding encoder + ``precomputed_lm_hints_25Hz=None``), avoiding a PyTorch Qwen forward while still
 using HF ``prepare_condition`` on the host by default. Pass ``--ttnn-condition-embedding`` to force
@@ -36,6 +37,7 @@ valid-audio **slice** in codes phase when a mask is applied, otherwise **full vo
 ``ttnn_impl/qwen_model_full_device.QwenModelFullDevice``; use ``--guidance-scale 1`` if that backend
 cannot batch cond+uncond).
 """
+
 
 from __future__ import annotations
 
@@ -161,6 +163,7 @@ def _build_t_schedule(*, shift: float, infer_steps: int, timesteps: str | None, 
 # path (after explicit CLI / env overrides) so the demo is repo-independent by default.
 _VENDORED_ACESTEP_ROOT = Path(__file__).resolve().parent / "torch_ref" / "_vendored_acestep"
 
+
 _WELL_KNOWN_REPO_ROOTS = [
     Path.home() / "proj_sdk" / "ACE-Step-1.5",
     Path.home() / "ACE-Step-1.5",
@@ -181,6 +184,7 @@ def _resolve_ace_step_repo_root(*, ckpt_dir: str | None, ace_step_repo_root: str
     5. Well-known external paths (``~/proj_sdk/ACE-Step-1.5``, ``~/ACE-Step-1.5``,
        ``/opt/ACE-Step-1.5``).
     """
+
     candidates: list[Path] = []
     if ace_step_repo_root:
         candidates.append(Path(ace_step_repo_root).expanduser().resolve())
@@ -188,6 +192,7 @@ def _resolve_ace_step_repo_root(*, ckpt_dir: str | None, ace_step_repo_root: str
     if env:
         candidates.append(Path(env).expanduser().resolve())
     candidates.append(_VENDORED_ACESTEP_ROOT)
+
     if ckpt_dir:
         cur = Path(ckpt_dir).expanduser().resolve()
         for _ in range(8):
@@ -467,6 +472,7 @@ def main() -> None:
                 "be used automatically; if it is missing, pass --ace-step-repo-root or set "
                 "ACE_STEP_REPO_ROOT to an external checkout."
             )
+
         from models.demos.ace_step_v1_5.ref_decoder_compare import ensure_acestep_repo_on_path
 
         ensure_acestep_repo_on_path(root)
@@ -496,6 +502,7 @@ def main() -> None:
         dit_handler = AceStepHandler()
         llm_handler = LocalFiveHzLMHandler()
         device = "cpu"
+
         status, ok = dit_handler.initialize_service(
             project_root=str(ref_root),
             config_path=args.variant,
@@ -554,6 +561,7 @@ def main() -> None:
         from transformers import AutoTokenizer
 
         tok = AutoTokenizer.from_pretrained(str(text_model_dir))
+
         dit_instruction = "Fill the audio semantic mask based on the given conditions:"
         metas = {"caption": args.prompt, "duration": float(args.duration_sec), "language": "en"}
         text_prompt = f"""# Instruction
@@ -672,6 +680,7 @@ def main() -> None:
             from transformers import AutoModel
 
             ace = AutoModel.from_pretrained(str(model_dir), trust_remote_code=True).eval().to(torch_dev)
+
             B = 1
             lyric_dim = int(text_hidden_states.shape[-1])
             lyric_hidden_states = torch.zeros((B, 1, lyric_dim), dtype=torch.float32, device=torch_dev)
@@ -708,6 +717,7 @@ def main() -> None:
             if nc is None:
                 raise RuntimeError("Could not find null_condition_emb on ACE-Step model.")
             null_emb = nc.float().cpu()
+
     else:
         # --- Official: 5 Hz LM + AceStepHandler batching + prepare_condition (precomputed LM hints) ---
         ref_root = _ensure_acestep_on_path()
@@ -725,6 +735,7 @@ def main() -> None:
         from acestep.handler import AceStepHandler
 
         from models.demos.ace_step_v1_5.ttnn_impl.five_hz_lm import LocalFiveHzLMHandler
+
     except ModuleNotFoundError as e:
         raise RuntimeError(
             "Default preprocessing imports AceStepHandler, which pulls ACE-Step training code "
@@ -759,6 +770,7 @@ def main() -> None:
 
     dit_handler = AceStepHandler()
     llm_handler = LocalFiveHzLMHandler()
+
     device = "cpu"
     status, ok = dit_handler.initialize_service(
         project_root=str(ref_root),
@@ -996,6 +1008,7 @@ def main() -> None:
                 null_4d = ttnn.reshape(null_emb_tt, (1, 1, 1, d_enc))
                 null_rep_4d = ttnn.repeat(null_4d, (1, 1, s_enc, 1))
                 null_rep = ttnn.reshape(null_rep_4d, (1, s_enc, d_enc))
+
                 enc_tt_pipe = ttnn.concat([enc_hs_tt_one, null_rep], dim=0)
                 ctx_tt_pipe = concat_duplicate_batch(ctx_tt_one)
                 try:

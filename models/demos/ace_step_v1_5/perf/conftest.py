@@ -10,6 +10,7 @@ which may yield a ``MeshDevice`` handle. ACE-Step VAE conv helpers are validated
 ``device`` so Tracy/pytest runs match that path.
 """
 
+
 from __future__ import annotations
 
 import os
@@ -33,6 +34,7 @@ def device():
     if _DEFAULT_NUM_CQS > 1:
         open_kwargs["num_command_queues"] = _DEFAULT_NUM_CQS
     dev = ttnn.open_device(**open_kwargs)
+
     if hasattr(dev, "enable_program_cache"):
         dev.enable_program_cache()
     yield dev

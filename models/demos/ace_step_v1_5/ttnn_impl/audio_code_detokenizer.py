@@ -13,6 +13,7 @@ import numpy as np
 import ttnn
 
 from .condition_encoder import _bidirectional_attn_bias_np, _rope_cos_sin_np
+from .math_perf_env import ace_step_reshape_kwargs
 from .qwen3_embedding_encoder import Qwen3EmbeddingEncoderConfig, _TtQwen3EncoderLayer
 
 
@@ -154,6 +155,9 @@ class TtAceStepAudioCodeDetokenizer:
                 sdpa_compute_kernel_config=sdpa_compute_kernel_config,
                 sdpa_program_config=sdpa_program_config,
                 linear_compute_kernel_config=linear_compute_kernel_config,
+                # Fused batch = number of audio-code rows; cond reuse-mcast-1D program_config
+                # drives per_core_M = B * ceil(S/32) and can exceed WH/BH static CB budgets.
+                use_cond_linear_program_config=False,
             )
             for i in range(2)
         ]
@@ -185,6 +189,7 @@ class TtAceStepAudioCodeDetokenizer:
             return None
         code_np = fsq_codes_from_indices_np(np.asarray(code_ids, dtype=np.int64)).reshape(1, len(code_ids), 6)
         mapper = ttnn.ReplicateTensorToMesh(self.device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
+        _sr = ace_step_reshape_kwargs(ttnn)
         x = ttnn.as_tensor(
             code_np,
             device=self.device,
@@ -193,15 +198,15 @@ class TtAceStepAudioCodeDetokenizer:
             memory_config=self.mem,
             mesh_mapper=mapper,
         )
-        x = ttnn.reshape(x, (1, 1, len(code_ids), 6))
+        x = ttnn.reshape(x, (1, 1, len(code_ids), 6), **_sr)
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         q = ttnn.linear(x, self.quantizer_project_out_w, bias=self.quantizer_project_out_b, transpose_b=True)
         q = ttnn.linear(q, self.embed_w, bias=self.embed_b, transpose_b=True)
-        q = ttnn.reshape(q, (1, len(code_ids), 1, 2048))
+        q = ttnn.reshape(q, (1, len(code_ids), 1, 2048), **_sr)
         q = ttnn.repeat(q, (1, 1, 5, 1))
         special = ttnn.repeat(self.special_tokens, (1, len(code_ids), 1, 1))
         h = ttnn.add(q, special)
-        h = ttnn.reshape(h, (len(code_ids), 1, 5, 2048))
+        h = ttnn.reshape(h, (len(code_ids), 1, 5, 2048), **_sr)
         bias_np = _bidirectional_attn_bias_np(np.ones((len(code_ids), 5), dtype=np.float32), sliding_window=None)
         bias_tt = ttnn.as_tensor(
             bias_np,
@@ -218,7 +223,7 @@ class TtAceStepAudioCodeDetokenizer:
             ttnn.deallocate(bias_tt)
         h = ttnn.rms_norm(ttnn.to_layout(h, ttnn.TILE_LAYOUT), weight=self.norm_w, epsilon=1e-6, memory_config=self.mem)
         h = ttnn.linear(h, self.proj_out_w, bias=self.proj_out_b, transpose_b=True)
-        h = ttnn.reshape(h, (1, len(code_ids) * 5, 64))
+        h = ttnn.reshape(h, (1, len(code_ids) * 5, 64), **_sr)
         return h
 
 

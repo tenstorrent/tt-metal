@@ -59,19 +59,12 @@ class TtSnake1d:
         self.dtype = dtype or getattr(ttnn, "bfloat16", None) or getattr(ttnn, "float16", None)
         if self.dtype is None:
             raise RuntimeError("TTNN build missing a usable dtype (bfloat16/float16)")
+        # DRAM only: L1 params/activations clash with conv1d circular buffers on Blackhole.
         self.memory_config = memory_config if memory_config is not None else getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+        self._out_kw = {"memory_config": self.memory_config} if self.memory_config is not None else {}
 
-        # sin(alpha*x)^2 loses too much precision in bfloat16 for pretrained Oobleck alphas
-        # (|alpha*x| reaches O(10–50) at deeper layers; bf16's 8-bit mantissa aliases sin into noise).
-        # float32 is required for correct audio quality — raise if unavailable rather than silently
-        # degrading to bf16.
-        compute_dtype = getattr(ttnn, "float32", None)
-        if compute_dtype is None:
-            raise RuntimeError(
-                "TtSnake1d requires ttnn.float32 for numerically stable sin(alpha*x)^2 computation. "
-                "This TTNN build does not expose float32. Build TTNN with float32 support."
-            )
-        self.compute_dtype = compute_dtype
+        # BF16 compute (not FP32): avoids ~784 μs DRAM FP32 BinaryNg per call; see perf19.
+        self.compute_dtype = self.dtype
 
         alpha = _snake_param_to_btc(alpha_host)
         beta = _snake_param_to_btc(beta_host)
@@ -105,7 +98,8 @@ class TtSnake1d:
             ``[B, T, C]`` row-major (internal compute uses TILE).
         """
         ttnn = self.ttnn
-        # Move to a tile-friendly rank-4 layout for elementwise ops.
+        out_kw = self._out_kw
+
         orig_shape = tuple(x.shape)
         if len(orig_shape) == 3:
             x4 = ttnn.unsqueeze(x, 1)
@@ -118,26 +112,24 @@ class TtSnake1d:
 
         x4 = ttnn.to_layout(x4, ttnn.TILE_LAYOUT)
 
-        # Promote to fp32 around sin()/square() to avoid bf16 mantissa aliasing.
         x4_compute = x4
         if self.compute_dtype is not None and x4.dtype != self.compute_dtype:
-            x4_compute = ttnn.typecast(x4, self.compute_dtype, memory_config=self.memory_config)
+            x4_compute = ttnn.typecast(x4, self.compute_dtype, **out_kw)
 
-        ax = ttnn.multiply(x4_compute, self._alpha_exp)
+        ax = ttnn.multiply(x4_compute, self._alpha_exp, **out_kw)
         s = ttnn.sin(ax)
         ttnn.deallocate(ax)
         s2 = ttnn.square(s)
         ttnn.deallocate(s)
-        term = ttnn.multiply(s2, self._beta_recip)
+        term = ttnn.multiply(s2, self._beta_recip, **out_kw)
         ttnn.deallocate(s2)
-        y4 = ttnn.add(x4_compute, term)
+        y4 = ttnn.add(x4_compute, term, **out_kw)
         ttnn.deallocate(term)
         if x4_compute is not x4:
             ttnn.deallocate(x4_compute)
 
-        # Cast back to the surrounding decoder's activation dtype so downstream conv prepacks match.
         if y4.dtype != self.dtype:
-            y4 = ttnn.typecast(y4, self.dtype, memory_config=self.memory_config)
+            y4 = ttnn.typecast(y4, self.dtype, **out_kw)
 
         if squeeze_back:
             y = ttnn.squeeze(y4, 1)

@@ -22,6 +22,7 @@ from __future__ import annotations
 import numpy as np
 
 from .._ttnn import get_ttnn
+from ..math_perf_env import ace_step_linear_l1_memory_config, ace_step_reshape_kwargs
 
 
 def _require_ttnn():
@@ -81,6 +82,13 @@ class TtConv1d:
         if math_fidelity is None:
             math_fidelity = ttnn.MathFidelity.HiFi2
 
+        self._vae_conv_perf = True
+        # Only kernel_size==1 convs (residual 1×1 projections) safely fit in L1 on Blackhole.
+        # Any kernel_size > 1 conv overflows the static CB region regardless of dilation:
+        # L1 buffer @ 139072 vs CB end @ 139328 (256-byte clash at act_block_h_override=32).
+        # Larger kernels need bigger CBs that push the activation buffer into the CB region.
+        self._l1_mem = ace_step_linear_l1_memory_config(ttnn) if (self.kernel_size == 1) else None
+
         w = _to_float32_numpy(weight_host)
         if w.ndim != 3 or w.shape[0] != self.out_channels or w.shape[1] != self.in_channels:
             raise ValueError(
@@ -99,40 +107,56 @@ class TtConv1d:
             self._bias_host_tt = ttnn.as_tensor(b, dtype=self.weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
             self._has_bias = True
 
+        # Low-channel layers tolerate act_block_h=64 (fewer weight passes); wide layers stay at 32 for L1 CB budget.
+        _act_block_h = 64 if self.in_channels <= 512 else 32
         self.conv_config = ttnn.Conv1dConfig(
             weights_dtype=self.weights_dtype,
             shard_layout=None,
-            deallocate_activation=False,
-            # act_block_h_override=32 forces the minimum activation block height (must be a multiple of 32).
-            # Smaller value → smaller per-core circular buffers → fits within Blackhole L1 (1.5 MB).
-            # Default (0) lets TTNN auto-pick, which chooses a large block that overflows L1 for
-            # the high-channel-count layers in the Oobleck decoder (up to 2048 ch).
-            act_block_h_override=32,
-            # Store persistent conv config tensors in DRAM instead of L1_SMALL to free up the small arena.
+            deallocate_activation=bool(self._vae_conv_perf),
+            act_block_h_override=_act_block_h,
             config_tensors_in_dram=True,
-            enable_act_double_buffer=False,
-            enable_weights_double_buffer=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
         )
-        # Oobleck convs feed into Snake (sin(alpha*x)^2). Accumulating dot products in bf16 dest
-        # injects audible LSB noise into x before sin(); fp32 dest accumulation removes it.
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
-            math_fidelity=math_fidelity,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
         self._packed_for: tuple[int, int] | None = None
         self._weight_dev = None
         self._bias_dev = None
 
+    def _input_memory_config(self):
+        ttnn = self.ttnn
+        if self._l1_mem is not None:
+            return self._l1_mem
+        return ttnn.DRAM_MEMORY_CONFIG
+
+    def _output_memory_config(self):
+        ttnn = self.ttnn
+        if self._l1_mem is not None:
+            return self._l1_mem
+        return ttnn.DRAM_MEMORY_CONFIG
+
+    def _maybe_l1(self, x):
+        # Always move to the target memory so L1 Snake outputs are explicitly placed in DRAM
+        # for k>1 convs. Leaving the tensor as-is is fragile: L1 allocator fragmentation can
+        # place a Snake output inside the static CB region of the conv program, causing a
+        # "L1 buffer clashes with CB" crash (e.g. L1 buffer @ 133120 vs CB end @ 139328).
+        target = self._l1_mem if self._l1_mem is not None else self.ttnn.DRAM_MEMORY_CONFIG
+        return self.ttnn.to_memory_config(x, target)
+
     def _ensure_packed(self, batch_size: int, input_length: int) -> None:
         ttnn = self.ttnn
         if self._packed_for == (batch_size, input_length) and self._weight_dev is not None:
             return
+        input_mem = self._input_memory_config()
         self._weight_dev = ttnn.prepare_conv_weights(
             weight_tensor=self._weight_host_tt,
-            input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            input_memory_config=input_mem,
             input_layout=ttnn.ROW_MAJOR_LAYOUT,
             weights_format="OIHW",
             in_channels=self.in_channels,
@@ -154,7 +178,7 @@ class TtConv1d:
         if self._has_bias:
             self._bias_dev = ttnn.prepare_conv_bias(
                 bias_tensor=self._bias_host_tt,
-                input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                input_memory_config=input_mem,
                 input_layout=ttnn.ROW_MAJOR_LAYOUT,
                 in_channels=self.in_channels,
                 out_channels=self.out_channels,
@@ -179,6 +203,7 @@ class TtConv1d:
         Returns a ``[B, T_out, out_channels]`` row-major tensor.
         """
         ttnn = self.ttnn
+        _sr = ace_step_reshape_kwargs(ttnn)
         if len(x.shape) != 3:
             raise ValueError(f"TtConv1d expects rank-3 [B,T,C], got {x.shape}")
         b = int(x.shape[0])
@@ -187,6 +212,7 @@ class TtConv1d:
         if c != self.in_channels:
             raise ValueError(f"Conv1d input channels mismatch: got {c}, expected {self.in_channels}")
 
+        x = self._maybe_l1(x)
         self._ensure_packed(b, t)
         ret = ttnn.conv1d(
             input_tensor=x,
@@ -207,11 +233,11 @@ class TtConv1d:
             return_output_dim=True,
             return_weights_and_bias=False,
             dtype=self.activation_dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self._output_memory_config(),
         )
         out, out_length = ret
         out = ttnn.squeeze(out, 0)
-        out = ttnn.reshape(out, (b, out_length, self.out_channels))
+        out = ttnn.reshape(out, (b, out_length, self.out_channels), **_sr)
         # L1 conv returns TILE; normalize to ROW_MAJOR so time/channel dims match PyTorch semantics
         # and residual / slice logic sees the true logical length.
         return ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
@@ -257,6 +283,10 @@ class TtConvTranspose1d:
         if math_fidelity is None:
             math_fidelity = ttnn.MathFidelity.HiFi2
 
+        self._vae_conv_perf = True
+        # conv_transpose has no dilation → smaller CB requirement → L1 interleaved is safe on Blackhole.
+        self._l1_mem = ace_step_linear_l1_memory_config(ttnn)
+
         w = _to_float32_numpy(weight_host)
         if w.ndim != 3 or w.shape[0] != self.in_channels or w.shape[1] != self.out_channels:
             raise ValueError(
@@ -276,26 +306,37 @@ class TtConvTranspose1d:
             self._bias_host_tt = ttnn.as_tensor(b, dtype=self.weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
             self._has_bias = True
 
+        _act_block_h = 64 if self.in_channels <= 512 else 32
         self.conv_config = ttnn.Conv2dConfig(
             weights_dtype=self.weights_dtype,
             shard_layout=None,
-            deallocate_activation=False,
-            act_block_h_override=32,
+            deallocate_activation=bool(self._vae_conv_perf),
+            act_block_h_override=_act_block_h,
             config_tensors_in_dram=True,
-            enable_act_double_buffer=False,
-            enable_weights_double_buffer=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
         )
-        # Match TtConv1d: fp32 dest accumulation matters for the conv→Snake pipeline.
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
-            math_fidelity=math_fidelity,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
         self._weight_dev = self._weight_host_tt
         self._bias_dev = self._bias_host_tt
         self._uploaded = False
+
+    def _output_memory_config(self):
+        ttnn = self.ttnn
+        if self._l1_mem is not None:
+            return self._l1_mem
+        return ttnn.DRAM_MEMORY_CONFIG
+
+    def _maybe_l1(self, x):
+        # Always move to the target memory — same rationale as TtConv1d._maybe_l1.
+        target = self._l1_mem if self._l1_mem is not None else self.ttnn.DRAM_MEMORY_CONFIG
+        return self.ttnn.to_memory_config(x, target)
 
     def __call__(self, x):
         """Run conv_transpose2d on a ``[B, T, C]`` row-major tensor.
@@ -312,6 +353,7 @@ class TtConvTranspose1d:
         if c != self.in_channels:
             raise ValueError(f"ConvT1d input channels mismatch: got {c}, expected {self.in_channels}")
 
+        x = self._maybe_l1(x)
         # TTNN conv_transpose2d expects [B, H, W, C] NHWC; map T -> W with H=1.
         x4 = ttnn.unsqueeze(x, 1)  # [B, 1, T, C]
 
@@ -336,6 +378,7 @@ class TtConvTranspose1d:
             return_weights_and_bias=True,
             mirror_kernel=True,
             dtype=self.activation_dtype,
+            memory_config=self._output_memory_config(),
         )
         # conv_transpose2d returns NHWC [B, 1, T_out, out_channels] (rank-4)
         out = ttnn.squeeze(out, 1)

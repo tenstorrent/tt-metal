@@ -93,25 +93,22 @@ class TtOobleckResidualUnit:
         # Skip-connection trim uses ``x[:, pad:pad+y_T, :]`` → ``ttnn.slice``. TILE slices require
         # 32-aligned starts/sizes on the last two dims; activations here are often TILE after convs.
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        # Keep the residual skip tensor in DRAM so it does not occupy L1 during conv1 (k=7).
+        # The k=7 conv program's static CB region extends to 139328; any live L1 buffer below
+        # that address causes a "CB clashes with L1 buffer" fatal error at program compile time.
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
 
         y = self.snake1(x)
-        y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)
         y = self.conv1(y)
         y = self.snake2(y)
-        y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)
         y = self.conv2(y)
 
         x_T = int(x.shape[1])
         y_T = int(y.shape[1])
         if y_T < x_T:
-            x = x[:, :y_T, :]
+            pad = (x_T - y_T) // 2
+            if pad > 0:
+                x = x[:, pad : pad + y_T, :]
 
-        x4 = ttnn.unsqueeze(x, 1)
-        y4 = ttnn.unsqueeze(y, 1)
-        x4 = ttnn.to_layout(x4, ttnn.TILE_LAYOUT)
-        y4 = ttnn.to_layout(y4, ttnn.TILE_LAYOUT)
-        z4 = ttnn.add(x4, y4)
-        ttnn.deallocate(y4)
-        z = ttnn.squeeze(z4, 1)
-        z = ttnn.to_layout(z, ttnn.ROW_MAJOR_LAYOUT)
-        return z
+        # Both branches are ROW_MAJOR [B,T,C] after snake/conv; elementwise add needs no TILE rank-4 path.
+        return ttnn.add(x, y)

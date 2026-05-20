@@ -46,6 +46,7 @@ all subsequent generates of the same shape. Requires the device fixture in
 ``perf/conftest.py`` (2 CQs + 128 MB trace region, both enabled by default).
 """
 
+
 from __future__ import annotations
 
 import os
@@ -104,6 +105,7 @@ def _ace_step_flush_device_profiler(device) -> None:
         return
     if os.environ.get("ACE_STEP_USE_TRACE", "").lower() in ("1", "true", "yes"):
         return
+
     try:
         ttnn.synchronize_device(device)
         ttnn.ReadDeviceProfiler(device)
@@ -163,6 +165,7 @@ def _e2e_trace_enabled() -> bool:
 
 
 class _E2EDenoiseTrace:
+
     """Persistent TTNN trace handle for the per-step DiT body inside :func:`run_ttnn_denoise_loop`.
 
     Wraps ``pipe.forward_with_temb_tp`` (patch_embed + DiT core + output_head) in a single
@@ -583,6 +586,7 @@ def run_ttnn_denoise_loop(
             tensors (ROW_MAJOR layout, as :meth:`AceStepV15TTNNPipeline.compute_temb_tp` returns).
 
     Returns:
+
         Denoised latents ``[B, frames, 64]``: CPU float32 :class:`torch.Tensor`, or an on-device
         :class:`ttnn.Tensor` when *return_device_latents* is True.
     """
@@ -731,6 +735,7 @@ def run_ttnn_denoise_loop(
     ) -> None:
         """Common slice + APG/ADG guidance + Euler subtract; consumes ``acoustic`` then advances ``xt_tt``."""
         nonlocal xt_tt
+
         if do_cfg:
             apply_cfg_now = cfg_lo <= t_curr_f <= cfg_hi
             vpc_rm = slice_batch_btc(acoustic, 0, 1, frames_i, c_lat)
@@ -985,6 +990,7 @@ def run_ttnn_denoise_loop(
                 ttnn.deallocate(_t)
             except Exception:
                 pass
+
     if momentum_ttnn is not None:
         momentum_ttnn.reset()
 
@@ -1362,6 +1368,7 @@ class AceStepE2EModel:
             # ``ttnn.deallocate(enc_tt_pipe)`` would free the cached buffer. Clone it into a
             # disposable working buffer so the cache survives every generate.
             enc_tt_pipe = ttnn.clone(enc_hs_tt_one)
+
             ctx_tt_pipe = ctx_tt_one
 
         enc_row = np.asarray(enc_mask_np, dtype=np.float32).reshape(1, -1)
@@ -1443,6 +1450,7 @@ class AceStepE2EModel:
             temb_per_step=self._temb_per_step,
             tp_per_step=self._tp_per_step,
         )
+
         if mask_tt is None:
             loop_kw["enc_mask"] = enc_mask_np
         else:

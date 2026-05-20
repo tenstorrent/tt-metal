@@ -104,6 +104,7 @@ def _resolve_ace_step_repo_root(*, ckpt_dir: str | None, ace_step_repo_root: str
     Order: explicit ``ace_step_repo_root`` → env ``ACE_STEP_REPO_ROOT`` → vendored copy under
     ``torch_ref/_vendored_acestep/`` → walk parents of ``ckpt_dir``.
     """
+
     candidates: list[Path] = []
     if ace_step_repo_root:
         candidates.append(Path(ace_step_repo_root).expanduser().resolve())
@@ -111,6 +112,7 @@ def _resolve_ace_step_repo_root(*, ckpt_dir: str | None, ace_step_repo_root: str
     if env:
         candidates.append(Path(env).expanduser().resolve())
     candidates.append(_VENDORED_ACESTEP_ROOT)
+
     if ckpt_dir:
         cur = Path(ckpt_dir).expanduser().resolve()
         for _ in range(8):
