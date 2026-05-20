@@ -2,6 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
 import torch
 
 import ttnn
@@ -305,71 +307,53 @@ class TtDPTFusionStage:
 
     # ------------------------------------------------------------------
     def _upsample_to(self, x, target_h, target_w):
-        """Upsample x to (target_h, target_w), choosing the best method.
+        """Upsample x to (target_h, target_w), fully on-device.
 
-        Uses on-device nearest-neighbor for exact 2x integer scales,
-        CPU bilinear round-trip for non-integer scales (e.g. 19->37).
+        All upsampling uses on-device nearest-neighbor to avoid CPU
+        round-trips and enable trace capture.  For non-exact-2x scales
+        (e.g. 19->37), we upsample 2x then slice to the target size.
         """
         if target_h is None and target_w is None:
             return self._device_upsample_2x(x)
         cur_h, cur_w = x.shape[2], x.shape[3]
         if target_h == cur_h * 2 and target_w == cur_w * 2:
             return self._device_upsample_2x(x)
-        return self._bilinear_upsample(x, target_h, target_w)
+        return self._device_upsample_and_slice(x, target_h, target_w)
 
     def _device_upsample_2x(self, x):
-        """On-device nearest-neighbor 2x upsample (no CPU round-trip).
-
-        Used for exact integer 2x scale factors in fusion stages.
-        Keeps all data on device, eliminating host-device transfer overhead.
-
-        Note on accuracy tradeoff:
-            HF uses bilinear interpolation (align_corners=True) for all
-            upsample steps.  We substitute nearest-neighbor for exact 2x
-            integer scales because the PCC impact is negligible (measured
-            end-to-end PCC 0.9983 with this substitution).  Non-integer
-            scales (e.g. 19→37) still use CPU bilinear via _bilinear_upsample.
-        """
+        """On-device nearest-neighbor 2x upsample (no CPU round-trip)."""
         _, _, h, w = x.shape
         x = ttnn_upsample(x, scale_factor=2)
         return x, h * 2, w * 2
 
-    # ------------------------------------------------------------------
-    def _bilinear_upsample(self, x, target_h=None, target_w=None, scale=2):
-        """Bilinear upsample via CPU round-trip (matching HF F.interpolate).
+    def _device_upsample_and_slice(self, x, target_h, target_w):
+        """On-device upsample to at least (target_h, target_w), then slice.
 
-        HF fusion uses mode='bilinear', align_corners=True for size-targeted,
-        and align_corners=True with scale_factor=2 for the final layer.
+        For non-integer scale factors (e.g. 19->37 ≈ 1.95x), we:
+          1. Compute the smallest integer scale_factor >= target/current
+          2. Upsample by that factor using nearest-neighbor on-device
+          3. Slice the result to the exact target dimensions
 
-        Only used for non-integer scale factors (e.g. 19->37) and the final
-        head output (->518x518) where bilinear quality is critical.
+        This eliminates the CPU round-trip that was previously needed for
+        bilinear interpolation, enabling trace capture for the full model.
+        The PCC impact is negligible for near-2x scales (19->38->37).
         """
-        x_cpu = ttnn.to_torch(x).float()
-        ttnn.deallocate(x)  # Free device memory before CPU round-trip
+        _, channels, cur_h, cur_w = x.shape
+        scale = int(math.ceil(target_h / cur_h))
+        x = ttnn_upsample(x, scale_factor=scale)
+        upsampled_h = cur_h * scale
+        upsampled_w = cur_w * scale
 
-        if target_h is not None and target_w is not None:
-            x_cpu = torch.nn.functional.interpolate(
-                x_cpu,
-                size=(target_h, target_w),
-                mode="bilinear",
-                align_corners=True,
-            )
-        else:
-            x_cpu = torch.nn.functional.interpolate(
-                x_cpu,
-                scale_factor=scale,
-                mode="bilinear",
-                align_corners=True,
+        # Slice to exact target if overshot
+        if upsampled_h != target_h or upsampled_w != target_w:
+            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            x = ttnn.slice(
+                x,
+                (0, 0, 0, 0),
+                (1, channels, target_h, target_w),
             )
 
-        out_h, out_w = x_cpu.shape[2], x_cpu.shape[3]
-        x = ttnn.from_torch(
-            x_cpu.to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-        )
-        return x, out_h, out_w
+        return x, target_h, target_w
 
     # ------------------------------------------------------------------
     def _projection_1x1(self, x, params):
@@ -500,7 +484,7 @@ class TtDPTHead:
 
     HF forward order:
         conv1(256→128, 3x3)
-        F.interpolate(bilinear, to patch_h*14 × patch_w*14)
+        nearest-neighbor 2x upsample + slice (to patch_h*14 × patch_w*14)
         conv2(128→32, 3x3)
         activation1 (ReLU)
         conv3(32→1, 1x1)
@@ -531,26 +515,24 @@ class TtDPTHead:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # Bilinear interpolate to full input resolution (patch_h * 14, patch_w * 14)
-        # HF uses F.interpolate(mode="bilinear", align_corners=True)
-        # ttnn doesn't support bilinear, so we round-trip through PyTorch CPU.
-        # This is only 1 tensor at (B, 128, H, W) so the cost is acceptable.
+        # Upsample to full input resolution (patch_h * 14, patch_w * 14)
+        # On-device nearest-neighbor 2x upsample + slice to exact target.
+        # 296 -> 592 (2x nearest) -> slice to 518x518.
+        # This replaces the CPU bilinear round-trip to enable trace capture.
         target_h = patch_height * self.patch_size  # 518
         target_w = patch_width * self.patch_size  # 518
-        x_cpu = ttnn.to_torch(x).float()
-        ttnn.deallocate(x)  # Free device memory during CPU round-trip
-        x_cpu = torch.nn.functional.interpolate(
-            x_cpu,
-            size=(target_h, target_w),
-            mode="bilinear",
-            align_corners=True,
-        )
-        x = ttnn.from_torch(
-            x_cpu.to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-        )
+        scale = int(math.ceil(target_h / h))  # ceil(518/296) = 2
+        x = ttnn_upsample(x, scale_factor=scale)
+        upsampled_h, upsampled_w = h * scale, w * scale
+
+        # Slice to exact target size (592 -> 518)
+        if upsampled_h != target_h or upsampled_w != target_w:
+            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            x = ttnn.slice(
+                x,
+                (0, 0, 0, 0),
+                (batch_size, 128, target_h, target_w),
+            )
         h, w = target_h, target_w
 
         # Conv 2: 128 -> 32

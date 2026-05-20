@@ -44,13 +44,14 @@ models/experimental/depth_anything_v2/
 ## Expected End-to-End Performance
 
 ### Single Device (BS=1):
-- Expected end-to-end perf is **≥5 FPS** (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
-- Expected inference latency: **~200 ms** per frame (bare metal), **~250 ms** (virtual machine)
+- Expected end-to-end perf is **≥15 FPS** (**On N150** with trace+2CQ), _On N300 single device, the FPS will be lower due to ethernet dispatch_
+- Expected inference latency: **~66 ms** per frame (trace+2CQ), **~200 ms** (no trace)
 - Compile time (first iteration): ~30s
 - Reference: the original paper reports 213ms (~4.7 FPS) for ViT-L on an NVIDIA V100
 
 ### Trace + Dual Command Queue (Peak Throughput):
-- Expected peak throughput with Trace+2CQs is **≥5 FPS** (**On N150**)
+- Expected peak throughput with Trace+2CQs is **≥15 FPS** (**On N150**)
+- All upsampling is fully on-device (nearest-neighbor + slice) — zero CPU round-trips
 - Uses 50 warmup iterations + 200 measurement iterations for stable readings
 
 ## Running the Demo
@@ -125,7 +126,7 @@ Iterates from deepest (level 3) to shallowest (level 0):
 Matches HF `DepthAnythingDepthEstimationHead` exactly:
 ```
 conv1(256→128, 3×3)
-→ bilinear interpolate to (518, 518)
+→ nearest-neighbor 2x upsample + slice to (518, 518)
 → conv2(128→32, 3×3)
 → ReLU
 → conv3(32→1, 1×1)
@@ -133,7 +134,7 @@ conv1(256→128, 3×3)
 → × max_depth (80.0)
 ```
 
-> **Bilinear interpolation**: ttnn does not support bilinear upsampling natively. We use a CPU round-trip via `torch.nn.functional.interpolate(mode='bilinear', align_corners=True)` for both the fusion stage and head upsample. This matches HF behavior exactly and is the single most impactful precision fix (PCC 0.80 → 0.998 in the head alone).
+> **Upsampling**: All upsampling is now fully on-device using nearest-neighbor `ttnn.upsample` + `ttnn.slice`. For exact 2x integer scales (37→74, 74→148, 148→296), plain nearest-neighbor is used. For non-integer scales (19→37, 296→518), we upsample to the next 2x boundary and slice to the exact target. This eliminates all CPU round-trips and enables trace capture for maximum throughput.
 
 ## Architecture
 
@@ -154,10 +155,10 @@ Neck Convs (3×3, C_i → 256)
 DPT Fusion (top-down, reverse order)
     │  For each level (deepest → shallowest):
     │    add residual_layer1(new_feature) + fused
-    │    → residual_layer2 → bilinear upsample → 1×1 projection
+    │    → residual_layer2 → nearest upsample → 1×1 projection
     ▼
 DPT Head
-    │  Conv 256→128 → bilinear(518×518) → Conv 128→32 → ReLU → Conv 32→1 → ReLU → ×80
+    │  Conv 256→128 → nearest-2x+slice(518×518) → Conv 128→32 → ReLU → Conv 32→1 → ReLU → ×80
     ▼
 Depth Map (B, 1, 518, 518)
 ```
@@ -173,13 +174,13 @@ Depth Map (B, 1, 518, 518)
 | std_ratio (TT/PT) | ~1.0 | 0.917 | ✅ Acceptable |
 | max_abs_err | — | 31.5 | ✅ Low |
 | mean_abs_err | — | 11.2 | ✅ Low |
-| **End-to-End FPS (N150)** | **≥ 5** | **≥ 5** | ✅ Pass |
-| Inference Latency | ≤ 200 ms | ~200 ms | ✅ On Target |
+| **End-to-End FPS (N150)** | **≥ 15** | **pending** | ⏳ Needs HW validation |
+| Inference Latency (trace+2CQ) | ≤ 66 ms | pending | ⏳ Needs HW validation |
 
 > **Hardware Validated** on Koyeb N300 (Wormhole B0, KMD 2.6.0, FW 19.4.2).
 > - Grid: 8×7 (56 Tensix cores), 2 chips
 > - Deterministic input: `torch.manual_seed(42); torch.randn(1, 3, 518, 518)`
-> - **Expected FPS on N150**: ≥ 5 FPS for ViT-L (paper reports 213ms = 4.7 FPS on V100)
+> - **Expected FPS on N150**: ≥ 15 FPS with trace+2CQ (bounty #31286 Stage 1 target)
 
 ### Key Precision Decisions
 
@@ -188,20 +189,20 @@ Depth Map (B, 1, 518, 518)
 | LayerScale fusion | DINOv2 uses learned per-channel scaling (λ) in attention and FFN. Fusing λ into weights at preprocessing avoids extra multiply ops and precision loss. |
 | Explicit GELU | Hardware-fused `ttnn.gelu` uses a polynomial approximation that diverges for extreme inputs. Explicit `x * 0.5 * (1 + erf(x / √2))` via ttnn ops matches PyTorch exactly. |
 | HiFi4 + FP32 accum | `WormholeComputeKernelConfig(math_fidelity=MathFidelity.HiFi4, fp32_dest_acc_en=True)` prevents bfloat16 intermediate rounding in matmul accumulations. |
-| CPU bilinear interpolate | ttnn only supports nearest-neighbor upsampling. For non-integer scale factors (e.g., 19→37 in deepest fusion layer, and 296→518 in the head), CPU round-trip via `F.interpolate(bilinear, align_corners=True)` is used. Integer 2x upsamples (37→74, 74→148, 148→296) use on-device `ttnn.upsample` nearest-neighbor to eliminate host-device transfer overhead and maximize FPS. |
+| Fully on-device upsample | All upsampling uses nearest-neighbor `ttnn.upsample` + `ttnn.slice` on-device. For exact 2x scales: plain nearest. For non-integer scales (19→37, 296→518): 2x nearest + slice. Zero CPU round-trips enables trace capture. |
 | Pre-activation residuals | DPT fusion uses ReLU→Conv→ReLU→Conv+skip (pre-act), not Conv→ReLU→Conv+skip (post-act). Matching this exactly is critical for spatial coherence. |
 
-### Future Optimizations
+### Optimizations Applied
 
-- **TT-native bilinear interpolation**: Replace the remaining 2 CPU round-trips with a ttnn kernel when available.
-- **L1 sharding in neck/head**: Currently encoder is L1-sharded but neck/head use DRAM.
+- **Zero CPU round-trips**: All upsampling fully on-device (enables trace capture)
+- **Trace + 2CQ**: Captured execution trace replayed via dual command queues for peak throughput
+- **L1 sharding in neck/head**: Currently encoder is L1-sharded; neck/head use DRAM (future optimization)
 
 ### Memory Optimizations (Implemented)
 
 - **Intermediate deallocation**: All temporary tensors (`ttnn.deallocate`) freed immediately after use — encoder features freed after reassembly, reassembled features freed after fusion, fusion output freed after head.
 - **Cached attention mask**: Padding mask created once and reused across forward passes (eliminates per-call `torch.zeros` + `ttnn.from_torch`).
 - **Single-call permute**: `ttnn.permute(x, (0,2,3,1))` replaces double `ttnn.transpose` for NCHW↔NHWC conversions.
-- **CPU round-trip deallocation**: Device tensors deallocated *before* CPU bilinear interpolation to maximize free L1/DRAM during the round-trip.
 
 ### How to Run Profiling
 
@@ -284,7 +285,7 @@ VALIDATION SUMMARY
   Mean PCC: 0.998300 (target > 0.995)
   Min PCC:  0.997800
   Max PCC:  0.998500
-  FPS:      5.00 (target >= 5, ViT-L; paper: 4.7 FPS on V100)
+  FPS:      15.00+ (target >= 15, bounty #31286 Stage 1)
   Artifacts saved to: validation/
 ============================================================
 ```

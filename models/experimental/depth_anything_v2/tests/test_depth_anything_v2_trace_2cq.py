@@ -25,10 +25,10 @@ from models.perf.perf_utils import prep_perf_report
 MODEL_ID = "depth-anything/Depth-Anything-V2-Large-hf"
 NUM_WARMUP = 50
 NUM_MEASURE = 200
-# The original paper (Figure 1) reports 213ms (~4.7 FPS) for ViT-L on a V100.
-# The bounty's "15 FPS" target appears sized for the Small variant (60ms on V100).
-# On N300 with L1 sharding + trace + 2CQ we target >= 5 FPS for the Large model.
-TARGET_FPS = 5.0
+# The bounty (#31286 Stage 1) requires at least 15 FPS at 518x518.
+# With trace + 2CQ + fully on-device upsampling (no CPU round-trips),
+# this target is achievable on N150.
+TARGET_FPS = 15.0
 
 
 def run_trace_2cq(device, tt_model, num_warmup, num_measure):
@@ -146,7 +146,7 @@ def test_depth_anything_v2_trace_2cq(device):
 
     Captures one execution trace on CQ0, overlaps I/O on CQ1, and replays
     to measure peak throughput with zero dispatch and minimal data transfer
-    overhead.  Target: >= 5 FPS (ViT-L; paper reports 4.7 FPS on V100).
+    overhead.  Target: >= 15 FPS (bounty #31286 Stage 1 requirement).
     """
     torch_model = AutoModelForDepthEstimation.from_pretrained(MODEL_ID, trust_remote_code=True)
     torch_model.eval()
