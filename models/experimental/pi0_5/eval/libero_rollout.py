@@ -668,7 +668,18 @@ class Pi0_5LiberoAdapter:
             self._trace_key = key
         else:
             # Steady-state path: just write the chunk's inputs and replay.
-            self._write_trace_inputs(images, img_masks, tokens, lang_mask)
+            # PI0_LIBERO_TRACE_FIXED_NOISE=1 reuses the capture-time noise on
+            # every replay (used to isolate accuracy bugs — distinguishes
+            # "trace mechanism broken" from "noise refresh broken").
+            import os as _os
+
+            refresh_noise = _os.environ.get("PI0_LIBERO_TRACE_FIXED_NOISE", "").strip().lower() not in (
+                "1",
+                "true",
+                "yes",
+                "on",
+            )
+            self._write_trace_inputs(images, img_masks, tokens, lang_mask, refresh_noise=refresh_noise)
             ttnn.execute_trace(device, self._trace_id, cq_id=0, blocking=True)
 
         actions_np = ttnn.to_torch(self._trace_actions_output).float().numpy()
