@@ -45,50 +45,30 @@ pytest models/experimental/devstarl2_small/tests/test_ministralattn.py -k pcc
 
 ## Demos
 
-### Image + text (`tt_image_demo.py`)
+Run from repo root on BH-QB (P150×4, `--mesh-width 4`).
 
-Defaults to Hugging Face (`--backend hf`). Pass **`--backend tt`** to run vision + text on device (example mesh / vision sizing):
+### Execution
 
-```sh
-python3 -m models.experimental.devstarl2_small.demo.tt_image_demo \
-  --backend tt \
-  --image models/experimental/devstarl2_small/resource/sample.jpeg \
-  --vision-square-pixels 1540 \
-  --mesh-width 4 \
-  --max-new-tokens 100
-```
+| Demo | Script | Description | Command |
+|------|--------|-------------|---------|
+| Image + text | `demo/tt_image_demo.py` | One-shot image Q&A on TT (vision → projector → text LM). Default prompt: `resource/sample.jpeg`. | `python3 -m models.experimental.devstarl2_small.demo.tt_image_demo --backend tt --image models/experimental/devstarl2_small/resource/sample.jpeg --vision-square-pixels 1540 --mesh-width 4 --max-new-tokens 100` |
+| Text LM | `demo/tt_text_demo.py` | Text-only TT prefill/decode + LM head. Default Fibonacci prompt; override with `--prompt`. | `python models/experimental/devstarl2_small/demo/tt_text_demo.py --mesh-width 4` |
+| Interactive agent | `demo/tt_demo_agent.py` | Multi-turn coding REPL on TT; `/image PATH [question…]` for multimodal. | `python models/experimental/devstarl2_small/demo/tt_demo_agent.py --vision-square-pixels 1540 ` |
 
-### Text LM on TT (`tt_text_demo.py`)
+### Performance
 
-```sh
-python models/experimental/devstarl2_small/demo/tt_text_demo.py \
-  --mesh-width 4
-```
+Representative BH-QB (P150×4) runs; each demo prints a traced-decode timing table to stdout after generation.
 
-### Agent on TT (`tt_demo_agent.py`)
-
-```sh
-python models/experimental/devstarl2_small/demo/tt_demo_agent.py --vision-square-pixels 1540
-```
-
-Example multimodal prompt for `tt_demo_agent.py` (attach the resource image, then ask a question):
-
-```text
-/image ./models/experimental/devstarl2_small/resource/sample.jpeg What is in this image?
-```
-
-Example text prompt (not the `tt_text_demo.py` default; pass via `--prompt` if desired):
-
-```text
-Can you implement in Python a method to compute the fibonnaci sequence at the `n`th element with `n` a parameter passed to the function ? You should start the sequence from 1, previous values are invalid.
-Then run the Python code for the function for n=5 and give the answer.
-```
+| Demo | System | Mesh | New tokens | t/s/u | t/s (e2e) | TTFT (ms) |
+|:-----|:-------|:-----|----------:|------:|----------:|----------:|
+| Image + text | BH-QB | 1x4 | 100 | 15.8 | 14.9 | 875 |
+| Text LM | BH-QB | 1x4 | 200 | 17.5 | 17.1 | 198 |
 
 ## Resources
 
 | Path | Purpose |
 |------|---------|
-| **`demo/`** | Runnable demos: `tt_image_demo.py` (HF or TT multimodal), `tt_text_demo.py` (TT text LM), `tt_demo_agent.py` (interactive TT agent with `/image`). |
+| **`demo/`** | Runnable demos: `tt_image_demo.py` (TT multimodal), `tt_text_demo.py` (TT text LM), `tt_demo_agent.py` (interactive TT agent with `/image`). |
 | **`resource/`** | Static assets only (e.g. `sample.jpeg` for image demos). No Python modules. |
 | **`devstral_utils/`** | Shared helpers imported by demos, tests, and TT modules (re-exported from `devstral_utils/__init__.py`). |
 | **`tt/`** | TT layer implementations (Ministral3 + Pixtral building blocks). |
