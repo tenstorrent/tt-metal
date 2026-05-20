@@ -100,6 +100,104 @@ End-to-end TTNN implementation of the **π₀.₅** (PI0.5) vision-language-acti
 
 Everything else (SigLIP-27, Gemma-2B VLM, Gemma-300M expert, flow-matching denoising with Euler integration, KV-cache prefill of the prefix) follows the openpi/lerobot reference.
 
+### TTNN dtype map (per stage)
+
+Dtypes and compute-kernel configs at each stage of the TTNN pipeline. Verified from `models/experimental/pi0_5/tt/*.py`. Asymmetries between stages are intentional — see notes below the diagram.
+
+```
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│            PI0.5 — TTNN per-stage dtype / compute-kernel map                     │
+├──────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                  │
+│  INPUTS                                                                          │
+│  ┌────────────────────────────────────────────────────────────────────────────┐  │
+│  │  images / x_t (noise)              bfloat16     TILE,  L1                  │  │
+│  │  img_masks / lang_masks            bfloat16     ROW_MAJOR, L1              │  │
+│  │  lang_tokens                       uint32       ROW_MAJOR (for embedding)  │  │
+│  │  adarms_cond (per-step,layer)      bfloat16     TILE,  DRAM (precomputed)  │  │
+│  └────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                  │
+│  SigLIP encoder — 27 layers     (block-sharded path is DEFAULT ON; opt out with  │
+│                                  PI0_SIGLIP_BS=0)                                │
+│  ┌────────────────────────────────────────────────────────────────────────────┐  │
+│  │                       Weight        Matmul out      Notes                  │  │
+│  │  patch_conv           bfloat16      bfloat16                               │  │
+│  │  attn  QKV  / O       bfloat16      bfloat8_b       fp32_dest=ON           │  │
+│  │  MLP   fc1  / fc2     bfloat8_b     bfloat8_b       fp32_dest=ON           │  │
+│  │                                                                            │  │
+│  │  Compute kernel:  HiFi2,  fp32_dest_acc_en=True,  packer_l1_acc=True       │  │
+│  └────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                  │
+│  PaliGemma VLM prefix prefill — Gemma 2B × 18 layers  (prefix ≈ 512 tokens)      │
+│  ┌────────────────────────────────────────────────────────────────────────────┐  │
+│  │                       Weight        Matmul out      Notes                  │  │
+│  │  embed / RMSNorm /                                                         │  │
+│  │  RoPE cos/sin         bfloat16          —                                  │  │
+│  │  QKV  (fused)         bfloat8_b     bfloat8_b                              │  │
+│  │  o_proj               bfloat8_b     bfloat16        residual-add path      │  │
+│  │  MLP  gate/up/down    bfloat8_b     bfloat16                               │  │
+│  │  KV cache                 —         bfloat16 (L1)   precision preserved    │  │
+│  │                                                                            │  │
+│  │  Compute kernel:  HiFi2,  fp32_dest_acc_en=False,  packer_l1_acc=True      │  │
+│  └────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                  │
+│  Action Expert (adaRMSNorm) — Gemma 300M × 18 layers × N_denoise steps           │
+│  ┌────────────────────────────────────────────────────────────────────────────┐  │
+│  │                       Weight        Matmul out      Notes                  │  │
+│  │  QKV  (fused)         bfloat8_b     bfloat8_b       same class as VLM      │  │
+│  │  o_proj               bfloat8_b     bfloat16                               │  │
+│  │  MLP  gate/up/down    bfloat8_b     bfloat16                               │  │
+│  │  adaRMS modulation                                                         │  │
+│  │   (scale, shift, gate)    —         bfloat16 (DRAM, precomputed per step)  │  │
+│  │  sharded RMSNorm                                                           │  │
+│  │   (8×2 grid)              —         bfloat16                               │  │
+│  │                                                                            │  │
+│  │  Compute kernel (matmul + sharded LN):                                     │  │
+│  │     HiFi2,  fp32_dest_acc_en=False,  packer_l1_acc=True                    │  │
+│  └────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                  │
+│  Suffix embedding — sincos(t) → time MLP → adarms_cond                           │
+│  ┌────────────────────────────────────────────────────────────────────────────┐  │
+│  │                       Weight        Matmul out      Notes                  │  │
+│  │  action_in_proj /                                                          │  │
+│  │  action_out_proj /                                                         │  │
+│  │  time_mlp_{in,out}    bfloat8_b     bfloat16        biases bfloat16        │  │
+│  │  sincos(t)            fp32 on host  →  bfloat16 upload                     │  │
+│  └────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                  │
+│  SDPA  (used in both SigLIP attn and Gemma attn)                                 │
+│  ┌────────────────────────────────────────────────────────────────────────────┐  │
+│  │  PI0_SDPA_HIFI         2          → HiFi2  (HiFi4 if ≥ 4)                  │  │
+│  │  PI0_SDPA_FP32_DEST    True       → fp32_dest_acc_en=True                  │  │
+│  │  PI0_SDPA_PACKER_L1    True       → packer_l1_acc=True                     │  │
+│  │  PI0_SDPA_EXP_APPROX   False      → softmax-exp approximation off          │  │
+│  └────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                  │
+│  Flow-matching denoise loop  (default num_denoising_steps=10)                    │
+│  ┌────────────────────────────────────────────────────────────────────────────┐  │
+│  │  default                  bfloat16  throughout  (x_t + velocity)           │  │
+│  │  PI0_DENOISE_FP32=1       float32   Euler accumulator                      │  │
+│  │                           (typecast x_t→fp32 before loop, fp32→bf16 after; │  │
+│  │                            per-step velocity also cast). +~30 ms;          │  │
+│  │                            biggest single accuracy lever vs bf16 drift.    │  │
+│  └────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                  │
+│  OUTPUT                                                                          │
+│  ┌────────────────────────────────────────────────────────────────────────────┐  │
+│  │  final x_t   bfloat16  →  slice [:, :action_horizon, :action_dim]          │  │
+│  │              →  ttnn.to_torch (host)                                       │  │
+│  └────────────────────────────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Notes on intentional asymmetries:**
+
+1. **SigLIP attn weights `bfloat16` vs MLP weights `bfloat8_b`** — attn is shape-bound by SDPA and benefits from precision on the small Q/K/V projections; MLP is bandwidth-bound on the 1152→4304 / 4304→1152 projections so bf8_b weights win.
+2. **`fp32_dest_acc_en` ON for SigLIP & SDPA, OFF for Gemma matmuls & sharded LN** — Gemma's sharded layouts need the DST register budget the fp32 accumulator would consume.
+3. **o_proj outputs `bfloat16` while QKV outputs `bfloat8_b`** — o_proj feeds the residual add, where bf16 is cheap and protects the residual stream's precision.
+4. **KV cache stays `bfloat16`** — KV reads are hot during expert prefill; precision was preserved here rather than re-quantizing per layer.
+5. **adaRMS modulation tensors precomputed on host in `bfloat16` and parked in DRAM** — they're load-once, read-per-step; the host pre-tilization saves device cycles inside the trace.
+
 ---
 
 ## Directory layout
