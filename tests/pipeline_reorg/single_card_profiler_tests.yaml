@@ -11,69 +11,17 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
-# ----- N150 (wh_n150_civ2) -----
-- name: N150 mid-run device data dump
-  cmd: run_mid_run_data_dump
-  skus:
-    wh_n150_civ2:
-      timeout: 5
-  owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
-
-- name: N150 profiler regressions
+# run_profiling_test invokes run_mid_run_data_dump as a subroutine, so there is
+# no separate matrix entry for the mid-run dump.
+- name: Profiler regressions
   cmd: run_profiling_test
   skus:
     wh_n150_civ2:
       timeout: 45
-  owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
-
-# ----- N300 (wh_n300_civ2) -----
-- name: N300 mid-run device data dump
-  cmd: run_mid_run_data_dump
-  skus:
-    wh_n300_civ2:
-      timeout: 5
-  owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
-
-- name: N300 profiler regressions
-  cmd: run_profiling_test
-  skus:
     wh_n300_civ2:
       timeout: 45
-  owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
-
-# ----- P100a (bh_p100a_civ2_viommu) -----
-- name: P100a mid-run device data dump
-  cmd: run_mid_run_data_dump
-  skus:
-    bh_p100a_civ2_viommu:
-      timeout: 5
-  owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
-
-- name: P100a profiler regressions
-  cmd: run_profiling_test
-  skus:
     bh_p100a_civ2_viommu:
       timeout: 45
-  owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
-
-# ----- P150b (bh_p150b_civ2_viommu) -----
-- name: P150b mid-run device data dump
-  cmd: run_mid_run_data_dump
-  skus:
-    bh_p150b_civ2_viommu:
-      timeout: 5
-  owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
-
-- name: P150b profiler regressions
-  cmd: run_profiling_test
-  skus:
     bh_p150b_civ2_viommu:
       timeout: 45
   owner_id: U03BJ1L3LUQ # Mo Memarian

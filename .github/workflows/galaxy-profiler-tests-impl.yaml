@@ -47,14 +47,15 @@ jobs:
       - name: Install dependencies
         run: pip3 install PyYAML
       - name: Verify test timeouts against budget
-        # "integration" category is a placeholder, see
+        # "profiler" subheading is temporary while team / test-framework
+        # assignment is being settled, see
         # https://github.com/tenstorrent/tt-metal/issues/44285
         run: |
           set -e
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "integration"
+            "profiler"
       - name: Build test matrix
         id: build-matrix
         run: |

@@ -85,22 +85,18 @@ ttnn:
     bh_p300: 145
     bh_quietbox_2: 145
   integration:
-    # Placeholder allocations for the merged profiler_tests.yaml matrix.
-    # Each SKU's budget covers ALL entries with that SKU (including both
-    # post-commit and full mode variants of test_device_profiler.py, which
-    # don't run together but are summed by the budget verifier).
-    # Final team / test-framework assignment tracked in
-    # https://github.com/tenstorrent/tt-metal/issues/44285
-    wh_llmbox: 185        # 30 t3k_integration + ~153 T3000 profiler entries
-    wh_galaxy: 385        # 340 galaxy_integration + ~45 galaxy profiler entries
-    # Single-card SKUs (profiler-only at this category): ~95 min sum each
-    # (5 mid-run + 30 device PC + 30 device full + 10 perf-op + 20 realtime).
-    # Budget bumped to 120 to give ~25% headroom while per-entry timeouts are
-    # still estimates pending first observed wall-clock data.
-    wh_n150_civ2: 120
-    wh_n300_civ2: 120
-    bh_p100a_civ2_viommu: 120
-    bh_p150b_civ2_viommu: 120
+    wh_llmbox: 30   # t3k_integration_tests.yaml (ttnn entries)
+    wh_galaxy: 340  # galaxy_integration_tests.yaml
+  # Profiler budgets are kept under their own subheading for now while team /
+  # test-framework assignment is being settled. Tracked in
+  # https://github.com/tenstorrent/tt-metal/issues/44285
+  profiler:
+    wh_llmbox: 120              # t3k_profiler_tests.yaml (~103m actual + headroom)
+    wh_galaxy: 50               # galaxy_profiler_tests.yaml (~45m actual + headroom)
+    wh_n150_civ2: 60            # single_card_profiler_tests.yaml (45m + headroom)
+    wh_n300_civ2: 60
+    bh_p100a_civ2_viommu: 60
+    bh_p150b_civ2_viommu: 60
 
 shield:
   e2e:
