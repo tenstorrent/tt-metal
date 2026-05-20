@@ -41,11 +41,13 @@ void kernel_main() {
     const uint32_t in1_dest_noc_y = get_arg_val<uint32_t>(argidx++);
     const uint32_t in1_sender_noc_x = get_arg_val<uint32_t>(argidx++);
     const uint32_t in1_sender_noc_y = get_arg_val<uint32_t>(argidx++);
-    const uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
-    const uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
+    // OFFSET_M_AXIS + OFFSET_IN0_ROW override these from on-device offsets (per-core M re-derived).
+    uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
+    uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
-    const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
+    // Host passes core.y here; we compute defer_write_k_block from runtime K_num_blocks below.
+    const uint32_t core_y_index = get_arg_val<uint32_t>(argidx++);
 
 #ifdef FUSE_TERNARY
     // Fuse addcmul - read runtime addresses before setting out_addr_rt_arg_idx
@@ -93,9 +95,10 @@ void kernel_main() {
 #endif  // FUSE_TERNARY
 
     // Variable-M: read actual M values from runtime args (after output addresses)
-    const uint32_t M_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks);
+    // OFFSET_M_AXIS overrides M_tiles and M_blocks_per_core from on-device offsets.
+    uint32_t M_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks);
     const uint32_t padded_M_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 1);
-    const uint32_t M_blocks_per_core = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 2);
+    uint32_t M_blocks_per_core = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 2);
     uint32_t in1_k_offset_tiles = 0U;
     uint32_t parent_K_tiles_stride_in1 = 0U;
     if constexpr (use_offset_in1) {
@@ -108,7 +111,82 @@ void kernel_main() {
     }
     // Variable-K: matmul-K extent from runtime; padded_K and K_num_blocks derived using
     // K_block_tiles (CTA). One cached program services any K value.
-    const uint32_t K_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 6);
+    // OFFSET_IN0_K / OFFSET_IN1_K overrides K_tiles from on-device offsets[start..start+2].
+    uint32_t K_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 6);
+
+#ifdef OFFSETS_ACTIVE
+    // EP path: read offsets from a 1-D UINT32 ROW_MAJOR device tensor. Each flag is
+    // independent; see docs/VARIABLE_MATMUL_REFACTOR.md (#1).
+    //   OFFSET_M_AXIS:   re-derives per-core M_start / M_end / M_blocks_per_core locally
+    //                    (matches dm_in0_sender's compute so both kernels agree).
+    //   OFFSET_OUT_ROW:  when this kernel is the writer (transpose_core_grid), sets
+    //                    out_row_offset_tiles from offsets[start].
+    //   OFFSET_IN0_K:    in0 owns the K offset and the cb_ctrl publish — nothing to do here.
+    //   OFFSET_IN1_K:    sets in1_k_offset_tiles + K_tiles. If OFFSET_IN0_K is not set,
+    //                    also publishes K_tiles on cb_ctrl[3] (otherwise dm_in0 publishes).
+    {
+        const uint32_t offsets_addr = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 7);
+        const uint32_t offsets_start_index = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 8);
+        constexpr uint32_t offsets_args_cta_offset =
+            tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>();
+        constexpr auto offsets_args = TensorAccessorArgs<offsets_args_cta_offset>();
+        const auto offsets_acc = TensorAccessor(offsets_args, offsets_addr);
+
+        // Use the in1 CB's L1 write pointer as scratch — unused at kernel startup; the
+        // real in1 tile reads only begin inside the K-loop below.
+        // Limitation: this reads exactly ONE page (kPageBytes) of the offsets tensor. The
+        // (start, end) pair must therefore fall within page 0 — i.e. (E + 1) * sizeof(uint32_t)
+        // <= kPageBytes, where E is num_experts. On Blackhole kPageBytes is typically 4 KB
+        // (~1024 experts max). Larger E would need a strided / page-aware read.
+        constexpr uint32_t kPageBytes = decltype(offsets_args)::AlignedPageSize;
+        uint32_t offsets_l1_addr = get_write_ptr(tt::CBIndex::c_1);
+        noc_async_read(get_noc_addr(0, offsets_acc), offsets_l1_addr, kPageBytes);
+        noc_async_read_barrier();
+        volatile tt_l1_ptr uint32_t* offsets_stage = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(offsets_l1_addr);
+        const uint32_t row_start = offsets_stage[offsets_start_index];
+        const uint32_t row_end = offsets_stage[offsets_start_index + 1U];
+#ifdef OFFSET_M_AXIS
+        {
+            const uint32_t in0_idx = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 9);
+            const uint32_t actual_eff_M = (row_end - row_start) / 32U;
+            // Empty-expert (actual=0) → M_blocks_per_core=0 (loop skipped). Still clamp
+            // M_tiles to >=1 for shape construction (TensorShape2D asserts d0>0).
+            M_tiles = actual_eff_M > 0U ? actual_eff_M : 1U;
+#ifdef OFFSET_OUT_ROW
+            // OFFSET_OUT_ROW + this kernel is the writer (transpose_core_grid) → override
+            // out_row_offset_tiles. dm_in0_sender publishes M values to cb_ctrl; we re-derive
+            // them locally here (both kernels read the same offsets).
+            if constexpr (is_output_writer) {
+                out_row_offset_tiles = row_start / 32U;
+            }
+#endif
+            constexpr uint32_t kAxisCores = IN0_AXIS_CORES;
+            const uint32_t per_core = (actual_eff_M + kAxisCores - 1U) / kAxisCores;
+            // Uniform M_blocks_per_core across cores — matches dm_in0_sender; bounds checks
+            // clip out-of-range reads/writes for the tail cores.
+            M_start_tile = per_core * in0_idx;
+            M_end_tile = per_core * (in0_idx + 1U);
+            M_blocks_per_core = (per_core + M_block_tiles - 1U) / M_block_tiles;
+        }
+#endif  // OFFSET_M_AXIS
+#ifdef OFFSET_IN1_K
+        in1_k_offset_tiles = row_start / 32U;
+        K_tiles = (row_end - row_start) / 32U;
+#if !defined(OFFSET_IN0_K)
+        // dm_in0 isn't publishing — this kernel owns the cb_ctrl[3] publish for compute.
+        cb_reserve_back(tt::CBIndex::c_8, 1U);
+        volatile tt_l1_ptr uint32_t* ctrl_l1 =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(tt::CBIndex::c_8));
+        ctrl_l1[3] = K_tiles;
+        cb_push_back(tt::CBIndex::c_8, 1U);
+#endif
+#elif defined(OFFSET_IN0_K)
+        // OFFSET_IN0_K without OFFSET_IN1_K: K_tiles still needs the local override here
+        // (used for padded_K_tiles below); dm_in0 owns the cb_ctrl publish.
+        K_tiles = (row_end - row_start) / 32U;
+#endif  // OFFSET_IN1_K / OFFSET_IN0_K
+    }
+#endif  // OFFSETS_ACTIVE
     const uint32_t padded_K_tiles = ((K_tiles + K_block_tiles - 1U) / K_block_tiles) * K_block_tiles;
 
     // Storage layout: without transpose_b the weight is stored as [K, N]; with it, as [N, K].
@@ -118,6 +196,17 @@ void kernel_main() {
     const TensorShape2D out0_shape(M_tiles, N_tiles_per_chunk, padded_M_tiles, N_tiles_per_chunk);
 
     const uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
+    // Compute defer_write_k_block from runtime K_num_blocks. Stagger across Y_AXIS_CORES so
+    // deferred output writes from different cores spread across the next block's K loop
+    // (latency hiding). Clamp to the last K iter — without this, K-axis OffsetsRoles that
+    // shrink K at runtime can leave the check never firing, deadlocking cb_id_out (cap 2)
+    // once M_blocks_per_core * N_blocks_per_core - 1 >= 3.
+    constexpr uint32_t kYAxisCores = Y_AXIS_CORES;
+    const uint32_t k_blocks_per_axis_core = (K_num_blocks + kYAxisCores - 1U) / kYAxisCores;
+    uint32_t defer_write_k_block = core_y_index * k_blocks_per_axis_core;
+    if (K_num_blocks > 0U) {
+        defer_write_k_block = std::min(defer_write_k_block, K_num_blocks - 1U);
+    }
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
     constexpr uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
 
@@ -324,6 +413,13 @@ void kernel_main() {
              */
             defer_write = !((m_block_iter == M_blocks_per_core - 1) && (n_block_iter == (N_blocks_per_core - 1)));
             defer_write = defer_write && !is_injector_core;
+            // When K_num_blocks == 0 (empty K-axis offset / empty expert), the deferred-write
+            // trigger inside the K-loop never fires, so previously-deferred blocks would never
+            // reach DRAM and the tiles keep allocator leftovers. Force every block to a direct
+            // write so the kernel-side zero-init in compute lands in the output tensor.
+            if (K_num_blocks == 0U) {
+                defer_write = false;
+            }
 
             if (!defer_write) {
                 if constexpr (is_output_writer) {

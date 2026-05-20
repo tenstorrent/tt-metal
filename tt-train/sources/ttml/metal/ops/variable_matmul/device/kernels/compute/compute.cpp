@@ -3,11 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/compute/bcast.h"
+#include "api/compute/cb_api.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
@@ -338,6 +340,45 @@ void matmul_blocks(
     }
 }
 
+// Write zero tiles to `out_cb` for a single M×N output block. Used in the K=0 path
+// (empty K-axis OffsetsRole expert): without this the M×N pack would copy uninitialized
+// DST → garbage gradients added to weights downstream. fill_tile is an SFPU op that
+// writes the param0 value to every element of a DST tile.
+void zero_blocks(
+    const uint32_t out_cb,
+    const uint32_t M_block_tiles,
+    const uint32_t N_block_tiles,
+    const uint32_t full_N_block_tiles,
+    const uint32_t subblock_h,
+    const uint32_t subblock_w) {
+    fill_tile_init();
+    for (uint32_t M_start = 0; M_start < M_block_tiles; M_start += subblock_h) {
+        for (uint32_t N_start = 0; N_start < N_block_tiles; N_start += subblock_w) {
+            tile_regs_acquire();
+            uint32_t dst_index = 0;
+            for (uint32_t h = 0; h < subblock_h; h++) {
+                for (uint32_t w = 0; w < subblock_w; w++) {
+                    fill_tile(dst_index, 0.0F);
+                    dst_index++;
+                }
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            uint32_t write_dst_index = 0;
+            for (uint32_t h = 0; h < subblock_h; h++) {
+                uint32_t h_tile_id = M_start + h;
+                for (uint32_t w = 0; w < subblock_w; w++) {
+                    uint32_t w_tile_id = N_start + w;
+                    uint32_t out_tile_id = h_tile_id * full_N_block_tiles + w_tile_id;
+                    pack_tile<true>(write_dst_index, out_cb, out_tile_id);
+                    write_dst_index++;
+                }
+            }
+            tile_regs_release();
+        }
+    }
+}
+
 void kernel_main() {
     // Index 0 (K_num_blocks): kept for arg layout compat; actual value from runtime args.
     constexpr uint32_t M_block_tiles = get_compile_time_arg_val(1);
@@ -351,14 +392,37 @@ void kernel_main() {
     constexpr bool transpose_a = static_cast<bool>(get_compile_time_arg_val(9));
 
     uint32_t argidx = 0;
-    const uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
-    const uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
+    // OFFSET_M_AXIS overrides M_start/M_end/M_blocks_per_core via cb_ctrl below.
+    uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
+    uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     // Variable-M: actual M_blocks_per_core from runtime args
-    const uint32_t M_blocks_per_core = get_arg_val<uint32_t>(argidx++);
+    uint32_t M_blocks_per_core = get_arg_val<uint32_t>(argidx++);
     // Variable-K: K extent comes from runtime; K_num_blocks derived using K_block_tiles (CTA).
-    const uint32_t K_tiles = get_arg_val<uint32_t>(argidx++);
+    // OFFSET_IN0_K / OFFSET_IN1_K overrides K_tiles from cb_ctrl[3].
+    uint32_t K_tiles = get_arg_val<uint32_t>(argidx++);
+
+#ifdef OFFSETS_ACTIVE
+    // cb_ctrl payload, packed by whichever dm kernel owns the publish (see dataflow kernels):
+    //   OFFSET_M_AXIS:                       ctrl[0..2] = (M_start, M_end, M_blocks_per_core)
+    //   OFFSET_IN0_K or OFFSET_IN1_K:        ctrl[3]    = K_tiles
+    // M-axis and K-axis are not currently combined in a single role, so the cb_ctrl publish
+    // is exclusive — exactly one of the two payloads is written per invocation. See
+    // docs/VARIABLE_MATMUL_REFACTOR.md (#1).
+    {
+        constexpr uint32_t cb_ctrl_id = tt::CBIndex::c_8;
+        cb_wait_front(cb_ctrl_id, 1U);
+#ifdef OFFSET_M_AXIS
+        M_start_tile = read_tile_value(cb_ctrl_id, 0U, 0U);
+        M_end_tile = read_tile_value(cb_ctrl_id, 0U, 1U);
+        M_blocks_per_core = read_tile_value(cb_ctrl_id, 0U, 2U);
+#else
+        K_tiles = read_tile_value(cb_ctrl_id, 0U, 3U);
+#endif
+        cb_pop_front(cb_ctrl_id, 1U);
+    }
+#endif  // OFFSETS_ACTIVE
     const uint32_t padded_K_tiles = ((K_tiles + K_block_tiles - 1U) / K_block_tiles) * K_block_tiles;
     const uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
 
@@ -424,8 +488,21 @@ void kernel_main() {
                 K_block_tiles /*kt_dim*/);
             reconfig_data_format(in1_cb, in0_cb_for_matmul);
             pack_reconfig_data_format(intermediate_cb);
-            // Accumulation buffer
+            // Defensive: disable L1 packer accumulator before k=0 pack of THIS iter so
+            // matmul packs cleanly over intermediate_cb instead of adding onto whatever
+            // was left in L1 by an earlier program (e.g. ttnn::multiply or swiglu_bw).
+            PACK((llk_pack_reconfig_l1_acc(0)));
             cb_reserve_back(intermediate_cb, out_block_num_tiles);
+            if (K_num_blocks == 0U) {
+                // Empty K-axis offset (e.g. empty expert in moe_ffn): the K-loop below
+                // would skip everything but leave intermediate_cb pointing at uninitialized
+                // DST/L1 → garbage gradients added to weights. Fill the FULL M_block ×
+                // N_block region (not just current_M × current_N, since copy_block later
+                // reads the full block) with zeros so downstream `add_grad` contributes
+                // nothing for empty experts. Per-device decision; works under DDP+TP
+                // batch-sharded where the host can't gate the call uniformly.
+                zero_blocks(intermediate_cb, M_block_tiles, N_block_tiles, N_block_tiles, subblock_h, subblock_w);
+            }
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
                 if constexpr (transpose_a) {
                     // Mirror the dataflow's skip-push pattern: dataflow skips pushing in0 at

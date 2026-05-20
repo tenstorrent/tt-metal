@@ -10,7 +10,6 @@
 #include <utility>
 
 #include "api/dataflow/dataflow_api.h"
-#include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 namespace detail {
 /**
@@ -39,6 +38,21 @@ auto make_tensor_accessor_tuple_uniform_page_size(
     const std::tuple<Args...>& args_tuple, uint32_t address_rt_arg_index_start, uint32_t page_size) {
     return detail::make_tensor_accessor_tuple_with_page_size(
         args_tuple, address_rt_arg_index_start, page_size, std::make_integer_sequence<uint32_t, sizeof...(Args)>());
+}
+void fill_zeros_async(uint32_t write_addr, uint32_t tile_bytes) {
+    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
+    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
+    // Fill tile with zeros
+    uint32_t bytes_left = tile_bytes;
+    for (;;) {
+        uint32_t read_size = bytes_left > MEM_ZEROS_SIZE ? MEM_ZEROS_SIZE : bytes_left;
+        noc_async_read(zeros_noc_addr, write_addr, read_size);
+        write_addr += read_size;
+        bytes_left -= read_size;
+        if (bytes_left == 0) {
+            break;
+        }
+    }
 }
 
 struct TensorShape2D {
