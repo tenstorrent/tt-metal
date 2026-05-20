@@ -9,19 +9,6 @@
 
 #include "ckernel.h"
 
-// ── Per-zone performance counter measurement ──────────────────────────
-// MEASURE_PERF_COUNTERS("INIT") / MEASURE_PERF_COUNTERS("TILE_LOOP")
-// placed BEFORE ZONE_SCOPED in the same scope — counter stops AFTER profiler zone ends.
-// Full counter implementation is in counters.h, transitively included below
-// when PERF_COUNTERS_COMPILED is defined.
-
-// Counter hooks are now integrated into profiler.h's zone_scoped class.
-// When PERF_COUNTERS_COMPILED is defined, zone_scoped calls
-// _profiler_counter_start/_stop automatically — no extra RAII objects
-// in run_kernel, so compiler inlining decisions are identical to NC builds.
-//
-// PERF_ZONE_SCOPED is now just an alias for ZONE_SCOPED (kept for compatibility).
-#define PERF_ZONE_SCOPED(marker) ZONE_SCOPED(marker)
 #ifdef PERF_COUNTERS_COMPILED
 #include "counters.h"
 #endif
