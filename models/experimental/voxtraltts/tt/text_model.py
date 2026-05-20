@@ -200,3 +200,50 @@ class VoxtralTTTextModel:
         host = self.inner.concat_host_output(x_rm)
         ttnn.deallocate(x_rm)
         return host[0, 0, 0, :dim].to(dtype=torch.bfloat16)
+
+    def decode_step_from_embeds_tt(
+        self,
+        x_embed_tt: ttnn.Tensor,
+        current_pos_tt: ttnn.Tensor,
+        rot_mats_global,
+        rot_mats_local,
+        page_table: ttnn.Tensor,
+    ) -> ttnn.Tensor:
+        """One DECODE step for trace replay; returns device hidden (post-norm) without host readback."""
+        decode_mem_cfg = self.inner.args.get_residual_mem_config(Mode.DECODE, self.inner.prefetcher)
+        x_tt = ttnn.to_memory_config(x_embed_tt, decode_mem_cfg)
+
+        for i, layer in enumerate(self.inner.layers):
+            activation_dtype = self.inner.args.decoders_optimizations.get_tensor_dtype(
+                decoder_id=i, tensor=TensorGroup.ACTIVATION
+            )
+            if not self.inner.args.is_galaxy:
+                x_tt = ttnn.to_memory_config(x_tt, decode_mem_cfg, activation_dtype)
+            elif activation_dtype is not None and x_tt.dtype != activation_dtype:
+                x_tt = ttnn.typecast(x_tt, activation_dtype)
+            x_tt = layer(
+                x_tt,
+                current_pos_tt,
+                rot_mats_global=rot_mats_global,
+                rot_mats_local=rot_mats_local,
+                user_id=0,
+                mode=Mode.DECODE,
+                page_table=page_table,
+                kv_cache=None,
+            )
+
+        x_norm = self.inner.norm(
+            x_tt,
+            mode=Mode.DECODE,
+            norm_config=self.inner.args.get_norm_config("lm_head", Mode.DECODE, self.inner.prefetcher),
+        )
+        ttnn.deallocate(x_tt)
+        try:
+            is_sharded = x_norm.memory_config().is_sharded()
+        except RuntimeError:
+            is_sharded = False
+        if is_sharded:
+            x_norm_interleaved = ttnn.sharded_to_interleaved(x_norm, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(x_norm)
+            x_norm = x_norm_interleaved
+        return ttnn.to_layout(x_norm, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
