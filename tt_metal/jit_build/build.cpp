@@ -17,6 +17,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <iterator>
 #include <mutex>
 #include <string>
@@ -66,6 +67,9 @@ void report_result(const string& target_name, string_view op, const string& cmd,
             TT_THROW("{} build failed. Log: {}", target_name, log_contents);
         }
         if (!log_contents.empty()) {
+            // Don't mix warnings from parallel compilations.
+            static std::mutex mutex;
+            std::lock_guard lock(mutex);
             std::cerr << "Building " << target_name << ", " << op << " step:\n" << cmd << "\n" << log_contents;
         }
     } else if (!result) {
