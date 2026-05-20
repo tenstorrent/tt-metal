@@ -27,92 +27,8 @@ NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", 61))
 MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", 3200 * _sp))
 IS_BALANCED = os.environ.get("PREFILL_IS_BALANCED", "1") == "1"
 CAPACITY_FACTOR = int(os.environ.get("PREFILL_CAPACITY_FACTOR", 8))
-_gate_mode_name = os.environ.get("PREFILL_GATE_FALLBACK_MODE", "HOST_ALL")
+_gate_mode_name = os.environ.get("PREFILL_GATE_FALLBACK_MODE", "DEVICE_FP32")
 PREFILL_DEBUG = os.environ.get("PREFILL_DEBUG", "0") == "1"
-PREFILL_TRACE_SYNCS = os.environ.get("PREFILL_TRACE_SYNCS", "0") == "1"
-
-
-def _install_sync_tracer() -> None:
-    """Monkey-patch ttnn.synchronize_device + ttnn.to_torch to print where they
-    are called from and how long each call took. First occurrence at each user
-    call site prints a stack snippet; subsequent calls just increment counters
-    that we dump at exit.
-
-    Enabled via PREFILL_TRACE_SYNCS=1. The goal is to expose any 'hidden' sync
-    points inside ttnn ops that we don't see by grepping for synchronize_device
-    in the model python code.
-    """
-    import atexit
-    import time as _time
-    import traceback
-
-    seen: dict = {}  # key -> {"count": int, "total_us": float, "max_us": float}
-
-    def _site_key():
-        # Skip the wrapper frame + this frame; find the first frame that
-        # isn't inside ttnn's own python package.
-        stack = traceback.extract_stack()[:-2]
-        user = [f for f in stack if "/ttnn/ttnn/" not in f.filename]
-        f = user[-1] if user else stack[-1]
-        return (f.filename, f.lineno, f.name)
-
-    def _record(name, key, duration_us):
-        full_key = (name, *key)
-        slot = seen.get(full_key)
-        if slot is None:
-            seen[full_key] = {"count": 1, "total_us": duration_us, "max_us": duration_us}
-            logger.info(f"[sync-trace] FIRST {name} from {key[0]}:{key[1]} in {key[2]}  ({duration_us:.1f} us)")
-        else:
-            slot["count"] += 1
-            slot["total_us"] += duration_us
-            if duration_us > slot["max_us"]:
-                slot["max_us"] = duration_us
-
-    _orig_sync = ttnn.synchronize_device
-
-    def _patched_sync(*args, **kwargs):
-        key = _site_key()
-        t0 = _time.perf_counter()
-        ret = _orig_sync(*args, **kwargs)
-        dt_us = (_time.perf_counter() - t0) * 1e6
-        _record("synchronize_device", key, dt_us)
-        return ret
-
-    ttnn.synchronize_device = _patched_sync
-
-    _orig_to_torch = ttnn.to_torch
-
-    def _patched_to_torch(*args, **kwargs):
-        key = _site_key()
-        t0 = _time.perf_counter()
-        ret = _orig_to_torch(*args, **kwargs)
-        dt_us = (_time.perf_counter() - t0) * 1e6
-        _record("to_torch", key, dt_us)
-        return ret
-
-    ttnn.to_torch = _patched_to_torch
-
-    def _dump_summary():
-        logger.info("=" * 80)
-        logger.info("[sync-trace] summary (per call site)")
-        logger.info("=" * 80)
-        # sort by total_us descending — the expensive ones first
-        rows = sorted(seen.items(), key=lambda kv: -kv[1]["total_us"])
-        for (name, fn, ln, func), s in rows:
-            avg = s["total_us"] / max(1, s["count"])
-            logger.info(
-                f"  {name:<22} {fn}:{ln} in {func}: "
-                f"count={s['count']} total={s['total_us']/1e3:.1f}ms "
-                f"avg={avg:.1f}us max={s['max_us']:.1f}us"
-            )
-        logger.info("=" * 80)
-
-    atexit.register(_dump_summary)
-    logger.info("[sync-trace] installed monkey-patches on ttnn.synchronize_device and ttnn.to_torch")
-
-
-if PREFILL_TRACE_SYNCS:
-    _install_sync_tracer()
 
 _shutdown = False
 
@@ -357,7 +273,6 @@ def _print_config() -> None:
         ("PREFILL_STANDALONE_ITERS", os.environ.get("PREFILL_STANDALONE_ITERS", "1")),
         ("PREFILL_ENABLE_MIGRATION", os.environ.get("PREFILL_ENABLE_MIGRATION", "0")),
         ("PREFILL_DEBUG", os.environ.get("PREFILL_DEBUG", "0")),
-        ("PREFILL_TRACE_SYNCS", os.environ.get("PREFILL_TRACE_SYNCS", "0")),
     ]
 
     sep = "=" * 70
