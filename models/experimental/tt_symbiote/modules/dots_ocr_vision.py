@@ -62,6 +62,80 @@ def _largest_divisor_le(value: int, limit: int) -> int:
     return 1
 
 
+def _bucket_pad_keep_bfp8(
+    x: ttnn.Tensor,
+    pad_len: int,
+    device,
+    cache: dict,
+) -> ttnn.Tensor:
+    """Pad ``x`` along dim 2 by ``pad_len`` zero rows, preserving the dtype.
+
+    ``ttnn.pad`` on TILE-layout BFP8 inputs always routes through BFLOAT16
+    internally (pad.cpp:164-169) and, on this build, leaves the result in
+    BFLOAT16: report8.txt shows op 289 (``TypecastDeviceOperation BFP8 =>
+    BF16``, 328 us) followed by ops 294/299 (``FillPad`` + ``Pad``, BF16
+    => BF16, 402 us), with no BFLOAT16 -> BFLOAT8_B typecast before the
+    first block's LayerNorm at op 357 (``BF16, BF16 => BF16``, 425 us vs
+    the 220 us baseline cost for the BFP8 residual stream). That BF16
+    residual stream also propagates into the first ``QKV`` matmul at op
+    369 (``BF16 x BFP8 => BFP8``, 1900 us vs ~1610 us for the BFP8 in0
+    variant the remaining 41 layers see). The same BFP8 -> BF16 upcast
+    happens to the rotary cos/sin tables in ``rope.build_padded``, which
+    forces every per-layer ``ttnn.experimental.rotary_embedding`` to run
+    ``BFP8, BF16 => BFP8`` at 785 us instead of the ``BFP8, BFP8 => BFP8``
+    fast path at 674 us (110 us x 2 rotaries x 42 layers = ~9.2 ms).
+
+    When the pad is tile-aligned on both sides (``x.shape[2] % 32 == 0``
+    and ``pad_len % 32 == 0``) we replace ``ttnn.pad`` with ``ttnn.concat``
+    against a cached zero tensor, which preserves the input dtype end-to-
+    end (BFP8 + BFP8 -> BFP8). When the actual seq-len is not tile-aligned
+    (e.g. ``actual_seq_len=11224`` -> ``pad_len=1064`` for bucket 12288),
+    ``ttnn.pad`` is still required to fill the partial last tile-row; we
+    follow it with an explicit ``ttnn.typecast`` back to ``bfloat8_b`` so
+    the first-block LN/QKV and every per-layer rotary stay on the BFP8
+    fast path (report9.txt: 195 us + 281 us + 9.2 ms vs the 399 us added
+    by the three typecasts = ~9.3 ms saved per vision pass).
+    """
+    if pad_len == 0:
+        return x
+    if pad_len < 0:
+        raise ValueError(f"pad_len must be non-negative, got {pad_len}")
+
+    b0 = int(x.shape[0])
+    b1 = int(x.shape[1])
+    s = int(x.shape[2])
+    d = int(x.shape[3])
+    mem = x.memory_config()
+    src_dtype = x.dtype
+
+    if s % 32 == 0 and pad_len % 32 == 0 and src_dtype == ttnn.bfloat8_b:
+        # Fast path: tile-aligned concat against a cached zero tensor keeps
+        # the entire pipeline BFP8 and avoids the typecast round-trip.
+        cache_key = (b0, b1, pad_len, d, src_dtype, x.layout)
+        zero = cache.get(cache_key)
+        if zero is None:
+            num_dev = int(device.get_num_devices()) if hasattr(device, "get_num_devices") else 1
+            mapper = ttnn.ReplicateTensorToMesh(device) if num_dev > 1 else None
+            t = torch.zeros((b0, b1, pad_len, d), dtype=torch.bfloat16)
+            zero = ttnn.from_torch(
+                t,
+                dtype=src_dtype,
+                layout=x.layout,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mapper,
+            )
+            cache[cache_key] = zero
+        return ttnn.concat([x, zero], dim=2, memory_config=mem)
+
+    # Fallback: ``ttnn.pad`` handles the partial-tile-row fill correctly.
+    # Restore BFP8 explicitly so downstream ops stay on the BFP8 fast path.
+    padded = ttnn.pad(x, padding=((0, 0), (0, 0), (0, pad_len), (0, 0)), value=0.0)
+    if src_dtype == ttnn.bfloat8_b and padded.dtype != ttnn.bfloat8_b:
+        padded = ttnn.typecast(padded, dtype=ttnn.bfloat8_b, memory_config=mem)
+    return padded
+
+
 # Cache program_config objects per (grid, m, k, n) so trace capture sees the
 # same Python object across calls. Recreating the config in the forward pass
 # every iteration breaks ttnn trace dedup and silently drops the entire
@@ -353,6 +427,10 @@ class TTNNDotsVision2DRoPE:
         self._padded_cache_key = None
         self._padded_cache_rot_mats = None
         self._padded_cache_cu_seqlens = None
+        # Cache for zero-pad tensors used by _concat_zero_seq_pad to skip the
+        # BFP8 -> BF16 -> BFP8 round-trip that ttnn.pad does on TILE BFP8
+        # inputs. Keyed by (b0, b1, pad_len, d, dtype, layout).
+        self._zero_pad_cache: dict = {}
 
     def build(
         self,
@@ -477,8 +555,13 @@ class TTNNDotsVision2DRoPE:
 
         if actual_seq_len < bucket_size:
             pad_len = bucket_size - actual_seq_len
-            cos_tt = ttnn.pad(cos_tt, padding=((0, 0), (0, 0), (0, pad_len), (0, 0)), value=0.0)
-            sin_tt = ttnn.pad(sin_tt, padding=((0, 0), (0, 0), (0, pad_len), (0, 0)), value=0.0)
+            # ``ttnn.pad`` on TILE-layout BFP8 upcasts to BF16 (pad.cpp:164)
+            # and leaves the output BF16, which forces the per-layer
+            # ``ttnn.experimental.rotary_embedding`` to consume BF16 cos/sin
+            # instead of BFP8. Use the concat fast path when the seq is
+            # tile-aligned, otherwise pad + typecast back to BFP8.
+            cos_tt = _bucket_pad_keep_bfp8(cos_tt, pad_len, self.device, self._zero_pad_cache)
+            sin_tt = _bucket_pad_keep_bfp8(sin_tt, pad_len, self.device, self._zero_pad_cache)
 
         self._padded_cache_key = cache_key
         self._padded_cache_rot_mats = (cos_tt, sin_tt)
@@ -1791,6 +1874,10 @@ class TTNNDotsOCRVisionTower(TTNNModule):
         self.head_dim = 128
         self.spatial_merge_size = 2
         self._bypass_tensor_wrapping = True
+        # Cache for zero-pad tensors used by _concat_zero_seq_pad to skip the
+        # BFP8 -> BF16 -> BFP8 round-trip that ttnn.pad does on TILE BFP8
+        # inputs (see _concat_zero_seq_pad docstring).
+        self._zero_pad_cache: dict = {}
 
     @classmethod
     def from_torch(cls, hf_vision_tower, hf_config=None):
@@ -2003,7 +2090,15 @@ class TTNNDotsOCRVisionTower(TTNNModule):
         else:
             if actual_seq_len < bucket:
                 pad_len = bucket - actual_seq_len
-                x = ttnn.pad(x, padding=((0, 0), (0, 0), (0, pad_len), (0, 0)), value=0.0)
+                # ``ttnn.pad`` on TILE-layout BFP8 upcasts to BF16 internally
+                # (pad.cpp:164-169) and (on this build) leaves the output
+                # BF16, which makes the trace-pinned residual stream BF16
+                # for the entire block_stack: report8 shows 328 us typecast
+                # + 402 us pad, plus the first block's LN paying +205 us
+                # (BF16 vs BFP8) and the first QKV matmul paying +150 us
+                # (BF16 in0). Use the concat fast path when actual_seq_len
+                # is tile-aligned; otherwise pad + typecast back to BFP8.
+                x = _bucket_pad_keep_bfp8(x, pad_len, self.device, self._zero_pad_cache)
 
             rot_mats, _ = self.rope.build_padded(grid_thw, actual_seq_len, bucket)
 
