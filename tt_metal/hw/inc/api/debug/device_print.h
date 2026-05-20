@@ -215,6 +215,15 @@ struct dp_typed_array_t {
 #define DEVICE_PRINT_INITIALIZE_LOCK() device_print_detail::locking::initialize_lock()
 #define DEVICE_PRINT_KERNEL_FINISHED() device_print_detail::locking::update_kernel_finished()
 
+#if DEVICE_PRINT_DISPATCH_ENABLED
+// Hook used by wait_for_space when DEVICE_PRINT itself runs on the dispatch_s kernel: that
+// kernel is the only thing draining the per-core L1 print buffers, so a busy-wait for space
+// would deadlock unless dispatch_s drives its own DEVICE_PRINT dispatcher inside the wait.
+// Defined in cq_dispatch_subordinate.cpp (where the dispatcher global lives). Declared at
+// global namespace so call sites inside device_print_detail::locking::* qualify with ::.
+void device_print_dispatcher_execute_hook();
+#endif
+
 namespace device_print_detail {
 
 // Helper to invoke a callable with arguments copied by value.
@@ -1444,14 +1453,6 @@ void initialize_lock() {
 }
 
 uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print_buffer, uint32_t message_size) {
-#if DEVICE_PRINT_DISPATCH_ENABLED
-    // Hook used by wait_for_space when DEVICE_PRINT itself runs on the dispatch_s kernel: that
-    // kernel is the only thing draining the per-core L1 print buffers, so a busy-wait for space
-    // would deadlock unless dispatch_s drives its own DEVICE_PRINT dispatcher inside the wait.
-    // Defined in cq_dispatch_subordinate.cpp (where the dispatcher global lives).
-    void ::device_print_dispatcher_execute_hook();
-#endif
-
     // Read pointers
     auto write_position = device_print_buffer->aux.wpos;
     auto read_position = device_print_buffer->aux.rpos;
@@ -1486,7 +1487,7 @@ uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print
                 internal_::risc_context_switch();
 #endif
 #if DEVICE_PRINT_DISPATCH_ENABLED
-                device_print_dispatcher_execute_hook();
+                ::device_print_dispatcher_execute_hook();
 #endif
                 // If we've closed the device, we've now disabled printing on it, don't hang.
                 if (device_print_buffer->aux.wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
@@ -1523,7 +1524,7 @@ uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print
                 internal_::risc_context_switch();
 #endif
 #if DEVICE_PRINT_DISPATCH_ENABLED
-                device_print_dispatcher_execute_hook();
+                ::device_print_dispatcher_execute_hook();
 #endif
                 // If we've closed the device, we've now disabled printing on it, don't hang.
                 if (device_print_buffer->aux.wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
@@ -1580,7 +1581,7 @@ uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print
             internal_::risc_context_switch();
 #endif
 #if DEVICE_PRINT_DISPATCH_ENABLED
-            device_print_dispatcher_execute_hook();
+            ::device_print_dispatcher_execute_hook();
 #endif
             // If we've closed the device, we've now disabled printing on it, don't hang.
             if (device_print_buffer->aux.wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC) {

@@ -62,43 +62,39 @@ constexpr uint32_t device_print_dram_buf_size = DEVICE_PRINT_DRAM_BUF_SIZE;
 constexpr uint64_t device_print_cycles_for_stall = DEVICE_PRINT_CYCLES_FOR_STALL;
 constexpr uint64_t device_print_cycles_for_full = DEVICE_PRINT_CYCLES_FOR_FULL;
 
-// RAII guard for dispatch_s's NOC cmd_buf state on cmd_buf 0 (writes) and
-// cmd_buf 1 (inline writes / reads).
+// RAII guard for dispatch_s's NOC cmd_buf state on cmd_buf 0 (NCRISC_WR_CMD_BUF, used by
+// dispatch_s for regular writes) and cmd_buf 1 (NCRISC_RD_CMD_BUF, used by dispatch_s for
+// inline writes via dispatch_s_noc_inline_dw_write).
 //
-// dispatch_s repurposes NCRISC's cmd_bufs: cmd_buf 1 (= NCRISC_RD_CMD_BUF) is
-// used by dispatch_s_noc_inline_dw_write for inline writes, which leaves
-// NOC_CTRL in write mode. ncrisc_noc_fast_read in DM_DEDICATED_NOC mode does
-// NOT reprogram NOC_CTRL; it relies on the cmd_buf having been left in read
-// mode by noc_init. So if we issue a read after dispatch_s did an inline
-// write, the NIU treats the request as malformed and never marks a read
-// response — noc_async_read_barrier hangs forever.
+// Why we save state: dispatch_s issues `cq_noc_async_write_with_state` calls that rely on
+// cmd_buf state programmed by a preceding `_init_state`. If our execute() runs between an
+// init_state and with_state pair, our init_state + with_state operations would clobber
+// dispatch_s's NOC_CTRL / NOC_*_ADDR_COORDINATE. The wait_for_workers reorder in
+// process_go_signal_mcast_cmd protects today's known site, but we save/restore for
+// defense-in-depth so future dispatch_s code can rely on cmd_buf state being preserved
+// across an execute() / shutdown() call.
 //
-// Constructor: snapshot NOC_CTRL + NOC_TARG_ADDR_COORDINATE for both
-// cmd_bufs, then reprogram cmd_buf 1's NOC_CTRL to the read-mode value
-// noc_init originally wrote. Destructor: restore everything so dispatch_s's
-// subsequent inline writes see the cmd_buf in the state it left them.
+// Constructor: snapshot the regs, then call the new-API _init_state functions to program
+// NOC_CTRL for our reads (cmd_buf 1) and writes (cmd_buf 0).
+// Destructor: restore the saved regs.
 struct DispatchSNocCmdBufGuard {
     uint32_t saved_rd_ctrl;
     uint32_t saved_rd_targ_coord;
     uint32_t saved_wr_ctrl;
-    uint32_t saved_wr_targ_coord;
+    uint32_t saved_wr_ret_coord;
 
     DispatchSNocCmdBufGuard() {
         saved_rd_ctrl = NOC_CMD_BUF_READ_REG(NOC_INDEX, NCRISC_RD_CMD_BUF, NOC_CTRL);
         saved_rd_targ_coord = NOC_CMD_BUF_READ_REG(NOC_INDEX, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_COORDINATE);
         saved_wr_ctrl = NOC_CMD_BUF_READ_REG(NOC_INDEX, NCRISC_WR_CMD_BUF, NOC_CTRL);
-        saved_wr_targ_coord = NOC_CMD_BUF_READ_REG(NOC_INDEX, NCRISC_WR_CMD_BUF, NOC_TARG_ADDR_COORDINATE);
-
-        constexpr uint32_t noc_rd_cmd_field =
-            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
-        NOC_CMD_BUF_WRITE_REG(NOC_INDEX, NCRISC_RD_CMD_BUF, NOC_CTRL, noc_rd_cmd_field);
+        saved_wr_ret_coord = NOC_CMD_BUF_READ_REG(NOC_INDEX, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_COORDINATE);
     }
 
     ~DispatchSNocCmdBufGuard() {
         NOC_CMD_BUF_WRITE_REG(NOC_INDEX, NCRISC_RD_CMD_BUF, NOC_CTRL, saved_rd_ctrl);
         NOC_CMD_BUF_WRITE_REG(NOC_INDEX, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_COORDINATE, saved_rd_targ_coord);
         NOC_CMD_BUF_WRITE_REG(NOC_INDEX, NCRISC_WR_CMD_BUF, NOC_CTRL, saved_wr_ctrl);
-        NOC_CMD_BUF_WRITE_REG(NOC_INDEX, NCRISC_WR_CMD_BUF, NOC_TARG_ADDR_COORDINATE, saved_wr_targ_coord);
+        NOC_CMD_BUF_WRITE_REG(NOC_INDEX, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_COORDINATE, saved_wr_ret_coord);
     }
 
     DispatchSNocCmdBufGuard(const DispatchSNocCmdBufGuard&) = delete;
