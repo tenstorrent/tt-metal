@@ -116,7 +116,7 @@ If the op uses something *not listed* in Appendix A and you are uncertain of its
 
 ### Output: the audit report
 
-The audit produces a written report. Write the report as `METAL2_PREPORT_AUDIT.md` in the op's directory (alongside the program factory `.cpp` files). This file is the audit's deliverable and is committed alongside the port — it sits next to `METAL2_PORT_PLAN.md` and `METAL2_PORT_PROBLEMS.md` (both written by the port recipe), so all generated docs for the port land in one spot.
+The audit produces a written report. Write the report as `METAL2_PREPORT_AUDIT.md` in the op's directory (alongside the program factory `.cpp` files). This file is the audit's deliverable and is committed alongside the port — it sits next to `METAL2_PORT_PLAN.md` and `METAL2_PORT_REPORT.md` (both written by the port recipe), so all generated docs for the port land in one spot.
 
 **Important framing for the human reader.** RED entries gate *this specific port attempt*, but they are **not permanent blockers**. Most RED entries mean "Metal 2.0 hasn't implemented this yet" — the port will become possible once the missing feature lands. A few (today: just `address_offset`) require a runtime-team consultation about a redesigned API. Each Appendix A entry's **Status** field describes the future path. **You must surface that future path explicitly in the report** for every RED row, so the human reader does not misread RED as "this op can never be ported." Reassuring framing matters here — a colleague seeing the report should understand the path forward, not just the gate.
 

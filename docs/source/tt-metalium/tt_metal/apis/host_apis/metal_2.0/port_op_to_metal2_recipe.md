@@ -19,11 +19,23 @@ The audit cleared the *features* and *prereqs* known at audit time. During the p
 
 In particular: if you find yourself constructing a clever workaround during the port — packing data into varargs to simulate a missing field, threading a buffer address through an RTA because the binding mechanism doesn't fit, hand-rolling a synchronization primitive — **stop**. Whatever you are about to write is almost certainly wrong. Surface the problem; do not paper over it.
 
+**Scope boundary — read carefully.** The porter's writeable surface is the **op's own directory** (the device-op factory, its kernels, its tests, the three `METAL2_*.md` artifacts). Files outside that directory — shared kernel-lib headers under `ttnn/cpp/ttnn/kernel_lib/`, LLKs under `tt_metal/`, framework primitives — are out of scope. The port respects this boundary; it does not propose changes to those files.
+
+**Crossing the boundary in kernel code.** Some kernel call sites in the ported kernels invoke functions whose source lives outside the op directory — kernel-lib helpers (`dataflow_kernel_lib::*`, `compute_kernel_lib::*`), LLKs (`reduce_init`, `pack_tile`, `cb_wait_front`, etc.). These callees take `uint32_t` CB ids today.
+
+- **`dfb::name` crosses freely.** Pass `dfb::name` directly at the call site. The `DFBAccessor::operator uint32_t()` implicit conversion bridges the named handle to the legacy `uint32_t` signature without `.id` extraction, temporary wrappers, or typed shims. See [Pattern: Pass DFB handles directly to LLKs and kernel-lib helpers](metal2_port_patterns.md#pattern-pass-dfb-handles-directly-to-llks-and-kernel-lib-helpers).
+- **`sem::name` and `ta::name` do NOT cross — assumption.** Unlike `dfb::name`, the semaphore and tensor-accessor handles have no implicit conversion to `uint32_t` today. **The recipe assumes that no out-of-op call site requires passing one** — semaphores and tensor accessors are consumed inside the op's own kernels. If you encounter a call site whose callee lives outside the op directory and that requires a `sem::name` or `ta::name` argument, this is an **assumption violation**. Do not write the call. Do not preemptively wrap, refactor, or extract — the fix is upstream of the porter's scope. Stop and record the site in [`METAL2_PORT_REPORT.md` — Handoff points](#capture-the-port-report) so the kernel-lib / API owners can address it.
+
+**Two exceptions to the boundary rule** — these are not "out-of-op" call graphs:
+
+- **Cross-op kernel files** — some ops share dataflow kernels that live in another op's directory (e.g., `eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp` reused by many ops). The legacy inventory step flags these; modifying them is porter-touchable with caution per [Caution: Modifying a shared dataflow kernel](metal2_port_patterns.md#caution-modifying-a-shared-dataflow-kernel). These are *peer ops*, not framework callees.
+- **Framework primitives the porter uses directly** — `noc.async_read(...)`, `cb.wait_front(...)` on a `DataflowBuffer` the porter constructs locally from `dfb::name`, the `TensorAccessor(ta::name)` constructor, etc. These are *consumed by* the porter's kernel code (named handles flow in via the documented constructors); they are not handoffs to out-of-op code.
+
 **Generated docs in the op directory.** This recipe directs you to write three files into the op's directory, alongside the program factory `.cpp` files:
 
 - `METAL2_PREPORT_AUDIT.md` — the audit report. (Written by the [audit doc](port_op_to_metal2_audit.md), not this one; included here so you know it's expected to be present as input.)
 - `METAL2_PORT_PLAN.md` — the port plan (this recipe's load-bearing artifact). Externalizes structural decisions before mechanical translation begins. Read by you during construction and verification, by human reviewers during PR review, and by future debuggers. See [Appendix A](#appendix-a--metal2_port_planmd-template) for the template.
-- `METAL2_PORT_PROBLEMS.md` — the post-port problems file. Records friction observed during the port: what bit you, where the docs helped or didn't. Written at the end of the port; feeds doc evolution. See [Capture problems and friction](#capture-problems-and-friction) for the structure.
+- `METAL2_PORT_REPORT.md` — the post-port report. Records handoff points, vindications, friction, and open items observed during the port. Written at the end of the port; feeds doc evolution and informs the kernel-lib / API teams. See [Capture the port report](#capture-the-port-report) for the structure.
 
 All three are committed alongside the port.
 
@@ -33,7 +45,7 @@ All three are committed alongside the port.
 2. [**Plan the spec**](#plan-the-spec) — Apply host-side specialization principles; identify legacy plumbing that should evaporate. Externalize all structural decisions to the plan.
 3. [**Construct paired spec + run-params**](#construct-paired-spec--run-params) — Construct the spec and run-params, paired by resource. Mechanical translation per the plan.
 4. [**Verification**](#verification) — Build, run tests, run anti-pattern self-audit against the [patterns catalog](metal2_port_patterns.md).
-5. [**Capture problems and friction**](#capture-problems-and-friction) — Write `METAL2_PORT_PROBLEMS.md` recording what the docs helped with and what they missed.
+5. [**Capture the port report**](#capture-the-port-report) — Write `METAL2_PORT_REPORT.md` recording handoff points, vindications, friction, and open items for downstream.
 
 **Reference material** the recipe relies on, loaded on demand:
 
@@ -225,27 +237,54 @@ If any checklist item fails, return to planning / construction to fix. Do not pa
 
 ---
 
-## Capture problems and friction
+## Capture the port report
 
-After the port reaches its stopping point — whether that's "all factories ported and tests pass" or "stuck on issue X and cannot proceed" — write `METAL2_PORT_PROBLEMS.md` to the op directory, alongside `METAL2_PREPORT_AUDIT.md` and `METAL2_PORT_PLAN.md`. This file captures the friction observed during the port and is read by the doc maintainers to evolve the audit / recipe / catalog / migration guide.
+After the port reaches its stopping point — whether that's "all factories ported and tests pass" or "stuck on issue X and cannot proceed" — write `METAL2_PORT_REPORT.md` to the op directory, alongside `METAL2_PREPORT_AUDIT.md` and `METAL2_PORT_PLAN.md`. The report captures what happened during the port: things that need handoff to other teams, things the docs got right, things the docs missed, and things the next porter or doc maintainer should know.
 
-**Structure each entry** as: *what bit you, and how the docs helped or didn't.* Cite file paths, line numbers, doc sections. Distinguish:
+The report is read by the kernel-lib / API owners (for handoff points), by the doc maintainers (for friction-driven evolution of the audit / recipe / catalog / migration guide), and by future porters of related ops.
 
-- **Vindications**: where the docs steered you right. Especially valuable when you almost did something the catalog warned against and the warning fired correctly. These are the entries that justify keeping a doc section in its current form.
-- **Gaps**: where the docs didn't have an answer, or had a stale answer. Most actionable kind of entry — directly translates to a doc improvement.
-- **Confusion**: where the docs were ambiguous, hard to follow, or led you to a near-miss before the right path became clear.
+Structure the report with the following sections. Each section may be empty (write "none" with a one-line note); do not omit sections.
 
-Aim for substance over comprehensiveness — 5–15 well-targeted entries beats 30 shallow ones. Be specific.
+### Handoff points
 
-Topics worth covering (not all will apply):
+Escalations to teams outside the porter's scope. Each entry is something the porter cannot fix from within the op directory and that should not be papered over.
 
-- **Doc structure**: was the workflow ordering helpful? Did the port-plan template fit your port? Were the cross-references navigable?
-- **Specific patterns**: catalog entries that matched real patterns you hit; entries that seemed to apply but were misleading.
-- **Migration guide gaps**: design principles or concept-map rows that left you without a clear translation.
-- **Anti-patterns you were tempted by**: if the docs warned you off something, note where the warning fired. Vindications worth recording.
-- **Audit appendix staleness** (if encountered): cite the entry, the framework evidence that contradicts it.
+Includes (not exhaustive):
 
-Commit `METAL2_PORT_PROBLEMS.md` alongside the port code, audit report, and port plan. All four artifacts (port code + the three `METAL2_*.md` files) form the port's PR.
+- **Boundary-rule assumption violations.** A call site outside the op directory that required `sem::name` or `ta::name` (per the [scope boundary](#read-this-first)). Cite the file:line, the callee, and the named handle that the call site demands. Tagged "API: requires implicit conversion / refactor."
+- **Kernel-lib gaps.** Cases where a shared kernel-lib helper or LLK is incompatible with Metal 2.0 binding semantics in a way the porter cannot work around. Cite the helper, the call site, the specific incompatibility.
+- **Framework gaps.** Audit-time entries that were YELLOW or UNSUPPORTED and that bit during the port. Cite the audit entry, what the port needed, and the workaround (if any) you adopted.
+
+Each handoff entry should be writable as a standalone ticket. The porter is the original reporter; the listed team is the owner.
+
+### Vindications
+
+Places where the docs steered the port right. Especially valuable when the porter almost did something the catalog warned against and the warning fired correctly — these are the entries that justify keeping a doc section in its current form.
+
+Cite the doc section by name and link; cite the file:line in the ported code where the warning applied. Brief — one short paragraph per entry.
+
+### Friction
+
+What bit during the port and how the docs helped or didn't. Two subcategories:
+
+- **Gaps** — where the docs didn't have an answer, or had a stale answer. Most actionable kind of entry — directly translates to a doc improvement.
+- **Confusion** — where the docs were ambiguous, hard to follow, or led to a near-miss before the right path became clear.
+
+Cite the doc section, the file:line in the port, and what the right answer turned out to be.
+
+### Open items for downstream
+
+Anything the porter discovered that is in scope for *some* future work but not the current port. The next porter or doc maintainer reads this section to know what to pick up. Includes:
+
+- Per-op carry-over (sibling ops the porter noticed would benefit from the same pattern).
+- Doc-evolution suggestions that don't fit cleanly into a Gap entry (broader restructure, new pattern entry candidate).
+- Test coverage notes the verification step surfaced but didn't act on.
+
+---
+
+**Substance over comprehensiveness** — 5–15 well-targeted entries across the four sections beats 30 shallow ones. Be specific: cite file paths, line numbers, doc sections.
+
+Commit `METAL2_PORT_REPORT.md` alongside the port code, audit report, and port plan. All four artifacts (port code + the three `METAL2_*.md` files) form the port's PR.
 
 ---
 
