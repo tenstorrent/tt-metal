@@ -4,10 +4,6 @@
 
 #pragma once
 
-#ifndef MEASURE_PERF_COUNTERS
-#define MEASURE_PERF_COUNTERS(zone_name)
-#endif
-
 #include <cstdint>
 
 #include "ckernel.h"
@@ -416,13 +412,9 @@ struct perf_counter_scoped
     {
         asm volatile("" ::: "memory");
         *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB1203Cu) = 1u; // PERF_CNT_ALL (INSTRN+FPU)
-        *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB1203Cu) = 0u;
         *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB12014u) = 1u; // TDMA_UNPACK
-        *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB12014u) = 0u;
         *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB12038u) = 1u; // L1
-        *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB12038u) = 0u;
         *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB120F8u) = 1u; // TDMA_PACK
-        *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB120F8u) = 0u;
         asm volatile("" ::: "memory");
     }
 
@@ -430,13 +422,9 @@ struct perf_counter_scoped
     {
         asm volatile("" ::: "memory");
         *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB1203Cu) = 2u; // PERF_CNT_ALL
-        *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB1203Cu) = 0u;
         *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB12014u) = 2u; // TDMA_UNPACK
-        *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB12014u) = 0u;
         *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB12038u) = 2u; // L1
-        *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB12038u) = 0u;
         *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB120F8u) = 2u; // TDMA_PACK
-        *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB120F8u) = 0u;
 
         struct bank_regs
         {
@@ -498,10 +486,7 @@ struct perf_counter_scoped
 
 } // namespace llk_perf
 
-#ifndef PERF_COUNTER_VAR_CONCAT_
-#undef MEASURE_PERF_COUNTERS
 #define PERF_COUNTER_VAR_CONCAT_(a, b)   a##b
 #define PERF_COUNTER_VAR_(line)          PERF_COUNTER_VAR_CONCAT_(_perf_ctr_, line)
 #define MEASURE_PERF_COUNTERS(zone_name) \
     const llk_perf::perf_counter_scoped PERF_COUNTER_VAR_(__LINE__)(llk_perf::get_zone_id(llk_perf::detail::zone_name_hash(zone_name)));
-#endif

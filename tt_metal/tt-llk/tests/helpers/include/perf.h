@@ -11,8 +11,7 @@
 
 #ifdef PERF_COUNTERS_COMPILED
 #include "counters.h"
-#endif
-#ifndef MEASURE_PERF_COUNTERS
+#else
 #define MEASURE_PERF_COUNTERS(zone_name)
 #endif
 
