@@ -128,19 +128,29 @@ struct dp_typed_array_t {
 #endif
 
 #if defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF) && defined(USE_DEVICE_PRINT)
-#define DEVICE_PRINT_GET_STRING_INFO_ADDRESS(variable_name, updated_format)                         \
-    std::uintptr_t variable_name = 0;                                                               \
-    {                                                                                               \
-        constexpr auto _device_print_format_array = updated_format.to_array();                      \
-        constexpr auto _device_print_file_array = []() {                                            \
-            device_print_detail::helpers::static_string<sizeof(__FILE__)> file_str;                 \
-            for (std::size_t i = 0; i < sizeof(__FILE__); ++i) {                                    \
-                file_str.push_back(__FILE__[i]);                                                    \
-            }                                                                                       \
-            return file_str.to_array();                                                             \
-        }();                                                                                        \
-        variable_name = device_print_detail::                                                       \
-            register_string_info<_device_print_format_array, _device_print_file_array, __LINE__>(); \
+// Each DEVICE_PRINT call site declares a local Tag struct inside its own scope and hands
+// its type to register_string_info. As two struct definitions in distinct scopes are
+// distinct types, each call site gets its own instantiation.
+// The Tag carries fmt/file/line as constexpr static members, and the argument types
+// are passed as additional template parameters with decltype(args)..., where args is the
+// lambda's parameter pack. We strip the type qualifiers.
+#define DEVICE_PRINT_GET_STRING_INFO_ADDRESS(variable_name, format)                     \
+    std::uintptr_t variable_name = 0;                                                   \
+    {                                                                                   \
+        struct _DevicePrintStringInfoTag {                                              \
+            static constexpr const auto& fmt() { return format; }                       \
+            static constexpr auto file() {                                              \
+                device_print_detail::helpers::static_string<sizeof(__FILE__)> file_str; \
+                for (std::size_t i = 0; i < sizeof(__FILE__); ++i) {                    \
+                    file_str.push_back(__FILE__[i]);                                    \
+                }                                                                       \
+                return file_str.to_array();                                             \
+            }                                                                           \
+            static constexpr std::size_t line() { return __LINE__; }                    \
+        };                                                                              \
+        variable_name = device_print_detail::register_string_info<                      \
+            _DevicePrintStringInfoTag,                                                  \
+            std::remove_cv_t<std::remove_reference_t<decltype(args)>>...>();            \
     }
 
 #define DEVICE_PRINT(format, ...)                                                                                  \
@@ -172,11 +182,8 @@ struct dp_typed_array_t {
                         device_print_detail::checks::count_placeholders(format) ==                                 \
                             device_print_detail::helpers::count_arguments(args...),                                \
                     "Number of {} placeholders must match number of arguments");                                   \
-                /* Update format to include all necessary data */                                                  \
-                constexpr auto updated_format =                                                                    \
-                    device_print_detail::formatting::update_format_string_from_args(format, args...);              \
-                /* Store updated format string in a special section for device_print */                            \
-                DEVICE_PRINT_GET_STRING_INFO_ADDRESS(device_print_info_address, updated_format);                   \
+                /* Store updated format string in a special section for device_print. */                           \
+                DEVICE_PRINT_GET_STRING_INFO_ADDRESS(device_print_info_address, format);                           \
                 return device_print_info_address;                                                                  \
             },                                                                                                     \
             ##__VA_ARGS__);                                                                                        \
@@ -218,6 +225,12 @@ struct dp_typed_array_t {
 
 namespace device_print_detail {
 
+// Forward declarations needed by register_string_info.
+namespace formatting {
+template <std::size_t N, typename... Args>
+constexpr auto update_format_string(const char (&format)[N]);
+}
+
 // Helper to invoke a callable with arguments copied by value.
 // This allows DEVICE_PRINT to accept volatile packed struct fields,
 // which cannot be bound to references directly.
@@ -232,13 +245,19 @@ __attribute__((always_inline)) inline auto invoke_by_value(F&& f, Args... args) 
 // header function, function template, in-class member, lambda-in-template) inherit COMDAT linkage;
 // that conflicts with the named-section attribute and silently sends them to `.data` instead
 // of `.device_print_strings_info`.
-template <auto FormatArr, auto FileArr, std::size_t Line>
+//
+// We compute the format string inside this template so that Tag only references compile-time
+// literals, as it's a local class and thus can't access enclosing variables.
+template <typename Tag, typename... ArgsT>
 static std::uintptr_t register_string_info() {
-    static const auto allocated_string __attribute__((section(DEVICE_PRINT_STRINGS_SECTION_NAME), used)) = FormatArr;
-    static const auto allocated_file_string __attribute__((section(DEVICE_PRINT_STRINGS_SECTION_NAME), used)) = FileArr;
+    static constexpr auto kFormat =
+        device_print_detail::formatting::update_format_string<sizeof(Tag::fmt()), ArgsT...>(Tag::fmt()).to_array();
+    static constexpr auto kFile = Tag::file();
+    static const auto allocated_string __attribute__((section(DEVICE_PRINT_STRINGS_SECTION_NAME), used)) = kFormat;
+    static const auto allocated_file_string __attribute__((section(DEVICE_PRINT_STRINGS_SECTION_NAME), used)) = kFile;
     static structures::DevicePrintStringInfo allocated_string_info
         __attribute__((section(DEVICE_PRINT_STRINGS_INFO_SECTION_NAME), used)) = {
-            allocated_string.data(), allocated_file_string.data(), Line};
+            allocated_string.data(), allocated_file_string.data(), Tag::line()};
     return reinterpret_cast<std::uintptr_t>(&allocated_string_info);
 }
 
@@ -821,7 +840,7 @@ struct device_print_type<char*> {
     static constexpr device_print_type_info value = {'s', sizeof(char*)};
     static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, char* argument) {
         *reinterpret_cast<device_print_buffer_ptr<std::uintptr_t>>(device_print_buffer + offset) =
-                reinterpret_cast<std::uintptr_t>(argument);
+            reinterpret_cast<std::uintptr_t>(argument);
     }
 };
 template <>
@@ -829,7 +848,7 @@ struct device_print_type<const char*> {
     static constexpr device_print_type_info value = {'s', sizeof(const char*)};
     static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, const char* argument) {
         *reinterpret_cast<device_print_buffer_ptr<std::uintptr_t>>(device_print_buffer + offset) =
-                reinterpret_cast<std::uintptr_t>(argument);
+            reinterpret_cast<std::uintptr_t>(argument);
     }
 };
 
@@ -840,7 +859,7 @@ struct device_print_type<ct_string> {
     static constexpr device_print_type_info value = {'s', sizeof(const char*)};
     static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, ct_string argument) {
         *reinterpret_cast<device_print_buffer_ptr<std::uintptr_t>>(device_print_buffer + offset) =
-                reinterpret_cast<std::uintptr_t>(argument.ptr);
+            reinterpret_cast<std::uintptr_t>(argument.ptr);
     }
 };
 
