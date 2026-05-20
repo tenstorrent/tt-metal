@@ -17,9 +17,9 @@ void kernel_main() {
     constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(5);
     constexpr uint32_t in0_tile_size = get_compile_time_arg_val(6);
     constexpr uint32_t out_tile_size = get_compile_time_arg_val(7);
-    uint32_t in0_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(8));
-    uint32_t in0_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(9));
-    uint32_t in0_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(10));
+    const uint32_t in0_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(8));
+    const uint32_t in0_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(9));
+    const uint32_t in0_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(10));
     constexpr uint32_t is_output_writer = get_compile_time_arg_val(11);
     constexpr uint32_t is_injector_core = get_compile_time_arg_val(12);
     constexpr bool transpose_a = static_cast<bool>(get_compile_time_arg_val(13));
@@ -98,7 +98,7 @@ void kernel_main() {
         // <= kPageBytes, where E is num_experts. On Blackhole kPageBytes is typically 4 KB
         // (~1024 experts max). Larger E would need a strided / page-aware read.
         constexpr uint32_t kPageBytes = decltype(offsets_args)::AlignedPageSize;
-        uint32_t offsets_l1_addr = get_write_ptr(tt::CBIndex::c_0);
+        const uint32_t offsets_l1_addr = get_write_ptr(tt::CBIndex::c_0);
         noc_async_read(get_noc_addr(0, offsets_acc), offsets_l1_addr, kPageBytes);
         noc_async_read_barrier();
         volatile tt_l1_ptr uint32_t* offsets_stage = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(offsets_l1_addr);
@@ -198,17 +198,17 @@ void kernel_main() {
     bool defer_write = false;
 
     for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
-        uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
-        uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
-        uint32_t current_M_block_tiles = m_tile_end - m_tile;
-        uint32_t current_block_bytes = current_M_block_tiles * K_block_tiles * in0_tile_size;
+        const uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
+        const uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
+        const uint32_t current_M_block_tiles = m_tile_end - m_tile;
+        const uint32_t current_block_bytes = current_M_block_tiles * K_block_tiles * in0_tile_size;
 
         // When striding M block, in0 gets no reuse
         reuse_block = false;
         k_forward = true;
         for (uint32_t n_block_iter = 0; n_block_iter < N_blocks_per_core; n_block_iter++) {
-            uint32_t n_tile = N_start_tile + n_block_iter * N_block_tiles;
-            uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
+            const uint32_t n_tile = N_start_tile + n_block_iter * N_block_tiles;
+            const uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
 
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
                 if (defer_write && k_block_iter == defer_write_k_block) {
@@ -231,10 +231,10 @@ void kernel_main() {
                     reuse_block = false;
                     continue;
                 }
-                uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
+                const uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
                 cb_reserve_back(cb_id_in0, in0_block_num_tiles);
 
-                uint32_t in0_start_address = get_write_ptr(cb_id_in0);
+                const uint32_t in0_start_address = get_write_ptr(cb_id_in0);
                 if constexpr (is_injector_core) {
                     read_in0_block_sync<M_block_tiles, K_block_tiles, transpose_a, use_offset>(
                         in0_reader,
@@ -264,7 +264,8 @@ void kernel_main() {
                     noc_semaphore_wait(in0_sender_semaphore_addr_ptr, 1);
                     noc_semaphore_set(in0_sender_semaphore_addr_ptr, 0);
 
-                    uint64_t in0_unicast_data_addr = get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_start_address);
+                    const uint64_t in0_unicast_data_addr =
+                        get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_start_address);
 
                     /**
                      * in0 is M_block_tiles x K_block_tiles. When M block is partial, we don't need to write the

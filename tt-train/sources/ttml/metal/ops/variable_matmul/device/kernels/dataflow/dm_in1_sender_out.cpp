@@ -17,9 +17,9 @@ void kernel_main() {
     constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(5);
     constexpr uint32_t in1_tile_size = get_compile_time_arg_val(6);
     constexpr uint32_t out_tile_size = get_compile_time_arg_val(7);
-    uint32_t in1_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(8));
-    uint32_t in1_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(9));
-    uint32_t in1_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(10));
+    const uint32_t in1_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(8));
+    const uint32_t in1_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(9));
+    const uint32_t in1_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(10));
     constexpr uint32_t is_output_writer = get_compile_time_arg_val(11);
     constexpr uint32_t is_injector_core = get_compile_time_arg_val(12);
     constexpr bool transpose_b = static_cast<bool>(get_compile_time_arg_val(13));
@@ -91,7 +91,7 @@ void kernel_main() {
         // <= kPageBytes, where E is num_experts. On Blackhole kPageBytes is typically 4 KB
         // (~1024 experts max). Larger E would need a strided / page-aware read.
         constexpr uint32_t kPageBytes = decltype(offsets_args)::AlignedPageSize;
-        uint32_t offsets_l1_addr = get_write_ptr(tt::CBIndex::c_1);
+        const uint32_t offsets_l1_addr = get_write_ptr(tt::CBIndex::c_1);
         noc_async_read(get_noc_addr(0, offsets_acc), offsets_l1_addr, kPageBytes);
         noc_async_read_barrier();
         volatile tt_l1_ptr uint32_t* offsets_stage = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(offsets_l1_addr);
@@ -179,16 +179,16 @@ void kernel_main() {
     bool defer_write = false;
 
     for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
-        uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
-        uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
+        const uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
+        const uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
 
         k_forward = true;
 
         for (uint32_t n_block_iter = 0; n_block_iter < N_blocks_per_core; n_block_iter++) {
-            uint32_t n_tile = N_start_tile + n_block_iter * N_block_tiles;
-            uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
-            uint32_t current_N_block_tiles = n_tile_end - n_tile;
-            uint32_t current_N_tiles_bytes = current_N_block_tiles * in1_tile_size;
+            const uint32_t n_tile = N_start_tile + n_block_iter * N_block_tiles;
+            const uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
+            const uint32_t current_N_block_tiles = n_tile_end - n_tile;
+            const uint32_t current_N_tiles_bytes = current_N_block_tiles * in1_tile_size;
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
@@ -205,7 +205,7 @@ void kernel_main() {
                     }
                 }
 
-                uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
+                const uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
                 cb_reserve_back(cb_id_in1, in1_block_num_tiles);
 
                 uint32_t in1_start_address = get_write_ptr(cb_id_in1);
@@ -241,7 +241,7 @@ void kernel_main() {
                      * `current_N_tiles_bytes`.
                      */
                     for (uint32_t i = 0; i < K_block_tiles; i++) {
-                        uint64_t in1_unicast_data_addr = in1_unicast_data_base_addr | in1_start_address;
+                        const uint64_t in1_unicast_data_addr = in1_unicast_data_base_addr | in1_start_address;
                         noc_async_write(in1_start_address, in1_unicast_data_addr, current_N_tiles_bytes);
                         in1_start_address += full_N_tiles_bytes;
                     }
