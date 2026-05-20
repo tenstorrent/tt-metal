@@ -153,7 +153,6 @@ class TTSeamlessM4Tv2Encoder:
         # this fuses the per-tensor reshape + permute (HC transpose) into a
         # single device kernel.
         qkv_4d = ttnn.reshape(qkv, (batch, 1, seq_q, 3 * hidden_size))
-        ttnn.deallocate(qkv)
 
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv_4d,
@@ -187,7 +186,6 @@ class TTSeamlessM4Tv2Encoder:
         merged_4d = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(attn_out)
         merged = ttnn.reshape(merged_4d, (batch, seq_q, hidden_size))
-        ttnn.deallocate(merged_4d)
 
         proj = self._linear(merged, attn_module.out_proj.weight, attn_module.out_proj.bias)
         ttnn.deallocate(merged)
