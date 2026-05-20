@@ -1075,7 +1075,8 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
     cb_reserve_back(out_cb, num_tiles);
     sub_tiles_init(in0_cb, in1_cb);
     exp_tile_init<false>();
-    // recip_tile_init<false>(); // Can omit this because accurate exp_tile_init performs reduce_tile_init
+    // recip_tile_first_column<false> calls the scalar reciprocal helper directly.
+    MATH((ckernel::sfpu::sfpu_reciprocal_init<false>()));
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         acquire_dst();
