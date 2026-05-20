@@ -9,11 +9,10 @@ from models.tt_transformers.tt.decoder import TransformerBlock
 
 
 def remap_voxtral_text_state_dict(state_dict: dict[str, object]) -> dict[str, object]:
-    """Normalize alternate/HF text keys to tt_transformers text key format."""
+    """Map HF/Voxtral text keys to tt_transformers naming."""
     remapped: dict[str, object] = {}
     for key, value in state_dict.items():
         new_key = key
-        # HF-style projection naming -> tt_transformers text naming.
         new_key = new_key.replace(".self_attn.q_proj.", ".attention.wq.")
         new_key = new_key.replace(".self_attn.k_proj.", ".attention.wk.")
         new_key = new_key.replace(".self_attn.v_proj.", ".attention.wv.")
