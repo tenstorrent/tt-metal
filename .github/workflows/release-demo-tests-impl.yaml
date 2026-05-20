@@ -128,7 +128,7 @@ jobs:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - ${{ (!contains(join(matrix.test-group.runs_on, ' '), 'viommu') && !contains(join(matrix.test-group.runs_on, ' '), 'tt-ubuntu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
         - ${{ (!contains(join(matrix.test-group.runs_on, ' '), 'tt-ubuntu') && format('/mnt/MLPerf:/mnt/MLPerf{0}', inputs.mlperf-read-only && ':ro' || ':rw')) || '/no_mlperf' }}
-        - ${{ (contains(matrix.test-group.sku, 'bh_') && !contains(join(matrix.test-group.runs_on, ' '), 'yyz2-lfc') && format('{0}:/localdev/blackhole_demos/huggingface_data:ro', contains(join(matrix.test-group.runs_on, ' '), 'pipeline-functional') && '/mnt/MLPerf/tt_dnn-models' || '/localdev/blackhole_demos/huggingface_data')) || '/no_bh_cache' }}
+        - ${{ (contains(matrix.test-group.sku, 'bh_') && !contains(join(matrix.test-group.runs_on, ' '), 'yyz2-lfc') && format('{0}:/localdev/blackhole_demos/huggingface_data:rw', contains(join(matrix.test-group.runs_on, ' '), 'pipeline-functional') && '/mnt/MLPerf/tt_dnn-models' || '/localdev/blackhole_demos/huggingface_data')) || '/no_bh_cache' }}
       options: >-
         --device /dev/tenstorrent
         ${{ contains(join(matrix.test-group.runs_on, ' '), 'tt-ubuntu') && '-e TT_GH_CI_INFRA=1' || '' }}
@@ -157,13 +157,18 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/set-cpu-governor@main
         with:
           governor: performance
-      - name: Download model weights from LFC
-        if: ${{ contains(join(matrix.test-group.runs_on, ' '), 'yyz2-lfc') && contains(matrix.test-group.name, 'llama') }}
+      - name: Download Llama model weights from LFC
+        if: ${{ contains(matrix.test-group.name, 'llama') && contains(join(matrix.test-group.runs_on, ' '), 'yyz2-lfc') }}
         timeout-minutes: 15
         run: |
           set -e
           mkdir -p /localdev/blackhole_demos/huggingface_data/meta-llama
-          wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/meta-llama http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/
+          if [[ "${{ matrix.test-group.model-name }}" == "llama3.3-70b" ]]; then
+            model_path="Llama-3.3-70B-Instruct/"
+          else
+            model_path="Llama-3.1-8B-Instruct/"
+          fi
+          wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/meta-llama "http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/${model_path}"
       - name: Ensure BH links online
         if: ${{ contains(matrix.test-group.sku, 'bh_') }}
         uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
