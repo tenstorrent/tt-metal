@@ -20,17 +20,42 @@ See [../../models/Wan2_2.md](../../models/Wan2_2.md) for the base model architec
 
 - **CPU-side fusion:** `W' = W + sum_i scale_i * (B_i @ A_i)` for low-rank
   adapter pairs, with per-module alpha scaling applied when an `.alpha` key
-  is present.
+  is present. The `fp32` promote → add → cast-back uses a fresh allocation
+  per pair to avoid mutating the base when a stack folds in multiple
+  adapters touching the same target.
 - **Single aggregate verification:** after the full stack is fused, an L2
   norm check confirms the base weights actually changed (catches silent
   load failures from key mismatches).
-- **Key format auto-detection:** supports lightx2v native keys
-  (`blocks.<i>.cross_attn.k.lora_A.weight`), diffusers prefixes
-  (`diffusion_model.`, `transformer.`, `unet.`, `model.` stripped
-  automatically), and kohya/A1111 keys (`lora_unet_blocks_0_cross_attn_k.lora_down.weight`).
 - **Cache namespacing:** the TT cache is keyed by a SHA1 hash of the ordered
   `(resolved_path, scale)` tuples per expert. Two stacks with the same files
   in different order get different namespaces.
+
+### Supported adapter key formats
+
+`fuse_lora_state_dict` auto-detects these key shapes per adapter entry:
+
+1. **Low-rank pairs** at one of:
+   - `<base>.lora_A.weight` / `<base>.lora_B.weight` (lightx2v native)
+   - `<base>.lora_down.weight` / `<base>.lora_up.weight` (legacy / kohya)
+   - PEFT-style `<base>.lora_A.default.weight` (the trailing `.default`
+     adapter-name segment is tolerated; SVI uses this convention)
+2. **Bias deltas** at `<base>.diff_b` — added to the base `.bias`.
+3. **Full-parameter deltas** at `<base>.diff` — added to the base
+   `.weight`. Some LoRAs ship RMSNorm gammas via this channel.
+4. **Per-module alpha** at `<base>.alpha` — applied as
+   `effective_scale = scale * alpha / rank` for the low-rank pair under
+   the same `<base>`.
+
+### Supported key namespaces (auto-stripped or remapped)
+
+- **lightx2v native:** `blocks.<i>.attn.q.lora_A.weight` — passes through.
+- **diffusers prefixes:** `diffusion_model.`, `transformer.`, `unet.`,
+  `model.` — stripped automatically before matching.
+- **kohya / A1111:** `lora_unet_blocks_<i>_cross_attn_k.lora_down.weight`
+  — remapped to lightx2v-style.
+
+Anything outside the above is logged as a skipped-unknown warning rather
+than erroring, so legitimate-but-unsupported keys don't break the load.
 
 ## API
 
