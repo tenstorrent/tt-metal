@@ -810,9 +810,7 @@ def run(
                         # default to False when the key is truly absent.
                         if "use_optimal_ccl_for_llama" not in op_kwargs:
                             op_kwargs["use_optimal_ccl_for_llama"] = kwargs.get("use_optimal_ccl_for_llama", False)
-                        tt_out_tensor = ttnn.experimental.all_gather_async(
-                            tt_input, _dim, **op_kwargs
-                        )
+                        tt_out_tensor = ttnn.experimental.all_gather_async(tt_input, _dim, **op_kwargs)
                     else:
                         _ag_kwargs = dict(
                             num_links=num_links,

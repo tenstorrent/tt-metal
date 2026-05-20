@@ -169,9 +169,7 @@ def run(
     start_time = start_measuring_time()
     try:
         output_tensor = ttnn.unsqueeze_to_4D(input_tensor_a)
-        output_tensor = mesh_tensor_to_torch(
-            output_tensor, device if is_mesh_device else None
-        )
+        output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
         e2e_perf = stop_measuring_time(start_time)
         if is_mesh_device:
             torch_output_tensor = reconcile_golden_to_actual(

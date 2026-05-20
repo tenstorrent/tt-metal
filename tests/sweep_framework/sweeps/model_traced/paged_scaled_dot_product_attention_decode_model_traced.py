@@ -105,10 +105,12 @@ def _sdpa_device_context(tensor_placements, program_config_raw):
 
     from tests.scripts.common import get_updated_device_params
 
-    _dev_params = get_updated_device_params({
-        "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-        "l1_small_size": 79104,
-    })
+    _dev_params = get_updated_device_params(
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "l1_small_size": 79104,
+        }
+    )
     device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(*mesh),
         **_dev_params,
@@ -254,7 +256,9 @@ def _paged_sdpa_decode_golden(
         k_chunks = (torch_k_cache,)
         v_chunks = (torch_v_cache,)
     per_chip = [
-        _paged_sdpa_decode_chip_attn(q, k, v, page_table, cur_pos, num_users, page_size, sliding_window_size, scale=scale)
+        _paged_sdpa_decode_chip_attn(
+            q, k, v, page_table, cur_pos, num_users, page_size, sliding_window_size, scale=scale
+        )
         for q, k, v in zip(q_chunks, k_chunks, v_chunks)
     ]
     out = torch.cat(per_chip, dim=-1)  # (1, num_users, H_q, D_global)
@@ -306,12 +310,24 @@ def run(
             kwargs.get("program_config"),
         ) as _dev:
             return run(
-                input_a_shape, input_a_dtype, input_a_layout, input_a_memory_config,
-                input_b_dtype, input_b_layout, input_b_memory_config,
-                input_c_dtype, input_c_layout, input_c_memory_config,
-                input_d_dtype, input_d_layout, input_d_memory_config,
-                input_e_dtype, input_e_layout, input_e_memory_config,
-                output_memory_config, storage_type,
+                input_a_shape,
+                input_a_dtype,
+                input_a_layout,
+                input_a_memory_config,
+                input_b_dtype,
+                input_b_layout,
+                input_b_memory_config,
+                input_c_dtype,
+                input_c_layout,
+                input_c_memory_config,
+                input_d_dtype,
+                input_d_layout,
+                input_d_memory_config,
+                input_e_dtype,
+                input_e_layout,
+                input_e_memory_config,
+                output_memory_config,
+                storage_type,
                 device=_dev,
                 **kwargs,
             )
@@ -423,10 +439,9 @@ def run(
             #   Q:       (1, num_users, num_q_heads, head_dim)
             #   K cache: (num_pages, num_kv_heads, page_size, head_dim)
             #   Output:  same layout as Q
-            B_q = shape_a[0]
-            D = shape_a[-1]       # head_dim
+            # Q layout reminder: (B_q=shape_a[0], num_users_padded=shape_a[1], H_q=shape_a[2], D=shape_a[-1])
+            D = shape_a[-1]  # head_dim
             num_users_padded = shape_a[1]  # dim 1 = num_users (may be tile-padded)
-            H_q = shape_a[2]      # dim 2 = num Q heads
 
             # Determine actual num_users from cur_pos or page_table (unambiguous)
             num_users = int(shape_e[0]) if shape_e is not None and len(shape_e) >= 1 else num_users_padded
@@ -436,8 +451,10 @@ def run(
                 _scale = D**-0.5
             _scale = float(_scale)
 
-            # Determine D-dim shard factor from tensor placement (for DRAM-distributed head_dim)
-            _shard_axis, _shard_factor = _paged_sdpa_input_shard_axis_and_factor(input_a_tensor_placement)
+            # Determine D-dim shard factor from tensor placement (for DRAM-distributed head_dim).
+            # Shard axis is documented for clarity but unused — attention is not separable along D
+            # so we always compute the full-D golden regardless of any per-axis sharding.
+            _paged_sdpa_input_shard_axis_and_factor(input_a_tensor_placement)
             _d_factor = 1  # attention is not separable along D; always compute full-D golden
 
             _sw = kwargs.get("sliding_window_size")
@@ -480,7 +497,9 @@ def run(
         # The master records Q in ROW_MAJOR_LAYOUT with a specific non-contiguous
         # HEIGHT_SHARDED grid (e.g. {(1,0)-(3,1), (1,2)-(2,2)} with shard (8,128)).
         # Using a custom contiguous grid or TILE_LAYOUT produces a different trace hash.
-        from tests.sweep_framework.sweep_utils.mesh_tensor_utils import apply_tensor_placement_topology as _apply_sdpa_topo
+        from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+            apply_tensor_placement_topology as _apply_sdpa_topo,
+        )
 
         if _is_sharded_memory_config(mem_config_a) and len(shape_a) == 4:
             # Create Q with master's exact layout + memory_config via ReplicateTensorToMesh.
@@ -503,6 +522,8 @@ def run(
                 _mesh = device.shape
                 _apply_sdpa_topo(tensor_a, input_a_tensor_placement, (_mesh[0], _mesh[1]))
             except Exception:
+                # Best-effort: topology reapply is metadata-only; the sweep
+                # can still execute with the topology inferred at creation.
                 pass
 
         tensor_b = create_tensor_on_mesh(
@@ -624,9 +645,7 @@ def run(
 
             parsed_pc = _dtpc(traced_pc)
             if parsed_pc is None:
-                raise RuntimeError(
-                    f"Failed to parse SDPA program_config from master: {traced_pc!r}"
-                )
+                raise RuntimeError(f"Failed to parse SDPA program_config from master: {traced_pc!r}")
             op_kwargs["program_config"] = parsed_pc
 
     # Use master's exact output memory_config.  The V2 vector stores it as

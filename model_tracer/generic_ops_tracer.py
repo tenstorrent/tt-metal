@@ -1756,7 +1756,9 @@ Examples (Import existing traces):
         if not args.load and "test_stats" in result:
             stats = result["test_stats"]
             if stats["total"] > 0:
-                print(f"Test Results: ✅ {stats['passed']} passed, ❌ {stats['failed']} failed (Total: {stats['total']})")
+                print(
+                    f"Test Results: ✅ {stats['passed']} passed, ❌ {stats['failed']} failed (Total: {stats['total']})"
+                )
                 if stats["failed"] > 0:
                     if args.include_failed:
                         print(f"📌 Traces captured from all {stats['total']} test(s) (--include-failed enabled)")

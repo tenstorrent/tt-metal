@@ -78,10 +78,16 @@ def mesh_device_fixture():
     # sub_device_manager is loaded.
     try:
         from models.demos.llama3_70b_galaxy.tt.model_config import get_core_ranges as _gcr
+
         (
-            _active_sender_cores, _dram_cores, _all_sender_cores,
-            _active_receiver_cores_list, _all_receiver_cores,
-            _worker_cores, _mm_ring_cores, _hop_grid,
+            _active_sender_cores,
+            _dram_cores,
+            _all_sender_cores,
+            _active_receiver_cores_list,
+            _all_receiver_cores,
+            _worker_cores,
+            _mm_ring_cores,
+            _hop_grid,
         ) = _gcr(12, 2, is_functional_test=False)
 
         _sender_crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in _active_sender_cores])
@@ -94,7 +100,9 @@ def mesh_device_fixture():
             "sender_core_range_set": _sender_crs,
         }
     except Exception:
-        import traceback; traceback.print_exc()
+        import traceback
+
+        traceback.print_exc()
         _CORE_RANGE_INFO = None
 
     device_name = ttnn.get_arch_name()
@@ -305,6 +313,9 @@ def _run_sub_device_linear(
             actual_mesh = device.shape
             _apply_topo(ttnn_a, input_a_tensor_placement, (actual_mesh[0], actual_mesh[1]))
         except Exception:
+            # Best-effort: topology reapply is metadata-only and not all
+            # configurations support it; the sweep can still execute with
+            # the default/derived topology.
             pass
 
     # Weight B: always DRAM interleaved → to_memory_config(sharded DRAM)
@@ -325,12 +336,11 @@ def _run_sub_device_linear(
             actual_mesh = device.shape
             _apply_topo(ttnn_b, input_b_tensor_placement, (actual_mesh[0], actual_mesh[1]))
         except Exception:
+            # Best-effort: see note on input A; topology reapply is metadata-only.
             pass
 
     # ---- Step 2: Create and load sub_device_manager ----
-    mgr = device.create_sub_device_manager(
-        [ttnn.SubDevice([sender_crs]), ttnn.SubDevice([worker_cores])], 0
-    )
+    mgr = device.create_sub_device_manager([ttnn.SubDevice([sender_crs]), ttnn.SubDevice([worker_cores])], 0)
     device.load_sub_device_manager(mgr)
 
     try:
@@ -350,7 +360,8 @@ def _run_sub_device_linear(
             # Create prefetcher address tensor and dispatch
             t_addrs = torch.tensor([ttnn_b.buffer_address()], dtype=torch.int64).repeat(len(dram_cores), 1)
             t_mc = ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1,
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
                 ttnn.ShardSpec(
                     sender_crs,
                     [t_addrs.shape[0] // len(dram_cores), t_addrs.shape[1]],
@@ -358,8 +369,11 @@ def _run_sub_device_linear(
                 ),
             )
             tt_addrs = ttnn.from_torch(
-                t_addrs, dtype=ttnn.uint32, device=device,
-                memory_config=t_mc, mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+                t_addrs,
+                dtype=ttnn.uint32,
+                device=device,
+                memory_config=t_mc,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device),
             )
             ttnn.dram_prefetcher([ttnn_b, tt_addrs], num_layers=1, global_cb=gcb)
 
@@ -395,19 +409,21 @@ def _run_sub_device_linear(
         return ttnn_a, ttnn_b, result
 
     finally:
-        # ---- Cleanup: always reset sub-device state ----
+        # ---- Cleanup: always reset sub-device state (best-effort) ----
+        # Each step is wrapped independently so a failure in one (e.g. the
+        # device is already in an error/hang state) does not skip the others.
         try:
             device.reset_sub_device_stall_group()
-        except Exception:
-            pass
+        except Exception as _e_stall:
+            print(f"Warning: reset_sub_device_stall_group failed: {_e_stall}")
         try:
             device.clear_loaded_sub_device_manager()
-        except Exception:
-            pass
+        except Exception as _e_clear:
+            print(f"Warning: clear_loaded_sub_device_manager failed: {_e_clear}")
         try:
             device.remove_sub_device_manager(mgr)
-        except Exception:
-            pass
+        except Exception as _e_remove:
+            print(f"Warning: remove_sub_device_manager failed: {_e_remove}")
 
 
 def run(
@@ -615,16 +631,10 @@ def run(
     # matching the repro test pattern.
     # -----------------------------------------------------------------------
     _sub_device_id_raw = kwargs.get("sub_device_id")
-    _has_sub_device = (
-        _sub_device_id_raw is not None
-        and _sub_device_id_raw != "__ABSENT__"
-    )
+    _has_sub_device = _sub_device_id_raw is not None and _sub_device_id_raw != "__ABSENT__"
 
     gcb_raw = kwargs.get("global_cb")
-    _has_global_cb = (
-        gcb_raw is not None
-        and gcb_raw != "__ABSENT__"
-    )
+    _has_global_cb = gcb_raw is not None and gcb_raw != "__ABSENT__"
 
     if _has_sub_device and _CORE_RANGE_INFO is not None and is_mesh_device:
         # Vector serialization canonicalizes (sorts) CoreRangeSet cores, but
@@ -689,9 +699,7 @@ def run(
 
         sdid = _dtsdid(_sub_device_id_raw)
         if sdid is None:
-            raise RuntimeError(
-                f"Unable to parse sub_device_id from master kwargs: {_sub_device_id_raw!r}"
-            )
+            raise RuntimeError(f"Unable to parse sub_device_id from master kwargs: {_sub_device_id_raw!r}")
         linear_kwargs["sub_device_id"] = sdid
 
         parsed_op_kwargs.pop("sub_device_id", None)
@@ -758,6 +766,8 @@ def run(
                 try:
                     ttnn_a = ttnn.to_memory_config(ttnn_a, input_a_memory_config)
                 except Exception:
+                    # Best-effort reshard: stay on the prior memory config if
+                    # the target shard layout is incompatible with this device.
                     pass
         except Exception:
             ttnn_a = ttnn.from_torch(
@@ -800,12 +810,16 @@ def run(
                 try:
                     ttnn_b = ttnn.to_memory_config(ttnn_b, weight_memory_config)
                 except Exception:
+                    # Best-effort reshard: stay on prior config when target
+                    # shard layout is incompatible.
                     pass
             # Re-apply topology after tensor creation to ensure it matches master.
             try:
                 actual_mesh = device.shape
                 _apply_topo(ttnn_b, input_b_tensor_placement, (actual_mesh[0], actual_mesh[1]))
             except Exception:
+                # Best-effort: topology reapply is metadata-only; continue
+                # with the topology already inferred at tensor creation.
                 pass
         else:
             ttnn_b = ttnn.from_torch(

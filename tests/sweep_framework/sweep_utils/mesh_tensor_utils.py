@@ -21,25 +21,46 @@ import ast
 
 
 def _find_master_json() -> Optional[str]:
-    """Find the master trace JSON file, trying known filenames."""
-    env_path = os.environ.get("TTNN_MASTER_JSON_PATH", "")
-    if env_path and os.path.isfile(env_path):
-        return env_path
+    """Find the master trace JSON file, trying known filenames.
 
-    base_dirs = [
-        os.path.join(os.path.dirname(__file__), "..", "..", ".."),
-        os.environ.get("TT_METAL_HOME", ""),
-    ]
+    Note on path safety: ``TTNN_MASTER_JSON_PATH`` and ``TT_METAL_HOME`` come
+    from the environment and could in principle point anywhere. This is dev
+    tooling, not a service handling untrusted input, but we still:
+      * resolve every candidate to an absolute, canonical path
+      * require the resolved file to live under one of the known repo roots
+        (the package's repo root or ``TT_METAL_HOME``) to avoid silently
+        loading a JSON from outside the project tree
+    """
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+    allowed_roots: list[str] = [repo_root]
+    tt_metal_home = os.environ.get("TT_METAL_HOME", "")
+    if tt_metal_home:
+        allowed_roots.append(os.path.abspath(tt_metal_home))
+
+    def _is_under_allowed_root(path: str) -> bool:
+        resolved = os.path.realpath(path)
+        for root in allowed_roots:
+            try:
+                root_resolved = os.path.realpath(root)
+                # commonpath raises ValueError on mixed drives / empty roots.
+                if root_resolved and os.path.commonpath([resolved, root_resolved]) == root_resolved:
+                    return True
+            except ValueError:
+                continue
+        return False
+
+    env_path = os.environ.get("TTNN_MASTER_JSON_PATH", "")
+    if env_path and os.path.isfile(env_path) and _is_under_allowed_root(env_path):
+        return os.path.abspath(env_path)
+
     filenames = [
         "ttnn_operations_master_main.json",
         "ttnn_operations_master.json",
     ]
-    for base in base_dirs:
-        if not base:
-            continue
+    for base in allowed_roots:
         for fn in filenames:
             path = os.path.join(base, "model_tracer", "traced_operations", fn)
-            if os.path.isfile(path):
+            if os.path.isfile(path) and _is_under_allowed_root(path):
                 return os.path.abspath(path)
     return None
 
@@ -156,7 +177,6 @@ def setup_sub_device_manager(device, master_json_path=None):
                 cwsg = pc.get("compute_with_storage_grid_size", {})
                 if isinstance(cwsg, dict):
                     gx = cwsg.get("x", 0)
-                    gy = cwsg.get("y", 0)
                     if gx - 1 > max_x:
                         max_x = gx - 1
                     # hop_cores may extend Y range
@@ -207,12 +227,14 @@ def setup_sub_device_manager(device, master_json_path=None):
         # cores wait for data that never arrives.
         if global_cb is not None:
             try:
-                _dram_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))])
                 _prefetcher_setup_info = {
                     "sender_core_range_set": sender_core_range_set,
                     "dram_cores": _dram_cores,
                 }
-            except Exception:
+            except Exception as _pf_info_err:
+                # Best-effort: prefetcher metadata is optional. Surface the
+                # reason but keep the rest of the sub-device setup usable.
+                print(f"Warning: failed to build prefetcher setup info: {_pf_info_err}")
                 _prefetcher_setup_info = None
         else:
             _prefetcher_setup_info = None
@@ -233,8 +255,11 @@ def teardown_sub_device_manager(device, manager_id):
             device.reset_sub_device_stall_group()
             device.clear_loaded_sub_device_manager()
             device.remove_sub_device_manager(manager_id)
-        except Exception:
-            pass
+        except Exception as e:
+            # Teardown is best-effort: device may already be in an error state
+            # (hang, prior op fault). Surface the cause but don't propagate so
+            # the test fixture can still finish cleanup of remaining resources.
+            print(f"Warning: failed to teardown sub-device manager {manager_id}: {e}")
 
 
 def get_mesh_shape_from_machine_info(machine_info: Optional[Dict]) -> Optional[Tuple[int, int]]:
@@ -321,8 +346,11 @@ def create_mesh_device(
                         break
                 if _needs_sub_device:
                     break
-    except Exception:
-        pass
+    except Exception as _sd_probe_err:
+        # Best-effort detection: if the master JSON is missing/malformed we
+        # fall back to the default (no sub-device). Surface the reason so the
+        # silent default doesn't mask a real configuration problem.
+        print(f"Warning: sub-device autodetect failed, defaulting to disabled: {_sd_probe_err}")
 
     needs_col = False
     needs_row_only = False
@@ -400,6 +428,8 @@ def create_mesh_device(
                 **(dict(num_command_queues=1) if _needs_sub_device else {}),
             )
         except Exception:
+            # Best-effort: ETH dispatch may be unavailable on some hosts; fall
+            # through to env-override / COL / WORKER paths below.
             pass
 
     # 3. Env-var override (when ETH not needed).
@@ -413,6 +443,8 @@ def create_mesh_device(
                 **(dict(num_command_queues=1) if _needs_sub_device else {}),
             )
         except Exception:
+            # Best-effort: requested axis may not be valid for this device;
+            # fall through to the COL default below.
             pass
 
     # 4. Default to COL.
@@ -426,6 +458,8 @@ def create_mesh_device(
             **(dict(num_command_queues=1) if _needs_sub_device else {}),
         )
     except Exception:
+        # Best-effort: COL dispatch may be unsupported on this device; fall
+        # through to the legacy WORKER/ROW path below.
         pass
 
     return ttnn.open_mesh_device(
@@ -638,6 +672,9 @@ def replicate_with_topology(
         try:
             tensor = ttnn.to_memory_config(tensor, memory_config)
         except Exception:
+            # Best-effort reshard: stay on DRAM if the target shard config is
+            # incompatible with the freshly created tensor (mismatched grid,
+            # shard shape, etc.).
             pass
     else:
         tensor = ttnn.from_torch(
@@ -1113,6 +1150,8 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> t
             if dt == ttnn.uint32:
                 return torch.int64
         except Exception:
+            # Some tensor objects (deallocated / placeholder) raise on .dtype
+            # access; treat dtype as unknown and let the caller default.
             pass
         return None
 
@@ -1200,6 +1239,8 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> t
             torch_dtype = _get_torch_dtype(ttnn_tensor)
             return result.to(torch_dtype) if torch_dtype is not None else result
         except Exception:
+            # Best-effort: 2D composer can fail for non-canonical layouts;
+            # fall through to the row/col reassembly path below.
             pass
 
     if len(placements) == 2 and len(dist_dims) == 2:
@@ -1235,6 +1276,8 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> t
             torch_dtype = _get_torch_dtype(ttnn_tensor)
             return result.to(torch_dtype) if torch_dtype is not None else result
         except Exception:
+            # Best-effort: 1D composer can fail when device list shape doesn't
+            # match shard layout; fall through to the device-0 fallback.
             pass
 
     if device_tensors:

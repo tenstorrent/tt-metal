@@ -189,10 +189,10 @@ def _canonicalize_program_config_repr(s: str) -> str:
     return s
 
 
-
 def _parse_shard_spec_string(s):
     """Parse a serialized ShardSpec string into a comparable dict."""
     import re as _re_ss, json as _json_ss
+
     if not isinstance(s, str) or "ShardSpec" not in s:
         return s
     result = {}
@@ -222,22 +222,28 @@ def _parse_shard_spec_string(s):
             try:
                 result["grid"] = _json_ss.loads(fixed)
             except Exception:
+                # Best-effort parse: ShardSpec serialization can vary across
+                # versions; if both attempts fail, leave grid unset and let
+                # the caller fall back to defaults.
                 pass
     # Extract shape
-    shape_match = _re_ss.search(r'shape=\[([\d,\s]+)\]', s)
+    shape_match = _re_ss.search(r"shape=\[([\d,\s]+)\]", s)
     if shape_match:
         try:
             result["shape"] = [int(x.strip()) for x in shape_match.group(1).split(",")]
         except Exception:
+            # Best-effort: malformed/non-integer shape components are skipped
+            # to preserve tolerant parsing of older serialized forms.
             pass
     # Extract orientation and normalize
-    orient_match = _re_ss.search(r'orientation=(\S+)', s)
+    orient_match = _re_ss.search(r"orientation=(\S+)", s)
     if orient_match:
         orient = orient_match.group(1).rstrip(",").rstrip("}")
         # Normalize ShardOrientation::ROW_MAJOR -> ROW_MAJOR
         orient = orient.replace("ShardOrientation::", "")
         result["orientation"] = orient
     return result if result else s
+
 
 def normalize(obj: Any, *, _parent_key: str = "") -> Any:
     """Recursively normalize a config dict for comparison.
@@ -337,7 +343,6 @@ def _classify(path: str) -> str:
     return "value"
 
 
-
 def _is_tensor_metadata(d):
     """Check if a dict looks like tensor metadata (not an op argument)."""
     if not isinstance(d, dict):
@@ -349,6 +354,7 @@ def _is_tensor_metadata(d):
     if d.get("type") == "ttnn.Tensor" or "original_shape" in d:
         return True
     return False
+
 
 def deep_diff(master: Any, sweep: Any, prefix: str = "") -> list[Diff]:
     """Produce a list of leaf-level diffs between two normalized argument trees."""
@@ -365,13 +371,45 @@ def deep_diff(master: Any, sweep: Any, prefix: str = "") -> list[Diff]:
                 # Also skip known sweep-framework output kwargs that the model
                 # trace never captures (e.g. the output memory_config passed by
                 # the sweep module to control placement).
-                if sweep[k] is None or k in ("memory_config", "core_grid", "dtype", "sub_core_grids", "indices_tensor", "subdevice_id", "global_cb", "sub_device_id", "mesh_device", "persistent_output_tensor", "arg0", "arg1", "arg2", "arg3", "arg4"):
+                if sweep[k] is None or k in (
+                    "memory_config",
+                    "core_grid",
+                    "dtype",
+                    "sub_core_grids",
+                    "indices_tensor",
+                    "subdevice_id",
+                    "global_cb",
+                    "sub_device_id",
+                    "mesh_device",
+                    "persistent_output_tensor",
+                    "arg0",
+                    "arg1",
+                    "arg2",
+                    "arg3",
+                    "arg4",
+                ):
                     continue
                 diffs.append(Diff(child_path, "<missing>", sweep[k], "extra_key"))
             elif k not in sweep:
                 if _is_tensor_metadata(master.get(k)):
                     continue
-                if master[k] is not None and k not in ("memory_config", "core_grid", "dtype", "sub_core_grids", "indices_tensor", "subdevice_id", "global_cb", "sub_device_id", "mesh_device", "persistent_output_tensor", "arg0", "arg1", "arg2", "arg3", "arg4"):
+                if master[k] is not None and k not in (
+                    "memory_config",
+                    "core_grid",
+                    "dtype",
+                    "sub_core_grids",
+                    "indices_tensor",
+                    "subdevice_id",
+                    "global_cb",
+                    "sub_device_id",
+                    "mesh_device",
+                    "persistent_output_tensor",
+                    "arg0",
+                    "arg1",
+                    "arg2",
+                    "arg3",
+                    "arg4",
+                ):
                     diffs.append(Diff(child_path, master[k], "<missing>", "extra_key"))
             else:
                 # Skip comparison of tensor metadata dicts (different tracing formats)

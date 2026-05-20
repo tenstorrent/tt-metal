@@ -112,10 +112,16 @@ def mesh_device_fixture():
     _sub_dev_mgr = None
     try:
         from models.demos.llama3_70b_galaxy.tt.model_config import get_core_ranges as _gcr
+
         (
-            _active_sender_cores, _dram_cores, _all_sender_cores,
-            _active_receiver_cores_list, _all_receiver_cores,
-            _worker_cores, _mm_ring_cores, _hop_grid,
+            _active_sender_cores,
+            _dram_cores,
+            _all_sender_cores,
+            _active_receiver_cores_list,
+            _all_receiver_cores,
+            _worker_cores,
+            _mm_ring_cores,
+            _hop_grid,
         ) = _gcr(12, 2, is_functional_test=False)
 
         _sender_crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in _active_sender_cores])
@@ -132,7 +138,9 @@ def mesh_device_fixture():
             "sender_core_range_set": _sender_crs,
         }
     except Exception:
-        import traceback; traceback.print_exc()
+        import traceback
+
+        traceback.print_exc()
         _sub_dev_mgr = None
         _GLOBAL_CB = None
         _PREFETCHER_INFO = None
@@ -145,8 +153,10 @@ def mesh_device_fixture():
         if _sub_dev_mgr is not None:
             device.clear_loaded_sub_device_manager()
             device.remove_sub_device_manager(_sub_dev_mgr)
-    except Exception:
-        pass
+    except Exception as _td_err:
+        # Best-effort teardown: device may be in an error state already.
+        # Surface the cause but don't block close_mesh_device below.
+        print(f"Warning: sub-device teardown failed: {_td_err}")
     ttnn.close_mesh_device(device)
 
 
@@ -435,6 +445,7 @@ def run(
         # so the traced op signature matches master.  Only strip global_cb and
         # sub_device_id (infrastructure objects that can't survive a device reset).
         import traceback as _tb_fallback
+
         _tb_fallback.print_exc()
         input_tensor_a = ttnn.from_torch(
             torch_input_tensor_a,
@@ -450,9 +461,7 @@ def run(
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        fallback_kwargs = {
-            k: v for k, v in op_kwargs.items() if k not in ("global_cb", "sub_device_id")
-        }
+        fallback_kwargs = {k: v for k, v in op_kwargs.items() if k not in ("global_cb", "sub_device_id")}
         # Keep the traced memory_config when available; fall back to DRAM only
         # when no traced output memory_config was parsed.
         if "memory_config" not in fallback_kwargs or not isinstance(

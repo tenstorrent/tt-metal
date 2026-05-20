@@ -556,13 +556,16 @@ def _build_program_config_by_type(type_name: str, cfg: dict):
             hop_cores = cfg.get("hop_cores")
             if hop_cores and isinstance(hop_cores, list):
                 import ttnn as _ttnn_hc
+
                 parsed_hop = []
                 for hc in hop_cores:
                     if isinstance(hc, dict) and "start" in hc and "end" in hc:
-                        parsed_hop.append(_ttnn_hc.CoreRange(
-                            _ttnn_hc.CoreCoord(hc["start"]["x"], hc["start"]["y"]),
-                            _ttnn_hc.CoreCoord(hc["end"]["x"], hc["end"]["y"]),
-                        ))
+                        parsed_hop.append(
+                            _ttnn_hc.CoreRange(
+                                _ttnn_hc.CoreCoord(hc["start"]["x"], hc["start"]["y"]),
+                                _ttnn_hc.CoreCoord(hc["end"]["x"], hc["end"]["y"]),
+                            )
+                        )
                 if parsed_hop:
                     kwargs["hop_cores"] = _ttnn_hc.CoreRangeSet(set(parsed_hop))
             return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(**kwargs)
