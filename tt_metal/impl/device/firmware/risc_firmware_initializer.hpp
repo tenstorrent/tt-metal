@@ -92,7 +92,7 @@ private:
 
     // Wait for base FW to reach a terminal postcode (PASS/FAIL/SKIP). Idle eth only —
     // any terminal state, as long as we don't assert/deassert during that process
-    bool wait_for_eth_fw_ready(tt::ChipId device_id, const CoreCoord& virtual_core, int timeout_ms = 10000);
+    bool wait_for_eth_fw_ready(tt::ChipId device_id, const CoreCoord& virtual_core, int timeout_ms = 20000);
 
     // Zero all ETH RISC interrupt-mode registers on core. No-op on archs that don't
     // expose this (num_interrupt_vecs == 0)

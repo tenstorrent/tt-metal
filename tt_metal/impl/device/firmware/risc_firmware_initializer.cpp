@@ -172,7 +172,7 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
             for (const auto& eth_core : this->get_control_plane_().get_inactive_ethernet_cores(device_id)) {
                 CoreCoord virtual_core =
                     cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
-                if (!wait_for_eth_fw_ready(device_id, virtual_core, 20000)) {
+                if (!wait_for_eth_fw_ready(device_id, virtual_core)) {
                     TT_THROW(
                         "Device {}: eth base firmware not ready on core ({},{}), cannot proceed with reset",
                         device_id,
@@ -1123,9 +1123,11 @@ void RiscFirmwareInitializer::initialize_firmware(
 
             if (hal_.get_eth_fw_is_cooperative() || core_type != HalProgrammableCoreType::ACTIVE_ETH ||
                 !rtoptions_.get_enable_2_erisc_mode()) {
-                // Disable all ERISC interrupts on idle eth: base FW interrupts can corrupt PC when we switch to runtime
-                // FW. This must happen before we write PC and deassert
-                disable_eth_interrupts(device_id, virtual_core);
+                if (is_idle_eth) {
+                    // Disable all ERISC interrupts on idle eth: base FW interrupts can corrupt PC when
+                    // we switch to runtime FW. Must happen before we write PC and deassert.
+                    disable_eth_interrupts(device_id, virtual_core);
+                }
                 cluster_.write_reg(
                     &jit_build_config.fw_launch_addr_value,
                     tt_cxy_pair(device_id, virtual_core),
