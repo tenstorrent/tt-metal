@@ -66,9 +66,10 @@ class TtMLP:
         down_w = state_dict[prefix + "down_proj.weight"]
 
         wp = resolve_weight_cache_path(weight_cache_path, args)
-        # Experiment: gate_proj quantized to bfloat8_b with HiFi4 fidelity.
+        # Quantize weights to bfloat8_b for DRAM bandwidth; matmul outputs stay bfloat16 with
+        # HiFi4 fidelity. Quantizing outputs to bf8_b compounds across 88 layers and drops PCC.
         self.gate_proj_weight_dtype = ttnn.bfloat8_b
-        self.gate_proj_output_dtype = ttnn.bfloat8_b
+        self.gate_proj_output_dtype = ttnn.bfloat16
         self.gate_proj = upload_matmul_weight(
             gate_w,
             mesh_device,
@@ -78,9 +79,8 @@ class TtMLP:
             weight_cache_path=wp,
             cache_key=f"{prefix}gate_proj_bfp8",
         )
-        # Experiment: up_proj quantized to bfloat8_b with HiFi4 fidelity.
         self.up_proj_weight_dtype = ttnn.bfloat8_b
-        self.up_proj_output_dtype = ttnn.bfloat8_b
+        self.up_proj_output_dtype = ttnn.bfloat16
         self.up_proj = upload_matmul_weight(
             up_w,
             mesh_device,
@@ -90,9 +90,8 @@ class TtMLP:
             weight_cache_path=wp,
             cache_key=f"{prefix}up_proj_bfp8",
         )
-        # Experiment: down_proj quantized to bfloat8_b with HiFi4 fidelity.
         self.down_proj_weight_dtype = ttnn.bfloat8_b
-        self.down_proj_output_dtype = ttnn.bfloat8_b
+        self.down_proj_output_dtype = ttnn.bfloat16
         self.down_proj = upload_matmul_weight(
             down_w,
             mesh_device,

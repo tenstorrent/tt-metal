@@ -84,6 +84,19 @@ def _shard_decode_rope_tables(
     return ttnn.interleaved_to_sharded(cos, mem_config), ttnn.interleaved_to_sharded(sin, mem_config)
 
 
+def _reshape_decode_batch_dim(x: ttnn.Tensor, batch_size: int) -> ttnn.Tensor:
+    """Decode activations use TILE height padding (often 32); logical batch may be smaller.
+
+    Matches tt_transformers decode: ``reshape(x, (1, 1, batch, H), (1, 1, tile_h, H))``.
+    """
+    hidden = int(x.shape[-1])
+    tile_h = int(x.shape[-2])
+    logical = (1, 1, batch_size, hidden)
+    if tile_h == batch_size:
+        return ttnn.reshape(x, logical)
+    return ttnn.reshape(x, logical, (1, 1, tile_h, hidden))
+
+
 # --- Weight loading ---
 
 
@@ -179,12 +192,13 @@ class TtAttention:
 
         wp = resolve_weight_cache_path(weight_cache_path, args)
         pfx = prefix
-        # Experiment: q_proj and kv_proj quantized together to bfloat8_b with HiFi4 fidelity.
-        # They must share output dtype because nlp_create_qkv_heads requires Q and KV to match.
+        # Quantize weights to bfloat8_b for DRAM bandwidth; matmul outputs stay bfloat16 with
+        # HiFi4 fidelity. Quantizing outputs to bf8_b compounds across 88 layers and drops PCC.
+        # nlp_create_qkv_heads also requires q and kv outputs to share dtype.
         self.q_proj_weight_dtype = ttnn.bfloat8_b
-        self.q_proj_output_dtype = ttnn.bfloat8_b
+        self.q_proj_output_dtype = ttnn.bfloat16
         self.kv_proj_weight_dtype = ttnn.bfloat8_b
-        self.kv_proj_output_dtype = ttnn.bfloat8_b
+        self.kv_proj_output_dtype = ttnn.bfloat16
         self.q_proj = _to_tt_weight(
             q_w,
             mesh_device,
@@ -203,9 +217,8 @@ class TtAttention:
             weight_cache_path=wp,
             cache_key=f"{pfx}kv_proj_bfp8",
         )
-        # Experiment: o_proj quantized to bfloat8_b with HiFi4 fidelity.
         self.o_proj_weight_dtype = ttnn.bfloat8_b
-        self.o_proj_output_dtype = ttnn.bfloat8_b
+        self.o_proj_output_dtype = ttnn.bfloat16
         self.o_proj = _to_tt_weight(
             o_w,
             mesh_device,
@@ -279,21 +292,10 @@ class TtAttention:
             else self._compute_kernel_config,
         )
 
-    def _to_bfp8(self, x: ttnn.Tensor, *, mode: str) -> ttnn.Tensor:
-        """Cast ``x`` to ``bfloat8_b`` if it is not already. Caller owns the returned tensor."""
-        if x.dtype == ttnn.bfloat8_b:
-            return x
-        return ttnn.typecast(x, dtype=ttnn.bfloat8_b, memory_config=self._act_mem(mode))
-
     def _project_qkv_prefill(self, x: ttnn.Tensor, *, seq_len: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Return ``(q, kv_fused)`` for ``nlp_create_qkv_heads``."""
-        # Cast LN output to bfloat8_b so the q_proj / kv_proj matmuls see in0 = bfloat8_b
-        # (matches in1 weight dtype, halves activation bandwidth into DRAM-bound matmuls).
-        # Note: caller still owns ``x``; only deallocate the local bf8 copy we created.
-        x_bf8 = self._to_bfp8(x, mode="prefill")
-        owns_bf8 = x_bf8 is not x
         q = self._linear(
-            x_bf8,
+            x,
             self.q_proj,
             mode="prefill",
             kind="qkv",
@@ -302,7 +304,7 @@ class TtAttention:
             compute_kernel_config=self._compute_kernel_config_hifi4,
         )
         kv = self._linear(
-            x_bf8,
+            x,
             self.kv_proj,
             mode="prefill",
             kind="qkv",
@@ -310,16 +312,12 @@ class TtAttention:
             output_dtype=self.kv_proj_output_dtype,
             compute_kernel_config=self._compute_kernel_config_hifi4,
         )
-        if owns_bf8:
-            ttnn.deallocate(x_bf8)
         return q, kv
 
     def _project_qkv_decode(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """Fused QKV activation for ``nlp_create_qkv_heads_decode`` (Q and KV matmuls + concat)."""
-        x_bf8 = self._to_bfp8(x, mode="decode")
-        owns_bf8 = x_bf8 is not x
         q = self._linear(
-            x_bf8,
+            x,
             self.q_proj,
             mode="decode",
             kind="qkv",
@@ -327,25 +325,18 @@ class TtAttention:
             compute_kernel_config=self._compute_kernel_config_hifi4,
         )
         kv = self._linear(
-            x_bf8,
+            x,
             self.kv_proj,
             mode="decode",
             kind="qkv",
             output_dtype=self.kv_proj_output_dtype,
             compute_kernel_config=self._compute_kernel_config_hifi4,
         )
-        if owns_bf8:
-            ttnn.deallocate(x_bf8)
         return ttnn.concat([q, kv], dim=-1, memory_config=self._act_mem("decode"))
 
     def _project_o(self, attn_out_flat: ttnn.Tensor, *, mode: str, seq_len: int = 1) -> ttnn.Tensor:
-        # Cast concat-heads output to bfloat8_b so o_proj matmul gets in0 = bfloat8_b.
-        # Note: the caller still owns ``attn_out_flat`` and deallocates it after this call —
-        # we only deallocate the local ``attn_bf8`` we created here.
-        attn_bf8 = self._to_bfp8(attn_out_flat, mode=mode)
-        owns_bf8 = attn_bf8 is not attn_out_flat
         dense = self._linear(
-            attn_bf8,
+            attn_out_flat,
             self.o_proj,
             mode=mode,
             kind="o_proj",
@@ -353,8 +344,6 @@ class TtAttention:
             output_dtype=self.o_proj_output_dtype,
             compute_kernel_config=self._compute_kernel_config_hifi4,
         )
-        if owns_bf8:
-            ttnn.deallocate(attn_bf8)
         return all_reduce_replicate(
             dense,
             mesh_device=self.mesh_device,
@@ -395,14 +384,6 @@ class TtAttention:
         ttnn.deallocate(q)
         ttnn.deallocate(kv)
 
-        # Bridge bfloat8_b matmul outputs to bfloat16 for downstream RoPE / SDPA / KV-cache.
-        if q_heads.dtype != ttnn.bfloat16:
-            q_heads = ttnn.typecast(q_heads, dtype=ttnn.bfloat16, memory_config=act_mem)
-        if k_heads.dtype != ttnn.bfloat16:
-            k_heads = ttnn.typecast(k_heads, dtype=ttnn.bfloat16, memory_config=act_mem)
-        if v_heads.dtype != ttnn.bfloat16:
-            v_heads = ttnn.typecast(v_heads, dtype=ttnn.bfloat16, memory_config=act_mem)
-
         cos_q, sin_q, cos_k, sin_k = self.rotary_emb.get_prefill_tables(start_pos, S)
         q_heads, k_heads = self.rotary_emb.apply(q_heads, k_heads, cos_q, sin_q, cos_k, sin_k)
 
@@ -442,24 +423,18 @@ class TtAttention:
         x: ttnn.Tensor,
         current_pos: ttnn.Tensor,
     ) -> ttnn.Tensor:
-        """``x``: ``(1, 1, B, hidden_size)``; ``current_pos`` device int32 tensor ``[B]``."""
+        """``x``: ``(1, 1, tile_h, hidden_size)`` with logical batch ``B`` in dim 2; ``current_pos`` is ``[B]``."""
         batch_size = int(current_pos.shape[0])
         act_mem = self._act_mem("decode")
         Hq_local = self.args.n_local_heads
         Hkv_local = self.args.n_local_kv_heads
 
-        hidden = int(x.shape[-1])
-        # ``nlp_create_qkv_heads_decode`` expects ``(1, seq_len, batch, fused_qkv_dim)``.
-        x = ttnn.reshape(x, (1, 1, batch_size, hidden))
+        # TILE layout pads height (e.g. 32 for batch=1); do not squeeze to (1, 1, 1, H).
+        x = _reshape_decode_batch_dim(x, batch_size)
 
         xqkv = self._project_qkv_decode(x)
         fused_dim = int(xqkv.shape[-1])
-        xqkv = ttnn.reshape(xqkv, (1, 1, batch_size, fused_dim))
-
-        # Bridge bfloat8_b q_proj/kv_proj outputs to bfloat16 before nlp_create_qkv_heads_decode,
-        # which only accepts BFLOAT16 / FLOAT32 inputs.
-        if xqkv.dtype != ttnn.bfloat16:
-            xqkv = ttnn.typecast(xqkv, dtype=ttnn.bfloat16, memory_config=act_mem)
+        xqkv = _reshape_decode_batch_dim(xqkv, batch_size)
 
         q_heads, k_heads, v_heads = ttnn.experimental.nlp_create_qkv_heads_decode(
             xqkv,
