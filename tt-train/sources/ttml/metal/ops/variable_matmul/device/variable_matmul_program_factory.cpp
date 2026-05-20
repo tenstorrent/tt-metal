@@ -260,8 +260,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     const bool offsets_active =
         operation_attributes.offsets_role != OffsetsRole::None && tensor_args.offsets_tensor.has_value();
     // Orthogonal offset flags derived from the role. Each kernel branch keys off these (not
-    // off the role enum), so future role combinations = just listing flags here. See
-    // docs/VARIABLE_MATMUL_REFACTOR.md (#1).
+    // off the role enum), so future role combinations are just a matter of listing flags here.
     const auto role = operation_attributes.offsets_role;
     const bool offset_m_axis = offsets_active && (role == OffsetsRole::OutputRow || role == OffsetsRole::InputRow ||
                                                   role == OffsetsRole::InputAndOutputRow);
@@ -799,7 +798,7 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
     // Must mirror init-path: both in0 and in1 kernels are compiled with the offset defines for
     // every role, so RT-arg updates must match — otherwise the kernel's `offsets_start_index`
     // arg keeps the value from the first build and subsequent cache-hit invocations read
-    // offsets[0] instead of offsets[e]. See docs/VARIABLE_MATMUL_REFACTOR.md (#1).
+    // offsets[0] instead of offsets[e].
     const bool offsets_active =
         operation_attributes.offsets_role != OffsetsRole::None && tensor_args.offsets_tensor.has_value();
     const bool in0_needs_offsets = offsets_active;
