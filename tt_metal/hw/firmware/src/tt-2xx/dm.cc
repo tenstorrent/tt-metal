@@ -210,6 +210,8 @@ extern "C" uint32_t _start1() {
     device_setup();
     if (hartid > 0) {
         signal_subordinate_completion();
+        // Set up overlay command buffers - legacy name
+        noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     } else {  // This is DM0
         risc_init();
         noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
@@ -294,6 +296,7 @@ extern "C" uint32_t _start1() {
                 // noc_mode = launch_msg_address->kernel_config.brisc_noc_mode;
                 my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
                 my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
+                // Set up overlay command buffers - legacy name
                 noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
                 // re-initialize the NoCs
                 // uint8_t cmd_buf;
