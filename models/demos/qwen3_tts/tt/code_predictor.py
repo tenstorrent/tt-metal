@@ -101,6 +101,46 @@ class CodePredictor(LightweightModule):
             ttnn.ShardSpec(self._cp_concat_grid, (_M, self.head_dim), ttnn.ShardOrientation.ROW_MAJOR),
         )
 
+        # Sharded nlp_create_qkv_heads input: WIDTH_SHARDED across num_kv_heads cores.
+        # Each shard = (num_q_per_kv + 2) * head_dim wide (KV-group-interleaved layout).
+        # For CP: num_q_per_kv = 16/8 = 2, shard_width = (2+2)*128 = 512, num_cores = 4096/512 = 8.
+        num_q_per_kv = self.num_heads // self.num_kv_heads
+        qkv_shard_width = (num_q_per_kv + 2) * self.head_dim
+        _fused_qkv_cp = (self.num_heads + 2 * self.num_kv_heads) * self.head_dim
+        assert _fused_qkv_cp % qkv_shard_width == 0
+        qkv_num_cores = _fused_qkv_cp // qkv_shard_width  # 8
+        self._cp_qkv_in_grid = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(qkv_num_cores - 1, 0))}
+        )
+        self._cp_qkv_in_memcfg = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(self._cp_qkv_in_grid, (_M, qkv_shard_width), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        _q_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.num_heads - 1, 0))})
+        _kv_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.num_kv_heads - 1, 0))})
+        self._cp_q_out_memcfg = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(_q_grid, (_M, self.head_dim), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        self._cp_k_out_memcfg = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(_kv_grid, (_M, self.head_dim), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        # Row permutation [Q|K|V] → [(q0,q1,k0,v0), (q2,q3,k1,v1), ...] kvgi layout.
+        _row_perm = []
+        for i in range(self.num_kv_heads):
+            for q_in_group in range(num_q_per_kv):
+                q_head_idx = i * num_q_per_kv + q_in_group
+                _row_perm.extend(range(q_head_idx * self.head_dim, (q_head_idx + 1) * self.head_dim))
+            k_off = self.num_heads * self.head_dim
+            _row_perm.extend(range(k_off + i * self.head_dim, k_off + (i + 1) * self.head_dim))
+            v_off = (self.num_heads + self.num_kv_heads) * self.head_dim
+            _row_perm.extend(range(v_off + i * self.head_dim, v_off + (i + 1) * self.head_dim))
+        self._cp_kvgi_row_perm = torch.tensor(_row_perm, dtype=torch.long)
+
         # --- weight format helpers ---
         def _perm_rope_rows(w_2d: torch.Tensor, head_dim: int) -> torch.Tensor:
             out_dim = w_2d.shape[0]
@@ -177,11 +217,14 @@ class CodePredictor(LightweightModule):
             k_w = _perm_rope_rows(lw_torch["self_attn.k_proj.weight"], HD)
             v_w = lw_torch["self_attn.v_proj.weight"]
             wqkv_plain = torch.cat([q_w, k_w, v_w], dim=0).contiguous()
+            # Also build kvgi-layout variant for the sharded nlp_create_qkv_heads path.
+            wqkv_kvgi = wqkv_plain.index_select(0, self._cp_kvgi_row_perm).contiguous()
             self.layers_w.append(
                 {
                     "input_ln_w": norm_w_1d_to_tt(lw_torch["input_layernorm.weight"], H),
                     "post_ln_w": norm_w_1d_to_tt(lw_torch["post_attention_layernorm.weight"], H),
                     "wqkv": w_to_tt(wqkv_plain),
+                    "wqkv_kvgi": w_to_tt(wqkv_kvgi),
                     "o_proj": w_to_tt(lw_torch["self_attn.o_proj.weight"]),
                     "gate": w_to_tt(lw_torch["mlp.gate_proj.weight"]),
                     "up": w_to_tt(lw_torch["mlp.up_proj.weight"]),
@@ -246,24 +289,30 @@ class CodePredictor(LightweightModule):
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
-        # QKV (K=1024) — default L1_INTERLEAVED beats DRAM-sharded by ~17% on this
-        # shape (128 cores vs 80, and in0_block_w=2 setup cost doesn't pay off here).
+        # QKV uses wqkv in kvgi layout so we can width-shard xqkv across 8 cores
+        # and feed it to the sharded nlp_create_qkv_heads kernel (1c → 8c, 39→~5 µs).
         xqkv = ttnn.matmul(
             x,
-            lw["wqkv"],
+            lw["wqkv_kvgi"],
             dtype=self.act_dtype,
             compute_kernel_config=self.kcfg,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(x)
+        xqkv_sh = ttnn.to_memory_config(xqkv, self._cp_qkv_in_memcfg)
+        ttnn.deallocate(xqkv)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
-            xqkv,
+            xqkv_sh,
             num_heads=self.num_heads,
             num_kv_heads=self.num_kv_heads,
             transpose_k_heads=False,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=self._cp_q_out_memcfg,
         )
-        ttnn.deallocate(xqkv)
+        ttnn.deallocate(xqkv_sh)
+        # Reshard q/k/v back to L1_INTERLEAVED for downstream ops (rms_norm + RoPE).
+        q = ttnn.to_memory_config(q, ttnn.L1_MEMORY_CONFIG)
+        k = ttnn.to_memory_config(k, ttnn.L1_MEMORY_CONFIG)
+        v = ttnn.to_memory_config(v, ttnn.L1_MEMORY_CONFIG)
 
         q_n = ttnn.rms_norm(
             q,
