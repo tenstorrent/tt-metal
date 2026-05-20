@@ -6,9 +6,6 @@
 #include <tt-metalium/constants.hpp>
 #include "api/dataflow/dataflow_api.h"
 #include "llk_defs.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
 #include "ttnn/cpp/ttnn/operations/pool/device/kernels/experimental_device_api.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/reduce_rm_dataflow_common.hpp"
@@ -75,7 +72,7 @@ void kernel_main() {
 
     experimental::CB cb_rm(cb_id_rm);
     experimental::CB cb_clear_value(cb_id_clear_value);
-    experimental::Noc noc;
+    Noc noc;
 
     //
     // Scaler tile (reduce_helpers_dataflow): pushed once, used by compute for every reduce call.
@@ -193,7 +190,7 @@ void kernel_main() {
                     rm_fill_page_with_clear_template(noc, cb_rm, page_bytes, clear_template_src, clear_template_bytes);
 #if defined(SHARDED_WIDTH_INPUT)
                     if (w_range.valid_bytes > 0) {
-                        experimental::UnicastEndpoint self_ep;
+                        UnicastEndpoint self_ep;
                         for (uint32_t r = 0; r < slabs[hti].rows_in_pack; ++r) {
                             const uint32_t row_addr =
                                 src_addr + (slabs[hti].first_page + r) * shard_page_bytes + w_range.chunk_start_bytes;
