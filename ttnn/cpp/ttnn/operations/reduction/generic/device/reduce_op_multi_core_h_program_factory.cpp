@@ -36,7 +36,6 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     const uint32_t tile_width = a.tensor_spec().tile().get_width();
     const uint32_t tile_hw = a.tensor_spec().tile().get_tile_hw();
 
-    // TODO: check if this is missing partial tiles
     uint32_t Wt = (W + tile_width - 1) / tile_width;
     uint32_t Ht = (H + tile_height - 1) / tile_height;
     uint32_t HtWt = Ht * Wt;
@@ -67,8 +66,15 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
                               output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
     TT_FATAL(
-        !(rm_path && use_width_sharding),
-        "Reduce H RM path does not currently support sharded tensors in this merged factory");
+        !rm_path || (a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+                     output.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED),
+        "Reduce H RM path only supports interleaved tensors (input layout {}, output layout {})",
+        static_cast<int>(a.memory_config().memory_layout()),
+        static_cast<int>(output.memory_config().memory_layout()));
+    TT_FATAL(
+        !rm_path || operation_attributes.math_op == tt::tt_metal::ReduceOpMath::SUM,
+        "Reduce H RM path only supports SUM (mean lowered from AVG), got {}",
+        operation_attributes.math_op);
     TT_FATAL(
         !(rm_path && operation_attributes.negate),
         "Reduce H RM path does not currently support 'negate' (CB index c_4/c_5 collision)");

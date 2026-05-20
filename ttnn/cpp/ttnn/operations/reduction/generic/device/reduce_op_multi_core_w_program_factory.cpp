@@ -33,13 +33,19 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
     const uint32_t tile_height = a.tensor_spec().tile().get_height();
     const uint32_t tile_width = a.tensor_spec().tile().get_width();
 
-    // TODO: check if this is missing partial tiles
     uint32_t Wt = (W + tile_width - 1) / tile_width;
     uint32_t Ht = (H + tile_height - 1) / tile_height;
 
     TT_FATAL(
-        !(rm_path && a.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED),
-        "Reduce W RM path does not currently support sharded tensors in this merged factory");
+        !rm_path || (a.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
+                     output.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED),
+        "Reduce W RM path only supports interleaved tensors (input layout {}, output layout {})",
+        static_cast<int>(a.memory_config().memory_layout()),
+        static_cast<int>(output.memory_config().memory_layout()));
+    TT_FATAL(
+        !rm_path || operation_attributes.math_op == tt::tt_metal::ReduceOpMath::SUM,
+        "Reduce W RM path only supports SUM (mean lowered from AVG), got {}",
+        operation_attributes.math_op);
     TT_FATAL(
         !(rm_path && operation_attributes.negate),
         "Reduce W RM path does not currently support 'negate' (CB index c_4/c_5 collision)");
@@ -58,12 +64,15 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
 
     tt_metal::IDevice* device = &a.mutable_device();
 
-    // if (operation_attributes.row_major_w_dense_path || operation_attributes.row_major_h_dense_path)
-    const uint32_t wt_tiles_per_chunk = std::min<uint32_t>(8, Wt);
+    // RM-only constants. ht_tiles_per_chunk (orthogonal dim) is restricted to 1 for now but exposed
+    // as a named knob so the chunk size can be lifted later without re-threading through every site.
+    constexpr uint32_t k_rm_ht_tiles_per_chunk = 1;
+    constexpr uint32_t k_rm_max_wt_tiles_per_chunk = 8;
+    const uint32_t rm_rows_per_tile = tile_height;
+    const uint32_t wt_tiles_per_chunk = std::min<uint32_t>(k_rm_max_wt_tiles_per_chunk, std::max(1U, Wt));
     const uint32_t datum_size = tt::datum_size(dst_cb_data_format);
     const uint32_t src_datum_size = tt::datum_size(src0_cb_data_format);
     const uint32_t chunk_row_bytes = wt_tiles_per_chunk * tile_width * src_datum_size;
-    const uint32_t rm_rows_per_tile = tile_height;
     const uint32_t rm_staging_page_size = rm_rows_per_tile * chunk_row_bytes;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -88,7 +97,6 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
 
     ProgramDescriptor desc;
 
-    constexpr uint32_t k_rm_ht_tiles_per_chunk = 1;  // W reduce restricted to 1
     if (rm_path) {
         constexpr uint32_t cb_rm = tt::CBIndex::c_24;
         constexpr uint32_t num_rm_pages = 2;
@@ -264,7 +272,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
             compute_kernel_args_group_1.end(),
             {
                 wt_tiles_per_chunk,
-                1,  // ht_tiles_per_chunk (W reduce restricted to 1)
+                k_rm_ht_tiles_per_chunk,
             });
     }
 
@@ -297,7 +305,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
                 compute_kernel_args_group_2.end(),
                 {
                     wt_tiles_per_chunk,
-                    1,  // ht_tiles_per_chunk (W reduce restricted to 1)
+                    k_rm_ht_tiles_per_chunk,
                 });
         }
 

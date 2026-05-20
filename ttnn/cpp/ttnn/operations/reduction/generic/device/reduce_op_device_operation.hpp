@@ -42,26 +42,8 @@ struct ReduceDeviceOperation {
             tensor_return_value_t& tensor_return_value);
     };
 
-    struct ReduceMultiCoreWRmProgramFactory {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-    };
-
-    struct ReduceMultiCoreHRmProgramFactory {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-    };
-
-    using program_factory_t = std::variant<
-        ReduceSingleCoreHwProgramFactory,
-        ReduceMultiCoreHProgramFactory,
-        ReduceMultiCoreWProgramFactory,
-        ReduceMultiCoreWRmProgramFactory,
-        ReduceMultiCoreHRmProgramFactory>;
+    using program_factory_t =
+        std::variant<ReduceSingleCoreHwProgramFactory, ReduceMultiCoreHProgramFactory, ReduceMultiCoreWProgramFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
