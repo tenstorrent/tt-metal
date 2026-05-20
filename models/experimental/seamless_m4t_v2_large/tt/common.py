@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any, Optional, Tuple
 
 import ttnn
@@ -21,6 +22,71 @@ TILE = 32
 def core_grid(device: ttnn.Device) -> ttnn.CoreGrid:
     grid = device.compute_with_storage_grid_size()
     return ttnn.CoreGrid(y=grid.y, x=grid.x)
+
+
+def determine_num_dram_shard_cores(shard_dim: int, max_dram_cores: int) -> int:
+    """Largest core count ≤ ``max_dram_cores`` that evenly divides ``shard_dim`` (DRAM width shards)."""
+    num_cores = max_dram_cores
+    while shard_dim % num_cores != 0:
+        assert num_cores > 0, "Unable to find DRAM shard core count"
+        num_cores -= 1
+    return num_cores
+
+
+def find_largest_divisor(n: int, max_divisor: int = 8) -> int:
+    for i in range(max_divisor, 0, -1):
+        if n % i == 0:
+            return i
+    return 1
+
+
+def create_dram_sharded_mem_config(device: ttnn.Device, k: int, n: int) -> Tuple[ttnn.MemoryConfig, int]:
+    """WIDTH-sharded DRAM config for linear weight ``[k, n]`` (``n`` may be padded)."""
+    dram_cores = dram_shard_core_count(device, n)
+    assert device.dram_grid_size().y == 1, "DRAM sharding assumes dram grid y == 1"
+    padded_n = math.ceil(n / (TILE * dram_cores)) * (TILE * dram_cores)
+    dram_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_cores - 1, 0))})
+    shard_spec = ttnn.ShardSpec(dram_grid, (k, padded_n // dram_cores), ttnn.ShardOrientation.ROW_MAJOR)
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+    return mem_config, padded_n
+
+
+def is_dram_width_sharded(tensor: ttnn.Tensor) -> bool:
+    mc = tensor.memory_config()
+    return mc.buffer_type == ttnn.BufferType.DRAM and mc.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+
+
+def dram_shard_core_count(device: ttnn.Device, n: int) -> int:
+    return determine_num_dram_shard_cores(n, int(device.dram_grid_size().x))
+
+
+def dram_linear_input_mem_config(device: ttnn.Device, m: int, k: int) -> ttnn.MemoryConfig:
+    dram_cores = dram_shard_core_count(device, k)
+    return ttnn.create_sharded_memory_config(
+        (m, k // dram_cores),
+        core_grid=ttnn.CoreGrid(x=dram_cores, y=1),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+
+def dram_matmul_program_config(
+    device: ttnn.Device,
+    m: int,
+    k: int,
+    n: int,
+    *,
+    fused_activation=None,
+) -> ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig:
+    dram_cores = dram_shard_core_count(device, n)
+    assert k % (TILE * dram_cores) == 0, f"k={k} must divide tile_size * dram_cores ({TILE * dram_cores})"
+    return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+        in0_block_w=find_largest_divisor(k // (TILE * dram_cores)),
+        per_core_M=max(1, math.ceil(m / TILE)),
+        per_core_N=math.ceil(n / (TILE * dram_cores)),
+        fused_activation=fused_activation,
+    )
 
 
 def ensure_tile_bf16_sdpa_mask(x: ttnn.Tensor) -> ttnn.Tensor:
