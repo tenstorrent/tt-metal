@@ -256,7 +256,10 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
     Program program;
     constexpr const char* DM_KERNEL_NAME = "rta_dm";
 
-    std::vector<uint32_t> rtas_range2 = {0x1000, 0x1001, 0x1002};
+    // Pad to match default_rtas.size() (== num_runtime_varargs in the schema).
+    // Metal 2.0 enforces a uniform per-node RTA count across all NodeCoords in a kernel run, so
+    // every node binding under this kernel must provide exactly num_runtime_varargs values.
+    std::vector<uint32_t> rtas_range2 = {0x1000, 0x1001, 0x1002, 0x1003, 0x1004};
 
     // Build a Metal 2.0 KernelSpec that works on both gen1 (single BRISC) and gen2 (all Quasar user DMs).
     // Provide both gen1 and gen2 configs so the runtime selects the one matching the current arch.
