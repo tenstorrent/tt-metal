@@ -427,6 +427,7 @@ void kernel_main() {
 #endif
                 if (is_injector_core) {
                     DeviceZoneScopedSumN2("in0_read_ag");
+#ifndef AGMM_ABLATE_IN0_READ
                     read_in0_block_sync<M_block_tiles, K_block_tiles>(
                         in0_reader,
                         in0_shape,
@@ -446,6 +447,7 @@ void kernel_main() {
                         k_block_right_tile,
                         k_block_right_tile + k_right_tiles,
                         k_right_tiles);
+#endif
                 } else {
                     // Get from previous device
                     DeviceZoneScopedSumN1("chain_wait_prev");
@@ -467,10 +469,12 @@ void kernel_main() {
                      * in0 is M_block_tiles x K_block_tiles. When M block is partial, we don't need to write the
                      * padded tiles. Use `current_block_bytes`.
                      */
+#ifndef AGMM_ABLATE_CHAIN_MCAST
                     noc_async_write(in0_start_address, in0_unicast_data_addr, current_block_bytes);
 
 #ifdef ARCH_BLACKHOLE
                     noc_async_writes_flushed();
+#endif
 #endif
 
                     noc_semaphore_set_remote(in0_valid_semaphore_addr, in0_receiver_semaphore_noc_addr);

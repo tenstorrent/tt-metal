@@ -564,6 +564,16 @@ all_gather_minimal_matmul_async_factory_helper(
     if (agmm_uni_ring) {
         defines["AGMM_UNI_RING"] = "1";
     }
+    // Ablation flags — each removes one piece of the in0 data movement while leaving sem
+    // signaling intact so the kernel still runs end-to-end. Used to isolate which part of
+    // the dataflow is on the critical path. PCC is garbage when any of these are set.
+    for (const char* name :
+         {"AGMM_ABLATE_IN0_READ", "AGMM_ABLATE_CHAIN_MCAST", "AGMM_ABLATE_FABRIC_SEND", "AGMM_ABLATE_FABRIC_WAIT"}) {
+        const char* v = std::getenv(name);
+        if (v != nullptr && std::string(v) == "1") {
+            defines[name] = "1";
+        }
+    }
     if (use_bias) {
         defines["FUSE_BIAS"] = "1";
     }

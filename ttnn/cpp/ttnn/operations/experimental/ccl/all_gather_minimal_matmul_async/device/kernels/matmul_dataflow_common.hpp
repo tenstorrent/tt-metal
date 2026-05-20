@@ -218,7 +218,9 @@ void compute_actual_k_block(
             // m_block, advance sem_target by K_blocks_per_device to consume those extras.
             if (device_iter > 0) {
                 DeviceZoneScopedSumN1("in0_wait_sem");
+#ifndef AGMM_ABLATE_FABRIC_WAIT
                 noc_semaphore_wait_min(out_ready_semaphore_forward, sem_target_forward + 1);
+#endif
                 sem_target_forward += 1;
             }
             if (k_block_iter == total_k_block_count - 1) {
@@ -319,6 +321,7 @@ FORCE_INLINE void forward_half_block_to_fabric_neighbor(
             noc_addrs[i] = tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_id, 0);
         }
         if (do_write) {
+#ifndef AGMM_ABLATE_FABRIC_SEND
             if (tiles_to_put_in_current_packet > 1) {
                 fabric_unicast_noc_scatter_write_with_state<
                     UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
@@ -334,6 +337,7 @@ FORCE_INLINE void forward_half_block_to_fabric_neighbor(
             }
 
             noc_async_writes_flushed();
+#endif
             tiles_read += tiles_to_put_in_current_packet;
             l1_read_addr += (tiles_to_put_in_current_packet * page_size);
             if (reached_half_block_end) {
