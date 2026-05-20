@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Stage-by-stage PCC test for the full Voxtral TTS TT pipeline vs CPU reference."""
+"""Full Voxtral TTS pipeline PCC vs CPU reference (prefill, loop, waveform)."""
 
 from __future__ import annotations
 
@@ -161,7 +161,7 @@ def test_ttnn_voxtral_tts_e2e_pcc(device, reset_seeds, request):
     acoustic_total = 0
 
     for step in range(generate_steps):
-        _ref_codes, tt_codes, step_matches, step_total = _compare_acoustic_codes(
+        _, tt_codes, step_matches, step_total = _compare_acoustic_codes(
             pipe,
             cpu,
             hidden_bf16=tt_hidden.to(torch.bfloat16),

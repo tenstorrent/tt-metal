@@ -1,9 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""E2E Voxtral TTS pipeline tests vs CPU reference.
-
-Per-step PCC with teacher-forced discrete feedback (not free-running stream comparison).
-"""
+"""Component pipeline PCC (not full E2E — see ``tests/pcc/test_ttnn_voxtral_tts_e2e.py``)."""
 
 from __future__ import annotations
 
@@ -81,14 +78,14 @@ def _log_generated_code_tokenizer_diagnostics(pipe: VoxtralTTSPipeline, codes_b3
     latent_tt = pipe.audio_tokenizer.latent_from_codes(codes_b37t)
     tt_latent_btc = ttnn.to_torch(latent_tt).squeeze(1).float()
     ref_latent_btc = ref_latent_ncl.permute(0, 2, 1).contiguous().float()
-    ok, msg = comp_pcc(ref_latent_btc, tt_latent_btc, pcc=0.99)
+    _, msg = comp_pcc(ref_latent_btc, tt_latent_btc, pcc=0.99)
     _log_pcc("latent_from_codes", float(msg), 0.99)
 
     ref_hidden_btd = decoder_blocks_stack_reference(ref_latent_ncl, sd, cfg)
     hidden_tt = pipe.audio_tokenizer.decode_full_forward(latent_tt)
     ttnn.deallocate(latent_tt)
     tt_hidden_btd = ttnn.to_torch(hidden_tt).squeeze(1).float()
-    ok, msg = comp_pcc(ref_hidden_btd.float(), tt_hidden_btd, pcc=0.99)
+    _, msg = comp_pcc(ref_hidden_btd.float(), tt_hidden_btd, pcc=0.99)
     _log_pcc("decoder stack output", float(msg), 0.99)
 
     ref_mel_ncl = output_proj_mel_ncl_reference_bf16(ref_hidden_btd.to(torch.bfloat16), sd)
@@ -96,13 +93,13 @@ def _log_generated_code_tokenizer_diagnostics(pipe: VoxtralTTSPipeline, codes_b3
     mel_tt = pipe.audio_tokenizer.output_proj_forward(hidden_tt)
     ttnn.deallocate(hidden_tt)
     tt_mel_btc = ttnn.to_torch(mel_tt).squeeze(1).contiguous().float()
-    ok, msg = comp_pcc(ref_mel_btc, tt_mel_btc, pcc=0.99)
+    _, msg = comp_pcc(ref_mel_btc, tt_mel_btc, pcc=0.99)
     _log_pcc("output_proj mel", float(msg), 0.99)
 
     ref_wav = pretransform_decode(ref_mel_ncl, channels=cfg.channels).float()
     tt_wav = pipe.audio_tokenizer.pretransform_decode_torch(mel_tt)
     ttnn.deallocate(mel_tt)
-    ok, msg = comp_pcc(ref_wav.float(), tt_wav.float(), pcc=0.99)
+    _, msg = comp_pcc(ref_wav.float(), tt_wav.float(), pcc=0.99)
     _log_pcc("pretransform waveform", float(msg), 0.99)
 
 
@@ -251,42 +248,6 @@ def test_voxtral_tts_pipeline_waveform_codes_pcc(device, reset_seeds):
 
 @torch.no_grad()
 @pytest.mark.timeout(3600)
-def test_voxtral_tts_pipeline_generate_path_smoke_and_waveform_pcc(device, reset_seeds):
-    """Short generate_with_codes path + tokenizer self-consistency PCC."""
-    name = resolve_voxtral_model_name_or_skip()
-    try:
-        pipe = VoxtralTTSPipeline.from_model_name(device, model_name_or_path=name, text_max_seq_len=512)
-    except Exception as exc:
-        pytest.skip(f"Pipeline load failed: {exc}")
-
-    out = pipe.generate_with_codes(
-        text=_DEMO_TEXT,
-        voice=_DEMO_VOICE,
-        max_tokens=4,
-        seed=0,
-    )
-
-    assert out.codes_b37t.dim() == 3 and tuple(out.codes_b37t.shape[:2]) == (1, 37)
-    assert out.codes_b37t.shape[2] > 0, "generate path produced no acoustic frames before end-of-audio"
-    assert out.waveform.shape == (1, 1, out.codes_b37t.shape[2] * pipe._downsample_factor)
-    assert torch.isfinite(out.waveform).all(), "generate path produced non-finite waveform samples"
-
-    ref_wav = audio_tokenizer_decode_reference(
-        out.codes_b37t, pipe.audio_tokenizer_sd, pipe.config.audio_tokenizer_args
-    )
-    ref_wav = ref_wav.reshape(1, 1, -1)[:, :, : out.waveform.shape[-1]]
-    ok, msg = comp_pcc(ref_wav.float(), out.waveform.float(), pcc=WAVEFORM_PCC)
-    _log_stage_header("SHORT GENERATE PATH - tokenizer self-consistency")
-    _log_pcc("TT waveform vs CPU decode of TT codes", float(msg), WAVEFORM_PCC)
-    logger.info(
-        f"  frames={out.codes_b37t.shape[2]} waveform shape={tuple(out.waveform.shape)} "
-        f"hit_end_audio={out.hit_end_audio}"
-    )
-    assert ok, f"Generated-code waveform PCC failed: {msg}"
-
-
-@torch.no_grad()
-@pytest.mark.timeout(3600)
 def test_voxtral_tts_pipeline_acoustic_forward_matches_reference(device, reset_seeds):
     """TT acoustic forward vs CPU ref with synced FM RNG."""
     name = resolve_voxtral_model_name_or_skip()
@@ -347,7 +308,6 @@ def test_voxtral_tts_pipeline_text_multistep_decode_pcc(device, reset_seeds, dec
 
     request = compose_speech_request(_DEMO_TEXT, name, voice=_DEMO_VOICE, ref_audio=None)
     prompt_ids = request["prompt_token_ids"]
-    # One TT tile (128); truncate instead of pad to avoid KV drift.
     prompt_tokens = torch.tensor(prompt_ids[:128], dtype=torch.int64).unsqueeze(0)
 
     vocab_size = pipe.text.inner.vocab_size
@@ -539,35 +499,6 @@ def test_voxtral_tts_pipeline_inference(device, reset_seeds, generate_steps):
         generate_steps=generate_steps,
         acoustic_hidden_source="cpu",
         feedback_codes="reference",
-    )
-
-
-@torch.no_grad()
-@pytest.mark.timeout(3600)
-@pytest.mark.parametrize("generate_steps", [8], ids=["8_steps"])
-def test_voxtral_tts_pipeline_free_running_inference_pcc(device, reset_seeds, generate_steps):
-    """Full pipeline PCC: TT hidden + TT acoustic codes fed back."""
-    name = resolve_voxtral_model_name_or_skip()
-    try:
-        pipe = VoxtralTTSPipeline.from_model_name(device, model_name_or_path=name, text_max_seq_len=512)
-    except Exception as exc:
-        pytest.skip(f"Pipeline load failed: {exc}")
-
-    try:
-        cpu = VoxtralCPUReference(model_name_or_path=name, dtype="bfloat16", device="cpu")
-    except Exception as exc:
-        pytest.skip(f"CPU reference load failed: {exc}")
-
-    request = compose_speech_request(_DEMO_TEXT, name, voice=_DEMO_VOICE, ref_audio=None)
-    prompt_ids = request["prompt_token_ids"]
-    _run_pipeline_inference_pcc_loop(
-        pipe,
-        cpu,
-        prompt_ids=prompt_ids,
-        prompt_len=len(prompt_ids),
-        generate_steps=generate_steps,
-        acoustic_hidden_source="tt",
-        feedback_codes="tt",
     )
 
 

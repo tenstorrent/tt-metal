@@ -47,7 +47,6 @@ def get_VoxtralTTArgs(preloaded_state_dict: Optional[dict[str, torch.Tensor]] = 
             prev_hf_model = os.environ.get("HF_MODEL")
             os.environ["HF_MODEL"] = model_name_or_path
             try:
-                # use_hf_rope path matches our text-side reference behavior.
                 kwargs.setdefault("use_hf_rope", True)
                 super().__init__(*args, **kwargs)
             finally:
@@ -79,7 +78,6 @@ def get_VoxtralTTArgs(preloaded_state_dict: Optional[dict[str, torch.Tensor]] = 
             self.is_multimodal = False
 
         def create_tokenizer(self):
-            # Text-model bringup path does not require tokenizer in this adapter.
             return None
 
         def create_processor(self):
