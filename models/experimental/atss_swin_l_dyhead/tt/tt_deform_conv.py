@@ -221,8 +221,6 @@ class TtDeformConv2dV2:
         if offset_nhwc.layout != ttnn.ROW_MAJOR_LAYOUT:
             offset_nhwc = ttnn.to_layout(offset_nhwc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        # grid_xy = base_grid + offset * scale. Both base_grid and offset are in (x, y) interleaved
-        # order matching grid_sample's expectation — no per-call swap needed.
         off_scaled = ttnn.multiply(offset_nhwc, self.scale, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         grid_xy = ttnn.add(self.base_grid, off_scaled, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(off_scaled)
