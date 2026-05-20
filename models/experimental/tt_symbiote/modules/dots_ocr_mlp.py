@@ -290,7 +290,7 @@ class TTNNDotsOCRMLP(TTNNModule):
         tt_module.up_proj = None
 
         tt_module.down_proj = TTNNDotsOCRRowShardedNoAllGather.from_torch(torch_mlp.down_proj)
-        tt_module.down_proj.use_decode_l1_sharded_matmul = False
+        tt_module.down_proj.use_decode_l1_sharded_matmul = True
         return tt_module
 
     def set_weight_dtype(self, dtype):
