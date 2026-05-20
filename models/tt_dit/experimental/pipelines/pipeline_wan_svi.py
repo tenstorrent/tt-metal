@@ -74,7 +74,23 @@ class WanPipelineSVI(WanPipelineI2VLora):
             kwargs=kwargs,
         )
 
-        super().__init__(*args, **kwargs)
+        # The base WanPipeline.__init__ unconditionally constructs a
+        # UniPCSolver from `scheduler`, which raises for FlowMatch
+        # schedulers. Swap in a UniPC stand-in so super().__init__ goes
+        # through, then replace _solver with the correct on-device stepper.
+        from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
+
+        real_scheduler = kwargs.get("scheduler")
+        if isinstance(real_scheduler, FlowMatchEulerDiscreteScheduler):
+            from diffusers.schedulers import UniPCMultistepScheduler
+
+            from ...solvers import EulerSolver
+
+            kwargs["scheduler"] = UniPCMultistepScheduler(use_flow_sigmas=True, prediction_type="flow_prediction")
+            super().__init__(*args, **kwargs)
+            self._solver = EulerSolver(scheduler=real_scheduler)
+        else:
+            super().__init__(*args, **kwargs)
 
     @staticmethod
     def _configure_regime(

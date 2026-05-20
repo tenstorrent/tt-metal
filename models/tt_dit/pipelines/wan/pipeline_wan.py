@@ -18,7 +18,7 @@ from diffusers.models import AutoencoderKLWan
 from diffusers.models import WanTransformer3DModel as TorchWanTransformer3DModel
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 from diffusers.pipelines.wan.pipeline_output import WanPipelineOutput
-from diffusers.schedulers import FlowMatchEulerDiscreteScheduler, UniPCMultistepScheduler
+from diffusers.schedulers import UniPCMultistepScheduler
 from diffusers.video_processor import VideoProcessor
 from loguru import logger
 from transformers import AutoTokenizer, UMT5EncoderModel
@@ -31,7 +31,7 @@ from ...models.transformers.wan2_2.transformer_wan import WanTransformer3DModel
 from ...models.vae.vae_wan2_1 import WanDecoder
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VaeHWParallelConfig
 from ...parallel.manager import CCLManager
-from ...solvers import EulerSolver, UniPCSolver
+from ...solvers import UniPCSolver
 from ...utils import cache, tensor
 from ...utils.conv3d import conv3d_blocking_hash
 from ...utils.tensor import (
@@ -297,10 +297,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         scheduler = scheduler or UniPCMultistepScheduler.from_pretrained(
             checkpoint_name, subfolder="scheduler", flow_shift=12.0
         )
-        if isinstance(scheduler, FlowMatchEulerDiscreteScheduler):
-            self._solver = EulerSolver(scheduler=scheduler)
-        else:
-            self._solver = UniPCSolver(scheduler=scheduler)
+        self._solver = UniPCSolver(scheduler=scheduler)
 
         if self.dynamic_load:
             # setup models that cannot be loaded together with the corresponding model.
@@ -378,7 +375,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         height: int = 0,
         width: int = 0,
         num_frames: int = 81,
-        boundary_ratio: Optional[float] = None,
         **extra_kwargs,
     ):
         device_configs = {}
@@ -476,7 +472,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             vae_parallel_config=vae_parallel_config,
             encoder_parallel_config=encoder_parallel_config,
             num_links=num_links or config["num_links"],
-            boundary_ratio=0.875 if boundary_ratio is None else boundary_ratio,
+            boundary_ratio=extra_kwargs.pop("boundary_ratio", 0.875),
             scheduler=scheduler,
             dynamic_load=dynamic_load if dynamic_load is not None else config["dynamic_load"],
             topology=topology or config["topology"],
