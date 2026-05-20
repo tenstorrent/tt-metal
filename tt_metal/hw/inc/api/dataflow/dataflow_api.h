@@ -10,6 +10,7 @@
 #define DATA_FORMATS_DEFINED
 #endif
 
+#include <algorithm>
 #include <stdint.h>
 #include <tuple>
 #include <utility>
