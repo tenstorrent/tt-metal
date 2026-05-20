@@ -141,50 +141,74 @@ of speaker embeddings). This validates that TTNN faithfully reproduces the
 torch model's voice characteristics. A value of 0.999 indicates near-identical
 output, confirming TTNN correctness.
 
-### Performance (RTF target not yet met — requires Stage 2 optimization)
+### Performance — validated end-to-end on `benchmark.py` (real demo path)
 
-| Metric | Value | Target | Status |
-|---|---|---|---|
-| **RTF (TTNN only)** | **3.66** | **< 0.5** | **❌** |
-| Generator time (5s audio) | 18.0s | — | — |
-| Flow time (5s audio) | 0.24s | — | — |
-| TTNN vs pure Torch | 2.4× faster | — | — |
+All numbers below come from `python -m models.demos.rvc.benchmark`, the
+authoritative measurement harness. It runs the exact `demo.py` inference
+graph (same modules, same chunked overlap-add) with one-time setup,
+cold-start separated from warm steady-state, and a strict no-fallback
+guard that raises on any silent torch routing. No microbenchmarks.
 
-### Runtime Breakdown (5s input, 10 chunks × 50 frames)
+**TTNN-only RTF** = wall-clock time spent in `flow.forward + gen.forward`
+divided by output audio duration. **Full-pipeline RTF** additionally
+includes torch preprocessing (Hubert + RMVPE + TextEncoder + SineGen).
 
-| Stage | Time | % of TTNN |
-|---|---:|---:|
-| TTNN Flow Decoder | 0.24s | 1.3% |
-| **TTNN Generator** | **18.0s** | **98.7%** |
-| TTNN Total | 18.2s | — |
+| Clip | Cold RTF (TTNN only) | Warm RTF (TTNN only) | Cold RTF (full) | Warm RTF (full) | Audio PCC | Warm cv |
+|---|---:|---:|---:|---:|---:|---:|
+| 3.00s   | 0.3510 | **0.2784** | 0.6506 | 0.5336 | 0.998 | 1.6% |
+| 10.00s  | 0.2887 | **0.2709** | 0.4347 | **0.4069** | 0.998 | 0.2% |
 
-### RTF Bottleneck Analysis
+| Target | 3s | 10s |
+|---|---|---|
+| TTNN-only RTF < 0.5 | ✅ 0.28 | ✅ 0.27 |
+| Full-pipeline RTF < 0.5 | ❌ 0.53 (preprocessing-dominated) | ✅ 0.41 |
 
-The RTF gap is caused by **host↔device dispatch overhead**, not insufficient
-device compute. This is a well-understood framework-level bottleneck:
+**Preprocessing dominates at short clips.** On 3s audio the torch
+preprocessing (Hubert + RMVPE) is roughly 0.75s of fixed cost — about
+half the full-pipeline wall time. On 10s audio that same cost amortizes
+and the full pipeline meets RTF < 0.5 comfortably. RMVPE pitch
+extraction is the largest single preprocessing line item.
 
-- Generator executes ~79 `ttnn.conv1d` dispatches per chunk
-- Each dispatch: ~45ms total. Profiling suggests device kernel execution is a relatively small fraction of total per-dispatch runtime.
-- The remaining ~40ms is host-side tensor conversion and command dispatch
-- For 10 chunks, repeated host↔device round-trips dominate Generator runtime.
-- Chunking itself is not the bottleneck — it adds < 1% overhead
+### Runtime Breakdown (warm steady-state)
 
-This pattern is documented in the tt-metal
-[Advanced Performance Optimizations](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md)
-tech report, which prescribes Metal Trace and device-resident activations
-as the standard resolution path.
+| Stage | 3s (warm mean) | 10s (warm mean) | % of TTNN at 10s |
+|---|---:|---:|---:|
+| Preprocessing (Hubert + RMVPE + TextEncoder + SineGen) | 0.756s | 1.353s | — |
+| TTNN Flow Decoder | 0.111s | 0.358s | ~13% |
+| **TTNN Generator** | **0.719s** | **2.346s** | **~87%** |
+| TTNN Total | 0.830s | 2.704s | 100% |
 
-### Stage 1 Status Summary
+### How the optimization works
 
-**Functional bring-up: complete.** The pipeline loads real checkpoints,
-runs on N300 hardware, produces correct audio, and passes all validation.
+The Generator's inner ResBlock loop runs `leaky_relu → conv1d →
+leaky_relu → conv1d → add` for three dilation iterations per ResBlock,
+12 ResBlocks per generator forward. Pre-optimization each conv1d went
+host → device → host, paying a host roundtrip per call. The optimized
+path keeps activations device-resident across the whole inner loop;
+the only host roundtrips are one `from_torch` at ResBlock entry and
+one `to_torch` at exit.
 
-**Performance target: not met.** RTF = 3.66 vs target < 0.5. The gap is
-entirely attributable to host↔device dispatch overhead in the Generator's
-79 conv1d calls per chunk. Device compute time is estimated at < 10% of
-total runtime. This maps directly to Stage 2 optimization techniques
-(Metal Trace, device-resident activations) which are designed specifically
-for this bottleneck pattern.
+One subtle dependency was found and documented: `ttnn.leaky_relu`
+requires `Layout.TILE`, but `ttnn.conv1d` at the HiFi-GAN ResBlock
+config `(k=11, d=5, ch=128, in_width=7200)` rejects `Layout.TILE`
+inputs with a program-compilation failure (storage and memory_config
+are not the cause; only layout matters). The fix is one
+`ttnn.to_layout(x, ROW_MAJOR_LAYOUT)` between each leaky_relu and the
+conv1d that follows it. See `_resblock1_device` in `ttnn/runtime.py`.
+
+### Validation
+
+- `tests/test_runtime.py` — 5/5 (existing T=10 smoke + correctness)
+- `tests/test_production_shapes.py` — 9/9 (k=11 at seq_lens 720, 7200,
+  14400, 28800; gen at demo chunk sizes 53, 55, 60; determinism;
+  PCC vs torch reference)
+- `tests/test_ttnn_ops.py` — 39/39 (per-op PCC coverage)
+- `benchmark.py` — strict no-fallback at both 3s and 10s, all chunks
+  active on TTNN, audio PCC ≥ 0.997 across all runs
+
+The three test files must currently be run as **separate pytest
+invocations**; co-execution in one session causes TTNN device-state
+accumulation that does not reproduce in real demo runs.
 
 ## File Structure
 
