@@ -138,17 +138,13 @@ void kernel_main() {
                 transpose_wh_init_short(cb_in_welford_alias);
             }
             tile_regs_acquire();
-        } else if constexpr (welford_fp32_alias) {
-            // The final transpose_wh_tile(cb_var, ...) at the end of the previous NCHt iteration
-            // calls transpose_wh_init(cb_var, cb_out) which programs UNPACK hw_configure for
-            // cb_var, leaving the unpacker in UnpackToDestFp32 mode (because c_19 cb_var is
-            // flagged UnpackToDestFp32). On the do_scale path, the next NCHt iteration's first
-            // op is mul_tiles_bcast_scalar, whose _init_short does not call hw_configure --
-            // so without this re-init the FPU mul reads SrcA via the leaked UnpackToDest path
-            // and produces zeros. Run the full init_bcast once per NCHt iteration to put UNPACK
-            // back into cb_in's Default mode before the inner mul loop.
-            init_bcast<EltwiseBinaryType::ELWMUL, BroadcastType::SCALAR>(cb_in, cb_scalar, cb_scaled);
         }
+        // do_scale path: full init_bcast and full transpose_wh_init happen INSIDE the wt loop
+        // (each iteration) to pair UNPACK mode flips for cb_in (Default, FPU mul SrcA) and
+        // cb_scaled (UnpackToDestFp32, unpack-to-DEST consumer for the welford-intake transpose).
+        // The first iteration's init_bcast also resets the leaked UnpackToDest mode from the
+        // previous NCHt iteration's final transpose_wh_init(cb_var, cb_out), so no separate
+        // outer-loop reset is needed.
 
         // Welford SFPU state (running mean in LREG4, M2 in LREG5)
         // persists across DST cycles because LREGs are separate from
@@ -159,7 +155,16 @@ void kernel_main() {
                 cb_in_obj.wait_front(onetile);
                 tile_regs_acquire();
                 reconfig_data_format_srca(cb_in);
-                mul_tiles_bcast_scalar_init_short(cb_in, cb_scalar);
+                if constexpr (welford_fp32_alias) {
+                    // Full init_bcast each iter: programs UNPACK hw_configure for cb_in
+                    // (Default mode), resetting any UnpackToDest mode left by either the previous
+                    // wt's cb_scaled transpose or the previous NCHt's cb_var final transpose.
+                    // The redundant init each iter is the cost of keeping cb_scaled flagged
+                    // UnpackToDestFp32 to preserve the FPU mul output's mantissa.
+                    init_bcast<EltwiseBinaryType::ELWMUL, BroadcastType::SCALAR>(cb_in, cb_scalar, cb_scaled);
+                } else {
+                    mul_tiles_bcast_scalar_init_short(cb_in, cb_scalar);
+                }
                 mul_tiles_bcast_scalar(cb_in, cb_scalar, 0, 0, input_dst);
                 tile_regs_commit();
                 cb_in_obj.pop_front(1);
@@ -179,11 +184,15 @@ void kernel_main() {
                 cb_scaled_obj.wait_front(onetile);
                 tile_regs_acquire();
                 reconfig_data_format_srca(cb_scaled);
-                // cb_scaled is NOT flagged UnpackToDestFp32; _init_short here doesn't touch
-                // UNPACK's unpack_to_dest mode. The TF32 readback truncates cb_scaled to ~10
-                // mantissa bits -- this is a precision floor on the do_scale path that we
-                // accept to avoid the within-wt-iter UNPACK-mode leak (see program factory).
-                transpose_wh_init_short(cb_scaled);
+                if constexpr (welford_fp32_alias) {
+                    // Full transpose_wh_init each iter: programs UNPACK hw_configure for
+                    // cb_scaled (UnpackToDestFp32 mode), preserving the FPU mul output's
+                    // mantissa bits past TF32. The next wt iter's init_bcast resets UNPACK
+                    // back to cb_in's Default mode before the FPU mul reads SrcA again.
+                    transpose_wh_init(cb_scaled, cb_var);
+                } else {
+                    transpose_wh_init_short(cb_scaled);
+                }
                 transpose_wh_tile(cb_scaled, 0, input_dst);
                 cb_scaled_obj.pop_front(onetile);
             } else {

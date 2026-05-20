@@ -453,13 +453,15 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     if (reduce_w && fp32_dest_acc_en && !narrow_scratch_to_bf16) {
         unpack_to_dest_mode[static_cast<uint32_t>(CBIndex::c_19)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
-    // c_20 (cb_scaled): NOT flagged UnpackToDestFp32. The mode is global per unpacker
-    // context, so activating UnpackToDestFp32 on cb_scaled via a full transpose_wh_init in the
-    // wt inner loop would leave UNPACK in UnpackToDest mode and break the NEXT wt iteration's
-    // FPU mul (its _init_short doesn't reset that mode). Reading cb_scaled with the default
-    // SrcA path truncates back to TF32 (~10 bits), losing the up-to-12 extra mantissa bits
-    // the FPU mul output can carry beyond its TF32 inputs -- this is a precision floor for
-    // the do_scale path that mirrors the FPU SrcA truncation upstream.
+    // c_20 (cb_scaled): flagged UnpackToDestFp32 to preserve the up-to-22 mantissa bits the
+    // FPU mul output can carry beyond its TF32 inputs. UnpackToDest mode is global per
+    // unpacker context, so the kernel pairs every wt-inner-iteration's cb_scaled transpose
+    // (full transpose_wh_init, which programs UNPACK for cb_scaled's UnpackToDestFp32 mode)
+    // with a full init_bcast at the next iteration's mul (which reprograms UNPACK back to
+    // cb_in's Default mode). See welford_reduce_w.cpp do_scale loop for the pairing.
+    if (reduce_w && do_scale && input_cb_data_format == tt::DataFormat::Float32) {
+        unpack_to_dest_mode[static_cast<uint32_t>(CBIndex::c_20)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
     if (reduce_hw && fp32_dest_acc_en && !narrow_scratch_to_bf16) {
         unpack_to_dest_mode[static_cast<uint32_t>(CBIndex::c_22)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
