@@ -17,19 +17,12 @@ void kernel_main() {
 
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3);
 
-    // SFPU init handles unpacker reconfig itself; the FPU/GMPOOL path needs reduce<> to reconfigure
-    // the input format. Decide once at compile time from REDUCE_FORMAT/REDUCE_OP.
-    constexpr bool is_sfpu_path =
-        compute_kernel_lib::detail::is_sfpu_reduce_format(REDUCE_FORMAT) && REDUCE_OP == PoolType::MAX;
-    constexpr auto reconfig_mode = is_sfpu_path ? compute_kernel_lib::ReduceDataFormatReconfigMode::NONE
-                                                : compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT;
-
     compute_kernel_lib::reduce<
         REDUCE_OP,
         REDUCE_DIM,
         REDUCE_FORMAT,
         compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-        reconfig_mode>(
+        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
         tt::CBIndex::c_0,
         tt::CBIndex::c_2,
         tt::CBIndex::c_3,

@@ -68,11 +68,22 @@ ALWI bool sfpu_is_first_tile(uint32_t axis_index, const AccumulateT& accumulate)
     return axis_index == 0;
 }
 
-// True if `reduce_format` is an SFPU-eligible format (Int32 or Float32).
-// The full SFPU dispatch (`is_sfpu` inside reduce()) additionally requires reduce_type == MAX,
-// so Float32 SUM/AVG correctly stays on the FPU path.
-constexpr bool is_sfpu_reduce_format(DataFormat f) {
-    return f == DataFormat::Int32 || f == DataFormat::Float32;
+// Int32/Float32 MAX on REDUCE_ROW/COL uses SFPU. Float32 MAX REDUCE_SCALAR uses FPU. Int32 MAX REDUCE_SCALAR is unsupported.
+template <PoolType reduce_type, ReduceDim reduce_dim, DataFormat reduce_format>
+constexpr bool is_sfpu_reduce_path() {
+    if constexpr (reduce_type != PoolType::MAX) {
+        return false;
+    }
+    if constexpr (reduce_format != DataFormat::Int32 && reduce_format != DataFormat::Float32) {
+        return false;
+    }
+    if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR) {
+        static_assert(
+            reduce_format != DataFormat::Int32,
+            "Int32 MAX REDUCE_SCALAR is not supported");
+        return false;
+    }
+    return reduce_dim == ReduceDim::REDUCE_ROW || reduce_dim == ReduceDim::REDUCE_COL;
 }
 
 // Post-reduce scalar multiply. mul_unary_tile is fp32-only, so Int32 is bracketed with typecasts
@@ -177,7 +188,8 @@ template <
     ReduceDim reduce_dim,
     DataFormat reduce_format,
     typename AccumulateT,
-    bool use_matmul = false>
+    bool use_matmul = false,
+    bool is_sfpu = false>
 ALWI void reload_accumulator_if_needed(
     DataflowBuffer& accum_dfb, uint32_t input_dfb_id, uint32_t scaler_dfb_id, const AccumulateT& accumulate) {
     if constexpr (is_accumulate_v<AccumulateT>) {
@@ -192,7 +204,7 @@ ALWI void reload_accumulator_if_needed(
             // CRITICAL: Re-init after copy_tile corrupts SRCA config
             // Use short version since packer config is still valid from initial init
             // Pass accumulator DFB as old_dfb_id to reconfigure data format from accumulator to input DFB
-            if constexpr (detail::is_sfpu_reduce_format(reduce_format) && reduce_type == PoolType::MAX) {
+            if constexpr (is_sfpu) {
                 detail::sfpu_reduce_max_fold_init<reduce_format>();
             } else if constexpr (use_matmul) {
                 reduce_with_matmul_init_with_dt(input_dfb_id, scaler_dfb_id, accumulate.config.cb_accumulator);
@@ -286,6 +298,7 @@ ALWI void reduce(
     const uint32_t num_batches = input_block_shape.batches;
 
     constexpr bool use_matmul = reduce_uses_matmul<reduce_type, reduce_dim>();
+    constexpr bool is_sfpu = detail::is_sfpu_reduce_path<reduce_type, reduce_dim, reduce_format>();
 
     DataflowBuffer input_dfb(input_dfb_id);
     DataflowBuffer scaler_dfb(scaler_dfb_id);
@@ -294,16 +307,6 @@ ALWI void reduce(
         if constexpr (enable_accumulation) { return accumulate.config.cb_accumulator; }
         else { return 0; }
     }());
-
-    // SFPU reduce path: Int32/Float32 MAX only (MIN dispatches to reduce_sfpu_{h,w}_neg.cpp),
-    // REDUCE_ROW / REDUCE_COL only. Accumulate::at reload uses sfpu_reduce_max_fold_init when is_sfpu.
-    // Float32 SUM/AVG uses FPU because reduce_type != MAX.
-    constexpr bool is_sfpu = detail::is_sfpu_reduce_format(reduce_format) && reduce_type == PoolType::MAX;
-    if constexpr (is_sfpu) {
-        static_assert(
-            reduce_dim == ReduceDim::REDUCE_ROW || reduce_dim == ReduceDim::REDUCE_COL,
-            "SFPU reduce path: REDUCE_ROW or REDUCE_COL only");
-    }
 
     // Apply reconfig based on mode
     if constexpr (reconfig_input(reconfig_mode)) {
@@ -364,7 +367,7 @@ ALWI void reduce(
             tile_regs_acquire();
 
             // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
-            reload_accumulator_if_needed<reduce_type, reduce_dim, reduce_format, AccumulateT>(
+            reload_accumulator_if_needed<reduce_type, reduce_dim, reduce_format, AccumulateT, false, is_sfpu>(
                 accum_dfb, input_dfb_id, scaler_dfb_id, accumulate);
 
             const uint32_t dst_idx = get_dst_index(accumulate);
@@ -450,7 +453,7 @@ ALWI void reduce(
                 tile_regs_acquire();
 
                 // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
-                reload_accumulator_if_needed<reduce_type, reduce_dim, reduce_format, AccumulateT, use_matmul>(
+                reload_accumulator_if_needed<reduce_type, reduce_dim, reduce_format, AccumulateT, use_matmul, is_sfpu>(
                     accum_dfb, input_dfb_id, scaler_dfb_id, accumulate);
                 if constexpr (is_sfpu) {
                     if (Wt > 1) {
@@ -583,7 +586,7 @@ ALWI void reduce(
                 tile_regs_acquire();
 
                 // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
-                reload_accumulator_if_needed<reduce_type, reduce_dim, reduce_format, AccumulateT>(
+                reload_accumulator_if_needed<reduce_type, reduce_dim, reduce_format, AccumulateT, false, is_sfpu>(
                     accum_dfb, input_dfb_id, scaler_dfb_id, accumulate);
                 if constexpr (is_sfpu) {
                     if (Ht > 1) {

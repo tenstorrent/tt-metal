@@ -154,13 +154,11 @@ Tensor reduce(
     // However, sqrt of a negative number is NaN, so negative scalers
     // must take the two-step W-then-H path where the scaler is applied once.
     //
-    // INT32 and FLOAT32 SFPU min/max have no REDUCE_SCALAR primitive in the LLK, so HW
-    // reductions for those dtypes always take the W-then-H decomposition regardless of
-    // tile count. This applies equally to MAX (negate=false) and MIN (lowered to MAX with
-    // negate=true by ttnn::reduction::common.cpp), since both use the SFPU per-axis factories.
+    // INT32 SFPU max/min has no REDUCE_SCALAR primitive (ROW/COL only), so Int32 HW always uses
+    // W-then-H. Float32 max HW can use single-core REDUCE_SCALAR (FPU) when num_tiles == 1;
+    // multi-tile HW still uses W-then-H via is_multicore_hw. Applies to MAX and MIN (MIN via negate).
     const bool use_two_step_hw_sfpu_reduce = (reduce_dim == tt::tt_metal::ReduceOpDim::HW) &&
-                                             ((tilized_input.dtype() == tt::tt_metal::DataType::INT32) ||
-                                              (tilized_input.dtype() == tt::tt_metal::DataType::FLOAT32)) &&
+                                             (tilized_input.dtype() == tt::tt_metal::DataType::INT32) &&
                                              (reduce_math == tt::tt_metal::ReduceOpMath::MAX);
 
     if (is_multicore_hw || use_two_step_hw_sfpu_reduce ||
