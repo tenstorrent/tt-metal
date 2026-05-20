@@ -129,6 +129,30 @@ class CodePredictor(LightweightModule):
             ttnn.BufferType.L1,
             ttnn.ShardSpec(_kv_grid, (_M, self.head_dim), ttnn.ShardOrientation.ROW_MAJOR),
         )
+        # Sharded RMSNorm config (mirrors talker's _build_sharded_rmsnorm_configs).
+        # hidden=1024 across 32 cores → block_w = 1024/32/32 = 1 tile/core.
+        # CP runs at M_padded=32 → block_h = 1.
+        _ln_num_cores = 32
+        _ln_block_w = (self.hidden_size // _ln_num_cores) // 32  # 1
+        _ln_block_h = _M // 32  # 1
+        _ln_cols = min(_compute_grid.x, _ln_num_cores)
+        while _ln_num_cores % _ln_cols != 0:
+            _ln_cols -= 1
+        _ln_rows = _ln_num_cores // _ln_cols
+        _ln_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_ln_cols - 1, _ln_rows - 1))})
+        self._cp_ln_in_memcfg = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(_ln_grid, (_M, self.hidden_size // _ln_num_cores), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        self._cp_ln_progcfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(_compute_grid.x, _compute_grid.y),
+            subblock_w=_ln_block_w,
+            block_h=_ln_block_h,
+            block_w=_ln_block_w,
+            inplace=False,
+        )
+
         # Row permutation [Q|K|V] → [(q0,q1,k0,v0), (q2,q3,k1,v1), ...] kvgi layout.
         _row_perm = []
         for i in range(self.num_kv_heads):
@@ -281,13 +305,19 @@ class CodePredictor(LightweightModule):
     ) -> Tuple[ttnn.Tensor, Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]]:
         # residual aliases h_tt (caller-owned). Do NOT deallocate it.
         residual = h_tt
-        x = ttnn.rms_norm(
-            h_tt,
+        # Sharded RMSNorm — drops from 1c × 17 µs to 32c × ~2 µs.
+        h_sh = ttnn.to_memory_config(h_tt, self._cp_ln_in_memcfg)
+        x_sh = ttnn.rms_norm(
+            h_sh,
             epsilon=self.rms_norm_eps,
             weight=lw["input_ln_w"],
             compute_kernel_config=self.kcfg,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            program_config=self._cp_ln_progcfg,
+            memory_config=self._cp_ln_in_memcfg,
         )
+        ttnn.deallocate(h_sh)
+        x = ttnn.to_memory_config(x_sh, ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(x_sh)
 
         # QKV uses wqkv in kvgi layout so we can width-shard xqkv across 8 cores
         # and feed it to the sharded nlp_create_qkv_heads kernel (1c → 8c, 39→~5 µs).
@@ -525,13 +555,18 @@ class CodePredictor(LightweightModule):
         ttnn.deallocate(o)
 
         residual2 = h_post  # we own h_post → free after MLP residual.
-        h2 = ttnn.rms_norm(
-            h_post,
+        h_post_sh = ttnn.to_memory_config(h_post, self._cp_ln_in_memcfg)
+        h2_sh = ttnn.rms_norm(
+            h_post_sh,
             epsilon=self.rms_norm_eps,
             weight=lw["post_ln_w"],
             compute_kernel_config=self.kcfg,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            program_config=self._cp_ln_progcfg,
+            memory_config=self._cp_ln_in_memcfg,
         )
+        ttnn.deallocate(h_post_sh)
+        h2 = ttnn.to_memory_config(h2_sh, ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(h2_sh)
 
         # gate/up (K=1024) — default L1_INTERLEAVED beats DRAM-sharded (same as QKV).
         gate_o = ttnn.matmul(
@@ -629,13 +664,18 @@ class CodePredictor(LightweightModule):
             if updated_kvs is not None:
                 updated_kvs.append(updated_kv)
 
-        h_norm = ttnn.rms_norm(
-            h,
+        h_sh = ttnn.to_memory_config(h, self._cp_ln_in_memcfg)
+        h_norm_sh = ttnn.rms_norm(
+            h_sh,
             epsilon=self.rms_norm_eps,
             weight=self.final_norm_w,
             compute_kernel_config=self.kcfg,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            program_config=self._cp_ln_progcfg,
+            memory_config=self._cp_ln_in_memcfg,
         )
+        ttnn.deallocate(h_sh)
+        h_norm = ttnn.to_memory_config(h_norm_sh, ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(h_norm_sh)
         if own_h:
             ttnn.deallocate(h)
 
