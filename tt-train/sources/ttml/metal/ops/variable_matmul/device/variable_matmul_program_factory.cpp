@@ -276,6 +276,17 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         offsets_active && (role == OffsetsRole::OutputRow || role == OffsetsRole::InputAndOutputRow);
     const bool offset_in0_k = offsets_active && (role == OffsetsRole::InputK || role == OffsetsRole::InputAndWeightK);
     const bool offset_in1_k = offsets_active && (role == OffsetsRole::WeightK || role == OffsetsRole::InputAndWeightK);
+    // `use_offset` / `use_offset_in1` — when true, the dm kernel adds the row/K offset to
+    // the per-tile address. Computed once and shared across all four dm kernel CTA lists
+    // (in0 sender + in0 receiver, in1 sender + in1 receiver). Sender and receiver MUST
+    // agree on this flag — a mismatch makes one side read different runtime args than the
+    // other (the cause of bug 9a416f25a08, where the receiver was missing
+    // `input_and_weight_k_active`).
+    const bool use_offset_in0 =
+        operation_attributes.in0_row_offset_tiles > 0 || operation_attributes.effective_M_tiles > 0 ||
+        operation_attributes.in0_k_offset_tiles > 0 || parent_K_tiles_in0 > K_tiles || offset_in0_k;
+    const bool use_offset_in1 =
+        operation_attributes.in1_k_offset_tiles > 0 || parent_K_tiles_in1 > K_tiles || offset_in1_k;
     // Both dm kernels need the offsets accessor + RT args whenever any flag is active —
     // they each read the offsets tensor to derive their own slice of the override values.
     // compute reads its override values from cb_ctrl, not directly from offsets.
@@ -323,37 +334,30 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
 
     // in0 sender compile-time args (22 fixed + tensor accessor args)
     std::vector<uint32_t> in0_sender_compile_time_args = {
-        actual_M_tiles,                      // 0: M_tiles (unused by kernel, kept for arg layout compat)
-        actual_padded_M_tiles,               // 1: padded_M_tiles (max)
-        0U,                                  // 2: K_tiles (unused, kept for layout compat; RT-driven)
-        0U,                                  // 3: padded_K_tiles (unused; RT-derived)
-        N_tiles,                             // 4: N_tiles
-        padded_N_tiles,                      // 5: padded_N_tiles
-        M_block_tiles,                       // 6: M_block_tiles
-        K_block_tiles,                       // 7: K_block_tiles
-        N_block_tiles,                       // 8: N_block_tiles
-        actual_M_blocks_per_core,            // 9: M_blocks_per_core (unused by kernel, kept for arg layout compat)
-        N_blocks_per_core,                   // 10: N_blocks_per_core
-        in0_tile_size,                       // 11: in_tile_size
-        out_tile_size,                       // 12: out_tile_size
-        in2_tile_size,                       // 13: in2_tile_size (dummy, no bias)
-        in0_sender_semaphore_id,             // 14: sender_sem_id
-        in0_receiver_semaphore_id,           // 15: receiver_sem_id
-        in0_valid_semaphore_id,              // 16: valid_sem_id
-        in0_is_output_writer,                // 17: is_output_writer
-        true,                                // 18: is_injector_core
-        1U,                                  // 19: N_chunks (always 1)
-        N_tiles,                             // 20: N_tiles_per_chunk (= N_tiles when N_chunks=1)
-        in3_tile_size,                       // 21: in3_tile_size (dummy, no AG)
-        static_cast<uint32_t>(transpose_a),  // 22: transpose_a
-        // 23: use_offset — when false (caller has offset_tiles=0 and effective_M_tiles=0),
-        // the kernel skips the per-tile offset add in the address formula. The runtime
-        // args still carry offset / parent_M_tiles_stride for hot reload, but they're
-        // not read. This avoids paying the per-tile address-compute overhead for the
-        // common (no offset) case (e.g. all moe-ffn backward calls).
-        static_cast<uint32_t>(
-            operation_attributes.in0_row_offset_tiles > 0 || operation_attributes.effective_M_tiles > 0 ||
-            operation_attributes.in0_k_offset_tiles > 0 || parent_K_tiles_in0 > K_tiles || offset_in0_k),
+        actual_M_tiles,                         // 0: M_tiles (unused by kernel, kept for arg layout compat)
+        actual_padded_M_tiles,                  // 1: padded_M_tiles (max)
+        0U,                                     // 2: K_tiles (unused, kept for layout compat; RT-driven)
+        0U,                                     // 3: padded_K_tiles (unused; RT-derived)
+        N_tiles,                                // 4: N_tiles
+        padded_N_tiles,                         // 5: padded_N_tiles
+        M_block_tiles,                          // 6: M_block_tiles
+        K_block_tiles,                          // 7: K_block_tiles
+        N_block_tiles,                          // 8: N_block_tiles
+        actual_M_blocks_per_core,               // 9: M_blocks_per_core (unused by kernel, kept for arg layout compat)
+        N_blocks_per_core,                      // 10: N_blocks_per_core
+        in0_tile_size,                          // 11: in_tile_size
+        out_tile_size,                          // 12: out_tile_size
+        in2_tile_size,                          // 13: in2_tile_size (dummy, no bias)
+        in0_sender_semaphore_id,                // 14: sender_sem_id
+        in0_receiver_semaphore_id,              // 15: receiver_sem_id
+        in0_valid_semaphore_id,                 // 16: valid_sem_id
+        in0_is_output_writer,                   // 17: is_output_writer
+        true,                                   // 18: is_injector_core
+        1U,                                     // 19: N_chunks (always 1)
+        N_tiles,                                // 20: N_tiles_per_chunk (= N_tiles when N_chunks=1)
+        in3_tile_size,                          // 21: in3_tile_size (dummy, no AG)
+        static_cast<uint32_t>(transpose_a),     // 22: transpose_a
+        static_cast<uint32_t>(use_offset_in0),  // 23: use_offset
         static_cast<uint32_t>(tensor_args.output_tensor.has_value()),  // 24: use_out_offset
     };
     append_accessors(in0_sender_compile_time_args, input_tensor, output_tensor);
@@ -396,11 +400,8 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         1U,       // N_chunks
         N_tiles,  // N_tiles_per_chunk
         in3_tile_size,
-        static_cast<uint32_t>(transpose_a),  // 22: transpose_a
-        // 23: use_offset (must match sender)
-        static_cast<uint32_t>(
-            operation_attributes.in0_row_offset_tiles > 0 || operation_attributes.effective_M_tiles > 0 ||
-            operation_attributes.in0_k_offset_tiles > 0 || parent_K_tiles_in0 > K_tiles || offset_in0_k),
+        static_cast<uint32_t>(transpose_a),                            // 22: transpose_a
+        static_cast<uint32_t>(use_offset_in0),                         // 23: use_offset
         static_cast<uint32_t>(tensor_args.output_tensor.has_value()),  // 24: use_out_offset
     };
     append_accessors(in0_receiver_compile_time_args, input_tensor, output_tensor);
@@ -439,13 +440,11 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         in1_receiver_semaphore_id,
         in1_valid_semaphore_id,
         in1_is_output_writer,
-        true,                                // is_injector_core
-        1U,                                  // N_chunks
-        N_tiles,                             // N_tiles_per_chunk
-        static_cast<uint32_t>(transpose_b),  // 21: transpose_b
-        // 22: use_offset_in1 — K-offset path on the weight (analogous to in0's use_offset).
-        static_cast<uint32_t>(
-            operation_attributes.in1_k_offset_tiles > 0 || parent_K_tiles_in1 > K_tiles || offset_in1_k),
+        true,                                                          // is_injector_core
+        1U,                                                            // N_chunks
+        N_tiles,                                                       // N_tiles_per_chunk
+        static_cast<uint32_t>(transpose_b),                            // 21: transpose_b
+        static_cast<uint32_t>(use_offset_in1),                         // 22: use_offset_in1
         static_cast<uint32_t>(tensor_args.output_tensor.has_value()),  // 23: use_out_offset
     };
     append_accessors(in1_sender_compile_time_args, weight_tensor, output_tensor);
@@ -484,13 +483,11 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         in1_receiver_semaphore_id,
         in1_valid_semaphore_id,
         in1_is_output_writer,
-        false,                               // is_injector_core
-        1U,                                  // N_chunks
-        N_tiles,                             // N_tiles_per_chunk
-        static_cast<uint32_t>(transpose_b),  // 21: transpose_b
-        static_cast<uint32_t>(
-            operation_attributes.in1_k_offset_tiles > 0 || parent_K_tiles_in1 > K_tiles ||
-            offset_in1_k),                                             // 22: use_offset_in1
+        false,                                                         // is_injector_core
+        1U,                                                            // N_chunks
+        N_tiles,                                                       // N_tiles_per_chunk
+        static_cast<uint32_t>(transpose_b),                            // 21: transpose_b
+        static_cast<uint32_t>(use_offset_in1),                         // 22: use_offset_in1
         static_cast<uint32_t>(tensor_args.output_tensor.has_value()),  // 23: use_out_offset
     };
     append_accessors(in1_receiver_compile_time_args, weight_tensor, output_tensor);
