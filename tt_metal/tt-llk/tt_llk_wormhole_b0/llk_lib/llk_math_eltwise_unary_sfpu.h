@@ -61,9 +61,12 @@ inline void eltwise_unary_sfpu_configure_addrmod()
 template <SfpuType sfpu_op>
 inline void _llk_math_eltwise_unary_sfpu_init_()
 {
-    if (cfg_read(ALU_ACC_CTRL_Fp32_enabled_ADDR32) & ALU_ACC_CTRL_Fp32_enabled_MASK)
+    if constexpr (sfpu_op == SfpuType::typecast)
     {
-        _llk_math_dbg_feature_disable_();
+        if (cfg_read(ALU_ACC_CTRL_Fp32_enabled_ADDR32) & ALU_ACC_CTRL_Fp32_enabled_MASK)
+        {
+            _llk_math_dbg_feature_disable_();
+        }
     }
     sfpu::_init_sfpu_config_reg();
     eltwise_unary_sfpu_configure_addrmod<sfpu_op>();

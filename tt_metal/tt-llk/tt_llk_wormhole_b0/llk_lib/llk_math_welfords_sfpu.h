@@ -55,10 +55,6 @@ inline void _llk_math_welfords_sfpu_inc_dst_face_addr_()
 
 inline void _llk_math_welfords_sfpu_init_()
 {
-    if (cfg_read(ALU_ACC_CTRL_Fp32_enabled_ADDR32) & ALU_ACC_CTRL_Fp32_enabled_MASK)
-    {
-        _llk_math_dbg_feature_disable_();
-    }
     sfpu::_init_sfpu_config_reg();
     welfords_sfpu_configure_addrmod();
     math::reset_counters(p_setrwc::SET_ABD_F);

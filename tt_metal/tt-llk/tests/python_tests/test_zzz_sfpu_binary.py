@@ -66,6 +66,9 @@ def test_sfpu_binary_float(
     mathop,
     bcast_dim,
 ):
+    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
+        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+
     if (
         TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
         and bcast_dim != LlkBroadcastType.None_
