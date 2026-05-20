@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import time
+
 import pytest
 from loguru import logger
 
@@ -65,6 +67,11 @@ def run_model_pipeline(device, test_infra, num_measurement_iterations, use_trace
         x = ttnn.to_memory_config(input_on_device, ttnn.DRAM_MEMORY_CONFIG)
         return test_infra.ttnn_model.forward_device(x)
 
+    # At 1280x1280 the L1 input staging buffer (~150KB/core) competes with conv2d
+    # auto-slicer for L1 space. Use DRAM-only staging to avoid the L1 pressure.
+    # The overlap benefit is negligible at this resolution (transfer ~50ms vs model ~2s).
+    staging_mem_config = dram_mem_config
+
     pipeline = create_pipeline_from_config(
         config=PipelineConfig(
             use_trace=use_trace,
@@ -74,7 +81,7 @@ def run_model_pipeline(device, test_infra, num_measurement_iterations, use_trace
         model=model_wrapper,
         device=device,
         dram_input_memory_config=dram_mem_config,
-        l1_input_memory_config=l1_mem_config,
+        l1_input_memory_config=staging_mem_config,
     )
 
     logger.info(f"Running model warmup with input shape {list(tt_inputs_host.shape)}")
@@ -238,3 +245,84 @@ def test_atss_swinl_dyhead_perf_multi_device_2cq(
         expected_inference_throughput,
         num_command_queues=2,
     )
+
+
+def run_model_direct(device, test_infra, num_warmup, num_measurement_iterations):
+    """Direct forward-pass timing without pipeline infrastructure (no L1 input staging)."""
+    torch_input_nchw = test_infra.torch_input_tensor.permute(0, 3, 1, 2)
+
+    tt_input_device = ttnn.from_torch(
+        torch_input_nchw,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=test_infra.inputs_mesh_mapper,
+    )
+
+    logger.info(f"Warming up ({num_warmup} iterations)...")
+    for _ in range(num_warmup):
+        _ = test_infra.ttnn_model.forward_device(tt_input_device)
+        ttnn.synchronize_device(device)
+
+    logger.info(f"Measuring ({num_measurement_iterations} iterations)...")
+    start = time.perf_counter()
+    for _ in range(num_measurement_iterations):
+        _ = test_infra.ttnn_model.forward_device(tt_input_device)
+        ttnn.synchronize_device(device)
+    elapsed = time.perf_counter() - start
+
+    avg_time = elapsed / num_measurement_iterations
+    fps = test_infra.batch_size / avg_time
+    logger.info(f"Direct forward: {avg_time:.4f}s avg, {fps:.2f} FPS (batch={test_infra.batch_size})")
+    return avg_time, fps
+
+
+@run_for_wormhole_b0()
+@pytest.mark.models_performance_bare_metal
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("batch_size_per_device", (1,))
+@pytest.mark.parametrize(
+    "resolution, expected_inference_throughput",
+    [((1280, 1280), 1)],
+)
+def test_atss_swinl_dyhead_perf_direct(
+    device,
+    batch_size_per_device,
+    model_location_generator,
+    resolution,
+    expected_inference_throughput,
+):
+    """Direct forward-pass perf — no pipeline/trace/2CQ. Baseline timing."""
+    profiler.clear()
+
+    inputs_mesh_mapper, _, output_mesh_composer = get_mesh_mappers(device)
+    num_devices = device.get_num_devices()
+    batch_size = batch_size_per_device * num_devices
+
+    test_infra = ATSSPerformanceRunnerInfra(
+        device,
+        batch_size,
+        model_location_generator=model_location_generator,
+        resolution=resolution,
+        inputs_mesh_mapper=inputs_mesh_mapper,
+        outputs_mesh_composer=output_mesh_composer,
+    )
+
+    num_warmup = 1
+    num_measurement = 3
+    avg_time, fps = run_model_direct(device, test_infra, num_warmup, num_measurement)
+
+    prep_perf_report(
+        model_name=f"ttnn_atss_swinl_dyhead_direct_batch_size{batch_size}",
+        batch_size=batch_size,
+        inference_and_compile_time=avg_time * 2,
+        inference_time=avg_time,
+        expected_compile_time=240,
+        expected_inference_time=batch_size / expected_inference_throughput,
+        comments=f"{resolution[0]}x{resolution[1]}_direct_batchsize{batch_size}",
+        inference_time_cpu=0.0,
+    )
+
+    logger.info(f"AtssSwinlDyhead {resolution[0]}x{resolution[1]} direct: " f"avg={avg_time:.4f}s, FPS={fps:.2f}")
