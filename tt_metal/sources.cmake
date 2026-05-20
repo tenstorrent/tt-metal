@@ -205,6 +205,7 @@ set(JITAPI_FILES
     impl/dispatch/kernels/cq_prefetch.cpp
     impl/dispatch/kernels/cq_realtime_profiler.cpp
     impl/dispatch/kernels/cq_realtime_profiler_push.cpp
+    impl/dispatch/kernels/device_print_dispatch.h
     fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp
     fabric/impl/kernels/tt_fabric_mux.cpp
     kernels/compute/blank.cpp
