@@ -717,6 +717,35 @@ run_quad_demo_stress_test() {
 }
 
 ###############################################################################
+# AIME fast eval (short, smoke-style regression check)
+###############################################################################
+
+# Runs a 3-prompt AIME-24 subset that converged correctly within 8K tokens on
+# the ds-rc1 baseline. Acts as a fast end-to-end regression check on top of
+# the device sampling + scoring pipeline. See
+# models/demos/deepseek_v3/demo/test_demo_aime_fast.py for details.
+
+run_dual_aime_under_8k_fast_test() {
+    setup_dual_galaxy_env
+    local timeout=$(_demo_timeout 2400)
+    local junit_path="$(_test_run_summary_junit_path aime_under_8k_fast_dual)"
+    local junit_flag="--junitxml=${junit_path}"
+
+    _test_run_summary_exec _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout ${junit_flag} models/demos/deepseek_v3/demo/test_demo_aime_fast.py -k 'dual_aime_under_8k_fast' 2>&1 | tee generated/artifacts/dual_aime_under_8k_fast_output.log"
+    _test_run_summary_append_junit_rows "aime_under_8k_fast_dual" "${junit_path}" "${_TEST_RUN_LAST_EC}"
+}
+
+run_quad_aime_under_8k_fast_test() {
+    setup_quad_galaxy_env
+    local timeout=$(_demo_timeout 2400)
+    local junit_path="$(_test_run_summary_junit_path aime_under_8k_fast_quad)"
+    local junit_flag="--junitxml=${junit_path}"
+
+    _test_run_summary_exec _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout ${junit_flag} models/demos/deepseek_v3/demo/test_demo_aime_fast.py -k 'quad_aime_under_8k_fast' 2>&1 | tee generated/artifacts/quad_aime_under_8k_fast_output.log"
+    _test_run_summary_append_junit_rows "aime_under_8k_fast_quad" "${junit_path}" "${_TEST_RUN_LAST_EC}"
+}
+
+###############################################################################
 # Composite runners
 ###############################################################################
 
@@ -747,6 +776,7 @@ run_all_needed_local_tests() {
     run_dual_demo_stress_test
     run_quad_teacher_forced_test
     run_quad_test_model_long_prefill_single_galaxy_test
+    run_quad_aime_under_8k_fast_test
     run_quad_demo_test
     run_quad_demo_stress_test
 
