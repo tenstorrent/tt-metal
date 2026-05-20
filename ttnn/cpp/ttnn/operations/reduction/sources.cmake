@@ -25,8 +25,6 @@ set(TTNN_OP_REDUCTION_SRCS
     generic/device/reduce_op_single_core_hw_program_factory.cpp
     generic/device/reduce_op_multi_core_h_program_factory.cpp
     generic/device/reduce_op_multi_core_w_program_factory.cpp
-    generic/device/reduce_op_multi_core_h_rm_program_factory.cpp
-    generic/device/reduce_op_multi_core_w_rm_program_factory.cpp
     generic/device/reduce_op.cpp
     generic/device/common.cpp
     generic/device/welford_reduce_device_operation.cpp
