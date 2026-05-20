@@ -106,7 +106,6 @@ constexpr uint32_t leids_aligned_page = decltype(leids_args)::AlignedPageSize;
 constexpr uint32_t cnt_page_bytes = decltype(counts_args)::AlignedPageSize;
 constexpr uint32_t off_page_bytes = decltype(offsets_args)::AlignedPageSize;
 
-constexpr uint32_t TILE_H = tt::constants::TILE_HEIGHT;
 constexpr uint32_t SENTINEL = 0xFFFFFFFFU;
 constexpr uint16_t K_SLOT_SENTINEL = 0xFFFFU;
 constexpr uint32_t PLAN_CHUNK = 32U;
@@ -522,7 +521,7 @@ void kernel_main() {
     // tile-rows past the last active expert slice.
     noc_async_read(get_noc_addr(0, off_addrgen), (uint32_t)stage, (e_local + 1U) * sizeof(uint32_t));
     noc_async_read_barrier();
-    const uint32_t max_active_tiles = stage[e_local] / TILE_H;
+    const uint32_t max_active_tiles = stage[e_local] / tt::constants::TILE_HEIGHT;
 
     // Each core processes interleaved tile-rows [my_worker_start, my_worker_start+72,
     // my_worker_start+144, ...]. my_worker_count is uniform (= tiles_group_1) so
@@ -551,8 +550,8 @@ void kernel_main() {
     const uint64_t zeros_noc = get_noc_addr(MEM_ZEROS_BASE);
     constexpr uint32_t zero_chunk_bytes = MEM_ZEROS_SIZE;
     for (uint32_t step = 0; step < my_active_count; ++step, tile_row += worker_stride) {
-        uint64_t plan_noc = get_noc_addr(0, plan_addrgen) + tile_row * TILE_H * sizeof(uint32_t);
-        noc_async_read(plan_noc, plan_l1_addr, TILE_H * sizeof(uint32_t));
+        uint64_t plan_noc = get_noc_addr(0, plan_addrgen) + tile_row * tt::constants::TILE_HEIGHT * sizeof(uint32_t);
+        noc_async_read(plan_noc, plan_l1_addr, tt::constants::TILE_HEIGHT * sizeof(uint32_t));
         noc_async_read_barrier();
 
         for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
@@ -563,7 +562,7 @@ void kernel_main() {
             uint32_t read_bytes = is_last_chunk ? last_chunk_bytes : hidden_chunk_bytes;
             uint32_t pad_bytes = hidden_chunk_bytes - read_bytes;
 
-            for (uint32_t r = 0; r < TILE_H; ++r) {
+            for (uint32_t r = 0; r < tt::constants::TILE_HEIGHT; ++r) {
                 uint32_t src = plan_l1_buf[r];
                 uint32_t row_dst = dst + r * hidden_chunk_bytes;
                 if (src == SENTINEL) {

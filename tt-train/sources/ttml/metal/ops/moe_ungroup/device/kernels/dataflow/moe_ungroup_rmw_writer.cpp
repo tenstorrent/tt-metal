@@ -49,8 +49,6 @@ constexpr auto gs_args = TensorAccessorArgs<offsets_args.next_compile_time_args_
 constexpr uint32_t off_page_bytes = decltype(offsets_args)::AlignedPageSize;
 constexpr uint32_t ungrouped_aligned_page = decltype(ungrouped_args)::AlignedPageSize;
 
-constexpr uint32_t TILE_H = tt::constants::TILE_HEIGHT;
-constexpr uint32_t TILE_W = tt::constants::TILE_WIDTH;
 constexpr uint32_t SENTINEL = 0xFFFFFFFFU;
 
 // Local BRISC<->NCRISC handshake on the same core (no NOC; both RISCs share L1).
@@ -137,16 +135,16 @@ void kernel_main() {
     // Per-expert loop.
     // ---------------------------------------------------------------
     for (uint32_t e = 0; e < e_local; ++e) {
-        auto slice =
-            ttml::metal::moe_ungroup::expert_slice_for_core(offsets_buf, e, TILE_H, num_total_cores, my_core_idx);
+        auto slice = ttml::metal::moe_ungroup::expert_slice_for_core(
+            offsets_buf, e, tt::constants::TILE_HEIGHT, num_total_cores, my_core_idx);
         uint32_t my_real_count = slice.my_count;
 
         for (uint32_t step = 0; step < my_real_count; ++step) {
             uint32_t tr_global = slice.my_start_tr_global + step;
 
             // Pre-fetch plan slice + grouped_scores slice. Both are
-            // [TILE_H = 32]-entry contiguous slices of [T_cap]-sized
-            // ROW_MAJOR DRAM tensors, indexed by tr_global * TILE_H.
+            // TILE_HEIGHT-entry contiguous slices of [T_cap]-sized
+            // ROW_MAJOR DRAM tensors, indexed by tr_global * TILE_HEIGHT.
             //
             // grouped_scores[tr_global*32 .. tr_global*32 + 32) goes
             // straight into w_buf — moe_group already pre-baked
@@ -158,10 +156,12 @@ void kernel_main() {
             // for every row, so we don't need a pure-write fast path — every
             // expert just does scaled += and the first one effectively writes.
             {
-                uint64_t plan_noc = get_noc_addr(0, plan_addrgen) + tr_global * TILE_H * sizeof(uint32_t);
-                noc_async_read(plan_noc, plan_buf_addr, TILE_H * sizeof(uint32_t));
-                uint64_t gs_noc = get_noc_addr(0, gs_addrgen) + tr_global * TILE_H * sizeof(uint16_t);
-                noc_async_read(gs_noc, w_buf_addr, TILE_H * sizeof(uint16_t));
+                uint64_t plan_noc =
+                    get_noc_addr(0, plan_addrgen) + tr_global * tt::constants::TILE_HEIGHT * sizeof(uint32_t);
+                noc_async_read(plan_noc, plan_buf_addr, tt::constants::TILE_HEIGHT * sizeof(uint32_t));
+                uint64_t gs_noc =
+                    get_noc_addr(0, gs_addrgen) + tr_global * tt::constants::TILE_HEIGHT * sizeof(uint16_t);
+                noc_async_read(gs_noc, w_buf_addr, tt::constants::TILE_HEIGHT * sizeof(uint16_t));
                 noc_async_read_barrier();
             }
 
@@ -201,10 +201,10 @@ void kernel_main() {
                 // isn't tile-aligned — zero-pad the L1 tail so tilize sees
                 // zeros in the partial last tile column (otherwise it'd read
                 // uninit bytes that round-trip into the writer's RMW).
-                cb_reserve_back(cb_existing_rm, TILE_H);
+                cb_reserve_back(cb_existing_rm, tt::constants::TILE_HEIGHT);
                 uint32_t existing_l1 = get_write_ptr(cb_existing_rm);
                 uint32_t pad_bytes = hidden_chunk_bytes - write_bytes;
-                for (uint32_t r = 0; r < TILE_H; ++r) {
+                for (uint32_t r = 0; r < tt::constants::TILE_HEIGHT; ++r) {
                     uint32_t flat = plan_buf[r];
                     uint32_t row_buf = existing_l1 + r * hidden_chunk_bytes;
                     if (flat == SENTINEL) {
@@ -221,7 +221,7 @@ void kernel_main() {
                 // can land slightly after their request size due to packet
                 // alignment, overwriting the pad with neighbour-row bytes.
                 if (pad_bytes > 0U) {
-                    for (uint32_t r = 0; r < TILE_H; ++r) {
+                    for (uint32_t r = 0; r < tt::constants::TILE_HEIGHT; ++r) {
                         uint32_t flat = plan_buf[r];
                         if (flat == SENTINEL) {
                             continue;
@@ -233,7 +233,7 @@ void kernel_main() {
                         }
                     }
                 }
-                cb_push_back(cb_existing_rm, TILE_H);
+                cb_push_back(cb_existing_rm, tt::constants::TILE_HEIGHT);
 
                 // (3) Wait for compute's combined+untilized output.
                 cb_wait_front(cb_out0, tiles_per_chunk);
@@ -242,7 +242,7 @@ void kernel_main() {
                 // movement — no scalar arithmetic.
                 {
                     uint32_t src_l1 = get_read_ptr(cb_out0);
-                    for (uint32_t r = 0; r < TILE_H; ++r) {
+                    for (uint32_t r = 0; r < tt::constants::TILE_HEIGHT; ++r) {
                         uint32_t flat = plan_buf[r];
                         if (flat == SENTINEL) {
                             continue;
