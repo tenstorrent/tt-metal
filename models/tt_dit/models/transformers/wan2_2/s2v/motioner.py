@@ -18,8 +18,10 @@ an unfold + matmul — same pattern as :class:`WanPatchEmbed`.
 
 The forward takes a motion-latent tensor, pads/zips into the three buckets,
 runs each projection, and concatenates the token sequences. Rope-precompute
-runs on host via :func:`rope_s2v.rope_precompute` and is uploaded once per
-clip.
+for the motion tokens is done by the surrounding transformer's
+``prepare_rope_features`` (which rebuilds rope from scratch using
+``self.freqs`` as reference data); the motioner does not produce its own
+rope.
 
 The alternative ``MotionerTransformers`` path (``enable_motioner=True``) is
 rejected by :class:`WanS2VTransformer3DModel.__init__` and is not in scope.
@@ -37,7 +39,7 @@ from .....layers.embeddings import WanPatchEmbed
 from .....layers.module import Module
 from .....parallel.config import DiTParallelConfig
 from .....utils.tensor import bf16_tensor
-from .rope_s2v import rope_params, rope_precompute
+from .rope_s2v import rope_params
 
 
 def _patchify_for_unfolded_conv(x_BCTHW: torch.Tensor, patch_size: tuple[int, int, int]) -> torch.Tensor:
@@ -212,37 +214,4 @@ class FramePackMotionerWan(Module):
         twox_tokens = self._project(clean_2x, self.proj_2x)
         fourx_tokens = self._project(clean_4x, self.proj_4x)
 
-        motion_tokens = ttnn.concat([post_tokens, twox_tokens, fourx_tokens], dim=2)
-
-        # Rope precompute on host. Grid sizes mirror the reference (lines
-        # 720-749 of motioner.py): negative ``f_o`` indicates motion frames
-        # precede the noisy clip in time, and the ``t_f/t_h/t_w`` "range"
-        # arguments give the upsampling factors used by the rope frequencies.
-        zb = self.zip_frame_buckets
-        start_post = -zb[0]
-        end_post = start_post + zb[0]
-        grid_post = [
-            torch.tensor([start_post, 0, 0]).unsqueeze(0),
-            torch.tensor([end_post, lat_h // 2, lat_w // 2]).unsqueeze(0),
-            torch.tensor([zb[0], lat_h // 2, lat_w // 2]).unsqueeze(0),
-        ]
-        start_2x = -(zb[0] + zb[1])
-        end_2x = start_2x + zb[1] // 2
-        grid_2x = [
-            torch.tensor([start_2x, 0, 0]).unsqueeze(0),
-            torch.tensor([end_2x, lat_h // 4, lat_w // 4]).unsqueeze(0),
-            torch.tensor([zb[1], lat_h // 2, lat_w // 2]).unsqueeze(0),
-        ]
-        start_4x = -(zb[0] + zb[1] + zb[2])
-        end_4x = start_4x + zb[2] // 4
-        grid_4x = [
-            torch.tensor([start_4x, 0, 0]).unsqueeze(0),
-            torch.tensor([end_4x, lat_h // 8, lat_w // 8]).unsqueeze(0),
-            torch.tensor([zb[2], lat_h // 2, lat_w // 2]).unsqueeze(0),
-        ]
-        grid_sizes = [grid_post, grid_2x, grid_4x]
-
-        N_motion = motion_tokens.shape[-2]
-        rope_input = torch.zeros(B, N_motion, self.num_heads, self.head_dim, dtype=torch.float32)
-        motion_rope = rope_precompute(rope_input, grid_sizes, self.freqs, start=None)
-        return motion_tokens, motion_rope
+        return ttnn.concat([post_tokens, twox_tokens, fourx_tokens], dim=2)

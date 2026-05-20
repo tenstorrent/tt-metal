@@ -840,15 +840,14 @@ class WanPipelineS2V(WanPipeline):
                 target_num_frames=self._LAT_TARGET_FRAMES,
             )
 
-        cond_states_torch = torch.zeros(
-            1, self.vae.config.z_dim, self._LAT_TARGET_FRAMES, latent_h, latent_w, dtype=torch.float32
-        )
+        # ``cond_states_torch=None`` is the no-pose path the transformer's
+        # ``prepare_cond_emb`` shape-caches WanPatchEmbed(zeros) for.
         with _stage(f"s2v_clip_{clip_idx}_prepare_cond_emb"):
             self.transformer.prepare_cond_emb(
                 noisy_latents_torch=latents,
                 ref_latent_torch=ref_latent_torch,
                 motion_latents_torch=motion_latents_torch,
-                cond_states_torch=cond_states_torch,
+                cond_states_torch=None,
                 drop_first_motion=drop_first_motion,
             )
         return latents

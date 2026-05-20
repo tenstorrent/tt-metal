@@ -505,6 +505,11 @@ class CausalAudioEncoder(Module):
             device=mesh_device,
             dtype=ttnn.float32,
         )
+        # Host cache of the silu-normalized weights — the Parameter is a
+        # static 25-element learned table, so the silu/sum/normalize is the
+        # same every clip. Materialized on first forward (after state-dict
+        # load) and reused.
+        self._cached_w_normalized: torch.Tensor | None = None
 
     def forward(self, features_torch: torch.Tensor) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
         """Run the learned weighted aggregation + MotionEncoder on host then
@@ -520,13 +525,14 @@ class CausalAudioEncoder(Module):
             (``need_global=False``) or a ``(global, local)`` tuple of two such
             tensors (``need_global=True``).
         """
-        # The aggregation is cheap and is run once per clip; do it on host
-        # so the MotionEncoder sees a single contiguous [B, T, dim] input.
+        if self._cached_w_normalized is None:
+            with torch.no_grad():
+                weights_torch = local_device_to_torch(self.weights.data).reshape(1, self.num_layers, 1, 1)
+                w = torch.nn.functional.silu(weights_torch.float())
+                w_sum = w.sum(dim=1, keepdim=True).clamp_min(1e-12)
+                self._cached_w_normalized = (w / w_sum).contiguous()
         with torch.no_grad():
-            weights_torch = local_device_to_torch(self.weights.data).reshape(1, self.num_layers, 1, 1)
-            w = torch.nn.functional.silu(weights_torch.float())
-            w_sum = w.sum(dim=1, keepdim=True).clamp_min(1e-12)
-            weighted = (features_torch.float() * w / w_sum).sum(dim=1)  # [B, dim, T]
+            weighted = (features_torch.float() * self._cached_w_normalized).sum(dim=1)  # [B, dim, T]
             agg = weighted.permute(0, 2, 1).contiguous()  # [B, T, dim]
 
         return self.encoder(agg)

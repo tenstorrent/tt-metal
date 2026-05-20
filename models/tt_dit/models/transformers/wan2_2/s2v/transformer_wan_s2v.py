@@ -206,6 +206,13 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         self._adain_E_cache: dict[tuple[int, int, int], ttnn.Tensor] = {}
         self._adain_Z_cache: dict[tuple[int, int, int], tuple[ttnn.Tensor, ttnn.Tensor]] = {}
         self._noisy_mask_emb_cache: dict[int, ttnn.Tensor] = {}
+        # ``trainable_cond_mask`` is a static 3×dim Parameter — fetch from
+        # device once and reuse on every clip.
+        self._cached_mask_table_torch: torch.Tensor | None = None
+        # Cached pose embedding for the no-pose (zero ``cond_states``) path.
+        # Keyed by ``padded_N_noisy`` since the cond_encoder output is
+        # ``WanPatchEmbed(zeros) == bias`` — constant per shape signature.
+        self._pose_emb_zero_cache: dict[int, ttnn.Tensor] = {}
         self._mask_noisy_cache: dict[tuple[int, int, int], ttnn.Tensor] = {}
         self._mask_constant_cache: dict[tuple[int, int, int, int], ttnn.Tensor] = {}
         self._timestep_proj_zero_cached: ttnn.Tensor | None = None
@@ -686,7 +693,10 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
           * ``noisy_latents_torch`` ``[B=1, C=16, F, H, W]`` — used to derive ``N_noisy``.
           * ``ref_latent_torch``    ``[B=1, C=16, 1, H, W]`` — VAE-encoded ref image.
           * ``motion_latents_torch`` ``[B=1, C=16, T_motion, H, W]``.
-          * ``cond_states_torch``   pose video, or ``None`` for the reference's ``-1.0`` filler.
+          * ``cond_states_torch``   pose video, or ``None`` for the production
+            no-pose path (zeros — matches the reference's ``COND[0] * 0`` shortcut).
+            The transformer caches ``WanPatchEmbed(zeros)`` per shape so the
+            cond_encoder runs once across all clips for the no-pose path.
 
         Populates ``_cached_pose_emb_1BND``, ``_cached_const_tokens_1BND``
         (mask-augmented patched ref+motion), ``_cached_noisy_mask_emb_1BND``,
@@ -699,14 +709,14 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         # behave like Parameter weight caches: built once per shape and reused
         # forever. The ``self._cached_X`` pointers below are repointed at the
         # right cache entry without re-uploading anything.
-        for attr in (
-            "_cached_pose_emb_1BND",
-            "_cached_const_tokens_1BND",
-        ):
-            prev = getattr(self, attr, None)
-            if prev is not None:
-                ttnn.deallocate(prev)
-                setattr(self, attr, None)
+        # ``_cached_pose_emb_1BND`` is now shape-cached in
+        # ``_pose_emb_zero_cache`` (no-pose path) and lives across all clips.
+        # Only ``_cached_const_tokens_1BND`` is input-dependent and needs
+        # per-clip teardown.
+        prev_const = self._cached_const_tokens_1BND
+        if prev_const is not None:
+            ttnn.deallocate(prev_const)
+            self._cached_const_tokens_1BND = None
 
         B, C, F, H, W = noisy_latents_torch.shape
         pT, pH, pW = self.patch_size
@@ -716,14 +726,31 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         tp_axis = self.parallel_config.tensor_parallel.mesh_axis
 
         # --- Pose embedding (cond_encoder) ---
-        if cond_states_torch is None:
-            cond_states_torch = -torch.ones_like(noisy_latents_torch)
-        cond_1BNI, _ = self.preprocess_spatial_input_host(cond_states_torch, pad=True)
+        # ``cond_states_torch=None`` is the production no-pose path. The
+        # cond_encoder output for an all-zero input is ``WanPatchEmbed.bias``,
+        # which is constant per shape — cache it by shape signature so we
+        # only run patchify + upload + cond_encoder once per shape. The
+        # explicit ``-torch.ones_like`` fallback fires only if a caller
+        # passes a non-zero tensor explicitly (not used by the pipeline).
         padded_N_noisy = get_padded_vision_seq_len(N_noisy, sp_factor)
-        cond_dev = bf16_tensor(
-            cond_1BNI, device=self.mesh_device, mesh_axis=sp_axis, shard_dim=2, layout=ttnn.TILE_LAYOUT
-        )
-        self._cached_pose_emb_1BND = self.cond_encoder(cond_dev)
+        if cond_states_torch is None:
+            if padded_N_noisy in self._pose_emb_zero_cache:
+                self._cached_pose_emb_1BND = self._pose_emb_zero_cache[padded_N_noisy]
+            else:
+                cond_zero = torch.zeros_like(noisy_latents_torch)
+                cond_1BNI, _ = self.preprocess_spatial_input_host(cond_zero, pad=True)
+                cond_dev = bf16_tensor(
+                    cond_1BNI, device=self.mesh_device, mesh_axis=sp_axis, shard_dim=2, layout=ttnn.TILE_LAYOUT
+                )
+                pose_emb = self.cond_encoder(cond_dev)
+                self._pose_emb_zero_cache[padded_N_noisy] = pose_emb
+                self._cached_pose_emb_1BND = pose_emb
+        else:
+            cond_1BNI, _ = self.preprocess_spatial_input_host(cond_states_torch, pad=True)
+            cond_dev = bf16_tensor(
+                cond_1BNI, device=self.mesh_device, mesh_axis=sp_axis, shard_dim=2, layout=ttnn.TILE_LAYOUT
+            )
+            self._cached_pose_emb_1BND = self.cond_encoder(cond_dev)
 
         # --- Reference latent (shares patch_embedding with noisy; un-padded
         # so the on-device concat with the noisy sequence is exact).
@@ -738,7 +765,7 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
             motion_emb_1BND = None
             N_motion = 0
         else:
-            motion_emb_1BND, _motion_rope = self.frame_packer(motion_latents_torch)
+            motion_emb_1BND = self.frame_packer(motion_latents_torch)
             N_motion = int(motion_emb_1BND.shape[-2])
 
         # --- trainable_cond_mask additions ---
@@ -747,8 +774,15 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         N_total = N_noisy + N_ref + N_motion
         padded_N_noisy = get_padded_vision_seq_len(N_noisy, sp_factor)
         padded_const = get_padded_vision_seq_len(N_ref + N_motion, sp_factor)
+        # ``trainable_cond_mask`` is a static Parameter — cache the host
+        # tensor on first use instead of D2H every clip.
+        if self._cached_mask_table_torch is None:
+            with torch.no_grad():
+                self._cached_mask_table_torch = (
+                    local_device_to_torch(self.trainable_cond_mask.data).reshape(3, self.dim).to(torch.float32)
+                )
+        mask_table = self._cached_mask_table_torch
         with torch.no_grad():
-            mask_table = local_device_to_torch(self.trainable_cond_mask.data).reshape(3, self.dim).to(torch.float32)
             # ref + motion: [N_ref] copies of row 1, [N_motion] copies of row 2.
             # const_mask_torch is shape-only conditional on N_ref/N_motion but
             # is consumed below as a host tensor added into per-clip data
