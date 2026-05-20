@@ -71,28 +71,5 @@ DeviceAddr pages_sent_worker_l1_base(const GlobalCircularBuffer& gcb);
 // runtime args. Empty for worker-sender GCBs.
 const std::vector<std::vector<CoreCoord>>& receiver_coords_per_sender(const GlobalCircularBuffer& gcb);
 
-namespace global_circular_buffer_dram_sender {
-
-// Friend-access struct for the GlobalCircularBuffer DRAM-sender private state. The
-// experimental factory functions and accessors above call into this; the main public
-// header forward-declares it and friends it inside GlobalCircularBuffer.
-//
-// Lives in its own sub-namespace (not `detail`) to avoid colliding with unqualified
-// `detail::` lookups elsewhere under `tt::tt_metal::experimental`.
-struct GlobalCircularBufferDramSenderInternals {
-    static GlobalCircularBuffer make_dram_sender(
-        IDevice* device,
-        const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
-        uint32_t size,
-        BufferType buffer_type);
-
-    static SenderCoreType sender_core_type(const GlobalCircularBuffer& gcb);
-    static DeviceAddr pages_sent_drisc_l1_base(const GlobalCircularBuffer& gcb);
-    static DeviceAddr pages_sent_worker_l1_base(const GlobalCircularBuffer& gcb);
-    static const std::vector<std::vector<CoreCoord>>& receiver_coords_per_sender(const GlobalCircularBuffer& gcb);
-};
-
-}  // namespace global_circular_buffer_dram_sender
-
 }  // namespace experimental
 }  // namespace tt::tt_metal

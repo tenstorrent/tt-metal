@@ -301,11 +301,25 @@ std::ostream& operator<<(std::ostream& os, const GlobalCircularBuffer& value) {
 }
 
 // ---- Experimental DRAM-sender extension -------------------------------------------------
-// Declarations live in tt-metalium/experimental/global_circular_buffer.hpp. The friend
-// struct in that header is the only way to construct or query the DRAM-sender state on a
-// GlobalCircularBuffer; the public GlobalCircularBuffer API is unchanged.
+// The free-function entrypoints declared in tt-metalium/experimental/global_circular_buffer.hpp
+// delegate to this struct, which is the only thing that names GlobalCircularBuffer's private
+// DRAM-sender state. Defined here (impl-only) so the experimental public header doesn't have
+// to spell out the friend struct.
 
 namespace global_circular_buffer_dram_sender {
+
+struct GlobalCircularBufferDramSenderInternals {
+    static GlobalCircularBuffer make_dram_sender(
+        IDevice* device,
+        const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
+        uint32_t size,
+        BufferType buffer_type);
+
+    static SenderCoreType sender_core_type(const GlobalCircularBuffer& gcb);
+    static DeviceAddr pages_sent_drisc_l1_base(const GlobalCircularBuffer& gcb);
+    static DeviceAddr pages_sent_worker_l1_base(const GlobalCircularBuffer& gcb);
+    static const std::vector<std::vector<CoreCoord>>& receiver_coords_per_sender(const GlobalCircularBuffer& gcb);
+};
 
 GlobalCircularBuffer GlobalCircularBufferDramSenderInternals::make_dram_sender(
     IDevice* device,
