@@ -22,12 +22,18 @@ void check_tensor_in_grid(const Tensor& tensor, const CoreCoord& grid_size) {
     if (tensor.memory_config().is_sharded() && tensor.memory_config().buffer_type() != BufferType::DRAM) {
         const auto& shard_spec = tensor.memory_config().shard_spec().value();
         const auto& shard_grid = shard_spec.grid;
-        CoreRange range(CoreCoord(0, 0), grid_size);
+        TT_FATAL(
+            grid_size.x > 0 && grid_size.y > 0,
+            "compute grid size must be non-zero, got ({}, {})",
+            grid_size.x,
+            grid_size.y);
+        const CoreRange range(CoreCoord(0, 0), CoreCoord(grid_size.x - 1, grid_size.y - 1));
         TT_FATAL(
             range.contains(shard_grid),
-            "Tensor shard spec grid must be within config grid! Shard grid: {}, Config grid: {}",
+            "Tensor shard spec grid {} must lie within compute grid ({}, {})",
             shard_grid,
-            range);
+            grid_size.x,
+            grid_size.y);
     }
 }
 
