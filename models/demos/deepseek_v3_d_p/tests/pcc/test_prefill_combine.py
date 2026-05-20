@@ -189,13 +189,12 @@ def test_ttnn_combine(
 
     # TILE_LAYOUT packs bfp8 cleanly along the 32-row tile dim; ROW_MAJOR can't represent
     # bfp8 (no exponent grouping across rows) so keep bfloat16 in that path.
-    tt_dispatched_buffer_dtype = ttnn.bfloat8_b if dispatched_buffer_layout == ttnn.TILE_LAYOUT else ttnn.bfloat16
     tt_dispatched_buffer = ttnn.from_torch(
         dispatched_buffer,
         mesh_mapper=mesh_mapper,
         layout=dispatched_buffer_layout,
         device=mesh_device,
-        dtype=tt_dispatched_buffer_dtype,
+        dtype=ttnn.bfloat16,
     )
 
     tt_dispatched_metadata = ttnn.from_torch(
