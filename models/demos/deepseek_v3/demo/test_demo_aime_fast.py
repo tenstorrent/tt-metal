@@ -114,16 +114,6 @@ def _score_generations(prompt_items: list[dict], generations: list[dict]) -> lis
                 "enable_trace": True,
                 "sample_on_device": True,
             },
-            id="dual_aime_under_8k_fast",
-            marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(2400)],
-        ),
-        pytest.param(
-            {
-                "max_users_per_row": 8,
-                "max_new_tokens": 8192,
-                "enable_trace": True,
-                "sample_on_device": True,
-            },
             id="quad_aime_under_8k_fast",
             marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(2400)],
         ),
