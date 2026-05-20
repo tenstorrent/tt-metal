@@ -42,6 +42,35 @@ from .motioner import FramePackMotionerWan
 from .rope_s2v import rope_precompute
 
 
+def _slice_and_adjust_T(
+    x: ttnn.Tensor,
+    B: int,
+    T_have: int,
+    K: int,
+    D: int,
+    mf_lat: int,
+    target_T: int | None,
+) -> ttnn.Tensor:
+    """Trim the ``motion_frames[1]`` prefix off ``x`` and adjust to ``target_T``.
+
+    On device throughout. ``x`` has shape ``[B, T_have, K, D]``. Returns
+    ``[B, target_T, K, D]`` (or ``[B, T_have - mf_lat, K, D]`` if
+    ``target_T is None``). The motion encoder's 4× temporal downsample can
+    land one frame off when ``num_frames`` isn't a multiple of 4 — when the
+    post-slice ``T`` falls short, pad on the right by repeating the last
+    frame (matches the host fallback's previous behaviour).
+    """
+    sliced = ttnn.slice(x, [0, mf_lat, 0, 0], [B, T_have, K, D])
+    T_post = T_have - mf_lat
+    if target_T is None or target_T == T_post:
+        return sliced
+    if target_T < T_post:
+        return ttnn.slice(sliced, [0, 0, 0, 0], [B, target_T, K, D])
+    # Pad on the right: repeat the last frame ``target_T - T_post`` times.
+    last_frame = ttnn.slice(sliced, [0, T_post - 1, 0, 0], [B, T_post, K, D])
+    return ttnn.concat([sliced] + [last_frame] * (target_T - T_post), dim=1)
+
+
 class WanS2VTransformer3DModel(WanTransformer3DModel):
     """Speech-to-video variant of the WAN 2.2 DiT.
 
@@ -216,32 +245,25 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         else:
             audio_global_emb, audio_local_emb = None, audio_emb_out
 
-        local_torch = local_device_to_torch(audio_local_emb)
-        local_torch = local_torch[:, motion_frames[1] :, :, :]
-        # Snap T to the latent frame count: motion_frames=[17,5] can leave the
-        # encoder one frame off when num_frames isn't a multiple of 4, which
-        # would break the per-frame block-diagonal mask.
-        if target_num_frames is not None and target_num_frames != local_torch.shape[1]:
-            T_have = local_torch.shape[1]
-            if target_num_frames > T_have:
-                pad = local_torch[:, -1:, :, :].expand(-1, target_num_frames - T_have, -1, -1)
-                local_torch = torch.cat([local_torch, pad], dim=1)
-            else:
-                local_torch = local_torch[:, :target_num_frames, :, :]
-        B, T_video, num_tok_p1, dim = local_torch.shape
+        # On-device post-processing: slice off motion_frames[1] prefix, then
+        # adjust to target_num_frames (motion_encoder's 4× downsample can
+        # land one frame off when num_frames isn't a multiple of 4). All
+        # via ttnn.slice / ttnn.concat — no H↔D roundtrip per clip.
+        mf_lat = motion_frames[1]
+        B = int(audio_local_emb.shape[0])
+        T_have = int(audio_local_emb.shape[1])
+        num_tok_p1 = int(audio_local_emb.shape[2])
+        dim = int(audio_local_emb.shape[3])
+
+        local_dev = _slice_and_adjust_T(audio_local_emb, B, T_have, num_tok_p1, dim, mf_lat, target_num_frames)
+        T_video = int(local_dev.shape[1])
         self.num_frames = T_video
         self.num_audio_tokens_per_frame = num_tok_p1
-        # Flatten to ``[1, B, T*(N+1), dim]`` cross-attn K/V; audio is small
-        # enough that we keep it SP-replicated.
-        flat_torch = local_torch.reshape(B, T_video * num_tok_p1, dim).unsqueeze(0).contiguous()
+
         if self.merged_audio_emb_flat is not None:
             ttnn.deallocate(self.merged_audio_emb_flat)
-        self.merged_audio_emb_flat = from_torch(
-            flat_torch,
-            device=self.mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-        )
+        # Flatten to [1, B, T_video * num_tok_p1, dim] cross-attn K/V.
+        self.merged_audio_emb_flat = ttnn.reshape(local_dev, [1, B, T_video * num_tok_p1, dim])
         # New clip → drop per-injector K/V caches (audio-dependent). The
         # ``_frame_attn_mask_cache`` is shape-keyed and lives across clips.
         self.audio_injector.invalidate_audio_kv_cache()
@@ -250,20 +272,10 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
             ttnn.deallocate(self.audio_emb_global_token0_dev)
             self.audio_emb_global_token0_dev = None
         if audio_global_emb is not None:
-            global_torch = local_device_to_torch(audio_global_emb)
-            global_torch = global_torch[:, motion_frames[1] :, :, :]
-            if target_num_frames is not None and target_num_frames != global_torch.shape[1]:
-                T_have = global_torch.shape[1]
-                if target_num_frames > T_have:
-                    pad = global_torch[:, -1:, :, :].expand(-1, target_num_frames - T_have, -1, -1)
-                    global_torch = torch.cat([global_torch, pad], dim=1)
-                else:
-                    global_torch = global_torch[:, :target_num_frames, :, :]
-            # AdaIN reads token 0.
-            token0_torch = global_torch[:, :, 0, :].contiguous().unsqueeze(0)
-            self.audio_emb_global_token0_dev = bf16_tensor(
-                token0_torch, device=self.mesh_device, layout=ttnn.TILE_LAYOUT
-            )
+            global_dev = _slice_and_adjust_T(audio_global_emb, B, T_have, 1, dim, mf_lat, target_num_frames)
+            # [B, T_video, 1, dim] → [1, B, T_video, dim] (drop the singleton
+            # token axis and prepend the SP-replicated leading dim).
+            self.audio_emb_global_token0_dev = ttnn.reshape(global_dev, [1, B, T_video, dim])
         for kv in self._adain_modulation_cache.values():
             for t in kv:
                 ttnn.deallocate(t)
