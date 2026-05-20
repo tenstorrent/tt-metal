@@ -161,6 +161,19 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
+- name: Mistral-7B seqlen sweep
+  cmd: |
+    export HF_MODEL=mistralai/Mistral-7B-Instruct-v0.3 
+    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep"
+  model: mistral-7b
+  skus:
+    wh_n150:
+      timeout: 30
+      tier: 2
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+
 - name: Gemma-3-4B seqlen sweep
   cmd: |
     export HF_MODEL=google/gemma-3-4b-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google/gemma-3-4b-it
