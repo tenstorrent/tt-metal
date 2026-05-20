@@ -118,9 +118,10 @@ def test_transformer_attention_softmax_(
     assert_with_pcc(torch_output_tensor, output_tensor, 0.996)
 
 
-# Regression tests for #28525: when softmax inputs exceed bf16's exp() overflow point (~88),
-# an unstable softmax kernel collapses entire rows to all zeros. attention_softmax (out-of-place)
-# and attention_softmax_ (in-place; trailing underscore per PyTorch's naming convention) both
+# Test the numeric stability of softmax.
+# When inputs exceed bf16's exp() overflow point (~88),
+# an unstable softmax kernel collapses entire rows to all zeros.
+# attention_softmax (out-of-place) and attention_softmax_ (in-place) both
 # default to numerically stable softmax, so these inputs should still produce a correct
 # distribution that matches the torch golden.
 @pytest.mark.parametrize(
