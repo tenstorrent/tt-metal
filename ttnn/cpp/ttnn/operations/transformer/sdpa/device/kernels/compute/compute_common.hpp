@@ -2109,6 +2109,13 @@ void sdpa_inner_loop(
         if (q_per_core > 1 || is_last_ring_iter) {
             cb_pop_front(cb_q_in, q_chunk_tiles);
         }
+
+        // Under global Q scheduling the reader pushes one cb_attention_sink slot per Q iter,
+        // so we must drain matching slots inside this loop. Pre-PR the push/pop pair was
+        // 1:1 outside the loop; the new cadence is 1:1 per iter.
+        if constexpr (use_attention_sink) {
+            cb_pop_front(cb_attention_sink, Sq_chunk_t);
+        }
     }
 
     if constexpr (sdpa_type == RING) {
@@ -2118,10 +2125,6 @@ void sdpa_inner_loop(
             cb_pop_front(cb_k_in, k_chunk_tiles);
             cb_pop_front(cb_v_in, v_chunk_tiles);
         }
-    }
-
-    if constexpr (use_attention_sink) {
-        cb_pop_front(cb_attention_sink, Sq_chunk_t);
     }
 }
 
