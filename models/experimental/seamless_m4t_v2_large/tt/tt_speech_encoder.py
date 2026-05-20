@@ -27,8 +27,10 @@ _BF16_ATTN_MASK_MIN = float(torch.finfo(torch.bfloat16).min)
 
 # Drain on-device profiler markers every N conformer layers when device profiling is on.
 _PROFILER_LAYER_DRAIN_INTERVAL = 8
-# Stage 2: short-seq matmuls use 1D multicast (seq <= threshold); longer use 2D grid.
+# Long-seq matmuls use 2D grid; shorter seq uses 1D or wide-FFN 2D (see ``_matmul_program_config``).
 _MATMUL_1D_SEQ_THRESHOLD = 128
+# FFN / wide projections (e.g. 1024→4096) use 2D tiling when seq has multiple M tiles.
+_MATMUL_WIDE_DIM_THRESHOLD = 2048
 
 
 def _drain_device_profiler(device: ttnn.Device, *, trace_no_profiler: bool) -> None:
@@ -217,6 +219,14 @@ class TTSeamlessM4Tv2SpeechEncoder:
         ttnn.deallocate(normed_sharded)
         return normed
 
+    @staticmethod
+    def _pick_matmul_out_subblock_w(per_core_n: int, out_subblock_h: int = 1) -> int:
+        """Prefer wider subblocks when legal (Tracy: 1×3 / 1×4 on Conformer FFN)."""
+        for w in (4, 3, 2, 1):
+            if per_core_n % w == 0 and w * out_subblock_h <= 4:
+                return w
+        return 1
+
     def _matmul_program_config(self, token_rows: int, in_dim: int, out_dim: int):
         key = (token_rows, in_dim, out_dim)
         cached = self._matmul_pc_cache.get(key)
@@ -228,39 +238,73 @@ class TTSeamlessM4Tv2SpeechEncoder:
         in0_block_w = min(4, k_tiles)
         while in0_block_w > 1 and k_tiles % in0_block_w != 0:
             in0_block_w -= 1
-        if token_rows <= _MATMUL_1D_SEQ_THRESHOLD:
-            per_core_n = (out_dim + cg.x * 32 - 1) // (cg.x * 32)
-            per_core_m = (token_rows + 31) // 32
-            out_subblock_w = min(4, max(1, per_core_n))
-            while out_subblock_w > 1 and per_core_n % out_subblock_w != 0:
-                out_subblock_w -= 1
-            result = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(cg.x, 1),
-                in0_block_w=in0_block_w,
-                out_subblock_h=1,
-                out_subblock_w=out_subblock_w,
-                per_core_M=max(1, per_core_m),
-                per_core_N=max(1, per_core_n),
-                fuse_batch=True,
-                mcast_in0=True,
-            )
-        else:
-            grid_y = min(cg.y, (token_rows + 31) // 32)
-            per_core_m = (token_rows + grid_y * 32 - 1) // (grid_y * 32)
-            per_core_n = (out_dim + cg.x * 32 - 1) // (cg.x * 32)
-            out_subblock_w = min(4, max(1, per_core_n))
-            while out_subblock_w > 1 and per_core_n % out_subblock_w != 0:
-                out_subblock_w -= 1
+
+        m_tiles = max(1, (token_rows + 31) // 32)
+        n_tiles = max(1, (out_dim + 31) // 32)
+        wide = in_dim >= _MATMUL_WIDE_DIM_THRESHOLD or out_dim >= _MATMUL_WIDE_DIM_THRESHOLD
+
+        if token_rows > _MATMUL_1D_SEQ_THRESHOLD:
+            grid_y = min(cg.y, m_tiles)
+            while grid_y > 1 and n_tiles % (cg.x * grid_y) != 0:
+                grid_y -= 1
+            per_core_m = max(1, (m_tiles + grid_y - 1) // grid_y)
+            per_core_n = max(1, (n_tiles + cg.x * grid_y - 1) // (cg.x * grid_y))
+            out_subblock_w = self._pick_matmul_out_subblock_w(per_core_n)
             result = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(cg.x, grid_y),
                 in0_block_w=in0_block_w,
                 out_subblock_h=1,
                 out_subblock_w=out_subblock_w,
-                per_core_M=max(1, per_core_m),
-                per_core_N=max(1, per_core_n),
+                per_core_M=per_core_m,
+                per_core_N=per_core_n,
                 transpose_mcast=False,
                 fused_activation=None,
             )
+        elif wide and cg.y > 1 and m_tiles >= 2:
+            grid_y = min(cg.y, m_tiles, max(1, n_tiles // max(1, cg.x)))
+            while grid_y > 1 and n_tiles % (cg.x * grid_y) != 0:
+                grid_y -= 1
+            if grid_y > 1:
+                per_core_m = max(1, (m_tiles + grid_y - 1) // grid_y)
+                per_core_n = max(1, (n_tiles + cg.x * grid_y - 1) // (cg.x * grid_y))
+                out_subblock_w = self._pick_matmul_out_subblock_w(per_core_n)
+                result = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(cg.x, grid_y),
+                    in0_block_w=in0_block_w,
+                    out_subblock_h=1,
+                    out_subblock_w=out_subblock_w,
+                    per_core_M=per_core_m,
+                    per_core_N=per_core_n,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                )
+            else:
+                per_core_n = max(1, (out_dim + cg.x * 32 - 1) // (cg.x * 32))
+                out_subblock_w = self._pick_matmul_out_subblock_w(per_core_n)
+                result = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=(cg.x, 1),
+                    in0_block_w=in0_block_w,
+                    out_subblock_h=1,
+                    out_subblock_w=out_subblock_w,
+                    per_core_M=m_tiles,
+                    per_core_N=per_core_n,
+                    fuse_batch=True,
+                    mcast_in0=True,
+                )
+        else:
+            per_core_n = max(1, (out_dim + cg.x * 32 - 1) // (cg.x * 32))
+            out_subblock_w = self._pick_matmul_out_subblock_w(per_core_n)
+            result = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(cg.x, 1),
+                in0_block_w=in0_block_w,
+                out_subblock_h=1,
+                out_subblock_w=out_subblock_w,
+                per_core_M=m_tiles,
+                per_core_N=per_core_n,
+                fuse_batch=True,
+                mcast_in0=True,
+            )
+
         self._matmul_pc_cache[key] = result
         return result
 
@@ -720,8 +764,8 @@ class TTSeamlessM4Tv2SpeechEncoder:
             ffn.intermediate_dense.weight,
             ffn.intermediate_dense.bias,
             program_config=pc1,
+            activation="silu",
         )
-        h = ttnn.silu(h, memory_config=ttnn.L1_MEMORY_CONFIG)
         out = self._linear(h, ffn.output_dense.weight, ffn.output_dense.bias, program_config=pc2)
         ttnn.deallocate(h)
         return out
@@ -731,8 +775,13 @@ class TTSeamlessM4Tv2SpeechEncoder:
         ff_dim = self.speech_encoder_intermediate_size
         pc1 = self._matmul_program_config(token_rows, hdim, ff_dim)
         pc2 = self._matmul_program_config(token_rows, ff_dim, hdim)
-        h = self._linear(x, ffn.intermediate_dense.weight, ffn.intermediate_dense.bias, program_config=pc1)
-        h = ttnn.relu(h, memory_config=ttnn.L1_MEMORY_CONFIG)
+        h = self._linear(
+            x,
+            ffn.intermediate_dense.weight,
+            ffn.intermediate_dense.bias,
+            program_config=pc1,
+            activation="relu",
+        )
         out = self._linear(h, ffn.output_dense.weight, ffn.output_dense.bias, program_config=pc2)
         ttnn.deallocate(h)
         return out
