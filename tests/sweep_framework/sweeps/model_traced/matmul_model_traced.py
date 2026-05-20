@@ -415,7 +415,11 @@ def run(
                 mesh_mapper=ttnn.ReplicateTensorToMesh(device),
             )
             ttnn.dram_prefetcher([input_tensor_b, _tt_addrs], num_layers=1, global_cb=_GLOBAL_CB)
-            device.set_sub_device_stall_group([ttnn.SubDeviceId(1)])
+            from tests.sweep_framework.master_config_loader_v2 import dict_to_sub_device_id as _dtsdid
+
+            _sdid = _dtsdid(kwargs.get("sub_device_id"))
+            if _sdid is not None:
+                device.set_sub_device_stall_group([_sdid])
         except Exception as _pf_err:
             print(f"Warning: dram_prefetcher dispatch failed: {_pf_err}")
 

@@ -687,7 +687,14 @@ def run(
             )
             device.load_sub_device_manager(_ag_sub_dev_mgr)
 
-            worker_sub_device_id = ttnn.SubDeviceId(1)
+            # The worker sub-device is index 1 by construction (we just
+            # created the manager above with [prefetcher, worker]).  When
+            # the master trace recorded a different `subdevice_id`, prefer
+            # that value so the kwargs match the trace exactly.
+            from tests.sweep_framework.master_config_loader_v2 import dict_to_sub_device_id as _dtsdid
+
+            _traced_sdid = _dtsdid(subdevice_id) or _dtsdid(kwargs.get("subdevice_id"))
+            worker_sub_device_id = _traced_sdid if _traced_sdid is not None else ttnn.SubDeviceId(1)
             ccl_sub_device_crs = worker_cores
             sub_device_stall_group = [ttnn.SubDeviceId(0), worker_sub_device_id]
 
@@ -779,6 +786,9 @@ def run(
                             op_kwargs["persistent_output_tensor"] = None
 
                         if subdevice_id is not None or "subdevice_id" not in absent_keys:
+                            # Use the master's recorded sub_device_id (already
+                            # parsed into worker_sub_device_id above), not a
+                            # hardcoded SubDeviceId(1).
                             op_kwargs["subdevice_id"] = worker_sub_device_id
                         # Ensure input tensor topology matches master trace
                         if input_a_tensor_placement:

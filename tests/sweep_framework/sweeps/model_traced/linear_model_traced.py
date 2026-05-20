@@ -223,54 +223,16 @@ def _reorder_l1_mc_for_dram_sharded(mc, device):
 
 
 # ---------------------------------------------------------------------------
-# Sub-device linear path — matches the repro test pattern exactly.
+# Sub-device linear path — runs ttnn.linear with the master's sub-device +
+# (optional) global_cb + dram_prefetcher orchestration.
 #
-# The master trace vectors store core grids in a canonical (sorted) order that
-# does NOT match the model's actual shard-to-core mapping.  The matmul kernel
-# (MatmulMultiCoreReuseMultiCast1DProgramConfig with gather_in0=True) expects
-# specific cores to hold specific input shards.  Using the wrong ordering
-# produces PCC ~ 0 (random).  The correct orderings are hardcoded here from
-# the working repro test (test_failing_configs_repro_fixed.py).
+# All op-argument values (memory configs, shard grids, dtypes, placements,
+# sub_device_id, program_config, compute_kernel_config, etc.) come straight
+# from the master JSON via the V2 vector — no qwen-specific constants here.
+# The only machine-dependent inputs are the prefetcher core-range layout
+# (active senders, dram cores, worker cores), which describe the 6U Galaxy
+# and are resolved once in the fixture from get_core_ranges().
 # ---------------------------------------------------------------------------
-
-# Input shard grid (24 cores) — matches the model's actual shard placement
-_QWEN3_INPUT_CORE_COORDS = [
-    (6, 6), (6, 7), (6, 9), (6, 0), (6, 1), (6, 2), (6, 4), (6, 5),
-    (5, 5), (5, 6), (5, 7), (5, 9), (5, 0), (5, 1), (5, 2), (5, 4),
-    (1, 4), (1, 5), (1, 9), (1, 0),
-    (2, 0), (2, 4), (2, 5), (2, 9),
-]
-
-# Output shard grid (24 cores) — different ordering from input
-_QWEN3_OUTPUT_CORE_COORDS = [
-    (1, 9), (2, 9), (1, 0), (2, 0), (1, 4), (2, 4), (1, 5), (2, 5),
-    (5, 0), (6, 0), (5, 9), (6, 9), (5, 1), (6, 1), (5, 7), (6, 7),
-    (5, 6), (6, 6), (5, 2), (6, 2), (5, 4), (6, 4), (5, 5), (6, 5),
-]
-
-
-def _make_crs_from_coords(coords):
-    """Create a CoreRangeSet from a list of (x, y) coordinate tuples."""
-    return ttnn.CoreRangeSet([
-        ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y))
-        for (x, y) in coords
-    ])
-
-
-def _build_correct_mc(vector_mc, correct_coords):
-    """Rebuild a MemoryConfig using the correct core ordering.
-
-    Takes the vector's parsed MemoryConfig (which has sorted cores) and
-    replaces the grid with the correct ordering while preserving shard shape,
-    orientation, memory layout, and buffer type.
-    """
-    if vector_mc is None or vector_mc.shard_spec is None:
-        return vector_mc
-    new_grid = _make_crs_from_coords(correct_coords)
-    new_shard = ttnn.ShardSpec(
-        new_grid, vector_mc.shard_spec.shape, vector_mc.shard_spec.orientation
-    )
-    return ttnn.MemoryConfig(vector_mc.memory_layout, vector_mc.buffer_type, new_shard)
 
 
 def _run_sub_device_linear(
@@ -292,7 +254,7 @@ def _run_sub_device_linear(
     """Run linear with full sub-device lifecycle matching the repro test.
 
     For configs with sub_device_id (qwen3-32b Galaxy linear):
-    1. Create tensors with correct core-ordered memory configs
+    1. Create tensors with the master's exact memory configs
     2. Apply tensor topology
     3. Load sub_device_manager
     4. If global_cb: create it, dispatch dram_prefetcher, manage stall groups
@@ -308,15 +270,10 @@ def _run_sub_device_linear(
     sender_crs = cri["sender_core_range_set"]
     worker_cores = cri["worker_cores"]
 
-    # ---- Step 0: Rebuild memory configs with correct core ordering ----
-    # The vector stores cores in sorted order, but the matmul kernel requires
-    # the model's actual shard-to-core mapping.
-    input_a_mc = _build_correct_mc(input_a_memory_config, _QWEN3_INPUT_CORE_COORDS)
-    output_mc = _build_correct_mc(linear_kwargs.get("memory_config"), _QWEN3_OUTPUT_CORE_COORDS)
-    if output_mc is not None:
-        linear_kwargs["memory_config"] = output_mc
-    # Weight DRAM shard grid (0,0)-(11,0) is a contiguous range — order is
-    # unambiguous, so we keep the vector's parsed config as-is.
+    # The master JSON's shard_spec.grid preserves the exact core ordering used
+    # by the model. dict_to_memory_config (in master_config_loader_v2) keeps
+    # that order through to the constructed MemoryConfig, so we use it as-is.
+    input_a_mc = input_a_memory_config
 
     # ---- Step 1: Create tensors ----
 
@@ -670,7 +627,34 @@ def run(
     )
 
     if _has_sub_device and _CORE_RANGE_INFO is not None and is_mesh_device:
-        # Build linear kwargs for the sub-device path
+        # Vector serialization canonicalizes (sorts) CoreRangeSet cores, but
+        # the matmul kernel (gather_in0=True with WIDTH_SHARDED) requires the
+        # model's actual shard-to-core mapping.  Read the original memory
+        # configs straight from the master JSON to preserve that ordering —
+        # matches what matmul_model_traced.py does for the same configs.
+        config_hash = kwargs.get("config_hash")
+        if config_hash:
+            from tests.sweep_framework.master_config_loader_v2 import (
+                find_master_config as _fmc,
+                dict_to_memory_config as _dtmc_master,
+            )
+
+            _master_cfg = _fmc("ttnn.linear", str(config_hash))
+            if _master_cfg is not None:
+                _margs = _master_cfg.get("arguments", {})
+                _ma_mc = _margs.get("arg0", {}).get("memory_config")
+                _mb_mc = _margs.get("arg1", {}).get("memory_config")
+                _mout_mc = _margs.get("memory_config")
+                if _ma_mc:
+                    input_a_memory_config = _dtmc_master(_ma_mc)
+                if _mb_mc:
+                    input_b_memory_config = _dtmc_master(_mb_mc)
+                if _mout_mc:
+                    output_memory_config = _dtmc_master(_mout_mc)
+                    # Override memory_config too — the vector's value has the
+                    # cores in sorted order which breaks gather_in0 matmul.
+                    memory_config = output_memory_config
+
         linear_kwargs = {}
         if ttnn_bias is not None:
             linear_kwargs["bias"] = ttnn_bias
@@ -701,12 +685,16 @@ def run(
         if _output_tile is not None:
             linear_kwargs["output_tile"] = _output_tile
 
-        # Parse sub_device_id
-        linear_kwargs["sub_device_id"] = ttnn.SubDeviceId(1)
+        from tests.sweep_framework.master_config_loader_v2 import dict_to_sub_device_id as _dtsdid
 
-        # Remove sub_device_id from parsed_op_kwargs to avoid double-passing
+        sdid = _dtsdid(_sub_device_id_raw)
+        if sdid is None:
+            raise RuntimeError(
+                f"Unable to parse sub_device_id from master kwargs: {_sub_device_id_raw!r}"
+            )
+        linear_kwargs["sub_device_id"] = sdid
+
         parsed_op_kwargs.pop("sub_device_id", None)
-        # Also remove global_cb — handled by the sub_device path
         parsed_op_kwargs.pop("global_cb", None)
         linear_kwargs.update(parsed_op_kwargs)
 

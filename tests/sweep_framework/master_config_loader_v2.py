@@ -101,6 +101,32 @@ BASE_DIR = get_base_dir()
 TTNN_OPERATIONS_MASTER_JSON = os.path.join(BASE_DIR, "model_tracer", "traced_operations", "ttnn_operations_master.json")
 
 
+def find_master_config(op_name, config_hash, master_path=None):
+    """Locate a single configuration in the master JSON by op + config hash.
+
+    Returns the configuration dict (the entry under operations.<op>.configurations)
+    or None if not found.
+
+    Matches `config_hash` exactly or by 8-character prefix so callers can use the
+    short form for readability.
+    """
+    path = master_path or TTNN_OPERATIONS_MASTER_JSON
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path) as f:
+            master = json.load(f)
+    except Exception:
+        return None
+
+    op_data = master.get("operations", {}).get(op_name, {})
+    for cfg in op_data.get("configurations", []):
+        h = str(cfg.get("config_hash", ""))
+        if h == config_hash or (len(config_hash) >= 8 and h.startswith(config_hash[:8])):
+            return cfg
+    return None
+
+
 @dataclass
 class TensorConfig:
     """Represents a tensor configuration extracted from master JSON"""
@@ -158,6 +184,129 @@ def parse_layout(layout_val):
         key = layout_val.replace("Layout.", "").replace("ttnn.", "").replace("_LAYOUT", "").upper()
         return _LAYOUT_MAP.get(key, ttnn.TILE_LAYOUT)
     return layout_val
+
+
+def dict_to_sub_device_id(value):
+    """Convert a sub_device_id value from traced JSON to a ttnn.SubDeviceId.
+
+    Master JSON format: {"type": "SubDeviceId", "value": "SubDeviceId(1)"}
+    Returns ttnn.SubDeviceId objects, plain ints (wrapped), and None unchanged.
+    """
+    if value is None or value == "__ABSENT__":
+        return None
+    if isinstance(value, ttnn.SubDeviceId):
+        return value
+    if isinstance(value, int):
+        return ttnn.SubDeviceId(value)
+    if isinstance(value, dict):
+        val_str = str(value.get("value", value.get("repr", "")))
+        import re
+
+        m = re.search(r"SubDeviceId\((\d+)\)", val_str)
+        if m:
+            return ttnn.SubDeviceId(int(m.group(1)))
+    if isinstance(value, str):
+        import re
+
+        m = re.search(r"SubDeviceId\((\d+)\)", value)
+        if m:
+            return ttnn.SubDeviceId(int(m.group(1)))
+    return None
+
+
+def parse_placement_string(placement_str):
+    """Parse a tensor_placement.placement string from traced JSON to a list of ttnn placements.
+
+    Master JSON format examples:
+      "['PlacementShard(0)', 'PlacementShard(1)']"
+      "['PlacementReplicate', 'PlacementShard(-1)']"
+
+    Returns a list of ttnn.PlacementShard / ttnn.PlacementReplicate objects, or
+    None if the input cannot be parsed.
+    """
+    if placement_str is None or placement_str == "__ABSENT__":
+        return None
+    if isinstance(placement_str, list):
+        # Already a list of objects or strings; coerce strings.
+        out = []
+        for p in placement_str:
+            if isinstance(p, (ttnn.PlacementShard, ttnn.PlacementReplicate)):
+                out.append(p)
+            else:
+                parsed = parse_placement_string(f"['{p}']") if isinstance(p, str) else None
+                if parsed:
+                    out.extend(parsed)
+        return out or None
+    if not isinstance(placement_str, str):
+        return None
+
+    import re
+
+    out = []
+    for tok in re.findall(r"Placement(?:Shard|Replicate)(?:\(-?\d+\))?", placement_str):
+        if tok.startswith("PlacementReplicate"):
+            out.append(ttnn.PlacementReplicate())
+        else:
+            m = re.search(r"PlacementShard\((-?\d+)\)", tok)
+            if m:
+                out.append(ttnn.PlacementShard(int(m.group(1))))
+    return out or None
+
+
+def parse_mesh_shape(tensor_placement):
+    """Extract the mesh shape tuple from a tensor_placement dict.
+
+    Master JSON format: {"mesh_device_shape": "[8, 4]", ...}
+    Returns a (rows, cols) tuple, or None if absent.
+    """
+    if tensor_placement is None:
+        return None
+    if isinstance(tensor_placement, (list, tuple)) and len(tensor_placement) == 2:
+        return (int(tensor_placement[0]), int(tensor_placement[1]))
+    if not isinstance(tensor_placement, dict):
+        return None
+
+    val = tensor_placement.get("mesh_device_shape")
+    if val is None:
+        return None
+    if isinstance(val, (list, tuple)) and len(val) == 2:
+        return (int(val[0]), int(val[1]))
+
+    import re
+
+    nums = re.findall(r"\d+", str(val))
+    if len(nums) >= 2:
+        return (int(nums[0]), int(nums[1]))
+    return None
+
+
+def build_tensor_topology(tensor_placement, *, device_shape=None):
+    """Build a ttnn.TensorTopology from a master tensor_placement dict.
+
+    Uses the placement metadata stored in the master JSON:
+      {
+        "mesh_device_shape": "[8, 4]",
+        "distribution_shape": "[8, 4]",
+        "placement": "['PlacementShard(0)', 'PlacementShard(1)']",
+      }
+
+    `device_shape` (optional): when provided, used as the mesh shape instead of
+    the master's `mesh_device_shape` (e.g. when running on a smaller mesh).
+    """
+    placements = parse_placement_string(
+        tensor_placement.get("placement") if isinstance(tensor_placement, dict) else None
+    )
+    if placements is None:
+        return None
+    mesh = device_shape or parse_mesh_shape(tensor_placement)
+    if mesh is None:
+        return None
+    rows, cols = int(mesh[0]), int(mesh[1])
+    return ttnn.TensorTopology(
+        ttnn.MeshShape(rows, cols),
+        list(placements),
+        [ttnn.MeshCoordinate(r, c) for r in range(rows) for c in range(cols)],
+    )
 
 
 def dict_to_core_grid(value):
@@ -254,21 +403,46 @@ def _parse_string_repr_program_config(type_name: str, value_str: str):
     import re
 
     if "SDPAProgramConfig" in type_name or "SDPAProgramConfig" in value_str:
+        # Master format: SDPAProgramConfig(compute_with_storage_grid_size=8-6,
+        #   sub_core_grids={[1-0 - 3-9], [5-0 - 6-8]}, q_chunk_size=0, k_chunk_size=0,
+        #   exp_approx_mode=false, max_cores_per_head_batch=16)
         grid_m = re.search(r"compute_with_storage_grid_size=\(x=(\d+),\s*y=(\d+)\)", value_str)
+        if not grid_m:
+            grid_m = re.search(r"compute_with_storage_grid_size=(\d+)-(\d+)", value_str)
         q_chunk_m = re.search(r"q_chunk_size=(\d+)", value_str)
         k_chunk_m = re.search(r"k_chunk_size=(\d+)", value_str)
         exp_m = re.search(r"exp_approx_mode=(\w+)", value_str)
+        max_cores_m = re.search(r"max_cores_per_head_batch=(\d+)", value_str)
         if not grid_m or not q_chunk_m or not k_chunk_m:
             return None
         exp_val = False
         if exp_m:
             exp_val = exp_m.group(1).lower() not in ("false", "0")
-        return ttnn.SDPAProgramConfig(
+
+        sdpa_kwargs = dict(
             compute_with_storage_grid_size=ttnn.CoreCoord(int(grid_m.group(1)), int(grid_m.group(2))),
             q_chunk_size=int(q_chunk_m.group(1)),
             k_chunk_size=int(k_chunk_m.group(1)),
             exp_approx_mode=exp_val,
         )
+        if max_cores_m:
+            sdpa_kwargs["max_cores_per_head_batch"] = int(max_cores_m.group(1))
+
+        scg_m = re.search(r"sub_core_grids=\{(.+?)\}", value_str)
+        if scg_m:
+            scg_ranges = re.findall(r"\[(\d+)-(\d+)\s*-\s*(\d+)-(\d+)\]", scg_m.group(1))
+            if scg_ranges:
+                sdpa_kwargs["sub_core_grids"] = ttnn.CoreRangeSet(
+                    [
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(int(sx), int(sy)),
+                            ttnn.CoreCoord(int(ex), int(ey)),
+                        )
+                        for sx, sy, ex, ey in scg_ranges
+                    ]
+                )
+
+        return ttnn.SDPAProgramConfig(**sdpa_kwargs)
 
     if "LayerNormShardedMultiCoreProgramConfig" in value_str:
         grid_m = re.search(r"compute_with_storage_grid_size=\(x=(\d+),\s*y=(\d+)\)", value_str)

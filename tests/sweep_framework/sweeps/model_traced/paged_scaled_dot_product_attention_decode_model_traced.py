@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import re as _re_mod
 from contextlib import contextmanager
 from functools import partial
 
@@ -83,19 +82,26 @@ def mesh_device_fixture():
 def _sdpa_device_context(tensor_placements, program_config_raw):
     """Open a mesh device with the right mesh shape for this config.
 
-    - Mesh shape is inferred from tensor_placement metadata (defaults to (4,8)).
-    - Uses COL dispatch (WORKER), matching the production model config.
-      The SDPA sub_core_grids explicitly avoid the dispatch column (x=7).
+    Mesh shape is taken strictly from the master JSON via the parsed
+    tensor_placement metadata. If no placement records mesh_device_shape we
+    fail loudly rather than guess.
+
+    Uses COL dispatch (WORKER), matching the production model config; the
+    SDPA sub_core_grids in the master deliberately avoid the dispatch column.
     """
-    # Determine mesh shape from tensor placement metadata
-    mesh = (4, 8)
+    from tests.sweep_framework.master_config_loader_v2 import parse_mesh_shape
+
+    mesh = None
     for tp in tensor_placements:
-        if isinstance(tp, dict):
-            ms_str = str(tp.get("mesh_device_shape", ""))
-            ms_nums = _re_mod.findall(r"\d+", ms_str)
-            if len(ms_nums) >= 2:
-                mesh = (int(ms_nums[0]), int(ms_nums[1]))
-                break
+        ms = parse_mesh_shape(tp)
+        if ms is not None:
+            mesh = ms
+            break
+    if mesh is None:
+        raise RuntimeError(
+            "SDPA: master tensor_placement is missing mesh_device_shape; "
+            "cannot determine mesh shape without hardcoding a default."
+        )
 
     from tests.scripts.common import get_updated_device_params
 
@@ -606,53 +612,22 @@ def run(
             )
         op_kwargs["attention_sink"] = sink_tensor
 
-    # Parse the master's exact program_config, including sub_core_grids and
-    # CoreCoord grid size.  The master's string-repr format is:
-    #   SDPAProgramConfig(compute_with_storage_grid_size=8-6,
-    #     sub_core_grids={[1-0 - 3-9], [5-0 - 6-8]}, q_chunk_size=0, ...)
+    # Use the loader's canonical SDPAProgramConfig parser so every value
+    # (compute_with_storage_grid_size, sub_core_grids, q/k_chunk_size,
+    # exp_approx_mode, max_cores_per_head_batch) comes from the master JSON.
     if "program_config" not in op_kwargs:
         traced_pc = kwargs.get("program_config")
-        if isinstance(traced_pc, dict) and traced_pc.get("type") == "SDPAProgramConfig":
-            import re as _re_pc
-
-            val = traced_pc.get("value", "")
-            gm = _re_pc.search(r"compute_with_storage_grid_size=(\d+)-(\d+)", val)
-            qm = _re_pc.search(r"q_chunk_size=(\d+)", val)
-            km = _re_pc.search(r"k_chunk_size=(\d+)", val)
-            em = _re_pc.search(r"exp_approx_mode=(\w+)", val)
-            mcm = _re_pc.search(r"max_cores_per_head_batch=(\d+)", val)
-
-            if gm:
-                _grid_x, _grid_y = int(gm.group(1)), int(gm.group(2))
-            else:
-                _grid_x, _grid_y = 8, 6
-
-            _sdpa_kwargs = dict(
-                compute_with_storage_grid_size=ttnn.CoreCoord(_grid_x, _grid_y),
-                q_chunk_size=int(qm.group(1)) if qm else 0,
-                k_chunk_size=int(km.group(1)) if km else 0,
-                exp_approx_mode=em.group(1).lower() == "true" if em else False,
+        if traced_pc is not None and traced_pc != "__ABSENT__":
+            from tests.sweep_framework.master_config_loader_v2 import (
+                dict_to_program_config as _dtpc,
             )
-            if mcm:
-                _sdpa_kwargs["max_cores_per_head_batch"] = int(mcm.group(1))
 
-            # Parse sub_core_grids from the string repr.
-            # Format: sub_core_grids={[sx-sy - ex-ey], [sx-sy - ex-ey], ...}
-            scg_m = _re_pc.search(r"sub_core_grids=\{(.+?)\}", val)
-            if scg_m:
-                scg_ranges = _re_pc.findall(r"\[(\d+)-(\d+)\s*-\s*(\d+)-(\d+)\]", scg_m.group(1))
-                if scg_ranges:
-                    _sdpa_kwargs["sub_core_grids"] = ttnn.CoreRangeSet([
-                        ttnn.CoreRange(
-                            ttnn.CoreCoord(int(sx), int(sy)),
-                            ttnn.CoreCoord(int(ex), int(ey)),
-                        )
-                        for sx, sy, ex, ey in scg_ranges
-                    ])
-
-            op_kwargs["program_config"] = ttnn.SDPAProgramConfig(**_sdpa_kwargs)
-        elif traced_pc is not None and traced_pc != "__ABSENT__" and not isinstance(traced_pc, dict):
-            op_kwargs["program_config"] = traced_pc
+            parsed_pc = _dtpc(traced_pc)
+            if parsed_pc is None:
+                raise RuntimeError(
+                    f"Failed to parse SDPA program_config from master: {traced_pc!r}"
+                )
+            op_kwargs["program_config"] = parsed_pc
 
     # Use master's exact output memory_config.  The V2 vector stores it as
     # a parsed MemoryConfig or dict; use it directly so the trace matches.
