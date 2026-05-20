@@ -73,7 +73,7 @@ TEST(GraphTrackerThreading, ProcessorsAreIsolatedPerThread) {
     std::atomic<int> ready_count{0};
     std::atomic<bool> go{false};
 
-    auto run_one_thread = [&](std::shared_ptr<CountingProcessor> proc) {
+    auto run_one_thread = [&](const std::shared_ptr<CountingProcessor>& proc) {
         auto& tracker = GraphTracker::instance();
         tracker.clear();
         tracker.push_processor(proc);
