@@ -250,19 +250,23 @@ class TtDeformConv2dV2:
         samples_3d = ttnn.reshape(samples, (H_out * W_out, K, C_in))
         mask_3d = ttnn.reshape(mask_nhwc, (H_out * W_out, K, 1))
         modulated_3d = ttnn.multiply(samples_3d, mask_3d, memory_config=big_mem_config)
+        ttnn.deallocate(samples_3d)
 
         # 5. Final 1x1 weighted sum via matmul.
         modulated_flat = ttnn.reshape(modulated_3d, (1, H_out * W_out, K * C_in))
         modulated_tiled = ttnn.to_layout(modulated_flat, ttnn.TILE_LAYOUT, memory_config=big_mem_config)
 
+        out_bytes = H_out * W_out * C_out * 2
+        out_mem = ttnn.L1_MEMORY_CONFIG if out_bytes <= 2 * 1024 * 1024 else ttnn.DRAM_MEMORY_CONFIG
         out_flat = ttnn.matmul(
             modulated_tiled,
             self.weight_tt,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=out_mem,
             compute_kernel_config=self._compute_config,
         )
+        ttnn.deallocate(modulated_tiled)
         if self.bias_tt is not None:
-            out_flat = ttnn.add(out_flat, self.bias_tt, memory_config=ttnn.L1_MEMORY_CONFIG)
+            out_flat = ttnn.add(out_flat, self.bias_tt, memory_config=out_mem)
 
         # Reshape back to (1, H_out, W_out, C_out)
         out_nhwc = ttnn.reshape(out_flat, (1, H_out, W_out, C_out))

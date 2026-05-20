@@ -147,11 +147,18 @@ class TtDyReLUNHWC:
         a2 = ttnn.multiply(a2, 2.0, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         branch1 = ttnn.multiply(feat_nhwc, a1, memory_config=full_mem)
+        ttnn.deallocate(a1)
         branch1 = ttnn.add(branch1, b1, memory_config=full_mem)
+        ttnn.deallocate(b1)
         branch2 = ttnn.multiply(feat_nhwc, a2, memory_config=full_mem)
+        ttnn.deallocate(a2)
         branch2 = ttnn.add(branch2, b2, memory_config=full_mem)
+        ttnn.deallocate(b2)
 
-        return ttnn.maximum(branch1, branch2)
+        out = ttnn.maximum(branch1, branch2, memory_config=full_mem)
+        ttnn.deallocate(branch1)
+        ttnn.deallocate(branch2)
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -621,6 +628,7 @@ class TtDyHeadBlockDevice:
             scale_w_mid = self.scale_attn(mid)
             sum_feat = ttnn.multiply(mid, scale_w_mid, memory_config=lv_mem)
             ttnn.deallocate(scale_w_mid)
+            ttnn.deallocate(mid)
             summed_levels = 1
 
             # low branch (from previous level)
@@ -663,7 +671,6 @@ class TtDyHeadBlockDevice:
             out = self.task_attn(sum_feat)
             outs.append(out)
             ttnn.deallocate(sum_feat)
-            ttnn.deallocate(mid)
 
         # Cleanup
         for o in offset_per_level + mask_per_level:
