@@ -409,7 +409,7 @@ void kernel_main() {
             }
 #ifdef FUSE_BIAS
             if constexpr (!is_output_writer) {
-                read_bias_block_sync<N_block_tiles>(in2_reader, cb_id_in2, in2_tile_size, n_tile, n_tile_end);
+                read_tiles_by_row(cb_id_in2, in2_reader, n_tile, n_tile_end - n_tile, in2_tile_size, N_block_tiles);
             }
 #endif
 
