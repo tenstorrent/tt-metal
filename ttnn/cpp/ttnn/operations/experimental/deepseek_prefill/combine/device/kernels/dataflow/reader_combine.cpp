@@ -298,10 +298,29 @@ void kernel_main() {
     // then sends ROUTE_INFO_SENTINEL when all its batches are complete.  Sender exits when
     // every idle core has signalled done, eliminating head-of-line blocking between cores.
     {
+        static_assert((SLOTS_PER_IDLE & (SLOTS_PER_IDLE - 1)) == 0, "SLOTS_PER_IDLE must be a power of 2");
+        constexpr uint32_t SLOTS_PER_IDLE_MASK = SLOTS_PER_IDLE - 1;
+
         uint32_t idle_done_count = 0;
         bool idle_finished[num_idle_cores_group];
+        // consumed[c] tracks how many data_ready increments we've processed for idle core c.
+        // The idle core only ever INCREMENTS data_ready_sem; the sender never decrements it.
+        // Replaces the per-row noc_semaphore_inc(-1) + noc_async_atomic_barrier round-trip
+        // with a local register-resident counter compare.
+        uint32_t consumed[num_idle_cores_group];
+        uint32_t ring_meta_addr[num_idle_cores_group][SLOTS_PER_IDLE];
+        uint64_t buffer_scratch_noc_addr_table[num_idle_cores_group][SLOTS_PER_IDLE];
         for (uint32_t c = 0; c < num_idle_cores_group; c++) {
             idle_finished[c] = false;
+            consumed[c] = 0;
+            uint32_t meta_addr = metadata_buf_base + c * SLOTS_PER_IDLE * aligned_dispatched_metadata_page_size;
+            uint32_t out_addr = untilize_base + c * SLOTS_PER_IDLE * aligned_output_page_size;
+            for (uint32_t s = 0; s < SLOTS_PER_IDLE; s++) {
+                ring_meta_addr[c][s] = meta_addr;
+                buffer_scratch_noc_addr_table[c][s] = get_noc_addr(out_addr);
+                meta_addr += aligned_dispatched_metadata_page_size;
+                out_addr += aligned_output_page_size;
+            }
         }
 
         while (idle_done_count < num_idle_cores_group) {
@@ -310,29 +329,37 @@ void kernel_main() {
                     continue;
                 }
 
-                // Non-blocking check: data_ready lives in sender L1, read directly without NOC.
-                if (*data_ready_sem_ptrs[c] == 0) {
+                // Non-blocking check: data_ready lives in sender L1.  Invalidate L1 cache so the
+                // load picks up any NoC-written increments from the idle core (the prior atomic
+                // barrier used to do this for us; now we do it explicitly).
+                invalidate_l1_cache();
+                if (*data_ready_sem_ptrs[c] == consumed[c]) {
                     continue;
                 }
-                noc_semaphore_inc(self_data_ready_noc_addrs[c], (uint32_t)-1);
-                noc_async_atomic_barrier();
+                consumed[c]++;
 
                 uint32_t slot = read_slots[c];
-                volatile tt_l1_ptr uint32_t* ring_meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                    metadata_buf_base + (c * SLOTS_PER_IDLE + slot) * aligned_dispatched_metadata_page_size);
-                uint32_t dst_chip = ring_meta[0];
-                read_slots[c] = (slot + 1) % SLOTS_PER_IDLE;
+                volatile tt_l1_ptr uint32_t* ring_meta =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ring_meta_addr[c][slot]);
+                uint32_t meta0 = ring_meta[0];
+                uint32_t meta1 = ring_meta[1];
+                uint32_t meta2 = ring_meta[2];
+                uint64_t buffer_scratch_noc_addr = buffer_scratch_noc_addr_table[c][slot];
+                read_slots[c] = (slot + 1) & SLOTS_PER_IDLE_MASK;
 
-                if (dst_chip == ROUTE_INFO_SENTINEL) {
+                if (meta0 == ROUTE_INFO_SENTINEL) {
+                    // Reset the sem so a subsequent kernel invocation starts at 0 even if the
+                    // framework doesn't reset program-level sems between runs.  Pairs with
+                    // consumed[c] being a local that resets at kernel entry.
+                    noc_semaphore_set(data_ready_sem_ptrs[c], 0);
+                    noc_async_atomic_barrier();
                     idle_finished[c] = true;
                     idle_done_count++;
                     continue;
                 }
 
-                uint32_t dst_token_idx = ring_meta[1];
-                uint32_t dst_topk_indice = ring_meta[2];
-                uint32_t output_page_idx = dst_token_idx * num_experts_per_tok + dst_topk_indice;
-                uint32_t buffer_scratch_addr = untilize_base + (c * SLOTS_PER_IDLE + slot) * aligned_output_page_size;
+                uint32_t dst_chip = meta0;
+                uint32_t output_page_idx = meta1 * num_experts_per_tok + meta2;
 
                 if constexpr (is_1d_topology<topology>()) {
                     uint32_t route = get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
@@ -340,21 +367,18 @@ void kernel_main() {
                         manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
 
                     cb_reserve_back(cb_route_info_id, 1);
-                    volatile tt_l1_ptr uint32_t* route_info =
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_route_info_id));
+                    uint32_t cb_base = get_write_ptr(cb_route_info_id);
+                    volatile tt_l1_ptr uint32_t* route_info = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_base);
                     route_info[0] = route;
                     route_info[1] = distance;
                     route_info[2] = output_page_idx;
-                    route_info[3] = 0;
-                    cb_push_back(cb_route_info_id, 1);
-                    cb_reserve_back(cb_output_for_writer_id, 1);
                     {
                         DeviceZoneScopedN("combine-reader-sending-data-writer-CB");
-                        uint32_t output_dst = get_write_ptr(cb_output_for_writer_id);
-                        noc_async_read(get_noc_addr(buffer_scratch_addr), output_dst, aligned_output_page_size);
+                        uint32_t output_dst = cb_base + l1_alignment;
+                        noc_async_read(buffer_scratch_noc_addr, output_dst, aligned_output_page_size);
                         noc_async_read_barrier();
                     }
-                    cb_push_back(cb_output_for_writer_id, 1);
+                    cb_push_back(cb_route_info_id, 1);
                 }
                 noc_semaphore_inc<true>(idle_credits_noc_addrs[c], 1);
             }
@@ -427,20 +451,19 @@ void kernel_main() {
                             manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
 
                         cb_reserve_back(cb_route_info_id, 1);
+                        uint32_t cb_base = get_write_ptr(cb_route_info_id);
                         volatile tt_l1_ptr uint32_t* route_info =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_route_info_id));
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_base);
                         route_info[0] = route;
                         route_info[1] = distance;
                         route_info[2] = output_page_idx;
                         route_info[3] = 0;
-                        cb_push_back(cb_route_info_id, 1);
 
-                        cb_reserve_back(cb_output_for_writer_id, 1);
-                        uint32_t output_dst = get_write_ptr(cb_output_for_writer_id);
+                        uint32_t output_dst = cb_base + l1_alignment;
                         noc_async_read(
                             get_noc_addr(buffer_scratch_addr), output_dst, aligned_dispatched_buffer_page_size);
                         noc_async_read_barrier();
-                        cb_push_back(cb_output_for_writer_id, 1);
+                        cb_push_back(cb_route_info_id, 1);
                     }
                 }
             }
