@@ -1,0 +1,26 @@
+name: "Bug Escape Probe - 8e823c23 fix"
+on:
+  workflow_dispatch:
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+  pages: write
+  id-token: write
+  packages: write
+  checks: write
+jobs:
+  probe:
+    uses: ./.github/workflows/blackhole-post-commit.yaml
+    with:
+      build-artifact-name: "TTMetal_build_any_22.04_amd64_x86_64-linux-clang-20-libstdcpp_Release_43d283e02818bba72cd8abd44cae244df2f718fa_26087214024"
+      wheel-artifact-name: "ttnn-dist-cp310-Release-43d283e02818bba72cd8abd44cae244df2f718fa-26087214024"
+      schedule-runs-all-tests: false
+      run-ttnn-unit-tests: true
+      run-ops-unit-tests: true
+      run-models-unit-tests: false
+      run-profiler-regression: false
+      run-umd-unit-tests: false
+      run-tt-cnn-unit-tests: false
+      run-blackhole-multi-card-fast-unit-tests: false
+    secrets: inherit
