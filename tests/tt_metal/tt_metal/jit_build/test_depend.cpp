@@ -143,7 +143,7 @@ TEST_F(JitBuildDependencyTests, ConcurrentUpToDateCheck) {
     constexpr int kNumFiles = 20;
     constexpr int kNumThreads = 16;
 
-    std::vector<std::string> dep_names;
+    std::vector<std::filesystem::path> dep_names;
     dep_names.reserve(kNumFiles);
     for (int i = 0; i < kNumFiles; ++i) {
         dep_names.push_back("dep_" + std::to_string(i) + ".txt");
@@ -170,12 +170,100 @@ TEST_F(JitBuildDependencyTests, ConcurrentUpToDateCheck) {
     }
 }
 
+// Validates that an absolute-path dependency round-trips correctly through
+// write_dependency_hashes → dependencies_up_to_date (stream overloads).
+TEST_F(JitBuildDependencyTests, AbsolutePathRoundTrip) {
+    constexpr auto obj_file_name = "abs_test.o";
+
+    // Create a file with an absolute path inside out_dir_
+    auto abs_dep = out_dir_ / "absolute_header.h";
+    std::ofstream{abs_dep} << "// absolute header content";
+
+    // Build ParsedDependencies using the absolute path directly
+    const tt::jit_build::ParsedDependencies dependencies{
+        {obj_file_name, {abs_dep}},
+    };
+
+    // Write hashes to a stringstream
+    std::stringstream hash_stream;
+    tt::jit_build::write_dependency_hashes(dependencies, out_dir_, obj_file_name, hash_stream);
+    ASSERT_FALSE(hash_stream.fail());
+
+    // Read back and verify dependencies are up to date
+    tt::jit_build::clear_file_hash_cache();
+    EXPECT_TRUE(tt::jit_build::dependencies_up_to_date(hash_stream));
+}
+
+// Validates that a relative-path dependency is stored as an absolute path and
+// round-trips correctly through write → read.
+TEST_F(JitBuildDependencyTests, RelativePathBecomesAbsoluteRoundTrip) {
+    constexpr auto obj_file_name = "rel_test.o";
+
+    // Create a file via a relative name (relative to out_dir_)
+    std::filesystem::path rel_dep = "include/relative_dep.h";
+    std::filesystem::create_directories(out_dir_ / "include");
+    std::ofstream{out_dir_ / rel_dep} << "// relative header content";
+
+    const tt::jit_build::ParsedDependencies dependencies{
+        {obj_file_name, {rel_dep}},
+    };
+
+    // Write hashes — the writer should convert rel_dep to an absolute path
+    std::stringstream hash_stream;
+    tt::jit_build::write_dependency_hashes(dependencies, out_dir_, obj_file_name, hash_stream);
+    ASSERT_FALSE(hash_stream.fail());
+
+    // Verify the stored path is absolute by parsing it the same way the reader
+    // does (operator>> uses std::quoted), rather than doing a raw substring search.
+    std::stringstream verify_stream(hash_stream.str());
+    std::filesystem::path stored_path;
+    verify_stream >> stored_path;
+    ASSERT_FALSE(verify_stream.fail()) << "Failed to parse stored path from hash file";
+    EXPECT_TRUE(stored_path.is_absolute()) << "Expected absolute path, got: " << stored_path;
+    EXPECT_EQ(stored_path, out_dir_ / rel_dep)
+        << "Expected " << (out_dir_ / rel_dep) << ", got: " << stored_path;
+
+    // Read back and verify round-trip
+    tt::jit_build::clear_file_hash_cache();
+    EXPECT_TRUE(tt::jit_build::dependencies_up_to_date(hash_stream));
+}
+
+// Validates that a path containing spaces round-trips correctly.
+// This is the scenario where the write/read semantic mismatch (quoted vs
+// unquoted) would cause a failure: write uses dep_path.string() (unquoted),
+// but read uses operator>>(istream&, path&) which internally uses std::quoted.
+// When the first character is NOT a quote, operator>> falls back to
+// whitespace-delimited extraction, which splits on the space mid-path.
+TEST_F(JitBuildDependencyTests, PathWithSpacesRoundTrip) {
+    constexpr auto obj_file_name = "spaces_test.o";
+
+    // Create a directory and file with a space in the name
+    auto dir_with_space = out_dir_ / "my headers";
+    std::filesystem::create_directories(dir_with_space);
+    auto dep_with_space = dir_with_space / "spaced header.h";
+    std::ofstream{dep_with_space} << "// header with spaces in path";
+
+    const tt::jit_build::ParsedDependencies dependencies{
+        {obj_file_name, {dep_with_space}},
+    };
+
+    // Write hashes
+    std::stringstream hash_stream;
+    tt::jit_build::write_dependency_hashes(dependencies, out_dir_, obj_file_name, hash_stream);
+    ASSERT_FALSE(hash_stream.fail());
+
+    // Read back — this will FAIL if write is unquoted but read expects quoted
+    tt::jit_build::clear_file_hash_cache();
+    EXPECT_TRUE(tt::jit_build::dependencies_up_to_date(hash_stream))
+        << "Path with spaces failed round-trip. Hash file content: " << hash_stream.str();
+}
+
 TEST_F(JitBuildDependencyTests, ConcurrentInvalidation) {
     constexpr auto obj_file_name = "test.o";
     constexpr int kNumFiles = 20;
     constexpr int kNumThreads = 16;
 
-    std::vector<std::string> dep_names;
+    std::vector<std::filesystem::path> dep_names;
     dep_names.reserve(kNumFiles);
     for (int i = 0; i < kNumFiles; ++i) {
         dep_names.push_back("dep_" + std::to_string(i) + ".txt");

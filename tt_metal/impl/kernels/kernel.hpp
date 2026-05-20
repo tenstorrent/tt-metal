@@ -11,6 +11,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 #include "api/tt-metalium/kernel_types.hpp"
 #include "api/tt-metalium/runtime_args_data.hpp"
@@ -210,13 +211,13 @@ public:
     // Binary management (moved from KernelImpl)
     const std::vector<const ll_api::memory*>& binaries(uint64_t build_key) const;
     void set_binaries(uint64_t build_key, std::vector<const ll_api::memory*>&& binaries);
-    bool binaries_exist_on_disk(const IDevice* device, const std::string& binary_root) const;
+    bool binaries_exist_on_disk(const IDevice* device, const std::filesystem::path& binary_root) const;
 
     virtual void set_build_options(JitBuildOptions& /*build_options*/) const {}
     virtual void generate_binaries(IDevice* device, JitBuildOptions& build_options) const = 0;
-    virtual void read_binaries(IDevice* device, const std::string& binary_root) = 0;
+    virtual void read_binaries(IDevice* device, const std::filesystem::path& binary_root) = 0;
 
-    void register_kernel_elf_paths_with_watcher(IDevice& device, const std::string& binary_root) const;
+    void register_kernel_elf_paths_with_watcher(IDevice& device, const std::filesystem::path& binary_root) const;
 
     void set_precompiled_config(experimental::PrecompiledKernelConfig config);
     const std::optional<experimental::PrecompiledKernelConfig>& precompiled_config() const {
@@ -288,7 +289,7 @@ protected:
 
     virtual std::string config_hash() const = 0;
 
-    std::vector<std::string> file_paths(IDevice& device, const std::string& binary_root) const;
+    std::vector<std::filesystem::path> file_paths(IDevice& device, const std::filesystem::path& binary_root) const;
 
 private:
     void register_kernel_with_watcher();
@@ -332,7 +333,7 @@ public:
 
     uint32_t get_kernel_processor_type(int index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
-    void read_binaries(IDevice* device, const std::string& binary_root) override;
+    void read_binaries(IDevice* device, const std::filesystem::path& binary_root) override;
 
     bool configure(
         IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
@@ -370,7 +371,7 @@ public:
 
     uint32_t get_kernel_processor_type(int index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
-    void read_binaries(IDevice* device, const std::string& binary_root) override;
+    void read_binaries(IDevice* device, const std::filesystem::path& binary_root) override;
 
     bool configure(
         IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
@@ -408,7 +409,7 @@ public:
 
     uint32_t get_kernel_processor_type(int index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
-    void read_binaries(IDevice* device, const std::string& binary_root) override;
+    void read_binaries(IDevice* device, const std::filesystem::path& binary_root) override;
 
     bool configure(
         IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
@@ -468,7 +469,7 @@ public:
     uint32_t get_kernel_processor_type(int index) const override;
     void set_build_options(JitBuildOptions& build_options) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
-    void read_binaries(IDevice* device, const std::string& binary_root) override;
+    void read_binaries(IDevice* device, const std::filesystem::path& binary_root) override;
 
     bool configure(
         IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
@@ -558,7 +559,7 @@ public:
     uint32_t get_kernel_processor_type(int index) const override;
     std::vector<uint32_t> get_processor_indices_for_binary(int binary_index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
-    void read_binaries(IDevice* device, const std::string& binary_root) override;
+    void read_binaries(IDevice* device, const std::filesystem::path& binary_root) override;
 
     bool configure(
         IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
@@ -629,7 +630,7 @@ public:
 
     uint32_t get_kernel_processor_type(int index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
-    void read_binaries(IDevice* device, const std::string& binary_root) override;
+    void read_binaries(IDevice* device, const std::filesystem::path& binary_root) override;
 
     bool configure(
         IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const override;

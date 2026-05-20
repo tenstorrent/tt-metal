@@ -13,10 +13,12 @@
 #include <random>
 #include <system_error>
 #include <thread>
+#include <vector>
 
-#include <tt-logger/tt-logger.hpp>
 #include <fcntl.h>
 #include <unistd.h>
+#include <tt-logger/tt-logger.hpp>
+#include <tt_stl/assert.hpp>
 
 namespace tt::filesystem {
 
@@ -619,7 +621,13 @@ void async_sync_filesystem(const std::filesystem::path& path) {
     if (g_pending_sync.valid()) {
         g_pending_sync.get();
     }
-    g_pending_sync = std::async(std::launch::async, [p = path] { sync_filesystem(p); });
+    g_pending_sync = std::async(std::launch::async, [p = path] {
+        try {
+            sync_filesystem(p);
+        } catch (const std::exception& e) {
+            log_warning(tt::LogMetal, "async sync_filesystem failed for {}: {}", p.string(), e.what());
+        }
+    });
 }
 
 void wait_for_pending_sync() {
@@ -709,6 +717,77 @@ size_t remove_empty_parent_directories(const std::filesystem::path& path) {
     }
 
     return removed_count;
+}
+
+namespace {
+
+using PathParts = std::vector<std::filesystem::path>;
+
+PathParts split_components(const std::filesystem::path& path) {
+    PathParts parts;
+    for (const auto& part : path.lexically_normal()) {
+        parts.push_back(part);
+    }
+    return parts;
+}
+
+std::filesystem::path build_from_parts(const PathParts& parts, size_t begin, size_t end) {
+    TT_ASSERT(end <= parts.size(), "build_from_parts: end ({}) > parts.size() ({})", end, parts.size());
+    if (begin >= end) {
+        return {};
+    }
+    std::filesystem::path out = parts[begin];
+    for (size_t i = begin + 1; i < end; ++i) {
+        out /= parts[i];
+    }
+    return out;
+}
+
+bool starts_with_components(const PathParts& path_parts, const PathParts& prefix_parts) {
+    if (prefix_parts.size() > path_parts.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < prefix_parts.size(); ++i) {
+        if (path_parts[i] != prefix_parts[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+}  // namespace
+
+bool map_path_prefix(
+    const std::filesystem::path& path,
+    const std::filesystem::path& source_prefix,
+    const std::filesystem::path& target_prefix,
+    std::filesystem::path& mapped_path) {
+    auto path_parts = split_components(path);
+    auto source_parts = split_components(source_prefix);
+    auto target_parts = split_components(target_prefix);
+    if (!starts_with_components(path_parts, source_parts)) {
+        return false;
+    }
+    // Return false when path == source_prefix (no file-path suffix to remap).
+    // Consistent with make_relative_if_under returning false for path == base.
+    if (path_parts.size() == source_parts.size()) {
+        return false;
+    }
+    PathParts mapped_parts = target_parts;
+    mapped_parts.insert(mapped_parts.end(), path_parts.begin() + source_parts.size(), path_parts.end());
+    mapped_path = build_from_parts(mapped_parts, 0, mapped_parts.size());
+    return true;
+}
+
+bool make_relative_if_under(
+    const std::filesystem::path& path, const std::filesystem::path& base, std::filesystem::path& relative_path) {
+    auto path_parts = split_components(path);
+    auto base_parts = split_components(base);
+    if (!starts_with_components(path_parts, base_parts)) {
+        return false;
+    }
+    relative_path = build_from_parts(path_parts, base_parts.size(), path_parts.size());
+    return !relative_path.empty();
 }
 
 }  // namespace tt::filesystem

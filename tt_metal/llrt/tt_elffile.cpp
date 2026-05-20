@@ -35,6 +35,8 @@ std::string format(std::string m, Args&&...) {
 #include <tt-logger/tt-logger.hpp>
 #endif
 
+#include "common/filesystem_utils.hpp"
+
 // These guidelines are wrong. And I will die on this hill :)
 // NOLINTBEGIN (readability-redundant-access-specifiers)
 // NOLINTBEGIN (cppcoreguidelines-explicit-virtual-function)
@@ -289,19 +291,50 @@ void ElfFile::ReadImage(const std::string& path) {
     pimpl_->LoadImage();
 }
 
+namespace {
+// tiny RAII helper
+struct FDCloser {
+    ~FDCloser() {
+        if (fd >= 0) {
+            ::close(fd);
+        }
+    }
+    int fd;
+};
+}  // namespace
+
 ElfFile::Impl* ElfFile::Impl::Make(ElfFile& owner, const std::string& path) {
-    int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
     struct stat st{};
     void* buffer = MAP_FAILED;
-    if (fd >= 0 && fstat(fd, &st) >= 0) {
-        buffer = mmap(nullptr, st.st_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
-    }
-    if (fd >= 0) {
-        // It is acceptable to close a mapped file -- the mapping stays.
-        close(fd);
-    }
-    if (buffer == MAP_FAILED) {
-        TT_THROW("{}: cannot map elf file into memory: {}", path, strerror(errno));
+    std::error_code ec;
+
+    const bool mmap_success = tt::filesystem::retry_on_estale_ec(
+        [&](std::error_code& inner_ec) {
+            buffer = MAP_FAILED;
+            errno = 0;
+            FDCloser f{::open(path.c_str(), O_RDONLY | O_CLOEXEC)};
+            if (f.fd < 0) {
+                const int e = errno;
+                if (e != 0) { inner_ec.assign(e, std::system_category()); } else { inner_ec = std::make_error_code(std::errc::io_error); }
+                return false;
+            }
+            if (::fstat(f.fd, &st) < 0) {
+                const int e = errno;
+                if (e != 0) { inner_ec.assign(e, std::system_category()); } else { inner_ec = std::make_error_code(std::errc::io_error); }
+                return false;
+            }
+            buffer = ::mmap(nullptr, st.st_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, f.fd, 0);
+            if (buffer == MAP_FAILED) {
+                const int e = errno;
+                if (e != 0) { inner_ec.assign(e, std::system_category()); } else { inner_ec = std::make_error_code(std::errc::io_error); }
+                return false;
+            }
+            return true;
+        },
+        ec);
+
+    if (!mmap_success) {
+        TT_THROW("{}: cannot map elf file into memory: {}", path, ec.message());
     }
 
     owner.contents_ = std::span(reinterpret_cast<std::byte*>(buffer), st.st_size);
@@ -329,18 +362,41 @@ ElfFile::Impl* ElfFile::Impl::Make(ElfFile& owner, const std::string& path) {
 }
 
 void ElfFile::WriteImage(std::string const& path) {
-    // open is an os-defined varadic function, it the API to use.
-    int file_descriptor = open(
-        path.c_str(),
-        O_WRONLY | O_CLOEXEC | O_CREAT | O_TRUNC,
-        S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
-    bool failed = file_descriptor < 0;
-    if (!failed) {
-        failed = write(file_descriptor, contents_.data(), contents_.size()) != ssize_t(contents_.size());
-        close(file_descriptor);
-    }
-    if (failed) {
-        TT_THROW("{}: cannot map elf file into memory: {}", path, strerror(errno));
+    std::error_code ec;
+    const bool write_ok = tt::filesystem::retry_on_estale_ec(
+        [&](std::error_code& inner_ec) {
+            errno = 0;
+            FDCloser f{::open(
+                path.c_str(),
+                O_WRONLY | O_CLOEXEC | O_CREAT | O_TRUNC,
+                S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH)};
+            if (f.fd < 0) {
+                const int e = errno;
+                if (e != 0) { inner_ec.assign(e, std::system_category()); } else { inner_ec = std::make_error_code(std::errc::io_error); }
+                return false;
+            }
+            // POSIX allows ::write() to write fewer bytes than requested (a "short write"),
+            // particularly on NFS or when interrupted by a signal. A single write() call is
+            // therefore not sufficient to guarantee all bytes are written. Loop until all
+            // bytes are flushed or an error occurs.
+            const char* buf = reinterpret_cast<const char*>(contents_.data());
+            ssize_t remaining = static_cast<ssize_t>(contents_.size());
+            while (remaining > 0) {
+                const ssize_t n = ::write(f.fd, buf, static_cast<size_t>(remaining));
+                if (n < 0) {
+                    const int e = errno;
+                    if (e != 0) { inner_ec.assign(e, std::system_category()); } else { inner_ec = std::make_error_code(std::errc::io_error); }
+                    return false;
+                }
+                buf += n;
+                remaining -= n;
+            }
+            return true;
+        },
+        ec);
+
+    if (!write_ok) {
+        TT_THROW("{}: cannot write elf image: {}", path, ec.message());
     }
 }
 

@@ -952,7 +952,7 @@ void RiscFirmwareInitializer::initialize_firmware(
                 for (uint32_t riscv_id = 0; riscv_id < num_build_states; riscv_id++) {
                     auto fw_path = BuildEnvManager::get_instance().get_firmware_binary_path(
                         device_id, core_type_idx, processor_class, riscv_id);
-                    const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
+                    const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path.string());
                     uint32_t fw_size = binary_mem.get_text_size();
                     hal_.set_iram_text_size(
                         launch_msg, core_type, static_cast<HalProcessorClassType>(processor_class), riscv_id, fw_size);
@@ -1022,7 +1022,7 @@ void RiscFirmwareInitializer::initialize_firmware(
                     for (uint32_t eriscv_id = 0; eriscv_id < num_build_states; eriscv_id++) {
                         auto fw_path = BuildEnvManager::get_instance().get_firmware_binary_path(
                             device_id, core_type_idx, processor_class, eriscv_id);
-                        const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
+                        const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path.string());
                         llrt::test_load_write_read_risc_binary(
                             binary_mem, device_id, virtual_core, core_type_idx, processor_class, eriscv_id);
                     }
@@ -1070,7 +1070,7 @@ void RiscFirmwareInitializer::initialize_firmware(
                     for (uint32_t drisc_id = 0; drisc_id < num_build_states; drisc_id++) {
                         auto fw_path = BuildEnvManager::get_instance().get_firmware_binary_path(
                             device_id, core_type_idx, processor_class, drisc_id);
-                        const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
+                        const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path.string());
                         llrt::test_load_write_read_risc_binary(
                             binary_mem, device_id, virtual_core, core_type_idx, processor_class, drisc_id);
                     }
