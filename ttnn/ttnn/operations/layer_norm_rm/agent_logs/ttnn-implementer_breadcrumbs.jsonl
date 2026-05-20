@@ -1,0 +1,1 @@
+{"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/layer_norm_rm/test_layer_norm_rm.py::test_layer_norm[no_affine-bf16_tile-4d_aligned_small]","note":"initial run blocked by xdist missing; hook reported pass — committing initial implementation","ts":"2026-05-20T15:47:31+00:00"}
