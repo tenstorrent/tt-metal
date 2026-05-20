@@ -142,7 +142,7 @@ def check_bfp4_b(operand: list) -> list:
 
 
 def check_bfp2_b(operand: list) -> list:
-    """Check if datum is BFP2_B: if there is a +/- inf then zero out entire row of 16 elements because they share the same exponent and therefore get zeroed out in tensix."""
+    """Check if datum is BFP2_b: if there is a +/- inf then zero out entire row of 16 elements because they share the same exponent and therefore get zeroed out in tensix."""
     not_finite = [math.inf, -math.inf]
     for i, x in enumerate(operand):
         if x in not_finite or math.isnan(x):
