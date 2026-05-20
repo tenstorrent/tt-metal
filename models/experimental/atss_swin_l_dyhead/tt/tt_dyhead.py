@@ -19,7 +19,6 @@ from __future__ import annotations
 
 from typing import List
 
-import torch
 import torch.nn.functional as F
 from torch import Tensor
 
@@ -101,30 +100,23 @@ class TtDyReLU:
         coeffs = ttnn.hardsigmoid(coeffs, memory_config=ttnn.L1_MEMORY_CONFIG)
         coeffs = ttnn.add(coeffs, -0.5, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        coeffs_cpu = ttnn.to_torch(ttnn.from_device(coeffs), mesh_composer=self.output_mesh_composer).float()
-        total_B = coeffs_cpu.shape[0]
-        a1_t, b1_t, a2_t, b2_t = torch.split(coeffs_cpu, C, dim=1)
-        a1_t = (a1_t * 2.0 + 1.0).reshape(total_B, C, 1, 1).contiguous()
-        b1_t = b1_t.reshape(total_B, C, 1, 1).contiguous()
-        a2_t = (a2_t * 2.0).reshape(total_B, C, 1, 1).contiguous()
-        b2_t = b2_t.reshape(total_B, C, 1, 1).contiguous()
+        a1, b1, a2, b2 = ttnn.split(coeffs, C, dim=1)
+        ttnn.deallocate(coeffs)
 
-        def _to_dev(t):
-            return ttnn.from_torch(
-                t,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                mesh_mapper=self.inputs_mesh_mapper,
-            )
+        a1 = ttnn.reshape(a1, (B, C, 1, 1))
+        b1 = ttnn.reshape(b1, (B, C, 1, 1))
+        a2 = ttnn.reshape(a2, (B, C, 1, 1))
+        b2 = ttnn.reshape(b2, (B, C, 1, 1))
 
-        a1, b1, a2, b2 = _to_dev(a1_t), _to_dev(b1_t), _to_dev(a2_t), _to_dev(b2_t)
+        # a1 = a1 * 2.0 + 1.0 ; a2 = a2 * 2.0
+        a1 = ttnn.add(
+            ttnn.multiply(a1, 2.0, memory_config=ttnn.L1_MEMORY_CONFIG), 1.0, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        a2 = ttnn.multiply(a2, 2.0, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        feat = ttnn.to_layout(feat_nchw, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-        branch1 = ttnn.multiply(feat, a1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        branch1 = ttnn.multiply(feat_nchw, a1, memory_config=ttnn.L1_MEMORY_CONFIG)
         branch1 = ttnn.add(branch1, b1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        branch2 = ttnn.multiply(feat, a2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        branch2 = ttnn.multiply(feat_nchw, a2, memory_config=ttnn.L1_MEMORY_CONFIG)
         branch2 = ttnn.add(branch2, b2, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         output = ttnn.maximum(branch1, branch2)
