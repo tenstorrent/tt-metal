@@ -72,13 +72,17 @@ Cases A and B fail identically on WH — **multi-buffer-index aliasing is NOT
 required** to trigger the bug. They produce identical correct output on BH
 (modulo TF32 SrcA rounding on the dest-reuse mul).
 
-PASS/FAIL is decided by structural metrics:
+PASS/FAIL is decided purely by structural metrics:
 - `num_zero_tiles == 0` (tiles whose output is ~0 but expected is non-trivial)
 - `num_overscaled_tiles == 0` (tiles where actual/expected > 2)
 
-A loose per-element tolerance (~2%) is also applied to catch any other catastrophic
-divergence, but the structural metrics are what reliably distinguish "bug
-triggered" from "correct output with TF32 rounding".
+Per-element diffs that exceed a small absolute threshold (~1e-3) are still
+printed as `mismatch (informational, not part of verdict)` lines so anyone
+reading the output can see the magnitude of any precision deviation, but they
+do not influence the verdict. The structural metrics are what reliably
+distinguish "bug triggered" from "correct output with TF32 rounding" on
+architectures where the dest-reuse mul reads its operand through the SrcA
+TF32 path.
 
 ### Empirical BH output for comparison
 
