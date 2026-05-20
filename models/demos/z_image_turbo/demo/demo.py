@@ -5,7 +5,7 @@
 """
 Z-Image-Turbo demo — generate 512x512 images from text prompts.
 
-Hardware: 4x Blackhole P150, tensor-parallel across (1,4) mesh.
+Hardware: 2x Blackhole P300 (QB2), tensor-parallel across (1,4) mesh.
 Models:   text encoder + transformer + VAE decoder all on TTNN with Metal Trace.
 
 Single prompt:
