@@ -22,12 +22,11 @@
     # todo)) download the rank bindings from the main branch once this PR is merged: https://github.com/tenstorrent/tt-metal/pull/44608
     wget https://raw.githubusercontent.com/tenstorrent/tt-metal/gongyu/fix_sp1_sp4_tests/models/demos/deepseek_v3_b1/scaleout_configs/rev_c/rev_c_rank_binding_single_pod.yaml
     wget https://raw.githubusercontent.com/tenstorrent/tt-metal/gongyu/fix_sp1_sp4_tests/models/demos/deepseek_v3_b1/scaleout_configs/rev_c/rev_c_rank_file_single_pod
-    echo "============= SP4 superpod: copied rank bindings ============="
-    for file in "$RANK_BINDINGS_SRC"/*; do
-      dst_file="./$(basename "$file")"
-      echo "----- dst: $dst_file -----"
-      ls -la "$dst_file"
-      cat "$dst_file"
+    echo "============= SP1 superpod: downloaded rank bindings ============="
+    for file in rev_c_rank_binding_single_pod.yaml rev_c_rank_file_single_pod; do
+      echo "----- file: $file -----"
+      ls -la "$file"
+      cat "$file"
     done
 
     # todo)) add proper stress test that can run for 2 hours -- repeat batches?
