@@ -1,25 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-E2E performance tests for Voxtral TTS with **2CQ** on P150 (Blackhole).
-
-* **Non-traced:** full ``VoxtralTTSPipeline.forward`` (prefill + ``max_tokens`` acoustic/text loop +
-  waveform decode) per pipeline iteration.
-
-* **Traced:** ``forward_tts_generation_trace`` — text prefill on host, then a fixed device loop of
-  acoustic (semantic + FM) + text decode inside trace.
-  Trace replays decode at fixed positions with KV filled during replay (not CPU-side KV replay from
-  materialize). Pipeline output is the last step's acoustic codes; waveform is excluded (vocoder
-  ``conv1d`` is not trace-safe on P150 without a weight warmup path).
-
-Device perf (Tracy kernels) lives in ``test_voxtral_tts_device_perf.py``.
-
-Usage::
-
-    pytest models/experimental/voxtraltts/tests/perf/test_voxtral_tts_e2e_perf_2cq.py \\
-        -v -m models_performance_bare_metal
-"""
+"""Voxtral TTS 2CQ E2E perf on P150: non-traced ``forward`` and traced generation loop (+ PCC gates)."""
 
 from __future__ import annotations
 
@@ -58,13 +40,9 @@ _DUMMY_WIDTH = 32
 _GENERATE_MAX_TOKENS = 8
 _TEXT_MAX_SEQ_LEN = 512
 
-# Loose E2E global batches/s (full forward iterations). Tighten after P150 baseline.
 _EXPECTED_E2E_FULL_THROUGHPUT_FPS = 0.25
-# Traced path runs ``_GENERATE_MAX_TOKENS`` generation steps per pipeline iteration.
 _EXPECTED_E2E_TRACE_GEN_LOOP_FPS = 2.0
 
-# Match demo/PCC device open (default l1_small_size=0). A non-zero l1_small_size shrinks the
-# L1 bank and can trigger conv1d static-CB clashes on P150 during audio tokenizer decode.
 _DEVICE_PARAMS_2CQ = {"num_command_queues": 2}
 _DEVICE_PARAMS_2CQ_TRACE = {
     "l1_small_size": 32768,
@@ -275,7 +253,6 @@ def _materialize_voxtral_trace_e2e_bundle(
             audio_codes_b37=tt_codes,
             past_key_values=cpu_pkv,
         )
-        # Advance TT acoustic input without device text decode (keeps KV at prefill-only for trace).
         tt_hidden = cpu_hidden.to(torch.bfloat16)
 
     last_step = steps[-1]

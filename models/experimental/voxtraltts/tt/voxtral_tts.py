@@ -36,82 +36,6 @@ from models.experimental.voxtraltts.tt.voxtral_tt_args import _load_safetensors_
 ACOUSTIC_CFG_ALPHA_DEFAULT = 1.2
 
 
-def _safe_deallocate_ttnn_tensor(tensor: ttnn.Tensor) -> None:
-    try:
-        ttnn.deallocate(tensor)
-    except Exception:
-        pass
-
-
-def _cleanup_ttnn_tensors(obj: Any, seen_objects: set[int], seen_tensors: set[int]) -> None:
-    """Best-effort cleanup of TT tensors owned by nested model modules."""
-    if obj is None:
-        return
-
-    obj_id = id(obj)
-    if isinstance(obj, ttnn.Tensor):
-        if obj_id not in seen_tensors:
-            seen_tensors.add(obj_id)
-            _safe_deallocate_ttnn_tensor(obj)
-        return
-
-    if obj_id in seen_objects:
-        return
-    seen_objects.add(obj_id)
-
-    if isinstance(obj, (str, bytes, int, float, bool, torch.Tensor, ttnn.Device, ttnn.MeshDevice)):
-        return
-
-    if isinstance(obj, dict):
-        for key, value in list(obj.items()):
-            if isinstance(value, ttnn.Tensor):
-                _cleanup_ttnn_tensors(value, seen_objects, seen_tensors)
-                obj[key] = None
-            else:
-                _cleanup_ttnn_tensors(value, seen_objects, seen_tensors)
-        return
-
-    if isinstance(obj, list):
-        for index, value in enumerate(obj):
-            if isinstance(value, ttnn.Tensor):
-                _cleanup_ttnn_tensors(value, seen_objects, seen_tensors)
-                obj[index] = None
-            else:
-                _cleanup_ttnn_tensors(value, seen_objects, seen_tensors)
-        return
-
-    if isinstance(obj, tuple):
-        for value in obj:
-            _cleanup_ttnn_tensors(value, seen_objects, seen_tensors)
-        return
-
-    if isinstance(obj, set):
-        for value in list(obj):
-            _cleanup_ttnn_tensors(value, seen_objects, seen_tensors)
-        return
-
-    attrs = getattr(obj, "__dict__", None)
-    if attrs is None:
-        return
-
-    skip_attrs = {
-        "mesh_device",
-        "device",
-        "tt_ccl",
-        "ccl",
-        "_compute_kernel_config",
-        "compute_kernel_config",
-    }
-    for name, value in list(attrs.items()):
-        if name in skip_attrs:
-            continue
-        if isinstance(value, ttnn.Tensor):
-            _cleanup_ttnn_tensors(value, seen_objects, seen_tensors)
-            setattr(obj, name, None)
-        else:
-            _cleanup_ttnn_tensors(value, seen_objects, seen_tensors)
-
-
 @dataclass
 class VoxtralTTSGenerateOutput:
     """Debuggable output from the full free-running TTS path."""
@@ -124,14 +48,7 @@ class VoxtralTTSGenerateOutput:
 
 @dataclass
 class VoxtralTTSPipeline:
-    """Loads and wires ``VoxtralTTTextModel``, ``VoxtralTTAcousticModel``, and ``VoxtralTTAudioTokenizer``.
-
-    ``forward(text, voice)`` runs the full TTS pipeline entirely on TT:
-    1. Mistral-common tokenization (CPU, tokenization only — not model inference).
-    2. Voice-embedding injection + prefill on TT text transformer.
-    3. Autoregressive TT acoustic decode loop (hidden → codes).
-    4. TT audio tokenizer decode (codes → waveform).
-    """
+    """Text + acoustic + audio-tokenizer on TT. CPU: tokenize, voice file, embedding lookup."""
 
     mesh_device: Any
     model_name_or_path: str
@@ -206,10 +123,6 @@ class VoxtralTTSPipeline:
             end_audio_id=int(AudioSpecialTokens.id(AudioSpecialTokens.end_audio)),
         )
 
-    # ------------------------------------------------------------------
-    # Internal helpers for generate()
-    # ------------------------------------------------------------------
-
     def _resolve_model_file(self, filename: str) -> Path:
         p = Path(self.model_name_or_path)
         if p.is_dir():
@@ -225,9 +138,9 @@ class VoxtralTTSPipeline:
         prompt_token_ids: list[int],
         voice: str,
     ) -> torch.Tensor:
-        """Token IDs + voice embedding injection → ``[S, dim]`` bfloat16 CPU embeddings."""
+        """Prompt token IDs + voice injection → ``[S, dim]`` bfloat16 CPU embeddings."""
         input_ids = torch.tensor(prompt_token_ids, dtype=torch.long)
-        embeds = F.embedding(input_ids, self.tok_embedding_weight)  # [S, dim]
+        embeds = F.embedding(input_ids, self.tok_embedding_weight)
         voice_path = self._resolve_model_file(f"voice_embedding/{voice}.pt")
         try:
             voice_emb = torch.load(str(voice_path), map_location="cpu", weights_only=True)
@@ -242,20 +155,16 @@ class VoxtralTTSPipeline:
                 f"{n_audio} audio placeholder positions in prompt."
             )
         embeds[audio_mask] = voice_emb
-        return embeds  # [S, dim] bfloat16
+        return embeds
 
     def _audio_codes_to_mm_embed(self, audio_codes_1_37: torch.Tensor) -> torch.Tensor:
-        """``[1, 37]`` discrete codes → ``[dim]`` multimodal embedding (CPU, lookup+sum)."""
+        """``[1, 37]`` codes → ``[dim]`` MM embedding (CPU lookup+sum)."""
         emb = audio_tokenizer_encode_tokens_reference(
-            audio_codes_1_37.unsqueeze(-1),  # [1, 37, 1]
+            audio_codes_1_37.unsqueeze(-1),
             self.mm_embedding_weight,
             self.config.audio_model_args,
-        )  # [1, dim]  (T=1, squeezed)
-        return emb.squeeze(0).to(dtype=torch.bfloat16)  # [dim]
-
-    # ------------------------------------------------------------------
-    # End-to-end TT generation (fully on TT — no reference model)
-    # ------------------------------------------------------------------
+        )
+        return emb.squeeze(0).to(dtype=torch.bfloat16)
 
     @torch.no_grad()
     def forward(
@@ -268,46 +177,28 @@ class VoxtralTTSPipeline:
         fixed_step_count: bool = False,
         include_waveform_decode: bool = True,
     ) -> VoxtralTTSGenerateOutput:
-        """Full TT TTS pipeline: text → acoustic codes → audio waveform.
-
-        All neural-network forward passes run on TT:
-        - text prefill + each decode step uses ``VoxtralTTTextModel``.
-        - acoustic head uses ``VoxtralTTAcousticModel``.
-        - audio tokenizer decode uses ``VoxtralTTAudioTokenizer``.
-
-        Tokenization (mistral-common) and embedding lookup / voice-file I/O run on CPU —
-        these are not model inference, equivalent to a tokenizer ``encode()`` call.
-
-        Returns ``VoxtralTTSGenerateOutput`` with the final float32 waveform
-        ``[1, 1, T*patch]`` plus generated code diagnostics.
-        """
+        """TT TTS: prefill → acoustic loop → optional waveform decode. Returns codes + waveform."""
         torch.manual_seed(seed)
 
         request = compose_speech_request(text, self.model_name_or_path, voice=voice)
         prompt_token_ids: list[int] = request["prompt_token_ids"]
         S_prompt = len(prompt_token_ids)
 
-        # --- 1. TT prefill with voice-injected embeddings ---
         inputs_embeds = self._build_voice_injected_embeds(prompt_token_ids, voice)
-        last_hidden = self.text.prefill_from_embeds(inputs_embeds, start_pos=0)  # [dim]
+        last_hidden = self.text.prefill_from_embeds(inputs_embeds, start_pos=0)
 
-        # --- 2. Autoregressive acoustic decode loop ---
         cfg_alpha = torch.tensor(ACOUSTIC_CFG_ALPHA_DEFAULT, dtype=torch.bfloat16)
         generated_codes: list[torch.Tensor] = []
         current_pos = S_prompt
 
         for _ in range(max_tokens):
-            # TT acoustic: [1, dim] hidden → [1, 37] codes
-            audio_codes = self.acoustic.forward(last_hidden.unsqueeze(0), cfg_alpha).to(torch.long)  # [1, 37]
+            audio_codes = self.acoustic.forward(last_hidden.unsqueeze(0), cfg_alpha).to(torch.long)
 
-            generated_codes.append(audio_codes[0].detach().cpu())  # [37]
+            generated_codes.append(audio_codes[0].detach().cpu())
             if not fixed_step_count and int(audio_codes[0, 0].item()) == self.end_audio_id:
                 break
 
-            # MM embedding for next text step: [dim] on CPU
-            mm_embed = self._audio_codes_to_mm_embed(audio_codes)  # [dim]
-
-            # TT decode step: updates KV cache at current_pos, returns [dim] hidden
+            mm_embed = self._audio_codes_to_mm_embed(audio_codes)
             last_hidden = self.text.decode_step_from_embeds(mm_embed, current_pos)
             current_pos += 1
 
@@ -320,13 +211,12 @@ class VoxtralTTSPipeline:
                 hit_end_audio=False,
             )
 
-        # --- 3. Trim to end-of-audio and unshift codes ---
-        stacked = torch.stack(generated_codes, dim=0)  # [T, 37]
+        stacked = torch.stack(generated_codes, dim=0)
         eoa = (stacked[:, 0] == self.end_audio_id).nonzero(as_tuple=False)
         hit_end_audio = len(eoa) > 0
         cut = int(eoa[0].item()) if len(eoa) else stacked.shape[0]
         shifted_audio_tokens = stacked[:cut]
-        audio_tokens = shifted_audio_tokens - 2  # un-shift special-token offset
+        audio_tokens = shifted_audio_tokens - 2
         if audio_tokens.numel() == 0:
             empty_wav = torch.tensor([], dtype=torch.float32)
             return VoxtralTTSGenerateOutput(
@@ -335,9 +225,8 @@ class VoxtralTTSPipeline:
                 shifted_codes_t37=shifted_audio_tokens.long(),
                 hit_end_audio=hit_end_audio,
             )
-        codes_b37t = audio_tokens.T.unsqueeze(0).long()  # [1, 37, T]
+        codes_b37t = audio_tokens.T.unsqueeze(0).long()
 
-        # --- 4. TT audio tokenizer decode: codes → waveform ---
         if include_waveform_decode:
             wav = self.decode_waveform_from_codes_tt(codes_b37t)
             expected_samples = audio_tokens.shape[0] * self._downsample_factor
@@ -406,7 +295,7 @@ class VoxtralTTSPipeline:
         return wav
 
     def _acoustic_hidden_tile_copy(self, llm_hidden_tt: ttnn.Tensor) -> ttnn.Tensor:
-        """``[B, 1, dim]`` TILE copy for acoustic ops; never frees closed-over trace inputs."""
+        """Clone + TILE layout for acoustic/trace; does not free trace inputs."""
         work = ttnn.clone(llm_hidden_tt)
         if len(work.shape) == 4:
             bsz, dim = int(work.shape[0]), int(work.shape[-1])
@@ -425,43 +314,13 @@ class VoxtralTTSPipeline:
             work = tile_hidden
         return work
 
-    def forward_generation_step_trace(
-        self,
-        llm_hidden_tt: ttnn.Tensor,
-        text_step: Any,
-        noise_tt: ttnn.Tensor,
-        cfg_scalar: float = ACOUSTIC_CFG_ALPHA_DEFAULT,
-    ) -> ttnn.Tensor:
-        """One autoregressive TT step for trace capture: acoustic (semantic + FM) + text decode.
-
-        All inputs must be allocated before ``pipeline.compile``; no host readback or
-        ``synchronize_device``. Returns a **new** device hidden each call.
-        """
-        llm_tile = self._acoustic_hidden_tile_copy(llm_hidden_tt)
-        codes_tt = self.acoustic.forward_acoustic_trace_codes(llm_tile, noise_tt, cfg_scalar)
-        if llm_tile.is_allocated():
-            ttnn.deallocate(llm_tile)
-        if codes_tt.is_allocated():
-            ttnn.deallocate(codes_tt)
-        return self.text.decode_step_from_embeds_tt(
-            text_step.x_embed_tt,
-            text_step.current_pos_tt,
-            text_step.rot_mats_global,
-            text_step.rot_mats_local,
-            text_step.page_table,
-        )
-
     def forward_tts_generation_trace(
         self,
         steps: list[Any],
         *,
         cfg_scalar: float = ACOUSTIC_CFG_ALPHA_DEFAULT,
     ) -> ttnn.Tensor:
-        """Fixed-count generation loop inside trace (prefill + decode inputs materialized before capture).
-
-        Each step supplies ``llm_hidden_tt`` (acoustic input), ``noise_tt``, and text-decode tensors.
-        KV is filled only inside trace replay (materialize must not run device decode beforehand).
-        """
+        """Fixed-step traced loop; inputs materialized before capture. Returns last-step acoustic codes."""
         last_codes_tt = None
         for step in steps:
             llm_tile = self._acoustic_hidden_tile_copy(step.llm_hidden_tt)
@@ -494,15 +353,7 @@ class VoxtralTTSPipeline:
         return self.acoustic.forward(llm_hidden_bf16, cfg_alpha)
 
     def cleanup_all(self) -> None:
-        """Release the minimum device-side state needed to make ``close_device`` not segfault.
-
-        Only ``tt_transformers.TT_CCL``'s ``GlobalSemaphore`` handles are actively
-        problematic at profiler-enabled ``close_device`` time; everything else
-        (weight tensors, KV caches, rope matrices, audio-tokenizer weights) is
-        released naturally during the device-close path. Releasing tensors here
-        manually was suppressing the implicit device-profiler dump during close,
-        so we now leave them alone.
-        """
+        """Drop TT_CCL semaphores so profiler-enabled ``close_device`` does not segfault."""
         try:
             ttnn.synchronize_device(self.mesh_device)
         except Exception:
@@ -516,13 +367,7 @@ class VoxtralTTSPipeline:
             pass
 
     def _release_tt_ccl_handles(self) -> None:
-        """Drop ``GlobalSemaphore`` lists held by ``tt_transformers.TT_CCL``.
-
-        These survive ``_cleanup_ttnn_tensors`` because they are not ``ttnn.Tensor``;
-        the list-walk only ``None``s out entries whose ``isinstance(value, ttnn.Tensor)``
-        check passes, so the C++ handles stay alive and crash ``close_device`` when the
-        profiler is enabled.
-        """
+        """Clear ``TT_CCL`` ``GlobalSemaphore`` lists on the text transformer."""
         inner = getattr(self.text, "inner", None) if self.text is not None else None
         ccl = getattr(inner, "tt_ccl", None) if inner is not None else None
         if ccl is None:

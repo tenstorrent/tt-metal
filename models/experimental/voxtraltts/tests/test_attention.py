@@ -7,10 +7,10 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.experimental.voxtraltts.reference.functional import (
     VoxtralTextConfig,
+    compute_rope_frequencies,
     text_attention as reference_text_attention,
 )
 from models.experimental.voxtraltts.tt.attention import VoxtralTTAttention
-from models.experimental.voxtraltts.tt.rope import compute_rope_frequencies
 
 
 @torch.no_grad()

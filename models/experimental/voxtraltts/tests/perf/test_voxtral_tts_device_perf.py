@@ -1,18 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Voxtral TTS — device performance test for P150 (Blackhole).
-
-Measures raw device kernel execution time using the device profiler. Runs the
-complete E2E PCC test (``test_ttnn_voxtral_tts_e2e_pcc``) with profiler enabled
-and reports device throughput (samples/s).
-
-Usage::
-
-    pytest models/experimental/voxtraltts/tests/perf/test_voxtral_tts_device_perf.py \\
-        -v -m models_device_performance_bare_metal
-"""
+"""P150 device perf via Tracy on ``test_ttnn_voxtral_tts_e2e_pcc``."""
 
 import pytest
 
@@ -25,7 +14,6 @@ _DEVICE_COLS = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 _INFERENCE_TIME_KEY = "AVG DEVICE KERNEL SAMPLES/S"
 _BATCH_SIZE = 1
 
-# Full pipeline PCC (text + acoustic loop + waveform) exceeds Tracy's default buffer.
 _OP_SUPPORT_COUNT = 50000
 
 
@@ -33,11 +21,7 @@ _OP_SUPPORT_COUNT = 50000
 @pytest.mark.timeout(3600)
 @pytest.mark.models_device_performance_bare_metal
 def test_perf_device_bare_metal_voxtral_tts():
-    """
-    Device performance for the complete Voxtral TTS E2E PCC path.
-
-    Inner pytest uses ``--timeout=0`` so the PCC test's own timeout governs the workload.
-    """
+    """Device kernel throughput for full E2E PCC (inner pytest ``--timeout=0``)."""
     subdir = "ttnn_voxtral_tts_e2e_pcc"
     num_iterations = 1
     command = f"pytest --timeout=0 {_PCC_TEST}::{_PCC_TARGET} -sv"

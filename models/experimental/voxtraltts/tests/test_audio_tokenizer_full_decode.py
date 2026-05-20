@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""E2E audio tokenizer decode: codes → waveform PCC vs ``audio_tokenizer_decode_reference`` (bf16 CPU golden)."""
+"""Codes → waveform PCC vs CPU ``audio_tokenizer_decode_reference``."""
 
 from __future__ import annotations
 
@@ -44,10 +44,7 @@ _PCC_TARGET = 0.99
     ],
 )
 def test_audio_tokenizer_full_decode_pcc(device, reset_seeds, time_len, pcc):
-    """Random valid codes → waveform PCC ≥ target vs bf16 CPU golden.
-
-    ``time_len=160`` exercises the chunked decoder transpose/output projection paths.
-    """
+    """Random codes → waveform PCC vs CPU golden."""
     model_name = resolve_voxtral_model_name_or_skip()
     try:
         full = _load_safetensors_state_dict(model_name)

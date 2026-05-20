@@ -105,17 +105,7 @@ class VoxtralTTTextModel:
         inputs_embeds: torch.Tensor,
         start_pos: int = 0,
     ) -> torch.Tensor:
-        """TT prompt prefill with pre-built embeddings (voice-injected).
-
-        Returns a ``[dim]`` bfloat16 CPU tensor — the final-normalized hidden state
-        of the last valid prompt token (after norm, before LM head).
-
-        Implementation: runs each token through ``decode_step_from_embeds`` one at
-        a time.  This fills the KV cache correctly at every prompt position and
-        avoids the prefill attention kernel whose circular-buffer allocation
-        overflows L1 on P150 Blackhole for this model+grid combination.
-        For a typical TTS prompt (≤ a few hundred tokens) the overhead is small.
-        """
+        """Prefill via per-token decode (KV-safe; avoids P150 prefill L1 overflow). Returns ``[dim]`` hidden."""
         S = inputs_embeds.shape[0]
         embeds_bf16 = inputs_embeds.to(dtype=torch.bfloat16)
 
@@ -123,19 +113,14 @@ class VoxtralTTTextModel:
         for i in range(S):
             last_hidden = self.decode_step_from_embeds(embeds_bf16[i], start_pos + i)
 
-        return last_hidden  # [dim]
+        return last_hidden
 
     def decode_step_from_embeds(
         self,
         x_embed: torch.Tensor,
         current_pos_idx: int,
     ) -> torch.Tensor:
-        """One DECODE step with pre-computed embedding; returns ``[dim]`` hidden state (post-norm, pre-LM-head).
-
-        ``x_embed``: ``[dim]`` or ``[1, dim]`` bfloat16 CPU tensor (the next-step input embedding,
-        e.g. multimodal audio codebook embedding).  Runs all transformer layers in DECODE mode so
-        the KV cache is correctly updated at ``current_pos_idx``.
-        """
+        """One decode step from a CPU embedding; returns post-norm ``[dim]`` hidden (pre-LM-head)."""
         dim = self.inner.args.dim
         x_4d = x_embed.reshape(1, 1, 1, dim).to(dtype=torch.bfloat16).contiguous()
         emb_tt = ttnn.from_torch(
@@ -179,8 +164,6 @@ class VoxtralTTTextModel:
                 kv_cache=None,
             )
 
-        # Match HuggingFace ``outputs.hidden_states[-1]`` used by the CPU reference:
-        # final decoder hidden after the model-level RMSNorm, before LM head.
         x_norm = self.inner.norm(
             x_tt,
             mode=Mode.DECODE,

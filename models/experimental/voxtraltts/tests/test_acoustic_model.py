@@ -1,14 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Checkpoint-backed tests for ``VoxtralTTAcousticModel`` vs ``FlowMatchingAudioTransformerRef``.
-
-Tests: velocity trunk PCC (``predict_velocity``; per-op table on failure, set
-``VOXTRAL_ACOUSTIC_DEBUG_PCC=1`` to always print), semantic head linear PCC, end-to-end
-``forward()`` (semantic token exact match + acoustic minimum agreement rate), and single-layer
-attention/MLP PCC. ``test_acoustic_all_layers_attention_mlp_pcc`` repeats those checks for every
-FM block; ``test_acoustic_predict_velocity_pcc`` is the full-stack velocity gate.
-"""
+"""``VoxtralTTAcousticModel`` PCC vs ``FlowMatchingAudioTransformerRef`` (velocity, semantic, forward, per-layer)."""
 
 from __future__ import annotations
 
@@ -149,10 +142,8 @@ def _per_op_pcc_report(
     x_t: torch.Tensor,
     llm_h: torch.Tensor,
     t_emb: torch.Tensor,
-    *,
-    b: int,
 ) -> str:
-    """Second TT/CPU forward with intermediates; returns multiline string for pytest failure message."""
+    """Per-op intermediate PCC table for pytest failures."""
     _, ref_dbg = _reference_predict_velocity_debug(ref, x_t, llm_h, t_emb)
     tt_vel_tt, tt_dbg = tt_model.predict_velocity_debug(x_t, llm_h, t_emb)
     ttnn.deallocate(tt_vel_tt)
@@ -196,12 +187,8 @@ def test_acoustic_predict_velocity_pcc(mesh_device, reset_seeds):
 
     extra = ""
     if not passing or _acoustic_debug_pcc_enabled():
-        table = _per_op_pcc_report(ref, tt_model, x_t, llm_h, t_emb, b=b)
-        extra = (
-            "\n\nPer-op PCC vs CPU reference (rows in **forward order**; first LOW pinpoints the stage):\n"
-            + table
-            + "\n\nTip: full message appears above without pytest -s when the assertion fails."
-        )
+        table = _per_op_pcc_report(ref, tt_model, x_t, llm_h, t_emb)
+        extra = "\n\nPer-op PCC (forward order; first LOW = diverging stage):\n" + table
         if _acoustic_debug_pcc_enabled():
             print(extra)
 
@@ -252,11 +239,7 @@ def test_acoustic_semantic_logits_pcc(mesh_device, reset_seeds):
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 @torch.no_grad()
 def test_acoustic_forward_e2e_matches_reference(mesh_device, reset_seeds):
-    """Full ``forward()`` integration: RNG synced; semantic token exact; acoustic codes mostly match.
-
-    TT runs FM decode on device in BF16; CPU reference uses PyTorch matmul—small trajectory drift can
-    flip ``round()`` on a few acoustic bins. Semantic argmax uses the same masked logits shape as ref.
-    """
+    """``forward()`` integration: synced RNG; semantic exact; acoustic codes >= 88% match."""
     model_name_or_path = resolve_voxtral_model_name_or_skip()
     try:
         ref, cfg = _load_reference_model(model_name_or_path)
@@ -392,12 +375,7 @@ def test_acoustic_layer_mlp_pcc(mesh_device, reset_seeds, layer_idx):
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 @torch.no_grad()
 def test_acoustic_all_layers_attention_mlp_pcc(mesh_device, reset_seeds):
-    """Attention + MLP PCC (>= 0.99) for **each** ``AcousticTransformerBlock`` index in ``ref.layers_ids``.
-
-    Same tensor shapes and PCC bar as ``test_acoustic_layer_attention_pcc`` /
-    ``test_acoustic_layer_mlp_pcc``, but loops all layers from config (e.g. 0,1,2). Full velocity
-    stack remains ``test_acoustic_predict_velocity_pcc``.
-    """
+    """Attention + MLP PCC for every FM layer."""
     model_name_or_path = resolve_voxtral_model_name_or_skip()
     try:
         ref, cfg = _load_reference_model(model_name_or_path)

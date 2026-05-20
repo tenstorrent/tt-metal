@@ -30,17 +30,7 @@ def _repeat_kv_ttnn(kv: ttnn.Tensor, repeats: int) -> ttnn.Tensor:
 
 
 class VoxtralTTAttention:
-    """Voxtral attention: TT linear, ``nlp_create_qkv_heads``, optional RoPE, SDPA, output projection.
-
-    **Text / acoustic (default):** GQA, Mistral-style RoPE when ``cos``/``sin`` are non-identity, SDPA
-    non-causal (bidirectional acoustic uses identity cos/sin).
-
-    **Audio tokenizer (opt-in):** set ``is_causal=True`` for causal SDPA; set ``use_qk_norm=True`` to apply
-    per-head RMSNorm on Q/K (checkpoint keys ``{weight_prefix}.q_norm`` / ``k_norm``) before RoPE; pass
-    ``attn_mask`` as a device tensor for explicit masks (mutually exclusive with ``is_causal``).
-    ``attention_mask`` may be a host ``torch.Tensor`` (uploaded once) or a ``ttnn.Tensor``; prefer keyword
-    ``attn_mask`` for device-resident masks.
-    """
+    """GQA attention: fused QKV linear, optional RoPE, SDPA, output proj. Audio tokenizer: ``is_causal``, ``use_qk_norm``, ``attn_mask``."""
 
     def __init__(
         self,
@@ -111,7 +101,6 @@ class VoxtralTTAttention:
         wv = get_weight(f"{weight_prefix}.wv").transpose(-2, -1).contiguous()
         wo = get_weight(f"{weight_prefix}.wo").transpose(-2, -1).contiguous()
 
-        # Fused QKV projection for TT head-creation op.
         wqkv = torch.cat([wq, wk, wv], dim=-1)
 
         self.wqkv = ttnn.from_torch(
@@ -139,7 +128,6 @@ class VoxtralTTAttention:
         attn_mask: ttnn.Tensor | None = None,
         qk_norm_mode: Mode | str | None = None,
     ) -> ttnn.Tensor:
-        # hidden_states: [B, 1, S, H]
         seq_len = hidden_states.shape[-2]
         _qk_mode = self._qk_norm_mode if qk_norm_mode is None else qk_norm_mode
 
@@ -204,7 +192,7 @@ class VoxtralTTAttention:
                 )
                 mask_owned = True
             else:
-                mask_tt = attention_mask  # ttnn.Tensor from legacy positional arg
+                mask_tt = attention_mask
 
         if mask_tt is not None and self.is_causal:
             ttnn.deallocate(q)
@@ -212,7 +200,6 @@ class VoxtralTTAttention:
             ttnn.deallocate(v)
             raise ValueError("is_causal and attn_mask/attention_mask are mutually exclusive.")
 
-        # Text RoPE on device (HF-style cos/sin broadcast [1, 1, S, D] over heads).
         if not identity_rope:
             assert cos is not None and sin is not None
             q_shape = tuple(q.shape)
@@ -263,11 +250,9 @@ class VoxtralTTAttention:
             else:
                 k = k_rot
 
-        # Acoustic: identity cos/sin — q, k unchanged.
         n_rep = self.num_attention_heads // self.num_key_value_heads
         k_rep = _repeat_kv_ttnn(k, n_rep)
         v_rep = _repeat_kv_ttnn(v, n_rep)
-        # When n_rep == 1 (MHA), _repeat_kv_ttnn returns k/v unchanged — do not deallocate before SDPA.
         if n_rep > 1:
             ttnn.deallocate(k)
             ttnn.deallocate(v)

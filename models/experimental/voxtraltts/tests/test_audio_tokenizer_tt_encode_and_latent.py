@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""TT-only paths: multi-codebook MM sum + ``latent_from_codes_tt`` vs CPU references."""
+"""MM codebook sum and ``latent_from_codes_tt`` PCC vs CPU references."""
 
 import pytest
 import torch

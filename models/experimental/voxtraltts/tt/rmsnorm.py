@@ -32,7 +32,6 @@ class VoxtralTTRMSNorm:
         weight_dtype=ttnn.bfloat16,
         weight_cache_path: Path | None = None,
     ) -> None:
-        # models.common.rmsnorm expects "<weight_key>.weight" in state_dict.
         if weight_key in state_dict and f"{weight_key}.weight" not in state_dict:
             state_dict = {**state_dict, f"{weight_key}.weight": state_dict[weight_key]}
 
