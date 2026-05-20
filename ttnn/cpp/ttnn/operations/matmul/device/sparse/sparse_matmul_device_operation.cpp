@@ -72,6 +72,77 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor_b = tensor_args.input_tensors.at(1);
     const auto& sparsity = tensor_args.input_tensors.at(2);
 
+    TT_FATAL(
+        input_tensor_a.storage_type() == ttnn::StorageType::DEVICE &&
+            input_tensor_b.storage_type() == ttnn::StorageType::DEVICE &&
+            sparsity.storage_type() == ttnn::StorageType::DEVICE,
+        "All sparse matmul inputs must be on device");
+    TT_FATAL(
+        input_tensor_a.buffer() != nullptr && input_tensor_b.buffer() != nullptr && sparsity.buffer() != nullptr,
+        "All sparse matmul inputs must be allocated in buffers");
+    TT_FATAL(
+        input_tensor_a.device() == input_tensor_b.device() && input_tensor_a.device() == sparsity.device(),
+        "All sparse matmul inputs must be on the same device");
+    TT_FATAL(
+        input_tensor_a.layout() == ttnn::Layout::TILE && input_tensor_b.layout() == ttnn::Layout::TILE,
+        "Input tensors A and B must be TILE layout");
+    TT_FATAL(
+        is_floating_point(input_tensor_a.dtype()),
+        "Input tensor A must be a floating point type, got {}",
+        input_tensor_a.dtype());
+    TT_FATAL(
+        sparsity.layout() == ttnn::Layout::ROW_MAJOR,
+        "Sparsity tensor must be ROW_MAJOR layout, got {}",
+        sparsity.layout());
+
+    TT_FATAL(
+        operation_attributes.is_input_a_sparse || operation_attributes.is_input_b_sparse,
+        "sparse_matmul requires at least one of is_input_a_sparse or is_input_b_sparse to be true");
+
+    const auto& a_shape = input_tensor_a.logical_shape();
+    const auto& b_shape = input_tensor_b.logical_shape();
+    const auto& sparsity_shape = sparsity.logical_shape();
+
+    TT_FATAL(sparsity_shape.rank() == 4, "sparsity tensor must have rank 4, got {}", sparsity_shape.rank());
+    TT_FATAL(
+        sparsity_shape[-2] == 1,
+        "sparsity shape[-2] must be 1 (expected [..., 1, num_experts]), got {}",
+        sparsity_shape[-2]);
+
+    const uint32_t num_experts = b_shape[1];
+    TT_FATAL(
+        sparsity_shape[-1] == num_experts,
+        "sparsity last dimension ({}) must match num_experts from input B ({})",
+        sparsity_shape[-1],
+        num_experts);
+
+    if (operation_attributes.is_input_a_sparse && operation_attributes.is_input_b_sparse) {
+        TT_FATAL(
+            sparsity_shape[0] == 1 && sparsity_shape[1] == 1 && sparsity_shape[2] == 1,
+            "sparsity shape must be [1, 1, 1, num_experts] when both inputs are sparse, got {}",
+            sparsity_shape);
+    } else if (operation_attributes.is_input_a_sparse) {
+        TT_FATAL(
+            sparsity_shape[0] == 1 && sparsity_shape[1] == 1,
+            "sparsity shape must be [1, 1, A, E] when input A is sparse, got {}",
+            sparsity_shape);
+        TT_FATAL(
+            sparsity_shape[2] == a_shape[0] && sparsity_shape[3] == a_shape[1],
+            "sparsity batch dimensions ({}, {}) must match input A batch dimensions ({}, {})",
+            sparsity_shape[2],
+            sparsity_shape[3],
+            a_shape[0],
+            a_shape[1]);
+    } else {
+        TT_FATAL(
+            sparsity_shape[0] == a_shape[0] && sparsity_shape[1] == a_shape[1],
+            "sparsity batch dimensions ({}, {}) must match input A batch dimensions ({}, {})",
+            sparsity_shape[0],
+            sparsity_shape[1],
+            a_shape[0],
+            a_shape[1]);
+    }
+
     const auto& a_shape_padded = get_matmul_tensor_padded_shape(input_tensor_a, /*transpose=*/false);
     const auto& b_shape_padded = get_matmul_tensor_padded_shape(input_tensor_b, /*transpose=*/false);
     auto in0_tile = get_matmul_tile(input_tensor_a, /*transpose=*/false);
@@ -120,7 +191,9 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
         b_shape_padded,
         in1_tile);
     TT_FATAL(
-        operation_attributes.nnz.value_or(1) > 0, "nnz ({}) must be greater than 0", operation_attributes.nnz.value());
+        operation_attributes.nnz.value_or(1) > 0,
+        "nnz ({}) must be greater than 0",
+        operation_attributes.nnz.value_or(1));
 
     // Check that nnz is less than or equal to the length of all batch dimensions
     uint32_t batch_length_A = 1;
@@ -156,7 +229,7 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         operation_attributes.nnz.value_or(1) <= batch_length,
         "nnz ({}) must be less than or equal to the length of all batch dimensions ({})",
-        operation_attributes.nnz,
+        operation_attributes.nnz.value_or(1),
         batch_length);
 
     // When nnz is supplied, the receiver and compute kernels loop exactly nnz times while the in0 sender
