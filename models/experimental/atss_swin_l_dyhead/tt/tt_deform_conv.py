@@ -47,11 +47,13 @@ def _precompute_base_grid_yx_and_scale(
     """Precompute the constant pieces of the sample-grid construction.
 
     Returns:
-        base_grid_yx: (1, H_out, W_out, 2*kH*kW) with channel order
-            (y_0, x_0, y_1, x_1, ..., y_{K-1}, x_{K-1}), pre-normalized so that
-            final_grid_yx = base_grid_yx + offset_dy_dx * scale_yx
-        scale_yx:    (1, 1, 1, 2*kH*kW), (scale_y, scale_x) interleaved K times,
-                     for normalizing the (dy, dx) offsets to [-1, 1] grid space.
+        base_grid_xy: (1, H_out, W_out, 2*kH*kW) with channel order
+            (x_0, y_0, x_1, y_1, ..., x_{K-1}, y_{K-1}), pre-normalized so that
+            final_grid_xy = base_grid_xy + offset_dx_dy * scale_xy.
+            Stored in (x, y) order to match grid_sample's expectation, avoiding
+            a per-call (y,x)→(x,y) swap (saves 5 ops × 13 DCN calls × 6 blocks).
+        scale_xy:    (1, 1, 1, 2*kH*kW), (scale_x, scale_y) interleaved K times,
+                     for normalizing the (dx, dy) offsets to [-1, 1] grid space.
     """
     sh, sw = stride
     ph, pw = padding
@@ -83,13 +85,13 @@ def _precompute_base_grid_yx_and_scale(
     base_y_norm = base_y_raw * scale_y + bias_y
     base_x_norm = base_x_raw * scale_x + bias_x
 
-    # Stack interleaved (y, x): (H_out, W_out, K, 2) → (H_out, W_out, 2K)
-    base = torch.stack([base_y_norm, base_x_norm], dim=-1).reshape(H_out, W_out, K * 2)
+    # Stack interleaved (x, y): grid_sample expects (x, y) order.
+    base = torch.stack([base_x_norm, base_y_norm], dim=-1).reshape(H_out, W_out, K * 2)
     base = base.unsqueeze(0).contiguous()  # (1, H_out, W_out, 2K)
 
     scale = torch.zeros(K * 2, dtype=torch.float32)
-    scale[0::2] = scale_y
-    scale[1::2] = scale_x
+    scale[0::2] = scale_x
+    scale[1::2] = scale_y
     scale = scale.view(1, 1, 1, K * 2).contiguous()
 
     return base, scale
@@ -208,7 +210,7 @@ class TtDeformConv2dV2:
         """
         Args:
             x_nhwc:      (1, H_in, W_in, C_in) NHWC ttnn — feature map.
-            offset_nhwc: (1, H_out, W_out, 2*K) NHWC ttnn — channels in (dy_0, dx_0, ..., dy_{K-1}, dx_{K-1}) order.
+            offset_nhwc: (1, H_out, W_out, 2*K) NHWC ttnn — channels in (dx_0, dy_0, ..., dx_{K-1}, dy_{K-1}) order.
             mask_nhwc:   (1, H_out, W_out, K)   NHWC ttnn — sigmoided modulation values per kernel cell.
 
         Returns:
@@ -216,31 +218,17 @@ class TtDeformConv2dV2:
         """
         H_out, W_out, K, C_in, C_out = self.H_out, self.W_out, self.K, self.C_in, self.C_out
 
-        # Ensure offset is in ROW_MAJOR layout for downstream grid_sample.
         if offset_nhwc.layout != ttnn.ROW_MAJOR_LAYOUT:
-            offset_nhwc = ttnn.to_layout(offset_nhwc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+            offset_nhwc = ttnn.to_layout(offset_nhwc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        # 1. grid_yx = base_grid + offset * scale  (all interleaved in (y, x) order)
-        off_scaled = ttnn.multiply(offset_nhwc, self.scale, memory_config=ttnn.L1_MEMORY_CONFIG)
-        grid_yx = ttnn.add(self.base_grid, off_scaled, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # grid_xy = base_grid + offset * scale. Both base_grid and offset are in (x, y) interleaved
+        # order matching grid_sample's expectation — no per-call swap needed.
+        off_scaled = ttnn.multiply(offset_nhwc, self.scale, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        grid_xy = ttnn.add(self.base_grid, off_scaled, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(off_scaled)
 
-        # 2. Swap interleaved (y_k, x_k) → (x_k, y_k) so grid_sample sees (x, y) order.
-        grid_5d = ttnn.reshape(grid_yx, (1, H_out, W_out, K, 2))
-        y_comp = ttnn.slice(grid_5d, [0, 0, 0, 0, 0], [1, H_out, W_out, K, 1])
-        x_comp = ttnn.slice(grid_5d, [0, 0, 0, 0, 1], [1, H_out, W_out, K, 2])
-        grid_xy_5d = ttnn.concat([x_comp, y_comp], dim=4)
-        grid_xy = ttnn.reshape(grid_xy_5d, (1, H_out, W_out, 2 * K))
-        ttnn.deallocate(grid_5d)
-        ttnn.deallocate(y_comp)
-        ttnn.deallocate(x_comp)
-        # Ensure grid is ROW_MAJOR for ttnn.grid_sample (it asserts on this).
-        if grid_xy.layout != ttnn.ROW_MAJOR_LAYOUT:
-            grid_xy = ttnn.to_layout(grid_xy, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-
-        # Ensure x is ROW_MAJOR for grid_sample.
         if x_nhwc.layout != ttnn.ROW_MAJOR_LAYOUT:
-            x_nhwc = ttnn.to_layout(x_nhwc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+            x_nhwc = ttnn.to_layout(x_nhwc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         # 3. grid_sample with K-batching → (1, H_out, W_out, C_in*K) channels k-major
         samples = ttnn.grid_sample(

@@ -397,21 +397,17 @@ class TtDyHeadBlockDevice:
         self.mask_dim = self.K  # 9
 
         # spatial_conv_offset weight/bias (256 → 27, 3x3 padding=1)
+        # Permute output channels from (dy,dx) to (dx,dy) order so the offset
+        # matches the base_grid's (x,y) layout — avoids a per-call swap.
         scoff = pt_block.spatial_conv_offset
-        self.so_weight = (
-            ttnn.from_torch(
-                torch.permute(scoff.weight.data, (2, 3, 1, 0))
-                .reshape(self.kH * self.kW * in_channels, scoff.weight.shape[0])
-                .contiguous(),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            if False
-            else self._prep_conv_weight(scoff.weight.data, device)
-        )
-        self.so_bias = self._prep_conv_bias(scoff.bias.data, device)
+        oc_perm = torch.zeros(self.offset_dim + self.mask_dim, dtype=torch.long)
+        for k in range(self.K):
+            oc_perm[2 * k] = 2 * k + 1  # dx first
+            oc_perm[2 * k + 1] = 2 * k  # dy second
+        for k in range(self.K):
+            oc_perm[self.offset_dim + k] = self.offset_dim + k
+        self.so_weight = self._prep_conv_weight(scoff.weight.data[oc_perm], device)
+        self.so_bias = self._prep_conv_bias(scoff.bias.data[oc_perm], device)
         self.so_out = scoff.weight.shape[0]  # 27
 
         # spatial_conv_{mid, low, high} — one TtDeformConv2dV2 per (level, role)
