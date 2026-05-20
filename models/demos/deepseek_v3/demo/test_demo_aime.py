@@ -47,6 +47,38 @@ def _load_prompt_items(path: Path) -> list[dict]:
     return items
 
 
+def _repeat_prompt_items(prompt_items: list[dict], repeat_count: int) -> list[dict]:
+    if repeat_count < 1:
+        pytest.fail(f"AIME repeat_count must be >= 1, got {repeat_count}")
+    if repeat_count == 1:
+        return prompt_items
+
+    repeated_items = []
+    for repeat_index in range(1, repeat_count + 1):
+        for source_index, item in enumerate(prompt_items, start=1):
+            repeated_items.append(
+                {
+                    **item,
+                    "repeat_index": repeat_index,
+                    "repeat_source_index": source_index,
+                }
+            )
+    return repeated_items
+
+
+def _score_artifact_path(case_id: str) -> Path:
+    return ARTIFACT_DIR / f"{case_id}_score.json"
+
+
+def _clear_score_artifact(case_id: str) -> None:
+    if not _is_primary_artifact_writer():
+        return
+    try:
+        _score_artifact_path(case_id).unlink()
+    except FileNotFoundError:
+        pass
+
+
 def _score_generations(prompt_items: list[dict], generations: list[dict]) -> tuple[list[dict], dict]:
     rows = []
     for idx, (item, generation) in enumerate(zip(prompt_items, generations), start=1):
@@ -54,18 +86,20 @@ def _score_generations(prompt_items: list[dict], generations: list[dict]) -> tup
         result = score_aime24(item["doc"], text)
         predicted = extract_aime_boxed_integer(text)
         target = normalize_aime_integer(item["doc"].get("answer"))
-        rows.append(
-            {
-                "index": idx,
-                "aime_id": item["doc"].get("id"),
-                "target": target,
-                "predicted": predicted,
-                "correct": bool(result["exact_match"]),
-                "no_boxed": bool(result["no_boxed"]),
-                "boxed_wrong": bool(result["boxed_wrong"]),
-                "generated_tokens": len(generation.get("tokens", [])),
-            }
-        )
+        row = {
+            "index": idx,
+            "aime_id": item["doc"].get("id"),
+            "target": target,
+            "predicted": predicted,
+            "correct": bool(result["exact_match"]),
+            "no_boxed": bool(result["no_boxed"]),
+            "boxed_wrong": bool(result["boxed_wrong"]),
+            "generated_tokens": len(generation.get("tokens", [])),
+        }
+        if "repeat_index" in item:
+            row["repeat_index"] = item["repeat_index"]
+            row["repeat_source_index"] = item["repeat_source_index"]
+        rows.append(row)
 
     summary = {
         "correct": sum(1 for row in rows if row["correct"]),
@@ -73,28 +107,35 @@ def _score_generations(prompt_items: list[dict], generations: list[dict]) -> tup
         "boxed_wrong": sum(1 for row in rows if row["boxed_wrong"]),
         "total": len(rows),
     }
+    summary["correct_pct"] = 100.0 * summary["correct"] / summary["total"]
+    summary["no_boxed_pct"] = 100.0 * summary["no_boxed"] / summary["total"]
+    summary["boxed_wrong_pct"] = 100.0 * summary["boxed_wrong"] / summary["total"]
     return rows, summary
 
 
 def _print_and_write_summary(case_id: str, rows: list[dict], summary: dict) -> None:
     lines = [
         (
-            f"AIME24 {case_id}: {summary['correct']}/{summary['total']} correct, "
+            f"AIME24 {case_id}: {summary['correct']}/{summary['total']} correct "
+            f"({summary['correct_pct']:.1f}%), "
             f"{summary['no_boxed']}/{summary['total']} no-boxed, "
             f"{summary['boxed_wrong']}/{summary['total']} boxed-wrong"
         )
     ]
     for row in rows:
+        repeat = ""
+        if "repeat_index" in row:
+            repeat = " repeat={repeat_index} repeat_source={repeat_source_index}".format(**row)
         lines.append(
-            "  index={index} aime_id={aime_id} target={target} predicted={predicted} "
-            "tokens={generated_tokens} correct={correct} no_boxed={no_boxed}".format(**row)
+            "  index={index}{repeat} aime_id={aime_id} target={target} predicted={predicted} "
+            "tokens={generated_tokens} correct={correct} no_boxed={no_boxed}".format(repeat=repeat, **row)
         )
     print("\n" + "\n".join(lines))
 
     if _is_primary_artifact_writer():
         ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
         payload = {"case": case_id, "summary": summary, "rows": rows}
-        (ARTIFACT_DIR / f"{case_id}_score.json").write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        _score_artifact_path(case_id).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
 @pytest.mark.parametrize(
@@ -107,7 +148,8 @@ def _print_and_write_summary(case_id: str, rows: list[dict], summary: dict) -> N
                 "max_new_tokens": 8000,
                 "max_seq_len": 8192,
                 "max_users_per_row": 8,
-                "min_correct": _env_int("DEEPSEEK_AIME_FAST_MIN_CORRECT", 3),
+                "repeat_count": _env_int("DEEPSEEK_AIME_FAST_REPEAT_COUNT", 6),
+                "min_correct": _env_int("DEEPSEEK_AIME_FAST_MIN_CORRECT", 29),
             },
             id="quad_aime_fast",
             marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(3600)],
@@ -128,7 +170,9 @@ def _print_and_write_summary(case_id: str, rows: list[dict], summary: dict) -> N
 )
 def test_demo_aime24(case: dict):
     prompt_items = _load_prompt_items(Path(case["prompts_file"]))
+    prompt_items = _repeat_prompt_items(prompt_items, case.get("repeat_count", 1))
     prompts = [item["prompt"] for item in prompt_items]
+    _clear_score_artifact(case["id"])
 
     run_kwargs = {
         "prompts": prompts,
@@ -156,8 +200,15 @@ def test_demo_aime24(case: dict):
     rows, summary = _score_generations(prompt_items, generations)
     _print_and_write_summary(case["id"], rows, summary)
 
-    assert summary["correct"] >= case["min_correct"], (
-        f"AIME24 {case['id']} regression: {summary['correct']}/{summary['total']} correct, "
-        f"expected >= {case['min_correct']}; no_boxed={summary['no_boxed']}, "
-        f"boxed_wrong={summary['boxed_wrong']}"
-    )
+    if "min_correct_pct" in case:
+        assert summary["correct_pct"] >= case["min_correct_pct"], (
+            f"AIME24 {case['id']} regression: {summary['correct']}/{summary['total']} correct "
+            f"({summary['correct_pct']:.1f}%), expected >= {case['min_correct_pct']:.1f}%; "
+            f"no_boxed={summary['no_boxed']}, boxed_wrong={summary['boxed_wrong']}"
+        )
+    else:
+        assert summary["correct"] >= case["min_correct"], (
+            f"AIME24 {case['id']} regression: {summary['correct']}/{summary['total']} correct, "
+            f"expected >= {case['min_correct']}; no_boxed={summary['no_boxed']}, "
+            f"boxed_wrong={summary['boxed_wrong']}"
+        )
