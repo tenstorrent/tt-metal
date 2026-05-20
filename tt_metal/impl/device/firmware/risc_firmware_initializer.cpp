@@ -168,8 +168,7 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
         for (tt::ChipId device_id : device_ids) {
             ClearNocData(descriptor_->env_impl(), device_id);
             // Wait for base FW to finish its eth_init() on all idle ETH cores before
-            // asserting reset (otherwise we kill it mid-init). Note: postcode is read via the
-            // active-eth HAL slot — on BH the layout matches for both active and idle cores.
+            // asserting reset (otherwise we could kill it mid-init)
             for (const auto& eth_core : this->get_control_plane_().get_inactive_ethernet_cores(device_id)) {
                 CoreCoord virtual_core =
                     cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
@@ -751,10 +750,14 @@ void RiscFirmwareInitializer::disable_eth_interrupts(tt::ChipId device_id, const
 
 bool RiscFirmwareInitializer::wait_for_eth_fw_ready(
     tt::ChipId device_id, const CoreCoord& virtual_core, int timeout_ms) {
-    if (cluster_.arch() != ARCH::BLACKHOLE) {
+    // skip for Non-BH archs and simulation (which has no base FW running)
+    if (cluster_.arch() != ARCH::BLACKHOLE || rtoptions_.get_simulator_enabled()) {
         return true;
     }
     constexpr auto k_sleep_time = std::chrono::microseconds{100};
+    // Note: get_eth_fw_mailbox_val is hardcoded to the ACTIVE_ETH HAL slot, but we call this
+    // for idle eth cores too. Works because active and idle eth share the same underlying
+    // memory map.
     const uint32_t postcode_addr = hal_.get_eth_fw_mailbox_val(FWMailboxMsg::POSTCODE);
 
     const auto start_time = std::chrono::steady_clock::now();
@@ -1118,15 +1121,10 @@ void RiscFirmwareInitializer::initialize_firmware(
                 cluster_.write_core(data.data(), data.size(), tt_cxy_pair(device_id, virtual_core), ncrisc_halt_addr);
             }
 
-            // Disable ERISC interrupts: base FW interrupts can corrupt PC when we switch to runtime FW.
-            //   - For idle ERISCs, must happen before we write PC and deassert.
-            //   - For active ERISCs, safer if it's done before we switch from base FW to runtime FW.
-            // Ordering: must use write_reg (UC TLB) for both this and fw_launch_addr below — write_core
-            // (WC TLB) can coalesce and re-open the race.
-            // Only applicable to BH; on other archs num_interrupt_vecs is 0.
-
             if (hal_.get_eth_fw_is_cooperative() || core_type != HalProgrammableCoreType::ACTIVE_ETH ||
                 !rtoptions_.get_enable_2_erisc_mode()) {
+                // Disable all ERISC interrupts on idle eth: base FW interrupts can corrupt PC when we switch to runtime
+                // FW. This must happen before we write PC and deassert
                 disable_eth_interrupts(device_id, virtual_core);
                 cluster_.write_reg(
                     &jit_build_config.fw_launch_addr_value,

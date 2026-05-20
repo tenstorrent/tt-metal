@@ -300,7 +300,7 @@ void print_aerisc_training_status(tt::ChipId device_id, const CoreCoord& virtual
         return v;
     };
 
-    // Bracket all reads with heartbeat samples to detect whether base FW is alive during the dump.
+    // Bracket all reads with heartbeat samples to detect whether base FW is alive during the dump
     const auto heartbeat_addr = hal.get_eth_fw_mailbox_val(tt::tt_metal::FWMailboxMsg::HEARTBEAT);
     const uint32_t heartbeat_start = read_u32(heartbeat_addr);
 

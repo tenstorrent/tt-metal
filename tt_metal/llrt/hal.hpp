@@ -128,7 +128,7 @@ enum class FWMailboxMsg : uint8_t {
 };
 
 // Hardware debug registers on active ethernet cores.
-// Populated only on archs that expose them (currently BH); callers must check
+// Populated only on archs that expose them (currently BH) - callers must check
 // Hal::get_supports_eth_debug_regs() before reading addresses.
 enum class EthDebugReg : uint8_t {
     // PCS status register
@@ -468,7 +468,7 @@ public:
     uint32_t get_remapper_pair_stride() const { return remapper_pair_stride_; }
     uint32_t get_remapper_num_pairs() const { return remapper_num_pairs_; }
 
-    // Base address of ETH RISC interrupt mode registers; 0 if not supported on this arch.
+    // Base address of ETH RISC interrupt mode registers. Returns 0 if not supported on an arch
     uint32_t get_eth_interrupt_mode_base_reg() const { return eth_interrupt_mode_base_reg_; }
     uint32_t get_eth_interrupt_num_vecs() const { return eth_interrupt_num_vecs_; }
 

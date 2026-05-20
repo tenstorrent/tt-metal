@@ -382,8 +382,13 @@ void Hal::initialize_bh(
             ((addr >= NOC1_REGS_START_ADDR) && (addr < NOC1_REGS_START_ADDR + 0x1000)) ||
             (addr == RISCV_DEBUG_REG_SOFT_RESET_0) ||
             (addr == IERISC_RESET_PC ||
-             addr == SUBORDINATE_IERISC_RESET_PC) ||  // used to program start addr for eth FW
-            (addr == DRISC_RESET_PC));                // used to program start addr for DRAM FW
+             addr == SUBORDINATE_IERISC_RESET_PC) ||                // used to program start addr for eth FW
+            (addr == DRISC_RESET_PC) ||                             // used to program start addr for DRAM FW
+            (addr == ETH_CORE_A_ETH_CTRL_A_PCS_STATUS_REG_ADDR) ||  // read for active-eth timeout debug
+            // ERISC interrupt registers, written by host to disable base FW interrupts
+            // before switching to runtime FW (see RiscFirmwareInitializer::disable_eth_interrupts).
+            ((addr >= ETH_RISC_CTRL_A_INTERRUPT_MODE_0__REG_ADDR) &&
+             (addr < ETH_RISC_CTRL_A_INTERRUPT_MODE_0__REG_ADDR + 4 * ETH_RISC_NUM_INTERRUPT_VECS)));
     };
     // NOLINTEND(misc-redundant-expression)
 
