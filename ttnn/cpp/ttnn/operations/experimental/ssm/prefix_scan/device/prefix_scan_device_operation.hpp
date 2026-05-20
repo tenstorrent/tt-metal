@@ -7,8 +7,11 @@
 #include <optional>
 #include <variant>
 
+#include <tt-metalium/base_types.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/tensor/memory_config/memory_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 #include "prefix_scan_program_factory.hpp"
 
 #include "prefix_scan_device_operation_types.hpp"
