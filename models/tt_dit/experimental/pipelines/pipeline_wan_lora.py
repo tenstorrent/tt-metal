@@ -37,11 +37,7 @@ LoRAArg = Union[LoRASpec, str, Iterable[Union[LoRASpec, str]], None]
 
 
 def normalize_lora_arg(arg: LoRAArg) -> List[LoRASpec]:
-    """Coerce a LoRA constructor argument into a list of :class:`LoRASpec`.
-
-    Accepts None, a bare path string (scale defaults to 1.0), a single
-    LoRASpec, or any iterable mixing the two. Returns an empty list for None.
-    """
+    """Coerce None / str / LoRASpec / iterable-of-either into a List[LoRASpec]."""
     if arg is None:
         return []
     if isinstance(arg, LoRASpec):
@@ -129,13 +125,10 @@ def fuse_lora_state_dict(
 ) -> Dict[str, torch.Tensor]:
     """Return a new state dict with LoRA deltas fused into ``base_state_dict``.
 
-    Computes ``W_fused = W + scale * B @ A`` for each rank-r low-rank pair and
-    adds direct deltas for ``.diff`` / ``.diff_b`` keys. ``base_state_dict``
-    is not mutated; modified entries are fresh tensors so the caller can
-    chain fusions safely.
-
-    Raises:
-        KeyError: a LoRA low-rank pair is missing one half.
+    The base dict is not mutated; entries that were touched are fresh tensors
+    so the caller can chain fusions across a stack safely. See
+    ``experimental/models/Wan2_2_LoRA.md`` for the supported adapter key
+    formats. Raises ``KeyError`` when a low-rank pair is missing one half.
     """
     pairs: Dict[str, Dict[str, torch.Tensor]] = {}
     direct_deltas: List[Tuple[str, str, torch.Tensor]] = []  # (base_path, suffix, tensor)
@@ -159,7 +152,7 @@ def fuse_lora_state_dict(
 
     if skipped_unknown:
         logger.warning(
-            f"LoRA fusion: {len(skipped_unknown)} unrecognized key suffixes ignored " f"(first: {skipped_unknown[0]})"
+            f"LoRA fusion: {len(skipped_unknown)} unrecognized keys ignored. " f"Examples: {skipped_unknown[:5]}"
         )
 
     fused = dict(base_state_dict)
@@ -201,10 +194,9 @@ def fuse_lora_state_dict(
         applied_direct += 1
 
     if skipped_unmapped:
-        sample = skipped_unmapped[:5]
         logger.warning(
-            f"LoRA fusion: {len(skipped_unmapped)} adapter targets not present in base model; "
-            f"skipped. Examples: {sample}"
+            f"LoRA fusion: {len(skipped_unmapped)} adapter targets not present in base; skipped. "
+            f"Examples: {skipped_unmapped[:5]}"
         )
 
     logger.info(f"Fused {applied_pairs} low-rank pairs and {applied_direct} direct deltas (scale={scale})")
@@ -262,11 +254,7 @@ def verify_fusion_changed_weights(
 
 
 def _lora_stack_cache_namespace(specs_by_expert: Dict[int, List[LoRASpec]]) -> str:
-    """Stable short hash so distinct LoRA stacks cache separately on disk.
-
-    Hashes ordered ``(resolved_path, scale)`` tuples per expert index. Two
-    stacks with the same files in different order get different namespaces.
-    """
+    """Hash ordered ``(resolved_path, scale)`` per expert so distinct stacks cache separately."""
     h = hashlib.sha1()
     for idx in sorted(specs_by_expert.keys()):
         h.update(f"expert_{idx}\x00".encode())
@@ -330,7 +318,7 @@ class WanPipelineI2VLora(WanPipelineI2V):
             lora_sd = load_file(str(spec.path))
             if not _has_lora_keys(lora_sd):
                 raise RuntimeError(
-                    f"No LoRA-style keys (lora_A/lora_B, lora_down/lora_up, diff/diff_b) " f"found in {spec.path}"
+                    f"No LoRA-style keys (lora_A/lora_B, lora_down/lora_up, diff/diff_b) found in {spec.path}"
                 )
             fused_sd = fuse_lora_state_dict(fused_sd, lora_sd, scale=spec.scale)
 
