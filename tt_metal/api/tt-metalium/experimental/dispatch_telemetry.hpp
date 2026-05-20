@@ -7,6 +7,7 @@
 #include <optional>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/dispatch_telemetry_types.hpp>
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 class IDevice;

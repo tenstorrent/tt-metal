@@ -46,9 +46,16 @@ template <typename T>
 FORCE_INLINE volatile tt_l1_ptr T* write_to_l1(uint32_t dst_addr, const T& src_object) {
     static_assert(sizeof(T) % sizeof(uint32_t) == 0);
     auto* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_addr);
-    const auto* src = reinterpret_cast<const uint32_t*>(&src_object);
+
+    // Casting to uint8_t* instead of uint32_t* to avoid undefined behavior
+    const auto* src = reinterpret_cast<const uint8_t*>(&src_object);
     for (uint32_t i = 0; i < sizeof(T) / sizeof(uint32_t); ++i) {
-        dst[i] = src[i];
+        uint32_t word = 0;
+        auto* word_bytes = reinterpret_cast<uint8_t*>(&word);
+        for (uint32_t byte = 0; byte < sizeof(uint32_t); ++byte) {
+            word_bytes[byte] = src[i * sizeof(uint32_t) + byte];
+        }
+        dst[i] = word;
     }
     return reinterpret_cast<volatile tt_l1_ptr T*>(dst_addr);
 }

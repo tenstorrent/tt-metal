@@ -1029,7 +1029,9 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Disable dispatch telemetry.
         // Default: false (dispatch telemetry enabled)
         // Usage: export TT_METAL_DISPATCH_TELEMETRY_DISABLE=1
-        case EnvVarID::TT_METAL_DISPATCH_TELEMETRY_DISABLE: this->dispatch_telemetry_disabled = true; break;
+        case EnvVarID::TT_METAL_DISPATCH_TELEMETRY_DISABLE:
+            this->dispatch_telemetry_disabled = is_env_enabled(value);
+            break;
 
         // ========================================
         // WATCHER SYSTEM

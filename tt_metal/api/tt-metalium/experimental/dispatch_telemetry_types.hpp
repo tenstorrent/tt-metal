@@ -7,19 +7,23 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-namespace {
+
+namespace tt::tt_metal {
+namespace detail {
+
 constexpr uint32_t pack(const char (&s)[5]) {
     return (uint32_t(s[0]) << 24) | (uint32_t(s[1]) << 16) | (uint32_t(s[2]) << 8) | (uint32_t(s[3]));
 }
-}  // namespace
-namespace tt::tt_metal {
+
+}  // namespace detail
+
 /**
  * @brief Expected signature for validating that a telemetry buffer contains dispatch telemetry data.
  */
-constexpr uint32_t DISPATCH_TELEMETRY_SIGNATURE = pack("DISP");
+constexpr uint32_t DISPATCH_TELEMETRY_SIGNATURE = detail::pack("DISP");
 constexpr uint32_t DISPATCH_TELEMETRY_VERSION = 1;
 
-constexpr uint32_t PREFETCH_TELEMETRY_SIGNATURE = pack("PREF");
+constexpr uint32_t PREFETCH_TELEMETRY_SIGNATURE = detail::pack("PREF");
 constexpr uint32_t PREFETCH_TELEMETRY_VERSION = 1;
 
 // Used to invalidate the telemetry buffer

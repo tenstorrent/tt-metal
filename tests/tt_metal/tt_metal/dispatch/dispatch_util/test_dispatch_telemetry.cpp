@@ -13,6 +13,7 @@
 #include "command_queue_fixture.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/dispatch/command_queue_common.hpp"
+#include "impl/dispatch/dispatch_mem_map.hpp"
 
 namespace tt::tt_metal {
 namespace {
