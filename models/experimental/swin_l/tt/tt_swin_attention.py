@@ -11,55 +11,60 @@ import ttnn
 
 
 def roll(tensor, shifts, dims):
-    """Cyclic shift via slice + concat (same as Swin-S)."""
+    """Cyclic shift — uses native ttnn.roll (single op), with a slice+concat fallback."""
     if isinstance(shifts, int):
-        shifts = (shifts,)
+        shifts = [shifts]
     if isinstance(dims, int):
-        dims = (dims,)
+        dims = [dims]
+    shifts = list(shifts)
+    dims = list(dims)
 
-    result = tensor
-    shape = result.shape
-    num_dims = len(shape)
-
-    for shift, dim in zip(shifts, dims):
-        shift %= shape[dim]
-        if shift == 0:
-            continue
-
-        start_left = [0] * num_dims
-        end_left = list(shape)
-        start_right = [0] * num_dims
-        end_right = list(shape)
-        start_left[dim] = shape[dim] - shift
-        end_right[dim] = shape[dim] - shift
-
-        left_part = ttnn.slice(result, slice_start=start_left, slice_end=end_left, slice_step=[1] * num_dims)
-        right_part = ttnn.slice(result, slice_start=start_right, slice_end=end_right, slice_step=[1] * num_dims)
-        result = ttnn.concat([left_part, right_part], dim)
-        ttnn.deallocate(left_part)
-        ttnn.deallocate(right_part)
-    return result
+    shape = tensor.shape
+    # Drop zero shifts to keep the call minimal.
+    filtered = [(s % shape[d], d) for s, d in zip(shifts, dims) if (s % shape[d]) != 0]
+    if not filtered:
+        return tensor
+    nz_shifts = [s for s, _ in filtered]
+    nz_dims = [d for _, d in filtered]
+    return ttnn.roll(tensor, shifts=nz_shifts, dim=nz_dims)
 
 
 class TtSwinAttention:
     """Shifted window multi-head self-attention (TTNN)."""
 
     def __init__(self, device, parameters, dim, window_size, shift_size, num_heads, attn_mask=None):
+        import torch
+
         self.device = device
-        self.parameters = parameters
+        self.parameters = dict(parameters)  # shallow copy so we can replace qkv weights
         self.dim = dim
         self.window_size = list(window_size) if not isinstance(window_size, list) else window_size
         self.shift_size = list(shift_size) if not isinstance(shift_size, list) else shift_size
         self.num_heads = num_heads
         self.attn_mask = attn_mask
 
+        # Pre-scale the Q rows of qkv.weight (and qkv.bias) by 1/sqrt(head_dim) so we don't
+        # need a per-call `q *= scale` pass on the full (B*nW, H, S, D) tensor.
+        head_dim = dim // num_heads
+        scale = head_dim**-0.5
+        qkv_w = ttnn.to_torch(parameters["qkv"]["weight"]).float()  # (C, 3C) in linear-ready form
+        qkv_b = ttnn.to_torch(parameters["qkv"]["bias"]).float()  # (1, 3C)
+        qkv_w[:, :dim] *= scale
+        qkv_b[:, :dim] *= scale
+        self.parameters["qkv"] = {
+            "weight": ttnn.from_torch(
+                qkv_w.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            ),
+            "bias": ttnn.from_torch(
+                qkv_b.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            ),
+        }
+
         # For shift!=0 layers, pre-combine rel_pos_bias + window_mask on host into a
         # single (nW, num_heads, N, N) bias so __call__ does a single add (instead of
         # two adds with broadcast). For shift==0 layers we keep rpb as-is.
         rpb = parameters["relative_position_bias"]  # (1, num_heads, N, N) TILE bf16 on device
         if attn_mask is not None and sum(self.shift_size) > 0:
-            import torch
-
             rpb_t = ttnn.to_torch(rpb).float()  # (1, H, N, N)
             mask_t = ttnn.to_torch(attn_mask).float()  # 5D, last two dims are (N, N)
             N = mask_t.shape[-1]
@@ -128,10 +133,7 @@ class TtSwinAttention:
         )
         ttnn.deallocate(qkv)
 
-        # Pre-scale Q before matmul (no separate scalar mul on the bigger attn tensor).
-        scale = head_dim**-0.5
-        q = ttnn.multiply(q, scale, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
+        # Q rows of qkv weight are already pre-scaled in __init__, so no runtime scale here.
         attn = ttnn.matmul(
             q,
             k_t,
