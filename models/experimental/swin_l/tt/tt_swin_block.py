@@ -21,6 +21,14 @@ class TtSwinBlock:
             device, parameters["attn"], dim, window_size, shift_size, num_heads, attn_mask=attn_mask
         )
         self.mlp = TtSwinMLP(device, parameters["mlp"], dim, mlp_ratio=mlp_ratio)
+        # Match ViT's LN compute config: HiFi2 + math_approx + packer L1 acc — faster than
+        # the default while staying numerically adequate for pre-norm transformer blocks.
+        self._ln_compute_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
 
     def __call__(self, input_tensor):
         # LN1 -> Attention
@@ -30,6 +38,7 @@ class TtSwinBlock:
                 weight=self.parameters["norm1"]["weight"],
                 bias=self.parameters["norm1"]["bias"],
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self._ln_compute_config,
             )
         )
         output = input_tensor + attn_out
@@ -42,6 +51,7 @@ class TtSwinBlock:
                 weight=self.parameters["norm2"]["weight"],
                 bias=self.parameters["norm2"]["bias"],
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self._ln_compute_config,
             )
         )
         result = output + mlp_out
