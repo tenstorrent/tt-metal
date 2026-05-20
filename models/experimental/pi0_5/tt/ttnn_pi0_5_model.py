@@ -23,7 +23,41 @@ from models.experimental.pi0_5.common.configs import (
     SuffixConfig,
 )
 from models.experimental.pi0_5.common.weight_loader import Pi0_5WeightLoader as PI0WeightLoader
+from models.experimental.pi0_5.tt.ttnn_common import denoise_loop_fp32
 from models.experimental.pi0_5.tt.ttnn_prefix import PrefixEmbeddingTTNN
+from models.experimental.pi0_5.reference.torch_siglip_hf import use_hf_siglip
+
+
+def use_upstream_masks() -> bool:
+    """`PI0_UPSTREAM_MASKS=1` (or implicitly when PI0_SIGLIP_HF=1) -> plumb
+    cumsum-based position_ids and a logical-pad attention mask through VLM and
+    expert. Decoupling from PI0_SIGLIP_HF lets us A/B test the device-side
+    ttnn_siglip with HF-compatible mask handling, isolating the SigLIP
+    semantic gap from the mask/RoPE plumbing gap.
+    """
+    import os as _os
+
+    return use_hf_siglip() or _os.environ.get("PI0_UPSTREAM_MASKS", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _precompute_rope_table_torch(head_dim: int, max_seq_len: int, base: float = 10000.0):
+    """Host-side RoPE table in TTNN split-half format.
+
+    Mirrors precompute_freqs_cis_meta_format in ttnn_gemma.py — values are
+    repeated as [c0, c1, ..., c_{n/2-1}, c0, c1, ..., c_{n/2-1}] so that
+    ttnn.experimental.rotary_embedding's split-half rotation pairs x[i] with
+    x[i+dim/2] correctly. Returns (cos, sin) each shaped [max_seq_len, head_dim].
+    """
+    half = head_dim // 2
+    freqs = 1.0 / (base ** (torch.arange(0, head_dim, 2, dtype=torch.float32) / head_dim))
+    t = torch.arange(max_seq_len, dtype=torch.float32)
+    fo = torch.outer(t, freqs)
+    cos = torch.cos(fo)
+    sin = torch.sin(fo)
+    return torch.cat([cos, cos], dim=-1), torch.cat([sin, sin], dim=-1)
+
+
+_MASK_VAL = -1e4  # finite large-negative; exp(-1e4)=0 in bf16, no NaN
 
 from models.experimental.pi0_5.common.configs import Pi0_5ModelConfig
 from models.experimental.pi0_5.tt.ttnn_suffix import (
@@ -84,6 +118,18 @@ class Pi0_5ModelTTNN:
         # docstring for the finite-mask hybrid rationale.
         self._sdpa_attn_mask: Optional["ttnn.Tensor"] = None
         self._sdpa_mask_kv_len: int = 0
+        # Upstream-compat artifact cache (mask + RoPE tables for the
+        # PI0_UPSTREAM_MASKS=1 / PI0_SIGLIP_HF=1 path). Two usage modes:
+        # (1) auto: sample_actions builds + caches on first call (keyed by
+        #     img_mask_tuple, lang_real_count, prefix_len) — costs a
+        #     device sync on subsequent calls to verify the key still matches.
+        # (2) explicit pre-stage via prepare_upstream_artifacts() — caller
+        #     takes responsibility for the key match. sample_actions uses
+        #     the cached artifacts WITHOUT ANY coercion/sync, so the call
+        #     stays trace-capture-safe.
+        self._cached_upstream_artifacts = None  # type: Optional[dict]
+        self._cached_upstream_key = None  # type: Optional[tuple]
+        self._upstream_artifacts_explicit = False
 
     def _precompute_bs1_timestep_tensors(self) -> None:
         num_steps = self.denoise_config.num_steps
@@ -251,6 +297,188 @@ class Pi0_5ModelTTNN:
                 )
             )
 
+    @staticmethod
+    def _coerce_upstream_masks(img_masks, lang_masks):
+        """Normalize img_masks (list of torch/ttnn/scalar) and lang_masks
+        (torch/ttnn/numpy) into torch bool tensors suitable for the host
+        artifact builder. Shared by `sample_actions` and
+        `prepare_upstream_artifacts` so both follow the exact same coercion
+        rules and produce the same cache key.
+        """
+
+        def _img(m):
+            if isinstance(m, torch.Tensor):
+                return m
+            if isinstance(m, ttnn.Tensor):
+                return ttnn.to_torch(m).to(torch.bool).view(-1)
+            return torch.tensor([bool(m)])
+
+        ims = [_img(m) for m in img_masks]
+        if isinstance(lang_masks, ttnn.Tensor):
+            lm = ttnn.to_torch(lang_masks).to(torch.bool)
+        elif isinstance(lang_masks, torch.Tensor):
+            lm = lang_masks.to(torch.bool)
+        else:
+            lm = torch.from_numpy(lang_masks).to(torch.bool)
+        if lm.dim() == 1:
+            lm = lm.unsqueeze(0)
+        return ims, lm
+
+    @staticmethod
+    def _upstream_cache_key(img_masks, lang_masks, prefix_len: int):
+        """Stable hashable key over the inputs that determine the upstream
+        mask + RoPE artifacts. img_masks reduce to per-image True/False;
+        lang_masks reduce to a single "real token count". Anything else
+        (per-image embedding values, lang_token IDs themselves) does NOT
+        affect the artifacts, so we ignore it.
+        """
+        img_present = tuple(bool(m.any().item()) for m in img_masks)
+        lang_real = int(lang_masks.sum().item())
+        return (img_present, lang_real, int(prefix_len))
+
+    def prepare_upstream_artifacts(self, img_masks, lang_masks, prefix_len: int) -> None:
+        """Pre-stage the upstream-compat mask + RoPE tensors onto the model
+        so a subsequent `sample_actions` call performs zero host→device
+        transfers (required to capture the call inside a `ttnn` trace).
+
+        Idempotent: skips rebuilding if the cache key matches the prior
+        prepare. Call this BEFORE `ttnn.begin_trace_capture(...)`. Marks
+        the cache as 'explicit' so sample_actions bypasses its own
+        coerce+key-check path (which would otherwise sync the device).
+        """
+        ims, lm = self._coerce_upstream_masks(img_masks, lang_masks)
+        key = self._upstream_cache_key(ims, lm, prefix_len)
+        if self._cached_upstream_artifacts is None or self._cached_upstream_key != key:
+            self._cached_upstream_artifacts = self._build_upstream_attn_artifacts(ims, lm, prefix_len=prefix_len)
+            self._cached_upstream_key = key
+        self._upstream_artifacts_explicit = True
+
+    def _build_upstream_attn_artifacts(
+        self,
+        img_masks: List[torch.Tensor],
+        lang_masks: torch.Tensor,
+        prefix_len: int,
+    ):
+        """Build all the upstream-openpi-compat tensors that the default TTNN
+        path skips: VLM prefix attention mask, prefix RoPE table at
+        cumsum(pad)-1 positions, expert cross-attention mask (full pad
+        masking, not just tile-overhang), and suffix RoPE table at the
+        prefix-offset start position.
+
+        Built on host (torch), uploaded as ttnn bf16 TILE. Returns a dict of
+        ttnn tensors. Sample_actions feeds these into forward_vlm /
+        forward_expert when PI0_SIGLIP_HF=1.
+
+        Args:
+            img_masks: per-image torch bool tensors, each (1,) — True if the
+                image is real, False for masked-out slots (e.g., right_wrist).
+            lang_masks: torch bool tensor (1, lang_seq_len) — True for real
+                language tokens, False for padding.
+            prefix_len: total prefix length (sum of num_image_tokens per image
+                + lang_seq_len). Must match prefix_embs.shape[1].
+
+        Returns:
+            dict with keys:
+              - prefix_attn_mask:   (1, 1, prefix_padded, prefix_padded) ttnn bf16
+              - prefix_cos / prefix_sin: (1, 1, prefix_padded, vlm_head_dim) ttnn bf16
+              - expert_attn_mask:   (1, 1, suffix_padded, prefix_padded + suffix_padded) ttnn bf16
+              - suffix_cos / suffix_sin: (1, 1, suffix_padded, expert_head_dim) ttnn bf16
+        """
+        num_image_tokens = self.config.siglip_config.num_patches
+        action_horizon = self.config.action_horizon
+        suffix_padded = ((action_horizon + 31) // 32) * 32
+        prefix_padded = ((prefix_len + 31) // 32) * 32
+        vlm_head_dim = self.config.vlm_config.head_dim
+        expert_head_dim = self.config.expert_config.head_dim
+        max_seq_len = self.config.max_seq_len
+
+        # ---- 1) Build a 1D prefix pad_mask (prefix_len,) on host ----
+        pad_segments = []
+        for m in img_masks:
+            real = bool(m.item()) if m.numel() == 1 else bool(m[0].item())
+            pad_segments.append(torch.full((num_image_tokens,), real, dtype=torch.bool))
+        # lang_masks: shape (1, lang_seq_len) bool
+        pad_segments.append(lang_masks[0].to(torch.bool))
+        pad_mask = torch.cat(pad_segments, dim=0)  # (prefix_len,)
+        assert pad_mask.shape[0] == prefix_len, (pad_mask.shape, prefix_len)
+
+        prefix_real_count = int(pad_mask.sum().item())  # for suffix offset
+
+        # ---- 2) Prefix attention mask (additive bf16) ----
+        # Both ends of attention must be real (bidirectional within prefix).
+        pad_2d = pad_mask[:, None] & pad_mask[None, :]
+        prefix_mask = torch.zeros(prefix_padded, prefix_padded, dtype=torch.bfloat16)
+        prefix_mask[:prefix_len, :prefix_len].masked_fill_(~pad_2d, _MASK_VAL)
+        if prefix_padded > prefix_len:
+            prefix_mask[prefix_len:, :] = _MASK_VAL
+            prefix_mask[:, prefix_len:] = _MASK_VAL
+        prefix_mask_4d = prefix_mask.unsqueeze(0).unsqueeze(0)
+
+        # ---- 3) Prefix RoPE table at cumsum(pad)-1 positions ----
+        # Padding tokens are masked out so their position doesn't matter, but
+        # match openpi convention so the "real" K cache values are byte-identical
+        # to PyTorch reference.
+        position_ids = torch.cumsum(pad_mask.to(torch.int64), dim=0) - 1
+        position_ids = position_ids.clamp(min=0, max=max_seq_len - 1)
+        cos_vlm, sin_vlm = _precompute_rope_table_torch(vlm_head_dim, max_seq_len)
+        prefix_cos = cos_vlm[position_ids]  # (prefix_len, head_dim)
+        prefix_sin = sin_vlm[position_ids]
+        if prefix_padded > prefix_len:
+            zpad_c = torch.zeros(prefix_padded - prefix_len, vlm_head_dim, dtype=prefix_cos.dtype)
+            zpad_s = torch.zeros(prefix_padded - prefix_len, vlm_head_dim, dtype=prefix_sin.dtype)
+            prefix_cos = torch.cat([prefix_cos, zpad_c], dim=0)
+            prefix_sin = torch.cat([prefix_sin, zpad_s], dim=0)
+        prefix_cos = prefix_cos.unsqueeze(0).unsqueeze(0)  # (1, 1, prefix_padded, head_dim)
+        prefix_sin = prefix_sin.unsqueeze(0).unsqueeze(0)
+
+        # ---- 4) Suffix RoPE table at prefix_real_count + [0..suffix_padded-1] ----
+        cos_exp, sin_exp = _precompute_rope_table_torch(expert_head_dim, max_seq_len)
+        suffix_positions = (torch.arange(suffix_padded, dtype=torch.int64) + prefix_real_count).clamp(
+            max=max_seq_len - 1
+        )
+        suffix_cos = cos_exp[suffix_positions].unsqueeze(0).unsqueeze(0)
+        suffix_sin = sin_exp[suffix_positions].unsqueeze(0).unsqueeze(0)
+
+        # ---- 5) Expert cross-attention mask ----
+        # Shape: (1, 1, suffix_padded, prefix_padded + suffix_padded)
+        # Block: prefix pad positions, tile-overhang on prefix side, tile-overhang on suffix side.
+        kv_total = prefix_padded + suffix_padded
+        expert_mask = torch.zeros(suffix_padded, kv_total, dtype=torch.bfloat16)
+        # Prefix-side: positions with pad_mask=False get masked
+        pad_blocked = (~pad_mask).nonzero(as_tuple=True)[0]
+        if pad_blocked.numel() > 0:
+            expert_mask[:, pad_blocked] = _MASK_VAL
+        if prefix_padded > prefix_len:
+            expert_mask[:, prefix_len:prefix_padded] = _MASK_VAL
+        if suffix_padded > action_horizon:
+            expert_mask[:, prefix_padded + action_horizon : kv_total] = _MASK_VAL
+        # Phantom suffix rows: mask them out entirely so they don't contribute
+        # to softmax (they're junk Q rows). Their attention output is discarded.
+        if suffix_padded > action_horizon:
+            expert_mask[action_horizon:suffix_padded, :] = _MASK_VAL
+        expert_mask_4d = expert_mask.unsqueeze(0).unsqueeze(0)
+
+        # ---- Upload ----
+        def _upload(x_torch, mem=ttnn.DRAM_MEMORY_CONFIG):
+            return ttnn.from_torch(
+                x_torch.to(torch.bfloat16) if x_torch.dtype != torch.bfloat16 else x_torch,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=mem,
+            )
+
+        # SDPA requires attention masks in DRAM.
+        return {
+            "prefix_attn_mask": _upload(prefix_mask_4d, ttnn.DRAM_MEMORY_CONFIG),
+            "prefix_cos": _upload(prefix_cos, ttnn.DRAM_MEMORY_CONFIG),
+            "prefix_sin": _upload(prefix_sin, ttnn.DRAM_MEMORY_CONFIG),
+            "expert_attn_mask": _upload(expert_mask_4d, ttnn.DRAM_MEMORY_CONFIG),
+            "suffix_cos": _upload(suffix_cos, ttnn.DRAM_MEMORY_CONFIG),
+            "suffix_sin": _upload(suffix_sin, ttnn.DRAM_MEMORY_CONFIG),
+            "prefix_real_count": prefix_real_count,
+        }
+
     def _build_sdpa_phantom_mask(self, prefix_kv_len_logical: int) -> "ttnn.Tensor":
         """
         SDPA attention mask for the expert keep_padded path.
@@ -341,7 +569,40 @@ class Pi0_5ModelTTNN:
         # the concatenated prefix here before the VLM stack runs.
         if prefix_embs.layout != ttnn.TILE_LAYOUT:
             prefix_embs = ttnn.to_layout(prefix_embs, ttnn.TILE_LAYOUT)
-        _, prefix_kv_cache = self.backbone.forward_vlm(prefix_embs, use_cache=True)
+
+        # UPSTREAM-OPENPI COMPAT (gated by PI0_SIGLIP_HF=1 or
+        # PI0_UPSTREAM_MASKS=1): get attention masks + position-aware RoPE
+        # tables. Three branches:
+        # (a) explicit pre-stage via prepare_upstream_artifacts(): trust the
+        #     caller, reuse the cached tensors WITHOUT any host/device sync
+        #     so we stay trace-capture-safe.
+        # (b) auto-cached: build the key on host, hit the cache if it
+        #     matches the prior call. Costs a device sync on the
+        #     ttnn img_mask but avoids re-uploading the 6 mask/RoPE tensors.
+        # (c) cold build: first call without pre-stage — build + cache.
+        upstream_artifacts = None
+        if use_upstream_masks():
+            if self._upstream_artifacts_explicit and self._cached_upstream_artifacts is not None:
+                upstream_artifacts = self._cached_upstream_artifacts
+            else:
+                ims_t, lm_t = self._coerce_upstream_masks(img_masks, lang_masks)
+                key = self._upstream_cache_key(ims_t, lm_t, prefix_embs.shape[1])
+                if self._cached_upstream_artifacts is not None and self._cached_upstream_key == key:
+                    upstream_artifacts = self._cached_upstream_artifacts
+                else:
+                    upstream_artifacts = self._build_upstream_attn_artifacts(
+                        ims_t, lm_t, prefix_len=prefix_embs.shape[1]
+                    )
+                    self._cached_upstream_artifacts = upstream_artifacts
+                    self._cached_upstream_key = key
+
+        _, prefix_kv_cache = self.backbone.forward_vlm(
+            prefix_embs,
+            attention_mask=upstream_artifacts["prefix_attn_mask"] if upstream_artifacts else None,
+            cos_override=upstream_artifacts["prefix_cos"] if upstream_artifacts else None,
+            sin_override=upstream_artifacts["prefix_sin"] if upstream_artifacts else None,
+            use_cache=True,
+        )
 
         # OPTIMIZATION (keep_padded, reapplied from reverted commit 3d597a3b8e6
         # with finite-mask hybrid fix): treat the expert suffix as
@@ -405,15 +666,30 @@ class Pi0_5ModelTTNN:
             x_t_ttnn = self.x_t_ttnn
         fast_path = batch_size == 1
 
+        # PI0_DENOISE_FP32=1 keeps the Euler accumulator in fp32 across the
+        # 10 denoise steps. bf16+bf16=bf16 accumulates ~bf16_eps · ||x_t||
+        # rounding per step; fp32 staging eliminates that. Adds 2 typecasts
+        # per step (bf16→fp32 for velocity, fp32→bf16 for embed_actions input).
+        fp32_loop = denoise_loop_fp32()
+        if fp32_loop:
+            x_t_fp32 = ttnn.typecast(x_t_ttnn, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
+
         for i in range(num_steps):
             t = timesteps[i]
             t_next = timesteps[i + 1]
             dt = t_next - t
 
+            if fp32_loop:
+                # embed_actions / expert / project_output run in bf16 — cast a
+                # transient view of x_t back to bf16 just for this step's forward.
+                x_t_bf16 = ttnn.typecast(x_t_fp32, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+            else:
+                x_t_bf16 = x_t_ttnn
+
             if fast_path:
                 # OPTIMIZATION: adarms_cond is precomputed at init (deterministic
                 # per step); only the action embedding depends on x_t.
-                suffix_embs = self.suffix_embedding.embed_actions(x_t_ttnn)
+                suffix_embs = self.suffix_embedding.embed_actions(x_t_bf16)
                 adarms_cond = self._adarms_cond_per_step_bs1[i]
                 precomputed_block_mods = self._block_mods_per_step[i]
                 precomputed_final_mod = self._final_mod_per_step[i]
@@ -421,30 +697,64 @@ class Pi0_5ModelTTNN:
                 assert timesteps_ttnn is not None
                 t_tensor = ttnn.slice(timesteps_ttnn, [0, i], [batch_size, i + 1])
                 t_tensor = ttnn.reshape(t_tensor, (batch_size,))
-                suffix_embs, _, _, adarms_cond = self.embed_suffix(state, x_t_ttnn, t_tensor)
+                suffix_embs, _, _, adarms_cond = self.embed_suffix(state, x_t_bf16, t_tensor)
                 precomputed_block_mods = None
                 precomputed_final_mod = None
 
+            if fp32_loop:
+                ttnn.deallocate(x_t_bf16)
+
+            # Upstream-compat path overrides the keep_padded phantom mask with
+            # a full one that also blocks logical-padding prefix positions
+            # (image3, lang-pad), and applies the suffix RoPE at the prefix
+            # offset. The keep_padded shape contract is the same (suffix
+            # treated as logical=physical=tile_align(action_horizon)) so the
+            # KV-cache concat fast path still applies.
+            if upstream_artifacts is not None:
+                _expert_mask = upstream_artifacts["expert_attn_mask"]
+                _cos_o = upstream_artifacts["suffix_cos"]
+                _sin_o = upstream_artifacts["suffix_sin"]
+            else:
+                _expert_mask = self._sdpa_attn_mask if keep_padded_expert else None
+                _cos_o = None
+                _sin_o = None
             expert_output, _ = self.backbone.forward_expert(
                 suffix_embs,
                 adarms_cond=adarms_cond,
                 past_key_values=prefix_kv_cache,
                 precomputed_block_mods=precomputed_block_mods,
                 precomputed_final_mod=precomputed_final_mod,
-                attention_mask=self._sdpa_attn_mask if keep_padded_expert else None,
+                attention_mask=_expert_mask,
                 keep_padded=keep_padded_expert,
+                cos_override=_cos_o,
+                sin_override=_sin_o,
             )
             ttnn.deallocate(suffix_embs)
 
             velocity = self.suffix_embedding.project_output(expert_output)
             ttnn.deallocate(expert_output)
 
-            velocity_scaled = ttnn.mul(velocity, dt, memory_config=ttnn.L1_MEMORY_CONFIG)
-            ttnn.deallocate(velocity)
+            if fp32_loop:
+                # Cast velocity to fp32 so the multiply-add accumulates without
+                # bf16 rounding noise.
+                velocity_fp32 = ttnn.typecast(velocity, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(velocity)
+                velocity_scaled = ttnn.mul(velocity_fp32, dt, memory_config=ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(velocity_fp32)
+                x_t_new = ttnn.add(x_t_fp32, velocity_scaled, memory_config=ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(velocity_scaled)
+                ttnn.deallocate(x_t_fp32)
+                x_t_fp32 = x_t_new
+            else:
+                velocity_scaled = ttnn.mul(velocity, dt, memory_config=ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(velocity)
+                x_t_new = ttnn.add(x_t_ttnn, velocity_scaled, memory_config=ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(velocity_scaled)
+                x_t_ttnn = x_t_new
 
-            x_t_new = ttnn.add(x_t_ttnn, velocity_scaled, memory_config=ttnn.L1_MEMORY_CONFIG)
-            ttnn.deallocate(velocity_scaled)
-            x_t_ttnn = x_t_new
+        if fp32_loop:
+            x_t_ttnn = ttnn.typecast(x_t_fp32, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(x_t_fp32)
 
         # Slice off the phantom rows (we always host-pad x_t to ah_padded
         # at init / sample-call time, regardless of keep_padded).

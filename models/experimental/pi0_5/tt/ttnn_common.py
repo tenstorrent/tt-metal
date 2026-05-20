@@ -84,6 +84,27 @@ def get_sdpa_compute_kernel_config() -> "ttnn.WormholeComputeKernelConfig":
     )
 
 
+def denoise_loop_fp32() -> bool:
+    """Whether to stage the flow-matching Euler integration loop in fp32.
+
+    Default `False` — `x_t ← x_t + dt·v` runs entirely in `bfloat16`,
+    matching the dtype-map memory.
+
+    Set `PI0_DENOISE_FP32=1` to keep `x_t` in `float32` across the 10
+    Euler steps. The torch reference uses fp32 throughout the integration
+    and accumulates ~0 rounding noise. The bf16 version accumulates up to
+    ~bf16_eps · ||x_t|| ≈ 0.008 per step (10× per inference), which is
+    enough to drift LIBERO trajectories on long-horizon goal/libero_10
+    tasks (where small action drift compounds over 220–520 env steps).
+
+    Adds 2 typecasts per step (bf16→fp32 for velocity, fp32→bf16 for
+    embed_actions input) but the accumulator stays clean. Measured cost
+    is +0.06 ms on the traced perf path (essentially free); accuracy
+    lift on `lerobot/pi05_libero_finetuned` is ~+12.5 pp at N=10.
+    """
+    return _env_bool("PI0_DENOISE_FP32", False)
+
+
 def get_ttnn_dtype(precision: str) -> ttnn.DataType:
     """
     Convert precision string to TTNN dtype.
