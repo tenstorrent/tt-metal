@@ -167,51 +167,6 @@ def test_eltwise_binary_broadcast_quasar(
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
-    # Env-var-gated MxInt2 diagnostics: when MXINT2_DIAGNOSTIC is set, dump
-    # extra info on failing MxInt2 cases. Two variants:
-    #  - MxInt2 OUTPUT mismatches: block-by-block lattice comparison.
-    #  - MxInt2 INPUT + Elwmul + Scalar mismatches: derive HW's implied
-    #    scalar (res[i] / a_decoded[i]) and compare with golden's scalar.
-    import os as _os
-
-    if _os.environ.get("MXINT2_DIAGNOSTIC") and not passed_test(
-        golden_tensor, res_tensor, formats.output_format, print_errors=False
-    ):
-        test_id = (
-            f"{formats.input_format}->{formats.output_format} "
-            f"{mathop} {broadcast_type} {dest_sync_mode} dims={input_dimensions}"
-        )
-        if formats.output_format == DataFormat.MxInt2:
-            from helpers.mxint2_diagnostic import diagnose_mxint2_mismatch
-
-            diagnose_mxint2_mismatch(
-                src_A=src_A,
-                src_B_bcast=bcast_src_B_tensor,
-                mathop=mathop,
-                golden_tensor=golden_tensor,
-                res_tensor=res_tensor,
-                formats=formats,
-                test_id=test_id,
-            )
-        if (
-            formats.input_format == DataFormat.MxInt2
-            and mathop == MathOperation.Elwmul
-            and broadcast_type == BroadcastType.Scalar
-        ):
-            from helpers.mxint2_diagnostic import (
-                diagnose_mxint2_input_elwmul_scalar,
-            )
-
-            diagnose_mxint2_input_elwmul_scalar(
-                src_A=src_A,
-                src_B_bcast=bcast_src_B_tensor,
-                golden_tensor=golden_tensor,
-                res_tensor=res_tensor,
-                formats=formats,
-                math_fidelity=math_fidelity,
-                test_id=test_id,
-            )
-
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format, print_errors=True
     ), "Assert against golden failed"
