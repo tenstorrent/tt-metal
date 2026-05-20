@@ -302,6 +302,7 @@ def mlp_wi_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=N
     max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
     if max_seq_len == 512 and max_batch in (1, 32):
         fid = ttnn.MathFidelity.LoFi if dtype == ttnn.bfloat8_b else ttnn.MathFidelity.HiFi2
+        # fp32_dest_acc_en=False lifts subblock h*w cap to 8.
         return _make_compute_kernel(mesh_device, fid, max_seq_len, max_batch, fp32_dest_acc_en=False)
     return matmul_compute_kernel_config(mesh_device, max_seq_len, max_batch)
 
@@ -434,7 +435,7 @@ def _mlp_wi_minimal_matmul_config(mesh_device, max_seq_len, max_batch_size, *, h
         M_block_size=8,
         K_block_size=8,
         N_block_size=8,
-        subblock_h=4,
+        subblock_h=8,
         subblock_w=1,
         compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
     )
