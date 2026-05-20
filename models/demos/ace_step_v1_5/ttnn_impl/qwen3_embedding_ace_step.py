@@ -140,6 +140,20 @@ class AceStepQwen3Encoder:
         self.config = self.model_args.hf_config
         self._blocks_per_seq = blocks_per_seq
 
+        # Lazy-initialized trace state for :meth:`forward_traced`. The trace captures the
+        # device-only portion (token embedding lookup -> transformer prefill -> final norm)
+        # against persistent input/output buffers; per-call we refresh those buffers via
+        # ``copy_host_to_device_tensor`` on CQ 1 and ``execute_trace`` on CQ 0. None until
+        # the first :meth:`forward_traced` call; freed by :meth:`release_trace`.
+        self._trace_id: Optional[Any] = None
+        self._persistent_tokens: Optional[ttnn.Tensor] = None
+        self._persistent_page_table: Optional[ttnn.Tensor] = None
+        self._persistent_chunk_page_table: Optional[ttnn.Tensor] = None
+        self._persistent_output: Optional[ttnn.Tensor] = None
+        self._rot_mats_global: Any = None
+        self._rot_mats_local: Any = None
+        self._trace_op_event: Any = None
+
     # ------------------------------------------------------------------
     # ACE-Step API surface (drop-in for the deleted TtQwen3EmbeddingEncoder)
     # ------------------------------------------------------------------
@@ -268,6 +282,240 @@ class AceStepQwen3Encoder:
         except Exception:
             pass
         return h
+
+    # ------------------------------------------------------------------
+    # Trace + 2CQ replayed forward (output bit-equivalent to :meth:`forward`
+    # for ``batch_size == 1``; the existing host round-trip in ``forward()`` only
+    # serves the B > 1 per-user loop, so removing it for B == 1 keeps numerics
+    # identical while making the device path trace-safe).
+    # ------------------------------------------------------------------
+
+    def forward_traced(self, input_ids) -> Any:
+        """Trace-replayed equivalent of :meth:`forward` for ``batch_size=1``.
+
+        First call captures a TTNN trace of ``transform_and_embed_prefill_inputs_device``
+        -> ``Transformer.ttnn_prefill_forward(get_last_token=-1)`` -> ``Transformer.norm``
+        against persistent input/output buffers. Subsequent calls stream the new token
+        ids and page-table tensors onto the persistent buffers via
+        ``copy_host_to_device_tensor`` on CQ 1, then ``execute_trace`` on CQ 0 and
+        return the persistent output tensor.
+
+        Mirrors :meth:`tt_transformers.tt.generator.Generator._capture_trace_prefill` /
+        ``_prefill_forward_trace`` exactly, except the trace ends with
+        ``Transformer.norm(... mode=PREFILL)`` instead of the LMHead — so the output is
+        per-token hidden states ``[1, 1, max_seq_len, H]`` (what ACE-Step's DiT
+        cross-attention needs) rather than the pooled ``[1, H]`` that
+        :meth:`Generator.prefill_forward_text(return_hidden_states=True)` returns.
+
+        Output is bit-equivalent to :meth:`forward` because bf16 -> float32 -> bf16
+        (the host round-trip in ``forward()``) is lossless.
+
+        Requires the TTNN device opened with ``num_command_queues=2`` and a
+        ``trace_region_size`` large enough for the 28-layer Qwen3 prefill graph.
+        ``forward()`` remains available as the eager fallback (single-CQ environments,
+        or batch_size > 1).
+
+        Args:
+            input_ids: ``np.ndarray`` (``uint32``) or ``torch.Tensor`` of shape ``[1, S]``
+                with ``S <= max_seq_len``. Padded internally to ``max_seq_len`` so the
+                captured trace shape stays constant across calls.
+
+        Returns:
+            ``ttnn.Tensor`` of shape ``[1, 1, max_seq_len, hidden_size]``
+            (bf16 / TILE / DRAM). **Persistent buffer** — the caller MUST NOT
+            ``ttnn.deallocate`` it. The buffer is overwritten by the next
+            :meth:`forward_traced` call, so consumers must finish using the output
+            before the next call (this is the same contract as
+            :class:`models.demos.ace_step_v1_5.ttnn_impl.e2e_model_tt._E2EDenoiseTrace`).
+        """
+        if not hasattr(ttnn, "begin_trace_capture") or not hasattr(ttnn, "execute_trace"):
+            raise RuntimeError(
+                "AceStepQwen3Encoder.forward_traced requires a TTNN build with trace support "
+                "(begin_trace_capture / execute_trace)."
+            )
+
+        ids_t = _to_torch_int64(input_ids)
+        if ids_t.dim() != 2:
+            raise ValueError(f"input_ids must be [B, S], got {tuple(ids_t.shape)}")
+        b, s = int(ids_t.shape[0]), int(ids_t.shape[1])
+        if b != 1:
+            raise NotImplementedError(
+                f"forward_traced supports batch_size=1 only (got {b}); use forward() for batched inputs."
+            )
+        if s > self.max_seq_len:
+            raise ValueError(f"seq_len {s} > max_seq_len {self.max_seq_len}")
+
+        # Pad to max_seq_len so the trace shape is constant across calls. Matches what
+        # tt_transformers' Attention.forward_prefill expects (seq_len % 128 == 0).
+        if s < self.max_seq_len:
+            pad = torch.zeros((1, self.max_seq_len - s), dtype=ids_t.dtype)
+            ids_padded = torch.cat([ids_t, pad], dim=-1)
+        else:
+            ids_padded = ids_t
+
+        # Per-user page table: identical layout to the eager forward (user 0 takes the
+        # first blocks_per_seq blocks; we only support B=1 here so user_idx=0).
+        page_table = torch.arange(0, self._blocks_per_seq, dtype=torch.int32).reshape(1, self._blocks_per_seq)
+
+        if self._trace_id is None:
+            self._capture_trace(ids_padded, page_table)
+        return self._replay_trace(ids_padded, page_table)
+
+    def _capture_trace(self, ids_padded: "torch.Tensor", page_table: "torch.Tensor") -> None:
+        """Build persistent buffers, run a warmup pass, then capture the trace.
+
+        Mirrors :meth:`Generator._capture_trace_prefill` (single-batch branch) with
+        ``get_last_token=-1`` and a final ``Transformer.norm`` instead of the LMHead.
+        """
+        from models.tt_transformers.tt.common import copy_host_to_device
+
+        # 1. Host-side preparation. ``prepare_prefill_inputs_trace`` returns host ttnn
+        #    tensors for tokens / page_table / chunk_page_table and DEVICE pointers into
+        #    the preallocated cos/sin matrices for rot_mats_{global,local}. The rot_mats
+        #    cover the entire ``max_seq_len`` range when trace_enabled=True, so they're
+        #    stable across calls and are baked into the captured trace.
+        host_inputs = self.tt_model.prepare_prefill_inputs_trace(
+            ids_padded,
+            page_table=page_table,
+            batch_size=1,
+            user_id=0,
+        )
+        self._rot_mats_global = host_inputs[1]
+        self._rot_mats_local = host_inputs[2]
+        host_payload = (host_inputs[0], host_inputs[3], host_inputs[4])
+
+        # 2. Warmup (compile) pass — uploads host_payload to throw-away device tensors
+        #    so every program-cache entry the trace will reference is already resident.
+        device_payload_warm = copy_host_to_device(host_payload, mesh_device=self.device)
+        transformed = self.tt_model.transform_and_embed_prefill_inputs_device(*device_payload_warm)
+        out_warm_hidden = self.tt_model.ttnn_prefill_forward(
+            x=transformed[0],
+            rot_mats_global=self._rot_mats_global,
+            rot_mats_local=self._rot_mats_local,
+            user_id=0,
+            page_table=transformed[1],
+            chunk_page_table=transformed[2],
+            chunk_start_idx=None,
+            get_last_token=-1,
+            kv_cache=self.tt_kv_cache,
+            batch_size=1,
+        )
+        out_warm_normed = self.tt_model.norm(out_warm_hidden, mode=Mode.PREFILL)
+        ttnn.synchronize_device(self.device)
+        for t in (out_warm_hidden, out_warm_normed):
+            try:
+                ttnn.deallocate(t)
+            except Exception:
+                pass
+        for t in device_payload_warm:
+            if t is not None:
+                try:
+                    ttnn.deallocate(t)
+                except Exception:
+                    pass
+
+        # 3. Allocate the persistent input buffers the trace will read from on every
+        #    replay (refreshed via ``copy_host_to_device_tensor`` on CQ 1).
+        device_payload = copy_host_to_device(host_payload, mesh_device=self.device)
+        self._persistent_tokens = device_payload[0]
+        self._persistent_page_table = device_payload[1]
+        self._persistent_chunk_page_table = device_payload[2]
+
+        # 4. Capture the trace against the persistent buffers.
+        self._trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
+        transformed = self.tt_model.transform_and_embed_prefill_inputs_device(
+            self._persistent_tokens,
+            self._persistent_page_table,
+            self._persistent_chunk_page_table,
+        )
+        hidden = self.tt_model.ttnn_prefill_forward(
+            x=transformed[0],
+            rot_mats_global=self._rot_mats_global,
+            rot_mats_local=self._rot_mats_local,
+            user_id=0,
+            page_table=transformed[1],
+            chunk_page_table=transformed[2],
+            chunk_start_idx=None,
+            get_last_token=-1,
+            kv_cache=self.tt_kv_cache,
+            batch_size=1,
+        )
+        self._persistent_output = self.tt_model.norm(hidden, mode=Mode.PREFILL)
+        ttnn.end_trace_capture(self.device, self._trace_id, cq_id=0)
+        ttnn.synchronize_device(self.device)
+        try:
+            ttnn.deallocate(hidden)
+        except Exception:
+            pass
+
+        # 5. Initialize the CQ-0 op event so the first replay's ``wait_for_event(1, …)``
+        #    has a valid token to wait on (mirrors the SwinV2 runner init pattern).
+        self._trace_op_event = ttnn.record_event(self.device, 0)
+
+    def _replay_trace(self, ids_padded: "torch.Tensor", page_table: "torch.Tensor") -> Any:
+        """Stream this call's inputs onto the persistent buffers (CQ 1), then ``execute_trace`` (CQ 0)."""
+        if self._trace_id is None:
+            raise RuntimeError("AceStepQwen3Encoder._replay_trace called before _capture_trace.")
+
+        # Build host inputs for this call. We deliberately re-run the cheap host prep
+        # every call (instead of caching) so changes in page_table / chunk_page_table
+        # would be picked up if a future caller varied them. For ACE-Step's B=1 flow,
+        # page_table is constant; the tokens vary per prompt.
+        host_inputs = self.tt_model.prepare_prefill_inputs_trace(
+            ids_padded,
+            page_table=page_table,
+            batch_size=1,
+            user_id=0,
+        )
+        host_payload = (host_inputs[0], host_inputs[3], host_inputs[4])
+        persistent_payload = (
+            self._persistent_tokens,
+            self._persistent_page_table,
+            self._persistent_chunk_page_table,
+        )
+
+        # CQ 1 writes wait for the previous CQ 0 trace execution to finish reading the
+        # persistent buffers, then refresh them in place. CQ 0 then waits for the write
+        # event and executes the trace, recording a fresh op event for the next call.
+        ttnn.wait_for_event(1, self._trace_op_event)
+        for src, dst in zip(host_payload, persistent_payload):
+            if src is not None and dst is not None:
+                ttnn.copy_host_to_device_tensor(src, dst, cq_id=1)
+        write_event = ttnn.record_event(self.device, 1)
+        ttnn.wait_for_event(0, write_event)
+        ttnn.execute_trace(self.device, self._trace_id, cq_id=0, blocking=False)
+        self._trace_op_event = ttnn.record_event(self.device, 0)
+
+        return self._persistent_output
+
+    def release_trace(self) -> None:
+        """Release the captured trace id + every persistent buffer. Safe to call repeatedly.
+
+        Call when the encoder instance is being destroyed, or when re-capturing against
+        a different ``max_seq_len`` (which would otherwise leak the previous trace).
+        """
+        if self._trace_id is not None:
+            try:
+                ttnn.release_trace(self.device, self._trace_id)
+            except Exception:
+                pass
+            self._trace_id = None
+        for attr in (
+            "_persistent_tokens",
+            "_persistent_page_table",
+            "_persistent_chunk_page_table",
+            "_persistent_output",
+        ):
+            t = getattr(self, attr, None)
+            if t is not None:
+                try:
+                    ttnn.deallocate(t)
+                except Exception:
+                    pass
+                setattr(self, attr, None)
+        self._rot_mats_global = None
+        self._rot_mats_local = None
+        self._trace_op_event = None
 
 
 def _to_torch_int64(x):
