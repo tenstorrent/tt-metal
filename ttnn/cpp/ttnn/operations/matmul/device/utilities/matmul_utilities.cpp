@@ -279,7 +279,7 @@ void validate_matmul_reuse_work_split(
     const uint32_t Nt = get_N_dim(b_shape_padded, in1_tile);
     const uint32_t per_core_M = program_config.per_core_M;
     const uint32_t per_core_N = program_config.per_core_N;
-    TT_FATAL(Mt % per_core_M == 0, "Mt ({}) must be divisible by per_core_M ({})", Mt, per_core_M);
+    TT_FATAL((B * Mt) % per_core_M == 0, "B * Mt ({}) must be divisible by per_core_M ({})", B * Mt, per_core_M);
     TT_FATAL(Nt % per_core_N == 0, "Nt ({}) must be divisible by per_core_N ({})", Nt, per_core_N);
     const uint32_t num_output_blocks_total = (B * Mt / per_core_M) * (Nt / per_core_N);
     TT_FATAL(
