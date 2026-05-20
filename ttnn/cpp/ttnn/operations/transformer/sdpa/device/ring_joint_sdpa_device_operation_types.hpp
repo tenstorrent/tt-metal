@@ -91,6 +91,10 @@ struct RingJointSDPAInputs {
     Tensor joint_v;
     Tensor gathered_k;
     Tensor gathered_v;
+
+    // Chunked-prefill is signalled implicitly by Q being shorter than the per-device K shard:
+    // Q is the latest slab, K is the populated prefix from chunk 0 through the current chunk.
+    bool is_chunked() const { return input_q.logical_shape()[2] < input_k.logical_shape()[2]; }
 };
 
 // Index constants for RingJointSDPAResult vector

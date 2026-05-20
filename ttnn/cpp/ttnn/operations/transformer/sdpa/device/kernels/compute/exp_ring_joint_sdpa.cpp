@@ -212,7 +212,11 @@ void kernel_main() {
                 cb_sum_out,
                 cb_sum_in,
                 cb_signal,
-                needs_lightweight_mask>(
+                needs_lightweight_mask,
+                false,  // is_causal_sdpa
+                false,  // is_balanced_sdpa
+                false,  // chunked_enabled
+                local_padded_Nt>(
                 global_q_start,
                 global_q_end,
                 num_kv_chunks,
@@ -220,7 +224,6 @@ void kernel_main() {
                 ring_iter,
                 ring_id,
                 num_local_k_chunks,
-                local_padded_Nt,
                 logical_nt,
                 ring_iter_needs_global_n_mask,
                 ring_iter_needs_joint_n_mask,

@@ -19,11 +19,13 @@ void kernel_main() {
     constexpr uint32_t vDHt = get_compile_time_arg_val(4);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(5);
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(6);
-    constexpr uint32_t local_padded_N = get_compile_time_arg_val(7);
-    constexpr uint32_t local_padded_Nt = get_compile_time_arg_val(8);
+    constexpr uint32_t q_local_padded_Nt = get_compile_time_arg_val(7);
+    constexpr uint32_t kv_local_padded_Nt = get_compile_time_arg_val(8);
     constexpr uint32_t padded_Nt = get_compile_time_arg_val(9);
-    constexpr uint32_t logical_n = get_compile_time_arg_val(10);
-    constexpr uint32_t logical_nt = get_compile_time_arg_val(11);
+    // Slot 10: reader-unused (writer/compute consume it for constexpr mask-CB sizing).
+    // Slot 11: non-chunked logical_nt fallback — reader uses an RT logical_nt only when chunked.
+    constexpr uint32_t logical_n_layout_hint [[maybe_unused]] = get_compile_time_arg_val(10);
+    constexpr uint32_t logical_nt_layout_hint = get_compile_time_arg_val(11);
     constexpr uint32_t Lt = get_compile_time_arg_val(12);
     constexpr uint32_t L = get_compile_time_arg_val(13);
     constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(14);
@@ -36,14 +38,17 @@ void kernel_main() {
     constexpr uint32_t is_causal = get_compile_time_arg_val(21);
     constexpr uint32_t is_balanced = get_compile_time_arg_val(22);
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(23) == 1;
+    // Reader's slot-24 carries chunked_enabled; writer/compute use slot-24/33 for use_streaming_compute.
+    constexpr bool chunked_enabled = get_compile_time_arg_val(24) == 1;
     constexpr uint32_t num_q_readers = get_compile_time_arg_val(25);
+    constexpr uint32_t chunk_size_t = get_compile_time_arg_val(26);
 
     // Joint-path compile-time gating. When zero, joint Q/K branches are statically dead
     // and dropped by the compiler, eliminating runtime ternaries and joint generator uses.
     constexpr bool has_joint_q = num_joint_q_chunks > 0;
     constexpr bool has_joint_k = num_joint_k_chunks > 0;
 
-    constexpr auto q_args = TensorAccessorArgs<26>();
+    constexpr auto q_args = TensorAccessorArgs<27>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto gathered_k_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -63,6 +68,13 @@ void kernel_main() {
     const uint32_t joint_v_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
+    // Chunked: RT (varies per chunk, not in program-cache key). Non-chunked: CT hint keeps the skip math constexpr.
+    uint32_t logical_nt;
+    if constexpr (chunked_enabled) {
+        logical_nt = get_arg_val<uint32_t>(argidx++);
+    } else {
+        logical_nt = logical_nt_layout_hint;
+    }
     const uint32_t q_per_core = global_q_end - global_q_start;
 
     // Head chain runtime args (always present)
@@ -204,9 +216,9 @@ void kernel_main() {
     const auto joint_k_reader = TensorAccessor(joint_k_args, joint_k_addr);
     const auto joint_v_reader = TensorAccessor(joint_v_args, joint_v_addr);
 
-    const auto input_q_tile_logical = TensorTileShape(B, NH, local_padded_Nt, DHt);
-    const auto input_k_tile_logical = TensorTileShape(B, NHK, local_padded_Nt, DHt);
-    const auto input_v_tile_logical = TensorTileShape(B, NH, local_padded_Nt, vDHt);
+    const auto input_q_tile_logical = TensorTileShape(B, NH, q_local_padded_Nt, DHt);
+    const auto input_k_tile_logical = TensorTileShape(B, NHK, kv_local_padded_Nt, DHt);
+    const auto input_v_tile_logical = TensorTileShape(B, NH, kv_local_padded_Nt, vDHt);
     const auto gathered_k_input_tile_logical = TensorTileShape(B, NHK, padded_Nt, DHt);
     const auto gathered_v_input_tile_logical = TensorTileShape(B, NH, padded_Nt, vDHt);
     const auto joint_input_tile_logical = TensorTileShape(B, NH, Lt, DHt);
@@ -244,9 +256,12 @@ void kernel_main() {
             }
         }
 
-        const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;  // Floor division to get tile ID
-        const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
-        const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
+        // Last real (non-padding) tile id; logical_nt-1 == (logical_n-1)/TILE_H for tile-aligned logical_n.
+        // Chunked-prefill: balanced layout puts one slab of real K per chunk on every device → every iter is active.
+        const uint32_t global_n_tile_id = logical_nt - 1;
+        const uint32_t ring_iter_kv_start_tile = ring_id * kv_local_padded_Nt;
+        const bool ring_iter_processes_KV_chunks =
+            chunked_enabled ? true : (ring_iter_kv_start_tile <= global_n_tile_id);
 
         // In causal non balanced case when processing KV received from other devices:
         // - skip over KV received from subsequent devices
@@ -275,7 +290,7 @@ void kernel_main() {
             iter_num_kv_chunks /= 2;
             // Mirror compute's K-loop extension: include the straddle chunk so K/V tiles
             // for it get loaded. Compute -inf-masks its late-half columns via lw_mask.
-            using Straddle = KCausalStraddleInfo<local_padded_Nt, Sk_chunk_t>;
+            using Straddle = KCausalStraddleInfo<kv_local_padded_Nt, Sk_chunk_t>;
             if constexpr (Straddle::has_straddle) {
                 iter_num_kv_chunks = Straddle::straddle_chunk_id + 1;
             }
@@ -314,7 +329,7 @@ void kernel_main() {
 
             // Default to local Q tensor; override below for joint Q when applicable.
             Slice q_slice(nb, nq, q_row_start_tile, q_row_start_tile + Sq_chunk_t, 0, DHt);
-            uint32_t q_end_seq_tile = local_padded_Nt;
+            uint32_t q_end_seq_tile = q_local_padded_Nt;
             if constexpr (has_joint_q) {
                 if (is_joint_q) {
                     const uint32_t joint_q_row_start_tile = (q_chunk - num_local_q_chunks) * Sq_chunk_t;
@@ -337,8 +352,9 @@ void kernel_main() {
                  * If this k chunk is in the spatial input and beyond the logical N, we will skip it.
                  */
                 const bool kv_chunk_is_joint = has_joint_k ? (k_chunk >= num_local_k_chunks) : false;
-                // Global index into the padded KV tensor
-                const uint32_t kv_global_start_tile = local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
+                const uint32_t kv_global_start_tile =
+                    kv_global_tile_for_local<chunked_enabled, kv_local_padded_Nt, chunk_size_t, q_local_padded_Nt>(
+                        ring_id, k_chunk * Sk_chunk_t);
                 const bool kv_chunk_is_beyond_logical_n = !kv_chunk_is_joint && (kv_global_start_tile >= logical_nt);
 
                 if (kv_chunk_is_beyond_logical_n) {
@@ -355,12 +371,15 @@ void kernel_main() {
                     const uint32_t local_k_row_start_tile = k_chunk * Sk_chunk_t;
                     k_slice = Slice(nb, nk, local_k_row_start_tile, local_k_row_start_tile + Sk_chunk_t, 0, DHt);
                     v_slice = Slice(nb, nq, local_k_row_start_tile, local_k_row_start_tile + Sk_chunk_t, 0, vDHt);
-                    end_seq_tile = std::min(logical_nt, local_padded_Nt);
+                    // Chunked: gathered-K coord ≠ global-K coord, so skip the logical_nt clamp
+                    // (host pre-zeros padding slabs, so reading the full slice is safe).
+                    end_seq_tile = chunked_enabled ? kv_local_padded_Nt : std::min(logical_nt, kv_local_padded_Nt);
                 } else {
                     const uint32_t gathered_kv_start_tile = ring_iter_kv_start_tile + k_chunk * Sk_chunk_t;
                     k_slice = Slice(nb, nk, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, DHt);
                     v_slice = Slice(nb, nq, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, vDHt);
-                    end_seq_tile = std::min(logical_nt, local_padded_Nt * (ring_id + 1));
+                    end_seq_tile = chunked_enabled ? kv_local_padded_Nt * (ring_id + 1)
+                                                   : std::min(logical_nt, kv_local_padded_Nt * (ring_id + 1));
                 }
                 if constexpr (has_joint_k) {
                     if (kv_chunk_is_joint) {

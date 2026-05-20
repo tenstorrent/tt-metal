@@ -91,15 +91,49 @@ struct RingIdSequencer {
 };
 
 /**
+ * Per-call chunked-prefill runtime state for sdpa_ring_v2. The compile-time per-chunk
+ * geometry (q_local_padded_Nt / chunk_size_t) lives in template params; this struct
+ * carries the per-chunk runtime offsets.
+ */
+struct ChunkedContext {
+    uint32_t q_start_idx_t = 0;  // absolute Q-tile offset of this chunk's Q slab
+    uint32_t ring_index = 0;     // logical ring rotation index for absolute-Q-tile compute
+};
+
+/**
+ * Map a device-local K tile index to its global attention K position. Used by the
+ * logical_n skip predicate and the diagonal-stamp mask coords. Under chunked-prefill
+ * the local cache packs the per-chunk K region for each chunk back-to-back; each
+ * region is q_local_padded_Nt tiles (= Q's per-device extent, since one chunk's Q
+ * is one such region), so the mapping is non-monotonic.
+ */
+template <
+    bool chunked_enabled,
+    uint32_t kv_local_padded_Nt = 0,
+    uint32_t chunk_size_t = 0,
+    uint32_t q_local_padded_Nt = 0>
+inline uint32_t kv_global_tile_for_local(uint32_t ring_id, uint32_t local_tile_idx) {
+    if constexpr (chunked_enabled) {
+        return (local_tile_idx / q_local_padded_Nt) * chunk_size_t + ring_id * q_local_padded_Nt +
+               (local_tile_idx % q_local_padded_Nt);
+    } else {
+        return ring_id * kv_local_padded_Nt + local_tile_idx;
+    }
+}
+
+/**
  * Find the last ring iteration that performs actual KV computation.
  * Creates a copy of the sequencer and iterates it with no synchronization.
  *
- * @param seq               Sequencer state (copied — original is not modified)
- * @param local_padded_Nt   Per-device padded sequence length in tiles
- * @param global_n_tile_id  Logical (unpadded) sequence length in tiles (logical_n / TILE_HEIGHT)
- * @param L                 Joint sequence length in elements (0 if no joint attention)
- * @param is_causal         Whether causal masking is enabled
- * @param is_balanced       Whether balanced (zigzag) causal distribution is enabled
+ * @param seq                       Sequencer state (copied — original is not modified)
+ * @param local_padded_Nt           Per-device padded sequence length in tiles
+ * @param global_n_tile_id          Logical (unpadded) sequence length in tiles (logical_n / TILE_HEIGHT)
+ * @param L                         Joint sequence length in elements (0 if no joint attention)
+ * @param is_causal                 Whether causal masking is enabled
+ * @param is_balanced               Whether balanced (zigzag) causal distribution is enabled
+ * @param chunked_enabled   Whether balanced chunked-prefill layout is active. When
+ *                                  true, every iter holds one slab of real data per chunk
+ *                                  → every iter does work.
  */
 inline uint32_t find_last_active_ring_iter(
     RingIdSequencer seq,
@@ -107,7 +141,12 @@ inline uint32_t find_last_active_ring_iter(
     uint32_t global_n_tile_id,
     uint32_t L,
     bool is_causal = false,
-    bool is_balanced = false) {
+    bool is_balanced = false,
+    bool chunked_enabled = false) {
+    if (chunked_enabled) {
+        return seq.ring_size - 1;
+    }
+
     uint32_t last_active = 0;
     auto no_sync = [](uint32_t, uint32_t) {};
 
@@ -126,26 +165,27 @@ inline uint32_t find_last_active_ring_iter(
 }
 
 /**
- * Count valid (non-skipped) K chunks for a ring iteration.
- * Same skip logic as compute: local K chunks whose global start tile >= logical_nt are skipped.
- *
- * @param num_kv_chunks      Total K chunks this ring iter (local + joint if applicable)
- * @param num_local_k_chunks Number of local (non-joint) K chunks
- * @param ring_iter_kv_start_tile  First tile index of this ring iter's KV range
- * @param Sk_chunk_t         K chunk size in tiles
- * @param logical_nt         Logical sequence length in tiles (logical_n / TILE_HEIGHT)
+ * Count valid (non-skipped) K chunks for a ring iteration. Local K chunks whose global
+ * start tile >= logical_nt are skipped (matches compute).
  */
-inline uint32_t count_valid_kv_chunks(
-    uint32_t num_kv_chunks,
-    uint32_t num_local_k_chunks,
-    uint32_t ring_iter_kv_start_tile,
+template <
+    bool chunked_enabled,
+    uint32_t kv_local_padded_Nt,
     uint32_t Sk_chunk_t,
-    uint32_t logical_nt) {
+    uint32_t chunk_size_t = 0,
+    uint32_t q_local_padded_Nt = 0>
+inline uint32_t count_valid_kv_chunks(
+    uint32_t num_kv_chunks, uint32_t num_local_k_chunks, uint32_t ring_id, uint32_t logical_nt) {
     uint32_t count = 0;
     for (uint32_t k = 0; k < num_kv_chunks; ++k) {
         const bool is_joint = k >= num_local_k_chunks;
-        if (!is_joint && (ring_iter_kv_start_tile + k * Sk_chunk_t >= logical_nt)) {
-            continue;
+        if (!is_joint) {
+            const uint32_t kv_global_start_tile =
+                kv_global_tile_for_local<chunked_enabled, kv_local_padded_Nt, chunk_size_t, q_local_padded_Nt>(
+                    ring_id, k * Sk_chunk_t);
+            if (kv_global_start_tile >= logical_nt) {
+                continue;
+            }
         }
         count++;
     }

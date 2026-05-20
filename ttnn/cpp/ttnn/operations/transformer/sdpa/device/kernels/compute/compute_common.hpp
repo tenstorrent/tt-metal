@@ -24,6 +24,7 @@
 #include "api/compute/reduce.h"
 #include "api/compute/reduce_custom.h"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_utils.hpp"
 #include "cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
 ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
@@ -1412,34 +1413,59 @@ void apply_causal_mask_lightweight(
     uint32_t q_start_tile,
     uint32_t k_start_tile,
     uint32_t num_rows,
-    uint32_t num_cols) {
+    uint32_t num_cols,
+    uint32_t straddle_col = 0,
+    uint32_t straddle_jump = 0) {
     copy_tile_to_dst_init_short(mask_cb);
     PACK((llk_pack_reconfig_l1_acc(1)));
 
     for (uint32_t row = 0; row < num_rows; row++) {
-        int32_t diag_col = static_cast<int32_t>(q_start_tile + row) - static_cast<int32_t>(k_start_tile);
         uint32_t row_offset = row * num_cols;
+        const int32_t q_pos = static_cast<int32_t>(q_start_tile + row);
 
-        if (diag_col < 0) {
-            // Entire row above diagonal -> stamp all neginf
-            stamp_tile_range_l1_acc<dst_batch>(mask_cb, neginf_idx, out_cb, row_offset, num_cols);
-        } else if (static_cast<uint32_t>(diag_col) < num_cols) {
-            // Stamp the diagonal tile
-            tile_regs_acquire();
-            copy_tile(mask_cb, diag_idx, 0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile<true>(0, out_cb, row_offset + static_cast<uint32_t>(diag_col));
-            tile_regs_release();
+        if (straddle_col == 0) {
+            // Fast path: K coords contiguous across cols.
+            int32_t diag_col = q_pos - static_cast<int32_t>(k_start_tile);
+            if (diag_col < 0) {
+                // Entire row above diagonal -> stamp all neginf
+                stamp_tile_range_l1_acc<dst_batch>(mask_cb, neginf_idx, out_cb, row_offset, num_cols);
+            } else if (static_cast<uint32_t>(diag_col) < num_cols) {
+                // Stamp the diagonal tile
+                tile_regs_acquire();
+                copy_tile(mask_cb, diag_idx, 0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile<true>(0, out_cb, row_offset + static_cast<uint32_t>(diag_col));
+                tile_regs_release();
 
-            // Stamp neginf tiles to the right of diagonal
-            uint32_t neginf_start = static_cast<uint32_t>(diag_col) + 1;
-            if (neginf_start < num_cols) {
-                stamp_tile_range_l1_acc<dst_batch>(
-                    mask_cb, neginf_idx, out_cb, row_offset + neginf_start, num_cols - neginf_start);
+                // Stamp neginf tiles to the right of diagonal
+                uint32_t neginf_start = static_cast<uint32_t>(diag_col) + 1;
+                if (neginf_start < num_cols) {
+                    stamp_tile_range_l1_acc<dst_batch>(
+                        mask_cb, neginf_idx, out_cb, row_offset + neginf_start, num_cols - neginf_start);
+                }
+            }
+            // else: diag_col >= num_cols -> entire row below diagonal, no mask needed
+        } else {
+            // Chunked-prefill straddle: K coord jumps by straddle_jump at col >= straddle_col
+            // (the K-chunk crosses a slab boundary). Evaluate per-col.
+            for (uint32_t col = 0; col < num_cols; col++) {
+                int32_t k_pos = static_cast<int32_t>(k_start_tile) + static_cast<int32_t>(col);
+                if (col >= straddle_col) {
+                    k_pos += static_cast<int32_t>(straddle_jump);
+                }
+                if (k_pos > q_pos) {
+                    stamp_tile_range_l1_acc<dst_batch>(mask_cb, neginf_idx, out_cb, row_offset + col, 1);
+                } else if (k_pos == q_pos) {
+                    tile_regs_acquire();
+                    copy_tile(mask_cb, diag_idx, 0);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_tile<true>(0, out_cb, row_offset + col);
+                    tile_regs_release();
+                }
             }
         }
-        // else: diag_col >= num_cols -> entire row below diagonal, no mask needed
     }
 
     PACK((llk_pack_reconfig_l1_acc(0)));
@@ -1527,9 +1553,11 @@ struct LightweightMaskContext {
         uint32_t global_n_mask_chunk_id,
         uint32_t local_n_mask_chunk_id,
         uint32_t joint_n_mask_chunk_id,
-        uint32_t q_start_tile = 0) const {
+        uint32_t q_start_tile,
+        uint32_t k_start_tile,
+        uint32_t straddle_col = 0,
+        uint32_t straddle_jump = 0) const {
         if (is_causal) {
-            uint32_t k_start_tile = k_chunk * Sk_chunk_t;
             apply_causal_mask_lightweight<dst_size>(
                 cb_mask_in,
                 neginf_tile_idx,
@@ -1538,7 +1566,9 @@ struct LightweightMaskContext {
                 q_start_tile,
                 k_start_tile,
                 Sq_chunk_t,
-                Sk_chunk_t);
+                Sk_chunk_t,
+                straddle_col,
+                straddle_jump);
         }
 
         // Apply padding stamp (also when is_causal — the causal stamp doesn't handle K padding).
@@ -1675,7 +1705,10 @@ template <
     bool is_chunked,
     uint32_t scale_fp32,
     uint32_t sliding_window_size,
-    bool lightweight_mask_enabled = false>
+    bool lightweight_mask_enabled = false,
+    bool chunked_enabled = false,
+    uint32_t chunked_q_local_padded_Nt = 0,
+    uint32_t chunked_chunk_size_t = 0>
 void sdpa_inner_loop(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -1735,7 +1768,8 @@ void sdpa_inner_loop(
     const bool is_causal = false,
     const bool is_balanced = false,
     const bool use_zigzag_balancing = false,
-    const bool is_last_ring_iter = true) {
+    const bool is_last_ring_iter = true,
+    const ChunkedContext& chunked = {}) {
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
     uint32_t KV_chunks_processed_in_iter = 0;
     const uint32_t q_per_core = iter_q_end - iter_q_start;
@@ -1766,7 +1800,11 @@ void sdpa_inner_loop(
         } else if (sdpa_type == RING) {
             uint32_t q_chunk = remap_q_index(q_iter, q_num_chunks, use_zigzag_balancing) % q_num_chunks;
 
-            if (is_causal) {
+            if constexpr (chunked_enabled) {
+                // Absolute Q tile row. Diag stamp masks K past Q's range; logical_n skip handles K past the cache.
+                q_start_tile =
+                    chunked.q_start_idx_t + chunked.ring_index * chunked_q_local_padded_Nt + q_chunk * Sq_chunk_t;
+            } else if (is_causal) {
                 q_start_tile = q_chunk * Sq_chunk_t;
                 causal_k_limit = (q_start_tile + Sq_chunk_t + Sk_chunk_t - 1) / Sk_chunk_t;
             }
@@ -1794,10 +1832,17 @@ void sdpa_inner_loop(
         uint32_t processed_k_chunks = 0;
 
         for (uint32_t k_chunk = iter_k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
+            uint32_t kv_global_start_tile = 0;  // RING only: abs K-tile index of this k_chunk's start
             if constexpr (sdpa_type == RING) {
                 const bool kv_chunk_is_joint = k_chunk >= num_local_k_chunks;
-                // Global index into the padded KV tensor
-                const uint32_t kv_global_start_tile = local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
+                // Global index into the padded KV tensor. Chunked: non-monotonic local→abs map.
+                if constexpr (chunked_enabled) {
+                    kv_global_start_tile =
+                        kv_global_tile_for_local<true, 0, chunked_chunk_size_t, chunked_q_local_padded_Nt>(
+                            ring_id, k_chunk * Sk_chunk_t);
+                } else {
+                    kv_global_start_tile = local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
+                }
                 if (!kv_chunk_is_joint && (kv_global_start_tile >= logical_nt)) {
                     // This is a KV chunk on spatial input beyond the logical N, and not joint KV. Skip it.
                     continue;
@@ -1806,7 +1851,9 @@ void sdpa_inner_loop(
 
             KV_chunks_processed_in_iter++;
 
-            if (sdpa_type == RING && k_chunk >= causal_k_limit && is_causal) {
+            // Chunked-prefill: never take this skip (local-frame causal_k_limit doesn't apply —
+            // the diag stamp uses absolute coords every k_chunk instead).
+            if (sdpa_type == RING && !chunked_enabled && k_chunk >= causal_k_limit && is_causal) {
                 cb_wait_front(cb_k_in, k_chunk_tiles);
                 cb_wait_front(cb_v_in, v_chunk_tiles);
                 cb_pop_front(cb_k_in, k_chunk_tiles);
@@ -1854,8 +1901,27 @@ void sdpa_inner_loop(
             if (sdpa_type == RING && !is_causal) {
                 apply_mask = needs_padding_mask;
             } else if (is_causal || sliding_window_size > 0) {
-                const uint32_t k_low_idx = k_chunk * Sk_chunk_t;
-                const uint32_t k_high_idx = k_low_idx + Sk_chunk_t;
+                // Chunked-prefill (RING): use abs K so the causal-overlap test matches the diag stamp's frame.
+                uint32_t k_low_idx;
+                uint32_t k_high_idx;
+                if constexpr (sdpa_type == RING && chunked_enabled) {
+                    k_low_idx = kv_global_start_tile;
+                    k_high_idx = k_low_idx + Sk_chunk_t;
+                    // Straddle: chunk crosses a per-chunk slab boundary in the local cache. The
+                    // tail tiles land in the next slab, so the actual high global K is shifted by
+                    // chunk_size_t - q_local_padded_Nt.
+                    if (chunked_q_local_padded_Nt > 0) {
+                        const uint32_t local_start = k_chunk * Sk_chunk_t;
+                        const uint32_t slab_end_local =
+                            (local_start / chunked_q_local_padded_Nt + 1) * chunked_q_local_padded_Nt;
+                        if (local_start + Sk_chunk_t > slab_end_local) {
+                            k_high_idx += (chunked_chunk_size_t - chunked_q_local_padded_Nt);
+                        }
+                    }
+                } else {
+                    k_low_idx = k_chunk * Sk_chunk_t;
+                    k_high_idx = k_low_idx + Sk_chunk_t;
+                }
                 // Apply mask if causal overlap, sliding window, or this K chunk has padding
                 apply_mask = (q_start_tile < k_high_idx) || (sliding_window_size > 0) || needs_padding_mask;
             } else if constexpr (use_provided_mask) {
@@ -1884,6 +1950,27 @@ void sdpa_inner_loop(
                     cb_wait_front(cb_qk_im, Sk_chunk_t * Sq_chunk_t);
                     cb_pop_front(cb_qk_im, Sk_chunk_t * Sq_chunk_t);
                     cb_reserve_back(cb_qk_im, Sk_chunk_t * Sq_chunk_t);
+                    // Chunked-prefill: feed abs K (matches abs q_start_tile so diag stamp lines up).
+                    uint32_t k_start_tile_for_mask;
+                    uint32_t lw_straddle_col = 0;
+                    uint32_t lw_straddle_jump = 0;
+                    if constexpr (sdpa_type == RING && chunked_enabled) {
+                        k_start_tile_for_mask = kv_global_start_tile;
+                        // When Sk_chunk_t ∤ chunked_q_local_padded_Nt a K-chunk can straddle two
+                        // per-chunk slabs; global K coord jumps by chunk_size_t - q_local_padded_Nt
+                        // at the slab boundary. Stamp evaluates per-col when straddle_col > 0.
+                        if (chunked_q_local_padded_Nt > 0) {
+                            const uint32_t local_start = k_chunk * Sk_chunk_t;
+                            const uint32_t slab_end_local =
+                                (local_start / chunked_q_local_padded_Nt + 1) * chunked_q_local_padded_Nt;
+                            if (local_start + Sk_chunk_t > slab_end_local) {
+                                lw_straddle_col = slab_end_local - local_start;
+                                lw_straddle_jump = chunked_chunk_size_t - chunked_q_local_padded_Nt;
+                            }
+                        }
+                    } else {
+                        k_start_tile_for_mask = k_chunk * Sk_chunk_t;
+                    }
                     lw_mask.template apply<dst_size>(
                         cb_mask_in,
                         cb_qk_im,
@@ -1897,7 +1984,10 @@ void sdpa_inner_loop(
                         global_n_mask_chunk_id,
                         local_n_mask_chunk_id,
                         joint_n_mask_chunk_id,
-                        q_start_tile);
+                        q_start_tile,
+                        k_start_tile_for_mask,
+                        lw_straddle_col,
+                        lw_straddle_jump);
                     cb_push_back(cb_qk_im, Sk_chunk_t * Sq_chunk_t);
                 } else {
                     add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
@@ -2412,7 +2502,10 @@ template <
     uint32_t DHt,
     uint32_t vDHt,
     uint32_t scale_fp32,
-    bool lightweight_mask_enabled = false>
+    bool lightweight_mask_enabled = false,
+    bool chunked_enabled = false,
+    uint32_t chunked_q_local_padded_Nt = 0,
+    uint32_t chunked_chunk_size_t = 0>
 void sdpa_ring(
     const uint32_t qk_in0_block_w,
     const uint32_t qk_subblock_w,
@@ -2467,7 +2560,8 @@ void sdpa_ring(
     const bool is_causal_ring_iter,
     const bool skip_first_half_q,
     const bool is_last_ring_iter,
-    const bool use_zigzag_balancing = false) {
+    const bool use_zigzag_balancing = false,
+    const ChunkedContext& chunked = {}) {
     sdpa_inner_loop<
         RING,
         cb_qk_im,
@@ -2486,7 +2580,10 @@ void sdpa_ring(
         false,  // is_chunked (not used)
         scale_fp32,
         0,  // sliding_window_size (not used)
-        lightweight_mask_enabled>(
+        lightweight_mask_enabled,
+        chunked_enabled,
+        chunked_q_local_padded_Nt,
+        chunked_chunk_size_t>(
         0,  // Skt (not used)
         qk_in0_block_w,
         qk_subblock_w,
@@ -2545,7 +2642,8 @@ void sdpa_ring(
         is_causal_ring_iter,
         skip_first_half_q,
         use_zigzag_balancing,
-        is_last_ring_iter);
+        is_last_ring_iter,
+        chunked);
 }
 
 /**
