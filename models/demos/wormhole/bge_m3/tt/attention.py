@@ -148,9 +148,9 @@ class BgeM3Attention(LightweightModule):
             qkv_fused = ttnn.reshape(qkv_fused, [batch_size, 1, seq_len, -1])
 
         # Stage 2: split Q/K/V heads.
-        # B1/S512: head-split kernels for higher core utilization (16 → 256 work units).
+        # B1/S512 + B32/S512: head-split kernels for higher core utilization.
         # Other shapes: stock ttnn ops.
-        if self.config.max_batch_size == 1 and self.config.max_seq_len == 512:
+        if self.config.max_batch_size in (1, 32) and self.config.max_seq_len == 512:
             from models.demos.wormhole.bge_m3.tt.custom_ops.fused_qkv_heads.op import bge_qkv_heads_headsplit
 
             q, k, v = bge_qkv_heads_headsplit(
@@ -219,8 +219,8 @@ class BgeM3Attention(LightweightModule):
         ttnn.deallocate(k)
         ttnn.deallocate(v)
 
-        # Stage 5: concat heads. B1/S512: head-split with groups=4.
-        if self.config.max_batch_size == 1 and self.config.max_seq_len == 512:
+        # Stage 5: concat heads. B1/S512 + B32/S512: head-split with groups=4.
+        if self.config.max_batch_size in (1, 32) and self.config.max_seq_len == 512:
             from models.demos.wormhole.bge_m3.tt.custom_ops.fused_concat_heads.op import bge_concat_heads_headsplit
 
             context = bge_concat_heads_headsplit(context, head_groups=4, out_memcfg=self.config.output_memcfg)
