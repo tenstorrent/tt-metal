@@ -16,6 +16,11 @@ from typing import Any
 import ttnn
 from models.experimental.glm4_moe_lite.tt.runtime_config import Glm4RuntimeConfig
 
+# Shared-expert down proj (e.g. 32 x 10240 x 2048): 64 N-tiles / 32 cores => per_core_N=2,
+# which allows out_subblock_w=2 (perf report recommends out_subblock_h * out_subblock_w >= 2).
+_DOWN_MATMUL_NUM_CORES = 32
+_DOWN_OUT_SUBBLOCK_W = 2
+
 
 def compute_1d_prog_cfg(
     device: Any, b_weight: ttnn.Tensor, m_total: int
@@ -55,6 +60,64 @@ def compute_1d_prog_cfg(
     )
 
 
+def compute_1d_mlp_down_prog_cfg(
+    device: Any, b_weight: ttnn.Tensor, m_total: int
+) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
+    """1D multicast program config for MLP down projections (K=intermediate, N=hidden).
+
+    Uses exactly 32 cores with per_core_N=2 and out_subblock_w=2 when N-tiles are
+    divisible by 32 (2048 hidden => 64 tiles). Falls back to compute_1d_prog_cfg otherwise.
+    """
+    K = int(b_weight.shape[-2])
+    N = int(b_weight.shape[-1])
+    m_tiles = max(1, (m_total + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE)
+    k_tiles = (K + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+    n_tiles = (N + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+    num_cores = _DOWN_MATMUL_NUM_CORES
+
+    if n_tiles % num_cores != 0:
+        return compute_1d_prog_cfg(device, b_weight, m_total)
+
+    per_core_N = n_tiles // num_cores
+    if per_core_N % _DOWN_OUT_SUBBLOCK_W != 0:
+        return compute_1d_prog_cfg(device, b_weight, m_total)
+
+    grid = device.compute_with_storage_grid_size()
+    max_x, max_y = int(grid.x), int(grid.y)
+    core_x, core_y = max_x, max_y
+    found = False
+    for gx in range(min(max_x, num_cores), 0, -1):
+        if num_cores % gx != 0:
+            continue
+        gy = num_cores // gx
+        if gy <= max_y:
+            core_x, core_y = gx, gy
+            found = True
+            break
+    if not found:
+        return compute_1d_prog_cfg(device, b_weight, m_total)
+
+    in0_bw = 1
+    for candidate in (4, 3, 2):
+        if k_tiles % candidate == 0:
+            in0_bw = candidate
+            break
+
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
+        in0_block_w=in0_bw,
+        out_subblock_h=1,
+        out_subblock_w=_DOWN_OUT_SUBBLOCK_W,
+        out_block_h=1,
+        out_block_w=_DOWN_OUT_SUBBLOCK_W,
+        per_core_M=m_tiles,
+        per_core_N=per_core_N,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+
 def mlp_linear(
     a: ttnn.Tensor,
     b: ttnn.Tensor,
@@ -83,6 +146,27 @@ def mlp_linear(
             b_batch *= int(b.shape[i])
         if m_total <= ttnn.TILE_SIZE and b_batch == 1:
             kwargs["program_config"] = compute_1d_prog_cfg(device, b, m_total)
+    return ttnn.linear(a, b, **kwargs)
+
+
+def mlp_down_linear(
+    a: ttnn.Tensor,
+    b: ttnn.Tensor,
+    *,
+    device: Any,
+    cfg: Glm4RuntimeConfig,
+    memory_config: ttnn.MemoryConfig | None = None,
+) -> ttnn.Tensor:
+    """Linear for MLP down projections with a fixed 32-core / out_subblock_w=2 program config."""
+    kwargs: dict[str, object] = {}
+    mc = memory_config if memory_config is not None else cfg.decode_act_mc
+    if mc is not None:
+        kwargs["memory_config"] = mc
+    kwargs["compute_kernel_config"] = cfg.mlp_compute_kernel_config()
+    m_total = 1
+    for i in range(len(a.shape) - 1):
+        m_total *= int(a.shape[i])
+    kwargs["program_config"] = compute_1d_mlp_down_prog_cfg(device, b, m_total)
     return ttnn.linear(a, b, **kwargs)
 
 
