@@ -161,6 +161,7 @@ ChunkedParams compute_chunked_params(
 
 }  // namespace
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const SDPAParams& operation_attributes, const SDPAInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input_tensor_q = tensor_args.q;
