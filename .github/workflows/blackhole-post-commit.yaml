@@ -259,7 +259,7 @@ jobs:
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
-      tracy: true
+      tracy: false
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-umd-tests: true
       enable-lto: ${{ inputs.enable-lto || false }}
