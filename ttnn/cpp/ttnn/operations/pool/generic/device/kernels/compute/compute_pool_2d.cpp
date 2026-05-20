@@ -227,7 +227,7 @@ void kernel_main() {
 
                     constexpr uint32_t PACKER_FACE_R_DIM_STICK = 1;  // face_r_dim = 1 => one-row faces (stick packing)
                     if constexpr (is_output_block_format) {
-                        PACK((llk_pack_untilize_hw_configure_disaggregated<DST_ACCUM_MODE, ckernel::PackMode::Default>(
+                        PACK((llk_pack_reconfig_data_format_disaggregated<DST_ACCUM_MODE>(
                             pre_tilize_cb_id, PACKER_FACE_R_DIM_STICK, num_faces_in_output_tile)));
                     }
                     PACK((llk_pack_untilize_init<max_tiles_per_iter, max_tiles_per_iter, false, false, TILE_C_DIM>(
