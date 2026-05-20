@@ -12,8 +12,9 @@
 #include <vector>
 
 #include "core/compute_kernel_config.hpp"
-#include "core/random.hpp"
+#include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "test_utils/random_data.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/minimal_matmul.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
@@ -43,16 +44,8 @@ const std::vector<GramMatmulShape> shapes = {
 };
 
 ttnn::Tensor make_random_tensor(uint32_t M, uint32_t K, ttnn::distributed::MeshDevice* device, uint32_t seed) {
-    std::vector<float> data(M * K);
-    ttml::core::parallel_generate(
-        std::span{data.data(), data.size()}, []() { return std::uniform_real_distribution<float>(-1.0f, 1.0f); }, seed);
-    auto shape = ttnn::Shape({1, 1, M, K});
-    return ttnn::Tensor::from_vector(
-        data,
-        ttnn::TensorSpec(
-            shape,
-            tt::tt_metal::TensorLayout(ttnn::DataType::BFLOAT16, tt::tt_metal::Layout::TILE, ttnn::DRAM_MEMORY_CONFIG)),
-        device);
+    auto data = ttml::test_utils::make_uniform_vector<float>(M * K, -1.0f, 1.0f, seed);
+    return ttml::core::from_vector(data, ttnn::Shape({1, 1, M, K}), device);
 }
 
 double bench_op(auto fn, ttnn::distributed::MeshDevice* device) {
@@ -141,14 +134,9 @@ void BM_GramMatmul(benchmark::State& state) {
     // Print results table
     // Cell format: "%6.0f us %3.0f TF" = 16 chars
     std::cout << "\n";
-    std::cout << "  "
-                 "┌────────────────────────┬──────────────────┬──────────────────┬──────────────────┬────────────┬─────"
-                 "────┐\n";
-    std::cout << "  │ Shape                  │  gram_matmul     │  minimal_matmul  │  ttnn::matmul    │ vs minimal │ "
-                 "vs ttnn │\n";
-    std::cout << "  "
-                 "├────────────────────────┼──────────────────┼──────────────────┼──────────────────┼────────────┼─────"
-                 "────┤\n";
+    std::cout << "  ┌────────────────────────┬──────────────────┬──────────────────┬──────────────────┬────────────┬─────────┐\n";
+    std::cout << "  │ Shape                  │  gram_matmul     │  minimal_matmul  │  ttnn::matmul    │ vs minimal │ vs ttnn │\n";
+    std::cout << "  ├────────────────────────┼──────────────────┼──────────────────┼──────────────────┼────────────┼─────────┤\n";
     for (const auto& r : results) {
         char line[320];
         std::snprintf(
@@ -166,9 +154,7 @@ void BM_GramMatmul(benchmark::State& state) {
             r.ttnn_us / r.gram_us);
         std::cout << line << "\n";
     }
-    std::cout << "  "
-                 "└────────────────────────┴──────────────────┴──────────────────┴──────────────────┴────────────┴─────"
-                 "────┘\n";
+    std::cout << "  └────────────────────────┴──────────────────┴──────────────────┴──────────────────┴────────────┴─────────┘\n";
     std::cout << std::flush;
 
     state.SetIterationTime(results.back().gram_us * 1e-6);
