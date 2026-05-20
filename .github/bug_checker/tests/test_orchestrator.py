@@ -112,9 +112,7 @@ def test_empty_diff_returns_empty():
 @patch("bug_checker.orchestrator.LLMSession")
 @patch("bug_checker.orchestrator.select_rules")
 @patch("bug_checker.orchestrator.load_rules")
-def test_run_bug_check_fails_closed_when_llm_rule_errors(
-    mock_load, mock_select, mock_llm_cls, mock_post
-):
+def test_run_bug_check_fails_closed_when_llm_rule_errors(mock_load, mock_select, mock_llm_cls, mock_post):
     rule = _rule(["foo/**"])
     mock_load.return_value = [rule]
     mock_select.return_value = [rule]

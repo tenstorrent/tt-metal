@@ -104,8 +104,8 @@ def test_select_rules():
     assert any(r.id == "ccl-ring-buffer-mismatch" for r in selected)
     assert not any(r.id == "reshape-dim-check" for r in selected)
 
+
 def test_select_rules_by_label():
     rules = load_rules()
     selected = select_rules(rules, changed_files=[], pr_labels=["area:ops"])
     assert any(r.id == "reshape-dim-check" for r in selected)
-

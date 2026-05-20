@@ -129,9 +129,7 @@ def print_findings(findings: list[Finding]) -> None:
         if f.suggested_fix:
             logger.opt(colors=True).info("<green>  Suggested fix:</green>")
             for fix_line in f.suggested_fix.splitlines():
-                logger.opt(colors=True).info(
-                    "<green>    {fix_line}</green>", fix_line=fix_line
-                )
+                logger.opt(colors=True).info("<green>    {fix_line}</green>", fix_line=fix_line)
 
     if blocking:
         logger.opt(colors=True).info(
@@ -152,18 +150,14 @@ def print_findings(findings: list[Finding]) -> None:
 
 def format_pr_comment(finding: Finding, rule_path: str | None = None) -> str:
     """Format a single finding as a PR comment body."""
-    severity_emoji = (
-        ":red_circle:" if finding.severity == "blocking" else ":black_circle:"
-    )
+    severity_emoji = ":red_circle:" if finding.severity == "blocking" else ":black_circle:"
     rule_label = _format_rule_label(finding.rule_id, rule_path)
     parts = [
         f"**Bug Checker [{finding.severity.upper()}]** {severity_emoji} {rule_label}\n",
         finding.message,
     ]
     if finding.suggested_fix:
-        parts.append(
-            f"\n**Suggested fix:**\n```suggestion\n{finding.suggested_fix}\n```"
-        )
+        parts.append(f"\n**Suggested fix:**\n```suggestion\n{finding.suggested_fix}\n```")
     return "\n".join(parts)
 
 
@@ -191,16 +185,12 @@ def format_summary_comment(
 
     lines = ["## Bug Checker Failed\n" if failed_rules else "## Bug Checker Results\n"]
     if failed_rules and not findings:
-        lines.append(
-            "The analysis did not complete, so this run cannot be treated as a pass."
-        )
+        lines.append("The analysis did not complete, so this run cannot be treated as a pass.")
     elif not findings:
         lines.append("No issues found.")
     else:
         if failed_rules:
-            lines.append(
-                "Partial findings were produced before the checker failed. Treat this run as failed.\n"
-            )
+            lines.append("Partial findings were produced before the checker failed. Treat this run as failed.\n")
         if blocking:
             lines.append(f"**{len(blocking)} blocking issue(s) found.**\n")
         if warnings:
@@ -224,8 +214,6 @@ def format_summary_comment(
         )
 
     if comment_failures:
-        lines.append(
-            f"\n> **Note:** {comment_failures} comment(s) could not be posted due to API errors."
-        )
+        lines.append(f"\n> **Note:** {comment_failures} comment(s) could not be posted due to API errors.")
 
     return "\n".join(lines)

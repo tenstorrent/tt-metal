@@ -110,9 +110,7 @@ def test_format_summary_comment_with_failures():
 
 
 def test_format_summary_comment_with_failed_rules():
-    summary = format_summary_comment(
-        [], failed_rules=["ccl-ring-buffer-mismatch", "reshape-dim-check"]
-    )
+    summary = format_summary_comment([], failed_rules=["ccl-ring-buffer-mismatch", "reshape-dim-check"])
     assert "Bug Checker Failed" in summary
     assert "2 rule(s) failed" in summary
     assert "`ccl-ring-buffer-mismatch`" in summary
