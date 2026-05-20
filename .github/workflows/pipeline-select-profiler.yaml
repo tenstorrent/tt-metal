@@ -62,28 +62,27 @@ jobs:
       run-galaxy: ${{ steps.logic.outputs.run-galaxy }}
       run-t3k: ${{ steps.logic.outputs.run-t3k }}
       run-single-card: ${{ steps.logic.outputs.run-single-card }}
+      single-card-skus: ${{ steps.logic.outputs.single-card-skus }}
       any-selected: ${{ steps.logic.outputs.any-selected }}
     steps:
       - name: Determine sub-pipeline selection
         id: logic
         run: |
           set -e
-          # Push events don't carry workflow_dispatch inputs, so the run_*
-          # booleans evaluate as empty. Mirror the workflow_dispatch defaults
-          # so a push runs the same set a developer gets clicking "Run workflow"
-          # without changes.
-          if [[ "${{ github.event_name }}" == "push" ]]; then
-            galaxy=true
+          # Schedule events don't carry workflow_dispatch inputs, so the run-*
+          # booleans evaluate as empty. Run every sub-pipeline on schedule.
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            galaxy=false
             t3k=true
             bh=true
             n300=true
             n150=true
           else
-            galaxy="${{ inputs.run_galaxy_profiler }}"
-            t3k="${{ inputs.run_t3k_profiler }}"
-            bh="${{ inputs.run_blackhole_profiler }}"
-            n300="${{ inputs.run_n300_profiler }}"
-            n150="${{ inputs.run_n150_profiler }}"
+            galaxy="${{ inputs.run-galaxy-profiler }}"
+            t3k="${{ inputs.run-t3k-profiler }}"
+            bh="${{ inputs.run-blackhole-profiler }}"
+            n300="${{ inputs.run-n300-profiler }}"
+            n150="${{ inputs.run-n150-profiler }}"
           fi
 
           parts=()
@@ -98,7 +97,7 @@ jobs:
           { [[ "$galaxy" == "true" ]] || [[ "$t3k" == "true" ]] || [[ "$run_sc" == "true" ]]; } && any=true
 
           if [[ "$any" != "true" ]]; then
-            echo "::error::No profiler sub-pipeline selected. Enable at least one of the run_*_profiler inputs."
+            echo "::error::No profiler sub-pipeline selected. Enable at least one of the run-*-profiler inputs."
             exit 1
           fi
 
