@@ -63,7 +63,7 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
     const uint32_t offset_tiles = operation_attributes.in0_row_offset_tiles;
     const uint32_t k_offset_tiles = operation_attributes.in0_k_offset_tiles;
     const uint32_t in1_k_offset_tiles = operation_attributes.in1_k_offset_tiles;
-    const uint32_t M_parent_tiles = M_parent / TILE_HEIGHT;
+    const uint32_t M_parent_tiles = tt::div_up(M_parent, TILE_HEIGHT);
     const uint32_t K_in_tiles = K_in / TILE_WIDTH;
     const uint32_t K_w_tiles = K_w / TILE_WIDTH;
     const uint32_t M = (effective_M_tiles > 0) ? (effective_M_tiles * TILE_HEIGHT) : M_parent;
@@ -91,13 +91,17 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
             K_in_tiles);
     }
     TT_FATAL(M > 0 && K_w > 0, "variable_matmul dimensions must be positive");
+    // Non-tile-aligned matmul-M is supported (matches minimal_matmul / ttnn::matmul): the
+    // tensor's TILE-layout physical storage rounds up to a multiple of TILE_HEIGHT, the
+    // kernel operates on padded tiles, and the dataflow writer's `if (i >= logical_d0)
+    // break;` clips writes at the logical tile boundary. The last (partial) M tile's
+    // padded rows are zero on input → zero on output, so they're harmless.
+    const uint32_t M_tiles_ceil = tt::div_up(M, TILE_HEIGHT);
     TT_FATAL(
-        M % TILE_HEIGHT == 0, "variable_matmul actual M ({}) must be a multiple of TILE_HEIGHT ({})", M, TILE_HEIGHT);
-    TT_FATAL(
-        offset_tiles + (M / TILE_HEIGHT) <= M_parent_tiles,
+        offset_tiles + M_tiles_ceil <= M_parent_tiles,
         "variable_matmul offset {} + effective_M tiles {} exceeds input M tiles {}",
         offset_tiles,
-        M / TILE_HEIGHT,
+        M_tiles_ceil,
         M_parent_tiles);
 
     // Tile alignment checks
@@ -142,10 +146,10 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
         const auto& out = tensor_args.output_tensor.value();
         const auto& out_logical = out.logical_shape();
         const uint32_t matmul_N = config.transpose_b ? w_logical[-2] : w_logical[-1];
-        const uint32_t out_M_tiles = out_logical[-2] / TILE_HEIGHT;
+        const uint32_t out_M_tiles = tt::div_up(out_logical[-2], TILE_HEIGHT);
         const uint32_t out_N = out_logical[-1];
         const uint32_t out_offset = operation_attributes.out_row_offset_tiles;
-        const uint32_t M_tiles_actual = M / TILE_HEIGHT;
+        const uint32_t M_tiles_actual = tt::div_up(M, TILE_HEIGHT);
         TT_FATAL(out.layout() == Layout::TILE, "variable_matmul output tensor must be TILE layout");
         TT_FATAL(out.dtype() == act_tensor.dtype(), "variable_matmul output dtype must match input dtype");
         TT_FATAL(out_N == matmul_N, "variable_matmul output N ({}) must match matmul N ({})", out_N, matmul_N);

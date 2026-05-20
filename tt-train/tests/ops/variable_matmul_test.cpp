@@ -391,6 +391,23 @@ TEST_F(VariableMatmulTest, MinimalParity_NoTranspose) {
     EXPECT_EQ(max_abs_error(result, ref), 0.0F) << "variable vs minimal (no transpose) not bit-exact";
 }
 
+// Non-tile-aligned M (matches DeepSeek 16B with TP=8: moe_inter_dim=1408/8 = 176). The
+// TILE-layout physical storage rounds to ceil(176/32)*32 = 192; variable_matmul must
+// process all 6 M-tiles, write the same as minimal_matmul, and present logical_shape M=176
+// to the caller. Output's physical tile 5 has 16 valid rows + 16 padded zeros.
+TEST_F(VariableMatmulTest, MinimalParity_NoTranspose_NonTileAlignedM_176) {
+    const uint32_t M = 176, K = 128, N = 256;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto input = create_random_device_tensor(M, K, device);
+    auto weight = create_random_device_tensor(K, N, device);
+
+    auto result = ttml::metal::variable_matmul(input, weight, kConfig);
+    auto ref = minimal_matmul_hifi4(input, weight, kConfig);
+
+    EXPECT_EQ(max_abs_error(result, ref), 0.0F) << "variable vs minimal (M=176, non-tile-aligned) not bit-exact";
+}
+
 TEST_F(VariableMatmulTest, MinimalParity_TransposeB) {
     const uint32_t M = 128, K = 128, N = 512;
     auto* device = &ttml::autograd::ctx().get_device();
