@@ -264,6 +264,9 @@ class VoxtralTTSPipeline:
         voice: str = "casual_male",
         max_tokens: int = 2500,
         seed: int = 0,
+        *,
+        fixed_step_count: bool = False,
+        include_waveform_decode: bool = True,
     ) -> VoxtralTTSGenerateOutput:
         """Full TT TTS pipeline: text → acoustic codes → audio waveform.
 
@@ -298,7 +301,7 @@ class VoxtralTTSPipeline:
             audio_codes = self.acoustic.forward(last_hidden.unsqueeze(0), cfg_alpha).to(torch.long)  # [1, 37]
 
             generated_codes.append(audio_codes[0].detach().cpu())  # [37]
-            if int(audio_codes[0, 0].item()) == self.end_audio_id:
+            if not fixed_step_count and int(audio_codes[0, 0].item()) == self.end_audio_id:
                 break
 
             # MM embedding for next text step: [dim] on CPU
@@ -335,10 +338,13 @@ class VoxtralTTSPipeline:
         codes_b37t = audio_tokens.T.unsqueeze(0).long()  # [1, 37, T]
 
         # --- 4. TT audio tokenizer decode: codes → waveform ---
-        wav = self.decode_waveform_from_codes_tt(codes_b37t)
-        expected_samples = audio_tokens.shape[0] * self._downsample_factor
-        wav_flat = wav.detach().cpu().float().reshape(-1)
-        waveform = wav_flat[:expected_samples].reshape(1, 1, -1)
+        if include_waveform_decode:
+            wav = self.decode_waveform_from_codes_tt(codes_b37t)
+            expected_samples = audio_tokens.shape[0] * self._downsample_factor
+            wav_flat = wav.detach().cpu().float().reshape(-1)
+            waveform = wav_flat[:expected_samples].reshape(1, 1, -1)
+        else:
+            waveform = torch.zeros(1, 1, 0, dtype=torch.float32)
         return VoxtralTTSGenerateOutput(
             waveform=waveform,
             codes_b37t=codes_b37t,
@@ -355,9 +361,19 @@ class VoxtralTTSPipeline:
         voice: str = "casual_male",
         max_tokens: int = 2500,
         seed: int = 0,
+        *,
+        fixed_step_count: bool = False,
+        include_waveform_decode: bool = True,
     ) -> torch.Tensor:
         """Compatibility wrapper returning only the final waveform."""
-        return self.forward(text=text, voice=voice, max_tokens=max_tokens, seed=seed).waveform
+        return self.forward(
+            text=text,
+            voice=voice,
+            max_tokens=max_tokens,
+            seed=seed,
+            fixed_step_count=fixed_step_count,
+            include_waveform_decode=include_waveform_decode,
+        ).waveform
 
     @torch.no_grad()
     def generate_with_codes(
@@ -366,9 +382,19 @@ class VoxtralTTSPipeline:
         voice: str = "casual_male",
         max_tokens: int = 2500,
         seed: int = 0,
+        *,
+        fixed_step_count: bool = False,
+        include_waveform_decode: bool = True,
     ) -> VoxtralTTSGenerateOutput:
         """Run the same free-running path as :meth:`generate`, returning generated codes for diagnostics."""
-        return self.forward(text=text, voice=voice, max_tokens=max_tokens, seed=seed)
+        return self.forward(
+            text=text,
+            voice=voice,
+            max_tokens=max_tokens,
+            seed=seed,
+            fixed_step_count=fixed_step_count,
+            include_waveform_decode=include_waveform_decode,
+        )
 
     def decode_waveform_from_codes_tt(self, codes_b37t: torch.Tensor) -> torch.Tensor:
         """``[B,37,T]`` int CPU codes → float32 waveform (TT latent + decoder + pretransform)."""
@@ -378,6 +404,82 @@ class VoxtralTTSPipeline:
         wav = self.audio_tokenizer.pretransform_decode_torch(mel_tt)
         ttnn.deallocate(mel_tt)
         return wav
+
+    def _acoustic_hidden_tile_copy(self, llm_hidden_tt: ttnn.Tensor) -> ttnn.Tensor:
+        """``[B, 1, dim]`` TILE copy for acoustic ops; never frees closed-over trace inputs."""
+        work = ttnn.clone(llm_hidden_tt)
+        if len(work.shape) == 4:
+            bsz, dim = int(work.shape[0]), int(work.shape[-1])
+            reshaped = ttnn.reshape(work, (bsz, 1, dim))
+            if work.is_allocated():
+                ttnn.deallocate(work)
+            work = reshaped
+        if work.layout != ttnn.TILE_LAYOUT:
+            tile_hidden = ttnn.to_layout(
+                work,
+                ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            if work.is_allocated():
+                ttnn.deallocate(work)
+            work = tile_hidden
+        return work
+
+    def forward_generation_step_trace(
+        self,
+        llm_hidden_tt: ttnn.Tensor,
+        text_step: Any,
+        noise_tt: ttnn.Tensor,
+        cfg_scalar: float = ACOUSTIC_CFG_ALPHA_DEFAULT,
+    ) -> ttnn.Tensor:
+        """One autoregressive TT step for trace capture: acoustic (semantic + FM) + text decode.
+
+        All inputs must be allocated before ``pipeline.compile``; no host readback or
+        ``synchronize_device``. Returns a **new** device hidden each call.
+        """
+        llm_tile = self._acoustic_hidden_tile_copy(llm_hidden_tt)
+        codes_tt = self.acoustic.forward_acoustic_trace_codes(llm_tile, noise_tt, cfg_scalar)
+        if llm_tile.is_allocated():
+            ttnn.deallocate(llm_tile)
+        if codes_tt.is_allocated():
+            ttnn.deallocate(codes_tt)
+        return self.text.decode_step_from_embeds_tt(
+            text_step.x_embed_tt,
+            text_step.current_pos_tt,
+            text_step.rot_mats_global,
+            text_step.rot_mats_local,
+            text_step.page_table,
+        )
+
+    def forward_tts_generation_trace(
+        self,
+        steps: list[Any],
+        *,
+        cfg_scalar: float = ACOUSTIC_CFG_ALPHA_DEFAULT,
+    ) -> ttnn.Tensor:
+        """Fixed-count generation loop inside trace (prefill + decode inputs materialized before capture).
+
+        Each step supplies ``llm_hidden_tt`` (acoustic input), ``noise_tt``, and text-decode tensors.
+        KV is filled only inside trace replay (materialize must not run device decode beforehand).
+        """
+        last_codes_tt = None
+        for step in steps:
+            llm_tile = self._acoustic_hidden_tile_copy(step.llm_hidden_tt)
+            codes_tt = self.acoustic.forward_acoustic_trace_codes(llm_tile, step.noise_tt, cfg_scalar)
+            if llm_tile.is_allocated():
+                ttnn.deallocate(llm_tile)
+            self.text.decode_step_from_embeds_tt(
+                step.text_step.x_embed_tt,
+                step.text_step.current_pos_tt,
+                step.text_step.rot_mats_global,
+                step.text_step.rot_mats_local,
+                step.text_step.page_table,
+            )
+            if last_codes_tt is not None and last_codes_tt.is_allocated():
+                ttnn.deallocate(last_codes_tt)
+            last_codes_tt = codes_tt
+        assert last_codes_tt is not None
+        return last_codes_tt
 
     def acoustic_codes_forward(
         self,
