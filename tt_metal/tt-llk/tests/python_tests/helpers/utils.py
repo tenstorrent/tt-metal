@@ -574,6 +574,16 @@ def passed_test(
                     golden_tensor[idx],
                 )
 
+    # If the golden tensor has essentially no signal (all near-zero), PCC is
+    # mathematically undefined (variance = 0). calculate_pcc's "either is
+    # completely zero" branch returns 0.0 when one side is exactly zero and
+    # the other has any non-zero — including sub-tolerance HW noise — which
+    # spuriously fails tests like Elwmul with a zero scalar broadcast where
+    # the true result is 0 everywhere. When golden is effectively zero, rely
+    # on the per-element tolerance check alone.
+    if golden_tensor.abs().max().item() < 1e-6:
+        return bool(is_within_tolerance)
+
     pcc = calculate_pcc(res_tensor, golden_tensor)
 
     if print_pcc:
