@@ -47,7 +47,9 @@ inline uint32_t pack_fill_value_for_dtype(ttnn::DataType dtype, float fill_value
         case ttnn::DataType::BFLOAT16: return pack_fill_value(fill_value);
         case ttnn::DataType::UINT16: return pack_fill_value(static_cast<uint16_t>(fill_value));
         case ttnn::DataType::UINT32: return pack_fill_value(static_cast<uint32_t>(fill_value));
-        case ttnn::DataType::INT32: return pack_fill_value(static_cast<int32_t>(fill_value));
+        // INT32: recover the raw int32 bits from fill_value via std::bit_cast<uint32_t>. Host passes
+        // bit-encoded sentinels as float (generic_reductions::get_pad_value); do not decode numerically.
+        case ttnn::DataType::INT32: return std::bit_cast<uint32_t>(fill_value);
         default: TT_THROW("fill_pad: unsupported dtype"); return 0u;
     }
 }
