@@ -59,6 +59,12 @@ import numpy as np
 import torch
 
 import ttnn
+from models.demos.ace_step_v1_5.ace_step_perf_log import (
+    AceStepPerfRecorder,
+    ace_step_perf_log_steps_enabled,
+    ace_step_perf_logging_enabled,
+    make_denoise_progress_fn,
+)
 
 from .condition_encoder import TtAceStepInstrumentalConditionEncoder
 from .dit_sampling_ttnn import (
@@ -1275,6 +1281,21 @@ class AceStepE2EModel:
             raise RuntimeError("Cached context latents were not initialized.")
         do_cfg = self.config.guidance_scale > 1.0 + 1e-6
 
+        perf = AceStepPerfRecorder(
+            enabled=ace_step_perf_logging_enabled(),
+            params={
+                "variant": "e2e",
+                "duration_sec": float(self.config.duration_sec),
+                "frames": int(self.frames),
+                "infer_steps": int(self.config.infer_steps),
+                "guidance_scale": float(self.config.guidance_scale),
+                "use_adg": bool(self.config.use_adg),
+                "do_cfg": bool(do_cfg),
+                "seed": int(self.config.seed),
+                "use_trace": _e2e_trace_enabled(),
+            },
+        )
+
         # Start each generate() with an empty device-profiler ring so the per-layer flush downstream
         # has full 12000-marker headroom; no-op when device profiling is off.
         _ace_step_flush_device_profiler(self.device)
@@ -1294,13 +1315,18 @@ class AceStepE2EModel:
             self._prompt_cache.move_to_end(cache_key)
             _ace_step_prof_signpost("ACE-Step E2E", "Start text encoding (cache hit)")
             _ace_step_prof_signpost("ACE-Step E2E", "Start condition encoding (cache hit)")
+            if perf.enabled:
+                perf.record("text_encoder_cached", 0.0)
+                perf.record("condition_encoder_cached", 0.0)
         else:
             _ace_step_prof_signpost("ACE-Step E2E", "Start text encoding")
-            text_hs_tt, attn_mask_np = self.encode_text(prompt)
+            with perf.timed("text_encoder", device=self.device):
+                text_hs_tt, attn_mask_np = self.encode_text(prompt)
             _ace_step_flush_device_profiler(self.device)
 
             _ace_step_prof_signpost("ACE-Step E2E", "Start condition encoding")
-            enc_hs_tt_one, enc_mask_np, null_emb_tt = self._condition_encoder.forward(text_hs_tt, attn_mask_np)
+            with perf.timed("condition_encoder", device=self.device):
+                enc_hs_tt_one, enc_mask_np, null_emb_tt = self._condition_encoder.forward(text_hs_tt, attn_mask_np)
             _ace_step_flush_device_profiler(self.device)
             try:
                 ttnn.deallocate(text_hs_tt)
@@ -1366,27 +1392,28 @@ class AceStepE2EModel:
         enc_attn_1d_bk = np.concatenate([enc_row, enc_row], axis=0) if do_cfg else enc_row
 
         _ace_step_prof_signpost("ACE-Step E2E", "Start DiT preparation (SDPA mask)")
-        b_mask = 2 if do_cfg else 1
-        xt_dummy = ttnn.zeros(
-            (b_mask, int(self.frames), 64),
-            device=self.device,
-            dtype=self.act_dtype,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=self.mem,
-        )
-        ctx_for_mask = concat_duplicate_batch(ctx_tt_one) if do_cfg else ctx_tt_one
-        mask_tt = self.pipe.build_encoder_attention_mask_b1qk_optional(
-            xt_bt64=xt_dummy,
-            context_latents_bt128=ctx_for_mask,
-            encoder_hidden_states_btd=enc_tt_pipe,
-            encoder_attention_mask_1d_bk=enc_attn_1d_bk,
-        )
-        try:
-            ttnn.deallocate(xt_dummy)
-            if do_cfg:
-                ttnn.deallocate(ctx_for_mask)
-        except Exception:
-            pass
+        with perf.timed("dit_mask_prep", device=self.device):
+            b_mask = 2 if do_cfg else 1
+            xt_dummy = ttnn.zeros(
+                (b_mask, int(self.frames), 64),
+                device=self.device,
+                dtype=self.act_dtype,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=self.mem,
+            )
+            ctx_for_mask = concat_duplicate_batch(ctx_tt_one) if do_cfg else ctx_tt_one
+            mask_tt = self.pipe.build_encoder_attention_mask_b1qk_optional(
+                xt_bt64=xt_dummy,
+                context_latents_bt128=ctx_for_mask,
+                encoder_hidden_states_btd=enc_tt_pipe,
+                encoder_attention_mask_1d_bk=enc_attn_1d_bk,
+            )
+            try:
+                ttnn.deallocate(xt_dummy)
+                if do_cfg:
+                    ttnn.deallocate(ctx_for_mask)
+            except Exception:
+                pass
 
         # Refresh persistent trace buffers from this prompt's freshly-encoded enc/ctx/mask before
         # the loop replays the captured DiT body. ``prime_per_prompt`` runs device→device copies
@@ -1447,12 +1474,17 @@ class AceStepE2EModel:
         else:
             loop_kw["enc_mask"] = None
 
+        if ace_step_perf_log_steps_enabled():
+            loop_kw["progress_fn"] = make_denoise_progress_fn(perf, num_steps=len(self.t_schedule))
+
         _ace_step_prof_signpost("ACE-Step E2E", "Start denoising loop")
-        pred_latents = run_ttnn_denoise_loop(**loop_kw)
+        with perf.timed("dit_denoise_loop", device=self.device):
+            pred_latents = run_ttnn_denoise_loop(**loop_kw)
         _ace_step_flush_device_profiler(self.device)
         try:
             _ace_step_prof_signpost("ACE-Step E2E", "Start VAE decode")
-            wav = self.decode_vae(pred_latents, return_waveform_ttnn=return_waveform_ttnn)
+            with perf.timed("vae_decode", device=self.device):
+                wav = self.decode_vae(pred_latents, return_waveform_ttnn=return_waveform_ttnn)
             _ace_step_flush_device_profiler(self.device)
             _ace_step_prof_signpost("ACE-Step E2E", "Generation complete")
         finally:
@@ -1460,4 +1492,5 @@ class AceStepE2EModel:
                 ttnn.deallocate(pred_latents)
             except Exception:
                 pass
+        perf.emit_summary(label="generate_total")
         return wav
