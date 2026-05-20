@@ -1251,6 +1251,89 @@ class LTXPipeline:
             bf16_tensor_2dshard(a_sin, device=self.mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1}),
         )
 
+    def _prepare_av_cross_pe(
+        self,
+        latent_frames: int,
+        latent_height: int,
+        latent_width: int,
+        audio_N: int,
+        audio_N_real: int,
+        fps: float = 24.0,
+        cross_pe_max_pos: int = 20,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+        """Compute temporal-only cross positional embeddings for A↔V cross-attention.
+
+        Reference: ``MultiModalTransformerArgsPreprocessor.prepare`` builds ``cross_pe`` from
+        ``modality.positions[:, 0:1, :]`` (temporal slice only) at ``dim=audio_cross_attention_dim``
+        with ``max_pos=[cross_pe_max_pos]``. Both video and audio share this scheme so that audio
+        token at time t and video tokens at time t share the same rotary phase — this is what
+        ties footstep onsets, lip movement, and other AV alignment cues.
+
+        Returns 8 device tensors used by inner_step:
+            (v_q_cos, v_q_sin)         — video Q in A→V cross-attn (SP×TP sharded).
+            (a_q_cos, a_q_sin)         — audio Q in V→A cross-attn (SP×TP sharded).
+            (v_k_cos, v_k_sin)         — video K in V→A cross-attn (TP-only; K side after AllGather).
+            (a_k_cos, a_k_sin)         — audio K in A→V cross-attn (TP-only; K side after AllGather).
+        """
+        from ...models.transformers.ltx.rope_ltx import LTXRopeType, precompute_freqs_cis
+        from ...utils.ltx import (
+            AudioLatentShape,
+            VideoLatentShape,
+            audio_get_patch_grid_bounds,
+            get_pixel_coords,
+            video_get_patch_grid_bounds,
+        )
+
+        v_shape = VideoLatentShape(
+            batch=1, channels=128, frames=latent_frames, height=latent_height, width=latent_width
+        )
+        v_coords = video_get_patch_grid_bounds(v_shape)
+        v_positions = get_pixel_coords(v_coords, scale_factors=(8, 32, 32), causal_fix=True).float()
+        v_positions[:, 0, ...] = v_positions[:, 0, ...] / fps  # temporal axis → seconds
+        v_temporal = v_positions[:, 0:1, :]  # (1, 1, video_N, 2)
+
+        a_shape = AudioLatentShape(batch=1, channels=8, frames=audio_N_real, mel_bins=16)
+        a_positions = audio_get_patch_grid_bounds(a_shape).float()  # (1, 1, audio_N_real, 2)
+
+        rope_kwargs = dict(
+            dim=2048,  # audio_cross_attention_dim — both sides share this
+            out_dtype=torch.float32,
+            theta=self.positional_embedding_theta,
+            max_pos=[cross_pe_max_pos],
+            use_middle_indices_grid=True,
+            num_attention_heads=32,
+            rope_type=LTXRopeType.SPLIT,
+        )
+
+        v_cos, v_sin = precompute_freqs_cis(v_temporal.bfloat16(), **rope_kwargs)  # (1, 32, video_N, 32)
+        a_cos, a_sin = precompute_freqs_cis(a_positions.bfloat16(), **rope_kwargs)  # (1, 32, audio_N_real, 32)
+
+        # Pad audio cross-PE to audio_N (matching the audio RoPE padding scheme: cos=1, sin=0).
+        if audio_N > audio_N_real:
+            d_half = a_cos.shape[-1]
+            a_cos_padded = torch.ones(1, 32, audio_N, d_half)
+            a_cos_padded[:, :, :audio_N_real, :] = a_cos
+            a_sin_padded = torch.zeros(1, 32, audio_N, d_half)
+            a_sin_padded[:, :, :audio_N_real, :] = a_sin
+            a_cos, a_sin = a_cos_padded, a_sin_padded
+
+        sp_axis = self.parallel_config.sequence_parallel.mesh_axis
+        tp_axis = self.parallel_config.tensor_parallel.mesh_axis
+
+        # Q-side: SP×TP sharded (matches the Q tensor layout post-attention QKV split).
+        v_q_cos = bf16_tensor_2dshard(v_cos, device=self.mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
+        v_q_sin = bf16_tensor_2dshard(v_sin, device=self.mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
+        a_q_cos = bf16_tensor_2dshard(a_cos, device=self.mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
+        a_q_sin = bf16_tensor_2dshard(a_sin, device=self.mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
+
+        # K-side: TP-only on heads (sequence is replicated after AllGather on K).
+        v_k_cos = bf16_tensor(v_cos, device=self.mesh_device, mesh_axis=tp_axis, shard_dim=1)
+        v_k_sin = bf16_tensor(v_sin, device=self.mesh_device, mesh_axis=tp_axis, shard_dim=1)
+        a_k_cos = bf16_tensor(a_cos, device=self.mesh_device, mesh_axis=tp_axis, shard_dim=1)
+        a_k_sin = bf16_tensor(a_sin, device=self.mesh_device, mesh_axis=tp_axis, shard_dim=1)
+
+        return (v_q_cos, v_q_sin, a_q_cos, a_q_sin, v_k_cos, v_k_sin, a_k_cos, a_k_sin)
+
     @staticmethod
     def _zero_audio_padding(t: torch.Tensor, audio_N_real: int) -> torch.Tensor:
         """Zero SP-padded audio token slots so they do not affect guidance or GE."""
@@ -1377,6 +1460,20 @@ class LTXPipeline:
 
         v_cos, v_sin = self._prepare_rope(latent_frames, latent_h, latent_w)
         a_cos, a_sin = self._prepare_audio_rope(audio_N, audio_N_real)
+        # Cross-modal positional embeddings for A↔V cross-attention. Without these, audio queries
+        # attend to video keys with a uniform (no-RoPE) phase — destroying temporal sync. Reference
+        # MultiModalTransformerArgsPreprocessor builds these from the temporal-only column at
+        # dim=audio_cross_attention_dim with max_pos=[cross_pe_max_pos]. See test_av_model_pcc_vs_reference.
+        (
+            v_xpe_cos,
+            v_xpe_sin,
+            a_xpe_cos,
+            a_xpe_sin,
+            v_xpe_cos_full,
+            v_xpe_sin_full,
+            a_xpe_cos_full,
+            a_xpe_sin_full,
+        ) = self._prepare_av_cross_pe(latent_frames, latent_h, latent_w, audio_N, audio_N_real)
         tt_attn_mask, tt_pad_mask_sp, tt_pad_mask_full = self._prepare_audio_masks(audio_N, audio_N_real)
 
         tt_vp = self._prepare_prompt(video_prompt_embeds)
@@ -1422,6 +1519,14 @@ class LTXPipeline:
                     audio_N=audio_N,
                     trans_mat=None,
                     timestep_torch=torch.tensor([sigma]),
+                    video_cross_pe_cos=v_xpe_cos,
+                    video_cross_pe_sin=v_xpe_sin,
+                    audio_cross_pe_cos=a_xpe_cos,
+                    audio_cross_pe_sin=a_xpe_sin,
+                    video_cross_pe_cos_full=v_xpe_cos_full,
+                    video_cross_pe_sin_full=v_xpe_sin_full,
+                    audio_cross_pe_cos_full=a_xpe_cos_full,
+                    audio_cross_pe_sin_full=a_xpe_sin_full,
                     skip_cross_attn=skip_ca,
                     skip_self_attn_blocks=skip_sa_blocks,
                     audio_attn_mask=tt_attn_mask,
