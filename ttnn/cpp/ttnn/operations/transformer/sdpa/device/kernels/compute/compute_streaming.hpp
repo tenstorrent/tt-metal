@@ -11,6 +11,7 @@
 #include <type_traits>
 
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sdpa_streaming_qktv.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_utils.hpp"
 
 #if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
 #include "api/compute/experimental/matmul_custom.h"
@@ -1515,7 +1516,8 @@ template <
     uint32_t cb_signal = 0,
     bool lightweight_mask_enabled = false,
     bool is_causal_sdpa = false,
-    bool is_balanced_sdpa = false>
+    bool is_balanced_sdpa = false,
+    bool chunked_prefill_enabled = false>
 void sdpa_ring_v2(
     const uint32_t global_q_start,
     const uint32_t global_q_end,
@@ -1537,10 +1539,19 @@ void sdpa_ring_v2(
     const uint32_t q_per_core = 1,
     const LightweightMaskContext& lw_mask = {},
     const bool skip_first_half_q = false,
-    const bool use_zigzag_balancing = false) {
+    const bool use_zigzag_balancing = false,
+    const uint32_t q_start_idx_t = 0,
+    const uint32_t ring_index = 0,
+    const uint32_t q_local_padded_Nt = 0,
+    const bool is_first_active_iter = true,
+    const uint32_t chunk_size_t = 0,
+    const uint32_t slab_tiles = 0) {
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
     constexpr bool uniform_format = uniform_dataformat;
-    const bool is_causal_iter = is_causal_sdpa && (ring_iter == 0);
+    // Diag-stamp is on for is_causal's iter 0, OR for every iter in chunked-prefill mode
+    // (which uses absolute Q/K tile coordinates so the diagonal is correct on every iter).
+    // is_causal_sdpa and chunked_prefill_enabled are mutually exclusive (host TT_FATAL).
+    const bool is_causal_iter = (is_causal_sdpa && (ring_iter == 0)) || chunked_prefill_enabled;
 
     // reduce_trigger enables early reduce start via semaphore signaling from packer to unpacker.
     // All conditions are compile-time except the active_Sk == Sk_chunk_t guard (padded chunks).
@@ -1603,9 +1614,18 @@ void sdpa_ring_v2(
 
     // ---- K-loop helpers ---------------------------------------------------
 
-    // Skip KV chunks beyond the logical sequence length (padding tiles).
+    // Skip KV chunks beyond the logical sequence length (padding tiles). Under chunked
+    // the balanced layout interleaves slabs in the local cache → the global K position
+    // is non-monotonic in local tile index. The kv_global_tile_for_local helper threads
+    // the slab arithmetic; the slab_tiles % Sk_chunk_t == 0 TT_FATAL guarantees the
+    // first-tile-of-chunk check is sufficient (no straddling).
     auto try_skip_oob_kv = [&](uint32_t k_chunk, bool kv_chunk_is_joint) -> bool {
-        return !kv_chunk_is_joint && (local_padded_Nt * ring_id + k_chunk * Sk_chunk_t >= logical_nt);
+        if (kv_chunk_is_joint) {
+            return false;
+        }
+        const uint32_t global_start = kv_global_tile_for_local(
+            chunked_prefill_enabled, ring_id, k_chunk * Sk_chunk_t, local_padded_Nt, chunk_size_t, slab_tiles);
+        return global_start >= logical_nt;
     };
 
     // Causal skip: K chunks fully above the diagonal — drain K/V from CBs and skip.
@@ -1639,6 +1659,12 @@ void sdpa_ring_v2(
                 q_start_tile = q_chunk * Sq_chunk_t;
                 causal_k_limit = (q_start_tile + Sq_chunk_t + Sk_chunk_t - 1) / Sk_chunk_t;
             }
+        } else if constexpr (chunked_prefill_enabled) {
+            // Chunked prefill: q_start_tile is the absolute Q tile row. Diagonal stamping uses
+            // absolute Q/K coords so K chunks fully past Q's range get all-neginf'd by
+            // apply_causal_mask_lightweight (diag_col < 0 → all neginf). No K-loop truncation —
+            // logical_n skip handles K past the cache, and the mask handles the rest.
+            q_start_tile = q_start_idx_t + ring_index * q_local_padded_Nt + q_chunk * Sq_chunk_t;
         }
 
         if (try_balanced_skip(q_chunk)) {
@@ -1668,14 +1694,16 @@ void sdpa_ring_v2(
         // or restore from DRAM (multi Q-chunk).
         AccumulatorHalf q_prev = acc_state.prev, q_cur = acc_state.cur;
 
-        // First ring iteration starts fresh; subsequent ones have prior accumulated state.
-        const bool is_first_kv_for_this_q = (ring_iter == 0);
+        // First *active* ring iteration starts fresh. For chunked-prefill with short logical_n
+        // the literal ring_iter == 0 may be skipped (all-padding K shard), and the next iter
+        // would otherwise try to restore non-existent prior accumulators.
+        const bool is_first_kv_for_this_q = is_first_active_iter;
 
         // Multi Q-chunk restore: K0 reads prev accumulators directly from staging buffers
         // (cb_prev_out, cb_max_in, cb_sum_in) — no copy_block needed.
         // After K0's swap, reset q_cur to original accumulator CBs for normal ping-pong.
         const AccumulatorHalf original_prev = q_prev;
-        const bool restore_from_staging = (q_per_core > 1 && ring_iter > 0);
+        const bool restore_from_staging = (q_per_core > 1 && !is_first_active_iter);
         if (restore_from_staging) {
             q_prev = {cb_sum_in, cb_max_in, cb_prev_out};
         }
@@ -1773,6 +1801,15 @@ void sdpa_ring_v2(
                 q_cur.sum = cb_sum_out;
             }
 
+            // K start tile fed to the diagonal stamp must share Q's coordinate frame:
+            // - is_causal: local (k_chunk * Sk_chunk_t)
+            // - chunked-prefill (balanced): global attention K position via the slab mapping
+            const uint32_t step_k_start_tile =
+                chunked_prefill_enabled
+                    ? kv_global_tile_for_local(
+                          true, ring_id, k_chunk * Sk_chunk_t, local_padded_Nt, chunk_size_t, slab_tiles)
+                    : (k_chunk * Sk_chunk_t);
+
             sdpa_inner_loop_step<
                 false,  // profiling_enabled
                 Sq_chunk_t,
@@ -1787,7 +1824,7 @@ void sdpa_ring_v2(
                 qktv_subblock_w,
                 false,  // use_padded_mask — ring uses ring mask instead
                 true,   // ring_mode
-                is_causal_sdpa,
+                is_causal_sdpa || chunked_prefill_enabled,
                 uniform_dataformat,
                 cb_q_in,
                 cb_kt_in,
@@ -1812,7 +1849,7 @@ void sdpa_ring_v2(
                 step_save_max_cb,
                 is_causal_iter,
                 q_start_tile,
-                k_chunk * Sk_chunk_t,
+                step_k_start_tile,
                 lw_mask.neginf_tile_idx,
                 lw_mask.causal_diag_tile_idx);
 

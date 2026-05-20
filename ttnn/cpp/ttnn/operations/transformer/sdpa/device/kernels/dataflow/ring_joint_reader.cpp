@@ -19,11 +19,14 @@ void kernel_main() {
     constexpr uint32_t vDHt = get_compile_time_arg_val(4);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(5);
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(6);
-    constexpr uint32_t local_padded_N = get_compile_time_arg_val(7);
-    constexpr uint32_t local_padded_Nt = get_compile_time_arg_val(8);
+    constexpr uint32_t q_local_padded_Nt = get_compile_time_arg_val(7);
+    constexpr uint32_t kv_local_padded_Nt = get_compile_time_arg_val(8);
     constexpr uint32_t padded_Nt = get_compile_time_arg_val(9);
-    constexpr uint32_t logical_n = get_compile_time_arg_val(10);
-    constexpr uint32_t logical_nt = get_compile_time_arg_val(11);
+    // Slots 10/11 are layout hints retained for CT-arg-slot stability across non-chunked
+    // builds (where they carry the true logical_n in the program-cache key). The reader's
+    // runtime decisions use the RT logical_n/logical_nt read below.
+    constexpr uint32_t logical_n_layout_hint [[maybe_unused]] = get_compile_time_arg_val(10);
+    constexpr uint32_t logical_nt_layout_hint [[maybe_unused]] = get_compile_time_arg_val(11);
     constexpr uint32_t Lt = get_compile_time_arg_val(12);
     constexpr uint32_t L = get_compile_time_arg_val(13);
     constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(14);
@@ -36,9 +39,15 @@ void kernel_main() {
     constexpr uint32_t is_causal = get_compile_time_arg_val(21);
     constexpr uint32_t is_balanced = get_compile_time_arg_val(22);
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(23) == 1;
+    // Slot 24 is reader-only meaning chunked_prefill_enabled (writer/compute use it for
+    // use_streaming_compute, which reader doesn't reference).
+    constexpr bool chunked_prefill_enabled = get_compile_time_arg_val(24) == 1;
     constexpr uint32_t num_q_readers = get_compile_time_arg_val(25);
+    // Balanced chunked-prefill layout params. Zero when non-chunked.
+    constexpr uint32_t chunk_size_t = get_compile_time_arg_val(26);
+    constexpr uint32_t slab_tiles = get_compile_time_arg_val(27);
 
-    constexpr auto q_args = TensorAccessorArgs<26>();
+    constexpr auto q_args = TensorAccessorArgs<28>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto gathered_k_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -58,6 +67,15 @@ void kernel_main() {
     const uint32_t joint_v_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
+    // logical_nt: RT for chunked-prefill (varies per chunk, not in program-cache key), CT
+    // layout hint otherwise (lets non-chunked builds keep the constexpr-folded skip math —
+    // binary size on mla_100k-q160-k256 is on the edge).
+    uint32_t logical_nt;
+    if constexpr (chunked_prefill_enabled) {
+        logical_nt = get_arg_val<uint32_t>(argidx++);
+    } else {
+        logical_nt = logical_nt_layout_hint;
+    }
     const uint32_t q_per_core = global_q_end - global_q_start;
 
     // Head chain runtime args (always present)
@@ -199,9 +217,9 @@ void kernel_main() {
     const auto joint_k_reader = TensorAccessor(joint_k_args, joint_k_addr);
     const auto joint_v_reader = TensorAccessor(joint_v_args, joint_v_addr);
 
-    const auto input_q_tile_logical = TensorTileShape(B, NH, local_padded_Nt, DHt);
-    const auto input_k_tile_logical = TensorTileShape(B, NHK, local_padded_Nt, DHt);
-    const auto input_v_tile_logical = TensorTileShape(B, NH, local_padded_Nt, vDHt);
+    const auto input_q_tile_logical = TensorTileShape(B, NH, q_local_padded_Nt, DHt);
+    const auto input_k_tile_logical = TensorTileShape(B, NHK, kv_local_padded_Nt, DHt);
+    const auto input_v_tile_logical = TensorTileShape(B, NH, kv_local_padded_Nt, vDHt);
     const auto gathered_k_input_tile_logical = TensorTileShape(B, NHK, padded_Nt, DHt);
     const auto gathered_v_input_tile_logical = TensorTileShape(B, NH, padded_Nt, vDHt);
     const auto joint_input_tile_logical = TensorTileShape(B, NH, Lt, DHt);
@@ -234,9 +252,16 @@ void kernel_main() {
         const bool do_joint_kv = ring_id == ring_size - 1;
         const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
 
-        const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;  // Floor division to get tile ID
-        const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
-        const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
+        // Last real (non-padding) tile id; for tile-aligned logical_n, (n-1)/TILE_H == nt-1.
+        // The (n-1)/H formula is the original strict form — kv_start <= it means the iter
+        // has at least one real row, vs original n/H (floor) which wrongly let the boundary
+        // iter in for exact-tile-aligned logical_n.
+        // Under chunked-prefill the balanced layout gives every iter one slab per chunk of
+        // real K, so every iter is active for any logical_n >= chunk_size.
+        const uint32_t global_n_tile_id = logical_nt - 1;
+        const uint32_t ring_iter_kv_start_tile = ring_id * kv_local_padded_Nt;
+        const bool ring_iter_processes_KV_chunks =
+            chunked_prefill_enabled ? true : (ring_iter_kv_start_tile <= global_n_tile_id);
 
         // In causal non balanced case when processing KV received from other devices:
         // - skip over KV received from subsequent devices
@@ -264,7 +289,7 @@ void kernel_main() {
             iter_num_kv_chunks /= 2;
             // Mirror compute's K-loop extension: include the straddle chunk so K/V tiles
             // for it get loaded. Compute -inf-masks its late-half columns via lw_mask.
-            using Straddle = KCausalStraddleInfo<local_padded_Nt, Sk_chunk_t>;
+            using Straddle = KCausalStraddleInfo<kv_local_padded_Nt, Sk_chunk_t>;
             if constexpr (Straddle::has_straddle) {
                 iter_num_kv_chunks = Straddle::straddle_chunk_id + 1;
             }
@@ -311,7 +336,7 @@ void kernel_main() {
             } else {
                 // Index into the Q input tensor
                 q_slice = Slice(nb, nq, q_row_start_tile, q_row_start_tile + Sq_chunk_t, 0, DHt);
-                q_end_seq_tile = local_padded_Nt;
+                q_end_seq_tile = q_local_padded_Nt;
             }
 
             // Iteration counter for chain forwarding decisions
@@ -328,8 +353,17 @@ void kernel_main() {
                  * If this k chunk is in the spatial input and beyond the logical N, we will skip it.
                  */
                 const bool kv_chunk_is_joint = k_chunk >= num_local_k_chunks;
-                // Global index into the padded KV tensor
-                const uint32_t kv_global_start_tile = local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
+                // Global attention K position of this chunk's first local tile. Under
+                // contiguous it's just ring_id * kv_local_padded_Nt + k_chunk * Sk_chunk_t;
+                // under balanced chunked-prefill it threads slab arithmetic to find the true
+                // global K row position (each slab maps to a different global chunk).
+                const uint32_t kv_global_start_tile = kv_global_tile_for_local(
+                    chunked_prefill_enabled,
+                    ring_id,
+                    k_chunk * Sk_chunk_t,
+                    kv_local_padded_Nt,
+                    chunk_size_t,
+                    slab_tiles);
                 const bool kv_chunk_is_beyond_logical_n = !kv_chunk_is_joint && (kv_global_start_tile >= logical_nt);
 
                 if (kv_chunk_is_beyond_logical_n) {
@@ -357,13 +391,21 @@ void kernel_main() {
 
                         k_slice = Slice(nb, nk, local_k_row_start_tile, local_k_row_start_tile + Sk_chunk_t, 0, DHt);
                         v_slice = Slice(nb, nq, local_k_row_start_tile, local_k_row_start_tile + Sk_chunk_t, 0, vDHt);
-                        end_seq_tile = std::min(logical_nt, local_padded_Nt);
+                        // Under chunked the gathered-K coord ≠ global-K coord, so the
+                        // logical_nt clamp would zero-fill valid data on devices whose
+                        // slabs sit past logical_nt in *gathered-K* coords. The host pre-
+                        // zeros padding slabs, so reading the full device slice yields the
+                        // right result (real data for valid slabs, zero for padded slabs).
+                        end_seq_tile =
+                            chunked_prefill_enabled ? kv_local_padded_Nt : std::min(logical_nt, kv_local_padded_Nt);
                     } else {
                         // Gathered KV
                         const uint32_t gathered_kv_start_tile = ring_iter_kv_start_tile + k_chunk * Sk_chunk_t;
                         k_slice = Slice(nb, nk, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, DHt);
                         v_slice = Slice(nb, nq, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, vDHt);
-                        end_seq_tile = std::min(logical_nt, local_padded_Nt * (ring_id + 1));
+                        end_seq_tile = chunked_prefill_enabled
+                                           ? kv_local_padded_Nt * (ring_id + 1)
+                                           : std::min(logical_nt, kv_local_padded_Nt * (ring_id + 1));
                     }
                 }
 

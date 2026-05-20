@@ -53,35 +53,36 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     Naming:
         - padded_N: the global, padded sequence length
-        - local_padded_N: the local shard of the padded sequence length. local_padded_N = padded_N / ring_size
+        - kv_local_padded_N: local shard of padded sequence length for K/V (== padded_N / ring_size)
+        - q_local_padded_N: local Q seq length. For chunked prefill < kv_local_padded_N; otherwise equal.
         - logical_n: the logical global sequence length. logical_n <= padded_N.
         - L: the logical joint sequence length
 
-    input_tensor_q: B x NH x local_padded_N x DH
-    input_tensor_k: B x NH x local_padded_N x DH
-    input_tensor_v: B x NH x local_padded_N x DH
+    input_tensor_q: B x NH  x q_local_padded_N  x DH
+    input_tensor_k: B x NHK x kv_local_padded_N x DH
+    input_tensor_v: B x NH  x kv_local_padded_N x DH
 
-    gathered_input_tensor_k: B x NH x padded_N x DH
-    gathered_input_tensor_v: B x NH x padded_N x DH
+    gathered_input_tensor_k: B x NHK x padded_N x DH
+    gathered_input_tensor_v: B x NH  x padded_N x DH
 
     joint_tensor_q: B x NH x L x DH
     joint_tensor_k: B x NH x L x DH
     joint_tensor_v: B x NH x L x DH
 
-    output_tensor: B x NH x local_padded_N x DH
+    output_tensor: B x NH x q_local_padded_N x DH
     joint_output_tensor: B x NH x L x DH
 
 
     The algorithm is roughly described below.
     - for each ring iteration:
         - read a Q chunk from input_tensor_q
-        - for each KV chunk in local_padded_N:
+        - for each KV chunk in kv_local_padded_N:
             - on the first ring iteration, read from local input_tensor_k and input_tensor_v
             - otherwise, read from gathered_input_tensor_k and gathered_input_tensor_v
             - on the last ring iteration, also read from joint_tensor_k and joint_tensor_v
             - if the KV chunk is from the non-joint input and contains the global token index (logical_n - 1), generate
     a mask
-            - else if the KV chunk is from non-joint input and contains the local token index (local_padded_N - 1),
+            - else if the KV chunk is from non-joint input and contains the local token index (kv_local_padded_N - 1),
     generate an attention mask
             - else if the KV chunk is from the joint input and contains the local token index (L - 1), generate a mask
             - compute attention
@@ -173,12 +174,18 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     log_debug(tt::LogOp, "k_shape (gathered): {}", k_shape);
     log_debug(tt::LogOp, "v_shape (gathered): {}", v_shape);
 
-    const uint32_t B = q_shape[0], NH = q_shape[1], NHK = k_shape[1], local_padded_N = q_shape[2], DH = q_shape[3];
+    // For chunked prefill q_shape[2] (Q rows per device) can be shorter than
+    // input_k.logical_shape()[2] (K/V rows per device, == padded_N / ring_size).
+    // Keep them separate everywhere downstream.
+    const uint32_t B = q_shape[0], NH = q_shape[1], NHK = k_shape[1], DH = q_shape[3];
+    const uint32_t q_local_padded_N = q_shape[2];
+    const uint32_t kv_local_padded_N = tensor_args.input_k.logical_shape()[2];
     const uint32_t padded_N = k_shape[2];
     const uint32_t L = joint_q_shape[2];
     const uint32_t vDH = v_shape[3];
 
-    const uint32_t local_padded_Nt = local_padded_N / tt::constants::TILE_HEIGHT;
+    const uint32_t q_local_padded_Nt = q_local_padded_N / tt::constants::TILE_HEIGHT;
+    const uint32_t kv_local_padded_Nt = kv_local_padded_N / tt::constants::TILE_HEIGHT;
     const uint32_t padded_Nt = padded_N / tt::constants::TILE_HEIGHT;
     // Find unpadded sequence lengths in tiles
     const uint32_t Lt = tt::div_up(L, tt::constants::TILE_HEIGHT);
@@ -196,25 +203,44 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const uint32_t Sq_chunk_t = q_chunk_size / tt::constants::TILE_HEIGHT;
     const uint32_t Sk_chunk_t = k_chunk_size / tt::constants::TILE_HEIGHT;
 
-    // Lightweight mask: needed when any K/joint dimension has padding, or when causal masking is active.
-    const bool local_n_has_padding = (local_padded_Nt % Sk_chunk_t) != 0;
+    // Chunked-prefill is detected by shape: Q's per-device length is strictly less than
+    // the per-device K shard (Q is the latest slab against a growing K cache). The kernel
+    // applies a per-row causal stamp using absolute Q/K coordinates on every ring iter
+    // (not just iter 0 like the classic is_causal path). The diagonal tile is shared with
+    // is_causal, so its CB slot needs to exist whenever either is on.
+    //
+    // Under chunked the K/V cache uses the balanced layout: each device holds one slab
+    // per chunk, slab_tiles = q_local_padded_Nt (Q is exactly one slab per call).
+    // chunk_size_t = slab_tiles * ring_size. q_start_idx_t = (N_local_kv - N_local_q) *
+    // ring_size / TILE_HEIGHT = (kv_local_padded_Nt - q_local_padded_Nt) * ring_size.
+    const bool chunked_prefill_enabled = q_local_padded_N < kv_local_padded_N;
+    const uint32_t ring_size_u = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
+    const uint32_t slab_tiles = chunked_prefill_enabled ? q_local_padded_Nt : 0u;
+    const uint32_t chunk_size_t = chunked_prefill_enabled ? slab_tiles * ring_size_u : 0u;
+    const uint32_t q_start_idx_t =
+        chunked_prefill_enabled ? (kv_local_padded_Nt - q_local_padded_Nt) * ring_size_u : 0u;
+    const bool diag_tile_needed = args.is_causal || chunked_prefill_enabled;
+
+    // Lightweight mask: needed when any K/joint dimension has padding, or when causal/chunked
+    // masking is active.
+    const bool local_n_has_padding = (kv_local_padded_Nt % Sk_chunk_t) != 0;
     const bool global_n_has_padding = (args.logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT)) != 0;
     const bool joint_has_padding = L > 0 && (L % (Sk_chunk_t * tt::constants::TILE_HEIGHT)) != 0;
     const bool needs_lightweight_mask =
-        (local_n_has_padding || global_n_has_padding || joint_has_padding) || args.is_causal;
+        (local_n_has_padding || global_n_has_padding || joint_has_padding) || diag_tile_needed;
 
     // Partial tile support when padding boundary falls inside a tile.
     const uint32_t global_n_partial_col = args.logical_n % tt::constants::TILE_HEIGHT;
     const uint32_t joint_l_partial_col = L % tt::constants::TILE_HEIGHT;
     const uint32_t partial_mask_tiles = (global_n_partial_col != 0 ? 1 : 0) + (joint_l_partial_col != 0 ? 1 : 0);
-    const uint32_t causal_diag_tiles = args.is_causal ? 1 : 0;
+    const uint32_t causal_diag_tiles = diag_tile_needed ? 1 : 0;
     // Single CB holds: 1 neginf tile + optional causal diagonal + up to 2 partial mask tiles
     const uint32_t total_lightweight_mask_tiles = 1 + causal_diag_tiles + partial_mask_tiles;
 
-    const uint32_t num_local_q_chunks = tt::div_up(local_padded_N, q_chunk_size);
+    const uint32_t num_local_q_chunks = tt::div_up(q_local_padded_N, q_chunk_size);
     const uint32_t num_joint_q_chunks = tt::div_up(L, q_chunk_size);
     const uint32_t num_q_chunks = num_local_q_chunks + num_joint_q_chunks;
-    const uint32_t num_local_k_chunks = tt::div_up(local_padded_N, k_chunk_size);
+    const uint32_t num_local_k_chunks = tt::div_up(kv_local_padded_N, k_chunk_size);
     const uint32_t num_joint_k_chunks = tt::div_up(L, k_chunk_size);
 
     log_debug(tt::LogOp, "B: {}", B);
@@ -225,14 +251,16 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     log_debug(tt::LogOp, "vDH: {}", vDH);
 
     // Log padded dimensions
-    log_debug(tt::LogOp, "local_padded_N: {}", local_padded_N);
+    log_debug(tt::LogOp, "q_local_padded_N: {}", q_local_padded_N);
+    log_debug(tt::LogOp, "kv_local_padded_N: {}", kv_local_padded_N);
     log_debug(tt::LogOp, "padded_N: {}", padded_N);
     log_debug(tt::LogOp, "L: {}", L);
 
     // Log tile dimensions
     log_debug(tt::LogOp, "DHt: {}", DHt);
     log_debug(tt::LogOp, "vDHt: {}", vDHt);
-    log_debug(tt::LogOp, "local_padded_Nt: {}", local_padded_Nt);
+    log_debug(tt::LogOp, "q_local_padded_Nt: {}", q_local_padded_Nt);
+    log_debug(tt::LogOp, "kv_local_padded_Nt: {}", kv_local_padded_Nt);
     log_debug(tt::LogOp, "padded_Nt: {}", padded_Nt);
     log_debug(tt::LogOp, "Lt: {}", Lt);
 
@@ -345,6 +373,33 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         qk_out_subblock_h,
         qk_out_subblock_w);
 
+    // Chunked-prefill needs the streaming compute path: the legacy sdpa_ring's diagonal
+    // stamp uses local-frame Q/K tile coords, but chunked requires absolute coords. Streaming
+    // v2 threads absolute coords through; legacy doesn't yet.
+    TT_FATAL(
+        !chunked_prefill_enabled || use_streaming_compute,
+        "Chunked-prefill (N_local_q < N_local_kv) requires the streaming compute path. "
+        "use_streaming_compute={}, Sq_chunk_t={}, Sk_chunk_t={}, qk_out_subblock_h={}, qk_out_subblock_w={}",
+        use_streaming_compute,
+        Sq_chunk_t,
+        Sk_chunk_t,
+        qk_out_subblock_h,
+        qk_out_subblock_w);
+
+    // Chunked-prefill balanced layout: a K chunk that straddles a slab boundary would
+    // hold tiles from two different global K positions, breaking the per-k_chunk-start-tile
+    // logical_n skip (some tiles in the chunk could be real, others padding). Require
+    // slab_tiles to be a multiple of Sk_chunk_t so every K chunk lives in exactly one slab.
+    TT_FATAL(
+        !chunked_prefill_enabled || (slab_tiles % Sk_chunk_t == 0),
+        "Chunked-prefill requires slab_tiles ({} = N_local_q / TILE_HEIGHT) to be a multiple of "
+        "Sk_chunk_t ({} = k_chunk_size / TILE_HEIGHT). N_local_q={}, sp_size={}, k_chunk_size={}.",
+        slab_tiles,
+        Sk_chunk_t,
+        q_local_padded_N,
+        ring_size_u,
+        k_chunk_size);
+
     auto [out_out_subblock_h, out_out_subblock_w] =
         detail::determine_largest_subblock_size(Sq_chunk_t, vDHt, dst_size, use_streaming_compute ? 2 : UINT32_MAX);
 
@@ -433,8 +488,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         vDHt,
         Sq_chunk_t,
         Sk_chunk_t,
-        local_padded_N,
-        local_padded_Nt,
+        q_local_padded_Nt,   // slot 7: Q tile count (per device)
+        kv_local_padded_Nt,  // slot 8: K/V tile count (per device)
         padded_Nt,
         static_cast<uint32_t>(args.logical_n),
         logical_nt,
@@ -450,8 +505,14 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         args.is_causal,
         args.is_balanced,
         static_cast<uint32_t>(enable_zigzag_balancing),
-        static_cast<uint32_t>(use_streaming_compute),
-        num_active_cores,  // num_q_readers for get_barrier_read_threshold
+        // Slot 24: reader-only meaning is `chunked_prefill_enabled` (reader has no
+        // use_streaming_compute logic). Writer and compute use their own slot-24 / slot-33
+        // for use_streaming_compute respectively.
+        static_cast<uint32_t>(chunked_prefill_enabled),
+        num_active_cores,  // num_q_readers for get_barrier_read_threshold (slot 25)
+        // Slots 26/27: balanced chunked-prefill layout params. Zero when non-chunked.
+        chunk_size_t,
+        slab_tiles,
     };
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
@@ -517,8 +578,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         vDHt,
         Sq_chunk_t,
         Sk_chunk_t,
-        local_padded_N,
-        local_padded_Nt,
+        q_local_padded_Nt,   // slot 7
+        kv_local_padded_Nt,  // slot 8
         padded_Nt,
         args.logical_n,
         logical_nt,
@@ -539,6 +600,10 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         args.is_balanced,
         static_cast<uint32_t>(enable_zigzag_balancing),
         (std::uint32_t)out_out_subblock_h,
+        static_cast<uint32_t>(chunked_prefill_enabled),  // slot 29
+        // Slots 30/31: balanced chunked-prefill layout params. Zero when non-chunked.
+        chunk_size_t,
+        slab_tiles,
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
@@ -564,8 +629,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         vDHt,
         Sq_chunk_t,
         Sk_chunk_t,
-        local_padded_N,
-        local_padded_Nt,
+        q_local_padded_Nt,   // slot 7 (unused by compute)
+        kv_local_padded_Nt,  // slot 8
         padded_Nt,
         args.logical_n,
         logical_nt,
@@ -596,7 +661,11 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         (std::uint32_t)uniform_dataformat,
         args.is_causal,
         args.is_balanced,
-        static_cast<uint32_t>(enable_zigzag_balancing)};
+        static_cast<uint32_t>(enable_zigzag_balancing),
+        static_cast<uint32_t>(chunked_prefill_enabled),  // slot 40
+        // Slots 41/42: balanced chunked-prefill layout params. Zero when non-chunked.
+        chunk_size_t,
+        slab_tiles};
 
     std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
@@ -1401,6 +1470,11 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
             global_q_start,
             global_q_end,
         };
+        // RT logical_nt only for chunked-prefill (saves an RT slot + a kernel-side load for
+        // non-chunked builds, where the CT layout hint is exact).
+        if (chunked_prefill_enabled) {
+            reader_args.push_back(logical_nt);
+        }
         // Append chain runtime args for store-and-forward
         const auto& head_chain = head_chain_configs.at(i);
         const auto& batch_chain = batch_chain_configs.at(i);
@@ -1444,14 +1518,23 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
             global_q_start,
             global_q_end,
         };
+        if (chunked_prefill_enabled) {
+            writer_args.push_back(logical_nt);
+        }
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_args);
         SetRuntimeArgs(program, writer_kernels_id, core, writer_args);
 
-        // Compute args
+        // Compute args. q_start_idx_t and RT logical_nt are only pushed when chunked
+        // (gating saves an RT slot + a kernel-side load for non-chunked builds whose
+        // binary is on the edge of the kernel-config buffer budget for k=256).
         std::vector<uint32_t> compute_args = {
             global_q_start,
             global_q_end,
         };
+        if (chunked_prefill_enabled) {
+            compute_args.push_back(q_start_idx_t);
+            compute_args.push_back(logical_nt);
+        }
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(compute_args);
         SetRuntimeArgs(program, compute_kernels_id, core, compute_args);
     }
@@ -1539,12 +1622,26 @@ void RingJointSDPAProgramFactory::override_runtime_arguments(
 
         auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernels_id);
         auto& writer_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernels_id);
+        auto& compute_args_by_core = GetRuntimeArgs(program, shared_vars.compute_kernels_id);
+
+        // Refresh chunked-prefill RT slots if the cached program is reused with the same
+        // shapes (program-cache key now includes K shape, so per-chunk reuse only triggers
+        // when the exact same chunk is replayed). Slot positions mirror the gated push in
+        // create_at — only present when chunked.
+        const uint32_t q_local_padded_Nt_rt = tensor_args.input_q.logical_shape()[2] / tt::constants::TILE_HEIGHT;
+        const uint32_t kv_local_padded_Nt_rt = tensor_args.input_k.logical_shape()[2] / tt::constants::TILE_HEIGHT;
+        const bool chunked_prefill_enabled = q_local_padded_Nt_rt < kv_local_padded_Nt_rt;
+        const uint32_t ring_size_u = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
+        const uint32_t logical_nt_rt = tt::div_up(static_cast<uint32_t>(args.logical_n), tt::constants::TILE_HEIGHT);
+        const uint32_t q_start_idx_t_rt =
+            chunked_prefill_enabled ? (kv_local_padded_Nt_rt - q_local_padded_Nt_rt) * ring_size_u : 0u;
 
         for (uint32_t i = 0; i < shared_vars.num_cores; ++i) {
             CoreCoord core = {i % shared_vars.grid_size.x, i / shared_vars.grid_size.x};
 
             auto& reader_args = reader_args_by_core[core.x][core.y];
             auto& writer_args = writer_args_by_core[core.x][core.y];
+            auto& compute_args = compute_args_by_core[core.x][core.y];
 
             // Update reader args
             reader_args[0] = q_addr;
@@ -1560,6 +1657,13 @@ void RingJointSDPAProgramFactory::override_runtime_arguments(
             writer_args[0] = out_addr;
             writer_args[1] = joint_out_addr;
             writer_args[2] = stats_addr;
+
+            if (chunked_prefill_enabled) {
+                reader_args[10] = logical_nt_rt;
+                writer_args[5] = logical_nt_rt;
+                compute_args[2] = q_start_idx_t_rt;
+                compute_args[3] = logical_nt_rt;
+            }
         }
     }
 }

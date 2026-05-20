@@ -206,6 +206,40 @@ def compute_sdpa_flops(sq, sk, d_q, d_v, num_heads, is_causal=False):
     return flops
 
 
+def compute_chunked_prefill_sdpa_flops(
+    chunk_size,
+    chunk_idx,
+    d_q,
+    d_v,
+    num_heads_per_device,
+    sp_size,
+    approximate=False,
+):
+    """
+    Per-device FLOPs for one chunked-prefill chunk of ring joint SDPA.
+
+    Chunk ``chunk_idx`` (0-indexed) of size ``chunk_size`` (= ``c``) is run against
+    a K/V cache that has grown to ``(chunk_idx + 1) * c`` rows. With the balanced
+    KV layout, each device holds ``slab_rows = c / sp_size`` Q rows and traverses
+    the full ``(chunk_idx + 1) * c`` K rows via the ring.
+
+    Causal mask shape (globally, per chunk):
+      - Rectangle ``[c, chunk_idx * c]``                       history block
+      - Triangle  inside the ``[c, c]`` diagonal block         current chunk
+
+    ``approximate=False`` (default) returns useful FLOPs — the rectangle + triangle,
+    i.e. ``c^2 * (chunk_idx + 0.5)`` (q, k) pairs (per head, globally), divided by
+    ``sp_size`` for the per-device figure.
+
+    ``approximate=True`` returns the rectangle approximation the kernel actually
+    performs — the full ``[c, (chunk_idx + 1) * c]`` per-device block, i.e.
+    ``c^2 * (chunk_idx + 1)`` (q, k) pairs globally. The diagonal mask only nulls
+    output values; the FLOPs still happen.
+    """
+    pairs_factor = (chunk_idx + 1) if approximate else (chunk_idx + 0.5)
+    return int(2 * (d_q + d_v) * num_heads_per_device * (chunk_size * chunk_size / sp_size) * pairs_factor)
+
+
 def compute_math_utilization(
     local_seqlen,
     total_seqlen,
@@ -231,9 +265,13 @@ def compute_math_utilization(
         is_causal: Whether causal masking is used.
         arch: Architecture name ("blackhole" or "wormhole_b0").
     """
-    constants = ARCH_CONSTANTS[arch]
     mm_flops = compute_sdpa_flops(local_seqlen, total_seqlen, d_q, d_v, num_heads_per_device, is_causal)
+    return compute_math_util_from_flops(mm_flops, duration_ns, core_count, arch=arch)
 
+
+def compute_math_util_from_flops(mm_flops, duration_ns, core_count, arch="blackhole"):
+    """Math utilization (0-100) from a precomputed FLOP count."""
+    constants = ARCH_CONSTANTS[arch]
     cycles = duration_ns * constants["clock_ghz"]
     theoretical_flops = core_count * cycles * constants["mm_flops_per_cycle_per_core"]
     return (mm_flops / theoretical_flops) * 100 if theoretical_flops > 0 else 0

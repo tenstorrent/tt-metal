@@ -63,9 +63,24 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     // Validate joint strategy is 'rear'
     TT_FATAL(args.joint_strategy == "rear", "Joint strategy must be 'rear'. Got: {}", args.joint_strategy);
 
-    // Validate all tensors have the same dtype
+    // Get shapes
+    const auto& q_shape = input_tensor_q.logical_shape();
+    const auto& k_shape = gathered_input_tensor_k.logical_shape();
+    const auto& v_shape = gathered_input_tensor_v.logical_shape();
+    const auto& joint_q_shape = joint_tensor_q.logical_shape();
+    const auto& joint_k_shape = joint_tensor_k.logical_shape();
+    const auto& joint_v_shape = joint_tensor_v.logical_shape();
+
+    // Chunked-prefill is detected by shape: Q's per-device length is strictly less than
+    // the per-device K shard, i.e. Q is the latest slab against a growing K cache that
+    // already holds earlier chunks. Chunk 0 (N_local_q == N_local_kv) is mathematically
+    // identical to a regular is_causal=True call and goes through the normal path.
+    const bool chunked_prefill_enabled = q_shape[2] < tensor_args.input_k.logical_shape()[2];
+
+    // Validate all tensors have the same dtype. Chunked-prefill and is_causal both allow
+    // Q≠KV dtype (MLA: BF16 Q + BF8_B KV); the legacy non-causal path requires uniform.
     const auto dtype = input_tensor_q.dtype();
-    if (!args.is_causal) {
+    if (!args.is_causal && !chunked_prefill_enabled) {
         for (const auto& tensor : sdpa_input_tensors) {
             TT_FATAL(
                 tensor.dtype() == dtype,
@@ -74,14 +89,6 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
                 tensor.dtype());
         }
     }
-
-    // Get shapes
-    const auto& q_shape = input_tensor_q.logical_shape();
-    const auto& k_shape = gathered_input_tensor_k.logical_shape();
-    const auto& v_shape = gathered_input_tensor_v.logical_shape();
-    const auto& joint_q_shape = joint_tensor_q.logical_shape();
-    const auto& joint_k_shape = joint_tensor_k.logical_shape();
-    const auto& joint_v_shape = joint_tensor_v.logical_shape();
 
     // Validate storage types and buffers
     for (const auto& tensor : sdpa_input_tensors) {
@@ -102,7 +109,12 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto NQH = q_shape[1];
     const auto NKH = k_shape[1];
     const auto NVH = v_shape[1];
-    const auto N_local = q_shape[2];
+    // N_local_q: per-device Q seq length. Chunked prefill: strictly less than N_local_kv
+    //            (Q is the latest slab). Non-chunked: equals N_local_kv.
+    // N_local_kv: per-device K/V seq length, pre-gather. Always equals N_global / ring_size.
+    // N_global: post-gather K/V seq length, i.e. the full KV cache length.
+    const auto N_local_q = q_shape[2];
+    const auto N_local_kv = tensor_args.input_k.logical_shape()[2];
     const auto N_global = k_shape[2];
     const auto L = joint_q_shape[2];
     const auto DH = q_shape[3];
@@ -112,8 +124,27 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(!(L != 0 && args.is_causal), "Causality is enabled only for ring attention");
 
+    // Chunked-prefill is mutually exclusive with is_causal: the chunked path applies its
+    // own causal-within-the-strip mask in the non-causal codepath. The chunk 0 case
+    // (N_local_q == N_local_kv) is handled by the regular is_causal=True path because the
+    // math is identical, so chunked-mode detection requires strict shape inequality.
     TT_FATAL(
-        !(args.is_balanced && (N_local / 2) % q_chunk_size != 0),
+        !(chunked_prefill_enabled && args.is_causal),
+        "Chunked-prefill (N_local_q < N_local_kv) is mutually exclusive with is_causal=True. "
+        "For chunk 0 of growing prefill, pass is_causal=True with equal Q/K shapes instead. "
+        "Got N_local_q={}, N_local_kv={}, is_causal={}",
+        N_local_q,
+        N_local_kv,
+        args.is_causal);
+
+    // q_start_idx and chunk_size tile-alignment: derived as
+    //   q_start_idx = (N_local_kv - N_local_q) * ring_size
+    //   chunk_size  = N_local_q * ring_size  (one slab per device per call)
+    // Both are automatically TILE_HEIGHT-aligned because N_local_q and N_local_kv are
+    // each validated as multiples of TILE_HEIGHT below; no extra checks needed.
+
+    TT_FATAL(
+        !(args.is_balanced && (N_local_q / 2) % q_chunk_size != 0),
         "q_chunk_size must divide half of local q seq_len in balanced case");
 
     TT_FATAL(
@@ -126,8 +157,10 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         joint_k_shape[0],
         joint_v_shape[0]);
 
-    // Validate head dimensions match
-    if (!args.is_causal) {
+    // Validate head dimensions match. Chunked-prefill goes through the non-causal codepath
+    // but targets MLA where K head dim == Q != V — use the same relaxed K-only check as
+    // is_causal.
+    if (!args.is_causal && !chunked_prefill_enabled) {
         TT_FATAL(
             k_shape[3] == DH && v_shape[3] == DH && joint_q_shape[3] == DH && joint_k_shape[3] == DH &&
                 joint_v_shape[3] == DH,
@@ -153,14 +186,6 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         N_global);
 
     TT_FATAL(
-        N_global == N_local * args.ring_size,
-        "Global sequence length must be equal to local sequence length times ring size. Got global sequence length: "
-        "{}, local sequence length: {}, ring size: {}",
-        N_global,
-        N_local,
-        args.ring_size);
-
-    TT_FATAL(
         args.logical_n <= N_global,
         "Logical sequence length must be less than or equal to global sequence length. Got logical sequence length: "
         "{}, global sequence length: {}",
@@ -168,26 +193,20 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         N_global);
 
     TT_FATAL(
-        (N_global - args.logical_n) < N_local,
-        "Delta between global (padded) and logical (unpadded) sequence length must be less than local (per device) "
-        "sequence length. Got delta: {}, local sequence length: {} "
-        "This implies at least one device will have only padded tokens and no real tokens to process. Either "
-        "reduce the ring size or reduce padding by reducing the chunk size.",
-        N_global - args.logical_n,
-        N_local);
-
-    TT_FATAL(
         joint_k_shape[2] == L && joint_v_shape[2] == L,
         "Joint sequence length must match. Got joint_K: {}, joint_V: {}",
         joint_k_shape[2],
         joint_v_shape[2]);
 
-    // Check shapes based on ring
+    // K/V gather invariant: the post-gather K seq length is exactly the per-device shard
+    // times the ring size. Q seq is independent (and shorter than the KV cache for
+    // chunked prefill).
     TT_FATAL(
-        q_shape[2] * args.ring_size == k_shape[2],
-        "Q sequence length times ring size must be equal to K sequence length. Got Q: {}, K: {}, ring_size: {}",
-        q_shape[2],
-        k_shape[2],
+        N_global == N_local_kv * args.ring_size,
+        "Gathered K seq length must equal per-device K shard times ring size. Got N_global: {}, N_local_kv: {}, "
+        "ring_size: {}",
+        N_global,
+        N_local_kv,
         args.ring_size);
     TT_FATAL(
         k_shape[2] == v_shape[2],
@@ -212,9 +231,14 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         tt::constants::TILE_WIDTH);
 
     TT_FATAL(
-        N_local % tt::constants::TILE_HEIGHT == 0,
-        "Local sequence length must be divisible by TILE_HEIGHT. Got N_local: {}, TILE_HEIGHT: {}",
-        N_local,
+        N_local_q % tt::constants::TILE_HEIGHT == 0,
+        "Per-device Q seq length must be divisible by TILE_HEIGHT. Got N_local_q: {}, TILE_HEIGHT: {}",
+        N_local_q,
+        tt::constants::TILE_HEIGHT);
+    TT_FATAL(
+        N_local_kv % tt::constants::TILE_HEIGHT == 0,
+        "Per-device K/V seq length must be divisible by TILE_HEIGHT. Got N_local_kv: {}, TILE_HEIGHT: {}",
+        N_local_kv,
         tt::constants::TILE_HEIGHT);
 
     // Validate padding: Only the sequence dimension may be padded

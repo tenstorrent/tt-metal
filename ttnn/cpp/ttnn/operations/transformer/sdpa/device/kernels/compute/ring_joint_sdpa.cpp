@@ -21,11 +21,16 @@ void kernel_main() {
     constexpr uint32_t vDHt = get_compile_time_arg_val(4);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(5);
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(6);
-    constexpr uint32_t local_padded_N = get_compile_time_arg_val(7);
-    constexpr uint32_t local_padded_Nt = get_compile_time_arg_val(8);
+    constexpr uint32_t q_local_padded_Nt [[maybe_unused]] = get_compile_time_arg_val(7);
+    constexpr uint32_t kv_local_padded_Nt = get_compile_time_arg_val(8);
+    constexpr uint32_t kv_local_padded_N = kv_local_padded_Nt * tt::constants::TILE_HEIGHT;
     constexpr uint32_t padded_Nt = get_compile_time_arg_val(9);
-    constexpr uint32_t logical_n = get_compile_time_arg_val(10);
-    constexpr uint32_t logical_nt = get_compile_time_arg_val(11);
+    // Slots 10/11 are kept for CT-arg-slot stability across non-chunked builds. Their values
+    // feed *constexpr* mask-CB layout decisions only (global_n_has_padding, total_mask_tiles).
+    // The actual logical_n / logical_nt used by the kernel come from RT args (below) so
+    // chunked-prefill chunks can share a program-cache entry even as logical_n varies.
+    constexpr uint32_t logical_n_layout_hint = get_compile_time_arg_val(10);
+    constexpr uint32_t logical_nt_layout_hint = get_compile_time_arg_val(11);
     constexpr uint32_t Lt = get_compile_time_arg_val(12);
     constexpr uint32_t L = get_compile_time_arg_val(13);
     constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(14);
@@ -55,28 +60,51 @@ void kernel_main() {
     constexpr bool is_causal = get_compile_time_arg_val(37) == 1;
     constexpr bool is_balanced = get_compile_time_arg_val(38) == 1;
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(39) == 1;
+    constexpr bool chunked_prefill_enabled = get_compile_time_arg_val(40) == 1;
+    // Balanced chunked-prefill layout params. Zero when non-chunked.
+    constexpr uint32_t chunk_size_t = get_compile_time_arg_val(41);
+    constexpr uint32_t slab_tiles = get_compile_time_arg_val(42);
+    // Chunked-prefill rides on the diag-tile slot. is_causal and chunked_prefill_enabled
+    // are mutually exclusive (validated host-side).
+    constexpr bool diag_tile_enabled = is_causal || chunked_prefill_enabled;
 
     // Lightweight mask: all mask tiles live in cb_mask_in.
     // Layout: [neginf(0)] [causal_diag?(1)] [global_n_partial?] [joint_l_partial?]
-    // Needed when any K/joint dimension has padding, or when causal masking is active.
-    constexpr bool local_n_has_padding = local_padded_Nt % Sk_chunk_t != 0;
-    constexpr bool global_n_has_padding = logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
+    // Needed when any K/joint dimension has padding, or when causal/chunked masking is active.
+    // global_n_has_padding uses the CT layout hint, which matches the *actual* RT logical_n
+    // only when chunked-prefill keeps logical_n tile-aligned across chunks (enforced by the
+    // host TT_FATAL on q_start_idx % TILE_HEIGHT). For non-chunked builds the hint is the
+    // true logical_n (in attributes()), so the constexpr is exact.
+    constexpr bool local_n_has_padding = kv_local_padded_Nt % Sk_chunk_t != 0;
+    constexpr bool global_n_has_padding = logical_n_layout_hint % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
     constexpr bool joint_has_padding = L > 0 && L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
     constexpr bool needs_lightweight_mask =
-        (local_n_has_padding || global_n_has_padding || joint_has_padding) || is_causal;
+        (local_n_has_padding || global_n_has_padding || joint_has_padding) || diag_tile_enabled;
 
     constexpr uint32_t neginf_tile_idx = 0;
-    constexpr uint32_t causal_diag_tile_idx = is_causal ? 1 : 0;
-    constexpr uint32_t base_partial_offset = 1 + (is_causal ? 1 : 0);
+    constexpr uint32_t causal_diag_tile_idx = diag_tile_enabled ? 1 : 0;
+    constexpr uint32_t base_partial_offset = 1 + (diag_tile_enabled ? 1 : 0);
     constexpr uint32_t global_n_partial_tile_idx = (global_n_partial_col > 0) ? base_partial_offset : 0;
     constexpr uint32_t joint_l_partial_tile_idx =
         (joint_l_partial_col > 0) ? (base_partial_offset + (global_n_partial_col > 0 ? 1 : 0)) : 0;
     constexpr uint32_t total_mask_tiles =
-        1 + (is_causal ? 1 : 0) + (global_n_partial_col > 0 ? 1 : 0) + (joint_l_partial_col > 0 ? 1 : 0);
+        1 + (diag_tile_enabled ? 1 : 0) + (global_n_partial_col > 0 ? 1 : 0) + (joint_l_partial_col > 0 ? 1 : 0);
 
     uint32_t argidx = 0;
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
+    // q_start_idx_t and logical_nt are pushed by the host only when chunked-prefill is on
+    // — keeps non-chunked builds free of the extra RT reads (binary is on the edge for
+    // mla_100k-q160-k256). For non-chunked, q_start_idx_t is unused and logical_nt comes
+    // from the CT layout hint (logical_n is in the program-cache key on that path).
+    uint32_t q_start_idx_t = 0;
+    uint32_t logical_nt;
+    if constexpr (chunked_prefill_enabled) {
+        q_start_idx_t = get_arg_val<uint32_t>(argidx++);
+        logical_nt = get_arg_val<uint32_t>(argidx++);
+    } else {
+        logical_nt = logical_nt_layout_hint;
+    }
     const uint32_t q_per_core = global_q_end - global_q_start;
 
     RingSDPAOpIndexer fused_op_indexer = RingSDPAOpIndexer(argidx);
@@ -128,10 +156,11 @@ void kernel_main() {
 
     // Precompute padded tile counts that are constant across ring iterations
     constexpr uint32_t local_n_padded_tiles =
-        (local_padded_Nt % Sk_chunk_t != 0) ? (Sk_chunk_t - (local_padded_Nt % Sk_chunk_t)) : 0;
+        (kv_local_padded_Nt % Sk_chunk_t != 0) ? (Sk_chunk_t - (kv_local_padded_Nt % Sk_chunk_t)) : 0;
     constexpr uint32_t joint_n_padded_tiles = (Lt % Sk_chunk_t != 0) ? (Sk_chunk_t - (Lt % Sk_chunk_t)) : 0;
 
-    using Straddle = KCausalStraddleInfo<local_padded_Nt, Sk_chunk_t>;
+    // q_local_padded_Nt = q_local_padded_N / TILE_HEIGHT, derived from CT-arg slot 7.
+    using Straddle = KCausalStraddleInfo<kv_local_padded_Nt, Sk_chunk_t>;
     constexpr bool has_straddle = Straddle::has_straddle;
     constexpr uint32_t straddle_chunk_id = Straddle::straddle_chunk_id;
     constexpr uint32_t straddle_num_padded_tiles = Straddle::straddle_num_padded_tiles;
@@ -141,48 +170,73 @@ void kernel_main() {
         {cb_sum_B, cb_max_B, cb_out_im_B},  // cur
     };
 
+    // logical_nt - 1 == (logical_n - 1) / TILE_HEIGHT for tile-aligned logical_n
+    // (chunked-prefill TT_FATAL keeps q_start_idx tile-aligned, and existing non-chunked
+    // configs use tile-aligned seq_len). Avoids a runtime div on every kernel start.
+    // Under chunked-prefill every iter is active (balanced layout) → ring_size - 1.
     const uint32_t last_active_ring_iter = find_last_active_ring_iter(
-        fused_op_indexer.seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L, is_causal, is_balanced);
+        fused_op_indexer.seq, kv_local_padded_Nt, logical_nt - 1, L, is_causal, is_balanced, chunked_prefill_enabled);
 
     uint32_t ring_index = fused_op_indexer.seq.ring_index;
     uint32_t half_sequence = num_q_chunks / 2;
+    // Index into the sequence of active (non-skipped) ring iters. For chunked-prefill with
+    // logical_n shorter than the K cache, leading iters can be skipped — the kernel that
+    // *first* actually processes K must start fresh accumulators, not restore stale staging.
+    uint32_t active_iter_idx = 0;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
         const bool do_joint_kv = ring_id == ring_size - 1;
         const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
 
         // First, find out if this ring iter processes any KV chunks.
-        const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
+        // Under chunked-prefill the balanced layout gives every device one slab per chunk
+        // of real K, so every iter is active (for logical_n >= chunk_size, which holds
+        // for chunk 0 onward).
+        const uint32_t ring_iter_kv_start_tile = ring_id * kv_local_padded_Nt;
         const uint32_t ring_iter_kv_end_tile = ring_iter_kv_start_tile + num_local_k_chunks * Sk_chunk_t;
-        const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;
-        const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
+        const uint32_t global_n_tile_id = logical_nt - 1;
+        const bool ring_iter_processes_KV_chunks =
+            chunked_prefill_enabled ? true : (ring_iter_kv_start_tile <= global_n_tile_id);
         const bool ring_iter_does_work = (ring_iter_processes_KV_chunks || (do_joint_kv && L != 0)) &&
                                          !(is_causal && ring_index < ring_id && !is_balanced);
 
         if (!ring_iter_does_work) {
             continue;
         }
+        // Plan §4: under chunked every iter is active, so ring_iter == 0 is always
+        // first-active. Skip the active_iter_idx tracking on the chunked path.
+        const bool is_first_active_iter = chunked_prefill_enabled ? (ring_iter == 0) : (active_iter_idx == 0);
+        active_iter_idx++;
 
-        const int32_t global_n_within_ring_iter = logical_n - ring_id * local_padded_N;
-        // Note the > and <=. This means there is real length of logical_n within this ring iter.
+        // Tile-aligned form: rows-arithmetic is a TILE_HEIGHT-scaled version of tiles-arithmetic
+        // for tile-aligned logical_n. Working in tiles saves a runtime multiply per iter.
+        // Under chunked the balanced layout makes the all-real-region end at a slab boundary
+        // (tile-aligned + k_chunk-aligned via TT_FATAL slab_tiles % Sk_chunk_t), so the
+        // per-k_chunk-start skip in the K loop suffices and no partial-tile mask is needed.
+        const int32_t global_nt_within_ring_iter =
+            static_cast<int32_t>(logical_nt) - static_cast<int32_t>(ring_id * kv_local_padded_Nt);
         const bool global_n_is_within_ring_iter =
-            global_n_within_ring_iter > 0 && global_n_within_ring_iter <= (int32_t)local_padded_N;
-        const bool global_n_needs_masking = global_n_within_ring_iter % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
+            !chunked_prefill_enabled &&
+            (global_nt_within_ring_iter > 0 && global_nt_within_ring_iter <= (int32_t)kv_local_padded_Nt);
+        const bool global_n_needs_masking = (global_nt_within_ring_iter % (int32_t)Sk_chunk_t) != 0;
         const bool ring_iter_needs_global_n_mask = global_n_is_within_ring_iter && global_n_needs_masking;
-        const uint32_t global_n_mask_chunk_id = global_n_within_ring_iter / (Sk_chunk_t * tt::constants::TILE_HEIGHT);
+        const uint32_t global_n_mask_chunk_id = global_nt_within_ring_iter / Sk_chunk_t;
 
         // LOCAL N MASK
-        const bool local_n_needs_masking = local_padded_Nt % Sk_chunk_t != 0;
-        const uint32_t local_n_mask_chunk_id = local_padded_Nt / Sk_chunk_t;
+        const bool local_n_needs_masking = kv_local_padded_Nt % Sk_chunk_t != 0;
+        const uint32_t local_n_mask_chunk_id = kv_local_padded_Nt / Sk_chunk_t;
 
         // JOINT L MASK
         const bool joint_n_needs_masking = L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
         const bool ring_iter_needs_joint_n_mask = joint_n_needs_masking && do_joint_kv;
         const uint32_t joint_n_mask_chunk_id = L / (Sk_chunk_t * tt::constants::TILE_HEIGHT);
 
-        // Build lightweight mask context for this ring iteration
+        // Build lightweight mask context for this ring iteration.
+        // is_causal mode applies diagonal only on iter 0 (K is local-frame). Chunked-prefill
+        // applies the diagonal stamp on every iter using absolute Q/K tile coordinates
+        // (kernel passes them through to apply_causal_mask_lightweight via sdpa_ring_v2).
         LightweightMaskContext lw_mask;
-        lw_mask.is_causal = (ring_iter == 0 ? is_causal : false);
+        lw_mask.is_causal = chunked_prefill_enabled ? true : (ring_iter == 0 ? is_causal : false);
         lw_mask.neginf_tile_idx = neginf_tile_idx;
         lw_mask.causal_diag_tile_idx = causal_diag_tile_idx;
         lw_mask.local_n_padded_tiles = local_n_padded_tiles;
@@ -197,9 +251,8 @@ void kernel_main() {
         lw_mask.straddle_num_padded_tiles = ring_iter_needs_straddle_mask ? straddle_num_padded_tiles : 0;
         lw_mask.straddle_mask_chunk_id = straddle_chunk_id;
         if (ring_iter_needs_global_n_mask) {
-            const uint32_t unpadded_in_chunk = global_n_within_ring_iter % (Sk_chunk_t * tt::constants::TILE_HEIGHT);
-            const uint32_t valid_tiles =
-                (unpadded_in_chunk + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
+            // Tile-aligned: valid_tiles == global_nt_within_ring_iter % Sk_chunk_t
+            const uint32_t valid_tiles = global_nt_within_ring_iter % Sk_chunk_t;
             lw_mask.global_n_padded_tiles = Sk_chunk_t - valid_tiles;
         }
 
@@ -254,7 +307,8 @@ void kernel_main() {
                 cb_signal,
                 needs_lightweight_mask,
                 is_causal,
-                is_balanced>(
+                is_balanced,
+                chunked_prefill_enabled>(
                 global_q_start,
                 global_q_end,
                 iter_num_kv_chunks,
@@ -262,7 +316,7 @@ void kernel_main() {
                 ring_iter,
                 ring_id,
                 num_local_k_chunks,
-                local_padded_Nt,
+                kv_local_padded_Nt,
                 logical_nt,
                 ring_iter_needs_global_n_mask,
                 ring_iter_needs_joint_n_mask,
@@ -275,7 +329,13 @@ void kernel_main() {
                 q_per_core,
                 lw_mask,
                 skip_first_half_q,
-                use_zigzag_balancing);
+                use_zigzag_balancing,
+                q_start_idx_t,
+                ring_index,
+                q_local_padded_Nt,
+                is_first_active_iter,
+                chunk_size_t,
+                slab_tiles);
         } else {
             sdpa_ring<
                 cb_qk_im,
@@ -313,7 +373,7 @@ void kernel_main() {
                 ring_iter,
                 ring_id,
                 num_local_k_chunks,
-                local_padded_Nt,
+                kv_local_padded_Nt,
                 logical_nt,
                 ring_iter_needs_global_n_mask,
                 ring_iter_needs_joint_n_mask,
