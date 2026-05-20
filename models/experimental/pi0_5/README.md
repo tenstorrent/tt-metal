@@ -1,6 +1,6 @@
 # PI0.5 (`pi0_5`) — Tenstorrent
 
-End-to-end TTNN implementation of the **π₀.₅** (PI0.5) vision-language-action policy on Blackhole, with a PyTorch reference, LIBERO simulator integration, and a real-weights perf path that runs at **~64.85 ms / chunk** (~770 actions/s) with trace+2CQ.
+End-to-end TTNN implementation of the **π₀.₅** (PI0.5) vision-language-action policy on Blackhole, with a PyTorch reference, LIBERO simulator integration, and a real-weights perf path that runs at **~55.8 ms / chunk** (N=10) — **~37.8 ms / chunk** at N=5 — with the upstream openpi `pi05_libero` checkpoint and TTNN trace. End-to-end LIBERO simulator success: **788/800 (98.5%)** across all four suites.
 
 This package is **self-contained** — it does not import from `models/experimental/pi0/`.
 
@@ -235,24 +235,33 @@ python_env/bin/pytest -xvs models/experimental/pi0_5/tests/pcc/test_pcc_expert_b
 ### Perf tests (Blackhole)
 
 ```bash
-# Headline: full sample_actions with trace
+# Headline: full sample_actions with trace.
+# Auto-detects action_horizon from <checkpoint>/config.json
+# (openpi `action_horizon` or lerobot `chunk_size`).
+PI05_CHECKPOINT_DIR=/path/to/pi05_libero_upstream \
+PI0_UPSTREAM_MASKS=1 QWEN_NLP_CONCAT_HEADS_HEAD_SPLIT=1 QWEN_NLP_CREATE_HEADS_HEAD_SPLIT=1 \
 PYTHONPATH=$PWD python_env/bin/pytest -xvs \
   models/experimental/pi0_5/tests/perf/test_perf_ttnn_full_e2e_trace.py
-#  → Per-call avg ≈ 64-65 ms (N=10),  Action throughput ≈ 770 actions/s
+#  → Per-call avg ≈ 55.8 ms (N=10) / 37.8 ms (N=5) on upstream pi05_libero
 
-# Without trace
+# N=5 sweep: same flags + PI05_NUM_DENOISE_STEPS=5
+# Without trace:
 PYTHONPATH=$PWD python_env/bin/pytest -xvs \
   models/experimental/pi0_5/tests/perf/test_perf_ttnn_full_e2e.py
 ```
 
-**Latest measured trace-mode perf (Blackhole, N=10, with SigLIP block-sharded encoder + adaRMS expert + sharded LayerNorm/RMSNorm):**
+**Latest measured trace-mode perf (Blackhole, upstream openpi `pi05_libero`, action_horizon=10):**
 
-| metric | value |
-|---|---|
-| per-call latency | **64.85 ms** |
-| chunk throughput | 15.42 chunks/s |
-| action throughput | **770 actions/s** |
-| trace capture (one-time) | ~475 ms |
+| Denoise steps | Per-call latency | Chunk throughput | Action throughput |
+|---:|---:|---:|---:|
+| N=10 | **55.75 ms** | 17.94 chunks/s | 179 actions/s |
+| N=5  | **37.79 ms** | 26.46 chunks/s | **265 actions/s** |
+
+Standard deviation across 20 traced replays: 0.05 ms (both N). Trace capture: ~230–330 ms (one-time per (task, N) key).
+
+Each denoise step ≈ **3.6 ms** through the 18-layer Gemma 300M action expert; fixed cost (SigLIP encode + VLM prefill + projection + dispatch) is ≈ 19.8 ms.
+
+On the lerobot `pi05_base` checkpoint (action_horizon=50, N=10, with SigLIP block-sharded encoder + adaRMS expert + sharded LayerNorm/RMSNorm), the same test path measures **~64.85 ms / chunk** (~770 actions/s) — the larger suffix dominates the per-step cost.
 
 
 ---
@@ -260,6 +269,40 @@ PYTHONPATH=$PWD python_env/bin/pytest -xvs \
 ## LIBERO simulator rollout
 
 End-to-end real-robot benchmark on the LIBERO suites (`libero_spatial`, `libero_object`, `libero_goal`, `libero_10`).
+
+### Latest simulator results
+
+Full 4-suite, 10-init-per-task sweep on the **upstream openpi `pi05_libero`** checkpoint, TTNN traced rollout (`PI0_LIBERO_TRACE=1`, default on), 8-way parallel across Blackhole devices.
+
+| Suite          | N=10              | N=5              |
+|----------------|-------------------|------------------|
+| libero_spatial | 100/100 (100.0%)  |  99/100 ( 99.0%) |
+| libero_object  |  98/100 ( 98.0%)  |  99/100 ( 99.0%) |
+| libero_goal    |  98/100 ( 98.0%)  |  98/100 ( 98.0%) |
+| libero_10      |  98/100 ( 98.0%)  |  98/100 ( 98.0%) |
+| **TOTAL**      | **394/400 (98.5%)** | **394/400 (98.5%)** |
+
+**Grand total: 788/800 (98.5%)** — N=5 matches N=10 accuracy with **~1.48× throughput** (37.8 ms vs 55.8 ms per chunk). At LIBERO's 20 Hz env, N=5 is ~13× faster than real-time.
+
+### Upstream openpi `pi05_libero` support
+
+The rollout adapter now supports both checkpoint variants. Defaults target upstream openpi:
+
+| Variant | `--checkpoint` | `--action-horizon` | `--state-in-prompt` |
+|---|---|---:|---|
+| **upstream openpi** (default) | `pi05_libero_upstream` | `10` | `false` |
+| lerobot finetune | `pi05_libero_finetuned` | `50` | `true` |
+
+The three flags are coordinated: overriding one without the others produces garbage (untrained position embeddings beyond the trained range, or state tokens the model never saw during training).
+
+Required env vars for the traced upstream path:
+```bash
+PI0_UPSTREAM_MASKS=1                   # cumsum-RoPE + logical-pad attention mask
+QWEN_NLP_CONCAT_HEADS_HEAD_SPLIT=1     # NLP head-split kernel paths (action expert)
+QWEN_NLP_CREATE_HEADS_HEAD_SPLIT=1
+PI0_SIGLIP_HF=1                        # optional: HF SigLIP bridge for vision encoder
+# PI0_LIBERO_TRACE defaults to on for backend=ttnn; opt out with =0
+```
 
 ### One-time setup (not in git)
 
