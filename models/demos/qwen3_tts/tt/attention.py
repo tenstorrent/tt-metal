@@ -318,6 +318,24 @@ class Attention(LightweightModule):
         # can split the matmul output without an intermediate L1 copy.
         self._fused_qkv = _fused_qkv
         num_q_per_kv = num_heads // num_kv_heads
+
+        # Helper: pick num_cores so in0_block_w (= k_tiles / num_cores) ≥ 2.
+        # Halves the DRAM-sharded inner-loop iteration count (and per-iter overhead).
+        # Reduces MLP/QKV/O decode matmul time by ~30% on K=2048 shapes.
+        def _pick_grid_block_w2(k_tiles, n_tiles, max_rows=10, max_cols=13):
+            max_cores = max_rows * max_cols
+            cands = [
+                c for c in range(1, max_cores + 1) if k_tiles % c == 0 and n_tiles % c == 0 and (k_tiles // c) >= 2
+            ]
+            if not cands:
+                return find_grid_k_n(k_tiles, n_tiles)
+            cands.sort(reverse=True)
+            for cores in cands:
+                for rows in range(1, max_rows + 1):
+                    if cores % rows == 0 and (cores // rows) <= max_cols:
+                        return rows, cores // rows
+            return find_grid_k_n(k_tiles, n_tiles)
+
         row_perm = []
         for i in range(num_kv_heads):
             for q_in_group in range(num_q_per_kv):
@@ -332,7 +350,7 @@ class Attention(LightweightModule):
         self.wqkv_dram_sharded, k_q, n_padded_q = build_dram_sharded_weight(wqkv_kn, device, dtype=weight_dtype)
         self._decode_wqkv_n_padded = n_padded_q
         k_tiles_q, n_tiles_q = k_q // 32, n_padded_q // 32
-        rows_q, cols_q = find_grid_k_n(k_tiles_q, n_tiles_q)
+        rows_q, cols_q = _pick_grid_block_w2(k_tiles_q, n_tiles_q)
         self._decode_wqkv_dramshard_progcfg = dram_sharded_program_config(
             m=32, k=k_q, n=n_padded_q, num_cores=rows_q * cols_q
         )
@@ -347,7 +365,7 @@ class Attention(LightweightModule):
         self.wo_dram_sharded, k_o, n_padded_o = build_dram_sharded_weight(wo_kn, device, dtype=weight_dtype)
         self._decode_wo_n_padded = n_padded_o
         k_tiles_o, n_tiles_o = k_o // 32, n_padded_o // 32
-        rows_o, cols_o = find_grid_k_n(k_tiles_o, n_tiles_o)
+        rows_o, cols_o = _pick_grid_block_w2(k_tiles_o, n_tiles_o)
         self._decode_wo_dramshard_progcfg = dram_sharded_program_config(
             m=32, k=k_o, n=n_padded_o, num_cores=rows_o * cols_o
         )
@@ -357,6 +375,65 @@ class Attention(LightweightModule):
         self._decode_wo_out_memcfg = width_sharded_l1_memcfg(
             m_tiles=1, k_tiles=n_tiles_o, num_cores_x=cols_o, num_cores_y=rows_o
         )
+
+        # === Prefill bucket=128 — width-sharded IN0 + 1D-mcast (mcast_in0=True) ===
+        # Reuses the same in0_block_w=2 trick from decode (halve num_cores, double
+        # per-core K shard, fewer inner-loop iterations). For QKV: 32 cores grid,
+        # IN0 shard [4 M-tiles, 2 K-tiles] per core, per_core_M=4, per_core_N=N_tiles/32.
+        _pf128_num_cores = 32
+        if k_tiles_q % _pf128_num_cores == 0 and n_tiles_q % _pf128_num_cores == 0:
+            _pf128_grid_x, _pf128_grid_y = 8, 4
+            self._prefill128_wqkv_in0_memcfg = width_sharded_l1_memcfg(
+                m_tiles=128 // 32, k_tiles=k_tiles_q, num_cores_x=_pf128_grid_x, num_cores_y=_pf128_grid_y
+            )
+            self._prefill128_wqkv_out_memcfg = width_sharded_l1_memcfg(
+                m_tiles=128 // 32, k_tiles=n_tiles_q, num_cores_x=_pf128_grid_x, num_cores_y=_pf128_grid_y
+            )
+            _pf_in0_block_w = k_tiles_q // _pf128_num_cores  # 2
+            _pf_per_core_N = n_tiles_q // _pf128_num_cores
+            _pf_per_core_M = 128 // 32  # 4
+            _sb_lim = 4 if _fp32_linear else 8
+            _pf_sbw = max(i for i in range(1, _sb_lim + 1) if _pf_per_core_N % i == 0)
+            _pf_sbh = max(i for i in range(1, _sb_lim + 1) if _pf_per_core_M % i == 0 and i * _pf_sbw <= _sb_lim)
+            self._prefill128_wqkv_progcfg = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(_pf128_grid_x, _pf128_grid_y),
+                in0_block_w=_pf_in0_block_w,
+                out_subblock_h=_pf_sbh,
+                out_subblock_w=_pf_sbw,
+                per_core_M=_pf_per_core_M,
+                per_core_N=_pf_per_core_N,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
+            )
+        else:
+            self._prefill128_wqkv_progcfg = None
+
+        # Same for O proj
+        if k_tiles_o % _pf128_num_cores == 0 and n_tiles_o % _pf128_num_cores == 0:
+            self._prefill128_wo_in0_memcfg = width_sharded_l1_memcfg(
+                m_tiles=128 // 32, k_tiles=k_tiles_o, num_cores_x=_pf128_grid_x, num_cores_y=_pf128_grid_y
+            )
+            self._prefill128_wo_out_memcfg = width_sharded_l1_memcfg(
+                m_tiles=128 // 32, k_tiles=n_tiles_o, num_cores_x=_pf128_grid_x, num_cores_y=_pf128_grid_y
+            )
+            _po_in0_block_w = k_tiles_o // _pf128_num_cores
+            _po_per_core_N = n_tiles_o // _pf128_num_cores
+            _po_sbw = max(i for i in range(1, _sb_lim + 1) if _po_per_core_N % i == 0)
+            _po_sbh = max(i for i in range(1, _sb_lim + 1) if _pf_per_core_M % i == 0 and i * _po_sbw <= _sb_lim)
+            self._prefill128_wo_progcfg = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(_pf128_grid_x, _pf128_grid_y),
+                in0_block_w=_po_in0_block_w,
+                out_subblock_h=_po_sbh,
+                out_subblock_w=_po_sbw,
+                per_core_M=_pf_per_core_M,
+                per_core_N=_po_per_core_N,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
+            )
+        else:
+            self._prefill128_wo_progcfg = None
 
         # === Sharded NLP head op memcfgs (decode m=32 + prefill m=128) ===
         # nlp_concat_heads HEIGHT_SHARDED input over num_heads cores (1 head/shard).
@@ -496,10 +573,24 @@ class Attention(LightweightModule):
         # nlp_create_qkv_heads instead of single-core. Larger prefill buckets
         # (64, 128) need separate per-m shard configs to engage — TODO.
         use_dram_shard_qkv = seq_len <= 32
+        use_prefill128_qkv = (not is_decode) and (seq_len == 128) and (self._prefill128_wqkv_progcfg is not None)
         # Sharded nlp_create_qkv_heads engages downstream of the DRAM-sharded QKV
         # since wqkv was rearranged to KV-group-interleaved layout.
         sharded_qkv_split = use_dram_shard_qkv
-        if use_dram_shard_qkv:
+        if use_prefill128_qkv:
+            x_sharded = ttnn.to_memory_config(x, self._prefill128_wqkv_in0_memcfg)
+            xqkv_sharded = ttnn.linear(
+                x_sharded,
+                self.wqkv,
+                compute_kernel_config=self.compute_kernel_config,
+                program_config=self._prefill128_wqkv_progcfg,
+                memory_config=self._prefill128_wqkv_out_memcfg,
+            )
+            ttnn.deallocate(x_sharded)
+            xqkv = ttnn.to_memory_config(xqkv_sharded, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(xqkv_sharded)
+            xqkv_already_sharded_for_split = False
+        elif use_dram_shard_qkv:
             # Skip the I→S if x is already in the matching width-sharded layout
             # (e.g. piped through from a sharded layernorm in decoder_layer).
             if x.memory_config() == self._decode_wqkv_in0_memcfg:
@@ -886,6 +977,9 @@ class Attention(LightweightModule):
 
         # Hoist use_dram_shard_o so it can also gate the direct concat→wo reshard below.
         use_dram_shard_o = is_decode and seq_len == 1
+        use_prefill128_o = (
+            (not is_decode) and (seq_len == 128) and getattr(self, "_prefill128_wo_progcfg", None) is not None
+        )
         # Pick decode (m=32) vs prefill bucket-size sharded NLPConcat memcfgs.
         sharded_concat_decode = is_decode
         sharded_concat_prefill = not is_decode and seq_len in self._prefill_concat_configs
@@ -924,7 +1018,20 @@ class Attention(LightweightModule):
             attn_output = ttnn.experimental.nlp_concat_heads(attn_output, memory_config=ttnn.L1_MEMORY_CONFIG)
             _attn_already_in_wo_in0 = False
 
-        if use_dram_shard_o:
+        if use_prefill128_o:
+            attn_sharded = ttnn.to_memory_config(attn_output, self._prefill128_wo_in0_memcfg)
+            ttnn.deallocate(attn_output)
+            out_sharded = ttnn.linear(
+                attn_sharded,
+                self.wo,
+                compute_kernel_config=self.compute_kernel_config,
+                program_config=self._prefill128_wo_progcfg,
+                memory_config=self._prefill128_wo_out_memcfg,
+            )
+            ttnn.deallocate(attn_sharded)
+            output = ttnn.to_memory_config(out_sharded, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(out_sharded)
+        elif use_dram_shard_o:
             if _attn_already_in_wo_in0:
                 attn_sharded = attn_output  # already 64-core width-sharded
                 _own_attn_sharded = False

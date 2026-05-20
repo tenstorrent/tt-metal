@@ -18,8 +18,10 @@ Usage:
         --ref-audio /path/to/reference.wav \\
         --ref-text "Reference audio transcript" \\
         --output /tmp/ttnn_tts_output.wav \\
-        --seed 42 \\
-        --use-2cq
+        --seed 42
+
+    Trace + KV cache + 2CQ are ON by default. Use --no-trace / --no-kv-cache /
+    --no-2cq to disable.
 """
 
 import argparse
@@ -72,7 +74,7 @@ def run_full_ttnn_tts(
     repetition_penalty: float = 1.0,
     use_kv_cache: bool = True,
     use_trace: bool = True,
-    use_2cq: bool = False,
+    use_2cq: bool = True,
     seed: Optional[int] = None,
     ref_cache: str = None,
     trim_frames: int = 4,
@@ -381,9 +383,11 @@ def main():
     parser.add_argument("--no-kv-cache", action="store_true", help="Disable KV cache (slower)")
     parser.add_argument("--no-trace", action="store_true", help="Disable trace (use non-traced KV cache decode)")
     parser.add_argument(
-        "--use-2cq",
-        action="store_true",
-        help="Two command queues: H2D on CQ1 overlapped with Metal trace on CQ0",
+        "--no-2cq",
+        dest="use_2cq",
+        action="store_false",
+        default=True,
+        help="Disable two command queues (default ON: H2D on CQ1 overlapped with trace on CQ0)",
     )
     parser.add_argument(
         "--seed",
