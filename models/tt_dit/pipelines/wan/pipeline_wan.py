@@ -31,7 +31,7 @@ from ...models.transformers.wan2_2.transformer_wan import WanTransformer3DModel
 from ...models.vae.vae_wan2_1 import WanDecoder
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VaeHWParallelConfig
 from ...parallel.manager import CCLManager
-from ...solvers import DPMSolverSDESolver, EulerSolver, UniPCSolver, WanDPMSolverSDEScheduler
+from ...solvers import EulerSolver, UniPCSolver
 from ...utils import cache, tensor
 from ...utils.conv3d import conv3d_blocking_hash
 from ...utils.tensor import (
@@ -297,17 +297,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         scheduler = scheduler or UniPCMultistepScheduler.from_pretrained(
             checkpoint_name, subfolder="scheduler", flow_shift=12.0
         )
-        if isinstance(scheduler, WanDPMSolverSDEScheduler):
-            # Stochastic DPM-Solver++(2S) for ComfyUI dpm++_sde parity.
-            # Needs mesh layout to upload per-step Gaussian noise.
-            sp_axis = parallel_config.sequence_parallel.mesh_axis
-            self._solver = DPMSolverSDESolver(
-                scheduler=scheduler,
-                mesh_device=mesh_device,
-                mesh_axes=[None, None, sp_axis, None],
-                dtype=ttnn.bfloat16,
-            )
-        elif isinstance(scheduler, FlowMatchEulerDiscreteScheduler):
+        if isinstance(scheduler, FlowMatchEulerDiscreteScheduler):
             self._solver = EulerSolver(scheduler=scheduler)
         else:
             self._solver = UniPCSolver(scheduler=scheduler)

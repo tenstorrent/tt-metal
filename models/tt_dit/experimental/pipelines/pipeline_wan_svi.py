@@ -30,14 +30,15 @@ Two sampling regimes:
   CFG=5.0, ``FlowMatchEulerDiscreteScheduler`` at sigma_shift=5, SVI LoRA
   alone at 1.0/1.0 (high/low expert).
 - ``comfyui``: matches the upstream ComfyUI workflow at
-  ``comfyui_workflow/SVI-Wan22-1210-*-Clips.json``. 6 steps, CFG=1.5,
+  ``comfyui_workflow/SVI-Wan22-1210-10-Clips.json``. 6 steps, CFG=1.5,
   ``flow_shift=8``, SVI LoRA at 1.0/1.0 stacked on top of LightX2V LoRA at
   0.5/1.0 (per upstream's ``docs/svi/comfyui.md``: LightX2V at 1.0 hurts
   SVI on the high-noise expert, so 0.5 is recommended there). Solver-wise,
-  upstream uses k-diffusion ``dpm++_sde`` with Karras-fixed sigmas; tt-metal
-  has no device-side ``DPMSolverSDESolver`` today, so we approximate with
-  ``UniPCMultistepScheduler`` at the same flow_shift. Output is functionally
-  equivalent but not bit-identical.
+  upstream uses k-diffusion ``dpm++_sde`` (stochastic 2nd-order singlestep
+  with BrownianTreeNoiseSampler); tt-metal has no on-device port, so we
+  substitute ``UniPCMultistepScheduler(use_flow_sigmas=True)`` at the same
+  flow_shift. Both are order-2 flow-aware solvers; output is visually
+  close but not bit-exact to ComfyUI.
 
 Upstream: https://github.com/vita-epfl/Stable-Video-Infinity (svi_wan22).
 LoRA weights: HF ``vita-video-gen/svi-model``.
