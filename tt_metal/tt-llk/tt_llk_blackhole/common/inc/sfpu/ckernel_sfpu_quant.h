@@ -48,6 +48,18 @@ constexpr std::uint32_t DEQUANT_REPLAY_SLOT          = REQUANT_REPLAY_SLOT + REQ
 constexpr std::uint32_t DEQUANT_REPLAY_LEN_2S_COMP   = 7;
 constexpr std::uint32_t DEQUANT_REPLAY_LEN_SIGN_MAGN = 5;
 
+// Direction-neutral alias for the SFPCAST+SFPSETSGN combo emitted by
+// apply_sign_magnitude_conversion. The combo is the Blackhole workaround
+// for the SFPCAST RTL bug (tenstorrent/tt-llk-bh#16) and is symmetric:
+// it swaps between int32 sign-magnitude and 2's-complement representations
+// regardless of which side is the source. The named enum value
+// InstrModCast::INT_SIGN_MAGN_TO_INT32_2S_COMP describes only one of those
+// directions; tt-llk convention (matching the canonical bug-fix commit and
+// the other int32 SFPU kernels) is to use it for both directions. The
+// sibling value INT32_2S_COMP_TO_INT_SIGN_MAGN has a known HW bug
+// (sign-mag -0 -> mostneg int32) and is not used in any tt-llk kernel.
+constexpr auto INT_REPR_SWAP_CAST = InstrModCast::INT_SIGN_MAGN_TO_INT32_2S_COMP;
+
 // Configure ADDR_MOD_6 with dest auto-increment of one SFPU dst row
 // (sfpi::SFP_DESTREG_STRIDE == 2 dst-address units) so the per-iteration
 // SFPSTORE walks dst_reg through the face's 4-row x 8-col blocks. Replaces
@@ -97,11 +109,14 @@ inline void _init_quant_int32_(const std::uint32_t zero_point)
         TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_EVEN, 0 /*imm8*/, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT8);
         if constexpr (!SIGN_MAGNITUDE_FORMAT)
         {
-            // sign-magn -> 2's complement, then SETSGN to work around a
-            // Blackhole RTL bug in the cast (tenstorrent/tt-llk-bh#16). LREG4
-            // is the helper's scratch destination; LREG0 receives the fixed-up
-            // result.
-            apply_sign_magnitude_conversion(p_sfpu::LREG0, p_sfpu::LREG4, InstrModCast::INT_SIGN_MAGN_TO_INT32_2S_COMP);
+            // STOCH_RND output above is in sign-magnitude form; convert to
+            // 2's-complement so the trailing INT32_2S_COMP SFPSTORE writes
+            // out 2's-complement bits (on BH the store mode itself is a
+            // no-op, so the bits in LREG0 are what land in memory). LREG4
+            // is the helper's scratch destination; LREG0 receives the
+            // sign-fixed result. See INT_REPR_SWAP_CAST above for why the
+            // cast mode constant is direction-neutral.
+            apply_sign_magnitude_conversion(p_sfpu::LREG0, p_sfpu::LREG4, INT_REPR_SWAP_CAST);
         }
     }
 }
@@ -122,11 +137,14 @@ inline void _init_requant_int32_(const std::uint32_t zero_point)
     {
         if constexpr (!SIGN_MAGNITUDE_FORMAT)
         {
-            // Input arrives in 2's-complement bits in LREG0; convert to
-            // sign-magnitude (which the int->fp32 SFPCAST below expects)
-            // via the same cast+SETSGN pair the output side uses to work
-            // around the Blackhole RTL bug in the cast.
-            apply_sign_magnitude_conversion(p_sfpu::LREG0, p_sfpu::LREG4, InstrModCast::INT_SIGN_MAGN_TO_INT32_2S_COMP);
+            // Input arrives in 2's-complement bits in LREG0 (the upstream
+            // quant kernel stores 2's-complement when SIGN_MAGNITUDE_FORMAT
+            // is false, and the INT32_2S_COMP SFPLOAD mode is a no-op on
+            // BH). Convert to sign-magnitude so the int->fp32 SFPCAST below
+            // sees its expected input. Uses the same cast+SETSGN combo as
+            // the output side (see INT_REPR_SWAP_CAST above for why this
+            // works in both directions).
+            apply_sign_magnitude_conversion(p_sfpu::LREG0, p_sfpu::LREG4, INT_REPR_SWAP_CAST);
         }
         // int32 sign-magnitude -> fp32.
         TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPCAST_MOD1_INT32_TO_FP32_RNE);
@@ -141,8 +159,10 @@ inline void _init_requant_int32_(const std::uint32_t zero_point)
         TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_EVEN, 0 /*imm8*/, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT8);
         if constexpr (!SIGN_MAGNITUDE_FORMAT)
         {
-            // sign-magnitude -> 2's complement (with the same SETSGN bug-fix).
-            apply_sign_magnitude_conversion(p_sfpu::LREG0, p_sfpu::LREG4, InstrModCast::INT_SIGN_MAGN_TO_INT32_2S_COMP);
+            // STOCH_RND output is sign-magnitude; convert to 2's-complement
+            // for the trailing INT32_2S_COMP SFPSTORE. Same cast+SETSGN
+            // combo as the input side; see INT_REPR_SWAP_CAST above.
+            apply_sign_magnitude_conversion(p_sfpu::LREG0, p_sfpu::LREG4, INT_REPR_SWAP_CAST);
         }
     }
 }
@@ -162,11 +182,12 @@ inline void _init_dequant_int32_(const std::uint32_t zero_point)
     {
         if constexpr (!SIGN_MAGNITUDE_FORMAT)
         {
-            // Input arrives in 2's-complement bits in LREG0; convert to
-            // sign-magnitude so the int->fp32 SFPCAST below sees what it
-            // expects. SETSGN inside the helper is the workaround for the
-            // Blackhole cast bug.
-            apply_sign_magnitude_conversion(p_sfpu::LREG0, p_sfpu::LREG4, InstrModCast::INT_SIGN_MAGN_TO_INT32_2S_COMP);
+            // Input arrives in 2's-complement bits in LREG0 (INT32_2S_COMP
+            // SFPLOAD is a no-op on BH); convert to sign-magnitude so the
+            // int->fp32 SFPCAST below sees its expected input. Same
+            // cast+SETSGN combo as the other sites; see INT_REPR_SWAP_CAST
+            // above.
+            apply_sign_magnitude_conversion(p_sfpu::LREG0, p_sfpu::LREG4, INT_REPR_SWAP_CAST);
         }
         // int32 sign-magnitude -> fp32.
         TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPCAST_MOD1_INT32_TO_FP32_RNE);
@@ -217,9 +238,9 @@ inline void _quant_int32_(const std::uint32_t dst_index_in0, const std::uint32_t
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
-        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_7, in0_off); // operand A (fp32)
-        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_7, in1_off); // operand B (fp32 scaler)
-        lltt::replay(QUANT_REPLAY_SLOT, REPLAY_LEN);                           // MAD + SFPNOP + STOCH_RND + (CAST + SETSGN)
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_7, in0_off);           // operand A (fp32)
+        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_7, in1_off);           // operand B (fp32 scaler)
+        lltt::replay(QUANT_REPLAY_SLOT, REPLAY_LEN);                                       // MAD + SFPNOP + STOCH_RND + (CAST + SETSGN)
         TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_6, out_off); // store + dst_reg += 2
     }
 }
