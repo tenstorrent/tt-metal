@@ -19,6 +19,9 @@ except ImportError:
     HAS_TV_NMS = False
 
 
+_ANCHOR_CACHE: Dict[Tuple, List[Tensor]] = {}
+
+
 # ---------------------------------------------------------------------------
 # Anchor generation
 # ---------------------------------------------------------------------------
@@ -65,6 +68,24 @@ def generate_all_anchors(
     for (h, w), s in zip(feat_shapes, strides):
         anchors.append(generate_anchors_single_level(h, w, s, base_size, center_offset, device))
     return anchors
+
+
+def generate_all_anchors_cached(
+    feat_shapes: List[Tuple[int, int]],
+    strides: Sequence[int] = (8, 16, 32, 64, 128),
+    base_size: int = 8,
+    center_offset: float = 0.5,
+    device: torch.device = torch.device("cpu"),
+) -> List[Tensor]:
+    """Cached version of generate_all_anchors. Anchors are deterministic
+    given (feat_shapes, strides, base_size, center_offset, device), so reuse
+    avoids redundant computation across inference calls."""
+    key = (tuple(feat_shapes), tuple(strides), base_size, center_offset, str(device))
+    cached = _ANCHOR_CACHE.get(key)
+    if cached is None:
+        cached = generate_all_anchors(feat_shapes, strides, base_size, center_offset, device)
+        _ANCHOR_CACHE[key] = cached
+    return cached
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +177,7 @@ def atss_postprocess(
     assert HAS_TV_NMS, "torchvision is required for NMS"
 
     feat_shapes = [(s.shape[2], s.shape[3]) for s in cls_scores]
-    all_anchors = generate_all_anchors(feat_shapes, strides, device=cls_scores[0].device)
+    all_anchors = generate_all_anchors_cached(feat_shapes, strides, device=cls_scores[0].device)
 
     all_bboxes = []
     all_scores = []
