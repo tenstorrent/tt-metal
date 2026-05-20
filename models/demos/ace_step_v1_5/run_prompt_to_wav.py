@@ -384,10 +384,16 @@ def main() -> None:
         default=True,
         help=(
             "Load the 5 Hz LM via the experimental TTNN causal stack "
-            "(ttnn_impl/five_hz_causal_lm_experimental.py -> qwen_tt_transformers_lm.QwenModelTtTransformers, "
-            "i.e. the stock models/tt_transformers graph). Default: on. "
-            "Opens TTNN before LM init; requires guidance_scale==1 for DiT KV / mesh batch=1. "
-            "Use --no-experimental-5hz-ttnn-causal-lm to fall back to host PyTorch HF Qwen 1.7B."
+            "(``ttnn_impl/five_hz_causal_lm_experimental.py`` -> "
+            "``ttnn_impl/qwen_tt_transformers_lm.QwenModelTtTransformers``, the stock "
+            "``models/tt_transformers`` graph). Default: on; use "
+            "``--no-experimental-5hz-ttnn-causal-lm`` to fall back to host PyTorch HF Qwen 1.7B. "
+            "Opens TTNN before LM init. The LM is built with ``max_batch_size=1`` so this path "
+            "forces ``lm_cfg_scale=1`` (no LM-side classifier-free guidance). The DiT side is "
+            "unaffected: keep ``--guidance_scale 7`` for base/sft (DiT CFG on) or "
+            "``--guidance_scale 1`` for turbo. (Previously this flag also forced "
+            "``--guidance_scale 1``; that was over-restrictive and the dominant cause of noisy "
+            "audio on the experimental LM path -- DiT CFG is independent of the LM batch limit.)"
         ),
     )
     ap.add_argument(
@@ -832,10 +838,18 @@ def main() -> None:
 
     tt_dev_early = None
     if getattr(args, "experimental_5hz_ttnn_causal_lm", False):
-        if float(gs) > 1.0 + 1e-6:
-            raise ValueError(
-                "--experimental-5hz-ttnn-causal-lm requires --guidance_scale 1 (DiT KV / mesh batch=1 for this demo)."
-            )
+        # NOTE: The experimental TTNN causal LM is built with ``max_batch_size=1`` (see
+        # ``QwenModelTtTransformers``). That constraint applies to the **LM** only -- it
+        # blocks LM-side classifier-free guidance (cond+uncond in one batch), which is why
+        # the handler forces ``lm_cfg_scale=1`` below. It does NOT constrain the DiT, which
+        # has its own batch handling (``do_cfg = gs > 1`` at line ~876 dispatches the DiT
+        # with batch=2 independently). So ``--guidance_scale > 1`` (DiT CFG) IS supported
+        # alongside the experimental TTNN LM. Previously this branch raised when ``gs > 1``
+        # because the demo conservatively assumed the LM batch=1 constraint propagated to
+        # the DiT; that was the dominant cause of the "noisy output" on the experimental
+        # LM path -- disabling DiT CFG on the base variant (trained for gs=7) drops audio
+        # quality substantially. Use ``--guidance_scale 7`` (or the variant default) for
+        # base/sft, ``--guidance_scale 1`` for turbo.
         _configure_ttnn_runtime(no_ttnn_strict=args.no_ttnn_strict)
         import ttnn as _ttnn_pre_lm
 
