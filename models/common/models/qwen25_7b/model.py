@@ -102,6 +102,66 @@ class Qwen25_7BConfig:
     rope_table_len: int
 
 
+@dataclass(frozen=True)
+class Qwen25_7BPrecisionConfig:
+    """Per-layer precision + math-fidelity recipe for Qwen2.5-7B-Instruct.
+
+    Mirrors the fields TTTv1's ``DecodersPrecision`` actually distinguishes for
+    Qwen2.5-7B (Llama-family group in ``model_config.py`` for both ``accuracy()``
+    and ``performance()``). Two module-level recipes are exposed:
+    :data:`QWEN25_7B_ACCURACY` and :data:`QWEN25_7B_PERFORMANCE`. Pass one to
+    :meth:`Qwen25_7B.from_pretrained` via ``precision=``; use
+    ``dataclasses.replace(QWEN25_7B_PERFORMANCE, perf_decode_tuning=False)`` to
+    customize a single field (e.g. disable aggressive decode math during
+    teacher-forcing parity runs).
+
+    Attention compute-kernel configs (HIFI4 + fp32 dest acc for LI_QKV / LI_O /
+    SDPA prefill, plus the decode variants and the LoFi perf-decode kernel) are
+    resolved inside ``_resolve_qwen_wh_tuning`` from
+    :attr:`perf_decode_tuning`; they are not exposed here because TTTv1 ships
+    them as a coupled bundle for this model.
+    """
+
+    # Qwen2.5-7B keeps BF16 WQKV/WO in BOTH TTTv1 recipes — TTTv2's
+    # ``Attention1D`` default of BFP8 silently downgrades QKV/WO precision and
+    # broadens per-layer divergence on this model (see
+    # debugging/numerical_divergence_vs_hf_2026-05-14.md).
+    wqkv_dtype: ttnn.DataType = ttnn.bfloat16
+    wo_dtype: ttnn.DataType = ttnn.bfloat16
+    kv_cache_dtype: ttnn.DataType = ttnn.bfloat8_b
+
+    # MLP weights: BFP8 in both modes for Qwen2.5-7B (TTTv1 does not drop these
+    # to BFP4 for this checkpoint).
+    mlp_w1_w3_dtype: ttnn.DataType = ttnn.bfloat8_b
+    mlp_w2_dtype: ttnn.DataType = ttnn.bfloat8_b
+
+    lm_head_dtype: ttnn.DataType = ttnn.bfloat8_b
+
+    # Decode-side throughput tuning: LoFi attention decode (LI_QKV / SDPA /
+    # LI_O), HiFi2 MLP decode FF, SDPA exp-approx, no W1→DRAM spill for small
+    # batch. Performance recipe only — keep ``False`` in accuracy mode and in
+    # any teacher-forcing path (aggressive decode math drops top-1).
+    perf_decode_tuning: bool = False
+
+
+# TTTv1 ``DecodersPrecision.accuracy("Qwen2.5-7B-Instruct")`` (Llama-family
+# group in ``model_config.py``): BF16 attention, BFP8 MLP, BF16 LM head, BF16
+# KV cache, HiFi4 throughout. ``perf_decode_tuning`` stays off — decode keeps
+# HiFi4 + fp32 dest acc.
+QWEN25_7B_ACCURACY = Qwen25_7BPrecisionConfig(
+    kv_cache_dtype=ttnn.bfloat16,
+    lm_head_dtype=ttnn.bfloat16,
+)
+
+# TTTv1 ``DecodersPrecision.performance("Qwen2.5-7B-Instruct")``: same dtypes
+# as accuracy except ``kv_cache_dtype`` / ``lm_head_dtype`` drop to BFP8, plus
+# the decode-side throughput bundle (LoFi attn decode + SDPA exp-approx + HiFi2
+# MLP decode FF) is engaged via ``perf_decode_tuning=True``.
+QWEN25_7B_PERFORMANCE = Qwen25_7BPrecisionConfig(
+    perf_decode_tuning=True,
+)
+
+
 def _qwen_wh_mlp_matmul_compute_kernel() -> ttnn.WormholeComputeKernelConfig:
     """HiFi4 lowers L1 circular-buffer footprint vs HiFi2 for wide FF matmuls on Wormhole."""
     return ttnn.WormholeComputeKernelConfig(
@@ -296,9 +356,7 @@ def _build_decoder_layer(
     topology: Any,
     num_dev: int,
     torch_dtype: torch.dtype,
-    wqkv_dtype: ttnn.DataType,
-    mlp_w_dtype: ttnn.DataType,
-    kv_cache_dtype: ttnn.DataType,
+    precision: Qwen25_7BPrecisionConfig,
     executor_mode: bool,
     paged_cfg: Qwen25PagedAttentionConfig | None,
     cache_path: Path | None,
@@ -308,8 +366,10 @@ def _build_decoder_layer(
     prefix = f"layer{idx}"
 
     wqkv, wo, qn, kn, wqkv_b = weight_utils.attention_wqkv_wo_from_hf_layer(hf_layer.self_attn, num_dev)
-    lazy_wqkv = _lazy(wqkv, dtype=wqkv_dtype, cache=(cache_path / "attn", f"{prefix}_wqkv") if cache_path else None)
-    lazy_wo = _lazy(wo, dtype=wqkv_dtype, cache=(cache_path / "attn", f"{prefix}_wo") if cache_path else None)
+    lazy_wqkv = _lazy(
+        wqkv, dtype=precision.wqkv_dtype, cache=(cache_path / "attn", f"{prefix}_wqkv") if cache_path else None
+    )
+    lazy_wo = _lazy(wo, dtype=precision.wo_dtype, cache=(cache_path / "attn", f"{prefix}_wo") if cache_path else None)
 
     def _qk_norm_cfg(weight: torch.Tensor | None, name: str) -> RMSNorm1DConfig | None:
         if weight is None:
@@ -357,7 +417,7 @@ def _build_decoder_layer(
             use_vllm_paged_kv_cache=executor_mode,
             paged_attention_config=paged_cfg,
             kv_cache=None,
-            kv_cache_dtype=kv_cache_dtype,
+            kv_cache_dtype=precision.kv_cache_dtype,
             decode_sdpa_prg_config=wh.perf_decode_sdpa_cfg,
             li_qkv_decode_compute_kernel_cfg=wh.attn_li_qkv_decode_kernel_cfg,
             sdpa_decode_compute_kernel_cfg=wh.attn_sdpa_decode_kernel_cfg,
@@ -370,9 +430,21 @@ def _build_decoder_layer(
     w1, w2, w3 = weight_utils.mlp_weights_from_hf_layer(hf_layer.mlp)
     mlp = MLP1D.from_config(
         MLP1DConfig(
-            w1=_lazy(w1, dtype=mlp_w_dtype, cache=(cache_path / "mlp", f"{prefix}_w1") if cache_path else None),
-            w2=_lazy(w2, dtype=mlp_w_dtype, cache=(cache_path / "mlp", f"{prefix}_w2") if cache_path else None),
-            w3=_lazy(w3, dtype=mlp_w_dtype, cache=(cache_path / "mlp", f"{prefix}_w3") if cache_path else None),
+            w1=_lazy(
+                w1,
+                dtype=precision.mlp_w1_w3_dtype,
+                cache=(cache_path / "mlp", f"{prefix}_w1") if cache_path else None,
+            ),
+            w2=_lazy(
+                w2,
+                dtype=precision.mlp_w2_dtype,
+                cache=(cache_path / "mlp", f"{prefix}_w2") if cache_path else None,
+            ),
+            w3=_lazy(
+                w3,
+                dtype=precision.mlp_w1_w3_dtype,
+                cache=(cache_path / "mlp", f"{prefix}_w3") if cache_path else None,
+            ),
             mesh_device=mesh_device,
             tt_ccl=tt_ccl,
             topology=topology,
@@ -592,13 +664,9 @@ class Qwen25_7B(LightweightModule):
         max_seq_len: int = 4096,
         num_layers: int | None = None,
         cache_dir: Path | str | None = None,
-        wqkv_dtype: ttnn.DataType = ttnn.bfloat16,
-        mlp_w_dtype: ttnn.DataType = ttnn.bfloat8_b,
-        kv_cache_dtype: ttnn.DataType = ttnn.bfloat8_b,
-        lm_head_dtype: ttnn.DataType = ttnn.bfloat8_b,
+        precision: Qwen25_7BPrecisionConfig = QWEN25_7B_ACCURACY,
         block_size: int = 32,
         executor_mode: bool = False,
-        perf_decode_tuning: bool = False,
     ) -> Qwen25_7B:
         """
         Load HF weights on host and build TTNN modules (weights materialize on first forward).
@@ -610,13 +678,15 @@ class Qwen25_7B(LightweightModule):
             max_seq_len: KV cache sequence budget (per layer).
             num_layers: If set, truncate stack for smoke tests.
             cache_dir: Optional directory for ``LazyWeight`` tensor caches.
-            kv_cache_dtype: Device dtype for paged KV tensors (executor allocation).
+            precision: Per-layer precision + math-fidelity recipe (see :class:`Qwen25_7BPrecisionConfig`).
+                Defaults to :data:`QWEN25_7B_ACCURACY` (mirrors TTTv1
+                ``DecodersPrecision.accuracy`` for Qwen2.5-7B). Use
+                :data:`QWEN25_7B_PERFORMANCE` for TTTv1's perf recipe (BFP8 KV cache + BFP8
+                LM head + ``perf_decode_tuning``), or ``dataclasses.replace(...)`` to customize
+                a single field.
             block_size: Paged attention block size (tokens per block).
             executor_mode: If True, use external paged KV (``set_kv_cache`` + shared executor).
                 If False, internal KV tensors (smoke / ``prefill_from_token_ids`` without executor).
-            perf_decode_tuning: If True, apply decode-only throughput knobs (SDPA exp-approx, LoFi decode
-                attention math, HiFi2 MLP decode FF, no W1 DRAM spill for small batch). Intended for
-                ``optimizations=="performance"`` in the demo; leave False for accuracy mode.
         """
         ttnn.SetDefaultDevice(mesh_device)
         cache_path = Path(cache_dir) if cache_dir else None
@@ -702,7 +772,7 @@ class Qwen25_7B(LightweightModule):
             hf_model_id=hf_model_id,
             num_dev=num_dev,
             max_batch_size=max_batch_size,
-            perf_decode_tuning=perf_decode_tuning,
+            perf_decode_tuning=precision.perf_decode_tuning,
         )
 
         layers: list[Qwen25_7BDecoderLayer] = [
@@ -715,9 +785,7 @@ class Qwen25_7B(LightweightModule):
                 topology=topology,
                 num_dev=num_dev,
                 torch_dtype=torch_dtype,
-                wqkv_dtype=wqkv_dtype,
-                mlp_w_dtype=mlp_w_dtype,
-                kv_cache_dtype=kv_cache_dtype,
+                precision=precision,
                 executor_mode=executor_mode,
                 paged_cfg=paged_cfg,
                 cache_path=cache_path,
@@ -745,7 +813,7 @@ class Qwen25_7B(LightweightModule):
             mesh_device=mesh_device,
             hf_lm_head=hf.lm_head,
             qcfg=qcfg,
-            lm_head_dtype=lm_head_dtype,
+            lm_head_dtype=precision.lm_head_dtype,
             lm_head_compute_kernel_cfg=wh.lm_head_compute_kernel_cfg,
             cache_path=cache_path,
         )
@@ -762,7 +830,7 @@ class Qwen25_7B(LightweightModule):
                 max_seq_len=max_seq_len,
                 cluster_shape=list(mesh_device.shape),
                 model_cache_path=cache_path,
-                kv_cache_dtype=kv_cache_dtype,
+                kv_cache_dtype=precision.kv_cache_dtype,
             )
         return model
 

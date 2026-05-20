@@ -26,6 +26,7 @@ LazyWeight tensor cache (same rules as ``models/tt_transformers`` ``ModelArgs``)
 (``device_name`` is ``N150`` / ``N300`` / ``N150x4`` / ``{n}dev`` from mesh size).
 """
 
+import dataclasses
 import json
 import os
 from pathlib import Path
@@ -38,7 +39,7 @@ from transformers import AutoConfig, AutoTokenizer
 import ttnn
 from models.common.models.executor import run_perf_benchmark, run_teacher_forcing
 from models.common.models.qwen25_7b.executor import EagerQwenExecutor, TracedQwenExecutor
-from models.common.models.qwen25_7b.model import Qwen25_7B
+from models.common.models.qwen25_7b.model import QWEN25_7B_ACCURACY, QWEN25_7B_PERFORMANCE, Qwen25_7B
 from models.common.tests.demos.cleanup_utils import cleanup_model_case
 from models.tt_transformers.tt.common import encode_prompt_hf
 
@@ -305,36 +306,33 @@ def create_model(
 ):
     """Build ``Qwen25_7B`` in executor (paged KV) mode.
 
+    Picks one of the two module-level precision recipes (``QWEN25_7B_ACCURACY`` /
+    ``QWEN25_7B_PERFORMANCE``) — both defined in ``qwen25_7b/model.py`` and grounded
+    in TTTv1's ``DecodersPrecision`` for Qwen2.5-7B. The dataclass owns the dtype +
+    math-fidelity recipe; this demo just selects between the two and forwards it.
+
     ``max_batch_size`` must match the workload: decode DRAM matmul CB usage scales with
     tile-padded batch rows, so batch-1 perf tests should pass ``max_batch_size=1`` even when
     batch-32 / teacher-forcing cases need 32.
 
-    ``perf_decode_tuning`` (decode LoFi / SDPA approx / HiFi2 MLP decode, etc.) defaults to
-    ``optimizations == "performance"`` but callers may disable it for teacher-forcing parity.
+    ``perf_decode_tuning`` is an ablation knob — when not ``None`` it overrides the
+    recipe's :attr:`Qwen25_7BPrecisionConfig.perf_decode_tuning` via
+    ``dataclasses.replace``. The token-accuracy path passes ``False`` even under
+    ``optimizations="performance"`` to keep teacher-forcing parity off aggressive
+    decode math.
     """
     hf_model = os.environ.get("HF_MODEL", "Qwen/Qwen2.5-7B-Instruct")
     _skip_unless_heads_divide_mesh(mesh_device, hf_model)
 
-    # Differentiate modes similarly to ``DecodersPrecision`` on Llama: tighter weights in "accuracy".
-    if optimizations == "accuracy":
-        wqkv_dtype = ttnn.bfloat16
-        mlp_w_dtype = ttnn.bfloat8_b
-        kv_cache_dtype = ttnn.bfloat16
-        lm_head_dtype = ttnn.bfloat16
-    else:
-        wqkv_dtype = ttnn.bfloat16
-        mlp_w_dtype = ttnn.bfloat8_b
-        kv_cache_dtype = ttnn.bfloat8_b
-        lm_head_dtype = ttnn.bfloat8_b
+    precision = QWEN25_7B_PERFORMANCE if optimizations == "performance" else QWEN25_7B_ACCURACY
+    if perf_decode_tuning is not None and perf_decode_tuning != precision.perf_decode_tuning:
+        precision = dataclasses.replace(precision, perf_decode_tuning=perf_decode_tuning)
 
     num_devices = mesh_device.get_num_devices()
     if num_devices >= 4:
         max_seq_len = min(131072 // max_batch_size, 8192)
     else:
         max_seq_len = 4096
-
-    if perf_decode_tuning is None:
-        perf_decode_tuning = optimizations == "performance"
 
     try:
         model = Qwen25_7B.from_pretrained(
@@ -344,12 +342,8 @@ def create_model(
             max_seq_len=max_seq_len,
             num_layers=None,
             cache_dir=cache_dir,
-            wqkv_dtype=wqkv_dtype,
-            mlp_w_dtype=mlp_w_dtype,
-            kv_cache_dtype=kv_cache_dtype,
-            lm_head_dtype=lm_head_dtype,
+            precision=precision,
             executor_mode=True,
-            perf_decode_tuning=perf_decode_tuning,
         )
     except Exception as e:
         pytest.skip(f"Could not build Qwen model (weights / memory / mesh): {e}")
@@ -380,7 +374,13 @@ def test_qwen25_7b(test_config, mesh_device, optimizations):
     cache_dir = lazy_weight_cache_dir_for_demo(mesh_device, hf_model)
 
     try:
-        max_bs = 1 if test_config == "batch-1" else 32
+        # Only the batch-32 throughput test actually exercises 32 users. ``token-accuracy``
+        # teacher-forces a single reference sequence, so running it with max_batch_size=32
+        # is pure waste and trips ``decode_spill_w1_to_dram_before_w3`` (extra per-step DRAM
+        # round-trip in MLP decode, see model.py:_resolve_qwen_wh_tuning), which pushes the
+        # cold-cache first-invocation runtime past pytest.ini's 300s budget. Mirror the
+        # Mistral-7B demo fix and use max_batch_size=1 for everything except batch-32.
+        max_bs = 32 if test_config == "batch-32" else 1
         # Keep teacher-forcing parity off aggressive decode math; throughput tests use full tuning.
         decode_tuning = optimizations == "performance" and test_config != "token-accuracy"
         model = create_model(
