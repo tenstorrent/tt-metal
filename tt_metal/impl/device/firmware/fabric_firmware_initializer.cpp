@@ -275,6 +275,10 @@ void FabricFirmwareInitializer::init(
 
     tt_fabric::FabricConfig fabric_config = descriptor_->fabric_config();
     if (!tt_fabric::is_tt_fabric_config(fabric_config)) {
+        // No fabric context will be built for non-tt-fabric configs (see ControlPlane::initialize_fabric_context).
+        // Clear devices_ so teardown's "nothing was ever initialized" gate (devices_.empty()) does not fall through
+        // to get_fabric_context(), which would FATAL.
+        devices_.clear();
         return;
     }
 
@@ -326,6 +330,7 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
     // to write the master fabric router termination signal to terminate the kernels that were started under the
     // previous fabric config. devices_.empty() correctly captures "nothing was ever initialized".
     if (devices_.empty()) {
+        devices_.clear();
         initialized_.clear();
         init_done.erase(key);
         return;

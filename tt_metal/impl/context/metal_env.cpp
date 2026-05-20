@@ -192,6 +192,23 @@ bool MetalEnvImpl::set_fabric_config(
     tt_fabric::FabricUDMMode fabric_udm_mode,
     tt_fabric::FabricManagerMode fabric_manager,
     tt_fabric::FabricRouterConfig router_config) {
+    // Reject transitions that would reinitialize the control plane while devices are still open. Re-enabling fabric
+    // (or refreshing it to the same value) while a mesh is alive replaces control_plane_ and fabric_context_
+    // underneath running fabric kernels AND dangles the `ControlPlane&` reference held by FabricFirmwareInitializer.
+    // Callers must close the mesh device first. Going TO DISABLED is allowed -- that path defers fabric_context
+    // cleanup to the mesh close (see teardown_fabric_config). The auto-bump path in DeviceManager::open_devices
+    // calls this before add_devices_to_pool, so no devices are active there yet and the gate is a no-op for it.
+    if (fabric_config != tt_fabric::FabricConfig::DISABLED) {
+        const bool devices_still_open = MetalContext::instance_exists() && MetalContext::instance().device_manager() &&
+                                        !MetalContext::instance().device_manager()->get_all_active_devices().empty();
+        TT_FATAL(
+            !devices_still_open,
+            "SetFabricConfig({}) is not allowed while devices are still open: it would reinitialize the control "
+            "plane underneath running fabric kernels and dangle the ControlPlane& held by the fabric firmware "
+            "initializer. Close the mesh device before changing the fabric config to a non-DISABLED value.",
+            enchantum::to_string(fabric_config));
+    }
+
     force_reinit_ = true;
 
     // Export channel trimming capture data before fabric config changes.
