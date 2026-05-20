@@ -442,9 +442,6 @@ def create_routed_expert_tensors(
                 f"sram_expert_ids must be the contiguous tail of [0..7] for the dense "
                 f"workaround; got {sram_expert_ids}"
             )
-        gate_proj_expert_tensors = None  # unused when is_moe=False
-        up_proj_expert_tensors = None
-        down_proj_expert_tensors = None
 
     if enable_routing:
         assert is_moe, "enable_routing=True is only supported with MoE weights"
@@ -604,15 +601,9 @@ def create_routed_expert_tensors(
         )
 
         # SRAM gate/up/down proj cb_out tensors are now overlaid onto the SDPA
-        # kv_cache buffer in _overlap_cbs_with_sdpa_buffer. The dimensions below
-        # are still needed locally for the gather dst sizing.
-        _num_active = 8
-        _tile_w = 32
-        _sram_out_per_core = _num_active * _sram_per_core_N * _tile_w  # 256
-        _num_sram_cores = len(a_cores)  # 64
-
-        # SRAM gather dst, GR mcast_src, GR scratch (intermed/scalar) CBs are now
-        # all kv_buf-overlaid in _overlap_cbs_with_sdpa_buffer (sender-only region).
+        # kv_cache buffer in _overlap_cbs_with_sdpa_buffer. SRAM gather dst, GR
+        # mcast_src, GR scratch (intermed/scalar) CBs are also all kv_buf-overlaid
+        # in _overlap_cbs_with_sdpa_buffer (sender-only region).
 
     return RoutedExpertTensors(
         ttnn_residual_mcast_src=ttnn_residual_mcast_src,

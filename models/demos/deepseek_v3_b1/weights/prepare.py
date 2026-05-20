@@ -685,8 +685,8 @@ def create_gate_indices_tensor(
         Position in sram_expert_ids is the slot index — this list IS the
         single source of truth for SRAM placement and must match the slab
         ordering used by build_sram_expert_weights (and friends). A mismatch
-        means slot s in the index points at slot s'-≠s's weights → silent
-        wrong outputs.
+        means slot s in the index points at some other slot's weights, silently
+        producing wrong outputs.
 
         Default empty preserves Phase 1B behavior (identity arange).
 
@@ -734,7 +734,7 @@ def create_gate_indices_tensor(
 
 def build_sram_expert_weights(
     sram_expert_ids: list,
-    full_torch_weights_per_device: list,
+    full_torch_weights_per_device: dict[int, list[torch.Tensor]],
     assigner: Any,
     mesh_device: Any,
     core_grid: ttnn.CoreRangeSet,
@@ -748,10 +748,16 @@ def build_sram_expert_weights(
     """Build T L1-allocated CompressedTensors for SRAM-resident routed experts.
 
     Mirrors ``_build_sram_cts_slice_k`` from
-    ``test_matmul_expert.py::per_core_allocation`` — HEIGHT_SHARDED with
-    K-slicing across cores, N-parallel across the remaining core axis. Each
-    core holds a ``[sram_k_per_core × tile_w, sram_per_core_N × tile_w]``
-    slab per expert.
+    ``test_matmul_expert.py::per_core_allocation``. Layout is selected by
+    ``k_parallel_factor = num_sram_cores // sram_n_parallel``:
+      * ``k_parallel > 1`` (gate/up at TP8: 8 K-slices × 8 N-slices = 64 cores)
+        → HEIGHT_SHARDED. Per-core shards stacked along H via K-major slab
+        ordering.
+      * ``k_parallel == 1`` (down at TP8: 112 cores, K replicated, N split)
+        → WIDTH_SHARDED. Per-device data passes through as-is; ttnn handles
+        per-core slicing along W.
+    Each core holds a ``[sram_k_per_core × tile_w, sram_per_core_N × tile_w]``
+    slab per expert in either case.
 
     Slot ordering: returned CTs are in the same order as ``sram_expert_ids``,
     so slot s corresponds to global expert ``sram_expert_ids[s]``. This MUST
@@ -1959,11 +1965,19 @@ def prepare_dense_layer_weights(
         device, state_dict, layer_idx, is_moe=False, move_to_device=move_to_device, cache_config=cache_config
     )
     assert isinstance(routed, DenseRoutedExpertWeights)
+    # Dense MLP has exactly 8 chunks along the routed-equivalent N dim. The kernel-side
+    # synthesis (op.py num_dram_experts_pre_selected) also assumes sram_expert_ids is the
+    # contiguous tail of [0..7]; mismatches produce silent wrong outputs.
+    _dense_ids = list(sram_expert_ids)
+    if _dense_ids:
+        assert len(_dense_ids) <= 8, f"dense sram_expert_ids over 8 chunks: {_dense_ids}"
+        assert all(0 <= eid < 8 for eid in _dense_ids), f"dense sram_expert_ids must be in [0..7]: {_dense_ids}"
+        assert len(set(_dense_ids)) == len(_dense_ids), f"dense sram_expert_ids has duplicates: {_dense_ids}"
     sram_gate, sram_up, sram_down = _build_dense_sram_routed_weights(
         device,
         state_dict,
         layer_idx,
-        list(sram_expert_ids),
+        _dense_ids,
     )
     result = DeepSeekV3DenseLayerWeights(
         q_a_proj=attn.q_a_proj,
