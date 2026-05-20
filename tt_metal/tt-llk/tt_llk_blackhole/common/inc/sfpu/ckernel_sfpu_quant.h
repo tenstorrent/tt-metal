@@ -27,26 +27,29 @@ namespace ckernel::sfpu
 // required so a single compute kernel can mix all three ops without each
 // init clobbering the others' recordings.
 //
-// Body content (see the inits for the exact emission order):
-//   QUANT   ( 2s-comp, 5 ) : SFPMAD, SFPNOP, STOCH_RND, SFPCAST, SFPSETSGN
-//   QUANT   (sign-magn, 3) : SFPMAD, SFPNOP, STOCH_RND
-//   REQUANT ( 2s-comp, 8 ) : SFPCAST+SFPSETSGN(in), SFPCAST(int->fp32), SFPMAD,
-//                             SFPNOP, STOCH_RND, SFPCAST+SFPSETSGN(out)
-//   REQUANT (sign-magn, 4) : SFPCAST(int->fp32), SFPMAD, SFPNOP, STOCH_RND
-//   DEQUANT ( 2s-comp, 7 ) : SFPCAST+SFPSETSGN(in), SFPCAST(int->fp32), SFPADD,
-//                             SFPNOP, SFPMUL, SFPNOP
-//   DEQUANT (sign-magn, 5) : SFPCAST(int->fp32), SFPADD, SFPNOP, SFPMUL, SFPNOP
+// Body content (see the inits for the exact emission order). No SFPNOPs are
+// emitted: on Blackhole the SFPU implicitly stalls on read-after-write
+// hazards between back-to-back fp32 ops, so SFPMAD->STOCH_RND,
+// SFPADD->SFPMUL and SFPMUL->SFPSTORE don't need explicit pipeline bubbles.
+//   QUANT   ( 2s-comp, 4 ) : SFPMAD, STOCH_RND, SFPCAST, SFPSETSGN
+//   QUANT   (sign-magn, 2) : SFPMAD, STOCH_RND
+//   REQUANT ( 2s-comp, 7 ) : SFPCAST+SFPSETSGN(in), SFPCAST(int->fp32), SFPMAD,
+//                             STOCH_RND, SFPCAST+SFPSETSGN(out)
+//   REQUANT (sign-magn, 3) : SFPCAST(int->fp32), SFPMAD, STOCH_RND
+//   DEQUANT ( 2s-comp, 5 ) : SFPCAST+SFPSETSGN(in), SFPCAST(int->fp32),
+//                             SFPADD, SFPMUL
+//   DEQUANT (sign-magn, 3) : SFPCAST(int->fp32), SFPADD, SFPMUL
 constexpr std::uint32_t QUANT_REPLAY_SLOT          = 0;
-constexpr std::uint32_t QUANT_REPLAY_LEN_2S_COMP   = 5;
-constexpr std::uint32_t QUANT_REPLAY_LEN_SIGN_MAGN = 3;
+constexpr std::uint32_t QUANT_REPLAY_LEN_2S_COMP   = 4;
+constexpr std::uint32_t QUANT_REPLAY_LEN_SIGN_MAGN = 2;
 
 constexpr std::uint32_t REQUANT_REPLAY_SLOT          = QUANT_REPLAY_SLOT + QUANT_REPLAY_LEN_2S_COMP;
-constexpr std::uint32_t REQUANT_REPLAY_LEN_2S_COMP   = 8;
-constexpr std::uint32_t REQUANT_REPLAY_LEN_SIGN_MAGN = 4;
+constexpr std::uint32_t REQUANT_REPLAY_LEN_2S_COMP   = 7;
+constexpr std::uint32_t REQUANT_REPLAY_LEN_SIGN_MAGN = 3;
 
 constexpr std::uint32_t DEQUANT_REPLAY_SLOT          = REQUANT_REPLAY_SLOT + REQUANT_REPLAY_LEN_2S_COMP;
-constexpr std::uint32_t DEQUANT_REPLAY_LEN_2S_COMP   = 7;
-constexpr std::uint32_t DEQUANT_REPLAY_LEN_SIGN_MAGN = 5;
+constexpr std::uint32_t DEQUANT_REPLAY_LEN_2S_COMP   = 5;
+constexpr std::uint32_t DEQUANT_REPLAY_LEN_SIGN_MAGN = 3;
 
 // Direction-neutral alias for the SFPCAST+SFPSETSGN combo emitted by
 // apply_sign_magnitude_conversion. The combo is the Blackhole workaround
@@ -95,15 +98,10 @@ inline void _init_quant_int32_(const std::uint32_t zero_point)
 
     lltt::record<lltt::NoExec>(QUANT_REPLAY_SLOT, REPLAY_LEN);
     {
-        // D(LREG0) = LREG0 * LREG1 + LREG2 (zero point)
+        // D(LREG0) = LREG0 * LREG1 + LREG2 (zero point). The Blackhole SFPU
+        // implicitly stalls SFP_STOCH_RND below until SFPMAD's LREG0 write
+        // retires, so no explicit pipeline-bubble TTI_SFPNOP is needed here.
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG0, 0 /*mod1*/);
-        // SFPMAD has a 2-cycle write latency on LREG0 and SFP_STOCH_RND below
-        // reads LREG0, so exactly one SFPU pipeline bubble is required. Use
-        // TTI_SFPNOP (SFPU NOP, opcode 0x8f) rather than the generic Tensix
-        // TTI_NOP (0x02) so the bubble lands in the SFPU pipe and so the
-        // recorded body contains only SFPU-pipe opcodes (a hard requirement
-        // for correct replay-buffer playback).
-        TTI_SFPNOP;
         // fp32 -> int sign-magnitude. LCONST_0 (LREG9) is the HW-provided 0.0
         // used as the zero descale.
         TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_EVEN, 0 /*imm8*/, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT8);
@@ -148,13 +146,10 @@ inline void _init_requant_int32_(const std::uint32_t zero_point)
         }
         // int32 sign-magnitude -> fp32.
         TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPCAST_MOD1_INT32_TO_FP32_RNE);
-        // D(LREG0) = LREG0 * LREG1 + LREG2 (zero point)
+        // D(LREG0) = LREG0 * LREG1 + LREG2 (zero point). BH SFPU implicitly
+        // stalls STOCH_RND below until SFPMAD's LREG0 write retires, so no
+        // explicit pipeline-bubble TTI_SFPNOP is needed here.
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG0, 0 /*mod1*/);
-        // SFPMAD has a 2-cycle write latency on LREG0 and STOCH_RND below
-        // reads it next, so one SFPU pipeline bubble is required. SFPNOP
-        // (not the Tensix TTI_NOP) so the bubble lands in the SFPU pipe and
-        // the recorded body contains only SFPU-pipe opcodes.
-        TTI_SFPNOP;
         // fp32 -> int sign-magnitude. LCONST_0 (LREG9) provides the 0.0 descale.
         TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_EVEN, 0 /*imm8*/, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT8);
         if constexpr (!SIGN_MAGNITUDE_FORMAT)
@@ -192,18 +187,14 @@ inline void _init_dequant_int32_(const std::uint32_t zero_point)
         // int32 sign-magnitude -> fp32.
         TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPCAST_MOD1_INT32_TO_FP32_RNE);
         // SFPADD = VA*VB + VC ; with LCONST_1 (LREG10) = 1.0 this collapses
-        // to A + LREG2 (= A + zero_point as loaded by the caller).
+        // to A + LREG2 (= A + zero_point as loaded by the caller). BH SFPU
+        // implicitly stalls SFPMUL below until SFPADD's LREG0 write retires.
         TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG0, 0 /*mod1*/);
-        // SFPADD has a 2-cycle write latency on LREG0; SFPMUL reads it next.
-        TTI_SFPNOP;
         // SFPMUL with LCONST_0 (LREG9 = 0.0) ignored as +C :
-        // LREG0 = (A + LREG2) * LREG1.
+        // LREG0 = (A + LREG2) * LREG1. The TT_SFPSTORE outside the replay
+        // (which reads LREG0) is similarly handled by the SFPU's implicit
+        // RAW stall, so no trailing TTI_SFPNOP is required.
         TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0 /*mod1*/);
-        // SFPMUL has a 2-cycle write latency on LREG0; the SFPSTORE that
-        // follows the replay reads it. Keep this NOP inside the recorded
-        // body rather than relying on the implicit gap between the replay
-        // completing and TT_SFPSTORE issuing.
-        TTI_SFPNOP;
     }
 }
 
@@ -240,7 +231,7 @@ inline void _quant_int32_(const std::uint32_t dst_index_in0, const std::uint32_t
     {
         TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_7, in0_off);           // operand A (fp32)
         TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_7, in1_off);           // operand B (fp32 scaler)
-        lltt::replay(QUANT_REPLAY_SLOT, REPLAY_LEN);                                       // MAD + SFPNOP + STOCH_RND + (CAST + SETSGN)
+        lltt::replay(QUANT_REPLAY_SLOT, REPLAY_LEN);                                       // MAD + STOCH_RND + (CAST + SETSGN)
         TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_6, out_off); // store + dst_reg += 2
     }
 }
