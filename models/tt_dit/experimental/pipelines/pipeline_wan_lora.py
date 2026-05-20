@@ -2,48 +2,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Wan2.2 I2V pipeline with LoRA adapters fused into the base PyTorch weights.
+"""Wan2.2 I2V pipeline with LoRA adapters fused into the base weights.
 
-Each expert transformer (high-noise + low-noise) gets its own ordered LoRA
-stack. Stacks are fused on CPU before TT conversion, so inference uses
-vanilla I2V machinery with no LoRA-specific runtime cost. The TT cache is
-keyed by a SHA1 hash of the ordered ``(path, scale)`` tuples per expert,
-so distinct stacks never alias.
-
-Single-LoRA usage::
-
-    pipe = WanPipelineI2VLora.create_pipeline(
-        mesh_device=...,
-        lora_high="/path/high.safetensors",
-        lora_low="/path/low.safetensors",
-    )
-
-Multi-LoRA stacking (e.g. LightX2V LoRA + style LoRA, applied in order)::
-
-    pipe = WanPipelineI2VLora.create_pipeline(
-        mesh_device=...,
-        lora_high=[
-            LoRASpec("/path/lightx2v_high.safetensors", scale=1.0),
-            LoRASpec("/path/style_high.safetensors", scale=0.5),
-        ],
-        lora_low=[LoRASpec("/path/lightx2v_low.safetensors", scale=1.0)],
-    )
-
-Adapter conventions detected automatically inside :func:`fuse_lora_state_dict`:
-
-1. Low-rank pairs at ``<base>.lora_A.weight`` / ``<base>.lora_B.weight`` or
-   ``<base>.lora_down.weight`` / ``<base>.lora_up.weight``. PEFT-style
-   adapter-name segments (``<base>.lora_A.default.weight``) are tolerated.
-2. Bias deltas at ``<base>.diff_b`` (added to the base ``.bias``).
-3. Full param deltas at ``<base>.diff`` (added to the base ``.weight``,
-   used e.g. for RMSNorm gammas).
-4. Per-module alpha scaling via ``<base>.alpha`` (effective_scale =
-   scale * alpha / rank).
-
-Key namespaces accepted on input: lightx2v native (``blocks.N.attn.q.lora_A``),
-diffusers prefixes (``diffusion_model.``, ``transformer.``, ``unet.``,
-``model.``) stripped automatically, kohya/A1111 (``lora_unet_blocks_N_...``)
-remapped to lightx2v style.
+Each expert (high/low noise) takes an ordered LoRA stack; stacks are fused
+on CPU before TT conversion so inference has no LoRA-specific runtime cost.
+See ``experimental/models/Wan2_2_LoRA.md`` for the adapter-key formats
+detected by ``fuse_lora_state_dict`` and the supported namespaces.
 """
 import hashlib
 import re
@@ -346,11 +310,8 @@ class WanPipelineI2VLora(WanPipelineI2V):
         super().__init__(*args, **kwargs)
 
     def prepare_text_conditioning(self, tt_model, prompt_embeds, buffer, traced=False):
-        # When guidance_scale=1.0 the encoder returns negative_prompt_embeds=None.
-        # The base loop still calls this for the negative buffer; forwarding
-        # None would hit NoneType in Linear. combined_step short-circuits when
-        # do_classifier_free_guidance is False, so leaving the buffer untouched
-        # is safe.
+        # guidance_scale=1.0 → encoder returns None for negative embeds; combined_step
+        # skips CFG so the untouched buffer is fine.
         if prompt_embeds is None:
             return buffer
         return super().prepare_text_conditioning(tt_model, prompt_embeds, buffer, traced)

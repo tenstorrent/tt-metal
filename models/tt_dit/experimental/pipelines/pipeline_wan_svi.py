@@ -4,44 +4,9 @@
 
 """Stable-Video-Infinity (SVI) 2.0 Pro pipeline for Wan2.2 I2V.
 
-Generates long videos by autoregressively chaining short Wan2.2 I2V clips.
-Continuity across clips is handled entirely in latent space — there is no
-rolling pixel-frame handoff.
-
-Per upstream's ``docs/svi/svi_2.0_pro.md``, each clip's I2V conditioning ``y``
-is structured as::
-
-    y = concat([anchor_latent, motion_latent, zero_padding], dim=temporal)
-
-- ``anchor_latent``: the user-provided first image, VAE-encoded as a single
-  latent frame. Same across every clip in the sequence.
-- ``motion_latent``: the last ``num_motion_latent`` latent frames from the
-  previous clip's denoised output (None on the first clip).
-- ``zero_padding``: literal-zero latents for the remaining frame slots.
-
-The mask is set at latent frame 0 only (the anchor position). Continuity
-between clips is produced by the motion-latent splice plus the SVI LoRA's
-trained behavior; the original "use decoded last frame as next clip's
-image_prompt" mechanism from SVI 2.0 is explicitly NOT used in 2.0 Pro.
-
-Two sampling regimes:
-
-- ``python``: matches upstream ``inference_svi_2.0_pro.py``. 50 steps,
-  CFG=5.0, ``FlowMatchEulerDiscreteScheduler`` at sigma_shift=5, SVI LoRA
-  alone at 1.0/1.0 (high/low expert).
-- ``comfyui``: matches the upstream ComfyUI workflow at
-  ``comfyui_workflow/SVI-Wan22-1210-10-Clips.json``. 6 steps, CFG=1.5,
-  ``flow_shift=8``, SVI LoRA at 1.0/1.0 stacked on top of LightX2V LoRA at
-  0.5/1.0 (per upstream's ``docs/svi/comfyui.md``: LightX2V at 1.0 hurts
-  SVI on the high-noise expert, so 0.5 is recommended there). Solver-wise,
-  upstream uses k-diffusion ``dpm++_sde`` (stochastic 2nd-order singlestep
-  with BrownianTreeNoiseSampler); tt-metal has no on-device port, so we
-  substitute ``UniPCMultistepScheduler(use_flow_sigmas=True)`` at the same
-  flow_shift. Both are order-2 flow-aware solvers; output is visually
-  close but not bit-exact to ComfyUI.
-
-Upstream: https://github.com/vita-epfl/Stable-Video-Infinity (svi_wan22).
-LoRA weights: HF ``vita-video-gen/svi-model``.
+Chains short I2V clips into long videos with latent-space continuity.
+See ``experimental/models/Wan2_2_SVI.md`` for the regime parameters,
+upstream-workflow comparison, and the documented scheduler gap.
 """
 from pathlib import Path
 from typing import List, Literal, Optional, Union
@@ -57,41 +22,20 @@ from models.tt_dit.pipelines.wan.pipeline_wan_i2v import ImagePrompt
 Regime = Literal["python", "comfyui"]
 
 
+_REGIMES = {
+    "python": {
+        "flow_shift": 5.0,
+        "call_defaults": dict(num_inference_steps=50, guidance_scale=5.0, guidance_scale_2=5.0),
+    },
+    "comfyui": {
+        "flow_shift": 8.0,
+        "call_defaults": dict(num_inference_steps=6, guidance_scale=1.5, guidance_scale_2=1.5),
+    },
+}
+
+
 class WanPipelineSVI(WanPipelineI2VLora):
-    """Wan2.2 I2V with SVI 2.0 Pro LoRA + autoregressive clip-chaining driver.
-
-    Args:
-        svi_high, svi_low: Paths to SVI LoRA safetensors for the high- and
-            low-noise experts respectively. Required for both regimes.
-        lightx2v_high, lightx2v_low: Paths to LightX2V LoRA safetensors.
-            Required for ``regime="comfyui"`` (which stacks them under SVI);
-            must be ``None`` for ``regime="python"``.
-        regime: ``"python"`` or ``"comfyui"`` (see module docstring).
-        num_motion_latent: Number of latent frames from the previous clip's
-            denoised output to splice into the next clip's conditioning at
-            positions 1..N. Default 1 matches upstream's argparse default.
-            Set to 0 to collapse SVI 2.0 Pro to SVI 2.0 behavior (anchor
-            alone, no latent handoff).
-        num_overlap_frame: Number of decoded pixel frames to drop on concat
-            between adjacent clips. Driver-only — does not affect per-clip
-            generation. Default 4 matches upstream's argparse default.
-        sigma_shift: Optional override for the flow-shift parameter of the
-            scheduler. Defaults are 5.0 for ``python`` and 8.0 for
-            ``comfyui`` (both match upstream).
-    """
-
-    PYTHON_CALL_DEFAULTS = dict(
-        num_inference_steps=50,
-        guidance_scale=5.0,
-        guidance_scale_2=5.0,
-    )
-    COMFYUI_CALL_DEFAULTS = dict(
-        num_inference_steps=6,
-        guidance_scale=1.5,
-        guidance_scale_2=1.5,
-    )
-    PYTHON_FLOW_SHIFT = 5.0
-    COMFYUI_FLOW_SHIFT = 8.0
+    """Wan2.2 I2V with SVI 2.0 Pro LoRA + autoregressive clip-chaining driver."""
 
     def __init__(
         self,
@@ -106,21 +50,8 @@ class WanPipelineSVI(WanPipelineI2VLora):
         sigma_shift: Optional[float] = None,
         **kwargs,
     ):
-        if regime not in ("python", "comfyui"):
-            raise ValueError(f"regime must be 'python' or 'comfyui', got {regime!r}")
-        if regime == "comfyui":
-            if lightx2v_high is None or lightx2v_low is None:
-                raise ValueError(
-                    "regime='comfyui' requires lightx2v_high and lightx2v_low LoRA paths. "
-                    "See experimental/models/Wan2_2_SVI.md for the recommended HF repo."
-                )
-            for label, path in [("lightx2v_high", lightx2v_high), ("lightx2v_low", lightx2v_low)]:
-                if not Path(path).is_file():
-                    raise FileNotFoundError(f"{label}: file does not exist: {path}")
-        elif lightx2v_high is not None or lightx2v_low is not None:
-            raise ValueError(
-                "lightx2v LoRA paths are only valid in regime='comfyui'. " "Drop them for regime='python'."
-            )
+        if regime not in _REGIMES:
+            raise ValueError(f"regime must be one of {sorted(_REGIMES)}, got {regime!r}")
 
         for label, path in [("svi_high", svi_high), ("svi_low", svi_low)]:
             if not Path(path).is_file():
@@ -129,51 +60,73 @@ class WanPipelineSVI(WanPipelineI2VLora):
         self._regime: Regime = regime
         self._num_motion_latent = int(num_motion_latent)
         self._num_overlap_frame = int(num_overlap_frame)
-        # Cache for the anchor VAE encode + mask template across the
-        # clips of a single generate_long_video call. Cleared in the
-        # generate_long_video finally block.
-        self._anchor_latents_cache: Optional[tuple] = None  # (cache_key, tt_y_template)
+        # Lives for the duration of one generate_long_video call; cleared in
+        # that method's finally block.
+        self._anchor_latents_cache: Optional[tuple] = None
+
+        self._configure_regime(
+            regime=regime,
+            svi_high=svi_high,
+            svi_low=svi_low,
+            lightx2v_high=lightx2v_high,
+            lightx2v_low=lightx2v_low,
+            sigma_shift=sigma_shift,
+            kwargs=kwargs,
+        )
+
+        super().__init__(*args, **kwargs)
+
+    @staticmethod
+    def _configure_regime(
+        *,
+        regime: "Regime",
+        svi_high: str,
+        svi_low: str,
+        lightx2v_high: Optional[str],
+        lightx2v_low: Optional[str],
+        sigma_shift: Optional[float],
+        kwargs: dict,
+    ) -> None:
+        """Populate ``kwargs['lora_high'/'lora_low'/'scheduler']`` per regime."""
+        shift = _REGIMES[regime]["flow_shift"] if sigma_shift is None else float(sigma_shift)
 
         if regime == "python":
+            if lightx2v_high is not None or lightx2v_low is not None:
+                raise ValueError("lightx2v_* are only valid in regime='comfyui'; drop them for 'python'.")
             kwargs["lora_high"] = [LoRASpec(svi_high, 1.0)]
             kwargs["lora_low"] = [LoRASpec(svi_low, 1.0)]
-            shift = self.PYTHON_FLOW_SHIFT if sigma_shift is None else float(sigma_shift)
-            # create_pipeline always forwards scheduler=None explicitly, so
-            # `"scheduler" in kwargs` is True even when unset by the caller;
-            # gate on the value being None.
+            # Matches diffsynth's FlowMatchScheduler("Wan") — plain Euler on a
+            # flow-matching schedule, dispatched to EulerSolver downstream.
             if kwargs.get("scheduler") is None:
                 from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
 
-                # Matches diffsynth's FlowMatchScheduler("Wan") at sigma_shift=5
-                # (plain Euler step on a flow-matching schedule).
                 kwargs["scheduler"] = FlowMatchEulerDiscreteScheduler(shift=shift)
-        else:  # comfyui
-            # Per upstream docs/svi/comfyui.md: LightX2V at 1.0 on the
-            # high-noise expert "hurts SVI"; 0.5 is recommended.
-            kwargs["lora_high"] = [
-                LoRASpec(lightx2v_high, 0.5),
-                LoRASpec(svi_high, 1.0),
-            ]
-            kwargs["lora_low"] = [
-                LoRASpec(lightx2v_low, 1.0),
-                LoRASpec(svi_low, 1.0),
-            ]
-            shift = self.COMFYUI_FLOW_SHIFT if sigma_shift is None else float(sigma_shift)
-            if kwargs.get("scheduler") is None:
-                from diffusers.schedulers import UniPCMultistepScheduler
+            return
 
-                # ComfyUI WanVideoSampler uses k-diffusion dpm++_sde with
-                # 'fixed' sigmas; tt-metal's stochastic DPMSolverSDESolver
-                # was experimental and produced broken output. Falling back
-                # to UniPC at the same flow_shift — not bit-exact to
-                # ComfyUI but the visual match is acceptable.
-                kwargs["scheduler"] = UniPCMultistepScheduler(
-                    use_flow_sigmas=True,
-                    prediction_type="flow_prediction",
-                    flow_shift=shift,
-                )
+        # comfyui regime: requires LightX2V LoRAs stacked under SVI.
+        if lightx2v_high is None or lightx2v_low is None:
+            raise ValueError(
+                "regime='comfyui' requires lightx2v_high and lightx2v_low LoRA paths. "
+                "See experimental/models/Wan2_2_SVI.md for the recommended HF repo."
+            )
+        for label, path in [("lightx2v_high", lightx2v_high), ("lightx2v_low", lightx2v_low)]:
+            if not Path(path).is_file():
+                raise FileNotFoundError(f"{label}: file does not exist: {path}")
+        # Per upstream docs/svi/comfyui.md: LightX2V at 1.0 on the high-noise
+        # expert hurts SVI; 0.5 is recommended.
+        kwargs["lora_high"] = [LoRASpec(lightx2v_high, 0.5), LoRASpec(svi_high, 1.0)]
+        kwargs["lora_low"] = [LoRASpec(lightx2v_low, 1.0), LoRASpec(svi_low, 1.0)]
+        # ComfyUI workflow uses k-diffusion dpm++_sde; tt-metal has no
+        # on-device port, so we substitute UniPC at the same flow_shift.
+        # Visually close, not bit-exact.
+        if kwargs.get("scheduler") is None:
+            from diffusers.schedulers import UniPCMultistepScheduler
 
-        super().__init__(*args, **kwargs)
+            kwargs["scheduler"] = UniPCMultistepScheduler(
+                use_flow_sigmas=True,
+                prediction_type="flow_prediction",
+                flow_shift=shift,
+            )
 
     @staticmethod
     def create_pipeline(*args, **kwargs):
@@ -209,26 +162,13 @@ class WanPipelineSVI(WanPipelineI2VLora):
         anchor_image: Optional[PIL.Image.Image] = None,
         prev_last_latent: Optional[torch.Tensor] = None,
     ):
-        """Build (latents, tt_y) matching upstream SVI 2.0 Pro conditioning.
-
-        Calls the base ``WanPipelineI2V.prepare_latents`` with a single
-        ``ImagePrompt(anchor, frame_pos=0)`` so the mask channels and the
-        anchor-at-frame-0 image latent are correct, then:
-
-        - splices ``prev_last_latent[:, :, -num_motion_latent:]`` into the
-          image-latent channels at temporal positions 1..num_motion_latent;
-        - exact-zeros the remaining image-latent slots (frames
-          num_motion_latent+1..end) to match upstream's
-          ``padding = torch.zeros(...)``.
-        """
         if anchor_image is None:
             anchor_image = getattr(self, "_svi_anchor_image", None)
         if prev_last_latent is None:
             prev_last_latent = getattr(self, "_svi_prev_last_latent", None)
 
-        # WanPipelineI2V.__init__ → warmup_buffers → run_single_prompt → __call__
-        # invokes us during pipeline construction with a blank Image and no SVI
-        # state. Defer to the base I2V prepare_latents in that case.
+        # WanPipelineI2V.__init__'s warmup_buffers invokes __call__ with no
+        # SVI state — defer to the plain I2V path for that one pass.
         if anchor_image is None and prev_last_latent is None:
             return super().prepare_latents(
                 batch_size=batch_size,
@@ -244,19 +184,13 @@ class WanPipelineSVI(WanPipelineI2VLora):
 
         anchor_pil = anchor_image if anchor_image is not None else _unwrap_image(image_prompt)
 
-        # Anchor VAE encode is the dominant non-DiT cost per clip (~3-8s on
-        # BH 2x4) and the encoded result depends only on (anchor, H, W, T,
-        # dtype) — none of which change across clips of a single
-        # generate_long_video call. Cache the encoded template the first
-        # time we're called and reuse it (cloned) for subsequent clips.
+        # Cache the encoded anchor + mask across clips; the encoder is the
+        # dominant non-DiT cost per clip (~3-8s on BH 2x4) and the result is
+        # invariant under (anchor, H, W, T, dtype).
         cache_key = (id(anchor_pil), height, width, num_frames, num_channels_latents, dtype)
         cached = self._anchor_latents_cache
         if latents is None and cached is not None and cached[0] == cache_key:
             tt_y_template = cached[1]
-            # Build fresh random latents the same way the base does so we
-            # don't reuse noise across clips.
-            from ...pipelines.wan.pipeline_wan import WanPipeline
-
             latents, _ = WanPipeline.prepare_latents(
                 self,
                 batch_size=batch_size,
@@ -281,8 +215,7 @@ class WanPipelineSVI(WanPipelineI2VLora):
                 device=device,
                 latents=latents,
             )
-            # Stash the encoded template (cloned so subsequent in-place
-            # splices don't poison the cache).
+            # Cloned because the motion-latent splice below mutates tt_y in place.
             self._anchor_latents_cache = (cache_key, tt_y.clone())
 
         # tt_y layout: (B, 4 mask channels + 16 image-latent channels, T_lat, H_lat, W_lat).
@@ -322,23 +255,15 @@ class WanPipelineSVI(WanPipelineI2VLora):
     ):
         """Run ``num_clips`` chained I2V generations and return the concat.
 
-        Anchor stays constant across all clips; continuity comes from
-        ``prev_last_latent`` spliced into each next clip's conditioning.
-
-        ``prompt`` may be a single string (used for every clip) or a
-        ``List[str]`` of length ``num_clips`` (one per clip, mirrors
-        upstream's per-clip ``prompt.txt``).
-
-        Returns a tensor of shape::
-
-            (num_clips * num_frames - (num_clips - 1) * num_overlap_frame,
-             ...spatial dims..., 3)
+        ``prompt`` and ``guidance_scale`` / ``guidance_scale_2`` may each be
+        a single value (broadcast across clips) or a length-``num_clips``
+        list for per-clip overrides.
         """
         if num_clips < 1:
             raise ValueError("num_clips must be >= 1")
         call_kwargs.setdefault("output_type", "pt")
 
-        defaults = self.PYTHON_CALL_DEFAULTS if self._regime == "python" else self.COMFYUI_CALL_DEFAULTS
+        defaults = _REGIMES[self._regime]["call_defaults"]
         for k, v in defaults.items():
             call_kwargs.setdefault(k, v)
 
@@ -351,10 +276,6 @@ class WanPipelineSVI(WanPipelineI2VLora):
         else:
             prompts_per_clip = [prompt] * num_clips
 
-        # guidance_scale / guidance_scale_2 may be a single float (same
-        # across clips) or a list of length num_clips. Mirrors upstream's
-        # 4-Clips workflow which uses CFG=2.0 for clips 1-2 and 1.5 for
-        # clips 3-4.
         gs_per_clip = _as_per_clip(call_kwargs.pop("guidance_scale"), num_clips, "guidance_scale")
         gs2_per_clip = _as_per_clip(call_kwargs.pop("guidance_scale_2"), num_clips, "guidance_scale_2")
 
@@ -464,11 +385,8 @@ def _unwrap_image(image_prompt) -> PIL.Image.Image:
 
 
 def _concat_with_overlap(clips: List[torch.Tensor], *, overlap: int) -> torch.Tensor:
-    """Temporal-concat decoded clips, dropping ``overlap`` boundary frames
-    between adjacent clips."""
+    """Temporal-concat decoded clips, dropping ``overlap`` boundary frames between adjacent clips."""
     if not clips:
         raise ValueError("no clips to concatenate")
-    if len(clips) == 1:
-        return clips[0]
     pieces = [clips[0]] + [c[overlap:] if overlap > 0 else c for c in clips[1:]]
     return torch.cat(pieces, dim=0)

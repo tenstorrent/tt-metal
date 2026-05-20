@@ -2,13 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""End-to-end test for Wan2.2 I2V with Stable-Video-Infinity (SVI 2.0 Pro).
-
-Requires ``SVI_HIGH_PATH`` and ``SVI_LOW_PATH`` env vars pointing at the SVI
-LoRA safetensors (``vita-video-gen/svi-model`` on HuggingFace). All other
-inference knobs (number of clips, num_motion_latent, num_overlap_frame) are
-env-configurable to support experimentation.
-"""
+"""End-to-end test for Wan2.2 I2V with SVI 2.0 Pro. All knobs are env-var driven."""
 import os
 
 import PIL
