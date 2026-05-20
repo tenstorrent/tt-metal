@@ -164,6 +164,16 @@ grid_11_10_configs = {
     (16384, 512, 64): (6, 8, 2, (2, 2)),
 }
 
+grid_12_9_configs = {
+    (9472, 5120, 1280): (10, 8, 8, (2, 1)),
+    (2368, 5120, 1280): (10, 8, 6, (2, 1)),
+    (128, 5120, 1280): (1, 16, 8, (1, 2)),
+    (9472, 5120, 3456): (9, 5, 12, (1, 2)),
+    (2368, 5120, 3456): (7, 5, 12, (1, 2)),
+    (9472, 5120, 3840): (7, 5, 16, (1, 2)),
+    (2368, 5120, 3840): (7, 5, 16, (1, 2)),
+}
+
 
 _BH_GALAXY_MIN_DEVICES = 32
 _BH_GALAXY_MAX_CORE_GRID = (11, 10)
@@ -180,18 +190,160 @@ def get_matmul_core_grid(mesh_device):
     return core_grid
 
 
-grid_12_9_configs = {
-    (9472, 5120, 1280): (10, 8, 8, (2, 1)),
-    (2368, 5120, 1280): (10, 8, 6, (2, 1)),
-    (128, 5120, 1280): (1, 16, 8, (1, 2)),
-    (9472, 5120, 3456): (9, 5, 12, (1, 2)),
-    (2368, 5120, 3456): (7, 5, 12, (1, 2)),
-    (9472, 5120, 3840): (7, 5, 16, (1, 2)),
-    (2368, 5120, 3840): (7, 5, 16, (1, 2)),
+def _compute_heuristic_blocking(M: int, K: int, N: int, grid_x: int, grid_y: int, tp_factor: int = -1):
+    """Heuristic matmul blocking for shapes absent from the per-grid lookup tables.
+
+    Rules derived empirically from BH GLX sweep data across 11×10 and 12×9 grids.
+
+    ┌───────────┬────────────────────────────────────────────────────────────────┐
+    │ M_block   │ ceil(M_tiles / grid_x), rounded up to the next sb_h multiple, │
+    │           │ capped at 16.                                                  │
+    ├───────────┼────────────────────────────────────────────────────────────────┤
+    │ N_block   │ ceil(N_tiles / grid_y) rounded up to the next sb_w multiple   │
+    │           │ that evenly divides N_tiles, capped at 16.                     │
+    ├───────────┼────────────────────────────────────────────────────────────────┤
+    │ K_block   │ min(8, K_tiles_per_device) snapped to a divisor of            │
+    │           │ K_tiles_per_device. 8 tiles fits BH's 1.5 MB L1 well.         │
+    │           │ K_tiles_per_device = K/(tp_factor*32) when tp_factor is set,  │
+    │           │ otherwise K//32.                                               │
+    ├───────────┼────────────────────────────────────────────────────────────────┤
+    │ subblock  │ (1, 4) default.                                                │
+    │           │ (4, 1) when N_tiles ≤ 4 (tiny/narrow N → maximise M reuse).  │
+    │           │ (1, 3) when N_tiles % 4 ≠ 0, N_tiles % 3 == 0, N_tiles ≤ 24. │
+    │           │ (1, 2) when N_tiles % 4 ≠ 0, N_tiles % 2 == 0.               │
+    │           │ (1, 1) otherwise.                                              │
+    └───────────┴────────────────────────────────────────────────────────────────┘
+
+    Examples (validated against sweep data):
+        (512,  5120, 2560), 11×10 → (2, 8,  8, (1, 4))
+        (512,  6144, 2304), 11×10 → (2, 8,  8, (1, 4))
+        (1024, 6144, 4608), 11×10 → (3, 8, 16, (1, 4))
+        (128,   512,  192), 11×10 → (1, 8,  3, (1, 3))
+        (512,  6144,  768), 12× 9 → (2, 8,  4, (1, 4))  [sweep-optimal: (2,16,3,(1,3))]
+        (1024, 6144,  128), 11×10 → (4, 8,  1, (4, 1))  [sweep-optimal: (8,8,1,(4,1))]
+    """
+    M_t = M // 32
+    K_t = K // 32
+    N_t = N // 32
+
+    m_raw = max(1, math.ceil(M_t / grid_x))  # target M-blocks per column of cores
+    n_raw = N_t / grid_y  # target N-tiles per row of cores
+
+    # ── subblock (sb_h, sb_w) ─────────────────────────────────────────────
+    if N_t <= 4:
+        sb_h, sb_w = 4, 1  # tiny/narrow N: maximise M-direction reuse
+    elif N_t % 4 == 0:
+        sb_h, sb_w = 1, 4  # wide output (dominant case)
+    elif N_t % 3 == 0 and N_t <= 24:
+        sb_h, sb_w = 1, 3
+    elif N_t % 2 == 0:
+        sb_h, sb_w = 1, 2
+    else:
+        sb_h, sb_w = 1, 1
+
+    # ── M_block ───────────────────────────────────────────────────────────
+    M_block = max(sb_h, math.ceil(m_raw / sb_h) * sb_h)
+    M_block = min(M_block, 16)
+
+    # ── N_block ───────────────────────────────────────────────────────────
+    N_block = max(sb_w, math.ceil(n_raw / sb_w) * sb_w)
+    N_block = min(N_block, 16)
+    # Snap down to the nearest multiple of sb_w that divides N_t exactly
+    while N_t % N_block != 0 and N_block > sb_w:
+        N_block -= sb_w
+    N_block = max(sb_w, N_block)
+
+    # ── K_block ───────────────────────────────────────────────────────────
+    K_t_per_device = K // (tp_factor * 32) if tp_factor > 0 else K_t
+    K_block = min(8, K_t_per_device)
+    while K_t_per_device % K_block != 0 and K_block > 1:
+        K_block -= 1
+
+    return M_block, K_block, N_block, (sb_h, sb_w)
+
+
+_grid_config_lookup = {
+    (8, 8): grid_88_configs,
+    (8, 9): grid_89_configs,
+    (13, 9): grid_13_9_configs,
+    (12, 10): grid_12_10_configs,
+    (11, 10): grid_11_10_configs,
+    (12, 9): grid_12_9_configs,
 }
 
 
-def get_matmul_config(M, K, N, core_grid, default_block_size=None):
+def _lookup_nearest_blocking(M: int, K: int, N: int, grid_x: int, grid_y: int, tp_factor: int):
+    """Return the blocking config from the grid's lookup table whose (M, K, N) is
+    closest to the query shape.
+
+    Distance is measured in log-ratio space so that relative differences matter equally
+    at all scales (e.g. 64→128 is the same distance as 1024→2048):
+
+        d = |log(M/M_ref)| + |log(K/K_ref)| + |log(N/N_ref)|
+
+    Block sizes borrowed from the nearest neighbour are snapped down to the nearest
+    divisor of the query's tile counts so the config is always valid for the query shape.
+    When tp_factor is provided, K_block is snapped against K_tiles_per_device
+    (K / (tp_factor * 32)) so the config is valid under tensor-parallel K-sharding.
+
+    Returns the config tuple for the nearest shape, or None if the grid has no table.
+    """
+    grid_dict = _grid_config_lookup.get((grid_x, grid_y))
+    if not grid_dict:
+        return None
+
+    lM, lK, lN = math.log(M), math.log(K), math.log(N)
+    best_key, best_dist = None, float("inf")
+    for ref_M, ref_K, ref_N in grid_dict:
+        dist = abs(lM - math.log(ref_M)) + abs(lK - math.log(ref_K)) + abs(lN - math.log(ref_N))
+        if dist < best_dist:
+            best_dist = dist
+            best_key = (ref_M, ref_K, ref_N)
+
+    cfg = grid_dict[best_key]
+    if len(cfg) == 4:
+        Mb, Kb, Nb, sb = cfg
+    else:
+        Mb, Kb, Nb = cfg
+        sb = None
+
+    M_t, N_t = M // 32, N // 32
+    K_t_per_device = K // (tp_factor * 32)
+
+    def snap(val, tiles):
+        """Snap val down to the nearest divisor of tiles."""
+        val = min(val, tiles)
+        while tiles % val != 0 and val > 1:
+            val -= 1
+        return val
+
+    Mb = snap(Mb, M_t)
+    Kb = snap(Kb, K_t_per_device)
+    Nb = snap(Nb, N_t)
+
+    return (Mb, Kb, Nb, sb) if sb is not None else (Mb, Kb, Nb)
+
+
+def get_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic=False, num_k_shards=-1):
+    """Get the matmul config for the given shape and core grid.
+
+    Args:
+        M: The number of rows in the matrix.
+        K: The number of columns in the matrix.
+        N: The number of elements in the matrix.
+        core_grid: The core grid to use.
+        default_block_size: The default block size to use if no config is found.
+        use_heuristic: Whether to use the heuristic blocking algorithm.
+        num_k_shards: The number of shards. If set, we will use the nearest blocking algorithm.
+
+        Algorithm order:
+            - Default block size
+            - Heuristic blocking
+            - Nearest blocking based on num_k_shards provided num_k_shards
+
+    Returns:
+        The matmul config.
+    """
     # Default to 8x8x8 with subblock 2x2 when unknown
     subblock_h = 2
     subblock_w = 2
@@ -203,15 +355,7 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None):
     config_tuple = None
     grid_x = getattr(core_grid, "x", None)
     grid_y = getattr(core_grid, "y", None)
-    grid_lookup = {
-        (8, 8): grid_88_configs,
-        (8, 9): grid_89_configs,
-        (13, 9): grid_13_9_configs,
-        (12, 10): grid_12_10_configs,
-        (11, 10): grid_11_10_configs,
-        (12, 9): grid_12_9_configs,
-    }
-    grid_dict = grid_lookup.get((grid_x, grid_y))
+    grid_dict = _grid_config_lookup.get((grid_x, grid_y))
     if grid_dict is not None:
         config_tuple = grid_dict.get((M, K, N))
 
@@ -222,7 +366,23 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None):
         config_tuple = config_tuple[:3]
 
     if config_tuple is None:
-        M_block_size, K_block_size, N_block_size = default_block_size if default_block_size is not None else (8, 8, 8)
+        if default_block_size is not None:
+            assert (
+                not use_heuristic and num_k_shards == -1
+            ), "Default block size cannot be used with heuristic or nearest blocking"
+            M_block_size, K_block_size, N_block_size = default_block_size
+        elif use_heuristic:
+            M_block_size, K_block_size, N_block_size, (subblock_h, subblock_w) = _compute_heuristic_blocking(
+                M, K, N, grid_x, grid_y
+            )
+        elif num_k_shards > 0:
+            nearest = _lookup_nearest_blocking(M, K, N, grid_x, grid_y, num_k_shards) or (8, 8, 8)
+            if len(nearest) == 4:
+                subblock_h, subblock_w = nearest[3]
+                nearest = nearest[:3]
+            M_block_size, K_block_size, N_block_size = nearest
+        else:
+            M_block_size, K_block_size, N_block_size = 8, 8, 8
 
         M_tiles = math.ceil(M / 32)
         N_tiles = math.ceil(N / 32)
