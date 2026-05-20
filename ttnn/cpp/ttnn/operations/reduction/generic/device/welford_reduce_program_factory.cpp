@@ -165,36 +165,25 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
 
     ProgramDescriptor desc;
 
-    // Input CB c_0: Default mode (FPU-friendly) so mul_tiles_bcast_scalar SrcA read works on
-    // the do_scale=true path. The welford SFPU consumer (transpose_wh_tile / copy_tile /
-    // welford_reinit) reads via c_29 -- a second buffer index aliased onto c_0's allocation,
-    // flagged UnpackToDestFp32 below. Same pattern as cb_x_welford in layernorm.
+    // Input CB c_0. The unpack_to_dest_mode flag below makes c_0 UnpackToDestFp32 for FP32
+    // input on the !do_scale path so the welford SFPU intake (copy_tile / transpose_wh_tile)
+    // reads via the precision-preserving unpack-to-DEST path. On the do_scale path c_0 stays
+    // Default so the FPU mul_tiles_bcast_scalar SrcA read works (UnpackToDest is incompatible
+    // with FPU SrcA); the SFPU welford on that path reads cb_scaled instead, and cb_scaled's
+    // own UnpackToDestFp32 flag preserves the FPU mul output mantissa. Because do_scale is a
+    // compile-time constant, no single program ever needs both modes on c_0 simultaneously,
+    // so the layernorm-style alias CB pattern is not required here.
     CBIndex input_cb_index = CBIndex::c_0;
-    constexpr CBIndex input_cb_welford_alias_index = CBIndex::c_29;
     uint32_t input_tiles_per_cb = 2;
-    {
-        CBDescriptor input_cb_desc{
-            .total_size = input_tiles_per_cb * input_single_tile_size,
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(input_cb_index),
-                .data_format = input_cb_data_format,
-                .page_size = input_single_tile_size,
-            }}},
-        };
-        // Alias only declared when FP32 input needs the precision-preserving welford SFPU read.
-        // For BF16 input the alias would add nothing (both indices would be Default mode), so
-        // skip it; the kernel falls back to reading cb_in directly via the welford_fp32_alias
-        // compile-time flag below.
-        if (input_cb_data_format == tt::DataFormat::Float32) {
-            input_cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(input_cb_welford_alias_index),
-                .data_format = input_cb_data_format,
-                .page_size = input_single_tile_size,
-            });
-        }
-        desc.cbs.push_back(std::move(input_cb_desc));
-    }
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = input_tiles_per_cb * input_single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(input_cb_index),
+            .data_format = input_cb_data_format,
+            .page_size = input_single_tile_size,
+        }}},
+    });
 
     CBIndex scalar_cb_index = CBIndex::c_2;
     desc.cbs.push_back(CBDescriptor{
@@ -307,15 +296,15 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     reduce_defines["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
     reduce_defines["DST_SYNC_FULL"] = dst_full_sync_en ? "1" : "0";
 
-    // Named CT args for the welford-fp32 alias mechanism. Shared between reader and compute.
-    // Reader uses these to also push_back the alias FIFO state (the alias shares cb_in's memory
-    // but has its own rd/wr pointers; without this the alias rd_ptr stays frozen and drifts
-    // relative to cb_in's across iterations, causing stale reads after NCHt>1). Mirrors
-    // layernorm's welford_fp32_alias / cb_x_welford pattern.
-    std::vector<std::pair<std::string, uint32_t>> welford_named_args = {
-        {"welford_fp32_alias", static_cast<uint32_t>(input_cb_data_format == tt::DataFormat::Float32 ? 1 : 0)},
-        {"cb_in_welford_alias", static_cast<uint32_t>(input_cb_welford_alias_index)},
-    };
+    // Named CT arg consumed only by the W-reduce compute kernel: gates the full hw_configure
+    // pairs in the do_scale wt-inner loop that switch UNPACK between cb_in's Default mode
+    // (FPU mul SrcA) and cb_scaled's UnpackToDestFp32 mode (welford-intake transpose). H- and
+    // HW-reduce kernels don't have a cb_scaled-style intermediate and don't need this flag.
+    std::vector<std::pair<std::string, uint32_t>> welford_named_args;
+    if (reduce_w) {
+        welford_named_args.push_back(
+            {"welford_fp32_input", static_cast<uint32_t>(input_cb_data_format == tt::DataFormat::Float32 ? 1 : 0)});
+    }
 
     // --- Reader kernel ---
     uint32_t scaler_bits = std::bit_cast<uint32_t>(operation_attributes.scalar);
@@ -324,7 +313,6 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     reader_desc.core_ranges = all_cores;
     reader_desc.config = ReaderConfigDescriptor{};
     reader_desc.defines = {reduce_defines.begin(), reduce_defines.end()};
-    reader_desc.named_compile_time_args = welford_named_args;
 
     if (reduce_h || reduce_hw) {
         // H-reduce and HW-reduce: column-partitioned reader reads tiles column by column.
@@ -443,12 +431,13 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     //     writer-side cross-core re-reduction.
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-    // c_0 stays in Default mode so the FPU mul_tiles_bcast_scalar SrcA read on do_scale=true
-    // works. c_29 (alias on c_0's allocation) gets UnpackToDestFp32 for the welford SFPU
-    // consumer reading via transpose_wh_tile / copy_tile / welford_reinit.
-    if (input_cb_data_format == tt::DataFormat::Float32) {
-        unpack_to_dest_mode[static_cast<uint32_t>(input_cb_welford_alias_index)] =
-            tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    // c_0 (cb_in): UnpackToDestFp32 only on the !do_scale path with FP32 input. On the
+    // !do_scale path the welford SFPU intake reads c_0 directly via copy_tile / transpose_wh_tile,
+    // so UnpackToDestFp32 preserves the full FP32 mantissa into DEST. On the do_scale path c_0
+    // is read by the FPU mul (SrcA), which is incompatible with UnpackToDest mode -- c_0 must
+    // stay Default there, and the precision-preserving plumbing lives downstream on cb_scaled.
+    if (input_cb_data_format == tt::DataFormat::Float32 && !do_scale) {
+        unpack_to_dest_mode[static_cast<uint32_t>(CBIndex::c_0)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
     if (reduce_w && fp32_dest_acc_en && !narrow_scratch_to_bf16) {
         unpack_to_dest_mode[static_cast<uint32_t>(CBIndex::c_19)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;

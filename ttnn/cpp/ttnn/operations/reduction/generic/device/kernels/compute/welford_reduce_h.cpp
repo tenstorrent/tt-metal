@@ -36,23 +36,20 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
-    // Circular buffer that the reader kernel fills with input tiles. Declared Default-mode so
-    // FPU mul_tiles_bcast_scalar's SrcA read works on do_scale=true.
+    // Circular buffer that the reader kernel fills with input tiles.
+    // For FP32 input + do_scale=false: c_0 is flagged UnpackToDestFp32 by the program factory
+    //   so copy_tile preserves the FP32 mantissa into DEST for the welford SFPU consumer.
+    // For do_scale=true: c_0 stays Default so the FPU mul_tiles_bcast_scalar SrcA read works.
+    // (H-reduce does not need the FP32-input compile-time flag the W kernel uses for its
+    // cb_scaled hw_configure pairing -- this kernel's do_scale path runs FPU mul + welford
+    // entirely on DEST with no UnpackToDest-mode CB in the inner loop.)
     constexpr auto cb_in = tt::CBIndex::c_0;
-    // Welford SFPU consumer alias of cb_in. Active for FP32 input (alias is declared with
-    // UnpackToDestFp32 by the host); collapses to cb_in for BF16. See welford_reduce_w.cpp
-    // for the full layernorm-style rationale.
-    constexpr auto cb_in_welford_alias_named =
-        static_cast<tt::CBIndex>(get_named_compile_time_arg_val("cb_in_welford_alias"));
-    constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
-    constexpr auto cb_in_welford_alias = welford_fp32_alias ? cb_in_welford_alias_named : cb_in;
     // Scalar tile produced by the reader via generate_reduce_scaler.
     constexpr auto cb_scalar = tt::CBIndex::c_2;
     // Circular buffer where the final variance/std output tile is written.
     constexpr auto cb_out = tt::CBIndex::c_16;
 
     CircularBuffer cb_in_obj(cb_in);
-    CircularBuffer cb_in_welford_alias_obj(cb_in_welford_alias);
     CircularBuffer cb_scalar_obj(cb_scalar);
     CircularBuffer cb_out_obj(cb_out);
 
@@ -134,7 +131,7 @@ void kernel_main() {
         // - start_N advances by one tile height each iteration so Welford sees the correct
         //   element count / divisor progression across the whole H reduction.
         if constexpr (!do_scale) {
-            copy_tile_to_dst_init_short(cb_in_welford_alias);
+            copy_tile_to_dst_init_short(cb_in);
             tile_regs_acquire();
         }
 
@@ -142,33 +139,24 @@ void kernel_main() {
         // persists across DST cycles because LREGs are separate from
         // the DST register file managed by tile_regs_acquire/release.
         for (uint32_t ht = 0; ht < Ht; ++ht) {
-            // Wait on whichever CB is read by the welford intake: alias when active (it has
-            // independent FIFO pointers that the reader push_back's in lock-step), else cb_in.
-            if constexpr (welford_fp32_alias) {
-                cb_in_welford_alias_obj.wait_front(onetile);
-            } else {
-                cb_in_obj.wait_front(onetile);
-            }
+            cb_in_obj.wait_front(onetile);
 
             if constexpr (do_scale) {
                 tile_regs_acquire();
-                // FPU mul reads cb_in (Default mode -- no UnpackToDestFp32 conflict on SrcA).
+                // FPU mul reads cb_in (Default mode -- no UnpackToDest conflict on SrcA).
                 mul_tiles_bcast_scalar_init_short(cb_in, cb_scalar);
                 mul_tiles_bcast_scalar(cb_in, cb_scalar, 0, 0, input_dst);
 
-                // welford_reinit via the alias (UnpackToDestFp32) so the welford SFPU consumer
-                // sees the precision-preserving unpack mode.
-                welford_reinit(cb_in_welford_alias);
+                // welford_reinit programs the welford SFPU's UNPACK_A/MATH init. Welford reads
+                // input_dst (DEST) directly, so the operand passed here is just for the init's
+                // bookkeeping -- cb_in is fine regardless of FP32/BF16.
+                welford_reinit(cb_in);
             } else {
-                // copy_tile via the alias (UnpackToDestFp32) preserves FP32 mantissa into DEST.
-                copy_tile(cb_in_welford_alias, 0, input_dst);
+                // copy_tile reads cb_in. For FP32 input, c_0 carries UnpackToDestFp32 so the
+                // FP32 mantissa is preserved into DEST for the welford SFPU consumer.
+                copy_tile(cb_in, 0, input_dst);
             }
             cb_in_obj.pop_front(onetile);
-            if constexpr (welford_fp32_alias) {
-                // Keep alias's rd_ptr advancing in lock-step with cb_in's, even on the do_scale
-                // path where the alias data isn't read (the reader push_back's it regardless).
-                cb_in_welford_alias_obj.pop_front(onetile);
-            }
 
             if (ht < (Ht - 1)) {
                 welford_update<0>(input_dst, start_N, {});
