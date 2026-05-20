@@ -186,7 +186,7 @@ ttnn::device_operation::ProgramArtifacts ReduceDeviceOperation::ReduceMultiCoreW
     m2::KernelSpec reader{
         .unique_id = W_READER,
         .source = m2::KernelSpec::SourceFilePath{"ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
-                                                 "reader_unary_reduce_universal_start_id_metal2.cpp"},
+                                                 "reader_unary_reduce_universal_start_id.cpp"},
         .compiler_options =
             {
                 .defines = defines_from_map(reduce_defines),
@@ -219,8 +219,8 @@ ttnn::device_operation::ProgramArtifacts ReduceDeviceOperation::ReduceMultiCoreW
     // Writer kernel: consumes OUTPUT.
     m2::KernelSpec writer{
         .unique_id = W_WRITER,
-        .source = m2::KernelSpec::SourceFilePath{"ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
-                                                 "writer_unary_interleaved_start_id_metal2.cpp"},
+        .source = m2::KernelSpec::SourceFilePath{"ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
+                                                 "writer_unary_interleaved_start_id.cpp"},
         .compiler_options =
             {
                 .defines = defines_from_map(reduce_defines),
@@ -250,7 +250,7 @@ ttnn::device_operation::ProgramArtifacts ReduceDeviceOperation::ReduceMultiCoreW
     // Per-group CTAs (Ht differs) — preserve multiplicity (Anti-pattern: Demoting per-group CTA to RTA).
     const std::string compute_kernel_source =
         std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/") +
-        (operation_attributes.negate ? "reduce_w_neg_metal2.cpp" : "reduce_metal2.cpp");
+        (operation_attributes.negate ? "reduce_w_neg.cpp" : "reduce.cpp");
 
     auto make_compute = [&](const char* unique_id, uint32_t this_Ht, const CoreRangeSet&) {
         m2::KernelSpec spec{

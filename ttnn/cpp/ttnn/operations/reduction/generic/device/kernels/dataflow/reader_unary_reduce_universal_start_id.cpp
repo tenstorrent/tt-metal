@@ -1,34 +1,45 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+
+// Metal 2.0 fork of reader_unary_reduce_universal_start_id.cpp.
+//
+// Differences from the legacy reader:
+//   - Named arg retrieval via get_arg(args::name)
+//   - Named DFB bindings (dfb::input, dfb::scaler) replace magic CB indices
+//   - TensorBinding (ta::input) replaces TensorAccessorArgs + buffer-address RTA
+//   - get_tile_size(cb_id) -> cb_obj.get_tile_size() (Device 2.0 cleanup)
+//
+// Host bindings expected (per the W factory's KernelSpec):
+//   compile_time_arg_bindings: { {"scaler_bits", ...} }
+//   runtime_arguments_schema.named_runtime_args: { "num_tiles", "start_id" }
+//   dfb_bindings: { INPUT (CONSUMER, name="input"), SCALER (PRODUCER, name="scaler") }
+//   tensor_bindings: { INPUT_TENSOR (name="input") }
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 void kernel_main() {
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_tiles = get_arg_val<uint32_t>(1);
-    uint32_t start_id = get_arg_val<uint32_t>(2);
-    constexpr uint32_t scaler_bits = get_compile_time_arg_val(0);
-    constexpr auto tensor_args = TensorAccessorArgs<1>();
+    constexpr uint32_t scaler_bits = get_arg(args::scaler_bits);
+    auto num_tiles = get_arg(args::num_tiles);
+    auto start_id = get_arg(args::start_id);
 
-    constexpr uint32_t cb_id_in2 = 2;
     float scaler_f = __builtin_bit_cast(float, scaler_bits);
-    dataflow_kernel_lib::prepare_reduce_scaler<cb_id_in2, REDUCE_OP, REDUCE_DIM>(scaler_f);
+    // prepare_reduce_scaler is a template on the CB id; dfb::scaler converts implicitly.
+    dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, REDUCE_OP, REDUCE_DIM>(scaler_f);
 
-    constexpr uint32_t cb_id_in0 = 0;
+    DataflowBuffer cb_in0(dfb::input);
+    auto tensor_accessor = TensorAccessor(ta::input);
 
     constexpr uint32_t onetile = 1;
-    uint32_t tile_bytes = get_tile_size(cb_id_in0);
-
-    auto tensor_accessor = TensorAccessor(tensor_args, src_addr);
+    uint32_t tile_bytes = cb_in0.get_tile_size();
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     for (uint32_t i = start_id; i < start_id + num_tiles; i++) {
