@@ -13,7 +13,7 @@
 namespace tt::lite {
 
 static constexpr uint32_t TTB_MAGIC = 0x54544230;  // "TTB0"
-static constexpr uint32_t TTB_VERSION = 0;
+static constexpr uint32_t TTB_VERSION = 1;
 
 struct TraceWorkerDesc {
     uint8_t sub_device_id;
@@ -38,6 +38,11 @@ struct TraceBinaryHeader {
     uint32_t num_io_buffers;
 };
 
+struct JitCacheFile {
+    std::string relative_path;
+    std::vector<uint8_t> data;
+};
+
 struct TraceBinary {
     TraceBinaryHeader header;
     std::vector<TraceWorkerDesc> worker_descs;
@@ -50,6 +55,8 @@ struct TraceBinary {
     uint64_t trace_buf_address;
     uint32_t trace_buf_page_size;
     uint32_t trace_buf_num_pages;
+
+    std::vector<JitCacheFile> jit_cache_files;
 };
 
 inline bool write_trace_binary(const TraceBinary& bin, const std::string& path) {
@@ -96,6 +103,18 @@ inline bool write_trace_binary(const TraceBinary& bin, const std::string& path) 
     out.write(reinterpret_cast<const char*>(&bin.trace_buf_address), 8);
     out.write(reinterpret_cast<const char*>(&bin.trace_buf_page_size), 4);
     out.write(reinterpret_cast<const char*>(&bin.trace_buf_num_pages), 4);
+
+    // JIT cache section (version 1+)
+    uint32_t num_jit_files = bin.jit_cache_files.size();
+    out.write(reinterpret_cast<const char*>(&num_jit_files), 4);
+    for (auto& jf : bin.jit_cache_files) {
+        uint32_t path_len = jf.relative_path.size();
+        out.write(reinterpret_cast<const char*>(&path_len), 4);
+        out.write(jf.relative_path.data(), path_len);
+        uint64_t data_len = jf.data.size();
+        out.write(reinterpret_cast<const char*>(&data_len), 8);
+        out.write(reinterpret_cast<const char*>(jf.data.data()), data_len);
+    }
 
     return out.good();
 }
@@ -154,6 +173,23 @@ inline bool read_trace_binary(TraceBinary& bin, const std::string& path) {
     in.read(reinterpret_cast<char*>(&bin.trace_buf_address), 8);
     in.read(reinterpret_cast<char*>(&bin.trace_buf_page_size), 4);
     in.read(reinterpret_cast<char*>(&bin.trace_buf_num_pages), 4);
+
+    // JIT cache section (version 1+): read if data remains
+    if (bin.header.version >= 1 && in.peek() != std::char_traits<char>::eof()) {
+        uint32_t num_jit_files = 0;
+        in.read(reinterpret_cast<char*>(&num_jit_files), 4);
+        bin.jit_cache_files.resize(num_jit_files);
+        for (uint32_t i = 0; i < num_jit_files; i++) {
+            uint32_t path_len;
+            in.read(reinterpret_cast<char*>(&path_len), 4);
+            bin.jit_cache_files[i].relative_path.resize(path_len);
+            in.read(bin.jit_cache_files[i].relative_path.data(), path_len);
+            uint64_t data_len;
+            in.read(reinterpret_cast<char*>(&data_len), 8);
+            bin.jit_cache_files[i].data.resize(data_len);
+            in.read(reinterpret_cast<char*>(bin.jit_cache_files[i].data.data()), data_len);
+        }
+    }
 
     return in.good();
 }

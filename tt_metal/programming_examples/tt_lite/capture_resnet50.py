@@ -94,6 +94,12 @@ def main():
     weight_dtype = ttnn.bfloat8_b
     math_fidelity = ttnn.MathFidelity.LoFi
 
+    runtime_root = os.environ.get("TT_METAL_RUNTIME_ROOT", "(not set)")
+    jit_cache_home = os.environ.get("HOME", "")
+    jit_cache_path = os.path.join(jit_cache_home, ".cache", "tt-metal-cache") if jit_cache_home else "/tmp/tt-metal-cache"
+    print(f"TT_METAL_RUNTIME_ROOT = {runtime_root}")
+    print(f"JIT cache path = {jit_cache_path}")
+    print(f"NOTE: Replay must use the same TT_METAL_RUNTIME_ROOT and same device model for JIT cache hits.")
     print(f"Opening device (trace_region_size=5554176, l1_small_size=24576)...")
     device = ttnn.open_mesh_device(
         ttnn.MeshShape(1, 1),

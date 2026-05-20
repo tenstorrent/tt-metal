@@ -13,6 +13,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -61,6 +62,35 @@ static bool write_file(const std::string& path, const void* data, size_t size) {
     if (!f.is_open()) return false;
     f.write(reinterpret_cast<const char*>(data), size);
     return f.good();
+}
+
+static void extract_jit_cache(const tt::lite::TraceBinary& ttb) {
+    if (ttb.jit_cache_files.empty()) return;
+
+    std::string cache_root;
+    const char* home = std::getenv("HOME");
+    if (home && std::filesystem::exists(home)) {
+        cache_root = std::string(home) + "/.cache/tt-metal-cache/";
+    } else {
+        cache_root = "/tmp/tt-metal-cache/";
+    }
+
+    std::cout << "Extracting " << ttb.jit_cache_files.size() << " JIT cache files to " << cache_root << std::endl;
+    uint32_t written = 0, skipped = 0;
+    for (auto& jf : ttb.jit_cache_files) {
+        auto full_path = std::filesystem::path(cache_root) / jf.relative_path;
+        if (std::filesystem::exists(full_path)) {
+            skipped++;
+            continue;
+        }
+        std::filesystem::create_directories(full_path.parent_path());
+        std::ofstream out(full_path, std::ios::binary);
+        if (out.is_open()) {
+            out.write(reinterpret_cast<const char*>(jf.data.data()), jf.data.size());
+            written++;
+        }
+    }
+    std::cout << "  JIT cache: " << written << " files written, " << skipped << " already existed" << std::endl;
 }
 
 int main(int argc, char** argv) {
@@ -140,7 +170,10 @@ int main(int argc, char** argv) {
     std::cout << "  trace_region_size: " << trace_region_size << std::endl;
     std::cout << "  l1_small_size: " << l1_small_size << std::endl;
 
-    // 3. Open device
+    // 3. Extract JIT cache (before device init to enable cache hits)
+    extract_jit_cache(ttb);
+
+    // 4. Open device
     auto mesh_shape = MeshShape{1, 1};
     auto mesh_device = MeshDevice::create(
         MeshDeviceConfig(mesh_shape),

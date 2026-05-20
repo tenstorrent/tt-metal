@@ -7,11 +7,12 @@ Python implementation of the .ttb (Tenstorrent Trace Binary) file format.
 Compatible with the C++ reader in trace_binary.h.
 """
 
+import os
 import struct
 from dataclasses import dataclass, field
 
 TTB_MAGIC = 0x54544230  # "TTB0"
-TTB_VERSION = 0
+TTB_VERSION = 1
 
 
 BUFFER_TYPE_DRAM = 0
@@ -37,6 +38,7 @@ class TraceBinary:
     trace_buf_address: int = 0
     trace_buf_page_size: int = 0
     trace_buf_num_pages: int = 0
+    jit_cache_files: list = field(default_factory=list)  # list of (relative_path, bytes)
 
 
 def write_trace_binary(ttb: TraceBinary, path: str) -> bool:
@@ -92,6 +94,15 @@ def write_trace_binary(ttb: TraceBinary, path: str) -> bool:
             f.write(struct.pack("<Q", ttb.trace_buf_address))
             f.write(struct.pack("<I", ttb.trace_buf_page_size))
             f.write(struct.pack("<I", ttb.trace_buf_num_pages))
+
+            # JIT cache section (version 1+)
+            f.write(struct.pack("<I", len(ttb.jit_cache_files)))
+            for rel_path, data in ttb.jit_cache_files:
+                path_bytes = rel_path.encode("utf-8")
+                f.write(struct.pack("<I", len(path_bytes)))
+                f.write(path_bytes)
+                f.write(struct.pack("<Q", len(data)))
+                f.write(data)
 
         return True
     except Exception as e:
@@ -161,6 +172,24 @@ def export_trace(device, trace_id, output_path, io_tensors, persistent_tensors=N
         )
         ttb.io_buffer_names.append(name)
 
+    # Collect JIT cache files
+    home = os.environ.get("HOME", "")
+    jit_cache_root = os.path.join(home, ".cache", "tt-metal-cache") if home else "/tmp/tt-metal-cache"
+    if os.path.isdir(jit_cache_root):
+        print(f"Collecting JIT cache from: {jit_cache_root}")
+        total_jit_bytes = 0
+        for root, _dirs, files in os.walk(jit_cache_root):
+            for fname in files:
+                full_path = os.path.join(root, fname)
+                rel_path = os.path.relpath(full_path, jit_cache_root)
+                with open(full_path, "rb") as jf:
+                    data = jf.read()
+                ttb.jit_cache_files.append((rel_path, data))
+                total_jit_bytes += len(data)
+        print(f"  JIT cache: {len(ttb.jit_cache_files)} files, {total_jit_bytes / (1024 * 1024):.1f} MB")
+    else:
+        print(f"WARNING: JIT cache directory not found: {jit_cache_root}")
+
     if write_trace_binary(ttb, output_path):
         print(f"Trace binary written to: {output_path}")
         print(f"  Trace streams: {len(ttb.trace_streams)}")
@@ -171,5 +200,6 @@ def export_trace(device, trace_id, output_path, io_tensors, persistent_tensors=N
         print(f"  IO buffers: {len(ttb.io_buffers)}")
         for i, bp in enumerate(ttb.io_buffers):
             print(f"    {ttb.io_buffer_names[i]} addr=0x{bp.address:x} size={bp.size} page_size={bp.page_size}")
+        print(f"  JIT cache files: {len(ttb.jit_cache_files)}")
         return True
     return False
