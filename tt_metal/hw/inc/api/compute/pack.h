@@ -11,6 +11,7 @@
 #ifndef ARCH_QUASAR
 #include "llk_pack_rows_api.h"
 #endif
+#endif
 
 namespace ckernel {
 

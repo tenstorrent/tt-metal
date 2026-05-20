@@ -68,7 +68,7 @@ ALWI void matmul_block_math_dynamic_throttle(
         }
         MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, ct_dim, rt_dim)));
     }
-#endif  // TODO: AM; add Quasar implementation
+#endif
 }
 #endif
 
@@ -164,7 +164,7 @@ template <uint32_t num_faces = 4>
 ALWI void matmul_tiles_math(uint32_t idst) {
 #ifndef ARCH_QUASAR
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE, num_faces>(idst)));
-#endif  // TODO: AM; add Quasar implementation
+#endif
 }
 
 // clang-format off
@@ -216,7 +216,7 @@ ALWI void mm_init_short_with_dt(
         (llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(c_in_old_srca, in1_cb_id)));
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(c_in_old_srca, in1_cb_id)));
     mm_init_short(in0_cb_id, in1_cb_id, transpose);
-#endif  // TODO: AM; add Quasar implementation
+#endif
 }
 
 // clang-format off
@@ -395,7 +395,7 @@ ALWI void mm_block_init_short_with_dt(
         (llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(old_in1_cb_id, in1_cb_id)));
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(old_in1_cb_id, in1_cb_id)));
     mm_block_init_short(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
-#endif  // TODO: AM; add Quasar implementation
+#endif
 }
 
 // clang-format off
@@ -430,7 +430,7 @@ ALWI void mm_block_init_short_with_both_dt(
         old_in1_cb_id, in1_cb_id, old_in0_cb_id, in0_cb_id)));
     MATH((llk_math_reconfig_data_format<DST_ACCUM_MODE>(old_in1_cb_id, in1_cb_id, old_in0_cb_id, in0_cb_id)));
     mm_block_init_short(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
-#endif  // TODO: AM; add Quasar implementation
+#endif
 }
 
 }  // namespace ckernel

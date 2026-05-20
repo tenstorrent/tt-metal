@@ -694,9 +694,15 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     //                      Stimulus Generation
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> packed_input0 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        0.0f, 1.0f, in0_total_size_bytes / sizeof(bfloat16), 0x1234);
+        0.0f,
+        1.0f,
+        in0_total_size_bytes / sizeof(bfloat16),
+        std::chrono::system_clock::now().time_since_epoch().count());
     std::vector<uint32_t> packed_input1 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        -0.45f, 1.0f, in1_total_size_bytes / sizeof(bfloat16), 0x5678);
+        -0.45f,
+        1.0f,
+        in1_total_size_bytes / sizeof(bfloat16),
+        std::chrono::system_clock::now().time_since_epoch().count());
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Golden Generation
