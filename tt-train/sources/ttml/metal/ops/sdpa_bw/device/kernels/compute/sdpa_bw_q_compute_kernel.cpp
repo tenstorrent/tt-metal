@@ -161,17 +161,14 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
         tile_regs_commit();
         tile_regs_wait();
         cb_reserve_back(cb_attention_weights, onetile);
-        // 2-arg pack_reconfig_data_format(X, X): the LLK compares pack_dst_format[old] vs
-        // pack_dst_format[new] — same CB on both sides ⇒ formats match ⇒ skip the reconfig.
-        // The 1-arg variant unconditionally reprograms PACK, which here triggers an implicit
-        // SFPU pipeline drain (~3.5 µs on Medium) right after exp_tile. Safe because every
-        // PACK target in this K-loop is Float32 in the program factory.
-        pack_reconfig_data_format(cb_attention_weights, cb_attention_weights);
+        // 2-arg pack_reconfig: skip reprogram if new PACK format matches the previously-configured one.
+        pack_reconfig_data_format(cb_grad_query_accum, cb_attention_weights);
         pack_tile(matmul_accum_reg, cb_attention_weights);
         tile_regs_release();
         cb_push_back(cb_attention_weights, onetile);
 
-        compute_grad_attn_weights(cb_grad_output, cb_value, v_tiles, cb_grad_attn_weights, scaler_bits);
+        compute_grad_attn_weights(
+            cb_grad_output, cb_value, v_tiles, cb_grad_attn_weights, cb_attention_weights, scaler_bits);
 
         compute_grad_scores(cb_grad_attn_weights, cb_attention_weights, cb_u_scalar_row, scaler_bits, cb_grad_scores);
 

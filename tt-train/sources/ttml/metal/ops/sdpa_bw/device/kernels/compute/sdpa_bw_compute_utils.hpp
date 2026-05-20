@@ -135,7 +135,9 @@ inline void transpose_tile_fpu(const uint32_t cb_input, /*output cb*/ const uint
     tile_regs_commit();
 
     cb_reserve_back(cb_transpose_wh, onetile);
-    pack_reconfig_data_format(cb_transpose_wh);
+    // 2-arg pack_reconfig: skip reprogram if new PACK format matches the previously-configured one.
+    // In both callers (update_grad_value, update_grad_key) the previous PACK target equals cb_input.
+    pack_reconfig_data_format(cb_input, cb_transpose_wh);
     tile_regs_wait();
     pack_tile(0, cb_transpose_wh);
     tile_regs_release();
@@ -202,7 +204,7 @@ void compute_u_scalar_row(
     pack_tile(accum_register, cb_u_scalar_row);
 
     cb_reserve_back(cb_u_scaler_output, onetile);
-    pack_reconfig_data_format(cb_u_scaler_output);
+    pack_reconfig_data_format(cb_u_scalar_row, cb_u_scaler_output);
     pack_tile(accum_register, cb_u_scaler_output);
     cb_push_back(cb_u_scaler_output, onetile);
 
@@ -218,6 +220,7 @@ void compute_grad_attn_weights(
     const uint32_t cb_value,
     const uint32_t tiles_per_row,
     const uint32_t cb_grad_attn_weights,
+    const uint32_t cb_prev_pack,
     const uint32_t scaler_bits) {
     reconfig_data_format(cb_grad_output, cb_value);
     // This call is required to set up the matmul correctly
@@ -235,14 +238,8 @@ void compute_grad_attn_weights(
 
     tile_regs_wait();
     cb_reserve_back(cb_grad_attn_weights, onetile);
-    // 2-arg pack_reconfig_data_format(X, X): the LLK compares pack_dst_format[old] vs
-    // pack_dst_format[new] — same CB on both sides ⇒ formats match ⇒ skip the reconfig.
-    // The 1-arg variant unconditionally reprograms PACK, which triggers an implicit
-    // SFPU pipeline drain (~3.5 µs on Medium). Safe because every PACK target in the
-    // K-loop (cb_attention_weights, cb_grad_attn_weights, cb_grad_scores,
-    // cb_grad_query_accum) is Float32 in the program factory, so the previously-
-    // configured PACK format always matches Float32.
-    pack_reconfig_data_format(cb_grad_attn_weights, cb_grad_attn_weights);
+    // 2-arg pack_reconfig: skip reprogram if new PACK format matches the previously-configured one.
+    pack_reconfig_data_format(cb_prev_pack, cb_grad_attn_weights);
     pack_tile(0, cb_grad_attn_weights);
     tile_regs_release();
 
@@ -290,9 +287,8 @@ void compute_grad_scores(
 
     tile_regs_wait();
     cb_reserve_back(cb_grad_scores, onetile);
-    // 2-arg pack_reconfig: cb_grad_scores is Float32, same as previous PACK target — skip.
-    // See compute_grad_attn_weights for the full rationale.
-    pack_reconfig_data_format(cb_grad_scores, cb_grad_scores);
+    // 2-arg pack_reconfig: skip reprogram if new PACK format matches the previously-configured one.
+    pack_reconfig_data_format(cb_grad_attn_weights, cb_grad_scores);
     pack_tile(grad_reg, cb_grad_scores);
     tile_regs_release();
     cb_push_back(cb_grad_scores, onetile);
@@ -310,9 +306,8 @@ void update_grad_query(
     const bool do_accumulate = false) {
     cb_wait_front(cb_grad_scores, onetile);
 
-    // 2-arg pack_reconfig: cb_grad_query_accum is Float32, same as previous PACK target — skip.
-    // See compute_grad_attn_weights for the full rationale.
-    pack_reconfig_data_format(cb_grad_query_accum, cb_grad_query_accum);
+    // 2-arg pack_reconfig: skip reprogram if new PACK format matches the previously-configured one.
+    pack_reconfig_data_format(cb_grad_scores, cb_grad_query_accum);
     // First iteration: reserve space for result
     // Subsequent iterations: enable L1 accumulation to add to existing values
     if (!do_accumulate) {
@@ -368,7 +363,7 @@ void update_grad_value(
     // grad_V = Attention^T @ grad_output
     cb_wait_front(cb_transpose_wh, onetile);
 
-    pack_reconfig_data_format(cb_grad_value_accum);
+    pack_reconfig_data_format(cb_transpose_wh, cb_grad_value_accum);
     // First iteration: reserve space for result
     // Subsequent iterations: enable L1 accumulation to add to existing values
     if (!do_accumulate) {
@@ -420,7 +415,7 @@ void update_grad_key(
     transpose_tile_fpu(cb_grad_scores, cb_transpose_wh);
     cb_wait_front(cb_transpose_wh, onetile);
 
-    pack_reconfig_data_format(cb_grad_key_accum);
+    pack_reconfig_data_format(cb_transpose_wh, cb_grad_key_accum);
     if (!do_accumulate) {
         cb_reserve_back(cb_grad_key_accum, tiles_per_row);
     } else {
