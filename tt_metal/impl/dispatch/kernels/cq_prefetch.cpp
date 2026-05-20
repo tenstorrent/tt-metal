@@ -126,9 +126,13 @@ constexpr uintptr_t cmddat_q_end = cmddat_q_base + cmddat_q_size;
 
 constexpr bool telemetry_enabled = !DISPATCH_TELEMETRY_DISABLED;
 constexpr uint32_t prefetch_telemetry_base = DISPATCH_TELEMETRY_ADDR;
+constexpr uint32_t upstream_blocked_count_addr =
+    prefetch_telemetry_base + offsetof(tt::tt_metal::PrefetchCoreTelemetry, upstream_blocked_count);
+constexpr uint32_t upstream_unblocked_count_addr =
+    prefetch_telemetry_base + offsetof(tt::tt_metal::PrefetchCoreTelemetry, upstream_unblocked_count);
+using PrefetchTelemetryBlockGuard =
+    TelemetryBlockGuard<upstream_blocked_count_addr, upstream_unblocked_count_addr, telemetry_enabled>;
 
-constexpr uint32_t prefetch_q_end = prefetch_q_base + prefetch_q_size;
-constexpr uint32_t cmddat_q_end = cmddat_q_base + cmddat_q_size;
 constexpr uint32_t scratch_db_end = scratch_db_base + scratch_db_size;
 constexpr uint32_t ringbuffer_end = scratch_db_base + ringbuffer_size;
 
@@ -265,12 +269,6 @@ static uint32_t router_direction;
 CQRelayClient<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes, fabric_header_rb_base>
     relay_client;
 
-using PrefetchTelemetryBlockGuard =
-    TelemetryBlockGuard<tt::tt_metal::PrefetchTelemetry, prefetch_telemetry_base, telemetry_enabled>;
-FORCE_INLINE void init_prefetch_telemetry() {
-    init_telemetry<tt::tt_metal::PrefetchTelemetry, prefetch_telemetry_base, telemetry_enabled>();
-}
-
 // Feature to stall the prefetcher, mainly for ExecBuf impl which reuses CmdDataQ
 static enum class StallState : uint32_t { STALLED = 1U, NOT_STALLED = 0U } stall_state = StallState::NOT_STALLED;
 
@@ -281,6 +279,7 @@ bool process_cmd(
     uintptr_t& cmd_ptr,
     uint32_t& downstream_data_ptr,
     uint32_t& stride,
+    uint32_t& command_counter,
     uint32_t* l1_cache,
     PrefetchExecBufState& exec_buf_state);
 
@@ -495,7 +494,7 @@ FORCE_INLINE uint32_t read_from_pcie(
 //   - If no commands are available, retire exactly one oldest in-flight read per iteration to make progress; if nothing
 //     is in-flight and PrefetchQ is empty, spin until host posts work.
 template <uint32_t preamble_size>
-void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_ptr) {
+void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_ptr, uint32_t& upstream_blocked_counter) {
     static constexpr uint32_t INFLIGHT_MASK = tt::tt_metal::PrefetchConstants::PREFETCH_MAX_OUTSTANDING_PCIE_READS - 1U;
     enum class InflightFlags : uint32_t { NOSTALL = 0x0U, STALL_AFTER = 0x1U };
     struct InflightRead {
@@ -751,7 +750,7 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                 uint32_t heartbeat = 0U;
 
                 if ((fetch_size = *prefetch_q_rd_ptr) == 0U) {
-                    PrefetchTelemetryBlockGuard prefetch_telemetry_blocked;
+                    PrefetchTelemetryBlockGuard block_guard(&upstream_blocked_counter);
                     do {
                         invalidate_l1_cache();
                         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
@@ -1661,7 +1660,11 @@ static uint32_t process_exec_buf_relay_paged_packed_cmd(
 }
 
 uint32_t process_exec_buf_cmd(
-    uintptr_t cmd_ptr_outer, uint32_t& downstream_data_ptr, uint32_t* l1_cache, PrefetchExecBufState& exec_buf_state) {
+    uintptr_t cmd_ptr_outer,
+    uint32_t& downstream_data_ptr,
+    uint32_t& command_counter,
+    uint32_t* l1_cache,
+    PrefetchExecBufState& exec_buf_state) {
     // dispatch on eth cores is memory constrained, so exec_buf reuses the cmddat_q
     // prefetch_h stalls upon issuing an exec_buf to prevent conflicting use of the cmddat_q,
     // the exec_buf contains the release commands
@@ -1683,7 +1686,8 @@ uint32_t process_exec_buf_cmd(
 
         while (exec_buf_state.length > 0) {
             uint32_t stride;
-            done = process_cmd<false, true>(cmd_ptr, downstream_data_ptr, stride, l1_cache, exec_buf_state);
+            done = process_cmd<false, true>(
+                cmd_ptr, downstream_data_ptr, stride, command_counter, l1_cache, exec_buf_state);
 
             if (done) {
                 break;
@@ -1974,6 +1978,7 @@ bool process_cmd(
     uintptr_t& cmd_ptr,
     uint32_t& downstream_data_ptr,
     uint32_t& stride,
+    uint32_t& command_counter,
     uint32_t* l1_cache,
     PrefetchExecBufState& exec_buf_state) {
     volatile CQPrefetchCmd tt_l1_ptr* cmd = (volatile CQPrefetchCmd tt_l1_ptr*)cmd_ptr;
@@ -2045,7 +2050,7 @@ bool process_cmd(
             if (is_h_variant) {
                 ASSERT(stall_state == StallState::STALLED);  // ExecBuf must be preceded by a prefetcher stall
             }
-            stride = process_exec_buf_cmd(cmd_ptr, downstream_data_ptr, l1_cache, exec_buf_state);
+            stride = process_exec_buf_cmd(cmd_ptr, downstream_data_ptr, command_counter, l1_cache, exec_buf_state);
             stall_state = StallState::NOT_STALLED;  // Stall is no longer required after ExecBuf finished.
             break;
 
@@ -2117,7 +2122,8 @@ bool process_cmd(
     }
 
     if constexpr (telemetry_enabled) {
-        get_telemetry_ptr<tt::tt_metal::PrefetchTelemetry, prefetch_telemetry_base>()->command_count++;
+        reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::PrefetchCoreTelemetry*>(prefetch_telemetry_base)
+            ->command_count = ++command_counter;
     }
     return done;
 }
@@ -2541,6 +2547,8 @@ void kernel_main_h() {
     bool done = false;
     uint32_t heartbeat = 0;
     uint32_t l1_cache[l1_cache_elements_rounded];
+    uint32_t command_counter = 0;
+    uint32_t upstream_blocked_counter = 0;
 
     // Fetch q uses read buf. Write buf for process_relay_inline_all/process_relay_linear_h_cmd can be setup once
     relay_client.init<
@@ -2564,7 +2572,7 @@ void kernel_main_h() {
         NCRISC_WR_CMD_BUF>(get_noc_addr_helper(downstream_noc_xy, 0), my_dev_id, to_dev_id, router_direction);
 
     while (!done) {
-        fetch_q_get_cmds<sizeof(CQPrefetchHToPrefetchDHeader)>(fence, cmd_ptr, pcie_read_ptr);
+        fetch_q_get_cmds<sizeof(CQPrefetchHToPrefetchDHeader)>(fence, cmd_ptr, pcie_read_ptr, upstream_blocked_counter);
 
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
 
@@ -2588,6 +2596,11 @@ void kernel_main_h() {
             // DPRINT("prefetch terminating_10\n");
             done = true;
         }
+
+        if constexpr (telemetry_enabled) {
+            reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::PrefetchCoreTelemetry*>(prefetch_telemetry_base)
+                ->command_count = ++command_counter;
+        }
     }
 }
 
@@ -2600,6 +2613,7 @@ void kernel_main_d() {
     bool done = false;
     uint32_t heartbeat = 0;
     uint32_t l1_cache[l1_cache_elements_rounded];
+    uint32_t command_counter = 0;
 
     // Cmdbuf allocation is not defined yet for fabric so we can't use stateful APIs on Dispatch D
 #if defined(FABRIC_RELAY)
@@ -2642,7 +2656,8 @@ void kernel_main_d() {
         uint32_t amt_processed = 0;
         while (length > amt_processed) {
             uint32_t stride;
-            done = process_cmd<true, false>(cmd_ptr, downstream_data_ptr, stride, l1_cache, exec_buf_state);
+            done = process_cmd<true, false>(
+                cmd_ptr, downstream_data_ptr, stride, command_counter, l1_cache, exec_buf_state);
             amt_processed += stride;
 
             h_cmddat_q_reader.consumed_data(cmd_ptr, stride);
@@ -2677,6 +2692,8 @@ void kernel_main_hd() {
     uint32_t heartbeat = 0;
     uint32_t l1_cache[l1_cache_elements_rounded];
     PrefetchExecBufState exec_buf_state;
+    uint32_t command_counter = 0;
+    uint32_t upstream_blocked_counter = 0;
 
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, DispatchRelayInlineState::downstream_write_cmd_buf>(
         0, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), 0);
@@ -2686,14 +2703,15 @@ void kernel_main_hd() {
     while (!done) {
         DeviceZoneScopedN("CQ-PREFETCH");
         constexpr uint32_t preamble_size = 0;
-        fetch_q_get_cmds<preamble_size>(fence, cmd_ptr, pcie_read_ptr);
+        fetch_q_get_cmds<preamble_size>(fence, cmd_ptr, pcie_read_ptr, upstream_blocked_counter);
 
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
 
         volatile CQPrefetchCmd tt_l1_ptr* cmd = (volatile CQPrefetchCmd tt_l1_ptr*)cmd_ptr;
 
         uint32_t stride;
-        done = process_cmd<false, false>(cmd_ptr, downstream_data_ptr, stride, l1_cache, exec_buf_state);
+        done =
+            process_cmd<false, false>(cmd_ptr, downstream_data_ptr, stride, command_counter, l1_cache, exec_buf_state);
         cmd_ptr += stride;
     }
 }
@@ -2710,7 +2728,8 @@ void kernel_main() {
     my_dev_id = get_arg_val<uint32_t>(OFFSETOF_MY_DEV_ID);
     to_dev_id = get_arg_val<uint32_t>(OFFSETOF_TO_DEV_ID);
     router_direction = get_arg_val<uint32_t>(OFFSETOF_ROUTER_DIRECTION);
-    init_prefetch_telemetry();
+
+    init_telemetry<tt::tt_metal::PrefetchCoreTelemetry, prefetch_telemetry_base, telemetry_enabled>();
 
     if (is_h_variant and is_d_variant) {
         kernel_main_hd();

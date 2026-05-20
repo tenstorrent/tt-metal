@@ -5,8 +5,6 @@ target_link_libraries(
     dispatch_telemetry_dump
     PRIVATE
         Metalium::Metal
-        Metalium::Metal::Impl
-        Metalium::Metal::LLRT
         TT::STL
         numa
 )

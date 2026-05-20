@@ -4,7 +4,6 @@
 
 #include <enchantum/enchantum.hpp>
 #include <tt-metalium/tt_align.hpp>
-#include <tt-metalium/experimental/dispatch_telemetry_types.hpp>
 
 #include "dispatch_mem_map.hpp"
 #include <tt_stl/assert.hpp>
@@ -13,6 +12,7 @@
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
 #include "llrt/rtoptions.hpp"
+#include "dispatch_telemetry_types.hpp"
 #include <tt_stl/enum.hpp>
 
 namespace tt::tt_metal {

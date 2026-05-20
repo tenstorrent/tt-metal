@@ -23,8 +23,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/distributed_context.hpp
     api/tt-metalium/distributed_host_buffer.hpp
     api/tt-metalium/experimental/blitz_decode_pipeline.hpp
-    api/tt-metalium/experimental/dispatch_telemetry.hpp
-    api/tt-metalium/experimental/dispatch_telemetry_types.hpp
+    api/tt-metalium/experimental/dispatch_telemetry_api.hpp
     api/tt-metalium/experimental/context/metal_env.hpp
     api/tt-metalium/experimental/core_subset_write/buffer_write.hpp
     api/tt-metalium/experimental/core_subset_write/mesh_command_queue.hpp
@@ -187,11 +186,13 @@ set(JITAPI_FILES
     fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto
     fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.textproto
     fabric/fabric_edm_packet_header.hpp
+    impl/dispatch/dispatch_telemetry_types.hpp
     impl/dispatch/kernels/cq_commands.hpp
     impl/dispatch/kernels/cq_common.hpp
     impl/dispatch/kernels/cq_prefetch.hpp
     impl/dispatch/kernels/cq_relay.hpp
     impl/dispatch/kernels/cq_helpers.hpp
+    impl/dispatch/kernels/telemetry.hpp
     impl/dispatch/kernels/realtime_profiler.hpp
     impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp
     soc_descriptors/blackhole_140_arch.yaml

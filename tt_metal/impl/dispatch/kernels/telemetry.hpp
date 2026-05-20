@@ -6,15 +6,16 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "internal/risc_attribs.h"
-#include "tt_metal/api/tt-metalium/experimental/dispatch_telemetry_types.hpp"
+#include "api/debug/assert.h"
+
+#include "tt_metal/impl/dispatch/dispatch_telemetry_types.hpp"
 
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
 
-template <typename Telemetry, uint32_t telemetry_addr>
-FORCE_INLINE volatile tt_l1_ptr Telemetry* get_telemetry_ptr() {
-    return reinterpret_cast<volatile tt_l1_ptr Telemetry*>(telemetry_addr);
-}
+template <typename T>
+FORCE_INLINE volatile tt_l1_ptr T* write_to_l1(uint32_t dst_addr, const T& src_object);
 
 template <typename Telemetry, uint32_t telemetry_addr, bool enabled>
 FORCE_INLINE void init_telemetry() {
@@ -26,34 +27,51 @@ FORCE_INLINE void init_telemetry() {
     write_to_l1(telemetry_addr, telemetry);
 }
 
-template <typename Telemetry, uint32_t telemetry_addr, bool enabled>
-class TelemetryBlockGuardImpl;
+template <uint32_t blocked_count_store_addr, uint32_t unblocked_count_store_addr, bool enabled>
+class TelemetryBlockGuard;
 
-template <typename Telemetry, uint32_t telemetry_addr>
-class TelemetryBlockGuardImpl<Telemetry, telemetry_addr, true> {
+// Note: Uses single local block counter to keep L1 block and unblock counters in lockstep.
+template <uint32_t blocked_count_store_addr, uint32_t unblocked_count_store_addr>
+class TelemetryBlockGuard<blocked_count_store_addr, unblocked_count_store_addr, true> {
 public:
-    FORCE_INLINE explicit TelemetryBlockGuardImpl() : telemetry_(get_telemetry_ptr<Telemetry, telemetry_addr>()) {
-        telemetry_->blocked_by_host_count++;
+    FORCE_INLINE explicit TelemetryBlockGuard(uint32_t* blocked_counter) : blocked_counter_(blocked_counter) {
+        if (blocked_counter_ == nullptr) {
+            ASSERT(0);
+            return;
+        }
+        auto* blocked_count_addr_ = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(blocked_count_store_addr);
+        *blocked_count_addr_ = ++(*blocked_counter_);
     }
 
-    FORCE_INLINE ~TelemetryBlockGuardImpl() { telemetry_->unblocked_by_host_count++; }
+    FORCE_INLINE ~TelemetryBlockGuard() {
+        if (blocked_counter_ == nullptr) {
+            ASSERT(0);
+            return;
+        }
+        auto* unblocked_count_addr_ = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(unblocked_count_store_addr);
+        *unblocked_count_addr_ = *blocked_counter_;
+    }
 
-    TelemetryBlockGuardImpl(const TelemetryBlockGuardImpl&) = delete;
-    TelemetryBlockGuardImpl& operator=(const TelemetryBlockGuardImpl&) = delete;
-    TelemetryBlockGuardImpl(TelemetryBlockGuardImpl&& other) = delete;
-    TelemetryBlockGuardImpl& operator=(TelemetryBlockGuardImpl&& other) = delete;
+    TelemetryBlockGuard(const TelemetryBlockGuard&) = delete;
+    TelemetryBlockGuard& operator=(const TelemetryBlockGuard&) = delete;
+    TelemetryBlockGuard(TelemetryBlockGuard&& other) = delete;
+    TelemetryBlockGuard& operator=(TelemetryBlockGuard&& other) = delete;
 
 private:
-    volatile tt_l1_ptr Telemetry* telemetry_;
+    uint32_t* blocked_counter_;
 };
 
 // Designed to be no-op if telemetry is disabled
-template <typename Telemetry, uint32_t telemetry_addr>
-class TelemetryBlockGuardImpl<Telemetry, telemetry_addr, false> {
+template <uint32_t blocked_count_store_addr, uint32_t unblocked_count_store_addr>
+class TelemetryBlockGuard<blocked_count_store_addr, unblocked_count_store_addr, false> {
 public:
-    FORCE_INLINE explicit TelemetryBlockGuardImpl() {}
-    FORCE_INLINE ~TelemetryBlockGuardImpl() = default;
+    FORCE_INLINE explicit TelemetryBlockGuard(uint32_t* = nullptr) {}
 };
 
-template <typename Telemetry, uint32_t telemetry_addr, bool enabled>
-using TelemetryBlockGuard = TelemetryBlockGuardImpl<Telemetry, telemetry_addr, enabled>;
+using NoTelemetryBlockGuard = TelemetryBlockGuard<0, 0, false>;
+
+// Allows compile time checks when passing as template parameter
+template <typename T>
+struct is_telemetry_block_guard : std::false_type {};
+template <uint32_t a, uint32_t b, bool c>
+struct is_telemetry_block_guard<TelemetryBlockGuard<a, b, c>> : std::true_type {};

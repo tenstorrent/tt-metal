@@ -147,7 +147,7 @@ tt_metal/tools/* @kmabeeTT @mo-tenstorrent @ihamer-tt @tenstorrent/codeowner-byp
 tt_metal/tools/lightmetal_runner @kmabeeTT @tenstorrent/codeowner-bypass
 tt_metal/tools/mem_bench @abhullar-tt @tenstorrent/codeowner-bypass # should be moved to tests micro benchmark?
 tt_metal/tools/precompile_fw @abhullar-tt @ruizhangTT @tenstorrent/codeowner-bypass
-tt_metal/tools/dispatch_telemetry_dump/ @anashTT @tenstorrent/codeowner-bypass
+tt_metal/tools/dispatch_telemetry_dump/ @anashTT @jbaumanTT @sidnadTT @tenstorrent/codeowner-bypass
 tt_metal/tools/jit_compile_server @ruizhangTT @tenstorrent/metalium-runtime @tenstorrent/codeowner-bypass
 tt_metal/tools/profiler/ @mo-tenstorrent @akerteszTT @tenstorrent/codeowner-bypass
 tt_metal/tools/profiler/event_metadata.hpp @sohaibnadeemTT @tenstorrent/codeowner-bypass

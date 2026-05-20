@@ -8,6 +8,7 @@
 #include "internal/risc_attribs.h"
 #include "api/dataflow/dataflow_api.h"
 #include "cq_helpers.hpp"
+#include "telemetry.hpp"
 
 #include "internal/debug/sanitize.h"
 #include "api/debug/assert.h"
@@ -392,13 +393,22 @@ private:
 //  - This class only accounts for pages locally; it does NOT release credits back to the producer.
 //    Use CBReaderWithReleasePolicy or CBReaderWithManualRelease when credits must be returned.
 //  - Credits are returned per-block, not per-page.
+//  - If check_upstream_blocking is true, block and unblock counter addresses will be incremented
+//    if blocked on upstream.
 template <
     uint32_t my_sem_id,
     uint32_t cb_log_page_size,
     uint32_t cb_blocks,
     uint32_t cb_pages_per_block,
-    uint32_t cb_base>
+    uint32_t cb_base,
+    bool check_upstream_blocking = false,
+    uint32_t upstream_block_count_addr = 0,
+    uint32_t upstream_unblock_count_addr = 0>
 class CBReader {
+    static_assert(
+        (check_upstream_blocking && upstream_block_count_addr != 0 && upstream_unblock_count_addr != 0) ||
+        (!check_upstream_blocking && upstream_block_count_addr == 0 && upstream_unblock_count_addr == 0));
+
 public:
     FORCE_INLINE void wait_all_pages() {
         volatile tt_l1_ptr uint32_t* sem_addr =
@@ -442,12 +452,15 @@ protected:
 
     // Acquire pages from upstream. Updates the cb_fence and returns the number of pages acquired. May block waiting for
     // credits from upstream if we already acquired all the pages previously.
-    FORCE_INLINE uint32_t acquire_pages() {
+    template <typename T = NoTelemetryBlockGuard>
+    FORCE_INLINE uint32_t acquire_pages(uint32_t* blocked_counter = nullptr) {
+        static_assert(is_telemetry_block_guard<T>::value, "T must be a telemetry block guard");
         volatile tt_l1_ptr uint32_t* sem_addr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_sem_id));
 
         if (local_count_ == upstream_count_) {
             WAYPOINT("UAPW");
+            T block_guard(blocked_counter);
             uint32_t heartbeat = 0;
             do {
                 invalidate_l1_cache();
@@ -499,13 +512,17 @@ public:
         this->block_noc_writes_to_clear_ = noc_get_nonposted_writes_issued(noc_index);
     }
 
-    // Returns how much data is available. Will block until data is available. May release old pages before cmd_ptr to
+    // Returns how much data is available. Will block until data is available. Tracks via blocked
+    // counter addresses if check_blocking is true.May release old pages before cmd_ptr to
     // writer. Updates cmd_ptr on wrap-around.
     // noc_increment_nonposted_writes_issued() must be called before calling this function.
     // If this function doesn't return sufficient data, there are two options:
     // 1. Process all the available data and then call this function again.
     // 2. Call get_cb_page_and_release_pages to attempt to get more data.
-    FORCE_INLINE uint32_t wait_for_available_data_and_release_old_pages(uintptr_t& cmd_ptr) {
+    template <typename T = NoTelemetryBlockGuard>
+    FORCE_INLINE uint32_t
+    wait_for_available_data_and_release_old_pages(uintptr_t& cmd_ptr, uint32_t* blocked_counter = nullptr) {
+        static_assert(is_telemetry_block_guard<T>::value, "T must be a telemetry block guard");
         if (this->available_bytes(cmd_ptr) == 0) {
             if (this->cb_fence_ == this->block_next_start_addr_[this->rd_block_idx_]) {
                 if (this->rd_block_idx_ == cb_blocks - 1) {
@@ -514,7 +531,7 @@ public:
                 }
                 move_rd_to_next_block_and_release_pages();
             }
-            this->acquire_pages();
+            this->template acquire_pages<T>(blocked_counter);
         }
         return this->available_bytes(cmd_ptr);
     }
