@@ -3,9 +3,6 @@ name: "(Profiler) Choose your pipeline"
 on:
   schedule:
     - cron: "0 2 * * *" # Run daily at 2am UTC
-  push:
-    branches:
-      - tdowdall/profiler-reorg
   workflow_dispatch:
     inputs:
       run-t3k-profiler:
