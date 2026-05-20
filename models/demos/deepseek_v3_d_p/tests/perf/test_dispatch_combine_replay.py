@@ -170,34 +170,67 @@ def test_dispatch_combine_replay(mesh_device, num_links, topology, capture_file,
     # Aggregator uses chip_id % mesh_cols to attribute each chip to its dispatch col;
     # this print lets us verify the assumption that device_id enumeration follows row-major
     # LinMeshCoord (so device_id % num_cols == col_idx).
+    # NOTE: using print(flush=True) instead of logger.info so output is unfiltered.
+    # Diagnostic: Galaxy's physical Dev IDs are permuted (not arithmetic). We need the actual
+    # mesh-coord → device_id mapping from ttnn at runtime, plus a JSON sidecar so the
+    # aggregator can group chips into the correct dispatch-group columns.
     try:
-        logger.info(f"[mesh-map] mesh.shape=({mesh_rows}, {mesh_cols}) — checking device_id ↔ (row, col) mapping:")
-        any_mismatch = False
+        print(f"\n[MESH-MAP] mesh.shape=({mesh_rows}, {mesh_cols}) — actual device_id at each (row, col):", flush=True)
+        # 2D table of device IDs
+        mapping_2d = []
         for r in range(mesh_rows):
-            row_devs = []
+            row = []
             for c in range(mesh_cols):
-                dev = mesh_device.get_device(ttnn.MeshCoordinate(r, c))
-                did = dev.id()
-                row_devs.append(
-                    f"(r={r},c={c})→id={did:>2} [id%{mesh_cols}={did % mesh_cols}{'✓' if (did % mesh_cols) == c else f' EXPECTED {c}'}]"
-                )
-                if (did % mesh_cols) != c:
-                    any_mismatch = True
-            logger.info("[mesh-map]  " + "  ".join(row_devs))
-        if any_mismatch:
-            logger.warning(
-                "[mesh-map] device_id % num_cols does NOT cleanly map to col_idx — "
-                "summarize_8x4's per-col attribution via chip_id % 4 will be wrong. "
-                "Need to use the actual mapping above when aggregating."
+                did = mesh_device.get_device_id(ttnn.MeshCoordinate(r, c))
+                row.append(did)
+            mapping_2d.append(row)
+            print(
+                f"[MESH-MAP]  row {r}:  " + "  ".join(f"c={c}→id={mapping_2d[r][c]:>2}" for c in range(mesh_cols)),
+                flush=True,
             )
-        else:
-            logger.info(
-                "[mesh-map] ✓ device_id % num_cols == col_idx for all positions — chip_id % 4 attribution is correct"
-            )
-    except Exception as e:
-        logger.warning(
-            f"[mesh-map] could not enumerate mesh devices via mesh_device.get_device(MeshCoordinate(r,c)): {e}"
+        # ttnn's canonical visualization
+        try:
+            print(f"[MESH-MAP] ttnn.visualize_mesh_device(mesh_device):", flush=True)
+            ttnn.visualize_mesh_device(mesh_device)
+        except Exception as e:
+            print(f"[MESH-MAP] visualize_mesh_device failed: {e}", flush=True)
+        # Build per-col device-id lists (dispatch groups) and a JSON sidecar.
+        col_to_device_ids = {c: [mapping_2d[r][c] for r in range(mesh_rows)] for c in range(mesh_cols)}
+        print(f"[MESH-MAP] dispatch_group → physical device_ids:", flush=True)
+        for c in range(mesh_cols):
+            print(f"[MESH-MAP]   col {c}: {col_to_device_ids[c]}", flush=True)
+        # Quick consistency check vs the two arithmetic formulas
+        mod_match = all((mapping_2d[r][c] % mesh_cols) == c for r in range(mesh_rows) for c in range(mesh_cols))
+        div_match = all((mapping_2d[r][c] // mesh_rows) == c for r in range(mesh_rows) for c in range(mesh_cols))
+        print(
+            f"[MESH-MAP] arithmetic checks: id % {mesh_cols} ↔ col  {'matches' if mod_match else 'does NOT match'}; "
+            f"id // {mesh_rows} ↔ col  {'matches' if div_match else 'does NOT match'}",
+            flush=True,
         )
+        # Save a JSON sidecar next to the dispatch capture dir, keyed by mesh shape, so the
+        # sweep aggregator can look it up.
+        import json
+
+        sidecar_dir = Path(os.getenv("TT_DS_DISPATCH_CAPTURE_DIR", _capture_root()))
+        sidecar = sidecar_dir / f"meshmap_{mesh_rows}x{mesh_cols}.json"
+        try:
+            sidecar.parent.mkdir(parents=True, exist_ok=True)
+            with open(sidecar, "w") as f:
+                json.dump(
+                    {
+                        "mesh_rows": mesh_rows,
+                        "mesh_cols": mesh_cols,
+                        "mapping_rc_to_devid": mapping_2d,  # mapping_2d[r][c] = device_id
+                        "col_to_device_ids": col_to_device_ids,
+                    },
+                    f,
+                    indent=2,
+                )
+            print(f"[MESH-MAP] wrote sidecar → {sidecar}", flush=True)
+        except Exception as e:
+            print(f"[MESH-MAP] could not write sidecar: {e}", flush=True)
+    except Exception as e:
+        print(f"[MESH-MAP] error enumerating mesh: {e}", flush=True)
 
     logger.info(
         f"[replay] file={capture_file}  layer={layer_idx}  galaxy_col={galaxy_col}  mesh={tuple(mesh_device.shape)}  is_full_8x4={is_full_8x4}"
@@ -257,7 +290,7 @@ def test_dispatch_combine_replay(mesh_device, num_links, topology, capture_file,
 
     # --- 2. Compute offsets/counts/region_offsets from indices + table.
     logger.info(f"[replay] computing gate outputs ({'full 4 cols' if is_full_8x4 else f'col{galaxy_col}'})...")
-    col_offsets_full, col_counts_full, col_region_offsets_full, _ = get_gate_outputs(
+    col_offsets_full, col_counts_full, col_region_offsets_full, col_counter_full = get_gate_outputs(
         indices=indices,
         dispatch_group_size=dgs,
         num_routed_experts=nre,
@@ -266,10 +299,14 @@ def test_dispatch_combine_replay(mesh_device, num_links, topology, capture_file,
         num_experts_per_tok=nept,
         expert_dispatch_table=col_table,
     )  # each (4, dgs, nre)
+    # end_offsets[g, c, e] = offsets[g, c, e] + counter[g, c, e]; exclusive end pointer
+    # per source chip per expert (used by the second untilizer in the two-untilizer kernel).
+    col_end_offsets_full = col_offsets_full + col_counter_full
     if is_full_8x4:
         col_offsets = col_offsets_full.contiguous()
         col_counts = col_counts_full.contiguous()
         col_region_offsets = col_region_offsets_full.contiguous()
+        col_end_offsets = col_end_offsets_full.contiguous()
         total_routings = int(col_counts.sum().item()) // dgs
         total_topk_slots = indices.numel()
         logger.info(
@@ -280,6 +317,7 @@ def test_dispatch_combine_replay(mesh_device, num_links, topology, capture_file,
         col_offsets = col_offsets_full[0:1].contiguous()  # (1, dgs, nre)
         col_counts = col_counts_full[0:1].contiguous()  # (1, dgs, nre)
         col_region_offsets = col_region_offsets_full[0:1].contiguous()  # (1, dgs, nre)
+        col_end_offsets = col_end_offsets_full[0:1].contiguous()  # (1, dgs, nre)
         col_routings = int(col_counts.sum().item()) // dgs
         total_topk_slots = indices.numel()
         logger.info(
@@ -315,6 +353,7 @@ def test_dispatch_combine_replay(mesh_device, num_links, topology, capture_file,
     logger.info(f"[replay] sharding col{galaxy_col} dispatch_table and expert_offsets...")
     tt_table = TtDispatchModule.shard_expert_dispatch_table(mesh_device, col_table, dispatch_axis=sp_axis)
     tt_offsets = TtDispatchModule.shard_expert_offsets(mesh_device, col_offsets)
+    tt_end_offsets = TtDispatchModule.shard_expert_offsets(mesh_device, col_end_offsets)
 
     counts_mapper = get_expert_token_counts_mesh_mapper(mesh_device)
     logger.info(f"[replay] pushing counts and region_offsets...")
@@ -371,7 +410,9 @@ def test_dispatch_combine_replay(mesh_device, num_links, topology, capture_file,
 
     def _run_one_iter():
         # Dispatch -> layout convert (mirroring production tt_moe.py:468-489) -> combine.
-        dispatched_buffer, metadata = dispatch_module(tt_x, tt_weights, tt_indices, tt_offsets, tt_table)
+        dispatched_buffer, metadata = dispatch_module(
+            tt_x, tt_weights, tt_indices, tt_offsets, tt_end_offsets, tt_table
+        )
         # In production, the buffer is squeezed to 2D, tile-converted to bfp8, fed to routed FFN
         # (which writes back in-place), then unsqueezed to 4D and fed to combine. For perf replay
         # we skip the FFN but match the layout transforms so combine sees production-shape input.

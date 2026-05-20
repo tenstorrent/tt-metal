@@ -158,7 +158,6 @@ def run_one(
     out_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(produced, out_csv)
     print(f"  saved → {out_csv}  ({out_csv.stat().st_size / 1024:.1f} KB)")
-    augment_csv_with_op_names(out_csv)
 
     # Cleanup: remove the entire produced.parent dir (timestamped OR named) — we've already
     # copied just the ops CSV. The big profile_log_device.csv (~5–30 MB) and any other
@@ -180,256 +179,218 @@ def run_one(
     return out_csv
 
 
-# Position of each op within one iter of test_dispatch_combine_replay's _run_one_iter:
-#   0 = dispatch, 1 = to_layout (skip in summary), 2 = combine
-# Plus 1 startup op at op_idx==1 before the iter loop begins.
-_OPS_PER_ITER = 3
-_OP_POSITION = {
-    "DispatchDeviceOperation": 0,
-    "CombineDeviceOperation": 2,
-}
-_POSITION_TO_OP_NAME = {
-    0: "DispatchDeviceOperation",
-    1: "ToLayout",
-    2: "CombineDeviceOperation",
+_OP_SHORT_NAME = {
+    "DispatchDeviceOperation": "dispatch",
+    "CombineDeviceOperation": "combine",
 }
 
 
-def augment_csv_with_op_names(csv_path: Path) -> None:
-    """If the CSV is device-only (no OP CODE column), synthesize OP CODE / CHIP_ID / OP_IDX /
-    DEVICE ID / ITER_IN_DEV columns from GLOBAL CALL COUNT so each row is self-describing.
+def _per_iter_max_across_chips(op_df: pd.DataFrame) -> pd.Series:
+    """For non-collective ops (Dispatch, Combine), the wall-clock time of the Nth invocation
+    is the MAX duration across all participating devices (matches the semantics of
+    models.tt_transformers.tests.test_utils.merge_device_rows for non-collective ops).
 
-    GCC encoding (confirmed in our data):
-      chip_id = GCC % 1024
-      op_idx  = GCC // 1024   (1-indexed; op_idx=1 is a one-time startup op)
-    For op_idx >= 2:
-      iter_in_dev    = (op_idx - 2) // 3
-      pos_in_iter    = (op_idx - 2) % 3
-      OP CODE map    = {0: DispatchDeviceOperation, 1: ToLayout, 2: CombineDeviceOperation}
+    Input: op_df filtered to one OP CODE, with DEVICE ID and GLOBAL CALL COUNT columns.
+    Returns a Series indexed by iter (0-based), value = max DEVICE KERNEL DURATION [ns] across
+    all devices for that iter of that op.
     """
-    try:
-        df = pd.read_csv(csv_path, low_memory=False)
-    except Exception as e:
-        print(f"  ! could not read {csv_path} to augment: {e}", file=sys.stderr)
-        return
-    if "OP CODE" in df.columns:
-        return  # already has op names — leave alone
-    if "GLOBAL CALL COUNT" not in df.columns:
-        print(f"  ! {csv_path} has no GLOBAL CALL COUNT column; can't synthesize OP CODE", file=sys.stderr)
-        return
-
-    chip_id = df["GLOBAL CALL COUNT"] % 1024
-    op_idx = df["GLOBAL CALL COUNT"] // 1024
-    is_startup = op_idx == 1
-    pos_in_iter = (op_idx - 2) % _OPS_PER_ITER
-    iter_in_dev = (op_idx - 2) // _OPS_PER_ITER
-
-    op_code = pos_in_iter.map(_POSITION_TO_OP_NAME).where(~is_startup, other="Startup")
-    iter_in_dev_col = iter_in_dev.where(~is_startup, other=-1)
-    pos_in_iter_col = pos_in_iter.where(~is_startup, other=-1)
-
-    df.insert(0, "OP CODE", op_code)
-    df.insert(1, "DEVICE ID", chip_id)
-    df.insert(2, "CHIP_ID", chip_id)
-    df.insert(3, "OP_IDX", op_idx)
-    df.insert(4, "ITER_IN_DEV", iter_in_dev_col)
-    df.insert(5, "POS_IN_ITER", pos_in_iter_col)
-    df.to_csv(csv_path, index=False)
-    print(f"  [augment] added OP CODE, DEVICE ID, CHIP_ID, OP_IDX, ITER_IN_DEV, POS_IN_ITER → {csv_path}")
+    op_df = op_df.sort_values(["DEVICE ID", "GLOBAL CALL COUNT"]).copy()
+    op_df["iter"] = op_df.groupby("DEVICE ID").cumcount()
+    return op_df.groupby("iter")["DEVICE KERNEL DURATION [ns]"].max()
 
 
 def aggregate_one_csv(csv: Path, op_code: str, n_warmup: int) -> dict | None:
-    """For one LB run CSV, return per-chip stats for one op (Dispatch or Combine).
-
-    Supports two CSV variants:
-      - Full tracy merge (has OP CODE + DEVICE ID columns): filter by OP CODE.
-      - Device-only OPs csv (no OP CODE / DEVICE ID): attribute by GLOBAL CALL COUNT.
-        chip_id = GCC % 1024, op_idx = GCC // 1024. Test sequence per iter is
-        dispatch → to_layout → combine, with one startup op at op_idx=1.
+    """For one CSV (8x1 LB or single-col Galaxy), compute the per-op wall-clock metric:
+    max-across-chips per iter, then median across the timed iters (drop first n_warmup).
     """
     try:
         df = pd.read_csv(csv, low_memory=False)
     except Exception as e:
         print(f"  ! failed to read {csv}: {e}", file=sys.stderr)
         return None
-    if df.empty:
+    if df.empty or "OP CODE" not in df.columns or "DEVICE ID" not in df.columns:
         return None
-    df = df.copy()
-    df["dur_ns"] = pd.to_numeric(df["DEVICE KERNEL DURATION [ns]"], errors="coerce")
-    df = df.dropna(subset=["dur_ns"])
-    if df.empty:
+    op_df = df[df["OP CODE"] == op_code].dropna(subset=["DEVICE ID", "DEVICE KERNEL DURATION [ns]"]).copy()
+    if op_df.empty:
         return None
-
-    if "OP CODE" in df.columns and "DEVICE ID" in df.columns:
-        op_df = df[df["OP CODE"] == op_code].copy()
-        if op_df.empty:
-            return None
-        op_df = op_df.sort_values(["DEVICE ID", "GLOBAL CALL COUNT"]).reset_index(drop=True)
-        op_df["iter"] = op_df.groupby("DEVICE ID").cumcount()
-        timed = op_df[op_df["iter"] >= n_warmup]
-        if timed.empty:
-            return None
-        per_chip = timed.groupby("DEVICE ID")["dur_ns"].median()
-    else:
-        # Device-only fallback: attribute by GCC encoding.
-        pos = _OP_POSITION.get(op_code)
-        if pos is None:
-            return None
-        df["chip_id"] = df["GLOBAL CALL COUNT"] % 1024
-        df["op_idx"] = df["GLOBAL CALL COUNT"] // 1024
-        df = df[df["op_idx"] >= 2]  # drop op_idx=1 startup op
-        df["op_idx_in_iter"] = (df["op_idx"] - 2) % _OPS_PER_ITER
-        df["iter_in_dev"] = (df["op_idx"] - 2) // _OPS_PER_ITER
-        op_df = df[df["op_idx_in_iter"] == pos]
-        timed = op_df[op_df["iter_in_dev"] >= n_warmup]
-        if timed.empty:
-            return None
-        per_chip = timed.groupby("chip_id")["dur_ns"].median()
-
+    op_df["DEVICE ID"] = op_df["DEVICE ID"].astype(int)
+    op_df["DEVICE KERNEL DURATION [ns]"] = pd.to_numeric(op_df["DEVICE KERNEL DURATION [ns]"], errors="coerce")
+    op_df = op_df.dropna(subset=["DEVICE KERNEL DURATION [ns]"])
+    per_iter = _per_iter_max_across_chips(op_df)
+    timed = per_iter.iloc[n_warmup:]
+    if timed.empty:
+        return None
     return {
-        "n_chips": len(per_chip),
-        "max_chip_med_ns": int(per_chip.max()),
-        "median_chip_med_ns": int(per_chip.median()),
-        "min_chip_med_ns": int(per_chip.min()),
+        "n_chips": op_df["DEVICE ID"].nunique(),
+        "n_iters_timed": len(timed),
+        "wall_clock_ns": int(timed.median()),
     }
 
 
-def aggregate_one_csv_8x4(csv: Path, op_code: str, n_warmup: int, num_cols: int = 4) -> dict | None:
-    """For one Galaxy 8x4 run CSV (32 chips, one CSV per layer), return per-col stats.
+def _load_meshmap_sidecar(capture_dir: Path | str, mesh_rows: int, mesh_cols: int) -> dict[int, list[int]] | None:
+    """Load the per-col device-id mapping written by the test's [MESH-MAP] diagnostic.
+    Returns dict {col_idx: [device_ids_in_that_col]} or None if not found.
+    Galaxy's mesh has permuted physical Dev IDs, so arithmetic attribution (% mesh_cols) is
+    unreliable — use the sidecar's actual mapping.
+    """
+    import json
 
-    Uses position-based attribution (no OP CODE column) and `col = chip_id % num_cols`
-    (same convention as analyze_galaxy_per_col.py). Returns dict mapping col_idx → stats.
+    sidecar = Path(capture_dir) / f"meshmap_{mesh_rows}x{mesh_cols}.json"
+    if not sidecar.exists():
+        return None
+    try:
+        with open(sidecar) as f:
+            data = json.load(f)
+        c2d = data.get("col_to_device_ids", {})
+        # JSON keys are strings — convert to int
+        return {int(k): list(v) for k, v in c2d.items()}
+    except Exception as e:
+        print(f"  ! could not parse {sidecar}: {e}", file=sys.stderr)
+        return None
+
+
+def aggregate_one_csv_8x4(
+    csv: Path,
+    op_code: str,
+    n_warmup: int,
+    num_cols: int = 4,
+    capture_dir: Path | str | None = None,
+) -> dict | None:
+    """For Galaxy 8x4 CSV (32 chips, single run per layer), compute per-col wall-clock metric.
+
+    Per-col chip attribution comes from a meshmap sidecar (`meshmap_8x4.json` under
+    capture_dir) written by the test's [MESH-MAP] diagnostic. Galaxy's physical Dev IDs are
+    permuted (not arithmetic), so we don't fall back to `DEVICE_ID % num_cols` — if the
+    sidecar is missing we return None with a clear warning.
+
+    Within each col: max-across-its-8-chips per iter (wall-clock per kernel call) → median
+    across timed iters.
     """
     try:
         df = pd.read_csv(csv, low_memory=False)
     except Exception as e:
         print(f"  ! failed to read {csv}: {e}", file=sys.stderr)
         return None
-    if df.empty:
-        return None
-    df = df.copy()
-    df["dur_ns"] = pd.to_numeric(df["DEVICE KERNEL DURATION [ns]"], errors="coerce")
-    df = df.dropna(subset=["dur_ns"])
-    if df.empty:
+    if df.empty or "OP CODE" not in df.columns or "DEVICE ID" not in df.columns:
         return None
 
-    pos = _OP_POSITION.get(op_code)
-    if pos is None:
+    # Load real (col → device_ids) mapping from sidecar
+    if capture_dir is None:
+        print(
+            f"  ! aggregate_one_csv_8x4 needs capture_dir to find meshmap_*.json sidecar",
+            file=sys.stderr,
+        )
+        return None
+    col_to_devids = _load_meshmap_sidecar(capture_dir, mesh_rows=8, mesh_cols=num_cols)
+    if col_to_devids is None:
+        print(
+            f"  ! no meshmap_8x{num_cols}.json sidecar at {capture_dir}/. Run a single "
+            f"test combo (with TT_DS_DISPATCH_CAPTURE_DIR set) to generate it, or copy it "
+            f"from a prior run. Won't fall back to arithmetic (% {num_cols}) since Galaxy's "
+            f"physical Dev IDs are permuted, not row-major.",
+            file=sys.stderr,
+        )
         return None
 
-    if "OP CODE" in df.columns and "DEVICE ID" in df.columns:
-        op_df = df[df["OP CODE"] == op_code].copy()
-        if op_df.empty:
-            return None
-        op_df = op_df.sort_values(["DEVICE ID", "GLOBAL CALL COUNT"]).reset_index(drop=True)
-        op_df["iter"] = op_df.groupby("DEVICE ID").cumcount()
-        timed = op_df[op_df["iter"] >= n_warmup].copy()
-        timed["col_idx"] = timed["DEVICE ID"] % num_cols
-        chip_col = "DEVICE ID"
-    else:
-        df["chip_id"] = df["GLOBAL CALL COUNT"] % 1024
-        df["op_idx"] = df["GLOBAL CALL COUNT"] // 1024
-        df = df[df["op_idx"] >= 2]
-        df["op_idx_in_iter"] = (df["op_idx"] - 2) % _OPS_PER_ITER
-        df["iter_in_dev"] = (df["op_idx"] - 2) // _OPS_PER_ITER
-        timed = df[(df["op_idx_in_iter"] == pos) & (df["iter_in_dev"] >= n_warmup)].copy()
-        timed["col_idx"] = timed["chip_id"] % num_cols
-        chip_col = "chip_id"
-
-    if timed.empty:
+    op_df = df[df["OP CODE"] == op_code].dropna(subset=["DEVICE ID", "DEVICE KERNEL DURATION [ns]"]).copy()
+    if op_df.empty:
         return None
+    op_df["DEVICE ID"] = op_df["DEVICE ID"].astype(int)
+    op_df["DEVICE KERNEL DURATION [ns]"] = pd.to_numeric(op_df["DEVICE KERNEL DURATION [ns]"], errors="coerce")
+    op_df = op_df.dropna(subset=["DEVICE KERNEL DURATION [ns]"])
 
     per_col_stats = {}
     for c in range(num_cols):
-        col_df = timed[timed["col_idx"] == c]
+        devids_in_col = set(col_to_devids.get(c, []))
+        if not devids_in_col:
+            per_col_stats[c] = None
+            continue
+        col_df = op_df[op_df["DEVICE ID"].isin(devids_in_col)]
         if col_df.empty:
             per_col_stats[c] = None
             continue
-        per_chip_median = col_df.groupby(chip_col)["dur_ns"].median()
+        per_iter = _per_iter_max_across_chips(col_df)
+        timed = per_iter.iloc[n_warmup:]
+        if timed.empty:
+            per_col_stats[c] = None
+            continue
         per_col_stats[c] = {
-            "n_chips": len(per_chip_median),
-            "max_chip_med_ns": int(per_chip_median.max()),
-            "median_chip_med_ns": int(per_chip_median.median()),
-            "min_chip_med_ns": int(per_chip_median.min()),
+            "n_chips": col_df["DEVICE ID"].nunique(),
+            "n_iters_timed": len(timed),
+            "wall_clock_ns": int(timed.median()),
         }
     return per_col_stats
 
 
-def summarize_8x1(out_dir: Path, layers: list[int], cols: list[int], links_id: str, warmup: int) -> pd.DataFrame:
-    """8x1 sweep summary: per-layer per-col table, 4 CSVs per layer (one per col)."""
-    rows = []
-    headers = ["Layer"]
+def _print_summary_header(cols: list[int]) -> list[str]:
+    """Build and print the table header. Returns the column label list (for CSV)."""
+    headers = []
     for op in OPS_OF_INTEREST:
+        short = _OP_SHORT_NAME[op]
         for c in cols:
-            headers.append(f"{op.replace('DeviceOperation', '')[:8]}_col{c}")
-        headers.append(f"{op.replace('DeviceOperation', '')[:8]}_max")
-
+            headers.append(f"{short}_col{c}")
+        headers.append(f"{short}_max")
     print("\n" + "=" * 130)
-    print(f"{'Layer':<7}  " + " ".join(f"{h:>13}" for h in headers[1:]))
+    print(f"{'Layer':<7}  " + " ".join(f"{h:>14}" for h in headers))
     print("-" * 130)
+    return headers
 
+
+def summarize_8x1(out_dir: Path, layers: list[int], cols: list[int], links_id: str, warmup: int) -> pd.DataFrame:
+    """8x1 sweep summary: per-layer per-col table, one CSV per (layer, col)."""
+    _print_summary_header(cols)
+    rows = []
     for L in layers:
         row = {"layer_idx": L}
         line_cells = []
         for op in OPS_OF_INTEREST:
+            short = _OP_SHORT_NAME[op]
             per_col = {}
             for c in cols:
-                name = f"L{L:02d}_col{c}_{links_id}"
-                csv = out_dir / f"{name}.csv"
+                csv = out_dir / f"L{L:02d}_col{c}_{links_id}.csv"
                 if not csv.exists():
                     per_col[c] = None
                     continue
                 s = aggregate_one_csv(csv, op, warmup)
-                per_col[c] = s["max_chip_med_ns"] if s else None
+                per_col[c] = s["wall_clock_ns"] if s else None
             layer_max = max((v for v in per_col.values() if v is not None), default=None)
-            short = op.replace("DeviceOperation", "")[:8].lower()
             for c in cols:
-                col_key = f"{short}_col{c}_max_chip_med_ns"
-                row[col_key] = per_col.get(c)
-                line_cells.append(f"{per_col.get(c):>13,}" if per_col.get(c) is not None else f"{'--':>13}")
-            row[f"{short}_layer_max_ns"] = layer_max
-            line_cells.append(f"{layer_max:>13,}" if layer_max is not None else f"{'--':>13}")
-
+                row[f"{short}_col{c}_ns"] = per_col.get(c)
+                line_cells.append(f"{per_col[c]:>14,}" if per_col.get(c) is not None else f"{'--':>14}")
+            row[f"{short}_max_ns"] = layer_max
+            line_cells.append(f"{layer_max:>14,}" if layer_max is not None else f"{'--':>14}")
         print(f"L{L:02d}     " + " ".join(line_cells))
         rows.append(row)
     print("=" * 130)
     return pd.DataFrame(rows)
 
 
-def summarize_8x4(out_dir: Path, layers: list[int], links_id: str, warmup: int) -> pd.DataFrame:
-    """8x4 sweep summary: per-layer per-col table extracted from a single 32-chip CSV per layer."""
-    rows = []
+def summarize_8x4(
+    out_dir: Path, layers: list[int], links_id: str, warmup: int, capture_dir: Path | str
+) -> pd.DataFrame:
+    """8x4 sweep summary: per-layer per-col table from a single 32-chip CSV per layer.
+    Uses meshmap_8x4.json sidecar from capture_dir to map device_ids → dispatch group cols
+    (Galaxy's physical IDs are permuted, not arithmetic).
+    """
     cols = [0, 1, 2, 3]
-    headers = ["Layer"]
-    for op in OPS_OF_INTEREST:
-        for c in cols:
-            headers.append(f"{op.replace('DeviceOperation', '')[:8]}_col{c}")
-        headers.append(f"{op.replace('DeviceOperation', '')[:8]}_max")
-
-    print("\n" + "=" * 130)
-    print(f"{'Layer':<7}  " + " ".join(f"{h:>13}" for h in headers[1:]))
-    print("-" * 130)
-
+    _print_summary_header(cols)
+    rows = []
     for L in layers:
         row = {"layer_idx": L}
         line_cells = []
-        name = f"L{L:02d}_{links_id}"
-        csv = out_dir / f"{name}.csv"
+        csv = out_dir / f"L{L:02d}_{links_id}.csv"
         for op in OPS_OF_INTEREST:
-            per_col_stats = aggregate_one_csv_8x4(csv, op, warmup) if csv.exists() else None
+            short = _OP_SHORT_NAME[op]
+            per_col_stats = aggregate_one_csv_8x4(csv, op, warmup, capture_dir=capture_dir) if csv.exists() else None
             per_col = {
-                c: (per_col_stats[c]["max_chip_med_ns"] if per_col_stats and per_col_stats.get(c) else None)
-                for c in cols
+                c: (per_col_stats[c]["wall_clock_ns"] if per_col_stats and per_col_stats.get(c) else None) for c in cols
             }
             layer_max = max((v for v in per_col.values() if v is not None), default=None)
-            short = op.replace("DeviceOperation", "")[:8].lower()
             for c in cols:
-                col_key = f"{short}_col{c}_max_chip_med_ns"
-                row[col_key] = per_col.get(c)
-                line_cells.append(f"{per_col.get(c):>13,}" if per_col.get(c) is not None else f"{'--':>13}")
-            row[f"{short}_layer_max_ns"] = layer_max
-            line_cells.append(f"{layer_max:>13,}" if layer_max is not None else f"{'--':>13}")
-
+                row[f"{short}_col{c}_ns"] = per_col.get(c)
+                line_cells.append(f"{per_col[c]:>14,}" if per_col.get(c) is not None else f"{'--':>14}")
+            row[f"{short}_max_ns"] = layer_max
+            line_cells.append(f"{layer_max:>14,}" if layer_max is not None else f"{'--':>14}")
         print(f"L{L:02d}     " + " ".join(line_cells))
         rows.append(row)
     print("=" * 130)
@@ -457,8 +418,8 @@ def main():
     )
     ap.add_argument("--capture-dir", required=True, help="Path with L<NN>/indices.pt files")
     ap.add_argument("--out-dir", required=True, help="Where to save per-combo CSVs")
-    ap.add_argument("--warmup", type=int, default=2)
-    ap.add_argument("--timed", type=int, default=5)
+    ap.add_argument("--warmup", type=int, default=1)
+    ap.add_argument("--timed", type=int, default=3)
     ap.add_argument(
         "--skip-existing", action="store_true", help="Skip combos where the per-combo CSV already exists in out_dir."
     )
@@ -528,7 +489,7 @@ def main():
                     )
 
     if args.mesh == "8x4":
-        summary = summarize_8x4(out_dir, layers, args.num_links_id, args.warmup)
+        summary = summarize_8x4(out_dir, layers, args.num_links_id, args.warmup, capture_dir=args.capture_dir)
     else:
         summary = summarize_8x1(out_dir, layers, cols, args.num_links_id, args.warmup)
     summary_path = out_dir / f"summary_{args.num_links_id}.csv"

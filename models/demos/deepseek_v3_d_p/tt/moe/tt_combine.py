@@ -60,6 +60,7 @@ class TtCombineModule(LightweightModule):
         memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
         init_zeros: bool = True,
         fp8_output: bool = False,
+        layer_idx: int = -1,
     ):
         """
         Initialize combine module with configuration parameters.
@@ -93,6 +94,7 @@ class TtCombineModule(LightweightModule):
         self.memory_config = memory_config
         self.init_zeros = init_zeros
         self.fp8_output = fp8_output
+        self.layer_idx = layer_idx
 
     def forward(
         self,

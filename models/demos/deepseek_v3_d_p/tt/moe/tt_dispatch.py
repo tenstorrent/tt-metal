@@ -102,6 +102,7 @@ class TtDispatchModule(LightweightModule):
         fp8_output: bool = False,
         subdevice_id=None,
         num_untilizers_per_sender: int = 2,
+        layer_idx: int = -1,
     ):
         """
         Initialize dispatch module with configuration parameters.
@@ -145,6 +146,7 @@ class TtDispatchModule(LightweightModule):
         self.topology = topology
         self.fp8_output = fp8_output
         self.subdevice_id = subdevice_id
+        self.layer_idx = layer_idx
         self.num_untilizers_per_sender = num_untilizers_per_sender
 
     @staticmethod

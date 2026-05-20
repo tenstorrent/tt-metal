@@ -1,180 +1,192 @@
-# Claude handoff: Dispatch + Combine ethernet measurement on LoudBox
+# Dispatch + Combine ethernet measurement: LoudBox 8x1 vs Galaxy 8x4
 
-You are picking up an in-progress experiment to measure how ethernet/fabric bandwidth affects the MoE prefill **dispatch and combine** ops for DeepSeek-V3 prefill on Tenstorrent hardware. The capture step is done on a Galaxy 8×4 machine; the **replay step on LoudBox 8×1 is what's running on this machine**. This document is the handoff from a previous Claude session.
+End-to-end workflow for measuring how ethernet/fabric bandwidth affects MoE prefill **dispatch** and **combine** ops in DeepSeek-V3 prefill on Tenstorrent hardware.
 
-## RECOMMENDED PATH: unified dispatch+combine replay (new)
+## TL;DR
 
-The flow described in **§ Unified flow** below is the **current recommended approach** — it captures only the gate's `indices` tensor (KB-sized) and runs both dispatch and combine on LB in sequence. This replaces the older combine-only flow (which captured combine's inputs directly and needed a `src_chip` global-coord remap).
+1. **On Galaxy 8x4**: capture each MoE layer's gate `indices` tensor during a real prefill (KB per layer).
+2. **On LoudBox 8x1**: replay each of Galaxy's 4 dispatch groups (cols) separately on the 8 LB chips → "no contention" per-col times.
+3. **On Galaxy 8x4**: replay all layers in-situ → "with contention" per-col times.
+4. **Compare**: LB per-col vs Galaxy per-col matches within ~1-3% (the residual is the actual 4-col fabric contention overhead). Hot col (heaviest routing share) matches on 57/58 dispatch and 58/58 combine layers.
 
-The older combine-only flow (§ Legacy combine-only) is still available and described later, but you should default to the unified flow for new work.
+## Approach
 
-# Unified flow (dispatch + combine)
+### Why captures are small
 
-## Goal in one paragraph
+Dispatch's only load-driving input is the gate `indices` tensor (`(dispatch_group_size, seq_len_per_chip, num_experts_per_tok)` int32). Everything else either:
+- Falls out of `indices` via `get_gate_outputs()` (expert_offsets, counts, region_offsets), or
+- Is static config (`expert_dispatch_table` via `ExpertMapping.create_dispatch_table()`), or
+- Is filler whose content doesn't affect kernel cycle count (`x`, `weights`)
 
-Capture the gate's `indices` tensor from each MoE layer during a real DeepSeek-V3 prefill on Galaxy 8×4, ship the small `.pt` files (KB each) to an 8-chip LoudBox, and replay both **dispatch** and **combine** there in sequence on each of the 4 conceptual Galaxy columns. Compare LB per-column kernel times against Galaxy actual per-layer times to quantify ethernet bandwidth sensitivity for both ops. The user already finished the capture step; only the replay sweep + aggregation remains on this LB.
+So one `(8, sl, 8)` int32 tensor (~32 KB at 1K ISL, ~800 KB at 25K ISL) per layer is enough. Total across all 58 MoE layers: ~2 MB at 1K, ~46 MB at 25K.
 
-## Why this design
+### LB 8x1 replay design (per-col, isolated)
 
-Dispatch's only load-driving input is the gate `indices` tensor (`(dispatch_group_size, seq_len_per_chip, num_experts_per_tok)` int32). Everything else either falls out of indices via `get_gate_outputs()` (the expert_offsets and counts), is static config (the expert_dispatch_table), or is filler whose content doesn't affect kernel cycle count (`x` and `weights`). So a single `.pt` per layer captures the routing pattern; everything else is reconstructed on LB.
+For Galaxy col k:
+- **`num_routed_experts = 256`** on LB (= Galaxy global; the table indexing space, NOT physical experts)
+- **`experts_per_chip = 8`** explicit override (LB hosts 8 experts/chip × 8 chips = 64 experts, same per-chip layout as Galaxy col k)
+- **`dispatch_table = col 0's row` of `ExpertMapping.create_dispatch_table(256, 8, 4)`** — all cols on LB use col 0's table; per-col differentiation comes from the indices remap (next).
+- **Indices remap (LB only)**: `indices_lb = (indices_galaxy - k * 64) % 64`, with out-of-col routings replaced by sentinel `255` whose table entry is `-1` → kernel skips. This is essential because LB's combine kernel uses `first_expert_id = 0` for its single-col mesh, so expert IDs must land in `[0, 64)`.
 
-This is much cleaner than the older combine-only flow because:
-- Smaller captures (KB vs MB-GB)
-- No `src_chip` global-coord remap needed — dispatch on LB writes its own LB-local src_chip values into metadata, and combine consumes them naturally
-- Measures BOTH ops with one run; profiler CSV separates `DispatchDeviceOperation` from `CombineDeviceOperation`
+End-to-end: each col-k LB replay does **the same routings Galaxy col k did** (true 1:1), just relabeled into the col-0 expert range so the kernel's combine logic works correctly.
 
-## Current state for unified flow
+### Galaxy 8x4 replay design (full mesh, with contention)
 
-- 🟡 Galaxy capture script ready (`tt_dispatch.py:_capture_indices`, env `TT_DS_CAPTURE_DISPATCH_LAYERS`). User needs to **run the dispatch capture on Galaxy** to produce `L<NN>/indices.pt` files. The unified flow does NOT use the old `combine_captures*/` data.
-- ✅ Replay test ready: `tests/perf/test_dispatch_combine_replay.py`.
-- ✅ Sweep runner ready: `tests/perf/run_dispatch_combine_replay_sweep.py`.
-- 🟡 Captures location once user runs them on Galaxy: typically `/localdev/nmilicevic/dispatch_captures/` (settable via `TT_DS_DISPATCH_CAPTURE_DIR`).
+- Mesh shape `(8, 4)`, `FABRIC_1D`, `Topology.Linear`, `num_links=2` — production config
+- Full `(4, 256)` dispatch table; all 4 cols dispatch simultaneously
+- Indices used as-is (no remap)
+- One run per layer captures all 4 cols' per-chip times via the profiler
 
-## Galaxy capture (one-time, run by user before any replay)
+### Per-col attribution on Galaxy (critical)
 
-```bash
-TT_DS_CAPTURE_DISPATCH_LAYERS=all TT_DS_DISPATCH_CAPTURE_DIR=/data/nmilicevic/dispatch_captures TT_DS_PREFILL_TTNN_CACHE=/mnt/models/.../prefill_secure DEEPSEEK_V3_HF_MODEL=/mnt/models/deepseek-ai/DeepSeek-R1-0528 python -m pytest -xvs models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py -k "pretrained and smoke and e256_device_fp32 and mesh-8x4 and 61_layers and longbook_qa_eng and 1024 and iter1 and balanced and right_pad"
-```
-
-`TT_DS_CAPTURE_DISPATCH_LAYERS` accepts `"all"`, a comma list `"5,20,40,55"`, or empty/unset (no capture). One `indices.pt` per MoE layer is written; total ~5 MB at 1K isl, ~45 MB at 25K isl (across 58 MoE layers). Rsync to LB:
-
-```bash
-rsync -av /data/nmilicevic/dispatch_captures/ bh-51:/localdev/nmilicevic/dispatch_captures/
-```
-
-## What's NEXT (the immediate task)
-
-Run the sweep at the layers of interest, examine the per-layer LB dispatch+combine times. Optionally compare against Galaxy actual perf in a future iteration.
-
-```bash
-TT_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python models/demos/deepseek_v3_d_p/tests/perf/run_dispatch_combine_replay_sweep.py --layers 5,20,40,55 --cols 0,1,2,3 --num-links-id linear-8-2link --capture-dir /localdev/nmilicevic/dispatch_captures --out-dir /localdev/nmilicevic/lb_dispatch_combine_results --warmup 2 --timed 5 |& tee sweep.log
-```
-
-Note: `num_links` is hard-coded to 2 (Blackhole always uses 2 links). The `--num-links-id linear-8-2link` arg only controls the output filename suffix; it's not a configurable link count.
-
-The runner script does, per (layer × col):
-1. `python -m tracy -p -v --disable-device-data-push-to-tracy -m pytest -v test_dispatch_combine_replay.py -k "L<L> and col<C> and linear-8-2link"`
-2. `python tools/tracy/process_ops_logs.py -n L<NN>_col<K>_linear-8-2link` to produce `ops_perf_results_*_<name>.csv` (has rows for both `DispatchDeviceOperation` and `CombineDeviceOperation`)
-3. Copies that CSV to `out_dir/L<NN>_col<K>_linear-8-2link.csv`
-4. Deletes the source `generated/profiler/reports/<ts>/` dir and `.logs/tracy_profile_log_host.tracy`, `.logs/tracy_ops_times.csv`, `.logs/tracy_ops_data.csv`
-
-After all combos, prints + saves `out_dir/summary_linear-8-2link.csv`:
+Galaxy's physical Dev IDs are **permuted, not arithmetic** — `DEVICE_ID % 4` is wrong. The actual mapping is discovered at runtime via `mesh_device.get_device_id(MeshCoordinate(r, c))` and saved to a JSON sidecar (`meshmap_8x4.json` next to the capture dir). The aggregator reads the sidecar to group chips into the correct dispatch groups. Example mapping (varies per machine):
 
 ```
-Layer        col0           col1           col2           col3      LAYER max
-L05      <ns>           <ns>           <ns>           <ns>          <ns>
-L20      ...
-L40      ...
-L55      ...
+col 0: [0, 1, 2, 3, 27, 26, 25, 24]
+col 1: [4, 5, 6, 7, 31, 30, 29, 28]
+col 2: [12, 13, 14, 15, 23, 22, 21, 20]
+col 3: [8, 9, 10, 11, 19, 18, 17, 16]
 ```
 
-## Files to know (unified flow)
+### Aggregation semantics
+
+For each (layer, op, col), the wall-clock metric is:
+
+```
+per-iter:  max DEVICE KERNEL DURATION across the 8 chips in this col (this iter's wall-clock)
+across iters: median over timed iters (warmup dropped)
+```
+
+This matches `models.tt_transformers.tests.test_utils.merge_device_rows` for non-collective ops. Then per-layer wall-clock = `max` across the 4 cols.
+
+## Files (current state)
 
 | File | Purpose |
 |---|---|
-| `models/demos/deepseek_v3_d_p/COMBINE_GLX_LB_MEASUREMENT.md` | Older full workflow doc (combine-only) — has background context |
-| `models/demos/deepseek_v3_d_p/tt/moe/tt_dispatch.py` | `TtDispatchModule` — kernel wrapper. Has `_capture_indices` for Galaxy capture, controlled by `TT_DS_CAPTURE_DISPATCH_LAYERS` env var. |
-| `models/demos/deepseek_v3_d_p/tt/moe/tt_combine.py` | `TtCombineModule` — kernel wrapper. Old `_capture_inputs` is still there for the legacy flow but unused by unified flow. |
-| `models/demos/deepseek_v3_d_p/tests/perf/test_dispatch_combine_replay.py` | **Unified replay test** — loads `indices.pt`, runs dispatch + combine on 8x1 LB. |
-| `models/demos/deepseek_v3_d_p/tests/perf/run_dispatch_combine_replay_sweep.py` | **Unified sweep runner** — main tool for the LB measurement. |
-| `models/demos/deepseek_v3_d_p/tests/perf/test_combine_replay.py` | Legacy combine-only replay (still works, but newer flow is preferred). |
-| `models/demos/deepseek_v3_d_p/tests/perf/run_combine_replay_sweep.py` | Legacy combine-only sweep runner. |
-| `models/demos/deepseek_v3_d_p/tests/perf/analyze_combine_perf.py` | Aggregation CLI — currently combine-focused but easily extended to dispatch. |
-| `models/demos/deepseek_v3_d_p/tests/perf/fix_captured_metadata.py` | Legacy one-shot patch script for OLD combine captures (unused by unified flow). |
+| `tt/moe/tt_dispatch.py` | `TtDispatchModule` kernel wrapper. `_capture_indices()` hook saves the gate indices when `TT_DS_CAPTURE_DISPATCH_LAYERS` env var matches the layer. |
+| `tt/moe/tt_combine.py` | `TtCombineModule` kernel wrapper. Legacy `_capture_inputs()` for the deprecated combine-only flow lives here too. |
+| `tests/perf/test_dispatch_combine_replay.py` | **Replay test.** Loads `indices.pt`, runs dispatch+to_layout+combine for one combo. Handles both `(8,1)` (LB) and `(8,4)` (Galaxy) mesh variants. On the 8x4 variant it writes the `meshmap_8x4.json` sidecar. |
+| `tests/perf/run_dispatch_combine_replay_sweep.py` | **Sweep runner.** Iterates over (layer × col) on 8x1 or (layer) on 8x4. Wraps pytest under tracy with `-r` (+ `shlex.quote(kfilter)` to dodge the shell-quoting bug), grabs the timestamped `ops_perf_results_*.csv` tracy auto-produces, copies just the ops CSV to `--out-dir`, deletes the big tracy artifacts. `--summary-only` re-aggregates without re-running. |
+| `tests/perf/plot_lb_vs_glx.py` | Bar-plot generator. Reads both summaries; emits 8 standalone PNGs (2 ops × 4 cols) plus one combined PNG. |
+| `tests/perf/analyze_galaxy_per_col.py` | Standalone Galaxy per-col aggregator from a single `ops_perf_results_*.csv`. Pre-mesh-map era — uses `DEVICE_ID % 4` so it's only correct if Galaxy's mesh happens to be row-major; otherwise use the sweep runner's `--summary-only` path. |
+| `tests/perf/test_combine_replay.py` + `run_combine_replay_sweep.py` | Legacy combine-only flow. Functional but superseded. |
+| `tests/perf/analyze_combine_perf.py` + `fix_captured_metadata.py` | Legacy combine-only tools. |
+| `CLAUDE_HANDOFF_LB.md` | This document. |
 
-## Methodology (how the aggregation works — same for dispatch and combine)
+## Commands
 
-For one Galaxy layer L and one op (dispatch OR combine), the LB no-contention estimate is computed in 3 levels:
+All commands are single-line for copy-paste. Set `TT_METAL_HOME` to the local `tt-metal/` root (`/data/nmilicevic/tt-metal` on Galaxy, `/localdev/nmilicevic/tt-metal` on LB).
 
+### Step 1 — Galaxy capture (one-time)
+
+On Galaxy 8x4:
+
+```bash
+TT_DS_CAPTURE_DISPATCH_LAYERS=all TT_DS_DISPATCH_CAPTURE_DIR=/data/nmilicevic/dispatch_captures_25k TT_DS_PREFILL_TTNN_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure DEEPSEEK_V3_HF_MODEL=/mnt/models/deepseek-ai/DeepSeek-R1-0528 TT_METAL_HOME=/data/nmilicevic/tt-metal python -m pytest -xvs models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py -k "pretrained and smoke and e256_device_fp32 and mesh-8x4 and 61_layers and longbook_qa_eng and 25600 and iter1 and balanced and right_pad"
 ```
-layer_L_op_LB_time =
-  max over 4 captured columns of (
-    max over 8 chips of (
-      median over timed iters of DEVICE_KERNEL_DURATION_ns
-    )
-  )
+
+Writes one `L<NN>/indices.pt` per MoE layer (~58 files) plus `meshmap_8x4.json` (after the first replay test runs on the same machine — see Step 3).
+
+Rsync to LB:
+
+```bash
+rsync -av /data/nmilicevic/dispatch_captures_25k/ bh-51:/localdev/nmilicevic/dispatch_captures_25k/
 ```
 
-- **median per chip across iters**: smooths run-to-run noise; max would overestimate by latching on the worst iter
-- **max across 8 chips per column**: dispatch and combine both have implicit synchronization barriers — kernel completes when slowest chip finishes
-- **max across 4 columns**: on Galaxy all 4 columns run dispatch/combine concurrently; the layer's wall-clock for each op = slowest column
+### Step 2 — LB 8x1 sweep (no contention, per-col)
 
-The unified sweep runner produces TWO numbers per layer (dispatch_max and combine_max). Default `warmup=2 timed=5` is fine; lower if you want faster runs (3 timed minimum for a stable median).
+On LB:
 
-## Gotchas the previous session hit (so you don't repeat them)
+```bash
+TT_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 TT_METAL_HOME=/localdev/nmilicevic/tt-metal python models/demos/deepseek_v3_d_p/tests/perf/run_dispatch_combine_replay_sweep.py --mesh 8x1 --layers $(seq -s, 3 60) --cols 0,1,2,3 --capture-dir /localdev/nmilicevic/dispatch_captures_25k --out-dir /localdev/nmilicevic/lb_8x1_dispatch_combine_results_full_correct --warmup 1 --timed 3 --skip-existing |& tee lb_sweep.log
+```
 
-1. **`python -m tracy -r` has a shell-quoting bug.** It reassembles its child command via `" ".join(args)` and runs with `shell=True`, which strips quotes from `-k "..."` filters. Pytest then sees `and` as a positional filename and collects 0 items. The runner script avoids `-r` entirely; it does manual `process_ops_logs.py` post-processing instead. If you need `-r` for some reason, use nested quotes: `-k "'L05 and col0 and linear-8-2link'"`.
+Produces 232 CSVs (58 layers × 4 cols) + `summary_linear-8-2link.csv`. ~4-6 hours wall-clock at 25K ISL. Use tmux to survive ssh disconnects.
 
-2. **Without `TT_METAL_DEVICE_PROFILER=1` set, no per-op CSV.** It's just an env var, set it in your environment or rely on the runner script which sets it for you.
+### Step 3 — Galaxy 8x4 sweep (with contention, one CSV per layer)
 
-3. **`OP CODE` and `DEVICE ID` columns only exist in `ops_perf_results_*.csv`** produced via the full `process_ops_logs.py` path (which needs `tracy_ops_times.csv` + `tracy_ops_data.csv` from a `python -m tracy` run). The smaller `cpp_device_perf_report.csv` produced by `--device-only` doesn't have them.
+On Galaxy:
 
-4. **LoudBox physical fabric is not a true linear-8 chain** (degree histogram `{3:8}` in fabric init logs — it's a 3-regular graph, probably a hypercube). But `FabricConfig.FABRIC_1D` + `Topology.Linear` works on it for combine at topk=8, as verified by `test_prefill_combine.py -k "linear-8-2link and perf_no_pcc"` running successfully.
+```bash
+TT_METAL_HOME=/data/nmilicevic/tt-metal python models/demos/deepseek_v3_d_p/tests/perf/run_dispatch_combine_replay_sweep.py --mesh 8x4 --layers $(seq -s, 3 60) --capture-dir /data/nmilicevic/dispatch_captures_25k --out-dir /data/nmilicevic/glx_8x4_dispatch_combine_results_full --warmup 1 --timed 3 --skip-existing |& tee glx_8x4_sweep.log
+```
 
-5. **Old combine-only flow had a `src_chip` global-coord issue** — captured metadata had `src_chip ∈ {0, 4, 8, 12, 16, 20, 24, 28}` (Galaxy global LinMeshCoords) instead of `[0, 8)` (within-group). The combine kernel would try to fabric-write to non-existent chips and hang. The fix divided by `num_dispatch_groups` (4). **The unified flow doesn't have this problem** because dispatch runs on LB and writes LB-local src_chip values into the metadata that combine consumes.
+Single run per layer. The first run also writes `meshmap_8x4.json` into `--capture-dir` — needed for correct per-col aggregation. ~1-2 hours wall-clock at 25K ISL.
 
-6. **Don't use `ttnn.empty` or `ReplicateTensorToMesh` for `dispatched_buffer` in the old combine-only flow.** Both produce tensors without the per-device shard spec the combine kernel needs. Symptom: kernel queues fine, `synchronize_device` hangs forever. Use `ttnn.from_torch(host_tensor, mesh_mapper=get_ep_mesh_mapper(mesh_device), ...)`. The unified flow sidesteps this entirely because dispatch produces the buffer with the right shard spec already.
+### Step 4 — Re-aggregate (no re-profile needed)
 
-7. **`expert_id` field in metadata is global Galaxy expert ID** (0-63 for col0, 64-127 for col1, …) in the old flow. The combine kernel doesn't use it for routing — only `src_chip`, `token_idx`, `topk_idx`, `weight` matter.
+If you ever want to redo aggregation (changed `--warmup`, fixed a bug, re-rendered):
 
-8. **LB replay is TRUE 1:1 with Galaxy col k via skip-by-table.** `num_routed_experts=256` (Galaxy global) is the table indexing space, NOT the number of physical experts hosted on LB. `experts_per_chip=8` is passed explicitly to `TtDispatchModule.__init__` (overrides `compute_constants` which would otherwise derive `256/8=32`). LB physically hosts `experts_per_chip × dispatch_group_size = 64` experts (8 per chip × 8 chips), same per-chip layout as Galaxy col k. The dispatch_table on LB is **col k's row of `ExpertMapping.create_dispatch_table(256, 8, 4)`** — `(1, 256)` shape with 64 valid chip IDs (in `[0, 8)`) for experts at global IDs `[k·64, (k+1)·64)`, and `-1` for the other 192 experts. Captured indices are pushed to LB **as-is** (no remap, values in `[0, 256)`). Every routing that Galaxy col k did is replayed; every routing that Galaxy col k skipped via -1 is also skipped on LB via -1.
+```bash
+TT_METAL_HOME=/localdev/nmilicevic/tt-metal python models/demos/deepseek_v3_d_p/tests/perf/run_dispatch_combine_replay_sweep.py --mesh 8x1 --layers $(seq -s, 3 60) --cols 0,1,2,3 --capture-dir /localdev/nmilicevic/dispatch_captures_25k --out-dir /localdev/nmilicevic/lb_8x1_dispatch_combine_results_full_correct --warmup 1 --summary-only
 
-9. **Untested kernel config risk**: the combination `num_routed_experts=256, experts_per_chip=8 explicit, dispatch_group_size=8, num_devices_physical=8` doesn't appear in any tt-metal CI parametrize that I've found. `TtDispatchModule.__init__` plumbs all four through, but if internal kernel code asserts something like `num_routed_experts == experts_per_chip * num_devices_physical` (which would be `64 == 64` in this config and fail), the kernel could reject the combo. First-run failure mode: hang at `synchronize_device`. Mitigation if it hangs: switch to a smaller-scale approximation — see git history for the previous "Path B" with `num_routed_experts=64` + remap + 4× over-routing.
+TT_METAL_HOME=/data/nmilicevic/tt-metal python models/demos/deepseek_v3_d_p/tests/perf/run_dispatch_combine_replay_sweep.py --mesh 8x4 --layers $(seq -s, 3 60) --capture-dir /data/nmilicevic/dispatch_captures_25k --out-dir /data/nmilicevic/glx_8x4_dispatch_combine_results_full --warmup 1 --summary-only
+```
 
-## How to extend / things you might be asked
+### Step 5 — Comparison plots
 
-- **Vary num_links?** Not on Blackhole — always 2 links. The 1-link parametrize entry was removed; only `linear-8-2link` exists.
-- **Compare against Galaxy actual per column**: use `analyze_galaxy_per_col.py` (next to `analyze_combine_perf.py`) to get Galaxy per-(layer, op, col) times. LB sweep produces per-(layer, col, links) CSVs. Both are 1:1 ("max over 8 chips for one column") so direct comparison is apples-to-apples — no over-routing fudge needed in Path A.
-- **More layers**: `--layers 3,4,5,...,60` for all MoE layers. 58 × 4 = 232 runs at 1K isl ≈ 5-8 hours wall-clock.
-- **Larger captures (25K isl)**: same workflow with `--capture-dir` pointing at the 25K dispatch_captures dir. Replay run host RAM is bounded (~MB for indices + per-iter buffer allocation on device only).
-- **Legacy combine-only flow**: still present in case you want to compare results, but the unified flow is preferred for all new work.
+After both summaries exist, copy the LB summary somewhere both Galaxy & LB can see (e.g., into the tt-metal root on Galaxy) and run:
+
+```bash
+python3 /data/nmilicevic/tt-metal/models/demos/deepseek_v3_d_p/tests/perf/plot_lb_vs_glx.py --lb-summary /data/nmilicevic/tt-metal/lb_summary_linear-8-2link.csv --glx-summary /data/nmilicevic/glx_8x4_dispatch_combine_results_full/summary_mesh-8x4-2link.csv --out-dir /data/nmilicevic/tt-metal/lb_vs_glx_plots
+```
+
+Produces 8 standalone PNGs (`dispatch_col0.png` … `combine_col3.png`) plus one combined PNG (`all_lb_vs_glx.png`). Each plot has blue bars (LB 8x1) and orange bars (Galaxy 8x4) side-by-side per MoE layer.
+
+## Diagnostic: print the Galaxy mesh layout
+
+On Galaxy, quick standalone (~5 s, no captures needed):
+
+```bash
+TT_METAL_HOME=/data/nmilicevic/tt-metal python -c "import ttnn; mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(8, 4)); ttnn.visualize_mesh_device(mesh); print('=== per-col device IDs ==='); [print(f'  col {c}: {[mesh.get_device_id(ttnn.MeshCoordinate(r, c)) for r in range(8)]}') for c in range(4)]; ttnn.close_mesh_device(mesh)"
+```
+
+Prints ttnn's canonical mesh visualization plus the 8 device IDs per dispatch group. The `[MESH-MAP]` block in the test's pytest output (when the env var is set) shows the same info.
+
+## Final results (58-layer comparison, 25K ISL)
+
+From `lb_vs_glx_comparison.csv` (produced by ad-hoc cross-comparison; both `summary_*.csv` files together):
+
+| Metric | Value |
+|---|---|
+| Hot-col match LB↔GLX (which col is slowest per layer) | Dispatch 57/58, Combine 58/58 |
+| Galaxy per-col overhead vs LB — Dispatch | mean +2.45%, median +2.41%, p90 +4.20%, max +6.44% |
+| Galaxy per-col overhead vs LB — Combine  | mean +0.95%, median +0.89%, p90 +1.79%, max +3.04% |
+| Galaxy layer_max overhead vs LB layer_max | Dispatch +1.67% mean, Combine +0.55% mean |
+
+Galaxy's 4-col fabric contention overhead is real but small (~1-3%); per-col routing-share signature is preserved on both machines.
+
+## Gotchas worth remembering
+
+1. **Tracy `-r` shell-quoting bug.** `python -m tracy -r` reassembles its child command via `" ".join(args)` and runs it with `shell=True`, which strips quotes from `-k "..."` filters. **Fix:** the runner uses `shlex.quote(kfilter)` so the filter survives the round-trip. Don't drop `-r` — it's what triggers tracy's `generate_report()` and gives you `OP CODE` + `DEVICE ID` columns in the CSV.
+
+2. **Without `TT_METAL_DEVICE_PROFILER=1`, no per-op CSV.** The runner sets it; if running pytest by hand, set it.
+
+3. **LB combine kernel needs expert IDs in `[0, 64)`.** The kernel uses `first_expert_id = 0` on a single-col mesh, so for col k > 0 we **must** remap indices on the host before pushing (`indices - k*64`, with sentinel `255` → table `-1` for out-of-col). The test does this automatically when `mesh_cols != ndg_galaxy`. Skipping this remap leaves col 1/2/3 combine processing nothing → bogus ~1ms times.
+
+4. **Galaxy mesh layout is permuted.** Per-col attribution **must** use `meshmap_8x4.json`, not `DEVICE_ID % 4` or `DEVICE_ID // 8`. The sidecar is written automatically by the test on the first 8x4 run. If you ever re-image the machine or change the mesh shape, regenerate the sidecar by running one test combo.
+
+5. **Don't use `ttnn.empty` / `ReplicateTensorToMesh` for `dispatched_buffer`** in the legacy combine-only flow. Both produce tensors without the per-device shard spec the combine kernel needs → kernel queues then `synchronize_device` hangs. Use `ttnn.from_torch(host_tensor, mesh_mapper=get_ep_mesh_mapper(...))`. Not an issue in the unified flow.
+
+6. **`num_links` is always 2 on Blackhole.** The 1-link parametrize entry was removed; only `linear-8-2link` (LB) and `mesh-8x4-2link` (Galaxy) exist.
+
+7. **`num_routed_experts=256` + `experts_per_chip=8 explicit` + `num_devices=8`** is an untested kernel config (doesn't appear in any tt-metal CI parametrize). It works for our use case but isn't on the validated config matrix. If you switch ISL or layer config and hit a hang at `synchronize_device`, this is the likely cause.
 
 ## Environment
 
-- `TT_METAL_HOME = /localdev/nmilicevic/tt-metal`
-- Branch: `nmilicevic/ds-glx-lb-measure` (or whatever's checked out — look at `git branch --show-current`)
-- Python: use `python_env/bin/activate` from the repo root
-- LB hostname: `bh-51-special-nmilicevic-for-reservation-74201` (reservation-specific). User: `nikolamilicevic`.
-- LoudBox: 8× p150b BH chips. Plenty of RAM (~500 GB).
+- `TT_METAL_HOME = /data/nmilicevic/tt-metal` (Galaxy) or `/localdev/nmilicevic/tt-metal` (LB)
+- Branch: `nmilicevic/ds-glx-lb-measure`
+- Python: `source python_env/bin/activate` from the repo root
+- Galaxy hostnames: e.g. `bh-glx-110-c05u02`, `bh-glx-d03u02` (varies per reservation; you'll generally be on slurm-login first, then `srun --pty bash` onto a Galaxy node)
+- LB hostname: `bh-51-special-nmilicevic-for-reservation-<N>`
+- 8x4 Galaxy: 32× p150b BH chips. LoudBox: 8× p150b BH chips, both at 200G ethernet per fabric link
 
-## How to invoke me effectively here
+# Legacy combine-only flow (deprecated)
 
-When asking for help: paste the exact command you ran, the last ~50 lines of output, and what you expected to see. I'll diagnose. Things I'd want to know if a run fails:
+The previous session built a combine-only capture-and-replay flow before the unified one. Still works, kept for backward compat:
 
-```bash
-# inspect one indices capture
-python -c "
-import torch
-b = torch.load('/localdev/nmilicevic/dispatch_captures/L05/indices.pt', weights_only=False)
-print('keys:', list(b.keys()))
-print('config:', b['config'])
-print('indices shape/dtype:', b['indices'].shape, b['indices'].dtype)
-print('indices value range:', b['indices'].min().item(), b['indices'].max().item())
-"
-# expect: keys = ['indices', 'config']
-# expect: indices shape = (8, seq_len_per_chip, num_experts_per_tok), dtype=int32
-# expect: indices value range in [0, num_routed_experts)
+- Captures: `combine_captures/` / `combine_captures_1k/` with `L<NN>/col<K>.pt` files (4 per layer, MB-sized at 25K).
+- `dispatched_metadata[..., 0]` (src_chip) had a global-coord bug — patched via `fix_captured_metadata.py`. The flag `src_chip_remapped=True` in each `.pt` confirms the patch.
+- Test: `tests/perf/test_combine_replay.py`. Sweep: `run_combine_replay_sweep.py`. Analyzer: `analyze_combine_perf.py`.
 
-# free RAM
-free -h
-
-# git branch + latest commit
-git -C /localdev/nmilicevic/tt-metal branch --show-current
-git -C /localdev/nmilicevic/tt-metal log -1 --oneline
-
-# what's in the output dir
-ls -la /localdev/nmilicevic/lb_dispatch_combine_results/
-```
-
-If anything in `test_dispatch_combine_replay.py` or `run_dispatch_combine_replay_sweep.py` code looks off, those are the main files on this machine. The Galaxy capture hook lives in `tt_dispatch.py:_capture_indices` (only needed when re-running capture).
-
-# Legacy combine-only flow (still works, but deprecated)
-
-The previous session built a combine-only capture-and-replay flow before the unified one. It's still present and functional:
-
-- Captures: `combine_captures/` and `combine_captures_1k/` with `L<NN>/col<K>.pt` files (4 per layer, ~MB each at 25K).
-- Captures **have been patched** (`fix_captured_metadata.py`) so `dispatched_metadata[..., 0]` is within-group chip ID `[0, 8)`. The config flag `src_chip_remapped=True` in each `.pt` confirms the patch.
-- Test: `test_combine_replay.py` loads `.pt`, pushes to device, runs combine N times. Uses `ttnn.from_torch(..., dtype=ttnn.bfloat16, mesh_mapper=get_ep_mesh_mapper(...))` for the buffer — do NOT use `ttnn.empty` or `ReplicateTensorToMesh` here (combine hangs without proper shard spec).
-- Sweep: `run_combine_replay_sweep.py` mirrors the new unified runner but for combine only.
-
-Use the unified flow for new measurements. The legacy flow is kept for backward compat and result comparison.
+Use the unified flow for any new work.
