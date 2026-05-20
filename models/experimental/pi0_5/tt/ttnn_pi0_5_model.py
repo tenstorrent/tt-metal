@@ -347,9 +347,21 @@ class Pi0_5ModelTTNN:
         coerce+key-check path (which would otherwise sync the device).
         """
         ims, lm = self._coerce_upstream_masks(img_masks, lang_masks)
-        key = self._upstream_cache_key(ims, lm, prefix_len)
+        # When PI0_EXPERT_KV_INPLACE=1 is active, the expert attention mask
+        # has to span the full static KV buffer (max_seq_len), not just
+        # prefix_padded + suffix_padded. Include the override in the cache
+        # key so a flip in the cache state invalidates stale artifacts.
+        expert_kv_total_override = None
+        if self.backbone.expert_kv_static_cache is not None:
+            expert_kv_total_override = self.backbone.expert_kv_static_cache[0][0].shape[2]
+        key = (*self._upstream_cache_key(ims, lm, prefix_len), expert_kv_total_override)
         if self._cached_upstream_artifacts is None or self._cached_upstream_key != key:
-            self._cached_upstream_artifacts = self._build_upstream_attn_artifacts(ims, lm, prefix_len=prefix_len)
+            self._cached_upstream_artifacts = self._build_upstream_attn_artifacts(
+                ims,
+                lm,
+                prefix_len=prefix_len,
+                expert_kv_total_override=expert_kv_total_override,
+            )
             self._cached_upstream_key = key
         self._upstream_artifacts_explicit = True
 
@@ -663,9 +675,23 @@ class Pi0_5ModelTTNN:
             update_idx = prefix_kv_cache[0][0].shape[2]  # prefix_logical_lifted (tile-aligned)
             for i, (past_k, past_v) in enumerate(prefix_kv_cache):
                 k_buf, v_buf = self.backbone.expert_kv_static_cache[i]
-                ttnn.kv_cache.fill_cache(k_buf, past_k, 0)
-                ttnn.kv_cache.fill_cache(v_buf, past_v, 0)
+                ttnn.fill_cache(k_buf, past_k, 0)
+                ttnn.fill_cache(v_buf, past_v, 0)
             self._static_kv_update_idx = update_idx
+            # Free the original prefix_kv_cache list now that the data lives
+            # in the static buffers. ~4.7 MB of L1 across 18 layers × (K, V)
+            # that would otherwise stay pinned for the whole denoise loop
+            # and collide with matmul circular-buffer regions. Also free the
+            # pre-lift copy so the L1 allocator can compact.
+            for k, v in prefix_kv_cache:
+                ttnn.deallocate(k)
+                ttnn.deallocate(v)
+            if _prefix_kv_cache_original is not None and _prefix_kv_cache_original is not prefix_kv_cache:
+                for k, v in _prefix_kv_cache_original:
+                    ttnn.deallocate(k)
+                    ttnn.deallocate(v)
+            prefix_kv_cache = None
+            _prefix_kv_cache_original = None
 
         num_steps = self.denoise_config.num_steps
         timesteps = [1.0 - i / num_steps for i in range(num_steps + 1)]
