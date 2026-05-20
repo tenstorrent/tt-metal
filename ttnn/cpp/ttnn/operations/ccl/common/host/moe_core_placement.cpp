@@ -120,7 +120,7 @@ std::optional<CoreRange> find_combine_strip_avoiding(
 
     // Prefer eastern columns (legacy pool was x=5,6 on WH).
     for (int sx = static_cast<int>(worker_grid.x) - static_cast<int>(kMoEComputeCombineStripWidth); sx >= 0; --sx) {
-        for (uint32_t sy = 0; sy + strip_height <= worker_grid.y && sy < y_limit; ++sy) {
+        for (uint32_t sy = 0; sy + strip_height <= y_limit; ++sy) {
             bool valid = true;
             for (uint32_t dy = 0; dy < strip_height && valid; ++dy) {
                 for (uint32_t dx = 0; dx < kMoEComputeCombineStripWidth && valid; ++dx) {
