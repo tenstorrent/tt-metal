@@ -26,6 +26,7 @@ void bind_reduction_argmax_operation(nb::module_& mod) {
                 keepdim (bool, optional): Keep reduced dim. Default: ``False``.
                 sub_core_grids (CoreRangeSet, optional): Limits execution to a subset of cores. Supported on ROW_MAJOR last-dim reductions (<= 2 ranges) and non-HW dim (``argmax_nc``) reductions. Default: ``None``.
                 use_multicore (bool, optional): Enables multi-core only on ROW_MAJOR last-dim reductions. Default: ``False``.
+                    **Deprecated** — use ``sub_core_grids`` to control core assignment instead. Will be removed in a future release (tracked in #44838).
                 memory_config (ttnn.MemoryConfig, optional): Output memory (INTERLEAVED DRAM/L1). Default: input's memory_config.
                 output_tensor (ttnn.Tensor, optional): Preallocated output (must be UINT32, ROW_MAJOR, INTERLEAVED, same device). Default: ``None``.
 
