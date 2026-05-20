@@ -37,6 +37,13 @@ from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask
 from tests.ttnn.utils_for_testing import check_with_pcc
 
 from models.common.utility_functions import profiler, run_for_blackhole
+from models.experimental.seamless_m4t_v2_large.tt.common import to_torch_replicated_first_shard
+from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import (
+    mesh_default_device,
+    MESH_DEVICE_PARAMETRIZE_E2E_2CQ,
+    MESH_DEVICE_PARAMETRIZE_E2E_2CQ_GENERATE,
+    MESH_DEVICE_PARAMETRIZE_E2E_2CQ_TRACE,
+)
 from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.experimental.seamless_m4t_v2_large.reference.torch_seamless_m4t_v2_model import (
     forward_text_modality_logits,
@@ -97,10 +104,7 @@ def _assert_text_logits_pcc_local(
 ) -> None:
     ref_f = ref_logits.detach().float().cpu()
     _, sd, v = ref_f.shape
-    if logits_tt.storage_type() == ttnn.StorageType.DEVICE:
-        flat = ttnn.to_torch(ttnn.from_device(logits_tt)).to(torch.bfloat16).contiguous().reshape(-1)
-    else:
-        flat = ttnn.to_torch(logits_tt).to(torch.bfloat16).contiguous().reshape(-1)
+    flat = to_torch_replicated_first_shard(logits_tt).to(torch.bfloat16).contiguous().reshape(-1)
     sp = flat.numel() // v
     tt_f = flat.reshape(1, sp, v)[:, :sd, :v].contiguous().float().cpu()
     assert tt_f.shape == ref_f.shape, f"{ctx}: shape ref {tuple(ref_f.shape)} vs ttnn {tuple(tt_f.shape)}"
@@ -113,10 +117,7 @@ def _assert_t2u_logits_pcc_local(
     ref_logits_bf16: torch.Tensor, logits_tt: ttnn.Tensor, *, ctx: str, pcc: float = PCC_THRESHOLD
 ) -> None:
     v = int(ref_logits_bf16.shape[-1])
-    if logits_tt.storage_type() == ttnn.StorageType.DEVICE:
-        flat = ttnn.to_torch(ttnn.from_device(logits_tt)).to(torch.bfloat16).contiguous().reshape(-1)
-    else:
-        flat = ttnn.to_torch(logits_tt).to(torch.bfloat16).contiguous().reshape(-1)
+    flat = to_torch_replicated_first_shard(logits_tt).to(torch.bfloat16).contiguous().reshape(-1)
     sp = flat.numel() // v
     tt_logits_3d = flat.reshape(1, sp, v)[:, : ref_logits_bf16.shape[1], :].contiguous()
     assert (
@@ -354,7 +355,7 @@ def _t2u_timed_stages(model: Any, tt_model: Any, device: ttnn.Device, *, ctx: st
     ttnn.deallocate(attn_tt)
     ttnn.deallocate(char_ids_tt)
 
-    tt_logits = ttnn.to_torch(ttnn.from_device(tt_logits_tt)).to(torch.bfloat16).cpu()
+    tt_logits = to_torch_replicated_first_shard(tt_logits_tt).to(torch.bfloat16).cpu()
     ttnn.deallocate(tt_logits_tt)
 
     v = int(ref_logits_bf16.shape[-1])
@@ -702,64 +703,62 @@ def _run_pipeline(
 @run_for_blackhole()
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.timeout(3600)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"l1_small_size": 32768, "num_command_queues": 2}],
-    indirect=True,
-)
+@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_E2E_2CQ, indirect=["mesh_device", "device_params"])
 @pytest.mark.parametrize("batch_size_per_device", (1,))
 @pytest.mark.parametrize("task,expected_inference_throughput", _E2E_TASK_THROUGHPUT_PARAMS)
 def test_seamless_m4t_v2_large_e2e_perf_2cq(
-    device, batch_size_per_device, expected_inference_throughput: float, task: str
+    mesh_device, device_params, batch_size_per_device, expected_inference_throughput: float, task: str
 ):
     """Compile + 2CQ overlapped pipeline (non-traced); PCC on last host logits; optional T2U after pipeline."""
-    b = _build_model_for_task(device, task)
-    profiler.clear()
-    num_devices = device.get_num_devices()
-    batch_size = batch_size_per_device * num_devices
+    with mesh_default_device(mesh_device):
+        _ = device_params
+        b = _build_model_for_task(mesh_device, task)
+        profiler.clear()
+        num_devices = mesh_device.get_num_devices()
+        batch_size = batch_size_per_device * num_devices
 
-    outputs = _run_pipeline(
-        device,
-        b.forward_fn,
-        b.dummy_host,
-        b.dram_config,
-        b.l1_config,
-        NUM_MEASUREMENT_ITERS,
-        use_trace=False,
-    )
+        outputs = _run_pipeline(
+            mesh_device,
+            b.forward_fn,
+            b.dummy_host,
+            b.dram_config,
+            b.l1_config,
+            NUM_MEASUREMENT_ITERS,
+            use_trace=False,
+        )
 
-    logits_host = outputs[-1]
-    assert_text_logits_pcc_vs_ref(b.ref_logits, logits_host, ctx=f"{b.task.upper()}_E2E_2CQ")
+        logits_host = outputs[-1]
+        assert_text_logits_pcc_vs_ref(b.ref_logits, logits_host, ctx=f"{b.task.upper()}_E2E_2CQ")
 
-    if b.enc_in_tt is not None:
-        ttnn.deallocate(b.enc_in_tt)
-    if b.input_ids_tt is not None:
-        ttnn.deallocate(b.input_ids_tt)
-    ttnn.deallocate(b.enc_attn_tt)
-    ttnn.deallocate(b.dec_ids_tt)
-    ttnn.deallocate(b.dec_mask_tt)
+        if b.enc_in_tt is not None:
+            ttnn.deallocate(b.enc_in_tt)
+        if b.input_ids_tt is not None:
+            ttnn.deallocate(b.input_ids_tt)
+        ttnn.deallocate(b.enc_attn_tt)
+        ttnn.deallocate(b.dec_ids_tt)
+        ttnn.deallocate(b.dec_mask_tt)
 
-    if b.needs_t2u:
-        t2u_timed_stages_for_e2e(b.model, b.tt_model, device, ctx=f"{b.task.upper()}_E2E_T2U")
+        if b.needs_t2u:
+            t2u_timed_stages_for_e2e(b.model, b.tt_model, mesh_device, ctx=f"{b.task.upper()}_E2E_T2U")
 
-    compile_time = profiler.get("compile")
-    inference_time_avg = profiler.get("run_model_pipeline_2cqs") / NUM_MEASUREMENT_ITERS
-    expected_inference_time = batch_size / expected_inference_throughput
-    prep_perf_report(
-        model_name=f"ttnn_seamless_m4t_v2_large_2cqs_batch_size{batch_size}_{b.task}",
-        batch_size=batch_size,
-        inference_and_compile_time=compile_time,
-        inference_time=inference_time_avg,
-        expected_compile_time=600,
-        expected_inference_time=expected_inference_time,
-        comments=f"task_{b.task}_batchsize{batch_size}",
-        inference_time_cpu=0.0,
-    )
-    logger.info(
-        f"Seamless M4T v2 Large task={b.task} batch_size={batch_size} "
-        f"compile={compile_time:.2f}s inference_avg={inference_time_avg:.4f}s "
-        f"FPS={batch_size / inference_time_avg:.2f}"
-    )
+        compile_time = profiler.get("compile")
+        inference_time_avg = profiler.get("run_model_pipeline_2cqs") / NUM_MEASUREMENT_ITERS
+        expected_inference_time = batch_size / expected_inference_throughput
+        prep_perf_report(
+            model_name=f"ttnn_seamless_m4t_v2_large_2cqs_batch_size{batch_size}_{b.task}",
+            batch_size=batch_size,
+            inference_and_compile_time=compile_time,
+            inference_time=inference_time_avg,
+            expected_compile_time=600,
+            expected_inference_time=expected_inference_time,
+            comments=f"task_{b.task}_batchsize{batch_size}",
+            inference_time_cpu=0.0,
+        )
+        logger.info(
+            f"Seamless M4T v2 Large task={b.task} batch_size={batch_size} "
+            f"compile={compile_time:.2f}s inference_avg={inference_time_avg:.4f}s "
+            f"FPS={batch_size / inference_time_avg:.2f}"
+        )
 
 
 # Autoregressive ``generate`` is far slower per iteration than single-prefill ``forward``
@@ -779,15 +778,11 @@ _GENERATE_E2E_TASK_THROUGHPUT_PARAMS = [(t, _EXPECTED_GENERATE_E2E_THROUGHPUT_FP
 @run_for_blackhole()
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.timeout(3600)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"l1_small_size": 65536, "num_command_queues": 2}],
-    indirect=True,
-)
+@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_E2E_2CQ_GENERATE, indirect=["mesh_device", "device_params"])
 @pytest.mark.parametrize("batch_size_per_device", (1,))
 @pytest.mark.parametrize("task,expected_inference_throughput", _GENERATE_E2E_TASK_THROUGHPUT_PARAMS)
 def test_seamless_m4t_v2_large_e2e_perf_2cq_generate(
-    device, batch_size_per_device, expected_inference_throughput: float, task: str
+    mesh_device, device_params, batch_size_per_device, expected_inference_throughput: float, task: str
 ):
     """Compile + 2CQ non-traced pipeline driving full autoregressive ``tt_model.generate(...)`` per iteration.
 
@@ -804,91 +799,86 @@ def test_seamless_m4t_v2_large_e2e_perf_2cq_generate(
     per-prefill FPS. ``l1_small_size=65536`` matches the demo (32 KiB is fine for text-only but
     too tight for the speech-encoder → T2U → vocoder chain on s2st).
     """
-    b = _build_model_for_task(device, task)
-    use_speech, tgt_lang, needs_t2u = SEAMLESS_E2E_TASKS[task]
-    b.forward_fn = _make_generate_fn(
-        b.tt_model,
-        use_speech=use_speech,
-        enc_in_tt=b.enc_in_tt,
-        input_ids_tt=b.input_ids_tt,
-        enc_attn_tt=b.enc_attn_tt,
-        tgt_lang=tgt_lang,
-        generate_speech=needs_t2u,
-        max_new_tokens=_GENERATE_MAX_NEW_TOKENS,
-        pad_token_id=b.cfg.pad_token_id,
-        eos_token_id=b.cfg.eos_token_id,
-    )
-
-    profiler.clear()
-    num_devices = device.get_num_devices()
-    batch_size = batch_size_per_device * num_devices
-
-    outputs = _run_pipeline(
-        device,
-        b.forward_fn,
-        b.dummy_host,
-        b.dram_config,
-        b.l1_config,
-        NUM_MEASUREMENT_ITERS,
-        use_trace=False,
-    )
-
-    last = outputs[-1]
-    if needs_t2u:
-        assert (
-            isinstance(last, (list, tuple)) and len(last) == 2
-        ), f"{b.task.upper()}_E2E_2CQ_GENERATE: expected (waveform, lengths) tuple, got {type(last)}"
-        wav_host, lengths_host = last
-        wav_t = ttnn.to_torch(wav_host) if isinstance(wav_host, ttnn.Tensor) else wav_host
-        len_t = ttnn.to_torch(lengths_host) if isinstance(lengths_host, ttnn.Tensor) else lengths_host
-        assert (
-            int(len_t.reshape(-1)[0].item()) > 0
-        ), f"{b.task.upper()}_E2E_2CQ_GENERATE: vocoder reported zero-length waveform"
-        logger.info(
-            f"{b.task.upper()}_E2E_2CQ_GENERATE waveform_samples={int(len_t.reshape(-1)[0].item())} "
-            f"wav_shape={tuple(wav_t.shape)}"
+    with mesh_default_device(mesh_device):
+        _ = device_params
+        b = _build_model_for_task(mesh_device, task)
+        use_speech, tgt_lang, needs_t2u = SEAMLESS_E2E_TASKS[task]
+        b.forward_fn = _make_generate_fn(
+            b.tt_model,
+            use_speech=use_speech,
+            enc_in_tt=b.enc_in_tt,
+            input_ids_tt=b.input_ids_tt,
+            enc_attn_tt=b.enc_attn_tt,
+            tgt_lang=tgt_lang,
+            generate_speech=needs_t2u,
+            max_new_tokens=_GENERATE_MAX_NEW_TOKENS,
+            pad_token_id=b.cfg.pad_token_id,
+            eos_token_id=b.cfg.eos_token_id,
         )
-    else:
-        assert isinstance(
-            last, ttnn.Tensor
-        ), f"{b.task.upper()}_E2E_2CQ_GENERATE: expected sequences tensor, got {type(last)}"
-        seq_t = ttnn.to_torch(last)
-        assert seq_t.numel() > 0, f"{b.task.upper()}_E2E_2CQ_GENERATE: empty sequences output"
-        logger.info(f"{b.task.upper()}_E2E_2CQ_GENERATE sequences_shape={tuple(seq_t.shape)}")
 
-    if b.enc_in_tt is not None:
-        ttnn.deallocate(b.enc_in_tt)
-    if b.input_ids_tt is not None:
-        ttnn.deallocate(b.input_ids_tt)
-    ttnn.deallocate(b.enc_attn_tt)
-    ttnn.deallocate(b.dec_ids_tt)
-    ttnn.deallocate(b.dec_mask_tt)
+        profiler.clear()
+        num_devices = mesh_device.get_num_devices()
+        batch_size = batch_size_per_device * num_devices
 
-    compile_time = profiler.get("compile")
-    inference_time_avg = profiler.get("run_model_pipeline_2cqs") / NUM_MEASUREMENT_ITERS
-    expected_inference_time = batch_size / expected_inference_throughput
-    prep_perf_report(
-        model_name=f"ttnn_seamless_m4t_v2_large_2cqs_generate_batch_size{batch_size}_{b.task}",
-        batch_size=batch_size,
-        inference_and_compile_time=compile_time,
-        inference_time=inference_time_avg,
-        expected_compile_time=600,
-        expected_inference_time=expected_inference_time,
-        comments=f"generate_task_{b.task}_batchsize{batch_size}_max_new_tokens{_GENERATE_MAX_NEW_TOKENS}",
-        inference_time_cpu=0.0,
-    )
-    logger.info(
-        f"Seamless M4T v2 Large generate task={b.task} batch_size={batch_size} "
-        f"max_new_tokens={_GENERATE_MAX_NEW_TOKENS} compile={compile_time:.2f}s "
-        f"inference_avg={inference_time_avg:.4f}s FPS={batch_size / inference_time_avg:.3f}"
-    )
+        outputs = _run_pipeline(
+            mesh_device,
+            b.forward_fn,
+            b.dummy_host,
+            b.dram_config,
+            b.l1_config,
+            NUM_MEASUREMENT_ITERS,
+            use_trace=False,
+        )
 
+        last = outputs[-1]
+        if needs_t2u:
+            assert (
+                isinstance(last, (list, tuple)) and len(last) == 2
+            ), f"{b.task.upper()}_E2E_2CQ_GENERATE: expected (waveform, lengths) tuple, got {type(last)}"
+            wav_host, lengths_host = last
+            wav_t = to_torch_replicated_first_shard(wav_host)
+            len_t = to_torch_replicated_first_shard(lengths_host)
+            assert (
+                int(len_t.reshape(-1)[0].item()) > 0
+            ), f"{b.task.upper()}_E2E_2CQ_GENERATE: vocoder reported zero-length waveform"
+            logger.info(
+                f"{b.task.upper()}_E2E_2CQ_GENERATE waveform_samples={int(len_t.reshape(-1)[0].item())} "
+                f"wav_shape={tuple(wav_t.shape)}"
+            )
+        else:
+            assert isinstance(
+                last, ttnn.Tensor
+            ), f"{b.task.upper()}_E2E_2CQ_GENERATE: expected sequences tensor, got {type(last)}"
+            seq_t = to_torch_replicated_first_shard(last)
+            assert seq_t.numel() > 0, f"{b.task.upper()}_E2E_2CQ_GENERATE: empty sequences output"
+            logger.info(f"{b.task.upper()}_E2E_2CQ_GENERATE sequences_shape={tuple(seq_t.shape)}")
 
-_DEVICE_PARAMS_2CQ_TRACE: dict = {
-    "l1_small_size": 32768,
-    "trace_region_size": 450_000_000,
-    "num_command_queues": 2,
-}
+        if b.enc_in_tt is not None:
+            ttnn.deallocate(b.enc_in_tt)
+        if b.input_ids_tt is not None:
+            ttnn.deallocate(b.input_ids_tt)
+        ttnn.deallocate(b.enc_attn_tt)
+        ttnn.deallocate(b.dec_ids_tt)
+        ttnn.deallocate(b.dec_mask_tt)
+
+        compile_time = profiler.get("compile")
+        inference_time_avg = profiler.get("run_model_pipeline_2cqs") / NUM_MEASUREMENT_ITERS
+        expected_inference_time = batch_size / expected_inference_throughput
+        prep_perf_report(
+            model_name=f"ttnn_seamless_m4t_v2_large_2cqs_generate_batch_size{batch_size}_{b.task}",
+            batch_size=batch_size,
+            inference_and_compile_time=compile_time,
+            inference_time=inference_time_avg,
+            expected_compile_time=600,
+            expected_inference_time=expected_inference_time,
+            comments=f"generate_task_{b.task}_batchsize{batch_size}_max_new_tokens{_GENERATE_MAX_NEW_TOKENS}",
+            inference_time_cpu=0.0,
+        )
+        logger.info(
+            f"Seamless M4T v2 Large generate task={b.task} batch_size={batch_size} "
+            f"max_new_tokens={_GENERATE_MAX_NEW_TOKENS} compile={compile_time:.2f}s "
+            f"inference_avg={inference_time_avg:.4f}s FPS={batch_size / inference_time_avg:.3f}"
+        )
 
 
 def _make_traced_text_e2e_forward_fn(
@@ -1035,11 +1025,11 @@ def _dealloc_speech_trace_masks(m: Any) -> None:
 @run_for_blackhole()
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.timeout(3600)
-@pytest.mark.parametrize("device_params", [_DEVICE_PARAMS_2CQ_TRACE], indirect=True)
+@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_E2E_2CQ_TRACE, indirect=["mesh_device", "device_params"])
 @pytest.mark.parametrize("batch_size_per_device", (1,))
 @pytest.mark.parametrize("task,expected_inference_throughput", _E2E_TASK_THROUGHPUT_PARAMS)
 def test_seamless_m4t_v2_large_e2e_perf_2cq_trace(
-    device, batch_size_per_device, expected_inference_throughput: float, task: str
+    mesh_device, device_params, batch_size_per_device, expected_inference_throughput: float, task: str
 ):
     """
     ``use_trace=True`` + 2CQ: materialize masks **before** compile. **Text:** ``forward_text_e2e_prefill_trace``.
@@ -1047,185 +1037,193 @@ def test_seamless_m4t_v2_large_e2e_perf_2cq_trace(
     then ``forward_speech_e2e_prefill_trace`` for full speech→text inside trace.
     **t2st / s2st:** ``forward_*_e2e_plus_t2u_trace`` extends the traced body with T2U (prebuilt inputs + cums).
     """
-    b = _build_model_for_task(device, task)
-    use_speech, _, needs_t2u = SEAMLESS_E2E_TASKS[task]
+    with mesh_default_device(mesh_device):
+        _ = device_params
+        b = _build_model_for_task(mesh_device, task)
+        use_speech, _, needs_t2u = SEAMLESS_E2E_TASKS[task]
 
-    t2u_pack: Optional[_T2UTracePack] = None
-    if needs_t2u:
-        t2u_pack = _materialize_t2u_trace_pack(b.model, b.tt_model, device)
+        t2u_pack: Optional[_T2UTracePack] = None
+        if needs_t2u:
+            t2u_pack = _materialize_t2u_trace_pack(b.model, b.tt_model, mesh_device)
 
-    conv_bf16: Optional[ttnn.Tensor] = None
-    pad_tail_sp: Optional[ttnn.Tensor] = None
-    speech_log_len = 0
-    speech_phys_len = 0
-    speech_trace: Any = None
+        conv_bf16: Optional[ttnn.Tensor] = None
+        pad_tail_sp: Optional[ttnn.Tensor] = None
+        speech_log_len = 0
+        speech_phys_len = 0
+        speech_trace: Any = None
 
-    enc_attn_padded: ttnn.Tensor
-    enc_attn_owned: bool
+        enc_attn_padded: ttnn.Tensor
+        enc_attn_owned: bool
 
-    if use_speech:
-        assert b.enc_in_tt is not None
-        (
-            conv_bf16,
-            pad_tail_sp,
-            speech_log_len,
-            speech_phys_len,
+        if use_speech:
+            assert b.enc_in_tt is not None
+            (
+                conv_bf16,
+                pad_tail_sp,
+                speech_log_len,
+                speech_phys_len,
+                enc_attn_padded,
+                speech_trace,
+            ) = b.tt_model.materialize_speech_encoder_trace_tensors(b.enc_in_tt, b.enc_attn_tt)
+            enc_attn_owned = True
+        else:
+            assert b.input_ids_tt is not None
+            (
+                enc_ids_p,
+                enc_pos,
+                enc_m4,
+                enc_attn_padded,
+                enc_attn_owned,
+            ) = b.tt_model.materialize_text_encoder_trace_tensors(
+                b.input_ids_tt,
+                b.enc_attn_tt,
+            )
+
+        ttnn.synchronize_device(mesh_device)
+
+        ids_p, pos_tt, causal_4d, cross_4d = b.tt_model.materialize_decoder_trace_tensors(
             enc_attn_padded,
-            speech_trace,
-        ) = b.tt_model.materialize_speech_encoder_trace_tensors(b.enc_in_tt, b.enc_attn_tt)
-        enc_attn_owned = True
-    else:
-        assert b.input_ids_tt is not None
-        enc_ids_p, enc_pos, enc_m4, enc_attn_padded, enc_attn_owned = b.tt_model.materialize_text_encoder_trace_tensors(
-            b.input_ids_tt,
-            b.enc_attn_tt,
+            b.dec_ids_tt,
+            b.dec_mask_tt,
+        )
+        ttnn.synchronize_device(mesh_device)
+
+        if use_speech:
+            assert b.enc_in_tt is not None and conv_bf16 is not None and speech_trace is not None
+            if needs_t2u:
+                assert t2u_pack is not None
+                traced_forward = _make_traced_speech_e2e_plus_t2u_forward_fn(
+                    b.tt_model,
+                    b.enc_in_tt,
+                    conv_bf16,
+                    speech_trace,
+                    pad_tail_sp,
+                    speech_log_len,
+                    speech_phys_len,
+                    ids_p,
+                    pos_tt,
+                    causal_4d,
+                    cross_4d,
+                    t2u_pack,
+                )
+            else:
+                traced_forward = _make_traced_speech_e2e_forward_fn(
+                    b.tt_model,
+                    b.enc_in_tt,
+                    conv_bf16,
+                    speech_trace,
+                    pad_tail_sp,
+                    speech_log_len,
+                    speech_phys_len,
+                    ids_p,
+                    pos_tt,
+                    causal_4d,
+                    cross_4d,
+                )
+        else:
+            if needs_t2u:
+                assert t2u_pack is not None
+                traced_forward = _make_traced_text_e2e_plus_t2u_forward_fn(
+                    b.tt_model,
+                    enc_ids_p,
+                    enc_pos,
+                    enc_m4,
+                    ids_p,
+                    pos_tt,
+                    causal_4d,
+                    cross_4d,
+                    t2u_pack,
+                )
+            else:
+                traced_forward = _make_traced_text_e2e_forward_fn(
+                    b.tt_model,
+                    enc_ids_p,
+                    enc_pos,
+                    enc_m4,
+                    ids_p,
+                    pos_tt,
+                    causal_4d,
+                    cross_4d,
+                )
+
+        profiler.clear()
+        num_devices = mesh_device.get_num_devices()
+        batch_size = batch_size_per_device * num_devices
+
+        outputs = _run_pipeline(
+            mesh_device,
+            traced_forward,
+            b.dummy_host,
+            b.dram_config,
+            b.l1_config,
+            NUM_MEASUREMENT_ITERS,
+            use_trace=True,
         )
 
-    ttnn.synchronize_device(device)
-
-    ids_p, pos_tt, causal_4d, cross_4d = b.tt_model.materialize_decoder_trace_tensors(
-        enc_attn_padded,
-        b.dec_ids_tt,
-        b.dec_mask_tt,
-    )
-    ttnn.synchronize_device(device)
-
-    if use_speech:
-        assert b.enc_in_tt is not None and conv_bf16 is not None and speech_trace is not None
+        last_out = outputs[-1]
         if needs_t2u:
+            assert isinstance(last_out, (list, tuple)) and len(last_out) == 2
+            logits_host, t2u_host = last_out[0], last_out[1]
+            assert_text_logits_pcc_vs_ref(b.ref_logits, logits_host, ctx=f"{b.task.upper()}_E2E_2CQ_TRACE")
             assert t2u_pack is not None
-            traced_forward = _make_traced_speech_e2e_plus_t2u_forward_fn(
-                b.tt_model,
-                b.enc_in_tt,
-                conv_bf16,
-                speech_trace,
-                pad_tail_sp,
-                speech_log_len,
-                speech_phys_len,
-                ids_p,
-                pos_tt,
-                causal_4d,
-                cross_4d,
-                t2u_pack,
-            )
+            _assert_t2u_logits_pcc_local(t2u_pack.ref_logits_bf16, t2u_host, ctx=f"{b.task.upper()}_E2E_2CQ_TRACE_T2U")
         else:
-            traced_forward = _make_traced_speech_e2e_forward_fn(
-                b.tt_model,
-                b.enc_in_tt,
-                conv_bf16,
-                speech_trace,
-                pad_tail_sp,
-                speech_log_len,
-                speech_phys_len,
-                ids_p,
-                pos_tt,
-                causal_4d,
-                cross_4d,
-            )
-    else:
-        if needs_t2u:
-            assert t2u_pack is not None
-            traced_forward = _make_traced_text_e2e_plus_t2u_forward_fn(
-                b.tt_model,
-                enc_ids_p,
-                enc_pos,
-                enc_m4,
-                ids_p,
-                pos_tt,
-                causal_4d,
-                cross_4d,
-                t2u_pack,
-            )
+            assert_text_logits_pcc_vs_ref(b.ref_logits, last_out, ctx=f"{b.task.upper()}_E2E_2CQ_TRACE")
+
+        _dealloc_if_allocated(pos_tt)
+        _dealloc_if_allocated(causal_4d)
+        _dealloc_if_allocated(cross_4d)
+        if ids_p is not b.dec_ids_tt:
+            _dealloc_if_allocated(ids_p)
+
+        if use_speech:
+            _dealloc_if_allocated(conv_bf16)
+            _dealloc_if_allocated(pad_tail_sp)
+            if speech_trace is not None:
+                _dealloc_speech_trace_masks(speech_trace)
         else:
-            traced_forward = _make_traced_text_e2e_forward_fn(
-                b.tt_model,
-                enc_ids_p,
-                enc_pos,
-                enc_m4,
-                ids_p,
-                pos_tt,
-                causal_4d,
-                cross_4d,
-            )
+            _dealloc_if_allocated(enc_pos)
+            _dealloc_if_allocated(enc_m4)
+            if enc_ids_p is not b.input_ids_tt:
+                _dealloc_if_allocated(enc_ids_p)
 
-    profiler.clear()
-    num_devices = device.get_num_devices()
-    batch_size = batch_size_per_device * num_devices
+        if enc_attn_owned:
+            ttnn.deallocate(enc_attn_padded)
+        if b.enc_in_tt is not None:
+            ttnn.deallocate(b.enc_in_tt)
+        if b.input_ids_tt is not None:
+            ttnn.deallocate(b.input_ids_tt)
+        ttnn.deallocate(b.enc_attn_tt)
+        ttnn.deallocate(b.dec_ids_tt)
+        ttnn.deallocate(b.dec_mask_tt)
 
-    outputs = _run_pipeline(
-        device,
-        traced_forward,
-        b.dummy_host,
-        b.dram_config,
-        b.l1_config,
-        NUM_MEASUREMENT_ITERS,
-        use_trace=True,
-    )
+        if t2u_pack is not None:
+            _dealloc_t2u_trace_pack(t2u_pack)
 
-    last_out = outputs[-1]
-    if needs_t2u:
-        assert isinstance(last_out, (list, tuple)) and len(last_out) == 2
-        logits_host, t2u_host = last_out[0], last_out[1]
-        assert_text_logits_pcc_vs_ref(b.ref_logits, logits_host, ctx=f"{b.task.upper()}_E2E_2CQ_TRACE")
-        assert t2u_pack is not None
-        _assert_t2u_logits_pcc_local(t2u_pack.ref_logits_bf16, t2u_host, ctx=f"{b.task.upper()}_E2E_2CQ_TRACE_T2U")
-    else:
-        assert_text_logits_pcc_vs_ref(b.ref_logits, last_out, ctx=f"{b.task.upper()}_E2E_2CQ_TRACE")
-
-    _dealloc_if_allocated(pos_tt)
-    _dealloc_if_allocated(causal_4d)
-    _dealloc_if_allocated(cross_4d)
-    if ids_p is not b.dec_ids_tt:
-        _dealloc_if_allocated(ids_p)
-
-    if use_speech:
-        _dealloc_if_allocated(conv_bf16)
-        _dealloc_if_allocated(pad_tail_sp)
-        if speech_trace is not None:
-            _dealloc_speech_trace_masks(speech_trace)
-    else:
-        _dealloc_if_allocated(enc_pos)
-        _dealloc_if_allocated(enc_m4)
-        if enc_ids_p is not b.input_ids_tt:
-            _dealloc_if_allocated(enc_ids_p)
-
-    if enc_attn_owned:
-        ttnn.deallocate(enc_attn_padded)
-    if b.enc_in_tt is not None:
-        ttnn.deallocate(b.enc_in_tt)
-    if b.input_ids_tt is not None:
-        ttnn.deallocate(b.input_ids_tt)
-    ttnn.deallocate(b.enc_attn_tt)
-    ttnn.deallocate(b.dec_ids_tt)
-    ttnn.deallocate(b.dec_mask_tt)
-
-    if t2u_pack is not None:
-        _dealloc_t2u_trace_pack(t2u_pack)
-
-    compile_time = profiler.get("compile")
-    inference_time_avg = profiler.get("run_model_pipeline_2cqs") / NUM_MEASUREMENT_ITERS
-    expected_inference_time = batch_size / expected_inference_throughput
-    prep_perf_report(
-        model_name=f"ttnn_seamless_m4t_v2_large_2cqs_trace_batch_size{batch_size}_{b.task}",
-        batch_size=batch_size,
-        inference_and_compile_time=compile_time,
-        inference_time=inference_time_avg,
-        expected_compile_time=600,
-        expected_inference_time=expected_inference_time,
-        comments=f"task_{b.task}_trace_{'speech_e2e_t2u' if use_speech and needs_t2u else 'speech_e2e' if use_speech else 'text_e2e_t2u' if needs_t2u else 'text_e2e'}_batchsize{batch_size}",
-        inference_time_cpu=0.0,
-    )
-    trace_kind = (
-        "speech E2E + T2U"
-        if use_speech and needs_t2u
-        else "speech E2E"
-        if use_speech
-        else "text E2E + T2U"
-        if needs_t2u
-        else "text E2E"
-    )
-    logger.info(
-        f"Seamless M4T v2 Large (2CQ trace {trace_kind}) task={b.task} batch_size={batch_size} "
-        f"compile={compile_time:.2f}s inference_avg={inference_time_avg:.4f}s "
-        f"FPS={batch_size / inference_time_avg:.2f}"
-    )
+        compile_time = profiler.get("compile")
+        inference_time_avg = profiler.get("run_model_pipeline_2cqs") / NUM_MEASUREMENT_ITERS
+        expected_inference_time = batch_size / expected_inference_throughput
+        prep_perf_report(
+            model_name=f"ttnn_seamless_m4t_v2_large_2cqs_trace_batch_size{batch_size}_{b.task}",
+            batch_size=batch_size,
+            inference_and_compile_time=compile_time,
+            inference_time=inference_time_avg,
+            expected_compile_time=600,
+            expected_inference_time=expected_inference_time,
+            comments=f"task_{b.task}_trace_{'speech_e2e_t2u' if use_speech and needs_t2u else 'speech_e2e' if use_speech else 'text_e2e_t2u' if needs_t2u else 'text_e2e'}_batchsize{batch_size}",
+            inference_time_cpu=0.0,
+        )
+        trace_kind = (
+            "speech E2E + T2U"
+            if use_speech and needs_t2u
+            else "speech E2E"
+            if use_speech
+            else "text E2E + T2U"
+            if needs_t2u
+            else "text E2E"
+        )
+        logger.info(
+            f"Seamless M4T v2 Large (2CQ trace {trace_kind}) task={b.task} batch_size={batch_size} "
+            f"compile={compile_time:.2f}s inference_avg={inference_time_avg:.4f}s "
+            f"FPS={batch_size / inference_time_avg:.2f}"
+        )

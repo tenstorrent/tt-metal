@@ -3,7 +3,6 @@
 
 import pytest
 import torch
-import ttnn
 from loguru import logger
 
 from tests.ttnn.utils_for_testing import check_with_pcc
@@ -13,14 +12,22 @@ from models.experimental.seamless_m4t_v2_large.reference.torch_speech_encoder im
     load_pretrained_speech_encoder,
 )
 from models.experimental.seamless_m4t_v2_large.scripts.download_weights import ensure_seamless_m4t_v2_large_weights
+
+
+from models.experimental.seamless_m4t_v2_large.tt.common import to_torch_replicated_first_shard
 from models.experimental.seamless_m4t_v2_large.tt.model_preprocessing import create_speech_encoder_parameters
 from models.experimental.seamless_m4t_v2_large.tt.tt_speech_encoder import TTSeamlessM4Tv2SpeechEncoder
+from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import (
+    mesh_default_device,
+    MESH_DEVICE_PARAMETRIZE_TEXT,
+    from_torch_bfloat16_tile,
+)
 
 PCC_THRESHOLD = 0.99
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-def test_seamless_m4t_v2_speech_encoder_pcc(device, reset_seeds):
+def _run_speech_encoder_pcc(device) -> None:
+    """Shared PCC body. Mesh-safe readback via ``to_torch_replicated_first_shard``."""
     try:
         weights_dir = ensure_seamless_m4t_v2_large_weights()
     except ImportError as e:
@@ -57,23 +64,19 @@ def test_seamless_m4t_v2_speech_encoder_pcc(device, reset_seeds):
         speech_encoder_left_chunk_num=cfg.speech_encoder_left_chunk_num,
     )
 
-    tt_x = ttnn.from_torch(
-        input_features,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    m1 = ttnn.from_torch(
-        attention_mask.to(torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    tt_x = from_torch_bfloat16_tile(device, input_features)
+    m1 = from_torch_bfloat16_tile(device, attention_mask)
 
     tt_out = tt_model(tt_x, conv_attention_mask_1d=m1)
-    tt_cpu = ttnn.to_torch(tt_out).to(torch.bfloat16)
+    tt_cpu = to_torch_replicated_first_shard(tt_out).to(torch.bfloat16)
     pcc_passed, pcc_message = check_with_pcc(ref, tt_cpu, pcc=PCC_THRESHOLD)
     logger.info(pcc_message)
     assert pcc_passed, pcc_message
+
+
+@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
+def test_seamless_m4t_v2_speech_encoder_pcc(mesh_device, device_params, reset_seeds):
+    _ = reset_seeds
+    _ = device_params
+    with mesh_default_device(mesh_device):
+        _run_speech_encoder_pcc(mesh_device)
