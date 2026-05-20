@@ -15,6 +15,8 @@ import numpy as np
 
 import ttnn
 
+from .math_perf_env import ace_step_reshape_kwargs
+
 WEIGHT_KEY = "encoder.text_projector.weight"
 
 
@@ -104,7 +106,8 @@ class TtAceStepTextProjector:
         if d != self.d_text:
             raise ValueError(f"Expected D_text={self.d_text}, got {d}")
         x = ttnn.to_layout(hidden_b1sh, ttnn.ROW_MAJOR_LAYOUT)
-        x = ttnn.reshape(x, (b, s, self.d_text))
+        _sr = ace_step_reshape_kwargs(ttnn)
+        x = ttnn.reshape(x, (b, s, self.d_text), **_sr)
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         out = ttnn.linear(x, self.weight_tt, bias=None, transpose_b=True)
         # Keep TILE: ``condition_encoder`` and ``ttnn.concat`` require TILE on all operands.

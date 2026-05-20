@@ -1,9 +1,17 @@
+"""DEPRECATED: legacy unit-test scaffolding — production E2E uses ``dit_decoder_core``.
+
+``AdaLNZeroTTNN`` / ``TransformerBlockTTNN`` do not match HF ``AceStepDiTLayer`` (wrong norm,
+modulation layout, gates, cross-attn). Prefer ``TtAceStepDiTCore`` and PCC tests under
+``tests/test_pcc_dit_decoder_core.py`` et al.
+"""
+
 from __future__ import annotations
 
 import math
 
 from ._ttnn import get_ttnn
 from .config import AceConfigTTNN
+from .math_perf_env import ace_step_add_one, ace_step_nlp_concat_heads, ace_step_permute_kwargs, ace_step_reshape_kwargs
 
 # TTNN SDPA requires TILE tensors whose logical head_dim equals the padded head_dim
 # (see sdpa_device_operation.cpp: logical_shape[3] == legacy_shape[3]). Sub-tile
@@ -71,9 +79,7 @@ class AdaLNZeroTTNN:
         beta = ttnn.slice(gb, (0, 0, 0, d), (int(gb.shape[0]), 1, 1, d2))
         ttnn.deallocate(gb)
 
-        one = ttnn.full((1, 1, 1, 1), 1.0, device=self.mesh_device, dtype=self.dtype, layout=ttnn.TILE_LAYOUT)
-        gamma1 = ttnn.add(gamma, one)
-        ttnn.deallocate(one)
+        gamma1 = ace_step_add_one(ttnn, gamma)
         ttnn.deallocate(gamma)
         y = ttnn.multiply(x_norm, gamma1)
         ttnn.deallocate(x_norm)
@@ -198,9 +204,31 @@ class MultiHeadSelfAttentionTTNN:
         self.wk, self.bk = as_w(weights["wk"]), as_b(weights["bk"])
         self.wv, self.bv = as_w(weights["wv"]), as_b(weights["bv"])
         self.wo, self.bo = as_w(weights["wo"]), as_b(weights["bo"])
+        self._causal_neg_mask_by_s: dict[int, object] = {}
+
+    def _causal_neg_mask(self, S: int):
+        """Lower-triangular causal mask as large negative logits; cached per sequence length."""
+        cached = self._causal_neg_mask_by_s.get(S)
+        if cached is not None:
+            return cached
+        ttnn = self.ttnn
+        _sr = ace_step_reshape_kwargs(ttnn)
+        if not hasattr(ttnn, "tril"):
+            raise RuntimeError("TTNN build missing ttnn.tril; cannot build causal mask without host ops.")
+        keep = ttnn.tril(ttnn.ones((S, S), device=self.mesh_device, dtype=self.dtype, layout=ttnn.ROW_MAJOR_LAYOUT))
+        keep = ttnn.to_layout(keep, ttnn.TILE_LAYOUT)
+        keep = ttnn.reshape(keep, (1, 1, S, S), **_sr)
+        inv = ttnn.subtract(1.0, keep)
+        ttnn.deallocate(keep)
+        neg = ttnn.multiply(inv, -1.0e9)
+        ttnn.deallocate(inv)
+        self._causal_neg_mask_by_s[S] = neg
+        return neg
 
     def __call__(self, x):
         ttnn = self.ttnn
+        _sr = ace_step_reshape_kwargs(ttnn)
+        _pk = ace_step_permute_kwargs(ttnn)
         # x: [B,1,S,D]
         q = ttnn.linear(x, self.wq, bias=self.bq, transpose_b=True)
         k = ttnn.linear(x, self.wk, bias=self.bk, transpose_b=True)
@@ -211,16 +239,13 @@ class MultiHeadSelfAttentionTTNN:
         H = self.n_heads
         Dh = self.d_head
 
-        # [B,1,S,H*Dh] -> [B,H,S,Dh]
-        q = ttnn.reshape(q, (B, 1, S, H, Dh))
-        k = ttnn.reshape(k, (B, 1, S, H, Dh))
-        v = ttnn.reshape(v, (B, 1, S, H, Dh))
-        q = ttnn.permute(q, (0, 3, 2, 4, 1))
-        k = ttnn.permute(k, (0, 3, 2, 4, 1))
-        v = ttnn.permute(v, (0, 3, 2, 4, 1))
-        q = ttnn.reshape(q, (B, H, S, Dh))
-        k = ttnn.reshape(k, (B, H, S, Dh))
-        v = ttnn.reshape(v, (B, H, S, Dh))
+        # [B,1,S,H*Dh] -> [B,S,H,Dh] -> [B,H,S,Dh]
+        q = ttnn.reshape(q, (B, S, H, Dh), **_sr)
+        k = ttnn.reshape(k, (B, S, H, Dh), **_sr)
+        v = ttnn.reshape(v, (B, S, H, Dh), **_sr)
+        q = ttnn.permute(q, (0, 2, 1, 3), **_pk)
+        k = ttnn.permute(k, (0, 2, 1, 3), **_pk)
+        v = ttnn.permute(v, (0, 2, 1, 3), **_pk)
 
         kt = ttnn.transpose(k, -2, -1)
         ttnn.deallocate(k)
@@ -229,21 +254,8 @@ class MultiHeadSelfAttentionTTNN:
         ttnn.deallocate(kt)
         scores = ttnn.multiply(scores, self.scale)
 
-        # Causal masking: require a TTNN op that can produce a lower-triangular keep mask.
-        # If unavailable, users should provide an SDPA fused kernel; this scaffolding keeps the API explicit.
-        if not hasattr(ttnn, "tril"):
-            raise RuntimeError("TTNN build missing ttnn.tril; cannot build causal mask without host ops.")
-        keep = ttnn.tril(ttnn.ones((S, S), device=self.mesh_device, dtype=self.dtype, layout=ttnn.ROW_MAJOR_LAYOUT))
-        keep = ttnn.to_layout(keep, ttnn.TILE_LAYOUT)
-        keep = ttnn.reshape(keep, (1, 1, S, S))
-        one = ttnn.full((1, 1, 1, 1), 1.0, device=self.mesh_device, dtype=self.dtype, layout=ttnn.TILE_LAYOUT)
-        inv = ttnn.subtract(one, keep)
-        ttnn.deallocate(one)
-        ttnn.deallocate(keep)
-        neg = ttnn.multiply(inv, -1.0e9)
-        ttnn.deallocate(inv)
+        neg = self._causal_neg_mask(S)
         scores = ttnn.add(scores, neg)
-        ttnn.deallocate(neg)
 
         probs = ttnn.softmax(scores, dim=-1)
         ttnn.deallocate(scores)
@@ -251,11 +263,8 @@ class MultiHeadSelfAttentionTTNN:
         ttnn.deallocate(probs)
         ttnn.deallocate(v)
 
-        # [B,H,S,Dh] -> [B,S,H,Dh] -> [B,1,S,H*Dh]
-        # Keep all ops rank-4 (TTNN permute requires dims.size() == input_rank).
-        ctx = ttnn.reshape(ctx, (B, H, S, Dh))
-        ctx = ttnn.permute(ctx, (0, 2, 1, 3))  # [B,S,H,Dh]
-        ctx = ttnn.reshape(ctx, (B, 1, S, H * Dh))
+        # [B,H,S,Dh] -> [B,1,S,H*Dh] via fused nlp_concat_heads (single kernel vs permute+reshape)
+        ctx = ace_step_nlp_concat_heads(ttnn, ctx)
         out = ttnn.linear(ctx, self.wo, bias=self.bo, transpose_b=True)
         ttnn.deallocate(ctx)
         return out
@@ -312,9 +321,13 @@ class MultiHeadSelfAttentionSDPATTNN:
         self.wk, self.bk = as_w(weights["wk"]), as_b(weights["bk"])
         self.wv, self.bv = as_w(weights["wv"]), as_b(weights["bv"])
         self.wo, self.bo = as_w(weights["wo"]), as_b(weights["bo"])
+        self._sdpa_d = _sdpa_head_dim_tile_padding(self.d_head)
+        self._sdpa_pad = self._sdpa_d - self.d_head
 
     def __call__(self, x):
         ttnn = self.ttnn
+        _sr = ace_step_reshape_kwargs(ttnn)
+        _pk = ace_step_permute_kwargs(ttnn)
         q = ttnn.linear(x, self.wq, bias=self.bq, transpose_b=True)
         k = ttnn.linear(x, self.wk, bias=self.bk, transpose_b=True)
         v = ttnn.linear(x, self.wv, bias=self.bv, transpose_b=True)
@@ -324,20 +337,16 @@ class MultiHeadSelfAttentionSDPATTNN:
         H = self.n_heads
         Dh = self.d_head
 
-        q = ttnn.reshape(q, (B, 1, S, H, Dh))
-        k = ttnn.reshape(k, (B, 1, S, H, Dh))
-        v = ttnn.reshape(v, (B, 1, S, H, Dh))
-        q = ttnn.permute(q, (0, 3, 2, 4, 1))
-        k = ttnn.permute(k, (0, 3, 2, 4, 1))
-        v = ttnn.permute(v, (0, 3, 2, 4, 1))
-        q = ttnn.reshape(q, (B, H, S, Dh))
-        k = ttnn.reshape(k, (B, H, S, Dh))
-        v = ttnn.reshape(v, (B, H, S, Dh))
+        # [B,1,S,H*Dh] -> [B,S,H,Dh] -> [B,H,S,Dh]
+        q = ttnn.reshape(q, (B, S, H, Dh), **_sr)
+        k = ttnn.reshape(k, (B, S, H, Dh), **_sr)
+        v = ttnn.reshape(v, (B, S, H, Dh), **_sr)
+        q = ttnn.permute(q, (0, 2, 1, 3), **_pk)
+        k = ttnn.permute(k, (0, 2, 1, 3), **_pk)
+        v = ttnn.permute(v, (0, 2, 1, 3), **_pk)
 
-        sdpa_d = _sdpa_head_dim_tile_padding(Dh)
-        if sdpa_d > Dh:
-            pt = sdpa_d - Dh
-            pad4 = ((0, 0), (0, 0), (0, 0), (0, pt))
+        if self._sdpa_pad > 0:
+            pad4 = ((0, 0), (0, 0), (0, 0), (0, self._sdpa_pad))
             q = ttnn.pad(q, padding=pad4, value=0.0)
             k = ttnn.pad(k, padding=pad4, value=0.0)
             v = ttnn.pad(v, padding=pad4, value=0.0)
@@ -349,10 +358,10 @@ class MultiHeadSelfAttentionSDPATTNN:
         ttnn.deallocate(k)
         ttnn.deallocate(v)
 
-        if sdpa_d > Dh:
+        if self._sdpa_pad > 0:
             ctx = ttnn.slice(ctx, (0, 0, 0, 0), (B, H, S, Dh))
-        ctx = ttnn.permute(ctx, (0, 2, 1, 3))
-        ctx = ttnn.reshape(ctx, (B, 1, S, H * Dh))
+        # [B,H,S,Dh] -> [B,1,S,H*Dh] via fused nlp_concat_heads (single kernel vs permute+reshape)
+        ctx = ace_step_nlp_concat_heads(ttnn, ctx)
         out = ttnn.linear(ctx, self.wo, bias=self.bo, transpose_b=True)
         ttnn.deallocate(ctx)
         return out
