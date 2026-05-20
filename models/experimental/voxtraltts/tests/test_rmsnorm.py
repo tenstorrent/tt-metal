@@ -22,7 +22,6 @@ def test_voxtral_rmsnorm_pcc(device, reset_seeds, batch, seq_len, hidden_size, m
     torch_input = torch.randn(batch, 1, seq_len, hidden_size, dtype=torch.bfloat16)
     torch_weight = torch.randn(hidden_size, dtype=torch.bfloat16)
 
-    # Reference path uses [B, S, H].
     reference_output = reference_rms_norm(torch_input.squeeze(1), torch_weight, eps=eps)
 
     tt_model = VoxtralTTRMSNorm(
