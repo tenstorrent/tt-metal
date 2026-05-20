@@ -67,19 +67,25 @@ void validate_matmul_tile_constraints(
     const tt::tt_metal::Tile& in0_tile,
     const tt::tt_metal::Tile& in1_tile,
     const operations::matmul::MatmulProgramConfig& chosen_program_config) {
-    constexpr uint32_t bfloat4_min_outer_tile_extent = 4;
+    // minimum tile_h = 4: shared exponents are packed into a uint32 (4 exponents minimum)
+    constexpr uint32_t bfloat4_min_tile_height = 4;
     if (input_tensor_a.dtype() == DataType::BFLOAT4_B) {
         TT_FATAL(
-            in0_tile.get_height() >= bfloat4_min_outer_tile_extent,
+            in0_tile.get_height() >= bfloat4_min_tile_height,
             "BFLOAT4_B matmul requires in0 tile height >= {} (got {})",
-            bfloat4_min_outer_tile_extent,
+            bfloat4_min_tile_height,
             in0_tile.get_height());
     }
     if (input_tensor_b.dtype() == DataType::BFLOAT4_B) {
         TT_FATAL(
-            in1_tile.get_width() >= bfloat4_min_outer_tile_extent,
+            in1_tile.get_height() >= bfloat4_min_tile_height,
+            "BFLOAT4_B matmul requires in1 tile height >= {} (got {})",
+            bfloat4_min_tile_height,
+            in1_tile.get_height());
+        TT_FATAL(
+            in1_tile.get_width() >= bfloat4_min_tile_height,
             "BFLOAT4_B matmul requires in1 tile width >= {} (got {})",
-            bfloat4_min_outer_tile_extent,
+            bfloat4_min_tile_height,
             in1_tile.get_width());
     }
 
@@ -197,7 +203,9 @@ void check_output_shard_grid_within_extent(
         return;
     }
     const auto& shard_grid = output_mem_config.shard_spec().value().grid;
-    const tt::tt_metal::CoreRange bbox(tt::tt_metal::CoreCoord(0, 0), extent);
+    TT_FATAL(extent.x > 0 && extent.y > 0, "device grid extent must be non-zero, got ({}, {})", extent.x, extent.y);
+    const tt::tt_metal::CoreRange bbox(
+        tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(extent.x - 1, extent.y - 1));
     TT_FATAL(
         bbox.contains(shard_grid),
         "{}: output shard grid {} must lie within extent {}",
@@ -219,39 +227,41 @@ void validate_matmul_compute_grid_and_per_core_dims(
             if constexpr (
                 std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseProgramConfig> ||
                 std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig> ||
-                std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
-                bool skip_grid_check = false;
-                if constexpr (std::is_same_v<
-                                  ProgramConfigType,
-                                  operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
-                    skip_grid_check = program_config.gather_in0;
-                }
-                if (!skip_grid_check) {
-                    const auto& grid = program_config.compute_with_storage_grid_size;
-                    TT_FATAL(
-                        grid.x > 0 && grid.y > 0,
-                        "compute_with_storage_grid_size must be non-zero, got ({}, {})",
-                        grid.x,
-                        grid.y);
-                    TT_FATAL(
-                        grid.x <= device_grid.x && grid.y <= device_grid.y,
-                        "compute_with_storage_grid_size ({}, {}) must fit within device grid ({}, {})",
-                        grid.x,
-                        grid.y,
-                        device_grid.x,
-                        device_grid.y);
-                }
-                validate_matmul_nonzero_block_dims(
-                    program_config.in0_block_w, program_config.per_core_M, program_config.per_core_N);
-                return;
-            }
-            if constexpr (
+                std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig> ||
                 std::is_same_v<
                     ProgramConfigType,
                     operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig> ||
                 std::is_same_v<
                     ProgramConfigType,
                     operations::matmul::MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>) {
+                if constexpr (
+                    std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseProgramConfig> ||
+                    std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig> ||
+                    std::is_same_v<
+                        ProgramConfigType,
+                        operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+                    bool skip_grid_check = false;
+                    if constexpr (std::is_same_v<
+                                      ProgramConfigType,
+                                      operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+                        skip_grid_check = program_config.gather_in0;
+                    }
+                    if (!skip_grid_check) {
+                        const auto& grid = program_config.compute_with_storage_grid_size;
+                        TT_FATAL(
+                            grid.x > 0 && grid.y > 0,
+                            "compute_with_storage_grid_size must be non-zero, got ({}, {})",
+                            grid.x,
+                            grid.y);
+                        TT_FATAL(
+                            grid.x <= device_grid.x && grid.y <= device_grid.y,
+                            "compute_with_storage_grid_size ({}, {}) must fit within device grid ({}, {})",
+                            grid.x,
+                            grid.y,
+                            device_grid.x,
+                            device_grid.y);
+                    }
+                }
                 validate_matmul_nonzero_block_dims(
                     program_config.in0_block_w, program_config.per_core_M, program_config.per_core_N);
             }
@@ -324,6 +334,8 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
                     TT_FATAL(
                         program_config.hop_cores.empty(),
                         "Hop cores are not supported for any mode besides gather_in0.");
+                    TT_FATAL(
+                        Mt > 0 && Nt > 0, "Mt and Nt must be greater than zero in tiles (got Mt={}, Nt={})", Mt, Nt);
                     const uint32_t num_blocks_y = ((Mt - 1) / per_core_M) + 1;
                     const uint32_t num_blocks_x = ((Nt - 1) / per_core_N) + 1;
                     const uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
@@ -351,6 +363,7 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
                 const auto Mt =
                     operations::matmul::utilities::get_M_dim(a_shape_padded, in0_tile, program_config.fuse_batch);
                 const auto Nt = operations::matmul::utilities::get_N_dim(b_shape_padded, in1_tile);
+                TT_FATAL(Mt > 0 && Nt > 0, "Mt and Nt must be greater than zero in tiles (got Mt={}, Nt={})", Mt, Nt);
                 uint32_t num_blocks_y = ((Mt - 1) / program_config.per_core_M) + 1;
                 uint32_t num_blocks_x = ((Nt - 1) / program_config.per_core_N) + 1;
                 if (program_config.transpose_mcast) {
