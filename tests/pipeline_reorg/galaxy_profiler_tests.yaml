@@ -2,7 +2,7 @@
 #
 # Each entry represents a parallel job with the following keys:
 #   name: The display name for the job in GitHub Actions.
-#   cmd: The exact command to run for the test.
+#   cmd: Function name from tests/scripts/wh_6u/run_wh_6u_profiler_tests.sh.
 #   skus: A mapping of SKU names to their configuration.
 #     Each SKU entry contains:
 #       timeout: The maximum allowed runtime for this job in minutes on that SKU.
@@ -11,21 +11,10 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
-- name: Galaxy profiler device tests
-  # ~20 functions, observed >14 min wall-clock; 30 min gives healthy headroom.
-  cmd: TT_METAL_DEVICE_PROFILER=1 pytest tests/tt_metal/tools/profiler/test_device_profiler.py --noconftest --timeout 360
+- name: Galaxy profiler tests
+  cmd: run_profiling_test
   skus:
     wh_galaxy:
-      timeout: 30
-  owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
-
-- name: Galaxy profiler realtime cross-reference tests
-  # Single test; observed ~6 min wall-clock; 15 min gives ~2.5x buffer.
-  # The test itself has @pytest.mark.timeout(2100) baked in as the per-test ceiling.
-  cmd: TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/tracy/test_realtime_profiler.py::test_cross_reference_tg --timeout 2400
-  skus:
-    wh_galaxy:
-      timeout: 15
+      timeout: 45
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285

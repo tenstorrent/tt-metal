@@ -97,7 +97,14 @@ main() {
         source python_env/bin/activate
     fi
 
-    run_profiling_test
+    # If a function name is provided as first argument, run that function
+    if [[ -n "$1" ]] && [[ "$(type -t "$1")" == "function" ]]; then
+        echo "Running function: $1"
+        "$@"
+    else
+        # Otherwise run all tests
+        run_profiling_test
+    fi
 }
 
 main "$@"

@@ -2,227 +2,79 @@
 #
 # Each entry represents a parallel job with the following keys:
 #   name: The display name for the job in GitHub Actions.
-#   cmd: The exact command to run for the test.
+#   cmd: Function name from tests/scripts/single_card/run_single_card_profiler_tests.sh.
 #   skus: A mapping of SKU names to their configuration.
 #     Each SKU entry contains:
 #       timeout: The maximum allowed runtime for this job in minutes on that SKU.
 #   owner_id: The Slack user ID to notify on failure.
 #   team: The team that owns the test.
-#   mode: (optional) "post-commit" or "full" — applied by the impl's mode filter.
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
 # ----- N150 (wh_n150_civ2) -----
 - name: N150 mid-run device data dump
-  cmd: |
-    set -eo pipefail
-    set -x
-    rm -rf "$PROFILER_ARTIFACTS_DIR"
-    mkdir -p "$PROFILER_ARTIFACTS_DIR"
-    python -m tracy -v -r -p --sync-host-device --dump-device-data-mid-run -m pytest tests/ttnn/tracy/test_profiler_sync.py::test_mesh_device
-    python "$PROFILER_SCRIPTS_ROOT/compare_ops_logs.py"
+  cmd: run_mid_run_data_dump
   skus:
     wh_n150_civ2:
       timeout: 5
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
 
-- name: N150 profiler device tests (post-commit)
-  cmd: TT_METAL_DEVICE_PROFILER=1 pytest tests/tt_metal/tools/profiler/test_device_profiler.py --noconftest --timeout 360 -m "not skip_post_commit"
+- name: N150 profiler regressions
+  cmd: run_profiling_test
   skus:
     wh_n150_civ2:
-      timeout: 30
-  owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
-  mode: post-commit
-
-- name: N150 profiler device tests (full)
-  cmd: TT_METAL_DEVICE_PROFILER=1 pytest tests/tt_metal/tools/profiler/test_device_profiler.py --noconftest --timeout 360
-  skus:
-    wh_n150_civ2:
-      timeout: 30
-  owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
-  mode: full
-
-- name: N150 profiler perf op report tests
-  cmd: TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/tracy/test_perf_op_report.py --noconftest -k "not TestOpSupportCount"
-  skus:
-    wh_n150_civ2:
-      timeout: 10
-  owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
-
-- name: N150 real-time profiler tests
-  # Consolidated real-time profiler suite: callback smoke, short-zone regression,
-  # host/device correlation, cross-reference, sync-accuracy. Per-test timeouts
-  # come from @pytest.mark.timeout decorators on the individual tests.
-  cmd: |
-    set -eo pipefail
-    rm -rf "$PROFILER_ARTIFACTS_DIR"
-    mkdir -p "$PROFILER_ARTIFACTS_DIR"
-    pytest tests/ttnn/tracy/test_realtime_profiler.py
-  skus:
-    wh_n150_civ2:
-      timeout: 20
+      timeout: 45
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
 
 # ----- N300 (wh_n300_civ2) -----
 - name: N300 mid-run device data dump
-  cmd: |
-    set -eo pipefail
-    set -x
-    rm -rf "$PROFILER_ARTIFACTS_DIR"
-    mkdir -p "$PROFILER_ARTIFACTS_DIR"
-    python -m tracy -v -r -p --sync-host-device --dump-device-data-mid-run -m pytest tests/ttnn/tracy/test_profiler_sync.py::test_mesh_device
-    python "$PROFILER_SCRIPTS_ROOT/compare_ops_logs.py"
+  cmd: run_mid_run_data_dump
   skus:
     wh_n300_civ2:
       timeout: 5
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
 
-- name: N300 profiler device tests (post-commit)
-  cmd: TT_METAL_DEVICE_PROFILER=1 pytest tests/tt_metal/tools/profiler/test_device_profiler.py --noconftest --timeout 360 -m "not skip_post_commit"
+- name: N300 profiler regressions
+  cmd: run_profiling_test
   skus:
     wh_n300_civ2:
-      timeout: 30
-  owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
-  mode: post-commit
-
-- name: N300 profiler device tests (full)
-  cmd: TT_METAL_DEVICE_PROFILER=1 pytest tests/tt_metal/tools/profiler/test_device_profiler.py --noconftest --timeout 360
-  skus:
-    wh_n300_civ2:
-      timeout: 30
-  owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
-  mode: full
-
-- name: N300 profiler perf op report tests
-  cmd: TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/tracy/test_perf_op_report.py --noconftest -k "not TestOpSupportCount"
-  skus:
-    wh_n300_civ2:
-      timeout: 10
-  owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
-
-- name: N300 real-time profiler tests
-  cmd: |
-    set -eo pipefail
-    rm -rf "$PROFILER_ARTIFACTS_DIR"
-    mkdir -p "$PROFILER_ARTIFACTS_DIR"
-    pytest tests/ttnn/tracy/test_realtime_profiler.py
-  skus:
-    wh_n300_civ2:
-      timeout: 20
+      timeout: 45
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
 
 # ----- P100a (bh_p100a_civ2_viommu) -----
 - name: P100a mid-run device data dump
-  cmd: |
-    set -eo pipefail
-    set -x
-    rm -rf "$PROFILER_ARTIFACTS_DIR"
-    mkdir -p "$PROFILER_ARTIFACTS_DIR"
-    python -m tracy -v -r -p --sync-host-device --dump-device-data-mid-run -m pytest tests/ttnn/tracy/test_profiler_sync.py::test_mesh_device
-    python "$PROFILER_SCRIPTS_ROOT/compare_ops_logs.py"
+  cmd: run_mid_run_data_dump
   skus:
     bh_p100a_civ2_viommu:
       timeout: 5
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
 
-- name: P100a profiler device tests (post-commit)
-  cmd: TT_METAL_DEVICE_PROFILER=1 pytest tests/tt_metal/tools/profiler/test_device_profiler.py --noconftest --timeout 360 -m "not skip_post_commit"
+- name: P100a profiler regressions
+  cmd: run_profiling_test
   skus:
     bh_p100a_civ2_viommu:
-      timeout: 30
-  owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
-  mode: post-commit
-
-- name: P100a profiler device tests (full)
-  cmd: TT_METAL_DEVICE_PROFILER=1 pytest tests/tt_metal/tools/profiler/test_device_profiler.py --noconftest --timeout 360
-  skus:
-    bh_p100a_civ2_viommu:
-      timeout: 30
-  owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
-  mode: full
-
-- name: P100a profiler perf op report tests
-  cmd: TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/tracy/test_perf_op_report.py --noconftest -k "not TestOpSupportCount"
-  skus:
-    bh_p100a_civ2_viommu:
-      timeout: 10
-  owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
-
-- name: P100a real-time profiler tests
-  cmd: |
-    set -eo pipefail
-    rm -rf "$PROFILER_ARTIFACTS_DIR"
-    mkdir -p "$PROFILER_ARTIFACTS_DIR"
-    pytest tests/ttnn/tracy/test_realtime_profiler.py
-  skus:
-    bh_p100a_civ2_viommu:
-      timeout: 20
+      timeout: 45
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
 
 # ----- P150b (bh_p150b_civ2_viommu) -----
 - name: P150b mid-run device data dump
-  cmd: |
-    set -eo pipefail
-    set -x
-    rm -rf "$PROFILER_ARTIFACTS_DIR"
-    mkdir -p "$PROFILER_ARTIFACTS_DIR"
-    python -m tracy -v -r -p --sync-host-device --dump-device-data-mid-run -m pytest tests/ttnn/tracy/test_profiler_sync.py::test_mesh_device
-    python "$PROFILER_SCRIPTS_ROOT/compare_ops_logs.py"
+  cmd: run_mid_run_data_dump
   skus:
     bh_p150b_civ2_viommu:
       timeout: 5
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
 
-- name: P150b profiler device tests (post-commit)
-  cmd: TT_METAL_DEVICE_PROFILER=1 pytest tests/tt_metal/tools/profiler/test_device_profiler.py --noconftest --timeout 360 -m "not skip_post_commit"
+- name: P150b profiler regressions
+  cmd: run_profiling_test
   skus:
     bh_p150b_civ2_viommu:
-      timeout: 30
-  owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
-  mode: post-commit
-
-- name: P150b profiler device tests (full)
-  cmd: TT_METAL_DEVICE_PROFILER=1 pytest tests/tt_metal/tools/profiler/test_device_profiler.py --noconftest --timeout 360
-  skus:
-    bh_p150b_civ2_viommu:
-      timeout: 30
-  owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
-  mode: full
-
-- name: P150b profiler perf op report tests
-  cmd: TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/tracy/test_perf_op_report.py --noconftest -k "not TestOpSupportCount"
-  skus:
-    bh_p150b_civ2_viommu:
-      timeout: 10
-  owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
-
-- name: P150b real-time profiler tests
-  cmd: |
-    set -eo pipefail
-    rm -rf "$PROFILER_ARTIFACTS_DIR"
-    mkdir -p "$PROFILER_ARTIFACTS_DIR"
-    pytest tests/ttnn/tracy/test_realtime_profiler.py
-  skus:
-    bh_p150b_civ2_viommu:
-      timeout: 20
+      timeout: 45
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285

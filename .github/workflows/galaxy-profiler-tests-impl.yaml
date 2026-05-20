@@ -114,7 +114,7 @@ jobs:
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          ${{ matrix.test-group.cmd }}
+          bash tests/scripts/wh_6u/run_wh_6u_profiler_tests.sh ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}

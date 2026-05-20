@@ -40,7 +40,7 @@ jobs:
   load-test-matrix:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.apply-mode-filter.outputs.matrix }}
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/single_card_profiler_tests.yaml
     steps:
@@ -69,29 +69,6 @@ jobs:
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.enabled-skus }}" \
             ./.github/sku_config.yaml
-      - name: Apply mode filter
-        id: apply-mode-filter
-        # Inputs flow via env vars so shell metacharacters in cmd fields
-        # (e.g. `awk '{print $1}'`) can't break the shell parser.
-        env:
-          MATRIX_JSON: ${{ steps.build-matrix.outputs.matrix }}
-          TEST_SELECTION: ${{ inputs.test-selection }}
-          ENABLED_SKUS: ${{ inputs.enabled-skus }}
-        run: |
-          if [ "$TEST_SELECTION" = "all" ]; then
-            FILTERED="$MATRIX_JSON"
-          else
-            FILTERED=$(jq -c --arg m "$TEST_SELECTION" '[.[] | select(.mode == null or .mode == $m)]' <<<"$MATRIX_JSON")
-          fi
-          if [ "$FILTERED" = "[]" ]; then
-            echo "::error::No tests match enabled-skus='$ENABLED_SKUS' + test-selection='$TEST_SELECTION'."
-            exit 1
-          fi
-          {
-            echo "matrix<<EOF"
-            echo "$FILTERED"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
 
   single-card-profiler-tests:
     needs: load-test-matrix
@@ -145,8 +122,10 @@ jobs:
           enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          MODE_FLAG: ${{ inputs.test-selection == 'post-commit' && '--post-commit' || '--full' }}
         run: |
-          ${{ matrix.test-group.cmd }}
+          bash tests/scripts/single_card/run_single_card_profiler_tests.sh "$MODE_FLAG" ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}

@@ -2,7 +2,7 @@
 #
 # Each entry represents a parallel job with the following keys:
 #   name: The display name for the job in GitHub Actions.
-#   cmd: The exact command to run for the test.
+#   cmd: Function name from tests/scripts/t3000/run_t3000_profiler_tests.sh.
 #   skus: A mapping of SKU names to their configuration.
 #     Each SKU entry contains:
 #       timeout: The maximum allowed runtime for this job in minutes on that SKU.
@@ -12,15 +12,7 @@
 # For max allowed timeout refer to .github/time_budget.yaml
 
 - name: T3000 mid-run device data dump
-  cmd: |
-    set -eo pipefail
-    set -x
-    rm -rf "$PROFILER_ARTIFACTS_DIR"
-    mkdir -p "$PROFILER_ARTIFACTS_DIR"
-    python -m tracy -v -r -p --sync-host-device --dump-device-data-mid-run -m pytest tests/ttnn/tracy/test_profiler_sync.py::test_mesh_device
-    runDate=$(ls "$PROFILER_OUTPUT_DIR/")
-    cat "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv"
-    python "$PROFILER_SCRIPTS_ROOT/compare_ops_logs.py"
+  cmd: run_mid_run_data_dump
   skus:
     wh_llmbox:
       timeout: 8
@@ -28,21 +20,7 @@
   team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
 
 - name: T3000 async falcon7b causal-LM
-  cmd: |
-    set -eo pipefail
-    set -x
-    rm -rf "$PROFILER_ARTIFACTS_DIR"
-    mkdir -p "$PROFILER_ARTIFACTS_DIR"
-    python -m tracy -v -r -p --op-support-count 2000 -m "pytest -svv models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_causallm.py::test_falcon_causal_lm[wormhole_b0-20-2-BFLOAT16-L1-falcon_7b-layers_2-decode_batch32]" | tee "$PROFILER_ARTIFACTS_DIR/test_out.log"
-    if grep -q "SKIPPED" "$PROFILER_ARTIFACTS_DIR/test_out.log"; then
-        echo "No verification as test was skipped"
-        exit 0
-    fi
-    runDate=$(ls "$PROFILER_OUTPUT_DIR/")
-    csv="$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv"
-    lineCount=$(wc -l < "$csv" | awk '{print $1}')
-    (( lineCount >= 1000 )) || { echo "Line count $lineCount below floor 1000" >&2; exit 1; }
-    python "$PROFILER_SCRIPTS_ROOT/compare_ops_logs.py"
+  cmd: run_async_test
   skus:
     wh_llmbox:
       timeout: 15
@@ -50,67 +28,15 @@
   team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
 
 - name: T3000 async tracing resnet50 (legacy vs runtime comparison)
-  cmd: |
-    set -eo pipefail
-    set -x
-    rm -rf "$PROFILER_ARTIFACTS_DIR"
-    mkdir -p "$PROFILER_ARTIFACTS_DIR"
-    python -m tracy -v -r -p -m "pytest models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-DataType.BFLOAT8_B-DataType.BFLOAT8_B-MathFidelity.LoFi-device_params0]" | tee "$PROFILER_ARTIFACTS_DIR/test_out.log"
-    if grep -q "SKIPPED" "$PROFILER_ARTIFACTS_DIR/test_out.log"; then
-        echo "No verification as test was skipped"
-        exit 0
-    fi
-    runDate=$(ls "$PROFILER_OUTPUT_DIR/")
-    csv="$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv"
-    lineCount=$(wc -l < "$csv" | awk '{print $1}')
-    (( lineCount >= 2600 )) || { echo "Line count $lineCount below floor 2600" >&2; exit 1; }
-    python "$PROFILER_SCRIPTS_ROOT/compare_ops_logs.py"
-    # Legacy path vs runtime analysis comparison
-    ./tools/tracy/process_ops_logs.py -o "$PROFILER_ARTIFACTS_DIR" -n "legacy_comparison" --force-legacy-device-logs
-    legacy_report="$PROFILER_ARTIFACTS_DIR/reports/legacy_comparison/ops_perf_results_legacy_comparison.csv"
-    [[ -f "$legacy_report" ]] || { echo "ERROR: Legacy report not found at $legacy_report"; exit 1; }
-    python tools/tracy/compare_full_op_report.py "$csv" "$legacy_report"
-    rm -rf "$PROFILER_ARTIFACTS_DIR/reports/legacy_comparison"
-    # Device-only report on the same artifacts
-    rm -rf "$PROFILER_OUTPUT_DIR/$runDate"
-    ./tools/tracy/process_ops_logs.py --device-only --date
-    runDate=$(ls "$PROFILER_OUTPUT_DIR/")
-    csv="$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv"
-    lineCount=$(wc -l < "$csv" | awk '{print $1}')
-    (( lineCount >= 1700 )) || { echo "ops_perf line count $lineCount below floor 1700" >&2; exit 1; }
-    csv2="$PROFILER_OUTPUT_DIR/$runDate/per_core_op_to_op_times_$runDate.csv"
-    lineCount=$(wc -l < "$csv2" | awk '{print $1}')
-    (( lineCount >= 1700 )) || { echo "per_core_op_to_op line count $lineCount below floor 1700" >&2; exit 1; }
+  cmd: run_async_tracing_T3000_test
   skus:
     wh_llmbox:
       timeout: 25
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
 
-# NOTE: This entry runs two pytest invocations because the test's purpose is
-# to cross-compare profiler artifacts between a mid-run-dump pytest and a
-# normal pytest of the SAME resnet50 invocation. Splitting them across matrix
-# shards would lose the shared artifact state required by the comparison.
 - name: T3000 async tracing resnet50 (mid-run dump cross-comparison)
-  cmd: |
-    set -eo pipefail
-    set -x
-    rm -rf "$PROFILER_ARTIFACTS_DIR"
-    mkdir -p "$PROFILER_ARTIFACTS_DIR"
-    python -m tracy -v -r -p --dump-device-data-mid-run -m pytest models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-DataType.BFLOAT8_B-DataType.BFLOAT8_B-MathFidelity.LoFi-device_params0] | tee "$PROFILER_ARTIFACTS_DIR/test_out.log"
-    if grep -q "SKIPPED" "$PROFILER_ARTIFACTS_DIR/test_out.log"; then
-        echo "No verification as test was skipped"
-        exit 0
-    fi
-    midRunDumpRunDate=$(ls "$PROFILER_OUTPUT_DIR/")
-    mv "$PROFILER_ARTIFACTS_DIR/.logs/cpp_device_perf_report.csv" "$PROFILER_OUTPUT_DIR/$midRunDumpRunDate/cpp_device_perf_report.csv"
-    python -m tracy -v -r -p -m pytest models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-DataType.BFLOAT8_B-DataType.BFLOAT8_B-MathFidelity.LoFi-device_params0]
-    nonMidRunDumpRunDate=$(ls "$PROFILER_OUTPUT_DIR/" | grep -v "$midRunDumpRunDate")
-    mv "$PROFILER_ARTIFACTS_DIR/.logs/cpp_device_perf_report.csv" "$PROFILER_OUTPUT_DIR/$nonMidRunDumpRunDate/cpp_device_perf_report.csv"
-    python "$PROFILER_SCRIPTS_ROOT/compare_ops_logs.py" "$PROFILER_OUTPUT_DIR/$midRunDumpRunDate/ops_perf_results_$midRunDumpRunDate.csv" "$PROFILER_OUTPUT_DIR/$midRunDumpRunDate/cpp_device_perf_report.csv"
-    python "$PROFILER_SCRIPTS_ROOT/compare_ops_logs.py" "$PROFILER_OUTPUT_DIR/$nonMidRunDumpRunDate/ops_perf_results_$nonMidRunDumpRunDate.csv" "$PROFILER_OUTPUT_DIR/$nonMidRunDumpRunDate/cpp_device_perf_report.csv"
-    python "$PROFILER_SCRIPTS_ROOT/compare_ops_logs.py" --only-compare-op-ids "$PROFILER_OUTPUT_DIR/$midRunDumpRunDate/ops_perf_results_$midRunDumpRunDate.csv" "$PROFILER_OUTPUT_DIR/$nonMidRunDumpRunDate/cpp_device_perf_report.csv"
-    python "$PROFILER_SCRIPTS_ROOT/compare_ops_logs.py" --only-compare-op-ids "$PROFILER_OUTPUT_DIR/$nonMidRunDumpRunDate/ops_perf_results_$nonMidRunDumpRunDate.csv" "$PROFILER_OUTPUT_DIR/$midRunDumpRunDate/cpp_device_perf_report.csv"
+  cmd: run_async_tracing_mid_run_dump_T3000_test
   skus:
     wh_llmbox:
       timeout: 25
@@ -118,21 +44,7 @@
   team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
 
 - name: T3000 CCL AllGather profiling
-  cmd: |
-    set -eo pipefail
-    set -x
-    rm -rf "$PROFILER_ARTIFACTS_DIR"
-    mkdir -p "$PROFILER_ARTIFACTS_DIR"
-    python -m tracy -v -r -p -m "pytest tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_ttnn_all_gather[wormhole_b0-fabric_ring-mem_config_input0-mem_config_ag0-sd35_prompt-check-1link-mesh_device0]" | tee "$PROFILER_ARTIFACTS_DIR/test_out.log"
-    if grep -q "SKIPPED" "$PROFILER_ARTIFACTS_DIR/test_out.log"; then
-        echo "No verification as test was skipped"
-        exit 0
-    fi
-    runDate=$(ls "$PROFILER_OUTPUT_DIR/")
-    csv="$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv"
-    lineCount=$(grep -c "AllGatherDeviceOperation" "$csv" || true)
-    (( lineCount == 8 )) || { echo "AllGatherDeviceOperation line count $lineCount != 8" >&2; exit 1; }
-    python "$PROFILER_SCRIPTS_ROOT/compare_ops_logs.py"
+  cmd: run_ccl_T3000_test
   skus:
     wh_llmbox:
       timeout: 10
@@ -140,18 +52,7 @@
   team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
 
 - name: T3000 trace-only resnet50
-  cmd: |
-    set -eo pipefail
-    set -x
-    rm -rf "$PROFILER_ARTIFACTS_DIR"
-    mkdir -p "$PROFILER_ARTIFACTS_DIR"
-    TT_METAL_DEVICE_PROFILER=1 python -m tracy -v -p --device-trace-profiler -m \
-        pytest models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-DataType.BFLOAT8_B-DataType.BFLOAT8_B-MathFidelity.LoFi-device_params0]
-    if [[ -f "$PROFILER_ARTIFACTS_DIR/test_out.log" ]] && grep -q "SKIPPED" "$PROFILER_ARTIFACTS_DIR/test_out.log"; then
-        echo "No verification as test was skipped"
-    else
-        echo "Trace-only resnet50 ran successfully"
-    fi
+  cmd: run_trace_only_resnet
   skus:
     wh_llmbox:
       timeout: 10
@@ -159,58 +60,7 @@
   team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
 
 - name: T3000 multi-host tracy smoke
-  cmd: |
-    set -eo pipefail
-    set -x
-    rm -rf "$PROFILER_ARTIFACTS_DIR"
-    mkdir -p "$PROFILER_ARTIFACTS_DIR"
-    set +e
-    tt-run --bare \
-        --mpi-args "--allow-run-as-root" \
-        --rank-binding tests/ttnn/distributed/config/t3k_tracy_smoke_rank_bindings.yaml \
-        --tracy "-r" \
-        pytest tests/ttnn/distributed/test_tracy_multi_host_smoke.py | tee "$PROFILER_ARTIFACTS_DIR/test_out.log"
-    tt_run_status=${PIPESTATUS[0]}
-    set -e
-    if grep -q "SKIPPED" "$PROFILER_ARTIFACTS_DIR/test_out.log"; then
-        echo "No verification as test was skipped (not a T3K)"
-        exit 0
-    fi
-    [[ "$tt_run_status" -eq 0 ]] || { echo "ERROR: tt-run exited with status $tt_run_status" >&2; exit 1; }
-    if grep -qE 'FAILED tests/|ERROR tests/' "$PROFILER_ARTIFACTS_DIR/test_out.log"; then
-        echo "ERROR: pytest reported FAILED or ERROR" >&2
-        exit 1
-    fi
-    for rank_dir in "$PROFILER_ARTIFACTS_DIR"/ttrun/rank*; do
-        rank=$(basename "$rank_dir")
-        [[ -f "$rank_dir/.logs/tracy_ops_times.csv" ]] || { echo "ERROR: Missing tracy_ops_times.csv for $rank" >&2; exit 1; }
-        echo "$rank: tracy host reports present"
-    done
-  skus:
-    wh_llmbox:
-      timeout: 10
-  owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
-
-- name: T3000 profiler device tests
-  # Same pytest as the galaxy device tests; copy 30 min budget.
-  cmd: TT_METAL_DEVICE_PROFILER=1 pytest tests/tt_metal/tools/profiler/test_device_profiler.py --noconftest --timeout 360
-  skus:
-    wh_llmbox:
-      timeout: 30
-  owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
-
-- name: T3000 profiler perf op report tests
-  cmd: TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/tracy/test_perf_op_report.py --noconftest
-  skus:
-    wh_llmbox:
-      timeout: 10
-  owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
-
-- name: T3000 profiler process_ops_logs tests
-  cmd: pytest tests/ttnn/tracy/test_process_ops_logs.py --noconftest
+  cmd: run_multi_host_tracy_smoke
   skus:
     wh_llmbox:
       timeout: 10
