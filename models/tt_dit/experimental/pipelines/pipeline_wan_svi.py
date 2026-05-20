@@ -128,12 +128,20 @@ class WanPipelineSVI(WanPipelineI2VLora):
         self._regime: Regime = regime
         self._num_motion_latent = int(num_motion_latent)
         self._num_overlap_frame = int(num_overlap_frame)
+        # Caches keyed across the clips of a single generate_long_video
+        # call. Set up at the top of generate_long_video and cleared in
+        # its finally block.
+        self._anchor_latents_cache: Optional[tuple] = None  # (template_latents_shape, tt_y_const)
+        self._prompt_embeds_cache: dict = {}
 
         if regime == "python":
             kwargs["lora_high"] = [LoRASpec(svi_high, 1.0)]
             kwargs["lora_low"] = [LoRASpec(svi_low, 1.0)]
             shift = self.PYTHON_FLOW_SHIFT if sigma_shift is None else float(sigma_shift)
-            if "scheduler" not in kwargs:
+            # create_pipeline always forwards scheduler=None explicitly, so
+            # `"scheduler" in kwargs` is True even when unset by the caller;
+            # gate on the value being None.
+            if kwargs.get("scheduler") is None:
                 from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
 
                 # Matches diffsynth's FlowMatchScheduler("Wan") at sigma_shift=5
@@ -151,7 +159,7 @@ class WanPipelineSVI(WanPipelineI2VLora):
                 LoRASpec(svi_low, 1.0),
             ]
             shift = self.COMFYUI_FLOW_SHIFT if sigma_shift is None else float(sigma_shift)
-            if "scheduler" not in kwargs:
+            if kwargs.get("scheduler") is None:
                 from models.tt_dit.solvers import WanDPMSolverSDEScheduler
 
                 # ComfyUI WanVideoSampler uses k-diffusion dpm++_sde with
@@ -234,17 +242,47 @@ class WanPipelineSVI(WanPipelineI2VLora):
             )
 
         anchor_pil = anchor_image if anchor_image is not None else _unwrap_image(image_prompt)
-        latents, tt_y = super().prepare_latents(
-            batch_size=batch_size,
-            image_prompt=[ImagePrompt(image=anchor_pil, frame_pos=0)],
-            num_channels_latents=num_channels_latents,
-            height=height,
-            width=width,
-            num_frames=num_frames,
-            dtype=dtype,
-            device=device,
-            latents=latents,
-        )
+
+        # Anchor VAE encode is the dominant non-DiT cost per clip (~3-8s on
+        # BH 2x4) and the encoded result depends only on (anchor, H, W, T,
+        # dtype) — none of which change across clips of a single
+        # generate_long_video call. Cache the encoded template the first
+        # time we're called and reuse it (cloned) for subsequent clips.
+        cache_key = (id(anchor_pil), height, width, num_frames, num_channels_latents, dtype)
+        cached = self._anchor_latents_cache
+        if latents is None and cached is not None and cached[0] == cache_key:
+            tt_y_template = cached[1]
+            # Build fresh random latents the same way the base does so we
+            # don't reuse noise across clips.
+            from ...pipelines.wan.pipeline_wan import WanPipeline
+
+            latents, _ = WanPipeline.prepare_latents(
+                self,
+                batch_size=batch_size,
+                num_channels_latents=num_channels_latents,
+                height=height,
+                width=width,
+                num_frames=num_frames,
+                dtype=dtype,
+                device=device,
+                latents=None,
+            )
+            tt_y = tt_y_template.clone()
+        else:
+            latents, tt_y = super().prepare_latents(
+                batch_size=batch_size,
+                image_prompt=[ImagePrompt(image=anchor_pil, frame_pos=0)],
+                num_channels_latents=num_channels_latents,
+                height=height,
+                width=width,
+                num_frames=num_frames,
+                dtype=dtype,
+                device=device,
+                latents=latents,
+            )
+            # Stash the encoded template (cloned so subsequent in-place
+            # splices don't poison the cache).
+            self._anchor_latents_cache = (cache_key, tt_y.clone())
 
         # tt_y layout: (B, 4 mask channels + 16 image-latent channels, T_lat, H_lat, W_lat).
         t_lat = tt_y.shape[2]
@@ -278,6 +316,7 @@ class WanPipelineSVI(WanPipelineI2VLora):
         width: int = 832,
         base_seed: int = 0,
         seed_stride: int = 42,
+        partial_output_path: Optional[str] = None,
         **call_kwargs,
     ):
         """Run ``num_clips`` chained I2V generations and return the concat.
@@ -311,6 +350,58 @@ class WanPipelineSVI(WanPipelineI2VLora):
         else:
             prompts_per_clip = [prompt] * num_clips
 
+        # Pre-encode each unique prompt once so repeated clips skip the
+        # T5 forward. For single-prompt mode that's (N-1) re-encodes
+        # avoided; per-clip prompts get encoded once and reused for the
+        # negative embed (which is the same empty string across clips).
+        self._prepare_text_encoder()
+        negative_prompt = call_kwargs.pop("negative_prompt", "")
+        # CFG state isn't set on the pipeline until __call__ runs, so
+        # derive it from the guidance_scale we'll pass in.
+        do_cfg = float(call_kwargs.get("guidance_scale", 1.0)) > 1.0
+        unique_prompts = list(dict.fromkeys(prompts_per_clip))
+        for unique_prompt in unique_prompts:
+            if unique_prompt not in self._prompt_embeds_cache:
+                pos, neg = self.encode_prompt(
+                    prompt=unique_prompt,
+                    negative_prompt=negative_prompt,
+                    do_classifier_free_guidance=do_cfg,
+                )
+                self._prompt_embeds_cache[unique_prompt] = (pos, neg)
+
+        try:
+            return self._generate_clips_loop(
+                prompts_per_clip=prompts_per_clip,
+                anchor_pil=anchor_pil,
+                height=height,
+                width=width,
+                num_frames=num_frames,
+                num_clips=num_clips,
+                base_seed=base_seed,
+                seed_stride=seed_stride,
+                partial_output_path=partial_output_path,
+                call_kwargs=call_kwargs,
+            )
+        finally:
+            # Drop per-call caches so the next generate_long_video call
+            # can re-encode with a different anchor / prompt set.
+            self._anchor_latents_cache = None
+            self._prompt_embeds_cache = {}
+
+    def _generate_clips_loop(
+        self,
+        *,
+        prompts_per_clip,
+        anchor_pil,
+        height,
+        width,
+        num_frames,
+        num_clips,
+        base_seed,
+        seed_stride,
+        partial_output_path,
+        call_kwargs,
+    ):
         prev_last_latent: Optional[torch.Tensor] = None
         clips: List[torch.Tensor] = []
 
@@ -322,8 +413,10 @@ class WanPipelineSVI(WanPipelineI2VLora):
                 f"prompt={clip_prompt[:80]!r}...)"
             )
 
+            prompt_embeds, negative_prompt_embeds = self._prompt_embeds_cache[clip_prompt]
             result = self(
-                prompt=clip_prompt,
+                prompt_embeds=prompt_embeds,
+                negative_prompt_embeds=negative_prompt_embeds,
                 image_prompt=[ImagePrompt(image=anchor_pil, frame_pos=0)],
                 height=height,
                 width=width,
@@ -341,6 +434,16 @@ class WanPipelineSVI(WanPipelineI2VLora):
                 raise RuntimeError("SVI requires return_last_latent=True from the inner pipeline.")
 
             clips.append(frames[0] if frames.ndim == 5 else frames)
+
+            # Save partial concat so a mid-run hang still leaves a usable
+            # video covering the clips that completed.
+            if partial_output_path is not None:
+                partial = _concat_with_overlap(clips, overlap=self._num_overlap_frame)
+                torch.save(partial.detach().cpu(), partial_output_path)
+                logger.info(
+                    f"saved partial output after clip {clip_idx + 1}/{num_clips} "
+                    f"({partial.shape[0]} frames) to {partial_output_path}"
+                )
 
         return _concat_with_overlap(clips, overlap=self._num_overlap_frame)
 

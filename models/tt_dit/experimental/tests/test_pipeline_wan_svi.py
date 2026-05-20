@@ -118,6 +118,8 @@ def test_long_video(
         f"steps={num_inference_steps}, motion={num_motion_latent}, overlap={num_overlap_frame}"
     )
 
+    output_basename = f"wan_svi_{regime}_{num_clips}clips_{width}x{height}"
+
     with torch.no_grad():
         video = pipeline.generate_long_video(
             prompt=prompt,
@@ -130,6 +132,7 @@ def test_long_video(
             num_inference_steps=num_inference_steps,
             guidance_scale=guidance_scale,
             guidance_scale_2=guidance_scale_2,
+            partial_output_path=f"{output_basename}.partial.pt",
         )
 
     expected_T = num_clips * num_frames - (num_clips - 1) * num_overlap_frame
@@ -139,7 +142,6 @@ def test_long_video(
 
     assert not torch.isnan(video.float()).any(), "video contains NaN"
 
-    output_basename = f"wan_svi_{regime}_{num_clips}clips_{width}x{height}"
     torch.save(video.detach().cpu(), f"{output_basename}.pt")
     logger.info(f"Saved raw tensor to: {output_basename}.pt")
 
