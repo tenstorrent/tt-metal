@@ -549,7 +549,11 @@
     else
       export HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
     fi
-    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
+    if [[ -d /localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct ]]; then
+      export HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
+    else
+      export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
+    fi
     export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/meta-llama--Llama-3.1-8B-Instruct
     if [[ ! -d "${TT_CACHE_PATH}" ]]; then
       export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
@@ -571,12 +575,16 @@
     else
       export HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
     fi
-    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
+    if [[ -d /localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct ]]; then
+      export HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
+    else
+      export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
+    fi
     export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/meta-llama--Llama-3.1-8B-Instruct
     if [[ ! -d "${TT_CACHE_PATH}" ]]; then
       export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
     fi
-    pytest models/tt_transformers/demo/simple_text_demo.py -k "stress" --max_seq_len 131072
+    pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "stress" --max_seq_len 131072
   skus:
     bh_p150:
       timeout: 84
