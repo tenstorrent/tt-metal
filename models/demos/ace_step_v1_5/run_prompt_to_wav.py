@@ -330,8 +330,9 @@ def main() -> None:
         type=float,
         default=None,
         help=(
-            "CFG strength. Default: 1 when --experimental-5hz-ttnn-causal-lm is on "
-            "(required by that path), 1 for turbo variants, 7 for base/sft. Set 1 to disable CFG."
+            "DiT CFG strength. Default: 1 for turbo variants, 7 for base/sft. "
+            "Independent of --experimental-5hz-ttnn-causal-lm (which only forces lm_cfg_scale=1). "
+            "Set 1 to disable DiT CFG."
         ),
     )
     ap.add_argument("--cfg_interval_start", type=float, default=0.0)
@@ -501,9 +502,10 @@ def main() -> None:
 
     gs = args.guidance_scale
     if gs is None:
-        if bool(getattr(args, "experimental_5hz_ttnn_causal_lm", False)):
-            gs = 1.0
-        elif "turbo" in str(args.variant).lower():
+        # NOTE: --experimental-5hz-ttnn-causal-lm no longer forces gs=1.0. The LM batch=1
+        # constraint only affects lm_cfg_scale (forced to 1 below); DiT CFG is independent
+        # and base/sft are trained for gs=7. Resolve purely from the variant.
+        if "turbo" in str(args.variant).lower():
             gs = 1.0
         else:
             gs = 7.0
