@@ -722,6 +722,12 @@ class Model:
                 )
                 ho = self.prepare_inputs_prefill(ti, page_table=pi, trace_enabled=True, batched_prefill=True)
                 hi = (ho[0], ho[3], ho[4])
+                # Wait for the previous iter's trace to finish reading the
+                # shared trace input tensors before overwriting them with
+                # this iter's payload. Without this sync, copy_host_to_device
+                # on iter N+1 can clobber inputs that iter N is still consuming
+                # via the async execute_trace. See tenstorrent/tt-metal#44746.
+                ttnn.synchronize_device(mesh_device)
                 copy_host_to_device(hi, device_tensors=tc_inputs[trace_key], mesh_device=mesh_device)
                 ttnn.execute_trace(mesh_device, tc_ids[trace_key], cq_id=0, blocking=False)
                 if not skip_lm:
