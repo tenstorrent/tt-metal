@@ -43,15 +43,18 @@ def _precompute_base_grid_yx_and_scale(
     padding: Tuple[int, int],
     dilation: Tuple[int, int],
     align_corners: bool,
+    offset_format: str = "yx",
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Precompute the constant pieces of the sample-grid construction.
 
-    Returns:
-        base_grid_yx: (1, H_out, W_out, 2*kH*kW) with channel order
-            (y_0, x_0, y_1, x_1, ..., y_{K-1}, x_{K-1}), pre-normalized so that
-            final_grid_yx = base_grid_yx + offset_dy_dx * scale_yx
-        scale_yx:    (1, 1, 1, 2*kH*kW), (scale_y, scale_x) interleaved K times,
-                     for normalizing the (dy, dx) offsets to [-1, 1] grid space.
+    Args:
+        offset_format: "yx" — offset channels are (dy_0, dx_0, ..., dy_{K-1}, dx_{K-1})
+                        (torchvision convention). base_grid and scale match this order,
+                        and the device-side path swaps (y,x) → (x,y) before grid_sample.
+                       "xy" — offset channels are pre-swapped to (dx_0, dy_0, ..., dx_{K-1},
+                        dy_{K-1}). base_grid and scale are built in (x,y) order so the
+                        sum directly yields the (x,y) grid expected by grid_sample. Skips
+                        the device-side swap entirely.
     """
     sh, sw = stride
     ph, pw = padding
@@ -61,14 +64,11 @@ def _precompute_base_grid_yx_and_scale(
     # NOTE: ttnn.grid_sample uses align_corners=False semantics regardless of the
     # align_corners flag passed to it (as of this writing). We always use the
     # align_corners=False normalization so that grid coord = (2*y_pixel + 1)/H - 1.
-    # This makes pixel coordinate y_pixel map to the correct grid coordinate for
-    # ttnn.grid_sample to sample the same pixel as torchvision's DCN.
     scale_y = 2.0 / H_in
     scale_x = 2.0 / W_in
     bias_y = 1.0 / H_in - 1.0
     bias_x = 1.0 / W_in - 1.0
-    # Param kept for API symmetry; not used.
-    _ = align_corners
+    _ = align_corners  # API symmetry
 
     iy = torch.arange(H_out, dtype=torch.float32)
     ix = torch.arange(W_out, dtype=torch.float32)
@@ -83,15 +83,23 @@ def _precompute_base_grid_yx_and_scale(
     base_y_norm = base_y_raw * scale_y + bias_y
     base_x_norm = base_x_raw * scale_x + bias_x
 
-    # Stack interleaved (y, x): (H_out, W_out, K, 2) → (H_out, W_out, 2K)
-    base = torch.stack([base_y_norm, base_x_norm], dim=-1).reshape(H_out, W_out, K * 2)
+    if offset_format == "yx":
+        # Interleaved (y, x): grid[2k]=y_k, grid[2k+1]=x_k
+        base = torch.stack([base_y_norm, base_x_norm], dim=-1).reshape(H_out, W_out, K * 2)
+        scale = torch.zeros(K * 2, dtype=torch.float32)
+        scale[0::2] = scale_y
+        scale[1::2] = scale_x
+    elif offset_format == "xy":
+        # Interleaved (x, y): grid[2k]=x_k, grid[2k+1]=y_k — directly consumable by grid_sample
+        base = torch.stack([base_x_norm, base_y_norm], dim=-1).reshape(H_out, W_out, K * 2)
+        scale = torch.zeros(K * 2, dtype=torch.float32)
+        scale[0::2] = scale_x
+        scale[1::2] = scale_y
+    else:
+        raise ValueError(f"offset_format must be 'yx' or 'xy', got {offset_format!r}")
+
     base = base.unsqueeze(0).contiguous()  # (1, H_out, W_out, 2K)
-
-    scale = torch.zeros(K * 2, dtype=torch.float32)
-    scale[0::2] = scale_y
-    scale[1::2] = scale_x
     scale = scale.view(1, 1, 1, K * 2).contiguous()
-
     return base, scale
 
 
@@ -137,6 +145,7 @@ class TtDeformConv2dV2:
         padding: Tuple[int, int] = (1, 1),
         dilation: Tuple[int, int] = (1, 1),
         align_corners: bool = True,
+        offset_format: str = "yx",
     ):
         self.device = device
         self.C_in = C_in
@@ -152,10 +161,14 @@ class TtDeformConv2dV2:
         self.padding = padding
         self.dilation = dilation
         self.align_corners = align_corners
+        assert offset_format in ("yx", "xy"), f"offset_format must be 'yx' or 'xy', got {offset_format!r}"
+        self.offset_format = offset_format
 
-        # Precompute base_grid and scale on host, transfer once
+        # Precompute base_grid and scale on host, transfer once. In "xy" mode the base+scale
+        # are already in the (x,y) interleaved order grid_sample wants, so the device-side
+        # swap (reshape+slice+slice+concat+reshape — ~5 ops per call) is skipped entirely.
         base_grid_torch, scale_torch = _precompute_base_grid_yx_and_scale(
-            H_in, W_in, H_out, W_out, kH, kW, stride, padding, dilation, align_corners
+            H_in, W_in, H_out, W_out, kH, kW, stride, padding, dilation, align_corners, offset_format=offset_format
         )
         self.base_grid = ttnn.from_torch(
             base_grid_torch,
@@ -220,20 +233,23 @@ class TtDeformConv2dV2:
         if offset_nhwc.layout != ttnn.ROW_MAJOR_LAYOUT:
             offset_nhwc = ttnn.to_layout(offset_nhwc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        # 1. grid_yx = base_grid + offset * scale  (all interleaved in (y, x) order)
+        # 1. grid = base_grid + offset * scale.
+        #    "yx" mode: grid is in (y,x) interleaved order, needs swap before grid_sample.
+        #    "xy" mode: grid is already in (x,y) interleaved order — ready for grid_sample.
         off_scaled = ttnn.multiply(offset_nhwc, self.scale, memory_config=ttnn.L1_MEMORY_CONFIG)
-        grid_yx = ttnn.add(self.base_grid, off_scaled, memory_config=ttnn.L1_MEMORY_CONFIG)
+        grid_xy = ttnn.add(self.base_grid, off_scaled, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(off_scaled)
 
-        # 2. Swap interleaved (y_k, x_k) → (x_k, y_k) so grid_sample sees (x, y) order.
-        grid_5d = ttnn.reshape(grid_yx, (1, H_out, W_out, K, 2))
-        y_comp = ttnn.slice(grid_5d, [0, 0, 0, 0, 0], [1, H_out, W_out, K, 1])
-        x_comp = ttnn.slice(grid_5d, [0, 0, 0, 0, 1], [1, H_out, W_out, K, 2])
-        grid_xy_5d = ttnn.concat([x_comp, y_comp], dim=4)
-        grid_xy = ttnn.reshape(grid_xy_5d, (1, H_out, W_out, 2 * K))
-        ttnn.deallocate(grid_5d)
-        ttnn.deallocate(y_comp)
-        ttnn.deallocate(x_comp)
+        if self.offset_format == "yx":
+            # 2. Swap interleaved (y_k, x_k) → (x_k, y_k) so grid_sample sees (x, y) order.
+            grid_5d = ttnn.reshape(grid_xy, (1, H_out, W_out, K, 2))
+            y_comp = ttnn.slice(grid_5d, [0, 0, 0, 0, 0], [1, H_out, W_out, K, 1])
+            x_comp = ttnn.slice(grid_5d, [0, 0, 0, 0, 1], [1, H_out, W_out, K, 2])
+            grid_xy_5d = ttnn.concat([x_comp, y_comp], dim=4)
+            grid_xy = ttnn.reshape(grid_xy_5d, (1, H_out, W_out, 2 * K))
+            ttnn.deallocate(grid_5d)
+            ttnn.deallocate(y_comp)
+            ttnn.deallocate(x_comp)
         # Ensure grid is ROW_MAJOR for ttnn.grid_sample (it asserts on this).
         if grid_xy.layout != ttnn.ROW_MAJOR_LAYOUT:
             grid_xy = ttnn.to_layout(grid_xy, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)

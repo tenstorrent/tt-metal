@@ -412,22 +412,23 @@ class TtDyHeadBlockDevice:
         self.offset_dim = 2 * self.K  # 18
         self.mask_dim = self.K  # 9
 
-        # spatial_conv_offset weight/bias (256 → 27, 3x3 padding=1)
+        # spatial_conv_offset weight/bias (256 → 27, 3x3 padding=1).
+        # Offset channels (rows 0..17) are stored interleaved as (dy_0, dx_0, dy_1, dx_1, ..., dy_8, dx_8).
+        # Pre-permute the offset rows to (dx_0, dy_0, dx_1, dy_1, ..., dx_8, dy_8) so the DCN sees
+        # the (x,y) layout natively — eliminates a (reshape+slice+slice+concat+reshape) chain on
+        # every DCN call (~5 device ops × 78 calls/inference → ~64ms in the profile).
         scoff = pt_block.spatial_conv_offset
-        self.so_weight = (
-            ttnn.from_torch(
-                torch.permute(scoff.weight.data, (2, 3, 1, 0))
-                .reshape(self.kH * self.kW * in_channels, scoff.weight.shape[0])
-                .contiguous(),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            if False
-            else self._prep_conv_weight(scoff.weight.data, device)
-        )
-        self.so_bias = self._prep_conv_bias(scoff.bias.data, device)
+        so_w = scoff.weight.data.clone()  # (27, 256, 3, 3)
+        so_b = scoff.bias.data.clone()  # (27,)
+        # Swap each (dy_k, dx_k) pair → (dx_k, dy_k) for rows 0..17. Mask rows 18..26 untouched.
+        offset_perm = (
+            torch.arange(2 * self.K, dtype=torch.long).reshape(self.K, 2).flip(-1).reshape(-1)
+        )  # [1,0,3,2,...]
+        full_perm = torch.cat([offset_perm, torch.arange(2 * self.K, 3 * self.K, dtype=torch.long)])  # mask unchanged
+        so_w = so_w[full_perm]
+        so_b = so_b[full_perm]
+        self.so_weight = self._prep_conv_weight(so_w, device)
+        self.so_bias = self._prep_conv_bias(so_b, device)
         self.so_out = scoff.weight.shape[0]  # 27
 
         # spatial_conv_{mid, low, high} — one TtDeformConv2dV2 per (level, role)
@@ -435,6 +436,8 @@ class TtDyHeadBlockDevice:
         # low: input level i-1, output level i, stride 2
         # high: input level i+1, output level i+1 (no upsample baked in), stride 1
         # Each DCN has its own (256, 256, 3, 3) weight (no bias).
+        # Pass offset_format="xy" to all DCN instances — the spatial_conv_offset weight is
+        # pre-permuted (above) so the offset is in (dx,dy) order, matching base_grid in (x,y).
         self.dcn_mid: List[TtDeformConv2dV2] = []
         self.dcn_low: List[TtDeformConv2dV2] = []
         self.dcn_high: List[TtDeformConv2dV2] = []
@@ -457,6 +460,7 @@ class TtDyHeadBlockDevice:
                     stride=(1, 1),
                     padding=(1, 1),
                     dilation=(1, 1),
+                    offset_format="xy",
                 )
             )
             # low: in=prev level (larger), out=curr level, stride 2
@@ -478,6 +482,7 @@ class TtDyHeadBlockDevice:
                         stride=(2, 2),
                         padding=(1, 1),
                         dilation=(1, 1),
+                        offset_format="xy",
                     )
                 )
             else:
@@ -501,6 +506,7 @@ class TtDyHeadBlockDevice:
                         stride=(1, 1),
                         padding=(1, 1),
                         dilation=(1, 1),
+                        offset_format="xy",
                     )
                 )
             else:
