@@ -13,6 +13,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <tuple>
 #include <unordered_map>
@@ -28,6 +29,7 @@
 #include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
 #include "tt_metal/impl/context/metal_context.hpp"
 #include <llrt/tt_cluster.hpp>
+#include <unistd.h>
 
 namespace tt::tt_metal::experimental::tt_fabric {
 
@@ -671,6 +673,46 @@ std::optional<std::string> hostname_for_asic_from_hostname_map(
     return std::nullopt;
 }
 
+std::string hostname_first_label(std::string_view h) {
+    const auto dot = h.find('.');
+    return std::string(dot == std::string_view::npos ? h : h.substr(0, dot));
+}
+
+// Map gethostname()+label matching → PSD/descriptor hostname key used in hostname_to_asics (ambiguous → nullopt).
+std::optional<std::string> resolve_local_hostname_from_hostname_asics_map(
+    const std::map<std::string, std::set<tt::tt_metal::AsicID>>& hostname_to_asics) {
+    if (hostname_to_asics.empty()) {
+        return std::nullopt;
+    }
+    char buf[256];
+    if (::gethostname(buf, sizeof(buf) - 1) != 0) {
+        return std::nullopt;
+    }
+    buf[sizeof(buf) - 1] = '\0';
+
+    std::string local_full(buf);
+    const std::string local_short = hostname_first_label(local_full);
+
+    for (const auto& [hn, _] : hostname_to_asics) {
+        if (hn == local_full || hn == local_short) {
+            return hn;
+        }
+    }
+
+    std::optional<std::string> only_with_label;
+    int label_matches = 0;
+    for (const auto& [hn, _] : hostname_to_asics) {
+        if (hostname_first_label(hn) == local_short) {
+            ++label_matches;
+            only_with_label = hn;
+        }
+    }
+    if (label_matches == 1) {
+        return only_with_label;
+    }
+    return std::nullopt;
+}
+
 // Minimal host cover for inter-mesh mapping: partition physical meshes by host, then apply.
 // `rank_bound_logical_to_physical`: logical meshes already fixed by rank bindings → skip those and their physical
 // meshes for host-alignment bias (empty when rank bindings are disabled).
@@ -761,6 +803,210 @@ void add_inter_mesh_minimal_host_cover_from_hostname_map(
     }
 }
 
+// Physical mesh partition (among unbound) that minimally covers required_asics, else nullopt.
+std::optional<MeshId> smallest_physical_mesh_covering_required_asics(
+    const PhysicalMultiMeshGraph& physical_graph,
+    const std::set<MeshId>& bound_physical_mesh_ids,
+    const std::set<tt::tt_metal::AsicID>& required_asics) {
+    if (required_asics.empty()) {
+        return std::nullopt;
+    }
+
+    auto node_vec_contains = [](const std::vector<tt::tt_metal::AsicID>& nodes, tt::tt_metal::AsicID asic) -> bool {
+        return std::find(nodes.begin(), nodes.end(), asic) != nodes.end();
+    };
+
+    std::optional<MeshId> best_physical;
+    std::optional<std::size_t> best_node_count;
+    for (const auto& [physical_mesh_id, adj] : physical_graph.mesh_adjacency_graphs_) {
+        if (bound_physical_mesh_ids.contains(physical_mesh_id)) {
+            continue;
+        }
+        const auto& node_vec = adj.get_nodes();
+        if (node_vec.empty()) {
+            continue;
+        }
+
+        bool covers_all = true;
+        for (const auto& asic : required_asics) {
+            if (!node_vec_contains(node_vec, asic)) {
+                covers_all = false;
+                break;
+            }
+        }
+        if (!covers_all) {
+            continue;
+        }
+
+        const std::size_t n = node_vec.size();
+        if (!best_node_count.has_value() || n < *best_node_count) {
+            best_node_count = n;
+            best_physical = physical_mesh_id;
+        } else if (n == *best_node_count && physical_mesh_id < *best_physical) {
+            best_physical = physical_mesh_id;
+        }
+    }
+    return best_physical;
+}
+
+// Tray 1 / ASIC location 1 (discovery coordinate) used as soft inter-mesh anchor for logical mesh 0.
+inline const AsicPosition k_logical_mesh_zero_preferred_discovery_asic_position =
+    AsicPosition{tt::tt_metal::TrayID{1u}, tt::tt_metal::ASICLocation{1u}};
+
+// Resolve a single ASIC at `anchor_position` preferring resolved-local-host ASIC list; else unique global hit.
+std::optional<tt::tt_metal::AsicID> resolve_anchor_asic_at_discovery_position(
+    const TopologyMappingConfig& config,
+    const std::optional<std::string>& resolved_local_hostname_key,
+    const AsicPosition& anchor_position) {
+    if (config.asic_positions.empty()) {
+        return std::nullopt;
+    }
+
+    auto position_matches = [&](tt::tt_metal::AsicID asic_id) -> bool {
+        auto pos_it = config.asic_positions.find(asic_id);
+        return pos_it != config.asic_positions.end() && pos_it->second == anchor_position;
+    };
+
+    if (resolved_local_hostname_key.has_value()) {
+        auto host_it = config.hostname_to_asics.find(*resolved_local_hostname_key);
+        if (host_it != config.hostname_to_asics.end()) {
+            int local_count = 0;
+            std::optional<tt::tt_metal::AsicID> local_only;
+            for (const auto& asic : host_it->second) {
+                if (position_matches(asic)) {
+                    ++local_count;
+                    local_only = asic;
+                }
+            }
+            if (local_count == 1) {
+                return local_only;
+            }
+        }
+    }
+
+    int global_count = 0;
+    std::optional<tt::tt_metal::AsicID> global_only;
+    for (const auto& [asic_id, pos] : config.asic_positions) {
+        if (pos == anchor_position) {
+            ++global_count;
+            global_only = asic_id;
+        }
+    }
+    return global_count == 1 ? global_only : std::nullopt;
+}
+
+/**
+ * Biases inter-mesh solving so logical mesh id 0 prefers the right physical partition(s):
+ * - the partition covering the Phase-1 / mapping host (`gethostname` match in `hostname_to_asics`),
+ * - and the partition that contains discovery ASIC (tray id 1, ASIC location 1), which tracks the canonical
+ *   "starter" silicon on that stack.
+ *
+ * Rationale for CI / multihost: without this soft anchor, isomorphism in the mapper can associate logical mesh 0 with
+ * an arbitrary symmetric physical mesh, which shifts which host owns mesh 0 and which ASIC lands on which UMD-visible
+ * index after rank bindings (`TT_VISIBLE_DEVICES`, etc.). That makes rank-0 / mesh-0 / device-0 assumptions in tests
+ * and golden ASIC-mapping checks brittle across hosts or reorderings. Preferring localhost + tray 1 / location 1 keeps
+ * launched jobs and documented expectations aligned so we avoid those mismatches.
+ *
+ * Constraints are preferences only—the solver may still choose another isomorphism if constraints demand it.
+ * If localhost cover and tray/loc anchors disagree on the physical mesh, tray 1 / location 1 wins (see log line).
+ */
+void add_logical_mesh_zero_anchor_inter_mesh_preference(
+    const TopologyMappingConfig& config,
+    const PhysicalMultiMeshGraph& physical_graph,
+    const AdjacencyGraph<MeshId>& mesh_logical_level_graph,
+    const std::map<MeshId, MeshId>& rank_bound_logical_to_physical,
+    ::tt::tt_fabric::MappingConstraints<MeshId, MeshId>& inter_mesh_constraints) {
+    if (config.hostname_to_asics.empty() && config.asic_positions.empty()) {
+        return;
+    }
+
+    constexpr MeshId k_logical_anchor{0};
+    const auto& logical_nodes_vec = mesh_logical_level_graph.get_nodes();
+    const bool logical_anchor_exists =
+        std::find(logical_nodes_vec.begin(), logical_nodes_vec.end(), k_logical_anchor) != logical_nodes_vec.end();
+    if (!logical_anchor_exists) {
+        return;
+    }
+
+    std::set<MeshId> bound_physical_mesh_ids;
+    for (const auto& [_, physical_mesh_id] : rank_bound_logical_to_physical) {
+        bound_physical_mesh_ids.insert(physical_mesh_id);
+    }
+
+    std::optional<std::string> local_hostname_opt;
+    if (!config.hostname_to_asics.empty()) {
+        local_hostname_opt = resolve_local_hostname_from_hostname_asics_map(config.hostname_to_asics);
+    }
+
+    std::optional<MeshId> from_hostname_partition;
+    if (local_hostname_opt.has_value()) {
+        auto host_it = config.hostname_to_asics.find(*local_hostname_opt);
+        if (host_it != config.hostname_to_asics.end() && !host_it->second.empty()) {
+            from_hostname_partition = smallest_physical_mesh_covering_required_asics(
+                physical_graph, bound_physical_mesh_ids, host_it->second);
+        }
+    }
+    if (!from_hostname_partition.has_value() && !config.hostname_to_asics.empty()) {
+        log_debug(
+            tt::LogFabric,
+            "Logical mesh {} anchor: no partition from local hostname hostname_to_asics match",
+            k_logical_anchor.get());
+    }
+
+    std::optional<MeshId> from_discovery_position_partition;
+    const auto anchor_asic_coords = resolve_anchor_asic_at_discovery_position(
+        config, local_hostname_opt, k_logical_mesh_zero_preferred_discovery_asic_position);
+    if (anchor_asic_coords.has_value()) {
+        const std::set<tt::tt_metal::AsicID> single{*anchor_asic_coords};
+        from_discovery_position_partition =
+            smallest_physical_mesh_covering_required_asics(physical_graph, bound_physical_mesh_ids, single);
+    }
+    if (!from_discovery_position_partition.has_value()) {
+        if (!config.asic_positions.empty()) {
+            log_debug(
+                tt::LogFabric,
+                "Logical mesh {} anchor: could not resolve tray 1 / ASIC location 1 partition (ambiguous or missing in "
+                "TopologyMappingConfig::asic_positions / no smallest cover)",
+                k_logical_anchor.get());
+        }
+    }
+
+    std::optional<MeshId> chosen_physical;
+    if (from_hostname_partition.has_value() && from_discovery_position_partition.has_value()) {
+        if (*from_hostname_partition == *from_discovery_position_partition) {
+            chosen_physical = from_hostname_partition;
+        } else {
+            chosen_physical = from_discovery_position_partition;
+            log_info(
+                tt::LogFabric,
+                "Logical mesh {} anchor: localhost partition ({}) differs from tray-1/loc-1 partition ({}); preferring "
+                "the latter",
+                k_logical_anchor.get(),
+                from_hostname_partition->get(),
+                from_discovery_position_partition->get());
+        }
+    } else if (from_discovery_position_partition.has_value()) {
+        chosen_physical = from_discovery_position_partition;
+    } else if (from_hostname_partition.has_value()) {
+        chosen_physical = from_hostname_partition;
+    }
+
+    if (!chosen_physical.has_value()) {
+        return;
+    }
+
+    inter_mesh_constraints.add_preferred_constraint(k_logical_anchor, *chosen_physical);
+
+    log_info(
+        tt::LogFabric,
+        "Inter-mesh preference: logical mesh {} → physical mesh {} (hostname_anchor={}, "
+        "tray1_asic_location1_anchor={})",
+        k_logical_anchor.get(),
+        chosen_physical->get(),
+        from_hostname_partition.has_value(),
+        from_discovery_position_partition.has_value());
+}
+
 // Helper function to build ASIC positions to ASIC IDs map
 std::map<AsicPosition, std::set<tt::tt_metal::AsicID>> build_asic_positions_map(
     const ::tt::tt_fabric::AdjacencyGraph<tt::tt_metal::AsicID>& physical_graph, const TopologyMappingConfig& config) {
@@ -791,6 +1037,8 @@ std::map<AsicPosition, std::set<tt::tt_metal::AsicID>> build_asic_positions_map(
     if (config.disable_rank_bindings) {
         add_inter_mesh_minimal_host_cover_from_hostname_map(
             config, physical_graph, mesh_logical_level_graph, inter_mesh_constraints, {});
+        add_logical_mesh_zero_anchor_inter_mesh_preference(
+            config, physical_graph, mesh_logical_level_graph, {}, inter_mesh_constraints);
         return inter_mesh_constraints;
     }
 
@@ -848,6 +1096,8 @@ std::map<AsicPosition, std::set<tt::tt_metal::AsicID>> build_asic_positions_map(
 
     add_inter_mesh_minimal_host_cover_from_hostname_map(
         config, physical_graph, mesh_logical_level_graph, inter_mesh_constraints, rank_bound_logical_to_physical);
+    add_logical_mesh_zero_anchor_inter_mesh_preference(
+        config, physical_graph, mesh_logical_level_graph, rank_bound_logical_to_physical, inter_mesh_constraints);
     return inter_mesh_constraints;
 }
 
