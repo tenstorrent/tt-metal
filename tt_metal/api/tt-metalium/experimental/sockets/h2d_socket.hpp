@@ -121,6 +121,16 @@ public:
 
     uint32_t get_config_buffer_address() const { return config_buffer_address_; }
 
+    uint32_t get_fifo_size() const { return fifo_size_; }
+
+    bool has_space(std::optional<uint32_t> num_bytes_to_check);
+
+    // Cumulative bytes pushed into the FIFO (wraps modulo 2^32).
+    uint32_t get_bytes_sent() const { return bytes_sent_; }
+
+    // Returns true iff the device has acked past `watermark`.
+    bool acked_past(uint32_t watermark);
+
     void set_page_size(uint32_t page_size);
 
     void write(void* data, uint32_t num_pages);
