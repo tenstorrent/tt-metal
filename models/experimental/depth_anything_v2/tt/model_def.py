@@ -608,7 +608,6 @@ def vit_patch_embeddings(config, pixel_values, parameters, device):
     """
     batch_size, img_c, img_h, img_w = pixel_values.shape
     patch_size = 14
-    patch_count = img_h // patch_size  # 37
 
     # ---- 1. Convert input to NHWC for ttnn.conv2d ----------------------
     x = ttnn.transpose(pixel_values, -2, -1)  # (B, C, H, W) -> (B, C, W, H)
@@ -943,9 +942,7 @@ class TtDepthAnythingV2:
         mask = torch.zeros(1, 1, seqL, seqL)
         mask[:, :, :, 1:32] = float("-inf")  # CLS padding keys
         mask[:, :, :, 1401:seqL] = float("-inf")  # patch padding keys
-        self.attention_mask = ttnn.from_torch(
-            mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
-        )
+        self.attention_mask = ttnn.from_torch(mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
 
     # ------------------------------------------------------------------
     def _move_to_device(self, params, device):
