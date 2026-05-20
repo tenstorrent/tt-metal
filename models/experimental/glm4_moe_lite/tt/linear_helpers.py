@@ -143,7 +143,15 @@ def lm_head_linear(
     memory_config: ttnn.MemoryConfig | None = None,
     overrides: Matmul1dProgOverrides | None = None,
 ) -> ttnn.Tensor:
-    """LM head: interleaved activations + weights with tuned 1D multicast program config."""
+    """LM head: interleaved activations + weights with tuned 1D multicast program config.
+
+    Setting ``program_config`` flips ttnn.linear's implicit fidelity default from HiFi2 to LoFi
+    (matmul_device_operation.cpp::create_matmul_attributes). For the LM-head reduction
+    over hidden_size that drop is enough to flip top-1 token selection and produce
+    template-style drift, so we pin an explicit HiFi4 + fp32 DST accumulation kernel config
+    here. ``fp32_dest_acc_en`` is also threaded into ``compute_1d_prog_cfg`` so the
+    out-subblock heuristic respects the smaller (4-tile) DST budget.
+    """
     m_total = 1
     for i in range(len(a.shape) - 1):
         m_total *= int(a.shape[i])
@@ -153,11 +161,22 @@ def lm_head_linear(
             b,
             m_total,
             overrides=overrides or LM_HEAD_MATMUL_OVERRIDES,
+            fp32_dest_acc_en=True,
         ),
+        "compute_kernel_config": _lm_head_compute_kernel_config(),
     }
     if memory_config is not None:
         kwargs["memory_config"] = memory_config
     return ttnn.linear(a, b, **kwargs)
+
+
+def _lm_head_compute_kernel_config() -> ttnn.WormholeComputeKernelConfig:
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
 
 
 def compute_1d_mlp_down_prog_cfg(
