@@ -500,7 +500,10 @@ void kernel_main() {
                             uint32_t bias_tile_idx = in1_index_subblock_offset;
                             for (uint32_t k = 0; k < out_subblock_w; k++, i++) {
                                 const uint32_t safe_bias_tile_idx =
-                                    (is_last_in1_subblock_padded && k >= last_subblock_w_valid) ? 0u : bias_tile_idx;
+                                    (is_last_in1_subblock_padded && k >= last_subblock_w_valid)
+                                        ? 0u              // Padded output columns with tile 0 of cb_bias added are
+                                        : bias_tile_idx;  // dropped by the writer.
+
                                 if constexpr (row_broadcast_bias) {
                                     add_tiles_bcast_rows(mm_partials_cb_id, bias_cb_id, i, safe_bias_tile_idx, i);
                                 } else {
