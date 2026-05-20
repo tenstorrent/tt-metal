@@ -28,6 +28,8 @@ namespace tt::tt_metal {
 // Use-After-Free message naming that specific entry point.
 
 TEST_F(MeshDeviceFixture, Host_UAF_WriteToBuffer_SanityCheck) {
+    ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
+
     auto* device = this->devices_.at(0)->get_devices()[0];
 
     auto buffer = Buffer::create(device, 1024, 1024, BufferType::L1);
@@ -38,6 +40,8 @@ TEST_F(MeshDeviceFixture, Host_UAF_WriteToBuffer_SanityCheck) {
 }
 
 TEST_F(MeshDeviceFixture, Host_UAF_ReadFromBuffer_SanityCheck) {
+    ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
+
     auto* device = this->devices_.at(0)->get_devices()[0];
 
     auto buffer = Buffer::create(device, 1024, 1024, BufferType::L1);
@@ -60,6 +64,8 @@ TEST_F(MeshDeviceFixture, Host_UAF_ReadShard_SanityCheck) {
 }
 
 TEST_F(MeshDeviceFixture, Host_UAF_CoreSubsetWriteToBuffer_SanityCheck) {
+    ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
+
     auto* device = this->devices_.at(0)->get_devices()[0];
 
     auto buffer = Buffer::create(device, 1024, 1024, BufferType::L1);
@@ -81,6 +87,8 @@ TEST_F(MeshDeviceFixture, Host_UAF_CoreSubsetWriteToBuffer_SanityCheck) {
 // points, so this confirms the sanitizer fires through the smart-pointer path
 // too (the path most user code actually takes).
 TEST_F(MeshDeviceFixture, Host_UAF_WriteToBuffer_SharedPtrOverload_SanityCheck) {
+    ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
+
     auto* device = this->devices_.at(0)->get_devices()[0];
 
     auto buffer = Buffer::create(device, 1024, 1024, BufferType::L1);

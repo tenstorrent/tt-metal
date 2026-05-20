@@ -27,7 +27,7 @@ namespace tt::tt_metal {
 // address as belonging to a CB region but landing outside the currently-
 // reserved sub-range, and aborts before the memcpy.
 TEST_F(MeshDeviceFixture, CB_Boundary_Violation_SanityCheck) {
-    ::setenv("TT_EMULE_STRICT_CB_BOUNDARY", "1", 1);
+    ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
     auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
@@ -75,7 +75,7 @@ TEST_F(MeshDeviceFixture, CB_Boundary_Violation_SanityCheck) {
 // flows through __emule_local_l1_to_ptr; the sanitizer sees the access is
 // outside both windows (write reservation is empty after the push) and aborts.
 TEST_F(MeshDeviceFixture, CB_Boundary_Violation_Read_SanityCheck) {
-    ::setenv("TT_EMULE_STRICT_CB_BOUNDARY", "1", 1);
+    ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
     auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
@@ -122,7 +122,7 @@ TEST_F(MeshDeviceFixture, CB_Boundary_Violation_Read_SanityCheck) {
 // which sits BELOW the current write_ptr in raw address space) to make sure
 // the modular page-distance math accepts it. No abort expected.
 TEST_F(MeshDeviceFixture, CB_Boundary_Wraparound_SanityCheck) {
-    ::setenv("TT_EMULE_STRICT_CB_BOUNDARY", "1", 1);
+    ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
     auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};

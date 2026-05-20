@@ -51,7 +51,7 @@ TEST_F(MeshDeviceFixture, CB_Reservation_Overflow_SanityCheck) {
 
     EXPECT_DEATH(
         detail::LaunchProgram(device, program),
-        ".*EMULE BUG: cb_reserve_back.*requests more than capacity.*"
+        ".*\\[ASAN ERROR\\] CB Reservation Overflow:.*"
     );
 }
 

@@ -26,7 +26,7 @@ namespace tt::tt_metal {
 // any system region and not inside any allocated tensor). The sanitizer is
 // expected to abort with an Out-of-Bounds Write ASAN message.
 TEST_F(MeshDeviceFixture, OOB_Tensor_Gap_L1_SanityCheck) {
-    ::setenv("TT_EMULE_STRICT_TENSOR", "1", 1);
+    ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
     auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
@@ -70,7 +70,7 @@ TEST_F(MeshDeviceFixture, OOB_Tensor_Gap_L1_SanityCheck) {
 // sanitizer is expected to abort with an Out-of-Bounds Write ASAN message
 // naming DRAM.
 TEST_F(MeshDeviceFixture, OOB_Tensor_Gap_DRAM_SanityCheck) {
-    ::setenv("TT_EMULE_STRICT_TENSOR", "1", 1);
+    ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
     auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};

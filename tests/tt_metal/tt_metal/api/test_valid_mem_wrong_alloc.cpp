@@ -20,8 +20,7 @@ using namespace tt::tt_metal;
 namespace tt::tt_metal {
 
 TEST_F(MeshDeviceFixture, Object_Intent_Provenance_Violation_SanityCheck) {
-    ::setenv("TT_EMULE_STRICT_TENSOR", "1", 1);
-    ::setenv("TT_EMULE_STRICT_OBJECT_INTENT", "1", 1);
+    ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
     auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
@@ -96,8 +95,7 @@ TEST_F(MeshDeviceFixture, Object_Intent_Provenance_Violation_SanityCheck) {
 // crash and fail. It guards the well-behaved path from being broken by future
 // changes to the resolved-set tracking or snapshot logic.
 TEST_F(MeshDeviceFixture, Object_Intent_Provenance_NoViolation_Control) {
-    ::setenv("TT_EMULE_STRICT_TENSOR", "1", 1);
-    ::setenv("TT_EMULE_STRICT_OBJECT_INTENT", "1", 1);
+    ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
     auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
@@ -143,8 +141,7 @@ TEST_F(MeshDeviceFixture, Object_Intent_Provenance_NoViolation_Control) {
 // "provenance" framing (the violating address can be arbitrarily far from
 // the intended object as long as it lands inside *some* allocated buffer).
 TEST_F(MeshDeviceFixture, Object_Intent_Provenance_NonAdjacent_Violation) {
-    ::setenv("TT_EMULE_STRICT_TENSOR", "1", 1);
-    ::setenv("TT_EMULE_STRICT_OBJECT_INTENT", "1", 1);
+    ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
     auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
