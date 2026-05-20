@@ -308,6 +308,112 @@ struct EltwiseShape {
 };
 
 // =============================================================================
+// 1c. Taxonomy: Lifecycle as a two-axis struct
+// =============================================================================
+//
+// Per `eltwise_taxonomy.md`, each input's lifecycle is a `(WaitPolicy, PopPolicy)`
+// pair, each output's lifecycle is a `(ReservePolicy, PushPolicy)` pair. Named
+// constants compose the legal pairs; custom struct literals are validated by
+// `is_legal_input_lifecycle` / `is_legal_output_lifecycle`.
+//
+// This is the future-direction policy surface. The existing `CopyTilePolicy` /
+// `PackTilePolicy` enums (section 4) remain in place for the current chain
+// implementation; the structs below are the migration target.
+
+enum class WaitPolicy : uint8_t {
+    None,        // chain emits no cb_wait_front
+    PerTile,     // wait 1 per iter
+    PerChunk,    // wait K per K-iter chunk
+    Upfront,     // wait M once at entry (M = kind's tile count)
+    Cumulative,  // wait (i+1) per iter / chunk
+};
+
+enum class PopPolicy : uint8_t {
+    None,      // chain emits no cb_pop_front
+    PerTile,   // pop 1 per iter
+    PerChunk,  // pop K per K-iter chunk
+    AtEnd,     // pop M once at exit
+};
+
+struct InputLifecycle {
+    WaitPolicy wait;
+    PopPolicy pop;
+
+    constexpr bool operator==(InputLifecycle other) const noexcept { return wait == other.wait && pop == other.pop; }
+    constexpr bool operator!=(InputLifecycle other) const noexcept { return !(*this == other); }
+};
+
+inline constexpr InputLifecycle Streaming = {WaitPolicy::PerTile, PopPolicy::PerTile};
+inline constexpr InputLifecycle Chunked = {WaitPolicy::PerChunk, PopPolicy::PerChunk};
+inline constexpr InputLifecycle Bulk = {WaitPolicy::Upfront, PopPolicy::AtEnd};
+inline constexpr InputLifecycle Pipelined = {WaitPolicy::Cumulative, PopPolicy::AtEnd};
+inline constexpr InputLifecycle CallerManaged = {WaitPolicy::None, PopPolicy::None};
+
+/// Validates a caller-constructed `InputLifecycle` against the legal set.
+/// Used by every input element's `static_assert` at chain composition.
+constexpr bool is_legal_input_lifecycle(InputLifecycle lc) noexcept {
+    return lc == Streaming || lc == Chunked || lc == Bulk || lc == Pipelined || lc == CallerManaged;
+}
+
+enum class ReservePolicy : uint8_t {
+    None,
+    PerTile,
+    PerChunk,
+    Upfront,
+};
+
+enum class PushPolicy : uint8_t {
+    None,
+    PerTile,
+    PerChunk,
+    AtEnd,
+};
+
+struct OutputLifecycle {
+    ReservePolicy reserve;
+    PushPolicy push;
+
+    constexpr bool operator==(OutputLifecycle other) const noexcept {
+        return reserve == other.reserve && push == other.push;
+    }
+    constexpr bool operator!=(OutputLifecycle other) const noexcept { return !(*this == other); }
+};
+
+inline constexpr OutputLifecycle OutStreaming = {ReservePolicy::PerTile, PushPolicy::PerTile};
+inline constexpr OutputLifecycle OutChunked = {ReservePolicy::PerChunk, PushPolicy::PerChunk};
+inline constexpr OutputLifecycle OutBulk = {ReservePolicy::Upfront, PushPolicy::AtEnd};
+// SDPA reduce_c family: bulk reserve + incremental push for downstream pipelining.
+inline constexpr OutputLifecycle OutBulkReservePerTile = {ReservePolicy::Upfront, PushPolicy::PerTile};
+inline constexpr OutputLifecycle OutBulkReservePerChunk = {ReservePolicy::Upfront, PushPolicy::PerChunk};
+
+constexpr bool is_legal_output_lifecycle(OutputLifecycle lc) noexcept {
+    return lc == OutStreaming || lc == OutChunked || lc == OutBulk || lc == OutBulkReservePerTile ||
+           lc == OutBulkReservePerChunk;
+}
+
+/// Per-input operand kind. The output kind is always `Block` (single column
+/// in the output matrix), so no enum is defined for the output side.
+enum class OperandKind : uint8_t {
+    Block,   // Ht × Wt — walks the full iteration domain
+    Row,     // 1  × Wt — broadcast down rows
+    Col,     // Ht × 1  — broadcast across cols
+    Scalar,  // 1  × 1  — broadcast everywhere
+};
+
+/// Kind × InputLifecycle compatibility. Row / Col / Scalar operands only have
+/// fewer tiles than the iteration count, so per-tile / per-chunk / cumulative
+/// lifecycles would over-consume. Restricted to `Bulk` or `CallerManaged`.
+constexpr bool is_legal_kind_lifecycle(OperandKind kind, InputLifecycle lc) noexcept {
+    if (!is_legal_input_lifecycle(lc)) {
+        return false;
+    }
+    if (kind == OperandKind::Block) {
+        return true;  // Block accepts every legal lifecycle
+    }
+    return lc == Bulk || lc == CallerManaged;  // Row / Col / Scalar restricted to Bulk / CallerManaged
+}
+
+// =============================================================================
 // 2. DEST slot enum — capped at compile-time DEST capacity
 // =============================================================================
 
