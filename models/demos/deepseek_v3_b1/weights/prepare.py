@@ -767,10 +767,11 @@ def build_sram_expert_weights(
     Args:
         sram_expert_ids: list of global expert IDs in slot order (e.g.
             ``[42, 77, 198]``). Length T = number of SRAM-resident experts.
-        full_torch_weights_per_device: indexed
-            ``[global_eid][device_idx] -> torch.Tensor`` of shape
-            ``(K, N_per_device)``. Caller is responsible for the full-set
-            torch source (typically from state_dict + TP8 column-shard).
+        full_torch_weights_per_device: mapping keyed by **global expert id**
+            (NOT slot index) → list of per-device ``torch.Tensor`` of shape
+            ``(K, N_per_device)``. Access is ``full_torch_weights_per_device[eid][dev_idx]``.
+            Caller is responsible for the full-set torch source (typically from
+            state_dict + TP8 column-shard).
         assigner: precision assigner used by CompressedTensor (e.g.
             ``UniformPrecisionAssigner(ttnn.bfloat4_b)``).
         mesh_device: TP8 mesh device.
