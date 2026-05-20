@@ -3023,9 +3023,8 @@ TEST_F(ProgramSpecTestGen1, CompilerIncludePathsForwardedToKernelConfig) {
 namespace {
 ProgramSpec MakeAliasProgramSpec(
     const NodeCoord& node,
-    DataflowBufferSpec dfb_a,
-    DataflowBufferSpec dfb_b,
-    const std::optional<std::string>& second_kernel_source = std::nullopt) {
+    const DataflowBufferSpec& dfb_a,
+    const DataflowBufferSpec& dfb_b) {
     ProgramSpec spec;
 
     KernelSpec producer = MakeMinimalDMKernel("producer_kernel");

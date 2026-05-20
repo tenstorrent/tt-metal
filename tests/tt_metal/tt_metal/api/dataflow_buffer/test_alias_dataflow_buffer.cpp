@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: � 2026 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -424,8 +424,7 @@ AliasBorrowedDFBComponents make_alias_borrowed_dfb_program_spec(
 TEST_F(MeshDeviceFixture, AliasDFBAddressEquality1Sx1S) {
     const NodeCoord node{0, 0};
 
-    // make these variables
-    auto [spec, in_a, in_b, out_a, out_b] = make_alias_dfb_program_spec(
+    [[maybe_unused]] auto [spec, in_a, in_b, out_a, out_b] = make_alias_dfb_program_spec(
         devices_.at(0), node, 512, 8, 256, 16, 1, 1);
 
     Program program = MakeProgramFromSpec(*devices_.at(0), spec);

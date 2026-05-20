@@ -1142,7 +1142,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             if (dfb.alias_with.empty()) {
                 continue;
             }
-            const uint32_t total_size_a = dfb.entry_size * dfb.num_entries;
+            const size_t total_size_a = dfb.entry_size * dfb.num_entries;
             const auto bindings_a = kernel_ids_for_dfb(dfb.unique_id);
 
             for (const auto& alias_name : dfb.alias_with) {
@@ -2295,7 +2295,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
     {
         std::unordered_set<DFBSpecName> handled_as_secondary;
         for (const auto& dfb_spec : spec.dataflow_buffers) {
-            if (handled_as_secondary.count(dfb_spec.unique_id)) {
+            if (handled_as_secondary.contains(dfb_spec.unique_id)) {
                 continue;
             }
             if (dfb_spec.alias_with.empty()) {
@@ -2303,7 +2303,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
             }
             const uint32_t primary_id = dfb_name_to_id.at(dfb_spec.unique_id);
             for (const auto& alias_name : dfb_spec.alias_with) {
-                if (handled_as_secondary.count(alias_name)) {
+                if (handled_as_secondary.contains(alias_name)) {
                     continue;
                 }
                 const uint32_t secondary_id = dfb_name_to_id.at(alias_name);

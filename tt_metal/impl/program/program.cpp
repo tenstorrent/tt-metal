@@ -484,6 +484,23 @@ void ProgramImpl::set_dfb_alias(uint32_t primary_id, uint32_t secondary_id) {
         "Both DFBs must be created via add_dataflow_buffer before aliasing.",
         secondary_id,
         dataflow_buffers_.size());
+    TT_FATAL(primary_id != secondary_id, "set_dfb_alias: cannot alias a DFB with itself. Primary and secondary DFB IDs must be different");
+
+    auto& primary_dfb = dataflow_buffers_[primary_id];
+    auto& secondary_dfb = dataflow_buffers_[secondary_id];
+
+    TT_FATAL(
+        !primary_dfb->alias_primary_id.has_value(),
+        "set_dfb_alias: primary DFB id {} is already a secondary of DFB id {}. Alias chains are not allowed.",
+        primary_id,
+        primary_dfb->alias_primary_id.value());
+    TT_FATAL(
+        !secondary_dfb->alias_primary_id.has_value(),
+        "set_dfb_alias: secondary DFB id {} is already aliased to primary DFB id {}.",
+        secondary_id,
+        secondary_dfb->alias_primary_id.value());
+
+
     dataflow_buffers_[primary_id]->alias_secondary_ids.push_back(secondary_id);
     dataflow_buffers_[secondary_id]->alias_primary_id = primary_id;
 }
