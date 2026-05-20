@@ -226,9 +226,11 @@ inline void _llk_unpack_A_init_(
         config_unpacker_x_end<UNP_SEL>(face_r_dim);
     }
 
-	if (unpack_to_dest && is_32bit_input(unpack_src_format, unpack_dst_format)) {
-            cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
-        }
+    // Enable 32-bit dest mode for 32-bit formats.
+    if (unpack_to_dest && is_32bit_input(unpack_src_format, unpack_dst_format))
+    {
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
+    }
 
     _llk_unpack_A_mop_config_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(transpose_of_faces > 0, num_faces, unpack_src_format, unpack_dst_format);
 }
@@ -299,9 +301,6 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
 template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_A_uninit_(const std::uint32_t face_r_dim)
 {
-    TT_SETADCXX(p_setadc::UNP_A, face_r_dim * FACE_C_DIM - 1, 0x0);
-    if constexpr (BType != BroadcastType::NONE)
-    {
-        TT_SETADCXX(p_setadc::UNP_B, face_r_dim * FACE_C_DIM - 1, 0x0);
-    }
+    constexpr std::uint32_t UNP_SEL = (BType == BroadcastType::NONE) ? p_setadc::UNP_A : p_setadc::UNP_AB;
+    TT_SETADCXX(UNP_SEL, face_r_dim * FACE_C_DIM - 1, 0x0);
 }

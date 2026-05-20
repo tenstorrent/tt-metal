@@ -31,7 +31,11 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
         // Tile base row in Dst32b space: each 32x32 tile is 4 faces × 16 rows = 64 rows.
         const std::uint32_t tile_base = dst_index * 64;
 
+        // Disable implied SrcA format inference so manual SrcA format switches take effect.
+        // We must disable this for the SrcA format switching approach to control MOVD2B/MOVB2D behavior.
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(1);
+
+        // Disable zero flag to prevent mantissa flushing when exponent bits are 0.
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
 
         if constexpr (src_b_bcast_type == BroadcastType::ROW)
