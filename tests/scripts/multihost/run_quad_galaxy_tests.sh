@@ -725,16 +725,6 @@ run_quad_demo_stress_test() {
 # the device sampling + scoring pipeline. See
 # models/demos/deepseek_v3/demo/test_demo_aime_fast.py for details.
 
-run_dual_aime_under_8k_fast_test() {
-    setup_dual_galaxy_env
-    local timeout=$(_demo_timeout 2400)
-    local junit_path="$(_test_run_summary_junit_path aime_under_8k_fast_dual)"
-    local junit_flag="--junitxml=${junit_path}"
-
-    _test_run_summary_exec _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout ${junit_flag} models/demos/deepseek_v3/demo/test_demo_aime_fast.py -k 'dual_aime_under_8k_fast' 2>&1 | tee generated/artifacts/dual_aime_under_8k_fast_output.log"
-    _test_run_summary_append_junit_rows "aime_under_8k_fast_dual" "${junit_path}" "${_TEST_RUN_LAST_EC}"
-}
-
 run_quad_aime_under_8k_fast_test() {
     setup_quad_galaxy_env
     local timeout=$(_demo_timeout 2400)
