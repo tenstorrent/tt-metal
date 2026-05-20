@@ -36,6 +36,11 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      use-artifacts-from-run:
+        required: false
+        type: string
+        default: ""
+        description: "Workflow run ID to reuse pre-built profiler artifacts (skips rebuild). Source run must have tracy=true artifacts."
   schedule:
     - cron: "0 2,7,10,14,17,20,23 * * *"
   workflow_call:
@@ -65,6 +70,11 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      use-artifacts-from-run:
+        required: false
+        type: string
+        default: ""
+        description: "Workflow run ID to reuse pre-built profiler artifacts (skips rebuild). Source run must have tracy=true artifacts."
 
 run-name: "(Single-card) Device perf regressions"
 jobs:
@@ -79,6 +89,7 @@ jobs:
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
+      use-artifacts-from-run: ${{ inputs.use-artifacts-from-run || '' }}
   device-perf:
     needs: build-artifact-profiler
     secrets: inherit
