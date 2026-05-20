@@ -55,6 +55,11 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      use-artifacts-from-run:
+        required: false
+        type: string
+        default: ""
+        description: "Workflow run ID to reuse pre-built artifacts (skips rebuild). Source run must have non-profiler Release artifacts."
   schedule:
     - cron: "0 */2 * * *" # This cron schedule runs the workflow every 2 hours
 
@@ -71,8 +76,10 @@ jobs:
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
+      tracy: false
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
+      use-artifacts-from-run: ${{ inputs.use-artifacts-from-run || '' }}
   t3000-unit-tests:
     needs: build-artifact
     secrets: inherit
