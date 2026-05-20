@@ -83,8 +83,8 @@ jobs:
         default-ops-tests:
           [[
             { name: "wormhole_b0 sdxl op tests", cmd: "pytest --timeout 300 models/demos/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py -k \"_performance\" -xv --tb=short", merge_gate: false, arch: "wormhole_b0", timeout: 5, slow_dispatch: false },
-            { name: "blackhole deepseek blitz op tests (slow dispatch)", cmd: "pytest --timeout 600 -m \"not skip_post_commit\" models/demos/deepseek_v3_b1/tests/unit_tests/ --ignore=models/demos/deepseek_v3_b1/tests/unit_tests/per_core_allocation", merge_gate: false, arch: "blackhole", timeout: 20, slow_dispatch: true },
-            { name: "blackhole deepseek blitz op tests (fast dispatch)", cmd: "pytest --timeout 600 -m \"not skip_post_commit\" models/demos/deepseek_v3_b1/tests/unit_tests/ --ignore=models/demos/deepseek_v3_b1/tests/unit_tests/per_core_allocation", merge_gate: false, arch: "blackhole", timeout: 20, slow_dispatch: false },
+            { name: "blackhole deepseek blitz op tests (slow dispatch)", cmd: "pytest --timeout 600 -m \"not skip_post_commit\" models/demos/deepseek_v3_b1/tests/unit_tests/ --ignore=models/demos/deepseek_v3_b1/tests/unit_tests/per_core_allocation", merge_gate: false, arch: "blackhole", timeout: 30, slow_dispatch: true },
+            { name: "blackhole deepseek blitz op tests (fast dispatch)", cmd: "pytest --timeout 600 -m \"not skip_post_commit\" models/demos/deepseek_v3_b1/tests/unit_tests/ --ignore=models/demos/deepseek_v3_b1/tests/unit_tests/per_core_allocation", merge_gate: false, arch: "blackhole", timeout: 30, slow_dispatch: false },
             { name: "blackhole deepseek per-core allocation tests (slow dispatch)", cmd: "pytest --timeout 600 -m \"not skip_post_commit\" models/demos/deepseek_v3_b1/tests/unit_tests/per_core_allocation/", merge_gate: false, arch: "blackhole", timeout: 10, slow_dispatch: true },
             { name: "blackhole deepseek per-core allocation tests (fast dispatch)", cmd: "pytest --timeout 600 -m \"not skip_post_commit\" models/demos/deepseek_v3_b1/tests/unit_tests/per_core_allocation/", merge_gate: false, arch: "blackhole", timeout: 10, slow_dispatch: false }
           ]]
@@ -119,6 +119,7 @@ jobs:
         test-group: ${{ fromJSON(needs.define-ops-tests.outputs.ops-tests) }}
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: ${{ format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label) }}
+    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
       image: ${{ format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image) || inputs.docker-image || 'docker-image-unresolved!' }}
       env:
@@ -135,7 +136,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ inputs.ref || github.sha }}
           filter: blob:none
@@ -149,6 +150,8 @@ jobs:
           enable-watcher: ${{ inputs.enable-watcher || false }}
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+          enable-kernel-ccache: true
+          redis-ccache-storage: redis://${{ vars.REDIS_CCACHE_USER }}:${{ secrets.REDIS_CCACHE_PASSWORD }}@${{ vars.REDIS_CCACHE_HOST }}:${{ vars.REDIS_CCACHE_PORT }}|read-only=${{ vars.REDIS_CCACHE_IS_READONLY }}
           auto-triage: ${{ !inputs.enable-watcher }}
 
       - name: ${{ matrix.test-group.name }} tests
@@ -175,6 +178,13 @@ jobs:
         run: |
           export DEVICE_PERF_REPORT_FILENAME=Ops_Perf.csv
           python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME CHECK
+
+      - name: 📊 CCache Report
+        if: ${{ !cancelled() }}
+        run: |
+          echo "::group::CCache Statistics"
+          ccache --show-stats || echo "ccache stats not available"
+          echo "::endgroup::"
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10

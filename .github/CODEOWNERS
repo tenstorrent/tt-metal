@@ -201,7 +201,7 @@ ttnn/**/*nanobind* @tenstorrent/metalium-developers-ttnn-core @nsextonTT @tensto
 ttnn/tutorials/ @tenstorrent/metalium-developers-ttnn-core @aczajkowskiTT @tenstorrent/codeowner-bypass
 ttnn/ttnn/_experimental/moe_compute_utils.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 ttnn/ttnn/operations/ @tenstorrent/metalium-developers-ops-leads @tenstorrent/codeowner-bypass
-ttnn/ttnn/operations/moreh.py @razorback3 @dongjin-na @ayerofieiev-tt @tenstorrent/codeowner-bypass
+ttnn/ttnn/operations/moreh.py @razorback3 @dongjin-na @ayerofieiev-tt @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
 ttnn/ttnn/operations/conv2d.py @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 ttnn/ttnn/operations/pool.py @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 ttnn/ttnn/operations/matmul.py @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
@@ -216,8 +216,8 @@ ttnn/examples/**/kernels/ @tenstorrent/metalium-developers-mmfusedreduce @tensto
 
 ttnn/cpp/ttnn/operations/ @tenstorrent/metalium-developers-ops-leads @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/**/CMakeLists.txt @tenstorrent/metalium-developers-ops-leads @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
-ttnn/cpp/ttnn/operations/moreh*/ @razorback3 @dongjin-na @ayerofieiev-tt @nmauriceTT @aczajkowskiTT @tenstorrent/codeowner-bypass
-ttnn/cpp/ttnn/operations/moreh*/**/CMakeLists.txt @razorback3 @dongjin-na @ayerofieiev-tt @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+ttnn/cpp/ttnn/operations/moreh*/ @razorback3 @dongjin-na @ayerofieiev-tt @nmauriceTT @aczajkowskiTT @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
+ttnn/cpp/ttnn/operations/moreh*/**/CMakeLists.txt @razorback3 @dongjin-na @ayerofieiev-tt @tenstorrent/metalium-developers-infra @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/ccl/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/ccl/**/CMakeLists.txt @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/point_to_point/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
@@ -292,6 +292,8 @@ ttnn/api/tools/profiler/ @mo-tenstorrent @akerteszTT @tenstorrent/codeowner-bypa
 
 
 
+tests/tt_eager/python_api_testing/sweep_tests/pytests/tt_dnn/test_layernorm_sharded.py @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
+tests/tt_eager/python_api_testing/sweep_tests/pytests/tt_dnn/test_softmax_sharded.py @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
 tests/tt_eager/python_api_testing/unit_testing/misc/test_concat.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 tests/tt_eager/python_api_testing/unit_testing/misc/test_fill_rm.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 tests/tt_eager/python_api_testing/unit_testing/misc/test_move_sharded.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
@@ -299,9 +301,11 @@ tests/tt_eager/python_api_testing/unit_testing/misc/test_move.py @tenstorrent/me
 tests/tt_eager/python_api_testing/unit_testing/misc/test_padding_test.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 tests/tt_eager/python_api_testing/unit_testing/misc/test_reshape.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 tests/tt_eager/python_api_testing/unit_testing/misc/test_reshard.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
+tests/tt_eager/python_api_testing/unit_testing/misc/test_sharded.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 tests/tt_eager/python_api_testing/unit_testing/misc/test_tilize_test.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 tests/tt_eager/python_api_testing/unit_testing/misc/test_transpose.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 tests/tt_eager/python_api_testing/unit_testing/misc/test_untilize_test.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
+tests/tt_eager/python_api_testing/unit_testing/misc/test_update_cache.py @tenstorrent/metallium-maintainers-llama-models @tenstorrent/codeowner-bypass
 
 
 tests/ttnn/ @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT @tenstorrent/codeowner-bypass
@@ -395,7 +399,7 @@ models/demos/deepseek_v3_b1 @tt-aho @TT-BrianLiu @sjameelTT @nardoTT @tt-asaigal
 models/demos/deepseek_v3_b1/demo @esmalTT @tt-aho @TT-BrianLiu @sjameelTT @nardoTT @tt-asaigal @tenstorrent/codeowner-bypass
 models/demos/deepseek_v3_b1/weights @esmalTT @tt-aho @TT-BrianLiu @sjameelTT @nardoTT @tt-asaigal @tenstorrent/codeowner-bypass
 models/demos/deepseek_v3_d_p @tenstorrent/metalium-developers-ds-prefill @tenstorrent/codeowner-bypass
-models/demos/gpt_oss @uaydonat @mtairum @sraizada-tt @handrewsTT @tenstorrent/codeowner-bypass
+models/demos/gpt_oss @uaydonat @mtairum @sraizada-tt @djordje-tt @handrewsTT @tenstorrent/codeowner-bypass
 models/**/bert*/ @TT-BrianLiu @uaydonat @tenstorrent/codeowner-bypass
 models/demos/metal_BERT_large_11 @tt-aho @TT-BrianLiu @tenstorrent/codeowner-bypass
 models/**/distilbert/ @tt-aho @uaydonat @tenstorrent/codeowner-bypass

@@ -13,6 +13,21 @@ Two variants:
   by extension ``CompressedTensorAssigner.assign``, ``pack_bfp_tile``, and the
   per-core L1 upload path) on top of the DRAM cache load. Intended as a
   regression gate for the assigner short-circuit and ``pack_bfp_tile`` work.
+
+Environment variables
+---------------------
+``CACHE_PERF_ROOT``         Override the on-disk TensorCache root. Defaults to
+                            ``~/.cache/deepseek_v3_b1_cache_perf``. Point at the
+                            production demo's cache (e.g. ``--cache-path``) to
+                            measure warm-path latency against real artifacts.
+``BSPM_DIR``                Mirror of the demo CLI's ``--bspm-dir`` — model-specific
+                            BSPM root (e.g. ``.../bit_sculpt/results/<model>``).
+                            When set, the routed-expert path uses per-expert
+                            mixed-precision assignments (256 unique cache entries
+                            per projection per layer, matches production load
+                            behaviour). When unset, falls back to uniform BFP4
+                            (1 cache entry per projection, lower bound only).
+``BSPM_BUDGET``             Mirror of ``--bspm-budget`` (default 3.5).
 """
 
 from __future__ import annotations
@@ -42,6 +57,7 @@ from models.demos.deepseek_v3_b1.weights.transforms.sram_experts import (
 MOE_LAYER_IDX = 3
 SRAM_HOT_EXPERTS_CEILING = 64
 CACHE_PERF_ROOT = Path(os.environ.get("CACHE_PERF_ROOT", str(Path.home() / ".cache" / "deepseek_v3_b1_cache_perf")))
+DEFAULT_BSPM_BUDGET = 3.5
 
 
 def _resolve_tensor_cache_root() -> Path:
@@ -49,6 +65,25 @@ def _resolve_tensor_cache_root() -> Path:
     root = Path(env_root).resolve() if env_root else CACHE_PERF_ROOT / "moe_layer_cache"
     root.mkdir(parents=True, exist_ok=True)
     return root
+
+
+def _resolve_bspm_config() -> tuple[Path | None, float]:
+    """Read optional BSPM directory + budget from env so callers can mirror the demo CLI.
+
+    Set ``BSPM_DIR`` (matches ``--bspm-dir``) to point at the model-specific BSPM root
+    e.g. ``/data/.../bit_sculpt/results/deepseek-r1-0528``; optionally set
+    ``BSPM_BUDGET`` (matches ``--bspm-budget``, default 3.5). When ``BSPM_DIR`` is
+    unset, the uniform-BFP4 fallback path is exercised (1 cache entry/projection,
+    no per-expert assignment slicing) — useful for measuring the new TP8 DRAM
+    compressed path's lower bound. When set, every expert/projection gets its own
+    ``assignment_hash`` (256× more cache entries per layer) which matches the
+    production demo's load behaviour.
+    """
+    bspm_dir_env = os.environ.get("BSPM_DIR", "").strip()
+    bspm_dir = Path(bspm_dir_env).resolve() if bspm_dir_env else None
+    bspm_budget_env = os.environ.get("BSPM_BUDGET", "").strip()
+    bspm_budget = float(bspm_budget_env) if bspm_budget_env else DEFAULT_BSPM_BUDGET
+    return bspm_dir, bspm_budget
 
 
 @pytest.mark.parametrize(
@@ -65,13 +100,20 @@ def test_cache_weight_provider_load_moe_layer_perf(bh_2d_mesh_device: Any, hf_mo
         pytest.skip("Test requires 8 devices (4x2 mesh)")
 
     tensor_cache_root = _resolve_tensor_cache_root()
+    bspm_dir, bspm_budget = _resolve_bspm_config()
 
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
-    provider = CacheWeightProvider(tensor_cache_root, hf_model_path)
+    provider = CacheWeightProvider(
+        tensor_cache_root,
+        hf_model_path,
+        bspm_dir=bspm_dir,
+        bspm_budget=bspm_budget,
+    )
 
     total_size_mb = NUM_ROUTED_EXPERTS * 3 * 7168 * 2048 / (1024 * 1024)
 
-    logger.info("Loading MoE layer {} from TensorCache root {}", MOE_LAYER_IDX, tensor_cache_root)
+    bspm_mode = f"BSPM (dir={bspm_dir}, budget={bspm_budget})" if bspm_dir is not None else "uniform-BFP4"
+    logger.info("Loading MoE layer {} from TensorCache root {} ({})", MOE_LAYER_IDX, tensor_cache_root, bspm_mode)
     t0 = time.perf_counter()
     loaded = provider.load_moe_layer(MOE_LAYER_IDX, submesh)
     elapsed_s = time.perf_counter() - t0
@@ -109,6 +151,7 @@ def test_cache_weight_provider_load_moe_layer_sram_perf(bh_2d_mesh_device: Any, 
         pytest.skip("Test requires 8 devices (4x2 mesh)")
 
     tensor_cache_root = _resolve_tensor_cache_root()
+    bspm_dir, bspm_budget = _resolve_bspm_config()
 
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
 
@@ -131,15 +174,19 @@ def test_cache_weight_provider_load_moe_layer_sram_perf(bh_2d_mesh_device: Any, 
         sram_core_grids=SramExpertCoreGrids.shared_expert_mirror(),
         sram_assigner=CompressedTensorAssigner(formats=["bfp4"]),
         worker_l1_size=worker_l1_size,
+        bspm_dir=bspm_dir,
+        bspm_budget=bspm_budget,
     )
 
     total_size_mb = NUM_ROUTED_EXPERTS * 3 * 7168 * 2048 / (1024 * 1024)
     sram_candidates = len(sram_hot_experts.get(MOE_LAYER_IDX, []))
 
+    bspm_mode = f"BSPM (dir={bspm_dir}, budget={bspm_budget})" if bspm_dir is not None else "uniform-BFP4"
     logger.info(
-        "Loading MoE layer {} (SRAM hot experts: {} candidates) from TensorCache root {}",
+        "Loading MoE layer {} (SRAM hot experts: {} candidates, {}) from TensorCache root {}",
         MOE_LAYER_IDX,
         sram_candidates,
+        bspm_mode,
         tensor_cache_root,
     )
     t0 = time.perf_counter()

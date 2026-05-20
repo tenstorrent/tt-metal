@@ -6,7 +6,7 @@
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     // Compile-time constants
@@ -31,7 +31,7 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<0>();
 
     constexpr uint32_t cb_id_in = tt::CBIndex::c_2;
-    experimental::CircularBuffer cb_in(cb_id_in);
+    CircularBuffer cb_in(cb_id_in);
 
     // Precompute bytes-per-block along X
     constexpr uint32_t x_block_size_bytes = x_block_size * element_size;

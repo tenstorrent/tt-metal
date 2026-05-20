@@ -129,7 +129,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
     }
 
-    _llk_math_eltwise_unary_sfpu_init_();
+    _llk_math_eltwise_sfpu_init_();
     _init_where_();
 
     // Per-tile offsets in SFPU dest_reg_addr units (rows × 2; tile stride = 64 for 32x32 tiles).
@@ -143,16 +143,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Bracket the per-face SFPU section. `_set_dst_write_addr_<Tile32x32>(DST_INDEX)` sets
     // the section base to DST_INDEX's tile start so the offsets above resolve to the
     // correct tile (DST_INDEX + 0, +1, +2).
-    _llk_math_eltwise_unary_sfpu_start_(params.DST_INDEX);
+    _llk_math_eltwise_sfpu_start_(params.DST_INDEX);
 
     const std::uint32_t num_sfpu_iterations = params.TEST_FACE_R_DIM / ckernel::math::SFP_ROWS;
     for (std::uint32_t face = 0; face < params.num_faces; face++)
     {
         _calculate_where_(static_cast<int>(num_sfpu_iterations), cond_tile_offset, true_tile_offset, false_tile_offset, out_tile_offset);
-        _llk_math_eltwise_unary_sfpu_inc_dst_face_addr_();
+        _llk_math_eltwise_sfpu_inc_dst_face_addr_();
     }
 
-    _llk_math_eltwise_unary_sfpu_done_();
+    _llk_math_eltwise_sfpu_done_();
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
 

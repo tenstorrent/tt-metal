@@ -29,6 +29,7 @@
 #include <utility>
 
 #include "impl/allocator/allocator.hpp"
+#include "pinned_memory_cache.hpp"
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"
 #include "device/device_impl.hpp"
@@ -1381,7 +1382,8 @@ bool MeshDeviceImpl::initialize_impl(
 }
 
 void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDevice>& mesh_device) {
-    if (realtime_profiler_) {
+    static const bool enable_rt_profiler = tt::parse_env<bool>("TT_METAL_ENABLE_REALTIME_PROFILER", false);
+    if (!enable_rt_profiler || realtime_profiler_) {
         return;
     }
     realtime_profiler_ = std::make_unique<RealtimeProfilerManager>(mesh_device);
@@ -1531,6 +1533,7 @@ MeshDevice::MeshDevice(MetalEnv& /*metal_env*/) {}
 
 MeshDevice::~MeshDevice() {
     Inspector::mesh_device_destroyed(this->pimpl_.get());
+    experimental::PinnedMemoryCache::instance().release_for_device(*this);
     pimpl_->close_impl(this);
 }
 

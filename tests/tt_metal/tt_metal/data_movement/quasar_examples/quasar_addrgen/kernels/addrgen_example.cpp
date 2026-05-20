@@ -12,6 +12,8 @@
 #include "internal/tt-2xx/quasar/overlay/addrgen_api.hpp"
 #include <cstdint>
 
+using namespace overlay;
+
 // 1D source config
 constexpr uint32_t src_1d_base = 0x10000;
 constexpr uint64_t src_1d_stride = 2048;

@@ -71,6 +71,7 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/softmax_backward_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/scaled_dot_product_attention.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/swiglu_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/moe_ffn_swiglu_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/unary_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/rand_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/randn_op.cpp
@@ -192,6 +193,10 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/polynorm_fw/polynorm_fw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/polynorm_fw/device/polynorm_fw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/polynorm_fw/device/polynorm_fw_program_factory.cpp
+    # PolyNorm Backward
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/polynorm_bw/polynorm_bw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/polynorm_bw/device/polynorm_bw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/polynorm_bw/device/polynorm_bw_program_factory.cpp
     # AdamW Optimizer (consolidated: supports both half and full precision)
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/adamw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_device_operation.cpp

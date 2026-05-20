@@ -39,7 +39,12 @@ template <
     InputClamping input_clamping = InputClamping::ClampToNegative>
 ALWI void exp_tile_init() {
     MATH(SFPU_TEMPLATE_INIT_KERNEL(
-        exponential, sfpu::exp_init, approx, scale, (input_clamping == InputClamping::ClampToNegative)));
+        exponential,
+        sfpu::exp_init,
+        approx,
+        scale,
+        (input_clamping == InputClamping::ClampToNegative),
+        DST_ACCUM_MODE));
 }
 
 // clang-format off
@@ -92,8 +97,8 @@ template <
     uint32_t scale = 0x3F800000,
     InputClamping input_clamping = InputClamping::ClampToNegative>
 ALWI void exp_packthread_tile_init() {
-    PACK(SFPU_TEMPLATE_INIT_KERNEL(
-        exponential, sfpu::exp_init, approx, scale, (input_clamping == InputClamping::ClampToNegative)));
+    PACK(llk_math_eltwise_unary_sfpu_init<SfpuType::exponential>(
+        sfpu::exp_init<approx, scale, (input_clamping == InputClamping::ClampToNegative), DST_ACCUM_MODE>));
 }
 
 /**

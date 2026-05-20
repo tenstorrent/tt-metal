@@ -749,8 +749,8 @@ PhysicalSystemDescriptor create_physical_system_descriptor() {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
-    return tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
+    return tt::tt_metal::run_physical_system_discovery(
+        *cluster.get_cluster_desc(), distributed_context, rtoptions.get_target_device());
 }
 
 // Single-galaxy pipeline test helper (multi-process). 5 stages, 4 ranks: stage 4 (loopback) on rank 0.

@@ -465,6 +465,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     } scale_union{};
     scale_union.f = scale.value_or(1.0f);
 
+    const bool use_zigzag_balancing = is_causal;
+
     std::vector<uint32_t> reader_compile_time_args = {// interleaved accessor args
                                                       B,
                                                       NQH,
@@ -501,6 +503,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     reader_compile_time_args.push_back(0);  // receiver_semaphore_id placeholder
     reader_compile_time_args.push_back(0);  // valid_semaphore_id placeholder
     reader_compile_time_args.push_back(0);  // mcast_enabled placeholder
+    reader_compile_time_args.push_back(static_cast<uint32_t>(use_zigzag_balancing));  // arg 31
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -558,10 +561,11 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         (std::uint32_t)use_padded_mask,
         (uint32_t)is_chunked,
         sliding_window_size.value_or(0),
-        (std::uint32_t)(lightweight_mask),       // arg 20: lightweight mask (causal or streaming padded)
-        (std::uint32_t)(use_streaming_compute),  // arg 21: row-grouped cb_out drain
-        out_out_subblock_h,                      // arg 22: drain group height
-        k_partial_col,                           // arg 23: K partial-tile col (0 = no partial)
+        (std::uint32_t)(lightweight_mask),            // arg 20: lightweight mask (causal or streaming padded)
+        (std::uint32_t)(use_streaming_compute),       // arg 21: row-grouped cb_out drain
+        out_out_subblock_h,                           // arg 22: drain group height
+        k_partial_col,                                // arg 23: K partial-tile col (0 = no partial)
+        static_cast<uint32_t>(use_zigzag_balancing),  // arg 24
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
@@ -601,10 +605,11 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         scale_union.u,
         sliding_window_size.value_or(0),
         (std::uint32_t)use_attention_sink,
-        (std::uint32_t)use_streaming_compute,  // arg 30
-        valid_Skt,                             // arg 31: unpadded K tile count for streaming padded_k_tiles
-        (std::uint32_t)uniform_dataformat,     // arg 32: skip reconfig when all formats match
-        k_partial_col,                         // arg 33: K partial-tile col (0 = no partial)
+        (std::uint32_t)use_streaming_compute,         // arg 30
+        valid_Skt,                                    // arg 31: unpadded K tile count for streaming padded_k_tiles
+        (std::uint32_t)uniform_dataformat,            // arg 32: skip reconfig when all formats match
+        k_partial_col,                                // arg 33: K partial-tile col (0 = no partial)
+        static_cast<uint32_t>(use_zigzag_balancing),  // arg 34
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
@@ -616,13 +621,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
-    uint32_t balanced_q_parallel =
-        (is_causal && (q_per_core * q_parallel_factor == q_num_chunks) && (q_per_core % 2 == 0));
-    if (balanced_q_parallel) {
-        defines["BALANCED_Q_PARALLEL"] = "1";
-    }
 
-    log_debug(tt::LogOp, "BALANCED_Q_PARALLEL: {}", balanced_q_parallel);
+    log_debug(tt::LogOp, "use_zigzag_balancing: {}", use_zigzag_balancing);
 
     // NOTE: CreateKernel calls are deferred until after chain construction so that
     // the mcast_enabled compile-time arg can be determined first.
