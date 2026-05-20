@@ -5,22 +5,27 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
-#include <array>
 #include <cstdint>
-#include <random>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/math.hpp>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/ops/moe_group/moe_group.hpp"
+#include "moe_test_utils.hpp"
 
 namespace {
 
 constexpr uint32_t kTileH = 32U;
 constexpr uint32_t kSentinel = 0xFFFFFFFFU;
 constexpr uint16_t kKSlotSentinel = 0xFFFFU;
+
+// Float-comparison tolerance for bf16-derived outputs. Single source of truth so
+// rtol/atol stay consistent across all checks in this test file.
+constexpr float kRtol = 1e-3F;
+constexpr float kAtol = 1e-3F;
 
 class MoeGroupTest : public ::testing::Test {
 protected:
@@ -32,10 +37,6 @@ protected:
         ttml::autograd::ctx().close_device();
     }
 };
-
-uint32_t round_up_to(uint32_t x, uint32_t a) {
-    return ((x + a - 1U) / a) * a;
-}
 
 // Cursor alignment in element-count units — mirrors moe_group_device_operation.cpp.
 uint32_t cursor_align_elems() {
@@ -54,7 +55,7 @@ uint32_t compute_t_cap(uint32_t e_local, uint32_t k, uint32_t d, uint32_t b, uin
     const uint32_t cur_align = cursor_align_elems();
     const uint32_t unaligned =
         std::min(e_local, k) * d * b * s + e_local * (kTileH + (cur_align - 1U) * num_total_cores);
-    return round_up_to(unaligned, kTileH);
+    return tt::round_up(unaligned, kTileH);
 }
 
 // num_workers as picked by split_work_to_cores(grid, total_tiles).
@@ -135,9 +136,9 @@ GroupReference moe_group_reference(
     for (uint32_t e = 0; e < E_local; ++e) {
         uint32_t running = offsets[e];
         for (uint32_t c = 0; c < num_total_cores; ++c) {
-            running += round_up_to(local_counts[c * E_local + e], cur_align);
+            running += tt::round_up(local_counts[c * E_local + e], cur_align);
         }
-        offsets[e + 1] = round_up_to(running, kTileH);
+        offsets[e + 1] = tt::round_up(running, kTileH);
     }
 
     std::vector<uint32_t> plan(T_cap, kSentinel);
@@ -165,7 +166,7 @@ GroupReference moe_group_reference(
                 }
                 ++n;
             }
-            running += round_up_to(n, cur_align);
+            running += tt::round_up(n, cur_align);
         }
     }
 
@@ -180,49 +181,22 @@ GroupReference moe_group_reference(
         H};
 }
 
-// Input builders ------------------------------------------------------------
-
-xt::xarray<float> make_dispatched(uint32_t D, uint32_t B, uint32_t S, uint32_t H, uint32_t seed = 0) {
-    xt::xarray<float> out = xt::zeros<float>({D, B, S, H});
-    // row (d,b,s) value = (d*B*S + b*S + s), broadcast across H. Round-trips
-    // cleanly through bf16 for small grids (integers <= 2^7).
-    for (uint32_t d = 0; d < D; ++d) {
-        for (uint32_t b = 0; b < B; ++b) {
-            for (uint32_t s = 0; s < S; ++s) {
-                const float v = static_cast<float>(d * B * S + b * S + s);
-                for (uint32_t h = 0; h < H; ++h) out(d, b, s, h) = v;
-            }
-        }
-    }
-    (void)seed;
-    return out;
-}
-
-xt::xarray<uint32_t> make_metadata(uint32_t D, uint32_t B, uint32_t S, uint32_t K, uint32_t E, uint32_t seed = 0) {
-    xt::xarray<uint32_t> out = xt::zeros<uint32_t>({D, B, S, K});
-    std::mt19937 rng(seed + 1);
-    std::vector<uint32_t> all(E);
-    for (uint32_t e = 0; e < E; ++e) all[e] = e;
-    for (uint32_t d = 0; d < D; ++d) {
-        for (uint32_t b = 0; b < B; ++b) {
-            for (uint32_t s = 0; s < S; ++s) {
-                std::shuffle(all.begin(), all.end(), rng);
-                for (uint32_t ki = 0; ki < K; ++ki) out(d, b, s, ki) = all[ki];
-            }
-        }
-    }
-    return out;
-}
-
-xt::xarray<float> make_scores(uint32_t D, uint32_t B, uint32_t S, uint32_t K, uint32_t seed = 0) {
-    xt::xarray<float> out = xt::zeros<float>({D, B, S, K});
-    std::mt19937 rng(seed + 13);
-    std::uniform_real_distribution<float> dist(0.0F, 0.5F);
-    for (auto it = out.begin(); it != out.end(); ++it) *it = dist(rng);
-    // Round-trip through bf16 so the reference matches what the device sees.
-    auto& dev = ttml::autograd::ctx().get_device();
-    auto t = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(out, &dev, ttnn::Layout::ROW_MAJOR);
-    return ttml::core::to_xtensor(t);
+// Build host inputs (dispatched + scores already bf16-roundtripped on the test
+// device, so the host reference compares apples-to-apples against device output).
+ttml::test_utils::moe::MoeHostInputs make_inputs(
+    uint32_t D, uint32_t B, uint32_t S, uint32_t H, uint32_t E, uint32_t K) {
+    return ttml::test_utils::moe::make_moe_host_inputs({
+        .D = D,
+        .B = B,
+        .S = S,
+        .H = H,
+        .E = E,
+        .K = K,
+        // Row-index broadcast keeps moe_group reorder checks (EXPECT_FLOAT_EQ on grouped rows)
+        // trivially debuggable: out row N must equal the constant float(N).
+        .dispatched_pattern = ttml::test_utils::moe::DispatchedPattern::RowIndexBroadcast,
+        .roundtrip_device = &ttml::autograd::ctx().get_device(),
+    });
 }
 
 // Run the device op + return host-side outputs as plain arrays.
@@ -238,26 +212,15 @@ struct DeviceOutputs {
 };
 
 DeviceOutputs run_op(
-    const xt::xarray<float>& dispatched,
-    const xt::xarray<uint32_t>& metadata,
-    const xt::xarray<float>& scores,
-    const std::vector<uint16_t>& local_expert_ids,
-    uint32_t k) {
+    const ttml::test_utils::moe::MoeHostInputs& host, const std::vector<uint16_t>& local_expert_ids, uint32_t k) {
     auto& dev = ttml::autograd::ctx().get_device();
     const uint32_t E_local = static_cast<uint32_t>(local_expert_ids.size());
-    const uint32_t H = static_cast<uint32_t>(dispatched.shape(3));
+    const uint32_t H = static_cast<uint32_t>(host.dispatched.shape(3));
 
-    auto disp_tt = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(dispatched, &dev, ttnn::Layout::ROW_MAJOR);
-    // metadata / leids as uint16 ROW_MAJOR
-    xt::xarray<uint16_t> md16 = xt::cast<uint16_t>(metadata);
-    auto md_tt = ttml::core::from_xtensor<uint16_t, ttnn::DataType::UINT16>(md16, &dev, ttnn::Layout::ROW_MAJOR);
-    auto sc_tt = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(scores, &dev, ttnn::Layout::ROW_MAJOR);
-    xt::xarray<uint16_t> leids_arr = xt::adapt(local_expert_ids, std::vector<size_t>{local_expert_ids.size()});
-    auto leids_tt =
-        ttml::core::from_xtensor<uint16_t, ttnn::DataType::UINT16>(leids_arr, &dev, ttnn::Layout::ROW_MAJOR);
+    auto dev_in = ttml::test_utils::moe::to_device_inputs(host, local_expert_ids, &dev);
 
-    auto [grouped, grouped_scores, k_slot, counts, offsets, plan] =
-        ttml::metal::moe_group(disp_tt, md_tt, sc_tt, leids_tt, E_local, k);
+    auto [grouped, grouped_scores, k_slot, counts, offsets, plan] = ttml::metal::moe_group(
+        dev_in.dispatched_bf16, dev_in.metadata_u16, dev_in.scores_bf16, dev_in.leids_u16, E_local, k);
 
     DeviceOutputs out;
     out.H = H;
@@ -285,26 +248,21 @@ DeviceOutputs run_op(
 }
 
 void check_against_reference(
-    const xt::xarray<float>& dispatched,
-    const xt::xarray<uint32_t>& metadata,
-    const xt::xarray<float>& scores,
-    const std::vector<uint16_t>& local_expert_ids,
-    uint32_t k) {
-    const uint32_t D = static_cast<uint32_t>(dispatched.shape(0));
-    const uint32_t B = static_cast<uint32_t>(dispatched.shape(1));
-    const uint32_t S = static_cast<uint32_t>(dispatched.shape(2));
+    const ttml::test_utils::moe::MoeHostInputs& host, const std::vector<uint16_t>& local_expert_ids, uint32_t k) {
+    const uint32_t D = static_cast<uint32_t>(host.dispatched.shape(0));
+    const uint32_t B = static_cast<uint32_t>(host.dispatched.shape(1));
+    const uint32_t S = static_cast<uint32_t>(host.dispatched.shape(2));
     const uint32_t E_local = static_cast<uint32_t>(local_expert_ids.size());
 
-    // Round-trip dispatched through bf16 so the reference compares apples-to-apples.
-    auto& dev = ttml::autograd::ctx().get_device();
-    auto disp_rt = ttml::core::to_xtensor(
-        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(dispatched, &dev, ttnn::Layout::ROW_MAJOR));
+    // host.dispatched is already bf16-roundtripped by make_inputs(), so it matches what the
+    // device sees and can be fed straight into the reference.
+    const auto& disp_rt = host.dispatched;
 
     const uint32_t num_workers = compute_num_workers(E_local, k, D, B, S);
     const uint32_t t_cap = compute_t_cap(E_local, k, D, B, S);
-    auto ref = moe_group_reference(disp_rt, metadata, scores, local_expert_ids, k, num_workers, t_cap);
+    auto ref = moe_group_reference(disp_rt, host.metadata, host.scores, local_expert_ids, k, num_workers, t_cap);
 
-    auto out = run_op(dispatched, metadata, scores, local_expert_ids, k);
+    auto out = run_op(host, local_expert_ids, k);
 
     ASSERT_EQ(out.T_cap, ref.t_cap);
     ASSERT_EQ(out.counts.size(), ref.counts.size());
@@ -324,8 +282,11 @@ void check_against_reference(
         EXPECT_EQ(out.k_slot[i], ref.k_slot[i]) << "k_slot[" << i << "]";
     }
     ASSERT_EQ(out.grouped_scores.size(), ref.grouped_scores.size());
-    for (size_t i = 0; i < ref.grouped_scores.size(); ++i) {
-        EXPECT_NEAR(out.grouped_scores[i], ref.grouped_scores[i], 1e-3F) << "grouped_scores[" << i << "]";
+    {
+        auto out_gs = xt::adapt(out.grouped_scores, std::vector<size_t>{out.grouped_scores.size()});
+        auto ref_gs = xt::adapt(ref.grouped_scores, std::vector<size_t>{ref.grouped_scores.size()});
+        EXPECT_TRUE(xt::allclose(out_gs, ref_gs, kRtol, kAtol))
+            << "grouped_scores allclose failed (rtol=" << kRtol << " atol=" << kAtol << ")";
     }
     // grouped: only ACTIVE rows (plan[i] != SENTINEL) are guaranteed equal to
     // dispatched[plan[i]]. Pad rows are not part of the op contract — the
@@ -333,6 +294,9 @@ void check_against_reference(
     // grouped_scores, so any value there is harmless.
     ASSERT_EQ(out.grouped.size(), ref.grouped.size());
     const uint32_t H = out.H;
+    // moe_group only reorders dispatched rows into the grouped layout — no math is
+    // performed on the values — so each active grouped row must be bit-identical
+    // to the bf16-roundtripped dispatched source. EXPECT_FLOAT_EQ is intentional.
     for (uint32_t i = 0; i < ref.t_cap; ++i) {
         const uint32_t src = ref.plan[i];
         if (src == kSentinel)
@@ -351,30 +315,21 @@ TEST_F(MoeGroupTest, BasicShape) {
     constexpr uint32_t D = 2, B = 1, S = 32, H = 64;
     constexpr uint32_t E = 4, K = 2;
     const std::vector<uint16_t> leids = {0, 1};
-    auto dispatched = make_dispatched(D, B, S, H);
-    auto metadata = make_metadata(D, B, S, K, E);
-    auto scores = make_scores(D, B, S, K);
-    check_against_reference(dispatched, metadata, scores, leids, K);
+    check_against_reference(make_inputs(D, B, S, H, E, K), leids, K);
 }
 
 TEST_F(MoeGroupTest, LargerH) {
     constexpr uint32_t D = 2, B = 1, S = 32, H = 256;
     constexpr uint32_t E = 4, K = 2;
     const std::vector<uint16_t> leids = {0, 1};
-    auto dispatched = make_dispatched(D, B, S, H);
-    auto metadata = make_metadata(D, B, S, K, E);
-    auto scores = make_scores(D, B, S, K);
-    check_against_reference(dispatched, metadata, scores, leids, K);
+    check_against_reference(make_inputs(D, B, S, H, E, K), leids, K);
 }
 
 TEST_F(MoeGroupTest, NonTileAlignedH) {
     constexpr uint32_t D = 2, B = 1, S = 32, H = 80;
     constexpr uint32_t E = 4, K = 2;
     const std::vector<uint16_t> leids = {0, 1};
-    auto dispatched = make_dispatched(D, B, S, H);
-    auto metadata = make_metadata(D, B, S, K, E);
-    auto scores = make_scores(D, B, S, K);
-    check_against_reference(dispatched, metadata, scores, leids, K);
+    check_against_reference(make_inputs(D, B, S, H, E, K), leids, K);
 }
 
 TEST_F(MoeGroupTest, ExpertZeroActive) {
@@ -382,20 +337,14 @@ TEST_F(MoeGroupTest, ExpertZeroActive) {
     constexpr uint32_t E = 4, K = 2;
     // local expert 5 is never present in metadata (E=4 → ids in [0,3]).
     const std::vector<uint16_t> leids = {0, 5};
-    auto dispatched = make_dispatched(D, B, S, H);
-    auto metadata = make_metadata(D, B, S, K, E);
-    auto scores = make_scores(D, B, S, K);
-    check_against_reference(dispatched, metadata, scores, leids, K);
+    check_against_reference(make_inputs(D, B, S, H, E, K), leids, K);
 }
 
 TEST_F(MoeGroupTest, AllTokensActiveForAllExperts) {
     constexpr uint32_t D = 2, B = 1, S = 32, H = 64;
     constexpr uint32_t E = 2, K = 2;  // K == E → every token hits both
     const std::vector<uint16_t> leids = {0, 1};
-    auto dispatched = make_dispatched(D, B, S, H);
-    auto metadata = make_metadata(D, B, S, K, E);
-    auto scores = make_scores(D, B, S, K);
-    check_against_reference(dispatched, metadata, scores, leids, K);
+    check_against_reference(make_inputs(D, B, S, H, E, K), leids, K);
 }
 
 TEST_F(MoeGroupTest, LargeELocal) {
@@ -404,8 +353,5 @@ TEST_F(MoeGroupTest, LargeELocal) {
     std::vector<uint16_t> leids;
     leids.reserve(32);
     for (uint16_t i = 0; i < 32; ++i) leids.push_back(i);
-    auto dispatched = make_dispatched(D, B, S, H);
-    auto metadata = make_metadata(D, B, S, K, E);
-    auto scores = make_scores(D, B, S, K);
-    check_against_reference(dispatched, metadata, scores, leids, K);
+    check_against_reference(make_inputs(D, B, S, H, E, K), leids, K);
 }

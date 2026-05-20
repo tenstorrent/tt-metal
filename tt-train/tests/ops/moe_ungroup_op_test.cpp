@@ -4,9 +4,8 @@
 
 #include <gtest/gtest.h>
 
-#include <algorithm>
+#include <array>
 #include <cstdint>
-#include <random>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <vector>
@@ -15,10 +14,16 @@
 #include "core/tt_tensor_utils.hpp"
 #include "metal/ops/moe_group/moe_group.hpp"
 #include "metal/ops/moe_ungroup/moe_ungroup.hpp"
+#include "moe_test_utils.hpp"
 
 namespace {
 
 constexpr uint32_t kSentinel = 0xFFFFFFFFU;
+
+// Float-comparison tolerance for bf16-derived outputs. Single source of truth so
+// rtol/atol stay consistent across all checks in this test file.
+constexpr float kRtol = 5e-2F;
+constexpr float kAtol = 1e-2F;
 
 class MoeUngroupTest : public ::testing::Test {
 protected:
@@ -31,43 +36,19 @@ protected:
     }
 };
 
-// Input builders ------------------------------------------------------------
-
-xt::xarray<float> make_dispatched(uint32_t D, uint32_t B, uint32_t S, uint32_t H, uint32_t seed = 0) {
-    std::mt19937 rng(seed + 5);
-    std::uniform_real_distribution<float> dist(-1.0F, 1.0F);
-    xt::xarray<float> out = xt::zeros<float>({D, B, S, H});
-    for (auto it = out.begin(); it != out.end(); ++it) *it = dist(rng);
-    // bf16 round-trip so reference matches device exactly.
-    auto& dev = ttml::autograd::ctx().get_device();
-    auto t = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(out, &dev, ttnn::Layout::ROW_MAJOR);
-    return ttml::core::to_xtensor(t);
-}
-
-xt::xarray<uint32_t> make_metadata(uint32_t D, uint32_t B, uint32_t S, uint32_t K, uint32_t E, uint32_t seed = 0) {
-    xt::xarray<uint32_t> out = xt::zeros<uint32_t>({D, B, S, K});
-    std::mt19937 rng(seed + 1);
-    std::vector<uint32_t> all(E);
-    for (uint32_t e = 0; e < E; ++e) all[e] = e;
-    for (uint32_t d = 0; d < D; ++d) {
-        for (uint32_t b = 0; b < B; ++b) {
-            for (uint32_t s = 0; s < S; ++s) {
-                std::shuffle(all.begin(), all.end(), rng);
-                for (uint32_t ki = 0; ki < K; ++ki) out(d, b, s, ki) = all[ki];
-            }
-        }
-    }
-    return out;
-}
-
-xt::xarray<float> make_scores(uint32_t D, uint32_t B, uint32_t S, uint32_t K, uint32_t seed = 0) {
-    xt::xarray<float> out = xt::zeros<float>({D, B, S, K});
-    std::mt19937 rng(seed + 13);
-    std::uniform_real_distribution<float> dist(0.0F, 0.5F);
-    for (auto it = out.begin(); it != out.end(); ++it) *it = dist(rng);
-    auto& dev = ttml::autograd::ctx().get_device();
-    auto t = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(out, &dev, ttnn::Layout::ROW_MAJOR);
-    return ttml::core::to_xtensor(t);
+// Build host inputs with dispatched + scores already bf16-roundtripped on the
+// test device, so reference comparisons match what the device actually sees.
+ttml::test_utils::moe::MoeHostInputs make_inputs(
+    uint32_t D, uint32_t B, uint32_t S, uint32_t H, uint32_t E, uint32_t K) {
+    return ttml::test_utils::moe::make_moe_host_inputs({
+        .D = D,
+        .B = B,
+        .S = S,
+        .H = H,
+        .E = E,
+        .K = K,
+        .roundtrip_device = &ttml::autograd::ctx().get_device(),
+    });
 }
 
 // Reference: for each tile-row i with plan[i]=src (!= SENTINEL), add
@@ -109,23 +90,13 @@ struct GroupOutputs {
 };
 
 GroupOutputs build_group_inputs(
-    const xt::xarray<float>& dispatched,
-    const xt::xarray<uint32_t>& metadata,
-    const xt::xarray<float>& scores,
-    const std::vector<uint16_t>& local_expert_ids,
-    uint32_t k) {
+    const ttml::test_utils::moe::MoeHostInputs& host, const std::vector<uint16_t>& local_expert_ids, uint32_t k) {
     auto& dev = ttml::autograd::ctx().get_device();
     const uint32_t E_local = static_cast<uint32_t>(local_expert_ids.size());
 
-    auto disp_tt = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(dispatched, &dev, ttnn::Layout::ROW_MAJOR);
-    xt::xarray<uint16_t> md16 = xt::cast<uint16_t>(metadata);
-    auto md_tt = ttml::core::from_xtensor<uint16_t, ttnn::DataType::UINT16>(md16, &dev, ttnn::Layout::ROW_MAJOR);
-    auto sc_tt = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(scores, &dev, ttnn::Layout::ROW_MAJOR);
-    xt::xarray<uint16_t> leids_arr = xt::adapt(local_expert_ids, std::vector<size_t>{local_expert_ids.size()});
-    auto leids_tt =
-        ttml::core::from_xtensor<uint16_t, ttnn::DataType::UINT16>(leids_arr, &dev, ttnn::Layout::ROW_MAJOR);
-    auto [grouped, grouped_scores, k_slot, counts, offsets, plan] =
-        ttml::metal::moe_group(disp_tt, md_tt, sc_tt, leids_tt, E_local, k);
+    auto dev_in = ttml::test_utils::moe::to_device_inputs(host, local_expert_ids, &dev);
+    auto [grouped, grouped_scores, k_slot, counts, offsets, plan] = ttml::metal::moe_group(
+        dev_in.dispatched_bf16, dev_in.metadata_u16, dev_in.scores_bf16, dev_in.leids_u16, E_local, k);
 
     GroupOutputs g{std::move(grouped), std::move(plan), std::move(offsets), std::move(grouped_scores), {}, {}, {}};
     auto plan_xt = ttml::core::to_xtensor<uint32_t>(g.plan);
@@ -139,23 +110,19 @@ GroupOutputs build_group_inputs(
 }
 
 void run_and_check(
-    const xt::xarray<float>& dispatched,
-    const xt::xarray<uint32_t>& metadata,
-    const xt::xarray<float>& scores,
-    const std::vector<uint16_t>& local_expert_ids,
-    uint32_t k) {
-    const uint32_t D = static_cast<uint32_t>(dispatched.shape(0));
-    const uint32_t B = static_cast<uint32_t>(dispatched.shape(1));
-    const uint32_t S = static_cast<uint32_t>(dispatched.shape(2));
+    const ttml::test_utils::moe::MoeHostInputs& host, const std::vector<uint16_t>& local_expert_ids, uint32_t k) {
+    const uint32_t D = static_cast<uint32_t>(host.dispatched.shape(0));
+    const uint32_t B = static_cast<uint32_t>(host.dispatched.shape(1));
+    const uint32_t S = static_cast<uint32_t>(host.dispatched.shape(2));
     const uint32_t E_local = static_cast<uint32_t>(local_expert_ids.size());
 
-    auto g = build_group_inputs(dispatched, metadata, scores, local_expert_ids, k);
+    auto g = build_group_inputs(host, local_expert_ids, k);
 
     auto out_tt = ttml::metal::moe_ungroup(g.expert_out, g.plan, g.offsets, g.grouped_scores, E_local, D, B, S);
     auto out_xt = ttml::core::to_xtensor(out_tt);
 
     auto ref = moe_ungroup_reference(g.expert_out_host, g.plan_host, g.grouped_scores_host, D, B, S);
-    EXPECT_TRUE(xt::allclose(out_xt, ref, 5e-2F, 1e-2F));
+    EXPECT_TRUE(xt::allclose(out_xt, ref, kRtol, kAtol));
 }
 
 }  // namespace
@@ -164,40 +131,28 @@ TEST_F(MoeUngroupTest, Basic) {
     constexpr uint32_t D = 2, B = 1, S = 32, H = 64;
     constexpr uint32_t E = 4, K = 2;
     const std::vector<uint16_t> leids = {0, 1};
-    auto dispatched = make_dispatched(D, B, S, H);
-    auto metadata = make_metadata(D, B, S, K, E);
-    auto scores = make_scores(D, B, S, K);
-    run_and_check(dispatched, metadata, scores, leids, K);
+    run_and_check(make_inputs(D, B, S, H, E, K), leids, K);
 }
 
 TEST_F(MoeUngroupTest, LargerH) {
     constexpr uint32_t D = 2, B = 1, S = 32, H = 256;
     constexpr uint32_t E = 4, K = 2;
     const std::vector<uint16_t> leids = {0, 1};
-    auto dispatched = make_dispatched(D, B, S, H);
-    auto metadata = make_metadata(D, B, S, K, E);
-    auto scores = make_scores(D, B, S, K);
-    run_and_check(dispatched, metadata, scores, leids, K);
+    run_and_check(make_inputs(D, B, S, H, E, K), leids, K);
 }
 
 TEST_F(MoeUngroupTest, NonTileAlignedH) {
     constexpr uint32_t D = 2, B = 1, S = 32, H = 80;
     constexpr uint32_t E = 4, K = 2;
     const std::vector<uint16_t> leids = {0, 1};
-    auto dispatched = make_dispatched(D, B, S, H);
-    auto metadata = make_metadata(D, B, S, K, E);
-    auto scores = make_scores(D, B, S, K);
-    run_and_check(dispatched, metadata, scores, leids, K);
+    run_and_check(make_inputs(D, B, S, H, E, K), leids, K);
 }
 
 TEST_F(MoeUngroupTest, AllTokensActive) {
     constexpr uint32_t D = 2, B = 1, S = 32, H = 64;
     constexpr uint32_t E = 2, K = 2;
     const std::vector<uint16_t> leids = {0, 1};
-    auto dispatched = make_dispatched(D, B, S, H);
-    auto metadata = make_metadata(D, B, S, K, E);
-    auto scores = make_scores(D, B, S, K);
-    run_and_check(dispatched, metadata, scores, leids, K);
+    run_and_check(make_inputs(D, B, S, H, E, K), leids, K);
 }
 
 TEST_F(MoeUngroupTest, LargeELocal) {
@@ -206,23 +161,21 @@ TEST_F(MoeUngroupTest, LargeELocal) {
     std::vector<uint16_t> leids;
     leids.reserve(32);
     for (uint16_t i = 0; i < 32; ++i) leids.push_back(i);
-    auto dispatched = make_dispatched(D, B, S, H);
-    auto metadata = make_metadata(D, B, S, K, E);
-    auto scores = make_scores(D, B, S, K);
-    run_and_check(dispatched, metadata, scores, leids, K);
+    run_and_check(make_inputs(D, B, S, H, E, K), leids, K);
 }
 
 // End-to-end integration: moe_group -> identity FFN (expert_out = grouped) ->
 // moe_ungroup should recover sum_e sum_k score_{t,k}[leid match] * dispatched[t].
-TEST_F(MoeUngroupTest, GroupUngroupRoundTrip) {
-    constexpr uint32_t D = 2, B = 1, S = 32, H = 64;
-    constexpr uint32_t E = 4, K = 2;
-    const std::vector<uint16_t> leids = {0, 1, 2, 3};  // all experts local
-    auto dispatched = make_dispatched(D, B, S, H);
-    auto metadata = make_metadata(D, B, S, K, E);
-    auto scores = make_scores(D, B, S, K);
+//
+// Requires leids = [0, E) so that every metadata id is local, which makes
+// `w_sum` the simple sum over all K scores per token.
+void check_group_ungroup_roundtrip(uint32_t D, uint32_t B, uint32_t S, uint32_t H, uint32_t E, uint32_t K) {
+    std::vector<uint16_t> leids;
+    leids.reserve(E);
+    for (uint16_t i = 0; i < E; ++i) leids.push_back(i);
+    auto host = make_inputs(D, B, S, H, E, K);
 
-    auto g = build_group_inputs(dispatched, metadata, scores, leids, K);
+    auto g = build_group_inputs(host, leids, K);
     auto out_tt = ttml::metal::moe_ungroup(
         g.expert_out, g.plan, g.offsets, g.grouped_scores, static_cast<uint32_t>(leids.size()), D, B, S);
     auto out_xt = ttml::core::to_xtensor(out_tt);
@@ -234,10 +187,39 @@ TEST_F(MoeUngroupTest, GroupUngroupRoundTrip) {
         for (uint32_t b = 0; b < B; ++b) {
             for (uint32_t s = 0; s < S; ++s) {
                 float w_sum = 0.0F;
-                for (uint32_t ki = 0; ki < K; ++ki) w_sum += scores(d, b, s, ki);
-                for (uint32_t hh = 0; hh < H; ++hh) expected(d, b, s, hh) = w_sum * dispatched(d, b, s, hh);
+                for (uint32_t ki = 0; ki < K; ++ki) w_sum += host.scores(d, b, s, ki);
+                for (uint32_t hh = 0; hh < H; ++hh) expected(d, b, s, hh) = w_sum * host.dispatched(d, b, s, hh);
             }
         }
     }
-    EXPECT_TRUE(xt::allclose(out_xt, expected, 5e-2F, 1e-2F));
+    EXPECT_TRUE(xt::allclose(out_xt, expected, kRtol, kAtol));
+}
+
+TEST_F(MoeUngroupTest, GroupUngroupRoundTrip) {
+    check_group_ungroup_roundtrip(/*D=*/2, /*B=*/1, /*S=*/32, /*H=*/64, /*E=*/4, /*K=*/2);
+}
+
+TEST_F(MoeUngroupTest, GroupUngroupRoundTripLargerH) {
+    check_group_ungroup_roundtrip(/*D=*/2, /*B=*/1, /*S=*/32, /*H=*/256, /*E=*/4, /*K=*/2);
+}
+
+TEST_F(MoeUngroupTest, GroupUngroupRoundTripNonTileAlignedH) {
+    check_group_ungroup_roundtrip(/*D=*/2, /*B=*/1, /*S=*/32, /*H=*/80, /*E=*/4, /*K=*/2);
+}
+
+TEST_F(MoeUngroupTest, GroupUngroupRoundTripLargerS) {
+    check_group_ungroup_roundtrip(/*D=*/2, /*B=*/1, /*S=*/128, /*H=*/64, /*E=*/4, /*K=*/2);
+}
+
+TEST_F(MoeUngroupTest, GroupUngroupRoundTripKEqualsE) {
+    // K == E → every token hits every expert; w_sum is the full row sum of scores.
+    check_group_ungroup_roundtrip(/*D=*/2, /*B=*/1, /*S=*/32, /*H=*/64, /*E=*/4, /*K=*/4);
+}
+
+TEST_F(MoeUngroupTest, GroupUngroupRoundTripLargerD) {
+    check_group_ungroup_roundtrip(/*D=*/4, /*B=*/1, /*S=*/32, /*H=*/64, /*E=*/4, /*K=*/2);
+}
+
+TEST_F(MoeUngroupTest, GroupUngroupRoundTripLargerELocal) {
+    check_group_ungroup_roundtrip(/*D=*/2, /*B=*/1, /*S=*/64, /*H=*/64, /*E=*/8, /*K=*/4);
 }

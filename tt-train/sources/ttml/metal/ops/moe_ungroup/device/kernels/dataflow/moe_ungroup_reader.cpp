@@ -41,14 +41,12 @@ constexpr uint32_t mcast_ex = get_compile_time_arg_val(13);
 constexpr uint32_t mcast_ey = get_compile_time_arg_val(14);
 constexpr uint32_t mcast_num_dests_incl_self = get_compile_time_arg_val(15);
 constexpr uint32_t cb_id_ctrl = get_compile_time_arg_val(16);
-// ceil(h / TILE_W) — computed host-side in program factory.
+// ceil(h / TILE_WIDTH) — computed host-side in program factory.
 constexpr uint32_t Wt = get_compile_time_arg_val(17);
 
 constexpr auto expert_out_args = TensorAccessorArgs<18>();
 constexpr auto offsets_args = TensorAccessorArgs<expert_out_args.next_compile_time_args_offset()>();
 
-constexpr uint32_t TILE_H = tt::constants::TILE_HEIGHT;
-constexpr uint32_t TILE_W = tt::constants::TILE_WIDTH;
 constexpr uint32_t TILE_BYTES = tt::constants::TILE_HW * 2U;  // bf16 tile
 
 inline void barrier_fanin_mcast(uint32_t my_core_idx) {
@@ -120,8 +118,8 @@ void kernel_main() {
     // cb_ctrl.
     uint32_t my_total_active_steps = 0U;
     for (uint32_t e = 0; e < e_local; ++e) {
-        auto slice =
-            ttml::metal::moe_ungroup::expert_slice_for_core(offsets_l1, e, TILE_H, num_total_cores, my_core_idx);
+        auto slice = ttml::metal::moe_ungroup::expert_slice_for_core(
+            offsets_l1, e, tt::constants::TILE_HEIGHT, num_total_cores, my_core_idx);
         tr_start_per_expert[e] = slice.my_start_tr_global;
         my_real_count_per_expert[e] = slice.my_count;
         my_total_active_steps += slice.my_count;

@@ -23,7 +23,7 @@ namespace ttml::metal {
 // ABI invariants:
 //   - T_cap is a multiple of 32.
 //   - offsets[0] == 0 and every offsets[i] is a multiple of 32. The dataflow
-//     kernels divide offsets by TILE_H=32 and process whole tile rows; direct
+//     kernels divide offsets by TILE_HEIGHT and process whole tile rows; direct
 //     callers must preserve the alignment that moe_group produces.
 //
 // Output:
