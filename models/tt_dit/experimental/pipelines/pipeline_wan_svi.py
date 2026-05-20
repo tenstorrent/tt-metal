@@ -159,13 +159,14 @@ class WanPipelineSVI(WanPipelineI2VLora):
             ]
             shift = self.COMFYUI_FLOW_SHIFT if sigma_shift is None else float(sigma_shift)
             if kwargs.get("scheduler") is None:
-                from models.tt_dit.solvers import WanDPMSolverSDEScheduler
+                from diffusers.schedulers import UniPCMultistepScheduler
 
                 # ComfyUI WanVideoSampler uses k-diffusion dpm++_sde with
-                # 'fixed' sigmas at flow_shift=8. WanDPMSolverSDEScheduler
-                # produces the doubled flow-sigma schedule that the matching
-                # DPMSolverSDESolver consumes.
-                kwargs["scheduler"] = WanDPMSolverSDEScheduler(
+                # 'fixed' sigmas; tt-metal's stochastic DPMSolverSDESolver
+                # was experimental and produced broken output. Falling back
+                # to UniPC at the same flow_shift — not bit-exact to
+                # ComfyUI but the visual match is acceptable.
+                kwargs["scheduler"] = UniPCMultistepScheduler(
                     use_flow_sigmas=True,
                     prediction_type="flow_prediction",
                     flow_shift=shift,
