@@ -192,6 +192,14 @@ void run_single_core_copy_block_matmul_partials(
             experimental::metal2_host_api::ComputeConfiguration{
                 .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
                 .dst_full_sync_en = test_config.dst_full_sync_en,
+                // When fp32_dest_acc_en is true the src DFB is Float32 and the compute kernel
+                // consumes it, so metal2_host_api requires an explicit unpack_to_dest_mode entry.
+                // Default is unpack via SrcA/B, ~19-bit precision.
+                .unpack_to_dest_mode =
+                    test_config.fp32_dest_acc_en
+                        ? std::vector<experimental::metal2_host_api::ComputeConfiguration::
+                                          UnpackToDestModeEntry>{{SRC0_DFB, tt::tt_metal::UnpackToDestMode::Default}}
+                        : std::vector<experimental::metal2_host_api::ComputeConfiguration::UnpackToDestModeEntry>{},
             },
     };
 
