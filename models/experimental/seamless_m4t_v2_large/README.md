@@ -222,11 +222,11 @@ pytest models/experimental/seamless_m4t_v2_large/tests/perf/test_seamless_device
 
 | Task | Device kernel samples/s | Avg kernel duration (ms) |
 |------|------------------------:|-------------------------:|
-| T2TT | 63.07 | 15.85 |
-| S2TT | 33.31 | 30.02 |
-| T2ST | 31.20 | 32.06 |
-| S2ST | 21.65 | 46.20 |
-| ASR  | 33.38 | 29.96 |
+| T2TT | 50.52 | 19.79 |
+| S2TT | 28.36 | 35.26 |
+| T2ST | 28.10 | 35.59 |
+| S2ST | 19.60 | 51.03 |
+| ASR  | 28.37 | 35.25 |
 
 #### BH QB — `MeshShape(1, 4)`, replicated batch-1
 
