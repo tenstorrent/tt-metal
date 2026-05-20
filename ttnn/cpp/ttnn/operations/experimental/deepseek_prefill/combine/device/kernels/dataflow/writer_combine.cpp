@@ -197,8 +197,8 @@ void kernel_main() {
         //  Sentinel-terminated fabric send loop
         while (true) {
             cb_wait_front(cb_route_info_id, 1);
-            volatile tt_l1_ptr uint32_t* route_info =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_route_info_id));
+            uint32_t cb_base = get_read_ptr(cb_route_info_id);
+            volatile tt_l1_ptr uint32_t* route_info = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_base);
             uint32_t route = route_info[0];
             {
                 // DeviceZoneScopedN("combine-waiting-for-route-info");
@@ -209,10 +209,7 @@ void kernel_main() {
             }
             uint32_t distance = route_info[1];
             uint32_t output_page_idx = route_info[2];
-            cb_pop_front(cb_route_info_id, 1);
-
-            cb_wait_front(cb_output_for_writer_id, 1);
-            uint32_t output_data_addr = get_read_ptr(cb_output_for_writer_id);
+            uint32_t output_data_addr = cb_base + l1_alignment;
 
             DPRINT_COMBINE << "Fabric send: route=" << route << " distance=" << distance
                            << " page_idx=" << output_page_idx << ENDL();
