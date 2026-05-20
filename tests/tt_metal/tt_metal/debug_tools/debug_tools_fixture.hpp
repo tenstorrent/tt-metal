@@ -244,7 +244,6 @@ protected:
         tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(true);
         watcher_previous_enabled = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled();
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_enabled(false);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_use_device_print(true);
 
         ExtraSetUp();
 
@@ -258,7 +257,6 @@ protected:
         ExtraTearDown();
 
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_enabled(watcher_previous_enabled);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_use_device_print(false);
     }
 
     // Override this function in child classes for additional setup commands between DPRINT setup

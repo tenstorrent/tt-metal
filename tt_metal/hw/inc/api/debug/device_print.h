@@ -125,7 +125,7 @@ struct dp_typed_array_t {
 #define DEVICE_PRINT_IS_KERNEL 0
 #endif
 
-#if defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF) && defined(USE_DEVICE_PRINT)
+#if defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF)
 #define DEVICE_PRINT_GET_STRING_INFO_ADDRESS(variable_name, updated_format)                         \
     std::uintptr_t variable_name = 0;                                                               \
     {                                                                                               \

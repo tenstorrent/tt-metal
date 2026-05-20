@@ -349,9 +349,6 @@ class RunTimeOptions {
     // Disable use of pre-compiled firmware and fall back to JIT compilation.
     bool disable_precompiled_fw = false;
 
-    // Use new DEVICE_PRINT system instead of legacy DPRINT
-    bool use_device_print = false;
-
     // Enable hybrid lockstep + per-core L1 allocator mode
     bool allocator_mode_hybrid = false;
 
@@ -556,13 +553,12 @@ public:
     }
     std::string get_compile_hash_string() const {
         std::string compile_hash_str = fmt::format(
-            "{}_{}_{}_{}_{}_{}",
+            "{}_{}_{}_{}_{}",
             get_watcher_hash(),
             get_kernels_early_return(),
             get_erisc_iram_enabled(),
             get_enable_2_erisc_mode(),
-            get_disable_fabric_2_erisc_mode(),
-            get_use_device_print());
+            get_disable_fabric_2_erisc_mode());
         for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
             compile_hash_str += "_";
             compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
@@ -791,9 +787,6 @@ public:
 
     bool get_disable_precompiled_fw() const { return disable_precompiled_fw; }
     void set_disable_precompiled_fw(bool disable) { disable_precompiled_fw = disable; }
-
-    bool get_use_device_print() const { return use_device_print; }
-    void set_use_device_print(bool use) { use_device_print = use; }
 
     // Parse all feature-specific environment variables, after hal is initialized.
     // (Needed because syntax of some env vars is arch-dependent.)
