@@ -201,9 +201,9 @@ def _run_unary_datacopy_test(
             DataFormat.Fp8_e4m3,
         ]
     ),
-    dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
-    num_faces=lambda tilize: get_valid_num_faces_datacopy(tilize),
-    tilize=lambda formats: get_valid_tilize_datacopy(formats),
+    dest_acc=get_valid_dest_accumulation_modes,
+    num_faces=get_valid_num_faces_datacopy,
+    tilize=get_valid_tilize_datacopy,
     input_dimensions=[[64, 64], [32, 256], [128, 256]],
 )
 def test_unary_datacopy(
