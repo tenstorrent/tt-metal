@@ -6,9 +6,10 @@
 // by setting device_print_build=DevicePrintBuild.Yes in TestConfig.
 // All print calls compile to nothing when the macro is not set.
 
-// PROCESSOR_INDEX, LLK_DEVICE_PRINT_BUFFER_BASE and DPRINT_BUFFER_SIZE
-// are passed in by test_config.py at build time; see RISC_INFO,
-// DEVICE_PRINT_BUFFER_BASE and DEVICE_PRINT_PER_THREAD_SIZE.
+// PROCESSOR_INDEX, LLK_DEVICE_PRINT_BUFFER_BASE, LLK_RUNTIME_ARGS_START
+// and DPRINT_BUFFER_SIZE are passed in by test_config.py at build time;
+// see RISC_INFO, DEVICE_PRINT_BUFFER_BASE, DEVICE_PRINT_RUNTIME_ARGS_START
+// and DEVICE_PRINT_PER_THREAD_SIZE.
 
 // Disabled under COVERAGE: coverage linker scripts grow TRISC sections
 // way past the device print buffer slot, so they can't share L1.
@@ -39,6 +40,15 @@ inline __attribute__((always_inline)) void invalidate_l1_cache()
 
 // We need to include this header after the above definitions.
 #include "api/debug/device_print.h"
+
+#if !defined(LLK_DEVICE_PRINT_BUFFER_BASE) || !defined(LLK_RUNTIME_ARGS_START)
+#error "LLK_DEVICE_PRINT_BUFFER_BASE and LLK_RUNTIME_ARGS_START must be defined by the build"
+#endif
+static_assert(
+    LLK_DEVICE_PRINT_BUFFER_BASE + sizeof(DevicePrintMemoryLayout) <= LLK_RUNTIME_ARGS_START,
+    "LLK device print buffer overlaps RUNTIME_ARGS; "
+    "adjust TestConfig.DEVICE_PRINT_BUFFER_BASE / DEVICE_PRINT_PER_THREAD_SIZE "
+    "in tests/python_tests/helpers/test_config.py.");
 
 #else
 

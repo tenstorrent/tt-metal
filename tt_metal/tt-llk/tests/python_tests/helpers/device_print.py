@@ -23,8 +23,9 @@ and tt_metal/hw/inc/hostdev/device_print_common.h):
 
 import re
 import struct
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from helpers.logger import logger
 from ttexalens.tt_exalens_lib import parse_elf, read_from_device, write_words_to_device
@@ -116,11 +117,159 @@ PLACEHOLDER_RE = re.compile(
 )
 
 
-@dataclass
+@dataclass(slots=True)
 class StringInfo:
     format_string_ptr: int
     file_ptr: int
     line: int
+
+
+@dataclass(frozen=True, slots=True)
+class _Placeholder:
+    """Compiled metadata for one placeholder in a format string.
+
+    Built once per format string in an ELF and cached in ElfStrings,
+    so high-rate prints don't re-run the regex / re-compute offsets.
+
+    `kind` determines how the value is rendered:
+      - "enum":    resolve through DWARF (uses enum_name, is_flag, use_full_name, cleaned_spec)
+      - "string":  dereference into .device_print_strings (uses spec)
+      - "plain":   apply spec directly to the unpacked value
+      - "custom":  call formatter, then apply spec as string padding
+      - "unknown": emit error_msg, no unpack
+    Other fields are unused when not relevant for the kind.
+    """
+
+    kind: str
+    # Pre-compiled struct.Struct for unpacking this arg from args_blob; faster
+    # than calling struct.unpack_from(fmt, ...) which re-parses fmt each call.
+    unpacker: Any = None
+    size: int = 0
+    offset: int = 0
+    formatter: Any = None
+    spec: str = ""
+    enum_name: str = ""
+    is_flag: bool = False
+    use_full_name: bool = False
+    cleaned_spec: str = ""
+    error_msg: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class _RenderPlan:
+    """Pre-built rendering plan for a format string.
+
+    Iteration mode: append literals[i], render placeholders[i]
+    from args_blob, repeat; finally append literals[-1].
+
+    Literals are pre-cooked (fmtlib uses double braces
+    for escaping: swap {{ for {, and }} for })
+    so `_render` doesn't redo that on every record.
+
+    When there are no placeholders, literals = [cooked_fmt] and
+    `placeholders` is empty.
+    """
+
+    literals: list[str] = field(default_factory=list)
+    placeholders: list[_Placeholder] = field(default_factory=list)
+
+
+def _build_render_plan(
+    fmt: str, type_table: dict[str, tuple[str, int, object]]
+) -> _RenderPlan:
+    """Parse fmt into a _RenderPlan. Pure function of (fmt, type_table)."""
+
+    placeholders = list(PLACEHOLDER_RE.finditer(fmt))
+    if not placeholders:
+        return _RenderPlan(literals=[fmt.replace("{{", "{").replace("}}", "}")])
+
+    # Determine type per reordered-slot index, then compute offsets in
+    # ascending slot order; matches size-descending packing on device.
+    type_for_ridx: dict[int, str] = {}
+    for m in placeholders:
+        ridx = int(m.group(1))
+        type_for_ridx.setdefault(ridx, m.group(2))
+
+    offsets: dict[int, int] = {}
+    cur = 0
+    for ridx in sorted(type_for_ridx):
+        type_token = type_for_ridx[ridx]
+        base_char = type_token[3] if type_token.startswith("/") else type_token
+        entry = type_table.get(base_char)
+        offsets[ridx] = cur
+        cur += entry[1] if entry else 4
+
+    literals: list[str] = []
+    compiled: list[_Placeholder] = []
+    last_end = 0
+    for m in placeholders:
+        literals.append(fmt[last_end : m.start()].replace("{{", "{").replace("}}", "}"))
+        ridx = int(m.group(1))
+        type_token = m.group(2)
+        base_char = type_token[3] if type_token.startswith("/") else type_token
+        entry = type_table.get(base_char)
+        spec = m.group("spec") or ""
+
+        if entry is None:
+            compiled.append(
+                _Placeholder(kind="unknown", error_msg=f"<unknown type '{type_token}'>")
+            )
+        else:
+            struct_fmt, size, formatter = entry
+            offset = offsets[ridx]
+            unpacker = struct.Struct("<" + struct_fmt)
+            if type_token.startswith("/"):
+                # Enum: '#' in the spec means we should render with the
+                # typename:: prefix. Consume the '#' here and tell
+                # format_enum to use the full name.
+                compiled.append(
+                    _Placeholder(
+                        kind="enum",
+                        unpacker=unpacker,
+                        size=size,
+                        offset=offset,
+                        spec=spec,
+                        enum_name=m.group("enum_name"),
+                        is_flag=(m.group("flag") == "E"),
+                        use_full_name="#" in spec,
+                        cleaned_spec=spec.replace("#", ""),
+                    )
+                )
+            elif base_char == "s":
+                compiled.append(
+                    _Placeholder(
+                        kind="string",
+                        unpacker=unpacker,
+                        size=size,
+                        offset=offset,
+                        spec=spec,
+                    )
+                )
+            elif formatter is str:
+                compiled.append(
+                    _Placeholder(
+                        kind="plain",
+                        unpacker=unpacker,
+                        size=size,
+                        offset=offset,
+                        spec=spec,
+                    )
+                )
+            else:
+                compiled.append(
+                    _Placeholder(
+                        kind="custom",
+                        unpacker=unpacker,
+                        size=size,
+                        offset=offset,
+                        formatter=formatter,
+                        spec=spec,
+                    )
+                )
+        last_end = m.end()
+
+    literals.append(fmt[last_end:].replace("{{", "{").replace("}}", "}"))
+    return _RenderPlan(literals=literals, placeholders=compiled)
 
 
 class ElfStrings:
@@ -138,6 +287,10 @@ class ElfStrings:
         self.type_table: dict[str, tuple[str, int, object]] = _type_table_for(4)
         self._parsed_elf = None  # kept around for DWARF enum lookups
         self._enum_cache: dict[str, list[tuple[int, str]] | None] = {}
+        # Per-format-string render plan cache. Keyed by the raw format string;
+        # the type_table is fixed per-ELF, so the plan is reusable across
+        # records that share a format string (e.g. tight DEVICE_PRINT loops).
+        self._render_plan_cache: dict[str, _RenderPlan] = {}
 
         try:
             elf = parse_elf(elf_path, require_debug_symbols=False)
@@ -155,7 +308,12 @@ class ElfStrings:
                     self._info_addr = s.address
                     self._info_data = bytes(s.data)
         except Exception:
-            pass  # Can't parse ELF; has_device_print will be False
+            # has_device_print will be false.
+            logger.exception(
+                "Failed to parse device print sections from %s; "
+                'records from this RISC will say "no ELF".',
+                elf_path,
+            )
 
     def _enumerators(self, enum_name: str) -> list[tuple[int, str]] | None:
         """List of (value, name) for `enum_name` in DWARF declaration order.
@@ -209,6 +367,16 @@ class ElfStrings:
     @property
     def has_device_print(self) -> bool:
         return self._info_addr is not None and self._strings_addr is not None
+
+    def get_render_plan(self, fmt: str) -> _RenderPlan:
+        """Return the cached _RenderPlan for fmt, or build it on miss.
+        Optimization for tight DEVICE_PRINT loops."""
+
+        plan = self._render_plan_cache.get(fmt)
+        if plan is None:
+            plan = _build_render_plan(fmt, self.type_table)
+            self._render_plan_cache[fmt] = plan
+        return plan
 
     def info_at(self, info_id: int) -> StringInfo | None:
         """Look up the DevicePrintStringInfo record at index `info_id`.
@@ -418,85 +586,65 @@ class DevicePrintParser:
         return self.poll(location)
 
     def _render(self, fmt: str, args_blob: bytes, elf: ElfStrings) -> str:
-        placeholders = list(PLACEHOLDER_RE.finditer(fmt))
+        # Plan (regex scan + offset computation + literal cooking) is cached
+        # on `elf` per format string, so this is one dict lookup on the hot path.
+        plan = elf.get_render_plan(fmt)
+        literals = plan.literals
+        placeholders = plan.placeholders
+
         if not placeholders:
-            return fmt.replace("{{", "{").replace("}}", "}")
-
-        # Determine type per reordered-slot index, then compute offsets in
-        # ascending slot order; matches size-descending packing on device.
-        type_for_ridx: dict[int, str] = {}
-        for m in placeholders:
-            ridx = int(m.group(1))
-            type_for_ridx.setdefault(ridx, m.group(2))
-
-        offsets: dict[int, int] = {}
-        cur = 0
-        for ridx in sorted(type_for_ridx):
-            type_token = type_for_ridx[ridx]
-            base_char = type_token[3] if type_token.startswith("/") else type_token
-            entry = elf.type_table.get(base_char)
-            offsets[ridx] = cur
-            cur += entry[1] if entry else 4
+            return literals[0]
 
         parts: list[str] = []
-        last_end = 0
-        for m in placeholders:
-            parts.append(fmt[last_end : m.start()])
-            ridx = int(m.group(1))
-            type_token = m.group(2)
-            base_char = type_token[3] if type_token.startswith("/") else type_token
-            entry = elf.type_table.get(base_char)
-            if entry is None:
-                parts.append(f"<unknown type '{type_token}'>")
-            else:
-                struct_fmt, size, formatter = entry
-                offset = offsets[ridx]
-                if offset + size > len(args_blob):
-                    parts.append("<truncated arg>")
-                else:
-                    val = struct.unpack_from("<" + struct_fmt, args_blob, offset)[0]
-                    spec = m.group("spec") or ""
-                    if type_token.startswith("/"):
-                        # Enum: '#' in the spec means we should render with
-                        # the typename:: prefix. We consume the '#' here
-                        # and tell format_enum to use the full name.
-                        use_full_name = "#" in spec
-                        cleaned_spec = spec.replace("#", "")
-                        rendered = elf.format_enum(
-                            m.group("enum_name"),
-                            val,
-                            is_flag=(m.group("flag") == "E"),
-                            use_full_name=use_full_name,
-                        )
-                        parts.append(
-                            format(rendered, cleaned_spec) if cleaned_spec else rendered
-                        )
+        blob_len = len(args_blob)
+        for i, ph in enumerate(placeholders):
+            parts.append(literals[i])
 
-                    elif base_char == "s":
-                        rendered = elf.string_at(val)
-                        parts.append(format(rendered, spec) if spec else rendered)
+            if ph.kind == "unknown":
+                parts.append(ph.error_msg)
+                continue
 
-                    elif formatter is str:
-                        # Plain int/float: apply spec directly.
-                        try:
-                            parts.append(format(val, spec) if spec else str(val))
-                        except (ValueError, TypeError):
-                            # DEVICE_PRINT enforces spec correctness at compile time,
-                            # but fmtlib isn't 1:1 with Python's format(),
-                            # so better be conservative here.
-                            parts.append(str(val))
-                    else:
-                        # Custom formatter (bool, bfloat, pointer): format first, then
-                        # apply spec as string padding/alignment if present.
-                        rendered = formatter(val)
-                        try:
-                            parts.append(format(rendered, spec) if spec else rendered)
-                        except (ValueError, TypeError):
-                            parts.append(str(rendered))
+            if ph.offset + ph.size > blob_len:
+                parts.append("<truncated arg>")
+                continue
 
-            last_end = m.end()
-        parts.append(fmt[last_end:])
-        return "".join(parts).replace("{{", "{").replace("}}", "}")
+            val = ph.unpacker.unpack_from(args_blob, ph.offset)[0]
+            spec = ph.spec
+
+            if ph.kind == "enum":
+                rendered = elf.format_enum(
+                    ph.enum_name,
+                    val,
+                    is_flag=ph.is_flag,
+                    use_full_name=ph.use_full_name,
+                )
+                cleaned_spec = ph.cleaned_spec
+                parts.append(
+                    format(rendered, cleaned_spec) if cleaned_spec else rendered
+                )
+            elif ph.kind == "string":
+                rendered = elf.string_at(val)
+                parts.append(format(rendered, spec) if spec else rendered)
+            elif ph.kind == "plain":
+                # Plain int/float: apply spec directly.
+                try:
+                    parts.append(format(val, spec) if spec else str(val))
+                except (ValueError, TypeError):
+                    # DEVICE_PRINT enforces spec correctness at compile time,
+                    # but fmtlib isn't 1:1 with Python's format(), so we're
+                    # conservative here.
+                    parts.append(str(val))
+            else:  # "custom"
+                # Custom formatter (bool, bfloat, pointer): format first, then
+                # apply spec as string padding/alignment if present.
+                rendered = ph.formatter(val)
+                try:
+                    parts.append(format(rendered, spec) if spec else rendered)
+                except (ValueError, TypeError):
+                    parts.append(str(rendered))
+
+        parts.append(literals[-1])
+        return "".join(parts)
 
 
 # Any test file can import this to use device print.

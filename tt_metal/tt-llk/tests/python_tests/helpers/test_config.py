@@ -238,6 +238,11 @@ class TestConfig:
     # Coverage builds extend TRISC sections past this address; device print
     # is disabled under coverage so the conflict doesn't matter.
     DEVICE_PRINT_BUFFER_BASE: ClassVar[int] = 0x15000
+    # Matches RUNTIME_ARGS_START in the non-coverage linker scripts
+    # (memory.{wormhole,blackhole,quasar}.ld). Passed to the build as
+    # -DLLK_RUNTIME_ARGS_START so dprint.h can static_assert that the
+    # device print buffer doesn't overlap RUNTIME_ARGS.
+    DEVICE_PRINT_RUNTIME_ARGS_START: ClassVar[int] = 0x20000
     DEVICE_PRINT_PER_THREAD_SIZE: ClassVar[int] = (
         1024  # passed to the build as -DDPRINT_BUFFER_SIZE
     )
@@ -1193,17 +1198,19 @@ class TestConfig:
                     else f""
                 )
                 trisc_define = "ISOLATE_SFPU" if name == "sfpu" else name.upper()
-                risc_id, _ = TestConfig.RISC_INFO[name]
                 device_print_flags = ""
                 if self.device_print_build == DevicePrintBuild.Yes:
+                    risc_id, _ = TestConfig.RISC_INFO[name]
                     device_print_flags = (
                         f"-DLLK_DEVICE_PRINT_BUFFER_BASE={TestConfig.DEVICE_PRINT_BUFFER_BASE:#x} "
+                        f"-DLLK_RUNTIME_ARGS_START={TestConfig.DEVICE_PRINT_RUNTIME_ARGS_START:#x} "
                         f"-DDPRINT_BUFFER_SIZE={TestConfig.DEVICE_PRINT_PER_THREAD_SIZE} "
+                        f"-DPROCESSOR_INDEX={risc_id} "
                     )
                 compile_command = (
                     f"{TestConfig.GXX} {TestConfig.ARCH_COMPUTE} {TestConfig.ARCH_SPECIFIC_OPTIONS} {TestConfig.OPTIONS_ALL} -I{TestConfig.TESTS_WORKING_DIR} "
                     f"-I{TestConfig.RISCV_SOURCES} -I{VARIANT_DIR} {local_options_compile} {optional_kernel_flags} "
-                    f"-DLLK_TRISC_{trisc_define} -DPROCESSOR_INDEX={risc_id} {device_print_flags}{TestConfig.OPTIONS_LINK} {COVERAGES_DEPS} "
+                    f"-DLLK_TRISC_{trisc_define} {device_print_flags}{TestConfig.OPTIONS_LINK} {COVERAGES_DEPS} "
                     f"-T{local_memory_layout_ld} -T{TestConfig.LINKER_SCRIPTS / name}.ld -T{TestConfig.LINKER_SCRIPTS}/sections.ld "
                     f"-x c++ - -lc -o {VARIANT_ELF_DIR / name}.elf"
                 )
