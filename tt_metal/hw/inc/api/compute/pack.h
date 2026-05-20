@@ -7,7 +7,9 @@
 #include "common_globals.h"
 #ifdef TRISC_PACK
 #include "llk_pack_tile_api.h"
+#ifndef ARCH_QUASAR
 #include "llk_pack_rows_api.h"
+#endif
 #endif
 
 namespace ckernel {
@@ -212,7 +214,11 @@ ALWI void pack_reconfig_l1_acc(const uint32_t l1_acc_en) {
  * | Function   | num_rows | Number of rows to pack from dest to L1 (each row = 16 datums)  | uint32_t | 1 to 64     | True     |
  */
 // clang-format on
-ALWI void pack_rows_init(uint32_t num_rows) { PACK((llk_pack_rows_init(num_rows))); }
+ALWI void pack_rows_init(uint32_t num_rows) {
+#ifndef ARCH_QUASAR
+    PACK((llk_pack_rows_init(num_rows)));
+#endif
+}
 
 // clang-format off
 /**
@@ -238,7 +244,9 @@ ALWI void pack_rows_init(uint32_t num_rows) { PACK((llk_pack_rows_init(num_rows)
  */
 // clang-format on
 ALWI void pack_rows(uint32_t idst, uint32_t ocb, uint32_t output_index = 0) {
+#ifndef ARCH_QUASAR
     PACK((llk_pack_rows(idst, ocb, output_index)));
+#endif
 }
 
 // clang-format off
@@ -254,7 +262,11 @@ ALWI void pack_rows(uint32_t idst, uint32_t ocb, uint32_t output_index = 0) {
  * Return value: None
  */
 // clang-format on
-ALWI void pack_rows_uninit() { PACK((llk_pack_rows_uninit())); }
+ALWI void pack_rows_uninit() {
+#ifndef ARCH_QUASAR
+    PACK((llk_pack_rows_uninit()));
+#endif
+}
 
 /**
  * Configures packer ReLU activation at runtime.

@@ -11,6 +11,7 @@
 #include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>  // tt::DataFormat
 
@@ -77,12 +78,21 @@ struct DataflowBufferSpec {
     // Advanced options
     //////////////////////////////
 
-    // Build DFB on borrowed memory
-    // Instead of program-scope memory allocation, the DFB is built on user-allocated memory (buffer or tensor)
-    // If uses_borrowed_memory is true, you must pass a BufferView or MeshTensorView as a program execution parameter
-    // (The user is responsible for ensuring the memory is valid for the duration of the Program execution.)
-    bool uses_borrowed_memory = false;
-    // Note: The borrowed memory itself is specified as a program execution parameter.
+    // Build DFB on borrowed memory.
+    //
+    // Instead of allocating Program execution-lifetime DFB storage in L1/SRAM (default),
+    // build the DFB on top of a user-managed memory object. The DFB gets a non-owning view
+    // of the memory for the duration of Program execution.
+    //
+    // The user-managed device memory object is declared at ProgramSpec scope and bound here.
+    // (Currently, only TensorParameter is supported.) The actual memory address is supplied
+    // at runtime via ProgramRunParams.
+    //
+    // The bound memory object must have L1-based storage and be large enough to hold the DFB's
+    // total size (entry_size * num_entries).
+    //
+    // (TODO: this should become std::variant<TensorParameterName, BufferParameterName>.)
+    std::optional<TensorParameterName> borrowed_from = std::nullopt;
 
     // Alias two or more DFBs
     // Aliased DFBs are logically distinct, but physically share the same backing memory.
