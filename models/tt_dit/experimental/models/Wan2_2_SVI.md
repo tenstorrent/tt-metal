@@ -11,10 +11,12 @@ the conditioning latent for each clip is built as
 y = concat([anchor_latent, motion_latent, padding], dim=temporal)
 ```
 
-- **`anchor_latent`** — the VAE-encoded user-provided first frame, repeated
-  across every clip.
-- **`motion_latent`** — the last `num_motion_latent` latent frames of the
-  previous clip's denoised output (`None` on the first clip).
+- **`anchor_latent`** — the VAE-encoded user-provided first frame. The same
+  anchor is used for every clip so the long video keeps a fixed visual
+  reference.
+- **`motion_latent`** — the last `num_motion_latent` latent time steps from
+  the previous clip's denoised output (`None` on the first clip). This is a
+  continuity-strength knob, not a value derived from `num_frames`.
 - **`padding`** — literal-zero latents for the remaining frame slots.
 
 The original SVI 2.0 last-frame handoff is explicitly **not** used in 2.0
@@ -49,7 +51,7 @@ is semantically equivalent.
 `flow_shift=8`. Both are order-2 flow-aware solvers; output is visually
 close but not bit-exact to ComfyUI. The 4-clip variant additionally uses
 `cfg=2.0` for clips 1-2 and `cfg=1.5` for clips 3-4 — pass
-`GUIDANCE_SCALE="2.0||2.0||1.5||1.5"` (and matching `SVI_NUM_CLIPS=4`) to
+`GUIDANCE_SCALE="2.0;2.0;1.5;1.5"` (and matching `SVI_NUM_CLIPS=4`) to
 match that pattern; the 10-clip variant uses uniform `cfg=1.5` which is the
 default.
 
@@ -117,7 +119,8 @@ export SVI_LOW_PATH=/path/to/svi/SVI_Wan2.2-I2V-A14B_low_noise_lora_v2.0_pro.saf
 export LIGHTX2V_HIGH_PATH=/path/to/lightx2v/wan2.2_i2v_A14b_high_noise_lora_rank64_lightx2v_4step_1022.safetensors
 export LIGHTX2V_LOW_PATH=/path/to/lightx2v/wan2.2_i2v_A14b_low_noise_lora_rank64_lightx2v_4step_1022.safetensors
 
-export PROMPT_IMAGE=$TT_METAL_HOME/prompt_image.png
+export PROMPT_IMAGE=$TT_METAL_HOME/example.png
+export PROMPT="A subject moving naturally through the scene"
 export SVI_NUM_CLIPS=10
 
 pytest models/tt_dit/experimental/tests/test_pipeline_wan_svi.py \
@@ -131,23 +134,53 @@ Same `SVI_HIGH_PATH` / `SVI_LOW_PATH` exports as above; omit the LightX2V
 ones. Replace the `-k` selector with `... and python`. Expect roughly 6×
 the wall time per clip.
 
-## Environment variables
+## Configuration
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `SVI_HIGH_PATH` | Yes | — | Path to high-noise expert SVI LoRA `.safetensors` |
-| `SVI_LOW_PATH` | Yes | — | Path to low-noise expert SVI LoRA |
-| `LIGHTX2V_HIGH_PATH` | Yes for `comfyui` | — | High-noise expert LightX2V LoRA |
-| `LIGHTX2V_LOW_PATH` | Yes for `comfyui` | — | Low-noise expert LightX2V LoRA |
-| `SVI_NUM_CLIPS` | No | 2 | Number of 81-frame clips to chain |
-| `SVI_NUM_MOTION_LATENT` | No | 1 | Latent frames of prev clip to splice into next clip's conditioning |
-| `SVI_NUM_OVERLAP_FRAME` | No | 4 | Decoded pixel frames to drop on concat between clips |
-| `SVI_SEED` | No | 0 | Base seed; clip N uses `base + 42 × N` |
-| `NUM_STEPS` | No | 50 (`python`) / 6 (`comfyui`) | Denoising steps per clip |
-| `GUIDANCE_SCALE` | No | 5.0 (`python`) / 1.5 (`comfyui`) | CFG for high-noise expert; `\|\|`-separated list for per-clip override |
-| `GUIDANCE_SCALE_2` | No | matches `GUIDANCE_SCALE` | CFG for low-noise expert; same `\|\|` syntax |
-| `PROMPT_IMAGE` | No | `./prompt_image.png` | Seed image (acts as anchor for every clip) |
-| `PROMPT` | No | golden retriever prompt | Text prompt; `\|\|`-separated list for per-clip prompts |
+### Required paths
+
+- `SVI_HIGH_PATH` / `SVI_LOW_PATH`: SVI 2.0 Pro LoRA files for the high-noise
+  and low-noise Wan2.2 experts.
+- `LIGHTX2V_HIGH_PATH` / `LIGHTX2V_LOW_PATH`: LightX2V LoRA files for the
+  high-noise and low-noise experts. Required only for `regime='comfyui'`.
+
+### Normal inputs
+
+- `PROMPT_IMAGE` (default `./prompt_image.png`): the anchor image. This is the
+  first-frame reference used for every clip.
+- `PROMPT` (default golden retriever prompt): one prompt string for all clips,
+  or a semicolon-separated list with exactly `SVI_NUM_CLIPS` entries for
+  per-clip prompts. Example: `PROMPT="wide shot;close-up;camera pans left"` with
+  `SVI_NUM_CLIPS=3`.
+- `SVI_NUM_CLIPS` (default `2`): number of 81-frame clips to generate and
+  chain.
+
+### Expert knobs
+
+These are useful for matching upstream workflows, ablations, or debugging. The
+defaults are the intended starting point.
+
+- `NUM_STEPS` (default `50` for `python`, `6` for `comfyui`): denoising steps
+  per clip. Higher values are slower and usually improve quality. The `comfyui`
+  default assumes the LightX2V acceleration LoRAs are present.
+- `GUIDANCE_SCALE` (default `5.0` for `python`, `1.5` for `comfyui`): CFG for
+  the high-noise expert. Accepts either one value for all clips or a
+  semicolon-separated list of length `SVI_NUM_CLIPS`.
+- `GUIDANCE_SCALE_2` (default: matches `GUIDANCE_SCALE`): CFG for the low-noise
+  expert. Uses the same scalar or semicolon per-clip format. For the upstream
+  ComfyUI 4-clip workflow, use
+  `GUIDANCE_SCALE="2.0;2.0;1.5;1.5"` and the same value for
+  `GUIDANCE_SCALE_2`.
+- `SVI_SEED` (default `0`): base random seed. Clip `i` uses
+  `SVI_SEED + i * 42`, so each clip gets deterministic but distinct noise.
+- `SVI_NUM_MOTION_LATENT` (default `1`): number of latent time steps copied
+  from the previous clip into the next clip's conditioning. Increasing this can
+  strengthen cross-clip continuity but may make the next clip follow the
+  previous motion more tightly. Setting it to `0` disables the SVI Pro latent
+  handoff and leaves only the anchor image.
+- `SVI_NUM_OVERLAP_FRAME` (default `4`): number of decoded frames dropped from
+  the start of every clip after the first when concatenating the final video.
+  This removes duplicate or unstable boundary frames; it does not affect latent
+  conditioning.
 
 ## Limitations / open items
 

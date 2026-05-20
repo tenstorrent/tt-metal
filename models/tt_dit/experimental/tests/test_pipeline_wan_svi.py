@@ -8,27 +8,27 @@ Required env vars (or the test is skipped):
 - ``SVI_HIGH_PATH`` / ``SVI_LOW_PATH``: SVI LoRA safetensors (high/low noise)
 - ``LIGHTX2V_HIGH_PATH`` / ``LIGHTX2V_LOW_PATH``: required only when regime='comfyui'
 
-Common optional env vars (defaults shown):
-    SVI_NUM_CLIPS=2        SVI_NUM_MOTION_LATENT=1   SVI_NUM_OVERLAP_FRAME=4
-    SVI_SEED=0             NUM_STEPS=<50|6>           GUIDANCE_SCALE=<5.0|1.5>
-    GUIDANCE_SCALE_2=<matches GUIDANCE_SCALE>         PROMPT_IMAGE=./prompt_image.png
-    PROMPT="<text>"
+Normal optional env vars:
+- ``PROMPT_IMAGE``: anchor image for every clip (default: ``./prompt_image.png``)
+- ``PROMPT``: text prompt for generation. Pass one string for all clips, or a
+  semicolon-separated list with exactly ``SVI_NUM_CLIPS`` entries for per-clip
+  prompts.
+- ``SVI_NUM_CLIPS``: number of 81-frame clips to chain (default: ``2``)
 
-``PROMPT``, ``GUIDANCE_SCALE``, and ``GUIDANCE_SCALE_2`` accept a single value
-or a ``||``-separated list of length ``SVI_NUM_CLIPS`` for per-clip overrides
-(e.g. ``GUIDANCE_SCALE="2.0||2.0||1.5||1.5"`` matches the upstream 4-Clips
-workflow). Example invocation::
+Example per-clip prompt format:
+``PROMPT="clip 1 prompt;clip 2 prompt;clip 3 prompt"`` requires
+``SVI_NUM_CLIPS=3``. Example invocation::
 
     SVI_HIGH_PATH=/path/svi_high.safetensors \\
     SVI_LOW_PATH=/path/svi_low.safetensors \\
     LIGHTX2V_HIGH_PATH=/path/lx2v_high.safetensors \\
     LIGHTX2V_LOW_PATH=/path/lx2v_low.safetensors \\
-    SVI_NUM_CLIPS=10 PROMPT_IMAGE=./jon-rap.png \\
+    SVI_NUM_CLIPS=10 PROMPT_IMAGE=./example.png \\
     pytest models/tt_dit/experimental/tests/test_pipeline_wan_svi.py \\
       -v -k "comfyui and bh_2x4" -s
 
-See ``experimental/models/Wan2_2_SVI.md`` for the full env-var table and the
-upstream-workflow comparison.
+See ``experimental/models/Wan2_2_SVI.md`` for advanced knobs (steps, CFG, seed,
+motion-latent handoff, overlap) and the upstream-workflow comparison.
 """
 import os
 from dataclasses import dataclass
@@ -73,14 +73,14 @@ class _SVIRunConfig:
 
 
 def _parse_per_clip_env(env_val: str, num_clips: int, name: str, cast):
-    """Parse a scalar or ``||``-separated per-clip env var."""
-    if "||" not in env_val:
-        return cast(env_val)
+    """Parse a scalar or semicolon-separated per-clip env var."""
+    parts = [p.strip() for p in env_val.split(";")]
+    if len(parts) == 1:
+        return cast(parts[0])
 
-    parts = [cast(p.strip()) for p in env_val.split("||")]
     if len(parts) != num_clips:
-        pytest.fail(f"{name} '||'-split into {len(parts)} values but SVI_NUM_CLIPS={num_clips}")
-    return parts
+        pytest.fail(f"{name} has {len(parts)} entries but SVI_NUM_CLIPS={num_clips}")
+    return [cast(p) for p in parts]
 
 
 def _read_svi_config(regime: str, width: int, height: int) -> _SVIRunConfig:
