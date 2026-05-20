@@ -408,17 +408,9 @@ DispatchTopology::DispatchTopology(
     command_queue_compile_group_ = std::make_unique<detail::ProgramCompileGroup>();
     bool is_galaxy_cluster = descriptor_.cluster().is_galaxy_cluster();
     dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] = std::make_unique<DispatchMemMap>(
-        CoreType::WORKER,
-        descriptor_.num_cqs(),
-        descriptor_.hal(),
-        is_galaxy_cluster,
-        descriptor_.rtoptions().get_dram_backed_cq());
+        CoreType::WORKER, descriptor_.num_cqs(), descriptor_.hal(), is_galaxy_cluster, descriptor_.rtoptions());
     dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] = std::make_unique<DispatchMemMap>(
-        CoreType::ETH,
-        descriptor_.num_cqs(),
-        descriptor_.hal(),
-        is_galaxy_cluster,
-        descriptor_.rtoptions().get_dram_backed_cq());
+        CoreType::ETH, descriptor_.num_cqs(), descriptor_.hal(), is_galaxy_cluster, descriptor_.rtoptions());
 }
 
 DispatchTopology::~DispatchTopology() { reset(); }
