@@ -12,6 +12,7 @@
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/vector.h>
 
+#include <tt-metalium/experimental/global_circular_buffer.hpp>
 #include "ttnn/global_circular_buffer.hpp"
 namespace ttnn::global_circular_buffer {
 
@@ -19,7 +20,10 @@ void py_module_types(nb::module_& mod) {
     nb::class_<GlobalCircularBuffer>(mod, "global_circular_buffer")
         .def("size", &GlobalCircularBuffer::size)
         .def("sender_core_type", [](const GlobalCircularBuffer& gcb) {
-            return gcb.sender_core_type() == tt::tt_metal::experimental::SenderCoreType::Worker ? "worker" : "dram";
+            return tt::tt_metal::experimental::sender_core_type(gcb) ==
+                           tt::tt_metal::experimental::SenderCoreType::Worker
+                       ? "worker"
+                       : "dram";
         });
 }
 

@@ -25,8 +25,9 @@ struct MatmulParams {
     bool transpose_a = false;
     bool transpose_b = false;
     std::optional<tt::tt_metal::Tile> output_tile = std::nullopt;
-    // global_cb may be a worker-sender or DRAM-sender GlobalCircularBuffer; the gather_in0
-    // matmul factory uses gcb.sender_core_type() to pick the right CB attachment.
+    // global_cb may be a worker-sender or DRAM-sender GlobalCircularBuffer. The matmul
+    // kernels see the same receiver-side CB regardless; the slot[7] remote_pages_addr
+    // override baked into the GCB config buffer steers receiver-side ack semantics.
     std::optional<tt::tt_metal::experimental::GlobalCircularBuffer> global_cb = std::nullopt;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt;
 };

@@ -101,14 +101,6 @@ struct WriterDataMovementConfig : public DataMovementConfig {
         std::vector<std::filesystem::path> compiler_include_paths = {});
 };
 
-struct DramConfig {
-    NOC noc = NOC::NOC_0;
-    std::vector<uint32_t> compile_args;
-    std::map<std::string, std::string> defines;
-    std::unordered_map<std::string, uint32_t> named_compile_args;
-    KernelBuildOptLevel opt_level = KernelBuildOptLevel::Os;
-};
-
 struct ComputeConfig {
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     bool fp32_dest_acc_en = false;

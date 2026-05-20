@@ -13,8 +13,9 @@
 
 namespace ttnn {
 
-// `global_cb` may be a worker-sender or DRAM-sender GlobalCircularBuffer; the op picks the
-// right program factory based on `global_cb->sender_core_type()`.
+// `global_cb` may be a worker-sender or DRAM-sender GlobalCircularBuffer; the op picks
+// the right program factory based on the experimental
+// `tt::tt_metal::experimental::sender_core_type(*global_cb)` query.
 ttnn::Tensor dram_prefetcher(
     std::vector<ttnn::Tensor>& tensors,
     uint32_t num_layers,

@@ -1765,9 +1765,8 @@ GlobalCircularBuffer CreateGlobalCircularBuffer(
     IDevice* device,
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
-    BufferType buffer_type,
-    SenderCoreType sender_core_type) {
-    return GlobalCircularBuffer(device, sender_receiver_core_mapping, size, buffer_type, sender_core_type);
+    BufferType buffer_type) {
+    return GlobalCircularBuffer(device, sender_receiver_core_mapping, size, buffer_type);
 }
 
 CBHandle CreateCircularBuffer(

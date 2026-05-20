@@ -8,9 +8,12 @@
 #include <cstdint>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/global_circular_buffer.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+
+#include "impl/kernels/kernel.hpp"  // DramConfig + CreateKernel(DramConfig)
 
 namespace ttnn::prim {
 
@@ -30,7 +33,8 @@ DramPrefetcherDramCoreProgramFactory::cached_program_t DramPrefetcherDramCorePro
     const DramPrefetcherParams& args, const DramPrefetcherInputs& tensor_args, Tensor& /*output_tensor*/) {
     TT_FATAL(args.global_cb.has_value(), "global_cb must be provided");
     TT_FATAL(
-        args.global_cb->sender_core_type() == tt::tt_metal::experimental::SenderCoreType::Dram,
+        tt::tt_metal::experimental::sender_core_type(*args.global_cb) ==
+            tt::tt_metal::experimental::SenderCoreType::Dram,
         "DramPrefetcherDramCoreProgramFactory requires a DRAM-sender GlobalCircularBuffer");
 
     const auto& gcb = *args.global_cb;
@@ -140,7 +144,7 @@ DramPrefetcherDramCoreProgramFactory::cached_program_t DramPrefetcherDramCorePro
     // L1 (it placed each receiver's `aligned_pages_sent_addr` to point there); build the rest of
     // the layout immediately above that.
     const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
-    const uint32_t pages_sent_addr = static_cast<uint32_t>(gcb.pages_sent_drisc_l1_base());
+    const uint32_t pages_sent_addr = static_cast<uint32_t>(tt::tt_metal::experimental::pages_sent_drisc_l1_base(gcb));
     uint32_t cursor = pages_sent_addr + 2 * l1_alignment * num_receivers;
     cursor = align_up(cursor, l1_alignment);
     const uint32_t noc_xy_addr = cursor;
@@ -201,7 +205,7 @@ DramPrefetcherDramCoreProgramFactory::cached_program_t DramPrefetcherDramCorePro
             config_addr,
             gcb.size(),
             static_cast<uint32_t>(gcb.buffer_address()),
-            static_cast<uint32_t>(gcb.pages_sent_worker_l1_base()),
+            static_cast<uint32_t>(tt::tt_metal::experimental::pages_sent_worker_l1_base(gcb)),
             M,
         };
 
@@ -229,7 +233,7 @@ DramPrefetcherDramCoreProgramFactory::cached_program_t DramPrefetcherDramCorePro
         for (const auto* t : data_tensors) {
             rt_args.push_back(compute_block_geom(*t).push_page_size);
         }
-        const auto& receiver_phys = gcb.receiver_coords_per_sender().at(s);
+        const auto& receiver_phys = tt::tt_metal::experimental::receiver_coords_per_sender(gcb).at(s);
         for (const auto& c : receiver_phys) {
             rt_args.push_back(c.x);
             rt_args.push_back(c.y);

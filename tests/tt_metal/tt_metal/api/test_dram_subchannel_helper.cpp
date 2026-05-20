@@ -8,7 +8,7 @@
 #include <cstdint>
 
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/dram_subchannel.hpp>
+#include <tt-metalium/experimental/dram_subchannel.hpp>
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 

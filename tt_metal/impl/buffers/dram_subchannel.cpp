@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <dram_subchannel.hpp>
+#include <tt-metalium/experimental/dram_subchannel.hpp>
 
 #include <set>
 

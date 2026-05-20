@@ -21,8 +21,10 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
-#include <tt-metalium/dram_subchannel.hpp>
-#include <tt-metalium/dram_subchannel.hpp>
+#include <tt-metalium/experimental/dram_subchannel.hpp>
+#include <tt-metalium/experimental/global_circular_buffer.hpp>
+
+#include "impl/kernels/kernel.hpp"  // DramConfig
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
@@ -73,17 +75,17 @@ protected:
         const uint32_t dram_addr = dram_buffer->address();
         tt::tt_metal::detail::WriteToDeviceDRAMChannel(device_, dram_channel, dram_addr, data);
 
-        // Sender = bank 0, unused subchannel; one worker receiver.
+        // Sender = bank 0; one worker receiver.
         const uint32_t bank_id = 0;
-        const uint32_t unused_sub = experimental::pick_unused_dram_subchannel(device_, bank_id);
-        CoreCoord sender_logical{bank_id, unused_sub};
         CoreRangeSet receiver_cores(CoreRange({0, 0}, {0, 0}));
 
         // GCB sized to hold at least num_blocks blocks per receiver.
         const uint32_t gcb_size = num_blocks * block_size;
-        std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_logical, receiver_cores}};
-        auto gcb = experimental::CreateGlobalCircularBuffer(
-            mesh_device_, mapping, gcb_size, BufferType::L1, experimental::SenderCoreType::Dram);
+        std::vector<std::pair<uint32_t, CoreRangeSet>> bank_to_receivers = {{bank_id, receiver_cores}};
+        auto gcb = experimental::CreateGlobalCircularBufferWithDramSenders(
+            mesh_device_, bank_to_receivers, gcb_size, BufferType::L1);
+        const uint32_t unused_sub = experimental::pick_unused_dram_subchannel(device_, bank_id);
+        CoreCoord sender_logical{bank_id, unused_sub};
 
         // DRISC L1 layout.
         const auto& hal = MetalContext::instance().hal();
@@ -126,7 +128,7 @@ protected:
             config_addr,
             gcb_size,
             static_cast<uint32_t>(gcb.buffer_address()),
-            static_cast<uint32_t>(gcb.pages_sent_worker_l1_base()),
+            static_cast<uint32_t>(experimental::pages_sent_worker_l1_base(gcb)),
         };
         KernelHandle sender_kernel_id = CreateKernel(
             program,
@@ -141,7 +143,7 @@ protected:
             /*dma_block_size[0]=*/block_size,
             /*push_page_size[0]=*/block_size / kNumReceivers,
         };
-        const auto& receiver_phys = gcb.receiver_coords_per_sender().at(0);
+        const auto& receiver_phys = experimental::receiver_coords_per_sender(gcb).at(0);
         for (const auto& c : receiver_phys) {
             sender_rt_args.push_back(c.x);
             sender_rt_args.push_back(c.y);

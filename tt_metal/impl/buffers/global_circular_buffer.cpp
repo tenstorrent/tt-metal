@@ -9,6 +9,8 @@
 #include <device.hpp>
 #include <global_circular_buffer.hpp>
 #include <host_api.hpp>
+#include <tt-metalium/experimental/dram_subchannel.hpp>
+#include <tt-metalium/experimental/global_circular_buffer.hpp>
 #include <tt_align.hpp>
 #include <tt_metal.hpp>
 #include <algorithm>
@@ -32,18 +34,25 @@
 
 namespace tt::tt_metal::experimental {
 
-GlobalCircularBuffer::GlobalCircularBuffer(
+namespace {
+
+// Body shared by the public Worker ctor and the private DRAM-sender ctor (with tag).
+// Populates the core sets, validates topology, and triggers the buffer/config L1 setup.
+void initialize_global_circular_buffer(
+    GlobalCircularBuffer& gcb,
     IDevice* device,
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
     BufferType buffer_type,
-    SenderCoreType sender_core_type) :
-    device_(device),
-    sender_receiver_core_mapping_(sender_receiver_core_mapping),
-    size_(size),
-    sender_core_type_(sender_core_type) {
-    TT_FATAL(device_ != nullptr, "Device cannot be null");
-    if (sender_core_type_ == SenderCoreType::Dram) {
+    bool is_dram_sender,
+    // Mutable references into gcb's private state (we're called from inside the class via
+    // the friend struct, so all access is legal).
+    CoreRangeSet& sender_cores_out,
+    CoreRangeSet& receiver_cores_out,
+    CoreRangeSet& all_cores_out,
+    uint32_t& max_num_receivers_per_sender_out) {
+    TT_FATAL(device != nullptr, "Device cannot be null");
+    if (is_dram_sender) {
         const auto& hal = MetalContext::instance().hal();
         TT_FATAL(
             hal.has_programmable_core_type(HalProgrammableCoreType::DRAM),
@@ -60,50 +69,98 @@ GlobalCircularBuffer::GlobalCircularBuffer(
     for (const auto& [sender_core, receiver_cores] : sender_receiver_core_mapping) {
         num_receiver_cores += receiver_cores.num_cores();
         sender_cores.emplace_back(sender_core);
-        receiver_cores_ = receiver_cores_.merge(receiver_cores);
+        receiver_cores_out = receiver_cores_out.merge(receiver_cores);
         max_num_receivers_per_sender = std::max(max_num_receivers_per_sender, receiver_cores.num_cores());
     }
-    sender_cores_ = CoreRangeSet(sender_cores);
-    TT_FATAL(num_sender_cores == sender_cores_.num_cores(), "Duplicate sender cores found");
-    TT_FATAL(num_receiver_cores == receiver_cores_.num_cores(), "Duplicate receiver cores found");
+    sender_cores_out = CoreRangeSet(sender_cores);
+    TT_FATAL(num_sender_cores == sender_cores_out.num_cores(), "Duplicate sender cores found");
+    TT_FATAL(num_receiver_cores == receiver_cores_out.num_cores(), "Duplicate receiver cores found");
 
-    if (sender_core_type_ == SenderCoreType::Worker) {
-        // Worker senders share the cb_buffer L1 allocation with receivers; require all coords unique.
-        all_cores_ = sender_cores_.merge(receiver_cores_);
-        TT_FATAL(all_cores_.num_cores() == num_sender_cores + num_receiver_cores, "Duplicate cores found");
+    if (!is_dram_sender) {
+        all_cores_out = sender_cores_out.merge(receiver_cores_out);
+        TT_FATAL(all_cores_out.num_cores() == num_sender_cores + num_receiver_cores, "Duplicate cores found");
     } else {
-        // DRAM senders live in DRISC L1 (no slot in the sharded cb_buffer). cb_buffer_ is sharded
-        // across receivers only.
-        all_cores_ = receiver_cores_;
-
-        // Validate: a DRAM sender's physical NOC coord must not collide with any receiver's
-        // physical worker coord (they share the same NoC virtual address space).
+        all_cores_out = receiver_cores_out;
         std::unordered_set<CoreCoord> sender_dram_phys;
         for (const auto& [sender_core, _receiver_cores] : sender_receiver_core_mapping) {
-            CoreCoord phys = device_->virtual_core_from_logical_core(sender_core, CoreType::DRAM);
+            CoreCoord phys = device->virtual_core_from_logical_core(sender_core, CoreType::DRAM);
             sender_dram_phys.insert(phys);
         }
-        for (const auto& receiver_logical : corerange_to_cores(receiver_cores_)) {
-            CoreCoord receiver_phys = device_->worker_core_from_logical_core(receiver_logical);
+        for (const auto& receiver_logical : corerange_to_cores(receiver_cores_out)) {
+            CoreCoord receiver_phys = device->worker_core_from_logical_core(receiver_logical);
             TT_FATAL(
                 sender_dram_phys.find(receiver_phys) == sender_dram_phys.end(),
                 "Receiver worker core physical ({}, {}) collides with a DRAM sender physical coord",
                 receiver_phys.x,
                 receiver_phys.y);
         }
+    }
+    max_num_receivers_per_sender_out = max_num_receivers_per_sender;
+    (void)gcb;
+    (void)size;
+    (void)buffer_type;
+}
 
-        // Pre-compute physical worker NOC XY for each sender's receivers (the DRISC kernel
-        // pushes to these as runtime args).
-        receiver_coords_per_sender_.reserve(num_sender_cores);
-        for (const auto& [_sender_core, receivers] : sender_receiver_core_mapping) {
-            const auto& receivers_vec = corerange_to_cores(receivers);
-            std::vector<CoreCoord> phys;
-            phys.reserve(receivers_vec.size());
-            for (const auto& r : receivers_vec) {
-                phys.emplace_back(device_->worker_core_from_logical_core(r));
-            }
-            receiver_coords_per_sender_.push_back(std::move(phys));
+}  // namespace
+
+GlobalCircularBuffer::GlobalCircularBuffer(
+    IDevice* device,
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
+    uint32_t size,
+    BufferType buffer_type) :
+    device_(device),
+    sender_receiver_core_mapping_(sender_receiver_core_mapping),
+    size_(size),
+    sender_core_type_value_(0) {
+    uint32_t max_num_receivers_per_sender = 0;
+    initialize_global_circular_buffer(
+        *this,
+        device,
+        sender_receiver_core_mapping,
+        size,
+        buffer_type,
+        /*is_dram_sender=*/false,
+        sender_cores_,
+        receiver_cores_,
+        all_cores_,
+        max_num_receivers_per_sender);
+    this->setup_cb_buffers(buffer_type, max_num_receivers_per_sender);
+}
+
+GlobalCircularBuffer::GlobalCircularBuffer(
+    IDevice* device,
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
+    uint32_t size,
+    BufferType buffer_type,
+    DramSenderTag) :
+    device_(device),
+    sender_receiver_core_mapping_(sender_receiver_core_mapping),
+    size_(size),
+    sender_core_type_value_(1) {
+    uint32_t max_num_receivers_per_sender = 0;
+    initialize_global_circular_buffer(
+        *this,
+        device,
+        sender_receiver_core_mapping,
+        size,
+        buffer_type,
+        /*is_dram_sender=*/true,
+        sender_cores_,
+        receiver_cores_,
+        all_cores_,
+        max_num_receivers_per_sender);
+
+    // Pre-compute physical worker NOC XY for each sender's receivers (the DRISC kernel
+    // pushes to these as runtime args).
+    receiver_coords_per_sender_.reserve(sender_receiver_core_mapping.size());
+    for (const auto& [_sender_core, receivers] : sender_receiver_core_mapping) {
+        const auto& receivers_vec = corerange_to_cores(receivers);
+        std::vector<CoreCoord> phys;
+        phys.reserve(receivers_vec.size());
+        for (const auto& r : receivers_vec) {
+            phys.emplace_back(device_->worker_core_from_logical_core(r));
         }
+        receiver_coords_per_sender_.push_back(std::move(phys));
     }
 
     this->setup_cb_buffers(buffer_type, max_num_receivers_per_sender);
@@ -156,7 +213,7 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
     uint32_t pages_sent_address = tt::align(noc_xy_address + (num_noc_xy_words * sizeof(uint32_t)), l1_alignment);
     auto buffer_address = cb_buffer().address();
 
-    if (sender_core_type_ == SenderCoreType::Dram) {
+    if (sender_core_type_value_ == 1) {
         // Where the DRISC sender's local pages_sent/acked counters live, agreed between host and
         // the DRISC kernel. Used as the receiver's remote_pages_acked_addr override so the
         // receiver's NOC inc lands in DRISC L1 instead of a phantom worker L1 offset.
@@ -172,7 +229,7 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
 
         // Worker senders have their own config page in the sharded buffer; DRAM senders don't
         // (the DRISC kernel hand-rolls the sender iface state from compile-time args).
-        if (sender_core_type_ == SenderCoreType::Worker) {
+        if (sender_core_type_value_ == 0) {
             uint32_t sender_idx = core_to_core_id.at(sender_core) * cb_config_page_size / sizeof(uint32_t);
             cb_config_host_buffer[sender_idx++] = 1;
             cb_config_host_buffer[sender_idx++] = num_receivers;
@@ -191,7 +248,7 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
 
         // Sender's physical NOC coord -- where the receiver's pages_acked NOC-inc lands. For
         // worker senders this is the worker phys; for DRAM senders it's the DRAM virtual coord.
-        CoreCoord sender_physical_coord = (sender_core_type_ == SenderCoreType::Worker)
+        CoreCoord sender_physical_coord = (sender_core_type_value_ == 0)
                                               ? device_->worker_core_from_logical_core(sender_core)
                                               : device_->virtual_core_from_logical_core(sender_core, CoreType::DRAM);
 
@@ -208,7 +265,7 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
             // For DRAM senders this points at the per-receiver pages_acked slot in DRISC L1 so the
             // receiver's NoC-inc lands on the sender (DRAM core) side.
             cb_config_host_buffer[receiver_idx++] =
-                (sender_core_type_ == SenderCoreType::Dram)
+                (sender_core_type_value_ == 1)
                     ? static_cast<uint32_t>(pages_sent_drisc_l1_base_ + 2 * i * l1_alignment + l1_alignment)
                     : 0;
             cb_config_host_buffer[receiver_idx++] = sender_physical_coord.x;
@@ -241,6 +298,94 @@ const std::vector<std::pair<CoreCoord, CoreRangeSet>>& GlobalCircularBuffer::sen
 std::ostream& operator<<(std::ostream& os, const GlobalCircularBuffer& value) {
     tt::stl::reflection::operator<<(os, value);
     return os;
+}
+
+// ---- Experimental DRAM-sender extension -------------------------------------------------
+// Declarations live in tt-metalium/experimental/global_circular_buffer.hpp. The friend
+// struct in that header is the only way to construct or query the DRAM-sender state on a
+// GlobalCircularBuffer; the public GlobalCircularBuffer API is unchanged.
+
+namespace global_circular_buffer_dram_sender {
+
+GlobalCircularBuffer GlobalCircularBufferDramSenderInternals::make_dram_sender(
+    IDevice* device,
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
+    uint32_t size,
+    BufferType buffer_type) {
+    return GlobalCircularBuffer(
+        device, sender_receiver_core_mapping, size, buffer_type, GlobalCircularBuffer::DramSenderTag{});
+}
+
+SenderCoreType GlobalCircularBufferDramSenderInternals::sender_core_type(const GlobalCircularBuffer& gcb) {
+    return static_cast<SenderCoreType>(gcb.sender_core_type_value_);
+}
+
+DeviceAddr GlobalCircularBufferDramSenderInternals::pages_sent_drisc_l1_base(const GlobalCircularBuffer& gcb) {
+    return gcb.pages_sent_drisc_l1_base_;
+}
+
+DeviceAddr GlobalCircularBufferDramSenderInternals::pages_sent_worker_l1_base(const GlobalCircularBuffer& gcb) {
+    return gcb.pages_sent_worker_l1_base_;
+}
+
+const std::vector<std::vector<CoreCoord>>& GlobalCircularBufferDramSenderInternals::receiver_coords_per_sender(
+    const GlobalCircularBuffer& gcb) {
+    return gcb.receiver_coords_per_sender_;
+}
+
+}  // namespace global_circular_buffer_dram_sender
+
+namespace {
+
+// Map (bank_id, receivers) pairs to (DRAM-logical CoreCoord, receivers) pairs by picking
+// an unused subchannel for each bank.
+std::vector<std::pair<CoreCoord, CoreRangeSet>> build_dram_sender_mapping(
+    IDevice* device, const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers) {
+    std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping;
+    mapping.reserve(bank_to_receivers.size());
+    for (const auto& [bank_id, receivers] : bank_to_receivers) {
+        uint32_t sub = ::tt::tt_metal::experimental::pick_unused_dram_subchannel(device, bank_id);
+        mapping.emplace_back(CoreCoord{bank_id, sub}, receivers);
+    }
+    return mapping;
+}
+
+}  // namespace
+
+GlobalCircularBuffer CreateGlobalCircularBufferWithDramSenders(
+    IDevice* device,
+    const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
+    uint32_t size,
+    BufferType buffer_type) {
+    auto mapping = build_dram_sender_mapping(device, bank_to_receivers);
+    return global_circular_buffer_dram_sender::GlobalCircularBufferDramSenderInternals::make_dram_sender(
+        device, mapping, size, buffer_type);
+}
+
+GlobalCircularBuffer CreateGlobalCircularBufferWithDramSenders(
+    distributed::MeshDevice* mesh_device,
+    const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
+    uint32_t size,
+    BufferType buffer_type) {
+    auto mapping = build_dram_sender_mapping(mesh_device, bank_to_receivers);
+    return global_circular_buffer_dram_sender::GlobalCircularBufferDramSenderInternals::make_dram_sender(
+        mesh_device, mapping, size, buffer_type);
+}
+
+SenderCoreType sender_core_type(const GlobalCircularBuffer& gcb) {
+    return global_circular_buffer_dram_sender::GlobalCircularBufferDramSenderInternals::sender_core_type(gcb);
+}
+
+DeviceAddr pages_sent_drisc_l1_base(const GlobalCircularBuffer& gcb) {
+    return global_circular_buffer_dram_sender::GlobalCircularBufferDramSenderInternals::pages_sent_drisc_l1_base(gcb);
+}
+
+DeviceAddr pages_sent_worker_l1_base(const GlobalCircularBuffer& gcb) {
+    return global_circular_buffer_dram_sender::GlobalCircularBufferDramSenderInternals::pages_sent_worker_l1_base(gcb);
+}
+
+const std::vector<std::vector<CoreCoord>>& receiver_coords_per_sender(const GlobalCircularBuffer& gcb) {
+    return global_circular_buffer_dram_sender::GlobalCircularBufferDramSenderInternals::receiver_coords_per_sender(gcb);
 }
 
 }  // namespace tt::tt_metal::experimental

@@ -18,8 +18,10 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
-#include <tt-metalium/dram_subchannel.hpp>
-#include <tt-metalium/dram_subchannel.hpp>
+#include <tt-metalium/experimental/dram_subchannel.hpp>
+#include <tt-metalium/experimental/global_circular_buffer.hpp>
+
+#include "impl/kernels/kernel.hpp"  // DramConfig
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
@@ -61,20 +63,20 @@ TEST_F(DramSenderGCBFixture, SmokeOneSenderFourReceivers) {
     constexpr uint32_t kNumPages = 1;
     constexpr uint32_t kRemoteCBId = 31;
 
-    // Sender: bank 0, unused subchannel
+    // Sender: bank 0
     const uint32_t bank_id = 0;
-    const uint32_t unused_sub = experimental::pick_unused_dram_subchannel(device_, bank_id);
-    CoreCoord sender_logical{bank_id, unused_sub};
-
     // Receivers
     CoreRangeSet receiver_cores(CoreRange({0, 0}, {kNumReceivers - 1, 0}));
-
-    std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_logical, receiver_cores}};
+    std::vector<std::pair<uint32_t, CoreRangeSet>> bank_to_receivers = {{bank_id, receiver_cores}};
 
     // Size: per-receiver fifo. Use 1KB.
     constexpr uint32_t kGcbSize = 1024;
-    auto gcb = experimental::CreateGlobalCircularBuffer(
-        mesh_device_, mapping, kGcbSize, BufferType::L1, experimental::SenderCoreType::Dram);
+    auto gcb = experimental::CreateGlobalCircularBufferWithDramSenders(
+        mesh_device_, bank_to_receivers, kGcbSize, BufferType::L1);
+    // Resolve the sender's DRAM logical coord for the rest of the test (sub was picked by the
+    // factory; we need it for some of the DRISC-side bookkeeping below).
+    const uint32_t unused_sub = experimental::pick_unused_dram_subchannel(device_, bank_id);
+    CoreCoord sender_logical{bank_id, unused_sub};
 
     // Pre-load DRISC L1 with per-receiver data pattern starting at DRISC L1 UNRESERVED + offset
     // far enough above pages_sent_drisc_l1_base.
@@ -98,7 +100,7 @@ TEST_F(DramSenderGCBFixture, SmokeOneSenderFourReceivers) {
     const uint32_t data_addr = cursor;
 
     // Sanity: our DramSenderGlobalCircularBuffer agreed to plant pages_sent at drisc_l1_unreserved.
-    ASSERT_EQ(gcb.pages_sent_drisc_l1_base(), pages_sent_addr);
+    ASSERT_EQ(experimental::pages_sent_drisc_l1_base(gcb), pages_sent_addr);
 
     // Per-receiver pattern: pattern[r] = 0xABCD0000 + r*page_index*256
     std::vector<uint32_t> pattern(kNumReceivers * kPageSize / sizeof(uint32_t));
@@ -132,7 +134,7 @@ TEST_F(DramSenderGCBFixture, SmokeOneSenderFourReceivers) {
         data_addr,
         kGcbSize,
         static_cast<uint32_t>(gcb.buffer_address()),
-        static_cast<uint32_t>(gcb.pages_sent_worker_l1_base()),
+        static_cast<uint32_t>(experimental::pages_sent_worker_l1_base(gcb)),
     };
     KernelHandle sender_kernel_id = CreateKernel(
         program,
@@ -142,7 +144,7 @@ TEST_F(DramSenderGCBFixture, SmokeOneSenderFourReceivers) {
 
     std::vector<uint32_t> sender_rt_args;
     sender_rt_args.reserve(2 * kNumReceivers);
-    const auto& receiver_phys = gcb.receiver_coords_per_sender().at(0);
+    const auto& receiver_phys = experimental::receiver_coords_per_sender(gcb).at(0);
     for (const auto& c : receiver_phys) {
         sender_rt_args.push_back(c.x);
         sender_rt_args.push_back(c.y);
@@ -210,12 +212,12 @@ TEST_F(DramSenderGCBFixture, SmokeTwoProgramsAsyncSlowDispatch) {
     constexpr uint32_t kGcbSize = 1024;
 
     const uint32_t bank_id = 0;
+    CoreRangeSet receiver_cores(CoreRange({0, 0}, {kNumReceivers - 1, 0}));
+    std::vector<std::pair<uint32_t, CoreRangeSet>> bank_to_receivers = {{bank_id, receiver_cores}};
+    auto gcb = experimental::CreateGlobalCircularBufferWithDramSenders(
+        mesh_device_, bank_to_receivers, kGcbSize, BufferType::L1);
     const uint32_t unused_sub = experimental::pick_unused_dram_subchannel(device_, bank_id);
     CoreCoord sender_logical{bank_id, unused_sub};
-    CoreRangeSet receiver_cores(CoreRange({0, 0}, {kNumReceivers - 1, 0}));
-    std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_logical, receiver_cores}};
-    auto gcb = experimental::CreateGlobalCircularBuffer(
-        mesh_device_, mapping, kGcbSize, BufferType::L1, experimental::SenderCoreType::Dram);
 
     const auto& hal = MetalContext::instance().hal();
     const uint32_t drisc_l1_unreserved = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
@@ -262,7 +264,7 @@ TEST_F(DramSenderGCBFixture, SmokeTwoProgramsAsyncSlowDispatch) {
         data_addr,
         kGcbSize,
         static_cast<uint32_t>(gcb.buffer_address()),
-        static_cast<uint32_t>(gcb.pages_sent_worker_l1_base()),
+        static_cast<uint32_t>(experimental::pages_sent_worker_l1_base(gcb)),
     };
     KernelHandle sender_kernel_id = CreateKernel(
         sender_program,
@@ -270,7 +272,7 @@ TEST_F(DramSenderGCBFixture, SmokeTwoProgramsAsyncSlowDispatch) {
         sender_logical,
         DramConfig{.noc = NOC::NOC_0, .compile_args = sender_compile_args});
     std::vector<uint32_t> sender_rt_args;
-    const auto& receiver_phys = gcb.receiver_coords_per_sender().at(0);
+    const auto& receiver_phys = experimental::receiver_coords_per_sender(gcb).at(0);
     for (const auto& c : receiver_phys) {
         sender_rt_args.push_back(c.x);
         sender_rt_args.push_back(c.y);
@@ -318,12 +320,11 @@ TEST_F(DramSenderGCBFixture, SmokeTwoProgramsAsyncSlowDispatch) {
 }
 
 TEST_F(DramSenderGCBFixture, RejectsDuplicateSender) {
-    CoreCoord sender_logical{0, experimental::pick_unused_dram_subchannel(device_, 0)};
     CoreRangeSet recv0(CoreRange({0, 0}, {0, 0}));
     CoreRangeSet recv1(CoreRange({1, 0}, {1, 0}));
-    std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_logical, recv0}, {sender_logical, recv1}};
-    EXPECT_ANY_THROW(experimental::CreateGlobalCircularBuffer(
-        mesh_device_, mapping, 1024, BufferType::L1, experimental::SenderCoreType::Dram));
+    std::vector<std::pair<uint32_t, CoreRangeSet>> bank_to_receivers = {{0, recv0}, {0, recv1}};
+    EXPECT_ANY_THROW(
+        experimental::CreateGlobalCircularBufferWithDramSenders(mesh_device_, bank_to_receivers, 1024, BufferType::L1));
 }
 
 }  // namespace tt::tt_metal

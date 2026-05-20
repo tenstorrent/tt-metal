@@ -167,14 +167,6 @@ KernelHandle CreateKernel(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const std::variant<DataMovementConfig, ComputeConfig>& config);
 
-// CreateKernel overload that targets programmable DRAM cores (DRISC) via DramConfig.
-// Blackhole only; requires TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1.
-KernelHandle CreateKernel(
-    Program& program,
-    const std::string& file_name,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    const DramConfig& config);
-
 // clang-format off
 /**
  * Creates a data movement or compute kernel from source code with the given config and adds it to the program.
