@@ -258,36 +258,37 @@ class TtDeformConv2dV2:
         if x_nhwc.layout != ttnn.ROW_MAJOR_LAYOUT:
             x_nhwc = ttnn.to_layout(x_nhwc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        # 3. grid_sample with K-batching → (1, H_out, W_out, C_in*K) channels k-major
+        # 3. grid_sample with K-batching using batch_output_channels=False.
+        # Output shape (1, H_out, W_out*K, C_in) ROW_MAJOR — W extended by K (each consecutive
+        # group of K rows along W corresponds to the K sample points of one output pixel).
+        # This layout lets us multiply by the mask without repeat_interleave: reshape the mask
+        # to (1, H_out, W_out*K, 1) and broadcast on the last dim.
         samples = ttnn.grid_sample(
             x_nhwc,
             grid_xy,
             mode="bilinear",
             padding_mode="zeros",
             align_corners=False,  # ttnn.grid_sample uses align_corners=False semantics regardless
-            batch_output_channels=True,
+            batch_output_channels=False,
         )
         ttnn.deallocate(grid_xy)
 
-        # 4. Apply modulation: expand mask from K channels to K*C_in by repeat_interleave.
-        # The intermediate tensors are LARGE (H_out * W_out * K * C_in elements ~= 29 MB for P3@80x80).
-        # Use DRAM for these so we don't OOM the per-core L1 banks.
+        # 4. Apply modulation. Mask (1, H, W, K) reshape → (1, H, W*K, 1) is a pure view
+        # (W and K are contiguous, K becomes the new W axis with stride C_in=1). Multiply
+        # samples (1, H, W*K, C_in) by mask (1, H, W*K, 1) with broadcast on the last dim.
+        # Avoids ttnn.repeat_interleave which decomposes into ~9 concat ops per call.
         big_tensor_bytes = H_out * W_out * K * C_in * 2  # bf16
         big_mem_config = ttnn.DRAM_MEMORY_CONFIG if big_tensor_bytes > 4 * 1024 * 1024 else ttnn.L1_MEMORY_CONFIG
 
-        # Move large intermediates to DRAM if they exceed L1 budget.
         if samples.memory_config().buffer_type != ttnn.BufferType.DRAM and big_mem_config == ttnn.DRAM_MEMORY_CONFIG:
             samples = ttnn.to_memory_config(samples, big_mem_config)
-        mask_expanded = (
-            ttnn.repeat_interleave(mask_nhwc, C_in, dim=-1, memory_config=big_mem_config)
-            if big_mem_config == ttnn.DRAM_MEMORY_CONFIG
-            else ttnn.repeat_interleave(mask_nhwc, C_in, dim=-1)
-        )
-        modulated = ttnn.multiply(samples, mask_expanded, memory_config=big_mem_config)
-        # Note: do NOT explicitly deallocate samples/mask_expanded — Python GC handles it,
-        # and explicit deallocate can invalidate dependent reshape views downstream.
 
-        # 5. Final 1x1 weighted sum via matmul.
+        mask_extended = ttnn.reshape(mask_nhwc, (1, H_out, W_out * K, 1))
+        modulated = ttnn.multiply(samples, mask_extended, memory_config=big_mem_config)
+
+        # 5. Final 1x1 weighted sum via matmul. Reshape (1, H, W*K, C_in) → (1, H*W, K*C_in).
+        # This matches the previous matmul input shape exactly (since the K-axis is now
+        # the innermost-but-one and folds in the same k-major order as batch_output_channels=True).
         modulated_flat = ttnn.reshape(modulated, (1, H_out * W_out, K * C_in))
         modulated_tiled = ttnn.to_layout(modulated_flat, ttnn.TILE_LAYOUT, memory_config=big_mem_config)
 
