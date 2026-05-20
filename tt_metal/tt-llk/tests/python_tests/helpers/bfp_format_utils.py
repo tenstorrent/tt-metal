@@ -118,3 +118,64 @@ def bfp4b_to_float16b(operand: torch.Tensor, dimensions=None) -> torch.Tensor:
         ).flatten()
 
     return quantized
+
+
+def bfp2b_to_float16b(operand: torch.Tensor, dimensions=None) -> torch.Tensor:
+    """
+    Simulate BFP2_b pack/unpack round-trip quantization.
+
+    Each 16-element block shares a single exponent and stores 2 bits per
+    element: 1 sign bit + 1 magnitude bit (no implicit leading mantissa bit).
+    The hardware packer keeps only the implicit leading 1 of each element's
+    full 24-bit mantissa and shifts it right by ``shared_exp - elem_exp``;
+    only elements whose exponent equals the block's shared exponent survive
+    with magnitude 1, all others collapse to 0.
+
+    Representable per-element output values are therefore::
+
+        { 0, +1 * 2^(shared_exp - 127), -1 * 2^(shared_exp - 127) }
+
+    Args:
+        operand: Input tensor (any shape).
+        dimensions: If provided, untilize the result back to these dimensions.
+
+    Returns:
+        Quantized bfloat16 tensor (same number of elements as input).
+    """
+    BFP2_BLOCK = 16
+    flat = operand.flatten().to(torch.float32)
+    n = flat.numel()
+
+    u32 = flat.view(torch.int32)
+
+    signs = (u32 >> 31) & 1
+    exps = (u32 >> 23) & 0xFF
+
+    # Truly-zero elements must not influence the shared exponent.
+    nonzero = (u32 & 0x7FFFFFFF) != 0
+    exps = torch.where(nonzero, exps, torch.zeros_like(exps))
+
+    exps_blocks = exps.view(-1, BFP2_BLOCK)
+    signs_blocks = signs.view(-1, BFP2_BLOCK)
+    nonzero_blocks = nonzero.view(-1, BFP2_BLOCK)
+
+    shared_exps = exps_blocks.max(dim=1, keepdim=True).values
+
+    # An element keeps magnitude 1 only when its exponent matches shared_exp
+    # (and it was nonzero to begin with); all others become 0 after the pack.
+    keep = (exps_blocks == shared_exps) & nonzero_blocks
+    mag = keep.to(torch.float32)
+
+    values = mag * torch.exp2((shared_exps - 127).float())
+    values = torch.where(signs_blocks.bool(), -values, values)
+
+    quantized = values.flatten()[:n].to(torch.bfloat16)
+
+    if dimensions is not None:
+        quantized = untilize_block(
+            quantized,
+            stimuli_format=DataFormat.Float16_b,
+            dimensions=dimensions,
+        ).flatten()
+
+    return quantized

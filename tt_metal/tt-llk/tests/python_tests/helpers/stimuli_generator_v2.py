@@ -9,7 +9,7 @@ from typing import Callable, Dict, List, Optional, Set, Tuple, Union
 
 import torch
 
-from .bfp_format_utils import bfp4b_to_float16b
+from .bfp_format_utils import bfp2b_to_float16b, bfp4b_to_float16b
 from .format_config import MX_FORMAT_MAX_NORMAL, DataFormat
 from .llk_params import format_dict
 from .tile_constants import (
@@ -860,7 +860,7 @@ def _generate_linspace_tensor(
 
 def _get_dtype_for_format(stimuli_format: DataFormat) -> torch.dtype:
     """Return the torch dtype to use for *stimuli_format*."""
-    if stimuli_format in (DataFormat.Bfp8_b, DataFormat.Bfp4_b):
+    if stimuli_format in (DataFormat.Bfp8_b, DataFormat.Bfp4_b, DataFormat.Bfp2_b):
         return torch.bfloat16
     if stimuli_format == DataFormat.Tf32:
         return torch.float32
@@ -1564,12 +1564,16 @@ def _generate_source_tensor_v2(
         tensor = tensor.reshape(-1)
         if stimuli_format == DataFormat.Bfp4_b:
             tensor = bfp4b_to_float16b(tensor)
+        if stimuli_format == DataFormat.Bfp2_b:
+            tensor = bfp2b_to_float16b(tensor)
         return tensor
 
     if spec.distribution == DistributionKind.SEQUENTIAL:
         tensor = _generate_sequential(spec, num_elements, dtype, stimuli_format)
         if stimuli_format == DataFormat.Bfp4_b:
             tensor = bfp4b_to_float16b(tensor)
+        if stimuli_format == DataFormat.Bfp2_b:
+            tensor = bfp2b_to_float16b(tensor)
         return tensor
 
     # ── ULP sweep: enumerate all representable values (no face loop) ─────
@@ -1583,6 +1587,8 @@ def _generate_source_tensor_v2(
             tensor = torch.cat([vals, padding])
         if stimuli_format == DataFormat.Bfp4_b:
             tensor = bfp4b_to_float16b(tensor)
+        if stimuli_format == DataFormat.Bfp2_b:
+            tensor = bfp2b_to_float16b(tensor)
         return tensor
 
     # ── linspace distributions: global sweep (no face loop) ──────────────
@@ -1596,6 +1602,8 @@ def _generate_source_tensor_v2(
 
         if stimuli_format == DataFormat.Bfp4_b:
             tensor = bfp4b_to_float16b(tensor)
+        if stimuli_format == DataFormat.Bfp2_b:
+            tensor = bfp2b_to_float16b(tensor)
         return tensor
 
     elements_per_face = face_r_dim * FACE_C_DIM
@@ -1633,7 +1641,8 @@ def _generate_source_tensor_v2(
     # already reflect the precision loss introduced by the format.
     if stimuli_format == DataFormat.Bfp4_b:
         tensor = bfp4b_to_float16b(tensor)
-
+    if stimuli_format == DataFormat.Bfp2_b:
+        tensor = bfp2b_to_float16b(tensor)
     return tensor
 
 
@@ -1658,6 +1667,14 @@ def _default_bfp4b_face(
     return integer_part.to(torch.bfloat16) + fraction
 
 
+def _default_bfp2b_face(
+    size: int, dtype: torch.dtype, gen: Optional[torch.Generator] = None
+) -> torch.Tensor:
+    integer_part = torch.randint(0, 3, (size,), generator=gen)
+    fraction = torch.randint(0, 4, (size,), generator=gen).to(torch.bfloat16) / 4.0
+    return integer_part.to(torch.bfloat16) + fraction
+
+
 def _default_spec_for_format(stimuli_format: DataFormat) -> StimuliSpec:
     """Return the built-in default StimuliSpec for a given data format.
 
@@ -1676,6 +1693,8 @@ def _default_spec_for_format(stimuli_format: DataFormat) -> StimuliSpec:
         return StimuliSpec(distribution=_default_bfp8b_face)
     if stimuli_format == DataFormat.Bfp4_b:
         return StimuliSpec(distribution=_default_bfp4b_face)
+    if stimuli_format == DataFormat.Bfp2_b:
+        return StimuliSpec(distribution=_default_bfp2b_face)
     if stimuli_format.is_integer():
         if stimuli_format == DataFormat.UInt32:
             return StimuliSpec.uniform(low=0.0, high=float(2**32 - 2))

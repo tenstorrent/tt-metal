@@ -221,6 +221,66 @@ def unpack_bfp4_b(bfp4_block, sfpu=False, num_faces=4, face_r_dim=16):
     return torch.tensor(bfloat16_values, dtype=torch.bfloat16)
 
 
+def bfp2_to_float_block(exponent, bfp2_mantissas, unpacked_bfp2):
+    bfloat16_values = []
+    exp_adj = exponent - 127
+    scale = 2.0**exp_adj
+
+    for mantissa in bfp2_mantissas:
+        mag = mantissa & 0x1
+        if mag == 0:
+            bfloat16_values.append(0.0)
+            unpacked_bfp2[(exp_adj, mantissa)] = 0.0
+            continue
+
+        key = (exp_adj, mantissa)
+        cached = unpacked_bfp2.get(key)
+        if cached is not None:
+            bfloat16_values.append(cached)
+            continue
+
+        sign = -1.0 if mantissa & 0x2 else 1.0
+        value = sign * mag * scale
+        bfloat16_values.append(value)
+        unpacked_bfp2[key] = value
+
+    return bfloat16_values
+
+
+def unpack_bfp2_b(bfp2_block, sfpu=False, num_faces=4, face_r_dim=16):
+    actual_exponents = face_r_dim * num_faces
+    exponents_in_packed = max(actual_exponents, MIN_BFP_EXPONENTS)
+
+    if not sfpu:
+        exponents = bfp2_block[:actual_exponents]
+        packed_mantissas = bfp2_block[exponents_in_packed:]
+    else:
+        exponents = bfp2_block[:16]
+        packed_mantissas = bfp2_block[16 : 16 + actual_exponents * 4]
+
+    # Expand packed bytes into 2-bit datums using NumPy vectorized ops
+    # Hardware BFP2_b convention: bits[1:0] = element 0, bits[3:2] = element 1,
+    # bits[5:4] = element 2, bits[7:6] = element 3
+    packed = np.frombuffer(packed_mantissas, dtype=np.uint8)
+    mantissas = np.empty(len(packed) * 4, dtype=np.uint8)
+    mantissas[0::4] = packed & 0x3
+    mantissas[1::4] = (packed >> 2) & 0x3
+    mantissas[2::4] = (packed >> 4) & 0x3
+    mantissas[3::4] = (packed >> 6) & 0x3
+
+    unpacked_bfp2 = {}
+
+    bfloat16_values = []
+    for i, exponent in enumerate(exponents):
+        block_mantissas = mantissas[i * 16 : (i + 1) * 16]
+        block_bfloat16_values = bfp2_to_float_block(
+            exponent, block_mantissas, unpacked_bfp2
+        )
+        bfloat16_values.extend(block_bfloat16_values)
+
+    return torch.tensor(bfloat16_values, dtype=torch.bfloat16)
+
+
 # ============================================================================
 # MX (Microscaling) Format Support - OCP Specification
 # ============================================================================
@@ -517,6 +577,8 @@ def unpack_res_tiles(
         unpack_func = unpack_bfp16 if sfpu else unpack_bfp8_b
     elif output_format == DataFormat.Bfp4_b:
         unpack_func = unpack_bfp16 if sfpu else unpack_bfp4_b
+    elif output_format == DataFormat.Bfp2_b:
+        unpack_func = unpack_bfp16 if sfpu else unpack_bfp2_b
     elif output_format == DataFormat.MxFp8R:
         unpack_func = unpack_mxfp8r
     elif output_format == DataFormat.MxFp8P:
@@ -534,7 +596,7 @@ def unpack_res_tiles(
         end_idx = start_idx + elements_per_tile_needed
         tile_data = packed_list[start_idx:end_idx]
 
-        if unpack_func in (unpack_bfp8_b, unpack_bfp4_b):
+        if unpack_func in (unpack_bfp8_b, unpack_bfp4_b, unpack_bfp2_b):
             unpacked_tile = unpack_func(
                 tile_data, sfpu=sfpu, num_faces=num_faces, face_r_dim=face_r_dim
             )

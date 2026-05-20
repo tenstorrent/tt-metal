@@ -35,6 +35,7 @@ tolerances = {
     DataFormat.UInt8: Tolerance(atol=0, rtol=0),
     DataFormat.Bfp8_b: Tolerance(atol=0.1, rtol=0.2),
     DataFormat.Bfp4_b: Tolerance(atol=0.25, rtol=0.3),
+    DataFormat.Bfp2_b: Tolerance(atol=0.5, rtol=0.4),
     DataFormat.MxFp8R: Tolerance(atol=0.2, rtol=0.3),
     DataFormat.MxFp8P: Tolerance(atol=0.2, rtol=0.3),
     DataFormat.MxFp4: Tolerance(atol=0.5, rtol=0.35),
@@ -192,17 +193,23 @@ def calculate_pcc(golden, input):
     return pcc_result
 
 
-def _bfp4_block_aware_compare(
-    golden: torch.Tensor, result: torch.Tensor, max_ulp_diff: int = 2
+def _bfp_block_aware_compare(
+    golden: torch.Tensor,
+    result: torch.Tensor,
+    mantissa_bits: int,
+    max_ulp_diff: int = 2,
 ) -> torch.Tensor:
-    """Compare two BFP4_b tensors allowing small ULP differences per 16-element block.
+    """Compare two block-float tensors allowing small ULP differences per 16-element block.
 
-    BFP4_b shares an exponent across each 16-element block, so the ULP size
-    depends on the block's max magnitude.  The SFPU hardware computes in FP32
-    with internal approximations (e.g. Newton-Raphson for rsqrt) that can
-    differ slightly from the golden model.  After Bfp4 quantization (3-bit
-    mantissa), these small intermediate differences can shift a value by up
-    to ``max_ulp_diff`` quantization steps.
+    BFP4_b/BFP2_b share an exponent across each 16-element block, so the ULP
+    size depends on the block's max magnitude.  The SFPU hardware computes in
+    FP32 with internal approximations (e.g. Newton-Raphson for rsqrt) that can
+    differ slightly from the golden model.  After block-float quantization,
+    these small intermediate differences can shift a value by up to
+    ``max_ulp_diff`` quantization steps.
+
+    ``mantissa_bits`` is the number of mantissa bits the format reconstructs
+    per element (3 for Bfp4_b, 1 for Bfp2_b).
 
     For full tiles (n a multiple of 1024), we tilize before block-wise check and
     untilize the validity mask. For partial tiles (num_faces 1 or 2: 256/512
@@ -211,7 +218,6 @@ def _bfp4_block_aware_compare(
     from helpers.tilize_untilize import tilize_block, untilize_block
 
     BLOCK = 16
-    BFP4_MANTISSA_BITS = 3
     TILE_SIZE = 1024
 
     g_flat = golden.float().flatten()
@@ -252,7 +258,7 @@ def _bfp4_block_aware_compare(
             continue
 
         block_exp = math.floor(math.log2(block_max))
-        one_ulp = 2.0 ** (block_exp - BFP4_MANTISSA_BITS + 1)
+        one_ulp = 2.0 ** (block_exp - mantissa_bits + 1)
 
         diff = (g_blk - r_blk).abs()
         is_valid_til[blk_start:blk_end] = (diff <= max_ulp_diff * one_ulp) | both_nan
@@ -310,7 +316,9 @@ def passed_test(
     res_tensor = res_tensor.type(format_dict[output_data_format])
 
     if output_data_format == DataFormat.Bfp4_b:
-        is_valid = _bfp4_block_aware_compare(golden_tensor, res_tensor)
+        is_valid = _bfp_block_aware_compare(golden_tensor, res_tensor, mantissa_bits=3)
+    elif output_data_format == DataFormat.Bfp2_b:
+        is_valid = _bfp_block_aware_compare(golden_tensor, res_tensor, mantissa_bits=1)
     else:
         is_close = torch.isclose(
             golden_tensor, res_tensor, rtol=tolerance.rtol, atol=tolerance.atol
@@ -420,6 +428,10 @@ def passed_test(
         target_pcc = pow(0.99, L1_to_L1_iterations)
     elif output_data_format == DataFormat.Bfp4_b:
         target_pcc = 0.98
+    elif output_data_format == DataFormat.Bfp2_b:
+        target_pcc = (
+            0.90  # Bfp2_b has only 1 mantissa bit; precision is severely limited
+        )
     elif output_data_format == DataFormat.MxFp4:
         target_pcc = 0.95  # MxFp4 E2M1 has very limited precision (only 8 positive and 8 negative representable values)
 

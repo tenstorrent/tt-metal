@@ -257,6 +257,87 @@ def pack_bfp4_b(tensor, block_size=16, num_faces=4, face_r_dim=16):
     return result
 
 
+def float_to_bfp2_block(block):
+    n = len(block)
+
+    raw_bytes = struct.pack(f"<{n}f", *(float(v) for v in block))
+    all_bits = struct.unpack(f"<{n}I", raw_bytes)
+
+    signs = [0] * n
+    exponents = [0] * n
+    mantissas = [0] * n
+    shared_exponent = 0
+
+    for i, bits in enumerate(all_bits):
+        if bits & 0x7FFFFFFF:  # nonzero magnitude (handles -0.0 too)
+            signs[i] = bits >> 31
+            exp = (bits >> 23) & 0xFF
+            exponents[i] = exp
+            mantissas[i] = 0x800000 | (bits & 0x7FFFFF)
+            if exp > shared_exponent:
+                shared_exponent = exp
+
+    bfp2_mantissas = [0] * n
+    for i in range(n):
+        if mantissas[i]:
+            shifted = mantissas[i] >> (shared_exponent - exponents[i])
+            bfp2_mantissas[i] = (signs[i] << 1) | ((shifted >> 23) & 0x1)
+
+    return shared_exponent, bfp2_mantissas
+
+
+def pack_bfp2_b(tensor, block_size=16, num_faces=4, face_r_dim=16):
+    """Pack tensor into BFP2_b format.
+
+    BFP2_b uses 16-element blocks, each with a shared exponent and 2-bit mantissas
+    (1 sign bit + 1 magnitude bit per element). Four mantissa datums are packed
+    per byte (bits[1:0] = first element, bits[3:2] = second, bits[5:4] = third,
+    bits[7:6] = fourth).
+
+    Args:
+        tensor: Input tensor (typically 1024 elements for full tile)
+        block_size: Elements per block (always 16 for BFP2_b)
+        num_faces: Number of faces to pack (1, 2, or 4)
+        face_r_dim: Number of rows per face (1, 2, 4, 8, or 16)
+
+    Returns:
+        List of packed bytes: [exponents...] + [packed_mantissas...]
+    """
+    flattened_tensor = tensor.flatten()
+
+    elements_per_face = face_r_dim * FACE_C_DIM
+    elements_to_pack = elements_per_face * num_faces
+    assert (
+        len(flattened_tensor) >= elements_to_pack
+    ), f"Tensor has {len(flattened_tensor)} elements, but need at least {elements_to_pack} for {num_faces} face(s)"
+    flattened_tensor = flattened_tensor[:elements_to_pack]
+
+    num_blocks = len(flattened_tensor) // block_size
+
+    exponents = []
+    all_mantissas = []
+
+    for i in range(num_blocks):
+        block = flattened_tensor[i * block_size : (i + 1) * block_size]
+        shared_exponent, bfp2_mantissas = float_to_bfp2_block(block)
+        exponents.append(shared_exponent)
+        all_mantissas.extend(bfp2_mantissas)
+
+    if len(exponents) < MIN_BFP_EXPONENTS:
+        padding_count = MIN_BFP_EXPONENTS - len(exponents)
+        exponents.extend([0] * padding_count)
+
+    packed_mantissas = []
+    for i in range(0, len(all_mantissas), 4):
+        e0 = all_mantissas[i] if i < len(all_mantissas) else 0
+        e1 = all_mantissas[i + 1] if (i + 1) < len(all_mantissas) else 0
+        e2 = all_mantissas[i + 2] if (i + 2) < len(all_mantissas) else 0
+        e3 = all_mantissas[i + 3] if (i + 3) < len(all_mantissas) else 0
+        packed_mantissas.append((e3 << 6) | (e2 << 4) | (e1 << 2) | e0)
+
+    return exponents + packed_mantissas
+
+
 # ============================================================================
 # MX (Microscaling) Format Support - OCP Specification
 # ============================================================================

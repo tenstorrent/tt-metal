@@ -5,7 +5,7 @@ import math
 
 import torch
 
-from .bfp_format_utils import bfp4b_to_float16b
+from .bfp_format_utils import bfp2b_to_float16b, bfp4b_to_float16b
 from .deprecation import deprecated
 from .format_config import MX_FORMAT_MAX_NORMAL, MX_FORMAT_MIN_MAGNITUDE, DataFormat
 from .llk_params import format_dict
@@ -70,7 +70,11 @@ def generate_random_face(
         return _generate_mxfp4_face(
             size, const_face, const_value, sfpu, negative_values
         )
-    elif stimuli_format not in (DataFormat.Bfp8_b, DataFormat.Bfp4_b):
+    elif stimuli_format not in (
+        DataFormat.Bfp8_b,
+        DataFormat.Bfp4_b,
+        DataFormat.Bfp2_b,
+    ):
         if stimuli_format.is_integer():
             if const_face:
                 srcA_face = (
@@ -124,9 +128,12 @@ def generate_random_face(
             if stimuli_format == DataFormat.Bfp8_b:
                 integer_part = torch.randint(low, 3, (size,))
                 fraction = torch.randint(0, 16, (size,)).to(dtype=torch.bfloat16) / 16.0
-            else:  # Bfp4_b has 3-bit mantissa
+            elif stimuli_format == DataFormat.Bfp4_b:  # Bfp4_b has 3-bit mantissa
                 integer_part = torch.randint(low, 3, (size,))
                 fraction = torch.randint(0, 8, (size,)).to(dtype=torch.bfloat16) / 8.0
+            elif stimuli_format == DataFormat.Bfp2_b:  # Bfp2_b has 1-bit mantissa
+                integer_part = torch.randint(low, 3, (size,))
+                fraction = torch.randint(0, 4, (size,)).to(dtype=torch.bfloat16) / 4.0
 
             srcA_face = integer_part.to(dtype=torch.bfloat16) + fraction
 
@@ -386,7 +393,7 @@ def calculate_tile_and_face_counts_w_tile_dimensions(
 
 def _get_dtype_for_format(stimuli_format: DataFormat) -> torch.dtype:
     """Get the torch dtype for a given data format."""
-    if stimuli_format in (DataFormat.Bfp8_b, DataFormat.Bfp4_b):
+    if stimuli_format in (DataFormat.Bfp8_b, DataFormat.Bfp4_b, DataFormat.Bfp2_b):
         return torch.bfloat16
     return format_dict[stimuli_format]
 
@@ -457,6 +464,8 @@ def _generate_source_tensor(
     # BFP8_b quantization themselves, using the correct tilized layout.
     if stimuli_format == DataFormat.Bfp4_b:
         tensor = bfp4b_to_float16b(tensor)
+    elif stimuli_format == DataFormat.Bfp2_b:
+        tensor = bfp2b_to_float16b(tensor)
 
     return tensor
 
