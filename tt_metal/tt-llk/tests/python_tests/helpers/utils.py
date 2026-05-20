@@ -267,6 +267,87 @@ def _bfp_block_aware_compare(
     return is_valid
 
 
+def _mxint2_block_aware_compare(
+    golden: torch.Tensor, result: torch.Tensor
+) -> torch.Tensor:
+    """Compare two MxInt2 tensors allowing single-lattice-step disagreements.
+
+    MxInt2 represents each element as raw -1/0/+1 times the block's
+    2^(scale-127). The per-block lattice has only three points, so any
+    intermediate-precision divergence between HW's dest->pack path and the
+    golden's fp32 model can flip a near-midpoint element by exactly one lattice
+    step (e.g. golden picks +scale, HW picks 0). The two are equally valid
+    quantizations of a true value sitting on the midpoint; what looks like a
+    failure is the coarse lattice amplifying sub-ULP precision noise.
+
+    Acceptance rule (per 32-element block): a position is valid iff
+        |g[i] - r[i]| <= block_scale_max
+    where ``block_scale_max = max(|g|, |r|)`` over the block (this equals the
+    block's lattice spacing whenever the block has any non-zero element).
+    Larger differences (sign flips, 2-step jumps) still fail.
+
+    Tilizes first to match HW's block layout (32-element block = one face
+    row-pair), so the comparison is done in the same coordinate system HW
+    used when deriving block scales.
+    """
+    from helpers.tilize_untilize import tilize_block, untilize_block
+
+    BLOCK = 32
+    TILE_SIZE = 1024
+
+    g_flat = golden.float().flatten()
+    r_flat = result.float().flatten()
+    n = g_flat.numel()
+
+    if n == 0:
+        return torch.ones(0, dtype=torch.bool)
+
+    if n % TILE_SIZE == 0:
+        num_tiles = n // TILE_SIZE
+        tile_dim = (32 * num_tiles, 32)
+        g_til = tilize_block(g_flat, tile_dim, DataFormat.Float32).flatten()
+        r_til = tilize_block(r_flat, tile_dim, DataFormat.Float32).flatten()
+    else:
+        g_til = g_flat
+        r_til = r_flat
+
+    is_valid_til = torch.ones(n, dtype=torch.bool)
+
+    for blk_start in range(0, n, BLOCK):
+        blk_end = min(blk_start + BLOCK, n)
+        g_blk = g_til[blk_start:blk_end]
+        r_blk = r_til[blk_start:blk_end]
+
+        both_nan = torch.isnan(g_blk) & torch.isnan(r_blk)
+        diff = (g_blk - r_blk).abs()
+
+        block_scale = torch.max(
+            g_blk.abs().nan_to_num(nan=0.0).max(),
+            r_blk.abs().nan_to_num(nan=0.0).max(),
+        ).item()
+
+        if block_scale == 0.0:
+            is_valid_til[blk_start:blk_end] = (g_blk == r_blk) | both_nan
+        else:
+            # Small fp slack on the bound; the legitimate disagreements we
+            # observed sit at diff == block_scale (e.g. golden=+2 vs HW=0 at
+            # scaled=0.5 midpoint), well inside this margin.
+            is_valid_til[blk_start:blk_end] = (diff <= block_scale + 1e-6) | both_nan
+
+    if n % TILE_SIZE == 0:
+        num_tiles = n // TILE_SIZE
+        tile_dim = (32 * num_tiles, 32)
+        is_valid = (
+            untilize_block(is_valid_til.float(), DataFormat.Float32, tile_dim)
+            .flatten()
+            .bool()
+        )
+    else:
+        is_valid = is_valid_til
+
+    return is_valid
+
+
 _RECORD_TEST_ORDER: bool = False
 
 # Per-format params for _mxfp_block_aware_compare: (mantissa_bits, max_steps).

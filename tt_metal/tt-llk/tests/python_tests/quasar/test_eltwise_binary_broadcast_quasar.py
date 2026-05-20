@@ -167,6 +167,33 @@ def test_eltwise_binary_broadcast_quasar(
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
+    # Env-var-gated MxInt2 diagnostic: when MXINT2_DIAGNOSTIC is set, dump a
+    # block-by-block comparison for any MxInt2-output mismatch so we can see
+    # if HW and golden disagree on block scale vs. per-element rounding.
+    import os as _os
+
+    if (
+        _os.environ.get("MXINT2_DIAGNOSTIC")
+        and formats.output_format == DataFormat.MxInt2
+        and not passed_test(
+            golden_tensor, res_tensor, formats.output_format, print_errors=False
+        )
+    ):
+        from helpers.mxint2_diagnostic import diagnose_mxint2_mismatch
+
+        diagnose_mxint2_mismatch(
+            src_A=src_A,
+            src_B_bcast=bcast_src_B_tensor,
+            mathop=mathop,
+            golden_tensor=golden_tensor,
+            res_tensor=res_tensor,
+            formats=formats,
+            test_id=(
+                f"{formats.input_format}->{formats.output_format} "
+                f"{mathop} {broadcast_type} {dest_sync_mode} dims={input_dimensions}"
+            ),
+        )
+
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format, print_errors=True
     ), "Assert against golden failed"
