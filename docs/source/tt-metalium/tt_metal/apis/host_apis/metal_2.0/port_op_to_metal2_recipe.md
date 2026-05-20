@@ -76,7 +76,7 @@ All three are committed alongside the port.
   - `defines` (key → value pairs).
   - `config` (the descriptor type: `ReaderConfigDescriptor` / `WriterConfigDescriptor` / `ComputeConfigDescriptor` and its content).
 - **CBs**: every `CBDescriptor` (one row per descriptor):
-  - `total_size`, `core_ranges`, format descriptors (`buffer_index`, `data_format`, `page_size`).
+  - `total_size`, `core_ranges`, format descriptors (`buffer_index`, `data_format`, `page_size`, `tile` if set).
 - **Semaphores**: every `SemaphoreDescriptor`:
   - `id`, `core_type`, `core_ranges`, `initial_value`.
 - **Tensor accessors**: every `TensorAccessor` use site (host and device):
@@ -168,7 +168,7 @@ Any items the audit flagged as YELLOW that affect this port, plus any new findin
 For each resource type, construct the spec entry and its run-params entry as a pair. The order emerges naturally from the op's existing structure (reader / writer / compute order, tensor → DFB → semaphore precedence); the recipe does not prescribe a fixed sequence.
 
 - **`KernelSpec` ↔ `KernelRunParams`.** For each planned `KernelSpec`, build the schema (`compile_time_arg_bindings`, `runtime_arguments_schema`, `dfb_bindings`, `tensor_bindings`, `semaphore_bindings`, `config_spec`); alongside, build the corresponding `KernelRunParams` entry (per-node `named_runtime_args` and `named_common_runtime_args`). If the kernel has no RTAs, the run-params entry may be omitted entirely.
-- **`DataflowBufferSpec`.** Build with `entry_size`, `num_entries`, `data_format_metadata`. No placement field — placement is derived from the kernel bindings. Borrowed-memory DFBs (not yet supported as of this guide's date) would have failed the audit; their presence here indicates the audit missed something.
+- **`DataflowBufferSpec`.** Build with `entry_size`, `num_entries`, `data_format_metadata`, and `tile_format_metadata` **copied from the legacy CB's `format_descriptors[i].tile`** when that field was set (see [migration guide for the rationale](metal2_migration_guide.md#dataflowbufferspec)). No placement field — placement is derived from the kernel bindings. Borrowed-memory DFBs (not yet supported as of this guide's date) would have failed the audit; their presence here indicates the audit missed something.
 - **`SemaphoreSpec`.** Build with `target_nodes`. (Semaphores have no per-execution counterpart on `ProgramRunParams`.)
 - **`TensorParameter` ↔ `TensorArg`.** Declare each tensor as a `TensorParameter` (using `<tensor>.tensor_spec()`); alongside, add the corresponding `TensorArg` to `ProgramRunParams::tensor_args`.
 - **`WorkUnitSpec`.** Build with `kernels` (by `unique_id`) and `target_nodes`. No per-execution counterpart.
@@ -317,9 +317,9 @@ Written during the inventory and planning steps; committed alongside the port fo
 | compute | ... | ... | ... | ... | ... | ... | ... | ... |
 
 ### CBs
-| index | total_size | core_ranges | data_format | page_size |
-|---|---|---|---|---|
-| 0 | ... | ... | ... | ... |
+| index | total_size | core_ranges | data_format | page_size | tile (if set) |
+|---|---|---|---|---|---|
+| 0 | ... | ... | ... | ... | ... |
 
 ### Semaphores
 | id | core_type | core_ranges | initial_value |
