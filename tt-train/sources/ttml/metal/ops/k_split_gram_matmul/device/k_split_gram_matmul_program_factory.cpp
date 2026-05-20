@@ -110,7 +110,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
         uint32_t mb = find_max_mb(kb);
         if (mb == 0)
             continue;
-        uint32_t n = (Mpc + mb - 1) / mb;
+        uint32_t n = tt::div_up(Mpc, mb);
         if (n > best_num_m_blocks)
             break;
         best_num_m_blocks = n;
@@ -129,7 +129,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     const uint32_t M_block = best_mb;
     const uint32_t N_block = M_block;
     const uint32_t num_m_blocks = best_num_m_blocks;
-    const uint32_t num_n_blocks = (Mpc + N_block - 1) / N_block;
+    const uint32_t num_n_blocks = tt::div_up(Mpc, N_block);
     const uint32_t block_sz = K_block_tiles * M_block;
     const uint32_t cb_size = input_cb_num_blocks * block_sz;
     const uint32_t num_tiles = M_block * K_tiles;  // tiles per sender per (m_sub, n_sub) pass
