@@ -4,29 +4,11 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 #include <tt-metalium/constants.hpp>
-
-FORCE_INLINE uint32_t get_tilized_idx(uint32_t h_idx, uint32_t w_idx) {
-    constexpr uint32_t tile_height = tt::constants::TILE_HEIGHT;
-    constexpr uint32_t tile_width = tt::constants::TILE_WIDTH;
-    constexpr uint32_t half_tile_height = tile_height / 2;
-    constexpr uint32_t half_tile_width = tile_width / 2;
-
-    if (h_idx < half_tile_height && w_idx < half_tile_width) {
-        return h_idx * half_tile_width + w_idx;
-    }
-    if (h_idx < half_tile_height && w_idx >= half_tile_width) {
-        return h_idx * half_tile_width + (w_idx % half_tile_width) + half_tile_height * half_tile_width;
-    }
-    if (h_idx >= half_tile_height && w_idx < half_tile_width) {
-        return (h_idx % half_tile_height) * half_tile_width + w_idx + half_tile_height * tile_width;
-    }
-    return (h_idx % half_tile_height) * half_tile_width + (w_idx % half_tile_width) +
-           half_tile_height * (tile_width + half_tile_width);
-}
+#include "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/reduce_rm_dataflow_common.hpp"
 
 // Writes one scalar (datum_bytes) per reduced logical row. Each output tile now contains up to TILE_HEIGHT row
 // reductions, so writer emits multiple destination rows per popped tile.
@@ -43,8 +25,8 @@ void kernel_main() {
 
     const auto dst_accessor = TensorAccessor(dst_args, dst_addr);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_tile(cb_id_tile);
+    Noc noc;
+    CircularBuffer cb_tile(cb_id_tile);
 
     uint32_t rows_written = 0;
     while (rows_written < num_rows) {

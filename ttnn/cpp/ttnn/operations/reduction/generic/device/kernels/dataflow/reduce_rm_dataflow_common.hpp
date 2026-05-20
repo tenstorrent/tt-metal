@@ -7,12 +7,31 @@
 #include <api/dataflow/dataflow_api.h>
 #include <cstdint>
 #include <tt-metalium/constants.hpp>
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
 #include "ttnn/cpp/ttnn/operations/pool/device/kernels/experimental_device_api.hpp"
 
 #define RM_DF_ALWI inline __attribute__((always_inline))
+
+// Map a logical (h_idx, w_idx) within a tile to its flat datum offset in tile-layout (4-face) storage.
+// Used by the writers that scatter sparse outputs of `reduce()` — column 0 of every row for W-reduce,
+// row 0 of every column for H-reduce — into row-major output pages.
+RM_DF_ALWI uint32_t get_tilized_idx(uint32_t h_idx, uint32_t w_idx) {
+    constexpr uint32_t tile_height = tt::constants::TILE_HEIGHT;
+    constexpr uint32_t tile_width = tt::constants::TILE_WIDTH;
+    constexpr uint32_t half_tile_height = tile_height / 2;
+    constexpr uint32_t half_tile_width = tile_width / 2;
+
+    if (h_idx < half_tile_height && w_idx < half_tile_width) {
+        return h_idx * half_tile_width + w_idx;
+    }
+    if (h_idx < half_tile_height && w_idx >= half_tile_width) {
+        return h_idx * half_tile_width + (w_idx % half_tile_width) + half_tile_height * half_tile_width;
+    }
+    if (h_idx >= half_tile_height && w_idx < half_tile_width) {
+        return (h_idx % half_tile_height) * half_tile_width + w_idx + half_tile_height * tile_width;
+    }
+    return (h_idx % half_tile_height) * half_tile_width + (w_idx % half_tile_width) +
+           half_tile_height * (tile_width + half_tile_width);
+}
 
 // Same packing convention as pool_kernels_common fill_with_val: repeat uint16 `val` for n uint16 slots.
 RM_DF_ALWI void rm_fill_with_val_bf16(uint32_t begin_addr, uint32_t num_u16, uint16_t val) {
@@ -107,12 +126,12 @@ RM_DF_ALWI uint32_t rm_precompute_slabs_for_h_chunk(
 // need to spell it out.
 template <typename ClearTemplateSrc>
 RM_DF_ALWI void rm_fill_page_with_clear_template(
-    experimental::Noc& noc,
+    Noc& noc,
     experimental::CB& cb_rm,
     uint32_t page_bytes,
     const ClearTemplateSrc& clear_template_src,
     uint32_t clear_template_bytes) {
-    experimental::UnicastEndpoint self_ep;
+    UnicastEndpoint self_ep;
     uint32_t pad_offset = 0;
     while (pad_offset < page_bytes) {
         const uint32_t copy_bytes =
@@ -127,7 +146,7 @@ RM_DF_ALWI void rm_fill_page_with_clear_template(
 // splitting into per-tile reads — same pattern as pool/reader_pool_2d.cpp's contiguous-read path).
 template <typename TensorAccessorT>
 RM_DF_ALWI void rm_read_slab_into_page(
-    experimental::Noc& noc,
+    Noc& noc,
     experimental::CB& cb_rm,
     const TensorAccessorT& tensor_accessor,
     const RmSlabInfo& slab,
