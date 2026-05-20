@@ -121,7 +121,7 @@ dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, REDUCE_OP, REDUCE_DIM>(s
 
 No `.id` extraction, no temporary `DataflowBuffer` constructed just to retrieve its underlying id, no wrapper structs.
 
-**Today vs. tomorrow**: Today's Quasar LLKs and kernel-lib helpers still accept `uint32_t` — the implicit conversion is the right bridge on both architectures. The kernel-lib's eventual evolution (accepting DFB handles natively) is upstream of any port; do not preemptively wrap or refactor.
+**Today vs. tomorrow**: Today's LLKs and kernel-lib helpers on WH/BH accept `uint32_t` — the implicit conversion is the right bridge for porting-scope work. Kernel-lib and LLK Quasar correctness is upstream of any WH/BH port; do not preemptively wrap or refactor.
 
 **Prerequisite**: implicit conversion on `DFBAccessor::operator uint32_t()`, commit `3fbb1016d08` on `akertesz/dfb-accessor-implicit-conv`, PR #44646.
 
