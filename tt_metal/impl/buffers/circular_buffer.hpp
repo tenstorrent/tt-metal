@@ -10,10 +10,6 @@
 
 namespace tt::tt_metal {
 
-namespace experimental {
-class DramSenderGlobalCircularBuffer;
-}
-
 class CircularBufferImpl {
 public:
     CircularBufferImpl(const CoreRangeSet& core_range_set, const CircularBufferConfig& config);
@@ -21,10 +17,6 @@ public:
         const CoreRangeSet& core_ranges,
         const CircularBufferConfig& config,
         const experimental::GlobalCircularBuffer& global_circular_buffer);
-    CircularBufferImpl(
-        const CoreRangeSet& core_ranges,
-        const CircularBufferConfig& config,
-        const experimental::DramSenderGlobalCircularBuffer& dram_sender_global_circular_buffer);
     CircularBufferImpl(const CBDescriptor& descriptor);
 
     CBHandle id() const { return id_; }
@@ -42,10 +34,7 @@ public:
     uint32_t page_size(uint32_t buffer_index) const;
 
     bool globally_allocated() const { return this->config_.globally_allocated_address().has_value(); }
-    bool is_global_circular_buffer() const {
-        return this->shadow_global_circular_buffer_ != nullptr ||
-               this->shadow_dram_sender_global_circular_buffer_ != nullptr;
-    }
+    bool is_global_circular_buffer() const { return this->shadow_global_circular_buffer_ != nullptr; }
 
     uint32_t size() const { return this->config_.total_size(); }
 
@@ -66,8 +55,6 @@ public:
     void set_locally_allocated_address(uint32_t address) { this->locally_allocated_address_ = address; }
 
     void set_global_circular_buffer(const experimental::GlobalCircularBuffer& global_circular_buffer);
-    void set_dram_sender_global_circular_buffer(
-        const experimental::DramSenderGlobalCircularBuffer& dram_sender_global_circular_buffer);
 
     DeviceAddr config_address() const;
 
@@ -87,7 +74,6 @@ private:
     uint32_t globally_allocated_address_{};
     DeviceAddr global_circular_buffer_config_address_{};
     const experimental::GlobalCircularBuffer* shadow_global_circular_buffer_ = nullptr;
-    const experimental::DramSenderGlobalCircularBuffer* shadow_dram_sender_global_circular_buffer_ = nullptr;
     // add a callback to invalidate circular buffer allocation
 };
 

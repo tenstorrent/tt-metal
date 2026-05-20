@@ -10,9 +10,11 @@ matmuls; smaller rings are exercised here too for the QKV/FF cases that fit at l
 recv_per_bank.
 
 Each parameterized case:
-- Builds a fresh DramSenderGlobalCircularBuffer for one matmul.
-- Pushes the weight via ttnn.dram_prefetcher(run_on_dram_cores=True).
-- Runs ttnn.linear with the matching dram_sender_global_cb.
+- Builds a fresh DRAM-sender GlobalCircularBuffer via
+  ttnn.create_global_circular_buffer_with_dram_senders for one matmul.
+- Pushes the weight via ttnn.dram_prefetcher(global_cb=gcb); the op infers the DRAM-core
+  program factory from gcb.sender_core_type() == "dram".
+- Runs ttnn.linear with the same gcb.
 - PCC against torch.matmul.
 
 Receiver layout: each bank's receivers are laid out at row-major-adjacent ring positions
@@ -167,7 +169,7 @@ def test_dram_core_prefetcher_BH_param(device, name, k_tiles_per_shard, n_tiles_
         ),
     )
 
-    # ---- DramSenderGlobalCircularBuffer ----
+    # ---- DRAM-sender GlobalCircularBuffer ----
     # gcb_size must be a multiple of matmul's receiver fifo_page_size to avoid remote_cb_wait_front
     # wrap-math overshoot. fifo_page_size = in0_block_w * per_core_N * tile_bytes (matmul-computed
     # in0_block_w = K_per_shard_tiles).
@@ -180,7 +182,7 @@ def test_dram_core_prefetcher_BH_param(device, name, k_tiles_per_shard, n_tiles_
     bank_to_receivers = [
         (b, _bank_receivers_row_major(b, num_receivers_per_bank, ring_cols)) for b in range(num_dram_banks)
     ]
-    gcb = ttnn.create_dram_sender_global_circular_buffer(device, bank_to_receivers, gcb_size)
+    gcb = ttnn.create_global_circular_buffer_with_dram_senders(device, bank_to_receivers, gcb_size)
     logger.info(
         f"[{name}] M={M} K={K} N={N} ring={ring_size} recv/bank={num_receivers_per_bank} dtype={dtype} "
         f"K_per_shard={K_per_shard} fifo_page={in1_block_size_bytes} gcb_size={gcb_size}"
@@ -224,7 +226,7 @@ def test_dram_core_prefetcher_BH_param(device, name, k_tiles_per_shard, n_tiles_
     )
 
     # ---- Run: prefetcher -> matmul ----
-    ttnn.dram_prefetcher([tt_weight, addrs], num_layers=1, run_on_dram_cores=True, dram_sender_global_cb=gcb)
+    ttnn.dram_prefetcher([tt_weight, addrs], num_layers=1, global_cb=gcb)
     tt_out = ttnn.linear(
         tt_act,
         tt_weight,
@@ -232,7 +234,7 @@ def test_dram_core_prefetcher_BH_param(device, name, k_tiles_per_shard, n_tiles_
         memory_config=output_mem_config,
         compute_kernel_config=compute_kernel_config,
         dtype=ttnn.bfloat16,
-        dram_sender_global_cb=gcb,
+        global_cb=gcb,
     )
 
     # ---- Verify ----

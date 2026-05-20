@@ -23,7 +23,6 @@ set(TTNN_CORE_SRCS
     core/distributed/fabric_socket.cpp
     core/distributed/mpi_socket.cpp
     core/events.cpp
-    core/dram_sender_global_circular_buffer.cpp
     core/global_circular_buffer.cpp
     core/global_semaphore.cpp
     core/operation.cpp
@@ -318,7 +317,6 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn-nanobind/events.cpp
     cpp/ttnn-nanobind/fabric.cpp
     cpp/ttnn-nanobind/disaggregation.cpp
-    cpp/ttnn-nanobind/dram_sender_global_circular_buffer.cpp
     cpp/ttnn-nanobind/global_circular_buffer.cpp
     cpp/ttnn-nanobind/global_semaphore.cpp
     cpp/ttnn-nanobind/hd_socket.cpp

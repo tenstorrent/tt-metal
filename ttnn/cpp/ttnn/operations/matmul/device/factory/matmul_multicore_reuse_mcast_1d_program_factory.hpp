@@ -68,7 +68,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
-    const std::optional<const tt::tt_metal::experimental::DramSenderGlobalCircularBuffer>& dram_sender_global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     uint32_t start_cb_index,
     std::optional<CoreRangeSet> restricted_cores);
@@ -86,7 +85,6 @@ matmul_multi_core_reuse_mcast_1d_optimized_helper(
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
-    const std::optional<const tt::tt_metal::experimental::DramSenderGlobalCircularBuffer>& dram_sender_global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
 
 namespace reuse_mcast_1d_optimized_helpers {

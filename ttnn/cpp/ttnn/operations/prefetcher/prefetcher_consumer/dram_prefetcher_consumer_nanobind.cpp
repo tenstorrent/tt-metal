@@ -26,20 +26,14 @@ void bind_dram_prefetcher_consumer(nb::module_& mod) {
                 num_iters (int): total pages each receiver should consume (= num_layers * num_blocks).
                 page_size_bytes (int): receiver-side page size; must match what the sender pushes
                     (in0_block_w_tiles * n_tiles_per_receiver * tile_bytes).
-
-            Keyword Args:
-                global_cb (GlobalCircularBuffer, optional): for worker-core prefetcher path.
-                dram_sender_global_cb (DramSenderGlobalCircularBuffer, optional): for DRAM-core path.
-
-            Exactly one of `global_cb` / `dram_sender_global_cb` must be set.
+                global_cb (GlobalCircularBuffer): either a worker-sender or DRAM-sender GCB.
         )doc",
         &ttnn::dram_prefetcher_consumer,
         nb::arg("mesh_device"),
         nb::arg("num_iters"),
         nb::arg("page_size_bytes"),
         nb::kw_only(),
-        nb::arg("global_cb") = std::nullopt,
-        nb::arg("dram_sender_global_cb") = std::nullopt);
+        nb::arg("global_cb"));
 }
 
 }  // namespace ttnn::operations::dram_prefetcher_consumer::detail

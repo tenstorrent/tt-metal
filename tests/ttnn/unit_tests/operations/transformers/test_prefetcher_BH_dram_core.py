@@ -2,10 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Integration test for ttnn.dram_prefetcher in DRAM-core mode (run_on_dram_cores=True).
+"""Integration test for ttnn.dram_prefetcher in DRAM-core mode (DRAM-sender global_cb).
 
 Exercises the new DramPrefetcherDramCoreProgramFactory path:
-- Op accepts run_on_dram_cores=True + dram_sender_global_cb without raising.
+- Op accepts a DRAM-sender global_cb without raising.
 - The factory builds the program and the DRISC kernel JIT-compiles successfully.
 
 End-to-end data flow with a matmul receiver is out of scope for this prototype:
@@ -72,7 +72,7 @@ def test_dram_prefetcher_dram_core_factory_builds(device):
     )
     addrs = ttnn.as_tensor(addrs_dummy, device=device, dtype=ttnn.uint32, memory_config=addrs_mem_config)
 
-    gcb = ttnn.create_dram_sender_global_circular_buffer(device, [(bank_id, receivers)], size=4096)
+    gcb = ttnn.create_global_circular_buffer_with_dram_senders(device, [(bank_id, receivers)], size=4096)
 
     # The op accepts the arguments and the factory builds a Program / JIT-compiles the DRISC
     # kernel. In slow dispatch (required for DRAM-core kernels) the launch synchronously waits
@@ -85,11 +85,10 @@ def test_dram_prefetcher_dram_core_factory_builds(device):
         ttnn.dram_prefetcher(
             [data_tensor, addrs],
             num_layers=1,
-            run_on_dram_cores=True,
-            dram_sender_global_cb=gcb,
+            global_cb=gcb,
         )
     except RuntimeError as e:
         raised_message = str(e)
 
     if "Timeout" not in raised_message and raised_message != "":
-        pytest.fail(f"dram_prefetcher(run_on_dram_cores=True) raised non-timeout error: {raised_message}")
+        pytest.fail(f"dram_prefetcher(DRAM-sender global_cb) raised non-timeout error: {raised_message}")

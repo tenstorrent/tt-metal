@@ -18,13 +18,25 @@ class IDevice;
 
 namespace experimental {
 
+// Domain that the sender cores live in. Worker = standard sharded GCB where senders are
+// worker cores hosting their own slice of the cb_buffer_ in L1. Dram = senders are
+// programmable DRAM cores (Blackhole DRISCs) that own their staging L1 separately; the
+// cb_buffer_ is sharded over receivers only, and the receiver-side config_buffer slot
+// for `remote_pages_addr_override` points at DRISC L1 so the receiver's pages_acked
+// NoC-inc lands on the DRISC side.
+enum class SenderCoreType : uint8_t {
+    Worker = 0,
+    Dram = 1,
+};
+
 class GlobalCircularBuffer {
 public:
     GlobalCircularBuffer(
         IDevice* device,
         const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
         uint32_t size,
-        BufferType buffer_type = BufferType::L1);
+        BufferType buffer_type = BufferType::L1,
+        SenderCoreType sender_core_type = SenderCoreType::Worker);
 
     GlobalCircularBuffer(const GlobalCircularBuffer&) = default;
     GlobalCircularBuffer& operator=(const GlobalCircularBuffer&) = default;
@@ -43,11 +55,28 @@ public:
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping() const;
     IDevice* get_device() const { return this->device_; }
 
+    // Sender-domain accessors. For Worker GCBs the DRAM-specific ones return 0 / empty.
+    SenderCoreType sender_core_type() const { return sender_core_type_; }
+    // DRAM-only: physical worker NOC XY for each sender's receivers (used by the DRISC
+    // kernel's runtime args).
+    const std::vector<std::vector<CoreCoord>>& receiver_coords_per_sender() const {
+        return receiver_coords_per_sender_;
+    }
+    // DRAM-only: DRISC unreserved L1 base where the sender's pages_sent/acked counters live.
+    // The factory builds the DRISC L1 layout starting at this address.
+    DeviceAddr pages_sent_drisc_l1_base() const { return pages_sent_drisc_l1_base_; }
+    // DRAM-only: worker-L1 offset (inside the receiver's config page) where the
+    // receiver's local pages_sent counter lives. The DRISC NoC-incs to this address.
+    DeviceAddr pages_sent_worker_l1_base() const { return pages_sent_worker_l1_base_; }
+
     static constexpr auto attribute_names =
-        std::forward_as_tuple("sender_receiver_core_mapping", "size", "buffer_type");
+        std::forward_as_tuple("sender_receiver_core_mapping", "size", "buffer_type", "sender_core_type");
     auto attribute_values() const {
         return std::make_tuple(
-            this->sender_receiver_core_mapping_, this->size_, cb_buffer_.get_buffer()->buffer_type());
+            this->sender_receiver_core_mapping_,
+            this->size_,
+            cb_buffer_.get_buffer()->buffer_type(),
+            this->sender_core_type_);
     }
 
 private:
@@ -63,6 +92,11 @@ private:
     CoreRangeSet receiver_cores_;
     CoreRangeSet all_cores_;
     uint32_t size_ = 0;
+    SenderCoreType sender_core_type_ = SenderCoreType::Worker;
+    // DRAM-sender-only metadata (zero/empty for Worker senders).
+    std::vector<std::vector<CoreCoord>> receiver_coords_per_sender_;
+    DeviceAddr pages_sent_drisc_l1_base_ = 0;
+    DeviceAddr pages_sent_worker_l1_base_ = 0;
 };
 
 /**
@@ -78,7 +112,8 @@ GlobalCircularBuffer CreateGlobalCircularBuffer(
     IDevice* device,
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
-    BufferType buffer_type = BufferType::L1);
+    BufferType buffer_type = BufferType::L1,
+    SenderCoreType sender_core_type = SenderCoreType::Worker);
 
 /**
  * @brief Creates a Circular Buffer in L1 memory of specified cores using the address space of the

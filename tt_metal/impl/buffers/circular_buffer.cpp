@@ -4,7 +4,6 @@
 
 #include <buffer.hpp>
 #include <circular_buffer.hpp>
-#include <dram_sender_global_circular_buffer.hpp>
 #include <global_circular_buffer.hpp>
 #include <array>
 #include <string>
@@ -52,25 +51,6 @@ CircularBufferImpl::CircularBufferImpl(
         !this->config_.remote_buffer_indices().empty(),
         "Remote buffer indices should be specified when using a GlobalCircularBuffer");
     this->set_global_circular_buffer(global_circular_buffer);
-}
-
-CircularBufferImpl::CircularBufferImpl(
-    const CoreRangeSet& core_ranges,
-    const CircularBufferConfig& config,
-    const experimental::DramSenderGlobalCircularBuffer& dram_sender_global_circular_buffer) :
-    id_(reinterpret_cast<uintptr_t>(this)),
-    core_ranges_(core_ranges),
-    config_(config),
-    locally_allocated_address_(std::nullopt) {
-    this->validate_set_config_attributes();
-    TT_FATAL(
-        !config.globally_allocated_address().has_value(),
-        "Cannot create CircularBuffer with specified DramSenderGlobalCircularBuffer when config already linked to a "
-        "buffer");
-    TT_FATAL(
-        !this->config_.remote_buffer_indices().empty(),
-        "Remote buffer indices should be specified when using a DramSenderGlobalCircularBuffer");
-    this->set_dram_sender_global_circular_buffer(dram_sender_global_circular_buffer);
 }
 
 CircularBufferImpl::CircularBufferImpl(const CBDescriptor& descriptor) :
@@ -194,17 +174,6 @@ void CircularBufferImpl::set_global_circular_buffer(const experimental::GlobalCi
     this->shadow_global_circular_buffer_ = &global_circular_buffer;
     this->globally_allocated_address_ = global_circular_buffer.buffer_address();
     this->global_circular_buffer_config_address_ = global_circular_buffer.config_address();
-}
-
-void CircularBufferImpl::set_dram_sender_global_circular_buffer(
-    const experimental::DramSenderGlobalCircularBuffer& dram_sender_global_circular_buffer) {
-    TT_FATAL(
-        dram_sender_global_circular_buffer.receiver_cores().contains(this->core_ranges_),
-        "Specified cores are not contained in associated DramSenderGlobalCircularBuffer receiver cores");
-    this->config().set_globally_allocated_address(dram_sender_global_circular_buffer.cb_buffer());
-    this->shadow_dram_sender_global_circular_buffer_ = &dram_sender_global_circular_buffer;
-    this->globally_allocated_address_ = dram_sender_global_circular_buffer.buffer_address();
-    this->global_circular_buffer_config_address_ = dram_sender_global_circular_buffer.config_address();
 }
 
 DeviceAddr CircularBufferImpl::config_address() const { return this->global_circular_buffer_config_address_; }

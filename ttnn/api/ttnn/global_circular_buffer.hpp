@@ -24,4 +24,20 @@ GlobalCircularBuffer create_global_circular_buffer(
     uint32_t size,
     BufferType buffer_type = BufferType::L1);
 
+// DRAM-sender variant: senders are programmable DRAM cores identified by DRAM bank id.
+// The factory picks an unused DRAM subchannel for each bank id and builds the mapping with
+// SenderCoreType::Dram. The returned GlobalCircularBuffer is the same type as the worker
+// variant; the sender domain is recorded inside and queryable via sender_core_type().
+GlobalCircularBuffer create_global_circular_buffer_with_dram_senders(
+    IDevice* device,
+    const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
+    uint32_t size,
+    BufferType buffer_type = BufferType::L1);
+
+GlobalCircularBuffer create_global_circular_buffer_with_dram_senders(
+    MeshDevice* mesh_device,
+    const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
+    uint32_t size,
+    BufferType buffer_type = BufferType::L1);
+
 }  // namespace ttnn::global_circular_buffer

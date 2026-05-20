@@ -109,7 +109,7 @@ def test_dram_core_prefetcher_multi_tensor(device, num_tensors, num_layers):
     gcb_size = _round_up(per_recv_bytes_per_tensor, push_page_size)
 
     bank_to_receivers = [(b, _bank_receivers_row_major(b, _NUM_RECV_PER_BANK)) for b in range(_NUM_DRAM_BANKS)]
-    gcb = ttnn.create_dram_sender_global_circular_buffer(device, bank_to_receivers, gcb_size)
+    gcb = ttnn.create_global_circular_buffer_with_dram_senders(device, bank_to_receivers, gcb_size)
 
     # Per receiver per layer: 1 push per K-block per tensor.
     num_iters_total = num_layers * num_tensors * k_tiles
@@ -123,15 +123,14 @@ def test_dram_core_prefetcher_multi_tensor(device, num_tensors, num_layers):
     ttnn.dram_prefetcher(
         weights + [addrs],
         num_layers=num_layers,
-        run_on_dram_cores=True,
-        dram_sender_global_cb=gcb,
+        global_cb=gcb,
     )
     # Receiver: discard all pushed data.
     ttnn.dram_prefetcher_consumer(
         device,
         num_iters=num_iters_total,
         page_size_bytes=push_page_size,
-        dram_sender_global_cb=gcb,
+        global_cb=gcb,
     )
     ttnn.synchronize_device(device)
     logger.info(f"[multi_tensor] num_tensors={num_tensors} num_layers={num_layers} completed cleanly")

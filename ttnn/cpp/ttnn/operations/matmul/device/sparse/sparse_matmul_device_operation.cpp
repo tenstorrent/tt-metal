@@ -337,7 +337,6 @@ SparseMatmulParams create_sparse_matmul_attributes(
         /*transpose_b=*/false,
         parameters.output_tile,
         parameters.global_cb,
-        /*dram_sender_global_cb=*/std::nullopt,
         parameters.sub_device_id};
 
     auto matmul_struct =

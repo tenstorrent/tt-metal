@@ -227,7 +227,7 @@ def test_bench_dram_core_repeats(device):
     block_size_bytes = int((_K * (_N // num_dram_banks) // num_receivers_per_bank) * _DTYPE_BYTES)
     gcb_size = _gcb_size_capped(block_size_bytes)
     bank_to_receivers = [(b, _bank_receivers_row_major(b, num_receivers_per_bank)) for b in range(num_dram_banks)]
-    gcb = ttnn.create_dram_sender_global_circular_buffer(device, bank_to_receivers, gcb_size)
+    gcb = ttnn.create_global_circular_buffer_with_dram_senders(device, bank_to_receivers, gcb_size)
 
     program_config = _build_program_config(num_kernel_repeats)
     output_mem_config = ttnn.create_sharded_memory_config(
@@ -249,7 +249,7 @@ def test_bench_dram_core_repeats(device):
 
     # Correctness: single-repeat config first.
     cc_config = _build_program_config(num_kernel_repeats=1)
-    ttnn.dram_prefetcher([tt_weight, addrs], num_layers=1, run_on_dram_cores=True, dram_sender_global_cb=gcb)
+    ttnn.dram_prefetcher([tt_weight, addrs], num_layers=1, global_cb=gcb)
     cc_out = ttnn.linear(
         tt_act,
         tt_weight,
@@ -257,7 +257,7 @@ def test_bench_dram_core_repeats(device):
         memory_config=output_mem_config,
         compute_kernel_config=compute_kernel_config,
         dtype=ttnn.bfloat16,
-        dram_sender_global_cb=gcb,
+        global_cb=gcb,
     )
     cc_torch = ttnn.to_torch(cc_out)
     expected = pt_act.float() @ pt_weight.float()
@@ -266,9 +266,7 @@ def test_bench_dram_core_repeats(device):
     assert passing, f"[bench] PCC failed: {output_str}"
 
     def run_once():
-        ttnn.dram_prefetcher(
-            [tt_weight, addrs], num_layers=num_kernel_repeats, run_on_dram_cores=True, dram_sender_global_cb=gcb
-        )
+        ttnn.dram_prefetcher([tt_weight, addrs], num_layers=num_kernel_repeats, global_cb=gcb)
         return ttnn.linear(
             tt_act,
             tt_weight,
@@ -276,7 +274,7 @@ def test_bench_dram_core_repeats(device):
             memory_config=output_mem_config,
             compute_kernel_config=compute_kernel_config,
             dtype=ttnn.bfloat16,
-            dram_sender_global_cb=gcb,
+            global_cb=gcb,
         )
 
     # Warmup + 3 timed runs.

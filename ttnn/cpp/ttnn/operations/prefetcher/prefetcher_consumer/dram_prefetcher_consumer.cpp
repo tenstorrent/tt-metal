@@ -25,19 +25,14 @@ void dram_prefetcher_consumer(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     uint32_t num_iters,
     uint32_t page_size_bytes,
-    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
-    const std::optional<const tt::tt_metal::experimental::DramSenderGlobalCircularBuffer>& dram_sender_global_cb) {
+    const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb) {
     using namespace tt::tt_metal;
 
     TT_FATAL(mesh_device != nullptr, "mesh_device required");
     TT_FATAL(num_iters > 0, "num_iters must be > 0");
     TT_FATAL(page_size_bytes > 0, "page_size_bytes must be > 0");
-    TT_FATAL(
-        global_cb.has_value() != dram_sender_global_cb.has_value(),
-        "Exactly one of global_cb / dram_sender_global_cb must be set");
 
-    const CoreRangeSet receiver_cores =
-        global_cb.has_value() ? global_cb->receiver_cores() : dram_sender_global_cb->receiver_cores();
+    const CoreRangeSet receiver_cores = global_cb.receiver_cores();
     TT_FATAL(receiver_cores.num_cores() > 0, "GCB has no receiver cores");
 
     Program program = CreateProgram();
@@ -47,11 +42,7 @@ void dram_prefetcher_consumer(
     // in units of this page size.
     CircularBufferConfig cb_config(page_size_bytes);
     cb_config.remote_index(kRemoteCBId).set_page_size(page_size_bytes).set_data_format(tt::DataFormat::Float16_b);
-    if (dram_sender_global_cb.has_value()) {
-        experimental::CreateCircularBuffer(program, receiver_cores, cb_config, *dram_sender_global_cb);
-    } else {
-        experimental::CreateCircularBuffer(program, receiver_cores, cb_config, *global_cb);
-    }
+    experimental::CreateCircularBuffer(program, receiver_cores, cb_config, global_cb);
 
     const std::vector<uint32_t> compile_args = {kRemoteCBId, num_iters};
     CreateKernel(

@@ -315,8 +315,7 @@ Tensor matmul(
     const std::optional<const tt::tt_metal::Tile>& output_tile,
     std::optional<Tensor> optional_output_tensor,
     const std::optional<const GlobalCircularBuffer>& global_cb,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    const std::optional<const DramSenderGlobalCircularBuffer>& dram_sender_global_cb) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
@@ -341,7 +340,6 @@ Tensor matmul(
         transpose_b,
         output_tile,
         global_cb,
-        dram_sender_global_cb,
         sub_device_id};
 
     return bound_matmul(
@@ -367,8 +365,7 @@ Tensor linear(
     const std::optional<const tt::tt_metal::Tile>& output_tile,
     std::optional<ttnn::Tensor> optional_output_tensor,
     const std::optional<const GlobalCircularBuffer>& global_cb,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    const std::optional<const DramSenderGlobalCircularBuffer>& dram_sender_global_cb) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
@@ -389,7 +386,6 @@ Tensor linear(
         transpose_b,
         output_tile,
         global_cb,
-        dram_sender_global_cb,
         sub_device_id};
     return bound_matmul(input_tensor_a, input_tensor_b, bias, matmul_params, optional_output_tensor);
 }
@@ -408,8 +404,7 @@ std::vector<Tensor> matmul_batched_weights(
     const std::optional<const tt::tt_metal::Tile>& output_tile,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<const GlobalCircularBuffer>& global_cb,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    const std::optional<const DramSenderGlobalCircularBuffer>& dram_sender_global_cb) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     TT_FATAL(transpose_a == false, "cannot transpose A in batched matmul");
     TT_FATAL(transpose_b == false, "cannot transpose B in batched matmul");
     TT_FATAL(memory_config.has_value(), "memory_config must be provided");
@@ -438,7 +433,6 @@ std::vector<Tensor> matmul_batched_weights(
         transpose_b,
         output_tile,
         global_cb,
-        dram_sender_global_cb,
         sub_device_id};
 
     return ttnn::prim::matmul(
@@ -513,7 +507,6 @@ Tensor addmm(
         /*transpose_b=*/false,
         output_tile,
         /*global_cb=*/std::nullopt,
-        /*dram_sender_global_cb=*/std::nullopt,
         /*sub_device_id=*/std::nullopt};
     auto out_tensor = bound_matmul(mat1_tensor, mat2_tensor, std::nullopt, matmul_params, optional_output_tensor);
 

@@ -28,10 +28,12 @@ inline uint32_t align_up(uint32_t a, uint32_t align) { return (a + align - 1) & 
 
 DramPrefetcherDramCoreProgramFactory::cached_program_t DramPrefetcherDramCoreProgramFactory::create(
     const DramPrefetcherParams& args, const DramPrefetcherInputs& tensor_args, Tensor& /*output_tensor*/) {
-    TT_FATAL(args.run_on_dram_cores, "DramPrefetcherDramCoreProgramFactory requires run_on_dram_cores=true");
-    TT_FATAL(args.dram_sender_global_cb.has_value(), "dram_sender_global_cb must be provided");
+    TT_FATAL(args.global_cb.has_value(), "global_cb must be provided");
+    TT_FATAL(
+        args.global_cb->sender_core_type() == tt::tt_metal::experimental::SenderCoreType::Dram,
+        "DramPrefetcherDramCoreProgramFactory requires a DRAM-sender GlobalCircularBuffer");
 
-    const auto& gcb = *args.dram_sender_global_cb;
+    const auto& gcb = *args.global_cb;
     const auto& input_tensors = tensor_args.input_tensors;
     TT_FATAL(input_tensors.size() >= 2, "Need at least one data tensor + the tensor_addrs tensor");
 

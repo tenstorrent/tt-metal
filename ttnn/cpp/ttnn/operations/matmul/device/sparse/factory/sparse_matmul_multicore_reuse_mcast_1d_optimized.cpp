@@ -38,7 +38,6 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         /*transpose_b=*/false,
         operation_attributes.output_tile,
         operation_attributes.global_cb,
-        /*dram_sender_global_cb=*/std::nullopt,
         operation_attributes.sub_device_id};
 
     auto chosen_program_config = operations::matmul::get_program_config(

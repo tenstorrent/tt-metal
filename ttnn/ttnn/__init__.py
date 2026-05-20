@@ -161,11 +161,7 @@ from ttnn._ttnn.operations.debug import (
 
 from ttnn._ttnn.global_circular_buffer import (
     create_global_circular_buffer,
-)
-
-from ttnn._ttnn import dram_sender_global_circular_buffer
-from ttnn._ttnn.dram_sender_global_circular_buffer import (
-    create_dram_sender_global_circular_buffer,
+    create_global_circular_buffer_with_dram_senders,
 )
 
 from ttnn._ttnn.fabric import (

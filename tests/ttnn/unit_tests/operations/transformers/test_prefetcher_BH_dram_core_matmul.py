@@ -5,8 +5,8 @@
 """End-to-end matmul test for the DRAM-core prefetcher path.
 
 Wires:
-- ttnn.dram_prefetcher(run_on_dram_cores=True, dram_sender_global_cb=gcb)
-- ttnn.linear(dram_sender_global_cb=gcb, gather_in0=True 1D-mcast)
+- ttnn.dram_prefetcher(global_cb=gcb)
+- ttnn.linear(global_cb=gcb, gather_in0=True 1D-mcast)
 - Verifies via PCC against torch.matmul(in0, weight).
 """
 
@@ -118,7 +118,7 @@ def test_dram_core_prefetcher_matmul(device):
         bank_to_receivers.append(
             (b, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(start, 0), ttnn.CoreCoord(end, 0))}))
         )
-    gcb = ttnn.create_dram_sender_global_circular_buffer(device, bank_to_receivers, gcb_size)
+    gcb = ttnn.create_global_circular_buffer_with_dram_senders(device, bank_to_receivers, gcb_size)
 
     # ---- Matmul program config: 1D-mcast gather_in0, num_global_cb_receivers=1 ----
     in0_block_w = K // ring_size // ttnn.TILE_SIZE or 1
@@ -165,8 +165,7 @@ def test_dram_core_prefetcher_matmul(device):
     ttnn.dram_prefetcher(
         [tt_weight, addrs],
         num_layers=1,
-        run_on_dram_cores=True,
-        dram_sender_global_cb=gcb,
+        global_cb=gcb,
     )
 
     tt_out = ttnn.linear(
@@ -176,7 +175,7 @@ def test_dram_core_prefetcher_matmul(device):
         memory_config=output_mem_config,
         compute_kernel_config=compute_kernel_config,
         dtype=ttnn.bfloat16,
-        dram_sender_global_cb=gcb,
+        global_cb=gcb,
     )
 
     # ---- Verify ----

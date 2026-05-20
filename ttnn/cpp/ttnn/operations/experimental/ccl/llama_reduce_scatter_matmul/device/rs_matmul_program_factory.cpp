@@ -64,7 +64,6 @@ ttnn::device_operation::CachedProgram<Matmul_RS::Matmul_RS_PF::shared_variables_
             operation_attributes.matmul.untilize_out,
             fused_op_signaler,
             operation_attributes.matmul.global_cb,
-            operation_attributes.matmul.dram_sender_global_cb,
             sub_device_id /*sub_device_id*/,
             tt::CBIndex::c_6 /*start cb index*/,
             reduce_scatter_core_range);
@@ -90,7 +89,6 @@ ttnn::device_operation::CachedProgram<Matmul_RS::Matmul_RS_PF::shared_variables_
         operation_attributes.matmul.untilize_out,
         fused_op_signaler,
         operation_attributes.matmul.global_cb,
-        operation_attributes.matmul.dram_sender_global_cb,
         sub_device_id /*sub_device_id*/,
         tt::CBIndex::c_6 /*start cb index*/,
         reduce_scatter_core_range);

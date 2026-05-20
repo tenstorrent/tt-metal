@@ -183,7 +183,7 @@ def test_bw_dram_core_prefetcher(device):
             (b, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(b, 0), ttnn.CoreCoord(b, _NUM_RECV_PER_BANK - 1))}))
         )
     gcb_size = _build_gcb_size(page_size)
-    gcb = ttnn.create_dram_sender_global_circular_buffer(device, bank_to_receivers, gcb_size)
+    gcb = ttnn.create_global_circular_buffer_with_dram_senders(device, bank_to_receivers, gcb_size)
 
     logger.info(
         f"[dram_core_bw] K={_K} N={_N} {_DTYPE_NAME} ring={_NUM_RECEIVERS} num_layers={num_layers} "
@@ -195,15 +195,12 @@ def test_bw_dram_core_prefetcher(device):
         ttnn.dram_prefetcher(
             [tt_weight, addrs],
             num_layers=num_layers,
-            run_on_dram_cores=True,
-            dram_sender_global_cb=gcb,
+            global_cb=gcb,
             dram_core_k_block_w_tiles=_DRAM_CORE_K_BLOCK_W_TILES,
         )
 
     def consumer_fn():
-        ttnn.dram_prefetcher_consumer(
-            device, num_iters=num_iters_total, page_size_bytes=page_size, dram_sender_global_cb=gcb
-        )
+        ttnn.dram_prefetcher_consumer(device, num_iters=num_iters_total, page_size_bytes=page_size, global_cb=gcb)
 
     elapsed = _time_one_run(device, sender_fn, consumer_fn)
     bytes_per_run = num_iters_total * page_size * _NUM_RECEIVERS  # aggregate across all receivers

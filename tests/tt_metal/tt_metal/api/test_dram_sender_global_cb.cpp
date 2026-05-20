@@ -17,7 +17,8 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/dram_sender_global_circular_buffer.hpp>
+#include <tt-metalium/global_circular_buffer.hpp>
+#include <tt-metalium/dram_subchannel.hpp>
 #include <tt-metalium/dram_subchannel.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -72,7 +73,8 @@ TEST_F(DramSenderGCBFixture, SmokeOneSenderFourReceivers) {
 
     // Size: per-receiver fifo. Use 1KB.
     constexpr uint32_t kGcbSize = 1024;
-    auto gcb = experimental::CreateDramSenderGlobalCircularBuffer(mesh_device_, mapping, kGcbSize, BufferType::L1);
+    auto gcb = experimental::CreateGlobalCircularBuffer(
+        mesh_device_, mapping, kGcbSize, BufferType::L1, experimental::SenderCoreType::Dram);
 
     // Pre-load DRISC L1 with per-receiver data pattern starting at DRISC L1 UNRESERVED + offset
     // far enough above pages_sent_drisc_l1_base.
@@ -212,7 +214,8 @@ TEST_F(DramSenderGCBFixture, SmokeTwoProgramsAsyncSlowDispatch) {
     CoreCoord sender_logical{bank_id, unused_sub};
     CoreRangeSet receiver_cores(CoreRange({0, 0}, {kNumReceivers - 1, 0}));
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_logical, receiver_cores}};
-    auto gcb = experimental::CreateDramSenderGlobalCircularBuffer(mesh_device_, mapping, kGcbSize, BufferType::L1);
+    auto gcb = experimental::CreateGlobalCircularBuffer(
+        mesh_device_, mapping, kGcbSize, BufferType::L1, experimental::SenderCoreType::Dram);
 
     const auto& hal = MetalContext::instance().hal();
     const uint32_t drisc_l1_unreserved = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
@@ -319,7 +322,8 @@ TEST_F(DramSenderGCBFixture, RejectsDuplicateSender) {
     CoreRangeSet recv0(CoreRange({0, 0}, {0, 0}));
     CoreRangeSet recv1(CoreRange({1, 0}, {1, 0}));
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_logical, recv0}, {sender_logical, recv1}};
-    EXPECT_ANY_THROW(experimental::CreateDramSenderGlobalCircularBuffer(mesh_device_, mapping, 1024, BufferType::L1));
+    EXPECT_ANY_THROW(experimental::CreateGlobalCircularBuffer(
+        mesh_device_, mapping, 1024, BufferType::L1, experimental::SenderCoreType::Dram));
 }
 
 }  // namespace tt::tt_metal

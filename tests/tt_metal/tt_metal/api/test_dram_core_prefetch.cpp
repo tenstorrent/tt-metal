@@ -20,7 +20,8 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/dram_sender_global_circular_buffer.hpp>
+#include <tt-metalium/global_circular_buffer.hpp>
+#include <tt-metalium/dram_subchannel.hpp>
 #include <tt-metalium/dram_subchannel.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -81,7 +82,8 @@ protected:
         // GCB sized to hold at least num_blocks blocks per receiver.
         const uint32_t gcb_size = num_blocks * block_size;
         std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_logical, receiver_cores}};
-        auto gcb = experimental::CreateDramSenderGlobalCircularBuffer(mesh_device_, mapping, gcb_size, BufferType::L1);
+        auto gcb = experimental::CreateGlobalCircularBuffer(
+            mesh_device_, mapping, gcb_size, BufferType::L1, experimental::SenderCoreType::Dram);
 
         // DRISC L1 layout.
         const auto& hal = MetalContext::instance().hal();
