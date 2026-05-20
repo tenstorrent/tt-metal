@@ -47,7 +47,7 @@ public:
     // return true and the print server will be terminated.
     bool hang_detected();
 
-    class Impl;  // Abstract base; defined in dprint_server.cpp.
+    class Impl;  // Defined in dprint_server.cpp.
 
 private:
     std::unique_ptr<Impl> impl_;  // Pointer to implementation
