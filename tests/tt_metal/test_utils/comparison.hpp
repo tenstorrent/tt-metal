@@ -75,15 +75,20 @@ bool is_close_packed_vectors(
 }
 
 // Pearson correlation coefficient between two equally-sized float vectors.
-// Returns 1.0 for empty inputs or zero-variance vectors (degenerate).
+// Empty inputs are treated as a failure (caller has nothing to validate against).
+// Zero-variance handling: PCC is mathematically undefined when either input is
+// constant. We pass only when *both* sides are constant AND element-wise equal
+// (so constant-input identity checks still work); a constant device output
+// against a varying golden — the failure mode for FP8 corruption that saturates
+// to a single value — must not be silently accepted.
 inline bool check_pcc(const std::vector<float>& a, const std::vector<float>& b, double min_pcc) {
-    TT_FATAL(a.size() == b.size(), "compute_pcc -- a.size()={} == b.size()={}", a.size(), b.size());
+    TT_FATAL(a.size() == b.size(), "check_pcc -- a.size()={} == b.size()={}", a.size(), b.size());
 
-    double pcc = 0.0;
-    if (a.empty()) {
-        pcc = 1.0;
-    }
     const std::size_t n = a.size();
+    if (n == 0) {
+        log_error(tt::LogTest, "check_pcc: empty inputs — nothing to validate, returning false");
+        return false;
+    }
     double sum_a = 0.0, sum_b = 0.0, sum_a2 = 0.0, sum_b2 = 0.0, sum_ab = 0.0;
     for (std::size_t i = 0; i < n; i++) {
         double ai = a[i], bi = b[i];
@@ -93,15 +98,27 @@ inline bool check_pcc(const std::vector<float>& a, const std::vector<float>& b, 
         sum_b2 += bi * bi;
         sum_ab += ai * bi;
     }
-    double denom_a = (n * sum_a2) - (sum_a * sum_a);
-    double denom_b = (n * sum_b2) - (sum_b * sum_b);
-    if (denom_a == 0.0 || denom_b == 0.0) {
-        pcc = 1.0;
+    const double denom_a = (n * sum_a2) - (sum_a * sum_a);
+    const double denom_b = (n * sum_b2) - (sum_b * sum_b);
+    if (denom_a == 0.0 && denom_b == 0.0) {
+        if (a == b) {
+            return true;
+        }
+        log_error(tt::LogTest, "check_pcc: both inputs are constant but unequal — a[0]={}, b[0]={}", a[0], b[0]);
+        return false;
     }
-    pcc = (n * sum_ab - sum_a * sum_b) / std::sqrt(denom_a * denom_b);
+    if (denom_a == 0.0 || denom_b == 0.0) {
+        log_error(
+            tt::LogTest,
+            "check_pcc: one input is constant while the other varies (a const={}, b const={}) — PCC is undefined",
+            denom_a == 0.0,
+            denom_b == 0.0);
+        return false;
+    }
+    const double pcc = (n * sum_ab - sum_a * sum_b) / std::sqrt(denom_a * denom_b);
 
     if (pcc < min_pcc) {
-        log_info(tt::LogTest, "check_pcc: PCC = {} < min_pcc = {}", pcc, min_pcc);
+        log_error(tt::LogTest, "check_pcc: PCC = {} < min_pcc = {}", pcc, min_pcc);
         return false;
     }
     return true;

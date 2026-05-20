@@ -4,6 +4,7 @@
 
 #pragma once
 #include <algorithm>
+#include <limits>
 #include <tt-metalium/bfloat16.hpp>
 
 #include <tt-logger/tt-logger.hpp>
@@ -93,7 +94,9 @@ std::vector<ValueType> unpack_vector(const std::vector<PackType>& values) {
     using bits_type = decltype(sized_unsigned.template operator()<sizeof(ValueType)>());
     constexpr unsigned int num_values_to_unpack = sizeof(PackType) / sizeof(ValueType);
     std::vector<ValueType> results = {};
-    constexpr unsigned long bitmask = (1 << (sizeof(ValueType) * CHAR_BIT)) - 1;
+    // Width-safe mask: shifting by sizeof(ValueType)*CHAR_BIT is UB when it
+    // equals the width of the operand type (e.g. ValueType=uint32_t ⇒ shift by 32).
+    constexpr PackType bitmask = static_cast<PackType>(std::numeric_limits<bits_type>::max());
     std::for_each(values.begin(), values.end(), [&](const PackType& value) {
         PackType current_value = value;
         for (unsigned j = 0; j < num_values_to_unpack; j++) {
