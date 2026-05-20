@@ -216,7 +216,7 @@ class ZImageTransformerTTNN(LightweightModule):
 
     # ── Optimized norm ─────────────────────────────────────────────────────────
 
-    def _rms_norm(self, x, norm_weight, scale_inv_dim, eps, hidden_dim):
+    def _rms_norm(self, x, norm_weight):
         """Fused RMS norm via ttnn.rms_norm."""
         x = self._ensure_tile(x)
         return ttnn.rms_norm(
@@ -473,9 +473,6 @@ class ZImageTransformerTTNN(LightweightModule):
         x_normed = self._rms_norm(
             cap_feats_2d,
             norm_weight=self.weights["cap_embedder.0.weight"],
-            scale_inv_dim=self.weights["_scale_cap"],
-            eps=self.weights["_eps_cap"],
-            hidden_dim=2560,
         )
         ttnn.deallocate(cap_feats_2d, False)
         x_matmul = ttnn.matmul(
@@ -711,9 +708,6 @@ class ZImageTransformerTTNN(LightweightModule):
         norm1_normed = self._rms_norm(
             x_3d,
             self.weights[f"{block_prefix}.attention_norm1.weight"],
-            self.weights["_scale_hidden"],
-            self.weights["_eps_hidden"],
-            HIDDEN_DIM,
         )
         norm1_x = ttnn.multiply(
             norm1_normed, scale_msa, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -725,9 +719,6 @@ class ZImageTransformerTTNN(LightweightModule):
         norm2_out = self._rms_norm(
             attn_out,
             self.weights[f"{block_prefix}.attention_norm2.weight"],
-            self.weights["_scale_hidden"],
-            self.weights["_eps_hidden"],
-            HIDDEN_DIM,
         )
         ttnn.deallocate(attn_out, False)
         gated_attn = ttnn.multiply(
@@ -747,9 +738,6 @@ class ZImageTransformerTTNN(LightweightModule):
         norm3_normed = self._rms_norm(
             x,
             self.weights[f"{block_prefix}.ffn_norm1.weight"],
-            self.weights["_scale_hidden"],
-            self.weights["_eps_hidden"],
-            HIDDEN_DIM,
         )
         norm3_x = ttnn.multiply(
             norm3_normed, scale_mlp, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -763,9 +751,6 @@ class ZImageTransformerTTNN(LightweightModule):
         norm4_out = self._rms_norm(
             mlp_out,
             self.weights[f"{block_prefix}.ffn_norm2.weight"],
-            self.weights["_scale_hidden"],
-            self.weights["_eps_hidden"],
-            HIDDEN_DIM,
         )
         ttnn.deallocate(mlp_out, False)
         gated_mlp = ttnn.multiply(
@@ -790,18 +775,12 @@ class ZImageTransformerTTNN(LightweightModule):
         norm1_x = self._rms_norm(
             x_3d,
             self.weights[f"{block_prefix}.attention_norm1.weight"],
-            self.weights["_scale_hidden"],
-            self.weights["_eps_hidden"],
-            HIDDEN_DIM,
         )
         attn_out = self._attention(norm1_x, seq_len, block_prefix, is_caption=is_caption)
         ttnn.deallocate(norm1_x, False)
         norm2_out = self._rms_norm(
             attn_out,
             self.weights[f"{block_prefix}.attention_norm2.weight"],
-            self.weights["_scale_hidden"],
-            self.weights["_eps_hidden"],
-            HIDDEN_DIM,
         )
         ttnn.deallocate(attn_out, False)
         x = ttnn.add(
@@ -816,9 +795,6 @@ class ZImageTransformerTTNN(LightweightModule):
         norm3_x = self._rms_norm(
             x,
             self.weights[f"{block_prefix}.ffn_norm1.weight"],
-            self.weights["_scale_hidden"],
-            self.weights["_eps_hidden"],
-            HIDDEN_DIM,
         )
         norm3_2d = ttnn.reshape(norm3_x, [seq_len, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(norm3_x, False)
@@ -827,9 +803,6 @@ class ZImageTransformerTTNN(LightweightModule):
         norm4_out = self._rms_norm(
             mlp_out,
             self.weights[f"{block_prefix}.ffn_norm2.weight"],
-            self.weights["_scale_hidden"],
-            self.weights["_eps_hidden"],
-            HIDDEN_DIM,
         )
         ttnn.deallocate(mlp_out, False)
         x_residual = ttnn.add(x, norm4_out, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
