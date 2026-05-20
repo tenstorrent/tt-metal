@@ -80,7 +80,6 @@ from ...encoders.wav2vec2.audio_preprocess import (
     WAV2VEC2_HZ,
     WAV2VEC2_SAMPLE_RATE,
     get_audio_embed_bucket_fps,
-    linear_interpolation,
     load_audio_to_input_values,
 )
 from ...encoders.wav2vec2.config_wav2vec2 import Wav2Vec2Config
@@ -744,50 +743,66 @@ class WanPipelineS2V(WanPipeline):
         Returns ``(audio_BLNF_full, num_repeat)`` where ``audio_BLNF_full``
         has shape ``[1, num_layers, audio_dim, num_repeat * 80]``.
         """
+        import time
+
+        _t0 = time.perf_counter()
         input_values = load_audio_to_input_values(audio_prompt, self.audio_processor)
         T_raw = input_values.shape[-1]
         assert T_raw % S2V_AUDIO_SAMPLES_PER_CLIP == 0, (
             f"load_audio_to_input_values must snap to a multiple of " f"{S2V_AUDIO_SAMPLES_PER_CLIP}; got T_raw={T_raw}"
         )
         n_chunks = T_raw // S2V_AUDIO_SAMPLES_PER_CLIP
+        _t1 = time.perf_counter()
 
         # Per-chunk wav2vec2: every call has the canonical clip length so the
-        # on-device program cache hits the same shape for every chunk and
-        # every audio file. Each chunk returns ``num_layers`` ttnn tensors.
-        per_chunk_hidden_dev: list[list] = []
+        # on-device program cache hits the same shape for every chunk. Each
+        # chunk returns ``num_layers`` ttnn tensors; stack-on-device into
+        # ``[num_layers, B, T_chunk, C]`` so the D2H below is one transfer
+        # per chunk instead of ``num_layers`` (75 → 3 d2h calls on 16s audio).
+        # Three smaller d2h calls overlap better than one big one (async-DMA
+        # in flight), so we keep them separate and concat on host below.
+        per_chunk_stacked_dev: list = []
         for c in range(n_chunks):
             start = c * S2V_AUDIO_SAMPLES_PER_CLIP
             end = start + S2V_AUDIO_SAMPLES_PER_CLIP
             chunk = input_values[..., start:end]
-            per_chunk_hidden_dev.append(self.tt_audio_encoder(chunk, output_hidden_states=True))
+            chunk_hidden = self.tt_audio_encoder(chunk, output_hidden_states=True)
+            per_chunk_stacked_dev.append(ttnn.stack(chunk_hidden, dim=0))
+        ttnn.synchronize_device(self.mesh_device)
+        _t2 = time.perf_counter()
 
-        # Bring each layer to host then concat along time across chunks so the
-        # bucketing below sees ``[1, num_layers, T_50Hz_total, audio_dim]`` —
-        # exactly the layout the single-call path produced.
-        num_layers = len(per_chunk_hidden_dev[0])
-        per_layer_chunks: list[list[torch.Tensor]] = [[] for _ in range(num_layers)]
-        for chunk_hidden in per_chunk_hidden_dev:
-            for layer_idx, h in enumerate(chunk_hidden):
-                per_layer_chunks[layer_idx].append(
-                    fast_device_to_host(h, self.mesh_device, [None, None], ccl_manager=self.encoder_ccl_manager).float()
-                )
-        hidden_torch = torch.stack(
-            [torch.cat(per_layer_chunks[layer_idx], dim=1) for layer_idx in range(num_layers)],
-            dim=1,
+        # One D2H per chunk, then concat on host along time. Permute to
+        # ``[B, num_layers, T, C]`` to match downstream layout.
+        per_chunk_host: list[torch.Tensor] = [
+            fast_device_to_host(t, self.mesh_device, [None, None], ccl_manager=self.encoder_ccl_manager).float()
+            for t in per_chunk_stacked_dev
+        ]
+        hidden_torch = torch.cat(per_chunk_host, dim=2).permute(1, 0, 2, 3).contiguous()
+        num_layers = hidden_torch.shape[1]
+        _t3 = time.perf_counter()
+
+        # Vectorized interp + bucket across all layers in one pass. The
+        # per-layer loop was ~25 separate F.interpolate calls + 25 gathers;
+        # batching collapses both into single ops on the layer-batched
+        # [num_layers, C, T] tensor.
+        feat_LCT = hidden_torch[0].permute(0, 2, 1).contiguous()  # [L, C, T_50Hz]
+        T_50Hz = feat_LCT.shape[-1]
+        T_30Hz = int(T_50Hz / float(WAV2VEC2_HZ) * S2V_VIDEO_RATE)
+        feat_LCT_30Hz = torch.nn.functional.interpolate(
+            feat_LCT, size=T_30Hz, align_corners=True, mode="linear"
+        )  # [L, C, T_30Hz]
+        feat_LTC_30Hz = feat_LCT_30Hz.permute(0, 2, 1).contiguous()  # [L, T_30Hz, C]
+        aligned_LBC, num_repeat = get_audio_embed_bucket_fps(
+            feat_LTC_30Hz, fps=16, batch_frames=self._INFER_FRAMES_PIXEL, video_rate=S2V_VIDEO_RATE
         )
-
-        num_repeat: Optional[int] = None
-        bucketed_per_layer = []
-        for layer_idx in range(hidden_torch.shape[1]):
-            feat_30Hz = linear_interpolation(
-                hidden_torch[0, layer_idx], input_fps=WAV2VEC2_HZ, output_fps=S2V_VIDEO_RATE
-            )
-            aligned, this_num_repeat = get_audio_embed_bucket_fps(
-                feat_30Hz, fps=16, batch_frames=self._INFER_FRAMES_PIXEL, video_rate=S2V_VIDEO_RATE
-            )
-            bucketed_per_layer.append(aligned)
-            num_repeat = this_num_repeat  # identical across layers
-        audio_BLNF_full = torch.stack(bucketed_per_layer, dim=0).unsqueeze(0).permute(0, 1, 3, 2)
+        audio_BLNF_full = aligned_LBC.unsqueeze(0).permute(0, 1, 3, 2)
+        _t4 = time.perf_counter()
+        logger.info(
+            f"[wav2vec2 breakdown] n_chunks={n_chunks} load_audio={_t1 - _t0:.3f}s "
+            f"tt_encoder_fwd={_t2 - _t1:.3f}s d2h+concat={_t3 - _t2:.3f}s "
+            f"interp+bucket={_t4 - _t3:.3f}s ({num_layers} layers, batched) "
+            f"total={_t4 - _t0:.3f}s"
+        )
         return audio_BLNF_full, int(num_repeat)
 
     def _prepare_clip(

@@ -126,29 +126,30 @@ def get_audio_embed_bucket_fps(
     output from 50 Hz to ``video_rate`` Hz via :func:`linear_interpolation`.
 
     Args:
-        audio_embed: ``[T_audio, C]`` float features at ``video_rate``.
+        audio_embed: ``[T_audio, C]`` or ``[L, T_audio, C]`` float features at
+            ``video_rate``. The ``[L, ...]`` form gates the same gather across
+            multiple layers in one call.
         fps: Target video frame rate.
         batch_frames: Number of video frames in one clip.
         video_rate: Frame rate that ``audio_embed`` was resampled to.
 
     Returns:
         Tuple ``(aligned, num_clips)`` where ``aligned`` has shape
-        ``[num_clips * batch_frames, C]``. For single-clip audio
-        ``num_clips == 1`` and the output is ``[batch_frames, C]``.
+        ``[num_clips * batch_frames, C]`` (or ``[L, num_clips * batch_frames, C]``
+        for the layer-batched input).
     """
-    assert audio_embed.dim() == 2, f"expected [T, C] got {tuple(audio_embed.shape)}"
-    audio_frame_num, audio_dim = audio_embed.shape
+    assert audio_embed.dim() in (2, 3), f"expected [T, C] or [L, T, C] got {tuple(audio_embed.shape)}"
+    batched = audio_embed.dim() == 3
+    audio_frame_num = audio_embed.shape[-2]
     scale = video_rate / fps  # float
 
-    # min_batch_num is the number of full clips fitting in the audio
-    # (the reference always rounds up by +1 to guarantee enough samples).
+    # min_batch_num always rounds up by +1 to guarantee enough samples
+    # (reference ``wan/modules/s2v/audio_encoder.py:150``).
     min_batch_num = int(audio_frame_num / (batch_frames * scale)) + 1
     bucket_num = min_batch_num * batch_frames
 
-    # The reference's sample-index range extends past the real audio to
-    # accommodate the +1 rounding above; indices past the audio length
-    # produce zero embeddings (the model treats those as "no audio for
-    # this video frame"). See ``wan/modules/s2v/audio_encoder.py:163-184``.
+    # Sample-index range extends past the real audio to accommodate the +1
+    # rounding above; out-of-range indices produce zero embeddings.
     padd_audio_num = math.ceil(min_batch_num * batch_frames / fps * video_rate) - audio_frame_num
     total_frames = audio_frame_num + padd_audio_num
 
@@ -160,6 +161,10 @@ def get_audio_embed_bucket_fps(
     )
     in_range = frame_indices < audio_frame_num
     safe_indices = torch.where(in_range, frame_indices, torch.zeros_like(frame_indices))
-    aligned = audio_embed[safe_indices]
-    aligned = aligned * in_range.unsqueeze(-1).to(aligned.dtype)
+    if batched:
+        aligned = audio_embed[:, safe_indices, :]  # [L, num_buckets, C]
+        aligned = aligned * in_range.view(1, -1, 1).to(aligned.dtype)
+    else:
+        aligned = audio_embed[safe_indices]
+        aligned = aligned * in_range.unsqueeze(-1).to(aligned.dtype)
     return aligned, min_batch_num
