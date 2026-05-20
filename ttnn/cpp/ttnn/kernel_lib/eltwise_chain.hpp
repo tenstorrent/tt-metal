@@ -349,10 +349,41 @@ inline constexpr InputLifecycle Bulk = {WaitPolicy::Upfront, PopPolicy::AtEnd};
 inline constexpr InputLifecycle Pipelined = {WaitPolicy::Cumulative, PopPolicy::AtEnd};
 inline constexpr InputLifecycle CallerManaged = {WaitPolicy::None, PopPolicy::None};
 
+// Bulk wait + per-tile pop. Caller (or upstream stage) bulk-waits M tiles upfront,
+// chain drains one per iter. Used by SDPA in-place block helpers and groupnorm
+// sharded in-place gamma/beta (~5 sites).
+inline constexpr InputLifecycle BulkDrain = {WaitPolicy::Upfront, PopPolicy::PerTile};
+
+// Half-edge lifecycles — chain owns wait OR pop, not both. The chain emits its
+// edge; the caller is responsible for the other. Load-bearing for persistent
+// broadcast operands (gamma, beta, mean, recip_std, etc.) that outlive the
+// chain call.
+
+// Chain waits M upfront, never pops. Caller owns the final pop. Used by
+// reduction-result tiles consumed by many bcast pack calls (~52 sites).
+inline constexpr InputLifecycle HeldBulk = {WaitPolicy::Upfront, PopPolicy::None};
+
+// Chain waits cumulatively (i+1 per iter), never pops. Caller owns the final
+// pop. Persistent gamma/beta operands in normalization (~33 sites).
+inline constexpr InputLifecycle HeldCumulative = {WaitPolicy::Cumulative, PopPolicy::None};
+
+// Chain waits 1 per iter (idempotent), never pops. Caller owns the final pop.
+// Moreh helper `pop=0` caller param convention (~14 sites).
+inline constexpr InputLifecycle HeldStream = {WaitPolicy::PerTile, PopPolicy::None};
+
+// Caller bulk-waited externally, chain bulk-pops M at exit. Multi-phase
+// consumer chains in softmax cb_exps (~7 sites).
+inline constexpr InputLifecycle DeferredPop = {WaitPolicy::None, PopPolicy::AtEnd};
+
 /// Validates a caller-constructed `InputLifecycle` against the legal set.
 /// Used by every input element's `static_assert` at chain composition.
+/// Half-edge cells (HeldBulk, HeldCumulative, HeldStream, DeferredPop) are
+/// legal because the catalog audit found them load-bearing for persistent
+/// broadcast operands. Other half-edge combinations are static_assert
+/// rejected — see audit-confirmed cells in eltwise_taxonomy.md.
 constexpr bool is_legal_input_lifecycle(InputLifecycle lc) noexcept {
-    return lc == Streaming || lc == Chunked || lc == Bulk || lc == Pipelined || lc == CallerManaged;
+    return lc == Streaming || lc == Chunked || lc == Bulk || lc == Pipelined || lc == CallerManaged ||
+           lc == BulkDrain || lc == HeldBulk || lc == HeldCumulative || lc == HeldStream || lc == DeferredPop;
 }
 
 enum class ReservePolicy : uint8_t {
@@ -385,10 +416,13 @@ inline constexpr OutputLifecycle OutBulk = {ReservePolicy::Upfront, PushPolicy::
 // SDPA reduce_c family: bulk reserve + incremental push for downstream pipelining.
 inline constexpr OutputLifecycle OutBulkReservePerTile = {ReservePolicy::Upfront, PushPolicy::PerTile};
 inline constexpr OutputLifecycle OutBulkReservePerChunk = {ReservePolicy::Upfront, PushPolicy::PerChunk};
+// L1-accumulator pack helper (tt-train compute_utils): chain emits pack_tile only,
+// caller wraps the chain with its own reserve+push window. 4 catalog sites.
+inline constexpr OutputLifecycle OutCallerManaged = {ReservePolicy::None, PushPolicy::None};
 
 constexpr bool is_legal_output_lifecycle(OutputLifecycle lc) noexcept {
     return lc == OutStreaming || lc == OutChunked || lc == OutBulk || lc == OutBulkReservePerTile ||
-           lc == OutBulkReservePerChunk;
+           lc == OutBulkReservePerChunk || lc == OutCallerManaged;
 }
 
 /// Per-input operand kind. The output kind is always `Block` (single column
@@ -400,9 +434,22 @@ enum class OperandKind : uint8_t {
     Scalar,  // 1  × 1  — broadcast everywhere
 };
 
-/// Kind × InputLifecycle compatibility. Row / Col / Scalar operands only have
-/// fewer tiles than the iteration count, so per-tile / per-chunk / cumulative
-/// lifecycles would over-consume. Restricted to `Bulk` or `CallerManaged`.
+/// Kind × InputLifecycle compatibility.
+///
+/// Block: every legal lifecycle is allowed — iteration count Ht·Wt matches
+/// operand size.
+///
+/// Row / Col / Scalar: only lifecycles whose total pop count equals the
+/// operand's tile count M (M < Ht·Wt) are legal. PerTile / PerChunk /
+/// Cumulative pop policies would over-consume.
+/// Legal cells for Row/Col/Scalar:
+///   - Bulk             (wait M, pop M)
+///   - CallerManaged    (no chain edges)
+///   - HeldBulk         (wait M, never pop — chain holds for caller)
+///   - HeldCumulative   (cumulative wait to M, never pop)
+///   - DeferredPop      (caller pre-waited, chain bulk-pops M at end)
+/// Note: HeldCumulative on Scalar degenerates to HeldBulk (M=1) but is
+/// kept legal for symmetry.
 constexpr bool is_legal_kind_lifecycle(OperandKind kind, InputLifecycle lc) noexcept {
     if (!is_legal_input_lifecycle(lc)) {
         return false;
@@ -410,7 +457,8 @@ constexpr bool is_legal_kind_lifecycle(OperandKind kind, InputLifecycle lc) noex
     if (kind == OperandKind::Block) {
         return true;  // Block accepts every legal lifecycle
     }
-    return lc == Bulk || lc == CallerManaged;  // Row / Col / Scalar restricted to Bulk / CallerManaged
+    // Row / Col / Scalar: only lifecycles whose pop count matches operand size M.
+    return lc == Bulk || lc == CallerManaged || lc == HeldBulk || lc == HeldCumulative || lc == DeferredPop;
 }
 
 // =============================================================================

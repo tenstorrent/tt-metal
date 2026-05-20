@@ -77,11 +77,21 @@ enum class PopPolicy : uint8_t {
 
 struct InputLifecycle { WaitPolicy wait; PopPolicy pop; };
 
-inline constexpr InputLifecycle Streaming     = {WaitPolicy::PerTile,    PopPolicy::PerTile};
-inline constexpr InputLifecycle Chunked       = {WaitPolicy::PerChunk,   PopPolicy::PerChunk};
-inline constexpr InputLifecycle Bulk          = {WaitPolicy::Upfront,    PopPolicy::AtEnd};
-inline constexpr InputLifecycle Pipelined     = {WaitPolicy::Cumulative, PopPolicy::AtEnd};
-inline constexpr InputLifecycle CallerManaged = {WaitPolicy::None,       PopPolicy::None};
+// Full-edge — chain owns both wait and pop (or neither for CallerManaged).
+inline constexpr InputLifecycle Streaming      = {WaitPolicy::PerTile,    PopPolicy::PerTile};
+inline constexpr InputLifecycle Chunked        = {WaitPolicy::PerChunk,   PopPolicy::PerChunk};
+inline constexpr InputLifecycle Bulk           = {WaitPolicy::Upfront,    PopPolicy::AtEnd};
+inline constexpr InputLifecycle Pipelined      = {WaitPolicy::Cumulative, PopPolicy::AtEnd};
+inline constexpr InputLifecycle CallerManaged  = {WaitPolicy::None,       PopPolicy::None};
+inline constexpr InputLifecycle BulkDrain      = {WaitPolicy::Upfront,    PopPolicy::PerTile};   // bulk wait + drain per-tile
+
+// Half-edge — chain owns exactly one edge. Load-bearing for persistent
+// broadcast operands (mean, recip_std, gamma, beta) that outlive the chain
+// call. Catalog audit: ~110 sites use these.
+inline constexpr InputLifecycle HeldBulk       = {WaitPolicy::Upfront,    PopPolicy::None};      // chain holds; caller pops
+inline constexpr InputLifecycle HeldCumulative = {WaitPolicy::Cumulative, PopPolicy::None};      // cumulative hold
+inline constexpr InputLifecycle HeldStream     = {WaitPolicy::PerTile,    PopPolicy::None};      // per-call hold (idempotent)
+inline constexpr InputLifecycle DeferredPop    = {WaitPolicy::None,       PopPolicy::AtEnd};     // caller waited, chain pops
 ```
 
 ```cpp
@@ -95,55 +105,72 @@ inline constexpr OutputLifecycle OutChunked               = {ReservePolicy::PerC
 inline constexpr OutputLifecycle OutBulk                  = {ReservePolicy::Upfront,  PushPolicy::AtEnd};
 inline constexpr OutputLifecycle OutBulkReservePerTile    = {ReservePolicy::Upfront,  PushPolicy::PerTile};
 inline constexpr OutputLifecycle OutBulkReservePerChunk   = {ReservePolicy::Upfront,  PushPolicy::PerChunk};
+inline constexpr OutputLifecycle OutCallerManaged         = {ReservePolicy::None,     PushPolicy::None};
 ```
 
-The two extra output combos (`OutBulkReservePerTile`, `OutBulkReservePerChunk`)
-cover the SDPA `reduce_c` pattern (~4 catalog sites) where downstream needs
-incremental visibility. Without these the chain would force those callers to
-either OOS or stall downstream.
+The two `OutBulkReserve*` cells cover the SDPA `reduce_c` pattern (~17 catalog
+sites) where downstream needs incremental visibility. `OutCallerManaged` covers
+the tt-train L1-accumulator pack helper (4 sites) where the chain emits only
+the pack_tile and the caller wraps reserve/push externally.
 
 ## Legal cells (named + validated)
 
-`is_legal_lifecycle()` returns true for:
+`is_legal_input_lifecycle()` / `is_legal_output_lifecycle()` accept the named
+constants above. Any custom struct literal whose `(wait, pop)` pair is not in
+the legal set static_asserts at chain composition.
 
 ```
-Input side (legal InputLifecycle values):
-  {PerTile,    PerTile}     Streaming
-  {PerChunk,   PerChunk}    Chunked
-  {Upfront,    AtEnd}       Bulk
-  {Cumulative, AtEnd}       Pipelined
-  {None,       None}        CallerManaged
+Input legal cells (10):
+  Streaming        {PerTile,    PerTile}        full-edge
+  Chunked          {PerChunk,   PerChunk}       full-edge
+  Bulk             {Upfront,    AtEnd}          full-edge
+  Pipelined        {Cumulative, AtEnd}          full-edge
+  CallerManaged    {None,       None}           no edges
+  BulkDrain        {Upfront,    PerTile}        full-edge (~5 sites, in-place patterns)
+  HeldBulk         {Upfront,    None}           half-edge (~52 sites)
+  HeldCumulative   {Cumulative, None}           half-edge (~33 sites)
+  HeldStream       {PerTile,    None}           half-edge (~14 sites)
+  DeferredPop      {None,       AtEnd}          half-edge (~7 sites)
 
-Output side (legal OutputLifecycle values):
-  {PerTile,    PerTile}     OutStreaming
-  {PerChunk,   PerChunk}    OutChunked
-  {Upfront,    AtEnd}       OutBulk
-  {Upfront,    PerTile}     OutBulkReservePerTile     (SDPA reduce_c)
-  {Upfront,    PerChunk}    OutBulkReservePerChunk    (SDPA reduce_c variant)
+Output legal cells (6):
+  OutStreaming               {PerTile,  PerTile}
+  OutChunked                 {PerChunk, PerChunk}
+  OutBulk                    {Upfront,  AtEnd}
+  OutBulkReservePerTile      {Upfront,  PerTile}    SDPA reduce_c (~17 sites)
+  OutBulkReservePerChunk     {Upfront,  PerChunk}   layernorm welford (~3 sites)
+  OutCallerManaged           {None,     None}       L1-acc helper (4 sites)
 ```
 
-All other pairs static_assert at construction. Half-edge combos
-(`{PerTile, None}`, `{None, PerTile}`, etc.) are deliberately not in the legal
-set — see "Why no half-edge ownership" below.
+Combinations not in the legal set are static_asserted. Specifically rejected:
+- `{None, PerTile}` (caller-wait + chain-per-tile-pop — no catalog evidence)
+- `{None, PerChunk}` (same)
+- `{PerTile, PerChunk}` / `{PerChunk, PerTile}` (mismatched rates)
+- `{PerTile, AtEnd}` (1 niche site at topk_final — accepted as struct literal, not named)
+- `{Cumulative, PerTile}` / `{Cumulative, PerChunk}` (no catalog evidence)
+- `{Cumulative, Cumulative}` (reduce-into-DST — OOS, fan-in cardinality)
 
-## Input matrix — 12 legal / 20
-
-```
-              Streaming    Chunked    Bulk    Pipelined    CallerManaged
-              ─────────    ───────    ────    ─────────    ─────────────
-  Block       ✓            ✓          ✓       ✓            ✓
-  Row         ✗ E1         ✗ E1       ✓       ✗ E1         ✓
-  Col         ✗ E1         ✗ E1       ✓       ✗ E1         ✓
-  Scalar      ✗ E1         ✗ E1       ✓ N2    ✗ E1         ✓
-```
+## Input matrix — 25 legal cells / 40
 
 ```
-E1  static_assert: "Row/Col/Scalar kinds have count M < Ht·Wt iterations.
-                    Streaming/Chunked/Pipelined would over-consume.
-                    Use Bulk (chain emits one wait+pop) or CallerManaged
-                    (operand lives across multiple chain calls)."
+                Streaming  Chunked  Bulk  Pipelined  CallerManaged  BulkDrain  HeldBulk  HeldCumulative  HeldStream  DeferredPop
+                ─────────  ───────  ────  ─────────  ─────────────  ─────────  ────────  ──────────────  ──────────  ───────────
+  Block         ✓          ✓        ✓     ✓          ✓              ✓          ✓         ✓               ✓           ✓
+  Row           ✗ E1       ✗ E1     ✓     ✗ E1       ✓              ✗ E1       ✓         ✓               ✗ E1        ✓
+  Col           ✗ E1       ✗ E1     ✓     ✗ E1       ✓              ✗ E1       ✓         ✓               ✗ E1        ✓
+  Scalar        ✗ E1       ✗ E1     ✓ N2  ✗ E1       ✓              ✗ E1       ✓         ✓ N3            ✗ E1        ✓
+```
 
-N2  Scalar + Bulk degenerates to wait(1) + pop(1). Cleanest legal cell.
+```
+E1  static_assert: "Row/Col/Scalar kinds have operand size M < Ht·Wt iterations.
+                    Lifecycles that pop more than M times (Streaming, Chunked,
+                    Pipelined, BulkDrain, HeldStream) would over-consume.
+                    Use a Bulk-family, Held*, DeferredPop, or CallerManaged
+                    lifecycle whose pop count equals M (or zero)."
+
+N2  Scalar + Bulk degenerates to wait(1) + pop(1).
+
+N3  Scalar + HeldCumulative degenerates to Scalar + HeldBulk (M=1).
+    Kept legal for naming symmetry across kinds.
 ```
 
 ## Output matrix — 5 legal cells
@@ -158,21 +185,30 @@ The two `OutBulkReserve*` cells cover the SDPA `reduce_c` family (4 catalog
 sites). They share the bulk reserve discipline with `OutBulk` but emit
 push edges incrementally for downstream pipelining.
 
-## Why no half-edge ownership
+## Half-edge ownership — supported, with limits
 
-`{PerTile, None}` (chain waits, caller pops) and `{None, PerTile}` (caller
-waits, chain pops) are deliberately omitted. They look expressive but the
-catalog evidence shows zero in-scope sites benefit:
+Per catalog audit (~110 sites use half-edges), the chain supports five
+half-edge cells where caller owns one edge:
 
-- "Caller bulk-waited externally, chain pops per call" composes cleanly as
-  chain-`Bulk` — the per-call `cb_wait_front` becomes a ~1ns idempotent
-  comparison when the producer already pushed everything.
-- "Chain waits, caller pops later" is a deferred-cleanup pattern that lives
-  better as cross-chain composition (caller-managed across multiple chain
-  calls).
+```
+Cell              Chain emits           Caller emits         Use case
+────────────────  ──────────────────    ──────────────────   ─────────────────────────────────
+HeldBulk          cb_wait_front(M)      cb_pop_front(M)      Reduction-result held by chain
+HeldCumulative    cumulative wait       cb_pop_front(M)      gamma/beta persistent
+HeldStream        per-call wait(1)      cb_pop_front(M)      moreh helper `pop=0` convention
+DeferredPop       —                     cb_wait_front(N)     Caller pre-waited (prev phase),
+                                        + chain does pop     chain owns cleanup
+```
 
-`CallerManaged = {None, None}` is the atomic hand-off contract. Anything
-else, the chain owns both edges.
+Half-edge cells NOT in the legal set (catalog showed zero benefit):
+- `{None, PerTile}` / `{None, PerChunk}`: caller-wait + chain-per-tile-pop has
+  no observed use case. The asymmetric direction (caller waits big, chain pops
+  small slices) doesn't show up because per-slice pops are usually paired with
+  per-slice waits (Chunked).
+- `{Cumulative, PerTile}` / `{Cumulative, PerChunk}`: no catalog evidence.
+
+These rejected combinations static_assert at chain composition with a
+diagnostic naming a legal alternative.
 
 ## Compatibility rules enforced by static_assert
 
@@ -344,22 +380,34 @@ Any NOT_COVERED count motivates adding to the matrix.
 ## Final audit result (666 sites)
 
 ```
-SUPPORTABLE                           655 / 666   98.4%
-  COVERED                             361         54.2%
-  COVERED_AFTER_REFACTOR              111         16.7%
-  OUT_OF_SCOPE                        183         27.5%
+SUPPORTABLE                                ~660 / 666   ~99%
+  Full-edge (Streaming/Chunked/Bulk/        357         54%
+   Pipelined/CallerManaged + BulkDrain)
+  Half-edge (HeldBulk/HeldCumulative/      ~110        17%
+   HeldStream/DeferredPop)
+  COVERED_AFTER_REFACTOR (reader-side       ~10         1.5%
+   CB slicing)
+  OUT_OF_SCOPE                              183        27.5%
 
-NOT SUPPORTABLE                        11 / 666    1.6%
-  intimg conditional pack             2           PackTile::when(predicate) — not modeled
-  intimg pinned absolute output slot  1           caller-pinned slot — deliberately excluded
-  groupnorm in-place CB rewrite       1           same CB in & out — deliberately excluded
-  bcast-fill unary_bcast LLK          6           1 DST → N CB slots (special LLK, OOS)
-  layernorm barrier ordering          1           non-canonical sync (refactor candidate)
+NOT SUPPORTABLE                              ~6 / 666   ~0.9%
+  intimg conditional pack                   2           PackTile::when(predicate) — not modeled
+  intimg pinned absolute output slot        1           caller-pinned slot — deliberately excluded
+  groupnorm in-place CB rewrite             1           same CB in & out — deliberately excluded
+  bcast-fill unary_bcast LLK                6 (OOS)     1 DST → N CB slots (special LLK, OOS)
+  Drained {Cumulative, Cumulative}          4 (OOS)    reduce-into-DST, fan-in cardinality
+  topk_final staged-flush                   1 (legal   {PerTile, AtEnd} via struct literal,
+                                                       no named constant)
 ```
 
-Compared to the single-axis design (97.7%), adding `OutBulkReservePerTile` and
-`OutBulkReservePerChunk` reclaims the 4 SDPA `reduce_c` sites without enabling
-half-edge ownership.
+Coverage progression:
+- Single-axis design (CopyTilePolicy enum):     97.7%
+- Two-axis, named full-edge only:               97.7% (same)
+- Two-axis + 5 half-edge named constants:       ~99%
+- Two-axis + half-edge + OutCallerManaged:      ~99% (one more cell named)
+
+The 5 half-edge cells reclaim ~110 sites without compromising the static_assert
+discipline — rejected combinations are still caught at chain composition with
+specific diagnostics naming legal alternatives.
 
 ## Open questions for the audit
 
