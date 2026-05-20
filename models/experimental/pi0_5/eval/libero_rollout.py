@@ -167,6 +167,40 @@ class Pi0_5LiberoAdapter:
         self.cfg = cfg
         self.device = torch.device("cpu")
 
+        # Optional TTNN trace state. Gated by PI0_LIBERO_TRACE=1. When active,
+        # each `predict_chunk` writes new inputs into persistent on-device
+        # buffers via `ttnn.copy_host_to_device_tensor` and then replays a
+        # captured trace, dropping per-chunk wall-clock from the untraced
+        # ~370 ms toward the trace-perf baseline (~60 ms). The trace is
+        # rebuilt when the (task_desc, num_denoising_steps) key changes —
+        # different prompt -> different lang_mask -> different upstream
+        # mask/RoPE artifacts.
+        import os as _os
+
+        self._use_trace = backend == "ttnn" and _os.environ.get("PI0_LIBERO_TRACE", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+        self._trace_id = None
+        self._trace_actions_output = None
+        self._trace_key = None
+        # Pre-allocated persistent input buffers, populated lazily on first
+        # chunk so we know the shapes coming from the rollout.
+        self._trace_images_host = None  # List[ttnn.Tensor] (host-side)
+        self._trace_images_dev = None  # List[ttnn.Tensor] (device-resident)
+        self._trace_img_masks_host = None
+        self._trace_img_masks_dev = None
+        self._trace_tokens_host = None
+        self._trace_tokens_dev = None
+        self._trace_lang_mask_host = None
+        self._trace_lang_mask_dev = None
+        self._trace_noise_host = None
+        # Action-horizon padded to tile boundary (must match
+        # model.x_t_ttnn shape).
+        self._trace_ah_padded = ((cfg.action_horizon + 31) // 32) * 32
+
     # --- image ---
     @staticmethod
     def _resize_with_pad_centered(img_hwc_uint8: np.ndarray, size: int = 224) -> np.ndarray:
@@ -335,6 +369,13 @@ class Pi0_5LiberoAdapter:
                 )
             self.model.denoising.config.num_steps = original_steps
             actions_np = actions[0].float().cpu().numpy()
+        elif self._use_trace:
+            # === TTNN backend with persistent buffers + trace replay ===
+            # Path through `_predict_chunk_traced` does the per-chunk
+            # `copy_host_to_device_tensor` + `execute_trace` dance. Trace is
+            # captured lazily on the first chunk per task and reused across
+            # chunks within that task. See class init for the rationale.
+            actions_np = self._predict_chunk_traced(images, img_masks, tokens, lang_mask, num_denoising_steps)
         else:
             # TTNN backend: convert torch inputs → ttnn, run, convert back.
             ttnn = self._ttnn
@@ -413,6 +454,227 @@ class Pi0_5LiberoAdapter:
             ttnn.deallocate(out)
 
         return self._denormalize_actions(actions_np)  # (50, 7)
+
+    # -----------------------------------------------------------------
+    # Trace path (PI0_LIBERO_TRACE=1)
+    # -----------------------------------------------------------------
+
+    def _build_noise_torch(self) -> torch.Tensor:
+        """Match Pi0_5ModelTTNN's noise-prep convention: (1, ah_padded, action_dim)
+        with the action_horizon rows filled with N(0, 1) and the tail zero.
+        Caller writes this into model.x_t_ttnn each chunk so the captured
+        trace replays with fresh noise (matches openpi's per-call resample).
+        """
+        ah = self.cfg.action_horizon
+        ah_padded = self._trace_ah_padded
+        noise_padded = torch.zeros(1, ah_padded, self.cfg.action_dim, dtype=torch.float32)
+        noise_padded[:, :ah, :] = torch.randn(1, ah, self.cfg.action_dim)
+        return noise_padded
+
+    def _ensure_trace_buffers(self, images, img_masks, tokens, lang_mask):
+        """Lazily allocate the persistent input buffers (host + device pairs)
+        on the first call. Shapes locked in from the first chunk; all
+        subsequent calls write into the same buffers via
+        ttnn.copy_host_to_device_tensor.
+        """
+        if self._trace_images_host is not None:
+            return
+        ttnn = self._ttnn
+        device = self.ttnn_device
+
+        # Image buffers — one per camera, matching the untraced layout
+        # (TILE bf16 DRAM).
+        self._trace_images_host = []
+        self._trace_images_dev = []
+        for img in images:
+            host_t = ttnn.from_torch(img, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            dev_t = ttnn.from_torch(
+                img,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self._trace_images_host.append(host_t)
+            self._trace_images_dev.append(dev_t)
+
+        # Image-mask buffers (one per camera, ROW_MAJOR bf16 L1)
+        self._trace_img_masks_host = []
+        self._trace_img_masks_dev = []
+        for m in img_masks:
+            host_t = ttnn.from_torch(m.float(), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+            dev_t = ttnn.from_torch(
+                m.float(),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            self._trace_img_masks_host.append(host_t)
+            self._trace_img_masks_dev.append(dev_t)
+
+        # Language token + mask buffers
+        self._trace_tokens_host = ttnn.from_torch(
+            tokens.to(torch.uint32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
+        self._trace_tokens_dev = ttnn.from_torch(
+            tokens.to(torch.uint32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+        )
+        self._trace_lang_mask_host = ttnn.from_torch(
+            lang_mask.to(torch.float32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        )
+        self._trace_lang_mask_dev = ttnn.from_torch(
+            lang_mask.to(torch.float32),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+        # Noise host-side staging tensor — write to model.x_t_ttnn each call.
+        self._trace_noise_host = ttnn.from_torch(
+            self._build_noise_torch(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        )
+
+    def _write_trace_inputs(self, images, img_masks, tokens, lang_mask, refresh_noise: bool = True):
+        """Write the current chunk's data into the persistent device buffers
+        via `ttnn.copy_host_to_device_tensor`. No new device allocations.
+        """
+        ttnn = self._ttnn
+
+        # Images — rebuild host tensors (tile cast happens here) and copy.
+        for i, img in enumerate(images):
+            host_t = ttnn.from_torch(img, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            ttnn.copy_host_to_device_tensor(host_t, self._trace_images_dev[i])
+            self._trace_images_host[i] = host_t  # keep ref alive
+
+        for i, m in enumerate(img_masks):
+            host_t = ttnn.from_torch(m.float(), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.copy_host_to_device_tensor(host_t, self._trace_img_masks_dev[i])
+            self._trace_img_masks_host[i] = host_t
+
+        host_t = ttnn.from_torch(tokens.to(torch.uint32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.copy_host_to_device_tensor(host_t, self._trace_tokens_dev)
+        self._trace_tokens_host = host_t
+
+        host_t = ttnn.from_torch(lang_mask.to(torch.float32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        ttnn.copy_host_to_device_tensor(host_t, self._trace_lang_mask_dev)
+        self._trace_lang_mask_host = host_t
+
+        if refresh_noise:
+            noise_host = ttnn.from_torch(self._build_noise_torch(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            ttnn.copy_host_to_device_tensor(noise_host, self.model.x_t_ttnn)
+            self._trace_noise_host = noise_host
+
+    def _predict_chunk_traced(self, images, img_masks, tokens, lang_mask, num_denoising_steps: int) -> np.ndarray:
+        """Trace-replay path for one chunk. See class init for context.
+
+        Flow:
+          1. Lazy: allocate persistent input buffers (`_ensure_trace_buffers`).
+          2. If task changed (key mismatch): release old trace, re-stage
+             upstream artifacts, run one warmup forward, capture trace.
+          3. Write new chunk inputs into the persistent buffers + refresh
+             noise via copy_host_to_device_tensor.
+          4. `ttnn.execute_trace`.
+          5. Read `_trace_actions_output` back to host.
+        """
+        ttnn = self._ttnn
+        device = self.ttnn_device
+
+        from models.experimental.pi0_5.tt.ttnn_pi0_5_model import use_upstream_masks
+
+        # Cache key: trace must be rebuilt when the captured graph's tensor
+        # references change. The lang_mask, lang_tokens, and image tensors
+        # are referenced by buffer in the trace, so their values can change
+        # via copy_host_to_device_tensor without invalidating capture.
+        # Things that DO require re-capture:
+        #   - num_denoising_steps: changes the captured op count.
+        #   - lang_real_count when use_upstream_masks(): the mask/RoPE
+        #     artifacts are rebuilt by prepare_upstream_artifacts when the
+        #     real-token count changes, which produces a new tensor (new
+        #     address) — the captured trace still points at the old one.
+        #   - tokens.shape[-1]: changes the lang dim shape.
+        #   - img_mask pattern: changes which images contribute to the
+        #     prefix attention mask (upstream path) and changes pad masks.
+        key = (
+            int(tokens.shape[-1]),
+            tuple(int(m.any().item()) for m in img_masks),
+            int(num_denoising_steps),
+            # Only include lang_real_count when upstream artifacts depend on
+            # it. In the default lerobot path the prompt is the discretized
+            # state which re-tokenizes per chunk, but the captured graph
+            # doesn't depend on that count — including it would trigger
+            # spurious re-captures (0.8 s each).
+            int(lang_mask.sum().item()) if use_upstream_masks() else None,
+        )
+
+        self._ensure_trace_buffers(images, img_masks, tokens, lang_mask)
+
+        if self._trace_id is None or self._trace_key != key:
+            # Release any stale trace + output reference before re-capturing.
+            if self._trace_id is not None:
+                if self._trace_actions_output is not None:
+                    ttnn.deallocate(self._trace_actions_output)
+                ttnn.release_trace(device, self._trace_id)
+                self._trace_id = None
+                self._trace_actions_output = None
+
+            # Set denoise step count + rebuild model's per-step precomputed
+            # tensors so the upcoming warmup + trace capture see the right N.
+            self.model.denoise_config.num_steps = num_denoising_steps
+            self.model._precompute_bs1_timestep_tensors()
+            self.model._precompute_bs1_adarms_cond()
+            self.model._precompute_bs1_modulations()
+
+            # Populate buffers with the current chunk so warmup + capture run
+            # on real-shape data, then pre-stage upstream artifacts (mask +
+            # RoPE) once.
+            self._write_trace_inputs(images, img_masks, tokens, lang_mask)
+            if use_upstream_masks():
+                num_image_tokens = self.cfg.siglip_config.num_patches
+                prefix_len = len(images) * num_image_tokens + lang_mask.shape[-1]
+                self.model.prepare_upstream_artifacts(img_masks, lang_mask, prefix_len=prefix_len)
+
+            # Resample-noise must be False so sample_actions doesn't try to
+            # ttnn.from_torch new noise inside the captured region (trace
+            # forbids host→device transfers).
+            self.model.resample_noise = False
+
+            # Warmup: one untraced forward to JIT-compile kernels.
+            with torch.no_grad():
+                warm_out = self.model.sample_actions(
+                    images=self._trace_images_dev,
+                    img_masks=self._trace_img_masks_dev,
+                    lang_tokens=self._trace_tokens_dev,
+                    lang_masks=self._trace_lang_mask_dev,
+                    state=None,
+                )
+            ttnn.synchronize_device(device)
+            if isinstance(warm_out, ttnn.Tensor):
+                ttnn.deallocate(warm_out)
+
+            # Capture.
+            self._trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+            self._trace_actions_output = self.model.sample_actions(
+                images=self._trace_images_dev,
+                img_masks=self._trace_img_masks_dev,
+                lang_tokens=self._trace_tokens_dev,
+                lang_masks=self._trace_lang_mask_dev,
+                state=None,
+            )
+            ttnn.end_trace_capture(device, self._trace_id, cq_id=0)
+            ttnn.synchronize_device(device)
+            self._trace_key = key
+        else:
+            # Steady-state path: just write the chunk's inputs and replay.
+            self._write_trace_inputs(images, img_masks, tokens, lang_mask)
+            ttnn.execute_trace(device, self._trace_id, cq_id=0, blocking=True)
+
+        actions_np = ttnn.to_torch(self._trace_actions_output).float().numpy()
+        if actions_np.ndim == 3:
+            actions_np = actions_np[0]
+        return actions_np[: self.chunk_size, : self.max_action_dim]
 
 
 # ---------------------------------------------------------------------------
