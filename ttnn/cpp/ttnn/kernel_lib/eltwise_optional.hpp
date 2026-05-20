@@ -105,6 +105,13 @@ struct OptionalChainElement<false, Inner>
     ALWI void reserve_upfront(uint32_t) const {}
     ALWI void push_per_tile(uint32_t) const {}
     ALWI void push_at_end(uint32_t) const {}
+
+    // 2D no-op stubs (called by `eltwise_chain(EltwiseShape, ...)` overload).
+    ALWI void wait_upfront_2d(uint32_t, uint32_t) const {}
+    ALWI void exec_2d(uint32_t, uint32_t, uint32_t, uint32_t) const {}
+    ALWI void pop_upfront_end_2d(uint32_t, uint32_t) const {}
+    ALWI void reserve_upfront_2d(uint32_t, uint32_t) const {}
+    ALWI void push_at_end_2d(uint32_t, uint32_t) const {}
 };
 
 }  // namespace compute_kernel_lib

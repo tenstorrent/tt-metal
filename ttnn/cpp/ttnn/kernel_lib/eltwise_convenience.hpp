@@ -114,4 +114,96 @@ ALWI void copy(uint32_t n_tiles) {
         PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 }
 
+// =============================================================================
+// 2D shape overloads — pass `EltwiseShape::of(Ht, Wt)` for row/col/scalar
+// broadcast indexing. Forwarders to the 2D `eltwise_chain(EltwiseShape, …)`
+// overload; same default policies as the 1D entries above.
+// =============================================================================
+
+template <
+    BinaryFpuOp Op,
+    uint32_t CbA,
+    uint32_t CbB,
+    uint32_t CbOut,
+    BroadcastDim Bcast = BroadcastDim::None,
+    BinaryDataFormatReconfig Reconfig = BinaryDataFormatReconfig::Input,
+    CbIndexMode Idx = CbIndexMode::FirstTile>
+ALWI void binary_op(EltwiseShape shape) {
+    eltwise_chain(
+        shape,
+        BinaryFpu<CbA, CbB, Op, Bcast, Reconfig, CopyTilePolicy::WaitAndPop, CopyTilePolicy::WaitAndPop, Idx>{},
+        PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+}
+
+template <
+    uint32_t CbA,
+    uint32_t CbB,
+    uint32_t CbOut,
+    BroadcastDim Bcast = BroadcastDim::None,
+    BinaryDataFormatReconfig Reconfig = BinaryDataFormatReconfig::Input,
+    CbIndexMode Idx = CbIndexMode::FirstTile>
+ALWI void binary_add(EltwiseShape shape) {
+    binary_op<BinaryFpuOp::Add, CbA, CbB, CbOut, Bcast, Reconfig, Idx>(shape);
+}
+
+template <
+    uint32_t CbA,
+    uint32_t CbB,
+    uint32_t CbOut,
+    BroadcastDim Bcast = BroadcastDim::None,
+    BinaryDataFormatReconfig Reconfig = BinaryDataFormatReconfig::Input,
+    CbIndexMode Idx = CbIndexMode::FirstTile>
+ALWI void binary_sub(EltwiseShape shape) {
+    binary_op<BinaryFpuOp::Sub, CbA, CbB, CbOut, Bcast, Reconfig, Idx>(shape);
+}
+
+template <
+    uint32_t CbA,
+    uint32_t CbB,
+    uint32_t CbOut,
+    BroadcastDim Bcast = BroadcastDim::None,
+    BinaryDataFormatReconfig Reconfig = BinaryDataFormatReconfig::Input,
+    CbIndexMode Idx = CbIndexMode::FirstTile>
+ALWI void binary_mul(EltwiseShape shape) {
+    binary_op<BinaryFpuOp::Mul, CbA, CbB, CbOut, Bcast, Reconfig, Idx>(shape);
+}
+
+template <
+    class SfpuOp,
+    uint32_t CbIn,
+    uint32_t CbOut,
+    CopyTileReconfig Reconfig = CopyTileReconfig::Input,
+    CbIndexMode Idx = CbIndexMode::FirstTile>
+ALWI void unary(EltwiseShape shape) {
+    static_assert(is_dest_only_op_v<SfpuOp>, "unary<SfpuOp,...>: SfpuOp must be a DEST-only SFPU element");
+    eltwise_chain(
+        shape,
+        CopyTile<CbIn, Dst::D0, CopyTilePolicy::WaitAndPop, Idx, Reconfig>{},
+        SfpuOp{},
+        PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+}
+
+template <class SfpuBinOp, uint32_t CbA, uint32_t CbB, uint32_t CbOut, CbIndexMode Idx = CbIndexMode::FirstTile>
+ALWI void binary_sfpu(EltwiseShape shape) {
+    static_assert(is_dest_only_op_v<SfpuBinOp>, "binary_sfpu<Op,...>: Op must be a DEST-only SFPU binary element");
+    eltwise_chain(
+        shape,
+        CopyTile<CbA, Dst::D0, CopyTilePolicy::WaitAndPop, Idx>{},
+        CopyTile<CbB, Dst::D1, CopyTilePolicy::WaitAndPop, Idx>{},
+        SfpuBinOp{},
+        PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+}
+
+template <
+    uint32_t CbIn,
+    uint32_t CbOut,
+    CopyTileReconfig Reconfig = CopyTileReconfig::Input,
+    CbIndexMode Idx = CbIndexMode::FirstTile>
+ALWI void copy(EltwiseShape shape) {
+    eltwise_chain(
+        shape,
+        CopyTile<CbIn, Dst::D0, CopyTilePolicy::WaitAndPop, Idx, Reconfig>{},
+        PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+}
+
 }  // namespace compute_kernel_lib

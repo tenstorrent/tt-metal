@@ -63,8 +63,10 @@ struct Recip : UnaryOp<Recip<Slot>, Slot> {
 // ---- Rsqrt — Approx (Fast/Exact) and Legacy (On/Off). Templated on both.
 template <Approx fast = Approx::Exact, Legacy legacy = Legacy::Off, Dst Slot = Dst::D0>
 struct Rsqrt : UnaryOp<Rsqrt<fast, legacy, Slot>, Slot> {
-    static ALWI void init() { rsqrt_tile_init(); }
-    static ALWI void exec_impl(uint32_t slot_offset) { rsqrt_tile<fast == Approx::Fast>(to_u32(Slot) + slot_offset); }
+    static ALWI void init() { rsqrt_tile_init<legacy == Legacy::On>(); }
+    static ALWI void exec_impl(uint32_t slot_offset) {
+        rsqrt_tile<legacy == Legacy::On, fast == Approx::Fast>(to_u32(Slot) + slot_offset);
+    }
 };
 
 // ---- Cbrt ----
