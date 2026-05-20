@@ -16,13 +16,129 @@ from __future__ import annotations
 
 
 import os
+import pathlib
 
 import torch
 import ttnn
-from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 
 from models.experimental.tt_symbiote.core.module import TTNNModule, TTNNLayerStack
 from ttnn.operations.transformer import SDPAProgramConfig
+
+
+# ---------------------------------------------------------------------------
+# Vision-tower weight cache (BFP8/BFP4, tile-layout, transpose-applied).
+#
+# ``ttnn.as_tensor(..., cache_file_name=...)`` does the right thing here:
+#   - first run: torch -> tilize+quantize -> dump_tensor_flatbuffer to disk,
+#     then to_device.
+#   - later runs: load_tensor_flatbuffer straight to mesh device, skipping
+#     the BFP4/BFP8 quantization + tile pack on host (which is the slow
+#     part of vision-tower load: ~6-8 s out of ~10 s warmup at DP=8).
+# Files use the existing ttnn ``.tensorbin`` flatbuffer format and are keyed
+# by (module_name, attr_name, num_devices). Module names are stable because
+# the pipeline calls ``vision_tower.override_children_module_names()`` after
+# constructing the tower, giving every weight a path like
+# ``vision_tower.blocks[0].mlp.tt_fc1_weight``.
+# ---------------------------------------------------------------------------
+VISION_WEIGHT_CACHE_DIR = pathlib.Path(
+    os.environ.get(
+        "DOTS_OCR_VISION_WEIGHT_CACHE_DIR",
+        str(pathlib.Path.home() / ".cache" / "tt_dots_ocr_vision_weights"),
+    )
+)
+
+
+def _vision_weight_cache_path(module_name: str | None, attr_name: str, num_devices: int) -> str | None:
+    """Stable cache path for a vision-tower weight tensor.
+
+    Returns ``None`` when ``module_name`` is unset (e.g. a raw test harness
+    instantiation without the pipeline's name-override pass), so the caller
+    falls back to an uncached load.
+    """
+    if not module_name or module_name.startswith(("TTNN", "_")):
+        return None
+    safe = module_name.replace("/", "_").replace(".", "_").replace("[", "_").replace("]", "_")
+    return str(VISION_WEIGHT_CACHE_DIR / f"{safe}__{attr_name}__nd{num_devices}")
+
+
+def _vision_cached_linear_weight(
+    module_name: str | None,
+    attr_name: str,
+    w_torch: "torch.Tensor | None",
+    *,
+    dtype: ttnn.DataType,
+    device,
+    memory_config=None,
+) -> "ttnn.Tensor | None":
+    """Cached equivalent of ``preprocess_linear_weight`` + ``to_device``.
+
+    ``preprocess_linear_weight`` does ``w.T.contiguous()`` then
+    ``ttnn.from_torch(..., dtype, layout=TILE)``. We reproduce that here
+    inside ``ttnn.as_tensor`` so the on-disk cache stores the
+    transpose-applied, tile-layout, dtype-quantized tensor and subsequent
+    runs skip the BFP4/BFP8 host packing entirely.
+    """
+    if w_torch is None:
+        return None
+    cache_path = _vision_weight_cache_path(module_name, attr_name, device.get_num_devices())
+    w_T = w_torch.T.contiguous()
+    return ttnn.as_tensor(
+        w_T,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG,
+        cache_file_name=cache_path,
+    )
+
+
+def _vision_cached_linear_bias(
+    module_name: str | None,
+    attr_name: str,
+    b_torch: "torch.Tensor | None",
+    *,
+    dtype: ttnn.DataType,
+    device,
+    memory_config=None,
+) -> "ttnn.Tensor | None":
+    """Cached equivalent of ``preprocess_linear_bias`` + ``to_device``."""
+    if b_torch is None:
+        return None
+    cache_path = _vision_weight_cache_path(module_name, attr_name, device.get_num_devices())
+    b_R = b_torch.reshape((1, -1))
+    return ttnn.as_tensor(
+        b_R,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG,
+        cache_file_name=cache_path,
+    )
+
+
+def _vision_cached_from_torch(
+    module_name: str | None,
+    attr_name: str,
+    t_torch: "torch.Tensor | None",
+    *,
+    dtype: ttnn.DataType,
+    layout: ttnn.Layout = ttnn.TILE_LAYOUT,
+    device,
+    memory_config=None,
+) -> "ttnn.Tensor | None":
+    """Cached ``ttnn.from_torch + to_device`` for non-linear weights (norms, RoPE, etc.)."""
+    if t_torch is None:
+        return None
+    cache_path = _vision_weight_cache_path(module_name, attr_name, device.get_num_devices())
+    return ttnn.as_tensor(
+        t_torch,
+        dtype=dtype,
+        layout=layout,
+        device=device,
+        memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG,
+        cache_file_name=cache_path,
+    )
+
 
 # Tracy (perf): vision Matmul/SDPA show HiFi4; use lower fidelity for ViT matmul/SDPA only.
 # Norms (RMS/LayerNorm) keep HiFi4 for stability.
@@ -233,6 +349,24 @@ def _vision_matmul_program_config(device, m_dim: int, k_dim: int, n_dim: int):
     )
     _VISION_MATMUL_PC_CACHE[cache_key] = pc
     return pc
+
+
+# L1 BLOCK_SHARDED activation sharding for vision matmuls was attempted on
+# top of the BFP8 residual stream (shard ``hidden_states`` once across the
+# 8x8 grid, feed gate AND up from the resident L1 shard for double activation
+# reuse; same idea for o_proj). It nets a 2-3% throughput regression
+# (354 -> 342 tok/s averaged over 3 runs at S=12288). Root cause: when in0 is
+# BLOCK_SHARDED the 2D-mcast matmul factory allocates an additional
+# ``in2_CB`` of the SAME size as the resident shard
+# (matmul_multicore_reuse_mcast_2d_program_factory.cpp:148-149,
+# ``in2_CB_size = per_core_M * in0_shard_width_in_tiles *
+# in0_single_tile_size``), which doubles the dynamic L1 cost of the shard.
+# That doubling forces ``out_block_h`` from the DRAM path's 16 down to 8,
+# halving in-flight K-block reuse against the output and adding outer-M
+# iterations. The extra weight DRAM re-reads exactly cancel the saved
+# activation DRAM read. SDPA also explicitly forbids sharded inputs
+# (sdpa_device_operation.cpp:44), so SDPA L1 sharding is not an option here.
+# All vision matmuls stay on the DRAM-interleaved path.
 
 
 def _vision_matmul_compute_config(device, *, math_fidelity: ttnn.MathFidelity) -> ttnn.DeviceComputeKernelConfig:
@@ -525,42 +659,51 @@ class TTNNDotsVisionRMSNorm(TTNNModule):
         return new_norm
 
     def preprocess_weights_impl(self):
+        """No-op on host: see ``move_weights_to_device_impl``."""
+        return
+
+    def move_weights_to_device_impl(self):
+        self.compute_kernel_config = _vision_sdpa_compute_config(self.device, math_fidelity=VISION_NORM_MATH_FIDELITY)
+
+        mn = self.module_name
         if self._use_layer_norm:
-            self.tt_weight = ttnn.from_torch(
+            self.tt_weight = _vision_cached_from_torch(
+                mn,
+                "tt_weight",
                 self._weight_torch.unsqueeze(0),
                 dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
+                device=self.device,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
-            if self._bias_torch is not None:
-                self.tt_bias = ttnn.from_torch(
+            self.tt_bias = (
+                _vision_cached_from_torch(
+                    mn,
+                    "tt_bias",
                     self._bias_torch.unsqueeze(0),
                     dtype=ttnn.bfloat8_b,
                     layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
                     memory_config=ttnn.L1_MEMORY_CONFIG,
                 )
+                if self._bias_torch is not None
+                else None
+            )
         else:
+            # RMSNorm weight is BF16 ROW_MAJOR with a row-tile (1,1,dim/32,32)
+            # reshape so the kernel can broadcast it without an extra tilize.
             dim = self._weight_torch.numel()
             tile = 32
-            w = self._weight_torch.to(torch.bfloat16)
-            w = w.view(1, 1, dim).reshape(1, 1, dim // tile, tile)
-            self.tt_weight = ttnn.from_torch(
+            w = self._weight_torch.to(torch.bfloat16).view(1, 1, dim).reshape(1, 1, dim // tile, tile)
+            self.tt_weight = _vision_cached_from_torch(
+                mn,
+                "tt_weight",
                 w,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
-
-    def move_weights_to_device_impl(self):
-        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
-
-        self.compute_kernel_config = _vision_sdpa_compute_config(self.device, math_fidelity=VISION_NORM_MATH_FIDELITY)
-
-        if self._use_layer_norm:
-            self.tt_weight = ttnn.to_device(self.tt_weight, self.device, memory_config=ttnn.L1_MEMORY_CONFIG)
-            if self.tt_bias is not None:
-                self.tt_bias = ttnn.to_device(self.tt_bias, self.device, memory_config=ttnn.L1_MEMORY_CONFIG)
-        else:
-            self.tt_weight = ttnn.to_device(self.tt_weight, self.device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         if x.layout != ttnn.TILE_LAYOUT:
@@ -641,50 +784,48 @@ class TTNNDotsVisionMLP(TTNNModule):
         return new_mlp
 
     def preprocess_weights_impl(self):
-        """Linear weights in low precision (PyTorch Linear [out,in]; preprocessing applies TT layout)."""
+        """No-op on host: cached preprocessing happens in
+        ``move_weights_to_device_impl`` via ``ttnn.as_tensor(cache_file_name=...)``,
+        which fuses tile-pack + quantize + dump-to-disk into one step on
+        cache miss and skips them entirely on cache hit.
 
-        def pw(w):
-            if w is None:
-                return None
-            return preprocess_linear_weight(w, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+        Vision MLP weights are BFP4 (gate / up / down). Per layer:
+        gate (1536x4224) + up (1536x4224) + down (4224x1536) = ~26 MB in BFP8
+        -> ~13 MB in BFP4. Across 42 vision layers that is ~550 MB of DRAM
+        weight traffic saved per forward pass. SwiGLU MLP weights tolerate
+        BFP4 well (matches the decoder MLP which is BFP4 by default in
+        ``TTNNDotsOCRFusedGateUpRowSharded``). Biases stay BFP8 because
+        they are tiny and fused into the matmul kernel.
+        """
+        self._intermediate_size = None
 
-        def pb(b):
-            if b is None:
-                return None
-            return preprocess_linear_bias(b, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+    def move_weights_to_device_impl(self):
+        self.compute_kernel_config = _vision_matmul_compute_config(self.device, math_fidelity=ttnn.MathFidelity.LoFi)
 
+        mn = self.module_name
         # Unfused gate/up projections (two linears). Vision MLP uses DRAM linears without
         # decoder-style CCL, so fusion only saved one matmul launch while forcing two
         # SliceDeviceOperation per block on the fused [gate|up] output; unfused removes those slices.
-        self._intermediate_size = None
         self.tt_fused_gate_up_weight = None
         self.tt_fused_gate_up_bias = None
-        self.tt_fc1_weight = pw(self._fc1_weight)
-        self.tt_fc1_bias = pb(self._fc1_bias)
-        self.tt_fc3_weight = pw(self._fc3_weight)
-        self.tt_fc3_bias = pb(self._fc3_bias)
-
-        self.tt_fc2_weight = pw(self._fc2_weight)
-        self.tt_fc2_bias = pb(self._fc2_bias)
-
-    def move_weights_to_device_impl(self):
-        mem = ttnn.DRAM_MEMORY_CONFIG
-
-        def _to_dev(t):
-            if t is None:
-                return None
-            return ttnn.to_device(t, self.device, memory_config=mem)
-
-        self.compute_kernel_config = _vision_matmul_compute_config(self.device, math_fidelity=ttnn.MathFidelity.LoFi)
-
-        self.tt_fused_gate_up_weight = _to_dev(getattr(self, "tt_fused_gate_up_weight", None))
-        self.tt_fused_gate_up_bias = _to_dev(getattr(self, "tt_fused_gate_up_bias", None))
-        self.tt_fc1_weight = _to_dev(getattr(self, "tt_fc1_weight", None))
-        self.tt_fc1_bias = _to_dev(getattr(self, "tt_fc1_bias", None))
-        self.tt_fc2_weight = _to_dev(self.tt_fc2_weight)
-        self.tt_fc2_bias = _to_dev(self.tt_fc2_bias)
-        self.tt_fc3_weight = _to_dev(getattr(self, "tt_fc3_weight", None))
-        self.tt_fc3_bias = _to_dev(getattr(self, "tt_fc3_bias", None))
+        self.tt_fc1_weight = _vision_cached_linear_weight(
+            mn, "tt_fc1_weight", self._fc1_weight, dtype=ttnn.bfloat4_b, device=self.device
+        )
+        self.tt_fc1_bias = _vision_cached_linear_bias(
+            mn, "tt_fc1_bias", self._fc1_bias, dtype=ttnn.bfloat8_b, device=self.device
+        )
+        self.tt_fc2_weight = _vision_cached_linear_weight(
+            mn, "tt_fc2_weight", self._fc2_weight, dtype=ttnn.bfloat4_b, device=self.device
+        )
+        self.tt_fc2_bias = _vision_cached_linear_bias(
+            mn, "tt_fc2_bias", self._fc2_bias, dtype=ttnn.bfloat8_b, device=self.device
+        )
+        self.tt_fc3_weight = _vision_cached_linear_weight(
+            mn, "tt_fc3_weight", self._fc3_weight, dtype=ttnn.bfloat4_b, device=self.device
+        )
+        self.tt_fc3_bias = _vision_cached_linear_bias(
+            mn, "tt_fc3_bias", self._fc3_bias, dtype=ttnn.bfloat8_b, device=self.device
+        )
 
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         if hidden_states.layout != ttnn.TILE_LAYOUT:
@@ -703,19 +844,30 @@ class TTNNDotsVisionMLP(TTNNModule):
         # Gate/up outputs are BFP8: halves the matmul writeback (38 MB BF16
         # -> 21 MB BFP8) and the matching read in the SILU multiply, with
         # no quality impact since the silu+mul output is already BFP8 in
-        # this path. BFP4 weight x BF16 activation -> BFP8 output is a
+        # this path. BFP8 weight x BFP8 activation -> BFP8 output is a
         # supported matmul dtype combo on Wormhole.
         #
-        # Note: an L1 BLOCK_SHARDED activation variant was tried (shard
-        # ``hidden_states`` once across the 8x8 grid and reuse for gate/up).
-        # It regressed FLOP utilization from 28% to 24% on these matmuls
-        # (per-op time 2.42 ms -> 2.83 ms) because the BF16 shard at
-        # 576 KB / core forces ``out_block_h`` from 12 down to 6 in the
-        # sharded program_config to stay under the 1.5 MB per-core L1 cap.
-        # Halving ``out_block_h`` doubles outer-M iterations, doubling weight
-        # DRAM re-reads -- the slow vision matmuls are weight-DRAM-bound, so
-        # the activation L1 win is more than wiped out by the weight DRAM
-        # cost. Stay on the DRAM-interleaved path.
+        # L1 BLOCK_SHARDED activation re-attempted on top of the BFP8
+        # residual stream (shard ``hidden_states`` once, reuse for both
+        # gate and up). It still nets a 2-3% throughput regression
+        # (354 -> 342 tok/s averaged over 3 runs at S=12288). Root cause:
+        # when in0 is BLOCK_SHARDED the 2D-mcast matmul factory allocates
+        # an additional ``in2_CB`` of the SAME size as the resident shard
+        # (matmul_multicore_reuse_mcast_2d_program_factory.cpp:148-149),
+        # which doubles the dynamic L1 cost of the shard. That forces
+        # ``out_block_h`` from the DRAM path's 16 down to 8, halving
+        # in-flight K-block reuse against the output and adding
+        # outer-M iterations -- the extra weight DRAM re-reads cancel
+        # the saved activation DRAM read. Stay on the DRAM-interleaved
+        # path until the kernel can be taught to alias in2_CB onto the
+        # resident shard buffer.
+        #
+        # Plain L1_INTERLEAVED ``gate``/``up`` outputs also OOM:
+        # 55 MB / 64 cores = 859 KB/core resident, then the up matmul
+        # (when gate is alive) or the silu*mul (with gate AND up alive)
+        # blows past the 1.4 MB per-core budget. Direct test:
+        # ``program.cpp:934`` clash, CB region 943 KB + 942 KB resident.
+        # Gate/up/gate_up_mul must all be DRAM at this M*N footprint.
         gate_up_pc = _vision_matmul_program_config(self.device, m_dim, k_dim, n_dim)
         gate = ttnn.linear(
             hidden_states,
@@ -757,6 +909,14 @@ class TTNNDotsVisionMLP(TTNNModule):
         # following residual add. The downstream RMSNorm/attention path
         # already operates on BFP8 cleanly, so this stays inside the existing
         # quantization envelope.
+        #
+        # Output to L1: fc2 output at S=12288 BFP8 is 20 MB
+        # (~313 KB/core L1_INTERLEAVED). fc2's kernel CBs at out_block_h=16,
+        # per_core_n=6, in0_block_w=8 are ~700 KB/core (in1_block_w grows
+        # with K=4224 / grid_x=8 = 17, capped at 8 by the in0_block_w
+        # heuristic). That leaves ~700 KB/core headroom -- the L1-resident
+        # output fits with margin. Next op is the residual add, which now
+        # reads in0 from L1 instead of DRAM (~20 MB saved per layer).
         down_m = int(gate_up_mul.shape[0]) * int(gate_up_mul.shape[1]) * int(gate_up_mul.shape[2])
         down_k = int(self.tt_fc2_weight.shape[-2])
         down_n = int(self.tt_fc2_weight.shape[-1])
@@ -766,7 +926,7 @@ class TTNNDotsVisionMLP(TTNNModule):
             self.tt_fc2_weight,
             bias=self.tt_fc2_bias,
             dtype=ttnn.bfloat8_b,
-            memory_config=mem,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
             program_config=down_pc,
         )
@@ -832,46 +992,60 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
         return new_pe
 
     def preprocess_weights_impl(self):
-        if self._proj_weight is not None:
-            self.tt_proj_weight = ttnn.from_torch(
-                self._proj_weight.to(torch.bfloat16),
-                dtype=ttnn.bfloat8_b,
-                layout=ttnn.TILE_LAYOUT,
-            )
-        if self._proj_bias is not None:
-            self.tt_proj_bias = ttnn.from_torch(
-                self._proj_bias.reshape(1, 1, 1, -1).to(torch.bfloat16),
-                dtype=ttnn.bfloat8_b,
-                layout=ttnn.TILE_LAYOUT,
-            )
-        if self._norm_weight is not None:
-            dim = self._norm_weight.numel()
-            tile = 32
-            w = self._norm_weight.to(torch.bfloat16)
-            w = w.view(1, 1, dim).reshape(1, 1, dim // tile, tile)
-            self.tt_norm_weight = ttnn.from_torch(
-                w,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-            )
+        """No-op on host: see ``move_weights_to_device_impl``."""
+        return
 
     def move_weights_to_device_impl(self):
-        mem = ttnn.DRAM_MEMORY_CONFIG
-        mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
-
-        if self.tt_proj_weight is not None:
-            self.tt_proj_weight = ttnn.to_device(self.tt_proj_weight, self.device, memory_config=mem)
-        if self.tt_proj_bias is not None:
-            self.tt_proj_bias = ttnn.to_device(self.tt_proj_bias, self.device, memory_config=mem)
-        if self.tt_norm_weight is not None:
-            self.tt_norm_weight = ttnn.to_device(self.tt_norm_weight, self.device, memory_config=mem)
-
         self.vision_matmul_compute_kernel_config = _vision_matmul_compute_config(
             self.device, math_fidelity=VISION_MATMUL_MATH_FIDELITY
         )
         self.vision_norm_compute_kernel_config = _vision_sdpa_compute_config(
             self.device, math_fidelity=VISION_NORM_MATH_FIDELITY
         )
+
+        mn = self.module_name
+        # Patch-embed projection: BFP8 (image-encoding precision matters --
+        # BFP4 here loses too many bits in the per-pixel patch dot product).
+        # The matmul is ``[N_patches, 14*14*3=588] @ [588, 1536]``; we feed
+        # the torch tensor directly without a transpose since the conv ->
+        # linear reshape already left it in [out, in] form, but ``ttnn.linear``
+        # below uses ``transpose_b=True`` so we cache the un-transposed shape.
+        self.tt_proj_weight = (
+            _vision_cached_from_torch(
+                mn,
+                "tt_proj_weight",
+                self._proj_weight.to(torch.bfloat16) if self._proj_weight is not None else None,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+            )
+            if self._proj_weight is not None
+            else None
+        )
+        self.tt_proj_bias = (
+            _vision_cached_from_torch(
+                mn,
+                "tt_proj_bias",
+                self._proj_bias.reshape(1, 1, 1, -1).to(torch.bfloat16) if self._proj_bias is not None else None,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+            )
+            if self._proj_bias is not None
+            else None
+        )
+        if self._norm_weight is not None:
+            dim = self._norm_weight.numel()
+            tile = 32
+            w = self._norm_weight.to(torch.bfloat16).view(1, 1, dim).reshape(1, 1, dim // tile, tile)
+            self.tt_norm_weight = _vision_cached_from_torch(
+                mn,
+                "tt_norm_weight",
+                w,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+            )
 
     def forward(self, pixel_values: torch.Tensor, grid_thw: torch.Tensor = None) -> ttnn.Tensor:
         mem = ttnn.DRAM_MEMORY_CONFIG
@@ -882,9 +1056,9 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
             x_tt = ttnn.from_torch(
                 x,
                 device=self.device,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
-                memory_config=mem,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
                 mesh_mapper=mapper,
             )
 
@@ -942,9 +1116,9 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
         x_tt = ttnn.from_torch(
             x.to(torch.bfloat16),
             device=self.device,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=mem,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             mesh_mapper=mapper,
         )
 
@@ -957,7 +1131,7 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
             bias=self.tt_proj_bias,
             transpose_b=True,
             dtype=ttnn.bfloat8_b,
-            memory_config=mem,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.vision_matmul_compute_kernel_config,
         )
 
@@ -966,6 +1140,8 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
                 out,
                 weight=self.tt_norm_weight,
                 epsilon=1e-5,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
                 compute_kernel_config=self.vision_norm_compute_kernel_config,
             )
 
@@ -1037,6 +1213,26 @@ class TTNNDotsVisionAttention(TTNNModule):
         return new_attn
 
     def preprocess_weights_impl(self):
+        """No-op on host: the cached ``ttnn.as_tensor`` path in
+        ``move_weights_to_device_impl`` does the tile-pack + dtype quantize
+        + dump-to-disk on cache miss, and skips them on cache hit.
+
+        QKV stays BFP8 (BFP4 K-projection wrecks attention scores; the K
+        matmul is the only place head-dim precision feeds the per-token
+        QK^T scores directly). O proj stays BFP8 too -- it's a small
+        post-attention projection, BFP4 there would compound onto the
+        BFP8 residual stream.
+        """
+        return
+
+    def move_weights_to_device_impl(self):
+        self.compute_kernel_config = _vision_matmul_compute_config(
+            self.device, math_fidelity=VISION_MATMUL_MATH_FIDELITY
+        )
+        self.sdpa_compute_kernel_config = _vision_sdpa_compute_config(
+            self.device, math_fidelity=VISION_SDPA_MATH_FIDELITY
+        )
+
         # QKV weights/bias are kept in the native HF "half-half" head_dim
         # layout. Combined with cos/sin built in the same half-half layout
         # (see TTNNDotsVision2DRoPE.build), this lets us use the cheaper
@@ -1044,47 +1240,32 @@ class TTNNDotsVisionAttention(TTNNModule):
         # preserves input dtype -- so Q/K can stay BFP8 the whole way from
         # the QKV matmul into SDPA, eliminating the 4 typecasts per layer
         # the llama kernel forced (~1.3 ms x 42 layers in vision prefill).
-        self.tt_qkv_weight = preprocess_linear_weight(self._qkv_weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
-        if self._qkv_bias is not None:
-            self.tt_qkv_bias = preprocess_linear_bias(self._qkv_bias, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
-        self.tt_o_proj_weight = preprocess_linear_weight(
-            self._o_proj_weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT
+        mn = self.module_name
+        self.tt_qkv_weight = _vision_cached_linear_weight(
+            mn, "tt_qkv_weight", self._qkv_weight, dtype=ttnn.bfloat8_b, device=self.device
         )
-        if self._o_proj_bias is not None:
-            self.tt_o_proj_bias = preprocess_linear_bias(
-                self._o_proj_bias, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT
-            )
-
-    def move_weights_to_device_impl(self):
-        mem = ttnn.DRAM_MEMORY_CONFIG
-
-        def _to_dev(t):
-            if t is None:
-                return None
-            return ttnn.to_device(t, self.device, memory_config=mem)
-
-        self.compute_kernel_config = _vision_matmul_compute_config(
-            self.device, math_fidelity=VISION_MATMUL_MATH_FIDELITY
+        self.tt_qkv_bias = _vision_cached_linear_bias(
+            mn, "tt_qkv_bias", self._qkv_bias, dtype=ttnn.bfloat8_b, device=self.device
         )
-
-        self.tt_qkv_weight = _to_dev(self.tt_qkv_weight)
-        self.tt_qkv_bias = _to_dev(self.tt_qkv_bias)
-        self.tt_o_proj_weight = _to_dev(self.tt_o_proj_weight)
-        self.tt_o_proj_bias = _to_dev(self.tt_o_proj_bias)
-
-        self.sdpa_compute_kernel_config = _vision_sdpa_compute_config(
-            self.device, math_fidelity=VISION_SDPA_MATH_FIDELITY
+        self.tt_o_proj_weight = _vision_cached_linear_weight(
+            mn, "tt_o_proj_weight", self._o_proj_weight, dtype=ttnn.bfloat8_b, device=self.device
+        )
+        self.tt_o_proj_bias = _vision_cached_linear_bias(
+            mn, "tt_o_proj_bias", self._o_proj_bias, dtype=ttnn.bfloat8_b, device=self.device
         )
 
     def _concat_heads(self, ctx: ttnn.Tensor) -> ttnn.Tensor:
         """Gather head slices back into a single sequence-major tensor.
 
         ``nlp_concat_heads`` supports interleaved DRAM or L1 inputs (see
-        ``tests/tt_eager/.../test_nlp_concat_heads.py``). SDPA often leaves
-        ``[B,H,S,D]`` on DRAM in BF8; call the concat kernel directly instead
-        of staging through L1 + extra typecasts.
+        ``tests/tt_eager/.../test_nlp_concat_heads.py``). SDPA already
+        leaves ``[B,H,S,D]`` in L1 (see SDPA call below). Output to L1
+        too -- the next op (o_proj matmul) reads in0 from L1 instead of
+        DRAM, saving ~20 MB of activation DRAM read per layer.
+        L1 footprint at S=12288 BFP8: ~313 KB per core (20 MB / 64 cores
+        L1_INTERLEAVED), comfortably under the 1.4 MB per-core budget.
         """
-        out_mem = ttnn.DRAM_MEMORY_CONFIG
+        out_mem = ttnn.L1_MEMORY_CONFIG
         buf = ctx.memory_config().buffer_type
         dt = ctx.dtype
 
@@ -1176,13 +1357,16 @@ class TTNNDotsVisionAttention(TTNNModule):
             mapper = ttnn.ReplicateTensorToMesh(self.device) if num_dev > 1 else None
             attn_mask = ttnn.from_torch(
                 m,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
                 mesh_mapper=mapper,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
             if attn_mask.dtype != q.dtype:
-                attn_mask = ttnn.typecast(attn_mask, q.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                # SDPA explicitly requires attn_mask in DRAM
+                # (sdpa_device_operation.cpp:77-79). Keep DRAM here.
+                attn_mask = ttnn.typecast(attn_mask, q.dtype, memory_config=ttnn.L1_MEMORY_CONFIG)
             owns_attn_mask = True
 
         program_config = self._get_sdpa_program_config(s_pad)
@@ -1229,32 +1413,43 @@ class TTNNDotsVisionAttention(TTNNModule):
         qkv_k = int(self.tt_qkv_weight.shape[-2])
         qkv_n = int(self.tt_qkv_weight.shape[-1])
 
-        # An L1 BLOCK_SHARDED activation variant of this matmul was attempted
-        # (shard ``hidden_states`` once across the 8x8 grid, feed the QKV
-        # matmul in0 from the resident L1 shard). It regressed the per-op
-        # time from 1.9 ms -> 3.0 ms (FLOP utilization 39% -> 25%) because
-        # the BF16 shard at 576 KB / core forces ``out_block_h`` from 12
-        # down to 6 in the matched program_config to stay under the per-core
-        # L1 cap. Halving ``out_block_h`` doubles outer-M iterations, and
-        # this matmul is weight-DRAM-bound -- the 2x weight re-reads from
-        # DRAM more than wipe out the activation L1 win.
+        # L1 BLOCK_SHARDED for QKV is NOT a net win at this shape. With
+        # per_core_n=18 (N=4608, n_tiles=144), the BFP8 shard + matching
+        # ``in2_CB`` (which the kernel allocates same-sized as the shard
+        # when in0 is sharded -- mcast_2d_program_factory.cpp:148-149)
+        # eats ~626 KB per core, forcing ``out_block_h`` from 16 down to 4
+        # to fit the 1.5 MB L1 budget. That 4x increase in outer-M iters
+        # is 4x more weight DRAM re-reads, and QKV is weight-DRAM-bound at
+        # this shape -- net per-op time regresses. The MLP gate/up shape
+        # (per_core_n=17) sits in a sweet spot where the L1 cap allows
+        # ``out_block_h=8`` at full DST area=8, *and* the input is reused
+        # by both gate and up matmuls so the activation DRAM-read saving
+        # is doubled. Stay on the DRAM-interleaved path here.
         qkv_pc = _vision_matmul_program_config(self.device, qkv_m, qkv_k, qkv_n)
         qkv = ttnn.linear(
             hidden_states,
             self.tt_qkv_weight,
             bias=self.tt_qkv_bias,
             dtype=ttnn.bfloat8_b,
-            memory_config=mem,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
             program_config=qkv_pc,
         )
 
+        # ``nlp_create_qkv_heads`` output is OK to put in L1 because Q,K
+        # are immediately replaced by rotary_embedding's DRAM output below
+        # (Python rebinding deallocates the L1 originals), and V is
+        # immediately replaced by the BFP4 DRAM typecast. The L1
+        # residency window is one op long and never coexists with rotary
+        # or SDPA CBs. Letting nlp_create_qkv_heads write to L1 instead
+        # of DRAM saves ~50 MB / layer of activation DRAM traffic for
+        # the kernel write.
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv,
             num_heads=self.num_heads,
             num_kv_heads=self.num_kv_heads,
             transpose_k_heads=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(qkv)
 
@@ -1266,6 +1461,12 @@ class TTNNDotsVisionAttention(TTNNModule):
             # around the rotary, and SDPA reads BFP8 Q/K/V directly.
             # QKV matmul is BFP8 in0 (post-norm1) x BFP8 weight -> BFP8
             # output now -- the residual stream is BFP8 end-to-end.
+            #
+            # Output stays DRAM. Tested rotary L1: per-core OOM at
+            # ``program.cpp:934`` (CB region 879 KB + Q/K/V L1 residents
+            # of ~626-940 KB/core overflow the 1.4 MB per-core budget).
+            # Q,K must be DRAM going INTO SDPA anyway (see SDPA note
+            # below).
             q = ttnn.experimental.rotary_embedding(q, cos, sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             k = ttnn.experimental.rotary_embedding(k, cos, sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
@@ -1280,12 +1481,15 @@ class TTNNDotsVisionAttention(TTNNModule):
         # SDPA validates BFP4 V in sdpa_device_operation.cpp:40 ("Data type ...
         # must be BFLOAT16, BFLOAT8_B, or BFLOAT4_B"), and the output dtype
         # matches Q's dtype (BFP8) regardless of V dtype.
+        #
+        # Output stays DRAM. Tested L1: OOM at SDPA (V_BFP4 156 KB/core
+        # resident + chunked SDPA CBs ~1.3 MB/core overflows the 1.4 MB
+        # per-core budget). SDPA also forbids sharded Q/K/V
+        # (sdpa_device_operation.cpp:44), and at this S=12288 chunk
+        # config (q=256, k=512), the partial-QK^T circular buffer alone
+        # is 256*512*4 = 512 KB/core -- no room for any L1-resident
+        # input.
         v = ttnn.typecast(v, dtype=ttnn.bfloat4_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        # SDPA still requires interleaved Q/K/V (sdpa_device_operation.cpp:44 forbids
-        # sharded inputs) and at S=12288 the BFP8 Q+K (~36 MB) + BFP4 V (~10 MB)
-        # plus SDPA's static circular buffers exceed the per-core L1 budget --
-        # keep these tensors on DRAM.
 
         if cu_seqlens is None:
             logical_s = int(attention_logical_seq_len) if attention_mask is not None else s
@@ -1306,12 +1510,20 @@ class TTNNDotsVisionAttention(TTNNModule):
             # The previous BF16 here forced the residual ``ttnn.add`` below
             # to upcast its BFP8 input back to BF16, doubling the residual
             # tensor footprint and silently making norm2 read BF16.
+            #
+            # Output to L1: at S=12288 BFP8 the o_proj output is 20 MB
+            # (~313 KB/core L1_INTERLEAVED). The matmul kernel's CBs at
+            # ``out_block_h=16, per_core_n=6, in0_block_w=6`` are ~587
+            # KB/core, leaving ~500 KB/core headroom -- the L1-resident
+            # output (313 KB/core) fits with margin. Next op is the
+            # residual ``ttnn.add``, which now reads in0 from L1 instead
+            # of DRAM, saving ~20 MB of activation DRAM read per layer.
             return ttnn.linear(
                 ctx,
                 self.tt_o_proj_weight,
                 bias=self.tt_o_proj_bias,
                 dtype=ttnn.bfloat8_b,
-                memory_config=mem,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_kernel_config,
                 program_config=o_pc,
             )
@@ -1344,13 +1556,13 @@ class TTNNDotsVisionAttention(TTNNModule):
         o_k = int(self.tt_o_proj_weight.shape[-2])
         o_n = int(self.tt_o_proj_weight.shape[-1])
         o_pc = _vision_matmul_program_config(self.device, o_m, o_k, o_n)
-        # Same BFP8 rationale as the no-cu_seqlens branch above.
+        # Same BFP8 + L1 rationale as the no-cu_seqlens branch above.
         return ttnn.linear(
             ctx,
             self.tt_o_proj_weight,
             bias=self.tt_o_proj_bias,
             dtype=ttnn.bfloat8_b,
-            memory_config=mem,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
             program_config=o_pc,
         )
@@ -1426,6 +1638,10 @@ class TTNNDotsVisionBlock(TTNNModule):
         attention_logical_seq_len: int | None = None,
     ) -> ttnn.Tensor:
         if hidden_states.layout != ttnn.TILE_LAYOUT:
+            # Cold path: only fires if upstream skipped tilization. Keep
+            # DRAM here -- the residual stream is DRAM end-to-end (see
+            # comment on the residual ``ttnn.add`` below for the L1 OOM
+            # rationale at S=12288).
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         residual = hidden_states
@@ -1442,6 +1658,14 @@ class TTNNDotsVisionBlock(TTNNModule):
         # promotes to BF16, doubling the residual tile footprint going into
         # ``norm2``. Now both operands are BFP8 and so is the result, so the
         # whole layer (and the next one's norm input) stays in BFP8.
+        #
+        # Output stays DRAM. Forcing the residual stream to L1 was tested
+        # and OOMed: at S=12288 the 20 MB residual (~313 KB/core
+        # L1_INTERLEAVED) plus the alive intermediate (norm out / attn
+        # out) plus the next matmul's CBs (~1.3 MB/core for QKV at the
+        # selected ``out_block_h``) trips ``program.cpp:934``. Activation
+        # tensors that *outlive* a heavy matmul must be DRAM at this
+        # sequence length.
         hidden_states = ttnn.add(residual, hidden_states, dtype=ttnn.bfloat8_b)
 
         residual = hidden_states
@@ -1533,61 +1757,87 @@ class TTNNDotsPatchMerger(TTNNModule):
         return new_merger
 
     def preprocess_weights_impl(self):
-        def _to_host(w, layout=ttnn.TILE_LAYOUT):
-            if w is None:
-                return None
-            return ttnn.from_torch(w.to(torch.bfloat16), dtype=ttnn.bfloat8_b, layout=layout)
+        """No-op on host: see ``move_weights_to_device_impl``."""
+        return
+
+    def move_weights_to_device_impl(self):
+        self.compute_kernel_config = _vision_matmul_compute_config(
+            self.device, math_fidelity=VISION_MATMUL_MATH_FIDELITY
+        )
+
+        mn = self.module_name
+        mem = ttnn.DRAM_MEMORY_CONFIG
 
         if self._use_layer_norm:
-            self.tt_ln_weight = _to_host(self._ln_weight.unsqueeze(0))
-            if self._ln_bias is not None:
-                self.tt_ln_bias = _to_host(self._ln_bias.unsqueeze(0))
+            self.tt_ln_weight = (
+                _vision_cached_from_torch(
+                    mn,
+                    "tt_ln_weight",
+                    self._ln_weight.unsqueeze(0).to(torch.bfloat16),
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                )
+                if self._ln_weight is not None
+                else None
+            )
+            self.tt_ln_bias = (
+                _vision_cached_from_torch(
+                    mn,
+                    "tt_ln_bias",
+                    self._ln_bias.unsqueeze(0).to(torch.bfloat16),
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                )
+                if self._ln_bias is not None
+                else None
+            )
         else:
             if self._ln_weight is not None:
                 dim = self._ln_weight.numel()
                 tile = 32
-                w = self._ln_weight.to(torch.bfloat16)
-                w = w.view(1, 1, dim).reshape(1, 1, dim // tile, tile)
-                self.tt_ln_weight = ttnn.from_torch(w, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+                w = self._ln_weight.to(torch.bfloat16).view(1, 1, dim).reshape(1, 1, dim // tile, tile)
+                self.tt_ln_weight = _vision_cached_from_torch(
+                    mn,
+                    "tt_ln_weight",
+                    w,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=self.device,
+                )
 
+        # w1 (gelu projection): replicated across mesh.
         self.tt_w1 = (
-            ttnn.from_torch(self._w1_weight.to(torch.bfloat16), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+            _vision_cached_from_torch(
+                mn,
+                "tt_w1",
+                self._w1_weight.to(torch.bfloat16),
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+            )
             if self._w1_weight is not None
             else None
         )
-        self.tt_w2 = (
-            ttnn.from_torch(self._w2_weight.to(torch.bfloat16), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
-            if self._w2_weight is not None
-            else None
-        )
         self.tt_w1_bias = (
-            ttnn.from_torch(self._w1_bias.to(torch.bfloat16), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+            _vision_cached_from_torch(
+                mn,
+                "tt_w1_bias",
+                self._w1_bias.to(torch.bfloat16),
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+            )
             if self._w1_bias is not None
             else None
         )
-        self.tt_w2_bias = (
-            ttnn.from_torch(self._w2_bias.to(torch.bfloat16), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
-            if self._w2_bias is not None
-            else None
-        )
 
-    def move_weights_to_device_impl(self):
-        mem = ttnn.DRAM_MEMORY_CONFIG
-
-        def _to_dev(t):
-            if t is None:
-                return None
-            return ttnn.to_device(t, self.device, memory_config=mem)
-
-        self.tt_ln_weight = _to_dev(self.tt_ln_weight)
-        self.tt_ln_bias = _to_dev(self.tt_ln_bias)
-        self.tt_w1 = _to_dev(self.tt_w1)
-        self.tt_w1_bias = _to_dev(self.tt_w1_bias)
-
-        # Col-shard w2 across devices so the patch merger natively produces
-        # col-sharded output matching text embeddings.  Weight shape is
-        # [intermediate, H] (already transposed); sharding dim=-1 gives each
-        # device [intermediate, H/num_devices].
+        # w2 (output projection): col-sharded across mesh in TP mode so the
+        # merger produces col-sharded output that lines up with text
+        # embeddings. ``ttnn.as_tensor`` cache supports ``mesh_mapper`` but
+        # caches the *unsharded* tensor and reshards on load -- so this still
+        # benefits from caching across runs.
         num_devices = self.device.get_num_devices() if hasattr(self.device, "get_num_devices") else 1
         if num_devices > 1:
             col_shard_mapper = ttnn.ShardTensor2dMesh(
@@ -1595,33 +1845,58 @@ class TTNNDotsPatchMerger(TTNNModule):
                 dims=(None, -1),
                 mesh_shape=list(self.device.shape),
             )
-            # Re-create w2 on device with col-shard mapper
-            self.tt_w2 = ttnn.from_torch(
-                self._w2_weight.to(torch.bfloat16),
-                dtype=ttnn.bfloat8_b,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-                memory_config=mem,
-                mesh_mapper=col_shard_mapper,
+            cache_key = _vision_weight_cache_path(mn, "tt_w2_colshard", num_devices)
+            self.tt_w2 = (
+                ttnn.as_tensor(
+                    self._w2_weight.to(torch.bfloat16),
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    memory_config=mem,
+                    mesh_mapper=col_shard_mapper,
+                    cache_file_name=cache_key,
+                )
+                if self._w2_weight is not None
+                else None
             )
             if self._w2_bias is not None:
-                self.tt_w2_bias = ttnn.from_torch(
+                bias_cache_key = _vision_weight_cache_path(mn, "tt_w2_bias_colshard", num_devices)
+                self.tt_w2_bias = ttnn.as_tensor(
                     self._w2_bias.to(torch.bfloat16),
                     dtype=ttnn.bfloat8_b,
                     layout=ttnn.TILE_LAYOUT,
                     device=self.device,
                     memory_config=mem,
                     mesh_mapper=col_shard_mapper,
+                    cache_file_name=bias_cache_key,
                 )
             else:
                 self.tt_w2_bias = None
         else:
-            self.tt_w2 = _to_dev(self.tt_w2)
-            self.tt_w2_bias = _to_dev(self.tt_w2_bias)
-
-        self.compute_kernel_config = _vision_matmul_compute_config(
-            self.device, math_fidelity=VISION_MATMUL_MATH_FIDELITY
-        )
+            self.tt_w2 = (
+                _vision_cached_from_torch(
+                    mn,
+                    "tt_w2",
+                    self._w2_weight.to(torch.bfloat16),
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                )
+                if self._w2_weight is not None
+                else None
+            )
+            self.tt_w2_bias = (
+                _vision_cached_from_torch(
+                    mn,
+                    "tt_w2_bias",
+                    self._w2_bias.to(torch.bfloat16),
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                )
+                if self._w2_bias is not None
+                else None
+            )
 
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         if hidden_states.layout != ttnn.TILE_LAYOUT:

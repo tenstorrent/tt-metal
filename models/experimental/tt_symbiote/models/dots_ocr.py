@@ -583,19 +583,36 @@ class TTNNDotsOCRPipeline(TTNNModule):
         model_path: str,
         device: "ttnn.MeshDevice",
         batch_size: int = 1,
+        num_layers: Optional[int] = None,
     ) -> "TTNNDotsOCRPipeline":
         """Build pipeline from a HuggingFace model path.
 
         Loads the HF model, extracts components, creates TTNN modules,
         and assembles the pipeline.
+
+        When ``num_layers`` is set, only the first ``num_layers`` decoder
+        layers are wired into the pipeline (and the paged KV cache is sized
+        to match). This is a bring-up/perf-debug knob: it lets the vision
+        tower and a small subset of the decoder share the full graph inside
+        one ``TracedRun`` so we can profile/validate individual stages
+        without paying for all decoder layers. Output is not parity-correct
+        vs the full stack.
         """
         from transformers import AutoModelForCausalLM
+        from torch import nn
 
         hf_model = AutoModelForCausalLM.from_pretrained(
             model_path,
             trust_remote_code=True,
             torch_dtype=torch.bfloat16,
         )
+
+        if num_layers is not None:
+            available = len(hf_model.model.layers)
+            if num_layers <= 0 or num_layers > available:
+                raise ValueError(f"num_layers must be in [1, {available}] (got {num_layers}) for {model_path}")
+            hf_model.model.layers = nn.ModuleList(list(hf_model.model.layers)[:num_layers])
+            hf_model.config.num_hidden_layers = num_layers
 
         # --- Create TTNN modules from HF components ---
         # _bypass_tensor_wrapping is set later by set_device() which sees
