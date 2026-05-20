@@ -75,6 +75,7 @@ def torch_seed():
 def device():
     ttnn = require_ttnn()
     dev = ttnn.open_device(**_open_kwargs())
+
     if hasattr(dev, "enable_program_cache"):
         dev.enable_program_cache()
     yield dev
@@ -116,6 +117,7 @@ def mesh_device():
     # Fallback: some TTNN builds only expose single-device APIs.
     if hasattr(ttnn, "open_device"):
         dev = ttnn.open_device(**_open_kwargs())
+
         if hasattr(dev, "enable_program_cache"):
             dev.enable_program_cache()
         try:

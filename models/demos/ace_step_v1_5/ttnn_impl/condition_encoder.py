@@ -23,6 +23,12 @@ import numpy as np
 
 import ttnn
 
+from .math_perf_env import (
+    ace_step_cond_linear_program_config,
+    ace_step_init_hifi2_linear_compute_kernel_config,
+    ace_step_linear_l1_memory_config,
+    ace_step_reshape_kwargs,
+)
 from .qwen3_embedding_encoder import Qwen3EmbeddingEncoderConfig, _TtQwen3EncoderLayer
 from .text_projector import TtAceStepTextProjector, load_text_projector_weight_numpy
 
@@ -116,6 +122,9 @@ class _TtAceStepTinyEncoder:
         dtype,
         mem,
         mapper,
+        linear_compute_kernel_config=None,
+        activation_l1_memory_config=None,
+        linear_output_l1_memory_config=None,
     ) -> None:
         self.device = device
         self.dtype = dtype
@@ -124,6 +133,10 @@ class _TtAceStepTinyEncoder:
         self.hidden_size = int(cfg.hidden_size)
         self.max_seq_len = int(max_seq_len)
         self.sliding_window = None if sliding_window is None else int(sliding_window)
+        self._linear_ck = linear_compute_kernel_config
+        self._act_l1 = activation_l1_memory_config
+        self._linear_out_l1 = linear_output_l1_memory_config
+        self._embed_pc_cache: dict = {}
         self.embed_w = _as_weight(
             weights_np, f"{prefix}.embed_tokens.weight", device=device, dtype=dtype, mem=mem, mapper=mapper
         )
@@ -138,6 +151,11 @@ class _TtAceStepTinyEncoder:
         self.norm_w = _as_weight(
             weights_np, f"{prefix}.norm.weight", device=device, dtype=dtype, mem=mem, mapper=mapper
         )
+        _layer_kw = dict(
+            linear_compute_kernel_config=linear_compute_kernel_config,
+            activation_l1_memory_config=activation_l1_memory_config,
+            linear_output_l1_memory_config=linear_output_l1_memory_config,
+        )
         self.layers = [
             _TtQwen3EncoderLayer(
                 device=device,
@@ -147,6 +165,7 @@ class _TtAceStepTinyEncoder:
                 dtype=dtype,
                 mem=mem,
                 mapper=mapper,
+                **_layer_kw,
             )
             for i in range(int(num_layers))
         ]
@@ -164,6 +183,33 @@ class _TtAceStepTinyEncoder:
         self.sin_tt = ttnn.as_tensor(
             sin_np, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=mem, mesh_mapper=mapper
         )
+
+    def _l1_activation(self, t: ttnn.Tensor) -> ttnn.Tensor:
+        if self._act_l1 is None:
+            return t
+        return ttnn.to_memory_config(t, self._act_l1)
+
+    def _embed_linear_kwargs(self, *, batch_size: int, seq_len: int) -> dict:
+        kw: dict = {}
+        if self._linear_ck is not None:
+            kw["compute_kernel_config"] = self._linear_ck
+        key = (int(batch_size), int(seq_len), int(self.input_dim))
+        pc = self._embed_pc_cache.get(key)
+        if pc is None:
+            pc = ace_step_cond_linear_program_config(
+                self.device,
+                seq_len=int(seq_len),
+                in_dim=int(self.input_dim),
+                out_dim=self.hidden_size,
+                batch_size=int(batch_size),
+            )
+            if pc is not None:
+                self._embed_pc_cache[key] = pc
+        if pc is not None:
+            kw["program_config"] = pc
+        if self._linear_out_l1 is not None:
+            kw["memory_config"] = self._linear_out_l1
+        return kw
 
     def __call__(
         self,
@@ -188,6 +234,7 @@ class _TtAceStepTinyEncoder:
             if attention_mask_01 is None
             else np.asarray(attention_mask_01, dtype=np.float32).reshape(b, s)
         )
+        _sr = ace_step_reshape_kwargs(ttnn)
         x = ttnn.as_tensor(
             x_np,
             device=self.device,
@@ -195,9 +242,11 @@ class _TtAceStepTinyEncoder:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=self.mem,
         )
-        x = ttnn.reshape(x, (b, 1, s, self.input_dim))
+        x = ttnn.reshape(x, (b, 1, s, self.input_dim), **_sr)
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        h = ttnn.linear(x, self.embed_w, bias=self.embed_b, transpose_b=True)
+        x = self._l1_activation(x)
+        lin_embed = self._embed_linear_kwargs(batch_size=b, seq_len=s)
+        h = ttnn.linear(x, self.embed_w, bias=self.embed_b, transpose_b=True, **lin_embed)
         cos_tt = ttnn.slice(self.cos_tt, (0, 0, 0, 0), (1, 1, s, int(self.cos_tt.shape[-1])))
         sin_tt = ttnn.slice(self.sin_tt, (0, 0, 0, 0), (1, 1, s, int(self.sin_tt.shape[-1])))
         mapper = ttnn.ReplicateTensorToMesh(self.device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
@@ -226,11 +275,11 @@ class _TtAceStepTinyEncoder:
             for bias_tt in bias_cache.values():
                 ttnn.deallocate(bias_tt)
         h = ttnn.to_layout(h, ttnn.TILE_LAYOUT)
-        h = ttnn.rms_norm(h, weight=self.norm_w, epsilon=float(1e-6), memory_config=self.mem)
+        h = ttnn.rms_norm(h, weight=self.norm_w, epsilon=float(1e-6), memory_config=self._linear_out_l1 or self.mem)
         if output_first_token:
             h = ttnn.slice(h, (0, 0, 0, 0), (b, 1, 1, self.hidden_size))
-            return ttnn.reshape(h, (b, 1, self.hidden_size))
-        return ttnn.reshape(h, (b, s, self.hidden_size))
+            return ttnn.reshape(h, (b, 1, self.hidden_size), **_sr)
+        return ttnn.reshape(h, (b, s, self.hidden_size), **_sr)
 
 
 class TtAceStepInstrumentalConditionEncoder:
@@ -245,17 +294,11 @@ class TtAceStepInstrumentalConditionEncoder:
         mapper = ttnn.ReplicateTensorToMesh(device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
         self.weights_np = load_condition_weights_np(str(checkpoint_safetensors_path))
         init_ck = getattr(ttnn, "init_device_compute_kernel_config", None)
+        linear_compute_kernel_config = ace_step_init_hifi2_linear_compute_kernel_config(device)
+        l1_mc = ace_step_linear_l1_memory_config(ttnn)
         sdpa_compute_kernel_config = None
-        linear_compute_kernel_config = None
         if callable(init_ck):
             sdpa_compute_kernel_config = init_ck(
-                device.arch(),
-                math_fidelity=ttnn.MathFidelity.HiFi4,
-                math_approx_mode=False,
-                fp32_dest_acc_en=True,
-                packer_l1_acc=True,
-            )
-            linear_compute_kernel_config = init_ck(
                 device.arch(),
                 math_fidelity=ttnn.MathFidelity.HiFi4,
                 math_approx_mode=False,
@@ -286,6 +329,11 @@ class TtAceStepInstrumentalConditionEncoder:
             weights_dtype=self.dtype,
             weight_memory_config=self.mem,
         )
+        _enc_kw = dict(
+            linear_compute_kernel_config=linear_compute_kernel_config,
+            activation_l1_memory_config=l1_mc,
+            linear_output_l1_memory_config=l1_mc,
+        )
         self.lyric_encoder = _TtAceStepTinyEncoder(
             weights_np=self.weights_np,
             prefix="encoder.lyric_encoder",
@@ -298,11 +346,11 @@ class TtAceStepInstrumentalConditionEncoder:
             dtype=self.dtype,
             mem=self.mem,
             mapper=mapper,
+            **_enc_kw,
         )
         for layer in self.lyric_encoder.layers:
             layer._sdpa_compute_kernel_config = sdpa_compute_kernel_config
             layer._sdpa_program_config = sdpa_program_config
-            layer._linear_ck = linear_compute_kernel_config
         self.timbre_encoder = _TtAceStepTinyEncoder(
             weights_np=self.weights_np,
             prefix="encoder.timbre_encoder",
@@ -315,11 +363,11 @@ class TtAceStepInstrumentalConditionEncoder:
             dtype=self.dtype,
             mem=self.mem,
             mapper=mapper,
+            **_enc_kw,
         )
         for layer in self.timbre_encoder.layers:
             layer._sdpa_compute_kernel_config = sdpa_compute_kernel_config
             layer._sdpa_program_config = sdpa_program_config
-            layer._linear_ck = linear_compute_kernel_config
         self.null_condition_emb = ttnn.as_tensor(
             self.weights_np["null_condition_emb"],
             device=device,

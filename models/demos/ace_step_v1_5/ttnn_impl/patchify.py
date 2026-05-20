@@ -7,6 +7,8 @@ import numpy as np
 
 import ttnn
 
+from .math_perf_env import ace_step_ensure_l1_activation, ace_step_linear_l1_memory_config, ace_step_reshape_kwargs
+
 
 @dataclass(frozen=True)
 class PatchifyMetadata:
@@ -282,8 +284,12 @@ class TtAceStepPatchEmbed1D:
         out, out_length = conv_ret
 
         # conv1d returns rank-4 [1, B, out_length, out_channels]
+        _sr = ace_step_reshape_kwargs(ttnn)
         out = ttnn.squeeze(out, 0)
-        out = ttnn.reshape(out, (batch_size, out_length, out.shape[-1]))
+        out = ttnn.reshape(out, (batch_size, out_length, out.shape[-1]), **_sr)
+        _l1_mc = ace_step_linear_l1_memory_config(ttnn)
+        if _l1_mc is not None:
+            out = ace_step_ensure_l1_activation(ttnn, out, _l1_mc)
         return out, meta
 
     def __call__(self, hidden_states: ttnn.Tensor) -> Tuple[ttnn.Tensor, PatchifyMetadata]:
@@ -423,7 +429,8 @@ class TtAceStepDePatchify1D:
         m = b * t_p
         n = self.out_channels * self.patch_size
 
-        x2d = ttnn.reshape(hidden_states, (m, self.in_channels))
+        _sr = ace_step_reshape_kwargs(ttnn)
+        x2d = ttnn.reshape(hidden_states, (m, self.in_channels), **_sr)
         x2d = ttnn.to_layout(x2d, ttnn.TILE_LAYOUT)
 
         w_tile = ttnn.to_layout(self.weight, ttnn.TILE_LAYOUT)
@@ -445,7 +452,7 @@ class TtAceStepDePatchify1D:
 
         # Single reshape RowMajor (m, patch*C) → (B, T_full, C); avoids an extra ReshapeView device op per forward
         # (same linear memory order as the prior two-step (B,T_p,patch,C)→(B,T,C) sequence).
-        y = ttnn.reshape(y2d_rm, (b, t_p * self.patch_size, self.out_channels))
+        y = ttnn.reshape(y2d_rm, (b, t_p * self.patch_size, self.out_channels), **_sr)
 
         # Add bias per output channel (broadcast across batch and time)
         y4 = ttnn.unsqueeze(y, 1)  # [B, 1, T, C]

@@ -16,6 +16,8 @@ import numpy as np
 
 import ttnn
 
+from .math_perf_env import ace_step_reshape_kwargs
+
 
 class TtnnMomentumBufferApg:
     __slots__ = ("momentum", "running_tt")
@@ -29,7 +31,7 @@ class TtnnMomentumBufferApg:
             return
         try:
             ttnn.deallocate(self.running_tt)
-        except RuntimeError:
+        except Exception:
             pass
         self.running_tt = None
 
@@ -68,19 +70,15 @@ def bf16_row_from_numpy_bc(arr_f32_np: np.ndarray, *, device: Any, dram: Any) ->
 
 def typecast_bf16_any_to_fp32_tile(tt_bf16: ttnn.Tensor, *, dram: Any) -> ttnn.Tensor:
     tt = ttnn.to_layout(tt_bf16, layout=ttnn.TILE_LAYOUT)
-    try:
-        out = ttnn.typecast(tt, ttnn.float32, memory_config=dram)
-    finally:
-        ttnn.deallocate(tt)
+    out = ttnn.typecast(tt, ttnn.float32, memory_config=dram)
+    ttnn.deallocate(tt)
     return out
 
 
 def fp32_tile_to_row_bf16(x_f32_tile: ttnn.Tensor, *, dram: Any) -> ttnn.Tensor:
     x_bf_tile = ttnn.typecast(x_f32_tile, ttnn.bfloat16, memory_config=dram)
-    try:
-        out = ttnn.to_layout(x_bf_tile, layout=ttnn.ROW_MAJOR_LAYOUT)
-    finally:
-        ttnn.deallocate(x_bf_tile)
+    out = ttnn.to_layout(x_bf_tile, layout=ttnn.ROW_MAJOR_LAYOUT)
+    ttnn.deallocate(x_bf_tile)
     return out
 
 
@@ -173,19 +171,11 @@ def apg_guidance_velocity_ttnn(
         diff = momentum_step_apg(momentum_buffer, diff, dram=dram)
 
     if norm_threshold > 0:
-        diff_sq = ttnn.multiply(diff, diff, memory_config=dram)
-        rss = _sum_keepdim(diff_sq, dim, dram=dram)
-        ttnn.deallocate(diff_sq)
-        rss_eps = ttnn.add(rss, 1e-20, memory_config=dram)
+        rss = _sum_keepdim(ttnn.multiply(diff, diff, memory_config=dram), dim, dram=dram)
+        diff_norm = ttnn.sqrt(ttnn.add(rss, 1e-20, memory_config=dram), memory_config=dram)
         ttnn.deallocate(rss)
-        diff_norm = ttnn.sqrt(rss_eps, memory_config=dram)
-        ttnn.deallocate(rss_eps)
-        diff_norm_eps = ttnn.add(diff_norm, 1e-20, memory_config=dram)
-        ratio = ttnn.div(float(norm_threshold), diff_norm_eps)
-        ttnn.deallocate(diff_norm_eps)
-        ones = ttnn.ones_like(diff)
-        factor = ttnn.minimum(ratio, ones)
-        ttnn.deallocate(ones)
+        ratio = ttnn.div(float(norm_threshold), ttnn.add(diff_norm, 1e-20, memory_config=dram))
+        factor = ttnn.minimum(ratio, ttnn.ones_like(diff))
         scaled = ttnn.multiply(diff, factor, memory_config=dram)
         ttnn.deallocate(diff)
         ttnn.deallocate(ratio)
@@ -210,6 +200,29 @@ def apg_guidance_velocity_ttnn(
     return guided
 
 
+def _const_tile_bc(shape: tuple[int, int, int], value: float, *, device: Any, dram: Any) -> ttnn.Tensor:
+    """Fill a TILE FP32 tensor on device (no host ``numpy`` + H2D per ADG step)."""
+    if hasattr(ttnn, "full"):
+        return ttnn.full(
+            shape,
+            float(value),
+            device=device,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=dram,
+        )
+    b_, t_, c_ = shape
+    arr = np.full((b_, t_, c_), float(value), dtype=np.float32)
+    rm = ttnn.as_tensor(
+        arr,
+        device=device,
+        dtype=ttnn.float32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=dram,
+    )
+    return ttnn.to_layout(rm, layout=ttnn.TILE_LAYOUT)
+
+
 def adg_guidance_velocity_ttnn(
     xt_f32_tt: ttnn.Tensor,
     vpc_bf16_rm: ttnn.Tensor,
@@ -230,6 +243,8 @@ def adg_guidance_velocity_ttnn(
     ttnn.deallocate(vpc_bf16_rm)
     ttnn.deallocate(vpu_bf16_rm)
 
+    _sr = ace_step_reshape_kwargs(ttnn)
+
     b_, t__, c__ = int(xt_f32_tt.shape[0]), int(xt_f32_tt.shape[1]), int(xt_f32_tt.shape[2])
 
     # Scalar-broadcast multiply: ``ttnn.multiply(tensor, python_float, ...)`` is a pure device op
@@ -248,8 +263,8 @@ def adg_guidance_velocity_ttnn(
     ttnn.deallocate(vpc)
     ttnn.deallocate(vpu)
 
-    lh_t_flat = ttnn.reshape(lh_t, (b_ * t__, c__))
-    lh_u_flat = ttnn.reshape(lh_u, (b_ * t__, c__))
+    lh_t_flat = ttnn.reshape(lh_t, (b_ * t__, c__), **_sr)
+    lh_u_flat = ttnn.reshape(lh_u, (b_ * t__, c__), **_sr)
     nt = _normalize_l2_dim(lh_t_flat, dim=1, eps=1e-6, dram=dram)
     nu = _normalize_l2_dim(lh_u_flat, dim=1, eps=1e-6, dram=dram)
     dotted_flat = _dot_keepdim_along_dim(nt, nu, dim=1, dram=dram)
@@ -259,7 +274,7 @@ def adg_guidance_velocity_ttnn(
     ttnn.deallocate(dotted_flat)
     theta_flat = ttnn.acos(cos_theta)
     ttnn.deallocate(cos_theta)
-    latent_theta = ttnn.reshape(theta_flat, (b_, t__, 1))
+    latent_theta = ttnn.reshape(theta_flat, (b_, t__, 1), **_sr)
     ttnn.deallocate(theta_flat)
 
     w = float(guidance_scale) - 1.0
@@ -271,7 +286,7 @@ def adg_guidance_velocity_ttnn(
     )
 
     ld = ttnn.subtract(lh_t, lh_u, memory_config=dram)
-    latent_diff_flat = ttnn.reshape(ld, (b_ * t__, c__))
+    latent_diff_flat = ttnn.reshape(ld, (b_ * t__, c__), **_sr)
     lh_u_proj = lh_u_flat
     dotted_pv = _dot_keepdim_along_dim(latent_diff_flat, lh_u_proj, dim=1, dram=dram)
     sq_u = _sum_keepdim(ttnn.multiply(lh_u_proj, lh_u_proj, memory_config=dram), dim=1, dram=dram)
@@ -295,13 +310,11 @@ def adg_guidance_velocity_ttnn(
     denom_s = ttnn.add(sin_theta, 1e-20, memory_config=dram)
     ratio = ttnn.div(sin_nn, denom_s)
 
-    perp_btc = ttnn.reshape(perp_flat, (b_, t__, c__))
-    # ratio / sin_theta are [B, T, 1] (see apg_guidance.adg_forward); broadcast to C like PyTorch.
-    ratio_btc = ttnn.repeat_interleave(ratio, int(c__), dim=2)
-    prim = ttnn.multiply(perp_btc, ratio_btc, memory_config=dram)
+    perp_btc = ttnn.reshape(perp_flat, (b_, t__, c__), **_sr)
+    # ratio / sin_theta are [B, T, 1]; multiply/compare broadcast on dim 2 like PyTorch.
+    prim = ttnn.multiply(perp_btc, ratio, memory_config=dram)
 
-    sin_btc = ttnn.repeat_interleave(sin_theta, int(c__), dim=2)
-    ms = ttnn.le(sin_btc, float(1e-3))
+    ms = ttnn.le(sin_theta, float(1e-3))
     alt = ttnn.multiply(perp_btc, float(w_eff), memory_config=dram)
     latent_p = ttnn.where(ms, alt, prim, memory_config=dram)
     latent_new = ttnn.add(latent_v_new, latent_p, memory_config=dram)
