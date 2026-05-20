@@ -303,7 +303,9 @@ jobs:
       - name: ${{ matrix.test-group.name }}
         id: run-test
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        working-directory: /ci/tt-metal
+        # Keep runtime compilation and tt-run working directory on a single source root.
+        # Avoid mixing /ci/tt-metal and /home/user/tt-metal include paths in one run.
+        working-directory: /home/user/tt-metal
         run: |
           # Store command safely using heredoc
           CMD=$(cat << 'EOF'
