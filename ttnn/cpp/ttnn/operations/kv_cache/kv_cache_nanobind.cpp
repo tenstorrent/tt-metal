@@ -29,7 +29,7 @@ void bind_fill_cache_for_user_(nb::module_& mod) {
 
         Args:
             cache (ttnn.Tensor): the cache tensor to be written to.
-            input_tensor (ttnn.Tensor): the input tensor to be written to the cache.
+            input (ttnn.Tensor): the input tensor to be written to the cache.
             batch_index (int): the index into the cache tensor.
 
         Keyword Args:
@@ -128,9 +128,9 @@ void bind_fill_cache(nb::module_& mod) {
             * :attr:`update_idx` (int): seq-dim offset within the user slot, must be a multiple of TILE_HEIGHT. Default = 0.
 
         Example:
-            >>> tensor1 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> output = ttnn.update_cache(tensor1, tensor2, batch_idx)
+            >>> cache_tensor = ttnn.from_torch(torch.zeros((4, 1, 128, 64), dtype=torch.bfloat16), device=device)
+            >>> input_tensor = ttnn.from_torch(torch.randn((1, 1, 32, 64), dtype=torch.bfloat16), device=device)
+            >>> output = ttnn.fill_cache(cache_tensor, input_tensor, batch_idx=0, update_idx=32)
 
     )doc";
 

@@ -98,7 +98,8 @@ void UpdateKVCacheOperation::validate_on_program_cache_miss(
             args.update_idx,
             TILE_HEIGHT);
         TT_FATAL(
-            args.update_idx + input_tensor.padded_shape()[-2] <= cache_tensor.padded_shape()[-2],
+            args.update_idx <= cache_tensor.padded_shape()[-2] &&
+                input_tensor.padded_shape()[-2] <= cache_tensor.padded_shape()[-2] - args.update_idx,
             "Fill update_idx ({}) + input tensor height ({}) must be <= cache tensor height ({})",
             args.update_idx,
             input_tensor.padded_shape()[-2],
