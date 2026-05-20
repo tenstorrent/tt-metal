@@ -27,6 +27,7 @@ import sys
 
 import pytest
 import torch
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     ELEMENTS_PER_TILE,
