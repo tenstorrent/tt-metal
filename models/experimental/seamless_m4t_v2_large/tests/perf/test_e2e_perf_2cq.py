@@ -47,6 +47,10 @@ from models.experimental.seamless_m4t_v2_large.reference.torch_text_to_unit impo
     hf_discrete_duration_counts_batch1,
     synthetic_t2u_inputs,
 )
+from models.experimental.seamless_m4t_v2_large.tt.tt_seamless_m4t_v2_model import (
+    TTSeamlessM4Tv2GenerationOutput,
+    TTSeamlessM4Tv2GreedySearchOutput,
+)
 from models.experimental.seamless_m4t_v2_large.tt.tt_text_to_unit import (
     T2UTraceHardUpsampleCumsums,
     make_t2u_trace_prealloc_tensors,
@@ -485,6 +489,78 @@ def _make_forward_fn(
     return forward
 
 
+def _make_generate_fn(
+    tt_model: Any,
+    *,
+    use_speech: bool,
+    enc_in_tt: Optional[ttnn.Tensor],
+    input_ids_tt: Optional[ttnn.Tensor],
+    enc_attn_tt: ttnn.Tensor,
+    tgt_lang: str,
+    generate_speech: bool,
+    max_new_tokens: int,
+    pad_token_id: int,
+    eos_token_id: Any,
+    speaker_id: int = 0,
+) -> Callable[[ttnn.Tensor], Any]:
+    """Pipeline body: full autoregressive ``TTSeamlessM4Tv2Model.generate`` (dummy L1 input ignored).
+
+    Text-only tasks (``generate_speech=False``) return the ``sequences`` tensor. Speech tasks
+    (``t2st`` / ``s2st``) return ``(waveform, waveform_lengths)``; ``return_intermediate_token_ids``
+    is left ``False`` so ``generate`` already deallocates ``sequences`` and ``unit_sequences``
+    internally and the pipeline's output schema stays minimal.
+
+    Note: ``generate`` does per-step host scalar readbacks for the EOS check (and host T2U→vocoder
+    remap for speech), which serialises the two command queues. Throughput here is the full
+    autoregressive E2E latency per task, **not** per-prefill latency like the ``forward`` pipeline.
+    """
+    gen_common = dict(
+        max_new_tokens=int(max_new_tokens),
+        do_sample=False,
+        num_beams=1,
+        pad_token_id=int(pad_token_id),
+        eos_token_id=eos_token_id,
+    )
+
+    def generate(_device_input: ttnn.Tensor) -> Any:
+        del _device_input  # pipeline supplies sharded L1 tensor; Seamless inputs are closed over
+        if use_speech:
+            assert enc_in_tt is not None
+            out = tt_model.generate(
+                input_features=enc_in_tt,
+                attention_mask=enc_attn_tt,
+                generate_speech=generate_speech,
+                tgt_lang=tgt_lang,
+                speaker_id=speaker_id,
+                **gen_common,
+            )
+        else:
+            assert input_ids_tt is not None
+            out = tt_model.generate(
+                input_ids=input_ids_tt,
+                attention_mask=enc_attn_tt,
+                generate_speech=generate_speech,
+                tgt_lang=tgt_lang,
+                speaker_id=speaker_id,
+                **gen_common,
+            )
+
+        if generate_speech:
+            # Speech path: ``generate`` returns ``(waveform_tt, lengths_tt)`` when
+            # ``return_intermediate_token_ids=False`` (default here). Forward as a tuple.
+            if isinstance(out, TTSeamlessM4Tv2GenerationOutput):
+                wav, lengths = out.waveform, out.waveform_lengths
+            else:
+                wav, lengths = out  # type: ignore[misc]
+            return (wav, lengths)
+
+        # Text-only path: ``generate`` returns ``TTSeamlessM4Tv2GreedySearchOutput(sequences=...)``.
+        assert isinstance(out, TTSeamlessM4Tv2GreedySearchOutput), type(out)
+        return out.sequences
+
+    return generate
+
+
 @dataclass
 class _Seamless2CQBundle:
     model: Any
@@ -683,6 +759,128 @@ def test_seamless_m4t_v2_large_e2e_perf_2cq(
         f"Seamless M4T v2 Large task={b.task} batch_size={batch_size} "
         f"compile={compile_time:.2f}s inference_avg={inference_time_avg:.4f}s "
         f"FPS={batch_size / inference_time_avg:.2f}"
+    )
+
+
+# Autoregressive ``generate`` is far slower per iteration than single-prefill ``forward``
+# (decoder loop + per-step EOS readback + for speech: host T2U→vocoder remap). These bounds
+# are intentionally loose; tighten once a steady baseline is established on hardware.
+_GENERATE_MAX_NEW_TOKENS: int = 48
+_EXPECTED_GENERATE_E2E_THROUGHPUT_FPS: Dict[str, float] = {
+    "t2tt": 0.5,
+    "s2tt": 0.5,
+    "t2st": 0.25,
+    "s2st": 0.25,
+    "asr": 0.5,
+}
+_GENERATE_E2E_TASK_THROUGHPUT_PARAMS = [(t, _EXPECTED_GENERATE_E2E_THROUGHPUT_FPS[t]) for t in _TASKS]
+
+
+@run_for_blackhole()
+@pytest.mark.models_performance_bare_metal
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 65536, "num_command_queues": 2}],
+    indirect=True,
+)
+@pytest.mark.parametrize("batch_size_per_device", (1,))
+@pytest.mark.parametrize("task,expected_inference_throughput", _GENERATE_E2E_TASK_THROUGHPUT_PARAMS)
+def test_seamless_m4t_v2_large_e2e_perf_2cq_generate(
+    device, batch_size_per_device, expected_inference_throughput: float, task: str
+):
+    """Compile + 2CQ non-traced pipeline driving full autoregressive ``tt_model.generate(...)`` per iteration.
+
+    Unlike ``test_seamless_m4t_v2_large_e2e_perf_2cq`` (single encoder + decoder + lm_head pass on a
+    seeded ``decoder_input_ids``), every pipeline step runs the entire generation loop:
+
+    * **t2tt / s2tt / asr** — encoder → greedy text decode → tokens.
+    * **t2st / s2st** — encoder → greedy text decode → re-encode (speech path) → T2U → HiFi-GAN
+      vocoder → waveform + lengths.
+
+    The 2CQ overlap helps with host→device transfers between iterations, but per-step host scalar
+    readbacks for the EOS check (and the speech-path host remap before the vocoder) serialise
+    most of the in-iteration work — the measured FPS is therefore full E2E generation FPS, not
+    per-prefill FPS. ``l1_small_size=65536`` matches the demo (32 KiB is fine for text-only but
+    too tight for the speech-encoder → T2U → vocoder chain on s2st).
+    """
+    b = _build_model_for_task(device, task)
+    use_speech, tgt_lang, needs_t2u = SEAMLESS_E2E_TASKS[task]
+    b.forward_fn = _make_generate_fn(
+        b.tt_model,
+        use_speech=use_speech,
+        enc_in_tt=b.enc_in_tt,
+        input_ids_tt=b.input_ids_tt,
+        enc_attn_tt=b.enc_attn_tt,
+        tgt_lang=tgt_lang,
+        generate_speech=needs_t2u,
+        max_new_tokens=_GENERATE_MAX_NEW_TOKENS,
+        pad_token_id=b.cfg.pad_token_id,
+        eos_token_id=b.cfg.eos_token_id,
+    )
+
+    profiler.clear()
+    num_devices = device.get_num_devices()
+    batch_size = batch_size_per_device * num_devices
+
+    outputs = _run_pipeline(
+        device,
+        b.forward_fn,
+        b.dummy_host,
+        b.dram_config,
+        b.l1_config,
+        NUM_MEASUREMENT_ITERS,
+        use_trace=False,
+    )
+
+    last = outputs[-1]
+    if needs_t2u:
+        assert (
+            isinstance(last, (list, tuple)) and len(last) == 2
+        ), f"{b.task.upper()}_E2E_2CQ_GENERATE: expected (waveform, lengths) tuple, got {type(last)}"
+        wav_host, lengths_host = last
+        wav_t = ttnn.to_torch(wav_host) if isinstance(wav_host, ttnn.Tensor) else wav_host
+        len_t = ttnn.to_torch(lengths_host) if isinstance(lengths_host, ttnn.Tensor) else lengths_host
+        assert (
+            int(len_t.reshape(-1)[0].item()) > 0
+        ), f"{b.task.upper()}_E2E_2CQ_GENERATE: vocoder reported zero-length waveform"
+        logger.info(
+            f"{b.task.upper()}_E2E_2CQ_GENERATE waveform_samples={int(len_t.reshape(-1)[0].item())} "
+            f"wav_shape={tuple(wav_t.shape)}"
+        )
+    else:
+        assert isinstance(
+            last, ttnn.Tensor
+        ), f"{b.task.upper()}_E2E_2CQ_GENERATE: expected sequences tensor, got {type(last)}"
+        seq_t = ttnn.to_torch(last)
+        assert seq_t.numel() > 0, f"{b.task.upper()}_E2E_2CQ_GENERATE: empty sequences output"
+        logger.info(f"{b.task.upper()}_E2E_2CQ_GENERATE sequences_shape={tuple(seq_t.shape)}")
+
+    if b.enc_in_tt is not None:
+        ttnn.deallocate(b.enc_in_tt)
+    if b.input_ids_tt is not None:
+        ttnn.deallocate(b.input_ids_tt)
+    ttnn.deallocate(b.enc_attn_tt)
+    ttnn.deallocate(b.dec_ids_tt)
+    ttnn.deallocate(b.dec_mask_tt)
+
+    compile_time = profiler.get("compile")
+    inference_time_avg = profiler.get("run_model_pipeline_2cqs") / NUM_MEASUREMENT_ITERS
+    expected_inference_time = batch_size / expected_inference_throughput
+    prep_perf_report(
+        model_name=f"ttnn_seamless_m4t_v2_large_2cqs_generate_batch_size{batch_size}_{b.task}",
+        batch_size=batch_size,
+        inference_and_compile_time=compile_time,
+        inference_time=inference_time_avg,
+        expected_compile_time=600,
+        expected_inference_time=expected_inference_time,
+        comments=f"generate_task_{b.task}_batchsize{batch_size}_max_new_tokens{_GENERATE_MAX_NEW_TOKENS}",
+        inference_time_cpu=0.0,
+    )
+    logger.info(
+        f"Seamless M4T v2 Large generate task={b.task} batch_size={batch_size} "
+        f"max_new_tokens={_GENERATE_MAX_NEW_TOKENS} compile={compile_time:.2f}s "
+        f"inference_avg={inference_time_avg:.4f}s FPS={batch_size / inference_time_avg:.3f}"
     )
 
 
