@@ -72,8 +72,7 @@ void kernel_main() {
     uint32_t K_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 7);
 
 #ifdef OFFSETS_ACTIVE
-    // EP path: read offsets from a 1-D UINT32 ROW_MAJOR device tensor. Each flag is
-    // independent; see docs/VARIABLE_MATMUL_REFACTOR.md (#1).
+    // EP path: read offsets from a 1-D UINT32 ROW_MAJOR device tensor. Each flag is independent.
     //   OFFSET_M_AXIS:   re-derives per-core M_start / M_end / M_blocks_per_core locally
     //                    (matches dm_in0_sender's compute so both kernels agree).
     //   OFFSET_OUT_ROW:  when this kernel is the writer (transpose_core_grid), sets

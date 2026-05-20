@@ -80,7 +80,7 @@ void kernel_main() {
 
 #ifdef OFFSETS_ACTIVE
     // EP path: read on-device offsets and override the matching host-derived values. Each flag
-    // is independent; they compose freely. See docs/VARIABLE_MATMUL_REFACTOR.md (#1).
+    // is independent; they compose freely.
     //   OFFSET_M_AXIS:   offsets[start..start+2] → M_tiles + per-core M; publishes M on cb_ctrl.
     //   OFFSET_IN0_ROW:  also sets in0_row_offset_tiles from offsets[start].
     //   OFFSET_OUT_ROW:  also sets out_row_offset_tiles from offsets[start] when this kernel
