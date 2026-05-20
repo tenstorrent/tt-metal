@@ -133,6 +133,9 @@ jobs:
               )
               s3.list_objects_v2(Bucket="ctcache", MaxKeys=1)
               print("ctcache Garage S3 connection OK")
+              # Signal to downstream steps that S3 is reachable
+              with open(os.environ["GITHUB_ENV"], "a") as f:
+                  f.write("CTCACHE_S3_OK=1\n")
           except Exception as e:
               print(f"::warning::ctcache Garage S3 unreachable ({e}) — analysis will run without caching")
               sys.exit(0)
@@ -188,7 +191,8 @@ jobs:
         run: |
           # Overwrite the no-op shim with the real analysis wrapper.
           # The filename stays ./clang-tidy-shim so Ninja's command hash is unchanged.
-          if command -v clang-tidy-cache &>/dev/null; then
+          # Gate on both: clang-tidy-cache installed AND S3 probe succeeded.
+          if command -v clang-tidy-cache &>/dev/null && [ "${CTCACHE_S3_OK:-0}" = "1" ]; then
             cat > ./clang-tidy-shim << 'SHIMEOF'
           #!/bin/bash
           exec clang-tidy-cache clang-tidy-20 "$@"
@@ -201,7 +205,11 @@ jobs:
           exec clang-tidy-20 "$@"
           SHIMEOF
             chmod +x ./clang-tidy-shim
-            echo "::warning::clang-tidy-cache not found — running clang-tidy-20 directly (no result caching)"
+            if ! command -v clang-tidy-cache &>/dev/null; then
+              echo "::warning::clang-tidy-cache not found — running clang-tidy-20 directly (no result caching)"
+            else
+              echo "::warning::Garage S3 unreachable at probe time — falling back to direct clang-tidy-20 (no result caching)"
+            fi
           fi
 
       - name: 🔍 Analyze code with clang-tidy
