@@ -64,7 +64,7 @@ FORCE_INLINE void reduce_block(
             compute_kernel_lib::Accumulate::at(cb_acc, chunk_idx),
 #ifdef REDUCE_POST_MUL
             [](uint32_t dst_idx) {
-                constexpr uint32_t post_mul_scaler_bits = get_compile_time_arg_val(5);
+                constexpr uint32_t post_mul_scaler_bits = get_compile_time_arg_val(3);
                 binop_with_scalar_tile_init();
                 mul_unary_tile(dst_idx, post_mul_scaler_bits);
             }
@@ -96,8 +96,8 @@ void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t NC = get_compile_time_arg_val(2);
-    constexpr uint32_t wt_tiles_per_chunk = get_compile_time_arg_val(3);
-    constexpr uint32_t ht_tiles_per_chunk = get_compile_time_arg_val(4);
+    constexpr uint32_t wt_tiles_per_chunk = get_compile_time_arg_val(4);
+    constexpr uint32_t ht_tiles_per_chunk = get_compile_time_arg_val(5);
     // arg(5) = post_mul_scaler_bits — captured inside reduce_block() under REDUCE_POST_MUL.
 
     compute_kernel_hw_startup(cb_rm, cb_tile_in);

@@ -5,7 +5,11 @@
 
 #pragma once
 
+#include <bit>
+#include <limits>
 #include <string_view>
+
+#include <tt-metalium/bfloat16.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 
@@ -20,6 +24,25 @@ enum class ReduceOpParallelizationStrategy { MULTI_CORE_H, MULTI_CORE_W, MULTI_C
 }  // namespace tt::tt_metal
 
 namespace ttnn::prim {
+
+// Identity element for the given reduction math op: -inf for MAX, +inf for MIN, 0 otherwise.
+// Used by the dense RM paths to pad partial chunks without disturbing the result.
+inline float get_reduce_pad_value(tt::tt_metal::ReduceOpMath reduce_math) {
+    using tt::tt_metal::ReduceOpMath;
+    return reduce_math == ReduceOpMath::MAX   ? -std::numeric_limits<float>::infinity()
+           : reduce_math == ReduceOpMath::MIN ? std::numeric_limits<float>::infinity()
+                                              : 0.0f;
+}
+
+// Bit pattern of the RM padding identity in the input's data format, ready to load into a CB tile.
+inline uint32_t dense_rm_padding_identity_bits(tt::DataFormat df, tt::tt_metal::ReduceOpMath op) {
+    const float v = get_reduce_pad_value(op);
+    if (df == tt::DataFormat::Float32) {
+        return std::bit_cast<uint32_t>(v);
+    }
+    const uint16_t bf16 = std::bit_cast<uint16_t>(bfloat16::truncate(v));
+    return static_cast<uint32_t>(bf16);
+}
 
 tt::tt_metal::ReduceOpParallelizationStrategy get_parallelization_strategy(
     const tt::tt_metal::Tensor& input_tensors, tt::tt_metal::ReduceOpDim reduce_dim);

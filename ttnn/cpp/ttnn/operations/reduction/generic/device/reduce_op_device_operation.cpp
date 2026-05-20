@@ -13,12 +13,6 @@ namespace ttnn::prim {
 ReduceDeviceOperation::program_factory_t ReduceDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using namespace tt::tt_metal;
-    if (operation_attributes.row_major_w_dense_path) {
-        return ReduceMultiCoreWRmProgramFactory{};
-    }
-    if (operation_attributes.row_major_h_dense_path) {
-        return ReduceMultiCoreHRmProgramFactory{};
-    }
     auto parallelization_strategy = get_parallelization_strategy(tensor_args, operation_attributes.dim);
 
     switch (parallelization_strategy) {
