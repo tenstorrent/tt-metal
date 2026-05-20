@@ -14,6 +14,8 @@ Steady-state replay latency = real e2e fps for pi0.5 on this hardware.
 Skipped if the checkpoint isn't present locally.
 """
 
+import json
+import os
 import statistics
 import time
 from pathlib import Path
@@ -23,7 +25,25 @@ import pytest
 import torch
 import ttnn
 
-CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "weights" / "pi05_base"
+_DEFAULT_CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "weights" / "pi05_base"
+CHECKPOINT_DIR = Path(os.environ.get("PI05_CHECKPOINT_DIR", str(_DEFAULT_CHECKPOINT_DIR)))
+
+
+def _action_horizon_from_checkpoint(d: Path, default: int = 50) -> int:
+    """Read action_horizon from the checkpoint's config.json.
+    Accepts either openpi's `action_horizon` or lerobot's `chunk_size`.
+    """
+    cfg = d / "config.json"
+    if cfg.exists():
+        try:
+            data = json.loads(cfg.read_text())
+            for key in ("action_horizon", "chunk_size"):
+                if key in data:
+                    return int(data[key])
+        except (ValueError, json.JSONDecodeError):
+            pass
+    return default
+
 
 NUM_WARMUP = 2
 NUM_ITERS = 20
@@ -95,9 +115,14 @@ def test_pi0_5_ttnn_full_e2e_trace(device):
     from models.experimental.pi0_5.common.weight_loader import Pi0_5WeightLoader
     from models.experimental.pi0_5.tt.ttnn_pi0_5_model import Pi0_5ModelTTNN
 
-    print(f"\n📋 Loading PI0.5 TTNN model from {CHECKPOINT_DIR}")
+    action_horizon = _action_horizon_from_checkpoint(CHECKPOINT_DIR)
+    num_denoising_steps = int(os.environ.get("PI05_NUM_DENOISE_STEPS", "10"))
+    print(
+        f"\n📋 Loading PI0.5 TTNN model from {CHECKPOINT_DIR}  "
+        f"(action_horizon={action_horizon}, num_denoising_steps={num_denoising_steps})"
+    )
     loader = Pi0_5WeightLoader(str(CHECKPOINT_DIR))
-    cfg = Pi0_5ModelConfig()
+    cfg = Pi0_5ModelConfig(action_horizon=action_horizon, num_denoising_steps=num_denoising_steps)
     model = Pi0_5ModelTTNN(cfg, loader, device)
     print(f"✅ Model loaded")
 
@@ -117,6 +142,22 @@ def test_pi0_5_ttnn_full_e2e_trace(device):
     # forbids. The captured trace reuses model.x_t_ttnn — refresh it between
     # trace replays by setting model.x_t_ttnn from host before each replay.
     model.resample_noise = False
+
+    # Pre-stage upstream-compat artifacts (mask + RoPE tables) before trace
+    # capture. When PI0_UPSTREAM_MASKS=1 or PI0_SIGLIP_HF=1, sample_actions
+    # would otherwise build these on host + upload them inside the captured
+    # region — which trace capture forbids. With the artifacts cached on the
+    # model, sample_actions consumes them by reference and the captured
+    # trace replays cleanly. No-op when neither env var is set.
+    from models.experimental.pi0_5.tt.ttnn_pi0_5_model import use_upstream_masks
+
+    if use_upstream_masks():
+        # The image is uploaded as (B, 3, 224, 224); prefix_len = 256 (one
+        # image) + LANG_SEQ_LEN. Match `_call_sample_actions`'s single-image
+        # signature for this test.
+        prefix_len = 256 + LANG_SEQ_LEN
+        model.prepare_upstream_artifacts([img_mask], lang_masks_ttnn, prefix_len=prefix_len)
+        print(f"   pre-staged upstream artifacts (prefix_len={prefix_len})")
 
     print(f"\n📷 Capturing trace of full sample_actions…")
     capture_start = time.perf_counter()
