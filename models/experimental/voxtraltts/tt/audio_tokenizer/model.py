@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""TTNN audio tokenizer. Decoder always loaded; encoder modules only constructed when checkpoint keys exist."""
+"""TT audio tokenizer decode path; encoder modules optional (gated on checkpoint keys)."""
 
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ def extract_audio_tokenizer_state_dict(full_state_dict: dict) -> dict:
 
 
 class VoxtralTTAudioTokenizer:
-    """Tokenizer on TT: encoder stem optional; decoder blocks loaded when keys exist (see ``params.json`` norms)."""
+    """TT decode stack (+ optional encoder / quantizer when weights exist)."""
 
     cfg: VoxtralAudioTokenizerConfig
 
@@ -457,10 +457,7 @@ class VoxtralTTAudioTokenizer:
             )
 
         b, _, input_t, input_c = (int(latent_b1tc.shape[i]) for i in range(4))
-        # Keep decoder transformer sequence lengths tile-aligned.  TT SDPA operates
-        # on tiled tensors; non-multiple-of-32 generated-code lengths can let padded
-        # tile lanes perturb attention numerics.  The stack is causal/sliding-window,
-        # so right-padding then trimming preserves the logical decoded prefix.
+        # Pad T to a tile multiple for SDPA; trim after upsample (causal stack).
         min_decode_t = 32
         decode_t = max(min_decode_t, ((input_t + 31) // 32) * 32)
         stack_input = latent_b1tc
@@ -491,11 +488,7 @@ class VoxtralTTAudioTokenizer:
         m = self._decoder_sliding_window_attn_mask_tt(int(x.shape[2]))
         x = self.decoder_blocks_5_forward(x, attn_mask=m)
         ttnn.deallocate(m)
-        # Flush the async command queue so L1 tensors produced by the preceding
-        # transformer (SDPA output etc.) are physically freed before decoder_blocks_6's
-        # conv1d compiles its program and runs the static-CB / L1-buffer clash check.
-        # Pattern follows tt_transformers/generator.py. Same fence is needed after
-        # decoder_blocks_7 for symmetry on very long sequences.
+        # Free L1 from prior SDPA before decoder_blocks_6 conv static-CB compile (P150).
         ttnn.synchronize_device(self.mesh_device)
         x = self.decoder_blocks_6_forward(x)
         m = self._decoder_sliding_window_attn_mask_tt(int(x.shape[2]))
@@ -722,8 +715,6 @@ class VoxtralTTAudioTokenizer:
         if len(mel_b1tc.shape) != 4 or int(mel_b1tc.shape[1]) != 1:
             raise ValueError(f"Expected [B,1,T,C_mel] mel, got {tuple(mel_b1tc.shape)}")
         b, _, t, c_mel = (int(mel_b1tc.shape[i]) for i in range(4))
-        # The waveform "pretransform" is only a flattening reshape.  Do the
-        # final view on host after copying the TT mel out; a TT-side reshape of
-        # [1,1,20000,240] -> [1,1,4800000] creates an oversized L1 CB on P150.
+        # Flatten on host — large TT reshape blows L1 on P150.
         mel_host = ttnn.to_torch(mel_b1tc).float()
         return mel_host.reshape(b, 1, t * c_mel)

@@ -11,8 +11,7 @@ from loguru import logger
 import ttnn
 
 
-# Keep medium sequences unchunked for numerical parity; chunk only when the
-# sequence is large enough to hit P150 L1 pressure in the demo path.
+# Chunk long conv outputs to avoid P150 L1 pressure.
 MAX_CONV_TRANSPOSE_OUTPUT_CHUNK = 1024
 
 
@@ -63,14 +62,10 @@ def resolve_input_proj_conv_weight(state_dict: dict):
 
 
 def get_audio_tokenizer_conv_configs(device):
-    """Same pattern as Whisper ``get_conv_configs`` (``ttnn_optimized_functional_whisper``)."""
     conv1d_config = ttnn.Conv1dConfig(
         weights_dtype=ttnn.bfloat16,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         config_tensors_in_dram=True,
-        # Limit activation block height to one tile (32 rows).
-        # Default (0) uses output_matrix_height_per_core which grows with sequence length
-        # and causes L1 circular-buffer overflow on P150 Blackhole for long sequences.
         act_block_h_override=32,
     )
     conv1d_compute_config = ttnn.init_device_compute_kernel_config(
@@ -83,14 +78,7 @@ def get_audio_tokenizer_conv_configs(device):
 
 
 def get_audio_tokenizer_conv_transpose_configs(device):
-    """Conservative config for CausalConvTranspose1d on long upsampled sequences.
-
-    Disables packer L1 accumulation (packer_l1_acc=False) to eliminate the
-    per-core output-accumulation CB whose size grows with sequence length.
-    On P150 Blackhole those CBs push the static-CB region past existing L1
-    allocations, causing the 'circular buffers clash with L1 buffers' error at
-    decoder_blocks_6 where the sequence has been upsampled 4x from the latent.
-    """
+    """Conv transpose config: ``packer_l1_acc=False`` avoids P150 static-CB clashes on long seqs."""
     conv1d_config = ttnn.Conv1dConfig(
         weights_dtype=ttnn.bfloat16,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -103,7 +91,7 @@ def get_audio_tokenizer_conv_transpose_configs(device):
         device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi2,
         fp32_dest_acc_en=False,
-        packer_l1_acc=False,  # no L1 accumulation CBs — keeps static CB region smaller
+        packer_l1_acc=False,
     )
     return conv1d_config, conv1d_compute_config
 
@@ -678,7 +666,6 @@ class VoxtralTTAudioTokenizerDecoderCausalConvTranspose1d:
         self.max_conv_output_chunk = MAX_CONV_TRANSPOSE_OUTPUT_CHUNK
         self.debug_name = f"decoder_blocks.{self.block_index}.conv_transpose"
 
-        # ConvTranspose1d weight is [in, out, k]. Equivalent conv1d uses [out, in, flipped_k].
         w_t = resolve_decoder_block_conv_transpose_fused_weight(state_dict, block_index).contiguous()
         ic, oc, k = (int(w_t.shape[0]), int(w_t.shape[1]), int(w_t.shape[2]))
         if in_channels is not None and ic != in_channels:
@@ -724,16 +711,10 @@ class VoxtralTTAudioTokenizerDecoderCausalConvTranspose1d:
         if c != self.in_channels:
             raise ValueError(f"Expected C_in={self.in_channels}, got {c}")
 
-        # Ensure the input is in DRAM before conv1d compiles its program.
-        # The preceding transformer block can output an L1 tensor whose address
-        # falls inside the conv1d static CB region on long sequences (4–8× the
-        # initial seq length for decoder_blocks_4/6), causing a CB/L1 clash.
-        # Only copy+free when the input is genuinely in L1; if it is already in
-        # DRAM, to_memory_config() returns the *same* Python object and deallocating
-        # it would make x_dram invalid ("Tensor is not allocated").
+        # Move L1 activations to DRAM before conv compile (avoid CB/L1 clash on long seqs).
         if x_b1tc.memory_config().buffer_type != ttnn.BufferType.DRAM:
             x_dram = ttnn.to_memory_config(x_b1tc, ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(x_b1tc)  # release L1 before conv CBs are compiled
+            ttnn.deallocate(x_b1tc)
             _free_x_dram = True
         else:
             x_dram = x_b1tc
@@ -842,9 +823,6 @@ class VoxtralTTAudioTokenizerDecoderCausalConvTranspose1d:
                             _tensor_debug(conv_chunk),
                             tuple(weight_tensor.shape),
                         )
-                    # Do not cache returned device-prepared weights here. Each split
-                    # runs once per decode, and retaining prepared weights increases
-                    # L1 pressure for subsequent split/chunk programs.
                     out_chunk = ttnn.conv1d(
                         input_tensor=conv_chunk,
                         weight_tensor=weight_tensor,
@@ -901,5 +879,4 @@ class VoxtralTTAudioTokenizerDecoderCausalConvTranspose1d:
             ttnn.deallocate(conv_out)
             out4 = ttnn.reshape(out3, (b, 1, t_out, self.out_channels))
             ttnn.deallocate(out3)
-        _ = right_padding
         return ttnn.to_layout(out4, ttnn.TILE_LAYOUT)

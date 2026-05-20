@@ -35,7 +35,6 @@ class VoxtralTTMLP:
                 return state_dict[f"{key}.weight"]
             raise KeyError(f"Missing MLP weight for key '{key}'")
 
-        # F.linear uses weight [out, in]. ttnn.linear expects [in, out], so transpose.
         w1 = get_weight(w1_key).transpose(-2, -1).contiguous()
         w2 = get_weight(w2_key).transpose(-2, -1).contiguous()
         w3 = get_weight(w3_key).transpose(-2, -1).contiguous()
@@ -63,8 +62,6 @@ class VoxtralTTMLP:
         )
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        # Reuse the shared tt_transformers MLP pattern:
-        # w2_in = mul(w1_out, w3_out, input_tensor_a_activations=[SILU])
         _lin_kw = {"dtype": self.output_dtype, "memory_config": ttnn.DRAM_MEMORY_CONFIG}
         if self.compute_kernel_config is not None:
             _lin_kw["compute_kernel_config"] = self.compute_kernel_config
