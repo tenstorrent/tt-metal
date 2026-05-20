@@ -571,6 +571,133 @@ class VoxtralTTAcousticModel:
         offset = len(AudioSpecialTokens.all_special_tokens())
         return output_codes + offset
 
+    def _decode_one_frame_tt(
+        self,
+        semantic_code_tt: ttnn.Tensor,
+        llm_hidden_tt: ttnn.Tensor,
+        cfg_scalar: float,
+        noise_tt: ttnn.Tensor,
+    ) -> ttnn.Tensor:
+        """Euler FM on device for trace replay; returns rounded acoustic codes ``[bsz, n_acoustic]`` on device."""
+        bsz = int(llm_hidden_tt.shape[0])
+        # Clone so euler deallocations never free the persistent ``noise_tt`` (trace compile runs twice).
+        sampled_tt = ttnn.clone(noise_tt)
+        tt_llm = llm_hidden_tt
+        tt_llm_zero = ttnn.zeros_like(tt_llm)
+        tt_llm_batched = ttnn.concat([tt_llm, tt_llm_zero], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(tt_llm_zero)
+
+        for i in range(len(self._timesteps_cpu) - 1):
+            t_val = float(self._timesteps_cpu[i].item())
+            dt_val = float((self._timesteps_cpu[i + 1] - self._timesteps_cpu[i]).item())
+
+            te = self._time_embedding_tt(t_val, bsz)
+            x_batched = ttnn.concat([sampled_tt, sampled_tt], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            te_batched = ttnn.concat([te, te], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(te)
+            v_tt = self._predict_velocity_impl(
+                None,
+                None,
+                None,
+                _tt_xt=x_batched,
+                _tt_te=te_batched,
+                _tt_llm=tt_llm_batched,
+                return_debug=False,
+            )
+
+            v_shape = tuple(v_tt.shape)
+            v_cond = ttnn.slice(v_tt, [0, 0, 0, 0], [bsz, v_shape[1], v_shape[2], v_shape[3]])
+            v_uncond = ttnn.slice(v_tt, [bsz, 0, 0, 0], [2 * bsz, v_shape[1], v_shape[2], v_shape[3]])
+            ttnn.deallocate(v_tt)
+            v_cond_scaled = ttnn.multiply(v_cond, cfg_scalar, dtype=self.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(v_cond)
+            v_uncond_scaled = ttnn.multiply(
+                v_uncond, 1.0 - cfg_scalar, dtype=self.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            ttnn.deallocate(v_uncond)
+            v_t_tt = ttnn.add(v_cond_scaled, v_uncond_scaled, dtype=self.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(v_cond_scaled)
+            ttnn.deallocate(v_uncond_scaled)
+
+            v_t_3d = ttnn.reshape(v_t_tt, (bsz, 1, self.n_acoustic_out))
+            ttnn.deallocate(v_t_tt)
+            v_scaled = ttnn.multiply(v_t_3d, dt_val, dtype=self.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(v_t_3d)
+            new_sampled = ttnn.add(sampled_tt, v_scaled, dtype=self.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(sampled_tt)
+            ttnn.deallocate(v_scaled)
+            sampled_tt = new_sampled
+
+        ttnn.deallocate(tt_llm_batched)
+
+        clamped_tt = ttnn.clip(sampled_tt, min=-1.0, max=1.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(sampled_tt)
+        plus_one_tt = ttnn.add(clamped_tt, 1.0, dtype=self.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(clamped_tt)
+        halved_tt = ttnn.multiply(plus_one_tt, 0.5, dtype=self.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(plus_one_tt)
+        scaled_tt = ttnn.multiply(
+            halved_tt,
+            float(self._acoustic_embeddings_levels - 1),
+            dtype=self.dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(halved_tt)
+        return ttnn.round(scaled_tt, decimals=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    def forward_semantic_trace(self, llm_hidden_tt: ttnn.Tensor) -> ttnn.Tensor:
+        """Trace-safe semantic head only (linear + masked argmax). No host I/O; does not touch inputs."""
+        sem_tt = ttnn.linear(
+            llm_hidden_tt,
+            self.w_semantic,
+            dtype=self.dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self._compute_kernel_config,
+        )
+        sem_masked = ttnn.add(sem_tt, self._sem_mask_tt, dtype=self.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(sem_tt)
+        semantic_code_tt = ttnn.argmax(sem_masked, dim=2, keepdim=True)
+        ttnn.deallocate(sem_masked)
+        return semantic_code_tt
+
+    def forward_acoustic_trace_codes(
+        self,
+        llm_hidden_tt: ttnn.Tensor,
+        noise_tt: ttnn.Tensor,
+        cfg_scalar: float,
+    ) -> ttnn.Tensor:
+        """Trace-safe acoustic frame; returns ``[B, 1, 1+n_acoustic]`` discrete codes on device."""
+        semantic_code_tt = self.forward_semantic_trace(llm_hidden_tt)
+        rounded_tt = self._decode_one_frame_tt(semantic_code_tt, llm_hidden_tt, cfg_scalar, noise_tt)
+        sem_tile = ttnn.to_layout(semantic_code_tt, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if semantic_code_tt.is_allocated():
+            ttnn.deallocate(semantic_code_tt)
+        if sem_tile.dtype != self.dtype:
+            sem_cast = ttnn.typecast(sem_tile, self.dtype)
+            ttnn.deallocate(sem_tile)
+            sem_tile = sem_cast
+        offset = float(len(AudioSpecialTokens.all_special_tokens()))
+        rounded_off = ttnn.add(rounded_tt, offset, dtype=self.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(rounded_tt)
+        codes_tt = ttnn.concat([sem_tile, rounded_off], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(sem_tile)
+        ttnn.deallocate(rounded_off)
+        return codes_tt
+
+    def forward_acoustic_trace(
+        self,
+        llm_hidden_tt: ttnn.Tensor,
+        noise_tt: ttnn.Tensor,
+        cfg_scalar: float,
+    ) -> None:
+        """Trace-safe full acoustic frame: semantic argmax + Euler FM (no host I/O).
+
+        ``noise_tt`` must stay allocated across trace compile/capture and replay; FM uses
+        ``ttnn.clone(noise_tt)`` internally so euler temporaries never free it.
+        """
+        codes_tt = self.forward_acoustic_trace_codes(llm_hidden_tt, noise_tt, cfg_scalar)
+        ttnn.deallocate(codes_tt)
+
     def predict_velocity(
         self,
         x_t: torch.Tensor,
