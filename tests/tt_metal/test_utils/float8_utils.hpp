@@ -8,6 +8,7 @@
 #include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/float8.hpp>
 
 namespace tt::test_utils {
@@ -37,12 +38,17 @@ inline std::vector<float> bf16_to_floats(const std::vector<uint32_t>& packed) {
     return detail::to_floats(unpack_uint32_vec_into_bfloat16_vec(packed));
 }
 
-// Linear byte index within a 32x32 tile of 1-byte elements stored as 4 16x16
-// faces in (TL, TR, BL, BR) order, addressed by logical (col, row).
-// Applies to any 8-bit tile format (Fp8_e4m3, Lf8, Int8, UInt8).
+// Linear byte index within a TILE_HEIGHT x TILE_WIDTH tile of 1-byte elements
+// stored as 4 FACE_HEIGHT x FACE_WIDTH faces in (TL, TR, BL, BR) order,
+// addressed by logical (col, row). Applies to any 8-bit tile format
+// (Fp8_e4m3, Lf8, Int8, UInt8).
 inline int byte_tile_face_major_index(int col, int row) {
-    int offset = ((col < 16) ? 0 : 256) + ((row < 16) ? 0 : 512);
-    return offset + ((row % 16) * 16) + (col % 16);
+    constexpr int kFaceH = static_cast<int>(tt::constants::FACE_HEIGHT);
+    constexpr int kFaceW = static_cast<int>(tt::constants::FACE_WIDTH);
+    constexpr int kFaceHW = kFaceH * kFaceW;     // bytes per face (TL, TR, or BL)
+    constexpr int kTopRowFacesHW = 2 * kFaceHW;  // TL + TR — bytes per top tile-row
+    const int offset = ((col < kFaceW) ? 0 : kFaceHW) + ((row < kFaceH) ? 0 : kTopRowFacesHW);
+    return offset + ((row % kFaceH) * kFaceW) + (col % kFaceW);
 }
 
 }  // namespace tt::test_utils

@@ -65,6 +65,14 @@ struct BlockedMatmulConfig {
     uint32_t N = 1;           // per-block cols (tiles)
     uint32_t num_blocks = 1;  // number of K-blocks
     bool packer_l1_acc = false;
+    // Format / DEST-mode parameters. Defaults preserve the original BF16 + fp32_dest=false
+    // behaviour exercised by `TensixTestSingleCoreMultiBlock*ComputeMatmul` (and the Quasar
+    // multi-block matmul tests). On Blackhole, any in/out FP8 path requires
+    // fp32_dest_acc_en=true (asserted at JIT time in ComputeKernel::set_build_options).
+    tt::DataFormat in0_fmt = tt::DataFormat::Float16_b;
+    tt::DataFormat in1_fmt = tt::DataFormat::Float16_b;
+    tt::DataFormat out_fmt = tt::DataFormat::Float16_b;
+    bool fp32_dest_acc_en = false;
 };
 
 void create_CBs_for_fused_matmul(
@@ -604,20 +612,29 @@ bool single_block_matmul(
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
-    const bool fp8_out = (out_fmt == tt::DataFormat::Fp8_e4m3);
-    auto dest_floats = fp8_out ? fp8_to_floats(dest_buffer_data) : bf16_to_floats(dest_buffer_data);
-
+    std::vector<float> dest_floats;
     // Tolerances under random U(-1, +1) stimulus. FP8 output: ~1/8
     // quantization plus deeper accumulation rounding for K>1. BF16 output
     // (default fp32_dest_acc=false uses BF16 dest accumulation, so per-element
     // error grows with K * TILE_WIDTH inner-dim length) needs a few-percent
     // slack. PCC backstop catches structural mis-permutations that pointwise
     // tolerances would let slip.
-    const float rtol = fp8_out ? 0.125f : 0.05f;
-    const float atol = fp8_out ? ((K > 1) ? 0.25f : 0.125f) : ((K > 1) ? 0.4f : 0.2f);
+    float rtol = 0.05f;
+    float atol = (K > 1) ? 0.4f : 0.2f;
+    double min_pcc = 0.99;
+    if (out_fmt == tt::DataFormat::Fp8_e4m3) {
+        dest_floats = fp8_to_floats(dest_buffer_data);
+        rtol = 0.125f;
+        atol = (K > 1) ? 0.25f : 0.125f;
+        min_pcc = (K > 1) ? 0.98 : 0.99;
+    } else if (out_fmt == tt::DataFormat::Float16_b) {
+        dest_floats = bf16_to_floats(dest_buffer_data);
+    } else {
+        TT_FATAL(false, "single_block_matmul: unsupported out_fmt {}", static_cast<int>(out_fmt));
+    }
+
     pass &= tt::test_utils::is_close_vectors<float>(
         dest_floats, golden_floats, [&](float a, float b) { return tt::test_utils::is_close(a, b, rtol, atol); });
-    const double min_pcc = fp8_out ? ((K > 1) ? 0.98 : 0.99) : 0.99;
     pass &= check_pcc(dest_floats, golden_floats, min_pcc);
     if (not pass) {
         dump_matmul_debug(stimulus.in0_floats, stimulus.in1_floats, golden_floats, dest_floats);
@@ -630,17 +647,26 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const uint32_t K = cfg.K;
     const uint32_t N = cfg.N;
     const uint32_t num_blocks = cfg.num_blocks;
+    const tt::DataFormat in0_fmt = cfg.in0_fmt;
+    const tt::DataFormat in1_fmt = cfg.in1_fmt;
+    const tt::DataFormat out_fmt = cfg.out_fmt;
 
     const bool is_quasar = MetalContext::instance().get_cluster().arch() == ARCH::QUASAR;
 
     bool pass = true;
     CoreCoord core(0, 0);
-    const size_t cb_page_size = 2 * tt::constants::TILE_HW;  // 2 bytes per bfloat16 element
-    const size_t in0_block_size_bytes = M * K * cb_page_size;
-    const size_t in1_block_size_bytes = K * N * cb_page_size;
+    const size_t in0_tile_size = tt::tile_size(in0_fmt);
+    const size_t in1_tile_size = tt::tile_size(in1_fmt);
+    const size_t out_tile_size = tt::tile_size(out_fmt);
+    // Partials CB carries the in-flight DEST tiles. Sizing it as the output format is a
+    // conservative bound — it matches existing BF16 behaviour and works for FP8 since the
+    // packer gasket converts Float32 DEST → out_fmt at L1 write time.
+    const size_t partials_tile_size = out_tile_size;
+    const size_t in0_block_size_bytes = M * K * in0_tile_size;
+    const size_t in1_block_size_bytes = K * N * in1_tile_size;
     const size_t in0_total_size_bytes = num_blocks * in0_block_size_bytes;
     const size_t in1_total_size_bytes = num_blocks * in1_block_size_bytes;
-    const size_t out_byte_size = M * N * cb_page_size;
+    const size_t out_byte_size = M * N * out_tile_size;
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -685,7 +711,11 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t partials_id = 0;
 
     if (is_quasar) {
-        auto make_dfb = [&](uint32_t entry_size, uint32_t num_entries, uint16_t producer_mask, uint16_t consumer_mask) {
+        auto make_dfb = [&](uint32_t entry_size,
+                            uint32_t num_entries,
+                            uint16_t producer_mask,
+                            uint16_t consumer_mask,
+                            tt::DataFormat fmt) {
             return tt_metal::experimental::dfb::CreateDataflowBuffer(
                 program_,
                 core,
@@ -700,16 +730,16 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
                     .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
                     .enable_producer_implicit_sync = false,
                     .enable_consumer_implicit_sync = false,
-                    .data_format = tt::DataFormat::Float16_b});
+                    .data_format = fmt});
         };
-        in0_id = make_dfb(cb_page_size, M * K, 0x1, 0x100);
-        in1_id = make_dfb(cb_page_size, K * N, 0x1, 0x100);
-        out_id = make_dfb(cb_page_size, M * N, 0x100, 0x2);
+        in0_id = make_dfb(in0_tile_size, M * K, 0x1, 0x100, in0_fmt);
+        in1_id = make_dfb(in1_tile_size, K * N, 0x1, 0x100, in1_fmt);
+        out_id = make_dfb(out_tile_size, M * N, 0x100, 0x2, out_fmt);
         partials_id = tt_metal::experimental::dfb::CreateDataflowBuffer(
             program_,
             core,
             tt_metal::experimental::dfb::DataflowBufferConfig{
-                .entry_size = cb_page_size,
+                .entry_size = partials_tile_size,
                 .num_entries = M * N,
                 .num_producers = 1,
                 .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
@@ -717,7 +747,7 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
                 .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
                 .enable_producer_implicit_sync = false,
                 .enable_consumer_implicit_sync = false,
-                .data_format = tt::DataFormat::Float16_b,
+                .data_format = out_fmt,
                 .tensix_scope = tt_metal::experimental::dfb::TensixScope::INTRA});
     } else {
         const uint32_t in0_cb_index = 0;
@@ -726,23 +756,23 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         const uint32_t partials_cb_index = 24;
 
         tt_metal::CircularBufferConfig l1_input0_cb_config =
-            tt_metal::CircularBufferConfig(in0_block_size_bytes, {{in0_cb_index, tt::DataFormat::Float16_b}})
-                .set_page_size(in0_cb_index, cb_page_size);
+            tt_metal::CircularBufferConfig(in0_block_size_bytes, {{in0_cb_index, in0_fmt}})
+                .set_page_size(in0_cb_index, in0_tile_size);
         tt_metal::CreateCircularBuffer(program_, core, l1_input0_cb_config);
 
         tt_metal::CircularBufferConfig l1_input1_cb_config =
-            tt_metal::CircularBufferConfig(in1_block_size_bytes, {{in1_cb_index, tt::DataFormat::Float16_b}})
-                .set_page_size(in1_cb_index, cb_page_size);
+            tt_metal::CircularBufferConfig(in1_block_size_bytes, {{in1_cb_index, in1_fmt}})
+                .set_page_size(in1_cb_index, in1_tile_size);
         tt_metal::CreateCircularBuffer(program_, core, l1_input1_cb_config);
 
         tt_metal::CircularBufferConfig l1_output_cb_config =
-            tt_metal::CircularBufferConfig(out_byte_size, {{out_cb_index, tt::DataFormat::Float16_b}})
-                .set_page_size(out_cb_index, cb_page_size);
+            tt_metal::CircularBufferConfig(out_byte_size, {{out_cb_index, out_fmt}})
+                .set_page_size(out_cb_index, out_tile_size);
         tt_metal::CreateCircularBuffer(program_, core, l1_output_cb_config);
 
         tt_metal::CircularBufferConfig l1_partials_cb_config =
-            tt_metal::CircularBufferConfig(out_byte_size, {{partials_cb_index, tt::DataFormat::Float16_b}})
-                .set_page_size(partials_cb_index, cb_page_size);
+            tt_metal::CircularBufferConfig(out_byte_size, {{partials_cb_index, out_fmt}})
+                .set_page_size(partials_cb_index, partials_tile_size);
         tt_metal::CreateCircularBuffer(program_, core, l1_partials_cb_config);
 
         in0_id = in0_cb_index;
@@ -816,81 +846,57 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
             program_,
             "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/multi_block_compute.cpp",
             core,
-            tt_metal::ComputeConfig{.compile_args = compute_compile_args, .defines = compute_defines});
+            tt_metal::ComputeConfig{
+                .fp32_dest_acc_en = cfg.fp32_dest_acc_en,
+                .compile_args = compute_compile_args,
+                .defines = compute_defines});
     }
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Stimulus Generation
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<uint32_t> packed_input0 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        0.0f,
-        1.0f,
-        in0_total_size_bytes / sizeof(bfloat16),
-        std::chrono::system_clock::now().time_since_epoch().count());
-    std::vector<uint32_t> packed_input1 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        -0.45f,
-        1.0f,
-        in1_total_size_bytes / sizeof(bfloat16),
-        std::chrono::system_clock::now().time_since_epoch().count());
+    // Stimulus + reference floats are emitted in face-major-tile order across the full
+    // num_blocks × (M×K) / (K×N) tile counts; we slice into per-block windows in the golden loop.
+    const OperandStimulus in0_stim = make_operand_stimulus(in0_fmt, num_blocks * M * K, /*seed=*/0);
+    const OperandStimulus in1_stim = make_operand_stimulus(in1_fmt, num_blocks * K * N, /*seed=*/1);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Golden Generation
     ////////////////////////////////////////////////////////////////////////////
-    // Data in DRAM is in TILED_NFACES layout, stored as num_blocks consecutive
-    // blocks of [M*32, K*32] and [K*32, N*32] respectively.
-    const uint32_t M_elem = M * 32;
-    const uint32_t K_elem = K * 32;
-    const uint32_t N_elem = N * 32;
-    const uint32_t block_in0_elems = M_elem * K_elem;
-    const uint32_t block_in1_elems = K_elem * N_elem;
-    const uint32_t out_elems = M_elem * N_elem;
-
-    auto u16_in0 = u16_from_u32_vector(packed_input0);
-    auto u16_in1 = u16_from_u32_vector(packed_input1);
-
-    std::vector<float> golden_float(out_elems, 0.0f);
-    std::vector<uint32_t> block_shape_in0 = {1, 1, M_elem, K_elem};
-    std::vector<uint32_t> block_shape_in1 = {1, 1, K_elem, N_elem};
-
+    // Output is M×N tiles in face-major-tile order (TILED_NFACES layout). For each block,
+    // accumulate the per-block matmul into the shared golden, using byte_tile_face_major_index
+    // for both inputs and output to match the layout the device produces.
+    std::vector<float> golden_floats(M * N * tt::constants::TILE_HW, 0.0f);
     for (uint32_t b = 0; b < num_blocks; b++) {
-        // Extract this block's tile data and untilize to row-major
-        std::vector<uint16_t> block_in0(
-            u16_in0.begin() + b * block_in0_elems, u16_in0.begin() + (b + 1) * block_in0_elems);
-        std::vector<uint16_t> block_in1(
-            u16_in1.begin() + b * block_in1_elems, u16_in1.begin() + (b + 1) * block_in1_elems);
-
-        auto in0_rm = convert_layout<uint16_t>(
-            block_in0, block_shape_in0, TensorLayoutType::TILED_NFACES, TensorLayoutType::LIN_ROW_MAJOR);
-        auto in1_rm = convert_layout<uint16_t>(
-            block_in1, block_shape_in1, TensorLayoutType::TILED_NFACES, TensorLayoutType::LIN_ROW_MAJOR);
-
-        for (uint32_t i = 0; i < M_elem; i++) {
-            for (uint32_t j = 0; j < N_elem; j++) {
-                for (uint32_t k = 0; k < K_elem; k++) {
-                    float a = static_cast<float>(std::bit_cast<bfloat16>(in0_rm[i * K_elem + k]));
-                    float bb = static_cast<float>(std::bit_cast<bfloat16>(in1_rm[k * N_elem + j]));
-                    golden_float[i * N_elem + j] += a * bb;
+        const size_t in0_block_off = b * M * K * tt::constants::TILE_HW;
+        const size_t in1_block_off = b * K * N * tt::constants::TILE_HW;
+        for (uint32_t mt = 0; mt < M; mt++) {
+            for (uint32_t nt = 0; nt < N; nt++) {
+                const size_t out_tile_off = (mt * N + nt) * tt::constants::TILE_HW;
+                for (uint32_t y = 0; y < tt::constants::TILE_HEIGHT; y++) {
+                    for (uint32_t x = 0; x < tt::constants::TILE_WIDTH; x++) {
+                        float acc = 0.0f;
+                        for (uint32_t kt = 0; kt < K; kt++) {
+                            const size_t in0_tile_off = in0_block_off + (mt * K + kt) * tt::constants::TILE_HW;
+                            const size_t in1_tile_off = in1_block_off + (kt * N + nt) * tt::constants::TILE_HW;
+                            for (uint32_t z = 0; z < tt::constants::TILE_WIDTH; z++) {
+                                acc += in0_stim.floats[in0_tile_off + byte_tile_face_major_index(z, y)] *
+                                       in1_stim.floats[in1_tile_off + byte_tile_face_major_index(x, z)];
+                            }
+                        }
+                        golden_floats[out_tile_off + byte_tile_face_major_index(x, y)] += acc;
+                    }
                 }
             }
         }
     }
 
-    // Convert golden from float to bfloat16, tilize, and pack
-    std::vector<uint16_t> golden_u16(out_elems);
-    for (uint32_t i = 0; i < out_elems; i++) {
-        golden_u16[i] = std::bit_cast<uint16_t>(bfloat16(golden_float[i]));
-    }
-    std::vector<uint32_t> out_shape = {1, 1, M_elem, N_elem};
-    auto golden_tiled = convert_layout<uint16_t>(
-        golden_u16, out_shape, TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_NFACES);
-    auto packed_golden = u32_from_u16_vector(golden_tiled);
-
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
 
-    tt_metal::detail::WriteToBuffer(input0_dram_buffer, packed_input0);
-    tt_metal::detail::WriteToBuffer(input1_dram_buffer, packed_input1);
+    tt_metal::detail::WriteToBuffer(input0_dram_buffer, in0_stim.packed);
+    tt_metal::detail::WriteToBuffer(input1_dram_buffer, in1_stim.packed);
 
     tt_metal::SetRuntimeArgs(
         program_,
@@ -927,32 +933,34 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
+    std::vector<float> dest_floats;
+    if (out_fmt == tt::DataFormat::Fp8_e4m3) {
+        dest_floats = fp8_to_floats(dest_buffer_data);
+    } else if (out_fmt == tt::DataFormat::Float16_b) {
+        dest_floats = bf16_to_floats(dest_buffer_data);
+    } else {
+        TT_FATAL(false, "blocked_matmul: unsupported out_fmt {}", static_cast<int>(out_fmt));
+    }
 
-    int failed_index;
-    pass &= is_close_packed_vectors<bfloat16, uint32_t>(
-        dest_buffer_data,
-        packed_golden,
-        [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.05f, 0.05f); },
-        &failed_index);
-    if (not pass) {
-        log_info(tt::LogTest, "Failed Index={}", failed_index);
-        print_vector_fixed_numel_per_row(
-            unpack_vector<bfloat16, uint32_t>(dest_buffer_data), tt::constants::TILE_WIDTH);
+    // For BF16 output: per-element close (tight tolerances are realistic).
+    // For FP8 output: per-element checks are not meaningful — FP8 quantization compounds
+    // across blocks, and PACKER_L1_ACC re-quantizes every block-output through Fp8 storage.
+    // PCC is the structural-correctness backstop; thresholds reflect realistic FP8 fidelity loss
+    // (lower for L1Acc, which round-trips through Fp8 L1 every block instead of through Float32 DEST).
+    if (out_fmt == tt::DataFormat::Fp8_e4m3) {
+        const double min_pcc = cfg.packer_l1_acc ? 0.85 : 0.95;
+        pass &= check_pcc(dest_floats, golden_floats, min_pcc);
+    } else {
+        const float rtol = 0.05f;
+        const float atol = 0.05f + 0.05f * static_cast<float>(K * num_blocks);
+        pass &= tt::test_utils::is_close_vectors<float>(
+            dest_floats, golden_floats, [&](float a, float b) { return tt::test_utils::is_close(a, b, rtol, atol); });
+        pass &= check_pcc(dest_floats, golden_floats, /*min_pcc=*/0.99);
     }
     return pass;
 }
 
 }  // namespace unit_tests::compute::matmul
-
-namespace {
-const char* matmul_data_format_name(tt::DataFormat f) {
-    switch (f) {
-        case tt::DataFormat::Fp8_e4m3: return "Fp8_e4m3";
-        case tt::DataFormat::Float16_b: return "Float16_b";
-        default: return "DataFormat(unknown)";
-    }
-}
-}  // namespace
 
 TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleTileComputeMatmul) {
     for (unsigned int id = 0; id < num_devices_; id++) {
@@ -989,9 +997,39 @@ TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreMultiBlockL1AccComputeMatmul) {
     }
 }
 
-// sweeps in×out data format × fp32 dest acc (8 cases). Logs each case at start.
-// Skips mixed Fp8/non-Fp8 cells at fp32_dest=false — those require per-CB role
-// metadata in JIT to pick the correct DEST family.
+// FP8 variants of the multi-block matmul. Blackhole-gated because Fp8_e4m3 only exists on BH
+// and the JIT-time assert in ComputeKernel::set_build_options requires fp32_dest_acc_en=true
+// for any FP8 path. Mirrors the BF16 SpillReload / L1Acc tests at M=K=N=2, num_blocks=4.
+TEST_F(LLKBlackholeSingleCardFixture, TensixTestSingleCoreMultiBlockSpillReloadComputeMatmulFp8e4m3) {
+    unit_tests::compute::matmul::BlockedMatmulConfig config{
+        .M = 2,
+        .K = 2,
+        .N = 2,
+        .num_blocks = 4,
+        .packer_l1_acc = false,
+        .in0_fmt = tt::DataFormat::Fp8_e4m3,
+        .in1_fmt = tt::DataFormat::Fp8_e4m3,
+        .out_fmt = tt::DataFormat::Fp8_e4m3,
+        .fp32_dest_acc_en = true};
+    ASSERT_TRUE(unit_tests::compute::matmul::blocked_matmul(this->devices_.at(0), config));
+}
+TEST_F(LLKBlackholeSingleCardFixture, TensixTestSingleCoreMultiBlockL1AccComputeMatmulFp8e4m3) {
+    unit_tests::compute::matmul::BlockedMatmulConfig config{
+        .M = 2,
+        .K = 2,
+        .N = 2,
+        .num_blocks = 4,
+        .packer_l1_acc = true,
+        .in0_fmt = tt::DataFormat::Fp8_e4m3,
+        .in1_fmt = tt::DataFormat::Fp8_e4m3,
+        .out_fmt = tt::DataFormat::Fp8_e4m3,
+        .fp32_dest_acc_en = true};
+    ASSERT_TRUE(unit_tests::compute::matmul::blocked_matmul(this->devices_.at(0), config));
+}
+
+// Sweeps in × out data format (4 cells). fp32_dest_acc_en is fixed to true: BH requires it
+// whenever any CB is Fp8 (see ComputeKernel::set_build_options assert), and for the non-Fp8
+// cells the fp32-dest=false variant is already covered by other tests.
 TEST_F(LLKBlackholeSingleCardFixture, TensixTestSingleCoreSingleTileComputeMatmulFormatSweep) {
     static constexpr std::array<tt::DataFormat, 2> kInFormats = {
         tt::DataFormat::Fp8_e4m3,
@@ -1001,31 +1039,19 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixTestSingleCoreSingleTileComputeMatmu
         tt::DataFormat::Fp8_e4m3,
         tt::DataFormat::Float16_b,
     };
-    static constexpr std::array<bool, 2> kFp32DestAccEn = {true, false};
+    static constexpr bool kFp32DestAccEn = true;
 
     for (tt::DataFormat in_fmt : kInFormats) {
         for (tt::DataFormat out_fmt : kOutFormats) {
-            for (bool fp32_dest_acc_en : kFp32DestAccEn) {
-                const bool mixed_fp8 = (in_fmt == tt::DataFormat::Fp8_e4m3) != (out_fmt == tt::DataFormat::Fp8_e4m3);
-                if (mixed_fp8 && !fp32_dest_acc_en) {
-                    log_info(
-                        tt::LogTest,
-                        "TensixTestSingleCoreSingleTileComputeMatmulFormatSweep: SKIP in_fmt={} out_fmt={} "
-                        "fp32_dest_acc_en=false (unsupported on this branch)",
-                        matmul_data_format_name(in_fmt),
-                        matmul_data_format_name(out_fmt));
-                    continue;
-                }
-                log_info(
-                    tt::LogTest,
-                    "TensixTestSingleCoreSingleTileComputeMatmulFormatSweep: in_fmt={} out_fmt={} "
-                    "fp32_dest_acc_en={}",
-                    matmul_data_format_name(in_fmt),
-                    matmul_data_format_name(out_fmt),
-                    fp32_dest_acc_en);
-                ASSERT_TRUE(unit_tests::compute::matmul::single_tile_matmul(
-                    this->devices_.at(0), in_fmt, in_fmt, out_fmt, fp32_dest_acc_en));
-            }
+            log_info(
+                tt::LogTest,
+                "TensixTestSingleCoreSingleTileComputeMatmulFormatSweep: in_fmt={} out_fmt={} "
+                "fp32_dest_acc_en={}",
+                in_fmt,
+                out_fmt,
+                kFp32DestAccEn);
+            ASSERT_TRUE(unit_tests::compute::matmul::single_tile_matmul(
+                this->devices_.at(0), in_fmt, in_fmt, out_fmt, kFp32DestAccEn));
         }
     }
 }
@@ -1050,18 +1076,6 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixTestSingleCoreSingleBlockSingleTileA
         tt::DataFormat::Fp8_e4m3,
         tt::DataFormat::Fp8_e4m3,
         /*fp32_dest_acc_en=*/true));
-}
-
-TEST_F(
-    LLKBlackholeSingleCardFixture, TensixTestSingleCoreSingleBlockSingleTileAccumulationComputeMatmulFp8e4m3Fp16Dest) {
-    ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(
-        this->devices_.at(0),
-        1,
-        2,
-        1,
-        tt::DataFormat::Fp8_e4m3,
-        tt::DataFormat::Fp8_e4m3,
-        /*fp32_dest_acc_en=*/false));
 }
 
 }  // namespace tt::tt_metal
