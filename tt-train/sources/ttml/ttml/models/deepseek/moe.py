@@ -154,14 +154,25 @@ class MoE(AbstractModuleBase):
             # Reshape to [B, 1, S*n_groups, experts_per_group]
             biased_grouped = ttnn.reshape(biased, [B, 1, S * self.n_groups, experts_per_group])
 
-            # Score each group by its top-2 experts
+            # Score each group by its top-2 experts. Sum in fp32 — two
+            # near-equal group sums round to the same bf16 value and let
+            # topk's tie-break flip the routing decision unpredictably
+            # across platforms.
             top2_vals, _top2_idx = ttnn.topk(ttnn.typecast(biased_grouped, ttnn.DataType.BFLOAT16), 2, dim=-1)
-            group_scores = ttnn.sum(top2_vals, dim=-1, keepdim=True)
+            top2_vals_f32 = ttnn.typecast(top2_vals, ttnn.DataType.FLOAT32)
+            group_scores = ttnn.sum(top2_vals_f32, dim=-1, keepdim=True)
             group_scores = ttnn.reshape(group_scores, [B, 1, S, self.n_groups])
+
+            # Center around the per-token mean before bf16 cast. ttnn.topk
+            # requires bf16, but bf16 at value ~0.86 has ULP ~7e-3 (large
+            # enough to merge near-equal sums) whereas bf16 of (g - mean) at
+            # ~1e-3 has ULP ~8e-6 — so the fp32 ordering survives the cast.
+            group_mean = ttnn.mean(group_scores, dim=-1, keepdim=True)
+            group_scores_centered = ttnn.subtract(group_scores, group_mean)
 
             # Select top n_limited_groups groups
             _gv, top_group_indices = ttnn.topk(
-                ttnn.typecast(group_scores, ttnn.DataType.BFLOAT16), self.n_limited_groups, dim=-1
+                ttnn.typecast(group_scores_centered, ttnn.DataType.BFLOAT16), self.n_limited_groups, dim=-1
             )
 
             # Build group mask [B, 1, S, num_experts] via scatter + repeat_interleave.
