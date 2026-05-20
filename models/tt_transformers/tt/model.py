@@ -88,6 +88,19 @@ class Transformer(LightweightModule):
 
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
 
+        # Device tensors used to build dynamic slice params for prefill RoPE slicing.
+        # Keeps chunk_start_idx-driven slicing inside the traced graph.
+        self._tt_seq_len_buffer = ttnn.from_torch(
+            torch.tensor([1, 1, self.args.max_seq_len, self.args.head_dim], dtype=torch.int32),
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        self._tt_slice_start_zeros_4 = ttnn.from_torch(
+            torch.tensor([0, 0, 0, 0], dtype=torch.int32),
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
         self.layers = [
             TransformerBlock(
                 args=args,
@@ -272,7 +285,14 @@ class Transformer(LightweightModule):
         return hidden_states
 
     def prepare_prefill_inputs_trace(
-        self, tokens, page_table=None, chunk_page_table=None, batch_size=1, user_id=0, **kwargs
+        self,
+        tokens,
+        page_table=None,
+        chunk_page_table=None,
+        chunk_start_idx=0,
+        batch_size=1,
+        user_id=0,
+        **kwargs,
     ):
         """
         Inputs are torch tensors or python types. This function returns ttnn
@@ -282,16 +302,23 @@ class Transformer(LightweightModule):
             tokens,
             page_table=page_table,
             chunk_page_table=chunk_page_table,
+            chunk_start_idx=chunk_start_idx,
             trace_enabled=True,
             batch_size=batch_size,
             user_id=user_id,
         )
         return host_inputs
 
-    def transform_and_embed_prefill_inputs_device(self, tokens, tt_page_table, tt_chunk_page_table):
+    def transform_and_embed_prefill_inputs_device(
+        self,
+        tokens,
+        tt_page_table,
+        tt_chunk_page_table,
+        tt_chunk_start_idx,
+    ):
         tt_tokens = self.embd(tokens)
         tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
-        return tt_tokens, tt_page_table, tt_chunk_page_table
+        return tt_tokens, tt_page_table, tt_chunk_page_table, tt_chunk_start_idx
 
     def prepare_inputs_prefill(
         self,
@@ -299,6 +326,7 @@ class Transformer(LightweightModule):
         start_pos=0,
         page_table=None,
         chunk_page_table=None,
+        chunk_start_idx=None,
         trace_enabled=False,
         last_token_idx=None,
         global_user_id=None,
@@ -409,12 +437,24 @@ class Transformer(LightweightModule):
         else:
             tt_chunk_page_table = None
 
+        if chunk_start_idx is not None:
+            chunk_start_idx_tensor = torch.tensor([chunk_start_idx], dtype=torch.int32)
+            tt_chunk_start_idx = ttnn.from_torch(
+                chunk_start_idx_tensor,
+                device=device,
+                dtype=ttnn.int32,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        else:
+            tt_chunk_start_idx = None
+
         return (
             tokens if trace_enabled else tokens_embd,
             tt_rot_mats_prefill_global,
             tt_rot_mats_prefill_local,
             tt_page_table,
             tt_chunk_page_table,
+            tt_chunk_start_idx,
         )
 
     def prepare_inputs_decode(self, *inputs):
@@ -702,6 +742,35 @@ class Transformer(LightweightModule):
         ttnn.plus_one(current_pos, skip_negative_entries=True)
         ttnn.plus_one(rot_mat_idxs)
 
+    def _slice_prefill_rot_mats(self, rot_mats, chunk_start_idx):
+        """Slices full prefill RoPE mats on device to [chunk_start_idx, max_seq_len)."""
+        if rot_mats is None or chunk_start_idx is None or not isinstance(chunk_start_idx, ttnn.Tensor):
+            return rot_mats
+
+        full_rot_cos, full_rot_sin = rot_mats[0], rot_mats[1]
+        if full_rot_cos.shape[2] != self.args.max_seq_len:
+            # Already sliced in input prep path; leave as-is.
+            return rot_mats
+
+        z = self._tt_slice_start_zeros_4
+        tt_slice_starts = ttnn.concat([z[0:2], chunk_start_idx, z[3:4]], dim=0)
+
+        rot_cos_slice = ttnn.slice(
+            input_tensor=full_rot_cos,
+            starts=tt_slice_starts,
+            ends=self._tt_seq_len_buffer,
+            slice_dim=2,
+            num_devices=self.args.num_devices,
+        )
+        rot_sin_slice = ttnn.slice(
+            input_tensor=full_rot_sin,
+            starts=tt_slice_starts,
+            ends=self._tt_seq_len_buffer,
+            slice_dim=2,
+            num_devices=self.args.num_devices,
+        )
+        return (rot_cos_slice, rot_sin_slice)
+
     def ttnn_decode_forward(
         self,
         x,
@@ -805,6 +874,13 @@ class Transformer(LightweightModule):
             # Run prefetcher if it is enabled
             if self.prefetcher is not None:
                 self.prefetcher.run()
+
+        if mode == Mode.PREFILL:
+            # For traced prefill, keep RoPE slicing in-graph and driven by the
+            # on-device chunk_start_idx input.
+            rot_mats_global = self._slice_prefill_rot_mats(rot_mats_global, chunk_start_idx)
+            if rot_mats_local is not None:
+                rot_mats_local = self._slice_prefill_rot_mats(rot_mats_local, chunk_start_idx)
 
         if page_tables_per_layer is not None and len(page_tables_per_layer) != len(self.layers):
             raise ValueError(

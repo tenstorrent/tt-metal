@@ -30,7 +30,7 @@ from models.demos.deepseek_v3.tests.fused_op_unit_tests.test_utils import (
     measure_perf_us,
 )
 from models.demos.deepseek_v3.tt.rms_norm.rms_norm import RMSNorm
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_fabric_config, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     get_model_config,
@@ -372,7 +372,7 @@ def _build_rms_norm_inputs(
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": get_fabric_config(),
             "trace_region_size": 2967552,
         }
     ],
@@ -466,7 +466,7 @@ def test_ds_rms_norm(
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": get_fabric_config(),
             "trace_region_size": 2967552,
         }
     ],

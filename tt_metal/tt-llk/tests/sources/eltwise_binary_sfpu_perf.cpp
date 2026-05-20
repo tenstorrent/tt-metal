@@ -210,8 +210,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 block_tile, formats.math, formats.math);
                         }
 
-                        test_utils::call_binary_sfpu_operation<DST_SYNC_MODE, is_fp32_dest_acc_en, APPROX_MODE, SFPU_BINARY_OPERATION, ITERATIONS>(
-                            block_tile, (block_tile + 1) % MAX_TILES_DEST, formats.math);
+                        test_utils::
+                            call_binary_sfpu_operation<DST_SYNC_MODE, is_fp32_dest_acc_en, APPROX_MODE, SFPU_BINARY_OPERATION, ITERATIONS, formats.math>(
+                                block_tile, (block_tile + 1) % MAX_TILES_DEST, block_tile);
                     }
                 }
             }
@@ -236,8 +237,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             block_tile, formats.math, formats.math);
 
                         // Start SFPU binary operation
-                        test_utils::call_binary_sfpu_operation<DST_SYNC_MODE, is_fp32_dest_acc_en, APPROX_MODE, SFPU_BINARY_OPERATION, ITERATIONS>(
-                            block_tile, (block_tile + 1) % MAX_TILES_DEST, formats.math);
+                        test_utils::
+                            call_binary_sfpu_operation<DST_SYNC_MODE, is_fp32_dest_acc_en, APPROX_MODE, SFPU_BINARY_OPERATION, ITERATIONS, formats.math>(
+                                block_tile, (block_tile + 1) % MAX_TILES_DEST, block_tile);
                     }
 
                     _llk_math_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
@@ -272,9 +274,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ZONE_SCOPED("INIT")
 
         // Configure packer hardware
-        _llk_pack_hw_configure_<is_fp32_dest_acc_en>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * num_faces);
+        _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * num_faces);
 
-        _llk_pack_init_wrapper_<false /* untilize */, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, num_faces);
+        _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, num_faces);
         // Initialize destination for packing
         _llk_pack_dest_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
 

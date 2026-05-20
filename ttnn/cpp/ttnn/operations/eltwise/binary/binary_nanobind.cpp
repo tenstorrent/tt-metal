@@ -2033,7 +2033,7 @@ void py_module(nb::module_& mod) {
 
     detail::bind_binary_composite_with_rtol_atol<"isclose">(
         mod,
-        R"doc(Computes isclose for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(Computes isclose for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. INT32 tensors are typecast to FLOAT32 on device; for integers with magnitude much larger than 2^24 (~1.67e7), that cast can round distinct values to the same float, so the result may differ from ``torch.isclose`` on the original integer tensors.)doc",
         R"doc(\mathrm{output\_tensor} = \begin{cases} 1, & \text{if } |\mathrm{input\_tensor\_a} - \mathrm{input\_tensor\_b}| \leq (\mathrm{atol} + \mathrm{rtol} \times |\mathrm{input\_tensor\_b}|) \\ 0, & \text{otherwise} \end{cases}
         )doc",
         &ttnn::isclose);

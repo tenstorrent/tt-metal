@@ -607,10 +607,11 @@ def create_decoder_block_tensors(
     sender_core_from_residual = attn_output.memory_config().shard_spec.grid.bounding_box().end
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core_from_residual)])
 
-    # Routed weight tensors differ between MoE (list) and dense (single tensor)
-    routed_gate = weights.routed_gate_proj[0] if is_moe else weights.routed_gate_proj
-    routed_up = weights.routed_up_proj[0] if is_moe else weights.routed_up_proj
-    routed_down = weights.routed_down_proj[0] if is_moe else weights.routed_down_proj
+    # Dense and MoE routed weights are TP8 CompressedTensor lists feeding
+    # MoeRoutedExpertOp's setup_matmul_expert_dram path.
+    routed_gate = weights.routed_gate_proj
+    routed_up = weights.routed_up_proj
+    routed_down = weights.routed_down_proj
 
     result = {
         # Attention weights (from prepare_*_layer_weights)
@@ -965,8 +966,10 @@ class DecoderStage(StageKind):
 
         Returns:
             The composed host KV-cache tensor of shape
-            ``(num_slots, 1, max_seq_len, kvpe_dim)`` dtype bfloat16, or ``None``
-            if invoked before ``setup`` (no KV cache to compose).
+            ``(num_slots, 1, max_seq_len, kvpe_dim)``, or ``None`` if invoked
+            before ``setup`` (no KV cache to compose). Dtype is whatever
+            ``ttnn.to_torch`` produces for the underlying ``ttnn.bfloat8_b`` device tensor;
+            in practice the host tensor lands as ``torch.float32``.
         """
         if not self._state or "d" not in self._state:
             logger.warning("get_kv_cache_host called before setup; returning None")

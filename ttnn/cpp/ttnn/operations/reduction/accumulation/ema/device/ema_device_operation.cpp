@@ -2,10 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ema_device_operation.hpp"
+#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
-
-#include <tt_stl/assert.hpp>
 
 #include <cmath>
 
@@ -59,6 +58,19 @@ void EmaDeviceOperation::validate_on_program_cache_miss(
 
     // Alpha validation
     TT_FATAL(!std::isnan(operation_attributes.alpha), "EMA alpha must be a valid number, got NaN");
+    {
+        const auto& ema_out_mem = operation_attributes.output_mem_config;
+        ReduceOpDeviceGridValidationOptions ema_grid_opts;
+        ema_grid_opts.shard_grid_contained_in_device_grid = &ema_out_mem;
+        ema_grid_opts.memory_config_label = "output";
+        validate_reduce_op_tensor(input_tensor, "EMA", "input");
+        validate_reduce_op_tensor(
+            input_tensor, "EMA", "output", &ema_grid_opts, compute_output_specs(operation_attributes, tensor_args));
+
+        if (tensor_args.optional_output_tensor.has_value()) {
+            validate_reduce_op_tensor(tensor_args.optional_output_tensor.value(), "EMA", "preallocated_output");
+        }
+    }
 }
 
 TensorSpec EmaDeviceOperation::compute_output_specs(
