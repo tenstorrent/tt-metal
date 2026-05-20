@@ -218,6 +218,11 @@ void run_single_core_copy_block_matmul_partials(
 
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 
+    distributed::MeshWorkload workload;
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    workload.add_program(device_range, std::move(program));
+    auto& program_run = workload.get_programs().at(device_range);
+
     std::vector<uint32_t> src_vec = generate_copy_block_stimulus(dram_buffer_size, test_config);
     distributed::WriteShard(cq, src_dram_buffer, src_vec, zero_coord);
 
@@ -249,10 +254,10 @@ void run_single_core_copy_block_matmul_partials(
             .kernel_spec_name = COMPUTE,
         },
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::metal2_host_api::SetProgramRunParameters(program_run, params);
 
-    auto* dev = mesh_device->get_devices()[0];
-    tt_metal::detail::LaunchProgram(dev, program, /*wait_until_cores_done=*/true);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     std::vector<uint32_t> result_vec;
     distributed::ReadShard(cq, result_vec, dst_dram_buffer, zero_coord);

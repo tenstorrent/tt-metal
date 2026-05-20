@@ -717,6 +717,7 @@ static void run_quasar_tilize_untilize_test(
     bool is_tilize = (mode == QuasarTestMode::TILIZE);
 
     IDevice* dev = mesh_device->get_devices()[0];
+    auto& cq = mesh_device->mesh_command_queue();
     const experimental::metal2_host_api::NodeCoord node{0, 0};
 
     bool is_8bit_integer = (data_format == tt::DataFormat::Int8 || data_format == tt::DataFormat::UInt8);
@@ -886,6 +887,12 @@ static void run_quasar_tilize_untilize_test(
 
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    workload.add_program(device_range, std::move(program));
+    auto& program_run = workload.get_programs().at(device_range);
+
     std::vector<uint32_t> src_vec;
     if (data_format == tt::DataFormat::Int8) {
         src_vec = create_random_vector_of_int8(src_dram_buffer_size, /*seed=*/42);
@@ -938,9 +945,10 @@ static void run_quasar_tilize_untilize_test(
             .kernel_spec_name = COMPUTE,
         },
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::metal2_host_api::SetProgramRunParameters(program_run, params);
 
-    detail::LaunchProgram(dev, program, true);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     std::vector<uint32_t> result_vec;
     detail::ReadFromBuffer(dst_dram_buffer, result_vec);

@@ -155,7 +155,7 @@ static inline tt::tt_metal::TensorSpec make_flat_dram_tensor_spec(uint32_t entry
 
 void run_single_core_transpose(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const TransposeConfig& test_config) {
-    auto* device = mesh_device->get_devices()[0];
+    auto& cq = mesh_device->mesh_command_queue();
     const experimental::metal2_host_api::NodeCoord node{0, 0};
 
     const TransposeDims dims = compute_and_validate_transpose_dims(test_config.shape);
@@ -291,6 +291,12 @@ void run_single_core_transpose(
 
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    workload.add_program(device_range, std::move(program));
+    auto& program_run = workload.get_programs().at(device_range);
+
     experimental::metal2_host_api::ProgramRunParams params;
     params.kernel_run_params = {
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
@@ -309,12 +315,13 @@ void run_single_core_transpose(
         {.tensor_parameter_name = IN_TENSOR, .tensor = in_tensor},
         {.tensor_parameter_name = OUT_TENSOR, .tensor = out_tensor},
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::metal2_host_api::SetProgramRunParameters(program_run, params);
 
     vector<uint32_t> src_vec = create_random_vector_of_bfloat16(dram_buffer_size, 100.0f, 0x1234);
     tt_metal::detail::WriteToBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), src_vec);
 
-    tt_metal::detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     read_and_validate_transpose_result(out_tensor, src_vec, test_config.shape, dims);
 }

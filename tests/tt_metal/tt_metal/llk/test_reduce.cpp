@@ -291,6 +291,7 @@ static inline tt::tt_metal::TensorSpec make_flat_dram_tensor_spec(uint32_t entry
 
 void run_single_core_reduce_program(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const ReduceConfig& test_config) {
+    auto& cq = mesh_device->mesh_command_queue();
     const experimental::metal2_host_api::NodeCoord node{0, 0};
 
     const ReduceDims dims = compute_and_validate_reduce_dims(test_config);
@@ -470,6 +471,12 @@ void run_single_core_reduce_program(
 
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    workload.add_program(device_range, std::move(program));
+    auto& program_run = workload.get_programs().at(device_range);
+
     // Reader/writer RTAs depend on reduce_dim
     std::unordered_map<std::string, uint32_t> reader_named_rtas;
     uint32_t writer_num_tiles;
@@ -500,14 +507,14 @@ void run_single_core_reduce_program(
         {.tensor_parameter_name = IN_TENSOR, .tensor = in_tensor},
         {.tensor_parameter_name = OUT_TENSOR, .tensor = out_tensor},
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::metal2_host_api::SetProgramRunParameters(program_run, params);
 
     vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
         dims.dram_buffer_size, test_config.data_gen_rand_max, test_config.data_gen_seed, test_config.data_gen_offset);
     tt_metal::detail::WriteToBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), src_vec);
 
-    auto* dev = mesh_device->get_devices()[0];
-    tt_metal::detail::LaunchProgram(dev, program, /*wait_until_cores_done=*/true);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     std::vector<uint32_t> result_vec;
     tt_metal::detail::ReadFromBuffer(*out_tensor.mesh_buffer().get_reference_buffer(), result_vec);

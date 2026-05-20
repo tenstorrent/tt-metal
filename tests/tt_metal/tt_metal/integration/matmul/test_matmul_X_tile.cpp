@@ -386,6 +386,12 @@ static void matmul_tile_block(
 
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    workload.add_program(device_range, std::move(program));
+    auto& program_run = workload.get_programs().at(device_range);
+
     fixture->WriteBuffer(mesh_device, ctx.src0_dram_buffer, activations);
     fixture->WriteBuffer(mesh_device, ctx.src1_dram_buffer, weights);
 
@@ -424,10 +430,9 @@ static void matmul_tile_block(
             .kernel_spec_name = COMPUTE,
         },
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::metal2_host_api::SetProgramRunParameters(program_run, params);
 
-    auto* device = mesh_device->get_devices()[0];
-    tt::tt_metal::detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
+    fixture->RunProgram(mesh_device, workload);
 
     verify_matmul_tile_output(fixture, mesh_device, cfg, std::move(tensor_vals), ctx);
 }

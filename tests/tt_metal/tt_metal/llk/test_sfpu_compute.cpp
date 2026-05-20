@@ -165,10 +165,13 @@ struct SfpuConfig {
 bool run_sfpu_all_same_buffer(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const SfpuConfig& test_config) {
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
-    auto* device = mesh_device->get_devices()[0];
+    auto& cq = mesh_device->mesh_command_queue();
 
     tt::tt_metal::InterleavedBufferConfig dram_config{
-        .device = device, .size = byte_size, .page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
+        .device = mesh_device->get_devices()[0],
+        .size = byte_size,
+        .page_size = byte_size,
+        .buffer_type = tt::tt_metal::BufferType::DRAM};
 
     auto input_dram_buffer = CreateBuffer(dram_config);
     auto output_dram_buffer = CreateBuffer(dram_config);
@@ -322,6 +325,12 @@ bool run_sfpu_all_same_buffer(
 
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    workload.add_program(device_range, std::move(program));
+    auto& program_run = workload.get_programs().at(device_range);
+
     experimental::metal2_host_api::ProgramRunParams params;
     params.kernel_run_params = {
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
@@ -346,10 +355,11 @@ bool run_sfpu_all_same_buffer(
             .kernel_spec_name = COMPUTE,
         },
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::metal2_host_api::SetProgramRunParameters(program_run, params);
 
     tt_metal::detail::WriteToBuffer(input_dram_buffer, packed_input);
-    tt_metal::detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
