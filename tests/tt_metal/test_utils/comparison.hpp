@@ -4,8 +4,10 @@
 
 #pragma once
 #include <algorithm>
+#include <cmath>
 #include <functional>
 #include <random>
+#include <vector>
 
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/test_utils/packing.hpp"
@@ -13,12 +15,10 @@
 namespace tt::test_utils {
 
 //! Generic Library of templated comparison functions.
-//! Custom type is supported as long as the custom type supports the following custom functions
-//! static SIZEOF - indicates byte size of custom type
-//! to_float() - get float value from custom type
-//! to_packed() - get packed (into an integral type that is of the bitwidth specified by SIZEOF)
-//! Constructor(float in) - constructor with a float as the initializer
-//! Constructor(uint32_t in) - constructor with a uint32_t as the initializer -- only lower bits needed
+//! Custom ValueType is supported as long as it is convertible to float (used
+//! by is_close to compute absolute / relative error). The unpack-and-compare
+//! helpers additionally require trivial-copyability for std::bit_cast through
+//! the byte-shuffling layer in packing.hpp.
 //
 // this follows the implementation of numpy's is_close
 template <typename ValueType>
@@ -72,6 +72,39 @@ bool is_close_packed_vectors(
         unpack_vector<ValueType, PackType>(vec_b),
         comparison_function,
         argfail);
+}
+
+// Pearson correlation coefficient between two equally-sized float vectors.
+// Returns 1.0 for empty inputs or zero-variance vectors (degenerate).
+inline bool check_pcc(const std::vector<float>& a, const std::vector<float>& b, double min_pcc) {
+    TT_FATAL(a.size() == b.size(), "compute_pcc -- a.size()={} == b.size()={}", a.size(), b.size());
+
+    double pcc = 0.0;
+    if (a.empty()) {
+        pcc = 1.0;
+    }
+    const std::size_t n = a.size();
+    double sum_a = 0.0, sum_b = 0.0, sum_a2 = 0.0, sum_b2 = 0.0, sum_ab = 0.0;
+    for (std::size_t i = 0; i < n; i++) {
+        double ai = a[i], bi = b[i];
+        sum_a += ai;
+        sum_b += bi;
+        sum_a2 += ai * ai;
+        sum_b2 += bi * bi;
+        sum_ab += ai * bi;
+    }
+    double denom_a = (n * sum_a2) - (sum_a * sum_a);
+    double denom_b = (n * sum_b2) - (sum_b * sum_b);
+    if (denom_a == 0.0 || denom_b == 0.0) {
+        pcc = 1.0;
+    }
+    pcc = (n * sum_ab - sum_a * sum_b) / std::sqrt(denom_a * denom_b);
+
+    if (pcc < min_pcc) {
+        log_info(tt::LogTest, "check_pcc: PCC = {} < min_pcc = {}", pcc, min_pcc);
+        return false;
+    }
+    return true;
 }
 
 }  // namespace tt::test_utils
