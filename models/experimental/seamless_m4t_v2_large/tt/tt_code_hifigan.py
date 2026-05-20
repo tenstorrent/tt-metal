@@ -29,6 +29,8 @@ from typing import Any, Optional, Tuple
 import torch
 import ttnn
 
+from models.experimental.seamless_m4t_v2_large.tt.common import to_torch_replicated_first_shard
+
 from models.experimental.seamless_m4t_v2_large.tt.common import core_grid
 
 
@@ -38,7 +40,7 @@ def _vocoder_hf_gather_index(input_ids: ttnn.Tensor, *, batch: int, seq: int, pa
     ``from_device`` may yield a 1-D tensor (length ``batch * seq``); ``ids_t[0]`` would then be a
     single id and the count would be wrong (``t_audio`` stuck near 1 and ~320 output samples).
     """
-    ids_t = ttnn.to_torch(ttnn.from_device(input_ids)).to(torch.long).reshape(batch, -1)
+    ids_t = to_torch_replicated_first_shard(input_ids).to(torch.long).reshape(batch, -1)
     if ids_t.shape[1] > seq:
         ids_t = ids_t[:, :seq]
     count = int((ids_t[0] != pad_id).sum().item())
@@ -443,7 +445,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         # TILE-padded tensors (the last *storage* column is often padding), which yielded ``t_audio``
         # near 1 and essentially silent HiFi-GAN output.
         cumsum_pre_seq = ttnn.slice(cumsum_inc, [0, 0], [batch, seq], (1, 1))
-        cs_t = ttnn.to_torch(ttnn.from_device(cumsum_pre_seq)).float()
+        cs_t = to_torch_replicated_first_shard(cumsum_pre_seq).float()
         pad_id = int(self.cfg.t2u_pad_token_id)
         idx = _vocoder_hf_gather_index(input_ids, batch=batch, seq=seq, pad_id=pad_id)
         t_audio = int(cs_t[0, idx].item())
@@ -617,7 +619,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
                 "_compute_output_lengths_dev: HF gather index is computed per row; only B==1 is wired."
             )
         cum_pre = ttnn.slice(cumsum_inc, [0, 0], [batch, seq], (1, 1))
-        cs_t = ttnn.to_torch(ttnn.from_device(cum_pre)).float()
+        cs_t = to_torch_replicated_first_shard(cum_pre).float()
         idx = _vocoder_hf_gather_index(input_ids, batch=batch, seq=seq, pad_id=pad_id)
         u = float(cs_t[0, idx].item())
         unit_lens = ttnn.full(

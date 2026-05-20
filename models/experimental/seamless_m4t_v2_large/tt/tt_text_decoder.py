@@ -26,6 +26,7 @@ from models.experimental.seamless_m4t_v2_large.tt.common import (
     is_dram_width_sharded,
     sdpa_program_config,
     TILE,
+    to_torch_replicated_first_shard,
 )
 
 
@@ -1063,7 +1064,7 @@ class TTSeamlessM4Tv2Decoder:
         is_decode = kv_cache is not None and current_decode_pos is not None
         if is_decode:
             if cache_seq_len is None:
-                cache_seq_len = int(ttnn.to_torch(current_decode_pos).reshape(-1)[0].item()) + 1
+                cache_seq_len = int(to_torch_replicated_first_shard(current_decode_pos).reshape(-1)[0].item()) + 1
         else:
             cache_seq_len = None
 

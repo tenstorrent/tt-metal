@@ -3,7 +3,6 @@
 
 import pytest
 import torch
-import ttnn
 from loguru import logger
 
 from tests.ttnn.utils_for_testing import check_with_pcc
@@ -13,15 +12,30 @@ from models.experimental.seamless_m4t_v2_large.reference.torch_code_hifigan impo
     load_pretrained_code_hifigan,
 )
 from models.experimental.seamless_m4t_v2_large.scripts.download_weights import ensure_seamless_m4t_v2_large_weights
+from models.experimental.seamless_m4t_v2_large.tt.common import to_torch_replicated_first_shard
+from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import (
+    DEVICE_PARAMS_BH_QB_FULL,
+    DEVICE_PARAMS_P150_FULL,
+    MESH_SHAPE_BH_QB,
+    MESH_SHAPE_P150,
+    _requires_num_devices,
+    from_torch_uint32_rm,
+    mesh_default_device,
+)
 from models.experimental.seamless_m4t_v2_large.tt.model_preprocessing import create_code_hifigan_parameters
 from models.experimental.seamless_m4t_v2_large.tt.tt_code_hifigan import TTSeamlessM4Tv2CodeHifiGan
 
 PCC_THRESHOLD = 0.99
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 65536}], indirect=True)
-@pytest.mark.parametrize("batch", [1, 2])
-def test_seamless_m4t_v2_code_hifigan_pcc(device, batch, reset_seeds):
+def _run_code_hifigan_pcc(device, batch: int) -> None:
+    """Shared PCC body. Works on either a single-device 1×1 mesh or a multi-device 1×N mesh.
+
+    Multi-device readbacks of replicated tensors go through ``to_torch_replicated_first_shard``,
+    which attaches a ``ConcatMeshToTensor(dim=0)`` composer and slices the first device's copy
+    out — required because ``ttnn.to_torch`` errors on a >1-shard tensor without a composer.
+    On a 1×1 mesh that helper is a bit-identical pass-through.
+    """
     try:
         weights_dir = ensure_seamless_m4t_v2_large_weights()
     except ImportError as e:
@@ -47,32 +61,14 @@ def test_seamless_m4t_v2_code_hifigan_pcc(device, batch, reset_seeds):
     params = create_code_hifigan_parameters(vocoder, device=device)
     tt_v = TTSeamlessM4Tv2CodeHifiGan(device, params, cfg)
 
-    input_ids_tt = ttnn.from_torch(
-        input_ids.to(torch.int32),
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    sp_tt = ttnn.from_torch(
-        speaker_id.to(torch.int32),
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    lang_tt = ttnn.from_torch(
-        lang_id.to(torch.int32),
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    input_ids_tt = from_torch_uint32_rm(device, input_ids)
+    sp_tt = from_torch_uint32_rm(device, speaker_id)
+    lang_tt = from_torch_uint32_rm(device, lang_id)
 
     out_tt, lengths_tt = tt_v.forward(input_ids_tt, sp_tt, lang_tt)
 
-    tt_wav = ttnn.to_torch(ttnn.from_device(out_tt)).to(torch.bfloat16).squeeze(-1).contiguous()
-    lengths_torch = ttnn.to_torch(ttnn.from_device(lengths_tt)).to(torch.long).reshape(-1)
+    tt_wav = to_torch_replicated_first_shard(out_tt).to(torch.bfloat16).squeeze(-1).contiguous()
+    lengths_torch = to_torch_replicated_first_shard(lengths_tt).to(torch.long).reshape(-1)
 
     # ``ref_wav`` is ``[B, T_wav_ref]`` after ``squeeze(1)``; ``ref_lengths`` is ``[B]``.
     if ref_wav.dim() == 3:
@@ -105,3 +101,37 @@ def test_seamless_m4t_v2_code_hifigan_pcc(device, batch, reset_seeds):
         assert ok, f"row {b}: {msg}"
 
     logger.info(f"SeamlessM4Tv2 CodeHiFi-GAN PCC [B={batch}] min over rows: {pcc_min}")
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params,batch",
+    [
+        pytest.param(
+            MESH_SHAPE_P150,
+            DEVICE_PARAMS_P150_FULL,
+            1,
+            id="1x1-b1",
+            marks=pytest.mark.skipif(_requires_num_devices(1), reason="P150 (1 device)"),
+        ),
+        pytest.param(
+            MESH_SHAPE_P150,
+            DEVICE_PARAMS_P150_FULL,
+            2,
+            id="1x1-b2",
+            marks=pytest.mark.skipif(_requires_num_devices(1), reason="P150 (1 device)"),
+        ),
+        pytest.param(
+            MESH_SHAPE_BH_QB,
+            DEVICE_PARAMS_BH_QB_FULL,
+            1,
+            id="1x4-b1",
+            marks=pytest.mark.skipif(_requires_num_devices(4), reason="BH QB (4 devices)"),
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_seamless_m4t_v2_code_hifigan_pcc(mesh_device, device_params, batch, reset_seeds):
+    _ = reset_seeds
+    _ = device_params
+    with mesh_default_device(mesh_device):
+        _run_code_hifigan_pcc(mesh_device, batch)

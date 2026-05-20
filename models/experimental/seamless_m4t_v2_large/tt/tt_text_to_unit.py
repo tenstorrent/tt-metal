@@ -10,7 +10,7 @@ unit upsample, self-attn + conv decoder stack; ``lm_head`` logits in the field H
 
 **Implementation policy:** All math in this file runs through **ttnn** (no ``torch`` / no ``numpy`` /
 no Transformers helpers). Host-side control flow uses Python ``int`` / ``Sequence[int]`` for repeat
-counts and sequence lengths. Small host readbacks use ``ttnn.from_device`` plus ``ttnn.to_torch`` as a
+counts and sequence lengths. Small host readbacks use ``to_torch_replicated_first_shard`` as a
 host transport only — torch is not used for any math — to unpack float32 values into integer repeat
 counts for ``ttnn.repeat_interleave``, matching HF ``round(expm1(...))`` with clamp. I/O tensors stay
 on device except for that readback.
@@ -30,7 +30,7 @@ import torch
 import ttnn
 
 from models.common.utility_functions import nearest_32
-from models.experimental.seamless_m4t_v2_large.tt.common import core_grid
+from models.experimental.seamless_m4t_v2_large.tt.common import core_grid, to_torch_replicated_first_shard
 
 # HF ``torch.finfo(torch.bfloat16).min`` additive padding mask floor (approx.).
 _BF16_MASK_FLOOR = -3.3895313892565356e38
@@ -39,12 +39,12 @@ _BF16_MASK_FLOOR = -3.3895313892565356e38
 def _row_major_host_f32_flat(host_tensor: ttnn.Tensor, *, num_floats: int) -> list[float]:
     """Flat list of float32 values from a host-side ttnn tensor.
 
-    Uses ``ttnn.to_torch`` for the host readback because the ``HostBuffer`` iterator yields
+    Uses ``to_torch_replicated_first_shard`` for the host readback because the ``HostBuffer`` iterator yields
     ``std::byte``, which pybind does not auto-convert (``bytes(shard)`` raises TypeError). The
     decoded values feed integer repeat counts for ``ttnn.repeat_interleave`` — torch is only used
     as a host transport, no math runs through it.
     """
-    flat = ttnn.to_torch(host_tensor).to(torch.float32).reshape(-1)
+    flat = to_torch_replicated_first_shard(host_tensor).to(torch.float32).reshape(-1)
     n = int(num_floats)
     if int(flat.numel()) < n:
         raise RuntimeError(f"Host tensor has {int(flat.numel())} floats; need {n}.")
