@@ -350,7 +350,9 @@ class Attention(Module):
             N = weight.padded_shape[-1]
             full_grid = self.mesh_device.compute_with_storage_grid_size()
             core_grid = ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
-            matmul_config = get_matmul_config(M, K, N, core_grid)
+            matmul_config = get_matmul_config(
+                M, K, N, core_grid, use_heuristic=True, num_k_shards=self.parallel_config.tensor_parallel.factor
+            )
 
             ag_persistent_buffer = self.ccl_manager.get_ag_ping_pong_buffer(
                 x.shape, -1, parallel_config.tensor_parallel.mesh_axis, dtype=x.get_dtype()
@@ -384,7 +386,9 @@ class Attention(Module):
             K = x.padded_shape[-1]
             N = weight.padded_shape[-1]
             core_grid = self.mesh_device.compute_with_storage_grid_size()
-            matmul_config = get_matmul_config(M, K, N, core_grid)
+            matmul_config = get_matmul_config(
+                M, K, N, core_grid, use_heuristic=True, num_k_shards=self.parallel_config.tensor_parallel.factor
+            )
             return ttnn.experimental.dit_minimal_matmul_addcmul_fused(
                 x,
                 weight,
