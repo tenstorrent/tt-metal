@@ -17,6 +17,14 @@ Text-to-image pipeline ([Tongyi-MAI/Z-Image-Turbo](https://huggingface.co/Tongyi
 
 All three models are Metal-Traced after compilation for fast inference (no host dispatch overhead).
 
+## Dependencies
+
+Install model-specific dependencies:
+
+```bash
+pip install -r models/demos/z_image_turbo/requirements.txt
+```
+
 ## Quick Start
 
 ```bash
