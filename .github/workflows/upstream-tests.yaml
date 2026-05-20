@@ -289,7 +289,7 @@ jobs:
         env:
           HF_HOME: /mnt/MLPerf/huggingface
           HF_MODEL: meta-llama/Llama-3.1-8B-Instruct
-          TT_CACHE_PATH: /mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
+          TT_CACHE_PATH: /mnt/MLPerf/huggingface/tt_cache/meta-llama--Llama-3.1-8B-Instruct
         run: |
           docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G \
             --device /dev/tenstorrent -v $HF_HOME:$HF_HOME:rw \
@@ -332,7 +332,7 @@ jobs:
           TT_CACHE_PATH: >-
             ${{ matrix.bh-config.extra-tag == 'pipeline-perf'
             && '/localdev/blackhole_demos/huggingface_data/tt_cache'
-            || '/mnt/MLPerf/huggingface/tt_cache' }}/meta-llama/Llama-3.1-8B-Instruct
+            || '/mnt/MLPerf/huggingface/tt_cache' }}/meta-llama--Llama-3.1-8B-Instruct
         run: |
           docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G \
             --device /dev/tenstorrent -v $HF_HOME:$HF_HOME:rw \
