@@ -409,7 +409,7 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
 }
 
 void validate_matmul_fused_operations(
-    const std::optional<Tensor>& optional_bias,
+    const std::optional<const Tensor>& optional_bias,
     const std::optional<ttnn::operations::unary::UnaryWithParam>& fused_activation,
     const operations::matmul::MatmulProgramConfig& chosen_program_config) {
     std::visit(
@@ -420,8 +420,9 @@ void validate_matmul_fused_operations(
                 TT_FATAL(
                     !fused_activation.has_value(),
                     "Fused activation is not supported for MatmulMultiCoreProgramConfig");
-            }
-            if constexpr (std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseProgramConfig>) {
+            } else if constexpr (std::is_same_v<
+                                     ProgramConfigType,
+                                     operations::matmul::MatmulMultiCoreReuseProgramConfig>) {
                 TT_FATAL(!optional_bias.has_value(), "Bias is not supported for MatmulMultiCoreReuseProgramConfig");
                 TT_FATAL(
                     !fused_activation.has_value(),
