@@ -53,9 +53,26 @@ class TtSwinAttention:
         self.num_heads = num_heads
         self.attn_mask = attn_mask
 
-    def __call__(self, input_tensor):
-        relative_position_bias = self.parameters["relative_position_bias"]
+        # For shift!=0 layers, pre-combine rel_pos_bias + window_mask on host into a
+        # single (nW, num_heads, N, N) bias so __call__ does a single add (instead of
+        # two adds with broadcast). For shift==0 layers we keep rpb as-is.
+        rpb = parameters["relative_position_bias"]  # (1, num_heads, N, N) TILE bf16 on device
+        if attn_mask is not None and sum(self.shift_size) > 0:
+            import torch
 
+            rpb_t = ttnn.to_torch(rpb).float()  # (1, H, N, N)
+            mask_t = ttnn.to_torch(attn_mask).float()  # 5D, last two dims are (N, N)
+            N = mask_t.shape[-1]
+            nW = mask_t.numel() // (N * N)
+            mask_t = mask_t.reshape(nW, 1, N, N)
+            combined = (rpb_t + mask_t).to(torch.bfloat16)  # (nW, H, N, N)
+            self.combined_attn_bias = ttnn.from_torch(
+                combined, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            )
+        else:
+            self.combined_attn_bias = rpb  # (1, H, N, N), broadcasts over batch in plain add
+
+    def __call__(self, input_tensor):
         B, H, W, C = input_tensor.shape
         pad_r = (self.window_size[1] - W % self.window_size[1]) % self.window_size[1]
         pad_b = (self.window_size[0] - H % self.window_size[0]) % self.window_size[0]
@@ -102,22 +119,22 @@ class TtSwinAttention:
         )
         ttnn.deallocate(input_tensor)
 
-        qkv = ttnn.to_layout(qkv, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        q = ttnn.slice(qkv, [0, 0, 0], [B * num_windows, seq_len, C])
-        k = ttnn.slice(qkv, [0, 0, C], [B * num_windows, seq_len, 2 * C])
-        v = ttnn.slice(qkv, [0, 0, 2 * C], [B * num_windows, seq_len, 3 * C])
+        # Fused: split QKV + reshape to (B*nW, H, S, D) + transpose K for matmul (Q,K,V all TILE).
+        q, k_t, v = ttnn.transformer.split_query_key_value_and_split_heads(
+            qkv,
+            num_heads=self.num_heads,
+            transpose_key=True,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
         ttnn.deallocate(qkv)
 
-        q = ttnn.transpose(ttnn.reshape(q, (B * num_windows, seq_len, self.num_heads, head_dim)), 1, 2)
-        k = ttnn.permute(ttnn.reshape(k, (B * num_windows, seq_len, self.num_heads, head_dim)), (0, 2, 3, 1))
-        v = ttnn.transpose(ttnn.reshape(v, (B * num_windows, seq_len, self.num_heads, head_dim)), 1, 2)
-
+        # Pre-scale Q before matmul (no separate scalar mul on the bigger attn tensor).
         scale = head_dim**-0.5
-        q = ttnn.to_layout(q * scale, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-        k = ttnn.to_layout(k, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        q = ttnn.multiply(q, scale, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
         attn = ttnn.matmul(
             q,
-            k,
+            k_t,
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False, packer_l1_acc=True
             ),
@@ -125,21 +142,14 @@ class TtSwinAttention:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(q)
-        ttnn.deallocate(k)
+        ttnn.deallocate(k_t)
 
-        # relative position bias
-        attn = ttnn.add(attn, relative_position_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        # attention mask for shifted windows
-        if sum(shift_size) > 0 and self.attn_mask is not None:
-            attn = ttnn.reshape(
-                attn + self.attn_mask,
-                (B * num_windows, self.num_heads, seq_len, seq_len),
-            )
-
+        # Single add for the combined bias (rel_pos_bias for shift==0, or rel_pos_bias +
+        # window_mask pre-combined in __init__ for shift!=0). Replaces the previous
+        # two-step add chain.
+        attn = ttnn.add(attn, self.combined_attn_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn = ttnn.softmax(attn, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        v = ttnn.to_layout(v, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         output = ttnn.matmul(
             attn,
             v,
@@ -152,9 +162,8 @@ class TtSwinAttention:
         ttnn.deallocate(v)
         ttnn.deallocate(attn)
 
-        output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        output = ttnn.transpose(output, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        output = ttnn.reshape(output, (B * num_windows, seq_len, C))
+        # Concatenate heads back: (B*nW, H, S, D) -> (B*nW, S, H*D)
+        output = ttnn.transformer.concatenate_heads(output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         output = ttnn.linear(
             ttnn.to_layout(output, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG),
