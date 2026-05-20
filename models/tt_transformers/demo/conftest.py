@@ -19,8 +19,8 @@ def pytest_addoption(parser):
     parser.addoption(
         "--paged_attention", action="store", type=bool, help="Whether to use paged attention or default attention"
     )
-    parser.addoption("--page_params", action="store", type=dict, help="Page parameters for paged attention")
-    parser.addoption("--sampling_params", action="store", type=dict, help="Sampling parameters for decoding")
+    parser.addoption("--page_params", action="store", type=str, help="Page parameters for paged attention")
+    parser.addoption("--sampling_params", action="store", type=str, help="Sampling parameters for decoding")
     parser.addoption(
         "--stop_at_eos", action="store", type=int, help="Whether to stop decoding when the model generates an EoS token"
     )

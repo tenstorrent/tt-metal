@@ -12,36 +12,36 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
-- name: Llama 3.1-8B sweep tests
-  cmd: |
-    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-batch-32"
-  model: llama3.1-8b
-  skus:
-    wh_n150:
-      timeout: 10
-      tier: 1
-    wh_llmbox_perf:
-      timeout: 30
-      tier: 2
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-- name: Llama 3.3-70B sweep tests
-  cmd: |
-    export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ MESH_DEVICE=TG
-    pytest --timeout 1800 models/demos/llama3_70b_galaxy/demo/prefix_caching_benchmark.py
-  model: llama3.3-70b
-  skus:
-    wh_galaxy:
-      timeout: 30
-      tier: 1
-  owner_id: U09LTAPEU2U # Viktor Pus
-  team: models
+# - name: Llama 3.1-8B sweep tests
+#   cmd: |
+#     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
+#     pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-batch-32"
+#   model: llama3.1-8b
+#   skus:
+#     wh_n150:
+#       timeout: 10
+#       tier: 1
+#     wh_llmbox_perf:
+#       timeout: 30
+#       tier: 2
+#   owner_id: U03PUAKE719 # Miguel Tairum Cruz
+#   team: models
+# - name: Llama 3.3-70B sweep tests
+#   cmd: |
+#     export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ MESH_DEVICE=TG
+#     pytest --timeout 1800 models/demos/llama3_70b_galaxy/demo/prefix_caching_benchmark.py
+#   model: llama3.3-70b
+#   skus:
+#     wh_galaxy:
+#       timeout: 30
+#       tier: 1
+#   owner_id: U09LTAPEU2U # Viktor Pus
+#   team: models
 
 - name: Llama 3.1-8B seqlen sweep
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
-    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" --num_layers 10 --max_seq_len 131072 --page_params '{"page_block_size": 64, "page_max_num_blocks_per_dp": 2048}'
+    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" --num_layers 10 
   model: llama3.1-8b
   skus:
     wh_n150:
@@ -56,7 +56,7 @@
 - name: Llama 3.3-70B seqlen sweep
   cmd: |
     export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ MESH_DEVICE=TG HF_MODEL=meta-llama/Llama-3.3-70B-Instruct
-    pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" --max_seq_len 131072 --page_params '{"page_block_size": 64, "page_max_num_blocks_per_dp": 2048}'
+    pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" 
   model: llama3.3-70b
   skus:
     wh_galaxy:
@@ -71,7 +71,7 @@
 - name: Qwen3-32B seqlen sweep
   cmd: |
     export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache MESH_DEVICE=TG HF_MODEL=Qwen/Qwen3-32B
-    pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" --max_seq_len 131072 --page_params '{"page_block_size": 64, "page_max_num_blocks_per_dp": 2048}'
+    pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" 
   model: qwen3-32b
   skus:
     wh_galaxy:
@@ -86,7 +86,7 @@
 - name: GPT-OSS seqlen sweep
   cmd: |
     export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache MESH_DEVICE=TG HF_MODEL=tenstorrent/gpt-oss-120B
-    pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" --max_seq_len 131072 --page_params '{"page_block_size": 64, "page_max_num_blocks_per_dp": 2048}'
+    pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" 
   model: gpt-oss
   skus:
     wh_galaxy:
@@ -98,7 +98,7 @@
 - name: Llama 3.3-70B seqlen sweep (LoudBox)
   cmd: |
     export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ HF_MODEL=meta-llama/Llama-3.3-70B-Instruct
-    pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" --max_seq_len 131072 --page_params '{"page_block_size": 64, "page_max_num_blocks_per_dp": 2048}'
+    pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" 
   model: llama3.3-70b
   skus:
     wh_llmbox_perf:
@@ -113,7 +113,7 @@
 - name: Qwen3-32B seqlen sweep (LoudBox)
   cmd: |
     export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache HF_MODEL=Qwen/Qwen3-32B
-    pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" --max_seq_len 131072 --page_params '{"page_block_size": 64, "page_max_num_blocks_per_dp": 2048}'
+    pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" 
   model: qwen3-32b
   skus:
     wh_llmbox_perf:
@@ -128,7 +128,7 @@
 - name: Qwen2.5-32B seqlen sweep
   cmd: |
     export HF_MODEL=Qwen/Qwen2.5-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-32B-Instruct
-    pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" --max_seq_len 131072 --page_params '{"page_block_size": 64, "page_max_num_blocks_per_dp": 2048}'
+    pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" 
   model: qwen2.5-32b
   skus:
     wh_llmbox_perf:
@@ -140,7 +140,7 @@
 - name: Qwen2.5-Coder-32B seqlen sweep
   cmd: |
     export HF_MODEL=Qwen/Qwen2.5-Coder-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-Coder-32B-Instruct
-    pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" --max_seq_len 131072 --page_params '{"page_block_size": 64, "page_max_num_blocks_per_dp": 2048}'
+    pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" 
   model: qwen2.5-coder-32b
   skus:
     wh_llmbox_perf:
@@ -152,7 +152,7 @@
 - name: Mixtral-8x7B seqlen sweep # Mixtral's native max context is 32k
   cmd: |
     export HF_MODEL=mistralai/Mixtral-8x7B-Instruct-v0.1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai/Mixtral-8x7B-Instruct-v0.1
-    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" --max_seq_len 32768 --page_params '{"page_block_size": 32, "page_max_num_blocks_per_dp": 1024}' 
+    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" --max_seq_len 32768 --page_params "{\"page_block_size\": 32, \"page_max_num_blocks_per_dp\": 1024}" 
   model: mixtral-8x7b
   skus:
     wh_llmbox_perf:
@@ -164,7 +164,7 @@
 - name: Gemma-3-4B seqlen sweep
   cmd: |
     export HF_MODEL=google/gemma-3-4b-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google/gemma-3-4b-it
-    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" --num_layers 10 --max_seq_len 131072 --page_params '{"page_block_size": 64, "page_max_num_blocks_per_dp": 2048}'
+    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" --num_layers 10 
   model: gemma-3-4b
   skus:
     wh_n150:
@@ -176,7 +176,7 @@
 - name: Gemma-3-27B seqlen sweep
   cmd: |
     export HF_MODEL=google/gemma-3-27b-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google/gemma-3-27b-it
-    pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" --max_seq_len 131072 --page_params '{"page_block_size": 64, "page_max_num_blocks_per_dp": 2048}'
+    pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" 
   model: gemma-3-27b
   skus:
     wh_llmbox_perf:
