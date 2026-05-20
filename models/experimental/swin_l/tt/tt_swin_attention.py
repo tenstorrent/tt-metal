@@ -120,7 +120,7 @@ class TtSwinAttention:
                 math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=False, packer_l1_acc=True
             ),
             core_grid=ttnn.CoreGrid(y=8, x=8),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(input_tensor)
 
@@ -129,7 +129,7 @@ class TtSwinAttention:
             qkv,
             num_heads=self.num_heads,
             transpose_key=True,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(qkv)
 
