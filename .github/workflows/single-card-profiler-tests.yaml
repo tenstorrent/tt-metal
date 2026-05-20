@@ -3,30 +3,26 @@ name: "(Single-card) Profiler tests"
 on:
   workflow_dispatch:
     inputs:
-      run_blackhole_profiler:
+      run-blackhole-profiler:
         description: "Blackhole profiler"
         required: false
         type: boolean
         default: true
-      run_n300_profiler:
+      run-n300-profiler:
         description: "N300 profiler"
         required: false
         type: boolean
         default: true
-      run_n150_profiler:
+      run-n150-profiler:
         description: "N150 profiler"
         required: false
         type: boolean
         default: true
-      single-card-mode:
-        description: "Single-card mode filter (post-commit / full / all)"
+      post-commit-only:
+        description: "Whether to only run tests on post-commit branches (i.e. not on PRs)"
         required: false
-        type: choice
-        options:
-          - post-commit
-          - full
-          - all
-        default: post-commit
+        type: boolean
+        default: false
       platform:
         required: false
         type: choice
@@ -63,12 +59,12 @@ jobs:
         run: |
           set -e
           parts=()
-          [[ "${{ inputs.run_blackhole_profiler }}" == "true" ]] && parts+=("bh_p100a_civ2_viommu" "bh_p150b_civ2_viommu")
-          [[ "${{ inputs.run_n300_profiler }}" == "true" ]] && parts+=("wh_n300_civ2")
-          [[ "${{ inputs.run_n150_profiler }}" == "true" ]] && parts+=("wh_n150_civ2")
+          [[ "${{ inputs.run-blackhole-profiler }}" == "true" ]] && parts+=("bh_p100a_civ2_viommu" "bh_p150b_civ2_viommu")
+          [[ "${{ inputs.run-n300-profiler }}" == "true" ]] && parts+=("wh_n300_civ2")
+          [[ "${{ inputs.run-n150-profiler }}" == "true" ]] && parts+=("wh_n150_civ2")
           skus=$(IFS=,; echo "${parts[*]}")
           if [[ -z "$skus" ]]; then
-            echo "::error::No SKUs selected. Enable at least one of run_blackhole_profiler / run_n300_profiler / run_n150_profiler."
+            echo "::error::No SKUs selected. Enable at least one of run-blackhole-profiler / run-n300-profiler / run-n150-profiler."
             exit 1
           fi
           echo "value=$skus" >> "$GITHUB_OUTPUT"
@@ -95,4 +91,4 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.compute-skus.outputs.enabled-skus }}
-      test-mode: ${{ inputs.single-card-mode }}
+      test-selection: ${{ inputs.post-commit-only == 'true' && 'post-commit' || 'all' }}

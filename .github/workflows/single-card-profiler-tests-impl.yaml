@@ -15,13 +15,10 @@ on:
       enabled-skus:
         required: false
         type: string
-        default: "wh_n150_civ2,wh_n300_civ2,bh_p100a_civ2_viommu,bh_p150b_civ2_viommu"
-        description: "Comma-separated SKU list to run."
-      test-mode:
+      test-selection:
         required: false
         type: string
-        default: "post-commit"
-        description: "post-commit, full, or all."
+        default: "all"
       ref:
         required: false
         type: string
@@ -78,16 +75,16 @@ jobs:
         # (e.g. `awk '{print $1}'`) can't break the shell parser.
         env:
           MATRIX_JSON: ${{ steps.build-matrix.outputs.matrix }}
-          TEST_MODE: ${{ inputs.test-mode }}
+          TEST_SELECTION: ${{ inputs.test-selection }}
           ENABLED_SKUS: ${{ inputs.enabled-skus }}
         run: |
-          if [ "$TEST_MODE" = "all" ]; then
+          if [ "$TEST_SELECTION" = "all" ]; then
             FILTERED="$MATRIX_JSON"
           else
-            FILTERED=$(jq -c --arg m "$TEST_MODE" '[.[] | select(.mode == null or .mode == $m)]' <<<"$MATRIX_JSON")
+            FILTERED=$(jq -c --arg m "$TEST_SELECTION" '[.[] | select(.mode == null or .mode == $m)]' <<<"$MATRIX_JSON")
           fi
           if [ "$FILTERED" = "[]" ]; then
-            echo "::error::No tests match enabled-skus='$ENABLED_SKUS' + test-mode='$TEST_MODE'."
+            echo "::error::No tests match enabled-skus='$ENABLED_SKUS' + test-selection='$TEST_SELECTION'."
             exit 1
           fi
           {

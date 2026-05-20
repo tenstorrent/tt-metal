@@ -317,7 +317,7 @@ jobs:
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       # civ2-matrix emits P100a or P150b; map to viommu SKUs.
       enabled-skus: ${{ matrix.test-group == 'P100a' && 'bh_p100a_civ2_viommu' || 'bh_p150b_civ2_viommu' }}
-      test-mode: post-commit
+      test-selection: post-commit
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   umd-unit-tests:

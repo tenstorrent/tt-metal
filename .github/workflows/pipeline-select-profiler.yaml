@@ -1,45 +1,38 @@
 name: "(Profiler) Choose your pipeline"
 
 on:
+  schedule:
+    - cron: "0 2 * * *" # Run daily at 2am UTC
   push:
     branches:
       - tdowdall/profiler-reorg
   workflow_dispatch:
     inputs:
-      run_t3k_profiler:
+      run-t3k-profiler:
         description: "T3K profiler"
         required: false
         type: boolean
         default: true
-      run_galaxy_profiler:
+      run-galaxy-profiler:
         description: "Galaxy profiler"
         required: false
         type: boolean
         default: false
-      run_blackhole_profiler:
+      run-blackhole-profiler:
         description: "Blackhole profiler"
         required: false
         type: boolean
         default: true
-      run_n300_profiler:
+      run-n300-profiler:
         description: "N300 profiler"
         required: false
         type: boolean
         default: true
-      run_n150_profiler:
+      run-n150-profiler:
         description: "N150 profiler"
         required: false
         type: boolean
         default: true
-      single-card-mode:
-        description: "Single-card mode filter (applies to blackhole / n300 / n150 entries only)"
-        required: false
-        type: choice
-        options:
-          - post-commit
-          - full
-          - all
-        default: post-commit
       platform:
         required: false
         type: choice
@@ -72,7 +65,6 @@ jobs:
       run-galaxy: ${{ steps.logic.outputs.run-galaxy }}
       run-t3k: ${{ steps.logic.outputs.run-t3k }}
       run-single-card: ${{ steps.logic.outputs.run-single-card }}
-      single-card-skus: ${{ steps.logic.outputs.single-card-skus }}
       any-selected: ${{ steps.logic.outputs.any-selected }}
     steps:
       - name: Determine sub-pipeline selection
@@ -81,8 +73,8 @@ jobs:
           set -e
           # Push events don't carry workflow_dispatch inputs, so the run_*
           # booleans evaluate as empty. Mirror the workflow_dispatch defaults
-          # (t3k + bh + n300 + n150 on, galaxy off) so a push runs the same
-          # set a developer gets clicking "Run workflow" without changes.
+          # so a push runs the same set a developer gets clicking "Run workflow"
+          # without changes.
           if [[ "${{ github.event_name }}" == "push" ]]; then
             galaxy=true
             t3k=true
@@ -163,5 +155,4 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.determine-tests.outputs.single-card-skus }}
-      # `inputs.single-card-mode` is unset on push; fall back to post-commit.
-      test-mode: ${{ inputs.single-card-mode || 'post-commit' }}
+      test-selection: 'all'

@@ -411,7 +411,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       # matrix-wormhole-only emits N150 and/or N300; map to viommu SKUs.
       enabled-skus: ${{ matrix.test-group.runner-label == 'N300' && 'wh_n300_civ2' || 'wh_n150_civ2' }}
-      test-mode: post-commit
+      test-selection: post-commit
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   tt-train-cpp-unit-tests:
     needs: [build-artifact, generate-arch-matrix]

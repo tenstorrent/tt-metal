@@ -363,7 +363,7 @@ jobs:
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       # Sanity historically ran (wormhole_b0, N300) → wh_n300_civ2, post-commit only.
       enabled-skus: wh_n300_civ2
-      test-mode: post-commit
+      test-selection: post-commit
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
