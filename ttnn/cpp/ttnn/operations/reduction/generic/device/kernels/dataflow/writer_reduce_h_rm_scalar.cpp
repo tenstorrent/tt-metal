@@ -4,11 +4,12 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/endpoints.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 #include <tt-metalium/constants.hpp>
+#include "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/reduce_rm_dataflow_common.hpp"
 
 //
 // Dense RM H reduce writer.
@@ -20,18 +21,6 @@
 //
 // Output layout: (N, C, 1, W) in row-major. One output page per (n, c) → page_id == nc, page width == W.
 //
-
-FORCE_INLINE uint32_t tile_row0_face_offset_datums(uint32_t w_idx) {
-    // Mirror of writer_reduce_w_rm_scalar.cpp's get_tilized_idx(0, w_idx). Within the tilized layout, the
-    // first 16 columns of tile-row 0 are contiguous at offsets [0..15]; the next 16 columns start at offset
-    // 16*16 == 256 (face 1, top-right). This helper returns the starting index for a face's leftmost column.
-    constexpr uint32_t half_tile_width = tt::constants::TILE_WIDTH / 2;
-    constexpr uint32_t half_tile_height = tt::constants::TILE_HEIGHT / 2;
-    if (w_idx < half_tile_width) {
-        return w_idx;
-    }
-    return (w_idx - half_tile_width) + half_tile_height * half_tile_width;
-}
 
 void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -56,8 +45,8 @@ void kernel_main() {
     const auto dst_accessor = TensorAccessor(dst_args, dst_addr);
 #endif
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_tile(cb_id_tile);
+    Noc noc;
+    CircularBuffer cb_tile(cb_id_tile);
 
     uint32_t outputs_remaining = num_output_tiles_local;
     uint32_t current_nc = start_output_tile_id / Wt;
@@ -90,9 +79,9 @@ void kernel_main() {
             // Emit at most 2 wide writes per tile (one per face along W), each up to half_tile_width datums.
             for (uint32_t face_col = 0; face_col < valid_cols; face_col += face_w) {
                 const uint32_t face_valid = (valid_cols - face_col) < face_w ? (valid_cols - face_col) : face_w;
-                const uint32_t src_idx_in_tile = tile_row0_face_offset_datums(face_col);
+                const uint32_t src_idx_in_tile = get_tilized_idx(0, face_col);
 #if defined(SHARDED_WIDTH_INPUT)
-                experimental::UnicastEndpoint dst_ep;
+                UnicastEndpoint dst_ep;
                 const uint32_t dst_row_addr =
                     dst_addr + current_nc * shard_page_bytes + (w_base_col + face_col) * datum_bytes;
                 noc.async_write(

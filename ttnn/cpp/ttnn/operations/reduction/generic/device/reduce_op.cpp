@@ -126,8 +126,7 @@ Tensor reduce(
         (reduce_math == tt::tt_metal::ReduceOpMath::AVG || reduce_math == tt::tt_metal::ReduceOpMath::SUM ||
          reduce_math == tt::tt_metal::ReduceOpMath::MAX);
     // W-reduce: MAX is excluded: REDUCE_ROW chunked accumulation does not support MAX (see comment above).
-    const bool use_rm_dense_w = rm_base_eligible && reduce_math != tt::tt_metal::ReduceOpMath::MAX &&
-                                reduce_dim == tt::tt_metal::ReduceOpDim::W;
+    const bool use_rm_dense_w = rm_base_eligible && reduce_dim == tt::tt_metal::ReduceOpDim::W;
     // H-reduce: MAX is supported here
     // (REDUCE_COL accumulation is compatible with MAX).
     const bool use_rm_dense_h = rm_base_eligible && reduce_dim == tt::tt_metal::ReduceOpDim::H;
