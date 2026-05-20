@@ -58,7 +58,7 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
         # Strip ISO timestamp
         m = ts_pattern.match(s)
         if m:
-            s = s[m.end():]
+            s = s[m.end() :]
         # Strip ##[error] / ##[warning] / ##[group] etc.
         s = gh_annotation_pattern.sub("", s).strip()
         return s
@@ -83,9 +83,11 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
     reset_start_idx = None
     for i, line in enumerate(lines):
         lower = line.lower()
-        if ("tt_metal_infra" in lower and ".sh" in lower) or \
-           "starting tt-smi reset" in lower or \
-           "tt-smi reset" in lower:
+        if (
+            ("tt_metal_infra" in lower and ".sh" in lower)
+            or "starting tt-smi reset" in lower
+            or "tt-smi reset" in lower
+        ):
             reset_start_idx = i
             break
 
@@ -118,9 +120,9 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
                 block_end_ts = ts
             reset_done = True
         if (
-            "unable to reset board successfully" in lower or
-            "runner will now shutdown" in lower or
-            "the operation was canceled" in lower
+            "unable to reset board successfully" in lower
+            or "runner will now shutdown" in lower
+            or "the operation was canceled" in lower
         ):
             # Always collect all conclusive failure lines (there can be multiple)
             content = clean_line(line)
@@ -163,15 +165,14 @@ def get_github_job_ids_to_tt_smi_versions(workflow_outputs_dir, workflow_run_id:
     github_job_ids_to_tt_smi_resets = {}
 
     for log_file in log_files:
-        filename = log_file.stem  # 1_75973563201
-        assert "_" in filename, f"Unexpected filename format: {filename}"
+        filename = log_file.stem
 
-        workflow_attempt_str, github_job_id_str = filename.split("_", 1)
+        assert filename.isdigit(), f"Unexpected filename format: {filename}"
 
-        workflow_attempt_from_file = int(workflow_attempt_str)
-        github_job_id = int(github_job_id_str)
-        assert workflow_attempt_from_file >= 1
+        github_job_id = int(filename)
         assert github_job_id > 0
+
+        workflow_attempt_from_file = workflow_attempt
 
         tt_smi_version = search_for_tt_smi_version_in_log_file_(log_file)
         if tt_smi_version:
@@ -184,9 +185,7 @@ def get_github_job_ids_to_tt_smi_versions(workflow_outputs_dir, workflow_run_id:
 
         key = (workflow_attempt_from_file, github_job_id)
 
-        assert key not in github_job_ids_to_tt_smi_resets, (
-            f"Duplicate reset key detected: {key}"
-        )
+        assert key not in github_job_ids_to_tt_smi_resets, f"Duplicate reset key detected: {key}"
 
         github_job_ids_to_tt_smi_resets[key] = tt_smi_reset
 
@@ -217,7 +216,8 @@ def is_job_hanging_from_job_log(error_snippet, workflow_outputs_dir, workflow_ru
     ** Threshold may be reduced in the future
     """
     log_dir = workflow_outputs_dir / str(workflow_run_id) / "logs"
-    matching_logs = list(log_dir.glob(f"*_{workflow_job_id}.log"))
+    assert str(workflow_job_id).isdigit()
+    matching_logs = list(log_dir.glob(f"{workflow_job_id}.log"))
 
     if not matching_logs:
         logger.warning(f"Unable to find github job log file for job: {workflow_job_id}")
@@ -326,10 +326,8 @@ def get_github_job_ids_to_workflow_run_uuids_(workflow_outputs_dir, workflow_run
         if artifact_uuid_name:
             uuid = artifact_uuid_name.replace("test_reports_", "")
             filename = log_file.stem
-            assert "_" in filename, f"Unexpected filename format: {filename}"
-            workflow_attempt_str, github_job_id_str = filename.split("_", 1)
-
-            github_job_id = int(github_job_id_str)
+            assert filename.isdigit(), f"Unexpected filename format: {filename}"
+            github_job_id = int(filename)
             github_job_ids_to_workflow_run_uuids[github_job_id] = uuid
     return github_job_ids_to_workflow_run_uuids
 
@@ -389,11 +387,8 @@ def get_github_job_id_to_annotations(workflow_outputs_dir, workflow_run_id: int)
         if annot_json_info:
             # Map job id to annotation info (list of dict)
             filename = annot_json_file.name.replace("_annotations.json", "")
-
-            # format: 1_68697389866
-            workflow_attempt_str, github_job_id_str = filename.split("_", 1)
-
-            github_job_id = int(github_job_id_str)
+            assert filename.isdigit(), f"Unexpected filename format: {filename}"
+            github_job_id = int(filename)
             github_job_ids_to_annotation_jsons[github_job_id] = annot_json_info
     return github_job_ids_to_annotation_jsons
 

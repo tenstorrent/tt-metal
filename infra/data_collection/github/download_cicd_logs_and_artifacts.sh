@@ -95,12 +95,12 @@ download_logs_for_all_jobs() {
         # https://github.com/tenstorrent/tt-metal/issues/12966
         # We bypass any log download that returned a non-zero exit code so the downloader doesn't crash midway.
         # williamly: We may want to check http status code for robustness in the future again but it may be costly in terms of api calls used.
-        gh api /repos/$repo/actions/jobs/$job_id/logs > generated/cicd/$workflow_run_id/logs/${attempt_number}_${job_id}.log || true
+        gh api /repos/$repo/actions/jobs/$job_id/logs > generated/cicd/$workflow_run_id/logs/$job_id.log || true
 
         # Only download annotations for failed jobs
         if [[ "$job_conclusion" == "failure" ]]; then
             echo "[info] downloading annotations for failed job $job_id"
-            gh api /repos/$repo/check-runs/$job_id/annotations > generated/cicd/$workflow_run_id/logs/${attempt_number}_${job_id}_annotations.json
+            gh api /repos/$repo/check-runs/$job_id/annotations > generated/cicd/$workflow_run_id/logs/${job_id}_annotations.json
         fi
     done
 }

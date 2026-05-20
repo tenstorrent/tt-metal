@@ -137,7 +137,7 @@ jobs:
             attempt_number="${{ inputs.test_workflow_run_attempt }}"
           elif [[ "$event_name" == "workflow_run" ]]; then
             run_id="${{ github.event.workflow_run.id }}"
-            attempt_number=$(gh api /repos/tenstorrent/tt-metal/actions/runs/$run_id | jq -r '.run_attempt')
+            attempt_number="${{ github.event.workflow_run.run_attempt }}"
             [[ -z "$run_id" ]] && { echo "run_id is empty" ; exit 1; }
             [[ -z "$attempt_number" ]] && { echo "attempt_number is empty" ; exit 1; }
           else
