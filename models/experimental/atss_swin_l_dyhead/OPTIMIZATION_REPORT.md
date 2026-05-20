@@ -10,11 +10,12 @@
 
 This report documents the optimization effort to maximize device utilization for the ATSS Swin-L DyHead object detection model on Tenstorrent hardware. The headline result:
 
-| Metric | Baseline (2CQ, no trace, host DyHead) | After (Trace + 2CQ, device DyHead) | Speedup |
+| Metric | Baseline (2CQ, no trace, host DyHead) | After (Trace + 2CQ, device DyHead, fp32 GN) | Speedup |
 |---|---:|---:|---:|
-| **Inference time avg** | 6.06 s | **0.4555 s** | **13.3×** |
-| **FPS** | 0.165 | **2.20** | **13.3×** |
-| Compile time | 208 s | 5.86 s | 35× faster |
+| **Inference time avg** | 6.06 s | **0.593 s** | **10.2×** |
+| **FPS** | 0.165 | **1.69** | **10.2×** |
+| E2E PCC (worst level) | n/a | **≥0.98** vs reference | — |
+| Compile time | 208 s | ~45 s | 4.6× faster |
 
 **Key wins:**
 - Native on-device DCNv2 kernel (`TtDeformConv2dV2`) via composition of `ttnn.grid_sample` + `ttnn.matmul` — PCC ≥ 0.994 vs `torchvision.ops.deform_conv2d`.
@@ -278,43 +279,70 @@ Comparison vs the existing no-trace test on the same hardware:
 - `test_atss_swinl_dyhead_perf_single_device_2cq` (no trace): **6.06 s/inference, 0.165 FPS** (this report's measurement)
 - `test_atss_swinl_dyhead_perf_single_device_trace_2cq` (trace + 2CQ, device DyHead): **0.4555 s/inference, 2.195 FPS** — **13.3× speedup**
 
-### 7.6 PCC investigation findings (single session)
+### 7.6 PCC investigation: root-causing the drift and fixing it
 
-Per-block PCC vs the PyTorch reference (random NCHW inputs, after each of 6 DyHead blocks):
+Per-block PCC vs PyTorch reference, with the original `ttnn.group_norm`:
 
 ```
            L0(P3)  L1(P4)  L2(P5)  L3(P6)  L4(P7)
   block0:   0.993   0.994   0.996   0.982   1.000
-  block1:   0.993   0.972   0.977   0.912   0.988
-  block2:   0.983   0.949   0.927   0.872   0.952
-  block3:   0.968   0.931   0.892   0.864   0.904
-  block4:   0.957   0.922   0.882   0.822   0.877
   block5:   0.925   0.916   0.877   0.807   0.877
 ```
 
-**Root cause:** ~1.5% PCC drop per block, fundamental to bf16 storage between chained ops.
-The single-block PCC is ≥0.98 at every level — the per-block math is correct. The drift compounds linearly across the 6-block chain.
+E2E head outputs (cls/reg/cent at 5 levels) ranged from -0.34 to 1.00. **Bad at deep levels.**
 
-**What we tried and the result:**
+**Things we tried that did NOT move the needle:**
 
-| Change | PCC at block5 P3 | PCC at block5 P7 |
+| Change | block5 P3 | block5 P7 |
 |---|---:|---:|
-| Baseline (LoFi, align_corners=False math) | 0.925 | 0.878 |
-| Align resize math to `align_corners=True` (matches ref) | 0.925 | 0.878 |
-| HiFi2 + fp32_dest_acc in all DyHead matmuls | 0.925 | 0.877 |
+| Baseline | 0.925 | 0.878 |
+| Align resize math to `align_corners=True` (matches reference) | 0.925 | 0.878 |
+| HiFi2 + fp32_dest_acc all DyHead matmuls | 0.925 | 0.877 |
 | HiFi4 + fp32_dest_acc + packer_l1_acc | 0.925 | 0.878 |
-| HiFi3 + fp32_dest_acc + packer_l1_acc (current) | 0.925 | 0.877 |
+| HiFi3 + fp32_dest_acc + packer_l1_acc | 0.925 | 0.877 |
 
-Math-fidelity flags don't move the needle because the storage between ops is bf16 — the limiting factor is bf16 quantization at op boundaries, not the matmul reduction precision.
+Math-fidelity flags didn't help because the matmul accumulator was already fp32 — the output was being truncated to bf16 anyway.
 
-Element-wise analysis (after 6 blocks): no NaN/Inf, no systematic bias, but per-element diff std is ~0.08–0.11 on values that are typically 0.1–0.2 (relative noise ~50%, absolute ~0.1). PCC stays "high" (0.8–0.9) because the overall pattern correlates but individual elements drift.
+**Important Wormhole HW note discovered along the way:** `MathFidelity.HiFi4` + `fp32_dest_acc=True` triggers a HW bug that REDUCES accuracy vs HiFi3. The runtime emits a warning. HiFi3 is the highest practical fidelity on this device.
 
-**Important hardware note** (uncovered during this work): on Wormhole, `MathFidelity.HiFi4` + `fp32_dest_acc=True` triggers a HW bug that REDUCES accuracy vs HiFi3. The runtime emits this warning. Use HiFi3 + fp32_dest_acc as the maximum-precision config on Wormhole.
+**Smoking-gun diagnostic.** Swap `ttnn.group_norm` for a CPU GN that does its math in fp32, leaving everything else identical. Result:
 
-### 7.7 Outstanding work
+```
+           L0(P3)  L1(P4)  L2(P5)  L3(P6)  L4(P7)
+  block5:   0.996   0.996   0.997   0.998   0.999
+```
 
-- **Fundamental PCC fix:** would require fp32 storage between blocks (2× memory, slower ops). Not pursued — single-block PCC is fine, and the bf16-compounded drift is a known characteristic of TTNN inference. **Use COCO mAP for production accuracy validation**, not per-tensor PCC, because detections are robust to this kind of channel-wise noise as long as ranking is preserved.
+**`ttnn.group_norm` (which hard-asserts bf16 input/output) is the precision bottleneck.** Its bf16 quantization of the normalized output gets amplified by `1/sqrt(var)` and compounds through 6 chained blocks.
+
+**The fix.** Replace `ttnn.group_norm` with a custom on-device fp32 GroupNorm built from primitive ttnn ops (`tt_dyhead_device.py::TtGroupNorm`). The flow:
+
+1. Cast bf16 input → fp32, reshape `(N, H, W, C)` → 5D `(N, H, W, G, C/G)`.
+2. Per-group mean via `ttnn.mean(... dim=(1, 2, 4), keepdim=True)` — fp32.
+3. Centered = x − mean; variance = mean(centered²) — fp32.
+4. Normalized = centered · rsqrt(var + ε) — fp32.
+5. Apply learnable affine: `normalized * gamma_5d + beta_5d` — fp32.
+6. Reshape back to `(N, H, W, C)`, cast to bf16 for the next op.
+
+~10 ttnn ops per call vs 1 for ttnn.group_norm. Still trace-compatible (all ops are device ops; no host roundtrips).
+
+### 7.7 Results after fix
+
+| Test | Before (ttnn.group_norm) | After (custom fp32 GN) |
+|---|---:|---:|
+| Per-block PCC at block5 P7 | 0.877 | **0.999** |
+| E2E cls PCC range | [-0.04, 0.94] | **[0.99, 1.00]** |
+| E2E reg PCC range | [0.21, 0.98] | **[0.98, 1.00]** |
+| E2E cent PCC range | [-0.33, 1.00] | **[0.98, 1.00]** |
+| Inference time (trace+2CQ) | 0.456 s | 0.593 s |
+| FPS | 2.20 | **1.69** |
+| Speedup vs 6.06 s baseline | 13.3× | **10.2×** |
+
+Traded ~23% throughput for full numerical correctness. PCC now matches the CPU-hybrid reference across all stages.
+
+### 7.8 Outstanding work
+
 - **Multi-device variant** (`test_atss_swinl_dyhead_perf_multi_device_2cq`) — should work identically but needs verification.
+- **Custom GN perf tuning** — the 10-op implementation is unoptimized. Possible wins: keep intermediates in L1 for small spatial sizes; share gamma/beta across blocks (they're already pre-uploaded per block); fold the affine into the multiply with `addcmul`-style fused op if available.
 
 ---
 
