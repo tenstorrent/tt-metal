@@ -237,7 +237,7 @@ def compute_attn_masks(
     patch_size: int,
     window_size: int,
     device: ttnn.Device,
-) -> List[Optional[ttnn.Tensor]]:
+) -> List[Optional[torch.Tensor]]:
     """
     Precompute attention masks for shifted window attention at each of the 4 stages.
     Returns list of 4 ttnn tensors (or None if window >= feature size).
@@ -270,8 +270,8 @@ def compute_attn_masks(
             attn_mask = attn_mask.permute(0, 2, 1, 3).reshape(num_windows, ws * ws)
             attn_mask = attn_mask.unsqueeze(1) - attn_mask.unsqueeze(2)
             attn_mask = attn_mask.masked_fill(attn_mask != 0, -100.0).masked_fill(attn_mask == 0, 0.0)
-            attn_mask = attn_mask.unsqueeze(1).unsqueeze(0)  # [1, 1, nW, ws*ws, ws*ws]
-            masks.append(ttnn.from_torch(attn_mask, device=device, layout=ttnn.TILE_LAYOUT))
+            attn_mask = attn_mask.unsqueeze(1)  # [nW, 1, ws*ws, ws*ws]
+            masks.append(attn_mask)
 
         # Next stage: spatial dims halve
         feat_h = feat_h // 2

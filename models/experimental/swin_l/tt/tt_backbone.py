@@ -165,11 +165,9 @@ class TtSwinLBackbone:
         # Run 4 stages, collecting features only for stages in out_indices
         features = []
         for s in range(4):
-            # Run all blocks in this stage
             for block in self.stages[s]:
                 output = block(output)
 
-            # Only collect output for stages in out_indices
             if s in self.out_indices:
                 normed = ttnn.layer_norm(
                     output,
@@ -179,7 +177,6 @@ class TtSwinLBackbone:
                 )
                 features.append(normed)
 
-            # Downsample (except after last stage)
             if s < 3:
                 output = self.downsamples[s](output)
 

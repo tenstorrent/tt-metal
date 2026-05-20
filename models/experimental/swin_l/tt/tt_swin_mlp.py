@@ -20,14 +20,13 @@ class TtSwinMLP:
         self.dim = dim
 
     def __call__(self, input_tensor):
-        # fc1 + GELU
         output = ttnn.linear(
             input_tensor,
             self.parameters["fc1"]["weight"],
             bias=self.parameters["fc1"]["bias"],
             activation="gelu",
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_fidelity=ttnn.MathFidelity.LoFi,
                 fp32_dest_acc_en=False,
                 packer_l1_acc=True,
             ),
@@ -35,13 +34,12 @@ class TtSwinMLP:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # fc2
         return ttnn.linear(
             output,
             self.parameters["fc2"]["weight"],
             bias=self.parameters["fc2"]["bias"],
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_fidelity=ttnn.MathFidelity.LoFi,
                 fp32_dest_acc_en=True,
                 packer_l1_acc=True,
             ),

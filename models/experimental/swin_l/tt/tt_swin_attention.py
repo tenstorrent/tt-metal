@@ -3,10 +3,12 @@
 
 """
 TTNN Shifted Window Attention for Swin-L backbone.
-Adapted from models/experimental/swin_s/tt/tt_shifted_window_attention.py.
-Initial version: correctness-first (no hardcoded sharding configs).
+
+Uses fused scaled_dot_product_attention kernel to replace manual
+matmul(Q, K^T) + softmax + matmul(attn, V) with a single kernel call.
 """
 
+import torch
 import ttnn
 
 
@@ -42,7 +44,7 @@ def roll(tensor, shifts, dims):
 
 
 class TtSwinAttention:
-    """Shifted window multi-head self-attention (TTNN)."""
+    """Shifted window multi-head self-attention using fused SDPA kernel."""
 
     def __init__(self, device, parameters, dim, window_size, shift_size, num_heads, attn_mask=None):
         self.device = device
@@ -52,10 +54,32 @@ class TtSwinAttention:
         self.shift_size = list(shift_size) if not isinstance(shift_size, list) else shift_size
         self.num_heads = num_heads
         self.attn_mask = attn_mask
+        self._sdpa_mask = None
+        self._compute_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+            math_approx_mode=False,
+        )
+
+    def _prepare_sdpa_mask(self, num_windows):
+        """Precompute combined mask (relative position bias + window mask) for fused SDPA."""
+        rpb_tt = self.parameters["relative_position_bias"]
+
+        has_shift = sum(self.shift_size) > 0
+        if self.attn_mask is not None and has_shift:
+            rpb = ttnn.to_torch(ttnn.from_device(rpb_tt)).float()
+            combined = rpb + self.attn_mask.float()
+            self._sdpa_mask = ttnn.from_torch(
+                combined.to(torch.bfloat16),
+                device=self.device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            self._sdpa_mask = rpb_tt
 
     def __call__(self, input_tensor):
-        relative_position_bias = self.parameters["relative_position_bias"]
-
         B, H, W, C = input_tensor.shape
         pad_r = (self.window_size[1] - W % self.window_size[1]) % self.window_size[1]
         pad_b = (self.window_size[0] - H % self.window_size[0]) % self.window_size[0]
@@ -71,11 +95,9 @@ class TtSwinAttention:
         if self.window_size[1] >= pad_W:
             shift_size[1] = 0
 
-        # cyclic shift
         if sum(shift_size) > 0:
             input_tensor = roll(input_tensor, (-shift_size[0], -shift_size[1]), [1, 2])
 
-        # partition windows
         num_windows = (pad_H // self.window_size[0]) * (pad_W // self.window_size[1])
         nH = pad_H // self.window_size[0]
         nW = pad_W // self.window_size[1]
@@ -86,7 +108,6 @@ class TtSwinAttention:
             ttnn.transpose(ttnn.reshape(input_tensor, (B, nH, wH, nW, wW, C)), 2, 3), (B * num_windows, wH * wW, C)
         )
 
-        # QKV projection
         seq_len = wH * wW
         head_dim = C // self.num_heads
 
@@ -108,49 +129,37 @@ class TtSwinAttention:
         v = ttnn.slice(qkv, [0, 0, 2 * C], [B * num_windows, seq_len, 3 * C])
         ttnn.deallocate(qkv)
 
+        # Reshape to multi-head: (B*nW, nh, sl, hd) — K is NOT transposed for fused SDPA
         q = ttnn.transpose(ttnn.reshape(q, (B * num_windows, seq_len, self.num_heads, head_dim)), 1, 2)
-        k = ttnn.permute(ttnn.reshape(k, (B * num_windows, seq_len, self.num_heads, head_dim)), (0, 2, 3, 1))
+        k = ttnn.transpose(ttnn.reshape(k, (B * num_windows, seq_len, self.num_heads, head_dim)), 1, 2)
         v = ttnn.transpose(ttnn.reshape(v, (B * num_windows, seq_len, self.num_heads, head_dim)), 1, 2)
 
-        scale = head_dim**-0.5
-        q = ttnn.to_layout(q * scale, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        q = ttnn.to_layout(q, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         k = ttnn.to_layout(k, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        attn = ttnn.matmul(
+        v = ttnn.to_layout(v, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        if self._sdpa_mask is None:
+            self._prepare_sdpa_mask(num_windows)
+
+        # Fused SDPA: scale*Q@K^T + mask + softmax + @V in one kernel
+        output = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False, packer_l1_acc=True
+            v,
+            attn_mask=self._sdpa_mask,
+            is_causal=False,
+            scale=head_dim**-0.5,
+            program_config=ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(8, 8),
+                q_chunk_size=32,
+                k_chunk_size=32,
             ),
-            core_grid=ttnn.CoreGrid(y=8, x=8),
+            compute_kernel_config=self._compute_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(q)
         ttnn.deallocate(k)
-
-        # relative position bias
-        attn = ttnn.add(attn, relative_position_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        # attention mask for shifted windows
-        if sum(shift_size) > 0 and self.attn_mask is not None:
-            attn = ttnn.reshape(
-                attn + self.attn_mask,
-                (B * num_windows, self.num_heads, seq_len, seq_len),
-            )
-
-        attn = ttnn.softmax(attn, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        v = ttnn.to_layout(v, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        output = ttnn.matmul(
-            attn,
-            v,
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False
-            ),
-            core_grid=ttnn.CoreGrid(y=8, x=8),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
         ttnn.deallocate(v)
-        ttnn.deallocate(attn)
 
         output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         output = ttnn.transpose(output, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -172,11 +181,9 @@ class TtSwinAttention:
         output = ttnn.transpose(output, 2, 3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         output = ttnn.reshape(output, (B, pad_H, pad_W, C))
 
-        # reverse cyclic shift
         if sum(shift_size) > 0:
             output = roll(output, (shift_size[0], shift_size[1]), [1, 2])
 
-        # unpad
         if pad_b > 0 or pad_r > 0:
             output = ttnn.slice(output, [0, 0, 0, 0], [B, H, W, C], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return output
