@@ -103,8 +103,6 @@ class TTNNDotsOCRAttention(TTNNModule):
 
         # O projection
         new_attn.o_proj = TTNNLinearLLamaIReplicatedWColSharded.from_torch(hf_attn.o_proj)
-        new_attn.qkv_proj.use_decode_l1_sharded_matmul = True
-        new_attn.o_proj.use_decode_l1_sharded_matmul = True
 
         new_attn.sdpa = TTNNSDPAAttention()
         new_attn.core_grid = ttnn.CoreGrid(y=8, x=8)
@@ -234,10 +232,7 @@ class TTNNDotsOCRAttention(TTNNModule):
         qkv_states = self.qkv_proj(hidden_states)
 
         is_decode = int(seq_length) == 1
-        if is_decode and (
-            qkv_states.memory_config().buffer_type != ttnn.BufferType.L1
-            or qkv_states.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
-        ):
+        if is_decode and qkv_states.memory_config().buffer_type != ttnn.BufferType.L1:
             qkv_states = ttnn.to_memory_config(qkv_states, ttnn.L1_MEMORY_CONFIG)
 
         qkv_states = ttnn.reshape(qkv_states, (batch_size, 1, seq_length, -1))

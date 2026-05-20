@@ -11,6 +11,7 @@ and MLP blocks, across a few useful kernel/layout families:
 * auto/interleaved baseline
 * 1D multicast with interleaved weights
 * L1-sharded operands/output
+* mixed L1-sharded activation + DRAM-sharded weight + L1-sharded output
 * DRAM-sharded weights with sharded activations/output
 
 Run with ``-s`` to print rough wall-clock latency for each variant. For precise
@@ -63,39 +64,39 @@ _LOFI = ttnn.MathFidelity.LoFi
 
 
 DECODE_MATMUL_SHAPES = [
-    # DecodeMatmulShape(
-    #     name="attn_qkv",
-    #     m=32,
-    #     k=1536,
-    #     n=2048,
-    #     in0_dtype=_BF16,
-    #     in1_dtype=_BFP8,
-    #     out_dtype=_BF16,
-    #     math_fidelity=_HIFI2,
-    #     pcc_threshold=0.99,
-    # ),
-    # DecodeMatmulShape(
-    #     name="attn_o_proj",
-    #     m=32,
-    #     k=1536,
-    #     n=1536,
-    #     in0_dtype=_BF16,
-    #     in1_dtype=_BFP4,
-    #     out_dtype=_BFP8,
-    #     math_fidelity=_LOFI,
-    #     pcc_threshold=0.99,
-    # ),
-    # DecodeMatmulShape(
-    #     name="mlp_gate_up",
-    #     m=32,
-    #     k=1536,
-    #     n=17920,
-    #     in0_dtype=_BF16,
-    #     in1_dtype=_BFP4,
-    #     out_dtype=_BFP8,
-    #     math_fidelity=_LOFI,
-    #     pcc_threshold=0.99,
-    # ),
+    DecodeMatmulShape(
+        name="attn_qkv",
+        m=32,
+        k=1536,
+        n=2048,
+        in0_dtype=_BF16,
+        in1_dtype=_BFP8,
+        out_dtype=_BF16,
+        math_fidelity=_HIFI2,
+        pcc_threshold=0.99,
+    ),
+    DecodeMatmulShape(
+        name="attn_o_proj",
+        m=32,
+        k=1536,
+        n=1536,
+        in0_dtype=_BF16,
+        in1_dtype=_BFP4,
+        out_dtype=_BFP8,
+        math_fidelity=_LOFI,
+        pcc_threshold=0.99,
+    ),
+    DecodeMatmulShape(
+        name="mlp_gate_up",
+        m=32,
+        k=1536,
+        n=17920,
+        in0_dtype=_BF16,
+        in1_dtype=_BFP4,
+        out_dtype=_BFP8,
+        math_fidelity=_LOFI,
+        pcc_threshold=0.99,
+    ),
     DecodeMatmulShape(
         name="mlp_down",
         m=32,
@@ -112,13 +113,20 @@ DECODE_MATMUL_SHAPES = [
 
 KERNEL_VARIANTS = [
     # KernelVariant(name="auto_dram_in_dram_out", kind="auto", input_l1=False, output_l1=False),
-    # KernelVariant(name="auto_dram_in_l1_out", kind="auto", input_l1=False, output_l1=True),
+    KernelVariant(name="auto_dram_in_l1_out", kind="auto", input_l1=False, output_l1=True),
     # KernelVariant(name="auto_l1_in_dram_out", kind="auto", input_l1=True, output_l1=False),
     # KernelVariant(name="auto_l1_in_l1_out", kind="auto", input_l1=True, output_l1=True),
     # KernelVariant(name="mcast1d_dram_in_dram_out", kind="mcast1d", input_l1=False, output_l1=False),
-    KernelVariant(name="mcast1d_l1_in_l1_out", kind="mcast1d", input_l1=True, output_l1=True),
+    # KernelVariant(name="mcast1d_l1_in_l1_out", kind="mcast1d", input_l1=True, output_l1=True),
     # KernelVariant(name="l1_sharded_l1_out", kind="l1_sharded", input_l1=True, output_l1=True),
     # KernelVariant(name="dram_sharded_l1_out", kind="dram_sharded", input_l1=True, output_l1=True),
+    # KernelVariant(name="dram_sharded_dram_out", kind="dram_sharded", input_l1=False, output_l1=False),
+    KernelVariant(
+        name="in0_l1_sharded_in1_dram_sharded_l1_out",
+        kind="mixed_l1_dram_sharded",
+        input_l1=True,
+        output_l1=True,
+    ),
 ]
 
 
@@ -186,17 +194,17 @@ def _l1_sharded_configs(shape: DecodeMatmulShape):
 
     in0_mem_cfg = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
+        ttnn.BufferType.DRAM,
         ttnn.ShardSpec(core_range_set, [shape.m, shape.k // num_cores], ttnn.ShardOrientation.ROW_MAJOR),
     )
     in1_mem_cfg = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
+        ttnn.BufferType.DRAM,
         ttnn.ShardSpec(core_range_set, [shape.k, shape.n // num_cores], ttnn.ShardOrientation.ROW_MAJOR),
     )
     out_mem_cfg = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
+        ttnn.BufferType.DRAM,
         ttnn.ShardSpec(core_range_set, [shape.m, shape.n // num_cores], ttnn.ShardOrientation.ROW_MAJOR),
     )
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -259,6 +267,11 @@ def _dram_sharded_configs(device, shape: DecodeMatmulShape):
     return in0_mem_cfg, in1_mem_cfg, out_mem_cfg, program_config
 
 
+def _mixed_l1_dram_sharded_configs(device, shape: DecodeMatmulShape):
+    """A in L1 WIDTH_SHARDED, B in DRAM WIDTH_SHARDED, output in L1 WIDTH_SHARDED."""
+    return _dram_sharded_configs(device, shape)
+
+
 def _compute_kernel_config(shape: DecodeMatmulShape):
     return ttnn.WormholeComputeKernelConfig(
         math_fidelity=shape.math_fidelity,
@@ -271,6 +284,8 @@ def _compute_kernel_config(shape: DecodeMatmulShape):
 def _memory_and_program_configs(device, shape: DecodeMatmulShape, variant: KernelVariant):
     if variant.kind == "l1_sharded":
         return _l1_sharded_configs(shape)
+    if variant.kind == "mixed_l1_dram_sharded":
+        return _mixed_l1_dram_sharded_configs(device, shape)
     if variant.kind == "dram_sharded":
         return _dram_sharded_configs(device, shape)
 
