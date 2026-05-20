@@ -85,19 +85,16 @@ void kernel_main() {
     // Order: tr-outer, pass-inner — matches the compute kernel's per-tile-row
     // loop that runs all 3 passes for one row before moving to the next.
     if constexpr (is_rm_input) {
-        // RM input: stream sticks for each tile-row × 3 passes.
+        // RM input: stream sticks for each tile-row × 3 passes via the
+        // read_sticks_for_tilize<ROW> helper. ROW granularity matches the
+        // compute side's asymmetric tilize(num_blocks=1, total_num_rows=TILE_H).
         const auto input_accessor = TensorAccessor(input_args, input_addr, padded_row_bytes);
         for (uint32_t tr = 0; tr < total_tile_rows; ++tr) {
-            uint32_t row_base = tr * TILE_H;
+            uint32_t start_page = tr * TILE_H;
             for (uint32_t pass = 0; pass < 3; ++pass) {
-                for (uint32_t row = 0; row < TILE_H; ++row) {
-                    cb_reserve_back(cb_input_sticks, 1);
-                    uint32_t l1_addr = get_write_ptr(cb_input_sticks);
-                    uint64_t noc_addr = input_accessor.get_noc_addr(row_base + row);
-                    noc_async_read(noc_addr, l1_addr, input_row_bytes);
-                    noc_async_read_barrier();
-                    cb_push_back(cb_input_sticks, 1);
-                }
+                dataflow_kernel_lib::
+                    read_sticks_for_tilize<cb_input_sticks, dataflow_kernel_lib::TilizeGranularity::ROW>(
+                        input_accessor, TILE_H, input_row_bytes, start_page);
             }
         }
     } else {

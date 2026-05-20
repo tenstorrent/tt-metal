@@ -8,6 +8,6 @@ Import as:
     from ttnn.operations.layer_norm_rm import layer_norm
 """
 
-from .layer_norm_rm import layer_norm
+from .layer_norm_rm import EXCLUSIONS, INPUT_TAGGERS, SUPPORTED, layer_norm, validate
 
-__all__ = ["layer_norm"]
+__all__ = ["layer_norm", "validate", "INPUT_TAGGERS", "SUPPORTED", "EXCLUSIONS"]

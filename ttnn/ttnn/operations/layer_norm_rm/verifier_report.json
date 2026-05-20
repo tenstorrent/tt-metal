@@ -1,0 +1,231 @@
+{
+  "summary": {
+    "total": 3795,
+    "supported_pass": 292,
+    "supported_fail": 98,
+    "supported_marked_xfail": 0,
+    "supported_skipped": 0,
+    "supported_other": 0,
+    "xfail_expected": 1535,
+    "xpass_drift": 0,
+    "xfail_wrong_mode": 0,
+    "xfail_other": 0,
+    "invalid_skipped": 1855,
+    "invalid_unexpected": 0,
+    "no_axes_found": 15
+  },
+  "sample_by_category": {
+    "xfail_expected": {
+      "count": 1535,
+      "samples": []
+    },
+    "supported_pass": {
+      "count": 292,
+      "samples": []
+    },
+    "invalid_skipped": {
+      "count": 1855,
+      "samples": []
+    },
+    "supported_fail": {
+      "count": 98,
+      "samples": [
+        {
+          "nodeid": "eval/golden_tests/layer_norm_rm/test_golden.py::test_op[4x8x47x256-affine=gamma_beta-affine_dtype=FLOAT32-affine_layout=ROW_MAJOR-alignment=h_non_aligned-dtype=FLOAT32-layout=TILE-rank=4]",
+          "axes": {
+            "dtype": "FLOAT32",
+            "layout": "TILE",
+            "affine": "gamma_beta",
+            "affine_dtype": "FLOAT32",
+            "affine_layout": "ROW_MAJOR",
+            "alignment": "h_non_aligned",
+            "rank": 4
+          },
+          "status": "failed",
+          "failure_category": "numerical-bug"
+        },
+        {
+          "nodeid": "eval/golden_tests/layer_norm_rm/test_golden.py::test_op[4x8x47x256-affine=gamma_only-affine_dtype=FLOAT32-affine_layout=ROW_MAJOR-alignment=h_non_aligned-dtype=FLOAT32-layout=TILE-rank=4]",
+          "axes": {
+            "dtype": "FLOAT32",
+            "layout": "TILE",
+            "affine": "gamma_only",
+            "affine_dtype": "FLOAT32",
+            "affine_layout": "ROW_MAJOR",
+            "alignment": "h_non_aligned",
+            "rank": 4
+          },
+          "status": "failed",
+          "failure_category": "numerical-bug"
+        },
+        {
+          "nodeid": "eval/golden_tests/layer_norm_rm/test_golden.py::test_op[4x8x47x256-affine=no_affine-affine_dtype=FLOAT32-affine_layout=TILE-alignment=h_non_aligned-dtype=FLOAT32-layout=TILE-rank=4]",
+          "axes": {
+            "dtype": "FLOAT32",
+            "layout": "TILE",
+            "affine": "no_affine",
+            "affine_dtype": "FLOAT32",
+            "affine_layout": "TILE",
+            "alignment": "h_non_aligned",
+            "rank": 4
+          },
+          "status": "failed",
+          "failure_category": "numerical-bug"
+        },
+        {
+          "nodeid": "eval/golden_tests/layer_norm_rm/test_golden.py::test_op[4x8x47x256-affine=gamma_beta-affine_dtype=BFLOAT16-affine_layout=ROW_MAJOR-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE-rank=4]",
+          "axes": {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "affine": "gamma_beta",
+            "affine_dtype": "BFLOAT16",
+            "affine_layout": "ROW_MAJOR",
+            "alignment": "h_non_aligned",
+            "rank": 4
+          },
+          "status": "failed",
+          "failure_category": "numerical-bug"
+        },
+        {
+          "nodeid": "eval/golden_tests/layer_norm_rm/test_golden.py::test_op[4x8x47x256-affine=gamma_only-affine_dtype=BFLOAT16-affine_layout=ROW_MAJOR-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE-rank=4]",
+          "axes": {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "affine": "gamma_only",
+            "affine_dtype": "BFLOAT16",
+            "affine_layout": "ROW_MAJOR",
+            "alignment": "h_non_aligned",
+            "rank": 4
+          },
+          "status": "failed",
+          "failure_category": "numerical-bug"
+        },
+        {
+          "nodeid": "eval/golden_tests/layer_norm_rm/test_golden.py::test_op[4x8x47x256-affine=no_affine-affine_dtype=FLOAT32-affine_layout=TILE-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE-rank=4]",
+          "axes": {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "affine": "no_affine",
+            "affine_dtype": "FLOAT32",
+            "affine_layout": "TILE",
+            "alignment": "h_non_aligned",
+            "rank": 4
+          },
+          "status": "failed",
+          "failure_category": "numerical-bug"
+        },
+        {
+          "nodeid": "eval/golden_tests/layer_norm_rm/test_golden.py::test_op[2x1x100x47-affine=gamma_beta-affine_dtype=FLOAT32-affine_layout=ROW_MAJOR-alignment=w_non_aligned-dtype=FLOAT32-layout=TILE-rank=4]",
+          "axes": {
+            "dtype": "FLOAT32",
+            "layout": "TILE",
+            "affine": "gamma_beta",
+            "affine_dtype": "FLOAT32",
+            "affine_layout": "ROW_MAJOR",
+            "alignment": "w_non_aligned",
+            "rank": 4
+          },
+          "status": "failed",
+          "failure_category": "numerical-precision"
+        },
+        {
+          "nodeid": "eval/golden_tests/layer_norm_rm/test_golden.py::test_op[2x1x100x47-affine=gamma_only-affine_dtype=FLOAT32-affine_layout=ROW_MAJOR-alignment=w_non_aligned-dtype=FLOAT32-layout=TILE-rank=4]",
+          "axes": {
+            "dtype": "FLOAT32",
+            "layout": "TILE",
+            "affine": "gamma_only",
+            "affine_dtype": "FLOAT32",
+            "affine_layout": "ROW_MAJOR",
+            "alignment": "w_non_aligned",
+            "rank": 4
+          },
+          "status": "failed",
+          "failure_category": "numerical-precision"
+        },
+        {
+          "nodeid": "eval/golden_tests/layer_norm_rm/test_golden.py::test_op[2x1x100x47-affine=no_affine-affine_dtype=FLOAT32-affine_layout=TILE-alignment=w_non_aligned-dtype=FLOAT32-layout=TILE-rank=4]",
+          "axes": {
+            "dtype": "FLOAT32",
+            "layout": "TILE",
+            "affine": "no_affine",
+            "affine_dtype": "FLOAT32",
+            "affine_layout": "TILE",
+            "alignment": "w_non_aligned",
+            "rank": 4
+          },
+          "status": "failed",
+          "failure_category": "numerical-precision"
+        },
+        {
+          "nodeid": "eval/golden_tests/layer_norm_rm/test_golden.py::test_op[2x1x100x47-affine=gamma_beta-affine_dtype=BFLOAT16-affine_layout=ROW_MAJOR-alignment=w_non_aligned-dtype=BFLOAT16-layout=TILE-rank=4]",
+          "axes": {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "affine": "gamma_beta",
+            "affine_dtype": "BFLOAT16",
+            "affine_layout": "ROW_MAJOR",
+            "alignment": "w_non_aligned",
+            "rank": 4
+          },
+          "status": "failed",
+          "failure_category": "numerical-precision"
+        }
+      ]
+    },
+    "no_axes_found": {
+      "count": 15,
+      "samples": [
+        {
+          "nodeid": "eval/golden_tests/layer_norm_rm/test_regression.py::test_small_magnitude_input[32x64]",
+          "test_name": "test_small_magnitude_input[32x64]",
+          "status": "passed"
+        },
+        {
+          "nodeid": "eval/golden_tests/layer_norm_rm/test_regression.py::test_small_magnitude_input[64x128]",
+          "test_name": "test_small_magnitude_input[64x128]",
+          "status": "passed"
+        },
+        {
+          "nodeid": "eval/golden_tests/layer_norm_rm/test_regression.py::test_small_magnitude_input[128x256]",
+          "test_name": "test_small_magnitude_input[128x256]",
+          "status": "passed"
+        },
+        {
+          "nodeid": "eval/golden_tests/layer_norm_rm/test_regression.py::test_large_magnitude_input[32x64]",
+          "test_name": "test_large_magnitude_input[32x64]",
+          "status": "passed"
+        },
+        {
+          "nodeid": "eval/golden_tests/layer_norm_rm/test_regression.py::test_large_magnitude_input[64x128]",
+          "test_name": "test_large_magnitude_input[64x128]",
+          "status": "passed"
+        },
+        {
+          "nodeid": "eval/golden_tests/layer_norm_rm/test_regression.py::test_large_magnitude_input[128x256]",
+          "test_name": "test_large_magnitude_input[128x256]",
+          "status": "passed"
+        },
+        {
+          "nodeid": "eval/golden_tests/layer_norm_rm/test_regression.py::test_uniform_input[32x64]",
+          "test_name": "test_uniform_input[32x64]",
+          "status": "passed"
+        },
+        {
+          "nodeid": "eval/golden_tests/layer_norm_rm/test_regression.py::test_uniform_input[64x128]",
+          "test_name": "test_uniform_input[64x128]",
+          "status": "passed"
+        },
+        {
+          "nodeid": "eval/golden_tests/layer_norm_rm/test_regression.py::test_uniform_input[128x256]",
+          "test_name": "test_uniform_input[128x256]",
+          "status": "passed"
+        },
+        {
+          "nodeid": "eval/golden_tests/layer_norm_rm/test_regression.py::test_positive_only_input[32x64]",
+          "test_name": "test_positive_only_input[32x64]",
+          "status": "failed"
+        }
+      ]
+    }
+  }
+}
