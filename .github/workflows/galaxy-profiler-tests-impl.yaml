@@ -6,17 +6,6 @@ on:
       docker-image:
         required: true
         type: string
-<<<<<<< HEAD
-      wheel-artifact-name:
-        required: true
-        type: string
-      build-artifact-name:
-        required: true
-        type: string
-      enabled-skus:
-        required: false
-        type: string
-=======
       build-artifact-name:
         required: true
         type: string
@@ -39,7 +28,6 @@ on:
         required: false
         type: boolean
         default: false
->>>>>>> da2705402a2 (Transform profiler into choose your own pipeline)
 
 jobs:
   load-test-matrix:
@@ -57,42 +45,22 @@ jobs:
             tests/pipeline_reorg
           sparse-checkout-cone-mode: true
       - name: Install dependencies
-<<<<<<< HEAD
-        run: |
-          pip3 install PyYAML
-      - name: Verify test timeouts against budget
-        # The "integration" pipeline category is a placeholder pending final
-        # team / test-framework assignment, see
-        # https://github.com/tenstorrent/tt-metal/issues/44285
-        run: |
-          set -e
-          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
-=======
         run: pip3 install PyYAML
       - name: Verify test timeouts against budget
         # "integration" category is a placeholder, see
         # https://github.com/tenstorrent/tt-metal/issues/44285
         run: |
           set -e
->>>>>>> da2705402a2 (Transform profiler into choose your own pipeline)
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
             "integration"
-<<<<<<< HEAD
-      - name: Build unified test matrix based on enabled SKUs
-=======
       - name: Build test matrix
->>>>>>> da2705402a2 (Transform profiler into choose your own pipeline)
         id: build-matrix
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
-<<<<<<< HEAD
-            ${{ inputs.enabled-skus || 'ALL_SKUS_IN_TESTS' }} \
-=======
             "wh_galaxy" \
->>>>>>> da2705402a2 (Transform profiler into choose your own pipeline)
             ./.github/sku_config.yaml
 
   galaxy-profiler-tests:
@@ -104,72 +72,45 @@ jobs:
     name: ${{ matrix.test-group.name }}
     runs-on: ${{ matrix.test-group.runs_on }}
     container:
-<<<<<<< HEAD
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
-=======
       image: ${{ inputs.docker-image }}
->>>>>>> da2705402a2 (Transform profiler into choose your own pipeline)
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: wormhole_b0
         LOGURU_LEVEL: INFO
-<<<<<<< HEAD
-        PROFILER_SCRIPTS_ROOT: /work/tt_metal/tools/profiler
-=======
         PROFILER_SCRIPTS_ROOT: /work/tools/tracy
->>>>>>> da2705402a2 (Transform profiler into choose your own pipeline)
         PROFILER_TEST_SCRIPTS_ROOT: /work/tests/tt_metal/tools/profiler
         PROFILER_ARTIFACTS_DIR: /work/generated/profiler
         PROFILER_OUTPUT_DIR: /work/generated/profiler/reports
         DONT_USE_VIRTUAL_ENVIRONMENT: 1
       volumes:
-<<<<<<< HEAD
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-=======
-        - ${{ github.workspace }}/docker-job:/work
->>>>>>> da2705402a2 (Transform profiler into choose your own pipeline)
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /mnt/MLPerf:/mnt/MLPerf:ro
       options: "--device /dev/tenstorrent"
     defaults:
       run:
         shell: bash
-<<<<<<< HEAD
         working-directory: /work # https://github.com/actions/runner/issues/878
-=======
-        working-directory: /work
->>>>>>> da2705402a2 (Transform profiler into choose your own pipeline)
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@v4
         with:
-<<<<<<< HEAD
-          submodules: recursive
-          path: docker-job
-      - name: Mark repository as safe directory
-        run: |
-          git config --global --add safe.directory $GITHUB_WORKSPACE
-=======
           ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
           path: docker-job
       - name: Mark repository as safe directory
         run: git config --global --add safe.directory $GITHUB_WORKSPACE
->>>>>>> da2705402a2 (Transform profiler into choose your own pipeline)
       - name: ⬇️  Setup Job
         uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-<<<<<<< HEAD
-=======
           enable-watcher: ${{ inputs.enable-watcher }}
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
->>>>>>> da2705402a2 (Transform profiler into choose your own pipeline)
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
