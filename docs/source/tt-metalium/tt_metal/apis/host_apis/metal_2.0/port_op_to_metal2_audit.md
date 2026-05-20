@@ -88,9 +88,9 @@ Confirm all kernel-side data-movement code in this op is Device 2.0 compliant. S
 
 For each kernel that reads tensor data directly (i.e. via host-managed `Buffer` addresses), identify how it accesses the tensor. **Compute kernels that only consume from / produce to circular buffers are out of scope for Check 3** — they read CB pointers, not tensor memory, and the tensor read happens upstream in a dataflow kernel. Audit only the kernels that actually touch tensor memory.
 
-**Causal-link gate (run this first).** Before classifying any kernel under the cases below, check whether its tensor-access pattern is **causally downstream of a Step 0.2 RED entry** — most commonly **Dynamic CircularBuffer** / borrowed memory. The typical signal: the kernel reads tensor data through `cb_*.wait_front` / `cb_*.get_read_ptr` from a CB that is itself a borrowed-memory dynamic CB. In that case, the kernel's lack of `TensorAccessor` is *symptomatic* of the sharded data-flow strategy, not an independent gap. Do **not** classify the kernel under any of the cases below — surface the dependency to the user as a question, and note that re-evaluation of Check 3 happens after the upstream gate clears. Converting the kernel to `TensorAccessor` while the dynamic CB exists would be incoherent; it only makes sense as part of the eventual borrowed-memory-DFB redesign.
+**Causal-link gate (run this first).** Before classifying any kernel under the cases below, check whether its tensor-access pattern is a **borrowed-memory DFB read**: the kernel reads tensor data through `cb_*.wait_front` / `cb_*.get_read_ptr` from a CB that is itself a borrowed-memory CB (see Step 0.2's [Dynamic CircularBuffer entry](#dynamic-circularbuffer-cb-built-on-borrowed-buffer-memory--landed)). In that case, the kernel's lack of `TensorAccessor` is *intended* — the borrowed-memory DFB **is** the tensor access — and the port handles it via `DataflowBufferSpec::borrowed_from`. Do **not** classify the kernel under any of the cases below; the borrowed-memory DFB plan handles it.
 
-Step-ordering tip: if a kernel involves sharded code paths or reads from a CB rather than via `TensorAccessor`, scan Step 0.2's Dynamic CircularBuffer rule for the same code path *before* finalizing your Check 3 classification. AI agents have been observed reasoning toward "exotic Yellow" before reaching the causal-link check; running the gate first prevents this failure.
+Step-ordering tip: if a kernel involves sharded code paths or reads from a CB rather than via `TensorAccessor`, scan Step 0.2's Dynamic CircularBuffer rule for the same code path *before* finalizing your Check 3 classification. The borrowed-memory DFB pattern is the supported replacement for the legacy dynamic CB, and kernels reading from it correctly do not use `TensorAccessor` — mis-classifying such a kernel as RED ("convert to TensorAccessor") would be a regression.
 
 **For kernels that pass the causal-link gate** (i.e. the lack of `TensorAccessor` is not downstream of a dynamic CB), classify by one of these three cases:
 
@@ -301,7 +301,7 @@ Plain `CircularBuffer`, `CBHandle`, `CBDescriptor`, or `CBFormatDescriptor` *wit
 
 ### Dynamic CircularBuffer (CB built on borrowed Buffer memory) — LANDED
 
-**Status**: Supported in Metal 2.0 as of commit `f06cb279620` (PR #44662). The legacy "dynamic circular buffer" pattern — `CBDescriptor::buffer = <some_buffer>` placing a CB on top of an existing `Buffer`'s memory — translates to Metal 2.0 as a **borrowed-memory DFB** via `DataflowBufferSpec::borrowed_from`. See `tt_metal/api/tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp:95` for the spec field.
+**Status**: Supported in Metal 2.0. The legacy "dynamic circular buffer" pattern — `CBDescriptor::buffer = <some_buffer>` placing a CB on top of an existing `Buffer`'s memory — translates to Metal 2.0 as a **borrowed-memory DFB** via `DataflowBufferSpec::borrowed_from`. See `tt_metal/api/tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp:95` for the spec field.
 
 **Recognition — definitely this feature** (no port gate; use borrowed-memory DFB):
 

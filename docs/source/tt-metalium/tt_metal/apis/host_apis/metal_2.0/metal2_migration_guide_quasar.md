@@ -284,7 +284,9 @@ KernelSpec consumer{ /* ... */
 
 Each `local_accessor_name` is independent per binding; the producer and consumer can name the same DFB differently in their respective kernel sources. The producer/consumer RISC masks that the legacy `DataflowBufferConfig` carried are no longer needed: the runtime determines RISC assignment from the kernel bindings.
 
-Advanced cases (aliased DFBs, borrowed-memory DFBs, remote DFBs) are exposed in `dataflow_buffer_spec.hpp`, but aren't supported yet.
+**Borrowed-memory DFBs.** A DFB can be built on top of an existing `Buffer`'s memory rather than allocating its own L1 storage — the Metal 2.0 form of the legacy "dynamic circular buffer." Set `DataflowBufferSpec::borrowed_from` to the name of a `TensorParameter` whose buffer backs the DFB; the DFB's L1 address resolves at runtime from the corresponding `TensorArg` in `ProgramRunParams::tensor_args`.
+
+Other advanced cases (aliased DFBs, remote DFBs) are exposed in `dataflow_buffer_spec.hpp` but aren't supported yet.
 
 ---
 

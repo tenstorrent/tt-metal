@@ -88,7 +88,7 @@ All three are committed alongside the port.
 
 **Stop signals**:
 - An unreferenced kernel file in the op's directory: not a stop, but note in the inventory's "Flags" subsection (so the report makes clear what was *not* audited).
-- A descriptor type not in the audit's scan: stop and report. (Most commonly: a `BufferDescriptor` for a borrowed-memory CB, which the audit should have flagged as RED but may have missed.)
+- A descriptor type not in the audit's scan: stop and report. The audit's Appendix A is the authoritative scope — anything the legacy factory uses that doesn't map onto an entry there is a signal the audit was incomplete.
 
 ---
 
@@ -110,7 +110,7 @@ All three are committed alongside the port.
 The Metal 2.0 spec shape. Default: 1:1 with legacy.
 
 - **KernelSpecs**: one per legacy `KernelDescriptor` (default). When the legacy factory has multiple `KernelDescriptor`s of the same source for work-split, **preserve the multiplicity**: one `KernelSpec` per legacy `KernelDescriptor`, with the per-group CTAs reproduced. See [Anti-pattern: Demoting per-group CTA to RTA](metal2_port_patterns.md#anti-pattern-demoting-per-group-cta-to-rta) for why this is non-negotiable.
-- **DataflowBufferSpecs**: one per legacy `CBDescriptor`. Note any borrowed-memory cases (which should have failed the audit; their presence here is a regression).
+- **DataflowBufferSpecs**: one per legacy `CBDescriptor`. For borrowed-memory cases (legacy `CBDescriptor::buffer` set), plan the DFB with `borrowed_from = <tensor_parameter_name>` naming the `TensorParameter` whose buffer backs the DFB.
 - **SemaphoreSpecs**: one per legacy `SemaphoreDescriptor`.
 - **TensorParameters**: one per distinct legacy `TensorAccessor` originating tensor. Note that multiple kernel-side accesses to the same tensor collapse to one `TensorParameter` with multiple `TensorBinding`s.
 - **WorkUnitSpecs**: one per distinct (set of kernels, target nodes) pairing. Most ops have one or two.
@@ -168,7 +168,7 @@ Any items the audit flagged as YELLOW that affect this port, plus any new findin
 For each resource type, construct the spec entry and its run-params entry as a pair. The order emerges naturally from the op's existing structure (reader / writer / compute order, tensor → DFB → semaphore precedence); the recipe does not prescribe a fixed sequence.
 
 - **`KernelSpec` ↔ `KernelRunParams`.** For each planned `KernelSpec`, build the schema (`compile_time_arg_bindings`, `runtime_arguments_schema`, `dfb_bindings`, `tensor_bindings`, `semaphore_bindings`, `config_spec`); alongside, build the corresponding `KernelRunParams` entry (per-node `named_runtime_args` and `named_common_runtime_args`). If the kernel has no RTAs, the run-params entry may be omitted entirely.
-- **`DataflowBufferSpec`.** Build with `entry_size`, `num_entries`, `data_format_metadata`, and `tile_format_metadata` **copied from the legacy CB's `format_descriptors[i].tile`** when that field was set (see [migration guide for the rationale](metal2_migration_guide.md#dataflowbufferspec)). No placement field — placement is derived from the kernel bindings. Borrowed-memory DFBs (not yet supported as of this guide's date) would have failed the audit; their presence here indicates the audit missed something.
+- **`DataflowBufferSpec`.** Build with `entry_size`, `num_entries`, `data_format_metadata`, and `tile_format_metadata` **copied from the legacy CB's `format_descriptors[i].tile`** when that field was set (see [migration guide for the rationale](metal2_migration_guide.md#dataflowbufferspec)). No placement field — placement is derived from the kernel bindings. For borrowed-memory DFBs, set `borrowed_from = <tensor_parameter_name>` naming the `TensorParameter` whose buffer backs the DFB; the backing L1 address resolves at runtime from the corresponding `TensorArg`, so no `dfb_run_params` entry is needed for the backing memory.
 - **`SemaphoreSpec`.** Build with `target_nodes`. (Semaphores have no per-execution counterpart on `ProgramRunParams`.)
 - **`TensorParameter` ↔ `TensorArg`.** Declare each tensor as a `TensorParameter` (using `<tensor>.tensor_spec()`); alongside, add the corresponding `TensorArg` to `ProgramRunParams::tensor_args`.
 - **`WorkUnitSpec`.** Build with `kernels` (by `unique_id`) and `target_nodes`. No per-execution counterpart.
