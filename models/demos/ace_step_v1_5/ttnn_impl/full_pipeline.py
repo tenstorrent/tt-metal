@@ -22,6 +22,11 @@ if _ttnn_concat_fn is None:
     raise RuntimeError("Neither ttnn.concat nor ttnn.concatenate is available")
 
 from .dit_decoder_core import AceStepDecoderConfigTTNN, TtAceStepDiTCore, TtTimestepEmbedding
+from .math_perf_env import (
+    ace_step_dit_linear_l1_memory_config,
+    ace_step_ensure_l1_activation,
+    ace_step_sdpa_mask_memory_config,
+)
 from .output_head import TtAceStepDiTOutputHead
 from .patchify import TtAceStepPatchEmbed1D
 from .safetensors_loader import load_safetensors_state_dict
@@ -195,6 +200,7 @@ class AceStepV15TTNNPipeline:
         self.timesteps_host = timesteps_host
         self._zero_timestep_index = int(timesteps_host.size - 1)
 
+        _temb_l1 = ace_step_dit_linear_l1_memory_config(ttnn)
         self.time_embed = TtTimestepEmbedding(
             cfg=core_cfg,
             state_dict=sd,
@@ -202,6 +208,7 @@ class AceStepV15TTNNPipeline:
             mesh_device=device,
             timesteps_host=timesteps_host,
             dtype=self.activation_dtype,
+            linear_output_l1_memory_config=_temb_l1,
         )
         self.time_embed_r = TtTimestepEmbedding(
             cfg=core_cfg,
@@ -210,6 +217,7 @@ class AceStepV15TTNNPipeline:
             mesh_device=device,
             timesteps_host=timesteps_host,
             dtype=self.activation_dtype,
+            linear_output_l1_memory_config=_temb_l1,
         )
 
         self.core = TtAceStepDiTCore(cfg=core_cfg, state_dict=sd, mesh_device=device, dtype=self.activation_dtype)
@@ -382,7 +390,7 @@ class AceStepV15TTNNPipeline:
             device=self.device,
             dtype=self.activation_dtype,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=getattr(ttnn, "DRAM_MEMORY_CONFIG", None),
+            memory_config=ace_step_sdpa_mask_memory_config(ttnn),
         )
         if len(self._enc_mask_cache) >= self._enc_mask_cache_max:
             _, evicted = self._enc_mask_cache.popitem(last=False)
@@ -410,9 +418,9 @@ class AceStepV15TTNNPipeline:
             target_batch: if > 1, replicate along dim 0 (the CFG-merged ``[cond, uncond]`` case).
 
         Returns:
-            ``(temb_bd, timestep_proj_b6d)`` device tensors. ``temb_bd`` stays in TILE layout
-            (output_head accepts both); ``timestep_proj_b6d`` is converted to ROW_MAJOR because
-            the DiT core's ``scale_shift_table`` broadcast requires it.
+            ``(temb_bd, timestep_proj_b6d)`` device tensors, both in TILE layout with L1
+            memory config when available. ``TtAceStepDiTLayer.__call__`` handles TILE input
+            directly (avoids DRAM round-trip from ROW_MAJOR conversion).
 
         Calling this once per Euler step at the start of the denoise loop avoids re-running the
         ~10 op time-embed MLP per ``forward_with_temb_tp`` call.
@@ -427,8 +435,12 @@ class AceStepV15TTNNPipeline:
                 self.timesteps_host[int(timestep_r_index)]
             )
         temb_r, tp_r = self.time_embed_r.from_timestep_value(delta_tr)
-        temb = ttnn.add(temb_t, temb_r)  # [1, D]
-        timestep_proj = ttnn.add(tp_t, tp_r)  # [1, 6, D]
+        _ts_mc = ace_step_dit_linear_l1_memory_config(ttnn) or getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+        temb = ttnn.add(temb_t, temb_r, memory_config=_ts_mc)  # [1, D]
+        timestep_proj = ttnn.add(tp_t, tp_r, memory_config=_ts_mc)  # [1, 6, D]
+        if _ts_mc is not None:
+            temb = ace_step_ensure_l1_activation(ttnn, temb, _ts_mc)
+            timestep_proj = ace_step_ensure_l1_activation(ttnn, timestep_proj, _ts_mc)
 
         b = int(target_batch)
         if b != 1:
@@ -437,13 +449,27 @@ class AceStepV15TTNNPipeline:
                     f"compute_temb_tp expected B=1 outputs from time_embed before replication, got "
                     f"temb={tuple(temb.shape)} timestep_proj={tuple(timestep_proj.shape)}"
                 )
-            concat = getattr(ttnn, "concat", None) or getattr(ttnn, "concatenate", None)
-            if concat is None:
-                raise RuntimeError("TTNN build missing concat / concatenate")
-            temb = concat([temb] * b, dim=0)  # [B, D]
-            timestep_proj = concat([timestep_proj] * b, dim=0)  # [B, 6, D]
+            _concat_mc = ace_step_dit_linear_l1_memory_config(ttnn)
 
-        timestep_proj = ttnn.to_layout(timestep_proj, ttnn.ROW_MAJOR_LAYOUT)
+            def _replicate_batch(x, batch: int):
+                if int(x.shape[0]) == batch:
+                    return x
+                xs = [x] * int(batch)
+                ckw = {}
+                if _concat_mc is not None:
+                    ckw["memory_config"] = _concat_mc
+                if hasattr(ttnn, "concat"):
+                    return ttnn.concat(xs, dim=0, **ckw)
+                return ttnn.concatenate(xs, dim=0, **ckw)
+
+            temb = _replicate_batch(temb, b)  # [B, D]
+            timestep_proj = _replicate_batch(timestep_proj, b)  # [B, 6, D]
+            if _ts_mc is not None:
+                temb = ace_step_ensure_l1_activation(ttnn, temb, _ts_mc)
+                timestep_proj = ace_step_ensure_l1_activation(ttnn, timestep_proj, _ts_mc)
+
+        # Keep TILE layout: converting to ROW_MAJOR forces DRAM buffers and Tracy reports
+        # BinaryNg inputs as dram_interleaved despite L1 ``memory_config``.
         return temb, timestep_proj
 
     def forward_with_temb_tp(
@@ -537,7 +563,7 @@ class AceStepV15TTNNPipeline:
                     device=self.device,
                     dtype=self.activation_dtype,
                     layout=ttnn.TILE_LAYOUT,
-                    memory_config=getattr(ttnn, "DRAM_MEMORY_CONFIG", None),
+                    memory_config=ace_step_sdpa_mask_memory_config(ttnn),
                 )
 
         # Self-attention padding mask (patchified) will be threaded through the core in the next step.
@@ -562,7 +588,7 @@ class AceStepV15TTNNPipeline:
                     device=self.device,
                     dtype=self.activation_dtype,
                     layout=ttnn.TILE_LAYOUT,
-                    memory_config=getattr(ttnn, "DRAM_MEMORY_CONFIG", None),
+                    memory_config=ace_step_sdpa_mask_memory_config(ttnn),
                 )
 
         # Sanity: temb/tp batch must match the hidden_states batch (caller's responsibility).

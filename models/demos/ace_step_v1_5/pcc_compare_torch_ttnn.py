@@ -183,6 +183,7 @@ def _prepare_condition_official(
 
     dit_handler = AceStepHandler()
     llm_handler = LocalFiveHzLMHandler()
+
     device = "cpu"
     status, ok = dit_handler.initialize_service(
         project_root=str(ref_root),
@@ -306,6 +307,7 @@ def main() -> None:
             "models/demos/ace_step_v1_5/torch_ref/_vendored_acestep/ should normally be picked "
             "up automatically; if missing, pass --ace-step-repo-root or set ACE_STEP_REPO_ROOT."
         )
+
     ensure_acestep_repo_on_path(ref_root)
 
     ts_list: list[float] | None = None
