@@ -104,8 +104,8 @@ def _print_and_write_summary(case_id: str, rows: list[dict], summary: dict) -> N
             {
                 "id": "quad_aime_fast",
                 "prompts_file": FAST_PROMPTS_FILE,
-                "max_new_tokens": 8192,
-                "max_seq_len": None,
+                "max_new_tokens": 8000,
+                "max_seq_len": 8192,
                 "max_users_per_row": 8,
                 "min_correct": _env_int("DEEPSEEK_AIME_FAST_MIN_CORRECT", 3),
             },
