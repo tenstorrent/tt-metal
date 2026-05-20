@@ -855,6 +855,10 @@ ttnn::device_operation::ProgramArtifacts MyProgramFactory::create_program_spec(
 }
 ```
 
+> **`OpParams` and `OpInputs` are placeholders.** Each real device-op anchors to its own `operation_attributes_t` and `tensor_args_t` aliases — use those.
+>
+> **Extract `MeshTensor` from each input `ttnn::Tensor` at the start of host code.** In a Metal 2.0 factory body, the `MeshTensor` (not the `ttnn::Tensor`) is the object that gets passed around. The first step inside `create_program_spec` is to extract the `MeshTensor` from each incoming tensor and work with those for the remainder. A fuller mini-recipe for MeshTensor migration is forthcoming and will be slotted into the workflow; for now, treat this extraction as a fixed prelude.
+
 A Metal 2.0 factory **does not** construct the `Program` itself, nor does it call `SetProgramRunParameters` directly. Those are the framework adapter's responsibilities.
 
 ### Cache-miss vs cache-hit lifecycle

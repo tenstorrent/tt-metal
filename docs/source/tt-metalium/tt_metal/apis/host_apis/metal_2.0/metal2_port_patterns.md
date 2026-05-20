@@ -121,6 +121,8 @@ dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, REDUCE_OP, REDUCE_DIM>(s
 
 No `.id` extraction, no temporary `DataflowBuffer` constructed just to retrieve its underlying id, no wrapper structs.
 
+**Template-parameter position works too.** The example `dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, REDUCE_OP, REDUCE_DIM>(scaler_f)` above uses `dfb::scaler` as a non-type template parameter. The `DFBAccessor::operator uint32_t()` conversion is `constexpr`, so `dfb::name` is a valid integral constant expression wherever the legacy signature took a `uint32_t` non-type template parameter — call-argument and template-argument positions are both fine.
+
 **Today vs. tomorrow**: Today's LLKs and kernel-lib helpers on WH/BH accept `uint32_t` — the implicit conversion is the right bridge for porting-scope work. Kernel-lib and LLK Quasar correctness is upstream of any WH/BH port; do not preemptively wrap or refactor.
 
 **Prerequisite**: implicit conversion on `DFBAccessor::operator uint32_t()`, commit `3fbb1016d08` on `akertesz/dfb-accessor-implicit-conv`, PR #44646.
@@ -280,11 +282,10 @@ The framework validates that the two compute `KernelSpec`s have non-overlapping 
 
 **Recognition signal**: A port modifies a kernel source that lives outside the op's own directory — typically a reader / writer in `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/` or similar. Common shared kernels include `reader_unary_interleaved_start_id.cpp`, `writer_unary_interleaved_start_id.cpp`, and `reader_unary_reduce_universal_start_id.cpp`.
 
-**Decision**: Before modifying a shared kernel, grep for other op directories that reference its path. Modifications that change CTA / RTA / binding shape will silently affect every consuming op.
+**Decision**: Modify in place under the assumption that all consumers will co-migrate to Metal 2.0 together. Before editing the kernel, grep for other op directories that reference its path so the coordination footprint is known and recorded.
 
-Two safe paths:
+A kernel-source change that compiles cleanly for the porting op but breaks a sibling op's CTA layout is one of the failure modes that escapes the recipe's anti-pattern self-audit — it's *not* in the ported op's own files. The legacy-inventory step should explicitly note any cross-op kernel sources, and the port report records the touch under "Open items for downstream" so the next sibling-op porter sees the coordination signal.
 
-1. **In-place modification when all consumers are co-migrating.** If every consuming op is being ported to Metal 2.0 in the same PR (or in a bundled set of PRs), modify in place and update each consumer's factory consistently.
-2. **Fork when consumers diverge.** If some consumers remain on legacy and some are on Metal 2.0, fork the shared kernel with a `_metal2`-suffixed copy (e.g., `reader_unary_interleaved_start_id_metal2.cpp`). Reference the new file from the ported factory's `KernelSpec::source`. Plan to delete the legacy copy when all consumers have ported.
+**Excluded from "cross-op"**: kernel-lib (`ttnn/cpp/ttnn/kernel_lib/`) and standard framework APIs (`tt_metal/hw/inc/api/...`) — these are out of porter scope by the [recipe's scope boundary](port_op_to_metal2_recipe.md#read-this-first) and the porter does not modify them. Cross-op kernels are sources living in *another op's* kernel directory.
 
-A kernel-source change that compiles cleanly for the porting op but breaks a sibling op's CTA layout is one of the failure modes that escapes the recipe's anti-pattern self-audit — it's *not* in the ported op's own files. The legacy-inventory step should explicitly note any cross-op kernel sources.
+**The fork path is not used today.** An earlier draft of this caution offered a fork-with-`_metal2`-suffix path for cases where consumers can't co-migrate. We've shelved it pending evidence that the co-migration assumption fails in practice. If a port hits a case where it does fail, that's a porting problem to record in the report, not a fork to take on the porter's own initiative.

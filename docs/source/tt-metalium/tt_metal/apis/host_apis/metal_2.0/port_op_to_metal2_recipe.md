@@ -276,6 +276,7 @@ Cite the doc section, the file:line in the port, and what the right answer turne
 
 Anything the porter discovered that is in scope for *some* future work but not the current port. The next porter or doc maintainer reads this section to know what to pick up. Includes:
 
+- **Cross-op kernel touches.** Any kernel source the port modified that lives outside the op directory (per the [scope boundary](#read-this-first) and the [shared-dataflow-kernel Caution](metal2_port_patterns.md#caution-modifying-a-shared-dataflow-kernel)). Excludes `ttnn/cpp/ttnn/kernel_lib/` and standard framework APIs, which are scope boundaries the porter does not cross. List the kernel path and the consuming op directories the porter knows about — this is the coordination signal for the next sibling-op port and the evidence that informs whether the co-migration assumption holds in practice.
 - Per-op carry-over (sibling ops the porter noticed would benefit from the same pattern).
 - Doc-evolution suggestions that don't fit cleanly into a Gap entry (broader restructure, new pattern entry candidate).
 - Test coverage notes the verification step surfaced but didn't act on.
@@ -305,6 +306,8 @@ Written during the inventory and planning steps; committed alongside the port fo
 ### Factory shape
 - Concept: <ProgramFactoryConcept | ProgramDescriptorFactoryConcept>
 - Variants: <list, or "single">
+
+> **Multi-variant ops** (e.g., Welford W/H/HW; Reduce W/H/HW): repeat the Kernels / CBs / Semaphores / Tensor accessors / Work split sub-sections **per variant**. Nest the per-variant blocks under a `### Variant: <name>` heading and downshift the per-resource headings to `####`. Cross-op kernels and Flags stay top-level — they typically apply across variants. The single-variant skeleton below is the inner shape of each variant block.
 
 ### Kernels
 | unique_id | source | core_ranges | CTAs (positional) | CTAs (named) | RTAs | CRTAs | defines | config |
@@ -339,7 +342,7 @@ Written during the inventory and planning steps; committed alongside the port fo
 (or "n/a — single core")
 
 ### Cross-op kernels
-List any kernel `source` path outside the op's directory. Each one is a Caution case (see [catalog](metal2_port_patterns.md#caution-modifying-a-shared-dataflow-kernel)).
+List any kernel `source` path outside the op's directory. Each one is a Caution case (see [catalog](metal2_port_patterns.md#caution-modifying-a-shared-dataflow-kernel)) and is also reported in `METAL2_PORT_REPORT.md` under "Open items for downstream."
 
 (or "none")
 
@@ -352,6 +355,8 @@ Anything the inventory step noticed but didn't classify — unreferenced kernel 
 
 *Filled in during the planning step.*
 
+> **Multi-variant ops**: repeat this section per variant, nested under `### Variant: <name>` headings.
+
 - KernelSpecs: ...
 - DataflowBufferSpecs: ...
 - SemaphoreSpecs: ...
@@ -359,6 +364,8 @@ Anything the inventory step noticed but didn't classify — unreferenced kernel 
 - WorkUnitSpecs: ...
 
 ## Preserved Multiplicity
+
+> **Multi-variant ops**: repeat per variant if work-split multiplicity differs across variants; a single shared row suffices if the pattern is identical across variants.
 
 | legacy KernelDescriptors | same-source KernelSpecs | WorkUnitSpecs | shared DFBs (multi-binding) |
 |---|---|---|---|
