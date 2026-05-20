@@ -380,16 +380,15 @@ void zero_blocks(
 }
 
 void kernel_main() {
-    // Index 0 (K_num_blocks): kept for arg layout compat; actual value from runtime args.
-    constexpr uint32_t M_block_tiles = get_compile_time_arg_val(1);
-    constexpr uint32_t K_block_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t N_block_tiles = get_compile_time_arg_val(3);
-    // Index 4 is unused placeholder (kept for arg layout compat). Actual M_blocks_per_core from runtime args.
-    constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(5);
-    constexpr uint32_t subblock_h = get_compile_time_arg_val(6);
-    constexpr uint32_t subblock_w = get_compile_time_arg_val(7);
-    constexpr uint32_t transpose_b = get_compile_time_arg_val(8);
-    constexpr bool transpose_a = static_cast<bool>(get_compile_time_arg_val(9));
+    // K_num_blocks and M_blocks_per_core come from runtime args.
+    constexpr uint32_t M_block_tiles = get_compile_time_arg_val(0);
+    constexpr uint32_t K_block_tiles = get_compile_time_arg_val(1);
+    constexpr uint32_t N_block_tiles = get_compile_time_arg_val(2);
+    constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(3);
+    constexpr uint32_t subblock_h = get_compile_time_arg_val(4);
+    constexpr uint32_t subblock_w = get_compile_time_arg_val(5);
+    constexpr uint32_t transpose_b = get_compile_time_arg_val(6);
+    constexpr bool transpose_a = static_cast<bool>(get_compile_time_arg_val(7));
 
     uint32_t argidx = 0;
     // OFFSET_M_AXIS overrides M_start/M_end/M_blocks_per_core via cb_ctrl below.
