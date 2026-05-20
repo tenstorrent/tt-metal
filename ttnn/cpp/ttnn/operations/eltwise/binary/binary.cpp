@@ -922,7 +922,33 @@ Tensor eq(
     return operations::binary::relational_binary<operations::binary::BinaryOpType::EQ>(
         lhs, rhs, dtype, memory_config, output);
 }
-TTNN_BINARY_OP_TENSOR_TENSOR_IMPL(ne, NE)
+Tensor ne(
+    const Tensor& lhs,
+    const Tensor& rhs,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const auto a = lhs.dtype() == DataType::UINT8 ? ttnn::typecast(lhs, DataType::BFLOAT16) : lhs;
+    const auto b = rhs.dtype() == DataType::UINT8 ? ttnn::typecast(rhs, DataType::BFLOAT16) : rhs;
+    return ttnn::detail::invoke_binary_ng(
+        a,
+        b,
+        operations::binary::BinaryOpType::NE,
+        output_dtype,
+        memory_config,
+        output,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        /*fast_and_approximate_mode*/ false,
+        sub_core_grids,
+        sub_device_id);
+}
 Tensor ne(
     const Tensor& lhs,
     float rhs,
