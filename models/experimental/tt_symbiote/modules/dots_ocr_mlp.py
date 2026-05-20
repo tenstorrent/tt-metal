@@ -27,7 +27,39 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
 
     def move_weights_to_device_impl(self):
         if not _tp_requires_ccl(self.device):
-            super().move_weights_to_device_impl()
+            weight = torch.cat([self._gate_weight_torch, self._up_weight_torch], dim=0)
+            self.tt_weight_host = preprocess_linear_weight(
+                weight,
+                dtype=ttnn.bfloat4_b,
+                layout=ttnn.TILE_LAYOUT,
+                weights_mesh_mapper=_tp_mesh_mapper(self.device, self.weight_dim),
+            )
+            self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
+
+            if self._gate_bias_torch is not None or self._up_bias_torch is not None:
+                intermediate = self._gate_weight_torch.shape[0]
+                zeros_dtype = self._gate_weight_torch.dtype
+                gate_bias = (
+                    self._gate_bias_torch
+                    if self._gate_bias_torch is not None
+                    else torch.zeros(intermediate, dtype=zeros_dtype)
+                )
+                up_bias = (
+                    self._up_bias_torch
+                    if self._up_bias_torch is not None
+                    else torch.zeros(intermediate, dtype=zeros_dtype)
+                )
+                bias = torch.cat([gate_bias, up_bias], dim=0)
+                self.tt_bias_host = preprocess_linear_bias(
+                    bias,
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    weights_mesh_mapper=_tp_mesh_mapper(self.device, self.input_dim),
+                )
+                self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device)
+            else:
+                self.tt_bias = None
+
             self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=False,
