@@ -47,7 +47,7 @@ def get_expected_metrics(mesh_device):
     "mesh_device, cfg, sp, tp, topology, num_links",
     [
         pytest.param(
-            [(2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear, 1],
+            (2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear, 1,
             marks=pytest.mark.skip(reason="Disabled by issue #44770: device hang TT_THROW TIMEOUT in fetch queue wait"),
         ),
         [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear, 4],

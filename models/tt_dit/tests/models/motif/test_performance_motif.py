@@ -26,7 +26,7 @@ from ....pipelines.motif.pipeline_motif import MotifPipeline
     [
         # [(2, 4), (2, 1), (2, 0), (2, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
         pytest.param(
-            [(2, 4), (2, 0), (1, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
+            (2, 4), (2, 0), (1, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1,
             marks=pytest.mark.skip(reason="Disabled by issue #44770: perf regression clip_encoding/denoising/total_time exceeds targets"),
         ),
         [(4, 8), (2, 1), (4, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 4],

@@ -222,6 +222,7 @@ def target_maker():
         json.dump(margin_values, f, indent=2)
 
 
+@pytest.mark.skip(reason="Disabled by issue #44770: depends on test_gemma_vision which fails due to missing MLPerf model files")
 @pytest.mark.models_device_performance_bare_metal
 def test_op_to_op_perf_gemma_vision():
     # If you want to make new targets, just changed this variable to True by simply changing the code make_new_targets = True, but DO NOT MERGE that part into PR made with new targets,
