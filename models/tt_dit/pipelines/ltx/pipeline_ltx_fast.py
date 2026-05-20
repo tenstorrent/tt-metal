@@ -57,6 +57,18 @@ class LTXFastPipeline(LTXAVPipeline):
 
         v_cos, v_sin = self._prepare_rope(latent_frames, latent_h, latent_w)
         a_cos, a_sin = self._prepare_audio_rope(audio_N, audio_N_real)
+        # Without cross-PE the A↔V cross-attention runs with no positional info,
+        # destroying audio-video temporal sync (lip sync). Reference: pipeline_ltx.py.
+        (
+            v_xpe_cos,
+            v_xpe_sin,
+            a_xpe_cos,
+            a_xpe_sin,
+            v_xpe_cos_full,
+            v_xpe_sin_full,
+            a_xpe_cos_full,
+            a_xpe_sin_full,
+        ) = self._prepare_av_cross_pe(latent_frames, latent_h, latent_w, audio_N, audio_N_real)
         tt_attn_mask, tt_pad_mask_sp, tt_pad_mask_full = self._prepare_audio_masks(audio_N, audio_N_real)
 
         tt_vp = self._prepare_prompt(v_embeds)
@@ -104,6 +116,14 @@ class LTXFastPipeline(LTXAVPipeline):
                 audio_N=audio_N,
                 trans_mat=None,
                 timestep_torch=torch.tensor([sigma]),
+                video_cross_pe_cos=v_xpe_cos,
+                video_cross_pe_sin=v_xpe_sin,
+                audio_cross_pe_cos=a_xpe_cos,
+                audio_cross_pe_sin=a_xpe_sin,
+                video_cross_pe_cos_full=v_xpe_cos_full,
+                video_cross_pe_sin_full=v_xpe_sin_full,
+                audio_cross_pe_cos_full=a_xpe_cos_full,
+                audio_cross_pe_sin_full=a_xpe_sin_full,
                 audio_attn_mask=tt_attn_mask,
                 audio_padding_mask=tt_pad_mask_sp,
                 audio_padding_mask_full=tt_pad_mask_full,

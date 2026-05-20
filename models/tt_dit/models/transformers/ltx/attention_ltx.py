@@ -475,13 +475,13 @@ class LTXAttention(Module):
                 # computation when D_half < 64 (minimum reliable tile width).
                 q_d_half = rope_cos.shape[-1]
                 if q_d_half < 64:
-                    q_BHNE = self._apply_split_rope_host(q_BHNE, rope_cos, rope_sin, q_d_half)
+                    q_BHNE = self._apply_split_rope(q_BHNE, rope_cos, rope_sin, q_d_half)
                 else:
                     q_BHNE = self._apply_split_rope(q_BHNE, rope_cos, rope_sin, D_half)
 
                 k_d_half = _k_cos.shape[-1]
                 if k_d_half < 64:
-                    k_BHNE = self._apply_split_rope_host(k_BHNE, _k_cos, _k_sin, k_d_half)
+                    k_BHNE = self._apply_split_rope(k_BHNE, _k_cos, _k_sin, k_d_half)
                 else:
                     k_BHNE = self._apply_split_rope(k_BHNE, _k_cos, _k_sin, D_half)
 
