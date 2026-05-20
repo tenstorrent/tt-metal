@@ -313,57 +313,9 @@ jobs:
             echo "schedule-runs-all-tests-effective: true"
           fi
 
-  run-profiler-regression:
-    needs: [resolve-artifacts, generate-matrix]
-    if: ${{ always() && !cancelled() && (inputs.run-profiler-regression == true || (github.event_name == 'schedule' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
-    uses: ./.github/workflows/run-profiler-regression.yaml
-    secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
-    with:
-      arch: "blackhole"
-      runner-label: ${{ matrix.test-group }}
-      post_commit_only: true
-      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher || false }}
-      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-  umd-unit-tests:
-    needs: [resolve-artifacts, generate-matrix]
-    if: ${{ always() && !cancelled() && (inputs.run-umd-unit-tests == true || (github.event_name == 'schedule' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
-    secrets: inherit
-    uses: ./.github/workflows/umd-unit-tests.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
-    with:
-      arch: blackhole
-      runner-label: ${{ matrix.test-group }}
-      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher || false }}
-      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-  models-unit-tests:
-    needs: [resolve-artifacts, generate-matrix]
-    if: ${{ always() && !cancelled() && (inputs.run-models-unit-tests == true || (github.event_name == 'schedule' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
-    secrets: inherit
-    uses: ./.github/workflows/models-post-commit.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
-    with:
-      arch: blackhole
-      runner-label: ${{ matrix.test-group }}
-      timeout: 20
-      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher || false }}
-      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+  # Pruned for bit-11 cluster probe: keep only ttnn-unit-tests (covers
+  # test_typecast_sharded_fp32_bf16 in eltwise group 4, the canonical bit-11
+  # test). Removed: run-profiler-regression, umd-unit-tests, models-unit-tests.
   ttnn-unit-tests:
     needs: [resolve-artifacts, generate-matrix]
     if: ${{ always() && !cancelled() && (inputs.run-ttnn-unit-tests == true || (github.event_name == 'schedule' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
@@ -379,59 +331,4 @@ jobs:
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       timeout-minutes-override: ${{ inputs.enable-watcher && 120 || 0 }}
-      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-  ops-unit-tests:
-    needs: [resolve-artifacts, generate-matrix]
-    if: ${{ always() && !cancelled() && (inputs.run-ops-unit-tests == true || (github.event_name == 'schedule' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
-    secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
-    uses: ./.github/workflows/ops-post-commit.yaml
-    with:
-      arch: blackhole
-      runner-label: ${{ matrix.test-group }}
-      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher || false }}
-      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-
-  # TT-CNN Unit Tests
-  tt-cnn-unit-tests:
-    needs: [resolve-artifacts, generate-matrix]
-    if: ${{ always() && !cancelled() && (inputs.run-tt-cnn-unit-tests == true || (github.event_name == 'schedule' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
-    secrets: inherit
-    uses: ./.github/workflows/tt-cnn-post-commit.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
-    with:
-      arch: blackhole
-      runner-label: ${{ matrix.test-group }}
-      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher || false }}
-      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-
-  # Multi-card post-commit tests
-  blackhole-multi-card-fast-unit-tests:
-    # Don't run on daily P100-only schedule
-    if: ${{ always() && !cancelled() && (inputs.run-blackhole-multi-card-fast-unit-tests == true || (github.event_name == 'schedule' && github.event.schedule != '0 7 * * *' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
-    needs: [resolve-artifacts, generate-matrix]
-    secrets: inherit
-    uses: ./.github/workflows/blackhole-multi-card-unit-tests-impl.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [ "BH-LLMBox", "BH-LoudBox", "P300-viommu"]
-    with:
-      arch: blackhole
-      runner-label: ${{ matrix.test-group }}
-      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
-      fast-only: true
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
