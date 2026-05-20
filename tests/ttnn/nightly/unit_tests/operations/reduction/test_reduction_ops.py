@@ -551,7 +551,8 @@ def test_generic_ops_wh_block_shard(
 @pytest.mark.parametrize("correction", [True, False])
 @pytest.mark.parametrize("dim", [-1, -2, 0, (-2, -1), (0, -2, -1), None])
 @pytest.mark.parametrize("shape", [(3, 4), (1, 1, 3, 4, 5), (3, 4, 8, 56, 33)])
-def test_generic_ops_w_scalar(device, op, scalar, correction, dim, shape):
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32], ids=["bfloat16", "float32"])
+def test_generic_ops_w_scalar(device, op, scalar, correction, dim, shape, dtype):
     rank = len(shape)
     if isinstance(dim, tuple) and len(dim) > rank:
         pytest.skip("More reduction dims than tensor rank")
@@ -560,7 +561,7 @@ def test_generic_ops_w_scalar(device, op, scalar, correction, dim, shape):
         pytest.skip("PyTorch supports the correction argument only for var and std")
 
     torch.manual_seed(0)
-    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_input = torch.randn(shape, dtype=dtype)
 
     ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_op = getattr(ttnn, op)

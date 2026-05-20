@@ -35,8 +35,17 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
-    // Circular buffer that the reader kernel fills with input tiles.
+    // Circular buffer that the reader kernel fills with input tiles. Declared Default-mode so
+    // FPU mul_tiles_bcast_scalar's SrcA read works on do_scale=true.
     constexpr auto cb_in = tt::CBIndex::c_0;
+    // Second buffer index aliased onto cb_in for the welford SFPU consumer when FP32 precision
+    // is needed. For BF16 the named alias-index slot is unused (the alias is not declared on the
+    // host side), and the conditional collapses cb_in_welford_alias onto cb_in. Mirrors
+    // cb_x_welford in layernorm_sharded_welford.cpp.
+    constexpr auto cb_in_welford_alias_named =
+        static_cast<tt::CBIndex>(get_named_compile_time_arg_val("cb_in_welford_alias"));
+    constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
+    constexpr auto cb_in_welford_alias = welford_fp32_alias ? cb_in_welford_alias_named : cb_in;
     // Scalar tile produced by the reader via generate_reduce_scaler.
     // Used to scale every input tile before Welford processing.
     constexpr auto cb_scalar = tt::CBIndex::c_2;
@@ -57,6 +66,7 @@ void kernel_main() {
     constexpr auto cb_scaled = tt::CBIndex::c_20;
 
     CircularBuffer cb_in_obj(cb_in);
+    CircularBuffer cb_in_welford_alias_obj(cb_in_welford_alias);
     CircularBuffer cb_scalar_obj(cb_scalar);
     CircularBuffer cb_out_obj(cb_out);
     CircularBuffer cb_var_obj(cb_var);
@@ -112,12 +122,32 @@ void kernel_main() {
         // (same MATH-side effect as welford_reinit), so a separate welford_reinit after the mul
         // is not required here.
         if constexpr (!do_scale) {
-            // Explicit srca reconfig is required because the output packing
-            // phase (below) calls reconfig_data_format_srca(cb_var) which
-            // changes the format on the 2nd+ NCHt iterations.
-            reconfig_data_format_srca(cb_in);
-            transpose_wh_init_short(cb_in);
+            // Read transpose input via the welford alias (UnpackToDestFp32) to preserve FP32
+            // mantissa for the welford SFPU consumer. cb_in itself stays Default-mode for the
+            // FPU mul on the do_scale path; the alias shares its backing allocation.
+            reconfig_data_format_srca(cb_in_welford_alias);
+            if constexpr (welford_fp32_alias) {
+                // Full transpose_wh hw init when the alias is active. The alias buffer index
+                // isn't visible to compute_kernel_hw_startup at kernel entry (only cb_in is),
+                // so we run the full init once to program UNPACK / MATH / PACK hw_configure
+                // for it -- this is what makes the UnpackToDestFp32 mode flagged on the alias
+                // descriptor actually take effect on the unpacker. Mirrors layernorm's
+                // welford-intake pattern.
+                transpose_wh_init(cb_in_welford_alias, cb_var);
+            } else {
+                transpose_wh_init_short(cb_in_welford_alias);
+            }
             tile_regs_acquire();
+        } else if constexpr (welford_fp32_alias) {
+            // The final transpose_wh_tile(cb_var, ...) at the end of the previous NCHt iteration
+            // calls transpose_wh_init(cb_var, cb_out) which programs UNPACK hw_configure for
+            // cb_var, leaving the unpacker in UnpackToDestFp32 mode (because c_19 cb_var is
+            // flagged UnpackToDestFp32). On the do_scale path, the next NCHt iteration's first
+            // op is mul_tiles_bcast_scalar, whose _init_short does not call hw_configure --
+            // so without this re-init the FPU mul reads SrcA via the leaked UnpackToDest path
+            // and produces zeros. Run the full init_bcast once per NCHt iteration to put UNPACK
+            // back into cb_in's Default mode before the inner mul loop.
+            init_bcast<EltwiseBinaryType::ELWMUL, BroadcastType::SCALAR>(cb_in, cb_scalar, cb_scaled);
         }
 
         // Welford SFPU state (running mean in LREG4, M2 in LREG5)
@@ -128,19 +158,16 @@ void kernel_main() {
                 // --- Scale step: multiply input tile by scalar ---
                 cb_in_obj.wait_front(onetile);
                 tile_regs_acquire();
-                // Explicit srca reconfig is required because the output packing
-                // phase (below) calls reconfig_data_format_srca(cb_var) which
-                // sets the unpacker to cb_var's format (Float32 when fp32 dest
-                // accumulation is enabled).  mul_tiles_bcast_scalar_init_short
-                // does not fully reconfigure the data format, so without this
-                // call the unpacker would read cb_in (Float16_b) data using the
-                // stale Float32 format, producing garbage on the 2nd+ NCHt
-                // iterations.
                 reconfig_data_format_srca(cb_in);
                 mul_tiles_bcast_scalar_init_short(cb_in, cb_scalar);
                 mul_tiles_bcast_scalar(cb_in, cb_scalar, 0, 0, input_dst);
                 tile_regs_commit();
                 cb_in_obj.pop_front(1);
+                if constexpr (welford_fp32_alias) {
+                    // Alias is not read on the do_scale path (FPU mul reads cb_in directly), but
+                    // the reader pushed to it; pop to keep its FIFO state in lock-step with cb_in.
+                    cb_in_welford_alias_obj.pop_front(onetile);
+                }
                 cb_scaled_obj.reserve_back(onetile);
                 tile_regs_wait();
                 pack_reconfig_data_format(cb_scaled);
@@ -152,16 +179,29 @@ void kernel_main() {
                 cb_scaled_obj.wait_front(onetile);
                 tile_regs_acquire();
                 reconfig_data_format_srca(cb_scaled);
+                // cb_scaled is NOT flagged UnpackToDestFp32; _init_short here doesn't touch
+                // UNPACK's unpack_to_dest mode. The TF32 readback truncates cb_scaled to ~10
+                // mantissa bits -- this is a precision floor on the do_scale path that we
+                // accept to avoid the within-wt-iter UNPACK-mode leak (see program factory).
                 transpose_wh_init_short(cb_scaled);
                 transpose_wh_tile(cb_scaled, 0, input_dst);
                 cb_scaled_obj.pop_front(onetile);
             } else {
-                cb_in_obj.wait_front(onetile);
-                // Re-establish transpose unpack/math config each iteration. The welford
-                // recovery sequence below reconfigures unpack to no-transpose, so subsequent
-                // iterations need to re-init transpose before reading the next tile.
-                transpose_wh_init_short(cb_in);
-                transpose_wh_tile(cb_in, 0, input_dst);
+                // Wait on whichever CB is read: alias when active, cb_in otherwise.
+                // The alias has its own FIFO state (rd/wr pointers); the reader push_back's the
+                // alias every tile so it stays in lock-step with cb_in. Without popping the
+                // alias every iteration, its rd_ptr would stay frozen and subsequent NCHt
+                // iterations would re-read the same slot's stale data.
+                if constexpr (welford_fp32_alias) {
+                    cb_in_welford_alias_obj.wait_front(onetile);
+                } else {
+                    cb_in_obj.wait_front(onetile);
+                }
+                transpose_wh_init_short(cb_in_welford_alias);
+                transpose_wh_tile(cb_in_welford_alias, 0, input_dst);
+                if constexpr (welford_fp32_alias) {
+                    cb_in_welford_alias_obj.pop_front(onetile);
+                }
                 cb_in_obj.pop_front(onetile);
             }
 
@@ -172,7 +212,7 @@ void kernel_main() {
             //   2. llk_math_welfords_sfpu_init re-programs the replay buffer with the welford
             //      recurrence, without clearing LREG4/5 (which would lose the running
             //      mean/M2 accumulator).
-            welford_reinit(cb_in);
+            welford_reinit(cb_in_welford_alias);
             MATH((llk_math_welfords_sfpu_init()));
 
             if (wt < (Wt - 1)) {
@@ -205,7 +245,13 @@ void kernel_main() {
 
         cb_var_obj.wait_front(onetile);
         reconfig_data_format_srca(cb_var);
-        transpose_wh_init_short(cb_var);
+        if constexpr (welford_fp32_alias) {
+            // cb_var is UnpackToDestFp32 for FP32 input; needs full hw_configure to activate
+            // the unpack-to-DEST mode (same rationale as the welford-intake alias init above).
+            transpose_wh_init(cb_var, cb_out);
+        } else {
+            transpose_wh_init_short(cb_var);
+        }
         tile_regs_acquire();
         transpose_wh_tile(cb_var, 0, var_dst);
         if constexpr (is_std) {

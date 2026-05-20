@@ -29,6 +29,9 @@ void kernel_main() {
     constexpr uint32_t row_chunk = use_welford ? 1 : compute_kernel_lib::DEST_AUTO_LIMIT;
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
+    // Welford-fp32 alias FIFO: see reader_unary_reduce_universal_start_id.cpp for rationale.
+    constexpr uint32_t cb_id_in_welford_alias = get_named_compile_time_arg_val("cb_in_welford_alias");
+    constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
 
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(cb_id_in0);
@@ -42,6 +45,7 @@ void kernel_main() {
 
     Noc noc;
     CircularBuffer cb_in0(cb_id_in0);
+    CircularBuffer cb_in_welford_alias(cb_id_in_welford_alias);
 
     uint32_t w = curr_col_in_batch;
 
@@ -75,6 +79,10 @@ void kernel_main() {
                 noc.async_read(tensor_accessor, cb_in0, tile_bytes, {.page_id = curr_id}, {.offset_bytes = 0});
                 noc.async_read_barrier();
                 cb_in0.push_back(onetile);
+                if constexpr (welford_fp32_alias) {
+                    cb_in_welford_alias.reserve_back(onetile);
+                    cb_in_welford_alias.push_back(onetile);
+                }
 
                 ++w;
 
