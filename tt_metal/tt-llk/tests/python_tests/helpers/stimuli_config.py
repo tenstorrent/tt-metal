@@ -244,10 +244,6 @@ class StimuliConfig:
 
         return lines
 
-    def generate_stimuli_ONLY_header_addresses(self) -> list[str]:
-        """Speed-of-light variant: same address constexprs, no stimuli data."""
-        return self.generate_stimuli_header_addresses()
-
     @staticmethod
     def get_packer(data_format):
         packers = {

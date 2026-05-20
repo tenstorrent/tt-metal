@@ -57,22 +57,6 @@ void copy_runtimes_from_L1(struct RuntimeParams* temp_args)
     ckernel::memcpy_blocking(temp_args, __runtime_args_start, sizeof(struct RuntimeParams));
 }
 
-#ifdef PERF_COUNTERS_COMPILED
-// WC-only custom memset: overrides libc_a-memset.o so the linker doesn't place
-// libc's memset after .text.zzz_perf_counters / .text.zzz_profiler_hooks.
-// Pinning memset in trisc.o's .text keeps the layout stable inside WC builds.
-// NC build skips this so its TRISC ELF is byte-identical to MAIN (uses libc memset).
-extern "C" __attribute__((used, optimize("no-tree-loop-distribute-patterns"))) void* memset(void* s, int c, std::size_t n)
-{
-    auto* dst = static_cast<std::uint8_t*>(s);
-    while (n--)
-    {
-        *dst++ = static_cast<std::uint8_t>(c);
-    }
-    return s;
-}
-#endif
-
 int main(void)
 {
     mailbox_t mailbox = reinterpret_cast<volatile std::uint32_t*>(mailboxes_start + mailbox_offset);
@@ -102,7 +86,6 @@ int main(void)
     llk_profiler::reset();
     llk_profiler::sync_threads();
 #endif
-#line 90
     {
         ZONE_SCOPED("KERNEL")
 

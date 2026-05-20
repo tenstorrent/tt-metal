@@ -122,13 +122,7 @@ int main()
                 device_setup();
 
 #ifdef PERF_COUNTERS_COMPILED
-                // Configure + arm counters BEFORE releasing TRISCs, so counters
-                // are counting from the very first TRISC instruction.
-                // We deliberately do NOT clear the profiler buffer here — that
-                // would cause an L1 write burst right before TRISC release and
-                // slow down INIT-zone L1 access (~13 cyc on L1_TO_L1). Instead,
-                // monitor_zones_from_brisc() waits long enough for TRISC's own
-                // llk_profiler::reset() to zero the buffer before polling.
+                // Configure + arm counters before releasing TRISCs.
                 llk_perf::configure_and_arm_from_brisc();
 #endif
 
