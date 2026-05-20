@@ -54,6 +54,9 @@ constexpr uint32_t NOC_V2_MCAST_RESP_VC = 14;
 // Static transaction ID used for all command buffers
 constexpr uint32_t NOC_V2_TRID_STATIC = 0;
 
+// Per-cmd-buf packetization limit programmed at boot. 8KB; lower than the 64KB HW default to avoid NOC congestion.
+constexpr uint32_t NOC_V2_MAX_BYTES_IN_PACKET = 8 * 1024;
+
 // ============================================================================
 // CMD_BUF_MISC Register Bit Definitions (TT_ROCC_CMD_BUF_MISC_reg_t)
 // ============================================================================
@@ -291,6 +294,10 @@ inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
         OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ACK_TR_ID_REG_OFFSET / 8, NOC_V2_TRID_STATIC);
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ID_REG_OFFSET / 8, NOC_V2_TRID_STATIC);
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        OVERLAY_WR_CMD_BUF,
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MAX_BYTES_IN_PACKET_REG_OFFSET / 8,
+        NOC_V2_MAX_BYTES_IN_PACKET);
 
     // Read command buffer (CMDBUF_1): remote src → local dest
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
@@ -307,6 +314,10 @@ inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
         OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ACK_TR_ID_REG_OFFSET / 8, NOC_V2_TRID_STATIC);
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ID_REG_OFFSET / 8, NOC_V2_TRID_STATIC);
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        OVERLAY_RD_CMD_BUF,
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MAX_BYTES_IN_PACKET_REG_OFFSET / 8,
+        NOC_V2_MAX_BYTES_IN_PACKET);
 
     // Atomic command buffer (SCMDBUF): simple buffer for atomics and inline writes
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
@@ -315,6 +326,8 @@ inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_COORD_REG_OFFSET / 8, my_xy);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, NOC_V2_WR_RESP_VC);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MAX_BYTES_IN_PACKET_REG_OFFSET / 8, NOC_V2_MAX_BYTES_IN_PACKET);
 }
 
 // set noc local memory state for a single kernel from the global state
