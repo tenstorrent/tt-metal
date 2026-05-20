@@ -9,7 +9,7 @@
 #include <device.hpp>
 #include <global_circular_buffer.hpp>
 #include <host_api.hpp>
-#include <tt-metalium/experimental/dram_subchannel.hpp>
+#include "impl/buffers/dram_subchannel.hpp"
 #include <tt-metalium/experimental/global_circular_buffer.hpp>
 #include <tt_align.hpp>
 #include <tt_metal.hpp>

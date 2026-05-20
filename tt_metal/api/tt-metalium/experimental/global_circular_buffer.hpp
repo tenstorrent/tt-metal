@@ -39,9 +39,10 @@ enum class SenderCoreType : uint8_t {
 };
 
 // Construct a GlobalCircularBuffer where senders are programmable DRAM cores identified
-// by DRAM bank id. Each bank id is mapped to an unused DRAM subchannel
-// (`pick_unused_dram_subchannel`); receiver sets across senders must be disjoint and must
-// not collide with the resolved DRAM-sender physical NOC coords.
+// by DRAM bank id. Each bank id is mapped internally to an unused DRAM subchannel (one
+// that the SOC descriptor does not already reserve as a worker/eth endpoint). Receiver
+// sets across senders must be disjoint and must not collide with the resolved DRAM-sender
+// physical NOC coords.
 GlobalCircularBuffer CreateGlobalCircularBufferWithDramSenders(
     IDevice* device,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,

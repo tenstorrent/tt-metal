@@ -21,7 +21,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
-#include <tt-metalium/experimental/dram_subchannel.hpp>
+#include "impl/buffers/dram_subchannel.hpp"
 #include <tt-metalium/experimental/global_circular_buffer.hpp>
 
 #include "impl/kernels/kernel.hpp"  // DramConfig
