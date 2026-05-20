@@ -28,19 +28,13 @@ void kernel_main() {
     constexpr uint32_t TILE_H = 32;
 
     if constexpr (is_rm_output) {
-        // RM output: drain 32 sticks per tile-row, write `output_row_bytes` bytes each.
+        // RM output: cb_output has tile-sized pages (Wt per tile-row) from the
+        // untilize helper; the data is laid out as 32 rows of padded_row_bytes
+        // each. write_sticks_after_untilize walks tile-rows and writes the
+        // valid `output_row_bytes` per stick, skipping L1 padding.
         const auto accessor = TensorAccessor(dst_args, output_addr, padded_row_bytes);
-        for (uint32_t tr = 0; tr < total_tile_rows; ++tr) {
-            uint32_t row_base = tr * TILE_H;
-            for (uint32_t row = 0; row < TILE_H; ++row) {
-                cb_wait_front(cb_output, 1);
-                uint32_t l1_addr = get_read_ptr(cb_output);
-                uint64_t noc_addr = accessor.get_noc_addr(row_base + row);
-                noc_async_write(l1_addr, noc_addr, output_row_bytes);
-                noc_async_write_barrier();
-                cb_pop_front(cb_output, 1);
-            }
-        }
+        dataflow_kernel_lib::write_sticks_after_untilize<cb_output>(
+            accessor, total_tile_rows * TILE_H, output_row_bytes);
     } else {
         // TILE output: drain Wt tiles per tile-row × total_tile_rows.
         constexpr uint32_t tile_bytes_v = get_tile_size(cb_output);

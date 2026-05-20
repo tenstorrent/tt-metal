@@ -164,38 +164,23 @@ def create_program_descriptor(
         )
     )
 
-    # cb_output — depends on output layout.
-    if is_rm_output:
-        # 32 sticks per tile-row (single-buffer to keep L1 footprint bounded).
-        cbs.append(
-            ttnn.CBDescriptor(
-                total_size=TILE_DIM * padded_row_bytes,
-                core_ranges=core_grid,
-                format_descriptors=[
-                    ttnn.CBFormatDescriptor(
-                        buffer_index=CB_OUTPUT,
-                        data_format=output_tensor.dtype,
-                        page_size=padded_row_bytes,
-                    )
-                ],
-            )
+    # cb_output — page_size is ALWAYS tile_size. The untilize helper outputs
+    # tile-sized pages (Wt per tile-row) where each tile holds 32 rows of
+    # padded_row_bytes laid out in row-major order. For RM output, the writer
+    # uses dataflow_kernel_lib::write_sticks_after_untilize to extract sticks.
+    cbs.append(
+        ttnn.CBDescriptor(
+            total_size=2 * Wt * tile_size,
+            core_ranges=core_grid,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=CB_OUTPUT,
+                    data_format=output_tensor.dtype,
+                    page_size=tile_size,
+                )
+            ],
         )
-    else:
-        # Wt tiles per tile-row, double-buffered so the writer can drain one
-        # while compute fills the next.
-        cbs.append(
-            ttnn.CBDescriptor(
-                total_size=2 * Wt * tile_size,
-                core_ranges=core_grid,
-                format_descriptors=[
-                    ttnn.CBFormatDescriptor(
-                        buffer_index=CB_OUTPUT,
-                        data_format=output_tensor.dtype,
-                        page_size=tile_size,
-                    )
-                ],
-            )
-        )
+    )
 
     # cb_mean, cb_inv_std — 1 tile each (per-row scalars, held by helpers across passes).
     for cb_idx in (CB_MEAN, CB_INV_STD):

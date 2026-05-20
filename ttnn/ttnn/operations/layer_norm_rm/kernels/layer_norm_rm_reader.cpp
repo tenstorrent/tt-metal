@@ -82,12 +82,14 @@ void kernel_main() {
     }
 
     // ---------------- Three passes over the input ----------------
+    // Order: tr-outer, pass-inner — matches the compute kernel's per-tile-row
+    // loop that runs all 3 passes for one row before moving to the next.
     if constexpr (is_rm_input) {
         // RM input: stream sticks for each tile-row × 3 passes.
         const auto input_accessor = TensorAccessor(input_args, input_addr, padded_row_bytes);
-        for (uint32_t pass = 0; pass < 3; ++pass) {
-            for (uint32_t tr = 0; tr < total_tile_rows; ++tr) {
-                uint32_t row_base = tr * TILE_H;
+        for (uint32_t tr = 0; tr < total_tile_rows; ++tr) {
+            uint32_t row_base = tr * TILE_H;
+            for (uint32_t pass = 0; pass < 3; ++pass) {
                 for (uint32_t row = 0; row < TILE_H; ++row) {
                     cb_reserve_back(cb_input_sticks, 1);
                     uint32_t l1_addr = get_write_ptr(cb_input_sticks);
@@ -102,8 +104,8 @@ void kernel_main() {
         // TILE input: stream tiles for each tile-row × 3 passes.
         constexpr uint32_t tile_bytes_v = get_tile_size(cb_input_tiles);
         const auto input_accessor = TensorAccessor(input_args, input_addr, tile_bytes_v);
-        for (uint32_t pass = 0; pass < 3; ++pass) {
-            for (uint32_t tr = 0; tr < total_tile_rows; ++tr) {
+        for (uint32_t tr = 0; tr < total_tile_rows; ++tr) {
+            for (uint32_t pass = 0; pass < 3; ++pass) {
                 for (uint32_t wt = 0; wt < Wt; ++wt) {
                     uint32_t tile_id = tr * Wt + wt;
                     cb_reserve_back(cb_input_tiles, 1);
