@@ -9,7 +9,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.devstarl2_small.devstral_utils.pixtral_seq_chunk import (
     pad_seq_to_chunk_multiple,
-    pixtral_vision_seq_chunk_len,
+    pixtral_effective_mm_seq_len,
     trim_seq_dim2,
 )
 
@@ -58,28 +58,52 @@ class MistralTTVisionMLP(LightweightModule):
         """Fused SwiGLU (w1/w3) with optional sequence-axis chunking (same policy as ``tt_pixtralattn``)."""
         x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         seq_len = int(x.shape[-2])
-        chunk = pixtral_vision_seq_chunk_len(self.args)
+        mm_seq_len = pixtral_effective_mm_seq_len(self.args, seq_len)
+        w13_n = 2 * int(self.args.vision_hidden_dim)
 
-        def run_chunk(xc: ttnn.Tensor) -> ttnn.Tensor:
+        def run_chunk(xc: ttnn.Tensor, m_len: int) -> ttnn.Tensor:
+            pc_w13 = self.args.matmul_config(
+                m=min(m_len, mm_seq_len),
+                k=int(self.args.vision_dim),
+                n=w13_n,
+                grid_size=(8, 8),
+                in0_block_w=1,
+                fuse_batch=m_len <= mm_seq_len,
+            )
+            pc_w2 = self.args.matmul_config(
+                m=min(m_len, mm_seq_len),
+                k=int(self.args.vision_hidden_dim),
+                n=int(self.args.vision_dim),
+                grid_size=(8, 8),
+                in0_block_w=1,
+                fuse_batch=m_len <= mm_seq_len,
+            )
             fused = ttnn.linear(
                 xc,
                 self.w1_w3,
                 dtype=ttnn.bfloat16,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_kernel_config,
+                program_config=pc_w13,
             )
             b0, b1, sl, tw = fused.shape
             half = tw // 2
             w1_out = ttnn.slice(fused, (0, 0, 0, 0), (b0, b1, sl, half))
             w3_out = ttnn.slice(fused, (0, 0, 0, half), (b0, b1, sl, tw))
-            w1_out = ttnn.silu(w1_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            w2_in = ttnn.mul(w1_out, w3_out, dtype=ttnn.bfloat16)
+            w2_in = ttnn.mul(
+                w1_out,
+                w3_out,
+                input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
             w2_out = ttnn.linear(
                 w2_in,
                 self.w2,
                 dtype=ttnn.bfloat16,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_kernel_config,
+                program_config=pc_w2,
             )
             ttnn.deallocate(fused)
             ttnn.deallocate(w1_out)
@@ -88,13 +112,12 @@ class MistralTTVisionMLP(LightweightModule):
             return w2_out
 
         original_seq_len = seq_len
-        x, seq_len, original_seq_len = pad_seq_to_chunk_multiple(x, seq_len, chunk)
+        if seq_len <= mm_seq_len:
+            return run_chunk(x, seq_len)
 
-        if seq_len <= chunk:
-            return trim_seq_dim2(run_chunk(x), original_seq_len)
-
-        x_batched = ttnn.reshape(x, [1, seq_len // chunk, chunk, -1])
-        out_batched = run_chunk(x_batched)
+        x, seq_len, original_seq_len = pad_seq_to_chunk_multiple(x, seq_len, mm_seq_len)
+        x_batched = ttnn.reshape(x, [1, seq_len // mm_seq_len, mm_seq_len, -1])
+        out_batched = run_chunk(x_batched, original_seq_len)
         out = ttnn.reshape(out_batched, [1, 1, seq_len, -1])
         return trim_seq_dim2(out, original_seq_len)
 
