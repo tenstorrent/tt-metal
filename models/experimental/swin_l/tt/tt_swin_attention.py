@@ -165,17 +165,17 @@ class TtSwinAttention:
         ttnn.deallocate(attn)
 
         # Concatenate heads back: (B*nW, H, S, D) -> (B*nW, S, H*D)
-        output = ttnn.transformer.concatenate_heads(output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        output = ttnn.transformer.concatenate_heads(output, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         output = ttnn.linear(
-            ttnn.to_layout(output, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            ttnn.to_layout(output, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG),
             self.parameters["proj"]["weight"],
             bias=self.parameters["proj"]["bias"],
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False
             ),
             core_grid=ttnn.CoreGrid(y=8, x=8),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
