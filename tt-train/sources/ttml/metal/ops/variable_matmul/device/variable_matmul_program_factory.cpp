@@ -334,31 +334,26 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
 
     // in0 sender compile-time args (22 fixed + tensor accessor args)
     std::vector<uint32_t> in0_sender_compile_time_args = {
-        actual_M_tiles,                         // 0: M_tiles (unused by kernel, kept for arg layout compat)
-        actual_padded_M_tiles,                  // 1: padded_M_tiles (max)
-        0U,                                     // 2: K_tiles (unused, kept for layout compat; RT-driven)
-        0U,                                     // 3: padded_K_tiles (unused; RT-derived)
-        N_tiles,                                // 4: N_tiles
-        padded_N_tiles,                         // 5: padded_N_tiles
-        M_block_tiles,                          // 6: M_block_tiles
-        K_block_tiles,                          // 7: K_block_tiles
-        N_block_tiles,                          // 8: N_block_tiles
-        actual_M_blocks_per_core,               // 9: M_blocks_per_core (unused by kernel, kept for arg layout compat)
-        N_blocks_per_core,                      // 10: N_blocks_per_core
-        in0_tile_size,                          // 11: in_tile_size
-        out_tile_size,                          // 12: out_tile_size
-        in2_tile_size,                          // 13: in2_tile_size (dummy, no bias)
-        in0_sender_semaphore_id,                // 14: sender_sem_id
-        in0_receiver_semaphore_id,              // 15: receiver_sem_id
-        in0_valid_semaphore_id,                 // 16: valid_sem_id
-        in0_is_output_writer,                   // 17: is_output_writer
-        true,                                   // 18: is_injector_core
-        1U,                                     // 19: N_chunks (always 1)
-        N_tiles,                                // 20: N_tiles_per_chunk (= N_tiles when N_chunks=1)
-        in3_tile_size,                          // 21: in3_tile_size (dummy, no AG)
-        static_cast<uint32_t>(transpose_a),     // 22: transpose_a
-        static_cast<uint32_t>(use_offset_in0),  // 23: use_offset
-        static_cast<uint32_t>(tensor_args.output_tensor.has_value()),  // 24: use_out_offset
+        N_tiles,                                                       // 0:  N_tiles
+        padded_N_tiles,                                                // 1:  padded_N_tiles
+        M_block_tiles,                                                 // 2:  M_block_tiles
+        K_block_tiles,                                                 // 3:  K_block_tiles
+        N_block_tiles,                                                 // 4:  N_block_tiles
+        N_blocks_per_core,                                             // 5:  N_blocks_per_core
+        in0_tile_size,                                                 // 6:  in_tile_size
+        out_tile_size,                                                 // 7:  out_tile_size
+        in2_tile_size,                                                 // 8:  in2_tile_size (dummy, no bias)
+        in0_sender_semaphore_id,                                       // 9:  sender_sem_id
+        in0_receiver_semaphore_id,                                     // 10: receiver_sem_id
+        in0_valid_semaphore_id,                                        // 11: valid_sem_id
+        in0_is_output_writer,                                          // 12: is_output_writer
+        true,                                                          // 13: is_injector_core
+        1U,                                                            // 14: N_chunks (always 1)
+        N_tiles,                                                       // 15: N_tiles_per_chunk
+        in3_tile_size,                                                 // 16: in3_tile_size (dummy, no AG)
+        static_cast<uint32_t>(transpose_a),                            // 17: transpose_a
+        static_cast<uint32_t>(use_offset_in0),                         // 18: use_offset
+        static_cast<uint32_t>(tensor_args.output_tensor.has_value()),  // 19: use_out_offset
     };
     append_accessors(in0_sender_compile_time_args, input_tensor, output_tensor);
     if (in0_needs_offsets) {
@@ -378,31 +373,26 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
 
     // in0 receiver compile-time args (same layout, is_injector_core=false)
     std::vector<uint32_t> in0_receiver_compile_time_args = {
-        actual_M_tiles,
-        actual_padded_M_tiles,
-        0U,  // K_tiles (RT-driven)
-        0U,  // padded_K_tiles (RT-derived)
-        N_tiles,
-        padded_N_tiles,
-        M_block_tiles,
-        K_block_tiles,
-        N_block_tiles,
-        actual_M_blocks_per_core,
-        N_blocks_per_core,
-        in0_tile_size,
-        out_tile_size,
-        in2_tile_size,
-        in0_sender_semaphore_id,
-        in0_receiver_semaphore_id,
-        in0_valid_semaphore_id,
-        in0_is_output_writer,
-        false,    // is_injector_core
-        1U,       // N_chunks
-        N_tiles,  // N_tiles_per_chunk
-        in3_tile_size,
-        static_cast<uint32_t>(transpose_a),                            // 22: transpose_a
-        static_cast<uint32_t>(use_offset_in0),                         // 23: use_offset
-        static_cast<uint32_t>(tensor_args.output_tensor.has_value()),  // 24: use_out_offset
+        N_tiles,                                                       // 0:  N_tiles
+        padded_N_tiles,                                                // 1:  padded_N_tiles
+        M_block_tiles,                                                 // 2:  M_block_tiles
+        K_block_tiles,                                                 // 3:  K_block_tiles
+        N_block_tiles,                                                 // 4:  N_block_tiles
+        N_blocks_per_core,                                             // 5:  N_blocks_per_core
+        in0_tile_size,                                                 // 6:  in_tile_size
+        out_tile_size,                                                 // 7:  out_tile_size
+        in2_tile_size,                                                 // 8:  in2_tile_size (dummy, no bias)
+        in0_sender_semaphore_id,                                       // 9:  sender_sem_id
+        in0_receiver_semaphore_id,                                     // 10: receiver_sem_id
+        in0_valid_semaphore_id,                                        // 11: valid_sem_id
+        in0_is_output_writer,                                          // 12: is_output_writer
+        false,                                                         // 13: is_injector_core
+        1U,                                                            // 14: N_chunks
+        N_tiles,                                                       // 15: N_tiles_per_chunk
+        in3_tile_size,                                                 // 16: in3_tile_size (dummy, no AG)
+        static_cast<uint32_t>(transpose_a),                            // 17: transpose_a
+        static_cast<uint32_t>(use_offset_in0),                         // 18: use_offset
+        static_cast<uint32_t>(tensor_args.output_tensor.has_value()),  // 19: use_out_offset
     };
     append_accessors(in0_receiver_compile_time_args, input_tensor, output_tensor);
     if (in0_needs_offsets) {
@@ -420,32 +410,27 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
             .compile_args = in0_receiver_compile_time_args,
             .defines = in0_defines});
 
-    // in1 sender compile-time args (22 fixed + tensor accessor args; index 21 = transpose_b)
+    // in1 sender compile-time args (19 scalar + tensor accessor args)
     std::vector<uint32_t> in1_sender_compile_time_args = {
-        actual_M_tiles,
-        actual_padded_M_tiles,
-        0U,  // K_tiles (RT-driven)
-        0U,  // padded_K_tiles (RT-derived)
-        N_tiles,
-        padded_N_tiles,
-        M_block_tiles,
-        K_block_tiles,
-        N_block_tiles,
-        actual_M_blocks_per_core,
-        N_blocks_per_core,
-        in1_tile_size,
-        out_tile_size,
-        in2_tile_size,
-        in1_sender_semaphore_id,
-        in1_receiver_semaphore_id,
-        in1_valid_semaphore_id,
-        in1_is_output_writer,
-        true,                                                          // is_injector_core
-        1U,                                                            // N_chunks
-        N_tiles,                                                       // N_tiles_per_chunk
-        static_cast<uint32_t>(transpose_b),                            // 21: transpose_b
-        static_cast<uint32_t>(use_offset_in1),                         // 22: use_offset_in1
-        static_cast<uint32_t>(tensor_args.output_tensor.has_value()),  // 23: use_out_offset
+        N_tiles,                                                       // 0:  N_tiles
+        padded_N_tiles,                                                // 1:  padded_N_tiles
+        M_block_tiles,                                                 // 2:  M_block_tiles
+        K_block_tiles,                                                 // 3:  K_block_tiles
+        N_block_tiles,                                                 // 4:  N_block_tiles
+        N_blocks_per_core,                                             // 5:  N_blocks_per_core
+        in1_tile_size,                                                 // 6:  in1_tile_size
+        out_tile_size,                                                 // 7:  out_tile_size
+        in2_tile_size,                                                 // 8:  in2_tile_size (dummy, no bias)
+        in1_sender_semaphore_id,                                       // 9:  sender_sem_id
+        in1_receiver_semaphore_id,                                     // 10: receiver_sem_id
+        in1_valid_semaphore_id,                                        // 11: valid_sem_id
+        in1_is_output_writer,                                          // 12: is_output_writer
+        true,                                                          // 13: is_injector_core
+        1U,                                                            // 14: N_chunks
+        N_tiles,                                                       // 15: N_tiles_per_chunk
+        static_cast<uint32_t>(transpose_b),                            // 16: transpose_b
+        static_cast<uint32_t>(use_offset_in1),                         // 17: use_offset_in1
+        static_cast<uint32_t>(tensor_args.output_tensor.has_value()),  // 18: use_out_offset
     };
     append_accessors(in1_sender_compile_time_args, weight_tensor, output_tensor);
     if (in1_needs_offsets) {
@@ -465,30 +450,25 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
 
     // in1 receiver compile-time args
     std::vector<uint32_t> in1_receiver_compile_time_args = {
-        actual_M_tiles,
-        actual_padded_M_tiles,
-        0U,  // K_tiles (RT-driven)
-        0U,  // padded_K_tiles (RT-derived)
-        N_tiles,
-        padded_N_tiles,
-        M_block_tiles,
-        K_block_tiles,
-        N_block_tiles,
-        actual_M_blocks_per_core,
-        N_blocks_per_core,
-        in1_tile_size,
-        out_tile_size,
-        in2_tile_size,
-        in1_sender_semaphore_id,
-        in1_receiver_semaphore_id,
-        in1_valid_semaphore_id,
-        in1_is_output_writer,
-        false,                                                         // is_injector_core
-        1U,                                                            // N_chunks
-        N_tiles,                                                       // N_tiles_per_chunk
-        static_cast<uint32_t>(transpose_b),                            // 21: transpose_b
-        static_cast<uint32_t>(use_offset_in1),                         // 22: use_offset_in1
-        static_cast<uint32_t>(tensor_args.output_tensor.has_value()),  // 23: use_out_offset
+        N_tiles,                                                       // 0:  N_tiles
+        padded_N_tiles,                                                // 1:  padded_N_tiles
+        M_block_tiles,                                                 // 2:  M_block_tiles
+        K_block_tiles,                                                 // 3:  K_block_tiles
+        N_block_tiles,                                                 // 4:  N_block_tiles
+        N_blocks_per_core,                                             // 5:  N_blocks_per_core
+        in1_tile_size,                                                 // 6:  in1_tile_size
+        out_tile_size,                                                 // 7:  out_tile_size
+        in2_tile_size,                                                 // 8:  in2_tile_size (dummy, no bias)
+        in1_sender_semaphore_id,                                       // 9:  sender_sem_id
+        in1_receiver_semaphore_id,                                     // 10: receiver_sem_id
+        in1_valid_semaphore_id,                                        // 11: valid_sem_id
+        in1_is_output_writer,                                          // 12: is_output_writer
+        false,                                                         // 13: is_injector_core
+        1U,                                                            // 14: N_chunks
+        N_tiles,                                                       // 15: N_tiles_per_chunk
+        static_cast<uint32_t>(transpose_b),                            // 16: transpose_b
+        static_cast<uint32_t>(use_offset_in1),                         // 17: use_offset_in1
+        static_cast<uint32_t>(tensor_args.output_tensor.has_value()),  // 18: use_out_offset
     };
     append_accessors(in1_receiver_compile_time_args, weight_tensor, output_tensor);
     if (in1_needs_offsets) {
@@ -508,16 +488,14 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
 
     // ----- Compute kernel -----
     std::vector<uint32_t> compute_compile_time_args = {
-        0U,                                  // 0: K_num_blocks (RT-driven)
-        M_block_tiles,                       // 1: M_block_tiles
-        K_block_tiles,                       // 2: K_block_tiles
-        N_block_tiles,                       // 3: N_block_tiles
-        actual_M_blocks_per_core,            // 4: M_blocks_per_core (unused, kept for arg layout compat)
-        N_blocks_per_core,                   // 5: N_blocks_per_core
-        subblock_h,                          // 6: subblock_h
-        subblock_w,                          // 7: subblock_w
-        static_cast<uint32_t>(transpose_b),  // 8: transpose_b
-        static_cast<uint32_t>(transpose_a),  // 9: transpose_a
+        M_block_tiles,                       // 0: M_block_tiles
+        K_block_tiles,                       // 1: K_block_tiles
+        N_block_tiles,                       // 2: N_block_tiles
+        N_blocks_per_core,                   // 3: N_blocks_per_core
+        subblock_h,                          // 4: subblock_h
+        subblock_w,                          // 5: subblock_w
+        static_cast<uint32_t>(transpose_b),  // 6: transpose_b
+        static_cast<uint32_t>(transpose_a),  // 7: transpose_a
     };
 
     std::map<std::string, std::string> compute_defines;

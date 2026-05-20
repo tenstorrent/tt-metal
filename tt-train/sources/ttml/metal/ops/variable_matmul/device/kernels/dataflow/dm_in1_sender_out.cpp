@@ -9,28 +9,26 @@
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
 
 void kernel_main() {
-    // Indices 0, 1, 9 are unused placeholders (kept for compile-time arg layout compatibility).
-    // Actual M_tiles, padded_M_tiles, M_blocks_per_core come from runtime args.
-    // Indices 2, 3 are unused placeholders. K_tiles comes from runtime args (variable-K).
-    constexpr uint32_t N_tiles = get_compile_time_arg_val(4);
-    constexpr uint32_t padded_N_tiles = get_compile_time_arg_val(5);
-    constexpr uint32_t M_block_tiles = get_compile_time_arg_val(6);
-    constexpr uint32_t K_block_tiles = get_compile_time_arg_val(7);
-    constexpr uint32_t N_block_tiles = get_compile_time_arg_val(8);
-    constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(10);
-    constexpr uint32_t in1_tile_size = get_compile_time_arg_val(11);
-    constexpr uint32_t out_tile_size = get_compile_time_arg_val(12);
-    constexpr uint32_t in2_tile_size = get_compile_time_arg_val(13);
-    uint32_t in1_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(14));
-    uint32_t in1_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(15));
-    uint32_t in1_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(16));
-    constexpr uint32_t is_output_writer = get_compile_time_arg_val(17);
-    constexpr uint32_t is_injector_core = get_compile_time_arg_val(18);
-    constexpr uint32_t N_chunks = get_compile_time_arg_val(19);
-    constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(20);
-    constexpr bool transpose_b = static_cast<bool>(get_compile_time_arg_val(21));
-    constexpr bool use_offset_in1 = static_cast<bool>(get_compile_time_arg_val(22));
-    constexpr bool use_out_offset = static_cast<bool>(get_compile_time_arg_val(23));
+    // M_tiles, padded_M_tiles, M_blocks_per_core, K_tiles, padded_K_tiles come from runtime args.
+    constexpr uint32_t N_tiles = get_compile_time_arg_val(0);
+    constexpr uint32_t padded_N_tiles = get_compile_time_arg_val(1);
+    constexpr uint32_t M_block_tiles = get_compile_time_arg_val(2);
+    constexpr uint32_t K_block_tiles = get_compile_time_arg_val(3);
+    constexpr uint32_t N_block_tiles = get_compile_time_arg_val(4);
+    constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(5);
+    constexpr uint32_t in1_tile_size = get_compile_time_arg_val(6);
+    constexpr uint32_t out_tile_size = get_compile_time_arg_val(7);
+    constexpr uint32_t in2_tile_size = get_compile_time_arg_val(8);
+    uint32_t in1_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(9));
+    uint32_t in1_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(10));
+    uint32_t in1_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(11));
+    constexpr uint32_t is_output_writer = get_compile_time_arg_val(12);
+    constexpr uint32_t is_injector_core = get_compile_time_arg_val(13);
+    constexpr uint32_t N_chunks = get_compile_time_arg_val(14);
+    constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(15);
+    constexpr bool transpose_b = static_cast<bool>(get_compile_time_arg_val(16));
+    constexpr bool use_offset_in1 = static_cast<bool>(get_compile_time_arg_val(17));
+    constexpr bool use_out_offset = static_cast<bool>(get_compile_time_arg_val(18));
 
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
@@ -57,8 +55,8 @@ void kernel_main() {
 
     const uint32_t out_addr_rt_arg_idx = argidx;  // Output addresses start here (after ternary if present)
 
-    // Tensor accessor for input tensor (CTAs 0..23 are scalar; accessor starts at 24)
-    constexpr auto in1_args = TensorAccessorArgs<24>();
+    // Tensor accessor for input tensor (scalar CTAs 0..18; accessor starts at 19)
+    constexpr auto in1_args = TensorAccessorArgs<19>();
     const auto in1_reader = TensorAccessor(in1_args, in1_addr, in1_tile_size);
 
     // Always create tuple of output accessors (size = N_chunks)
