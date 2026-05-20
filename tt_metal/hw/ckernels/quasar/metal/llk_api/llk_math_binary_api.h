@@ -38,8 +38,7 @@ inline void llk_math_eltwise_binary_init(
     const std::uint32_t operand_id = get_operand_id(operand_A);
     const ckernel::TensorShape tensor_shape_A = get_operand_tensor_shape(operand_id);
 
-    constexpr auto effective_math_fidelity =
-        (eltwise_binary_type == EltwiseBinaryType::ELWMUL) ? math_fidelity : MathFidelity::LoFi;
+    constexpr auto effective_math_fidelity = get_effective_math_fidelity<eltwise_binary_type, math_fidelity>();
     if constexpr (src_b_bcast_type == BroadcastType::NONE) {
         _llk_math_eltwise_binary_init_<eltwise_binary_type, effective_math_fidelity, binary_reuse_dest>(
             tensor_shape_A, acc_to_dest);
@@ -76,8 +75,7 @@ template <
     MathFidelity math_fidelity,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void llk_math_eltwise_binary(uint dst_index, const bool clear_fp32_dst_acc = true) {
-    constexpr auto effective_math_fidelity =
-        (eltwise_binary_type == EltwiseBinaryType::ELWMUL) ? math_fidelity : MathFidelity::LoFi;
+    constexpr auto effective_math_fidelity = get_effective_math_fidelity<eltwise_binary_type, math_fidelity>();
     static_assert(
         eltwise_binary_type == EltwiseBinaryType::ELWMUL || effective_math_fidelity == MathFidelity::LoFi,
         "Math fidelity must be LoFi for non-ELWMUL ops");
@@ -127,8 +125,7 @@ inline void llk_math_eltwise_binary(
     [[maybe_unused]] const std::uint32_t operand_B,
     uint dst_index,
     const bool clear_fp32_dst_acc) {
-    constexpr auto effective_math_fidelity =
-        (eltwise_binary_type == EltwiseBinaryType::ELWMUL) ? math_fidelity : MathFidelity::LoFi;
+    constexpr auto effective_math_fidelity = get_effective_math_fidelity<eltwise_binary_type, math_fidelity>();
     static_assert(
         eltwise_binary_type == EltwiseBinaryType::ELWMUL || effective_math_fidelity == MathFidelity::LoFi,
         "Math fidelity must be LoFi for non-ELWMUL ops");
