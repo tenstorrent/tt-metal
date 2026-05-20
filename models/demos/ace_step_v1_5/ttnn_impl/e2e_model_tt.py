@@ -710,17 +710,14 @@ def run_ttnn_denoise_loop(
 
     # Trace control flow:
     # - ``trace_state is None``: pure eager path (legacy behavior, ``ACE_STEP_USE_TRACE`` off).
-    # - ``trace_state.is_ready()``: replay path — every step uses ``execute_trace`` against the
-    #   persistent buffers. ``ctx_tt_pipe`` / ``enc_tt_pipe`` / ``encoder_attention_mask_b1qk``
-    #   passed in by the caller are not used by the trace (caller already primed contents into
-    #   the persistent buffers via :meth:`_E2EDenoiseTrace.prime_per_prompt`); the loop still
-    #   deallocates them on exit per the usual ownership contract.
-    # - ``trace_state`` provided, buffers exist, trace id released: ``recapture`` immediately at
-    #   the top of the loop — reuses the persistent buffers (caller already primed them) and
-    #   re-arms the trace id without paying for two eager warmups again.
-    # - ``trace_state`` provided, no buffers: first-ever capture path — two eager warmup steps
-    #   prime the program cache, then step 2 clones inputs into fresh persistent buffers and
-    #   captures the trace; subsequent steps replay.
+    # - ``trace_state.is_ready()``: replay path — ``execute_trace`` against persistent buffers.
+    # - After every capture/replay, :meth:`release_trace_only` runs *before* post-DiT eager ops
+    #   (APG/ADG + Euler) so fresh allocations do not land in trace-reserved memory (the Metal
+    #   "Allocating device buffers is unsafe due to the existence of an active trace" warning).
+    #   The next traced step :meth:`recapture`s against the same persistent buffers.
+    # - ``trace_state`` provided, buffers exist, trace id released at loop entry: one-time
+    #   :meth:`recapture` for the second+ ``run_ttnn_denoise_loop`` call on the same shape.
+    # - ``trace_state`` provided, no buffers: two eager warmup steps, then capture on step 2.
     if trace_state is not None and trace_state.has_buffers() and not trace_state.is_ready():
         # Second+ generate of the same shape — persistent buffers carry over from previous
         # ``run_ttnn_denoise_loop`` but the trace id was released so eager VAE / next-prompt
@@ -854,6 +851,10 @@ def run_ttnn_denoise_loop(
             c_lat=c_lat,
             do_cfg=do_cfg,
         )
+        # Drop the trace id before post-DiT eager ops (APG/ADG, Euler) — they allocate fresh
+        # device buffers and will corrupt trace-reserved memory if the id stays installed.
+        ttnn.synchronize_device(device)
+        trace_state.release_trace_only(device)
 
         _post_dit_eager(
             step_idx=step_idx,
@@ -866,8 +867,11 @@ def run_ttnn_denoise_loop(
 
     def _diffusion_iterate_traced(*, step_idx: int, t_curr_f: float, euler_dt: float) -> None:
         """Replay path: stream new (xt, temb, tp) into persistent buffers, execute trace, finish eagerly."""
-        assert trace_state is not None and trace_state.is_ready()
+        assert trace_state is not None
         nonlocal _trace_op_event
+        if not trace_state.is_ready():
+            # Previous step released the trace id before post-DiT eager allocations; re-arm now.
+            trace_state.recapture(pipe=pipe, device=device)
         xt_row = fp32_tile_to_row_bf16(xt_tt, dram=mem)
         if do_cfg:
             xt_pipe_in = concat_duplicate_batch(xt_row)
@@ -890,6 +894,8 @@ def run_ttnn_denoise_loop(
             tp=tp_per_step[int(step_idx)],
             op_event=_trace_op_event,
         )
+        ttnn.synchronize_device(device)
+        trace_state.release_trace_only(device)
 
         _post_dit_eager(
             step_idx=step_idx,
@@ -939,32 +945,9 @@ def run_ttnn_denoise_loop(
                 f"Trace output buffer moved across executes: {trace_state.output_addr} -> {cur_addr}. "
                 "An allocation inside the captured graph re-ran non-deterministically."
             )
-        # Release the trace id BEFORE returning so the VAE decode (and the next prompt's text /
-        # condition encoders) allocate in :func:`mark_allocations_safe` mode. Keeping the trace
-        # alive across ``generate()`` calls is what produced the
-        # "Allocating device buffers is unsafe due to the existence of an active trace" warning
-        # on the first generate and caused the second generate's VAE to hang on corrupted
-        # device buffers. Persistent buffers stay alive — the next loop reuses them via
-        # :meth:`_E2EDenoiseTrace.recapture`.
+        # Trace id is already released after every replay/capture step (before post-DiT eager
+        # allocations). This is a no-op safety net if the last step took a non-trace path.
         trace_state.release_trace_only(device)
-
-        # ``xt_tt`` was allocated by the eager post-DiT path while the allocator was in
-        # ``mark_allocations_unsafe`` mode (its address may sit inside the trace region). After
-        # the release above we're back in safe mode, so re-home ``xt_tt`` into a tracked buffer
-        # before handing it to the VAE — otherwise downstream VAE allocations could collide and
-        # corrupt the final latents (manifests as a hang in the second generate's VAE).
-        try:
-            xt_tt_safe = ttnn.clone(xt_tt)
-            try:
-                ttnn.deallocate(xt_tt)
-            except Exception:
-                pass
-            xt_tt = xt_tt_safe
-        except Exception:
-            # ``ttnn.clone`` may fail if it doesn't accept this dtype/layout; in that case keep
-            # the unsafe ``xt_tt`` — we've already released the trace so the risk window is
-            # smaller than the alternative of crashing here.
-            pass
 
     _ace_step_flush_device_profiler(device)
 
