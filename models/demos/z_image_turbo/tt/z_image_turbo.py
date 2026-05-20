@@ -243,7 +243,7 @@ class ZImageTurbo(LightweightModule):
     def warmup(self, prompt="a cat sitting on a mat", steps=9, seed=42):
         """Compile all models, capture TE + DIT + VAE traces, run one full generation.
 
-        After this call, generate() uses cached traces for all three models.
+        After this call, forward() uses cached traces for all three models.
         """
         print("=" * 72)
         print("WARMUP: compile all programs → capture TE + DIT + VAE traces → generate")
@@ -369,7 +369,7 @@ class ZImageTurbo(LightweightModule):
         Must call warmup() first. Returns a PIL Image.
         """
         if self._dit_trace_id is None:
-            raise RuntimeError("Call warmup() before generate().")
+            raise RuntimeError("Call warmup() before forward().")
 
         t_total = time.time()
         _dram_stats(self.mesh_device, "before generate")
