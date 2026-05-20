@@ -68,12 +68,9 @@ jobs:
             # Preload the ASan runtime so Python can load ASan-instrumented native extensions
             # without hitting missing-symbol errors at import time (Python itself is not ASan-built).
             export LD_PRELOAD="$(clang-20 -print-resource-dir)/lib/linux/libclang_rt.asan-x86_64.so"
-            # detect_leaks=0  - suppress leak reports; many Python/docs modules intentionally skip
-            #                   cleanup on exit, producing false-positive leak noise.
-            # symbolize=1     - enable symbol resolution in ASan stack traces for readable output.
-            # abort_on_error=0 - report errors without aborting so the full docs build completes
-            #                   and we can see all issues rather than dying on the first one.
-            export ASAN_OPTIONS="detect_leaks=0:symbolize=1:abort_on_error=0"
+            # Disable LeakSanitizer — it runs at process exit by default and produces spurious
+            # reports from Python internals/docs tooling that don't clean up deliberately.
+            export ASAN_OPTIONS="detect_leaks=0"
           fi
           ./tests/scripts/run_build_docs.sh
       - name: Prepare artifact - move output
