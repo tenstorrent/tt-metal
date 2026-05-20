@@ -140,7 +140,7 @@ inline BlockScaleResult finalize_block_scale(
     return {static_cast<uint8_t>(shared_exp_biased), shared_exp_adj_for_elem_max};
 }
 
-TileWordCounts compute_tile_word_counts(uint32_t elem_count, uint32_t l1_alignment, const FormatParams& params);
+TileWordCounts compute_tile_word_counts(uint32_t elem_count, const FormatParams& params);
 
 inline uint32_t convert_to_mx_elem_bits(float datum, const FormatParams& params) {
     uint32_t ui32 = __builtin_bit_cast(uint32_t, datum);

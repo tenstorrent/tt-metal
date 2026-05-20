@@ -2,10 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "mx_common.hpp"
+#include <tt-metalium/mx_common.hpp>
 
 #include <tt_stl/assert.hpp>
 
+#include "hal_types.hpp"
+#include "impl/context/metal_context.hpp"
 #include "math.hpp"
 
 namespace tt::tt_metal::mx {
@@ -28,7 +30,8 @@ uint32_t compute_elem_words(uint32_t elem_count, const FormatParams& params) {
 
 }  // namespace
 
-TileWordCounts compute_tile_word_counts(uint32_t elem_count, uint32_t l1_alignment, const FormatParams& params) {
+TileWordCounts compute_tile_word_counts(uint32_t elem_count, const FormatParams& params) {
+    uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
     TileWordCounts counts;
     counts.exp_count = compute_exp_count(elem_count, params);
     counts.exp_bytes = compute_exp_bytes(counts.exp_count, l1_alignment);

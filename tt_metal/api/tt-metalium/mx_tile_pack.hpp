@@ -2,9 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Internal helper for mxfp4.cpp / mxfp6.cpp. Pulls in MetalContext and Tile;
-// not intended as a reusable public header.
-
 #pragma once
 
 #include <cstdint>
@@ -14,11 +11,9 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/span.hpp>
 
-#include "constants.hpp"
-#include "hal_types.hpp"
-#include "impl/context/metal_context.hpp"
-#include "mx_common.hpp"
-#include "tile.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/mx_common.hpp>
+#include <tt-metalium/tile.hpp>
 
 namespace tt::tt_metal::mx {
 
@@ -76,8 +71,7 @@ std::vector<uint32_t> pack_as_mx_tiles_impl(
         params.elem_width_storage_bits > 0 && 32 % static_cast<uint32_t>(params.elem_width_storage_bits) == 0,
         "MX elem storage width must divide 32 bits evenly");
 
-    uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
-    auto word_counts = compute_tile_word_counts(tile_HW, l1_alignment, params);
+    auto word_counts = compute_tile_word_counts(tile_HW, params);
     uint32_t exp_count = word_counts.exp_count;
     uint32_t exp_words = word_counts.exp_words;
     uint32_t elem_words = word_counts.elem_words;
@@ -200,8 +194,7 @@ inline std::vector<float> unpack_mx_tiles_into_float_vec_impl(
         params.elem_width_storage_bits > 0 && 32 % static_cast<uint32_t>(params.elem_width_storage_bits) == 0,
         "MX elem storage width must divide 32 bits evenly");
 
-    uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
-    auto word_counts = compute_tile_word_counts(tile_HW, l1_alignment, params);
+    auto word_counts = compute_tile_word_counts(tile_HW, params);
     uint32_t exp_count = word_counts.exp_count;
     uint32_t exp_words = word_counts.exp_words;
     uint32_t elem_words = word_counts.elem_words;
