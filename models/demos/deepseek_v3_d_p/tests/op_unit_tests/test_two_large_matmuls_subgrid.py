@@ -120,25 +120,33 @@ def test_large_matmul_on_subdevices(device):
         tt_a2, tt_b2 = _make_inputs(device)
         ckc = _compute_kernel_config(device)
 
-        # Dispatch both matmuls without syncing in between so they can overlap.
-        tt_out1 = ttnn.matmul(
-            tt_a1,
-            tt_b1,
-            program_config=prog_config,
-            sub_device_id=sd1_id,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            dtype=ttnn.bfloat16,
-            compute_kernel_config=ckc,
-        )
-        tt_out2 = ttnn.matmul(
-            tt_a2,
-            tt_b2,
-            program_config=prog_config,
-            sub_device_id=sd2_id,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            dtype=ttnn.bfloat16,
-            compute_kernel_config=ckc,
-        )
+        def _dispatch_pair():
+            o1 = ttnn.matmul(
+                tt_a1,
+                tt_b1,
+                program_config=prog_config,
+                sub_device_id=sd1_id,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=ckc,
+            )
+            o2 = ttnn.matmul(
+                tt_a2,
+                tt_b2,
+                program_config=prog_config,
+                sub_device_id=sd2_id,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=ckc,
+            )
+            return o1, o2
+
+        # Warmup pass: populates the program cache so the next dispatch hits it.
+        warm1, warm2 = _dispatch_pair()
+        ttnn.synchronize_device(device)
+
+        # Measurement pass: should hit the program cache populated above.
+        tt_out1, tt_out2 = _dispatch_pair()
         ttnn.synchronize_device(device)
         logger.info(f"both matmuls done, shapes: sd1={tt_out1.shape}, sd2={tt_out2.shape}")
     finally:
