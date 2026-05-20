@@ -341,42 +341,31 @@ def _print_config() -> None:
     """Print all env var values at startup so the config is visible in logs."""
     UNSET = "<NOT SET>"
     rows = [
-        # (label, value, required)
-        ("DEEPSEEK_V3_HF_MODEL", os.environ.get("DEEPSEEK_V3_HF_MODEL", UNSET), True),
-        ("TT_DS_PREFILL_TTNN_CACHE", os.environ.get("TT_DS_PREFILL_TTNN_CACHE", DEFAULT_TTNN_CACHE), False),
-        ("TT_IPC_SHM_C2P", os.environ.get("TT_IPC_SHM_C2P", UNSET), False),
-        ("TT_IPC_SHM_P2C", os.environ.get("TT_IPC_SHM_P2C", UNSET), False),
-        ("PREFILL_SP", str(_sp), False),
-        ("PREFILL_TP", str(_tp), False),
-        ("PREFILL_NUM_LAYERS", str(NUM_LAYERS), False),
-        ("PREFILL_MAX_SEQ_LEN", str(MAX_SEQ_LEN), False),
-        ("PREFILL_IS_BALANCED", str(IS_BALANCED), False),
-        ("PREFILL_CAPACITY_FACTOR", str(CAPACITY_FACTOR), False),
-        ("PREFILL_GATE_FALLBACK_MODE", _gate_mode_name, False),
-        ("PREFILL_STANDALONE", os.environ.get("PREFILL_STANDALONE", "0"), False),
-        ("PREFILL_STANDALONE_INPUT", os.environ.get("PREFILL_STANDALONE_INPUT", "<default>"), False),
-        ("PREFILL_STANDALONE_ITERS", os.environ.get("PREFILL_STANDALONE_ITERS", "5"), False),
-        ("PREFILL_ENABLE_MIGRATION", os.environ.get("PREFILL_ENABLE_MIGRATION", "0"), False),
-        ("PREFILL_DEBUG", os.environ.get("PREFILL_DEBUG", "0"), False),
-        ("PREFILL_TRACE_SYNCS", os.environ.get("PREFILL_TRACE_SYNCS", "0"), False),
+        ("DEEPSEEK_V3_HF_MODEL", os.environ.get("DEEPSEEK_V3_HF_MODEL", UNSET)),
+        ("TT_DS_PREFILL_TTNN_CACHE", os.environ.get("TT_DS_PREFILL_TTNN_CACHE", DEFAULT_TTNN_CACHE)),
+        ("TT_IPC_SHM_C2P", os.environ.get("TT_IPC_SHM_C2P", UNSET)),
+        ("TT_IPC_SHM_P2C", os.environ.get("TT_IPC_SHM_P2C", UNSET)),
+        ("PREFILL_SP", str(_sp)),
+        ("PREFILL_TP", str(_tp)),
+        ("PREFILL_NUM_LAYERS", str(NUM_LAYERS)),
+        ("PREFILL_MAX_SEQ_LEN", str(MAX_SEQ_LEN)),
+        ("PREFILL_IS_BALANCED", str(IS_BALANCED)),
+        ("PREFILL_CAPACITY_FACTOR", str(CAPACITY_FACTOR)),
+        ("PREFILL_GATE_FALLBACK_MODE", _gate_mode_name),
+        ("PREFILL_STANDALONE", os.environ.get("PREFILL_STANDALONE", "0")),
+        ("PREFILL_STANDALONE_INPUT", os.environ.get("PREFILL_STANDALONE_INPUT", "<default>")),
+        ("PREFILL_STANDALONE_ITERS", os.environ.get("PREFILL_STANDALONE_ITERS", "1")),
+        ("PREFILL_ENABLE_MIGRATION", os.environ.get("PREFILL_ENABLE_MIGRATION", "0")),
+        ("PREFILL_DEBUG", os.environ.get("PREFILL_DEBUG", "0")),
+        ("PREFILL_TRACE_SYNCS", os.environ.get("PREFILL_TRACE_SYNCS", "0")),
     ]
-
-    missing_required = [label for label, val, req in rows if req and val == UNSET]
 
     sep = "=" * 70
     config_lines = [sep, "prefill_runner configuration", sep]
-    for label, val, req in rows:
-        flag = " [REQUIRED]" if req else ""
-        warn = " *** MISSING ***" if val == UNSET and req else ""
-        config_lines.append(f"  {label:<35} = {val}{flag}{warn}")
+    for label, val in rows:
+        config_lines.append(f"  {label:<35} = {val}")
     config_lines.append(sep)
     logger.info("\n" + "\n".join(config_lines))
-
-    if missing_required:
-        raise RuntimeError(
-            f"Missing required environment variables: {missing_required}. "
-            f"See the module docstring for descriptions."
-        )
 
 
 def main() -> None:
