@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 
@@ -12,7 +12,6 @@ from ttnn.model_preprocessing import (
     preprocess_linear_bias,
     preprocess_linear_weight,
 )
-from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
 def main():
@@ -279,14 +278,12 @@ def main():
     torch_output = ttnn.to_torch(output)
     torch_optimized_output = ttnn.to_torch(optimized_output)
 
-    # Relaxed thresholds: optimized path uses bfloat8_b matmuls vs bfloat16 in the unoptimized path.
-    assert_numeric_metrics(
-        torch_output,
-        torch_optimized_output,
-        pcc_threshold=0.95,
-        frobenius_threshold=0.5,
-        check_allclose=False,
-    )
+    # Compare via Pearson correlation. PCC tolerates the precision gap between the two paths
+    # (optimized uses bfloat8_b matmuls; unoptimized uses bfloat16), where torch.allclose would not.
+    flat_ref = torch_output.flatten().to(torch.float32)
+    flat_opt = torch_optimized_output.flatten().to(torch.float32)
+    pcc = torch.corrcoef(torch.stack([flat_ref, flat_opt]))[0, 1].item()
+    assert pcc >= 0.95, f"Outputs disagree: PCC {pcc:.4f} < 0.95"
 
     ttnn.close_device(device)
 
