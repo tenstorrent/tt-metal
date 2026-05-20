@@ -573,7 +573,7 @@ def _conformer_self_attn_params(
     with_relative: bool,
     weight_dtype: ttnn.DataType = ttnn.bfloat16,
 ) -> dict:
-    # Stage 3a: fused Q|K|V matmul stays bf16 (bf8 QKV drops PCC); out_proj may use bf8.
+    # Fused Q|K|V uses ``weight_dtype`` (bf8 on speech encoder for DRAM bandwidth).
     # Stage 8: for relative-position self-attention, pre-fold 1/√head_dim into Q weights
     # and bias, eliminating a runtime multiply per conformer layer.  Adapter self-attn
     # (with_relative=False) uses SDPA which applies the scale internally at runtime.
@@ -587,7 +587,7 @@ def _conformer_self_attn_params(
             attn.linear_k,
             attn.linear_v,
             device=device,
-            weight_dtype=ttnn.bfloat16,
+            weight_dtype=weight_dtype,
             q_scale=q_scale,
         ),
         "linear_out": _linear_pair(attn.linear_out, device=device, weight_dtype=weight_dtype),
@@ -690,8 +690,8 @@ def create_speech_encoder_parameters(speech_encoder, *, device: ttnn.Device) -> 
     """
     Convert [`SeamlessM4Tv2SpeechEncoder`] weights to TTNN tensors for [`TTSeamlessM4Tv2SpeechEncoder`].
 
-    FFN and attention out projections use ``bfloat8_b`` weights (Stage 1 bandwidth optimization);
-    fused QKV weights stay ``bfloat16`` (Stage 3a — bf8 QKV hurts PCC). Biases stay bf16.
+    FFN, fused QKV, and attention out projections use ``bfloat8_b`` weights (DRAM bandwidth).
+    Biases stay ``bfloat16``; activations and matmul accumulate in bf16/fp32 at runtime.
     """
     matmul_bf8 = ttnn.bfloat8_b
     fp = speech_encoder.feature_projection
@@ -751,16 +751,17 @@ def create_text_to_unit_parameters(encoder, *, device: ttnn.Device) -> dict:
     runs at bf16 fidelity (``HiFi2`` + ``fp32_dest_acc_en``), so PCC is preserved.
 
     Extend the same ``bfloat8_b`` storage to the attention projections
-    (``q_proj``, ``k_proj``, ``v_proj``, ``out_proj``).  The underlying matmul
+    (fused ``qkv`` + ``out_proj`` via ``fuse_qkv=True``).  The underlying matmul
     still accumulates in fp32 with HiFi math fidelity, so the bf8 weight
     quantization is well below PCC headroom and we pick up an extra
-    DRAM-bandwidth saving on 4 projections per encoder layer.
+    DRAM-bandwidth saving on the fused QKV and out projections per layer.
     """
     layers = _m4t_encoder_self_attn_ffn_layers(
         encoder,
         device=device,
         ffn_weight_dtype=ttnn.bfloat8_b,
         attn_weight_dtype=ttnn.bfloat8_b,
+        fuse_qkv=True,
     )
     out = {
         "layers": layers,
@@ -802,9 +803,13 @@ def _t2u_decoder_layer_parameters(layer: torch.nn.Module, *, device: ttnn.Device
     """[`SeamlessM4Tv2TextToUnitDecoderLayer`] weights."""
     layer_dict = {
         "self_attn": {
-            "q_proj": _linear_pair(layer.self_attn.q_proj, device=device),
-            "k_proj": _linear_pair(layer.self_attn.k_proj, device=device),
-            "v_proj": _linear_pair(layer.self_attn.v_proj, device=device),
+            "qkv": _fused_qkv_pair(
+                layer.self_attn.q_proj,
+                layer.self_attn.k_proj,
+                layer.self_attn.v_proj,
+                device=device,
+                weight_dtype=ttnn.bfloat8_b,
+            ),
             "out_proj": _linear_pair(layer.self_attn.out_proj, device=device),
         },
         "self_attn_layer_norm": {
@@ -1048,7 +1053,7 @@ def create_seamless_m4t_v2_model_parameters(model: torch.nn.Module, *, device: t
     """
     w_lm = preprocess_linear_weight(
         model.lm_head.weight.detach(),
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
     )
     out = {

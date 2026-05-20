@@ -672,18 +672,6 @@ class TTSeamlessM4Tv2TextToUnitEncoder:
             compute_kernel_config=self._linear_ln_compute_cfg,
         )
 
-    @staticmethod
-    def _heads(x: ttnn.Tensor, batch: int, seq: int, num_heads: int, head_dim: int) -> ttnn.Tensor:
-        x = ttnn.reshape(x, (batch, seq, num_heads, head_dim))
-        return ttnn.permute(x, (0, 2, 1, 3))
-
-    @staticmethod
-    def _merge_heads(
-        x: ttnn.Tensor, batch: int, seq: int, num_heads: int, head_dim: int, hidden_size: int
-    ) -> ttnn.Tensor:
-        x = ttnn.permute(x, (0, 2, 1, 3))
-        return ttnn.reshape(x, (batch, seq, hidden_size))
-
     def _self_attention(
         self,
         hidden_states: ttnn.Tensor,
@@ -697,42 +685,39 @@ class TTSeamlessM4Tv2TextToUnitEncoder:
         hidden_size: int,
         sdpa_cfg: ttnn.SDPAProgramConfig,
     ) -> ttnn.Tensor:
-        q = self._linear(hidden_states, attn_module.q_proj.weight, attn_module.q_proj.bias)
-        k = self._linear(hidden_states, attn_module.k_proj.weight, attn_module.k_proj.bias)
-        v = self._linear(hidden_states, attn_module.v_proj.weight, attn_module.v_proj.bias)
+        qkv = self._linear(hidden_states, attn_module.qkv.weight, attn_module.qkv.bias)
+        qkv_4d = ttnn.reshape(qkv, (batch, 1, seq, 3 * hidden_size))
 
-        qh = self._heads(q, batch, seq, num_heads, head_dim)
-        kh = self._heads(k, batch, seq, num_heads, head_dim)
-        vh = self._heads(v, batch, seq, num_heads, head_dim)
-
-        qh = ttnn.multiply(qh, 1.0 / math.sqrt(head_dim), memory_config=ttnn.L1_MEMORY_CONFIG)
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            qkv_4d,
+            num_heads=num_heads,
+            num_kv_heads=num_heads,
+            transpose_k_heads=False,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(qkv_4d)
 
         attn_out = ttnn.transformer.scaled_dot_product_attention(
-            qh,
-            kh,
-            vh,
+            q,
+            k,
+            v,
             attn_mask=attn_mask,
             is_causal=False,
-            scale=1.0,
+            scale=1.0 / math.sqrt(head_dim),
             program_config=sdpa_cfg,
             compute_kernel_config=self._sdpa_compute_cfg,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        ttnn.deallocate(qh)
-        ttnn.deallocate(kh)
-        ttnn.deallocate(vh)
+        ttnn.deallocate(q)
+        ttnn.deallocate(k)
+        ttnn.deallocate(v)
 
-        attn_out = ttnn.slice(
-            attn_out,
-            [0, 0, 0, 0],
-            [batch, num_heads, seq, head_dim],
-            [1, 1, 1, 1],
-        )
+        merged_4d = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(attn_out)
+        merged = ttnn.reshape(merged_4d, (batch, seq, hidden_size))
 
-        merged = self._merge_heads(attn_out, batch, seq, num_heads, head_dim, hidden_size)
         proj = self._linear(merged, attn_module.out_proj.weight, attn_module.out_proj.bias)
         ttnn.deallocate(merged)
-        ttnn.deallocate(attn_out)
         return proj
 
     def forward(self, inputs_embeds: ttnn.Tensor, attention_mask_4d: ttnn.Tensor) -> ttnn.Tensor:
@@ -936,18 +921,6 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             compute_kernel_config=self._linear_ln_compute_cfg,
         )
 
-    @staticmethod
-    def _heads(x: ttnn.Tensor, batch: int, seq: int, num_heads: int, head_dim: int) -> ttnn.Tensor:
-        x = ttnn.reshape(x, (batch, seq, num_heads, head_dim))
-        return ttnn.permute(x, (0, 2, 1, 3))
-
-    @staticmethod
-    def _merge_heads(
-        x: ttnn.Tensor, batch: int, seq: int, num_heads: int, head_dim: int, hidden_size: int
-    ) -> ttnn.Tensor:
-        x = ttnn.permute(x, (0, 2, 1, 3))
-        return ttnn.reshape(x, (batch, seq, hidden_size))
-
     def _decoder_self_attention(
         self,
         hidden_states: ttnn.Tensor,
@@ -961,42 +934,39 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         hidden_size: int,
         sdpa_cfg: ttnn.SDPAProgramConfig,
     ) -> ttnn.Tensor:
-        q = self._linear(hidden_states, attn_module.q_proj.weight, attn_module.q_proj.bias)
-        k = self._linear(hidden_states, attn_module.k_proj.weight, attn_module.k_proj.bias)
-        v = self._linear(hidden_states, attn_module.v_proj.weight, attn_module.v_proj.bias)
+        qkv = self._linear(hidden_states, attn_module.qkv.weight, attn_module.qkv.bias)
+        qkv_4d = ttnn.reshape(qkv, (batch, 1, seq, 3 * hidden_size))
 
-        qh = self._heads(q, batch, seq, num_heads, head_dim)
-        kh = self._heads(k, batch, seq, num_heads, head_dim)
-        vh = self._heads(v, batch, seq, num_heads, head_dim)
-
-        qh = ttnn.multiply(qh, 1.0 / math.sqrt(head_dim), memory_config=ttnn.L1_MEMORY_CONFIG)
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            qkv_4d,
+            num_heads=num_heads,
+            num_kv_heads=num_heads,
+            transpose_k_heads=False,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(qkv_4d)
 
         attn_out = ttnn.transformer.scaled_dot_product_attention(
-            qh,
-            kh,
-            vh,
+            q,
+            k,
+            v,
             attn_mask=attn_mask,
             is_causal=False,
-            scale=1.0,
+            scale=1.0 / math.sqrt(head_dim),
             program_config=sdpa_cfg,
             compute_kernel_config=self._sdpa_compute_cfg,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        ttnn.deallocate(qh)
-        ttnn.deallocate(kh)
-        ttnn.deallocate(vh)
+        ttnn.deallocate(q)
+        ttnn.deallocate(k)
+        ttnn.deallocate(v)
 
-        attn_out = ttnn.slice(
-            attn_out,
-            [0, 0, 0, 0],
-            [batch, num_heads, seq, head_dim],
-            [1, 1, 1, 1],
-        )
+        merged_4d = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(attn_out)
+        merged = ttnn.reshape(merged_4d, (batch, seq, hidden_size))
 
-        merged = self._merge_heads(attn_out, batch, seq, num_heads, head_dim, hidden_size)
         proj = self._linear(merged, attn_module.out_proj.weight, attn_module.out_proj.bias)
         ttnn.deallocate(merged)
-        ttnn.deallocate(attn_out)
         return proj
 
     def _duration_predictor(
