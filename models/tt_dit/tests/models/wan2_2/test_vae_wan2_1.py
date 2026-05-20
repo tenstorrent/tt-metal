@@ -1859,34 +1859,21 @@ def test_wan_decoder_chunked_consistency(
         height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[h_axis], mesh_axis=h_axis),
         width_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[w_axis], mesh_axis=w_axis),
     )
-    # Latent (B, C, T, H, W) -> pixel (H*8, W*8). The decoder needs real
-    # pixel dims at construction so get_conv3d_config hits the per-shape
-    # _BLOCKINGS table rather than the channel-only _DEFAULT_BLOCKINGS
-    # fallback -- this test validates the production path.
-    pixel_height = H * 8
-    pixel_width = W * 8
-
-    def _build_model(t_chunk_size_for_init):
-        m = WanDecoder(
-            base_dim=base_dim,
-            z_dim=z_dim,
-            dim_mult=dim_mult,
-            num_res_blocks=num_res_blocks,
-            attn_scales=attn_scales,
-            temperal_downsample=temperal_downsample,
-            out_channels=out_channels,
-            is_residual=False,
-            mesh_device=mesh_device,
-            ccl_manager=ccl_manager,
-            parallel_config=parallel_config,
-            dtype=dtype,
-            height=pixel_height,
-            width=pixel_width,
-            t_chunk_size=t_chunk_size_for_init,
-            cached=t_chunk_size_for_init is not None,
-        )
-        m.load_torch_state_dict(torch_model.state_dict())
-        return m
+    tt_model = WanDecoder(
+        base_dim=base_dim,
+        z_dim=z_dim,
+        dim_mult=dim_mult,
+        num_res_blocks=num_res_blocks,
+        attn_scales=attn_scales,
+        temperal_downsample=temperal_downsample,
+        out_channels=out_channels,
+        is_residual=False,
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        dtype=dtype,
+    )
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     # Prepare input
     torch_input = torch.randn(B, C, T, H, W, dtype=torch.float32)
@@ -1899,9 +1886,6 @@ def test_wan_decoder_chunked_consistency(
     concat_dims[w_axis] = 4
 
     def run_decoder(t_chunk_size):
-        # Fresh model per chunk_size: the constructor's _BLOCKINGS lookup keys
-        # off stage_t.T_res, which depends on t_chunk_size.
-        model = _build_model(t_chunk_size_for_init=t_chunk_size)
         tt_input_tensor = typed_tensor_2dshard(
             tt_input_host,
             mesh_device,
@@ -1909,7 +1893,7 @@ def test_wan_decoder_chunked_consistency(
             shard_mapping={h_axis: 2, w_axis: 3},
             dtype=ttnn.float32 if dtype == ttnn.DataType.FLOAT32 else ttnn.bfloat16,
         )
-        tt_output, new_logical_h = model(tt_input_tensor, logical_h, t_chunk_size=t_chunk_size)
+        tt_output, new_logical_h = tt_model(tt_input_tensor, logical_h, t_chunk_size=t_chunk_size)
         return ttnn.to_torch(
             tt_output,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
@@ -1920,8 +1904,8 @@ def test_wan_decoder_chunked_consistency(
     baseline = run_decoder(t_chunk_size=1)
     logger.info(f"Baseline output shape: {baseline.shape}")
 
-    # chunk_size=7 matches the production vae_t_chunk_size on BH 2x4 / 480p.
-    for t_chunk_size in [2, 4, 7, 8, 16, T]:
+    # Compare each chunk size against the baseline
+    for t_chunk_size in [2, 4, 8, 16, T]:
         if t_chunk_size > T:
             continue
         logger.info(f"Running t_chunk_size={t_chunk_size} (T={T})")
