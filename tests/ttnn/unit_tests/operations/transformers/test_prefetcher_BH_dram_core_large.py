@@ -26,12 +26,14 @@ end up with their full contiguous slice at the same fifo offset. M=1 keeps the o
 single-push-per-K-block path; M=2 unlocks FF1 (K=4096 N=14336) at ring=64.
 
 Known prototype limits (each is a follow-up):
-- Multi-tensor in a single dram_prefetcher call has historically left the DRISC cores in
-  reset state; not re-verified after the chunked-DMA + receiver-layout fixes. Tests below
-  run one (prefetcher, matmul) pair per case.
 - in0_block_w_tiles can be overridden via `dram_core_k_block_w_tiles` op param, but values
   >=4 hang on a fifo-wrap edge case (gather_in0 already uses kbw=1 so this is non-blocking).
 - Fast dispatch on the DRAM-core path is not implemented yet (slow dispatch only).
+
+Multi-tensor in a single dram_prefetcher call (the "DRISC in reset" issue from earlier
+versions) is verified working post-fix in test_prefetcher_BH_multi_tensor.py. Tests below
+still run one (prefetcher, matmul) pair per case to keep the parametrize cases focused
+on shape correctness.
 """
 
 import math
