@@ -15,6 +15,24 @@ struct DramRunSummary {
     uint64_t checked_bytes = 0;
     uint64_t suspected_write_error_bytes = 0;
     uint64_t suspected_read_error_bytes = 0;
+
+    uint64_t prepare_ticks = 0;
+    uint64_t write_ticks = 0;
+    uint64_t read_ticks = 0;
+    uint64_t generate_ticks = 0;
+    uint64_t ncrisc_blocked_wait_ticks = 0;
+    uint64_t compare_brisc_ticks = 0;
+    uint64_t compare_wait_ticks = 0;
+    uint64_t compare_total_ticks = 0;
+    uint64_t ncrisc_idle_ticks = 0;
+    uint64_t ncrisc_write_active_ticks = 0;
+    uint64_t ncrisc_read_active_ticks = 0;
+    uint64_t ncrisc_diag_active_ticks = 0;
+    uint64_t math_generate_active_ticks = 0;
+    uint64_t pack_generate_active_ticks = 0;
+    uint64_t math_compare_active_ticks = 0;
+    uint64_t pack_compare_active_ticks = 0;
+    uint64_t unpack_compare_active_ticks = 0;
 };
 
 struct DramDeploymentConfig {

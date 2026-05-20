@@ -3,6 +3,28 @@
 #include "api/compute/compute_kernel_api.h"
 #include "patterns/sync_mailbox.hpp"
 #include "patterns/dram_pattern_fill.hpp"
+#include "timestamp.hpp"
+
+static inline void prof_add_u64(volatile tt_l1_ptr uint32_t* mb, uint32_t lo_idx, uint64_t delta) {
+    const uint64_t cur = (static_cast<uint64_t>(mb[lo_idx + 1u]) << 32) | static_cast<uint64_t>(mb[lo_idx]);
+    const uint64_t nxt = cur + delta;
+    mb[lo_idx] = static_cast<uint32_t>(nxt);
+    mb[lo_idx + 1u] = static_cast<uint32_t>(nxt >> 32);
+}
+
+static inline uint32_t prof_generate_counter_idx(uint32_t helper_id) {
+    return (helper_id == DRAM_COMPARE_HELPER_MATH) ? MB_PROF_MATH_GEN_ACTIVE_LO : MB_PROF_PACK_GEN_ACTIVE_LO;
+}
+
+static inline uint32_t prof_compare_counter_idx(uint32_t helper_id) {
+    if (helper_id == DRAM_COMPARE_HELPER_MATH) {
+        return MB_PROF_MATH_CMP_ACTIVE_LO;
+    }
+    if (helper_id == DRAM_COMPARE_HELPER_PACK) {
+        return MB_PROF_PACK_CMP_ACTIVE_LO;
+    }
+    return MB_PROF_UNPACK_CMP_ACTIVE_LO;
+}
 
 static inline void compare_range_and_publish(
     volatile tt_l1_ptr uint32_t* mb, uint32_t helper_id, uint32_t done_tag, uint32_t start_word, uint32_t end_word) {
@@ -34,6 +56,8 @@ static inline void compare_range_and_publish(
         first_observed_idx = MB_COMPARE_UNPACK_FIRST_OBSERVED;
     }
 
+    const uint64_t prof_t0 = timestamp();
+
     uint32_t failures = 0u;
     uint32_t first_addr = 0xFFFFFFFFu;
     uint32_t first_expected = 0u;
@@ -58,6 +82,7 @@ static inline void compare_range_and_publish(
     mb[first_addr_idx] = first_addr;
     mb[first_expected_idx] = first_expected;
     mb[first_observed_idx] = first_observed;
+    prof_add_u64(mb, prof_compare_counter_idx(helper_id), timestamp() - prof_t0);
     mb[done_idx] = done_tag;
 }
 
@@ -66,6 +91,8 @@ static inline void generate_range_and_publish(
     const uint32_t dst_l1_addr = mb[MB_GENERATE_L1_ADDR];
 
     tt_l1_ptr uint32_t* dst_words = reinterpret_cast<tt_l1_ptr uint32_t*>(dst_l1_addr);
+
+    const uint64_t prof_t0 = timestamp();
 
     DramPatternFillParams fill{};
     fill.pattern_id = mb[MB_PATTERN_ID_GLOBAL];
@@ -76,6 +103,8 @@ static inline void generate_range_and_publish(
     fill.word_count = mb[MB_GENERATE_WORD_COUNT];
 
     dram_fill_pattern_buffer_range(dst_words, fill, start_word, end_word);
+
+    prof_add_u64(mb, prof_generate_counter_idx(helper_id), timestamp() - prof_t0);
 
     if (helper_id == DRAM_COMPARE_HELPER_MATH) {
         mb[MB_GENERATE_MATH_DONE] = done_tag;
@@ -126,6 +155,8 @@ static inline void compare_helper_loop(uint32_t helper_id) {
 
         const uint32_t word_count = mb[MB_COMPARE_WORD_COUNT];
 
+        // NCRISC compares the first quarter after its read phase. The compute helpers
+        // compare the remaining three quarters while BRISC only orchestrates.
         const uint32_t q1 = word_count >> 2;
         const uint32_t q2 = word_count >> 1;
         const uint32_t q3 = (word_count * 3u) >> 2;

@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <csignal>
+#include <cstdlib>
 
 #include <thread>
 #include <chrono>
@@ -17,8 +18,13 @@
 #include <sstream>
 #include <iostream>
 #include <vector>
+#include <fstream>
+#include <algorithm>
+#include <cctype>
+#include <dirent.h>
 
 #include <iomanip>
+#include <array>
 
 namespace tt::tt_metal {
 
@@ -28,6 +34,78 @@ using namespace tt;
 std::atomic<bool> g_stop_requested{false};
 std::atomic<bool> g_watchdog_requested{false};
 static std::atomic<bool> g_stop_message_printed{false};
+
+static std::string test_dram_trim_copy(std::string s) {
+    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) {
+        s.erase(s.begin());
+    }
+    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) {
+        s.pop_back();
+    }
+    return s;
+}
+
+static std::string test_dram_read_text_file_trimmed(const std::string& path) {
+    std::ifstream file(path);
+    std::string value;
+    std::getline(file, value);
+    return test_dram_trim_copy(value);
+}
+
+static std::vector<std::string> get_tenstorrent_pci_bdf_lines() {
+    std::vector<std::string> lines;
+
+    DIR* dir = opendir("/sys/bus/pci/devices");
+    if (dir == nullptr) {
+        return lines;
+    }
+
+    while (auto* entry = readdir(dir)) {
+        const std::string bdf = entry->d_name;
+        if (bdf.empty() || bdf[0] == '.') {
+            continue;
+        }
+
+        const std::string base = "/sys/bus/pci/devices/" + bdf;
+        std::string vendor = test_dram_read_text_file_trimmed(base + "/vendor");
+        std::transform(vendor.begin(), vendor.end(), vendor.begin(), [](unsigned char c) { return std::tolower(c); });
+
+        // Tenstorrent PCI vendor id. This catches Blackhole/Galaxy boards exposed on PCIe.
+        if (vendor != "0x1e52") {
+            continue;
+        }
+
+        const std::string pci_device = test_dram_read_text_file_trimmed(base + "/device");
+        const std::string bus = (bdf.size() >= 7) ? bdf.substr(bdf.size() - 7, 2) : "??";
+        const std::string device = (bdf.size() >= 4) ? bdf.substr(bdf.size() - 4, 2) : "??";
+        const std::string function = (bdf.size() >= 1) ? bdf.substr(bdf.size() - 1, 1) : "?";
+
+        lines.push_back(fmt::format(
+            "bdf={} bus={} device={} function={} pci_device_id={}", bdf, bus, device, function, pci_device));
+    }
+
+    closedir(dir);
+    std::sort(lines.begin(), lines.end());
+    return lines;
+}
+
+static void log_blackhole_galaxy_pci_bdfs_once() {
+    static std::once_flag once;
+    std::call_once(once, []() {
+        const auto lines = get_tenstorrent_pci_bdf_lines();
+
+        if (lines.empty()) {
+            log_info(
+                tt::LogTest, "Blackhole Galaxy PCI BDF scan: no Tenstorrent PCI devices found in /sys/bus/pci/devices");
+            return;
+        }
+
+        log_info(tt::LogTest, "Blackhole Galaxy PCI BDF scan: found {} Tenstorrent PCI device(s)", lines.size());
+        for (const auto& line : lines) {
+            log_info(tt::LogTest, "Blackhole Galaxy PCI: {}", line);
+        }
+    });
+}
 
 struct DramBankSummary {
     bool pass = true;
@@ -292,15 +370,80 @@ static void print_subtest_status(
     log_info(tt::LogTest, "{}", out);
 }
 
-template <size_t N>
-static uint64_t count_subtests_for_patterns(const uint32_t (&patterns)[N], uint32_t repeats) {
-    uint64_t total = 0;
-
-    for (uint32_t pattern_id : patterns) {
-        total += (uint64_t)repeats * num_passes_for_pattern(pattern_id);
+static bool get_dram_repeated_patterns_only_from_env() {
+    const char* value = std::getenv("DRAM_TEST_REPEATED_PATTERNS_ONLY");
+    if (value == nullptr) {
+        value = std::getenv("DRAM_TEST_REPEATED_ONLY");
+    }
+    if (value == nullptr) {
+        value = std::getenv("REPEATED_PATTERNS_ONLY");
     }
 
-    return total;
+    return value != nullptr && std::string(value) == "1";
+}
+
+static const std::vector<uint32_t>& get_deployment_patterns_from_env() {
+    static const std::vector<uint32_t> all_patterns = {
+        DRAM_PATTERN_COUNTER,
+        DRAM_PATTERN_CHECKERBOARD,
+        DRAM_PATTERN_ADDRESS,
+        DRAM_PATTERN_MARCHING_ONES,
+        DRAM_PATTERN_MARCHING_ZEROES,
+        DRAM_PATTERN_MARCHING_ONE_BITS,
+        DRAM_PATTERN_MARCHING_ZERO_BITS,
+        DRAM_PATTERN_TOGGLE_BITS,
+        DRAM_PATTERN_SATURATION,
+        DRAM_PATTERN_REVERSIBLE_RANDOM,
+        DRAM_PATTERN_RANDOM,
+        DRAM_PATTERN_RANDOM_XOSHIRO128PP,
+        DRAM_PATTERN_BYTEWISE_SSN,
+    };
+
+    // Repeated/chunk-stable patterns: the expected data for a chunk is deterministic
+    // from the pass/pattern and does not require expensive per-word random generation.
+    // This mode is useful for faster deployment bring-up runs.
+    static const std::vector<uint32_t> repeated_patterns = {
+        DRAM_PATTERN_COUNTER,
+        DRAM_PATTERN_CHECKERBOARD,
+        DRAM_PATTERN_ADDRESS,
+        DRAM_PATTERN_MARCHING_ONES,
+        DRAM_PATTERN_MARCHING_ZEROES,
+        DRAM_PATTERN_MARCHING_ONE_BITS,
+        DRAM_PATTERN_MARCHING_ZERO_BITS,
+        DRAM_PATTERN_TOGGLE_BITS,
+        DRAM_PATTERN_SATURATION,
+    };
+
+    return get_dram_repeated_patterns_only_from_env() ? repeated_patterns : all_patterns;
+}
+
+static void log_dram_pattern_mode_once() {
+    static std::once_flag once;
+    std::call_once(once, []() {
+        const bool repeated_only = get_dram_repeated_patterns_only_from_env();
+        const auto& patterns = get_deployment_patterns_from_env();
+
+        std::vector<std::string> names;
+        names.reserve(patterns.size());
+        for (uint32_t pattern_id : patterns) {
+            names.push_back(pattern_name(pattern_id));
+        }
+
+        std::string pattern_list;
+        for (size_t i = 0; i < names.size(); i++) {
+            if (i != 0) {
+                pattern_list += ",";
+            }
+            pattern_list += names[i];
+        }
+
+        log_info(
+            tt::LogTest,
+            "DRAM pattern mode: {} patterns={} env DRAM_TEST_REPEATED_PATTERNS_ONLY={}",
+            repeated_only ? "repeated-only" : "all",
+            pattern_list,
+            repeated_only ? "1" : "0");
+    });
 }
 
 class [[maybe_unused]] Watchdog {
@@ -615,21 +758,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentOptimalWorkersAllDramBanks)
     constexpr uint32_t initial_seed = 0x12345678u;
     constexpr uint32_t advance_seed = 1u;
 
-    static const uint32_t kDeploymentPatterns[] = {
-        DRAM_PATTERN_COUNTER,
-        DRAM_PATTERN_CHECKERBOARD,
-        DRAM_PATTERN_ADDRESS,
-        DRAM_PATTERN_MARCHING_ONES,
-        DRAM_PATTERN_MARCHING_ZEROES,
-        DRAM_PATTERN_MARCHING_ONE_BITS,
-        DRAM_PATTERN_MARCHING_ZERO_BITS,
-        DRAM_PATTERN_TOGGLE_BITS,
-        DRAM_PATTERN_SATURATION,
-        DRAM_PATTERN_REVERSIBLE_RANDOM,
-        DRAM_PATTERN_RANDOM,
-        DRAM_PATTERN_RANDOM_XOSHIRO128PP,
-        DRAM_PATTERN_BYTEWISE_SSN,
-    };
+    const auto& kDeploymentPatterns = get_deployment_patterns_from_env();
 
     const uint32_t chunk_bytes = get_dram_chunk_bytes_from_env(4096u);
     const uint32_t total_bytes_per_controller = get_dram_test_bytes_from_env(DRAM_TEST_BYTES);
@@ -637,6 +766,8 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentOptimalWorkersAllDramBanks)
     auto noc_mode = get_dram_noc_mode_from_env();
 
     std::signal(SIGINT, handle_sigint);
+    log_blackhole_galaxy_pci_bdfs_once();
+    log_dram_pattern_mode_once();
 
     log_info(tt::LogTest, "Persistent optimal-worker DRAM deployment running on {} chip(s)", devices_.size());
 
@@ -865,21 +996,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentAllWorkersSingleDramSequent
     constexpr uint32_t initial_seed = 0x12345678u;
     constexpr uint32_t advance_seed = 1u;
 
-    static const uint32_t kDeploymentPatterns[] = {
-        DRAM_PATTERN_COUNTER,
-        DRAM_PATTERN_CHECKERBOARD,
-        DRAM_PATTERN_ADDRESS,
-        DRAM_PATTERN_MARCHING_ONES,
-        DRAM_PATTERN_MARCHING_ZEROES,
-        DRAM_PATTERN_MARCHING_ONE_BITS,
-        DRAM_PATTERN_MARCHING_ZERO_BITS,
-        DRAM_PATTERN_TOGGLE_BITS,
-        DRAM_PATTERN_SATURATION,
-        DRAM_PATTERN_REVERSIBLE_RANDOM,
-        DRAM_PATTERN_RANDOM,
-        DRAM_PATTERN_RANDOM_XOSHIRO128PP,
-        DRAM_PATTERN_BYTEWISE_SSN,
-    };
+    const auto& kDeploymentPatterns = get_deployment_patterns_from_env();
 
     const uint32_t chunk_bytes = get_dram_chunk_bytes_from_env(4096u);
     const uint32_t total_bytes_per_controller = get_dram_test_bytes_from_env(DRAM_TEST_BYTES);
@@ -887,6 +1004,8 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentAllWorkersSingleDramSequent
     auto noc_mode = get_dram_noc_mode_from_env();
 
     std::signal(SIGINT, handle_sigint);
+    log_blackhole_galaxy_pci_bdfs_once();
+    log_dram_pattern_mode_once();
 
     log_info(tt::LogTest, "Persistent all-workers single-DRAM sequential sweep running on {} chip(s)", devices_.size());
 
@@ -1180,21 +1299,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentPartitionedWorkersAllDramBa
     constexpr uint32_t initial_seed = 0x12345678u;
     constexpr uint32_t advance_seed = 1u;
 
-    static const uint32_t kDeploymentPatterns[] = {
-        DRAM_PATTERN_COUNTER,
-        DRAM_PATTERN_CHECKERBOARD,
-        DRAM_PATTERN_ADDRESS,
-        DRAM_PATTERN_MARCHING_ONES,
-        DRAM_PATTERN_MARCHING_ZEROES,
-        DRAM_PATTERN_MARCHING_ONE_BITS,
-        DRAM_PATTERN_MARCHING_ZERO_BITS,
-        DRAM_PATTERN_TOGGLE_BITS,
-        DRAM_PATTERN_SATURATION,
-        DRAM_PATTERN_REVERSIBLE_RANDOM,
-        DRAM_PATTERN_RANDOM,
-        DRAM_PATTERN_RANDOM_XOSHIRO128PP,
-        DRAM_PATTERN_BYTEWISE_SSN,
-    };
+    const auto& kDeploymentPatterns = get_deployment_patterns_from_env();
 
     const uint32_t chunk_bytes = get_dram_chunk_bytes_from_env(4096u);
     const uint32_t total_bytes_per_controller = get_dram_test_bytes_from_env(DRAM_TEST_BYTES);
@@ -1202,6 +1307,8 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentPartitionedWorkersAllDramBa
     auto noc_mode = get_dram_noc_mode_from_env();
 
     std::signal(SIGINT, handle_sigint);
+    log_blackhole_galaxy_pci_bdfs_once();
+    log_dram_pattern_mode_once();
 
     log_info(tt::LogTest, "Persistent partitioned-workers all-DRAM test running on {} chip(s)", devices_.size());
 

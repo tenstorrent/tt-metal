@@ -66,6 +66,29 @@ struct DramBaseResult {
     uint64_t prepare_ticks;
     uint64_t write_ticks;
     uint64_t read_ticks;
+
+    // Profiler: finer-grained timing for DDR pipeline analysis.
+    // generate_ticks: time spent issuing/waiting for MATH/PACK pattern generation.
+    // ncrisc_blocked_wait_ticks: BRISC wall time blocked waiting for NCRISC completion.
+    // compare_brisc_ticks: BRISC's local 1/4 compare loop time.
+    // compare_wait_ticks: time after BRISC compare spent waiting for MATH/PACK/UNPACK compare helpers.
+    // compare_total_ticks: compare wall time from start_compare to all helpers consumed.
+    uint64_t generate_ticks;
+    uint64_t ncrisc_blocked_wait_ticks;
+    uint64_t compare_brisc_ticks;
+    uint64_t compare_wait_ticks;
+    uint64_t compare_total_ticks;
+
+    // Granular profiler: active/idle counters reported by individual RISCVs.
+    uint64_t ncrisc_idle_ticks;
+    uint64_t ncrisc_write_active_ticks;
+    uint64_t ncrisc_read_active_ticks;
+    uint64_t ncrisc_diag_active_ticks;
+    uint64_t math_generate_active_ticks;
+    uint64_t pack_generate_active_ticks;
+    uint64_t math_compare_active_ticks;
+    uint64_t pack_compare_active_ticks;
+    uint64_t unpack_compare_active_ticks;
 };
 
 // -------------------------
