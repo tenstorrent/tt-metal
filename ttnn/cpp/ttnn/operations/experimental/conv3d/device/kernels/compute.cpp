@@ -279,7 +279,15 @@ void kernel_main() {
                                     }
 
                                     if constexpr (use_fp32_partials) {
+                                        // Restore srcA to cb_vol2col_tiled for matmul. The
+                                        // reconfig above (before tilize) flipped srcA to
+                                        // cb_vol2col_rm; without this restore, matmul reads the
+                                        // tiled input through a row-major srcA mapping and PCC
+                                        // craters (~0.5). InitMode::Short below does not reconfigure
+                                        // dataformats — that's the caller's responsibility — so
+                                        // we pair the pack_reconfig with the matching srcA reconfig.
                                         pack_reconfig_data_format(cb_matmul_interm_tiled);
+                                        reconfig_data_format_srca(cb_vol2col_tiled);
                                     }
 
                                     // Phase 2: matmul the batch.
@@ -289,15 +297,21 @@ void kernel_main() {
                                     // in1_policy=WaitAndRetainOnLastBlock: weights stay across all
                                     // matmul_M_t/subblock_h invocations within this output block
                                     // (popped at the c_out_block level, see end of c_out_block loop).
-                                    // interm_buf = out_buf because num_k_blocks==1: interm is unused
-                                    // and passing the same buffer makes mm_block_init configure pack
-                                    // for the correct (matmul_interm) format.
+                                    // InitMode::Short: kernel's boot mm_init at the top of
+                                    // kernel_main owns hw_configure; Short restores matmul-mode
+                                    // unpack/math state after the tilize above without redoing
+                                    // hw_configure (which is unsafe mid-kernel — see
+                                    // compute_kernel_hw_startup.h:26-30). Pack and srcA dataformat
+                                    // reconfigs for use_fp32_partials are handled above; without
+                                    // use_fp32_partials, srcA stays on cb_vol2col_tiled across the
+                                    // tilize→matmul boundary so no extra reconfig is needed.
+                                    // interm_buf = out_buf because num_k_blocks==1: interm is unused.
                                     compute_kernel_lib::matmul_block<
                                         /*transpose=*/false,
                                         /*packer_l1_acc=*/false,
                                         compute_kernel_lib::LastBlockTarget::Out,
                                         compute_kernel_lib::OutputLayout::SubblockMajor,
-                                        compute_kernel_lib::matmul_config::InitMode::Full,
+                                        compute_kernel_lib::matmul_config::InitMode::Short,
                                         compute_kernel_lib::InputPolicy::WaitAndPopPerKBlock,
                                         compute_kernel_lib::InputPolicy::WaitAndRetainOnLastBlock>(
                                         cb_vol2col_tiled_buf,

@@ -89,21 +89,24 @@ namespace matmul_config {
  * matching mm_block_init. Mirrors the InitUninitMode convention used by untilize_helpers
  * for back-to-back invocations.
  *
- * Full          (default) Helper calls mm_block_init at the start — the full re-init that
- *               re-runs unpack/math/pack hw_configure plus pack_init/pack_dest_init in
- *               addition to the matmul-specific init. Required when an intervening op
- *               (tilize, untilize, reduce, eltwise) reconfigured PACK/UNPACK/MATH for its
- *               own needs and the matmul-mode hw config must be re-established. After
- *               compute_kernel_hw_startup alone (no intervening ops), Short is sufficient
- *               and faster, but Full is the safe conservative default.
- * Short         Helper calls mm_block_init_short — only the matmul-specific
- *               llk_unpack_AB_matmul_init + llk_math_matmul_init, no hw_configure. Use
- *               (a) right after compute_kernel_hw_startup with the same in0/in1/out CBs,
- *               or (b) for chains of matmul_block calls where the previous helper already
- *               configured matmul state and only the per-call shape/cb might have changed.
- * None          Helper skips init entirely. Use only when the caller has just executed a
- *               compatible matmul_block in the same configuration and no other op has
- *               touched matmul state.
+ * Short         (default) Helper calls mm_block_init_short — only the matmul-specific
+ *               llk_unpack_AB_matmul_init + llk_math_matmul_init, no hw_configure. This is
+ *               the right mode for every mid-kernel call: it puts the unpacker and math
+ *               back into matmul-block mode after an intervening op (tilize, untilize,
+ *               reduce, eltwise) reconfigured them, without redoing the slow MMIO writes
+ *               in unpack/math/pack hw_configure. Packer state and dataformats are the
+ *               caller's responsibility — pair with pack_reconfig_data_format / reconfig_data_format
+ *               (or use the with_dt variants below) when those changed across the boundary.
+ * Full          Helper calls mm_block_init at the start — the full re-init that re-runs
+ *               unpack/math/pack hw_configure plus pack_init/pack_dest_init in addition
+ *               to the matmul-specific init. Use only as the very first compute call of
+ *               the kernel; mid-kernel use has the same safety constraint as
+ *               compute_kernel_hw_startup (slow MMIO writes that need the execution units
+ *               idle — see compute_kernel_hw_startup.h:26-30).
+ * None          Helper skips init entirely. Use when the caller has already issued an
+ *               explicit mm_block_init / mm_block_init_short (and any needed dataformat
+ *               reconfigs) before the helper call, or when chaining helper invocations
+ *               whose previous call already configured matmul state.
  */
 enum class InitMode : uint8_t { Full, Short, None };
 
@@ -272,10 +275,18 @@ struct NoIn1BaseOffset {
  *                                           corruption on the K-accumulator.
  *                                           Use HiFi2 or HiFi3 instead.
  *
- * Init handling: by default the helper calls mm_block_init() itself (init_mode=Full).
- * The caller's only init responsibility is one compute_kernel_hw_startup() at boot.
- * For back-to-back chains, init_mode=Short uses mm_block_init_short (cheap restore);
- * init_mode=None skips init entirely. See matmul_config::InitMode.
+ * Init handling: by default the helper calls mm_block_init_short() (init_mode=Short),
+ * which restores matmul-mode unpack/math state without redoing hw_configure. Callers
+ * are responsible for one boot-time init at the top of kernel_main — typically
+ * mm_block_init() (matmul-first kernels) or mm_init() (kernels whose first matmul
+ * passes through scalar matmul_tiles). After intervening tilize/untilize/reduce/eltwise
+ * ops, pair the Short default with pack_reconfig_data_format / reconfig_data_format
+ * when dataformats changed; Short by itself is sufficient when only matmul mode needs
+ * to be re-established. init_mode=Full re-runs hw_configure and is reserved for
+ * matmul_block calls that ARE the boot init (no prior mm_block_init at kernel start);
+ * mid-kernel Full has the same safety constraint as compute_kernel_hw_startup.
+ * init_mode=None skips init entirely — use when the caller has already issued the
+ * appropriate init before the helper call. See matmul_config::InitMode.
  *
  * SKIP_COMPUTE: When this macro is defined by the calling TU (microbenchmark path),
  * the inner ckernel::matmul_block() call is omitted. All other pipeline work (waits,
@@ -293,8 +304,11 @@ struct NoIn1BaseOffset {
  *                     See LastBlockTarget docstring for the three valid pack/RELU
  *                     combinations.
  *   layout            OutputLayout: SubblockMajor (default) or RowMajor (see above).
- *   init_mode         matmul_config::InitMode: Full (default), Short, or None.
- *                     Controls whether the helper itself calls mm_block_init / _short.
+ *   init_mode         matmul_config::InitMode: Short (default), Full, or None.
+ *                     Controls whether the helper itself calls mm_block_init_short
+ *                     (Short, default — restores matmul mode after intervening ops),
+ *                     mm_block_init (Full — boot-time hw_configure; use only when this
+ *                     IS the first compute call of the kernel), or no init (None).
  *   in0_policy        InputPolicy: WaitAndPopPerKBlock (default) or
  *                     WaitAndRetainOnLastBlock (caller reuses in0 across the next
  *                     iteration — SDPA reuses Q across K chunks). NoWaitNoPop is
@@ -577,7 +591,7 @@ template <
     bool packer_l1_acc = false,
     LastBlockTarget last_block_target = LastBlockTarget::Out,
     OutputLayout layout = OutputLayout::SubblockMajor,
-    matmul_config::InitMode init_mode = matmul_config::InitMode::Full,
+    matmul_config::InitMode init_mode = matmul_config::InitMode::Short,
     InputPolicy in0_policy = InputPolicy::WaitAndPopPerKBlock,
     InputPolicy in1_policy = InputPolicy::WaitAndPopPerKBlock,
     typename PostComputeFn = NoPostCompute,
