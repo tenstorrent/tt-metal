@@ -73,6 +73,19 @@ def test_format_pr_comment():
     assert "Something is wrong" in comment
 
 
+def test_format_pr_comment_links_rule_path():
+    finding = _make_finding(rule_id="reshape-dim-check")
+    comment = format_pr_comment(
+        finding,
+        rule_path=".github/bug_checker/rules/reshape-dim-check.md",
+    )
+    expected_link = (
+        "[`reshape-dim-check`](https://github.com/tenstorrent/tt-metal/blob/main/"
+        ".github/bug_checker/rules/reshape-dim-check.md)"
+    )
+    assert expected_link in comment
+
+
 def test_format_pr_comment_with_fix():
     finding = _make_finding(suggested_fix="auto x = correct();")
     comment = format_pr_comment(finding)

@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+from urllib.parse import quote
 
 from .llm import Finding
 from .logger import logger
+
+REPO = os.environ.get("GITHUB_REPOSITORY", "tenstorrent/tt-metal")
 
 
 # --- SARIF ---
@@ -146,11 +150,14 @@ def print_findings(findings: list[Finding]) -> None:
 # --- PR Comments ---
 
 
-def format_pr_comment(finding: Finding) -> str:
+def format_pr_comment(finding: Finding, rule_path: str | None = None) -> str:
     """Format a single finding as a PR comment body."""
-    severity_emoji = "!!!" if finding.severity == "blocking" else "?"
+    severity_emoji = (
+        ":red_circle:" if finding.severity == "blocking" else ":black_circle:"
+    )
+    rule_label = _format_rule_label(finding.rule_id, rule_path)
     parts = [
-        f"{severity_emoji} **Bug Checker [{finding.severity.upper()}]** `{finding.rule_id}`\n",
+        f"**Bug Checker [{finding.severity.upper()}]** {severity_emoji} {rule_label}\n",
         finding.message,
     ]
     if finding.suggested_fix:
@@ -158,6 +165,15 @@ def format_pr_comment(finding: Finding) -> str:
             f"\n**Suggested fix:**\n```suggestion\n{finding.suggested_fix}\n```"
         )
     return "\n".join(parts)
+
+
+def _format_rule_label(rule_id: str, rule_path: str | None = None) -> str:
+    """Format a rule id, linking to its markdown definition when available."""
+    if not rule_path:
+        return f"`{rule_id}`"
+
+    quoted_path = quote(rule_path, safe="/")
+    return f"[`{rule_id}`](https://github.com/{REPO}/blob/main/{quoted_path})"
 
 
 def format_summary_comment(

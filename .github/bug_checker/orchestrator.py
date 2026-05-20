@@ -354,6 +354,9 @@ def _post_findings_as_comments(
 ) -> None:
     """Post findings as PR comments (inline where valid, general otherwise) plus a summary."""
     valid_diff_lines = diff_line_numbers(pr_info.diff)
+    rule_paths = {
+        rule.id: f".github/bug_checker/rules/{rule.file}" for rule in load_rules()
+    }
 
     inline_posted = 0
     general_posted = 0
@@ -361,7 +364,7 @@ def _post_findings_as_comments(
 
     for finding in findings or []:
         line_in_diff = finding.line in valid_diff_lines.get(finding.file, set())
-        body = format_pr_comment(finding)
+        body = format_pr_comment(finding, rule_path=rule_paths.get(finding.rule_id))
         try:
             if line_in_diff:
                 post_pr_comment(
