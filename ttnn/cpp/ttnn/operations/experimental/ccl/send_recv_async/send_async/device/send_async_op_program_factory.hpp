@@ -8,6 +8,7 @@
 
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/workload_descriptor.hpp>
+#include "ttnn/distributed/types.hpp"
 
 namespace ttnn::experimental::prim {
 

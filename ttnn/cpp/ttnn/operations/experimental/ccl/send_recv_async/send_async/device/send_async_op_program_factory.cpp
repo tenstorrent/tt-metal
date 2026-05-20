@@ -12,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/program_descriptors.hpp>
