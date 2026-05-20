@@ -157,6 +157,12 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
                 compute_kernel_config=compute_kernel_config,
             )
 
+        # BFLOAT8_B tensors are TILE-only (shared exponent in 16-elem sub-blocks
+        # is undefined under ROW_MAJOR). Round-trip via BFLOAT16 for host inspection.
+        # Pre-PR #42770, fill_implicit_tile_padding leaked BFLOAT16 on rank-4 BFP8
+        # inputs, silently upcasting in0_t and producing BFLOAT16 layer_norm output.
+        if ttz.dtype == ttnn.bfloat8_b:
+            ttz = ttnn.typecast(ttz, ttnn.bfloat16)
         tt_got_back = ttz.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
         pt_in = in0 + in1 if test_id <= 5 else in0
@@ -167,13 +173,24 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
 
         ref_lnorm = ref_fn(pt_in, gamma.flatten(), beta.flatten(), epsf)
 
+        # BFLOAT8_B layer_norm uses a shared exponent per 16-element sub-block, so its
+        # accuracy on small inner dims (e.g. width=42 padded to tile=64, ~1k elements)
+        # is fundamentally lower than BFLOAT16/FLOAT32. Worst observed across the 12
+        # (test_id, shape) cases: ATOL=0.86, relFro=0.186, PCC=0.984. Pre-PR #42770
+        # these never triggered because the fill_implicit_tile_padding dtype leak
+        # silently ran the norm in BFLOAT16.
+        if in_dtype == ttnn.bfloat8_b:
+            pcc_threshold, atol, frobenius_threshold = 0.98, 1.0, 0.22
+        else:
+            pcc_threshold, atol, frobenius_threshold = 0.999, 0.098, 0.016
+
         assert_numeric_metrics(
             ref_lnorm,
             tt_got_back,
-            pcc_threshold=0.999,
+            pcc_threshold=pcc_threshold,
             rtol=3.266,
-            atol=0.098,
-            frobenius_threshold=0.016,
+            atol=atol,
+            frobenius_threshold=frobenius_threshold,
         )
 
 
