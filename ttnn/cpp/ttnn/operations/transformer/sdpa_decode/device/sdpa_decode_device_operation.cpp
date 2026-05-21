@@ -156,7 +156,7 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             tensor_args.page_table_tensor.has_value(),
             "num_kv_heads_override is only supported in paged mode (when page_table is provided)");
-        TT_FATAL(operation_attributes.num_kv_heads_override.value() > 0, "num_kv_heads must be > 0");
+        TT_FATAL(operation_attributes.num_kv_heads_override.value() > 0, "num_kv_heads_override must be > 0");
     }
 
     if (operation_attributes.paged_attention) {
@@ -261,7 +261,6 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
             // when num_kv_heads_override was set, and rejecting legitimate asymmetric
             // calls when it wasn't. Use the override (or default to cache when unset).
             const uint32_t view_num_kv_heads = operation_attributes.num_kv_heads_override.value_or(cache_num_kv_heads);
-            TT_FATAL(view_num_kv_heads > 0, "num_kv_heads must be > 0");
             const uint64_t cache_elems_per_block =
                 static_cast<uint64_t>(cache_num_kv_heads) * cache_block_size * cache_head_dim;
             const uint64_t view_elems_per_block =
