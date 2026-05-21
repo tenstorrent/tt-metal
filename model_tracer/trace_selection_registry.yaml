@@ -353,3 +353,241 @@ registry:
     tt_kmd: "TT-KMD 2.5.0"
     tt_smi: "4.0.0"
     tt_firmware: "19.7.1.0"
+
+  - trace_id: 41
+    status: draft
+    models: [llama-3.2-1b_2]
+    hardware: {board_type: Wormhole, device_series: n150, card_count: 1}
+    trace_uid: 79e5ac55-f221-4067-b761-386ee7205467
+    tt_metal_sha: 4e89c74d30d195c26eefb957c3d99963ab2c0bf9
+    config_count: 565
+    loaded_at: '2026-05-15'
+    notes: ''
+    pytest_args: null
+    tt_kmd: "TT-KMD 2.5.0"
+    tt_smi: "4.0.0"
+    tt_firmware: "19.7.1.0"
+
+  - trace_id: 42
+    status: draft
+    models: [llama-3.1-8b-instruct_2]
+    hardware: {board_type: Wormhole, device_series: n150, card_count: 1}
+    trace_uid: 93c042d8-35db-4d25-b805-aabee14cb911
+    tt_metal_sha: 4e89c74d30d195c26eefb957c3d99963ab2c0bf9
+    config_count: 272
+    loaded_at: '2026-05-15'
+    notes: ''
+    pytest_args: null
+    tt_kmd: "TT-KMD 2.5.0"
+    tt_smi: "4.0.0"
+    tt_firmware: "19.7.1.0"
+
+  - trace_id: 43
+    status: draft
+    models: [phi-3-mini-4k-instruct]
+    hardware: {board_type: Wormhole, device_series: n150, card_count: 1}
+    trace_uid: 38dfe94c-9176-4796-8d91-db7dbfb53228
+    tt_metal_sha: 4e89c74d30d195c26eefb957c3d99963ab2c0bf9
+    config_count: 271
+    loaded_at: '2026-05-15'
+    notes: ''
+    pytest_args: null
+    tt_kmd: "TT-KMD 2.5.0"
+    tt_smi: "4.0.0"
+    tt_firmware: "19.7.1.0"
+
+  - trace_id: 44
+    status: draft
+    models: [mistral-7b-instruct-v0.2]
+    hardware: {board_type: Wormhole, device_series: n150, card_count: 1}
+    trace_uid: 9a3f2f2b-14ae-4cf3-8e21-bb37e91854d1
+    tt_metal_sha: 4e89c74d30d195c26eefb957c3d99963ab2c0bf9
+    config_count: 385
+    loaded_at: '2026-05-15'
+    notes: ''
+    pytest_args: null
+    tt_kmd: "TT-KMD 2.5.0"
+    tt_smi: "4.0.0"
+    tt_firmware: "19.7.1.0"
+
+  - trace_id: 45
+    status: draft
+    models: [gemma4]
+    hardware: {board_type: Wormhole, device_series: n150, card_count: 1}
+    trace_uid: 3578c8cb-cb83-4028-8228-128ff672d7e5
+    tt_metal_sha: 4e89c74d30d195c26eefb957c3d99963ab2c0bf9
+    config_count: 309
+    loaded_at: '2026-05-15'
+    notes: ''
+    pytest_args: '-k 1x1'
+    tt_kmd: "TT-KMD 2.5.0"
+    tt_smi: "4.0.0"
+    tt_firmware: "19.7.1.0"
+
+  - trace_id: 46
+    status: draft
+    models: [gemma4]
+    hardware: {board_type: Wormhole, device_series: n150, card_count: 1}
+    trace_uid: ef9a2f35-1f3c-4d6e-b027-56d6bfc88e44
+    tt_metal_sha: 4e89c74d30d195c26eefb957c3d99963ab2c0bf9
+    config_count: 316
+    loaded_at: '2026-05-15'
+    notes: ''
+    pytest_args: '-k 1x1'
+    tt_kmd: "TT-KMD 2.5.0"
+    tt_smi: "4.0.0"
+    tt_firmware: "19.7.1.0"
+
+  - trace_id: 47
+    status: draft
+    models: [whisper_4]
+    hardware: {board_type: Wormhole, device_series: n150, card_count: 1}
+    trace_uid: d0866c31-d8a4-4613-8b74-6e8a8fc61dd2
+    tt_metal_sha: 4e89c74d30d195c26eefb957c3d99963ab2c0bf9
+    config_count: 109
+    loaded_at: '2026-05-15'
+    notes: ''
+    pytest_args: null
+    tt_kmd: "TT-KMD 2.5.0"
+    tt_smi: "4.0.0"
+    tt_firmware: "19.7.1.0"
+
+  - trace_id: 48
+    status: draft
+    models: [falcon7b_2]
+    hardware: {board_type: Wormhole, device_series: n150, card_count: 1}
+    trace_uid: cc54a7fd-da40-430d-907b-14411c91ecb0
+    tt_metal_sha: 4e89c74d30d195c26eefb957c3d99963ab2c0bf9
+    config_count: 2221
+    loaded_at: '2026-05-15'
+    notes: ''
+    pytest_args: '--input-method=json --input-path=models/demos/falcon7b_common/demo/input_data.json -k default_mode_1024_stochastic'
+    tt_kmd: "TT-KMD 2.5.0"
+    tt_smi: "4.0.0"
+    tt_firmware: "19.7.1.0"
+
+  - trace_id: 49
+    status: draft
+    models: [functional_unet]
+    hardware: {board_type: Wormhole, device_series: n150, card_count: 1}
+    trace_uid: 742377b2-67ad-4baf-a4e0-26ed8be26bfa
+    tt_metal_sha: 4e89c74d30d195c26eefb957c3d99963ab2c0bf9
+    config_count: 42
+    loaded_at: '2026-05-15'
+    notes: ''
+    pytest_args: null
+    tt_kmd: "TT-KMD 2.5.0"
+    tt_smi: "4.0.0"
+    tt_firmware: "19.7.1.0"
+
+  - trace_id: 52
+    status: draft
+    models: [stable_diffusion_xl_base_2]
+    hardware: {board_type: Wormhole, device_series: n150, card_count: 1}
+    trace_uid: 52d76807-9a35-4ebd-b35f-cbdb6ad33834
+    tt_metal_sha: a9cc340902fa1a7b672a7c7cd3bc9dc67cd2ca56
+    config_count: 832
+    loaded_at: '2026-05-19'
+    notes: ''
+    pytest_args: null
+    tt_kmd: "TT-KMD 2.8.0"
+    tt_smi: "5.2.0"
+    tt_firmware: "19.7.1.0"
+
+  - trace_id: 53
+    status: draft
+    models: [qwen25_vl]
+    hardware: {board_type: Wormhole, device_series: n150, card_count: 1}
+    trace_uid: 4af14df9-5ba2-4061-bbea-6fde09d293fa
+    tt_metal_sha: a9cc340902fa1a7b672a7c7cd3bc9dc67cd2ca56
+    config_count: 97
+    loaded_at: '2026-05-19'
+    notes: ''
+    pytest_args: '-k batch-1'
+    tt_kmd: "TT-KMD 2.8.0"
+    tt_smi: "5.2.0"
+    tt_firmware: "19.7.1.0"
+
+  - trace_id: 54
+    status: draft
+    models: [speecht5_tts]
+    hardware: {board_type: Wormhole, device_series: n150, card_count: 1}
+    trace_uid: 80cde41b-3749-4248-a734-31f39dafeed9
+    tt_metal_sha: a9cc340902fa1a7b672a7c7cd3bc9dc67cd2ca56
+    config_count: 146
+    loaded_at: '2026-05-19'
+    notes: ''
+    pytest_args: null
+    tt_kmd: "TT-KMD 2.8.0"
+    tt_smi: "5.2.0"
+    tt_firmware: "19.7.1.0"
+
+  - trace_id: 55
+    status: draft
+    models: [mobilenetv2]
+    hardware: {board_type: Wormhole, device_series: n150, card_count: 1}
+    trace_uid: 4bd4d983-9509-48e0-9c18-9af1f3356c14
+    tt_metal_sha: a9cc340902fa1a7b672a7c7cd3bc9dc67cd2ca56
+    config_count: 82
+    loaded_at: '2026-05-19'
+    notes: ''
+    pytest_args: null
+    tt_kmd: "TT-KMD 2.8.0"
+    tt_smi: "5.2.0"
+    tt_firmware: "19.7.1.0"
+
+  - trace_id: 56
+    status: draft
+    models: [resnet50]
+    hardware: {board_type: Wormhole, device_series: n150, card_count: 1}
+    trace_uid: 667aa8a3-08ad-42f7-9470-c14bc6bba948
+    tt_metal_sha: a9cc340902fa1a7b672a7c7cd3bc9dc67cd2ca56
+    config_count: 66
+    loaded_at: '2026-05-19'
+    notes: ''
+    pytest_args: null
+    tt_kmd: "TT-KMD 2.8.0"
+    tt_smi: "5.2.0"
+    tt_firmware: "19.7.1.0"
+
+  - trace_id: 57
+    status: draft
+    models: [bge_large_en]
+    hardware: {board_type: Wormhole, device_series: n150, card_count: 1}
+    trace_uid: 3de91bb1-59e6-45e7-a1c2-8b19d712db4e
+    tt_metal_sha: 3b2e6f3226fda3cc3da081e8d7fa24100882ada1
+    config_count: 35
+    loaded_at: '2026-05-20'
+    notes: ''
+    pytest_args: null
+    tt_kmd: "TT-KMD 2.8.0"
+    tt_smi: "5.2.0"
+    tt_firmware: "19.7.1.0"
+
+  - trace_id: 58
+    status: draft
+    models: [segmentation_2]
+    hardware: {board_type: Wormhole, device_series: n150, card_count: 1}
+    trace_uid: 6ce01647-2493-49f4-b96c-78d3f2d5f7d2
+    tt_metal_sha: 3b2e6f3226fda3cc3da081e8d7fa24100882ada1
+    config_count: 100
+    loaded_at: '2026-05-20'
+    notes: ''
+    pytest_args: null
+    tt_kmd: "TT-KMD 2.8.0"
+    tt_smi: "5.2.0"
+    tt_firmware: "19.7.1.0"
+
+  - trace_id: 59
+    status: draft
+    models: [vit_3]
+    hardware: {board_type: Wormhole, device_series: n150, card_count: 1}
+    trace_uid: 9e568805-fd7f-46e9-a214-3d045487ff60
+    tt_metal_sha: 3b2e6f3226fda3cc3da081e8d7fa24100882ada1
+    config_count: 22
+    loaded_at: '2026-05-20'
+    notes: ''
+    pytest_args: null
+    tt_kmd: "TT-KMD 2.8.0"
+    tt_smi: "5.2.0"
+    tt_firmware: "19.7.1.0"
