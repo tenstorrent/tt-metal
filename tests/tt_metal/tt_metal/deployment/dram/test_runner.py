@@ -68,7 +68,7 @@ def parse_teststart(l: str) -> Optional[Event]:
         return None
 
     testname = m.group(1)
-    print(f"\tTESTSTART '{testname}'")
+    # print(f"\tTESTSTART '{testname}'")
 
     return Event(EventType.TESTSTART, {"name": testname})
 
@@ -80,7 +80,7 @@ def parse_testend(l: str) -> Optional[Event]:
 
     status = m.group(1)
     testname = m.group(2)
-    print(f"\tTESTEND '{testname}' '{status}'")
+    # print(f"\tTESTEND '{testname}' '{status}'")
 
     return Event(EventType.TESTEND, {"name": testname, "status": status})
 
