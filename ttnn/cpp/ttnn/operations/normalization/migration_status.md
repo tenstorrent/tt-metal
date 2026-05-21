@@ -10,9 +10,9 @@ kernels under `ttnn/cpp/ttnn/operations/normalization/`.
 
 | Status | Count |
 |---|---|
-| Migrated | 1 |
+| Migrated | 3 |
 | Easy (single FPU pattern matches batch_norm) | 0 |
-| Medium (chunked-output or held-bcast operands) | ~12 |
+| Medium (chunked-output or held-bcast operands) | ~10 |
 | Hard (mixed SFPU DEST-DEST + manual `last_srca_cb` threading) | ~5 |
 | Out-of-scope under current taxonomy (welford / transpose / raw reduce_tile) | ~8 |
 | Structural anomaly (semantic ambiguity) | 1 |
@@ -25,6 +25,19 @@ kernels under `ttnn/cpp/ttnn/operations/normalization/`.
 | Kernel | Sites | Commit | Notes |
 |---|---|---|---|
 | `batch_norm/.../batch_norm_kernel.cpp` | 4 | `17056fe08cb` | Template on `<WeightHas, BiasHas>`. Stage 1 = 1-tile BinaryFpu<Add>+Rsqrt+PackTile. Stages 2-4 fused via DestReuseBinary; cb_tmp_1 staging eliminated. 20/20 PASS on `test_batch_norm`. |
+| `layernorm_distributed/.../layernorm_pre_allgather.cpp` | 1 | `189ef03f223` | Squaring chain over `EltwiseShape::of(Wt/blk, blk)`. cb_inp = HeldCumulative on Block (same-CB BinaryFpu<Mul>); cb_x2 = OutChunked on Block. Verified bit-exact (max diff 0.000000) against original via single-device probe; full pytest needs 4 PCIe devices. |
+| `rmsnorm_distributed/.../rmsnorm_pre_allgather.cpp` | 1 | `c41aca20b88` | Same squaring chain as `layernorm_pre_allgather`. Only difference: explicit `cb_pop_front(cb_inp, Wt)` post-reduce vs. layernorm's second reduce. Verified bit-exact against original; full pytest needs 4 PCIe devices. |
+
+### Bit-exact-probe verification pattern
+
+For kernels whose pytest needs hardware we don't have locally (multi-chip /
+multi-PCIe), use this two-step probe protocol:
+
+1. Before migration: probe op end-to-end on a single device, save the kernel's output via `torch.save`.
+2. After migration: re-probe with the same seed/shape, load saved output, compare with `(out - orig).abs().max()`.
+
+A bit-exact zero-diff result is strong evidence the chain's CB/DEST/dtype-reconfig emission matches the pre-migration LLK sequence. Used to validate the two `pre_allgather` migrations above without 4-PCIe hardware.
+
 
 ### Medium difficulty (next migration targets)
 
