@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ema_device_operation.hpp"
+#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 
 #include "ttnn/operations/math.hpp"
 
@@ -50,6 +51,8 @@ tt::tt_metal::ProgramDescriptor EmaDeviceOperation::EmaProgramFactory::create_de
     // We now have the number of cores to use, compute per core parameters
     auto all_cores = CoreRangeSet(grid_to_cores(num_cores, grid_size.x, grid_size.y, false));
 
+    validate_reduce_op_program_grid(
+        "EMA", all_cores, device->compute_with_storage_grid_size(), nullptr, false, {{&output, "output"}});
     log_debug(
         tt::LogOp,
         "EmaProgramFactory: grid_size=({}, {}), num_cores={}, total_batch_channel_tiles={}",

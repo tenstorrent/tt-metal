@@ -17,6 +17,7 @@ file(
     GLOB_RECURSE kernels
     deepseek_grouped_gate/device/kernels/*
     deepseek_moe_fast_reduce_nc/device/kernels/*
+    deepseek_moe_fast_reduce_nc_fused/device/kernels/*
     fast_reduce_nc/device/kernels/*
     integral_image/device/kernels/*
 )
@@ -42,6 +43,7 @@ target_link_libraries(
     PRIVATE
         TT::Metalium
         TTNN::Core
+        TTNN::Ops::Reduction
 )
 
 install(

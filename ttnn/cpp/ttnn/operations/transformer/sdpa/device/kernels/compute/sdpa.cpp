@@ -49,6 +49,7 @@ void kernel_main() {
     constexpr uint32_t valid_Skt = get_compile_time_arg_val(31);
     constexpr bool uniform_dataformat = get_compile_time_arg_val(32) == 1;
     constexpr uint32_t k_partial_col = get_compile_time_arg_val(33);
+    constexpr bool use_zigzag_balancing = get_compile_time_arg_val(34) == 1;
 
     const uint32_t core_id = get_arg_val<uint32_t>(0);
     const uint32_t local_batch_start = get_arg_val<uint32_t>(1);
@@ -178,7 +179,8 @@ void kernel_main() {
                         local_q_start,
                         phase_chunked_offset,
                         lw_mask,
-                        q_num_chunks);
+                        q_num_chunks,
+                        use_zigzag_balancing);
                 }
             }
         }
@@ -256,7 +258,8 @@ void kernel_main() {
                         cb_sum_B,
                         cb_exp_max_diff,
                         cb_out,
-                        lw_mask);
+                        lw_mask,
+                        use_zigzag_balancing);
                 }
             }
         }

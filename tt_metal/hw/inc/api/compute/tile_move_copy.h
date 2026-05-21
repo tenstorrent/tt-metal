@@ -72,7 +72,7 @@ ALWI void copy_tile_to_dst_init_short_with_dt(uint32_t old_cbid, uint32_t new_cb
     UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(old_cbid, new_cbid)));
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(old_cbid, new_cbid)));
     copy_tile_to_dst_init_short(new_cbid, transpose);
-#endif  // TODO: AM; add Quasar implementation
+#endif
 }
 
 // clang-format off

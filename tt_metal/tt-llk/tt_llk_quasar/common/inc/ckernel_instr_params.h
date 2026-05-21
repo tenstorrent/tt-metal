@@ -397,6 +397,10 @@ struct p_sfpu
         constexpr static std::uint32_t Stochastic = 0x1;
         constexpr static std::uint32_t RoundZero  = 0x2;
     };
+
+    // TO DO: Clean up if needed #44713
+    // Needed for exp_tile() to be architecture agnostic
+    constexpr static std::uint32_t kCONST_1_FP16B = 0x3F80;
 };
 
 struct p_cleardvalid

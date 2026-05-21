@@ -234,6 +234,9 @@ class ModelPipeline:
             user_id=0,
             position_id=self.position_id,
             token_type=TokenType.BASE,
+            temperature=self.temperature,
+            top_k=self.top_k,
+            probability_mass_threshold=self.top_p,
         )
         result = self.model.read_result()
         self.position_id += 1

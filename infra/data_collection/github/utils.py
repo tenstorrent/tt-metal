@@ -103,6 +103,8 @@ def get_job_failure_signature_(github_job, failure_description, workflow_outputs
         "No space left on device": str(InfraErrorV1.DISK_SPACE_FAILURE),
         "API rate limit exceeded": str(InfraErrorV1.API_RATE_LIMIT_FAILURE),
         "Tenstorrent cards seem to be in use": str(InfraErrorV1.RUNNER_CARD_IN_USE_FAILURE),
+        "Error response from daemon": str(InfraErrorV1.DOCKER_REGISTRY_FAILURE),
+        "Failed to CreateArtifact": str(InfraErrorV1.ARTIFACT_UPLOAD_FAILURE),
         "device timeout, potential hang detected, the device is unrecoverable": str(InfraErrorV1.TT_TRIAGE_JOB_HANG),
     }
 
