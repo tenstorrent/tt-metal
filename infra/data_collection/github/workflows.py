@@ -53,7 +53,6 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
     def clean_line(line):
         """Strip ISO timestamp prefix and GitHub annotation prefix, return clean content."""
         s = line.strip()
-        # Strip ISO timestamp
         m = ts_pattern.match(s)
         if m:
             s = s[m.end() :]
@@ -109,7 +108,7 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
     reset_done = False
 
     for line in block_lines:
-        lower = line.lower()
+        lower = line.strip().lower()
         ts = parse_ts(line)
         # Only update end timestamp while reset is still in progress
         if ts and not reset_done:
