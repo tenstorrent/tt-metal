@@ -24,7 +24,7 @@ namespace compute_kernel_lib {
 
 namespace detail {
 
-// SFPU MAX fold (also used by reduce_sfpu_{h,w}_neg for -MAX(-x) MIN).
+// SFPU MAX fold (also used by reduce_{h,w}_neg for -MAX(-x) MIN).
 template <DataFormat format>
 ALWI void sfpu_reduce_max_fold_init() {
     static_assert(

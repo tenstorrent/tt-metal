@@ -289,7 +289,7 @@ struct NoOp {
  * @tparam reduce_format Routes Int32/Float32 MAX to the SFPU path (Float32 for precision; Int32 has
  *                       no FPU support). Pass via REDUCE_FORMAT define from host (same as REDUCE_OP
  *                       / REDUCE_DIM). Other formats use FPU/GMPOOL. Only REDUCE_ROW/REDUCE_COL MAX
- *                       on SFPU; MIN dispatched separately via reduce_sfpu_{h,w}_neg.cpp.
+ *                       on SFPU; MIN dispatched via reduce_{h,w}_neg.cpp (SFPU vs FPU branch).
  * @tparam input_policy Input handling policy (default: WaitAndPopPerTile - streaming mode)
  * @tparam reconfig_mode Data format reconfiguration mode (default: INPUT_AND_OUTPUT)
  *

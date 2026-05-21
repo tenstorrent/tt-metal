@@ -5,7 +5,8 @@
 // Thin wrapper around compute_kernel_lib::reduce<>. The host always defines REDUCE_FORMAT
 // (the input data format); compute_kernel_lib::reduce<> dispatches to SFPU when
 // REDUCE_FORMAT is Int32/Float32 and REDUCE_OP is MAX, otherwise FPU/GMPOOL.
-// MIN on Int32/Float32 is dispatched separately via reduce_sfpu_{h,w}_neg.
+// MIN keeps its dedicated -MAX(-x) kernel (reduce_{h,w}_neg.cpp), which is itself
+// REDUCE_FORMAT-aware and selects SFPU vs FPU internally.
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
