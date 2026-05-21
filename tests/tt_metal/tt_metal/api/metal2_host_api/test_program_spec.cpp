@@ -29,6 +29,7 @@
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
+#include <algorithm>
 #include <filesystem>
 #include <optional>
 #include <type_traits>
@@ -39,6 +40,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_metal.hpp>  // for CompileProgram (JIT trigger)
+#include <hostdevcommon/tensor_accessor/arg_config.hpp>
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 #include <tt-metalium/distributed.hpp>
@@ -277,23 +279,37 @@ TEST_F(ProgramSpecTestQuasar, InvalidLocalAccessorNameFails) {
     }
 }
 
-TEST_F(ProgramSpecTestQuasar, KernelReferencesUnknownDFBFails) {
+// Metal 2.0 Optional Resource Bindings: a kernel may bind a DFB that does not exist on the
+// ProgramSpec. The framework emits the kernel-side dfb::<accessor> token with the sentinel id
+// (0xFFFF) so the kernel can declare `if constexpr (cta) { DataflowBuffer x(dfb::accessor); }`
+// without paying L1 cost for the unused branch. The wrapper ctor's ASSERT catches misuse at
+// device runtime in debug builds.
+TEST_F(ProgramSpecTestQuasar, KernelReferencesUnknownDFBEmitsSentinel) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
     spec.program_id = "test_program";
 
     auto kernel = MakeMinimalDMKernel("kernel");
-    // Bind to a DFB that doesn't exist
-    BindDFBToKernel(kernel, "nonexistent_dfb", "accessor", KernelSpec::DFBEndpointType::PRODUCER);
+    // Bind to a DFB that doesn't exist on the program (optional binding pattern).
+    BindDFBToKernel(kernel, "nonexistent_dfb", "optional_accessor", KernelSpec::DFBEndpointType::PRODUCER);
 
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("Kernel 'kernel' references unknown DFB 'nonexistent_dfb'")));
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    // Verify the kernel-side accessor handle for the unresolved binding carries the sentinel id.
+    constexpr uint16_t kDFBSentinelId = 0xFFFFu;
+    bool found = false;
+    program.impl().get_kernel_by_spec_name("kernel")->process_dataflow_buffer_local_accessor_handles(
+        [&](const std::string& accessor_name, uint16_t logical_dfb_id) {
+            if (accessor_name == "optional_accessor") {
+                EXPECT_EQ(logical_dfb_id, kDFBSentinelId);
+                found = true;
+            }
+        });
+    EXPECT_TRUE(found);
 }
 
 TEST_F(ProgramSpecTestQuasar, DFBWithNoBindingsFails) {
@@ -905,18 +921,30 @@ TEST_F(ProgramSpecTestQuasar, SemaphoreBoundToComputeKernelFailsOnQuasar) {
             ::testing::HasSubstr("Semaphore bindings are not supported for compute kernels.")));
 }
 
-TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingUnknownSemaphoreFails) {
+// Metal 2.0 Optional Resource Bindings: a kernel may bind a semaphore that does not exist on
+// the ProgramSpec. The framework emits the kernel-side sem::<accessor> token with the sentinel
+// id (0xFFFF); the ckernel::Semaphore ctor ASSERTs on misuse at device runtime.
+TEST_F(ProgramSpecTestQuasar, KernelReferencesUnknownSemaphoreEmitsSentinel) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     KernelSpec::SemaphoreBinding binding;
     binding.semaphore_spec_name = "missing_sem";
-    binding.accessor_name = "my_sem";
+    binding.accessor_name = "optional_sem";
     spec.kernels[0].semaphore_bindings = {binding};
 
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("references unknown semaphore 'missing_sem'")));
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    constexpr uint16_t kSemaphoreSentinelId = 0xFFFFu;
+    bool found = false;
+    program.impl()
+        .get_kernel_by_spec_name(spec.kernels[0].unique_id)
+        ->process_semaphore_local_accessor_handles([&](const std::string& accessor_name, uint16_t semaphore_id) {
+            if (accessor_name == "optional_sem") {
+                EXPECT_EQ(semaphore_id, kSemaphoreSentinelId);
+                found = true;
+            }
+        });
+    EXPECT_TRUE(found);
 }
 
 TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingInvalidAccessorFails) {
@@ -2792,16 +2820,37 @@ TEST_F(ProgramSpecTestGen1, DuplicateTensorParameterNameFails) {
             ::testing::HasSubstr("Duplicate TensorParameter name 'input_tensor'")));
 }
 
-TEST_F(ProgramSpecTestGen1, KernelReferencesUnknownTensorParameterFails) {
+// Metal 2.0 Optional Resource Bindings: a kernel may bind a TensorParameter that does not
+// exist on the ProgramSpec. The framework emits a two-word zeroed CTA payload (args_config
+// without the Bound bit, aligned_page_size = 0) and marks the TensorBindingHandle as unbound,
+// so no runtime base-address attachment occurs.
+TEST_F(ProgramSpecTestGen1, KernelReferencesUnknownTensorParameterEmitsUnboundPayload) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
 
-    // Reference a TensorParameter that doesn't exist in the program.
-    BindTensorParameterToKernel(spec.kernels[0], "nonexistent_tensor", "input_ta");
+    // Reference a TensorParameter that doesn't exist in the program (optional binding pattern).
+    BindTensorParameterToKernel(spec.kernels[0], "nonexistent_tensor", "optional_ta");
 
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("references unknown TensorParameter 'nonexistent_tensor'")));
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    auto kernel = program.impl().get_kernel_by_spec_name(spec.kernels[0].unique_id);
+    const auto& binding_handles = kernel->tensor_binding_handles();
+    auto it = std::find_if(binding_handles.begin(), binding_handles.end(), [](const TensorBindingHandle& h) {
+        return h.accessor_name == "optional_ta";
+    });
+    ASSERT_NE(it, binding_handles.end());
+    EXPECT_FALSE(it->bound);
+
+    // Verify the kernel's CTA payload at the binding's offset has the Bound bit unset.
+    // (Two-word unbound payload: args_config = 0, aligned_page_size = 0.)
+    bool checked_cta = false;
+    kernel->process_compile_time_args([&](const std::vector<uint32_t>& values) {
+        ASSERT_LT(it->cta_offset, values.size());
+        const uint8_t args_config_raw = static_cast<uint8_t>(values[it->cta_offset] & 0xFFu);
+        constexpr uint8_t kBoundBit = static_cast<uint8_t>(tensor_accessor::ArgConfig::Bound);
+        EXPECT_EQ(args_config_raw & kBoundBit, 0u) << "Bound bit must be unset for unbound binding";
+        checked_cta = true;
+    });
+    EXPECT_TRUE(checked_cta);
 }
 
 TEST_F(ProgramSpecTestGen1, UnboundTensorParameterFails) {
@@ -2846,6 +2895,45 @@ TEST_F(ProgramSpecTestGen1, InvalidTensorAccessorNameFails) {
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("tensor accessor_name 'has-dash' must be a valid C++ identifier")));
+}
+
+// Metal 2.0 Optional Resource Bindings: a kernel with both a bound and an unbound TensorBinding
+// must keep CTA offsets consistent — the unbound payload (2 zero words) matches non-sharded
+// NumArgsCT, so subsequent bindings' offsets line up. Verifies the Bound bit lands on the
+// resolved binding's payload and is unset on the unresolved one.
+TEST_F(ProgramSpecTestGen1, KernelMixedBoundAndUnboundTensorParametersSucceeds) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    spec.tensor_parameters = {MakeMinimalTensorParameter("real_tensor")};
+    BindTensorParameterToKernel(spec.kernels[0], "real_tensor", "bound_ta");
+    BindTensorParameterToKernel(spec.kernels[0], "missing_tensor", "unbound_ta");
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    auto kernel = program.impl().get_kernel_by_spec_name(spec.kernels[0].unique_id);
+    const auto& binding_handles = kernel->tensor_binding_handles();
+
+    auto bound_it = std::find_if(binding_handles.begin(), binding_handles.end(), [](const TensorBindingHandle& h) {
+        return h.accessor_name == "bound_ta";
+    });
+    auto unbound_it = std::find_if(binding_handles.begin(), binding_handles.end(), [](const TensorBindingHandle& h) {
+        return h.accessor_name == "unbound_ta";
+    });
+    ASSERT_NE(bound_it, binding_handles.end());
+    ASSERT_NE(unbound_it, binding_handles.end());
+    EXPECT_TRUE(bound_it->bound);
+    EXPECT_FALSE(unbound_it->bound);
+
+    constexpr uint8_t kBoundBit = static_cast<uint8_t>(tensor_accessor::ArgConfig::Bound);
+    kernel->process_compile_time_args([&](const std::vector<uint32_t>& values) {
+        ASSERT_LT(bound_it->cta_offset, values.size());
+        ASSERT_LT(unbound_it->cta_offset, values.size());
+        EXPECT_NE(values[bound_it->cta_offset] & kBoundBit, 0u);
+        EXPECT_EQ(values[unbound_it->cta_offset] & kBoundBit, 0u);
+    });
+
+    // CTA offsets must be distinct and the unbound binding must occupy exactly 2 words
+    // (args_config + aligned_page_size) so subsequent bindings would be at +2.
+    EXPECT_NE(bound_it->cta_offset, unbound_it->cta_offset);
 }
 
 TEST_F(ProgramSpecTestGen1, AccessorNamesAcrossCategoriesAreSeparateNamespaces) {
