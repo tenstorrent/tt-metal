@@ -586,18 +586,20 @@ class TTNNGeneratorNSF:
         ttnn.deallocate(cond_tt)
         x_cf = x_cf + cond_cl.permute(0, 2, 1)
 
+        # --- Cross-stage device residency (Phase 3A.2b) ---
+        # Upload the conv_pre+cond activation ONCE; a single rolling device
+        # tensor `x_dev` then flows through all upsample stages with no
+        # stage-boundary download/upload. `x_dev` is rebound each stage and the
+        # prior tensor is always freed first (leaky_relu deallocs the incoming
+        # tensor; the ResBlock group consumes the noise-added tensor), so no
+        # device tensor leaks across stages or across chunks.
+        x_nhwc = x_cf.permute(0, 2, 1).unsqueeze(1)
+        x_dev = ttnn.from_torch(
+            x_nhwc.float(), dtype=DEFAULT_DTYPE, layout=ttnn.TILE_LAYOUT,
+            device=self._device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
         for i in range(NUM_UPSAMPLES):
             ct = self._ups[i]
-
-            # --- Within-stage device residency (Phase 3A.2a) ---
-            # Upload the stage activation ONCE; leaky_relu, conv_transpose,
-            # noise-add and the ResBlock group all run device-resident. The
-            # stage boundary (the download below) is intentionally retained —
-            # cross-stage residency is 3A.2b.
-            x_nhwc = x_cf.permute(0, 2, 1).unsqueeze(1)
-            x_dev = ttnn.from_torch(
-                x_nhwc.float(), dtype=DEFAULT_DTYPE, layout=ttnn.TILE_LAYOUT,
-                device=self._device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
             # pre-upsample leaky_relu (device, TILE); conv_transpose wants ROW_MAJOR
             lr = ttnn.leaky_relu(x_dev, negative_slope=LRELU_SLOPE)
@@ -629,11 +631,13 @@ class TTNNGeneratorNSF:
             ttnn.deallocate(ct_out)
             ttnn.deallocate(src_dev)
 
-            # ResBlock group on the resident tensor; download to host CF at the
-            # stage boundary (retained for 3A.2a).
-            avg = self._resblock_group_resident(x_dev, i, seq_len)
-            x_cf = ttnn.to_torch(avg).float().squeeze(1).permute(0, 2, 1)
-            ttnn.deallocate(avg)
+            # ResBlock group on the resident tensor; its output IS the next
+            # stage's input — no stage-boundary download/upload (Phase 3A.2b).
+            x_dev = self._resblock_group_resident(x_dev, i, seq_len)
+
+        # Single download after the final upsample stage for the host conv_post.
+        x_cf = ttnn.to_torch(x_dev).float().squeeze(1).permute(0, 2, 1)
+        ttnn.deallocate(x_dev)
 
         # conv_post + tanh (persistent host weight)
         x_cf = F.leaky_relu(x_cf)
