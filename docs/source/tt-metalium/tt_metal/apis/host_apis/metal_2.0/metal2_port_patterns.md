@@ -69,15 +69,9 @@ The two-distinct-names form (`acc_w` for PRODUCER, `acc_r` for CONSUMER, yieldin
 
 **Recognition signal**: A DFB is used by a kernel only on some code paths — e.g., a `cb_scaled` buffer used only when `do_scale = true`, or a `cb_fusion` used only when `FUSE_PRE_ADD`. The configuration is known at host time.
 
-**Why this is hard.** Metal 2.0's `dfb::<name>` namespace is generated from the actual host bindings: if the host omits SCALED from `dfb_bindings`, `dfb::cb_scaled` is not declared in `kernel_bindings_generated.h`. C++ `if constexpr` in a non-template function (which `kernel_main()` is) still performs name lookup on the discarded branch — so `if constexpr (false) { ... dfb::cb_scaled ... }` fails to compile at parse time even though the branch is dead at codegen. Two interim patterns work around this; choose by L1 budget and kernel structure. Both are bridges until NTTP-ified CTAs let the entire kernel body be template-instantiated, at which point `if constexpr` discarded branches truly *do* skip non-dependent name lookup.
+**Why this is hard.** Metal 2.0's `dfb::<name>` namespace is generated from the actual host bindings: if the host omits SCALED from `dfb_bindings`, `dfb::cb_scaled` is not declared in `kernel_bindings_generated.h`. C++ `if constexpr` in a non-template function (which `kernel_main()` is) still performs name lookup on the discarded branch — so `if constexpr (false) { ... dfb::cb_scaled ... }` fails to compile at parse time even though the branch is dead at codegen. The same constraint hits kernels that reference the conditional DFB name from file-scope contexts like ternaries: both operands resolve at parse time regardless of which branch the constant condition selects. The fix is to gate the kernel-side references at the **preprocessor** level, before C++ parsing sees them.
 
-### Option A — Conditional host binding + `#ifdef` in kernel
-
-**Use when:**
-- L1 budget is tight, and paying ~1 tile/core per conditionally-unused DFB (Option B) is unaffordable. Layernorm and similar are this case.
-- The kernel references the conditionally-bound DFB name from a **file-scope context** — ternary expressions like `(do_gamma | do_beta) ? cb_fusion : cb_out`, struct-scope `constexpr` expressions, or other non-`if constexpr` name-lookup contexts. Both ternary operands resolve at parse time regardless of which branch the constant condition selects, so the conditionally-bound name must either exist (Option B) or be `#ifdef`-gated away (Option A).
-
-**Mechanism.** Conditionally bind the DFB on the host. Emit a matching preprocessor define when the binding is present. `#ifdef`-gate the kernel-side constexpr alias of the DFB name, and `#ifdef`-gate all file-scope expressions that reference it.
+**Decision.** Conditionally bind the DFB on the host. Emit a matching preprocessor define via `KernelSpec::defines` when the binding is present. On the kernel side, `#ifdef`-gate the constexpr alias of the DFB name and all expressions that reference it.
 
 ```cpp
 // Host:
@@ -97,7 +91,7 @@ KernelSpec compute{
 constexpr uint32_t cb_fusion = dfb::cb_fusion;
 #endif
 
-// File-scope expression using the conditional name:
+// File-scope expression referencing the conditional name:
 #ifdef FUSE_PRE_ADD
 constexpr uint32_t cb_x = (do_gamma | do_beta) ? cb_fusion : cb_out;
 #else
@@ -105,40 +99,11 @@ constexpr uint32_t cb_x = cb_out;
 #endif
 ```
 
-### Option B — Unconditional host binding + `if constexpr` in kernel
+The `#ifdef` runs at the preprocessor stage, before the C++ compiler sees the code — so `dfb::cb_fusion` never enters name lookup in the unfused build, and the conditionally-bound DFB is honored end-to-end. This avoids the L1 cost of binding the DFB unconditionally (which can be significant for L1-tight ops — layernorm's `cb_fusion` is ~16 tiles, for example) and works regardless of whether the kernel references the DFB name from file-scope expressions or only inside function bodies.
 
-**Use when:**
-- L1 budget can absorb the unused DFB tile (~1 tile/core per conditionally-unused DFB).
-- The kernel's references to the DFB are confined to `if constexpr` blocks — no file-scope ternaries, struct-scope constexpr expressions, or other contexts that force name lookup of both branches.
+**Don't bind unconditionally** as an alternative. Beyond the L1 cost, it fails to compile when the kernel needs to reference the conditionally-used name from a file-scope ternary or similar parse-time-resolves-both-branches context.
 
-**Mechanism.** Bind the DFB unconditionally on the host so `dfb::cb_scaled` always exists. Declare the `DataflowBuffer` wrapper at top level in the kernel. Gate uses with `if constexpr`.
-
-```cpp
-// Host:
-KernelSpec compute{
-    .compile_time_arg_bindings = {{"do_scale", do_scale ? 1u : 0u}, /* ... */},
-    .dfb_bindings = {INPUT, OUTPUT, SCALED},  // SCALED bound unconditionally
-};
-
-// Kernel:
-constexpr auto do_scale = get_arg(args::do_scale);
-DataflowBuffer cb_scaled(dfb::cb_scaled);
-if constexpr (do_scale) {
-    cb_scaled.wait_front(...);
-    // ... all uses of cb_scaled
-}
-```
-
-### Choosing between A and B
-
-| Constraint | Option A (`#ifdef`) | Option B (unconditional + `if constexpr`) |
-|---|---|---|
-| L1 cost | None | ~1 tile/core per conditionally-unused DFB |
-| Kernel preprocessor scaffolding | Required | None |
-| File-scope ternary / struct-scope constexpr referencing the DFB name | Required | Won't compile |
-| Composability across multiple conditionals | Awkward (`#if defined(A) && defined(B)`) | Clean (`if constexpr (a && b)`) |
-
-Prefer Option B when its preconditions hold — cleaner kernel code, easier to compose. Fall back to Option A when L1 budget or file-scope name lookup forces it. Both options are interim; NTTP-ified CTAs will eventually let the kernel be templated end-to-end, at which point `if constexpr` discarded branches skip non-dependent name lookup and Option B subsumes Option A without the L1 cost.
+**Future direction.** Metal 2.0 work to NTTP-ify all CTAs would let the entire kernel body be template-instantiated on the CTA values, at which point `if constexpr` discarded branches truly skip non-dependent name lookup and the `#ifdef` scaffolding could be retired in favor of `if constexpr (do_scale) { use dfb::name; }`. That work is not currently planned; for Metal 2.0 today, `#ifdef`-gated conditional bindings are the recommended pattern.
 
 ---
 
