@@ -46,6 +46,7 @@ Forward pass:
 from __future__ import annotations
 
 import math
+import os
 
 import torch
 
@@ -54,6 +55,67 @@ from models.tt_dit.layers.linear import ColParallelLinear
 from models.tt_dit.layers.module import Module
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_transformers.tt.common import get_rot_transformation_mat
+
+
+def _cpu_apply_rope_fp32_per_chip(
+    q_tt: ttnn.Tensor,
+    cos_hf_per_chip: torch.Tensor,
+    sin_hf_per_chip: torch.Tensor,
+    mesh_device: ttnn.MeshDevice,
+    head_dim: int,
+    padded_head_dim: int,
+    num_local_heads: int,
+    cluster_shape,  # tuple (rows, cols)
+) -> ttnn.Tensor:
+    """CPU-fallback RoPE: gather all heads to CPU, apply HF rotate_half in
+    fp32 on unpadded head_dim, re-pad to padded_head_dim, scatter back.
+
+    Different chips hold different heads (TP=8 along cluster_axis=0). After
+    gather we have all `num_heads` heads on CPU; after rotation we scatter
+    each chip's 2-head slice back via ShardTensor2dMesh(dims=(1, None)).
+    """
+    import ttnn  # local
+
+    # Gather all 32 chips' data: per-chip [1, num_local_heads, S, padded] →
+    # ConcatMeshToTensor(dim=0) gives [32, num_local_heads, S, padded] with
+    # row-major chip ordering (chip 0..3 = row 0 cols 0..3; chip 4..7 = row 1...).
+    rows, cols = cluster_shape[0], cluster_shape[1]
+    t_all = ttnn.to_torch(q_tt, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+    # shape: [num_devices=32, num_local_heads=2, S, padded]
+    # Slice to ONE col (cols replicate the same heads, so col 0 has all 8 rows'
+    # heads — reshape to [8, num_local_heads, S, padded]).
+    # In row-major: indices 0, cols, 2*cols, ... = col 0 of each row.
+    # For cluster_shape=(8, 4): col-0 chips are 0, 4, 8, 12, 16, 20, 24, 28.
+    row_chips = t_all[::cols]  # [rows=8, num_local_heads=2, S, padded]
+    # Flatten heads: chip 0 has heads 0..1, chip 1 has heads 2..3, etc.
+    all_heads = row_chips.reshape(rows * num_local_heads, *row_chips.shape[2:])
+    # shape: [num_heads=16, S, padded]
+    all_real = all_heads[..., :head_dim].to(torch.float32)  # [num_heads, S, head_dim]
+
+    # HF rotate_half on unpadded head_dim
+    cos = cos_hf_per_chip.to(torch.float32).unsqueeze(0)  # [1, S, head_dim]
+    sin = sin_hf_per_chip.to(torch.float32).unsqueeze(0)
+    half = head_dim // 2
+    x1 = all_real[..., :half]
+    x2 = all_real[..., half:]
+    rotated_half = torch.cat([-x2, x1], dim=-1)
+    q_rot_real = all_real * cos + rotated_half * sin  # [num_heads, S, head_dim]
+    # Re-pad to padded_head_dim
+    q_rot_padded = torch.nn.functional.pad(q_rot_real, (0, padded_head_dim - head_dim))
+    # Reshape back to per-frame layout for scatter:
+    # We need to scatter heads across cluster_axis=0 (rows) and replicate across
+    # cluster_axis=1 (cols). Use ShardTensor2dMesh(dims=(0, None)).
+    # Input to scatter: shape [num_heads, S, padded]
+    # Unsqueeze to 4D [1, num_heads, S, padded] for the from_torch.
+    q_rot_4d = q_rot_padded.unsqueeze(0).to(torch.bfloat16)
+    return ttnn.from_torch(
+        q_rot_4d,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(1, None), mesh_shape=cluster_shape),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
 
 
 def _pad_head_dim(t: torch.Tensor, *, head_dim_axis: int, head_dim: int, padded_head_dim: int) -> torch.Tensor:
@@ -404,10 +466,23 @@ class Qwen36VisionAttentionTP(Module):
             exp_approx_mode=False,
         )
 
-    def forward(self, x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
-        """Run attention. Input + output are replicated across the TP axis."""
+    def forward(
+        self,
+        x: ttnn.Tensor,
+        cos: ttnn.Tensor,
+        sin: ttnn.Tensor,
+        *,
+        cos_hf_cpu: torch.Tensor | None = None,
+        sin_hf_cpu: torch.Tensor | None = None,
+    ) -> ttnn.Tensor:
+        """Run attention. Input + output are replicated across the TP axis.
+
+        If `QWEN36_VISION_CPU_ROPE=1` and cos_hf_cpu/sin_hf_cpu are provided,
+        applies RoPE on CPU in fp32 using HF's exact rotate_half — recovers
+        the bf16 RoPE precision floor at the cost of a per-layer D2H+H2D
+        round-trip. Used to validate the precision hypothesis.
+        """
         # qkv projection → per-chip [B, 1, S, 3 * num_local_heads * padded_head_dim]
-        # = [B, 1, S, 3 * 2 * 96] = [B, 1, S, 576]
         xqkv = self.qkv_proj.forward(x)
 
         # If xqkv came out 3D, unsqueeze to 4D for nlp_create_qkv_heads.
@@ -424,17 +499,45 @@ class Qwen36VisionAttentionTP(Module):
         )
         ttnn.deallocate(xqkv)
 
-        # Apply 2D vision RoPE to q, k via the TTNN op that handles padded
-        # head_dim correctly (the manual `cos*x + sin*rotate_half(x)` would
-        # pair k↔k+padded/2 instead of k↔k+head_dim/2, causing PCC loss).
-        q_rot = ttnn.experimental.rotary_embedding_llama(
-            q, cos, sin, self._rope_transformation_mat, is_decode_mode=False
+        # Apply 2D vision RoPE — two paths:
+        #  (a) on-device via `rotary_embedding_llama` (bf16-only; ~0.987 single-block PCC)
+        #  (b) CPU fp32 fallback via HF's exact rotate_half (slower; precision-control experiment)
+        use_cpu_rope = (
+            os.environ.get("QWEN36_VISION_CPU_ROPE", "0") == "1" and cos_hf_cpu is not None and sin_hf_cpu is not None
         )
-        ttnn.deallocate(q)
-        k_rot = ttnn.experimental.rotary_embedding_llama(
-            k, cos, sin, self._rope_transformation_mat, is_decode_mode=False
-        )
-        ttnn.deallocate(k)
+        if use_cpu_rope:
+            cs = tuple(self.mesh_device.shape)
+            q_rot = _cpu_apply_rope_fp32_per_chip(
+                q,
+                cos_hf_cpu,
+                sin_hf_cpu,
+                self.mesh_device,
+                self.head_dim,
+                self.padded_head_dim,
+                self.num_local_heads,
+                cs,
+            )
+            ttnn.deallocate(q)
+            k_rot = _cpu_apply_rope_fp32_per_chip(
+                k,
+                cos_hf_cpu,
+                sin_hf_cpu,
+                self.mesh_device,
+                self.head_dim,
+                self.padded_head_dim,
+                self.num_local_heads,
+                cs,
+            )
+            ttnn.deallocate(k)
+        else:
+            q_rot = ttnn.experimental.rotary_embedding_llama(
+                q, cos, sin, self._rope_transformation_mat, is_decode_mode=False
+            )
+            ttnn.deallocate(q)
+            k_rot = ttnn.experimental.rotary_embedding_llama(
+                k, cos, sin, self._rope_transformation_mat, is_decode_mode=False
+            )
+            ttnn.deallocate(k)
 
         # Non-causal SDPA with dynamic grid. Pass scale = 1/sqrt(head_dim) explicitly
         # using the UNPADDED head_dim so SDPA's internal scaling matches the reference

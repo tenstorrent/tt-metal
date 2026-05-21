@@ -113,7 +113,8 @@ def test_vision_attention_tp_qwen36(grid_h, grid_w, layer_num, mesh_device, rese
         layout=ttnn.TILE_LAYOUT,
     )
     logger.info(f"Running TT vision attn TP=8 on {mesh_device.shape}")
-    tt_output = tt_attn.forward(tt_input, cos_tt, sin_tt)
+    # Pass HF cos/sin for the optional CPU-RoPE path (QWEN36_VISION_CPU_ROPE=1).
+    tt_output = tt_attn.forward(tt_input, cos_tt, sin_tt, cos_hf_cpu=cos_ref, sin_hf_cpu=sin_ref)
 
     # Output is replicated across all 32 chips, per-chip shape [1, S, H].
     # ConcatMeshToTensor(dim=0) → [32, S, H]. Take chip 0's view.

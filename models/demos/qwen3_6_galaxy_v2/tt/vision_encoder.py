@@ -150,13 +150,23 @@ class Qwen36VisionEncoder:
         H = self.vc.hidden_size
 
         # --- Vision 2D RoPE tables ---
+        head_dim = self.vc.hidden_size // self.vc.num_heads
         cos_tt, sin_tt = build_vision_rope_tensors(
             seq_len=seq_len,
             grid_thw=grid_thw,
-            head_dim=self.vc.hidden_size // self.vc.num_heads,
+            head_dim=head_dim,
             padded_head_dim=self.padded_head_dim,
             spatial_merge_size=self.vc.spatial_merge_size,
             mesh_device=self.mesh_device,
+        )
+        # CPU cos/sin for the optional CPU-RoPE precision path (env QWEN36_VISION_CPU_ROPE=1).
+        from models.demos.qwen3_vl.reference.functional import qwen3_vision_transformer_preprocess
+
+        _cu_seqlens, (cos_hf_cpu, sin_hf_cpu) = qwen3_vision_transformer_preprocess(
+            seq_len=seq_len,
+            grid_thw=grid_thw,
+            head_dim=head_dim,
+            spatial_merge_size=self.vc.spatial_merge_size,
         )
 
         # --- Upload x to mesh (replicated across all 32 chips) ---
@@ -171,7 +181,7 @@ class Qwen36VisionEncoder:
 
         # --- 27 vision blocks ---
         for layer_num, block in enumerate(self.blocks):
-            x_tt = block.forward(x_tt, cos_tt, sin_tt)
+            x_tt = block.forward(x_tt, cos_tt, sin_tt, cos_hf_cpu=cos_hf_cpu, sin_hf_cpu=sin_hf_cpu)
 
         # --- PatchMerger ---
         x_tt = self.merger.forward(x_tt)  # [B, 1, seq_len // 4, 5120] replicated

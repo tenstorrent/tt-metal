@@ -106,8 +106,20 @@ class Qwen36VisionBlockTP(Module):
         norm_state.update({f"norm2.{k[len('norm2.') :]}": v for k, v in stripped.items() if k.startswith("norm2.")})
         self.load_torch_state_dict(norm_state, strict=False)
 
-    def forward(self, x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
-        """Forward pass: norm + attn + residual + norm + mlp + residual."""
+    def forward(
+        self,
+        x: ttnn.Tensor,
+        cos: ttnn.Tensor,
+        sin: ttnn.Tensor,
+        *,
+        cos_hf_cpu: torch.Tensor | None = None,
+        sin_hf_cpu: torch.Tensor | None = None,
+    ) -> ttnn.Tensor:
+        """Forward pass: norm + attn + residual + norm + mlp + residual.
+
+        cos_hf_cpu / sin_hf_cpu are optional torch tensors [S, head_dim] used by
+        the attention's CPU-RoPE precision path (env QWEN36_VISION_CPU_ROPE=1).
+        """
         # x: [B, 1, S, H] or [B, S, H] replicated input
         # Ensure 4D for tt_dit LayerNorm
         needs_unsqueeze_x = len(x.shape) == 3
@@ -116,7 +128,7 @@ class Qwen36VisionBlockTP(Module):
 
         # Attention sub-block
         x_norm = self.norm1.forward(x)
-        attn_out = self.attn.forward(x_norm, cos, sin)
+        attn_out = self.attn.forward(x_norm, cos, sin, cos_hf_cpu=cos_hf_cpu, sin_hf_cpu=sin_hf_cpu)
         ttnn.deallocate(x_norm)
         # attn returns 3D; restore 4D for residual add
         if len(attn_out.shape) == 3:
