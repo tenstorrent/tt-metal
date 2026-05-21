@@ -6,6 +6,19 @@
 
 #include <cstdint>
 
+// Always available — test sources use this in `if constexpr` checks regardless
+// of whether perf counters are compiled in.
+enum class PerfRunType
+{
+    L1_TO_L1,
+    UNPACK_ISOLATE,
+    MATH_ISOLATE,
+    PACK_ISOLATE,
+    L1_CONGESTION
+};
+
+#ifdef PERF_COUNTERS_COMPILED
+
 #include "ckernel.h"
 
 // ============================================================================
@@ -37,6 +50,21 @@ constexpr std::uint32_t perf_counters_zone_data_addr(std::uint32_t zone)
 constexpr std::uint32_t perf_counters_sync_ctrl_addr(std::uint32_t zone)
 {
     return perf_counters_zone_data_addr(zone) + PERF_COUNTERS_ZONE_DATA_BYTES;
+}
+
+// Per-zone atomic counters used by ATINCGET-gated arm/freeze.
+// Layout in sync_ctrl block (40 bytes available):
+//   +0  : SYNC_ZONE_COMPLETE flag (existing)
+//   +16 : entry atomic counter (16B-aligned for ATINCGET)
+//   +32 : exit  atomic counter (16B-aligned for ATINCGET)
+constexpr std::uint32_t perf_counters_entry_atomic_addr(std::uint32_t zone)
+{
+    return perf_counters_sync_ctrl_addr(zone) + 16;
+}
+
+constexpr std::uint32_t perf_counters_exit_atomic_addr(std::uint32_t zone)
+{
+    return perf_counters_sync_ctrl_addr(zone) + 32;
 }
 
 static_assert(PERF_COUNTERS_ZONES_BASE + PERF_COUNTERS_MAX_ZONES * PERF_COUNTERS_ZONE_SIZE <= 0x16AFF4u, "Perf counter L1 layout overflows profiler region");
@@ -399,6 +427,108 @@ __attribute__((always_inline)) inline std::uint32_t get_zone_id(std::uint32_t ha
 #ifndef _LLK_PERF_COUNTER_SCOPED_DEFINED_
 #define _LLK_PERF_COUNTER_SCOPED_DEFINED_
 
+inline __attribute__((always_inline)) void arm_all_counters()
+{
+    asm volatile("" ::: "memory");
+    *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB1203Cu) = 1u; // PERF_CNT_ALL (INSTRN+FPU)
+    *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB12014u) = 1u; // TDMA_UNPACK
+    *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB12038u) = 1u; // L1
+    *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB120F8u) = 1u; // TDMA_PACK
+    asm volatile("" ::: "memory");
+}
+
+inline __attribute__((always_inline)) void freeze_and_read_all_counters(std::uint32_t zone_id)
+{
+    asm volatile("" ::: "memory");
+    *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB1203Cu) = 2u;
+    *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB12014u) = 2u;
+    *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB12038u) = 2u;
+    *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB120F8u) = 2u;
+
+    struct bank_regs
+    {
+        std::uint32_t mode_reg;
+        std::uint32_t out_l;
+    };
+
+    static constexpr bank_regs banks[5] = {
+        {0xFFB12004u, 0xFFB12100u},
+        {0xFFB1201Cu, 0xFFB12120u},
+        {0xFFB12010u, 0xFFB12108u},
+        {0xFFB12034u, 0xFFB12118u},
+        {0xFFB120F4u, 0xFFB12110u},
+    };
+
+    std::uint32_t cycles_base              = PERF_COUNTERS_ZONES_BASE + zone_id * PERF_COUNTERS_ZONE_SIZE;
+    volatile std::uint32_t* bank_cycles    = reinterpret_cast<volatile std::uint32_t*>(cycles_base);
+    volatile std::uint32_t* counter_counts = bank_cycles + PERF_COUNTERS_BANK_CYCLES_WORDS;
+    std::uint32_t shared_cycles            = *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(banks[0].out_l);
+    bank_cycles[0]                         = shared_cycles;
+    bank_cycles[1]                         = shared_cycles;
+    bank_cycles[2]                         = shared_cycles;
+    bank_cycles[3]                         = shared_cycles;
+    bank_cycles[4]                         = shared_cycles;
+
+    const volatile std::uint32_t* cfg = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_SHARED_CONFIG_ADDR);
+    std::uint32_t out_idx             = 0;
+#pragma GCC unroll 0
+    for (std::uint32_t i = 0; i < PERF_COUNTERS_CONFIG_WORDS; ++i)
+    {
+        std::uint32_t cw = cfg[i];
+        if (!(cw & 0x80000000u))
+        {
+            continue;
+        }
+        std::uint32_t bank_id    = cw & 0xFFu;
+        std::uint32_t counter_id = (cw >> 8) & 0x1FFu;
+        std::uint32_t l1_mux     = (cw >> 17) & 0x7u;
+        const bank_regs& br      = banks[bank_id];
+        if (bank_id == 3u)
+        {
+            volatile std::uint32_t tt_reg_ptr* mux = reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB12218u);
+            *mux                                   = (*mux & ~(0x7u << 4)) | (l1_mux << 4);
+        }
+        *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(br.mode_reg) = counter_id << 8;
+        counter_counts[out_idx]                                            = *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(br.out_l + 4u);
+        ++out_idx;
+    }
+
+    std::uint32_t sync_addr                               = perf_counters_sync_ctrl_addr(zone_id);
+    *reinterpret_cast<volatile std::uint32_t*>(sync_addr) = SYNC_ZONE_COMPLETE;
+}
+
+// Per-run-type designation of which thread does the real 169-counter read.
+// Other threads spinwait on the sync flag so cross-thread wall_clock stays symmetric.
+template <PerfRunType run_type>
+constexpr bool is_active_perf_thread()
+{
+#if defined(LLK_TRISC_UNPACK)
+    return run_type == PerfRunType::UNPACK_ISOLATE;
+#elif defined(LLK_TRISC_MATH)
+    return run_type == PerfRunType::MATH_ISOLATE;
+#elif defined(LLK_TRISC_PACK)
+    return run_type == PerfRunType::L1_TO_L1 || run_type == PerfRunType::PACK_ISOLATE || run_type == PerfRunType::L1_CONGESTION;
+#else
+    return false;
+#endif
+}
+
+// Strict single-active-thread + pc_buf-semaphore barrier:
+//   perf_ctor:
+//     ACTIVE thread:     fence → arm (4 MMIO writes) → fence
+//     NON-ACTIVE thread: fence → spinwait on entry-sem → semget → fence
+//                        — blocks until active has armed; counter window starts cleanly.
+//   perf_dtor:
+//     ACTIVE thread:     fence → freeze + 169-iter read + sync_addr write → sempost ×N → fence
+//     NON-ACTIVE thread: fence → spinwait on exit-sem → semget → fence
+// Net: counter prozor = ACTIVE arms → ACTIVE freezes. Niko drugi ne dira counter regs.
+// Both perf_ctor and perf_dtor act as cross-thread barriers — all threads exit
+// these phases at near-identical wall_clock moments → symmetric zone boundaries.
+constexpr std::uint8_t PERF_ENTRY_SEM        = ckernel::semaphore::FPU_SFPU;       // entry barrier
+constexpr std::uint8_t PERF_EXIT_SEM         = ckernel::semaphore::UNPACK_TO_DEST; // exit barrier
+constexpr std::uint32_t PERF_NUM_SPINWAITERS = 2;
+
+template <PerfRunType run_type>
 struct perf_counter_scoped
 {
     std::uint32_t zone_id;
@@ -411,74 +541,44 @@ struct perf_counter_scoped
     inline __attribute__((always_inline)) explicit perf_counter_scoped(std::uint32_t zid) : zone_id(zid)
     {
         asm volatile("" ::: "memory");
-        *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB1203Cu) = 1u; // PERF_CNT_ALL (INSTRN+FPU)
-        *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB12014u) = 1u; // TDMA_UNPACK
-        *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB12038u) = 1u; // L1
-        *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB120F8u) = 1u; // TDMA_PACK
+        if constexpr (is_active_perf_thread<run_type>())
+        {
+            arm_all_counters();
+            for (std::uint32_t i = 0; i < PERF_NUM_SPINWAITERS; ++i)
+            {
+                ckernel::semaphore_post(PERF_ENTRY_SEM);
+            }
+        }
+        else
+        {
+            while (ckernel::semaphore_read(PERF_ENTRY_SEM) == 0)
+            {
+                asm volatile("nop");
+            }
+            ckernel::semaphore_get(PERF_ENTRY_SEM);
+        }
         asm volatile("" ::: "memory");
     }
 
     inline __attribute__((always_inline)) ~perf_counter_scoped()
     {
         asm volatile("" ::: "memory");
-        *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB1203Cu) = 2u; // PERF_CNT_ALL
-        *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB12014u) = 2u; // TDMA_UNPACK
-        *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB12038u) = 2u; // L1
-        *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB120F8u) = 2u; // TDMA_PACK
-
-        struct bank_regs
+        if constexpr (is_active_perf_thread<run_type>())
         {
-            std::uint32_t mode_reg;
-            std::uint32_t out_l;
-        };
-
-        static constexpr bank_regs banks[5] = {
-            {0xFFB12004u, 0xFFB12100u}, // 0 INSTRN_THREAD
-            {0xFFB1201Cu, 0xFFB12120u}, // 1 FPU
-            {0xFFB12010u, 0xFFB12108u}, // 2 TDMA_UNPACK
-            {0xFFB12034u, 0xFFB12118u}, // 3 L1
-            {0xFFB120F4u, 0xFFB12110u}, // 4 TDMA_PACK
-        };
-
-        std::uint32_t cycles_base              = PERF_COUNTERS_ZONES_BASE + zone_id * PERF_COUNTERS_ZONE_SIZE;
-        volatile std::uint32_t* bank_cycles    = reinterpret_cast<volatile std::uint32_t*>(cycles_base);
-        volatile std::uint32_t* counter_counts = bank_cycles + PERF_COUNTERS_BANK_CYCLES_WORDS;
-
-        // INSTRN OUT_L replicated to all banks: FPU/L1 OUT_L return 0 on 2nd+ zone
-        // when counter_sel is high (HW quirk); INSTRN cycles agree within ±30 cyc.
-        std::uint32_t shared_cycles = *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(banks[0].out_l);
-        bank_cycles[0]              = shared_cycles;
-        bank_cycles[1]              = shared_cycles;
-        bank_cycles[2]              = shared_cycles;
-        bank_cycles[3]              = shared_cycles;
-        bank_cycles[4]              = shared_cycles;
-
-        const volatile std::uint32_t* cfg = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_SHARED_CONFIG_ADDR);
-        std::uint32_t out_idx             = 0;
-#pragma GCC unroll 0
-        for (std::uint32_t i = 0; i < PERF_COUNTERS_CONFIG_WORDS; ++i)
-        {
-            std::uint32_t cw = cfg[i];
-            if (!(cw & 0x80000000u))
+            freeze_and_read_all_counters(zone_id);
+            for (std::uint32_t i = 0; i < PERF_NUM_SPINWAITERS; ++i)
             {
-                continue;
+                ckernel::semaphore_post(PERF_EXIT_SEM);
             }
-            std::uint32_t bank_id    = cw & 0xFFu;
-            std::uint32_t counter_id = (cw >> 8) & 0x1FFu;
-            std::uint32_t l1_mux     = (cw >> 17) & 0x7u;
-            const bank_regs& br      = banks[bank_id];
-            if (bank_id == 3u)
-            {
-                volatile std::uint32_t tt_reg_ptr* mux = reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB12218u);
-                *mux                                   = (*mux & ~(0x7u << 4)) | (l1_mux << 4);
-            }
-            *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(br.mode_reg) = counter_id << 8;
-            counter_counts[out_idx]                                            = *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(br.out_l + 4u);
-            ++out_idx;
         }
-
-        std::uint32_t sync_addr                               = PERF_COUNTERS_ZONES_BASE + zone_id * PERF_COUNTERS_ZONE_SIZE + PERF_COUNTERS_ZONE_DATA_BYTES;
-        *reinterpret_cast<volatile std::uint32_t*>(sync_addr) = SYNC_ZONE_COMPLETE;
+        else
+        {
+            while (ckernel::semaphore_read(PERF_EXIT_SEM) == 0)
+            {
+                asm volatile("nop");
+            }
+            ckernel::semaphore_get(PERF_EXIT_SEM);
+        }
         asm volatile("" ::: "memory");
     }
 };
@@ -489,4 +589,10 @@ struct perf_counter_scoped
 #define PERF_COUNTER_VAR_CONCAT_(a, b)   a##b
 #define PERF_COUNTER_VAR_(line)          PERF_COUNTER_VAR_CONCAT_(_perf_ctr_, line)
 #define MEASURE_PERF_COUNTERS(zone_name) \
-    const llk_perf::perf_counter_scoped PERF_COUNTER_VAR_(__LINE__)(llk_perf::get_zone_id(llk_perf::detail::zone_name_hash(zone_name)));
+    const llk_perf::perf_counter_scoped<PERF_RUN_TYPE> PERF_COUNTER_VAR_(__LINE__)(llk_perf::get_zone_id(llk_perf::detail::zone_name_hash(zone_name)));
+
+#else // !PERF_COUNTERS_COMPILED
+
+#define MEASURE_PERF_COUNTERS(zone_name)
+
+#endif // PERF_COUNTERS_COMPILED

@@ -5,9 +5,7 @@
 #include <cstdint>
 
 #include "boot.h"
-#ifdef PERF_COUNTERS_COMPILED
-#include "counters.h"
-#endif
+#include "counters.h" // heavy machinery is gated internally by PERF_COUNTERS_COMPILED
 
 #ifdef LLK_BOOT_MODE_BRISC
 
