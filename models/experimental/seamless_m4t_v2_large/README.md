@@ -197,16 +197,16 @@ Measured on a four-chip Blackhole QB system (`1x4` parametrization). Inputs are 
 
 | Task | `forward()` non-traced | `forward()` traced | `generate()` non-traced |
 |------|------------------------:|-------------------:|------------------------:|
-| T2TT | 76.39 | 239.44 | 4.09 |
-| S2TT | 43.71 | 118.72 | 8.99 |
-| T2ST | 74.87 | 122.44 | 2.94 |
-| S2ST | 44.11 | 80.72 | 4.76 |
-| ASR | 43.76 | 118.08 | 9.13 |
+| T2TT | 75.12 | 241.71 | 4.09 |
+| S2TT | 45.05 | 121.95 | 9.22 |
+| T2ST | 77.68 | 122.94 | 2.95 |
+| S2ST | 44.62 | 81.38 | 4.78 |
+| ASR | 44.50 | 121.55 | 9.10 |
 
 BH QB run (all `1x4` cases):
 
 ```bash
-pytest models/experimental/seamless_m4t_v2_large/tests/perf/test_e2e_perf_2cq.py -k 1x4 -v
+pytest models/experimental/seamless_m4t_v2_large/tests/perf/test_e2e_perf_2cq.py -k 1x4 -v -m models_performance_bare_metal
 ```
 
 ### Device-kernel throughput
