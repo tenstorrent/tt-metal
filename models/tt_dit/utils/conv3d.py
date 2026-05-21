@@ -540,6 +540,154 @@ def register_conv3d_configs(configs: dict) -> None:
     _DEFAULT_BLOCKINGS.update({(c_in, c_out, _ntuple(ks, 3)): tuple(v) for (c_in, c_out, ks), v in configs.items()})
 
 
+def _compute_heuristic_blocking_conv3d(
+    in_channels: int,
+    out_channels: int,
+    kernel_size: tuple,
+    T: int,
+    H: int,
+    W: int,
+    h_factor: int = 1,
+    w_factor: int = 1,
+) -> tuple:
+    """Heuristic blocking for conv3d layers not covered by either lookup table.
+
+    Returns (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block).
+
+    Rules derived from empirical sweep data across BH 4x8 / 4x32 configurations:
+    - H_out_block * W_out_block targets 32 wherever the dimensions allow.
+    - Preferred spatial pairs (ordered by H*W area): (16,2), (8,4), (4,8).
+    - T_out_block = 1 for (1,*,*) kernels; scales 1→3→5→7 with T for (3,*,*).
+    - C_in_block targets 96 (or 192 for large C_in); C_out_block targets 96–256.
+    """
+
+    def snap(n: int, target: int) -> int:
+        """Largest divisor of n that is <= target."""
+        b = min(target, n)
+        while b > 1 and n % b != 0:
+            b -= 1
+        return b
+
+    # C_in_block: 96 is the empirical sweet spot; use full C_in for small channels.
+    if in_channels <= 96:
+        C_in_block = in_channels
+    elif in_channels <= 192:
+        C_in_block = snap(in_channels, 96)
+    else:
+        C_in_block = snap(in_channels, 192)
+
+    # C_out_block: scale target with C_out magnitude.
+    if out_channels <= 96:
+        C_out_block = out_channels
+    elif out_channels <= 192:
+        C_out_block = snap(out_channels, 96)
+    elif out_channels <= 384:
+        C_out_block = snap(out_channels, 128)
+    else:
+        C_out_block = snap(out_channels, 256)
+
+    # T_out_block: (1,*,*) kernels never block temporally; scale with T otherwise.
+    kt = kernel_size[0]
+    if kt == 1 or T <= 3:
+        T_out_block = 1
+    elif T <= 12:
+        T_out_block = 3
+    elif T <= 25:
+        T_out_block = 5
+    else:
+        T_out_block = 7
+
+    # H_out_block, W_out_block: target hw_product = 32.
+    # Preferred Hb order shifts toward smaller values for large spatial areas.
+    hw_area = H * W
+    if hw_area <= 500:
+        hb_order = [16, 8, 32, 4, 2, 1]
+    elif hw_area <= 5000:
+        hb_order = [8, 16, 4, 32, 2, 1]
+    else:
+        hb_order = [4, 8, 2, 16, 1]
+
+    hw_target = 32
+    H_out_block, W_out_block = 1, 1
+    for Hb in hb_order:
+        Wb = hw_target // Hb
+        if H % Hb == 0 and W % Wb == 0:
+            H_out_block, W_out_block = Hb, Wb
+            break
+
+    if H_out_block == 1 and W_out_block == 1:
+        # No hw_target=32 pair fits; find the best individual divisors.
+        for Hb in range(min(H, 32), 0, -1):
+            if H % Hb == 0:
+                H_out_block = Hb
+                break
+        for Wb in range(min(W, 32), 0, -1):
+            if W % Wb == 0:
+                W_out_block = Wb
+                break
+
+    return C_in_block, C_out_block, T_out_block, H_out_block, W_out_block
+
+
+def _lookup_nearest_blocking_conv3d(
+    in_channels: int,
+    out_channels: int,
+    kernel_size: tuple,
+    T: int,
+    H: int,
+    W: int,
+    h_factor: int = 1,
+    w_factor: int = 1,
+) -> tuple | None:
+    """Nearest-neighbor blocking for conv3d using log-ratio distance on (T, H, W).
+
+    Search phases (first non-empty set wins):
+      1. Same (h_factor, w_factor, C_in, C_out, kernel) — nearest by (T, H, W).
+      2. Same (C_in, C_out, kernel) across any (h_factor, w_factor) — nearest by (T, H, W).
+
+    The borrowed C_in_block / C_out_block are snapped to valid divisors of the
+    query's channel dimensions (needed when phase-2 borrows from a different mesh).
+    T / H / W blocks are used as-is because conv3d pads partial blocks internally.
+
+    Returns (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block) or None.
+    """
+
+    def snap(n: int, b: int) -> int:
+        while b > 1 and n % b != 0:
+            b -= 1
+        return max(b, 1)
+
+    def spatial_dist(T_r: int, H_r: int, W_r: int) -> float:
+        dt = abs(math.log(T / T_r)) if T > 0 and T_r > 0 else 0.0
+        dh = abs(math.log(H / H_r)) if H > 0 and H_r > 0 else 0.0
+        dw = abs(math.log(W / W_r)) if W > 0 and W_r > 0 else 0.0
+        return dt + dh + dw
+
+    ks = tuple(kernel_size)
+
+    # Phase 1: exact mesh + channel match; vary only (T, H, W).
+    phase1 = {k: v for k, v in _BLOCKINGS.items() if k[:5] == (h_factor, w_factor, in_channels, out_channels, ks)}
+
+    candidates = phase1 or {
+        # Phase 2: same channels/kernel, any mesh.
+        k: v
+        for k, v in _BLOCKINGS.items()
+        if k[2] == in_channels and k[3] == out_channels and k[4] == ks
+    }
+
+    if not candidates:
+        return None
+
+    best = min(candidates, key=lambda k: spatial_dist(k[5], k[6], k[7]))
+    C_in_b, C_out_b, T_b, H_b, W_b = candidates[best]
+
+    # Snap channel blocks only — they must divide the query's channel counts.
+    C_in_b = snap(in_channels, C_in_b)
+    C_out_b = snap(out_channels, C_out_b)
+
+    return C_in_b, C_out_b, T_b, H_b, W_b
+
+
 def get_conv3d_config(
     in_channels, out_channels, kernel_size, weights_dtype, grid_size, *, h_factor=1, w_factor=1, T=0, H=0, W=0
 ):
