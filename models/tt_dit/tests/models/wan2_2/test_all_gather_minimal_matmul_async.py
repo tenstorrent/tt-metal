@@ -287,10 +287,7 @@ def run_test_linear_impl(
         tt_output = tt_output_tensor_list[n]
 
         if use_non_fused:
-            if cluster_axis == 0:
-                concat_dims = [sp_axis + 2, tp_axis + 2]
-            else:
-                concat_dims = [tp_axis + 2, sp_axis + 2]
+            concat_dims = [sp_axis + 2, tp_axis + 2]
         else:
             # Fused AGMM output: M on non-cluster axis, N on cluster axis
             concat_dims = [0, 0]
@@ -400,10 +397,7 @@ def run_test_linear(
 
     # Prepare TT tensors
     if use_non_fused:
-        if sp_axis == 1:
-            shard_dims = [sp_axis + 2, tp_axis + 2]
-        else:
-            shard_dims = [tp_axis + 2, sp_axis + 2]
+        shard_dims = [sp_axis + 2, tp_axis + 2]
     else:
         # Fused AGMM gathers K (last dim) across cluster_axis
         shard_dims = [0, 0]
@@ -534,11 +528,11 @@ def run_test_linear(
             ttnn.Topology.Ring,
             2,
             6,
-            1,
             0,
+            1,
             12,
             9,
-            0,
+            1,
         ],
     ],
     ids=[
@@ -571,6 +565,7 @@ def run_test_linear(
         (115200, 5120, 1280, True, True, None, 1, True, 10, 8, 6, 2, 1),
         (115200, 5120, 1280, True, True, None, 1, False, 10, 8, 6, 2, 1),
         (115200, 5120, 3456, True, True, "gelu", 1, False, 7, 5, 12, 1, 2),
+        (4096, 6144, 4608, True, True, None, 1, False, 4, 4, 24, 1, 4),
     ],
     ids=[
         "4k4k4k",
@@ -591,6 +586,7 @@ def run_test_linear(
         "1xssg720pdenseattn1",
         "1xssg720pdenseattn2",
         "1xssg720pff1",
+        "ltx",
     ],
 )
 @pytest.mark.parametrize(

@@ -11,6 +11,8 @@
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+
 using ttnn::ccl::Topology;
 
 ///////////////////////////////////////////////////
@@ -268,6 +270,7 @@ void kernel_main() {
     bool defer_write = false;
 
     for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
+        DPRINT << " THE CORRECT KERNEL" << ENDL();
         uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
         uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
         uint32_t current_M_block_tiles = m_tile_end - m_tile;
@@ -281,6 +284,7 @@ void kernel_main() {
             uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
 
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
+                DeviceZoneScopedN("in0 block");
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
                         cb_wait_front(cb_id_out, out_block_num_tiles);

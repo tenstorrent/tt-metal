@@ -14,6 +14,8 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+
 void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     copy_tile_to_dst_init_short(in_cb);
     reconfig_data_format_srca(in_cb);
@@ -278,6 +280,8 @@ void matmul_blocks(
     const uint32_t subblock_h,
     const uint32_t subblock_w) {
     uint32_t in0_index_offset = 0;
+
+    DeviceZoneScopedN("MATMUL_BLOCK");
 
     for (uint32_t M_start = 0; M_start < M_block_tiles; M_start += subblock_h) {
         uint32_t in1_index_offset = 0;
