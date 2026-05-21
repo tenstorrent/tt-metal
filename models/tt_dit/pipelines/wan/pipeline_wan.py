@@ -1029,7 +1029,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             profiler.start("vae", profiler_iteration)
 
         # Captured before applying the VAE std-rescale to `latents`.
-        last_latent_out = latents.detach().cpu().clone() if return_last_latent else None
+        last_latent_out = latents.detach().clone() if return_last_latent else None
 
         if not output_type == "latent":
             latents = latents.to(self.vae.dtype)
