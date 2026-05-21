@@ -113,10 +113,12 @@ std::vector<float> make_edge_case_inputs(uint32_t num_tiles, int seed = 42) {
 }
 
 // Pack the input under specific env-var settings and return the resulting
-// bytes. Caller picks which BFP packer via `pack_fn`.
-template <typename PackFn>
+// bytes. Caller picks which BFP packer via `pack_fn`. Templated on the input
+// element type so we can drive both `Span<const float>` and
+// `Span<const bfloat16>` paths with the same helper.
+template <typename PackFn, typename T>
 std::vector<uint32_t> pack_under_env(
-    PackFn&& pack_fn, const char* threads_env, const char* simd_env, tt::stl::Span<const float> input) {
+    PackFn&& pack_fn, const char* threads_env, const char* simd_env, tt::stl::Span<const T> input) {
     ScopedEnv t("TT_BFP_HOST_TILIZER_THREADS", threads_env);
     ScopedEnv s("TT_BFP_HOST_TILIZER_DISABLE_SIMD", simd_env);
     return pack_fn(input);
@@ -275,7 +277,10 @@ TEST(HostBfpTilizerEquivalence, Bfp2b_SerialMatchesParallel) {
     auto input = make_edge_case_inputs(kNumTiles);
 
     auto pack = [](tt::stl::Span<const float> in) {
-        return pack_as_bfp2_tiles(in, /*row_major_input=*/true, /*is_exp_a=*/false);
+        // Fully qualify to disambiguate from the `tt::tt_metal` overload that
+        // becomes visible via `using namespace tt::tt_metal;` in other TUs
+        // included in the same unity build.
+        return ::pack_as_bfp2_tiles(in, /*row_major_input=*/true, /*is_exp_a=*/false);
     };
 
     auto serial = pack_under_env(pack, "1", nullptr, tt::stl::make_const_span(input));
