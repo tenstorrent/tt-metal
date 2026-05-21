@@ -1381,6 +1381,16 @@ public:
 
     std::vector<uint32_t> get_forwarding_link_indices_in_direction(
         const FabricNodeId& src_node_id, const RoutingDirection& direction) const override {
+        // Z is rejected: a chip can have Z-link neighbors in multiple meshes, so collapsing
+        // a direction to a single neighbor (as this overload does) is undefined for Z.
+        // Use the (src, dst, direction) overload when the destination is known, or query
+        // ControlPlane::get_active_fabric_eth_channels_in_direction() for direction-only
+        // enumeration of physical links.
+        TT_FATAL(
+            direction != RoutingDirection::Z,
+            "get_forwarding_link_indices_in_direction(src, direction) does not support Z "
+            "(src {}). Use the (src, dst, direction) overload instead.",
+            src_node_id);
         const auto& neighbor_node_id = get_neighbor_node_id(src_node_id, direction);
         return this->get_forwarding_link_indices_in_direction(src_node_id, neighbor_node_id, direction);
     }

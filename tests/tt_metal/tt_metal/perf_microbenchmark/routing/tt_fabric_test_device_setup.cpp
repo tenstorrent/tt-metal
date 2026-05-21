@@ -638,23 +638,6 @@ ConnectionKey TestDevice::register_fabric_connection(
     RoutingDirection outgoing_direction,
     uint32_t link_idx,
     uint8_t vc_id) {
-    // Validate link_idx against the forwarding link indices for this direction.
-    std::vector<uint32_t> available_link_indices = get_forwarding_link_indices_in_direction(outgoing_direction);
-
-    TT_FATAL(
-        !available_link_indices.empty(),
-        "No forwarding link indices found for direction {} from node {}",
-        static_cast<int>(outgoing_direction),
-        this->fabric_node_id_);
-
-    TT_FATAL(
-        std::find(available_link_indices.begin(), available_link_indices.end(), link_idx) !=
-            available_link_indices.end(),
-        "On node {}, link_idx={} is not valid for direction {}",
-        this->fabric_node_id_,
-        link_idx,
-        static_cast<int>(outgoing_direction));
-
     // Resolve link_idx -> physical eth chan and the first-hop neighbor on the other end.
     // The ConnectionKey dedups on (direction, link_idx, vc_id, eth_chan): all four are
     // mutually consistent, but eth_chan is what we conceptually identify the connection by.
@@ -662,9 +645,19 @@ ConnectionKey TestDevice::register_fabric_connection(
     // with different final dsts can legitimately share one physical connection (e.g. Z-link
     // sub-torus all-to-all). The first-hop neighbor is recorded on the Connection so that
     // downstream calls into the fabric API have a valid (dst, link_idx) pair.
+    //
+    // Validation is by direction only (no per-destination filter): for Z, multiple chans
+    // in one direction can land on different peer chips, and the same link_idx may
+    // legitimately serve many final dsts. Per-destination forwarding correctness is
+    // enforced by the fabric API at append-connection time.
     const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto candidate_eth_chans =
         cp.get_active_fabric_eth_channels_in_direction(fabric_node_id_, outgoing_direction);
+    TT_FATAL(
+        !candidate_eth_chans.empty(),
+        "No active fabric eth channels in direction {} from node {}",
+        static_cast<int>(outgoing_direction),
+        this->fabric_node_id_);
     TT_FATAL(
         link_idx < candidate_eth_chans.size(),
         "On node {}, link_idx={} out of range for direction {} ({} eth chans available)",
@@ -1177,6 +1170,18 @@ RoutingDirection TestDevice::get_forwarding_direction(
 }
 
 std::vector<uint32_t> TestDevice::get_forwarding_link_indices_in_direction(const RoutingDirection& direction) const {
+    // Z is intentionally rejected here: a single direction can land on multiple peer
+    // chips on Z, so resolving link indices without a concrete destination is undefined.
+    // Callers with a known destination should use the 3-arg overload
+    // get_forwarding_link_indices_in_direction(src, dst, direction). Callers that only
+    // need to validate / enumerate physical links in a direction should query
+    // ControlPlane::get_active_fabric_eth_channels_in_direction(src, direction) directly.
+    TT_FATAL(
+        direction != RoutingDirection::Z,
+        "TestDevice::get_forwarding_link_indices_in_direction(direction) does not support Z "
+        "(node {}). Use the (src, dst, direction) overload, or query the control plane's "
+        "active eth channels in the direction directly.",
+        this->fabric_node_id_);
     const auto link_indices =
         this->route_manager_->get_forwarding_link_indices_in_direction(this->fabric_node_id_, direction);
     TT_FATAL(
@@ -1373,8 +1378,10 @@ void TestDevice::create_latency_sender_kernel(
 
     // Register fabric connection to mark ethernet link as "used"
     // This is required for telemetry and code profiling to know which cores to read from
+    // Use the 3-arg overload (src, dst, direction) so this works for Z, where a single
+    // direction can have multiple peer chips and the single-arg overload is undefined.
     RoutingDirection outgoing_direction = get_forwarding_direction(fabric_node_id_, dest_node);
-    auto available_links = get_forwarding_link_indices_in_direction(outgoing_direction);
+    auto available_links = get_forwarding_link_indices_in_direction(fabric_node_id_, dest_node, outgoing_direction);
     TT_FATAL(
         !available_links.empty(),
         "No forwarding links available in direction {} from node {} to node {}",
@@ -1472,8 +1479,10 @@ void TestDevice::create_latency_responder_kernel(
     // Register fabric connection to mark ethernet link as "used"
     // This is required for telemetry and code profiling to know which cores to read from
     // Note: Responder sends back to sender, so use RECEIVER worker type (similar to flow control credits)
+    // Use the 3-arg overload (src, dst, direction) so this works for Z, where a single
+    // direction can have multiple peer chips and the single-arg overload is undefined.
     RoutingDirection outgoing_direction = get_forwarding_direction(fabric_node_id_, sender_node);
-    auto available_links = get_forwarding_link_indices_in_direction(outgoing_direction);
+    auto available_links = get_forwarding_link_indices_in_direction(fabric_node_id_, sender_node, outgoing_direction);
     TT_FATAL(
         !available_links.empty(),
         "No forwarding links available in direction {} from node {} to node {}",
