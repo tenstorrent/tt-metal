@@ -168,6 +168,53 @@ def apply_interleaved_mrope(freqs: torch.Tensor, mrope_section: Sequence[int]) -
     return freqs_t
 
 
+def build_mrope_tt_tensors(
+    position_ids_3d: torch.Tensor,
+    *,
+    rope_theta: float,
+    partial_rotary_dim: int,
+    mrope_section: Sequence[int],
+    mesh_device,  # ttnn.MeshDevice (avoid circular import)
+    attention_scaling: float = 1.0,
+):
+    """Build M-RoPE cos/sin on CPU and upload to mesh as ttnn tensors.
+
+    Returns:
+      (cos_tt, sin_tt) each ttnn tensor of shape `[1, 1, S, partial_rotary_dim]`,
+      replicated across the mesh, bfloat16, TILE_LAYOUT, DRAM_MEMORY_CONFIG.
+
+    This is the format the existing qwen3.6 attention `rot_mats` argument
+    expects — a drop-in replacement for the 1D-gather-based path when
+    running with multimodal 3D position_ids.
+    """
+    import ttnn  # local import to keep this file pure-torch otherwise
+
+    cos, sin = build_mrope_cos_sin(
+        position_ids_3d,
+        rope_theta=rope_theta,
+        partial_rotary_dim=partial_rotary_dim,
+        mrope_section=mrope_section,
+        attention_scaling=attention_scaling,
+        dtype=torch.float32,
+    )
+    # cos, sin: [B, S, partial_rotary_dim] → [1, 1, S, partial_rotary_dim]
+    assert cos.shape[0] == 1, f"M-RoPE TT upload assumes B=1 for now; got B={cos.shape[0]}"
+    cos_4d = cos.unsqueeze(1)
+    sin_4d = sin.unsqueeze(1)
+
+    def _upload(t):
+        return ttnn.from_torch(
+            t,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    return _upload(cos_4d), _upload(sin_4d)
+
+
 def build_mrope_cos_sin(
     position_ids: torch.Tensor,
     *,
