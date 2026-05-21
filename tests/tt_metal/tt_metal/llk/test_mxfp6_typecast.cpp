@@ -42,7 +42,7 @@ static vector<uint32_t> run_mxfp6_typecast(
     const vector<uint32_t>& src_vec,
     uint32_t num_tiles,
     bool fp32_dest_acc_en) {
-    const IDevice* dev = mesh_device.get_devices()[0];
+    IDevice* dev = mesh_device.get_devices()[0];
     const experimental::metal2_host_api::NodeCoord node{0, 0};
 
     uint32_t input_tile_size = tt::tile_size(input_fmt);
