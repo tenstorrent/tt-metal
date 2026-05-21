@@ -174,8 +174,11 @@ class TtSwinLBackbone:
         )
 
         # Run 4 stages, collecting features only for stages in out_indices
+        import tracy
+
         features = []
         for s in range(4):
+            tracy.signpost(f"swin_stage_{s}")
             # Run all blocks in this stage
             for block in self.stages[s]:
                 output = block(output)
