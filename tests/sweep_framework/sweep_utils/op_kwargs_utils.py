@@ -323,11 +323,6 @@ def build_op_kwargs(
             op_kwargs[key] = None
             continue
 
-        # Skip activation list kwargs entirely — nanobind rejects Python lists
-        # for Sequence[EltwiseUnaryWithParam] params. The default (empty) is correct
-        # for model-traced configs since models don't use per-input activations.
-        if isinstance(value, list) and "activation" in key:
-            continue
         list_parsed = _maybe_parse_unary_list(value)
         if list_parsed is not value:
             op_kwargs[key] = list_parsed
