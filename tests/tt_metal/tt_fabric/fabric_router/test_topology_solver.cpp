@@ -5183,8 +5183,10 @@ AdjacencyGraph<TestGlobalNode> make_mesh_level_physical_graph_cluster_trace_80()
     return AdjacencyGraph<TestGlobalNode>(global_adj_map);
 }
 
-// Shared enumeration cap for Benchmark_*_MultiSolve_SatDfs (keep Line64 and Ring64/trace comparable).
-constexpr size_t kTopologyBenchmarkMultiSolveEnumerationCap = 10;
+// Line64 mesh benchmark: keep moderate cap (many Hamiltonian paths exist; full grid enumeration explodes).
+constexpr size_t kTopologyBenchmarkLine64MultiSolveEnumerationCap = 10;
+// Ring64 on 80-node trace: large cap for incremental scaling (SAT vs DFS); may exhaust before cap.
+constexpr size_t kTopologyBenchmarkRing64MultiSolveEnumerationCap = 500;
 
 }  // namespace
 
@@ -5196,7 +5198,7 @@ TEST_F(TopologySolverTest, Benchmark_Line64_On_Mesh4x16_MultiSolve_SatDfs) {
     constexpr size_t kPathNodes = 64;
     constexpr size_t kMeshRows = 4;
     constexpr size_t kMeshCols = 16;
-    constexpr size_t kMaxSolutions = kTopologyBenchmarkMultiSolveEnumerationCap;
+    constexpr size_t kMaxSolutions = kTopologyBenchmarkLine64MultiSolveEnumerationCap;
 
     static_assert(kMeshRows * kMeshCols == kPathNodes, "mesh node count must match path length");
 
@@ -5338,7 +5340,7 @@ TEST_F(TopologySolverTest, Benchmark_Ring64_On_ClusterTrace80_MultiSolve_SatDfs)
     using namespace tt::tt_fabric::detail;
     constexpr size_t kRingNodes = 64;
     constexpr size_t kTraceNodes = 80;
-    constexpr size_t kMaxSolutions = kTopologyBenchmarkMultiSolveEnumerationCap;
+    constexpr size_t kMaxSolutions = kTopologyBenchmarkRing64MultiSolveEnumerationCap;
 
     auto target_graph = create_1d_ring_graph<TestTargetNode>(kRingNodes);
     auto global_graph = make_mesh_level_physical_graph_cluster_trace_80();
@@ -5352,7 +5354,7 @@ TEST_F(TopologySolverTest, Benchmark_Ring64_On_ClusterTrace80_MultiSolve_SatDfs)
     ASSERT_EQ(graph_data.n_target, kRingNodes);
     ASSERT_EQ(graph_data.n_global, kTraceNodes);
 
-    setenv("TT_METAL_OPERATION_TIMEOUT_SECONDS", "600", 1);
+    setenv("TT_METAL_OPERATION_TIMEOUT_SECONDS", "7200", 1);
 
     auto validate_all = [&](const std::vector<MappingResult<TestTargetNode, TestGlobalNode>>& results,
                             const char* label) {
@@ -5388,7 +5390,7 @@ TEST_F(TopologySolverTest, Benchmark_Ring64_On_ClusterTrace80_MultiSolve_SatDfs)
                 global_graph,
                 constraints,
                 excluded,
-                ConnectionValidationMode::RELAXED,
+                ConnectionValidationMode::STRICT,
                 /*quiet_mode=*/true,
                 engine,
                 unique_shapes_flag);
@@ -5400,16 +5402,29 @@ TEST_F(TopologySolverTest, Benchmark_Ring64_On_ClusterTrace80_MultiSolve_SatDfs)
             excluded.push_back(results.back().target_to_global);
 
             const auto t_incremental_begin = clock::now();
+            std::string incremental_delta_ms_csv;
+            std::string incremental_cumulative_ms_csv;
+            long cumulative_incremental_round_ms = 0;
             for (size_t extra = 1; extra < kMaxSolutions; ++extra) {
+                const auto t_round_begin = clock::now();
                 auto next_result = enum_session.next(
                     target_graph,
                     global_graph,
                     constraints,
                     excluded,
-                    ConnectionValidationMode::RELAXED,
+                    ConnectionValidationMode::STRICT,
                     /*quiet_mode=*/true,
                     engine,
                     unique_shapes_flag);
+                const long round_delta_ms =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t_round_begin).count();
+                cumulative_incremental_round_ms += round_delta_ms;
+                if (!incremental_delta_ms_csv.empty()) {
+                    incremental_delta_ms_csv += ',';
+                    incremental_cumulative_ms_csv += ',';
+                }
+                incremental_delta_ms_csv += std::to_string(round_delta_ms);
+                incremental_cumulative_ms_csv += std::to_string(cumulative_incremental_round_ms);
                 if (!next_result.success) {
                     break;
                 }
@@ -5432,8 +5447,16 @@ TEST_F(TopologySolverTest, Benchmark_Ring64_On_ClusterTrace80_MultiSolve_SatDfs)
 
             if (!unique_shapes_flag) {
                 EXPECT_GE(n_found, 2u) << engine_label << ": expect multiple distinct embeddings";
-                EXPECT_EQ(n_found, kMaxSolutions)
-                    << engine_label << ": should fill requested enumeration cap (distinct assignments)";
+                EXPECT_LE(n_found, kMaxSolutions) << engine_label << ": at most one result per requested slot";
+                if (n_found < kMaxSolutions) {
+                    log_info(
+                        tt::LogFabric,
+                        "Benchmark_Ring64_On_ClusterTrace80_MultiSolve: enumeration exhausted before cap "
+                        "engine={} unique_shapes=false solutions_found={} max_requested={}",
+                        engine_label,
+                        n_found,
+                        kMaxSolutions);
+                }
                 std::set<std::vector<int>> distinct_raw;
                 for (const auto& r : results) {
                     std::vector<int> raw(graph_data.n_target, -1);
@@ -5516,7 +5539,8 @@ TEST_F(TopologySolverTest, Benchmark_Ring64_On_ClusterTrace80_MultiSolve_SatDfs)
                 tt::LogFabric,
                 "Benchmark_Ring64_On_ClusterTrace80_MultiSolve: engine={} unique_shapes={} "
                 "first_solution_ms={} incremental_total_ms={} incremental_avg_ms={} total_ms={} "
-                "solutions_found={} max_requested={} ring_nodes={} trace_nodes={}",
+                "solutions_found={} max_requested={} ring_nodes={} trace_nodes={} "
+                "incremental_delta_ms_per_round=[{}] incremental_cumulative_ms_after_round=[{}]",
                 engine_label,
                 unique_shapes_word,
                 first_ms,
@@ -5526,7 +5550,9 @@ TEST_F(TopologySolverTest, Benchmark_Ring64_On_ClusterTrace80_MultiSolve_SatDfs)
                 n_found,
                 kMaxSolutions,
                 kRingNodes,
-                kTraceNodes);
+                kTraceNodes,
+                incremental_delta_ms_csv,
+                incremental_cumulative_ms_csv);
         }
     }
 }
@@ -5721,7 +5747,6 @@ TEST_F(TopologySolverTest, TopologySolver_SolveNextAndIncrementalSatSession) {
     {
         TopologyMappingEnumerationSession<int, int> probe;
         std::vector<std::map<int, int>> ex;
-        ex.reserve(kRounds);
         for (size_t i = 0; i < kRounds; ++i) {
             const auto r = probe.next(
                 target,
@@ -5740,7 +5765,6 @@ TEST_F(TopologySolverTest, TopologySolver_SolveNextAndIncrementalSatSession) {
 
     TopologyMappingEnumerationSession<int, int> check_calls;
     std::vector<std::map<int, int>> ex_acc;
-    ex_acc.reserve(kRounds);
     std::set<std::map<int, int>> session_maps;
     for (size_t i = 0; i < kRounds; ++i) {
         const size_t excluded_at_call = ex_acc.size();
@@ -5793,7 +5817,6 @@ TEST_F(TopologySolverTest, TopologySolver_SolveNextAndIncrementalSatSession) {
     {
         TopologyMappingEnumerationSession<int, int> warmup;
         std::vector<std::map<int, int>> ex;
-        ex.reserve(kRounds);
         for (size_t i = 0; i < kRounds; ++i) {
             const auto r = warmup.next(
                 target,
@@ -5814,7 +5837,6 @@ TEST_F(TopologySolverTest, TopologySolver_SolveNextAndIncrementalSatSession) {
     for (size_t i = 0; i < kRounds; ++i) {
         TopologyMappingEnumerationSession<int, int> fresh;
         std::vector<std::map<int, int>> ex;
-        ex.reserve(i);
         for (size_t j = 0; j < i; ++j) {
             ex.push_back(expected_prefix[j]);
         }
@@ -5838,7 +5860,6 @@ TEST_F(TopologySolverTest, TopologySolver_SolveNextAndIncrementalSatSession) {
     TopologyMappingEnumerationSession<int, int> reuse_session;
     {
         std::vector<std::map<int, int>> ex;
-        ex.reserve(kRounds);
         for (size_t i = 0; i < kRounds; ++i) {
             const auto r = reuse_session.next(
                 target,
@@ -5859,12 +5880,8 @@ TEST_F(TopologySolverTest, TopologySolver_SolveNextAndIncrementalSatSession) {
 
     RecordProperty("fresh_session_total_ms", static_cast<int>(fresh_ms));
     RecordProperty("reuse_session_total_ms", static_cast<int>(reuse_ms));
-    // Timing assertions are only meaningful when there is measurable elapsed time.
-    // Sub-millisecond problems (both == 0 ms) cannot be compared reliably.
-    if (fresh_ms > 0) {
-        EXPECT_LT(reuse_ms, fresh_ms);
-        EXPECT_LT(reuse_ms * 2, fresh_ms);
-    }
+    EXPECT_LT(reuse_ms, fresh_ms);
+    EXPECT_LT(reuse_ms * 2, fresh_ms);
 }
 
 }  // namespace tt::tt_fabric
