@@ -86,6 +86,11 @@ class TtSwinAttention:
         pad_H = H + pad_b
         pad_W = W + pad_r
 
+        # Switch to ROW_MAJOR BEFORE padding (pad+untilize are both real ops on TILE
+        # tensors with non-tile-aligned H/W). Doing the untilize on the unpadded tensor,
+        # then padding in ROW_MAJOR, fuses the layout transition with the pad cost.
+        if input_tensor.layout != ttnn.ROW_MAJOR_LAYOUT:
+            input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if pad_b > 0 or pad_r > 0:
             input_tensor = ttnn.pad(input_tensor, [(0, 0), (0, pad_b), (0, pad_r), (0, 0)], value=0.0)
 
@@ -106,10 +111,8 @@ class TtSwinAttention:
         wH = self.window_size[0]
         wW = self.window_size[1]
 
-        # Window partition. Doing this in TILE layout is expensive because wH=12, nW=4,
-        # wW=12 are not tile-aligned (TILE=32), so reshape + transpose are real ops. We get
-        # a much cheaper chain by untilizing once, running the partition in ROW_MAJOR
-        # (where the reshape/transpose are pure byte views), and tilizing once at the end.
+        # Window partition in ROW_MAJOR is cheap: reshape + transpose + reshape are pure
+        # byte views (no tile-grid raster cost). We then tilize once via ttnn.linear (QKV).
         if input_tensor.layout != ttnn.ROW_MAJOR_LAYOUT:
             input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         input_tensor = ttnn.reshape(
