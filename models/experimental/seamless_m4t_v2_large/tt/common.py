@@ -103,6 +103,18 @@ def _largest_divisor_at_most(n: int, cap: int) -> int:
     return 1
 
 
+def pick_largest_height_shard_nhw_cores(nhw_tiles: int, device: ttnn.Device) -> int:
+    """Largest NHW core count that divides ``nhw_tiles`` and fits the compute grid.
+
+    Used for conformer depthwise Conv1d (height-sharded). TTNN auto-shard often picks very
+    few cores when L1 is tight; ``override_sharding_config`` + ``core_grid`` can raise core
+    count when a large divisor of ``nhw_tiles`` exists (e.g. 992 tiles → 31 or 62 cores).
+    """
+    grid = device.compute_with_storage_grid_size()
+    max_cores = max(1, int(grid.x) * int(grid.y))
+    return _largest_divisor_at_most(max(1, nhw_tiles), min(max_cores, max(1, nhw_tiles)))
+
+
 def _pick_matmul_1d_grid(device: ttnn.Device, *, n_tiles: int) -> tuple[int, int]:
     """Pick a worker grid for 1D-on-N multicast matmul (Devstral-style).
 
