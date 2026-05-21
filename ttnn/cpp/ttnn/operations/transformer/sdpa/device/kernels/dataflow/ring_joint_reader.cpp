@@ -38,6 +38,11 @@ void kernel_main() {
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(23) == 1;
     constexpr uint32_t num_q_readers = get_compile_time_arg_val(25);
 
+    // Joint-path compile-time gating. When zero, joint Q/K branches are statically dead
+    // and dropped by the compiler, eliminating runtime ternaries and joint generator uses.
+    constexpr bool has_joint_q = num_joint_q_chunks > 0;
+    constexpr bool has_joint_k = num_joint_k_chunks > 0;
+
     constexpr auto q_args = TensorAccessorArgs<26>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
@@ -232,7 +237,12 @@ void kernel_main() {
         // Iterate over KV blocks gathered on ring.
         // Only the last ring ID will append joint_K, joint_V to K, V.
         const bool do_joint_kv = ring_id == ring_size - 1;
-        const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
+        uint32_t num_kv_chunks = num_local_k_chunks;
+        if constexpr (has_joint_k) {
+            if (do_joint_kv) {
+                num_kv_chunks += num_joint_k_chunks;
+            }
+        }
 
         const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;  // Floor division to get tile ID
         const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
@@ -241,7 +251,8 @@ void kernel_main() {
         // In causal non balanced case when processing KV received from other devices:
         // - skip over KV received from subsequent devices
         // - do non-causal attention on the KV from preceding devices
-        const bool ring_iter_does_work = (ring_iter_processes_KV_chunks || (do_joint_kv && L != 0)) &&
+        const bool joint_contributes = (has_joint_k && L != 0) ? do_joint_kv : false;
+        const bool ring_iter_does_work = (ring_iter_processes_KV_chunks || joint_contributes) &&
                                          !(is_causal && ring_index < ring_id && !is_balanced);
 
         uint32_t KV_chunks_processed_in_iter = 0;
@@ -288,7 +299,7 @@ void kernel_main() {
             const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
             const uint32_t q_chunk = global_q_chunk % num_q_chunks;
             const auto q_row_start_tile = q_chunk * Sq_chunk_t;
-            const bool is_joint_q = q_chunk >= num_local_q_chunks;
+            const bool is_joint_q = has_joint_q ? (q_chunk >= num_local_q_chunks) : false;
 
             const bool balanced_skip_q = q_chunk < half_sequence && is_balanced && ring_index < ring_id;
 
@@ -301,17 +312,15 @@ void kernel_main() {
                 continue;
             }
 
-            Slice q_slice;
-            uint32_t q_end_seq_tile;
-            if (is_joint_q) {
-                // Get row index into the joint Q tensor
-                const uint32_t joint_q_row_start_tile = (q_chunk - num_local_q_chunks) * Sq_chunk_t;
-                q_slice = Slice(nb, nq, joint_q_row_start_tile, joint_q_row_start_tile + Sq_chunk_t, 0, DHt);
-                q_end_seq_tile = Lt;
-            } else {
-                // Index into the Q input tensor
-                q_slice = Slice(nb, nq, q_row_start_tile, q_row_start_tile + Sq_chunk_t, 0, DHt);
-                q_end_seq_tile = local_padded_Nt;
+            // Default to local Q tensor; override below for joint Q when applicable.
+            Slice q_slice(nb, nq, q_row_start_tile, q_row_start_tile + Sq_chunk_t, 0, DHt);
+            uint32_t q_end_seq_tile = local_padded_Nt;
+            if constexpr (has_joint_q) {
+                if (is_joint_q) {
+                    const uint32_t joint_q_row_start_tile = (q_chunk - num_local_q_chunks) * Sq_chunk_t;
+                    q_slice = Slice(nb, nq, joint_q_row_start_tile, joint_q_row_start_tile + Sq_chunk_t, 0, DHt);
+                    q_end_seq_tile = Lt;
+                }
             }
 
             // Iteration counter for chain forwarding decisions
@@ -327,7 +336,7 @@ void kernel_main() {
                  * If this is the last ring ID, we will also read from joint KV.
                  * If this k chunk is in the spatial input and beyond the logical N, we will skip it.
                  */
-                const bool kv_chunk_is_joint = k_chunk >= num_local_k_chunks;
+                const bool kv_chunk_is_joint = has_joint_k ? (k_chunk >= num_local_k_chunks) : false;
                 // Global index into the padded KV tensor
                 const uint32_t kv_global_start_tile = local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
                 const bool kv_chunk_is_beyond_logical_n = !kv_chunk_is_joint && (kv_global_start_tile >= logical_nt);
@@ -337,33 +346,28 @@ void kernel_main() {
                     continue;
                 }
 
+                // Default to local/gathered KV; override below for joint KV when applicable.
                 Slice k_slice;
                 Slice v_slice;
-                uint32_t
-                    end_seq_tile;  // further information to `read_block` to determine whether it should pad with zeros.
-
+                uint32_t end_seq_tile;
                 const uint32_t nk = nq / q_heads_per_k;
-                if (kv_chunk_is_joint) {
-                    const uint32_t joint_k_chunk = k_chunk - num_local_k_chunks;
-                    const uint32_t joint_k_row_start_tile = joint_k_chunk * Sk_chunk_t;
-
-                    k_slice = Slice(nb, nk, joint_k_row_start_tile, joint_k_row_start_tile + Sk_chunk_t, 0, DHt);
-                    v_slice = Slice(nb, nq, joint_k_row_start_tile, joint_k_row_start_tile + Sk_chunk_t, 0, vDHt);
-                    end_seq_tile = Lt;
+                if (ring_iter == 0) {
+                    const uint32_t local_k_row_start_tile = k_chunk * Sk_chunk_t;
+                    k_slice = Slice(nb, nk, local_k_row_start_tile, local_k_row_start_tile + Sk_chunk_t, 0, DHt);
+                    v_slice = Slice(nb, nq, local_k_row_start_tile, local_k_row_start_tile + Sk_chunk_t, 0, vDHt);
+                    end_seq_tile = std::min(logical_nt, local_padded_Nt);
                 } else {
-                    if (ring_iter == 0) {
-                        // Local KV
-                        const uint32_t local_k_row_start_tile = k_chunk * Sk_chunk_t;
-
-                        k_slice = Slice(nb, nk, local_k_row_start_tile, local_k_row_start_tile + Sk_chunk_t, 0, DHt);
-                        v_slice = Slice(nb, nq, local_k_row_start_tile, local_k_row_start_tile + Sk_chunk_t, 0, vDHt);
-                        end_seq_tile = std::min(logical_nt, local_padded_Nt);
-                    } else {
-                        // Gathered KV
-                        const uint32_t gathered_kv_start_tile = ring_iter_kv_start_tile + k_chunk * Sk_chunk_t;
-                        k_slice = Slice(nb, nk, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, DHt);
-                        v_slice = Slice(nb, nq, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, vDHt);
-                        end_seq_tile = std::min(logical_nt, local_padded_Nt * (ring_id + 1));
+                    const uint32_t gathered_kv_start_tile = ring_iter_kv_start_tile + k_chunk * Sk_chunk_t;
+                    k_slice = Slice(nb, nk, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, DHt);
+                    v_slice = Slice(nb, nq, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, vDHt);
+                    end_seq_tile = std::min(logical_nt, local_padded_Nt * (ring_id + 1));
+                }
+                if constexpr (has_joint_k) {
+                    if (kv_chunk_is_joint) {
+                        const uint32_t joint_k_row_start_tile = (k_chunk - num_local_k_chunks) * Sk_chunk_t;
+                        k_slice = Slice(nb, nk, joint_k_row_start_tile, joint_k_row_start_tile + Sk_chunk_t, 0, DHt);
+                        v_slice = Slice(nb, nq, joint_k_row_start_tile, joint_k_row_start_tile + Sk_chunk_t, 0, vDHt);
+                        end_seq_tile = Lt;
                     }
                 }
 
@@ -380,17 +384,17 @@ void kernel_main() {
                 if (k_chain.should_receive(nb, nq)) {
                     k_chain.receive();
                 } else {
-                    // Injector or non-participant: read K from DRAM
-                    // For padded iterations, injector still reads K to broadcast to receivers
-                    fetch_block(
-                        kv_chunk_is_joint ? joint_k_generator
-                                          : (ring_iter == 0 ? local_k_generator : gathered_k_generator),
-                        k_slice,
-                        end_seq_tile,
-                        cb_k_start_address,
-                        k_tile_bytes,
-                        true /*transpose*/
-                    );
+                    // Injector or non-participant: read K from DRAM. Pick the generator once
+                    // (joint branch elided when has_joint_k is false), then issue one fetch.
+                    const auto& k_gen = [&]() -> const auto& {
+                        if constexpr (has_joint_k) {
+                            if (kv_chunk_is_joint) {
+                                return joint_k_generator;
+                            }
+                        }
+                        return ring_iter == 0 ? local_k_generator : gathered_k_generator;
+                    }();
+                    fetch_block(k_gen, k_slice, end_seq_tile, cb_k_start_address, k_tile_bytes, true /*transpose*/);
                 }
 
                 // Forward K chunk via chain (uses K's data size explicitly)
@@ -415,13 +419,21 @@ void kernel_main() {
                 // Placed after K forward so no outstanding NOC writes remain
                 // (noc_async_read_barrier inside subblock read would deadlock with in-flight writes).
                 if (k_chunk == 0 && need_q_read) {
+                    const auto& q_gen = [&]() -> const auto& {
+                        if constexpr (has_joint_q) {
+                            if (is_joint_q) {
+                                return joint_q_generator;
+                            }
+                        }
+                        return q_generator;
+                    }();
                     if constexpr (use_q_subblock_push) {
                         for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
                             const uint32_t sb_row_start = q_slice.d2_start + q_sub * qk_subblock_h;
                             const uint32_t sb_row_end = sb_row_start + qk_subblock_h;
                             Slice q_sub_slice(q_slice.d0, q_slice.d1, sb_row_start, sb_row_end, 0, DHt);
                             read_block(
-                                is_joint_q ? joint_q_generator : q_generator,
+                                q_gen,
                                 q_sub_slice,
                                 q_end_seq_tile,
                                 cb_q_in,
@@ -431,7 +443,7 @@ void kernel_main() {
                         }
                     } else {
                         read_block(
-                            is_joint_q ? joint_q_generator : q_generator,
+                            q_gen,
                             q_slice,
                             q_end_seq_tile,
                             cb_q_in,
@@ -448,15 +460,15 @@ void kernel_main() {
                 if (v_chain.should_receive(nb, nq)) {
                     v_chain.receive();
                 } else {
-                    fetch_block(
-                        kv_chunk_is_joint ? joint_v_generator
-                                          : (ring_iter == 0 ? local_v_generator : gathered_v_generator),
-                        v_slice,
-                        end_seq_tile,
-                        cb_v_start_address,
-                        v_tile_bytes,
-                        false /*transpose*/
-                    );
+                    const auto& v_gen = [&]() -> const auto& {
+                        if constexpr (has_joint_k) {
+                            if (kv_chunk_is_joint) {
+                                return joint_v_generator;
+                            }
+                        }
+                        return ring_iter == 0 ? local_v_generator : gathered_v_generator;
+                    }();
+                    fetch_block(v_gen, v_slice, end_seq_tile, cb_v_start_address, v_tile_bytes, false /*transpose*/);
                 }
 
                 // Forward V to next core(s) before push_back — prevents compute from
