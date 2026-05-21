@@ -2,8 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-
 import pytest
 import torch
 import ttnn
@@ -395,124 +393,106 @@ def test_performance():
     ), f"Utilization {util:.1f}% is greater than expected {expected_util:.1f}% by more than {tolerance:.1f}%"
 
 
-# Wan2.2 AGMM-equivalent shapes: the local matmul each device performs after the
-# K-axis all-gather. Matches the SHAPES list in models/tt_dit/utils/sweep_mm_block_sizes.py
-# (K-fractured 4-way; cluster_size=4 is used only for K_block candidate generation
-# so the block search space matches what the AGMM sweep explores).
 TABLE_CONFIGS = [
-    # (M, K, N, use_bias, activation, cluster_size_for_candidate_gen)
-    (3072, 5120, 3840, True, None, 4),
-    (3072, 5120, 1280, True, None, 4),
-    (3072, 5120, 3456, True, "gelu", 4),
+    (512, 512, 512),
+    (512, 1024, 1024),
+    (512, 1024, 2048),
+    (1024, 1024, 1024),
+    (1024, 1024, 2048),
+    (1024, 2048, 2048),
+    (2048, 2048, 2048),
+    (2048, 2048, 3072),
+    (2048, 3072, 3072),
+    (3072, 3072, 3072),
+    (3072, 3072, 4096),
+    (3072, 4096, 4096),
+    (4096, 4096, 4096),
+    (8192, 8192, 8192),
+    (16384, 16384, 16384),
 ]
 
 
-def _shape_id(M, K, N, activation):
-    return f"M{M}_K{K}_N{N}_{'gelu' if activation else 'plain'}"
-
-
-TABLE_CONFIG_IDS = [_shape_id(M, K, N, a) for M, K, N, _, a, _ in TABLE_CONFIGS]
-
-
-@pytest.mark.timeout(0)
-@pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance sweep — skip on CI")
+@pytest.mark.skip()
 @pytest.mark.parametrize(
-    "M, K, N, use_bias, activation, cluster_size",
+    "M, K, N",
     TABLE_CONFIGS,
-    ids=TABLE_CONFIG_IDS,
 )
-def test_perf_table_sweep(device, M, K, N, use_bias, activation, cluster_size):
-    """Sweep all (M_block, K_block, N_block, subblock) combos for one (shape, bias, activation).
+@pytest.mark.parametrize("fp32_acc", [True, False], ids=["fp32_acc", "bf16_acc"])
+@pytest.mark.parametrize(
+    "math_fidelity",
+    [ttnn.MathFidelity.LoFi, ttnn.MathFidelity.HiFi2, ttnn.MathFidelity.HiFi4],
+    ids=["LoFi", "HiFi2", "HiFi4"],
+)
+@pytest.mark.parametrize(
+    "dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b], ids=["dtype_bf16", "dtype_bf8b", "dtype_bf4b"]
+)
+def test_perf_table_sweep(device, M, K, N, fp32_acc, math_fidelity, dtype):
+    logger.info(f"Running test_linear with M={M}, K={K}, N={N}")
+    torch_execution_dtype = torch.float32
+    torch_dtype = torch.bfloat16
 
-    Block candidates match the AGMM Linear sweep (models/tt_dit/utils/sweep_mm_block_sizes.py):
-      - M_block / N_block: even sizes in [2,16] union divisors of M_per_core / N_per_core.
-      - K_block: divisors of K_per_device at >= K_BLOCK_MIN (K_per_device = K_tiles / cluster_size,
-        matching the AGMM 4-way K-fracture so the search space is identical).
-      - subblock: pick_subblock — prefers (2,2) when fp32 dest acc and both blocks even.
-    L1 budget filter and subblock picker are also reused from the AGMM sweep helpers.
-    """
-    from models.tt_dit.utils.sweep_mm_block_sizes import (
-        get_mn_block_candidates,
-        get_k_block_candidates,
-        pick_subblock,
-        estimate_l1_kb,
-        L1_BUDGET_KB,
-    )
+    torch_input = torch.randn((M, K), dtype=torch_dtype).to(torch_execution_dtype)
+    weight_input = torch.randn((K, N), dtype=torch_dtype).to(torch_execution_dtype)
 
-    M_tiles, K_tiles, N_tiles = M // 32, K // 32, N // 32
-    core_grid = device.compute_with_storage_grid_size()
-    M_per_core = (M_tiles + core_grid.x - 1) // core_grid.x
-    N_per_core = (N_tiles + core_grid.y - 1) // core_grid.y
-    K_per_device = K_tiles // cluster_size
+    # Prepare TT tensors
+    tt_input = ttnn.from_torch(torch_input, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_weight = ttnn.from_torch(weight_input, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT)
 
-    m_cands = get_mn_block_candidates(M_per_core)
-    k_cands = get_k_block_candidates(K_per_device)
-    n_cands = get_mn_block_candidates(N_per_core)
+    with torch.no_grad():
+        torch_output = torch_input @ weight_input
 
-    use_case = "plain_gelu" if activation == "gelu" else "plain"
-
-    print(f"\n=== {_shape_id(M, K, N, activation)} ===", flush=True)
-    print(f"  per_core: M={M_per_core}  K_per_device={K_per_device}  N={N_per_core}", flush=True)
-    print(f"  M blocks ({len(m_cands)}): {m_cands}", flush=True)
-    print(f"  K blocks ({len(k_cands)}): {k_cands}", flush=True)
-    print(f"  N blocks ({len(n_cands)}): {n_cands}", flush=True)
-
-    combos = []
-    for m_blk in m_cands:
-        for k_blk in k_cands:
-            for n_blk in n_cands:
-                if estimate_l1_kb(m_blk, k_blk, n_blk, use_case) > L1_BUDGET_KB:
-                    continue
-                sb_h, sb_w = pick_subblock(m_blk, n_blk)
-                combos.append((m_blk, k_blk, n_blk, sb_h, sb_w))
-
-    print(f"  combos to measure: {len(combos)} (post-L1 filter)", flush=True)
-
-    # Build tensors once per shape (huge speedup for the sweep vs rebuilding per combo).
-    torch_input = torch.randn((M, K), dtype=torch.float32)
-    weight_input = torch.randn((K, N), dtype=torch.float32)
-    bias_input = torch.randn((1, N), dtype=torch.float32) if use_bias else None
-
-    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-    tt_weight = ttnn.from_torch(weight_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-    tt_bias = (
-        ttnn.from_torch(bias_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT) if use_bias else None
-    )
-
-    activation_fn = (ttnn.UnaryOpType.GELU, False) if activation == "gelu" else None
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_fidelity=math_fidelity,
         math_approx_mode=False,
-        fp32_dest_acc_en=True,
+        fp32_dest_acc_en=fp32_acc,
         packer_l1_acc=True,
     )
 
-    failed = 0
-    for m_blk, k_blk, n_blk, sb_h, sb_w in combos:
+    core_grid = device.compute_with_storage_grid_size()
+    subblocks = [(2, 2)] if fp32_acc else [(2, 4), (4, 2)]
+
+    m_block_sizes = [2, 4, 8, 16]
+    n_block_sizes = [2, 4, 8, 16]
+    k_block_sizes = [2, 4, 8, 16]
+
+    from itertools import product
+
+    for M_block_size, K_block_size, N_block_size, (subblock_h, subblock_w) in product(
+        m_block_sizes, k_block_sizes, n_block_sizes, subblocks
+    ):
+        if (M_block_size < subblock_h) or (N_block_size < subblock_w):
+            continue
+        if (M_block_size % subblock_h) != 0 or (N_block_size % subblock_w) != 0:
+            continue
+        logger.info(
+            f"Running minimal_matmul with M_block_size={M_block_size}, K_block_size={K_block_size}, N_block_size={N_block_size}, subblock_h={subblock_h}, subblock_w={subblock_w}"
+        )
+
+        matmul_config = ttnn.MinimalMatmulConfig(
+            M_block_size=M_block_size,
+            K_block_size=K_block_size,
+            N_block_size=N_block_size,
+            subblock_h=subblock_h,
+            subblock_w=subblock_w,
+            compute_with_storage_grid_size=core_grid,
+        )
         try:
-            matmul_config = ttnn.MinimalMatmulConfig(
-                M_block_size=m_blk,
-                K_block_size=k_blk,
-                N_block_size=n_blk,
-                subblock_h=sb_h,
-                subblock_w=sb_w,
-                compute_with_storage_grid_size=core_grid,
-            )
-            ttnn.experimental.minimal_matmul(
-                tt_input,
-                tt_weight,
-                bias_tensor=tt_bias,
-                fused_activation=activation_fn,
+            tt_output = ttnn.experimental.minimal_matmul(
+                input_tensor=tt_input,
+                weight_tensor=tt_weight,
+                bias_tensor=None,
                 compute_kernel_config=compute_config,
                 config=matmul_config,
             )
+            tt_output = ttnn.to_torch(tt_output)
+            check_result = assert_quality(torch_output, tt_output)
         except Exception as e:
             if isinstance(e, KeyboardInterrupt):
                 raise
-            failed += 1
-    if failed:
-        logger.info(f"Failed combos: {failed}")
+            logger.error(
+                f"Error running minimal_matmul with M_block_size={M_block_size}, K_block_size={K_block_size}, N_block_size={N_block_size}, subblock_h={subblock_h}, subblock_w={subblock_w}"
+            )
 
 
 def perf_model(M, K, N, core_count, fidelity_div):
@@ -567,97 +547,81 @@ def post_process_ops_log(
     return results
 
 
-@pytest.mark.timeout(0)
-@pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance sweep — skip on CI")
-def test_create_perf_table():
-    """Per shape, run test_perf_table_sweep via run_device_profiler and report top combos.
-
-    Mirrors the AGMM sweep orchestrator (models/tt_dit/utils/sweep_mm_block_sizes.py
-    test_mm_sweep): one profiler subprocess per shape, parse ops log, sort by kernel
-    duration. Outputs the best block-size combo per shape so it can be compared to
-    the AGMM Linear sweep results on the same shapes.
-    """
-    fidelity_div = 2  # HiFi2 (matches AGMM default in run_test_linear / sweep)
+@pytest.mark.skip()
+@pytest.mark.parametrize(
+    "fidelity, dtype, fp32_acc",
+    [
+        ("HiFi2", "dtype_bf16", "fp32_acc"),
+        ("HiFi2", "dtype_bf16", "bf16_acc"),
+        ("HiFi4", "dtype_bf16", "bf16_acc"),
+        ("HiFi2", "dtype_bf8b", "bf16_acc"),
+        ("LoFi", "dtype_bf8b", "bf16_acc"),
+        ("LoFi", "dtype_bf4b", "bf16_acc"),
+    ],
+    ids=[
+        "HiFi2_bf16_fp32_acc",
+        "HiFi2_bf16_bf16_acc",
+        "HiFi4_bf16_bf16_acc",
+        "HiFi2_bf8b_bf16_acc",
+        "LoFi_bf8b_bf16_acc",
+        "LoFi_bf4b_bf16_acc",
+    ],
+)
+def test_create_perf_table(fidelity, dtype, fp32_acc):
+    fidelity_div = {
+        "HiFi2": 2,
+        "HiFi4": 4,
+        "LoFi": 1,
+    }[fidelity]
     perf_results = []
     expected_results = []
     attrs_results = []
-    summary_rows = []
-    for M, K, N, use_bias, activation, _cluster_size in TABLE_CONFIGS:
-        shape_id = _shape_id(M, K, N, activation)
-        subdir = f"ttnn_minimal_matmul_sweep_{shape_id}"
-        command = (
-            f"pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_minimal_matmul.py"
-            f"::test_perf_table_sweep[{shape_id}] -s"
-        )
+    subdir = "ttnn_linear_performance"
+    for M, K, N in TABLE_CONFIGS:
+        float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]"]
+        cols = ["ATTRIBUTES"]
+        command = f"pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_minimal_matmul.py::test_perf_table_sweep[{dtype}-{fidelity}-{fp32_acc}-M={M}-K={K}-N={N}]"
 
         run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
         r = post_process_ops_log(
-            subdir,
-            float_columns=["CORE COUNT", "DEVICE KERNEL DURATION [ns]"],
-            columns=["ATTRIBUTES"],
-            op_name="",
-            sum_vals=False,
-            has_signposts=False,
+            subdir, float_columns=float_cols, columns=cols, op_name="", sum_vals=False, has_signposts=False
         )
 
-        durations = r["DEVICE KERNEL DURATION [ns]"]
-        attrs_col = r["ATTRIBUTES"]
-        if len(durations) == 0:
-            print(f"\n=== {shape_id} ===  no measurements", flush=True)
-            perf_results.append(None)
-            expected_results.append(None)
-            attrs_results.append(None)
-            continue
-
         core_count = int(r["CORE COUNT"][0])
-        # numpy/pandas ordering
-        import numpy as np
-
-        order = np.argsort(durations)
-        best_idx = int(order[0])
-        duration_ns = int(durations[best_idx])
-        try:
-            best_attrs_full = attrs_col.iloc[best_idx]
-        except AttributeError:
-            best_attrs_full = attrs_col[best_idx]
-        # Trim attrs to just the MinimalMatmulConfig portion if possible
-        try:
-            best_attrs = best_attrs_full.split("'config': ")[1].split("'fused_")[0]
-        except Exception:
-            best_attrs = str(best_attrs_full)[:200]
+        duration_ns = int(r["DEVICE KERNEL DURATION [ns]"].min())
+        duration_arg_min = int(r["DEVICE KERNEL DURATION [ns]"].argmin())
+        attrs = r["ATTRIBUTES"][duration_arg_min].split("'config': ")[1].split("'fused_")[0]
 
         expected_ns = perf_model(M, K, N, core_count, fidelity_div)
 
-        print(f"\n=== {shape_id} ===  ({'bias' if use_bias else 'no_bias'}, {activation or 'plain'})", flush=True)
-        print(f"  Best: {duration_ns} ns", flush=True)
-        print("  Top 5:", flush=True)
-        for rank, idx in enumerate(order[:5], 1):
-            ns = int(durations[idx])
-            try:
-                a_full = attrs_col.iloc[idx]
-            except AttributeError:
-                a_full = attrs_col[idx]
-            try:
-                a = a_full.split("'config': ")[1].split("'fused_")[0]
-            except Exception:
-                a = str(a_full)[:200]
-            print(f"    #{rank}: {ns} ns  {a}", flush=True)
-
         perf_results.append(duration_ns)
         expected_results.append(expected_ns)
-        attrs_results.append(best_attrs)
-        summary_rows.append((M, K, N, use_bias, activation, duration_ns, expected_ns, best_attrs))
+        attrs_results.append(attrs)
 
     # Pretty summary table
-    print("\n| M, K, N | bias | act | math util (%) | measured (ms) | best config |", flush=True)
-    print("|---|---|---|---:|---:|---:|", flush=True)
-    for M, K, N, use_bias, activation, measured_ns, ideal_ns, attrs in summary_rows:
-        if measured_ns is None or measured_ns == 0:
-            print(f"| ({M}, {K}, {N}) | {use_bias} | {activation or '-'} | - | - | - |", flush=True)
-            continue
-        measured_ms = measured_ns / 1e6
-        math_util = (ideal_ns / measured_ns) * 100.0
-        print(
-            f"| ({M}, {K}, {N}) | {use_bias} | {activation or '-'} | {math_util:.1f} | {measured_ms:.3f} | {attrs} |",
-            flush=True,
-        )
+    config_details = f"DTYPE: {dtype}, FP32 ACC: {fp32_acc}, FIDELITY: {fidelity}"
+    header = "| M, K, N | math util (%) | measured perf (ms) | attributes |"
+    sep = "|---|---:|---:|---:|"
+    print(config_details)
+    print(header)
+    print(sep)
+    for idx in range(len(TABLE_CONFIGS)):
+        M, K, N = TABLE_CONFIGS[idx]
+        measured_ns = perf_results[idx]
+        ideal_ns = expected_results[idx]
+        attrs = attrs_results[idx]
+
+        if measured_ns is None or ideal_ns is None or measured_ns == 0:
+            measured_ms_str = "-"
+            util_str = "-"
+            attrs_str = "-"
+        else:
+            measured_ms = measured_ns / 1e6
+            # Assume 1 cycle ≈ 1 ns for ideal estimate already returned from perf_model
+            math_util = (ideal_ns / measured_ns) * 100.0
+            attrs_str = attrs
+
+            measured_ms_str = f"{measured_ms:.3f}"
+            util_str = f"{math_util:.1f}"
+
+        print(f"| ({M}, {K}, {N}) | {util_str} | {measured_ms_str} | {attrs_str} |")
