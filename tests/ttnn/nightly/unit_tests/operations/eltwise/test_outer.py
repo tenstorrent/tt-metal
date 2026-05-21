@@ -424,7 +424,7 @@ def _b_shard_for_outer_output():
         # Width-sharded output [32, 128] across 4 cores
         ([32], [128], lambda: _w_shard_for_outer_output(4)),
         # Block-sharded output [64, 64] across 2x2 grid
-        ([64], [64], lambda: _b_shard_for_outer_output()),
+        ([64], [64], _b_shard_for_outer_output),
     ],
 )
 def test_outer_sharded_output_width_block(a_shape, b_shape, out_mem_fn, device):
