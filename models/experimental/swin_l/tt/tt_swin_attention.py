@@ -65,6 +65,10 @@ class TtSwinAttention:
         # For shift!=0 layers, pre-combine rel_pos_bias + window_mask on host into a
         # single (nW, num_heads, N, N) bias so __call__ does a single add (instead of
         # two adds with broadcast). For shift==0 layers we keep rpb as-is.
+        # Store the bias as BFP8_B to match the attn-matmul output dtype. The attn add
+        # below is on (B*nW, H, N, N) BFP8 + bias; if bias is BF16 the kernel runs the
+        # mixed-type path (median ~128us / call, 3.07 ms/iter). Same-type BFP8+BFP8 is
+        # much faster.
         rpb = parameters["relative_position_bias"]  # (1, num_heads, N, N) TILE bf16 on device
         if attn_mask is not None and sum(self.shift_size) > 0:
             rpb_t = ttnn.to_torch(rpb).float()  # (1, H, N, N)
@@ -74,10 +78,14 @@ class TtSwinAttention:
             mask_t = mask_t.reshape(nW, 1, N, N)
             combined = (rpb_t + mask_t).to(torch.bfloat16)  # (nW, H, N, N)
             self.combined_attn_bias = ttnn.from_torch(
-                combined, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+                combined, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
             )
         else:
-            self.combined_attn_bias = rpb  # (1, H, N, N), broadcasts over batch in plain add
+            # rpb arrives as BF16 from parameters; convert once on host to BFP8_B.
+            rpb_t = ttnn.to_torch(rpb).to(torch.bfloat16)
+            self.combined_attn_bias = ttnn.from_torch(
+                rpb_t, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
+            )
 
     def __call__(self, input_tensor):
         B, H, W, C = input_tensor.shape
