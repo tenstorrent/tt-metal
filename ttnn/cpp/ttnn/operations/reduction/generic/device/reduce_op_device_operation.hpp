@@ -11,7 +11,6 @@
 #include "reduce_op_device_operation_types.hpp"
 #include "tt_stl/reflection.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/metal2_artifacts.hpp"
 #include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::prim {
@@ -37,7 +36,7 @@ struct ReduceDeviceOperation {
     };
 
     struct ReduceMultiCoreWProgramFactory {
-        static ttnn::device_operation::ProgramArtifacts create_program_spec(
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
