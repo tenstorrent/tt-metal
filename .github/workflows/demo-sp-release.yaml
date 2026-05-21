@@ -114,17 +114,17 @@ jobs:
   #     mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
   #     job-prefix: "[Wan2.2] "
 
-  deepseek-single-galaxy-tests:
-    name: "Single Galaxy DeepSeek Tests"
+  deepseek-sp4-tests:
+    name: "SP4 DeepSeek Tests"
     needs: build-artifact
-    if: ${{ inputs.test-group == 'all' || inputs.test-group == 'single_galaxy_deepseek' || github.event_name == 'schedule' }}
+    if: ${{ inputs.test-group == 'all' || inputs.test-group == 'sp4_deepseek' || github.event_name == 'schedule' }}
     secrets: inherit
     uses: ./.github/workflows/demo-sp-multihost-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      sp-config: spsg
+      sp-config: sp4
 
   deepseek-sp1-tests:
     name: "SP1 DeepSeek Tests"
@@ -138,14 +138,14 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       sp-config: sp1
 
-  deepseek-sp4-tests:
-    name: "SP4 DeepSeek Tests"
+  deepseek-single-galaxy-tests:
+    name: "Single Galaxy DeepSeek Tests"
     needs: build-artifact
-    if: ${{ inputs.test-group == 'all' || inputs.test-group == 'sp4_deepseek' || github.event_name == 'schedule' }}
+    if: ${{ inputs.test-group == 'all' || inputs.test-group == 'single_galaxy_deepseek' || github.event_name == 'schedule' }}
     secrets: inherit
     uses: ./.github/workflows/demo-sp-multihost-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      sp-config: sp4
+      sp-config: spsg
