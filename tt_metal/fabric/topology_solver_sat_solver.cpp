@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/experimental/fabric/topology_solver_sat_solver.hpp>
+#include "topology_solver_sat_solver.hpp"
 
 #include <cstdlib>
 #include <memory>

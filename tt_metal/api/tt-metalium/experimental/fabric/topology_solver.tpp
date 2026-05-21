@@ -33,7 +33,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 
-#include <tt-metalium/experimental/fabric/topology_solver_sat_solver.hpp>
 #include <memory>
 
 namespace tt::tt_fabric {
@@ -1293,7 +1292,7 @@ void TopologyMappingEnumerationSession<TargetNode, GlobalNode>::reset() noexcept
     mode_ = ConnectionValidationMode::RELAXED;
     graph_data_.reset();
     constraint_data_.reset();
-    sat_solver_.reset();
+    sat_session_.reset();
     sat_enc_ = {};
 }
 
@@ -1340,15 +1339,12 @@ MappingResult<TargetNode, GlobalNode> TopologyMappingEnumerationSession<TargetNo
         }
 
         if (use_sat_) {
-            sat_solver_ = std::make_unique<detail::TopologySatSolver>();
-            sat_solver_->configure_for_blocking_clause_enumeration();
-            sat_enc_ = {};
-            if (!topology_sat_encode_hard_constraints(
-                    *sat_solver_,
-                    TopologySatGraphView(*graph_data_),
-                    TopologySatConstraintView(*constraint_data_),
-                    sat_enc_,
-                    connection_validation_mode)) {
+            sat_session_ = detail::topology_sat_session_create_and_encode(
+                TopologySatGraphView(*graph_data_),
+                TopologySatConstraintView(*constraint_data_),
+                sat_enc_,
+                connection_validation_mode);
+            if (!sat_session_) {
                 MappingResult<TargetNode, GlobalNode> failure;
                 failure.success = false;
                 failure.error_message = "TopologyMappingEnumerationSession: SAT hard encode failed";
@@ -1398,15 +1394,12 @@ MappingResult<TargetNode, GlobalNode> TopologyMappingEnumerationSession<TargetNo
 
     if (use_sat_) {
         if (excluded_idx.size() < sat_exclusions_encoded_) {
-            sat_solver_ = std::make_unique<detail::TopologySatSolver>();
-            sat_solver_->configure_for_blocking_clause_enumeration();
-            sat_enc_ = {};
-            if (!topology_sat_encode_hard_constraints(
-                    *sat_solver_,
-                    TopologySatGraphView(*graph_data_),
-                    TopologySatConstraintView(*constraint_data_),
-                    sat_enc_,
-                    connection_validation_mode)) {
+            sat_session_ = detail::topology_sat_session_create_and_encode(
+                TopologySatGraphView(*graph_data_),
+                TopologySatConstraintView(*constraint_data_),
+                sat_enc_,
+                connection_validation_mode);
+            if (!sat_session_) {
                 MappingResult<TargetNode, GlobalNode> failure;
                 failure.success = false;
                 failure.error_message = "TopologyMappingEnumerationSession: SAT re-encode failed";
@@ -1416,8 +1409,8 @@ MappingResult<TargetNode, GlobalNode> TopologyMappingEnumerationSession<TargetNo
             sat_exclusions_encoded_ = 0;
         }
         while (sat_exclusions_encoded_ < excluded_idx.size()) {
-            if (!topology_sat_add_blocking_clause_for_mapping(
-                    *sat_solver_, sat_enc_, excluded_idx[sat_exclusions_encoded_], unique_shapes)) {
+            if (!detail::topology_sat_session_add_blocking_clause(
+                    sat_session_.get(), sat_enc_, excluded_idx[sat_exclusions_encoded_], unique_shapes)) {
                 MappingResult<TargetNode, GlobalNode> failure;
                 failure.success = false;
                 failure.error_message =
@@ -1428,19 +1421,12 @@ MappingResult<TargetNode, GlobalNode> TopologyMappingEnumerationSession<TargetNo
         }
 
         ++sat_solve_calls_;
-        const int status = sat_solver_->solve();
-        if (status != detail::TopologySatSolver::kSat) {
+        std::vector<int> raw;
+        if (!detail::topology_sat_session_solve_and_decode(sat_session_.get(), sat_enc_, raw)) {
             MappingResult<TargetNode, GlobalNode> failure;
             failure.success = false;
             failure.error_message =
                 "TopologyMappingEnumerationSession: no new mapping found (all solutions exhausted or excluded)";
-            return failure;
-        }
-        std::vector<int> raw;
-        if (!topology_sat_decode_hard_solution(*sat_solver_, sat_enc_, raw)) {
-            MappingResult<TargetNode, GlobalNode> failure;
-            failure.success = false;
-            failure.error_message = "TopologyMappingEnumerationSession: SAT decode failed";
             return failure;
         }
         for (const auto& excl : excluded_idx) {
@@ -3759,21 +3745,6 @@ bool SatSearchEngine<TargetNode, GlobalNode>::search(
         validation_mode,
         quiet_mode,
         state_);
-}
-
-template <typename TargetNode, typename GlobalNode>
-bool topology_sat_encode_hard_constraints(
-    TopologySatSolver& solver,
-    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
-    const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
-    TopologySatHardEncoding& enc,
-    ConnectionValidationMode validation_mode = ConnectionValidationMode::RELAXED) {
-    return topology_sat_encode_hard_constraints(
-        solver,
-        TopologySatGraphView(graph_data),
-        TopologySatConstraintView(constraint_data),
-        enc,
-        validation_mode);
 }
 
 template <typename TargetNode, typename GlobalNode>

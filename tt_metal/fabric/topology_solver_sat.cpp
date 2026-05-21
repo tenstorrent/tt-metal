@@ -18,7 +18,8 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 
-#include <tt-metalium/experimental/fabric/topology_solver_sat_solver.hpp>
+#include "topology_solver_sat_solver.hpp"
+#include "topology_solver_sat_session.hpp"
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 
 namespace tt::tt_fabric::detail {
@@ -1512,6 +1513,40 @@ bool topology_sat_search_n(
     }
 
     return !all_mappings_out.empty();
+}
+
+// ── Session bridge functions (public API — declared in topology_solver.hpp) ────
+
+void topology_sat_session_destroy(TopologySatSession* p) noexcept { delete p; }
+
+std::unique_ptr<TopologySatSession, TopologySatSessionDeleter> topology_sat_session_create_and_encode(
+    const TopologySatGraphView& graph_data,
+    const TopologySatConstraintView& constraint_data,
+    TopologySatHardEncoding& enc,
+    ConnectionValidationMode validation_mode) {
+    auto session = std::unique_ptr<TopologySatSession, TopologySatSessionDeleter>(new TopologySatSession{});
+    session->solver.configure_for_blocking_clause_enumeration();
+    enc = {};
+    if (!topology_sat_encode_hard_constraints(session->solver, graph_data, constraint_data, enc, validation_mode)) {
+        return nullptr;
+    }
+    return session;
+}
+
+bool topology_sat_session_add_blocking_clause(
+    TopologySatSession* session,
+    TopologySatHardEncoding& enc,
+    const std::vector<int>& raw_mapping,
+    bool unique_shapes) {
+    return topology_sat_add_blocking_clause_for_mapping(session->solver, enc, raw_mapping, unique_shapes);
+}
+
+bool topology_sat_session_solve_and_decode(
+    TopologySatSession* session, const TopologySatHardEncoding& enc, std::vector<int>& raw_out) {
+    if (session->solver.solve() != TopologySatSolver::kSat) {
+        return false;
+    }
+    return topology_sat_decode_hard_solution(session->solver, enc, raw_out);
 }
 
 }  // namespace tt::tt_fabric::detail

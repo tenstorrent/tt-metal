@@ -48,7 +48,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/fabric/topology_mapper_utils.hpp
     api/tt-metalium/experimental/fabric/topology_solver.hpp
     api/tt-metalium/experimental/fabric/topology_solver.tpp
-    api/tt-metalium/experimental/fabric/topology_solver_sat_solver.hpp
     api/tt-metalium/experimental/forge_backdoor/global_semaphore.hpp
     api/tt-metalium/experimental/host_api.hpp
     api/tt-metalium/experimental/inspector.hpp

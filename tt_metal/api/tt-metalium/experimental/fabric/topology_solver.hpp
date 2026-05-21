@@ -914,19 +914,36 @@ struct TopologySatConstraintView {
     }
 };
 
-struct TopologySatSolver;
+// Opaque SAT solver session — full definition is in the private
+// topology_solver_sat_session.hpp to keep CaDiCaL out of the public API.
+struct TopologySatSession;
 
-struct TopologySearchState;
+void topology_sat_session_destroy(TopologySatSession* p) noexcept;
 
-bool topology_sat_encode_hard_constraints(
-    TopologySatSolver& solver,
+struct TopologySatSessionDeleter {
+    void operator()(TopologySatSession* p) const noexcept { topology_sat_session_destroy(p); }
+};
+
+// Creates a new SAT session and encodes hard constraints into it.
+// On success, enc is populated and a non-null session is returned.
+// Returns nullptr if the constraint set is hard-infeasible (no encoding possible).
+std::unique_ptr<TopologySatSession, TopologySatSessionDeleter> topology_sat_session_create_and_encode(
     const TopologySatGraphView& graph_data,
     const TopologySatConstraintView& constraint_data,
     TopologySatHardEncoding& enc,
     ConnectionValidationMode validation_mode = ConnectionValidationMode::RELAXED);
 
-bool topology_sat_decode_hard_solution(
-    TopologySatSolver& solver, const TopologySatHardEncoding& enc, std::vector<int>& mapping_out);
+// Appends a blocking clause for raw_mapping to session. Returns false on failure.
+bool topology_sat_session_add_blocking_clause(
+    TopologySatSession* session, TopologySatHardEncoding& enc,
+    const std::vector<int>& raw_mapping, bool unique_shapes);
+
+// Runs one solve call and decodes the solution into raw_out.
+// Returns false if UNSAT or decoding fails.
+bool topology_sat_session_solve_and_decode(
+    TopologySatSession* session, const TopologySatHardEncoding& enc, std::vector<int>& raw_out);
+
+struct TopologySearchState;
 
 bool topology_sat_search(
     const TopologySatGraphView& graph_data,
@@ -946,9 +963,6 @@ bool topology_sat_search_n(
     const std::vector<std::vector<int>>& initial_forbidden_shape_keys,
     TopologySearchState& state);
 
-/** Ruling out one model: exact assignment or shape clause per unique_shapes (matches topology_sat_search_n). */
-bool topology_sat_add_blocking_clause_for_mapping(
-    TopologySatSolver& solver, TopologySatHardEncoding& enc, const std::vector<int>& raw_mapping, bool unique_shapes);
 
 /**
  * @brief Unified heuristic for node selection and candidate generation
@@ -1463,7 +1477,7 @@ private:
     ConnectionValidationMode mode_{ConnectionValidationMode::RELAXED};
     std::optional<detail::GraphIndexData<TargetNode, GlobalNode>> graph_data_;
     std::optional<detail::ConstraintIndexData<TargetNode, GlobalNode>> constraint_data_;
-    std::unique_ptr<detail::TopologySatSolver> sat_solver_{};
+    std::unique_ptr<detail::TopologySatSession, detail::TopologySatSessionDeleter> sat_session_{};
     detail::TopologySatHardEncoding sat_enc_{};
 };
 
