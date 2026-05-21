@@ -561,7 +561,7 @@ See [TensorParameter](#tensorparameter) for the host-side declaration that produ
 
 The Metal 2.0 host API declares kernel arguments by name; the kernel-side API retrieves them by name. This replaces the legacy positional `get_arg_val<uint32_t>(N)` style.
 
-Include `experimental/kernel_args.h` in any kernel that uses the named-argument API. The `args::` and `dfb::` / `sem::` namespaces are auto-generated from the host-side bindings into `kernel_bindings_generated.h`, which the kernel build system pulls in.
+**The only `#include` a porter adds to a kernel is `experimental/kernel_args.h`** — that pulls in the accessor templates (`get_arg`, `args::`, `dfb::`, `sem::`, `ta::`). The generated headers `kernel_bindings_generated.h` (which carries `dfb::` / `sem::` / `ta::` declarations from the host bindings) and `kernel_args_generated.h` (which carries `args::` declarations from `compile_time_arg_bindings` + `runtime_arguments_schema`) are auto-included by the build system via `<kernel_includes.hpp>` before the kernel source. **Do not** `#include` either generated header from your kernel.
 
 **Example 1 — Named arguments only.**
 
