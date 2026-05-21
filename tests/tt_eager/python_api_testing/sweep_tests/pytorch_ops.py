@@ -1234,10 +1234,6 @@ def matmul(x, y, *args, **kwargs):
     return torch.matmul(x, y)
 
 
-def outer(x, y, *args, **kwargs):
-    return x.unsqueeze(-1) * y.unsqueeze(-2)
-
-
 def reduce_sum(x, dims=None, keepdim=False, *args, **kwargs):
     return torch.sum(x, dims, keepdim)
 

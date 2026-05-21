@@ -32,6 +32,9 @@ SHAPE_PAIRS = [
     ([1, 8, 32], [4, 8, 32]),
     # Rank-mismatch broadcast (b's missing leading dims treated as 1)
     ([2, 3, 32], [32]),
+    # Rank-4 inputs (mirrors original eager test shapes; output is 5-D)
+    ([1, 1, 1, 32], [1, 1, 1, 32]),
+    ([1, 1, 1, 2048], [1, 1, 1, 64]),  # LLaMa dimensions
 ]
 
 
