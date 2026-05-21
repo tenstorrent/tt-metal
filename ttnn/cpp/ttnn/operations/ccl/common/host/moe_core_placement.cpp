@@ -21,23 +21,6 @@ CoreCoordPairSet core_coords_to_pair_set(const std::vector<CoreCoord>& cores) {
     return result;
 }
 
-std::vector<CoreCoord> pick_worker_cores_avoiding(
-    const CoreCoordPairSet& avoid, const CoreCoord& worker_grid, uint32_t num_cores) {
-    std::vector<CoreCoord> picked;
-    picked.reserve(num_cores);
-
-    for (int y = static_cast<int>(worker_grid.y) - 1; y >= 0 && picked.size() < num_cores; --y) {
-        for (int x = static_cast<int>(worker_grid.x) - 1; x >= 0 && picked.size() < num_cores; --x) {
-            CoreCoord candidate(static_cast<uint32_t>(x), static_cast<uint32_t>(y));
-            if (!avoid.contains({candidate.x, candidate.y})) {
-                picked.push_back(candidate);
-            }
-        }
-    }
-
-    return picked;
-}
-
 std::vector<CoreCoord> pick_worker_cores_row_major_avoiding(
     const CoreCoordPairSet& avoid, const CoreCoord& worker_grid, uint32_t num_cores) {
     std::vector<CoreCoord> picked;
@@ -88,26 +71,6 @@ std::vector<CoreCoord> pick_tilize_cores_in_upper_rows(
     }
 
     return picked;
-}
-
-std::optional<CoreRange> find_worker_rectangle_avoiding(
-    const CoreCoordPairSet& avoid, const CoreCoord& worker_grid, uint32_t width, uint32_t height) {
-    for (uint32_t sy = 0; sy + height <= worker_grid.y; ++sy) {
-        for (uint32_t sx = 0; sx + width <= worker_grid.x; ++sx) {
-            bool valid = true;
-            for (uint32_t dy = 0; dy < height && valid; ++dy) {
-                for (uint32_t dx = 0; dx < width && valid; ++dx) {
-                    if (avoid.contains({sx + dx, sy + dy})) {
-                        valid = false;
-                    }
-                }
-            }
-            if (valid) {
-                return CoreRange({sx, sy}, {sx + width - 1, sy + height - 1});
-            }
-        }
-    }
-    return std::nullopt;
 }
 
 std::optional<CoreRange> find_combine_strip_avoiding(

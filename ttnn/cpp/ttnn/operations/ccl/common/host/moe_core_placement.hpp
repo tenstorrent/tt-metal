@@ -19,14 +19,6 @@ using CoreCoordPairSet = std::set<std::pair<uint32_t, uint32_t>>;
 
 CoreCoordPairSet core_coords_to_pair_set(const std::vector<CoreCoord>& cores);
 
-// Top-right → bottom-left scan (matches moe_gpt tilize placement).
-std::vector<CoreCoord> pick_worker_cores_avoiding(
-    const CoreCoordPairSet& avoid, const CoreCoord& worker_grid, uint32_t num_cores);
-
-// Row-major scan for first valid W×H rectangle (matches moe_gpt combine placement).
-std::optional<CoreRange> find_worker_rectangle_avoiding(
-    const CoreCoordPairSet& avoid, const CoreCoord& worker_grid, uint32_t width, uint32_t height);
-
 // Bottom-left → top-right row-major scan (matches legacy moe_compute combine pool order).
 std::vector<CoreCoord> pick_worker_cores_row_major_avoiding(
     const CoreCoordPairSet& avoid, const CoreCoord& worker_grid, uint32_t num_cores);
