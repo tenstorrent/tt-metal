@@ -35,6 +35,9 @@ from models.demos.deepseek_v3_b1.prepare_weights import (
 )
 
 
+DEFAULT_SYNTHETIC_SEED = 520
+
+
 class WeightProvider(Protocol):
     """Provides embedding and LM head weights on demand; each host loads only what its stage needs."""
 
@@ -76,26 +79,28 @@ def _build_synthetic_moe_state_dict(
     layer_id: int,
     *,
     num_routed_experts: int = NUM_ROUTED_EXPERTS,
+    seed: int = DEFAULT_SYNTHETIC_SEED,
 ) -> dict[str, torch.Tensor]:
     """Build a synthetic MoE layer state dict with HF tensor shapes (randn for weights, ones for norms)."""
     state_dict: dict[str, torch.Tensor] = {}
     dtype = torch.bfloat16
+    generator = torch.Generator().manual_seed(seed + layer_id)
 
     # Attention weights (HF shapes)
     state_dict[_layer_key(layer_id, "self_attn.q_a_proj.weight")] = torch.randn(
-        LogicalModelDimensions.Q_A_DIM, LogicalModelDimensions.HIDDEN_SIZE, dtype=dtype
+        LogicalModelDimensions.Q_A_DIM, LogicalModelDimensions.HIDDEN_SIZE, generator=generator, dtype=dtype
     )
     state_dict[_layer_key(layer_id, "self_attn.q_b_proj.weight")] = torch.randn(
-        LogicalModelDimensions.Q_B_OUT, LogicalModelDimensions.Q_A_DIM, dtype=dtype
+        LogicalModelDimensions.Q_B_OUT, LogicalModelDimensions.Q_A_DIM, generator=generator, dtype=dtype
     )
     state_dict[_layer_key(layer_id, "self_attn.kv_a_proj_with_mqa.weight")] = torch.randn(
-        LogicalModelDimensions.KV_A_DIM, LogicalModelDimensions.HIDDEN_SIZE, dtype=dtype
+        LogicalModelDimensions.KV_A_DIM, LogicalModelDimensions.HIDDEN_SIZE, generator=generator, dtype=dtype
     )
     state_dict[_layer_key(layer_id, "self_attn.kv_b_proj.weight")] = torch.randn(
-        LogicalModelDimensions.KV_B_PROJ_OUT, LogicalModelDimensions.KV_B_LORA_RANK, dtype=dtype
+        LogicalModelDimensions.KV_B_PROJ_OUT, LogicalModelDimensions.KV_B_LORA_RANK, generator=generator, dtype=dtype
     )
     state_dict[_layer_key(layer_id, "self_attn.o_proj.weight")] = torch.randn(
-        LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.O_PROJ_OUT, dtype=dtype
+        LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.O_PROJ_OUT, generator=generator, dtype=dtype
     )
 
     # Norms (ones per plan)
@@ -114,58 +119,63 @@ def _build_synthetic_moe_state_dict(
 
     # MoE gate
     state_dict[_layer_key(layer_id, "mlp.gate.weight")] = torch.randn(
-        LogicalModelDimensions.GATE_NUM_INDICES, LogicalModelDimensions.HIDDEN_SIZE, dtype=dtype
+        LogicalModelDimensions.GATE_NUM_INDICES, LogicalModelDimensions.HIDDEN_SIZE, generator=generator, dtype=dtype
     )
     state_dict[_layer_key(layer_id, "mlp.gate.e_score_correction_bias")] = torch.randn(
-        LogicalModelDimensions.GATE_NUM_INDICES, dtype=dtype
+        LogicalModelDimensions.GATE_NUM_INDICES, generator=generator, dtype=dtype
     )
 
     # Shared experts
     state_dict[_layer_key(layer_id, "mlp.shared_experts.gate_proj.weight")] = torch.randn(
-        LogicalModelDimensions.MOE_INTERMEDIATE_SIZE, LogicalModelDimensions.HIDDEN_SIZE, dtype=dtype
+        LogicalModelDimensions.MOE_INTERMEDIATE_SIZE, LogicalModelDimensions.HIDDEN_SIZE, generator=generator, dtype=dtype
     )
     state_dict[_layer_key(layer_id, "mlp.shared_experts.up_proj.weight")] = torch.randn(
-        LogicalModelDimensions.MOE_INTERMEDIATE_SIZE, LogicalModelDimensions.HIDDEN_SIZE, dtype=dtype
+        LogicalModelDimensions.MOE_INTERMEDIATE_SIZE, LogicalModelDimensions.HIDDEN_SIZE, generator=generator, dtype=dtype
     )
     state_dict[_layer_key(layer_id, "mlp.shared_experts.down_proj.weight")] = torch.randn(
-        LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.MOE_INTERMEDIATE_SIZE, dtype=dtype
+        LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.MOE_INTERMEDIATE_SIZE, generator=generator, dtype=dtype
     )
 
     # Routed experts
     for e in range(num_routed_experts):
         state_dict[_layer_key(layer_id, f"mlp.experts.{e}.gate_proj.weight")] = torch.randn(
-            LogicalModelDimensions.MOE_INTERMEDIATE_SIZE, LogicalModelDimensions.HIDDEN_SIZE, dtype=dtype
+            LogicalModelDimensions.MOE_INTERMEDIATE_SIZE, LogicalModelDimensions.HIDDEN_SIZE, generator=generator, dtype=dtype
         )
         state_dict[_layer_key(layer_id, f"mlp.experts.{e}.up_proj.weight")] = torch.randn(
-            LogicalModelDimensions.MOE_INTERMEDIATE_SIZE, LogicalModelDimensions.HIDDEN_SIZE, dtype=dtype
+            LogicalModelDimensions.MOE_INTERMEDIATE_SIZE, LogicalModelDimensions.HIDDEN_SIZE, generator=generator, dtype=dtype
         )
         state_dict[_layer_key(layer_id, f"mlp.experts.{e}.down_proj.weight")] = torch.randn(
-            LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.MOE_INTERMEDIATE_SIZE, dtype=dtype
+            LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.MOE_INTERMEDIATE_SIZE, generator=generator, dtype=dtype
         )
 
     return state_dict
 
 
-def _build_synthetic_dense_state_dict(layer_id: int) -> dict[str, torch.Tensor]:
+def _build_synthetic_dense_state_dict(
+    layer_id: int,
+    *,
+    seed: int = DEFAULT_SYNTHETIC_SEED,
+) -> dict[str, torch.Tensor]:
     """Build a synthetic dense layer state dict with HF tensor shapes (randn for weights, ones for norms)."""
     state_dict: dict[str, torch.Tensor] = {}
     dtype = torch.bfloat16
+    generator = torch.Generator().manual_seed(seed + layer_id)
 
     # Attention weights (HF shapes)
     state_dict[_layer_key(layer_id, "self_attn.q_a_proj.weight")] = torch.randn(
-        LogicalModelDimensions.Q_A_DIM, LogicalModelDimensions.HIDDEN_SIZE, dtype=dtype
+        LogicalModelDimensions.Q_A_DIM, LogicalModelDimensions.HIDDEN_SIZE, generator=generator, dtype=dtype
     )
     state_dict[_layer_key(layer_id, "self_attn.q_b_proj.weight")] = torch.randn(
-        LogicalModelDimensions.Q_B_OUT, LogicalModelDimensions.Q_A_DIM, dtype=dtype
+        LogicalModelDimensions.Q_B_OUT, LogicalModelDimensions.Q_A_DIM, generator=generator, dtype=dtype
     )
     state_dict[_layer_key(layer_id, "self_attn.kv_a_proj_with_mqa.weight")] = torch.randn(
-        LogicalModelDimensions.KV_A_DIM, LogicalModelDimensions.HIDDEN_SIZE, dtype=dtype
+        LogicalModelDimensions.KV_A_DIM, LogicalModelDimensions.HIDDEN_SIZE, generator=generator, dtype=dtype
     )
     state_dict[_layer_key(layer_id, "self_attn.kv_b_proj.weight")] = torch.randn(
-        LogicalModelDimensions.KV_B_PROJ_OUT, LogicalModelDimensions.KV_B_LORA_RANK, dtype=dtype
+        LogicalModelDimensions.KV_B_PROJ_OUT, LogicalModelDimensions.KV_B_LORA_RANK, generator=generator, dtype=dtype
     )
     state_dict[_layer_key(layer_id, "self_attn.o_proj.weight")] = torch.randn(
-        LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.O_PROJ_OUT, dtype=dtype
+        LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.O_PROJ_OUT, generator=generator, dtype=dtype
     )
 
     # Norms (ones per plan)
@@ -184,13 +194,13 @@ def _build_synthetic_dense_state_dict(layer_id: int) -> dict[str, torch.Tensor]:
 
     # Single MLP (used for both shared and routed in dense)
     state_dict[_layer_key(layer_id, "mlp.gate_proj.weight")] = torch.randn(
-        LogicalModelDimensions.INTERMEDIATE_SIZE, LogicalModelDimensions.HIDDEN_SIZE, dtype=dtype
+        LogicalModelDimensions.INTERMEDIATE_SIZE, LogicalModelDimensions.HIDDEN_SIZE, generator=generator, dtype=dtype
     )
     state_dict[_layer_key(layer_id, "mlp.up_proj.weight")] = torch.randn(
-        LogicalModelDimensions.INTERMEDIATE_SIZE, LogicalModelDimensions.HIDDEN_SIZE, dtype=dtype
+        LogicalModelDimensions.INTERMEDIATE_SIZE, LogicalModelDimensions.HIDDEN_SIZE, generator=generator, dtype=dtype
     )
     state_dict[_layer_key(layer_id, "mlp.down_proj.weight")] = torch.randn(
-        LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.INTERMEDIATE_SIZE, dtype=dtype
+        LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.INTERMEDIATE_SIZE, generator=generator, dtype=dtype
     )
 
     return state_dict
@@ -222,6 +232,9 @@ class CacheWeightProvider:
 
 class SyntheticWeightProvider:
     """Create deterministic synthetic embedding and LM head weights in place (no cache)."""
+
+    def __init__(self, seed: int = DEFAULT_SYNTHETIC_SEED) -> None:
+        self._seed = seed
 
     def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
         emb_w = torch.zeros(
@@ -255,14 +268,16 @@ class SyntheticWeightProvider:
     def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
         from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
 
-        sd = _build_synthetic_moe_state_dict(layer_id, num_routed_experts=NUM_ROUTED_EXPERTS)
+        sd = _build_synthetic_moe_state_dict(
+            layer_id, num_routed_experts=NUM_ROUTED_EXPERTS, seed=self._seed,
+        )
         bdw = BlitzDecodeWeights(device)
         return prepare_moe_layer_weights(bdw, sd, layer_id, num_routed_experts=NUM_ROUTED_EXPERTS)
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
         from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
 
-        sd = _build_synthetic_dense_state_dict(layer_id)
+        sd = _build_synthetic_dense_state_dict(layer_id, seed=self._seed)
         bdw = BlitzDecodeWeights(device)
         return prepare_dense_layer_weights(bdw, sd, layer_id, move_to_device=True)
 

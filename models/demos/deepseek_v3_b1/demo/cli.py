@@ -89,6 +89,12 @@ def create_parser() -> argparse.ArgumentParser:
         help="synthetic: random prepare path; real: load tensorbin cache; state_dict: HF safetensors + prepare path",
     )
     parser.add_argument(
+        "--seed",
+        type=int,
+        default=520,
+        help="Seed for synthetic decoder weights",
+    )
+    parser.add_argument(
         "--fp32",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -131,6 +137,7 @@ def run_demo(
     model_path: Path | None = None,
     lm_head_fp32_dest_acc_en: bool = True,
     lm_head_persistent_mode: bool = True,
+    seed: int = 520,
     dense_layer_id_override: int | None = None,
     moe_layer_id_override: int | None = None,
 ) -> None:
@@ -147,6 +154,7 @@ def run_demo(
             model_path=model_path,
             lm_head_fp32_dest_acc_en=lm_head_fp32_dest_acc_en,
             lm_head_persistent_mode=lm_head_persistent_mode,
+            seed=seed,
             dense_layer_id_override=dense_layer_id_override,
             moe_layer_id_override=moe_layer_id_override,
         )
@@ -205,6 +213,7 @@ def main(argv: list[str] | None = None) -> int:
         model_path=args.model_path,
         lm_head_fp32_dest_acc_en=args.fp32,
         lm_head_persistent_mode=args.persistent_mode,
+        seed=args.seed,
         dense_layer_id_override=args.dense_layer_id_override,
         moe_layer_id_override=args.moe_layer_id_override,
     )
