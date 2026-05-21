@@ -637,10 +637,10 @@ ProgramDescriptor RingDistributedSdpaDeviceOperation::RingDistributedSdpaProgram
             {q_buffer,
              k_buffer,
              v_buffer,
-             static_cast<tt_metal::Buffer*>(nullptr),  // mask
+             static_cast<Buffer*>(nullptr),  // mask
              page_table_buffer,
-             static_cast<tt_metal::Buffer*>(nullptr),  // attention_sink
-             static_cast<tt_metal::Buffer*>(nullptr),  // chunk_start_idx (ring has none)
+             static_cast<Buffer*>(nullptr),  // attention_sink
+             static_cast<Buffer*>(nullptr),  // chunk_start_idx (ring has none)
              i,
              local_batch_start,
              local_batch_end,
