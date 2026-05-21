@@ -46,7 +46,17 @@ class CircularBufferIdManager:
 
         cb_id = self._next_id
         if cb_id >= self.NUM_CIRCULAR_BUFFERS:
-            raise RuntimeError(f"All {self.NUM_CIRCULAR_BUFFERS} circular buffer IDs are exhausted")
+            from collections import Counter
+
+            breakdown = Counter()
+            for _id, (fmt, td) in self._id_to_format.items():
+                breakdown[(str(fmt), td.height, td.width)] += 1
+            lines = [f"  {k}: {v}" for k, v in sorted(breakdown.items(), key=lambda x: -x[1])]
+            raise RuntimeError(
+                f"All {self.NUM_CIRCULAR_BUFFERS} circular buffer IDs are exhausted.\n"
+                f"Trying to allocate ({data_format}, {tile.height}x{tile.width}); exclude_size={len(exclude)}\n"
+                f"Breakdown:\n" + "\n".join(lines)
+            )
         self._next_id += 1
         # Make a copy of the tile descriptor to avoid dependencies
         self._id_to_format[cb_id] = (data_format, ttnn.TileDescriptor(tile))

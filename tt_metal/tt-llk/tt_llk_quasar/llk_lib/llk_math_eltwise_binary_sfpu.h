@@ -6,38 +6,10 @@
 #include <cstdint>
 #include <utility>
 
-#include "ckernel_sfpu.h"
-#include "llk_defs.h"
-using namespace ckernel;
-using namespace ckernel::math;
-
-inline void _eltwise_binary_sfpu_configure_addrmod_()
-{
-    _sfpu_configure_addrmod_();
-}
-
-inline void _llk_math_eltwise_binary_sfpu_start_(const std::uint32_t tile_index)
-{
-    _llk_math_sfpu_start_(tile_index);
-}
-
-inline void _llk_math_eltwise_binary_sfpu_done_()
-{
-    _llk_math_sfpu_done_();
-}
-
-inline void _llk_math_eltwise_binary_sfpu_inc_dst_face_addr_()
-{
-    _llk_math_sfpu_inc_dst_face_addr_();
-}
-
-inline void _llk_math_eltwise_binary_sfpu_init_()
-{
-    _llk_math_sfpu_init_();
-}
+#include "llk_math_eltwise_sfpu_common.h"
 
 template <bool APPROXIMATE, class F, class... ARGS>
 inline void _llk_math_eltwise_binary_sfpu_params_(F&& sfpu_func, std::uint32_t dst_tile_index, ARGS&&... args)
 {
-    _llk_math_sfpu_params_(std::forward<F>(sfpu_func), dst_tile_index, std::forward<ARGS>(args)...);
+    _llk_math_eltwise_sfpu_params_(std::forward<F>(sfpu_func), dst_tile_index, std::forward<ARGS>(args)...);
 }

@@ -8,6 +8,7 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #ifdef ARCH_QUASAR
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #else
 #include "api/dataflow/circular_buffer.h"
 #endif
@@ -26,14 +27,16 @@ constexpr uint32_t compute_num_blocks_per_col(uint32_t per_core_block_tile_cnt) 
 }
 
 void kernel_main() {
+#ifdef ARCH_QUASAR
+    constexpr uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
+    constexpr uint32_t per_core_block_tile_cnt = get_arg(args::per_core_block_tile_cnt);
+    DataflowBuffer dfb_in0(dfb::in);
+    DataflowBuffer dfb_out0(dfb::out);
+#else
     constexpr uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     constexpr uint32_t per_core_block_tile_cnt = get_compile_time_arg_val(1);
-#ifndef ARCH_QUASAR
     CircularBuffer cb_in0(tt::CBIndex::c_0);
     CircularBuffer cb_out0(tt::CBIndex::c_16);
-#else
-    DataflowBuffer dfb_in0(get_compile_time_arg_val(2));
-    DataflowBuffer dfb_out0(get_compile_time_arg_val(3));
 #endif
 
     // Compute optimal num_blocks_per_col and block_ct_dim
