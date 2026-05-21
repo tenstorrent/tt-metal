@@ -5,30 +5,26 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 void kernel_main() {
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_tiles = get_arg_val<uint32_t>(1);
-    uint32_t start_id = get_arg_val<uint32_t>(2);
-    constexpr uint32_t scaler_bits = get_compile_time_arg_val(0);
-    constexpr auto tensor_args = TensorAccessorArgs<1>();
+    auto num_tiles = get_arg(args::num_tiles);
+    auto start_id = get_arg(args::start_id);
+    constexpr auto scaler_bits = get_arg(args::scaler_bits);
 
-    constexpr uint32_t cb_id_in2 = 2;
     float scaler_f = __builtin_bit_cast(float, scaler_bits);
-    dataflow_kernel_lib::prepare_reduce_scaler<cb_id_in2, REDUCE_OP, REDUCE_DIM>(scaler_f);
-
-    constexpr uint32_t cb_id_in0 = 0;
+    dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler_dfb, REDUCE_OP, REDUCE_DIM>(scaler_f);
 
     constexpr uint32_t onetile = 1;
-    uint32_t tile_bytes = get_tile_size(cb_id_in0);
+    DataflowBuffer cb_in0(dfb::in_dfb);
+    uint32_t tile_bytes = cb_in0.get_tile_size();
 
-    auto tensor_accessor = TensorAccessor(tensor_args, src_addr);
+    auto tensor_accessor = TensorAccessor(ta::input);
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     for (uint32_t i = start_id; i < start_id + num_tiles; i++) {

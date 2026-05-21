@@ -152,21 +152,18 @@ ttnn::device_operation::ProgramArtifacts WelfordReduceDeviceOperation::WelfordRe
             .tile_format_metadata = tensor_arg.tensor_spec().tile(),
         });
 
-        // cb_scaled — only used when do_scale; per the patterns catalog, we bind
-        // unconditionally and let `if constexpr (do_scale)` in the kernel elide
-        // the uses (or, since the legacy kernel already gates inside an
-        // `if constexpr (do_scale)` block, the wrapper construction sits there
-        // too — paying ~1 input-tile per core in L1 when do_scale=false is the
-        // documented temporary cost).
-        if (do_scale) {
-            dataflow_buffers.push_back(m2::DataflowBufferSpec{
-                .unique_id = WELFORD_SCALED_DFB,
-                .entry_size = input_single_tile_size,
-                .num_entries = 1,
-                .data_format_metadata = input_cb_data_format,
-                .tile_format_metadata = tensor_arg.tensor_spec().tile(),
-            });
-        }
+        // cb_scaled — used only when do_scale, but per the patterns catalog
+        // [Conditional / optional DFB bindings], bind the DFB unconditionally
+        // on the host. The kernel declares the wrapper at top level and gates
+        // only the uses with `if constexpr (do_scale)`. This pays ~1 input-tile
+        // per core in L1 when do_scale=false (the documented temporary cost).
+        dataflow_buffers.push_back(m2::DataflowBufferSpec{
+            .unique_id = WELFORD_SCALED_DFB,
+            .entry_size = input_single_tile_size,
+            .num_entries = 1,
+            .data_format_metadata = input_cb_data_format,
+            .tile_format_metadata = tensor_arg.tensor_spec().tile(),
+        });
     }
 
     if (reduce_hw) {
@@ -386,21 +383,20 @@ ttnn::device_operation::ProgramArtifacts WelfordReduceDeviceOperation::WelfordRe
                 .local_accessor_name = "var_dfb",
                 .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER,
             });
-            if (do_scale) {
-                // scaled_dfb is also a self-loop on the compute kernel (Welford W
-                // packs into it from the FPU mul step, then re-reads via
-                // transpose_wh_tile).
-                compute.dfb_bindings.push_back(m2::KernelSpec::DFBBinding{
-                    .dfb_spec_name = WELFORD_SCALED_DFB,
-                    .local_accessor_name = "scaled_dfb",
-                    .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER,
-                });
-                compute.dfb_bindings.push_back(m2::KernelSpec::DFBBinding{
-                    .dfb_spec_name = WELFORD_SCALED_DFB,
-                    .local_accessor_name = "scaled_dfb",
-                    .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER,
-                });
-            }
+            // scaled_dfb is a self-loop on the compute kernel (Welford W packs
+            // into it from the FPU mul step, then re-reads via transpose_wh_tile).
+            // Bound unconditionally per the patterns catalog; the kernel-side
+            // `if constexpr (do_scale)` block discards the uses when do_scale=false.
+            compute.dfb_bindings.push_back(m2::KernelSpec::DFBBinding{
+                .dfb_spec_name = WELFORD_SCALED_DFB,
+                .local_accessor_name = "scaled_dfb",
+                .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER,
+            });
+            compute.dfb_bindings.push_back(m2::KernelSpec::DFBBinding{
+                .dfb_spec_name = WELFORD_SCALED_DFB,
+                .local_accessor_name = "scaled_dfb",
+                .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER,
+            });
         }
         if (reduce_hw) {
             compute.dfb_bindings.push_back(m2::KernelSpec::DFBBinding{

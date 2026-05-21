@@ -5,43 +5,43 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
 void kernel_main() {
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t col_start_tile_id =
-        get_arg_val<uint32_t>(1);  // Start id in column major order. This should be the start of a column
-    uint32_t curr_col_in_batch = get_arg_val<uint32_t>(2);
-    uint32_t num_cols = get_arg_val<uint32_t>(3);  // number of cols to read
+    // src_addr is no longer load-bearing — the TensorBinding auto-injects the buffer
+    // address — but the legacy RTA slot is preserved here for layout stability;
+    // the value is unused.
+    [[maybe_unused]] auto src_addr = get_arg(args::src_addr);
+    auto col_start_tile_id = get_arg(args::col_start_tile_id);  // Start id in column major order. This should be the
+                                                                // start of a column
+    auto curr_col_in_batch = get_arg(args::curr_col_in_batch);
+    auto num_cols = get_arg(args::num_cols);  // number of cols to read
 
-    constexpr uint32_t Ht = get_compile_time_arg_val(0);
-    constexpr uint32_t Wt = get_compile_time_arg_val(1);
-    constexpr uint32_t HtWt = get_compile_time_arg_val(2);
+    constexpr auto Ht = get_arg(args::Ht);
+    constexpr auto Wt = get_arg(args::Wt);
+    constexpr auto HtWt = get_arg(args::HtWt);
 
-    constexpr uint32_t scaler_bits = get_compile_time_arg_val(3);
-    constexpr bool use_welford = get_compile_time_arg_val(4) != 0;
+    constexpr auto scaler_bits = get_arg(args::scaler_bits);
+    constexpr bool use_welford = get_arg(args::use_welford) != 0;
     // Welford must process one column at a time because the SFPU can only maintain
     // a single running mean/M2 state. DEST_AUTO_LIMIT interleaves multiple columns
     // per chunk, which would feed the Welford kernel tiles from the wrong columns.
     constexpr uint32_t row_chunk = use_welford ? 1 : compute_kernel_lib::DEST_AUTO_LIMIT;
 
-    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
-
     constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes = get_tile_size(cb_id_in0);
+    DataflowBuffer cb_in0(dfb::in_dfb);
+    const uint32_t tile_bytes = cb_in0.get_tile_size();
 
-    constexpr uint32_t cb_id_in2 = tt::CBIndex::c_2;
     float scaler_f = __builtin_bit_cast(float, scaler_bits);
-    dataflow_kernel_lib::prepare_reduce_scaler<cb_id_in2, REDUCE_OP, REDUCE_DIM>(scaler_f);
+    dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler_dfb, REDUCE_OP, REDUCE_DIM>(scaler_f);
 
-    constexpr auto tensor_args = TensorAccessorArgs<5>();
-    auto tensor_accessor = TensorAccessor(tensor_args, src_addr);
+    auto tensor_accessor = TensorAccessor(ta::input);
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
 
     uint32_t w = curr_col_in_batch;
 
