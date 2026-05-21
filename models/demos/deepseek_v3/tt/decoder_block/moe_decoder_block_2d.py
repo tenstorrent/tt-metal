@@ -68,11 +68,17 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
         fabric_config: ttnn.FabricConfig,
+        batch_size_per_row: int,
     ) -> ModelPrefillConfig:
         moe_cls = _moe_cls(fabric_config=fabric_config, mesh_device=mesh_device)
         return {
             "shared_expert": SharedExpert.prefill_model_config(hf_config, mesh_device, fabric_config),
-            "moe": moe_cls.prefill_model_config(hf_config, mesh_device, fabric_config),
+            "moe": moe_cls.prefill_model_config(
+                hf_config,
+                mesh_device,
+                fabric_config,
+                batch_size_per_row=batch_size_per_row,
+            ),
         }
 
     @classmethod
