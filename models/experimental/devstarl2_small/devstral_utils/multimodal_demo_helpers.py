@@ -24,8 +24,6 @@ except ImportError:  # minimal fallback if tests package not on PYTHONPATH
 
 DEFAULT_MODEL_ID = "mistralai/Devstral-Small-2-24B-Instruct-2512"
 
-_HF_TRUST_PATCHES_APPLIED = False
-
 
 def text_model_root(multimodal_inner: Mistral3Model):
     lm = multimodal_inner.language_model
@@ -33,10 +31,12 @@ def text_model_root(multimodal_inner: Mistral3Model):
 
 
 def apply_devstral_hf_trust_patches():
-    global _HF_TRUST_PATCHES_APPLIED
-    if _HF_TRUST_PATCHES_APPLIED:
-        return
     from models.tt_transformers.tt import model_config as mc
+
+    if hasattr(mc.ModelArgs, "_devstral_orig_set_hf_params") and hasattr(
+        mc.ModelArgs, "_devstral_orig_get_hf_model_cls"
+    ):
+        return
 
     orig_set = mc.ModelArgs._set_hf_params
     orig_get_hf_model_cls = mc.ModelArgs.get_hf_model_cls
@@ -61,7 +61,6 @@ def apply_devstral_hf_trust_patches():
     mc.ModelArgs.get_hf_model_cls = _get_hf_model_cls_devstral_safe  # type: ignore[method-assign]
     mc.ModelArgs._devstral_orig_set_hf_params = orig_set  # type: ignore[attr-defined]
     mc.ModelArgs._devstral_orig_get_hf_model_cls = orig_get_hf_model_cls  # type: ignore[attr-defined]
-    _HF_TRUST_PATCHES_APPLIED = True
 
 
 _tt_prefill_target_seqlen_cache: dict = {}

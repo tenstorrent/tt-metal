@@ -145,10 +145,16 @@ def _resolve_workspace_path(workspace_root: str, raw_path: str) -> Path:
     return candidate
 
 
-def run_shell(command: str, workspace_root: str, timeout_sec: int) -> Dict[str, Any]:
+def run_shell(command: str | List[str], workspace_root: str, timeout_sec: int) -> Dict[str, Any]:
+    if isinstance(command, str):
+        argv = shlex.split(command)
+    else:
+        argv = list(command)
+    if not argv:
+        return {"ok": False, "exit_code": None, "output": "", "error": "empty command"}
     try:
         completed = subprocess.run(
-            ["bash", "-lc", command],
+            argv,
             cwd=workspace_root,
             capture_output=True,
             text=True,
@@ -236,9 +242,7 @@ def tool_grep(args: Dict[str, Any], config: ChatConfig) -> Dict[str, Any]:
     cmd = ["rg", "-n", "--glob", glob, "--max-count", str(max_results), pattern, str(target)]
     if case_insensitive:
         cmd.insert(1, "-i")
-    return run_shell(
-        " ".join(subprocess.list2cmdline([part]) for part in cmd), config.workspace_root, config.command_timeout_sec
-    )
+    return run_shell(cmd, config.workspace_root, config.command_timeout_sec)
 
 
 def tool_web_fetch(args: Dict[str, Any]) -> Dict[str, Any]:
