@@ -863,3 +863,84 @@ def test_linear_k_tail(
         for i in range(submesh.get_num_devices()):
             assert check_result[0][c][i]["pcc"] > 0.999_500
             assert check_result[0][c][i]["relative_rmse"] < 0.02
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, topology, num_links, num_workers_per_link, sp_axis, tp_axis, core_grid_x, core_grid_y, cluster_axis",
+    [
+        [
+            (2, 4),
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
+            ttnn.Topology.Linear,
+            1,
+            4,
+            0,
+            1,
+            4,
+            4,
+            1,
+        ],
+    ],
+    ids=["t3k_linear"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+    [
+        (3072, 5120, 1280, 8, 8, 8, 2, 2),
+        (3072, 5120, 3840, 8, 8, 8, 2, 2),
+    ],
+    ids=["3072x5120x2560", "3072x5120x7680"],
+)
+def test_linear_t3k(
+    mesh_device,
+    M,
+    K,
+    N,
+    M_block_size,
+    K_block_size,
+    N_block_size,
+    subblock_h,
+    subblock_w,
+    topology,
+    core_grid_x,
+    core_grid_y,
+    num_workers_per_link,
+    num_links,
+    sp_axis,
+    tp_axis,
+    cluster_axis,
+):
+    """Linear topology PCC on a 2x4 (T3K) mesh.
+
+    Same uni-ring algorithm as `wh4x8links4_linear` in `test_linear`, but on the smaller
+    T3K mesh shape and with `num_links=1` / `num_workers_per_link=4` to exercise the mux
+    placement and worker_idx assignment at a different link/worker configuration than the
+    one TG uses (links=4, workers_per_link=2). cluster_axis=1 keeps the K-fractured layout
+    (4 devices along the AGMM ring axis).
+    """
+    submesh = _create_cluster_submesh(mesh_device, cluster_axis)
+    check_result = run_test_linear(
+        submesh,
+        M,
+        K,
+        N,
+        M_block_size,
+        K_block_size,
+        N_block_size,
+        subblock_h,
+        subblock_w,
+        topology,
+        core_grid=ttnn.CoreCoord(core_grid_x, core_grid_y),
+        num_workers_per_link=num_workers_per_link,
+        num_links=num_links,
+        force_transpose=True,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        use_bias=True,
+        cluster_axis=cluster_axis,
+    )
+    for c in range(1):
+        for i in range(submesh.get_num_devices()):
+            assert check_result[0][c][i]["pcc"] > 0.999_500
+            assert check_result[0][c][i]["relative_rmse"] < 0.02
