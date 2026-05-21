@@ -420,7 +420,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
 
         writer_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
-            "writer_reduce_h_rm_scalar.cpp";
+            "writer_reduce_rm_scalar.cpp";
         writer_desc.compile_time_args = writer_compile_time_args;
         writer_desc.defines = {reduce_defines.begin(), reduce_defines.end()};
     } else if (use_width_sharding) {
