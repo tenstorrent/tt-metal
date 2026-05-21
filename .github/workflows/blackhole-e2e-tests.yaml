@@ -25,7 +25,7 @@ on:
           - "Ubuntu 24.04"
         description: "Platform to build and test"
       model:
-        description: 'Select model to test (filters rows by model-name in tests/pipeline_reorg/blackhole_e2e_tests.yaml; untagged rows always run)'
+        description: 'Select model to test (filters rows strictly by model-name in tests/pipeline_reorg/blackhole_e2e_tests.yaml; use "all" to run every row including untagged)'
         required: false
         default: 'all'
         type: choice
