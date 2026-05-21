@@ -536,7 +536,9 @@ def run_demo(
     logger.info(f"Opening mesh device with shape {mesh_shape}")
     if enable_trace:
         logger.info("Enabling trace for decode forward pass")
-        # NOTE:
+        # NOTE: A trace_region_size of 0 lets the runtime/device allocate trace buffers dynamically
+        # instead of reserving a fixed region up front. This avoids overcommitting memory, at the
+        # cost of giving us less explicit control over reserved trace capacity.
         trace_region_size = 0
         logger.info(f"Trace region size set to {trace_region_size}")
         mesh_device = ttnn.open_mesh_device(
