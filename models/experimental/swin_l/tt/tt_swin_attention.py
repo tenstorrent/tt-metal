@@ -121,6 +121,7 @@ class TtSwinAttention:
             ),
             core_grid=ttnn.CoreGrid(y=8, x=8),
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat8_b,
         )
         ttnn.deallocate(input_tensor)
 
@@ -181,6 +182,7 @@ class TtSwinAttention:
             ),
             core_grid=ttnn.CoreGrid(y=8, x=8),
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat8_b,
         )
 
         output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
