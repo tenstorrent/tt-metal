@@ -656,3 +656,19 @@ def test_typecast_rm_chunked_program_cache(device):
         output_tensor = ttnn.typecast(input_tensor, ttnn.uint8)
         result = ttnn.to_torch(output_tensor)
         assert torch.equal(result, expected), f"typecast correctness check failed on call {i + 1}"
+
+
+def test_typecast_bf16_to_uint8_specific_case(device):
+    # Case from issue #36219: 1.0 -> 1 (not 3)
+    torch_ones = torch.ones([1, 1, 32, 32], dtype=torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(torch_ones, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.typecast(input_tensor, ttnn.uint8)
+    output_torch = ttnn.to_torch(output)
+
+    expected = torch.ones([1, 1, 32, 32], dtype=torch.uint8)
+
+    # Check if any element is 3 (the original bug)
+    assert not torch.any(output_torch == 3), f"Found 3 in output: {output_torch}"
+    assert torch.equal(output_torch.to(torch.uint8), expected)
