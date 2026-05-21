@@ -156,7 +156,7 @@ jobs:
     # test_matrix_<sku>; here we download + merge them to form
     # expected-jobs, so the matrix script runs only once per SKU (in
     # the impl) and there's no logic duplication across workflows.
-    needs: blackhole-e2e-tests
+    needs: [build-artifact, generate-card-matrix, blackhole-e2e-tests]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -182,6 +182,21 @@ jobs:
           echo "matrix<<EOF" >> $GITHUB_OUTPUT
           echo "$merged" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
+      - name: Aggregate upstream run result
+        id: run-result
+        env:
+          # Most-severe-wins so build/matrix failures aren't masked when
+          # blackhole-e2e-tests gets skipped because of an upstream fail.
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          RESULT=$(jq -rn --argjson n "$NEEDS" '
+            [$n[].result] as $r |
+            if   any($r[]; . == "failure")   then "failure"
+            elif any($r[]; . == "cancelled") then "cancelled"
+            elif any($r[]; . == "success")   then "success"
+            else                                  "skipped"
+            end')
+          echo "run-result=$RESULT" >> "$GITHUB_OUTPUT"
       - id: ai-run-summary
         continue-on-error: true
         uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/run@main
@@ -196,7 +211,7 @@ jobs:
           api-key: ${{ secrets.TT_CHAT_API_KEY }}
           api-url: ${{ secrets.TT_CHAT_URL }}
           expected-jobs: ${{ steps.merge.outputs.matrix }}
-          run-result: ${{ needs.blackhole-e2e-tests.result }}
+          run-result: ${{ steps.run-result.outputs.run-result }}
       - name: Show report
         if: always() && steps.ai-run-summary.outputs.report-file != ''
         continue-on-error: true
