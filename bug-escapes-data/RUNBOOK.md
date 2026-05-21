@@ -48,42 +48,102 @@ After any verdict (confirmed, refuted, unverifiable), write the ID to `seen-esca
 
 ### campaign-state.json schema
 
-Top-level: object keyed by `escape_id`. Each entry:
+Top-level structure (array-based, NOT keyed by escape_id):
 
 ```json
 {
-  "escape_id": "42847291__1ee8c3ca",
-  "status": "bisect_in_progress",
-  "step": "bisect",
-  "test_name": "test_foo::test_bar",
-  "test_filepath": "tests/models/...",
-  "workflow": ".github/workflows/blackhole-e2e-tests.yaml",
-  "job_name": "...",
-  "build_variant": "standard",
-  "bisect_range": ["sha1", "sha2", "..."],
-  "bisect_low": 0,
-  "bisect_high": 12,
-  "bisect_probes": [
-    {"sha": "...", "run_id": 12345678, "result": "FAIL", "dispatched_at": "2026-05-14T02:00:00Z"}
+  "campaign_start": "2026-05-15",
+  "bisects_in_progress": [
+    {
+      "escape_id": "42847291__1ee8c3ca",
+      "hw": "BH",
+      "runner_label": "BH-llmbox",
+      "test_name": "test_foo::test_bar",
+      "test_filepath": "tests/models/...",
+      "test_command": "pytest tests/models/... -v",
+      "last_failing_sha": "...",
+      "first_passing_sha": "...",
+      "total_commits_in_range": 12,
+      "manual_bisect": {
+        "low": 0,
+        "high": 11,
+        "runs": [
+          {"sha": "...", "run_id": 12345678, "result": "FAIL", "dispatched_at": "2026-05-14T02:00:00Z"}
+        ]
+      },
+      "step": "bisect_mid1_dispatched",
+      "fix_commit": "abc123",
+      "fix_commit_full": "abc123def456...",
+      "fix_pr": 12345,
+      "fix_pr_title": "...",
+      "fix_layer": 2,
+      "test_layer": 4,
+      "verification_runs": {
+        "before": {"run_id": null, "result": null},
+        "after": {"run_id": null, "result": null}
+      },
+      "status": "bisect_in_progress"
+    }
   ],
-  "fix_commit_sha": null,
-  "before_run_id": null,
-  "after_run_id": null,
-  "dispatch_time": "2026-05-14T02:00:00Z"
+  "verification_in_progress": [
+    {
+      "escape_id": "...",
+      "purpose": "verify fix commit",
+      "fix_commit": "...",
+      "before_commit": "...",
+      "hw": "BH",
+      "test_command": "pytest ...",
+      "before_run_id": 12345678,
+      "before_run_url": "https://github.com/tenstorrent/tt-metal/actions/runs/12345678/job/...",
+      "before_dispatched_at": "2026-05-14T02:00:00Z",
+      "before_result": "FAIL",
+      "after_run_id": 12345679,
+      "after_run_url": "https://github.com/tenstorrent/tt-metal/actions/runs/12345679/job/...",
+      "after_dispatched_at": "2026-05-14T03:00:00Z",
+      "after_result": null,
+      "verification_conclusion": null,
+      "verified_at": null
+    }
+  ],
+  "resolved": [
+    {
+      "escape_id": "...",
+      "hw": "BH",
+      "method": "A",
+      "test": "test_foo",
+      "verdict": "confirmed",
+      "before_run_id": 12345678,
+      "before_result": "FAIL",
+      "after_run_id": 12345679,
+      "after_result": "PASS",
+      "resolved_at": "2026-05-14T04:00:00Z",
+      "note": "..."
+    }
+  ],
+  "pending": [
+    {
+      "escape_id": "...",
+      "hw": "BH",
+      "runner_label": "...",
+      "priority": 1,
+      "test_name": "...",
+      "test_filepath": "...",
+      "suggested_test_command": "pytest ...",
+      "last_failing_sha": "...",
+      "first_passing_sha": "...",
+      "commit_range_size": 12,
+      "cluster_with": null,
+      "note": "..."
+    }
+  ],
+  "active_bisects": {}
 }
 ```
 
-Valid `status` values:
-- `bisect_in_progress` — dispatched at least one midpoint probe, bisect not complete
-- `awaiting_verification` — bisect complete, fix_commit_sha known, before/after not yet dispatched
-- `verification_in_progress` — before_run_id and/or after_run_id dispatched, waiting for results
-- `confirmed` — before=FAIL, after=PASS, written to confirmed-escapes.json
-- `refuted` — bisect or verification showed test wasn't broken/fixed by suspected commit
-- `inconclusive_timeout` — a run exceeded 90 min or was cancelled
-- `skipped_*` — pre-filtered out (see seen-escapes.json)
-
-**Recovery rule:** On any session start, for every entry with `status` containing `in_progress`:
-check the run_id via GitHub API before taking any new action. See Context Reset Protocol in MEMORY.md.
+**Recovery rule:** On any session start:
+- Check every entry in `bisects_in_progress` — for each `manual_bisect.runs` entry with a `run_id`, poll its GitHub Actions status before dispatching a new probe
+- Check every entry in `verification_in_progress` — for each `before_run_id`/`after_run_id`, poll status before dispatching
+- See Context Reset Protocol in MEMORY.md for full procedure
 
 ---
 
