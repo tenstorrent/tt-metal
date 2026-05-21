@@ -92,9 +92,11 @@ class TtPixtralPatchConv:
         # HF Conv2d weight: [out_channels, in_channels, kH, kW] = [1024, 3, 14, 14].
         w_4d = state_dict["vision_tower.patch_conv.weight"].to(torch.bfloat16)
         assert w_4d.shape == (VISION_HIDDEN_SIZE, VISION_NUM_CHANNELS, self.patch_size, self.patch_size)
+
         self.weight = ttnn.from_torch(
             w_4d,
-            dtype=dtype,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
