@@ -8,6 +8,7 @@
 #include "build.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "params.h"
 #include "perf.h"
@@ -39,6 +40,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const bool UNPACK_TRANSPOSE_FACES = params.UNPACK_TRANSPOSE_FACES;
 #endif
     {
+        MEASURE_PERF_COUNTERS("INIT")
         ZONE_SCOPED("INIT")
 
         _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
@@ -49,6 +51,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     {
+        MEASURE_PERF_COUNTERS("TILE_LOOP")
         ZONE_SCOPED("TILE_LOOP")
 
         for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
@@ -88,6 +91,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT = params.TILE_CNT;
 #endif
     {
+        MEASURE_PERF_COUNTERS("INIT")
         ZONE_SCOPED("INIT")
 
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
@@ -96,6 +100,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     {
+        MEASURE_PERF_COUNTERS("TILE_LOOP")
         ZONE_SCOPED("TILE_LOOP")
 
         for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
@@ -151,6 +156,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT = params.TILE_CNT;
 #endif
     {
+        MEASURE_PERF_COUNTERS("INIT")
         ZONE_SCOPED("INIT")
         _llk_pack_hw_configure_<is_fp32_dest_acc_en>(formats.pack_src, formats.pack_dst, TILE_WIDTH * TILE_HEIGHT);
         _llk_pack_init_<false, false>(formats.pack_dst);
@@ -158,6 +164,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
+        MEASURE_PERF_COUNTERS("TILE_LOOP")
         ZONE_SCOPED("TILE_LOOP")
 
         for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)

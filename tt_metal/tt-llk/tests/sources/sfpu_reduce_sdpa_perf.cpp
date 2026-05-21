@@ -9,6 +9,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "params.h"
 #include "perf.h"
@@ -37,6 +38,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
 #endif
     {
+        MEASURE_PERF_COUNTERS("INIT")
         ZONE_SCOPED("INIT")
         // Configure unpacker for Float16_b format
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -53,6 +55,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
+        MEASURE_PERF_COUNTERS("TILE_LOOP")
         ZONE_SCOPED("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
@@ -105,6 +108,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t block_height = BLOCK_RT_DIM;
 
     {
+        MEASURE_PERF_COUNTERS("INIT")
         ZONE_SCOPED("INIT")
         // Initialize datacopy from srcA to dest
 #ifdef ARCH_BLACKHOLE
@@ -124,6 +128,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
+        MEASURE_PERF_COUNTERS("TILE_LOOP")
         ZONE_SCOPED("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
@@ -213,6 +218,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
 #endif
     {
+        MEASURE_PERF_COUNTERS("INIT")
         ZONE_SCOPED("INIT")
         // Configure packer hardware
 #ifdef ARCH_BLACKHOLE
@@ -232,6 +238,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
+        MEASURE_PERF_COUNTERS("TILE_LOOP")
         ZONE_SCOPED("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {

@@ -466,7 +466,10 @@ class PerfConfig(TestConfig):
                 variant_raw_data.append(profiler_data)
 
             get_stats = Profiler.STATS_FUNCTION[run_type]
-            results.append(get_stats(ProfilerData.concat(variant_raw_data)))
+            # WC build emits no ZONE_START/ZONE_END events (ZONE_SCOPED muted) — stats df is empty.
+            stats_df = get_stats(ProfilerData.concat(variant_raw_data))
+            if not stats_df.empty:
+                results.append(stats_df)
 
             if variant_counter_results:
                 all_counters = pd.concat(variant_counter_results, ignore_index=True)

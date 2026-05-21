@@ -188,6 +188,11 @@ def _stats_timings(perf_data: pd.DataFrame) -> pd.DataFrame:
 def _stats_l1_to_l1(data: ProfilerData) -> pd.DataFrame:
     raw_data = data.zones().raw()
 
+    # WC build (PERF_COUNTERS_COMPILED) emits no ZONE_START/ZONE_END events because
+    # ZONE_SCOPED is muted; only HW counter values are produced. Skip wall_clock stats.
+    if raw_data.empty:
+        return pd.DataFrame()
+
     # Validate that run_index has been explicitly set
     if raw_data["run_index"].isna().any():
         raise ValueError(
@@ -235,6 +240,10 @@ def _stats_l1_to_l1(data: ProfilerData) -> pd.DataFrame:
 
 
 def _stats_thread(stat: str, raw_thread: pd.DataFrame) -> pd.DataFrame:
+    # WC build emits no zone events — skip wall_clock stats, counters provide values instead.
+    if raw_thread.empty:
+        return pd.DataFrame()
+
     start_entries = raw_thread[(raw_thread["type"] == "ZONE_START")].reset_index(
         drop=True
     )
@@ -276,6 +285,12 @@ def _stats_l1_congestion(data: ProfilerData) -> pd.DataFrame:
         f"{PerfRunType.L1_CONGESTION.name}[PACK]", data.pack().raw()
     )
 
+    if unpack_stats.empty and pack_stats.empty:
+        return pd.DataFrame()
+    if unpack_stats.empty:
+        return pack_stats
+    if pack_stats.empty:
+        return unpack_stats
     return pd.merge(unpack_stats, pack_stats, on="marker", how="outer", validate="1:1")
 
 
