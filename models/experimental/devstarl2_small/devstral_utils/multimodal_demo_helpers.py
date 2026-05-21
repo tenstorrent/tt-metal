@@ -125,6 +125,7 @@ def close_devstral_demo_mesh(mesh_device) -> None:
         try:
             ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
         except Exception:
+            # Best-effort cleanup: fabric disable may fail in teardown; do not mask close errors.
             pass
 
 
