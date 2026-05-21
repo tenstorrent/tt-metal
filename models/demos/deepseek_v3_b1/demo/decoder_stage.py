@@ -663,11 +663,11 @@ def create_decoder_block_tensors(
         "up_proj_weights": routed_up,
         "down_proj_weights": routed_down,
         # Optional SRAM-resident routed weights — populated by the weight loader when
-        # SRAM placement is configured. None on weight objects without sram_* fields,
-        # which means n_sram_active stays 0 → SRAM chain skips uniformly.
-        "sram_gate_proj_weights": getattr(weights, "sram_gate_proj", None),
-        "sram_up_proj_weights": getattr(weights, "sram_up_proj", None),
-        "sram_down_proj_weights": getattr(weights, "sram_down_proj", None),
+        # SRAM placement is configured. Empty list when not configured; the kernel's
+        # SRAM chain skips uniformly via sram_*_active=0.
+        "sram_gate_proj_weights": weights.sram_gate_proj,
+        "sram_up_proj_weights": weights.sram_up_proj,
+        "sram_down_proj_weights": weights.sram_down_proj,
         "final_output_mem_config": final_output_mem_config,
         "final_output_total_width": final_output_total_width,
         # Shared expert weights
