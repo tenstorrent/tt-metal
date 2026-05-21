@@ -2,6 +2,16 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+"""Blackhole fuser config parser.
+
+All the arch-specific configuration lives in plain dicts at the top of the file.
+The shared base classes in fuser.validator read these dicts to run validation and
+build runtime objects, so this file only needs to define the data and thin subclasses.
+
+To add a new FPU op, add one entry to FPU_MAP with its tags, one to OUTPUT_DIMS,
+and one to UNPACKER_RULES if the op requires a specific unpacker.
+"""
+
 from typing import Annotated, List, Optional, Union
 
 from fuser.validator import (
@@ -135,6 +145,13 @@ BINARY_SFPU_OPS = {
 
 
 class FpuMathSchema(FpuMathSchemaBase):
+    """Blackhole FPU math node (type="Fpu").
+
+    Validates operation and unpacker strings against the keys of FPU_MAP and
+    UNPACKER_MAP, then passes the Blackhole dicts to validate_fpu_math() for
+    all cross-field checks.
+    """
+
     operation: str
     unpacker: Optional[str] = None
 
@@ -172,6 +189,8 @@ class FpuMathSchema(FpuMathSchemaBase):
 
 
 class BlackholeUnarySfpuMathSchema(UnarySfpuMathSchema):
+    """Blackhole unary SFPU node, only allows operations listed in UNARY_SFPU_OPS."""
+
     @field_validator("operation", mode="after")
     @classmethod
     def validate_arch_operation(cls, v):
@@ -184,6 +203,8 @@ class BlackholeUnarySfpuMathSchema(UnarySfpuMathSchema):
 
 
 class BlackholeBinarySfpuMathSchema(BinarySfpuMathSchema):
+    """Blackhole binary SFPU node, only allows operations listed in BINARY_SFPU_OPS."""
+
     @field_validator("operation", mode="after")
     @classmethod
     def validate_arch_operation(cls, v):
@@ -202,6 +223,13 @@ MathSchema = Annotated[
 
 
 class OperationSchema(OperationSchemaBase):
+    """Blackhole fused operation with one output and a pipeline of math nodes.
+
+    Extends the base with tilize handling. The _arch_validate() method looks at
+    which unpackers are used and sets the bh_tilize flag when UnpackerTilizeA is
+    present. Then _arch_kwargs() forwards that flag to FusedOperation.
+    """
+
     math: List[MathSchema] = Field(..., min_length=1)
     packer: str = "Packer"
     bh_tilize: Optional[Tilize] = None

@@ -2,6 +2,21 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+"""Shared base classes and validation for fuser config schemas.
+
+Each architecture (wormhole/parser.py, blackhole/parser.py) inherits from the base
+classes defined here and supplies plain dicts that control all validation and
+construction. The dicts are:
+
+    FPU_MAP              op name to (factory, tags) for FPU instantiation and category tagging
+    UNPACKER_MAP         unpacker name to runtime class
+    PACKER_MAP           packer name to runtime class
+    UNPACKER_RULES       op name to allowed unpacker name(s), either a string or a set
+    OUTPUT_DIMS          op name to a lambda(src_a, src_b) that computes output dimensions
+    SUPPORTED_FIDELITIES op name to set of allowed MathFidelity values (absent means all allowed)
+    FORCED_REDUCE_DIM    op name to the ReduceDimension that gets forced (absent means user picks)
+"""
+
 from typing import Annotated, Callable, Dict, List, Literal, Optional, Set, Tuple, Union
 
 from fuser.compute_node import ComputeNode
@@ -35,6 +50,14 @@ from pydantic import (
 
 
 class UnarySfpuMathSchema(BaseModel):
+    """Base schema for unary SFPU math nodes (type="UnarySfpu").
+
+    Validates that the operation belongs to MathOpType.SFPU_UNARY.
+    Each architecture subclass overrides _sfpu_class() to return the correct
+    runtime SFPU class and adds a validate_arch_operation check against its
+    own UNARY_SFPU_OPS set.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["UnarySfpu"]
@@ -79,6 +102,14 @@ class UnarySfpuMathSchema(BaseModel):
 
 
 class BinarySfpuMathSchema(BaseModel):
+    """Base schema for binary SFPU math nodes (type="BinarySfpu").
+
+    Validates that the operation belongs to MathOpType.SFPU_BINARY or SFPU_BINARY_INT.
+    Each architecture subclass overrides _sfpu_class() to return the correct
+    runtime SFPU class and adds a validate_arch_operation check against its
+    own BINARY_SFPU_OPS set.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["BinarySfpu"]
@@ -131,6 +162,14 @@ class BinarySfpuMathSchema(BaseModel):
 
 
 class FpuMathSchemaBase(BaseModel):
+    """Base schema for FPU math nodes (type="Fpu").
+
+    Holds all shared fields like broadcast, reduce, transpose, and fidelity.
+    Each architecture subclass adds its own operation and unpacker string fields,
+    validates them against the keys of FPU_MAP and UNPACKER_MAP, and then calls
+    validate_fpu_math() with its arch-specific dict rules for cross-field checks.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["Fpu"]
@@ -168,6 +207,13 @@ def validate_fpu_math(
     supported_fidelities: Dict[str, Set],
     unpacker_rules: Dict[str, Union[str, Set[str]]],
 ):
+    """Validate an FPU math config against the dict rules provided by the arch parser.
+
+    Checks reduce requirements, unpacker compatibility, math fidelity restrictions,
+    reuse_dest constraints, and unpacker-specific limitations like tilize, transpose,
+    and broadcast. Every rule is driven by the dicts and sets that the caller passes in,
+    so this function stays architecture-agnostic.
+    """
     op = schema.operation
 
     forced_dim = forced_reduce_dim.get(op)
@@ -263,6 +309,12 @@ def build_compute_node(
     matmul_ops: Set[str],
     unpacker_map: Dict[str, type],
 ):
+    """Create a ComputeNode from schema fields and the arch-provided maps.
+
+    Looks up the FPU factory in fpu_map, resolves the unpacker class from
+    unpacker_map, checks matmul dimension compatibility and the Int32 unpack_to_dest
+    requirement, then builds the ComputeNode with all the configured parameters.
+    """
     op = schema.operation
     src_a = operands.get(schema.src_a)
     src_b = operands.get(schema.src_b)
@@ -327,6 +379,12 @@ def compute_output_dimensions(
     operands,
     output_dims: Dict[str, Callable],
 ) -> Optional[Tuple[int, int]]:
+    """Compute output tile dimensions using the arch-provided OUTPUT_DIMS map.
+
+    Each entry maps an op name to a lambda that takes (src_a_dims, src_b_dims)
+    and returns (rows, cols). Returns None for ops that are not in the map,
+    for example SFPU ops that do not change dimensions.
+    """
     fn = output_dims.get(schema.operation)
     if fn is None:
         return None
@@ -336,6 +394,14 @@ def compute_output_dimensions(
 
 
 class OperationSchemaBase(BaseModel):
+    """Base schema for a fused operation with one output and one or more math nodes.
+
+    Each architecture subclass adds its own math list and packer field, and
+    overrides _get_packer_class() to return the correct packer. Blackhole also
+    overrides _arch_validate() for tilize detection and _arch_kwargs() to forward
+    the bh_tilize flag to FusedOperation.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     output: str = Field(..., min_length=1)

@@ -2,6 +2,16 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+"""Wormhole B0 fuser config parser.
+
+All the arch-specific configuration lives in plain dicts at the top of the file.
+The shared base classes in fuser.validator read these dicts to run validation and
+build runtime objects, so this file only needs to define the data and thin subclasses.
+
+To add a new FPU op, add one entry to FPU_MAP with its tags, one to OUTPUT_DIMS,
+and one to UNPACKER_RULES if the op requires a specific unpacker.
+"""
+
 from typing import Annotated, List, Optional, Union
 
 from fuser.validator import (
@@ -152,6 +162,13 @@ BINARY_SFPU_OPS = {
 
 
 class FpuMathSchema(FpuMathSchemaBase):
+    """Wormhole FPU math node (type="Fpu").
+
+    Validates operation and unpacker strings against the keys of FPU_MAP and
+    UNPACKER_MAP, then passes the Wormhole dicts to validate_fpu_math() for
+    all cross-field checks.
+    """
+
     operation: str
     unpacker: Optional[str] = None
 
@@ -189,6 +206,8 @@ class FpuMathSchema(FpuMathSchemaBase):
 
 
 class WormholeUnarySfpuMathSchema(UnarySfpuMathSchema):
+    """Wormhole unary SFPU node, only allows operations listed in UNARY_SFPU_OPS."""
+
     @field_validator("operation", mode="after")
     @classmethod
     def validate_arch_operation(cls, v):
@@ -201,6 +220,8 @@ class WormholeUnarySfpuMathSchema(UnarySfpuMathSchema):
 
 
 class WormholeBinarySfpuMathSchema(BinarySfpuMathSchema):
+    """Wormhole binary SFPU node, only allows operations listed in BINARY_SFPU_OPS."""
+
     @field_validator("operation", mode="after")
     @classmethod
     def validate_arch_operation(cls, v):
@@ -219,6 +240,12 @@ MathSchema = Annotated[
 
 
 class OperationSchema(OperationSchemaBase):
+    """Wormhole fused operation with one output and a pipeline of math nodes.
+
+    Wires the Wormhole PACKER_MAP into the base class. Unlike Blackhole, Wormhole
+    does not need any arch-specific overrides for tilize handling.
+    """
+
     math: List[MathSchema] = Field(..., min_length=1)
     packer: str = "Packer"
 
