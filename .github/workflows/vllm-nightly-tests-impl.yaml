@@ -89,7 +89,6 @@ jobs:
               "arch": "arch-wormhole_b0",
               "mesh-device": "N150",
               "additional-server-args": "--async-scheduling",
-              "requirements": "models/demos/gemma4/requirements.txt",
               "multimodal": false,
               "owner_id": "U08TJ70UFRT"
             },
@@ -103,7 +102,6 @@ jobs:
               "mesh-device": "T3K",
               "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
               "additional-server-args": "--async-scheduling",
-              "requirements": "models/demos/gemma4/requirements.txt",
               "multimodal": false,
               "owner_id": "U08TJ70UFRT"
             },
@@ -117,7 +115,6 @@ jobs:
               "mesh-device": "P150x4",
               "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
               "additional-server-args": "--async-scheduling",
-              "requirements": "models/demos/gemma4/requirements.txt",
               "multimodal": false,
               "owner_id": "U08TJ70UFRT"
             },
@@ -131,7 +128,6 @@ jobs:
               "mesh-device": "T3K",
               "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
               "additional-server-args": "--async-scheduling",
-              "requirements": "models/demos/gemma4/requirements.txt",
               "multimodal": false,
               "owner_id": "U08TJ70UFRT"
             },
@@ -145,7 +141,6 @@ jobs:
               "mesh-device": "P150x4",
               "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
               "additional-server-args": "--async-scheduling",
-              "requirements": "models/demos/gemma4/requirements.txt",
               "multimodal": false,
               "owner_id": "U08TJ70UFRT"
             },
@@ -466,16 +461,12 @@ jobs:
             if [ -d vllm/plugins/vllm-tt-plugin ]; then
               uv pip install --no-deps -e vllm/plugins/vllm-tt-plugin
             fi
+            # Per-model Python deps when the model directory pins versions that
+            # differ from the docker image (Gemma4 needs transformers==5.5.0).
+            case "${{ matrix.test-group.model }}" in
+              google/gemma-4-*) uv pip install -r models/demos/gemma4/requirements.txt ;;
+            esac
           } 2>&1 | tee "${FILE_INSTALL_LOG}"
-          exit "${PIPESTATUS[0]}"
-
-      # Per-model Python deps when the model's tt-metal directory pins versions
-      # that differ from the docker image (e.g. Gemma4 needs transformers==5.5.0).
-      # Set "requirements" on the matrix entry to opt in.
-      - name: 📀 Install model requirements
-        if: ${{ matrix.test-group.requirements != '' }}
-        run: |
-          uv pip install -r "${{ matrix.test-group.requirements }}" 2>&1 | tee -a "${FILE_INSTALL_LOG}"
           exit "${PIPESTATUS[0]}"
 
       - name: 🚀 Run server
