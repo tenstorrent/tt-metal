@@ -640,15 +640,12 @@ struct MatmulExpertCompressedDRAM {
             }
 
             if constexpr (CTArgs::accum_experts) {
-                // Per-expert push/pop = full cb_out size, so wr/rd wrap back to base
-                // each cycle. cb_out is per_core_n in non-gather, cores_per_bank *
-                // per_core_n in gather (output tensor shard is widened so receiver
-                // has L1 space for sender's NOC alongside its own pack). Full-cap
-                // wraparound keeps PACK's local fifo_wr_ptr pinned at its override
-                // target (slot 1 for receiver) across all per-expert cycles, and
-                // makes NCRISC's get_read_ptr return base = slot 0 = sender's pack.
+                // cb_out is per_core_n in non-gather, cores_per_bank * per_core_n
+                // in gather (output tensor shard is widened so receiver has L1 space
+                // for sender's NOC alongside its own pack).
                 constexpr uint32_t cb_out_num_pages =
                     CTArgs::primary_at_last_offset ? CTArgs::cores_per_bank * CTArgs::per_core_n : CTArgs::per_core_n;
+                constexpr uint32_t cb_acc = CTArgs::cb_internal_acc;
 
                 uint32_t num_dram_experts = 0;
                 if constexpr (CTArgs::enable_indexing) {
@@ -674,19 +671,15 @@ struct MatmulExpertCompressedDRAM {
                     num_dram_experts = num_active_experts;
                 }
 
-                // Gather receiver: pin PACK's local wr_ptr (on cb_out) to slot 1.
-                // After each per-expert cb_push_back of the full cb size
-                // (cb_out_num_pages = cores_per_bank * per_core_n), fifo_wr_ptr wraps
-                // back to base + per_core_n_bytes (= slot 1). Sender's NOC lands at
-                // receiver's slot 0, giving [sender_n | receiver_n] order on cb_out's
-                // shared L1.
-                if constexpr (CTArgs::primary_at_last_offset && CTArgs::is_in_bank_primary) {
-                    PACK(({
-                        uint32_t base = unified_kernels::get_cb_buf_addr(CTArgs::cb_out);
-                        uint32_t page_size = unified_kernels::get_cb_page_size(CTArgs::cb_out);
-                        unified_kernels::override_cb_wr_ptr(CTArgs::cb_out, base + CTArgs::per_core_n * page_size);
-                    }));
-                }
+                // Accumulation packs must land at the same slot for every expert:
+                // slot 0 on senders, slot 1 on the gather receiver. Reset PACK's
+                // local wr_ptr each expert instead of relying on full-CB push
+                // wraparound, which LLK asserts reject when it would cross fifo_limit.
+                const uint32_t acc_base = unified_kernels::get_cb_buf_addr(cb_acc);
+                const uint32_t acc_page_size = unified_kernels::get_cb_page_size(cb_acc);
+                const uint32_t acc_pack_addr = (CTArgs::primary_at_last_offset && CTArgs::is_in_bank_primary)
+                                                   ? acc_base + CTArgs::per_core_n * acc_page_size
+                                                   : acc_base;
 
                 uint32_t fmt_slot = 0;
                 uint32_t dram_idx = 0;
@@ -707,7 +700,8 @@ struct MatmulExpertCompressedDRAM {
                         continue;
                     }
 
-                    cb_reserve_back(CTArgs::cb_out, cb_out_num_pages);
+                    PACK(({ unified_kernels::override_cb_wr_ptr(cb_acc, acc_pack_addr); }));
+                    cb_reserve_back(cb_acc, CTArgs::per_core_n);
 
                     if (dram_idx == 0) {
                         PACK((llk_pack_reconfig_l1_acc(0)));
@@ -760,7 +754,7 @@ struct MatmulExpertCompressedDRAM {
                         tile_regs_commit();
                         tile_regs_wait();
                         for (uint32_t sn = 0; sn < CTArgs::subblock_n; sn++) {
-                            pack_tile(sn, CTArgs::cb_out);
+                            pack_tile(sn, cb_acc);
                         }
                         tile_regs_release();
                     }
@@ -769,17 +763,12 @@ struct MatmulExpertCompressedDRAM {
                     MATH((fmt_sync::consumer_release(CTArgs::fmt_sem_addr_1)));
                     fmt_slot ^= 1;
 
-                    // Per-expert push/pop on cb_out — required for packer state
-                    // correctness (cb_push_back flushes the pack DMA queue) AND keeps
-                    // PACK's wr_ptr pinned via the wraparound trick (push full size →
-                    // wr_ptr wraps back to slot 1 base). Push and pop EVERY expert so
-                    // cb_out's fifo ends balanced (0 in flight); the consumer-facing
-                    // signal is the single cb_push_back(cb_out, …) after the gather sync.
-                    // Eltwise_add hasn't started yet (sequential after down_proj on the
-                    // same core), so the transient push/pop is invisible to it.
-                    cb_push_back(CTArgs::cb_out, cb_out_num_pages);
-                    cb_wait_front(CTArgs::cb_out, cb_out_num_pages);
-                    cb_pop_front(CTArgs::cb_out, cb_out_num_pages);
+                    // Per-expert push/pop on cb_internal_acc flushes the pack DMA queue
+                    // while keeping cb_out invisible to downstream consumers until the
+                    // single final cb_push_back after the gather sync.
+                    cb_push_back(cb_acc, CTArgs::per_core_n);
+                    cb_wait_front(cb_acc, CTArgs::per_core_n);
+                    cb_pop_front(cb_acc, CTArgs::per_core_n);
                     ++dram_idx;
                 }
 
