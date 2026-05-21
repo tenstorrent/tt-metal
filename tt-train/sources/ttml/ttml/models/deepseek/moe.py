@@ -164,12 +164,6 @@ class MoE(AbstractModuleBase):
                     f"MoE: moe_inter_dim={I} must be divisible by axis {expert_tp_axis_name!r} size ({D}) "
                     "for TP-sharded routed experts"
                 )
-            local_I = I // D
-            if local_I % 32 != 0:
-                raise ValueError(
-                    f"MoE: local TP expert intermediate shard must be divisible by 32. "
-                    f"moe_inter_dim={I}, axis {expert_tp_axis_name!r} size={D}, local_shard={local_I}"
-                )
             mapper_gate = ttml.mesh().axis_mapper(expert_tp_axis_name, tdim=2)
             mapper_down = ttml.mesh().axis_mapper(expert_tp_axis_name, tdim=3)
             k_in = math.sqrt(1.0 / H)

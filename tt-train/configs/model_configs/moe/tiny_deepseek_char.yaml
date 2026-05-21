@@ -1,7 +1,7 @@
 transformer_config:
   model_type: "deepseek"
   embedding_dim: 1536
-  num_blocks: 16
+  num_blocks: 5
   num_heads: 12
   max_sequence_length: 2048
   dropout_prob: 0.0
