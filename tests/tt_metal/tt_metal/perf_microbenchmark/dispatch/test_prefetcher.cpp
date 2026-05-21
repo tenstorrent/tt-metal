@@ -2664,7 +2664,7 @@ public:
 
         // Physical cores
         const CoreCoord phys_prefetch = this->device_->worker_core_from_logical_core(Common::sd_prefetch_core);
-        const CoreCoord phys_disp = this->device_->worker_core_from_logical_core(Common::sd_dispatch_core);
+        const CoreCoord phys_disp = this->device_->worker_core_from_logical_core(Common::dispatch_core(this->device_));
         const tt_cxy_pair prefetch_cxy(this->device_->id(), phys_prefetch);
 
         auto& cluster = tt_metal::MetalContext::instance().get_cluster();
@@ -2743,13 +2743,14 @@ public:
 
         // Slot 0: prefetch_sync_sem - dispatch signals prefetch when a stall round-trip is done.
         const uint32_t pf_sync_sem = tt_metal::CreateSemaphore(program, {Common::sd_prefetch_core}, 0u);
-        const uint32_t di_sync_sem = tt_metal::CreateSemaphore(program, {Common::sd_dispatch_core}, 0u);
+        const uint32_t di_sync_sem = tt_metal::CreateSemaphore(program, {Common::dispatch_core(this->device_)}, 0u);
         TT_FATAL(pf_sync_sem == di_sync_sem, "prefetch_sync_sem slot mismatch ({} vs {})", pf_sync_sem, di_sync_sem);
 
         // Slot 1: downstream_cb_sem on prefetch (init=dispatch_buffer_pages); dispatch_cb_sem on dispatch (init=0).
         const uint32_t pf_downstream_cb_sem =
             tt_metal::CreateSemaphore(program, {Common::sd_prefetch_core}, dispatch_buffer_pages);
-        const uint32_t di_dispatch_cb_sem = tt_metal::CreateSemaphore(program, {Common::sd_dispatch_core}, 0u);
+        const uint32_t di_dispatch_cb_sem =
+            tt_metal::CreateSemaphore(program, {Common::dispatch_core(this->device_)}, 0u);
         TT_FATAL(
             pf_downstream_cb_sem == di_dispatch_cb_sem,
             "dispatch_cb sem slot mismatch ({} vs {})",
@@ -2791,21 +2792,23 @@ public:
             this->device_,
             dispatch_buffer_pages,
             di_dispatch_cb_sem,
+            di_dispatch_cb_sem,
             di_sync_sem,
             phys_prefetch,
             phys_disp,
             memmap,
+            memmap.dispatch_buffer_base(),
             dev_completion_base,
             Common::SD_COMPLETION_QUEUE_SIZE);
         auto dispatch_kernel = tt_metal::CreateKernel(
             program,
             "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
-            {Common::sd_dispatch_core},
+            {Common::dispatch_core(this->device_)},
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = tt_metal::NOC::NOC_0,
                 .defines = dispatch_defines});
-        tt_metal::SetRuntimeArgs(program, dispatch_kernel, Common::sd_dispatch_core, {0u, 0u, 0u});
+        tt_metal::SetRuntimeArgs(program, dispatch_kernel, Common::dispatch_core(this->device_), {0u, 0u, 0u});
 
         // Initialize the dispatcher's completion queue write/read pointers in L1, mirroring
         // what topology.cpp does for FD mode.  The kernel reads this slot at startup; without

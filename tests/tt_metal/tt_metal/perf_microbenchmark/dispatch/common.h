@@ -1198,7 +1198,6 @@ protected:
 
 // Fixed core layout used by the SD spoof-prefetch execution path
 inline constexpr CoreCoord sd_spoof_prefetch_core = {0, 0};
-inline constexpr CoreCoord sd_dispatch_core = {4, 0};
 
 inline CoreCoord dispatch_core(const tt_metal::IDevice* device) {
     return (device->arch() == tt::ARCH::QUASAR) ? CoreCoord{0, 0} : CoreCoord{4, 0};
@@ -1219,18 +1218,15 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
     tt_metal::IDevice* device_,
     uint32_t dispatch_buffer_pages,
     uint32_t dispatch_core_sem_id,
+    uint32_t spoof_prefetch_sem_id,
     uint32_t prefetch_sync_sem,
     const CoreCoord& phys_spoof,
     const CoreCoord& phys_disp,
     const tt_metal::DispatchMemMap& memmap,
+    uint32_t dispatch_cb_base,
     uint32_t completion_queue_base = 0,
-    uint32_t completion_queue_size = 0,
-    uint32_t spoof_prefetch_sem_id = UINT32_MAX,
-    uint32_t dispatch_cb_base = UINT32_MAX) {
+    uint32_t completion_queue_size = 0) {
     const bool is_cq_dram_backed = (device_->arch() == tt::ARCH::QUASAR);
-    const uint32_t upstream_cb_sem_id =
-        (spoof_prefetch_sem_id == UINT32_MAX) ? dispatch_core_sem_id : spoof_prefetch_sem_id;
-    const uint32_t cb_base = (dispatch_cb_base == UINT32_MAX) ? memmap.dispatch_buffer_base() : dispatch_cb_base;
     const uint32_t num_compute_cores =
         device_->compute_with_storage_grid_size().x * device_->compute_with_storage_grid_size().y;
     const auto my_virtual = device_->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, phys_disp);
@@ -1242,12 +1238,12 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
     return {
         {"IS_CQ_DRAM_BACKED", is_cq_dram_backed ? "1" : "0"},
         {"DRAM_BACKED_CQ_BANK_ID", "0"},
-        {"DISPATCH_CB_BASE", std::to_string(cb_base)},
+        {"DISPATCH_CB_BASE", std::to_string(dispatch_cb_base)},
         {"DISPATCH_CB_LOG_PAGE_SIZE", std::to_string(DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE)},
         {"DISPATCH_CB_PAGES", std::to_string(dispatch_buffer_pages)},
         {"MY_DISPATCH_CB_SEM_ID", std::to_string(dispatch_core_sem_id)},
         // spoof_prefetch_sem_id is the upstream credit pool; dispatch releases credits back into it.
-        {"UPSTREAM_DISPATCH_CB_SEM_ID", std::to_string(upstream_cb_sem_id)},
+        {"UPSTREAM_DISPATCH_CB_SEM_ID", std::to_string(spoof_prefetch_sem_id)},
         {"DISPATCH_CB_BLOCKS", std::to_string(DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS)},
         {"UPSTREAM_SYNC_SEM", std::to_string(prefetch_sync_sem)},
         {"DISPATCH_D_SHUTDOWN_SEM_ID", "0"},  // no dispatch_s in SD; disables dispatch_s_enabled path
