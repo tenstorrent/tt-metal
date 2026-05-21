@@ -408,11 +408,19 @@ def _make_mock_job(step_name="Checkout", step_conclusion="failure"):
     "failure_description,step_name,step_conclusion",
     [
         # Annotation-level matches (specific error text surfaced in GitHub annotation)
-        ("fatal: clone of 'https://github.com/tenstorrent/tt-umd.git' into submodule path failed", "Run something", "success"),
+        (
+            "fatal: clone of 'https://github.com/tenstorrent/tt-umd.git' into submodule path failed",
+            "Run something",
+            "success",
+        ),
         ("Failed to clone 'tt_metal/third_party/umd'. Retry scheduled", "Run something", "success"),
         ("could not read Username for 'https://github.com': terminal prompts disabled", "Run something", "success"),
         ("terminal prompts disabled", "Run something", "success"),
-        ("Fetched in submodule path 'tt_metal/third_party/tracy', but it did not contain abc123", "Run something", "success"),
+        (
+            "Fetched in submodule path 'tt_metal/third_party/tracy', but it did not contain abc123",
+            "Run something",
+            "success",
+        ),
         # Step-name match: generic git exit code annotation but checkout step failed
         ("The process '/usr/bin/git' failed with exit code 1", "Checkout", "failure"),
         ("The process '/usr/bin/git' failed with exit code 1", "\u2b07\ufe0f Checkout", "failure"),
