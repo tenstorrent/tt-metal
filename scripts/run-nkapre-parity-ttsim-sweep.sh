@@ -133,13 +133,14 @@ run_cmd() {
 }
 
 # --- Section 1: TTNN Tests (single card) ---
+# Do not inherit WH mock cluster desc from Galaxy login/slurm env; it breaks BH ttsim init.
 for t in unit_tests_ttnn unit_tests_ttnn_tensor unit_tests_ttnn_ccl \
     unit_tests_ttnn_ccl_multi_tensor unit_tests_ttnn_ccl_ops unit_tests_ttnn_accessor \
     test_ccl_multi_cq_multi_device; do
-    run_cmd "1.ttnn_cpp/$t" "./build/test/ttnn/$t"
+    run_cmd "1.ttnn_cpp/$t" "env -u TT_METAL_MOCK_CLUSTER_DESC_PATH ./build/test/ttnn/$t"
 done
 
-run_cmd "1.ttnn_py/unit_tests" "$PYTHON -m pytest tests/ttnn/unit_tests/ -xvvv --timeout=120"
+run_cmd "1.ttnn_py/unit_tests" "env -u TT_METAL_MOCK_CLUSTER_DESC_PATH $PYTHON -m pytest tests/ttnn/unit_tests/ -xvvv --timeout=120"
 
 # --- Section 2: T3000 Tests ---
 run_cmd "2.distributed/distributed_unit_tests" \
