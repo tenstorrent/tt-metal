@@ -10,6 +10,7 @@ The default is (1, 2) — a single-row, two-column BlackHole (P300 × 2) mesh.
 Override via env var ``MESH_DEVICE``:
     P300x2   → (1, 2)   (default; 2 × BlackHole P300)
     P150x4   → (1, 4)   (4 × BlackHole P150)
+    P150x8   → (1, 8)   (8 × BlackHole P150)
     P150x2   → (1, 2)
     N300     → (1, 2)   (2 × WH N300)
     T3K      → (1, 8)   (WH T3000, full 8-chip rack)
@@ -26,6 +27,7 @@ def mesh_device_request_param() -> tuple[int, int]:
     _MAP = {
         "P300X2": (1, 2),
         "P300": (1, 2),
+        "P150X8": (1, 8),
         "P150X4": (1, 4),
         "P150X2": (1, 2),
         "N300": (1, 2),
