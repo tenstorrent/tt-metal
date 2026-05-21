@@ -22,6 +22,14 @@ section_enabled() {
     [[ ",${PARITY_SECTIONS}," == *",${n},"* ]]
 }
 
+section2_enabled() {
+    section_enabled 2 || section_enabled 2.fabric
+}
+
+fabric_enabled() {
+    section2_enabled
+}
+
 mkdir -p "$RESULTS_DIR"
 SUMMARY="$RESULTS_DIR/summary.tsv"
 RUN_LOG="$RESULTS_DIR/run.log"
@@ -151,8 +159,9 @@ run_cmd "1.ttnn_py/unit_tests" "env -u TT_METAL_MOCK_CLUSTER_DESC_PATH $PYTHON -
 
 fi
 
-if section_enabled 2; then
+if section2_enabled; then
 # --- Section 2: T3000 Tests (single-host; multiprocess tt-run gated by PARITY_INCLUDE_MP) ---
+if section_enabled 2; then
 run_cmd "2.distributed/distributed_unit_tests" \
     "$WH_MULTICHIP_ENV ./build/test/tt_metal/distributed/distributed_unit_tests"
 run_cmd "2.distributed/run_visible_devices_mp" \
@@ -184,7 +193,9 @@ for ex in distributed_program_dispatch distributed_buffer_rw distributed_eltwise
         "$WH_MULTICHIP_ENV ./build/programming_examples/distributed/$ex"
 done
 
-# TT-Fabric (ttsim: mock cluster + matching sim arch)
+fi
+
+# TT-Fabric (ttsim: mock cluster + matching sim arch) — runs for section 2 or 2.fabric
 for filt in "ControlPlaneFixture.*T3k*" "T3kCustomMeshGraphControlPlaneTests*" "T3k*MeshGraphFabric2DDynamicTests*"; do
     run_cmd "2.fabric/control/$filt" \
         "$MOCK_FABRIC_ENV ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter='$filt'"
@@ -194,7 +205,7 @@ run_cmd "2.fabric/worker_edm" \
     "$WH_MULTICHIP_ENV ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter='*WorkerFabricEdmDatapath*:*EdmFabric*'"
 
 run_cmd "2.fabric/unicast_1x8" \
-    "$MOCK_FABRIC_ENV TT_MESH_GRAPH_DESC_PATH=tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x8_mesh_graph_descriptor.textproto ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter='*Fabric2DFixture.TestUnicast*'"
+    "$WH_MULTICHIP_ENV TT_METAL_SLOW_DISPATCH_MODE=1 TT_MESH_GRAPH_DESC_PATH=tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x8_mesh_graph_descriptor.textproto ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter='*Fabric2DFixture.TestUnicast*'"
 
 run_cmd "2.fabric/telemetry/Fabric2D" \
     "$WH_MULTICHIP_ENV TT_METAL_FABRIC_BW_TELEMETRY=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter='Fabric2D*Fixture.*'"
@@ -212,6 +223,7 @@ for cfg in test_fabric_sanity_common.yaml test_fabric_sanity_at_least_2x2_mesh.y
         "$WH_MULTICHIP_ENV ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config $TT_METAL_HOME/tests/tt_metal/tt_metal/perf_microbenchmark/routing/$cfg"
 done
 
+if section_enabled 2; then
 # TTNN distributed (T3K) — includes second unit_tests_ttnn from md
 run_cmd "2.ttnn_dist/unit_tests_ttnn" "$WH_MULTICHIP_ENV ./build/test/ttnn/unit_tests_ttnn"
 run_cmd "2.ttnn_dist/unit_tests_ttnn_udm" "$WH_MULTICHIP_ENV ./build/test/ttnn/unit_tests_ttnn_udm"
