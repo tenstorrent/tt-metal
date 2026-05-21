@@ -39,14 +39,12 @@ Mode A (single slot), one prompt, dump everything to ``./dumps``::
 
 Mode B (8 replication slots), two-prompt multi-turn, validate everything
 (including cross-trace PCC of both hidden states AND KV cache against the
-GPU/HF reference), no dumps.  For single-layer runs the ``--hidden-states-dir``
-must point directly at the directory containing ``<prompt>.pt`` and
-``kv_cache_reference_<prompt>.pt`` files (e.g. the layer-specific subdirectory)::
+GPU/HF reference), no dumps::
 
     TT_METAL_SLOW_DISPATCH_MODE=1 \\
+    DEEPSEEK_V3_HIDDEN_STATES_DIR=/data/gpu_reference \\
     python -m models.demos.deepseek_v3_b1.tests.unit_tests.run_host_io_decoder_sweep \\
         --decoder-layer-indices 4 \\
-        --hidden-states-dir /data/gpu_reference/layer_04 \\
         --prompt q_what_is_python q_quick_brown_fox \\
         --num-replication-slots 8 \\
         --validate-hidden-states-cross-trace \\
@@ -304,6 +302,15 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="If set, log every inner sweep iteration; otherwise log every 1000 outer positions per prompt.",
     )
     misc.add_argument(
+        "--num-testing-iterations",
+        type=int,
+        default=1,
+        help=(
+            "Number of full sweep iterations to run. Each iteration launches a fresh decoder pass, "
+            "runs enabled verification, then releases in-memory outputs before the next iteration."
+        ),
+    )
+    misc.add_argument(
         "--dry-run",
         action="store_true",
         help="Print resolved config and exit before opening any device.",
@@ -418,6 +425,7 @@ def _config_from_args_for_rank(
         cache_path=args.cache_path,
         seed=args.seed,
         log_per_iteration=args.log_per_iteration,
+        num_testing_iterations=args.num_testing_iterations,
     )
 
 
@@ -499,6 +507,7 @@ def _log_resolved_config(config: HostIoDecoderSweepConfig) -> None:
         ("cache_path", config.cache_path),
         ("seed", config.seed),
         ("log_per_iteration", config.log_per_iteration),
+        ("num_testing_iterations", config.num_testing_iterations),
     ):
         logger.info(f"  {field:38s} = {value}")
 
@@ -554,6 +563,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         logger.info("SUMMARY")
     logger.info("=" * 80)
+    logger.info(f"testing iterations: {config.num_testing_iterations}")
     logger.info(f"prompts run: {list(result.collected.keys())}")
     logger.info(f"prompt_lengths: {result.schedule.prompt_lengths}")
     logger.info(f"total positions: {result.schedule.total_length()}")
