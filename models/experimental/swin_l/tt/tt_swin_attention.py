@@ -167,8 +167,10 @@ class TtSwinAttention:
         # Concatenate heads back: (B*nW, H, S, D) -> (B*nW, S, H*D)
         output = ttnn.transformer.concatenate_heads(output, memory_config=ttnn.L1_MEMORY_CONFIG)
 
+        # concat_heads preserves the matmul-attn@V output layout (TILE), so no explicit
+        # to_layout is needed before the proj linear — skipping it saves a dispatch.
         output = ttnn.linear(
-            ttnn.to_layout(output, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG),
+            output,
             self.parameters["proj"]["weight"],
             bias=self.parameters["proj"]["bias"],
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
