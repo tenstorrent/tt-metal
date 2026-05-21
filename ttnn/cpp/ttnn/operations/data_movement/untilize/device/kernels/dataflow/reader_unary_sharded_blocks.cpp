@@ -6,16 +6,25 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
 
-// Block-by-block reader for sharded inputs. The kernel does a simple local L1 to CB copy (not page-by-page via
-// TensorAccessor), so it is not fully using device API 1.1 features. Only cb operations are used.
-// Reads tiles from the local L1 shard one block (tile-row) at a time into a double-buffered CB, so the
-// CB only needs 2 blocks instead of the entire shard.
+// Block-by-block reader for sharded inputs.
+//
+// This unified reader is used for sharded block-reader paths in untilize and supports both:
+//   - L1 sharded input
+//   - DRAM sharded input
+//
+// Source addressing is page-based via TensorAccessor:
+//   - Runtime arg `start_page` is the first page for this core.
+//   - Each loop iteration reads one block (`tiles_per_block` pages).
+//   - TensorAccessor resolves the correct NOC address for each page based on compile-time buffer properties.
+//
+// The kernel still streams one block at a time into a double-buffered CB, so the CB only needs up to
+// two blocks rather than an entire shard.
 //
 // This kernel is used when use_block_reader=true in UntilizeMultiCoreProgramFactory:
 //   - Uneven sharding: tensor dims don't evenly divide shard dims
 //
 // Data flow (block reader):
-//   L1 Shard Buffer          CB (double-buffered)          Compute
+//   Sharded Source (L1/DRAM) CB (double-buffered)          Compute
 //   +------------------+     +----------+----------+
 //   | block 0 (1 row)  | --> | block 0  |          | --> untilize_block()
 //   | block 1          | --> |          | block 1  | --> untilize_block()
