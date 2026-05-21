@@ -2,29 +2,35 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Clone dtype-conversion compute kernel, ported to Metal 2.0.
+//
+// Host bindings expected (per CloneOperation::ProgramFactory's compute KernelSpec):
+//   compile_time_arg_bindings: { {"num_units", ...} }   (per-group; multiplicity preserved)
+//   dfb_bindings: { INPUT_DFB (CONSUMER, name="src_dfb"),
+//                   OUTPUT_DFB (PRODUCER, name="dst_dfb") }
+
 #include "api/compute/common.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t src_cb_id = get_compile_time_arg_val(0);
-    uint32_t dst_cb_id = get_compile_time_arg_val(1);
-    uint32_t num_tiles = get_compile_time_arg_val(2);
-    CircularBuffer src_cb(src_cb_id);
-    CircularBuffer dst_cb(dst_cb_id);
-    unary_op_init_common(src_cb_id, dst_cb_id);
-    for (uint32_t i = 0; i < num_tiles; ++i) {
-        src_cb.wait_front(1);
+    constexpr uint32_t num_units = get_arg(args::num_units);
+    DataflowBuffer src_dfb(dfb::src_dfb);
+    DataflowBuffer dst_dfb(dfb::dst_dfb);
+    unary_op_init_common(dfb::src_dfb, dfb::dst_dfb);
+    for (uint32_t i = 0; i < num_units; ++i) {
+        src_dfb.wait_front(1);
         tile_regs_acquire();
-        copy_tile(src_cb_id, 0, 0);
+        copy_tile(dfb::src_dfb, 0, 0);
         tile_regs_commit();
-        src_cb.pop_front(1);
+        src_dfb.pop_front(1);
 
-        dst_cb.reserve_back(1);
+        dst_dfb.reserve_back(1);
         tile_regs_wait();
-        pack_tile(0, dst_cb_id, 0);
+        pack_tile(0, dfb::dst_dfb, 0);
         tile_regs_release();
-        dst_cb.push_back(1);
+        dst_dfb.push_back(1);
     }
 }

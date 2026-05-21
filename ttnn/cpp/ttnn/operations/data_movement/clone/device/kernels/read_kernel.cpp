@@ -2,29 +2,33 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Clone tilized-interleaved reader, ported to Metal 2.0.
+//
+// Host bindings expected (per CloneOperation::ProgramFactory's KernelSpec):
+//   runtime_arguments_schema.named_runtime_args: { "num_tiles", "start_id" }
+//   dfb_bindings: { INPUT_DFB (PRODUCER, name="src_dfb") }
+//   tensor_bindings: { INPUT_TENSOR (name="input") }
+
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t input_buffer_address = get_arg_val<uint32_t>(0);
-    uint32_t num_tiles = get_arg_val<uint32_t>(1);
-    uint32_t start_id = get_arg_val<uint32_t>(2);
+    auto num_tiles = get_arg(args::num_tiles);
+    auto start_id = get_arg(args::start_id);
 
-    constexpr uint32_t src_cb_id = get_compile_time_arg_val(0);
-    constexpr auto src_args = TensorAccessorArgs<1>();
-
-    CircularBuffer src_cb(src_cb_id);
+    DataflowBuffer src_dfb(dfb::src_dfb);
     Noc noc;
-    const auto s = TensorAccessor(src_args, input_buffer_address);
-    const uint32_t tile_bytes = get_tile_size(src_cb_id);
+    const auto s = TensorAccessor(ta::input);
+    const uint32_t tile_bytes = src_dfb.get_tile_size();
 
     uint32_t end_id = start_id + num_tiles;
     for (uint32_t i = start_id; i < end_id; ++i) {
-        src_cb.reserve_back(1);
-        noc.async_read(s, src_cb, tile_bytes, {.page_id = i}, {.offset_bytes = 0});
+        src_dfb.reserve_back(1);
+        noc.async_read(s, src_dfb, tile_bytes, {.page_id = i}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        src_cb.push_back(1);
+        src_dfb.push_back(1);
     }
 }

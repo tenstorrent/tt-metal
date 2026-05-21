@@ -2,27 +2,39 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Clone row-major-sharded writer, ported to Metal 2.0.
+//
+// Host bindings expected (per CloneOperation::ProgramFactory's KernelSpec):
+//   runtime_arguments_schema.named_runtime_args: { "stick_size", "num_sticks" }
+//   dfb_bindings: { (INPUT_DFB or OUTPUT_DFB) (CONSUMER, name="dst_dfb") }
+//   tensor_bindings: { OUTPUT_TENSOR (name="output") }
+//
+// The output shard's local L1 base address is sourced from the TensorAccessor's
+// bank_base_address (auto-injected by the binding mechanism), substituting for
+// the legacy buffer-address RTA.
+
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t output_buffer_address = get_arg_val<uint32_t>(0);
-    uint32_t stick_size = get_arg_val<uint32_t>(1);
-    uint32_t num_sticks = get_arg_val<uint32_t>(2);
+    auto stick_size = get_arg(args::stick_size);
+    auto num_sticks = get_arg(args::num_sticks);
 
-    constexpr uint32_t dst_cb_id = get_compile_time_arg_val(0);
-    CircularBuffer dst_cb(dst_cb_id);
+    DataflowBuffer dst_dfb(dfb::dst_dfb);
+    const auto output_a = TensorAccessor(ta::output);
 
-    uint64_t local_l1_write_addr = get_noc_addr(output_buffer_address);
+    uint64_t local_l1_write_addr = get_noc_addr(static_cast<uint32_t>(output_a.bank_base_address));
 
     for (uint32_t i = 0; i < num_sticks; ++i) {
-        dst_cb.wait_front(1);
-        uint32_t dst_cb_read_addr = dst_cb.get_read_ptr();
+        dst_dfb.wait_front(1);
+        uint32_t dst_dfb_read_addr = dst_dfb.get_read_ptr();
 
-        noc_async_write(dst_cb_read_addr, local_l1_write_addr, stick_size);
+        noc_async_write(dst_dfb_read_addr, local_l1_write_addr, stick_size);
         noc_async_write_barrier();
 
-        dst_cb.pop_front(1);
+        dst_dfb.pop_front(1);
         local_l1_write_addr += stick_size;
     }
 }
