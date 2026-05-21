@@ -89,6 +89,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     // layer). The override drives the kernel's per-block stride and head-parallel
     // reduction grid the same way the legacy cache shape did.
     uint32_t num_kv_heads = operation_attributes.num_kv_heads_override.value_or(k_shape[1]);
+    TT_FATAL(num_kv_heads > 0, "num_kv_heads must be > 0");
     uint32_t num_q_heads = q_shape_unpadded[2];
     uint32_t page_block_size_t = 0;
     uint32_t q_heads_parallel_factor = 1;
