@@ -17,7 +17,7 @@ from ....utils.check import assert_quality
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        pytest.param((1, 8), id="1x8"),
+        pytest.param((4, 8), id="4x8"),
     ],
     indirect=True,
 )
@@ -41,6 +41,7 @@ def test_encode(mesh_device: ttnn.MeshDevice) -> None:
         parallel_config=parallel_config,
         ccl_manager=ccl_manager,
     )
+    tt_encoder.load_weights()
 
     torch_encoder = PromptEncoder(
         checkpoint_name=checkpoint_name,
@@ -64,7 +65,7 @@ def test_encode(mesh_device: ttnn.MeshDevice) -> None:
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        pytest.param((1, 8), id="1x8"),
+        pytest.param((4, 8), id="4x8"),
     ],
     indirect=True,
 )
@@ -88,6 +89,8 @@ def test_upsample(mesh_device: ttnn.MeshDevice) -> None:
         parallel_config=parallel_config,
         ccl_manager=ccl_manager,
     )
+
+    tt_encoder.load_weights()
 
     logger.info("running TT model...")
     tt_output = tt_encoder.upsample(prompts, max_length=224, temperature=temperature)
