@@ -16,6 +16,7 @@ from models.experimental.voxtraltts.reference.functional import (
 )
 
 from models.experimental.voxtraltts.tests.common import create_real_voxtral_text_model_or_skip
+from models.experimental.voxtraltts.tt.voxtral_tt_args import voxtral_text_logits_pcc_optimizations
 
 
 def _prefill_tile_start(token_index: int) -> int:
@@ -106,7 +107,12 @@ def test_text_model_prefill_inference(device, reset_seeds):
 @torch.no_grad()
 @pytest.mark.timeout(3600)
 def test_text_model_prefill_pcc(device, reset_seeds):
-    model = create_real_voxtral_text_model_or_skip(device, max_seq_len=256, dtype=ttnn.bfloat16)
+    model = create_real_voxtral_text_model_or_skip(
+        device,
+        max_seq_len=256,
+        dtype=ttnn.bfloat16,
+        optimizations=voxtral_text_logits_pcc_optimizations,
+    )
     args = model.inner.args
     state_dict = args.load_state_dict()
 
@@ -135,7 +141,12 @@ def test_text_model_prefill_pcc(device, reset_seeds):
 @torch.no_grad()
 @pytest.mark.timeout(3600)
 def test_text_model_decode_reference_pcc(device, reset_seeds):
-    model = create_real_voxtral_text_model_or_skip(device, max_seq_len=256, dtype=ttnn.bfloat16)
+    model = create_real_voxtral_text_model_or_skip(
+        device,
+        max_seq_len=256,
+        dtype=ttnn.bfloat16,
+        optimizations=voxtral_text_logits_pcc_optimizations,
+    )
     args = model.inner.args
     state_dict = args.load_state_dict()
 
@@ -176,7 +187,12 @@ def test_text_model_decode_reference_pcc(device, reset_seeds):
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("decode_steps", [4, 26], ids=["4_steps", "26_steps"])
 def test_text_model_decode_multistep_reference_pcc(device, reset_seeds, decode_steps):
-    model = create_real_voxtral_text_model_or_skip(device, max_seq_len=256, dtype=ttnn.bfloat16)
+    model = create_real_voxtral_text_model_or_skip(
+        device,
+        max_seq_len=256,
+        dtype=ttnn.bfloat16,
+        optimizations=voxtral_text_logits_pcc_optimizations,
+    )
     args = model.inner.args
     state_dict = args.load_state_dict()
 
