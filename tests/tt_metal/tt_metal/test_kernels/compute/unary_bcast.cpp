@@ -12,19 +12,17 @@
 #include "api/compute/bcast.h"
 #ifdef ARCH_QUASAR
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #else
 #include "api/dataflow/circular_buffer.h"
 #endif
 
 void kernel_main() {
-    uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
-    uint32_t per_core_block_dim = get_compile_time_arg_val(1);
-
 #ifdef ARCH_QUASAR
-    constexpr uint32_t dfb_src_id = get_compile_time_arg_val(2);
-    constexpr uint32_t dfb_dst_id = get_compile_time_arg_val(3);
-    DataflowBuffer dfb_src(dfb_src_id);
-    DataflowBuffer dfb_dst(dfb_dst_id);
+    constexpr uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
+    constexpr uint32_t per_core_block_dim = get_arg(args::per_core_block_dim);
+    DataflowBuffer dfb_src(dfb::src);
+    DataflowBuffer dfb_dst(dfb::dst);
     const uint32_t icb = dfb_src.get_id();
     const uint32_t ocb = dfb_dst.get_id();
 
@@ -45,6 +43,8 @@ void kernel_main() {
         }
     }
 #else
+    uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
+    uint32_t per_core_block_dim = get_compile_time_arg_val(1);
     CircularBuffer cb0(tt::CBIndex::c_0);
     CircularBuffer cb16(tt::CBIndex::c_16);
 
