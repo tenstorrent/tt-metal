@@ -9,6 +9,7 @@
 #include "ttnn/tensor/layout/layout.hpp"
 #include <tt_stl/optional_reference.hpp>
 #include <ttnn/distributed/tensor_topology.hpp>
+#include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 
 namespace tt::tt_metal::distributed {
 class MeshDevice;
@@ -37,6 +38,9 @@ void copy_to_device(
     const std::byte* src,
     Tensor& device_tensor,
     const std::optional<BufferRegion>& region = std::nullopt);
+
+void copy_tensor_over_socket(
+    const Tensor& host_tensor, Tensor& device_tensor, std::vector<distributed::H2DSocket*> sockets);
 
 void copy_to_host(
     distributed::MeshCommandQueue& queue,
