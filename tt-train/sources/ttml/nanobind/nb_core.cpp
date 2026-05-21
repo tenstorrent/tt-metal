@@ -181,6 +181,8 @@ void py_module(nb::module_& m) {
 
         // Bind DistributedContext methods
         using DistributedContext = tt::tt_metal::distributed::multihost::DistributedContext;
+        using DistRank = tt::tt_metal::distributed::multihost::Rank;
+        using DistTag = tt::tt_metal::distributed::multihost::Tag;
         auto py_dist_ctx = static_cast<nb::class_<DistributedContext>>(py_distributed.attr("DistributedContext"));
         py_dist_ctx.def("size", [](DistributedContext& self) { return *self.size(); });
         py_dist_ctx.def("rank", [](DistributedContext& self) { return *self.rank(); });
@@ -191,6 +193,34 @@ void py_module(nb::module_& m) {
                 return self.create_sub_context(ttsl::Span<int>(const_cast<int*>(ranks.data()), ranks.size()));
             },
             nb::arg("ranks"));
+        // Byte-level point-to-point primitives — pure host-MPI, no device or
+        // mesh-socket dependency. These are the operations the C++ training
+        // stack uses underneath SocketManager (e.g. for the multi-host socket
+        // descriptor handshake in mesh_socket_utils.cpp). Exposed here so
+        // tests can validate them directly without going through MeshSocket,
+        // which requires sender_mesh_id != receiver_mesh_id (not satisfied
+        // on Galaxy single-mesh layouts).
+        py_dist_ctx.def(
+            "send",
+            [](DistributedContext& self, nb::bytes data, int dest, int tag) {
+                // DistributedContext::send takes Span<std::byte> (non-const),
+                // but underlying MPI_Send treats it as readonly.
+                auto* ptr = reinterpret_cast<std::byte*>(const_cast<char*>(data.c_str()));
+                self.send(ttsl::Span<std::byte>(ptr, data.size()), DistRank{dest}, DistTag{tag});
+            },
+            nb::arg("data"),
+            nb::arg("dest"),
+            nb::arg("tag") = 0);
+        py_dist_ctx.def(
+            "recv",
+            [](DistributedContext& self, std::size_t nbytes, int source, int tag) -> nb::bytes {
+                std::vector<std::byte> buffer(nbytes);
+                self.recv(ttsl::Span<std::byte>(buffer.data(), buffer.size()), DistRank{source}, DistTag{tag});
+                return nb::bytes(reinterpret_cast<const char*>(buffer.data()), buffer.size());
+            },
+            nb::arg("nbytes"),
+            nb::arg("source"),
+            nb::arg("tag") = 0);
 
         // Bind SocketManager methods
         auto py_socket_manager =
