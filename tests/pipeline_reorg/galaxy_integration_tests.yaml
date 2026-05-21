@@ -6,3 +6,11 @@
     wh_galaxy:
       timeout: 50
   team: ttnn
+- cmd: ./tests/scripts/tg/run_tg_frequent_tests.sh --model motif
+  model: motif
+  name: Galaxy Motif integration tests
+  owner_id: U08TED0JM9D
+  skus:
+    wh_galaxy:
+      timeout: 10
+  team: ttnn
