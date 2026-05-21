@@ -261,32 +261,39 @@ class TtDeformConv2dV2:
         if x_nhwc.layout != ttnn.ROW_MAJOR_LAYOUT:
             x_nhwc = ttnn.to_layout(x_nhwc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        # 3. grid_sample with K-batching → (1, H_out, W_out, C_in*K) channels k-major
+        # 3. grid_sample with W-batching (batch_output_channels=False).
+        # Output shape (1, H_out, W_out*K, C_in) ROW_MAJOR — K consecutive rows along W
+        # carry the K sample points for each output pixel. C_in is the trailing dim, which
+        # tile-aligns cleanly (no K=9 padding overhead like batch_output_channels=True had).
+        # Credit: gtobarTT (e7c65ab) — saves ~16 ms across all DCN calls vs the 5D reshape
+        # path because the post-multiply reshape becomes a pure byte-view.
         samples = ttnn.grid_sample(
             x_nhwc,
             grid_xy,
             mode="bilinear",
             padding_mode="zeros",
             align_corners=False,  # ttnn.grid_sample uses align_corners=False semantics regardless
-            batch_output_channels=True,
+            batch_output_channels=False,
         )
         ttnn.deallocate(grid_xy)
 
-        # 4. Apply modulation. Channels in `samples` are laid out (K, C_in) with K as the
-        # slower-varying axis, so mask values can be broadcast over C_in by reshaping both
-        # tensors to 5D and relying on ttnn's last-dim-1 broadcast. This avoids materializing
-        # the K*C_in repeat-interleaved mask (29 MB at P3@80x80).
+        # 4. Apply modulation. mask (1, H, W, K) reshape -> (1, H, W*K, 1) is a pure view.
+        # Multiply samples (1, H, W*K, C_in) by mask (1, H, W*K, 1) broadcasts on the last dim.
+        # Stay in ROW_MAJOR so the next reshape to (1, H*W, K*C_in) is also a pure byte-view
+        # (no tile repacking).
         big_tensor_bytes = H_out * W_out * K * C_in * 2  # bf16
         big_mem_config = ttnn.DRAM_MEMORY_CONFIG if big_tensor_bytes > 4 * 1024 * 1024 else ttnn.L1_MEMORY_CONFIG
 
         if samples.memory_config().buffer_type != ttnn.BufferType.DRAM and big_mem_config == ttnn.DRAM_MEMORY_CONFIG:
             samples = ttnn.to_memory_config(samples, big_mem_config)
-        samples_5d = ttnn.reshape(samples, (1, H_out, W_out, K, C_in))
-        mask_5d = ttnn.reshape(mask_nhwc, (1, H_out, W_out, K, 1))
-        modulated_5d = ttnn.multiply(samples_5d, mask_5d, memory_config=big_mem_config)
+        if mask_nhwc.layout != ttnn.ROW_MAJOR_LAYOUT:
+            mask_nhwc = ttnn.to_layout(mask_nhwc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        mask_extended = ttnn.reshape(mask_nhwc, (1, H_out, W_out * K, 1))
+        modulated = ttnn.multiply(samples, mask_extended, memory_config=big_mem_config)
 
-        # 5. Final 1x1 weighted sum via matmul.
-        modulated_flat = ttnn.reshape(modulated_5d, (1, H_out * W_out, K * C_in))
+        # 5. Final 1x1 weighted sum via matmul. (1, H, W*K, C_in) -> (1, H*W, K*C_in) is
+        # a byte-view in ROW_MAJOR. Tilize once before the matmul.
+        modulated_flat = ttnn.reshape(modulated, (1, H_out * W_out, K * C_in))
         modulated_tiled = ttnn.to_layout(modulated_flat, ttnn.TILE_LAYOUT, memory_config=big_mem_config)
 
         out_flat = ttnn.matmul(
