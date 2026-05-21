@@ -88,20 +88,6 @@ ttnn::Tensor composite_reduce_scatter(
         "config to the input sharded memory config will break the op as the input and output shapes are different.");
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
 
-    // BFLOAT8_B + TILE inputs are unsafe through the composite split→pad→concat below: intermediate ops
-    // can leave per-chunk tensors with inconsistent dtypes, tripping ttnn::concat's dtype-equality check.
-    // Mirror composite_all_to_all: typecast BF8 → BF16 at the top, run in BF16, typecast back at the end.
-    // Guard on layout+dtype only — use_composite_reduce_scatter dispatches on per-device output, so every
-    // BF8 + TILE input reaching here is unsafe. Temporarily doubles tensor footprint for the composite path.
-    const ttnn::DataType original_input_dtype = input_tensor.dtype();
-    const bool convert_to_bfloat16_for_composite =
-        input_tensor.layout() == ttnn::Layout::TILE && original_input_dtype == ttnn::DataType::BFLOAT8_B;
-    if (convert_to_bfloat16_for_composite) {
-        // No explicit deallocate: input_tensor is pass-by-value, so deallocate(false) is a no-op
-        // (refcount > 1); the assignment releases the local handle.
-        input_tensor = ttnn::typecast(input_tensor, ttnn::DataType::BFLOAT16);
-    }
-
     /*
      * - If sharded to interleaved, convert to the final interleaved memory config, and use that final
      *   interleaved memory config for all ops within the composite.
@@ -123,6 +109,20 @@ ttnn::Tensor composite_reduce_scatter(
         native_rs_output_memory_config = output_memory_config;
     } else {
         native_rs_output_memory_config = input_tensor.memory_config();
+    }
+
+    // BFLOAT8_B + TILE inputs are unsafe through the composite split→pad→concat below: intermediate ops
+    // can leave per-chunk tensors with inconsistent dtypes, tripping ttnn::concat's dtype-equality check.
+    // Mirror composite_all_to_all: typecast BF8 → BF16 here, run in BF16, typecast back at the end.
+    // Placed AFTER the sharded→interleaved conversion above so the typecast always runs on an interleaved
+    // tensor (sharded-typecast is more expensive and less battle-tested). Guard on layout+dtype only —
+    // use_composite_reduce_scatter dispatches on per-device output, so every BF8 + TILE input reaching
+    // here is unsafe. Temporarily doubles tensor footprint for the composite path.
+    const ttnn::DataType original_input_dtype = input_tensor.dtype();
+    const bool convert_to_bfloat16_for_composite =
+        input_tensor.layout() == ttnn::Layout::TILE && original_input_dtype == ttnn::DataType::BFLOAT8_B;
+    if (convert_to_bfloat16_for_composite) {
+        input_tensor = ttnn::typecast(input_tensor, ttnn::DataType::BFLOAT16);
     }
 
     // split the input tensor so we can insert internal padding
