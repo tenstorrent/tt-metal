@@ -44,6 +44,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -352,11 +353,16 @@ def _ensure_variant(name: str, ckpt_dir: Path) -> Path:
     return local
 
 
-def main() -> None:
+def main(
+    session_pass: int = 0,
+    *,
+    _handlers: tuple[Any, Any, Any] | None = None,
+    _demo_session: Any = None,
+) -> None:
     ap = argparse.ArgumentParser(
         description="ACE-Step v1.5: HF preprocessing + TTNN DiT + TTNN or PyTorch VAE decode.",
     )
-    ap.add_argument("--prompt", type=str, required=True)
+    ap.add_argument("--prompt", type=str, default=None, help="Caption / text prompt (optional with --serve).")
     ap.add_argument(
         "--ckpt_dir",
         type=str,
@@ -528,7 +534,42 @@ def main() -> None:
         action="store_true",
         help="Log each Euler denoise step wall time. Same as ACE_STEP_DEMO_PERF_LOG_STEPS=1.",
     )
+    ap.add_argument(
+        "--warmup",
+        action="store_true",
+        help=(
+            "Single process: run an untimed compile-cache pass, then the timed generation. "
+            "Handlers and DiT/VAE/trace stay loaded between passes."
+        ),
+    )
+    ap.add_argument(
+        "--warmup-prompt",
+        type=str,
+        default=None,
+        help="Caption for the warmup pass (default: same as --prompt).",
+    )
+    ap.add_argument(
+        "--warmup-perf",
+        action="store_true",
+        help="Also log perf module lines for the warmup pass.",
+    )
+    ap.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help="Repeat the timed generation N times in the same session (after warmup if set).",
+    )
+    ap.add_argument(
+        "--serve",
+        action="store_true",
+        help="Keep the session alive and read prompts from stdin until EOF or a blank line.",
+    )
     args = ap.parse_args()
+
+    if not args.prompt and not args.serve:
+        ap.error("--prompt is required unless --serve is set")
+    if int(args.repeat) < 1:
+        ap.error("--repeat must be >= 1")
 
     if args.perf_log:
         os.environ["ACE_STEP_DEMO_PERF_LOG"] = "1"
@@ -536,6 +577,14 @@ def main() -> None:
         os.environ["ACE_STEP_DEMO_PERF_LOG_STEPS"] = "1"
 
     fast_preprocess = bool(args.fast_preprocess)
+    if fast_preprocess and (bool(getattr(args, "warmup", False)) or int(getattr(args, "repeat", 1)) > 1):
+        print(
+            "[ace_step_v1_5] --warmup/--repeat require the default handler path; ignoring for --fast-preprocess.",
+            flush=True,
+        )
+        args.warmup = False
+        args.repeat = 1
+
     if not fast_preprocess:
         import importlib.util
 
@@ -600,12 +649,13 @@ def main() -> None:
         ace_step_mesh_use_host_latent_sampler,
         ace_step_mesh_use_host_temb_precompute,
         ace_step_mesh_use_sequential_cfg,
+        ace_step_mesh_use_split_ttnn_preprocess,
         ace_step_needs_split_device,
         ace_step_resolve_vae_tiling,
         ace_step_synchronize_device,
         ace_step_ttnn_to_torch,
-        close_ace_step_device,
         open_dit_device,
+        open_preprocess_device,
         resolve_ace_step_mesh_sku,
         run_mesh_sequential_cfg_forwards,
         transition_preprocess_to_dit_device,
@@ -632,24 +682,32 @@ def main() -> None:
             flush=True,
         )
     host_only_preprocess = bool(split_device)
+    mesh_ttnn_preprocess = host_only_preprocess and ace_step_mesh_use_split_ttnn_preprocess(mesh_sku)
     dev: Any = None
     dev_opened_for_ttnn_text_encoder = False
 
     if mesh_sku is not None:
         print(f"[ace_step_v1_5] mesh SKU={mesh_sku} split_preprocess={split_device}", flush=True)
     if host_only_preprocess:
-        print(
-            "[ace_step_v1_5] multi-device mesh: host PyTorch preprocess "
-            "(5 Hz LM + handler on CPU; DiT/VAE open on full mesh after preprocess).",
-            flush=True,
-        )
-        if getattr(args, "experimental_5hz_ttnn_causal_lm", False):
+        if mesh_ttnn_preprocess:
+            print(
+                "[ace_step_v1_5] multi-device mesh: split TTNN preprocess on 1×1 "
+                "(5 Hz LM + Qwen + condition encoder), then DiT/VAE on full mesh.",
+                flush=True,
+            )
+        else:
+            print(
+                "[ace_step_v1_5] multi-device mesh: legacy host PyTorch preprocess "
+                "(ACE_STEP_MESH_HOST_PREPROCESS=1; DiT/VAE on full mesh after preprocess).",
+                flush=True,
+            )
+        if getattr(args, "experimental_5hz_ttnn_causal_lm", False) and not mesh_ttnn_preprocess:
             print(
                 "[ace_step_v1_5] multi-device mesh: forcing --no-experimental-5hz-ttnn-causal-lm.",
                 flush=True,
             )
             args.experimental_5hz_ttnn_causal_lm = False
-        if args.ttnn_condition_embedding:
+        if args.ttnn_condition_embedding and not mesh_ttnn_preprocess:
             print(
                 "[ace_step_v1_5] multi-device mesh: forcing --no-ttnn-condition-embedding "
                 "(HF prepare_condition on CPU).",
@@ -694,6 +752,7 @@ def main() -> None:
     from models.demos.ace_step_v1_5.ace_step_perf_log import (
         AceStepPerfRecorder,
         ace_step_perf_logging_enabled,
+        emit_session_summary,
         make_denoise_progress_fn,
     )
 
@@ -714,8 +773,48 @@ def main() -> None:
             "experimental_5hz_ttnn_lm": bool(getattr(args, "experimental_5hz_ttnn_causal_lm", False)),
             "mesh_sku": mesh_sku,
             "split_device": bool(split_device),
+            "mesh_ttnn_preprocess": bool(mesh_ttnn_preprocess),
+            "session_pass": int(session_pass),
         },
     )
+
+    from models.demos.ace_step_v1_5.demo_session import AceStepDemoSession, build_demo_run_specs
+
+    demo_session = _demo_session if _demo_session is not None else AceStepDemoSession()
+    if demo_session.session_perf.session_t0 is None:
+        demo_session.session_perf.session_t0 = time.perf_counter()
+    session_active = (
+        bool(getattr(args, "warmup", False))
+        or int(getattr(args, "repeat", 1)) > 1
+        or bool(getattr(args, "serve", False))
+    )
+    if session_pass == 0:
+        demo_session.run_specs = build_demo_run_specs(args)
+    run_specs = getattr(demo_session, "run_specs", None) or build_demo_run_specs(args)
+    if session_pass == 0 and session_active:
+        print("[ace_step_v1_5] session mode: handlers + DiT/VAE reused across passes", flush=True)
+    if session_pass < len(run_specs):
+        run_spec = run_specs[session_pass]
+    elif session_pass == 0:
+        from models.demos.ace_step_v1_5.demo_session import DemoRunSpec
+
+        run_spec = DemoRunSpec(prompt=str(args.prompt), out_path=Path(args.out), summary_label="demo_total")
+    else:
+        run_spec = None
+    if run_spec is not None:
+        if run_spec.record_perf:
+            perf.begin_run(summary_label=run_spec.summary_label, record=True)
+        else:
+            perf.begin_run_disabled(summary_label=run_spec.summary_label)
+        if run_spec.is_warmup:
+            print("[ace_step_v1_5] --- warmup pass (compile cache) ---", flush=True)
+        elif session_active and session_pass > 0:
+            print(f"[ace_step_v1_5] --- pass: {run_spec.summary_label} ---", flush=True)
+        run_prompt = run_spec.prompt
+        run_out_path = run_spec.out_path
+    else:
+        run_prompt = str(args.prompt)
+        run_out_path = Path(args.out)
 
     torch.manual_seed(int(args.seed))
     np.random.seed(int(args.seed))
@@ -1045,7 +1144,10 @@ def main() -> None:
         # by the time the handler tries to download anything every file exists on disk.
 
         tt_dev_early = None
-        if not host_only_preprocess and getattr(args, "experimental_5hz_ttnn_causal_lm", False):
+        need_preprocess_ttnn_dev = bool(getattr(args, "experimental_5hz_ttnn_causal_lm", False)) or bool(
+            mesh_ttnn_preprocess
+        )
+        if need_preprocess_ttnn_dev and _handlers is None:
             # NOTE: The experimental TTNN causal LM is built with ``max_batch_size=1`` (see
             # ``QwenModelTtTransformers``). That constraint applies to the **LM** only -- it
             # blocks LM-side classifier-free guidance (cond+uncond in one batch), which is why
@@ -1067,19 +1169,34 @@ def main() -> None:
                 and hasattr(_ttnn_pre_lm.CONFIG, "throw_exception_on_fallback")
             ):
                 _ttnn_pre_lm.CONFIG.throw_exception_on_fallback = True
-            tt_dev_early = _open_tt_device(
-                _ttnn_pre_lm,
-                device_id=int(args.device_id),
-                num_command_queues=(2 if bool(args.use_trace) else 1),
-            )
+            if mesh_ttnn_preprocess:
+                tt_dev_early = open_preprocess_device(
+                    _ttnn_pre_lm,
+                    device_id=int(args.device_id),
+                    num_command_queues=1,
+                )
+            else:
+                tt_dev_early = _open_tt_device(
+                    _ttnn_pre_lm,
+                    device_id=int(args.device_id),
+                    num_command_queues=(2 if bool(args.use_trace) else 1),
+                )
             if hasattr(tt_dev_early, "enable_program_cache"):
                 tt_dev_early.enable_program_cache()
+            demo_session.preprocess_dev = tt_dev_early
 
-        dit_handler = AceStepHandler()
-        llm_handler = LocalFiveHzLMHandler()
+        if _handlers is not None:
+            dit_handler, llm_handler, tt_dev_early = _handlers
+            demo_session.dit_handler = dit_handler
+            demo_session.llm_handler = llm_handler
+            if tt_dev_early is not None:
+                llm_handler.set_ttnn_logits_device(tt_dev_early)
+        else:
+            dit_handler = AceStepHandler()
+            llm_handler = LocalFiveHzLMHandler()
 
-        device = "cpu"
-        with perf.timed("handler_init"):
+            device = "cpu"
+            _init_t0 = time.perf_counter() if perf.enabled else None
             status, ok = dit_handler.initialize_service(
                 project_root=str(ref_root),
                 config_path=args.variant,
@@ -1100,6 +1217,12 @@ def main() -> None:
             print(status, flush=True)
             if not ok:
                 raise RuntimeError("5 Hz LM (local HF) initialize failed")
+            if _init_t0 is not None:
+                _init_ms = (time.perf_counter() - _init_t0) * 1000.0
+                perf.record_init_once("handler_init", _init_ms)
+                demo_session.session_perf.note_init("handler_init", _init_ms)
+            demo_session.dit_handler = dit_handler
+            demo_session.llm_handler = llm_handler
 
         ts_list = None
         if args.timesteps:
@@ -1108,89 +1231,130 @@ def main() -> None:
                 raw_ts.pop()
             ts_list = raw_ts or None
 
-        exp_ttnn_lm = bool(getattr(args, "experimental_5hz_ttnn_causal_lm", False))
-        params = GenerationParams(
-            task_type="text2music",
-            caption=args.prompt,
-            lyrics="[Instrumental]",
-            instrumental=True,
-            reference_audio=None,
-            duration=float(args.duration_sec),
-            inference_steps=int(infer_steps),
-            guidance_scale=gs,
-            lm_cfg_scale=1.0 if exp_ttnn_lm else 2.0,
-            use_adg=use_adg,
-            cfg_interval_start=cfg_interval_start,
-            cfg_interval_end=cfg_interval_end,
-            shift=float(args.shift),
-            thinking=True,
-            use_constrained_decoding=True,
-            timesteps=ts_list,
+        reuse_preprocess = demo_session.can_reuse_preprocess(
+            prompt=run_prompt,
+            duration_sec=float(args.duration_sec),
+            seed=int(args.seed),
         )
-        config = GenerationConfig(
-            batch_size=1,
-            use_random_seed=False,
-            seeds=[int(args.seed)],
-            audio_format="wav",
-            constrained_decoding_debug=True,
-        )
-        with perf.timed("five_hz_lm_generate"):
-            filtered = build_filtered_dit_kwargs_for_handler(dit_handler, llm_handler, params, config, progress=None)
-
-        if host_only_preprocess:
-            with perf.timed("handler_preprocess"):
-                enc_hs, enc_mask, ctx_lat, frames, null_emb = handler_prepare_condition_tensors(dit_handler, filtered)
-            perf.set_params(frames=int(frames))
+        if reuse_preprocess:
+            cached = demo_session.cached_preprocess
+            assert cached is not None
+            enc_hs = cached.enc_hs
+            enc_mask = cached.enc_mask
+            ctx_lat = cached.ctx_lat
+            null_emb = cached.null_emb
+            frames = int(cached.frames)
+            perf.set_params(frames=frames)
+            condition_tensors_on_device = False
+            enc_hs_tt_one = None
+            ctx_tt_one = None
+            null_emb_tt = None
+            dev_opened_for_ttnn_text_encoder = False
+            print(
+                "[ace_step_v1_5] reusing cached preprocess tensors " "(skip 5 Hz LM + condition encode on this pass)",
+                flush=True,
+            )
         else:
-            qwen_safetensors = text_model_dir / "model.safetensors"
-            if not qwen_safetensors.is_file():
-                raise FileNotFoundError(f"Missing Qwen embedding weights at {qwen_safetensors}")
-
-            _configure_ttnn_runtime(no_ttnn_strict=args.no_ttnn_strict)
-            import ttnn
-            from models.demos.ace_step_v1_5.ttnn_impl.audio_code_detokenizer import TtAceStepAudioCodeDetokenizer
-            from models.demos.ace_step_v1_5.ttnn_impl.qwen3_embedding_ace_step import (
-                AceStepQwen3Encoder as TtQwen3EmbeddingEncoder,
+            exp_ttnn_lm = bool(getattr(args, "experimental_5hz_ttnn_causal_lm", False))
+            params = GenerationParams(
+                task_type="text2music",
+                caption=run_prompt,
+                lyrics="[Instrumental]",
+                instrumental=True,
+                reference_audio=None,
+                duration=float(args.duration_sec),
+                inference_steps=int(infer_steps),
+                guidance_scale=gs,
+                lm_cfg_scale=1.0 if exp_ttnn_lm else 2.0,
+                use_adg=use_adg,
+                cfg_interval_start=cfg_interval_start,
+                cfg_interval_end=cfg_interval_end,
+                shift=float(args.shift),
+                thinking=True,
+                use_constrained_decoding=True,
+                timesteps=ts_list,
             )
-
-            if (
-                not args.no_ttnn_strict
-                and hasattr(ttnn, "CONFIG")
-                and hasattr(ttnn.CONFIG, "throw_exception_on_fallback")
-            ):
-                ttnn.CONFIG.throw_exception_on_fallback = True
-
-            if tt_dev_early is not None:
-                dev = tt_dev_early
-                dev_opened_for_ttnn_text_encoder = True
-            else:
-                dev = _open_tt_device(
-                    ttnn,
-                    device_id=int(args.device_id),
-                    num_command_queues=(2 if bool(args.use_trace) else 1),
-                )
-                if hasattr(dev, "enable_program_cache"):
-                    dev.enable_program_cache()
-                dev_opened_for_ttnn_text_encoder = True
-            llm_handler.set_ttnn_logits_device(dev)
-
-            with perf.timed("qwen_encoder_init", device=dev):
-                qwen_tt_encoder = TtQwen3EmbeddingEncoder(
-                    device=dev, hf_model_dir=str(text_model_dir), qwen_safetensors_path=str(qwen_safetensors)
-                )
-                audio_code_detokenizer = TtAceStepAudioCodeDetokenizer(
-                    device=dev,
-                    checkpoint_safetensors_path=str(safetensors_path),
-                    dtype=getattr(ttnn, "bfloat16", None),
-                )
-            _restore_infer_txt = attach_payload_preprocess_ttnn(
-                dit_handler,
-                tt_qwen_encoder=qwen_tt_encoder,
-                tt_audio_detokenizer=audio_code_detokenizer,
-                max_seq_len=256,
+            config = GenerationConfig(
+                batch_size=1,
+                use_random_seed=False,
+                seeds=[int(args.seed)],
+                audio_format="wav",
+                constrained_decoding_debug=True,
             )
-            try:
-                if args.ttnn_condition_embedding:
+            with perf.timed("five_hz_lm_generate"):
+                filtered = build_filtered_dit_kwargs_for_handler(
+                    dit_handler, llm_handler, params, config, progress=None
+                )
+
+            _run_handler_ttnn_preprocess = (not host_only_preprocess) or bool(mesh_ttnn_preprocess)
+
+            if _run_handler_ttnn_preprocess and args.ttnn_condition_embedding:
+                qwen_safetensors = text_model_dir / "model.safetensors"
+                if not qwen_safetensors.is_file():
+                    raise FileNotFoundError(f"Missing Qwen embedding weights at {qwen_safetensors}")
+
+                _configure_ttnn_runtime(no_ttnn_strict=args.no_ttnn_strict)
+                import ttnn
+                from models.demos.ace_step_v1_5.ttnn_impl.audio_code_detokenizer import TtAceStepAudioCodeDetokenizer
+                from models.demos.ace_step_v1_5.ttnn_impl.qwen3_embedding_ace_step import (
+                    AceStepQwen3Encoder as TtQwen3EmbeddingEncoder,
+                )
+
+                if (
+                    not args.no_ttnn_strict
+                    and hasattr(ttnn, "CONFIG")
+                    and hasattr(ttnn.CONFIG, "throw_exception_on_fallback")
+                ):
+                    ttnn.CONFIG.throw_exception_on_fallback = True
+
+                if demo_session.preprocess_dev is not None and demo_session.dit_dev is None:
+                    dev = demo_session.preprocess_dev
+                    tt_dev_early = dev
+                    dev_opened_for_ttnn_text_encoder = True
+                elif tt_dev_early is not None:
+                    dev = tt_dev_early
+                    dev_opened_for_ttnn_text_encoder = True
+                else:
+                    if mesh_ttnn_preprocess:
+                        dev = open_preprocess_device(
+                            ttnn,
+                            device_id=int(args.device_id),
+                            num_command_queues=1,
+                        )
+                    else:
+                        dev = _open_tt_device(
+                            ttnn,
+                            device_id=int(args.device_id),
+                            num_command_queues=(2 if bool(args.use_trace) else 1),
+                        )
+                    if hasattr(dev, "enable_program_cache"):
+                        dev.enable_program_cache()
+                    dev_opened_for_ttnn_text_encoder = True
+                    demo_session.preprocess_dev = dev
+                    tt_dev_early = dev
+
+                if exp_ttnn_lm or mesh_ttnn_preprocess:
+                    llm_handler.set_ttnn_logits_device(dev)
+
+                if demo_session.qwen_tt_encoder is None:
+                    with perf.timed("qwen_encoder_init", device=dev):
+                        demo_session.qwen_tt_encoder = TtQwen3EmbeddingEncoder(
+                            device=dev, hf_model_dir=str(text_model_dir), qwen_safetensors_path=str(qwen_safetensors)
+                        )
+                        demo_session.audio_code_detokenizer = TtAceStepAudioCodeDetokenizer(
+                            device=dev,
+                            checkpoint_safetensors_path=str(safetensors_path),
+                            dtype=getattr(ttnn, "bfloat16", None),
+                        )
+                qwen_tt_encoder = demo_session.qwen_tt_encoder
+                audio_code_detokenizer = demo_session.audio_code_detokenizer
+                _restore_infer_txt = attach_payload_preprocess_ttnn(
+                    dit_handler,
+                    tt_qwen_encoder=qwen_tt_encoder,
+                    tt_audio_detokenizer=audio_code_detokenizer,
+                    max_seq_len=256,
+                )
+                try:
                     from models.demos.ace_step_v1_5.ttnn_impl.condition_encoder import (
                         TtAceStepInstrumentalConditionEncoder,
                     )
@@ -1198,26 +1362,64 @@ def main() -> None:
                     with perf.timed("handler_preprocess", device=dev):
                         payload, frames = handler_prepare_condition_payload(dit_handler, filtered)
                     perf.set_params(frames=int(frames))
-                    condition_encoder = TtAceStepInstrumentalConditionEncoder(
-                        device=dev,
-                        checkpoint_safetensors_path=str(safetensors_path),
-                        dtype=getattr(ttnn, "bfloat16", None),
-                    )
+                    if demo_session.condition_encoder is None:
+                        demo_session.condition_encoder = TtAceStepInstrumentalConditionEncoder(
+                            device=dev,
+                            checkpoint_safetensors_path=str(safetensors_path),
+                            dtype=getattr(ttnn, "bfloat16", None),
+                        )
+                    condition_encoder = demo_session.condition_encoder
                     with perf.timed("condition_encoder", device=dev):
                         enc_hs_tt_one, enc_mask_np, ctx_tt_one, null_emb_tt = condition_encoder.forward_payload(payload)
-                    enc_mask = torch.from_numpy(enc_mask_np).to(dtype=torch.float32)
-                    condition_tensors_on_device = True
+
+                    if mesh_ttnn_preprocess:
+                        with perf.timed("preprocess_readback", device=dev):
+                            enc_hs = ace_step_ttnn_to_torch(enc_hs_tt_one, mesh_device=dev, dtype=torch.float32).cpu()
+                            ctx_lat = ace_step_ttnn_to_torch(ctx_tt_one, mesh_device=dev, dtype=torch.float32).cpu()
+                            null_emb = ace_step_ttnn_to_torch(null_emb_tt, mesh_device=dev, dtype=torch.float32).cpu()
+                        enc_mask = torch.from_numpy(np.asarray(enc_mask_np, dtype=np.float32))
+                        for _maybe_tt in (enc_hs_tt_one, ctx_tt_one):
+                            if _maybe_tt is not None:
+                                try:
+                                    ttnn.deallocate(_maybe_tt)
+                                except Exception:
+                                    pass
+                        enc_hs_tt_one = None
+                        ctx_tt_one = None
+                        null_emb_tt = None
+                        condition_tensors_on_device = False
+                    else:
+                        enc_mask = torch.from_numpy(enc_mask_np).to(dtype=torch.float32)
+                        condition_tensors_on_device = True
                     print("[condition] backend=ttnn official lyric+timbre+text+context", flush=True)
-                else:
-                    with perf.timed("handler_preprocess"):
-                        enc_hs, enc_mask, ctx_lat, frames, null_emb = handler_prepare_condition_tensors(
-                            dit_handler, filtered
-                        )
-                    perf.set_params(frames=int(frames))
-            finally:
-                _restore_infer_txt()
-                del audio_code_detokenizer
-                del qwen_tt_encoder
+                finally:
+                    _restore_infer_txt()
+                demo_session.store_preprocess(
+                    prompt=run_prompt,
+                    duration_sec=float(args.duration_sec),
+                    seed=int(args.seed),
+                    frames=int(frames),
+                    enc_hs=enc_hs,
+                    enc_mask=enc_mask,
+                    ctx_lat=ctx_lat,
+                    null_emb=null_emb,
+                )
+            elif host_only_preprocess:
+                with perf.timed("handler_preprocess"):
+                    enc_hs, enc_mask, ctx_lat, frames, null_emb = handler_prepare_condition_tensors(
+                        dit_handler, filtered
+                    )
+                perf.set_params(frames=int(frames))
+                demo_session.store_preprocess(
+                    prompt=run_prompt,
+                    duration_sec=float(args.duration_sec),
+                    seed=int(args.seed),
+                    frames=int(frames),
+                    enc_hs=enc_hs,
+                    enc_mask=enc_mask,
+                    ctx_lat=ctx_lat,
+                    null_emb=null_emb,
+                )
 
     do_cfg = gs > 1.0 + 1e-6
     perf.set_params(do_cfg=bool(do_cfg))
@@ -1262,7 +1464,12 @@ def main() -> None:
         ttnn.CONFIG.throw_exception_on_fallback = True
 
     dit_num_cqs = 2 if bool(args.use_trace) else 1
-    if split_device and dev_opened_for_ttnn_text_encoder and dev is not None:
+    if demo_session.dit_dev is not None:
+        dev = demo_session.dit_dev
+        dev_opened_for_ttnn_text_encoder = True
+        if demo_session.multi_pass:
+            print("[ace_step_v1_5] reusing DiT mesh device from session", flush=True)
+    elif split_device and dev_opened_for_ttnn_text_encoder and dev is not None:
         dev = transition_preprocess_to_dit_device(
             ttnn,
             dev,
@@ -1270,6 +1477,8 @@ def main() -> None:
             device_id=int(args.device_id),
             num_command_queues=dit_num_cqs,
         )
+        demo_session.dit_dev = dev
+        demo_session.clear_preprocess_device(ttnn)
         print(f"[ace_step_v1_5] opened DiT mesh for SKU={mesh_sku}", flush=True)
     elif not dev_opened_for_ttnn_text_encoder:
         dev = open_dit_device(
@@ -1279,6 +1488,7 @@ def main() -> None:
             num_command_queues=dit_num_cqs,
         )
         dev_opened_for_ttnn_text_encoder = True
+        demo_session.dit_dev = dev
         if split_device:
             print(f"[ace_step_v1_5] opened DiT mesh for SKU={mesh_sku}", flush=True)
 
@@ -1301,19 +1511,23 @@ def main() -> None:
     wav_bct_cpu: Any = None
 
     try:
-        with perf.timed("dit_pipeline_init", device=dev):
-            pipe = AceStepV15TTNNPipeline(
-                device=dev,
-                checkpoint_safetensors_path=str(safetensors_path),
-                timesteps_host=timesteps_host,
-                expected_input_length=int(frames),
-            )
+        if demo_session.pipe is None:
+            with perf.timed("dit_pipeline_init", device=dev):
+                demo_session.pipe = AceStepV15TTNNPipeline(
+                    device=dev,
+                    checkpoint_safetensors_path=str(safetensors_path),
+                    timesteps_host=timesteps_host,
+                    expected_input_length=int(frames),
+                )
+        pipe = demo_session.pipe
+        if demo_session.multi_pass:
+            print("[ace_step_v1_5] reusing DiT pipeline from session", flush=True)
         if ace_step_device_num_chips(dev) > 1:
             ace_step_synchronize_device(ttnn, dev)
         print("[ace_step_v1_5] DiT pipeline init complete", flush=True)
 
         defer_vae_init = ace_step_device_num_chips(dev) > 1
-        tt_vae: TtOobleckVaeDecoder | None = None
+        tt_vae: TtOobleckVaeDecoder | None = demo_session.tt_vae
         if not bool(args.torch_vae):
             vae_cfg = vae_dir / "config.json"
             if not vae_cfg.is_file():
@@ -1331,15 +1545,19 @@ def main() -> None:
                 act_dtype_vae = getattr(ttnn, "bfloat16", None)
                 if act_dtype_vae is None:
                     raise RuntimeError("TTNN VAE needs ttnn.bfloat16; build may be incomplete.")
-                with perf.timed("vae_init", device=dev):
-                    tt_vae = TtOobleckVaeDecoder.from_hf_vae_dir(
-                        str(vae_dir),
-                        device=dev,
-                        latent_frames=int(frames),
-                        batch_size=1,
-                        activation_dtype=act_dtype_vae,
-                        weights_dtype=act_dtype_vae,
-                    )
+                if tt_vae is None:
+                    with perf.timed("vae_init", device=dev):
+                        tt_vae = TtOobleckVaeDecoder.from_hf_vae_dir(
+                            str(vae_dir),
+                            device=dev,
+                            latent_frames=int(frames),
+                            batch_size=1,
+                            activation_dtype=act_dtype_vae,
+                            weights_dtype=act_dtype_vae,
+                        )
+                    demo_session.tt_vae = tt_vae
+                elif demo_session.multi_pass:
+                    print("[ace_step_v1_5] reusing TTNN VAE from session", flush=True)
 
         _ensure_acestep_on_path()
 
@@ -1495,7 +1713,9 @@ def main() -> None:
                         flush=True,
                     )
 
-            trace_state = _E2EDenoiseTrace()
+            if demo_session.trace_state is None:
+                demo_session.trace_state = _E2EDenoiseTrace()
+            trace_state = demo_session.trace_state
             _step_prog = make_denoise_progress_fn(perf, num_steps=len(t_schedule))
             _temb_dev = temb_per_step
             _tp_dev = tp_per_step
@@ -1849,6 +2069,7 @@ def main() -> None:
                     activation_dtype=act_dtype_vae,
                     weights_dtype=act_dtype_vae,
                 )
+            demo_session.tt_vae = tt_vae
             print("[ace_step_v1_5] VAE init done", flush=True)
 
         if tt_vae is not None:
@@ -1914,12 +2135,25 @@ def main() -> None:
                     ttnn.deallocate(_maybe_tt)
                 except Exception:
                     pass
-        if dev is not None:
-            close_ace_step_device(ttnn, dev)
+        _more_session_passes = session_pass + 1 < len(run_specs)
+        if _more_session_passes and session_active:
+            demo_session.close_dit_device(ttnn)
+            print("[ace_step_v1_5] closed DiT mesh; cached preprocess reused on next pass", flush=True)
+        elif not _more_session_passes:
+            demo_session.release(ttnn)
 
-    if wav_bct_cpu is not None:
+    if run_spec is not None and (run_spec.is_warmup or run_out_path is None):
+        print("[ace_step_v1_5] warmup pass complete (no wav written)", flush=True)
+    elif wav_bct_cpu is not None:
         wav = _normalize_wav_for_save(wav_bct_cpu.float())
         wav_to_save = wav[0]
+        out_path = run_out_path if run_out_path is not None else Path(args.out)
+        print(
+            f"[ace_step_v1_5] writing wav shape={tuple(wav_to_save.shape)} -> {out_path}",
+            flush=True,
+        )
+        _save_wav_fallback(wav_to_save, out_path, sample_rate=48000)
+        print(f"Wrote: {out_path}", flush=True)
     else:
         if pred_latents is None:
             raise RuntimeError("Internal error: latent decode path neither TTNN nor PyTorch.")
@@ -1933,15 +2167,40 @@ def main() -> None:
                 wav = vae.decode(lat).sample.float().cpu()
         wav = _normalize_wav_for_save(wav)
         wav_to_save = wav[0]
+        out_path = run_out_path if run_out_path is not None else Path(args.out)
+        print(
+            f"[ace_step_v1_5] writing wav shape={tuple(wav_to_save.shape)} -> {out_path}",
+            flush=True,
+        )
+        _save_wav_fallback(wav_to_save, out_path, sample_rate=48000)
+        print(f"Wrote: {out_path}", flush=True)
 
-    out_path = Path(args.out)
-    print(
-        f"[ace_step_v1_5] writing wav shape={tuple(wav_to_save.shape)} -> {out_path}",
-        flush=True,
+    if run_spec is not None:
+        if perf.enabled:
+            demo_session.session_perf.add_pass_snapshot(
+                perf.export_pass_snapshot(
+                    label=run_spec.summary_label,
+                    session_pass=session_pass,
+                    is_warmup=run_spec.is_warmup,
+                )
+            )
+        perf.emit_summary(label=run_spec.summary_label)
+
+    _has_more_passes = (
+        not fast_preprocess and demo_session.dit_handler is not None and session_pass + 1 < len(run_specs)
     )
-    _save_wav_fallback(wav_to_save, out_path, sample_rate=48000)
-    perf.emit_summary(label="demo_total")
-    print(f"Wrote: {out_path}", flush=True)
+    if _has_more_passes:
+        return main(
+            session_pass + 1,
+            _handlers=(
+                demo_session.dit_handler,
+                demo_session.llm_handler,
+                None,
+            ),
+            _demo_session=demo_session,
+        )
+
+    emit_session_summary(demo_session.session_perf)
 
 
 if __name__ == "__main__":
