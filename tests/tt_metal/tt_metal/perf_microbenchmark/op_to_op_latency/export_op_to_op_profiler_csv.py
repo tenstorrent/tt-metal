@@ -314,6 +314,15 @@ def merge_dispatch_into_timeline(
         gap_ns = float(d["dispatch_gap_ns"]) if "dispatch_gap_ns" in d else float(d["dispatch_gap_us"]) * 1000.0
         out.at[idx, "chip_dispatch_gap_ns"] = gap_ns
         out.at[idx, "chip_dispatch_gap_us"] = gap_ns / 1000.0
+
+    # NOTE on BRISC firmware prelude:
+    #   RT-profiler chip_dispatch_go_cycles and device-profiler brisc_go_cycles
+    #   are on different cycle counters / epochs and CANNOT be subtracted to
+    #   get a per-core "FW prelude" without an explicit sync offset (which
+    #   the current CSVs don't expose). Use `brisc_done_to_go_us` instead —
+    #   that is per-core BRISC kernel-exit(k) → BRISC kernel-entry(k+1) on
+    #   the same device-cycle counter, which is the per-core firmware +
+    #   dispatch transition window we actually want.
     return out
 
 
