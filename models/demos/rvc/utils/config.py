@@ -50,7 +50,8 @@ class Config:
         return x_pad, x_query, x_center, x_max
 
     def use_cpu(self) -> None:
-        self.device = self.instead = "cpu"
+        self.device = torch.device("cpu")
+        self.instead = "cpu"
         self.x_pad, self.x_query, self.x_center, self.x_max = self.params_config()
 
     def device_config(self) -> tuple:

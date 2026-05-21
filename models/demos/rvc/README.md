@@ -112,9 +112,9 @@ python -m models.demos.rvc.profile --max_secs 3.0
 
 ```bash
 python -m models.demos.rvc.evaluate \
-  --ttnn_audio data/output/ttnn_output.wav \
-  --torch_audio data/output/torch_reference.wav \
-  --source_audio data/sample.wav
+  --ttnn data/output/ttnn_output.wav \
+  --ref data/output/torch_reference.wav \
+  --source data/speech/sample-speech-0.wav
 ```
 
 ### Tests

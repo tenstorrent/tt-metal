@@ -67,7 +67,8 @@ class CrepePredictor:
     ):
         """Performs pitch estimation with the predictor's loaded model."""
         results = []
-        batch_size = 16
+        if batch_size is None:
+            batch_size = 16
 
         with torch.no_grad():
             generator = preprocess(

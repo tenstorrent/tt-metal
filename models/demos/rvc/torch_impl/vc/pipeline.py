@@ -158,7 +158,11 @@ class Pipeline:
     ):
         hubert_cfg_path, hubert_path = get_hubert_paths()
         if not os.path.exists(hubert_path):
-            raise FileNotFoundError("hubert_path not found.")
+            raise FileNotFoundError(
+                f"HuBERT model file not found: {hubert_path}. "
+                "Ensure the RVC assets are installed and RVC_ASSETS_DIR is set "
+                "correctly, or run assets-download.sh to fetch the required files."
+            )
         self.config = config or Config()
         self.if_f0 = if_f0
         self.version = version
@@ -183,9 +187,10 @@ class Pipeline:
         self._init_timing(self.tgt_sr, self.config)
 
     def _init_timing(self, tgt_sr: int, config: Config) -> None:
-        x_pad, x_center = (
+        x_pad, x_center, x_max = (
             config.x_pad,
             config.x_center,
+            config.x_max,
         )
         self.sr = 16000
         self.window = 160

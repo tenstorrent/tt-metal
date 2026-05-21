@@ -31,12 +31,17 @@ def transcode_audio(input_stream, output_stream, output_format, sample_rate):
     except (ValueError, AttributeError):
         pass
 
-    for frame in inp.decode(audio=0):
-        for p in ostream.encode(frame):
+    try:
+        for frame in inp.decode(audio=0):
+            for p in ostream.encode(frame):
+                out.mux(p)
+        # Flush the encoder so any delayed packets are emitted (otherwise the
+        # transcoded output can be truncated for codecs that buffer frames).
+        for p in ostream.encode(None):
             out.mux(p)
-
-    out.close()
-    inp.close()
+    finally:
+        out.close()
+        inp.close()
 
 
 def _decode_audio(f, sr):
