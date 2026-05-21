@@ -24,11 +24,6 @@ struct TensorAccessorArgs {
 
     static constexpr bool is_sharded = args_config.test(tensor_accessor::ArgConfig::Sharded);
     static constexpr bool is_dram = args_config.test(tensor_accessor::ArgConfig::IsDram);
-    // Metal 2.0 Optional Resource Bindings: true when the host bound a TensorParameter for this
-    // kernel binding; false when the binding is declared in the KernelSpec but no corresponding
-    // TensorParameter exists on the ProgramSpec. The framework emits a zeroed payload at CTA_OFFSET
-    // for unbound bindings, so is_bound resolves to false at template instantiation time.
-    static constexpr bool is_bound = args_config.test(tensor_accessor::ArgConfig::Bound);
     static constexpr bool rank_is_crta = args_config.test(tensor_accessor::ArgConfig::RuntimeRank);
     static constexpr bool num_banks_is_crta = args_config.test(tensor_accessor::ArgConfig::RuntimeNumBanks);
     static constexpr bool tensor_shape_is_crta = args_config.test(tensor_accessor::ArgConfig::RuntimeTensorShape);
@@ -47,6 +42,15 @@ struct TensorAccessorArgs {
     // aligned_page_size is always at CTA_OFFSET + 1
     static constexpr uint32_t AlignedPageSizeCTAOffset = CTA_OFFSET + 1;
     static constexpr uint32_t AlignedPageSize = get_compile_time_arg_val(AlignedPageSizeCTAOffset);
+
+    // Metal 2.0 Optional Resource Bindings: derived from the existing payload shape that
+    // TensorAccessorArgs(nullptr).append_to() has always emitted — two zero words at CTA_OFFSET
+    // and CTA_OFFSET + 1 (args_config = None, aligned_page_size = 0). A real Buffer-backed
+    // TensorAccessorArgs has aligned_page_size > 0; the unbound / nullptr case is uniquely the
+    // all-zero payload. Reusing the existing encoding (instead of adding a new bit to args_config)
+    // unifies legacy / descriptor-flow `TensorAccessorArgs(maybe ? buf : nullptr)` callers with
+    // Metal 2.0 unresolved TensorBindings (see also ResolveTensorBindingsForKernel).
+    static constexpr bool is_bound = (AlignedPageSize != 0);
 
     // Calculate offsets for compile-time arguments
     static constexpr uint32_t RankCTAOffset = CTA_OFFSET + 2;

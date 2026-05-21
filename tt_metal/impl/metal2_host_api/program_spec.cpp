@@ -1732,11 +1732,12 @@ std::vector<uint32_t> ResolveTensorParameterStaticCTAs(
     if (is_dram) {
         args_config.set(tensor_accessor::ArgConfig::IsDram);
     }
-    // Metal 2.0 Optional Resource Bindings: this function only runs for TensorParameters that
-    // exist on the ProgramSpec, so any binding resolved via this path is bound. ResolveTensor-
-    // BindingsForKernel emits a zeroed (Bound-unset) payload when a binding's TP is absent.
-    args_config.set(tensor_accessor::ArgConfig::Bound);
     // No Runtime* flags in the static port.
+    // Metal 2.0 Optional Resource Bindings: this function only runs for TensorParameters that
+    // exist on the ProgramSpec. The emitted payload's aligned_page_size below is always
+    // non-zero for a real TensorSpec, which is what TensorAccessorArgs<>::is_bound keys on
+    // (matching the existing `TensorAccessorArgs(nullptr)` shape — see is_bound in the
+    // device-side tensor_accessor_args.h).
 
     // aligned_page_size: align the unaligned page size up to the buffer-type alignment.
     const size_t unaligned_page_size = spec.compute_page_size_bytes();

@@ -40,7 +40,6 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_metal.hpp>  // for CompileProgram (JIT trigger)
-#include <hostdevcommon/tensor_accessor/arg_config.hpp>
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 #include <tt-metalium/distributed.hpp>
@@ -2821,9 +2820,11 @@ TEST_F(ProgramSpecTestGen1, DuplicateTensorParameterNameFails) {
 }
 
 // Metal 2.0 Optional Resource Bindings: a kernel may bind a TensorParameter that does not
-// exist on the ProgramSpec. The framework emits a two-word zeroed CTA payload (args_config
-// without the Bound bit, aligned_page_size = 0) and marks the TensorBindingHandle as unbound,
-// so no runtime base-address attachment occurs.
+// exist on the ProgramSpec. The framework emits the same two-word zeroed CTA payload that
+// `TensorAccessorArgs(nullptr).append_to()` has always emitted (args_config = 0,
+// aligned_page_size = 0). The kernel-side TensorAccessorArgs<>::is_bound keys on
+// aligned_page_size != 0; the all-zero payload reads as unbound. The TensorBindingHandle is
+// also marked unbound so no runtime base-address attachment occurs.
 TEST_F(ProgramSpecTestGen1, KernelReferencesUnknownTensorParameterEmitsUnboundPayload) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
 
@@ -2840,14 +2841,13 @@ TEST_F(ProgramSpecTestGen1, KernelReferencesUnknownTensorParameterEmitsUnboundPa
     ASSERT_NE(it, binding_handles.end());
     EXPECT_FALSE(it->bound);
 
-    // Verify the kernel's CTA payload at the binding's offset has the Bound bit unset.
-    // (Two-word unbound payload: args_config = 0, aligned_page_size = 0.)
+    // The unbound payload is exactly the legacy `TensorAccessorArgs(nullptr)` shape: two zero
+    // words at the binding's CTA offset.
     bool checked_cta = false;
     kernel->process_compile_time_args([&](const std::vector<uint32_t>& values) {
-        ASSERT_LT(it->cta_offset, values.size());
-        const uint8_t args_config_raw = static_cast<uint8_t>(values[it->cta_offset] & 0xFFu);
-        constexpr uint8_t kBoundBit = static_cast<uint8_t>(tensor_accessor::ArgConfig::Bound);
-        EXPECT_EQ(args_config_raw & kBoundBit, 0u) << "Bound bit must be unset for unbound binding";
+        ASSERT_LT(it->cta_offset + 1u, values.size());
+        EXPECT_EQ(values[it->cta_offset], 0u) << "args_config must be 0 for unbound binding";
+        EXPECT_EQ(values[it->cta_offset + 1], 0u) << "aligned_page_size must be 0 for unbound binding";
         checked_cta = true;
     });
     EXPECT_TRUE(checked_cta);
@@ -2899,8 +2899,9 @@ TEST_F(ProgramSpecTestGen1, InvalidTensorAccessorNameFails) {
 
 // Metal 2.0 Optional Resource Bindings: a kernel with both a bound and an unbound TensorBinding
 // must keep CTA offsets consistent — the unbound payload (2 zero words) matches non-sharded
-// NumArgsCT, so subsequent bindings' offsets line up. Verifies the Bound bit lands on the
-// resolved binding's payload and is unset on the unresolved one.
+// NumArgsCT, so subsequent bindings' offsets line up. Verifies the bound binding gets a real
+// aligned_page_size and the unbound binding gets the all-zero `TensorAccessorArgs(nullptr)`
+// shape that the kernel-side is_bound keys on.
 TEST_F(ProgramSpecTestGen1, KernelMixedBoundAndUnboundTensorParametersSucceeds) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
 
@@ -2923,12 +2924,15 @@ TEST_F(ProgramSpecTestGen1, KernelMixedBoundAndUnboundTensorParametersSucceeds) 
     EXPECT_TRUE(bound_it->bound);
     EXPECT_FALSE(unbound_it->bound);
 
-    constexpr uint8_t kBoundBit = static_cast<uint8_t>(tensor_accessor::ArgConfig::Bound);
+    // Bound binding's aligned_page_size (CTA offset + 1) must be non-zero;
+    // unbound binding must be exactly two zero words. is_bound on the kernel side keys on
+    // aligned_page_size != 0.
     kernel->process_compile_time_args([&](const std::vector<uint32_t>& values) {
-        ASSERT_LT(bound_it->cta_offset, values.size());
-        ASSERT_LT(unbound_it->cta_offset, values.size());
-        EXPECT_NE(values[bound_it->cta_offset] & kBoundBit, 0u);
-        EXPECT_EQ(values[unbound_it->cta_offset] & kBoundBit, 0u);
+        ASSERT_LT(bound_it->cta_offset + 1u, values.size());
+        ASSERT_LT(unbound_it->cta_offset + 1u, values.size());
+        EXPECT_NE(values[bound_it->cta_offset + 1], 0u) << "bound aligned_page_size must be non-zero";
+        EXPECT_EQ(values[unbound_it->cta_offset], 0u) << "unbound args_config must be 0";
+        EXPECT_EQ(values[unbound_it->cta_offset + 1], 0u) << "unbound aligned_page_size must be 0";
     });
 
     // CTA offsets must be distinct and the unbound binding must occupy exactly 2 words
