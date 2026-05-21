@@ -22,7 +22,7 @@ try:
     LIGHTNING_AVAILABLE = True
 except ImportError:
     LIGHTNING_AVAILABLE = False
-    logger.warning("Lightning not installed. Training module will not be available.")
+    # logger.warning("Lightning not installed. Training module will not be available.")
 
     # Create a dummy class for type hints
     class LightningDataModule:

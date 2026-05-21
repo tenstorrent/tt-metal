@@ -22,14 +22,12 @@ WEIGHT_KEY = "encoder.text_projector.weight"
 
 def load_text_projector_weight_numpy(checkpoint_path: str, *, weight_key: str = WEIGHT_KEY) -> np.ndarray:
     """Load only the projector row from ``model.safetensors`` into float32 host numpy."""
-    import torch
-    from safetensors import safe_open
+    from models.demos.ace_step_v1_5.weight_cache import _tensor_to_f32_numpy, get_torch_state_dict
 
-    with safe_open(checkpoint_path, framework="pt", device="cpu") as sf:
-        if weight_key not in sf.keys():
-            raise KeyError(f"{weight_key} not found in {checkpoint_path}")
-        w = sf.get_tensor(weight_key)
-        return w.detach().to(torch.float32).cpu().numpy()
+    sd = get_torch_state_dict(str(checkpoint_path), component="safetensors-checkpoint")
+    if weight_key not in sd:
+        raise KeyError(f"{weight_key} not found in {checkpoint_path}")
+    return _tensor_to_f32_numpy(sd[weight_key])
 
 
 class TtAceStepTextProjector:

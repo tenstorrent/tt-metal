@@ -34,21 +34,19 @@ from .text_projector import TtAceStepTextProjector, load_text_projector_weight_n
 
 
 def load_condition_weights_np(safetensors_path: str) -> Dict[str, np.ndarray]:
-    import torch
-    from safetensors import safe_open
+    from models.demos.ace_step_v1_5.weight_cache import load_prefix_weights_np
 
-    prefixes = (
-        "encoder.text_projector.",
-        "encoder.lyric_encoder.",
-        "encoder.timbre_encoder.",
-        "null_condition_emb",
+    return load_prefix_weights_np(
+        safetensors_path,
+        (
+            "encoder.text_projector.",
+            "encoder.lyric_encoder.",
+            "encoder.timbre_encoder.",
+            "null_condition_emb",
+        ),
+        component="condition-encoder-weights",
+        tag="condition_encoder_np",
     )
-    out: Dict[str, np.ndarray] = {}
-    with safe_open(str(safetensors_path), framework="pt", device="cpu") as sf:
-        for k in sf.keys():
-            if k.startswith(prefixes):
-                out[k] = sf.get_tensor(k).detach().to(torch.float32).cpu().numpy()
-    return out
 
 
 def _as_weight(weights_np: Dict[str, np.ndarray], key: str, *, device, dtype, mem, mapper, row_major: bool = False):

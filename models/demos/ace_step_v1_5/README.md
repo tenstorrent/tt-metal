@@ -26,6 +26,36 @@ python3 models/demos/ace_step_v1_5/run_prompt_to_wav.py \
 On first run, any missing model checkpoints are automatically downloaded from HuggingFace
 into `~/.cache/huggingface/hub/ACE-Step-1.5-checkpoints/`.
 
+### Weight caching (avoid reloading from disk)
+
+The demo caches host-side safetensors in two places:
+
+| Tier | Location | When it applies |
+|------|----------|-----------------|
+| **Disk** | `~/.cache/ace_step_v1_5/host_weights/` | Every CLI run after the first load of a checkpoint file |
+| **RAM + TT device** | In-process registry | Default `run_prompt_to_wav.py` path or `serve_prompt_to_wav.py` |
+
+Look for log lines:
+
+```
+[ace_step_v1_5] ⏳ LOAD   DiT-pipeline          path=.../model.safetensors
+[ace_step_v1_5] ♻  REUSE  condition-encoder-weights [already loaded in memory]
+```
+
+**HTTP service (weights load once at startup, multiple HTTP requests):**
+
+```bash
+python3 models/demos/ace_step_v1_5/serve_prompt_to_wav.py --port 8765
+```
+
+Disable all caching with `ACE_STEP_DISABLE_WEIGHT_CACHE=1`.
+
+Logging defaults to **INFO** (hides TTNN per-tensor flatbuffer cache DEBUG spam). Use
+`--verbose` on `run_prompt_to_wav.py` for full DEBUG output, or `ACE_STEP_LOG_LEVEL=DEBUG`.
+
+Disk npz sidecars are **off by default** (`ACE_STEP_WEIGHT_DISK_CACHE=1` to enable). Writing
+compressed caches for the full condition-encoder slice can take many minutes and looked like a hang.
+
 ### CLI options
 
 | Option | Type | Default | Description |

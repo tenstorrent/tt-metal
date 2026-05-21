@@ -35,16 +35,10 @@ def load_safetensors_state_dict(path: str, *, prefix: Optional[str] = None) -> S
         prefix: If provided, only keys that start with `prefix` are kept, and
             the prefix is stripped from returned keys.
     """
-    try:
-        from safetensors.torch import load_file as torch_load_file  # type: ignore
+    from models.demos.ace_step_v1_5.weight_cache import get_torch_state_dict
 
-        # Prefer torch loader when available to preserve dtype (e.g. BF16).
-        raw: Dict[str, Any] = {k: v.detach().cpu() for k, v in torch_load_file(path, device="cpu").items()}
-    except Exception:
-        # Torch-free fallback: load as numpy arrays. Note that BF16 support may vary by environment.
-        from safetensors.numpy import load_file  # type: ignore
-
-        raw = load_file(path)
+    component = f"safetensors{':' + prefix if prefix else ''}"
+    raw = get_torch_state_dict(path, component=component)
     if prefix is None:
         return SafetensorsStateDict(tensors=raw)
 

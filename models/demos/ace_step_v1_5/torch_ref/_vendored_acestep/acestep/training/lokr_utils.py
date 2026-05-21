@@ -20,9 +20,9 @@ try:
 except ImportError:
     LYCORIS_AVAILABLE = False
     LycorisNetwork = Any  # type: ignore[assignment,misc]
-    logger.warning(
-        "LyCORIS library not installed. LoKr training/inference unavailable. " "Install with: pip install lycoris-lora"
-    )
+    # logger.warning(
+    #     "LyCORIS library not installed. LoKr training/inference unavailable. " "Install with: pip install lycoris-lora"
+    # )
 
 
 def check_lycoris_available() -> bool:

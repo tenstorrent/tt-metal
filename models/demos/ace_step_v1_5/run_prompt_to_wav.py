@@ -353,6 +353,109 @@ def _ensure_variant(name: str, ckpt_dir: Path) -> Path:
     return local
 
 
+_REUSE_REGISTRY: Any = None
+
+
+def _run_with_weight_cache(args: argparse.Namespace) -> None:
+    """Default demo path: load weights once into RAM/TT device, generate one WAV, exit."""
+    global _REUSE_REGISTRY
+
+    from models.demos.ace_step_v1_5.ref_decoder_compare import ensure_acestep_repo_on_path
+    from models.demos.ace_step_v1_5.serve_prompt_to_wav import AceStepModelRegistry
+    from models.demos.ace_step_v1_5.serve_prompt_to_wav import _build_t_schedule as _svc_build_t_schedule
+    from models.demos.ace_step_v1_5.serve_prompt_to_wav import _ensure_variant as _svc_ensure_variant
+    from models.demos.ace_step_v1_5.serve_prompt_to_wav import _resolve_ace_step_repo_root as _svc_resolve_repo
+    from models.demos.ace_step_v1_5.weight_cache import log_weights_ready
+
+    ckpt_dir = Path(args.ckpt_dir)
+    os.environ["ACESTEP_CHECKPOINTS_DIR"] = str(ckpt_dir)
+    for name in (args.variant, "vae", "Qwen3-Embedding-0.6B", args.lm_variant):
+        _svc_ensure_variant(name, ckpt_dir)
+
+    model_dir = _ensure_variant(args.variant, ckpt_dir)
+    safetensors_path = model_dir / "model.safetensors"
+    if not safetensors_path.is_file():
+        shards = sorted(model_dir.glob("model-*.safetensors"))
+        if not shards:
+            raise FileNotFoundError(f"Missing checkpoint: {safetensors_path}")
+        safetensors_path = shards[0]
+
+    infer_steps = args.infer_steps
+    if infer_steps is None:
+        infer_steps = 8 if "turbo" in str(args.variant).lower() else 50
+
+    gs = args.guidance_scale
+    if gs is None:
+        gs = 1.0 if "turbo" in str(args.variant).lower() else 7.0
+    gs = float(gs)
+
+    use_adg = args.use_adg
+    if use_adg is None:
+        use_adg = "base" in str(args.variant).lower() and "turbo" not in str(args.variant).lower()
+
+    ref_root = _svc_resolve_repo(ckpt_dir=str(ckpt_dir), ace_step_repo_root=args.ace_step_repo_root)
+    if ref_root is None:
+        raise RuntimeError(
+            "Could not find ACE-Step 'acestep' package. " "Pass --ace-step-repo-root or set ACE_STEP_REPO_ROOT."
+        )
+    ensure_acestep_repo_on_path(ref_root)
+
+    t_schedule = _svc_build_t_schedule(
+        shift=float(args.shift),
+        infer_steps=int(infer_steps),
+        variant=str(args.variant),
+    )
+
+    if _REUSE_REGISTRY is None:
+        _REUSE_REGISTRY = AceStepModelRegistry()
+        _REUSE_REGISTRY.load(
+            ckpt_dir=ckpt_dir,
+            variant=str(args.variant),
+            lm_variant=str(args.lm_variant),
+            device_id=int(args.device_id),
+            no_ttnn_strict=bool(args.no_ttnn_strict),
+            use_trace=bool(args.use_trace),
+            t_schedule=t_schedule,
+            safetensors_path=safetensors_path,
+            vae_dir=ckpt_dir / "vae",
+            text_model_dir=ckpt_dir / "Qwen3-Embedding-0.6B",
+            ref_root=ref_root,
+            experimental_5hz_ttnn_lm=bool(getattr(args, "experimental_5hz_ttnn_causal_lm", False)),
+            use_torch_vae=bool(args.torch_vae),
+        )
+        log_weights_ready()
+    else:
+        from models.demos.ace_step_v1_5.weight_cache import log_weight_reuse
+
+        log_weight_reuse("all-components (session already initialised)", source="device")
+
+    exp_ttnn_lm = bool(getattr(args, "experimental_5hz_ttnn_causal_lm", False))
+    out_path = Path(args.out)
+
+    _REUSE_REGISTRY.generate(
+        prompt=str(args.prompt),
+        duration_sec=float(args.duration_sec),
+        seed=int(args.seed),
+        variant=str(args.variant),
+        lm_variant=str(args.lm_variant),
+        t_schedule=t_schedule,
+        guidance_scale=gs,
+        use_adg=bool(use_adg),
+        cfg_interval_start=float(args.cfg_interval_start),
+        cfg_interval_end=float(args.cfg_interval_end),
+        use_trace=bool(args.use_trace),
+        use_torch_vae=bool(args.torch_vae),
+        vae_chunk_latents=int(args.vae_chunk_latents),
+        vae_overlap_latents=int(args.vae_overlap_latents),
+        out_path=out_path,
+        exp_ttnn_lm=exp_ttnn_lm,
+        ckpt_dir=ckpt_dir,
+    )
+    from loguru import logger
+
+    logger.success("Wrote: {}", out_path.resolve())
+
+
 def main(
     session_pass: int = 0,
     *,
@@ -572,7 +675,49 @@ def main(
         action="store_true",
         help="Keep the session alive and read prompts from stdin until EOF or a blank line.",
     )
+    ap.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Enable DEBUG loguru output (includes per-tensor TTNN flatbuffer cache lines).",
+    )
+    ap.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Force INFO-only logging (default). Same as omitting --verbose.",
+    )
+    ap.add_argument(
+        "--use-model-registry",
+        action="store_true",
+        help=(
+            "Load all weights once via AceStepModelRegistry and run a single generation "
+            "(same path as serve_prompt_to_wav). Incompatible with --warmup/--repeat/--serve."
+        ),
+    )
     args = ap.parse_args()
+
+    from models.demos.ace_step_v1_5.official_lm_preprocess import configure_acestep_logging
+
+    if bool(args.verbose):
+        log_level = "DEBUG"
+        show_ttnn_cache = True
+    elif bool(args.quiet):
+        log_level = "INFO"
+        show_ttnn_cache = False
+    else:
+        log_level = os.environ.get("ACE_STEP_LOG_LEVEL", "INFO")
+        show_ttnn_cache = log_level.upper() == "DEBUG" and os.environ.get("ACE_STEP_SHOW_TTNN_TENSOR_CACHE", "0") in (
+            "1",
+            "true",
+            "True",
+            "yes",
+        )
+    configure_acestep_logging(level=log_level, show_ttnn_tensor_cache=show_ttnn_cache)
+
+    if bool(getattr(args, "use_model_registry", False)):
+        if not args.prompt:
+            ap.error("--prompt is required for --use-model-registry")
+        _run_with_weight_cache(args)
+        return
 
     if not args.prompt and not args.serve:
         ap.error("--prompt is required unless --serve is set")
@@ -848,9 +993,6 @@ def main(
 
     # --- Optional: full official path (LLM), no TTNN ---
     if args.use_official_lm:
-        from models.demos.ace_step_v1_5.official_lm_preprocess import configure_acestep_logging
-
-        configure_acestep_logging()
         ref_root = _ensure_acestep_on_path()
         try:
             from acestep.handler import AceStepHandler
@@ -1114,12 +1256,10 @@ def main(
         from models.demos.ace_step_v1_5.official_lm_preprocess import (
             attach_payload_preprocess_ttnn,
             build_filtered_dit_kwargs_for_handler,
-            configure_acestep_logging,
             handler_prepare_condition_payload,
             handler_prepare_condition_tensors,
         )
 
-        configure_acestep_logging()
         try:
             from acestep.handler import AceStepHandler
 
@@ -2234,6 +2374,12 @@ def main(
         )
 
     emit_session_summary(demo_session.session_perf)
+    out_path = Path(args.out)
+    _save_wav_fallback(wav[0], out_path, sample_rate=48000)
+    perf.emit_summary(label="demo_total")
+    from loguru import logger
+
+    logger.success("Wrote: {}", out_path.resolve())
 
 
 if __name__ == "__main__":
