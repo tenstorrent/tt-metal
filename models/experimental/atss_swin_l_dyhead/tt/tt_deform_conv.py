@@ -190,9 +190,11 @@ class TtDeformConv2dV2:
         # matmul: (1, H*W, K*C_in) @ (K*C_in, C_out) -> (1, H*W, C_out)
         w_prepared = prepare_deform_conv_weight(weight)  # (C_out, K*C_in)
         w_for_matmul = w_prepared.t().contiguous()  # (K*C_in, C_out)
+        # bf8_b weight (block-floating) halves weight read bandwidth on the K*C_in @ C_out
+        # matmul. Weight is constant per inference; precision is set once at __init__.
         self.weight_tt = ttnn.from_torch(
             w_for_matmul,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
