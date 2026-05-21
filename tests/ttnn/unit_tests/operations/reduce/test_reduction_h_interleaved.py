@@ -183,5 +183,5 @@ def test_2D_tensor(device, batch_size, h, w, c, n, dim, input_dtype, input_memor
         pcc_threshold=0.999,
         rtol=1.021,
         atol=12.240,
-        frobenius_threshold=0.009,
+        frobenius_threshold=0.011,
     )

@@ -211,7 +211,7 @@ jobs:
             ls -R /ci/artifacts
             exit 1
           fi
-          uv pip install "${ttnn_wheels[@]}"
+
           mpirun --pernode uv pip install "${ttnn_wheels[@]}"
 
       - name: Reset cards and validate cluster for ${{ matrix.test-group.name }}

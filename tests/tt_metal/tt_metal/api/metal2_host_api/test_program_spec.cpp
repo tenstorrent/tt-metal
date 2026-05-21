@@ -52,11 +52,13 @@ namespace {
 
 // Import shared test helpers
 using test_helpers::BindDFBToKernel;
+using test_helpers::BindTensorParameterToKernel;
 using test_helpers::MakeMinimalComputeKernel;
 using test_helpers::MakeMinimalDFB;
 using test_helpers::MakeMinimalDMKernel;
 using test_helpers::MakeMinimalGen1DMKernel;
 using test_helpers::MakeMinimalGen1ValidProgramSpec;
+using test_helpers::MakeMinimalTensorParameter;
 using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::MakeMinimalWorkUnit;
 using test_helpers::ScopedSlowDispatchOverride;
@@ -783,9 +785,16 @@ TEST_F(ProgramSpecTestQuasar, RemoteDFBNotYetSupportedAtRuntime) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("not yet supported")));
 }
 
-// Remove once implemented
-TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBFails) {
-    // Borrowed memory DFBs are not yet implemented
+// Helper: build a ProgramSpec with a single borrowed-memory DFB backed by a TensorParameter.
+//   - DFB default size: 32 bytes (entry_size 16 * num_entries 2). Fits inside
+//     MakeMinimalTensorParameter's 1x32 BFLOAT16 default (64 bytes); oversized cases
+//     pass larger dfb_entry_size / dfb_num_entries via the parameters.
+//   - tensor_buffer_type defaults to L1 (the only legal choice for borrowing).
+inline ProgramSpec MakeBorrowedDFBProgramSpec(
+    const std::string& tensor_param_name = "borrowed_tensor",
+    tt::tt_metal::BufferType tensor_buffer_type = tt::tt_metal::BufferType::L1,
+    uint32_t dfb_entry_size = 16,
+    uint32_t dfb_num_entries = 2) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -793,46 +802,59 @@ TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBFails) {
 
     auto producer = MakeMinimalDMKernel("producer");
     auto consumer = MakeMinimalDMKernel("consumer");
-    auto dfb = MakeMinimalDFB("dfb");
-    dfb.uses_borrowed_memory = true;  // Not supported!
+    auto dfb = MakeMinimalDFB("dfb", dfb_entry_size, dfb_num_entries);
+    dfb.borrowed_from = tensor_param_name;
 
     BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
 
+    auto tensor_param = MakeMinimalTensorParameter(tensor_param_name, tensor_buffer_type);
+    // The TensorParameter must be bound to at least one kernel (referential-integrity check).
+    BindTensorParameterToKernel(producer, tensor_param_name, "borrowed_t");
+
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
+    spec.tensor_parameters = {tensor_param};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
-
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("DFB 'dfb' uses borrowed memory, but this feature is not yet implemented")));
+    return spec;
 }
 
-// Remove once implemented
-TEST_F(ProgramSpecTestQuasar, DFBAliasingFails) {
-    // DFB aliasing is not yet implemented
-    NodeCoord node{0, 0};
+TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBSucceeds) {
+    // Positive baseline: borrowed-memory DFB whose TensorParameter is L1-resident and large enough.
+    ProgramSpec spec = MakeBorrowedDFBProgramSpec();
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
 
-    ProgramSpec spec;
-    spec.program_id = "test_program";
-
-    auto producer = MakeMinimalDMKernel("producer");
-    auto consumer = MakeMinimalDMKernel("consumer");
-    auto dfb = MakeMinimalDFB("dfb");
-    dfb.alias_with = std::vector<DFBSpecName>{"other_dfb"};  // Not supported yet!
-
-    BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
-
-    spec.kernels = {producer, consumer};
-    spec.dataflow_buffers = {dfb};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
+TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBUnknownTensorParameterFails) {
+    ProgramSpec spec = MakeBorrowedDFBProgramSpec("borrowed_tensor");
+    // Re-target the DFB at a TensorParameter that wasn't declared.
+    spec.dataflow_buffers[0].borrowed_from = "nonexistent_tensor";
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("DFB 'dfb' has a non-empty alias_with, but DFB aliasing is not yet implemented")));
+            ::testing::HasSubstr("borrows memory from TensorParameter 'nonexistent_tensor'")));
+}
+
+TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBNonL1TensorParameterFails) {
+    // DRAM-resident TensorParameter is not a legal borrow source.
+    ProgramSpec spec = MakeBorrowedDFBProgramSpec("borrowed_tensor", tt::tt_metal::BufferType::DRAM);
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("is not L1-resident")));
+}
+
+TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBOversizedFails) {
+    // DFB total bytes exceed the TensorParameter's packed size: 1*32*sizeof(bfloat16) = 64 bytes,
+    // so 128 bytes of DFB (entry_size 64, num_entries 2) overruns.
+    ProgramSpec spec = MakeBorrowedDFBProgramSpec(
+        "borrowed_tensor", tt::tt_metal::BufferType::L1, /*dfb_entry_size=*/64, /*dfb_num_entries=*/2);
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("is larger than its borrowed TensorParameter")));
 }
 
 TEST_F(ProgramSpecTestQuasar, SemaphoresSucceed) {
@@ -2312,11 +2334,11 @@ TEST(AggregateSpecTypes, DataflowBufferSpecDesignatedInitializers) {
         .unique_id = "borrowed_dfb",
         .entry_size = 1024,
         .num_entries = 8,
-        .uses_borrowed_memory = true,
+        .borrowed_from = "input_tensor",
         .disable_implicit_sync = true,
     };
 
-    EXPECT_TRUE(borrowed_dfb.uses_borrowed_memory);
+    EXPECT_EQ(borrowed_dfb.borrowed_from, std::optional<TensorParameterName>{"input_tensor"});
     EXPECT_TRUE(borrowed_dfb.disable_implicit_sync);
 }
 
@@ -2751,8 +2773,7 @@ TEST_F(ProgramSpecTestGen1, DuplicateKernelNameFails) {
 // are covered in test_program_run_params.cpp). Hardware-agnostic; using the Gen1 fixture for
 // lower-likelihood-of-unrelated-mock-issues per Audrey's guidance.
 
-using test_helpers::BindTensorParameterToKernel;
-using test_helpers::MakeMinimalTensorParameter;
+// (BindTensorParameterToKernel and MakeMinimalTensorParameter using-declarations hoisted to top-of-file.)
 
 TEST_F(ProgramSpecTestGen1, DuplicateTensorParameterNameFails) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
@@ -2991,6 +3012,169 @@ TEST_F(ProgramSpecTestGen1, CompilerIncludePathsForwardedToKernelConfig) {
     const auto built_compute_variant = built_compute->config();
     const auto& built_compute_config = std::get<ComputeConfig>(built_compute_variant);
     EXPECT_EQ(built_compute_config.compiler_include_paths, compute_paths);
+}
+
+// ============================================================================
+// DFB alias validation
+// ============================================================================
+
+// Helper: build a minimal 1-producer / 1-consumer ProgramSpec where both DFBs are
+// bound to the same producer/consumer kernels in a single WorkUnit on a single node.
+namespace {
+ProgramSpec MakeAliasProgramSpec(
+    const NodeCoord& node,
+    const DataflowBufferSpec& dfb_a,
+    const DataflowBufferSpec& dfb_b) {
+    ProgramSpec spec;
+
+    KernelSpec producer = MakeMinimalDMKernel("producer_kernel");
+    KernelSpec consumer = MakeMinimalDMKernel("consumer_kernel");
+
+    BindDFBToKernel(producer, dfb_a.unique_id, "out_a", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, dfb_a.unique_id, "in_a", KernelSpec::DFBEndpointType::CONSUMER);
+
+    BindDFBToKernel(producer, dfb_b.unique_id, "out_b", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, dfb_b.unique_id, "in_b", KernelSpec::DFBEndpointType::CONSUMER);
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb_a, dfb_b};
+    spec.work_units = {MakeMinimalWorkUnit("wu", node, {"producer_kernel", "consumer_kernel"})};
+    return spec;
+}
+}  // anonymous namespace
+
+TEST_F(ProgramSpecTestQuasar, AliasDFBFailsOnMismatchedTotalSize) {
+    // DFB_A: 512 * 8 = 4096 bytes, DFB_B: 256 * 8 = 2048 bytes — different totals → TT_FATAL
+    auto dfb_a = MakeMinimalDFB("dfb_a", /*entry_size=*/512, /*num_entries=*/8);
+    auto dfb_b = MakeMinimalDFB("dfb_b", /*entry_size=*/256, /*num_entries=*/8);
+    dfb_a.alias_with = {"dfb_b"};
+    dfb_b.alias_with = {"dfb_a"};
+
+    const NodeCoord node{0, 0};
+    auto spec = MakeAliasProgramSpec(node, dfb_a, dfb_b);
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("different total sizes")));
+}
+
+TEST_F(ProgramSpecTestQuasar, AliasDFBFailsOnAsymmetricDeclaration) {
+    // DFB_A lists DFB_B but DFB_B does not list DFB_A — clique violation → TT_FATAL
+    auto dfb_a = MakeMinimalDFB("dfb_a", /*entry_size=*/512, /*num_entries=*/8);
+    auto dfb_b = MakeMinimalDFB("dfb_b", /*entry_size=*/256, /*num_entries=*/16);
+    dfb_a.alias_with = {"dfb_b"};
+    // dfb_b.alias_with intentionally left empty
+
+    const NodeCoord node{0, 0};
+    auto spec = MakeAliasProgramSpec(node, dfb_a, dfb_b);
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("do not declare the same alias group")));
+}
+
+TEST_F(ProgramSpecTestQuasar, AliasDFBMatmulStyleSucceeds) {
+    // This is the nasty case from the matmul op....
+    // Two DFBs share L1 but are bound to different kernels.
+    //  - DFB_A is bound to {producer_kernel, consumer_kernel};
+    //  - DFB_B is bound to {producer_kernel, other_kernel}.
+    //
+    // This looks unspeakably evil and I'd like to forbid it. But, it does work.
+    // All kernels run on the same node set, so they all have the same L1.
+    // And (presumably) the DFB is used in a temporally disjoint way.
+    // So, nothing stops them from re-using the DFB memory.
+
+    const NodeCoord node{0, 0};
+
+    auto dfb_a = MakeMinimalDFB("dfb_a", /*entry_size=*/512, /*num_entries=*/8);
+    auto dfb_b = MakeMinimalDFB("dfb_b", /*entry_size=*/512, /*num_entries=*/8);
+    dfb_a.alias_with = {"dfb_b"};
+    dfb_b.alias_with = {"dfb_a"};
+
+    KernelSpec producer = MakeMinimalDMKernel("producer_kernel");
+    KernelSpec consumer = MakeMinimalDMKernel("consumer_kernel");
+    KernelSpec other = MakeMinimalDMKernel("other_kernel");
+
+    BindDFBToKernel(producer, "dfb_a", "out_a", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb_a", "in_a", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer, "dfb_b", "out_b", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(other, "dfb_b", "in_b", KernelSpec::DFBEndpointType::CONSUMER);
+
+    ProgramSpec spec;
+    spec.kernels = {producer, consumer, other};
+    spec.dataflow_buffers = {dfb_a, dfb_b};
+    spec.work_units = {
+        MakeMinimalWorkUnit("wu", node, {"producer_kernel", "consumer_kernel", "other_kernel"})};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, AliasDFBFailsOnDifferentNodeCoverage) {
+    // Two DFBs aliased, but bound to kernels running on disjoint nodes. The shared L1
+    // region only makes sense if both members cover the same cores; otherwise the
+    // secondary's address propagation would alias into L1 the primary never reserved.
+    NodeCoord node_a{0, 0};
+    NodeCoord node_b{1, 0};
+
+    auto dfb_a = MakeMinimalDFB("dfb_a", /*entry_size=*/512, /*num_entries=*/8);
+    auto dfb_b = MakeMinimalDFB("dfb_b", /*entry_size=*/512, /*num_entries=*/8);
+    dfb_a.alias_with = {"dfb_b"};
+    dfb_b.alias_with = {"dfb_a"};
+
+    KernelSpec producer_a = MakeMinimalDMKernel("producer_a");
+    KernelSpec consumer_a = MakeMinimalDMKernel("consumer_a");
+    KernelSpec producer_b = MakeMinimalDMKernel("producer_b");
+    KernelSpec consumer_b = MakeMinimalDMKernel("consumer_b");
+    BindDFBToKernel(producer_a, "dfb_a", "out_a", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer_a, "dfb_a", "in_a", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer_b, "dfb_b", "out_b", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer_b, "dfb_b", "in_b", KernelSpec::DFBEndpointType::CONSUMER);
+
+    ProgramSpec spec;
+    spec.kernels = {producer_a, consumer_a, producer_b, consumer_b};
+    spec.dataflow_buffers = {dfb_a, dfb_b};
+    spec.work_units = {
+        MakeMinimalWorkUnit("wu_a", node_a, {"producer_a", "consumer_a"}),
+        MakeMinimalWorkUnit("wu_b", node_b, {"producer_b", "consumer_b"}),
+    };
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("cover different sets of nodes")));
+}
+
+TEST_F(ProgramSpecTestQuasar, AliasDFBFailsOnInconsistentBorrowedFrom) {
+    // DFB_A borrows from a TensorParameter, DFB_B does not. Within an alias group, either
+    // no member borrows or all members borrow from the same TensorParameter.
+    const NodeCoord node{0, 0};
+
+    auto dfb_a = MakeMinimalDFB("dfb_a", /*entry_size=*/16, /*num_entries=*/2);
+    auto dfb_b = MakeMinimalDFB("dfb_b", /*entry_size=*/16, /*num_entries=*/2);
+    dfb_a.alias_with = {"dfb_b"};
+    dfb_b.alias_with = {"dfb_a"};
+    dfb_a.borrowed_from = "borrowed_tensor";
+    // dfb_b.borrowed_from intentionally left unset
+
+    KernelSpec producer = MakeMinimalDMKernel("producer_kernel");
+    KernelSpec consumer = MakeMinimalDMKernel("consumer_kernel");
+    BindDFBToKernel(producer, "dfb_a", "out_a", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb_a", "in_a", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer, "dfb_b", "out_b", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb_b", "in_b", KernelSpec::DFBEndpointType::CONSUMER);
+
+    auto tensor_param = MakeMinimalTensorParameter("borrowed_tensor", tt::tt_metal::BufferType::L1);
+    BindTensorParameterToKernel(producer, "borrowed_tensor", "borrowed_t");
+
+    ProgramSpec spec;
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb_a, dfb_b};
+    spec.tensor_parameters = {tensor_param};
+    spec.work_units = {MakeMinimalWorkUnit("wu", node, {"producer_kernel", "consumer_kernel"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("inconsistent borrowed_from")));
 }
 
 }  // namespace

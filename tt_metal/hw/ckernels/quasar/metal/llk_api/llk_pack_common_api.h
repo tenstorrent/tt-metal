@@ -93,3 +93,9 @@ TT_ALWAYS_INLINE void llk_pack_relu_config(const std::uint32_t config) {
 TT_ALWAYS_INLINE void llk_pack_relu_config(const ckernel::ReluConfig& relu_config) {
     _llk_pack_relu_config_<p_pacr::PACK0, false /* EN_32B_DEST */>(relu_config);
 }
+
+/**
+ * @brief: Configure packer0 to enable or disable l1 accumulation
+ * @param l1_acc_en: if false -> l1 acc is disabled, true -> l1 acc enabled
+ **/
+inline void llk_pack_reconfig_l1_acc(const std::uint32_t l1_acc_en) { _llk_pack_set_l1_acc_<p_pacr::PACK0>(l1_acc_en); }

@@ -74,7 +74,7 @@ async function run() {
     const slackTs = core.getInput('slack_ts') || '';
     const slackChannelId = core.getInput('slack_channel_id') || '';
     const slackBotToken = core.getInput('slack_bot_token') || '';
-    // Whether downstream auto-triage workflows should send their own Slack message.
+    // Whether downstream regression-analysis workflows should send their own Slack message.
     // Note: core.getInput() always returns a string, and GitHub API's createWorkflowDispatch
     // requires all inputs to be strings (even if the target workflow defines them as booleans).
     // The action.yml default is true, so we default to 'true' string here.
@@ -107,7 +107,7 @@ async function run() {
       core.warning(`Failed to parse slack_ts_map, falling back to global slack_ts: ${e.message}`);
     }
 
-    // Optional global cap on auto-triage dispatches per invocation.
+    // Optional global cap on regression-analysis dispatches per invocation.
     // Empty/unset = unlimited. Tracks successful createWorkflowDispatch calls
     // (a failed dispatch doesn't count so transient GHA errors don't consume
     // the budget).  Primarily for safe testing via workflow_dispatch.
@@ -124,7 +124,7 @@ async function run() {
     let dispatchCount = 0;
 
     // Use the same ref as the workflow that is invoking this action so that
-    // auto-triage.yml runs on the same branch (and picks up any in-branch changes),
+    // regression-analysis.yml runs on the same branch (and picks up any in-branch changes),
     // while still defaulting to main when invoked from main.
     const dispatchRef = github.context.ref || 'refs/heads/main';
 
@@ -174,7 +174,7 @@ async function run() {
 
       const failingJobs = allFailingJobs.slice(0, MAX_JOBS_PER_WORKFLOW);
       if (allFailingJobs.length > MAX_JOBS_PER_WORKFLOW) {
-        core.warning(`Workflow ${workflowFileName} has ${allFailingJobs.length} failing jobs, capping auto-triage to first ${MAX_JOBS_PER_WORKFLOW} to control cost`);
+        core.warning(`Workflow ${workflowFileName} has ${allFailingJobs.length} failing jobs, capping regression-analysis to first ${MAX_JOBS_PER_WORKFLOW} to control cost`);
         // Resolve a sensible ts for the cap notification: prefer the first
         // failing job's per-job ts, then the workflow-level keys, then global.
         const firstJobName = (typeof allFailingJobs[0] === 'object' && allFailingJobs[0]?.name) ? allFailingJobs[0].name : String(allFailingJobs[0]);
@@ -182,7 +182,7 @@ async function run() {
         if (capTs && slackChannelId && slackBotToken) {
           try {
             const skipped = allFailingJobs.length - MAX_JOBS_PER_WORKFLOW;
-            const message = `⚠️ \`${workflowFileName}\` has ${allFailingJobs.length} failing jobs. Auto-triage capped to ${MAX_JOBS_PER_WORKFLOW} jobs (${skipped} skipped). This usually indicates a systemic issue or shared root cause.`;
+            const message = `⚠️ \`${workflowFileName}\` has ${allFailingJobs.length} failing jobs. Regression-handling capped to ${MAX_JOBS_PER_WORKFLOW} jobs (${skipped} skipped). This usually indicates a systemic issue or shared root cause.`;
             await sendSlackMessage(slackChannelId, slackBotToken, message, capTs);
           } catch (error) {
             core.warning(`Failed to send Slack cap notification: ${error.message}`);
@@ -191,13 +191,13 @@ async function run() {
       }
 
       if (maxDispatches !== null && dispatchCount >= maxDispatches) {
-        core.warning(`Reached max_dispatches=${maxDispatches}; skipping remaining auto-triage dispatches for this run.`);
+        core.warning(`Reached max_dispatches=${maxDispatches}; skipping remaining regression-analysis dispatches for this run.`);
         break;
       }
 
       for (const job of failingJobs) {
         if (maxDispatches !== null && dispatchCount >= maxDispatches) {
-          core.warning(`Reached max_dispatches=${maxDispatches}; skipping remaining auto-triage dispatches for this run.`);
+          core.warning(`Reached max_dispatches=${maxDispatches}; skipping remaining regression-analysis dispatches for this run.`);
           break;
         }
 
@@ -213,13 +213,13 @@ async function run() {
           core.info(`Using per-job ts=${jobTs} for ${workflow.name} / ${jobName}`);
         }
 
-        core.info(`Triggering auto-triage for workflow: ${workflowFileName}, job: ${jobName}`);
+        core.info(`Triggering regression-analysis for workflow: ${workflowFileName}, job: ${jobName}`);
 
         try {
           await octokit.rest.actions.createWorkflowDispatch({
             owner: github.context.repo.owner,
             repo: github.context.repo.repo,
-            workflow_id: 'auto-triage.yml',
+            workflow_id: 'regression-analysis.yml',
             ref: dispatchRef,
             inputs: {
               workflow_name: workflowFileName,
@@ -230,22 +230,22 @@ async function run() {
             }
           });
           dispatchCount += 1;
-          core.info(`✓ Successfully triggered auto-triage for ${workflowFileName} / ${jobName} (dispatch ${dispatchCount}${maxDispatches !== null ? `/${maxDispatches}` : ''})`);
+          core.info(`✓ Successfully triggered regression-analysis for ${workflowFileName} / ${jobName} (dispatch ${dispatchCount}${maxDispatches !== null ? `/${maxDispatches}` : ''})`);
 
           // Add a small delay to avoid rate limiting
           await new Promise(resolve => setTimeout(resolve, 1000));
 
         } catch (error) {
-          core.error(`Failed to trigger auto-triage for ${workflowFileName} / ${jobName}: ${error.message}`);
+          core.error(`Failed to trigger regression-analysis for ${workflowFileName} / ${jobName}: ${error.message}`);
           // Continue with other jobs even if one fails
         }
       }
     }
 
     if (maxDispatches !== null) {
-      core.info(`Total auto-triage dispatches this run: ${dispatchCount}/${maxDispatches}`);
+      core.info(`Total regression-analysis dispatches this run: ${dispatchCount}/${maxDispatches}`);
     } else {
-      core.info(`Total auto-triage dispatches this run: ${dispatchCount}`);
+      core.info(`Total regression-analysis dispatches this run: ${dispatchCount}`);
     }
 
   } catch (error) {
