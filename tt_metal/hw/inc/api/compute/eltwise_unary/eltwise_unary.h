@@ -32,9 +32,8 @@ ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb, uint32_t call_line = 
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
 #else
     UNPACK((llk_unpack_hw_configure(icb)));
-    UNPACK((
-        llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn, DST_ACCUM_MODE>(
-            false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
+    UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false, DST_ACCUM_MODE>(
+        false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
 
     PACK((llk_pack_hw_configure(ocb)));
     PACK((llk_pack_init(ocb)));
