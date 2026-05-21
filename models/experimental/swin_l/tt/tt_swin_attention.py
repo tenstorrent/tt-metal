@@ -98,7 +98,7 @@ class TtSwinAttention:
             )
         else:
             # rpb arrives as BF16 from parameters; convert once on host to BFP8_B.
-            rpb_t = ttnn.to_torch(rpb).to(torch.bfloat16)
+            rpb_t = _to_torch_replica(rpb).to(torch.bfloat16)
             self.combined_attn_bias = ttnn.from_torch(
                 rpb_t, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
             )
