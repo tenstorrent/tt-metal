@@ -653,7 +653,7 @@ class Generator(WarmupForwardMixin):
                         input_a=self.tt_logits_accumulated[fill_slot],
                         input_b=self.tt_logits_accumulated[slot],
                     )
-        
+
         prefill_log_probs = None
         # On-device sampling for prefill
         if do_device_sampling:
@@ -1212,7 +1212,6 @@ class Generator(WarmupForwardMixin):
             sm_bs = self.model.sampling.seed_manager.max_batch_size
             rank_remap = slot_remap[0:sm_bs]
             self.model.sampling.seed_manager.apply_slot_remap(rank_remap)
-        self.model.sampling.seed_manager.get_new_values(active_seed_slots)
         if reset_inputs and sampling_params is not None:
             # If we have new inputs, we need to set up the sampling module again
             sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
@@ -1222,6 +1221,9 @@ class Generator(WarmupForwardMixin):
             if reset_batch:
                 sampling_module.reset_prompt_tokens(prompt_tokens)
                 sampling_module.reset_output_state(output_tokens)
+        # Advance seeds after parameter copies so seeded sampling observes
+        # one ordered params/seed state for this token.
+        self.model.sampling.seed_manager.get_new_values(active_seed_slots)
 
         if tt_out_logits_saved is not None:
             decode_kwargs["tt_out_logits_saved"] = tt_out_logits_saved

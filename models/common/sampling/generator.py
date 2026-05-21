@@ -23,7 +23,15 @@ DEVICE_SEED_MAX = 1_000_000
 _UINT64_MASK = (1 << 64) - 1
 
 
-def _stable_device_seed(seed: int, counter: int) -> int:
+def _hash_request_seed_to_device_seed(seed: int, counter: int) -> int:
+    """Derive a stable per-token device seed from a request seed.
+
+    The device sampling op accepts bounded positive seeds, while vLLM
+    request seeds can be any integer and must be reproducible regardless
+    of batch slot. Hashing (request seed, token counter) gives each token
+    a deterministic but well-mixed device seed without relying on mutable
+    per-slot RNG state. The constants below are the SplitMix64 finalizer.
+    """
     value = (int(seed) & _UINT64_MASK) ^ (
         (int(counter) + 0x9E3779B97F4A7C15) & _UINT64_MASK
     )
@@ -357,7 +365,13 @@ class SamplingGenerator:
         penalties_on = self._penalties_active
         log_probs_on = getattr(self, "_log_probs_active", False)
         force_argmax = self.tt_sampling.force_argmax_sampling
-        use_internal_trace = enable_trace and self.enable_internal_trace
+        # Explicit request seeds update a persistent seed tensor every token;
+        # run them directly so trace replay cannot observe stale seed state.
+        use_internal_trace = (
+            enable_trace
+            and self.enable_internal_trace
+            and not self.seed_manager.has_active_request_seed()
+        )
 
         if not use_internal_trace:
             tt_out = self._run_sampling(
@@ -583,6 +597,9 @@ class SeedManager:
         # When True, the next get_new_values() must push MAX_UINT32 (SKIP) so
         # the device transitions from rand_tile_init to rand_tile advance.
         self._needs_skip = False
+        # True only for the most recent get_new_values() call when at least
+        # one active slot used an explicit request seed.
+        self._active_request_seed = False
         # Mesh mapper for sharding seeds across rows when sampling_dp > 1.
         if tt_sampling._sampling_dp > 1:
             self._seed_mapper = ttnn.ShardTensor2dMesh(
@@ -604,9 +621,12 @@ class SeedManager:
         request_seed = self.seeds[slot]
         if request_seed is None:
             return self._next_device_seed_from_rng(self.rngs[slot])
-        device_seed = _stable_device_seed(int(request_seed), self.seed_counters[slot])
+        device_seed = _hash_request_seed_to_device_seed(int(request_seed), self.seed_counters[slot])
         self.seed_counters[slot] += 1
         return device_seed
+
+    def has_active_request_seed(self) -> bool:
+        return self._active_request_seed
 
     def apply_slot_remap(self, remap):
         """Reindex RNG state after batch condense.
@@ -684,8 +704,10 @@ class SeedManager:
         else:
             empty_slots = [int(slot) for slot in empty_slots]
         empty_slot_set = set(empty_slots)
+        self._active_request_seed = any(self.seeds[i] is not None for i in empty_slot_set)
 
         if not self._seed_active:
+            self._active_request_seed = False
             if self._reseted:
                 new_seeds = [self._next_unseeded_device_seed() for _ in range(self.max_batch_size)]
                 self._needs_skip = True
@@ -707,4 +729,6 @@ class SeedManager:
             torch.tensor(new_seeds), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._seed_mapper
         )
         ttnn.copy_host_to_device_tensor(new_seed_tt, self.tt_sampling.seeds_tt_tensor)
+        if self._active_request_seed:
+            ttnn.synchronize_device(self.tt_sampling.mesh_device)
         self._reseted = False
