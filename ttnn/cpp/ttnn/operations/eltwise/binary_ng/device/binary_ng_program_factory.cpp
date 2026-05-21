@@ -773,7 +773,12 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     // relational ops and broadcasted arithmetic u16 ops (no postprocess) are
     // unaffected.
     if (use_llk_bcast && a_data_format == tt::DataFormat::UInt16 && b_data_format == tt::DataFormat::UInt16 &&
-        op_config.postprocess.has_value() &&
+        (op_config.postprocess.has_value() ||
+         (std::holds_alternative<OpConfig::SfpuBinaryOp>(op_config.binary_op) &&
+          (std::get<OpConfig::SfpuBinaryOp>(op_config.binary_op) == OpConfig::SfpuBinaryOp::LT ||
+           std::get<OpConfig::SfpuBinaryOp>(op_config.binary_op) == OpConfig::SfpuBinaryOp::GT ||
+           std::get<OpConfig::SfpuBinaryOp>(op_config.binary_op) == OpConfig::SfpuBinaryOp::LE ||
+           std::get<OpConfig::SfpuBinaryOp>(op_config.binary_op) == OpConfig::SfpuBinaryOp::GE))) &&
         (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_A ||
          operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B)) {
         use_llk_bcast = false;

@@ -9,8 +9,6 @@ import pytest
 import ttnn
 from models.common.utility_functions import is_blackhole
 
-pytestmark = pytest.mark.use_module_device
-
 
 @pytest.mark.parametrize(
     "a_shape, b_shape",
@@ -30,7 +28,7 @@ pytestmark = pytest.mark.use_module_device
 )
 @pytest.mark.parametrize(
     "ttnn_op",
-    [ttnn.ne],
+    [ttnn.ne, ttnn.eq, ttnn.lt, ttnn.gt, ttnn.le, ttnn.ge],
 )
 def test_binary_relational_uint8(a_shape, b_shape, low_a, high_a, low_b, high_b, ttnn_op, device):
     if is_blackhole() and os.environ.get("TT_METAL_SIMULATOR"):
