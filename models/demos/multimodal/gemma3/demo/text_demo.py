@@ -695,6 +695,33 @@ def _gemma3_text_demo_device_params():
             False,  # stress_test
             False,  # enable_trace
         ),
+        # Seqlen sweep: 1k-128k context lengths, one step per seqlen
+        (
+            [
+                "models/tt_transformers/demo/sample_prompts/input_data_long_1k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_2k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_4k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_8k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",
+            ],  # input_prompts: list of 8 files, one per sweep step
+            True,   # instruct mode
+            8,      # repeat_batches (one per seqlen step)
+            128 * 1024,  # max_seq_len
+            1,      # batch_size
+            32,     # max_generated_tokens (minimal decode to verify prefill works)
+            True,   # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params
+            True,   # stop_at_eos
+            True,   # ci_only
+            1,      # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,   # enable_trace
+        ),
     ],
     ids=[
         "batch-1",  # latency
@@ -717,6 +744,7 @@ def _gemma3_text_demo_device_params():
         "ci-b1-DP-32",  # CI DP 32 batch 1
         "ci-stress-1",  # CI Stress test batch-1
         "ci-token-matching",  # CI performs token accuracy matching with reference procomputed tokens
+        "seqlen-sweep",  # sweep 1k-128k context lengths
     ],
 )
 @pytest.mark.parametrize(
@@ -891,7 +919,10 @@ def test_demo_text(
 
     logger.info(f"Reading inputs...")
     profiler.start("loading_inputs")
-    if len(input_prompts) == 1:  # Manual input
+    is_seqlen_sweep = isinstance(input_prompts, list) and len(input_prompts) > 1 and isinstance(input_prompts[0], str)
+    if is_seqlen_sweep:  # seqlen-sweep: list of file paths, loaded per step in repeat_batch_prompts
+        seqlen_sweep_files = input_prompts
+    elif len(input_prompts) == 1:  # Manual input
         input_prompts = input_prompts * global_batch_size
     else:  # Inputs from file
         input_prompts = load_inputs(input_prompts, global_batch_size, input_prompts)
@@ -963,8 +994,13 @@ def test_demo_text(
         input_prompts[0] = token_acc.prepare_ref_tokens(tokenizer)
 
     repeat_batch_prompts = []
-    for i in range(repeat_batches):
-        repeat_batch_prompts.append([input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))])
+    if is_seqlen_sweep:
+        for i in range(repeat_batches):
+            step_prompts = load_inputs(seqlen_sweep_files[i], global_batch_size, instruct)
+            repeat_batch_prompts.append(step_prompts)
+    else:
+        for i in range(repeat_batches):
+            repeat_batch_prompts.append([input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))])
 
     num_tokens_generated_decode = []
 

@@ -30,6 +30,7 @@ import time
 import pytest
 import torch
 from loguru import logger
+import json
 
 import ttnn
 from models.demos.gemma4.tests.test_factory import PREFILL_BUCKETS, parametrize_mesh_with_fabric
@@ -1027,10 +1028,15 @@ def test_demo_single_layer(device, model_path):
 
 
 _DEMO_PREFILL_LENGTHS = [128, 4096]
+_SEQLEN_SWEEP_LENGTHS = (1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072)
 
 
 @parametrize_mesh_with_fabric()
-@pytest.mark.parametrize("prefill_len", _DEMO_PREFILL_LENGTHS, ids=[f"prefill_{b}" for b in _DEMO_PREFILL_LENGTHS])
+@pytest.mark.parametrize(
+    "prefill_len",
+    [*_DEMO_PREFILL_LENGTHS, pytest.param(_SEQLEN_SWEEP_LENGTHS, id="seqlen-sweep")],
+    ids=[f"prefill_{b}" for b in _DEMO_PREFILL_LENGTHS] + ["seqlen-sweep"],
+)
 def test_demo(mesh_device, model_path, prefill_len, request):
     """Full model demo — runs on any multi-device mesh, parametrized over a
     short and a long prefill bucket.
@@ -1049,6 +1055,31 @@ def test_demo(mesh_device, model_path, prefill_len, request):
         pytest -k "prefill_4096"      # 4k prefill only
     """
     max_prefill = request.config.getoption("--max-prefill")
+    if isinstance(prefill_len, tuple):
+        # Seqlen sweep: iterate over each length, load the matching prompt file, run generation
+        for pl in prefill_len:
+            sweep_max_new_tokens = 32
+            sweep_max_seq_len = max(pl + sweep_max_new_tokens, 4096)
+            sweep_page_block_size = 64
+            sweep_page_params = {
+                "page_block_size": sweep_page_block_size,
+                "page_max_num_blocks": sweep_max_seq_len // sweep_page_block_size,
+            }
+            prompt_file = f"{_TT_TRANSFORMERS_PROMPTS_DIR}/input_data_long_{pl // 1024}k.json"
+            with open(prompt_file) as f:
+                prompt = json.load(f)[0]["prompt"]
+            run_generation(
+                mesh_device=mesh_device,
+                model_path=model_path,
+                prompts=[prompt],
+                max_new_tokens=sweep_max_new_tokens,
+                max_seq_len=sweep_max_seq_len,
+                page_params=sweep_page_params,
+                enable_decode_trace=True,
+                target_prefill_len=pl,
+            )
+        return
+
     if prefill_len > max_prefill:
         pytest.skip(f"prefill_len={prefill_len} > --max-prefill={max_prefill}")
 
