@@ -7,6 +7,8 @@
 
 #include <algorithm>
 #include <climits>
+#include <cstring>
+#include <filesystem>
 #include <unordered_set>
 #include <limits>
 #include <functional>
@@ -25,6 +27,8 @@
 #include "tt_metal/impl/context/metal_context.hpp"
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
+#include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "experimental/fabric/routing_table_generator.hpp"
 #include <cmath>
@@ -456,6 +460,41 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
         print_logical_adjacency_map(adjacency_map_logical_multi_mesh);
         print_physical_adjacency_map(adjacency_map_physical_multi_mesh);
 
+        // Debug: compare PGD-based vs rank-binding-based physical graphs (diagnostic only; solve uses rank bindings).
+        if (mesh_graph_.get_all_mesh_ids().size() > 1 && mesh_graph_.get_mesh_graph_descriptor_path().has_value()) {
+            const auto& root_dir = tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir();
+            std::filesystem::path pgd_path = std::filesystem::path(root_dir) /
+                                             "tests/tt_metal/tt_fabric/physical_groupings/"
+                                             "bh_galaxy_physical_grouping_descriptor.textproto";
+            if (const char* pgd_env = std::getenv("TT_METAL_PHYSICAL_GROUPING_DESCRIPTOR_PATH");
+                pgd_env != nullptr && strlen(pgd_env) > 0) {
+                pgd_path = pgd_env;
+            }
+            if (std::filesystem::exists(pgd_path)) {
+                log_info(
+                    tt::LogFabric,
+                    "TopologyMapper: Comparing PGD vs rank-binding physical multi-mesh graphs (PGD: {})...",
+                    pgd_path.string());
+                ::tt::tt_fabric::MeshGraphDescriptor mgd(mesh_graph_.get_mesh_graph_descriptor_path().value());
+                ::tt::tt_fabric::PhysicalGroupingDescriptor pgd(pgd_path);
+                auto physical_graph_pgd =
+                    ::tt::tt_metal::experimental::tt_fabric::build_physical_multi_mesh_adjacency_graph(
+                        physical_system_descriptor_, pgd, mgd);
+                ::tt::tt_metal::experimental::tt_fabric::compare_physical_multi_mesh_graph_paths(
+                    "PGD(TopologyMapper)",
+                    physical_graph_pgd,
+                    "RankBinding(TopologyMapper)",
+                    adjacency_map_physical_multi_mesh);
+                // #region agent log
+                ::tt::tt_metal::experimental::tt_fabric::agent_debug_ndjson(
+                    "A",
+                    "topology_mapper.cpp:build_mapping",
+                    "solve_physical_graph_source",
+                    "{\"using_pgd_for_solve\":false,\"using_rank_bindings_for_solve\":true}");
+                // #endregion
+            }
+        }
+
         // Build TopologyMappingConfig for multi-mesh solver
         ::tt::tt_metal::experimental::tt_fabric::TopologyMappingConfig config;
 
@@ -676,6 +715,32 @@ std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> TopologyMapper:
             }
         }
     }
+
+    // #region agent log
+    {
+        size_t mesh0_asics = mapping.contains(MeshId{0}) ? mapping.at(MeshId{0}).size() : 0;
+        size_t mesh15_asics = mapping.contains(MeshId{15}) ? mapping.at(MeshId{15}).size() : 0;
+        std::string host_keys;
+        for (const auto& [mpi_rank, host] : mpi_rank_to_host) {
+            if (!host_keys.empty()) {
+                host_keys += ";";
+            }
+            host_keys += fmt::format("{}:{}", mpi_rank, host);
+        }
+        ::tt::tt_metal::experimental::tt_fabric::agent_debug_ndjson(
+            "B",
+            "topology_mapper.cpp:build_asic_id_to_mesh_rank_mapping",
+            "asic_partition_summary",
+            fmt::format(
+                "{{\"world_size\":{},\"mpi_rank_to_host_count\":{},\"mesh0_asic_count\":{},\"mesh15_asic_count\":{},"
+                "\"host_keys_sample\":\"{}\"}}",
+                world_size,
+                mpi_rank_to_host.size(),
+                mesh0_asics,
+                mesh15_asics,
+                host_keys));
+    }
+    // #endregion
 
     return mapping;
 }

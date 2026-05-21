@@ -463,6 +463,29 @@ TopologyMappingResult map_multi_mesh_to_physical(
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {},
     const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {});
 
+/**
+ * @brief Log mesh-level channel counts and per-mesh ASIC counts for a physical multi-mesh graph.
+ *
+ * Used to compare PGD-based vs rank-binding-based graph construction paths.
+ */
+void log_physical_multi_mesh_graph_debug_summary(const std::string& label, const PhysicalMultiMeshGraph& graph);
+
+/**
+ * @brief Compare two physical multi-mesh graphs (topology-invariant multisets + per-edge diffs).
+ *
+ * Logs whether mesh ASIC-count multisets and directed inter-mesh channel-count multisets match.
+ * When they differ, logs edges present in only one graph.
+ */
+void compare_physical_multi_mesh_graph_paths(
+    const std::string& label_a,
+    const PhysicalMultiMeshGraph& graph_a,
+    const std::string& label_b,
+    const PhysicalMultiMeshGraph& graph_b);
+
+// Debug-session NDJSON logging (session dfd2cb).
+void agent_debug_ndjson(
+    const char* hypothesis_id, const char* location, const char* message, const std::string& data_json);
+
 }  // namespace tt::tt_metal::experimental::tt_fabric
 
 // Formatter for LogicalExitNode to enable fmt::format debugging

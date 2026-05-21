@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <chrono>
 #include <exception>
+#include <fstream>
 #include <functional>
 #include <limits>
 #include <map>
@@ -16,6 +17,7 @@
 #include <string_view>
 #include <utility>
 #include <tuple>
+#include <set>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -1672,6 +1674,237 @@ bool handle_forbidden_constraint(
 }
 
 }  // anonymous namespace
+
+namespace {
+
+using DirectedMeshEdge = std::pair<uint32_t, uint32_t>;
+
+DirectedMeshEdge directed_mesh_edge_key(MeshId src, MeshId dst) { return {src.get(), dst.get()}; }
+
+// Count parallel channels per directed mesh-level edge (AdjacencyGraph stores one neighbor per channel).
+std::map<DirectedMeshEdge, size_t> collect_directed_mesh_edge_channel_counts(const PhysicalMultiMeshGraph& graph) {
+    std::map<DirectedMeshEdge, size_t> edge_channels;
+    for (const auto& src_mesh : graph.mesh_level_graph_.get_nodes()) {
+        std::map<MeshId, size_t> dst_counts;
+        for (const auto& dst_mesh : graph.mesh_level_graph_.get_neighbors(src_mesh)) {
+            dst_counts[dst_mesh]++;
+        }
+        for (const auto& [dst_mesh, count] : dst_counts) {
+            edge_channels[directed_mesh_edge_key(src_mesh, dst_mesh)] = count;
+        }
+    }
+    return edge_channels;
+}
+
+std::vector<size_t> collect_per_mesh_asic_counts(const PhysicalMultiMeshGraph& graph) {
+    std::vector<size_t> asic_counts;
+    asic_counts.reserve(graph.mesh_adjacency_graphs_.size());
+    for (const auto& [mesh_id, mesh_graph] : graph.mesh_adjacency_graphs_) {
+        (void)mesh_id;
+        asic_counts.push_back(mesh_graph.get_nodes().size());
+    }
+    std::sort(asic_counts.begin(), asic_counts.end());
+    return asic_counts;
+}
+
+std::vector<size_t> collect_directed_edge_channel_count_multiset(
+    const std::map<DirectedMeshEdge, size_t>& edge_channels) {
+    std::vector<size_t> counts;
+    counts.reserve(edge_channels.size());
+    for (const auto& [_, count] : edge_channels) {
+        counts.push_back(count);
+    }
+    std::sort(counts.begin(), counts.end());
+    return counts;
+}
+
+std::string format_size_t_list(const std::vector<size_t>& values) {
+    std::string out;
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (i > 0) {
+            out += ", ";
+        }
+        out += std::to_string(values[i]);
+    }
+    return out;
+}
+
+size_t directed_mesh_edge_channel_count(
+    const std::map<DirectedMeshEdge, size_t>& edge_channels, uint32_t src_mesh, uint32_t dst_mesh) {
+    const auto it = edge_channels.find(directed_mesh_edge_key(MeshId{src_mesh}, MeshId{dst_mesh}));
+    return it == edge_channels.end() ? 0 : it->second;
+}
+
+}  // namespace
+
+void log_physical_multi_mesh_graph_debug_summary(const std::string& label, const PhysicalMultiMeshGraph& graph) {
+    const auto edge_channels = collect_directed_mesh_edge_channel_counts(graph);
+    const auto asic_counts = collect_per_mesh_asic_counts(graph);
+
+    log_info(
+        tt::LogFabric,
+        "[PhysicalMultiMeshDebug] {} — {} mesh(es), {} directed inter-mesh edge(s)",
+        label,
+        graph.mesh_adjacency_graphs_.size(),
+        edge_channels.size());
+
+    for (const auto& [mesh_id, mesh_graph] : graph.mesh_adjacency_graphs_) {
+        log_info(
+            tt::LogFabric,
+            "[PhysicalMultiMeshDebug] {} — mesh {}: {} ASIC(s)",
+            label,
+            mesh_id.get(),
+            mesh_graph.get_nodes().size());
+    }
+
+    for (const auto& [edge, count] : edge_channels) {
+        log_info(
+            tt::LogFabric,
+            "[PhysicalMultiMeshDebug] {} — directed edge {} -> {}: {} channel(s)",
+            label,
+            edge.first,
+            edge.second,
+            count);
+    }
+
+    if (!asic_counts.empty()) {
+        log_info(
+            tt::LogFabric,
+            "[PhysicalMultiMeshDebug] {} — sorted per-mesh ASIC counts: [{}]",
+            label,
+            format_size_t_list(asic_counts));
+    }
+
+    const auto channel_multiset = collect_directed_edge_channel_count_multiset(edge_channels);
+    if (!channel_multiset.empty()) {
+        log_info(
+            tt::LogFabric,
+            "[PhysicalMultiMeshDebug] {} — sorted directed edge channel counts: [{}]",
+            label,
+            format_size_t_list(channel_multiset));
+    }
+}
+
+// #region agent log
+void agent_debug_ndjson(
+    const char* hypothesis_id, const char* location, const char* message, const std::string& data_json) {
+    std::ofstream out("/data/rsong/tt-metal/.cursor/debug-dfd2cb.log", std::ios::app);
+    if (!out) {
+        return;
+    }
+    const auto ts =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+            .count();
+    out << "{\"sessionId\":\"dfd2cb\",\"hypothesisId\":\"" << hypothesis_id << "\",\"location\":\"" << location
+        << "\",\"message\":\"" << message << "\",\"data\":" << data_json << ",\"timestamp\":" << ts << "}\n";
+}
+// #endregion
+
+void compare_physical_multi_mesh_graph_paths(
+    const std::string& label_a,
+    const PhysicalMultiMeshGraph& graph_a,
+    const std::string& label_b,
+    const PhysicalMultiMeshGraph& graph_b) {
+    log_info(
+        tt::LogFabric, "[PhysicalMultiMeshDebug] Comparing physical multi-mesh graphs: '{}' vs '{}'", label_a, label_b);
+
+    log_physical_multi_mesh_graph_debug_summary(label_a, graph_a);
+    log_physical_multi_mesh_graph_debug_summary(label_b, graph_b);
+
+    const auto edges_a = collect_directed_mesh_edge_channel_counts(graph_a);
+    const auto edges_b = collect_directed_mesh_edge_channel_counts(graph_b);
+    const auto asic_a = collect_per_mesh_asic_counts(graph_a);
+    const auto asic_b = collect_per_mesh_asic_counts(graph_b);
+    const auto channels_a = collect_directed_edge_channel_count_multiset(edges_a);
+    const auto channels_b = collect_directed_edge_channel_count_multiset(edges_b);
+
+    const bool asic_multiset_match = (asic_a == asic_b);
+    const bool channel_multiset_match = (channels_a == channels_b);
+
+    // #region agent log
+    agent_debug_ndjson(
+        "A",
+        "topology_mapper_utils.cpp:compare_physical_multi_mesh_graph_paths",
+        "ring_edge_channel_compare",
+        fmt::format(
+            "{{\"label_a\":\"{}\",\"label_b\":\"{}\",\"edge_0_15_a\":{},\"edge_0_15_b\":{},\"edge_15_0_a\":{},"
+            "\"edge_15_0_b\":{},\"edge_0_1_a\":{},\"edge_0_1_b\":{},\"asic_multiset_match\":{},"
+            "\"channel_multiset_match\":{}}}",
+            label_a,
+            label_b,
+            directed_mesh_edge_channel_count(edges_a, 0, 15),
+            directed_mesh_edge_channel_count(edges_b, 0, 15),
+            directed_mesh_edge_channel_count(edges_a, 15, 0),
+            directed_mesh_edge_channel_count(edges_b, 15, 0),
+            directed_mesh_edge_channel_count(edges_a, 0, 1),
+            directed_mesh_edge_channel_count(edges_b, 0, 1),
+            asic_multiset_match,
+            channel_multiset_match));
+    // #endregion
+
+    log_info(
+        tt::LogFabric,
+        "[PhysicalMultiMeshDebug] Topology-invariant check — per-mesh ASIC count multiset match: {}, directed "
+        "inter-mesh channel count multiset match: {}",
+        asic_multiset_match ? "YES" : "NO",
+        channel_multiset_match ? "YES" : "NO");
+
+    if (!asic_multiset_match) {
+        log_warning(
+            tt::LogFabric,
+            "[PhysicalMultiMeshDebug] Per-mesh ASIC counts differ ({} vs {} meshes). PGD and rank-binding paths "
+            "partition ASICs differently.",
+            asic_a.size(),
+            asic_b.size());
+    }
+
+    if (!channel_multiset_match) {
+        log_warning(
+            tt::LogFabric,
+            "[PhysicalMultiMeshDebug] Directed inter-mesh channel count multisets differ — STRICT validation can "
+            "pass on one path and fail on the other even with the same PSD.");
+    }
+
+    // Log directed edges whose channel count differs when both graphs use the same MeshId labels.
+    std::set<DirectedMeshEdge> all_edges;
+    for (const auto& [edge, _] : edges_a) {
+        all_edges.insert(edge);
+    }
+    for (const auto& [edge, _] : edges_b) {
+        all_edges.insert(edge);
+    }
+
+    size_t edge_mismatches = 0;
+    for (const auto& edge : all_edges) {
+        const size_t count_a = edges_a.contains(edge) ? edges_a.at(edge) : 0;
+        const size_t count_b = edges_b.contains(edge) ? edges_b.at(edge) : 0;
+        if (count_a == count_b) {
+            continue;
+        }
+        edge_mismatches++;
+        log_warning(
+            tt::LogFabric,
+            "[PhysicalMultiMeshDebug] Edge {} -> {}: '{}' has {} channel(s), '{}' has {} channel(s)",
+            edge.first,
+            edge.second,
+            label_a,
+            count_a,
+            label_b,
+            count_b);
+    }
+
+    if (edge_mismatches == 0 && asic_multiset_match && channel_multiset_match) {
+        log_info(
+            tt::LogFabric,
+            "[PhysicalMultiMeshDebug] Graphs match under MeshId labels (same directed edge channel counts and ASIC "
+            "partition sizes).");
+    } else if (edge_mismatches > 0) {
+        log_warning(
+            tt::LogFabric,
+            "[PhysicalMultiMeshDebug] {} directed edge(s) differ under the same MeshId labels.",
+            edge_mismatches);
+    }
+}
 
 TopologyMappingResult map_multi_mesh_to_physical(
     const LogicalMultiMeshGraph& adjacency_map_logical,

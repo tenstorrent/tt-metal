@@ -1,0 +1,33 @@
+# Single BH Galaxy, 4 pipeline stages in a ring (mesh_id 0..3).
+#
+# Galaxy device layout (4x8):
+#   0  1  2  3  | 16 17 18 19
+#   4  5  6  7  | 20 21 22 23
+#   8  9  10 11 | 24 25 26 27
+#   12 13 14 15 | 28 29 30 31
+#
+# Each rank owns eight UMD chip IDs (one 4x2 mesh): two 2x2 quads on left and right trays.
+
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: 0,1,4,5,24,25,28,29
+  - rank: 1
+    mesh_id: 1
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: 2,3,6,7,26,27,30,31
+  - rank: 2
+    mesh_id: 2
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: 10,11,14,15,18,19,22,23
+  - rank: 3
+    mesh_id: 3
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: 8,9,12,13,16,17,20,21
+
+mesh_graph_desc_path: models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_single_galaxy_4stage.textproto
