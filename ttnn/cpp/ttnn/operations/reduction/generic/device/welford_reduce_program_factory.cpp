@@ -142,6 +142,8 @@ ttnn::device_operation::ProgramArtifacts WelfordReduceDeviceOperation::WelfordRe
     if (reduce_w) {
         // var scratch — Welford W needs it for the transpose between scaled and raw form.
         // It stores temporary data from the DST register, so data format is the same as DST.
+        // Intra-tensix (self-loop): the compute kernel produces and consumes;
+        // implicit sync disabled per host validator rule.
         tt::DataFormat scratch_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
         uint32_t scratch_single_tile_size = tt::tile_size(scratch_cb_data_format);
         dataflow_buffers.push_back(m2::DataflowBufferSpec{
@@ -150,6 +152,7 @@ ttnn::device_operation::ProgramArtifacts WelfordReduceDeviceOperation::WelfordRe
             .num_entries = 1,
             .data_format_metadata = scratch_cb_data_format,
             .tile_format_metadata = tensor_arg.tensor_spec().tile(),
+            .disable_implicit_sync = true,
         });
 
         // cb_scaled — used only when do_scale, but per the patterns catalog
@@ -157,12 +160,14 @@ ttnn::device_operation::ProgramArtifacts WelfordReduceDeviceOperation::WelfordRe
         // on the host. The kernel declares the wrapper at top level and gates
         // only the uses with `if constexpr (do_scale)`. This pays ~1 input-tile
         // per core in L1 when do_scale=false (the documented temporary cost).
+        // Intra-tensix self-loop — implicit sync disabled.
         dataflow_buffers.push_back(m2::DataflowBufferSpec{
             .unique_id = WELFORD_SCALED_DFB,
             .entry_size = input_single_tile_size,
             .num_entries = 1,
             .data_format_metadata = input_cb_data_format,
             .tile_format_metadata = tensor_arg.tensor_spec().tile(),
+            .disable_implicit_sync = true,
         });
     }
 
@@ -343,6 +348,29 @@ ttnn::device_operation::ProgramArtifacts WelfordReduceDeviceOperation::WelfordRe
         };
     }
 
+    // Compute-side ComputeConfiguration entries listing FP32 DFBs the kernel
+    // consumes. With fp32_dest_acc_en=true, every CONSUMER binding of an FP32-
+    // format DFB on a compute kernel must declare an explicit unpack_to_dest_mode.
+    // The legacy reduce kernels use FPU operations (transpose_wh_tile,
+    // mul_tiles_bcast_scalar, copy_tile, sqrt) on these DFBs, so they unpack via
+    // SrcA/B (UnpackToDestMode::Default), accepting the ~19-bit precision floor.
+    std::vector<m2::ComputeConfiguration::UnpackToDestModeEntry> unpack_to_dest_mode;
+    if (fp32_dest_acc_en) {
+        if (input_cb_data_format == tt::DataFormat::Float32) {
+            unpack_to_dest_mode.emplace_back(IN_DFB, tt::tt_metal::UnpackToDestMode::Default);
+        }
+        if (reduce_w) {
+            // var_dfb is Float32 when fp32_dest_acc_en=true. compute reads it via
+            // transpose_wh_tile (FPU operation) so SrcA/B is the right path.
+            unpack_to_dest_mode.emplace_back(WELFORD_VAR_DFB, tt::tt_metal::UnpackToDestMode::Default);
+        }
+        if (reduce_hw) {
+            // combined_dfb is always Float32 (regardless of fp32_dest_acc_en); the
+            // sqrt_tile + copy_tile sequence in Phase 2 reads it via FPU.
+            unpack_to_dest_mode.emplace_back(WELFORD_COMBINED_DFB, tt::tt_metal::UnpackToDestMode::Default);
+        }
+    }
+
     auto make_compute = [&](const char* unique_id) {
         m2::KernelSpec compute;
         compute.unique_id = unique_id;
@@ -352,6 +380,7 @@ ttnn::device_operation::ProgramArtifacts WelfordReduceDeviceOperation::WelfordRe
         compute.config_spec = m2::ComputeConfiguration{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
         };
         compute.runtime_arguments_schema.named_runtime_args = {"work_units_per_core"};
         compute.dfb_bindings = {

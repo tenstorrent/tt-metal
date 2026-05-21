@@ -166,6 +166,13 @@ ttsl::hash::hash_t ReduceDeviceOperation::compute_program_hash(
         program_factory.index(),
         tensor_args.dtype(),
         tensor_args.memory_config(),
+        // Both logical_shape and padded_shape are part of the input tensor's TensorSpec,
+        // which Metal 2.0 binds declaratively (see `tensor_parameters` in each program
+        // factory). TensorSpec equality is enforced at runtime by the binding machinery,
+        // so the cache key must include any field that the spec compares — including
+        // logical_shape, which the legacy hash omitted because the legacy path read the
+        // tensor address as a runtime arg and didn't care about full spec equality.
+        tensor_args.logical_shape(),
         tensor_args.padded_shape(),
         tensor_args.tensor_spec().tile());
 }

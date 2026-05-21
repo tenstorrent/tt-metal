@@ -149,12 +149,16 @@ ttnn::device_operation::ProgramArtifacts ReduceDeviceOperation::ReduceSingleCore
         },
     };
     if (operation_attributes.negate) {
+        // Self-loop (intra-tensix) DFBs: compute kernel both produces and
+        // consumes acc_dfb / ineg_dfb. The host validator requires implicit-sync
+        // disabled for intra-tensix DFBs.
         dataflow_buffers.push_back(m2::DataflowBufferSpec{
             .unique_id = ACC_DFB,
             .entry_size = dst_single_tile_size,
             .num_entries = 1,
             .data_format_metadata = dst_cb_data_format,
             .tile_format_metadata = output.tensor_spec().tile(),
+            .disable_implicit_sync = true,
         });
         dataflow_buffers.push_back(m2::DataflowBufferSpec{
             .unique_id = INEG_DFB,
@@ -162,6 +166,7 @@ ttnn::device_operation::ProgramArtifacts ReduceDeviceOperation::ReduceSingleCore
             .num_entries = 1,
             .data_format_metadata = dst_cb_data_format,
             .tile_format_metadata = output.tensor_spec().tile(),
+            .disable_implicit_sync = true,
         });
     }
 
@@ -235,6 +240,20 @@ ttnn::device_operation::ProgramArtifacts ReduceDeviceOperation::ReduceSingleCore
             ? "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_hw_neg.cpp"
             : "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce.cpp";
 
+    // unpack_to_dest_mode entries for FP32 DFBs consumed by compute (required
+    // when fp32_dest_acc_en=true).
+    std::vector<m2::ComputeConfiguration::UnpackToDestModeEntry> unpack_to_dest_mode;
+    if (fp32_dest_acc_en && src0_cb_data_format == tt::DataFormat::Float32) {
+        unpack_to_dest_mode.emplace_back(IN_DFB, tt::tt_metal::UnpackToDestMode::Default);
+    }
+    if (fp32_dest_acc_en && scaler_cb_data_format == tt::DataFormat::Float32) {
+        unpack_to_dest_mode.emplace_back(SCALER_DFB, tt::tt_metal::UnpackToDestMode::Default);
+    }
+    if (fp32_dest_acc_en && operation_attributes.negate && dst_cb_data_format == tt::DataFormat::Float32) {
+        unpack_to_dest_mode.emplace_back(ACC_DFB, tt::tt_metal::UnpackToDestMode::Default);
+        unpack_to_dest_mode.emplace_back(INEG_DFB, tt::tt_metal::UnpackToDestMode::Default);
+    }
+
     m2::KernelSpec compute;
     compute.unique_id = HW_COMPUTE_KERNEL;
     compute.source = m2::KernelSpec::SourceFilePath{compute_kernel_path};
@@ -248,6 +267,7 @@ ttnn::device_operation::ProgramArtifacts ReduceDeviceOperation::ReduceSingleCore
     compute.config_spec = m2::ComputeConfiguration{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
+        .unpack_to_dest_mode = unpack_to_dest_mode,
     };
     compute.dfb_bindings = {
         m2::KernelSpec::DFBBinding{

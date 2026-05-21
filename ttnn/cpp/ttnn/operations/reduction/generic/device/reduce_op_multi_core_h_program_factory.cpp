@@ -238,6 +238,7 @@ ttnn::device_operation::ProgramArtifacts ReduceDeviceOperation::ReduceMultiCoreH
             .num_entries = per_cb_num_entries,
             .data_format_metadata = dst_cb_data_format,
             .tile_format_metadata = output.tensor_spec().tile(),
+            .disable_implicit_sync = true,
         });
         dataflow_buffers.push_back(m2::DataflowBufferSpec{
             .unique_id = INEG_DFB,
@@ -245,6 +246,7 @@ ttnn::device_operation::ProgramArtifacts ReduceDeviceOperation::ReduceMultiCoreH
             .num_entries = per_cb_num_entries,
             .data_format_metadata = dst_cb_data_format,
             .tile_format_metadata = output.tensor_spec().tile(),
+            .disable_implicit_sync = true,
         });
     }
 
@@ -373,6 +375,20 @@ ttnn::device_operation::ProgramArtifacts ReduceDeviceOperation::ReduceMultiCoreH
     // For width-sharding, num_cols_per_core_group_1 == NC * shard_Wt. Expose (shard_Wt, NC)
     // to the compute kernel so its (nc, wt_chunk, ht, wt_in_chunk) iteration matches the
     // reader's per-batch tile layout.
+    // unpack_to_dest_mode entries for FP32 DFBs consumed by compute (required
+    // when fp32_dest_acc_en=true).
+    std::vector<m2::ComputeConfiguration::UnpackToDestModeEntry> unpack_to_dest_mode;
+    if (fp32_dest_acc_en && src0_cb_data_format == tt::DataFormat::Float32) {
+        unpack_to_dest_mode.emplace_back(IN_DFB, tt::tt_metal::UnpackToDestMode::Default);
+    }
+    if (fp32_dest_acc_en && scaler_cb_data_format == tt::DataFormat::Float32) {
+        unpack_to_dest_mode.emplace_back(SCALER_DFB, tt::tt_metal::UnpackToDestMode::Default);
+    }
+    if (fp32_dest_acc_en && operation_attributes.negate && dst_cb_data_format == tt::DataFormat::Float32) {
+        unpack_to_dest_mode.emplace_back(ACC_DFB, tt::tt_metal::UnpackToDestMode::Default);
+        unpack_to_dest_mode.emplace_back(INEG_DFB, tt::tt_metal::UnpackToDestMode::Default);
+    }
+
     auto make_compute = [&](const char* unique_id, uint32_t cols_per_group) {
         const uint32_t compute_Wt = use_width_sharding ? (cols_per_group / NC) : cols_per_group;
         const uint32_t compute_NC = use_width_sharding ? NC : 1;
@@ -391,6 +407,7 @@ ttnn::device_operation::ProgramArtifacts ReduceDeviceOperation::ReduceMultiCoreH
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .dst_full_sync_en = dst_full_sync_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
         };
         compute.dfb_bindings = {
             m2::KernelSpec::DFBBinding{
