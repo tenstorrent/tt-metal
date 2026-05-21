@@ -33,7 +33,7 @@ enum class Side : uint8_t { SrcA, SrcB, Pack };
 namespace detail {
 
 // =============================================================================
-// A0. 2D index-mode helpers (CbIndexMode → tile index / upfront window)
+// A0. 2D index-mode helpers (OperandKind → tile index / upfront window)
 //
 // Pure compile-time-elided helpers. `idx_2d` and `window_2d` are inlined by
 // every CB-reader element's `exec_2d` / `wait_upfront_2d`. RISC-V cost: zero
@@ -45,8 +45,9 @@ namespace detail {
 //   BlockIter | i_flat (= ht*Wt+wt)   | Ht * Wt
 //   RowBcast  | wt                    | Wt
 //   ColBcast  | ht                    | Ht
-//   Pinned    | runtime_k             | 1
-//   Absolute  | runtime_k             | Ht * Wt
+//
+// Runtime offsets are layered on top by `TileBase` (caller-side add to the
+// idx_2d result, and an inflation of the wait/pop count via `tile_base_value`).
 //
 // `is_bcast_mode_v<M>` is the predicate driving the (Policy × Mode) compatibility
 // static_asserts on every CB-reader element (Row/Col modes reject streaming
@@ -58,50 +59,28 @@ inline constexpr bool is_bcast_mode_v =
     (M == CbIndexMode::RowBcast) || (M == CbIndexMode::ColBcast);
 
 template <OperandKind M>
-ALWI constexpr uint32_t idx_2d(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t runtime_k) noexcept {
-    if constexpr (M == CbIndexMode::FirstTile) { (void)i_flat; (void)ht; (void)wt; (void)runtime_k; return 0; }
-    else if constexpr (M == CbIndexMode::BlockIter) { (void)ht; (void)wt; (void)runtime_k; return i_flat; }
-    else if constexpr (M == CbIndexMode::RowBcast)  { (void)i_flat; (void)ht; (void)runtime_k; return wt; }
-    else if constexpr (M == CbIndexMode::ColBcast)  { (void)i_flat; (void)wt; (void)runtime_k; return ht; }
-    else if constexpr (M == CbIndexMode::BlockIterOffset) {
-        (void)ht; (void)wt; return runtime_k + i_flat;
-    }
-    else                                             { (void)i_flat; (void)ht; (void)wt; return runtime_k; }
+ALWI constexpr uint32_t idx_2d(uint32_t i_flat, uint32_t ht, uint32_t wt) noexcept {
+    if constexpr (M == CbIndexMode::FirstTile) { (void)i_flat; (void)ht; (void)wt; return 0; }
+    else if constexpr (M == CbIndexMode::BlockIter) { (void)ht; (void)wt; return i_flat; }
+    else if constexpr (M == CbIndexMode::RowBcast)  { (void)i_flat; (void)ht; return wt; }
+    else                                            { (void)i_flat; (void)wt; return ht; }  // ColBcast
 }
 
 template <OperandKind M>
 ALWI constexpr uint32_t window_2d(uint32_t Ht, uint32_t Wt) noexcept {
-    if constexpr (M == CbIndexMode::BlockIter || M == CbIndexMode::Absolute) return Ht * Wt;
+    if constexpr (M == CbIndexMode::BlockIter) return Ht * Wt;
     else if constexpr (M == CbIndexMode::RowBcast) { (void)Ht; return Wt; }
     else if constexpr (M == CbIndexMode::ColBcast) { (void)Wt; return Ht; }
-    // BlockIterOffset: chain doesn't wait/pop (caller-managed). window_2d is only
-    // consumed by wait_upfront_2d / pop_upfront_end_2d, which only fire for
-    // WaitUpfrontPopAtEnd / CumulativeWaitPopAtEnd — those are rejected by the
-    // valid_policy_mode_2d_v static_assert for this mode, so the returned value
-    // is dead-code in practice. Return 0 to make accidental misuse harmless.
-    else if constexpr (M == CbIndexMode::BlockIterOffset) { (void)Ht; (void)Wt; return 0u; }
-    else                                            { (void)Ht; (void)Wt; return 1u; }
+    else                                            { (void)Ht; (void)Wt; return 1u; }  // FirstTile
 }
 
 // Allowed (Policy × Mode) combinations in 2D. RowBcast/ColBcast cannot stream
 // per-tile — the producer must stage the full row/col upfront. Matches the
 // `binary_op_helpers` static_assert (ROW/SCALAR require WaitUpfront* / NoWait*).
-//
-// BlockIterOffset also requires non-streaming: it pulls `runtime_k + i` which can
-// reference an arbitrary tile in the caller-staged window, so streaming wait/pop
-// would under-wait or pop the wrong slot. Caller-managed lifecycle (NoWaitNoPop)
-// is the canonical pairing.
-//
-// WaitAndPopPerBlock rejects RowBcast/ColBcast (window > BlockSize — producer
-// can't have only one chunk staged) and BlockIterOffset (caller-managed window
-// shape contradicts chain-owned chunked pop).
 template <InputLifecycle P, OperandKind M>
 inline constexpr bool valid_policy_mode_2d_v =
     !(is_bcast_mode_v<M> &&
-      (P == CopyTilePolicy::WaitAndPop || P == CopyTilePolicy::WaitAndPopPerBlock)) &&
-    !(M == CbIndexMode::BlockIterOffset &&
-      (P == CopyTilePolicy::WaitAndPop || P == CopyTilePolicy::WaitNoPop ||
-       P == CopyTilePolicy::NoWaitPop || P == CopyTilePolicy::WaitAndPopPerBlock));
+      (P == CopyTilePolicy::WaitAndPop || P == CopyTilePolicy::WaitAndPopPerBlock));
 
 // =============================================================================
 // A. Chain typed-list machinery
@@ -228,30 +207,22 @@ template <uint32_t Cb,
           Dst DstSlot,
           InputLifecycle Policy,
           OperandKind IndexMode,
-          CopyTileReconfig Reconfig>
+          CopyTileReconfig Reconfig,
+          class TileBaseT>
 struct CopyTile : CopyTileTag {
     // ---- compile-time validation ----
-    // BlockIter / Absolute legal under WaitUpfrontPopAtEnd, CumulativeWaitPopAtEnd, NoWaitNoPop.
-    // Single-tile-window policies (WaitAndPop, WaitNoPop, NoWaitPop) limit index to FirstTile
-    // (or Pinned k where k == 0 — runtime-asserted, not statically expressible).
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
                   "CopyTile: DEST slot exceeds DEST_AUTO_LIMIT");
-    static_assert(!(Policy == CopyTilePolicy::WaitAndPop  && IndexMode == CbIndexMode::BlockIter),
-                  "CopyTile: BlockIter index requires Upfront / Cumulative / NoWaitNoPop policy");
-    static_assert(!(Policy == CopyTilePolicy::WaitAndPop  && IndexMode == CbIndexMode::Absolute),
-                  "CopyTile: Absolute index requires Upfront / Cumulative / NoWaitNoPop policy");
-    static_assert(!(Policy == CopyTilePolicy::WaitNoPop   && IndexMode == CbIndexMode::BlockIter),
-                  "CopyTile: BlockIter index requires Upfront / Cumulative / NoWaitNoPop policy");
-    static_assert(!(Policy == CopyTilePolicy::WaitNoPop   && IndexMode == CbIndexMode::Absolute),
-                  "CopyTile: Absolute index requires Upfront / Cumulative / NoWaitNoPop policy");
-    static_assert(!(Policy == CopyTilePolicy::NoWaitPop   && IndexMode == CbIndexMode::BlockIter),
-                  "CopyTile: BlockIter index requires Upfront / Cumulative / NoWaitNoPop policy");
-    static_assert(!(Policy == CopyTilePolicy::NoWaitPop   && IndexMode == CbIndexMode::Absolute),
-                  "CopyTile: Absolute index requires Upfront / Cumulative / NoWaitNoPop policy");
     // 2D: RowBcast / ColBcast require non-streaming policy (matches binary_op_helpers ROW/SCALAR rule).
     static_assert(detail::valid_policy_mode_2d_v<Policy, IndexMode>,
                   "CopyTile: RowBcast / ColBcast index require non-streaming policy "
                   "(WaitUpfrontPopAtEnd, WaitNoPop, NoWaitPop, NoWaitNoPop, CumulativeWaitPopAtEnd)");
+    // TileBase != None requires Bulk-family / CallerManaged lifecycle — iter-dependent
+    // counts (Streaming/Chunked/Cumulative/Held{Stream,Cumulative}/NoWaitPop) can't
+    // compose with runtime base offsets. Caller must size CB to base+window.
+    static_assert(is_tile_base_none_v<TileBaseT> || is_legal_input_lifecycle_with_base(Policy),
+                  "CopyTile: TileBase != None requires Bulk-family or CallerManaged lifecycle "
+                  "(Bulk / HeldBulk / DeferredPop / BulkDrain / CallerManaged)");
 
     static constexpr uint32_t       cb              = Cb;
     static constexpr uint32_t       cb_a_id()       { return Cb; }
@@ -271,8 +242,10 @@ struct CopyTile : CopyTileTag {
     static constexpr uint32_t       reconfig_srcb_cb = NO_PREV_CB;
     static constexpr uint32_t       reconfig_pack_cb = NO_PREV_CB;
 
+    [[no_unique_address]] TileBaseT tile_base{};
+
     constexpr CopyTile() noexcept = default;
-    constexpr explicit CopyTile(uint32_t cb_tile_idx) noexcept : cb_tile_idx_(cb_tile_idx) {}
+    constexpr explicit CopyTile(TileBaseT base) noexcept : tile_base(base) {}
 
     // ---- chain pipeline hooks ----
     static ALWI void init() {
@@ -310,39 +283,39 @@ struct CopyTile : CopyTileTag {
     ALWI void wait_upfront(uint32_t n) const {
         if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
                       Policy == CopyTilePolicy::WaitUpfrontNoPop) {
-            cb_wait_front(Cb, n);
+            cb_wait_front(Cb, n + tile_base_value(tile_base));
         }
     }
 
     ALWI void exec(uint32_t i, uint32_t slot_offset) const {
+        const uint32_t base = tile_base_value(tile_base);
         const uint32_t in_idx = [&]() -> uint32_t {
-            if constexpr (IndexMode == CbIndexMode::FirstTile) return 0;
-            else if constexpr (IndexMode == CbIndexMode::BlockIter) return i;
-            else if constexpr (IndexMode == CbIndexMode::BlockIterOffset) return cb_tile_idx_ + i;
-            else return cb_tile_idx_;  // Pinned / Absolute
+            if constexpr (IndexMode == CbIndexMode::FirstTile) return base;
+            else if constexpr (IndexMode == CbIndexMode::BlockIter) return base + i;
+            else return base;  // Row/Col degenerate in 1D (no ht/wt context).
         }();
         copy_tile(Cb, in_idx, to_u32(DstSlot) + slot_offset);
     }
 
-    // 2D variants — Ht/Wt-aware. Identical to 1D for FirstTile/BlockIter/Pinned/Absolute
-    // (just routes through `idx_2d` and `window_2d`), and adds RowBcast/ColBcast support.
-    // Streaming policies handled by the same `wait_per_tile` / `pop_per_tile` as 1D.
+    // 2D variants — Ht/Wt-aware. Routes through `idx_2d` and `window_2d`; TileBase
+    // adds the runtime offset on top. Streaming policies handled by the same
+    // `wait_per_tile` / `pop_per_tile` as 1D.
     ALWI void wait_upfront_2d(uint32_t Ht, uint32_t Wt) const {
         if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
                       Policy == CopyTilePolicy::WaitUpfrontNoPop) {
-            cb_wait_front(Cb, detail::window_2d<IndexMode>(Ht, Wt));
+            cb_wait_front(Cb, detail::window_2d<IndexMode>(Ht, Wt) + tile_base_value(tile_base));
         }
     }
 
     ALWI void exec_2d(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t slot_offset) const {
-        const uint32_t in_idx = detail::idx_2d<IndexMode>(i_flat, ht, wt, cb_tile_idx_);
+        const uint32_t in_idx = tile_base_value(tile_base) + detail::idx_2d<IndexMode>(i_flat, ht, wt);
         copy_tile(Cb, in_idx, to_u32(DstSlot) + slot_offset);
     }
 
     ALWI void pop_upfront_end_2d(uint32_t Ht, uint32_t Wt) const {
         if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
                       Policy == CopyTilePolicy::CumulativeWaitPopAtEnd) {
-            cb_pop_front(Cb, detail::window_2d<IndexMode>(Ht, Wt));
+            cb_pop_front(Cb, detail::window_2d<IndexMode>(Ht, Wt) + tile_base_value(tile_base));
         }
     }
 
@@ -364,14 +337,9 @@ struct CopyTile : CopyTileTag {
     ALWI void pop_upfront_end(uint32_t n) const {
         if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
                       Policy == CopyTilePolicy::CumulativeWaitPopAtEnd) {
-            cb_pop_front(Cb, n);
+            cb_pop_front(Cb, n + tile_base_value(tile_base));
         }
     }
-
-private:
-    /// Pipeline-driven tile index — set by user via ctor only when IndexMode == Pinned / Absolute.
-    /// Not exposed as a public field; pipeline reads through exec().
-    uint32_t cb_tile_idx_ = 0;
 };
 
 // =============================================================================
@@ -382,26 +350,24 @@ template <uint32_t Cb,
           Dst DstSlot,
           OutputLifecycle Policy,
           OperandKind IndexMode,
-          PackTileReconfig Reconfig>
+          PackTileReconfig Reconfig,
+          class TileBaseT>
 struct PackTile : PackTileTag {
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
                   "PackTile: DEST slot exceeds DEST_AUTO_LIMIT");
     static_assert(!(Policy == PackTilePolicy::PerTileReserveAndPush && IndexMode == PackTileIndexMode::BlockIter),
                   "PackTile: BlockIter index requires UpfrontReservePushAtEnd or NoReserve* policy");
-    static_assert(!(Policy == PackTilePolicy::PerTileReserveAndPush && IndexMode == PackTileIndexMode::Absolute),
-                  "PackTile: Absolute index requires UpfrontReservePushAtEnd or NoReserve* policy");
     static_assert(!(Policy == PackTilePolicy::PerTileReserveNoPush  && IndexMode == PackTileIndexMode::BlockIter),
                   "PackTile: BlockIter index requires UpfrontReservePushAtEnd or NoReserve* policy");
     static_assert(!(Policy == PackTilePolicy::NoReservePushAtEnd    && IndexMode == PackTileIndexMode::BlockIter),
                   "PackTile: BlockIter requires Upfront* / NoReserveNoPush");
-    // BlockIterOffset packs to absolute slots `output_tile_idx_ + i`. Reserve+push
-    // bookkeeping for a strided window can only be expressed by the caller; the
-    // chain's per-tile / upfront reserve+push policies would push the wrong count.
-    // Restrict to NoReserveNoPush — caller owns the whole lifecycle.
-    static_assert(!(IndexMode == PackTileIndexMode::BlockIterOffset &&
-                    Policy != PackTilePolicy::NoReserveNoPush),
-                  "PackTile: BlockIterOffset index requires NoReserveNoPush policy "
-                  "(caller owns cb_reserve_back / cb_push_back).");
+    // TileBase != None on pack side requires caller-managed-style lifecycle on the
+    // output CB (caller pre-reserved a window large enough for base + kind window).
+    // Streaming / Chunked reserve+push counts can't be inflated by a runtime base
+    // without per-iter bookkeeping the chain doesn't own.
+    static_assert(is_tile_base_none_v<TileBaseT> || is_legal_output_lifecycle_with_base(Policy),
+                  "PackTile: TileBase != None requires Bulk-family or OutCallerManaged lifecycle "
+                  "(OutBulk / OutDeferredReserve / OutHeldReserve / OutCallerManaged)");
 
     static constexpr uint32_t          cb                  = Cb;
     static constexpr uint32_t          pack_cb_id()        { return Cb; }
@@ -418,8 +384,10 @@ struct PackTile : PackTileTag {
     static constexpr uint32_t          reconfig_pack_cb    =
         (Reconfig == PackTileReconfig::Output || Reconfig == PackTileReconfig::OutputConditional) ? Cb : NO_PREV_CB;
 
+    [[no_unique_address]] TileBaseT tile_base{};
+
     constexpr PackTile() noexcept = default;
-    constexpr explicit PackTile(uint32_t output_tile_idx) noexcept : output_tile_idx_(output_tile_idx) {}
+    constexpr explicit PackTile(TileBaseT base) noexcept : tile_base(base) {}
 
     static ALWI void init() {
         // Pack reconfig is fold-driven (compile-time-elided when prev_pack_cb == Cb).
@@ -444,43 +412,40 @@ struct PackTile : PackTileTag {
 
     ALWI void reserve_upfront(uint32_t n) const {
         if constexpr (Policy == PackTilePolicy::UpfrontReservePushAtEnd) {
-            cb_reserve_back(Cb, n);
+            cb_reserve_back(Cb, n + tile_base_value(tile_base));
         }
     }
 
     ALWI void exec(uint32_t i, uint32_t slot_offset) const {
+        const uint32_t base = tile_base_value(tile_base);
         const uint32_t out_idx = [&]() -> uint32_t {
-            if constexpr (IndexMode == PackTileIndexMode::FirstTile) return 0;
-            else if constexpr (IndexMode == PackTileIndexMode::BlockIter) return i;
-            else if constexpr (IndexMode == PackTileIndexMode::BlockIterOffset) return output_tile_idx_ + i;
-            else return output_tile_idx_;  // Pinned / Absolute
+            if constexpr (IndexMode == PackTileIndexMode::FirstTile) return base;
+            else /* BlockIter */                                     return base + i;
         }();
         pack_tile(to_u32(DstSlot) + slot_offset, Cb, out_idx);
     }
 
-    // 2D pack exec — output is always block-walked (ht*Wt + wt). `i_flat` is the
-    // flat tile index in the (Ht, Wt) walk. FirstTile/Pinned/Absolute behave identically
-    // to 1D. No RowBcast/ColBcast for pack — output covers the full block.
+    // 2D pack exec — output is block-walked (i_flat = ht*Wt + wt) for BlockIter,
+    // or pinned to slot 0 (+ base) for FirstTile. TileBase adds runtime offset.
     ALWI void exec_2d(uint32_t i_flat, uint32_t /*ht*/, uint32_t /*wt*/, uint32_t slot_offset) const {
+        const uint32_t base = tile_base_value(tile_base);
         const uint32_t out_idx = [&]() -> uint32_t {
-            if constexpr (IndexMode == PackTileIndexMode::FirstTile) return 0;
-            else if constexpr (IndexMode == PackTileIndexMode::BlockIter) return i_flat;
-            else if constexpr (IndexMode == PackTileIndexMode::BlockIterOffset) return output_tile_idx_ + i_flat;
-            else return output_tile_idx_;
+            if constexpr (IndexMode == PackTileIndexMode::FirstTile) return base;
+            else /* BlockIter */                                     return base + i_flat;
         }();
         pack_tile(to_u32(DstSlot) + slot_offset, Cb, out_idx);
     }
 
-    // 2D upfront reserve/push — full block window (Ht * Wt tiles).
+    // 2D upfront reserve/push — full block window (Ht * Wt tiles), inflated by base.
     ALWI void reserve_upfront_2d(uint32_t Ht, uint32_t Wt) const {
         if constexpr (Policy == PackTilePolicy::UpfrontReservePushAtEnd) {
-            cb_reserve_back(Cb, Ht * Wt);
+            cb_reserve_back(Cb, Ht * Wt + tile_base_value(tile_base));
         }
     }
     ALWI void push_at_end_2d(uint32_t Ht, uint32_t Wt) const {
         if constexpr (Policy == PackTilePolicy::NoReservePushAtEnd ||
                       Policy == PackTilePolicy::UpfrontReservePushAtEnd) {
-            cb_push_back(Cb, Ht * Wt);
+            cb_push_back(Cb, Ht * Wt + tile_base_value(tile_base));
         }
     }
 
@@ -502,13 +467,9 @@ struct PackTile : PackTileTag {
     ALWI void push_at_end(uint32_t n) const {
         if constexpr (Policy == PackTilePolicy::NoReservePushAtEnd ||
                       Policy == PackTilePolicy::UpfrontReservePushAtEnd) {
-            cb_push_back(Cb, n);
+            cb_push_back(Cb, n + tile_base_value(tile_base));
         }
     }
-
-private:
-    /// Pipeline-driven runtime output-tile index for Pinned / Absolute modes — ctor-only.
-    uint32_t output_tile_idx_ = 0;
 };
 
 // =============================================================================
@@ -609,7 +570,9 @@ template <uint32_t CbA,
           InputLifecycle BPolicy,
           OperandKind AIndex,
           Dst DstSlot,
-          OperandKind BIndex>
+          OperandKind BIndex,
+          class TileBaseA,
+          class TileBaseB>
 struct BinaryFpu : BinaryFpuTag {
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
                   "BinaryFpu: DEST slot exceeds DEST_AUTO_LIMIT");
@@ -629,6 +592,12 @@ struct BinaryFpu : BinaryFpuTag {
                   "BinaryFpu: A-side RowBcast / ColBcast index require non-streaming APolicy");
     static_assert(detail::valid_policy_mode_2d_v<BPolicy, BIndex>,
                   "BinaryFpu: B-side RowBcast / ColBcast index require non-streaming BPolicy");
+    // Per-operand TileBase lifecycle compatibility — Streaming/Chunked/Cumulative
+    // can't compose with runtime base offsets (iter-dependent wait/pop counts).
+    static_assert(is_tile_base_none_v<TileBaseA> || is_legal_input_lifecycle_with_base(APolicy),
+                  "BinaryFpu: TileBaseA != None requires APolicy to be Bulk-family or CallerManaged");
+    static_assert(is_tile_base_none_v<TileBaseB> || is_legal_input_lifecycle_with_base(BPolicy),
+                  "BinaryFpu: TileBaseB != None requires BPolicy to be Bulk-family or CallerManaged");
     // Per-block streaming uses chunk-local CB front. When the two sides use
     // DIFFERENT regimes (one per-block → chunk-local index `j`; the other upfront /
     // caller-managed → absolute index `base_tile + j`), the chain dispatcher
@@ -669,9 +638,21 @@ struct BinaryFpu : BinaryFpuTag {
         (DfReconfig == BinaryDataFormatReconfig::Input) ? CbB : NO_PREV_CB;
     static constexpr uint32_t      reconfig_pack_cb = NO_PREV_CB;
 
+    [[no_unique_address]] TileBaseA tile_base_a{};
+    [[no_unique_address]] TileBaseB tile_base_b{};
+
     constexpr BinaryFpu() noexcept = default;
-    constexpr BinaryFpu(uint32_t a_tile_idx, uint32_t b_tile_idx) noexcept
-        : a_tile_idx_(a_tile_idx), b_tile_idx_(b_tile_idx) {}
+    constexpr BinaryFpu(TileBaseA a, TileBaseB b) noexcept : tile_base_a(a), tile_base_b(b) {}
+    constexpr explicit BinaryFpu(TileBaseA a) noexcept : tile_base_a(a) {}
+
+    // Helper: when same_cb, both bases live in the single shared wait window.
+    // Wait/pop count uses max(base_a, base_b) — caller must stage that many tiles
+    // in front of both reads.
+    ALWI uint32_t same_cb_base_max() const noexcept {
+        const uint32_t bA = tile_base_value(tile_base_a);
+        const uint32_t bB = tile_base_value(tile_base_b);
+        return bA > bB ? bA : bB;
+    }
 
     // ---- init / reconfig ----
     // F-PERF-3: srca / srcb / pack reconfig are now fold-driven (compile-time-elided
@@ -738,11 +719,12 @@ struct BinaryFpu : BinaryFpuTag {
     ALWI void wait_upfront(uint32_t n) const {
         if constexpr (APolicy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
                       APolicy == CopyTilePolicy::WaitUpfrontNoPop) {
-            cb_wait_front(CbA, n);
+            const uint32_t a_base = same_cb ? same_cb_base_max() : tile_base_value(tile_base_a);
+            cb_wait_front(CbA, n + a_base);
         }
         if constexpr (!same_cb && (BPolicy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
                                    BPolicy == CopyTilePolicy::WaitUpfrontNoPop)) {
-            cb_wait_front(CbB, n);
+            cb_wait_front(CbB, n + tile_base_value(tile_base_b));
         }
     }
 
@@ -751,36 +733,36 @@ struct BinaryFpu : BinaryFpuTag {
     ALWI void wait_upfront_2d(uint32_t Ht, uint32_t Wt) const {
         if constexpr (APolicy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
                       APolicy == CopyTilePolicy::WaitUpfrontNoPop) {
-            cb_wait_front(CbA, detail::window_2d<AIndex>(Ht, Wt));
+            const uint32_t a_base = same_cb ? same_cb_base_max() : tile_base_value(tile_base_a);
+            cb_wait_front(CbA, detail::window_2d<AIndex>(Ht, Wt) + a_base);
         }
         if constexpr (!same_cb && (BPolicy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
                                    BPolicy == CopyTilePolicy::WaitUpfrontNoPop)) {
-            cb_wait_front(CbB, detail::window_2d<BIndex>(Ht, Wt));
+            cb_wait_front(CbB, detail::window_2d<BIndex>(Ht, Wt) + tile_base_value(tile_base_b));
         }
     }
 
     // Per-side index mode. AIndex drives a_idx, BIndex drives b_idx. The canonical
     // bcast walk is A=BlockIter (walks the tile range) + B=FirstTile (pins the
-    // scaler/vector operand at tile 0). BlockIterOffset adds a runtime base from
-    // the ctor (a_tile_idx_ / b_tile_idx_) to the per-iter index — used by
-    // per-outer-iter chains that pass `wt` as base. The 3-arg overload accepts a
+    // scaler/vector operand at tile 0). TileBaseA / TileBaseB add a runtime or
+    // compile-time base offset to the per-iter index. The 3-arg overload accepts a
     // chunk-local index (`i_local`) and an absolute index (`i_abs`); each side
     // picks via `a_uses_local_idx` / `b_uses_local_idx`. The 2-arg overload is
     // the same-regime fast path and forwards with i_local == i_abs.
     ALWI void exec(uint32_t i_local, uint32_t i_abs, uint32_t slot_offset) const {
         const uint32_t a_i = a_uses_local_idx ? i_local : i_abs;
         const uint32_t b_i = b_uses_local_idx ? i_local : i_abs;
+        const uint32_t a_base = tile_base_value(tile_base_a);
+        const uint32_t b_base = tile_base_value(tile_base_b);
         const uint32_t a_idx = [&]() -> uint32_t {
-            if constexpr      (AIndex == CbIndexMode::FirstTile)        return 0;
-            else if constexpr (AIndex == CbIndexMode::BlockIter)        return a_i;
-            else if constexpr (AIndex == CbIndexMode::BlockIterOffset)  return a_tile_idx_ + a_i;
-            else                                                        return a_tile_idx_;  // Pinned / Absolute
+            if constexpr      (AIndex == CbIndexMode::FirstTile) return a_base;
+            else if constexpr (AIndex == CbIndexMode::BlockIter) return a_base + a_i;
+            else                                                 return a_base;  // Row/Col degenerate in 1D
         }();
         const uint32_t b_idx = [&]() -> uint32_t {
-            if constexpr      (BIndex == CbIndexMode::FirstTile)        return 0;
-            else if constexpr (BIndex == CbIndexMode::BlockIter)        return b_i;
-            else if constexpr (BIndex == CbIndexMode::BlockIterOffset)  return b_tile_idx_ + b_i;
-            else                                                        return b_tile_idx_;  // Pinned / Absolute
+            if constexpr      (BIndex == CbIndexMode::FirstTile) return b_base;
+            else if constexpr (BIndex == CbIndexMode::BlockIter) return b_base + b_i;
+            else                                                 return b_base;  // Row/Col degenerate in 1D
         }();
         const uint32_t dst = to_u32(DstSlot) + slot_offset;
         if constexpr (Bcast == BroadcastDim::None) {
@@ -820,11 +802,12 @@ struct BinaryFpu : BinaryFpuTag {
     ALWI void pop_upfront_end(uint32_t n) const {
         if constexpr (APolicy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
                       APolicy == CopyTilePolicy::CumulativeWaitPopAtEnd) {
-            cb_pop_front(CbA, n);
+            const uint32_t a_base = same_cb ? same_cb_base_max() : tile_base_value(tile_base_a);
+            cb_pop_front(CbA, n + a_base);
         }
         if constexpr (!same_cb && (BPolicy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
                                    BPolicy == CopyTilePolicy::CumulativeWaitPopAtEnd)) {
-            cb_pop_front(CbB, n);
+            cb_pop_front(CbB, n + tile_base_value(tile_base_b));
         }
     }
 
@@ -843,8 +826,8 @@ struct BinaryFpu : BinaryFpuTag {
         const uint32_t b_flat = b_uses_local_idx ? i_flat_local : i_flat_abs;
         const uint32_t a_wt   = a_uses_local_idx ? wt_local     : wt_abs;
         const uint32_t b_wt   = b_uses_local_idx ? wt_local     : wt_abs;
-        const uint32_t a_idx  = detail::idx_2d<AIndex>(a_flat, ht, a_wt, a_tile_idx_);
-        const uint32_t b_idx  = detail::idx_2d<BIndex>(b_flat, ht, b_wt, b_tile_idx_);
+        const uint32_t a_idx  = tile_base_value(tile_base_a) + detail::idx_2d<AIndex>(a_flat, ht, a_wt);
+        const uint32_t b_idx  = tile_base_value(tile_base_b) + detail::idx_2d<BIndex>(b_flat, ht, b_wt);
         const uint32_t dst    = to_u32(DstSlot) + slot_offset;
         if constexpr (Bcast == BroadcastDim::None) {
             if constexpr      (Op == BinaryFpuOp::Add) add_tiles(CbA, CbB, a_idx, b_idx, dst);
@@ -865,18 +848,14 @@ struct BinaryFpu : BinaryFpuTag {
     ALWI void pop_upfront_end_2d(uint32_t Ht, uint32_t Wt) const {
         if constexpr (APolicy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
                       APolicy == CopyTilePolicy::CumulativeWaitPopAtEnd) {
-            cb_pop_front(CbA, detail::window_2d<AIndex>(Ht, Wt));
+            const uint32_t a_base = same_cb ? same_cb_base_max() : tile_base_value(tile_base_a);
+            cb_pop_front(CbA, detail::window_2d<AIndex>(Ht, Wt) + a_base);
         }
         if constexpr (!same_cb && (BPolicy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
                                    BPolicy == CopyTilePolicy::CumulativeWaitPopAtEnd)) {
-            cb_pop_front(CbB, detail::window_2d<BIndex>(Ht, Wt));
+            cb_pop_front(CbB, detail::window_2d<BIndex>(Ht, Wt) + tile_base_value(tile_base_b));
         }
     }
-
-private:
-    /// Pipeline-driven runtime indices for Pinned / Absolute modes — ctor-only.
-    uint32_t a_tile_idx_ = 0;
-    uint32_t b_tile_idx_ = 0;
 };
 
 // =============================================================================
@@ -890,7 +869,8 @@ template <uint32_t Cb,
           Dst DstOut,
           DestReuseReconfig Reconfig,
           InputLifecycle Policy,
-          OperandKind IndexMode>
+          OperandKind IndexMode,
+          class TileBaseT>
 struct DestReuseBinary : DestReuseBinaryTag {
     static_assert(to_u32(DstIn) < DEST_AUTO_LIMIT && to_u32(DstOut) < DEST_AUTO_LIMIT,
                   "DestReuseBinary: DEST slot exceeds DEST_AUTO_LIMIT");
@@ -898,6 +878,8 @@ struct DestReuseBinary : DestReuseBinaryTag {
                   "DestReuseBinary: BlockIter index requires Upfront / Cumulative / NoWaitNoPop policy");
     static_assert(detail::valid_policy_mode_2d_v<Policy, IndexMode>,
                   "DestReuseBinary: RowBcast / ColBcast index require non-streaming policy");
+    static_assert(is_tile_base_none_v<TileBaseT> || is_legal_input_lifecycle_with_base(Policy),
+                  "DestReuseBinary: TileBase != None requires Bulk-family or CallerManaged lifecycle");
 
     static constexpr uint32_t       cb_a_id()         { return Cb; }
     static constexpr uint32_t       cb_b_id()         { return 0;  }
@@ -919,8 +901,10 @@ struct DestReuseBinary : DestReuseBinaryTag {
         (Reconfig == DestReuseReconfig::Input && ReuseType == DestReuseType::DEST_TO_SRCA) ? Cb : NO_PREV_CB;
     static constexpr uint32_t       reconfig_pack_cb  = NO_PREV_CB;
 
+    [[no_unique_address]] TileBaseT tile_base{};
+
     constexpr DestReuseBinary() noexcept = default;
-    constexpr explicit DestReuseBinary(uint32_t cb_tile_idx) noexcept : cb_tile_idx_(cb_tile_idx) {}
+    constexpr explicit DestReuseBinary(TileBaseT base) noexcept : tile_base(base) {}
 
     // F-PERF-3: srca / srcb reconfig is fold-driven; init() programs only the per-op
     // LLK shape.
@@ -950,7 +934,7 @@ struct DestReuseBinary : DestReuseBinaryTag {
     ALWI void wait_upfront(uint32_t n) const {
         if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
                       Policy == CopyTilePolicy::WaitUpfrontNoPop) {
-            cb_wait_front(Cb, n);
+            cb_wait_front(Cb, n + tile_base_value(tile_base));
         }
     }
     ALWI void exec(uint32_t i, uint32_t slot_offset) const {
@@ -960,11 +944,11 @@ struct DestReuseBinary : DestReuseBinaryTag {
         constexpr auto reuse = (ReuseType == DestReuseType::DEST_TO_SRCA)
                                    ? ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCA
                                    : ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB;
+        const uint32_t base = tile_base_value(tile_base);
         const uint32_t in_idx = [&]() -> uint32_t {
-            if constexpr (IndexMode == CbIndexMode::FirstTile) return 0;
-            else if constexpr (IndexMode == CbIndexMode::BlockIter) return i;
-            else if constexpr (IndexMode == CbIndexMode::BlockIterOffset) return cb_tile_idx_ + i;
-            else return cb_tile_idx_;
+            if constexpr (IndexMode == CbIndexMode::FirstTile) return base;
+            else if constexpr (IndexMode == CbIndexMode::BlockIter) return base + i;
+            else return base;  // Row/Col degenerate in 1D
         }();
         binary_dest_reuse_tiles<et, reuse>(Cb, in_idx, to_u32(DstIn) + slot_offset);
     }
@@ -973,7 +957,7 @@ struct DestReuseBinary : DestReuseBinaryTag {
     ALWI void wait_upfront_2d(uint32_t Ht, uint32_t Wt) const {
         if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
                       Policy == CopyTilePolicy::WaitUpfrontNoPop) {
-            cb_wait_front(Cb, detail::window_2d<IndexMode>(Ht, Wt));
+            cb_wait_front(Cb, detail::window_2d<IndexMode>(Ht, Wt) + tile_base_value(tile_base));
         }
     }
     ALWI void exec_2d(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t slot_offset) const {
@@ -983,13 +967,13 @@ struct DestReuseBinary : DestReuseBinaryTag {
         constexpr auto reuse = (ReuseType == DestReuseType::DEST_TO_SRCA)
                                    ? ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCA
                                    : ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB;
-        const uint32_t in_idx = detail::idx_2d<IndexMode>(i_flat, ht, wt, cb_tile_idx_);
+        const uint32_t in_idx = tile_base_value(tile_base) + detail::idx_2d<IndexMode>(i_flat, ht, wt);
         binary_dest_reuse_tiles<et, reuse>(Cb, in_idx, to_u32(DstIn) + slot_offset);
     }
     ALWI void pop_upfront_end_2d(uint32_t Ht, uint32_t Wt) const {
         if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
                       Policy == CopyTilePolicy::CumulativeWaitPopAtEnd) {
-            cb_pop_front(Cb, detail::window_2d<IndexMode>(Ht, Wt));
+            cb_pop_front(Cb, detail::window_2d<IndexMode>(Ht, Wt) + tile_base_value(tile_base));
         }
     }
 
@@ -1008,13 +992,9 @@ struct DestReuseBinary : DestReuseBinaryTag {
     ALWI void pop_upfront_end(uint32_t n) const {
         if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
                       Policy == CopyTilePolicy::CumulativeWaitPopAtEnd) {
-            cb_pop_front(Cb, n);
+            cb_pop_front(Cb, n + tile_base_value(tile_base));
         }
     }
-
-private:
-    /// Pipeline-driven runtime index for Pinned / Absolute modes — ctor-only.
-    uint32_t cb_tile_idx_ = 0;
 };
 
 // =============================================================================

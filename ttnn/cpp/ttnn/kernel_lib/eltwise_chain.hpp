@@ -440,18 +440,15 @@ constexpr bool is_legal_output_lifecycle(OutputLifecycle lc) noexcept {
 /// Per-input operand kind. The output kind is always `Block` (single column
 /// in the output matrix), so no enum is defined for the output side.
 ///
-/// The first four values are the canonical taxonomy kinds. The remaining
-/// three (Pinned/Absolute/BlockIterOffset) are LEGACY indexing modes
-/// preserved for the CbIndexMode migration — they're deliberately excluded
-/// from the new taxonomy and should NOT be used by new code.
+/// Runtime/compile-time tile-index offsets that previously lived as separate
+/// kinds (`Pinned`/`Absolute`/`BlockIterOffset`) are now expressed by composing
+/// one of these four canonical kinds with a `TileBase` (see `TileBase` types
+/// below). The kind carries the iteration shape; `TileBase` carries the offset.
 enum class OperandKind : uint8_t {
-    Block,            // Ht × Wt — walks the full iteration domain
-    Row,              // 1  × Wt — broadcast down rows
-    Col,              // Ht × 1  — broadcast across cols
-    Scalar,           // 1  × 1  — broadcast everywhere
-    Pinned,           // DEPRECATED — runtime-fixed tile k
-    Absolute,         // DEPRECATED — runtime per-iter tile k
-    BlockIterOffset,  // DEPRECATED — runtime base k + per-iter offset
+    Block,   // Ht × Wt — walks the full iteration domain
+    Row,     // 1  × Wt — broadcast down rows
+    Col,     // Ht × 1  — broadcast across cols
+    Scalar,  // 1  × 1  — broadcast everywhere
 };
 
 /// Kind × InputLifecycle compatibility.
@@ -479,6 +476,89 @@ constexpr bool is_legal_kind_lifecycle(OperandKind kind, InputLifecycle lc) noex
     }
     // Row / Col / Scalar: only lifecycles whose pop count matches operand size M.
     return lc == Bulk || lc == CallerManaged || lc == HeldBulk || lc == HeldCumulative || lc == DeferredPop;
+}
+
+// =============================================================================
+// 1d. TileBase — orthogonal runtime/compile-time tile-index offset
+// =============================================================================
+//
+// Composes with `OperandKind` to express compound CB tile addressing:
+//
+//     tile_id = base + derived_from_kind(r, c)
+//              ^^^^   ^^^^^^^^^^^^^^^^^^^^^^^^
+//              TileBase                OperandKind (Block / Row / Col / Scalar)
+//
+// Three flavors:
+//   - `TileBaseNone`               : default, no offset, zero overhead.
+//   - `TileBaseCompileTime<K>`     : compile-time constant K, folded into address calc.
+//   - `TileBaseRuntime`            : ctor-supplied runtime value.
+//
+// Lifecycle restriction: `TileBase != None` requires Bulk-family or CallerManaged
+// lifecycles (input: Bulk / HeldBulk / DeferredPop / BulkDrain / CallerManaged;
+// output: OutBulk / OutDeferredReserve / OutHeldReserve / OutCallerManaged).
+// Streaming / Chunked / Cumulative / Held{Stream,Cumulative} / NoWaitPop are
+// forbidden because their wait/pop counts are iter-dependent and don't compose
+// with runtime base offsets cleanly. Caller must size the CB to hold
+// `base + window` tiles before the chain reads them. The chain's emitted
+// wait/reserve/pop/push counts inflate by `base` at runtime.
+
+struct TileBaseNone {};
+
+template <uint32_t K>
+struct TileBaseCompileTime {
+    static constexpr uint32_t base = K;
+};
+
+struct TileBaseRuntime {
+    uint32_t base;
+    constexpr explicit TileBaseRuntime(uint32_t b) noexcept : base(b) {}
+};
+
+template <class T>
+struct is_tile_base_none : std::is_same<T, TileBaseNone> {};
+template <class T>
+inline constexpr bool is_tile_base_none_v = is_tile_base_none<T>::value;
+
+template <class T>
+struct is_tile_base_runtime : std::false_type {};
+template <>
+struct is_tile_base_runtime<TileBaseRuntime> : std::true_type {};
+template <class T>
+inline constexpr bool is_tile_base_runtime_v = is_tile_base_runtime<T>::value;
+
+template <class T>
+struct is_tile_base_compile_time : std::false_type {};
+template <uint32_t K>
+struct is_tile_base_compile_time<TileBaseCompileTime<K>> : std::true_type {};
+template <class T>
+inline constexpr bool is_tile_base_compile_time_v = is_tile_base_compile_time<T>::value;
+
+/// Extract the (runtime or compile-time) base offset value. Returns 0 for
+/// `TileBaseNone` (compile-time-folded to zero — empty-base optimization).
+template <class T>
+ALWI uint32_t tile_base_value(const T& t) noexcept {
+    if constexpr (is_tile_base_none_v<T>) {
+        (void)t;
+        return 0u;
+    } else if constexpr (is_tile_base_compile_time_v<T>) {
+        (void)t;
+        return T::base;
+    } else {
+        return t.base;
+    }
+}
+
+/// Lifecycle compatibility check for `TileBase != None` on input elements.
+/// Only Bulk-family (single upfront wait, single end pop or no pop) and
+/// CallerManaged are legal — iter-dependent counts (Streaming/Chunked/Cumulative)
+/// can't be expressed as `base + window`.
+constexpr bool is_legal_input_lifecycle_with_base(InputLifecycle lc) noexcept {
+    return lc == Bulk || lc == HeldBulk || lc == DeferredPop || lc == BulkDrain || lc == CallerManaged;
+}
+
+/// Lifecycle compatibility check for `TileBase != None` on output elements.
+constexpr bool is_legal_output_lifecycle_with_base(OutputLifecycle lc) noexcept {
+    return lc == OutBulk || lc == OutDeferredReserve || lc == OutHeldReserve || lc == OutCallerManaged;
 }
 
 // =============================================================================
@@ -560,34 +640,30 @@ struct CopyTilePolicy {
 ///   | BlockIter | ht * Wt + wt   (flat)    | Ht * Wt        |
 ///   | RowBcast  | wt                       | Wt             |
 ///   | ColBcast  | ht                       | Ht             |
-///   | Pinned    | runtime k                | 1              |
-///   | Absolute  | runtime k                | Ht * Wt        |
+///
+/// Runtime/compile-time tile offsets are expressed via `TileBase` (composed with
+/// any of the four kinds), not as separate index modes.
 ///
 /// RowBcast / ColBcast require non-streaming CB policy (WaitUpfrontPopAtEnd,
 /// WaitNoPop, NoWaitPop, NoWaitNoPop, CumulativeWaitPopAtEnd) — caller stages all
 /// broadcast operand tiles before the chain starts. Same constraint as
 /// `binary_op_helpers`' ROW/COL static_assert.
+///
 /// Legacy `CbIndexMode::X` use-site syntax mapped to `OperandKind`. Each old
 /// enum value is now a `static constexpr OperandKind` member. Template
 /// parameters that previously took `CbIndexMode` should be migrated to
 /// `OperandKind`. Existing call sites continue to compile.
 ///
 /// Mapping:
-///   FirstTile       → Scalar           (always tile 0 — Scalar kind reads tile 0)
-///   BlockIter       → Block            (walks tiles 0..N-1)
-///   RowBcast        → Row              (1×Wt broadcast operand)
-///   ColBcast        → Col              (Ht×1 broadcast operand)
-///   Pinned          → Pinned (DEPRECATED, legacy OperandKind value)
-///   Absolute        → Absolute (DEPRECATED)
-///   BlockIterOffset → BlockIterOffset (DEPRECATED)
+///   FirstTile → Scalar           (always tile 0 — Scalar kind reads tile 0)
+///   BlockIter → Block            (walks tiles 0..N-1)
+///   RowBcast  → Row              (1×Wt broadcast operand)
+///   ColBcast  → Col              (Ht×1 broadcast operand)
 struct CbIndexMode {
     static constexpr OperandKind FirstTile = OperandKind::Scalar;
     static constexpr OperandKind BlockIter = OperandKind::Block;
-    static constexpr OperandKind Pinned = OperandKind::Pinned;
-    static constexpr OperandKind Absolute = OperandKind::Absolute;
     static constexpr OperandKind RowBcast = OperandKind::Row;
     static constexpr OperandKind ColBcast = OperandKind::Col;
-    static constexpr OperandKind BlockIterOffset = OperandKind::BlockIterOffset;
 };
 
 /// CopyTile dtype-reconfig.
@@ -664,14 +740,11 @@ struct PackTilePolicy {
 };
 
 /// Legacy `PackTileIndexMode::X` use-site syntax mapped to `OperandKind`.
-/// Output kind is always `Block` per the new taxonomy; legacy values preserved
-/// for the migration of chain dispatch code.
+/// Output kind is always `Block` per the new taxonomy. Runtime/compile-time
+/// pack-slot offsets are expressed via `TileBase`, not as separate modes.
 struct PackTileIndexMode {
     static constexpr OperandKind FirstTile = OperandKind::Scalar;
     static constexpr OperandKind BlockIter = OperandKind::Block;
-    static constexpr OperandKind Pinned = OperandKind::Pinned;
-    static constexpr OperandKind Absolute = OperandKind::Absolute;
-    static constexpr OperandKind BlockIterOffset = OperandKind::BlockIterOffset;
 };
 
 /// Pack-side dtype-reconfig.
@@ -842,7 +915,8 @@ template <
     Dst DstSlot = Dst::D0,
     InputLifecycle Policy = Streaming,
     OperandKind IndexMode = OperandKind::Scalar,
-    CopyTileReconfig Reconfig = CopyTileReconfig::Input>
+    CopyTileReconfig Reconfig = CopyTileReconfig::Input,
+    class TileBaseT = TileBaseNone>
 struct CopyTile;
 
 template <
@@ -855,7 +929,9 @@ template <
     InputLifecycle BPolicy = Streaming,
     OperandKind AIndex = OperandKind::Scalar,
     Dst DstSlot = Dst::D0,
-    OperandKind BIndex = AIndex>
+    OperandKind BIndex = AIndex,
+    class TileBaseA = TileBaseNone,
+    class TileBaseB = TileBaseNone>
 struct BinaryFpu;
 
 template <
@@ -866,7 +942,8 @@ template <
     Dst DstOut = Dst::D0,
     DestReuseReconfig Reconfig = DestReuseReconfig::Input,
     InputLifecycle Policy = Streaming,
-    OperandKind IndexMode = OperandKind::Scalar>
+    OperandKind IndexMode = OperandKind::Scalar,
+    class TileBaseT = TileBaseNone>
 struct DestReuseBinary;
 
 template <
@@ -883,7 +960,8 @@ template <
     Dst DstSlot = Dst::D0,
     OutputLifecycle Policy = OutStreaming,
     OperandKind IndexMode = OperandKind::Scalar,
-    PackTileReconfig Reconfig = PackTileReconfig::Output>
+    PackTileReconfig Reconfig = PackTileReconfig::Output,
+    class TileBaseT = TileBaseNone>
 struct PackTile;
 
 template <
@@ -1002,12 +1080,15 @@ ALWI void eltwise_chain_with_init(uint32_t n_tiles, Es... elts);
 /// 2D variant — runs the chain over an (Ht, Wt) tile grid.
 ///
 /// Inner loop blocks W (BlockSize tiles per inner iter). Each CB-reader element
-/// uses its `CbIndexMode` to derive the per-iter CB tile index from `(ht, wt)`:
+/// uses its `OperandKind` to derive the per-iter CB tile index from `(ht, wt)`,
+/// composed with the element's `TileBase` offset (default `TileBaseNone` = 0):
 ///
-///   - `BlockIter`/`Absolute` → `ht * Wt + wt`     (window = Ht*Wt)
-///   - `RowBcast`            → `wt`                (window = Wt)
-///   - `ColBcast`            → `ht`                (window = Ht)
-///   - `FirstTile`/`Pinned`  → 0 / runtime k       (window = 1)
+///   tile_id = tile_base_value + kind_derived(ht, wt)
+///
+///   - `BlockIter` → `ht * Wt + wt`     (window = Ht*Wt)
+///   - `RowBcast`  → `wt`                (window = Wt)
+///   - `ColBcast`  → `ht`                (window = Ht)
+///   - `FirstTile` → 0                   (window = 1)
 ///
 /// **Constraint**: `RowBcast`/`ColBcast` require non-streaming CB policy (Upfront,
 /// Cumulative, NoWait* / WaitNoPop / NoWaitPop) — caller stages broadcast operand
@@ -1016,9 +1097,9 @@ ALWI void eltwise_chain_with_init(uint32_t n_tiles, Es... elts);
 ///
 /// **Equivalence with 1D**: `eltwise_chain(EltwiseShape::of(1, n), …)` is
 /// semantically equivalent to `eltwise_chain(n, …)` for chains that use only
-/// `FirstTile` / `BlockIter` / `Pinned` / `Absolute`. The 1D overload skips the
-/// outer `ht` loop so it avoids the `ht * Wt` multiplication in the per-tile path;
-/// prefer 1D when no broadcast axis is in play.
+/// `FirstTile` / `BlockIter`. The 1D overload skips the outer `ht` loop so it
+/// avoids the `ht * Wt` multiplication in the per-tile path; prefer 1D when no
+/// broadcast axis is in play.
 template <uint32_t BlockSize = 1, class... Es>
 ALWI void eltwise_chain(EltwiseShape shape, Es... elts);
 
