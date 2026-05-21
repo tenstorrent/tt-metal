@@ -242,7 +242,7 @@ void kernel_main() {
                 uint32_t untilize_row_addr = untilize_read_ptr + t * aligned_output_page_size;
 
                 if (dst_chip == linearized_mesh_coord) {
-                    DeviceZoneScopedN("combine-LOCAL-row-write");
+                    DeviceZoneScopedN("LOCAL-row-write");
                     uint32_t dst_token_idx = metadata[1];
                     uint32_t dst_topk_indice = metadata[2];
                     uint32_t output_page_idx = dst_token_idx * num_experts_per_tok + dst_topk_indice;
@@ -257,7 +257,6 @@ void kernel_main() {
                         local_credits += n;
                     }
                     {
-                        DeviceZoneScopedN("combine-FABRIC-FULL-WRITE");
                         // Write routing metadata (dst_chip, dst_token_idx, dst_topk_indice) to
                         // sender's c_19 metadata ring slot so sender can read from L1 instead of DRAM.
                         uint64_t meta_dst_addr =
@@ -269,7 +268,7 @@ void kernel_main() {
                         uint64_t dst_addr = our_slice_noc_addr + write_slot * aligned_output_page_size;
                         uint32_t off = 0;
                         {
-                            DeviceZoneScopedN("combine-FABRIC-row-write");
+                            DeviceZoneScopedN("FABRIC-row-write");
                             while (off < aligned_output_page_size) {
                                 uint32_t chunk = (aligned_output_page_size - off > (uint32_t)NOC_MAX_BURST_SIZE)
                                                      ? (uint32_t)NOC_MAX_BURST_SIZE
