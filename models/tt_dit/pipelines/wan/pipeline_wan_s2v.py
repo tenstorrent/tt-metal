@@ -1062,12 +1062,19 @@ class WanPipelineS2V(WanPipeline):
         with _stage("prepare_latents"):
             # 2. Reference image VAE encode (once).
             with _stage("s2v_vae_encode_ref"):
-                # Aspect-preserving resize + center-crop to ``(height, width)``
-                # so arbitrary-aspect input images aren't stretched by the
+                # Aspect-preserving letterbox pad to ``(height, width)`` so
+                # arbitrary-aspect input images aren't stretched by the
                 # downstream ``VideoProcessor.preprocess`` (which uses
-                # ``resize_mode='default'`` = stretch).
-                image_prompt_cropped = ImageOps.fit(image_prompt, (width, height), method=Image.Resampling.LANCZOS)
-                ref_tensor = self.video_processor.preprocess(image_prompt_cropped, height=height, width=width).to(
+                # ``resize_mode='default'`` = stretch). ``ImageOps.pad``
+                # scales-to-contain (preserves all source content) then
+                # pads with black to match exactly ``(height, width)``.
+                # Cropping (``ImageOps.fit``) was tried first but loses
+                # ~57 % of a portrait image when fit into a landscape
+                # target — typical headshots get their face cropped off.
+                # The mesh config + program caches stay fixed because
+                # ``(height, width)`` is unchanged.
+                image_prompt_padded = ImageOps.pad(image_prompt, (width, height), method=Image.Resampling.LANCZOS)
+                ref_tensor = self.video_processor.preprocess(image_prompt_padded, height=height, width=width).to(
                     "cpu", dtype=torch.float32
                 )
                 ref_video = ref_tensor.unsqueeze(2)  # [1, 3, 1, H, W]
