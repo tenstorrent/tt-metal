@@ -77,7 +77,6 @@ uint32_t wrap_gt(uint32_t a, uint32_t b) {
     // Below relies on taking the diff first then the compare to move the wrap
     // to 2^31 away
     int32_t diff = a - b;
-    // DPRINT << "wrap_gt: a: " << a << " b: " << b << " diff: " << diff << ENDL();
     return diff > 0;
 }
 
@@ -126,7 +125,7 @@ FORCE_INLINE void cq_noc_async_write_with_state(
         noc, src_addr, dst_addr, size, ndests);
 
     if constexpr (send) {
-        // DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_FROM_STATE(noc, cmd_buf);
+        DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_FROM_STATE(noc, cmd_buf);
         noc_write_with_state<DM_DEDICATED_NOC, cmd_buf, CQ_NOC_sndl, send, CQ_NOC_wait, update_counters>(
             noc, src_addr, dst_addr, size, ndests);
     }
@@ -147,9 +146,9 @@ FORCE_INLINE void cq_noc_async_wwrite_with_state(
     uint32_t ndests = 1,
     uint8_t noc = noc_index) {
     if constexpr (wait) {
-        WAYPOINT("CMSW");
+        WAYPOINT("CNSW");
         while (!noc_cmd_buf_ready(noc, cmd_buf));
-        WAYPOINT("CMSD");
+        WAYPOINT("CNSD");
     }
     noc_wwrite_with_state<DM_DEDICATED_NOC, cmd_buf, flags, CQ_NOC_send, CQ_NOC_wait, false>(
         noc, src_addr, dst_noc_addr, dst_addr, size, ndests);
@@ -321,14 +320,9 @@ public:
     FORCE_INLINE void acquire_pages(uint32_t n) {
         volatile tt_l1_ptr uint32_t* sem_addr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<fd_core_type>(my_sem_id)));
-        DPRINT << "CBWriter: acquire_pages: n=" << n << " sem id: " << my_sem_id
-               << " additional_count: " << additional_count << ENDL();
 
         // Ensure last sem_inc has landed
         noc_async_atomic_barrier();
-        // DPRINT << "CBWriter: acquire_pages: after atomic barrier" << ENDL();
-        // DPRINT << "CBWriter: acquire_pages: additional_count=" << additional_count << ENDL();
-        // DPRINT << "CBWriter: acquire_pages: sem value=" << *sem_addr << ENDL();
 
         WAYPOINT("DAPW");
         // Use a wrapping compare here to compare distance
@@ -340,7 +334,6 @@ public:
         } while (wrap_gt(n, additional_count + *sem_addr));
         WAYPOINT("DAPD");
         additional_count -= n;
-        DPRINT << "CBWriter: acquire_pages: after loop: additional_count=" << additional_count << ENDL();
     }
 
     // Wait for all n pages to be available. If the consumer is using blocks, it may never return all pages at once
@@ -402,8 +395,6 @@ public:
             }
         }
 #endif
-        DPRINT << "release_pages: n=" << n << " sem_addr: " << (uintptr_t)get_semaphore<fd_core_type>(downstream_sem_id)
-               << "sem id: " << downstream_sem_id << ENDL();
 #ifdef ARCH_QUASAR
         Semaphore<fd_core_type>(downstream_sem_id).up(n);
 #else
@@ -487,9 +478,7 @@ protected:
         static_assert(is_telemetry_block_guard<T>::value, "T must be a telemetry block guard");
         volatile tt_l1_ptr uint32_t* sem_addr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<fd_core_type>(my_sem_id)));
-        DPRINT << "acquire_pages: sem_addr: " << (uintptr_t)sem_addr << "sem id: " << my_sem_id << ENDL();
 
-        // DPRINT << "acquire_pages: local_count_=" << local_count_ << " upstream_count_=" << upstream_count_ << ENDL();
         if (local_count_ == upstream_count_) {
             WAYPOINT("UAPW");
             T block_guard;
@@ -500,8 +489,6 @@ protected:
             } while ((upstream_count_ = *sem_addr) == local_count_);
             WAYPOINT("UAPD");
         }
-        DPRINT << "acquire_pages: after loop: local_count_=" << local_count_ << " upstream_count_=" << upstream_count_
-               << ENDL();
 
         // Set a fence to limit how much is processed at once
         uint32_t limit = static_cast<uint32_t>((block_next_start_addr_[rd_block_idx_] - cb_fence_) >> cb_log_page_size);
@@ -556,8 +543,10 @@ public:
     template <typename T = NoTelemetryBlockGuard>
     FORCE_INLINE uint32_t wait_for_available_data_and_release_old_pages(uintptr_t& cmd_ptr) {
         static_assert(is_telemetry_block_guard<T>::value, "T must be a telemetry block guard");
-        DPRINT << "wait_for_available_data_and_release_old_pages: cmd_ptr: " << cmd_ptr
-               << " available_bytes: " << this->available_bytes(cmd_ptr) << ENDL();
+        DPRINT(
+            "wait_for_available_data_and_release_old_pages: cmd_ptr: {} available_bytes: {}\n",
+            cmd_ptr,
+            this->available_bytes(cmd_ptr));
         if (this->available_bytes(cmd_ptr) == 0) {
             if (this->cb_fence_ == this->block_next_start_addr_[this->rd_block_idx_]) {
                 if (this->rd_block_idx_ == cb_blocks - 1) {
@@ -607,13 +596,11 @@ private:
         // allows time for writes from that block to complete. Note: this is incorrect if writes can be sent out of
         // order. We should use transaction IDs instead in that case.
         if (released_prev_block_) {
-            // DPRINT << "release_block_pages: released_prev_block_ is true" << ENDL();
             WAYPOINT("CBRW");
             while (!noc_nonposted_writes_sent_at_count(noc_index, this->block_noc_writes_to_clear_));
             ReleasePolicy::template release<noc_idx, noc_xy, sem_id>(cb_pages_per_block);
             WAYPOINT("CBRD");
         } else {
-            // DPRINT << "release_block_pages: setting released_prev_block_ to true" << ENDL();
             released_prev_block_ = true;
         }
         this->block_noc_writes_to_clear_ = noc_get_nonposted_writes_issued(noc_index);

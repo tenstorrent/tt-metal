@@ -1198,7 +1198,6 @@ protected:
 
 // Fixed core layout used by the SD spoof-prefetch execution path
 inline constexpr CoreCoord sd_spoof_prefetch_core = {0, 0};
-// Legacy constant — use dispatch_core(device) for new code; kept until test_prefetcher.cpp is updated.
 inline constexpr CoreCoord sd_dispatch_core = {4, 0};
 
 inline CoreCoord dispatch_core(const tt_metal::IDevice* device) {
