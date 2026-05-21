@@ -1,0 +1,284 @@
+from typing import Optional, AsyncIterator, Iterator
+from dataclasses import dataclass, asdict
+from argparse import ArgumentParser
+from dateutil import parser
+from enum import Enum, auto
+import fileinput
+import asyncio
+import pprint
+import json
+import re
+
+timeregex = "\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+"
+teststart = re.compile("\[\s+RUN\s+\] (.*)")
+testend = re.compile("\[\s+([^ ]*)\s+\] (.*) \(.*\)")
+testbdf = re.compile(f"({timeregex}).*Test \| \[bdf=(.*)\]\[device_id=(.*)\].*")
+testmismatch = re.compile(
+    f"({timeregex}).*Test \| \[bdf=(.*)\]\[device_id=(.*)\]"
+    + " Mismatch on dram_controller=(.*) core (.*) pattern=(.*) repeat=(.*)"
+    + " pass=(.*): failures=(.*), first_fail_classified_as=(.*),"
+    + " write_failures=(.*), read_failures=(.*) .*"
+)
+
+print_logs = True
+
+
+@dataclass
+class TestRun:
+    name: str
+    errors: list[dict]
+    status: str
+
+    def to_dict(self):
+        return {
+            "name": self.name,
+            "errors": self.errors,
+            "status": self.status,
+        }
+
+
+def runs_to_json(runs: list[TestRun], **kwargs) -> str:
+    return json.dumps([r.to_dict() for r in runs], **kwargs)
+
+
+def runs_to_jsonf(fname: str, runs: list[TestRun], **kwargs) -> None:
+    with open(fname, "w") as f:
+        json.dump([r.to_dict() for r in runs], f, **kwargs)
+
+
+class EventType(Enum):
+    TESTSTART = auto()
+    TESTEND = auto()
+    MISMATCH = auto()
+    BDF = auto()
+
+
+@dataclass
+class Event:
+    typ: EventType
+    extra: dict
+
+    def to_dict(self):
+        return {"typ": self.typ.name, "extra": self.extra}
+
+
+def parse_teststart(l: str) -> Optional[Event]:
+    m = teststart.match(l)
+    if m is None:
+        return None
+
+    testname = m.group(1)
+    print(f"\tTESTSTART '{testname}'")
+
+    return Event(EventType.TESTSTART, {"name": testname})
+
+
+def parse_testend(l: str) -> Optional[Event]:
+    m = testend.match(l)
+    if m is None:
+        return None
+
+    status = m.group(1)
+    testname = m.group(2)
+    print(f"\tTESTEND '{testname}' '{status}'")
+
+    return Event(EventType.TESTEND, {"name": testname, "status": status})
+
+
+def parse_mismatch(l: str) -> Optional[Event]:
+    m = testmismatch.match(l)
+    if m is None:
+        return None
+
+    extra = {
+        "bdf": m.group(2),
+        "dev_id": m.group(3),
+        "bank": m.group(4),
+        "core": m.group(5),
+        "pattern": m.group(6),
+        "repeat": m.group(7),
+        "pass": m.group(8),
+        "failures": m.group(9),
+        "first_fail_classified_as": m.group(10),
+        "write_failures": m.group(11),
+        "read_failures": m.group(12),
+    }
+    # print(f"\tMISMATCH '{extra}'")
+
+    return Event(EventType.MISMATCH, extra)
+
+
+def parse_bdf(l: str) -> Optional[Event]:
+    m = testbdf.match(l)
+    if m is None:
+        return None
+
+    extra = {
+        "bdf": m.group(2),
+        "dev_id": m.group(3),
+    }
+    # print(f"\tBDF '{extra}'")
+
+    return Event(EventType.BDF, extra)
+
+
+def parse_line(l: str) -> Optional[Event]:
+    if print_logs:
+        print(f"l: {l}")
+
+    parsers = [
+        parse_teststart,
+        parse_mismatch,
+        parse_testend,
+        parse_bdf,
+    ]
+
+    for p in parsers:
+        if r := p(l):
+            return r
+
+    # print(f"l: {l}")
+    return None
+
+
+async def parse_logs_stream(inf: asyncio.StreamReader) -> AsyncIterator[Event]:
+    while True:
+        l = await inf.readline()
+        if l == b"":
+            break
+
+        r = parse_line(l.decode("utf-8").strip())
+        if r is not None:
+            yield r
+
+
+async def parse_logs(inf: asyncio.StreamReader) -> list[Event]:
+    evs = []
+    async for e in parse_logs_stream(inf):
+        evs.append(e)
+
+    return evs
+
+
+def parse_evs(evs: list[Event], bdfs: dict[str, str]) -> Iterator[TestRun]:
+    test: str = ""
+    runs: list[TestRun] = []
+    errors: list[dict] = []
+
+    stresstest = "MeshDispatchFixture.TensixDeploymentEthernet05StressTest"
+    drambidir = "MeshDispatchFixture.TensixDeploymentEthernet04DataIntegrityDramBidir"
+    noprocs = [drambidir]
+
+    it = iter(evs)
+    for e in it:
+        if e.typ == EventType.TESTSTART:
+            test = e.extra["name"]
+            errors = []
+        elif e.typ == EventType.TESTEND:
+            runs.append(TestRun(test, errors, e.extra["status"]))
+            errors = []
+        elif e.typ == EventType.MISMATCH:
+            errors.append(e.extra)
+        elif e.typ == EventType.BDF:
+            bdfs[e.extra["dev_id"]] = e.extra["bdf"]
+
+    yield from runs
+
+
+def table(title: str, headers: list[str], rows: list[list]) -> str:
+    rows_str = [[str(x) for x in row] for row in rows]
+    all_rows = [headers] + rows_str
+    widths = [max(len(row[i]) for row in all_rows) for i in range(len(headers))]
+
+    sep = "+-" + "-+-".join("-" * w for w in widths) + "-+"
+    out = []
+    out.append("")
+    out.append(title)
+    out.append(sep)
+    out.append("| " + " | ".join(headers[i].ljust(widths[i]) for i in range(len(headers))) + " |")
+    out.append(sep)
+    for row in rows_str:
+        out.append("| " + " | ".join(row[i].ljust(widths[i]) for i in range(len(headers))) + " |")
+    out.append(sep)
+    return "\n".join(out)
+
+
+def shortname(n: str) -> str:
+    return n if "_" not in n else n.split("_")[1]
+
+
+def print_summary(runs: list[TestRun]):
+    headers = ["test name", "status"]
+    rows = []
+    for r in runs:
+        rows.append([shortname(r.name), r.status])
+
+    print(table("Test summary", headers, rows))
+
+
+def print_test_summary(r: TestRun, bdfs: dict[str, str]):
+    passes = [[True for i in range(8)] for i in range(32)]
+    for e in r.errors:
+        passes[int(e["dev_id"])][int(e["bank"])] = False
+
+    header = ["chip id", "bdf"]
+    for i in range(8):
+        header.append(f"D{i}")
+
+    rows = []
+    for d in range(len(passes)):
+        if not str(d) in bdfs:
+            continue
+        row = [d, bdfs[str(d)]]
+        for i in range(len(passes[d])):
+            row.append("PASS" if passes[d][i] else "FAIL")
+        rows.append(row)
+
+    print(table(f"{shortname(r.name)} summary", header, rows))
+
+
+def print_test_summaries(runs: list[TestRun], bdfs: dict[str, str]):
+    for r in runs:
+        print_test_summary(r, bdfs)
+
+
+def print_results(runs: list[TestRun], bdfs: dict[str, str]):
+    print_test_summaries(runs, bdfs)
+    print_summary(runs)
+
+
+async def main():
+    parser = ArgumentParser()
+    parser.add_argument("-q", action="store_true", help="Don't print the logs as the tests run")
+    parser.add_argument("-n", action="store_true", help="Don't print the summary")
+    parser.add_argument("-o", type=str, help="Output path for the json file")
+    opts = parser.parse_args()
+
+    if opts.q:
+        global print_logs
+        print_logs = False
+
+    outfile = opts.o if opts.o else "out.json"
+    print(f"Writing results to '{outfile}'")
+
+    program = "build/test/tt_metal/unit_tests_deployment"
+    args = ["--gtest_filter=*Dram*"]
+
+    proc = await asyncio.create_subprocess_exec(program, *args, stdout=asyncio.subprocess.PIPE)
+
+    p, evs = await asyncio.gather(proc.wait(), parse_logs(proc.stdout))
+
+    # pprint.pp(evs)
+    bdfs = {}
+    runs = list(parse_evs(evs, bdfs))
+    # pprint.pp(runs)
+    # pprint.pp(bdfs)
+    # print(runs_to_json(runs, sort_keys=True, indent=4))
+
+    if not opts.n:
+        print_results(runs, bdfs)
+    runs_to_jsonf(outfile, runs, sort_keys=True, indent=4)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
