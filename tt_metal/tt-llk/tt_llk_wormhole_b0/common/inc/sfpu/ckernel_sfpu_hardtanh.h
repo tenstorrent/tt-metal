@@ -47,7 +47,7 @@ inline void _calculate_hardtanh_(
 
         val += p2; // 12 bits
 
-        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = val;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = val;
 
         sfpi::dst_reg++;
     }

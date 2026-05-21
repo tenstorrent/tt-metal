@@ -41,7 +41,7 @@ inline void _calculate_silu_(std::uint32_t dst_index_in, std::uint32_t dst_index
             result = 1.0f - result;
         }
         v_endif;
-        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = val * result;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = val * result;
         sfpi::dst_reg++;
     }
 }

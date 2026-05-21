@@ -23,8 +23,8 @@ inline void _calculate_square_(std::uint32_t dst_index_in, std::uint32_t dst_ind
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
-        sfpi::vFloat v                                     = sfpi::dst_reg[0];
-        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = v * v;
+        sfpi::vFloat v                                             = sfpi::dst_reg[0];
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = v * v;
         sfpi::dst_reg++;
     }
 }

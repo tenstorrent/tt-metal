@@ -30,7 +30,7 @@ inline void _calculate_dropout_(std::uint32_t dst_index_in, std::uint32_t dst_in
     {
         ////////////////////////
         // Scale samples
-        // dst_reg[(dst_index_out - dst_index_in) * 32] = dst_reg[0] * sFloat16b(scale);
+        // dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = dst_reg[0] * sFloat16b(scale);
         ///////////////////////
         TT_SFPLOAD(p_sfpu::LREG0, 0, 3, 0);
         TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
@@ -47,12 +47,12 @@ inline void _calculate_dropout_(std::uint32_t dst_index_in, std::uint32_t dst_in
         ////////////////////////
         // Drop samples
         // v_if (rand < probability)
-        //   dst_reg[(dst_index_out - dst_index_in) * 32] = vConst0;
+        //   dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = vConst0;
         ///////////////////////
         TTI_SFPIADD(0, p_sfpu::LREG2, p_sfpu::LREG3, 10);
         TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
         TTI_SFPENCC(0, 0, 0, 0);
-        TT_SFPSTORE(0, 0, 3, (dst_index_out - dst_index_in) * 32);
+        TT_SFPSTORE(0, 0, 3, (dst_index_out - dst_index_in) * TILE_R_DIM);
 
         sfpi::dst_reg++;
     }

@@ -100,7 +100,7 @@ inline void _calculate_comp_(std::uint32_t dst_index_in, std::uint32_t dst_index
             result = flag1;
         }
 
-        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = result;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = result;
 
         sfpi::dst_reg++;
     }
@@ -200,7 +200,7 @@ inline void _calculate_zero_comp_(std::uint32_t dst_index_in, std::uint32_t dst_
     {
         sfpi::vFloat v = sfpi::dst_reg[0];
         apply_zero_comp<COMP_MODE>(v, exponent_size_8);
-        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = v;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = v;
         sfpi::dst_reg++;
     }
 }
@@ -299,7 +299,7 @@ inline void _calculate_zero_comp_int_(std::uint32_t dst_index_in, std::uint32_t 
     {
         sfpi::vInt v = sfpi::dst_reg[0];
         apply_zero_comp_int<COMP_MODE>(v);
-        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = v;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = v;
         sfpi::dst_reg++;
     }
 }
@@ -538,7 +538,7 @@ inline void _calculate_comp_unary_int_(std::uint32_t dst_index_in, std::uint32_t
 
         apply_unary_comp_int<COMP_MODE>(val, v, scalar);
 
-        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = val;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = val;
         sfpi::dst_reg++;
     }
 }
@@ -643,7 +643,7 @@ inline void _calculate_comp_unary_(std::uint32_t dst_index_in, std::uint32_t dst
 
         apply_unary_comp_float<COMP_MODE>(val, v, s);
 
-        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = val;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = val;
         sfpi::dst_reg++;
     }
 }

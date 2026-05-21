@@ -25,9 +25,9 @@ inline void _calculate_tanh_(std::uint32_t dst_index_in, std::uint32_t dst_index
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
     {
-        sfpi::vFloat val                                   = sfpi::dst_reg[0];
-        val                                                = lut(val, l0, l1, l2);
-        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = val;
+        sfpi::vFloat val                                           = sfpi::dst_reg[0];
+        val                                                        = lut(val, l0, l1, l2);
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = val;
 
         sfpi::dst_reg++;
     }

@@ -22,7 +22,7 @@ inline void _calculate_fill_(std::uint32_t dst_index_in, std::uint32_t dst_index
 
     for (int d = 0; d < ITERATIONS; d++)
     {
-        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = fill_val;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = fill_val;
         sfpi::dst_reg++;
     }
 }
@@ -45,7 +45,7 @@ inline void _calculate_fill_int_(std::uint32_t dst_index_in, std::uint32_t dst_i
     }
     for (int d = 0; d < ITERATIONS; d++)
     {
-        TT_SFPSTORE(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_3, (dst_index_out - dst_index_in) * 32);
+        TT_SFPSTORE(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_3, (dst_index_out - dst_index_in) * TILE_R_DIM);
         sfpi::dst_reg++;
     }
 }
@@ -58,7 +58,7 @@ inline void _calculate_fill_bitcast_(std::uint32_t dst_index_in, std::uint32_t d
 
     for (int d = 0; d < ITERATIONS; d++)
     {
-        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = fill_val;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = fill_val;
         sfpi::dst_reg++;
     }
 }

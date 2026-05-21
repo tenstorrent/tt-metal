@@ -28,17 +28,17 @@ inline void _llk_math_eltwise_unary_sfpu_params_(F&& sfpu_func, std::uint32_t ds
 template <class F, class... ARGS>
 inline void _llk_math_eltwise_unary_sfpu_params_split_(F&& sfpu_func, std::uint32_t dst_tile_index_in, std::uint32_t dst_tile_index_out, ARGS&&... args)
 {
-    _llk_math_eltwise_unary_sfpu_start_(dst_tile_index_in);
+    _llk_math_eltwise_sfpu_start_(dst_tile_index_in);
 
     for (std::uint32_t face = 0; face < NUM_FACES; face++)
     {
         sfpu_func(dst_tile_index_in, dst_tile_index_out, static_cast<ARGS&&>(args)...);
 
         // Move to the next face
-        _llk_math_eltwise_unary_sfpu_inc_dst_face_addr_();
+        _llk_math_eltwise_sfpu_inc_dst_face_addr_();
     }
 
-    _llk_math_eltwise_unary_sfpu_done_();
+    _llk_math_eltwise_sfpu_done_();
 }
 
 /**

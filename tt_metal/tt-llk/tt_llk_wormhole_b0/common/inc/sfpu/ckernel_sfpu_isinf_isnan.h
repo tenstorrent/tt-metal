@@ -129,23 +129,23 @@ inline void _calculate_sfpu_isinf_isnan_(std::uint32_t dst_index_in, std::uint32
 
         if constexpr (operation == SfpuType::isinf)
         {
-            sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = _calculate_isinf_<APPROXIMATION_MODE>(in);
+            sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = _calculate_isinf_<APPROXIMATION_MODE>(in);
         }
         else if constexpr (operation == SfpuType::isposinf)
         {
-            sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = _calculate_isposinf_<APPROXIMATION_MODE>(in);
+            sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = _calculate_isposinf_<APPROXIMATION_MODE>(in);
         }
         else if constexpr (operation == SfpuType::isneginf)
         {
-            sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = _calculate_isneginf_<APPROXIMATION_MODE>(in);
+            sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = _calculate_isneginf_<APPROXIMATION_MODE>(in);
         }
         else if constexpr (operation == SfpuType::isnan)
         {
-            sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = _calculate_isnan_<APPROXIMATION_MODE>(in);
+            sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = _calculate_isnan_<APPROXIMATION_MODE>(in);
         }
         else if constexpr (operation == SfpuType::isfinite)
         {
-            sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = _calculate_isfinite_<APPROXIMATION_MODE>(in);
+            sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = _calculate_isfinite_<APPROXIMATION_MODE>(in);
         }
 
         sfpi::dst_reg++;

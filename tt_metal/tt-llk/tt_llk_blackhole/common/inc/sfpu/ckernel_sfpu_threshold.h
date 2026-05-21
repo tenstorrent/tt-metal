@@ -41,7 +41,7 @@ inline void _calculate_threshold_(std::uint32_t dst_index_in, std::uint32_t dst_
 
         v_if (in <= v_threshold)
         {
-            sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = v_value;
+            sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = v_value;
         }
         v_endif;
 

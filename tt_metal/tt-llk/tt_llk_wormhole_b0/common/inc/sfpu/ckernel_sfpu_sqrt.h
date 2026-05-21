@@ -125,7 +125,7 @@ inline void _calculate_sqrt_internal_(std::uint32_t dst_index_in, std::uint32_t 
         {
             tmp = sfpi::convert<sfpi::vFloat16b>(tmp, sfpi::RoundMode::NearestEven);
         }
-        sfpi::dst_reg[0] = tmp;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = tmp;
         sfpi::dst_reg++;
     }
 }

@@ -99,7 +99,7 @@ inline void _calculate_reciprocal_internal_(std::uint32_t dst_index_in, std::uin
             out = _sfpu_reciprocal_<1>(in);
             out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::NearestEven);
         }
-        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = out;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = out;
         sfpi::dst_reg++;
     }
 }

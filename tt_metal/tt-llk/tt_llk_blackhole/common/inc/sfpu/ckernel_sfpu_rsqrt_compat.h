@@ -104,9 +104,9 @@ inline void _calculate_rsqrt_compat_(std::uint32_t dst_index_in, std::uint32_t d
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
     {
-        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = _sqrt_compat_<APPROXIMATION_MODE, 2>(sfpi::dst_reg[0]);
-        sfpi::vFloat in                                    = sfpi::dst_reg[(dst_index_out - dst_index_in) * 32];
-        sfpi::vFloat out                                   = _reciprocal_compat_<APPROXIMATION_MODE ? 2 : 3>(in);
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = _sqrt_compat_<APPROXIMATION_MODE, 2>(sfpi::dst_reg[0]);
+        sfpi::vFloat in                                            = sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM];
+        sfpi::vFloat out                                           = _reciprocal_compat_<APPROXIMATION_MODE ? 2 : 3>(in);
         v_if (in < 0.0)
         {
             out = -out;
@@ -127,7 +127,7 @@ inline void _calculate_sqrt_compat_(std::uint32_t dst_index_in, std::uint32_t ds
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
     {
-        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = _sqrt_compat_<APPROXIMATION_MODE, 2>(sfpi::dst_reg[0]);
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = _sqrt_compat_<APPROXIMATION_MODE, 2>(sfpi::dst_reg[0]);
         sfpi::dst_reg++;
     }
 }

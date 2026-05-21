@@ -87,7 +87,7 @@ sfpi_inline void _calculate_floor_(std::uint32_t dst_index_in, std::uint32_t dst
 {
     for (int d = 0; d < ITERATIONS; d++)
     {
-        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = _floor_body_(sfpi::dst_reg[0]);
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = _floor_body_(sfpi::dst_reg[0]);
         sfpi::dst_reg++;
     }
 }
@@ -97,7 +97,7 @@ sfpi_inline void _calculate_ceil_(std::uint32_t dst_index_in, std::uint32_t dst_
 {
     for (int d = 0; d < ITERATIONS; d++)
     {
-        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = _ceil_body_(sfpi::dst_reg[0]);
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = _ceil_body_(sfpi::dst_reg[0]);
         sfpi::dst_reg++;
     }
 }
@@ -107,7 +107,7 @@ sfpi_inline void _calculate_trunc_(std::uint32_t dst_index_in, std::uint32_t dst
 {
     for (int d = 0; d < ITERATIONS; d++)
     {
-        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = _trunc_body_(sfpi::dst_reg[0]);
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = _trunc_body_(sfpi::dst_reg[0]);
         sfpi::dst_reg++;
     }
 }
@@ -117,8 +117,8 @@ sfpi_inline void _calculate_frac_(std::uint32_t dst_index_in, std::uint32_t dst_
 {
     for (int d = 0; d < ITERATIONS; d++)
     {
-        sfpi::vFloat x   = sfpi::dst_reg[0];
-        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = x - _trunc_body_(x);
+        sfpi::vFloat x                                             = sfpi::dst_reg[0];
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = x - _trunc_body_(x);
         sfpi::dst_reg++;
     }
 }
@@ -166,9 +166,9 @@ void _calculate_round_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, 
 
     for (int d = 0; d < ITERATIONS; ++d)
     {
-        sfpi::vFloat v                                     = sfpi::dst_reg[0];
-        sfpi::vFloat result                                = inverse * _round_even_(v * coeff);
-        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = result;
+        sfpi::vFloat v                                             = sfpi::dst_reg[0];
+        sfpi::vFloat result                                        = inverse * _round_even_(v * coeff);
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = result;
         sfpi::dst_reg++;
     }
 }
@@ -180,8 +180,8 @@ sfpi_inline void _calculate_stochastic_round_(std::uint32_t dst_index_in, std::u
 #pragma GCC unroll ITERATIONS
     for (int d = 0; d < ITERATIONS; d++)
     {
-        sfpi::vFloat x   = sfpi::dst_reg[0];
-        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = sfpi::convert<sfpi::vFloat16b>(x, sfpi::RoundMode::Stochastic);
+        sfpi::vFloat x                                             = sfpi::dst_reg[0];
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = sfpi::convert<sfpi::vFloat16b>(x, sfpi::RoundMode::Stochastic);
         sfpi::dst_reg++;
     }
 }

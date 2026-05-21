@@ -118,9 +118,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, false /* untilize */, false /* tilize */>(
-        formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES);
-    _llk_pack_init_wrapper_<false /* untilize */, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES);
+    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
     _llk_pack_dest_init_<DST_SYNC, is_fp32_dest_acc_en>();
 
     for (int block = 0; block < params.NUM_BLOCKS; block++)
@@ -128,7 +127,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_packer_wait_for_math_done_();
 
         // Pack from DST_INDEX_OUT — the SFPU wrote its result here
-        _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, /* untilize */ false>(DST_INDEX_OUT, L1_ADDRESS(params.buffer_Res[block]));
+        _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, PackMode::Default>(DST_INDEX_OUT, L1_ADDRESS(params.buffer_Res[block]));
 
         _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
     }

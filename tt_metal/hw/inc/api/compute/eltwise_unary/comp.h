@@ -386,11 +386,7 @@ ALWI void gtz_tile(uint32_t idst) { MATH(SFPU_ZERO_KERNEL(greater_than_zero, RC,
 
 ALWI void gtz_tile(uint32_t idst_in, uint32_t idst_out) {
     MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::calculate_comp<APPROX, SfpuType::greater_than_zero>,
-        idst_in,
-        idst_out,
-        (int)VectorMode::RC,
-        8)));
+        ckernel::sfpu::calculate_comp<APPROX, SfpuType::greater_than_zero>, idst_in, idst_out, (int)VectorMode::RC)));
 }
 
 // clang-format off
@@ -442,7 +438,7 @@ ALWI void nez_tile(uint32_t idst) { MATH(SFPU_ZERO_KERNEL(not_equal_zero, RC, AP
 
 ALWI void nez_tile(uint32_t idst_in, uint32_t idst_out) {
     MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::calculate_comp<APPROX, SfpuType::not_equal_zero>, idst_in, idst_out, (int)VectorMode::RC, 8)));
+        ckernel::sfpu::calculate_comp<APPROX, SfpuType::not_equal_zero>, idst_in, idst_out, (int)VectorMode::RC)));
 }
 
 // clang-format off
@@ -494,8 +490,7 @@ ALWI void gez_tile(uint32_t idst_in, uint32_t idst_out) {
         ckernel::sfpu::calculate_comp<APPROX, SfpuType::greater_than_equal_zero>,
         idst_in,
         idst_out,
-        (int)VectorMode::RC,
-        8)));
+        (int)VectorMode::RC)));
 }
 
 // clang-format off
@@ -547,7 +542,7 @@ ALWI void ltz_tile(uint32_t idst) { MATH(SFPU_ZERO_KERNEL(less_than_zero, RC, AP
 
 ALWI void ltz_tile(uint32_t idst_in, uint32_t idst_out) {
     MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::calculate_comp<APPROX, SfpuType::less_than_zero>, idst_in, idst_out, (int)VectorMode::RC, 8)));
+        ckernel::sfpu::calculate_comp<APPROX, SfpuType::less_than_zero>, idst_in, idst_out, (int)VectorMode::RC)));
 }
 
 // clang-format off
@@ -596,7 +591,7 @@ ALWI void eqz_tile(uint32_t idst) { MATH(SFPU_ZERO_KERNEL(equal_zero, RC, APPROX
 
 ALWI void eqz_tile(uint32_t idst_in, uint32_t idst_out) {
     MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::calculate_comp<APPROX, SfpuType::equal_zero>, idst_in, idst_out, (int)VectorMode::RC, 8)));
+        ckernel::sfpu::calculate_comp<APPROX, SfpuType::equal_zero>, idst_in, idst_out, (int)VectorMode::RC)));
 }
 
 // clang-format off
@@ -695,8 +690,7 @@ ALWI void lez_tile(uint32_t idst_in, uint32_t idst_out) {
         ckernel::sfpu::calculate_comp<APPROX, SfpuType::less_than_equal_zero>,
         idst_in,
         idst_out,
-        (int)VectorMode::RC,
-        8)));
+        (int)VectorMode::RC)));
 }
 
 // clang-format off

@@ -77,7 +77,7 @@ inline void _calculate_activation_(std::uint32_t dst_index_in, std::uint32_t dst
     {
         sfpi::vFloat v = sfpi::dst_reg[0];
         apply_activation<APPROXIMATION_MODE, ACTIVATION_TYPE>(v, param0, param1);
-        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = v;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = v;
         sfpi::dst_reg++;
     }
 }
@@ -90,7 +90,7 @@ inline void _calculate_activation_(std::uint32_t dst_index_in, std::uint32_t dst
     {
         sfpi::vFloat v = sfpi::dst_reg[0];
         apply_activation<APPROXIMATION_MODE, ACTIVATION_TYPE>(v);
-        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = v;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = v;
         sfpi::dst_reg++;
     }
 }

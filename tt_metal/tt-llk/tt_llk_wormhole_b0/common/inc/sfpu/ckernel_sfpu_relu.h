@@ -31,7 +31,7 @@ inline void _calculate_lrelu_(std::uint32_t dst_index_in, std::uint32_t dst_inde
         TTI_SFPSETCC(0, p_sfpu::LREG0, 0, 0);                                         // condition - if value in LREG0 is negative //will set cc result reg
         TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG0, 0); // Multiply LREG0 * LREG2 (x * slope)
         TTI_SFPENCC(0, 0, 0, 0);                                                      // clear cc result reg
-        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, (dst_index_out - dst_index_in) * 32); // store from lreg0 into dest register
+        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, (dst_index_out - dst_index_in) * TILE_R_DIM); // store from lreg0 into dest register
         sfpi::dst_reg++;
     }
 }
@@ -68,7 +68,7 @@ inline void _relu_max_impl_(std::uint32_t dst_index_in, std::uint32_t dst_index_
             result = 0;
         }
         v_endif;
-        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = result;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = result;
         sfpi::dst_reg++;
     }
 }
@@ -116,7 +116,7 @@ inline void _relu_min_impl_(
         // Swap and store maximum in lreg1, minimum in lreg0 (sign + magnitude format)
         TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, 1);
         // Store the result
-        TT_SFPSTORE(p_sfpu::LREG1, sfpload_instr_mod, ADDR_MOD_3, (dst_index_out - dst_index_in) * 32);
+        TT_SFPSTORE(p_sfpu::LREG1, sfpload_instr_mod, ADDR_MOD_3, (dst_index_out - dst_index_in) * TILE_R_DIM);
         sfpi::dst_reg++;
     }
 }

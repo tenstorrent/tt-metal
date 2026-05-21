@@ -30,8 +30,8 @@ inline void _calculate_tanh_derivative_(std::uint32_t dst_index_in, std::uint32_
             val = lut(val, l0, l1, l2);
         }
 
-        val                                                = val * (-val) + sfpi::vConst1;
-        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = val;
+        val                                                        = val * (-val) + sfpi::vConst1;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = val;
 
         sfpi::dst_reg++;
     }

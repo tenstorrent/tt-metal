@@ -55,7 +55,7 @@ inline void _calculate_gelu_appx_(std::uint32_t dst_index_in, std::uint32_t dst_
         sfpi::vFloat result  = lut2_sign(in, l0, l1, l2, l4, l5, l6);
         result               = half_in + result;
 
-        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = result;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = result;
 
         sfpi::dst_reg++;
     }
@@ -75,9 +75,9 @@ inline void _calculate_gelu_accurate_(std::uint32_t dst_index_in, std::uint32_t 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
-        sfpi::vFloat in     = sfpi::dst_reg[0];
-        sfpi::vFloat result = _calculate_cdf_appx_(in, scaled);
-        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = result;
+        sfpi::vFloat in                                            = sfpi::dst_reg[0];
+        sfpi::vFloat result                                        = _calculate_cdf_appx_(in, scaled);
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = result;
         sfpi::dst_reg++;
     }
 }
@@ -120,7 +120,7 @@ inline void _calculate_gelu_derivative_(std::uint32_t dst_index_in, std::uint32_
                 val = val + 1.0f;
             }
             v_endif;
-            sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = val;
+            sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = val;
             sfpi::dst_reg++;
         }
 
@@ -155,7 +155,7 @@ inline void _calculate_gelu_derivative_(std::uint32_t dst_index_in, std::uint32_
 
             result = lut(result, l0, l1, imm2);
 
-            sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = partial + result + 0.5f;
+            sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = partial + result + 0.5f;
             sfpi::dst_reg++;
         }
 

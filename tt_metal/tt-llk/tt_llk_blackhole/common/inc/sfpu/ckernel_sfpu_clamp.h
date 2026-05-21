@@ -42,7 +42,7 @@ inline void _calculate_clamp_(
         }
         v_endif;
 
-        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = val + offset;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = val + offset;
 
         sfpi::dst_reg++;
     }

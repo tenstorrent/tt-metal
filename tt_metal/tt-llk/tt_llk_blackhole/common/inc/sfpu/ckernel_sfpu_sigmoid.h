@@ -30,7 +30,7 @@ inline void _calculate_sigmoid_(std::uint32_t dst_index_in, std::uint32_t dst_in
     {
         sfpi::vFloat val = sfpi::dst_reg[0];
 
-        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = lut2(val, l0, l1, l2, l4, l5, l6, lut_mode) + 0.5f;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = lut2(val, l0, l1, l2, l4, l5, l6, lut_mode) + 0.5f;
 
         sfpi::dst_reg++;
     }

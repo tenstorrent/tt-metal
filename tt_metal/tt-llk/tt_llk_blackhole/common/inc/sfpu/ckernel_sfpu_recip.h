@@ -67,7 +67,7 @@ inline void _calculate_reciprocal_fast_7b_(std::uint32_t dst_index_in, std::uint
     {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
         TTI_SFPARECIP(0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPARECIP_MOD1_RECIP);
-        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, (dst_index_out - dst_index_in) * 32);
+        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, (dst_index_out - dst_index_in) * TILE_R_DIM);
     }
 #else
     LLK_ASSERT(dst_index_out == dst_index_in, "recip fast-7b SFPLOADMACRO path requires dst_index_out == dst_index_in");
@@ -97,7 +97,7 @@ inline void _calculate_reciprocal_fast_8b_3c_(std::uint32_t dst_index_in, std::u
         TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG0, p_sfpu::LCONST_neg1, p_sfpu::LREG1, 0);
         TTI_SFPSHFT((-16) & 0xFFF, p_sfpu::LREG1, p_sfpu::LREG1, 5);
         TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
-        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, (dst_index_out - dst_index_in) * 32);
+        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, (dst_index_out - dst_index_in) * TILE_R_DIM);
     }
 #else
     LLK_ASSERT(dst_index_out == dst_index_in, "recip fast-8b SFPLOADMACRO path requires dst_index_out == dst_index_in");
@@ -204,7 +204,7 @@ inline void _calculate_reciprocal_fast_24b_5c_(std::uint32_t dst_index_in, std::
         TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG2, p_sfpu::LREG2, p_sfpu::LREG3, 0);
         TTI_SFPSWAP(0, p_sfpu::LCONST_1, p_sfpu::LREG3, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
         TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
-        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, (dst_index_out - dst_index_in) * 32);
+        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, (dst_index_out - dst_index_in) * TILE_R_DIM);
     }
 #else
     LLK_ASSERT(dst_index_out == dst_index_in, "recip fast-24b SFPLOADMACRO path requires dst_index_out == dst_index_in");

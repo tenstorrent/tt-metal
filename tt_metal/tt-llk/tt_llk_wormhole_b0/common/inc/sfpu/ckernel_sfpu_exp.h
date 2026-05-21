@@ -59,8 +59,9 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val)
 
     sfpi::vInt z = _float_to_int32_for_exp_21f_(xlog2);
 
-    sfpi::vInt exponential_part = sfpi::exexp(sfpi::reinterpret<sfpi::vFloat>(z), sfpi::ExponentMode::NoDebias); // Extract exponent ( = 2**(integer part of val/ln2))
-    sfpi::vInt fractional_part  = sfpi::exman(sfpi::reinterpret<sfpi::vFloat>(z));                         // Extract mantissa ( = leftover part, in [0; 1])
+    sfpi::vInt exponential_part =
+        sfpi::exexp(sfpi::reinterpret<sfpi::vFloat>(z), sfpi::ExponentMode::NoDebias); // Extract exponent ( = 2**(integer part of val/ln2))
+    sfpi::vInt fractional_part = sfpi::exman(sfpi::reinterpret<sfpi::vFloat>(z));      // Extract mantissa ( = leftover part, in [0; 1])
 
     sfpi::vFloat frac = sfpi::int32_to_float(fractional_part, sfpi::RoundMode::NearestEven);
 
@@ -128,7 +129,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val)
     sfpi::vInt z = _float_to_int32_for_exp_21f_(xlog2);
 
     sfpi::vInt exponential_part = exexp(sfpi::reinterpret<sfpi::vFloat>(z), sfpi::ExponentMode::NoDebias); // Extract exponent ( = 2**(integer part of val/ln2))
-    sfpi::vInt fractional_part  = sfpi::exman(sfpi::reinterpret<sfpi::vFloat>(z));                   // Extract mantissa ( = leftover part, in [0; 1])
+    sfpi::vInt fractional_part  = sfpi::exman(sfpi::reinterpret<sfpi::vFloat>(z));                         // Extract mantissa ( = leftover part, in [0; 1])
 
     sfpi::vFloat frac = sfpi::int32_to_float(fractional_part, sfpi::RoundMode::NearestEven);
 
@@ -416,7 +417,7 @@ void _calculate_exponential_(std::uint32_t dst_index_in, std::uint32_t dst_index
             TTI_SFPMAD(p_sfpu::LREG12, p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG0, 0);
             TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
             TTI_SFPSHFT(15, p_sfpu::LREG0, p_sfpu::LREG0, 1);
-            TT_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, (dst_index_out - dst_index_in) * 32);
+            TT_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, (dst_index_out - dst_index_in) * TILE_R_DIM);
             sfpi::dst_reg++;
         }
 #else
@@ -526,7 +527,7 @@ void _calculate_exponential_(std::uint32_t dst_index_in, std::uint32_t dst_index
             TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);
             TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LREG1, 5); // lreg[1] = lreg[0] << 15
             TTI_SFPSETSGN(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);             // lreg[0] preserves sign, copies e/m from lreg[1]
-            TT_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, (dst_index_out - dst_index_in) * 32);
+            TT_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, (dst_index_out - dst_index_in) * TILE_R_DIM);
             sfpi::dst_reg++;
         }
     }

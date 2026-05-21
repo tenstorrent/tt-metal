@@ -23,7 +23,7 @@ inline void _cast_fp32_to_fp16a_(std::uint32_t dst_index_in, std::uint32_t dst_i
     {
         TTI_SFPLOAD(0, 0, 3, 0);
         TTI_SFP_STOCH_RND(0, 0, 0, 0, 0, 8);
-        TT_SFPSTORE(0, 1, 3, (dst_index_out - dst_index_in) * 32);
+        TT_SFPSTORE(0, 1, 3, (dst_index_out - dst_index_in) * TILE_R_DIM);
         sfpi::dst_reg++;
     }
 }

@@ -19,8 +19,8 @@ inline void _calculate_negative_(std::uint32_t dst_index_in, std::uint32_t dst_i
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
-        sfpi::vFloat val = sfpi::dst_reg[0];
-        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = -val;
+        sfpi::vFloat val                                           = sfpi::dst_reg[0];
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = -val;
         sfpi::dst_reg++;
     }
 }
@@ -31,8 +31,8 @@ inline void _calculate_negative_int_(std::uint32_t dst_index_in, std::uint32_t d
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
-        sfpi::vInt val   = sfpi::dst_reg[0];
-        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = -val;
+        sfpi::vInt val                                             = sfpi::dst_reg[0];
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = -val;
         sfpi::dst_reg++;
     }
 }

@@ -100,7 +100,7 @@ inline void _calculate_sine_(std::uint32_t dst_index_in, std::uint32_t dst_index
             v *= -1;
         }
         v_endif;
-        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = v;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = v;
         sfpi::dst_reg++;
     }
 }
@@ -127,7 +127,7 @@ inline void _calculate_cosine_(std::uint32_t dst_index_in, std::uint32_t dst_ind
             v *= -1;
         }
         v_endif;
-        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = v;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = v;
         sfpi::dst_reg++;
     }
 }
@@ -143,19 +143,19 @@ inline void _calculate_acosh_(std::uint32_t dst_index_in, std::uint32_t dst_inde
         sfpi::vFloat inp = sfpi::dst_reg[0];
         v_if (inp < sfpi::vConst1)
         {
-            sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = std::numeric_limits<float>::quiet_NaN();
+            sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = std::numeric_limits<float>::quiet_NaN();
         }
         v_elseif (inp == sfpi::vConst1)
         {
-            sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = sfpi::vConst0;
+            sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = sfpi::vConst0;
         }
         v_else
         {
-            sfpi::vFloat tmp                                   = inp * inp;
-            tmp                                                = tmp - sfpi::vConst1;
-            tmp                                                = _calculate_sqrt_body_<APPROXIMATION_MODE>(tmp);
-            tmp                                                = tmp + inp;
-            sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = _calculate_log_body_no_init_(tmp);
+            sfpi::vFloat tmp                                           = inp * inp;
+            tmp                                                        = tmp - sfpi::vConst1;
+            tmp                                                        = _calculate_sqrt_body_<APPROXIMATION_MODE>(tmp);
+            tmp                                                        = tmp + inp;
+            sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = _calculate_log_body_no_init_(tmp);
         }
         v_endif;
         sfpi::dst_reg++;
@@ -179,7 +179,7 @@ inline void _calculate_asinh_(std::uint32_t dst_index_in, std::uint32_t dst_inde
             res = -res;
         }
         v_endif;
-        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = res;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = res;
         sfpi::dst_reg++;
     }
 }
@@ -222,7 +222,7 @@ inline void _calculate_atanh_(std::uint32_t dst_index_in, std::uint32_t dst_inde
             res = 0.5f * den;
         }
         v_endif;
-        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = res;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = res;
         sfpi::dst_reg++;
     }
 }
