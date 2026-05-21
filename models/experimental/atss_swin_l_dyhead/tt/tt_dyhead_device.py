@@ -406,12 +406,14 @@ class TtGroupNorm:
 _RESIZE_GRID_CACHE: dict = {}
 
 
-def _get_resize_grid(device, src_H, src_W, target_H, target_W):
-    """Return a cached (1, target_H, target_W, 2) grid for the given resize.
+def _get_resize_grid(device, src_H, src_W, target_H, target_W, padded_C):
+    """Return a cached precomputed (1, target_H, target_W, 6) grid for the given resize.
 
     Reference DyHead uses F.interpolate(mode='bilinear', align_corners=True) for cross-level
-    offset/mask/feature resizing. We replicate that sampling position with ttnn.grid_sample,
-    which itself always uses align_corners=False normalization regardless of the flag passed.
+    offset/mask/feature resizing. We replicate that sampling position with ttnn.grid_sample.
+    The returned grid is in the "precomputed" format produced by
+    ttnn.prepare_grid_sample_grid — it bakes the pixel coordinates and the bilinear
+    weights, so the runtime grid_sample skips that arithmetic each call.
 
     align_corners=True target-to-source mapping:
         src_y = ty * (H_in - 1) / (H_out - 1)        for H_out > 1
@@ -419,13 +421,12 @@ def _get_resize_grid(device, src_H, src_W, target_H, target_W):
     Convert to ttnn (align_corners=False) grid:
         ny = (2 * src_y + 1) / H_in - 1
     """
-    key = (id(device), src_H, src_W, target_H, target_W)
+    key = (id(device), src_H, src_W, target_H, target_W, padded_C)
     g = _RESIZE_GRID_CACHE.get(key)
     if g is not None:
         return g
     ty = torch.arange(target_H, dtype=torch.float32)
     tx = torch.arange(target_W, dtype=torch.float32)
-    # align_corners=True source-pixel positions
     if target_H > 1:
         src_y = ty * (src_H - 1.0) / (target_H - 1.0)
     else:
@@ -434,14 +435,21 @@ def _get_resize_grid(device, src_H, src_W, target_H, target_W):
         src_x = tx * (src_W - 1.0) / (target_W - 1.0)
     else:
         src_x = torch.zeros(1, dtype=torch.float32)
-    # Convert to ttnn grid (align_corners=False) coordinates
     ny = (2 * src_y + 1) / src_H - 1
     nx = (2 * src_x + 1) / src_W - 1
     grid = torch.zeros(1, target_H, target_W, 2, dtype=torch.float32)
     grid[:, :, :, 0] = nx.view(1, 1, target_W)
     grid[:, :, :, 1] = ny.view(1, target_H, 1)
+    # prepare_grid_sample_grid expects the input grid on HOST.
+    grid_host = ttnn.from_torch(grid, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    grid_prepared = ttnn.prepare_grid_sample_grid(
+        grid_host,
+        input_shape=[1, src_H, src_W, padded_C],
+        padding_mode="zeros",
+        output_dtype=ttnn.bfloat16,
+    )
     grid_tt = ttnn.from_torch(
-        grid.to(torch.bfloat16),
+        ttnn.to_torch(grid_prepared),
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
@@ -469,10 +477,12 @@ def _bilinear_resize_via_grid_sample(device, x_nhwc, target_H, target_W, channel
             x_nhwc = ttnn.to_layout(x_nhwc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         x_nhwc = ttnn.pad(x_nhwc, padding=[(0, 0), (0, 0), (0, 0), (0, padded_C - C)], value=0.0)
 
-    grid_tt = _get_resize_grid(device, H, W, target_H, target_W)
+    grid_tt = _get_resize_grid(device, H, W, target_H, target_W, padded_C)
     if x_nhwc.layout != ttnn.ROW_MAJOR_LAYOUT:
         x_nhwc = ttnn.to_layout(x_nhwc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-    out = ttnn.grid_sample(x_nhwc, grid_tt, mode="bilinear", padding_mode="zeros", align_corners=False)
+    out = ttnn.grid_sample(
+        x_nhwc, grid_tt, mode="bilinear", padding_mode="zeros", align_corners=False, use_precomputed_grid=True
+    )
     if needs_pad:
         out = ttnn.slice(out, [0, 0, 0, 0], [1, target_H, target_W, channels], memory_config=ttnn.L1_MEMORY_CONFIG)
     return out
