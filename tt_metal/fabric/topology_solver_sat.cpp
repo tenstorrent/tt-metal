@@ -266,9 +266,12 @@ void topology_sat_add_shape_clause_or_unsat(
             solver.add(-lit);
             solver.add(0);
         } else {
-            solver.add(1);
+            // No variables were ever declared — declare one now so CaDiCaL's strict variable check
+            // (factor=1, enabled by default in CaDiCaL 3.0.0) accepts the literal.
+            const int v = solver.declare_one_more_variable();
+            solver.add(v);
             solver.add(0);
-            solver.add(-1);
+            solver.add(-v);
             solver.add(0);
         }
         return;
@@ -293,9 +296,10 @@ bool topology_sat_add_blocking_clause_for_mapping_impl(
                 solver.add(-lit);
                 solver.add(0);
             } else {
-                solver.add(1);
+                const int v = solver.declare_one_more_variable();
+                solver.add(v);
                 solver.add(0);
-                solver.add(-1);
+                solver.add(-v);
                 solver.add(0);
             }
         } else {
