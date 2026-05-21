@@ -15,9 +15,12 @@ set(TRACY_TIMER_FALLBACK ON)
 
 set(DEFAULT_COMPONENT_NAME ${CMAKE_INSTALL_DEFAULT_COMPONENT_NAME})
 set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME tracy)
+# Out-of-tree only: keep all Tracy CMake state under ${CMAKE_BINARY_DIR}/profiler so removing
+# the top-level build directory leaves submodule source trees clean for git.
+set(_tt_profiler_binary_dir "${CMAKE_BINARY_DIR}/profiler")
 set(_saved_clang_tidy "${CMAKE_CXX_CLANG_TIDY}")
 set(CMAKE_CXX_CLANG_TIDY "")
-add_subdirectory(${TRACY_HOME})
+add_subdirectory(${TRACY_HOME} ${_tt_profiler_binary_dir})
 set(CMAKE_CXX_CLANG_TIDY "${_saved_clang_tidy}")
 set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
 
@@ -58,8 +61,8 @@ set(NO_FILESELECTOR ON)
 # Tracy code has warnings that the parent project's -Werror would make fatal.
 get_directory_property(_parent_compile_opts COMPILE_OPTIONS)
 add_compile_options(-Wno-error)
-add_subdirectory(${TRACY_HOME}/csvexport)
-add_subdirectory(${TRACY_HOME}/capture)
+add_subdirectory(${TRACY_HOME}/csvexport ${_tt_profiler_binary_dir}/csvexport)
+add_subdirectory(${TRACY_HOME}/capture ${_tt_profiler_binary_dir}/capture)
 
 set_property(
     DIRECTORY
@@ -68,6 +71,15 @@ set_property(
             "${_parent_compile_opts}"
 )
 unset(NO_FILESELECTOR)
+
+# install(TARGETS) copies capture/csvexport into build/bin; ensure they are built on ALL.
+add_custom_target(tracy_profiler_cli_tools ALL)
+add_dependencies(
+    tracy_profiler_cli_tools
+    tracy-capture
+    tracy-csvexport
+    tracy-capture-daemon
+)
 
 # Build Tracy profiler WASM project using Emscripten.
 #
@@ -112,11 +124,12 @@ else()
         COMMAND
             ${CMAKE_COMMAND} -E echo "Building Tracy profiler WASM..."
         COMMAND
-            "${_tt_tracy_emcmake}" cmake -DEMSCRIPTEN=ON -B ${CMAKE_BINARY_DIR}/profiler/build_wasm -S
+            "${_tt_tracy_emcmake}" cmake -DEMSCRIPTEN=ON -B ${_tt_profiler_binary_dir}/build_wasm -S
             ${TRACY_HOME}/profiler
         COMMAND
-            ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR}/profiler/build_wasm
+            ${CMAKE_COMMAND} --build ${_tt_profiler_binary_dir}/build_wasm
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         COMMENT "Building Tracy profiler WASM with Emscripten"
     )
+    add_dependencies(tracy_profiler_wasm tracy_profiler_cli_tools)
 endif()
