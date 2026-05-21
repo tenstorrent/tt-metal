@@ -29,6 +29,7 @@ class TTUpSample1d:
     ) -> ttnn.Tensor:
         if self._layer_type == "none":
             return x_nlc
+        # Factor-2 nearest matches ``F.interpolate(..., scale_factor=2, mode='nearest')`` on BCT.
         return ttnn.repeat_interleave(x_nlc, 2, 1, memory_config=memory_config)
 
     __call__ = forward

@@ -119,12 +119,18 @@ class TTSourceModuleHnNSF:
         params: TTSourceModuleHnNSFParams,
         *,
         use_torch_phase_fallback: bool = False,
+        use_torch_sinegen_fallback: bool = False,
         use_torch_linear_fallback: bool = False,
         use_torch_tanh_fallback: bool = False,
     ) -> None:
         self.device = device
         self.params = params
-        self._sinegen = TTSineGen(device, params.sinegen, use_torch_phase_fallback=use_torch_phase_fallback)
+        self._sinegen = TTSineGen(
+            device,
+            params.sinegen,
+            use_torch_phase_fallback=use_torch_phase_fallback,
+            use_torch_sinegen_fallback=use_torch_sinegen_fallback,
+        )
         self._use_torch_linear_fallback = use_torch_linear_fallback
         self._use_torch_tanh_fallback = use_torch_tanh_fallback
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(

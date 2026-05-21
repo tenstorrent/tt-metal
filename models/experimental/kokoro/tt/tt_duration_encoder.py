@@ -29,6 +29,13 @@ from .tt_ada_layer_norm import TTAdaLayerNorm, TTAdaLayerNormParams, preprocess_
 from .tt_lstm import TTLSTMParams, preprocess_tt_lstm_1layer, tt_bilstm_nlc
 
 
+def _cast_if_needed(x: ttnn.Tensor, dtype, *, memory_config: ttnn.MemoryConfig) -> tuple[ttnn.Tensor, bool]:
+    if x.dtype == dtype:
+        return x, False
+    out = ttnn.typecast(x, dtype, memory_config=memory_config)
+    return out, True
+
+
 @dataclass(frozen=True)
 class TTDurationEncoderLayerParams:
     """One BiLSTM + following :class:`TTAdaLayerNorm` (reference interleaves them)."""
@@ -94,6 +101,7 @@ class TTDurationEncoder:
         keep_mask_btl: ttnn.Tensor,
         compute_kernel_config,
         memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+        wire_dtype=None,
     ) -> ttnn.Tensor:
         """
         Returns:
@@ -105,39 +113,61 @@ class TTDurationEncoder:
         if c_in != p.d_model:
             raise ValueError(f"d_en channel dim {c_in} != d_model {p.d_model}")
 
-        b_style = int(style_bs.shape[0])
+        if wire_dtype is None:
+            wire_dtype = x.dtype
+
+        x, owns_x = _cast_if_needed(x, wire_dtype, memory_config=memory_config)
+        style_wired, owns_style = _cast_if_needed(style_bs, wire_dtype, memory_config=memory_config)
+        keep_wired, owns_mask = _cast_if_needed(keep_mask_btl, wire_dtype, memory_config=memory_config)
+
+        b_style = int(style_wired.shape[0])
         if b != b_style:
             raise ValueError(f"batch mismatch: d_en {b} vs style {b_style}")
 
-        s_bc = ttnn.reshape(style_bs, [b, 1, p.sty_dim], memory_config=memory_config)
+        s_bc = ttnn.reshape(style_wired, [b, 1, p.sty_dim], memory_config=memory_config)
         s_btl = ttnn.repeat(s_bc, (1, t_len, 1), memory_config=memory_config)
         # Keep s_bc alive: on some backends reshape can alias style_bs storage.
-        # Deallocating s_bc here may invalidate style_bs, which is reused by AdaLayerNorm.
-        x = ttnn.concat([x, s_btl], dim=2, memory_config=memory_config)
-        x = ttnn.multiply(x, keep_mask_btl, memory_config=memory_config)
+        x_cat = ttnn.concat([x, s_btl], dim=2, memory_config=memory_config)
+        if owns_x:
+            ttnn.deallocate(x)
+        x = ttnn.multiply(x_cat, keep_wired, memory_config=memory_config)
+        ttnn.deallocate(x_cat)
 
         lengths_list = [int(n) for n in sequence_lengths]
 
         for idx, layer in enumerate(p.layers):
-            x = tt_bilstm_nlc(
-                x_nlc=x,
+            x_in = x
+            x_lstm = tt_bilstm_nlc(
+                x_nlc=x_in,
                 fwd=layer.lstm_fwd,
                 rev=layer.lstm_rev,
                 compute_kernel_config=compute_kernel_config,
                 memory_config=memory_config,
                 sequence_lengths=lengths_list,
             )
-            x_d = ttnn.slice(x, [0, 0, 0], [b, t_len, p.d_model], [1, 1, 1], memory_config=memory_config)
+            ttnn.deallocate(x_in)
+            x_lstm, owns_cast = _cast_if_needed(x_lstm, wire_dtype, memory_config=memory_config)
+            # Slice can alias ``x_lstm``; do not deallocate ``x_lstm`` until after AdaLN.
+            x_d = ttnn.slice(x_lstm, [0, 0, 0], [b, t_len, p.d_model], [1, 1, 1], memory_config=memory_config)
             x_d = self._adalns[idx].forward(
                 x_d,
-                style_bs,
+                style_wired,
                 compute_kernel_config=compute_kernel_config,
                 memory_config=memory_config,
             )
-            x = ttnn.concat([x_d, s_btl], dim=2, memory_config=memory_config)
-            x = ttnn.multiply(x, keep_mask_btl, memory_config=memory_config)
+            ttnn.deallocate(x_lstm)
+            x_d, owns_d = _cast_if_needed(x_d, wire_dtype, memory_config=memory_config)
+            x_cat = ttnn.concat([x_d, s_btl], dim=2, memory_config=memory_config)
+            if owns_d:
+                ttnn.deallocate(x_d)
+            x = ttnn.multiply(x_cat, keep_wired, memory_config=memory_config)
+            ttnn.deallocate(x_cat)
 
         ttnn.deallocate(s_btl)
+        if owns_style:
+            ttnn.deallocate(style_wired)
+        if owns_mask:
+            ttnn.deallocate(keep_wired)
         return x
 
     __call__ = forward

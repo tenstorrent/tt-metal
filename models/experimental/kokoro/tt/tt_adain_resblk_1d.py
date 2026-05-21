@@ -152,7 +152,14 @@ def preprocess_tt_adain_resblk_1d(
 class TTAdainResBlk1d:
     """Residual AdaIN block: optional 2× nearest + depthwise transpose pool, two AdaIN + Conv stacks."""
 
-    __slots__ = ("_compute_kernel_config", "_norm1", "_norm2", "_params", "_upsample", "device")
+    __slots__ = (
+        "_compute_kernel_config",
+        "_norm1",
+        "_norm2",
+        "_params",
+        "_upsample",
+        "device",
+    )
 
     def __init__(self, device, params: TTAdainResBlk1dParams) -> None:
         self.device = device
@@ -162,7 +169,7 @@ class TTAdainResBlk1d:
         self._norm2 = TTAdaIN1d(params.norm2)
         self._compute_kernel_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi3,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
@@ -174,10 +181,12 @@ class TTAdainResBlk1d:
         style_bs: ttnn.Tensor,
         *,
         memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+        preserve_input_dtype: bool = False,
     ) -> ttnn.Tensor:
         p = self._params
         ck = self._compute_kernel_config
         dev = self.device
+        out_dtype = x_nlc.dtype if preserve_input_dtype else ttnn.bfloat16
 
         def shortcut(xi: ttnn.Tensor) -> ttnn.Tensor:
             sc = self._upsample.forward(xi, memory_config=memory_config)
@@ -189,6 +198,7 @@ class TTAdainResBlk1d:
                     device=dev,
                     compute_config=ck,
                     memory_config=memory_config,
+                    preserve_input_dtype=preserve_input_dtype,
                 )
             return sc
 
@@ -201,12 +211,27 @@ class TTAdainResBlk1d:
                     params=p.pool,
                     device=dev,
                     compute_config=ck,
+                    out_dtype=out_dtype,
                     memory_config=memory_config,
                 )
-            x = tt_conv1d_nlc(x_nlc=x, params=p.conv1, device=dev, compute_config=ck, memory_config=memory_config)
+            x = tt_conv1d_nlc(
+                x_nlc=x,
+                params=p.conv1,
+                device=dev,
+                compute_config=ck,
+                memory_config=memory_config,
+                preserve_input_dtype=preserve_input_dtype,
+            )
             x = self._norm2.forward(x, style_bs, compute_kernel_config=ck, memory_config=memory_config)
             x = ttnn.leaky_relu(x, negative_slope=0.2, memory_config=memory_config)
-            x = tt_conv1d_nlc(x_nlc=x, params=p.conv2, device=dev, compute_config=ck, memory_config=memory_config)
+            x = tt_conv1d_nlc(
+                x_nlc=x,
+                params=p.conv2,
+                device=dev,
+                compute_config=ck,
+                memory_config=memory_config,
+                preserve_input_dtype=preserve_input_dtype,
+            )
             return x
 
         r = residual(x_nlc)

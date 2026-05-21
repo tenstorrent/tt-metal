@@ -422,7 +422,13 @@ class TTTorchSTFT:
     phase stay on TT.  On trained harmonic waveforms cos(phase) PCC remains well below full fallback;
     use ``use_torch_stft_fallback=True`` for cos(phase) PCC > 0.99 vs reference.
 
-    iSTFT always runs on TT (full matrix or conv_transpose2d OLA).
+    ``use_torch_atan2_fallback=True`` moves only the atan2 + sqrt (magnitude/phase) step to CPU
+    float32 after the strided conv.  On BH hardware the atan2 SFPU rounds float32 inputs to BF16
+    before evaluation — near-zero real/imag pairs (true value ~1e-5) are rounded to 0 and produce
+    sign-random phase even when X_real/X_imag were computed precisely.  This flag alone does NOT
+    restore PCC when paired with device conv (BH BF16 conv also sign-flips near-zero bins); combine
+    with ``use_torch_stft_conv_fallback=True`` for full phase fidelity without ``torch.stft``.
+
     """
 
     def __init__(
@@ -432,6 +438,7 @@ class TTTorchSTFT:
         *,
         use_torch_stft_fallback: bool = False,
         use_torch_stft_conv_fallback: bool = False,
+        use_torch_atan2_fallback: bool = False,
     ) -> None:
         self.device = device
         self.params = params
@@ -441,6 +448,8 @@ class TTTorchSTFT:
         self.phase_zero_floor = float(os.getenv("KOKORO_STFT_PHASE_ZERO_FLOOR", "1e-8"))
         self._use_torch_stft_fallback = use_torch_stft_fallback
         self._use_torch_stft_conv_fallback = use_torch_stft_conv_fallback and not use_torch_stft_fallback
+        # atan2_fallback is independent of conv_fallback; irrelevant when stft_fallback=True.
+        self._use_torch_atan2_fallback = use_torch_atan2_fallback and not use_torch_stft_fallback
         conv_fb = self._use_torch_stft_conv_fallback
         self._conv_real = _StridedStftConv(device, params.conv_stft_real, params.hop_length, use_torch_fallback=conv_fb)
         self._conv_imag = _StridedStftConv(device, params.conv_stft_imag, params.hop_length, use_torch_fallback=conv_fb)
@@ -548,6 +557,53 @@ class TTTorchSTFT:
         ttnn.deallocate(X_imag)
         return magnitude, phase
 
+    def _atan2_torch_fallback(self, X_real: ttnn.Tensor, X_imag: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """CPU float32 atan2 + sqrt for phase/magnitude after device or CPU strided conv output.
+
+        On BH hardware atan2 runs on the SFPU which internally rounds float32 inputs to BF16 —
+        near-zero real/imag pairs (true value ~1e-5) become 0 and produce sign-random phase.
+        Moving this step to CPU float32 eliminates the atan2 precision issue.
+
+        NOTE: this flag alone does not restore phase PCC when paired with device conv2d, because
+        BH BF16 conv2d already sign-flips near-zero bins before atan2 sees them.  Combine with
+        ``use_torch_stft_conv_fallback=True`` so both the conv AND atan2 run on CPU float32,
+        achieving the same phase fidelity as ``use_torch_stft_fallback=True``.
+        """
+        mc = ttnn.DRAM_MEMORY_CONFIG
+        p = self.params
+        B = int(X_real.shape[0])
+        x_cpu = ttnn.to_torch(X_real).float().reshape(B, p.K, p.F)
+        y_cpu = ttnn.to_torch(X_imag).float().reshape(B, p.K, p.F)
+        ttnn.deallocate(X_real)
+        ttnn.deallocate(X_imag)
+
+        mag_sq = x_cpu**2 + y_cpu**2 + self.eps
+        magnitude = torch.sqrt(mag_sq)
+        phase = torch.atan2(y_cpu, x_cpu)
+
+        # Handle atan2(0, negative) → π (matches device _magnitude_phase_from_xy)
+        corr_mask = (y_cpu == 0.0) & (x_cpu < 0.0)
+        phase[corr_mask] = float(np.pi)
+
+        # Phase zero-floor: zero phase for near-zero-magnitude bins (matches device path)
+        phase[mag_sq < self.phase_zero_floor] = 0.0
+
+        mag_tt = ttnn.from_torch(
+            magnitude.contiguous(),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=mc,
+        )
+        phase_tt = ttnn.from_torch(
+            phase.contiguous(),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=mc,
+        )
+        return mag_tt, phase_tt
+
     def transform(self, x_bL: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """
         Args:
@@ -556,16 +612,19 @@ class TTTorchSTFT:
         Returns:
             ``(magnitude, phase)`` each ``[B, K, F]`` (TILE layout).
 
-        When ``use_torch_stft_fallback=True`` the entire transform runs on CPU via ``torch.stft``
-        (see :meth:`_transform_torch_fallback`).  This is necessary because BH rounds float32
-        inputs to BF16 before ALL ops — including the SFPU that evaluates ``atan2`` — so moving
-        only the conv2d to CPU still leaves ``atan2`` degraded.  The TTNN path (fallback=False)
-        applies BH BF16 throughout and achieves ~0.58 PCC on full-forward.
+        Fallback dispatch (evaluated in priority order):
+        - ``use_torch_stft_fallback=True``: entire transform on CPU via ``torch.stft`` (highest PCC).
+        - ``use_torch_atan2_fallback=True``: conv on TT/CPU (per ``use_torch_stft_conv_fallback``),
+          atan2+sqrt on CPU.  Pair with ``use_torch_stft_conv_fallback=True`` to achieve the same
+          cos(phase) PCC as ``use_torch_stft_fallback`` without using ``torch.stft``.
+        - No fallbacks: BH BF16 throughout; cos(phase) PCC ~0.64 for Kokoro harmonic input.
         """
         if self._use_torch_stft_fallback:
             return self._transform_torch_fallback(x_bL)
 
         X_real, X_imag = self._forward_stft_conv(x_bL)
+        if self._use_torch_atan2_fallback:
+            return self._atan2_torch_fallback(X_real, X_imag)
         return self._magnitude_phase_from_xy(X_real, X_imag)
 
     def _inverse_conv_transpose(self, X_real: ttnn.Tensor, X_imag: ttnn.Tensor) -> ttnn.Tensor:

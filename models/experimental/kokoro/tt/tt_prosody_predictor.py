@@ -43,6 +43,13 @@ from .tt_linear_norm import TTLinearNorm, TTLinearNormParams, preprocess_tt_line
 from .tt_lstm import TTLSTMParams, preprocess_tt_lstm_1layer, tt_bilstm_nlc
 
 
+def _to_fp32_if_needed(x: ttnn.Tensor, memory_config: ttnn.MemoryConfig) -> tuple[ttnn.Tensor, bool]:
+    if x.dtype == ttnn.float32:
+        return x, False
+    out = ttnn.typecast(x, ttnn.float32, memory_config=memory_config)
+    return out, True
+
+
 @dataclass(frozen=True)
 class TTProsodyPredictorParams:
     """Device-resident weights for :class:`TTProsodyPredictor`."""
@@ -166,6 +173,7 @@ class TTProsodyPredictor:
             math_fidelity=ttnn.MathFidelity.HiFi3,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
+            packer_l1_acc=False,
         )
         self._text_encoder = TTDurationEncoder(params.text_encoder)
         self._duration_proj = TTLinearNorm(params.duration_proj)
@@ -238,6 +246,7 @@ class TTProsodyPredictor:
         style_bs: ttnn.Tensor,
         *,
         memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+        use_fp32_boundary: bool = True,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Run the shared BiLSTM and the F0 / N decoder branches.
 
@@ -251,6 +260,16 @@ class TTProsodyPredictor:
         """
         ck = self.compute_kernel_config
 
+        if use_fp32_boundary:
+            en_fp32, owns_en = _to_fp32_if_needed(en_nlc, memory_config)
+            if owns_en:
+                ttnn.deallocate(en_nlc)
+                en_nlc = en_fp32
+            style_fp32, owns_style = _to_fp32_if_needed(style_bs, memory_config)
+            if owns_style:
+                ttnn.deallocate(style_bs)
+                style_bs = style_fp32
+
         x_shared = tt_bilstm_nlc(
             x_nlc=en_nlc,
             fwd=self.params.shared_fwd,
@@ -258,9 +277,21 @@ class TTProsodyPredictor:
             compute_kernel_config=ck,
             memory_config=memory_config,
         )
-        # x_shared: [B, T_aligned, d_hid]
+        if use_fp32_boundary:
+            # BiLSTM states are bf16; keep F0/N branch activations in fp32 to avoid ~Hz-level F0 drift.
+            x_fp32, owns_x = _to_fp32_if_needed(x_shared, memory_config)
+            if owns_x:
+                ttnn.deallocate(x_shared)
+                x_shared = x_fp32
 
-        F0 = self._run_branch(x_shared, self._f0_blocks, self.params.f0_proj, style_bs, memory_config)
+        F0 = self._run_branch(
+            x_shared,
+            self._f0_blocks,
+            self.params.f0_proj,
+            style_bs,
+            memory_config,
+            preserve_fp32_on_upsample=use_fp32_boundary,
+        )
         N = self._run_branch(x_shared, self._n_blocks, self.params.n_proj, style_bs, memory_config)
         ttnn.deallocate(x_shared)
 
@@ -275,17 +306,26 @@ class TTProsodyPredictor:
         proj_params: TTConv1dParams,
         style_bs: ttnn.Tensor,
         memory_config: ttnn.MemoryConfig,
+        *,
+        preserve_fp32_on_upsample: bool = False,
     ) -> ttnn.Tensor:
         """Apply ``AdainResBlk1d`` stack then 1x1 conv, then squeeze the single-channel dim."""
         ck = self.compute_kernel_config
         y = x_nlc
         for block in blocks:
-            y_new = block.forward(y, style_bs, memory_config=memory_config)
+            # P7: only the upsample (conv_transpose) block needs dtype preservation; blanket
+            # preserve_input_dtype on all F0 blocks regressed full-model PCC (~0.05).
+            preserve = preserve_fp32_on_upsample and block._params.pool is not None
+            y_new = block.forward(y, style_bs, memory_config=memory_config, preserve_input_dtype=preserve)
             if y is not x_nlc:
                 ttnn.deallocate(y)
             y = y_new
         y = tt_conv1d_nlc(
-            x_nlc=y, params=proj_params, device=self.device, compute_config=ck, memory_config=memory_config
+            x_nlc=y,
+            params=proj_params,
+            device=self.device,
+            compute_config=ck,
+            memory_config=memory_config,
         )
         assert int(y.shape[-1]) == 1, f"Expected single-channel output, got {list(y.shape)}"
         return ttnn.squeeze(y, -1)

@@ -51,10 +51,12 @@ from models.experimental.kokoro.reference.istftnet import Generator
 from models.experimental.kokoro.tt.tt_conv import tt_conv1d_nlc, tt_conv_transpose1d_nlc
 from models.experimental.kokoro.tt.tt_generator import (
     TTGenerator,
+    _f0_upsamp_cpu_nlc,
     _reflection_pad_left_1_nlc,
     _upsample_nearest_axis1,
     preprocess_tt_generator,
 )
+from models.experimental.kokoro.tt.tt_torch_stft import TTTorchSTFT, _reflect_pad_1d_dim2
 
 
 _CKPT_CANDIDATES = (
@@ -134,7 +136,9 @@ def _assert_generator_no_fallbacks(tt_mod: TTGenerator) -> None:
     assert not tt_mod._m_source._use_torch_linear_fallback
     assert not tt_mod._m_source._use_torch_tanh_fallback
     assert not tt_mod._m_source._sinegen.use_torch_phase_fallback
+    assert not tt_mod._m_source._sinegen.use_torch_sinegen_fallback
     assert not tt_mod._stft._use_torch_stft_fallback
+    assert not tt_mod._stft._use_torch_stft_conv_fallback
 
 
 def _pcc_ref_tt(ref_t: torch.Tensor, tt_t: ttnn.Tensor) -> float:
@@ -334,6 +338,47 @@ def test_tt_generator_f0_upsamp_no_fallback_pcc(device):
     _, pcc = comp_pcc(f0u_ref, f0u_h, pcc=0.0)
     print(f"TTGenerator f0_upsamp no-fallback PCC: {pcc:.6f}")
     assert pcc > 0.99, f"f0_upsamp PCC too low: {pcc}"
+
+
+def test_tt_generator_f0_upsamp_cpu_nlc_at_t162(device):
+    """At production ``T_f0=162``, CPU nearest upsample matches ref; repeat_interleave does not."""
+    ckpt_path = _find_checkpoint()
+    if ckpt_path is None:
+        pytest.skip("Kokoro checkpoint not found locally.")
+
+    ref = _build_kokoro_generator()
+    _load_trained_weights(ref, ckpt_path)
+    # Synthetic F0 curve length matching captured Kokoro runs (T_f0=162).
+    f0 = (100.0 + 50.0 * torch.sin(torch.linspace(0, 4 * 3.14159, 162))).unsqueeze(0)
+
+    with torch.no_grad():
+        f0u_ref = ref.f0_upsamp(f0[:, None]).transpose(1, 2).contiguous()
+
+    params = preprocess_tt_generator(ref, device, time_len_x=162)
+    mc = ttnn.DRAM_MEMORY_CONFIG
+    f0_tt = ttnn.from_torch(f0.unsqueeze(-1).contiguous(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    f0u_cpu = _f0_upsamp_cpu_nlc(
+        f0_tt, scale=params.upsample_scale_full, device=device, memory_config=mc, out_dtype=ttnn.float32
+    )
+    f0u_ri = _upsample_nearest_axis1(f0_tt, scale=params.upsample_scale_full, memory_config=mc)
+    h_cpu = ttnn.to_torch(f0u_cpu).float()
+    h_ri = ttnn.to_torch(f0u_ri).float()
+    ttnn.deallocate(f0u_cpu)
+    ttnn.deallocate(f0u_ri)
+    ttnn.deallocate(f0_tt)
+
+    _, pcc_cpu = comp_pcc(f0u_ref, h_cpu, pcc=0.0)
+    _, pcc_ri = comp_pcc(f0u_ref, h_ri, pcc=0.0)
+    max_abs_cpu = (f0u_ref - h_cpu).abs().max().item()
+    max_abs_ri = (f0u_ref - h_ri).abs().max().item()
+    print(
+        f"f0_upsamp T_f0=162: cpu_nlc PCC={pcc_cpu:.6f} max_abs={max_abs_cpu:.4f}, "
+        f"repeat_interleave PCC={pcc_ri:.6f} max_abs={max_abs_ri:.4f}"
+    )
+    assert pcc_cpu > 0.9999
+    assert max_abs_cpu < 1e-4
+    # On captured prosody F0, repeat_interleave max_abs can reach ~1 Hz; synthetic curve may be smaller.
+    assert max_abs_ri >= max_abs_cpu
 
 
 def test_tt_generator_ups_no_fallback_pcc(device):
@@ -676,6 +721,355 @@ def test_tt_generator_stft_no_fallback_pcc(device):
         "TTGenerator stft no-fallback PCC: " f"mag={pcc_mag:.6f}, cos(phase)={pcc_cos_phase:.6f}, inverse={pcc_inv:.6f}"
     )
     assert pcc_inv > 0.99, f"stft inverse PCC too low: {pcc_inv}"
+
+
+def _harmonic_source_for_stft(ref: Generator, f0: torch.Tensor) -> torch.Tensor:
+    """Trained ``m_source`` output at ``[B, L]`` — same signal the vocoder feeds into ``stft.transform``."""
+    with torch.no_grad(), _torch_random_zeros():
+        f0u = ref.f0_upsamp(f0[:, None]).transpose(1, 2)
+        har_src, _, _ = ref.m_source(f0u)
+        return har_src.transpose(1, 2).squeeze(1).float()
+
+
+def _stft_transform_pcc(
+    ref_stft,
+    tt_stft: TTTorchSTFT,
+    x_wave: torch.Tensor,
+) -> tuple[float, float]:
+    """Return ``(pcc_mag, pcc_cos_phase)`` for ``transform`` vs reference."""
+    with torch.no_grad():
+        mag_ref, phase_ref = ref_stft.transform(x_wave)
+    x_tt = ttnn.from_torch(x_wave, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=tt_stft.device)
+    mag_tt, phase_tt = tt_stft.transform(x_tt)
+    mag_h = ttnn.to_torch(mag_tt).float()
+    phase_h = ttnn.to_torch(phase_tt).float()
+    ttnn.deallocate(x_tt)
+    ttnn.deallocate(mag_tt)
+    ttnn.deallocate(phase_tt)
+    while mag_h.dim() > mag_ref.dim():
+        mag_h = mag_h.squeeze(0)
+    while phase_h.dim() > phase_ref.dim():
+        phase_h = phase_h.squeeze(0)
+    _, pcc_mag = comp_pcc(mag_ref.float(), mag_h, pcc=0.0)
+    _, pcc_phase = comp_pcc(torch.cos(phase_ref.float()), torch.cos(phase_h), pcc=0.0)
+    return pcc_mag, pcc_phase
+
+
+def test_tt_generator_stft_transform_conv_fallback_isolation(device):
+    """Compare STFT ``transform`` PCC: pure TTNN vs CPU conv vs full ``torch.stft``.
+
+    Uses trained ``m_source`` output (low amplitude, many near-zero STFT bins) at the generator's
+    baked ``stft.input_length``.
+    """
+    ckpt_path = _find_checkpoint()
+    if ckpt_path is None:
+        pytest.skip("Kokoro checkpoint not found locally.")
+
+    ref = _build_kokoro_generator()
+    _load_trained_weights(ref, ckpt_path)
+    params = preprocess_tt_generator(ref, device, time_len_x=5)
+    _, _, f0 = _setup_test_inputs(5)
+    x_wave = _harmonic_source_for_stft(ref, f0)
+
+    configs = [
+        ("pure_ttnn", dict()),
+        ("conv_cpu", dict(use_torch_stft_conv_fallback=True)),
+        ("full_torch_stft", dict(use_torch_stft_fallback=True)),
+    ]
+
+    rows: list[tuple[str, float, float]] = []
+    for name, stft_kw in configs:
+        tt_stft = TTTorchSTFT(device, params.stft, **stft_kw)
+        pcc_mag, pcc_phase = _stft_transform_pcc(ref.stft, tt_stft, x_wave)
+        rows.append((name, pcc_mag, pcc_phase))
+
+    print("\nSTFT transform op isolation (trained harmonic source, L={}):".format(params.stft.input_length))
+    print(f"{'mode':<18} {'pcc_mag':>10} {'pcc_cos_phase':>14}")
+    for name, pcc_mag, pcc_phase in rows:
+        print(f"{name:<18} {pcc_mag:10.6f} {pcc_phase:14.6f}")
+
+    by_name = {n: (m, p) for n, m, p in rows}
+    pcc_mag_pure, pcc_phase_pure = by_name["pure_ttnn"]
+    _, pcc_phase_conv = by_name["conv_cpu"]
+    _, pcc_phase_full = by_name["full_torch_stft"]
+
+    assert pcc_mag_pure > 0.95, f"unexpectedly low magnitude PCC on pure TTNN: {pcc_mag_pure:.6f}"
+    assert pcc_phase_full > 0.99, f"full torch.stft fallback phase PCC too low: {pcc_phase_full:.6f}"
+    assert (
+        pcc_phase_conv > pcc_phase_pure
+    ), f"conv CPU should help phase vs pure TT (conv={pcc_phase_conv:.6f}, pure={pcc_phase_pure:.6f})"
+    assert pcc_phase_conv < 0.99, "conv-only does not reach tight phase PCC; use use_torch_stft_fallback=True"
+
+
+def _stft_conv1d_weights_cpu(stft_params) -> tuple[torch.Tensor, torch.Tensor]:
+    """``[K, 1, n_fft]`` conv1d weights matching TT ``_StridedStftConv`` kernels."""
+    w_r = ttnn.to_torch(stft_params.conv_stft_real).float()[:, 0, :, 0].unsqueeze(1)
+    w_i = ttnn.to_torch(stft_params.conv_stft_imag).float()[:, 0, :, 0].unsqueeze(1)
+    return w_r, w_i
+
+
+def _ref_pure_ttnn_stft_transform_stages(
+    x_bl: torch.Tensor,
+    stft_params,
+    *,
+    eps: float,
+    phase_zero_floor: float,
+) -> dict[str, torch.Tensor]:
+    """CPU mirror of ``TTTorchSTFT`` transform (conv path, no ``torch.stft``)."""
+    pad = int(stft_params.conv_pad_len)
+    hop = int(stft_params.hop_length)
+    w_r, w_i = _stft_conv1d_weights_cpu(stft_params)
+    x = x_bl.float()
+    x_pad = F_torch.pad(x, (pad, pad), mode="reflect")
+    x_u = x_pad.unsqueeze(1)
+    x_real = F_torch.conv1d(x_u, w_r, stride=hop, padding=0)
+    x_imag = F_torch.conv1d(x_u, w_i, stride=hop, padding=0)
+    mag_sq = x_real.pow(2) + x_imag.pow(2) + eps
+    magnitude = torch.sqrt(mag_sq)
+    phase_atan2 = torch.atan2(x_imag, x_real)
+    neg_real = (x_imag == 0) & (x_real < 0)
+    phase_corr = torch.where(neg_real, torch.full_like(phase_atan2, torch.pi), phase_atan2)
+    near_zero = mag_sq < phase_zero_floor
+    phase_final = torch.where(near_zero, torch.zeros_like(phase_corr), phase_corr)
+    return {
+        "input": x,
+        "after_reflect_pad": x_pad,
+        "X_real": x_real,
+        "X_imag": x_imag,
+        "mag_sq": mag_sq,
+        "magnitude": magnitude,
+        "phase_atan2": phase_atan2,
+        "phase_after_neg_real_correction": phase_corr,
+        "phase_final": phase_final,
+    }
+
+
+def _ref_pure_ttnn_stft_inverse_stages(
+    magnitude_bkf: torch.Tensor,
+    phase_bkf: torch.Tensor,
+    stft_params,
+) -> dict[str, torch.Tensor]:
+    """CPU mirror of ``TTTorchSTFT.inverse`` (precomputed matrices when present)."""
+    mag = magnitude_bkf.float()
+    ph = phase_bkf.float()
+    x_real = mag * torch.cos(ph)
+    x_imag = mag * torch.sin(ph)
+    out: dict[str, torch.Tensor] = {
+        "X_real": x_real,
+        "X_imag": x_imag,
+    }
+    if stft_params.istft_real is None or stft_params.istft_imag is None:
+        return out
+    b = int(mag.shape[0])
+    x_real_flat = x_real.reshape(b, -1)
+    x_imag_flat = x_imag.reshape(b, -1)
+    b_real = ttnn.to_torch(stft_params.istft_real).float()
+    b_imag = ttnn.to_torch(stft_params.istft_imag).float()
+    y_real = x_real_flat @ b_real
+    y_imag = x_imag_flat @ b_imag
+    out["y_real_matmul"] = y_real
+    out["y_imag_matmul"] = y_imag
+    out["waveform_bl"] = y_real + y_imag
+    return out
+
+
+def test_tt_generator_stft_transform_inverse_per_op_diagnostic(device):
+    """Per-op PCC for pure-TTNN ``stft.transform`` and ``stft.inverse`` (no fallbacks).
+
+      Transform checkpoints mirror ``TTTorchSTFT._forward_stft_conv`` and
+      ``_magnitude_phase_from_xy``.  Reference stages replay the same conv/atan2 math on CPU
+      with TT-uploaded kernels (not ``torch.stft`` internals).
+
+      Also prints end-to-end PCC vs ``Generator.stft`` (``torch.stft`` / ``torch.istft``).
+
+    Inputs:
+      - **harmonic**: trained ``m_source`` waveform at ``params.stft.input_length``.
+      - **decoder_spec_phase**: ``exp``/``sin`` of ``conv_post`` for inverse-only checks.
+    """
+    ckpt_path = _find_checkpoint()
+    if ckpt_path is None:
+        pytest.skip("Kokoro checkpoint not found locally.")
+
+    ref = _build_kokoro_generator()
+    _load_trained_weights(ref, ckpt_path)
+    t_x = 5
+    x, s, f0 = _setup_test_inputs(t_x)
+    p = preprocess_tt_generator(ref, device, time_len_x=t_x)
+    tt_stft = TTTorchSTFT(device, p.stft, use_torch_stft_conv_fallback=True)
+    # assert not tt_stft._use_torch_stft_fallback
+    # assert not tt_stft._use_torch_stft_conv_fallback
+
+    mc = ttnn.DRAM_MEMORY_CONFIG
+    ck = tt_stft.compute_kernel_config
+    eps = tt_stft.eps
+    phase_floor = tt_stft.phase_zero_floor
+    sp = p.stft
+
+    har_wave = _harmonic_source_for_stft(ref, f0)
+    spec_dec, phase_dec = _ref_decoder_spec_phase(ref, x, s, f0)
+
+    with torch.no_grad():
+        mag_ref_stft, phase_ref_stft = ref.stft.transform(har_wave)
+        cos_phase_ref_stft = torch.cos(phase_ref_stft)
+
+    ref_tf = _ref_pure_ttnn_stft_transform_stages(har_wave, sp, eps=eps, phase_zero_floor=phase_floor)
+
+    pcc_log: list[tuple[str, float]] = []
+
+    def _log(name: str, ref_t: torch.Tensor, tt_t: ttnn.Tensor) -> None:
+        pcc_log.append((name, _pcc_ref_tt(ref_t, tt_t)))
+
+    x_tt = ttnn.from_torch(har_wave, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    _log("transform.input", ref_tf["input"], x_tt)
+
+    b = int(har_wave.shape[0])
+    l_in = int(har_wave.shape[-1])
+    x_rm = ttnn.to_layout(x_tt, ttnn.ROW_MAJOR_LAYOUT, memory_config=mc)
+    x_n1lc = ttnn.reshape(x_rm, [b, 1, l_in, 1], memory_config=mc)
+    ttnn.deallocate(x_rm)
+    x_pad = _reflect_pad_1d_dim2(x_n1lc, l_in, sp.conv_pad_len)
+    ttnn.deallocate(x_n1lc)
+    l_pad = l_in + 2 * sp.conv_pad_len
+    x_pad_flat = ttnn.reshape(x_pad, [b, l_pad], memory_config=mc)
+    _log("transform.after_reflect_pad", ref_tf["after_reflect_pad"], x_pad_flat)
+    ttnn.deallocate(x_pad_flat)
+
+    x_real = tt_stft._conv_real(x_pad, b, l_pad)
+    x_imag = tt_stft._conv_imag(x_pad, b, l_pad)
+    ttnn.deallocate(x_pad)
+    _log("transform.X_real", ref_tf["X_real"], x_real)
+    _log("transform.X_imag", ref_tf["X_imag"], x_imag)
+
+    mag_sq = ttnn.add(
+        ttnn.multiply(x_real, x_real, memory_config=mc),
+        ttnn.multiply(x_imag, x_imag, memory_config=mc),
+        memory_config=mc,
+    )
+    eps_t = ttnn.full_like(x_real, eps, memory_config=mc)
+    mag_sq = ttnn.add(mag_sq, eps_t, memory_config=mc)
+    ttnn.deallocate(eps_t)
+    _log("transform.mag_sq", ref_tf["mag_sq"], mag_sq)
+
+    magnitude = ttnn.sqrt(mag_sq, memory_config=mc)
+    _log("transform.magnitude", ref_tf["magnitude"], magnitude)
+
+    phase = ttnn.atan2(x_imag, x_real, memory_config=mc)
+    _log("transform.phase_atan2", ref_tf["phase_atan2"], phase)
+
+    corr_mask = ttnn.logical_and(
+        ttnn.eq(x_imag, 0.0, memory_config=mc),
+        ttnn.lt(x_real, 0.0, memory_config=mc),
+        memory_config=mc,
+    )
+    pi_fill = ttnn.full_like(phase, 3.141592653589793, memory_config=mc)
+    phase_corr = ttnn.where(corr_mask, pi_fill, phase, memory_config=mc)
+    ttnn.deallocate(corr_mask)
+    ttnn.deallocate(pi_fill)
+    ttnn.deallocate(phase)
+    _log("transform.phase_after_neg_real_correction", ref_tf["phase_after_neg_real_correction"], phase_corr)
+
+    near_zero = ttnn.lt(mag_sq, phase_floor, memory_config=mc)
+    zero_phase = ttnn.full_like(phase_corr, 0.0, memory_config=mc)
+    phase_final = ttnn.where(near_zero, zero_phase, phase_corr, memory_config=mc)
+    ttnn.deallocate(near_zero)
+    ttnn.deallocate(zero_phase)
+    ttnn.deallocate(mag_sq)
+    ttnn.deallocate(x_real)
+    ttnn.deallocate(x_imag)
+    _log("transform.phase_final", ref_tf["phase_final"], phase_final)
+
+    mag_end, phase_end = magnitude, phase_final
+    _log("transform.end_to_end.magnitude_vs_torch_stft", mag_ref_stft, mag_end)
+    cos_phase_tt = ttnn.cos(phase_end, memory_config=mc)
+    _log("transform.end_to_end.cos_phase_vs_torch_stft", cos_phase_ref_stft, cos_phase_tt)
+    ttnn.deallocate(cos_phase_tt)
+
+    # --- inverse: reference torch.stft mag/phase (matrix path should be exact) ---
+    ref_inv_a = _ref_pure_ttnn_stft_inverse_stages(mag_ref_stft, phase_ref_stft, sp)
+    mag_a_tt = ttnn.from_torch(mag_ref_stft.float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    phase_a_tt = ttnn.from_torch(phase_ref_stft.float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    cos_ph = ttnn.cos(phase_a_tt, memory_config=mc)
+    sin_ph = ttnn.sin(phase_a_tt, memory_config=mc)
+    x_r = ttnn.multiply(mag_a_tt, cos_ph, memory_config=mc)
+    x_i = ttnn.multiply(mag_a_tt, sin_ph, memory_config=mc)
+    ttnn.deallocate(cos_ph)
+    ttnn.deallocate(sin_ph)
+    _log("inverse_ref_inputs.X_real", ref_inv_a["X_real"], x_r)
+    _log("inverse_ref_inputs.X_imag", ref_inv_a["X_imag"], x_i)
+
+    kf = int(sp.K * sp.F)
+    x_r_flat = ttnn.reshape(x_r, [b, kf], memory_config=mc)
+    x_i_flat = ttnn.reshape(x_i, [b, kf], memory_config=mc)
+    ttnn.deallocate(x_r)
+    ttnn.deallocate(x_i)
+
+    if sp.istft_real is not None:
+        y_r = ttnn.matmul(x_r_flat, sp.istft_real, memory_config=mc, compute_kernel_config=ck)
+        y_i = ttnn.matmul(x_i_flat, sp.istft_imag, memory_config=mc, compute_kernel_config=ck)
+        _log("inverse_ref_inputs.y_real_matmul", ref_inv_a["y_real_matmul"], y_r)
+        _log("inverse_ref_inputs.y_imag_matmul", ref_inv_a["y_imag_matmul"], y_i)
+        y_sum = ttnn.add(y_r, y_i, memory_config=mc)
+        ttnn.deallocate(y_r)
+        ttnn.deallocate(y_i)
+        y_bl = ttnn.reshape(y_sum, [b, sp.output_length], memory_config=mc)
+        ttnn.deallocate(y_sum)
+        with torch.no_grad():
+            y_ref_inv = ref.stft.inverse(mag_ref_stft, phase_ref_stft).squeeze(1)
+        _log("inverse_ref_inputs.waveform_vs_torch_istft", y_ref_inv, y_bl)
+        ttnn.deallocate(y_bl)
+
+    ttnn.deallocate(x_r_flat)
+    ttnn.deallocate(x_i_flat)
+    ttnn.deallocate(mag_a_tt)
+    ttnn.deallocate(phase_a_tt)
+
+    # --- inverse: decoder spec/phase (generator forward boundary) ---
+    ref_inv_b = _ref_pure_ttnn_stft_inverse_stages(spec_dec, phase_dec, sp)
+    mag_b_tt = ttnn.from_torch(spec_dec.float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    phase_b_tt = ttnn.from_torch(phase_dec.float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    with torch.no_grad():
+        y_ref_dec = ref.stft.inverse(spec_dec, phase_dec).squeeze(1)
+    y_dec_tt = tt_stft.inverse(mag_b_tt, phase_b_tt)
+    _log("inverse_decoder_spec_phase.waveform_vs_torch_istft", y_ref_dec, y_dec_tt)
+    if "waveform_bl" in ref_inv_b:
+        y_dec_bl = ttnn.reshape(y_dec_tt, [b, sp.output_length], memory_config=mc)
+        _log("inverse_decoder_spec_phase.waveform_matmul_path", ref_inv_b["waveform_bl"], y_dec_bl)
+        ttnn.deallocate(y_dec_bl)
+    ttnn.deallocate(mag_b_tt)
+    ttnn.deallocate(phase_b_tt)
+    ttnn.deallocate(y_dec_tt)
+
+    # --- inverse: TT pure transform outputs (shows cascade from weak phase) ---
+    mag_tt_h = ttnn.to_torch(mag_end).float()
+    phase_tt_h = ttnn.to_torch(phase_end).float()
+    with torch.no_grad():
+        y_ref_from_tt_tf = ref.stft.inverse(mag_tt_h, phase_tt_h).squeeze(1)
+    mag_c_tt = ttnn.from_torch(mag_tt_h, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    phase_c_tt = ttnn.from_torch(phase_tt_h, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_c_tt = tt_stft.inverse(mag_c_tt, phase_c_tt)
+    _log("inverse_tt_transform_outputs.waveform_vs_torch_istft", y_ref_from_tt_tf, y_c_tt)
+    ttnn.deallocate(mag_c_tt)
+    ttnn.deallocate(phase_c_tt)
+    ttnn.deallocate(y_c_tt)
+    ttnn.deallocate(mag_end)
+    ttnn.deallocate(phase_end)
+    ttnn.deallocate(x_tt)
+
+    print(f"\nTTTorchSTFT per-op PCC (pure TTNN, L={sp.input_length}, harmonic m_source input):")
+    for name, val in pcc_log:
+        print(f"  {name:48s} {val:.6f}")
+
+    by_name = dict(pcc_log)
+    # Internal TT pipeline should match CPU replay of the same kernels.
+    assert by_name["transform.X_real"] > 0.99
+    assert by_name["transform.X_imag"] > 0.99
+    assert by_name["transform.magnitude"] > 0.99
+    if sp.istft_real is not None:
+        assert by_name["inverse_ref_inputs.y_real_matmul"] > 0.99
+        assert by_name["inverse_ref_inputs.y_imag_matmul"] > 0.99
+        assert by_name["inverse_ref_inputs.waveform_vs_torch_istft"] > 0.99
+    assert by_name["inverse_decoder_spec_phase.waveform_vs_torch_istft"] > 0.99
 
 
 def _ref_decoder_spec_phase(ref: Generator, x: torch.Tensor, s: torch.Tensor, f0: torch.Tensor):

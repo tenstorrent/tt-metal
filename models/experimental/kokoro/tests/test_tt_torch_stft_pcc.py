@@ -10,7 +10,6 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import pytest
 import torch
 
 _TT_METAL_ROOT = Path(__file__).resolve().parents[4]
@@ -161,39 +160,186 @@ def test_tt_torch_stft_longer_signal(device):
     assert pcc > 0.99, f"PCC too low: {pcc}"
 
 
-@pytest.mark.xfail(
-    reason=(
-        "BH BF16 atan2 noise: near-zero STFT bins have sign-random phase for low-amplitude "
-        "harmonic input. Use use_torch_stft_fallback=True to reach PCC > 0.99."
-    ),
-    strict=False,
-)
-def test_tt_torch_stft_transform_harmonic_pure_ttnn(device):
-    """Informational: documents BH BF16 phase accuracy failure with low-amplitude harmonic input.
+def _harmonic_signal(L: int = 1500, f0: float = 200.0, amplitude: float = 0.1, sr: int = 24_000) -> torch.Tensor:
+    """Single-frequency sinusoid matching Kokoro's typical sine-source amplitude."""
+    t = torch.arange(L, dtype=torch.float32)
+    return (amplitude * torch.sin(2 * torch.pi * f0 / sr * t)).unsqueeze(0)  # [1, L]
 
-    All existing STFT tests use broadband ``torch.randn`` (amplitude O(1)), giving all
-    frequency bins meaningful energy — BF16 atan2 noise is negligible relative to the
-    signal, so those tests pass.
 
-    Kokoro's ``sine_merge`` is a low-amplitude (~0.1) harmonic signal: energy is
-    concentrated in 1–2 bins while the remaining bins have magnitude ~1e-5.  On
-    Blackhole hardware, ``atan2`` in the SFPU rounds float32 inputs to BF16 before
-    computing.  For near-zero bins whose true X_real/X_imag values are below the BF16
-    noise floor (~1e-2 × signal), the rounded inputs become sign-random, giving
-    ``atan2`` output that is off by ±π.  This corrupts the STFT phase for these bins
-    even though the magnitude is correct.
+def test_tt_torch_stft_transform_harmonic_phase_ceiling_no_fallback(device):
+    """``transform`` on Kokoro-scale harmonic input WITHOUT any fallback documents the BH ceiling.
 
-    This test documents that failure.  Expected: cos(phase) PCC << 0.99.
-    See companion ``test_tt_torch_stft_transform_harmonic_torch_fallback`` for the
-    passing version with CPU fallback.
+    BH hardware rounds float32 to BF16 for ALL MAC ops — including the SFPU that evaluates
+    ``atan2``.  Near-zero DFT bins (sine_amp ≈ 0.1, true bin value ~1e-5) are rounded to 0
+    or sign-flipped → ``atan2(0, neg)`` gives ±π random phase.  The practical
+    cos(phase) PCC ceiling on BH is ~0.64 for Kokoro harmonic input.
+
+    Magnitude (sqrt of mag_sq) is insensitive to sign and asserted > 0.99.
+    cos(phase) PCC is printed but NOT asserted — this is a documented hardware limitation.
+    Use ``use_torch_stft_fallback=True`` or ``use_torch_stft_conv_fallback+use_torch_atan2_fallback``
+    to fix the phase.
+    """
+    x = _harmonic_signal()
+    ref = _make_ref()
+    params = preprocess_tt_torch_stft(
+        filter_length=_N_FFT, hop_length=_HOP, win_length=_WIN, input_length=x.shape[-1], device=device
+    )
+    tt_mod = TTTorchSTFT(device, params, use_torch_stft_fallback=False, use_torch_atan2_fallback=False)
+
+    with torch.no_grad():
+        mag_ref, phase_ref = ref.transform(x)
+
+    x_tt = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    mag_tt, phase_tt = tt_mod.transform(x_tt)
+    mag_h, phase_h = _to_torch(mag_tt), _to_torch(phase_tt)
+    while mag_h.dim() > mag_ref.dim():
+        mag_h = mag_h.squeeze(0)
+    while phase_h.dim() > phase_ref.dim():
+        phase_h = phase_h.squeeze(0)
+    ttnn.deallocate(mag_tt)
+    ttnn.deallocate(phase_tt)
+    ttnn.deallocate(x_tt)
+
+    _, pcc_mag = comp_pcc(mag_ref, mag_h, pcc=0.0)
+    _, pcc_phase = comp_pcc(torch.cos(phase_ref), torch.cos(phase_h), pcc=0.0)
+    print(
+        f"[no-fallback, harmonic 200Hz amp=0.1] mag PCC: {pcc_mag:.6f}, "
+        f"cos(phase) PCC: {pcc_phase:.6f}  (BH BF16 atan2 ceiling ~0.64)"
+    )
+    assert pcc_mag > 0.99, f"magnitude PCC too low: {pcc_mag}"
+    # cos(phase) PCC is NOT asserted — BH BF16 atan2 on near-zero bins is a hardware limitation
+
+
+def test_tt_torch_stft_transform_harmonic_stft_fallback_pcc(device):
+    """``transform`` WITH ``use_torch_stft_fallback=True`` achieves cos(phase) PCC > 0.99.
+
+    Full CPU ``torch.stft`` bypasses BH BF16 atan2 precision loss entirely.
+    This is the primary fix for the harmonic-source STFT phase PCC.
+    """
+    x = _harmonic_signal()
+    ref = _make_ref()
+    params = preprocess_tt_torch_stft(
+        filter_length=_N_FFT, hop_length=_HOP, win_length=_WIN, input_length=x.shape[-1], device=device
+    )
+    tt_mod = TTTorchSTFT(device, params, use_torch_stft_fallback=True)
+
+    with torch.no_grad():
+        mag_ref, phase_ref = ref.transform(x)
+
+    x_tt = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    mag_tt, phase_tt = tt_mod.transform(x_tt)
+    mag_h, phase_h = _to_torch(mag_tt), _to_torch(phase_tt)
+    while mag_h.dim() > mag_ref.dim():
+        mag_h = mag_h.squeeze(0)
+    while phase_h.dim() > phase_ref.dim():
+        phase_h = phase_h.squeeze(0)
+    ttnn.deallocate(mag_tt)
+    ttnn.deallocate(phase_tt)
+    ttnn.deallocate(x_tt)
+
+    _, pcc_mag = comp_pcc(mag_ref, mag_h, pcc=0.0)
+    _, pcc_phase = comp_pcc(torch.cos(phase_ref), torch.cos(phase_h), pcc=0.0)
+    print(f"[stft-fallback, harmonic 200Hz amp=0.1] mag PCC: {pcc_mag:.6f}, " f"cos(phase) PCC: {pcc_phase:.6f}")
+    assert pcc_mag > 0.99, f"magnitude PCC too low: {pcc_mag}"
+    assert pcc_phase > 0.99, f"cos(phase) PCC too low with stft_fallback: {pcc_phase}"
+
+
+def test_tt_torch_stft_transform_harmonic_conv_fallback_alone_insufficient(device):
+    """``use_torch_stft_conv_fallback=True`` alone does NOT fix cos(phase) PCC.
+
+    Running the strided conv2d on CPU produces accurate X_real/X_imag, but the
+    ``atan2`` SFPU on BH still runs in BF16 — near-zero real/imag pairs are rounded to 0
+    before SFPU evaluation, producing sign-random phase.
+
+    This test documents that conv_fallback alone is insufficient.  Magnitude is accurate
+    (asserted > 0.99); phase is printed but not asserted.  The fix is to also enable
+    ``use_torch_atan2_fallback=True``.
+    """
+    x = _harmonic_signal()
+    ref = _make_ref()
+    params = preprocess_tt_torch_stft(
+        filter_length=_N_FFT, hop_length=_HOP, win_length=_WIN, input_length=x.shape[-1], device=device
+    )
+    tt_mod = TTTorchSTFT(device, params, use_torch_stft_conv_fallback=True, use_torch_atan2_fallback=False)
+
+    with torch.no_grad():
+        mag_ref, phase_ref = ref.transform(x)
+
+    x_tt = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    mag_tt, phase_tt = tt_mod.transform(x_tt)
+    mag_h, phase_h = _to_torch(mag_tt), _to_torch(phase_tt)
+    while mag_h.dim() > mag_ref.dim():
+        mag_h = mag_h.squeeze(0)
+    while phase_h.dim() > phase_ref.dim():
+        phase_h = phase_h.squeeze(0)
+    ttnn.deallocate(mag_tt)
+    ttnn.deallocate(phase_tt)
+    ttnn.deallocate(x_tt)
+
+    _, pcc_mag = comp_pcc(mag_ref, mag_h, pcc=0.0)
+    _, pcc_phase = comp_pcc(torch.cos(phase_ref), torch.cos(phase_h), pcc=0.0)
+    print(
+        f"[conv-only-fallback, harmonic 200Hz amp=0.1] mag PCC: {pcc_mag:.6f}, "
+        f"cos(phase) PCC: {pcc_phase:.6f}  (BH BF16 atan2 SFPU still degrades phase)"
+    )
+    assert pcc_mag > 0.99, f"magnitude PCC too low: {pcc_mag}"
+    # cos(phase) PCC NOT asserted — atan2 BH BF16 degradation documented, fix = add atan2_fallback
+
+
+def test_tt_torch_stft_transform_harmonic_conv_and_atan2_fallback_pcc(device):
+    """``use_torch_stft_conv_fallback=True`` + ``use_torch_atan2_fallback=True`` → PCC > 0.99.
+
+    Both the strided conv2d (produces accurate X_real/X_imag) AND the atan2/sqrt step run
+    on CPU float32.  This combination is the minimal per-op fix: it achieves the same
+    cos(phase) PCC as ``use_torch_stft_fallback=True`` without invoking ``torch.stft``.
+
+    This test shows that the two BH BF16 failure points are:
+    1. Conv2d BF16 sign-flips near-zero bins (fixed by ``use_torch_stft_conv_fallback``).
+    2. atan2 SFPU BF16 produces wrong phase even on correct real/imag (fixed by ``use_torch_atan2_fallback``).
+    Both must be on CPU for phase PCC > 0.99.
+    """
+    x = _harmonic_signal()
+    ref = _make_ref()
+    params = preprocess_tt_torch_stft(
+        filter_length=_N_FFT, hop_length=_HOP, win_length=_WIN, input_length=x.shape[-1], device=device
+    )
+    tt_mod = TTTorchSTFT(device, params, use_torch_stft_conv_fallback=True, use_torch_atan2_fallback=True)
+
+    with torch.no_grad():
+        mag_ref, phase_ref = ref.transform(x)
+
+    x_tt = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    mag_tt, phase_tt = tt_mod.transform(x_tt)
+    mag_h, phase_h = _to_torch(mag_tt), _to_torch(phase_tt)
+    while mag_h.dim() > mag_ref.dim():
+        mag_h = mag_h.squeeze(0)
+    while phase_h.dim() > phase_ref.dim():
+        phase_h = phase_h.squeeze(0)
+    ttnn.deallocate(mag_tt)
+    ttnn.deallocate(phase_tt)
+    ttnn.deallocate(x_tt)
+
+    _, pcc_mag = comp_pcc(mag_ref, mag_h, pcc=0.0)
+    _, pcc_phase = comp_pcc(torch.cos(phase_ref), torch.cos(phase_h), pcc=0.0)
+    print(f"[conv+atan2-fallback, harmonic 200Hz amp=0.1] mag PCC: {pcc_mag:.6f}, " f"cos(phase) PCC: {pcc_phase:.6f}")
+    assert pcc_mag > 0.99, f"magnitude PCC too low: {pcc_mag}"
+    assert pcc_phase > 0.99, f"cos(phase) PCC too low with conv+atan2_fallback: {pcc_phase}"
+
+
+def test_tt_torch_stft_forward_harmonic_no_fallback(device):
+    """Round-trip forward with harmonic input achieves PCC > 0.99 without any fallback.
+
+    The direct X_real/X_imag path (conv → iSTFT matmul, skipping atan2) avoids BH BF16
+    phase-error amplification: mag*cos(atan2_BF16(y,x)) diverges from x by up to 100×
+    for near-zero bins. Bypassing the mag/phase roundtrip keeps error at the conv2d noise
+    floor and yields PCC > 0.99 even for low-amplitude harmonic input.
     """
     L = 1500
     sr = 24000
     f0 = 200.0
     amplitude = 0.1
-
     t = torch.arange(L, dtype=torch.float32)
-    x = (amplitude * torch.sin(2 * torch.pi * f0 / sr * t)).unsqueeze(0)  # [1, 1500]
+    x = (amplitude * torch.sin(2 * torch.pi * f0 / sr * t)).unsqueeze(0)
 
     ref = _make_ref()
     params = preprocess_tt_torch_stft(
@@ -202,84 +348,17 @@ def test_tt_torch_stft_transform_harmonic_pure_ttnn(device):
     tt_mod = TTTorchSTFT(device, params, use_torch_stft_fallback=False)
 
     with torch.no_grad():
-        mag_ref, phase_ref = ref.transform(x)
+        y_ref = ref(x)
 
-    # float32 input: eliminates input-quantization noise so the test isolates BH conv2d /
-    # atan2 BF16 compute error specifically.  BH MACs still round internally to BF16
-    # regardless of input dtype, so the test still fails as expected.
     x_tt = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    mag_tt, phase_tt = tt_mod.transform(x_tt)
-    mag_h = _to_torch(mag_tt)
-    phase_h = _to_torch(phase_tt)
-    while mag_h.dim() > mag_ref.dim():
-        mag_h = mag_h.squeeze(0)
-    while phase_h.dim() > phase_ref.dim():
-        phase_h = phase_h.squeeze(0)
-    ttnn.deallocate(mag_tt)
-    ttnn.deallocate(phase_tt)
+    y_tt = tt_mod(x_tt)
+    y_h = _to_torch(y_tt)
+    while y_h.dim() > y_ref.dim():
+        y_h = y_h.squeeze(0)
+    ttnn.deallocate(y_tt)
     ttnn.deallocate(x_tt)
 
-    _, pcc_mag = comp_pcc(mag_ref, mag_h, pcc=0.0)
-    _, pcc_phase = comp_pcc(torch.cos(phase_ref), torch.cos(phase_h), pcc=0.0)
-    print(
-        f"[harmonic f0={f0:.0f}Hz amp={amplitude}, pure-TTNN] "
-        f"magnitude PCC: {pcc_mag:.6f}, cos(phase) PCC: {pcc_phase:.6f} "
-        f"(expected << 0.99 — BH BF16 atan2 noise on near-zero bins)"
-    )
-    assert pcc_phase > 0.99, f"cos(phase) PCC too low: {pcc_phase}"
-
-
-def test_tt_torch_stft_transform_harmonic_torch_fallback(device):
-    """cos(phase) PCC > 0.99 with CPU torch.stft fallback for low-amplitude harmonic input.
-
-    Uses the same harmonic signal as ``test_tt_torch_stft_transform_harmonic_pure_ttnn``
-    (f0=200 Hz, amplitude=0.1, L=1500) but routes the entire ``transform`` through CPU
-    ``torch.stft``, bypassing BH BF16 atan2 noise on near-zero bins.
-
-    Why the fallback is needed: when ``use_torch_stft_fallback=False``, ``atan2`` runs
-    on the BH SFPU which rounds float32→BF16 before every op.  For bins with magnitude
-    ~1e-5 (well below the BF16 noise floor), the rounded X_real/X_imag become
-    sign-random, giving ±π phase error.  ``use_torch_stft_fallback=True`` runs
-    ``torch.stft`` in float32 on CPU, so all bins get accurate phase regardless of
-    magnitude.
-    """
-    L = 1500
-    sr = 24000
-    f0 = 200.0
-    amplitude = 0.1
-
-    t = torch.arange(L, dtype=torch.float32)
-    x = (amplitude * torch.sin(2 * torch.pi * f0 / sr * t)).unsqueeze(0)  # [1, 1500]
-
-    ref = _make_ref()
-    params = preprocess_tt_torch_stft(
-        filter_length=_N_FFT, hop_length=_HOP, win_length=_WIN, input_length=L, device=device
-    )
-    tt_mod = TTTorchSTFT(device, params, use_torch_stft_fallback=True)
-
-    with torch.no_grad():
-        mag_ref, phase_ref = ref.transform(x)
-
-    # float32 input: the fallback converts the device tensor back to float32 via
-    # ttnn.to_torch().float(), so a lossless round-trip means both reference and fallback
-    # see identical float32 values → cos(phase) PCC should reach ~1.0.
-    x_tt = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    mag_tt, phase_tt = tt_mod.transform(x_tt)
-    mag_h = _to_torch(mag_tt)
-    phase_h = _to_torch(phase_tt)
-    while mag_h.dim() > mag_ref.dim():
-        mag_h = mag_h.squeeze(0)
-    while phase_h.dim() > phase_ref.dim():
-        phase_h = phase_h.squeeze(0)
-    ttnn.deallocate(mag_tt)
-    ttnn.deallocate(phase_tt)
-    ttnn.deallocate(x_tt)
-
-    _, pcc_mag = comp_pcc(mag_ref, mag_h, pcc=0.0)
-    _, pcc_phase = comp_pcc(torch.cos(phase_ref), torch.cos(phase_h), pcc=0.0)
-    print(
-        f"[harmonic f0={f0:.0f}Hz amp={amplitude}, torch fallback] "
-        f"magnitude PCC: {pcc_mag:.6f}, cos(phase) PCC: {pcc_phase:.6f}"
-    )
-    assert pcc_mag > 0.99, f"magnitude PCC too low with torch fallback: {pcc_mag}"
-    assert pcc_phase > 0.99, f"cos(phase) PCC too low with torch fallback: {pcc_phase}"
+    assert y_h.shape == y_ref.shape, (y_h.shape, y_ref.shape)
+    _, pcc = comp_pcc(y_ref, y_h, pcc=0.0)
+    print(f"[harmonic f0={f0:.0f}Hz amp={amplitude}, no fallback] forward PCC: {pcc:.6f}")
+    assert pcc > 0.99, f"PCC too low: {pcc}"

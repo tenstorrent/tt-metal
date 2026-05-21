@@ -38,6 +38,7 @@ from .tt_conv import (
     TTConv1dParams,
     TTConvTranspose1dParams,
     tt_conv1d_nlc,
+    tt_conv1d_nlc_cpu,
     tt_conv_transpose1d_nlc,
     tt_weight_norm_materialize,
 )
@@ -154,6 +155,7 @@ __all__ = [
     "tt_bilstm_nlc",
     "tt_instance_norm_1d_nlc",
     "tt_conv1d_nlc",
+    "tt_conv1d_nlc_cpu",
     "tt_conv_transpose1d_nlc",
     "tt_weight_norm_materialize",
 ]

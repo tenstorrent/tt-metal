@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 import torch
+import torch.nn.functional as F
 
 import ttnn
 
@@ -145,6 +146,40 @@ def _chunked_tt_conv1d_nlc(
     for c in output_chunks:
         ttnn.deallocate(c)
     return out
+
+
+def tt_conv1d_nlc_cpu(
+    *,
+    x_nlc: ttnn.Tensor,
+    params: TTConv1dParams,
+    device,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+    out_dtype=None,
+) -> ttnn.Tensor:
+    """Run Conv1d on CPU using uploaded TT weights (NLC in/out).
+
+    Used for Kokoro ``F0_conv`` / ``N_conv`` where ``ttnn.conv1d`` diverges from PyTorch
+    on stride-2 ``kernel_size=3`` paths at inference lengths (e.g. ``T_f0=162``).
+    """
+    x = ttnn.to_torch(x_nlc).float()
+    while x.dim() > 3 and x.shape[0] == 1:
+        x = x.squeeze(0)
+    w = ttnn.to_torch(params.weight).float().squeeze(-1)
+    b = ttnn.to_torch(params.bias).float().reshape(-1) if params.bias is not None else None
+    x_bct = x.transpose(1, 2).contiguous()
+    with torch.no_grad():
+        y_bct = F.conv1d(
+            x_bct,
+            w,
+            b,
+            stride=params.stride,
+            padding=params.padding,
+            dilation=params.dilation,
+            groups=params.groups,
+        )
+    y_nlc = y_bct.transpose(1, 2).contiguous()
+    dtype = out_dtype if out_dtype is not None else x_nlc.dtype
+    return ttnn.from_torch(y_nlc, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
 
 
 def tt_conv1d_nlc(
