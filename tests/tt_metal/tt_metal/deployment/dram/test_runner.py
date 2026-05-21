@@ -1,6 +1,7 @@
 from typing import Optional, AsyncIterator, Iterator
 from dataclasses import dataclass, asdict
 from argparse import ArgumentParser
+from asyncio import StreamReader
 from dateutil import parser
 from enum import Enum, auto
 import fileinput
@@ -247,10 +248,34 @@ def print_results(runs: list[TestRun], bdfs: dict[str, str]):
     print_summary(runs)
 
 
+async def file_to_streamreader(path: str, chunk_size: int = 8192) -> StreamReader:
+    loop = asyncio.get_running_loop()
+    reader = StreamReader()
+
+    def feed_blocking():
+        with open(path, "rb") as f:
+            while True:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+                data = chunk
+                loop.call_soon_threadsafe(reader.feed_data, data)
+        loop.call_soon_threadsafe(reader.feed_eof)
+
+    loop.run_in_executor(None, feed_blocking)
+    return reader
+
+
+async def parse_file(file: str) -> list[Event]:
+    sr = await file_to_streamreader(file)
+    return await parse_logs(sr)
+
+
 async def main():
     parser = ArgumentParser()
     parser.add_argument("-q", action="store_true", help="Don't print the logs as the tests run")
     parser.add_argument("-n", action="store_true", help="Don't print the summary")
+    parser.add_argument("-i", type=str, help="Input file to parse instead of running the tests")
     parser.add_argument("-o", type=str, help="Output path for the json file")
     opts = parser.parse_args()
 
@@ -261,12 +286,15 @@ async def main():
     outfile = opts.o if opts.o else "out.json"
     print(f"Writing results to '{outfile}'")
 
-    program = "build/test/tt_metal/unit_tests_deployment"
-    args = ["--gtest_filter=*Dram*"]
+    if opts.i:
+        evs = await parse_file(opts.i)
+    else:
+        program = "build/test/tt_metal/unit_tests_deployment"
+        args = ["--gtest_filter=*DramDeployment_*"]
 
-    proc = await asyncio.create_subprocess_exec(program, *args, stdout=asyncio.subprocess.PIPE)
+        proc = await asyncio.create_subprocess_exec(program, *args, stdout=asyncio.subprocess.PIPE)
 
-    p, evs = await asyncio.gather(proc.wait(), parse_logs(proc.stdout))
+        p, evs = await asyncio.gather(proc.wait(), parse_logs(proc.stdout))
 
     # pprint.pp(evs)
     bdfs = {}
