@@ -9,7 +9,6 @@ from typing import Any, Callable
 
 import torch
 
-_APPLIED = False
 _ORIGINAL_DEQUANTIZE_ONE: Callable[..., Any] | None = None
 _ORIGINAL_CONVERT: Callable[..., Any] | None = None
 
@@ -71,8 +70,7 @@ def _apply_convert_patch() -> None:
 
 def apply_fp8_dequantize_compat() -> None:
     """Apply scalar-scale FP8 dequant workaround if not already applied."""
-    global _APPLIED
-    if _APPLIED:
+    if _ORIGINAL_DEQUANTIZE_ONE is not None or _ORIGINAL_CONVERT is not None:
         return
     from transformers.integrations.finegrained_fp8 import Fp8Dequantize
 
@@ -81,7 +79,6 @@ def apply_fp8_dequantize_compat() -> None:
         _apply_legacy_dequantize_one_patch()
     else:
         _apply_convert_patch()
-    _APPLIED = True
 
 
 __all__ = ["apply_fp8_dequantize_compat"]
