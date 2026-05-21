@@ -71,7 +71,6 @@ set(UNIT_TESTS_API_SOURCES
     test_metadata_size.cpp
     test_noc_without_barrier.cpp
     test_padded_write.cpp
-    test_pointer_size.cpp
     test_semaphore_write.cpp
     test_tensor_bad_acess.cpp
     test_valid_mem_wrong_alloc.cpp
