@@ -517,6 +517,20 @@ void DevicePrintImpl::print_buffer_data(
                         formatted_message = risc_data.message_buffer;
                     }
 
+                    // '\r' renders as a newline in the log but does not flush the buffer to the
+                    // logfile; only '\n' commits any preceding '\r'-terminated soft lines. Convert
+                    // '\r' to '\n' only in the portion up to the last real '\n' (the flush boundary)
+                    // — any '\r's past it are preserved verbatim in the buffer for a later flush.
+                    std::string converted_message;  // owns storage if we materialize a converted copy
+                    auto last_newline_pos = formatted_message.rfind('\n');
+                    if (last_newline_pos != std::string::npos &&
+                        formatted_message.substr(0, last_newline_pos).find('\r') != std::string::npos) {
+                        converted_message.assign(formatted_message);
+                        std::replace(
+                            converted_message.begin(), converted_message.begin() + last_newline_pos, '\r', '\n');
+                        formatted_message = converted_message;
+                    }
+
                     // Check if we hit new line
                     auto newline_pos = formatted_message.find('\n');
 

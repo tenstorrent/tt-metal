@@ -329,16 +329,55 @@ enum class FsmState : std::uint32_t
     RECONFIGURED
 };
 
+struct UnwindContext
+{
+    std::uintptr_t pc = UINTPTR_MAX;
+    std::uintptr_t ra = UINTPTR_MAX;
+
+    static const UnwindContext UNKNOWN;
+};
+
+inline const UnwindContext UnwindContext::UNKNOWN {UINTPTR_MAX, UINTPTR_MAX};
+
+struct ThreadOutputContext
+{
+    UnwindContext operation;
+    UnwindContext previous;
+    UnwindContext current;
+    std::size_t context_depth = 0;
+    std::size_t silent_depth  = 0;
+};
+
+struct UnpackOutputContext : ThreadOutputContext
+{
+    UnwindContext configure_a;
+    UnwindContext configure_b;
+};
+
+struct MathOutputContext : ThreadOutputContext
+{
+    UnwindContext configure_fpu;
+    UnwindContext configure_sfpu;
+};
+
+struct PackOutputContext : ThreadOutputContext
+{
+    UnwindContext configure_pack;
+};
+
+struct OutputContext
+{
+    UnpackOutputContext unpack;
+    MathOutputContext math;
+    PackOutputContext pack;
+};
+
 struct SanitizerState
 {
+    OutputContext context;
     OperandState operand;
     OperationState operation[MAX_THREADS];
     FsmState fsm[MAX_THREADS];
-
-    // meta state
-    ct_string function_curr[MAX_THREADS];
-    std::uint8_t function_depth[MAX_THREADS];
-    std::uint8_t silent_depth[MAX_THREADS];
 };
 
 } // namespace llk::san
