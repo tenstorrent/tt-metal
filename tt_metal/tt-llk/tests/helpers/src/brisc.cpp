@@ -6,6 +6,7 @@
 
 #include "boot.h"
 
+// BRISC firmware
 #ifdef LLK_BOOT_MODE_BRISC
 
 // Mailbox addresses
@@ -54,6 +55,9 @@ constexpr std::uint32_t BRISC_BOOT_READY_SENTINEL = 0xB001CAFEU;
 void reset_state(std::uint32_t& counter)
 {
     counter++;
+    // Double buffer protocol: host writes the next command to slot (counter & 1),
+    // BRISC reads from the same slot. After processing, bump counter so both sides
+    // move to the other slot, and zero the new slot to prevent retriggering.
     ckernel::store_blocking(brisc_command_buffer + (counter & 1), static_cast<std::uint32_t>(BriscCommandState::IDLE_STATE));
     commit_store(brisc_counter, counter);
 }
@@ -83,6 +87,9 @@ int main()
     {
         ckernel::invalidate_data_cache();
 
+        // Poll the active slot of the double buffered command mailbox.
+        // The host writes to slot (counter & 1) and BRISC reads the same slot.
+        // Using load_blocking ensures the read completes before the switch.
         switch (static_cast<BriscCommandState>(ckernel::load_blocking(brisc_command_buffer + (counter & 1))))
         {
             // Wormhole specific, on Blackhole this command has same behaviour as BriscCommandState::START_TRISCS
