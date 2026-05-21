@@ -25,8 +25,8 @@ Pre-fix baseline sweep (`run-20260521T021753Z/`) hit mass rc=134 heap aborts; ig
 |------|--------|------|------|---------|-------|
 | Full sweep (57 suites) | `run-20260521T030649Z/` | 24 | 24 | 9 | Post-fix scorecard; Section 1 + LLK stale |
 | Section 1 TTNN (HEAD verify) | `section1-by-commit-20260521T195930Z/` + quick | 2/2 targeted | 0 | 0 | mcq + region_write_read **Verified PASS** |
-| Section 2 T3K re-run | `section2-t3k-20260521T181117Z/` (job 11604) | 1 | 2 | 0 | 3/34 done; eth interleaved **in progress** (~47 min) |
-| Section 2 fabric-only | job 11605 (pending) | — | — | — | Starts after 11604; `PARITY_SECTIONS=2.fabric` on HEAD |
+| Section 2 T3K re-run | `section2-t3k-20260521T181117Z/` (job 11604) | 8 | 2 | 0 | 10/34 done; debug_tools/mesh **in progress** |
+| Section 2 fabric-only | job 11609 (pending after 11604) | — | — | — | `PARITY_SECTIONS=2.fabric` on HEAD |
 | Section 2 multiprocess | `mp-run-20260521T155410Z/` | 1 | 9 | 0 | `ttnn_launch_op` **Verified PASS** under tt-run+MPI |
 | Section 4 LLK WH | `llk-smoke-20260521T190458Z/` (job 11576) | 2/2 | 0 | 0 | weekly + nightly **Verified PASS** after venv setup |
 | Section 4 LLK (sweep) | `run-20260521T030649Z/` | 0 | 2 | 0 | **Env/setup FAIL** — missing `.venv` |
@@ -79,14 +79,21 @@ Job 11596 (`section1-by-commit-20260521T195930Z/`), quick verify (`ttnn-sec1-qui
 
 **Dir:** `section2-t3k-20260521T181117Z/`
 **Mock:** `t3k_cluster_desc.yaml` (8-chip WH)
-**Started:** 2026-05-21T21:51:47Z · **Status:** running (3 suites complete of 34; job started **pre-`6ccc779` skip fixes**)
+**Started:** 2026-05-21T21:51:47Z · **Status:** running (10 suites complete of 34; job started **pre-`6ccc779` skip fixes**)
 
 | Suite | Status | Duration | Key error / note |
 |-------|--------|----------|-------------------|
-| `2.distributed/distributed_unit_tests` | **FAIL** (pre-fix) | 272s | `TestWritesAndWorkloads` TT_FATAL on WH 8-chip sim — **fixed to SKIP on HEAD `6ccc779`** |
+| `2.distributed/distributed_unit_tests` | **FAIL** (pre-fix) | 272s | `TestWritesAndWorkloads` TT_FATAL — **fixed to SKIP on HEAD `6ccc779`** |
 | `2.distributed/run_visible_devices_mp` | **FAIL** (pre-fix) | 23s | MPI SIGSEGV under ttsim — **fixed to SKIP on HEAD `6ccc779`** |
 | `2.eth/ActiveEthKernelsDirectSendAllConnectedChips` | **Verified PASS** | 117s | Was **TIMEOUT** 900s on full sweep (6u desc) |
-| `2.eth/ActiveEthKernelsSendInterleavedBufferAllConnectedChips` | *in progress* | — | Actively transferring at doc time (~22:09Z) |
+| `2.eth/ActiveEthKernelsSendInterleavedBufferAllConnectedChips` | **Verified PASS** | 3303s (~55m) | Was **TIMEOUT** 901s on full sweep |
+| `2.eth/ActiveEthKernelsDirectRingGatherAllChips` | **Verified PASS** | 3s | |
+| `2.eth/ActiveEthKernelsInterleavedRingGatherAllChips` | **Verified PASS** | 3s | |
+| `2.dispatch/CommandQueueSingleCard` | **Verified PASS** | 1s | |
+| `2.dispatch/CommandQueueMultiDevice` | **Verified PASS** | 0s | |
+| `2.dispatch/UnitMeshCQSingleDevice` | **Verified PASS** | 1s | |
+| `2.dispatch/UnitMeshCQMultiDevice` | **Verified PASS** | 0s | |
+| `2.debug_tools/mesh` | *in progress* | — | Was **TIMEOUT** 901s on full sweep |
 | remaining Section 2 suites | *pending* | — | job 11604 still active |
 
 ### Full-sweep Section 2 (`run-20260521T030649Z/`, 6u mock desc)
