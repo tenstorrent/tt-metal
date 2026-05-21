@@ -707,8 +707,11 @@ def as_tensor(
         logger.debug(
             f"Generating cache for {cache_file_name} of shape {tensor.shape}, dtype {dtype_name}, layout {layout_name}"
         )
-        pathlib.Path(cache_file_name).parent.mkdir(parents=True, exist_ok=True)
-        ttnn._ttnn.tensor.dump_tensor_flatbuffer(cache_file_name, tensor)
+        try:
+            pathlib.Path(cache_file_name).parent.mkdir(parents=True, exist_ok=True)
+            ttnn._ttnn.tensor.dump_tensor_flatbuffer(cache_file_name, tensor)
+        except (OSError, RuntimeError) as e:
+            logger.warning(f"Could not write tensor cache to {cache_file_name}: {e}")
         if device is not None:
             tensor = tensor.to(device, memory_config)
         return tensor
