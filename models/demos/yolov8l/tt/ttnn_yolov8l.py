@@ -152,6 +152,7 @@ class TtConv:
         batch_size=1,
         packer_l1_acc=False,
         enable_weights_double_buffer=False,
+        high_fidelity=False,
     ):
         self.device = device
         self.parameters = parameters
@@ -162,6 +163,7 @@ class TtConv:
         self.act_block_h = act_block_h
         self.block_shard = block_shard
         self.bfloat8 = bfloat8
+        self.high_fidelity = high_fidelity
         self.change_shard = change_shard
         self.deallocate_activation = deallocate_activation
         self.output_layout = output_layout
@@ -214,9 +216,9 @@ class TtConv:
     def _initialize_compute_config(self):
         return ttnn.init_device_compute_kernel_config(
             self.device.arch(),
-            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_fidelity=ttnn.MathFidelity.HiFi2 if self.high_fidelity else ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
-            fp32_dest_acc_en=False,
+            fp32_dest_acc_en=self.high_fidelity,
             packer_l1_acc=self.packer_l1_acc,
         )
 
@@ -271,6 +273,7 @@ class TtBottleneck:
         deallocate_activation=False,
         output_layout=ttnn.TILE_LAYOUT,
         tilize=False,
+        high_fidelity=False,
     ):
         self.device = device
         self.path = path
@@ -286,6 +289,7 @@ class TtBottleneck:
             block_shard=self.block_shard,
             deallocate_activation=deallocate_activation,
             output_layout=output_layout,
+            high_fidelity=high_fidelity,
         )
         self.cv2 = TtConv(
             device,
@@ -296,6 +300,7 @@ class TtBottleneck:
             change_shard=change_shard,
             block_shard=self.block_shard,
             deallocate_activation=deallocate_activation,
+            high_fidelity=high_fidelity,
         )
 
     def __call__(self, x, ensure_dram=False):
@@ -330,6 +335,7 @@ class TtBottleneck_2:
         tilize=False,
         cv1_bottleneck_dram_fallbacks=False,
         cv2_bottleneck_dram_fallbacks=False,
+        high_fidelity=False,
     ):
         self.device = device
         self.path = path
@@ -345,6 +351,7 @@ class TtBottleneck_2:
             input_params,
             deallocate_activation=deallocate_activation,
             output_layout=output_layout,
+            high_fidelity=high_fidelity,
         )
         self.cv2 = TtConv(
             device,
@@ -352,6 +359,7 @@ class TtBottleneck_2:
             f"{self.path}.cv2",
             input_params,
             deallocate_activation=deallocate_activation,
+            high_fidelity=high_fidelity,
         )
 
     def __call__(self, x, ensure_dram=False):
@@ -383,6 +391,7 @@ class TtC2f:
         block_shard=False,
         deallocate_activation=False,
         output_layout=ttnn.ROW_MAJOR_LAYOUT,
+        high_fidelity=False,
     ):
         self.device = device
         self.parameters = parameters
@@ -396,6 +405,7 @@ class TtC2f:
         self.block_shard = block_shard
         self.deallocate_activation = deallocate_activation
         self.output_layout = output_layout
+        self.high_fidelity = high_fidelity
         self.cv1_a = TtConv(
             device,
             self.parameters,
@@ -405,6 +415,7 @@ class TtC2f:
             change_shard=self.change_shard,
             deallocate_activation=self.deallocate_activation,
             output_layout=self.output_layout,
+            high_fidelity=self.high_fidelity,
         )
 
         self.cv1_b = TtConv(
@@ -416,6 +427,7 @@ class TtC2f:
             change_shard=self.change_shard,
             deallocate_activation=self.deallocate_activation,
             output_layout=self.output_layout,
+            high_fidelity=self.high_fidelity,
         )
 
         self.cv2 = TtConv(
@@ -428,6 +440,7 @@ class TtC2f:
             change_shard=self.change_shard,
             deallocate_activation=self.deallocate_activation,
             block_shard=False,
+            high_fidelity=self.high_fidelity,
         )
 
         self.bottleneck_modules = []
@@ -445,6 +458,7 @@ class TtC2f:
                     block_shard=self.block_shard,
                     deallocate_activation=self.deallocate_activation,
                     tilize=self.tilize,
+                    high_fidelity=self.high_fidelity,
                 )
             )
 
@@ -521,6 +535,7 @@ class TtC2f_2:
         output_layout=ttnn.ROW_MAJOR_LAYOUT,
         cv1_bottleneck_dram_fallbacks=[],
         cv2_bottleneck_dram_fallbacks=[],
+        high_fidelity=False,
     ):
         self.device = device
         self.parameters = parameters
@@ -534,6 +549,7 @@ class TtC2f_2:
         self.block_shard = block_shard
         self.deallocate_activation = deallocate_activation
         self.output_layout = output_layout
+        self.high_fidelity = high_fidelity
         self.cv1_a = TtConv(
             device,
             self.parameters,
@@ -543,6 +559,7 @@ class TtC2f_2:
             change_shard=self.change_shard,
             deallocate_activation=self.deallocate_activation,
             output_layout=self.output_layout,
+            high_fidelity=self.high_fidelity,
         )
 
         self.cv1_b = TtConv(
@@ -554,6 +571,7 @@ class TtC2f_2:
             change_shard=self.change_shard,
             deallocate_activation=self.deallocate_activation,
             output_layout=self.output_layout,
+            high_fidelity=self.high_fidelity,
         )
 
         self.cv2 = TtConv(
@@ -566,6 +584,7 @@ class TtC2f_2:
             change_shard=self.change_shard,
             deallocate_activation=self.deallocate_activation,
             block_shard=False,
+            high_fidelity=self.high_fidelity,
         )
 
         self.bottleneck_modules = []
@@ -584,6 +603,7 @@ class TtC2f_2:
                     # tilize=self.tilize,
                     cv1_bottleneck_dram_fallbacks=True if i in cv1_bottleneck_dram_fallbacks else False,
                     cv2_bottleneck_dram_fallbacks=True if i in cv2_bottleneck_dram_fallbacks else False,
+                    high_fidelity=self.high_fidelity,
                 )
             )
 
@@ -619,7 +639,7 @@ class TtC2f_2:
 
 
 class TtSppf:
-    def __init__(self, device, parameters, path, input_params, batch_size):
+    def __init__(self, device, parameters, path, input_params, batch_size, high_fidelity=False):
         self.device = device
         self.parameters = parameters
         self.path = path
@@ -633,6 +653,7 @@ class TtSppf:
             input_params=input_params[0],
             change_shard=True,
             block_shard=True,
+            high_fidelity=high_fidelity,
         )
         self.cv2 = TtConv(
             device,
@@ -642,6 +663,7 @@ class TtSppf:
             change_shard=True,
             block_shard=True,
             packer_l1_acc=True,
+            high_fidelity=high_fidelity,
         )
 
     def __call__(self, x):
@@ -694,6 +716,7 @@ class TtDetectCv2:
             bfloat8=True,
             block_shard=block_shard,
             packer_l1_acc=packer_l1_acc,
+            high_fidelity=True,
         )
         self.conv1 = TtConv(
             device,
@@ -703,6 +726,7 @@ class TtDetectCv2:
             bfloat8=True,
             block_shard=block_shard,
             packer_l1_acc=packer_l1_acc,
+            high_fidelity=True,
         )
         self.conv2 = TtConv(
             device,
@@ -715,6 +739,7 @@ class TtDetectCv2:
             block_shard=block_shard,
             is_detect_cv2=True,
             packer_l1_acc=packer_l1_acc,
+            high_fidelity=True,
         )
 
     def __call__(self, x):
@@ -743,6 +768,7 @@ class TtDFL:
             bfloat8=True,
             is_fused=False,
             change_shard=False,
+            high_fidelity=True,
         )
 
     def __call__(self, x, c1=16):
@@ -799,12 +825,8 @@ class TtDetect:
             input_params=input_params["dfl_params"]["input_params"],
         )
 
-        self.anchors_dram_bf8 = ttnn.to_memory_config(
-            self.parameters["anchors"], memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat8_b
-        )
-        self.strides_dram_bf8 = ttnn.to_memory_config(
-            self.parameters["strides"], memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat8_b
-        )
+        self.anchors_dram = ttnn.to_memory_config(self.parameters["anchors"], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        self.strides_dram = ttnn.to_memory_config(self.parameters["strides"], memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     def __call__(self, x, nc=80, ch=(), reg_max=16):
         nc = self.nc
@@ -833,9 +855,9 @@ class TtDetect:
         ttnn.deallocate(x_cat)
         ttnn.deallocate(box)
 
-        dbox = ttnn_decode_bboxes(self.device, dfl, self.anchors_dram_bf8)
+        dbox = ttnn_decode_bboxes(self.device, dfl, self.anchors_dram)
         ttnn.deallocate(dfl)
-        dbox = ttnn.multiply(dbox, self.strides_dram_bf8, dtype=ttnn.bfloat8_b)
+        dbox = ttnn.multiply(dbox, self.strides_dram, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         return [ttnn.concat((dbox, ttnn.sigmoid(cls)), dim=1, memory_config=ttnn.L1_MEMORY_CONFIG), x]
 
@@ -921,7 +943,12 @@ class TtDetectionModel:
             input_params=c2f_configs["model.8"]["input_params"],
         )
         self.sppf_9 = TtSppf(
-            device, parameters, "model.9", input_params=sppf_configs["input_params"], batch_size=self.batch_size
+            device,
+            parameters,
+            "model.9",
+            input_params=sppf_configs["input_params"],
+            batch_size=self.batch_size,
+            high_fidelity=True,
         )
         self.c2f_12 = TtC2f_2(
             device,
@@ -931,6 +958,7 @@ class TtDetectionModel:
             shortcut=False,
             bfloat8=True,
             input_params=c2f_configs["model.12"]["input_params"],
+            high_fidelity=True,
         )
         self.c2f_15 = TtC2f(
             device,
@@ -939,6 +967,7 @@ class TtDetectionModel:
             n=3,
             shortcut=False,
             input_params=c2f_configs["model.15"]["input_params"],
+            high_fidelity=True,
         )
         self.conv_16 = TtConv(
             device,
@@ -947,6 +976,7 @@ class TtDetectionModel:
             input_params=conv_config["input_params"][4],
             bfloat8=True,
             packer_l1_acc=True,
+            high_fidelity=True,
         )
         self.c2f_18 = TtC2f_2(
             device,
@@ -955,6 +985,7 @@ class TtDetectionModel:
             n=3,
             shortcut=False,
             input_params=c2f_configs["model.18"]["input_params"],
+            high_fidelity=True,
         )
         self.conv_19 = TtConv(
             device,
@@ -963,6 +994,7 @@ class TtDetectionModel:
             input_params=conv_config["input_params"][5],
             bfloat8=True,
             packer_l1_acc=True,
+            high_fidelity=True,
         )
         self.c2f_21 = TtC2f_2(
             device,
@@ -972,6 +1004,7 @@ class TtDetectionModel:
             shortcut=False,
             input_params=c2f_configs["model.21"]["input_params"],
             change_shard=False,
+            high_fidelity=True,
         )
         self.detect_22 = TtDetect(device, parameters, "model.22", detect_config)
 

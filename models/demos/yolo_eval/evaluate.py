@@ -101,22 +101,22 @@ def evaluation(
 
     num_iterations = 500
 
-    if model_type == "torch_model":
-        if model_name in ["YOLOv10", "YOLOv11n", "YOLOv11s", "YOLOv8s"]:
-            num_iterations = 105
-        elif model_name in ["YOLOv9c", "YOLOv7", "YOLOv6l"]:
-            num_iterations = 20
-        elif model_name in ["YOLOv12x", "YOLOv5x"]:
-            num_iterations = 14
-        elif model_name == "YOLOv8x":
-            num_iterations = 180
-        elif model_name in ["YOLOv8l", "YOLOv11l"]:
-            num_iterations = 20
-        elif model_name == "YOLOv8s_World":
-            num_iterations = 50
-    elif model_type == "tt_model" and model_name in ["YOLOv8l", "YOLOv11l"]:
-        # Match torch subset size so mAP compares on the same val images (default tt was 500).
-        num_iterations = 20
+    # if model_type == "torch_model":
+    #     if model_name in ["YOLOv10", "YOLOv11n", "YOLOv11s", "YOLOv8s"]:
+    #         num_iterations = 105
+    #     elif model_name in ["YOLOv9c", "YOLOv7", "YOLOv6l"]:
+    #         num_iterations = 20
+    #     elif model_name in ["YOLOv12x", "YOLOv5x"]:
+    #         num_iterations = 14
+    #     elif model_name == "YOLOv8x":
+    #         num_iterations = 180
+    #     elif model_name in ["YOLOv8l", "YOLOv11l"]:
+    #         num_iterations = 20
+    #     elif model_name == "YOLOv8s_World":
+    #         num_iterations = 50
+    # elif model_type == "tt_model" and model_name in ["YOLOv8l", "YOLOv11l"]:
+    #     # Match torch subset size so mAP compares on the same val images (default tt was 500).
+    #     num_iterations = 20
 
     dataset_name = "coco-2017"
     dataset = fiftyone.zoo.load_zoo_dataset(
