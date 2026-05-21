@@ -69,6 +69,19 @@ def _prepend_ttnn_pkg_to_syspath() -> None:
             sys.path.insert(0, p)
 
 
+def _require_torchaudio() -> None:
+    import importlib.util
+
+    if importlib.util.find_spec("torchaudio") is not None:
+        return
+    raise RuntimeError(
+        "torchaudio is required for ACE-Step v1.5 demo preprocessing (5 Hz LM + AceStepHandler).\n"
+        "Install a build that matches your PyTorch/CUDA version, for example:\n"
+        "  pip install torchaudio\n"
+        "See https://pytorch.org/get-started/locally/ for the correct wheel index."
+    )
+
+
 def _configure_ttnn_runtime(*, no_ttnn_strict: bool) -> None:
     """Insert tt-metal roots and optional strict fallback before ``import ttnn``."""
     _prepend_ttnn_pkg_to_syspath()
@@ -303,22 +316,12 @@ def main() -> None:
         help="Run full official generate_music (LLM+handlers, CPU). Does not use TTNN; writes --out for A/B.",
     )
     ap.add_argument(
-        "--fast-preprocess",
-        action="store_true",
-        help=(
-            "Skip 5 Hz LM + handler batching; use tokenizer + TTNN Qwen3 embedding encoder and HF prepare_condition "
-            "(no precomputed LM hints). Avoids importing AceStepHandler (no torchaudio / full ACE-Step training stack). "
-            "If omitted and torchaudio is not installed, this path is selected automatically."
-        ),
-    )
-    ap.add_argument(
         "--ttnn-condition-embedding",
         action=argparse.BooleanOptionalAction,
-        default=None,
+        default=True,
         help=(
-            "Run ACE condition embedding / prepare_condition assembly in TTNN instead of HF prepare_condition. "
-            "Default: on for the official LM/handler TTNN demo path, off for --fast-preprocess. "
-            "Use --no-ttnn-condition-embedding to force the Torch prepare_condition reference path."
+            "Run ACE condition embedding in TTNN (handler path). Default: on. "
+            "Use --no-ttnn-condition-embedding for Torch prepare_condition."
         ),
     )
     ap.add_argument(
@@ -327,13 +330,12 @@ def main() -> None:
         help="Do not set throw_exception_on_fallback (may hide TTNN fallbacks).",
     )
     ap.add_argument(
-        "--experimental-5hz-ttnn-causal-lm",
-        action="store_true",
+        "--pytorch-lm",
+        action=argparse.BooleanOptionalAction,
+        default=False,
         help=(
-            "Load the 5 Hz LM via the stock tt_transformers TTNN causal stack "
-            "(models/demos/ace_step_v1_5/ttnn_impl/qwen_tt_transformers_lm.py). "
-            "Opens TTNN before LM init; requires guidance_scale==1 for DiT KV batch=1. "
-            "LM classifier-free guidance uses lm_cfg_scale (default 2); this path forces lm_cfg_scale=1."
+            "Use host PyTorch HF for the 5 Hz LM. Default: TTNN causal stack "
+            "(ttnn_impl/qwen_tt_transformers_lm.py). TTNN LM forces lm_cfg_scale=1."
         ),
     )
     ap.add_argument(
@@ -365,20 +367,7 @@ def main() -> None:
     )
     args = ap.parse_args()
 
-    fast_preprocess = bool(args.fast_preprocess)
-    if not fast_preprocess:
-        import importlib.util
-
-        if importlib.util.find_spec("torchaudio") is None:
-            print(
-                "[ace_step_v1_5] torchaudio not found; using --fast-preprocess "
-                "(install torchaudio for the 5 Hz LM / AceStepHandler path).",
-                file=sys.stderr,
-                flush=True,
-            )
-            fast_preprocess = True
-    if args.ttnn_condition_embedding is None:
-        args.ttnn_condition_embedding = not fast_preprocess
+    _require_torchaudio()
 
     import torch
 
@@ -522,166 +511,16 @@ def main() -> None:
     ctx_tt_one = None
     null_emb_tt = None
 
-    if fast_preprocess:
-        # --- Lightweight: TTNN Qwen3 embedding encoder + HF prepare_condition (no 5 Hz LM / no precomputed hints) ---
-        tok = AutoTokenizer.from_pretrained(str(text_model_dir))
-        dit_instruction = "Fill the audio semantic mask based on the given conditions:"
-        metas = {"caption": args.prompt, "duration": float(args.duration_sec), "language": "en"}
-        text_prompt = f"""# Instruction
-{dit_instruction}
+    # --- 5 Hz LM + AceStepHandler batching + prepare_condition (precomputed LM hints) ---
+    ref_root = _ensure_acestep_on_path()
 
-# Caption
-{args.prompt}
-
-# Metas
-{metas}<|endoftext|>
-"""
-        tokens = tok(text_prompt, padding="max_length", truncation=True, max_length=256, return_tensors="pt")
-        attn_mask_bool = tokens["attention_mask"].to(torch_dev).to(torch.bool)
-
-        frames = int(round(float(args.duration_sec) * 25.0))
-        if frames <= 0:
-            raise ValueError("duration_sec must be > 0")
-
-        silence = torch.load(str(silence_latent_path), map_location="cpu").to(torch.float32)
-        if silence.ndim != 3:
-            raise RuntimeError(f"Unexpected silence_latent rank: {tuple(silence.shape)}")
-        if int(silence.shape[-1]) == 64:
-            pass
-        elif int(silence.shape[1]) == 64:
-            silence = silence.transpose(1, 2).contiguous()
-        else:
-            raise RuntimeError(f"Unexpected silence_latent shape: {tuple(silence.shape)}")
-        src_latents = silence[:, :frames, :].contiguous()
-        if src_latents.shape[1] < frames:
-            rep = (frames + src_latents.shape[1] - 1) // src_latents.shape[1]
-            src_latents = src_latents.repeat(1, rep, 1)[:, :frames, :].contiguous()
-
-        chunk_masks = torch.ones((1, frames, 64), dtype=torch.float32)
-
-        _configure_ttnn_runtime(no_ttnn_strict=args.no_ttnn_strict)
-        import ttnn
-        from models.demos.ace_step_v1_5.ttnn_impl.qwen3_embedding_ace_step import (
-            AceStepQwen3Encoder as TtQwen3EmbeddingEncoder,
-        )
-
-        if not args.no_ttnn_strict and hasattr(ttnn, "CONFIG") and hasattr(ttnn.CONFIG, "throw_exception_on_fallback"):
-            ttnn.CONFIG.throw_exception_on_fallback = True
-
-        qwen_safetensors = text_model_dir / "model.safetensors"
-        if not qwen_safetensors.is_file():
-            raise FileNotFoundError(f"Missing Qwen embedding weights at {qwen_safetensors}")
-
-        dev = _open_tt_device(ttnn, device_id=int(args.device_id))
-        if hasattr(dev, "enable_program_cache"):
-            dev.enable_program_cache()
-        dev_opened_for_ttnn_text_encoder = True
-        mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
-        if mem is None:
-            raise RuntimeError("TTNN build missing DRAM_MEMORY_CONFIG.")
-
-        input_ids_np = tokens["input_ids"].numpy().astype(np.uint32)
-        attn_mask_np = tokens["attention_mask"].numpy().astype(np.float32)
-
-        qwen_enc = TtQwen3EmbeddingEncoder(
-            device=dev,
-            hf_model_dir=str(text_model_dir),
-            qwen_safetensors_path=str(qwen_safetensors),
-        )
-        try:
-            text_hs_tt = qwen_enc.forward(input_ids_np, attn_mask_np)
-            if args.ttnn_condition_embedding:
-                from models.demos.ace_step_v1_5.ttnn_impl.condition_encoder import TtAceStepInstrumentalConditionEncoder
-
-                condition_encoder = TtAceStepInstrumentalConditionEncoder(
-                    device=dev,
-                    checkpoint_safetensors_path=str(safetensors_path),
-                    dtype=getattr(ttnn, "bfloat16", None),
-                )
-                enc_hs_tt_one, enc_mask_np, null_emb_tt = condition_encoder.forward(text_hs_tt, attn_mask_np)
-                enc_mask = torch.from_numpy(enc_mask_np).to(dtype=torch.float32)
-                src_latents_tt = ttnn.as_tensor(
-                    src_latents.detach().to(dtype=torch.float32).cpu().contiguous().numpy(),
-                    device=dev,
-                    dtype=getattr(ttnn, "bfloat16", None),
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    memory_config=mem,
-                )
-                chunk_masks_tt = ttnn.as_tensor(
-                    chunk_masks.detach().to(dtype=torch.float32).cpu().contiguous().numpy(),
-                    device=dev,
-                    dtype=getattr(ttnn, "bfloat16", None),
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    memory_config=mem,
-                )
-                ctx_tt_one = ttnn.concat([src_latents_tt, chunk_masks_tt], dim=-1)
-                try:
-                    ttnn.deallocate(text_hs_tt)
-                except Exception:
-                    pass
-                try:
-                    ttnn.deallocate(src_latents_tt)
-                    ttnn.deallocate(chunk_masks_tt)
-                except Exception:
-                    pass
-                condition_tensors_on_device = True
-                print("[condition] backend=ttnn instrumental lyric+timbre+text", flush=True)
-            else:
-                text_hidden_states = ttnn.to_torch(text_hs_tt).float()
-                try:
-                    ttnn.deallocate(text_hs_tt)
-                except Exception:
-                    pass
-        finally:
-            del qwen_enc
-
-        if not args.ttnn_condition_embedding:
-            if text_hidden_states.ndim == 4:
-                text_hidden_states = text_hidden_states.squeeze(1).contiguous()
-            text_hidden_states = text_hidden_states.to(torch_dev)
-
-            ace = AutoModel.from_pretrained(str(model_dir), trust_remote_code=True).eval().to(torch_dev)
-            B = 1
-            lyric_dim = int(text_hidden_states.shape[-1])
-            lyric_hidden_states = torch.zeros((B, 1, lyric_dim), dtype=torch.float32, device=torch_dev)
-            lyric_attention_mask = torch.ones((B, 1), dtype=torch.bool, device=torch_dev)
-            refer_audio_acoustic_hidden_states_packed = torch.zeros((B, 1, 64), dtype=torch.float32, device=torch_dev)
-            refer_audio_order_mask = torch.zeros((B,), dtype=torch.long, device=torch_dev)
-            latent_attention_mask = torch.ones((B, frames), dtype=torch.float32, device=torch_dev)
-
-            with torch.inference_mode():
-                enc_hs, enc_mask, ctx_lat = ace.prepare_condition(
-                    text_hidden_states=text_hidden_states.to(dtype=torch.float32),
-                    text_attention_mask=attn_mask_bool,
-                    lyric_hidden_states=lyric_hidden_states,
-                    lyric_attention_mask=lyric_attention_mask,
-                    refer_audio_acoustic_hidden_states_packed=refer_audio_acoustic_hidden_states_packed,
-                    refer_audio_order_mask=refer_audio_order_mask,
-                    hidden_states=src_latents.to(device=torch_dev, dtype=torch.float32),
-                    attention_mask=latent_attention_mask,
-                    silence_latent=silence.to(device=torch_dev, dtype=torch.float32),
-                    src_latents=src_latents.to(device=torch_dev, dtype=torch.float32),
-                    chunk_masks=chunk_masks.to(device=torch_dev, dtype=torch.float32),
-                    is_covers=torch.zeros((B,), dtype=torch.bool, device=torch_dev),
-                    precomputed_lm_hints_25Hz=None,
-                )
-
-            enc_hs = enc_hs.float().cpu()
-            enc_mask = enc_mask.float().cpu()
-            ctx_lat = ctx_lat.float().cpu()
-
-            null_emb = _null_condition_emb(ace).float().cpu()
-    else:
-        # --- Official: 5 Hz LM + AceStepHandler batching + prepare_condition (precomputed LM hints) ---
-        ref_root = _ensure_acestep_on_path()
-
-        from models.demos.ace_step_v1_5.official_lm_preprocess import (
-            attach_infer_text_embeddings_ttnn,
-            build_filtered_dit_kwargs_for_handler,
-            configure_acestep_logging,
-            handler_prepare_condition_payload,
-            handler_prepare_condition_tensors,
-        )
+    from models.demos.ace_step_v1_5.official_lm_preprocess import (
+        attach_infer_text_embeddings_ttnn,
+        build_filtered_dit_kwargs_for_handler,
+        configure_acestep_logging,
+        handler_prepare_condition_payload,
+        handler_prepare_condition_tensors,
+    )
 
     configure_acestep_logging()
     try:
@@ -700,11 +539,8 @@ def main() -> None:
             "(it ships with this demo by default).\n"
             "  2. Point --ace-step-repo-root / $ACE_STEP_REPO_ROOT at an external clone "
             "of https://github.com/ace-step/ACE-Step-1.5.\n"
-            "  3. Pass --fast-preprocess to run the lightweight tokenizer + TTNN Qwen3 "
-            "encoder path that does not depend on acestep.handler (note: this skips the "
-            "5 Hz LM and lyric/timbre encoders, so audio quality differs).\n"
-            "  4. If e.name == 'torchaudio': pip install torchaudio (match your torch/CUDA "
-            "build from pytorch.org)."
+            "  3. If e.name == 'torchaudio': pip install torchaudio (match your torch/CUDA "
+            "build from pytorch.org; required for handler preprocessing)."
         ) from e
 
     from models.demos.ace_step_v1_5.acestep_preprocess_shim import GenerationConfig, GenerationParams
@@ -713,12 +549,10 @@ def main() -> None:
     # ``import acestep.model_downloader as _mdl; _mdl.MAIN_MODEL_COMPONENTS = [...]``
     # mutation here was informational only and has been removed.
 
+    use_ttnn_5hz_lm = not bool(args.pytorch_lm)
+
     tt_dev_early = None
-    if getattr(args, "experimental_5hz_ttnn_causal_lm", False):
-        if float(gs) > 1.0 + 1e-6:
-            raise ValueError(
-                "--experimental-5hz-ttnn-causal-lm requires --guidance_scale 1 (DiT KV / mesh batch=1 for this demo)."
-            )
+    if use_ttnn_5hz_lm:
         _configure_ttnn_runtime(no_ttnn_strict=args.no_ttnn_strict)
         import ttnn as _ttnn_pre_lm
 
@@ -750,7 +584,7 @@ def main() -> None:
         backend="pt",
         device=device,
         ttnn_causal_device=tt_dev_early,
-        experimental_ttnn_causal_lm=bool(getattr(args, "experimental_5hz_ttnn_causal_lm", False)),
+        use_ttnn_causal_lm=bool(use_ttnn_5hz_lm),
     )
     print(status, flush=True)
     if not ok:
@@ -763,7 +597,6 @@ def main() -> None:
             raw_ts.pop()
         ts_list = raw_ts or None
 
-    exp_ttnn_lm = bool(getattr(args, "experimental_5hz_ttnn_causal_lm", False))
     params = GenerationParams(
         task_type="text2music",
         caption=args.prompt,
@@ -773,7 +606,7 @@ def main() -> None:
         duration=float(args.duration_sec),
         inference_steps=int(infer_steps),
         guidance_scale=gs,
-        lm_cfg_scale=1.0 if exp_ttnn_lm else 2.0,
+        lm_cfg_scale=1.0 if use_ttnn_5hz_lm else 2.0,
         use_adg=use_adg,
         cfg_interval_start=float(args.cfg_interval_start),
         cfg_interval_end=float(args.cfg_interval_end),

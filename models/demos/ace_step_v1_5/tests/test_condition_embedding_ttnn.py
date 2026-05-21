@@ -4,7 +4,7 @@
 """PCC checks for the lightweight TTNN ACE condition embedding path.
 
 This intentionally tests the text-only path used by
-``run_prompt_to_wav.py --fast-preprocess --ttnn-condition-embedding``:
+``run_prompt_to_wav.py --ttnn-condition-embedding``:
 
 * TTNN Qwen3 embedding encoder
 * TTNN ``encoder.text_projector``

@@ -10,32 +10,33 @@ By default this matches ``torch_ref/run_prompt_to_wav.py --use-official-acestep`
 ``infer_text_embeddings``, and TTNN ``prepare_condition`` replacement with **precomputed LM hints**),
 emitting the same style of **loguru** / model logs as the official CLI. DiT sampling runs on TTNN.
 
-- **5 Hz LM (`acestep-5Hz-lm-1.7B` by default)**: experimental TTNN causal LM
+With the default ``--use-trace`` flag, traceable stages use TTNN trace + 2CQ replay: Qwen3
+caption, lyric embed, audio-code detokenizer, 5 Hz LM prefill + decode (+ CFG logit combine
+when ``lm_cfg_scale>1``), handler ``forward_payload_traced`` (lyric 8L + timbre 4L + text +
+concat), and DiT ``_E2EDenoiseTrace`` body per step (APG/ADG + Euler stay eager after
+``release_trace_only``). DiT CFG enc/ctx concat and VAE decode stay eager (trace replay was
+not bit-accurate → noise). Pass ``--no-use-trace`` to disable all traces (single CQ, fully eager).
+
+- **5 Hz LM (`acestep-5Hz-lm-1.7B` by default)**: TTNN causal LM
   (``ttnn_impl/five_hz_causal_lm_experimental.py`` →
   ``ttnn_impl/qwen_tt_transformers_lm.QwenModelTtTransformers``).
   The whole decoder (Embedding, ``Attention`` with fused QKV / paged SDPA, ``MLP``,
   ``DistributedNorm(RMSNorm)``, ``HfRotarySetup``, ``LMHead``) is built from the stock
   ``models/tt_transformers`` graph via
-  :func:`models.tt_transformers.tt.common.create_tt_model`. Disable with
-  ``--no-experimental-5hz-ttnn-causal-lm`` (falls back to host PyTorch HF Qwen 1.7B forward).
+  :func:`models.tt_transformers.tt.common.create_tt_model`. Use ``--pytorch-lm`` to fall back
+  to host PyTorch HF Qwen 1.7B forward instead.
 
 
-Use ``--fast-preprocess`` to skip the LM and use the lightweight path (tokenizer + TTNN ``Qwen3Model``
-embedding encoder + ``precomputed_lm_hints_25Hz=None``), avoiding a PyTorch Qwen forward while still
-using HF ``prepare_condition`` on the host by default. Pass ``--ttnn-condition-embedding`` to force
-the lightweight TTNN condition path, or ``--no-ttnn-condition-embedding`` to compare against Torch
-``prepare_condition``.
+Pass ``--no-ttnn-condition-embedding`` to compare against Torch ``prepare_condition`` on the host.
 
 ``--use-official-lm`` runs full ``acestep.inference.generate_music`` (PyTorch DiT on host) with no TTNN.
 
-On the default (non ``--fast-preprocess``) path, after the TTNN device is opened for the Qwen3 caption
+Requires **torchaudio** (for ``AceStepHandler`` / 5 Hz LM preprocessing). After the TTNN device is opened for the Qwen3 caption
 encoder, the same device is attached to the 5 Hz LM handler so the **CFG logit combine**
 (``uncond + cfg_scale * (cond - uncond)``) runs on TTNN with strict fallbacks disabled inside that op:
 valid-audio **slice** in codes phase when a mask is applied, otherwise **full vocabulary**; see
-``ttnn_impl/lm_logits_ttnn.py``. The 5 Hz causal LM forward remains PyTorch unless you pass
-``--experimental-5hz-ttnn-causal-lm`` (then ``ttnn_impl/five_hz_causal_lm_experimental.py`` wraps
-``ttnn_impl/qwen_model_full_device.QwenModelFullDevice``; use ``--guidance-scale 1`` if that backend
-cannot batch cond+uncond).
+``ttnn_impl/lm_logits_ttnn.py``. The 5 Hz causal LM forward uses TTNN by default
+(``ttnn_impl/five_hz_causal_lm_experimental.py``). Pass ``--pytorch-lm`` for host HF only.
 """
 
 
@@ -108,6 +109,20 @@ def _configure_ttnn_runtime(*, no_ttnn_strict: bool) -> None:
         os.environ["TTNN_CONFIG_OVERRIDES"] = '{"throw_exception_on_fallback": true}'
 
 
+def _require_torchaudio() -> None:
+    """ACE-Step handler preprocessing needs torchaudio; fail fast with install instructions."""
+    import importlib.util
+
+    if importlib.util.find_spec("torchaudio") is not None:
+        return
+    raise RuntimeError(
+        "torchaudio is required for ACE-Step v1.5 demo preprocessing (5 Hz LM + AceStepHandler).\n"
+        "Install a build that matches your PyTorch/CUDA version, for example:\n"
+        "  pip install torchaudio\n"
+        "See https://pytorch.org/get-started/locally/ for the correct wheel index."
+    )
+
+
 def _open_tt_device(ttnn: Any, *, device_id: int, num_command_queues: int = 1) -> Any:
     """Open device with L1 small arena sized for conv/VAE (same default as ``tests/conftest.py`` / ign/ACE_perf).
 
@@ -122,6 +137,29 @@ def _open_tt_device(ttnn: Any, *, device_id: int, num_command_queues: int = 1) -
     if int(num_command_queues) > 1:
         open_kwargs["num_command_queues"] = int(num_command_queues)
     return ttnn.open_device(**open_kwargs)
+
+
+def _finalize_condition_trace_tensors(
+    enc_hs_tt: Any,
+    condition_encoder: Any | None,
+    device: Any,
+    *,
+    use_trace: bool,
+    ctx_tt: Any | None = None,
+) -> tuple[Any, Any | None]:
+    """Clone traced ``enc`` / ``ctx`` and release condition traces before DiT."""
+    if not use_trace or condition_encoder is None:
+        return enc_hs_tt, ctx_tt
+    import ttnn
+
+    ttnn.synchronize_device(device)
+    if not hasattr(ttnn, "clone"):
+        raise RuntimeError("ttnn.clone is required when --use-trace is on (condition encoder trace).")
+    enc_owned = ttnn.clone(enc_hs_tt)
+    ctx_owned = ttnn.clone(ctx_tt) if ctx_tt is not None else None
+    if hasattr(condition_encoder, "release_trace"):
+        condition_encoder.release_trace()
+    return enc_owned, ctx_owned
 
 
 def _build_t_schedule(*, shift: float, infer_steps: int, timesteps: str | None, variant: str) -> list[float]:
@@ -420,7 +458,7 @@ def _run_with_weight_cache(args: argparse.Namespace) -> None:
             vae_dir=ckpt_dir / "vae",
             text_model_dir=ckpt_dir / "Qwen3-Embedding-0.6B",
             ref_root=ref_root,
-            experimental_5hz_ttnn_lm=bool(getattr(args, "experimental_5hz_ttnn_causal_lm", False)),
+            ttnn_5hz_lm=bool(use_ttnn_5hz_lm),
             use_torch_vae=bool(args.torch_vae),
         )
         log_weights_ready()
@@ -429,7 +467,7 @@ def _run_with_weight_cache(args: argparse.Namespace) -> None:
 
         log_weight_reuse("all-components (session already initialised)", source="device")
 
-    exp_ttnn_lm = bool(getattr(args, "experimental_5hz_ttnn_causal_lm", False))
+    exp_ttnn_lm = bool(use_ttnn_5hz_lm)
     out_path = Path(args.out)
 
     _REUSE_REGISTRY.generate(
@@ -508,7 +546,7 @@ def main(
         default=None,
         help=(
             "DiT CFG strength. Default: 1 for turbo variants, 7 for base/sft. "
-            "Independent of --experimental-5hz-ttnn-causal-lm (which only forces lm_cfg_scale=1). "
+            "Independent of the 5 Hz LM backend (TTNN LM forces lm_cfg_scale=1). "
             "Set 1 to disable DiT CFG."
         ),
     )
@@ -533,22 +571,12 @@ def main(
         help="Run full official generate_music (LLM+handlers, CPU). Does not use TTNN; writes --out for A/B.",
     )
     ap.add_argument(
-        "--fast-preprocess",
-        action="store_true",
-        help=(
-            "Skip 5 Hz LM + handler batching; use tokenizer + TTNN Qwen3 embedding encoder and HF prepare_condition "
-            "(no precomputed LM hints). Avoids importing AceStepHandler (no torchaudio / full ACE-Step training stack). "
-            "If omitted and torchaudio is not installed, this path is selected automatically."
-        ),
-    )
-    ap.add_argument(
         "--ttnn-condition-embedding",
         action=argparse.BooleanOptionalAction,
         default=True,
         help=(
-            "Run ACE condition embedding / prepare_condition assembly in TTNN instead of HF prepare_condition. "
-            "Default: on (forced off when --fast-preprocess is used). "
-            "Use --no-ttnn-condition-embedding to force the Torch prepare_condition reference path."
+            "Run ACE condition embedding in TTNN (handler path uses forward_payload_traced with "
+            "--use-trace). Default: on. Use --no-ttnn-condition-embedding for Torch prepare_condition."
         ),
     )
     ap.add_argument(
@@ -557,21 +585,15 @@ def main(
         help="Do not set throw_exception_on_fallback (may hide TTNN fallbacks).",
     )
     ap.add_argument(
-        "--experimental-5hz-ttnn-causal-lm",
+        "--pytorch-lm",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help=(
-            "Load the 5 Hz LM via the experimental TTNN causal stack "
-            "(``ttnn_impl/five_hz_causal_lm_experimental.py`` -> "
-            "``ttnn_impl/qwen_tt_transformers_lm.QwenModelTtTransformers``, the stock "
-            "``models/tt_transformers`` graph). Default: on; use "
-            "``--no-experimental-5hz-ttnn-causal-lm`` to fall back to host PyTorch HF Qwen 1.7B. "
-            "Opens TTNN before LM init. The LM is built with ``max_batch_size=1`` so this path "
-            "forces ``lm_cfg_scale=1`` (no LM-side classifier-free guidance). The DiT side is "
-            "unaffected: keep ``--guidance_scale 7`` for base/sft (DiT CFG on) or "
-            "``--guidance_scale 1`` for turbo. (Previously this flag also forced "
-            "``--guidance_scale 1``; that was over-restrictive and the dominant cause of noisy "
-            "audio on the experimental LM path -- DiT CFG is independent of the LM batch limit.)"
+            "Load the 5 Hz LM with host PyTorch ``AutoModelForCausalLM`` instead of the default "
+            "TTNN causal stack (``ttnn_impl/five_hz_causal_lm_experimental.py`` -> "
+            "``ttnn_impl/qwen_tt_transformers_lm.QwenModelTtTransformers``). Default: TTNN. "
+            "TTNN LM opens the device before LM init and forces ``lm_cfg_scale=1`` "
+            "(``max_batch_size=1``). DiT ``--guidance_scale`` is unchanged."
         ),
     )
     ap.add_argument(
@@ -587,14 +609,17 @@ def main(
         action=argparse.BooleanOptionalAction,
         default=True,
         help=(
-            "Wrap the per-step DiT body (patch_embed + DiT core + output_head) in a captured "
-            "TTNN trace + 2CQ replay (delegates to ``run_ttnn_denoise_loop`` with a "
-            "``_E2EDenoiseTrace`` from ``ttnn_impl/e2e_model_tt.py``). Default: on. "
-            "Opens the TTNN device with ``num_command_queues=2`` so host->device copies on CQ 1 "
-            "can overlap ``execute_trace`` on CQ 0. Trace is captured lazily after two eager "
-            "Euler steps. Use ``--no-use-trace`` to fall back to the legacy single-CQ eager "
-            "DiT loop in this script (useful for A/B vs. trace, or when Tracy device profiling "
-            "is enabled, since trace and TT_METAL_DEVICE_PROFILER are mutually exclusive)."
+            "Wrap the Qwen3 caption encoder (``forward_traced``), the instrumental condition "
+            "encoder (``forward_payload_traced`` on the handler path), and the per-step "
+            "DiT body (patch_embed + DiT core + output_head) in captured TTNN trace + 2CQ replay. "
+            "DiT tracing delegates to ``run_ttnn_denoise_loop`` with ``_E2EDenoiseTrace`` "
+            "(``ttnn_impl/e2e_model_tt.py``). Default: on. Opens the TTNN device with "
+            "``num_command_queues=2`` so host->device copies on CQ 1 can overlap "
+            "``execute_trace`` on CQ 0. DiT trace is captured lazily after two eager Euler "
+            "steps; Qwen3 and condition traces are captured on the first encode. Use "
+            "``--no-use-trace`` "
+            "for the legacy single-CQ eager path (A/B vs. trace, or Tracy device profiling, "
+            "which is mutually exclusive with trace)."
         ),
     )
     ap.add_argument(
@@ -749,6 +774,8 @@ def main(
                 flush=True,
             )
             fast_preprocess = True
+        else:
+            _require_torchaudio()
     if fast_preprocess and bool(args.ttnn_condition_embedding):
         # The TTNN condition encoder requires the handler path; --fast-preprocess bypasses it.
         print(
@@ -758,15 +785,15 @@ def main(
             flush=True,
         )
         args.ttnn_condition_embedding = False
-    if fast_preprocess and bool(getattr(args, "experimental_5hz_ttnn_causal_lm", False)):
-        # The experimental TTNN causal LM lives inside the official LM/handler path.
+    if fast_preprocess and not bool(args.pytorch_lm):
         print(
-            "[ace_step_v1_5] --fast-preprocess active: forcing --no-experimental-5hz-ttnn-causal-lm "
+            "[ace_step_v1_5] --fast-preprocess active: forcing --pytorch-lm "
             "(no 5 Hz LM forward in fast preprocess).",
             file=sys.stderr,
             flush=True,
         )
-        args.experimental_5hz_ttnn_causal_lm = False
+        args.pytorch_lm = True
+    use_ttnn_5hz_lm = not bool(args.pytorch_lm)
 
     import torch
 
@@ -854,12 +881,13 @@ def main(
                 "(ACE_STEP_MESH_HOST_PREPROCESS=1; DiT/VAE on full mesh after preprocess).",
                 flush=True,
             )
-        if getattr(args, "experimental_5hz_ttnn_causal_lm", False) and not mesh_ttnn_preprocess:
+        if use_ttnn_5hz_lm and not mesh_ttnn_preprocess:
             print(
-                "[ace_step_v1_5] multi-device mesh: forcing --no-experimental-5hz-ttnn-causal-lm.",
+                "[ace_step_v1_5] multi-device mesh: forcing --pytorch-lm (host 5 Hz LM on preprocess CPU).",
                 flush=True,
             )
-            args.experimental_5hz_ttnn_causal_lm = False
+            args.pytorch_lm = True
+            use_ttnn_5hz_lm = False
         if args.ttnn_condition_embedding and not mesh_ttnn_preprocess:
             print(
                 "[ace_step_v1_5] multi-device mesh: forcing --no-ttnn-condition-embedding "
@@ -876,8 +904,8 @@ def main(
 
     gs = args.guidance_scale
     if gs is None:
-        # NOTE: --experimental-5hz-ttnn-causal-lm no longer forces gs=1.0. The LM batch=1
-        # constraint only affects lm_cfg_scale (forced to 1 below); DiT CFG is independent
+        # NOTE: TTNN 5 Hz LM does not force gs=1.0. The LM batch=1 constraint only affects
+        # lm_cfg_scale (forced to 1 below); DiT CFG is independent
         # and base/sft are trained for gs=7. Resolve purely from the variant.
         if "turbo" in str(args.variant).lower():
             gs = 1.0
@@ -919,11 +947,11 @@ def main(
             "guidance_scale": float(gs),
             "use_adg": bool(use_adg),
             "seed": int(args.seed),
-            "fast_preprocess": bool(fast_preprocess),
             "ttnn_condition": bool(args.ttnn_condition_embedding),
             "torch_vae": bool(args.torch_vae),
             "use_trace": bool(args.use_trace),
-            "experimental_5hz_ttnn_lm": bool(getattr(args, "experimental_5hz_ttnn_causal_lm", False)),
+            "ttnn_5hz_lm": bool(use_ttnn_5hz_lm),
+            "ttnn_5hz_lm_trace": bool(args.use_trace) and bool(use_ttnn_5hz_lm),
             "mesh_sku": mesh_sku,
             "split_device": bool(split_device),
             "mesh_ttnn_preprocess": bool(mesh_ttnn_preprocess),
@@ -1075,278 +1103,96 @@ def main(
         return
 
     condition_tensors_on_device = False
+    condition_encoder = None
     enc_hs_tt_one = None
     ctx_tt_one = None
     null_emb_tt = None
 
-    if fast_preprocess:
-        # --- Lightweight: TTNN Qwen3 embedding encoder + HF prepare_condition (no 5 Hz LM / no precomputed hints) ---
-        from transformers import AutoTokenizer
+    # --- 5 Hz LM + AceStepHandler batching + prepare_condition (precomputed LM hints) ---
+    ref_root = _ensure_acestep_on_path()
 
-        tok = AutoTokenizer.from_pretrained(str(text_model_dir))
+    from models.demos.ace_step_v1_5.official_lm_preprocess import (
+        attach_payload_preprocess_ttnn,
+        build_filtered_dit_kwargs_for_handler,
+        configure_acestep_logging,
+        handler_prepare_condition_payload,
+        handler_prepare_condition_tensors,
+    )
 
-        dit_instruction = "Fill the audio semantic mask based on the given conditions:"
-        metas = {"caption": args.prompt, "duration": float(args.duration_sec), "language": "en"}
-        text_prompt = f"""# Instruction
-{dit_instruction}
+    configure_acestep_logging()
+    try:
+        from acestep.handler import AceStepHandler
 
-# Caption
-{args.prompt}
+        from models.demos.ace_step_v1_5.ttnn_impl.five_hz_lm import LocalFiveHzLMHandler
 
-# Metas
-{metas}<|endoftext|>
-"""
-        tokens = tok(text_prompt, padding="max_length", truncation=True, max_length=256, return_tensors="pt")
-        attn_mask_bool = tokens["attention_mask"].to(torch_dev).to(torch.bool)
+    except ModuleNotFoundError as e:
+        raise RuntimeError(
+            "The default preprocessing path needs the upstream ACE-Step ``acestep`` package "
+            "(``acestep.handler.AceStepHandler`` owns ``preprocess_batch`` and "
+            "``prepare_condition``).\n"
+            f"  Missing module: {e.name!r}.\n"
+            "Fix one of:\n"
+            "  1. Keep the vendored copy at "
+            "models/demos/ace_step_v1_5/torch_ref/_vendored_acestep/ in place "
+            "(it ships with this demo by default).\n"
+            "  2. Point --ace-step-repo-root / $ACE_STEP_REPO_ROOT at an external clone "
+            "of https://github.com/ace-step/ACE-Step-1.5.\n"
+            "  3. If e.name == 'torchaudio': pip install torchaudio (match your torch/CUDA "
+            "build from pytorch.org; required for handler preprocessing)."
+        ) from e
 
-        frames = int(round(float(args.duration_sec) * 25.0))
-        perf.set_params(frames=int(frames))
-        if frames <= 0:
-            raise ValueError("duration_sec must be > 0")
+    from models.demos.ace_step_v1_5.acestep_preprocess_shim import GenerationConfig, GenerationParams
 
-        silence = torch.load(str(silence_latent_path), map_location="cpu").to(torch.float32)
-        if silence.ndim != 3:
-            raise RuntimeError(f"Unexpected silence_latent rank: {tuple(silence.shape)}")
-        if int(silence.shape[-1]) == 64:
-            pass
-        elif int(silence.shape[1]) == 64:
-            silence = silence.transpose(1, 2).contiguous()
-        else:
-            raise RuntimeError(f"Unexpected silence_latent shape: {tuple(silence.shape)}")
-        src_latents = silence[:, :frames, :].contiguous()
-        if src_latents.shape[1] < frames:
-            rep = (frames + src_latents.shape[1] - 1) // src_latents.shape[1]
-            src_latents = src_latents.repeat(1, rep, 1)[:, :frames, :].contiguous()
+    # Note: weights are already downloaded by ``_ensure_variant`` earlier in main()
+    # via ``huggingface_hub.snapshot_download``; the historical
+    # ``import acestep.model_downloader as _mdl; _mdl.MAIN_MODEL_COMPONENTS = [args.variant,
+    # "vae", "Qwen3-Embedding-0.6B", args.lm_variant]`` mutation here was informational
+    # only and has been removed. The handler's defaults already cover the same set, and
+    # by the time the handler tries to download anything every file exists on disk.
 
-        chunk_masks = torch.ones((1, frames, 64), dtype=torch.float32)
-
+    tt_dev_early = None
+    need_preprocess_ttnn_dev = bool(use_ttnn_5hz_lm) or bool(mesh_ttnn_preprocess)
+    if need_preprocess_ttnn_dev and _handlers is None:
+        # TTNN 5 Hz LM uses ``max_batch_size=1`` (see ``QwenModelTtTransformers``). That
+        # applies to the LM only (``lm_cfg_scale=1`` below), not DiT CFG.
         _configure_ttnn_runtime(no_ttnn_strict=args.no_ttnn_strict)
-        import ttnn
-        from models.demos.ace_step_v1_5.ttnn_impl.qwen3_embedding_ace_step import (
-            AceStepQwen3Encoder as TtQwen3EmbeddingEncoder,
-        )
+        import ttnn as _ttnn_pre_lm
 
-        if not args.no_ttnn_strict and hasattr(ttnn, "CONFIG") and hasattr(ttnn.CONFIG, "throw_exception_on_fallback"):
-            ttnn.CONFIG.throw_exception_on_fallback = True
-
-        qwen_safetensors = text_model_dir / "model.safetensors"
-        if not qwen_safetensors.is_file():
-            raise FileNotFoundError(f"Missing Qwen embedding weights at {qwen_safetensors}")
-
-        dev = _open_tt_device(
-            ttnn,
-            device_id=int(args.device_id),
-            num_command_queues=(2 if bool(args.use_trace) else 1),
-        )
-        if hasattr(dev, "enable_program_cache"):
-            dev.enable_program_cache()
-        dev_opened_for_ttnn_text_encoder = True
-        mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
-        if mem is None:
-            raise RuntimeError("TTNN build missing DRAM_MEMORY_CONFIG.")
-
-        input_ids_np = tokens["input_ids"].numpy().astype(np.uint32)
-        attn_mask_np = tokens["attention_mask"].numpy().astype(np.float32)
-
-        qwen_enc = TtQwen3EmbeddingEncoder(
-            device=dev,
-            hf_model_dir=str(text_model_dir),
-            qwen_safetensors_path=str(qwen_safetensors),
-        )
-        try:
-            with perf.timed("text_encoder", device=dev):
-                text_hs_tt = qwen_enc.forward(input_ids_np, attn_mask_np)
-            if args.ttnn_condition_embedding:
-                from models.demos.ace_step_v1_5.ttnn_impl.condition_encoder import TtAceStepInstrumentalConditionEncoder
-
-                condition_encoder = TtAceStepInstrumentalConditionEncoder(
-                    device=dev,
-                    checkpoint_safetensors_path=str(safetensors_path),
-                    dtype=getattr(ttnn, "bfloat16", None),
-                )
-                with perf.timed("condition_encoder", device=dev):
-                    enc_hs_tt_one, enc_mask_np, null_emb_tt = condition_encoder.forward(text_hs_tt, attn_mask_np)
-                enc_mask = torch.from_numpy(enc_mask_np).to(dtype=torch.float32)
-                src_latents_tt = ttnn.as_tensor(
-                    src_latents.detach().to(dtype=torch.float32).cpu().contiguous().numpy(),
-                    device=dev,
-                    dtype=getattr(ttnn, "bfloat16", None),
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    memory_config=mem,
-                )
-                chunk_masks_tt = ttnn.as_tensor(
-                    chunk_masks.detach().to(dtype=torch.float32).cpu().contiguous().numpy(),
-                    device=dev,
-                    dtype=getattr(ttnn, "bfloat16", None),
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    memory_config=mem,
-                )
-                ctx_tt_one = ttnn.concat([src_latents_tt, chunk_masks_tt], dim=-1)
-                try:
-                    ttnn.deallocate(text_hs_tt)
-                except Exception:
-                    pass
-                try:
-                    ttnn.deallocate(src_latents_tt)
-                    ttnn.deallocate(chunk_masks_tt)
-                except Exception:
-                    pass
-                condition_tensors_on_device = True
-                print("[condition] backend=ttnn instrumental lyric+timbre+text", flush=True)
-            else:
-                text_hidden_states = ttnn.to_torch(text_hs_tt).float()
-                try:
-                    ttnn.deallocate(text_hs_tt)
-                except Exception:
-                    pass
-        finally:
-            del qwen_enc
-
-        if not args.ttnn_condition_embedding:
-            if text_hidden_states.ndim == 4:
-                text_hidden_states = text_hidden_states.squeeze(1).contiguous()
-            text_hidden_states = text_hidden_states.to(torch_dev)
-
-            from transformers import AutoModel
-
-            ace = AutoModel.from_pretrained(str(model_dir), trust_remote_code=True).eval().to(torch_dev)
-
-            B = 1
-            lyric_dim = int(text_hidden_states.shape[-1])
-            lyric_hidden_states = torch.zeros((B, 1, lyric_dim), dtype=torch.float32, device=torch_dev)
-            lyric_attention_mask = torch.ones((B, 1), dtype=torch.bool, device=torch_dev)
-            refer_audio_acoustic_hidden_states_packed = torch.zeros((B, 1, 64), dtype=torch.float32, device=torch_dev)
-            refer_audio_order_mask = torch.zeros((B,), dtype=torch.long, device=torch_dev)
-            latent_attention_mask = torch.ones((B, frames), dtype=torch.float32, device=torch_dev)
-
-            with perf.timed("prepare_condition_torch"):
-                with torch.inference_mode():
-                    enc_hs, enc_mask, ctx_lat = ace.prepare_condition(
-                        text_hidden_states=text_hidden_states.to(dtype=torch.float32),
-                        text_attention_mask=attn_mask_bool,
-                        lyric_hidden_states=lyric_hidden_states,
-                        lyric_attention_mask=lyric_attention_mask,
-                        refer_audio_acoustic_hidden_states_packed=refer_audio_acoustic_hidden_states_packed,
-                        refer_audio_order_mask=refer_audio_order_mask,
-                        hidden_states=src_latents.to(device=torch_dev, dtype=torch.float32),
-                        attention_mask=latent_attention_mask,
-                        silence_latent=silence.to(device=torch_dev, dtype=torch.float32),
-                        src_latents=src_latents.to(device=torch_dev, dtype=torch.float32),
-                        chunk_masks=chunk_masks.to(device=torch_dev, dtype=torch.float32),
-                        is_covers=torch.zeros((B,), dtype=torch.bool, device=torch_dev),
-                        precomputed_lm_hints_25Hz=None,
-                    )
-
-            enc_hs = enc_hs.float().cpu()
-            enc_mask = enc_mask.float().cpu()
-            ctx_lat = ctx_lat.float().cpu()
-
-            nc = getattr(ace, "null_condition_emb", None)
-            if nc is None:
-                inner = getattr(ace, "model", None)
-                nc = getattr(inner, "null_condition_emb", None) if inner is not None else None
-            if nc is None:
-                raise RuntimeError("Could not find null_condition_emb on ACE-Step model.")
-            null_emb = nc.float().cpu()
-
-    if not fast_preprocess:
-        # --- Official: 5 Hz LM + AceStepHandler batching + prepare_condition (precomputed LM hints) ---
-        ref_root = _ensure_acestep_on_path()
-
-        from models.demos.ace_step_v1_5.official_lm_preprocess import (
-            attach_payload_preprocess_ttnn,
-            build_filtered_dit_kwargs_for_handler,
-            handler_prepare_condition_payload,
-            handler_prepare_condition_tensors,
-        )
-
-        try:
-            from acestep.handler import AceStepHandler
-
-            from models.demos.ace_step_v1_5.ttnn_impl.five_hz_lm import LocalFiveHzLMHandler
-
-        except ModuleNotFoundError as e:
-            raise RuntimeError(
-                "The default preprocessing path needs the upstream ACE-Step ``acestep`` package "
-                "(``acestep.handler.AceStepHandler`` owns ``preprocess_batch`` and "
-                "``prepare_condition``).\n"
-                f"  Missing module: {e.name!r}.\n"
-                "Fix one of:\n"
-                "  1. Keep the vendored copy at "
-                "models/demos/ace_step_v1_5/torch_ref/_vendored_acestep/ in place "
-                "(it ships with this demo by default).\n"
-                "  2. Point --ace-step-repo-root / $ACE_STEP_REPO_ROOT at an external clone "
-                "of https://github.com/ace-step/ACE-Step-1.5.\n"
-                "  3. Pass --fast-preprocess to run the lightweight tokenizer + TTNN Qwen3 "
-                "encoder path that does not depend on acestep.handler (note: this skips the "
-                "5 Hz LM and lyric/timbre encoders, so audio quality differs).\n"
-                "  4. If e.name == 'torchaudio': pip install torchaudio (match your torch/CUDA "
-                "build from pytorch.org)."
-            ) from e
-
-        from models.demos.ace_step_v1_5.acestep_preprocess_shim import GenerationConfig, GenerationParams
-
-        # Note: weights are already downloaded by ``_ensure_variant`` earlier in main()
-        # via ``huggingface_hub.snapshot_download``; the historical
-        # ``import acestep.model_downloader as _mdl; _mdl.MAIN_MODEL_COMPONENTS = [args.variant,
-        # "vae", "Qwen3-Embedding-0.6B", args.lm_variant]`` mutation here was informational
-        # only and has been removed. The handler's defaults already cover the same set, and
-        # by the time the handler tries to download anything every file exists on disk.
-
-        tt_dev_early = None
-        need_preprocess_ttnn_dev = bool(getattr(args, "experimental_5hz_ttnn_causal_lm", False)) or bool(
-            mesh_ttnn_preprocess
-        )
-        if need_preprocess_ttnn_dev and _handlers is None:
-            # NOTE: The experimental TTNN causal LM is built with ``max_batch_size=1`` (see
-            # ``QwenModelTtTransformers``). That constraint applies to the **LM** only -- it
-            # blocks LM-side classifier-free guidance (cond+uncond in one batch), which is why
-            # the handler forces ``lm_cfg_scale=1`` below. It does NOT constrain the DiT, which
-            # has its own batch handling (``do_cfg = gs > 1`` at line ~876 dispatches the DiT
-            # with batch=2 independently). So ``--guidance_scale > 1`` (DiT CFG) IS supported
-            # alongside the experimental TTNN LM. Previously this branch raised when ``gs > 1``
-            # because the demo conservatively assumed the LM batch=1 constraint propagated to
-            # the DiT; that was the dominant cause of the "noisy output" on the experimental
-            # LM path -- disabling DiT CFG on the base variant (trained for gs=7) drops audio
-            # quality substantially. Use ``--guidance_scale 7`` (or the variant default) for
-            # base/sft, ``--guidance_scale 1`` for turbo.
-            _configure_ttnn_runtime(no_ttnn_strict=args.no_ttnn_strict)
-            import ttnn as _ttnn_pre_lm
-
-            if (
-                not args.no_ttnn_strict
-                and hasattr(_ttnn_pre_lm, "CONFIG")
-                and hasattr(_ttnn_pre_lm.CONFIG, "throw_exception_on_fallback")
-            ):
-                _ttnn_pre_lm.CONFIG.throw_exception_on_fallback = True
-            if mesh_ttnn_preprocess:
-                tt_dev_early = open_preprocess_device(
-                    _ttnn_pre_lm,
-                    device_id=int(args.device_id),
-                    num_command_queues=1,
-                )
-            else:
-                tt_dev_early = _open_tt_device(
-                    _ttnn_pre_lm,
-                    device_id=int(args.device_id),
-                    num_command_queues=(2 if bool(args.use_trace) else 1),
-                )
-            if hasattr(tt_dev_early, "enable_program_cache"):
-                tt_dev_early.enable_program_cache()
-            demo_session.preprocess_dev = tt_dev_early
-
-        if _handlers is not None:
-            dit_handler, llm_handler, tt_dev_early = _handlers
-            demo_session.dit_handler = dit_handler
-            demo_session.llm_handler = llm_handler
-            if tt_dev_early is not None:
-                llm_handler.set_ttnn_logits_device(tt_dev_early)
+        if (
+            not args.no_ttnn_strict
+            and hasattr(_ttnn_pre_lm, "CONFIG")
+            and hasattr(_ttnn_pre_lm.CONFIG, "throw_exception_on_fallback")
+        ):
+            _ttnn_pre_lm.CONFIG.throw_exception_on_fallback = True
+        if mesh_ttnn_preprocess:
+            tt_dev_early = open_preprocess_device(
+                _ttnn_pre_lm,
+                device_id=int(args.device_id),
+                num_command_queues=1,
+            )
         else:
-            dit_handler = AceStepHandler()
-            llm_handler = LocalFiveHzLMHandler()
+            tt_dev_early = _open_tt_device(
+                _ttnn_pre_lm,
+                device_id=int(args.device_id),
+                num_command_queues=(2 if bool(args.use_trace) else 1),
+            )
+        if hasattr(tt_dev_early, "enable_program_cache"):
+            tt_dev_early.enable_program_cache()
+        demo_session.preprocess_dev = tt_dev_early
 
-            device = "cpu"
-            _init_t0 = time.perf_counter() if perf.enabled else None
+    if _handlers is not None:
+        dit_handler, llm_handler, tt_dev_early = _handlers
+        demo_session.dit_handler = dit_handler
+        demo_session.llm_handler = llm_handler
+        if tt_dev_early is not None:
+            llm_handler.set_ttnn_logits_device(tt_dev_early)
+    else:
+        dit_handler = AceStepHandler()
+        llm_handler = LocalFiveHzLMHandler()
+
+        device = "cpu"
+        _init_t0 = time.perf_counter() if perf.enabled else None
+        with perf.timed("handler_init"):
             status, ok = dit_handler.initialize_service(
                 project_root=str(ref_root),
                 config_path=args.variant,
@@ -1362,216 +1208,230 @@ def main(
                 backend="pt",
                 device=device,
                 ttnn_causal_device=tt_dev_early,
-                experimental_ttnn_causal_lm=bool(getattr(args, "experimental_5hz_ttnn_causal_lm", False)),
+                use_ttnn_causal_lm=bool(use_ttnn_5hz_lm),
+                ttnn_lm_use_trace=bool(args.use_trace) and bool(use_ttnn_5hz_lm),
             )
             print(status, flush=True)
             if not ok:
                 raise RuntimeError("5 Hz LM (local HF) initialize failed")
-            if _init_t0 is not None:
-                _init_ms = (time.perf_counter() - _init_t0) * 1000.0
-                perf.record_init_once("handler_init", _init_ms)
-                demo_session.session_perf.note_init("handler_init", _init_ms)
-            demo_session.dit_handler = dit_handler
-            demo_session.llm_handler = llm_handler
+        if _init_t0 is not None:
+            _init_ms = (time.perf_counter() - _init_t0) * 1000.0
+            perf.record_init_once("handler_init", _init_ms)
+            demo_session.session_perf.note_init("handler_init", _init_ms)
+        demo_session.dit_handler = dit_handler
+        demo_session.llm_handler = llm_handler
 
-        ts_list = None
-        if args.timesteps:
-            raw_ts = [float(x.strip()) for x in args.timesteps.split(",") if x.strip()]
-            while raw_ts and raw_ts[-1] == 0.0:
-                raw_ts.pop()
-            ts_list = raw_ts or None
+    ts_list = None
+    if args.timesteps:
+        raw_ts = [float(x.strip()) for x in args.timesteps.split(",") if x.strip()]
+        while raw_ts and raw_ts[-1] == 0.0:
+            raw_ts.pop()
+        ts_list = raw_ts or None
 
-        reuse_preprocess = demo_session.can_reuse_preprocess(
-            prompt=run_prompt,
-            duration_sec=float(args.duration_sec),
-            seed=int(args.seed),
+    reuse_preprocess = demo_session.can_reuse_preprocess(
+        prompt=run_prompt,
+        duration_sec=float(args.duration_sec),
+        seed=int(args.seed),
+    )
+    if reuse_preprocess:
+        cached = demo_session.cached_preprocess
+        assert cached is not None
+        enc_hs = cached.enc_hs
+        enc_mask = cached.enc_mask
+        ctx_lat = cached.ctx_lat
+        null_emb = cached.null_emb
+        frames = int(cached.frames)
+        perf.set_params(frames=frames)
+        condition_tensors_on_device = False
+        enc_hs_tt_one = None
+        ctx_tt_one = None
+        null_emb_tt = None
+        dev_opened_for_ttnn_text_encoder = False
+        print(
+            "[ace_step_v1_5] reusing cached preprocess tensors (skip 5 Hz LM + condition encode on this pass)",
+            flush=True,
         )
-        if reuse_preprocess:
-            cached = demo_session.cached_preprocess
-            assert cached is not None
-            enc_hs = cached.enc_hs
-            enc_mask = cached.enc_mask
-            ctx_lat = cached.ctx_lat
-            null_emb = cached.null_emb
-            frames = int(cached.frames)
-            perf.set_params(frames=frames)
-            condition_tensors_on_device = False
-            enc_hs_tt_one = None
-            ctx_tt_one = None
-            null_emb_tt = None
-            dev_opened_for_ttnn_text_encoder = False
-            print(
-                "[ace_step_v1_5] reusing cached preprocess tensors " "(skip 5 Hz LM + condition encode on this pass)",
-                flush=True,
-            )
+    else:
+        params = GenerationParams(
+            task_type="text2music",
+            caption=run_prompt,
+            lyrics="[Instrumental]",
+            instrumental=True,
+            reference_audio=None,
+            duration=float(args.duration_sec),
+            inference_steps=int(infer_steps),
+            guidance_scale=gs,
+            lm_cfg_scale=1.0 if use_ttnn_5hz_lm else 2.0,
+            use_adg=use_adg,
+            cfg_interval_start=float(args.cfg_interval_start),
+            cfg_interval_end=float(args.cfg_interval_end),
+            shift=float(args.shift),
+            thinking=True,
+            use_constrained_decoding=True,
+            timesteps=ts_list,
+        )
+        config = GenerationConfig(
+            batch_size=1,
+            use_random_seed=False,
+            seeds=[int(args.seed)],
+            audio_format="wav",
+            constrained_decoding_debug=True,
+        )
+        with perf.timed("five_hz_lm_generate"):
+            filtered = build_filtered_dit_kwargs_for_handler(dit_handler, llm_handler, params, config, progress=None)
+        qwen_safetensors = text_model_dir / "model.safetensors"
+        if not qwen_safetensors.is_file():
+            raise FileNotFoundError(f"Missing Qwen embedding weights at {qwen_safetensors}")
+
+        _configure_ttnn_runtime(no_ttnn_strict=args.no_ttnn_strict)
+        import ttnn
+        from models.demos.ace_step_v1_5.ttnn_impl.audio_code_detokenizer import TtAceStepAudioCodeDetokenizer
+        from models.demos.ace_step_v1_5.ttnn_impl.qwen3_embedding_ace_step import (
+            AceStepQwen3Encoder as TtQwen3EmbeddingEncoder,
+        )
+
+        if not args.no_ttnn_strict and hasattr(ttnn, "CONFIG") and hasattr(ttnn.CONFIG, "throw_exception_on_fallback"):
+            ttnn.CONFIG.throw_exception_on_fallback = True
+
+        if demo_session.preprocess_dev is not None and demo_session.dit_dev is None:
+            dev = demo_session.preprocess_dev
+            tt_dev_early = dev
+            dev_opened_for_ttnn_text_encoder = True
+        elif tt_dev_early is not None:
+            dev = tt_dev_early
+            dev_opened_for_ttnn_text_encoder = True
         else:
-            exp_ttnn_lm = bool(getattr(args, "experimental_5hz_ttnn_causal_lm", False))
-            params = GenerationParams(
-                task_type="text2music",
-                caption=run_prompt,
-                lyrics="[Instrumental]",
-                instrumental=True,
-                reference_audio=None,
-                duration=float(args.duration_sec),
-                inference_steps=int(infer_steps),
-                guidance_scale=gs,
-                lm_cfg_scale=1.0 if exp_ttnn_lm else 2.0,
-                use_adg=use_adg,
-                cfg_interval_start=cfg_interval_start,
-                cfg_interval_end=cfg_interval_end,
-                shift=float(args.shift),
-                thinking=True,
-                use_constrained_decoding=True,
-                timesteps=ts_list,
-            )
-            config = GenerationConfig(
-                batch_size=1,
-                use_random_seed=False,
-                seeds=[int(args.seed)],
-                audio_format="wav",
-                constrained_decoding_debug=True,
-            )
-            with perf.timed("five_hz_lm_generate"):
-                filtered = build_filtered_dit_kwargs_for_handler(
-                    dit_handler, llm_handler, params, config, progress=None
+            if mesh_ttnn_preprocess:
+                dev = open_preprocess_device(
+                    ttnn,
+                    device_id=int(args.device_id),
+                    num_command_queues=1,
                 )
-
-            _run_handler_ttnn_preprocess = (not host_only_preprocess) or bool(mesh_ttnn_preprocess)
-
-            if _run_handler_ttnn_preprocess and args.ttnn_condition_embedding:
-                qwen_safetensors = text_model_dir / "model.safetensors"
-                if not qwen_safetensors.is_file():
-                    raise FileNotFoundError(f"Missing Qwen embedding weights at {qwen_safetensors}")
-
-                _configure_ttnn_runtime(no_ttnn_strict=args.no_ttnn_strict)
-                import ttnn
-                from models.demos.ace_step_v1_5.ttnn_impl.audio_code_detokenizer import TtAceStepAudioCodeDetokenizer
-                from models.demos.ace_step_v1_5.ttnn_impl.qwen3_embedding_ace_step import (
-                    AceStepQwen3Encoder as TtQwen3EmbeddingEncoder,
+            else:
+                dev = _open_tt_device(
+                    ttnn,
+                    device_id=int(args.device_id),
+                    num_command_queues=(2 if bool(args.use_trace) else 1),
                 )
+            if hasattr(dev, "enable_program_cache"):
+                dev.enable_program_cache()
+            dev_opened_for_ttnn_text_encoder = True
+            demo_session.preprocess_dev = dev
+            tt_dev_early = dev
+        llm_handler.set_ttnn_logits_device(dev)
 
-                if (
-                    not args.no_ttnn_strict
-                    and hasattr(ttnn, "CONFIG")
-                    and hasattr(ttnn.CONFIG, "throw_exception_on_fallback")
-                ):
-                    ttnn.CONFIG.throw_exception_on_fallback = True
-
-                if demo_session.preprocess_dev is not None and demo_session.dit_dev is None:
-                    dev = demo_session.preprocess_dev
-                    tt_dev_early = dev
-                    dev_opened_for_ttnn_text_encoder = True
-                elif tt_dev_early is not None:
-                    dev = tt_dev_early
-                    dev_opened_for_ttnn_text_encoder = True
-                else:
-                    if mesh_ttnn_preprocess:
-                        dev = open_preprocess_device(
-                            ttnn,
-                            device_id=int(args.device_id),
-                            num_command_queues=1,
-                        )
-                    else:
-                        dev = _open_tt_device(
-                            ttnn,
-                            device_id=int(args.device_id),
-                            num_command_queues=(2 if bool(args.use_trace) else 1),
-                        )
-                    if hasattr(dev, "enable_program_cache"):
-                        dev.enable_program_cache()
-                    dev_opened_for_ttnn_text_encoder = True
-                    demo_session.preprocess_dev = dev
-                    tt_dev_early = dev
-
-                if exp_ttnn_lm or mesh_ttnn_preprocess:
-                    llm_handler.set_ttnn_logits_device(dev)
-
-                if demo_session.qwen_tt_encoder is None:
-                    with perf.timed("qwen_encoder_init", device=dev):
-                        demo_session.qwen_tt_encoder = TtQwen3EmbeddingEncoder(
-                            device=dev, hf_model_dir=str(text_model_dir), qwen_safetensors_path=str(qwen_safetensors)
-                        )
-                        demo_session.audio_code_detokenizer = TtAceStepAudioCodeDetokenizer(
-                            device=dev,
-                            checkpoint_safetensors_path=str(safetensors_path),
-                            dtype=getattr(ttnn, "bfloat16", None),
-                        )
-                qwen_tt_encoder = demo_session.qwen_tt_encoder
-                audio_code_detokenizer = demo_session.audio_code_detokenizer
-                _restore_infer_txt = attach_payload_preprocess_ttnn(
-                    dit_handler,
-                    tt_qwen_encoder=qwen_tt_encoder,
-                    tt_audio_detokenizer=audio_code_detokenizer,
-                    max_seq_len=256,
+        if demo_session.qwen_tt_encoder is None:
+            with perf.timed("qwen_encoder_init", device=dev):
+                demo_session.qwen_tt_encoder = TtQwen3EmbeddingEncoder(
+                    device=dev, hf_model_dir=str(text_model_dir), qwen_safetensors_path=str(qwen_safetensors)
                 )
-                try:
-                    from models.demos.ace_step_v1_5.ttnn_impl.condition_encoder import (
-                        TtAceStepInstrumentalConditionEncoder,
+                demo_session.audio_code_detokenizer = TtAceStepAudioCodeDetokenizer(
+                    device=dev,
+                    checkpoint_safetensors_path=str(safetensors_path),
+                    dtype=getattr(ttnn, "bfloat16", None),
+                )
+        qwen_tt_encoder = demo_session.qwen_tt_encoder
+        audio_code_detokenizer = demo_session.audio_code_detokenizer
+        _restore_infer_txt = attach_payload_preprocess_ttnn(
+            dit_handler,
+            tt_qwen_encoder=qwen_tt_encoder,
+            tt_audio_detokenizer=audio_code_detokenizer,
+            max_seq_len=256,
+            use_trace=bool(args.use_trace),
+        )
+        if bool(args.use_trace):
+            print("[qwen3] backend=ttnn trace+2cq caption encode (handler infer_text_embeddings)", flush=True)
+        try:
+            if args.ttnn_condition_embedding:
+                from models.demos.ace_step_v1_5.official_lm_preprocess import (
+                    condition_encode_payload_tt,
+                    release_preprocess_device_traces,
+                )
+                from models.demos.ace_step_v1_5.ttnn_impl.condition_encoder import TtAceStepInstrumentalConditionEncoder
+
+                use_trace = bool(args.use_trace)
+                with perf.timed("handler_preprocess", device=dev):
+                    payload, frames = handler_prepare_condition_payload(dit_handler, filtered)
+                perf.set_params(frames=int(frames))
+                if use_trace:
+                    release_preprocess_device_traces(
+                        device=dev,
+                        tt_qwen_encoder=qwen_tt_encoder,
+                        tt_audio_detokenizer=audio_code_detokenizer,
                     )
-
-                    with perf.timed("handler_preprocess", device=dev):
-                        payload, frames = handler_prepare_condition_payload(dit_handler, filtered)
-                    perf.set_params(frames=int(frames))
-                    if demo_session.condition_encoder is None:
-                        demo_session.condition_encoder = TtAceStepInstrumentalConditionEncoder(
-                            device=dev,
-                            checkpoint_safetensors_path=str(safetensors_path),
-                            dtype=getattr(ttnn, "bfloat16", None),
-                        )
-                    condition_encoder = demo_session.condition_encoder
-                    with perf.timed("condition_encoder", device=dev):
-                        enc_hs_tt_one, enc_mask_np, ctx_tt_one, null_emb_tt = condition_encoder.forward_payload(payload)
-
-                    if mesh_ttnn_preprocess:
-                        with perf.timed("preprocess_readback", device=dev):
-                            enc_hs = ace_step_ttnn_to_torch(enc_hs_tt_one, mesh_device=dev, dtype=torch.float32).cpu()
-                            ctx_lat = ace_step_ttnn_to_torch(ctx_tt_one, mesh_device=dev, dtype=torch.float32).cpu()
-                            null_emb = ace_step_ttnn_to_torch(null_emb_tt, mesh_device=dev, dtype=torch.float32).cpu()
-                        enc_mask = torch.from_numpy(np.asarray(enc_mask_np, dtype=np.float32))
-                        for _maybe_tt in (enc_hs_tt_one, ctx_tt_one):
-                            if _maybe_tt is not None:
-                                try:
-                                    ttnn.deallocate(_maybe_tt)
-                                except Exception:
-                                    pass
-                        enc_hs_tt_one = None
-                        ctx_tt_one = None
-                        null_emb_tt = None
-                        condition_tensors_on_device = False
-                    else:
-                        enc_mask = torch.from_numpy(enc_mask_np).to(dtype=torch.float32)
-                        condition_tensors_on_device = True
-                    print("[condition] backend=ttnn official lyric+timbre+text+context", flush=True)
-                finally:
-                    _restore_infer_txt()
-            if not condition_tensors_on_device:
-                demo_session.store_preprocess(
-                    prompt=run_prompt,
-                    duration_sec=float(args.duration_sec),
-                    seed=int(args.seed),
-                    frames=int(frames),
-                    enc_hs=enc_hs,
-                    enc_mask=enc_mask,
-                    ctx_lat=ctx_lat,
-                    null_emb=null_emb,
+                condition_encoder = TtAceStepInstrumentalConditionEncoder(
+                    device=dev,
+                    checkpoint_safetensors_path=str(safetensors_path),
+                    dtype=getattr(ttnn, "bfloat16", None),
                 )
-            elif host_only_preprocess or not args.ttnn_condition_embedding:
+                with perf.timed("condition_encoder", device=dev):
+                    enc_hs_tt_one, enc_mask_np, ctx_tt_one, null_emb_tt = condition_encode_payload_tt(
+                        condition_encoder,
+                        payload,
+                        use_trace=use_trace,
+                    )
+                enc_hs_tt_one, ctx_tt_one = _finalize_condition_trace_tensors(
+                    enc_hs_tt_one,
+                    condition_encoder,
+                    dev,
+                    use_trace=use_trace,
+                    ctx_tt=ctx_tt_one,
+                )
+                if mesh_ttnn_preprocess:
+                    with perf.timed("preprocess_readback", device=dev):
+                        enc_hs = ace_step_ttnn_to_torch(enc_hs_tt_one, mesh_device=dev, dtype=torch.float32).cpu()
+                        ctx_lat = ace_step_ttnn_to_torch(ctx_tt_one, mesh_device=dev, dtype=torch.float32).cpu()
+                        null_emb = ace_step_ttnn_to_torch(null_emb_tt, mesh_device=dev, dtype=torch.float32).cpu()
+                    enc_mask = torch.from_numpy(np.asarray(enc_mask_np, dtype=np.float32))
+                    for _maybe_tt in (enc_hs_tt_one, ctx_tt_one, null_emb_tt):
+                        if _maybe_tt is not None:
+                            try:
+                                ttnn.deallocate(_maybe_tt)
+                            except Exception:
+                                pass
+                    enc_hs_tt_one = None
+                    ctx_tt_one = None
+                    null_emb_tt = None
+                    condition_tensors_on_device = False
+                else:
+                    enc_mask = torch.from_numpy(enc_mask_np).to(dtype=torch.float32)
+                    condition_tensors_on_device = True
+                if use_trace:
+                    print(
+                        "[condition] backend=ttnn trace+2cq official "
+                        "(lyric 8L + timbre 4L + text+concat + ctx concat trace)",
+                        flush=True,
+                    )
+                    print(
+                        "[preprocess] qwen caption + lyric embed + audio detokenizer + 5Hz LM prefill/decode trace enabled",
+                        flush=True,
+                    )
+                else:
+                    print("[condition] backend=ttnn official lyric+timbre+text+context (eager)", flush=True)
+            else:
                 with perf.timed("handler_preprocess"):
                     enc_hs, enc_mask, ctx_lat, frames, null_emb = handler_prepare_condition_tensors(
                         dit_handler, filtered
                     )
                 perf.set_params(frames=int(frames))
-                demo_session.store_preprocess(
-                    prompt=run_prompt,
-                    duration_sec=float(args.duration_sec),
-                    seed=int(args.seed),
-                    frames=int(frames),
-                    enc_hs=enc_hs,
-                    enc_mask=enc_mask,
-                    ctx_lat=ctx_lat,
-                    null_emb=null_emb,
-                )
-
+                condition_tensors_on_device = False
+        finally:
+            _restore_infer_txt()
+            if hasattr(qwen_tt_encoder, "release_trace"):
+                qwen_tt_encoder.release_trace()
+            if hasattr(audio_code_detokenizer, "release_trace"):
+                audio_code_detokenizer.release_trace()
+        if not condition_tensors_on_device:
+            demo_session.store_preprocess(
+                prompt=run_prompt,
+                duration_sec=float(args.duration_sec),
+                seed=int(args.seed),
+                frames=int(frames),
+                enc_hs=enc_hs,
+                enc_mask=enc_mask,
+                ctx_lat=ctx_lat,
+                null_emb=null_emb,
+            )
     do_cfg = gs > 1.0 + 1e-6
     perf.set_params(do_cfg=bool(do_cfg))
 
@@ -1789,6 +1649,7 @@ def main(
                 null_rep_4d = ttnn.repeat(null_4d, (1, 1, s_enc, 1))
                 null_rep = ttnn.reshape(null_rep_4d, (1, s_enc, d_enc))
 
+                # Eager CFG batch setup: traced replay was not bit-accurate vs eager (audible noise).
                 enc_tt_pipe = ttnn.concat([enc_hs_tt_one, null_rep], dim=0)
                 ctx_tt_pipe = concat_duplicate_batch(ctx_tt_one)
                 try:
@@ -1804,7 +1665,10 @@ def main(
                 ctx_tt_one = None
                 null_emb_tt = None
             else:
-                enc_tt_pipe = enc_hs_tt_one
+                if bool(args.use_trace) and hasattr(ttnn, "clone"):
+                    enc_tt_pipe = ttnn.clone(enc_hs_tt_one)
+                else:
+                    enc_tt_pipe = enc_hs_tt_one
                 ctx_tt_pipe = ctx_tt_one
                 enc_hs_tt_one = None
                 ctx_tt_one = None
@@ -1859,14 +1723,12 @@ def main(
                 print("[ace_step_v1_5] timestep embeddings ready", flush=True)
 
         if bool(args.use_trace):
-            # --- Trace + 2CQ path -----------------------------------------------------------------
-            # Delegate the per-step DiT body (patch_embed + DiT core + output_head) to the shared
-            # ``run_ttnn_denoise_loop`` from ``ttnn_impl/e2e_model_tt.py`` with a fresh
-            # ``_E2EDenoiseTrace``. The function precomputes ``temb_per_step`` / ``tp_per_step`` on
-            # the host-control side, runs two eager warmup Euler steps, then captures the DiT body
-            # into a TTNN trace and replays it for every remaining step. ``ctx_tt_pipe`` /
-            # ``enc_tt_pipe`` are consumed (deallocated) by the function on exit.
+            # --- Trace + 2CQ path (DiT body trace only when fused_M <= 16) ----------------------
             from models.demos.ace_step_v1_5.ttnn_impl.e2e_model_tt import _E2EDenoiseTrace, run_ttnn_denoise_loop
+            from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import (
+                ace_step_dit_body_trace_safe,
+                ace_step_dit_fused_m_tiles,
+            )
 
             def _trace_progress(step_idx: int, n_steps: int, t_curr: float, euler_dt: float) -> None:
                 if step_idx >= n_steps - 1:
@@ -1877,8 +1739,20 @@ def main(
                         flush=True,
                     )
 
+            patch_sz = int(pipe.patch_embed.config.patch_size)
+            patch_seq = (int(frames_i) + patch_sz - 1) // patch_sz
+            pipe_batch = 2 if do_cfg else 1
             if demo_session.trace_state is None:
-                demo_session.trace_state = _E2EDenoiseTrace()
+                if ace_step_dit_body_trace_safe(batch_size=pipe_batch, patch_seq_len=patch_seq):
+                    demo_session.trace_state = _E2EDenoiseTrace(use_full_step=False)
+                else:
+                    fused_m = ace_step_dit_fused_m_tiles(batch_size=pipe_batch, seq_len=patch_seq)
+                    print(
+                        f"[ttnn] DiT body trace disabled (fused_M={fused_m}>16): "
+                        "eager denoise + DRAM activations for clean audio on long clips",
+                        flush=True,
+                    )
+                    demo_session.trace_state = None
             trace_state = demo_session.trace_state
             _step_prog = make_denoise_progress_fn(perf, num_steps=len(t_schedule))
             _temb_dev = temb_per_step
@@ -1951,10 +1825,7 @@ def main(
                         _trace_loop_kw["encoder_attention_mask_b1qk"] = mask_tt
                     _trace_result = run_ttnn_denoise_loop(**_trace_loop_kw)
             finally:
-                if _keep_dit_mesh_for_next:
-                    trace_state.release_trace_only(dev)
-                else:
-                    trace_state.release(dev)
+                trace_state.release(dev)
 
             # ``run_ttnn_denoise_loop`` deallocated ``enc_tt_pipe`` / ``ctx_tt_pipe`` on exit;
             # mark them consumed so the bottom-of-block cleanup does not double-free.
@@ -2269,8 +2140,27 @@ def main(
                 except Exception:
                     pass
                 xt_tt = xt_vae_in
+            use_vae_trace = bool(args.use_trace)
+            if use_vae_trace:
+                print(
+                    "[vae] backend=ttnn decode_tiled (trace if single window; overlap-add eager)",
+                    flush=True,
+                )
+            else:
+                print("[vae] backend=ttnn eager decode_tiled", flush=True)
             with perf.timed("vae_decode", device=dev):
-                wav_tt = tt_vae.decode_tiled(xt_tt, chunk_size=vae_cs, overlap=vae_ov)
+                if use_vae_trace:
+                    ttnn.synchronize_device(dev)
+                wav_tt = tt_vae.decode_tiled(
+                    xt_tt,
+                    chunk_size=vae_cs,
+                    overlap=vae_ov,
+                    use_trace=use_vae_trace,
+                )
+                if use_vae_trace:
+                    ttnn.synchronize_device(dev)
+                    if hasattr(tt_vae, "release_trace"):
+                        tt_vae.release_trace()
             ace_step_synchronize_device(ttnn, dev)
             wav_ntc = _readback_ttnn(wav_tt)
             try:
@@ -2296,6 +2186,10 @@ def main(
         # ``momentum_ttnn.reset()`` is already invoked inside the non-trace branch above;
         # the trace branch does not allocate a momentum buffer.
     finally:
+        if condition_encoder is not None and hasattr(condition_encoder, "release_trace"):
+            condition_encoder.release_trace()
+        if tt_vae is not None and hasattr(tt_vae, "release_trace"):
+            tt_vae.release_trace()
         for _maybe_tt in (enc_hs_tt_one, ctx_tt_one, null_emb_tt):
             if _maybe_tt is not None:
                 try:

@@ -1,4 +1,36 @@
-# ACE-Step v1.5 (Torch ref + TTNN)
+# ACE-Step v1.5
+
+## About ACE-Step
+
+[ACE-Step](https://github.com/ace-step/ACE-Step-1.5) is an open-source music foundation model that generates stereo audio from text (and optional lyrics). Version 1.5 targets commercial-grade quality with fast inference: variable-length output at 48 kHz, multilingual prompts, and optional editing workflows (cover, repaint, vocal-to-BGM). Checkpoints are published on Hugging Face as [ACE-Step/Ace-Step1.5](https://huggingface.co/ACE-Step/Ace-Step1.5).
+
+The pipeline has three main stages:
+
+1. **5 Hz language model** — Turns the user prompt into structured conditioning (audio codes, captions, metadata) that guides generation.
+2. **Diffusion Transformer (DiT)** — Denoises latents in the VAE space using flow matching.
+3. **VAE decode** — Maps latents to a waveform (`AutoencoderOobleck`).
+
+This TT-Metal demo accelerates the DiT sampler and much of the preprocessing stack on Tenstorrent devices via TTNN, while keeping host-side orchestration aligned with the official ACE-Step inference path.
+
+### Currently supported
+
+| Component | Supported today | Notes |
+|-----------|-----------------|-------|
+| DiT (`--variant`) | **`acestep-v15-base` only** | `acestep-v15-sft` and `acestep-v15-turbo` exist upstream but are not validated on the TTNN e2e path yet. |
+| 5 Hz LM (`--lm_variant`) | **`acestep-5Hz-lm-1.7B`** (default) | Used for official-style preprocessing and conditioning. |
+
+Use `--variant acestep-v15-base` (the default) for `run_prompt_to_wav.py`.
+
+### Qwen3 embedding (TTNN)
+
+Caption / text conditioning uses a **local copy** of the TTNN Qwen3-Embedding stack, vendored under this demo until upstream lands in `tt-metal` main:
+
+- `ttnn_impl/qwen3_embedding_encoder.py` — Qwen3 transformer blocks + `TtQwen3EmbeddingEncoder`
+- `ttnn_impl/qwen3_embedding_ace_step.py` — ACE-Step wrapper (`AceStepQwen3Encoder`) over the HF `Qwen3-Embedding-0.6B` checkpoint
+
+This code is replicated from the work in [tt-metal PR #42463](https://github.com/tenstorrent/tt-metal/pull/42463) ([`ign/qwen3-embedding-4b-optimizations`](https://github.com/tenstorrent/tt-metal/tree/ign/qwen3-embedding-4b-optimizations)). Once that PR is merged, this demo can switch to importing the shared implementation from `tt-metal` instead of maintaining duplicate modules here.
+
+## This repo folder
 
 This folder provides:
 
@@ -7,12 +39,22 @@ This folder provides:
 - `tests/`: per-module PCC validation (Torch vs TTNN)
 - `run_prompt_to_wav.py`: end-to-end text-to-music demo (preprocessing + TTNN DiT + VAE decode)
 
-## Quick start — prompt-to-WAV demo
+## Dependencies
 
-Generate a WAV audio file from a text prompt using TTNN-accelerated inference:
+From the `tt-metal` repo root, install demo-specific Python packages (CPU `torchaudio` and `vector-quantize-pytorch` for the 5 Hz LM / ACE-Step preprocessing path):
 
 ```bash
-cd /home/ubuntu/proj_sdk/tt-metal
+cd tt-metal
+pip install -r models/demos/ace_step_v1_5/requirements.txt
+```
+
+
+## Quick start — prompt-to-WAV demo
+
+Generate a WAV audio file from a text prompt using TTNN-accelerated inference. **Only the base DiT checkpoint is supported today** (`--variant acestep-v15-base`).
+
+```bash
+cd tt-metal
 
 python3 models/demos/ace_step_v1_5/run_prompt_to_wav.py \
   --prompt "Electronic dance track with deep bass, punchy kick drum, bright synth lead, energetic rhythm" \
@@ -20,7 +62,7 @@ python3 models/demos/ace_step_v1_5/run_prompt_to_wav.py \
   --lm_variant acestep-5Hz-lm-1.7B \
   --duration_sec 15 \
   --infer_steps 4 \
-  --out /tmp/ttnn_wav.wav
+  --out /tmp/ttnn_LLMHandler.wav
 ```
 
 On first run, any missing model checkpoints are automatically downloaded from HuggingFace
@@ -79,24 +121,52 @@ compressed caches for the full condition-encoder slice can take many minutes and
 | `--use-official-lm` | flag | off | Run the full official `generate_music` path (LLM + handlers, CPU only). Does not use TTNN; useful for A/B comparison. |
 | `--ace-step-repo-root` | `str` | auto | Path to the ACE-Step-1.5 repo (contains `acestep/`). Auto-detected from well-known locations or `ACE_STEP_REPO_ROOT` env var. |
 | `--no-ttnn-strict` | flag | off | Do not set `throw_exception_on_fallback` (may hide silent TTNN fallbacks to PyTorch). |
+| `--use-trace` | flag | on | TTNN trace + 2CQ for preprocess + DiT (see table below). Use `--no-use-trace` for fully eager. |
+| `--perf-log` | flag | off | Per-module wall times (`ACE_STEP_DEMO_PERF_LOG=1`). |
 
-### DiT model variants
 
-| Variant | CFG | Steps | Quality | Diversity | Fine-Tunability |
-|---------|-----|-------|---------|-----------|-----------------|
-| `acestep-v15-base` | Yes | 50 | Medium | High | Easy |
-| `acestep-v15-sft` | Yes | 50 | High | Medium | Easy |
-| `acestep-v15-turbo` | No | 8 | Very High | Medium | Medium |
+### Trace + 2 command queues (default `--use-trace`)
 
-### LM variants
+With trace on, the device opens with **`num_command_queues=2`** and a **128 MiB** trace region. The usual pattern is **CQ 1** for host→device input refresh and **CQ 0** for `begin_trace_capture` / `execute_trace`. The only switch that turns trace off everywhere is **`--no-use-trace`**.
 
-| Variant | Parameters | Composition | Melody Copy |
-|---------|-----------|-------------|-------------|
-| `acestep-5Hz-lm-0.6B` | 0.6B | Medium | Weak |
-| `acestep-5Hz-lm-1.7B` | 1.7B | Medium | Medium |
-| `acestep-5Hz-lm-4B` | 4B | Strong | Strong |
+| Stage | Trace + 2CQ? | Notes |
+|-------|----------------|-------|
+| **5 Hz LM init** (`handler_init`) | **No** | Weight upload / `create_tt_model` (one-time) |
+| **5 Hz LM prefill** | **Yes** | ``QwenModelTtTransformers._prefill_traced`` |
+| **5 Hz LM decode** | **Yes** | Per-token ``execute_trace`` on CQ0 |
+| **5 Hz LM sampling / FSM** | **Partial** | Fused on-device penalties + top-k/top-p/sample (``apply_penalty_filter_sample``); constrained FSM on host — no CQ trace replay |
+| **LM CFG logit combine** | **Yes** (when used) | ``cfg_linear_combination_bf16`` trace per ``(device, K, cfg_scale)`` when ``_ttnn_lm_use_trace``; demo often sets ``lm_cfg_scale=1`` |
+| Qwen3 caption (`forward_traced`) | **Yes** | Handler / fast-preprocess text prefill |
+| Lyric token embed (`embed_tokens_traced`) | **Yes** | During handler `preprocess_batch` |
+| Audio-code detokenizer (`forward_traced`) | **Yes** | When LM emits audio codes |
+| **Lyric transformer (8L)** | **Yes** | Inside ``forward_payload_traced`` capture (shape-keyed) |
+| **Timbre transformer (4L)** | **Yes** | Same |
+| Condition payload (`forward_payload_traced`) | **Yes** | Lyric + timbre + text + concat on CQ0; CQ1 input refresh |
+| Context latents + chunk mask (`ctx_concat_traced`) | **Yes** | ``concat([src_latents, chunk_mask], dim=-1)`` |
+| Cover / LM hints for `src_latents` | **Host only** | Host branch; chosen array staged into ctx trace inputs |
+| Condition `enc_mask` | **Host + device** | NumPy for handler; ``upload_enc_mask_dev`` mirrors mask on device |
+| DiT CFG batch concat (pre-loop) | **No (eager)** | One-shot ``enc``/``ctx``/null setup; traced replay caused audible noise |
+| DiT ``compute_temb_tp`` | **No (eager)** | Precomputed per step; **streamed** into body trace via ``ttnn.copy`` on ``temb_buf``/``tp_buf`` |
+| DiT cross-attention SDPA mask | **In DiT trace** | ``_E2EDenoiseTrace.mask_buf`` when built from ``enc_mask`` |
+| DiT denoise body (`_E2EDenoiseTrace`) | **Yes** | ``patch_embed`` + DiT core + ``output_head`` on CQ0 |
+| DiT pre-step row cast + CFG dup | **No (eager)** | Per-step before body trace replay |
+| DiT CFG / ADG / APG + Euler | **No (eager)** | After ``release_trace_only`` each step (allocator + ADG ``sigma`` on host) |
+| DiT warmup (first 2 Euler steps) | **No (eager)** | Prime program cache before first capture |
+| VAE `decode_tiled` | **No (eager)** | All tiles eager; traced decode was not bit-accurate → noise (``decode_chunk_traced`` kept for tests only) |
 
-### Examples
+#### Stages that stay eager or host-only (by design)
+
+| Stage | Why |
+|-------|-----|
+| **5 Hz LM weight init** | Not a replay graph |
+| **LM constrained FSM** | Python control flow + dynamic token masks |
+| **LM CFG combine** | Skipped when ``lm_cfg_scale=1`` |
+| **DiT CFG enc/ctx concat** | Traced prep not bit-accurate vs eager |
+| **DiT full-step trace** | Opt-in only (``use_full_step``); default is body trace + eager post |
+| **VAE decode** | Traced replay not bit-accurate vs eager |
+| **DiT warmup (2 steps)** | Capture priming |
+| **Cover hint selection** | Host branch |
+| **VAE multi-tile overlap-add** | Trace replay PCC / audible noise |
 
 **Base model with 1.7B LM (balanced quality/speed):**
 
@@ -263,3 +333,5 @@ python3 -m models.demos.ace_step_v1_5.torch_ref.hf_output_head_demo \
   --subfolder "acestep-v15-turbo" \
   --seed 0 --batch 1 --original-seq-len 257 --noise-std 1.0
 ```
+
+Use **`--no-use-trace`** for a fully eager single-CQ pipeline (debugging or Tracy device profiling).

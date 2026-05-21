@@ -9,8 +9,8 @@ repetition penalty, and dense logit masks through :mod:`ttnn_impl.lm_logits_ttnn
 synthetic tensors and require Pearson correlation ≥ 0.99 vs host PyTorch that mirrors
 the bf16 staging used on device.
 
-**Experimental causal LM** (``run_prompt_to_wav.py`` or ``torch_ref/run_ace_step_ttmetal_demo_torch_ref_lm.py``
-with ``--experimental-5hz-ttnn-causal-lm``): compares
+**TTNN causal LM** (default in ``run_prompt_to_wav.py`` /
+``torch_ref/run_ace_step_ttmetal_demo_torch_ref_lm.py``): compares
 :class:`~models.demos.ace_step_v1_5.ttnn_impl.five_hz_causal_lm_experimental.AceStepFiveHzExperimentalTtnnCausalLM`
 to HuggingFace ``AutoModelForCausalLM`` (bf16). PCC uses :func:`models.common.utility_functions.comp_pcc`:
 
@@ -309,7 +309,7 @@ def test_llm_handler_experimental_causal_lm_prefill_decode_pcc_vs_torch(device, 
     del hf
     gc.collect()
 
-    # --- TTNN experimental wrapper (production ``five_hz_lm`` + ``initialize(..., experimental_ttnn_causal_lm=True)``) ---
+    # --- TTNN causal wrapper (production ``five_hz_lm`` + ``initialize(..., use_ttnn_causal_lm=True)``) ---
     try:
         exp = AceStepFiveHzExperimentalTtnnCausalLM(
             str(lm_dir),

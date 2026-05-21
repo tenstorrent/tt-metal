@@ -34,16 +34,10 @@ Performance profiling (Tracy / device profiler):
 Optional: set ``ACE_STEP_TRACY_EACH_DENOISE_STEP=1`` to emit one Tracy signpost per Euler step
 (use shorter ``infer_steps`` if the report becomes too dense).
 
-Optional: set ``ACE_STEP_USE_TRACE=1`` to wrap the per-step DiT body
-(``pipe.forward_with_temb_tp``) in a captured TTNN trace + 2CQ replay. The wrapping covers
-patch_embed + DiT core + output_head — the steady-state bulk of each Euler step. The pre-DiT
-prep (``fp32_tile_to_row_bf16``, CFG batch-duplicate), the post-DiT CFG split, the
-APG/ADG guidance, and the Euler subtract stay eager because they depend on per-step Python
-scalars (``t_curr``, ``euler_dt``) that would otherwise be baked into the captured graph. The
-trace is captured once per :class:`AceStepE2EModel` instance after two eager warmup steps in
-the first ``generate(...)`` call, then replayed for every remaining step in that generate and
-all subsequent generates of the same shape. Requires the device fixture in
-``perf/conftest.py`` (2 CQs + 128 MB trace region, both enabled by default).
+:class:`AceStepE2EModel` enables the per-step DiT **body** trace by default (``use_trace=True``,
+``use_full_step=False``). CFG/APG/ADG/Euler run eagerly after ``release_trace_only`` each step.
+Optional ``use_full_step=True`` folds pre-DiT + post into one capture when validated.
+Pass ``use_trace=False`` for a fully eager denoise loop. Requires 2 CQs + 128 MB trace region.
 """
 
 
@@ -67,6 +61,13 @@ from models.demos.ace_step_v1_5.ace_step_perf_log import (
 )
 
 from .condition_encoder import TtAceStepInstrumentalConditionEncoder
+from .denoise_trace_full_step import (
+    copy_scalar_into_tile,
+    denoise_full_step_device,
+    denoise_full_step_trace_graph,
+    make_scalar_fp32_tile,
+)
+from .dit_cfg_prep_trace import DitCfgPrepTrace
 from .dit_sampling_ttnn import (
     TtnnMomentumBufferApg,
     adg_guidance_velocity_host,
@@ -103,18 +104,23 @@ def _ace_step_prof_signpost(header: str, message: Optional[str] = None) -> None:
         pass
 
 
+_ACE_STEP_TRACE_SESSION: bool = False
+
+
+def ace_step_trace_session_active() -> bool:
+    """True while :func:`run_ttnn_denoise_loop` is executing with a DiT body trace."""
+    return _ACE_STEP_TRACE_SESSION
+
+
 def _ace_step_flush_device_profiler(device) -> None:
     """Sync and drain device profiler buffers when Tracy / device profiling is enabled.
 
-    Also no-op when ``ACE_STEP_USE_TRACE=1`` so the per-step flush in
-    :func:`run_ttnn_denoise_loop` doesn't try to call ``ttnn.synchronize_device`` between trace
-    executions. The per-RISC profiler ring buffer fills up under tracing anyway (replays don't
-    flush mid-graph), so the profiler and the e2e trace are mutually exclusive — Tracy users
-    should run without ``ACE_STEP_USE_TRACE``.
+    No-op during an active DiT trace session: ``ttnn.synchronize_device`` is illegal inside
+    trace capture and replays do not re-run Python layer code anyway.
     """
     if os.environ.get("TTNN_OP_PROFILER") != "1" and os.environ.get("TT_METAL_DEVICE_PROFILER") != "1":
         return
-    if os.environ.get("ACE_STEP_USE_TRACE", "").lower() in ("1", "true", "yes"):
+    if ace_step_trace_session_active():
         return
 
     try:
@@ -170,11 +176,6 @@ def to_numpy_f32(t: torch.Tensor) -> np.ndarray:
     return t.detach().to(dtype=torch.float32).cpu().contiguous().numpy()
 
 
-def _e2e_trace_enabled() -> bool:
-    """Return True when ``ACE_STEP_USE_TRACE`` opts the E2E denoise loop into trace+2CQ."""
-    return os.environ.get("ACE_STEP_USE_TRACE", "").lower() in ("1", "true", "yes")
-
-
 class _E2EDenoiseTrace:
 
     """Persistent TTNN trace handle for the per-step DiT body inside :func:`run_ttnn_denoise_loop`.
@@ -187,9 +188,10 @@ class _E2EDenoiseTrace:
     into the same persistent buffers via :meth:`prime_per_prompt`, and per-step inputs
     (current ``xt``, ``temb``, ``timestep_proj``) are streamed in via :meth:`replay`.
 
-    Trace covers only the DiT body; the pre-DiT BF16 row build + CFG concat and the post-DiT
-    slice + APG/ADG guidance + Euler subtract remain eager because they consume per-step
-    Python scalars (``t_curr``, ``euler_dt``) that would bake into the captured graph.
+    When ``use_full_step`` is True (default unless ADG is enabled), the trace also covers
+    pre-DiT ``fp32_tile_to_row_bf16``, CFG batch dup, APG/CFG velocity, and Euler update
+    (``dt`` streamed via a 1-element TILE buffer on CQ1). ADG keeps body+pre trace with
+    eager post.
 
     Buffer ownership: all persistent tensors below are owned by this object; the surrounding
     ``run_ttnn_denoise_loop`` MUST NOT call ``ttnn.deallocate`` on them. Call :meth:`release`
@@ -200,32 +202,42 @@ class _E2EDenoiseTrace:
     __slots__ = (
         "tid",
         "xt_buf",
+        "xt_tile_buf",
         "temb_buf",
         "tp_buf",
         "enc_buf",
         "ctx_buf",
         "mask_buf",
         "acoustic_buf",
+        "dt_buf",
         "frames",
         "pipe_batch",
         "c_lat",
         "do_cfg",
+        "use_full_step",
+        "guidance_scale",
+        "apply_cfg_capture",
         "output_addr",
     )
 
-    def __init__(self) -> None:
+    def __init__(self, *, use_full_step: bool = True) -> None:
         self.tid = None
         self.xt_buf: Optional[ttnn.Tensor] = None
+        self.xt_tile_buf: Optional[ttnn.Tensor] = None
         self.temb_buf: Optional[ttnn.Tensor] = None
         self.tp_buf: Optional[ttnn.Tensor] = None
         self.enc_buf: Optional[ttnn.Tensor] = None
         self.ctx_buf: Optional[ttnn.Tensor] = None
         self.mask_buf: Optional[ttnn.Tensor] = None
         self.acoustic_buf: Optional[ttnn.Tensor] = None
+        self.dt_buf: Optional[ttnn.Tensor] = None
         self.frames: Optional[int] = None
         self.pipe_batch: Optional[int] = None
         self.c_lat: Optional[int] = None
         self.do_cfg: Optional[bool] = None
+        self.use_full_step: bool = bool(use_full_step)
+        self.guidance_scale: float = 1.0
+        self.apply_cfg_capture: bool = True
         self.output_addr: Optional[int] = None
 
     def is_ready(self) -> bool:
@@ -238,6 +250,19 @@ class _E2EDenoiseTrace:
         After :meth:`release_trace_only`, ``has_buffers()`` stays True so the next denoise loop
         can call :meth:`recapture` without re-cloning every input.
         """
+        if self.use_full_step:
+            return all(
+                getattr(self, attr) is not None
+                for attr in (
+                    "xt_tile_buf",
+                    "temb_buf",
+                    "tp_buf",
+                    "enc_buf",
+                    "ctx_buf",
+                    "acoustic_buf",
+                    "dt_buf",
+                )
+            )
         return all(
             getattr(self, attr) is not None
             for attr in ("xt_buf", "temb_buf", "tp_buf", "enc_buf", "ctx_buf", "acoustic_buf")
@@ -299,7 +324,8 @@ class _E2EDenoiseTrace:
         *,
         pipe,
         device,
-        xt_pipe_in: ttnn.Tensor,
+        xt_pipe_in: ttnn.Tensor | None = None,
+        xt_tt_tile: ttnn.Tensor | None = None,
         temb: ttnn.Tensor,
         tp: ttnn.Tensor,
         enc_tt_pipe: ttnn.Tensor,
@@ -309,6 +335,10 @@ class _E2EDenoiseTrace:
         pipe_batch: int,
         c_lat: int,
         do_cfg: bool,
+        mem: Any = None,
+        guidance_scale: float = 1.0,
+        apply_cfg: bool = True,
+        euler_dt: float = 0.0,
     ) -> ttnn.Tensor:
         """Allocate persistent buffers, capture the DiT body trace, return ``acoustic_buf``.
 
@@ -326,6 +356,34 @@ class _E2EDenoiseTrace:
         if self.is_ready():
             raise RuntimeError("capture() called on an already-captured trace; call release() first.")
 
+        self.do_cfg = bool(do_cfg)
+        self.guidance_scale = float(guidance_scale)
+        self.apply_cfg_capture = bool(apply_cfg)
+        self.frames = int(frames)
+        self.pipe_batch = int(pipe_batch)
+        self.c_lat = int(c_lat)
+
+        if self.use_full_step:
+            if xt_tt_tile is None:
+                raise ValueError("full-step trace capture requires xt_tt_tile")
+            if mem is None:
+                raise ValueError("full-step trace capture requires mem")
+            return self._capture_full_step(
+                pipe=pipe,
+                device=device,
+                xt_tt_tile=xt_tt_tile,
+                temb=temb,
+                tp=tp,
+                enc_tt_pipe=enc_tt_pipe,
+                ctx_tt_pipe=ctx_tt_pipe,
+                encoder_attention_mask_b1qk=encoder_attention_mask_b1qk,
+                mem=mem,
+                apply_cfg=bool(apply_cfg),
+                euler_dt=float(euler_dt),
+            )
+
+        if xt_pipe_in is None:
+            raise ValueError("body-only trace capture requires xt_pipe_in")
         self.xt_buf = ttnn.clone(xt_pipe_in)
         self.temb_buf = ttnn.clone(temb)
         self.tp_buf = ttnn.clone(tp)
@@ -363,29 +421,132 @@ class _E2EDenoiseTrace:
         ttnn.end_trace_capture(device, self.tid, cq_id=0)
         ttnn.synchronize_device(device)
 
-        self.frames = int(frames)
-        self.pipe_batch = int(pipe_batch)
-        self.c_lat = int(c_lat)
-        self.do_cfg = bool(do_cfg)
         try:
             self.output_addr = int(self.acoustic_buf.buffer_address())
         except Exception:
             self.output_addr = None
         return self.acoustic_buf
 
+    def _capture_full_step(
+        self,
+        *,
+        pipe,
+        device,
+        xt_tt_tile: ttnn.Tensor,
+        temb: ttnn.Tensor,
+        tp: ttnn.Tensor,
+        enc_tt_pipe: ttnn.Tensor,
+        ctx_tt_pipe: ttnn.Tensor,
+        encoder_attention_mask_b1qk: Optional[ttnn.Tensor],
+        mem: Any,
+        apply_cfg: bool,
+        euler_dt: float,
+    ) -> ttnn.Tensor:
+        self.xt_tile_buf = ttnn.clone(xt_tt_tile)
+        self.temb_buf = ttnn.clone(temb)
+        self.tp_buf = ttnn.clone(tp)
+        self.enc_buf = ttnn.clone(enc_tt_pipe)
+        self.ctx_buf = ttnn.clone(ctx_tt_pipe)
+        self.mask_buf = ttnn.clone(encoder_attention_mask_b1qk) if encoder_attention_mask_b1qk is not None else None
+        self.dt_buf = make_scalar_fp32_tile(device, mem, value=float(euler_dt))
+        if not hasattr(ttnn, "clone"):
+            raise RuntimeError("full-step trace requires ttnn.clone")
+
+        xt_row = fp32_tile_to_row_bf16(self.xt_tile_buf, dram=mem)
+        if self.do_cfg:
+            xt_in = concat_duplicate_batch(xt_row)
+            try:
+                ttnn.deallocate(xt_row)
+            except Exception:
+                pass
+        else:
+            xt_in = xt_row
+        acoustic_warm = pipe.forward_with_temb_tp(
+            xt_bt64=xt_in,
+            context_latents_bt128=self.ctx_buf,
+            encoder_hidden_states_btd=self.enc_buf,
+            temb_bd=self.temb_buf,
+            timestep_proj_b6d=self.tp_buf,
+            attention_mask_1d_bt=None,
+            encoder_attention_mask_1d_bk=None,
+            encoder_attention_mask_b1qk=self.mask_buf,
+        )
+        try:
+            ttnn.deallocate(xt_in)
+        except Exception:
+            pass
+        self.acoustic_buf = ttnn.clone(acoustic_warm)
+        try:
+            ttnn.deallocate(acoustic_warm)
+        except Exception:
+            pass
+
+        warm = denoise_full_step_device(
+            pipe=pipe,
+            xt_tile=self.xt_tile_buf,
+            temb=self.temb_buf,
+            tp=self.tp_buf,
+            enc_buf=self.enc_buf,
+            ctx_buf=self.ctx_buf,
+            mask_buf=self.mask_buf,
+            acoustic_out=self.acoustic_buf,
+            dt_scalar_tile=self.dt_buf,
+            sigma_scalar_tile=self.dt_buf,
+            mem=mem,
+            frames_i=int(self.frames),
+            c_lat=int(self.c_lat),
+            do_cfg=bool(self.do_cfg),
+            use_adg=False,
+            guidance_scale=float(self.guidance_scale),
+            apply_cfg=bool(apply_cfg),
+            device=device,
+        )
+        self.xt_tile_buf = warm
+        ttnn.synchronize_device(device)
+
+        self.tid = ttnn.begin_trace_capture(device, cq_id=0)
+        self.xt_tile_buf = denoise_full_step_trace_graph(
+            pipe=pipe,
+            xt_tile=self.xt_tile_buf,
+            temb=self.temb_buf,
+            tp=self.tp_buf,
+            enc_buf=self.enc_buf,
+            ctx_buf=self.ctx_buf,
+            mask_buf=self.mask_buf,
+            acoustic_out=self.acoustic_buf,
+            dt_scalar_tile=self.dt_buf,
+            mem=mem,
+            frames_i=int(self.frames),
+            c_lat=int(self.c_lat),
+            do_cfg=bool(self.do_cfg),
+            guidance_scale=float(self.guidance_scale),
+            apply_cfg=bool(apply_cfg),
+        )
+        ttnn.end_trace_capture(device, self.tid, cq_id=0)
+        ttnn.synchronize_device(device)
+        try:
+            self.output_addr = int(self.acoustic_buf.buffer_address())
+        except Exception:
+            self.output_addr = None
+        return self.xt_tile_buf
+
     def replay(
         self,
         *,
         device,
-        xt_pipe_in: ttnn.Tensor,
+        xt_pipe_in: ttnn.Tensor | None = None,
+        xt_tt_tile: ttnn.Tensor | None = None,
         temb: ttnn.Tensor,
         tp: ttnn.Tensor,
         op_event,
         enc_tt_pipe: Optional[ttnn.Tensor] = None,
         ctx_tt_pipe: Optional[ttnn.Tensor] = None,
         encoder_attention_mask_b1qk: Optional[ttnn.Tensor] = None,
-    ) -> tuple[ttnn.Tensor, object]:
-        """Stream per-step inputs onto CQ 1, run ``execute_trace`` on CQ 0, return ``(acoustic_buf, op_event)``.
+        mem: Any = None,
+        euler_dt: float = 0.0,
+        apply_cfg: bool = True,
+    ) -> tuple[Any, object]:
+        """Stream per-step inputs onto CQ 1, run ``execute_trace`` on CQ 0.
 
         Caller passes the previous ``op_event`` so the host-side writes wait for the prior
         trace execution to finish before clobbering the persistent input buffers (otherwise we
@@ -393,11 +554,21 @@ class _E2EDenoiseTrace:
 
         Optional *enc_tt_pipe* / *ctx_tt_pipe* / *encoder_attention_mask_b1qk* copies support
         sequential B=1 CFG replays on mesh (cond vs uncond enc/ctx/mask rows).
+
+        Full-step mode returns updated ``xt_tile_buf``; body-only mode returns ``acoustic_buf``.
         """
         if not self.is_ready():
             raise RuntimeError("replay() called before capture()")
         ttnn.wait_for_event(1, op_event)
-        ttnn.copy(xt_pipe_in, self.xt_buf)
+        if self.use_full_step:
+            if xt_tt_tile is None or mem is None or self.xt_tile_buf is None or self.dt_buf is None:
+                raise ValueError("full-step replay requires xt_tt_tile and mem")
+            ttnn.copy(xt_tt_tile, self.xt_tile_buf)
+            copy_scalar_into_tile(float(euler_dt), self.dt_buf, dram=mem)
+        else:
+            if xt_pipe_in is None or self.xt_buf is None:
+                raise ValueError("body-only replay requires xt_pipe_in")
+            ttnn.copy(xt_pipe_in, self.xt_buf)
         ttnn.copy(temb, self.temb_buf)
         ttnn.copy(tp, self.tp_buf)
         if enc_tt_pipe is not None:
@@ -414,7 +585,8 @@ class _E2EDenoiseTrace:
         ttnn.wait_for_event(0, write_event)
         ttnn.execute_trace(device, self.tid, cq_id=0, blocking=False)
         op_event = ttnn.record_event(device, 0)
-        return self.acoustic_buf, op_event
+        out = self.xt_tile_buf if self.use_full_step else self.acoustic_buf
+        return out, op_event
 
     def release_trace_only(self, device) -> None:
         """Release the captured trace id but keep every persistent buffer alive.
@@ -443,8 +615,9 @@ class _E2EDenoiseTrace:
         *,
         pipe,
         device,
+        mem: Any = None,
     ) -> ttnn.Tensor:
-        """Re-capture the DiT body trace against the existing persistent buffers.
+        """Re-capture the DiT trace against the existing persistent buffers.
 
         Used at the start of every denoise loop after the first one: previous loop released the
         trace id via :meth:`release_trace_only` so eager VAE / encoder allocations stayed safe;
@@ -453,10 +626,8 @@ class _E2EDenoiseTrace:
         ``xt``/``temb``/``tp`` will be streamed in via :meth:`replay` like every other step), so
         no re-clone is needed.
 
-        The warm forward is still run because, although the program cache is hot from the
-        previous loop's replays, some kernel paths may have device-resident scratch space
-        torn down by the previous :func:`release_trace` (mirrors the warmup pass in
-        ``test_pipe_body_trace_2cq.py``).
+        Full-step mode re-captures :func:`~models.demos.ace_step_v1_5.ttnn_impl.denoise_trace_full_step.denoise_full_step_trace_graph`
+        without a warm eager pass (program cache is hot from prior replays).
         """
         if not self.has_buffers():
             raise RuntimeError("recapture() called without persistent buffers; use capture() first")
@@ -464,6 +635,37 @@ class _E2EDenoiseTrace:
             raise RuntimeError(
                 "recapture() called while a trace id is still installed; call release_trace_only() first"
             )
+
+        if self.use_full_step:
+            if mem is None:
+                raise ValueError("full-step recapture requires mem")
+            if self.xt_tile_buf is None or self.acoustic_buf is None or self.dt_buf is None:
+                raise RuntimeError("full-step recapture missing persistent buffers")
+            self.tid = ttnn.begin_trace_capture(device, cq_id=0)
+            self.xt_tile_buf = denoise_full_step_trace_graph(
+                pipe=pipe,
+                xt_tile=self.xt_tile_buf,
+                temb=self.temb_buf,
+                tp=self.tp_buf,
+                enc_buf=self.enc_buf,
+                ctx_buf=self.ctx_buf,
+                mask_buf=self.mask_buf,
+                acoustic_out=self.acoustic_buf,
+                dt_scalar_tile=self.dt_buf,
+                mem=mem,
+                frames_i=int(self.frames),
+                c_lat=int(self.c_lat),
+                do_cfg=bool(self.do_cfg),
+                guidance_scale=float(self.guidance_scale),
+                apply_cfg=bool(self.apply_cfg_capture),
+            )
+            ttnn.end_trace_capture(device, self.tid, cq_id=0)
+            ttnn.synchronize_device(device)
+            try:
+                self.output_addr = int(self.acoustic_buf.buffer_address())
+            except Exception:
+                self.output_addr = None
+            return self.xt_tile_buf
 
         warm_out = pipe.forward_with_temb_tp(
             xt_bt64=self.xt_buf,
@@ -510,7 +712,17 @@ class _E2EDenoiseTrace:
             except Exception:
                 pass
             self.tid = None
-        for attr in ("xt_buf", "temb_buf", "tp_buf", "enc_buf", "ctx_buf", "mask_buf", "acoustic_buf"):
+        for attr in (
+            "xt_buf",
+            "xt_tile_buf",
+            "temb_buf",
+            "tp_buf",
+            "enc_buf",
+            "ctx_buf",
+            "mask_buf",
+            "acoustic_buf",
+            "dt_buf",
+        ):
             buf = getattr(self, attr, None)
             if buf is not None:
                 try:
@@ -601,8 +813,8 @@ def run_ttnn_denoise_loop(
             captured, two eager warmup steps run first, then the DiT body is captured into a
             TTNN trace and used for every remaining step. When provided and already captured
             (subsequent ``generate`` calls), every step is replayed via the trace. Set
-            ``ACE_STEP_USE_TRACE=1`` to enable from :class:`AceStepE2EModel`. When ``None``
-            (the default), the loop runs fully eagerly — identical to the pre-trace behavior.
+            :class:`AceStepE2EModel` with ``use_trace=True`` (default). When ``None``, the loop
+            runs fully eagerly.
         temb_per_step: Optional pre-computed list of per-step ``temb_bd`` device tensors. When
             provided, the loop skips the in-call ``compute_temb_tp`` precompute and does NOT
             deallocate the tensors on exit — caller owns them. Pair with *tp_per_step*. Both
@@ -622,8 +834,24 @@ def run_ttnn_denoise_loop(
     if num_steps < 1:
         raise ValueError("t_schedule must be non-empty")
 
+    global _ACE_STEP_TRACE_SESSION
+    _prev_trace_session = _ACE_STEP_TRACE_SESSION
+    _ACE_STEP_TRACE_SESSION = trace_state is not None
+
     frames_i = int(frames)
     c_lat = 64
+    try:
+        from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import ace_step_dit_prefers_dram_activations
+
+        _patch_sz = int(getattr(getattr(pipe, "patch_embed", None), "config", None).patch_size)
+        _patch_seq = (int(frames_i) + _patch_sz - 1) // _patch_sz
+        _pipe_batch = 2 if bool(do_cfg) else 1
+        if ace_step_dit_prefers_dram_activations(batch_size=_pipe_batch, seq_len=_patch_seq):
+            _clear_pc = getattr(device, "disable_and_clear_program_cache", None)
+            if callable(_clear_pc):
+                _clear_pc()
+    except Exception:
+        pass
     cfg_lo = float(cfg_interval_start)
     cfg_hi = float(cfg_interval_end)
     gs = float(guidance_scale)
@@ -666,6 +894,38 @@ def run_ttnn_denoise_loop(
         raise ValueError("Host denoise path requires enc_hs and ctx_lat (or pass enc_tt_pipe and ctx_tt_pipe).")
     elif do_cfg and null_emb is None:
         raise ValueError("Host CFG path requires null_emb.")
+
+    # Pre-build the cross-attention SDPA mask once so ``_E2EDenoiseTrace.capture`` can persist it
+    # in ``mask_buf``. Without this, the traced DiT body uses the host ``encoder_attn_1d_bk_np``
+    # path and the mask is not part of the capture/replay graph.
+    if (
+        trace_state is not None
+        and encoder_attention_mask_b1qk is None
+        and encoder_attn_1d_bk_np is not None
+        and prebuilt
+    ):
+        assert ctx_tt_pipe is not None and enc_tt_pipe is not None
+        xt_row = fp32_tile_to_row_bf16(xt_tt, dram=mem)
+        if do_cfg:
+            xt_for_mask = concat_duplicate_batch(xt_row)
+            try:
+                ttnn.deallocate(xt_row)
+            except Exception:
+                pass
+        else:
+            xt_for_mask = xt_row
+        encoder_attention_mask_b1qk = pipe.build_encoder_attention_mask_b1qk_optional(
+            xt_bt64=xt_for_mask,
+            context_latents_bt128=ctx_tt_pipe,
+            encoder_hidden_states_btd=enc_tt_pipe,
+            encoder_attention_mask_1d_bk=encoder_attn_1d_bk_np,
+        )
+        try:
+            ttnn.deallocate(xt_for_mask)
+        except Exception:
+            pass
+        if encoder_attention_mask_b1qk is not None:
+            deallocate_encoder_mask = False
 
     if not prebuilt:
         if do_cfg:
@@ -758,7 +1018,7 @@ def run_ttnn_denoise_loop(
             )
 
     # Trace control flow:
-    # - ``trace_state is None``: pure eager path (legacy behavior, ``ACE_STEP_USE_TRACE`` off).
+    # - ``trace_state is None``: pure eager path.
     # - ``trace_state.is_ready()``: replay path — ``execute_trace`` against persistent buffers.
     # - After every capture/replay, :meth:`release_trace_only` runs *before* post-DiT eager ops
     #   (APG/ADG + Euler) so fresh allocations do not land in trace-reserved memory (the Metal
@@ -771,7 +1031,7 @@ def run_ttnn_denoise_loop(
         # Second+ generate of the same shape — persistent buffers carry over from previous
         # ``run_ttnn_denoise_loop`` but the trace id was released so eager VAE / next-prompt
         # encoder allocations stayed safe. Re-arm now using the primed buffers.
-        trace_state.recapture(pipe=pipe, device=device)
+        trace_state.recapture(pipe=pipe, device=device, mem=mem)
 
     _capture_after_step = 1  # first eager step is 0, second is 1; capture before step 2.
     _trace_op_event = None  # set lazily on first replay or capture.
@@ -924,6 +1184,9 @@ def run_ttnn_denoise_loop(
         if progress_fn is not None:
             progress_fn(step_idx, num_steps, t_curr_f, float(euler_dt))
 
+    if trace_state is not None:
+        trace_state.use_full_step = bool(trace_state.use_full_step) and not bool(use_adg)
+
     def _post_dit_eager(
         *, step_idx: int, t_curr_f: float, euler_dt: float, acoustic, xt_pipe_in, acoustic_is_persistent: bool
     ) -> None:
@@ -1072,6 +1335,31 @@ def run_ttnn_denoise_loop(
     def _diffusion_iterate_capture(*, step_idx: int, t_curr_f: float, euler_dt: float) -> None:
         """First-call capture path: clone current inputs into trace_state buffers, capture, use the captured output for this step."""
         assert trace_state is not None
+        nonlocal xt_tt
+        apply_cfg_now = bool(do_cfg) and cfg_lo <= t_curr_f <= cfg_hi
+        if trace_state.use_full_step:
+            xt_tt = trace_state.capture(
+                pipe=pipe,
+                device=device,
+                xt_tt_tile=xt_tt,
+                temb=temb_per_step[int(step_idx)],
+                tp=tp_per_step[int(step_idx)],
+                enc_tt_pipe=enc_tt_pipe,
+                ctx_tt_pipe=ctx_tt_pipe,
+                encoder_attention_mask_b1qk=encoder_attention_mask_b1qk,
+                frames=frames_i,
+                pipe_batch=pipe_batch,
+                c_lat=c_lat,
+                do_cfg=do_cfg,
+                mem=mem,
+                guidance_scale=float(gs),
+                apply_cfg=apply_cfg_now,
+                euler_dt=float(euler_dt),
+            )
+            if progress_fn is not None:
+                progress_fn(step_idx, num_steps, t_curr_f, float(euler_dt))
+            return
+
         xt_row = fp32_tile_to_row_bf16(xt_tt, dram=mem)
         if use_seq_cfg:
             enc_cap = slice_batch_dim0(enc_tt_pipe, 0, 1)
@@ -1137,8 +1425,6 @@ def run_ttnn_denoise_loop(
             c_lat=c_lat,
             do_cfg=do_cfg,
         )
-        # Drop the trace id before post-DiT eager ops (APG/ADG, Euler) — they allocate fresh
-        # device buffers and will corrupt trace-reserved memory if the id stays installed.
         ttnn.synchronize_device(device)
         trace_state.release_trace_only(device)
 
@@ -1154,10 +1440,30 @@ def run_ttnn_denoise_loop(
     def _diffusion_iterate_traced(*, step_idx: int, t_curr_f: float, euler_dt: float) -> None:
         """Replay path: stream new (xt, temb, tp) into persistent buffers, execute trace, finish eagerly."""
         assert trace_state is not None
-        nonlocal _trace_op_event
+        nonlocal _trace_op_event, xt_tt
+        apply_cfg_now = bool(do_cfg) and cfg_lo <= t_curr_f <= cfg_hi
         if not trace_state.is_ready():
-            # Previous step released the trace id before post-DiT eager allocations; re-arm now.
-            trace_state.recapture(pipe=pipe, device=device)
+            trace_state.recapture(pipe=pipe, device=device, mem=mem)
+
+        if _trace_op_event is None:
+            _trace_op_event = ttnn.record_event(device, 0)
+
+        if trace_state.use_full_step:
+            xt_tt, _trace_op_event = trace_state.replay(
+                device=device,
+                xt_tt_tile=xt_tt,
+                temb=temb_per_step[int(step_idx)],
+                tp=tp_per_step[int(step_idx)],
+                op_event=_trace_op_event,
+                mem=mem,
+                euler_dt=float(euler_dt),
+                apply_cfg=apply_cfg_now,
+            )
+            ttnn.synchronize_device(device)
+            if progress_fn is not None:
+                progress_fn(step_idx, num_steps, t_curr_f, float(euler_dt))
+            return
+
         xt_row = fp32_tile_to_row_bf16(xt_tt, dram=mem)
         if use_seq_cfg:
             xt_pipe_in = xt_row
@@ -1211,11 +1517,6 @@ def run_ttnn_denoise_loop(
         else:
             xt_pipe_in = xt_row
 
-        if _trace_op_event is None:
-            # First replay of this generate: nothing in flight, so synthesize a "completed" event by
-            # recording on CQ 0 right away. ``ttnn.record_event`` returns immediately and a wait on it
-            # is a no-op once dispatch has caught up.
-            _trace_op_event = ttnn.record_event(device, 0)
         acoustic, _trace_op_event = trace_state.replay(
             device=device,
             xt_pipe_in=xt_pipe_in,
@@ -1306,6 +1607,7 @@ def run_ttnn_denoise_loop(
     if momentum_ttnn is not None:
         momentum_ttnn.reset()
 
+    _ACE_STEP_TRACE_SESSION = _prev_trace_session
     if return_device_latents:
         return xt_tt
 
@@ -1335,6 +1637,8 @@ class AceStepE2EModel:
         self,
         config: E2EConfig,
         device: ttnn.Device,
+        *,
+        use_trace: bool = True,
     ) -> None:
         self.config = config
         self.device = device
@@ -1351,12 +1655,16 @@ class AceStepE2EModel:
         self._ctx_bt128_cached: Optional[ttnn.Tensor] = None
         # CFG null embedding expanded to encoder seq length; keyed by (hidden_dim, seq_len).
         self._null_rep_by_shape: dict[tuple[int, int], ttnn.Tensor] = {}
-        # ``ACE_STEP_USE_TRACE=1`` opts the DiT body (``pipe.forward_with_temb_tp``) into a
-        # captured TTNN trace + 2CQ replay. Captured lazily on the first ``generate()`` after two
-        # eager warmup steps; reused for every subsequent step + every subsequent generate of the
-        # same shape via ``_E2EDenoiseTrace.prime_per_prompt`` / ``.replay``. ``None`` keeps the
-        # existing fully-eager path.
-        self._trace_state: Optional[_E2EDenoiseTrace] = _E2EDenoiseTrace() if _e2e_trace_enabled() else None
+        # DiT body trace + 2CQ replay when ``use_trace`` (default). Captured lazily on the first
+        # ``generate()`` after two eager warmup steps; reused via ``_E2EDenoiseTrace``.
+        self._use_trace = bool(use_trace)
+        # Full-step trace: pre-cast + CFG dup + DiT body + APG + Euler all in one capture.
+        # Disabled automatically for ADG (run_ttnn_denoise_loop forces use_full_step=False).
+        self._trace_state: Optional[_E2EDenoiseTrace] = (
+            _E2EDenoiseTrace(use_full_step=True) if self._use_trace else None
+        )
+        # CFG prep trace: null_rep broadcast + enc concat + ctx dup (one-shot per generate).
+        self._cfg_prep_trace: Optional[DitCfgPrepTrace] = DitCfgPrepTrace(device) if self._use_trace else None
 
         self._load_silence_latent()
 
@@ -1503,8 +1811,8 @@ class AceStepE2EModel:
         attn_mask_np = np.asarray(tokens["attention_mask"], dtype=np.float32).reshape(1, -1)
         if self._qwen is None:
             raise RuntimeError("Qwen TTNN encoder was not initialized.")
-        # When the DiT body trace is enabled (``ACE_STEP_USE_TRACE=1``), also use the
-        # trace + 2CQ replay path for the Qwen3 caption encoder. Output is bit-equivalent
+        # When the DiT body trace is enabled, also use trace + 2CQ for the Qwen3 caption encoder.
+        # Output is bit-equivalent
         # to ``forward()`` for B=1 (the only path ACE-Step uses) — the existing host
         # round-trip in ``forward()`` exists only for the B>1 per-user loop. See
         # :meth:`AceStepQwen3Encoder.forward_traced` for details.
@@ -1586,7 +1894,12 @@ class AceStepE2EModel:
             )
         chunk = int(os.environ.get("ACE_STEP_VAE_CHUNK_LATENTS", str(self.config.vae_chunk_latents)))
         overlap = int(os.environ.get("ACE_STEP_VAE_OVERLAP_LATENTS", str(self.config.vae_overlap_latents)))
-        wav_tt = self._tt_vae.decode_tiled(lat_tt, chunk_size=chunk, overlap=overlap)
+        use_vae_trace = self._trace_state is not None
+        if use_vae_trace:
+            self._tt_vae.release_trace()
+        wav_tt = self._tt_vae.decode_tiled(lat_tt, chunk_size=chunk, overlap=overlap, use_trace=use_vae_trace)
+        if use_vae_trace and hasattr(self._tt_vae, "release_trace"):
+            self._tt_vae.release_trace()
         try:
             if owns_lat_tt:
                 ttnn.deallocate(lat_tt)
@@ -1673,12 +1986,22 @@ class AceStepE2EModel:
 
             _ace_step_prof_signpost("ACE-Step E2E", "Start condition encoding")
             with perf.timed("condition_encoder", device=self.device):
-                enc_hs_tt_one, enc_mask_np, null_emb_tt = self._condition_encoder.forward(text_hs_tt, attn_mask_np)
+                if self._trace_state is not None:
+                    from models.demos.ace_step_v1_5.official_lm_preprocess import condition_encode_tt
+
+                    enc_hs_tt_one, enc_mask_np, null_emb_tt = condition_encode_tt(
+                        self._condition_encoder,
+                        text_hs_tt,
+                        attn_mask_np,
+                        use_trace=True,
+                    )
+                else:
+                    enc_hs_tt_one, enc_mask_np, null_emb_tt = self._condition_encoder.forward(text_hs_tt, attn_mask_np)
+                    try:
+                        ttnn.deallocate(text_hs_tt)
+                    except Exception:
+                        pass
             _ace_step_flush_device_profiler(self.device)
-            try:
-                ttnn.deallocate(text_hs_tt)
-            except Exception:
-                pass
 
             # Insert into cache, evicting the oldest entry if full. We only deallocate
             # ``enc_hs_tt_one`` of the evicted entry — ``enc_mask_np`` is a host NumPy array and
@@ -1690,7 +2013,11 @@ class AceStepE2EModel:
                         ttnn.deallocate(_evicted_enc)
                     except Exception:
                         pass
-                self._prompt_cache[cache_key] = (enc_hs_tt_one, enc_mask_np)
+                if self._trace_state is not None and hasattr(ttnn, "clone"):
+                    enc_to_cache = ttnn.clone(enc_hs_tt_one)
+                else:
+                    enc_to_cache = enc_hs_tt_one
+                self._prompt_cache[cache_key] = (enc_to_cache, enc_mask_np)
 
         ctx_tt_one = self._ctx_bt128_cached
         enc_tt_pipe: ttnn.Tensor
@@ -1701,20 +2028,24 @@ class AceStepE2EModel:
         # for CFG, clone for non-CFG) so the loop's terminal ``ttnn.deallocate(enc_tt_pipe)``
         # frees the disposable working buffer and never touches the cached source.
         if do_cfg:
-            d_enc = int(enc_hs_tt_one.shape[-1])
-            s_enc = int(enc_hs_tt_one.shape[1])
-            # ``_expanded_null_emb`` caches the repeated null embedding per shape so the
-            # reshape+repeat is done once across all generate calls (avoids per-generate clone).
-            null_rep = self._expanded_null_emb(null_emb_tt, s_enc=s_enc, d_enc=d_enc)
-            # ``ttnn.concat`` allocates a new tensor; the cached ``enc_hs_tt_one`` is only READ.
-            enc_tt_pipe = ttnn.concat([enc_hs_tt_one, null_rep], dim=0)
-            ctx_tt_pipe = concat_duplicate_batch(ctx_tt_one)
+            if self._cfg_prep_trace is not None:
+                # Traced: null_rep broadcast + enc concat + ctx dup via DitCfgPrepTrace.
+                # First call captures; subsequent calls replay via 2CQ execute_trace.
+                enc_tt_pipe, ctx_tt_pipe = self._cfg_prep_trace.build(enc_hs_tt_one, ctx_tt_one, null_emb_tt)
+            else:
+                d_enc = int(enc_hs_tt_one.shape[-1])
+                s_enc = int(enc_hs_tt_one.shape[1])
+                # ``_expanded_null_emb`` caches the repeated null embedding per shape so the
+                # reshape+repeat is done once across all generate calls (avoids per-generate clone).
+                null_rep = self._expanded_null_emb(null_emb_tt, s_enc=s_enc, d_enc=d_enc)
+                # ``ttnn.concat`` allocates a new tensor; the cached ``enc_hs_tt_one`` is only READ.
+                enc_tt_pipe = ttnn.concat([enc_hs_tt_one, null_rep], dim=0)
+                ctx_tt_pipe = concat_duplicate_batch(ctx_tt_one)
         else:
             # Non-CFG: ``enc_tt_pipe`` would alias the cache directly, and the loop's terminal
             # ``ttnn.deallocate(enc_tt_pipe)`` would free the cached buffer. Clone it into a
             # disposable working buffer so the cache survives every generate.
             enc_tt_pipe = ttnn.clone(enc_hs_tt_one)
-
             ctx_tt_pipe = ctx_tt_one
 
         enc_row = np.asarray(enc_mask_np, dtype=np.float32).reshape(1, -1)

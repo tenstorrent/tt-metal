@@ -54,6 +54,11 @@ The :class:`AceStepFiveHzExperimentalTtnnCausalLM` wrapper continues to receive
 **torch** logits (one ``ttnn.to_torch`` at the model boundary), so all downstream
 consumers (sampling, repetition-penalty, CFG combine) keep working unchanged.
 
+**Trace**
+
+- With ``use_trace=True``, prefill uses ``_prefill_traced`` (``transform_and_embed`` + prefill in
+  capture, matching ``Generator._capture_trace_prefill``) and decode uses ``_decode_traced``.
+
 **Caveats**
 
 - This wrapper assumes the ACE-Step 5 Hz LM checkpoint is loadable via
@@ -78,6 +83,7 @@ from __future__ import annotations
 
 import os
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import Any, Optional
 
 import torch
@@ -86,10 +92,29 @@ import ttnn
 from models.demos.ace_step_v1_5.ttnn_impl.lm_logits_debug import ace_step_debug_lm_logits_enabled
 from models.tt_transformers.tt.common import (
     PagedAttentionConfig,
+    copy_host_to_device,
     create_tt_model,
     get_padded_prefill_len,
     num_blocks_in_seq,
 )
+
+
+@dataclass
+class _DecodeTraceState:
+    trace_id: Optional[int] = None
+    device_inputs: Optional[tuple] = None
+    logits_tt: Optional[Any] = None
+
+
+@dataclass
+class _PrefillTraceState:
+    trace_id: Optional[int] = None
+    device_inputs: Optional[tuple] = None
+    rot_mats_global: Any = None
+    rot_mats_local: Any = None
+    logits_tt: Optional[Any] = None
+    get_last_token: int = 0
+    last_token_offset_in_tile: int = 0
 
 
 @contextmanager
@@ -137,6 +162,7 @@ class QwenModelTtTransformers:
         dtype=None,
         use_hf_rope: bool = True,
         validate_against_hf: bool = False,
+        use_trace: bool = False,
     ) -> None:
         if validate_against_hf:
             raise RuntimeError("QwenModelTtTransformers does not support validate_against_hf=True.")
@@ -195,6 +221,9 @@ class QwenModelTtTransformers:
         # logits row out of the ``[1, 1, 32, padded_vocab]`` tile-aligned LMHead output.
         # ``None`` until at least one prefill has run.
         self._prefill_last_token_offset_in_tile: Optional[int] = None
+        self._use_trace = bool(use_trace) and hasattr(ttnn, "begin_trace_capture") and hasattr(ttnn, "execute_trace")
+        self._decode_trace = _DecodeTraceState()
+        self._prefill_traces: dict[int, _PrefillTraceState] = {}
 
     # ------------------------------------------------------------------
     # KV cache lifecycle
@@ -222,6 +251,22 @@ class QwenModelTtTransformers:
                     # That path means there's nothing to reset anyway.
                     pass
         self.tt_kv_cache = [layer.attention.layer_past for layer in self.tt_model.layers]
+        self.release_trace()
+
+    def release_trace(self) -> None:
+        if self._decode_trace.trace_id is not None:
+            try:
+                ttnn.release_trace(self.device, self._decode_trace.trace_id)
+            except Exception:
+                pass
+        self._decode_trace = _DecodeTraceState()
+        for st in self._prefill_traces.values():
+            if st.trace_id is not None:
+                try:
+                    ttnn.release_trace(self.device, st.trace_id)
+                except Exception:
+                    pass
+        self._prefill_traces.clear()
 
     # ------------------------------------------------------------------
     # Forward entry point
@@ -259,6 +304,13 @@ class QwenModelTtTransformers:
     # ------------------------------------------------------------------
 
     def _prefill(self, tokens: torch.Tensor) -> Any:
+        # Trace capture includes ``transform_and_embed_prefill_inputs_device`` + prefill
+        # (same graph as ``Generator._capture_trace_prefill``).
+        if self._use_trace:
+            return self._prefill_traced(tokens)
+        return self._prefill_eager(tokens)
+
+    def _prefill_eager(self, tokens: torch.Tensor) -> Any:
         seq_len = int(tokens.shape[1])
         prefill_seq_len = get_padded_prefill_len(seq_len)
         # Right-pad the prompt with zeros so the prefill input is a TTNN-friendly length
@@ -342,11 +394,101 @@ class QwenModelTtTransformers:
         self._cursor = seq_len
         return logits_tt
 
+    def _prefill_traced(self, tokens: torch.Tensor) -> Any:
+        seq_len = int(tokens.shape[1])
+        prefill_seq_len = int(get_padded_prefill_len(seq_len))
+        if prefill_seq_len != seq_len:
+            pad = torch.zeros(1, prefill_seq_len - seq_len, dtype=tokens.dtype, device=tokens.device)
+            padded_tokens = torch.cat([tokens, pad], dim=-1)
+        else:
+            padded_tokens = tokens
+
+        block_size = self._paged_cfg.block_size
+        n_blocks = num_blocks_in_seq(prefill_seq_len, block_size)
+        page_table_for_prefill = self._page_table_torch[:, :n_blocks].contiguous()
+
+        last_token_idx = seq_len - 1
+        get_last_token = (last_token_idx // 32) * 32
+        last_off = int(last_token_idx % 32)
+
+        st = self._prefill_traces.get(prefill_seq_len)
+        if st is None or st.trace_id is None:
+            host_inputs = self.tt_model.prepare_prefill_inputs_trace(
+                padded_tokens,
+                page_table=page_table_for_prefill,
+            )
+            tt_rot_global = host_inputs[1]
+            tt_rot_local = host_inputs[2]
+            host_tuple = (host_inputs[0], host_inputs[3], host_inputs[4])
+
+            device_inputs = copy_host_to_device(host_tuple, mesh_device=self.device)
+            x_embd, tt_page_table, _chunk_pt = self.tt_model.transform_and_embed_prefill_inputs_device(*device_inputs)
+            warm = self.tt_model.ttnn_prefill_forward(
+                x_embd,
+                rot_mats_global=tt_rot_global,
+                rot_mats_local=tt_rot_local,
+                page_table=tt_page_table,
+                chunk_page_table=None,
+                kv_cache=self.tt_kv_cache,
+                get_last_token=get_last_token,
+            )
+            ttnn.synchronize_device(self.device)
+            try:
+                ttnn.deallocate(warm)
+            except Exception:
+                pass
+
+            device_inputs = copy_host_to_device(host_tuple, mesh_device=self.device)
+            trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
+            x_embd, tt_page_table, _chunk_pt = self.tt_model.transform_and_embed_prefill_inputs_device(*device_inputs)
+            logits_tt = self.tt_model.ttnn_prefill_forward(
+                x_embd,
+                rot_mats_global=tt_rot_global,
+                rot_mats_local=tt_rot_local,
+                page_table=tt_page_table,
+                chunk_page_table=None,
+                kv_cache=self.tt_kv_cache,
+                get_last_token=get_last_token,
+            )
+            ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
+            ttnn.synchronize_device(self.device)
+            st = _PrefillTraceState(
+                trace_id=trace_id,
+                device_inputs=device_inputs,
+                rot_mats_global=tt_rot_global,
+                rot_mats_local=tt_rot_local,
+                logits_tt=logits_tt,
+                get_last_token=get_last_token,
+                last_token_offset_in_tile=last_off,
+            )
+            self._prefill_traces[prefill_seq_len] = st
+        else:
+            host_inputs = self.tt_model.prepare_prefill_inputs_trace(
+                padded_tokens,
+                page_table=page_table_for_prefill,
+            )
+            tt_rot_global = host_inputs[1]
+            tt_rot_local = host_inputs[2]
+            host_tuple = (host_inputs[0], host_inputs[3], host_inputs[4])
+            copy_host_to_device(host_tuple, st.device_inputs, mesh_device=self.device)
+            ttnn.execute_trace(self.device, st.trace_id, cq_id=0, blocking=True)
+            ttnn.synchronize_device(self.device)
+            logits_tt = st.logits_tt
+
+        self._prefill_last_token_offset_in_tile = last_off
+        self._cursor = seq_len
+        return logits_tt
+
     # ------------------------------------------------------------------
     # Decode (single new token)
     # ------------------------------------------------------------------
 
     def _decode(self, tokens: torch.Tensor, start_pos: int) -> Any:
+        if self._use_trace:
+            return self._decode_traced(tokens, start_pos)
+        return self._decode_eager(tokens, start_pos)
+
+    def _decode_eager(self, tokens: torch.Tensor, start_pos: int) -> Any:
         cur = int(start_pos)
         if ace_step_debug_lm_logits_enabled():
             self._last_debug_params = {
@@ -370,8 +512,6 @@ class QwenModelTtTransformers:
             current_pos,
             page_table=self._page_table_torch,
         )
-        from models.tt_transformers.tt.common import copy_host_to_device
-
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.device)
         tt_tokens, tt_current_pos, rope_idxs, tt_page_table = device_inputs
 
@@ -390,6 +530,66 @@ class QwenModelTtTransformers:
             logits_tt = out[0]
         else:
             logits_tt = out
+
+        self._cursor = cur + 1
+        return logits_tt
+
+    def _decode_traced(self, tokens: torch.Tensor, start_pos: int) -> Any:
+        """Decode with trace replay (matches ``Generator._decode_forward_trace_text``).
+
+        Every inference step copies fresh host inputs and runs ``execute_trace``, including
+        the first step after capture setup. Returning logits from the in-capture forward
+        without a replay left KV / output buffers out of sync with later steps.
+        """
+        cur = int(start_pos)
+        decode_tokens = tokens.view(1).to(torch.int32)
+        current_pos = torch.tensor([cur], dtype=torch.int32)
+        host_inputs = self.tt_model.prepare_decode_inputs_host(
+            decode_tokens,
+            current_pos,
+            page_table=self._page_table_torch,
+        )
+
+        if self._decode_trace.trace_id is None:
+            device_inputs = copy_host_to_device(host_inputs, mesh_device=self.device)
+            warm = self.tt_model.ttnn_decode_forward(
+                *device_inputs,
+                kv_cache=self.tt_kv_cache,
+                sampling_on_device=False,
+            )
+            if isinstance(warm, tuple):
+                warm_logits = warm[0]
+            else:
+                warm_logits = warm
+            ttnn.synchronize_device(self.device)
+            try:
+                ttnn.deallocate(warm_logits)
+            except Exception:
+                pass
+
+            device_inputs = copy_host_to_device(host_inputs, mesh_device=self.device)
+            trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
+            out = self.tt_model.ttnn_decode_forward(
+                *device_inputs,
+                kv_cache=self.tt_kv_cache,
+                sampling_on_device=False,
+            )
+            ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
+            ttnn.synchronize_device(self.device)
+            if isinstance(out, tuple):
+                logits_tt = out[0]
+            else:
+                logits_tt = out
+            self._decode_trace = _DecodeTraceState(
+                trace_id=trace_id,
+                device_inputs=device_inputs,
+                logits_tt=logits_tt,
+            )
+
+        copy_host_to_device(host_inputs, self._decode_trace.device_inputs, mesh_device=self.device)
+        ttnn.execute_trace(self.device, self._decode_trace.trace_id, cq_id=0, blocking=True)
+        ttnn.synchronize_device(self.device)
+        logits_tt = self._decode_trace.logits_tt
 
         self._cursor = cur + 1
         return logits_tt

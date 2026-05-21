@@ -4,7 +4,7 @@
 
 """Trace + 2CQ wrapping of ``TtAceStepInstrumentalConditionEncoder.forward_device``.
 
-Exercises the fast-preprocess text-only path used by ``ttnn_impl/e2e_model_tt.py``:
+Exercises the instrumental text-only trace path used by ``ttnn_impl/e2e_model_tt.py``:
 
     text_hidden (Qwen3 output) -> text_projector -> slice -> concat([lyric_const, timbre_const,
                                                                      text_valid, text_pad])

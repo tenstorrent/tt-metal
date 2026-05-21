@@ -102,11 +102,12 @@ class LocalFiveHzLMHandler:
         # (narrow valid-audio slice in codes phase, or full-vocab in other CFG branches). Strict TTNN.
         # Wired from run_prompt_to_wav after the same TTNN device is opened for Qwen caption encoding.
         self._ttnn_logits_device = None
-        # Optional: experimental TTNN causal LM (qwen_tt_transformers_lm); requires ttnn_causal_device at initialize.
+        # TTNN causal LM (qwen_tt_transformers_lm); requires ttnn_causal_device at initialize when enabled.
         self._ttnn_causal_device = None
-        self._experimental_ttnn_causal_lm = False
+        self._use_ttnn_causal_lm = True
         # True only after successful load of AceStepFiveHzExperimentalTtnnCausalLM (batch=1; no LM CFG).
-        self._experimental_ttnn_lm_active = False
+        self._ttnn_lm_active = False
+        self._ttnn_lm_use_trace = False
         self._ttnn_causal_max_seq_len = 16384
         # Increments on each TTNN LM sample when ``_ttnn_logits_device`` is set (feeds ``ttnn.rand`` seed).
         self._ttnn_sample_counter = 0
@@ -175,7 +176,7 @@ class LocalFiveHzLMHandler:
             self.constrained_processor = None
             self.llm_initialized = False
             self.llm_backend = None
-            self._experimental_ttnn_lm_active = False
+            self._ttnn_lm_active = False
             self._mlx_model = None
             self._mlx_model_path = None
             gc.collect()
@@ -432,6 +433,9 @@ class LocalFiveHzLMHandler:
 
         if temperature > 0:
             probs = torch.softmax(out.float() / float(temperature), dim=-1)
+            if not torch.isfinite(probs).all() or (probs < 0).any():
+                # Constrained masking can zero out the entire row; fall back to argmax.
+                return torch.argmax(out, dim=-1)
             return torch.multinomial(probs, num_samples=1).squeeze(1)
         return torch.argmax(out, dim=-1)
 
@@ -581,10 +585,7 @@ class LocalFiveHzLMHandler:
     def _load_pytorch_model(self, model_path: str, device: str) -> Tuple[bool, str]:
         """Load PyTorch model from path and return (success, status_message)"""
         try:
-            if (
-                getattr(self, "_experimental_ttnn_causal_lm", False)
-                and getattr(self, "_ttnn_causal_device", None) is not None
-            ):
+            if getattr(self, "_use_ttnn_causal_lm", True) and getattr(self, "_ttnn_causal_device", None) is not None:
                 from models.demos.ace_step_v1_5.ttnn_impl.five_hz_causal_lm_experimental import (
                     AceStepFiveHzExperimentalTtnnCausalLM,
                 )
@@ -593,22 +594,25 @@ class LocalFiveHzLMHandler:
                     model_path,
                     self._ttnn_causal_device,
                     max_seq_len=int(getattr(self, "_ttnn_causal_max_seq_len", 16384)),
+                    use_trace=bool(getattr(self, "_ttnn_lm_use_trace", False)),
                 )
                 self.llm.eval()
                 self.llm_backend = "pt"
                 self.llm_initialized = True
-                self._experimental_ttnn_lm_active = True
+                self._ttnn_lm_active = True
+                trace_note = " trace+2cq prefill+decode on" if getattr(self, "_ttnn_lm_use_trace", False) else ""
                 logger.info(
-                    "5Hz LM initialized using experimental TTNN causal stack (qwen_tt_transformers_lm); "
-                    "batch>1 / LM CFG batched paths are unsupported."
+                    "5Hz LM initialized using TTNN causal stack (qwen_tt_transformers_lm)%s; "
+                    "batch>1 / LM CFG batched paths are unsupported.",
+                    trace_note,
                 )
                 status_msg = (
-                    f"✅ 5Hz LM initialized (experimental TTNN causal)\nModel: {model_path}\n"
+                    f"✅ 5Hz LM initialized (TTNN causal)\nModel: {model_path}\n"
                     f"Host tensors: {device}\nTTNN device: attached"
                 )
                 return True, status_msg
 
-            self._experimental_ttnn_lm_active = False
+            self._ttnn_lm_active = False
             self.llm = AutoModelForCausalLM.from_pretrained(model_path, trust_remote_code=True)
             if not self.offload_to_cpu:
                 self.llm = self.llm.to(device).to(self.dtype)
@@ -701,8 +705,11 @@ class LocalFiveHzLMHandler:
         dtype: Optional[torch.dtype] = None,
         *,
         ttnn_causal_device=None,
-        experimental_ttnn_causal_lm: bool = False,
+        use_ttnn_causal_lm: bool = True,
         ttnn_causal_max_seq_len: int = 16384,
+        ttnn_lm_use_trace: bool = False,
+        experimental_ttnn_causal_lm: Optional[bool] = None,
+        experimental_ttnn_lm_use_trace: Optional[bool] = None,
     ) -> Tuple[str, bool]:
         """
         Initialize 5Hz LM model
@@ -714,28 +721,35 @@ class LocalFiveHzLMHandler:
             device: Device type ("auto", "cuda", "mps", "xpu", or "cpu")
             offload_to_cpu: Whether to offload to CPU
             dtype: Data type (if None, auto-detect based on device)
-            ttnn_causal_device: Open TTNN device for experimental TTNN causal LM (optional).
-            experimental_ttnn_causal_lm: If True and ``ttnn_causal_device`` is set, load
+            ttnn_causal_device: Open TTNN device for TTNN causal LM (required when ``use_ttnn_causal_lm``).
+            use_ttnn_causal_lm: If True (default) and ``ttnn_causal_device`` is set, load
                 :class:`~models.demos.ace_step_v1_5.ttnn_impl.five_hz_causal_lm_experimental.AceStepFiveHzExperimentalTtnnCausalLM`
                 instead of ``AutoModelForCausalLM`` (``backend`` must be ``pt``).
-            ttnn_causal_max_seq_len: ``max_seq_len`` passed to experimental ``QwenModel``.
+            ttnn_causal_max_seq_len: ``max_seq_len`` passed to ``QwenModelTtTransformers``.
+            ttnn_lm_use_trace: Enable decode trace replay on the TTNN LM when supported.
 
         Returns:
             (status_message, success)
         """
         try:
+            if experimental_ttnn_causal_lm is not None:
+                use_ttnn_causal_lm = bool(experimental_ttnn_causal_lm)
+            if experimental_ttnn_lm_use_trace is not None:
+                ttnn_lm_use_trace = bool(experimental_ttnn_lm_use_trace)
+
             self._ttnn_causal_device = ttnn_causal_device
-            self._experimental_ttnn_causal_lm = bool(experimental_ttnn_causal_lm)
+            self._use_ttnn_causal_lm = bool(use_ttnn_causal_lm)
             self._ttnn_causal_max_seq_len = int(ttnn_causal_max_seq_len)
-            if self._experimental_ttnn_causal_lm:
+            self._ttnn_lm_use_trace = bool(ttnn_lm_use_trace)
+            if self._use_ttnn_causal_lm:
                 if backend != "pt":
                     return (
-                        f"❌ experimental_ttnn_causal_lm requires backend='pt', got {backend!r}.",
+                        f"❌ use_ttnn_causal_lm requires backend='pt', got {backend!r}.",
                         False,
                     )
                 if self._ttnn_causal_device is None:
                     return (
-                        "❌ experimental_ttnn_causal_lm requires ttnn_causal_device (open TTNN device).",
+                        "❌ use_ttnn_causal_lm requires ttnn_causal_device (open TTNN device).",
                         False,
                     )
 
@@ -815,7 +829,7 @@ class LocalFiveHzLMHandler:
                 "device": device,
                 "offload_to_cpu": offload_to_cpu,
                 "dtype": self.dtype,
-                "experimental_ttnn_causal_lm": self._experimental_ttnn_causal_lm,
+                "use_ttnn_causal_lm": self._use_ttnn_causal_lm,
                 "ttnn_causal_max_seq_len": self._ttnn_causal_max_seq_len,
             }
 
@@ -1228,9 +1242,9 @@ class LocalFiveHzLMHandler:
         cot_text: str,
     ) -> str:
         """Internal helper function for single-item PyTorch generation."""
-        if getattr(self, "_experimental_ttnn_lm_active", False) and cfg_scale > 1.0:
+        if getattr(self, "_ttnn_lm_active", False) and cfg_scale > 1.0:
             logger.warning(
-                "Experimental TTNN 5 Hz LM supports batch_size==1 only; "
+                "TTNN 5 Hz LM supports batch_size==1 only; "
                 f"LM cfg_scale={cfg_scale} clamped to 1.0 (DiT guidance_scale is unchanged). "
                 "Set GenerationParams.lm_cfg_scale=1 to silence this."
             )
@@ -2963,6 +2977,7 @@ class LocalFiveHzLMHandler:
                             uncond_valid,
                             float(cfg_scale),
                             device=self._ttnn_logits_device,
+                            use_trace=bool(getattr(self, "_ttnn_lm_use_trace", False)),
                         ).to(device=device, dtype=torch.float32)
                     else:
                         cfg_valid = uncond_valid + cfg_scale * (cond_valid - uncond_valid)
@@ -2984,6 +2999,7 @@ class LocalFiveHzLMHandler:
                             uncond_logits.float(),
                             float(cfg_scale),
                             device=self._ttnn_logits_device,
+                            use_trace=bool(getattr(self, "_ttnn_lm_use_trace", False)),
                         ).to(device=device, dtype=torch.float32)
                     else:
                         # Apply CFG formula: cfg_logits = uncond + cfg_scale * (cond - uncond)

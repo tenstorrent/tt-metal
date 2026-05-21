@@ -153,6 +153,13 @@ class AceStepQwen3Encoder:
         self._rot_mats_global: Any = None
         self._rot_mats_local: Any = None
         self._trace_op_event: Any = None
+        # Lyric ``embed_tokens`` trace (separate from caption prefill trace).
+        self._embed_trace_id: Optional[Any] = None
+        self._embed_persistent_ids: Optional[ttnn.Tensor] = None
+        self._embed_persistent_out: Optional[ttnn.Tensor] = None
+        self._embed_ids_host: Optional[ttnn.Tensor] = None
+        self._embed_trace_op_event: Any = None
+        self._embed_cap_seq: Optional[int] = None
 
     # ------------------------------------------------------------------
     # ACE-Step API surface (drop-in for the deleted TtQwen3EmbeddingEncoder)
@@ -282,6 +289,85 @@ class AceStepQwen3Encoder:
         except Exception:
             pass
         return h
+
+    def embed_tokens_traced(self, input_ids, *, max_seq_len: int | None = None) -> Any:
+        """Trace + 2CQ embedding lookup for lyric tokens at exact ``[1, S]`` (recapture when S changes)."""
+        if not hasattr(ttnn, "begin_trace_capture"):
+            return self.embed_tokens(input_ids)
+        max_cap = int(max_seq_len or os.environ.get("ACE_STEP_MAX_LYRIC_SEQ", "512"))
+        ids_t = _to_torch_int64(input_ids)
+        if ids_t.dim() != 2 or int(ids_t.shape[0]) != 1:
+            return self.embed_tokens(input_ids)
+        seq = int(ids_t.shape[1])
+        if seq > max_cap:
+            return self.embed_tokens(input_ids)
+
+        if self._embed_trace_id is not None and self._embed_cap_seq != seq:
+            self._release_embed_trace()
+
+        if self._embed_trace_id is None:
+            ids_tt = ttnn.from_torch(
+                ids_t.to(torch.int64),
+                device=self.device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            out_warm = self.tt_model.embd(ids_tt)
+            ttnn.synchronize_device(self.device)
+            try:
+                ttnn.deallocate(out_warm)
+                ttnn.deallocate(ids_tt)
+            except Exception:
+                pass
+            self._embed_ids_host = ttnn.from_torch(
+                ids_t.to(torch.int64),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            self._embed_persistent_ids = ttnn.from_torch(
+                ids_t.to(torch.int64),
+                device=self.device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            self._embed_trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
+            self._embed_persistent_out = self.tt_model.embd(self._embed_persistent_ids)
+            ttnn.end_trace_capture(self.device, self._embed_trace_id, cq_id=0)
+            ttnn.synchronize_device(self.device)
+            self._embed_cap_seq = seq
+            self._embed_trace_op_event = ttnn.record_event(self.device, 0)
+
+        host_ids = ttnn.from_torch(ids_t.to(torch.int64), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.wait_for_event(1, self._embed_trace_op_event)
+        ttnn.copy_host_to_device_tensor(host_ids, self._embed_persistent_ids, cq_id=1)
+        write_event = ttnn.record_event(self.device, 1)
+        ttnn.wait_for_event(0, write_event)
+        ttnn.execute_trace(self.device, self._embed_trace_id, cq_id=0, blocking=True)
+        self._embed_trace_op_event = ttnn.record_event(self.device, 0)
+        ttnn.synchronize_device(self.device)
+        out = self._embed_persistent_out
+        if hasattr(ttnn, "clone"):
+            out = ttnn.clone(out)
+        return out
+
+    def _release_embed_trace(self) -> None:
+        if self._embed_trace_id is not None:
+            try:
+                ttnn.release_trace(self.device, self._embed_trace_id)
+            except Exception:
+                pass
+            self._embed_trace_id = None
+        for attr in ("_embed_persistent_ids", "_embed_persistent_out"):
+            t = getattr(self, attr, None)
+            if t is not None:
+                try:
+                    ttnn.deallocate(t)
+                except Exception:
+                    pass
+                setattr(self, attr, None)
+        self._embed_ids_host = None
+        self._embed_trace_op_event = None
+        self._embed_cap_seq = None
 
     # ------------------------------------------------------------------
     # Trace + 2CQ replayed forward (output bit-equivalent to :meth:`forward`
@@ -483,8 +569,9 @@ class AceStepQwen3Encoder:
                 ttnn.copy_host_to_device_tensor(src, dst, cq_id=1)
         write_event = ttnn.record_event(self.device, 1)
         ttnn.wait_for_event(0, write_event)
-        ttnn.execute_trace(self.device, self._trace_id, cq_id=0, blocking=False)
+        ttnn.execute_trace(self.device, self._trace_id, cq_id=0, blocking=True)
         self._trace_op_event = ttnn.record_event(self.device, 0)
+        ttnn.synchronize_device(self.device)
 
         return self._persistent_output
 
@@ -494,6 +581,7 @@ class AceStepQwen3Encoder:
         Call when the encoder instance is being destroyed, or when re-capturing against
         a different ``max_seq_len`` (which would otherwise leak the previous trace).
         """
+        self._release_embed_trace()
         if self._trace_id is not None:
             try:
                 ttnn.release_trace(self.device, self._trace_id)

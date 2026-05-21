@@ -5,8 +5,9 @@
 
 from __future__ import annotations
 
+import os
 import re
-from typing import Dict
+from typing import Any, Dict, Optional
 
 import numpy as np
 
@@ -219,21 +220,78 @@ class TtAceStepAudioCodeDetokenizer:
             memory_config=self.mem,
             mesh_mapper=mapper,
         )
+        self._detok_trace_id: Optional[Any] = None
+        self._detok_n_codes: Optional[int] = None
+        self._detok_ids_dev: Optional[ttnn.Tensor] = None
+        self._detok_ids_host: Optional[ttnn.Tensor] = None
+        self._detok_out_dev: Optional[ttnn.Tensor] = None
+        self._detok_bias_dev: Optional[ttnn.Tensor] = None
+        self._detok_op_event: Any = None
 
-    def forward(self, code_str: str) -> ttnn.Tensor | None:
-        code_ids = parse_audio_code_string(code_str)
-        if not code_ids:
-            return None
+    def _create_attn_bias_dev(self, n_codes: int) -> ttnn.Tensor:
+        """Attention bias for ``n_codes`` rows; must be allocated *before* trace capture."""
+        n = int(n_codes)
         mapper = (
             self._fsq_mapper
             if self._fsq_mapper is not None
             else (ttnn.ReplicateTensorToMesh(self.device) if hasattr(ttnn, "ReplicateTensorToMesh") else None)
         )
+        bias_np = _bidirectional_attn_bias_np(np.ones((n, 5), dtype=np.float32), sliding_window=None)
+        return ttnn.as_tensor(
+            bias_np,
+            device=self.device,
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=self.mem,
+            mesh_mapper=mapper,
+        )
+
+    def _forward_on_ids_dev(
+        self, ids_dev: ttnn.Tensor, n_codes: int, *, bias_tt: ttnn.Tensor | None = None
+    ) -> ttnn.Tensor:
+        """Device decode from ``[1, N]`` uint32 indices already on device."""
+        n = int(n_codes)
         _sr = ace_step_reshape_kwargs(ttnn)
-        # Move FSQ "code-id -> 6-dim code vector" onto the device: upload a [1, N] uint32
-        # index tensor and let ``ttnn.embedding`` gather rows from the precomputed codebook.
-        # Replaces the previous host ``fsq_codes_from_indices_np`` divmod + float upload.
-        ids_np = np.asarray(code_ids, dtype=np.uint32).reshape(1, len(code_ids))
+        x = ttnn.embedding(
+            ids_dev,
+            self.fsq_codebook_tt,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=self.dtype,
+            memory_config=self.mem,
+        )
+        x = ttnn.reshape(x, (1, 1, n, 6), **_sr)
+        q = ttnn.linear(x, self.quantizer_project_out_w, bias=self.quantizer_project_out_b, transpose_b=True)
+        q = ttnn.linear(q, self.embed_w, bias=self.embed_b, transpose_b=True)
+        q = ttnn.reshape(q, (1, n, 1, 2048), **_sr)
+        q = ttnn.repeat(q, (1, 1, 5, 1))
+        special = ttnn.repeat(self.special_tokens, (1, n, 1, 1))
+        h = ttnn.add(q, special)
+        h = ttnn.reshape(h, (n, 1, 5, 2048), **_sr)
+        owns_bias = False
+        if bias_tt is None:
+            bias_tt = self._create_attn_bias_dev(n)
+            owns_bias = True
+        try:
+            for layer in self.layers:
+                h = layer(h, self.cos_tt, self.sin_tt, bias_tt)
+        finally:
+            if owns_bias:
+                try:
+                    ttnn.deallocate(bias_tt)
+                except Exception:
+                    pass
+        h = ttnn.rms_norm(ttnn.to_layout(h, ttnn.TILE_LAYOUT), weight=self.norm_w, epsilon=1e-6, memory_config=self.mem)
+        h = ttnn.linear(h, self.proj_out_w, bias=self.proj_out_b, transpose_b=True)
+        return ttnn.reshape(h, (1, n * 5, 64), **_sr)
+
+    def _forward_n_codes(self, code_ids: list[int]) -> ttnn.Tensor:
+        n = int(len(code_ids))
+        mapper = (
+            self._fsq_mapper
+            if self._fsq_mapper is not None
+            else (ttnn.ReplicateTensorToMesh(self.device) if hasattr(ttnn, "ReplicateTensorToMesh") else None)
+        )
+        ids_np = np.asarray(code_ids, dtype=np.uint32).reshape(1, n)
         ids_tt = ttnn.as_tensor(
             ids_np,
             device=self.device,
@@ -242,44 +300,89 @@ class TtAceStepAudioCodeDetokenizer:
             memory_config=self.mem,
             mesh_mapper=mapper,
         )
-        x = ttnn.embedding(
-            ids_tt,
-            self.fsq_codebook_tt,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=self.dtype,
-            memory_config=self.mem,
-        )
         try:
-            ttnn.deallocate(ids_tt)
-        except Exception:
-            pass
-        # ``ttnn.embedding`` returns [1, N, 6]; reshape to [1, 1, N, 6] for the linear ops.
-        x = ttnn.reshape(x, (1, 1, len(code_ids), 6), **_sr)
-        q = ttnn.linear(x, self.quantizer_project_out_w, bias=self.quantizer_project_out_b, transpose_b=True)
-        q = ttnn.linear(q, self.embed_w, bias=self.embed_b, transpose_b=True)
-        q = ttnn.reshape(q, (1, len(code_ids), 1, 2048), **_sr)
-        q = ttnn.repeat(q, (1, 1, 5, 1))
-        special = ttnn.repeat(self.special_tokens, (1, len(code_ids), 1, 1))
-        h = ttnn.add(q, special)
-        h = ttnn.reshape(h, (len(code_ids), 1, 5, 2048), **_sr)
-        bias_np = _bidirectional_attn_bias_np(np.ones((len(code_ids), 5), dtype=np.float32), sliding_window=None)
-        bias_tt = ttnn.as_tensor(
-            bias_np,
-            device=self.device,
-            dtype=self.dtype,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=self.mem,
-            mesh_mapper=mapper,
-        )
-        try:
-            for layer in self.layers:
-                h = layer(h, self.cos_tt, self.sin_tt, bias_tt)
+            return self._forward_on_ids_dev(ids_tt, n)
         finally:
-            ttnn.deallocate(bias_tt)
-        h = ttnn.rms_norm(ttnn.to_layout(h, ttnn.TILE_LAYOUT), weight=self.norm_w, epsilon=1e-6, memory_config=self.mem)
-        h = ttnn.linear(h, self.proj_out_w, bias=self.proj_out_b, transpose_b=True)
-        h = ttnn.reshape(h, (1, len(code_ids) * 5, 64), **_sr)
-        return h
+            try:
+                ttnn.deallocate(ids_tt)
+            except Exception:
+                pass
+
+    def forward(self, code_str: str) -> ttnn.Tensor | None:
+        code_ids = parse_audio_code_string(code_str)
+        if not code_ids:
+            return None
+        return self._forward_n_codes(code_ids)
+
+    def forward_traced(self, code_str: str) -> ttnn.Tensor | None:
+        """Trace + 2CQ detokenizer for a fixed ``N = len(code_ids)`` (recapture when N changes)."""
+        if not hasattr(ttnn, "begin_trace_capture"):
+            return self.forward(code_str)
+        code_ids = parse_audio_code_string(code_str)
+        if not code_ids:
+            return None
+        n = int(len(code_ids))
+        max_n = int(os.environ.get("ACE_STEP_MAX_AUDIO_CODES", "200"))
+        if n > max_n:
+            return self.forward(code_str)
+        if self._detok_trace_id is not None and self._detok_n_codes != n:
+            self.release_trace()
+        if self._detok_trace_id is None:
+            ids_np = np.asarray(code_ids, dtype=np.uint32).reshape(1, n)
+            self._detok_ids_host = ttnn.from_torch(ids_np, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            self._detok_ids_dev = ttnn.as_tensor(
+                ids_np,
+                device=self.device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=self.mem,
+            )
+            self._detok_bias_dev = self._create_attn_bias_dev(n)
+            warm = self._forward_on_ids_dev(self._detok_ids_dev, n, bias_tt=self._detok_bias_dev)
+            ttnn.synchronize_device(self.device)
+            try:
+                ttnn.deallocate(warm)
+            except Exception:
+                pass
+            self._detok_trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
+            self._detok_out_dev = self._forward_on_ids_dev(self._detok_ids_dev, n, bias_tt=self._detok_bias_dev)
+            ttnn.end_trace_capture(self.device, self._detok_trace_id, cq_id=0)
+            ttnn.synchronize_device(self.device)
+            self._detok_n_codes = n
+            self._detok_op_event = ttnn.record_event(self.device, 0)
+
+        ids_np = np.asarray(code_ids, dtype=np.uint32).reshape(1, n)
+        host_ids = ttnn.from_torch(ids_np, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.wait_for_event(1, self._detok_op_event)
+        ttnn.copy_host_to_device_tensor(host_ids, self._detok_ids_dev, cq_id=1)
+        write_event = ttnn.record_event(self.device, 1)
+        ttnn.wait_for_event(0, write_event)
+        ttnn.execute_trace(self.device, self._detok_trace_id, cq_id=0, blocking=True)
+        self._detok_op_event = ttnn.record_event(self.device, 0)
+        ttnn.synchronize_device(self.device)
+        if hasattr(ttnn, "clone"):
+            return ttnn.clone(self._detok_out_dev)
+        return self._detok_out_dev
+
+    def release_trace(self) -> None:
+        if self._detok_trace_id is not None:
+            try:
+                ttnn.release_trace(self.device, self._detok_trace_id)
+            except Exception:
+                pass
+            self._detok_trace_id = None
+        for t in (self._detok_ids_dev, self._detok_out_dev, self._detok_bias_dev):
+            if t is not None:
+                try:
+                    ttnn.deallocate(t)
+                except Exception:
+                    pass
+        self._detok_ids_dev = None
+        self._detok_out_dev = None
+        self._detok_bias_dev = None
+        self._detok_ids_host = None
+        self._detok_op_event = None
+        self._detok_n_codes = None
 
 
 __all__ = ["TtAceStepAudioCodeDetokenizer", "parse_audio_code_string", "fsq_codes_from_indices_np"]
