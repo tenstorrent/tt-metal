@@ -271,7 +271,7 @@
 
 - id: bh-lb-deepseek-prefill-perf
   name: bh_lb_DeepSeek_PREFILL_PERF
-  model-name: deepseek
+  model-name: deepseek_prefill
   cmd: |
     exit_code=0
     pytest models/demos/deepseek_v3_d_p/tests/perf/test_dispatch_combine_perf.py -m models_device_performance_bare_metal -vvv --tb=short --timeout=900 || exit_code=$?
