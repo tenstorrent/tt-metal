@@ -35,6 +35,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "align_corners",
     [
         False,
+        True,
     ],
 )
 @pytest.mark.parametrize("grid_dtype", [ttnn.bfloat16, ttnn.float32])
@@ -99,6 +100,7 @@ def test_grid_sample_random_grid(device, input_shape, mode, align_corners, grid_
     "align_corners",
     [
         False,
+        True,
     ],
 )
 @pytest.mark.parametrize("grid_dtype", [ttnn.bfloat16, ttnn.float32])
@@ -167,6 +169,7 @@ def test_grid_sample_near_uniform_grid(device, input_shape, mode, align_corners,
     "align_corners",
     [
         False,
+        True,
     ],
 )
 def test_grid_sample_identity_transform(device, input_shape, mode, align_corners):
@@ -228,6 +231,7 @@ def test_grid_sample_identity_transform(device, input_shape, mode, align_corners
     "align_corners",
     [
         False,
+        True,
     ],
 )
 def test_grid_sample_scaling_patterns(device, input_shape, mode, align_corners, scale_factor):

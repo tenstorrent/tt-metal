@@ -282,6 +282,7 @@ ALWI void read_four_corner_inputs_with_fill(
 template <
     uint32_t grid_dtype,
     bool use_precomputed_grid,
+    bool align_corners,
     uint32_t input_height,
     uint32_t input_width,
     uint32_t input_stick_nbytes,
@@ -297,13 +298,23 @@ ALWI void process_grid_point(
     uint32_t grid_idx,
     const TensorAccessor& input_tensor_accessor,
     uint32_t batch_offset) {
-    // Compute scaling factors as constexpr
+    // PyTorch grid_sample coordinate convention:
+    //   align_corners=True : maps grid in [-1, 1] to image positions [0, size - 1]
+    //                        => coord_image = ((grid + 1) / 2) * (size - 1)
+    //                                       = grid * (size - 1) / 2 + (size - 1) / 2
+    //   align_corners=False: maps grid in [-1, 1] to image positions [-0.5, size - 0.5]
+    //                        => coord_image = ((grid + 1) / 2) * size - 0.5
+    //                                       = grid * size / 2 + size / 2 - 0.5
     constexpr float input_height_f = float(input_height);
     constexpr float input_width_f = float(input_width);
-    constexpr float height_scale = input_height_f * 0.5f;
-    constexpr float height_offset = height_scale - 0.5f;
-    constexpr float width_scale = input_width_f * 0.5f;
-    constexpr float width_offset = width_scale - 0.5f;
+    constexpr float height_scale =
+        align_corners ? (input_height_f > 1.0f ? (input_height_f - 1.0f) * 0.5f : 0.0f) : input_height_f * 0.5f;
+    constexpr float height_offset = align_corners ? (input_height_f > 1.0f ? (input_height_f - 1.0f) * 0.5f : 0.0f)
+                                                  : (input_height_f * 0.5f - 0.5f);
+    constexpr float width_scale =
+        align_corners ? (input_width_f > 1.0f ? (input_width_f - 1.0f) * 0.5f : 0.0f) : input_width_f * 0.5f;
+    constexpr float width_offset =
+        align_corners ? (input_width_f > 1.0f ? (input_width_f - 1.0f) * 0.5f : 0.0f) : (input_width_f * 0.5f - 0.5f);
 
     int32_t h0, h1, w0, w1;
     uint16_t weight_nw_bf, weight_ne_bf, weight_sw_bf, weight_se_bf;

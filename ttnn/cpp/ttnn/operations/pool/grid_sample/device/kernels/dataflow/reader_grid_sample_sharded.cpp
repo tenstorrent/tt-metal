@@ -75,12 +75,13 @@ void kernel_main() {
     constexpr uint32_t grid_dtype = get_compile_time_arg_val(9);
     constexpr uint32_t grid_hw = get_compile_time_arg_val(10);
     constexpr uint32_t use_precomputed_grid = get_compile_time_arg_val(11);
-    constexpr uint32_t split_reader = get_compile_time_arg_val(12);
-    constexpr uint32_t reader_id = get_compile_time_arg_val(13);
-    constexpr uint32_t grid_nsticks_per_core = get_compile_time_arg_val(14);
+    constexpr bool align_corners = get_compile_time_arg_val(12);
+    constexpr uint32_t split_reader = get_compile_time_arg_val(13);
+    constexpr uint32_t reader_id = get_compile_time_arg_val(14);
+    constexpr uint32_t grid_nsticks_per_core = get_compile_time_arg_val(15);
 
     // Input tensor accessor for remote NOC reads (updated for new arg count)
-    constexpr auto input_tensor_args = TensorAccessorArgs<15>();
+    constexpr auto input_tensor_args = TensorAccessorArgs<16>();
     const auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_addr);
 
     // Calculate starting batch from global grid stick position
@@ -140,6 +141,7 @@ void kernel_main() {
             process_grid_point<
                 grid_dtype,
                 use_precomputed_grid,
+                align_corners,
                 input_height,
                 input_width,
                 input_stick_nbytes,

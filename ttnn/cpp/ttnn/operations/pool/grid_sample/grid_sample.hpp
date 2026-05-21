@@ -5,6 +5,7 @@
 #pragma once
 
 #include "grid_sample_prepare_grid.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn {
@@ -37,7 +38,8 @@ ttnn::Tensor grid_sample(
     bool align_corners = false,
     bool use_precomputed_grid = false,
     bool batch_output_channels = false,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
 
 }  // namespace operations::grid_sample
 
