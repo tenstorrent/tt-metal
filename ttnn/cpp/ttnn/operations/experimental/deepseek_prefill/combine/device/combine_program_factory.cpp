@@ -821,7 +821,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         zero_init_kernel_id = tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/"
-            "zero_init_writer.cpp",
+            "writer_untilize.cpp",
             idle_core_grid,
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
