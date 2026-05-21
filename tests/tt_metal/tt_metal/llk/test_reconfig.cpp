@@ -2,11 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <fmt/base.h>
-#include <fmt/format.h>
 #include <gtest/gtest.h>
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -357,11 +354,7 @@ bool single_core_reconfig(
 }
 
 bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    // THREE matmul_tiles ops with reconfig_data_format between operand pairs.
-    // OP[1] uses Float32 operands (d2/d3); OP[0] and OP[2] use Float16_b.
-    //   OP[0]: matmul_tiles(d0, d1) -> dst[0]   [Float16_b srcA/B]
-    //   OP[1]: matmul_tiles(d2, d3) -> dst[1]   [Float32   srcA/B, reconfig Float16_b -> Float32]
-    //   OP[2]: matmul_tiles(d4, d5) -> dst[2]   [Float16_b srcA/B, reconfig Float32   -> Float16_b]
+    // Three matmul_tiles ops with reconfig between pairs; see reconfig_quasar.cpp.
     constexpr uint32_t kNumOps = 3;
     const uint32_t f16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
     const uint32_t f32_tile_size = tt::tile_size(tt::DataFormat::Float32);
@@ -388,8 +381,6 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
     auto inp5_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
     auto out_dram = distributed::MeshBuffer::create(out_buf_cfg, f16_dram_cfg, mesh_device.get());
 
-    // DFB names — referenced as dfb::<name> inside kernel code. The compute kernel
-    // expects dfb::in0..in5 and dfb::out; the writer expects dfb::in.
     constexpr const char* INP0_DFB = "in0";
     constexpr const char* INP1_DFB = "in1";
     constexpr const char* INP2_DFB = "in2";
@@ -401,8 +392,6 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
     constexpr const char* WRITER = "writer";
     constexpr const char* COMPUTE = "compute";
 
-    // d0/d1, d4/d5 are Float16_b; d2/d3 are Float32. Kernel uses reconfig_data_format
-    // between ops to switch the unpacker formats. Output stays Float16_b.
     auto make_f16_input_dfb = [&](const std::string& name) {
         return experimental::metal2_host_api::DataflowBufferSpec{
             .unique_id = name,
@@ -437,19 +426,11 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
 
     using DFBEndpoint = experimental::metal2_host_api::KernelSpec::DFBEndpointType;
     using DFBAccess = experimental::metal2_host_api::DFBAccessPattern;
-    auto reader_binding = [](const std::string& name) {
+    auto dfb_binding = [](const std::string& name, DFBEndpoint endpoint) {
         return experimental::metal2_host_api::KernelSpec::DFBBinding{
             .dfb_spec_name = name,
             .local_accessor_name = name,
-            .endpoint_type = DFBEndpoint::PRODUCER,
-            .access_pattern = DFBAccess::STRIDED,
-        };
-    };
-    auto compute_consumer_binding = [](const std::string& name) {
-        return experimental::metal2_host_api::KernelSpec::DFBBinding{
-            .dfb_spec_name = name,
-            .local_accessor_name = name,
-            .endpoint_type = DFBEndpoint::CONSUMER,
+            .endpoint_type = endpoint,
             .access_pattern = DFBAccess::STRIDED,
         };
     };
@@ -461,12 +442,12 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
                 "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_six_input.cpp"},
         .num_threads = 1,
         .dfb_bindings =
-            {reader_binding(INP0_DFB),
-             reader_binding(INP1_DFB),
-             reader_binding(INP2_DFB),
-             reader_binding(INP3_DFB),
-             reader_binding(INP4_DFB),
-             reader_binding(INP5_DFB)},
+            {dfb_binding(INP0_DFB, DFBEndpoint::PRODUCER),
+             dfb_binding(INP1_DFB, DFBEndpoint::PRODUCER),
+             dfb_binding(INP2_DFB, DFBEndpoint::PRODUCER),
+             dfb_binding(INP3_DFB, DFBEndpoint::PRODUCER),
+             dfb_binding(INP4_DFB, DFBEndpoint::PRODUCER),
+             dfb_binding(INP5_DFB, DFBEndpoint::PRODUCER)},
         .runtime_arguments_schema =
             {.named_runtime_args =
                  {"src0_addr",
@@ -513,24 +494,17 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
                 "tests/tt_metal/tt_metal/test_kernels/compute/reconfig_quasar.cpp"},
         .num_threads = 1,
         .dfb_bindings =
-            {compute_consumer_binding(INP0_DFB),
-             compute_consumer_binding(INP1_DFB),
-             compute_consumer_binding(INP2_DFB),
-             compute_consumer_binding(INP3_DFB),
-             compute_consumer_binding(INP4_DFB),
-             compute_consumer_binding(INP5_DFB),
-             {
-                 .dfb_spec_name = OUT_DFB,
-                 .local_accessor_name = OUT_DFB,
-                 .endpoint_type = DFBEndpoint::PRODUCER,
-                 .access_pattern = DFBAccess::STRIDED,
-             }},
+            {dfb_binding(INP0_DFB, DFBEndpoint::CONSUMER),
+             dfb_binding(INP1_DFB, DFBEndpoint::CONSUMER),
+             dfb_binding(INP2_DFB, DFBEndpoint::CONSUMER),
+             dfb_binding(INP3_DFB, DFBEndpoint::CONSUMER),
+             dfb_binding(INP4_DFB, DFBEndpoint::CONSUMER),
+             dfb_binding(INP5_DFB, DFBEndpoint::CONSUMER),
+             dfb_binding(OUT_DFB, DFBEndpoint::PRODUCER)},
         .config_spec =
             experimental::metal2_host_api::ComputeConfiguration{
                 .math_fidelity = MathFidelity::HiFi4,
                 .fp32_dest_acc_en = true,
-                // Matmul is a binary FPU op → must unpack via SrcA/B (Default), not direct-to-Dest.
-                // Required for FP32 DFBs (in2, in3) when fp32_dest_acc_en=true.
                 .unpack_to_dest_mode =
                     {{INP2_DFB, tt::tt_metal::UnpackToDestMode::Default},
                      {INP3_DFB, tt::tt_metal::UnpackToDestMode::Default}},
@@ -676,55 +650,8 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
     auto device_unpacked = unpack_vector<bfloat16, uint32_t>(dest_buffer_data);
     auto golden_unpacked = unpack_vector<bfloat16, uint32_t>(packed_golden);
 
-    // Per-op diagnostic: one labeled section per op showing format chain, pass/fail, and the
-    // result + golden tiles laid out 32x32 as floats. Always prints, regardless of pass/fail,
-    // so it's obvious which op produced which tile and how it compares to the golden.
-    struct OpStep {
-        const char* label;
-        tt::DataFormat src_a_fmt;
-        tt::DataFormat src_b_fmt;
-        tt::DataFormat out_fmt;
-    };
-    const std::array<OpStep, kNumOps> op_chain = {{
-        {"OP[0]: matmul_tiles(d0, d1) -> dst[0]  [Float16_b srcA/B]",
-         tt::DataFormat::Float16_b,
-         tt::DataFormat::Float16_b,
-         tt::DataFormat::Float16_b},
-        {"OP[1]: matmul_tiles(d2, d3) -> dst[1]  [Float32 srcA/B, reconfig Float16_b->Float32]",
-         tt::DataFormat::Float32,
-         tt::DataFormat::Float32,
-         tt::DataFormat::Float16_b},
-        {"OP[2]: matmul_tiles(d4, d5) -> dst[2]  [Float16_b srcA/B, reconfig Float32->Float16_b]",
-         tt::DataFormat::Float16_b,
-         tt::DataFormat::Float16_b,
-         tt::DataFormat::Float16_b},
-    }};
-    auto fmt_to_str = [](tt::DataFormat f) -> const char* {
-        switch (f) {
-            case tt::DataFormat::Float16_b: return "Float16_b";
-            case tt::DataFormat::Float16: return "Float16";
-            case tt::DataFormat::Float32: return "Float32";
-            default: return "?";
-        }
-    };
-
-    constexpr uint32_t kTileR = 32;
-    constexpr uint32_t kTileC = 32;
-    auto dump_tile_floats = [&](const std::vector<bfloat16>& vec, uint32_t tile_idx) {
-        for (uint32_t row = 0; row < kTileR; ++row) {
-            std::string row_str;
-            for (uint32_t col = 0; col < kTileC; ++col) {
-                const float v = static_cast<float>(vec[tile_idx * elems_per_tile + row * kTileC + col]);
-                row_str += fmt::format("{:>7.3f} ", v);
-            }
-            log_info(tt::LogTest, "    {}", row_str);
-        }
-    };
-
     bool pass = true;
     for (uint32_t t = 0; t < kNumOps; ++t) {
-        const OpStep& s = op_chain[t];
-
         uint32_t mismatches = 0;
         int first_mismatch_local = -1;
         float worst_absdiff = 0.0f;
@@ -742,37 +669,21 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
                 worst_absdiff = std::fmax(worst_absdiff, absdiff);
             }
         }
-        const bool tile_pass = (mismatches == 0);
-        if (!tile_pass) {
-            pass = false;
-        }
-
-        log_info(tt::LogTest, "================================================================");
-        log_info(tt::LogTest, "{}", s.label);
-        log_info(
-            tt::LogTest,
-            "  format:  srcA={}  srcB={}  output={}",
-            fmt_to_str(s.src_a_fmt),
-            fmt_to_str(s.src_b_fmt),
-            fmt_to_str(s.out_fmt));
-        if (tile_pass) {
-            log_info(tt::LogTest, "  status:  PASS  ({}/{} elements within tolerance)", elems_per_tile, elems_per_tile);
+        if (mismatches == 0) {
+            log_info(tt::LogTest, "OP[{}]: PASS", t);
         } else {
+            pass = false;
             log_error(
                 tt::LogTest,
-                "  status:  FAIL  ({}/{} mismatches; first at local idx {} (global {}); worst absdiff={:.4f})",
+                "OP[{}]: FAIL ({}/{} mismatches; first idx {} (global {}); worst absdiff={:.4f})",
+                t,
                 mismatches,
                 elems_per_tile,
                 first_mismatch_local,
                 t * elems_per_tile + first_mismatch_local,
                 worst_absdiff);
         }
-        log_info(tt::LogTest, "  result tile [device] (32x32 floats):");
-        dump_tile_floats(device_unpacked, t);
-        log_info(tt::LogTest, "  golden tile (32x32 floats):");
-        dump_tile_floats(golden_unpacked, t);
     }
-    log_info(tt::LogTest, "================================================================");
 
     return pass;
 }

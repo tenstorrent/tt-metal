@@ -46,7 +46,7 @@ constexpr static std::uint32_t TRISC_ID               = 0;
  * Whether reprogramming OUT_DATA_FORMAT from buffer-descriptor \p unpack_src_format (L1) to
  * \p unpack_dst_format is supported on Quasar for the given unpack path.
  *
- * \param en_32bit_dest
+ * \param en_32bit_dest   Reserved; caller passes EN_32BIT_DEST (unused in table rows).
  * \param unpack_to_dest  True: Unpack-to-Dest or Unpack-to-SrcS; false: SrcA/SrcB.
  *
  * Rules follow the Quasar Unpacker Format Conversions table (gasket outside TDMA).

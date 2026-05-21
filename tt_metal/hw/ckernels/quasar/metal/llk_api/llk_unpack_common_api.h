@@ -99,7 +99,7 @@ inline void llk_unpack_reconfig_data_format_srca(
     static_assert(
         dim_stride_target == p_dim_stride_target::IGNORE,
         "Quasar unpack reconfig does not support stride/tile-dimension changes");
-    // Silent no-op if old/new operands already share both src and dst formats;
+    // Silent no-op if old/new operands already share both src and dst formats.
     if (!should_reconfig_src_reg_df(srca_old_operand, srca_new_operand)) {
         return;
     }
@@ -112,7 +112,7 @@ inline void llk_unpack_reconfig_data_format_srcb(
     static_assert(
         dim_stride_target == p_dim_stride_target::IGNORE,
         "Quasar unpack reconfig does not support stride/tile-dimension changes");
-    // Silent no-op if old/new operands already share both src and dst formats; matches WH/BH semantics.
+    // Silent no-op if old/new operands already share both src and dst formats.
     if (!should_reconfig_src_reg_df(srcb_old_operand, srcb_new_operand)) {
         return;
     }

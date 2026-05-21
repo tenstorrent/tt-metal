@@ -27,13 +27,7 @@ void kernel_main() {
     d5.wait_front(1);
     dout.reserve_back(3);
 
-    // Three matmul_tiles ops with reconfig_data_format between operand pairs.
-    // OP[1] uses Float32 operands; OP[0] and OP[2] use Float16_b.
-    // Between ops we reconfig srcA/srcB formats and reprime the unpack MOP for
-    // the new buf descriptors (mm_init_short is a stub on Quasar).
-    //   OP[0]: matmul_tiles(d0, d1) -> dst[0]   [Float16_b srcA/B]
-    //   OP[1]: matmul_tiles(d2, d3) -> dst[1]   [Float32   srcA/B, reconfig Float16_b -> Float32]
-    //   OP[2]: matmul_tiles(d4, d5) -> dst[2]   [Float16_b srcA/B, reconfig Float32   -> Float16_b]
+    // OP[0]: d0×d1 (Float16_b); OP[1]: d2×d3 (Float32, reconfig); OP[2]: d4×d5 (Float16_b, reconfig).
     tile_regs_acquire();
 
     matmul_tiles(d0.get_id(), d1.get_id(), 0, 0, 0);
