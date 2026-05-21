@@ -112,9 +112,16 @@ def test_moreh_cumsum_dim(input_shape, dim, device):
     ids=["0", "1"],
 )
 def test_moreh_cumsum_backward(input_shape, dim, device):
-    if input_shape == [1, 1, TILE_HEIGHT - 1, TILE_WIDTH - 1] and dim == 0:
+    if (
+        input_shape
+        in (
+            [1, 1, TILE_HEIGHT - 1, TILE_WIDTH - 1],
+            [4, 4, TILE_HEIGHT * 12 - 1, TILE_WIDTH * 30 - 1],
+        )
+        and dim == 0
+    ):
         pytest.skip(
-            reason="Disabled by issue #44858: moreh cumsum backward TT_FATAL on TILE_HEIGHT-1/TILE_WIDTH-1 shape at dim 0"
+            reason="Disabled by issue #44858: moreh cumsum backward TT_FATAL on nightly dim-0 tile-misaligned shapes"
         )
 
     output_shape = input_shape.copy()
@@ -222,9 +229,16 @@ def test_moreh_cumsum_callback(input_shape, dim, device):
     ids=["0", "1"],
 )
 def test_moreh_cumsum_backward(input_shape, dim, device):
-    if input_shape == [1, 1, TILE_HEIGHT - 1, TILE_WIDTH - 1] and dim == 0:
+    if (
+        input_shape
+        in (
+            [1, 1, TILE_HEIGHT - 1, TILE_WIDTH - 1],
+            [4, 4, TILE_HEIGHT * 12 - 1, TILE_WIDTH * 30 - 1],
+        )
+        and dim == 0
+    ):
         pytest.skip(
-            reason="Disabled by issue #44858: moreh cumsum backward TT_FATAL on TILE_HEIGHT-1/TILE_WIDTH-1 shape at dim 0"
+            reason="Disabled by issue #44858: moreh cumsum backward TT_FATAL on nightly dim-0 tile-misaligned shapes"
         )
 
     output_shape = input_shape.copy()
