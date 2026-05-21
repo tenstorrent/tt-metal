@@ -369,8 +369,13 @@ void Hal::initialize_bh(
             ((addr >= NOC1_REGS_START_ADDR) && (addr < NOC1_REGS_START_ADDR + 0x1000)) ||
             (addr == RISCV_DEBUG_REG_SOFT_RESET_0) ||
             (addr == IERISC_RESET_PC ||
-             addr == SUBORDINATE_IERISC_RESET_PC) ||  // used to program start addr for eth FW
-            (addr == DRISC_RESET_PC));                // used to program start addr for DRAM FW
+             addr == SUBORDINATE_IERISC_RESET_PC) ||                // used to program start addr for eth FW
+            (addr == DRISC_RESET_PC) ||                             // used to program start addr for DRAM FW
+            (addr == ETH_CORE_A_ETH_CTRL_A_PCS_STATUS_REG_ADDR) ||  // read for active-eth timeout debug
+            // ERISC interrupt registers, written by host to disable base FW interrupts
+            // before switching to runtime FW (see RiscFirmwareInitializer::disable_eth_interrupts).
+            ((addr >= ETH_RISC_CTRL_A_INTERRUPT_MODE_0__REG_ADDR) &&
+             (addr < ETH_RISC_CTRL_A_INTERRUPT_MODE_0__REG_ADDR + 4 * ETH_RISC_NUM_INTERRUPT_VECS)));
     };
     // NOLINTEND(misc-redundant-expression)
 
@@ -429,6 +434,8 @@ void Hal::initialize_bh(
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
     this->eth_fw_is_cooperative_ = false;
+    this->eth_interrupt_mode_base_reg_ = ETH_RISC_CTRL_A_INTERRUPT_MODE_0__REG_ADDR;
+    this->eth_interrupt_num_vecs_ = ETH_RISC_NUM_INTERRUPT_VECS;
     this->virtualized_core_types_ = {
         dev_msgs::AddressableCoreType::TENSIX,
         dev_msgs::AddressableCoreType::ETH,
