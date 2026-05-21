@@ -304,13 +304,14 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
         fabric_config: ttnn.FabricConfig,
+        batch_size_per_row: int,
     ) -> ModelPrefillConfig:
         return cls.model_config(
             hf_config,
             mesh_device,
             fabric_config,
             "prefill",
-            batch_size_per_row=USERS_PER_ROW,
+            batch_size_per_row=batch_size_per_row,
         )
 
     @classmethod
