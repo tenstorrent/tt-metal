@@ -13,6 +13,8 @@
 #include "mesh_workload_impl.hpp"
 #include "tt-metalium/program.hpp"
 #include "dispatch/system_memory_manager.hpp"
+#include <tt-metalium/experimental/service_core_claims.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 namespace tt::tt_metal::distributed {
 
@@ -21,6 +23,23 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
     if (mesh_cq.device()->get_view().get_devices().empty()) {
         return;
     }
+
+    // Service programs target FD-idle dispatch-column cores and are dispatched via SD MMIO,
+    // independently of the FD command queue. Common case: no service programs, skip entirely.
+    auto& service_programs = mesh_workload.impl().get_service_programs();
+    if (!service_programs.empty()) {
+        for (auto& [device_range, program] : service_programs) {
+            for (const auto& coord : device_range) {
+                auto* device = mesh_cq.device()->impl().get_device(coord);
+                tt::tt_metal::detail::LaunchProgram(device, program, false, true);
+            }
+        }
+    }
+
+    if (mesh_workload.impl().get_programs().empty()) {
+        return;
+    }
+
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
         mesh_workload.impl().compile(mesh_cq.device());
         mesh_workload.impl().load_binaries(mesh_cq);
