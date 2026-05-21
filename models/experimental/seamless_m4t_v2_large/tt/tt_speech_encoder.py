@@ -15,6 +15,8 @@ import ttnn
 import torch
 
 from models.common.utility_functions import nearest_32
+from models.experimental.seamless_m4t_v2_large.tt.common import to_torch_replicated_first_shard
+from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import from_torch_bfloat16_tile
 
 
 def _core_grid(device: ttnn.Device) -> ttnn.CoreGrid:
@@ -89,9 +91,12 @@ class TTSeamlessM4Tv2SpeechEncoder:
         self.speech_encoder_chunk_size = speech_encoder_chunk_size
         self.speech_encoder_left_chunk_num = speech_encoder_left_chunk_num
         self.has_adapter = parameters.adapter is not None
-        # Relative-position index tensors keyed by ``(seq_len, left_max, right_max)`` — avoids
-        # ``ttnn.from_torch`` on every conformer self-attention during ``begin_trace_capture``.
+        # Relative-position index tensors keyed by ``(seq_len, left_max, right_max)``.
         self._rel_pos_idx_cache: dict[Tuple[int, int, int], ttnn.Tensor] = {}
+        # Flat uint32 index on CPU for host-side ``torch.embedding`` (avoids device Embeddings JIT).
+        self._rel_pos_idx_torch_cache: dict[Tuple[int, int, int], torch.Tensor] = {}
+        # ``(batch, seq_len)`` already passed through ``pre_warm`` for this forward lifetime.
+        self._runtime_warmed: set[Tuple[int, int]] = set()
         # Stage 4: cache the full embedded position table ``[S, S, head_dim]`` per
         # ``(seq_len, weight_id)`` — eliminates 24× ``ttnn.embedding`` + reshape per forward pass.
         # Stage 7: scale is pre-folded into the cached table and the tensor is stored in L1
@@ -564,6 +569,20 @@ class TTSeamlessM4Tv2SpeechEncoder:
         ttnn.deallocate(v)
         return qh, kh, vh
 
+    def _relative_position_index_flat_torch(self, seq_len: int, *, left_max: int, right_max: int) -> torch.Tensor:
+        """CPU flat uint32 distance indices ``[S*S]`` for host ``torch.embedding``."""
+        idx_key = (seq_len, left_max, right_max)
+        cached = self._rel_pos_idx_torch_cache.get(idx_key)
+        if cached is not None:
+            return cached
+        r = np.arange(seq_len, dtype=np.int64)
+        l = np.arange(seq_len, dtype=np.int64)
+        dist = r[np.newaxis, :] - l[:, np.newaxis]
+        dist = np.clip(dist, -left_max, right_max) + left_max
+        cached = torch.from_numpy(dist.astype(np.int64).reshape(-1))
+        self._rel_pos_idx_torch_cache[idx_key] = cached
+        return cached
+
     def _relative_embedding_table(
         self,
         seq_len: int,
@@ -589,35 +608,12 @@ class TTSeamlessM4Tv2SpeechEncoder:
         if cached_tab is not None:
             return cached_tab
 
-        idx_key = (seq_len, left_max, right_max)
-        idx_tt = self._rel_pos_idx_cache.get(idx_key)
-        if idx_tt is None:
-            r = np.arange(seq_len, dtype=np.int64)
-            l = np.arange(seq_len, dtype=np.int64)
-            dist = r[np.newaxis, :] - l[:, np.newaxis]
-            dist = np.clip(dist, -left_max, right_max) + left_max
-            dist_u32 = dist.astype(np.uint32).reshape(-1)
-            idx_tt = ttnn.from_torch(
-                torch.as_tensor(dist_u32, dtype=torch.uint32),
-                device=self.device,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            self._rel_pos_idx_cache[idx_key] = idx_tt
-
         head_dim = self.hidden_size // self.speech_encoder_attention_heads
-        emb = ttnn.embedding(
-            idx_tt,
-            distance_weight,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        # Stage 14: reshape immediately to final 5-D broadcast shape [1, 1, S, S, D].
-        # Caching in this shape avoids a per-call reshape in _mh_attention.
-        emb = ttnn.reshape(emb, (1, 1, seq_len, seq_len, head_dim))
-        if emb.get_layout() != ttnn.TILE_LAYOUT:
-            emb = ttnn.to_layout(emb, ttnn.TILE_LAYOUT)
+        idx_flat = self._relative_position_index_flat_torch(seq_len, left_max=left_max, right_max=right_max)
+        w_cpu = to_torch_replicated_first_shard(distance_weight).to(torch.bfloat16).contiguous()
+        emb_cpu = torch.nn.functional.embedding(idx_flat, w_cpu).reshape(1, 1, seq_len, seq_len, head_dim)
+        # Host TILE upload — avoids per-layer ``EmbeddingsDeviceOperation`` + cold tilize gaps in Tracy.
+        emb = from_torch_bfloat16_tile(self.device, emb_cpu, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         # Fold scale into the table when non-trivial (stage 7 / stage 8 compatibility).
         if scale != 1.0:
@@ -948,6 +944,9 @@ class TTSeamlessM4Tv2SpeechEncoder:
         cs = self.speech_encoder_chunk_size
         if cs is None:
             return None
+        # Inference seq (≪ chunk_size) lies in a single chunk → mask is all-zero; skip build/merge.
+        if seq_len <= cs:
+            return None
         cache_key = (batch, seq_len, self._enumish_cache_key(dtype))
         cached = self._chunk_attn_mask_cache.get(cache_key)
         if cached is not None:
@@ -963,17 +962,12 @@ class TTSeamlessM4Tv2SpeechEncoder:
         for qi in range(seq_len):
             bad = (idx_cols < start_indices[qi]) | (idx_cols >= end_indices[qi])
             chunk_np[0, 0, qi, bad] = 1.0
-        chunk_tt = ttnn.from_torch(
-            torch.from_numpy(chunk_np).to(torch.bfloat16),
-            device=self.device,
-            dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        chunk_host = torch.from_numpy(chunk_np).to(torch.bfloat16)
+        chunk_tt = from_torch_bfloat16_tile(self.device, chunk_host, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if batch == 1:
             self._chunk_attn_mask_cache[cache_key] = chunk_tt
             return chunk_tt
-        out = ttnn.concat([chunk_tt for _ in range(batch)], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.repeat(chunk_tt, [batch, 1, 1, 1], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(chunk_tt)
         self._chunk_attn_mask_cache[cache_key] = out
         return out
@@ -1248,18 +1242,25 @@ class TTSeamlessM4Tv2SpeechEncoder:
                     scale=1.0,
                 )
 
+    def _ensure_runtime_caches(self, batch: int, seq_len: int) -> None:
+        """One-time per ``(batch, seq_len)`` warmup before the conformer stack runs."""
+        key = (batch, seq_len)
+        if key in self._runtime_warmed:
+            return
+        self.pre_warm(batch, seq_len)
+        self._runtime_warmed.add(key)
+
     def pre_warm(self, batch: int, seq_len: int) -> None:
         """Pre-populate all shape-dependent device-side caches for ``(batch, seq_len)``.
 
-        Stage 12: calling this once before the first ``forward`` amortises the
-        first-pass overhead (FillPad ≈ 1.1 ms + Embeddings ≈ 0.3 ms from Tracy
-        Stage-7 profile) so that first-pass latency equals subsequent-pass latency.
+        Amortises first-pass Tracy gaps (``FillPad`` / ``EmbeddingsDeviceOperation`` / mask tilize)
+        so every conformer layer hits warm caches on the first ``forward`` call.
 
         Caches populated:
         * ``_dw_left_pad_cache``   — L1 zero tensors for depthwise conv left pad
-        * ``_rel_pos_tab_cache``   — ``[1, S, D, S]`` position tables per layer
-        * ``_rel_pos_idx_cache``   — distance index arrays (used during table build)
-        * ``_chunk_attn_mask_cache`` — chunk-causal attention mask
+        * ``_rel_pos_tab_cache``   — ``[1, 1, S, S, D]`` tables (host embedding + TILE upload)
+        * ``_chunk_attn_mask_cache`` — chunk mask (skipped when ``S <= chunk_size``)
+        * ``_encoder_additive_mask_cache`` — no-padding-mask entry (``mask_id=-1``)
         """
         enc = self.parameters.encoder
         for i in range(self.speech_encoder_layers):
@@ -1277,6 +1278,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
 
         self.warm_relative_position_caches_for_seq_lens([seq_len])
         self._chunk_attention_mask_float01(batch, seq_len, ttnn.bfloat16)
+        self._encoder_additive_mask(None, batch=batch, seq_len=seq_len, dtype=ttnn.bfloat16)
 
     def materialize_trace_attention_masks(
         self, conv_mask_1d_bf16: ttnn.Tensor, *, batch: int, seq: int
@@ -1359,6 +1361,12 @@ class TTSeamlessM4Tv2SpeechEncoder:
         seq = int(input_features.shape[1])
         token_m = batch * seq
 
+        dtype = ttnn.bfloat16
+        if trace_masks is None:
+            self._ensure_runtime_caches(batch, seq)
+            if conv_attention_mask_1d is not None:
+                self._encoder_additive_mask(conv_attention_mask_1d, batch=batch, seq_len=seq, dtype=dtype)
+
         fp = p.feature_projection
         h = self._layer_norm(
             input_features,
@@ -1377,7 +1385,6 @@ class TTSeamlessM4Tv2SpeechEncoder:
             h = ttnn.mul(h, m1, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         enc = p.encoder
-        dtype = ttnn.bfloat16
         if trace_masks is not None:
             attn_4d = trace_masks.encoder_additive_4d
             own_encoder_attn_4d = False
