@@ -187,9 +187,9 @@ class TtSwinAttention:
             dtype=ttnn.bfloat8_b,
         )
 
-        output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         output = ttnn.reshape(output, (B, nH, nW, wH, wW, C))
-        output = ttnn.transpose(output, 2, 3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        output = ttnn.transpose(output, 2, 3, memory_config=ttnn.L1_MEMORY_CONFIG)
         output = ttnn.reshape(output, (B, pad_H, pad_W, C))
 
         # reverse cyclic shift
