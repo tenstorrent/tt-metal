@@ -641,10 +641,21 @@ class WanPipelineS2V(WanPipeline):
                 pass
 
     def _load_s2v_transformer(self, s2v_snapshot: Path) -> None:
-        ref_sd = load_s2v_state_dict(s2v_snapshot)
-        tt_sd = translate_s2v_state_dict(ref_sd)
-        logger.info(f"Loading S2V transformer: {len(tt_sd)} parameters via native mapper.")
-        self.transformer.load_torch_state_dict(tt_sd, strict=True)
+        # Use cache.load_model so the translated tt_dit state dict gets
+        # written to ``TT_DIT_CACHE_DIR`` on first run; subsequent runs skip
+        # the 1260-parameter native-mapper translation (~20-30 s).
+        # ``get_torch_state_dict`` is a lazy callback — only invoked on
+        # cache miss, so the safetensors load + translate cost is avoided
+        # on warm starts. Cache key matches the t2v/i2v pattern:
+        # ``{TT_DIT_CACHE_DIR}/Wan2.2-S2V-14B/transformer/{parallel_id}_mesh{shape}_bf16``.
+        cache.load_model(
+            self.transformer,
+            model_name=os.path.basename(self.checkpoint_name),
+            subfolder="transformer",
+            parallel_config=self.parallel_config,
+            mesh_shape=tuple(self.mesh_device.shape),
+            get_torch_state_dict=lambda: translate_s2v_state_dict(load_s2v_state_dict(s2v_snapshot)),
+        )
 
     def _prepare_audio_encoder(self, audio_model_id: str) -> None:
         audio_parallel_config = EncoderParallelConfig(

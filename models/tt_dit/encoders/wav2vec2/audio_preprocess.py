@@ -47,19 +47,21 @@ def load_audio_to_input_values(
     waveform, _sr = librosa.load(audio_path, sr=target_sr, mono=True)
     inputs = processor(waveform, sampling_rate=target_sr, return_tensors="pt")
     iv = inputs.input_values
-    # Snap to the nearest multiple of S2V_AUDIO_SAMPLES_PER_CLIP so the
-    # wav2vec2 transformer always sees an integer number of canonical clips
-    # (each = 80 video frames worth of audio). This guarantees that warmup —
-    # which uses exactly one canonical clip — primes the same program shape
-    # the production audio path uses.
+    # Snap up to the next multiple of S2V_AUDIO_SAMPLES_PER_CLIP so wav2vec2
+    # sees a fixed canonical shape per clip (matches what the warmup primes)
+    # without ever truncating real audio. The reference implementation
+    # (``wan/modules/s2v/audio_encoder.py``) runs wav2vec2 on the full
+    # waveform and zero-pads at the feature-bucketing step; here we pad at
+    # the raw-audio step instead so every wav2vec2 forward sees the same
+    # 80 000-sample shape. ``ceil`` (not ``round``) avoids the silent
+    # truncation bug where ``round(15.997/5)=3`` chopped 1 s off the end of
+    # 16 s audio.
     canonical = S2V_AUDIO_SAMPLES_PER_CLIP
     T_raw = iv.shape[-1]
-    n_clips = max(1, round(T_raw / canonical))
+    n_clips = max(1, math.ceil(T_raw / canonical))
     target_len = n_clips * canonical
     if target_len > T_raw:
         iv = torch.nn.functional.pad(iv, (0, target_len - T_raw))
-    elif target_len < T_raw:
-        iv = iv[..., :target_len]
     return iv
 
 
