@@ -1,0 +1,161 @@
+name: "LLK Smoke (on-demand)"
+# Manually-triggered LLK smoke tests for a custom branch.
+# Auto-detects which architectures (Wormhole / Blackhole) need to run by
+# diffing the current branch against origin/main, using the same rules the
+# PR Gate uses:
+#   - Only WH files changed -> run Wormhole only
+#   - Only BH files changed -> run Blackhole only
+#   - Shared LLK areas (common / sfpi / tests / ci) changed -> run both
+
+on:
+  workflow_dispatch:
+    inputs:
+      pytest-markers:
+        description: "Pytest mark expression for LLK python_tests"
+        required: false
+        type: string
+        default: "not perf and not nightly and not quasar"
+
+permissions:
+  checks: write
+  contents: read
+  packages: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-docker-images:
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
+    with:
+      platform: "Ubuntu 22.04"
+
+  find-changed-files:
+    runs-on: ubuntu-latest
+    outputs:
+      llk-wormhole-changed: ${{ steps.find-changes.outputs.llk-wormhole-changed }}
+      llk-blackhole-changed: ${{ steps.find-changes.outputs.llk-blackhole-changed }}
+      llk-common-changed: ${{ steps.find-changes.outputs.llk-common-changed }}
+      llk-sfpi-changed: ${{ steps.find-changes.outputs.llk-sfpi-changed }}
+      llk-tests-changed: ${{ steps.find-changes.outputs.llk-tests-changed }}
+      llk-ci-changed: ${{ steps.find-changes.outputs.llk-ci-changed }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 1
+          sparse-checkout: .github
+      - id: find-changes
+        uses: ./.github/actions/find-changed-files
+
+  decide-archs:
+    needs: find-changed-files
+    runs-on: ubuntu-latest
+    outputs:
+      run-wormhole: ${{ steps.decide.outputs.run-wormhole }}
+      run-blackhole: ${{ steps.decide.outputs.run-blackhole }}
+    steps:
+      - id: decide
+        shell: bash
+        env:
+          LLK_WORMHOLE_CHANGED: ${{ needs.find-changed-files.outputs.llk-wormhole-changed }}
+          LLK_BLACKHOLE_CHANGED: ${{ needs.find-changed-files.outputs.llk-blackhole-changed }}
+          LLK_COMMON_CHANGED: ${{ needs.find-changed-files.outputs.llk-common-changed }}
+          LLK_SFPI_CHANGED: ${{ needs.find-changed-files.outputs.llk-sfpi-changed }}
+          LLK_TESTS_CHANGED: ${{ needs.find-changed-files.outputs.llk-tests-changed }}
+          LLK_CI_CHANGED: ${{ needs.find-changed-files.outputs.llk-ci-changed }}
+        run: |
+          set -euo pipefail
+
+          # Shared areas (test harness, ci, common LLK, sfpi) affect both archs.
+          SHARED_CHANGED=false
+          if [[ "$LLK_COMMON_CHANGED" == "true" \
+             || "$LLK_SFPI_CHANGED"   == "true" \
+             || "$LLK_TESTS_CHANGED"  == "true" \
+             || "$LLK_CI_CHANGED"     == "true" ]]; then
+            SHARED_CHANGED=true
+          fi
+
+          RUN_WH=false
+          RUN_BH=false
+          if [[ "$SHARED_CHANGED" == "true" ]]; then
+            RUN_WH=true
+            RUN_BH=true
+          else
+            [[ "$LLK_WORMHOLE_CHANGED"  == "true" ]] && RUN_WH=true
+            [[ "$LLK_BLACKHOLE_CHANGED" == "true" ]] && RUN_BH=true
+          fi
+
+          {
+            echo "### LLK Smoke (on-demand) selection"
+            echo ""
+            echo "| Flag | Value |"
+            echo "|---|---|"
+            echo "| llk-wormhole-changed | \`$LLK_WORMHOLE_CHANGED\` |"
+            echo "| llk-blackhole-changed | \`$LLK_BLACKHOLE_CHANGED\` |"
+            echo "| llk-common-changed | \`$LLK_COMMON_CHANGED\` |"
+            echo "| llk-sfpi-changed | \`$LLK_SFPI_CHANGED\` |"
+            echo "| llk-tests-changed | \`$LLK_TESTS_CHANGED\` |"
+            echo "| llk-ci-changed | \`$LLK_CI_CHANGED\` |"
+            echo ""
+            echo "**Wormhole will run:** \`$RUN_WH\`"
+            echo "**Blackhole will run:** \`$RUN_BH\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "run-wormhole=$RUN_WH" >> "$GITHUB_OUTPUT"
+          echo "run-blackhole=$RUN_BH" >> "$GITHUB_OUTPUT"
+
+          if [[ "$RUN_WH" == "false" && "$RUN_BH" == "false" ]]; then
+            echo "::warning::No relevant LLK changes detected vs origin/main; nothing to run."
+          fi
+
+  llk-smoke-wormhole:
+    needs: [build-docker-images, decide-archs]
+    if: ${{ needs.decide-archs.outputs.run-wormhole == 'true' }}
+    uses: ./.github/workflows/llk-smoke-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-docker-images.outputs.llk-ci-tag }}
+      enabled-skus: wh_n150_civ2
+      pytest-markers: ${{ inputs.pytest-markers }}
+
+  llk-smoke-blackhole:
+    needs: [build-docker-images, decide-archs]
+    if: ${{ needs.decide-archs.outputs.run-blackhole == 'true' }}
+    uses: ./.github/workflows/llk-smoke-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-docker-images.outputs.llk-ci-tag }}
+      enabled-skus: bh_p150b_civ2
+      pytest-markers: ${{ inputs.pytest-markers }}
+
+  # GitHub has so many design limitations it's not even funny.
+  # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
+  workflow-status:
+    name: LLK Smoke (on-demand) Status
+    # Force this job to run so GH can 'see' it, provided some other job has
+    # actually run. Otherwise if the entire workflow has been skipped, then
+    # this will report FAILED instead of SKIPPED.
+    if: >-
+      ${{
+        always() &&
+        contains(join(needs.*.result, ','), 'success') ||
+        contains(join(needs.*.result, ','), 'failure')
+      }}
+    needs:
+      - build-docker-images
+      - find-changed-files
+      - decide-archs
+      - llk-smoke-wormhole
+      - llk-smoke-blackhole
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check if all jobs passed
+        uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
+        with:
+          required-jobs: "build-docker-images, find-changed-files, decide-archs"
+          optional-jobs: >-
+            llk-smoke-wormhole, llk-smoke-blackhole
+        env:
+          NEEDS_CONTEXT: '${{ toJSON(needs) }}'
