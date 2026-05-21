@@ -19,7 +19,12 @@ import torch
 
 import ttnn
 from models.experimental.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
-from models.experimental.glm4_moe_lite.tt.linear_helpers import attn_linear, mlp_linear, tp_row_parallel_linear
+from models.experimental.glm4_moe_lite.tt.linear_helpers import (
+    attn_linear,
+    attn_wo_linear,
+    mlp_linear,
+    tp_row_parallel_linear,
+)
 from models.experimental.glm4_moe_lite.tt.runtime_config import Glm4RuntimeConfig
 
 
@@ -468,7 +473,7 @@ def flash_mla_and_output(
             v = ttnn.permute(v, (0, 2, 1, 3))
             v = ttnn.reshape(v, (1, batch, 1, int(num_heads * hparams.v_head_dim)))
             v = ttnn.permute(v, (0, 2, 1, 3))
-        attn_out = attn_linear(v, w.w_o, device=device, cfg=cfg)
+        attn_out = attn_wo_linear(v, w.w_o, device=device, cfg=cfg)
         ttnn.deallocate(v, force=False)
 
     _profile_add(profile, "attn_out_s", time.perf_counter() - t0 if profile is not None else 0.0)
