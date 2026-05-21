@@ -439,8 +439,8 @@ class TTNNGeneratorNSF:
         on device, then downloads. Retained as the per-block reference path
         and exercised directly by `tests/test_production_shapes.py`. The
         generator's `forward` no longer calls this per ResBlock — it uses
-        `_resblock_group_device`, which shares one upload/download across all
-        three ResBlocks of a stage (Phase 3A.1).
+        `_resblock_group_resident`, which shares one device-resident input
+        across all three ResBlocks of a stage (Phase 3A.1/3A.2a).
 
         Two layout constraints must be honored on every step:
 
@@ -478,7 +478,7 @@ class TTNNGeneratorNSF:
             leaky_relu → conv1 → leaky_relu → conv2 → add(residual)
         entirely on device and returns a NEW device tensor. `x_shared` (the
         block input, NHWC/TILE) is treated as read-only and is NOT deallocated
-        here: _resblock_group_device feeds the same `x_shared` to all three
+        here: _resblock_group_resident feeds the same `x_shared` to all three
         kernels of a stage, so its lifetime is owned by the caller.
 
         Layout discipline is the same as documented on `_resblock1_device`:
@@ -524,29 +524,21 @@ class TTNNGeneratorNSF:
 
         return x_dev
 
-    def _resblock_group_device(self, x_cf, stage, seq_len):
-        """All NUM_KERNELS ResBlocks of an upsample stage, device-resident.
+    def _resblock_group_resident(self, x_shared, stage, seq_len):
+        """ResBlock-group body on an already-resident device tensor.
 
-        Phase 3A.1 residency: the stage activation is uploaded ONCE, all three
-        ResBlocks run on device reading that shared input, their outputs are
-        summed and averaged (×1/NUM_KERNELS) on device, and the result is
-        downloaded ONCE. This replaces the previous per-ResBlock from_torch/
-        to_torch (3 uploads + 3 downloads per stage → 1 + 1) and the host-side
-        sum/average — with no change to the ResBlock math itself.
+        Takes `x_shared` (NHWC/TILE device tensor), runs all NUM_KERNELS
+        ResBlocks reading it, sums their outputs and averages
+        (×1/NUM_KERNELS) on device, and returns the result — no host
+        transfer. Consumes (deallocates) `x_shared`.
 
+        Phase 3A.1 introduced device-resident per-stage ResBlock grouping
+        (Σ and average on device); Phase 3A.2a feeds it the conv_transpose
+        output directly from `forward` so the whole stage body stays resident.
         Transient device tensors (per-kernel outputs, the running accumulator,
         the shared input) are deallocated as soon as they are consumed, so
         device residency does not grow across the group or across chunks.
         """
-        x_nhwc = x_cf.permute(0, 2, 1).unsqueeze(1)
-        x_shared = ttnn.from_torch(
-            x_nhwc.float(),
-            dtype=DEFAULT_DTYPE,
-            layout=ttnn.TILE_LAYOUT,
-            device=self._device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
         acc = None
         for j in range(NUM_KERNELS):
             rb_idx = stage * NUM_KERNELS + j
@@ -561,12 +553,9 @@ class TTNNGeneratorNSF:
                 acc = new_acc
 
         ttnn.deallocate(x_shared)
-
         avg = ttnn.multiply(acc, 1.0 / NUM_KERNELS)
         ttnn.deallocate(acc)
-        out = ttnn.to_torch(avg).float().squeeze(1).permute(0, 2, 1)
-        ttnn.deallocate(avg)
-        return out
+        return avg
 
     def forward(self, z, har_source, g):
         """Execute full generator with persistent weights.
@@ -598,18 +587,33 @@ class TTNNGeneratorNSF:
         x_cf = x_cf + cond_cl.permute(0, 2, 1)
 
         for i in range(NUM_UPSAMPLES):
-            x_cf = F.leaky_relu(x_cf, LRELU_SLOPE)
-
-            # Upsample (persistent TTNNConvTranspose1d)
             ct = self._ups[i]
-            out_ch = UPSAMPLE_INITIAL_CH // (2 ** (i + 1))
+
+            # --- Within-stage device residency (Phase 3A.2a) ---
+            # Upload the stage activation ONCE; leaky_relu, conv_transpose,
+            # noise-add and the ResBlock group all run device-resident. The
+            # stage boundary (the download below) is intentionally retained —
+            # cross-stage residency is 3A.2b.
             x_nhwc = x_cf.permute(0, 2, 1).unsqueeze(1)
-            x_tt = ttnn.from_torch(x_nhwc.float(), dtype=DEFAULT_DTYPE)
-            out_tt, out_len = ct(x_tt, batch_size=1, input_length=seq_len)
-            x_cf = TTNNConvTranspose1d.postprocess_output(out_tt, 1, out_len, out_ch)
+            x_dev = ttnn.from_torch(
+                x_nhwc.float(), dtype=DEFAULT_DTYPE, layout=ttnn.TILE_LAYOUT,
+                device=self._device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+            # pre-upsample leaky_relu (device, TILE); conv_transpose wants ROW_MAJOR
+            lr = ttnn.leaky_relu(x_dev, negative_slope=LRELU_SLOPE)
+            ttnn.deallocate(x_dev)
+            lr_rm = ttnn.to_layout(lr, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.deallocate(lr)
+
+            # ConvTranspose1d output stays resident (NHWC/TILE/DRAM); the old
+            # postprocess_output host download is dropped — probe-verified
+            # bit-identical to the on-device tensor.
+            ct_out, out_len = ct(lr_rm, batch_size=1, input_length=seq_len)
+            ttnn.deallocate(lr_rm)
             seq_len = out_len
 
-            # Noise injection (torch — small ops)
+            # Noise injection: generated on host (conservative, unchanged math),
+            # uploaded as NHWC/TILE, added on device.
             nc = self._noise_convs[i]
             if i < NUM_UPSAMPLES - 1:
                 stride_f0 = math.prod(UPSAMPLE_RATES[i + 1:])
@@ -617,11 +621,19 @@ class TTNNGeneratorNSF:
                                      stride=stride_f0, padding=stride_f0 // 2)
             else:
                 x_source = _linear_channel_first(har_source, nc["w"], nc["b"])
-            x_cf = x_cf + x_source[:, :, :seq_len]
+            src_nhwc = x_source[:, :, :seq_len].permute(0, 2, 1).unsqueeze(1)
+            src_dev = ttnn.from_torch(
+                src_nhwc.float(), dtype=DEFAULT_DTYPE, layout=ttnn.TILE_LAYOUT,
+                device=self._device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            x_dev = ttnn.add(ct_out, src_dev)
+            ttnn.deallocate(ct_out)
+            ttnn.deallocate(src_dev)
 
-            # ResBlocks (Phase 3A.1: device-resident group — one upload + one
-            # download per stage, Σ and 1/NUM_KERNELS average on device)
-            x_cf = self._resblock_group_device(x_cf, i, seq_len)
+            # ResBlock group on the resident tensor; download to host CF at the
+            # stage boundary (retained for 3A.2a).
+            avg = self._resblock_group_resident(x_dev, i, seq_len)
+            x_cf = ttnn.to_torch(avg).float().squeeze(1).permute(0, 2, 1)
+            ttnn.deallocate(avg)
 
         # conv_post + tanh (persistent host weight)
         x_cf = F.leaky_relu(x_cf)
