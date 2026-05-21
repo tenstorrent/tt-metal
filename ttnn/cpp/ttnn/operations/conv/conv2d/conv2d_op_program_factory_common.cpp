@@ -10,10 +10,12 @@
 #include <optional>
 #include <tuple>
 #include <unordered_map>
+#include <variant>
 #include <vector>
 #include <tt_stl/assert.hpp>
 #include "tt-metalium/constants.hpp"
 #include "tt-metalium/hal.hpp"
+#include "tt-metalium/program_descriptors.hpp"
 #include "tt-metalium/tt_backend_api_types.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -383,6 +385,92 @@ void allocate_cbs(
             // If this CB is overlapped by another CB, set the handle to the overlapped CB's handle
             const CBInfo& overlapped_cb = get_cb_info_by_name(cb_info, cb.overlapped_by_cb.value());
             cb.handle = overlapped_cb.handle;
+            cb.index = overlapped_cb.index;
+        }
+    }
+}
+
+void allocate_cbs_to_program_descriptor(
+    std::vector<CBInfo>& cb_info,
+    tt::tt_metal::ProgramDescriptor& desc,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& all_cores,
+    const Tensor& input_tensor,
+    const Tensor& output_tensor,
+    const Tensor& l1_indices_tensor) {
+    // CBDescriptor::core_ranges is a CoreRangeSet; widen single CoreCoord /
+    // CoreRange inputs so callers can pass the same variant they already use
+    // with the legacy allocate_cbs().
+    const tt::tt_metal::CoreRangeSet core_ranges = std::visit(
+        [](const auto& v) -> tt::tt_metal::CoreRangeSet {
+            using T = std::decay_t<decltype(v)>;
+            if constexpr (std::is_same_v<T, CoreCoord>) {
+                return tt::tt_metal::CoreRangeSet(CoreRange{v, v});
+            } else if constexpr (std::is_same_v<T, CoreRange>) {
+                return tt::tt_metal::CoreRangeSet(v);
+            } else {
+                return v;
+            }
+        },
+        all_cores);
+
+    uint32_t cb_index = 0;
+    for (auto& cb : cb_info) {
+        if (cb.num_pages == 0) {
+            // Skip circular buffers with zero pages (same as allocate_cbs()).
+            // Overlapped CBs always fall in this bucket and pick up their
+            // sibling's index in the second pass below.
+            continue;
+        }
+
+        // Globally-allocated CBs are backed by a sharded tensor buffer.
+        // Recording `Buffer*` on the descriptor lets the framework patch the
+        // CB base address on every dispatch (the descriptor-flow analogue of
+        // the legacy UpdateDynamicCircularBufferAddress() calls).
+        tt::tt_metal::Buffer* buffer = nullptr;
+        if (cb.is_globally_allocated) {
+            if (cb.name == Conv2dCb::ACT_SHARDED) {
+                buffer = input_tensor.buffer();
+            } else if (cb.name == Conv2dCb::OUT || cb.name == Conv2dCb::MATMUL_PARTIALS) {
+                buffer = output_tensor.buffer();
+            } else if (cb.name == Conv2dCb::READER_INDICES) {
+                buffer = l1_indices_tensor.buffer();
+            } else {
+                TT_THROW(
+                    "Unexpected circular buffer name {}. Expected one of: SHARDED_ACT_CB, OUT0_CB, READER_INDICES_CB",
+                    enchantum::to_string(cb.name));
+            }
+        }
+
+        cb.index = cb_index++;
+        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+            .total_size = cb.num_pages * cb.page_size,
+            .core_ranges = core_ranges,
+            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb.index),
+                .data_format = cb.data_format,
+                .page_size = cb.page_size,
+            }}},
+            .buffer = buffer,
+        });
+
+        log_trace(
+            tt::LogOp,
+            "Allocated descriptor CB {} with index {}, num pages {}, page size {}, globally allocated: {}",
+            enchantum::to_string(cb.name),
+            cb.index,
+            cb.num_pages,
+            cb.page_size,
+            cb.is_globally_allocated);
+    }
+
+    for (auto& cb : cb_info) {
+        if (cb.overlapped_by_cb.has_value()) {
+            // Overlapped CBs do not get their own CBDescriptor; they reuse the
+            // overlap target's buffer_index so kernels addressing the overlapped
+            // CB hit the shared underlying allocation. CBInfo::handle is left
+            // default-initialised — the descriptor flow does not expose CBHandle
+            // back to factories.
+            const CBInfo& overlapped_cb = get_cb_info_by_name(cb_info, cb.overlapped_by_cb.value());
             cb.index = overlapped_cb.index;
         }
     }
