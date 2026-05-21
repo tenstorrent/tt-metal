@@ -17,11 +17,11 @@ class TtRuntimeTrackerBase(object):
         self.max_obj_id = 0
 
     def update(self, track_instances: Instances, iou_thre=None):
-        track_instances.disappear_time = ttnn.where(
-            track_instances.scores >= self.score_thresh,
-            ttnn.zeros_like(track_instances.disappear_time),
-            track_instances.disappear_time,
-        )
+        # Original: where(score >= thresh, 0, disappear_time). Replace with
+        # `disappear_time * (1 - score_mask)` to avoid the per-call
+        # `ttnn.zeros_like` allocation that blocks trace capture.
+        score_mask = track_instances.scores >= self.score_thresh
+        track_instances.disappear_time = ttnn.multiply(track_instances.disappear_time, ttnn.rsub(score_mask, 1.0))
         ## This below should not be called but due to ttnn pipeline it is called because of mismatch values, Hence keeping it here
         # track_instances.obj_idxes = ttnn.to_torch(track_instances.obj_idxes)
         # track_instances.disappear_time = ttnn.to_torch( track_instances.disappear_time)

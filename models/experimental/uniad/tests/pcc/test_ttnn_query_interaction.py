@@ -46,7 +46,12 @@ def test_uniad_query_interaction(device, reset_seeds, model_location_generator):
     tt_track_instances.ref_pts = ttnn.from_torch(ref_pts, device=device)
     tt_track_instances.query = ttnn.from_torch(query, device=device, layout=ttnn.TILE_LAYOUT)
     tt_track_instances.output_embedding = ttnn.from_torch(output_embedding, device=device)
-    tt_track_instances.obj_idxes = ttnn.from_torch(obj_idxes, device=device)
+    # Force ttnn.int32 — without an explicit dtype, ttnn.from_torch picks
+    # UINT32 for torch.long inputs, and `obj_idxes >= 0` then evaluates as
+    # always-True (uint32 is always non-negative), collapsing the "active"
+    # filter. Matches the int32 dtype used by TtUniAD when it constructs
+    # this field via ttnn.full(..., dtype=ttnn.int32, ...).
+    tt_track_instances.obj_idxes = ttnn.from_torch(obj_idxes, device=device, dtype=ttnn.int32)
     data = {"init_track_instances": tt_track_instances, "track_instances": tt_track_instances}
 
     parameter = create_uniad_model_parameters_encoder(torch_model, device=device)
