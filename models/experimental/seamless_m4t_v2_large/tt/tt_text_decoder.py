@@ -3,9 +3,10 @@
 
 """TTNN [`SeamlessM4Tv2Decoder`] with prefill and KV-cache decode.
 
-DRAM width-sharded linears (Stage 2): prefill QKV, FFN fc1/fc2, self/cross ``out_proj``,
-cross ``q_proj``. Decode self-attn QKV uses interleaved ``qkv_decode`` weights (L1 matmul)
-for KV-cache PCC; all other sharded linears use the DRAM path in ``_linear``.
+Prefill and decode linears use interleaved L1 weights with
+``MatmulMultiCoreReuseMultiCast1DProgramConfig`` via ``common.matmul_program_config`` (text
+encoder / speech encoder pattern). Decode self-attn QKV uses a separate ``qkv_decode`` weight
+tensor for KV-cache PCC.
 """
 
 from __future__ import annotations
@@ -20,10 +21,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole, nearest_32
 from models.experimental.seamless_m4t_v2_large.tt.common import (
     build_ln_sharded_config,
-    core_grid,
-    dram_linear_input_mem_config,
-    dram_matmul_program_config,
-    is_dram_width_sharded,
+    matmul_program_config,
     sdpa_program_config,
     TILE,
     to_torch_replicated_first_shard,
@@ -378,8 +376,7 @@ class TTSeamlessM4Tv2Decoder:
             packer_l1_acc=True,
         )
         self._ln_sharded_cache: dict = {}
-        self._projection_pc_cache: dict = {}
-        self._dram_matmul_pc_cache: dict = {}
+        self._matmul_pc_cache: dict = {}
         self._tile_padded_batch_rows = TILE * ((max_batch_size + TILE - 1) // TILE)
         # Same rationale for SDPA chunk schedules: ``forward`` / greedy decode revisit the same
         # ``(seq_q, seq_k, large_chunks)`` keys many times (24 layers × steps); reuse one object.
@@ -420,30 +417,25 @@ class TTSeamlessM4Tv2Decoder:
         """See ``common.sdpa_program_config`` — ``large_chunks=False`` for short speech encoder keys."""
         return sdpa_program_config(self.device, seq_q, seq_k, self._sdpa_pc_cache, large_chunks=large_chunks)
 
-    _PROJECTION_1D_SEQ_THRESHOLD = 384
-    # Width-sharded LN on a single decode token still feeds matmuls with M=32 tile rows.
-    _DECODE_MATMUL_TILE_ROWS = 32
-
     @staticmethod
     def _pick_matmul_out_subblock_w(per_core_n: int, out_subblock_h: int = 1) -> int:
-        """Prefer wider subblocks when legal (Tracy often suggests 1x3 / 1x4 on decode FFN)."""
         for w in (4, 3, 2, 1):
             if per_core_n % w == 0 and w * out_subblock_h <= 4:
                 return w
         return 1
 
-    def _decode_matmul_program_config(self, in_dim: int, out_dim: int):
-        """Matmul PCs tuned for single-token decode (effective ``M=32`` rows, wide FFN on 2D grid)."""
+    def _decode_matmul_pc(self, in_dim: int, out_dim: int) -> ttnn.ProgramConfig:
+        """Decode matmul PC (effective ``M=32`` tile rows); kept separate from prefill ``_matmul_pc`` for KV PCC."""
         key = ("decode", in_dim, out_dim)
-        cached = self._projection_pc_cache.get(key)
+        cached = self._matmul_pc_cache.get(key)
         if cached is not None:
             return cached
 
         cg = self.device.compute_with_storage_grid_size()
-        k_tiles = max(1, in_dim // 32)
+        k_tiles = max(1, in_dim // TILE)
         in0_block_w = min(4, k_tiles)
-        n_tiles = (out_dim + 31) // 32
-        m_tiles = max(1, self._DECODE_MATMUL_TILE_ROWS // 32)
+        n_tiles = (out_dim + TILE - 1) // TILE
+        m_tiles = max(1, self._tile_padded_batch_rows // TILE)
 
         if out_dim >= 2048 and cg.y > 1:
             grid_y = min(cg.y, max(1, n_tiles // max(1, cg.x)))
@@ -463,7 +455,7 @@ class TTSeamlessM4Tv2Decoder:
                 fused_activation=None,
             )
         else:
-            per_core_n = max(1, (out_dim + cg.x * 32 - 1) // (cg.x * 32))
+            per_core_n = max(1, (out_dim + cg.x * TILE - 1) // (cg.x * TILE))
             per_core_m = m_tiles
             out_subblock_w = self._pick_matmul_out_subblock_w(per_core_n)
             result = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -477,74 +469,35 @@ class TTSeamlessM4Tv2Decoder:
                 mcast_in0=True,
             )
 
-        self._projection_pc_cache[key] = result
+        self._matmul_pc_cache[key] = result
         return result
 
-    def _prefill_projection_program_config(self, token_rows: int, in_dim: int, out_dim: int):
-        key = (token_rows, in_dim, out_dim)
-        cached = self._projection_pc_cache.get(key)
-        if cached is not None:
-            return cached
-
-        cg = self.device.compute_with_storage_grid_size()
-        k_tiles = max(1, in_dim // 32)
-        in0_block_w = min(4, k_tiles)
-        if token_rows <= self._PROJECTION_1D_SEQ_THRESHOLD:
-            per_core_n = (out_dim + cg.x * 32 - 1) // (cg.x * 32)
-            per_core_m = (token_rows + 31) // 32
-            out_subblock_w = min(4, max(1, per_core_n))
-            while out_subblock_w > 1 and per_core_n % out_subblock_w != 0:
-                out_subblock_w -= 1
-            result = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(cg.x, 1),
-                in0_block_w=in0_block_w,
-                out_subblock_h=1,
-                out_subblock_w=out_subblock_w,
-                per_core_M=max(1, per_core_m),
-                per_core_N=max(1, per_core_n),
-                fuse_batch=True,
-                mcast_in0=True,
-            )
-        else:
-            grid_y = min(cg.y, (token_rows + 31) // 32)
-            per_core_m = (token_rows + grid_y * 32 - 1) // (grid_y * 32)
-            per_core_n = (out_dim + cg.x * 32 - 1) // (cg.x * 32)
-            out_subblock_w = min(4, max(1, per_core_n))
-            while out_subblock_w > 1 and per_core_n % out_subblock_w != 0:
-                out_subblock_w -= 1
-            result = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(cg.x, grid_y),
-                in0_block_w=in0_block_w,
-                out_subblock_h=1,
-                out_subblock_w=out_subblock_w,
-                per_core_M=max(1, per_core_m),
-                per_core_N=max(1, per_core_n),
-                transpose_mcast=False,
-                fused_activation=None,
-            )
-        self._projection_pc_cache[key] = result
-        return result
-
-    def _linear_m_rows(self, x: ttnn.Tensor, *, is_decode: bool) -> int:
+    @staticmethod
+    def _linear_token_rows(x: ttnn.Tensor) -> int:
         if len(x.shape) == 3:
-            rows = int(x.shape[0]) * int(x.shape[1])
-        elif len(x.shape) == 2:
-            rows = int(x.shape[0])
-        else:
-            rows = int(x.shape[-2])
+            return int(x.shape[0]) * int(x.shape[1])
+        if len(x.shape) == 2:
+            return int(x.shape[0])
+        return int(x.shape[-2])
+
+    def _matmul_token_rows(self, x: ttnn.Tensor, *, is_decode: bool) -> int:
+        rows = self._linear_token_rows(x)
         if is_decode and rows <= self.max_batch_size:
             return self._tile_padded_batch_rows
         return rows
 
-    def _dram_matmul_program_config_cached(
-        self, m: int, k: int, n: int
-    ) -> ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig:
-        key = (m, k, n)
-        cached = self._dram_matmul_pc_cache.get(key)
+    def _matmul_pc(self, token_rows: int, in_dim: int, out_dim: int) -> ttnn.ProgramConfig:
+        key = (token_rows, in_dim, out_dim)
+        cached = self._matmul_pc_cache.get(key)
         if cached is not None:
             return cached
-        cached = dram_matmul_program_config(self.device, m, k, n)
-        self._dram_matmul_pc_cache[key] = cached
+        cached = matmul_program_config(
+            self.device,
+            token_rows=token_rows,
+            in_dim=in_dim,
+            out_dim=out_dim,
+        )
+        self._matmul_pc_cache[key] = cached
         return cached
 
     def _linear(
@@ -554,54 +507,23 @@ class TTSeamlessM4Tv2Decoder:
         bias: ttnn.Tensor,
         *,
         compute_cfg: Optional[ttnn.DeviceComputeKernelConfig] = None,
-        memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
-        program_config=None,
+        memory_config: ttnn.MemoryConfig = ttnn.L1_MEMORY_CONFIG,
+        program_config: Optional[ttnn.ProgramConfig] = None,
         activation: Optional[str] = None,
         is_decode: bool = False,
     ) -> ttnn.Tensor:
         ck = compute_cfg if compute_cfg is not None else self._linear_ln_compute_cfg
-        if is_dram_width_sharded(weight):
-            k = int(weight.shape[-2])
-            n = int(weight.shape[-1])
-            m = self._linear_m_rows(x, is_decode=is_decode)
-            dram_pc = self._dram_matmul_program_config_cached(m, k, n)
-            x_in = (
-                x if ttnn.is_sharded(x) else ttnn.to_memory_config(x, dram_linear_input_mem_config(self.device, m, k))
-            )
-            out = ttnn.linear(
-                x_in,
-                weight,
-                bias=None,
-                program_config=dram_pc,
-                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-                compute_kernel_config=ck,
-            )
-            if x_in is not x:
-                ttnn.deallocate(x_in)
-            out_mem = memory_config
-            if memory_config == ttnn.L1_MEMORY_CONFIG:
-                out = ttnn.sharded_to_interleaved(out, ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
-                out_mem = ttnn.L1_MEMORY_CONFIG
-            if bias is not None:
-                out = ttnn.add(out, bias, memory_config=out_mem)
-            if activation == "relu":
-                out = ttnn.relu(out, memory_config=out_mem)
-            return out
-        if program_config is not None:
-            return ttnn.linear(
-                x,
-                weight,
-                bias=bias,
-                program_config=program_config,
-                memory_config=memory_config,
-                compute_kernel_config=ck,
-                activation=activation,
+        if program_config is None:
+            program_config = self._matmul_pc(
+                self._matmul_token_rows(x, is_decode=is_decode),
+                int(weight.shape[-2]),
+                int(weight.shape[-1]),
             )
         return ttnn.linear(
             x,
             weight,
             bias=bias,
-            core_grid=core_grid(self.device),
+            program_config=program_config,
             memory_config=memory_config,
             compute_kernel_config=ck,
             activation=activation,
@@ -895,7 +817,7 @@ class TTSeamlessM4Tv2Decoder:
         kv_src = hidden_states if encoder_hidden_states is None else encoder_hidden_states
 
         if encoder_hidden_states is None and hasattr(attn_module, "qkv"):
-            pc_qkv = self._prefill_projection_program_config(batch * seq_q, hidden_size, 3 * hidden_size)
+            pc_qkv = self._matmul_pc(batch * seq_q, hidden_size, 3 * hidden_size)
             qkv = self._linear(
                 q_src,
                 attn_module.qkv.weight,
@@ -917,11 +839,9 @@ class TTSeamlessM4Tv2Decoder:
             ttnn.deallocate(q)
             kh, vh = k, v
         else:
-            pc_q = self._prefill_projection_program_config(batch * seq_q, hidden_size, hidden_size)
+            pc_q = self._matmul_pc(batch * seq_q, hidden_size, hidden_size)
             pc_kv_single = (
-                pc_q
-                if seq_k == seq_q and kv_src is q_src
-                else self._prefill_projection_program_config(batch * seq_k, hidden_size, hidden_size)
+                pc_q if seq_k == seq_q and kv_src is q_src else self._matmul_pc(batch * seq_k, hidden_size, hidden_size)
             )
 
             q = self._linear(
@@ -933,7 +853,7 @@ class TTSeamlessM4Tv2Decoder:
             )
             kv_packed = None
             if hasattr(attn_module, "kv"):
-                pc_kv2 = self._prefill_projection_program_config(batch * seq_k, hidden_size, 2 * hidden_size)
+                pc_kv2 = self._matmul_pc(batch * seq_k, hidden_size, 2 * hidden_size)
                 kv_packed = self._linear(
                     kv_src,
                     attn_module.kv.weight,
@@ -1032,7 +952,7 @@ class TTSeamlessM4Tv2Decoder:
             attn_module.out_proj.weight,
             attn_module.out_proj.bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            program_config=self._prefill_projection_program_config(batch * seq_q, hidden_size, hidden_size),
+            program_config=self._matmul_pc(batch * seq_q, hidden_size, hidden_size),
         )
         ttnn.deallocate(merged)
         return proj
@@ -1080,11 +1000,11 @@ class TTSeamlessM4Tv2Decoder:
         ffn_fc2_cfg = self._linear_ln_compute_cfg if use_kv_path else self._ffn_fc2_compute_cfg
 
         if is_decode:
-            pc_ffn_fc1 = self._decode_matmul_program_config(hidden_size, ffn_intermediate)
-            pc_ffn_fc2 = self._decode_matmul_program_config(ffn_intermediate, hidden_size)
+            pc_ffn_fc1 = self._decode_matmul_pc(hidden_size, ffn_intermediate)
+            pc_ffn_fc2 = self._decode_matmul_pc(ffn_intermediate, hidden_size)
         else:
-            pc_ffn_fc1 = self._prefill_projection_program_config(token_m, hidden_size, ffn_intermediate)
-            pc_ffn_fc2 = self._prefill_projection_program_config(token_m, ffn_intermediate, hidden_size)
+            pc_ffn_fc1 = self._matmul_pc(token_m, hidden_size, ffn_intermediate)
+            pc_ffn_fc2 = self._matmul_pc(token_m, ffn_intermediate, hidden_size)
 
         sdpa_decode_bundle = None
         decode_attn_pcs = None
@@ -1094,15 +1014,13 @@ class TTSeamlessM4Tv2Decoder:
             sdpa_decode_bundle = self._decode_sdpa_configs(cache_seq_len)
             attn_scale = 1.0 / math.sqrt(head_dim)
             decode_attn_pcs = {
-                "qkv": self._decode_matmul_program_config(hidden_size, 3 * hidden_size),
-                "out": self._decode_matmul_program_config(hidden_size, hidden_size),
-                "q_cross": self._decode_matmul_program_config(hidden_size, hidden_size),
-                "out_cross": self._decode_matmul_program_config(hidden_size, hidden_size),
+                "qkv": self._decode_matmul_pc(hidden_size, 3 * hidden_size),
+                "out": self._decode_matmul_pc(hidden_size, hidden_size),
+                "q_cross": self._decode_matmul_pc(hidden_size, hidden_size),
+                "out_cross": self._decode_matmul_pc(hidden_size, hidden_size),
             }
             if not cross_attn_cache_valid:
-                decode_attn_pcs["kv_enc"] = self._prefill_projection_program_config(
-                    batch * enc_seq, hidden_size, 2 * hidden_size
-                )
+                decode_attn_pcs["kv_enc"] = self._matmul_pc(batch * enc_seq, hidden_size, 2 * hidden_size)
 
         for i in range(num_layers):
             layer = parameters.layers[i]
@@ -1192,7 +1110,6 @@ class TTSeamlessM4Tv2Decoder:
                 layer.ffn.fc1.weight,
                 layer.ffn.fc1.bias,
                 compute_cfg=self._ffn_fc1_compute_cfg,
-                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 program_config=pc_ffn_fc1,
                 activation="relu",
                 is_decode=is_decode,
