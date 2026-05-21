@@ -2,12 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import json
 import os
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import safetensors.torch
 import torch
 import torch.nn as nn
 
@@ -25,6 +27,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     is_ring_fabric,
     sub_state_dict,
 )
+from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import get_model_config, get_test_weight_config, run_module_forward
 
@@ -100,6 +103,11 @@ def create_combined_state_dict(module_path: str, model_path: Path, state_dict: d
             out_state_dict[k_] = v
 
     return out_state_dict
+
+
+def _write_safetensors_index(model_dir: Path, weight_map: dict[str, str]) -> None:
+    index = {"metadata": {}, "weight_map": weight_map}
+    (model_dir / "model.safetensors.index.json").write_text(json.dumps(index))
 
 
 _max_seq_len_env = os.getenv("DEEPSEEK_MAX_SEQ_LEN_OVERRIDE")
@@ -485,8 +493,9 @@ def test_convert_weights_quad_ring_rejects_implicit_stacked_repack(
         )
 
 
+@pytest.mark.parametrize("state_dict_kind", ["plain_dict", "lazy_mlp_view"])
 def test_convert_weights_quad_ring_uses_prepared_checkpoint_tensors(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, state_dict_kind: str
 ) -> None:
     class _FakeMeshDevice:
         shape = (16, 8)
@@ -496,10 +505,29 @@ def test_convert_weights_quad_ring_uses_prepared_checkpoint_tensors(
 
     prepared_w0_w1 = torch.arange(1 * 1 * 2 * 3, dtype=torch.bfloat16).reshape(1, 1, 2, 3)
     prepared_w2 = torch.arange(1 * 1 * 2 * 5, dtype=torch.bfloat16).reshape(1, 1, 2, 5)
-    state_dict = {
-        "experts_quad_ring.w0_w1.weight": prepared_w0_w1,
-        "experts_quad_ring.w2.weight": prepared_w2,
-    }
+    if state_dict_kind == "plain_dict":
+        state_dict = {
+            "experts_quad_ring.w0_w1.weight": prepared_w0_w1,
+            "experts_quad_ring.w2.weight": prepared_w2,
+        }
+    else:
+        model_dir = tmp_path / "hf_model"
+        model_dir.mkdir()
+        shard = model_dir / "model-00001-of-00001.safetensors"
+        full_w0_w1_key = "model.layers.3.mlp.experts_quad_ring.w0_w1.weight"
+        full_w2_key = "model.layers.3.mlp.experts_quad_ring.w2.weight"
+        safetensors.torch.save_file(
+            {full_w0_w1_key: prepared_w0_w1, full_w2_key: prepared_w2},
+            str(shard),
+        )
+        _write_safetensors_index(model_dir, {full_w0_w1_key: shard.name, full_w2_key: shard.name})
+        root_state_dict = LazyStateDict(model_dir)
+        state_dict = sub_state_dict(root_state_dict, "model.layers.3.mlp.")
+        assert "experts_quad_ring.w0_w1.weight" in state_dict
+        assert "experts_quad_ring.w2.weight" in state_dict
+        quad_ring_subview = sub_state_dict(state_dict, "experts_quad_ring.")
+        assert "w0_w1.weight" not in quad_ring_subview
+        assert "w2.weight" not in quad_ring_subview
     captured = {}
     saved_tensors = []
 

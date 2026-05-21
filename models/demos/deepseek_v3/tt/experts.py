@@ -172,12 +172,24 @@ class Experts(AbstractModule):
             mesh_device, hidden_size, matmul_N
         )
 
-        view_with_prefix = getattr(state_dict, "view_with_prefix", None)
-        prepared_state_dict = view_with_prefix("experts_quad_ring.") if callable(view_with_prefix) else state_dict
-        prepared_w0_w1_key = "w0_w1.weight" if callable(view_with_prefix) else "experts_quad_ring.w0_w1.weight"
-        prepared_w2_key = "w2.weight" if callable(view_with_prefix) else "experts_quad_ring.w2.weight"
-        has_prepared_w0_w1 = prepared_w0_w1_key in prepared_state_dict
-        has_prepared_w2 = prepared_w2_key in prepared_state_dict
+        prepared_state_dict = state_dict
+        prepared_key_pairs = (
+            ("experts_quad_ring.w0_w1.weight", "experts_quad_ring.w2.weight"),
+            ("w0_w1.weight", "w2.weight"),
+        )
+        prepared_w0_w1_key = prepared_key_pairs[0][0]
+        prepared_w2_key = prepared_key_pairs[0][1]
+        has_prepared_w0_w1 = False
+        has_prepared_w2 = False
+        for candidate_w0_w1_key, candidate_w2_key in prepared_key_pairs:
+            candidate_has_w0_w1 = candidate_w0_w1_key in prepared_state_dict
+            candidate_has_w2 = candidate_w2_key in prepared_state_dict
+            if candidate_has_w0_w1 or candidate_has_w2:
+                prepared_w0_w1_key = candidate_w0_w1_key
+                prepared_w2_key = candidate_w2_key
+                has_prepared_w0_w1 = candidate_has_w0_w1
+                has_prepared_w2 = candidate_has_w2
+                break
 
         if has_prepared_w0_w1 or has_prepared_w2:
             if not (has_prepared_w0_w1 and has_prepared_w2):
