@@ -198,5 +198,5 @@ class TtSwinAttention:
 
         # unpad
         if pad_b > 0 or pad_r > 0:
-            output = ttnn.slice(output, [0, 0, 0, 0], [B, H, W, C], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            output = ttnn.slice(output, [0, 0, 0, 0], [B, H, W, C], memory_config=ttnn.L1_MEMORY_CONFIG)
         return output
