@@ -99,14 +99,14 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
 
     const bool input_is_dram_sharded = input_is_sharded && src0_buffer->buffer_type() == BufferType::DRAM;
 
-    // Non-backed reader: unbacked double-buffer CB for either
-    //  - uneven L1 sharding (size mismatch for backed CB), or
-    //  - DRAM sharding (DRAM buffers cannot back CBs).
-    bool use_non_backed_sharded_reader = input_is_sharded && (has_uneven_sharding || input_is_dram_sharded);
+    // Block reader: unbacked double-buffer CB, reads from L1 shard block-by-block.
+    // Required for uneven sharding where CB backing has a size mismatch.
+    // Even sharding uses zero-copy backed CB (fast production path).
+    bool use_block_reader = input_is_sharded && (has_uneven_sharding || input_is_dram_sharded);
 
     // Input CB
     uint32_t input_cb_num_tiles;
-    if (input_is_sharded && !use_non_backed_sharded_reader) {
+    if (input_is_sharded && !use_block_reader) {
         // Even sharding with pack_untilize: CB is backed by the sharded buffer (zero-copy)
         input_cb_num_tiles = num_tiles_per_input_block * num_input_blocks_per_full_core;
     } else {
@@ -114,7 +114,7 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
         input_cb_num_tiles =
             (num_input_blocks_per_full_core == 1) ? num_tiles_per_input_block : num_tiles_per_input_block * 2;
     }
-    Buffer* cb_backing_buffer = (input_is_sharded && !use_non_backed_sharded_reader) ? src0_buffer : nullptr;
+    Buffer* cb_backing_buffer = (input_is_sharded && !use_block_reader) ? src0_buffer : nullptr;
     auto [src0_cb_index, cb_src0] = create_cb(
         tt::CBIndex::c_0,
         program,
@@ -156,7 +156,7 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
             "reader_unary_dram_sharded_blocks.cpp",
             compute_core_range,
             ReaderDataMovementConfig(reader_compile_time_args));
-    } else if (use_non_backed_sharded_reader) {
+    } else if (use_block_reader) {
         // Block reader: copies from L1 shard into double-buffered CB one block at a time
         std::vector<uint32_t> reader_compile_time_args = {
             (uint32_t)src0_cb_index,
@@ -324,7 +324,7 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
                 i,
                 num_input_blocks_to_process,
             };
-        } else if (use_non_backed_sharded_reader) {
+        } else if (use_block_reader) {
             reader_run_time_args = {
                 src0_buffer->address(),
                 num_input_blocks_to_process,
@@ -426,7 +426,7 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
          cb_src0,
          cb_output,
          cores_with_run_time_args,
-         use_non_backed_sharded_reader}};
+         use_block_reader}};
 }
 
 void UntilizeMultiCoreProgramFactory::override_runtime_arguments(
@@ -444,10 +444,10 @@ void UntilizeMultiCoreProgramFactory::override_runtime_arguments(
     auto* dst_buffer = tensor_return_value.buffer();
 
     bool input_is_sharded = tensor_args.input.is_sharded();
-    bool use_non_backed_sharded_reader = cached_program.shared_variables.use_non_backed_sharded_reader;
+    bool block_reader = cached_program.shared_variables.has_uneven_sharding;
 
     // Reader
-    if (input_is_sharded && !use_non_backed_sharded_reader) {
+    if (input_is_sharded && !block_reader) {
         // Even sharding with pack_untilize: CB is backed by the sharded buffer
         UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
     } else {
