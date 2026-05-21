@@ -18,7 +18,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 
-#include "topology_solver_sat_solver.hpp"
+#include <tt-metalium/experimental/fabric/topology_solver_sat_solver.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 
 namespace tt::tt_fabric::detail {
