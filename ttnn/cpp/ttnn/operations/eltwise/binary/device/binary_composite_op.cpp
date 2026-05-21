@@ -546,19 +546,21 @@ Tensor floor_div(const Tensor& input_a, const Tensor& input_b, const std::option
 // leading dims: a:[..., N], b:[..., M] -> [..., N, M], equivalent to
 // a.unsqueeze(-1) * b.unsqueeze(-2).
 //
-// Sharded inputs are routed through interleaved DRAM before the unsqueeze:
-// reshape's shard-spec recomputation does not handle the rank change for
-// most shard strategies (only height-sharded 2D works natively), so the
-// safe contract is "sharded inputs accepted but materialized as
-// interleaved internally". Output sharding remains caller-controlled via
-// the output_mem_config kwarg.
+// Height-sharded inputs flow through unchanged: the shard is along the
+// preserved dim, so unsqueeze's reshape and the downstream broadcast
+// multiply both accept the layout. Width- and block-sharded inputs touch
+// the width dim, so we materialize those as interleaved DRAM first.
+// Output sharding remains caller-controlled via output_mem_config.
 Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    auto to_interleaved = [](const Tensor& t) {
-        return t.is_sharded() ? ttnn::sharded_to_interleaved(t, ttnn::DRAM_MEMORY_CONFIG) : t;
+    auto deshard_unless_height = [](const Tensor& t) {
+        const auto layout = t.memory_config().memory_layout();
+        const bool keep_sharded =
+            layout == TensorMemoryLayout::INTERLEAVED || layout == TensorMemoryLayout::HEIGHT_SHARDED;
+        return keep_sharded ? t : ttnn::sharded_to_interleaved(t, ttnn::DRAM_MEMORY_CONFIG);
     };
     return ttnn::multiply(
-        ttnn::unsqueeze(to_interleaved(input_a), -1),
-        ttnn::unsqueeze(to_interleaved(input_b), -2),
+        ttnn::unsqueeze(deshard_unless_height(input_a), -1),
+        ttnn::unsqueeze(deshard_unless_height(input_b), -2),
         std::nullopt,
         output_mem_config);
 }
