@@ -430,20 +430,17 @@ class TTNNGeneratorNSF:
         return out_tt
 
     def _resblock1_device(self, x_cf, block_idx, dilations, seq_len):
-        """ResBlock1 inner loop, executed entirely on device.
+        """Single ResBlock1, device-resident (one `from_torch` in, one
+        `to_torch` out).
 
-        Performs three dilation iterations of
+        Thin wrapper around `_resblock_core_device`: uploads the input,
+        runs the three dilation iterations of
             leaky_relu → conv1 → leaky_relu → conv2 → add(residual)
-        keeping every intermediate as a device tensor. Only two host↔device
-        transfers occur per call: one `from_torch` at entry, one `to_torch`
-        at exit. Each iteration explicitly deallocates its intermediates so
-        device memory doesn't grow across the 3-iter loop.
-
-        Why this is the hot path: the generator spends ~87% of TTNN time
-        here (12 ResBlocks × 6 conv1d each). The pre-optimization path moved
-        every conv1d result host→device→host, paying a host roundtrip per
-        conv — ~12 per block. Device residency collapses that to a single
-        entry + exit transfer, which is the bulk of the warm RTF win.
+        on device, then downloads. Retained as the per-block reference path
+        and exercised directly by `tests/test_production_shapes.py`. The
+        generator's `forward` no longer calls this per ResBlock — it uses
+        `_resblock_group_device`, which shares one upload/download across all
+        three ResBlocks of a stage (Phase 3A.1).
 
         Two layout constraints must be honored on every step:
 
@@ -460,9 +457,6 @@ class TTNNGeneratorNSF:
         See README "How the optimization works" for the why; see
         `tests/test_production_shapes.py` for the regression guard.
         """
-        block = self._resblocks[block_idx]
-        ch = block["channels"]
-
         x_nhwc = x_cf.permute(0, 2, 1).unsqueeze(1)
         x_dev = ttnn.from_torch(
             x_nhwc.float(),
@@ -471,7 +465,32 @@ class TTNNGeneratorNSF:
             device=self._device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        out_dev = self._resblock_core_device(x_dev, block_idx, dilations, seq_len)
+        ttnn.deallocate(x_dev)
+        out = ttnn.to_torch(out_dev).float().squeeze(1).permute(0, 2, 1)
+        ttnn.deallocate(out_dev)
+        return out
 
+    def _resblock_core_device(self, x_shared, block_idx, dilations, seq_len):
+        """Device-resident ResBlock1 inner loop on an already-uploaded tensor.
+
+        Runs the three dilation iterations of
+            leaky_relu → conv1 → leaky_relu → conv2 → add(residual)
+        entirely on device and returns a NEW device tensor. `x_shared` (the
+        block input, NHWC/TILE) is treated as read-only and is NOT deallocated
+        here: _resblock_group_device feeds the same `x_shared` to all three
+        kernels of a stage, so its lifetime is owned by the caller.
+
+        Layout discipline is the same as documented on `_resblock1_device`:
+        leaky_relu needs TILE; conv1d rejects TILE at certain configs, so a
+        `to_layout(ROW_MAJOR)` sits between each leaky_relu and the conv1d
+        that follows it.
+        """
+        block = self._resblocks[block_idx]
+        ch = block["channels"]
+
+        x_dev = x_shared
+        owns_x = False  # iteration 0's x_dev is the caller-owned x_shared
         for idx in range(3):
             d = dilations[idx]
             c1 = block["convs1"][idx]
@@ -498,11 +517,55 @@ class TTNNGeneratorNSF:
 
             new_x = ttnn.add(x_dev, c2_out)
             ttnn.deallocate(c2_out)
-            ttnn.deallocate(x_dev)
+            if owns_x:
+                ttnn.deallocate(x_dev)  # our own intermediate, never x_shared
+            owns_x = True
             x_dev = new_x
 
-        out = ttnn.to_torch(x_dev).float().squeeze(1).permute(0, 2, 1)
-        ttnn.deallocate(x_dev)
+        return x_dev
+
+    def _resblock_group_device(self, x_cf, stage, seq_len):
+        """All NUM_KERNELS ResBlocks of an upsample stage, device-resident.
+
+        Phase 3A.1 residency: the stage activation is uploaded ONCE, all three
+        ResBlocks run on device reading that shared input, their outputs are
+        summed and averaged (×1/NUM_KERNELS) on device, and the result is
+        downloaded ONCE. This replaces the previous per-ResBlock from_torch/
+        to_torch (3 uploads + 3 downloads per stage → 1 + 1) and the host-side
+        sum/average — with no change to the ResBlock math itself.
+
+        Transient device tensors (per-kernel outputs, the running accumulator,
+        the shared input) are deallocated as soon as they are consumed, so
+        device residency does not grow across the group or across chunks.
+        """
+        x_nhwc = x_cf.permute(0, 2, 1).unsqueeze(1)
+        x_shared = ttnn.from_torch(
+            x_nhwc.float(),
+            dtype=DEFAULT_DTYPE,
+            layout=ttnn.TILE_LAYOUT,
+            device=self._device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        acc = None
+        for j in range(NUM_KERNELS):
+            rb_idx = stage * NUM_KERNELS + j
+            rb_out = self._resblock_core_device(
+                x_shared, rb_idx, RESBLOCK_DILATIONS[j], seq_len)
+            if acc is None:
+                acc = rb_out
+            else:
+                new_acc = ttnn.add(acc, rb_out)
+                ttnn.deallocate(acc)
+                ttnn.deallocate(rb_out)
+                acc = new_acc
+
+        ttnn.deallocate(x_shared)
+
+        avg = ttnn.multiply(acc, 1.0 / NUM_KERNELS)
+        ttnn.deallocate(acc)
+        out = ttnn.to_torch(avg).float().squeeze(1).permute(0, 2, 1)
+        ttnn.deallocate(avg)
         return out
 
     def forward(self, z, har_source, g):
@@ -556,13 +619,9 @@ class TTNNGeneratorNSF:
                 x_source = _linear_channel_first(har_source, nc["w"], nc["b"])
             x_cf = x_cf + x_source[:, :, :seq_len]
 
-            # ResBlocks (persistent conv weights, device-resident inner loop)
-            xs = None
-            for j in range(NUM_KERNELS):
-                rb_idx = i * NUM_KERNELS + j
-                rb_out = self._resblock1_device(x_cf, rb_idx, RESBLOCK_DILATIONS[j], seq_len)
-                xs = rb_out if xs is None else xs + rb_out
-            x_cf = xs / NUM_KERNELS
+            # ResBlocks (Phase 3A.1: device-resident group — one upload + one
+            # download per stage, Σ and 1/NUM_KERNELS average on device)
+            x_cf = self._resblock_group_device(x_cf, i, seq_len)
 
         # conv_post + tanh (persistent host weight)
         x_cf = F.leaky_relu(x_cf)
