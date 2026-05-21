@@ -70,6 +70,32 @@ _EXPECTED_M_TILES = {
     (192, 768): 800,    # Stage 0: 160 * 5
 }
 
+# Per-(K, N) tuned program_config for fc2. Same shape logic as fc1.
+_TUNED_FC2_PROGRAM_CONFIGS = {
+    # Stage 0: input (1, 160, 160, 768) -> M_tiles=800, K=24, N=6.
+    # Standalone sweep: default = 582us; tuned 1D pcm=13 pcn=6 ibw=3 sub=1x6 = 381us (-35%).
+    # 2 Stage-0 calls/iter -> ~0.4 ms iter savings.
+    (768, 192): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=3,
+        out_subblock_h=1,
+        out_subblock_w=6,
+        per_core_M=13,
+        per_core_N=6,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=False,
+        gather_in0=False,
+        hop_cores=ttnn.CoreRangeSet([]),
+        num_global_cb_receivers=0,
+        untilize_out=False,
+    ),
+}
+
+_EXPECTED_M_TILES_FC2 = {
+    (768, 192): 800,    # Stage 0
+}
+
 
 class TtSwinMLP:
     """Two-layer MLP with GELU activation."""
@@ -85,6 +111,12 @@ class TtSwinMLP:
         N_w = int(w.shape[-1])
         self._fc1_pcfg = _TUNED_FC1_PROGRAM_CONFIGS.get((K_w, N_w))
         self._fc1_expected_Z_x_Y_tiles = _EXPECTED_M_TILES.get((K_w, N_w))
+        # Pre-resolve fc2 program_config off the static (K, N) shape.
+        w2 = parameters["fc2"]["weight"]
+        K2_w = int(w2.shape[-2])
+        N2_w = int(w2.shape[-1])
+        self._fc2_pcfg = _TUNED_FC2_PROGRAM_CONFIGS.get((K2_w, N2_w))
+        self._fc2_expected_Z_x_Y_tiles = _EXPECTED_M_TILES_FC2.get((K2_w, N2_w))
 
     def __call__(self, input_tensor):
         # Decide whether the runtime shape matches the tuned config's M_tiles.
@@ -129,7 +161,29 @@ class TtSwinMLP:
                 dtype=ttnn.bfloat8_b,
             )
 
-        # fc2
+        # fc2 — same shape-guarded tuned path as fc1.
+        use_tuned_fc2 = False
+        if self._fc2_pcfg is not None:
+            shp2 = output.shape
+            if len(shp2) == 4:
+                Z2 = int(shp2[1])
+                Y2 = int(shp2[2])
+                Y2_tiles = (Y2 + 31) // 32
+                use_tuned_fc2 = (Z2 * Y2_tiles) == self._fc2_expected_Z_x_Y_tiles
+        if use_tuned_fc2:
+            return ttnn.linear(
+                output,
+                self.parameters["fc2"]["weight"],
+                bias=self.parameters["fc2"]["bias"],
+                compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                    math_fidelity=ttnn.MathFidelity.LoFi,
+                    fp32_dest_acc_en=False,
+                    packer_l1_acc=True,
+                ),
+                program_config=self._fc2_pcfg,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                dtype=ttnn.bfloat8_b,
+            )
         return ttnn.linear(
             output,
             self.parameters["fc2"]["weight"],
