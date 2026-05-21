@@ -25,6 +25,16 @@ struct PagedUpdateCacheParams {
     // as num_kv_heads * block_size * head_dim is preserved (checked in
     // validate_on_program_cache_miss). Used by vLLM's hybrid kv-cache-groups path.
     const std::optional<uint32_t> block_size_override;
+    // Optional per-call num_kv_heads, overriding cache.padded_shape[1]. Companion to
+    // block_size_override for HMA cross-group sharing where sliding and full layers
+    // have asymmetric kv-head counts (e.g. Gemma4-26B-A4B sliding kv=8 / full kv=2).
+    // The decode-time input is height-sharded with the kv-heads dim padded to
+    // TILE_HEIGHT, so the kernel can't infer the logical kv-head count from the input
+    // tensor — the caller must pass it explicitly. The per-block element-count
+    // invariant input_num_heads * effective_block_size * input_head_dim ==
+    // cache_num_heads * cache_block_size * cache_head_dim is enforced in
+    // validate_on_program_cache_miss.
+    const std::optional<uint32_t> num_kv_heads_override;
 };
 
 struct PagedUpdateCacheInputs {

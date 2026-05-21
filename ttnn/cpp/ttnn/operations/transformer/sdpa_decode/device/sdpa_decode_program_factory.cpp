@@ -83,7 +83,13 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     uint32_t vDH = use_mla ? head_dim_v : (has_block_size_override ? q_shape[3] : v_shape[3]);
     uint32_t Bkv = k_shape[0];
     uint32_t Bmask = attn_mask.has_value() ? attn_mask->padded_shape()[0] : Bkv;
-    uint32_t num_kv_heads = k_shape[1];
+    // num_kv_heads from the cache view by default, or from the explicit override
+    // when an HMA cross-group caller is reading a buffer allocated for a different
+    // layer's spec (e.g. Gemma4-26B-A4B sliding kv=8 cache read by a full kv=2
+    // layer). The override drives the kernel's per-block stride and head-parallel
+    // reduction grid the same way the legacy cache shape did.
+    uint32_t num_kv_heads = operation_attributes.num_kv_heads_override.value_or(k_shape[1]);
+    TT_FATAL(num_kv_heads > 0, "num_kv_heads must be > 0");
     uint32_t num_q_heads = q_shape_unpadded[2];
     uint32_t page_block_size_t = 0;
     uint32_t q_heads_parallel_factor = 1;
