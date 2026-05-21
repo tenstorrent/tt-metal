@@ -125,20 +125,23 @@ inline uint32_t kv_global_tile_for_local(uint32_t ring_id, uint32_t local_tile_i
  * Find the last ring iteration that performs actual KV computation.
  * Creates a copy of the sequencer and iterates it with no synchronization.
  *
- * @param seq                       Sequencer state (copied — original is not modified)
- * @param local_padded_Nt           Per-device padded sequence length in tiles
- * @param global_n_tile_id          Logical (unpadded) sequence length in tiles (logical_n / TILE_HEIGHT)
- * @param L                         Joint sequence length in elements (0 if no joint attention)
- * @param is_causal                 Whether causal masking is enabled
- * @param is_balanced               Whether balanced (zigzag) causal distribution is enabled
- * @param chunked_enabled   Whether balanced chunked-prefill layout is active. When
- *                                  true, every iter holds one slab of real data per chunk
- *                                  → every iter does work.
+ * @param seq                 Sequencer state (copied — original is not modified)
+ * @param local_padded_Nt     Per-device padded sequence length in tiles
+ * @param last_n_tile_id      Last valid global K tile index (i.e., logical_nt - 1). The
+ *                            "does_work" predicate compares ring start to this with `<=`,
+ *                            so it represents an inclusive upper bound, not a count.
+ *                            Caller must ensure logical_nt > 0.
+ * @param L                   Joint sequence length in elements (0 if no joint attention)
+ * @param is_causal           Whether causal masking is enabled
+ * @param is_balanced         Whether balanced (zigzag) causal distribution is enabled
+ * @param chunked_enabled     Whether balanced chunked-prefill layout is active. When
+ *                            true, every iter holds one slab of real data per chunk
+ *                            → every iter does work.
  */
 inline uint32_t find_last_active_ring_iter(
     RingIdSequencer seq,
     uint32_t local_padded_Nt,
-    uint32_t global_n_tile_id,
+    uint32_t last_n_tile_id,
     uint32_t L,
     bool is_causal = false,
     bool is_balanced = false,
@@ -154,7 +157,7 @@ inline uint32_t find_last_active_ring_iter(
         uint32_t ring_id = seq.get_next_ring_id(no_sync);
         bool does_joint = (ring_id == seq.ring_size - 1);
         uint32_t kv_start = ring_id * local_padded_Nt;
-        bool does_work = ((kv_start <= global_n_tile_id) || (does_joint && L != 0)) &&
+        bool does_work = ((kv_start <= last_n_tile_id) || (does_joint && L != 0)) &&
                          !(is_causal && seq.ring_index < ring_id && !is_balanced);
         if (does_work) {
             last_active = t;

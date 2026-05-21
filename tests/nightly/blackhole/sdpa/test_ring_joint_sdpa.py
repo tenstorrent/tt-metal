@@ -1609,7 +1609,6 @@ def _generate_chunked_configs():
 CHUNKED_CONFIGS, CHUNKED_CONFIG_IDS = _generate_chunked_configs()
 
 
-@pytest.mark.skipif(os.environ.get("CI") == "true", reason="Long-running accuracy test - skip on CI")
 @pytest.mark.timeout(1200)
 @pytest.mark.parametrize("chunk_size", [CHUNKED_PREFILL_CHUNK_SIZE], ids=[f"chunk{CHUNKED_PREFILL_CHUNK_SIZE}"])
 @pytest.mark.parametrize(

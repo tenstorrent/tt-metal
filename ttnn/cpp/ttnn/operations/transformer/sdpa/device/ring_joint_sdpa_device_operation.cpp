@@ -117,6 +117,17 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(!(L != 0 && args.is_causal), "Causality is enabled only for ring attention");
 
     TT_FATAL(
+        args.logical_n > 0,
+        "Logical sequence length must be > 0; kernels derive last-valid-tile = logical_nt - 1 and would underflow.");
+
+    TT_FATAL(
+        N_local_q <= N_local_kv,
+        "Per-device Q seq length must be <= per-device K/V seq length. Equal: full-prefill path. Less: "
+        "chunked-prefill path. Greater is undefined. Got N_local_q={}, N_local_kv={}",
+        N_local_q,
+        N_local_kv);
+
+    TT_FATAL(
         !chunked_enabled || args.is_causal,
         "Chunked-prefill (N_local_q < N_local_kv) is mathematically causal; callers must pass is_causal=True. "
         "Got N_local_q={}, N_local_kv={}, is_causal={}",
