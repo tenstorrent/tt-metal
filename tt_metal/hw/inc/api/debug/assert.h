@@ -43,7 +43,7 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
         v->tripped = assert_type;
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
         // Flush 64B cache line to L1 so host sees all fields via NOC; fence ensures completion
-        flush_l2_cache_line(reinterpret_cast<uintptr_t>(v));
+        flush_l2_cache_range(reinterpret_cast<uintptr_t>(v), sizeof(debug_assert_msg_t));
 #endif
     }
 

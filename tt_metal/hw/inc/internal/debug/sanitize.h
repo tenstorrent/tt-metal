@@ -334,7 +334,7 @@ void __attribute__((noinline)) debug_sanitize_post_addr_and_hang(
         san->return_code = return_code;
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
         // Flush 64B cache line to L1 so host sees all fields via NOC; fence ensures completion
-        flush_l2_cache_line(reinterpret_cast<uintptr_t>(san));
+        flush_l2_cache_range(reinterpret_cast<uintptr_t>(san), sizeof(debug_sanitize_addr_msg_t));
 #endif
     }
 
