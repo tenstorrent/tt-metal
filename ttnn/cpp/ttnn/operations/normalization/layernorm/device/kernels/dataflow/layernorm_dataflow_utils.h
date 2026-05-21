@@ -168,12 +168,7 @@ inline void compute_single_stage_noc_addrs(
  */
 template <typename T, typename Block>
 inline void read_block_to_cb(
-    Noc& noc,
-    CircularBuffer& cb,
-    const T& addr,
-    const uint32_t tile_bytes,
-    const uint32_t offset,
-    const Block& block) {
+    Noc& noc, auto& cb, const T& addr, const uint32_t tile_bytes, const uint32_t offset, const Block& block) {
     // Need to reserve/push on intervals that nicely
     // divide the CB size. The CB and block size has been
     // configured to ensure this in the program setup
@@ -198,7 +193,7 @@ inline void read_block_to_cb(
 template <typename T, typename Block, uint32_t TILE_W, uint32_t TILE_H>
 inline void read_row_major_block_to_cb(
     Noc& noc,
-    CircularBuffer& cb_in_rm,
+    auto& cb_in_rm,
     const T& src_a,
     const uint32_t curr_tile_row,
     const uint32_t num_valid_rows,
@@ -229,7 +224,7 @@ inline void read_row_major_block_to_cb(
 template <typename T, typename Block, uint32_t TILE_W, uint32_t TILE_H>
 inline void write_row_major_block_from_cb(
     Noc& noc,
-    CircularBuffer& cb_out_rm,
+    auto& cb_out_rm,
     const T& dst_a,
     const uint32_t abs_row_base,
     const uint32_t num_valid_rows,
@@ -267,7 +262,7 @@ inline void write_row_major_block_from_cb(
 template <typename T, uint32_t TILE_W, uint32_t TILE_H>
 inline void push_row_major_blocks_to_cb(
     Noc& noc,
-    CircularBuffer& cb_in_rm,
+    auto& cb_in_rm,
     const T& src_a,
     const uint32_t Wt,
     const uint32_t block_size,

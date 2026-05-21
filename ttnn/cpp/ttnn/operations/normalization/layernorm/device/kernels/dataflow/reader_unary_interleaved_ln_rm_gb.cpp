@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
@@ -15,74 +16,55 @@
 namespace generic = norm::kernel_util::generic;
 
 void kernel_main() {
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t NCHt = get_arg_val<uint32_t>(1);
-    uint32_t Wt = get_arg_val<uint32_t>(2);
-    uint32_t tile_offset = get_arg_val<uint32_t>(3);
-
-    uint32_t gamma_addr = get_arg_val<uint32_t>(6);
-    uint32_t beta_addr = get_arg_val<uint32_t>(7);
-    uint32_t b_addr = get_arg_val<uint32_t>(8);
-
-    constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in"),
-                       cb_id_in1 = get_named_compile_time_arg_val("cb_inb");
-    constexpr uint32_t cb_id_gamma = get_named_compile_time_arg_val("cb_gamma");
-    constexpr uint32_t cb_id_beta = get_named_compile_time_arg_val("cb_beta");
+    auto NCHt = get_arg(args::NCHt);
+    auto Wt = get_arg(args::Wt);
+    auto tile_offset = get_arg(args::start_tile_row);
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
+    DataflowBuffer cb_in0(dfb::cb_in);
 #ifdef FUSE_PRE_ADD
-    CircularBuffer cb_in1(cb_id_in1);
+    DataflowBuffer cb_in1(dfb::cb_inb);
 #endif
 #ifdef FUSE_GAMMA
-    CircularBuffer cb_gamma(cb_id_gamma);
+    DataflowBuffer cb_gamma(dfb::cb_gamma);
 #endif
 #ifdef FUSE_BETA
-    CircularBuffer cb_beta(cb_id_beta);
+    DataflowBuffer cb_beta(dfb::cb_beta);
 #endif
 
-    // ublocks size defined in tiles
-    const uint32_t src0_tile_bytes = get_tile_size(cb_id_in0);
-    const DataFormat src0_data_format = get_dataformat(cb_id_in0);
+    const uint32_t src0_tile_bytes = get_tile_size(dfb::cb_in);
+    const DataFormat src0_data_format = get_dataformat(dfb::cb_in);
 
-    constexpr uint32_t blk = get_compile_time_arg_val(0);  // needed for correctness of softmax/LN kernels
-    constexpr bool use_welford = get_compile_time_arg_val(1) == 1;
-    [[maybe_unused]] constexpr uint32_t W = get_compile_time_arg_val(2);
-    constexpr auto src0_args = TensorAccessorArgs<3>();
-    constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
-    constexpr auto gamma_args = TensorAccessorArgs<src1_args.next_compile_time_args_offset()>();
-    constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
+    constexpr auto blk = get_arg(args::block_size);
+    constexpr bool use_welford = get_arg(args::use_welford) == 1;
+    [[maybe_unused]] constexpr auto W = get_arg(args::W);
 
-    const auto src_a = TensorAccessor(src0_args, src_addr);
+    const auto src_a = TensorAccessor(ta::src_a);
 
 #ifdef FUSE_GAMMA
-    const uint32_t gamma_tile_bytes = get_tile_size(cb_id_gamma);
-    const auto addrg = TensorAccessor(gamma_args, gamma_addr);
+    const uint32_t gamma_tile_bytes = get_tile_size(dfb::cb_gamma);
+    const auto addrg = TensorAccessor(ta::gamma);
 #endif
 #ifdef FUSE_BETA
-    const uint32_t beta_tile_bytes = get_tile_size(cb_id_beta);
-    const auto addrb = TensorAccessor(beta_args, beta_addr);
+    const uint32_t beta_tile_bytes = get_tile_size(dfb::cb_beta);
+    const auto addrb = TensorAccessor(ta::beta);
 #endif
 #ifdef FUSE_PRE_ADD
-    const uint32_t src1_tile_bytes = get_tile_size(cb_id_in1);
-    const auto src_b = TensorAccessor(src1_args, b_addr);
+    const uint32_t src1_tile_bytes = get_tile_size(dfb::cb_inb);
+    const auto src_b = TensorAccessor(ta::src_b);
 #endif
 
-    // Generate constant tiles for layernorm compute
     if constexpr (!use_welford) {
-        constexpr uint32_t cb_in_2 = get_named_compile_time_arg_val("cb_scaler");
         dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-            cb_in_2,
+            dfb::cb_scaler,
             ckernel::PoolType::SUM,
             ckernel::ReduceDim::REDUCE_ROW,
             dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
             /*compute_uses_reduce_tile=*/true>();
     }
-    constexpr uint32_t eps_cb_id = get_named_compile_time_arg_val("cb_eps");
-    const uint32_t eps = get_arg_val<uint32_t>(5);
-    generate_bcast_col_scalar(eps_cb_id, eps);
+    const uint32_t eps = get_arg(args::eps);
+    generate_bcast_col_scalar(dfb::cb_eps, eps);
 
-    // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     uint32_t offs = 0;
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
@@ -116,7 +98,7 @@ void kernel_main() {
             noc.async_read_barrier();
             cb_in1.push_back(block.full_block_size());
 #endif
-        }  // wt loop
+        }
 
 #if defined FUSE_GAMMA || defined FUSE_BETA
         if (ncht == 0) {
@@ -176,9 +158,9 @@ void kernel_main() {
                     cb_beta.push_back(block.full_block_size());
                 }
 #endif
-            }  // wt loop
+            }
         }
 #endif
         offs += Wt;
-    }  // ncht loop
+    }
 }

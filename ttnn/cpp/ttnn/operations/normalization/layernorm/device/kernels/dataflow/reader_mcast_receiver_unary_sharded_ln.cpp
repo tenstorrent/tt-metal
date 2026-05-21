@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "hostdevcommon/common_values.hpp"
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/kernel_args.h"
 #include "layernorm_dataflow_utils.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
@@ -36,52 +37,60 @@ void kernel_main() {
     // ---------------------------------------------------------------------------
     // Compile-time arguments
     // ---------------------------------------------------------------------------
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(2);
-    constexpr uint32_t block_h = get_compile_time_arg_val(3);
-    const bool is_all_to_all_worker = get_compile_time_arg_val(4) == 1;
-    constexpr uint32_t num_all_to_all_workers = get_compile_time_arg_val(5);
-    constexpr uint32_t num_tiles_per_worker = get_compile_time_arg_val(6);
-    constexpr uint32_t num_tiles_per_worker_last = get_compile_time_arg_val(7);
-    constexpr bool row_major = (bool)get_compile_time_arg_val(8);
-    constexpr uint32_t num_x = get_compile_time_arg_val(9);
-    constexpr uint32_t num_y = get_compile_time_arg_val(10);
-    constexpr bool use_two_stage_reduce = (bool)get_compile_time_arg_val(11);
-    constexpr uint32_t num_blocks_first_stage = get_compile_time_arg_val(12);
-    constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(13);
-    constexpr bool rms_norm = get_compile_time_arg_val(15) == 1;
-    constexpr bool use_welford = get_compile_time_arg_val(16) == 1;
+    constexpr uint32_t num_blocks = get_arg(args::num_blocks);
+    constexpr uint32_t block_h = get_arg(args::block_h);
+    const bool is_all_to_all_worker = get_arg(args::is_all_to_all_worker) == 1;
+    constexpr uint32_t num_all_to_all_workers = get_arg(args::num_all_to_all_workers_first_stage);
+    constexpr uint32_t num_tiles_per_worker = get_arg(args::num_tiles_per_worker);
+    constexpr uint32_t num_tiles_per_worker_last = get_arg(args::num_tiles_per_worker_last);
+    constexpr bool row_major = (bool)get_arg(args::row_major);
+    constexpr uint32_t num_x = get_arg(args::num_x);
+    constexpr uint32_t num_y = get_arg(args::num_y);
+    constexpr bool use_two_stage_reduce = (bool)get_arg(args::use_two_stage_reduce);
+    constexpr uint32_t num_blocks_first_stage = get_arg(args::num_blocks_first_stage);
+    constexpr uint32_t num_blocks_second_stage = get_arg(args::num_blocks_second_stage);
+    constexpr bool rms_norm = get_arg(args::rms_norm) == 1;
+    constexpr bool use_welford = get_arg(args::use_welford) == 1;
 
     // ---------------------------------------------------------------------------
     // Runtime arguments
     // ---------------------------------------------------------------------------
-    const bool is_last_all_to_all_worker = get_arg_val<uint32_t>(0);
-    const uint32_t all_to_all_tile_offset_bytes = get_arg_val<uint32_t>(1);
-    const bool is_second_stage_reader = get_arg_val<uint32_t>(2);
-    const uint32_t start_x = get_arg_val<uint32_t>(3);
-    const uint32_t start_y = get_arg_val<uint32_t>(4);
-    df::L1Ptr in0_remote_noc_x = (df::L1Ptr)(get_arg_addr(5));
-    df::L1Ptr in0_remote_noc_y = (df::L1Ptr)(get_arg_addr(5 + num_x));
+    const bool is_last_all_to_all_worker = get_arg(args::is_last_all_to_all_worker);
+    const uint32_t all_to_all_tile_offset_bytes = get_arg(args::all_to_all_offset_bytes);
+    const bool is_second_stage_reader = get_arg(args::is_second_stage_reader);
+    const uint32_t start_x = get_arg(args::start_x);
+    const uint32_t start_y = get_arg(args::start_y);
+    // Vararg payload: noc_x list followed by noc_y list
+    uint32_t in0_remote_noc_x_buf[num_x];
+    uint32_t in0_remote_noc_y_buf[num_y];
+    for (uint32_t i = 0; i < num_x; ++i) {
+        in0_remote_noc_x_buf[i] = get_vararg(i);
+    }
+    for (uint32_t j = 0; j < num_y; ++j) {
+        in0_remote_noc_y_buf[j] = get_vararg(num_x + j);
+    }
+    df::L1Ptr in0_remote_noc_x = reinterpret_cast<df::L1Ptr>(in0_remote_noc_x_buf);
+    df::L1Ptr in0_remote_noc_y = reinterpret_cast<df::L1Ptr>(in0_remote_noc_y_buf);
 
     // ---------------------------------------------------------------------------
     // CB definitions
     // ---------------------------------------------------------------------------
-    constexpr uint32_t cb_ex_partial = get_named_compile_time_arg_val("cb_ex_partial");  // E[x] partial reduce
-    constexpr uint32_t cb_ex = get_named_compile_time_arg_val("cb_ex");                  // E[x] global reduce
-    constexpr uint32_t cb_ex_external = get_named_compile_time_arg_val("cb_ex_external");
-    constexpr uint32_t cb_ex_partial2 =
-        get_named_compile_time_arg_val("cb_ex_partial2");                  // E[(x-E[x])^2] partial reduce
-    constexpr uint32_t cb_ex2 = get_named_compile_time_arg_val("cb_ex2");  // E[(x-E[x])^2] global reduce
-    constexpr uint32_t cb_ex_external2 = get_named_compile_time_arg_val("cb_ex_external2");
-    constexpr uint32_t cb_ex2pe = get_named_compile_time_arg_val("cb_ex2pe");
-    constexpr uint32_t cb_ex_global = get_named_compile_time_arg_val("cb_ex_global");  // E[x] global reduce
+    constexpr uint32_t cb_ex_partial = dfb::cb_ex_partial;
+    constexpr uint32_t cb_ex = dfb::cb_ex;
+    constexpr uint32_t cb_ex_external = dfb::cb_ex_external;
+    constexpr uint32_t cb_ex_partial2 = dfb::cb_ex_partial2;
+    constexpr uint32_t cb_ex2 = dfb::cb_ex2;
+    constexpr uint32_t cb_ex_external2 = dfb::cb_ex_external2;
+    constexpr uint32_t cb_ex2pe = dfb::cb_ex2pe;
+    constexpr uint32_t cb_ex_global = dfb::cb_ex_global;
 
     // ---------------------------------------------------------------------------
     // Set up experimental API objects
     // ---------------------------------------------------------------------------
     Noc noc;
-    Semaphore<> reduce_receiver_sem(get_compile_time_arg_val(0));
-    Semaphore<> reduce_sender_sem(get_compile_time_arg_val(1));
-    Semaphore<> reduce_second_stage_sem(get_compile_time_arg_val(14));
+    Semaphore<> reduce_receiver_sem(sem::reduce_receiver);
+    Semaphore<> reduce_sender_sem(sem::reduce_sender);
+    Semaphore<> reduce_second_stage_sem(sem::reduce_second_stage);
     UnicastEndpoint remote_ep;
 
     const uint32_t num_tiles_to_read = is_last_all_to_all_worker ? num_tiles_per_worker_last : num_tiles_per_worker;
@@ -125,11 +134,11 @@ void kernel_main() {
                                              const uint32_t cb_ex_global_id,
                                              const uint32_t cb_reduce_first_stage_id,
                                              const uint32_t num_tiles_scaler) __attribute__((always_inline)) {
-        CircularBuffer cb_partial_obj(cb_partial_id);
-        CircularBuffer cb_external_obj(cb_external_id);
-        CircularBuffer cb_ex_obj(cb_ex_id);
-        CircularBuffer cb_ex_global_obj(cb_ex_global_id);
-        CircularBuffer cb_reduce_first_stage_obj(cb_reduce_first_stage_id);
+        DataflowBuffer cb_partial_obj(cb_partial_id);
+        DataflowBuffer cb_external_obj(cb_external_id);
+        DataflowBuffer cb_ex_obj(cb_ex_id);
+        DataflowBuffer cb_ex_global_obj(cb_ex_global_id);
+        DataflowBuffer cb_reduce_first_stage_obj(cb_reduce_first_stage_id);
 
         // ============================================================================
         // Partial reduction

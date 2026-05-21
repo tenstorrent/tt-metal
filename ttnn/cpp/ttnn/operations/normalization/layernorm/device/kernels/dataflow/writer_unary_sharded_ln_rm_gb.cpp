@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/kernel_args.h"
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
@@ -12,63 +13,60 @@
 #include "reshard_writer.hpp"
 
 void kernel_main() {
-    constexpr bool is_all_to_all_worker = get_compile_time_arg_val(0) == 1;
-    constexpr bool fuse_gamma = get_compile_time_arg_val(1) == 1;
-    constexpr bool fuse_beta = get_compile_time_arg_val(2) == 1;
-    constexpr uint32_t block_w = get_compile_time_arg_val(3);
-    constexpr bool use_welford = get_compile_time_arg_val(4) == 1;
-    constexpr auto gamma_args = TensorAccessorArgs<5>();
-    constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
-    constexpr bool FLOAT32_DTYPE_GAMMA = get_compile_time_arg_val(beta_args.next_compile_time_args_offset() + 1) == 1;
-    constexpr bool FLOAT32_DTYPE_BETA = get_compile_time_arg_val(beta_args.next_compile_time_args_offset() + 2) == 1;
+    constexpr bool is_all_to_all_worker = get_arg(args::is_all_to_all_worker) == 1;
+    constexpr bool fuse_gamma = get_arg(args::do_gamma) == 1;
+    constexpr bool fuse_beta = get_arg(args::do_beta) == 1;
+    constexpr uint32_t block_w = get_arg(args::block_wt);
+    constexpr bool use_welford = get_arg(args::use_welford) == 1;
+    constexpr bool FLOAT32_DTYPE_GAMMA = get_arg(args::gamma_f32) == 1;
+    constexpr bool FLOAT32_DTYPE_BETA = get_arg(args::beta_f32) == 1;
 
-    // Reshard writer
-    constexpr uint32_t worker_core_stride_w_bytes =
-        get_compile_time_arg_val(beta_args.next_compile_time_args_offset() + 3);
-    constexpr uint32_t storage_core_stride_w_bytes =
-        get_compile_time_arg_val(beta_args.next_compile_time_args_offset() + 4);
-    constexpr uint32_t block_ht = get_compile_time_arg_val(beta_args.next_compile_time_args_offset() + 5);
+    constexpr uint32_t worker_core_stride_w_bytes = get_arg(args::block_wt_bytes);
+    constexpr uint32_t storage_core_stride_w_bytes = get_arg(args::block_wt_resharded_bytes);
+    constexpr uint32_t block_ht = get_arg(args::block_ht);
 
-    const uint32_t gamma_addr = get_arg_val<uint32_t>(3);
-    const uint32_t beta_addr = get_arg_val<uint32_t>(4);
-    const uint32_t gamma_tile_start_id = get_arg_val<uint32_t>(5);
-    const uint32_t beta_tile_start_id = get_arg_val<uint32_t>(6);
+    const uint32_t gamma_addr = get_arg(args::gamma_addr);
+    const uint32_t beta_addr = get_arg(args::beta_addr);
+    const uint32_t gamma_tile_start_id = get_arg(args::gamma_tile_start);
+    const uint32_t beta_tile_start_id = get_arg(args::beta_tile_start);
 
-    // Reshard writer
 #ifndef SKIP_WRITE_BACK
-    const uint32_t num_segments_to_write_back = get_arg_val<uint32_t>(7);
-    const uint32_t storage_core_start_offset = get_arg_val<uint32_t>(8);
-    tt_l1_ptr uint32_t* segment_args = (tt_l1_ptr uint32_t*)(get_arg_addr(9));
+    const uint32_t storage_core_start_offset = get_vararg(0);
+    const uint32_t num_segments_to_write_back = get_vararg(1);
+    uint32_t segment_args_buf[64];
+    for (uint32_t i = 0; i < 64; ++i) {
+        segment_args_buf[i] = get_vararg(2 + i);
+    }
+    tt_l1_ptr uint32_t* segment_args = reinterpret_cast<tt_l1_ptr uint32_t*>(segment_args_buf);
 #endif
 
-    constexpr uint32_t cb_gamma = get_named_compile_time_arg_val("cb_gamma");
-    constexpr uint32_t cb_beta = get_named_compile_time_arg_val("cb_beta");
-
-    constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
-    constexpr uint32_t cb_out_resharded = get_named_compile_time_arg_val("cb_out_resharded");
+    constexpr uint32_t cb_gamma = dfb::cb_gamma;
+    constexpr uint32_t cb_beta = dfb::cb_beta;
+    constexpr uint32_t cb_out = dfb::cb_out;
+    constexpr uint32_t cb_out_resharded = dfb::cb_out_resharded;
 
     Noc noc;
-    CircularBuffer cb_gamma_obj(cb_gamma);
-    CircularBuffer cb_beta_obj(cb_beta);
-    CircularBuffer cb_out_obj(cb_out);
-    CircularBuffer cb_out_resharded_obj(cb_out_resharded);
+    DataflowBuffer cb_gamma_obj(cb_gamma);
+    DataflowBuffer cb_beta_obj(cb_beta);
+    DataflowBuffer cb_out_obj(cb_out);
+    DataflowBuffer cb_out_resharded_obj(cb_out_resharded);
 
     const uint32_t out_single_tile_size_bytes = get_tile_size(cb_out);
 
     if constexpr (!use_welford) {
-        constexpr uint32_t cb_in_2 = get_named_compile_time_arg_val("cb_in_2");
-        const uint32_t scalar_w_bits = get_arg_val<uint32_t>(1);
+        constexpr uint32_t cb_in_2 = dfb::cb_scaler;
+        const uint32_t scalar_w_bits = get_arg(args::packed_winv);
         float scalar_w_f = __builtin_bit_cast(float, scalar_w_bits);
         dataflow_kernel_lib::prepare_reduce_scaler<cb_in_2, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
             scalar_w_f);
 
-        constexpr uint32_t eps_cb_id = get_named_compile_time_arg_val("cb_eps");
-        const uint32_t eps = get_arg_val<uint32_t>(2);
+        constexpr uint32_t eps_cb_id = dfb::cb_eps;
+        const uint32_t eps = get_arg(args::eps_u);
         generate_bcast_col_scalar(eps_cb_id, eps);
 
         if constexpr (is_all_to_all_worker) {
-            constexpr uint32_t cb_in_4 = get_named_compile_time_arg_val("cb_in_4");
-            const uint32_t scalar_c_bits = get_arg_val<uint32_t>(0);
+            constexpr uint32_t cb_in_4 = dfb::cb_scaler_global;
+            const uint32_t scalar_c_bits = get_arg(args::packed_cinv);
             float scalar_c_f = __builtin_bit_cast(float, scalar_c_bits);
             dataflow_kernel_lib::prepare_reduce_scaler<
                 cb_in_4,
@@ -80,7 +78,7 @@ void kernel_main() {
 
     if constexpr (fuse_gamma) {
         const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
-        const auto gamma = TensorAccessor(gamma_args, gamma_addr);
+        const auto gamma = TensorAccessor(ta::gamma);
 
         constexpr uint32_t mask_read_tile_face_bytes = FLOAT32_DTYPE_GAMMA ? 64 : 32;
         constexpr uint32_t mask_read_tile_offset_bytes = FLOAT32_DTYPE_GAMMA ? 1024 : 512;
@@ -111,7 +109,7 @@ void kernel_main() {
 
     if constexpr (fuse_beta) {
         const uint32_t beta_tile_bytes = get_tile_size(cb_beta);
-        const auto beta = TensorAccessor(beta_args, beta_addr);
+        const auto beta = TensorAccessor(ta::beta);
 
         uint32_t mask_read_tile_face_bytes = FLOAT32_DTYPE_BETA ? 64 : 32;
         uint32_t mask_read_tile_offset_bytes = FLOAT32_DTYPE_BETA ? 1024 : 512;
