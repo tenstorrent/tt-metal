@@ -19,10 +19,14 @@
 #include <tt_stl/assert.hpp>
 
 #include "topology_solver_sat_solver.hpp"
-#include "topology_solver_sat_session.hpp"
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 
 namespace tt::tt_fabric::detail {
+
+// Full definition of the opaque session type forward-declared in topology_solver.hpp.
+struct TopologySatSession {
+    TopologySatSolver solver;
+};
 
 // ── Adjacency and Edge Helpers ────────────────────────────────────────────────
 namespace {
