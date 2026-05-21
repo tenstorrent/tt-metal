@@ -134,18 +134,26 @@ pytest models/experimental/atss_swin_l_dyhead/tests/pcc/test_ttnn_e2e.py -v
 
 ### Run performance tests
 
-
 ```bash
-# Device performance
+# Device kernel perf (tracy, single device, no trace — reports DEVICE KERNEL DURATION).
+# This is the "pure compute" number used in the perf breakdown below.
 pytest models/experimental/atss_swin_l_dyhead/tests/perf/test_atss_swin_l_dyhead_device_perf.py -v
 
-# E2E single-device pipeline (2 CQs + no Trace)
+# E2E single-device pipeline, 2 CQs, no trace (baseline pipeline measurement).
 pytest models/experimental/atss_swin_l_dyhead/tests/perf/test_atss_swin_l_dyhead_e2e_perf.py::test_atss_swinl_dyhead_perf_single_device_2cq -v
 
-# E2E multi-device pipeline (2 CQs + no trace)
-pytest models/experimental/atss_swin_l_dyhead/tests/perf/test_atss_swin_l_dyhead_e2e_perf.py::test_atss_swinl_dyhead_perf_multi_device_2cq -v
+# E2E single-device pipeline, 2 CQs + TRACE (matches what demo_slice_4dev.py runs per-device).
+pytest models/experimental/atss_swin_l_dyhead/tests/perf/test_atss_swin_l_dyhead_e2e_perf.py::test_atss_swinl_dyhead_perf_single_device_trace_2cq -v
 
+# E2E multi-device pipeline (1x4 mesh), 2 CQs, no trace.
+pytest models/experimental/atss_swin_l_dyhead/tests/perf/test_atss_swin_l_dyhead_e2e_perf.py::test_atss_swinl_dyhead_perf_multi_device_2cq -v
 ```
+
+**Trace note:** the slice demo (`demo_slice_4dev.py`) runs with **trace enabled by default**
+(`use_trace=True`, plus a 400 MB trace region). That's what makes the steady-state host
+roundtrip land around 172 ms instead of the ~219 ms FW duration the no-trace perf test
+reports — trace replay skips per-op dispatch firmware overhead. Pass `--no-trace` to the
+demo if you want to compare against the no-trace numbers.
 
 ### Demos
 
