@@ -46,6 +46,32 @@ Example: `42847291__1ee8c3ca`
 Before touching any candidate, check `seen-escapes.json`. If ID is present, skip entirely.
 After any verdict (confirmed, refuted, unverifiable), write the ID to `seen-escapes.json`.
 
+### seen-escapes.json — canonical status values
+
+Every entry is a JSON object with a `status` field. Valid values (exhaustive — do NOT invent new ones):
+
+| Status | Set when |
+|--------|----------|
+| `pending` | Candidate found but not yet processed |
+| `skipped_layer_filter` | Step 2 layer pre-filter: no cross-layer commits in range |
+| `skipped_same_layer` | Step 2: fix commit touches same layer as test (not vertical) |
+| `skipped_same_layer_api_change` | Step 2: cross-layer commit is a non-bug API change |
+| `skipped_flaky_same_sha` | Step 2: test flips pass/fail on the same commit SHA — flaky |
+| `skipped_likely_noise` | Step 3a: noise blocklist match (infra pattern, no test output) |
+| `skipped_likely_noise_perf` | Step 3a: failure is a perf regression, not a correctness bug |
+| `skipped_prefilter` | Step 3a: pre-Opus quick filter caught it |
+| `skipped_prefilter_opus` | Step 3c: Opus verdict was SKIP_LIKELY_NOISE |
+| `skipped_unrelated` | Step 3c: Opus verdict was SKIP_UNRELATED |
+| `skipped_vague_justification` | Step 3c: Opus returned PROCEED but justification fields were generic/hedged |
+| `skipped_not_vertical` | Step 3c post-check: suspected fix layer ≥ test layer |
+| `false_positive` | Bisect converged to [skip ci] or CODEOWNERS-only commit |
+| `refuted_false_positive` | Same as above — use `false_positive` (legacy alias) |
+| `inconclusive_bisect_timeout` | Step 4: bisect run timed out |
+| `inconclusive_api_error` | Step 4 or 5: 3 consecutive GitHub API failures |
+| `inconclusive` | Step 5: verification timed out or was cancelled |
+| `refuted` | Step 5: BEFORE=PASS (wasn't failing) or BEFORE=FAIL+AFTER=FAIL (fix didn't fix it) |
+| `confirmed` | Step 5: BEFORE=FAIL + AFTER=PASS |
+
 ### campaign-state.json schema
 
 Top-level structure (array-based, NOT keyed by escape_id):
@@ -780,6 +806,41 @@ Write verdict + all run IDs to `campaign-state.json`.
 ---
 
 ### Step 6: Record Confirmed Escape
+
+**⚠️ Validate the entry before writing to confirmed-escapes.json or updating Confluence:**
+
+```python
+REQUIRED_FIELDS = [
+    "escape_id", "test_name", "test_filepath", "test_layer",
+    "fix_commit_sha", "fix_commit_message", "fix_layer",
+    "before_run_id", "after_run_id", "reasoning", "confirmed_at"
+]
+
+def validate_confirmed_escape(entry):
+    missing = [f for f in REQUIRED_FIELDS if not entry.get(f)]
+    if missing:
+        raise ValueError(f"Missing required fields: {missing}")
+
+    # fix_layer must be strictly less than test_layer
+    if not (entry["fix_layer"] < entry["test_layer"]):
+        raise ValueError(
+            f"Layer invariant violated: fix_layer={entry['fix_layer']} "
+            f"must be < test_layer={entry['test_layer']}"
+        )
+
+    # run IDs must be integers > 0
+    for field in ("before_run_id", "after_run_id"):
+        if not isinstance(entry[field], int) or entry[field] <= 0:
+            raise ValueError(f"{field} must be a positive integer, got: {entry[field]!r}")
+
+    # confirmed_at must be ISO 8601
+    import re
+    if not re.match(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", entry["confirmed_at"]):
+        raise ValueError(f"confirmed_at is not ISO 8601: {entry['confirmed_at']!r}")
+```
+
+If validation fails → do NOT write to `confirmed-escapes.json`, do NOT update Confluence.
+Instead mark `status: "inconclusive_api_error"` in `seen-escapes.json` and DM Evan.
 
 Append to `confirmed-escapes.json`:
 ```json
