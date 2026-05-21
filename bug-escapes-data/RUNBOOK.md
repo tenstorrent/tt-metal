@@ -105,7 +105,7 @@ Run once manually. Scans last 60 days. Full analysis pipeline.
 
 ### Mode B — Incremental
 Scheduled daily at 00:15Z via nanoclaw. Scans last 1 day only.
-Lighter threshold (2+ consecutive failures → 3+ consecutive passes).
+Same thresholds as backfill (≥10 consecutive failures, ≥10 consecutive passes).
 Skip Opus pre-classification if layer pre-filter already rules it out.
 
 ---
@@ -653,6 +653,13 @@ for most test probes. Pass that exact artifact name as `build-artifact-name` inp
 8. When `low == high` (or range is empty), the fix commit is `commits[low]`
    - Special case: if ALL midpoints PASS → fix commit is `commits[0]` (first after last_failing)
 
+9. **Before accepting the bisect result** — inspect the fix commit:
+   - If commit message contains `[skip ci]` OR only touches `CODEOWNERS`, `.github/`, docs, or
+     CI config files → it is a **false positive**. These are no-op commits that don't affect
+     test behavior. Look at the commit immediately before it in the range — that is the real candidate.
+   - If the fix commit is a merge commit with no meaningful diff (auto-merge, version bump) → same rule.
+   - Mark false positives as `refuted_false_positive` in campaign-state.json and do not dispatch verification.
+
 Save each midpoint run ID to `campaign-state.json`.
 
 **Arch determination:**
@@ -819,7 +826,56 @@ Extended bullet-point format (for notes outside the table):
 
 To get job IDs: `GET /repos/tenstorrent/tt-metal/actions/runs/{run_id}/jobs` — match on job name containing the test name fragment.
 
-Always fetch the current page content before updating so you don't clobber concurrent writes.
+**Confluence update procedure (mandatory — do not skip version handling):**
+
+```python
+# 1. Fetch current page to get version number
+page = confluence_get_page(page_id="{page_id}")
+current_version = page["version"]["number"]
+
+# 2. Apply your edit to the content
+
+# 3. Update with version number — Confluence uses optimistic locking
+confluence_update_page(
+    page_id="{page_id}",
+    title=page["title"],
+    content=updated_content,
+    # version number MUST be current_version + 1 (the API increments from current)
+)
+
+# 4. If you get HTTP 409 Conflict: re-fetch, re-apply edit, retry (max 3 attempts)
+# 409 means someone else edited between your fetch and your update — re-fetch and try again
+```
+
+The `mcp__jira__confluence_update_page` tool handles versioning internally — it fetches the
+current version before updating. Do NOT call `confluence_get_page` + `confluence_update_page`
+as separate steps with a gap between them if you can avoid it; do the edit atomically.
+
+---
+
+## GitHub API Resilience (MANDATORY — applies to ALL GitHub API calls)
+
+Every GitHub API call in this runbook can fail. Handle all failures:
+
+```
+Retry policy:
+  - 429 (rate limited): read X-RateLimit-Reset header, sleep until reset, then retry
+  - 500/502/503 (GitHub outage): exponential backoff — wait 30s, 60s, 120s — then mark step inconclusive
+  - 404 (run/branch/artifact deleted): do NOT retry — treat as "no data at this SHA", move on
+  - 403 (forbidden/token issue): stop campaign, DM Evan — this needs human intervention
+  - Network timeout: retry up to 3 times with 10s delay between attempts
+
+Rate limit budget:
+  - Authenticated: 5000 requests/hour
+  - Each escape bisect uses ~15-20 API calls; each verification uses ~10
+  - Max safe throughput: ~30 escapes/hour — well within limits for nightly incremental mode
+  - If X-RateLimit-Remaining < 200: stop dispatching new probes until reset
+
+Hard stop:
+  If 3 consecutive API calls to the same endpoint all fail → stop the current escape,
+  mark it inconclusive_api_error in campaign-state.json, move to next candidate.
+  Do NOT retry indefinitely.
+```
 
 ---
 
