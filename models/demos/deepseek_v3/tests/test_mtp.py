@@ -34,7 +34,7 @@ from models.demos.deepseek_v3.utils.weight_config import _try_load_cached_config
 
 DEFAULT_NUM_STEPS = 128
 GENERATE_REFERENCE = os.getenv("DEEPSEEK_V3_MTP_GENERATE_REFERENCE", "0") == "1"
-TRACE_REGION_SIZE = int(os.getenv("DEEPSEEK_TRACE_REGION_SIZE", "134217728"))
+TRACE_REGION_SIZE = int(os.getenv("DEEPSEEK_TRACE_REGION_SIZE", "0"))
 TIMEOUT_S = int(os.getenv("DEEPSEEK_V3_MTP_TIMEOUT_S", "1200"))
 MAX_E2E_SECONDS = float(os.getenv("DEEPSEEK_V3_MTP_E2E_MAX_S", "0"))
 MIN_TOKENS_PER_SEC = float(os.getenv("DEEPSEEK_V3_MTP_MIN_TPS", "1.0"))
