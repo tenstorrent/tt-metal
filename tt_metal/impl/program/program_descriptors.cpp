@@ -190,9 +190,31 @@ void apply_descriptor_runtime_args(Program& program, const ProgramDescriptor& de
 
     auto program_cbs = program.circular_buffers();
     for (uint32_t ci = 0; ci < static_cast<uint32_t>(desc.cbs.size()); ++ci) {
-        if (desc.cbs[ci].buffer) {
-            UpdateDynamicCircularBufferAddress(
-                program, program_cbs[ci]->id(), *desc.cbs[ci].buffer, desc.cbs[ci].address_offset);
+        const auto& cb_desc = desc.cbs[ci];
+        const auto& cb = *program_cbs[ci];
+        const auto cb_handle = cb.id();
+
+        if (cb_desc.buffer) {
+            UpdateDynamicCircularBufferAddress(program, cb_handle, *cb_desc.buffer, cb_desc.address_offset);
+        }
+
+        // Re-apply CB total_size / per-format page_size on cache-hit slow-path rebuild.
+        // CBDescriptor::total_size is not in the program hash (see hash_cb_descriptor), so
+        // factories that compute total_size from runtime-varying op attributes (e.g.
+        // attn_matmul, group_attn_matmul, slice_rm, generic_op) must have their fresh size
+        // applied here — otherwise the cached program keeps the first-build size and the
+        // kernel reads from / writes to mismatched memory.
+        if (cb.size() != cb_desc.total_size) {
+            UpdateCircularBufferTotalSize(program, cb_handle, cb_desc.total_size);
+        }
+        for (const auto& format_desc : cb_desc.format_descriptors) {
+            // CBFormatDescriptor::page_size IS in the program hash, so by construction it
+            // matches across cache hits today.  Update is a no-op when values match; the
+            // call is here so factories that opt out of hashing page_size in the future
+            // stay correct without a second framework change.
+            if (cb.page_size(format_desc.buffer_index) != format_desc.page_size) {
+                UpdateCircularBufferPageSize(program, cb_handle, format_desc.buffer_index, format_desc.page_size);
+            }
         }
     }
 }
