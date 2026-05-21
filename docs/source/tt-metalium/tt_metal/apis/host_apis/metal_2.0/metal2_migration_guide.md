@@ -284,6 +284,8 @@ KernelSpec consumer{ /* ... */
 };
 ```
 
+**Spec-validator: every DFB needs ≥1 PRODUCER and ≥1 CONSUMER binding.** The host validator rejects programs where a DFB has only producers or only consumers across the kernels that bind it. When kernels have asymmetric conditional usage of the same DFB (e.g., a reader unconditionally produces a tile but a compute kernel only conditionally needs it), satisfy the constraint by declaring the conditional-side `DFBBinding` unconditionally on the host. Do not modify the kernel's `wait_front` / `pop_front` patterns to "balance" the topology: per-execution DFB state is reinitialized at each program enqueue, so a tile produced and never consumed is harmless.
+
 **Borrowed-memory DFBs.** A DFB can be built on top of an existing `Buffer`'s memory rather than allocating its own L1 storage — the Metal 2.0 form of the legacy "dynamic circular buffer." Set `DataflowBufferSpec::borrowed_from` to the name of a `TensorParameter` whose buffer backs the DFB; the DFB's L1 address resolves at runtime from the corresponding `TensorArg` in `ProgramRunParams::tensor_args`.
 
 Other advanced features (aliased DFBs, remote DFBs spanning nodes) are described in `dataflow_buffer_spec.hpp` but are not yet supported.

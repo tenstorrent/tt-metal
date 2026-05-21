@@ -183,6 +183,7 @@ After all resources are built, assemble the `ProgramSpec` (collecting `kernels`,
 - Pack data into varargs that should be named arguments. ([Caution](metal2_port_patterns.md#caution-avoid-varargs-unless-absolutely-necessary).)
 - Thread a buffer address through an RTA because the binding mechanism doesn't fit.
 - Hand-roll a synchronization primitive.
+- Modify a kernel's `wait_front` / `pop_front` calls to "balance" a DFB's producer / consumer topology. The host-side spec validator's "every DFB needs ≥1 PRODUCER and ≥1 CONSUMER" check is satisfied by adjusting the *binding* declaration on the host (declare the conditional-side endpoint unconditionally), not by adding consumes/produces inside the kernel. Per-execution DFB state is reinitialized, so a tile produced and never consumed is harmless across enqueues.
 
 If any of these appear in your draft, **stop and report**. The likely cause is a structural decision during planning that should be revisited.
 
