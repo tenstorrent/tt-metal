@@ -1148,7 +1148,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             if (dfb.alias_with.empty()) {
                 continue;
             }
-            const size_t total_size_a = dfb.entry_size * dfb.num_entries;
+            const size_t total_size_a = static_cast<size_t>(dfb.entry_size) * static_cast<size_t>(dfb.num_entries);
             const auto group_a = extended_group(dfb);
             const auto& nodes_a = collected.dfb_node_set.at(dfb.unique_id);
 
@@ -1166,7 +1166,8 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 }
 
                 // Rule 2: same total size.
-                const size_t total_size_b = alias_spec->entry_size * alias_spec->num_entries;
+                const size_t total_size_b =
+                    static_cast<size_t>(alias_spec->entry_size) * static_cast<size_t>(alias_spec->num_entries);
                 TT_FATAL(
                     total_size_a == total_size_b,
                     "Aliased DFBs '{}' and '{}' have different total sizes ({} vs {} bytes). "
