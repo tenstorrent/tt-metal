@@ -10,6 +10,7 @@
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 
 #include "tt-metalium/circular_buffer_config.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
@@ -86,6 +87,32 @@ std::vector<CBInfo> get_cb_info(
 void allocate_cbs(
     std::vector<CBInfo>& cb_info,
     tt::tt_metal::Program& program,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& all_cores,
+    const Tensor& input_tensor,
+    const Tensor& output_tensor,
+    const Tensor& l1_indices_tensor);
+
+// Descriptor-flow equivalent of allocate_cbs(): instead of allocating
+// circular buffers directly on a `tt::tt_metal::Program`, appends one
+// `CBDescriptor` per non-empty CBInfo to `desc.cbs` and fills in the
+// `CBInfo::index` field on every entry (overlapped CBs adopt their
+// overlap target's index, mirroring the legacy helper).
+//
+// For globally-allocated CBs (sharded tensors), the corresponding tensor
+// buffer pointer is recorded on `CBDescriptor::buffer` so the framework's
+// `apply_descriptor_runtime_args` patches the dynamic CB address from the
+// live buffer on every dispatch.
+//
+// `CBInfo::handle` is left default-initialised: in the descriptor flow the
+// framework owns the CB handles inside the cached `tt::tt_metal::Program`,
+// so factory code never needs to look them up.
+//
+// Intended to be called from a Conv2d program factory's `create_descriptor()`
+// after `get_cb_info(...)`.  The legacy `allocate_cbs()` is preserved for any
+// not-yet-migrated factory.
+void allocate_cbs_to_program_descriptor(
+    std::vector<CBInfo>& cb_info,
+    tt::tt_metal::ProgramDescriptor& desc,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& all_cores,
     const Tensor& input_tensor,
     const Tensor& output_tensor,
