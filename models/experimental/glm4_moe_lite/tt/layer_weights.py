@@ -60,11 +60,15 @@ def _tp_mesh_mapper(device: Any, *, shard_dim: int) -> Any | None:
 def _env_experts_dtype() -> ttnn.DataType:
     """Return TT dtype for routed expert weights.
 
-    Default is BF8 for memory efficiency; override via `GLM4_MOE_LITE_EXPERTS_TT_DTYPE`.
+    Default is BFP4 (bfloat4_b): the routed gate/up/down sparse matmuls on
+    GLM-4.7-Flash are DRAM-bandwidth-saturated (~155-160% effective DRAM bw
+    observed at HiFi2 + BFP8). Halving weight bytes via BFP4 directly reduces
+    DRAM traffic for the dominant `routed_experts` block (~38% of decode).
+    Override via `GLM4_MOE_LITE_EXPERTS_TT_DTYPE` (e.g. set to bf8 to revert).
     """
     override = os.environ.get("GLM4_MOE_LITE_EXPERTS_TT_DTYPE", "").strip().lower()
     if not override:
-        return ttnn.bfloat8_b
+        return ttnn.bfloat4_b
     if override in {"bf8", "bfloat8_b"}:
         return ttnn.bfloat8_b
     if override in {"bf16", "bfloat16"}:
@@ -829,7 +833,9 @@ def convert_decoder_layer_weights(
         moe_intermediate = int(hparams.moe_intermediate_size)
         hidden = int(hparams.hidden_size)
         num_devices = int(device.get_num_devices()) if _is_mesh_device(device) else 1
-        experts_variant = f"localE_d{num_devices}_v1"
+        # Cache key includes dtype to prevent silent reuse of BFP8 caches after the
+        # BFP4 default flip (see _env_experts_dtype docstring).
+        experts_variant = f"localE_d{num_devices}_dt{str(experts_dtype).split('.')[-1]}_v2"
 
         # Stack experts: [E, in, out] with TT linear conventions.
         # gate/up: HF is [out, in] == [moe_intermediate, hidden] -> transpose to [hidden, moe_intermediate]
