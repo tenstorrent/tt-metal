@@ -21,7 +21,7 @@ was sufficient to land the port.
 
 Tagged "API: no escalations".
 
-## Vindications
+## Successes
 
 ### V1. Audit's borrowed-memory DFB classification carried into a working sharded port
 
