@@ -627,11 +627,9 @@ jobs:
         run: |
           ARTIFACT_PATHS="ttnn/ttnn/*.so build/lib build/programming_examples"
           ARTIFACT_PATHS+=" build/test build/tools runtime tt_metal/pre-compiled"
-          for p in build/capture build/csvexport; do
-            if [[ -e "$p" ]]; then
-              ARTIFACT_PATHS="$ARTIFACT_PATHS $p"
-            fi
-          done
+          if [[ "${{ inputs.tracy }}" = "true" ]]; then
+            ARTIFACT_PATHS="$ARTIFACT_PATHS build/bin"
+          fi
           if [[ "${{ inputs.skip-tt-train }}" != "true" ]]; then
             ARTIFACT_PATHS="$ARTIFACT_PATHS build/tt-train data"
           fi
