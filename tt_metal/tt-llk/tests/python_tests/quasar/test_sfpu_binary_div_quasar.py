@@ -1,8 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List
-
 import pytest
 import torch
 from helpers.format_config import DataFormat, FormatConfig
@@ -56,36 +54,29 @@ _SPECIAL_CASE_LANES = [
 _ELEMENTS_PER_TILE = 1024
 
 
-def generate_sfpu_binary_div_combinations(
-    formats_list: List[FormatConfig],
-):
-    combinations = []
-
-    for fmt, dest_acc in generate_sfpu_format_dest_acc_combinations(formats_list):
-        in_fmt = fmt.input_format
-
-        if fmt.input_format == DataFormat.Float16 and dest_acc == DestAccumulation.Yes:
-            continue
-
-        for implied_math_format in [ImpliedMathFormat.No, ImpliedMathFormat.Yes]:
-            if in_fmt.is_mx_format() and implied_math_format == ImpliedMathFormat.No:
-                continue
-
-            for src0_idx, src1_idx, dst_idx in _TILE_INDEX_VARIANTS:
-                combinations.append(
-                    (fmt, dest_acc, implied_math_format, src0_idx, src1_idx, dst_idx)
-                )
-
-    return combinations
-
-
-SFPU_BINARY_DIV_FORMATS = input_output_formats(
-    [
-        DataFormat.Float16,
-        DataFormat.Float16_b,
-        DataFormat.Float32,
+def _get_valid_formats_dest_acc():
+    """Float16 + DestAccumulation.Yes is not supported."""
+    formats = input_output_formats(
+        [
+            DataFormat.Float16,
+            DataFormat.Float16_b,
+            DataFormat.Float32,
+        ]
+    )
+    return [
+        (fmt, dest_acc)
+        for fmt, dest_acc in generate_sfpu_format_dest_acc_combinations(formats)
+        if not (
+            fmt.input_format == DataFormat.Float16 and dest_acc == DestAccumulation.Yes
+        )
     ]
-)
+
+
+def _get_valid_implied_math_formats(fmt: FormatConfig):
+    """MX formats require implied math format enabled."""
+    if fmt.input_format.is_mx_format():
+        return [ImpliedMathFormat.Yes]
+    return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
 
 
 def _prepare_div_inputs(
@@ -125,11 +116,13 @@ def _prepare_div_inputs(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_implied_tile_indices=generate_sfpu_binary_div_combinations(
-        SFPU_BINARY_DIV_FORMATS
+    formats_dest_acc=_get_valid_formats_dest_acc(),
+    implied_math_format=lambda formats_dest_acc: _get_valid_implied_math_formats(
+        formats_dest_acc[0]
     ),
+    tile_indices=_TILE_INDEX_VARIANTS,
 )
-def test_sfpu_binary_div_quasar(formats_dest_acc_implied_tile_indices):
+def test_sfpu_binary_div_quasar(formats_dest_acc, implied_math_format, tile_indices):
     """
     Test binary SFPU DIV on Quasar architecture.
 
@@ -145,14 +138,8 @@ def test_sfpu_binary_div_quasar(formats_dest_acc_implied_tile_indices):
     branch is additionally checked bit-exact against 1.0 after the main
     tolerance-based comparison.
     """
-    (
-        formats,
-        dest_acc,
-        implied_math_format,
-        src0_idx,
-        src1_idx,
-        dst_idx,
-    ) = formats_dest_acc_implied_tile_indices[0]
+    formats, dest_acc = formats_dest_acc
+    src0_idx, src1_idx, dst_idx = tile_indices
 
     num_tiles_needed = max(src0_idx, src1_idx, dst_idx) + 1
     input_dimensions = [num_tiles_needed * 32, 32]
