@@ -14,7 +14,45 @@ from models.experimental.voxtraltts.tt.text_decoder_layer import (
     permute_voxtral_text_qk_for_hf_rope,
     remap_voxtral_text_state_dict,
 )
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.model_config import (
+    DecodersPrecision,
+    MathFidelitySetting,
+    ModelArgs,
+    ModelOptimizations,
+    OpGroup,
+    PrecisionSetting,
+    TensorGroup,
+)
+
+
+def voxtral_text_high_accuracy_optimizations(model_args):
+    """BF16 weights + HiFi4 matmuls for text backbone (pipeline + logits PCC)."""
+    opt = ModelOptimizations(
+        {
+            "TensorPrecision": {
+                TensorGroup.FF1_FF3: PrecisionSetting.BF16,
+                TensorGroup.FF2: PrecisionSetting.BF16,
+                TensorGroup.WQKV: PrecisionSetting.BF16,
+                TensorGroup.KV_CACHE: PrecisionSetting.BF16,
+                TensorGroup.WO: PrecisionSetting.BF16,
+            },
+            "OpFidelity": {
+                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI4,
+                OpGroup.LI_FF2: MathFidelitySetting.HIFI4,
+                OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI4,
+                OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI4,
+                OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI4,
+                OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
+                OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI4,
+                OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI4,
+            },
+        }
+    )
+    return DecodersPrecision(model_args.n_layers, model_args.model_name, opt)
+
+
+# Backward-compatible alias used by text-model PCC tests.
+voxtral_text_logits_pcc_optimizations = voxtral_text_high_accuracy_optimizations
 
 
 def _load_safetensors_state_dict(model_name_or_path: str) -> dict[str, torch.Tensor]:
