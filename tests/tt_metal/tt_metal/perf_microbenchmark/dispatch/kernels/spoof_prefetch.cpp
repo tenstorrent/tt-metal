@@ -54,5 +54,6 @@ void kernel_main() {
     noc_async_write(cmd_ptr, get_noc_addr_helper(dispatch_noc_xy, dispatch_data_ptr), dispatch_cb_page_size);
     writer.release_pages(1);
     noc_async_write_barrier();
+    writer.wait_all_pages(dispatch_cb_pages);
     noc_async_atomic_barrier();
 }
