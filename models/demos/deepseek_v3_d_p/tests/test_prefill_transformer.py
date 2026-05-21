@@ -758,6 +758,7 @@ def test_prefill_transformer(
             "mesh_shape": mesh_shape,
             "n_routed_experts": n_routed_experts,
             "capacity_factor": dispatch_buffer_capacity_factor,
+            "gate_fallback_mode": gate_fallback_mode,
             "threshold": threshold,
         }
         write_pcc_summary(summary_result, threshold=threshold)
