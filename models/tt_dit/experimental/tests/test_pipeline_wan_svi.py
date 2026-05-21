@@ -165,7 +165,8 @@ def _assert_video(video: torch.Tensor, *, num_clips: int, num_frames: int, num_o
 
 
 def _save_outputs(video: torch.Tensor, output_basename: str) -> None:
-    torch.save(video.detach().cpu(), f"{output_basename}.pt")
+    video = video.detach()
+    torch.save(video, f"{output_basename}.pt")
     logger.info(f"Saved raw tensor to: {output_basename}.pt")
 
     try:
@@ -173,7 +174,7 @@ def _save_outputs(video: torch.Tensor, output_basename: str) -> None:
 
         # output_type='pt' returns (T, C, H, W) float; export_to_video wants
         # (T, H, W, C) uint8.
-        arr = video.detach().cpu()
+        arr = video
         if arr.ndim == 4 and arr.shape[1] in (1, 3):
             arr = arr.permute(0, 2, 3, 1).contiguous()
         if arr.dtype != torch.uint8:

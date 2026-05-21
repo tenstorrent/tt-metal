@@ -360,7 +360,7 @@ class WanPipelineSVI(WanPipelineI2VLora):
             # video covering the clips that completed.
             if partial_output_path is not None:
                 partial = _concat_with_overlap(clips, overlap=self._num_overlap_frame)
-                torch.save(partial.detach().cpu(), partial_output_path)
+                torch.save(partial.detach(), partial_output_path)
                 logger.info(
                     f"saved partial output after clip {clip_idx + 1}/{len(clip_specs)} "
                     f"({partial.shape[0]} frames) to {partial_output_path}"
