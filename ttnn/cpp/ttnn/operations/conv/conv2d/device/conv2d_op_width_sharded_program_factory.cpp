@@ -708,8 +708,9 @@ WorkloadDescriptor Conv2dWidthShardedProgramFactory::create_workload_descriptor(
     // post_conv2d_op_memory_checks() is intentionally NOT called here: it
     // takes a built `tt::tt_metal::Program&` (it inspects the realised CB
     // allocation), which is not available inside a descriptor factory.  The
-    // legacy `Conv2dShardedProgramFactory` (still on the old path) keeps the
-    // check; once that variant is also migrated the check can be re-expressed
+    // legacy check has been dropped along with the legacy `create()` /
+    // `override_runtime_arguments()` flow on both conv2d variants; if the
+    // post-build verification is needed in the future it can be re-expressed
     // against the descriptor or hoisted into the framework.
 
     WorkloadDescriptor workload_descriptor;
