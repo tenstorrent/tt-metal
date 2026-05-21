@@ -248,11 +248,11 @@ This appendix lists legacy-API features that gate the port. Each entry falls int
 
 - **UNSUPPORTED** — Metal 2.0 does not currently support this feature. Action: refuse the port and report (red). Each entry's **Status** field describes the future path: most entries will be supported as-is when implemented; a few will only be addressable via a redesigned, semantically different construct (and may require a runtime-team consultation before re-attempting). Always check the Status field before telling the user "wait and revisit."
 - **DISCOURAGED** — Metal 2.0 supports the feature today, but its use is discouraged in favor of a planned alternative. Action: report yellow and ask the user; if the user overrides, proceed per the entry's guidance.
-- **LANDED** — Metal 2.0 supports the feature as of the doc's "Last validated against main" commit. Action: no port gate; the feature is supported. The entry's **Status** field names the Metal 2.0 construct that replaces the legacy form, with the PR or commit reference.
+- **LANDED** — Metal 2.0 supports the feature as of the doc's "Last validated against main" commit. Action: no port gate; the feature is supported. The entry's **Status** field names the Metal 2.0 construct that replaces the legacy form.
 
 ### Maintenance: keeping Appendix A current
 
-Appendix A entries reflect Metal 2.0 feature support as of the **Last validated against main** commit declared at the top of this document. When a new Metal 2.0 feature lands (or an existing limitation is lifted), the doc maintainer updates the relevant entry — typically by flipping the tier from `UNSUPPORTED` to `LANDED`, rewriting the Status / Action paragraphs to reference the new construct, and bumping the doc's `Last validated against main` commit hash.
+Appendix A entries reflect Metal 2.0 feature support as of the **Last validated against main** commit declared at the top of this document. When the framework changes Metal 2.0 feature support, the doc maintainer updates the relevant entry — typically by changing the tier (e.g., from `UNSUPPORTED` to `LANDED`), rewriting the Status / Action paragraphs to reference the new construct, and bumping the doc's `Last validated against main` commit hash.
 
 **Staleness override for porting AIs.** If during the audit you observe a feature in the codebase whose Appendix A entry is marked `UNSUPPORTED` but the framework headers clearly show the API has landed (e.g., the spec/field/method the legacy construct would need to translate to is *visibly present* in `tt_metal/api/tt-metalium/experimental/metal2_host_api/`), this likely means the audit doc is stale. Do not refuse the port reflexively. Instead:
 
