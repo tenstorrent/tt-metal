@@ -146,6 +146,11 @@ enum DramSyncMailboxIndex : uint32_t {
     MB_PROF_UNPACK_CMP_ACTIVE_LO,
     MB_PROF_UNPACK_CMP_ACTIVE_HI,
 
+    // Host writes once before kernels start; NCRISC reads directly.
+    MB_INSERT_ERRORS_PATTERN_ID,
+    // NCRISC sets this after the first injected corruption for this mailbox.
+    MB_INSERT_ERRORS_DONE,
+
     MB_LAST_USED,
 };
 

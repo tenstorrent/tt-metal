@@ -131,6 +131,117 @@ struct DramGalaxySummary {
     std::vector<DramChipSummary> chips;
 };
 
+struct DramPatternTimingSummary {
+    static constexpr uint32_t kMaxPatternId = 32u;
+    uint64_t ticks[kMaxPatternId] = {};
+    uint64_t jobs[kMaxPatternId] = {};
+    uint64_t bytes[kMaxPatternId] = {};
+};
+
+static void accumulate_pattern_timing_summary(DramPatternTimingSummary& dst, const DramMultiInstanceSummary& run) {
+    for (const auto& entry : run.per_core_results) {
+        const DramBaseResult& r = entry.result;
+
+        if (r.pattern_id >= DramPatternTimingSummary::kMaxPatternId) {
+            continue;
+        }
+
+        dst.ticks[r.pattern_id] += r.job_total_ticks;
+        dst.jobs[r.pattern_id] += 1u;
+        dst.bytes[r.pattern_id] += static_cast<uint64_t>(r.words_checked) * sizeof(uint32_t);
+    }
+}
+
+static void merge_pattern_timing_summary(DramPatternTimingSummary& dst, const DramPatternTimingSummary& src) {
+    for (uint32_t pattern_id = 0; pattern_id < DramPatternTimingSummary::kMaxPatternId; ++pattern_id) {
+        dst.ticks[pattern_id] += src.ticks[pattern_id];
+        dst.jobs[pattern_id] += src.jobs[pattern_id];
+        dst.bytes[pattern_id] += src.bytes[pattern_id];
+    }
+}
+
+static uint32_t get_dram_test_loops_from_env(uint32_t default_loops = 1u) {
+    const char* env = std::getenv("DRAM_TEST_LOOPS");
+    if (env == nullptr || env[0] == '\0') {
+        return default_loops;
+    }
+
+    char* end = nullptr;
+    const unsigned long value = std::strtoul(env, &end, 0);
+    if (end == env || value == 0ul) {
+        return default_loops;
+    }
+
+    return static_cast<uint32_t>(value);
+}
+
+static bool pattern_timing_enabled() {
+    const char* env = std::getenv("DRAM_TEST_PATTERN_TIMING");
+    return (env != nullptr) && (std::atoi(env) != 0);
+}
+
+static void log_pattern_timing_summary(
+    const char* test_name, const DramPatternTimingSummary& summary, double test_wall_ms) {
+    if (!pattern_timing_enabled()) {
+        return;
+    }
+
+    bool any = false;
+
+    for (uint32_t pattern_id = 0; pattern_id < DramPatternTimingSummary::kMaxPatternId; ++pattern_id) {
+        if (summary.jobs[pattern_id] != 0u) {
+            any = true;
+            break;
+        }
+    }
+
+    if (!any) {
+        return;
+    }
+
+    // timestamp() ticks are treated as 1 GHz device ticks here: 1 tick = 1 ns.
+    // Raw sums are worker-time, so they can exceed wall-clock time when workers run in parallel.
+    // Scale all pattern times so the sum of displayed pattern ms matches the real host wall-clock test duration.
+    constexpr double kBlackholeClockHz = 1000000000.0;
+
+    double raw_total_ms = 0.0;
+
+    for (uint32_t pattern_id = 0; pattern_id < DramPatternTimingSummary::kMaxPatternId; ++pattern_id) {
+        raw_total_ms += static_cast<double>(summary.ticks[pattern_id]) * 1000.0 / kBlackholeClockHz;
+    }
+
+    const double scale = (raw_total_ms > 0.0 && test_wall_ms > 0.0) ? (test_wall_ms / raw_total_ms) : 1.0;
+
+    log_info(tt::LogTest, "=== {} BRISC job time by DRAM pattern ===", test_name);
+    log_info(
+        tt::LogTest,
+        "Pattern timing is scaled from BRISC worker-time to host wall-clock: raw_sum_ms={:.3f} wall_ms={:.3f} "
+        "scale={:.9f}",
+        raw_total_ms,
+        test_wall_ms,
+        scale);
+    log_info(
+        tt::LogTest, "| {:>2} | {:<24} | {:>8} | {:>14} | {:>14} |", "ID", "Pattern", "Jobs", "Wall ms", "Checked MB");
+
+    for (uint32_t pattern_id = 0; pattern_id < DramPatternTimingSummary::kMaxPatternId; ++pattern_id) {
+        if (summary.jobs[pattern_id] == 0u) {
+            continue;
+        }
+
+        const double raw_pattern_ms = static_cast<double>(summary.ticks[pattern_id]) * 1000.0 / kBlackholeClockHz;
+        const double scaled_pattern_ms = raw_pattern_ms * scale;
+
+        log_info(
+            tt::LogTest,
+            "| {:>2} | {:<24} | {:>8} | {:>14.3f} | {:>14.2f} |",
+            pattern_id,
+            pattern_name(pattern_id),
+            summary.jobs[pattern_id],
+            scaled_pattern_ms,
+            summary.bytes[pattern_id] / (1024.0 * 1024.0));
+    }
+}
+
 static void handle_sigint(int) {
     g_stop_requested.store(true);
 
@@ -319,15 +430,8 @@ static void print_subtest_status(
     log_info(tt::LogTest, "{}", out);
 }
 
-static bool get_dram_repeated_patterns_only_from_env() {
-    const char* value = std::getenv("DRAM_TEST_REPEATED_PATTERNS_ONLY");
-    if (value == nullptr) {
-        value = std::getenv("DRAM_TEST_REPEATED_ONLY");
-    }
-    if (value == nullptr) {
-        value = std::getenv("REPEATED_PATTERNS_ONLY");
-    }
-
+static bool get_dram_test_fast_from_env() {
+    const char* value = std::getenv("DRAM_TEST_FAST");
     return value != nullptr && std::string(value) == "1";
 }
 
@@ -348,28 +452,21 @@ static const std::vector<uint32_t>& get_deployment_patterns_from_env() {
         DRAM_PATTERN_BYTEWISE_SSN,
     };
 
-    // Repeated/chunk-stable patterns: the expected data for a chunk is deterministic
-    // from the pass/pattern and does not require expensive per-word random generation.
-    // This mode is useful for faster deployment bring-up runs.
-    static const std::vector<uint32_t> repeated_patterns = {
-        DRAM_PATTERN_COUNTER,
+    // Fast mode runs a small representative subset for quick deployment checks.
+    static const std::vector<uint32_t> fast_patterns = {
         DRAM_PATTERN_CHECKERBOARD,
+        DRAM_PATTERN_RANDOM,
+        DRAM_PATTERN_COUNTER,
         DRAM_PATTERN_ADDRESS,
-        DRAM_PATTERN_MARCHING_ONES,
-        DRAM_PATTERN_MARCHING_ZEROES,
-        DRAM_PATTERN_MARCHING_ONE_BITS,
-        DRAM_PATTERN_MARCHING_ZERO_BITS,
-        DRAM_PATTERN_TOGGLE_BITS,
-        DRAM_PATTERN_SATURATION,
     };
 
-    return get_dram_repeated_patterns_only_from_env() ? repeated_patterns : all_patterns;
+    return get_dram_test_fast_from_env() ? fast_patterns : all_patterns;
 }
 
 static void log_dram_pattern_mode_once() {
     static std::once_flag once;
     std::call_once(once, []() {
-        const bool repeated_only = get_dram_repeated_patterns_only_from_env();
+        const bool fast_mode = get_dram_test_fast_from_env();
         const auto& patterns = get_deployment_patterns_from_env();
 
         std::vector<std::string> names;
@@ -388,10 +485,10 @@ static void log_dram_pattern_mode_once() {
 
         log_info(
             tt::LogTest,
-            "DRAM pattern mode: {} patterns={} env DRAM_TEST_REPEATED_PATTERNS_ONLY={}",
-            repeated_only ? "repeated-only" : "all",
+            "DRAM pattern mode: {} patterns={} env DRAM_TEST_FAST={}",
+            fast_mode ? "fast" : "all",
             pattern_list,
-            repeated_only ? "1" : "0");
+            fast_mode ? "1" : "0");
     });
 }
 
@@ -703,7 +800,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentOptimalWorkersAllDramBanks)
     DramGalaxySummary galaxy{};
     const auto galaxy_start = std::chrono::steady_clock::now();
 
-    constexpr uint32_t repeats = 1u;
+    const uint32_t repeats = get_dram_test_loops_from_env(1u);
     constexpr uint32_t initial_seed = 0x12345678u;
     constexpr uint32_t advance_seed = 1u;
 
@@ -717,6 +814,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentOptimalWorkersAllDramBanks)
     std::signal(SIGINT, handle_sigint);
     log_blackhole_galaxy_pci_bdfs_once();
     log_dram_pattern_mode_once();
+    log_info(tt::LogTest, "DRAM_TEST_LOOPS={} (whole workload repeat count)", repeats);
 
     log_info(tt::LogTest, "Persistent optimal-worker DRAM deployment running on {} chip(s)", devices_.size());
 
@@ -731,6 +829,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentOptimalWorkersAllDramBanks)
         parallel_chips ? "YES" : "NO");
 
     std::mutex summary_mutex;
+    DramPatternTimingSummary pattern_timing;
 
     auto run_one_chip = [&](size_t chip_index) {
         if (g_stop_requested.load()) {
@@ -738,6 +837,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentOptimalWorkersAllDramBanks)
         }
 
         DramGalaxySummary chip_summary{};
+        DramPatternTimingSummary chip_pattern_timing{};
         bool chip_pass = true;
 
         const auto& mesh_device = devices_[chip_index];
@@ -858,6 +958,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentOptimalWorkersAllDramBanks)
         const double elapsed_ms = std::chrono::duration<double, std::milli>(subtest_end - subtest_start).count();
 
         accumulate_galaxy_summary(chip_summary, run, jobs.size());
+        accumulate_pattern_timing_summary(chip_pattern_timing, run);
 
         chip_summary.chips.push_back(make_chip_bank_summary(device, static_cast<uint32_t>(assignments.size()), run));
 
@@ -910,6 +1011,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentOptimalWorkersAllDramBanks)
             }
 
             merge_galaxy_summary(galaxy, chip_summary);
+            merge_pattern_timing_summary(pattern_timing, chip_pattern_timing);
             all_pass &= chip_pass;
         }
 
@@ -931,6 +1033,20 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentOptimalWorkersAllDramBanks)
     }
 
     const auto galaxy_end = std::chrono::steady_clock::now();
+    log_pattern_timing_summary(
+        "Persistent Optimal DRAM Deployment",
+        pattern_timing,
+        std::chrono::duration<double, std::milli>(galaxy_end - galaxy_start).count());
+
+    log_info(tt::LogTest, "=== Persistent Optimal DRAM Deployment Loop Summary ===");
+    log_info(
+        tt::LogTest,
+        "loops={} total_jobs={} checked_bytes={} pass={}",
+        repeats,
+        galaxy.jobs,
+        galaxy.checked_bytes,
+        galaxy.pass ? "YES" : "NO");
+
     log_galaxy_summary(
         "Persistent Optimal DRAM Deployment",
         galaxy,
@@ -962,7 +1078,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentAllWorkersSingleDramSequent
     const auto galaxy_start = std::chrono::steady_clock::now();
 
     constexpr uint64_t controller_bank_offset = 0u;
-    constexpr uint32_t repeats = 1u;
+    const uint32_t repeats = get_dram_test_loops_from_env(1u);
     constexpr uint32_t initial_seed = 0x12345678u;
     constexpr uint32_t advance_seed = 1u;
 
@@ -976,6 +1092,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentAllWorkersSingleDramSequent
     std::signal(SIGINT, handle_sigint);
     log_blackhole_galaxy_pci_bdfs_once();
     log_dram_pattern_mode_once();
+    log_info(tt::LogTest, "DRAM_TEST_LOOPS={} (whole workload repeat count)", repeats);
 
     log_info(tt::LogTest, "Persistent all-workers single-DRAM sequential sweep running on {} chip(s)", devices_.size());
 
@@ -991,6 +1108,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentAllWorkersSingleDramSequent
         parallel_chips ? "YES" : "NO");
 
     std::mutex summary_mutex;
+    DramPatternTimingSummary pattern_timing;
 
     auto run_one_chip = [&](size_t chip_index) {
         if (g_stop_requested.load()) {
@@ -998,6 +1116,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentAllWorkersSingleDramSequent
         }
 
         DramGalaxySummary chip_summary{};
+        DramPatternTimingSummary chip_pattern_timing{};
         bool chip_pass = true;
 
         const auto& mesh_device = devices_[chip_index];
@@ -1141,6 +1260,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentAllWorkersSingleDramSequent
                 std::chrono::duration_cast<std::chrono::seconds>(bank_end - bank_start).count();
 
             accumulate_galaxy_summary(chip_summary, run, bank_jobs);
+            accumulate_pattern_timing_summary(chip_pattern_timing, run);
 
             chip_bank_summary.pass &= run.summary.pass;
 
@@ -1235,6 +1355,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentAllWorkersSingleDramSequent
 
             chip_summary.chips.push_back(chip_bank_summary);
             merge_galaxy_summary(galaxy, chip_summary);
+            merge_pattern_timing_summary(pattern_timing, chip_pattern_timing);
             all_pass &= chip_pass;
         }
     };
@@ -1252,6 +1373,20 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentAllWorkersSingleDramSequent
     }
 
     const auto galaxy_end = std::chrono::steady_clock::now();
+
+    log_pattern_timing_summary(
+        "Persistent All-Workers Single-DRAM Sequential Sweep",
+        pattern_timing,
+        std::chrono::duration<double, std::milli>(galaxy_end - galaxy_start).count());
+
+    log_info(tt::LogTest, "=== Persistent All-Workers Single-DRAM Sequential Sweep Loop Summary ===");
+    log_info(
+        tt::LogTest,
+        "loops={} total_jobs={} checked_bytes={} pass={}",
+        repeats,
+        galaxy.jobs,
+        galaxy.checked_bytes,
+        galaxy.pass ? "YES" : "NO");
 
     log_galaxy_summary(
         "Persistent All-Workers Single-DRAM Sequential Sweep",
@@ -1284,7 +1419,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentPartitionedWorkersAllDramBa
     const auto galaxy_start = std::chrono::steady_clock::now();
 
     constexpr uint64_t controller_bank_offset = 0u;
-    constexpr uint32_t repeats = 1u;
+    const uint32_t repeats = get_dram_test_loops_from_env(1u);
     constexpr uint32_t initial_seed = 0x12345678u;
     constexpr uint32_t advance_seed = 1u;
 
@@ -1298,6 +1433,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentPartitionedWorkersAllDramBa
     std::signal(SIGINT, handle_sigint);
     log_blackhole_galaxy_pci_bdfs_once();
     log_dram_pattern_mode_once();
+    log_info(tt::LogTest, "DRAM_TEST_LOOPS={} (whole workload repeat count)", repeats);
 
     log_info(tt::LogTest, "Persistent partitioned-workers all-DRAM test running on {} chip(s)", devices_.size());
 
@@ -1313,6 +1449,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentPartitionedWorkersAllDramBa
         parallel_chips ? "YES" : "NO");
 
     std::mutex summary_mutex;
+    DramPatternTimingSummary pattern_timing;
 
     auto run_one_chip = [&](size_t chip_index) {
         if (g_stop_requested.load()) {
@@ -1320,6 +1457,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentPartitionedWorkersAllDramBa
         }
 
         DramGalaxySummary chip_summary{};
+        DramPatternTimingSummary chip_pattern_timing{};
         bool chip_pass = true;
 
         const auto& mesh_device = devices_[chip_index];
@@ -1486,6 +1624,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentPartitionedWorkersAllDramBa
         const auto duration_sec = std::chrono::duration_cast<std::chrono::seconds>(end - start).count();
 
         accumulate_galaxy_summary(chip_summary, run, total_jobs_for_chip);
+        accumulate_pattern_timing_summary(chip_pattern_timing, run);
 
         chip_summary.chips.push_back(make_chip_bank_summary(device, num_dram_channels, run));
 
@@ -1543,6 +1682,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentPartitionedWorkersAllDramBa
             }
 
             merge_galaxy_summary(galaxy, chip_summary);
+            merge_pattern_timing_summary(pattern_timing, chip_pattern_timing);
             all_pass &= chip_pass;
         }
     };
@@ -1560,6 +1700,20 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentPartitionedWorkersAllDramBa
     }
 
     const auto galaxy_end = std::chrono::steady_clock::now();
+
+    log_pattern_timing_summary(
+        "Persistent Partitioned Workers All-DRAM",
+        pattern_timing,
+        std::chrono::duration<double, std::milli>(galaxy_end - galaxy_start).count());
+
+    log_info(tt::LogTest, "=== Persistent Partitioned Workers All-DRAM Loop Summary ===");
+    log_info(
+        tt::LogTest,
+        "loops={} total_jobs={} checked_bytes={} pass={}",
+        repeats,
+        galaxy.jobs,
+        galaxy.checked_bytes,
+        galaxy.pass ? "YES" : "NO");
 
     log_galaxy_summary(
         "Persistent Partitioned Workers All-DRAM",

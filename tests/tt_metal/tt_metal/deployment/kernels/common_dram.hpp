@@ -89,6 +89,9 @@ struct DramBaseResult {
     uint64_t math_compare_active_ticks;
     uint64_t pack_compare_active_ticks;
     uint64_t unpack_compare_active_ticks;
+
+    // BRISC wall time for the whole job, measured with device timestamp().
+    uint64_t job_total_ticks;
 };
 
 // -------------------------

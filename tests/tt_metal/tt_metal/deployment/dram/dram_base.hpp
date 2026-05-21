@@ -33,6 +33,7 @@ struct DramRunSummary {
     uint64_t math_compare_active_ticks = 0;
     uint64_t pack_compare_active_ticks = 0;
     uint64_t unpack_compare_active_ticks = 0;
+    uint64_t job_total_ticks = 0;
 };
 
 struct DramDeploymentConfig {
