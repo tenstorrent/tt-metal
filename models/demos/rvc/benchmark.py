@@ -43,7 +43,6 @@ if _REPO_ROOT not in sys.path:
 import ttnn  # noqa: E402
 
 import argparse  # noqa: E402
-import math  # noqa: E402
 import platform  # noqa: E402
 import statistics  # noqa: E402
 import time  # noqa: E402
@@ -355,7 +354,7 @@ def main():
     print(f"  torch:         {torch.__version__}")
     print(f"  ttnn module:   {ttnn.__file__}")
     print(f"  device_id:     {args.device_id}")
-    print(f"  l1_small_size: 32768")
+    print("  l1_small_size: 32768")
     print(f"  max_secs:      {args.max_secs}")
     print(f"  f0_method:     {args.f0_method}")
     print(f"  MAX_CHUNK_FRAMES={MAX_CHUNK_FRAMES}  OVERLAP={OVERLAP}  TARGET_LEN={TARGET_LEN}")
@@ -424,7 +423,7 @@ def main():
         print(f"  Warm steady RTF (TTNN only):     {warm_ttnn_mean / output_secs:.4f}    ({_fmt(warm_ttnn_mean)} TTNN, mean of {args.runs})")
         print(f"  Cold-start RTF (full pipeline):  {(cold_ttnn + cold_pre) / output_secs:.4f}")
         print(f"  Warm steady RTF (full pipeline): {(warm_ttnn_mean + warm_pre_mean) / output_secs:.4f}")
-        print(f"  Bounty target:                   RTF < 0.5")
+        print("  Bounty target:                   RTF < 0.5")
         print(f"  Audio PCC (warm, mean):          {statistics.mean(warm_pcc):.6f}")
         print(f"  Chunk backends used:             {sorted({c['backend'] for r in warm_results for c in r['chunk_log']})}")
         print("=" * 72)

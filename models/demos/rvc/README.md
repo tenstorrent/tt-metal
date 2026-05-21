@@ -171,12 +171,17 @@ includes torch preprocessing (Hubert + RMVPE + TextEncoder + SineGen).
 
 | Clip | Cold RTF (TTNN only) | Warm RTF (TTNN only) | Cold RTF (full) | Warm RTF (full) | Audio PCC | Warm cv |
 |---|---:|---:|---:|---:|---:|---:|
-| 3.00s   | 0.3510 | **0.2784** | 0.6506 | 0.5336 | 0.998 | 1.6% |
-| 10.00s  | 0.2887 | **0.2709** | 0.4347 | **0.4069** | 0.998 | 0.2% |
+| 3.00s   | 0.3537 | **0.2763** | 0.6547 | 0.5276 | 0.998 | 1.3% |
+| 10.00s  | 0.2948 | **0.2742** | 0.4432 | **0.4067** | 0.998 | 1.2% |
+
+Numbers are from a clean N300 environment rebuild (`warmup=1, runs=3`).
+Cold-start is a single first run that pays `ttnn` JIT compilation, so it
+varies run-to-run (3s cold has been observed between ~0.35 and ~0.60);
+the warm steady-state means (the bolded headline) are stable to ~1–2%.
 
 | Target | 3s | 10s |
 |---|---|---|
-| TTNN-only RTF < 0.5 | ✅ 0.28 | ✅ 0.27 |
+| TTNN-only RTF < 0.5 | ✅ 0.28 | ✅ 0.28 |
 | Full-pipeline RTF < 0.5 | ❌ 0.53 (preprocessing-dominated) | ✅ 0.41 |
 
 **Preprocessing dominates at short clips.** On 3s audio the torch
@@ -187,12 +192,16 @@ extraction is the largest single preprocessing line item.
 
 ### Runtime Breakdown (warm steady-state)
 
-| Stage | 3s (warm mean) | 10s (warm mean) | % of TTNN at 10s |
+| Stage | 3s (warm) | 10s (warm) | % of TTNN at 10s |
 |---|---:|---:|---:|
-| Preprocessing (Hubert + RMVPE + TextEncoder + SineGen) | 0.756s | 1.353s | — |
-| TTNN Flow Decoder | 0.111s | 0.358s | ~13% |
-| **TTNN Generator** | **0.719s** | **2.346s** | **~87%** |
-| TTNN Total | 0.830s | 2.704s | 100% |
+| Preprocessing (Hubert + RMVPE + TextEncoder + SineGen) | 0.802s | 1.395s | — |
+| TTNN Flow Decoder | 0.105s | 0.361s | ~13% |
+| **TTNN Generator** | **0.709s** | **2.391s** | **~87%** |
+| TTNN Total | 0.814s | 2.752s | 100% |
+
+At 10s, RMVPE pitch extraction (~0.75s) is the largest single preprocessing
+line item, and the Generator is ~87% of TTNN time — which is why the
+device-resident ResBlock loop targets exactly that path.
 
 ### How the optimization works
 

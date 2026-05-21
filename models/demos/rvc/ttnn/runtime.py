@@ -53,6 +53,9 @@ UPSAMPLE_RATES = [12, 10, 2, 2]
 UPSAMPLE_KERNELS = [24, 20, 4, 4]
 UPSAMPLE_INITIAL_CH = 512
 RESBLOCK_DILATIONS = [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
+NUM_UPSAMPLES = 4       # len(UPSAMPLE_RATES)
+NUM_KERNELS = 3         # ResBlocks per upsample stage (kernels 3/7/11)
+LRELU_SLOPE = 0.1
 
 
 def _conv1d_to_torch(result, out_channels):
@@ -70,9 +73,6 @@ def _conv1d_to_torch(result, out_channels):
     out = ttnn.to_torch(ttnn.from_device(out_tt)).float()
     out = out.reshape(1, 1, out_len, -1)[:, :, :, :out_channels].squeeze(1)
     return out, out_len
-NUM_KERNELS = 3
-NUM_UPSAMPLES = 4
-LRELU_SLOPE = 0.1
 
 
 def _linear_channel_first(x, weight, bias):
@@ -170,7 +170,6 @@ class TTNNFlowDecoder:
                 padding=padding, dilation=d, groups=1,
                 dtype=DEFAULT_DTYPE, return_output_dim=True,
             )
-            conv_out_tt = result[0]
             conv_torch, _ = _conv1d_to_torch(result, 2 * HIDDEN_CH)
             conv_torch = conv_torch + conv["bs"][i].unsqueeze(0).unsqueeze(0)
 
@@ -439,6 +438,12 @@ class TTNNGeneratorNSF:
         transfers occur per call: one `from_torch` at entry, one `to_torch`
         at exit. Each iteration explicitly deallocates its intermediates so
         device memory doesn't grow across the 3-iter loop.
+
+        Why this is the hot path: the generator spends ~87% of TTNN time
+        here (12 ResBlocks × 6 conv1d each). The pre-optimization path moved
+        every conv1d result host→device→host, paying a host roundtrip per
+        conv — ~12 per block. Device residency collapses that to a single
+        entry + exit transfer, which is the bulk of the warm RTF win.
 
         Two layout constraints must be honored on every step:
 

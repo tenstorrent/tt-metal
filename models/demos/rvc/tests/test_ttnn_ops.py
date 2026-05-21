@@ -15,7 +15,7 @@ import pytest
 import torch
 import ttnn
 
-from models.demos.rvc.tests.pcc_utils import compute_pcc, assert_pcc
+from models.demos.rvc.tests.pcc_utils import assert_pcc
 
 
 # =============================================================================

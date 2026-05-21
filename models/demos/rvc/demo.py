@@ -44,7 +44,7 @@ from models.demos.rvc.torch_impl.vc.synthesizer import TextEncoder, SourceModule
 from models.demos.rvc.ttnn.runtime import TTNNFlowDecoder, TTNNGeneratorNSF
 from models.demos.rvc.utils.audio import load_audio
 from models.demos.rvc.utils.config import (
-    Config, HubertPretrainingConfig, HubertPretrainingTask,
+    HubertPretrainingConfig, HubertPretrainingTask,
     get_hubert_paths, get_model_and_config_paths,
 )
 
@@ -246,7 +246,7 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
             feats = retrieved * index_rate + (1 - index_rate) * feats
             print(f"  Retrieval: index_rate={index_rate}, {time.time()-t_retrieval_start:.3f}s")
         else:
-            print(f"  Retrieval: disabled (no index or rate=0)")
+            print("  Retrieval: disabled (no index or rate=0)")
 
         # 3. Speaker embedding
         sid = torch.tensor([speaker_id])
@@ -269,7 +269,6 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
     # === CHUNKED TTNN INFERENCE ===
     n_chunks = (num_frames + MAX_CHUNK_FRAMES - 1) // MAX_CHUNK_FRAMES
     print(f"\n--- TTNN Inference ({n_chunks} chunks of ≤{MAX_CHUNK_FRAMES} frames, overlap-add) ---")
-    OVERLAP_SAMPLES = OVERLAP * UPP
 
     ttnn_z_chunks = []
     audio_segments = []
@@ -430,7 +429,7 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
     rtf = t_ttnn_total / output_secs if output_secs > 0 else float('inf')
 
     print(f"\n{'=' * 60}")
-    print(f"TIMING SUMMARY")
+    print("TIMING SUMMARY")
     print(f"{'=' * 60}")
     print(f"  Input audio:      {audio_secs:.2f}s")
     print(f"  Output audio:     {output_secs:.2f}s @ {SR_TARGET}Hz")

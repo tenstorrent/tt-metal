@@ -15,7 +15,6 @@ Tests that persistent TTNN modules can:
 import os
 import pytest
 import torch
-import ttnn
 
 from safetensors.torch import load_file
 
@@ -63,7 +62,7 @@ class TestFlowRuntime:
             assert diff == 0.0, f"Non-determinism at run {i}: max_diff={diff}"
 
         flow.deallocate()
-        print(f"  Flow: 5/5 repeated runs, bit-identical, no OOM ✓")
+        print("  Flow: 5/5 repeated runs, bit-identical, no OOM ✓")
 
     def test_correctness_vs_torch(self, device, checkpoint):
         """Compare persistent flow against torch reference."""
@@ -111,7 +110,7 @@ class TestGeneratorRuntime:
             assert diff == 0.0, f"Non-determinism at run {i}: max_diff={diff}"
 
         gen.deallocate()
-        print(f"  Generator: 3/3 repeated runs, bit-identical, no OOM ✓")
+        print("  Generator: 3/3 repeated runs, bit-identical, no OOM ✓")
 
     def test_correctness_vs_torch(self, device, checkpoint):
         """Compare persistent generator against torch reference."""
@@ -189,4 +188,4 @@ class TestFullPipelineRuntime:
 
         flow.deallocate()
         gen.deallocate()
-        print(f"  Full pipeline: 3/3 runs, correct + deterministic + no OOM ✓")
+        print("  Full pipeline: 3/3 runs, correct + deterministic + no OOM ✓")
