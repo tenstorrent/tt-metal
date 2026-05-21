@@ -1011,14 +1011,8 @@ class TestConfig:
             '#include "llk_defs.h"',
             f"{sfpu_types_include}",
             (
-                # counters.h provides PerfRunType (needed for PERF_RUN_TYPE declaration below)
-                # and the MEASURE_PERF_COUNTERS macro. Heavy machinery is gated internally
-                # by PERF_COUNTERS_COMPILED.
-                '#include "counters.h"'
-                if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR
-                else ""
-            ),
-            (
+                # perf.h provides PerfRunType (needed for the PERF_RUN_TYPE declaration below).
+                # Test sources that use MEASURE_PERF_COUNTERS get counters.h via params.h.
                 '#include "perf.h"'
                 if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR
                 else ""

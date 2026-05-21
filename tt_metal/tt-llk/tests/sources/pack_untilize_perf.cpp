@@ -7,6 +7,7 @@
 #include <cstdio>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "params.h"
 #include "perf.h"

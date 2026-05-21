@@ -6,16 +6,7 @@
 
 #include <cstdint>
 
-// Always available — test sources use this in `if constexpr` checks regardless
-// of whether perf counters are compiled in.
-enum class PerfRunType
-{
-    L1_TO_L1,
-    UNPACK_ISOLATE,
-    MATH_ISOLATE,
-    PACK_ISOLATE,
-    L1_CONGESTION
-};
+#include "perf.h" // PerfRunType lives here
 
 #ifdef PERF_COUNTERS_COMPILED
 

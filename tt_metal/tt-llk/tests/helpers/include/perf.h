@@ -9,6 +9,15 @@
 
 #include "ckernel.h"
 
+enum class PerfRunType
+{
+    L1_TO_L1,
+    UNPACK_ISOLATE,
+    MATH_ISOLATE,
+    PACK_ISOLATE,
+    L1_CONGESTION
+};
+
 // FIXME: this shouldn't be statically allocated
 constexpr std::uint32_t PERF_INPUT_A = 0x21000;
 constexpr std::uint32_t PERF_INPUT_B = PERF_INPUT_A + 16 * 4096;
