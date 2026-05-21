@@ -7,6 +7,9 @@ Prefill and decode linears use interleaved L1 weights with
 ``MatmulMultiCoreReuseMultiCast1DProgramConfig`` via ``common.matmul_program_config`` (text
 encoder / speech encoder pattern). Decode self-attn QKV uses a separate ``qkv_decode`` weight
 tensor for KV-cache PCC.
+
+KV-cache: batched prefill uses ``slice_write`` (self; cross on bf16), decode cross reuses DRAM
+cache with Q-only ``nlp_create_qkv_heads`` when ``cross_attn_cache_valid``.
 """
 
 from __future__ import annotations
@@ -184,6 +187,60 @@ def write_self_kv_prefill_to_cache(
         ttnn.deallocate(k_typed)
         ttnn.deallocate(v_typed)
     if padded_seq != seq_len:
+        ttnn.deallocate(k_src)
+        ttnn.deallocate(v_src)
+
+
+def write_cross_kv_prefill_to_cache(
+    key_states: ttnn.Tensor,
+    value_states: ttnn.Tensor,
+    cross_cache: list[ttnn.Tensor],
+    *,
+    seq_len: Optional[int] = None,
+) -> None:
+    """Bulk-write cross K/V into cross cache via ``slice_write`` (bf16 warm path; bf8 keeps ``copy``)."""
+    k_cache, v_cache = cross_cache
+    bsz = int(key_states.shape[0])
+    nh = int(key_states.shape[1])
+    head_dim = int(key_states.shape[3])
+    padded_seq = int(key_states.shape[2])
+    fill_len = seq_len if seq_len is not None else padded_seq
+    begins = [0, 0, 0, 0]
+    ends = [bsz, nh, fill_len, head_dim]
+    strides = [1, 1, 1, 1]
+    if padded_seq != fill_len:
+        k_src = ttnn.slice(
+            key_states, [0, 0, 0, 0], [bsz, nh, fill_len, head_dim], [1, 1, 1, 1], memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        v_src = ttnn.slice(
+            value_states,
+            [0, 0, 0, 0],
+            [bsz, nh, fill_len, head_dim],
+            [1, 1, 1, 1],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+    else:
+        k_src = key_states
+        v_src = value_states
+    cache_dtype = k_cache.dtype
+    if k_src.dtype != cache_dtype:
+        k_typed = ttnn.typecast(k_src, dtype=cache_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        v_typed = ttnn.typecast(v_src, dtype=cache_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    else:
+        k_typed = k_src
+        v_typed = v_src
+    k_dram = ttnn.to_memory_config(k_typed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    v_dram = ttnn.to_memory_config(v_typed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.experimental.slice_write(k_dram, k_cache, begins, ends, strides)
+    ttnn.experimental.slice_write(v_dram, v_cache, begins, ends, strides)
+    if k_dram is not k_typed:
+        ttnn.deallocate(k_dram)
+    if v_dram is not v_typed:
+        ttnn.deallocate(v_dram)
+    if k_typed is not k_src:
+        ttnn.deallocate(k_typed)
+        ttnn.deallocate(v_typed)
+    if padded_seq != fill_len:
         ttnn.deallocate(k_src)
         ttnn.deallocate(v_src)
 
@@ -562,6 +619,20 @@ class TTSeamlessM4Tv2Decoder:
         x = ttnn.reshape(x, (batch, seq, num_heads, head_dim))
         return ttnn.permute(x, (0, 2, 1, 3))
 
+    @staticmethod
+    def _cross_q_heads_decode(q: ttnn.Tensor, *, num_heads: int) -> ttnn.Tensor:
+        """Decode cross Q via ``nlp_create_qkv_heads`` (``num_kv_heads=0``)."""
+        if len(q.shape) == 3:
+            q = ttnn.unsqueeze(q, 1)
+        qh, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+            q,
+            num_heads=num_heads,
+            num_kv_heads=0,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(q)
+        return qh
+
     def _self_attention_decode(
         self,
         hidden_states: ttnn.Tensor,
@@ -679,8 +750,7 @@ class TTSeamlessM4Tv2Decoder:
                 program_config=pc_q,
                 is_decode=True,
             )
-            qh = self._heads(q, batch, seq_q, num_heads, head_dim)
-            ttnn.deallocate(q)
+            qh = self._cross_q_heads_decode(q, num_heads=num_heads)
             kh, vh = cross_attn_cache[0], cross_attn_cache[1]
         else:
             q = self._linear(
@@ -775,7 +845,8 @@ class TTSeamlessM4Tv2Decoder:
         attn_scale: Optional[float] = None,
     ) -> ttnn.Tensor:
         is_decode = kv_cache is not None and current_decode_pos is not None
-        if is_decode and encoder_hidden_states is None:
+        is_cross_attn = "kv" in attn_module and "qkv" not in attn_module
+        if is_decode and encoder_hidden_states is None and not is_cross_attn:
             assert cache_seq_len is not None
             assert sdpa_decode_bundle is not None and decode_attn_pcs is not None and attn_scale is not None
             return self._self_attention_decode(
@@ -792,7 +863,7 @@ class TTSeamlessM4Tv2Decoder:
                 pc_out=decode_attn_pcs["out"],
                 attn_scale=attn_scale,
             )
-        if is_decode and encoder_hidden_states is not None:
+        if is_decode and (encoder_hidden_states is not None or (is_cross_attn and cross_attn_cache_valid)):
             assert decode_attn_pcs is not None and attn_scale is not None
             return self._cross_attention_decode(
                 hidden_states,
@@ -894,18 +965,19 @@ class TTSeamlessM4Tv2Decoder:
 
         is_causal = encoder_hidden_states is None and attn_mask is None
 
-        if (
-            prefill_kv_cache_fill
-            and kv_cache is not None
-            and encoder_hidden_states is None
-            and hasattr(attn_module, "qkv")
-        ):
+        if prefill_kv_cache_fill and kv_cache is not None and encoder_hidden_states is None and "qkv" in attn_module:
             fill_len = kv_cache_fill_len if kv_cache_fill_len is not None else seq_q
             write_self_kv_prefill_to_cache(kh, vh, kv_cache, seq_len=fill_len)
 
+        cross_kv_in_cache = False
         if prefill_kv_cache_fill and cross_attn_cache is not None and encoder_hidden_states is not None:
-            ttnn.copy(kh, cross_attn_cache[0])
-            ttnn.copy(vh, cross_attn_cache[1])
+            if cross_attn_cache[0].dtype == ttnn.bfloat16:
+                write_cross_kv_prefill_to_cache(kh, vh, cross_attn_cache)
+                kh, vh = cross_attn_cache[0], cross_attn_cache[1]
+                cross_kv_in_cache = True
+            else:
+                ttnn.copy(kh, cross_attn_cache[0])
+                ttnn.copy(vh, cross_attn_cache[1])
 
         attn_out = ttnn.transformer.scaled_dot_product_attention(
             qh,
@@ -919,8 +991,9 @@ class TTSeamlessM4Tv2Decoder:
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(qh)
-        ttnn.deallocate(kh)
-        ttnn.deallocate(vh)
+        if not cross_kv_in_cache:
+            ttnn.deallocate(kh)
+            ttnn.deallocate(vh)
 
         ls = attn_out.shape
         ps = attn_out.padded_shape
@@ -1069,9 +1142,10 @@ class TTSeamlessM4Tv2Decoder:
                 m_tiles=m_tiles,
                 n_tiles=n_tiles,
             )
+            enc_states = None if is_decode and cross_attn_cache_valid else encoder_hidden_states
             attn_out = self._attention(
                 normed,
-                encoder_hidden_states,
+                enc_states,
                 layer.cross_attention,
                 cross_attention_mask,
                 batch=batch,
