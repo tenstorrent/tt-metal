@@ -168,10 +168,6 @@ class Pipeline(BaseModel):
         None,
         description="Link to the Github Actions CI pipeline, for pipelines " "orchestrated and executed by Github.",
     )
-    workflow_attempt: Optional[int] = Field(
-        None,
-        description="GitHub workflow rerun attempt number.",
-    )
     pipeline_submission_ts: datetime = Field(
         description="Timestamp with timezone when the pipeline was submitted for " "execution.",
     )
@@ -194,7 +190,6 @@ class Pipeline(BaseModel):
     git_author: str = Field(description="Author of the Git commit.")
     orchestrator: Optional[str] = Field(None, description="CI/CD pipeline orchestration platform.")
     jobs: List[Job] = []
-    tt_smi_resets: List[TtSmiReset] = []
 
     # Model validator to check the unique combination constraint
     @model_validator(mode="before")
