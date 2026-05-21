@@ -8,6 +8,7 @@ import pytest
 import ttnn
 import torch.nn as nn
 from tests.ttnn.utils_for_testing import check_with_pcc
+from models.common.utility_functions import skip_with_watcher
 
 from tests.ttnn.unit_tests.operations.conv.test_conv3d import (
     setup_conv3d_test,
@@ -874,3 +875,29 @@ def test_conv3d_auto_blocking_large_c_in(device, input_shape, out_channels, kern
     pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=0.999)
     logger.info(f"Conv3d auto-blocking large C_in (issue #35436): {pcc_message}")
     assert pcc_passed, pcc_message
+
+
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37184")
+def test_conv3d_program_cache_batch_size(device):
+    """Regression for issue #44565: B=1 then B=2 on the same device used to produce garbage output for B=2."""
+    grid_size = device.compute_with_storage_grid_size()
+    out_channels = 64
+    kernel_size = (3, 3, 3)
+    stride = (1, 1, 1)
+    groups = 1
+    padding = (0, 1, 1)
+    padding_mode = "zeros"
+
+    for B in (1, 2):
+        input_shape = (B, 12, 8, 10, 9)
+        run_conv3d_test(
+            device,
+            input_shape,
+            out_channels,
+            kernel_size,
+            stride,
+            groups,
+            padding,
+            padding_mode,
+            grid_size=grid_size,
+        )

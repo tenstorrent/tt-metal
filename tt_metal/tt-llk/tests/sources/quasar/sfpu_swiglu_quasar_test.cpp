@@ -136,7 +136,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
     }
 
-    _llk_math_eltwise_unary_sfpu_init_();
+    _llk_math_eltwise_sfpu_init_();
 
     // SFPU section for swiglu. Base the Dest write address at the gate tile
     // (DST_INDEX + 0). Tile offsets are in Dest rows: one tile spans
@@ -146,10 +146,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     //   up   at Dest tile 1  → offset 1 * DEST_ROWS_PER_TILE
     //   out  at Dest tile 2  → offset 2 * DEST_ROWS_PER_TILE
     // _calculate_swiglu_ reads/writes 2 rows per iteration (SFP_ROWS=2), and
-    // _llk_math_eltwise_unary_sfpu_inc_dst_face_addr_() advances the base by
+    // _llk_math_eltwise_sfpu_inc_dst_face_addr_() advances the base by
     // TEST_FACE_R_DIM rows (one face) between face iterations, so the same
     // relative offsets work for every face.
-    _llk_math_eltwise_unary_sfpu_start_(params.DST_INDEX);
+    _llk_math_eltwise_sfpu_start_(params.DST_INDEX);
 
     // Load the 3 hoisted constants (+L, +2L, alpha) into LREG4/5/6 once for
     // the whole SFPU section. They persist across every per-face call below.
@@ -163,10 +163,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             /*gate_offset_idx=*/0,
             /*up_offset_idx=*/DEST_ROWS_PER_TILE,
             /*out_offset_idx=*/2 * DEST_ROWS_PER_TILE);
-        _llk_math_eltwise_unary_sfpu_inc_dst_face_addr_();
+        _llk_math_eltwise_sfpu_inc_dst_face_addr_();
     }
 
-    _llk_math_eltwise_unary_sfpu_done_();
+    _llk_math_eltwise_sfpu_done_();
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
 

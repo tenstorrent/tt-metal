@@ -225,7 +225,7 @@ inline __attribute__((always_inline)) void _sfpu_check_and_call_(
         PARAM0)
 
 #define SFPU_ZERO_KERNEL(OP, MODE, APPROXIMATE, DST_IDX) \
-    SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp, (APPROXIMATE, SfpuType::OP), MODE, DST_IDX, 8)
+    SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp, (APPROXIMATE, SfpuType::OP), MODE, DST_IDX)
 
 #define SFPU_ZERO_KERNEL_TYPE(TYPE, OP, MODE, APPROXIMATE, DST_IDX) \
     SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, TYPE, (APPROXIMATE, SfpuType::OP), MODE, DST_IDX)

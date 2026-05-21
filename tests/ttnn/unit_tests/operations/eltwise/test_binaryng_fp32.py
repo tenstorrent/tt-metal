@@ -448,6 +448,7 @@ def test_subalpha_fp32(alpha, device):
     "dtype",
     [
         "float32",
+        "bfloat16",
     ],
 )
 def test_special_values(device, op_name, dtype):

@@ -19,32 +19,28 @@ from models.tt_transformers.tt.ccl import TT_CCL
     ((1, 4),),
 )
 @pytest.mark.parametrize(
-    "gated",
-    (True, False),
-)
-@pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
+        {
+            "N150": (1, 1),
+            "N300": (1, 2),
+            "N150x4": (1, 4),
+            "T3K": (1, 8),
+            "TG": (8, 4),
+            "P150": (1, 1),
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     ],
     indirect=True,
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
-def test_block_inference(batch, num_chunks, mesh_device, reset_seeds, gated):
+def test_block_inference(batch, num_chunks, mesh_device, reset_seeds):
     dtype = ttnn.bfloat16
     pcc_required = 0.99
-    gated = False
 
     model_args = ModelArgs(mesh_device)
     state_dict = model_args.load_state_dict()
 
-    # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    if gated:
-        first_layer_prefix = "model.vision_tower.vision_model.encoder.layers.0."
-    else:
-        first_layer_prefix = "model.vision_tower.vision_model.encoder.layers.0."
+    first_layer_prefix = "model.vision_tower.vision_model.encoder.layers.0."
 
     dim = model_args.vision_dim
     heads = model_args.vision_attn_n_heads
@@ -61,7 +57,6 @@ def test_block_inference(batch, num_chunks, mesh_device, reset_seeds, gated):
         weight_cache_path=model_args.weight_cache_path(dtype),
         dtype=dtype,
         configuration=model_args,
-        gated=gated,
     )
 
     pt_attention_input = torch.randn(batch, seq_len, dim)

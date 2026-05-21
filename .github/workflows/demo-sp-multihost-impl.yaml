@@ -29,7 +29,7 @@ jobs:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/demo_sp_multihost_tests.yaml
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install dependencies
         run: pip3 install PyYAML
@@ -111,7 +111,7 @@ jobs:
       test-result: ${{ steps.run-test.outcome }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Parse docker image
         id: parse-image
@@ -211,6 +211,7 @@ jobs:
             ls -R /ci/artifacts
             exit 1
           fi
+
           mpirun --pernode uv pip install "${ttnn_wheels[@]}"
 
       - name: Reset cards and validate cluster for ${{ matrix.test-group.name }}
@@ -227,7 +228,7 @@ jobs:
             echo "=== Recovery attempt $attempt of $MAX_RECOVERY_ATTEMPTS ==="
 
             echo "--- Resetting cards with tt-smi ---"
-            if ! mpirun --pernode --tag-output tt-smi -glx_reset; then
+            if ! mpirun --pernode --mca btl_tcp_if_include ens5f0np0 tt-smi -glx_reset; then
               echo "WARNING: Reset failed on attempt $attempt"
               if [ "$attempt" -eq "$MAX_RECOVERY_ATTEMPTS" ]; then
                 echo "ERROR: Reset failed after $MAX_RECOVERY_ATTEMPTS attempts"
@@ -242,7 +243,7 @@ jobs:
             sleep 5
 
             echo "--- Running cluster validation ---"
-            if mpirun --pernode --tag-output \
+            if mpirun --pernode --mca btl_tcp_if_include ens5f0np0 --tag-output \
               /home/user/tt-metal/build/tools/scaleout/run_cluster_validation \
               --send-traffic \
               --hard-fail \

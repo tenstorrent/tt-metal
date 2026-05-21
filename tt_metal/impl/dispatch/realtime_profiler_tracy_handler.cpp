@@ -100,6 +100,9 @@ TracyTTCtx RealtimeProfilerTracyHandler::GetContext(uint32_t chip_id) {
 
 void RealtimeProfilerTracyHandler::HandleRecord([[maybe_unused]] const tt::ProgramRealtimeRecord& record) {
 #if defined(TRACY_ENABLE)
+    if (!tracy::GetProfiler().IsConnected()) {
+        return;
+    }
     TracyTTCtx ctx = GetContext(record.chip_id);
     if (!ctx) {
         return;
@@ -148,6 +151,9 @@ void RealtimeProfilerTracyHandler::HandleRecord([[maybe_unused]] const tt::Progr
 void RealtimeProfilerTracyHandler::PushSyncCheckMarker(
     [[maybe_unused]] uint32_t chip_id, [[maybe_unused]] uint64_t device_timestamp, [[maybe_unused]] double frequency) {
 #if defined(TRACY_ENABLE)
+    if (!tracy::GetProfiler().IsConnected()) {
+        return;
+    }
     TracyTTCtx ctx = GetContext(chip_id);
     if (!ctx) {
         return;
@@ -188,6 +194,9 @@ void RealtimeProfilerTracyHandler::CalibrateDevice(
     [[maybe_unused]] uint64_t device_timestamp,
     [[maybe_unused]] double frequency) {
 #if defined(TRACY_ENABLE)
+    if (!tracy::GetProfiler().IsConnected()) {
+        return;
+    }
     TracyTTCtx ctx = GetContext(chip_id);
     if (!ctx) {
         return;

@@ -35,7 +35,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
 )
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
-from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer import TtPrefillTransformer
+from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
     create_kv_chunk_address_table,
@@ -48,7 +48,7 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     P64TOK_PATH,
     P960TOK_PATH,
     PIE960_PATH,
-    PROMPTS_PATH,
+    PROMPT_1K_PATH,
     ReferenceCacheKey,
     check_reference_cache_exists,
     create_hf_model,
@@ -267,7 +267,7 @@ def test_prefill_transformer(
         if input_source == "json_prompts":
             from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
 
-            prompt_text = load_prompts_from_json(str(PROMPTS_PATH))
+            prompt_text = load_prompts_from_json(str(PROMPT_1K_PATH))
             prompt_text = prompt_text[0] if isinstance(prompt_text, list) else prompt_text
         elif input_source == "abc_1k":
             from models.demos.deepseek_v3.demo.demo import load_prompts_from_json

@@ -8,13 +8,19 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #ifdef ARCH_QUASAR
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #else
 #include "api/dataflow/circular_buffer.h"
 #endif
 
 void kernel_main() {
+#ifdef ARCH_QUASAR
+    constexpr uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
+    constexpr uint32_t per_core_block_tile_cnt = get_arg(args::per_core_block_tile_cnt);
+#else
     constexpr uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     constexpr uint32_t per_core_block_tile_cnt = get_compile_time_arg_val(1);
+#endif
 
 #ifndef ARCH_QUASAR
     CircularBuffer cb0(tt::CBIndex::c_0);
@@ -63,8 +69,8 @@ void kernel_main() {
 #endif
 
 #else  // ARCH_QUASAR
-    DataflowBuffer dfb_in(get_compile_time_arg_val(2));
-    DataflowBuffer dfb_out(get_compile_time_arg_val(3));
+    DataflowBuffer dfb_in(dfb::in);
+    DataflowBuffer dfb_out(dfb::out);
 
     compute_kernel_hw_startup(dfb_in.get_id(), dfb_out.get_id());
     tilize_init(dfb_in.get_id(), per_core_block_tile_cnt, dfb_out.get_id());
