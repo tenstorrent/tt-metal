@@ -112,7 +112,6 @@ class TTSeamlessM4Tv2SpeechEncoder:
         # (which forbids ``write_shard_to_device``) reuses them — same pattern as SDXL / vadv2.
         self._conv1d_prepared_cache: Dict[Tuple[Any, ...], Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]] = {}
         self._conv_config_cache: Dict[Tuple[Any, ...], ttnn.Conv1dConfig] = {}
-        self._conv_jit_warmed: set[Tuple[int, int]] = set()
         # Stage 1 (TTNN model bringup): LoFi linears, HiFi2 attention matmuls, sharded LN cache.
         self._linear_compute_cfg = ttnn.init_device_compute_kernel_config(
             device.arch(),
@@ -365,14 +364,15 @@ class TTSeamlessM4Tv2SpeechEncoder:
         out_channels: int,
         kernel_size: int,
         groups: int,
+        use_dw_zero_pad: bool = False,
     ) -> ttnn.Conv1dConfig:
         """Per-shape ``Conv1dConfig`` tuned from Tracy (exp6).
 
-        Conformer depthwise (k=31, g=1024) must not use ``act_block_h_override=32``: that
-        forces ABH=1 height-sharded programs on ~2 cores (~3.4% of peak). Leave auto-shard
-        to pick the 1-D depthwise height layout. Pointwise 1x1 uses the conv2d matmul path.
+        Conformer depthwise (k=31, g=1024) uses the 1-D depthwise height-sharded factory.
+        Do not set ``act_block_h_override`` (forces ABH=1 on ~2 cores). Double buffering is
+        disabled for depthwise: only two NHW cores are used and extra L1 CBs do not overlap DRAM.
         """
-        key = (batch, input_length, in_channels, out_channels, kernel_size, groups)
+        key = (batch, input_length, in_channels, out_channels, kernel_size, groups, use_dw_zero_pad)
         cached = self._conv_config_cache.get(key)
         if cached is not None:
             return cached
@@ -380,79 +380,196 @@ class TTSeamlessM4Tv2SpeechEncoder:
         is_depthwise = self._is_depthwise_conv(in_channels=in_channels, out_channels=out_channels, groups=groups)
         conv_kwargs: Dict[str, Any] = dict(
             weights_dtype=ttnn.bfloat8_b,
-            shard_layout=None,
             deallocate_activation=True,
-            enable_weights_double_buffer=True,
-            enable_act_double_buffer=True,
             reallocate_halo_output=True,
         )
-        if not is_depthwise and kernel_size > 1 and (input_length > 64 or in_channels >= 512):
-            conv_kwargs["act_block_h_override"] = 32
+        if is_depthwise:
+            conv_kwargs["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+            conv_kwargs["enable_weights_double_buffer"] = False
+            conv_kwargs["enable_act_double_buffer"] = False
+            if use_dw_zero_pad:
+                conv_kwargs["padding_mode"] = ttnn.PaddingMode.Zeros
+        else:
+            conv_kwargs["shard_layout"] = None
+            conv_kwargs["enable_weights_double_buffer"] = True
+            conv_kwargs["enable_act_double_buffer"] = True
+            if kernel_size > 1 and (input_length > 64 or in_channels >= 512):
+                conv_kwargs["act_block_h_override"] = 32
 
         conv_config = ttnn.Conv1dConfig(**conv_kwargs)
         self._conv_config_cache[key] = conv_config
         return conv_config
 
-    def _warm_conv_jit(self, batch: int, seq_len: int) -> None:
-        """JIT-compile depthwise + adapter strided conv programs once per ``(batch, seq_len)``."""
-        key = (batch, seq_len)
-        if key in self._conv_jit_warmed:
+    @staticmethod
+    def _conv1d_padding_key(padding: int | Tuple[int, int]) -> Tuple[int, ...]:
+        if isinstance(padding, int):
+            return (padding,)
+        return (int(padding[0]), int(padding[1]))
+
+    def _conv1d_prepared_cache_key(
+        self,
+        *,
+        weight: ttnn.Tensor,
+        bias: Optional[ttnn.Tensor],
+        batch: int,
+        input_length: int,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int,
+        stride: int,
+        padding: int | Tuple[int, int],
+        groups: int,
+        dilation: int,
+        x_nlc: Optional[ttnn.Tensor],
+    ) -> Tuple[Any, ...]:
+        is_depthwise = self._is_depthwise_conv(in_channels=in_channels, out_channels=out_channels, groups=groups)
+        if is_depthwise:
+            mem_key: Tuple[Any, ...] = ()
+        elif x_nlc is None:
+            mem_key = (-1, -1)
+        else:
+            mc = x_nlc.memory_config()
+            if mc is None:
+                mem_key = (-1, -1)
+            else:
+                mem_key = (
+                    self._enumish_cache_key(mc.buffer_type),
+                    self._enumish_cache_key(mc.memory_layout),
+                )
+        layout_key = -1 if x_nlc is None else self._enumish_cache_key(x_nlc.layout)
+        return (
+            self._tensor_stable_id(weight),
+            self._tensor_stable_id(bias) if bias is not None else 0,
+            batch,
+            input_length,
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride,
+            self._conv1d_padding_key(padding),
+            groups,
+            dilation,
+            mem_key,
+            layout_key,
+        )
+
+    def _prepare_conv1d_weights_on_device(
+        self,
+        *,
+        weight: ttnn.Tensor,
+        bias: Optional[ttnn.Tensor],
+        batch: int,
+        input_length: int,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int,
+        stride: int,
+        padding: int | Tuple[int, int],
+        groups: int,
+        dilation: int = 1,
+        use_dw_zero_pad: bool = False,
+    ) -> None:
+        """Upload depthwise (or other) conv weights once via ``prepare_conv_*`` — no forward conv."""
+        cache_key = self._conv1d_prepared_cache_key(
+            weight=weight,
+            bias=bias,
+            batch=batch,
+            input_length=input_length,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            groups=groups,
+            dilation=dilation,
+            x_nlc=None,
+        )
+        if cache_key in self._conv1d_prepared_cache:
             return
 
-        enc = self.parameters.encoder
-        dw = enc.layers[0].conv_module.depthwise_conv
-        lp = int(dw.left_pad)
-        t_len = seq_len + lp
-        h = ttnn.zeros(
-            (batch, t_len, self.hidden_size),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-        out, _ = self._conv1d(
-            h,
-            weight=dw.weight,
-            bias=dw.bias,
+        conv_config = self._conv1d_config(
             batch=batch,
-            input_length=t_len,
-            in_channels=int(dw.in_channels),
-            out_channels=int(dw.out_channels),
-            kernel_size=int(dw.kernel_size),
-            stride=int(dw.stride),
-            padding=int(dw.padding),
-            groups=int(dw.groups),
+            input_length=input_length,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            groups=groups,
+            use_dw_zero_pad=use_dw_zero_pad,
         )
-        ttnn.deallocate(h)
-        ttnn.deallocate(out)
+        if isinstance(padding, int):
+            pad_arg: int | Tuple[int, int] = (0, padding)
+        else:
+            pad_arg = padding
 
-        if self.has_adapter:
-            al = self.parameters.adapter.layers[0]
-            rc = al.residual_conv
-            h2 = ttnn.zeros(
-                (batch, seq_len, self.hidden_size),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
+        prep_w = ttnn.prepare_conv_weights(
+            weight_tensor=weight,
+            input_memory_config=ttnn.L1_MEMORY_CONFIG,
+            input_layout=ttnn.TILE_LAYOUT,
+            weights_format="OIHW",
+            in_channels=in_channels,
+            out_channels=out_channels,
+            batch_size=batch,
+            input_height=1,
+            input_width=input_length,
+            kernel_size=(1, kernel_size),
+            stride=(1, stride),
+            padding=pad_arg,
+            dilation=(1, dilation),
+            has_bias=bias is not None,
+            groups=groups,
+            device=self.device,
+            input_dtype=ttnn.bfloat16,
+            output_dtype=ttnn.bfloat16,
+            conv_config=conv_config,
+            compute_config=self._conv_compute_cfg,
+        )
+        prep_b = None
+        if bias is not None:
+            prep_b = ttnn.prepare_conv_bias(
+                bias_tensor=bias,
+                input_memory_config=ttnn.L1_MEMORY_CONFIG,
+                input_layout=ttnn.TILE_LAYOUT,
+                in_channels=in_channels,
+                out_channels=out_channels,
+                batch_size=batch,
+                input_height=1,
+                input_width=input_length,
+                kernel_size=(1, kernel_size),
+                stride=(1, stride),
+                padding=pad_arg,
+                dilation=(1, dilation),
+                groups=groups,
                 device=self.device,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                input_dtype=ttnn.bfloat16,
+                output_dtype=ttnn.bfloat16,
+                conv_config=conv_config,
+                compute_config=self._conv_compute_cfg,
             )
-            out2, _ = self._conv1d(
-                h2,
-                weight=rc.weight,
-                bias=rc.bias,
+        self._conv1d_prepared_cache[cache_key] = (
+            ttnn.clone(prep_w, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            ttnn.clone(prep_b, memory_config=ttnn.DRAM_MEMORY_CONFIG) if prep_b is not None else None,
+        )
+
+    def _prewarm_depthwise_conv_weights(self, batch: int, seq_len: int) -> None:
+        """Prepare all encoder depthwise weights for this shape (host upload only, no Conv2d forward)."""
+        enc = self.parameters.encoder
+        for i in range(self.speech_encoder_layers):
+            dw = enc.layers[i].conv_module.depthwise_conv
+            lp = int(dw.left_pad)
+            padding: int | Tuple[int, int] = (lp, 0) if lp > 0 else int(dw.padding)
+            self._prepare_conv1d_weights_on_device(
+                weight=dw.weight,
+                bias=dw.bias,
                 batch=batch,
                 input_length=seq_len,
-                in_channels=int(rc.in_channels),
-                out_channels=int(rc.out_channels),
-                kernel_size=int(rc.kernel_size),
-                stride=int(rc.stride),
-                padding=int(rc.padding),
-                groups=int(rc.groups),
+                in_channels=int(dw.in_channels),
+                out_channels=int(dw.out_channels),
+                kernel_size=int(dw.kernel_size),
+                stride=int(dw.stride),
+                padding=padding,
+                groups=int(dw.groups),
+                use_dw_zero_pad=lp > 0,
             )
-            ttnn.deallocate(h2)
-            ttnn.deallocate(out2)
-
-        self._conv_jit_warmed.add(key)
 
     def _conv1d(
         self,
@@ -466,9 +583,10 @@ class TTSeamlessM4Tv2SpeechEncoder:
         out_channels: int,
         kernel_size: int,
         stride: int,
-        padding: int,
+        padding: int | Tuple[int, int],
         groups: int,
         dilation: int = 1,
+        use_dw_zero_pad: bool = False,
     ) -> Tuple[ttnn.Tensor, int]:
         conv_config = self._conv1d_config(
             batch=batch,
@@ -477,29 +595,21 @@ class TTSeamlessM4Tv2SpeechEncoder:
             out_channels=out_channels,
             kernel_size=kernel_size,
             groups=groups,
+            use_dw_zero_pad=use_dw_zero_pad,
         )
-        mc = x_nlc.memory_config()
-        if mc is None:
-            mem_key = (-1, -1)
-        else:
-            mem_key = (
-                self._enumish_cache_key(mc.buffer_type),
-                self._enumish_cache_key(mc.memory_layout),
-            )
-        cache_key = (
-            self._tensor_stable_id(weight),
-            self._tensor_stable_id(bias) if bias is not None else 0,
-            batch,
-            input_length,
-            in_channels,
-            out_channels,
-            kernel_size,
-            stride,
-            padding,
-            groups,
-            dilation,
-            mem_key,
-            self._enumish_cache_key(x_nlc.layout),
+        cache_key = self._conv1d_prepared_cache_key(
+            weight=weight,
+            bias=bias,
+            batch=batch,
+            input_length=input_length,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            groups=groups,
+            dilation=dilation,
+            x_nlc=x_nlc,
         )
         cached = self._conv1d_prepared_cache.get(cache_key)
         if cached is not None:
@@ -551,7 +661,10 @@ class TTSeamlessM4Tv2SpeechEncoder:
                 prep_b = wb[1] if len(wb) > 1 else None
             else:
                 prep_w, prep_b = wb, None
-            self._conv1d_prepared_cache[cache_key] = (prep_w, prep_b)
+            self._conv1d_prepared_cache[cache_key] = (
+                ttnn.clone(prep_w, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+                ttnn.clone(prep_b, memory_config=ttnn.DRAM_MEMORY_CONFIG) if prep_b is not None else None,
+            )
         out_len = int(out_len)
         if ttnn.is_sharded(out):
             out = ttnn.sharded_to_interleaved(out, ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
@@ -954,43 +1067,25 @@ class TTSeamlessM4Tv2SpeechEncoder:
         )
         h = self._glu_last_dim(h, batch=batch, seq_len=t1, width=pc1.out_channels)
 
-        lp = int(cm.depthwise_conv.left_pad)
-        if lp > 0:
-            if prebuilt_dw_left_pad is not None:
-                pad_tensor = prebuilt_dw_left_pad
-            else:
-                pad_key = (batch, lp, hidden_size)
-                pad_tensor = self._dw_left_pad_cache.get(pad_key)
-                if pad_tensor is None:
-                    # Stage 10: tiny zero pad [B, lp, hsz] fits in L1 (≤ 6 KB at lp=3, hsz=1024).
-                    pad_tensor = ttnn.zeros(
-                        (batch, lp, hidden_size),
-                        dtype=ttnn.bfloat16,
-                        layout=ttnn.TILE_LAYOUT,
-                        device=self.device,
-                        memory_config=ttnn.L1_MEMORY_CONFIG,
-                    )
-                    self._dw_left_pad_cache[pad_key] = pad_tensor
-            # Stage 10: concat to L1 — both pad_tensor (L1) and h (L1 from GLU) feed L1.
-            h = ttnn.concat([pad_tensor, h], dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
-            t_len = t1 + lp
-        else:
-            t_len = t1
-
+        _ = prebuilt_dw_left_pad  # trace API: pads unused when halo applies zero left pad
+        _ = hidden_size
         dw = cm.depthwise_conv
+        lp = int(dw.left_pad)
+        dw_padding: int | Tuple[int, int] = (lp, 0) if lp > 0 else int(dw.padding)
         h, t2 = self._conv1d(
             h,
             weight=dw.weight,
             bias=dw.bias,
             batch=batch,
-            input_length=t_len,
+            input_length=t1,
             in_channels=dw.in_channels,
             out_channels=dw.out_channels,
             kernel_size=dw.kernel_size,
             stride=dw.stride,
-            padding=dw.padding,
+            padding=dw_padding,
             groups=dw.groups,
             dilation=1,
+            use_dw_zero_pad=lp > 0,
         )
         dln = cm.depthwise_layer_norm
         h = self._layer_norm(h, weight=dln.weight, bias=dln.bias, eps=float(dln.eps), batch=batch, seq_len=t2)
@@ -1399,27 +1494,12 @@ class TTSeamlessM4Tv2SpeechEncoder:
         so every conformer layer hits warm caches on the first ``forward`` call.
 
         Caches populated:
-        * ``_dw_left_pad_cache``   — L1 zero tensors for depthwise conv left pad
         * ``_rel_pos_tab_cache``   — ``[S, D, S]`` tables (host embedding + TILE upload)
         * ``_chunk_attn_mask_cache`` — chunk mask (skipped when ``S <= chunk_size``)
         * ``_encoder_additive_mask_cache`` — no-padding-mask entry (``mask_id=-1``)
-        * conv JIT — depthwise k=31 + adapter strided conv (amortises Halo + Conv2d compile)
+        * depthwise conv weight prep — ``prepare_conv_weights`` only (no Conv2d forward)
         """
-        self._warm_conv_jit(batch, seq_len)
-        enc = self.parameters.encoder
-        for i in range(self.speech_encoder_layers):
-            lp = int(enc.layers[i].conv_module.depthwise_conv.left_pad)
-            if lp > 0:
-                pad_key = (batch, lp, self.hidden_size)
-                if pad_key not in self._dw_left_pad_cache:
-                    self._dw_left_pad_cache[pad_key] = ttnn.zeros(
-                        (batch, lp, self.hidden_size),
-                        dtype=ttnn.bfloat16,
-                        layout=ttnn.TILE_LAYOUT,
-                        device=self.device,
-                        memory_config=ttnn.L1_MEMORY_CONFIG,
-                    )
-
+        self._prewarm_depthwise_conv_weights(batch, seq_len)
         self.warm_relative_position_caches_for_seq_lens([seq_len])
         self._chunk_attention_mask_float01(batch, seq_len, ttnn.bfloat16)
         self._encoder_additive_mask(None, batch=batch, seq_len=seq_len, dtype=ttnn.bfloat16)
@@ -1431,23 +1511,8 @@ class TTSeamlessM4Tv2SpeechEncoder:
         dtype = ttnn.bfloat16
         enc_4d, _enc_4d_owned = self._encoder_additive_mask(conv_mask_1d_bf16, batch=batch, seq_len=seq, dtype=dtype)
 
-        pads: List[Optional[ttnn.Tensor]] = []
-        enc = self.parameters.encoder
-        for i in range(self.speech_encoder_layers):
-            lp = int(enc.layers[i].conv_module.depthwise_conv.left_pad)
-            if lp > 0:
-                # Stage 10: L1 to match the cache in _conv_module (tiny tensor, ≤ 6 KB).
-                pads.append(
-                    ttnn.zeros(
-                        (batch, lp, self.hidden_size),
-                        dtype=ttnn.bfloat16,
-                        layout=ttnn.TILE_LAYOUT,
-                        device=self.device,
-                        memory_config=ttnn.L1_MEMORY_CONFIG,
-                    )
-                )
-            else:
-                pads.append(None)
+        # Depthwise causal left pad is applied inside Conv2d (``PaddingMode.Zeros``); no concat pads.
+        pads: List[Optional[ttnn.Tensor]] = [None] * self.speech_encoder_layers
 
         adapter_masks: List[Optional[ttnn.Tensor]] = []
         cur = seq
