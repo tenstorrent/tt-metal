@@ -62,15 +62,12 @@ ArgMaxNCProgramFactory::cached_program_t ArgMaxNCProgramFactory::create(
     const uint32_t num_output_tiles = output.physical_volume() / TILE_HW;
 
     const DataFormat input_data_format = datatype_to_dataformat_converter(input.dtype());
-    // Indices are staged through L1 as fp32 scalars (the reader writes (float)k
-    // into every element of an idx tile). The compute kernel accumulates argmax
-    // arithmetically in fp32 and typecasts to UInt32 before packing to the
-    // UInt32 output CB.
-    const DataFormat index_data_format = DataFormat::Float32;
+    // Indices live entirely in DST: the compute kernel materializes them as
+    // uint32 via fill_tile_int<UInt32> rather than staging them through a CB.
+    // The uint32 result is packed straight to the UInt32 output CB (no typecast).
     const DataFormat output_data_format = datatype_to_dataformat_converter(output.dtype());
 
     const uint32_t input_tile_size = tile_size(input_data_format);
-    const uint32_t index_tile_size = tile_size(index_data_format);
     const uint32_t output_tile_size = tile_size(output_data_format);
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -94,22 +91,15 @@ ArgMaxNCProgramFactory::cached_program_t ArgMaxNCProgramFactory::create(
 
     // Circular buffers (double-buffered input so the compute kernel can overlap with reader).
     constexpr uint32_t input_cb_depth = 2;
-    constexpr uint32_t index_cb_depth = 2;
     constexpr uint32_t output_cb_depth = 2;
 
     constexpr auto src_cb = CBIndex::c_0;
-    constexpr auto idx_cb = CBIndex::c_1;
     constexpr auto out_cb = CBIndex::c_16;
 
     CircularBufferConfig src_cb_config =
         CircularBufferConfig(input_cb_depth * input_tile_size, {{src_cb, input_data_format}})
             .set_page_size(src_cb, input_tile_size);
     CreateCircularBuffer(program, all_cores, src_cb_config);
-
-    CircularBufferConfig idx_cb_config =
-        CircularBufferConfig(index_cb_depth * index_tile_size, {{idx_cb, index_data_format}})
-            .set_page_size(idx_cb, index_tile_size);
-    CreateCircularBuffer(program, all_cores, idx_cb_config);
 
     CircularBufferConfig out_cb_config =
         CircularBufferConfig(output_cb_depth * output_tile_size, {{out_cb, output_data_format}})
@@ -140,19 +130,18 @@ ArgMaxNCProgramFactory::cached_program_t ArgMaxNCProgramFactory::create(
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
-    // Route the unpacker directly to DST for fp32 CBs so 32-bit precision is
-    // preserved end-to-end. Without this, `copy_tile` funnels data through
-    // SrcA (bf16 precision) and the argmax picks a different index than torch
-    // whenever two bf16-rounded values tie but their fp32 originals differ.
-    // - `src_cb` is fp32 only when the user input is fp32.
-    // - `idx_cb` is always fp32 so (float)k is exactly representable for all k.
+    // Route the unpacker directly to DST for the fp32 value CB so 32-bit precision
+    // is preserved end-to-end. Without this, `copy_tile` funnels data through SrcA
+    // (bf16 precision) and the argmax picks a different index than torch whenever
+    // two bf16-rounded values tie but their fp32 originals differ. bf16 inputs
+    // don't need the override — bf16 unpack widens into the full 32-bit DST slot
+    // on its own.
     // Size must match host JIT expectation (NUM_CIRCULAR_BUFFERS = 64 on Blackhole / host; WH device uses 32).
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (input_data_format == DataFormat::Float32) {
         unpack_to_dest_mode[static_cast<uint32_t>(src_cb)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
-    unpack_to_dest_mode[static_cast<uint32_t>(idx_cb)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
 
     auto make_compute_config = [&](uint32_t ntiles_per_core) {
         return ComputeConfig{

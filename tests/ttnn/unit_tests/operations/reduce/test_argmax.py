@@ -195,6 +195,38 @@ def test_argmax(device, tensor_shape, tensor_layout, dim, keepdim, use_multicore
 
     ttnn_result = ttnn.to_torch(ttnn.from_device(ttnn_result)).to(torch.int32)
 
+    # DIAGNOSTIC OUTPUT for [4,32,32] case
+    if tensor_shape == [4, 32, 32] and tensor_layout == ttnn.TILE_LAYOUT and dim == 0 and keepdim == True:
+        print("\n" + "=" * 60)
+        print("DIAGNOSTIC: [4,32,32] TILE dim=0 keepdim=True")
+        print("=" * 60)
+        print(f"Expected (torch) shape: {torch_result.shape}")
+        print(f"Expected min/max: {torch_result.min().item()}/{torch_result.max().item()}")
+        print(f"Expected [0,0:5,0]: {torch_result[0, 0:5, 0].tolist()}")
+        print(f"\nActual (ttnn) shape: {ttnn_result.shape}")
+        print(f"Actual min/max: {ttnn_result.min().item()}/{ttnn_result.max().item()}")
+        print(f"Actual [0,0:5,0]: {ttnn_result[0, 0:5, 0].tolist()}")
+
+        first_val = ttnn_result[0, 0, 0].item()
+        print(f"\nFirst value: {first_val} (0x{first_val & 0xFFFFFFFF:08X})")
+
+        if ttnn_result.max().item() > 100:
+            print("⚠️  CORRUPTION: Values out of range [0..3]")
+            print("   Likely bf16/fp32 bit reinterpretation")
+            # Show first few wrong values with hex
+            mismatches = (ttnn_result != torch_result).nonzero(as_tuple=False)
+            print(f"\nFirst 3 mismatches:")
+            for i in range(min(3, len(mismatches))):
+                pos = mismatches[i]
+                exp = torch_result[tuple(pos)].item()
+                act = ttnn_result[tuple(pos)].item()
+                print(f"  {pos.tolist()}: exp={exp}, act={act} (0x{act & 0xFFFFFFFF:08X})")
+        else:
+            matches = (ttnn_result == torch_result).sum().item()
+            total = torch_result.numel()
+            print(f"Accuracy: {matches}/{total} = {100.0*matches/total:.1f}%")
+        print("=" * 60 + "\n")
+
     # test for equivalance
     assert_equal(torch_result, ttnn_result)
 

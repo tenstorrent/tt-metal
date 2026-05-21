@@ -9,10 +9,12 @@
  * Reader kernel for register-based argmax over a non-HW dim (NC-style).
  *
  * For each output tile this kernel produces on its assigned core, it pushes
- * N = num_reduce_tiles data tiles into cb_in0 (input values) and N index
- * tiles into cb_in1 (each tile k entirely filled with the fp32 value (float)k).
- * The compute kernel consumes one pair at a time and tracks argmax in fp32
- * DST slots, performing a final Float32 -> UInt32 typecast before packing.
+ * N = num_reduce_tiles value tiles into cb_in0. Indices are NOT staged through
+ * a CB — the compute kernel materializes them as uint32 scalars inside DST via
+ * fill_tile_int<UInt32>. This avoids a tt-metal limitation: UnpackToDestFp32
+ * is only honored for Float32 CBs, and routing UInt32 indices through SrcA
+ * (the fallback path) corrupts their low 16 bits when the CB is alternated
+ * with a bf16/fp32 value CB.
  */
 
 namespace {
@@ -23,21 +25,6 @@ inline uint32_t compute_read_tile_id(
         return output_tile_id;
     }
     return ((output_tile_id / inner_tile_size) * reduce_tile_size) + (output_tile_id % inner_tile_size);
-}
-
-// Fill a single fp32 tile in the CB at `cb_id` with the value `fill_val`
-// (every element of the tile). Pushes the tile when done.
-inline void push_fp32_fill_tile(uint32_t cb_id, float fill_val) {
-    cb_reserve_back(cb_id, 1);
-    const uint32_t write_addr = get_write_ptr(cb_id);
-    const uint32_t tile_bytes = get_tile_size(cb_id);
-    // fp32 is 4 bytes per element.
-    const uint32_t num_elems = tile_bytes >> 2;
-    volatile tt_l1_ptr float* ptr = reinterpret_cast<volatile tt_l1_ptr float*>(write_addr);
-    for (uint32_t i = 0; i < num_elems; ++i) {
-        ptr[i] = fill_val;
-    }
-    cb_push_back(cb_id, 1);
 }
 
 }  // namespace
@@ -54,7 +41,6 @@ void kernel_main() {
     const bool dim_is_zero_b = dim_is_zero != 0;
 
     constexpr uint32_t cb_in0 = 0;
-    constexpr uint32_t cb_in1 = 1;
     constexpr uint32_t onetile = 1;
 
     constexpr auto input_tensor_args = TensorAccessorArgs<0>();
@@ -70,8 +56,6 @@ void kernel_main() {
             noc_async_read_tile(read_tile_id, s0, write_ptr);
             noc_async_read_barrier();
             cb_push_back(cb_in0, onetile);
-
-            push_fp32_fill_tile(cb_in1, static_cast<float>(k));
 
             read_tile_id += inner_tile_size;
         }
