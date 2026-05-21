@@ -43,6 +43,7 @@ NUM_PERF_RUNS = 3
         [(4, 8), 0, 1, 1, 1, ttnn.Topology.Linear, 2, False, False, line_params_8k_flux2],
         [(4, 8), 0, 1, 1, 0, ttnn.Topology.Ring, 2, False, False, ring_params_8k_flux2],
         [(4, 8), 1, 0, 1, 0, ttnn.Topology.Ring, 2, False, False, ring_params_8k_flux2],
+        [(4, 8), 0, 1, 1, 0, ttnn.Topology.Ring, 2, True, False, ring_params_8k_flux2],
     ],
     ids=[
         "bh_qb",
@@ -50,6 +51,7 @@ NUM_PERF_RUNS = 3
         "bh_glx_linear",
         "bh_glx_ring_sp0tp1",
         "bh_glx_ring_sp1tp0",
+        "bh_glx_ring_sp0tp1_fsdp",
     ],
     indirect=["mesh_device", "device_params"],
 )
