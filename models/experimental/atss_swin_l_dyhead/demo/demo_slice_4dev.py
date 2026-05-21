@@ -3,14 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-ATSS Swin-L DyHead SAHI-style 4-device demo (T3K, 1x4 mesh).
+ATSS Swin-L DyHead 4-device slice demo (T3K, 1x4 mesh).
 
 Slices a 1280x1280 image into 4 tiles of 640x640 (2x2, no overlap — exact fit),
 runs all 4 tiles in parallel across a 1x4 sub-mesh of Wormhole devices with
 2CQ + trace, then merges per-tile detections via greedy NMM into the original
 1280x1280 frame.
 
-Pipeline transferred from
+Slicing/merge logic transferred from the upstream yolov8l demo at
   models/demos/yolo_eval/yolov8l_sahi_640_pipelined.py  (sdawle/yolo_bh_demos)
 adapted for the ATSS detector (per-tile postprocess instead of yolo decode).
 
@@ -20,7 +20,7 @@ Usage:
   export TT_METAL_HOME=$(pwd)
   export PYTHONPATH=$(pwd)
 
-  python3 models/experimental/atss_swin_l_dyhead/demo/demo_sahi_4dev.py \
+  python3 models/experimental/atss_swin_l_dyhead/demo/demo_slice_4dev.py \
       --image path/to/your/1280x1280_image.jpg \
       --output-dir path/to/output
 """
@@ -511,7 +511,7 @@ def postprocess_and_merge(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="ATSS Swin-L DyHead SAHI 4-device demo (1280x1280)")
+    parser = argparse.ArgumentParser(description="ATSS Swin-L DyHead 4-device slice demo (1280x1280)")
     parser.add_argument("--image", required=True, help="Input image (will be resized to 1280x1280 if needed)")
     parser.add_argument("--checkpoint", default=None, help="mmdet .pth checkpoint")
     parser.add_argument("--score-thr", type=float, default=0.3)
@@ -540,7 +540,7 @@ def main():
         default=-1,
         help="Seam-merge abutting tolerance in px. -1 (default) auto-picks max(overlap, 20).",
     )
-    _default_out = str(Path(__file__).resolve().parent.parent / "results" / "sahi_4dev")
+    _default_out = str(Path(__file__).resolve().parent.parent / "results" / "slice_4dev")
     parser.add_argument("--output-dir", default=_default_out)
     args = parser.parse_args()
 
@@ -639,7 +639,7 @@ def main():
         x1 = int(round((ts.col_start + TILE_SIZE) * vis_scale)) - 1
         y1 = int(round((ts.row_start + TILE_SIZE) * vis_scale)) - 1
         cv2.rectangle(vis, (x0, y0), (x1, y1), (200, 200, 200), 1)
-    out_path = out_dir / "atss_sahi_4dev_detections.jpg"
+    out_path = out_dir / "atss_slice_4dev_detections.jpg"
     cv2.imwrite(str(out_path), vis)
     logger.info(f"Saved: {out_path}")
 

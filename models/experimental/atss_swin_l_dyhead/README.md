@@ -65,7 +65,7 @@ models/experimental/atss_swin_l_dyhead/
 │   ├── demo_inference.py              #   Single-image inference + visualization
 │   ├── demo_batch.py                  #   Multi-image batch inference
 │   ├── demo_perf.py                   #   Performance benchmark (PyTorch vs TTNN)
-│   └── demo_sahi_4dev.py              #   SAHI-style 4-device sliced demo (1280x1280 → 2x2 of 640)
+│   └── demo_slice_4dev.py             #   4-device slice demo (1280x1280 → 2x2 of 640, 1x4 mesh)
 └── README.md
 
 models/experimental/swin_l/             # Reusable Swin-L backbone (separate module)
@@ -147,32 +147,39 @@ pytest models/experimental/atss_swin_l_dyhead/tests/perf/test_atss_swin_l_dyhead
 
 ```
 
-### Demo
+### Demos
 
 The inference demos require user-supplied images (no test images are bundled).
 The performance benchmark and report scripts use synthetic random inputs.
 
+The model can run on either a **single Wormhole device** (full 1280×1280 input on one
+chip — the default for most demos) or on a **1×4 sub-mesh** (input sliced into 4×640×640
+tiles, one per device, all running in parallel). Single-device is the simplest path;
+the slicing demo is for the multi-device throughput story.
+
+#### Single-device demos (one Wormhole chip)
+
 ```bash
-# Single-image inference (--image is required)
+# Single-image inference (--image is required). Runs the full model on one device.
 python models/experimental/atss_swin_l_dyhead/demo/demo_inference.py \
     --image path/to/your/image.jpg
 
-# Batch inference on a directory of images (--image-dir is required)
+# Batch inference on a directory of images (--image-dir is required).
 python models/experimental/atss_swin_l_dyhead/demo/demo_batch.py \
     --image-dir path/to/your/image_directory/
 
-# Performance benchmark (no image needed — uses random tensor input)
+# Performance benchmark (no image needed — uses random tensor input).
 python models/experimental/atss_swin_l_dyhead/demo/demo_perf.py
 
-# PCC + performance report (no image needed — uses random tensor input)
+# PCC + performance report (no image needed — uses random tensor input).
 python models/experimental/atss_swin_l_dyhead/demo/generate_report.py
 ```
 
 Output is saved to `atss_swin_l_dyhead/results/` by default. Override with `--output-dir`.
 
-### Multi-device slicing demo (SAHI 4-device)
+#### Multi-device slice demo (1×4 mesh)
 
-`demo_sahi_4dev.py` runs sliced inference on a **1×4 Wormhole sub-mesh** (Galaxy or T3K).
+`demo_slice_4dev.py` runs sliced inference on a **1×4 Wormhole sub-mesh** (Galaxy or T3K).
 The input image is resized to 1280×1280, sliced into a 2×2 grid of 640×640 tiles, and
 all 4 tiles run **in parallel** across the 4 devices with 2 command queues + trace.
 Per-tile detections are post-processed on the host and merged via cross-tile greedy NMM
@@ -181,7 +188,7 @@ into a single 1280×1280 frame.
 ```bash
 # Baseline — exact 2x2 of 640x640 (no overlap, no seam-merge).
 # Best for aerial/top-down scenes with many small objects that don't cross tile seams.
-python models/experimental/atss_swin_l_dyhead/demo/demo_sahi_4dev.py \
+python models/experimental/atss_swin_l_dyhead/demo/demo_slice_4dev.py \
     --image path/to/1280x1280_image.jpg \
     --output-dir path/to/output_dir
 
@@ -189,10 +196,18 @@ python models/experimental/atss_swin_l_dyhead/demo/demo_sahi_4dev.py \
 # Best for street-level scenes where large objects (persons, buses) span tile boundaries.
 # The input is resized to (2*640 - overlap) = 1200x1200 before tiling so adjacent
 # tiles share an 80px band; boxes are scaled back to 1280x1280 for output.
-python models/experimental/atss_swin_l_dyhead/demo/demo_sahi_4dev.py \
+python models/experimental/atss_swin_l_dyhead/demo/demo_slice_4dev.py \
     --image path/to/1280x1280_image.jpg \
     --overlap 80 --seam-merge \
     --output-dir path/to/output_dir
+
+# Batch over a folder of 1280x1280 images.
+for img in path/to/your/images/*.jpg; do
+  name=$(basename "$img" .jpg)
+  python models/experimental/atss_swin_l_dyhead/demo/demo_slice_4dev.py \
+      --image "$img" \
+      --output-dir path/to/output_dir/$name
+done
 ```
 
 **Key flags:**
@@ -208,7 +223,7 @@ python models/experimental/atss_swin_l_dyhead/demo/demo_sahi_4dev.py \
 | `--score-thr` | `0.3` | Visualization-only score threshold; postprocess uses `ATSS_SCORE_THR=0.05`. |
 | `--class-agnostic` | off | If set, the merger ignores class labels. |
 | `--no-trace` | off | Disable trace (2CQ only). |
-| `--output-dir` | `results/sahi_4dev/` | Output directory for the annotated JPEG. |
+| `--output-dir` | `results/slice_4dev/` | Output directory for the annotated JPEG (`atss_slice_4dev_detections.jpg`). |
 
 **Choosing flags by scene type:**
 
