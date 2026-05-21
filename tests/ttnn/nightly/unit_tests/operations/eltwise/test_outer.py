@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Extended nightly validation for ttnn.outer (issue #44352).
+Extended nightly validation for ttnn.outer
 
-Covers the issue's checklist comprehensively:
+Coverage
 - All batched and unbatched torch.outer variants (1D, batched same-rank,
   broadcast-on-batch, rank-mismatch, degenerate)
 - All float and block-float dtypes (bfloat16, float32, bfloat8_b;
@@ -16,11 +16,6 @@ Covers the issue's checklist comprehensively:
 The op's contract: a:[..., N], b:[..., M] -> [..., N, M] via
 a.unsqueeze(-1) * b.unsqueeze(-2).
 
-Note on sharded inputs: ttnn.outer internally falls sharded inputs back
-to interleaved (in ttnn::outer C++) because reshape's shard-spec
-recomputation does not handle the rank change for most shard strategies.
-The output's memory config is whatever the caller passes (sharded or
-interleaved), independently of input sharding.
 """
 
 from functools import partial
@@ -94,7 +89,7 @@ ALL_SHAPES = (
     + SHAPES_DEGENERATE
 )
 
-# Subset for cross-product axes where the full catalog would blow up the matrix.
+# Subset for cross-product axes
 SHAPES_MEMCFG_SUBSET = [
     ([32], [32]),
     ([2048], [64]),
@@ -147,7 +142,7 @@ def _check(a_pt, b_pt, out_tt, dtype):
 
 
 # ---------------------------------------------------------------------------
-# Test 1: shape x dtype matrix (the headline coverage)
+# Test 1: shape x dtype matrix
 # ---------------------------------------------------------------------------
 
 
@@ -232,8 +227,7 @@ def test_outer_mixed_layouts(a_shape, b_shape, dtype, a_layout, b_layout, device
 
 
 # ---------------------------------------------------------------------------
-# Test 5: sharded inputs (height-sharded 2D works natively; others go
-# through the sharded_to_interleaved fallback in ttnn::outer)
+# Test 5: sharded inputs
 # ---------------------------------------------------------------------------
 
 
