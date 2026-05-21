@@ -333,10 +333,14 @@ class Flux2Pipeline:
                     prompts,
                     max_length=224,  # TODO: this should be higher
                     temperature=prompt_upsample_temperature,
+                    traced=traced,
                 )
 
             prompt_embeds, _mask = self._prompt_encoder.encode(
-                prompts, num_images_per_prompt=num_images_per_prompt, sequence_length=512
+                prompts,
+                num_images_per_prompt=num_images_per_prompt,
+                sequence_length=512,
+                traced=traced,
             )
             _, prompt_sequence_length, _ = prompt_embeds.shape
 
