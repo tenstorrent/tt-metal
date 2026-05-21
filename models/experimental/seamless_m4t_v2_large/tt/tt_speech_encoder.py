@@ -17,6 +17,7 @@ import torch
 from models.common.utility_functions import nearest_32
 from models.experimental.seamless_m4t_v2_large.tt.common import (
     matmul_program_config,
+    pick_largest_height_shard_nhw_cores,
     to_torch_replicated_first_shard,
 )
 from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import from_torch_bfloat16_tile
@@ -369,8 +370,9 @@ class TTSeamlessM4Tv2SpeechEncoder:
         """Per-shape ``Conv1dConfig`` tuned from Tracy (exp6).
 
         Conformer depthwise (k=31, g=1024) uses the 1-D depthwise height-sharded factory.
-        Do not set ``act_block_h_override`` (forces ABH=1 on ~2 cores). Double buffering is
-        disabled for depthwise: only two NHW cores are used and extra L1 CBs do not overlap DRAM.
+        Do not set ``act_block_h_override`` (it interacts badly with depthwise L1). When
+        ``nhw_tiles`` has a large divisor on the compute grid, override NHW sharding to use
+        more cores (approach C — Python-only, no TTNN C++ changes).
         """
         key = (batch, input_length, in_channels, out_channels, kernel_size, groups, use_dw_zero_pad)
         cached = self._conv_config_cache.get(key)
@@ -389,6 +391,12 @@ class TTSeamlessM4Tv2SpeechEncoder:
             conv_kwargs["enable_act_double_buffer"] = False
             if use_dw_zero_pad:
                 conv_kwargs["padding_mode"] = ttnn.PaddingMode.Zeros
+            nhw_tiles = (batch * input_length + 31) // 32
+            nhw_cores = pick_largest_height_shard_nhw_cores(nhw_tiles, self.device)
+            if nhw_cores > 2:
+                grid = self.device.compute_with_storage_grid_size()
+                conv_kwargs["override_sharding_config"] = True
+                conv_kwargs["core_grid"] = ttnn.num_cores_to_corerangeset(nhw_cores, grid, row_wise=True)
         else:
             conv_kwargs["shard_layout"] = None
             conv_kwargs["enable_weights_double_buffer"] = True
