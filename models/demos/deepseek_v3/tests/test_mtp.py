@@ -202,7 +202,7 @@ def _run_reference_decode_replay_consistency(
     [
         pytest.param(
             {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_config": get_fabric_config(),
                 "trace_region_size": TRACE_REGION_SIZE,
             },
             marks=SKIP_IN_CI,
@@ -236,7 +236,7 @@ def test_mtp_reference_decode_replay_consistency(
     [
         pytest.param(
             {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_config": get_fabric_config(),
                 "trace_region_size": TRACE_REGION_SIZE,
             },
             marks=SKIP_IN_CI,
@@ -1103,7 +1103,7 @@ class _MtpTraceRunner:
     [
         pytest.param(
             {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_config": get_fabric_config(),
                 "trace_region_size": TRACE_REGION_SIZE,
             },
             marks=SKIP_IN_CI,
@@ -1201,7 +1201,7 @@ def test_generate_mtp_reference_io(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": get_fabric_config(),
             "trace_region_size": TRACE_REGION_SIZE,
         }
     ],
@@ -1327,7 +1327,7 @@ def test_mtp_accept_rate_and_perf(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": get_fabric_config(),
             "trace_region_size": TRACE_REGION_SIZE,
         }
     ],
@@ -1458,7 +1458,7 @@ def test_mtp_prefill_priming(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": get_fabric_config(),
             "trace_region_size": TRACE_REGION_SIZE,
         }
     ],

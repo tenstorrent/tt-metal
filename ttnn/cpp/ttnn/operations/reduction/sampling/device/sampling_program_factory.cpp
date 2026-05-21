@@ -13,6 +13,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operation.hpp"
+#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 
 namespace ttnn::prim {
 
@@ -66,6 +67,14 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
         core_grid = sub_core_grids.value();
     }
     auto cores = corerange_to_cores(core_grid, num_cores, true);
+
+    validate_reduce_op_program_grid(
+        "Sampling",
+        core_grid,
+        compute_with_storage_grid_size,
+        sub_core_grids.has_value() ? &sub_core_grids.value() : nullptr,
+        true,
+        {});
 
     if (seed.has_value()) {
         random_seed = seed.value();
