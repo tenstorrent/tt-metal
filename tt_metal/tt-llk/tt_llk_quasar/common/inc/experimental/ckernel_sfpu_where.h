@@ -32,10 +32,16 @@ inline void _init_where_()
 }
 
 // Per-lane select: out = (cond == 0) ? false_val : true_val.
-// Offsets are in SFPU dest_reg_addr units (rows * 2) and address into the
-// per-tile sub-region of DEST; the dest counter (advanced by ADDR_MOD_6 in
-// the SFPSTORE) supplies the per-iteration row stride, so the offsets are
-// constants captured verbatim by REPLAY.
+//
+// Inputs are addressed by DEST tile index (matching the Blackhole API
+// surface). Tile-relative SFPU dest_reg_addr offsets are computed as
+// `(tile_index * 32) << 1` — i.e. tile_index * 64, since each tile holds
+// 32 SFP rows of 2 dest_reg_addr units each. The dest counter (advanced by
+// ADDR_MOD_6 in the SFPSTORE) supplies the per-iteration row stride, so the
+// offsets are constants captured verbatim by REPLAY.
+//
+// The ITERATIONS template parameter is the inner SFPU row-pair count per
+// face — 8 for the standard 16-row face (16 rows / 2 SFP rows per iteration).
 //
 // TODO: SFPLOADMACRO-based fast path. BH has a special case for the
 // in-place form (out == in0) that schedules through SFPLOADMACRO templates
@@ -47,21 +53,28 @@ inline void _init_where_()
 // either another Quasar SFPU kernel establishes a reference for this
 // pattern, or codegen confirms it as the long-term direction for ternary
 // SFPU kernels on Quasar.
-inline void _calculate_where_(const int iterations, const int in0_offset_idx, const int in1_offset_idx, const int in2_offset_idx, const int out_offset_idx)
+template <int ITERATIONS = 8>
+inline void _calculate_where_(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_in2, const std::uint32_t dst_index_out)
 {
+    const int offset0 = static_cast<int>((dst_index_in0 * 32) << 1); // condition tile base
+    const int offset1 = static_cast<int>((dst_index_in1 * 32) << 1); // true_val  tile base
+    const int offset2 = static_cast<int>((dst_index_in2 * 32) << 1); // false_val tile base
+    const int offset3 = static_cast<int>((dst_index_out * 32) << 1); // output    tile base
+
     // Record the 6-instruction body once into replay slots 0..5; the loop
     // below issues a REPLAY per row pair. ADDR_MOD_6's dest.incr=2 (programmed
     // in _init_where_) handles row stride across iterations.
     lltt::record(0, 6);
-    TT_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, in0_offset_idx); // condition -> LREG0
-    TT_SFPLOAD(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, in1_offset_idx); // true_val  -> LREG1
-    TTI_SFPSETCC(0, p_sfpu::LREG0, sfpi::SFPSETCC_MOD1_LREG_EQ0);                      // CC := (LREG0 == 0)
-    TT_SFPLOAD(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, in2_offset_idx); // false_val -> LREG1 only on CC-enabled lanes
-    TTI_SFPENCC(0, 0);                                                                 // re-enable all lanes
-    TT_SFPSTORE(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_6, 0, out_offset_idx); // store + advance dest by 2
+    TT_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, offset0);  // condition -> LREG0
+    TT_SFPLOAD(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, offset1);  // true_val  -> LREG1
+    TTI_SFPSETCC(0, p_sfpu::LREG0, sfpi::SFPSETCC_MOD1_LREG_EQ0);                // CC := (LREG0 == 0)
+    TT_SFPLOAD(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, offset2);  // false_val -> LREG1 only on CC-enabled lanes
+    TTI_SFPENCC(0, 0);                                                           // re-enable all lanes
+    TT_SFPSTORE(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_6, 0, offset3); // store + advance dest by 2
 
 #pragma GCC unroll 8
-    for (int d = 0; d < iterations; d++)
+    for (int d = 0; d < ITERATIONS; d++)
     {
         lltt::replay(0, 6);
     }

@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-# AI-generated — ternary SFPU where test for Quasar.
+# Ternary SFPU where test for Quasar — three independent input buffers
+# (condition, true_val, false_val), routed through the Quasar ternary SFPU
+# wrapper. Mirrors the Blackhole `test_zzz_ttnn_where.py` structure.
 
 from typing import List
 
@@ -173,10 +175,10 @@ def test_sfpu_where_quasar(formats_dest_acc_implied_test_case_input_dims):
     """
     Test ternary `where(condition, true_val, false_val) -> output` on Quasar.
 
-    The C++ test source packs 3 input tiles (condition, true_val, false_val)
-    into `buffer_A`, datacopies them into DEST at tile indices 0, 1, 2, then
-    runs the SFPU `where` kernel face-by-face writing output to DEST tile 0.
-    PACK writes DEST tile 0 out to `buffer_Res`.
+    Three independent L1 input buffers: buffer_A=condition, buffer_B=true_val,
+    buffer_C=false_val. The C++ test datacopies each into DEST tile 0/1/2 then
+    runs the SFPU `where` kernel through the ternary wrapper, writing output to
+    DEST tile 0. PACK writes DEST tile 0 to buffer_Res.
 
     Variants cover `mixed` / `all_ones` / `all_zeros` condition regimes — the
     last two pin the selector to a single branch so format issues on either
@@ -192,10 +194,10 @@ def test_sfpu_where_quasar(formats_dest_acc_implied_test_case_input_dims):
 
     torch.manual_seed(42)
 
-    # Build 3 tile-shaped tensors (condition, true_val, false_val) and
-    # concatenate them into buffer_A. generate_stimuli returns one 32x32
-    # tensor per call; we call it three times with different seeds so the
-    # three buffers look different.
+    # Build three tile-shaped tensors (condition, true_val, false_val) as
+    # independent stimuli. generate_stimuli returns one 32x32 tensor per call;
+    # we call it three times with different seeds so the three buffers look
+    # different.
     src_cond_raw, tile_cnt_single, _, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
@@ -226,10 +228,6 @@ def test_sfpu_where_quasar(formats_dest_acc_implied_test_case_input_dims):
     true_val = _prepare_where_value(src_true_raw, formats.input_format, scale=10.0)
     false_val = _prepare_where_value(src_false_raw, formats.input_format, scale=10.0)
 
-    # buffer_A = concat([condition, true_val, false_val]) — 3 tiles.
-    src_A = torch.cat([condition, true_val, false_val])
-    tile_cnt_A = tile_cnt_single * 3
-
     num_faces = 4
 
     # Golden: torch.where(condition != 0, true_val, false_val).
@@ -240,10 +238,6 @@ def test_sfpu_where_quasar(formats_dest_acc_implied_test_case_input_dims):
     golden_tensor = golden_tensor.to(torch_format_out)
 
     unpack_to_dest = _is_unpack_to_dest(formats, dest_acc)
-
-    # src_B is unused by the where kernel but StimuliConfig requires a non-None
-    # buffer_B tensor. Supply a dummy tensor of matching shape.
-    src_B_dummy = torch.zeros_like(condition)
 
     configuration = TestConfig(
         "sources/quasar/sfpu_where_quasar_test.cpp",
@@ -258,20 +252,23 @@ def test_sfpu_where_quasar(formats_dest_acc_implied_test_case_input_dims):
             DEST_SYNC(),
         ],
         runtimes=[
-            TILE_COUNT(tile_cnt_A),
+            TILE_COUNT(tile_cnt_single),
             NUM_FACES(num_faces),
             TEST_FACE_DIMS(),
             DEST_INDEX(0),
         ],
         variant_stimuli=StimuliConfig(
-            src_A,
+            condition,
             formats.input_format,
-            src_B_dummy,
+            true_val,
             formats.input_format,
             formats.output_format,
-            tile_count_A=tile_cnt_A,
+            tile_count_A=tile_cnt_single,
             tile_count_B=tile_cnt_single,
-            tile_count_res=1,
+            tile_count_res=tile_cnt_single,
+            buffer_C=false_val,
+            stimuli_C_format=formats.input_format,
+            tile_count_C=tile_cnt_single,
             num_faces=num_faces,
         ),
         unpack_to_dest=unpack_to_dest,
@@ -305,7 +302,6 @@ def test_sfpu_where_mcw_quasar(formats_dest_acc_implied_test_case_input_dims):
     Deterministic where test — alternating 0/1 condition pattern with
     known true/false scalars (2 and 11) for easy debugging.
 
-    This is the Quasar port of the old run's `test_where_mcw_quasar`.
     Runs through the same C++ harness as `test_sfpu_where_quasar`, so if
     this fails but the stimulus-driven test passes, the problem is in
     stimulus generation rather than the kernel.
@@ -330,9 +326,7 @@ def test_sfpu_where_mcw_quasar(formats_dest_acc_implied_test_case_input_dims):
     true_val = (torch.ones(height, width, dtype=torch_format_in) * 2).flatten()
     false_val = (torch.ones(height, width, dtype=torch_format_in) * 11).flatten()
 
-    src_A = torch.cat([condition, true_val, false_val])
     tile_cnt_single = 1
-    tile_cnt_A = tile_cnt_single * 3
 
     num_faces = 4
 
@@ -342,8 +336,6 @@ def test_sfpu_where_mcw_quasar(formats_dest_acc_implied_test_case_input_dims):
     golden_tensor = golden_tensor.to(torch_format_out)
 
     unpack_to_dest = _is_unpack_to_dest(formats, dest_acc)
-
-    src_B_dummy = torch.zeros_like(condition)
 
     configuration = TestConfig(
         "sources/quasar/sfpu_where_quasar_test.cpp",
@@ -358,20 +350,23 @@ def test_sfpu_where_mcw_quasar(formats_dest_acc_implied_test_case_input_dims):
             DEST_SYNC(),
         ],
         runtimes=[
-            TILE_COUNT(tile_cnt_A),
+            TILE_COUNT(tile_cnt_single),
             NUM_FACES(num_faces),
             TEST_FACE_DIMS(),
             DEST_INDEX(0),
         ],
         variant_stimuli=StimuliConfig(
-            src_A,
+            condition,
             formats.input_format,
-            src_B_dummy,
+            true_val,
             formats.input_format,
             formats.output_format,
-            tile_count_A=tile_cnt_A,
+            tile_count_A=tile_cnt_single,
             tile_count_B=tile_cnt_single,
-            tile_count_res=1,
+            tile_count_res=tile_cnt_single,
+            buffer_C=false_val,
+            stimuli_C_format=formats.input_format,
+            tile_count_C=tile_cnt_single,
             num_faces=num_faces,
         ),
         unpack_to_dest=unpack_to_dest,

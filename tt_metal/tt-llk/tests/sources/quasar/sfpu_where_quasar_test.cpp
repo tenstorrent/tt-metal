@@ -1,7 +1,26 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
-// AI-generated — ternary SFPU where kernel test for Quasar.
+//
+// Ternary SFPU where test for Quasar — mirrors the Blackhole ttnn_where_test
+// pattern: three independent L1 input buffers (buffer_A = condition,
+// buffer_B = true_val, buffer_C = false_val), routed through DEST via the
+// FPU-datacopy or unpack-to-dest path, then dispatched through the shared
+// `_llk_math_eltwise_ternary_sfpu_params_` wrapper.
+//
+// Buffer layout (params.TILE_CNT == 1 per input):
+//   buffer_A[0] = condition tile → Dest[DST_INDEX + 0]
+//   buffer_B[0] = true_val  tile → Dest[DST_INDEX + 1]
+//   buffer_C[0] = false_val tile → Dest[DST_INDEX + 2]
+//   SFPU writes                  → Dest[DST_INDEX + 0]  (overwrites condition tile,
+//                                                       matches Blackhole convention)
+//   buffer_Res[0] = result       ← Dest[DST_INDEX + 0]
+//
+// Two execution paths, selected at runtime by `unpack_to_dest`:
+//   * unpack_to_dest=true   — UNPACK → Dest directly. Used for 32-bit Dest formats
+//                             (Float32 with dest_acc=Yes).
+//   * unpack_to_dest=false  — UNPACK → SrcA → FPU datacopy → Dest. Required for
+//                             non-32-bit formats.
 
 #include <cstdint>
 
@@ -17,50 +36,87 @@
 #include "llk_unpack_unary_operand.h"
 #include "params.h"
 
-// UNPACK: unpack 3 tiles packed in buffer_A (cond, true_val, false_val).
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const std::uint32_t buf_desc_id          = 0;
-    const std::uint32_t num_tiles_per_unpack = params.TILE_CNT;
 
-    // UNPACK-to-DEST path: UNPACK writes DEST; SFPU reads/writes DEST; PACK reads DEST.
-    // FPU path: UNPACK writes SrcA; FPU datacopy writes DEST; SFPU reads/writes DEST; PACK reads DEST.
-    constexpr auto unpack_dest = unpack_to_dest ? dest_dvalid_client::UNPACK : dest_dvalid_client::FPU;
-    set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({unpack_dest, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
-
+    // DEST DVALID handshake: T0 is the producer on the unpack-to-dest path; on the
+    // FPU-datacopy path T1 (FPU) is the producer instead.
     if constexpr (unpack_to_dest)
     {
+        set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
         _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*is_int_fpu_en*/>();
-    }
-
-    buffer_descriptor_u bd_val = {0};
-    bd_val.f.l1_addr_16B       = L1_ADDRESS(params.buffer_A[0]);
-    bd_val.f.format            = static_cast<std::uint8_t>(formats.unpack_A_src);
-    bd_val.f.x_dim             = params.TEST_FACE_C_DIM;
-    bd_val.f.y_dim             = params.TEST_FACE_R_DIM;
-    bd_val.f.z_dim             = params.num_faces;
-
-    tdma_descriptor_t td_val;
-    td_val.buf_desc        = bd_val;
-    td_val.buf_desc_id     = buf_desc_id;
-    td_val.reg_data_format = static_cast<std::uint8_t>(formats.unpack_A_dst);
-    _configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
-
-    if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
-    {
-        // If Dst is 32b and MATH uses FPU datacopy (MOVA2D → ELWADD fallback), we need both SrcA and SrcB formats configured.
-        _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val, td_val);
     }
     else
     {
-        _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(td_val);
+        set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
     }
 
-    _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, num_tiles_per_unpack);
-    _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/);
+    // One buf_desc per input. The hw_configure pass below only consumes one
+    // tdma_descriptor — but the per-input MOP init reads from the matching
+    // buf_desc_id, so all three must be in the buf_desc table. All three share
+    // format / face geometry; only the L1 address (and slot id) differs.
+    const std::uint32_t buf_desc_cond  = 0;
+    const std::uint32_t buf_desc_true  = 1;
+    const std::uint32_t buf_desc_false = 2;
+
+    buffer_descriptor_u bd_cond = {0};
+    bd_cond.f.l1_addr_16B       = L1_ADDRESS(params.buffer_A[0]);
+    bd_cond.f.format            = static_cast<std::uint8_t>(formats.unpack_A_src);
+    bd_cond.f.x_dim             = params.TEST_FACE_C_DIM;
+    bd_cond.f.y_dim             = params.TEST_FACE_R_DIM;
+    bd_cond.f.z_dim             = params.num_faces;
+
+    buffer_descriptor_u bd_true = bd_cond;
+    bd_true.f.l1_addr_16B       = L1_ADDRESS(params.buffer_B[0]);
+
+    buffer_descriptor_u bd_false = bd_cond;
+    bd_false.f.l1_addr_16B       = L1_ADDRESS(params.buffer_C[0]);
+
+    tdma_descriptor_t td_cond;
+    td_cond.buf_desc        = bd_cond;
+    td_cond.buf_desc_id     = buf_desc_cond;
+    td_cond.reg_data_format = static_cast<std::uint8_t>(formats.unpack_A_dst);
+    _configure_buf_desc_table_(buf_desc_cond, bd_cond);
+    _configure_buf_desc_table_(buf_desc_true, bd_true);
+    _configure_buf_desc_table_(buf_desc_false, bd_false);
+
+    // For 32-bit Dest with the FPU-datacopy path, Mov2D is implemented via ELWADD,
+    // so both UNP_A and UNP_B must be configured with the same descriptor. Use td_cond
+    // (all three share format / face geometry — only the L1 address differs).
+    if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
+    {
+        _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_cond, td_cond);
+    }
+    else
+    {
+        _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(td_cond);
+    }
+
+    // Issue three single-tile unpacks, one per input. The standard
+    // `_llk_unpack_unary_operand_` resets the DST tile counter to 0 inside the
+    // call, which would cause all three unpacks to write to DEST[0]. To put
+    // the three inputs in DEST[0]/[1]/[2] we run the first via the wrapper
+    // (which sets DST=0 and increments to 1 after the MOP), then for tiles 2
+    // and 3 reconfigure the MOP for the new buf_desc_id and re-run it without
+    // resetting the DST counter — the post-MOP TILE_INC chains the writes to
+    // DEST[1] then DEST[2]. SRC counter is reset per tile (each L1 buffer is
+    // independent, l1_tile_idx=0). `UNP_DEST` shares UNP_A's counters per the
+    // wrapper convention.
+    constexpr std::uint32_t COUNTER_UNP = (UNPACKER_ENGINE_SEL == p_unpacr::UNP_DEST) ? p_unpacr::UNP_A : UNPACKER_ENGINE_SEL;
+
+    _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_cond, 1);
+    _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/); // → DEST[0], DST counter → 1
+
+    _llk_unpack_unary_operand_mop_config_<UNPACKER_ENGINE_SEL, is_fp32_dest_acc_en>(buf_desc_true, 1);
+    TTI_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, COUNTER_UNP, 0);
+    ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer); // → DEST[1], DST counter → 2
+
+    _llk_unpack_unary_operand_mop_config_<UNPACKER_ENGINE_SEL, is_fp32_dest_acc_en>(buf_desc_false, 1);
+    TTI_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, COUNTER_UNP, 0);
+    ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer); // → DEST[2], DST counter → 3
 
     if constexpr (unpack_to_dest)
     {
@@ -68,7 +124,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 }
 
-#endif
+#endif // LLK_TRISC_UNPACK
 
 #ifdef LLK_TRISC_MATH
 
@@ -78,23 +134,15 @@ const bool is_int_fpu_en = false;
 #include "cmath_common.h"
 #include "experimental/ckernel_sfpu_where.h"
 #include "llk_math_common.h"
+#include "llk_math_eltwise_ternary_sfpu.h"
+#include "llk_math_eltwise_ternary_sfpu_params.h"
 #include "llk_math_eltwise_unary_datacopy.h"
-#include "llk_math_eltwise_unary_sfpu_common.h"
 #include "params.h"
 
 using namespace ckernel;
 using namespace ckernel::math;
 using namespace ckernel::sfpu;
 
-// MATH: datacopy the three input tiles (condition, true_val, false_val) into DEST
-// at tile indices 0, 1, 2, then run the SFPU where kernel face-by-face with the
-// output overwriting DEST tile 0 (matches ttnn_where_test convention).
-// Per-face offsets (in SFPU dest_reg_addr units, i.e. rows × 2):
-//   - condition tile (DEST tile 0) → 0
-//   - true_val  tile (DEST tile 1) → 64  (32 rows × 2)
-//   - false_val tile (DEST tile 2) → 128 (64 rows × 2)
-//   - output   tile (DEST tile 0) → 0
-// Face stride is 16 (`_inc_dst_face_addr_<16>()`), advancing RWC_D between faces.
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -121,7 +169,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         const std::uint32_t num_rows = params.num_faces * params.TEST_FACE_R_DIM;
         _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(num_rows, 1);
 
-        for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
+        constexpr std::uint32_t kNumInputs = 3;
+        for (std::uint32_t i = 0; i < kNumInputs; ++i)
         {
             _llk_math_eltwise_unary_datacopy_(num_rows, params.DST_INDEX + i);
         }
@@ -129,30 +178,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
     }
 
-    _llk_math_eltwise_sfpu_init_();
+    // Ternary SFPU dispatch: select(cond, true_val, false_val) → output.
+    // Tile indices match the Blackhole `ttnn_where_test.cpp` convention (0, 1, 2, 0):
+    // condition in DEST[0], true in DEST[1], false in DEST[2], output overwrites DEST[0].
+    _llk_math_eltwise_ternary_sfpu_init_<SfpuType::where>();
     _init_where_();
 
-    // Per-tile offsets in SFPU dest_reg_addr units (rows × 2; tile stride = 64 for 32x32 tiles).
-    // We set section_base to tile DST_INDEX below so offsets are relative to DST_INDEX's tile.
-    constexpr int TILE_STRIDE       = 64;
-    constexpr int cond_tile_offset  = 0 * TILE_STRIDE;  // tile DST_INDEX + 0 = condition
-    constexpr int true_tile_offset  = 1 * TILE_STRIDE;  // tile DST_INDEX + 1 = true_val
-    constexpr int false_tile_offset = 2 * TILE_STRIDE;  // tile DST_INDEX + 2 = false_val
-    constexpr int out_tile_offset   = cond_tile_offset; // overwrite condition tile
-
-    // Bracket the per-face SFPU section. `_set_dst_write_addr_<Tile32x32>(DST_INDEX)` sets
-    // the section base to DST_INDEX's tile start so the offsets above resolve to the
-    // correct tile (DST_INDEX + 0, +1, +2).
-    _llk_math_eltwise_sfpu_start_(params.DST_INDEX);
-
-    const std::uint32_t num_sfpu_iterations = params.TEST_FACE_R_DIM / ckernel::math::SFP_ROWS;
-    for (std::uint32_t face = 0; face < params.num_faces; face++)
-    {
-        _calculate_where_(static_cast<int>(num_sfpu_iterations), cond_tile_offset, true_tile_offset, false_tile_offset, out_tile_offset);
-        _llk_math_eltwise_sfpu_inc_dst_face_addr_();
-    }
-
-    _llk_math_eltwise_sfpu_done_();
+    constexpr int k_where_iterations = 8; // 16 rows per face / 2 SFP rows per iteration.
+    _llk_math_eltwise_ternary_sfpu_params_(
+        ckernel::sfpu::_calculate_where_<k_where_iterations>,
+        /* dst_index_in0 */ 0U,
+        /* dst_index_in1 */ 1U,
+        /* dst_index_in2 */ 2U,
+        /* dst_index_out */ 0U);
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
 
@@ -162,7 +200,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     wait_mop_idle();
 }
 
-#endif
+#endif // LLK_TRISC_MATH
 
 #ifdef LLK_TRISC_PACK
 
@@ -171,7 +209,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_pack_common.h"
 #include "params.h"
 
-// PACK: write a single output tile (DEST tile 0) to buffer_Res.
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -202,4 +239,4 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }
 
-#endif
+#endif // LLK_TRISC_PACK
