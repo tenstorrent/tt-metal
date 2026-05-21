@@ -280,12 +280,18 @@ The framework validates that the two compute `KernelSpec`s have non-overlapping 
 
 **Category**: Caution
 
-**Recognition signal**: A port modifies a kernel source that lives outside the op's own directory — typically a reader / writer in `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/` or similar. Common shared kernels include `reader_unary_interleaved_start_id.cpp`, `writer_unary_interleaved_start_id.cpp`, and `reader_unary_reduce_universal_start_id.cpp`.
+**Recognition signal**: A port modifies a kernel source that lives outside the op's own directory — typically a reader / writer in `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/` or similar. Common shared kernels include `reader_unary_interleaved_start_id.cpp`, `writer_unary_interleaved_start_id.cpp`, `reader_unary_reduce_universal_start_id.cpp`, and `writer_unary_sharded.cpp` (under `data_movement/sharded/device/kernels/dataflow/`).
 
-**Decision**: Modify in place under the assumption that all consumers will co-migrate to Metal 2.0 together. Before editing the kernel, grep for other op directories that reference its path so the coordination footprint is known and recorded.
+**Decision**: Pick one of two paths, based on whether all consumers of the kernel can co-migrate to Metal 2.0 in the same PR (or a bundled set of PRs):
 
-A kernel-source change that compiles cleanly for the porting op but breaks a sibling op's CTA layout is one of the failure modes that escapes the recipe's anti-pattern self-audit — it's *not* in the ported op's own files. The legacy-inventory step should explicitly note any cross-op kernel sources, and the port report records the touch under "Open items for downstream" so the next sibling-op porter sees the coordination signal.
+1. **In-place modification** — when every consumer op of the kernel is being ported to Metal 2.0 in the same PR or bundled set. Modify the kernel source and update each consumer's factory consistently. Before editing, grep for all consumers (`grep -rl <kernel-filename> ttnn/cpp/ttnn/operations/`) and verify each one is in the bundled set.
+
+2. **Fork with `_metal2` suffix** — the typical answer during the bulk-port window, when consumers cannot all co-migrate. Copy the kernel into a `_metal2`-suffixed file alongside the original (e.g., `writer_unary_interleaved_start_id_metal2.cpp` next to the legacy `writer_unary_interleaved_start_id.cpp`). Modify the copy for Metal 2.0 — named bindings, `dfb::name`, `ta::name`, named RTAs. Reference the new file from the ported factory's `KernelSpec::source`. The legacy copy stays in place for unmigrated consumers.
+
+   **Sunset:** delete the legacy copy when the last unmigrated consumer ports. The `_metal2` suffix is a load-bearing signal during this window — anyone touching the legacy copy should see the suffix and consider whether the change also belongs on the fork.
+
+   **Drift discipline:** until sunset, bug fixes to the legacy copy should be evaluated for the `_metal2` copy. The fork is intentionally short-lived; keeping the two in sync is the cost of unblocking the bulk-port wave without coordinating dozens of consumer PRs.
+
+A kernel-source change that compiles cleanly for the porting op but breaks a sibling op's CTA layout is one of the failure modes that escapes the recipe's anti-pattern self-audit — it's *not* in the ported op's own files. The legacy-inventory step explicitly notes any cross-op kernel sources, and the port report records the touch under "Open items for downstream" with the chosen path (in-place co-migration list, or fork) so the next sibling-op porter sees the coordination signal.
 
 **Excluded from "cross-op"**: kernel-lib (`ttnn/cpp/ttnn/kernel_lib/`) and standard framework APIs (`tt_metal/hw/inc/api/...`) — these are out of porter scope by the [recipe's scope boundary](port_op_to_metal2_recipe.md#read-this-first) and the porter does not modify them. Cross-op kernels are sources living in *another op's* kernel directory.
-
-**The fork path is not used today.** An earlier draft of this caution offered a fork-with-`_metal2`-suffix path for cases where consumers can't co-migrate. We've shelved it pending evidence that the co-migration assumption fails in practice. If a port hits a case where it does fail, that's a porting problem to record in the report, not a fork to take on the porter's own initiative.
