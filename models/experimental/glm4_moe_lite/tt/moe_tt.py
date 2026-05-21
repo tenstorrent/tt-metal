@@ -14,6 +14,7 @@ import ttnn
 from models.common.modules.tt_ccl import get_tt_ccl
 from models.experimental.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
 from models.experimental.glm4_moe_lite.tt.layer_weights import MoELayerTTWeights
+from models.experimental.glm4_moe_lite.tt.linear_helpers import compute_1d_prog_cfg
 
 _SCATTER_ZERO_CACHE: dict[tuple[int, int, int], ttnn.Tensor] = {}
 
@@ -481,7 +482,6 @@ def moe_topk_tt(
     x: ttnn.Tensor,  # [1,1,T,H] TILE
     moe_w: MoELayerTTWeights,
     hparams: Glm4MoeLiteHParams,
-    compute_kernel_config: Any | None = None,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Return (topk_weights, topk_indices) for routed experts.
 
@@ -498,12 +498,21 @@ def moe_topk_tt(
     use_l1 = os.environ.get("GLM4_MOE_LITE_ROUTER_L1", "1").strip() == "1" and int(x.shape[2]) <= 32
     mc = ttnn.L1_MEMORY_CONFIG if use_l1 else None
 
-    if compute_kernel_config is None:
-        logits = ttnn.linear(x, moe_w.w_gate, memory_config=mc)  # [1,1,T,E]
-    else:
-        logits = ttnn.linear(
-            x, moe_w.w_gate, compute_kernel_config=compute_kernel_config, memory_config=mc
-        )  # [1,1,T,E]
+    m_total = 1
+    for i in range(len(x.shape) - 1):
+        m_total *= int(x.shape[i])
+    logits = ttnn.linear(
+        x,
+        moe_w.w_gate,
+        program_config=compute_1d_prog_cfg(x.device(), moe_w.w_gate, m_total, fp32_dest_acc_en=False),
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        ),
+        **({} if mc is None else {"memory_config": mc}),
+    )  # [1,1,T,E]
     scores = ttnn.sigmoid(logits, memory_config=mc)
     ttnn.deallocate(logits, force=False)
 

@@ -206,7 +206,6 @@ def moe_mlp_forward(
             x=x,
             moe_w=w.moe,
             hparams=hparams,
-            compute_kernel_config=mlp_compute_kernel_config,
         )
     _profile_add(profile, "moe_router_s", time.perf_counter() - t0 if profile is not None else 0.0)
     if use_signpost:
