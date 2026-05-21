@@ -532,47 +532,9 @@ all_gather_minimal_matmul_async_factory_helper(
     std::map<std::string, std::string> in0_defines;
     std::map<std::string, std::string> in0_injector_defines;
     std::map<std::string, std::string> in0_fabric_defines;
-    // AGMM_NO_FABRIC env var: when set to "1", skip all fabric transactions (payloads,
-    // semaphores, mux setup/teardown) and any waits for remote-device semaphores.
-    // Used to measure best-case timing if fabric were free.
-    const char* no_fabric_env = std::getenv("AGMM_NO_FABRIC");
-    const bool agmm_no_fabric = (no_fabric_env != nullptr && std::string(no_fabric_env) == "1");
-    if (agmm_no_fabric) {
-        defines["AGMM_NO_FABRIC"] = "1";
-    }
-    // AGMM_UNI_RING env var: when set to "1" AND topology is Linear, run a unidirectional
-    // ring on top of the line. Each device sends one full K-block per iter to its
-    // predecessor (Dev k -> Dev k-1, 1 hop); Dev 0 sends to Dev N-1 via a long unicast
-    // (N-1 hops). Trades the multi-hop compute-level chain relay for a multi-hop fabric
-    // unicast — collapses the ~200us critical-path stall at end devices to ~3us.
-    const char* uni_ring_env = std::getenv("AGMM_UNI_RING");
-    bool agmm_uni_ring =
-        (uni_ring_env != nullptr && std::string(uni_ring_env) == "1") && (topology == ttnn::ccl::Topology::Linear);
-    // AGMM_DUAL_UNI_RING env var: like AGMM_UNI_RING, but runs TWO uni-rings simultaneously
-    // (one in each direction) carrying k_left and k_right halves of each K-block. Mirrors
-    // the bidirectional half-block scheme of the Ring topology, but implements the wrap
-    // via fabric multi-hop unicast. Distributes fabric work across both mux ports at
-    // interior devices (~50% per-port load reduction) and halves the long-send transit
-    // time at end devices. Mutually exclusive with AGMM_UNI_RING (dual takes priority).
-    const char* dual_uni_ring_env = std::getenv("AGMM_DUAL_UNI_RING");
-    const bool agmm_dual_uni_ring = (dual_uni_ring_env != nullptr && std::string(dual_uni_ring_env) == "1") &&
-                                    (topology == ttnn::ccl::Topology::Linear);
-    if (agmm_dual_uni_ring) {
-        defines["AGMM_DUAL_UNI_RING"] = "1";
-        agmm_uni_ring = false;  // dual takes priority
-    }
+    const bool agmm_uni_ring = (topology == ttnn::ccl::Topology::Linear);
     if (agmm_uni_ring) {
         defines["AGMM_UNI_RING"] = "1";
-    }
-    // Ablation flags — each removes one piece of the in0 data movement while leaving sem
-    // signaling intact so the kernel still runs end-to-end. Used to isolate which part of
-    // the dataflow is on the critical path. PCC is garbage when any of these are set.
-    for (const char* name :
-         {"AGMM_ABLATE_IN0_READ", "AGMM_ABLATE_CHAIN_MCAST", "AGMM_ABLATE_FABRIC_SEND", "AGMM_ABLATE_FABRIC_WAIT"}) {
-        const char* v = std::getenv(name);
-        if (v != nullptr && std::string(v) == "1") {
-            defines[name] = "1";
-        }
     }
     if (use_bias) {
         defines["FUSE_BIAS"] = "1";
@@ -599,24 +561,6 @@ all_gather_minimal_matmul_async_factory_helper(
     // deliveries — exactly what we want.
     if (agmm_uni_ring && ring_index == 0) {
         unicast_forward_args[1] = ring_size - 1;  // distance_in_hops = N-1
-    }
-
-    // Dual uni-ring routing: builds 2 additional route arg sets (forward_long, backward_long)
-    // for the multi-hop wrap sends. For 1D fabric the route is just {mesh_id=0, distance=N-1}
-    // at Dev 0 (forward_long) and Dev N-1 (backward_long). Other devices get zero placeholders
-    // (those routes are unused at those positions, gated by num_targets_* CT args in the kernel).
-    std::array<uint32_t, 2> unicast_forward_long_args = {0, 0};
-    std::array<uint32_t, 2> unicast_backward_long_args = {0, 0};
-    if (agmm_dual_uni_ring) {
-        TT_FATAL(
-            tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig()),
-            "AGMM_DUAL_UNI_RING currently only supports 1D fabric config");
-        if (ring_index == 0) {
-            unicast_forward_long_args = {0, ring_size - 1};  // long send to Dev N-1
-        }
-        if (ring_index == ring_size - 1) {
-            unicast_backward_long_args = {0, ring_size - 1};  // long send to Dev 0
-        }
     }
 
     uint32_t in0_addr = ag_output_tensor.buffer()->address();
@@ -770,16 +714,6 @@ all_gather_minimal_matmul_async_factory_helper(
         in0_receiver_fabric_compile_time_args.end(), unicast_forward_args.begin(), unicast_forward_args.end());
     in0_receiver_fabric_compile_time_args.insert(
         in0_receiver_fabric_compile_time_args.end(), unicast_backward_args.begin(), unicast_backward_args.end());
-    if (agmm_dual_uni_ring) {
-        in0_receiver_fabric_compile_time_args.insert(
-            in0_receiver_fabric_compile_time_args.end(),
-            unicast_forward_long_args.begin(),
-            unicast_forward_long_args.end());
-        in0_receiver_fabric_compile_time_args.insert(
-            in0_receiver_fabric_compile_time_args.end(),
-            unicast_backward_long_args.begin(),
-            unicast_backward_long_args.end());
-    }
     append_accessors(
         in0_receiver_fabric_compile_time_args,
         ag_output_tensor,
@@ -921,19 +855,15 @@ all_gather_minimal_matmul_async_factory_helper(
             .compile_args = compute_compile_time_args,
             .defines = compute_defines});
 
-    // mux kernel — skip entirely under AGMM_NO_FABRIC (workers don't connect/terminate)
-    [[maybe_unused]] tt::tt_metal::KernelHandle mux_kernel_id = 0;
-    if (!agmm_no_fabric) {
-        mux_kernel_id = tt::tt_metal::CreateKernel(
-            program,
-            "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
-            mux_core_range_set,
-            tt::tt_metal::DataMovementConfig{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = tt::tt_metal::NOC::RISCV_1_default,
-                .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
-                .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
-    }
+    tt::tt_metal::KernelHandle mux_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
+        mux_core_range_set,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::RISCV_1_default,
+            .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
+            .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
 
     /**
      * The receiver writer cores defer their writes in order to reduce NOC congestion.
@@ -951,30 +881,28 @@ all_gather_minimal_matmul_async_factory_helper(
     // for requests that the receiver will never issue, leading to deadlock. Keep the original uniform
     // div_up-based ranges for M and N.
 
-    if (!agmm_no_fabric) {
-        for (uint32_t mux_id = 0; mux_id < num_mux_cores; ++mux_id) {
-            uint32_t dir = mux_id % 2;  // 2 being the number of directions
-            if (mux_connection_valid(dir)) {
-                uint32_t link = mux_id / 2;  // 2 is the num directions
-                uint32_t mux_x_index = (num_workers_per_link * (link + 1)) - (1 - dir);
-                if (mux_x_index >= full_grid_size.x) {
-                    mux_x_index = mux_x_index - full_grid_size.x;
-                }
-                auto mux_logical_core = CoreCoord(mux_x_index, full_grid_size.y - 1);
-
-                std::vector<uint32_t> mux_rt_args = {};
-                const auto src_node_id = device->get_fabric_node_id(sender_device_coord);
-                if (dir) {  // forward
-                    const auto dst_node_id = device->get_fabric_node_id(backward_coord.value());
-                    mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                        src_node_id, dst_node_id, link, program, {mux_logical_core});
-                } else {
-                    const auto dst_node_id = device->get_fabric_node_id(forward_coord.value());
-                    mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                        src_node_id, dst_node_id, link, program, {mux_logical_core});
-                }
-                tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
+    for (uint32_t mux_id = 0; mux_id < num_mux_cores; ++mux_id) {
+        uint32_t dir = mux_id % 2;  // 2 being the number of directions
+        if (mux_connection_valid(dir)) {
+            uint32_t link = mux_id / 2;  // 2 is the num directions
+            uint32_t mux_x_index = (num_workers_per_link * (link + 1)) - (1 - dir);
+            if (mux_x_index >= full_grid_size.x) {
+                mux_x_index = mux_x_index - full_grid_size.x;
             }
+            auto mux_logical_core = CoreCoord(mux_x_index, full_grid_size.y - 1);
+
+            std::vector<uint32_t> mux_rt_args = {};
+            const auto src_node_id = device->get_fabric_node_id(sender_device_coord);
+            if (dir) {  // forward
+                const auto dst_node_id = device->get_fabric_node_id(backward_coord.value());
+                mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
+                    src_node_id, dst_node_id, link, program, {mux_logical_core});
+            } else {
+                const auto dst_node_id = device->get_fabric_node_id(forward_coord.value());
+                mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
+                    src_node_id, dst_node_id, link, program, {mux_logical_core});
+            }
+            tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
         }
     }
 

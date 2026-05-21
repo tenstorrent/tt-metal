@@ -126,22 +126,7 @@ void compute_actual_k_block(
         k_left_start_tile = my_rank * k_tiles_per_device + device_k_block_iter * k_tiles_per_block;
         k_right_start_tile = k_left_start_tile + k_left_tiles;
     } else {
-#ifdef AGMM_DUAL_UNI_RING
-        // Dual uni-ring: bidirectional half-block ring on Linear. Ring A (leftward) brings
-        // k_left half of slice (my_rank + K) % N; ring B (rightward) brings k_right half of
-        // slice (my_rank - K + N) % N. Wraps are via fabric multi-hop unicast.
-        int32_t fwd_rank = my_rank + device_iter;
-        if ((uint32_t)fwd_rank >= num_devices) {
-            fwd_rank -= num_devices;
-        }
-        k_left_start_tile = fwd_rank * k_tiles_per_device + device_k_block_iter * k_tiles_per_block;
-
-        int32_t bwd_rank = my_rank - device_iter;
-        if (bwd_rank < 0) {
-            bwd_rank += num_devices;
-        }
-        k_right_start_tile = bwd_rank * k_tiles_per_device + device_k_block_iter * k_tiles_per_block + k_left_tiles;
-#elif defined(AGMM_UNI_RING)
+#ifdef AGMM_UNI_RING
         // Uni-ring on Linear: slice at iter K = (my_rank + K) mod N. Data flows leftward
         // around a virtual ring (Dev k -> Dev k-1 each iter; Dev 0 long-sends to Dev N-1).
         uint32_t actual_device_rank = my_rank + device_iter;
@@ -183,29 +168,9 @@ void compute_actual_k_block(
 #endif  // AGMM_UNI_RING
     }
 #ifdef IS_IN0
-#ifndef AGMM_NO_FABRIC
     if (is_first_n_block) {
         if (is_injector_core) {
-#ifdef AGMM_DUAL_UNI_RING
-            // Dual uni-ring: each iter, k_left half arrives via ring A and k_right half via
-            // ring B (signaled at the receiver's sem_backward and sem_forward respectively).
-            // Wait for both. Same per-m_block off-by-K_blocks_per_device bug as AGMM_UNI_RING
-            // — each ring's sender fires K_num_blocks sem incs per m_block but the receiver
-            // only consumes (N-1)*K_blocks_per_device of them via this wait. At the last
-            // K-block iter of each m_block, advance BOTH sem_targets by K_blocks_per_device
-            // to consume the iter N-1 extras and keep sends and waits in lockstep across
-            // m_block boundaries.
-            if (device_iter > 0) {
-                noc_semaphore_wait_min(out_ready_semaphore_forward, sem_target_forward + 1);
-                sem_target_forward += 1;
-                noc_semaphore_wait_min(out_ready_semaphore_backward, sem_target_backward + 1);
-                sem_target_backward += 1;
-            }
-            if (k_block_iter == total_k_block_count - 1) {
-                sem_target_forward += k_blocks_per_device;
-                sem_target_backward += k_blocks_per_device;
-            }
-#elif defined(AGMM_UNI_RING)
+#ifdef AGMM_UNI_RING
             // Uni-ring: one slice per iter from "successor" (Dev k+1 normally; for Dev N-1,
             // from Dev 0 via long send). All sends use out_ready_semaphore_forward at the
             // receiver — single sem per iter.
@@ -217,10 +182,7 @@ void compute_actual_k_block(
             // m_block's data, causing stale reads. Fix: at the last K-block iter of each
             // m_block, advance sem_target by K_blocks_per_device to consume those extras.
             if (device_iter > 0) {
-                DeviceZoneScopedSumN1("in0_wait_sem");
-#ifndef AGMM_ABLATE_FABRIC_WAIT
                 noc_semaphore_wait_min(out_ready_semaphore_forward, sem_target_forward + 1);
-#endif
                 sem_target_forward += 1;
             }
             if (k_block_iter == total_k_block_count - 1) {
@@ -254,10 +216,9 @@ void compute_actual_k_block(
                     }
                 }
             }
-#endif  // AGMM_UNI_RING / AGMM_DUAL_UNI_RING
+#endif  // AGMM_UNI_RING
         }
     }
-#endif  // !AGMM_NO_FABRIC
 #endif  // IS_IN0
 }
 
@@ -321,7 +282,6 @@ FORCE_INLINE void forward_half_block_to_fabric_neighbor(
             noc_addrs[i] = tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_id, 0);
         }
         if (do_write) {
-#ifndef AGMM_ABLATE_FABRIC_SEND
             if (tiles_to_put_in_current_packet > 1) {
                 fabric_unicast_noc_scatter_write_with_state<
                     UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
@@ -337,7 +297,6 @@ FORCE_INLINE void forward_half_block_to_fabric_neighbor(
             }
 
             noc_async_writes_flushed();
-#endif
             tiles_read += tiles_to_put_in_current_packet;
             l1_read_addr += (tiles_to_put_in_current_packet * page_size);
             if (reached_half_block_end) {
