@@ -144,7 +144,8 @@ is_valid_config() {
     return 1
 }
 
-SEP=$'\x1f'
+SEP=$'\x1f'   # field separator for test entry records (group/filter/config/envvars)
+ENV_SEP='|'  # separator between env KEY=value pairs (yq join() does not interpret \u escapes)
 declare -a test_entries=()
 while IFS=$'\t' read -r group filter configs envvars; do
     [[ -z "$group" ]] && continue
@@ -159,7 +160,7 @@ while IFS=$'\t' read -r group filter configs envvars; do
         fi
         test_entries+=("${group}${SEP}${filter}${SEP}${config}${SEP}${envvars}")
     done
-done < <(yq -r 'to_entries[] | .key as $group | .value[] | [$group, .filter, .config, (.env // {} | to_entries | map(.key + "=" + (.value | tostring)) | join("\u001f"))] | @tsv' "$TESTS_FILE")
+done < <(yq -r 'to_entries[] | .key as $group | .value[] | [$group, .filter, .config, (.env // {} | to_entries | map(.key + "=" + (.value | tostring)) | join("|"))] | @tsv' "$TESTS_FILE")
 
 total_tests=${#test_entries[@]}
 
@@ -248,7 +249,7 @@ for entry in "${test_entries[@]}"; do
     # Apply per-test env vars
     extra_env_keys=()
     if [[ -n "$envvars" ]]; then
-        while IFS= read -r -d "$SEP" pair || [[ -n "$pair" ]]; do
+        while IFS= read -r -d "$ENV_SEP" pair || [[ -n "$pair" ]]; do
             [[ -z "$pair" ]] && continue
             key="${pair%%=*}"
             export "$pair"

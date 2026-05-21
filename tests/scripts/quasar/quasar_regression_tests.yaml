@@ -18,6 +18,12 @@ unit_tests_legacy:
   - filter: "*SingleDmL1Write*"
     config: 1x3, 2x3, 2x3_DISPATCH
 
+  - filter: "*SingleDmL1Write*"
+    config: 1x3
+    env:
+      TT_METAL_DPRINT_CORES: all
+      TT_METAL_DEVICE_PRINT: 1
+
   - filter: "*DmLoopback*"
     config: 1x3
 
