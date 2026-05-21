@@ -47,7 +47,7 @@ on:
 
   schedule:
     # Run daily at 6 AM UTCP_a
-    - cron: "0 6 * * 1-5"
+    - cron: "0 7 * * 1-5"
 
 permissions:
   contents: write
@@ -66,6 +66,7 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
       build-wheel: true
+      tracy: true  # required for device-perf tests (e.g. galaxy DeepSeek Prefill PERF)
 
   deepseek-prefill-tests:
     name: "DeepSeek Prefill Tests"

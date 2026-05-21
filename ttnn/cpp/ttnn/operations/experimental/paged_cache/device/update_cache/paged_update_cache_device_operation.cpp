@@ -52,19 +52,27 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
         cache_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Only interleaved cache is supported");
 
-    // block_size_override is paged-mode only: in non-paged mode cache.shape[2] is the
+    // Overrides are paged-mode only: in non-paged mode cache.shape[2] is the
     // sequence length, and a "geometry mismatch" error there would be misleading.
     if (operation_attributes.block_size_override.has_value()) {
         TT_FATAL(
             page_table.has_value(),
             "block_size_override is only supported in paged mode (when page_table is provided)");
     }
+    if (operation_attributes.num_kv_heads_override.has_value()) {
+        TT_FATAL(
+            page_table.has_value(),
+            "num_kv_heads_override is only supported in paged mode (when page_table is provided)");
+    }
 
-    // Per-block byte-count consistency. When the caller reinterprets the cache with a
-    // different (block_size, head_dim) view via block_size_override, the kernel's
-    // per-block element stride (num_kv_heads * block_size * head_dim) must be preserved
-    // or block_start_id math will land in the wrong place. Trivially holds for legacy
-    // callers (no override, matching head dims). Non-paged callers keep the stricter
+    // Per-block element-count consistency. The program factory wires the kernel's
+    // per-block stride from (num_heads, effective_block_size, input_head_dim) read off
+    // the call view. For each new physical block in the cache the kernel jumps by that
+    // stride, so it must equal the cache's actual per-block element count. Allowing
+    // input_num_heads != cache_num_heads (via num_kv_heads_override) is what enables
+    // HMA cross-group tensor sharing for models with asymmetric num_kv_heads per layer
+    // type (e.g. Gemma4-26B-A4B sliding kv=8 / full kv=2). Trivially holds for legacy
+    // callers with no override and matching shapes. Non-paged callers keep the stricter
     // legacy last-dim equality below (sharding/stride assumptions upstream).
     const uint32_t input_head_dim = input_tensor.padded_shape()[-1];
     if (page_table.has_value()) {
@@ -72,10 +80,11 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
         const uint32_t cache_block_size = cache_tensor.padded_shape()[2];
         const uint32_t cache_head_dim = cache_tensor.padded_shape()[-1];
         const uint32_t effective_block_size = operation_attributes.block_size_override.value_or(cache_block_size);
+        const uint32_t input_num_heads = operation_attributes.num_kv_heads_override.value_or(cache_num_heads);
         const uint64_t cache_elems_per_block =
             static_cast<uint64_t>(cache_num_heads) * cache_block_size * cache_head_dim;
         const uint64_t view_elems_per_block =
-            static_cast<uint64_t>(cache_num_heads) * effective_block_size * input_head_dim;
+            static_cast<uint64_t>(input_num_heads) * effective_block_size * input_head_dim;
         TT_FATAL(
             view_elems_per_block == cache_elems_per_block,
             "paged_update_cache geometry mismatch: cache has {} elems/block "
@@ -86,7 +95,7 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
             cache_block_size,
             cache_head_dim,
             view_elems_per_block,
-            cache_num_heads,
+            input_num_heads,
             effective_block_size,
             input_head_dim);
         TT_FATAL(
@@ -269,11 +278,13 @@ ttsl::hash::hash_t PagedUpdateCacheDeviceOperation::compute_program_hash(
     // - share_cache: affects program structure (semaphore setup)
     // - mesh_coords: affects program factory selection
     // - block_size_override: enters compile-time args
+    // - num_kv_heads_override: enters compile-time args
     return operation::hash_operation<PagedUpdateCacheDeviceOperation>(
         args.compute_kernel_config,
         args.share_cache,
         args.mesh_coords,
         args.block_size_override,
+        args.num_kv_heads_override,
         tensor_args,
         program_factory.index());
 }
@@ -292,7 +303,8 @@ ttnn::experimental::prim::PagedUpdateCacheDeviceOperation::tensor_return_value_t
     uint32_t batch_offset,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords,
-    std::optional<uint32_t> block_size_override) {
+    std::optional<uint32_t> block_size_override,
+    std::optional<uint32_t> num_kv_heads_override) {
     using OperationType = ttnn::experimental::prim::PagedUpdateCacheDeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config);
@@ -304,7 +316,8 @@ ttnn::experimental::prim::PagedUpdateCacheDeviceOperation::tensor_return_value_t
         .compute_kernel_config = kernel_config_val,
         .share_cache = share_cache_arg,
         .mesh_coords = mesh_coords,
-        .block_size_override = block_size_override};
+        .block_size_override = block_size_override,
+        .num_kv_heads_override = num_kv_heads_override};
 
     auto tensor_args = OperationType::tensor_args_t{
         .cache_tensor = cache_tensor,

@@ -27,9 +27,8 @@ protected:
         auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-        auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
-        auto psd =
-            tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
+        auto psd = tt::tt_metal::run_physical_system_discovery(
+            *cluster.get_cluster_desc(), distributed_context, rtoptions.get_target_device());
         physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(std::move(psd));
     }
 
