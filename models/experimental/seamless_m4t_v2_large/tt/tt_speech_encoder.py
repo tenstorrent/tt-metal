@@ -544,12 +544,11 @@ class TTSeamlessM4Tv2SpeechEncoder:
     ) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """Fused QKV linear, slice Q|K|V, then ``_heads`` → ``[B, H, S, D]``.
 
-        ``nlp_create_qkv_heads`` matches unit tests but drops PCC to ~0.97 on this
-        stack (bf16 fused QKV); slice + reshape matches the prior separate-linear path.
+        ``nlp_create_qkv_heads`` matches unit tests but drops PCC badly on this stack
+        (≈0.09 E2E with fused bf16 QKV); slice + reshape + permute is required for parity.
 
-        Stage 17: ``k_transposed=True`` (set for relative-attention layers) extracts K
-        directly as ``[B, H, D, S]`` via a single permute, removing the downstream
-        ``kh_t = permute(k, (0,1,3,2))`` call.
+        Stage 17: ``k_transposed=True`` (relative-attention layers) uses ``_k_heads_transposed``
+        so K is ``[B, H, D, S]`` in one permute instead of ``_heads`` + ``permute(k,(0,1,3,2))``.
         """
         pc_qkv = self._matmul_program_config(batch * seq_len, hsz, 3 * hsz)
         qkv = self._linear(hidden_states, attn_module.qkv.weight, attn_module.qkv.bias, program_config=pc_qkv)
@@ -734,9 +733,10 @@ class TTSeamlessM4Tv2SpeechEncoder:
             ttnn.deallocate(probs)
             ttnn.deallocate(v)
 
-        merged = ttnn.permute(attn_out, (0, 2, 1, 3), memory_config=ttnn.L1_MEMORY_CONFIG)
+        merged_4d = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(attn_out)
-        merged = ttnn.reshape(merged, (batch, seq_len, hsz))
+        merged = ttnn.reshape(merged_4d, (batch, seq_len, hsz))
+        ttnn.deallocate(merged_4d)
         out = self._linear(merged, attn_module.linear_out.weight, attn_module.linear_out.bias, program_config=pc_out)
         ttnn.deallocate(merged)
         return out
