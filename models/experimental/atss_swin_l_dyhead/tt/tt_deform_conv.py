@@ -43,18 +43,15 @@ def _precompute_base_grid_yx_and_scale(
     padding: Tuple[int, int],
     dilation: Tuple[int, int],
     align_corners: bool,
-    offset_format: str = "yx",
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Precompute the constant pieces of the sample-grid construction.
 
-    Args:
-        offset_format: "yx" — offset channels are (dy_0, dx_0, ..., dy_{K-1}, dx_{K-1})
-                        (torchvision convention). base_grid and scale match this order,
-                        and the device-side path swaps (y,x) → (x,y) before grid_sample.
-                       "xy" — offset channels are pre-swapped to (dx_0, dy_0, ..., dx_{K-1},
-                        dy_{K-1}). base_grid and scale are built in (x,y) order so the
-                        sum directly yields the (x,y) grid expected by grid_sample. Skips
-                        the device-side swap entirely.
+    Returns:
+        base_grid_yx: (1, H_out, W_out, 2*kH*kW) with channel order
+            (y_0, x_0, y_1, x_1, ..., y_{K-1}, x_{K-1}), pre-normalized so that
+            final_grid_yx = base_grid_yx + offset_dy_dx * scale_yx
+        scale_yx:    (1, 1, 1, 2*kH*kW), (scale_y, scale_x) interleaved K times,
+                     for normalizing the (dy, dx) offsets to [-1, 1] grid space.
     """
     sh, sw = stride
     ph, pw = padding
@@ -64,11 +61,14 @@ def _precompute_base_grid_yx_and_scale(
     # NOTE: ttnn.grid_sample uses align_corners=False semantics regardless of the
     # align_corners flag passed to it (as of this writing). We always use the
     # align_corners=False normalization so that grid coord = (2*y_pixel + 1)/H - 1.
+    # This makes pixel coordinate y_pixel map to the correct grid coordinate for
+    # ttnn.grid_sample to sample the same pixel as torchvision's DCN.
     scale_y = 2.0 / H_in
     scale_x = 2.0 / W_in
     bias_y = 1.0 / H_in - 1.0
     bias_x = 1.0 / W_in - 1.0
-    _ = align_corners  # API symmetry
+    # Param kept for API symmetry; not used.
+    _ = align_corners
 
     iy = torch.arange(H_out, dtype=torch.float32)
     ix = torch.arange(W_out, dtype=torch.float32)
@@ -83,23 +83,15 @@ def _precompute_base_grid_yx_and_scale(
     base_y_norm = base_y_raw * scale_y + bias_y
     base_x_norm = base_x_raw * scale_x + bias_x
 
-    if offset_format == "yx":
-        # Interleaved (y, x): grid[2k]=y_k, grid[2k+1]=x_k
-        base = torch.stack([base_y_norm, base_x_norm], dim=-1).reshape(H_out, W_out, K * 2)
-        scale = torch.zeros(K * 2, dtype=torch.float32)
-        scale[0::2] = scale_y
-        scale[1::2] = scale_x
-    elif offset_format == "xy":
-        # Interleaved (x, y): grid[2k]=x_k, grid[2k+1]=y_k — directly consumable by grid_sample
-        base = torch.stack([base_x_norm, base_y_norm], dim=-1).reshape(H_out, W_out, K * 2)
-        scale = torch.zeros(K * 2, dtype=torch.float32)
-        scale[0::2] = scale_x
-        scale[1::2] = scale_y
-    else:
-        raise ValueError(f"offset_format must be 'yx' or 'xy', got {offset_format!r}")
-
+    # Stack interleaved (y, x): (H_out, W_out, K, 2) → (H_out, W_out, 2K)
+    base = torch.stack([base_y_norm, base_x_norm], dim=-1).reshape(H_out, W_out, K * 2)
     base = base.unsqueeze(0).contiguous()  # (1, H_out, W_out, 2K)
+
+    scale = torch.zeros(K * 2, dtype=torch.float32)
+    scale[0::2] = scale_y
+    scale[1::2] = scale_x
     scale = scale.view(1, 1, 1, K * 2).contiguous()
+
     return base, scale
 
 
@@ -145,7 +137,7 @@ class TtDeformConv2dV2:
         padding: Tuple[int, int] = (1, 1),
         dilation: Tuple[int, int] = (1, 1),
         align_corners: bool = True,
-        offset_format: str = "yx",
+        offset_layout: str = "yx",
     ):
         self.device = device
         self.C_in = C_in
@@ -161,15 +153,24 @@ class TtDeformConv2dV2:
         self.padding = padding
         self.dilation = dilation
         self.align_corners = align_corners
-        assert offset_format in ("yx", "xy"), f"offset_format must be 'yx' or 'xy', got {offset_format!r}"
-        self.offset_format = offset_format
+        assert offset_layout in ("yx", "xy"), f"offset_layout must be 'yx' or 'xy', got {offset_layout}"
+        self.offset_layout = offset_layout
 
-        # Precompute base_grid and scale on host, transfer once. In "xy" mode the base+scale
-        # are already in the (x,y) interleaved order grid_sample wants, so the device-side
-        # swap (reshape+slice+slice+concat+reshape — ~5 ops per call) is skipped entirely.
+        # Precompute base_grid and scale on host, transfer once. When offset_layout is "xy"
+        # the base_grid is built in (x_k, y_k) interleaved order so the runtime grid_yx -> grid_xy
+        # swap is unneeded (caller is responsible for delivering (dx_k, dy_k) offsets).
         base_grid_torch, scale_torch = _precompute_base_grid_yx_and_scale(
-            H_in, W_in, H_out, W_out, kH, kW, stride, padding, dilation, align_corners, offset_format=offset_format
+            H_in, W_in, H_out, W_out, kH, kW, stride, padding, dilation, align_corners
         )
+        if offset_layout == "xy":
+            # Reorder last dim from (y_0, x_0, y_1, x_1, ...) to (x_0, y_0, x_1, y_1, ...).
+            base_grid_torch = (
+                base_grid_torch.reshape(1, H_out, W_out, kH * kW, 2)
+                .flip(-1)
+                .reshape(1, H_out, W_out, 2 * kH * kW)
+                .contiguous()
+            )
+            scale_torch = scale_torch.reshape(1, 1, 1, kH * kW, 2).flip(-1).reshape(1, 1, 1, 2 * kH * kW).contiguous()
         self.base_grid = ttnn.from_torch(
             base_grid_torch,
             dtype=ttnn.bfloat16,
@@ -189,9 +190,11 @@ class TtDeformConv2dV2:
         # matmul: (1, H*W, K*C_in) @ (K*C_in, C_out) -> (1, H*W, C_out)
         w_prepared = prepare_deform_conv_weight(weight)  # (C_out, K*C_in)
         w_for_matmul = w_prepared.t().contiguous()  # (K*C_in, C_out)
+        # bf8_b weight (block-floating) halves weight read bandwidth on the K*C_in @ C_out
+        # matmul. Weight is constant per inference; precision is set once at __init__.
         self.weight_tt = ttnn.from_torch(
             w_for_matmul,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -233,16 +236,14 @@ class TtDeformConv2dV2:
         if offset_nhwc.layout != ttnn.ROW_MAJOR_LAYOUT:
             offset_nhwc = ttnn.to_layout(offset_nhwc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        # 1. grid = base_grid + offset * scale.
-        #    "yx" mode: grid is in (y,x) interleaved order, needs swap before grid_sample.
-        #    "xy" mode: grid is already in (x,y) interleaved order — ready for grid_sample.
+        # 1. grid = base_grid + offset * scale  (interleaved in self.offset_layout order)
         off_scaled = ttnn.multiply(offset_nhwc, self.scale, memory_config=ttnn.L1_MEMORY_CONFIG)
-        grid_xy = ttnn.add(self.base_grid, off_scaled, memory_config=ttnn.L1_MEMORY_CONFIG)
+        grid = ttnn.add(self.base_grid, off_scaled, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(off_scaled)
 
-        if self.offset_format == "yx":
-            # 2. Swap interleaved (y_k, x_k) → (x_k, y_k) so grid_sample sees (x, y) order.
-            grid_5d = ttnn.reshape(grid_xy, (1, H_out, W_out, K, 2))
+        if self.offset_layout == "yx":
+            # 2. Swap interleaved (y_k, x_k) -> (x_k, y_k) for grid_sample.
+            grid_5d = ttnn.reshape(grid, (1, H_out, W_out, K, 2))
             y_comp = ttnn.slice(grid_5d, [0, 0, 0, 0, 0], [1, H_out, W_out, K, 1])
             x_comp = ttnn.slice(grid_5d, [0, 0, 0, 0, 1], [1, H_out, W_out, K, 2])
             grid_xy_5d = ttnn.concat([x_comp, y_comp], dim=4)
@@ -250,6 +251,10 @@ class TtDeformConv2dV2:
             ttnn.deallocate(grid_5d)
             ttnn.deallocate(y_comp)
             ttnn.deallocate(x_comp)
+        else:
+            # base_grid already in XY-interleaved order — grid is the final sample grid.
+            grid_xy = grid
+
         # Ensure grid is ROW_MAJOR for ttnn.grid_sample (it asserts on this).
         if grid_xy.layout != ttnn.ROW_MAJOR_LAYOUT:
             grid_xy = ttnn.to_layout(grid_xy, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -258,11 +263,17 @@ class TtDeformConv2dV2:
         if x_nhwc.layout != ttnn.ROW_MAJOR_LAYOUT:
             x_nhwc = ttnn.to_layout(x_nhwc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        # 3. grid_sample with K-batching using batch_output_channels=False.
-        # Output shape (1, H_out, W_out*K, C_in) ROW_MAJOR — W extended by K (each consecutive
-        # group of K rows along W corresponds to the K sample points of one output pixel).
-        # This layout lets us multiply by the mask without repeat_interleave: reshape the mask
-        # to (1, H_out, W_out*K, 1) and broadcast on the last dim.
+        # 3. grid_sample with W-batching (batch_output_channels=False).
+        # Output shape (1, H_out, W_out*K, C_in) ROW_MAJOR — K consecutive rows along W
+        # carry the K sample points for each output pixel. C_in is the trailing dim, which
+        # tile-aligns cleanly (no K=9 padding overhead like batch_output_channels=True had).
+        # Credit: gtobarTT (e7c65ab) — saves ~16 ms across all DCN calls vs the 5D reshape
+        # path because the post-multiply reshape becomes a pure byte-view.
+        # Place grid_sample's output directly in DRAM for the big spatial sizes — the
+        # downstream multiply needs it there anyway, and skipping the L1->DRAM ttnn.copy
+        # eliminates a 2.57 ms / 6-call P3 op.
+        big_tensor_bytes = H_out * W_out * K * C_in * 2  # bf16
+        big_mem_config = ttnn.DRAM_MEMORY_CONFIG if big_tensor_bytes > 4 * 1024 * 1024 else ttnn.L1_MEMORY_CONFIG
         samples = ttnn.grid_sample(
             x_nhwc,
             grid_xy,
@@ -270,32 +281,21 @@ class TtDeformConv2dV2:
             padding_mode="zeros",
             align_corners=False,  # ttnn.grid_sample uses align_corners=False semantics regardless
             batch_output_channels=False,
+            memory_config=big_mem_config,
         )
         ttnn.deallocate(grid_xy)
 
-        # 4. Apply modulation. Mask (1, H, W, K) reshape → (1, H, W*K, 1) is a pure view
-        # (W and K are contiguous, K becomes the new W axis with stride C_in=1).
-        # Profiling showed the post-multiply TILE→TILE reshape (1, H, W*K, C_in)
-        # → (1, H*W, K*C_in) is a 2.7ms-per-call kernel op (the tile grid has to
-        # re-rasterize because H folds into the row dim while K*C_in folds into the
-        # column dim). For P3 alone (6 calls/iter) that's 16 ms.
-        # Workaround: do the multiply on ROW_MAJOR (where the reshape is a pure view
-        # of the flat byte stream), then reshape, then tilize once before the matmul.
-        big_tensor_bytes = H_out * W_out * K * C_in * 2  # bf16
-        big_mem_config = ttnn.DRAM_MEMORY_CONFIG if big_tensor_bytes > 4 * 1024 * 1024 else ttnn.L1_MEMORY_CONFIG
-
-        if samples.memory_config().buffer_type != ttnn.BufferType.DRAM and big_mem_config == ttnn.DRAM_MEMORY_CONFIG:
-            samples = ttnn.to_memory_config(samples, big_mem_config)
-
-        # Ensure mask is ROW_MAJOR so we can multiply with the ROW_MAJOR `samples`.
+        # 4. Apply modulation. mask (1, H, W, K) reshape -> (1, H, W*K, 1) is a pure view.
+        # Multiply samples (1, H, W*K, C_in) by mask (1, H, W*K, 1) broadcasts on the last dim.
+        # Stay in ROW_MAJOR so the next reshape to (1, H*W, K*C_in) is also a pure byte-view
+        # (no tile repacking).
         if mask_nhwc.layout != ttnn.ROW_MAJOR_LAYOUT:
             mask_nhwc = ttnn.to_layout(mask_nhwc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         mask_extended = ttnn.reshape(mask_nhwc, (1, H_out, W_out * K, 1))
-        # Multiply samples (1, H, W*K, C_in) by mask (1, H, W*K, 1) in ROW_MAJOR.
         modulated = ttnn.multiply(samples, mask_extended, memory_config=big_mem_config)
 
-        # 5. Final 1x1 weighted sum via matmul. Reshape (1, H, W*K, C_in) → (1, H*W, K*C_in)
-        # is a pure byte-view in ROW_MAJOR (both flatten as [h, w, k, c]). Then tilize once.
+        # 5. Final 1x1 weighted sum via matmul. (1, H, W*K, C_in) -> (1, H*W, K*C_in) is
+        # a byte-view in ROW_MAJOR. Tilize once before the matmul.
         modulated_flat = ttnn.reshape(modulated, (1, H_out * W_out, K * C_in))
         modulated_tiled = ttnn.to_layout(modulated_flat, ttnn.TILE_LAYOUT, memory_config=big_mem_config)
 
@@ -304,6 +304,7 @@ class TtDeformConv2dV2:
             self.weight_tt,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self._compute_config,
+            core_grid=ttnn.CoreGrid(y=8, x=8),
         )
         if self.bias_tt is not None:
             out_flat = ttnn.add(out_flat, self.bias_tt, memory_config=ttnn.L1_MEMORY_CONFIG)

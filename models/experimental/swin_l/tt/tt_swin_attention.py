@@ -51,9 +51,11 @@ class TtSwinAttention:
         qkv_b = ttnn.to_torch(parameters["qkv"]["bias"]).float()  # (1, 3C)
         qkv_w[:, :dim] *= scale
         qkv_b[:, :dim] *= scale
+        # bf8_b weight halves DRAM read bandwidth per qkv matmul (24 layers x 6/12/24/48
+        # head stages). Bias kept in bf16 (smaller, precision-sensitive).
         self.parameters["qkv"] = {
             "weight": ttnn.from_torch(
-                qkv_w.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+                qkv_w.to(torch.bfloat16), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
             ),
             "bias": ttnn.from_torch(
                 qkv_b.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
@@ -117,10 +119,11 @@ class TtSwinAttention:
             self.parameters["qkv"]["weight"],
             bias=self.parameters["qkv"]["bias"],
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=False, packer_l1_acc=True
+                math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False, packer_l1_acc=True
             ),
             core_grid=ttnn.CoreGrid(y=8, x=8),
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat8_b,
         )
         ttnn.deallocate(input_tensor)
 
@@ -134,6 +137,12 @@ class TtSwinAttention:
         ttnn.deallocate(qkv)
 
         # Q rows of qkv weight are already pre-scaled in __init__, so no runtime scale here.
+        # NOTE: tried ttnn.transformer.scaled_dot_product_attention with the 1280-branch's
+        # SDPAProgramConfig(q_chunk_size=32, k_chunk_size=32) at 640x640 — PCC dropped to 0.85.
+        # Likely cause: at 640 nW=196 (14x14), the SDPA flash chunking precision compounds
+        # too much across 24 stacked blocks. The 1280 branch (nW=8100, 90x90) doesn't see
+        # this because the aggregated batch dim averages out the per-chunk rounding.
+        # Stayed on the manual matmul+softmax path at 640.
         attn = ttnn.matmul(
             q,
             k_t,
@@ -141,16 +150,14 @@ class TtSwinAttention:
                 math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False, packer_l1_acc=True
             ),
             core_grid=ttnn.CoreGrid(y=8, x=8),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat8_b,
         )
         ttnn.deallocate(q)
         ttnn.deallocate(k_t)
 
-        # Single add for the combined bias (rel_pos_bias for shift==0, or rel_pos_bias +
-        # window_mask pre-combined in __init__ for shift!=0). Replaces the previous
-        # two-step add chain.
-        attn = ttnn.add(attn, self.combined_attn_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        attn = ttnn.softmax(attn, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn = ttnn.add(attn, self.combined_attn_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
+        attn = ttnn.softmax(attn, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         output = ttnn.matmul(
             attn,
@@ -160,27 +167,31 @@ class TtSwinAttention:
             ),
             core_grid=ttnn.CoreGrid(y=8, x=8),
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat8_b,
         )
         ttnn.deallocate(v)
         ttnn.deallocate(attn)
 
         # Concatenate heads back: (B*nW, H, S, D) -> (B*nW, S, H*D)
-        output = ttnn.transformer.concatenate_heads(output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        output = ttnn.transformer.concatenate_heads(output, memory_config=ttnn.L1_MEMORY_CONFIG)
 
+        # concat_heads preserves the matmul-attn@V output layout (TILE), so no explicit
+        # to_layout is needed before the proj linear — skipping it saves a dispatch.
         output = ttnn.linear(
-            ttnn.to_layout(output, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            output,
             self.parameters["proj"]["weight"],
             bias=self.parameters["proj"]["bias"],
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False
             ),
             core_grid=ttnn.CoreGrid(y=8, x=8),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat8_b,
         )
 
-        output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         output = ttnn.reshape(output, (B, nH, nW, wH, wW, C))
-        output = ttnn.transpose(output, 2, 3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        output = ttnn.transpose(output, 2, 3, memory_config=ttnn.L1_MEMORY_CONFIG)
         output = ttnn.reshape(output, (B, pad_H, pad_W, C))
 
         # reverse cyclic shift
@@ -189,5 +200,5 @@ class TtSwinAttention:
 
         # unpad
         if pad_b > 0 or pad_r > 0:
-            output = ttnn.slice(output, [0, 0, 0, 0], [B, H, W, C], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            output = ttnn.slice(output, [0, 0, 0, 0], [B, H, W, C], memory_config=ttnn.L1_MEMORY_CONFIG)
         return output

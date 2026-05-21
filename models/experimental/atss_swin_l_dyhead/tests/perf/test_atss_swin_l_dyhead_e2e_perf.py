@@ -50,7 +50,9 @@ def _create_sharded_memory_configs(device, shape):
     return dram_mem_config, l1_mem_config
 
 
-def run_model_pipeline(device, test_infra, num_measurement_iterations, use_trace, num_command_queues):
+def run_model_pipeline(
+    device, test_infra, num_measurement_iterations, use_trace, num_command_queues, num_warmup_iterations=0
+):
     torch_input_nchw = test_infra.torch_input_tensor.permute(0, 3, 1, 2)
     tt_inputs_host = ttnn.from_torch(
         torch_input_nchw,
@@ -81,6 +83,13 @@ def run_model_pipeline(device, test_infra, num_measurement_iterations, use_trace
     profiler.start("compile")
     pipeline.compile(tt_inputs_host)
     profiler.end("compile")
+
+    # Untimed warmup iterations so the 2CQ pipeline reaches steady state before measurement.
+    if num_warmup_iterations > 0:
+        warmup_inputs = [tt_inputs_host] * num_warmup_iterations
+        pipeline.preallocate_output_tensors_on_host(num_warmup_iterations)
+        logger.info(f"Running {num_warmup_iterations} untimed warmup iterations to reach steady state")
+        pipeline.enqueue(warmup_inputs).pop_all()
 
     host_inputs = [tt_inputs_host] * num_measurement_iterations
     pipeline.preallocate_output_tensors_on_host(num_measurement_iterations)
@@ -126,13 +135,16 @@ def run_perf_e2e_atss_swinl_dyhead(
         outputs_mesh_composer=output_mesh_composer,
     )
 
-    num_measurement_iterations = 2
+    # 2 warmup iterations to reach pipeline steady state, then 20 timed iterations.
+    num_warmup_iterations = 2
+    num_measurement_iterations = 20
     run_profiler_key = run_model_pipeline(
         device,
         test_infra,
         num_measurement_iterations,
         use_trace=use_trace,
         num_command_queues=num_command_queues,
+        num_warmup_iterations=num_warmup_iterations,
     )
 
     compile_time = profiler.get("compile")

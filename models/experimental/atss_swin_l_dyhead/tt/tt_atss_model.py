@@ -189,7 +189,11 @@ class TtATSSModel:
 
     def forward_backbone_fpn(self, x_ttnn):
         """Run Swin-L backbone + FPN on device. Returns list of 5 NCHW ttnn tensors."""
+        import tracy
+
+        tracy.signpost("backbone")
         backbone_feats = self.backbone(x_ttnn)
+        tracy.signpost("fpn")
         fpn_feats = self.fpn(backbone_feats)
         return fpn_feats
 
@@ -243,12 +247,17 @@ class TtATSSModel:
         Input: preprocessed image as ttnn tensor [1, 3, H, W] NCHW.
         Returns: (cls_scores, bbox_preds, centernesses) as lists of TTNN device tensors.
         """
+        import tracy
+
+        tracy.signpost("backbone_fpn")
         fpn_feats = self.forward_backbone_fpn(x_ttnn)
 
         if isinstance(self.dyhead, TtDyHeadDevice):
             # Fully on-device path — no host roundtrips. fpn_feats is already a list of
             # NHWC TTNN tensors, which is what TtDyHeadDevice expects.
+            tracy.signpost("dyhead")
             dy_feats_ttnn = self.dyhead(fpn_feats)
+            tracy.signpost("head")
             return self.head(dy_feats_ttnn)
 
         # Hybrid (CPU DCN) or pure-CPU DyHead — must transfer to host and back.

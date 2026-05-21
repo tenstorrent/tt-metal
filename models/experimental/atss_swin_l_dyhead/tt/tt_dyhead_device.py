@@ -70,11 +70,15 @@ class TtScaleAttnNHWC:
         pooled = ttnn.mean(feat_nhwc, dim=(-3, -2), keepdim=True, memory_config=ttnn.L1_MEMORY_CONFIG)
         pooled = ttnn.reshape(pooled, (B, C))
 
-        out = ttnn.matmul(
-            pooled, self.weight, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=self._compute_config
+        # Fused linear (matmul + bias + relu) — saves 2 dispatches per call.
+        out = ttnn.linear(
+            pooled,
+            self.weight,
+            bias=self.bias,
+            activation="relu",
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            compute_kernel_config=self._compute_config,
         )
-        out = ttnn.add(out, self.bias, memory_config=ttnn.L1_MEMORY_CONFIG)
-        out = ttnn.relu(out, memory_config=ttnn.L1_MEMORY_CONFIG)
         out = ttnn.hardsigmoid(out, memory_config=ttnn.L1_MEMORY_CONFIG)
         out = ttnn.reshape(out, (B, 1, 1, 1))
         return out
@@ -100,14 +104,16 @@ class TtDyReLUNHWC:
         w2 = conv2_w.reshape(exp_ch, ratio_ch).T.contiguous()  # (C/r, 4*C)
         b2 = conv2_b.reshape(1, exp_ch)
 
+        # DyReLU weights are constants per inference; bf8_b halves DRAM read per call.
+        # The biggest is weight2 (C/r, 4C) = (64, 1024) which is 128 KB bf16 -> 64 KB bf8_b.
         self.weight1 = ttnn.from_torch(
-            w1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            w1, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         self.bias1 = ttnn.from_torch(
             b1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         self.weight2 = ttnn.from_torch(
-            w2, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            w2, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         self.bias2 = ttnn.from_torch(
             b2, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -119,16 +125,23 @@ class TtDyReLUNHWC:
         pooled = ttnn.mean(feat_nhwc, dim=(-3, -2), keepdim=True, memory_config=ttnn.L1_MEMORY_CONFIG)
         pooled = ttnn.reshape(pooled, (B, C))
 
-        h = ttnn.matmul(
-            pooled, self.weight1, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=self._compute_config
+        # Fused matmul + bias + relu in one dispatch (was 3 ops).
+        h = ttnn.linear(
+            pooled,
+            self.weight1,
+            bias=self.bias1,
+            activation="relu",
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            compute_kernel_config=self._compute_config,
         )
-        h = ttnn.add(h, self.bias1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        h = ttnn.relu(h, memory_config=ttnn.L1_MEMORY_CONFIG)
-
-        coeffs = ttnn.matmul(
-            h, self.weight2, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=self._compute_config
+        # Fused matmul + bias in one dispatch (was 2 ops).
+        coeffs = ttnn.linear(
+            h,
+            self.weight2,
+            bias=self.bias2,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            compute_kernel_config=self._compute_config,
         )
-        coeffs = ttnn.add(coeffs, self.bias2, memory_config=ttnn.L1_MEMORY_CONFIG)
         coeffs = ttnn.hardsigmoid(coeffs, memory_config=ttnn.L1_MEMORY_CONFIG)
         coeffs = ttnn.add(coeffs, -0.5, memory_config=ttnn.L1_MEMORY_CONFIG)
 
@@ -146,12 +159,21 @@ class TtDyReLUNHWC:
         )
         a2 = ttnn.multiply(a2, 2.0, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        branch1 = ttnn.multiply(feat_nhwc, a1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        branch1 = ttnn.add(branch1, b1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        branch2 = ttnn.multiply(feat_nhwc, a2, memory_config=ttnn.L1_MEMORY_CONFIG)
-        branch2 = ttnn.add(branch2, b2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # Fused branch_k = b_k + feat * a_k. Broadcast shape (B, 1, 1, C) over (B, H, W, C)
+        # is supported by addcmul (unlike the (B,1,1,1) scalar-broadcast case). Deallocate
+        # small (a, b) coefficients immediately so L1 has room for the next branch.
+        # Inspired by the 1280-branch's commit ba954b9c7d2 ("Improve memory lifecycle").
+        branch1 = ttnn.addcmul(b1, feat_nhwc, a1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(a1)
+        ttnn.deallocate(b1)
+        branch2 = ttnn.addcmul(b2, feat_nhwc, a2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(a2)
+        ttnn.deallocate(b2)
 
-        return ttnn.maximum(branch1, branch2)
+        out = ttnn.maximum(branch1, branch2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(branch1)
+        ttnn.deallocate(branch2)
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -207,107 +229,170 @@ def _run_conv2d_nhwc(
 
 
 class TtGroupNorm:
-    """Custom GroupNorm on NHWC input, computed in **float32** on device.
+    """GroupNorm on NHWC input, using ttnn.group_norm with use_welford=True.
 
-    ttnn.group_norm hard-asserts bf16 input/output. Empirically (see
-    OPTIMIZATION_REPORT.md §7.6), that bf16 quantization is the dominant
-    per-block precision-loss source — replacing ttnn.group_norm with this fp32
-    custom impl recovers PCC from ~0.8 (at deep blocks) to 0.99+.
+    Welford's algorithm gives stable mean/variance accumulation, recovering most
+    of the precision the previous fp32 custom path provided. Replaces ~12 device
+    ops with ~3 (reshape + group_norm + reshape), saving ~700 ops/inference of
+    dispatch overhead at ~100 us each.
 
-    Uses 5D reshape (N, H, W, G, C/G) + per-group mean/var reductions in fp32,
-    then casts back to bf16 for the next op. Trace-safe: only ttnn ops + cached
-    gamma/beta. ~10 device ops per call vs 1 for ttnn.group_norm.
+    Per-spatial-size reciprocals tensors are precomputed at __init__ so the hot
+    path stays trace-safe.
     """
 
-    def __init__(self, device, weight: torch.Tensor, bias: torch.Tensor, num_groups: int):
+    @staticmethod
+    def _pick_grid(H: int, W: int, max_y: int = 8, max_x: int = 8) -> "ttnn.CoreGrid":
+        """Largest core grid where grid_y divides ceil(H*W/32) (= Ht). Required by ttnn.group_norm."""
+        Ht = (H * W + 31) // 32
+        for gy in range(min(max_y, Ht), 0, -1):
+            if Ht % gy == 0:
+                return ttnn.CoreGrid(y=gy, x=max_x)
+        return ttnn.CoreGrid(y=1, x=1)
+
+    def __init__(
+        self,
+        device,
+        weight: torch.Tensor,
+        bias: torch.Tensor,
+        num_groups: int,
+        level_shapes: List[Tuple[int, int]],
+    ):
         self.device = device
         self.num_groups = num_groups
         self.C = weight.shape[0]
         assert self.C % num_groups == 0, f"C={self.C} not divisible by num_groups={num_groups}"
         self.C_per_G = self.C // num_groups
-        # gamma, beta as 4D (1, 1, 1, C) so we can broadcast against (N, H, W, C) without
-        # reshaping the big tensor to 5D (which forces real data movement when C/G is not
-        # tile-aligned). The per-group reductions are done by transient reshape of small
-        # (N, 1, 1, C) stats tensors to (N, 1, G, C/G).
-        self.gamma_4d = ttnn.from_torch(
-            weight.reshape(1, 1, 1, self.C).contiguous(),
-            dtype=ttnn.float32,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        self.beta_4d = ttnn.from_torch(
-            bias.reshape(1, 1, 1, self.C).contiguous(),
-            dtype=ttnn.float32,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+
+        # Per (H, W): pick a core_grid that fits ttnn.group_norm's divisibility constraint,
+        # then prepare the matching gamma/beta/input_mask/reciprocals for that grid.
+        self.params: dict = {}
+        for H, W in set(level_shapes):
+            grid = self._pick_grid(H, W)
+            [gamma_t, beta_t], input_mask = ttnn.dram_group_norm_params_from_torch(
+                [weight, bias], self.C, num_groups, device, core_grid=grid, return_mask=True, dtype=ttnn.bfloat16
+            )
+            recip_torch = ttnn.create_group_norm_reciprocals(1, self.C, H, W, num_groups, grid)
+            recip_dram = ttnn.from_torch(
+                recip_torch,
+                dtype=ttnn.float32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            sharded_mem_cfg = ttnn.create_sharded_memory_config(
+                shape=recip_dram.shape,
+                core_grid=grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            )
+            recip = ttnn.to_memory_config(recip_dram, sharded_mem_cfg)
+            ttnn.deallocate(recip_dram)
+            self.params[(H, W)] = (grid, gamma_t, beta_t, input_mask, recip)
+
         self.epsilon = 1e-5
+        self._compute_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi3,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+            math_approx_mode=False,
+        )
+
+        # fp32 gamma/beta for the small-spatial-size custom GN fallback (P6, P7).
+        self._gamma_5d = ttnn.from_torch(
+            weight.reshape(1, 1, 1, num_groups, self.C_per_G).contiguous(),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._beta_5d = ttnn.from_torch(
+            bias.reshape(1, 1, 1, num_groups, self.C_per_G).contiguous(),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     def __call__(self, x_nhwc):
         N, H, W, C = x_nhwc.shape
+        # ttnn.group_norm only takes BFLOAT16 input; for small spatial sizes (<=100
+        # elements like P6 10x10 and P7 5x5) the bf16 quantization + welford reduction
+        # compounds badly across 6 DyHead blocks (cent PCC at P7 drops to ~0.92).
+        # Fall back to the custom fp32 path for those sizes; use welford for everything
+        # bigger where the precision holds and the op-count savings dominate.
+        if H * W < 200:
+            return self._custom_fp32_gn(x_nhwc)
+        grid, gamma_t, beta_t, input_mask, recip = self.params[(H, W)]
+        x_4d = ttnn.reshape(x_nhwc, (N, 1, H * W, C))
+        if x_4d.layout != ttnn.TILE_LAYOUT:
+            x_4d = ttnn.to_layout(x_4d, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.group_norm(
+            x_4d,
+            num_groups=self.num_groups,
+            input_mask=input_mask,
+            weight=gamma_t,
+            bias=beta_t,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            core_grid=grid,
+            inplace=False,
+            epsilon=self.epsilon,
+            use_welford=True,
+            reciprocals=recip,
+            compute_kernel_config=self._compute_config,
+        )
+        return ttnn.reshape(out, (N, H, W, C))
+
+    def _custom_fp32_gn(self, x_nhwc):
+        """fp32 GN for small spatial sizes (P6, P7) where welford precision is poor.
+
+        Adapted from gtobarTT's 499fcb3: keep the big tensor 4D throughout (avoid the
+        5D reshape that forces real data movement when C/G=16 isn't tile-aligned);
+        reduce group statistics on the tiny (N,1,1,C) per-channel stats; fold the
+        affine transform into one addcmul on the big tensor.
+        """
+        N, H, W, C = x_nhwc.shape
         G = self.num_groups
         C_per_G = self.C_per_G
-
-        # Big tensors stay 4D (N, H, W, C). 5D reshape on the big tensor forces real data
-        # movement because C/G=16 is not tile-aligned (TILE_WIDTH=32). Instead, do per-channel
-        # reductions over (H, W), then a cheap per-group reduction on the small (N, 1, 1, C)
-        # stats tensor by transient reshape to (N, 1, G, C/G).
         big_bytes = N * H * W * C * 4
         big_mem = ttnn.L1_MEMORY_CONFIG if big_bytes <= 4 * 1024 * 1024 else ttnn.DRAM_MEMORY_CONFIG
-        small_mem = ttnn.L1_MEMORY_CONFIG  # stats / scalars always fit in L1
+        small_mem = ttnn.L1_MEMORY_CONFIG
 
-        # Cast bf16 → fp32, ensure TILE layout for reductions.
-        if x_nhwc.dtype != ttnn.float32:
-            x_fp32 = ttnn.typecast(x_nhwc, ttnn.float32, memory_config=big_mem)
-        else:
-            x_fp32 = x_nhwc
+        x_fp32 = ttnn.typecast(x_nhwc, ttnn.float32, memory_config=big_mem)
         if x_fp32.layout != ttnn.TILE_LAYOUT:
             x_fp32 = ttnn.to_layout(x_fp32, ttnn.TILE_LAYOUT, memory_config=big_mem)
 
-        # Per-channel statistics on the (N, H, W, C) tensor.
+        # Per-channel stats on the 4D tensor (cheap reduction over H, W).
         mean_c = ttnn.mean(x_fp32, dim=(1, 2), keepdim=True, memory_config=small_mem)  # (N,1,1,C)
         x_sq = ttnn.multiply(x_fp32, x_fp32, memory_config=big_mem)
-        mean_x_sq_c = ttnn.mean(x_sq, dim=(1, 2), keepdim=True, memory_config=small_mem)  # (N,1,1,C)
+        mean_x_sq_c = ttnn.mean(x_sq, dim=(1, 2), keepdim=True, memory_config=small_mem)
         ttnn.deallocate(x_sq)
 
-        # Reduce per-channel statistics to per-group via cheap reshape on (N,1,1,C) → (N,1,G,C/G).
-        # These are 256-element tensors; the reshape + reduction cost is negligible.
+        # Per-group stats on the tiny per-channel tensors. E[E[x|HW]|G] = E[x|G].
         mean_c_5g = ttnn.reshape(mean_c, (N, 1, G, C_per_G))
         mean_x_sq_c_5g = ttnn.reshape(mean_x_sq_c, (N, 1, G, C_per_G))
-        mean_g = ttnn.mean(mean_c_5g, dim=(3,), keepdim=True, memory_config=small_mem)  # (N,1,G,1)
-        mean_x_sq_g = ttnn.mean(mean_x_sq_c_5g, dim=(3,), keepdim=True, memory_config=small_mem)  # (N,1,G,1)
-
-        # var_g = E[x²]_g - (E[x]_g)²
+        mean_g = ttnn.mean(mean_c_5g, dim=(3,), keepdim=True, memory_config=small_mem)
+        mean_x_sq_g = ttnn.mean(mean_x_sq_c_5g, dim=(3,), keepdim=True, memory_config=small_mem)
         var_g = ttnn.subtract(
-            mean_x_sq_g,
-            ttnn.multiply(mean_g, mean_g, memory_config=small_mem),
-            memory_config=small_mem,
+            mean_x_sq_g, ttnn.multiply(mean_g, mean_g, memory_config=small_mem), memory_config=small_mem
         )
         inv_std_g = ttnn.rsqrt(
             ttnn.add(var_g, self.epsilon, memory_config=small_mem),
             fast_and_approximate_mode=True,
             memory_config=small_mem,
         )
-        # Broadcast (N,1,G,1) inv_std and (N,1,G,1) mean back to (N,1,1,C) per-channel form.
-        # Reshape to (N,1,G,1) → (N,1,1,G) so it can broadcast against (N,1,1,C) reshaped as
-        # (N,1,G,C/G)? Simpler: build alpha = inv_std_g * gamma_c by reshaping gamma to (N,1,G,C/G)
-        # and broadcasting, then reshape result back to (N,1,1,C).
-        gamma_5g = ttnn.reshape(self.gamma_4d, (1, 1, G, C_per_G))
-        beta_5g = ttnn.reshape(self.beta_4d, (1, 1, G, C_per_G))
-        alpha_5g = ttnn.multiply(inv_std_g, gamma_5g, memory_config=small_mem)  # (N,1,G,C/G), broadcast over last
-        # delta = beta - mean_g * alpha
+
+        # Fold affine: y = alpha * x + delta where alpha = inv_std * gamma_per_channel
+        # and delta = beta - mean * alpha. Both computed in (1, 1, G, C/G) and reshaped
+        # back to (1, 1, 1, C) for the broadcast against the (N, H, W, C) tensor.
+        gamma_5g = ttnn.reshape(self._gamma_5d, (1, 1, G, C_per_G))
+        beta_5g = ttnn.reshape(self._beta_5d, (1, 1, G, C_per_G))
+        alpha_5g = ttnn.multiply(inv_std_g, gamma_5g, memory_config=small_mem)
         delta_5g = ttnn.subtract(
-            beta_5g,
-            ttnn.multiply(mean_g, alpha_5g, memory_config=small_mem),
-            memory_config=small_mem,
+            beta_5g, ttnn.multiply(mean_g, alpha_5g, memory_config=small_mem), memory_config=small_mem
         )
-        # Flatten the per-group axis back to per-channel.
         alpha_4d = ttnn.reshape(alpha_5g, (1, 1, 1, C))
         delta_4d = ttnn.reshape(delta_5g, (1, 1, 1, C))
 
-        # Single large op: y = alpha*x + delta (addcmul(a,b,c) = a + b*c)
         out_4d = ttnn.addcmul(delta_4d, x_fp32, alpha_4d, memory_config=big_mem)
         return ttnn.typecast(out_4d, ttnn.bfloat16, memory_config=big_mem)
 
@@ -323,12 +408,14 @@ class TtGroupNorm:
 _RESIZE_GRID_CACHE: dict = {}
 
 
-def _get_resize_grid(device, src_H, src_W, target_H, target_W):
-    """Return a cached (1, target_H, target_W, 2) grid for the given resize.
+def _get_resize_grid(device, src_H, src_W, target_H, target_W, padded_C):
+    """Return a cached precomputed (1, target_H, target_W, 6) grid for the given resize.
 
     Reference DyHead uses F.interpolate(mode='bilinear', align_corners=True) for cross-level
-    offset/mask/feature resizing. We replicate that sampling position with ttnn.grid_sample,
-    which itself always uses align_corners=False normalization regardless of the flag passed.
+    offset/mask/feature resizing. We replicate that sampling position with ttnn.grid_sample.
+    The returned grid is in the "precomputed" format produced by
+    ttnn.prepare_grid_sample_grid — it bakes the pixel coordinates and the bilinear
+    weights, so the runtime grid_sample skips that arithmetic each call.
 
     align_corners=True target-to-source mapping:
         src_y = ty * (H_in - 1) / (H_out - 1)        for H_out > 1
@@ -336,13 +423,12 @@ def _get_resize_grid(device, src_H, src_W, target_H, target_W):
     Convert to ttnn (align_corners=False) grid:
         ny = (2 * src_y + 1) / H_in - 1
     """
-    key = (id(device), src_H, src_W, target_H, target_W)
+    key = (id(device), src_H, src_W, target_H, target_W, padded_C)
     g = _RESIZE_GRID_CACHE.get(key)
     if g is not None:
         return g
     ty = torch.arange(target_H, dtype=torch.float32)
     tx = torch.arange(target_W, dtype=torch.float32)
-    # align_corners=True source-pixel positions
     if target_H > 1:
         src_y = ty * (src_H - 1.0) / (target_H - 1.0)
     else:
@@ -351,14 +437,21 @@ def _get_resize_grid(device, src_H, src_W, target_H, target_W):
         src_x = tx * (src_W - 1.0) / (target_W - 1.0)
     else:
         src_x = torch.zeros(1, dtype=torch.float32)
-    # Convert to ttnn grid (align_corners=False) coordinates
     ny = (2 * src_y + 1) / src_H - 1
     nx = (2 * src_x + 1) / src_W - 1
     grid = torch.zeros(1, target_H, target_W, 2, dtype=torch.float32)
     grid[:, :, :, 0] = nx.view(1, 1, target_W)
     grid[:, :, :, 1] = ny.view(1, target_H, 1)
+    # prepare_grid_sample_grid expects the input grid on HOST.
+    grid_host = ttnn.from_torch(grid, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    grid_prepared = ttnn.prepare_grid_sample_grid(
+        grid_host,
+        input_shape=[1, src_H, src_W, padded_C],
+        padding_mode="zeros",
+        output_dtype=ttnn.bfloat16,
+    )
     grid_tt = ttnn.from_torch(
-        grid.to(torch.bfloat16),
+        ttnn.to_torch(grid_prepared),
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
@@ -386,10 +479,12 @@ def _bilinear_resize_via_grid_sample(device, x_nhwc, target_H, target_W, channel
             x_nhwc = ttnn.to_layout(x_nhwc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         x_nhwc = ttnn.pad(x_nhwc, padding=[(0, 0), (0, 0), (0, 0), (0, padded_C - C)], value=0.0)
 
-    grid_tt = _get_resize_grid(device, H, W, target_H, target_W)
+    grid_tt = _get_resize_grid(device, H, W, target_H, target_W, padded_C)
     if x_nhwc.layout != ttnn.ROW_MAJOR_LAYOUT:
         x_nhwc = ttnn.to_layout(x_nhwc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-    out = ttnn.grid_sample(x_nhwc, grid_tt, mode="bilinear", padding_mode="zeros", align_corners=False)
+    out = ttnn.grid_sample(
+        x_nhwc, grid_tt, mode="bilinear", padding_mode="zeros", align_corners=False, use_precomputed_grid=True
+    )
     if needs_pad:
         out = ttnn.slice(out, [0, 0, 0, 0], [1, target_H, target_W, channels], memory_config=ttnn.L1_MEMORY_CONFIG)
     return out
@@ -427,23 +522,19 @@ class TtDyHeadBlockDevice:
         self.offset_dim = 2 * self.K  # 18
         self.mask_dim = self.K  # 9
 
-        # spatial_conv_offset weight/bias (256 → 27, 3x3 padding=1).
-        # Offset channels (rows 0..17) are stored interleaved as (dy_0, dx_0, dy_1, dx_1, ..., dy_8, dx_8).
-        # Pre-permute the offset rows to (dx_0, dy_0, dx_1, dy_1, ..., dx_8, dy_8) so the DCN sees
-        # the (x,y) layout natively — eliminates a (reshape+slice+slice+concat+reshape) chain on
-        # every DCN call (~5 device ops × 78 calls/inference → ~64ms in the profile).
+        # spatial_conv_offset weight/bias (256 -> 27, 3x3 padding=1).
+        # Permute the first 18 output channels to swap each (dy_k, dx_k) pair into
+        # (dx_k, dy_k), matching our DCNs' offset_layout="xy". Channels 18..26 are
+        # the modulation mask and stay in place.
         scoff = pt_block.spatial_conv_offset
-        so_w = scoff.weight.data.clone()  # (27, 256, 3, 3)
-        so_b = scoff.bias.data.clone()  # (27,)
-        # Swap each (dy_k, dx_k) pair → (dx_k, dy_k) for rows 0..17. Mask rows 18..26 untouched.
-        offset_perm = (
-            torch.arange(2 * self.K, dtype=torch.long).reshape(self.K, 2).flip(-1).reshape(-1)
-        )  # [1,0,3,2,...]
-        full_perm = torch.cat([offset_perm, torch.arange(2 * self.K, 3 * self.K, dtype=torch.long)])  # mask unchanged
-        so_w = so_w[full_perm]
-        so_b = so_b[full_perm]
-        self.so_weight = self._prep_conv_weight(so_w, device)
-        self.so_bias = self._prep_conv_bias(so_b, device)
+        perm = list(range(scoff.weight.shape[0]))  # 27
+        for k in range(self.K):
+            perm[2 * k], perm[2 * k + 1] = perm[2 * k + 1], perm[2 * k]
+        perm_t = torch.as_tensor(perm, dtype=torch.long)
+        scoff_w_perm = scoff.weight.data.index_select(0, perm_t).contiguous()
+        scoff_b_perm = scoff.bias.data.index_select(0, perm_t).contiguous()
+        self.so_weight = self._prep_conv_weight(scoff_w_perm, device)
+        self.so_bias = self._prep_conv_bias(scoff_b_perm, device)
         self.so_out = scoff.weight.shape[0]  # 27
 
         # spatial_conv_{mid, low, high} — one TtDeformConv2dV2 per (level, role)
@@ -451,8 +542,6 @@ class TtDyHeadBlockDevice:
         # low: input level i-1, output level i, stride 2
         # high: input level i+1, output level i+1 (no upsample baked in), stride 1
         # Each DCN has its own (256, 256, 3, 3) weight (no bias).
-        # Pass offset_format="xy" to all DCN instances — the spatial_conv_offset weight is
-        # pre-permuted (above) so the offset is in (dx,dy) order, matching base_grid in (x,y).
         self.dcn_mid: List[TtDeformConv2dV2] = []
         self.dcn_low: List[TtDeformConv2dV2] = []
         self.dcn_high: List[TtDeformConv2dV2] = []
@@ -475,7 +564,7 @@ class TtDyHeadBlockDevice:
                     stride=(1, 1),
                     padding=(1, 1),
                     dilation=(1, 1),
-                    offset_format="xy",
+                    offset_layout="xy",
                 )
             )
             # low: in=prev level (larger), out=curr level, stride 2
@@ -497,7 +586,7 @@ class TtDyHeadBlockDevice:
                         stride=(2, 2),
                         padding=(1, 1),
                         dilation=(1, 1),
-                        offset_format="xy",
+                        offset_layout="xy",
                     )
                 )
             else:
@@ -521,24 +610,34 @@ class TtDyHeadBlockDevice:
                         stride=(1, 1),
                         padding=(1, 1),
                         dilation=(1, 1),
-                        offset_format="xy",
+                        offset_layout="xy",
                     )
                 )
             else:
                 self.dcn_high.append(None)
 
-        # GroupNorms (one per conv role; weights shared across all levels)
+        # GroupNorms (one per conv role; weights shared across all levels).
+        # Pass all level_shapes so the welford reciprocals can be precomputed at __init__.
         self.gn_mid = TtGroupNorm(
-            device, pt_block.spatial_conv_mid.norm.weight.data, pt_block.spatial_conv_mid.norm.bias.data, num_groups=16
+            device,
+            pt_block.spatial_conv_mid.norm.weight.data,
+            pt_block.spatial_conv_mid.norm.bias.data,
+            num_groups=16,
+            level_shapes=level_shapes,
         )
         self.gn_low = TtGroupNorm(
-            device, pt_block.spatial_conv_low.norm.weight.data, pt_block.spatial_conv_low.norm.bias.data, num_groups=16
+            device,
+            pt_block.spatial_conv_low.norm.weight.data,
+            pt_block.spatial_conv_low.norm.bias.data,
+            num_groups=16,
+            level_shapes=level_shapes,
         )
         self.gn_high = TtGroupNorm(
             device,
             pt_block.spatial_conv_high.norm.weight.data,
             pt_block.spatial_conv_high.norm.bias.data,
             num_groups=16,
+            level_shapes=level_shapes,
         )
 
         # scale_attn (one Conv 256→1) and task_attn (DyReLU)
@@ -563,7 +662,7 @@ class TtDyHeadBlockDevice:
             device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
             fp32_dest_acc_en=True,
-            packer_l1_acc=False,
+            packer_l1_acc=True,
             math_approx_mode=False,
         )
 
@@ -647,6 +746,9 @@ class TtDyHeadBlockDevice:
             scale_w_mid = self.scale_attn(mid)
             sum_feat = ttnn.multiply(mid, scale_w_mid, memory_config=ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(scale_w_mid)
+            # mid is no longer needed after sum_feat is computed — free its L1/DRAM up-front
+            # so the low/high branch tensors have room. (Was being held until end of level.)
+            ttnn.deallocate(mid)
             summed_levels = 1
 
             # low branch (from previous level)
@@ -693,7 +795,6 @@ class TtDyHeadBlockDevice:
             out = self.task_attn(sum_feat)
             outs.append(out)
             ttnn.deallocate(sum_feat)
-            ttnn.deallocate(mid)
 
         # Cleanup
         for o in offset_per_level + mask_per_level:
@@ -717,7 +818,10 @@ class TtDyHeadDevice:
             self.blocks.append(TtDyHeadBlockDevice(device, pt_dyhead.dyhead_blocks[i], level_shapes))
 
     def __call__(self, x_list_nhwc: List["ttnn.Tensor"]) -> List["ttnn.Tensor"]:
+        import tracy
+
         x = x_list_nhwc
-        for block in self.blocks:
+        for i, block in enumerate(self.blocks):
+            tracy.signpost(f"dyhead_block_{i}")
             x = block(x)
         return x
