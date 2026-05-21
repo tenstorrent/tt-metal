@@ -15,6 +15,25 @@ import torch
 from .format_config import DataFormat
 from .tilize_untilize import untilize_block
 
+BFP_BLOCK = 16  # All BFP formats use 16-element blocks
+
+
+def _bfp_prepare_flat(operand: torch.Tensor) -> tuple[torch.Tensor, int, torch.Tensor]:
+    """Flatten operand and return a float32 tensor, its element count, and an int32 view.
+
+    This is common setup shared by all BFP format round-trip quantization functions.
+
+    Args:
+        operand: Input tensor (any shape).
+
+    Returns:
+        (flat, n, u32): flattened float32 tensor, element count, and int32 view.
+    """
+    flat = operand.flatten().to(torch.float32)
+    n = flat.numel()
+    u32 = flat.view(torch.int32)
+    return flat, n, u32
+
 
 def bfp8b_to_float16b(operand: torch.Tensor, dimensions=None) -> torch.Tensor:
     """
@@ -32,20 +51,16 @@ def bfp8b_to_float16b(operand: torch.Tensor, dimensions=None) -> torch.Tensor:
     Returns:
         Quantized bfloat16 tensor (same number of elements as input).
     """
-    BFP8_BLOCK = 16
-    flat = operand.flatten().to(torch.float32)
-    n = flat.numel()
-
-    u32 = flat.view(torch.int32)
+    flat, n, u32 = _bfp_prepare_flat(operand)
     bf16_bits = (u32 >> 16) & 0xFFFF
 
     signs = (bf16_bits >> 15) & 1
     exps = (bf16_bits >> 7) & 0xFF
     mants = ((bf16_bits & 0x7F) >> 1) | 0x40
 
-    exps_blocks = exps.view(-1, BFP8_BLOCK)
-    mants_blocks = mants.view(-1, BFP8_BLOCK)
-    signs_blocks = signs.view(-1, BFP8_BLOCK)
+    exps_blocks = exps.view(-1, BFP_BLOCK)
+    mants_blocks = mants.view(-1, BFP_BLOCK)
+    signs_blocks = signs.view(-1, BFP_BLOCK)
 
     shared_exps = exps_blocks.max(dim=1, keepdim=True).values
 
@@ -83,11 +98,7 @@ def bfp4b_to_float16b(operand: torch.Tensor, dimensions=None) -> torch.Tensor:
     Returns:
         Quantized bfloat16 tensor (same number of elements as input).
     """
-    BFP4_BLOCK = 16
-    flat = operand.flatten().to(torch.float32)
-    n = flat.numel()
-
-    u32 = flat.view(torch.int32)
+    flat, n, u32 = _bfp_prepare_flat(operand)
 
     signs = (u32 >> 31) & 1
     exps = (u32 >> 23) & 0xFF
@@ -95,9 +106,9 @@ def bfp4b_to_float16b(operand: torch.Tensor, dimensions=None) -> torch.Tensor:
     # Hardware takes bits 23:21 of the 24-bit mantissa (with implicit leading 1).
     mants = ((u32 & 0x7FFFFF) >> 21) | 0x4
 
-    exps_blocks = exps.view(-1, BFP4_BLOCK)
-    mants_blocks = mants.view(-1, BFP4_BLOCK)
-    signs_blocks = signs.view(-1, BFP4_BLOCK)
+    exps_blocks = exps.view(-1, BFP_BLOCK)
+    mants_blocks = mants.view(-1, BFP_BLOCK)
+    signs_blocks = signs.view(-1, BFP_BLOCK)
 
     shared_exps = exps_blocks.max(dim=1, keepdim=True).values
 
@@ -142,11 +153,7 @@ def bfp2b_to_float16b(operand: torch.Tensor, dimensions=None) -> torch.Tensor:
     Returns:
         Quantized bfloat16 tensor (same number of elements as input).
     """
-    BFP2_BLOCK = 16
-    flat = operand.flatten().to(torch.float32)
-    n = flat.numel()
-
-    u32 = flat.view(torch.int32)
+    flat, n, u32 = _bfp_prepare_flat(operand)
 
     signs = (u32 >> 31) & 1
     exps = (u32 >> 23) & 0xFF
@@ -155,9 +162,9 @@ def bfp2b_to_float16b(operand: torch.Tensor, dimensions=None) -> torch.Tensor:
     nonzero = (u32 & 0x7FFFFFFF) != 0
     exps = torch.where(nonzero, exps, torch.zeros_like(exps))
 
-    exps_blocks = exps.view(-1, BFP2_BLOCK)
-    signs_blocks = signs.view(-1, BFP2_BLOCK)
-    nonzero_blocks = nonzero.view(-1, BFP2_BLOCK)
+    exps_blocks = exps.view(-1, BFP_BLOCK)
+    signs_blocks = signs.view(-1, BFP_BLOCK)
+    nonzero_blocks = nonzero.view(-1, BFP_BLOCK)
 
     shared_exps = exps_blocks.max(dim=1, keepdim=True).values
 
