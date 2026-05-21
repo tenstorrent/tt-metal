@@ -322,7 +322,7 @@ def build_op_kwargs(
                 continue
             op_kwargs[key] = None
             continue
-
+        # Parse list-of-UnaryOpType-dicts (e.g. input_tensor_a_activations)
         list_parsed = _maybe_parse_unary_list(value)
         if list_parsed is not value:
             op_kwargs[key] = list_parsed
