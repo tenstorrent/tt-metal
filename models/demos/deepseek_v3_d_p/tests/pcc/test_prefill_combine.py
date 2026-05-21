@@ -289,8 +289,8 @@ def test_ttnn_combine(
 
     tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=mesh_composer)
     if use_fp8_output:
-        # Device returns a torch.float8_e4m3fn tensor directly via dlpack (DataType::FP8_E4M3
-        # → dlpack code Float8_E4M3FN). Widen to bfloat16 for validation, since
+        # ttnn.to_torch returns a torch.float8_e4m3fn tensor for FP8_E4M3 device tensors
+        # (see ttnn/ttnn/operations/core.py). Widen to bfloat16 for validation, since
         # validate_combine_output expects a regular float dtype.
         assert (
             tt_output_torch.dtype == torch.float8_e4m3fn
