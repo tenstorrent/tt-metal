@@ -90,11 +90,19 @@ public:
     // The token instance is emitted by host codegen into kernel_bindings_generated.h,
     // based on the information in the user's host code (ProgramSpec).
     // Delegates to the legacy TensorAccessorArgs ctor.
+    //
+    // If the host did not bind a TensorParameter for this accessor (optional binding pattern),
+    // TensorAccessorArgs<CTA_OFFSET>::is_bound is false. The delegated ctor will still complete
+    // (with a zeroed args payload), but ASSERT in the body traps reaching the use-site in debug
+    // builds. The discarded `if constexpr` branch never instantiates this ctor, so the assert
+    // doesn't fire for conditionally-unused bindings.
     template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
     TensorAccessor(tensor_accessor::TensorAccessorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>) :
         TensorAccessor(
             TensorAccessorArgs<CTA_OFFSET>{},
-            static_cast<size_t>(get_common_arg_val<uint32_t>(ADDR_CRTA_OFFSET / sizeof(uint32_t)))) {}
+            static_cast<size_t>(get_common_arg_val<uint32_t>(ADDR_CRTA_OFFSET / sizeof(uint32_t)))) {
+        ASSERT(TensorAccessorArgs<CTA_OFFSET>::is_bound);
+    }
 
     constexpr const auto& dspec() const {
         if constexpr (DSpec::is_static) {
@@ -369,11 +377,16 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
     // The token instance is emitted by host codegen into kernel_bindings_generated.h,
     // based on the information in the user's host code (ProgramSpec).
     // Delegates to the legacy TensorAccessorArgs ctor.
+    //
+    // See the interleaved-specialization version above for the optional-binding contract:
+    // when TensorAccessorArgs<CTA_OFFSET>::is_bound is false, ASSERT traps reaching the use-site.
     template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
     TensorAccessor(tensor_accessor::TensorAccessorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>) :
         TensorAccessor(
             TensorAccessorArgs<CTA_OFFSET>{},
-            static_cast<uint32_t>(get_common_arg_val<uint32_t>(ADDR_CRTA_OFFSET / sizeof(uint32_t)))) {}
+            static_cast<uint32_t>(get_common_arg_val<uint32_t>(ADDR_CRTA_OFFSET / sizeof(uint32_t)))) {
+        ASSERT(TensorAccessorArgs<CTA_OFFSET>::is_bound);
+    }
 
     template <typename DSpec_ = DSpec, std::enable_if_t<std::is_same_v<std::decay_t<DSpec_>, DSpec>, int> = 0>
     constexpr explicit TensorAccessor(

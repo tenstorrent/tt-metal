@@ -23,6 +23,11 @@ enum class ArgConfig : uint8_t {
     RuntimeTensorShape = 1 << 4,
     RuntimeShardShape = 1 << 5,
     RuntimeBankCoords = 1 << 6,
+    // Metal 2.0 Optional Resource Bindings: set by the framework when the kernel's TensorBinding
+    // resolves to a TensorParameter on the program. Unset (the zero-initialized payload state)
+    // indicates an unbound accessor — `dfb::name` / `sem::name` use sentinel ids for the same
+    // purpose; TensorAccessorArgs uses this bit because the payload is structurally richer.
+    Bound = 1 << 7,
     Runtime = RuntimeRank | RuntimeNumBanks | RuntimeTensorShape | RuntimeShardShape | RuntimeBankCoords
 };
 

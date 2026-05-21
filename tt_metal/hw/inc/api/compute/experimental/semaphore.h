@@ -35,9 +35,17 @@ namespace ckernel {
  */
 class Semaphore {
 public:
+    // Reserved id value indicating that the host did not bind a SemaphoreSpec for this accessor.
+    // See Metal 2.0 Optional Resource Bindings design: a kernel may declare `sem::<name>` for
+    // conditional use; when the host's ProgramSpec omits the underlying SemaphoreSpec, the
+    // framework emits the accessor with this sentinel id. The ctor traps it via ASSERT.
+    static constexpr uint32_t SENTINEL_ID = 0xFFFFu;
+
     explicit Semaphore(uint32_t semaphore_id) :
         local_l1_addr_(
-            (uintptr_t)(sem_l1_base[static_cast<int>(ProgrammableCoreType::TENSIX)]) + semaphore_id * L1_ALIGNMENT) {}
+            (uintptr_t)(sem_l1_base[static_cast<int>(ProgrammableCoreType::TENSIX)]) + semaphore_id * L1_ALIGNMENT) {
+        ASSERT(semaphore_id != SENTINEL_ID);
+    }
 
     /**
      * @brief Increment the semaphore by the specified value.
