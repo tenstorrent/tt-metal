@@ -150,22 +150,6 @@ static const std::vector<DispatchKernelNode> quasar_single_chip_1cq = {
     {2, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {1, x, x, x}, k_quasar_noc},
 };
 
-static const std::vector<DispatchKernelNode> quasar_single_chip_2cq = {
-    {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {2, x, x, x}, k_quasar_noc},
-    {1, 0, 0, 1, PREFETCH_HD, {x, x, x, x}, {3, x, x, x}, k_quasar_noc},
-    {2, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {x, x, x, x}, k_quasar_noc},
-    {3, 0, 0, 1, DISPATCH_HD, {1, x, x, x}, {x, x, x, x}, k_quasar_noc},
-};
-
-static const std::vector<DispatchKernelNode> quasar_single_chip_2cq_dispatch_s = {
-    {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {1, 4, x, x}, k_quasar_noc},
-    {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {4, x, x, x}, k_quasar_noc},
-    {2, 0, 0, 1, PREFETCH_HD, {x, x, x, x}, {3, 5, x, x}, k_quasar_noc},
-    {3, 0, 0, 1, DISPATCH_HD, {2, x, x, x}, {5, x, x, x}, k_quasar_noc},
-    {4, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {1, x, x, x}, k_quasar_noc},
-    {5, 0, 0, 1, DISPATCH_S, {2, x, x, x}, {3, x, x, x}, k_quasar_noc},
-};
-
 static const std::vector<DispatchKernelNode> two_chip_arch_1cq_fabric = {
     {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {1, 2, x, x}, k_prefetcher_noc},
     {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {2, x, x, x}, k_dispatcher_noc},
@@ -486,10 +470,13 @@ std::vector<DispatchKernelNode> DispatchTopology::generate_nodes(
         if (num_hw_cqs == 1) {
             return is_quasar ? quasar_single_chip_1cq : single_chip_arch_1cq;
         }
-        if (this->get_dispatch_query_manager_().dispatch_s_enabled()) {
-            return is_quasar ? quasar_single_chip_2cq_dispatch_s : single_chip_arch_2cq_dispatch_s;
+        if (is_quasar) {
+            TT_THROW("Quasar fast dispatch does not support 2 CQs yet");
         }
-        return is_quasar ? quasar_single_chip_2cq : single_chip_arch_2cq;
+        if (this->get_dispatch_query_manager_().dispatch_s_enabled()) {
+            return single_chip_arch_2cq_dispatch_s;
+        }
+        return single_chip_arch_2cq;
     };
 
     if (remote_devices.empty()) {
