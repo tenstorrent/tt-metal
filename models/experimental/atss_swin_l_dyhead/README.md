@@ -149,13 +149,13 @@ pytest models/experimental/atss_swin_l_dyhead/tests/perf/test_atss_swin_l_dyhead
 pytest models/experimental/atss_swin_l_dyhead/tests/perf/test_atss_swin_l_dyhead_e2e_perf.py::test_atss_swinl_dyhead_perf_multi_device_2cq -v
 
 # E2E multi-device pipeline, 2 CQs + TRACE (matches demo_slice_4dev.py end-to-end).
-# Reports per-iteration host roundtrip and total-mesh FPS (e.g. 32 inputs on Galaxy).
+# Reports per-iteration host roundtrip and total-mesh FPS.
 pytest models/experimental/atss_swin_l_dyhead/tests/perf/test_atss_swin_l_dyhead_e2e_perf.py::test_atss_swinl_dyhead_perf_multi_device_trace_2cq -v
 ```
 
 **Trace note:** the slice demo (`demo_slice_4dev.py`) runs with **trace enabled by default**
 (`use_trace=True`, plus a 400 MB trace region). That's what makes the steady-state host
-roundtrip land around 172 ms instead of the ~219 ms FW duration the no-trace perf test
+roundtrip land around 172 ms instead of the ~210 ms FW duration the no-trace perf test
 reports — trace replay skips per-op dispatch firmware overhead. Pass `--no-trace` to the
 demo if you want to compare against the no-trace numbers.
 
@@ -247,37 +247,17 @@ done
   object isn't split, and seam-merge catches the residual cases (e.g. a person tall
   enough that head + body land in different tiles).
 
-**Expected performance** on a healthy Galaxy 1×4 sub-mesh (measured on a dense
-harbor-shot frame ~90 detections, after merging the gtobarTT/astss_optimizations
-workstream — DCN addalpha fusion, Swin softmax numeric_stable=False, Swin attn
-untilize-before-pad + ROW_MAJOR window partition + bfp8_b attn bias, and tuned
+**Expected performance** on a healthy T3K 1×4 sub-mesh (measured on a dense
+harbor-shot frame ~90 detections, after merging adding DCN addalpha fusion,
+Swin softmax numeric_stable=False, Swin attn untilize-before-pad + ROW_MAJOR
+window partition + bfp8_b attn bias, and tuned
 Stage 0/1/2 fc1/fc2 program_configs):
-
-| Phase | Time |
-|---|---|
-| `open_mesh_device` | ~1.0 s (one-time) |
-| `build model + ttnn.from_torch` | ~6.6 s (one-time; up from ~3.5 s after the bfp8_b weight conversion lands more host work) |
-| `pipeline.compile` (warm JIT cache) | ~3 s (one-time; ~28 s on the very first run after new optimizations land while kernels build) |
-| `pipeline.enqueue + pop_all` (steady-state) | **~173 ms / frame** (the number shown in the title) |
-| `ttnn.to_torch` on outputs | ~7 ms |
-| Host postprocess + cross-tile NMM | ~24 ms (CPU, scales with detection count) |
-| `cv2.imwrite` | ~31 ms |
-| **Steady-state full e2e** | **~294 ms / frame  → ~3.40 fps** |
-
-**Device kernel time** (measured separately via `tests/perf/test_atss_swin_l_dyhead_device_perf.py`,
-which runs with tracy on a single device, no trace):
 
 | Metric | Time |
 |---|---|
-| `DEVICE KERNEL DURATION` (pure compute, per tile, parallel × 4) | ~163 ms |
-| `DEVICE FW DURATION` (kernel + per-op dispatch overhead, no trace) | ~219 ms |
-
-The `(infer …ms)` value in the title is the **host↔device round-trip** for one frame
-(input DMA + 4-tile parallel device compute + output DMA), measured **with trace**.
-It's larger than the pure kernel time (~196 ms) by ~10 ms of DMA overhead, but smaller
-than the FW time (~256 ms) because trace replays the captured op sequence and skips
-per-op dispatch firmware overhead. The first cold compile (no JIT cache anywhere on
-the host) takes ~140 s; subsequent runs reuse the JIT cache.
+| `DEVICE KERNEL DURATION` (pure compute, per tile, parallel × 4) | ~163 ms (6.12 samples/s) |
+| `DEVICE FW DURATION` (kernel + per-op dispatch overhead, no-trace pipeline) | ~210 ms (4.77 samples/s) |
+| `E2E DURATION` (kernel + DMA, trace replay skips dispatch) | ~172 ms (5.81 samples/s) |
 
 ### Usage
 
@@ -288,16 +268,3 @@ from models.experimental.atss_swin_l_dyhead.tt import TtATSSModel
 model = TtATSSModel.from_checkpoint(ATSS_CHECKPOINT, device)
 results = model.predict(image_tensor, img_shape=(H, W))
 ```
-## Implementation Status
-
-- [x] Phase 0: Reference implementations (backbone, FPN, DyHead, head, postprocess)
-- [x] Phase 1: Swin-L backbone (TTNN) -- from standalone swin_l module
-- [x] Phase 2: FPN neck (TTNN)
-- [x] Phase 3: DyHead -- hybrid (scale/task attention on TTNN, DCNv2 spatial on CPU)
-- [x] Phase 4: ATSS Head (TTNN)
-- [x] Phase 5: Post-processing (CPU -- anchors, bbox decode, NMS)
-- [x] Phase 6: Full model integration (hybrid TTNN + PyTorch)
-
-### Next TODOs
-- Full DyHead on TTNN (requires native TTNN DCNv2 kernel)
-- Optimization (sharding, precision tuning, L1 memory persistence)
