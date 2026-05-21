@@ -74,41 +74,80 @@ TT_METAL_ENABLE_REMOTE_CHIP=1 ./build/test/tt_metal/unit_tests_dispatch \
 ./build/programming_examples/distributed/distributed_trace_and_events
 ```
 
-### TT-Fabric tests on T3K (hardware, on-device)
+### TT-Fabric tests on T3K (simulator / ttsim)
+
+Mock cluster descriptors and WH multichip ttsim — no real T3K hardware required.
+
 ```bash
-# Control plane
-TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests \
+# One-time WH multichip sim setup
+mkdir -p ~/sim_wh_multichip
+cp /path/to/libttsim_wh.so ~/sim_wh_multichip/libttsim.so
+cp $TT_METAL_HOME/tt_metal/soc_descriptors/wormhole_b0_80_arch.yaml ~/sim_wh_multichip/soc_descriptor.yaml
+export TT_METAL_SIMULATOR=~/sim_wh_multichip/libttsim.so
+export TT_METAL_SIMULATOR_HOME=~/sim_wh_multichip
+export TT_METAL_DRAM_BACKED_CQ=1
+export TT_METAL_SIMULATOR_CQ_WAIT_CLOCKS=10000
+
+# Control plane (mock cluster only — simulator unset)
+env -u TT_METAL_SIMULATOR -u TT_METAL_SIMULATOR_HOME ARCH_NAME=wormhole_b0 \
+  TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_cluster_desc.yaml \
+  TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests \
   --gtest_filter="ControlPlaneFixture.*T3k*"
-TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests \
+env -u TT_METAL_SIMULATOR -u TT_METAL_SIMULATOR_HOME ARCH_NAME=wormhole_b0 \
+  TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_cluster_desc.yaml \
+  TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests \
   --gtest_filter="T3kCustomMeshGraphControlPlaneTests*"
-TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests \
+env -u TT_METAL_SIMULATOR -u TT_METAL_SIMULATOR_HOME ARCH_NAME=wormhole_b0 \
+  TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_cluster_desc.yaml \
+  TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests \
   --gtest_filter="T3k*MeshGraphFabric2DDynamicTests*"
 
-# Worker/EDM datapath
-./build/test/tt_metal/tt_fabric/fabric_unit_tests \
+# Worker/EDM datapath (WH multichip ttsim)
+ARCH_NAME=wormhole_b0 \
+  TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_cluster_desc.yaml \
+  ./build/test/tt_metal/tt_fabric/fabric_unit_tests \
   --gtest_filter="*WorkerFabricEdmDatapath*:*EdmFabric*"
 
-# 1x8 mesh on T3K with 2D fabric
-TT_MESH_GRAPH_DESC_PATH=tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x8_mesh_graph_descriptor.textproto \
+# 1x8 mesh on T3K with 2D fabric (mock cluster only)
+env -u TT_METAL_SIMULATOR -u TT_METAL_SIMULATOR_HOME ARCH_NAME=wormhole_b0 \
+  TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_cluster_desc.yaml \
+  TT_METAL_SLOW_DISPATCH_MODE=1 \
+  TT_MESH_GRAPH_DESC_PATH=tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x8_mesh_graph_descriptor.textproto \
   ./build/test/tt_metal/tt_fabric/fabric_unit_tests \
   --gtest_filter="*Fabric2DFixture.TestUnicast*"
 
-# Fabric 2D/1D fixture tests (with BW telemetry)
-TT_METAL_FABRIC_BW_TELEMETRY=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests \
+# Fabric 2D/1D fixture tests (WH multichip ttsim; with BW telemetry)
+ARCH_NAME=wormhole_b0 \
+  TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_cluster_desc.yaml \
+  TT_METAL_FABRIC_BW_TELEMETRY=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests \
   --gtest_filter="Fabric2D*Fixture.*"
-TT_METAL_FABRIC_BW_TELEMETRY=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests \
+ARCH_NAME=wormhole_b0 \
+  TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_cluster_desc.yaml \
+  TT_METAL_FABRIC_BW_TELEMETRY=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests \
   --gtest_filter="Fabric1D*Fixture.*"
-./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
-./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
-./build/test/tt_metal/tt_fabric/fabric_unit_tests \
+ARCH_NAME=wormhole_b0 \
+  TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_cluster_desc.yaml \
+  ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+ARCH_NAME=wormhole_b0 \
+  TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_cluster_desc.yaml \
+  ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
+env -u TT_METAL_SIMULATOR -u TT_METAL_SIMULATOR_HOME ARCH_NAME=wormhole_b0 \
+  TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_cluster_desc.yaml \
+  TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests \
   --gtest_filter="T3k*MeshGraphFabric2DDynamicTests*"
 
-# Fabric sanity microbenchmarks
-./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric \
+# Fabric sanity microbenchmarks (WH multichip ttsim)
+ARCH_NAME=wormhole_b0 \
+  TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_cluster_desc.yaml \
+  ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric \
   --test_config $TT_METAL_HOME/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common.yaml
-./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric \
+ARCH_NAME=wormhole_b0 \
+  TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_cluster_desc.yaml \
+  ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric \
   --test_config $TT_METAL_HOME/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_at_least_2x2_mesh.yaml
-./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric \
+ARCH_NAME=wormhole_b0 \
+  TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_cluster_desc.yaml \
+  ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric \
   --test_config $TT_METAL_HOME/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_at_least_2x2_mesh.yaml
 ```
 
@@ -234,6 +273,7 @@ For Wormhole: swap `libttsim_bh.so` → `libttsim_wh.so` and `blackhole_140_arch
 | Suite | Hardware |
 |-------|---------|
 | TTNN single-card | 1 TT card |
-| T3000 metal/fabric/ttnn | T3K (8-chip WH, single host) |
+| T3000 metal/ttnn (dist) | T3K (8-chip WH, single host) |
+| T3000 fabric | ttsim (WH multichip + T3K mock cluster desc) |
 | T3000 multiprocess | T3K + MPI (tt-run) |
 | Single Galaxy unit | 32-chip WH Galaxy, single host |
