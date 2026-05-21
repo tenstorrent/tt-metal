@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_dot_device_operation.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_host.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -147,10 +146,7 @@ ProgramDescriptor MorehDotOperation::create_descriptor(
     compute_desc.kernel_source = COMPUTE_KERNEL_PATH;
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = std::move(core_set);
-    compute_desc.defines = {
-        {"REDUCE_OP", "PoolType::SUM"},
-        {"REDUCE_DIM", "ReduceDim::REDUCE_ROW"},
-        {"REDUCE_FORMAT", ttnn::kernel_lib::reduce_format_define(cb_data_format)}};
+    compute_desc.defines = {{"REDUCE_OP", "PoolType::SUM"}, {"REDUCE_DIM", "ReduceDim::REDUCE_ROW"}};
     compute_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,

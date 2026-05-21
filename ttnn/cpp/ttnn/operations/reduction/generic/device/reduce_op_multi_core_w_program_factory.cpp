@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "reduce_op_device_operation.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_host.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -149,12 +148,8 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
         reduce_defines["REDUCE_POST_MUL"] = "1";
     }
 
-    // Always pass the input data format to the unified reduce<> template. SFPU vs FPU dispatch
-    // happens inside compute_kernel_lib::reduce<> via REDUCE_FORMAT + REDUCE_OP.
-    reduce_defines["REDUCE_FORMAT"] = ttnn::kernel_lib::reduce_format_define(src0_cb_data_format);
-
+    // SFPU vs FPU dispatch is inside compute_kernel_lib::reduce<> (format from input CB).
     // Tell the dataflow readers when to reserve one extra DST for the SFPU binary-fold work tile.
-    // Compute-side dispatch uses REDUCE_FORMAT + REDUCE_OP; readers only need a binary flag.
     if (use_sfpu_reduce_path) {
         reduce_defines["REDUCE_SFPU_PATH"] = "1";
     }
@@ -193,8 +188,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
         post_mul_scaler_bits,       // packed fp32 user scalar (only used if REDUCE_POST_MUL is set)
     };
 
-    // Both reduce.cpp and reduce_w_neg.cpp are REDUCE_FORMAT-aware and dispatch SFPU vs FPU
-    // internally; MIN keeps its dedicated -MAX(-x) kernel because it needs a pre-reduce negate.
+    // reduce.cpp and reduce_w_neg.cpp deduce format from the input CB; MIN uses -MAX(-x) in reduce_w_neg.
     const std::string compute_kernel =
         std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/") +
         (operation_attributes.negate ? "reduce_w_neg" : "reduce") + ".cpp";

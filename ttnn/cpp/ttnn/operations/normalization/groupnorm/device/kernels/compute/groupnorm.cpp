@@ -349,7 +349,6 @@ void kernel_main() {
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
-                    REDUCE_FORMAT,
                     compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
                     compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
                     cb_x_id,
@@ -366,7 +365,6 @@ void kernel_main() {
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
-                    REDUCE_FORMAT,
                     compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
                     compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
                     cb_ex_external_id,
@@ -483,7 +481,6 @@ void kernel_main() {
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
-                    REDUCE_FORMAT,
                     compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
                     compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
                     cb_xmm_id,
@@ -498,7 +495,6 @@ void kernel_main() {
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
-                    REDUCE_FORMAT,
                     compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
                     compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
                     cb_ex_external_id,

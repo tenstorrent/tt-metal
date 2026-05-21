@@ -12,7 +12,6 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/program_descriptors.hpp>
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_host.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/reduction/reduce_op_validation.hpp"
 
@@ -409,7 +408,6 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
         compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         compute_desc.core_ranges = single_core;
         compute_desc.compile_time_args = compute_args;
-        compute_desc.defines = {{"REDUCE_FORMAT", ttnn::kernel_lib::reduce_format_define(input_values_cb_data_format)}};
         compute_desc.config = ComputeConfigDescriptor{};
         desc.kernels.push_back(std::move(compute_desc));
     }

@@ -279,14 +279,13 @@ void kernel_main() {
             // (e.g. use `zero_whole_cb` from groupnorm_zero_fill.hpp, mirroring the
             // mcast reader). Same applies to the second REDUCE_SCALAR pack into
             // cb_ex_partial later in this kernel (variance).
-            compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR, REDUCE_FORMAT>(
+            compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR>(
                 cb_ex2pe_id, cb_scaler_id, cb_ex_partial_id, compute_kernel_lib::ReduceInputBlockShape::single());
 
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
-                    REDUCE_FORMAT,
                     compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
                     compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
                     cb_ex_external_id,
@@ -382,7 +381,7 @@ void kernel_main() {
             // The sharded reader's "single-tile-overwrite trick" depends on
             // this pack also clearing every non-result datum of cb_ex_partial
             // to exact zero (documented packer behavior for REDUCE_SCALAR).
-            compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR, REDUCE_FORMAT>(
+            compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR>(
                 cb_ex2pe_id, cb_scaler_id, cb_ex_partial_id, compute_kernel_lib::ReduceInputBlockShape::single());
 
             cb_ex_partial.wait_front(1);
@@ -390,7 +389,6 @@ void kernel_main() {
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
-                    REDUCE_FORMAT,
                     compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
                     compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
                     cb_ex_external_id,

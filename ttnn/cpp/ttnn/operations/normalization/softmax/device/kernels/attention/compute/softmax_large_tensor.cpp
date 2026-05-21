@@ -258,7 +258,7 @@ void reduce_cb(
     bool use_prev_reduce,
     uint32_t cb_length_t) {
     // Single reduce call with lambda that conditionally accumulates
-    compute_kernel_lib::reduce<reduce_type, ReduceDim::REDUCE_ROW, REDUCE_FORMAT>(
+    compute_kernel_lib::reduce<reduce_type, ReduceDim::REDUCE_ROW>(
         cb_in,
         cb_scaler,
         cb_out,

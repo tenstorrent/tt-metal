@@ -270,15 +270,12 @@ void normalize_scores(
     const uint32_t cb_epsilon_scalar,
     const uint32_t cb_normalized_scores) {
     // 1. Sum row (experts) to get row vector of sums [1, 32]
-    compute_kernel_lib::reduce<
-        PoolType::SUM,
-        ReduceDim::REDUCE_ROW,
-        REDUCE_FORMAT,
-        compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
-        cb_gathered_sigmoid,
-        cb_reduce_ones_scalar,
-        cb_reduce_intermediate,
-        compute_kernel_lib::ReduceInputBlockShape::single());
+    compute_kernel_lib::
+        reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
+            cb_gathered_sigmoid,
+            cb_reduce_ones_scalar,
+            cb_reduce_intermediate,
+            compute_kernel_lib::ReduceInputBlockShape::single());
 
     // 2. Add epsilon to intermediate results
     tile_regs_acquire();

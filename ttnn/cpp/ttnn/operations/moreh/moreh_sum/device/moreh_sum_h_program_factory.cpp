@@ -7,7 +7,6 @@
 
 #include "moreh_sum_device_operation.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_host.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/reduction/generic/device/common.hpp"
@@ -170,7 +169,6 @@ tt::tt_metal::ProgramDescriptor MorehSumOperation::MorehSumHFactory::create_desc
 
     // ---- Compute kernels (two groups) ----
     auto reduce_defines_map = reduce_op_utils::get_defines(reduce_op, reduce_dim);
-    reduce_defines_map["REDUCE_FORMAT"] = ttnn::kernel_lib::reduce_format_define(src0_cb_data_format);
     if (fp32_dest_acc_en) {
         reduce_defines_map["FP32_DEST_ACC_EN"] = "1";
     }

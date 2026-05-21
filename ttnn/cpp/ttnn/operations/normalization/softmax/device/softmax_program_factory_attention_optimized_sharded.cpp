@@ -8,8 +8,6 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_host.hpp"
-
 #include <bit>
 #include <map>
 #include <utility>
@@ -204,7 +202,6 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_d
     }
     softmax_defines["EXP_APPROX"] = math_approx_mode ? "1" : "0";
     softmax_defines["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
-    softmax_defines["REDUCE_FORMAT"] = ttnn::kernel_lib::reduce_format_define(in0_cb_data_format);
 
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = std::string(SOFTMAX_KERNEL_PATH_ATTENTION) + "/compute/softmax_sharded.cpp";

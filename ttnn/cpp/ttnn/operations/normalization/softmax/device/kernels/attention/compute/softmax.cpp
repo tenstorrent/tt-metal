@@ -29,7 +29,6 @@ void calc_numeric_stable(
     compute_kernel_lib::reduce<
         PoolType::MAX,
         ReduceDim::REDUCE_ROW,
-        REDUCE_FORMAT,
         compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop,
         compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
         cb_in, cb_max_scaler, cb_max, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
@@ -276,21 +275,18 @@ void kernel_main() {
 #endif
 
         // SUM reduce with reciprocal post-processing (1/sum)
-        compute_kernel_lib::reduce<
-            PoolType::SUM,
-            ReduceDim::REDUCE_ROW,
-            REDUCE_FORMAT,
-            compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
-            cb_exps,
-            cb_sum_scaler,
-            cb_recipsumexps,
-            compute_kernel_lib::ReduceInputBlockShape::row(Wt),
-            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-            compute_kernel_lib::NoAccumulation{},
-            [](uint32_t) {
-                recip_tile_init();
-                recip_tile(0);
-            });
+        compute_kernel_lib::
+            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
+                cb_exps,
+                cb_sum_scaler,
+                cb_recipsumexps,
+                compute_kernel_lib::ReduceInputBlockShape::row(Wt),
+                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                compute_kernel_lib::NoAccumulation{},
+                [](uint32_t) {
+                    recip_tile_init();
+                    recip_tile(0);
+                });
 
         cb_recipsumexps_obj.wait_front(1);  // will reuse Wt times for bcast
 

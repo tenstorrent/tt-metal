@@ -7,7 +7,6 @@
 
 #include "ttnn/operations/moreh/moreh_softmax_backward/device/moreh_softmax_backward_device_operation.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_host.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_softmax_backward {
@@ -149,7 +148,6 @@ tt::tt_metal::ProgramDescriptor MorehSoftmaxBackwardOperation::MorehSoftmaxBackw
     // create read/write kernel
     std::map<std::string, std::string> reader_defines_map;
     std::map<std::string, std::string> compute_defines_map;
-    compute_defines_map["REDUCE_FORMAT"] = ttnn::kernel_lib::reduce_format_define(data_format);
     if (op == MorehSoftmaxBackwardOp::SOFTMAX) {
         compute_defines_map["SOFTMAX"] = "1";
     } else {

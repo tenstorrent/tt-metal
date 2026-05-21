@@ -236,7 +236,6 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         rms_norm,
         use_welford,
         skip_write_back,
-        cb_data_format,
         operation_attributes.fused_activation,
         tensor_return_value.dtype());
 

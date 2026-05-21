@@ -185,7 +185,7 @@ void kernel_main() {
          * E[x] - reduce single pre-accumulated tile
          * cb_ex
          */
-        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, REDUCE_FORMAT>(
+        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
             cb_xsum, cb_scaler, cb_ex, compute_kernel_lib::ReduceInputBlockShape::single());
 
         cb_ex_obj.wait_front(onetile);
@@ -309,7 +309,7 @@ void kernel_main() {
          * E[(x-E[x])^2 = Var[x] - reduce single pre-accumulated tile
          * cb_var
          */
-        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, REDUCE_FORMAT>(
+        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
             cb_xmm2sum, cb_scaler, cb_var, compute_kernel_lib::ReduceInputBlockShape::single());
 
         /*

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // MIN along W as -MAX(-x). SFPU (Int32/Float32) folds negated tiles in DST; FPU uses
-// cb_ineg/cb_acc because GMPOOL reads L1. Path is chosen at compile time via REDUCE_FORMAT.
+// cb_ineg/cb_acc because GMPOOL reads L1. SFPU vs FPU is chosen from unpack_src_format[cb_input].
 
 #include <cstdint>
 
@@ -39,8 +39,9 @@ void kernel_main() {
     constexpr uint32_t cb_scaler = tt::CBIndex::c_2;
     constexpr uint32_t cb_output = tt::CBIndex::c_3;
     constexpr uint32_t onetile = 1;
+    constexpr DataFormat reduce_format = static_cast<DataFormat>(unpack_src_format[cb_input]);
 
-    if constexpr (compute_kernel_lib::detail::is_sfpu_reduce_path<REDUCE_OP, REDUCE_DIM, REDUCE_FORMAT>()) {
+    if constexpr (compute_kernel_lib::detail::is_sfpu_reduce_path<REDUCE_OP, REDUCE_DIM, reduce_format>()) {
         constexpr uint32_t acc_dst = 0;
         constexpr uint32_t work_dst = 1;
 
@@ -54,40 +55,40 @@ void kernel_main() {
                 tile_regs_acquire();
                 negative_tile_init();
                 if (Wt > 1) {
-                    compute_kernel_lib::detail::sfpu_reduce_max_fold_init<REDUCE_FORMAT>();
+                    compute_kernel_lib::detail::sfpu_reduce_max_fold_init<reduce_format>();
                 }
 
                 for (uint32_t wt = 0; wt < Wt; ++wt) {
                     cb_wait_front(cb_input, onetile);
                     if (wt == 0) {
                         copy_tile(cb_input, 0, acc_dst);
-                        if constexpr (REDUCE_FORMAT == DataFormat::Int32) {
+                        if constexpr (reduce_format == DataFormat::Int32) {
                             negative_tile_int32(acc_dst);
                         } else {
                             negative_tile(acc_dst);
                         }
                     } else {
                         copy_tile(cb_input, 0, work_dst);
-                        if constexpr (REDUCE_FORMAT == DataFormat::Int32) {
+                        if constexpr (reduce_format == DataFormat::Int32) {
                             negative_tile_int32(work_dst);
                         } else {
                             negative_tile(work_dst);
                         }
-                        compute_kernel_lib::detail::sfpu_reduce_max_fold_tile<REDUCE_FORMAT>(
+                        compute_kernel_lib::detail::sfpu_reduce_max_fold_tile<reduce_format>(
                             acc_dst, work_dst, acc_dst);
                     }
                     cb_pop_front(cb_input, onetile);
                 }
 
-                sfpu_reduce_init<REDUCE_OP, REDUCE_FORMAT>();
-                sfpu_reduce<REDUCE_OP, REDUCE_FORMAT, REDUCE_DIM>(acc_dst, /*ct_dim=*/1, /*rt_dim=*/1);
-                if constexpr (REDUCE_FORMAT == DataFormat::Int32) {
+                sfpu_reduce_init<REDUCE_OP, reduce_format>();
+                sfpu_reduce<REDUCE_OP, reduce_format, REDUCE_DIM>(acc_dst, /*ct_dim=*/1, /*rt_dim=*/1);
+                if constexpr (reduce_format == DataFormat::Int32) {
                     negative_tile_int32(acc_dst);
                 } else {
                     negative_tile(acc_dst);
                 }
 #ifdef REDUCE_POST_MUL
-                compute_kernel_lib::detail::reduce_post_mul_tile<REDUCE_FORMAT>(acc_dst, post_mul_scaler_bits);
+                compute_kernel_lib::detail::reduce_post_mul_tile<cb_input>(acc_dst, post_mul_scaler_bits);
 #endif
 
                 tile_regs_commit();

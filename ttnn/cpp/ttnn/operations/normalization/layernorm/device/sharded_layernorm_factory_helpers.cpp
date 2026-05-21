@@ -9,7 +9,6 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_host.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 using namespace tt::constants;
@@ -491,7 +490,6 @@ KernelDefines KernelDefines::build(
     bool rms_norm,
     bool use_welford,
     bool skip_write_back,
-    tt::DataFormat reduce_format,
     const std::optional<operations::unary::UnaryWithParam>& fused_activation,
     std::optional<tt::tt_metal::DataType> output_dtype) {
     KernelDefines defines;
@@ -516,7 +514,6 @@ KernelDefines KernelDefines::build(
     }
 
     // Compute defines
-    defines.compute.emplace_back("REDUCE_FORMAT", ttnn::kernel_lib::reduce_format_define(reduce_format));
     if (has_b) {
         defines.compute.emplace_back("FUSE_PRE_ADD", "1");
     }

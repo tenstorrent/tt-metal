@@ -173,7 +173,6 @@ void reduce_c() {
     compute_kernel_lib::reduce<
         pool_type,
         reduce_dim,
-        REDUCE_FORMAT,
         compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop,
         compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
         in0_cb, scale_cb, out_cb, compute_kernel_lib::ReduceInputBlockShape::of(rows, cols));

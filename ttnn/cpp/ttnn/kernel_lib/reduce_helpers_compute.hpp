@@ -36,17 +36,17 @@
  *   compute_kernel_hw_startup(dfb_in, dfb_scaler, dfb_out);
  *
  *   // Reduce each row (W dimension) - output has Ht tiles per batch
- *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, REDUCE_FORMAT>(
+ *   compute_kernel_lib::reduce<SUM, REDUCE_ROW>(
  *       dfb_in, dfb_scaler, dfb_out,
  *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
  *
  *   // Reduce each column (H dimension) - output has Wt tiles per batch
- *   compute_kernel_lib::reduce<SUM, REDUCE_COL, REDUCE_FORMAT>(
+ *   compute_kernel_lib::reduce<SUM, REDUCE_COL>(
  *       dfb_in, dfb_scaler, dfb_out,
  *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
  *
  *   // Reduce entire HxW grid to single tile (REDUCE_SCALAR)
- *   compute_kernel_lib::reduce<SUM, REDUCE_SCALAR, REDUCE_FORMAT>(
+ *   compute_kernel_lib::reduce<SUM, REDUCE_SCALAR>(
  *       dfb_in, dfb_scaler, dfb_out,
  *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
  *
@@ -286,10 +286,8 @@ struct NoOp {
  *
  * @tparam reduce_type The type of reduce operation (SUM, AVG, MAX) - required explicit parameter
  * @tparam reduce_dim The dimension to reduce (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR) - required explicit parameter
- * @tparam reduce_format Routes Int32/Float32 MAX to the SFPU path (Float32 for precision; Int32 has
- *                       no FPU support). Pass via REDUCE_FORMAT define from host (same as REDUCE_OP
- *                       / REDUCE_DIM). Other formats use FPU/GMPOOL. Only REDUCE_ROW/REDUCE_COL MAX
- *                       on SFPU; MIN dispatched via reduce_{h,w}_neg.cpp (SFPU vs FPU branch).
+ * Input data format is deduced from input_cb_id via unpack_src_format[input_cb_id]. Int32/Float32 MAX
+ * uses SFPU on REDUCE_ROW/COL; MIN uses reduce_{h,w}_neg.
  * @tparam input_policy Input handling policy (default: WaitAndPopPerTile - streaming mode)
  * @tparam reconfig_mode Data format reconfiguration mode (default: INPUT_AND_OUTPUT)
  *
@@ -306,35 +304,35 @@ struct NoOp {
  *
  * @example
  *   // Reduce entire HxW grid to single tile (REDUCE_SCALAR)
- *   compute_kernel_lib::reduce<SUM, REDUCE_SCALAR, REDUCE_FORMAT>(dfb_in, dfb_scaler, dfb_out,
+ *   compute_kernel_lib::reduce<SUM, REDUCE_SCALAR>(dfb_in, dfb_scaler, dfb_out,
  *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
  *
  * @example
  *   // Reduce each row (W dimension) - output has Ht tiles per batch
- *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, REDUCE_FORMAT>(dfb_in, dfb_scaler, dfb_out,
+ *   compute_kernel_lib::reduce<SUM, REDUCE_ROW>(dfb_in, dfb_scaler, dfb_out,
  *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
  *
  * @example
  *   // Reduce each column (H dimension) - output has Wt tiles per batch
- *   compute_kernel_lib::reduce<SUM, REDUCE_COL, REDUCE_FORMAT>(dfb_in, dfb_scaler, dfb_out,
+ *   compute_kernel_lib::reduce<SUM, REDUCE_COL>(dfb_in, dfb_scaler, dfb_out,
  *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
  *
  * @example
  *   // Reduce type and dimension specified with explicit namespace
- *   compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR, REDUCE_FORMAT>(dfb_in, dfb_scaler, dfb_out,
+ *   compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR>(dfb_in, dfb_scaler, dfb_out,
  *       compute_kernel_lib::ReduceInputBlockShape::single());
  *
  * @example
  *   // NoWaitNoPop policy: caller manages wait/pop externally
  *   // Use cases: (1) custom stride between rows, (2) sharded DFB mapped to tensor with data reuse
- *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, REDUCE_FORMAT, compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
+ *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
  *       dfb_in, dfb_scaler, dfb_out, compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC),
  *       compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(input_stride));
  *
  * @example
  *   // WaitUpfrontNoPop policy: tiles persist for reuse (ideal for softmax pattern)
  *   // Library waits for tiles internally, but does NOT pop - tiles remain for subsequent ops
- *   compute_kernel_lib::reduce<MAX, REDUCE_ROW, REDUCE_FORMAT,
+ *   compute_kernel_lib::reduce<MAX, REDUCE_ROW,
  * compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>( dfb_values, dfb_scaler, dfb_max,
  * compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt));
  *   // dfb_values tiles still available for sub_exp_block_bcast_cols_inplace()
@@ -342,12 +340,12 @@ struct NoOp {
  * @example
  *   // BulkWaitBulkPop policy (bulk wait/pop - optimal for performance)
  *   // Library waits for all Wt tiles per row, processes them with indexed access, then pops all Wt tiles
- *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, REDUCE_FORMAT, compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
+ *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
  *       dfb_in, dfb_scaler, dfb_out, compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
  *
  * @example
  *   // Post-reduce operation: softmax pattern with recip_tile after SUM reduce
- *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, REDUCE_FORMAT, compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
+ *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
  *       dfb_exps, dfb_scaler, dfb_out, compute_kernel_lib::ReduceInputBlockShape::row(Wt),
  *       compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
  *       NoAccumulation{},
@@ -359,7 +357,7 @@ struct NoOp {
  * @example
  *   // REDUCE_COL with post_reduce_op: apply recip_tile to each column result
  *   // dst_idx indicates which DEST register contains the column result (0 to current_chunk-1)
- *   compute_kernel_lib::reduce<SUM, REDUCE_COL, REDUCE_FORMAT>(
+ *   compute_kernel_lib::reduce<SUM, REDUCE_COL>(
  *       dfb_in, dfb_scaler, dfb_out,
  *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt),
  *       {},
@@ -372,7 +370,6 @@ struct NoOp {
 template <
     PoolType reduce_type,
     ReduceDim reduce_dim,
-    DataFormat reduce_format,
     ReduceInputPolicy input_policy = ReduceInputPolicy::WaitAndPopPerTile,
     ReduceDataFormatReconfigMode reconfig_mode = ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
     typename AccumulateT = NoAccumulation,

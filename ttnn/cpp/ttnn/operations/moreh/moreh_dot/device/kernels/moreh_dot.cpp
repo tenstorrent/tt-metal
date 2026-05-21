@@ -41,7 +41,6 @@ void kernel_main() {
         compute_kernel_lib::reduce<
             REDUCE_OP,
             REDUCE_DIM,
-            REDUCE_FORMAT,
             compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
             compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
             tt::CBIndex::c_24,

@@ -91,7 +91,7 @@ void kernel_main() {
                 }
 
                 auto output_cb = last_out ? cb_out0 : cb_intermed1;
-                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, REDUCE_FORMAT>(
+                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
                     cb_reduce,
                     cb_scaler,
                     output_cb,

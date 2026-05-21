@@ -72,24 +72,18 @@ void kernel_main() {
 
         // BulkWaitBulkPop: All Wt tiles already in CB (see cumulative wait above)
         // Bulk mode for optimal performance
-        compute_kernel_lib::reduce<
-            PoolType::AVG,
-            ReduceDim::REDUCE_ROW,
-            REDUCE_FORMAT,
-            compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
-            cb_x2, cb_reduce, cb_out, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+        compute_kernel_lib::
+            reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
+                cb_x2, cb_reduce, cb_out, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
 
         /*
          * sum(x)
          */
         // BulkWaitBulkPop: All Wt tiles already in CB (see cumulative wait above)
         // Bulk mode for optimal performance
-        compute_kernel_lib::reduce<
-            PoolType::AVG,
-            ReduceDim::REDUCE_ROW,
-            REDUCE_FORMAT,
-            compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
-            cb_inp, cb_reduce, cb_out, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+        compute_kernel_lib::
+            reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
+                cb_inp, cb_reduce, cb_out, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
     }
     cb_pop_front(cb_reduce, 1);
 }

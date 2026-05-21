@@ -15,7 +15,6 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_host.hpp"
 #include "ttnn/operations/math.hpp"
 
 using uint32_t = std::uint32_t;
@@ -710,7 +709,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
     eltwise_binary_defines["FP32_DEST_ACC"] = fp32_dest_acc_en ? "true" : "false";
-    eltwise_binary_defines["REDUCE_FORMAT"] = ttnn::kernel_lib::reduce_format_define(cb_data_format);
 
     // Float32 input on the welford path requires fp32_dest_acc_en=true as a prerequisite for
     // UnpackToDestFp32 (set below). UnpackToDestFp32 is what bypasses the unpacker's

@@ -36,8 +36,8 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
         tensor_args.storage_type());
     TT_FATAL(tensor_args.buffer() != nullptr, "Operands to reduce need to be allocated in buffers on device!");
     TT_FATAL((tensor_args.layout() == Layout::TILE), "Inputs to reduce must be tilized");
-    // INT32 MIN/MAX is supported via the SFPU reduce path (REDUCE_FORMAT define + the SFPU branch
-    // of compute_kernel_lib::reduce; reduce.cpp dispatches based on REDUCE_FORMAT, and MIN uses the
+    // INT32 MIN/MAX is supported via the SFPU reduce path (format deduced from input CB in
+    // compute_kernel_lib::reduce and reduce_{h,w}_neg; MIN uses the
     // dedicated reduce_{h,w}_neg kernels). The FPU GMPOOL path only accepts
     // {FLOAT32, BFLOAT16, BFLOAT8_B, UINT32} and is wrong for INT32 MIN/MAX.
     // FLOAT32 MIN/MAX also takes the SFPU path (set in the H/W program factories)

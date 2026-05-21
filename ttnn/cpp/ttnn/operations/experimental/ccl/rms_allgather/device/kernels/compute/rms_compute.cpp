@@ -166,7 +166,6 @@ void kernel_main() {
         compute_kernel_lib::reduce<
             PoolType::AVG,
             ReduceDim::REDUCE_ROW,
-            REDUCE_FORMAT,
             compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
             compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
             cb_ex_external2,
@@ -194,7 +193,6 @@ void kernel_main() {
             compute_kernel_lib::reduce<
                 PoolType::AVG,
                 ReduceDim::REDUCE_ROW,
-                REDUCE_FORMAT,
                 compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
                 compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
                 cb_stats,

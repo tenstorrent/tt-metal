@@ -6,7 +6,6 @@
 
 #include <bit>
 
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_host.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
@@ -279,8 +278,6 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPostAllGatherProgramFactory::create_
     compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel_desc.core_ranges = core_grid_set;
     compute_kernel_desc.compile_time_args = std::move(compute_args);
-    compute_kernel_desc.defines = {
-        {"REDUCE_FORMAT", ttnn::kernel_lib::reduce_format_define(intermediate_data_format)}};
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
