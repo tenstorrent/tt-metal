@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Chunked-stream writer + reader for long-decode Group A debug traces.
 
 Replaces the per-step ``step_{s}/`` directory layout for long traces. Each
