@@ -165,18 +165,24 @@ def load_backbone_weights(
                         "bias": _to_ttnn_linear_bias(_get(sd, f"{prefix}.attn.w_msa.qkv.bias")),
                     },
                     "proj": {
-                        "weight": _to_ttnn_linear_weight(_get(sd, f"{prefix}.attn.w_msa.proj.weight")),
+                        "weight": _to_ttnn_linear_weight(
+                            _get(sd, f"{prefix}.attn.w_msa.proj.weight"), dtype=ttnn.bfloat8_b
+                        ),
                         "bias": _to_ttnn_linear_bias(_get(sd, f"{prefix}.attn.w_msa.proj.bias")),
                     },
                     "relative_position_bias": rpb,
                 },
                 "mlp": {
                     "fc1": {
-                        "weight": _to_ttnn_linear_weight(_get(sd, f"{prefix}.ffn.layers.0.0.weight")),
+                        "weight": _to_ttnn_linear_weight(
+                            _get(sd, f"{prefix}.ffn.layers.0.0.weight"), dtype=ttnn.bfloat8_b
+                        ),
                         "bias": _to_ttnn_linear_bias(_get(sd, f"{prefix}.ffn.layers.0.0.bias")),
                     },
                     "fc2": {
-                        "weight": _to_ttnn_linear_weight(_get(sd, f"{prefix}.ffn.layers.1.weight")),
+                        "weight": _to_ttnn_linear_weight(
+                            _get(sd, f"{prefix}.ffn.layers.1.weight"), dtype=ttnn.bfloat8_b
+                        ),
                         "bias": _to_ttnn_linear_bias(_get(sd, f"{prefix}.ffn.layers.1.bias")),
                     },
                 },

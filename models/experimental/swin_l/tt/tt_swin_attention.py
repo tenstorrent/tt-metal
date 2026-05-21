@@ -51,9 +51,11 @@ class TtSwinAttention:
         qkv_b = ttnn.to_torch(parameters["qkv"]["bias"]).float()  # (1, 3C)
         qkv_w[:, :dim] *= scale
         qkv_b[:, :dim] *= scale
+        # bf8_b weight halves DRAM read bandwidth per qkv matmul (24 layers x 6/12/24/48
+        # head stages). Bias kept in bf16 (smaller, precision-sensitive).
         self.parameters["qkv"] = {
             "weight": ttnn.from_torch(
-                qkv_w.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+                qkv_w.to(torch.bfloat16), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
             ),
             "bias": ttnn.from_torch(
                 qkv_b.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
