@@ -964,16 +964,30 @@ bool run_buffer_tune_mode(const BenchmarkConfig& cfg) {
             output_peak_gbps = std::max(output_peak_gbps, row.gbps);
         }
         const double out_thresh = output_peak_gbps * (1.0 - tolerance_fraction);
-        best_output_depth = output_bw_rows.front().output_cb_depth;
+        bool out_found = false;
         for (const auto& row : output_bw_rows) {
-            if (row.gbps >= out_thresh && row.output_cb_depth < best_output_depth) {
-                best_output_depth = row.output_cb_depth;
+            if (row.gbps >= out_thresh) {
+                if (!out_found || row.output_cb_depth < best_output_depth) {
+                    best_output_depth = row.output_cb_depth;
+                    out_found = true;
+                }
+            }
+        }
+        if (!out_found) {
+            best_output_depth = output_bw_rows.front().output_cb_depth;
+            for (const auto& row : output_bw_rows) {
+                if (row.gbps >= output_peak_gbps - 1e-6 && row.output_cb_depth < best_output_depth) {
+                    best_output_depth = row.output_cb_depth;
+                }
             }
         }
         log_info(
             LogTest,
-            "buffer_tune: output sweep peak_gbps={:.4f}, smallest_output_cb_depth_at_peak={}",
+            "buffer_tune: output sweep peak_gbps={:.4f}, threshold_gbps={:.4f} (within {:.1f}% of peak), "
+            "smallest_output_cb_depth_at_peak={}",
             output_peak_gbps,
+            out_thresh,
+            tune_cfg.buffer_tune_bw_tolerance_pct,
             best_output_depth);
     }
 
