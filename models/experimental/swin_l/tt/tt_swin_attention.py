@@ -106,6 +106,12 @@ class TtSwinAttention:
         wH = self.window_size[0]
         wW = self.window_size[1]
 
+        # Window partition. Doing this in TILE layout is expensive because wH=12, nW=4,
+        # wW=12 are not tile-aligned (TILE=32), so reshape + transpose are real ops. We get
+        # a much cheaper chain by untilizing once, running the partition in ROW_MAJOR
+        # (where the reshape/transpose are pure byte views), and tilizing once at the end.
+        if input_tensor.layout != ttnn.ROW_MAJOR_LAYOUT:
+            input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         input_tensor = ttnn.reshape(
             ttnn.transpose(ttnn.reshape(input_tensor, (B, nH, wH, nW, wW, C)), 2, 3), (B * num_windows, wH * wW, C)
         )
