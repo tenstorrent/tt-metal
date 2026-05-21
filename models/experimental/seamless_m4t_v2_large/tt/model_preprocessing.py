@@ -281,8 +281,9 @@ def create_text_decoder_parameters(decoder, *, device: ttnn.Device) -> dict:
             # Fused self-attn Q|K|V; cross-attn K|V fused (see ``cross_attention``).
             # Attention linear weights in bfloat8_b (bandwidth; biases stay bf16) — encoder pattern.
             "self_attn": {
-                # Prefill: DRAM WIDTH-sharded QKV. Decode: interleaved (``qkv_decode``) for KV-cache PCC.
-                "qkv": _fused_qkv_pair_dram_sharded(
+                # Prefill: interleaved L1 matmul + ``MatmulMultiCoreReuseMultiCast1DProgramConfig`` (text encoder).
+                # Decode: separate ``qkv_decode`` weights for KV-cache PCC.
+                "qkv": _fused_qkv_pair(
                     layer.self_attn.q_proj,
                     layer.self_attn.k_proj,
                     layer.self_attn.v_proj,
@@ -296,9 +297,7 @@ def create_text_decoder_parameters(decoder, *, device: ttnn.Device) -> dict:
                     device=device,
                     weight_dtype=ttnn.bfloat8_b,
                 ),
-                "out_proj": _linear_pair_dram_sharded(
-                    layer.self_attn.out_proj, device=device, weight_dtype=ttnn.bfloat8_b
-                ),
+                "out_proj": _linear_pair(layer.self_attn.out_proj, device=device, weight_dtype=ttnn.bfloat8_b),
             },
             "cross_attention_layer_norm": {
                 "weight": _ln_to_device(layer.cross_attention_layer_norm.weight, device=device),
@@ -306,26 +305,22 @@ def create_text_decoder_parameters(decoder, *, device: ttnn.Device) -> dict:
             },
             # Fused K|V over encoder hidden states (one matmul vs two; Q stays separate).
             "cross_attention": {
-                "q_proj": _linear_pair_dram_sharded(
-                    layer.cross_attention.q_proj, device=device, weight_dtype=ttnn.bfloat8_b
-                ),
+                "q_proj": _linear_pair(layer.cross_attention.q_proj, device=device, weight_dtype=ttnn.bfloat8_b),
                 "kv": _fused_kv_pair(
                     layer.cross_attention.k_proj,
                     layer.cross_attention.v_proj,
                     device=device,
                     weight_dtype=ttnn.bfloat8_b,
                 ),
-                "out_proj": _linear_pair_dram_sharded(
-                    layer.cross_attention.out_proj, device=device, weight_dtype=ttnn.bfloat8_b
-                ),
+                "out_proj": _linear_pair(layer.cross_attention.out_proj, device=device, weight_dtype=ttnn.bfloat8_b),
             },
             "ffn_layer_norm": {
                 "weight": _ln_to_device(layer.ffn_layer_norm.weight, device=device),
                 "bias": _ln_to_device(layer.ffn_layer_norm.bias, device=device),
             },
             "ffn": {
-                "fc1": _linear_pair_dram_sharded(layer.ffn.fc1, device=device, weight_dtype=ttnn.bfloat8_b),
-                "fc2": _linear_pair_dram_sharded(layer.ffn.fc2, device=device, weight_dtype=ttnn.bfloat8_b),
+                "fc1": _linear_pair(layer.ffn.fc1, device=device, weight_dtype=ttnn.bfloat8_b),
+                "fc2": _linear_pair(layer.ffn.fc2, device=device, weight_dtype=ttnn.bfloat8_b),
             },
         }
         layers.append(make_parameter_dict(layer_dict))
