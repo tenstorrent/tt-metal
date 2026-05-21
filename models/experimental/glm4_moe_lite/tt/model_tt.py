@@ -1354,6 +1354,8 @@ class Glm4MoeLiteDenseOnlyTT:
                 logger.warning("GLM boundary debug (model_tt.decode) failed: {}", e)
 
         # vLLM uses a constant page_table width; accept any W here.
+        if _SIGNPOST_ENABLED:
+            signpost("rope_prep-start")
         t0 = time.perf_counter() if profile_on else 0.0
         is_mesh_device = _is_mesh_device(self.device)
         page_table_tt = ttnn.from_torch(
@@ -1390,6 +1392,8 @@ class Glm4MoeLiteDenseOnlyTT:
             )
         if profile_on:
             decode_profile["prep_inputs_s"] = decode_profile.get("prep_inputs_s", 0.0) + (time.perf_counter() - t0)
+        if _SIGNPOST_ENABLED:
+            signpost("rope_prep-end")
 
         if _SIGNPOST_ENABLED:
             signpost("decode-start")
@@ -1450,6 +1454,8 @@ class Glm4MoeLiteDenseOnlyTT:
             )
 
         # Run decoder stack.
+        if _SIGNPOST_ENABLED:
+            signpost("decoder_loop-start")
         for layer_idx in range(self.num_layers_to_run):
             w = self._ensure_layer_weights(layer_idx)
             layer_profile: dict[str, float] | None = None
@@ -1486,6 +1492,8 @@ class Glm4MoeLiteDenseOnlyTT:
                 ttnn.ReadDeviceProfiler(self.device)
             ttnn.deallocate(x, force=False)
             x = x_next
+        if _SIGNPOST_ENABLED:
+            signpost("decoder_loop-end")
 
         # Preserve hidden state for MTP before final_norm
         mtp_hidden = None
