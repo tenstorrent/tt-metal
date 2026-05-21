@@ -107,7 +107,7 @@ def _bfp_prepare_blocks(tensor, block_size, num_faces, face_r_dim):
 
     Args:
         tensor: Input tensor.
-        block_size: Elements per BFP block (16).
+        block_size: Elements per BFP block (16 for all current BFP formats).
         num_faces: Number of tile faces to pack.
         face_r_dim: Rows per face.
 
@@ -128,7 +128,7 @@ def _bfp_collect_blocks(flattened_tensor, block_size, float_to_block_fn):
 
     Args:
         flattened_tensor: Pre-processed tensor (output of _bfp_prepare_blocks).
-        block_size: Elements per block (always 16).
+        block_size: Elements per block (16 for all current BFP formats).
         float_to_block_fn: Callable(block) -> (shared_exponent, mantissas).
 
     Returns:
