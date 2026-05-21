@@ -7,7 +7,13 @@ import numpy as np
 
 import ttnn
 
-from .math_perf_env import ace_step_ensure_l1_activation, ace_step_linear_l1_memory_config, ace_step_reshape_kwargs
+from .math_perf_env import (
+    ace_step_dense_linear_program_config,
+    ace_step_ensure_l1_activation,
+    ace_step_init_hifi4_linear_compute_kernel_config,
+    ace_step_linear_l1_memory_config,
+    ace_step_reshape_kwargs,
+)
 
 
 @dataclass(frozen=True)
@@ -405,6 +411,8 @@ class TtAceStepDePatchify1D:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         self.activation_dtype = activation_dtype
+        self._ck = ace_step_init_hifi4_linear_compute_kernel_config(device)
+        self._pc_cache: dict = {}
 
     def forward(self, hidden_states: ttnn.Tensor, meta: PatchifyMetadata) -> ttnn.Tensor:
         if meta.patch_size != self.patch_size:
@@ -434,14 +442,17 @@ class TtAceStepDePatchify1D:
         x2d = ttnn.to_layout(x2d, ttnn.TILE_LAYOUT)
 
         w_tile = ttnn.to_layout(self.weight, ttnn.TILE_LAYOUT)
-        y2d = ttnn.linear(
-            x2d,
-            w_tile,
-            bias=None,
-            transpose_b=True,  # y = x @ W^T
-            dtype=self.activation_dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        _pc = self._pc_cache.get((m, self.in_channels, n))
+        if _pc is None:
+            _pc = ace_step_dense_linear_program_config(self.device, seq_len=m, in_dim=self.in_channels, out_dim=n)
+            if _pc is not None:
+                self._pc_cache[(m, self.in_channels, n)] = _pc
+        _lin_kw: dict = {"dtype": self.activation_dtype, "memory_config": ttnn.DRAM_MEMORY_CONFIG}
+        if self._ck is not None:
+            _lin_kw["compute_kernel_config"] = self._ck
+        if _pc is not None:
+            _lin_kw["program_config"] = _pc
+        y2d = ttnn.linear(x2d, w_tile, bias=None, transpose_b=True, **_lin_kw)
         y2d_rm = ttnn.to_layout(y2d, ttnn.ROW_MAJOR_LAYOUT)
 
         # `ttnn.linear` outputs may be padded to tile alignment on the last dim; reshape using the true M/N.
