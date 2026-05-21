@@ -220,22 +220,25 @@ python models/experimental/atss_swin_l_dyhead/demo/demo_sahi_4dev.py \
   object isn't split, and seam-merge catches the residual cases (e.g. a person tall
   enough that head + body land in different tiles).
 
-**Expected performance** on a healthy Galaxy 1×4 sub-mesh:
+**Expected performance** on a healthy Galaxy 1×4 sub-mesh (measured on a dense
+harbor-shot frame, ~95 detections, after the DCN grid_sample / DyHead GN fp32 /
+Swin HiFi2 LN optimizations merged from the parent branch):
 
 | Phase | Time |
 |---|---|
-| `open_mesh_device` | ~0.9 s (one-time) |
-| `build model + ttnn.from_torch` | ~3.5 s (one-time) |
-| `pipeline.compile` (warm cache) | ~3.9 s (one-time) |
-| `pipeline.enqueue + pop_all` (steady-state) | **~290 ms / frame** (the number shown in the title) |
-| `ttnn.to_torch` on outputs | ~9 ms |
-| Host postprocess + cross-tile NMM | ~40 ms (CPU, depends on detection count) |
-| `cv2.imwrite` | ~40 ms |
-| **Steady-state full e2e** | **~435 ms / frame  → ~2.3 fps** |
+| `open_mesh_device` | ~0.95 s (one-time) |
+| `build model + ttnn.from_torch` | ~3.3 s (one-time) |
+| `pipeline.compile` (warm JIT cache) | ~3 s (one-time; ~10 s the first run after the optimizations land while new kernels build) |
+| `pipeline.enqueue + pop_all` (steady-state) | **~220 ms / frame** (the number shown in the title) |
+| `ttnn.to_torch` on outputs | ~8 ms |
+| Host postprocess + cross-tile NMM | ~25 ms (CPU, scales with detection count) |
+| `cv2.imwrite` | ~28 ms |
+| **Steady-state full e2e** | **~340 ms / frame  → ~2.95 fps** |
 
 The `(infer …ms)` value in the title is the **host↔device round-trip** for one frame
 (input DMA + 4-tile parallel device compute + output DMA), not pure device time and
-not full end-to-end. The first cold compile (no JIT cache) takes ~140 s.
+not full end-to-end. The first cold compile (no JIT cache anywhere on the host) takes
+~140 s; subsequent runs reuse the JIT cache.
 
 ### Usage
 
