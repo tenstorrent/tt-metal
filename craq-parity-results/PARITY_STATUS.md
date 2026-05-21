@@ -1,8 +1,8 @@
 # tt-metal2 TTSim Parity Status
 
 **Branch:** `ridvan/nkapre-multichip-metal-v2`
-**Head commit (at sweep time):** `fbca6525d08`
-**Generated:** 2026-05-21 (updated with historical LLK / partial-run results)
+**Head commit:** `6ccc779e618` (sim skip fixes for dispatch-context + TT_VISIBLE_DEVICES mp)
+**Generated:** 2026-05-21 (live monitor; job 11604 started pre-fix at `fbca6525`)
 **Simulator:** craq-sim TTSim v3.5 on Galaxy compute (`bh-glx-b06u08`, `bh-glx-b07u02`)
 **Test catalog:** `nkapre-fork-test-commands.md`
 
@@ -25,7 +25,8 @@ Pre-fix baseline sweep (`run-20260521T021753Z/`) hit mass rc=134 heap aborts; ig
 |------|--------|------|------|---------|-------|
 | Full sweep (57 suites) | `run-20260521T030649Z/` | 24 | 24 | 9 | Post-fix scorecard; Section 1 + LLK stale |
 | Section 1 TTNN (HEAD verify) | `section1-by-commit-20260521T195930Z/` + quick | 2/2 targeted | 0 | 0 | mcq + region_write_read **Verified PASS** |
-| Section 2 T3K re-run | `section2-t3k-20260521T181117Z/` (job 11604) | 1 | 2 | 0 | 4/~40 done; eth interleaved **in progress** |
+| Section 2 T3K re-run | `section2-t3k-20260521T181117Z/` (job 11604) | 1 | 2 | 0 | 3/34 done; eth interleaved **in progress** (~47 min) |
+| Section 2 fabric-only | job 11605 (pending) | — | — | — | Starts after 11604; `PARITY_SECTIONS=2.fabric` on HEAD |
 | Section 2 multiprocess | `mp-run-20260521T155410Z/` | 1 | 9 | 0 | `ttnn_launch_op` **Verified PASS** under tt-run+MPI |
 | Section 4 LLK WH | `llk-smoke-20260521T190458Z/` (job 11576) | 2/2 | 0 | 0 | weekly + nightly **Verified PASS** after venv setup |
 | Section 4 LLK (sweep) | `run-20260521T030649Z/` | 0 | 2 | 0 | **Env/setup FAIL** — missing `.venv` |
@@ -78,12 +79,12 @@ Job 11596 (`section1-by-commit-20260521T195930Z/`), quick verify (`ttnn-sec1-qui
 
 **Dir:** `section2-t3k-20260521T181117Z/`
 **Mock:** `t3k_cluster_desc.yaml` (8-chip WH)
-**Started:** 2026-05-21T21:51:47Z · **Status:** running (4 suites complete of ~40)
+**Started:** 2026-05-21T21:51:47Z · **Status:** running (3 suites complete of 34; job started **pre-`6ccc779` skip fixes**)
 
 | Suite | Status | Duration | Key error / note |
 |-------|--------|----------|-------------------|
-| `2.distributed/distributed_unit_tests` | **FAIL** | 272s | `DispatchContextFixture.TestWritesAndWorkloads`: `TT_FATAL: Manually setting up and tearing down Fast Dispatch is only supported on Galaxy and Blackhole clusters` |
-| `2.distributed/run_visible_devices_mp` | **FAIL** | 23s | `mpirun … exited on signal 11 (Segmentation fault)` for config 2,3 |
+| `2.distributed/distributed_unit_tests` | **FAIL** (pre-fix) | 272s | `TestWritesAndWorkloads` TT_FATAL on WH 8-chip sim — **fixed to SKIP on HEAD `6ccc779`** |
+| `2.distributed/run_visible_devices_mp` | **FAIL** (pre-fix) | 23s | MPI SIGSEGV under ttsim — **fixed to SKIP on HEAD `6ccc779`** |
 | `2.eth/ActiveEthKernelsDirectSendAllConnectedChips` | **Verified PASS** | 117s | Was **TIMEOUT** 900s on full sweep (6u desc) |
 | `2.eth/ActiveEthKernelsSendInterleavedBufferAllConnectedChips` | *in progress* | — | Actively transferring at doc time (~22:09Z) |
 | remaining Section 2 suites | *pending* | — | job 11604 still active |
@@ -270,10 +271,20 @@ Observations: 2-chip BH sim + fabric 1D init succeeds; large DDR all-gather + re
 
 ## Live monitoring
 
+| Job | ID | State | Results |
+|-----|-----|-------|---------|
+| Section 2 T3K | 11604 | running | `section2-t3k-20260521T181117Z/` |
+| Fabric-only | 11605 | pending (after 11604) | `fabric-latest/` (TBD) |
+
 ```bash
 # Section 2 re-run (job 11604)
 tail -f /data/rsong/tt-metal2/craq-parity-results/section2-t3k-20260521T181117Z/sweep.log
 
+# Fabric job (11605)
+tail -f /data/rsong/tt-metal2/craq-parity-results/slurm-fabric-11605.out
+
 # P300 smoke logs (11599 complete, 11602 cancelled)
 tail -f /data/rsong/tt-metal2/craq-parity-results/p300-smoke-20260521T204420Z/pytest.log
 ```
+
+**craq-sim note:** pull to `acb6de0c` fails WH build (`tensix.cpp:5101` unused variable). Continue using prebuilt `src/_out/release_wh|bh/libttsim.so`.
