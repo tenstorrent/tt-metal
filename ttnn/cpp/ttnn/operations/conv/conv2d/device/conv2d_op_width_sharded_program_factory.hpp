@@ -23,12 +23,11 @@ namespace ttnn::prim {
 // compile-time args; the Tensor must outlive the cached MeshWorkload, which
 // `WorkloadDescriptor::buffers` arranges via shared-ptr ownership.
 //
-// The other variant in `Conv2dDeviceOperation::program_factory_t`
-// (`Conv2dShardedProgramFactory`) is still on the legacy
-// `ProgramFactoryConcept` path.  Per-alternative concept dispatch in
-// `dispatch_to_mesh_workload_factory` (device_operation.hpp) lets the two
-// styles coexist within the same `std::variant` without any change to
-// `Conv2dDeviceOperation` itself.
+// The sibling variant in `Conv2dDeviceOperation::program_factory_t`
+// (`Conv2dShardedProgramFactory`) is also on the descriptor path.
+// Per-alternative concept dispatch in `dispatch_to_mesh_workload_factory`
+// (device_operation.hpp) selects the matching adapter for each variant
+// alternative without any change to `Conv2dDeviceOperation` itself.
 struct Conv2dWidthShardedProgramFactory {
     // Builds the entire workload in one call (invoked ONCE per workload on
     // cache miss):
