@@ -445,6 +445,15 @@ void SetProgramRunParameters(Program& program, const ProgramRunParams& params) {
             combined_crtas.push_back(v_it->second);
         }
         for (const auto& handle : binding_handles) {
+            if (!handle.bound) {
+                // Metal 2.0 Optional Resource Bindings: unbound handle has no associated
+                // TensorArg. Push a zero placeholder so the kernel's CRTA layout stays consistent
+                // with the addr_crta_offsets baked into ta::<name> tokens. The kernel won't read
+                // this slot for a binding it doesn't use (`if constexpr (false)` branch elides
+                // the TensorAccessor ctor); the ctor's ASSERT traps any misuse.
+                combined_crtas.push_back(0u);
+                continue;
+            }
             auto addr_it = ta_binding_addresses.find(handle.tensor_parameter_name);
             TT_FATAL(
                 addr_it != ta_binding_addresses.end(),
@@ -530,6 +539,11 @@ void UpdateTensorArgs(Program& program, std::span<const ProgramRunParams::Tensor
 
         RuntimeArgsData& crta = kernel->common_runtime_args_data();
         for (const auto& handle : binding_handles) {
+            if (!handle.bound) {
+                // Metal 2.0 Optional Resource Bindings: unbound handle is fixed at zero by
+                // SetProgramRunParameters and stays zero across updates.
+                continue;
+            }
             auto addr_it = ta_binding_addresses.find(handle.tensor_parameter_name);
             TT_FATAL(
                 addr_it != ta_binding_addresses.end(),

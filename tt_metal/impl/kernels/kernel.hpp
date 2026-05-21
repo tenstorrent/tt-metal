@@ -105,6 +105,11 @@ struct TensorBindingHandle {
     uint32_t cta_offset;                // first word index of this binding's payload in the kernel's compile-time args
     uint32_t addr_crta_offset;  // byte offset of this binding's base-address slot within the kernel's CRTA buffer
                                 // (binding addresses live in their own section appended after user-named CRTAs)
+    // Metal 2.0 Optional Resource Bindings: false when the kernel's TensorBinding referenced a
+    // tensor_parameter_name that does not exist on the ProgramSpec. The handle is still emitted
+    // (the kernel-side `ta::<name>` token must exist for `if constexpr (false)` branches to
+    // compile), but no runtime base-address attachment is performed for unbound handles.
+    bool bound = true;
 };
 
 class Kernel : public JitBuildSettings {

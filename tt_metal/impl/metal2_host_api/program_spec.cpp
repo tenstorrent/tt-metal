@@ -314,12 +314,16 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 dfb_binding.local_accessor_name);
             seen_this_type = true;
 
-            // Referential integrity: the DFB must exist
-            TT_FATAL(
-                collected.dfb_by_name.contains(dfb_binding.dfb_spec_name),
-                "Kernel '{}' references unknown DFB '{}'",
-                kernel.unique_id,
-                dfb_binding.dfb_spec_name);
+            // Referential integrity: relaxed for Metal 2.0 Optional Resource Bindings.
+            // A DFBBinding may reference a dfb_spec_name that does not exist on the ProgramSpec —
+            // the kernel may use the resource only in a conditional branch (gated by an
+            // if constexpr on a CTA). For such bindings, the framework emits a sentinel-id
+            // DFBAccessor in kernel_bindings_generated.h; the binding does NOT participate in
+            // producer/consumer counting, DFB allocation, or alias-group validation, since
+            // there is no underlying DataflowBufferSpec to attach to.
+            if (!collected.dfb_by_name.contains(dfb_binding.dfb_spec_name)) {
+                continue;
+            }
 
             CollectedSpecData::DFBEndpointInfo& endpoint_info = collected.dfb_endpoints[dfb_binding.dfb_spec_name];
 
@@ -377,11 +381,11 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 "Kernel '{}' semaphore accessor_name '{}' must be a valid C++ identifier",
                 kernel.unique_id,
                 binding.accessor_name);
-            TT_FATAL(
-                collected.semaphore_by_name.contains(binding.semaphore_spec_name),
-                "Kernel '{}' references unknown semaphore '{}'",
-                kernel.unique_id,
-                binding.semaphore_spec_name);
+            // Referential integrity: relaxed for Metal 2.0 Optional Resource Bindings.
+            // A SemaphoreBinding may reference a semaphore_spec_name that does not exist on the
+            // ProgramSpec; the framework emits a sentinel-id sem::name token. No semaphore
+            // allocation or per-kernel attachment occurs for unresolved bindings.
+            (void)collected.semaphore_by_name.contains(binding.semaphore_spec_name);
         }
     }
 
@@ -407,11 +411,14 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 "Kernel '{}' tensor accessor_name '{}' must be a valid C++ identifier",
                 kernel.unique_id,
                 binding.accessor_name);
-            TT_FATAL(
-                collected.tensor_parameter_by_name.contains(binding.tensor_parameter_name),
-                "Kernel '{}' references unknown TensorParameter '{}'",
-                kernel.unique_id,
-                binding.tensor_parameter_name);
+            // Referential integrity: relaxed for Metal 2.0 Optional Resource Bindings.
+            // A TensorBinding may reference a tensor_parameter_name that does not exist on the
+            // ProgramSpec; the framework emits a zeroed (Bound-unset) CTA payload at the
+            // binding's CTA offset. The binding does NOT participate in TensorParameter usage
+            // counting or runtime tensor-address attachment.
+            if (!collected.tensor_parameter_by_name.contains(binding.tensor_parameter_name)) {
+                continue;
+            }
 
             collected.tensor_parameter_users[binding.tensor_parameter_name].push_back(&kernel);
         }
@@ -746,9 +753,14 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         const auto& compute_config = std::get<ComputeConfiguration>(kernel.config_spec);
 
         // Index the kernel's DFB bindings: which are bound, which are consumed.
+        // Skip optional bindings whose DFBSpec does not exist on the program: they have no
+        // unpack_to_dest_mode semantics (no actual hop runs).
         std::unordered_set<DFBSpecName> bound_dfbs;
         std::unordered_set<DFBSpecName> consumed_dfbs;
         for (const auto& binding : kernel.dfb_bindings) {
+            if (!collected.dfb_by_name.contains(binding.dfb_spec_name)) {
+                continue;
+            }
             bound_dfbs.insert(binding.dfb_spec_name);
             if (binding.endpoint_type == KernelSpec::DFBEndpointType::CONSUMER) {
                 consumed_dfbs.insert(binding.dfb_spec_name);
@@ -812,7 +824,12 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             if (binding.endpoint_type != KernelSpec::DFBEndpointType::CONSUMER) {
                 continue;
             }
-            const DataflowBufferSpec* dfb_spec = collected.dfb_by_name.at(binding.dfb_spec_name);
+            // Optional binding: no DFBSpec, no fp32-dest check applies.
+            auto dfb_it = collected.dfb_by_name.find(binding.dfb_spec_name);
+            if (dfb_it == collected.dfb_by_name.end()) {
+                continue;
+            }
+            const DataflowBufferSpec* dfb_spec = dfb_it->second;
             if (!dfb_spec->data_format_metadata.has_value()) {
                 continue;  // Deferred to the data_format-required check.
             }
@@ -1715,6 +1732,10 @@ std::vector<uint32_t> ResolveTensorParameterStaticCTAs(
     if (is_dram) {
         args_config.set(tensor_accessor::ArgConfig::IsDram);
     }
+    // Metal 2.0 Optional Resource Bindings: this function only runs for TensorParameters that
+    // exist on the ProgramSpec, so any binding resolved via this path is bound. ResolveTensor-
+    // BindingsForKernel emits a zeroed (Bound-unset) payload when a binding's TP is absent.
+    args_config.set(tensor_accessor::ArgConfig::Bound);
     // No Runtime* flags in the static port.
 
     // aligned_page_size: align the unaligned page size up to the buffer-type alignment.
@@ -1807,19 +1828,29 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
     const KernelSpec& kernel,
     const std::unordered_map<TensorParameterName, std::vector<uint32_t>>& resolved_binding_ctas,
     size_t base_named_crta_count) {
+    // Metal 2.0 Optional Resource Bindings: for a binding whose tensor_parameter_name does not
+    // resolve, emit a 2-word zeroed CTA payload (args_config = None, aligned_page_size = 0).
+    // The kernel-side TensorAccessorArgs<CTA_OFFSET>::is_bound reads `false` (the ArgConfig::Bound
+    // bit is unset), and TensorAccessor's binding-token ctor ASSERTs on use. Two zero words
+    // matches NumArgsCT for non-sharded, so subsequent bindings' CTA offsets remain correct.
+    static const std::vector<uint32_t> kUnboundCtaPayload = {0u, 0u};
+
     TensorBindingsForKernel out;
     out.handles.reserve(kernel.tensor_bindings.size());
 
     uint32_t cta_word_offset = 0;
     size_t crta_word_index = base_named_crta_count;
     for (const auto& binding : kernel.tensor_bindings) {
-        const auto& binding_ctas = resolved_binding_ctas.at(binding.tensor_parameter_name);
+        auto it = resolved_binding_ctas.find(binding.tensor_parameter_name);
+        const bool bound = (it != resolved_binding_ctas.end());
+        const std::vector<uint32_t>& binding_ctas = bound ? it->second : kUnboundCtaPayload;
 
         TensorBindingHandle handle;
         handle.accessor_name = binding.accessor_name;
         handle.tensor_parameter_name = binding.tensor_parameter_name;
         handle.cta_offset = cta_word_offset;
         handle.addr_crta_offset = static_cast<uint32_t>(crta_word_index * sizeof(uint32_t));
+        handle.bound = bound;
 
         out.cta_words.insert(out.cta_words.end(), binding_ctas.begin(), binding_ctas.end());
         cta_word_offset += static_cast<uint32_t>(binding_ctas.size());
@@ -1831,15 +1862,24 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
 }
 
 // Create map of local accessor name -> logical DFB id
+// For Metal 2.0 Optional Resource Bindings: bindings whose dfb_spec_name does not resolve to a
+// DataflowBufferSpec on the ProgramSpec are emitted with DFBAccessor::SENTINEL_ID, so the
+// kernel-side dfb::<name> token always exists and trips DataflowBuffer's ctor ASSERT on misuse.
 tt::tt_metal::DataflowBufferLocalAccessorHandleMap MakeDataflowBufferLocalAccessorHandles(
     const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
+    static constexpr uint16_t kDFBSentinelId = 0xFFFFu;  // matches DFBAccessor::SENTINEL_ID
     tt::tt_metal::DataflowBufferLocalAccessorHandleMap out;
     out.reserve(kernel_spec.dfb_bindings.size());
     for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
-        const uint32_t id = dfb_name_to_id.at(dfb_binding.dfb_spec_name);
+        auto it = dfb_name_to_id.find(dfb_binding.dfb_spec_name);
+        if (it == dfb_name_to_id.end()) {
+            out.emplace(dfb_binding.local_accessor_name, kDFBSentinelId);
+            continue;
+        }
+        const uint32_t id = it->second;
         TT_FATAL(
-            id <= std::numeric_limits<uint16_t>::max(),
-            "Kernel '{}' DFB '{}' logical id {} does not fit uint16_t",
+            id < kDFBSentinelId,
+            "Kernel '{}' DFB '{}' logical id {} collides with sentinel or does not fit uint16_t",
             kernel_spec.unique_id,
             dfb_binding.dfb_spec_name,
             id);
@@ -1849,15 +1889,24 @@ tt::tt_metal::DataflowBufferLocalAccessorHandleMap MakeDataflowBufferLocalAccess
 }
 
 // Create map of local accessor name -> logical Semaphore id
+// For Metal 2.0 Optional Resource Bindings: bindings whose semaphore_spec_name does not resolve
+// are emitted with Semaphore::SENTINEL_ID, so the kernel-side sem::<name> token always exists
+// and trips ckernel::Semaphore's ctor ASSERT on misuse.
 tt::tt_metal::SemaphoreLocalAccessorHandleMap MakeSemaphoreLocalAccessorHandles(
     const KernelSpec& kernel_spec, const SemaphoreNameToIdMap& semaphore_name_to_id) {
+    static constexpr uint16_t kSemaphoreSentinelId = 0xFFFFu;  // matches ckernel::Semaphore::SENTINEL_ID
     tt::tt_metal::SemaphoreLocalAccessorHandleMap out;
     out.reserve(kernel_spec.semaphore_bindings.size());
     for (const auto& semaphore_binding : kernel_spec.semaphore_bindings) {
-        const uint32_t id = semaphore_name_to_id.at(semaphore_binding.semaphore_spec_name);
+        auto it = semaphore_name_to_id.find(semaphore_binding.semaphore_spec_name);
+        if (it == semaphore_name_to_id.end()) {
+            out.emplace(semaphore_binding.accessor_name, kSemaphoreSentinelId);
+            continue;
+        }
+        const uint32_t id = it->second;
         TT_FATAL(
-            id <= std::numeric_limits<uint16_t>::max(),
-            "Kernel '{}' semaphore '{}' id {} does not fit uint16_t",
+            id < kSemaphoreSentinelId,
+            "Kernel '{}' semaphore '{}' id {} collides with sentinel or does not fit uint16_t",
             kernel_spec.unique_id,
             semaphore_binding.semaphore_spec_name,
             id);
