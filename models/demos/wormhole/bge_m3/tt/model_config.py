@@ -198,7 +198,27 @@ class ModelArgs:
             ttnn.CoreCoord(num_x - 1, num_y - 1),
         )
 
-    def encode_prompts(self, prompts: list[str] | str, prompt_length: int | None = None) -> ttnn.Tensor:
+    def encode_prompts(
+        self,
+        prompts: list[str] | str,
+        prompt_length: int | None = None,
+        *,
+        attention_mask_4d: bool = True,
+    ) -> ttnn.Tensor:
+        """Tokenize ``prompts`` and build BGE-M3 model inputs.
+
+        ``attention_mask_4d`` (default True) controls the shape of the
+        returned ``attention_mask``:
+          * True — SDPA-ready 4D additive mask ``[B, 1, S, S]`` (model
+            consumes it directly without rebuilding from a 2D keep-mask).
+          * False — raw 2D boolean keep-mask ``[B, S]`` (HF convention,
+            same as ``tokenizer_attention_mask``). Use this when callers
+            expect a 2D mask, e.g. ``BgeM3ForEmbedding._pad_inputs`` /
+            pooling helpers.
+
+        ``tokenizer_attention_mask`` is always populated with the raw 2D
+        keep-mask regardless of this flag.
+        """
         if isinstance(prompts, str):
             prompts = [prompts]
 
@@ -235,9 +255,12 @@ class ModelArgs:
             encoded["token_type_ids"] = input_ids.new_zeros(input_ids.shape)
         encoded["tokenizer_attention_mask"] = encoded["attention_mask"]
 
-        keep = encoded["tokenizer_attention_mask"].bfloat16()
-        additive = (1.0 - keep) * -100000.0
-        encoded["attention_mask"] = additive.unsqueeze(1).unsqueeze(1).expand(-1, -1, padded_length, -1).contiguous()
+        if attention_mask_4d:
+            keep = encoded["tokenizer_attention_mask"].bfloat16()
+            additive = (1.0 - keep) * -100000.0
+            encoded["attention_mask"] = (
+                additive.unsqueeze(1).unsqueeze(1).expand(-1, -1, padded_length, -1).contiguous()
+            )
 
         mask = input_ids.ne(int(self.pad_token_id)).to(dtype=input_ids.dtype)
         incremental_indices = mask.cumsum(dim=1) * mask
@@ -251,12 +274,21 @@ class ModelArgs:
                     dtype=ttnn.uint32,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                 ),
-                "attention_mask": ttnn.from_torch(
-                    encoded["attention_mask"].bfloat16(),
-                    device=self.mesh_device,
-                    dtype=self.attention_mask_dtype,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                "attention_mask": (
+                    ttnn.from_torch(
+                        encoded["attention_mask"].bfloat16(),
+                        device=self.mesh_device,
+                        dtype=self.attention_mask_dtype,
+                        layout=ttnn.TILE_LAYOUT,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                    if attention_mask_4d
+                    else ttnn.from_torch(
+                        encoded["attention_mask"].int(),
+                        device=self.mesh_device,
+                        dtype=ttnn.uint32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                    )
                 ),
                 "token_type_ids": ttnn.from_torch(
                     encoded["token_type_ids"].int(),
