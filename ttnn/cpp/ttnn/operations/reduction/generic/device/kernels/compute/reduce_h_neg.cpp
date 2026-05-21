@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // MIN along H as -MAX(-x). SFPU (Int32/Float32) folds negated tiles in DST; FPU uses
-// cb_ineg/cb_acc because GMPOOL reads L1. SFPU vs FPU is chosen from unpack_src_format[cb_input].
+// cb_ineg/cb_acc because GMPOOL reads L1. SFPU vs FPU uses input CB format at compile time.
 
 #include <cstdint>
 
@@ -92,7 +92,7 @@ void kernel_main() {
                 }
 #ifdef REDUCE_POST_MUL
                 for (uint32_t k = 0; k < current_chunk; ++k) {
-                    compute_kernel_lib::detail::reduce_post_mul_tile<cb_input>(k, post_mul_scaler_bits);
+                    compute_kernel_lib::detail::reduce_post_mul_tile<reduce_format>(k, post_mul_scaler_bits);
                 }
 #endif
 

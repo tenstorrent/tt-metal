@@ -88,9 +88,8 @@ constexpr bool is_sfpu_reduce_path() {
 
 // Post-reduce scalar multiply. mul_unary_tile is fp32-only, so Int32 is bracketed with typecasts
 // (truncates toward zero on the way back); all other formats use plain mul_unary_tile.
-template <uint32_t input_cb_id>
+template <DataFormat reduce_format>
 ALWI void reduce_post_mul_tile(uint32_t dst, uint32_t scaler_bits) {
-    constexpr DataFormat reduce_format = static_cast<DataFormat>(unpack_src_format[input_cb_id]);
     if constexpr (reduce_format == DataFormat::Int32) {
         typecast_tile_init<(uint32_t)DataFormat::Int32, (uint32_t)DataFormat::Float32>();
         typecast_tile<(uint32_t)DataFormat::Int32, (uint32_t)DataFormat::Float32>(dst);
@@ -249,6 +248,7 @@ template <
     ReduceDim reduce_dim,
     ReduceInputPolicy input_policy,
     ReduceDataFormatReconfigMode reconfig_mode,
+    DataFormat reduce_format,
     typename AccumulateT,
     typename PostReduceOp>
 ALWI void reduce(
@@ -289,8 +289,6 @@ ALWI void reduce(
     if (input_memory_layout.row_stride != 0) {
         ASSERT(input_memory_layout.row_stride >= input_block_shape.cols);
     }
-
-    constexpr DataFormat reduce_format = static_cast<DataFormat>(unpack_src_format[input_dfb_id]);
 
     // Compile-time flag: true when Accumulate type is passed, false otherwise
     constexpr bool enable_accumulation = is_accumulate_v<AccumulateT>;

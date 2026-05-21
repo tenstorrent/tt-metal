@@ -88,7 +88,7 @@ void kernel_main() {
                     negative_tile(acc_dst);
                 }
 #ifdef REDUCE_POST_MUL
-                compute_kernel_lib::detail::reduce_post_mul_tile<cb_input>(acc_dst, post_mul_scaler_bits);
+                compute_kernel_lib::detail::reduce_post_mul_tile<reduce_format>(acc_dst, post_mul_scaler_bits);
 #endif
 
                 tile_regs_commit();

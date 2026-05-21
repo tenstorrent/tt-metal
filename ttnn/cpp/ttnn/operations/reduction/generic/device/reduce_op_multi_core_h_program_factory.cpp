@@ -268,9 +268,8 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
         reduce_defines["REDUCE_POST_MUL"] = "1";
     }
 
-    // SFPU vs FPU dispatch is inside compute_kernel_lib::reduce<> (format from input CB).
-    // Tell the dataflow readers when to reserve one extra DST for the SFPU binary-fold work tile.
     if (use_sfpu_reduce_path) {
+        reduce_defines["REDUCE_FORMAT"] = a.dtype() == DataType::INT32 ? "DataFormat::Int32" : "DataFormat::Float32";
         reduce_defines["REDUCE_SFPU_PATH"] = "1";
     }
 
@@ -349,7 +348,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
         post_mul_scaler_bits,  // packed fp32 user scalar (only used if REDUCE_POST_MUL is set)
     };
 
-    // reduce.cpp and reduce_h_neg.cpp deduce format from the input CB; MIN uses -MAX(-x) in reduce_h_neg.
+    // reduce.cpp is REDUCE_FORMAT-aware; MIN uses -MAX(-x) in reduce_h_neg.
     const std::string compute_kernel =
         std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/") +
         (operation_attributes.negate ? "reduce_h_neg" : "reduce") + ".cpp";

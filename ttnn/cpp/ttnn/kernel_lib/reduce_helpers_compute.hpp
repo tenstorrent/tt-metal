@@ -286,8 +286,10 @@ struct NoOp {
  *
  * @tparam reduce_type The type of reduce operation (SUM, AVG, MAX) - required explicit parameter
  * @tparam reduce_dim The dimension to reduce (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR) - required explicit parameter
- * Input data format is deduced from input_cb_id via unpack_src_format[input_cb_id]. Int32/Float32 MAX
- * uses SFPU on REDUCE_ROW/COL; MIN uses reduce_{h,w}_neg.
+ * @tparam reduce_format Routes Int32/Float32 MAX to the SFPU path (Float32 for precision; Int32 has
+ *                       no FPU support). Pass via REDUCE_FORMAT define from host (same as REDUCE_OP
+ *                       / REDUCE_DIM). Other formats use FPU/GMPOOL. Only REDUCE_ROW/REDUCE_COL MAX
+ *                       on SFPU; MIN dispatched via reduce_{h,w}_neg.cpp (SFPU vs FPU branch).
  * @tparam input_policy Input handling policy (default: WaitAndPopPerTile - streaming mode)
  * @tparam reconfig_mode Data format reconfiguration mode (default: INPUT_AND_OUTPUT)
  *
@@ -332,9 +334,8 @@ struct NoOp {
  * @example
  *   // WaitUpfrontNoPop policy: tiles persist for reuse (ideal for softmax pattern)
  *   // Library waits for tiles internally, but does NOT pop - tiles remain for subsequent ops
- *   compute_kernel_lib::reduce<MAX, REDUCE_ROW,
- * compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>( dfb_values, dfb_scaler, dfb_max,
- * compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt));
+ *   compute_kernel_lib::reduce<MAX, REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
+ *       dfb_values, dfb_scaler, dfb_max, compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt));
  *   // dfb_values tiles still available for sub_exp_block_bcast_cols_inplace()
  *
  * @example
@@ -372,6 +373,7 @@ template <
     ReduceDim reduce_dim,
     ReduceInputPolicy input_policy = ReduceInputPolicy::WaitAndPopPerTile,
     ReduceDataFormatReconfigMode reconfig_mode = ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+    DataFormat reduce_format = DataFormat::Invalid,
     typename AccumulateT = NoAccumulation,
     typename PostReduceOp = NoOp>
 ALWI void reduce(
