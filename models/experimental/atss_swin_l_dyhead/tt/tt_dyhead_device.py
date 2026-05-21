@@ -332,33 +332,57 @@ class TtGroupNorm:
         return ttnn.reshape(out, (N, H, W, C))
 
     def _custom_fp32_gn(self, x_nhwc):
-        """fp32 5D-reshape path, used for small spatial sizes where welford precision is poor."""
+        """fp32 GN for small spatial sizes (P6, P7) where welford precision is poor.
+
+        Adapted from gtobarTT's 499fcb3: keep the big tensor 4D throughout (avoid the
+        5D reshape that forces real data movement when C/G=16 isn't tile-aligned);
+        reduce group statistics on the tiny (N,1,1,C) per-channel stats; fold the
+        affine transform into one addcmul on the big tensor.
+        """
         N, H, W, C = x_nhwc.shape
         G = self.num_groups
         C_per_G = self.C_per_G
         big_bytes = N * H * W * C * 4
         big_mem = ttnn.L1_MEMORY_CONFIG if big_bytes <= 4 * 1024 * 1024 else ttnn.DRAM_MEMORY_CONFIG
         small_mem = ttnn.L1_MEMORY_CONFIG
+
         x_fp32 = ttnn.typecast(x_nhwc, ttnn.float32, memory_config=big_mem)
         if x_fp32.layout != ttnn.TILE_LAYOUT:
             x_fp32 = ttnn.to_layout(x_fp32, ttnn.TILE_LAYOUT, memory_config=big_mem)
-        x_5d = ttnn.reshape(x_fp32, (N, H, W, G, C_per_G))
-        mean = ttnn.mean(x_5d, dim=(1, 2, 4), keepdim=True, memory_config=small_mem)
-        centered = ttnn.subtract(x_5d, mean, memory_config=big_mem)
-        var = ttnn.mean(
-            ttnn.multiply(centered, centered, memory_config=big_mem),
-            dim=(1, 2, 4),
-            keepdim=True,
-            memory_config=small_mem,
+
+        # Per-channel stats on the 4D tensor (cheap reduction over H, W).
+        mean_c = ttnn.mean(x_fp32, dim=(1, 2), keepdim=True, memory_config=small_mem)  # (N,1,1,C)
+        x_sq = ttnn.multiply(x_fp32, x_fp32, memory_config=big_mem)
+        mean_x_sq_c = ttnn.mean(x_sq, dim=(1, 2), keepdim=True, memory_config=small_mem)
+        ttnn.deallocate(x_sq)
+
+        # Per-group stats on the tiny per-channel tensors. E[E[x|HW]|G] = E[x|G].
+        mean_c_5g = ttnn.reshape(mean_c, (N, 1, G, C_per_G))
+        mean_x_sq_c_5g = ttnn.reshape(mean_x_sq_c, (N, 1, G, C_per_G))
+        mean_g = ttnn.mean(mean_c_5g, dim=(3,), keepdim=True, memory_config=small_mem)
+        mean_x_sq_g = ttnn.mean(mean_x_sq_c_5g, dim=(3,), keepdim=True, memory_config=small_mem)
+        var_g = ttnn.subtract(
+            mean_x_sq_g, ttnn.multiply(mean_g, mean_g, memory_config=small_mem), memory_config=small_mem
         )
-        inv_std = ttnn.rsqrt(
-            ttnn.add(var, self.epsilon, memory_config=small_mem),
+        inv_std_g = ttnn.rsqrt(
+            ttnn.add(var_g, self.epsilon, memory_config=small_mem),
             fast_and_approximate_mode=True,
             memory_config=small_mem,
         )
-        normalized = ttnn.multiply(centered, inv_std, memory_config=big_mem)
-        out_5d = ttnn.addcmul(self._beta_5d, normalized, self._gamma_5d, memory_config=big_mem)
-        out_4d = ttnn.reshape(out_5d, (N, H, W, C))
+
+        # Fold affine: y = alpha * x + delta where alpha = inv_std * gamma_per_channel
+        # and delta = beta - mean * alpha. Both computed in (1, 1, G, C/G) and reshaped
+        # back to (1, 1, 1, C) for the broadcast against the (N, H, W, C) tensor.
+        gamma_5g = ttnn.reshape(self._gamma_5d, (1, 1, G, C_per_G))
+        beta_5g = ttnn.reshape(self._beta_5d, (1, 1, G, C_per_G))
+        alpha_5g = ttnn.multiply(inv_std_g, gamma_5g, memory_config=small_mem)
+        delta_5g = ttnn.subtract(
+            beta_5g, ttnn.multiply(mean_g, alpha_5g, memory_config=small_mem), memory_config=small_mem
+        )
+        alpha_4d = ttnn.reshape(alpha_5g, (1, 1, 1, C))
+        delta_4d = ttnn.reshape(delta_5g, (1, 1, 1, C))
+
+        out_4d = ttnn.addcmul(delta_4d, x_fp32, alpha_4d, memory_config=big_mem)
         return ttnn.typecast(out_4d, ttnn.bfloat16, memory_config=big_mem)
 
 
