@@ -17,7 +17,12 @@ from typing import Any
 
 import ttnn
 from models.experimental.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
-from models.experimental.glm4_moe_lite.tt.linear_helpers import _DS_BATCH, dram_sharded_mlp, mlp_down_linear, mlp_linear
+from models.experimental.glm4_moe_lite.tt.linear_helpers import (
+    _DS_BATCH,
+    dram_sharded_mlp,
+    mlp_down_linear,
+    mlp_gate_up_linear,
+)
 from models.experimental.glm4_moe_lite.tt.runtime_config import Glm4RuntimeConfig, mesh_shape
 
 _SIGNPOST_ENABLED = os.environ.get("GLM4_MOE_LITE_SIGNPOST", "").strip() == "1"
@@ -72,15 +77,15 @@ def _run_standard_swiglu(
 ) -> ttnn.Tensor:
     """Standard (non-DRAM-sharded) SwiGLU: gate * silu -> up -> down."""
     if fuse_gate_up and getattr(w, "w_mlp_gate_up", None) is not None:
-        gate_up = mlp_linear(x, w.w_mlp_gate_up, device=device, cfg=cfg)
+        gate_up = mlp_gate_up_linear(x, w.w_mlp_gate_up, device=device, cfg=cfg)
         _batch = int(gate_up.shape[2])
         _inter_tp = int(gate_up.shape[3]) // 2
         gate = ttnn.slice(gate_up, [0, 0, 0, 0], [1, 1, _batch, _inter_tp])
         up = ttnn.slice(gate_up, [0, 0, 0, _inter_tp], [1, 1, _batch, _inter_tp * 2])
         ttnn.deallocate(gate_up, force=False)
     else:
-        gate = mlp_linear(x, w.w_mlp_gate, device=device, cfg=cfg)
-        up = mlp_linear(x, w.w_mlp_up, device=device, cfg=cfg)
+        gate = mlp_gate_up_linear(x, w.w_mlp_gate, device=device, cfg=cfg)
+        up = mlp_gate_up_linear(x, w.w_mlp_up, device=device, cfg=cfg)
 
     x_ff = ttnn.mul(gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
     ttnn.deallocate(gate, force=False)
