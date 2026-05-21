@@ -535,7 +535,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
         x = ttnn.reshape(x, (batch, seq, num_heads, head_dim))
         return ttnn.permute(x, (0, 2, 3, 1), memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    def _qkv_heads(
+    def _qkv_heads_slice(
         self,
         hidden_states: ttnn.Tensor,
         attn_module: Any,
@@ -546,15 +546,8 @@ class TTSeamlessM4Tv2SpeechEncoder:
         head_dim: int,
         hsz: int,
         k_transposed: bool = False,
-    ) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
-        """Fused QKV linear, slice Q|K|V, then ``_heads`` → ``[B, H, S, D]``.
-
-        ``nlp_create_qkv_heads`` matches unit tests but drops PCC badly on this stack
-        (≈0.09 E2E with fused bf16 QKV); slice + reshape + permute is required for parity.
-
-        Stage 17: ``k_transposed=True`` (relative-attention layers) uses ``_k_heads_transposed``
-        so K is ``[B, H, D, S]`` in one permute instead of ``_heads`` + ``permute(k,(0,1,3,2))``.
-        """
+    ) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, None]:
+        """Slice Q|K|V then reshape/permute (adapter SDPA and fallback)."""
         pc_qkv = self._matmul_program_config(batch * seq_len, hsz, 3 * hsz)
         qkv = self._linear(hidden_states, attn_module.qkv.weight, attn_module.qkv.bias, program_config=pc_qkv)
         q = ttnn.slice(qkv, [0, 0, 0], [batch, seq_len, hsz], [1, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -567,7 +560,75 @@ class TTSeamlessM4Tv2SpeechEncoder:
         ttnn.deallocate(q)
         ttnn.deallocate(k)
         ttnn.deallocate(v)
-        return qh, kh, vh
+        return qh, kh, vh, None
+
+    def _qkv_heads_fused(
+        self,
+        hidden_states: ttnn.Tensor,
+        attn_module: Any,
+        *,
+        batch: int,
+        seq_len: int,
+        num_heads: int,
+        head_dim: int,
+        hsz: int,
+        k_transposed: bool = False,
+    ) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+        """``split_query_key_value_and_split_heads`` on fused ``[B, S, 3*H]`` QKV matmul output."""
+        _ = head_dim
+        pc_qkv = self._matmul_program_config(batch * seq_len, hsz, 3 * hsz)
+        qkv = self._linear(hidden_states, attn_module.qkv.weight, attn_module.qkv.bias, program_config=pc_qkv)
+        q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
+            qkv,
+            num_heads=num_heads,
+            num_kv_heads=num_heads,
+            transpose_key=k_transposed,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        return q, k, v, qkv
+
+    def _qkv_heads(
+        self,
+        hidden_states: ttnn.Tensor,
+        attn_module: Any,
+        *,
+        batch: int,
+        seq_len: int,
+        num_heads: int,
+        head_dim: int,
+        hsz: int,
+        k_transposed: bool = False,
+    ) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, Optional[ttnn.Tensor]]:
+        """QKV linear + head layout.
+
+        Conformer relative attention (``k_transposed=True``) uses the fused TTNN op
+        ``split_query_key_value_and_split_heads`` (kernel over ``nlp_create_qkv_heads``).
+        Adapter SDPA (``k_transposed=False``) keeps slice+permute for PCC parity.
+
+        When the fused path is used, returns ``qkv_src``; ``_mh_attention`` frees it
+        after Q/K/V are consumed.
+        """
+        if not k_transposed:
+            return self._qkv_heads_slice(
+                hidden_states,
+                attn_module,
+                batch=batch,
+                seq_len=seq_len,
+                num_heads=num_heads,
+                head_dim=head_dim,
+                hsz=hsz,
+                k_transposed=k_transposed,
+            )
+        return self._qkv_heads_fused(
+            hidden_states,
+            attn_module,
+            batch=batch,
+            seq_len=seq_len,
+            num_heads=num_heads,
+            head_dim=head_dim,
+            hsz=hsz,
+            k_transposed=k_transposed,
+        )
 
     def _relative_position_index_flat_torch(self, seq_len: int, *, left_max: int, right_max: int) -> torch.Tensor:
         """CPU flat uint32 distance indices ``[S*S]`` for host ``torch.embedding``."""
@@ -650,7 +711,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
         pc_out = self._matmul_program_config(token_m, hsz, hsz)
         # Stage 17: for relative attention, K is extracted directly as [B, H, D, S]
         # (k_transposed=True), eliminating the downstream kh_t = permute(k,(0,1,3,2)).
-        q, k, v = self._qkv_heads(
+        q, k, v, qkv_src = self._qkv_heads(
             hidden_states,
             attn_module,
             batch=batch,
@@ -735,6 +796,8 @@ class TTSeamlessM4Tv2SpeechEncoder:
         ttnn.deallocate(merged_4d)
         out = self._linear(merged, attn_module.linear_out.weight, attn_module.linear_out.bias, program_config=pc_out)
         ttnn.deallocate(merged)
+        if qkv_src is not None:
+            ttnn.deallocate(qkv_src)
         return out
 
     def _glu_last_dim(self, x: ttnn.Tensor, *, batch: int, seq_len: int, width: int) -> ttnn.Tensor:
