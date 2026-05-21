@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.experimental.devstarl2_small.devstral_utils.pixtral_seq_chunk import vision_rope_memcfg
 from models.tt_transformers.tt.common import precompute_mistral_vision_freqs
 
 
@@ -37,12 +38,14 @@ class TtPixtralRotaryEmbedding(LightweightModule):
         )
 
         mapper = ttnn.ReplicateTensorToMesh(mesh_device) if self.is_mesh_device else None
+        max_table_rows = int(max_patches_per_side) * int(max_patches_per_side)
+        rope_mem_config = vision_rope_memcfg(max_table_rows, int(head_dim))
         self.cos_matrix = ttnn.from_torch(
             cos_torch,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=datatype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=rope_mem_config,
             mesh_mapper=mapper,
         )
         self.sin_matrix = ttnn.from_torch(
@@ -50,7 +53,7 @@ class TtPixtralRotaryEmbedding(LightweightModule):
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=datatype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=rope_mem_config,
             mesh_mapper=mapper,
         )
 
@@ -61,8 +64,15 @@ class TtPixtralRotaryEmbedding(LightweightModule):
 
     def forward(self, x: ttnn.Tensor, position_ids):
         position_ids = self._to_position_indices(position_ids)
-        cos = ttnn.embedding(position_ids, self.cos_matrix, layout=ttnn.TILE_LAYOUT)
-        sin = ttnn.embedding(position_ids, self.sin_matrix, layout=ttnn.TILE_LAYOUT)
+        seq_len = int(x.shape[-2])
+        head_dim = int(
+            getattr(self.config, "head_dim", None) or (self.config.hidden_size // self.config.num_attention_heads)
+        )
+        rope_mem_cfg = vision_rope_memcfg(seq_len, head_dim)
+        if position_ids.memory_config().buffer_type != rope_mem_cfg.buffer_type:
+            position_ids = ttnn.to_memory_config(position_ids, rope_mem_cfg)
+        cos = ttnn.embedding(position_ids, self.cos_matrix, layout=ttnn.TILE_LAYOUT, memory_config=rope_mem_cfg)
+        sin = ttnn.embedding(position_ids, self.sin_matrix, layout=ttnn.TILE_LAYOUT, memory_config=rope_mem_cfg)
 
         if x.dtype != cos.dtype:
             cos = ttnn.typecast(cos, dtype=x.dtype)

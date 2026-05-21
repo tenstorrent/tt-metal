@@ -12,6 +12,8 @@ from models.experimental.devstarl2_small.devstral_utils.pixtral_seq_chunk import
     pad_seq_to_chunk_multiple,
     pixtral_vision_seq_chunk_len,
     trim_seq_dim2,
+    vision_collective_memcfg,
+    vision_rope_memcfg,
 )
 
 
@@ -54,12 +56,24 @@ def _pixtral_sdpa_program_config(
 
 
 def apply_rotary_pos_emb_vision_tt(q, k, cos, sin):
-    seq_len = q.shape[2]
+    seq_len = int(q.shape[2])
+    head_dim = int(q.shape[-1])
+    rope_mem_cfg = vision_rope_memcfg(seq_len, head_dim)
     cos = ttnn.unsqueeze(cos, 0)
     sin = ttnn.unsqueeze(sin, 0)
 
-    q_embed = ttnn.experimental.rotary_embedding(q, cos, sin)
-    k_embed = ttnn.experimental.rotary_embedding(k, cos, sin)
+    def _rope_mem(t: ttnn.Tensor) -> ttnn.Tensor:
+        if t.memory_config().buffer_type != rope_mem_cfg.buffer_type:
+            return ttnn.to_memory_config(t, rope_mem_cfg)
+        return t
+
+    q = _rope_mem(q)
+    k = _rope_mem(k)
+    cos = _rope_mem(cos)
+    sin = _rope_mem(sin)
+
+    q_embed = ttnn.experimental.rotary_embedding(q, cos, sin, memory_config=rope_mem_cfg)
+    k_embed = ttnn.experimental.rotary_embedding(k, cos, sin, memory_config=rope_mem_cfg)
 
     if q_embed.shape[2] != seq_len:
         q_embed = q_embed[:, :, :seq_len, :]
@@ -273,6 +287,10 @@ class TtMistralImageAttention(LightweightModule):
         ttnn.deallocate(attn_output_11SH)
 
         if self.num_devices > 1:
+            shard_w = int(output_11SH.shape[-1])
+            ag_mem_cfg = vision_collective_memcfg(seq_len, shard_w)
+            if output_11SH.memory_config().buffer_type != ag_mem_cfg.buffer_type:
+                output_11SH = ttnn.to_memory_config(output_11SH, ag_mem_cfg)
             cluster_axis = 1
             dense_out_gathered = ttnn.experimental.all_gather_async(
                 output_11SH,
@@ -282,7 +300,7 @@ class TtMistralImageAttention(LightweightModule):
                 num_links=self.tt_ccl.get_num_links(cluster_axis),
                 cluster_axis=cluster_axis,
                 topology=ttnn.Topology.Linear,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=ag_mem_cfg,
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
                 chunks_per_sync=40,
                 num_workers_per_link=4,
@@ -294,7 +312,7 @@ class TtMistralImageAttention(LightweightModule):
                 dims=[1],
                 output=None,
                 compute_kernel_config=None,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=ag_mem_cfg,
             )
             dense_out_reduced = dense_out_reduced[:, :, : dense_out_gathered.shape[-2], :]
             ttnn.deallocate(dense_out_gathered)

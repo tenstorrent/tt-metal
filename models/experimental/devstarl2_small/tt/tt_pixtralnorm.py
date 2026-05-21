@@ -9,6 +9,7 @@ import ttnn
 
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import pad_by_zero
+from models.experimental.devstarl2_small.devstral_utils.pixtral_seq_chunk import vision_rms_norm_memcfg
 
 
 def _resolve_weight_state_dict_key(weight_key: str | None, state_dict_prefix: str | None) -> str:
@@ -58,7 +59,18 @@ class TtPixtralRMSNorm(LightweightModule):
         )[0]
 
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
-        return ttnn.rms_norm(hidden_states, epsilon=self.variance_epsilon, weight=self.weight)
+        norm_mem_cfg = vision_rms_norm_memcfg(
+            int(hidden_states.shape[-2]),
+            int(hidden_states.shape[-1]),
+        )
+        if hidden_states.memory_config().buffer_type != norm_mem_cfg.buffer_type:
+            hidden_states = ttnn.to_memory_config(hidden_states, norm_mem_cfg)
+        return ttnn.rms_norm(
+            hidden_states,
+            epsilon=self.variance_epsilon,
+            weight=self.weight,
+            memory_config=norm_mem_cfg,
+        )
 
 
 __all__ = ["TtPixtralRMSNorm"]

@@ -54,6 +54,7 @@ class TtPixtralAttentionLayer(LightweightModule):
             weight_cache_path=weight_cache_path,
             dtype=dtype,
             state_dict_prefix=f"{state_dict_prefix}feed_forward.",
+            tt_ccl=tt_ccl,
         )
 
     def forward(self, hidden_states: ttnn.Tensor, attention_mask=None, position_embeddings=None) -> ttnn.Tensor:

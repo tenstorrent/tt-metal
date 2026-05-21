@@ -7,6 +7,10 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.experimental.devstarl2_small.devstral_utils.pixtral_seq_chunk import (
+    vision_activation_memcfg,
+    vision_rms_norm_memcfg,
+)
 from models.experimental.devstarl2_small.tt.tt_patchmerger import TTMistral3PatchMerger
 from models.experimental.devstarl2_small.tt.tt_rmsnorm import RMSNorm
 
@@ -79,14 +83,21 @@ class TTMistral3MultiModalProjector(LightweightModule):
         )
 
     def forward(self, image_features: ttnn.Tensor, image_sizes) -> ttnn.Tensor:
-        x = ttnn.reshape(image_features, (1, 1, image_features.shape[0], image_features.shape[1]))
-        x = self.norm(x, mode="prefill")
+        seq_tokens = int(image_features.shape[0])
+        norm_mem_cfg = vision_rms_norm_memcfg(seq_tokens, int(image_features.shape[1]))
+        x = ttnn.reshape(image_features, (1, 1, seq_tokens, image_features.shape[1]))
+        if x.memory_config().buffer_type != norm_mem_cfg.buffer_type:
+            x = ttnn.to_memory_config(x, norm_mem_cfg)
+        x = self.norm(x, mode="prefill", memory_config=norm_mem_cfg)
         x = ttnn.reshape(x, image_features.shape)
         x = self.patch_merger(x, image_sizes)
         x = ttnn.linear(x, self.linear_1_weight, dtype=self.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        x = ttnn.gelu(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        x = ttnn.typecast(x, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         m_rows = int(x.shape[0])
+        act_mem_cfg = vision_activation_memcfg(m_rows)
+        if act_mem_cfg.buffer_type == ttnn.BufferType.L1 and x.memory_config().buffer_type != ttnn.BufferType.L1:
+            x = ttnn.to_memory_config(x, act_mem_cfg)
+        x = ttnn.gelu(x, memory_config=act_mem_cfg)
+        x = ttnn.typecast(x, ttnn.bfloat8_b, memory_config=act_mem_cfg)
         m_tiles = (m_rows + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
         use_small_config = m_tiles <= self._linear_2_small_m_per_core_tiles
         linear_kwargs = dict(

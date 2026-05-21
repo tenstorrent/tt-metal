@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.experimental.devstarl2_small.devstral_utils.pixtral_seq_chunk import vision_slice_memcfg
 from models.experimental.devstarl2_small.tt.tt_pixtral_patch_conv import TtPixtralPatchConv
 from models.experimental.devstarl2_small.tt.tt_pixtral_rotary_emb import TtPixtralRotaryEmbedding
 from models.experimental.devstarl2_small.tt.tt_pixtral_transformer import TtPixtralTransformer
@@ -81,13 +82,20 @@ class TtPixtralVisionModel(LightweightModule):
         bsz = patch_embeds.shape[0]
         h0, w0 = image_sizes[0]
         gh, gw = h0 // self.patch_size, w0 // self.patch_size
-        patch_embeds = ttnn.reshape(patch_embeds, [bsz, self.hidden_size, gh, gw])
+        slice_mem_cfg = vision_slice_memcfg(gh * gw)
+        patch_embeds = ttnn.reshape(patch_embeds, [bsz, self.hidden_size, gh, gw], memory_config=slice_mem_cfg)
+        if (
+            slice_mem_cfg.buffer_type == ttnn.BufferType.L1
+            and patch_embeds.memory_config().buffer_type != ttnn.BufferType.L1
+        ):
+            patch_embeds = ttnn.to_memory_config(patch_embeds, slice_mem_cfg)
 
         patch_embeds_list = [
             ttnn.slice(
                 patch_embeds,
                 [0, 0, 0, 0],
                 [bsz, self.hidden_size, sz[0] // self.patch_size, sz[1] // self.patch_size],
+                memory_config=slice_mem_cfg,
             )
             for sz in image_sizes
         ]
@@ -105,6 +113,7 @@ class TtPixtralVisionModel(LightweightModule):
             patch_embeds,
             (1, 1, patch_embeds.shape[-2], patch_embeds.shape[-1]),
         )
+        patch_embeds = ttnn.to_memory_config(patch_embeds, ttnn.DRAM_MEMORY_CONFIG)
         patch_embeds = self.ln_pre(patch_embeds)
 
         cos, sin = self.patch_positional_embedding(patch_embeds, position_ids_tt)
