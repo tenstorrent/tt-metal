@@ -230,14 +230,45 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         if x_dim == hidden_size // tp_size:
             # Single reduce_scatter on combined output using MoE's config for consistency
 
+            if combined_out.shape[2] == ttnn.TILE_SIZE:
+                combined_out = ttnn.experimental.deepseek_moe_post_combine_tilize(
+                    combined_out,
+                    **cfg["moe"]["quad_ring_deepseek_moe_post_combine_tilize_config"],
+                )
+            else:
+                output_shape = list(combined_out.shape)
+                output_shape[2] = ((output_shape[2] + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+                combined_out = ttnn.tilize_with_val_padding(
+                    combined_out,
+                    output_tensor_shape=output_shape,
+                    pad_value=0.0,
+                    memory_config=cfg["moe"]["quad_ring_deepseek_moe_post_combine_tilize_config"][
+                        "output_memory_config"
+                    ],
+                )
+
+            # conditionally set up for optimized or standard RS pathway
+            deepseek_moe_reduce_scatter = (
+                cfg["moe"]["fabric_config"] == ttnn.FabricConfig.FABRIC_1D_RING
+                and tp_size == 8
+                and num_tokens_per_row == ttnn.TILE_SIZE
+            )
+
+            if deepseek_moe_reduce_scatter:
+                reduce_mem_config = cfg["moe"]["ring_sum_experts_output_memory_config"]
+                reduce_split_size = combined_out.shape[-1] // tp_size
+            else:
+                reduce_mem_config = ttnn.L1_MEMORY_CONFIG
+                reduce_split_size = combined_out.shape[-1]
+
             summed_experts = ttnn.experimental.deepseek_moe_fast_reduce_nc_fused(
                 combined_out,
                 tt_moe_indices_rm,
                 cfg["moe"]["expert_mapping_tensor"],
                 reduce_dim=0,
                 cluster_axis=0,
-                split_size=combined_out.shape[-1] // tp_size,
-                output_memory_config=cfg["moe"]["ring_sum_experts_output_memory_config"],
+                split_size=reduce_split_size,
+                output_memory_config=reduce_mem_config,
                 scores_tensor=tt_moe_scores_rm,
                 num_shared_experts=1,
             )
@@ -245,18 +276,14 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
             ttnn.deallocate(tt_moe_scores_rm)
             ttnn.deallocate(tt_moe_indices_rm)
 
-            if (
-                cfg["moe"]["fabric_config"] == ttnn.FabricConfig.FABRIC_1D_RING
-                and tp_size == 8
-                and num_tokens_per_row == ttnn.TILE_SIZE
-            ):
+            if deepseek_moe_reduce_scatter:
                 output = ttnn.experimental.deepseek_moe_reduce_scatter(
                     summed_experts, **cfg["moe"]["ring_final_output_reduce_scatter"]
                 )
             else:
                 ccl_moe = cfg["moe"]["ccl"]
                 output = ttnn.experimental.reduce_scatter_minimal_async(
-                    summed_experts,
+                    summed_experts[0],
                     **ccl_moe.populate_reduce_scatter_runtime_args(cfg["moe"]["final_output_reduce_scatter"]),
                 )
 

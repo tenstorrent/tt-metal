@@ -532,13 +532,29 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
                 [cfg["num_experts_per_tok"], 1, batch_chunk, cfg["hidden_size"]],
             )
 
+            if post_combine_output_tensor.shape[2] == ttnn.TILE_SIZE:
+                post_combine_output_tensor = ttnn.experimental.deepseek_moe_post_combine_tilize(
+                    post_combine_output_tensor,
+                    **cfg["quad_ring_deepseek_moe_post_combine_tilize_config"],
+                )
+
+            else:
+                output_shape = list(post_combine_output_tensor.shape)
+                output_shape[2] = ((output_shape[2] + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+                post_combine_output_tensor = ttnn.tilize_with_val_padding(
+                    post_combine_output_tensor,
+                    output_tensor_shape=output_shape,
+                    pad_value=0.0,
+                    memory_config=cfg["quad_ring_deepseek_moe_post_combine_tilize_config"]["output_memory_config"],
+                )
+
             summed_experts = ttnn.experimental.deepseek_moe_fast_reduce_nc_fused(
                 post_combine_output_tensor,
                 topk_experts_indices_rm_chunk,
                 cfg["expert_mapping_tensor"],
                 reduce_dim=0,
                 cluster_axis=0,
-                split_size=1,
+                split_size=7168,
                 scores_tensor=topk_experts_weights_rm_chunk,
             )
 
@@ -615,27 +631,7 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
         ttnn.deallocate(compute_output)
 
         combine_output = ttnn.unsqueeze(combine_output, dim=1)
-
-        if combine_output.shape[2] == ttnn.TILE_SIZE:
-            combine_output = ttnn.experimental.deepseek_moe_post_combine_tilize(
-                combine_output,
-                **cfg["quad_ring_deepseek_moe_post_combine_tilize_config"],
-            )
-
-        else:
-            combine_output_shape = list(combine_output.shape)
-            combine_output_shape[2] = (
-                (combine_output_shape[2] + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
-            ) * ttnn.TILE_SIZE
-            combine_output = ttnn.tilize_with_val_padding(
-                combine_output,
-                output_tensor_shape=combine_output_shape,
-                pad_value=0.0,
-                memory_config=cfg["quad_ring_deepseek_moe_post_combine_tilize_config"]["output_memory_config"],
-            )
-
-        ttnn.deallocate(combine_output)
-        return post_combine_output_tensor
+        return combine_output
 
     @classmethod
     def _fwd_all_gather(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
