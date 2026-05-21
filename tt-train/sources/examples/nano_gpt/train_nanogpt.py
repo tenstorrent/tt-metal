@@ -206,6 +206,11 @@ class ModelConfig:
     # MoE TP: name of the mesh axis to shard expert intermediate dim on.
     # None / "" disables MoE TP (single-device SparseMoE).
     moe_tp_axis_name: Optional[str] = None
+    # How the MoE axis is used: "tp" (shard intermediate dim, SparseMoETP)
+    # or "ep" (partition expert list, SparseMoEEP). Source of truth lives
+    # in DeviceConfig.moe_parallel_type — this field receives the resolved
+    # value via the train_nanogpt main flow.
+    moe_parallel_type: str = "tp"
 
 
 class LossAverageMeter:
@@ -1014,6 +1019,7 @@ def create_model_from_config(model_config: ModelConfig, use_tp: bool = False) ->
             rope_theta=model_config.theta,
             runner_type=model_config.runner_type,
             moe_tp_axis_name=model_config.moe_tp_axis_name or None,
+            moe_parallel_type=model_config.moe_parallel_type,
             use_tp=use_tp,
         )
         return DeepSeek(deepseek_config)
@@ -1433,6 +1439,10 @@ def main():
             model_config.moe_tp_axis_name = "moe_tp"
         else:
             model_config.moe_tp_axis_name = logical
+
+    # Plumb moe_parallel_type from device_config to model_config so the
+    # transformer dispatcher can pick SparseMoEEP vs SparseMoETP.
+    model_config.moe_parallel_type = device_config.moe_parallel_type
 
     if device_config.enable_ddp or device_config.enable_tp or device_config.moe_tp_axis != -1:
         print(f"Mesh: shape={mesh.shape}, axis_names={mesh.axis_names}")

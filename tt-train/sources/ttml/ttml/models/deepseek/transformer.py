@@ -71,6 +71,7 @@ class DeepSeekBlock(AbstractModuleBase):
         from .moe import MoE
         from .moe_sparse import SparseMoE
         from .moe_sparse_tp import SparseMoETP
+        from .moe_sparse_ep import SparseMoEEP
 
         super().__init__()
         self.attn = MultiHeadLatentAttention(config, rope_params)
@@ -83,17 +84,33 @@ class DeepSeekBlock(AbstractModuleBase):
                 self.ffn = MoE(config)
             elif moe_type == "sparse":
                 mesh = _ttml.maybe_mesh()
+                # Resolve the MoE axis: full-model TP → "tp", else moe_tp_axis_name
+                # if it points at a real axis with size > 1, else no MoE axis.
                 if use_tp:
-                    self.ffn = SparseMoETP(config)
+                    moe_axis_name = "tp"
                 else:
                     tp_name = getattr(config, "moe_tp_axis_name", None)
-                    use_moe_tp = (
-                        tp_name is not None
-                        and mesh is not None
-                        and mesh.has_axis(tp_name)
-                        and mesh.axis_size(tp_name) > 1
+                    moe_axis_name = (
+                        tp_name
+                        if (
+                            tp_name is not None
+                            and mesh is not None
+                            and mesh.has_axis(tp_name)
+                            and mesh.axis_size(tp_name) > 1
+                        )
+                        else None
                     )
-                    self.ffn = SparseMoETP(config) if use_moe_tp else SparseMoE(config)
+
+                parallel_type = str(getattr(config, "moe_parallel_type", "tp")).lower()
+                if moe_axis_name is None:
+                    # No MoE axis (single-chip or pure replication) — fall back
+                    # to SparseMoE regardless of moe_parallel_type. "ep" with no
+                    # axis is a no-op.
+                    self.ffn = SparseMoE(config)
+                elif parallel_type == "ep":
+                    self.ffn = SparseMoEEP(config, axis_name=moe_axis_name)
+                else:  # "tp"
+                    self.ffn = SparseMoETP(config)
             else:
                 raise ValueError(
                     f"DeepSeekBlock: unknown moe_type={moe_type!r}; expected 'sparse' or 'dense' "

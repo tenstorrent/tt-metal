@@ -72,6 +72,15 @@ class DeepSeekConfig:
     # directly; ``moe_tp_axis_name`` is only for MoE-only TP experiments
     # when this flag is False.
     use_tp: bool = False
+    # How to use the MoE axis (the axis that ``SparseMoETP`` would otherwise
+    # use — ``"tp"`` when ``use_tp=True``, else ``moe_tp_axis_name``):
+    #   "tp" — SparseMoETP: every chip holds all E experts, sharded intermediate
+    #          dim; all_reduce after the FFN combines partials.
+    #   "ep" — SparseMoEEP: each chip holds E / D experts (full weights),
+    #          partial dense output, all_reduce after moe_ungroup. Use only
+    #          when the MoE axis is independent from DP (DP+EP on the same
+    #          axis would require an extra routing CCL not implemented yet).
+    moe_parallel_type: Literal["tp", "ep"] = "tp"
 
     def __post_init__(self) -> None:
         if not self.use_tp:

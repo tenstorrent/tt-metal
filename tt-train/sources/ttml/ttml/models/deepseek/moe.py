@@ -114,7 +114,13 @@ class MoE(AbstractModuleBase):
 
     memory_marker_prefix = "DENSE_MOE"
 
-    def __init__(self, config, *, expert_tp_axis_name: str | None = None) -> None:
+    def __init__(
+        self,
+        config,
+        *,
+        expert_tp_axis_name: str | None = None,
+        expert_ep_axis_name: str | None = None,
+    ) -> None:
         super().__init__()
 
         # We need to cast topk output to bf16 for some ops that come next
@@ -152,7 +158,51 @@ class MoE(AbstractModuleBase):
         # parameters (``SparseMoETP``) created directly with a mesh mapper — no
         # dense-on-device weights and no host readback from a duplicate LinearLayer.
         H, I = config.dim, config.moe_inter_dim
-        if expert_tp_axis_name is not None:
+        if expert_tp_axis_name is not None and expert_ep_axis_name is not None:
+            raise ValueError(
+                "MoE: expert_tp_axis_name and expert_ep_axis_name are mutually exclusive — "
+                "pick TP-sharded experts (intermediate dim split) OR EP-sharded experts "
+                "(expert list split), not both."
+            )
+
+        if expert_ep_axis_name is not None:
+            mesh = ttml.maybe_mesh()
+            if mesh is None or not mesh.has_axis(expert_ep_axis_name):
+                raise ValueError(
+                    f"MoE: expert_ep_axis_name={expert_ep_axis_name!r} requires an open mesh with that axis"
+                )
+            D = mesh.axis_size(expert_ep_axis_name)
+            E = config.n_routed_experts
+            if E % D != 0:
+                raise ValueError(
+                    f"MoE: n_routed_experts ({E}) must be divisible by axis "
+                    f"{expert_ep_axis_name!r} size ({D}) for EP-sharded experts"
+                )
+            self.e_local = E // D
+            self._ep_axis_name = expert_ep_axis_name
+            # Mapper shards dim 0 of the init tensor across the EP mesh axis.
+            # Init shape (D, 1, I, H) → each EP shard gets (1, 1, I, H), i.e.
+            # the i-th Parameter on shard r holds global expert r*E_local + i.
+            mapper = ttml.mesh().axis_mapper(expert_ep_axis_name, tdim=0)
+            k_in = math.sqrt(1.0 / H)
+            init_gate = ttml.init.uniform(-k_in, k_in)
+            k_mid = math.sqrt(1.0 / I)
+            init_down = ttml.init.uniform(-k_mid, k_mid)
+            self.w_gate = []
+            self.w_up = []
+            self.w_down = []
+            for i in range(self.e_local):
+                gate = Parameter(init_gate((D, 1, I, H), mapper))
+                up = Parameter(init_gate((D, 1, I, H), mapper))
+                down = Parameter(init_down((D, 1, H, I), mapper))
+                setattr(self, f"w_gate_{i}", gate)
+                setattr(self, f"w_up_{i}", up)
+                setattr(self, f"w_down_{i}", down)
+                self.w_gate.append(gate)
+                self.w_up.append(up)
+                self.w_down.append(down)
+            self.experts = ModuleList([])
+        elif expert_tp_axis_name is not None:
             mesh = ttml.maybe_mesh()
             if mesh is None or not mesh.has_axis(expert_tp_axis_name):
                 raise ValueError(
