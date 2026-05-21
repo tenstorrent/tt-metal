@@ -5247,6 +5247,19 @@ ProgramDescriptor MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
     // The 1D mcast matmul only supports rectangular sub-device worker grids, because the in0/in1
     // multicast targets a single bounding-box rectangle and the per-core index math assumes a
     // contiguous row-major rectangle of width `grid_size.x`.
+    if (!program_config.allowed_worker_cores.has_value()) {
+        log_warning(
+            tt::LogOp,
+            "MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor: program_config.allowed_worker_cores not "
+            "populated; auto-populating from compute_with_storage_grid_size. Callers that bypass "
+            "ttnn::prim::matmul() should invoke ttnn::operations::matmul::normalize_program_config() on the "
+            "program config first. This will become a hard error in a future release.");
+        program_config.allowed_worker_cores = CoreRangeSet(CoreRange(
+            CoreCoord(0, 0),
+            CoreCoord(
+                program_config.compute_with_storage_grid_size.x - 1,
+                program_config.compute_with_storage_grid_size.y - 1)));
+    }
     auto grid_size = program_config.allowed_worker_cores.value().bounding_box().grid_size();
 
     CoreCoord sub_device_start_core = {0, 0};
@@ -5379,10 +5392,15 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     uint32_t start_cb_index,
     std::optional<CoreRangeSet> restricted_cores) {
-    operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig config =
-        std::get<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config);
+    auto config = std::get<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config);
 
     if (!config.allowed_worker_cores.has_value()) {
+        log_warning(
+            tt::LogOp,
+            "matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; "
+            "auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. "
+            "CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program "
+            "config first. This will become a hard error in a future release.");
         config.allowed_worker_cores = CoreRangeSet(CoreRange(
             CoreCoord(0, 0),
             CoreCoord(config.compute_with_storage_grid_size.x - 1, config.compute_with_storage_grid_size.y - 1)));
@@ -5436,6 +5454,13 @@ MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory::create_mesh_workload(
             auto pc = std::get<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
                 attributes.program_config.value());
             if (!pc.allowed_worker_cores.has_value()) {
+                log_warning(
+                    tt::LogOp,
+                    "MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory::create_mesh_workload: "
+                    "program_config.allowed_worker_cores not populated; auto-populating from "
+                    "compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() should invoke "
+                    "ttnn::operations::matmul::normalize_program_config() on the program config first. This will "
+                    "become a hard error in a future release.");
                 pc.allowed_worker_cores = CoreRangeSet(CoreRange(
                     CoreCoord(0, 0),
                     CoreCoord(pc.compute_with_storage_grid_size.x - 1, pc.compute_with_storage_grid_size.y - 1)));

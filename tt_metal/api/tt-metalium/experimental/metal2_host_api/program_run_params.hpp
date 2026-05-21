@@ -93,13 +93,10 @@ struct ProgramRunParams {
         std::optional<uint32_t> entry_size = std::nullopt;
         std::optional<uint32_t> num_entries = std::nullopt;
 
-        // DFB borrowed memory
-        // For DFBs built on borrowed memory, the underlying memory is passed as an argument.
-        // using BorrowedMemory = std::variant<BufferView, MeshTensorView>; // non-owning view types, TBD
-        // std::optional<BorrowedMemory> borrowed_memory = std::nullopt;
+        // Note: borrowed-memory DFBs update their backing L1 SRAM address from
+        // the corresponding tensor_arg.
     };
-    // DFBRunParams must be specified for those DFBs built on borrowed memory.
-    // It is optional for regular DFBs.
+    // DFBRunParams is optional. Provide entries only when overriding DFB sizes.
     std::vector<DFBRunParams> dfb_run_params;
 };
 
@@ -144,9 +141,8 @@ struct ProgramRunParamsView {
         uint32_t* entry_size;   // points to the value that will be used to allocate DFB ephemeral memory
         uint32_t* num_entries;  // always set to non-null location
 
-        // DFB borrowed memory
-        // For DFBs built on borrowed memory, the underlying memory is passed as an argument.
-        // (TODO)
+        // Note: borrowed-memory DFBs update their backing L1 SRAM address from
+        // the corresponding tensor_arg.
     };
     std::unordered_map<DFBSpecName, DFBRunParamsView> dfb_run_params;
 };
