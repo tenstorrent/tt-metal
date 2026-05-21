@@ -435,11 +435,9 @@ protected:
                 mapped_asics.push_back(asic);
             }
         }
-        // ASSERT_* macros issue a void return, which is incompatible with non-void return types.
-        // Use EXPECT_* with an explicit early return on failure instead.
         EXPECT_FALSE(mapped_asics.empty()) << "No mapped ASICs for logical mesh " << logical_mesh.get();
         if (mapped_asics.empty()) {
-            return ::tt::tt_fabric::MeshId{0};
+            return ::tt::tt_fabric::MeshId{0};  // sentinel — test will already have failed
         }
         std::vector<::tt::tt_fabric::MeshId> candidates;
         for (const auto& [pm, graph] : physical.mesh_adjacency_graphs_) {
@@ -457,8 +455,8 @@ protected:
         }
         EXPECT_EQ(candidates.size(), 1u) << "Mapped ASICs for logical mesh " << logical_mesh.get()
                                          << " should lie in exactly one physical mesh subgraph";
-        if (candidates.empty()) {
-            return ::tt::tt_fabric::MeshId{0};
+        if (candidates.size() != 1u) {
+            return ::tt::tt_fabric::MeshId{0};  // sentinel — test will already have failed
         }
         return candidates.front();
     }
