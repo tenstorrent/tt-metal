@@ -41,7 +41,13 @@ class _TTMoEDecodeExpertState:
         pass
 
     @staticmethod
-    def _init_expert_mapping(torch_expert_mapping: "torch.Tensor", mesh_device: ttnn.MeshDevice):
+    def _init_expert_mapping(
+        torch_expert_mapping: "torch.Tensor",
+        shared_expert_ids_to_devices: dict[int, list[int]] | None,
+        mesh_device: ttnn.MeshDevice,
+        mesh_shape: tuple[int, int],
+        cluster_axis: int,
+    ):
         # [num_devices, num_experts] table where mapping[d, e] = linearized mesh coordinate
         # of the device that owns expert e (same value across all source rows d, since
         # ownership is global — different rows would matter only for shared experts where
@@ -56,6 +62,9 @@ class _TTMoEDecodeExpertState:
             )
         num_devices = mesh_device.get_num_devices()
         mapping_2d = torch_expert_mapping.to(torch.int32).unsqueeze(0).repeat(num_devices, 1)
+
+        if shared_expert_ids_to_devices is not None:
+            mapping_2d = map_shared_experts(mapping_2d, shared_expert_ids_to_devices, mesh_shape, cluster_axis)
 
         return ttnn.from_torch(
             mapping_2d,
@@ -144,16 +153,14 @@ class _TTMoEDecodeExpertState:
                 mesh_device.get_num_devices(),
             )
             total_torch_b0 = total_torch_b1 = total_torch_b2 = None
-            total_expert_mapping = map_shared_experts(
-                torch_expert_mapping, shared_expert_ids_to_devices, mesh_shape, cluster_axis
-            )
 
         else:
             total_torch_w0, total_torch_w1, total_torch_w2 = mapped_torch_w0, mapped_torch_w1, mapped_torch_w2
             total_torch_b0, total_torch_b1, total_torch_b2 = mapped_torch_b0, mapped_torch_b1, mapped_torch_b2
-            total_expert_mapping = torch_expert_mapping
 
-        self.tt_expert_mapping = self._init_expert_mapping(total_expert_mapping, mesh_device)
+        self.tt_expert_mapping = self._init_expert_mapping(
+            torch_expert_mapping, shared_expert_ids_to_devices, mesh_device, mesh_shape, cluster_axis
+        )
         logger.info("Uploaded expert mapping to mesh")
 
         self.tt_w0_w1, self.tt_w2 = self._init_total_expert_weights_impl(
@@ -445,30 +452,28 @@ class TTMoEDecode:
         return self._pre_split_chunk != self._padded_pre_split_chunk
 
     def _pad_for_fast_reduce(self, tt_x: ttnn.Tensor) -> ttnn.Tensor:
-        """Zero-pad the H dim so each fast_reduce output split is tile-aligned.
+        """Interleave-pad the H dim so each post-RS per-device chunk is tile-aligned.
 
-        fast_reduce_nc_fused requires `split_dim_size % (num_output_tensors * TILE_SIZE) == 0`.
-        Reshape `[..., N*chunk]` → `[..., N, chunk]`, pad the last dim to `padded_chunk`, then
-        reshape back to `[..., N*padded_chunk]`. Padding lives inside each pre-split chunk so
-        post-RS device data stays aligned with the original logical-chunk boundaries.
+        Downstream RS splits the H dim evenly into `num_replicated` chunks, so padding
+        must be inserted at each device-chunk boundary — not just appended at the end —
+        or device d>0 ends up with data shifted by `d * (padded - logical)` positions.
 
-        For the single-output path (`N=1`) this degenerates to appending zeros at the end —
-        which is what we want, since downstream `ttnn.reduce_scatter` splits the padded tensor
-        evenly into `num_replicated` device chunks.
+        Layout produced: `[chunk_0, pad_0, ..., chunk_{R-1}, pad_{R-1}]`, R=num_replicated.
+        Each `chunk_d` is `hidden / R` wide; each `pad_d` brings it up to TILE_SIZE alignment.
         """
         if not self._needs_fast_reduce_padding:
             return tt_x
-        N = self._num_fast_reduce_outputs
-        chunk = self._pre_split_chunk
-        padded_chunk = self._padded_pre_split_chunk
+        num_replicated = self.config.mesh_shape[1 - self.config.cluster_axis]
+        chunk = self._post_rs_logical_chunk
+        padded_chunk = self._padded_pre_split_chunk * self._num_fast_reduce_outputs // num_replicated
         shape = list(tt_x.shape)
-        reshaped = ttnn.reshape(tt_x, shape[:-1] + [N, chunk])
+        reshaped = ttnn.reshape(tt_x, shape[:-1] + [num_replicated, chunk])
         padded = ttnn.pad(
             reshaped,
             padding=[(0, 0)] * len(shape) + [(0, padded_chunk - chunk)],
             value=0.0,
         )
-        return ttnn.reshape(padded, shape[:-1] + [N * padded_chunk])
+        return ttnn.reshape(padded, shape[:-1] + [num_replicated * padded_chunk])
 
     def _unpad_after_reduce_scatter(self, tt_final: ttnn.Tensor) -> ttnn.Tensor:
         """Slice the trailing padding off each device's post-RS tensor.
@@ -590,6 +595,7 @@ class TTMoEDecode:
 
         # unsqueeze
         # [select_experts_k, tokens_per_device, hidden_size] -> [select_experts_k, 1, tokens_per_device, hidden_size]
+        # Note: this does not reallocate, aliases tt_combine_output so don't dealloc
         tt_unsqueezed_output = ttnn.unsqueeze(tt_combine_output, dim=1)
 
         # When hidden / num_replicated isn't tile-aligned, interleave-pad each per-device
@@ -629,6 +635,7 @@ class TTMoEDecode:
             **self.config.reduce.model_dump(),
             scores_tensor=tt_scores,
         )
+        ttnn.deallocate(tt_tilized_compute_output)
 
         if dealloc_indices:
             ttnn.deallocate(tt_dispatch_input_expert_indices_tensor)
@@ -644,12 +651,19 @@ class TTMoEDecode:
                 # cluster_axis=1,
                 **self.config.deepseek_moe_reduce_scatter.model_dump(),
             )
+            for t in tt_fast_reduce_output_tensors:
+                ttnn.deallocate(t)
+
+        # note: in this path the output is L1 sharded as if set up for deepseek_moe_reduce_scatter. Likely better to
+        # switch this to something more generic.
         elif self.config.mesh_shape[1 - self.config.cluster_axis] == self.SKIP_RS_DP_DIM:
             tt_final_output = tt_fast_reduce_output_tensors[0]
         else:
             tt_final_output = ttnn.reduce_scatter(
                 tt_fast_reduce_output_tensors[0], **self.config.reduce_scatter.model_dump()
             )
+            for t in tt_fast_reduce_output_tensors:
+                ttnn.deallocate(t)
 
         # Strip the per-chunk padding we inserted before tilize. No-op when no padding was applied.
         return self._unpad_after_reduce_scatter(tt_final_output)
