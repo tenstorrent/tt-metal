@@ -58,12 +58,13 @@ uint32_t float_to_u32(float v) {
     return out;
 }
 
-// Max number of worker cores per chip in TP>1 MUX mode. Sweep on BH 2x4 at
-// TP=4 LINE showed crossover at ~4 tile-rows: below that, MUX overhead beats
-// parallelism gains and 1 worker wins; at/above it, 8 workers win decisively.
-// At N=256 H_per_device=1280 (8 rows), 8 workers gives 1.21x vs composite
-// (single worker was 0.4x). See fused_distributed_rmsnorm_tp_milestone.md.
-constexpr uint32_t kMaxMuxWorkersPerChip = 8u;
+// Upper cap on TP>1 worker cores per chip. MUX channel count is uint8_t and
+// each channel costs L1 buffer space on the MUX core, so cap short of grid
+// size. Actual count is further clamped to (max_cores - mux) and num_tile_rows.
+// Upper cap on TP>1 worker cores per chip. The MUX channel count is uint8_t
+// but in practice the fabric MUX rejects (or deadlocks) above ~64 full-size
+// channels per core. Don't raise without verifying on hardware.
+constexpr uint32_t kMaxMuxWorkersPerChip = 64u;
 constexpr uint32_t kMuxRowsThreshold = 2u;  // < this many rows → use 1 worker
 
 uint32_t pick_num_workers_tp_gt_1(uint32_t num_tile_rows) {
