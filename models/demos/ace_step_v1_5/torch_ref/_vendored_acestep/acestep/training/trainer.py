@@ -26,7 +26,7 @@ try:
     LIGHTNING_AVAILABLE = True
 except ImportError:
     LIGHTNING_AVAILABLE = False
-    logger.warning("Lightning Fabric not installed. Training will use basic training loop.")
+    # logger.warning("Lightning Fabric not installed. Training will use basic training loop.")
 
 # OPTIMIZATION: Use 8-bit Adam to save some VRAM
 try:
@@ -35,7 +35,7 @@ try:
     HAS_BNB = True
 except ImportError:
     HAS_BNB = False
-    logger.warning("bitsandbytes not installed. Using standard AdamW.")
+    # logger.warning("bitsandbytes not installed. Using standard AdamW.")
 
 from acestep.training.configs import LoKRConfig, LoRAConfig, TrainingConfig
 from acestep.training.data_module import PreprocessedDataModule

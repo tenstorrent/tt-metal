@@ -218,7 +218,7 @@ class AceStepSampling1D(Sampling1D):
         """Fused top-k + top-p + temperature sampling on device.
 
         Args:
-            scores_tt: ``[B, V]`` device logits (TILE layout, bfloat16). Caller-owned.
+            scores_tt: ``[1, 1, B, V]`` device logits (TILE layout, bfloat16). Caller-owned.
             top_k: ``>= 1`` (clamped to ``max_top_k``). ``None``/``<=0`` → no top-k filter
                 (top_k = vocab_size).
             top_p: ``0 < p <= 1`` (``p=1`` ⇒ no nucleus filter).
@@ -315,17 +315,6 @@ def _pad_logits_batch(scores: torch.Tensor, max_batch: int) -> tuple[torch.Tenso
     return torch.cat([scores, filler], dim=0).contiguous(), batch
 
 
-def _logits_tt_to_sampling_4d(scores_tt: ttnn.Tensor) -> ttnn.Tensor:
-    """``Sampling1D`` top-k splits on dim=3; device logits must be ``[1, 1, B, V]``."""
-    rank = len(scores_tt.shape)
-    if rank == 4:
-        return scores_tt
-    if rank == 2:
-        b, v = int(scores_tt.shape[0]), int(scores_tt.shape[1])
-        return ttnn.reshape(scores_tt, (1, 1, b, v))
-    raise ValueError(f"expected rank-2 or rank-4 logits, got rank-{rank} shape={tuple(scores_tt.shape)}")
-
-
 def _device_key(device: Any) -> int:
     """Stable per-device identity for cache keys (mesh_device or single device)."""
     for attr in ("get_device_id", "id", "device_id"):
@@ -368,6 +357,47 @@ def _get_sampling(device: Any, vocab_size: int, max_batch_size: int = 32, max_to
 # ---------------------------------------------------------------------------
 # Public stateless helpers (drop-in replacements for the deleted *_bf16 helpers)
 # ---------------------------------------------------------------------------
+
+
+def _pad_batch_for_sampling(
+    scores_2d: torch.Tensor,
+    input_ids: torch.Tensor,
+    max_batch_size: int,
+) -> tuple[torch.Tensor, torch.Tensor, int]:
+    """Pad ``[B, V]`` logits (and matching ``input_ids``) to ``max_batch_size`` rows."""
+    batch = int(scores_2d.shape[0])
+    vocab = int(scores_2d.shape[1])
+    if batch > int(max_batch_size):
+        raise ValueError(f"batch={batch} exceeds Sampling1D max_batch_size={max_batch_size}")
+    if batch >= int(max_batch_size):
+        return scores_2d, input_ids, batch
+    scores_pad = torch.full(
+        (int(max_batch_size), vocab),
+        float("-inf"),
+        dtype=scores_2d.dtype,
+        device=scores_2d.device,
+    )
+    scores_pad[:batch] = scores_2d
+    seq = int(input_ids.shape[1])
+    ids_pad = torch.zeros((int(max_batch_size), seq), dtype=input_ids.dtype, device=input_ids.device)
+    ids_pad[:batch] = input_ids
+    return scores_pad, ids_pad, batch
+
+
+def _upload_logits_tile_4d(scores_2d: torch.Tensor, *, device: Any) -> ttnn.Tensor:
+    """Upload ``[B, V]`` host logits as ``[1, 1, B, V]`` TILE (``Sampling1D`` layout)."""
+    if scores_2d.dim() != 2:
+        raise ValueError(f"expected [B, V] scores, got {tuple(scores_2d.shape)}")
+    host_4d = scores_2d.detach().to(dtype=torch.bfloat16).unsqueeze(0).unsqueeze(0).contiguous()
+    replicate_mapper = ttnn.ShardTensor2dMesh(device, dims=(None, None), mesh_shape=device.shape)
+    return ttnn.from_torch(
+        host_4d,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=replicate_mapper,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
 
 
 def repetition_penalty_apply(
@@ -433,32 +463,24 @@ def apply_penalty_filter_sample(
         scores_in = padded
     else:
         scores_in = scores
-    scores_in, batch = _pad_logits_batch(scores_in, max_batch)
 
     penalties = _get_penalties(device, pad_to, max_batch_size=max_batch)
     sampler = _get_sampling(device, pad_to, max_batch_size=max_batch, max_top_k=max(32, int(top_k or 32)))
     penalties.load_device_buffers()
 
-    # Upload logits once (reuse Penalties1D mapper — works for 1×1 device and mesh).
-    replicate_mapper = penalties._replicate_mapper
-    scores_tt = ttnn.from_torch(
-        scores_in.detach().to(dtype=torch.bfloat16).contiguous(),
-        device=device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=replicate_mapper,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    scores_tt = _logits_tt_to_sampling_4d(scores_tt)
+    scores_in, input_ids_pad, batch = _pad_batch_for_sampling(scores_in, input_ids, max_batch)
+
+    # Sampling1D top-k splits on dim=3 → logits must be [1, 1, max_batch_size, V].
+    scores_tt = _upload_logits_tile_4d(scores_in, device=device)
 
     # Step 1: repetition penalty (if enabled). Reuses cached PenaltyParams/Accumulator.
-    # ``decode_forward`` updates logits in-place (``output_tensor=logits``); do not
-    # deallocate ``scores_tt`` here — the returned tensor is the same allocation.
     if repetition_penalty != 1.0:
         params, accum = penalties._get_or_build_state()
         penalties._set_repetition_penalty(params, float(repetition_penalty))
-        penalties.init_prompt_penalties(params, accum, input_ids)
-        scores_tt = penalties.decode_forward(scores_tt, params, accum)
+        penalties.init_prompt_penalties(params, accum, input_ids_pad)
+        scores_post_penalty = penalties.decode_forward(scores_tt, params, accum)
+        ttnn.deallocate(scores_tt)
+        scores_tt = scores_post_penalty
 
     # Step 2: fused top-k + top-p + temperature sampling.
     tokens_tt = sampler.sample_topk_topp_temp(

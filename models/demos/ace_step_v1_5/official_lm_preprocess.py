@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import inspect
 import math
+import os
 import sys
 from typing import Any, Callable
 
@@ -156,13 +157,40 @@ def attach_payload_preprocess_ttnn(
     return _restore
 
 
-def configure_acestep_logging(*, level: str = "DEBUG") -> None:
-    """Match CLI-style loguru lines (time | level | module:function:line - message)."""
+def configure_acestep_logging(
+    *,
+    level: str | None = None,
+    show_ttnn_tensor_cache: bool = False,
+) -> None:
+    """Match CLI-style loguru lines (time | level | module:function:line - message).
+
+    Default is ``INFO`` so TTNN ``core:as_tensor`` per-tensor flatbuffer cache lines stay hidden.
+    Pass ``show_ttnn_tensor_cache=True`` (demo ``--verbose``) to include those DEBUG lines.
+    """
+    if level is None:
+        level = os.environ.get("ACE_STEP_LOG_LEVEL", "INFO")
+
+    def _filter(record: dict) -> bool:
+        if show_ttnn_tensor_cache:
+            return True
+        if record["name"] == "core" and (
+            "Loaded cache for" in record["message"] or "Generating cache for" in record["message"]
+        ):
+            return False
+        return True
+
     logger.remove()
     logger.add(
         sys.stderr,
         level=level,
-        format=("{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}"),
+        colorize=True,
+        format=(
+            "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
+            "<level>{level: <8}</level> | "
+            "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
+            "<level>{message}</level>"
+        ),
+        filter=_filter,
     )
 
 
