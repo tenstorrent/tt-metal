@@ -59,7 +59,7 @@
     pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" 
   model: llama3.3-70b
   skus:
-    wh_galaxy:
+    wh_galaxy_perf:
       timeout: 60
       tier: 1
     bh_galaxy:
@@ -74,7 +74,7 @@
     pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" 
   model: qwen3-32b
   skus:
-    wh_galaxy:
+    wh_galaxy_perf:
       timeout: 60
       tier: 1
     bh_galaxy:
