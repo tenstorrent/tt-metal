@@ -608,6 +608,8 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
         attributes.transpose_b,
         bias_single_tile_size,
         attributes);
+    operations::matmul::normalize_program_config(
+        chosen_program_config, input_tensor_a.device()->compute_with_storage_grid_size());
 
     validate_matmul_tile_constraints(input_tensor_a, input_tensor_b, in0_tile, in1_tile, chosen_program_config);
     validate_matmul_block_and_subblock_configuration(attributes, chosen_program_config);
@@ -1550,6 +1552,8 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
             attributes.transpose_b,
             bias_single_tile_size,
             attributes);
+        operations::matmul::normalize_program_config(
+            chosen_program_config, input_tensor_a.device()->compute_with_storage_grid_size());
         return std::visit(
             [&](const auto& program_config) -> MatmulDeviceOperation::spec_return_value_t {
                 using ProgramConfigType = std::decay_t<decltype(program_config)>;
