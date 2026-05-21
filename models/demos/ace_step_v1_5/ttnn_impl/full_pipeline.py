@@ -174,6 +174,13 @@ class AceStepV15TTNNPipeline:
         num_kv_heads = int(kv_w.shape[0]) // head_dim
         num_layers = sum(1 for k in sd.keys() if k.startswith("layers.") and k.endswith(".self_attn.q_proj.weight"))
 
+        from models.demos.ace_step_v1_5.tt_device import ace_step_dit_rope_max_seq_len
+
+        rope_max_seq = ace_step_dit_rope_max_seq_len(
+            expected_input_length=expected_input_length,
+            patch_size=int(patch_size),
+            hf_max=int(max_position_embeddings),
+        )
         core_cfg = AceStepDecoderConfigTTNN(
             hidden_size=hidden,
             num_hidden_layers=num_layers,
@@ -183,7 +190,7 @@ class AceStepV15TTNNPipeline:
             rms_norm_eps=float(getattr(cfg, "rms_norm_eps", 1e-6)),
             sliding_window=sliding_window,
             layer_types=layer_types,
-            max_position_embeddings=max_position_embeddings,
+            max_position_embeddings=int(rope_max_seq),
             rope_theta=rope_theta,
         )
 
@@ -220,7 +227,16 @@ class AceStepV15TTNNPipeline:
             linear_output_l1_memory_config=_temb_l1,
         )
 
+        print(
+            f"[ace_step_v1_5] DiT: uploading {num_layers} decoder layers to device …",
+            flush=True,
+        )
+        from models.demos.ace_step_v1_5.tt_device import ace_step_device_num_chips, ace_step_synchronize_device
+
+        if ace_step_device_num_chips(device) > 1:
+            ace_step_synchronize_device(ttnn, device)
         self.core = TtAceStepDiTCore(cfg=core_cfg, state_dict=sd, mesh_device=device, dtype=self.activation_dtype)
+        print("[ace_step_v1_5] DiT: decoder core ready", flush=True)
         self.cond_dim = int(sd["condition_embedder.weight"].shape[1])
 
         # Cache for host-built additive masks uploaded to device.

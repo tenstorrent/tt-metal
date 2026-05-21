@@ -69,12 +69,16 @@ from models.demos.ace_step_v1_5.ace_step_perf_log import (
 from .condition_encoder import TtAceStepInstrumentalConditionEncoder
 from .dit_sampling_ttnn import (
     TtnnMomentumBufferApg,
+    adg_guidance_velocity_host,
     adg_guidance_velocity_ttnn,
+    apg_guidance_velocity_host,
     apg_guidance_velocity_ttnn,
     bf16_row_from_numpy_bc,
     concat_duplicate_batch,
     euler_subtract_v_dt,
+    euler_subtract_v_dt_host,
     fp32_tile_to_row_bf16,
+    refresh_fp32_tile_from_host,
     slice_batch_btc,
     typecast_bf16_any_to_fp32_tile,
 )
@@ -376,12 +380,18 @@ class _E2EDenoiseTrace:
         temb: ttnn.Tensor,
         tp: ttnn.Tensor,
         op_event,
+        enc_tt_pipe: Optional[ttnn.Tensor] = None,
+        ctx_tt_pipe: Optional[ttnn.Tensor] = None,
+        encoder_attention_mask_b1qk: Optional[ttnn.Tensor] = None,
     ) -> tuple[ttnn.Tensor, object]:
         """Stream per-step inputs onto CQ 1, run ``execute_trace`` on CQ 0, return ``(acoustic_buf, op_event)``.
 
         Caller passes the previous ``op_event`` so the host-side writes wait for the prior
         trace execution to finish before clobbering the persistent input buffers (otherwise we
         would race the trace's reads). Caller owns ``xt_pipe_in``; this method does NOT free it.
+
+        Optional *enc_tt_pipe* / *ctx_tt_pipe* / *encoder_attention_mask_b1qk* copies support
+        sequential B=1 CFG replays on mesh (cond vs uncond enc/ctx/mask rows).
         """
         if not self.is_ready():
             raise RuntimeError("replay() called before capture()")
@@ -389,6 +399,16 @@ class _E2EDenoiseTrace:
         ttnn.copy(xt_pipe_in, self.xt_buf)
         ttnn.copy(temb, self.temb_buf)
         ttnn.copy(tp, self.tp_buf)
+        if enc_tt_pipe is not None:
+            ttnn.copy(enc_tt_pipe, self.enc_buf)
+        if ctx_tt_pipe is not None:
+            ttnn.copy(ctx_tt_pipe, self.ctx_buf)
+        if encoder_attention_mask_b1qk is not None:
+            if self.mask_buf is None:
+                raise RuntimeError(
+                    "replay() got encoder_attention_mask_b1qk but trace was captured without a mask buffer"
+                )
+            ttnn.copy(encoder_attention_mask_b1qk, self.mask_buf)
         write_event = ttnn.record_event(device, 1)
         ttnn.wait_for_event(0, write_event)
         ttnn.execute_trace(device, self.tid, cq_id=0, blocking=False)
@@ -607,16 +627,15 @@ def run_ttnn_denoise_loop(
     cfg_hi = float(cfg_interval_end)
     gs = float(guidance_scale)
 
-    # ``ttnn.rand`` is uniform in [from,to]; ACE-Step uses Gaussian latents like ``torch.randn``.
-    if not hasattr(ttnn, "randn"):
-        raise RuntimeError("This path needs ``ttnn.randn`` (Gaussian) for latent init; ``ttnn.rand`` is uniform-only.")
-    xt_tt = ttnn.randn(
-        (1, frames_i, c_lat),
-        device,
-        dtype=ttnn.float32,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=mem,
-        seed=int(np.uint32(int(seed))),
+    from models.demos.ace_step_v1_5.ttnn_impl.dit_sampling_ttnn import dit_init_latents_fp32_tile
+
+    xt_tt = dit_init_latents_fp32_tile(
+        batch=1,
+        frames=frames_i,
+        channels=c_lat,
+        device=device,
+        dram=mem,
+        seed=int(seed),
     )
 
     if enc_mask is None and encoder_attention_mask_b1qk is None:
@@ -669,7 +688,25 @@ def run_ttnn_denoise_loop(
             enc_tt_pipe = bf16_row_from_numpy_bc(to_numpy_f32(enc_hs), device=device, dram=mem)
             ctx_tt_pipe = bf16_row_from_numpy_bc(to_numpy_f32(ctx_lat), device=device, dram=mem)
 
-    momentum_ttnn = TtnnMomentumBufferApg() if do_cfg and not use_adg else None
+    from models.demos.ace_step_v1_5.torch_ref._vendored_acestep.acestep.models.common.apg_guidance import MomentumBuffer
+    from models.demos.ace_step_v1_5.tt_device import (
+        ace_step_mesh_use_host_cfg_euler,
+        ace_step_mesh_use_host_temb_precompute,
+        ace_step_mesh_use_sequential_cfg,
+        ace_step_slice_encoder_mask_b1qk,
+        ace_step_ttnn_to_torch,
+        run_mesh_sequential_cfg_forwards,
+        slice_batch_dim0,
+    )
+
+    use_seq_cfg = ace_step_mesh_use_sequential_cfg(device, do_cfg=do_cfg)
+    use_host_cfg_euler = ace_step_mesh_use_host_cfg_euler(device)
+    if use_host_cfg_euler:
+        momentum_host = MomentumBuffer() if do_cfg and not use_adg else None
+        momentum_ttnn = None
+    else:
+        momentum_host = None
+        momentum_ttnn = TtnnMomentumBufferApg() if do_cfg and not use_adg else None
     _trace_each_step = os.environ.get("ACE_STEP_TRACY_EACH_DENOISE_STEP", "").lower() in ("1", "true", "yes")
     # Flush the device-profiler marker buffer every N denoise steps to avoid the per-RISC 12000-entry
     # ring buffer filling up across the loop (which silently drops markers, then trips
@@ -697,9 +734,14 @@ def run_ttnn_denoise_loop(
     # the lists are owned by the model (precomputed in ``__init__`` for the configured
     # ``(infer_steps, do_cfg)`` shape) — we use them as-is and do not deallocate on exit. Otherwise
     # we precompute on-the-fly and free at end of this call (legacy demo path).
-    pipe_batch = 2 if do_cfg else 1
+    pipe_batch = 1 if use_seq_cfg else (2 if do_cfg else 1)
     _temb_steps_owned = False
     if temb_per_step is None or tp_per_step is None:
+        if ace_step_mesh_use_host_temb_precompute(device):
+            raise ValueError(
+                "Multi-device mesh requires precomputed temb_per_step / tp_per_step "
+                "(host CPU precompute, then stage_host_temb_steps_to_device)."
+            )
         temb_per_step = []
         tp_per_step = []
         for _idx in range(num_steps):
@@ -732,11 +774,187 @@ def run_ttnn_denoise_loop(
 
     _capture_after_step = 1  # first eager step is 0, second is 1; capture before step 2.
     _trace_op_event = None  # set lazily on first replay or capture.
+    xt_host: torch.Tensor | None = None
+    _xt_tile_buf: ttnn.Tensor | None = None
+
+    def _safe_dealloc_tt(t: ttnn.Tensor | None) -> None:
+        if t is None:
+            return
+        try:
+            ttnn.deallocate(t)
+        except Exception:
+            pass
+
+    def _post_dit_host_cfg_euler(
+        *,
+        step_idx: int,
+        t_curr_f: float,
+        euler_dt: float,
+        vpc_rm: ttnn.Tensor,
+        vpu_rm: ttnn.Tensor | None,
+        xt_pipe_in: ttnn.Tensor,
+    ) -> None:
+        """Host torch APG/ADG + Euler; refresh on-device ``xt_tt`` for the next DiT step."""
+        nonlocal xt_tt, xt_host, _xt_tile_buf
+
+        if xt_host is None:
+            xt_host = ace_step_ttnn_to_torch(xt_tt, mesh_device=device, dtype=torch.float32)
+        vpc = ace_step_ttnn_to_torch(vpc_rm, mesh_device=device, dtype=torch.float32)
+        _safe_dealloc_tt(vpc_rm)
+        vpu: torch.Tensor | None = None
+        if vpu_rm is not None:
+            vpu = ace_step_ttnn_to_torch(vpu_rm, mesh_device=device, dtype=torch.float32)
+            _safe_dealloc_tt(vpu_rm)
+        _safe_dealloc_tt(xt_pipe_in)
+
+        apply_cfg_now = bool(do_cfg) and cfg_lo <= t_curr_f <= cfg_hi
+        if apply_cfg_now and vpu is not None:
+            if use_adg:
+                vt = adg_guidance_velocity_host(
+                    xt_host,
+                    vpc,
+                    vpu,
+                    float(t_curr_f),
+                    float(gs),
+                )
+            else:
+                vt = apg_guidance_velocity_host(
+                    vpc,
+                    vpu,
+                    float(gs),
+                    momentum_buffer=momentum_host,
+                    dims=[1],
+                )
+        else:
+            vt = vpc
+
+        xt_host = euler_subtract_v_dt_host(xt=xt_host, vt=vt, dt=float(euler_dt))
+        xt_old = xt_tt
+        xt_tt, _xt_tile_buf = refresh_fp32_tile_from_host(xt_host, device=device, dram=mem, buf=_xt_tile_buf)
+        if xt_old is not xt_tt:
+            _safe_dealloc_tt(xt_old)
+
+        if progress_fn is not None:
+            progress_fn(step_idx, num_steps, t_curr_f, float(euler_dt))
+
+    def _post_dit_eager_from_vpc_vpu(
+        *,
+        step_idx: int,
+        t_curr_f: float,
+        euler_dt: float,
+        vpc_rm: ttnn.Tensor,
+        vpu_rm: ttnn.Tensor | None,
+        xt_pipe_in: ttnn.Tensor,
+    ) -> None:
+        """APG/ADG guidance + Euler subtract from separate cond/uncond predictions."""
+        if use_host_cfg_euler:
+            _post_dit_host_cfg_euler(
+                step_idx=step_idx,
+                t_curr_f=t_curr_f,
+                euler_dt=euler_dt,
+                vpc_rm=vpc_rm,
+                vpu_rm=vpu_rm,
+                xt_pipe_in=xt_pipe_in,
+            )
+            return
+        nonlocal xt_tt
+
+        if do_cfg:
+            apply_cfg_now = cfg_lo <= t_curr_f <= cfg_hi
+            if apply_cfg_now:
+                assert vpu_rm is not None
+                if use_adg:
+                    vt_tt = adg_guidance_velocity_ttnn(
+                        xt_tt,
+                        vpc_rm,
+                        vpu_rm,
+                        float(t_curr_f),
+                        gs,
+                        device=device,
+                        dram=mem,
+                    )
+                else:
+                    vt_tt = apg_guidance_velocity_ttnn(
+                        vpc_rm,
+                        vpu_rm,
+                        gs,
+                        momentum_buffer=momentum_ttnn,
+                        dims=[1],
+                        dram=mem,
+                    )
+            else:
+                if vpu_rm is not None:
+                    try:
+                        ttnn.deallocate(vpu_rm)
+                    except Exception:
+                        pass
+                vt_tt = typecast_bf16_any_to_fp32_tile(vpc_rm, dram=mem)
+        else:
+            vt_tt = typecast_bf16_any_to_fp32_tile(vpc_rm, dram=mem)
+
+        try:
+            ttnn.deallocate(xt_pipe_in)
+        except Exception:
+            pass
+        if do_cfg and (cfg_lo <= t_curr_f <= cfg_hi):
+            try:
+                ttnn.deallocate(vpc_rm)
+                if vpu_rm is not None:
+                    ttnn.deallocate(vpu_rm)
+            except Exception:
+                pass
+        elif not do_cfg:
+            try:
+                ttnn.deallocate(vpc_rm)
+            except Exception:
+                pass
+
+        xt_old = xt_tt
+        xt_tt = euler_subtract_v_dt(xt=xt_tt, vt=vt_tt, dt=float(euler_dt), dram=mem)
+        try:
+            ttnn.deallocate(vt_tt)
+        except Exception:
+            pass
+        try:
+            ttnn.deallocate(xt_old)
+        except Exception:
+            pass
+
+        if progress_fn is not None:
+            progress_fn(step_idx, num_steps, t_curr_f, float(euler_dt))
 
     def _post_dit_eager(
         *, step_idx: int, t_curr_f: float, euler_dt: float, acoustic, xt_pipe_in, acoustic_is_persistent: bool
     ) -> None:
         """Common slice + APG/ADG guidance + Euler subtract; consumes ``acoustic`` then advances ``xt_tt``."""
+        if use_host_cfg_euler:
+            if do_cfg:
+                vpc_rm = slice_batch_btc(acoustic, 0, 1, frames_i, c_lat)
+                vpu_rm = slice_batch_btc(acoustic, 1, 2, frames_i, c_lat)
+                if acoustic_is_persistent:
+                    vpc_rm = ttnn.clone(vpc_rm)
+                    vpu_rm = ttnn.clone(vpu_rm)
+                _post_dit_host_cfg_euler(
+                    step_idx=step_idx,
+                    t_curr_f=t_curr_f,
+                    euler_dt=euler_dt,
+                    vpc_rm=vpc_rm,
+                    vpu_rm=vpu_rm,
+                    xt_pipe_in=xt_pipe_in,
+                )
+            else:
+                vpc_rm = ttnn.clone(acoustic) if acoustic_is_persistent else acoustic
+                _post_dit_host_cfg_euler(
+                    step_idx=step_idx,
+                    t_curr_f=t_curr_f,
+                    euler_dt=euler_dt,
+                    vpc_rm=vpc_rm,
+                    vpu_rm=None,
+                    xt_pipe_in=xt_pipe_in,
+                )
+            if not acoustic_is_persistent:
+                _safe_dealloc_tt(acoustic)
+            return
         nonlocal xt_tt
 
         if do_cfg:
@@ -801,6 +1019,26 @@ def run_ttnn_denoise_loop(
 
     def _diffusion_iterate(*, step_idx: int, t_curr_f: float, euler_dt: float) -> None:
         xt_row = fp32_tile_to_row_bf16(xt_tt, dram=mem)
+        if use_seq_cfg:
+            vpc_rm, vpu_rm = run_mesh_sequential_cfg_forwards(
+                pipe=pipe,
+                xt_b1=xt_row,
+                enc_tt_pipe=enc_tt_pipe,
+                ctx_tt_pipe=ctx_tt_pipe,
+                temb_bd=temb_per_step[int(step_idx)],
+                timestep_proj_b6d=tp_per_step[int(step_idx)],
+                encoder_attention_mask_1d_bk=encoder_attn_1d_bk_np,
+                device=device,
+            )
+            _post_dit_eager_from_vpc_vpu(
+                step_idx=step_idx,
+                t_curr_f=t_curr_f,
+                euler_dt=euler_dt,
+                vpc_rm=vpc_rm,
+                vpu_rm=vpu_rm,
+                xt_pipe_in=xt_row,
+            )
+            return
         if do_cfg:
             xt_pipe_in = concat_duplicate_batch(xt_row)
             try:
@@ -834,6 +1072,47 @@ def run_ttnn_denoise_loop(
         """First-call capture path: clone current inputs into trace_state buffers, capture, use the captured output for this step."""
         assert trace_state is not None
         xt_row = fp32_tile_to_row_bf16(xt_tt, dram=mem)
+        if use_seq_cfg:
+            enc_cap = slice_batch_dim0(enc_tt_pipe, 0, 1)
+            ctx_cap = slice_batch_dim0(ctx_tt_pipe, 0, 1)
+            xt_pipe_in = xt_row
+            acoustic = trace_state.capture(
+                pipe=pipe,
+                device=device,
+                xt_pipe_in=xt_pipe_in,
+                temb=temb_per_step[int(step_idx)],
+                tp=tp_per_step[int(step_idx)],
+                enc_tt_pipe=enc_cap,
+                ctx_tt_pipe=ctx_cap,
+                encoder_attention_mask_b1qk=ace_step_slice_encoder_mask_b1qk(encoder_attention_mask_b1qk, 0, 1),
+                frames=frames_i,
+                pipe_batch=1,
+                c_lat=c_lat,
+                do_cfg=True,
+            )
+            ttnn.synchronize_device(device)
+            trace_state.release_trace_only(device)
+            vpc_rm = ttnn.clone(acoustic)
+            enc_mask_uncond = encoder_attn_1d_bk_np[1:2] if encoder_attn_1d_bk_np is not None else None
+            vpu_rm = pipe.forward_with_temb_tp(
+                xt_bt64=xt_row,
+                context_latents_bt128=slice_batch_dim0(ctx_tt_pipe, 1, 2),
+                encoder_hidden_states_btd=slice_batch_dim0(enc_tt_pipe, 1, 2),
+                temb_bd=temb_per_step[int(step_idx)],
+                timestep_proj_b6d=tp_per_step[int(step_idx)],
+                attention_mask_1d_bt=None,
+                encoder_attention_mask_1d_bk=None if encoder_attention_mask_b1qk is not None else enc_mask_uncond,
+                encoder_attention_mask_b1qk=ace_step_slice_encoder_mask_b1qk(encoder_attention_mask_b1qk, 1, 2),
+            )
+            _post_dit_eager_from_vpc_vpu(
+                step_idx=step_idx,
+                t_curr_f=t_curr_f,
+                euler_dt=euler_dt,
+                vpc_rm=vpc_rm,
+                vpu_rm=vpu_rm,
+                xt_pipe_in=xt_pipe_in,
+            )
+            return
         if do_cfg:
             xt_pipe_in = concat_duplicate_batch(xt_row)
             try:
@@ -879,6 +1158,49 @@ def run_ttnn_denoise_loop(
             # Previous step released the trace id before post-DiT eager allocations; re-arm now.
             trace_state.recapture(pipe=pipe, device=device)
         xt_row = fp32_tile_to_row_bf16(xt_tt, dram=mem)
+        if use_seq_cfg:
+            xt_pipe_in = xt_row
+            enc_cond = slice_batch_dim0(enc_tt_pipe, 0, 1)
+            ctx_cond = slice_batch_dim0(ctx_tt_pipe, 0, 1)
+            enc_uncond = slice_batch_dim0(enc_tt_pipe, 1, 2)
+            ctx_uncond = slice_batch_dim0(ctx_tt_pipe, 1, 2)
+            if _trace_op_event is None:
+                _trace_op_event = ttnn.record_event(device, 0)
+            mask_cond = ace_step_slice_encoder_mask_b1qk(encoder_attention_mask_b1qk, 0, 1)
+            mask_uncond = ace_step_slice_encoder_mask_b1qk(encoder_attention_mask_b1qk, 1, 2)
+            vpc_buf, _trace_op_event = trace_state.replay(
+                device=device,
+                xt_pipe_in=xt_pipe_in,
+                temb=temb_per_step[int(step_idx)],
+                tp=tp_per_step[int(step_idx)],
+                op_event=_trace_op_event,
+                enc_tt_pipe=enc_cond,
+                ctx_tt_pipe=ctx_cond,
+                encoder_attention_mask_b1qk=mask_cond,
+            )
+            vpc_rm = ttnn.clone(vpc_buf)
+            vpu_buf, _trace_op_event = trace_state.replay(
+                device=device,
+                xt_pipe_in=xt_pipe_in,
+                temb=temb_per_step[int(step_idx)],
+                tp=tp_per_step[int(step_idx)],
+                op_event=_trace_op_event,
+                enc_tt_pipe=enc_uncond,
+                ctx_tt_pipe=ctx_uncond,
+                encoder_attention_mask_b1qk=mask_uncond,
+            )
+            vpu_rm = ttnn.clone(vpu_buf)
+            ttnn.synchronize_device(device)
+            trace_state.release_trace_only(device)
+            _post_dit_eager_from_vpc_vpu(
+                step_idx=step_idx,
+                t_curr_f=t_curr_f,
+                euler_dt=euler_dt,
+                vpc_rm=vpc_rm,
+                vpu_rm=vpu_rm,
+                xt_pipe_in=xt_pipe_in,
+            )
+            return
         if do_cfg:
             xt_pipe_in = concat_duplicate_batch(xt_row)
             try:
@@ -987,7 +1309,9 @@ def run_ttnn_denoise_loop(
         return xt_tt
 
     # Single device→Torch copy of latents for host VAE or other CPU consumers.
-    pred_latents = ttnn.to_torch(xt_tt, dtype=torch.float32).contiguous()
+    from models.demos.ace_step_v1_5.tt_device import ace_step_ttnn_to_torch
+
+    pred_latents = ace_step_ttnn_to_torch(xt_tt, dtype=torch.float32, mesh_device=device).contiguous()
     try:
         ttnn.deallocate(xt_tt)
     except Exception:
@@ -1249,7 +1573,9 @@ class AceStepE2EModel:
             pass
         if return_waveform_ttnn:
             return wav_tt
-        wav_bt_c = ttnn.to_torch(wav_tt, dtype=torch.float32).contiguous().numpy()
+        from models.demos.ace_step_v1_5.tt_device import ace_step_ttnn_to_torch
+
+        wav_bt_c = ace_step_ttnn_to_torch(wav_tt, dtype=torch.float32, mesh_device=self.device).contiguous().numpy()
         wav_bct = np.ascontiguousarray(np.swapaxes(wav_bt_c, 1, 2))
         peak = np.maximum(np.amax(np.abs(wav_bct), axis=(1, 2), keepdims=True), 1e-8)
         wav_np = np.clip(wav_bct / peak, -1.0, 1.0)
