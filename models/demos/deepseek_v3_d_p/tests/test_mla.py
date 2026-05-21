@@ -17,7 +17,7 @@ from ttnn.device import is_blackhole
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
-from models.demos.deepseek_v3_d_p.tests.model_variants import MLA_MODEL_CONFIGS
+from models.demos.deepseek_v3_d_p.tests.model_variants import MODEL_VARIANTS, run_reference_mla
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
@@ -149,7 +149,7 @@ def run_mla_inference(
 @pytest.mark.parametrize("seq_len", [128 * 1024, 100 * 1024], ids=["seq128k", "seq100k"])
 @pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
 @pytest.mark.parametrize("is_balanced", [False, True], ids=["sequential", "balanced"])
-@pytest.mark.parametrize("model_config", MLA_MODEL_CONFIGS.values(), ids=MLA_MODEL_CONFIGS.keys())
+@pytest.mark.parametrize("model_config", MODEL_VARIANTS.values(), ids=MODEL_VARIANTS.keys())
 @pytest.mark.timeout(0)  # Disable timeout — first run computes and caches CPU reference for large seq lengths
 def test_mla(
     use_pretrained,
@@ -173,9 +173,8 @@ def test_mla(
         mesh_device: Mesh device fixture
         seq_len: Sequence length
     """
-    # Variant-specific skips: Kimi only supports random weights today.
-    if model_config.config_builder is not None and use_pretrained:
-        pytest.skip(f"{model_config.name}: only random-weight path is supported")
+    if use_pretrained and not model_config.supports_pretrained:
+        pytest.skip(f"{model_config.name!r}: pretrained weights not available")
 
     weight_type = "Pretrained" if use_pretrained else "Random"
     logger.info("=" * 80)
@@ -187,8 +186,7 @@ def test_mla(
         config, sd = request.getfixturevalue("pretrained_transformer_weights")
         weights = sd["layers"][0]["mla_weights"]
     else:
-        # `random_weights_for_model` dispatches on `model_config.config_builder`:
-        # DSv3 falls back to the `config_only` fixture; Kimi calls the Kimi builder.
+        # `random_weights_for_model` derives shapes from `model_config.build_reference_config()`.
         config, weights = request.getfixturevalue("random_weights_for_model")
 
     fabric_config = device_params.get("fabric_config", ttnn.FabricConfig.FABRIC_1D)
@@ -354,21 +352,19 @@ def test_mla(
         )
         logger.info(f"KVPE cache PE part PCC is {pe_pcc_message}")
 
-        # Variant-specific HF upstream cross-check. Each model uses the HF
-        # reference from its own folder (DSv3 vendor or Kimi vendor), bound in
-        # MLA_MODEL_CONFIGS. Catches drift between tt-metal's `create_mla_reference`
-        # and the canonical upstream MLA forward.
-        if model_config.hf_ref is not None:
-            logger.info(f"Running upstream HF MLA reference (model={model_config.name})")
-            position_ids_hf = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
-            hf_out = model_config.hf_ref(
-                weights=weights,
-                hidden_states=hidden_states,
-                position_ids=position_ids_hf,
-            )
-            _, hf_pcc_message = assert_with_pcc(hf_out.unsqueeze(0), tt_output_cpu, model_config.hf_pcc_threshold)
-            logger.info(f"[hf_output] PCC: {hf_pcc_message}")
-            del hf_out
+        # Upstream MLA reference cross-check. Returns None when the variant has no reference bundled.
+        position_ids_ref = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
+        ref_out = run_reference_mla(
+            model_config,
+            weights=weights,
+            hidden_states=hidden_states,
+            position_ids=position_ids_ref,
+        )
+        if ref_out is not None:
+            logger.info(f"Running upstream MLA reference (model={model_config.name})")
+            _, ref_pcc_message = assert_with_pcc(ref_out.unsqueeze(0), tt_output_cpu, model_config.mla_pcc_threshold)
+            logger.info(f"[reference_output] PCC: {ref_pcc_message}")
+            del ref_out
     else:
         logger.info("Starting synchronize call")
         ttnn.synchronize_device(mesh_device)
