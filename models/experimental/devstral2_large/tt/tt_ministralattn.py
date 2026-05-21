@@ -122,21 +122,23 @@ def _to_tt_weight(
     )
 
 
-def _interleave_kv_for_tp(k_w: torch.Tensor, v_w: torch.Tensor, tp: int) -> torch.Tensor:
-    """Arrange ``[K | V]`` HF rows so a contiguous TP-chunk slice puts ``(K_local, V_local)``
-    on each device.
+def _interleave_qkv_for_tp(q_w: torch.Tensor, k_w: torch.Tensor, v_w: torch.Tensor, tp: int) -> torch.Tensor:
+    """Arrange ``[Q | K | V]`` HF rows so a contiguous TP-chunk slice puts
+    ``(Q_local, K_local, V_local)`` on each device.
 
-    Naive ``cat([k_w, v_w], dim=0)`` keeps all of K in the first half and all of V in the second
-    half — strip-sharding that along dim 0 gives some devices all-K and others all-V. Instead,
-    split each of K and V into ``tp`` row-chunks and zip them: contiguous chunk ``i`` of the
-    result is exactly device ``i``'s ``(K_local rows ; V_local rows)``.
+    Naive ``cat([q_w, k_w, v_w], dim=0)`` keeps all of Q in the first third etc. — strip-sharding
+    that along dim 0 gives some devices all-Q and others all-K/V. Instead, split each of Q, K, V
+    into ``tp`` row-chunks and zip them: contiguous chunk ``i`` of the result is exactly device
+    ``i``'s ``(Q_local rows ; K_local rows ; V_local rows)``.
     """
     if tp <= 1:
-        return torch.cat([k_w, v_w], dim=0)
+        return torch.cat([q_w, k_w, v_w], dim=0)
+    q_chunks = torch.chunk(q_w, tp, dim=0)
     k_chunks = torch.chunk(k_w, tp, dim=0)
     v_chunks = torch.chunk(v_w, tp, dim=0)
     pieces: list[torch.Tensor] = []
-    for kc, vc in zip(k_chunks, v_chunks):
+    for qc, kc, vc in zip(q_chunks, k_chunks, v_chunks):
+        pieces.append(qc)
         pieces.append(kc)
         pieces.append(vc)
     return torch.cat(pieces, dim=0)
@@ -185,37 +187,26 @@ class TtAttention:
         q_w = permute_split_half_to_interleaved(q_w, args.head_dim)
         k_w = permute_split_half_to_interleaved(k_w, args.head_dim)
 
-        # (2) Fuse K and V into a single column-parallel matmul, with rows interleaved per
-        # TP chunk so a contiguous TP strip-shard puts ``(K_local | V_local)`` on each device.
-        # The naive ``cat([k_w, v_w], dim=0)`` would give device 0 all-K and device N-1 all-V.
-        kv_w = _interleave_kv_for_tp(k_w, v_w, args.tp)
+        # (2) Fuse Q, K, V into a single column-parallel matmul, with rows interleaved per
+        # TP chunk so a contiguous TP strip-shard puts ``(Q_local | K_local | V_local)`` on each
+        # device. With TP=8 on Loudbox this lifts Nt from 48 (Q) / 8 (KV) to 56 (fused) and
+        # collapses two dispatches into one.
+        qkv_w = _interleave_qkv_for_tp(q_w, k_w, v_w, args.tp)
 
         wp = resolve_weight_cache_path(weight_cache_path, args)
         pfx = prefix
         # Quantize weights to bfloat8_b for DRAM bandwidth; matmul outputs stay bfloat16 with
         # HiFi4 fidelity. Quantizing outputs to bf8_b compounds across 88 layers and drops PCC.
-        # nlp_create_qkv_heads also requires q and kv outputs to share dtype.
-        self.q_proj_weight_dtype = ttnn.bfloat8_b
-        self.q_proj_output_dtype = ttnn.bfloat16
-        self.kv_proj_weight_dtype = ttnn.bfloat8_b
-        self.kv_proj_output_dtype = ttnn.bfloat16
-        self.q_proj = _to_tt_weight(
-            q_w,
+        self.qkv_proj_weight_dtype = ttnn.bfloat8_b
+        self.qkv_proj_output_dtype = ttnn.bfloat16
+        self.qkv_proj = _to_tt_weight(
+            qkv_w,
             mesh_device,
             args,
-            self.q_proj_weight_dtype,
+            self.qkv_proj_weight_dtype,
             shard_dim=-1,
             weight_cache_path=wp,
-            cache_key=f"{pfx}q_proj_bfp8",
-        )
-        self.kv_proj = _to_tt_weight(
-            kv_w,
-            mesh_device,
-            args,
-            self.kv_proj_weight_dtype,
-            shard_dim=-1,
-            weight_cache_path=wp,
-            cache_key=f"{pfx}kv_proj_bfp8",
+            cache_key=f"{pfx}qkv_proj_bfp8",
         )
         self.o_proj_weight_dtype = ttnn.bfloat8_b
         self.o_proj_output_dtype = ttnn.bfloat16
@@ -292,47 +283,28 @@ class TtAttention:
             else self._compute_kernel_config,
         )
 
-    def _project_qkv_prefill(self, x: ttnn.Tensor, *, seq_len: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Return ``(q, kv_fused)`` for ``nlp_create_qkv_heads``."""
-        q = self._linear(
+    def _project_qkv_prefill(self, x: ttnn.Tensor, *, seq_len: int) -> ttnn.Tensor:
+        """Return fused ``[Q | K | V]`` for ``nlp_create_qkv_heads``."""
+        return self._linear(
             x,
-            self.q_proj,
+            self.qkv_proj,
             mode="prefill",
             kind="qkv",
             seq_len=seq_len,
-            output_dtype=self.q_proj_output_dtype,
+            output_dtype=self.qkv_proj_output_dtype,
             compute_kernel_config=self._compute_kernel_config_hifi4,
         )
-        kv = self._linear(
-            x,
-            self.kv_proj,
-            mode="prefill",
-            kind="qkv",
-            seq_len=seq_len,
-            output_dtype=self.kv_proj_output_dtype,
-            compute_kernel_config=self._compute_kernel_config_hifi4,
-        )
-        return q, kv
 
     def _project_qkv_decode(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """Fused QKV activation for ``nlp_create_qkv_heads_decode`` (Q and KV matmuls + concat)."""
-        q = self._linear(
+        """Fused ``[Q | K | V]`` activation for ``nlp_create_qkv_heads_decode``."""
+        return self._linear(
             x,
-            self.q_proj,
+            self.qkv_proj,
             mode="decode",
             kind="qkv",
-            output_dtype=self.q_proj_output_dtype,
+            output_dtype=self.qkv_proj_output_dtype,
             compute_kernel_config=self._compute_kernel_config_hifi4,
         )
-        kv = self._linear(
-            x,
-            self.kv_proj,
-            mode="decode",
-            kind="qkv",
-            output_dtype=self.kv_proj_output_dtype,
-            compute_kernel_config=self._compute_kernel_config_hifi4,
-        )
-        return ttnn.concat([q, kv], dim=-1, memory_config=self._act_mem("decode"))
 
     def _project_o(self, attn_out_flat: ttnn.Tensor, *, mode: str, seq_len: int = 1) -> ttnn.Tensor:
         dense = self._linear(
@@ -371,18 +343,16 @@ class TtAttention:
         Hkv_local = self.args.n_local_kv_heads
 
         act_mem = self._act_mem("prefill")
-        q, kv = self._project_qkv_prefill(x, seq_len=S)
-        # Split into heads. ``input`` = Q (..., Hq_local*D); ``input_kv`` = fused [K|V] (..., 2*Hkv_local*D).
+        qkv = self._project_qkv_prefill(x, seq_len=S)
+        # Split fused ``[Q | K | V]`` (..., (Hq_local + 2*Hkv_local)*D) into heads.
         q_heads, k_heads, v_heads = ttnn.experimental.nlp_create_qkv_heads(
-            q,
-            kv,
+            qkv,
             num_heads=Hq_local,
             num_kv_heads=Hkv_local,
             transpose_k_heads=False,
             memory_config=act_mem,
         )
-        ttnn.deallocate(q)
-        ttnn.deallocate(kv)
+        ttnn.deallocate(qkv)
 
         cos_q, sin_q, cos_k, sin_k = self.rotary_emb.get_prefill_tables(start_pos, S)
         q_heads, k_heads = self.rotary_emb.apply(q_heads, k_heads, cos_q, sin_q, cos_k, sin_k)

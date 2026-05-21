@@ -255,10 +255,16 @@ def get_linear_program_config(
     k: Optional[int] = None,
     n: Optional[int] = None,
 ) -> Optional[ttnn.ProgramConfig]:
-    """Return a 1D-on-N multicast matmul config. ``k``/``n`` should be supplied by the caller
-    (``weight.shape[-2]`` / ``weight.shape[-1]``); the ``kind`` argument is kept for backward
-    compatibility but is no longer needed for shape derivation. Returns ``None`` if shape info
-    is missing (TTNN auto-picks instead).
+    """Return a matmul program config. ``k``/``n`` should be supplied by the caller
+    (``weight.shape[-2]`` / ``weight.shape[-1]``). Returns ``None`` if shape info is missing
+    (TTNN auto-picks instead).
+
+    All linears use 1D-on-N multicast. DRAM-sharded matmul was tried for decode QKV but
+    regressed both prefill and decode: the DRAM-sharded factory caps compute at ~num_dram_banks
+    (~12 cores on BH P150 — see
+    matmul_multicore_reuse_mcast_dram_sharded_program_factory.cpp:112-137), which is far less
+    than 1D-on-N's ``Nt=56`` cores for the fused QKV. DRAM-sharded only wins when
+    ``Nt <= num_dram_banks``.
     """
     _ = (mode, kind)
     if k is None or n is None:
