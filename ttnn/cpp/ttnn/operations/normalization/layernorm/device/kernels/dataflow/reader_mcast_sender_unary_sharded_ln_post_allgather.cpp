@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/kernel_args.h"
 #include "hostdevcommon/common_values.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
@@ -12,25 +13,25 @@
 
 // split REDUCE across cores
 void kernel_main() {
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(2);
-    constexpr uint32_t block_h = get_compile_time_arg_val(3);
-    constexpr uint32_t block_h_size_bytes = get_compile_time_arg_val(4);
-    constexpr uint32_t num_tiles_per_worker = get_compile_time_arg_val(6);
-    constexpr uint32_t num_tiles_per_worker_bytes = get_compile_time_arg_val(7);
-    constexpr bool rms_norm = get_compile_time_arg_val(17) == 1;
+    constexpr uint32_t num_blocks = get_arg(args::num_blocks);
+    constexpr uint32_t block_h = get_arg(args::block_h);
+    constexpr uint32_t block_h_size_bytes = get_arg(args::block_h_size_bytes);
+    constexpr uint32_t num_tiles_per_worker = get_arg(args::num_tiles_per_worker);
+    constexpr uint32_t num_tiles_per_worker_bytes = get_arg(args::num_tiles_per_worker_bytes);
+    constexpr bool rms_norm = get_arg(args::rms_norm) == 1;
 
-    const uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(0);
-    const uint32_t mcast_dest_noc_start_y = get_arg_val<uint32_t>(1);
-    const uint32_t mcast_dest_noc_end_x = get_arg_val<uint32_t>(2);
-    const uint32_t mcast_dest_noc_end_y = get_arg_val<uint32_t>(3);
+    const uint32_t mcast_dest_noc_start_x = get_arg(args::mcast_start_x);
+    const uint32_t mcast_dest_noc_start_y = get_arg(args::mcast_start_y);
+    const uint32_t mcast_dest_noc_end_x = get_arg(args::mcast_end_x);
+    const uint32_t mcast_dest_noc_end_y = get_arg(args::mcast_end_y);
 
-    constexpr uint32_t cb_stats_reduced = tt::CBIndex::c_21;  // [E[x], E[x^2]] local to sender
-    constexpr uint32_t cb_ex_global = tt::CBIndex::c_15;      // [E[x], E[X^2]] global to all cores
+    constexpr uint32_t cb_stats_reduced = dfb::cb_stats_reduced;
+    constexpr uint32_t cb_ex_global = dfb::cb_ex_global;
 
     Noc noc;
-    Semaphore<> reduce_sender_sem(get_compile_time_arg_val(1));
-    CircularBuffer cb_stats_reduced_obj(cb_stats_reduced);
-    CircularBuffer cb_ex_global_obj(cb_ex_global);
+    Semaphore<> reduce_sender_sem(sem::reduce_sender);
+    DataflowBuffer cb_stats_reduced_obj(cb_stats_reduced);
+    DataflowBuffer cb_ex_global_obj(cb_ex_global);
     MulticastEndpoint mcast_ep;
 
     constexpr uint32_t stats_tiles = rms_norm ? 1 : 2;
@@ -49,7 +50,7 @@ void kernel_main() {
     };
 
     const auto& global_reduce_sender =
-        [&](CircularBuffer& cb_ex_obj, CircularBuffer& cb_ex_global_obj_inner)
+        [&](DataflowBuffer& cb_ex_obj, DataflowBuffer& cb_ex_global_obj_inner)
             __attribute__((always_inline)) {
                 uint32_t l1_read_addr_ex_global = cb_ex_global_obj_inner.get_read_ptr();
                 noc.async_write_multicast<Noc::McastMode::INCLUDE_SRC>(

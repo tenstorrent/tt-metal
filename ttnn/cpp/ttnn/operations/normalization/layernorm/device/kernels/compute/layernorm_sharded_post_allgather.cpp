@@ -15,30 +15,28 @@
 
 // SPLIT REDUCE across Cores
 void kernel_main() {
-    constexpr uint32_t is_top_row = get_compile_time_arg_val(0);
-    constexpr uint32_t do_gamma = get_compile_time_arg_val(1);
-    constexpr uint32_t do_beta = get_compile_time_arg_val(2);
-    constexpr uint32_t num_blocks_first_stage = get_compile_time_arg_val(3);
-    constexpr uint32_t block_w = get_compile_time_arg_val(5);
-    constexpr uint32_t block_h_const = get_compile_time_arg_val(4);
-    volatile uint32_t block_h_volatile = get_compile_time_arg_val(4);
-    constexpr uint32_t subblock_w_const = get_compile_time_arg_val(6);
-    volatile uint32_t subblock_w_volatile = get_compile_time_arg_val(6);
-    constexpr uint32_t num_subblocks_w = get_compile_time_arg_val(7);
-    const bool is_allgather_worker = get_compile_time_arg_val(8) == 1;
-    constexpr uint32_t num_tiles_per_block = get_compile_time_arg_val(9);
-    constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(10) == 1;
-    constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(11) == 1;
-    constexpr bool LEGACY_RSQRT = get_compile_time_arg_val(12) == 1;
-    constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(13);
+    constexpr uint32_t is_top_row = get_arg(args::unused0);
+    constexpr uint32_t do_gamma = get_arg(args::do_gamma);
+    constexpr uint32_t do_beta = get_arg(args::do_beta);
+    constexpr uint32_t num_blocks_first_stage = get_arg(args::num_blocks_first_stage);
+    constexpr uint32_t block_w = get_arg(args::block_wt);
+    constexpr uint32_t block_h_const = get_arg(args::block_ht);
+    volatile uint32_t block_h_volatile = get_arg(args::block_ht);
+    constexpr uint32_t subblock_w_const = get_arg(args::subblock_wt);
+    volatile uint32_t subblock_w_volatile = get_arg(args::subblock_wt);
+    constexpr uint32_t num_subblocks_w = get_arg(args::num_subblocks_w);
+    const bool is_allgather_worker = get_arg(args::is_all_to_all_worker) == 1;
+    constexpr uint32_t num_tiles_per_block = get_arg(args::block_ht_block_wt);
+    constexpr bool FLOAT32_DTYPE = get_arg(args::fp32_dest_acc_en) == 1;
+    constexpr bool FLOAT32_REDUCTION = get_arg(args::float32_reduction) == 1;
+    constexpr bool LEGACY_RSQRT = get_arg(args::legacy_rsqrt) == 1;
+    constexpr uint32_t num_blocks_second_stage = get_arg(args::num_blocks_second_stage);
 
-    const uint32_t num_reduce_tiles_per_block_h =
-        get_arg_val<uint32_t>(0);  // This value is the same for all cores, except ones that have padding tiles in it.
-                                   // In that case, skip reduce for padding tiles.
-    const uint32_t num_tiles_per_allgather_worker = is_allgather_worker ? get_arg_val<uint32_t>(1) : 0;
-    const bool use_two_stage_reduce = is_allgather_worker ? get_arg_val<uint32_t>(2) == 1 : false;
-    const bool is_second_stage_reader = is_allgather_worker ? get_arg_val<uint32_t>(3) == 1 : false;
-    const uint32_t num_distributed_blocks = is_allgather_worker ? get_arg_val<uint32_t>(4) : 0;
+    const uint32_t num_reduce_tiles_per_block_h = get_arg(args::num_reduce_tiles_per_block_h);
+    const uint32_t num_tiles_per_allgather_worker = is_allgather_worker ? get_vararg(0) : 0;
+    const bool use_two_stage_reduce = is_allgather_worker ? get_vararg(1) == 1 : false;
+    const bool is_second_stage_reader = is_allgather_worker ? get_vararg(2) == 1 : false;
+    const uint32_t num_distributed_blocks = is_allgather_worker ? get_vararg(3) : 0;
 
     uint32_t num_blocks_reduce;
     if (is_second_stage_reader) {
@@ -58,37 +56,37 @@ void kernel_main() {
     constexpr uint32_t dst1 = 1;
     constexpr uint32_t scaler0 = 0;
 
-    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
-    constexpr uint32_t cb_in1 = tt::CBIndex::c_1;
-    constexpr uint32_t cb_eps = tt::CBIndex::c_3;
-    constexpr uint32_t cb_scaler_global = tt::CBIndex::c_4;
-    constexpr uint32_t cb_gamma = tt::CBIndex::c_5;
-    constexpr uint32_t cb_beta = tt::CBIndex::c_6;
+    constexpr uint32_t cb_in0 = dfb::cb_in0;
+    constexpr uint32_t cb_in1 = dfb::cb_inb;
+    constexpr uint32_t cb_eps = dfb::cb_eps;
+    constexpr uint32_t cb_scaler_global = dfb::cb_scaler_global;
+    constexpr uint32_t cb_gamma = dfb::cb_gamma;
+    constexpr uint32_t cb_beta = dfb::cb_beta;
 
-    constexpr uint32_t cb_ex = tt::CBIndex::c_9;              // E[x] global reduce
-    constexpr uint32_t cb_ex2 = tt::CBIndex::c_12;            // E[x^2]
-    constexpr uint32_t cb_stats = tt::CBIndex::c_7;           // E[(x-E[x])^2] global reduce
-    constexpr uint32_t cb_stats_reduced = tt::CBIndex::c_21;  // E[(x-E[x])^2] global reduce
-    constexpr uint32_t cb_ex_global = tt::CBIndex::c_15;      // E[x] global reduce
-    constexpr uint32_t cb_reciprocal = tt::CBIndex::c_20;     // [E[x^2]-E[x]^2]+eps
-    constexpr uint32_t cb_fusion = tt::CBIndex::c_18;         // stream gamma/beta
-    constexpr uint32_t cb_out = tt::CBIndex::c_16;
-    constexpr uint32_t cb_var = tt::CBIndex::c_19;
-    constexpr uint32_t cb_ex_sqr = tt::CBIndex::c_24;  // E[x]^2
+    constexpr uint32_t cb_ex = dfb::cb_ex;
+    constexpr uint32_t cb_ex2 = dfb::cb_ex2;
+    constexpr uint32_t cb_stats = dfb::cb_stats;
+    constexpr uint32_t cb_stats_reduced = dfb::cb_stats_reduced;
+    constexpr uint32_t cb_ex_global = dfb::cb_ex_global;
+    constexpr uint32_t cb_reciprocal = dfb::cb_ex2pe;  // c_20 in post-allgather
+    constexpr uint32_t cb_fusion = dfb::cb_xmm;        // c_18 stream gamma/beta
+    constexpr uint32_t cb_out = dfb::cb_out;
+    constexpr uint32_t cb_var = dfb::cb_var;
+    constexpr uint32_t cb_ex_sqr = dfb::cb_x;  // c_24 E[x]^2
 
-    CircularBuffer cb_in0_obj(cb_in0);
-    CircularBuffer cb_eps_obj(cb_eps);
-    CircularBuffer cb_scaler_global_obj(cb_scaler_global);
-    CircularBuffer cb_gamma_obj(cb_gamma);
-    CircularBuffer cb_beta_obj(cb_beta);
-    CircularBuffer cb_ex2_obj(cb_ex2);
-    CircularBuffer cb_stats_obj(cb_stats);
-    CircularBuffer cb_stats_reduced_obj(cb_stats_reduced);
-    CircularBuffer cb_ex_global_obj(cb_ex_global);
-    CircularBuffer cb_fusion_obj(cb_fusion);
-    CircularBuffer cb_out_obj(cb_out);
-    CircularBuffer cb_var_obj(cb_var);
-    CircularBuffer cb_ex_sqr_obj(cb_ex_sqr);
+    DataflowBuffer cb_in0_obj(cb_in0);
+    DataflowBuffer cb_eps_obj(cb_eps);
+    DataflowBuffer cb_scaler_global_obj(cb_scaler_global);
+    DataflowBuffer cb_gamma_obj(cb_gamma);
+    DataflowBuffer cb_beta_obj(cb_beta);
+    DataflowBuffer cb_ex2_obj(cb_ex2);
+    DataflowBuffer cb_stats_obj(cb_stats);
+    DataflowBuffer cb_stats_reduced_obj(cb_stats_reduced);
+    DataflowBuffer cb_ex_global_obj(cb_ex_global);
+    DataflowBuffer cb_fusion_obj(cb_fusion);
+    DataflowBuffer cb_out_obj(cb_out);
+    DataflowBuffer cb_var_obj(cb_var);
+    DataflowBuffer cb_ex_sqr_obj(cb_ex_sqr);
 
 #ifdef RMSNORM
     constexpr uint32_t init_in_cb = is_allgather_worker ? cb_stats : cb_in0;
@@ -99,10 +97,10 @@ void kernel_main() {
     constexpr uint32_t init_in_cb = is_allgather_worker ? cb_stats : cb_in0;
     constexpr uint32_t init_out_cb = is_allgather_worker ? cb_stats_reduced : cb_out;
     constexpr uint32_t stats_tiles = 2;
-    constexpr uint32_t cb_xmm = tt::CBIndex::c_18;  // x minus mean
+    constexpr uint32_t cb_xmm = dfb::cb_xmm;  // c_18 x minus mean
 #endif
     binary_op_init_common(init_in_cb, cb_scaler_global, init_out_cb);
-    CircularBuffer cb_xmm_obj(cb_xmm);
+    DataflowBuffer cb_xmm_obj(cb_xmm);
 
     // set block_h to volatile to disable automatically unroll of the loops, avoid code overflow
     const uint32_t block_h = (block_w == 1) ? block_h_volatile : block_h_const;
@@ -113,9 +111,9 @@ void kernel_main() {
     int index = 0;
 
     constexpr uint32_t cb_im = (do_gamma | do_beta) ? cb_ex_sqr : cb_out;
-    CircularBuffer cb_im_obj(cb_im);
+    DataflowBuffer cb_im_obj(cb_im);
     constexpr uint32_t cb_outgamma = do_beta ? cb_fusion : cb_out;
-    CircularBuffer cb_outgamma_obj(cb_outgamma);
+    DataflowBuffer cb_outgamma_obj(cb_outgamma);
 
     // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
     if constexpr (is_allgather_worker) {

@@ -10,17 +10,18 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/endpoints.h"
 
+template <typename CB1, typename CB2>
 inline void write_resharded_data(
     Noc& noc,
-    CircularBuffer& cb_out,
-    CircularBuffer& cb_out_resharded,
+    CB1& cb_out,
+    CB2& cb_out_resharded,
     uint32_t num_segments_to_write_back,
     uint32_t storage_core_start_offset,
     tt_l1_ptr uint32_t* segment_args,
     uint32_t worker_core_stride_w_bytes,
     uint32_t storage_core_stride_w_bytes,
     uint32_t block_ht) {
-    const uint32_t out_single_tile_size_bytes = get_tile_size(cb_out.get_cb_id());
+    const uint32_t out_single_tile_size_bytes = get_tile_size(cb_out.get_id());
     uint32_t args_idx = 0;
     uint32_t worker_core_read_offset = 0;
 

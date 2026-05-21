@@ -318,32 +318,10 @@ void bind_normalization_layernorm_device_operation(nb::module_& mod) {
 
 void bind_normalization_layernorm_program_factory(nb::module_& mod) {
     nb::class_<ttnn::prim::LayerNormMultiCoreProgramFactory>(mod, "LayerNormMultiCoreProgramFactory")
-        .def_static(
-            "create_descriptor",
-            [](const ttnn::prim::LayerNormParams& operation_attributes,
-               const ttnn::prim::LayerNormInputs& tensor_args,
-               Tensor& tensor_return_value,
-               const std::optional<CoreRangeSet>& core_range_set) {
-                return ttnn::prim::LayerNormMultiCoreProgramFactory::create_descriptor(
-                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
-            },
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            nb::arg("tensor_return_value"),
-            nb::arg("core_range_set") = nb::none(),
-            R"doc(
-            Creates a program descriptor for layer norm multi-core operation.
-
-            Args:
-                operation_attributes (LayerNormParams): Operation parameters including norm type, epsilon, memory config, etc.
-                tensor_args (LayerNormInputs): Input tensors including input, residual, weight, bias, and stats.
-                tensor_return_value (ttnn.Tensor): Output tensor reference.
-                core_range_set (ttnn.CoreRangeSet, optional): Optional core range set to restrict the program to specific cores.
-                    If not provided, uses device's compute grid.
-
-            Returns:
-                ttnn.ProgramDescriptor: The program descriptor for the layer norm operation.
-            )doc")
+        // Metal 2.0 port: `create_descriptor` is gone — the factory now builds a
+        // ProgramSpec via `create_program_spec` (invoked by the framework adapter).
+        // The Python OpDescriptor flow needs updating to call the framework adapter
+        // instead of `create_descriptor` directly.
         .def_static(
             "default_core_range",
             &ttnn::prim::LayerNormMultiCoreProgramFactory::default_core_range,
@@ -358,39 +336,10 @@ void bind_normalization_layernorm_program_factory(nb::module_& mod) {
                 ttnn.CoreRangeSet: The default core range covering the device's compute grid.
             )doc");
 
-    nb::class_<ttnn::prim::LayerNormShardedProgramFactory>(mod, "LayerNormShardedProgramFactory")
-        .def_static(
-            "create_descriptor",
-            [](const ttnn::prim::LayerNormParams& operation_attributes,
-               const ttnn::prim::LayerNormInputs& tensor_args,
-               Tensor& tensor_return_value,
-               const std::optional<CoreRangeSet>& core_range_set) {
-                return ttnn::prim::LayerNormShardedProgramFactory::create_descriptor(
-                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
-            },
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            nb::arg("tensor_return_value"),
-            nb::arg("core_range_set") = std::nullopt,
-            R"doc(
-            Creates a program descriptor for sharded layer norm operation.
-
-            Args:
-                operation_attributes (LayerNormParams): Operation parameters including norm type, epsilon, memory config, etc.
-                    Must have a LayerNormShardedMultiCoreProgramConfig as the program_config.
-                tensor_args (LayerNormInputs): Input tensors including input (sharded), residual, weight, bias, and stats.
-                tensor_return_value (ttnn.Tensor): Output tensor reference (sharded).
-                core_range_set (ttnn.CoreRangeSet, optional): Optional core range set. If provided, validates that the
-                    sharded tensor's shard spec cores lie entirely within this core range set. Raises an error if any
-                    shard spec core is outside the provided range.
-
-            Returns:
-                ttnn.ProgramDescriptor: The program descriptor for the sharded layer norm operation.
-
-            Raises:
-                RuntimeError: If core_range_set is provided and the sharded tensor's shard spec cores are not
-                    entirely contained within it.
-            )doc");
+    // Metal 2.0 port: `create_descriptor` is gone — the factory now builds a ProgramSpec
+    // via `create_program_spec` (invoked by the framework adapter). The Python OpDescriptor
+    // flow needs updating to call the framework adapter instead.
+    nb::class_<ttnn::prim::LayerNormShardedProgramFactory>(mod, "LayerNormShardedProgramFactory");
 }
 
 void bind_normalization_layernorm(nb::module_& mod) {

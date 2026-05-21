@@ -15,26 +15,23 @@
 
 // SPLIT REDUCE across Cores
 void kernel_main() {
-    constexpr uint32_t num_blocks_first_stage = get_compile_time_arg_val(3);
-    constexpr uint32_t block_w = get_compile_time_arg_val(5);
-    constexpr uint32_t block_h_const = get_compile_time_arg_val(4);
-    volatile uint32_t block_h_volatile = get_compile_time_arg_val(4);
-    constexpr uint32_t subblock_w_const = get_compile_time_arg_val(6);
-    volatile uint32_t subblock_w_volatile = get_compile_time_arg_val(6);
-    constexpr uint32_t num_subblocks_w = get_compile_time_arg_val(7);
-    const bool is_allgather_worker = get_compile_time_arg_val(8) == 1;
-    constexpr uint32_t num_tiles_per_block = get_compile_time_arg_val(9);
-    constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(10) == 1;
-    constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(11) == 1;
-    // LEGACY_RSQRT at index 12 is not used but needed for consistency across sharded compute kernels
-    constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(13);
+    constexpr uint32_t num_blocks_first_stage = get_arg(args::num_blocks_first_stage);
+    constexpr uint32_t block_w = get_arg(args::block_wt);
+    constexpr uint32_t block_h_const = get_arg(args::block_ht);
+    volatile uint32_t block_h_volatile = get_arg(args::block_ht);
+    constexpr uint32_t subblock_w_const = get_arg(args::subblock_wt);
+    volatile uint32_t subblock_w_volatile = get_arg(args::subblock_wt);
+    constexpr uint32_t num_subblocks_w = get_arg(args::num_subblocks_w);
+    const bool is_allgather_worker = get_arg(args::is_all_to_all_worker) == 1;
+    constexpr uint32_t num_tiles_per_block = get_arg(args::block_ht_block_wt);
+    constexpr bool FLOAT32_DTYPE = get_arg(args::fp32_dest_acc_en) == 1;
+    constexpr bool FLOAT32_REDUCTION = get_arg(args::float32_reduction) == 1;
+    constexpr uint32_t num_blocks_second_stage = get_arg(args::num_blocks_second_stage);
 
-    const uint32_t num_reduce_tiles_per_block_h =
-        get_arg_val<uint32_t>(0);  // This value is the same for all cores, except ones that have padding tiles in it.
-                                   // In that case, skip reduce for padding tiles.
-    const uint32_t num_tiles_per_allgather_worker = is_allgather_worker ? get_arg_val<uint32_t>(1) : 0;
-    const bool use_two_stage_reduce = is_allgather_worker ? get_arg_val<uint32_t>(2) == 1 : false;
-    const bool is_second_stage_reader = is_allgather_worker ? get_arg_val<uint32_t>(3) == 1 : false;
+    const uint32_t num_reduce_tiles_per_block_h = get_arg(args::num_reduce_tiles_per_block_h);
+    const uint32_t num_tiles_per_allgather_worker = is_allgather_worker ? get_vararg(0) : 0;
+    const bool use_two_stage_reduce = is_allgather_worker ? get_vararg(1) == 1 : false;
+    const bool is_second_stage_reader = is_allgather_worker ? get_vararg(2) == 1 : false;
 
     uint32_t num_blocks_reduce;
     if (is_second_stage_reader) {
@@ -47,32 +44,32 @@ void kernel_main() {
     constexpr uint32_t dst1 = 1;
     constexpr uint32_t scaler0 = 0;
 
-    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
-    constexpr uint32_t cb_in1 = tt::CBIndex::c_1;
+    constexpr uint32_t cb_in0 = dfb::cb_in0;
+    constexpr uint32_t cb_in1 = dfb::cb_inb;
 #ifdef FUSE_PRE_ADD
-    constexpr uint32_t cb_in = tt::CBIndex::c_14;
+    constexpr uint32_t cb_in = dfb::cb_in0_pre;  // c_14 in pre-allgather mode
 #else
     constexpr uint32_t cb_in = cb_in0;
 #endif
-    CircularBuffer cb_in_obj(cb_in);
-    constexpr uint32_t cb_scaler = tt::CBIndex::c_2;
-    constexpr uint32_t cb_scaler_global = tt::CBIndex::c_4;
-    constexpr uint32_t cb_x = tt::CBIndex::c_24;  // x minus mean
-    constexpr uint32_t cb_ex = tt::CBIndex::c_9;  // E[x] global reduce
+    DataflowBuffer cb_in_obj(cb_in);
+    constexpr uint32_t cb_scaler = dfb::cb_scaler;
+    constexpr uint32_t cb_scaler_global = dfb::cb_scaler_global;
+    constexpr uint32_t cb_x = dfb::cb_x;
+    constexpr uint32_t cb_ex = dfb::cb_ex;
 
-    constexpr uint32_t cb_ex2 = tt::CBIndex::c_12;  // E[(x-E[x])^2] global reduce
-    constexpr uint32_t cb_x2 = cb_x;                // x^2
-    constexpr uint32_t cb_out = tt::CBIndex::c_16;
+    constexpr uint32_t cb_ex2 = dfb::cb_ex2;
+    constexpr uint32_t cb_x2 = cb_x;
+    constexpr uint32_t cb_out = dfb::cb_out;
 
-    constexpr uint32_t cb_ex_partial2 = tt::CBIndex::c_11;   // E[x^2] partial reduce
-    constexpr uint32_t cb_ex_external2 = tt::CBIndex::c_13;  // E[x^2] partials received from other cores
+    constexpr uint32_t cb_ex_partial2 = dfb::cb_ex_partial2;
+    constexpr uint32_t cb_ex_external2 = dfb::cb_ex_external2;
     const uint32_t cb_reduction_out = (!use_two_stage_reduce or is_second_stage_reader) ? cb_out : cb_ex2;
 
-    CircularBuffer cb_scaler_obj(cb_scaler);
-    CircularBuffer cb_x2_obj(cb_x2);
-    CircularBuffer cb_ex_partial2_obj(cb_ex_partial2);
-    CircularBuffer cb_scaler_global_obj(cb_scaler_global);
-    CircularBuffer cb_ex_external2_obj(cb_ex_external2);
+    DataflowBuffer cb_scaler_obj(cb_scaler);
+    DataflowBuffer cb_x2_obj(cb_x2);
+    DataflowBuffer cb_ex_partial2_obj(cb_ex_partial2);
+    DataflowBuffer cb_scaler_global_obj(cb_scaler_global);
+    DataflowBuffer cb_ex_external2_obj(cb_ex_external2);
 
     // set block_h to volatile to disable automatically unroll of the loops, avoid code overflow
     const uint32_t block_h = (block_w == 1) ? block_h_volatile : block_h_const;
@@ -190,8 +187,7 @@ void kernel_main() {
         reconfig_data_format_srcb(cb_scaler, cb_scaler_global);
         reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_ex_external2, cb_scaler_global, cb_reduction_out);
         pack_reconfig_data_format(cb_reduction_out);
-        CircularBuffer(cb_reduction_out)
-            .reserve_back(num_tiles_per_partial_result * num_tiles_per_allgather_worker);
+        DataflowBuffer(cb_reduction_out).reserve_back(num_tiles_per_partial_result * num_tiles_per_allgather_worker);
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {  // loops over height
             tile_regs_acquire();
@@ -216,7 +212,6 @@ void kernel_main() {
             tile_regs_release();
         }
         reduce_uninit();
-        CircularBuffer(cb_reduction_out)
-            .push_back(num_tiles_per_partial_result * num_tiles_per_allgather_worker);
+        DataflowBuffer(cb_reduction_out).push_back(num_tiles_per_partial_result * num_tiles_per_allgather_worker);
     }
 }

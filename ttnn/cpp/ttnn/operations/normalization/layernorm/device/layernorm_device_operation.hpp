@@ -9,6 +9,7 @@
 
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/metal2_artifacts.hpp"
 
 #include "layernorm_device_operation_types.hpp"
 #include "layernorm_types.hpp"
@@ -17,11 +18,8 @@
 namespace ttnn::prim {
 
 struct LayerNormMultiCoreProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
-        const LayerNormParams& operation_attributes,
-        const LayerNormInputs& tensor_args,
-        Tensor& tensor_return_value,
-        const std::optional<CoreRangeSet>& core_range_set = std::nullopt);
+    static ttnn::device_operation::ProgramArtifacts create_program_spec(
+        const LayerNormParams& operation_attributes, const LayerNormInputs& tensor_args, Tensor& tensor_return_value);
 
     // Returns the default core range for non-sharded LayerNorm if a
     // core range override is not provided
@@ -29,11 +27,8 @@ struct LayerNormMultiCoreProgramFactory {
 };
 
 struct LayerNormShardedProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
-        const LayerNormParams& operation_attributes,
-        const LayerNormInputs& tensor_args,
-        Tensor& tensor_return_value,
-        const std::optional<CoreRangeSet>& core_range_set = std::nullopt);
+    static ttnn::device_operation::ProgramArtifacts create_program_spec(
+        const LayerNormParams& operation_attributes, const LayerNormInputs& tensor_args, Tensor& tensor_return_value);
 };
 
 struct LayerNormDeviceOperation {

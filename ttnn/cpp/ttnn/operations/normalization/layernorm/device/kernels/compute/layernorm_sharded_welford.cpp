@@ -100,68 +100,67 @@ void kernel_main() {
     // ---------------------------------------------------------------------------
     // Compile-time arguments
     // ---------------------------------------------------------------------------
-    constexpr uint32_t is_top_row = get_compile_time_arg_val(0);
-    constexpr uint32_t do_gamma = get_compile_time_arg_val(1);
-    constexpr uint32_t do_beta = get_compile_time_arg_val(2);
-    constexpr uint32_t num_blocks_first_stage = get_compile_time_arg_val(3);
-    constexpr uint32_t block_wt = get_compile_time_arg_val(5);
-    constexpr uint32_t block_ht_const = get_compile_time_arg_val(4);
-    volatile uint32_t block_ht_volatile = get_compile_time_arg_val(4);
-    constexpr uint32_t subblock_wt_const = get_compile_time_arg_val(6);
-    volatile uint32_t subblock_wt_volatile = get_compile_time_arg_val(6);
-    constexpr uint32_t num_subblocks_w = get_compile_time_arg_val(7);
-    const bool is_allgather_worker = get_compile_time_arg_val(8) == 1;
-    constexpr uint32_t num_tiles_per_block = get_compile_time_arg_val(9);
-    constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(10) == 1;
-    constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(11) == 1;
-    constexpr bool LEGACY_RSQRT = get_compile_time_arg_val(12) == 1;
-    constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(13);
-    constexpr uint32_t tile_width = get_compile_time_arg_val(14);
-    constexpr uint32_t last_tile_w = get_compile_time_arg_val(15);
-    constexpr uint32_t W = get_compile_time_arg_val(16);
-    constexpr uint32_t eps = get_compile_time_arg_val(17);
-    constexpr uint32_t per_core_recip_lut_size = get_compile_time_arg_val(18);
+    constexpr uint32_t is_top_row = get_arg(args::unused0);
+    constexpr uint32_t do_gamma = get_arg(args::do_gamma);
+    constexpr uint32_t do_beta = get_arg(args::do_beta);
+    constexpr uint32_t num_blocks_first_stage = get_arg(args::num_blocks_first_stage);
+    constexpr uint32_t block_wt = get_arg(args::block_wt);
+    constexpr uint32_t block_ht_const = get_arg(args::block_ht);
+    volatile uint32_t block_ht_volatile = get_arg(args::block_ht);
+    constexpr uint32_t subblock_wt_const = get_arg(args::subblock_wt);
+    volatile uint32_t subblock_wt_volatile = get_arg(args::subblock_wt);
+    constexpr uint32_t num_subblocks_w = get_arg(args::num_subblocks_w);
+    const bool is_allgather_worker = get_arg(args::is_all_to_all_worker) == 1;
+    constexpr uint32_t num_tiles_per_block = get_arg(args::block_ht_block_wt);
+    constexpr bool FLOAT32_DTYPE = get_arg(args::fp32_dest_acc_en) == 1;
+    constexpr bool FLOAT32_REDUCTION = get_arg(args::float32_reduction) == 1;
+    constexpr bool LEGACY_RSQRT = get_arg(args::legacy_rsqrt) == 1;
+    constexpr uint32_t num_blocks_second_stage = get_arg(args::num_blocks_second_stage);
+    constexpr uint32_t tile_width = get_arg(args::tile_width);
+    constexpr uint32_t last_tile_w = get_arg(args::last_tile_W);
+    constexpr uint32_t W = get_arg(args::K_dim);
+    constexpr uint32_t eps = get_arg(args::eps_u32);
+    constexpr uint32_t per_core_recip_lut_size = get_arg(args::per_core_recip_lut_size);
 
     // ---------------------------------------------------------------------------
     // CB definitions
     // ---------------------------------------------------------------------------
-    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
-    constexpr uint32_t cb_in1 = tt::CBIndex::c_1;
-    constexpr uint32_t cb_gamma = tt::CBIndex::c_5;
-    constexpr uint32_t cb_beta = tt::CBIndex::c_6;
-    constexpr uint32_t cb_x = tt::CBIndex::c_24;          // x minus mean
-    constexpr uint32_t cb_xmm = tt::CBIndex::c_18;        // x minus mean
-    constexpr uint32_t cb_ex_partial = tt::CBIndex::c_8;  // Interleaved E[x] and Var[x] partial results
-    constexpr uint32_t cb_ex = tt::CBIndex::c_9;          // Interleaved E[x] and Var[x] global reduce
-    constexpr uint32_t cb_ex_external = tt::CBIndex::c_10;
-    constexpr uint32_t cb_ex_global = tt::CBIndex::c_15;  // Interleaved E[x] and Var[x] final global mcast result
-    constexpr uint32_t cb_transpose = tt::CBIndex::c_22;  // Transpose interleaved E[x] and Var[x] to columns
-                                                          // (workaround for bug in transpose_wh_dest)
-    constexpr uint32_t cb_fusion = tt::CBIndex::c_18;     // stream gamma/beta
-    constexpr uint32_t cb_out = tt::CBIndex::c_16;
-    constexpr uint32_t cb_reciprocals = tt::CBIndex::c_25;  // LUT of pre-computed reciprocals for Welford's algorithm
+    constexpr uint32_t cb_in0 = dfb::cb_in0;
+    constexpr uint32_t cb_in1 = dfb::cb_inb;
+    constexpr uint32_t cb_gamma = dfb::cb_gamma;
+    constexpr uint32_t cb_beta = dfb::cb_beta;
+    constexpr uint32_t cb_x = dfb::cb_x;
+    constexpr uint32_t cb_xmm = dfb::cb_xmm;
+    constexpr uint32_t cb_ex_partial = dfb::cb_ex_partial;
+    constexpr uint32_t cb_ex = dfb::cb_ex;
+    constexpr uint32_t cb_ex_external = dfb::cb_ex_external;
+    constexpr uint32_t cb_ex_global = dfb::cb_ex_global;
+    constexpr uint32_t cb_transpose = dfb::cb_transpose;
+    constexpr uint32_t cb_fusion = dfb::cb_xmm;  // stream gamma/beta (alias of cb_xmm)
+    constexpr uint32_t cb_out = dfb::cb_out;
+    constexpr uint32_t cb_reciprocals = dfb::cb_reciprocals;
 
-    CircularBuffer cb_gamma_obj(cb_gamma);
-    CircularBuffer cb_beta_obj(cb_beta);
-    CircularBuffer cb_xmm_obj(cb_xmm);
-    CircularBuffer cb_ex_partial_obj(cb_ex_partial);
-    CircularBuffer cb_ex_obj(cb_ex);
-    CircularBuffer cb_ex_external_obj(cb_ex_external);
-    CircularBuffer cb_ex_global_obj(cb_ex_global);
-    CircularBuffer cb_transpose_obj(cb_transpose);
-    CircularBuffer cb_fusion_obj(cb_fusion);
-    CircularBuffer cb_out_obj(cb_out);
+    DataflowBuffer cb_gamma_obj(cb_gamma);
+    DataflowBuffer cb_beta_obj(cb_beta);
+    DataflowBuffer cb_xmm_obj(cb_xmm);
+    DataflowBuffer cb_ex_partial_obj(cb_ex_partial);
+    DataflowBuffer cb_ex_obj(cb_ex);
+    DataflowBuffer cb_ex_external_obj(cb_ex_external);
+    DataflowBuffer cb_ex_global_obj(cb_ex_global);
+    DataflowBuffer cb_transpose_obj(cb_transpose);
+    DataflowBuffer cb_fusion_obj(cb_fusion);
+    DataflowBuffer cb_out_obj(cb_out);
 
     constexpr uint32_t cb_im = (do_gamma | do_beta) ? cb_x : cb_out;
-    CircularBuffer cb_im_obj(cb_im);
+    DataflowBuffer cb_im_obj(cb_im);
     constexpr uint32_t cb_outgamma = do_beta ? cb_fusion : cb_out;
-    CircularBuffer cb_outgamma_obj(cb_outgamma);
+    DataflowBuffer cb_outgamma_obj(cb_outgamma);
 #ifdef FUSE_PRE_ADD
     constexpr uint32_t cb_in = cb_x;
 #else
     constexpr uint32_t cb_in = cb_in0;
 #endif
-    CircularBuffer cb_in_obj(cb_in);
+    DataflowBuffer cb_in_obj(cb_in);
 
     // Welford-fp32 alias of cb_in. When welford_fp32_alias is true, cb_x_welford_named points
     // to c_29, a separate buffer index sharing cb_in's SRAM but configured with UnpackToDestFp32,
@@ -182,7 +181,7 @@ void kernel_main() {
 
     // This value is the same for all cores, except ones that have padding tiles
     // in them. In that case, don't reduce over the padding elements.
-    const uint32_t num_reduce_tiles_per_block_h = get_arg_val<uint32_t>(0);
+    const uint32_t num_reduce_tiles_per_block_h = get_arg(args::num_reduce_tiles_per_block_h);
     const uint32_t partial_reduce_W = (num_reduce_tiles_per_block_h - 1) * tile_width + last_tile_w;
 
     // We split the Welford calls into full tiles and a final partial tile (if any)
@@ -192,11 +191,11 @@ void kernel_main() {
     const uint32_t partial_welford_tile_w = all_full_tiles ? 0 : last_tile_w;
 
     // This is the number of tile rows to process
-    const uint32_t num_tiles_per_allgather_worker = is_allgather_worker ? get_arg_val<uint32_t>(1) : 0;
+    const uint32_t num_tiles_per_allgather_worker = is_allgather_worker ? get_vararg(0) : 0;
 
     // These are for two-stage reductions
-    const bool use_two_stage_reduce = is_allgather_worker ? get_arg_val<uint32_t>(2) == 1 : false;
-    const bool is_second_stage_reader = is_allgather_worker ? get_arg_val<uint32_t>(3) == 1 : false;
+    const bool use_two_stage_reduce = is_allgather_worker ? get_vararg(1) == 1 : false;
+    const bool is_second_stage_reader = is_allgather_worker ? get_vararg(2) == 1 : false;
     constexpr uint32_t block_w = block_wt * tile_width;
     constexpr uint32_t last_block_w = block_w - tile_width + last_tile_w;
     uint32_t first_stage_w =
