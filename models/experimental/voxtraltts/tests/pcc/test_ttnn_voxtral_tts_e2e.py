@@ -19,7 +19,7 @@ from models.experimental.voxtraltts.tests.common import resolve_voxtral_model_na
 from models.experimental.voxtraltts.tt.voxtral_tts import VoxtralTTSPipeline
 
 PREFILL_HIDDEN_PCC = 0.99
-TEXT_DECODE_STEP_PCC = 0.98
+TEXT_DECODE_STEP_PCC = 0.99
 ACOUSTIC_MATCH_FRAC = 0.88
 WAVEFORM_PCC = 0.99
 
