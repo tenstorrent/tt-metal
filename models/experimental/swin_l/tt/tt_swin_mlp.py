@@ -16,7 +16,7 @@ import ttnn
 # (it pads the last spatial dim to TILE), so M_tiles_effective = Z * ceil(Y/TILE).
 _TUNED_FC1_PROGRAM_CONFIGS = {
     # Stage 2: input (1, 40, 40, 768) -> Z=40, Y=64[40], so M_tiles=40*2=80. weight (768, 3072).
-    # Standalone sweep showed: default LoFi+gelu+8x8 = 518us; tuned 2D 8x8 pcm=10 ibw=8 sub=2x4 = 218.5us (-58%).
+    # Standalone sweep: default LoFi+gelu+8x8 = 518us; tuned 2D 8x8 pcm=10 ibw=8 sub=2x4 = 218us (-58%).
     # 18 Stage-2 calls/iter -> ~5.4 ms iter savings.
     (768, 3072): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(8, 8),
@@ -28,6 +28,25 @@ _TUNED_FC1_PROGRAM_CONFIGS = {
         transpose_mcast=False,
         fused_activation=(ttnn.UnaryOpType.GELU, True),
     ),
+    # Stage 1: input (1, 80, 80, 384) -> Z=80, Y=96[80], M_tiles=80*3=240. weight (384, 1536).
+    # Standalone sweep: default = 716us; tuned 2D 8x8 pcm=30 ibw=12 sub=1x6 = 340us (-52%).
+    # 2 Stage-1 calls/iter -> ~0.75 ms iter savings.
+    (384, 1536): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=12,
+        out_subblock_h=1,
+        out_subblock_w=6,
+        per_core_M=30,
+        per_core_N=6,
+        transpose_mcast=False,
+        fused_activation=(ttnn.UnaryOpType.GELU, True),
+    ),
+}
+
+# Each (K, N) entry's expected M_tiles_effective for the canonical input shape.
+_EXPECTED_M_TILES = {
+    (768, 3072): 80,    # Stage 2: 40 * 2
+    (384, 1536): 240,   # Stage 1: 80 * 3
 }
 
 
@@ -44,8 +63,7 @@ class TtSwinMLP:
         K_w = int(w.shape[-2])
         N_w = int(w.shape[-1])
         self._fc1_pcfg = _TUNED_FC1_PROGRAM_CONFIGS.get((K_w, N_w))
-        # The per_core_M was chosen for M_tiles=80 (Z=40, Y_tiles=2). Verify at __call__.
-        self._fc1_expected_Z_x_Y_tiles = 80 if self._fc1_pcfg is not None else None
+        self._fc1_expected_Z_x_Y_tiles = _EXPECTED_M_TILES.get((K_w, N_w))
 
     def __call__(self, input_tensor):
         # Decide whether the runtime shape matches the tuned config's M_tiles.
