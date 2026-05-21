@@ -102,6 +102,16 @@ public:
     void deallocate_l1(IDevice* device, CoreCoord core, DeviceAddr addr);
     size_t bytes_available(IDevice* device, CoreCoord core) const;
 
+    // Returns the lowest currently-allocated address in this core's service L1 region,
+    // or std::nullopt if the core isn't claimed on this device or has no allocations.
+    // Used by Program::validate_circular_buffer_region to check that bottom-up CB
+    // regions on service cores don't extend up into the top-down service allocations
+    // (the worker-grid clash check uses the analogous BankManager query but doesn't
+    // see service-core allocations on its own). Does NOT TT_FATAL on unclaimed cores —
+    // returns nullopt instead, since callers iterate over CB CoreRanges which may
+    // legitimately contain non-service cores.
+    std::optional<DeviceAddr> lowest_allocated_address(ChipId device_id, CoreCoord core) const;
+
     // Returns the FD-mode compute grid snapshotted at first claim() for a device, or
     // nullopt if no service cores are currently claimed. Used internally to cap
     // compute_with_storage_grid_size() in SD mode so SD workloads don't accidentally
@@ -117,7 +127,10 @@ public:
     // NOTE: Internal dispatch routing (not user-facing)
     // Called on every EnqueueMeshWorkload
     bool has_any_claims() const;
-    // Called at add_program time to route programs targeting service cores to the SD path.
+    // Cross-device check: returns true if `core` is claimed on ANY device.
+    // Used for add-program-time routing and kernel-placement-time validation,
+    // where the target device id isn't known yet. For per-device checks, use
+    // `claimed_cores(device_id).contains(core)` directly.
     bool is_service_core(CoreCoord core) const;
 
     ServiceCoreManager(const ServiceCoreManager&) = delete;

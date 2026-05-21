@@ -6,12 +6,15 @@ import os
 import signal
 from pathlib import Path
 
+import numpy as np
+import torch
 from loguru import logger
 from transformers import AutoConfig
 
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.tt.mla.utils import create_balanced_chunk_order, reorder_tensor_chunks
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.runners.migration_setup import INVALID_SLOT_ID
@@ -30,89 +33,6 @@ CAPACITY_FACTOR = int(os.environ.get("PREFILL_CAPACITY_FACTOR", 8))
 _gate_mode_name = os.environ.get("PREFILL_GATE_FALLBACK_MODE", "HOST_ALL")
 PREFILL_DEBUG = os.environ.get("PREFILL_DEBUG", "0") == "1"
 PREFILL_TRACE_SYNCS = os.environ.get("PREFILL_TRACE_SYNCS", "0") == "1"
-
-
-def _install_sync_tracer() -> None:
-    """Monkey-patch ttnn.synchronize_device + ttnn.to_torch to print where they
-    are called from and how long each call took. First occurrence at each user
-    call site prints a stack snippet; subsequent calls just increment counters
-    that we dump at exit.
-
-    Enabled via PREFILL_TRACE_SYNCS=1. The goal is to expose any 'hidden' sync
-    points inside ttnn ops that we don't see by grepping for synchronize_device
-    in the model python code.
-    """
-    import atexit
-    import time as _time
-    import traceback
-
-    seen: dict = {}  # key -> {"count": int, "total_us": float, "max_us": float}
-
-    def _site_key():
-        # Skip the wrapper frame + this frame; find the first frame that
-        # isn't inside ttnn's own python package.
-        stack = traceback.extract_stack()[:-2]
-        user = [f for f in stack if "/ttnn/ttnn/" not in f.filename]
-        f = user[-1] if user else stack[-1]
-        return (f.filename, f.lineno, f.name)
-
-    def _record(name, key, duration_us):
-        full_key = (name, *key)
-        slot = seen.get(full_key)
-        if slot is None:
-            seen[full_key] = {"count": 1, "total_us": duration_us, "max_us": duration_us}
-            logger.info(f"[sync-trace] FIRST {name} from {key[0]}:{key[1]} in {key[2]}  ({duration_us:.1f} us)")
-        else:
-            slot["count"] += 1
-            slot["total_us"] += duration_us
-            if duration_us > slot["max_us"]:
-                slot["max_us"] = duration_us
-
-    _orig_sync = ttnn.synchronize_device
-
-    def _patched_sync(*args, **kwargs):
-        key = _site_key()
-        t0 = _time.perf_counter()
-        ret = _orig_sync(*args, **kwargs)
-        dt_us = (_time.perf_counter() - t0) * 1e6
-        _record("synchronize_device", key, dt_us)
-        return ret
-
-    ttnn.synchronize_device = _patched_sync
-
-    _orig_to_torch = ttnn.to_torch
-
-    def _patched_to_torch(*args, **kwargs):
-        key = _site_key()
-        t0 = _time.perf_counter()
-        ret = _orig_to_torch(*args, **kwargs)
-        dt_us = (_time.perf_counter() - t0) * 1e6
-        _record("to_torch", key, dt_us)
-        return ret
-
-    ttnn.to_torch = _patched_to_torch
-
-    def _dump_summary():
-        logger.info("=" * 80)
-        logger.info("[sync-trace] summary (per call site)")
-        logger.info("=" * 80)
-        # sort by total_us descending — the expensive ones first
-        rows = sorted(seen.items(), key=lambda kv: -kv[1]["total_us"])
-        for (name, fn, ln, func), s in rows:
-            avg = s["total_us"] / max(1, s["count"])
-            logger.info(
-                f"  {name:<22} {fn}:{ln} in {func}: "
-                f"count={s['count']} total={s['total_us']/1e3:.1f}ms "
-                f"avg={avg:.1f}us max={s['max_us']:.1f}us"
-            )
-        logger.info("=" * 80)
-
-    atexit.register(_dump_summary)
-    logger.info("[sync-trace] installed monkey-patches on ttnn.synchronize_device and ttnn.to_torch")
-
-
-if PREFILL_TRACE_SYNCS:
-    _install_sync_tracer()
 
 _shutdown = False
 
@@ -179,7 +99,76 @@ def _resolve_weight_cache_path() -> Path | None:
     return path
 
 
-def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
+def _build_h2d_service(mesh_device: ttnn.MeshDevice) -> ttnn.H2DStreamService:
+    """Construct an H2DStreamService whose per-shard backing tensor matches
+    what `TtDeepSeekPrefillPipeline._prepare_input_tensor` would have produced.
+
+    Per-shard target: `(1, 1, isl_per_chip)` uint32 ROW_MAJOR DRAM.
+    Achieved by setting global_spec.shape = `(sp_factor, 1, isl_per_chip)` and
+    mapping `[Shard(0), Replicate]` on a `(sp, tp)` mesh — first axis of the
+    tensor is sharded across mesh rows (sp), nothing else is split.
+
+    No `worker_cores`, no metadata: Mode 1 only. Per-iter usage is
+    `forward_to_tensor_bytes(...) -> barrier() -> consume the backing tensor
+    via the standard FD-dispatched embedding op` (see run_standalone_loop).
+    """
+    sp_factor, tp_factor = GLOBAL_MESH_SHAPE
+    assert MAX_SEQ_LEN % sp_factor == 0, f"MAX_SEQ_LEN={MAX_SEQ_LEN} must be divisible by sp_factor={sp_factor}"
+    isl_per_chip = MAX_SEQ_LEN // sp_factor
+    per_chip_bytes = isl_per_chip * 4  # uint32
+
+    global_spec = ttnn.TensorSpec(
+        shape=ttnn.Shape([sp_factor, 1, isl_per_chip]),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        buffer_type=ttnn.BufferType.DRAM,
+    )
+    mapper = ttnn.create_mesh_mapper(
+        mesh_device,
+        ttnn.MeshMapperConfig(
+            placements=[ttnn.PlacementShard(0), ttnn.PlacementReplicate()],
+        ),
+    )
+    service = ttnn.H2DStreamService(
+        mesh_device=mesh_device,
+        global_spec=global_spec,
+        fifo_size_bytes=8 * per_chip_bytes,  # 8 in-flight pages of headroom
+        scratch_cb_size_bytes=per_chip_bytes,  # one page; service requires >= page_size
+        mapper=mapper,
+    )
+    logger.info(
+        f"[h2d] H2DStreamService built: global_shape=({sp_factor},1,{isl_per_chip}) "
+        f"uint32 ROW_MAJOR DRAM, per_chip_bytes={per_chip_bytes}"
+    )
+    return service
+
+
+def _tokens_to_flat_numpy(token_ids: list[int]) -> np.ndarray:
+    """Host-side token-id prep for the H2D bytes path.
+
+    Mirrors `TtDeepSeekPrefillPipeline._prepare_input_tensor` minus the
+    `from_torch` upload: applies the `is_balanced` chunk reorder, reshapes
+    to `(sp_factor, 1, isl_per_chip)`, returns a contiguous int32 numpy
+    buffer. The service's mapper shards axis 0 across `sp_factor` mesh rows.
+    """
+    sp_factor = GLOBAL_MESH_SHAPE[0]
+    assert len(token_ids) == MAX_SEQ_LEN, f"token_ids must be padded to MAX_SEQ_LEN={MAX_SEQ_LEN}, got {len(token_ids)}"
+    isl_per_chip = MAX_SEQ_LEN // sp_factor
+
+    if IS_BALANCED:
+        chunk_order = create_balanced_chunk_order(sp_factor)
+        t = torch.tensor(token_ids, dtype=torch.int64).unsqueeze(0).unsqueeze(0).unsqueeze(-1)
+        t = reorder_tensor_chunks(t, chunk_order, seq_dim=2)
+        token_ids_sharded = t.squeeze(0).squeeze(-1).reshape(sp_factor, 1, isl_per_chip)
+    else:
+        token_ids_sharded = torch.tensor(token_ids, dtype=torch.int64).reshape(sp_factor, 1, isl_per_chip)
+
+    # uint32 bit pattern is what the device sees; int32 view is byte-identical
+    # for any non-negative token id (DeepSeek vocab fits in 18 bits anyway).
+    return token_ids_sharded.to(torch.int32).contiguous().numpy()
+
+
+def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DStreamService) -> None:
     """Run a single prefill from a JSON file (no C++ server / SHM required).
 
     Reads PREFILL_STANDALONE_INPUT (default: standalone_input.json next to this
@@ -231,9 +220,19 @@ def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
     num_iterations = int(os.environ.get("PREFILL_STANDALONE_ITERS", "5"))
     iter_times_ms = []
     first_token = None
+    flat_tokens = _tokens_to_flat_numpy(token_ids)
     for i in range(num_iterations):
         _t0 = _time.perf_counter()
-        first_token = pipeline.prefill(token_ids=token_ids, slot_id=0, actual_isl=actual_isl)
+        # Push token IDs through the persistent H2D service: the service core
+        # drains the FIFO into the backing tensor; barrier() waits for the
+        # device-side ACK so the embedding op below sees the new bytes.
+        h2d_service.forward_to_tensor_bytes(flat_tokens)
+        h2d_service.barrier()
+        first_token = pipeline.prefill(
+            input_tensor=h2d_service.get_backing_tensor(),
+            slot_id=0,
+            actual_isl=actual_isl,
+        )
         _dt_ms = (_time.perf_counter() - _t0) * 1000.0
         iter_times_ms.append(_dt_ms)
         logger.info(
@@ -260,7 +259,7 @@ def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
             )
 
 
-def run_request_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
+def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DStreamService) -> None:
     """Read prefill requests from SHM, run pipeline.prefill, write tokens back.
 
     SharedMemory lives in the C++ inference server's tree at
@@ -320,8 +319,11 @@ def run_request_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
                 token_ids = token_ids + [1] * (MAX_SEQ_LEN - len(token_ids))
 
             _t0 = _time.perf_counter()
+            flat_tokens = _tokens_to_flat_numpy(token_ids)
+            h2d_service.forward_to_tensor_bytes(flat_tokens)
+            h2d_service.barrier()
             first_token = pipeline.prefill(
-                token_ids=token_ids,
+                input_tensor=h2d_service.get_backing_tensor(),
                 slot_id=0,
                 actual_isl=actual_isl,
                 dst_slot=dst_slot,
@@ -451,6 +453,10 @@ def main() -> None:
     if PREFILL_DEBUG:
         probe_dram_allocatable_base(mesh_device, "after-compile")
 
+    h2d_service = _build_h2d_service(mesh_device)
+    if PREFILL_DEBUG:
+        probe_dram_allocatable_base(mesh_device, "after-h2d-service")
+
     if enable_migration:
         from models.demos.deepseek_v3_d_p.tt.runners.migration_setup import DECODE_EP_ID, setup_prefill_migration
 
@@ -466,9 +472,9 @@ def main() -> None:
 
     logger.info("Setup complete, entering request loop")
     if os.environ.get("PREFILL_STANDALONE", "0") == "1":
-        run_standalone_loop(pipeline)
+        run_standalone_loop(pipeline, h2d_service)
     else:
-        run_request_loop(pipeline)
+        run_request_loop(pipeline, h2d_service)
 
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
     ttnn.close_mesh_device(mesh_device)

@@ -156,18 +156,38 @@ class TtDeepSeekPrefillPipeline:
 
     def prefill(
         self,
-        token_ids: list[int],
-        slot_id: int,
+        token_ids: Optional[list[int]] = None,
+        slot_id: int = 0,
         actual_isl: Optional[int] = None,
         dst_slot: Optional[int] = None,
+        *,
+        input_tensor: Optional[ttnn.Tensor] = None,
     ) -> int:
+        """Run one prefill pass and return the first generated token.
+
+        Two input paths:
+          * Legacy: pass `token_ids` (a list of ints). The pipeline shards and
+            uploads the tokens via `ttnn.from_torch` on every call.
+          * Pre-uploaded: pass `input_tensor` (an already SP-sharded uint32
+            ROW_MAJOR tensor whose per-shard spec matches `_prepare_input_tensor`'s
+            output). Useful when the caller drives a persistent H2D streaming
+            service (e.g. `ttnn.H2DStreamService`) that owns the backing tensor.
+
+        `actual_isl` is required when `input_tensor` is supplied — the pipeline
+        can't infer it from a device tensor that's padded to `max_seq_len`.
+        """
         assert self.compiled, "Call compile() before prefill()"
-        if actual_isl is None:
-            actual_isl = len(token_ids)
+        if input_tensor is None:
+            assert token_ids is not None, "Provide token_ids or input_tensor"
+            if actual_isl is None:
+                actual_isl = len(token_ids)
+            tt_token_ids = self._prepare_input_tensor(token_ids)
+        else:
+            assert actual_isl is not None, "actual_isl required when input_tensor is provided"
+            tt_token_ids = input_tensor
         if dst_slot is None:
             dst_slot = slot_id
 
-        tt_token_ids = self._prepare_input_tensor(token_ids)
         on_layer_complete = self._build_migration_callback(slot_id, actual_isl, dst_slot)
 
         first_token_id, _first_token_prob, _ = self.model.forward(

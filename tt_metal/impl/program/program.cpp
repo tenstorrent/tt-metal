@@ -7,6 +7,7 @@
 #include <circular_buffer_config.hpp>
 #include <device.hpp>
 #include <graph_tracking.hpp>
+#include <tt-metalium/internal/service/service_core_manager.hpp>
 #include <enchantum/enchantum.hpp>
 #include "tt_metal/detail/reports/memory_reporter.hpp"
 #include "impl/buffers/semaphore.hpp"
@@ -1417,6 +1418,23 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
         }
     }
 
+    // Workload-level invariant: every program is either all-service or all-worker
+    // (asserted at MeshWorkload::add_program). That means every cb_allocator's
+    // CoreRange is uniformly one type — we pick the right L1-usage source per
+    // allocator rather than querying both. Build the per-device list once for
+    // the service-core branch to amortise the MeshDevice dynamic_cast.
+    const auto& svc = tt::tt_metal::internal::ServiceCoreManager::get();
+    std::vector<const IDevice*> devices_for_svc_check;
+    if (svc.has_any_claims()) {
+        if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
+            for (IDevice* dev : mesh->get_devices()) {
+                devices_for_svc_check.push_back(dev);
+            }
+        } else {
+            devices_for_svc_check.push_back(device);
+        }
+    }
+
     for (const CircularBufferAllocator& cb_allocator : this->cb_allocators_) {
         if (cb_allocator.l1_regions.empty()) {
             continue;
@@ -1430,6 +1448,39 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
                 cb_region_end,
                 max_l1_size);
         }
+
+        // Detect whether this cb_allocator is on a service core. Workload-level
+        // invariant guarantees the range is uniformly one type, so checking the
+        // start corner is sufficient.
+        const bool on_service_core =
+            svc.has_any_claims() && svc.is_service_core(cb_allocator.core_range.start_coord);
+
+        if (on_service_core) {
+            // Service-core path: worker-grid BankManager has no record of anything
+            // on this core, so query only ServiceCoreManager (which allocates
+            // top-down on this core's per-core FreeListOpt).
+            std::optional<DeviceAddr> svc_lowest;
+            for (const IDevice* dev : devices_for_svc_check) {
+                for (const auto& core : cb_allocator.core_range) {
+                    auto a = svc.lowest_allocated_address(dev->id(), core);
+                    if (a.has_value()) {
+                        svc_lowest = svc_lowest.has_value() ? std::make_optional(std::min(*svc_lowest, *a)) : a;
+                    }
+                }
+            }
+            if (svc_lowest.has_value() && svc_lowest.value() < cb_region_end) {
+                TT_THROW(
+                    "Circular buffers on service-core range {} in program {} clash with ServiceCoreManager-allocated "
+                    "L1 (lowest service allocation at {}, CB region ends at {})",
+                    cb_allocator.core_range.str(),
+                    this->id,
+                    svc_lowest.value(),
+                    cb_region_end);
+            }
+            continue;  // Worker-grid checks below are irrelevant for service cores.
+        }
+
+        // Worker-grid path (unchanged).
         if (hybrid_mode) {
             // Per-core allocations (experimental_set_per_core_allocation) can land at different
             // addresses per core, so query only the banks this CB covers on each physical allocator.
@@ -1461,11 +1512,34 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
 
 void detail::ProgramImpl::validate_circular_buffer_core_ranges(const IDevice* device) {
     auto grid_size = device->compute_with_storage_grid_size();
+    // Service cores live outside `compute_with_storage_grid_size()` by design
+    // (they are dispatch-column cores excluded from the worker grid). Allow
+    // CBs whose CoreRange lies entirely on cores currently claimed via
+    // ServiceCoreManager — the runtime CB allocation path still needs to be
+    // taught about service-core L1 (the worker-grid base address is wrong),
+    // but the up-front shape check shouldn't reject these ranges outright.
+    const auto& svc = tt::tt_metal::internal::ServiceCoreManager::get();
+    const auto claimed_on_device = svc.claimed_cores(device->id());
+    auto entirely_on_service_cores = [&](const CoreRange& cr) {
+        if (claimed_on_device.empty()) {
+            return false;
+        }
+        for (uint32_t x = cr.start_coord.x; x <= cr.end_coord.x; ++x) {
+            for (uint32_t y = cr.start_coord.y; y <= cr.end_coord.y; ++y) {
+                if (claimed_on_device.count(CoreCoord{x, y}) == 0) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    };
     for (const auto& cb : circular_buffers_) {
         for (const auto& cr : cb->core_ranges().ranges()) {
+            const bool in_worker_grid = cr.end_coord.x < grid_size.x && cr.end_coord.y < grid_size.y;
             TT_FATAL(
-                cr.end_coord.x < grid_size.x && cr.end_coord.y < grid_size.y,
-                "Circular buffer core range {} in program {} exceeds device compute grid ({}x{})",
+                in_worker_grid || entirely_on_service_cores(cr),
+                "Circular buffer core range {} in program {} exceeds device compute grid ({}x{}) and is "
+                "not entirely on cores claimed via ServiceCoreManager",
                 cr.str(),
                 this->id,
                 grid_size.x,

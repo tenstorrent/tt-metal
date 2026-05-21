@@ -6,7 +6,9 @@
 
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include <memory>
+#include <optional>
 #include <utility>
 
 namespace tt::umd {
@@ -68,6 +70,13 @@ public:
      * Allocates named shared memory for host-side buffers, pins it for device DMA,
      * and sets up device-side config and data buffers. The socket can be exported
      * via export_descriptor() for cross-process attachment.
+     *
+     * If `recv_core.core_coord` has been claimed on `recv_core.device_coord` via
+     * `tt::tt_metal::internal::ServiceCoreManager`, the device-side config (and,
+     * for HOST_PUSH, data) buffers are allocated from that core's service-core L1
+     * region instead of the worker-grid BankManager — required because the
+     * BankManager doesn't allocate into service-core L1. Detection is automatic;
+     * cleanup happens in the destructor.
      *
      * @param mesh_device The mesh device containing the target core.
      * @param recv_core The target core coordinate (device + core) to receive data.
@@ -184,6 +193,12 @@ private:
 
     std::shared_ptr<MeshBuffer> config_buffer_ = nullptr;
     std::shared_ptr<MeshBuffer> data_buffer_ = nullptr;
+    // When the config/data buffers were allocated from a service core's L1
+    // (i.e. `recv_core_` was a claimed service core at construction time),
+    // record the addresses so the dtor can release them back to the
+    // per-core service allocator. Empty otherwise.
+    std::optional<DeviceAddr> svc_config_l1_addr_;
+    std::optional<DeviceAddr> svc_data_l1_addr_;
     MeshCoreCoord recv_core_;
     BufferType buffer_type_ = BufferType::L1;
     uint32_t fifo_size_ = 0;

@@ -16,6 +16,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <set>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -96,16 +97,56 @@ void MeshWorkloadImpl::add_program(const MeshCoordinateRange& device_range, Prog
     Inspector::mesh_workload_add_program(this, device_range, program.impl().get_id());
 
     // Route to service_programs_ if any core in this program is a claimed service core.
+    // Structural invariants enforced here (no mesh device required):
+    //   1. A single program must target service cores exclusively or worker cores
+    //      exclusively. Mixing the two would land the whole program on the SD path
+    //      with worker-grid kernels along for the ride, producing silent corruption.
+    //   2. A service program must target exactly ONE core. Multi-core service
+    //      programs would need a "lockstep allocate" across the per-core
+    //      ServiceCoreManager allocators (e.g. for a CB that needs the same L1
+    //      address on every core in its CoreRange), which doesn't exist today.
+    //      Each service core has an independent FreeListOpt, so a multi-core
+    //      service CB has no way to pick a single shared address.
+    // The per-device claim-existence check (every device in `device_range` has the
+    // targeted cores claimed) happens at dispatch time in EnqueueMeshWorkload,
+    // where the MeshDevice is known.
     const auto& claims = internal::ServiceCoreManager::get();
     if (claims.has_any_claims()) {
-        // Only do per core checks if a service is running
+        bool any_service = false;
+        bool any_worker = false;
+        std::set<CoreCoord> service_cores;
         for (const auto& per_type : program.impl().logical_cores()) {
             for (const auto& core : per_type) {
                 if (claims.is_service_core(core)) {
-                    service_programs_[device_range] = std::move(program);
-                    return;
+                    any_service = true;
+                    service_cores.insert(core);
+                } else {
+                    any_worker = true;
                 }
             }
+        }
+        TT_FATAL(
+            !(any_service && any_worker),
+            "MeshWorkload program targets both service cores and worker-grid cores. "
+            "A program must target one set or the other exclusively (routing is per-program).");
+        if (any_service) {
+            std::string core_list;
+            for (const auto& c : service_cores) {
+                if (!core_list.empty()) {
+                    core_list += ", ";
+                }
+                core_list += c.str();
+            }
+            TT_FATAL(
+                service_cores.size() == 1,
+                "Service program targets {} cores ({}); only single-core service programs "
+                "are supported today. Multi-core service programs need lockstep allocation "
+                "across independent per-core ServiceCoreManager allocators, which is not "
+                "yet implemented.",
+                service_cores.size(),
+                core_list);
+            service_programs_[device_range] = std::move(program);
+            return;
         }
     }
 
