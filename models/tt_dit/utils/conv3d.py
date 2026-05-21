@@ -555,9 +555,11 @@ def _compute_heuristic_blocking_conv3d(
     Returns (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block).
 
     Rules derived from empirical sweep data across BH 4x8 / 4x32 configurations:
-    - H_out_block * W_out_block targets 32 wherever the dimensions allow.
+    - H_out_block * W_out_block targets 32; the runtime pads partial blocks so no
+      divisibility check is needed when selecting spatial pairs.
     - Preferred spatial pairs (ordered by H*W area): (16,2), (8,4), (4,8).
-    - T_out_block = 1 for (1,*,*) kernels; scales 1→3→5→7 with T for (3,*,*).
+    - T_out_block = 1 for (1,*,*) and (3,1,1) kernels; scales 1→3→5→7 with T
+      for (3,3,3) kernels only (tconv layers consistently use T=1 in sweep data).
     - C_in_block targets 96 (or 192 for large C_in); C_out_block targets 96–256.
     """
 
@@ -586,9 +588,11 @@ def _compute_heuristic_blocking_conv3d(
     else:
         C_out_block = snap(out_channels, 256)
 
-    # T_out_block: (1,*,*) kernels never block temporally; scale with T otherwise.
-    kt = kernel_size[0]
-    if kt == 1 or T <= 3:
+    # T_out_block: only (3,3,3) kernels benefit from temporal blocking.
+    # (1,*,*) never blocks temporally. (3,1,1) tconv layers consistently use
+    # T=1 in sweep data even at large T, so also default to 1.
+    kt, kh, kw = kernel_size
+    if kt == 1 or (kh == 1 and kw == 1) or T <= 3:
         T_out_block = 1
     elif T <= 12:
         T_out_block = 3
@@ -598,7 +602,8 @@ def _compute_heuristic_blocking_conv3d(
         T_out_block = 7
 
     # H_out_block, W_out_block: target hw_product = 32.
-    # Preferred Hb order shifts toward smaller values for large spatial areas.
+    # The runtime pads partial blocks internally so no divisibility check is needed;
+    # just pick the preferred pair by spatial area.
     hw_area = H * W
     if hw_area <= 500:
         hb_order = [16, 8, 32, 4, 2, 1]
@@ -608,23 +613,8 @@ def _compute_heuristic_blocking_conv3d(
         hb_order = [4, 8, 2, 16, 1]
 
     hw_target = 32
-    H_out_block, W_out_block = 1, 1
-    for Hb in hb_order:
-        Wb = hw_target // Hb
-        if H % Hb == 0 and W % Wb == 0:
-            H_out_block, W_out_block = Hb, Wb
-            break
-
-    if H_out_block == 1 and W_out_block == 1:
-        # No hw_target=32 pair fits; find the best individual divisors.
-        for Hb in range(min(H, 32), 0, -1):
-            if H % Hb == 0:
-                H_out_block = Hb
-                break
-        for Wb in range(min(W, 32), 0, -1):
-            if W % Wb == 0:
-                W_out_block = Wb
-                break
+    Hb = hb_order[0]
+    H_out_block, W_out_block = Hb, hw_target // Hb
 
     return C_in_block, C_out_block, T_out_block, H_out_block, W_out_block
 
