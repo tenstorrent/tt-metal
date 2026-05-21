@@ -20,18 +20,7 @@ inline void _calculate_exp2_()
     {
         sfpi::vFloat v = sfpi::dst_reg[0];
 
-        v = v * sfpi::vConstFloatPrgm0;
-        sfpi::vFloat result;
-
-        if constexpr (is_fp32_dest_acc_en)
-        {
-            result = _sfpu_exp_fp32_accurate_(v);
-        }
-        else
-        {
-            result = _sfpu_exp_21f_bf16_<true>(v);
-            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
-        }
+        sfpi::vFloat result = _sfpu_exp2_accurate_<is_fp32_dest_acc_en>(v);
 
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
@@ -41,7 +30,6 @@ inline void _calculate_exp2_()
 template <bool APPROXIMATION_MODE /*unused*/>
 inline void _init_exp2_()
 {
-    sfpi::vConstFloatPrgm0 = 0.6931471805f;
 }
 
 } // namespace ckernel::sfpu

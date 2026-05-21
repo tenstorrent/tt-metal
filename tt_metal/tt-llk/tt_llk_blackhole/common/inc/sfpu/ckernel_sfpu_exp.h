@@ -84,6 +84,165 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val)
 }
 
 /*
+ * Unsafe core of BF16 21f exp2: skips the clamp. The caller MUST ensure `val + 127`
+ * stays in [0, 256) (roughly val ∈ [-127, 128]) — otherwise the
+ * implicit float→int conversion in _float_to_int32_for_exp_21f_ can
+ * wrap and produce garbage.
+ *
+ * @param val The input value, must be in the safe range described above.
+ * @return sfpi::vFloat Result of exp2(val), 21-bit accuracy (~3 FP32 ULP).
+ */
+template <bool is_fp32_dest_acc_en>
+sfpi_inline sfpi::vFloat _sfpu_exp2_21f_bf16_unsafe_(sfpi::vFloat val)
+{
+    sfpi::vFloat x = (val + 127.f);
+
+    sfpi::vInt z = _float_to_int32_for_exp_21f_(x);
+
+    sfpi::vInt exponential_part = sfpi::exexp(sfpi::reinterpret<sfpi::vFloat>(z), sfpi::ExponentMode::NoDebias); // Extract exponent ( = 2**(integer part of val))
+    sfpi::vInt fractional_part  = sfpi::exman(sfpi::reinterpret<sfpi::vFloat>(z));                         // Extract mantissa ( = leftover part, in [0; 1])
+
+    sfpi::vFloat frac = sfpi::int32_to_float(fractional_part, sfpi::RoundMode::NearestEven);
+
+    // To refine approximation of 2**(x_f), we use an approximation of 2**x on [0; 2^23]
+    // This uses a 2nd degree polynomial adjustment of the fractional part
+    frac = PolynomialEvaluator::eval(frac, 1.0017248f, 7.839635491371155e-08f, 4.791750143340323e-15f);
+
+    // Recombined exponent and mantissa: this is equivalent to 2**(x_i) * 2**(x_f)
+    sfpi::vFloat y = sfpi::setexp(frac, exponential_part);
+
+    if constexpr (!is_fp32_dest_acc_en)
+    {
+        // LRegs work on float32 data. If DST is bfloat16 then SFPSTORE will truncate it.
+        // This can reduce accuracy: for instance, 9**2 = 80.8 gets round to 80.5
+        // rather than 81 (which would have been correct).
+        // To avoid this issue, we explicitly convert to bfloat16 using round-to-nearest-even.
+        y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::NearestEven);
+    }
+
+    return y;
+}
+
+/*
+ * This function implements the exp2 function using a polynomial approximation algorithm
+ * based on "Simple Multiple Precision Algorithms for Exponential Functions [Tips & Tricks]"
+ * by Moroz et al. 2022 (https://doi.org/10.1109/MSP.2022.3157460).
+ *
+ * @param val The input value (sfpi::vFloat vector), can be any floating point number
+ *
+ * @return sfpi::vFloat Result of exp2(val)
+ */
+template <bool is_fp32_dest_acc_en>
+sfpi_inline sfpi::vFloat _sfpu_exp2_21f_bf16_(sfpi::vFloat val)
+{
+    sfpi::vFloat x = (val + 127.f);
+
+    // Intermediary values can overflow in x is outside of [0, 256[ which leads to invalid results instead of 0
+    // (when input < -127) and +inf (when input > 128)
+    // To avoid this, we clamp x to [0, 255]
+    sfpi::vFloat threshold_low  = 0.f;
+    sfpi::vFloat threshold_high = sfpi::vFloat(255.f);
+    sfpi::vec_min_max(threshold_low, x);
+    sfpi::vec_min_max(x, threshold_high);
+
+    return _sfpu_exp2_21f_bf16_unsafe_<is_fp32_dest_acc_en>(x - 127.f);
+}
+
+/*
+ * Unsafe core of FP32 exp2: Direct base-2 evaluation.
+ *
+ * Skips the overflow / underflow / NaN guards present in _sfpu_exp2_fp32_accurate_.
+ * The caller MUST ensure |val| stays inside the safe range (roughly val ∈ [-127, 128])
+ * — otherwise the exponent arithmetic in setexp() can wrap and produce garbage.
+ *
+ * @param val The input value, must be in the safe range described above.
+ * @return sfpi::vFloat Result of exp2(val), accurate to <1 FP32 ULP.
+ */
+sfpi_inline sfpi::vFloat _sfpu_exp2_fp32_accurate_unsafe_(sfpi::vFloat val)
+{
+    // Step 1: Compute k = round(x)
+    sfpi::vInt k_int;
+    sfpi::vFloat k = _sfpu_round_to_nearest_int32_(val, k_int);
+
+    // Step 2: Range reduction
+    // r = x - k
+    sfpi::vFloat r = val - k;
+
+    // Step 3: Polynomial approximation for 2^r on [-0.5, 0.5]
+    // Use degree 7 Taylor series for < 1 ULP accuracy
+    sfpi::vFloat p = PolynomialEvaluator::eval(
+        r,
+        sfpi::vConst1, // c0 = 1
+        0.6931471805599453f, // c1 = ln(2)
+        0.2402265069591007f, // c2 = (ln 2)^2 / 2!
+        0.05550410866482158f, // c3 = (ln 2)^3 / 3!
+        0.009618129107628477f, // c4 = (ln 2)^4 / 4!
+        0.0013333558146428443f, // c5 = (ln 2)^5 / 5!
+        0.0001540353039332743f, // c6 = (ln 2)^6 / 6!
+        0.0000152527338023598f  // c7 = (ln 2)^7 / 7!
+    );
+
+    // Step 4: Scale by 2^k via direct exponent injection
+    sfpi::vInt p_exp   = sfpi::exexp(p, sfpi::ExponentMode::NoDebias);
+    sfpi::vInt new_exp = p_exp + k_int;
+
+    return sfpi::setexp(p, new_exp);
+}
+
+/*
+ * This function implements exp2(x) for float32.
+ * Target accuracy: < 1 ULP for float32.
+ *
+ * @param val The input value (sfpi::vFloat vector), can be any floating point number
+ * @return sfpi::vFloat Result of exp2(val)
+ */
+sfpi_inline sfpi::vFloat _sfpu_exp2_fp32_accurate_(sfpi::vFloat val)
+{
+    sfpi::vFloat result = sfpi::vConst0;
+
+    constexpr float OVERFLOW_THRESHOLD  = 128.0f;
+    constexpr float UNDERFLOW_THRESHOLD = -127.0f;
+
+    // Check for special cases
+    v_if (val >= OVERFLOW_THRESHOLD)
+    {
+        result = std::numeric_limits<float>::infinity();
+    }
+    v_elseif (val <= UNDERFLOW_THRESHOLD)
+    {
+        result = sfpi::vConst0;
+    }
+    v_elseif (sfpi::exexp(val) == 255)
+    {
+        result = val; // NaN or Inf
+    }
+    v_else
+    {
+        result = _sfpu_exp2_fp32_accurate_unsafe_(val);
+    }
+    v_endif;
+
+    return result;
+}
+
+template <bool is_fp32_dest_acc_en>
+sfpi_inline sfpi::vFloat _sfpu_exp2_accurate_(sfpi::vFloat val);
+
+// is_fp32_dest_acc_en == false
+template <>
+sfpi_inline sfpi::vFloat _sfpu_exp2_accurate_<false>(sfpi::vFloat val)
+{
+    return _sfpu_exp2_21f_bf16_<false>(val);
+}
+
+// is_fp32_dest_acc_en == true
+template <>
+sfpi_inline sfpi::vFloat _sfpu_exp2_accurate_<true>(sfpi::vFloat val)
+{
+    return _sfpu_exp2_fp32_accurate_(val);
+}
+
+/*
  * This function implements the exponential function using a polynomial approximation algorithm
  * based on "Simple Multiple Precision Algorithms for Exponential Functions [Tips & Tricks]"
  * by Moroz et al. 2022 (https://doi.org/10.1109/MSP.2022.3157460).
