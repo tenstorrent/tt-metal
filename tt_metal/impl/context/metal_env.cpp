@@ -192,12 +192,8 @@ bool MetalEnvImpl::set_fabric_config(
     tt_fabric::FabricUDMMode fabric_udm_mode,
     tt_fabric::FabricManagerMode fabric_manager,
     tt_fabric::FabricRouterConfig router_config) {
-    // Reject transitions that would reinitialize the control plane while devices are still open. Re-enabling fabric
-    // (or refreshing it to the same value) while a mesh is alive replaces control_plane_ and fabric_context_
-    // underneath running fabric kernels AND dangles the `ControlPlane&` reference held by FabricFirmwareInitializer.
-    // Callers must close the mesh device first. Going TO DISABLED is allowed -- that path defers fabric_context
-    // cleanup to the mesh close (see teardown_fabric_config). The auto-bump path in DeviceManager::open_devices
-    // calls this before add_devices_to_pool, so no devices are active there yet and the gate is a no-op for it.
+    // Reject transitions that would reinitialize the control plane while devices are still open.
+    // Callers must close the mesh device first. Going TO DISABLED is allowed
     if (fabric_config != tt_fabric::FabricConfig::DISABLED) {
         const bool devices_still_open = MetalContext::instance_exists() && MetalContext::instance().device_manager() &&
                                         !MetalContext::instance().device_manager()->get_all_active_devices().empty();
@@ -281,11 +277,7 @@ bool MetalEnvImpl::set_fabric_config(
 }
 
 void MetalEnvImpl::teardown_fabric_config() {
-    // When SetFabricConfig(DISABLED) is called while devices are still open, defer clear_fabric_context to the
-    // mesh->close() teardown path: FabricFirmwareInitializer::teardown (run from DeviceManager::close_devices in the
-    // correct dispatch-before-fabric order) dereferences control_plane_.get_fabric_context() to write the master
-    // fabric router termination signal. Clearing the context here would null it out and crash that path. Once the
-    // mesh closes the next SetFabricConfig call (or the destructor) will replace the stale fabric_context.
+    // defer clear_fabric_context to fabric firmware teardown if devices are still open
     const bool devices_still_open = MetalContext::instance_exists() && MetalContext::instance().device_manager() &&
                                     !MetalContext::instance().device_manager()->get_all_active_devices().empty();
 
