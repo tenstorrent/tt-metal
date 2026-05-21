@@ -498,9 +498,9 @@ def print_failing(runs: list[TestRun]):
 
 
 def print_results(runs: list[TestRun]):
+    print_failing(runs)
     for t in TestCase:
         print_test_summary(t, runs)
-    print_failing(runs)
     print_summary(runs)
 
 
