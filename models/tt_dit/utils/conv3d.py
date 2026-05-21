@@ -304,7 +304,8 @@ _BLOCKINGS = {
     (2, 4, 192, 96, (1, 3, 3), 28, 240, 208): (192, 96, 1, 4, 16),  # up2_spatial — swept 6509us
     # Stage 3 (cur_T=28): T_res=30 (no temporal upsample)
     (2, 4, 96, 96, (3, 3, 3), 30, 240, 208): (96, 96, 7, 2, 16),  # up3_res — swept 9364us
-    (2, 4, 96, 3, (3, 3, 3), 30, 240, 208): (96, 32, 4, 16, 2),  # conv_out — partial 5990us
+    # conv_out disabled — T_out_block=4 caused a frame-24-25 artifact; falls back to _DEFAULT_BLOCKINGS pending a clean re-sweep.
+    # (2, 4, 96, 3, (3, 3, 3), 30, 240, 208): (96, 32, 4, 16, 2),  # conv_out — partial 5990us
     # ===================================================================
     # BH Galaxy 4x8, 720p image encoder, T=33 output frames
     # h_factor=4, w_factor=8. Per-device H/W are unpadded output dims.

@@ -67,6 +67,7 @@ def create_cicd_json_for_data_analysis(
         workflow_attempt,
     )
     jobs = []
+    tt_smi_resets = []
 
     for raw_job in raw_jobs:
         github_job_id = int(raw_job["github_job_id"])
@@ -121,6 +122,7 @@ def create_cicd_json_for_data_analysis(
     pipeline = pydantic_models.Pipeline(
         **raw_pipeline,
         jobs=jobs,
+        tt_smi_resets=tt_smi_resets,
     )
 
     return pipeline
