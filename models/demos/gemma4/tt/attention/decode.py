@@ -16,6 +16,7 @@ from .operations import (
     apply_qkv_projection,
     apply_rope,
     concat_heads,
+    effective_block_size,
     split_qkv_heads_decode,
 )
 from .weights import AttentionWeights
@@ -111,8 +112,30 @@ def decode_forward(
             tt_v = ttnn.to_memory_config(tt_v, q_sharded_mem)
 
             if page_table is not None:
-                ttnn.experimental.paged_update_cache(k_cache, tt_k, update_idxs_tensor=cache_pos, page_table=page_table)
-                ttnn.experimental.paged_update_cache(v_cache, tt_v, update_idxs_tensor=cache_pos, page_table=page_table)
+                # Per-device kv-head count of the layer's input view. When the cache
+                # was allocated for a different layer type under HMA cross-group
+                # sharing (Gemma4-26B-A4B sliding kv=8 / full kv=2 on multi-device
+                # TP) cache.padded_shape[1] disagrees with what the kernel needs to
+                # write — see paged_update_cache num_kv_heads kwarg. Mirrors
+                # split_qkv_heads_decode's local head count.
+                num_local_kv_heads = 1 if weights.kv_replicated else config.num_key_value_heads // tp
+                eff_bs = effective_block_size(k_cache, config.head_dim, num_local_kv_heads)
+                ttnn.experimental.paged_update_cache(
+                    k_cache,
+                    tt_k,
+                    update_idxs_tensor=cache_pos,
+                    page_table=page_table,
+                    block_size=eff_bs,
+                    num_kv_heads=num_local_kv_heads,
+                )
+                ttnn.experimental.paged_update_cache(
+                    v_cache,
+                    tt_v,
+                    update_idxs_tensor=cache_pos,
+                    page_table=page_table,
+                    block_size=eff_bs,
+                    num_kv_heads=num_local_kv_heads,
+                )
             else:
                 ttnn.experimental.paged_update_cache(k_cache, tt_k, update_idxs_tensor=cache_pos)
                 ttnn.experimental.paged_update_cache(v_cache, tt_v, update_idxs_tensor=cache_pos)
@@ -144,6 +167,7 @@ def decode_forward(
     )
 
     if page_table is not None:
+        sdpa_num_local_kv_heads = 1 if weights.kv_replicated else config.num_key_value_heads // tp
         tt_sdpa = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             tt_q,
             k_cache,
@@ -154,6 +178,11 @@ def decode_forward(
             sliding_window_size=sliding_window,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=sdpa_program_config,
+            block_size=effective_block_size(k_cache, config.head_dim, sdpa_num_local_kv_heads),
+            # Tell SDPA the layer's view of the cache when the buffer was allocated
+            # for a different layer type under HMA cross-group sharing — same
+            # rationale as the num_kv_heads override on paged_update_cache.
+            num_kv_heads=sdpa_num_local_kv_heads,
         )
     else:
         tt_sdpa = ttnn.transformer.scaled_dot_product_attention_decode(

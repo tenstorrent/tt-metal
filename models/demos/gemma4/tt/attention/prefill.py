@@ -16,6 +16,7 @@ from .operations import (
     apply_qkv_projection,
     apply_rope,
     concat_heads,
+    effective_block_size,
     split_qkv_heads_prefill,
 )
 from .weights import AttentionWeights
@@ -85,8 +86,15 @@ def prefill_forward(
     if kv_cache is not None and shared_kv is None:
         k_cache, v_cache = kv_cache
         if page_table is not None:
-            ttnn.experimental.paged_fill_cache(k_cache, tt_k, page_table, batch_idx=user_id)
-            ttnn.experimental.paged_fill_cache(v_cache, tt_v, page_table, batch_idx=user_id)
+            # Per-device kv-head count of the layer's input view. Needed for
+            # eff_bs when the cache was allocated for a different layer type
+            # under HMA cross-group sharing (e.g. full-attention layer writing
+            # into a sliding-allocated buffer on Gemma4-26B-A4B at TP=1).
+            # Mirrors split_qkv_heads_prefill's local head count.
+            num_local_kv_heads = 1 if weights.kv_replicated else config.num_key_value_heads // tp
+            eff_bs = effective_block_size(k_cache, config.head_dim, num_local_kv_heads)
+            ttnn.experimental.paged_fill_cache(k_cache, tt_k, page_table, batch_idx=user_id, block_size=eff_bs)
+            ttnn.experimental.paged_fill_cache(v_cache, tt_v, page_table, batch_idx=user_id, block_size=eff_bs)
         else:
             ttnn.fill_cache(k_cache, tt_k, batch_idx=user_id)
             ttnn.fill_cache(v_cache, tt_v, batch_idx=user_id)

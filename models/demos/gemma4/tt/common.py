@@ -46,6 +46,7 @@ def create_tt_model(
 
     hf_config = Gemma4ModelArgs.load_hf_config(model_path)
     model_args = Gemma4ModelArgs.from_hf_config(hf_config)
+    model_args.model_cache_path = model_args.resolve_model_cache_path(model_path)
     # Store the real HF text config for RoPE creation (Gemma4TextRotaryEmbedding needs it)
     hf_text_config = getattr(hf_config, "text_config", hf_config)
     model_args._hf_text_config = hf_text_config
@@ -71,7 +72,7 @@ def create_tt_model(
     if state_dict is None:
         state_dict = Gemma4ModelArgs.load_state_dict(model_path, dummy_weights=False)
 
-    tensor_cache_path = str(model_args.weight_cache_path(model_path, dtype))
+    tensor_cache_path = str(model_args.weight_cache_path(dtype))
 
     # Resolve per-module dtype overrides from precision_overrides.json. The
     # mesh shape is the worker grid (rows x cols); a 1x1 mesh on a multi-device
