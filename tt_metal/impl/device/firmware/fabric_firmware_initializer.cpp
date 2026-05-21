@@ -275,6 +275,7 @@ void FabricFirmwareInitializer::init(
 
     tt_fabric::FabricConfig fabric_config = descriptor_->fabric_config();
     if (!tt_fabric::is_tt_fabric_config(fabric_config)) {
+        devices_.clear();
         return;
     }
 
@@ -321,8 +322,7 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
         return;
     }
 
-    tt_fabric::FabricConfig fabric_config = descriptor_->fabric_config();
-    if (!tt_fabric::is_tt_fabric_config(fabric_config)) {
+    if (devices_.empty()) {
         devices_.clear();
         initialized_.clear();
         init_done.erase(key);
