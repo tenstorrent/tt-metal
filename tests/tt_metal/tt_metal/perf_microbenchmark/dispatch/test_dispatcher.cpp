@@ -1200,11 +1200,13 @@ public:
             this->device_,
             dispatch_buffer_pages,
             dispatch_core_sem_id,
-            spoof_prefetch_sem_id,
             prefetch_sync_sem,
             phys_spoof,
             phys_disp,
             memmap,
+            0,
+            0,
+            spoof_prefetch_sem_id,
             dispatch_cb_base);
 
         KernelHandle dispatch_kernel;
