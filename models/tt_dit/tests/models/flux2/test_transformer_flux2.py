@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from typing import Protocol
 
 import diffusers
@@ -14,7 +15,7 @@ from tracy import signpost
 import ttnn
 
 from ....models.transformers.transformer_flux2 import Flux2Modulation, Flux2Transformer
-from ....parallel.config import DiTParallelConfig, ParallelFactor
+from ....parallel.config import DiTGParallelConfigNoCFG, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils import cache, tensor
 from ....utils.check import assert_quality
@@ -84,35 +85,16 @@ def test_modulation(mesh_device: ttnn.MeshDevice) -> None:
 
 
 @pytest.mark.parametrize(
-    ("mesh_device", "sp_axis", "tp_axis", "topology", "num_links", "device_params"),
+    "mesh_device, sp_axis, tp_axis, topology, num_links, device_params",
     [
-        pytest.param(
-            (1, 8),
-            0,
-            1,
-            ttnn.Topology.Linear,
-            1,
-            line_params_flux2_transformer,
-            id="1x8_linear",
-        ),
-        pytest.param(
-            (2, 4),
-            0,
-            1,
-            ttnn.Topology.Linear,
-            1,
-            line_params_flux2_transformer,
-            id="wh_2x4_linear",
-        ),
-        pytest.param(
-            (4, 8),
-            0,
-            1,
-            ttnn.Topology.Ring,
-            2,
-            ring_params_8k_flux2_transformer,
-            id="bh_4x8_ring",
-        ),
+        [(1, 8), 0, 1, ttnn.Topology.Linear, 1, line_params_flux2_transformer],
+        [(2, 4), 0, 1, ttnn.Topology.Linear, 1, line_params_flux2_transformer],
+        [(4, 8), 0, 1, ttnn.Topology.Ring, 2, ring_params_8k_flux2],
+    ],
+    ids=[
+        "1x8_linear",
+        "wh_2x4_linear",
+        "bh_4x8_ring",
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -125,6 +107,7 @@ def test_modulation(mesh_device: ttnn.MeshDevice) -> None:
 @pytest.mark.parametrize(
     ("skip_layers", "skip_single_layers"),
     [
+        pytest.param(0, 0, id="all_blocks"),
         pytest.param(7, 47, id="single_blocks"),
     ],
 )
@@ -172,8 +155,7 @@ def test_transformer(
         topology=topology,
     )
 
-    parallel_config = DiTParallelConfig(
-        cfg_parallel=ParallelFactor(factor=0, mesh_axis=0),
+    parallel_config = DiTGParallelConfigNoCFG(
         tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
         sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
     )
@@ -257,6 +239,147 @@ def test_transformer(
     signpost("t_end")
     tt_output_torch = tensor.to_torch(tt_output, mesh_axes=[None, sp_axis, None])
     assert_quality(torch_output, tt_output_torch, pcc=0.996, relative_rmse=0.09)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, sp_axis, tp_axis, topology, num_links, fsdp, device_params",
+    [
+        [(4, 8), 0, 1, ttnn.Topology.Ring, 2, False, ring_params_8k_flux2],
+        [(4, 8), 0, 1, ttnn.Topology.Ring, 2, True, ring_params_8k_flux2],
+    ],
+    ids=[
+        "bh_4x8_ring_nofsdp",
+        "bh_4x8_ring_fsdp",
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    ("batch_size", "height", "width", "prompt_seq_len"),
+    [
+        (1, 1024, 1024, 512),
+    ],
+)
+@pytest.mark.parametrize("xformer_idx", [0, 1, 3], ids=["x_single", "x_double", "x_both"])
+def test_transformer_profile(
+    mesh_device: ttnn.MeshDevice,
+    sp_axis: int,
+    tp_axis: int,
+    topology: ttnn.Topology,
+    num_links: int,
+    fsdp: bool,
+    batch_size: int,
+    height: int,
+    width: int,
+    prompt_seq_len: int,
+    xformer_idx: int,
+) -> None:
+    sp_factor = tuple(mesh_device.shape)[sp_axis]
+    tp_factor = tuple(mesh_device.shape)[tp_axis]
+
+    logger.info(
+        f"test_transformer: mesh={tuple(mesh_device.shape)}, sp={sp_factor}, tp={tp_factor}, "
+        f"topology={topology}, num_links={num_links}"
+    )
+
+    model_name = "black-forest-labs/FLUX.2-dev"
+    torch_model = diffusers.Flux2Transformer2DModel.from_pretrained(
+        model_name, subfolder="transformer", torch_dtype=torch.bfloat16
+    )
+    torch_model.eval()
+    torch_model.transformer_blocks = torch.nn.ModuleList([torch_model.transformer_blocks[0]] if xformer_idx > 0 else [])
+    torch_model.single_transformer_blocks = torch.nn.ModuleList(
+        [torch_model.single_transformer_blocks[0]] if xformer_idx != 1 else []
+    )
+
+    ccl_manager = CCLManager(
+        mesh_device=mesh_device,
+        num_links=num_links,
+        topology=topology,
+    )
+
+    parallel_config = DiTGParallelConfigNoCFG(
+        tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
+        sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
+    )
+
+    pos_embed = torch_model.pos_embed
+    head_dim = 128
+    num_heads = 48
+    in_channels = 128
+    joint_attention_dim = 15360
+    num_channels_latents = 128  # after patchify
+
+    if num_heads % parallel_config.tensor_parallel.factor != 0:
+        padding_config = PaddingConfig.from_tensor_parallel_factor(
+            num_heads,
+            head_dim,
+            parallel_config.tensor_parallel.factor,
+        )
+    else:
+        padding_config = None
+
+    tt_model = Flux2Transformer(
+        in_channels=in_channels,
+        num_layers=1 if xformer_idx > 0 else 0,
+        num_single_layers=1 if xformer_idx != 1 else 0,
+        attention_head_dim=head_dim,
+        num_attention_heads=num_heads,
+        joint_attention_dim=joint_attention_dim,
+        out_channels=128,
+        device=mesh_device,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        padding_config=padding_config,
+        is_fsdp=fsdp,
+    )
+
+    cache.load_model(
+        tt_model,
+        get_torch_state_dict=torch_model.state_dict,
+        model_name=os.path.basename(model_name),
+        subfolder="transformer",
+        parallel_config=parallel_config,
+        mesh_shape=tuple(mesh_device.shape),
+        is_fsdp=fsdp,
+    )
+
+    spatial_seq_len = height * width // 16**2
+
+    torch.manual_seed(0)
+    spatial = torch.randn([batch_size, spatial_seq_len, num_channels_latents])
+    prompt = torch.randn([batch_size, prompt_seq_len, joint_attention_dim])
+    timestep = torch.full([batch_size], fill_value=500)
+    guidance = torch.full([batch_size], fill_value=3)
+
+    # prepare for ROPE
+    text_ids = _prepare_ids(text_sequence_length=prompt_seq_len)
+    image_ids = _prepare_ids(height=height // 16, width=width // 16)
+    prompt_rope_cos, prompt_rope_sin = pos_embed.forward(text_ids)
+    spatial_rope_cos, spatial_rope_sin = pos_embed.forward(image_ids)
+
+    tt_spatial = tensor.from_torch(spatial, device=mesh_device, mesh_axes=[None, sp_axis, None])
+    tt_prompt = tensor.from_torch(prompt, device=mesh_device)
+    tt_timestep = tensor.from_torch(timestep.unsqueeze(-1), dtype=ttnn.float32, device=mesh_device)
+    tt_guidance = tensor.from_torch(guidance.unsqueeze(-1), device=mesh_device)
+
+    tt_spatial_rope_cos = tensor.from_torch(spatial_rope_cos, device=mesh_device, mesh_axes=[sp_axis, None])
+    tt_spatial_rope_sin = tensor.from_torch(spatial_rope_sin, device=mesh_device, mesh_axes=[sp_axis, None])
+    tt_prompt_rope_cos = tensor.from_torch(prompt_rope_cos, device=mesh_device)
+    tt_prompt_rope_sin = tensor.from_torch(prompt_rope_sin, device=mesh_device)
+
+    signpost("transformer_start")
+    tt_output = tt_model.forward(
+        spatial=tt_spatial,
+        prompt=tt_prompt,
+        timestep=tt_timestep,
+        guidance=tt_guidance,
+        spatial_rope=(tt_spatial_rope_cos, tt_spatial_rope_sin),
+        prompt_rope=(tt_prompt_rope_cos, tt_prompt_rope_sin),
+        spatial_sequence_length=spatial_seq_len,
+        prompt_sequence_length=prompt_seq_len,
+    )
+    ttnn.synchronize_device(mesh_device)
+    signpost("transformer_end")
 
 
 def _prepare_ids(*, height: int = 1, width: int = 1, text_sequence_length: int = 1) -> torch.Tensor:
