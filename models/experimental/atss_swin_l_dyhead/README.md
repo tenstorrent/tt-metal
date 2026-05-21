@@ -221,28 +221,29 @@ python models/experimental/atss_swin_l_dyhead/demo/demo_sahi_4dev.py \
   enough that head + body land in different tiles).
 
 **Expected performance** on a healthy Galaxy 1×4 sub-mesh (measured on a dense
-harbor-shot frame ~90 detections, after the DCN grid_sample / DyHead GN fp32 /
-Swin HiFi2 LN / Swin attention bf8_b + L1 routing optimizations merged from the
-parent branch):
+harbor-shot frame ~90 detections, after merging the gtobarTT/astss_optimizations
+workstream — DCN addalpha fusion, Swin softmax numeric_stable=False, Swin attn
+untilize-before-pad + ROW_MAJOR window partition + bfp8_b attn bias, and tuned
+Stage 0/1/2 fc1/fc2 program_configs):
 
 | Phase | Time |
 |---|---|
-| `open_mesh_device` | ~0.9 s (one-time) |
-| `build model + ttnn.from_torch` | ~3.5 s (one-time) |
-| `pipeline.compile` (warm JIT cache) | ~3 s (one-time; ~24 s on the very first run after new optimizations land while kernels build) |
-| `pipeline.enqueue + pop_all` (steady-state) | **~206 ms / frame** (the number shown in the title) |
-| `ttnn.to_torch` on outputs | ~8 ms |
-| Host postprocess + cross-tile NMM | ~23 ms (CPU, scales with detection count) |
-| `cv2.imwrite` | ~29 ms |
-| **Steady-state full e2e** | **~325 ms / frame  → ~3.08 fps** |
+| `open_mesh_device` | ~1.0 s (one-time) |
+| `build model + ttnn.from_torch` | ~6.6 s (one-time; up from ~3.5 s after the bfp8_b weight conversion lands more host work) |
+| `pipeline.compile` (warm JIT cache) | ~3 s (one-time; ~28 s on the very first run after new optimizations land while kernels build) |
+| `pipeline.enqueue + pop_all` (steady-state) | **~173 ms / frame** (the number shown in the title) |
+| `ttnn.to_torch` on outputs | ~7 ms |
+| Host postprocess + cross-tile NMM | ~24 ms (CPU, scales with detection count) |
+| `cv2.imwrite` | ~31 ms |
+| **Steady-state full e2e** | **~294 ms / frame  → ~3.40 fps** |
 
 **Device kernel time** (measured separately via `tests/perf/test_atss_swin_l_dyhead_device_perf.py`,
 which runs with tracy on a single device, no trace):
 
 | Metric | Time |
 |---|---|
-| `DEVICE KERNEL DURATION` (pure compute, per tile, parallel × 4) | ~196 ms |
-| `DEVICE FW DURATION` (kernel + per-op dispatch overhead, no trace) | ~256 ms |
+| `DEVICE KERNEL DURATION` (pure compute, per tile, parallel × 4) | ~163 ms |
+| `DEVICE FW DURATION` (kernel + per-op dispatch overhead, no trace) | ~219 ms |
 
 The `(infer …ms)` value in the title is the **host↔device round-trip** for one frame
 (input DMA + 4-tile parallel device compute + output DMA), measured **with trace**.
