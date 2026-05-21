@@ -88,6 +88,28 @@ ttnn::Tensor composite_reduce_scatter(
         "config to the input sharded memory config will break the op as the input and output shapes are different.");
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
 
+    // BFLOAT8_B + TILE_LAYOUT + non-tile-aligned input is unsafe through the composite split→pad→concat
+    // sequence below. Intermediate ops (split, pad, view) can produce per-chunk tensors with inconsistent
+    // dtypes, causing ttnn::concat to fail its "All Tensors should have same dtypes." validation. Mirror the
+    // guard already used in composite_all_to_all (below in this file): typecast BFLOAT8_B → BFLOAT16 at the
+    // top, execute the composite path in BFLOAT16, then typecast back at the end. The dtype-cast is cheap
+    // relative to the multi-device collective and only triggers for the BFLOAT8_B + non-tile-aligned case.
+    auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+    uint32_t tile_height = tile_shape[0];
+    uint32_t tile_width = tile_shape[1];
+    const auto& input_logical_shape = input_tensor.logical_shape();
+    bool is_tiled_and_not_tile_aligned =
+        input_tensor.layout() == ttnn::Layout::TILE &&
+        (input_logical_shape[-2] % tile_height != 0 || input_logical_shape[-1] % tile_width != 0);
+    const ttnn::DataType original_input_dtype = input_tensor.dtype();
+    const bool convert_to_bfloat16_for_composite =
+        is_tiled_and_not_tile_aligned && original_input_dtype == ttnn::DataType::BFLOAT8_B;
+    if (convert_to_bfloat16_for_composite) {
+        ttnn::Tensor bfloat16_input = ttnn::typecast(input_tensor, ttnn::DataType::BFLOAT16);
+        input_tensor.deallocate();
+        input_tensor = bfloat16_input;
+    }
+
     /*
      * - If sharded to interleaved, convert to the final interleaved memory config, and use that final
      *   interleaved memory config for all ops within the composite.
@@ -174,6 +196,14 @@ ttnn::Tensor composite_reduce_scatter(
     if (output_memory_config.is_sharded()) {
         rs_output_tensor = ttnn::to_memory_config(rs_output_tensor, output_memory_config);
     }
+
+    // Restore the original dtype if we typecast BFLOAT8_B → BFLOAT16 at the top of the composite path.
+    if (convert_to_bfloat16_for_composite) {
+        ttnn::Tensor bfloat8_output = ttnn::typecast(rs_output_tensor, original_input_dtype);
+        rs_output_tensor.deallocate();
+        rs_output_tensor = bfloat8_output;
+    }
+
     return rs_output_tensor;
 }
 
