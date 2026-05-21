@@ -139,7 +139,7 @@ def _reconstruct_logical_cache_from_paged(
     "device_params",
     [
         {
-            "trace_region_size": 5500000,  # Larger trace region for flash attention
+            "trace_region_size": 0,  # Larger trace region for flash attention
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
         }
     ],
