@@ -35,6 +35,7 @@ on:
         options:
           - all
           - deepseek_prefill
+          - llama31_8b
   schedule:
     - cron: "0 6 * * *" # runs every day at 6am UTC, 1am EST
 

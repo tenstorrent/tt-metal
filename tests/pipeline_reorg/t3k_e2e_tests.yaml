@@ -121,6 +121,7 @@
       timeout: 20
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
+  model-name: llama31_8b
 
 - name: t3k_DeepSeek_PREFILL
   cmd: |
