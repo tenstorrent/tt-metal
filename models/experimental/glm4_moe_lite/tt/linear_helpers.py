@@ -22,6 +22,37 @@ from models.experimental.glm4_moe_lite.tt.runtime_config import Glm4RuntimeConfi
 _DOWN_MATMUL_NUM_CORES = 32
 _DOWN_OUT_SUBBLOCK_W = 2
 
+# ---------------------------------------------------------------------------
+# w_o output projection decode matmul tuning — M=32, K=5120, N=2048
+# Default 64-core path gives per_core_N=1 → out_subblock_w=1 (SLOW in tracy).
+# 32 cores → per_core_N=2 → out_subblock_w=2, matching the down-proj pattern.
+#
+# Output sharding strategy (WIDTH_SHARDED):
+#   With mcast_in0=True the 1D multicast kernel width-parallelizes across N:
+#   each of the 32 compute cores independently produces its
+#   [per_core_M*TILE × per_core_N*TILE] = [32 × 64] output slice in its own DST
+#   registers.  Setting memory_config to WIDTH_SHARDED lets each core write that
+#   result directly to its local L1 bank (core-local store, no NOC hop) instead
+#   of routing it to DRAM via cross-chip NOC writes.  The net effect:
+#     • matmul writes: 32 local L1 writes of 4 KB each (fast)   vs.
+#                      32 NOC→DRAM writes of 4 KB each (slow, bandwidth-limited)
+#     • one follow-up to_memory_config gathers the 32 L1 shards to downstream
+#       format (DRAM or L1-interleaved), amortized across the whole output tensor
+#   Activation (in0) is NOT width-sharded — it is multicast via mcast_in0=True.
+#   K is the reduction dimension and is not partitioned.
+#   Weights stay DRAM-backed; 20 MB (K=5120×N=2048×2 B) does not fit in L1.
+#
+# Edit these constants directly to retune without touching function bodies.
+# ---------------------------------------------------------------------------
+_WO_NUM_CORES = 32  # total cores for 1D multicast; 32 → per_core_N=2 for N=2048
+_WO_PER_CORE_N = 2  # N=2048 → 64 N-tiles / 32 cores
+_WO_PER_CORE_M = 1  # M=32 → 1 M-tile (decode batch fits in one tile row)
+_WO_IN0_BLOCK_W = 4  # K=5120 → 160 K-tiles; 160 % 4 == 0 ✓
+_WO_OUT_SUBBLOCK_H = 1
+_WO_OUT_SUBBLOCK_W = 2  # avoids out_subblock_h * out_subblock_w == 1 penalty
+_WO_MCAST_IN0 = True  # broadcast 1-tile activation to all cores (weight-stationary)
+_WO_ACT_IN_L1 = True  # move v to L1 interleaved before matmul; eliminates DRAM read
+
 
 @dataclass(frozen=True)
 class Matmul1dProgOverrides:
@@ -511,3 +542,90 @@ def attn_linear(
             return tp_row_parallel_linear(a, b, device=device, cfg=cfg)
         else:
             return mlp_linear(a, b, device=device, cfg=cfg)
+
+
+def attn_wo_linear(
+    a: ttnn.Tensor,
+    b: ttnn.Tensor,
+    *,
+    device: Any,
+    cfg: Glm4RuntimeConfig,
+) -> ttnn.Tensor:
+    """Tuned w_o output projection for MLA decode: M=32, K=5120, N=2048.
+
+    Program config: 32-core 1D multicast, per_core_N=2, out_subblock_w=2
+    (see _WO_* constants), avoiding the out_subblock_h*w==1 SLOW penalty.
+
+    Output layout: WIDTH_SHARDED across the same 32-core compute grid.
+    Each core stores its [32 × 64] (= per_core_M*TILE × per_core_N*TILE) result
+    in its own L1 — a core-local write with no NOC hop, replacing the previous
+    cross-NOC DRAM writes.  One to_memory_config call afterwards materializes the
+    32 L1 shards into the downstream interleaved format.
+
+    Activation (in0) is NOT width-sharded; mcast_in0=True multicasts the full
+    [32 × 5120] activation from L1 to all 32 cores unchanged.
+
+    DRAM-sharded and TP execution modes route to their existing helpers.
+    """
+    if cfg.dram_sharded_attn:
+        return dram_sharded_linear(a, b, device=device, cfg=cfg)
+    if cfg.tp_enabled and not cfg.attn_dp:
+        return tp_row_parallel_linear(a, b, device=device, cfg=cfg)
+
+    # Resolve compute grid: fit _WO_NUM_CORES into the physical grid dimensions.
+    grid = device.compute_with_storage_grid_size()
+    max_x, max_y = int(grid.x), int(grid.y)
+    core_x, core_y = max_x, max_y
+    for gx in range(min(max_x, _WO_NUM_CORES), 0, -1):
+        if _WO_NUM_CORES % gx != 0:
+            continue
+        gy = _WO_NUM_CORES // gx
+        if gy <= max_y:
+            core_x, core_y = gx, gy
+            break
+
+    prog_cfg = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(core_x, core_y),
+        in0_block_w=_WO_IN0_BLOCK_W,
+        out_subblock_h=_WO_OUT_SUBBLOCK_H,
+        out_subblock_w=_WO_OUT_SUBBLOCK_W,
+        per_core_M=_WO_PER_CORE_M,
+        per_core_N=_WO_PER_CORE_N,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=_WO_MCAST_IN0,
+    )
+
+    # WIDTH_SHARDED output: shard shape [per_core_M*TILE, per_core_N*TILE] = [32, 64].
+    # Core grid matches the compute grid exactly so each core owns its output slice.
+    # ShardStrategy.WIDTH distributes along the N (column) dimension — the natural
+    # decomposition of mcast_in0=True where each core independently computes its
+    # N-column slice of the result.
+    out_shard_h = _WO_PER_CORE_M * ttnn.TILE_SIZE  # 32 rows
+    out_shard_w = _WO_PER_CORE_N * ttnn.TILE_SIZE  # 64 cols
+    out_mc = ttnn.create_sharded_memory_config(
+        shape=(out_shard_h, out_shard_w),
+        core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_x - 1, core_y - 1))]),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    act = ttnn.to_memory_config(a, ttnn.L1_MEMORY_CONFIG) if _WO_ACT_IN_L1 else a
+    out_sharded = ttnn.linear(
+        act,
+        b,
+        program_config=prog_cfg,
+        compute_kernel_config=cfg.mlp_compute_kernel_config(),
+        memory_config=out_mc,
+    )
+    if _WO_ACT_IN_L1:
+        ttnn.deallocate(act, force=False)
+
+    # Materialize WIDTH_SHARDED L1 output to the downstream interleaved format.
+    # This is a single flat gather (each core reads its 4 KB shard and writes to
+    # DRAM/L1-interleaved) — cheaper than the 32 cross-NOC DRAM writes the matmul
+    # would have issued if the output memory config were DRAM directly.
+    out = ttnn.to_memory_config(out_sharded, cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(out_sharded, force=False)
+    return out
