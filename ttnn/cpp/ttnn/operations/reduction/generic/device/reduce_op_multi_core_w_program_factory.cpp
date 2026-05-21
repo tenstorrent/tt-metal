@@ -196,7 +196,19 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
             });
     }
     TensorAccessorArgs(a).append_to(reader_compile_time_args);
-    std::vector<uint32_t> writer_compile_time_args = {rm_path ? datum_size : static_cast<uint32_t>(output_cb_index)};
+    std::vector<uint32_t> writer_compile_time_args;
+    if (rm_path) {
+        // Merged RM writer expects (datum_bytes, Wt, W_logical, wt_tiles_per_chunk) before
+        // TensorAccessorArgs. The W reduce branch only consumes slot 0; the H-only slots are
+        // passed as zero placeholders to keep the layout uniform across factories.
+        writer_compile_time_args = {
+            datum_size,
+            /*Wt placeholder*/ 0u,
+            /*W_logical placeholder*/ 0u,
+            /*wt_tiles_per_chunk placeholder*/ 0u};
+    } else {
+        writer_compile_time_args = {static_cast<uint32_t>(output_cb_index)};
+    }
     TensorAccessorArgs(output).append_to(writer_compile_time_args);
 
     if (operation_attributes.negate) {
@@ -245,7 +257,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =
         rm_path
-            ? "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/writer_reduce_w_rm_scalar.cpp"
+            ? "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/writer_reduce_rm_scalar.cpp"
             : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = all_cores;
