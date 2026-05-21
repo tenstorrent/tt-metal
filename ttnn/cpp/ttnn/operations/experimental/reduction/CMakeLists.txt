@@ -43,6 +43,7 @@ target_link_libraries(
     PRIVATE
         TT::Metalium
         TTNN::Core
+        TTNN::Ops::Reduction
 )
 
 install(

@@ -1313,8 +1313,10 @@ void sdpa_standard_v2(
         uint32_t k_loop_end = k_num_chunks;
         if constexpr (is_causal_sdpa) {
             // Reader and writer apply the same remap; compute must agree or causal
-            // masks and output positions desync.
-            q_chunk_local = remap_q_index(q_chunk_local, q_num_chunks, use_zigzag_balancing);
+            // masks and output positions desync. The mod is a no-op when the input is per-head
+            // ([0, q_num_chunks)) and extracts the per-head q_chunk when it's a flat global index
+            // (global Q scheduling iterates across batches and heads).
+            q_chunk_local = remap_q_index(q_chunk_local, q_num_chunks, use_zigzag_balancing) % q_num_chunks;
             // q_chunk_global is the absolute Q chunk index (used for the diagonal);
             // chunked-prefill shifts this via chunked_q_chunk_offset.
             const uint32_t q_chunk_global = q_chunk_local + chunked_q_chunk_offset;

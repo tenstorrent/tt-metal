@@ -390,7 +390,7 @@ def run_moe_compute_test(
 
 @pytest.mark.requires_device("TG")
 @pytest.mark.skipif(
-    (os.getenv("USE_TORUS_MODE") is None),
+    (os.getenv("USE_TORUS_MODE", "0") == "0"),
     reason="Requires ring fabric",
 )
 @pytest.mark.parametrize(

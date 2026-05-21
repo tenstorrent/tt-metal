@@ -966,8 +966,10 @@ class DecoderStage(StageKind):
 
         Returns:
             The composed host KV-cache tensor of shape
-            ``(num_slots, 1, max_seq_len, kvpe_dim)`` dtype bfloat16, or ``None``
-            if invoked before ``setup`` (no KV cache to compose).
+            ``(num_slots, 1, max_seq_len, kvpe_dim)``, or ``None`` if invoked
+            before ``setup`` (no KV cache to compose). Dtype is whatever
+            ``ttnn.to_torch`` produces for the underlying ``ttnn.bfloat8_b`` device tensor;
+            in practice the host tensor lands as ``torch.float32``.
         """
         if not self._state or "d" not in self._state:
             logger.warning("get_kv_cache_host called before setup; returning None")

@@ -138,16 +138,25 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
         chunked_q_chunk_offset_phase_2 += chunk_start_idx.value() / q_chunk_size;
     }
 
-    // Parallelization scheme
-    // We will choose parallelization factors for batch, num_heads, and q_seq_len in that order
-    uint32_t batch_parallel_factor = std::min(B, num_cores);
-    uint32_t nh_parallel_factor = std::min(num_cores / batch_parallel_factor, NQH);
-    uint32_t q_parallel_factor = std::min(num_cores / (batch_parallel_factor * nh_parallel_factor), q_num_chunks);
-
-    // Ceiling divide to allow for non-perfect divisions
-    const uint32_t batch_per_core = (B + batch_parallel_factor - 1) / batch_parallel_factor;
-    const uint32_t nh_per_core = (NQH + nh_parallel_factor - 1) / nh_parallel_factor;
-    const uint32_t q_per_core = (q_num_chunks + q_parallel_factor - 1) / q_parallel_factor;
+    // Global Q scheduling: distribute the flat B*NQH*q_num_chunks Q-chunk space evenly across cores
+    // (one linear range per core). Ring is always causal, so pair-distribute when q_num_chunks is
+    // even — that keeps the shared zigzag remap balancing light/heavy work across cores. The same
+    // (global_q_start, global_q_count) range is walked once per ring phase (num_phases=2 below).
+    const uint32_t total_q_chunks = B * NQH * q_num_chunks;
+    const bool global_q_pair_distribute = (q_num_chunks % 2 == 0);
+    uint32_t global_q_base_chunks_per_core = 0;
+    uint32_t global_q_cores_doing_extra = 0;
+    uint32_t global_q_extra_chunks_per_core = 0;
+    if (global_q_pair_distribute) {
+        const uint32_t total_pairs = total_q_chunks / 2;
+        global_q_base_chunks_per_core = (total_pairs / num_cores) * 2;
+        global_q_cores_doing_extra = total_pairs % num_cores;
+        global_q_extra_chunks_per_core = 2;
+    } else {
+        global_q_base_chunks_per_core = total_q_chunks / num_cores;
+        global_q_cores_doing_extra = total_q_chunks % num_cores;
+        global_q_extra_chunks_per_core = 1;
+    }
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * 2;
@@ -273,7 +282,7 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
         0,      // arg 21: use_streaming_compute — always false for ring distributed (causal)
         0,      // arg 22: out_subblock_h — unused when streaming is off
         0,      // arg 23: k_partial_col — non-streaming, no partial mask emitted
-        static_cast<uint32_t>(use_zigzag_balancing),  // arg 24
+        static_cast<uint32_t>(use_zigzag_balancing),  // arg 24: unified zigzag remap
     };
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
 
@@ -311,9 +320,9 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
         0,          //(std::uint32_t)use_attention_sink,
         0,          //(std::uint32_t)use_streaming_compute — always false for ring distributed (causal)
         valid_Skt,  // arg 31: unpadded K tiles for streaming padded_k_tiles
-        0,          // arg 32: uniform_dataformat — unused when streaming is off
-        0,          // arg 33: k_partial_col — non-streaming, no partial mask emitted
-        static_cast<uint32_t>(use_zigzag_balancing),  // arg 34
+        0u,         // arg 32: uniform_dataformat — unused on ring's non-streaming path
+        0u,         // arg 33: k_partial_col — unused on ring's non-streaming path
+        static_cast<uint32_t>(use_zigzag_balancing),  // arg 34: unified zigzag remap
     };
     TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
 
@@ -463,27 +472,23 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
     // Set reader rt args
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
-        uint32_t core_id = i;
 
         uint32_t read_offset_phase_1 = chunk_1 * Sqt;
         uint32_t read_offset_phase_2 = chunk_2 * Sqt;
         uint32_t write_offset_phase_1 = 0;
         uint32_t write_offset_phase_2 = Sqt;
 
-        uint32_t local_batch_start = (core_id / (nh_parallel_factor * q_parallel_factor)) * batch_per_core;
-        uint32_t local_batch_end = local_batch_start + batch_per_core;
-        uint32_t local_nh_start = ((core_id / q_parallel_factor) % nh_parallel_factor) * nh_per_core;
-        uint32_t local_nh_end = local_nh_start + nh_per_core;
-        uint32_t local_q_start = (core_id % q_parallel_factor) * q_per_core;
-        uint32_t local_q_end = local_q_start + q_per_core;
-
-        // clamp all to max values for non-even partitioning
-        local_batch_start = std::min(local_batch_start, B);
-        local_batch_end = std::min(local_batch_end, B);
-        local_nh_start = std::min(local_nh_start, NQH);
-        local_nh_end = std::min(local_nh_end, NQH);
-        local_q_start = std::min(local_q_start, q_num_chunks);
-        local_q_end = std::min(local_q_end, q_num_chunks);
+        // Per-core slice of the flat B*NQH*q_num_chunks Q-chunk space (walked once per phase).
+        uint32_t global_q_start = i * global_q_base_chunks_per_core +
+                                  std::min(i, global_q_cores_doing_extra) * global_q_extra_chunks_per_core;
+        uint32_t global_q_count =
+            global_q_base_chunks_per_core + ((i < global_q_cores_doing_extra) ? global_q_extra_chunks_per_core : 0u);
+        if (global_q_start >= total_q_chunks) {
+            global_q_start = total_q_chunks;
+            global_q_count = 0;
+        } else if (global_q_start + global_q_count > total_q_chunks) {
+            global_q_count = total_q_chunks - global_q_start;
+        }
 
         uint32_t page_table_addr = page_table.has_value() ? page_table->buffer()->address() : 0;
         SetRuntimeArgs(
@@ -498,50 +503,38 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
              0,  // attention_sink_addr,
              0,  // chunk_start_idx_addr (ring has no chunk_start_idx_tensor)
              i,
-             local_batch_start,
-             local_batch_end,
-             local_nh_start,
-             local_nh_end,
-             local_q_start,
-             local_q_end,
              2,
              chunked_q_chunk_offset_phase_1,
              read_offset_phase_1,
              chunked_q_chunk_offset_phase_2,
-             read_offset_phase_2});
+             read_offset_phase_2,
+             global_q_start,
+             global_q_count});
         SetRuntimeArgs(
             program,
             writer_kernels_id,
             core,
             {out_addr,
              i,
-             local_batch_start,
-             local_batch_end,
-             local_nh_start,
-             local_nh_end,
-             local_q_start,
-             local_q_end,
              2,
              0,  // use_chunk_start_idx_tensor (ring has no chunk_start_idx_tensor)
              chunked_q_chunk_offset_phase_1,
              write_offset_phase_1,
              chunked_q_chunk_offset_phase_2,
-             write_offset_phase_2});
+             write_offset_phase_2,
+             global_q_start,
+             global_q_count});
         SetRuntimeArgs(
             program,
             compute_kernels_id,
             core,
             {i,
-             local_batch_start,
-             local_batch_end,
-             local_nh_start,
-             local_nh_end,
-             local_q_start,
-             local_q_end,
              2,
              0,  // use_chunk_start_idx_tensor (ring has no chunk_start_idx_tensor)
              chunked_q_chunk_offset_phase_1,
-             chunked_q_chunk_offset_phase_2});
+             chunked_q_chunk_offset_phase_2,
+             global_q_start,
+             global_q_count});
     }
 
     return cached_program_t(

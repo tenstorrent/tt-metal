@@ -286,6 +286,9 @@ public:
     uint32_t add_dataflow_buffer(
         const CoreRangeSet& core_range_set, const experimental::dfb::DataflowBufferConfig& config);
 
+    // Declare an alias relationship: secondary shares primary's L1 address.
+    void set_dfb_alias(uint32_t primary_id, uint32_t secondary_id);
+
     // Allocates TCs and remapper configs, cannot be done on creation because we need to determine if a set of DFBs on a
     // core require remapper being enabled
     void finalize_dataflow_buffer_configs();
@@ -346,6 +349,11 @@ public:
     // Returns nullptr if name is not registered (caller validates).
     const TensorSpec* get_tensor_parameter_layout(const std::string& name) const;
     std::vector<std::string> get_registered_tensor_parameter_names() const;
+
+    // Metal 2.0: register that DFB `dfb_id` borrows its backing L1 memory from the MeshTensor
+    // bound to `tensor_parameter_name`.
+    void register_dfb_borrowed_binding(uint32_t dfb_id, const std::string& tensor_parameter_name);
+    const std::vector<std::pair<uint32_t, std::string>>& get_dfb_borrowed_bindings() const;
 
     // Metal 2.0: Get kernel by name (TT_FATAL if not found)
     std::shared_ptr<Kernel> get_kernel_by_spec_name(const KernelSpecName& name) const {
@@ -458,6 +466,9 @@ private:
         // Used by ValidateProgramRunParams to check that the supplied MeshTensor's spec matches
         // the parameter's declared layout, and as the per-parameter lookup for completeness checks.
         std::unordered_map<std::string, TensorSpec> tensor_parameter_layouts;
+
+        // Borrowed-memory DFB bindings: each entry is (dfb_id, tensor_parameter_name).
+        std::vector<std::pair<uint32_t, std::string>> dfb_borrowed_bindings;
     };
     std::optional<Metal2NameRegistry> metal2_registry_;  // Only populated for Metal 2.0 programs
 

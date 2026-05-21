@@ -199,8 +199,8 @@ inline __attribute__((always_inline)) void _sfpu_check_and_call_(
 #define SFPU_TWO_PARAM_KERNEL_INIT(OP, INIT_CB, APPROXIMATE, PARAM0, PARAM1) \
     SFPU_INIT_CB_ARGS(OP, INIT_CB, (APPROXIMATE), PARAM0, PARAM1)
 
-#define SFPU_TEMPLATE_INIT_KERNEL(OP, INIT_CB, APPROX, SCALE, CLAMP_NEGATIVE, DST_ACCUM_MODE) \
-    SFPU_INIT_CB(OP, INIT_CB, (APPROX, SCALE, CLAMP_NEGATIVE, DST_ACCUM_MODE))
+#define SFPU_TEMPLATE_INIT_KERNEL(OP, INIT_CB, APPROX, SCALE, CLAMP_NEGATIVE) \
+    SFPU_INIT_CB(OP, INIT_CB, (APPROX, SCALE, CLAMP_NEGATIVE))
 
 // ----- compare-with-zero aliases --------------------------------------------
 
@@ -225,7 +225,7 @@ inline __attribute__((always_inline)) void _sfpu_check_and_call_(
         PARAM0)
 
 #define SFPU_ZERO_KERNEL(OP, MODE, APPROXIMATE, DST_IDX) \
-    SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp, (APPROXIMATE, SfpuType::OP), MODE, DST_IDX, 8)
+    SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp, (APPROXIMATE, SfpuType::OP), MODE, DST_IDX)
 
 #define SFPU_ZERO_KERNEL_TYPE(TYPE, OP, MODE, APPROXIMATE, DST_IDX) \
     SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, TYPE, (APPROXIMATE, SfpuType::OP), MODE, DST_IDX)
