@@ -12,6 +12,7 @@ import ttnn
 from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import (
     ace_step_add_one,
     ace_step_binary_kwargs,
+    ace_step_ensure_dram_activation,
     ace_step_ensure_l1_activation,
     ace_step_linear_l1_memory_config,
     ace_step_reshape_kwargs,
@@ -133,6 +134,7 @@ class TtAceStepDiTOutputHead:
         meta: PatchifyMetadata,
         *,
         debug: Optional[dict[str, Any]] = None,
+        use_dram_activations: bool = False,
     ) -> ttnn.Tensor:
         if len(hidden_states.shape) != 3:
             raise ValueError(f"Expected hidden_states [B, T_p, hidden_size], got shape={hidden_states.shape}")
@@ -153,11 +155,20 @@ class TtAceStepDiTOutputHead:
 
         x_tile = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
         _sr = ace_step_reshape_kwargs(ttnn)
-        _el_mc = ace_step_linear_l1_memory_config(ttnn) or getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
-        _bin_kw = ace_step_binary_kwargs(ttnn, _el_mc)
+        _dram_mc = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+        if use_dram_activations:
+            _el_mc = _dram_mc
+            _bin_kw = ace_step_binary_kwargs(ttnn, _dram_mc)
 
-        def _l1(t):
-            return ace_step_ensure_l1_activation(ttnn, t, _el_mc)
+            def _l1(t):
+                return ace_step_ensure_dram_activation(ttnn, t, _dram_mc)
+
+        else:
+            _el_mc = ace_step_linear_l1_memory_config(ttnn) or _dram_mc
+            _bin_kw = ace_step_binary_kwargs(ttnn, _el_mc)
+
+            def _l1(t):
+                return ace_step_ensure_l1_activation(ttnn, t, _el_mc)
 
         normed = ttnn.rms_norm(
             x_tile,
@@ -194,5 +205,6 @@ class TtAceStepDiTOutputHead:
         meta: PatchifyMetadata,
         *,
         debug: Optional[dict[str, Any]] = None,
+        use_dram_activations: bool = False,
     ) -> ttnn.Tensor:
-        return self.forward(hidden_states, temb, meta, debug=debug)
+        return self.forward(hidden_states, temb, meta, debug=debug, use_dram_activations=use_dram_activations)

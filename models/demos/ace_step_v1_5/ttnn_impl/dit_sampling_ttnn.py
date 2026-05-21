@@ -433,6 +433,14 @@ def adg_guidance_velocity_host(
     )
 
 
+def euler_subtract_v_dt_from_tile(*, xt: ttnn.Tensor, vt: ttnn.Tensor, dt_tile: ttnn.Tensor, dram: Any) -> ttnn.Tensor:
+    """Euler update with ``dt`` read from a persistent 1-element TILE tensor (trace replay safe)."""
+    step = ttnn.multiply(vt, dt_tile, memory_config=dram)
+    xt_new = ttnn.subtract(xt, step, memory_config=dram)
+    ttnn.deallocate(step)
+    return xt_new
+
+
 def _sum_keepdim(x: ttnn.Tensor, dim: int, *, dram: Any) -> ttnn.Tensor:
     return ttnn.sum(x, dim=int(dim), keepdim=True)
 

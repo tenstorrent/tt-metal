@@ -19,7 +19,7 @@ runs without the upstream ACE-Step repo on `sys.path` for the LM half of the pip
 
 For PCC / parity tests, the **PyTorch-only mirror** is at
 `models/demos/ace_step_v1_5/torch_ref/five_hz_lm/`. Same module names, same public class
-(`LocalFiveHzLMHandler`), but `set_ttnn_logits_device` / `experimental_ttnn_causal_lm` are no-ops
+(`LocalFiveHzLMHandler`). Default LM forward is TTNN causal via `use_ttnn_causal_lm=True` at `initialize`.
 so the weights always load via `transformers.AutoModelForCausalLM`. Tests can import a parallel
 pair:
 
@@ -36,7 +36,7 @@ The handler dispatches into:
   EOS / pad checks, sequence concat (TTNN per-token logits assist).
 - `ttnn_impl/lm_logits_ttnn.py` — CFG `uncond + s·(cond - uncond)` linear combine.
 - `ttnn_impl/five_hz_causal_lm_experimental.py` → `ttnn_impl/qwen_tt_transformers_lm.py::QwenModelTtTransformers`
-  for `--experimental-5hz-ttnn-causal-lm` (stock `tt_transformers` Transformer: fused QKV/SDPA,
+  (default; stock `tt_transformers` Transformer: fused QKV/SDPA,
   paged KV cache, HF RoPE, `DistributedNorm(RMSNorm)`, `MLP`, `LMHead`).
 
 `TTNN_LM_CONVERSION_SUMMARY.txt` is a longer-form note tracking what stays on host vs what was
