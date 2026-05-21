@@ -104,14 +104,16 @@ class TtDyReLUNHWC:
         w2 = conv2_w.reshape(exp_ch, ratio_ch).T.contiguous()  # (C/r, 4*C)
         b2 = conv2_b.reshape(1, exp_ch)
 
+        # DyReLU weights are constants per inference; bf8_b halves DRAM read per call.
+        # The biggest is weight2 (C/r, 4C) = (64, 1024) which is 128 KB bf16 -> 64 KB bf8_b.
         self.weight1 = ttnn.from_torch(
-            w1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            w1, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         self.bias1 = ttnn.from_torch(
             b1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         self.weight2 = ttnn.from_torch(
-            w2, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            w2, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         self.bias2 = ttnn.from_torch(
             b2, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
