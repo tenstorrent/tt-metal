@@ -120,7 +120,7 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
             if ts:
                 block_end_ts = ts
             reset_done = True
-        if lower.startswith("error:"):
+        if "error:" in lower:
             # Always collect all conclusive failure lines (there can be multiple)
             content = clean_line(line)
             if content and content not in seen_errors:
