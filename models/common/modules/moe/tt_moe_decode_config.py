@@ -568,7 +568,108 @@ class TTMoEDecodeConfig(BaseModel):
         if data.get("num_fast_reduce_outputs") is None:
             data["num_fast_reduce_outputs"] = adoptable["num_fast_reduce_outputs"]
 
+        # Auto-fill `dispatch.shared_expert_ids` when shared experts exist. The dispatch
+        # kernel needs this list to identify which expert ids are shared (broadcast to
+        # the local replica) vs. routed (cross-cluster send). Without it, dispatch
+        # treats shared-expert ids as routed, mis-routes them, and stomps memory.
+        # By contract (enforced in `map_shared_experts`), shared expert ids are always
+        # `[num_routed, num_routed + num_shared)`, regardless of device assignment, so
+        # we derive them directly rather than depending on the experts sub-config
+        # convenience-keyword expansion (which runs after this validator).
+        num_shared = adoptable.get("num_shared_experts", 0)
+        if num_shared > 0:
+            num_routed = adoptable["num_routed_experts"]
+            shared_ids = list(range(num_routed, num_routed + num_shared))
+            dispatch_data = data.get("dispatch")
+            if isinstance(dispatch_data, dict) and dispatch_data.get("shared_expert_ids") is None:
+                dispatch_data["shared_expert_ids"] = shared_ids
+            elif isinstance(dispatch_data, BaseModel) and getattr(dispatch_data, "shared_expert_ids", None) is None:
+                data["dispatch"] = dispatch_data.model_copy(update={"shared_expert_ids": shared_ids})
+
+        # The YAML/input `reduce.shared_expert_scale` is the LOGICAL scale (single
+        # contribution per token). Each replica device emits the shared-expert output
+        # independently and reduce-scatter sums them, so the kernel-ready scale is
+        # `logical / num_replicated`. Apply here so the stored field == what the
+        # kernel sees; callers that need to round-trip must un-scale first
+        # (`with_mesh_shape` does this).
+        num_replicated = adoptable["mesh_shape"][1 - adoptable["cluster_axis"]]
+        if num_replicated > 1:
+            reduce_data = data.get("reduce")
+            if isinstance(reduce_data, dict) and reduce_data.get("shared_expert_scale") is not None:
+                reduce_data["shared_expert_scale"] = reduce_data["shared_expert_scale"] / num_replicated
+            elif isinstance(reduce_data, BaseModel) and getattr(reduce_data, "shared_expert_scale", None) is not None:
+                data["reduce"] = reduce_data.model_copy(
+                    update={"shared_expert_scale": reduce_data.shared_expert_scale / num_replicated}
+                )
+
         return data
+
+    # ---- Test-only mesh slicing ----
+
+    def with_mesh_shape(self, target_mesh_shape: tuple[int, int]) -> "TTMoEDecodeConfig":
+        """Return a new config sized for a column of the original mesh.
+
+        Lets a config that targets a full e.g. 16x4 mesh run on a single column (16x1)
+        so correctness tests can run on smaller hardware. The `cluster_axis` dim must
+        match the original; the replicated dim must be a divisor of the original.
+        Total expert count scales down proportionally so each device keeps the same
+        expert load (`num_routed_experts / num_devices` is invariant).
+
+        Derived fields (split_size, num_fast_reduce_outputs, the sub-configs' adopted
+        values, data-dependent memory-config defaults, etc.) are recomputed by
+        round-tripping through `model_validate` with the new mesh and expert count.
+        """
+        if tuple(target_mesh_shape) == self.mesh_shape:
+            return self
+
+        if target_mesh_shape[self.cluster_axis] != self.mesh_shape[self.cluster_axis]:
+            raise ValueError(
+                f"cluster_axis dim must be preserved when slicing: "
+                f"target[{self.cluster_axis}]={target_mesh_shape[self.cluster_axis]} != "
+                f"self[{self.cluster_axis}]={self.mesh_shape[self.cluster_axis]}"
+            )
+        other = 1 - self.cluster_axis
+        if self.mesh_shape[other] % target_mesh_shape[other] != 0:
+            raise ValueError(
+                f"replicated dim must be a divisor of the original: "
+                f"self[{other}]={self.mesh_shape[other]} not divisible by "
+                f"target[{other}]={target_mesh_shape[other]}"
+            )
+
+        new_num_routed = self.num_routed_experts * target_mesh_shape[other] // self.mesh_shape[other]
+        if new_num_routed % prod(target_mesh_shape) != 0:
+            raise ValueError(
+                f"scaled num_routed_experts ({new_num_routed}) is not divisible by "
+                f"target num_devices ({prod(target_mesh_shape)})"
+            )
+
+        data = self.model_dump(mode="json", exclude_defaults=True, exclude_none=True)
+        data["mesh_shape"] = list(target_mesh_shape)
+        data["num_routed_experts"] = new_num_routed
+        # Force re-derivation of mesh-derived top-level fields.
+        for derived in ("num_fast_reduce_outputs", "use_post_combine_tilize"):
+            data.pop(derived, None)
+        # Re-derive expert routing — the dumped expert_mapping is the expanded
+        # "sequential" list for the old mesh and won't address the sliced experts.
+        # Explicit (non-sequential) mappings aren't supported by the slicer.
+        experts_data = data.setdefault("experts", {})
+        if isinstance(experts_data, dict):
+            experts_data["expert_mapping"] = "sequential"
+            if self.num_shared_experts > 0:
+                experts_data["shared_expert_ids_to_devices"] = "fully_replicated"
+        # Clear the auto-filled `dispatch.shared_expert_ids` so it re-derives against
+        # the new num_routed_experts.
+        if isinstance(data.get("dispatch"), dict):
+            data["dispatch"].pop("shared_expert_ids", None)
+        # The dumped `reduce.shared_expert_scale` is the kernel-ready value
+        # (logical / old_num_replicated). Restore the logical value so the
+        # pre-validator can re-divide by the new num_replicated.
+        old_num_replicated = self.mesh_shape[1 - self.cluster_axis]
+        if old_num_replicated > 1 and isinstance(data.get("reduce"), dict):
+            reduce_data = data["reduce"]
+            if reduce_data.get("shared_expert_scale") is not None:
+                reduce_data["shared_expert_scale"] *= old_num_replicated
+        return type(self).model_validate(data)
 
     # ---- YAML round-trip ----
 

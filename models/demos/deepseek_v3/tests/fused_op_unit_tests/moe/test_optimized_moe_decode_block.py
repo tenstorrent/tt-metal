@@ -517,9 +517,8 @@ def _add_shared_experts_to_output_golden(
     return torch_output_golden
 
 
-def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_reference_tensor):
+def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_reference_tensor, atol_threshold=450):
     PCC_THRESHOLD = 0.988
-    ATOL_THRESHOLD = 450
 
     # bring to host
     # [1, 1, tokens_per_devices, hidden_size // num_replicated_devices] (per device) -> [1, 1, batch, hidden_size] (global on host)
@@ -541,12 +540,12 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
 
     # check allclose
     allclose_passed, allclose_output = comp_allclose(
-        output_reference_tensor, tt_output_tensor, atol=ATOL_THRESHOLD, rtol=0
+        output_reference_tensor, tt_output_tensor, atol=atol_threshold, rtol=0
     )
     logger.info(f"Final Output - Iteration: {iteration} - AllClose: {allclose_output}")
     if not allclose_passed:
         logger.warning(f"FAILED Final Output - Iteration: {iteration} - AllClose: {allclose_output}")
-        mask = (tt_output_tensor - output_reference_tensor).abs() > ATOL_THRESHOLD
+        mask = (tt_output_tensor - output_reference_tensor).abs() > atol_threshold
         logger.warning(
             f"Elements out of bounds: {tt_output_tensor[mask]} ref: {output_reference_tensor[mask]} idx: {mask.nonzero(as_tuple=True)}"
         )
