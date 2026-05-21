@@ -22,6 +22,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "llk_device_fixture.hpp"
@@ -98,9 +99,9 @@ bool single_core_reconfig(
     float in0_val = 1.0;
     float in1_val = 127.0;
     float in2_val = 0.0078125;
-    uint32_t single_tile_size_fp32 = 4 * 32 * 32;        // Single 32x32 tile size for Float32
-    uint32_t single_tile_size_bfp16b = 2 * 32 * 32;      // Single 32x32 tile size for Float16_b
-    uint32_t single_tile_size_bfp8b = (1 * 32 * 32) + 64;  // Single 32x32 tile size for Bfp8_b
+    uint32_t single_tile_size_fp32 = 4 * tt::constants::TILE_HW;
+    uint32_t single_tile_size_bfp16b = 2 * tt::constants::TILE_HW;
+    uint32_t single_tile_size_bfp8b = tt::constants::BFLOAT8_B_TILE_HW;
     uint32_t single_tile_size_out0 = test_config.fp32_dest_acc_en ? single_tile_size_fp32 : single_tile_size_bfp16b;
     const size_t dram_buffer_size_bfp16b = test_config.num_tiles * single_tile_size_bfp16b;
     const size_t dram_buffer_size_bfp8b = test_config.num_tiles * single_tile_size_bfp8b;
@@ -531,7 +532,7 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
     // stays in a sensible bfloat16 range; each output element is sum of 32 products).
     // d0/d1, d4/d5 are bfloat16 (Float16_b tile); d2/d3 are float32 (Float32 tile).
     constexpr int kRandMax = 1;
-    constexpr uint32_t elems_per_tile = 1024;  // 32x32 tile, format-independent
+    constexpr uint32_t elems_per_tile = tt::constants::TILE_HW;
     auto src0 = create_random_vector_of_bfloat16(f16_tile_size, kRandMax, /*seed=*/0x1001);
     auto src1 = create_random_vector_of_bfloat16(f16_tile_size, kRandMax, /*seed=*/0x1002);
     auto gen_random_f32 = [&](uint32_t seed) {
@@ -572,20 +573,20 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
     // Face-aware index for a 32x32 tile laid out as 4 faces of 16x16 (face-row-major,
     // then row-major within face). Matches how the device sees a tile in DRAM/L1.
     auto face_idx = [](uint32_t row, uint32_t col) -> uint32_t {
-        const uint32_t face = (row / 16) * 2 + (col / 16);
-        const uint32_t r = row % 16;
-        const uint32_t c = col % 16;
-        return face * 256 + r * 16 + c;
+        const uint32_t face = (row / tt::constants::FACE_HEIGHT) * 2 + (col / tt::constants::FACE_WIDTH);
+        const uint32_t r = row % tt::constants::FACE_HEIGHT;
+        const uint32_t c = col % tt::constants::FACE_WIDTH;
+        return face * tt::constants::FACE_HW + r * tt::constants::FACE_WIDTH + c;
     };
 
     // Matmul of two face-layout tiles. Inputs are converted to float for the
     // sum; output is bfloat16-truncated (pack format is Float16_b).
     auto matmul_face = [&](auto& A, auto& B) -> std::vector<bfloat16> {
         std::vector<bfloat16> C(elems_per_tile);
-        for (uint32_t i = 0; i < 32; ++i) {
-            for (uint32_t j = 0; j < 32; ++j) {
+        for (uint32_t i = 0; i < tt::constants::TILE_HEIGHT; ++i) {
+            for (uint32_t j = 0; j < tt::constants::TILE_WIDTH; ++j) {
                 float sum = 0.0f;
-                for (uint32_t k = 0; k < 32; ++k) {
+                for (uint32_t k = 0; k < tt::constants::TILE_WIDTH; ++k) {
                     sum += static_cast<float>(A[face_idx(i, k)]) * static_cast<float>(B[face_idx(k, j)]);
                 }
                 C[face_idx(i, j)] = bfloat16(sum);
@@ -656,16 +657,14 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
         int first_mismatch_local = -1;
         float worst_absdiff = 0.0f;
         for (uint32_t e = 0; e < elems_per_tile; ++e) {
-            const float af = static_cast<float>(device_unpacked[t * elems_per_tile + e]);
-            const float bf = static_cast<float>(golden_unpacked[t * elems_per_tile + e]);
-            const float absdiff = std::fabs(af - bf);
-            const float reldenom = std::fmax(std::fabs(af), std::fabs(bf));
-            const bool ok = (absdiff <= 0.001f) || (absdiff <= 0.0155f * reldenom);
-            if (!ok) {
+            const bfloat16 a = device_unpacked[t * elems_per_tile + e];
+            const bfloat16 b = golden_unpacked[t * elems_per_tile + e];
+            if (!is_close(a, b, 0.0155f, 0.001f)) {
                 if (first_mismatch_local < 0) {
                     first_mismatch_local = static_cast<int>(e);
                 }
                 ++mismatches;
+                const float absdiff = std::fabs(static_cast<float>(a) - static_cast<float>(b));
                 worst_absdiff = std::fmax(worst_absdiff, absdiff);
             }
         }
