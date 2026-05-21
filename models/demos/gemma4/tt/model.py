@@ -767,6 +767,7 @@ class Gemma4Model:
         start_pos=0,
         page_table=None,
         chunk_page_table=None,
+        chunk_start_idx=None,
         trace_enabled=False,
         last_token_idx=None,
         global_user_id=None,
@@ -778,16 +779,22 @@ class Gemma4Model:
         """Build prefill device inputs and cache the host-side state needed
         for per-layer inputs.
 
-        Returns ``(tt_input, None, None, tt_page_table, tt_chunk_page_table)``
-        where ``tt_input`` is host-staged token IDs when ``trace_enabled``
-        (so the trace owns the embed step) and tile-laid embeddings
-        otherwise. The ``None`` slots are positional placeholders for
+        Returns a 6-tuple matching
+        ``models/tt_transformers/tt/model.py:prepare_inputs_prefill``:
+        ``(tt_input, None, None, tt_page_table, tt_chunk_page_table,
+        tt_chunk_start_idx)``. ``tt_input`` is host-staged token IDs when
+        ``trace_enabled`` (so the trace owns the embed step) and tile-laid
+        embeddings otherwise. The two ``None`` slots are placeholders for
         ``rot_mats_global``/``rot_mats_local`` — Gemma4 computes RoPE
-        internally from layer state.
+        internally from layer state. ``tt_chunk_start_idx`` is always
+        ``None`` because Gemma4 doesn't chunk-prefill (added to the
+        return so the generator's 6-element unpack at
+        ``tt_transformers/tt/generator.py:1151`` lines up).
         """
         import torch.nn.functional as F
 
         del start_pos, last_token_idx, global_user_id, batch_size, user_id, batched_prefill, kwargs
+        del chunk_start_idx  # Accepted for signature compat; Gemma4 doesn't chunk-prefill.
 
         device = None if trace_enabled else self.mesh_device
         mesh_mapper = self._replicate_to_mesh_mapper()
@@ -828,14 +835,14 @@ class Gemma4Model:
             self._prefill_embeds_torch = None
 
         if trace_enabled:
-            return tt_tokens, None, None, tt_page_table, tt_chunk_page_table
+            return tt_tokens, None, None, tt_page_table, tt_chunk_page_table, None
 
         tt_embeds = self.embed_tokens(tt_tokens)
         if len(tt_embeds.shape) == 3:
             tt_embeds = ttnn.unsqueeze_to_4D(tt_embeds)
         tt_embeds = ttnn.to_layout(tt_embeds, ttnn.TILE_LAYOUT)
 
-        return tt_embeds, None, None, tt_page_table, tt_chunk_page_table
+        return tt_embeds, None, None, tt_page_table, tt_chunk_page_table, None
 
     def prepare_prefill_inputs_trace(self, tokens, **kwargs):
         return self.prepare_inputs_prefill(tokens, trace_enabled=True, **kwargs)
