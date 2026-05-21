@@ -45,10 +45,30 @@ A pipeline cycle is **read-only against helper surface by default**. To land new
 
 | Cycle mode | Effect |
 |---|---|
-| Read-only (default) | Kernels whose Step 2 audit finds a missing helper feature are logged into the gap map and skipped for this cycle with a `BLOCKED-CYCLE-<id>` annotation. PRs touching `kernel_lib/` headers are rejected on sight. |
+| Read-only (default) | Kernels whose Step 2 audit finds a **missing helper feature** are logged into the gap map and skipped for this cycle with a `BLOCKED-CYCLE-<id>` annotation. PRs touching `kernel_lib/` headers are rejected on sight. |
 | API-design (opt-in) | Works through the accumulated gap map via Gate 0 / Gate 1 / Gate 2 as normal. Migration of unblocked kernels still proceeds under the read-only rules. |
 
 Read-only is the default so that extending the helper requires an explicit kickoff declaration. This makes accretion visible at the planning level instead of in commit-by-commit drift. A read-only cycle is also a forcing function that exposes which gaps are real (they re-appear next cycle) vs which were one-kernel idiosyncrasies that should have lived on raw LLK.
+
+### `BLOCKED-CYCLE-<id>` is narrow on purpose — don't generalize it
+
+A migration outcome that uses `BLOCKED-CYCLE-<id>` MUST name a specific missing helper feature: a missing op struct, a missing policy enum value, a missing fusion point, a missing index mode. If you can describe the gap as *"the helper needs X"*, it's `BLOCKED-CYCLE-<id>:needs-X`.
+
+Anything else is not `BLOCKED`. In particular, do NOT use `BLOCKED-CYCLE-<id>` for:
+
+| Situation | Correct label |
+|---|---|
+| Kernel has eltwise sub-stages migratable per HQ Step 5; the cycle didn't get to it | `DEFERRED:partial-migration-not-done-this-cycle` (audit catalog only, not a kernel commit-level state). The kernel stays raw. |
+| CCL kernel migratable with existing surface but verification needs multi-device CI | The migration lands with `untestable_locally: <reason>` per Step 5 §"Migrations untestable on the local agent". This is not BLOCKED — it ships. |
+| Kernel needs ≥1 local op-struct wrappers in its anonymous namespace (no helper-surface change) | `DEFERRED:local-op-struct-needed` (audit-only). The kernel stays raw OR migrate it with the wrapper — your choice, not a structural block. |
+| Multi-stage kernel where some stages migrate and others stay raw | `MIGRATED-PARTIAL` per HQ Step 5 — once the migration lands. `DEFERRED:partial-migration-not-done-this-cycle` if it doesn't. |
+| HQ-Step-3-bullet-3 unsupported pattern (cumulative wait, exotic pack, deeply interleaved with no fusion) | `SKIPPED:HQ-bullet-3-<reason>` — the kernel stays raw, structurally. |
+| Kernel uses a different helper family (matmul / topk / reduce / transpose) | `SKIPPED:dominant-<family>-work` (or `SKIPPED:non-eltwise-kernel`). |
+| Shared header (`.hpp`/`.h` with no `kernel_main()`) | `SKIPPED:shared-header`. |
+
+Audit failure mode this is meant to prevent: a previous audit applied `BLOCKED-CYCLE-RO-1` to 66 entries where the actual reason was "the cycle didn't do the partial-migration work" or "the migration is untestable_locally per HQ". That conflated process state with helper-surface state and produced a misleading gap map. Future audits enumerate the helper-surface gap explicitly (`needs-WaitUpfrontWithBcastSelector` etc.) or use one of the `DEFERRED:`/`SKIPPED:` labels above.
+
+A read-only cycle's `BLOCKED-CYCLE-<id>` count is **the unique helper-surface gaps the cycle uncovered**, not the count of kernels-not-migrated. The gap map is a list of helper features to add, not a list of kernels to revisit.
 
 ## Approval Gates
 
