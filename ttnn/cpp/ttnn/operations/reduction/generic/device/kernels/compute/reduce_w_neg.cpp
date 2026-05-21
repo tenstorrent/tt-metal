@@ -2,15 +2,28 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Reduce W with negation: per-tile negate -> reduce_tile -> accumulate -> negate.
+// Ported to Metal 2.0 (named DFB bindings, named args).
+//
+// Host bindings expected:
+//   compile_time_arg_bindings: { {"Ht", ...}, {"Wt", ...}, {"NC", ...},
+//                                {"post_mul_scaler_bits", ...} (only if REDUCE_POST_MUL) }
+//   dfb_bindings:
+//     { INPUT (CONSUMER, name="input"),
+//       SCALER (CONSUMER, name="scaler"),
+//       OUTPUT (PRODUCER, name="output"),
+//       ACC self-loop (PRODUCER + CONSUMER, name="acc"),
+//       INEG self-loop (PRODUCER + CONSUMER, name="ineg") }
+
 #include <cstdint>
 
 #include "api/compute/reduce.h"
-
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 #include "llk_math_eltwise_binary.h"
 
@@ -19,28 +32,21 @@
 #endif
 
 void kernel_main() {
-    uint32_t Ht = get_compile_time_arg_val(0);
-    uint32_t Wt = get_compile_time_arg_val(1);
-    uint32_t NC = get_compile_time_arg_val(2);
+    constexpr uint32_t Ht = get_arg(args::Ht);
+    constexpr uint32_t Wt = get_arg(args::Wt);
+    constexpr uint32_t NC = get_arg(args::NC);
 #ifdef REDUCE_POST_MUL
     // Packed fp32 user scalar applied via mul_unary_tile after the reduce+negate finishes.
-    constexpr uint32_t post_mul_scaler_bits = get_compile_time_arg_val(3);
+    constexpr uint32_t post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
 #endif
 
-    // Circular buffers:
-    constexpr uint32_t cb_input = tt::CBIndex::c_0;
-    constexpr uint32_t cb_scaler = tt::CBIndex::c_2;
-    constexpr uint32_t cb_output = tt::CBIndex::c_3;
-    constexpr uint32_t cb_acc = tt::CBIndex::c_4;
-    constexpr uint32_t cb_ineg = tt::CBIndex::c_5;
+    DataflowBuffer cb_input_obj(dfb::input);
+    DataflowBuffer cb_scaler_obj(dfb::scaler);
+    DataflowBuffer cb_output_obj(dfb::output);
+    DataflowBuffer cb_acc_obj(dfb::acc);
+    DataflowBuffer cb_ineg_obj(dfb::ineg);
 
-    CircularBuffer cb_input_obj(cb_input);
-    CircularBuffer cb_scaler_obj(cb_scaler);
-    CircularBuffer cb_output_obj(cb_output);
-    CircularBuffer cb_acc_obj(cb_acc);
-    CircularBuffer cb_ineg_obj(cb_ineg);
-
-    compute_kernel_hw_startup(cb_input, cb_scaler, cb_output);
+    compute_kernel_hw_startup(dfb::input, dfb::scaler, dfb::output);
 
     cb_scaler_obj.wait_front(1);  // scaler tile from the reader
     for (uint32_t nc = 0; nc < NC; nc++) {
@@ -53,28 +59,28 @@ void kernel_main() {
             for (uint32_t wt = 0; wt < Wt; ++wt) {
                 cb_input_obj.wait_front(onetile);
                 tile_regs_acquire();
-                copy_tile_init(cb_input);
-                copy_tile(cb_input, 0, dst_idx);
+                copy_tile_init(dfb::input);
+                copy_tile(dfb::input, 0, dst_idx);
                 negative_tile_init();
                 negative_tile(dst_idx);
                 tile_regs_wait();
                 cb_input_obj.pop_front(onetile);
                 cb_ineg_obj.reserve_back(onetile);
                 tile_regs_commit();
-                pack_tile(dst_idx, cb_ineg);
+                pack_tile(dst_idx, dfb::ineg);
                 tile_regs_release();
                 cb_ineg_obj.push_back(onetile);
 
                 tile_regs_acquire();
                 if (wt > 0) {
                     cb_acc_obj.wait_front(onetile);
-                    copy_tile_init(cb_acc);
-                    copy_tile(cb_acc, 0, dst_idx);
+                    copy_tile_init(dfb::acc);
+                    copy_tile(dfb::acc, 0, dst_idx);
                 }
 
                 cb_ineg_obj.wait_front(onetile);
-                reduce_init<REDUCE_OP, REDUCE_DIM>(cb_ineg, cb_scaler, cb_acc);
-                reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_ineg, cb_scaler, 0, 0, dst_idx);
+                reduce_init<REDUCE_OP, REDUCE_DIM>(dfb::ineg, dfb::scaler, dfb::acc);
+                reduce_tile<REDUCE_OP, REDUCE_DIM>(dfb::ineg, dfb::scaler, 0, 0, dst_idx);
                 reduce_uninit();
                 tile_regs_wait();
                 cb_ineg_obj.pop_front(onetile);
@@ -83,15 +89,15 @@ void kernel_main() {
                 }
                 cb_acc_obj.reserve_back(onetile);
                 tile_regs_commit();
-                pack_tile(dst_idx, cb_acc);
+                pack_tile(dst_idx, dfb::acc);
                 tile_regs_release();
                 cb_acc_obj.push_back(onetile);
             }  // wt
 
             cb_acc_obj.wait_front(onetile);
             tile_regs_acquire();
-            copy_tile_init(cb_acc);
-            copy_tile(cb_acc, 0, dst_idx);
+            copy_tile_init(dfb::acc);
+            copy_tile(dfb::acc, 0, dst_idx);
             negative_tile_init();
             negative_tile(dst_idx);
 #ifdef REDUCE_POST_MUL
@@ -105,7 +111,7 @@ void kernel_main() {
             cb_acc_obj.pop_front(onetile);
             cb_output_obj.reserve_back(onetile);
             tile_regs_commit();
-            pack_tile(dst_idx, cb_output);
+            pack_tile(dst_idx, dfb::output);
             tile_regs_release();
             cb_output_obj.push_back(onetile);
         }  // ht

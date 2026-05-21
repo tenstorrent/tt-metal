@@ -2,30 +2,43 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Reduction-op width-sharded reader, ported to Metal 2.0.
+//
+// Host bindings expected (per the H factory's width-sharded KernelSpec):
+//   compile_time_arg_bindings: { {"scaler_bits", ...} }
+//   runtime_arguments_schema.named_runtime_args:
+//     { "num_tiles", "Wt", "Ht", "batch", "row_size_bytes", "batch_size_bytes" }
+//   dfb_bindings:
+//     { INPUT (CONSUMER, name="input"),
+//       INPUT_SHARDED (PRODUCER, name="input_sharded"),  // borrowed-memory DFB
+//       SCALER (PRODUCER, name="scaler") }
+//   tensor_bindings: (none - inputs read from the borrowed-memory DFB only)
+//
+// REDUCE_SCALER is always defined for this kernel today (the H width-sharded
+// factory always sets the define). The legacy kernel kept the ifdef in case
+// the kernel was reused elsewhere; we keep the gate to match.
+
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
+#include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
 void kernel_main() {
-    uint32_t num_tiles = get_arg_val<uint32_t>(0);
-    uint32_t Wt = get_arg_val<uint32_t>(1);
-    uint32_t Ht = get_arg_val<uint32_t>(2);
-    uint32_t batch = get_arg_val<uint32_t>(3);
-    uint32_t row_size_bytes = get_arg_val<uint32_t>(4);
-    uint32_t batch_size_bytes = get_arg_val<uint32_t>(5);
-
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
+    auto num_tiles = get_arg(args::num_tiles);
+    auto Wt = get_arg(args::Wt);
+    auto Ht = get_arg(args::Ht);
+    auto batch = get_arg(args::batch);
+    auto row_size_bytes = get_arg(args::row_size_bytes);
+    auto batch_size_bytes = get_arg(args::batch_size_bytes);
 
 #ifdef REDUCE_SCALER
-    constexpr uint32_t cb_id_in2 = get_compile_time_arg_val(2);
-    constexpr uint32_t scaler_bits = get_compile_time_arg_val(3);
+    constexpr uint32_t scaler_bits = get_arg(args::scaler_bits);
     float scaler_f = __builtin_bit_cast(float, scaler_bits);
-    dataflow_kernel_lib::prepare_reduce_scaler<cb_id_in2, REDUCE_OP, REDUCE_DIM>(scaler_f);
+    dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, REDUCE_OP, REDUCE_DIM>(scaler_f);
 #endif
 
     // Emit tiles in N, W_skip, H, W_chunk order to match the chunked iteration of the
@@ -34,11 +47,13 @@ void kernel_main() {
     constexpr uint32_t row_chunk = compute_kernel_lib::DEST_AUTO_LIMIT;
 
     constexpr uint32_t onetile = 1;
-    uint32_t tile_bytes = get_tile_size(cb_id_in0);
+
+    DataflowBuffer cb_in0(dfb::input);
+    DataflowBuffer cb_in1(dfb::input_sharded);
+
+    uint32_t tile_bytes = cb_in0.get_tile_size();
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
-    CircularBuffer cb_in1(cb_id_in1);
 
     cb_in1.reserve_back(num_tiles);
     uint32_t base_l1_addr = cb_in1.get_write_ptr();

@@ -2,6 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Welford W-reduce compute kernel, ported to Metal 2.0.
+//
+// Host bindings expected (per the Welford factory's W KernelSpec):
+//   compile_time_arg_bindings:
+//     { {"Wt", ...}, {"W", ...}, {"tile_width", ...},
+//       {"do_scale", 0|1}, {"correction", 0|1}, {"is_std", 0|1} }
+//   runtime_arguments_schema.named_runtime_args: { "NCHt" }
+//   dfb_bindings:
+//     { INPUT (CONSUMER, name="input"),
+//       SCALER (CONSUMER, name="scaler"),  (only when do_scale via cb_scalar)
+//       OUTPUT (PRODUCER, name="output"),
+//       SCRATCH (PRODUCER+CONSUMER self-loop, name="scratch"),   // cb_var (c_19)
+//       SCALED (PRODUCER+CONSUMER self-loop, name="scaled") }    // cb_scaled (c_20),
+//                                                                  only when do_scale
+
 #include <cstdint>
 
 #include "api/compute/bcast.h"
@@ -10,57 +25,28 @@
 #include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     // Runtime args:
     // Total number of outer-loop iterations (N * C * Ht),
     // i.e. how many independent row-reductions this core must perform.
-    uint32_t NCHt = get_arg_val<uint32_t>(0);
+    auto NCHt = get_arg(args::NCHt);
 
     // Compile-time args:
-    // Number of tiles along the W (reduction) dimension.
-    constexpr uint32_t Wt = get_compile_time_arg_val(0);
-    // The actual number of elements along W (before tiling).
-    constexpr uint32_t W = get_compile_time_arg_val(1);
-    // Number of elements per tile in the W dimension
-    // (typically 32, but can be smaller for narrow tiles).
-    constexpr uint32_t tile_width = get_compile_time_arg_val(2);
-    // Whether input scaling is required.
-    constexpr bool do_scale = get_compile_time_arg_val(3) != 0;
-    // Whether to apply Bessel's correction (divide by N-1 instead of N).
-    constexpr bool correction = get_compile_time_arg_val(4) != 0;
-    // Whether to compute standard deviation (sqrt of variance) instead of variance.
-    constexpr bool is_std = get_compile_time_arg_val(5) != 0;
+    constexpr uint32_t Wt = get_arg(args::Wt);
+    constexpr uint32_t W = get_arg(args::W);
+    constexpr uint32_t tile_width = get_arg(args::tile_width);
+    constexpr bool do_scale = get_arg(args::do_scale) != 0;
+    constexpr bool correction = get_arg(args::correction) != 0;
+    constexpr bool is_std = get_arg(args::is_std) != 0;
 
     constexpr uint32_t onetile = 1;
 
-    // Circular buffer that the reader kernel fills with input tiles.
-    constexpr auto cb_in = tt::CBIndex::c_0;
-    // Scalar tile produced by the reader via generate_reduce_scaler.
-    // Used to scale every input tile before Welford processing.
-    constexpr auto cb_scalar = tt::CBIndex::c_2;
-    // Circular buffer where the final variance output tile is written
-    // for the writer kernel to consume.
-    constexpr auto cb_out = tt::CBIndex::c_16;
-    // Scratch circular buffer used to hold the variance tile between
-    // the two transpose steps (Welford produces row-oriented results;
-    // we transpose back to column orientation via this buffer,
-    // and transpose operation can't take data from the DST register).
-    constexpr auto cb_var = tt::CBIndex::c_19;
-    // 1-tile intermediate: holds the scaled input tile between the
-    // mul_tiles_bcast_scalar (scale step) and transpose_wh_tile (Welford step).
-    // Only used when do_scale is true.
-    // The reason this is needed is because mul_tiles_bcast_scalar writes data
-    // to the DST register, but transpose_wh_tile is an unpack operation, so
-    // it expects data in a CB. Thus, this CB is used to hold the scaled input tile.
-    constexpr auto cb_scaled = tt::CBIndex::c_20;
-
-    CircularBuffer cb_in_obj(cb_in);
-    CircularBuffer cb_scalar_obj(cb_scalar);
-    CircularBuffer cb_out_obj(cb_out);
-    CircularBuffer cb_var_obj(cb_var);
-    CircularBuffer cb_scaled_obj(cb_scaled);
+    DataflowBuffer cb_in_obj(dfb::input);
+    DataflowBuffer cb_out_obj(dfb::output);
+    DataflowBuffer cb_var_obj(dfb::scratch);
 
     // Destination register indices inside the Tensix DST register file.
     // Welford's LLK uses three adjacent dst registers:
@@ -76,88 +62,60 @@ void kernel_main() {
     // we want to skip some columns from getting processed.
     constexpr uint32_t last_tile_rows = ((W % tile_width) == 0) ? tile_width : (W % tile_width);
 
-    compute_kernel_hw_startup(cb_in, cb_out);
-    pack_reconfig_data_format(cb_out);
+    compute_kernel_hw_startup(dfb::input, dfb::output);
+    pack_reconfig_data_format(dfb::output);
 
     if constexpr (do_scale) {
         // Scalar tile stays resident across all rows
+        DataflowBuffer cb_scalar_obj(dfb::scaler);
         cb_scalar_obj.wait_front(onetile);
     }
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         // Simultaneous calculation of E[x] and Var[x] using Welford's algorithm.
-        // When do_scale is true, each input tile is first multiplied by the scalar,
-        // packed to cb_scaled, then transposed and fed to welford_update.
-        // When do_scale is false, input tiles are transposed directly from cb_in.
-        // The Welford SFPU state (running mean in LREG4, M2 in LREG5) persists
-        // across tile_regs_release/acquire cycles because LREGs are SFPU registers,
-        // separate from the DST register file managed by tile_regs_acquire/release.
-
-        // start_N is the cumulative sample count across tiles processed so far;
-        // passed to the Welford LLK so it can compute the correct 1/(N+1) reciprocal
-        // for each sample's running-mean update.
+        // start_N is the cumulative sample count across tiles processed so far.
         uint32_t start_N = 0;
 
         // Programs SFPU replay buffer + clears LREG4/5
         welford_init();
 
-        // When scaling, DST must be acquired/released per tile because
-        // the FPU mul is incompatible with SFPU Welford. The scaled
-        // result is packed to cb_scaled so that transpose_wh_tile (an
-        // unpack operation) can read it back.
-        // Without scaling, transpose and welford (both SFPU-compatible)
-        // can share a single DST window for the entire loop.
-        // On the do_scale path, transpose_wh_init_short(cb_scaled) runs before each
-        // welford_update; it re-inits UNPACK and MATH via llk_math_eltwise_unary_datacopy_init
-        // (same MATH-side effect as welford_reinit), so a separate welford_reinit after the mul
-        // is not required here.
         if constexpr (!do_scale) {
             // Explicit srca reconfig is required because the output packing
-            // phase (below) calls reconfig_data_format_srca(cb_var) which
+            // phase (below) calls reconfig_data_format_srca(dfb::scratch) which
             // changes the format on the 2nd+ NCHt iterations.
-            reconfig_data_format_srca(cb_in);
-            transpose_wh_init_short(cb_in);
+            reconfig_data_format_srca(dfb::input);
+            transpose_wh_init_short(dfb::input);
             tile_regs_acquire();
         }
 
-        // Welford SFPU state (running mean in LREG4, M2 in LREG5)
-        // persists across DST cycles because LREGs are separate from
-        // the DST register file managed by tile_regs_acquire/release.
         for (uint32_t wt = 0; wt < Wt; ++wt) {
             if constexpr (do_scale) {
                 // --- Scale step: multiply input tile by scalar ---
                 cb_in_obj.wait_front(onetile);
                 tile_regs_acquire();
-                // Explicit srca reconfig is required because the output packing
-                // phase (below) calls reconfig_data_format_srca(cb_var) which
-                // sets the unpacker to cb_var's format (Float32 when fp32 dest
-                // accumulation is enabled).  mul_tiles_bcast_scalar_init_short
-                // does not fully reconfigure the data format, so without this
-                // call the unpacker would read cb_in (Float16_b) data using the
-                // stale Float32 format, producing garbage on the 2nd+ NCHt
-                // iterations.
-                reconfig_data_format_srca(cb_in);
-                mul_tiles_bcast_scalar_init_short(cb_in, cb_scalar);
-                mul_tiles_bcast_scalar(cb_in, cb_scalar, 0, 0, input_dst);
+                reconfig_data_format_srca(dfb::input);
+                mul_tiles_bcast_scalar_init_short(dfb::input, dfb::scaler);
+                mul_tiles_bcast_scalar(dfb::input, dfb::scaler, 0, 0, input_dst);
                 tile_regs_commit();
                 cb_in_obj.pop_front(1);
+                DataflowBuffer cb_scaled_obj(dfb::scaled);
                 cb_scaled_obj.reserve_back(onetile);
                 tile_regs_wait();
-                pack_reconfig_data_format(cb_scaled);
-                pack_tile(input_dst, cb_scaled);
+                pack_reconfig_data_format(dfb::scaled);
+                pack_tile(input_dst, dfb::scaled);
                 tile_regs_release();
                 cb_scaled_obj.push_back(onetile);
 
                 // --- Transpose scaled tile back into DST ---
                 cb_scaled_obj.wait_front(onetile);
                 tile_regs_acquire();
-                reconfig_data_format_srca(cb_scaled);
-                transpose_wh_init_short(cb_scaled);
-                transpose_wh_tile(cb_scaled, 0, input_dst);
+                reconfig_data_format_srca(dfb::scaled);
+                transpose_wh_init_short(dfb::scaled);
+                transpose_wh_tile(dfb::scaled, 0, input_dst);
                 cb_scaled_obj.pop_front(onetile);
             } else {
                 cb_in_obj.wait_front(onetile);
-                transpose_wh_tile(cb_in, 0, input_dst);
+                transpose_wh_tile(dfb::input, 0, input_dst);
                 cb_in_obj.pop_front(onetile);
             }
 
@@ -171,9 +129,7 @@ void kernel_main() {
             } else {
                 // Last tile: finalize and keep DST acquired for variance packing
                 welford_update_rows<0>(input_dst, start_N, 0, last_tile_rows, {});
-                // scale_idx controls the divisor for M2 -> variance conversion:
-                //   correction=false: scale_idx = W-1, reciprocal = 1/W  (population variance)
-                //   correction=true:  scale_idx = W-2, reciprocal = 1/(W-1) (sample variance)
+                // scale_idx controls the divisor for M2 -> variance conversion.
                 constexpr uint32_t scale_idx = correction ? (W - 2) : (W - 1);
                 welford_finalize_to_row<0>(mean_dst, scale_idx, {});
                 tile_regs_commit();
@@ -184,16 +140,16 @@ void kernel_main() {
         // Pack variance and transpose back to column format
         cb_var_obj.reserve_back(onetile);
         tile_regs_wait();
-        pack_reconfig_data_format(cb_var);
-        pack_tile(var_dst, cb_var);
+        pack_reconfig_data_format(dfb::scratch);
+        pack_tile(var_dst, dfb::scratch);
         tile_regs_release();
         cb_var_obj.push_back(onetile);
 
         cb_var_obj.wait_front(onetile);
-        reconfig_data_format_srca(cb_var);
-        transpose_wh_init_short(cb_var);
+        reconfig_data_format_srca(dfb::scratch);
+        transpose_wh_init_short(dfb::scratch);
         tile_regs_acquire();
-        transpose_wh_tile(cb_var, 0, var_dst);
+        transpose_wh_tile(dfb::scratch, 0, var_dst);
         if constexpr (is_std) {
             sqrt_tile_init();
             sqrt_tile(var_dst);
@@ -204,8 +160,8 @@ void kernel_main() {
         // Pack transposed variance to output
         cb_out_obj.reserve_back(onetile);
         tile_regs_wait();
-        pack_reconfig_data_format(cb_out);
-        pack_tile(var_dst, cb_out);
+        pack_reconfig_data_format(dfb::output);
+        pack_tile(var_dst, dfb::output);
         tile_regs_release();
         cb_out_obj.push_back(onetile);
 

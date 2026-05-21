@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Welford HW-reduction writer kernel.
+// Welford HW-reduction writer kernel, ported to Metal 2.0.
 //
 // Phase 1 (per output): Reads Wt partial (mean, var) tile pairs from
 // cb_partial (written by the compute kernel using
@@ -14,36 +14,39 @@
 // Phase 2 (per output): Waits for the compute kernel to pack the
 // output tile into cb_out (in the correct output data format), then
 // NOC-writes it to DRAM.
+//
+// Host bindings expected (per the Welford HW factory's KernelSpec):
+//   compile_time_arg_bindings:
+//     { {"Wt", ...}, {"W", ...}, {"tile_width", ...}, {"H", ...},
+//       {"correction", ...}, {"reduce_batch_size", ...} }
+//   runtime_arguments_schema.named_runtime_args:
+//     { "NC_per_core", "output_tile_start_id" }
+//   dfb_bindings:
+//     { OUTPUT (CONSUMER, name="output"),     // cb_out
+//       PARTIAL (CONSUMER, name="partial"),   // cb_partial: writer reads compute's partials
+//       COMBINED (PRODUCER, name="combined") } // cb_combined: writer writes combined scalar
+//   tensor_bindings: { OUTPUT_TENSOR (name="output") }
 
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_combine.h"
 
 void kernel_main() {
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t NC_per_core = get_arg_val<uint32_t>(1);
-    const uint32_t output_tile_start_id = get_arg_val<uint32_t>(2);
+    auto NC_per_core = get_arg(args::NC_per_core);
+    auto output_tile_start_id = get_arg(args::output_tile_start_id);
 
-    constexpr uint32_t Wt = get_compile_time_arg_val(0);
-    constexpr uint32_t W = get_compile_time_arg_val(1);
-    constexpr uint32_t tile_width = get_compile_time_arg_val(2);
-    constexpr uint32_t H = get_compile_time_arg_val(3);
-    constexpr bool correction = get_compile_time_arg_val(4) != 0;
-    constexpr uint32_t reduce_batch_size = get_compile_time_arg_val(5);
-
-    constexpr auto cb_partial = tt::CBIndex::c_21;
-    // cb_combined: Float32 tile written by this kernel, read back by compute
-    // for repacking into the output data format.
-    constexpr auto cb_combined = tt::CBIndex::c_22;
-    // cb_out: output tile packed by compute in the correct data format.
-    constexpr auto cb_out = tt::CBIndex::c_16;
-
-    constexpr auto dst_args = TensorAccessorArgs<6>();
+    constexpr uint32_t Wt = get_arg(args::Wt);
+    constexpr uint32_t W = get_arg(args::W);
+    constexpr uint32_t tile_width = get_arg(args::tile_width);
+    constexpr uint32_t H = get_arg(args::H);
+    constexpr bool correction = get_arg(args::correction) != 0;
+    constexpr uint32_t reduce_batch_size = get_arg(args::reduce_batch_size);
 
     // welford_finalize_to_row stores 32 per-column values in tile row 0.
     // In tile format, row 0 spans Face 0 (columns 0-15) and Face 1 (columns 16-31).
@@ -52,15 +55,16 @@ void kernel_main() {
     constexpr uint32_t FACE_ELEMENTS = FACE_W * FACE_W;
     constexpr uint32_t last_tile_cols = (W % tile_width == 0) ? tile_width : W % tile_width;
 
-    const uint32_t partial_tile_size_bytes = get_tile_size(cb_partial);
-    const uint32_t out_tile_size_bytes = get_tile_size(cb_out);
+    DataflowBuffer cb_partial_obj(dfb::partial);
+    DataflowBuffer cb_combined_obj(dfb::combined);
+    DataflowBuffer cb_out_obj(dfb::output);
+
+    const uint32_t partial_tile_size_bytes = cb_partial_obj.get_tile_size();
+    const uint32_t out_tile_size_bytes = cb_out_obj.get_tile_size();
 
     Noc noc;
-    CircularBuffer cb_partial_obj(cb_partial);
-    CircularBuffer cb_combined_obj(cb_combined);
-    CircularBuffer cb_out_obj(cb_out);
 
-    const auto tensor_out = TensorAccessor(dst_args, dst_addr);
+    const auto tensor_out = TensorAccessor(ta::output);
 
     // NC_per_core is the total number of NC slices assigned to this core.
     // Each output element is produced by combining reduce_batch_size
