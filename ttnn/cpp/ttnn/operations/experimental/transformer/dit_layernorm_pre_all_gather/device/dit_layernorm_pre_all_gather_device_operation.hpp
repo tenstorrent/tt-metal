@@ -5,14 +5,21 @@
 #pragma once
 
 #include <optional>
+#include <variant>
 
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/device_operation.hpp"
 
 #include "dit_layernorm_pre_all_gather_device_operation_types.hpp"
-#include "dit_layernorm_pre_all_gather_welford_program_factory.hpp"
 
 namespace ttnn::experimental::prim {
+
+struct PreAllGatherWelfordProgramFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const DitLayernormPreAllGatherParams& operation_attributes,
+        const DitLayernormPreAllGatherInputs& tensor_args,
+        Tensor& output);
+};
 
 struct PreAllGatherDeviceOperation {
     using operation_attributes_t = DitLayernormPreAllGatherParams;

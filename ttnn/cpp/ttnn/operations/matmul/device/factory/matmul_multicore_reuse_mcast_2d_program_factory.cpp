@@ -40,6 +40,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
+    bool dst_full_sync_en,
     uint32_t B,
     uint32_t M,
     uint32_t M_per_batch,
@@ -911,7 +912,10 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         compute_kernel_desc.named_compile_time_args = std::move(named_compile_args);
     }
     compute_kernel_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode};
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .math_approx_mode = math_approx_mode};
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Build CBDescriptors
@@ -1531,6 +1535,7 @@ create_program_mcast_in0_in1(
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
+    bool dst_full_sync_en,
     uint32_t B,
     uint32_t M,
     uint32_t M_per_batch,
@@ -2384,6 +2389,7 @@ create_program_mcast_in0_in1(
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = dst_full_sync_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args,
             .defines = mm_kernel_defines,
@@ -3078,9 +3084,23 @@ matmul_multi_core_reuse_mcast_2d_optimized_(
     auto program_config = std::get<operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>(
         operation_attributes.program_config.value());
 
+    if (!program_config.allowed_worker_cores.has_value()) {
+        log_warning(
+            tt::LogOp,
+            "matmul_multi_core_reuse_mcast_2d_optimized_helper: program_config.allowed_worker_cores not populated; "
+            "auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. "
+            "CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program "
+            "config first. This will become a hard error in a future release.");
+        program_config.allowed_worker_cores = CoreRangeSet(CoreRange(
+            CoreCoord(0, 0),
+            CoreCoord(
+                program_config.compute_with_storage_grid_size.x - 1,
+                program_config.compute_with_storage_grid_size.y - 1)));
+    }
+
     auto fuse_batch = program_config.fuse_batch;
     auto in0_block_w = program_config.in0_block_w;
-    auto compute_with_storage_grid_size = program_config.compute_with_storage_grid_size;
+    auto compute_with_storage_grid_size = program_config.allowed_worker_cores.value().bounding_box().grid_size();
     auto out_subblock_h = program_config.out_subblock_h;
     auto out_subblock_w = program_config.out_subblock_w;
     auto out_block_h = program_config.out_block_h;
@@ -3247,6 +3267,7 @@ matmul_multi_core_reuse_mcast_2d_optimized_(
         fp32_dest_acc_en,
         math_approx_mode,
         packer_l1_acc,
+        dst_full_sync_en,
         B,
         Mt,
         Mt_per_batch,
@@ -3394,6 +3415,7 @@ ProgramDescriptor MatmulMultiCoreReuseMcast2DProgramFactory::create_descriptor(
         fp32_dest_acc_en,
         math_approx_mode,
         packer_l1_acc,
+        dst_full_sync_en,
         B,
         Mt,
         Mt_per_batch,

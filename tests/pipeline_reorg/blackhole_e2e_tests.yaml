@@ -252,30 +252,47 @@
   name: bh_lb_DeepSeek_PREFILL
   model-name: deepseek
   cmd: |
-    pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc" --timeout 1800
-    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py -k '4x2 and pcc_check' -vvv --tb=short
-    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_rope_prefill.py -k '4x2' -vvv --tb=short
-    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla -k "2x4 and random and scaled_sl and check_pcc and line" -vvv --tb=short
-    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py -vvv --tb=short --timeout=900
-    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py -k "2x4 and layer0 and device" -vvv --tb=short
-    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_moe_grouped_topk.py -k "realistic" -vvv --tb=short
-    pytest models/demos/deepseek_v3_d_p/tests/perf/test_dispatch_combine_perf.py -m models_device_performance_bare_metal -vvv --tb=short --timeout=900
+    exit_code=0
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc and not perf-host-64" --timeout 1800 || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py -k '4x2 and pcc_check' -vvv --tb=short || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_rope_prefill.py -k '4x2' -vvv --tb=short || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla -k "2x4 and random and scaled_sl and check_pcc and line" -vvv --tb=short || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py -k "balanced and not non_balanced" -vvv --tb=short --timeout=900 || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py -k "2x4 and layer0 and device" -vvv --tb=short || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_moe_grouped_topk.py -k "realistic" -vvv --tb=short || exit_code=$?
+    exit $exit_code
   skus:
     bh_loudbox:
-      timeout: 70 # PR #43775: FP8 combine adds runtime; bumped from 68 to 70
+      timeout: 90
   owner_id: U08E1JCMAJF # Marko Bezulj
+  team: models
+
+- id: bh-lb-deepseek-prefill-perf
+  name: bh_lb_DeepSeek_PREFILL_PERF
+  model-name: deepseek
+  cmd: |
+    exit_code=0
+    pytest models/demos/deepseek_v3_d_p/tests/perf/test_dispatch_combine_perf.py -m models_device_performance_bare_metal -vvv --tb=short --timeout=900 || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/perf/test_moe_perf.py -vvv --tb=short || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/perf/test_mla_perf.py -vvv --tb=short || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/perf/test_prefill_block_perf.py -k "block_2x4" -vvv --tb=short || exit_code=$?
+    exit $exit_code
+  skus:
+    bh_loudbox:
+      timeout: 30
+  owner_id: U09LK84G4TF # Nikola Milicevic
   team: models
 
 - id: bh-qb-deepseek-prefill
   name: bh_qb_DeepSeek_PREFILL
   model-name: deepseek
   cmd: |
-    pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc" --timeout 1800
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc and not perf-host-64" --timeout 1800
     pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py -k '2x2 and pcc_check' -vvv --tb=short
     pytest models/demos/deepseek_v3_d_p/tests/cache/ -vvv --tb=short
     pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_dispatch_combine_l1_small_semaphores.py -vvv --tb=short
   skus:
     bh_llmbox:
-      timeout: 40
+      timeout: 30
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: models

@@ -79,7 +79,7 @@ jobs:
     runs-on: ${{ matrix.runs_on }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -89,6 +89,12 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          # Sweep CI default of 5s is too aggressive for traced multi-device
+          # configs on Galaxy: linear/multiply/matmul with sharded I/O can
+          # exceed 5s during reshard + dispatch bring-up, producing false-
+          # positive op-timeouts. Raise to 30s for the whole sweep job so
+          # every op benefits without per-module env-var overrides.
+          hang-detection-timeout: 30
       - name: 📋 Display parallel sweep configuration
         run: |
           echo "::group::🔧 Parallel Sweeps Execution - Configuration"

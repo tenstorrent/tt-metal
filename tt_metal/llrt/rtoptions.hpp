@@ -352,6 +352,16 @@ class RunTimeOptions {
     // Use new DEVICE_PRINT system instead of legacy DPRINT
     bool use_device_print = false;
 
+    // Time (in microseconds) between DEVICE_PRINT dispatch stall-detection passes
+    // and full-dispatch passes on dispatch_s.
+    uint32_t device_print_dispatch_stall_us = 50;
+    uint32_t device_print_dispatch_full_us = 100000;  // 100 ms
+
+    // Override for the dispatch_s DEVICE_PRINT dispatch L1 cache buffer size, in bytes.
+    // 0 means "use the per-arch default" (DispatchMemMap::dispatch_s_device_print_l1_cache_size()).
+    // Bump this if dispatch_s logs that it self-disabled because the buffer was too small.
+    uint32_t device_print_dispatch_l1_cache_bytes = 0;
+
     // Enable hybrid lockstep + per-core L1 allocator mode
     bool allocator_mode_hybrid = false;
 
@@ -794,6 +804,15 @@ public:
 
     bool get_use_device_print() const { return use_device_print; }
     void set_use_device_print(bool use) { use_device_print = use; }
+
+    uint32_t get_device_print_dispatch_stall_us() const { return device_print_dispatch_stall_us; }
+    void set_device_print_dispatch_stall_us(uint32_t v) { device_print_dispatch_stall_us = v; }
+
+    uint32_t get_device_print_dispatch_full_us() const { return device_print_dispatch_full_us; }
+    void set_device_print_dispatch_full_us(uint32_t v) { device_print_dispatch_full_us = v; }
+
+    uint32_t get_device_print_dispatch_l1_cache_bytes() const { return device_print_dispatch_l1_cache_bytes; }
+    void set_device_print_dispatch_l1_cache_bytes(uint32_t v) { device_print_dispatch_l1_cache_bytes = v; }
 
     // Parse all feature-specific environment variables, after hal is initialized.
     // (Needed because syntax of some env vars is arch-dependent.)
