@@ -484,12 +484,13 @@ Never modify `test-dispatch.yaml` or any shared workflow. Instead:
 
 **⚠️ WORKFLOW PRUNING IS MANDATORY — NOT OPTIONAL**
 
-The full `blackhole-post-commit.yaml` has 47–51 jobs. Dispatching it unmodified ties up
+Production CI workflows can have 47–51 jobs. Dispatching the full workflow unmodified ties up
 shared hardware for hours and is a protocol violation. Every probe dispatch MUST use a
-pruned workflow YAML.
+pruned workflow YAML — regardless of which workflow runs the failing test.
 
 **Pruning rules (must result in ≤ 2 jobs):**
-1. Open the workflow YAML (e.g. `.github/workflows/blackhole-post-commit.yaml`).
+1. Open the workflow YAML for the failing test (identified in Step 1 — e.g. `blackhole-demo-tests.yaml`,
+   `blackhole-e2e-tests.yaml`, `nightly-wh-models.yaml`, etc. — whatever workflow the CI run came from).
 2. Find the single target test job (the job whose log shows the test failing).
 3. Look at that job's `needs:` field — typically `[build-artifact]` or similar.
 4. **Delete every other job from the YAML.** Keep ONLY:
