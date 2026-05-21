@@ -191,8 +191,19 @@ void apply_descriptor_runtime_args(Program& program, const ProgramDescriptor& de
     auto program_cbs = program.circular_buffers();
     for (uint32_t ci = 0; ci < static_cast<uint32_t>(desc.cbs.size()); ++ci) {
         const auto& cb_desc = desc.cbs[ci];
-        const auto& cb = *program_cbs[ci];
-        const auto cb_handle = cb.id();
+        const auto cb_handle = program_cbs[ci]->id();
+
+        // Snapshot the cached config BEFORE any Update* call so comparisons stay
+        // consistent across the patch sequence.  In particular: comparing against
+        // `CircularBuffer::page_size()` after `UpdateCircularBufferTotalSize` can
+        // throw — that accessor re-checks total_size % page_size and a fresh
+        // total_size may be incompatible with the still-stale page_size before
+        // the page_size update lands.  The raw `page_sizes()` array doesn't
+        // validate, so we use that as our reference (same pattern the legacy
+        // GenericMeshProgramFactory::override_program_runtime_arguments uses).
+        const auto& cached_cb_config = GetCircularBufferConfig(program, cb_handle);
+        const uint32_t cached_total_size = cached_cb_config.total_size();
+        const auto cached_page_sizes = cached_cb_config.page_sizes();  // copy, not ref
 
         if (cb_desc.buffer) {
             UpdateDynamicCircularBufferAddress(program, cb_handle, *cb_desc.buffer, cb_desc.address_offset);
@@ -204,18 +215,24 @@ void apply_descriptor_runtime_args(Program& program, const ProgramDescriptor& de
         // attn_matmul, group_attn_matmul, slice_rm, generic_op) must have their fresh size
         // applied here — otherwise the cached program keeps the first-build size and the
         // kernel reads from / writes to mismatched memory.
-        if (cb.size() != cb_desc.total_size) {
+        if (cached_total_size != cb_desc.total_size) {
             UpdateCircularBufferTotalSize(program, cb_handle, cb_desc.total_size);
         }
-        for (const auto& format_desc : cb_desc.format_descriptors) {
-            // CBFormatDescriptor::page_size IS in the program hash, so by construction it
-            // matches across cache hits today.  Update is a no-op when values match; the
-            // call is here so factories that opt out of hashing page_size in the future
-            // stay correct without a second framework change.
-            if (cb.page_size(format_desc.buffer_index) != format_desc.page_size) {
-                UpdateCircularBufferPageSize(program, cb_handle, format_desc.buffer_index, format_desc.page_size);
+        // CBFormatDescriptor::page_size IS in the program hash today, so by construction
+        // values match across cache hits; Update is a no-op when they match.  The call
+        // is here so factories that opt out of hashing page_size in the future stay
+        // correct without a second framework change.  remote_format_descriptors covers
+        // the GlobalCircularBuffer path.
+        const auto patch_page_sizes = [&](const CBDescriptor::FormatDescriptors& fmt_list) {
+            for (const auto& fmt : fmt_list) {
+                const auto& cached = cached_page_sizes[fmt.buffer_index];
+                if (!cached.has_value() || *cached != fmt.page_size) {
+                    UpdateCircularBufferPageSize(program, cb_handle, fmt.buffer_index, fmt.page_size);
+                }
             }
-        }
+        };
+        patch_page_sizes(cb_desc.format_descriptors);
+        patch_page_sizes(cb_desc.remote_format_descriptors);
     }
 }
 
