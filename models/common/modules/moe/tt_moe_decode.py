@@ -42,25 +42,49 @@ class _TTMoEDecodeExpertState:
 
     @staticmethod
     def _init_expert_mapping(torch_expert_mapping: "torch.Tensor", mesh_device: ttnn.MeshDevice):
-        expert_mapping_dtype = ttnn.uint16
-        print("Expert mapping to device")
+        # [num_devices, num_experts] table where mapping[d, e] = linearized mesh coordinate
+        # of the device that owns expert e (same value across all source rows d, since
+        # ownership is global — different rows would matter only for shared experts where
+        # different src devices may pick different replicas; that is handled upstream
+        # by map_shared_experts). Replicated across all devices so each device holds the
+        # full lookup table. Matches the "new format" used by
+        # test_all_to_all_dispatch_metadata_6U.py and gen_expert_mapping in
+        # test_moe_compute_6U.py.
+        if torch_expert_mapping.ndim != 1:
+            raise ValueError(
+                f"expected 1D expert_mapping (length=num_experts), got shape {tuple(torch_expert_mapping.shape)}"
+            )
+        num_devices = mesh_device.get_num_devices()
+        mapping_2d = torch_expert_mapping.to(torch.int32).unsqueeze(0).repeat(num_devices, 1)
+
         return ttnn.from_torch(
-            torch_expert_mapping,
+            mapping_2d,
             device=mesh_device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=expert_mapping_dtype,
+            dtype=ttnn.uint16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
     @staticmethod
-    def _device_map_reorder_weights(
+    def _device_reorder_weights(
+        torch_expert_mapping: "torch.Tensor",
         torch_w0: "torch.Tensor",
         torch_w1: "torch.Tensor",
         torch_w2: "torch.Tensor",
-        torch_expert_mapping: "torch.Tensor",
+        torch_b0: "torch.Tensor" | None,
+        torch_b1: "torch.Tensor" | None,
+        torch_b2: "torch.Tensor" | None,
     ):
-        return tuple([t[:, torch_expert_mapping, :, :] for t in (torch_w0, torch_w1, torch_w2)])
+        perm = torch.argsort(torch_expert_mapping, stable=True)
+        mapped_tensors = [t[:, perm, :, :] for t in (torch_w0, torch_w1, torch_w2)]
+
+        if torch_b0 is not None:
+            mapped_tensors += [t[:, perm, :] for t in (torch_b0, torch_b1, torch_b2)]
+        else:
+            mapped_tensors += [None] * 3
+
+        return tuple(mapped_tensors)
 
     def __init__(
         self,
@@ -83,20 +107,32 @@ class _TTMoEDecodeExpertState:
         torch_b1: "torch.Tensor" | None = None,
         torch_b2: "torch.Tensor" | None = None,
     ):
-        print("init expert state")
-
-        # self._validate()
+        num_routed = torch_w0.shape[1]
+        logger.info(
+            f"Initializing expert state: routed_experts={num_routed} num_shared={num_shared_experts} "
+            f"mesh_shape={mesh_shape} cluster_axis={cluster_axis} has_bias={has_bias}"
+        )
 
         torch_expert_mapping = torch.tensor(expert_mapping, dtype=torch.int)
 
-        mapped_torch_w0, mapped_torch_w1, mapped_torch_w2 = self._device_map_reorder_weights(
-            torch_w0, torch_w1, torch_w2, torch_expert_mapping
+        (
+            mapped_torch_w0,
+            mapped_torch_w1,
+            mapped_torch_w2,
+            mapped_torch_b0,
+            mapped_torch_b1,
+            mapped_torch_b2,
+        ) = self._device_reorder_weights(
+            torch_expert_mapping, torch_w0, torch_w1, torch_w2, torch_b0, torch_b1, torch_b2
         )
 
-        logger.info("reordered weights")
-
         if shared_expert_ids_to_devices is not None:
-            logger.info("Adding shared expert weights")
+            if has_bias:
+                # add_shared_expert_weights only handles weights; extending it to bias
+                # requires a parallel API and per-shared-expert bias tensors.
+                raise NotImplementedError("bias + shared experts is not yet supported")
+
+            logger.info(f"Adding shared expert weights for {len(shared_expert_ids_to_devices)} shared experts")
             total_torch_w0, total_torch_w1, total_torch_w2 = add_shared_expert_weights(
                 mapped_torch_w0,
                 mapped_torch_w1,
@@ -107,18 +143,18 @@ class _TTMoEDecodeExpertState:
                 shared_expert_ids_to_devices,
                 mesh_device.get_num_devices(),
             )
-            logger.info("Adding shared expert mapping")
+            total_torch_b0 = total_torch_b1 = total_torch_b2 = None
             total_expert_mapping = map_shared_experts(
                 torch_expert_mapping, shared_expert_ids_to_devices, mesh_shape, cluster_axis
             )
 
         else:
             total_torch_w0, total_torch_w1, total_torch_w2 = mapped_torch_w0, mapped_torch_w1, mapped_torch_w2
+            total_torch_b0, total_torch_b1, total_torch_b2 = mapped_torch_b0, mapped_torch_b1, mapped_torch_b2
             total_expert_mapping = torch_expert_mapping
 
         self.tt_expert_mapping = self._init_expert_mapping(total_expert_mapping, mesh_device)
-
-        print("init map")
+        logger.info("Uploaded expert mapping to mesh")
 
         self.tt_w0_w1, self.tt_w2 = self._init_total_expert_weights_impl(
             total_torch_w0,
@@ -127,9 +163,9 @@ class _TTMoEDecodeExpertState:
             cluster_axis,
             mesh_device,
             has_bias,
-            torch_b0,
-            torch_b1,
-            torch_b2,
+            total_torch_b0,
+            total_torch_b1,
+            total_torch_b2,
         )
 
     @staticmethod
@@ -143,20 +179,25 @@ class _TTMoEDecodeExpertState:
         torch_b0: "torch.Tensor" | None = None,
         torch_b1: "torch.Tensor" | None = None,
         torch_b2: "torch.Tensor" | None = None,
-    ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         # TODO validate these be comparing to explicit values in the config
         num_layers = torch_w0.shape[0]
+        # torch_w0 holds all experts globally [L, num_devices * experts_per_device, K, N];
+        # ShardTensorToMesh(dim=2) below splits the experts dim across mesh devices, so the
+        # `E` we feed prepare_* must match the tensor's actual experts dim, not the per-device count.
+        num_experts_total = torch_w0.shape[1]
+        experts_per_device = num_experts_total // mesh_device.get_num_devices()
         hidden_size = torch_w0.shape[-2]
         intermediate_size = torch_w0.shape[-1]
-        total_experts_per_device = torch_w0.shape[1] // mesh_device.get_num_devices()
 
-        print("init-ing weights")
+        logger.info(
+            f"Preparing expert weights: total_experts={num_experts_total} per_device={experts_per_device} "
+            f"hidden={hidden_size} intermediate={intermediate_size} has_bias={has_bias}"
+        )
 
         w0_w1_shard_map, w2_shard_map, dram_core_range_set = get_weight_core_shard_maps(
             mesh_device, hidden_size, intermediate_size
         )
-
-        print("init shard maps")
 
         if has_bias:
             torch_w0_w1_reordered = prepare_w0_w1_tensor_with_bias(
@@ -165,73 +206,74 @@ class _TTMoEDecodeExpertState:
                 torch_b0,
                 torch_b1,
                 num_layers,
-                total_experts_per_device,
+                num_experts_total,
                 hidden_size,
                 intermediate_size,
                 w0_w1_shard_map,
             )
-            print(f"Built w0w1")
-
             torch_w2_reordered = prepare_w2_tensor_with_bias(
                 torch_w2,
                 torch_b2,
                 num_layers,
-                total_experts_per_device,
+                num_experts_total,
                 intermediate_size,
                 hidden_size,
                 w2_shard_map,
                 w0_w1_shard_map,
             )
-            print(f"Built w2")
 
         else:
             torch_w0_w1_reordered = prepare_w0_w1_tensor_for_moe_compute(
                 torch_w0,
                 torch_w1,
                 num_layers,
-                total_experts_per_device,
+                num_experts_total,
                 hidden_size,
                 intermediate_size,
                 w0_w1_shard_map,
             )
-            print(f"Built w0w1")
             torch_w2_reordered = prepare_w2_tensor_for_moe_compute(
-                torch_w2, num_layers, experts_per_device, intermediate_size, hidden_size, w2_shard_map, w0_w1_shard_map
+                torch_w2,
+                num_layers,
+                num_experts_total,
+                intermediate_size,
+                hidden_size,
+                w2_shard_map,
+                w0_w1_shard_map,
             )
 
-            print(f"Built w2")
-
+        # get_weight_mem_configs sizes per-device shard footprints, so it wants the per-device count.
+        # has_bias is passed so K_for_shard / w2_N_total grow by a tile to accommodate the bias row.
         w0_w1_mem_config, w2_mem_config, K_for_shard, w2_N_total = get_weight_mem_configs(
             num_layers,
-            total_experts_per_device,
+            experts_per_device,
             hidden_size,
             intermediate_size,
             w0_w1_shard_map,
             w2_shard_map,
             dram_core_range_set,
+            has_bias=has_bias,
         )
 
+        # Prepared tensors are shape (num_cores, L, E_total, groups_per_core, ..., 4*TILE).
+        # Shard along E (dim=2) so each device receives its assigned experts.
         tt_w0_w1 = ttnn.from_torch(
             torch_w0_w1_reordered,
             dtype=ttnn.bfloat4_b,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=w0_w1_mem_config,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device),
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=2),
         )
-
-        print("sent out w0w1")
-
         tt_w2 = ttnn.from_torch(
             torch_w2_reordered,
             dtype=ttnn.bfloat4_b,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=w2_mem_config,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device),
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=2),
         )
-
-        print("sent out w0w1")
+        logger.info("Uploaded w0/w1 and w2 to mesh")
 
         return tt_w0_w1, tt_w2
 
@@ -376,6 +418,73 @@ class TTMoEDecode:
         )
         self.buffers = _TTMoEDecodeBuffers(mesh_device, **config.buffers.model_dump())
 
+    @property
+    def _num_fast_reduce_outputs(self) -> int:
+        """Number of outputs fast_reduce_nc_fused will produce — N for the deepseek
+        RS-list path, 1 otherwise (downstream ttnn.reduce_scatter takes a single tensor)."""
+        return self.config.num_fast_reduce_outputs
+
+    @property
+    def _pre_split_chunk(self) -> int:
+        """Logical per-fast-reduce-output width (hidden_size / num_fast_reduce_outputs).
+        For the single-output path this is just hidden_size."""
+        return self.config.hidden_size // self._num_fast_reduce_outputs
+
+    @property
+    def _padded_pre_split_chunk(self) -> int:
+        """Aligned per-fast-reduce-output width = config.reduce.split_size."""
+        return self.config.reduce.split_size
+
+    @property
+    def _post_rs_logical_chunk(self) -> int:
+        """Logical per-device width after RS — what the model expects downstream."""
+        return self.config.hidden_size // self.config.mesh_shape[1 - self.config.cluster_axis]
+
+    @property
+    def _needs_fast_reduce_padding(self) -> bool:
+        return self._pre_split_chunk != self._padded_pre_split_chunk
+
+    def _pad_for_fast_reduce(self, tt_x: ttnn.Tensor) -> ttnn.Tensor:
+        """Zero-pad the H dim so each fast_reduce output split is tile-aligned.
+
+        fast_reduce_nc_fused requires `split_dim_size % (num_output_tensors * TILE_SIZE) == 0`.
+        Reshape `[..., N*chunk]` → `[..., N, chunk]`, pad the last dim to `padded_chunk`, then
+        reshape back to `[..., N*padded_chunk]`. Padding lives inside each pre-split chunk so
+        post-RS device data stays aligned with the original logical-chunk boundaries.
+
+        For the single-output path (`N=1`) this degenerates to appending zeros at the end —
+        which is what we want, since downstream `ttnn.reduce_scatter` splits the padded tensor
+        evenly into `num_replicated` device chunks.
+        """
+        if not self._needs_fast_reduce_padding:
+            return tt_x
+        N = self._num_fast_reduce_outputs
+        chunk = self._pre_split_chunk
+        padded_chunk = self._padded_pre_split_chunk
+        shape = list(tt_x.shape)
+        reshaped = ttnn.reshape(tt_x, shape[:-1] + [N, chunk])
+        padded = ttnn.pad(
+            reshaped,
+            padding=[(0, 0)] * len(shape) + [(0, padded_chunk - chunk)],
+            value=0.0,
+        )
+        return ttnn.reshape(padded, shape[:-1] + [N * padded_chunk])
+
+    def _unpad_after_reduce_scatter(self, tt_final: ttnn.Tensor) -> ttnn.Tensor:
+        """Slice the trailing padding off each device's post-RS tensor.
+
+        After RS each device holds at least `_post_rs_logical_chunk` valid columns followed
+        by zero padding (inserted before tilize). No-op when the original hidden splits
+        evenly without padding.
+        """
+        if not self._needs_fast_reduce_padding:
+            return tt_final
+        chunk = self._post_rs_logical_chunk
+        shape = list(tt_final.shape)
+        start = [0] * len(shape)
+        end = shape[:-1] + [chunk]
+        return ttnn.slice(tt_final, start, end)
+
     def _format_dispatch_inputs(
         self,
         tt_x: ttnn.Tensor,
@@ -436,7 +545,6 @@ class TTMoEDecode:
             tt_dispatch_input_expert_indices_tensor,
             tt_dispatch_input_expert_scores_tensor,
             self.expert_state.tt_expert_mapping,
-            layer_id=layer_id,
             **self.config.dispatch.model_dump(),
             # shared_expert_ids
             # cluster_axi
@@ -484,7 +592,12 @@ class TTMoEDecode:
         # [select_experts_k, tokens_per_device, hidden_size] -> [select_experts_k, 1, tokens_per_device, hidden_size]
         tt_unsqueezed_output = ttnn.unsqueeze(tt_combine_output, dim=1)
 
-        if self.config.batch_per_device == ttnn.TILE_SIZE:
+        # When hidden / num_replicated isn't tile-aligned, interleave-pad each per-device
+        # chunk up to split_size so fast_reduce_nc_fused's 128-divisibility check passes.
+        # No-op when already aligned.
+        tt_unsqueezed_output = self._pad_for_fast_reduce(tt_unsqueezed_output)
+
+        if self.config.use_post_combine_tilize:
             tt_tilized_compute_output = ttnn.experimental.deepseek_moe_post_combine_tilize(
                 tt_unsqueezed_output,
                 # output_memory_config,
@@ -531,11 +644,12 @@ class TTMoEDecode:
                 # cluster_axis=1,
                 **self.config.deepseek_moe_reduce_scatter.model_dump(),
             )
-        elif self.config.mesh_shape[1 - self.config.cluster_axis] == SKIP_RS_DP_DIM:
+        elif self.config.mesh_shape[1 - self.config.cluster_axis] == self.SKIP_RS_DP_DIM:
             tt_final_output = tt_fast_reduce_output_tensors[0]
         else:
             tt_final_output = ttnn.reduce_scatter(
-                tt_fast_reduce_output_tensors, **self.config.reduce_scatter.model_dump()
+                tt_fast_reduce_output_tensors[0], **self.config.reduce_scatter.model_dump()
             )
 
-        return tt_final_output
+        # Strip the per-chunk padding we inserted before tilize. No-op when no padding was applied.
+        return self._unpad_after_reduce_scatter(tt_final_output)
