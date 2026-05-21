@@ -389,9 +389,11 @@ MoEComputeMeshWorkloadFactory::create_at(
 
     // Tilize drain-sync core signals combine sync core (which then multicasts to the rest)
     // that metadata is ready and task splitting can proceed.
-    // Allocate on full rectangle of usable cores so we can multicast without clobbering.
+    // Allocate on the combine bounding box (not just selected cores) because the combine
+    // reader kernel multicasts to the full rectangle — cores inside the bbox but outside
+    // the selected set must also have a valid semaphore address to avoid L1 corruption.
     const auto tilize_combine_sync_semaphore_id =
-        tt::tt_metal::CreateSemaphore(program, combine_core_range_set, INVALID);
+        tt::tt_metal::CreateSemaphore(program, CoreRangeSet(combine_core_range_set.bounding_box()), INVALID);
 
     // Matmul dm1 signals combine cores when data is written; combine writer waits on this semaphore.
     // For double buffering, combine cores will also use this semaphore to signal matmul when buffer segments are free
