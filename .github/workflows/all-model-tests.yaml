@@ -46,7 +46,7 @@ on:
 
       # ── SKU selection ─────────────────────────────────────────────
       skus:
-        description: "SKUs to test (comma-separated). Options: all, wh_n150, wh_n300, wh_llmbox, wh_llmbox_perf, wh_galaxy, wh_galaxy_perf, bh_p150, bh_loudbox, bh_quietbox_2, bh_galaxy, bh_galaxy_perf"
+        description: "SKUs to test (comma-separated). Options: all, wh_n150, wh_n300, wh_llmbox, wh_llmbox_perf, wh_galaxy, wh_galaxy_perf, bh_p150, bh_p300, bh_loudbox, bh_quietbox_2, bh_galaxy, bh_galaxy_perf"
         required: false
         type: string
         default: "all"
