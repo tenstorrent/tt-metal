@@ -206,10 +206,15 @@ class TTSeamlessM4Tv2SpeechEncoder:
         batch: int,
         seq_len: int,
         channel_size: int,
+        input_sharded: bool = False,
+        output_sharded: bool = False,
     ) -> ttnn.Tensor:
         m_tiles, n_tiles = self._activation_tile_counts(batch, seq_len, channel_size)
         sharded_mem_config, sharded_pc = self._build_ln_sharded_config(m_tiles, n_tiles)
-        x_sharded = ttnn.to_memory_config(x, sharded_mem_config)
+        if input_sharded and ttnn.is_sharded(x):
+            x_sharded = x
+        else:
+            x_sharded = ttnn.to_memory_config(x, sharded_mem_config)
         normed_sharded = ttnn.layer_norm(
             x_sharded,
             weight=weight,
@@ -220,6 +225,8 @@ class TTSeamlessM4Tv2SpeechEncoder:
             compute_kernel_config=self._layernorm_compute_cfg,
         )
         ttnn.deallocate(x_sharded)
+        if output_sharded:
+            return normed_sharded
         normed = ttnn.sharded_to_interleaved(normed_sharded, ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
         ttnn.deallocate(normed_sharded)
         return normed
@@ -370,6 +377,8 @@ class TTSeamlessM4Tv2SpeechEncoder:
         seq_len: int,
         channel_size: Optional[int] = None,
         use_sharded: bool = True,
+        input_sharded: bool = False,
+        output_sharded: bool = False,
     ) -> ttnn.Tensor:
         ch = self.hidden_size if channel_size is None else channel_size
         n_tiles = ch // 32
@@ -383,6 +392,8 @@ class TTSeamlessM4Tv2SpeechEncoder:
                 batch=batch,
                 seq_len=seq_len,
                 channel_size=ch,
+                input_sharded=input_sharded,
+                output_sharded=output_sharded,
             )
         return ttnn.layer_norm(
             x,
@@ -1101,11 +1112,15 @@ class TTSeamlessM4Tv2SpeechEncoder:
         batch: int,
         seq_len: int,
         prebuilt_dw_left_pad: Optional[ttnn.Tensor] = None,
-    ) -> ttnn.Tensor:
+        input_sharded: bool = False,
+    ) -> Tuple[ttnn.Tensor, bool]:
         hsz = self.hidden_size
         token_m = batch * seq_len
 
-        res = hidden
+        if input_sharded:
+            res = ttnn.sharded_to_interleaved(hidden, ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
+        else:
+            res = hidden
         h = self._layer_norm(
             hidden,
             weight=layer.ffn1_layer_norm.weight,
@@ -1113,6 +1128,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
             eps=self.layer_norm_eps,
             batch=batch,
             seq_len=seq_len,
+            input_sharded=input_sharded,
         )
         ff = self._conformer_ffn(h, layer.ffn1, token_rows=token_m)
         ttnn.deallocate(h)
@@ -1173,13 +1189,17 @@ class TTSeamlessM4Tv2SpeechEncoder:
         ttnn.deallocate(ff2)
         ttnn.deallocate(res)
 
-        return self._layer_norm(
-            hidden,
-            weight=layer.final_layer_norm.weight,
-            bias=layer.final_layer_norm.bias,
-            eps=self.layer_norm_eps,
-            batch=batch,
-            seq_len=seq_len,
+        return (
+            self._layer_norm(
+                hidden,
+                weight=layer.final_layer_norm.weight,
+                bias=layer.final_layer_norm.bias,
+                eps=self.layer_norm_eps,
+                batch=batch,
+                seq_len=seq_len,
+                output_sharded=True,
+            ),
+            True,
         )
 
     def _adapter_layer(
@@ -1457,10 +1477,11 @@ class TTSeamlessM4Tv2SpeechEncoder:
             )
 
         trace_no_profiler = trace_masks is not None
+        h_sharded = False
         for i in range(self.speech_encoder_layers):
             layer = enc.layers[i]
             pad_i = trace_masks.conv_dw_left_pad[i] if trace_masks is not None else None
-            h = self._conformer_encoder_layer(
+            h, h_sharded = self._conformer_encoder_layer(
                 h,
                 layer,
                 attn_4d,
@@ -1468,9 +1489,13 @@ class TTSeamlessM4Tv2SpeechEncoder:
                 batch=batch,
                 seq_len=seq,
                 prebuilt_dw_left_pad=pad_i,
+                input_sharded=h_sharded,
             )
             if (i + 1) % _PROFILER_LAYER_DRAIN_INTERVAL == 0:
                 _drain_device_profiler(self.device, trace_no_profiler=trace_no_profiler)
+
+        if h_sharded:
+            h = ttnn.sharded_to_interleaved(h, ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
 
         h = self._layer_norm(
             h,
