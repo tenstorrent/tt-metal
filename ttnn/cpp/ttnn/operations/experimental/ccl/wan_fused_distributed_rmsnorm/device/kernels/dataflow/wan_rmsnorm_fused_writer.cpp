@@ -1,0 +1,195 @@
+// SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+/*
+ * Writer for the fused Wan2.2 distributed RMSNorm op.
+ *
+ * For TP=1 (is_tp_1 == 1):
+ *   Just drains output_cb to DRAM. The compute kernel pushes stats directly
+ *   into stats_gathered_cb, so no AG work is needed here.
+ *
+ * For TP>1 (is_tp_1 == 0):
+ *   First does a ring AG of per-row stats across the TP cluster axis, then
+ *   drains output_cb. Per-core fabric forwarder pattern:
+ *     1. For each row this core handles, pull stats_local_cb (compute pushed
+ *        a row of partial sum-of-squares), then do a fabric multicast write
+ *        + atomic_inc that lands the tile in slot[r * ring_size + my_device_index]
+ *        of stats_gathered_cb on every chip in the ring (including locally —
+ *        fused_write_atomic_and_advance does a local noc_async_write to the
+ *        same dest noc xy).
+ *     2. After all rows are written, wait for the GlobalSemaphore on this
+ *        core to reach num_tile_rows * (ring_size - 1) — that count of
+ *        atomic increments arriving over fabric from the other (ring_size-1)
+ *        chips, one per row.
+ *     3. Push stats_gathered_cb to compute kernel, which then runs the post
+ *        phase reading ring_size stats tiles per row.
+ *
+ * The pattern was modeled on rms_writer.cpp from the rms_allgather op, but
+ * adapted to a fully distributed AG: every worker core runs its own fabric
+ * loop for the rows it owns, rather than a single all_to_all_worker writing
+ * all the chip's stats. Each chip writes to slot[my_device_index] on every
+ * chip — that slot offset is unique per source chip but lives at the same
+ * L1 address on every ring chip (since CBs have identical layout across
+ * chips running the same program), so a single multicast destination NoC
+ * address suffices.
+ */
+
+#include <cstdint>
+
+#include "api/dataflow/dataflow_api.h"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
+
+void kernel_main() {
+    // ---------- compile-time args ----------
+    constexpr uint32_t output_cb = get_compile_time_arg_val(0);
+    constexpr uint32_t num_tile_cols = get_compile_time_arg_val(1);
+    constexpr uint32_t block_size = get_compile_time_arg_val(2);
+    constexpr uint32_t is_tp_1 = get_compile_time_arg_val(3);
+    constexpr uint32_t stats_local_cb = get_compile_time_arg_val(4);
+    constexpr uint32_t stats_gathered_cb = get_compile_time_arg_val(5);
+    constexpr uint32_t reserved_packet_header_cb = get_compile_time_arg_val(6);
+    constexpr uint32_t ring_size = get_compile_time_arg_val(7);
+    constexpr uint32_t my_device_index = get_compile_time_arg_val(8);
+    constexpr uint32_t num_targets_forward = get_compile_time_arg_val(9);
+    constexpr uint32_t num_targets_backward = get_compile_time_arg_val(10);
+    constexpr auto output_args = TensorAccessorArgs<11>();
+
+    // ---------- runtime args ----------
+    // size_t arg_idx (not uint32_t) so it can bind to FabricConnectionManager::build_from_args
+    // which takes the index by reference and advances it past the fabric rt args.
+    size_t arg_idx = 0;
+    const uint32_t output_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t tile_row_start = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t tile_row_end = get_arg_val<uint32_t>(arg_idx++);
+
+    const uint32_t output_tile_bytes = get_tile_size(output_cb);
+    const auto output_accessor = TensorAccessor(output_args, output_addr);
+    const uint32_t num_tile_rows = tile_row_end - tile_row_start;
+
+    // =================== TP>1: stats fabric AG ===================
+    if constexpr (is_tp_1 == 0) {
+        // The next runtime args carry the GlobalSemaphore L1 address + fabric
+        // connection setup info. Layout (set by host):
+        //   [3]  out_ready_sem_bank_addr  (L1 address of the GlobalSemaphore
+        //                                  on this core, same on every chip)
+        //   [4]  has_forward_fabric (0/1)
+        //   ...  forward fabric connection rt args (if has_forward_fabric)
+        //   [N]  has_backward_fabric (0/1)
+        //   ...  backward fabric connection rt args (if has_backward_fabric)
+        const uint32_t out_ready_sem_bank_addr = get_arg_val<uint32_t>(arg_idx++);
+
+        auto fabric_connection =
+            FabricConnectionManager::build_from_args<FabricConnectionManager::BUILD_AND_OPEN_CONNECTION_START_ONLY>(
+                arg_idx);
+
+        // Reserve two packet header slots, one for each direction.
+        cb_reserve_back(reserved_packet_header_cb, 1);
+        auto pkt_hdr_fwd_addr = get_write_ptr(reserved_packet_header_cb);
+        cb_push_back(reserved_packet_header_cb, 1);
+        cb_reserve_back(reserved_packet_header_cb, 1);
+        auto pkt_hdr_bwd_addr = get_write_ptr(reserved_packet_header_cb);
+        cb_push_back(reserved_packet_header_cb, 1);
+
+        volatile PACKET_HEADER_TYPE* pkt_hdr_forward = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(pkt_hdr_fwd_addr);
+        volatile PACKET_HEADER_TYPE* pkt_hdr_backward =
+            reinterpret_cast<volatile PACKET_HEADER_TYPE*>(pkt_hdr_bwd_addr);
+
+        // Unconditionally init both routing headers (matches rms_writer.cpp).
+        // num_targets=0 is a valid no-op routing config.
+        pkt_hdr_forward->to_chip_multicast(
+            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_forward)});
+        pkt_hdr_backward->to_chip_multicast(
+            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward)});
+
+        fabric_connection.open_finish();
+
+        // Reserve the full chunk's worth of gathered-stats slots up front.
+        // chunk_size_rows == num_tile_rows per the program factory's
+        // single-chunk-per-core decision; one cb_push_back at the end signals
+        // compute to start the post phase.
+        const uint32_t total_stats_tiles = num_tile_rows * ring_size;
+        cb_reserve_back(stats_gathered_cb, total_stats_tiles);
+        const uint32_t stats_gathered_base = get_write_ptr(stats_gathered_cb);
+        const uint32_t stats_tile_bytes = get_tile_size(stats_gathered_cb);
+
+        // GlobalSemaphore on this core; remote chips atomic_inc it via fabric.
+        const uint64_t out_ready_sem_noc_addr_in_pkt = safe_get_noc_addr(my_x[0], my_y[0], out_ready_sem_bank_addr, 0);
+        volatile tt_l1_ptr uint32_t* out_ready_sem_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr);
+
+        // For each row this core owns: fabric-mcast its stats tile + local
+        // write to my slot. fused_write_atomic_and_advance_local_read_address_for_fabric_write
+        // does both: local noc_async_write to dest noc xy AND fabric mcast
+        // write+atomic_inc to remote chips. It advances l1_read_addr by
+        // payload_size_bytes after sending.
+        for (uint32_t r = 0; r < num_tile_rows; r++) {
+            cb_wait_front(stats_local_cb, 1);
+            size_t l1_read_addr = get_read_ptr(stats_local_cb);
+
+            const uint32_t my_slot_offset = (r * ring_size + my_device_index) * stats_tile_bytes;
+            const uint32_t my_slot_addr = stats_gathered_base + my_slot_offset;
+            const uint64_t noc0_dest_noc_addr = safe_get_noc_addr(my_x[0], my_y[0], my_slot_addr, 0);
+
+            fused_write_atomic_and_advance_local_read_address_for_fabric_write(
+                noc0_dest_noc_addr,
+                pkt_hdr_forward,
+                pkt_hdr_backward,
+                fabric_connection,
+                l1_read_addr,
+                stats_tile_bytes,
+                out_ready_sem_noc_addr_in_pkt,
+                /*val=*/1,
+                /*flush=*/false);
+
+            cb_pop_front(stats_local_cb, 1);
+        }
+
+        fabric_connection.close_start();
+
+        // Wait for the (ring_size - 1) remote chips to have each atomic_inc'd
+        // num_tile_rows times for our rows. The local writes did NOT inc the
+        // sem (the fused fabric helper only inc's remote dests), so the
+        // expected count is num_tile_rows * (ring_size - 1).
+        const uint32_t expected_incs = num_tile_rows * (ring_size - 1);
+        if (expected_incs > 0) {
+            noc_semaphore_wait_min(out_ready_sem_ptr, expected_incs);
+        }
+        // Reset for any subsequent invocations of this op.
+        noc_semaphore_set(out_ready_sem_ptr, 0);
+
+        // Wait for the local async writes (to my own slots) to land before
+        // letting compute consume the stats.
+        noc_async_write_barrier();
+
+        // All slots are now populated — release the chunk to compute.
+        cb_push_back(stats_gathered_cb, total_stats_tiles);
+
+        fabric_connection.close_finish();
+    }
+
+    // =================== Drain output_cb to DRAM ===================
+    for (uint32_t tile_row = tile_row_start; tile_row < tile_row_end; tile_row++) {
+        uint32_t output_tile_idx = tile_row * num_tile_cols;
+        for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+            const uint32_t tiles_in_block =
+                ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
+            // Compute pushes `block_size` slots per col-block even when only
+            // `tiles_in_block` are valid; wait+pop the full block but only
+            // NoC-write the valid tiles. Without this, multi-chunk overflows
+            // output_cb because over-pushed garbage slots never drain.
+            cb_wait_front(output_cb, block_size);
+            uint32_t output_rd_ptr = get_read_ptr(output_cb);
+
+            for (uint32_t i = 0; i < tiles_in_block; i++) {
+                noc_async_write_tile(output_tile_idx, output_accessor, output_rd_ptr);
+                output_rd_ptr += output_tile_bytes;
+                output_tile_idx++;
+            }
+            noc_async_write_barrier();
+            cb_pop_front(output_cb, block_size);
+        }
+    }
+}
