@@ -261,7 +261,7 @@ def test_matmul_dram_sharded_single_device(
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,  # TODO: Remove this once we have a fix for issue #40860
-            "trace_region_size": 90112,
+            "trace_region_size": 0,
             "fabric_config": get_fabric_config(),
         }
     ],
@@ -714,7 +714,7 @@ def test_matmul_interleaved_single_device(
 )
 @pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize(
-    "device_params", [{"trace_region_size": 90112, "fabric_config": get_fabric_config()}], indirect=True
+    "device_params", [{"trace_region_size": 0, "fabric_config": get_fabric_config()}], indirect=True
 )
 @pytest.mark.requires_device(["T3K", "TG", "DUAL", "QUAD"])
 def test_matmul_interleaved_mesh_device(

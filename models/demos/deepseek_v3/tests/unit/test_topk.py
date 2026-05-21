@@ -85,7 +85,7 @@ def test_topk_single_device(shape, k, dtype, device):
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize(
-    "device_params", [{"trace_region_size": 16000, "fabric_config": get_fabric_config()}], indirect=True
+    "device_params", [{"trace_region_size": 0, "fabric_config": get_fabric_config()}], indirect=True
 )
 def test_topk_mesh_device(mesh_device, shape, k, dtype, enable_trace, device_params):
     """
