@@ -183,23 +183,41 @@ ttnn::device_operation::ProgramArtifacts CloneOperation::ProgramFactory::create_
     }();
 
     // Reader: produces INPUT_DFB from the input tensor.
-    // RTA schema differs slightly by branch:
+    // RTA schema differs by branch:
     //   tilized + interleaved: {num_tiles, start_id}
-    //   tilized + sharded:     {num_tiles}
+    //   tilized + sharded:     {input_buffer_addr, num_tiles}              (escape hatch)
     //   row-major + interleaved: {stick_size, num_sticks, start_id}
-    //   row-major + sharded:     {stick_size, num_sticks}
+    //   row-major + sharded:     {input_buffer_addr, stick_size, num_sticks} (escape hatch)
+    //
+    // Sharded kernels use a buffer-address RTA + raw L1 NoC reads (legacy idiom),
+    // not TensorAccessor. The interleaved kernels use TensorBinding -> TensorAccessor.
+    // See METAL2_PORT_REPORT.md for the Q2 escape-hatch rationale.
     std::vector<std::string> reader_rta_names;
+    std::vector<std::string> writer_rta_names;
+    if (is_sharded) {
+        reader_rta_names.push_back("input_buffer_addr");
+        writer_rta_names.push_back("output_buffer_addr");
+    }
     if (tilized) {
         reader_rta_names.push_back("num_tiles");
-        if (!is_sharded) {
-            reader_rta_names.push_back("start_id");
-        }
+        writer_rta_names.push_back("num_tiles");
     } else {
         reader_rta_names.push_back("stick_size");
         reader_rta_names.push_back("num_sticks");
-        if (!is_sharded) {
-            reader_rta_names.push_back("start_id");
-        }
+        writer_rta_names.push_back("stick_size");
+        writer_rta_names.push_back("num_sticks");
+    }
+    if (!is_sharded) {
+        reader_rta_names.push_back("start_id");
+        writer_rta_names.push_back("start_id");
+    }
+
+    // Interleaved kernels bind tensors; sharded kernels use buffer-address RTAs instead.
+    std::vector<m2::KernelSpec::TensorBinding> reader_tbs;
+    std::vector<m2::KernelSpec::TensorBinding> writer_tbs;
+    if (!is_sharded) {
+        reader_tbs.push_back({.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "input"});
+        writer_tbs.push_back({.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "output"});
     }
 
     m2::KernelSpec reader{
@@ -211,10 +229,7 @@ ttnn::device_operation::ProgramArtifacts CloneOperation::ProgramFactory::create_
                  .local_accessor_name = "src_dfb",
                  .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER},
             },
-        .tensor_bindings =
-            {
-                {.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "input"},
-            },
+        .tensor_bindings = reader_tbs,
         .runtime_arguments_schema = {.named_runtime_args = reader_rta_names},
         .config_spec =
             m2::DataMovementConfiguration{
@@ -227,7 +242,6 @@ ttnn::device_operation::ProgramArtifacts CloneOperation::ProgramFactory::create_
     };
 
     // Writer: consumes (INPUT_DFB or OUTPUT_DFB depending on convert_dtype).
-    std::vector<std::string> writer_rta_names = reader_rta_names;  // same schema shape
 
     m2::KernelSpec writer{
         .unique_id = C_WRITER,
@@ -238,10 +252,7 @@ ttnn::device_operation::ProgramArtifacts CloneOperation::ProgramFactory::create_
                  .local_accessor_name = "dst_dfb",
                  .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER},
             },
-        .tensor_bindings =
-            {
-                {.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "output"},
-            },
+        .tensor_bindings = writer_tbs,
         .runtime_arguments_schema = {.named_runtime_args = writer_rta_names},
         .config_spec =
             m2::DataMovementConfiguration{
@@ -282,6 +293,12 @@ ttnn::device_operation::ProgramArtifacts CloneOperation::ProgramFactory::create_
                     .fp32_dest_acc_en = fp32_dest_acc_en,
                     .dst_full_sync_en = dst_full_sync_en,
                     .math_approx_mode = math_approx_mode,
+                    // Legacy behavior: no unpack_to_dest_mode set on ComputeConfig means
+                    // Default (unpack via SrcA/B regs) for all CBs. The Metal 2.0 validator
+                    // requires an explicit choice when consuming an FP32 DFB with
+                    // fp32_dest_acc_en=true; provide Default for the input DFB to match
+                    // legacy semantics.
+                    .unpack_to_dest_mode = {{INPUT_DFB, tt::tt_metal::UnpackToDestMode::Default}},
                 },
         };
     };
@@ -334,15 +351,21 @@ ttnn::device_operation::ProgramArtifacts CloneOperation::ProgramFactory::create_
         kernels.push_back(std::move(*compute_g2));
     }
 
+    // TensorParameters: declared only when a kernel binds them. The sharded
+    // path uses buffer-address RTAs and has no TensorBindings, so it doesn't
+    // declare TensorParameters either. (The Metal 2.0 validator requires
+    // every TensorParameter to be referenced by at least one kernel.)
+    std::vector<m2::TensorParameter> tensor_parameters;
+    if (!is_sharded) {
+        tensor_parameters.push_back({.unique_id = INPUT_TENSOR, .spec = input.tensor_spec()});
+        tensor_parameters.push_back({.unique_id = OUTPUT_TENSOR, .spec = output.tensor_spec()});
+    }
+
     m2::ProgramSpec spec{
         .program_id = "clone",
         .kernels = std::move(kernels),
         .dataflow_buffers = std::move(dataflow_buffers),
-        .tensor_parameters =
-            {
-                {.unique_id = INPUT_TENSOR, .spec = input.tensor_spec()},
-                {.unique_id = OUTPUT_TENSOR, .spec = output.tensor_spec()},
-            },
+        .tensor_parameters = std::move(tensor_parameters),
         .work_units = std::move(work_units),
     };
 
@@ -363,6 +386,12 @@ ttnn::device_operation::ProgramArtifacts CloneOperation::ProgramFactory::create_
 
         std::unordered_map<std::string, uint32_t> reader_args;
         std::unordered_map<std::string, uint32_t> writer_args;
+        if (is_sharded) {
+            // Sharded path: explicit buffer-address RTA (escape hatch for the
+            // sharded kernel pattern that doesn't fit TensorAccessor cleanly).
+            reader_args["input_buffer_addr"] = static_cast<uint32_t>(input.buffer()->address());
+            writer_args["output_buffer_addr"] = static_cast<uint32_t>(output.buffer()->address());
+        }
         if (tilized) {
             reader_args["num_tiles"] = num_units_per_core;
             writer_args["num_tiles"] = num_units_per_core;
@@ -395,12 +424,14 @@ ttnn::device_operation::ProgramArtifacts CloneOperation::ProgramFactory::create_
         }
     }
 
-    run_params.tensor_args = {
-        m2::ProgramRunParams::TensorArg{
-            .tensor_parameter_name = INPUT_TENSOR, .tensor = std::cref(input.mesh_tensor())},
-        m2::ProgramRunParams::TensorArg{
-            .tensor_parameter_name = OUTPUT_TENSOR, .tensor = std::cref(output.mesh_tensor())},
-    };
+    if (!is_sharded) {
+        run_params.tensor_args = {
+            m2::ProgramRunParams::TensorArg{
+                .tensor_parameter_name = INPUT_TENSOR, .tensor = std::cref(input.mesh_tensor())},
+            m2::ProgramRunParams::TensorArg{
+                .tensor_parameter_name = OUTPUT_TENSOR, .tensor = std::cref(output.mesh_tensor())},
+        };
+    }
 
     return ttnn::device_operation::ProgramArtifacts{
         .spec = std::move(spec),

@@ -5,27 +5,26 @@
 // Clone tilized-sharded reader, ported to Metal 2.0.
 //
 // Host bindings expected (per CloneOperation::ProgramFactory's KernelSpec):
-//   runtime_arguments_schema.named_runtime_args: { "num_tiles" }
+//   runtime_arguments_schema.named_runtime_args: { "input_buffer_addr", "num_tiles" }
 //   dfb_bindings: { INPUT_DFB (PRODUCER, name="src_dfb") }
-//   tensor_bindings: { INPUT_TENSOR (name="input") }
 //
-// The input shard's local L1 base address is sourced from the TensorAccessor's
-// bank_base_address (auto-injected by the binding mechanism), substituting for
-// the legacy buffer-address RTA.
+// Note: this kernel does NOT use TensorAccessor. The legacy form took the
+// input shard's local L1 base address as an RTA; the Metal 2.0 port preserves
+// that escape hatch (audit Q2 option c). TensorAccessor's bank_base_address
+// is private, so this is the supported path until a public surface lands.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
-#include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
+    auto input_buffer_addr = get_arg(args::input_buffer_addr);
     auto num_tiles = get_arg(args::num_tiles);
 
     DataflowBuffer src_dfb(dfb::src_dfb);
-    const auto input_a = TensorAccessor(ta::input);
 
     const uint32_t tile_size = src_dfb.get_tile_size();
-    uint64_t local_l1_read_addr = get_noc_addr(static_cast<uint32_t>(input_a.bank_base_address));
+    uint64_t local_l1_read_addr = get_noc_addr(input_buffer_addr);
 
     for (uint32_t i = 0; i < num_tiles; ++i) {
         src_dfb.reserve_back(1);

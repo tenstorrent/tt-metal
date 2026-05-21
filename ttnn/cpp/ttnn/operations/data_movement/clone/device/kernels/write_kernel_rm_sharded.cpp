@@ -5,27 +5,23 @@
 // Clone row-major-sharded writer, ported to Metal 2.0.
 //
 // Host bindings expected (per CloneOperation::ProgramFactory's KernelSpec):
-//   runtime_arguments_schema.named_runtime_args: { "stick_size", "num_sticks" }
+//   runtime_arguments_schema.named_runtime_args: { "output_buffer_addr", "stick_size", "num_sticks" }
 //   dfb_bindings: { (INPUT_DFB or OUTPUT_DFB) (CONSUMER, name="dst_dfb") }
-//   tensor_bindings: { OUTPUT_TENSOR (name="output") }
 //
-// The output shard's local L1 base address is sourced from the TensorAccessor's
-// bank_base_address (auto-injected by the binding mechanism), substituting for
-// the legacy buffer-address RTA.
+// Note: see read_kernel_sharded.cpp -- escape-hatch path (audit Q2 option c).
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
-#include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
+    auto output_buffer_addr = get_arg(args::output_buffer_addr);
     auto stick_size = get_arg(args::stick_size);
     auto num_sticks = get_arg(args::num_sticks);
 
     DataflowBuffer dst_dfb(dfb::dst_dfb);
-    const auto output_a = TensorAccessor(ta::output);
 
-    uint64_t local_l1_write_addr = get_noc_addr(static_cast<uint32_t>(output_a.bank_base_address));
+    uint64_t local_l1_write_addr = get_noc_addr(output_buffer_addr);
 
     for (uint32_t i = 0; i < num_sticks; ++i) {
         dst_dfb.wait_front(1);
