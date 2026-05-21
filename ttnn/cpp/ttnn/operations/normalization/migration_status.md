@@ -98,6 +98,12 @@ surrounding eltwise stages, document blocker):
 | `kernel_util/.../numeric.h` | Numeric helper inline functions, not a compute kernel. |
 | `kernel_util/.../pre_add.h` | `pre_add::one_row` helper used by pre_allgather kernels. Internally uses `add_tiles_to_cb` style. Migrating this helper would also migrate every caller. |
 
+## Cross-op migration attempts
+
+| Kernel | Attempt | Outcome |
+|---|---|---|
+| `ttnn/.../eltwise/unary/.../tanhshrink_kernel.cpp` | Attempted full migration of both INP_FLOAT (FPU DestReuse) and INP_FLOAT32 (SFPU fan-out + SubBinary) paths. | **Reverted** — INP_FLOAT32 path failed `test_unary_tanhshrink_ttnn` with Max ATOL Delta ~197. Suspected issues with the fan-out CopyTile<D1,HeldStream> + CopyTile<D0,NoWaitPop> dedup + same-tile-twice access pattern, or SubBinary signature mismatch. Needs deeper triage (likely a chain-emission bug or wrong lifecycle/index combo for the SFPU-fan-out + SubBinary pattern). Bfloat16 / bfloat8_b paths (INP_FLOAT) did NOT get tested before revert. |
+
 ## Helper gaps surfaced during this cycle
 
 1. **`DestReuseBinarySfpu`**. Chain `DestReuseBinary` is FPU-only. SFPU
