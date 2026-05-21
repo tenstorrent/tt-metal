@@ -26,6 +26,7 @@ def create_real_voxtral_text_model_or_skip(
     max_seq_len: int = 256,
     max_batch_size: int = 1,
     dtype=ttnn.bfloat8_b,
+    optimizations=None,
 ):
     model_name_or_path = resolve_voxtral_model_name_or_skip()
     try:
@@ -35,6 +36,7 @@ def create_real_voxtral_text_model_or_skip(
             dtype=dtype,
             max_batch_size=max_batch_size,
             max_seq_len=max_seq_len,
+            optimizations=optimizations,
         )
     except Exception as exc:
         pytest.skip(f"Unable to build VoxtralTTTextModel from real checkpoint: {exc}")
