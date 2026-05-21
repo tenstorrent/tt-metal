@@ -24,8 +24,91 @@ import torch
 from loguru import logger
 
 
+def release_preprocess_device_traces(
+    *,
+    device: Any,
+    tt_qwen_encoder: Any | None = None,
+    tt_audio_detokenizer: Any | None = None,
+) -> None:
+    """Drop optional preprocess traces so the next module can capture safely."""
+    import ttnn
+
+    ttnn.synchronize_device(device)
+    if tt_qwen_encoder is not None and hasattr(tt_qwen_encoder, "release_trace"):
+        tt_qwen_encoder.release_trace()
+    if tt_audio_detokenizer is not None and hasattr(tt_audio_detokenizer, "release_trace"):
+        tt_audio_detokenizer.release_trace()
+
+
+def qwen_caption_encode_tt(
+    tt_qwen_encoder: Any,
+    ids_np: np.ndarray,
+    attn_np: np.ndarray | None,
+    *,
+    use_trace: bool,
+) -> Any:
+    """Run ``AceStepQwen3Encoder`` caption prefill; trace replay when ``use_trace`` and ``B == 1``.
+
+    ``forward_traced`` requires ``num_command_queues=2`` on the device (same as DiT trace).
+    Batch sizes other than 1 fall back to eager ``forward()`` with a one-time warning.
+    """
+    b = int(ids_np.shape[0])
+    if use_trace:
+        if b != 1:
+            logger.warning(
+                "[ace_step_v1_5] --use-trace: Qwen3 trace supports batch_size=1 only; " "using eager forward for B={}.",
+                b,
+            )
+            return tt_qwen_encoder.forward(ids_np, attn_np)
+        return tt_qwen_encoder.forward_traced(ids_np)
+    return tt_qwen_encoder.forward(ids_np, attn_np)
+
+
+def condition_encode_tt(
+    condition_encoder: Any,
+    text_hidden_tt: Any,
+    attn_mask_np: np.ndarray,
+    *,
+    use_trace: bool,
+) -> tuple[Any, np.ndarray, Any]:
+    """Run ``TtAceStepInstrumentalConditionEncoder`` fast instrumental path.
+
+    When ``use_trace`` is True, uses :meth:`forward_traced` (2 CQs, persistent output buffer).
+    Falls back to eager :meth:`forward` when trace is disabled or the build lacks trace APIs.
+    """
+    attn = np.asarray(attn_mask_np, dtype=np.float32).reshape(1, -1)
+    s = int(text_hidden_tt.shape[2])
+    if int(attn.shape[1]) != s:
+        raise ValueError(f"attention_mask length {attn.shape[1]} != text sequence length {s}")
+    valid = int(attn.sum())
+    if use_trace and hasattr(condition_encoder, "forward_traced"):
+        enc_tt, null_tt = condition_encoder.forward_traced(text_hidden_tt, valid)
+        enc_mask_np = condition_encoder._enc_mask_np(valid, s)
+        return enc_tt, enc_mask_np, null_tt
+    return condition_encoder.forward(text_hidden_tt, attn_mask_np)
+
+
+def condition_encode_payload_tt(
+    condition_encoder: Any,
+    payload: dict,
+    *,
+    use_trace: bool,
+) -> tuple[Any, np.ndarray, Any, Any]:
+    """Run ``TtAceStepInstrumentalConditionEncoder.forward_payload`` (handler demo path).
+
+    When ``use_trace`` is True, uses :meth:`forward_payload_traced` when available.
+    """
+    if use_trace and hasattr(condition_encoder, "forward_payload_traced"):
+        return condition_encoder.forward_payload_traced(payload)
+    return condition_encoder.forward_payload(payload)
+
+
 def attach_infer_text_embeddings_ttnn(
-    dit_handler: Any, *, tt_qwen_encoder: Any, max_seq_len: int = 256
+    dit_handler: Any,
+    *,
+    tt_qwen_encoder: Any,
+    max_seq_len: int = 256,
+    use_trace: bool = False,
 ) -> Callable[[], None]:
     """Replace ``dit_handler.infer_text_embeddings`` with ``TtQwen3EmbeddingEncoder`` on TTNN.
 
@@ -58,8 +141,12 @@ def attach_infer_text_embeddings_ttnn(
             pad_w = int(max_seq_len) - seq
             ids_np = np.pad(ids_np, ((0, 0), (0, pad_w)), constant_values=pad_val).astype(np.uint32)
             attn_np = np.pad(attn_np, ((0, 0), (0, pad_w)), constant_values=np.float32(0.0)).astype(np.float32)
-        hid_tt = tt_qwen_encoder.forward(ids_np, attn_np)
+        hid_tt = qwen_caption_encode_tt(tt_qwen_encoder, ids_np, attn_np, use_trace=use_trace)
         out = ttnn.to_torch(hid_tt).float()
+        if use_trace:
+            ttnn.synchronize_device(tt_qwen_encoder.device)
+            if hasattr(tt_qwen_encoder, "release_trace"):
+                tt_qwen_encoder.release_trace()
         if out.ndim == 4:
             out = out.squeeze(1)
         out = out[:, :seq, :].contiguous()
@@ -80,6 +167,7 @@ def attach_payload_preprocess_ttnn(
     tt_qwen_encoder: Any,
     tt_audio_detokenizer: Any | None = None,
     max_seq_len: int = 256,
+    use_trace: bool = False,
 ) -> Callable[[], None]:
     """Move supported ``preprocess_batch`` tensor kernels to TTNN.
 
@@ -116,8 +204,12 @@ def attach_payload_preprocess_ttnn(
             pad_w = int(max_seq_len) - seq
             ids_np = np.pad(ids_np, ((0, 0), (0, pad_w)), constant_values=pad_val).astype(np.uint32)
             attn_np = np.pad(attn_np, ((0, 0), (0, pad_w)), constant_values=np.float32(0.0)).astype(np.float32)
-        hid_tt = tt_qwen_encoder.forward(ids_np, attn_np)
+        hid_tt = qwen_caption_encode_tt(tt_qwen_encoder, ids_np, attn_np, use_trace=use_trace)
         out = ttnn.to_torch(hid_tt).float()
+        if use_trace:
+            ttnn.synchronize_device(tt_qwen_encoder.device)
+            if hasattr(tt_qwen_encoder, "release_trace"):
+                tt_qwen_encoder.release_trace()
         if out.ndim == 4:
             out = out.squeeze(1)
         out = out[:, :seq, :].contiguous()
@@ -127,8 +219,14 @@ def attach_payload_preprocess_ttnn(
     def _lyric_replacement(lyric_token_ids: torch.Tensor) -> torch.Tensor:
         ids = lyric_token_ids.detach()
         ids_np = ids.cpu().numpy().astype(np.uint32)
-        hid_tt = tt_qwen_encoder.embed_tokens(ids_np)
+        if use_trace and hasattr(tt_qwen_encoder, "embed_tokens_traced"):
+            hid_tt = tt_qwen_encoder.embed_tokens_traced(ids_np)
+            ttnn.synchronize_device(tt_qwen_encoder.device)
+        else:
+            hid_tt = tt_qwen_encoder.embed_tokens(ids_np)
         out = ttnn.to_torch(hid_tt).float()
+        if use_trace and hasattr(tt_qwen_encoder, "_release_embed_trace"):
+            tt_qwen_encoder._release_embed_trace()
         target_device = ids.device if ids.device.type != "meta" else torch.device("cpu")
         return out.to(device=target_device, dtype=dtype)
 
@@ -137,10 +235,16 @@ def attach_payload_preprocess_ttnn(
             if orig_decode is None:
                 return None
             return orig_decode(code_str)
-        hid_tt = tt_audio_detokenizer.forward(code_str)
+        if use_trace and hasattr(tt_audio_detokenizer, "forward_traced"):
+            hid_tt = tt_audio_detokenizer.forward_traced(code_str)
+        else:
+            hid_tt = tt_audio_detokenizer.forward(code_str)
         if hid_tt is None:
             return None
         out = ttnn.to_torch(hid_tt).float()
+        if use_trace and hasattr(tt_audio_detokenizer, "release_trace"):
+            ttnn.synchronize_device(tt_audio_detokenizer.device)
+            tt_audio_detokenizer.release_trace()
         return out.to(device=getattr(dit_handler, "device", torch.device("cpu")), dtype=dtype)
 
     dit_handler.infer_text_embeddings = _text_replacement

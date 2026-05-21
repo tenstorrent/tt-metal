@@ -46,17 +46,18 @@ def _ace_step_flush_device_profiler(ttnn, device) -> None:
     every Nth layer keeps the buffer within capacity. No-op when neither
     ``TT_METAL_DEVICE_PROFILER`` nor ``TTNN_OP_PROFILER`` is set, so production runs incur zero cost.
 
-    Also no-op when ``ACE_STEP_USE_TRACE=1`` is set: ``ttnn.synchronize_device`` is an event-sync
-    op and is illegal inside ``begin_trace_capture`` (TT_FATAL: "Event Synchronization is not
-    supported during trace capture"). The e2e trace path captures the DiT body forward, which
-    calls this helper once per layer — without this guard the capture would fire 24 fatals.
-    Tracy + e2e trace are mutually exclusive anyway: trace replays don't re-execute Python
-    layer code, so there'd be nothing to flush during replay.
+    Also no-op during an active DiT trace session: ``ttnn.synchronize_device`` is illegal inside
+    ``begin_trace_capture``. Tracy + e2e trace are mutually exclusive anyway.
     """
     if os.environ.get("TTNN_OP_PROFILER") != "1" and os.environ.get("TT_METAL_DEVICE_PROFILER") != "1":
         return
-    if os.environ.get("ACE_STEP_USE_TRACE", "").lower() in ("1", "true", "yes"):
-        return
+    try:
+        from models.demos.ace_step_v1_5.ttnn_impl.e2e_model_tt import ace_step_trace_session_active
+
+        if ace_step_trace_session_active():
+            return
+    except Exception:
+        pass
     try:
         ttnn.synchronize_device(device)
         ttnn.ReadDeviceProfiler(device)
@@ -116,9 +117,13 @@ from .math_perf_env import (
     ace_step_dit_linear_l1_memory_config,
     ace_step_dit_mlp_down_proj_linear_program_config,
     ace_step_dit_mlp_gate_up_linear_program_config,
+    ace_step_dit_prefers_dram_activations,
     ace_step_eltwise_l1_memory_config,
+    ace_step_ensure_dram_activation,
     ace_step_ensure_l1_activation,
     ace_step_init_dit_linear_compute_kernel_config,
+    ace_step_linear_kwargs_memory_config,
+    ace_step_matmul_activation,
     ace_step_nlp_concat_heads,
     ace_step_permute_kwargs,
     ace_step_reshape_kwargs,
@@ -767,8 +772,8 @@ class TtAceStepAttentionSDPA:
             )
         if pc is not None:
             kw["program_config"] = pc
-        if self._linear_out_l1 is not None:
-            kw["memory_config"] = self._linear_out_l1
+        _dram = getattr(self.ttnn, "DRAM_MEMORY_CONFIG", None)
+        kw["memory_config"] = ace_step_linear_kwargs_memory_config(pc, linear_out_l1=self._linear_out_l1, dram=_dram)
         return kw
 
     def _wkv_linear_kwargs(self, *, batch_size: int, seq_len: int, in_dim: int) -> dict:
@@ -790,8 +795,8 @@ class TtAceStepAttentionSDPA:
                 self._wkv_pc_cache[key] = pc
         if pc is not None:
             kw["program_config"] = pc
-        if self._linear_out_l1 is not None:
-            kw["memory_config"] = self._linear_out_l1
+        _dram = getattr(self.ttnn, "DRAM_MEMORY_CONFIG", None)
+        kw["memory_config"] = ace_step_linear_kwargs_memory_config(pc, linear_out_l1=self._linear_out_l1, dram=_dram)
         return kw
 
     def __call__(
@@ -804,34 +809,39 @@ class TtAceStepAttentionSDPA:
         attn_mask=None,
         debug: Optional[dict] = None,
         debug_prefix: str = "",
+        use_dram_activations: bool = False,
     ):
         ttnn = self.ttnn
         _sr = ace_step_reshape_kwargs(ttnn)
         _pk = ace_step_permute_kwargs(ttnn)
         _trace = _ace_step_attn_trace_print(debug_prefix)
+        _dram_mc = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+        _qk_mc = _dram_mc if use_dram_activations else (self._linear_out_l1 or _dram_mc)
+        _concat_mc = _dram_mc if use_dram_activations else ace_step_eltwise_l1_memory_config(ttnn)
         x = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)  # [B,1,S,D]
         b_x = int(x.shape[0])
         s_q = int(x.shape[2])
         d_in = int(x.shape[-1])
-        x = self._l1_activation(x)
         lin_q = self._linear_kwargs(
             batch_size=b_x,
             seq_len=s_q,
             in_dim=d_in,
             out_dim=self.d_model,
         )
-        q = ttnn.linear(x, self.wq, bias=self.bq, transpose_b=True, **lin_q)
+        x_q = ace_step_matmul_activation(ttnn, x, lin_q, l1_fn=self._l1_activation, dram_mc=_dram_mc)
+        q = ttnn.linear(x_q, self.wq, bias=self.bq, transpose_b=True, **lin_q)
         if encoder_hidden_states is None:
             lin_kv = self._wkv_linear_kwargs(batch_size=b_x, seq_len=s_q, in_dim=d_in)
-            kv = ttnn.linear(x, self.wkv, bias=self.bkv, transpose_b=True, **lin_kv)
+            x_kv = ace_step_matmul_activation(ttnn, x, lin_kv, l1_fn=self._l1_activation, dram_mc=_dram_mc)
+            kv = ttnn.linear(x_kv, self.wkv, bias=self.bkv, transpose_b=True, **lin_kv)
         else:
             enc = ttnn.to_layout(encoder_hidden_states, ttnn.TILE_LAYOUT)
             b_enc = int(enc.shape[0])
             s_enc = int(enc.shape[2])
             d_enc = int(enc.shape[-1])
-            enc = self._l1_activation(enc)
             lin_kv = self._wkv_linear_kwargs(batch_size=b_enc, seq_len=s_enc, in_dim=d_enc)
-            kv = ttnn.linear(enc, self.wkv, bias=self.bkv, transpose_b=True, **lin_kv)
+            enc_kv = ace_step_matmul_activation(ttnn, enc, lin_kv, l1_fn=self._l1_activation, dram_mc=_dram_mc)
+            kv = ttnn.linear(enc_kv, self.wkv, bias=self.bkv, transpose_b=True, **lin_kv)
 
         B = int(q.shape[0])
         S = int(q.shape[2])
@@ -992,8 +1002,7 @@ class TtAceStepAttentionSDPA:
             except Exception:
                 pass
 
-        # Head-dim RMSNorm on q and k — L1 to avoid DRAM round-trip into SDPA.
-        _qk_mc = self._linear_out_l1 or getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+        # Head-dim RMSNorm on q and k — L1 on short clips; DRAM on long clips (SDPA-safe).
         q = ttnn.rms_norm(q, weight=self.q_norm_w, epsilon=self.eps, memory_config=_qk_mc)
         k = ttnn.rms_norm(k, weight=self.k_norm_w, epsilon=self.eps, memory_config=_qk_mc)
         if debug is not None and debug.get("enabled", False):
@@ -1092,7 +1101,7 @@ class TtAceStepAttentionSDPA:
                 scale=self.scale,
                 additive_mask_b1qk=sdpa_attn_mask,
                 activations_dtype=self.dtype,
-                eltwise_memory_config=self._act_l1,
+                eltwise_memory_config=_dram_mc if use_dram_activations else self._act_l1,
             )
         else:
             sdpa_kwargs = dict(attn_mask=sdpa_attn_mask, is_causal=is_causal, scale=self.scale)
@@ -1111,17 +1120,18 @@ class TtAceStepAttentionSDPA:
                 flush=True,
             )
         # [B,H,S_ctx,Dh] -> [B,1,S_ctx,H*Dh] via fused nlp_concat_heads (single kernel vs permute+reshape)
-        ctx = ace_step_nlp_concat_heads(ttnn, ctx)
+        ctx = ace_step_nlp_concat_heads(ttnn, ctx, l1_mc=_concat_mc)
         if S_ctx != S:
             ctx = ttnn.slice(ctx, (0, 0, 0, 0), (B, 1, S, H * Dh))
-        ctx = self._l1_activation(ctx)
         lin_o = self._linear_kwargs(
             batch_size=B,
             seq_len=S,
             in_dim=H * Dh,
             out_dim=self.d_model,
         )
-        out = ttnn.linear(ctx, self.wo, bias=self.bo, transpose_b=True, **lin_o)
+        _dram_mc = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+        ctx_o = ace_step_matmul_activation(ttnn, ctx, lin_o, l1_fn=self._l1_activation, dram_mc=_dram_mc)
+        out = ttnn.linear(ctx_o, self.wo, bias=self.bo, transpose_b=True, **lin_o)
         if _trace:
             _ace_step_log_ttnn_tensor(f"{debug_prefix}attn_out_B1SD", out, ttnn=ttnn)
         if debug is not None and debug.get("enabled", False):
@@ -1204,8 +1214,8 @@ class TtQwen3MLP:
                 self._gate_up_pc_cache[key] = pc
         if pc is not None:
             kw["program_config"] = pc
-        if self._linear_out_l1 is not None:
-            kw["memory_config"] = self._linear_out_l1
+        _dram = getattr(self.ttnn, "DRAM_MEMORY_CONFIG", None)
+        kw["memory_config"] = ace_step_linear_kwargs_memory_config(pc, linear_out_l1=self._linear_out_l1, dram=_dram)
         return kw
 
     def _down_linear_kwargs(self, *, batch_size: int, seq_len: int) -> dict:
@@ -1227,8 +1237,8 @@ class TtQwen3MLP:
                 self._down_pc_cache[key] = pc
         if pc is not None:
             kw["program_config"] = pc
-        if self._linear_out_l1 is not None:
-            kw["memory_config"] = self._linear_out_l1
+        _dram = getattr(self.ttnn, "DRAM_MEMORY_CONFIG", None)
+        kw["memory_config"] = ace_step_linear_kwargs_memory_config(pc, linear_out_l1=self._linear_out_l1, dram=_dram)
         return kw
 
     def __call__(self, x, *, debug: Optional[dict] = None, debug_prefix: str = ""):
@@ -1236,14 +1246,16 @@ class TtQwen3MLP:
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         b_x = int(x.shape[0])
         s = int(x.shape[2])
-        x = self._l1_activation(x)
+        _dram_mc = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
         lin_gu = self._gate_up_linear_kwargs(batch_size=b_x, seq_len=s)
-        gate = ttnn.linear(x, self.w_gate, bias=None, transpose_b=True, **lin_gu)
-        up = ttnn.linear(x, self.w_up, bias=None, transpose_b=True, **lin_gu)
+        _use_l1 = "program_config" in lin_gu
+        x_lin = ace_step_matmul_activation(ttnn, x, lin_gu, l1_fn=self._l1_activation, dram_mc=_dram_mc)
+        gate = ttnn.linear(x_lin, self.w_gate, bias=None, transpose_b=True, **lin_gu)
+        up = ttnn.linear(x_lin, self.w_up, bias=None, transpose_b=True, **lin_gu)
         if debug is not None and debug.get("enabled", False):
             debug[f"{debug_prefix}gate_lin"] = gate
             debug[f"{debug_prefix}up_lin"] = up
-        _silu_mc = self._act_l1 or self._linear_out_l1 or getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+        _silu_mc = self._act_l1 if _use_l1 else _dram_mc
         gate = (
             ttnn.silu(gate, memory_config=_silu_mc)
             if hasattr(ttnn, "silu")
@@ -1251,15 +1263,19 @@ class TtQwen3MLP:
         )
         if debug is not None and debug.get("enabled", False):
             debug[f"{debug_prefix}gate_act"] = gate
-        gate = self._l1_activation(gate)
-        up = self._l1_activation(up)
+        if _use_l1:
+            gate = self._l1_activation(gate)
+            up = self._l1_activation(up)
         h = ttnn.multiply(gate, up, memory_config=_silu_mc)
         _bf16 = getattr(ttnn, "bfloat16", None)
         if _bf16 is not None:
             h = ttnn.typecast(h, _bf16, memory_config=_silu_mc)
-        h = self._l1_activation(h)
+        if _use_l1:
+            h = self._l1_activation(h)
         lin_down = self._down_linear_kwargs(batch_size=b_x, seq_len=s)
-        out = ttnn.linear(h, self.w_down, bias=None, transpose_b=True, **lin_down)
+        _use_l1_down = "program_config" in lin_down
+        h_lin = ace_step_matmul_activation(ttnn, h, lin_down, l1_fn=self._l1_activation, dram_mc=_dram_mc)
+        out = ttnn.linear(h_lin, self.w_down, bias=None, transpose_b=True, **lin_down)
         if debug is not None and debug.get("enabled", False):
             debug[f"{debug_prefix}mlp_raw_out"] = out
         return out
@@ -1395,6 +1411,7 @@ class TtAceStepDiTLayer:
         encoder_attention_mask_b1qk=None,
         self_attention_mask_b1qq=None,
         debug: Optional[dict] = None,
+        use_dram_activations: bool = False,
     ):
         """
         Args:
@@ -1408,13 +1425,21 @@ class TtAceStepDiTLayer:
         b = int(hidden_states.shape[0])
         _sr = ace_step_reshape_kwargs(ttnn)
 
-        # L1-interleaved for every BinaryNg and rms_norm output in this block.
+        # Short clips: L1 activations + 1D-mcast matmul. Long clips: DRAM-only (no L1/DRAM mix).
         _dram_mc = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
-        _el_mc = self._act_l1 or self._linear_out_l1 or _dram_mc
-        _bin_kw = ace_step_binary_kwargs(ttnn, _el_mc)
+        if use_dram_activations:
+            _el_mc = _dram_mc
+            _bin_kw = ace_step_binary_kwargs(ttnn, _dram_mc)
 
-        def _l1_act(t):
-            return ace_step_ensure_l1_activation(ttnn, t, _el_mc)
+            def _l1_act(t):
+                return ace_step_ensure_dram_activation(ttnn, t, _dram_mc)
+
+        else:
+            _el_mc = self._act_l1 or self._linear_out_l1 or _dram_mc
+            _bin_kw = ace_step_binary_kwargs(ttnn, _el_mc)
+
+            def _l1_act(t):
+                return ace_step_ensure_l1_activation(ttnn, t, _el_mc)
 
         temb = ttnn.to_layout(timestep_proj_b6d, ttnn.TILE_LAYOUT)
         temb = _l1_act(temb)
@@ -1468,6 +1493,7 @@ class TtAceStepDiTLayer:
             attn_mask=self_attention_mask_b1qq,
             debug=debug,
             debug_prefix=self_dbg_pfx,
+            use_dram_activations=use_dram_activations,
         )
         attn_out = _l1_act(attn_out)
         gated = ttnn.multiply(attn_out, gate_msa, **_bin_kw)
@@ -1491,6 +1517,7 @@ class TtAceStepDiTLayer:
             attn_mask=encoder_attention_mask_b1qk,
             debug=debug,
             debug_prefix=cross_dbg_pfx,
+            use_dram_activations=use_dram_activations,
         )
         ca = _l1_act(ca)
         hidden_states = ttnn.add(_l1_act(hidden_states), ca, **_bin_kw)
@@ -1512,6 +1539,7 @@ class TtAceStepDiTLayer:
         one_plus2 = ace_step_add_one(ttnn, c_scale, **_bin_kw)
         x3_scaled = ttnn.multiply(x3, one_plus2, **_bin_kw)
         h3 = ttnn.add(x3_scaled, c_shift, **_bin_kw)
+        h3 = _l1_act(h3)
         if debug is not None and debug.get("enabled", False):
             debug[f"{core_pfx}mlp_in"] = h3
         mlp_pfx = f"{core_pfx}mlp." if (debug is not None and debug.get("enabled", False)) else ""
@@ -1669,7 +1697,15 @@ class TtAceStepDiTCore:
         x = ttnn.to_layout(hidden_states_patches, ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.unsqueeze(x, 1)  # [B,1,S,D]
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        if l1_mc is not None:
+        _dram_mc = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+        _use_dram_act = ace_step_dit_prefers_dram_activations(
+            batch_size=int(x.shape[0]),
+            seq_len=int(x.shape[2]),
+        )
+        if _use_dram_act and _dram_mc is not None:
+            x = ace_step_ensure_dram_activation(ttnn, x, _dram_mc)
+            enc = ace_step_ensure_dram_activation(ttnn, enc, _dram_mc)
+        elif l1_mc is not None:
             x = ace_step_ensure_l1_activation(ttnn, x, l1_mc)
             enc = ace_step_ensure_l1_activation(ttnn, enc, l1_mc)
         if debug is not None and debug.get("enabled", False):
@@ -1690,6 +1726,7 @@ class TtAceStepDiTCore:
                 encoder_attention_mask_b1qk=encoder_attention_mask_b1qk,
                 self_attention_mask_b1qq=self_attention_mask_b1qq,
                 debug=debug,
+                use_dram_activations=_use_dram_act,
             )
             if _layer_flush_every and ((_layer_idx + 1) % _layer_flush_every) == 0:
                 _ace_step_flush_device_profiler(ttnn, self.mesh_device)
