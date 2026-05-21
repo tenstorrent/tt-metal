@@ -221,24 +221,35 @@ python models/experimental/atss_swin_l_dyhead/demo/demo_sahi_4dev.py \
   enough that head + body land in different tiles).
 
 **Expected performance** on a healthy Galaxy 1×4 sub-mesh (measured on a dense
-harbor-shot frame, ~95 detections, after the DCN grid_sample / DyHead GN fp32 /
-Swin HiFi2 LN optimizations merged from the parent branch):
+harbor-shot frame ~90 detections, after the DCN grid_sample / DyHead GN fp32 /
+Swin HiFi2 LN / Swin attention bf8_b + L1 routing optimizations merged from the
+parent branch):
 
 | Phase | Time |
 |---|---|
-| `open_mesh_device` | ~0.95 s (one-time) |
-| `build model + ttnn.from_torch` | ~3.3 s (one-time) |
-| `pipeline.compile` (warm JIT cache) | ~3 s (one-time; ~10 s the first run after the optimizations land while new kernels build) |
-| `pipeline.enqueue + pop_all` (steady-state) | **~220 ms / frame** (the number shown in the title) |
+| `open_mesh_device` | ~0.9 s (one-time) |
+| `build model + ttnn.from_torch` | ~3.5 s (one-time) |
+| `pipeline.compile` (warm JIT cache) | ~3 s (one-time; ~24 s on the very first run after new optimizations land while kernels build) |
+| `pipeline.enqueue + pop_all` (steady-state) | **~206 ms / frame** (the number shown in the title) |
 | `ttnn.to_torch` on outputs | ~8 ms |
-| Host postprocess + cross-tile NMM | ~25 ms (CPU, scales with detection count) |
-| `cv2.imwrite` | ~28 ms |
-| **Steady-state full e2e** | **~340 ms / frame  → ~2.95 fps** |
+| Host postprocess + cross-tile NMM | ~23 ms (CPU, scales with detection count) |
+| `cv2.imwrite` | ~29 ms |
+| **Steady-state full e2e** | **~325 ms / frame  → ~3.08 fps** |
+
+**Device kernel time** (measured separately via `tests/perf/test_atss_swin_l_dyhead_device_perf.py`,
+which runs with tracy on a single device, no trace):
+
+| Metric | Time |
+|---|---|
+| `DEVICE KERNEL DURATION` (pure compute, per tile, parallel × 4) | ~196 ms |
+| `DEVICE FW DURATION` (kernel + per-op dispatch overhead, no trace) | ~256 ms |
 
 The `(infer …ms)` value in the title is the **host↔device round-trip** for one frame
-(input DMA + 4-tile parallel device compute + output DMA), not pure device time and
-not full end-to-end. The first cold compile (no JIT cache anywhere on the host) takes
-~140 s; subsequent runs reuse the JIT cache.
+(input DMA + 4-tile parallel device compute + output DMA), measured **with trace**.
+It's larger than the pure kernel time (~196 ms) by ~10 ms of DMA overhead, but smaller
+than the FW time (~256 ms) because trace replays the captured op sequence and skips
+per-op dispatch firmware overhead. The first cold compile (no JIT cache anywhere on
+the host) takes ~140 s; subsequent runs reuse the JIT cache.
 
 ### Usage
 
