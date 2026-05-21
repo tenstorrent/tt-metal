@@ -7,7 +7,6 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include <bit>
-#include <numeric>
 
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -51,8 +50,13 @@ AllGatherFactory::cached_mesh_workload_t AllGatherFactory::create_mesh_workload(
     const auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
     ttnn::SmallVector<tt::tt_metal::SubDeviceId> subdevices = {subdevice_id};
 
-    // Allocate global semaphores for devices to sync between each other, since Fabric doesn't provide
-    // a native "wait for all devices to be ready" kernel functionality.
+    // TODO only use sems if output not provided. need to wire this down to kernel level.
+    // If output tensors are not persistent (globally allocated), we need to wait for all devices to be ready
+    // before beginning our operation.
+    // Since Fabric doesn't provide such capability within kernels, we need to manually sync using global semaphores.
+    // tt::tt_metal::GlobalSemaphore init_barrier_semaphore;
+    // tt::tt_metal::GlobalSemaphore final_barrier_semaphore;
+    // if (!tensor_args.persistent_output_tensor.has_value()) {
     // Allocate semaphores in L1_SMALL to avoid fragmenting the larger L1 memory pool.
     bool l1_small_size = mesh_device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1_SMALL);
     auto sem_buffer_type = l1_small_size > 0 ? tt::tt_metal::BufferType::L1_SMALL : tt::tt_metal::BufferType::L1;
@@ -62,6 +66,7 @@ AllGatherFactory::cached_mesh_workload_t AllGatherFactory::create_mesh_workload(
             "Allocating semaphores in L1, which may cause memory fragmentation and lead to memory allocation failures "
             "for subsequent operations. Configure an L1_SMALL region to avoid this.");
     }
+
     auto init_barrier_semaphore =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
     auto final_barrier_semaphore =
@@ -69,6 +74,7 @@ AllGatherFactory::cached_mesh_workload_t AllGatherFactory::create_mesh_workload(
     log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready");
     tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevices);
     log_debug(tt::LogOp, "All devices are ready, starting program execution");
+    //}
 
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program = create_at(
@@ -95,6 +101,10 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
     const auto& input_tensor = input;
     tt::tt_metal::Program program{};
 
+    ////////////////////////////////////////////////////////////////
+    // Fabric setup
+    ////////////////////////////////////////////////////////////////
+
     uint32_t num_devices = operation_attributes.ring_size;
     uint32_t device_idx = ::ttnn::ccl::get_linearized_index_from_physical_coord(
         input_tensor, sender_device_coord, operation_attributes.cluster_axis);
@@ -115,70 +125,105 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
         get_cores_close_to_erisc(operation_attributes.num_links * num_workers_per_link, true);
     auto sender_worker_cores = corerange_to_cores(sender_worker_core_range);
 
-    const uint32_t MAX_PACKET_SIZE_BYTES = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    const uint32_t packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+
+    ////////////////////////////////////////////////////////////////
+    // Page indexing
+    //
+    // Glossary:
+    //   input page     -- one page of the input tensor.
+    //   output page    -- one page of the output tensor.
+    //                     In concat mode the *kernel-visible* output page size is
+    //                     smaller than the tensor's actual output page.
+    //   stripe         -- a run of consecutive output page ids this device writes
+    //                     before jumping past other devices' contributions.
+    //   stripe jump    -- value the kernel adds to output_page_id at the stripe
+    //                     boundary.
+    //   stripe distance-- page-id distance from start of one of this device's
+    //                     stripes to the start of the next.
+    //
+    // Three copy modes, picked by input vs output page sizes:
+    //   matched (in == out): 1 write per input page, byte offset = 0.
+    //   concat  (out > in) : 1 write per input page, byte offset = (d % concat_factor) * in.
+    //   split   (in > out) : split_factor writes per input page, byte offset = 0.
+    //
+    // Kernel is a dumb page iterator. Iteration pattern is periodic stripes, i.e.
+    // consecutive pages (stripe) followed by periodic jumps (to the next stripe).
+    //
+    // Host derives the iterator parameters from input/output page sizes, gather dim,
+    // and device index.
+    ////////////////////////////////////////////////////////////////
+
     const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
     const uint32_t output_page_size = output_tensor.buffer()->aligned_page_size();
-    uint32_t cb_page_size = std::lcm(std::lcm(input_page_size, output_page_size), MAX_PACKET_SIZE_BYTES);
 
-    if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
-        // 32^2 elements == 1/2 or 1 packet, a couple more packets per cb_page for less sync
-        cb_page_size *= 4;
-    }
-
-    // Per-device page counts are defined by the local shard buffer, not by raw logical dims.
-    // Converting pages via logical_shape() breaks tiled tensors and can zero out num_input_pages.
-    const uint32_t num_input_pages = input_tensor.buffer()->num_pages();
-    TT_FATAL(num_input_pages > 0, "Broadcast all-gather requires at least one input page");
-    TT_FATAL(
-        input_tensor.buffer()->aligned_page_size() == input_tensor.buffer()->page_size(),
-        "AG doesnt support unaligned RM pages");
-
-    // Compute how many contiguous output pages to write to before jumping, and what the jump
-    // (stride) should be.
-    // Equal to product of dims after gather dim. Ex: for shape (a, b, c, d, e), if 'c' is the
-    // gather dim, then: output_pages_per_stride = c * d * e
     auto input_shape = input_tensor.padded_shape();
     uint32_t rank = input_shape.rank();
     int32_t gather_dim = operation_attributes.dim;
     if (gather_dim < 0) {
         gather_dim += rank;
     }
-    uint32_t inner_pages = 1;
-    for (int32_t i = gather_dim; i < rank; i++) {
-        uint32_t extent = input_shape[i];
-        if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
-            if (i == rank - 2) {
-                extent /= tt::constants::TILE_HEIGHT;
-            } else if (i == rank - 1) {
-                extent /= tt::constants::TILE_WIDTH;
-            }
-        } else {
-            if (i == rank - 1) {
-                extent = 1;
-            }
-        }
-        inner_pages *= extent;
-    }
-    uint32_t output_pages_per_stride = inner_pages;
-    uint32_t output_page_stride = (num_devices - 1) * output_pages_per_stride + 1;
-    TT_FATAL(output_pages_per_stride > 0, "output_pages_per_stride must be > 0");
 
-    // Special case: ROW_MAJOR gather on dim -1: pages get wider, not more numerous.
-    // Each device needs to write its own portion at some offset within the output page.
-    // We emulate this behavior by setting input_page_size as the kernel's output page size,
-    // and set output_pages_per_stride = num_input_pages so the iterator produces page IDs
-    // like (0, 1, 2, ...).
-    uint32_t kernel_output_page_size = output_page_size;
-    uint32_t output_page_byte_offset = 0;
-    bool is_rm_last_dim = input_tensor.layout() == ttnn::ROW_MAJOR_LAYOUT && gather_dim == rank - 1;
-    if (is_rm_last_dim) {
-        kernel_output_page_size = input_page_size;
-        output_pages_per_stride = num_input_pages;
-        output_page_byte_offset = device_idx * input_page_size;
+    // --- Copy mode ---
+    // Exactly one of concat_factor or split_factor is > 1 (or both = 1 in matched mode).
+    const uint32_t concat_factor = std::max(1u, output_page_size / input_page_size);
+    const uint32_t split_factor = std::max(1u, input_page_size / output_page_size);
+
+    // kernel_output_page_size = bytes per write = min(input, output).
+    const uint32_t kernel_output_page_size = std::min(input_page_size, output_page_size);
+    const uint32_t output_page_byte_offset = (device_idx % concat_factor) * input_page_size;
+    const uint32_t device_slot = device_idx / concat_factor;
+    const uint32_t num_input_pages = input_tensor.buffer()->num_pages();
+    const uint32_t num_output_pages = num_input_pages * split_factor;
+
+    // --- CB sizing ---
+    // cb_page_size is a multiple of input_page_size, which is itself a multiple of
+    // kernel_output_page_size = min(input, output), so the kernel increments both
+    // the cb_read_ptr and cb_write_ptr cleanly.
+    const uint32_t pages_per_packet = std::max(1u, packet_size / input_page_size);
+    uint32_t cb_page_size = input_page_size * pages_per_packet;
+
+    // Perf hack: for tile layout, pack multiple pages into a single CB page to reduce
+    // CB sync frequency between reader and writer. Don't do this for RM because of all
+    // the careful handling of page sizes.
+    // TODO identify the multiplier based on available L1 space
+    if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
+        cb_page_size *= 4;
     }
-    // For sharded RM tensors, input/output shard widths can differ, making page sizes differ.
-    // This scaling converts input page counts to output page counts proportionally.
-    const uint32_t num_output_pages = (num_input_pages * input_page_size) / kernel_output_page_size;
+
+    // --- Stripe geometry ---
+    // input_pages_per_stripe = num input pages along [gather_dim .. rank-1] this
+    // device contributes per stripe. For RM gather_dim=-1 this is the *page* count,
+    // which handles sharded RM input (> 1 input page per row).
+    uint32_t input_pages_per_stripe = 1;
+    for (int32_t i = gather_dim; i < rank; i++) {
+        uint32_t extent;
+        if (i == rank - 1) {
+            if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
+                extent = input_shape[i] / tt::constants::TILE_WIDTH;
+            } else {
+                extent = (input_shape[i] * input_tensor.element_size()) / input_page_size;
+            }
+        } else if (input_tensor.layout() == ttnn::TILE_LAYOUT && i == rank - 2) {
+            extent = input_shape[i] / tt::constants::TILE_HEIGHT;
+        } else {
+            extent = input_shape[i];
+        }
+        input_pages_per_stripe *= extent;
+    }
+
+    // In concat mode each iter goes to a different output page (one chunk per row
+    // from this device), so the stripe is 1 long. Otherwise the stripe spans this
+    // device's full contribution: input_pages_per_stripe * split_factor consecutive
+    // output pages.
+    const uint32_t output_pages_per_stripe = (concat_factor > 1) ? 1u : input_pages_per_stripe * split_factor;
+    const uint32_t output_page_stripe_distance = (num_devices * input_pages_per_stripe * split_factor) / concat_factor;
+    const uint32_t output_page_stripe_jump = output_page_stripe_distance - output_pages_per_stripe + 1;
+    TT_FATAL(output_pages_per_stripe > 0, "output_pages_per_stripe must be > 0");
+
+    ////////////////////////////////////////////////////////////////
+    // Circular Buffer and Kernel creation
+    ////////////////////////////////////////////////////////////////
 
     // L1 Scratch CB Creation
     uint32_t cb0_id = tt::CB::c_in0;
@@ -193,11 +238,11 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
     std::vector<uint32_t> reader_compile_args = {
         cb0_id,                                                 // cb0_id
         input_page_size,                                        // input tensor page size
-        kernel_output_page_size,                                // output page size (input_page_size for RM last-dim)
-        output_pages_per_stride,                                // consecutive pages before a stride jump
-        output_page_stride,                                     // jump amount at stride boundary
+        kernel_output_page_size,                                // kernel-visible page size = min(input, output)
+        output_pages_per_stripe,                                // stripe length (writes before a stripe jump)
+        output_page_stripe_jump,                                // value added to page_id at stripe boundary
         cb_page_size,                                           // cb entry size
-        MAX_PACKET_SIZE_BYTES,                                  // packet_size
+        packet_size,                                            // packet_size
         forward_coord.has_value() ? num_targets_forward : 0,    // range_hops
         backward_coord.has_value() ? num_targets_backward : 0,  // range_hops alternate (opposite dir)
     };
@@ -207,11 +252,11 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
     // Writer kernel
     std::vector<uint32_t> writer_compile_args = {
         cb0_id,                                                 // cb0_id
-        kernel_output_page_size,                                // output page size (input_page_size for RM last-dim)
-        output_pages_per_stride,                                // consecutive pages before a stride jump
-        output_page_stride,                                     // jump amount at stride boundary
+        kernel_output_page_size,                                // kernel-visible page size = min(input, output)
+        output_pages_per_stripe,                                // stripe length (writes before a stripe jump)
+        output_page_stripe_jump,                                // value added to page_id at stripe boundary
         cb_page_size,                                           // cb entry size
-        MAX_PACKET_SIZE_BYTES,                                  // packet_size
+        packet_size,                                            // packet_size
         backward_coord.has_value() ? num_targets_backward : 0,  // range_hops
         forward_coord.has_value() ? num_targets_forward : 0,    // range_hops alternate (opposite dir)
     };
@@ -250,22 +295,23 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
         uint32_t input_tile_id_start = (link * input_pages_per_link) + std::min(link, remainder);
         uint32_t input_tile_id_end = ((link + 1) * input_pages_per_link) + std::min(link + 1, remainder);
 
-        // Map input page range to output page range for this worker, assuming the output
-        // tensor only contains our slice.
-        // Scaling handles sharded RM tensors where input/output page sizes can differ.
+        // Map this worker's slice of input pages to its slice of output writes.
+        // num_output_pages already accounts for split_factor, so in matched/concat
+        // modes the ratio cancels back to num_input_pages.
         uint32_t local_output_start = (input_tile_id_start * num_output_pages) / num_input_pages;
         uint32_t local_output_end = (input_tile_id_end * num_output_pages) / num_input_pages;
         uint32_t num_worker_output_pages = local_output_end - local_output_start;
-        // Derive output page range in the actual output tensor containing all device slices:
-        //       output_page_id = (local / G * N + device_idx) * G + local % G
-        // For RM last-dim, page IDs are simply (0,1,2,...) — device position is in byte offset only.
-        uint32_t output_page_id_start =
-            (local_output_start / output_pages_per_stride * num_devices + device_idx) * output_pages_per_stride +
-            local_output_start % output_pages_per_stride;
-        uint32_t output_page_in_stride_start = local_output_start % output_pages_per_stride;
-        if (is_rm_last_dim) {
-            output_page_id_start = local_output_start;
-        }
+        // Map local write index -> global output page id of this device's first write:
+        //     stripe_index           = local / output_pages_per_stripe
+        //     position_in_stripe     = local % output_pages_per_stripe
+        //     output_page_id_start   = stripe_index * output_page_stripe_distance
+        //                            + device_slot * output_pages_per_stripe
+        //                            + position_in_stripe
+        // Concat with concat_factor=N collapses naturally (stripe_distance=1, device_slot=0).
+        uint32_t output_page_id_start = (local_output_start / output_pages_per_stripe) * output_page_stripe_distance +
+                                        device_slot * output_pages_per_stripe +
+                                        local_output_start % output_pages_per_stripe;
+        uint32_t output_page_in_stripe_start = local_output_start % output_pages_per_stripe;
 
         bool wait_output_semaphore = (link == 0);
         bool reset_global_semaphore = (link == 0);
@@ -277,8 +323,8 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
             input_tile_id_start,                // input_page_id_start
             input_tile_id_end,                  // input_page_id_end
             output_page_id_start,               // output page start
-            output_page_in_stride_start,        // initial position within stride
-            output_page_byte_offset,            // byte offset within output page (for RM gather_dim=-1)
+            output_page_in_stripe_start,        // initial position within stripe
+            output_page_byte_offset,            // byte offset within output page (nonzero only in page-concat)
             num_worker_output_pages,            // number of output pages for this worker
             device_idx,                         // this device's index
             1,                                  // num_connections // TODO hardcoded
@@ -301,8 +347,8 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
             semaphore.address(),                // out_ready_sem_bank_addr (absolute address)
             barrier_semaphore.address(),        // barrier_sem
             output_page_id_start,               // output page start
-            output_page_in_stride_start,        // initial position within stride
-            output_page_byte_offset,            // byte offset within output page (for RM gather_dim=-1)
+            output_page_in_stripe_start,        // initial position within stripe
+            output_page_byte_offset,            // byte offset within output page (nonzero only in page-concat)
             num_worker_output_pages,            // number of output pages for this worker
             device_idx,                         // this device's index
             wait_output_semaphore,              // wait_output_semaphore
