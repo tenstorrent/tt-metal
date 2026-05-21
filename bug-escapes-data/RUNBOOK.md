@@ -517,20 +517,48 @@ Look for a completed merge-gate or post-commit run at or near that SHA. Check it
 ```
 GET /repos/tenstorrent/tt-metal/actions/runs/{run_id}/artifacts
 ```
-If build artifacts exist:
-- Set `use-artifacts-from-run: {run_id}` in the dispatch payload (or in the workflow `inputs:` block)
-- **Remove the `build-artifact` job entirely from the pruned YAML** — result is 1 job only
-- Artifact reuse tests the *artifact commit's* code, not the probe branch's code. Only use when the
-  artifact commit is within ~5 commits of the target and those commits are irrelevant to the test.
+If build artifacts exist — pass all three artifact inputs in the workflow dispatch payload:
+```json
+{
+  "ref": "{branch}",
+  "inputs": {
+    "dev-docker-image": "{dev_docker_image from prior run's outputs}",
+    "build-artifact-name": "{build_artifact_name from prior run's outputs}",
+    "wheel-artifact-name": "{wheel_artifact_name from prior run's outputs}"
+  }
+}
+```
+The `build-artifact` job has `if: ${{ inputs.dev-docker-image == '' }}` — it skips itself
+when `dev-docker-image` is provided. The `resolve-artifacts` job then forwards the
+pre-built artifact names to all downstream test jobs. **All three inputs must be set
+together** — `resolve-artifacts` will fail with an error if only some are set.
 
-**⚠️ `tracy: true` → `tracy: false` when reusing merge-gate artifacts**
+To get the artifact names from a prior run:
+```
+GET /repos/tenstorrent/tt-metal/actions/runs/{run_id}/jobs   → find `resolve-artifacts` job
+GET /repos/tenstorrent/tt-metal/actions/jobs/{job_id}/logs   → grep for `build-artifact-name=`, `dev-docker-image=`, `wheel-artifact-name=`
+```
+Or from the build-artifact job outputs via the API:
+```
+GET /repos/tenstorrent/tt-metal/actions/runs/{run_id}   → check `jobs_url`
+```
 
-Merge-gate runs produce Release builds without the Tracy profiler. If the workflow has
-`tracy: true` hardcoded in the `build-artifact` job, the artifact download step will look for
-`TTMetal_build_any.*_profiler_` — which doesn't exist in merge-gate artifacts — and fail with:
+Do NOT remove the `build-artifact` job from the YAML — it self-skips via its `if:` condition.
+Keep the YAML structure intact; just pass the three inputs at dispatch time.
+
+Artifact reuse tests the *artifact commit's* code, not the probe branch's code. Only use when the
+artifact commit is within ~5 commits of the target and those commits are irrelevant to the test.
+
+**⚠️ Tracy/profiler mismatch when reusing merge-gate artifacts**
+
+Merge-gate runs produce Release builds without the Tracy profiler. Their `build-artifact-name`
+will NOT contain `_profiler_` in the artifact name. If you pass a profiler artifact name to a
+workflow that expects a non-profiler artifact (or vice versa), the download step will fail:
 `ERROR: Could not find build artifact matching expected pattern`.
 
-**Fix**: In the pruned YAML, change `tracy: true` → `tracy: false` before dispatching.
+**Check**: grep the `resolve-artifacts` log of the source run for `build-artifact-name=`. If
+the value does NOT contain `profiler`, you're using a standard Release build — this is fine
+for most test probes. Pass that exact artifact name as `build-artifact-name` input.
 
 1. Create (or reuse) a branch `brain/{escape-id}-bisect-probe` in a worktree.
 
@@ -539,7 +567,9 @@ Merge-gate runs produce Release builds without the Tracy profiler. If the workfl
    GET /repos/tenstorrent/tt-metal/actions/runs?head_sha={target_sha}
    ```
    Prefer the nearest completed merge-gate run (`gh-readonly-queue/main/...` branch).
-   If found: remove `build-artifact` from pruned YAML, set `use-artifacts-from-run`, fix `tracy`.
+   If found: extract `dev-docker-image`, `build-artifact-name`, `wheel-artifact-name` from
+   that run's `resolve-artifacts` job logs, then pass all three as dispatch inputs (see above).
+   The `build-artifact` job will self-skip via its `if:` condition — do not edit the YAML for this.
 
 3. If no reusable artifacts exist: keep `build-artifact` in the pruned YAML, then rebase the
    probe branch to the target commit with the pruned workflow on top:
