@@ -635,16 +635,28 @@ class TTNNGeneratorNSF:
             # stage's input — no stage-boundary download/upload (Phase 3A.2b).
             x_dev = self._resblock_group_resident(x_dev, i, seq_len)
 
-        # Single download after the final upsample stage for the host conv_post.
-        x_cf = ttnn.to_torch(x_dev).float().squeeze(1).permute(0, 2, 1)
+        # --- conv_post + tanh closed on device (Phase 3A.3) ---
+        # The stage-3 output stays resident through the final leaky_relu,
+        # conv_post and tanh; a single download materializes the audio. This
+        # removes the large stage-3 output download + conv_post re-upload
+        # roundtrip. NB: the pre-conv_post leaky_relu uses torch's default
+        # slope (0.01) to match the previous F.leaky_relu(x_cf) — NOT
+        # LRELU_SLOPE (0.1) used by the upsample/ResBlock activations.
+        lr = ttnn.leaky_relu(x_dev, negative_slope=0.01)
         ttnn.deallocate(x_dev)
+        lr_rm = ttnn.to_layout(lr, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(lr)
 
-        # conv_post + tanh (persistent host weight)
-        x_cf = F.leaky_relu(x_cf)
-        x_cl = x_cf.permute(0, 2, 1)
-        x_cl, _ = self._conv1d_persistent(
-            x_cl, self._conv_post_w, None, 32, 1, 7, seq_len)
-        return torch.tanh(x_cl.permute(0, 2, 1))
+        post = self._conv1d_device(
+            lr_rm, self._conv_post_w, None, 32, 1, 7, seq_len)
+        ttnn.deallocate(lr_rm)
+        audio_tt = ttnn.tanh(post)
+        ttnn.deallocate(post)
+
+        audio = ttnn.to_torch(audio_tt).float()
+        ttnn.deallocate(audio_tt)
+        # conv_post has out_channels=1; take channel 0 → [1, 1, seq_len]
+        return audio.reshape(1, 1, seq_len, -1)[:, :, :, 0]
 
     def __call__(self, z, har_source, g):
         """Enable callable syntax: gen(z, har, g) instead of gen.forward(z, har, g)."""
