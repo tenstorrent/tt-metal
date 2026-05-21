@@ -38,7 +38,7 @@ class Attention(Module):
         (False, 8, 4): (256, 256),
         (True, 2, 2): (128, 512),
         (True, 4, 8): (128, 512),
-        (True, 8, 4): (288, 512),
+        (True, 8, 4): (256, 512),
     }
     default_ring_sdpa_chunk_size: tuple[int, int] = (256, 256)
 
