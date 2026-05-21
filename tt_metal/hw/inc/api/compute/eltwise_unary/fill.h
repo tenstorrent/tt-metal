@@ -31,8 +31,8 @@ ALWI void fill_tile(uint32_t idst, float param0) {
 }
 
 ALWI void fill_tile(uint32_t idst_in, uint32_t idst_out, float param0) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::_calculate_fill_<APPROX, 8>, idst_in, idst_out, (int)VectorMode::RC, param0)));
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_fill_, (APPROX, 8), RC, idst_in, idst_out, param0)));
 }
 
 // clang-format off
@@ -63,9 +63,8 @@ ALWI void fill_tile_int(uint32_t idst_in, uint32_t idst_out, uint32_t param0) {
         "Unsupported data format. Supported: Int32, UInt32, UInt16");
     constexpr InstrModLoadStore _INSTRUCTION_MODE =
         (DATA_FORMAT == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::_calculate_fill_int_<APPROX, _INSTRUCTION_MODE, 8>,
-        idst_in, idst_out, (int)VectorMode::RC, param0)));
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_fill_int_, (APPROX, _INSTRUCTION_MODE, 8), RC, idst_in, idst_out, param0)));
 }
 
 // clang-format off
@@ -87,8 +86,8 @@ ALWI void fill_tile_bitcast(uint32_t idst, uint32_t param0) {
 }
 
 ALWI void fill_tile_bitcast(uint32_t idst_in, uint32_t idst_out, uint32_t param0) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::_calculate_fill_bitcast_<APPROX, 8>, idst_in, idst_out, (int)VectorMode::RC, param0)));
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_fill_bitcast_, (APPROX, 8), RC, idst_in, idst_out, param0)));
 }
 
 /**

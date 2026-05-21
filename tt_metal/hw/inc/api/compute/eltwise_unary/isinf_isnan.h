@@ -30,11 +30,14 @@ ALWI void isinf_tile(uint32_t idst) {
 }
 
 ALWI void isinf_tile(uint32_t idst_in, uint32_t idst_out) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::_calculate_sfpu_isinf_isnan_<SfpuType::isinf, APPROX, 8>,
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _calculate_sfpu_isinf_isnan_,
+        (SfpuType::isinf, APPROX, 8),
+        RC,
         idst_in,
-        idst_out,
-        (int)VectorMode::RC)));
+        idst_out)));
 }
 
 /**
@@ -62,11 +65,14 @@ ALWI void isposinf_tile(uint32_t idst) {
 }
 
 ALWI void isposinf_tile(uint32_t idst_in, uint32_t idst_out) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::_calculate_sfpu_isinf_isnan_<SfpuType::isposinf, APPROX, 8>,
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _calculate_sfpu_isinf_isnan_,
+        (SfpuType::isposinf, APPROX, 8),
+        RC,
         idst_in,
-        idst_out,
-        (int)VectorMode::RC)));
+        idst_out)));
 }
 
 /**
@@ -94,11 +100,14 @@ ALWI void isneginf_tile(uint32_t idst) {
 }
 
 ALWI void isneginf_tile(uint32_t idst_in, uint32_t idst_out) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::_calculate_sfpu_isinf_isnan_<SfpuType::isneginf, APPROX, 8>,
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _calculate_sfpu_isinf_isnan_,
+        (SfpuType::isneginf, APPROX, 8),
+        RC,
         idst_in,
-        idst_out,
-        (int)VectorMode::RC)));
+        idst_out)));
 }
 
 /**
@@ -125,11 +134,14 @@ ALWI void isnan_tile(uint32_t idst) {
 }
 
 ALWI void isnan_tile(uint32_t idst_in, uint32_t idst_out) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::_calculate_sfpu_isinf_isnan_<SfpuType::isnan, APPROX, 8>,
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _calculate_sfpu_isinf_isnan_,
+        (SfpuType::isnan, APPROX, 8),
+        RC,
         idst_in,
-        idst_out,
-        (int)VectorMode::RC)));
+        idst_out)));
 }
 
 /**
@@ -157,11 +169,14 @@ ALWI void isfinite_tile(uint32_t idst) {
 }
 
 ALWI void isfinite_tile(uint32_t idst_in, uint32_t idst_out) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::_calculate_sfpu_isinf_isnan_<SfpuType::isfinite, APPROX, 8>,
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _calculate_sfpu_isinf_isnan_,
+        (SfpuType::isfinite, APPROX, 8),
+        RC,
         idst_in,
-        idst_out,
-        (int)VectorMode::RC)));
+        idst_out)));
 }
 
 /**

@@ -28,8 +28,7 @@ namespace ckernel {
 ALWI void i1_tile(uint32_t idst) { MATH(SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_i1, RC, APPROX, idst)); }
 
 ALWI void i1_tile(uint32_t idst_in, uint32_t idst_out) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::calculate_i1<APPROX>, idst_in, idst_out, (int)VectorMode::RC)));
+    MATH((SFPU_CALL_MODE_SPLIT(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_i1, (APPROX), RC, idst_in, idst_out)));
 }
 
 /**

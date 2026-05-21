@@ -45,8 +45,8 @@ ALWI void erf_tile(uint32_t idst) {
 
 template <bool fast_and_approx = true>
 ALWI void erf_tile(uint32_t idst_in, uint32_t idst_out) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::calculate_erf<fast_and_approx>, idst_in, idst_out, (int)VectorMode::RC)));
+    MATH(
+        (SFPU_CALL_MODE_SPLIT(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erf, (fast_and_approx), RC, idst_in, idst_out)));
 }
 
 /************** ERFC *****************/
@@ -75,7 +75,7 @@ ALWI void erfc_tile(uint32_t idst) {
 }
 
 ALWI void erfc_tile(uint32_t idst_in, uint32_t idst_out) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(sfpu::calculate_erfc<>, idst_in, idst_out, (int)VectorMode::RC)));
+    MATH((SFPU_CALL_MODE_SPLIT(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erfc, (), RC, idst_in, idst_out)));
 }
 
 #endif

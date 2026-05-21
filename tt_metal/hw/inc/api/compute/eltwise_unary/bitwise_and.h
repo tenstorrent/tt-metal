@@ -32,8 +32,8 @@ ALWI void bitwise_and_tile(uint32_t idst, uint32_t param0) {
 }
 
 ALWI void bitwise_and_tile(uint32_t idst_in, uint32_t idst_out, uint32_t param0) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::calculate_bitwise_and<APPROX>, idst_in, idst_out, (int)VectorMode::RC, param0)));
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_bitwise_and, (APPROX), RC, idst_in, idst_out, param0)));
 }
 
 /**

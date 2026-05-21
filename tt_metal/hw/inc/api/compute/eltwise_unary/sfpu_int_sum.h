@@ -19,8 +19,7 @@ ALWI void sfpu_sum_int_col(uint32_t idst) {
 }
 
 ALWI void sfpu_sum_int_col(uint32_t idst_in, uint32_t idst_out) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::calculate_sum_int_col<APPROX>, idst_in, idst_out, (int)VectorMode::R)));
+    MATH((SFPU_CALL_MODE_SPLIT(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sum_int_col, (APPROX), R, idst_in, idst_out)));
 }
 
 ALWI void sfpu_sum_int_row(uint32_t idst) {
@@ -28,8 +27,7 @@ ALWI void sfpu_sum_int_row(uint32_t idst) {
 }
 
 ALWI void sfpu_sum_int_row(uint32_t idst_in, uint32_t idst_out) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::calculate_sum_int_row<APPROX>, idst_in, idst_out, (int)VectorMode::C)));
+    MATH((SFPU_CALL_MODE_SPLIT(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sum_int_row, (APPROX), C, idst_in, idst_out)));
 }
 
 ALWI void sfpu_add_int(uint32_t idst, uint32_t dst_offset = 2, int32_t iterations = 8) {
@@ -37,8 +35,8 @@ ALWI void sfpu_add_int(uint32_t idst, uint32_t dst_offset = 2, int32_t iteration
 }
 
 ALWI void sfpu_add_int(uint32_t idst_in, uint32_t idst_out, uint32_t dst_offset, int32_t iterations = 8) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::add_int<APPROX, 8>, idst_in, idst_out, (int)VectorMode::RC, dst_offset)));
+    MATH(
+        (SFPU_CALL_MODE_SPLIT(DST_SYNC_MODE, DST_ACCUM_MODE, add_int, (APPROX, 8), RC, idst_in, idst_out, dst_offset)));
 }
 
 }  // namespace ckernel

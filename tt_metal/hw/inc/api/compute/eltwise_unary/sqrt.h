@@ -40,11 +40,14 @@ ALWI void sqrt_tile(uint32_t idst) {
 
 template <bool FAST_APPROX = false>
 ALWI void sqrt_tile(uint32_t idst_in, uint32_t idst_out) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::calculate_sqrt<APPROX, 8, DST_ACCUM_MODE, FAST_APPROX>,
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sqrt,
+        (APPROX, 8, DST_ACCUM_MODE, FAST_APPROX),
+        RC,
         idst_in,
-        idst_out,
-        (int)VectorMode::RC)));
+        idst_out)));
 }
 
 #endif

@@ -35,8 +35,8 @@ ALWI void unary_ne_tile(uint32_t idst, uint32_t param0) {
 }
 
 ALWI void unary_ne_tile(uint32_t idst_in, uint32_t idst_out, uint32_t param0) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::calculate_unary_ne<APPROX, 8>, idst_in, idst_out, (int)VectorMode::RC, param0)));
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_ne, (APPROX, 8), RC, idst_in, idst_out, param0)));
 }
 
 /**
@@ -65,11 +65,14 @@ ALWI void unary_ne_tile_int32(uint32_t idst, uint32_t param0) {
 }
 
 ALWI void unary_ne_tile_int32(uint32_t idst_in, uint32_t idst_out, uint32_t param0) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::calculate_comp_unary_int<APPROX, SfpuType::unary_ne, 8>,
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_comp_unary_int,
+        (APPROX, SfpuType::unary_ne, 8),
+        RC,
         idst_in,
         idst_out,
-        (int)VectorMode::RC,
         param0)));
 }
 
@@ -94,8 +97,8 @@ ALWI void unary_eq_tile(uint32_t idst, uint32_t param0) {
 }
 
 ALWI void unary_eq_tile(uint32_t idst_in, uint32_t idst_out, uint32_t param0) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::calculate_unary_eq<APPROX, 8>, idst_in, idst_out, (int)VectorMode::RC, param0)));
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_eq, (APPROX, 8), RC, idst_in, idst_out, param0)));
 }
 
 /**
@@ -124,11 +127,14 @@ ALWI void unary_eq_tile_int32(uint32_t idst, uint32_t param0) {
 }
 
 ALWI void unary_eq_tile_int32(uint32_t idst_in, uint32_t idst_out, uint32_t param0) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::calculate_comp_unary_int<APPROX, SfpuType::unary_eq, 8>,
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_comp_unary_int,
+        (APPROX, SfpuType::unary_eq, 8),
+        RC,
         idst_in,
         idst_out,
-        (int)VectorMode::RC,
         param0)));
 }
 
@@ -153,8 +159,8 @@ ALWI void unary_gt_tile(uint32_t idst, uint32_t param0) {
 }
 
 ALWI void unary_gt_tile(uint32_t idst_in, uint32_t idst_out, uint32_t param0) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::calculate_unary_gt<APPROX, 8>, idst_in, idst_out, (int)VectorMode::RC, param0)));
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_gt, (APPROX, 8), RC, idst_in, idst_out, param0)));
 }
 
 /**
@@ -183,11 +189,14 @@ ALWI void unary_gt_tile_int32(uint32_t idst, uint32_t param0) {
 }
 
 ALWI void unary_gt_tile_int32(uint32_t idst_in, uint32_t idst_out, uint32_t param0) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::_calculate_comp_unary_int_<APPROX, SfpuType::unary_gt, 8>,
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _calculate_comp_unary_int_,
+        (APPROX, SfpuType::unary_gt, 8),
+        RC,
         idst_in,
         idst_out,
-        (int)VectorMode::RC,
         param0)));
 }
 
@@ -212,8 +221,8 @@ ALWI void unary_ge_tile(uint32_t idst, uint32_t param0) {
 }
 
 ALWI void unary_ge_tile(uint32_t idst_in, uint32_t idst_out, uint32_t param0) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::calculate_unary_ge<APPROX, 8>, idst_in, idst_out, (int)VectorMode::RC, param0)));
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_ge, (APPROX, 8), RC, idst_in, idst_out, param0)));
 }
 
 /**
@@ -242,11 +251,14 @@ ALWI void unary_ge_tile_int32(uint32_t idst, uint32_t param0) {
 }
 
 ALWI void unary_ge_tile_int32(uint32_t idst_in, uint32_t idst_out, uint32_t param0) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::_calculate_comp_unary_int_<APPROX, SfpuType::unary_ge, 8>,
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _calculate_comp_unary_int_,
+        (APPROX, SfpuType::unary_ge, 8),
+        RC,
         idst_in,
         idst_out,
-        (int)VectorMode::RC,
         param0)));
 }
 
@@ -271,8 +283,8 @@ ALWI void unary_lt_tile(uint32_t idst, uint32_t param0) {
 }
 
 ALWI void unary_lt_tile(uint32_t idst_in, uint32_t idst_out, uint32_t param0) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::calculate_unary_lt<APPROX, 8>, idst_in, idst_out, (int)VectorMode::RC, param0)));
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_lt, (APPROX, 8), RC, idst_in, idst_out, param0)));
 }
 
 // unary lt : if x < value --> 1, else 0
@@ -296,11 +308,14 @@ ALWI void unary_lt_tile_int32(uint32_t idst, uint32_t param0) {
 }
 
 ALWI void unary_lt_tile_int32(uint32_t idst_in, uint32_t idst_out, uint32_t param0) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::_calculate_comp_unary_int_<APPROX, SfpuType::unary_lt, 8>,
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _calculate_comp_unary_int_,
+        (APPROX, SfpuType::unary_lt, 8),
+        RC,
         idst_in,
         idst_out,
-        (int)VectorMode::RC,
         param0)));
 }
 
@@ -330,8 +345,8 @@ ALWI void unary_le_tile(uint32_t idst, uint32_t param0) {
 }
 
 ALWI void unary_le_tile(uint32_t idst_in, uint32_t idst_out, uint32_t param0) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::calculate_unary_le<APPROX, 8>, idst_in, idst_out, (int)VectorMode::RC, param0)));
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_le, (APPROX, 8), RC, idst_in, idst_out, param0)));
 }
 
 // unary le : if x <= value --> 1, else 0
@@ -355,11 +370,14 @@ ALWI void unary_le_tile_int32(uint32_t idst, uint32_t param0) {
 }
 
 ALWI void unary_le_tile_int32(uint32_t idst_in, uint32_t idst_out, uint32_t param0) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::_calculate_comp_unary_int_<APPROX, SfpuType::unary_le, 8>,
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _calculate_comp_unary_int_,
+        (APPROX, SfpuType::unary_le, 8),
+        RC,
         idst_in,
         idst_out,
-        (int)VectorMode::RC,
         param0)));
 }
 
@@ -385,8 +403,8 @@ ALWI void unary_le_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(unary_le, APPROX));
 ALWI void gtz_tile(uint32_t idst) { MATH(SFPU_ZERO_KERNEL(greater_than_zero, RC, APPROX, idst)); }
 
 ALWI void gtz_tile(uint32_t idst_in, uint32_t idst_out) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::calculate_comp<APPROX, SfpuType::greater_than_zero>, idst_in, idst_out, (int)VectorMode::RC)));
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp, (APPROX, SfpuType::greater_than_zero), RC, idst_in, idst_out)));
 }
 
 // clang-format off
@@ -408,11 +426,14 @@ ALWI void gtz_tile_int32(uint32_t idst) {
 }
 
 ALWI void gtz_tile_int32(uint32_t idst_in, uint32_t idst_out) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::calculate_comp_int<APPROX, SfpuType::greater_than_zero>,
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_comp_int,
+        (APPROX, SfpuType::greater_than_zero),
+        RC,
         idst_in,
-        idst_out,
-        (int)VectorMode::RC)));
+        idst_out)));
 }
 
 /**
@@ -437,8 +458,8 @@ ALWI void gtz_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(greater_than_zero, APPRO
 ALWI void nez_tile(uint32_t idst) { MATH(SFPU_ZERO_KERNEL(not_equal_zero, RC, APPROX, idst)); }
 
 ALWI void nez_tile(uint32_t idst_in, uint32_t idst_out) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::calculate_comp<APPROX, SfpuType::not_equal_zero>, idst_in, idst_out, (int)VectorMode::RC)));
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp, (APPROX, SfpuType::not_equal_zero), RC, idst_in, idst_out)));
 }
 
 // clang-format off
@@ -460,8 +481,8 @@ ALWI void nez_tile_int32(uint32_t idst) {
 }
 
 ALWI void nez_tile_int32(uint32_t idst_in, uint32_t idst_out) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::calculate_comp_int<APPROX, SfpuType::not_equal_zero>, idst_in, idst_out, (int)VectorMode::RC)));
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp_int, (APPROX, SfpuType::not_equal_zero), RC, idst_in, idst_out)));
 }
 
 /**
@@ -486,11 +507,14 @@ ALWI void nez_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(not_equal_zero, APPROX))
 ALWI void gez_tile(uint32_t idst) { MATH(SFPU_ZERO_KERNEL(greater_than_equal_zero, RC, APPROX, idst)); }
 
 ALWI void gez_tile(uint32_t idst_in, uint32_t idst_out) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::calculate_comp<APPROX, SfpuType::greater_than_equal_zero>,
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_comp,
+        (APPROX, SfpuType::greater_than_equal_zero),
+        RC,
         idst_in,
-        idst_out,
-        (int)VectorMode::RC)));
+        idst_out)));
 }
 
 // clang-format off
@@ -512,11 +536,14 @@ ALWI void gez_tile_int32(uint32_t idst) {
 }
 
 ALWI void gez_tile_int32(uint32_t idst_in, uint32_t idst_out) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::calculate_comp_int<APPROX, SfpuType::greater_than_equal_zero>,
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_comp_int,
+        (APPROX, SfpuType::greater_than_equal_zero),
+        RC,
         idst_in,
-        idst_out,
-        (int)VectorMode::RC)));
+        idst_out)));
 }
 
 /**
@@ -541,8 +568,8 @@ ALWI void gez_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(greater_than_equal_zero,
 ALWI void ltz_tile(uint32_t idst) { MATH(SFPU_ZERO_KERNEL(less_than_zero, RC, APPROX, idst)); }
 
 ALWI void ltz_tile(uint32_t idst_in, uint32_t idst_out) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::calculate_comp<APPROX, SfpuType::less_than_zero>, idst_in, idst_out, (int)VectorMode::RC)));
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp, (APPROX, SfpuType::less_than_zero), RC, idst_in, idst_out)));
 }
 
 // clang-format off
@@ -564,8 +591,8 @@ ALWI void ltz_tile_int32(uint32_t idst) {
 }
 
 ALWI void ltz_tile_int32(uint32_t idst_in, uint32_t idst_out) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::calculate_comp_int<APPROX, SfpuType::less_than_zero>, idst_in, idst_out, (int)VectorMode::RC)));
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp_int, (APPROX, SfpuType::less_than_zero), RC, idst_in, idst_out)));
 }
 
 /**
@@ -590,8 +617,8 @@ ALWI void ltz_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(less_than_zero, APPROX))
 ALWI void eqz_tile(uint32_t idst) { MATH(SFPU_ZERO_KERNEL(equal_zero, RC, APPROX, idst)); }
 
 ALWI void eqz_tile(uint32_t idst_in, uint32_t idst_out) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::calculate_comp<APPROX, SfpuType::equal_zero>, idst_in, idst_out, (int)VectorMode::RC)));
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp, (APPROX, SfpuType::equal_zero), RC, idst_in, idst_out)));
 }
 
 // clang-format off
@@ -613,8 +640,8 @@ ALWI void eqz_tile_int32(uint32_t idst) {
 }
 
 ALWI void eqz_tile_int32(uint32_t idst_in, uint32_t idst_out) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::calculate_comp_int<APPROX, SfpuType::equal_zero>, idst_in, idst_out, (int)VectorMode::RC)));
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp_int, (APPROX, SfpuType::equal_zero), RC, idst_in, idst_out)));
 }
 
 // clang-format off
@@ -636,8 +663,8 @@ ALWI void eqz_tile_uint16(uint32_t idst) {
 }
 
 ALWI void eqz_tile_uint16(uint32_t idst_in, uint32_t idst_out) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::calculate_comp_uint16<APPROX, SfpuType::equal_zero>, idst_in, idst_out, (int)VectorMode::RC)));
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp_uint16, (APPROX, SfpuType::equal_zero), RC, idst_in, idst_out)));
 }
 
 // clang-format off
@@ -660,8 +687,8 @@ ALWI void eqz_tile_uint32(uint32_t idst) {
 }
 
 ALWI void eqz_tile_uint32(uint32_t idst_in, uint32_t idst_out) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::calculate_eqz_uint32<APPROX, 8>, idst_in, idst_out, (int)VectorMode::RC)));
+    MATH((
+        SFPU_CALL_MODE_SPLIT(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_eqz_uint32, (APPROX, 8), RC, idst_in, idst_out)));
 }
 
 /**
@@ -686,11 +713,14 @@ ALWI void eqz_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(equal_zero, APPROX)); }
 ALWI void lez_tile(uint32_t idst) { MATH(SFPU_ZERO_KERNEL(less_than_equal_zero, RC, APPROX, idst)); }
 
 ALWI void lez_tile(uint32_t idst_in, uint32_t idst_out) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::calculate_comp<APPROX, SfpuType::less_than_equal_zero>,
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_comp,
+        (APPROX, SfpuType::less_than_equal_zero),
+        RC,
         idst_in,
-        idst_out,
-        (int)VectorMode::RC)));
+        idst_out)));
 }
 
 // clang-format off
@@ -712,11 +742,14 @@ ALWI void lez_tile_int32(uint32_t idst) {
 }
 
 ALWI void lez_tile_int32(uint32_t idst_in, uint32_t idst_out) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::calculate_comp_int<APPROX, SfpuType::less_than_equal_zero>,
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_comp_int,
+        (APPROX, SfpuType::less_than_equal_zero),
+        RC,
         idst_in,
-        idst_out,
-        (int)VectorMode::RC)));
+        idst_out)));
 }
 
 // clang-format off
@@ -738,11 +771,14 @@ ALWI void nez_tile_uint16(uint32_t idst) {
 }
 
 ALWI void nez_tile_uint16(uint32_t idst_in, uint32_t idst_out) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::calculate_comp_uint16<APPROX, SfpuType::not_equal_zero>,
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_comp_uint16,
+        (APPROX, SfpuType::not_equal_zero),
+        RC,
         idst_in,
-        idst_out,
-        (int)VectorMode::RC)));
+        idst_out)));
 }
 
 // clang-format off
@@ -764,8 +800,8 @@ ALWI void nez_tile_uint32(uint32_t idst) {
 }
 
 ALWI void nez_tile_uint32(uint32_t idst_in, uint32_t idst_out) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::calculate_nez_uint32<APPROX, 8>, idst_in, idst_out, (int)VectorMode::RC)));
+    MATH((
+        SFPU_CALL_MODE_SPLIT(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_nez_uint32, (APPROX, 8), RC, idst_in, idst_out)));
 }
 
 /**

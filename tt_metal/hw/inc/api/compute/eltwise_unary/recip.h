@@ -45,8 +45,11 @@ ALWI void recip_tile(uint32_t idst, int vector_mode = (int)VectorMode::RC) {
 
 template <bool legacy_compat = true>
 ALWI void recip_tile(uint32_t idst_in, uint32_t idst_out, int vector_mode) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::calculate_reciprocal<APPROX, DST_ACCUM_MODE, 8, legacy_compat>,
+    MATH((SFPU_CALL_SPLIT(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_reciprocal,
+        (APPROX, DST_ACCUM_MODE, 8, legacy_compat),
         idst_in,
         idst_out,
         vector_mode)));

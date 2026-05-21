@@ -28,8 +28,7 @@ ALWI void identity_tile(uint32_t idst) {
 }
 
 ALWI void identity_tile(uint32_t idst_in, uint32_t idst_out) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::calculate_identity<APPROX, 8>, idst_in, idst_out, (int)VectorMode::RC)));
+    MATH((SFPU_CALL_MODE_SPLIT(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_identity, (APPROX, 8), RC, idst_in, idst_out)));
 }
 
 /**
@@ -54,8 +53,8 @@ ALWI void identity_tile_uint32(uint32_t idst) {
 }
 
 ALWI void identity_tile_uint32(uint32_t idst_in, uint32_t idst_out) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::calculate_identity_uint<APPROX, 8>, idst_in, idst_out, (int)VectorMode::RC)));
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_identity_uint, (APPROX, 8), RC, idst_in, idst_out)));
 }
 
 }  // namespace ckernel

@@ -41,11 +41,14 @@ ALWI void softplus_tile_pack(uint32_t idst, uint32_t beta, uint32_t beta_recipro
 
 ALWI void softplus_tile(
     uint32_t idst_in, uint32_t idst_out, uint32_t beta, uint32_t beta_reciprocal, uint32_t threshold) {
-    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
-        ckernel::sfpu::calculate_softplus<APPROX, DST_ACCUM_MODE>,
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_softplus,
+        (APPROX, DST_ACCUM_MODE),
+        RC,
         idst_in,
         idst_out,
-        (int)VectorMode::RC,
         beta,
         beta_reciprocal,
         threshold)));
