@@ -164,25 +164,25 @@ def validate_fpu_math(
     schema,
     eltwise_ops: Set[str],
     reduce_ops: Set[str],
-    forced_row_reduce_ops: Set[str],
+    forced_reduce_dim: Dict[str, ReduceDimension],
     supported_fidelities: Dict[str, Set],
     unpacker_rules: Dict[str, Union[str, Set[str]]],
 ):
     op = schema.operation
 
-    if op in reduce_ops and schema.reduce_pool is None:
-        raise ValueError(f"Reduce operations require reduce_pool: {ReducePool}")
-
-    if op in reduce_ops and schema.reduce_dim is None:
-        raise ValueError(f"Reduce operations require reduce_dim: {ReduceDimension}")
-
-    if op in forced_row_reduce_ops:
+    forced_dim = forced_reduce_dim.get(op)
+    if forced_dim is not None:
         if schema.reduce_dim is None:
-            schema.reduce_dim = ReduceDimension.Row
-        elif schema.reduce_dim != ReduceDimension.Row:
+            schema.reduce_dim = forced_dim
+        elif schema.reduce_dim != forced_dim:
             raise ValueError(
-                f'Reduce operations require reduce_dim: "{ReduceDimension.Row.value}"'
+                f'Reduce operations require reduce_dim: "{forced_dim.value}"'
             )
+    elif op in reduce_ops:
+        if schema.reduce_pool is None:
+            raise ValueError(f"Reduce operations require reduce_pool: {ReducePool}")
+        if schema.reduce_dim is None:
+            raise ValueError(f"Reduce operations require reduce_dim: {ReduceDimension}")
 
     unpacker_name = schema.unpacker
 

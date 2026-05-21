@@ -13,7 +13,7 @@ from fuser.validator import (
     compute_output_dimensions,
     validate_fpu_math,
 )
-from helpers.llk_params import MathFidelity, MathOperation, Tilize
+from helpers.llk_params import MathFidelity, MathOperation, ReduceDimension, Tilize
 from pydantic import (
     Field,
     field_validator,
@@ -55,7 +55,7 @@ FPU_MAP = {
     "Datacopy": (DatacopyFpu, set()),
     "Matmul": (MatmulFpu, {"matmul"}),
     "Reduce": (ReduceFpu, {"reduce"}),
-    "ReduceBlockMax": (ReduceBlockMaxFpu, {"forced_row_reduce"}),
+    "ReduceBlockMax": (ReduceBlockMaxFpu, {"reduce"}),
 }
 
 _tagged = lambda tag: {op for op, (_, tags) in FPU_MAP.items() if tag in tags}
@@ -63,7 +63,10 @@ _tagged = lambda tag: {op for op, (_, tags) in FPU_MAP.items() if tag in tags}
 ELTWISE_OPS = _tagged("eltwise")
 MATMUL_OPS = _tagged("matmul")
 REDUCE_OPS = _tagged("reduce")
-FORCED_ROW_REDUCE_OPS = _tagged("forced_row_reduce")
+
+FORCED_REDUCE_DIM = {
+    "ReduceBlockMax": ReduceDimension.Row,
+}
 
 SUPPORTED_FIDELITIES = {
     "Elwadd": {MathFidelity.LoFi},
@@ -155,7 +158,7 @@ class FpuMathSchema(FpuMathSchemaBase):
             self,
             ELTWISE_OPS,
             REDUCE_OPS,
-            FORCED_ROW_REDUCE_OPS,
+            FORCED_REDUCE_DIM,
             SUPPORTED_FIDELITIES,
             UNPACKER_RULES,
         )
