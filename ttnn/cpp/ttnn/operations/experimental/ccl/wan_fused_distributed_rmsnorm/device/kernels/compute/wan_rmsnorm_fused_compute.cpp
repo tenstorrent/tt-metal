@@ -180,17 +180,16 @@ void kernel_main() {
             for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
                 cb_reserve_back(mul_rms_result_cb, block_size);
 
+                // Fuse math + pack into a single tile_regs cycle so MATH and
+                // PACK TRISCs can overlap (composite post_allgather pattern).
                 tile_regs_acquire();
+                tile_regs_wait();
                 for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
                     const uint32_t abs_idx = row_base + col_tile + i;
                     mul_tiles_bcast_cols(input_cb, reduce_result_cb, abs_idx, 0, i);
-                }
-                tile_regs_commit();
-
-                tile_regs_wait();
-                for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
                     pack_tile(i, mul_rms_result_cb);
                 }
+                tile_regs_commit();
                 tile_regs_release();
                 cb_push_back(mul_rms_result_cb, block_size);
 
@@ -234,15 +233,15 @@ void kernel_main() {
                     cb_wait_front(intermediate_cb, block_size);
                     cb_reserve_back(rotated_input_cb, block_size);
 
+                    // Fuse matmul + pack — output CB (rotated_input_cb) is fresh,
+                    // no in-place dependency.
                     tile_regs_acquire();
-                    for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                        matmul_tiles(intermediate_cb, transformation_mat_cb, i, 0, i);
-                    }
-                    tile_regs_commit();
                     tile_regs_wait();
                     for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
+                        matmul_tiles(intermediate_cb, transformation_mat_cb, i, 0, i);
                         pack_tile(i, rotated_input_cb);
                     }
+                    tile_regs_commit();
                     tile_regs_release();
                     cb_push_back(rotated_input_cb, block_size);
 
@@ -300,15 +299,14 @@ void kernel_main() {
                     cb_wait_front(rotated_input_cb, block_size);
                     cb_reserve_back(output_cb, block_size);
 
+                    // Fuse add + pack — output_cb is fresh, no in-place dep.
                     tile_regs_acquire();
-                    for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                        add_tiles(intermediate_cb, rotated_input_cb, i, i, i);
-                    }
-                    tile_regs_commit();
                     tile_regs_wait();
                     for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
+                        add_tiles(intermediate_cb, rotated_input_cb, i, i, i);
                         pack_tile(i, output_cb);
                     }
+                    tile_regs_commit();
                     tile_regs_release();
                     cb_push_back(output_cb, block_size);
 
