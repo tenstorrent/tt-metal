@@ -21,7 +21,7 @@ BFP_BLOCK = 16
 def _bf16_sign_exp_mantissa(flat: torch.Tensor):
     """Extract sign, exponent, and implicit 7-bit mantissa from BF16 (as uint16)."""
     bf16_bits = (flat.view(torch.int32) >> 16) & 0xFFFF
-    signs = (bf16_bits >> 15) & 1
+    signs = bf16_bits >> 15
     exps = (bf16_bits >> 7) & 0xFF
     mants = ((bf16_bits & 0x7F) >> 1) | 0x40
     return signs, exps, mants
@@ -49,12 +49,11 @@ def _finalize_bfp_quantized(
     n: int,
     dimensions,
 ) -> torch.Tensor:
+    # Note: hardware FTZ (flush of near-zero values that arise from BFP
+    # scale arithmetic with very small shared exponents) is applied once,
+    # centrally, at the end of the consuming golden's __call__ — so the
+    # same FTZ pass covers FP outputs as well. Do not FTZ here.
     values = torch.where(signs_blocks.bool(), -values, values)
-    # Hardware runs with FTZ: flush near-zero values that arise from BFP
-    # scale arithmetic with very small shared exponents (shared_exp <= 1).
-    # The smallest meaningful BFP value has shared_exp=2, giving ~2.35e-38.
-    FTZ_THRESHOLD = 1e-37
-    values = torch.where(values.abs() < FTZ_THRESHOLD, torch.zeros_like(values), values)
     out = values.flatten()[:n].to(torch.bfloat16)
     if dimensions is not None:
         out = untilize_block(

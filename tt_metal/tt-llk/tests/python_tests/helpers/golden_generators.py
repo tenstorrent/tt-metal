@@ -48,6 +48,32 @@ MAX_TILES_32_BIT_DEST = 4
 golden_registry = {}
 
 
+# Hardware always flushes subnormals to zero (FTZ).  Centralised here so that
+# every golden's __call__ funnels through the same pass — covers BFP/MX paths
+# (where near-zero values arise from BFP scale arithmetic with very small
+# shared exponents) and plain FP paths (where it's the only FTZ).
+#
+# The smallest meaningful BFP value has shared_exp=2, giving ~2.35e-38, so a
+# threshold of 1e-37 is just above the largest value the hardware flushes.
+_FTZ_THRESHOLD = 1e-37
+
+
+def _apply_ftz(result: torch.Tensor, data_format: DataFormat) -> torch.Tensor:
+    """Flush sub-FTZ values in *result* to zero, matching hardware FTZ.
+
+    No-op for integer formats — they have no subnormals and the float32
+    round-trip would silently lose precision for large values.
+    """
+    if data_format.is_integer():
+        return result
+    result_f32 = result.float()
+    return torch.where(
+        result_f32.abs() < _FTZ_THRESHOLD,
+        torch.zeros_like(result_f32),
+        result_f32,
+    ).to(result.dtype)
+
+
 def saturate_integer(result: torch.Tensor, data_format, torch_format) -> torch.Tensor:
     """Apply integer saturation during format conversion.
 
@@ -1487,7 +1513,10 @@ class DataCopyGolden:
             else:
                 result = _bfp8b_to_float16b(data, dims)
 
-        return result
+        # Final FTZ pass: hardware always flushes subnormals to zero. The BFP
+        # helpers no longer FTZ internally, so funnel every output (BFP, MX,
+        # plain FP) through the centralised FTZ to match silicon behaviour.
+        return _apply_ftz(result, data_format)
 
 
 @register_golden
@@ -1908,7 +1937,11 @@ class UnarySFPUGolden:
                 case DataFormat.Bfp4_b:
                     result = convert_inf_to_value(result, 130048.0)
 
-        return torch.tensor(result, dtype=format_dict[data_format])
+        # Final FTZ pass — see _apply_ftz for rationale. Centralised here
+        # because the BFP helpers above no longer FTZ internally.
+        return _apply_ftz(
+            torch.tensor(result, dtype=format_dict[data_format]), data_format
+        )
 
     # Helper functions
     def handle_infinite_numbers(self, expected: float) -> float:
@@ -2216,6 +2249,13 @@ class EltwiseBinaryGolden(FidelityMasking):
         # Fidelity masking models the source register decomposition, so use
         # the *input* format, not the output format.  Block-float / MX formats
         # are unpacked to Float16_b in the source registers.
+        #
+        # Consider both operands: if *either* operand is BFP/MX, both unpack
+        # to Float16_b in src regs, so the math operates on Float16_b
+        # regardless of the other operand's format. Falling back to operand
+        # A's format alone (or to data_format when input_format is None,
+        # which callers use to signal "already quantized") would mismodel
+        # the mixed-format and pre-quantized cases.
         def _src_reg_format(fmt):
             if fmt is None:
                 return None
@@ -2223,7 +2263,12 @@ class EltwiseBinaryGolden(FidelityMasking):
                 return DataFormat.Float16_b
             return fmt
 
-        math_format_for_fidelity = _src_reg_format(input_format) or data_format
+        src_a_fmt = _src_reg_format(input_format)
+        src_b_fmt = _src_reg_format(input_format_B)
+        if src_a_fmt == DataFormat.Float16_b or src_b_fmt == DataFormat.Float16_b:
+            math_format_for_fidelity = DataFormat.Float16_b
+        else:
+            math_format_for_fidelity = src_a_fmt or src_b_fmt or data_format
 
         t1, t2 = operand1, operand2
 
@@ -2279,20 +2324,11 @@ class EltwiseBinaryGolden(FidelityMasking):
         else:
             result = to_tensor(result, data_format)
 
-        # Final FTZ pass: hardware always flushes subnormals to zero.
-        # Do this after all quantization so it covers every output format.
-        # Skip for integer formats — they have no subnormals and the float32
-        # round-trip would silently lose precision for large values.
-        if not data_format.is_integer():
-            FTZ_THRESHOLD = 1e-37
-            result_f32 = result.float()
-            result = torch.where(
-                result_f32.abs() < FTZ_THRESHOLD,
-                torch.zeros_like(result_f32),
-                result_f32,
-            ).to(result.dtype)
-
-        return result
+        # Final FTZ pass: hardware always flushes subnormals to zero. Do this
+        # after all quantization so it covers every output format (including
+        # FP, where it's the only FTZ — the BFP helpers no longer FTZ
+        # internally, see bfp_format_utils._finalize_bfp_quantized).
+        return _apply_ftz(result, data_format)
 
     # Operation methods
     @staticmethod
@@ -2587,12 +2623,12 @@ class ReduceGolden:
 
         if reduce_to_one:
             # Accumulate all tiles into a single result
-            return self._reduce_all_tiles(
+            result = self._reduce_all_tiles(
                 operand, reduce_dim, pool_type, data_format, tile_cnt, tile_shape
             )
         else:
             # Process each tile independently; quantize output like eltwise binary
-            return torch.cat(
+            result = torch.cat(
                 [
                     self._quantize_reduce_output(
                         self._process_tile(
@@ -2608,6 +2644,11 @@ class ReduceGolden:
                     for tile in range(tile_cnt)
                 ]
             )
+
+        # Final FTZ pass: hardware always flushes subnormals to zero. Same
+        # rationale as EltwiseBinaryGolden — covers both BFP and FP outputs
+        # now that the BFP helpers no longer FTZ internally.
+        return _apply_ftz(result, data_format)
 
     def _quantize_reduce_output(self, tensor: torch.Tensor, data_format: DataFormat):
         """Quantize output to match what hardware packs into L1 (same as EltwiseBinaryGolden)."""
