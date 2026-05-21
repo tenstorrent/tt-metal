@@ -95,6 +95,8 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
             "path=ComputeOnly requires optional_output_tensor to be std::nullopt (no combine output is produced)");
     } else {
         TT_FATAL(args.combine_params.has_value(), "path=Full requires combine_params to be set");
+        TT_FATAL(args.combine_params->num_links > 0, "num_links must be greater than 0");
+        TT_FATAL(args.combine_params->axis < 2, "cluster_axis must be 0 or 1");
     }
 
     // Validate hidden_size

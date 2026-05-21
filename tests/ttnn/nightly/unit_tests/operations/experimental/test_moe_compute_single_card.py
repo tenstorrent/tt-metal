@@ -150,19 +150,13 @@ def _run_moe_compute_single_card_test(
     #########################################
 
     # Drain tilize core: the op uses `max_tilize_cores[0]` from the per-arch layout
-    # table (`get_layout()` in moe_compute_program_factory.cpp) filtered by what the
-    # chip's logical worker grid actually exposes. WH full-grid (y>=10) -> (6,9); WH
-    # harvested (y=9) -> (6,8); BH 11x10 -> (10,9). Match the op's choice exactly so
-    # input sharding lands on the right core.
-    _grid_for_drain = mesh_device.compute_with_storage_grid_size()
+    # table (`get_layout()` in moe_compute_program_factory.cpp). WH full-grid -> (6,9);
+    # BH 11x10 -> (10,9). Harvested grids are skipped above, so y>=10 always holds here.
     if arch == ttnn.device.Arch.BLACKHOLE:
         tilize_drain_core = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(10, 9), ttnn.CoreCoord(10, 9))})
     else:
         # WORMHOLE_B0 (other archs are skipped above).
-        _drain_y = 9 if _grid_for_drain.y >= 10 else 8
-        tilize_drain_core = ttnn.CoreRangeSet(
-            {ttnn.CoreRange(ttnn.CoreCoord(6, _drain_y), ttnn.CoreCoord(6, _drain_y))}
-        )
+        tilize_drain_core = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(6, 9), ttnn.CoreCoord(6, 9))})
 
     expert_mapping = gen_expert_mapping(
         num_devices, num_replicated_devices, cluster_axis, experts, experts_per_cluster, experts_per_device
@@ -351,7 +345,6 @@ def _run_moe_compute_single_card_test(
         activation_type=activation_type,
         compute_only=True,
     )
-    ttnn.synchronize_device(mesh_device)
 
     # ===================================================================
     # TRIPWIRE: compute_only=True must return EXACTLY 5 tensors.

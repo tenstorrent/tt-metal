@@ -82,22 +82,32 @@ from typing import Sequence
 import ttnn
 
 
-def _get_bh_ring_size():
-    """BH ring size, configurable via env var TT_MOE_BH_N. Supported: {8, 12, 16}; default 12.
+def _resolve_bh_ring_size(explicit_value=None):
+    """BH ring size resolver. Supported: {8, 12, 16}; default 12.
+
+    Resolution order (mirrors C++ resolve_bh_ring_size in moe_compute_program_factory.cpp):
+      1. If `explicit_value` is provided, validate and return it.
+      2. Else if env var TT_MOE_BH_N is set, validate and return it.
+      3. Else return the default (12).
 
     Default rationale: N=12 = LCM(3, 4) over the canonical model set (PR #43932's
     MODELS_1x16/1x8 all have output_width_shard_dim ∈ {3, 4}). The op validates
     matmul_num_cores % output_width_shard_dim == 0, so N=12 is the smallest BH ring
-    size that satisfies every shipped model (DS-family at width_dim=4 and GPT-OSS at
-    width_dim=3). N=8 and N=16 reject shapes with width_dim=3. Matches WH's hardcoded
-    ring=12. MUST stay in sync with C++ resolve_bh_ring_size() default in
-    moe_compute_program_factory.cpp.
+    size that satisfies every shipped model. Matches WH's hardcoded ring=12.
 
     All BH N values use HEIGHT_SHARDED weights with leading dim = num_banks (=8); N=8 is 1:1
     with banks, N=12/16 cross banks via the bank-run loop in dm0.cpp.
 
-    Raises ValueError on an invalid env value; returns 12 only when the env var is unset.
+    Callers that pass an explicit `bh_ring_size` to ttnn.experimental.moe_compute MUST
+    also pass the same value here, otherwise the prepared weight tensor shape will not
+    match the op's expected layout.
+
+    Raises ValueError on an invalid explicit value or env value.
     """
+    if explicit_value is not None:
+        if explicit_value not in (8, 12, 16):
+            raise ValueError(f"bh_ring_size={explicit_value} is not supported (must be 8, 12, or 16)")
+        return explicit_value
     env = os.environ.get("TT_MOE_BH_N")
     if env is None:
         return 12
@@ -808,7 +818,7 @@ def prepare_w2_tensor_with_bias(
     return N_with_bias
 
 
-def get_weight_core_shard_maps(mesh_device, hidden_size: int, intermediate_size: int):
+def get_weight_core_shard_maps(mesh_device, hidden_size: int, intermediate_size: int, bh_ring_size: int = None):
     """Compute per-ring-position shard maps for W0/W1 and W2 weight tensors.
 
     Uses _shard_tiles() (Euclidean rhythm) for W0/W1 and _w2_shard_tiles()
@@ -817,7 +827,7 @@ def get_weight_core_shard_maps(mesh_device, hidden_size: int, intermediate_size:
 
     Ring length:
     - WH: target_ring_size = num_dram_banks = 12 (1:1 ring-to-bank).
-    - BH: target_ring_size = _get_bh_ring_size() (env var TT_MOE_BH_N, default 12).
+    - BH: target_ring_size = _resolve_bh_ring_size(bh_ring_size) — kwarg > env > default 12.
           When target_ring_size > num_dram_banks (=8), the shard_map has extra entries
           for the synthetic ring positions that the C++ program_factory appends via
           kBhMatmulExtras. The prepare functions emit a matching target_ring_size-slot
@@ -827,12 +837,16 @@ def get_weight_core_shard_maps(mesh_device, hidden_size: int, intermediate_size:
 
     dram_core_range_set always has exactly num_dram_banks entries (the placement target),
     regardless of target_ring_size.
+
+    `bh_ring_size`: if you pass this kwarg to ttnn.experimental.moe_compute, pass the same
+    value here. Leaving it None falls back to env TT_MOE_BH_N then the default — the same
+    behavior as the op's resolver, so a fully-default call site stays consistent.
     """
     in0_core_coords = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(mesh_device, 0)
     n_dram_banks = len(in0_core_coords)
 
-    is_blackhole = mesh_device is not None and mesh_device.arch() == ttnn.Arch.BLACKHOLE
-    target_ring_size = _get_bh_ring_size() if is_blackhole else n_dram_banks
+    is_blackhole = mesh_device.arch() == ttnn.Arch.BLACKHOLE
+    target_ring_size = _resolve_bh_ring_size(bh_ring_size) if is_blackhole else n_dram_banks
 
     core2dram = {cc: dram_bank_id for dram_bank_id, cc in enumerate(in0_core_coords)}
     in0_core_coords_sorted = sorted(in0_core_coords, key=lambda x: (x.y, x.x), reverse=True)
@@ -954,7 +968,7 @@ def get_weight_mem_configs(
             f"(num_cores={num_cores}, groups_per_core={w1_w0_groups_per_core}, K_for_shard={K_for_shard})"
         )
     w0_w1_shard_height = w0_w1_total_rows // num_banks
-    w0_w1_shard_width = 4 * ttnn.TILE_SIZE
+    w0_w1_shard_width = BLOCK_TILES_W * ttnn.TILE_SIZE
 
     w0_w1_shard_spec = ttnn.ShardSpec(
         dram_core_range_set, (w0_w1_shard_height, w0_w1_shard_width), ttnn.ShardOrientation.ROW_MAJOR
@@ -970,7 +984,7 @@ def get_weight_mem_configs(
             f"(num_cores={num_cores}, w2_groups_per_core={w2_groups_per_core}, w2_N_total={w2_N_total})"
         )
     w2_shard_height = w2_total_rows // num_banks
-    w2_shard_width = 4 * ttnn.TILE_SIZE
+    w2_shard_width = BLOCK_TILES_W * ttnn.TILE_SIZE
 
     w2_shard_spec = ttnn.ShardSpec(
         dram_core_range_set, (w2_shard_height, w2_shard_width), ttnn.ShardOrientation.ROW_MAJOR
