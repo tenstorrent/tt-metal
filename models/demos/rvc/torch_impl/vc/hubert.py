@@ -136,7 +136,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
     ):
         """
         LayerNorm is applied either before or after the self-attention/ffn
-        modules similar to the original Transformer imlementation.
+        modules similar to the original Transformer implementation.
         """
         residual = x
 
@@ -422,7 +422,7 @@ class TransformerEncoder(nn.Module):
         # T x B x C -> B x T x C
         x = x.transpose(0, 1)
 
-        # undo paddding
+        # undo padding
         if pad_length > 0:
             x = x[:, :-pad_length]
         return x

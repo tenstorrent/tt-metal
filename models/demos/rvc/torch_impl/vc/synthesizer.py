@@ -585,7 +585,10 @@ class SineGen(nn.Module):
             # Mix with noise based on voiced/unvoiced
             noise_amp = uv * self.noise_std + (1 - uv) * self.sine_amp / 3
             if not self.validation:
-                sine_waves = sine_waves * uv + noise_amp * torch.randn_like(sine_waves)  # no noise, only sine waves
+                # non-validation: mix voiced sine with additive Gaussian noise
+                # (validation mode skips this, giving deterministic sine-only
+                # output for TTNN-vs-torch parity checks)
+                sine_waves = sine_waves * uv + noise_amp * torch.randn_like(sine_waves)
 
         return sine_waves
 

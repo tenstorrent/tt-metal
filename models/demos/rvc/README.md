@@ -127,6 +127,9 @@ reproduce in real demo runs, where the device is opened once per process):
 pytest models/demos/rvc/tests/test_runtime.py -v
 pytest models/demos/rvc/tests/test_production_shapes.py -v
 pytest models/demos/rvc/tests/test_ttnn_ops.py -v
+
+# pure-CPU unit tests (no device needed)
+pytest models/demos/rvc/tests/test_pipeline_rms.py -v
 ```
 
 ### End-to-end benchmark
@@ -150,7 +153,7 @@ microbenchmarks are not used for headline numbers.
 | Speaker similarity¹ | 0.999 | > 0.75 | ✅ |
 | WER | 0.000 | < 2.5 | ✅ |
 | Flow throughput | ~1973 frames/s | 30 tokens/s | ✅ |
-| Tests | 53/53 | — | ✅ |
+| Tests | 58/58 | — | ✅ |
 
 ¹ Speaker similarity measured between TTNN and Torch outputs (cosine similarity
 of speaker embeddings). This validates that TTNN faithfully reproduces the
@@ -228,6 +231,8 @@ conv1d that follows it. See `_resblock1_device` in `ttnn/runtime.py`.
   14400, 28800; gen at demo chunk sizes 53, 55, 60; determinism;
   PCC vs torch reference)
 - `tests/test_ttnn_ops.py` — 39/39 (per-op PCC coverage)
+- `tests/test_pipeline_rms.py` — 5/5 (pure-CPU: `_rms_numpy` vs librosa,
+  `change_rms` shape; no device needed)
 - `benchmark.py` — strict no-fallback at both 3s and 10s, all chunks
   active on TTNN, audio PCC ≥ 0.997 across all runs
 
@@ -270,7 +275,8 @@ models/demos/rvc/
 │   ├── pcc_utils.py         # PCC assertion utilities
 │   ├── test_runtime.py              # Runtime lifecycle + correctness (5 tests)
 │   ├── test_production_shapes.py    # k=11 + demo chunk regression (9 tests)
-│   └── test_ttnn_ops.py             # Per-operator PCC validation (39 tests)
+│   ├── test_ttnn_ops.py             # Per-operator PCC validation (39 tests)
+│   └── test_pipeline_rms.py         # _rms_numpy/change_rms unit tests (5 tests, CPU)
 │
 └── utils/
     ├── audio.py             # Audio loading/resampling

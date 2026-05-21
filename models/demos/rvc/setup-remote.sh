@@ -23,8 +23,14 @@ REMOTE="${REMOTE:-root@01.proxy.koyeb.app}"
 KEY_OPT=""
 if [ -n "${SSH_KEY:-}" ]; then KEY_OPT="-i $SSH_KEY"; fi
 
-SSH="ssh -o StrictHostKeyChecking=no $KEY_OPT -p $PORT $REMOTE"
-SCP="scp -q -o StrictHostKeyChecking=no $KEY_OPT -P $PORT"
+# Koyeb's TCP proxy presents a fresh host key on every redeploy, so strict
+# host-key checking is off by default (otherwise each rebuild would fail with
+# a "host key changed" error). In a trusted, stable environment, set
+# SSH_STRICT=accept-new (or yes) to opt back into verification.
+: "${SSH_STRICT:=no}"
+
+SSH="ssh -o StrictHostKeyChecking=$SSH_STRICT $KEY_OPT -p $PORT $REMOTE"
+SCP="scp -q -o StrictHostKeyChecking=$SSH_STRICT $KEY_OPT -P $PORT"
 REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 RVC="$REPO_ROOT/models/demos/rvc"
 REMOTE_ROOT="/root/rvc_bringup"

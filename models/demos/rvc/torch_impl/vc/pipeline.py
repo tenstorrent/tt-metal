@@ -86,7 +86,9 @@ def _rms_numpy(
         frames_list.append(frames)
     frames = np.stack(frames_list, axis=0)
 
-    power = np.mean(np.square(frames), axis=1, dtype=np.float64)
+    # frames is (batch, n_frames, frame_length); average power over the
+    # frame_length axis to get (batch, n_frames), matching librosa.
+    power = np.mean(np.square(frames), axis=-1, dtype=np.float64)
     rms = np.sqrt(power, dtype=np.float64).astype(dtype, copy=False)
     return rms
 
@@ -342,7 +344,7 @@ class Pipeline:
     ):
         assert audio.dim() == 2, audio.dim()
         speaker_id = torch.tensor(self.speaker_id, device=self.device).unsqueeze(0).long()
-        audio = audio.to(torch.float16).to(torch.float32)
+        audio = audio.to(torch.float16).to(torch.float32).to(self.device)
         with torch.no_grad():
             logits = self.hubert_model(
                 source=audio,
@@ -369,8 +371,8 @@ class Pipeline:
         num_frames = feats.shape[1]
 
         if pitch is not None and pitchf is not None:
-            pitch = pitch[:, :num_frames]
-            pitchf = pitchf[:, :num_frames]
+            pitch = pitch[:, :num_frames].to(feats.device)
+            pitchf = pitchf[:, :num_frames].to(feats.device)
         if self.protect < 0.5 and pitch is not None and pitchf is not None:
             pitchff = pitchf.clone()
             pitchff[pitchf > 0] = 1

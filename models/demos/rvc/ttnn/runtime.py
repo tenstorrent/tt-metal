@@ -181,7 +181,7 @@ class TTNNFlowDecoder:
             # Gating on device
             tanh_tt = to_device(conv_torch[:, :, :HIDDEN_CH], self._device)
             sig_tt = to_device(conv_torch[:, :, HIDDEN_CH:], self._device)
-            gated = ttnn.mul(ttnn.tanh(tanh_tt), ttnn.sigmoid(sig_tt))
+            gated = ttnn.multiply(ttnn.tanh(tanh_tt), ttnn.sigmoid(sig_tt))
 
             # res_skip linear (persistent weights)
             rs_out = ttnn.linear(gated, fw["rsl_ws"][i], bias=fw["rsl_bs"][i],
