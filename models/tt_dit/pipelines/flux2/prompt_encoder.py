@@ -87,7 +87,12 @@ class PromptEncoder:
         )
 
     def encode(
-        self, prompts: Sequence[str], *, num_images_per_prompt: int, sequence_length: int
+        self,
+        prompts: Sequence[str],
+        *,
+        num_images_per_prompt: int,
+        sequence_length: int,
+        traced: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         return _get_prompt_embeds(
             prompts,
@@ -97,9 +102,12 @@ class PromptEncoder:
             tokenizer=self._tokenizer,
             encoder=self._encoder,
             device=self._device,
+            traced=traced,
         )
 
-    def upsample(self, prompts: Sequence[str], *, max_length: int, temperature: float) -> list[str]:
+    def upsample(
+        self, prompts: Sequence[str], *, max_length: int, temperature: float, traced: bool = False
+    ) -> list[str]:
         return _upsample_prompts(
             prompts,
             max_length=max_length,
@@ -107,6 +115,7 @@ class PromptEncoder:
             tokenizer=self._tokenizer,
             encoder=self._encoder,
             device=self._device,
+            traced=traced,
         )
 
 
@@ -125,6 +134,7 @@ def _get_prompt_embeds(
     num_images_per_prompt: int,
     output_from_layers: Sequence[int],
     device: ttnn.MeshDevice | None,
+    traced: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     conversation = _format_input(prompts, system_message=SYSTEM_MESSAGE)
 
@@ -161,6 +171,7 @@ def _get_prompt_embeds(
             mask=tt_mask,
             skip_final_linear=True,
             output_hidden_states=True,
+            traced=traced,
         )
         tt_prompt_embeds = ttnn.concat([tt_hidden_states[k] for k in output_from_layers], dim=-1)
 
@@ -191,6 +202,7 @@ def _upsample_prompts(
     max_length: int,
     temperature: float,
     device: ttnn.MeshDevice | None,
+    traced: bool = False,
 ) -> list[str]:
     conversation = _format_input(prompts, system_message=SYSTEM_MESSAGE_UPSAMPLING_T2I)
 
@@ -218,6 +230,7 @@ def _upsample_prompts(
             eos_tokens=tokenizer.eos_token_id,
             max_length=max_length,
             temperature=temperature,
+            traced=traced,
         )
 
         output_tokens = ttnn.to_torch(ttnn.get_device_tensors(tt_output.tokens)[0])
