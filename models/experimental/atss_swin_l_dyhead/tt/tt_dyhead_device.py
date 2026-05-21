@@ -158,11 +158,20 @@ class TtDyReLUNHWC:
         a2 = ttnn.multiply(a2, 2.0, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Fused branch_k = b_k + feat * a_k. Broadcast shape (B, 1, 1, C) over (B, H, W, C)
-        # is supported by addcmul (unlike the (B,1,1,1) scalar-broadcast case).
+        # is supported by addcmul (unlike the (B,1,1,1) scalar-broadcast case). Deallocate
+        # small (a, b) coefficients immediately so L1 has room for the next branch.
+        # Inspired by the 1280-branch's commit ba954b9c7d2 ("Improve memory lifecycle").
         branch1 = ttnn.addcmul(b1, feat_nhwc, a1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(a1)
+        ttnn.deallocate(b1)
         branch2 = ttnn.addcmul(b2, feat_nhwc, a2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(a2)
+        ttnn.deallocate(b2)
 
-        return ttnn.maximum(branch1, branch2)
+        out = ttnn.maximum(branch1, branch2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(branch1)
+        ttnn.deallocate(branch2)
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -725,6 +734,9 @@ class TtDyHeadBlockDevice:
             scale_w_mid = self.scale_attn(mid)
             sum_feat = ttnn.multiply(mid, scale_w_mid, memory_config=ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(scale_w_mid)
+            # mid is no longer needed after sum_feat is computed — free its L1/DRAM up-front
+            # so the low/high branch tensors have room. (Was being held until end of level.)
+            ttnn.deallocate(mid)
             summed_levels = 1
 
             # low branch (from previous level)
@@ -771,7 +783,6 @@ class TtDyHeadBlockDevice:
             out = self.task_attn(sum_feat)
             outs.append(out)
             ttnn.deallocate(sum_feat)
-            ttnn.deallocate(mid)
 
         # Cleanup
         for o in offset_per_level + mask_per_level:

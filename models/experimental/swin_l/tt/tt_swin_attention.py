@@ -134,6 +134,12 @@ class TtSwinAttention:
         ttnn.deallocate(qkv)
 
         # Q rows of qkv weight are already pre-scaled in __init__, so no runtime scale here.
+        # NOTE: tried ttnn.transformer.scaled_dot_product_attention with the 1280-branch's
+        # SDPAProgramConfig(q_chunk_size=32, k_chunk_size=32) at 640x640 — PCC dropped to 0.85.
+        # Likely cause: at 640 nW=196 (14x14), the SDPA flash chunking precision compounds
+        # too much across 24 stacked blocks. The 1280 branch (nW=8100, 90x90) doesn't see
+        # this because the aggregated batch dim averages out the per-chunk rounding.
+        # Stayed on the manual matmul+softmax path at 640.
         attn = ttnn.matmul(
             q,
             k_t,
@@ -146,9 +152,6 @@ class TtSwinAttention:
         ttnn.deallocate(q)
         ttnn.deallocate(k_t)
 
-        # Single add for the combined bias (rel_pos_bias for shift==0, or rel_pos_bias +
-        # window_mask pre-combined in __init__ for shift!=0). Replaces the previous
-        # two-step add chain.
         attn = ttnn.add(attn, self.combined_attn_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn = ttnn.softmax(attn, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
