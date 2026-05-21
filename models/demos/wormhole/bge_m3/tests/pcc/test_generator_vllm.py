@@ -96,7 +96,10 @@ def _run_generator_embeddings(
     model_args,
     sentences: list[str],
 ) -> dict[str, torch.Tensor]:
-    encoded_input = model_args.encode_prompts(sentences)
+    # `BgeM3ForEmbedding._pad_inputs` and the dense / ColBERT scoring
+    # helpers expect the raw 2D boolean keep-mask `[B, S]`, so request the
+    # 2D form from `encode_prompts` instead of its default 4D additive.
+    encoded_input = model_args.encode_prompts(sentences, attention_mask_4d=False)
     input_ids = encoded_input["input_ids"]
     attention_mask = encoded_input["attention_mask"]
     token_type_ids = encoded_input.get("token_type_ids", torch.zeros_like(input_ids))
