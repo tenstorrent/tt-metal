@@ -24,7 +24,7 @@ void kernel_main() {
         return;  // No padding needed, exit early
     }
 #ifdef DEBUG
-    DEVICE_PRINT(
+    DPRINT(
         "num_units: {}, num_elements_per_row: {}, unpadded_row_size_bytes: {}, padded_row_size_bytes: {}, "
         "pad_size_bytes: {}\n",
         num_units,
@@ -32,8 +32,8 @@ void kernel_main() {
         unpadded_row_size_bytes,
         padded_row_size_bytes,
         pad_size_bytes);
-    DEVICE_PRINT("CB Temp Pad {}, pad_addr: {}, out_addr: {}\n", cb_temp_pad, pad_addr, out_addr);
-    DEVICE_PRINT("Output Elem Size {}\n", output_elem_size);
+    DPRINT("CB Temp Pad {}, pad_addr: {}, out_addr: {}\n", cb_temp_pad, pad_addr, out_addr);
+    DPRINT("Output Elem Size {}\n", output_elem_size);
 #endif
 
     if constexpr (output_elem_size == 2) {

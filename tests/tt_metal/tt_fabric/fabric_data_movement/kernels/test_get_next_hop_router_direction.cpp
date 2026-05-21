@@ -22,7 +22,7 @@ void kernel_main() {
         eth_chan_directions direction = get_next_hop_router_direction(dst_mesh_id, dst_fabric_dev_id);
         result_ptr[dst_idx] = static_cast<uint32_t>(direction);
 
-        DEVICE_PRINT(
+        DPRINT(
             "Routing: [{}/{}] -> [{}/{}] direction:{}\n",
             src_mesh_id,
             src_fabric_dev_id,

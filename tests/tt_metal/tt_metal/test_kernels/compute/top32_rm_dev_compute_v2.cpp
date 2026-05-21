@@ -148,18 +148,18 @@ void kernel_main() {
 
     // #if defined(TRISC_MATH)
     // volatile uint32_t* dst32 = reinterpret_cast<volatile uint32_t*>(0xFFBD8000U);
-    // DEVICE_PRINT("DEST[row][col] raw INT32 (hex):\n");
+    // DPRINT("DEST[row][col] raw INT32 (hex):\n");
     // for (int row = 0; row < 2*64; row++) {
     //     for (int col = 0; col < 16; col++) {
     //         uint32_t val = dst32[row * 16 + col];
     //         float f;
     //         std::memcpy(&f, &val, sizeof(f));
-    //         DEVICE_PRINT("{} ", f);
-    //         // DEVICE_PRINT("{:#X} ", val);
+    //         DPRINT("{} ", f);
+    //         // DPRINT("{:#X} ", val);
     //     }
-    //     DEVICE_PRINT("\n");
+    //     DPRINT("\n");
     //     if ((row+1) % 32 == 0) {
-    //         DEVICE_PRINT("\n");
+    //         DPRINT("\n");
     //         // row += 32;
     //     }
     // }

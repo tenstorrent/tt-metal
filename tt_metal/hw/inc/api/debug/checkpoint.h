@@ -24,14 +24,13 @@
 #include "internal/hw_thread.h"
 #include "api/debug/waypoint.h"
 
-// Checkpoints work independently of DPRINT/DEVICE_PRINT. When a print backend
-// is available, the dump phase prints CB metadata and optionally L1 data / dest
-// registers. When no print backend is enabled, the checkpoint still acts as a
-// barrier (all RISCs synchronize) but skips the dump.
+// Checkpoints work independently of DPRINT. When a print backend is available,
+// the dump phase prints CB metadata and optionally L1 data / dest registers.
+// When no print backend is enabled, the checkpoint still acts as a barrier
+// (all RISCs synchronize) but skips the dump.
 #if defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF)
 #define CHECKPOINT_PRINT_ENABLED 1
 #include "api/debug/dprint.h"
-#include "api/debug/device_print.h"
 #include "internal/circular_buffer_interface.h"
 #if defined(COMPILE_FOR_TRISC) && (COMPILE_FOR_TRISC == 1)
 #include "api/debug/dprint_tensix.h"
@@ -128,9 +127,8 @@ inline void debug_checkpoint_barrier() {
 
 // ---------------------------------------------------------------------------
 // CB dump implementation: prints CB state and optionally dest registers.
-// DPRINT headers use const char* name (runtime). DEVICE_PRINT headers are
-// printed by the calling macro via C string literal concatenation (since
-// DEVICE_PRINT format strings must be compile-time literals).
+// DPRINT headers are printed by the calling macro via C string literal
+// concatenation (since DPRINT format strings must be compile-time literals).
 // ---------------------------------------------------------------------------
 template <uint8_t num_cbs = 0, uint16_t words_per_cb = 0, bool dump_dest = false>
 inline void debug_checkpoint_dump_cbs_impl([[maybe_unused]] const char* name) {
@@ -157,9 +155,7 @@ inline void debug_checkpoint_dump_cbs_impl([[maybe_unused]] const char* name) {
                     case (uint32_t)DataFormat::Float16_b:
                         dprint_tensix_dest_reg_row_float16(data_format_reg_field_value, row);
                         break;
-                    default:
-                        DEVICE_PRINT("Unsupported data format: {}\n", (DataFormat)data_format_reg_field_value);
-                        break;
+                    default: DPRINT("Unsupported data format: {}\n", (DataFormat)data_format_reg_field_value); break;
                 }
                 row++;
             }
@@ -177,7 +173,7 @@ inline void debug_checkpoint_dump_cbs_impl([[maybe_unused]] const char* name) {
             continue;
         }
 
-        DEVICE_PRINT(
+        DPRINT(
             "CB{} sz={} rd={} wr={} ack={} rcv={}\n",
             cb,
             iface.fifo_size,
@@ -192,7 +188,7 @@ inline void debug_checkpoint_dump_cbs_impl([[maybe_unused]] const char* name) {
             for (uint16_t w = 0; w < words_per_cb; w += 4) {
                 uint16_t chunk = (words_per_cb - w > 4) ? 4 : (words_per_cb - w);
                 for (uint16_t j = 0; j < chunk; j++) {
-                    DEVICE_PRINT("  [{}] {:#010x}\n", (uint32_t)(w + j), data_ptr[w + j]);
+                    DPRINT("  [{}] {:#010x}\n", (uint32_t)(w + j), data_ptr[w + j]);
                 }
             }
         }
@@ -203,25 +199,25 @@ inline void debug_checkpoint_dump_cbs_impl([[maybe_unused]] const char* name) {
 }
 
 // ---------------------------------------------------------------------------
-// DEVICE_PRINT header macros — use C string literal concatenation so the
+// DPRINT header macros — use C string literal concatenation so the
 // checkpoint name is embedded into the format string at compile time.
-// (DEVICE_PRINT format strings must be compile-time literals.)
+// (DPRINT format strings must be compile-time literals.)
 // ---------------------------------------------------------------------------
 #if defined(CHECKPOINT_PRINT_ENABLED)
 #if defined(COMPILE_FOR_TRISC) && (COMPILE_FOR_TRISC == 1)
-#define _DEBUG_CKPT_DEVICE_PRINT_HEADER(name, dump_dest)       \
-    do {                                                       \
-        if (dump_dest) {                                       \
-            DEVICE_PRINT("=== CKPT " name " dest regs ===\n"); \
-        }                                                      \
+#define _DEBUG_CKPT_DPRINT_HEADER(name, dump_dest)       \
+    do {                                                 \
+        if (dump_dest) {                                 \
+            DPRINT("=== CKPT " name " dest regs ===\n"); \
+        }                                                \
     } while (0)
 #else
-#define _DEBUG_CKPT_DEVICE_PRINT_HEADER(name, dump_dest) \
-    DEVICE_PRINT("=== CKPT " name " RISC{} CBs ===\n", internal_::get_hw_thread_idx())
+#define _DEBUG_CKPT_DPRINT_HEADER(name, dump_dest) \
+    DPRINT("=== CKPT " name " RISC{} CBs ===\n", internal_::get_hw_thread_idx())
 #endif
 #else
-#define _DEBUG_CKPT_DEVICE_PRINT_HEADER(name, dump_dest) \
-    do {                                                 \
+#define _DEBUG_CKPT_DPRINT_HEADER(name, dump_dest) \
+    do {                                           \
     } while (0)
 #endif
 
@@ -318,24 +314,24 @@ inline void debug_checkpoint_global_post_dump(
 
 // ---------------------------------------------------------------------------
 // User-facing macros.
-// These expand the DEVICE_PRINT header inline (for literal concatenation)
-// then call the impl function for DPRINT header + body data.
+// These expand the DPRINT header inline (for literal concatenation)
+// then call the impl function for the body data.
 // ---------------------------------------------------------------------------
-#define DEBUG_CHECKPOINT(name)                        \
-    do {                                              \
-        WAYPOINT("CKW");                              \
-        debug_checkpoint_barrier();                   \
-        _DEBUG_CKPT_DEVICE_PRINT_HEADER(name, false); \
-        debug_checkpoint_dump_cbs_impl<>(name);       \
-        debug_checkpoint_barrier();                   \
-        WAYPOINT("CKD");                              \
+#define DEBUG_CHECKPOINT(name)                  \
+    do {                                        \
+        WAYPOINT("CKW");                        \
+        debug_checkpoint_barrier();             \
+        _DEBUG_CKPT_DPRINT_HEADER(name, false); \
+        debug_checkpoint_dump_cbs_impl<>(name); \
+        debug_checkpoint_barrier();             \
+        WAYPOINT("CKD");                        \
     } while (0)
 
 #define DEBUG_CHECKPOINT_EX(name, num_cbs, words_per_cb, dump_dest)             \
     do {                                                                        \
         WAYPOINT("CKW");                                                        \
         debug_checkpoint_barrier();                                             \
-        _DEBUG_CKPT_DEVICE_PRINT_HEADER(name, dump_dest);                       \
+        _DEBUG_CKPT_DPRINT_HEADER(name, dump_dest);                             \
         debug_checkpoint_dump_cbs_impl<num_cbs, words_per_cb, dump_dest>(name); \
         debug_checkpoint_barrier();                                             \
         WAYPOINT("CKD");                                                        \
@@ -344,7 +340,7 @@ inline void debug_checkpoint_global_post_dump(
 #define DEBUG_CHECKPOINT_GLOBAL(name, sem_id, barrier_coord_x, barrier_coord_y, num_cores)      \
     do {                                                                                        \
         debug_checkpoint_global_pre_dump(sem_id, barrier_coord_x, barrier_coord_y, num_cores);  \
-        _DEBUG_CKPT_DEVICE_PRINT_HEADER(name, false);                                           \
+        _DEBUG_CKPT_DPRINT_HEADER(name, false);                                                 \
         debug_checkpoint_dump_cbs_impl<>(name);                                                 \
         debug_checkpoint_global_post_dump(sem_id, barrier_coord_x, barrier_coord_y, num_cores); \
     } while (0)

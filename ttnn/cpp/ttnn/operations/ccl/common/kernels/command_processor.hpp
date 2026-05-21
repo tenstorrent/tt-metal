@@ -23,7 +23,7 @@ using address_t = uint32_t;
 #include "api/debug/dprint.h"
 
 void dprint(ttnn::ccl::cmd::CclCommandTensor const& command_tensor) {
-    DEVICE_PRINT(
+    DPRINT(
         "\ttensor_shape: ({}, {}, {}, {})\n"
         "\ttensor_slice_shape: ({}, {}, {}, {})\n"
         "\ttensor_slice_offset: ({}, {}, {}, {})\n"
@@ -51,7 +51,7 @@ void dprint(ttnn::ccl::cmd::CclCommandTensor const& command_tensor) {
 
 void print_tensor_command(uint32_t command_index, ttnn::ccl::cmd::CclCommandTensor const& command_tensor) {
 #ifdef DEBUG_PRINT_ENABLED
-    DEVICE_PRINT("cmd[{}]:\n", command_index);
+    DPRINT("cmd[{}]:\n", command_index);
     dprint(command_tensor);
 #endif
 }

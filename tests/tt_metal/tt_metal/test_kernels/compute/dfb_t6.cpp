@@ -19,7 +19,7 @@ void kernel_main() {
     DataflowBuffer dfb_out(dfb::out);
 
     for (uint32_t tile_id = 0; tile_id < num_entries; tile_id++) {
-        // DEVICE_PRINT("rbw\n");
+        // DPRINT("rbw\n");
         dfb_in.wait_front(1);
         // do some processing on unpacker
         dfb_in.pop_front(1);
@@ -30,9 +30,9 @@ void kernel_main() {
         dfb_out.reserve_back(1);
         // do some processing on packer
         dfb_out.push_back(1);
-        // DEVICE_PRINT("pbd\n");
+        // DPRINT("pbd\n");
     }
-    DEVICE_PRINT("PFW\n");
+    DPRINT("PFW\n");
     dfb_out.finish();
-    DEVICE_PRINT("PFD\n");
+    DPRINT("PFD\n");
 }

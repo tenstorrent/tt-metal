@@ -37,7 +37,7 @@ void kernel_main() {
     experimental::CB cb_in0(cb_id_in0);
 
 #ifdef DEBUG
-    DEVICE_PRINT(
+    DPRINT(
         "src_addr: {}, num_dims: {}, start_id: {}, num_tiles_per_core: {}, num_tiles_per_barrier: {}\n",
         src_addr,
         num_dims,
@@ -45,21 +45,21 @@ void kernel_main() {
         num_tiles_per_core,
         num_tiles_per_barrier);
 
-    DEVICE_PRINT("tile_size: {}, src_stick_id: {}, tiles_read: {}\n", tile_size, src_stick_id, tiles_read);
+    DPRINT("tile_size: {}, src_stick_id: {}, tiles_read: {}\n", tile_size, src_stick_id, tiles_read);
 
-    DEVICE_PRINT(
+    DPRINT(
         "num_unpadded_sticks: {} {} {} {}\n",
         num_unpadded_sticks[0],
         num_unpadded_sticks[1],
         num_unpadded_sticks[2],
         num_unpadded_sticks[3]);
-    DEVICE_PRINT(
+    DPRINT(
         "num_padded_sticks: {} {} {} {}\n",
         num_padded_sticks[0],
         num_padded_sticks[1],
         num_padded_sticks[2],
         num_padded_sticks[3]);
-    DEVICE_PRINT(
+    DPRINT(
         "num_tiles_per_row_this_core: {} extra_tiles_per_row: {}\n", num_tiles_per_row_this_core, extra_tiles_per_row);
 #endif
     uint32_t num_tiles_pushed = 0;
@@ -67,14 +67,14 @@ void kernel_main() {
         cb_in0.reserve_back(num_tiles_per_barrier);
         uint32_t l1_offset = 0;
 #ifdef DEBUG
-        DEVICE_PRINT("Src Buffer L1 Addr: {}\n", cb_in0.get_write_ptr());
-        DEVICE_PRINT("Tiles read {} Num tiles pushed: {}\n", tiles_read, num_tiles_pushed);
+        DPRINT("Src Buffer L1 Addr: {}\n", cb_in0.get_write_ptr());
+        DPRINT("Tiles read {} Num tiles pushed: {}\n", tiles_read, num_tiles_pushed);
 #endif
         for (uint32_t i = 0; i < num_tiles_per_barrier and tiles_read < num_tiles_per_core; ++i) {
             tiles_read++;
             if (id_per_dim[0] >= (num_unpadded_sticks[0] - extra_tiles_per_row)) {
 #ifdef DEBUG
-                DEVICE_PRINT(
+                DPRINT(
                     "Skipping read for src_stick_id: {}, id_per_dim: {} {} {} {}, tiles_read: {}\n",
                     src_stick_id,
                     id_per_dim[0],
@@ -89,7 +89,7 @@ void kernel_main() {
             } else {
                 noc.async_read(s0, cb_in0, tile_size, {.page_id = src_stick_id}, {.offset_bytes = l1_offset});
 #ifdef DEBUG
-                DEVICE_PRINT(
+                DPRINT(
                     "src_stick_id: {}, src_buffer_l1_addr: {}, tiles_read: {}, id {} {} {} {}\n",
                     src_stick_id,
                     cb_in0.get_write_ptr() + l1_offset,

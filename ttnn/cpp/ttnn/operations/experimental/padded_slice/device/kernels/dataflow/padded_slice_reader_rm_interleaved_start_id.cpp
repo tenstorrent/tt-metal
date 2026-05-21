@@ -49,7 +49,7 @@ void kernel_main() {
     experimental::CB cb_non_aligned(cb_id_non_aligned);
 
 #ifdef DEBUG
-    DEVICE_PRINT(
+    DPRINT(
         "src_addr: {}, padded_stick_size: {}, unpadded_stick_size: {}, stick_size_offset: {}, num_dims: {}, start_id: "
         "{}, num_sticks_per_core: {}, num_sticks_per_core_read: {}, num_read_per_barrier: {}\n",
         src_addr,
@@ -62,7 +62,7 @@ void kernel_main() {
         num_sticks_per_core_read,
         num_read_per_barrier);
 
-    DEVICE_PRINT(
+    DPRINT(
         "non_aligned: {}, cb = {}, read_size: {}, src_stick_id: {}, sticks_read: {}\n",
         is_non_aligned,
         cb_id_non_aligned,
@@ -70,19 +70,19 @@ void kernel_main() {
         src_stick_id,
         sticks_read);
 
-    DEVICE_PRINT(
+    DPRINT(
         "num_unpadded_sticks: {} {} {} {}\n",
         num_unpadded_sticks[0],
         num_unpadded_sticks[1],
         num_unpadded_sticks[2],
         num_unpadded_sticks[3]);
-    DEVICE_PRINT(
+    DPRINT(
         "num_padded_sticks: {} {} {} {}\n",
         num_padded_sticks[0],
         num_padded_sticks[1],
         num_padded_sticks[2],
         num_padded_sticks[3]);
-    DEVICE_PRINT("Out CB Page size: {}\n", get_local_cb_interface(cb_id_in0).fifo_page_size);
+    DPRINT("Out CB Page size: {}\n", get_local_cb_interface(cb_id_in0).fifo_page_size);
 #endif
     if constexpr (is_non_aligned) {
         // TRID-based pipelined async-read from src->scratch->dst.

@@ -46,7 +46,7 @@ public:
     FORCE_INLINE static volatile tt_l1_ptr PACKET_HEADER_TYPE* allocate_header(uint8_t num_headers = 1) {
         ASSERT(current_offset_ + HEADER_SIZE * num_headers <= risc_pool_end);
         if (current_offset_ + HEADER_SIZE * num_headers > risc_pool_end) {
-            DEVICE_PRINT(
+            DPRINT(
                 "=== PACKET HEADER POOL EXHAUSTION ERROR ===\n"
                 "CRITICAL: Insufficient space in packet header pool for RISC {}\n"
                 "  - Headers Allocated: {}\n"
@@ -71,7 +71,7 @@ public:
     FORCE_INLINE static uint8_t allocate_header_n(uint8_t num_headers) {
         ASSERT(route_id_ < HEADER_GROUP_SIZE_PER_RISC);
         if (route_id_ >= HEADER_GROUP_SIZE_PER_RISC) {
-            DEVICE_PRINT(
+            DPRINT(
                 "=== ROUTE ID EXHAUSTION ERROR ===\n"
                 "CRITICAL: Insufficient route IDs for RISC {}\n"
                 "  - Route IDs Allocated: {}\n"
@@ -93,7 +93,7 @@ public:
     FORCE_INLINE static void for_each_header(uint8_t route_id, Func&& func) {
         ASSERT(route_id < route_id_);
         if (route_id >= route_id_) {
-            DEVICE_PRINT(
+            DPRINT(
                 "=== ROUTE ID NOT FOUND ERROR ===\n"
                 "CRITICAL: Route ID {} not found in header table for RISC {}\n"
                 "  - Route IDs Allocated: {}\n"

@@ -68,7 +68,7 @@ void kernel_main() {
     auto* pkt_hdr_fwd = PacketHeaderPool::allocate_header();
 
     if (is_starting_worker) {
-        DEVICE_PRINT("Is starting worker\n");
+        DPRINT("Is starting worker\n");
         *connection_token_ptr += 1;
     }
 

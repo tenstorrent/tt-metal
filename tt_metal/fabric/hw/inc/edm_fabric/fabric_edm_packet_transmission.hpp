@@ -22,13 +22,13 @@ FORCE_INLINE void print_pkt_hdr_routing_fields(volatile tt::tt_fabric::PacketHea
 #ifdef DEBUG_PRINT_ENABLED
     switch (packet_start->chip_send_type) {
         case tt::tt_fabric::CHIP_UNICAST: {
-            DEVICE_PRINT(
+            DPRINT(
                 "C_UNI: dist:{}\n",
                 (uint32_t)(packet_start->routing_fields.value & tt::tt_fabric::RoutingFields::HOP_DISTANCE_MASK));
             break;
         }
         case tt::tt_fabric::CHIP_MULTICAST: {
-            DEVICE_PRINT(
+            DPRINT(
                 "C_MCST: dist:{}, rng:{}\n",
                 (uint32_t)(packet_start->routing_fields.value & tt::tt_fabric::RoutingFields::HOP_DISTANCE_MASK),
                 (uint32_t)((packet_start->routing_fields.value & tt::tt_fabric::RoutingFields::RANGE_MASK) >>
@@ -41,7 +41,7 @@ FORCE_INLINE void print_pkt_hdr_routing_fields(volatile tt::tt_fabric::PacketHea
 
 FORCE_INLINE void print_pkt_hdr_routing_fields(volatile tt::tt_fabric::LowLatencyPacketHeader* const packet_start) {
 #ifdef DEBUG_PRINT_ENABLED
-    DEVICE_PRINT("ROUTE:{}\n", packet_start->routing_fields.value);
+    DPRINT("ROUTE:{}\n", packet_start->routing_fields.value);
 #endif
 }
 
@@ -50,10 +50,10 @@ FORCE_INLINE void print_pkt_header_noc_fields(volatile T* const packet_start) {
 #ifdef DEBUG_PRINT_ENABLED
     switch (packet_start->noc_send_type) {
         case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
-            DEVICE_PRINT("N_WR addr:{}\n", (uint64_t)packet_start->command_fields.unicast_write.noc_address);
+            DPRINT("N_WR addr:{}\n", (uint64_t)packet_start->command_fields.unicast_write.noc_address);
         } break;
         case tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC: {
-            DEVICE_PRINT(
+            DPRINT(
                 "N_WR addr:{}, val:{}\n",
                 (uint64_t)packet_start->command_fields.unicast_seminc.noc_address,
                 (uint32_t)packet_start->command_fields.unicast_seminc.val);
@@ -69,7 +69,7 @@ FORCE_INLINE void print_pkt_header_noc_fields(volatile T* const packet_start) {
 FORCE_INLINE void print_pkt_header(volatile tt::tt_fabric::PacketHeader* const packet_start) {
 #ifdef DEBUG_PRINT_ENABLED
     auto const& header = *packet_start;
-    DEVICE_PRINT(
+    DPRINT(
         "PKT: nsnd_t:{} csnd_t:{} src_chip:{} payload_size_bytes:{}\n",
         (uint32_t)packet_start->noc_send_type,
         (uint32_t)packet_start->chip_send_type,
@@ -83,7 +83,7 @@ FORCE_INLINE void print_pkt_header(volatile tt::tt_fabric::PacketHeader* const p
 FORCE_INLINE void print_pkt_header(volatile tt::tt_fabric::LowLatencyPacketHeader* const packet_start) {
 #ifdef DEBUG_PRINT_ENABLED
     auto const& header = *packet_start;
-    DEVICE_PRINT(
+    DPRINT(
         "PKT: nsnd_t:{} src_chip:{} payload_size_bytes:{}\n",
         (uint32_t)packet_start->noc_send_type,
         (uint32_t)packet_start->src_ch_id,

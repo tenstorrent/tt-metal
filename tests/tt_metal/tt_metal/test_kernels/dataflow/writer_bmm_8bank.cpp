@@ -63,7 +63,7 @@ void kernel_main() {
                 noc.async_write_barrier();
                 cb.pop_front(onetile);
 #endif
-                // DEVICE_PRINT("WC{0} a{1}\n{0} {2}\n", itileC, dst_addr, uint32_t(dst_noc_addr));
+                // DPRINT("WC{0} a{1}\n{0} {2}\n", itileC, dst_addr, uint32_t(dst_noc_addr));
                 itileC++;
             }
         }

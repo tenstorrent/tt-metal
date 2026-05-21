@@ -68,7 +68,7 @@ FORCE_INLINE bool noc_read_data_sequence(
             issue_read_chunk();
 #else
 
-            // DEVICE_PRINT("tx: reading data into L1 buffer on channel {}\n", (uint32_t)noc_reader_buffer_wrptr);
+            // DPRINT("tx: reading data into L1 buffer on channel {}\n", (uint32_t)noc_reader_buffer_wrptr);
             read_chunk<AddrGen>(
                 transaction_channel_sender_buffer_addresses[noc_reader_buffer_wrptr
                                                                 .index()],  // eth_l1_buffer_address_base
@@ -191,35 +191,32 @@ void kernel_main() {
                 num_context_switches++;
                 if (num_context_switches > max_num_context_switches) {
                     if (!printed_hang) {
-                        DEVICE_PRINT("tx: HANG\n");
-                        DEVICE_PRINT("tx: HANG eth_sends_completed {}\n", eth_sends_completed);
-                        DEVICE_PRINT(
-                            "tx: HANG noc_reader_buffer_wrptr {}\n", (uint32_t)noc_reader_buffer_ackptr.index());
-                        DEVICE_PRINT(
+                        DPRINT("tx: HANG\n");
+                        DPRINT("tx: HANG eth_sends_completed {}\n", eth_sends_completed);
+                        DPRINT("tx: HANG noc_reader_buffer_wrptr {}\n", (uint32_t)noc_reader_buffer_ackptr.index());
+                        DPRINT(
                             "tx: HANG (raw) noc_reader_buffer_wrptr {}\n",
                             (uint32_t)noc_reader_buffer_ackptr.raw_index());
-                        DEVICE_PRINT(
-                            "tx: HANG noc_reader_buffer_ackptr {}\n", (uint32_t)noc_reader_buffer_wrptr.index());
-                        DEVICE_PRINT(
+                        DPRINT("tx: HANG noc_reader_buffer_ackptr {}\n", (uint32_t)noc_reader_buffer_wrptr.index());
+                        DPRINT(
                             "tx: HANG (raw) noc_reader_buffer_ackptr {}\n",
                             (uint32_t)noc_reader_buffer_wrptr.raw_index());
-                        DEVICE_PRINT("tx: HANG eth_sender_rdptr {}\n", (uint32_t)eth_sender_rdptr.index());
-                        DEVICE_PRINT("tx: HANG (raw) eth_sender_rdptr {}\n", (uint32_t)eth_sender_rdptr.raw_index());
-                        DEVICE_PRINT("tx: HANG eth_sender_ackptr {}\n", (uint32_t)eth_sender_ackptr.index());
-                        DEVICE_PRINT("tx: HANG (raw) eth_sender_ackptr {}\n", (uint32_t)eth_sender_ackptr.raw_index());
-                        DEVICE_PRINT("tx: HANG total_eth_sends {}\n", (uint32_t)total_eth_sends);
+                        DPRINT("tx: HANG eth_sender_rdptr {}\n", (uint32_t)eth_sender_rdptr.index());
+                        DPRINT("tx: HANG (raw) eth_sender_rdptr {}\n", (uint32_t)eth_sender_rdptr.raw_index());
+                        DPRINT("tx: HANG eth_sender_ackptr {}\n", (uint32_t)eth_sender_ackptr.index());
+                        DPRINT("tx: HANG (raw) eth_sender_ackptr {}\n", (uint32_t)eth_sender_ackptr.raw_index());
+                        DPRINT("tx: HANG total_eth_sends {}\n", (uint32_t)total_eth_sends);
                         for (uint32_t i = 0; i < MAX_NUM_CHANNELS; i++) {
-                            DEVICE_PRINT(
-                                "tx: HANG channel [{}] bytes_sent {}\n", i, erisc_info->channels[0].bytes_sent);
-                            DEVICE_PRINT(
+                            DPRINT("tx: HANG channel [{}] bytes_sent {}\n", i, erisc_info->channels[0].bytes_sent);
+                            DPRINT(
                                 "tx: HANG channel [{}] bytes_receiver_ack {}\n",
                                 i,
                                 erisc_info->channels[0].receiver_ack);
-                            DEVICE_PRINT(
+                            DPRINT(
                                 "tx: HANG eth_is_receiver_channel_send_acked ({}) {}\n",
                                 i,
                                 eth_is_receiver_channel_send_acked(i));
-                            DEVICE_PRINT(
+                            DPRINT(
                                 "tx: HANG eth_is_receiver_channel_send_done({}) {}\n",
                                 i,
                                 eth_is_receiver_channel_send_done(i));
@@ -229,9 +226,9 @@ void kernel_main() {
                         // bool more_data_to_read = page_index < num_pages;
                         // bool next_buffer_available = !buffer_pool_full<MAX_NUM_CHANNELS>(
                         //     noc_reader_buffer_wrptr, noc_reader_buffer_ackptr, eth_sender_rdptr, eth_sender_ackptr);
-                        // DEVICE_PRINT("tx: HANG noc_read_is_in_progress {}\n", noc_read_is_in_progress);
-                        // DEVICE_PRINT("tx: HANG more_data_to_read {}\n", more_data_to_read);
-                        // DEVICE_PRINT("tx: HANG next_buffer_available {}\n", next_buffer_available);
+                        // DPRINT("tx: HANG noc_read_is_in_progress {}\n", noc_read_is_in_progress);
+                        // DPRINT("tx: HANG more_data_to_read {}\n", more_data_to_read);
+                        // DPRINT("tx: HANG next_buffer_available {}\n", next_buffer_available);
                         num_context_switches = 0;
                         printed_hang = true;
                     }
@@ -244,7 +241,7 @@ void kernel_main() {
         }
     }
 
-    DEVICE_PRINT("tx: DONE\n");
-    DEVICE_PRINT("tx: DONE eth_sends_completed {}\n", eth_sends_completed);
-    DEVICE_PRINT("tx: DONE total_num_message_sends {}\n", total_num_message_sends);
+    DPRINT("tx: DONE\n");
+    DPRINT("tx: DONE eth_sends_completed {}\n", eth_sends_completed);
+    DPRINT("tx: DONE total_num_message_sends {}\n", total_num_message_sends);
 }

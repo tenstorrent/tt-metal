@@ -29,5 +29,5 @@ void kernel_main() {
 #endif
 
     result[0] = a + b;
-    DEVICE_PRINT("Adding two ints: {} + {} = {}\n", a, b, result[0]);
+    DPRINT("Adding two ints: {} + {} = {}\n", a, b, result[0]);
 }

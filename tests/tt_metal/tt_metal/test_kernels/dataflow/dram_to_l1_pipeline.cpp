@@ -29,7 +29,7 @@ void kernel_main() {
 #endif
 
         const uint32_t offset = i * static_cast<uint32_t>(sizeof(uint32_t));
-        DEVICE_PRINT(
+        DPRINT(
             "Reading {} bytes from DRAM address {} in bank {} and writing it to L1 address {}\n",
             sizeof(uint32_t),
             dram_src_address + offset,

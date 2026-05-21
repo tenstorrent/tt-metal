@@ -17,9 +17,9 @@ void kernel_main() {
     int32_t A = 1;
     int32_t B = 2;
 
-    DEVICE_PRINT("TEST packer\n");
+    DPRINT("TEST packer\n");
     const uint32_t value = A + B + thread_idx;
-    DEVICE_PRINT("{}\n", value);
+    DPRINT("{}\n", value);
     *((uint32_t*)(l1_address + MEM_L1_UNCACHED_BASE + thread_idx * sizeof(uint32_t))) = value;
 #endif
 
@@ -27,9 +27,9 @@ void kernel_main() {
     int32_t A = 2;
     int32_t B = 2;
 
-    DEVICE_PRINT("TEST unpacker\n");
+    DPRINT("TEST unpacker\n");
     const uint32_t value = A + B + thread_idx;
-    DEVICE_PRINT("{}\n", value);
+    DPRINT("{}\n", value);
     *((uint32_t*)(l1_address + MEM_L1_UNCACHED_BASE + thread_idx * sizeof(uint32_t))) = value;
 #endif
 
@@ -37,9 +37,9 @@ void kernel_main() {
     int32_t A = 3;
     int32_t B = 2;
 
-    DEVICE_PRINT("TEST math\n");
+    DPRINT("TEST math\n");
     const uint32_t value = A + B + thread_idx;
-    DEVICE_PRINT("{}\n", value);
+    DPRINT("{}\n", value);
     *((uint32_t*)(l1_address + MEM_L1_UNCACHED_BASE + thread_idx * sizeof(uint32_t))) = value;
 #endif
 
@@ -47,9 +47,9 @@ void kernel_main() {
     int32_t A = 4;
     int32_t B = 2;
 
-    DEVICE_PRINT("TEST isolate sfpu\n");
+    DPRINT("TEST isolate sfpu\n");
     const uint32_t value = A + B + thread_idx;
-    DEVICE_PRINT("{}\n", value);
+    DPRINT("{}\n", value);
     *((uint32_t*)(l1_address + MEM_L1_UNCACHED_BASE + thread_idx * sizeof(uint32_t))) = value;
 #endif
 }

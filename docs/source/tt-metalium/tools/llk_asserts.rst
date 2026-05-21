@@ -69,7 +69,7 @@ It takes **two required positional parameters** (no defaults):
 
 - ``<assert_output_path>`` — file where the on-timeout triage hook writes the lightweight-assert
   dump (callstacks, template parameters, runtime args, locals).
-- ``<dprint_output_path>`` — file where ``DEVICE_PRINT`` output from all cores is written
+- ``<dprint_output_path>`` — file where ``DPRINT`` output from all cores is written
   (``TT_METAL_DPRINT_FILE``).
 
 The script also requires ``TT_METAL_HOME`` to be set — activating the tt-metal Python
@@ -88,7 +88,7 @@ After the run completes, three artifacts are available for analysis:
 
 - ``test_output.txt`` — pytest stdout/stderr, including the host-side ``RuntimeError`` and stack trace.
 - ``assert.txt`` — the lightweight-assert dump from the device when the hang was detected.
-- ``/tmp/tt_dprint.log`` — ``DEVICE_PRINT`` output (e.g. ``expected: …, actual: …`` values
+- ``/tmp/tt_dprint.log`` — ``DPRINT`` output (e.g. ``expected: …, actual: …`` values
   emitted near a failing ``LLK_ASSERT``).
 
 **How the script is designed to work**
@@ -132,7 +132,7 @@ The end-to-end flow is:
    device, finds the asserting TRISC, recovers callstack, template params, runtime args, and
    locals, and writes them to ``<assert_output_path>``.
 4. ``tt-smi -r`` resets the device so the next test run is clean.
-5. Pytest reports a ``RuntimeError`` to ``test_output.txt``; ``DEVICE_PRINT`` lines emitted
+5. Pytest reports a ``RuntimeError`` to ``test_output.txt``; ``DPRINT`` lines emitted
    before the ``ebreak`` are in ``<dprint_output_path>``.
 
 Together, these three files normally pinpoint the failing kernel, the failing line, and the

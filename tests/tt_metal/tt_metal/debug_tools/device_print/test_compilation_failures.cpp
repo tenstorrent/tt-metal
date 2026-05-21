@@ -66,5 +66,5 @@ TEST_F(DevicePrintFailuresFixture, NotEnoughArguments) {
 TEST_F(DevicePrintFailuresFixture, OldStyleDprint) {
     TestCompileKernelFailure(
         "tests/tt_metal/tt_metal/test_kernels/device_print/failures/old_style_dprint.cpp",
-        "Old style DPRINT is deprecated. Use DEVICE_PRINT instead.");
+        "Old style DPRINT is deprecated. Use DPRINT(format, ...) instead.");
 }

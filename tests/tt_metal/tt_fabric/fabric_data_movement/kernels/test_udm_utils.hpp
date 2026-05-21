@@ -82,12 +82,12 @@ inline void print_udm_control_fields(volatile tt_l1_ptr uint32_t* packet_start_a
     volatile tt_l1_ptr PACKET_HEADER_TYPE* header =
         reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_start_addr);
 
-    DEVICE_PRINT("UDM Control Fields (Packet {}):\n", packet_index);
-    DEVICE_PRINT("  src_chip_id: {}\n", (uint32_t)header->udm_control.write.src_chip_id);
-    DEVICE_PRINT("  src_mesh_id: {}\n", (uint32_t)header->udm_control.write.src_mesh_id);
-    DEVICE_PRINT("  src_noc_x: {}\n", (uint32_t)header->udm_control.write.src_noc_x);
-    DEVICE_PRINT("  src_noc_y: {}\n", (uint32_t)header->udm_control.write.src_noc_y);
-    DEVICE_PRINT("  risc_id: {}\n", (uint32_t)header->udm_control.write.risc_id);
-    DEVICE_PRINT("  transaction_id: {}\n", (uint32_t)header->udm_control.write.transaction_id);
-    DEVICE_PRINT("  posted: {}\n", (uint32_t)header->udm_control.write.posted);
+    DPRINT("UDM Control Fields (Packet {}):\n", packet_index);
+    DPRINT("  src_chip_id: {}\n", (uint32_t)header->udm_control.write.src_chip_id);
+    DPRINT("  src_mesh_id: {}\n", (uint32_t)header->udm_control.write.src_mesh_id);
+    DPRINT("  src_noc_x: {}\n", (uint32_t)header->udm_control.write.src_noc_x);
+    DPRINT("  src_noc_y: {}\n", (uint32_t)header->udm_control.write.src_noc_y);
+    DPRINT("  risc_id: {}\n", (uint32_t)header->udm_control.write.risc_id);
+    DPRINT("  transaction_id: {}\n", (uint32_t)header->udm_control.write.transaction_id);
+    DPRINT("  posted: {}\n", (uint32_t)header->udm_control.write.posted);
 }

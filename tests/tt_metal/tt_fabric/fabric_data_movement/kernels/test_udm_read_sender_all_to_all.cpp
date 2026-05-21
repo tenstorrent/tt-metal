@@ -99,10 +99,10 @@ void kernel_main() {
                         expected_val);
 
                     if (!match) {
-                        DEVICE_PRINT("Data mismatch at provider {} packet {}\n", prov, i);
-                        DEVICE_PRINT("  Mismatch addr: {}\n", mismatch_addr);
-                        DEVICE_PRINT("  Mismatch val: {}\n", mismatch_val);
-                        DEVICE_PRINT("  Expected val: {}\n", expected_val);
+                        DPRINT("Data mismatch at provider {} packet {}\n", prov, i);
+                        DPRINT("  Mismatch addr: {}\n", mismatch_addr);
+                        DPRINT("  Mismatch val: {}\n", mismatch_val);
+                        DPRINT("  Expected val: {}\n", expected_val);
                     }
                 } break;
                 default: {

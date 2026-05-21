@@ -24,7 +24,7 @@ using ttnn::ccl::Shape4D;
 using shape_t = Shape4D<uint32_t>;
 
 void dprint(const ttnn::ccl::cmd::CclCommandTensor& command_tensor) {
-    DEVICE_PRINT(
+    DPRINT(
         "\ttensor_slice_shape: ({}, {}, {}, {})\n"
         "\ttensor_slice_offset: ({}, {}, {}, {})\n"
         "\tworker_start_offset_in_slice: ({}, {}, {}, {})\n"
@@ -46,7 +46,7 @@ void dprint(const ttnn::ccl::cmd::CclCommandTensor& command_tensor) {
 
 void print_tensor_command(uint32_t command_index, ttnn::ccl::cmd::CclCommandTensor const& command_tensor) {
 #ifdef DEBUG_PRINT_ENABLED
-    DEVICE_PRINT("cmd[{}]:\n", command_index);
+    DPRINT("cmd[{}]:\n", command_index);
     dprint(command_tensor);
 #endif
 }
@@ -320,7 +320,7 @@ void kernel_main() {
     const uint32_t local_l1_scratch_buffer_address = get_write_ptr(cb_id);
 
 #ifdef DEBUG_PRINT_ENABLED
-    DEVICE_PRINT("ccl_send has {} commands\n", num_commands);
+    DPRINT("ccl_send has {} commands\n", num_commands);
 #endif
 
     for (std::size_t i = 0; i < num_commands; ++i) {

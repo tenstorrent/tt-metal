@@ -1168,7 +1168,7 @@ struct TopKSampling {
                     {
                         auto* s = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scores_src);
                         auto* idx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(indices_src);
-                        DEVICE_PRINT(
+                        DPRINT(
                             "P1 in top3: idx={} s={} idx={} s={} idx={} s={}\n",
                             idx[0],
                             bf16_t(s[0]),
@@ -1189,7 +1189,7 @@ struct TopKSampling {
                             reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(CTArgs::topk_out_scores_cb));
                         auto* idx =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(CTArgs::topk_out_indices_cb));
-                        DEVICE_PRINT(
+                        DPRINT(
                             "P1 top3: idx={} s={} idx={} s={} idx={} s={}\n",
                             idx[0],
                             bf16_t(s[0]),
@@ -1263,7 +1263,7 @@ struct TopKSampling {
                 {
                     auto* dbg_scores = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(global_scores);
                     auto* dbg_indices = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_indices);
-                    DEVICE_PRINT(
+                    DPRINT(
                         "Phase2 top-3: [0] idx={} s={} [1] idx={} s={} [2] idx={} s={}\n",
                         dbg_indices[0],
                         bf16_t(dbg_scores[0]),
@@ -1310,7 +1310,7 @@ struct TopKSampling {
                         {
                             auto* dbg_s = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(global_scores);
                             auto* dbg_i = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_indices);
-                            DEVICE_PRINT("Mesh S1 top1: idx={} s={}\n", dbg_i[0], bf16_t(dbg_s[0]));
+                            DPRINT("Mesh S1 top1: idx={} s={}\n", dbg_i[0], bf16_t(dbg_s[0]));
                         }
                     }
 
@@ -1355,7 +1355,7 @@ struct TopKSampling {
                         {
                             auto* dbg_s = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(global_scores);
                             auto* dbg_i = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_indices);
-                            DEVICE_PRINT("Mesh S2 top1: idx={} s={}\n", dbg_i[0], bf16_t(dbg_s[0]));
+                            DPRINT("Mesh S2 top1: idx={} s={}\n", dbg_i[0], bf16_t(dbg_s[0]));
                         }
                     }
                 }
@@ -1446,9 +1446,9 @@ struct TopKSampling {
                         noc_async_read_barrier();
                         auto softmax_in_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(global_scores);
                         for (uint32_t i = 0; i < 4; ++i) {
-                            DEVICE_PRINT("softmax_in_ptr[{}] = {}\n", i, bf16_t(softmax_in_ptr[i]));
+                            DPRINT("softmax_in_ptr[{}] = {}\n", i, bf16_t(softmax_in_ptr[i]));
                         }
-                        DEVICE_PRINT("Softmax In DPRINT Finish\n");
+                        DPRINT("Softmax In DPRINT Finish\n");
 
                         cb_push_back(CTArgs::softmax_in_cb, 1);
 
@@ -1458,9 +1458,9 @@ struct TopKSampling {
                         auto softmax_out_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(CTArgs::softmax_out_cb));
                         for (uint32_t i = 0; i < 4; ++i) {
-                            DEVICE_PRINT("softmax_out_ptr[{}] = {}\n", i, bf16_t(softmax_out_ptr[i]));
+                            DPRINT("softmax_out_ptr[{}] = {}\n", i, bf16_t(softmax_out_ptr[i]));
                         }
-                        DEVICE_PRINT("Softmax Out DPRINT Finish\n");
+                        DPRINT("Softmax Out DPRINT Finish\n");
 
                         auto prob_u16 =
                             reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(CTArgs::softmax_out_cb));
@@ -1470,14 +1470,14 @@ struct TopKSampling {
 
                         uint16_t rand = rand_u16[0];
 
-                        DEVICE_PRINT(
+                        DPRINT(
                             "Softmax probs top3: "
                             "p0={} p1={} p2={} rand={}\n",
                             bf16_t(prob_u16[0]),
                             bf16_t(prob_u16[1]),
                             bf16_t(prob_u16[2]),
                             bf16_t(rand));
-                        DEVICE_PRINT("rand = {}\n", bf16_t(rand));
+                        DPRINT("rand = {}\n", bf16_t(rand));
 
                         // Top-P filter.
                         //
@@ -1503,7 +1503,7 @@ struct TopKSampling {
                                 }
                             }
                         }
-                        DEVICE_PRINT("BRISC: Top-P kept={} skip_rescale={}\n", kept_tokens, skip_rescale);
+                        DPRINT("BRISC: Top-P kept={} skip_rescale={}\n", kept_tokens, skip_rescale);
 
                         // Compute the rescale denominator from a *clean* second-pass sum
                         // over exactly the kept tokens.  Don't reuse the filter-loop value
@@ -1554,9 +1554,9 @@ struct TopKSampling {
                         }
 
                         for (uint32_t i = 0; i < 3; ++i) {
-                            DEVICE_PRINT("  [{}] idx, score={}\n", i, bf16_t(prob_u16[i]));
+                            DPRINT("  [{}] idx, score={}\n", i, bf16_t(prob_u16[i]));
                         }
-                        DEVICE_PRINT("Selected: idx={} kept={} K={}\n", selected_index, kept_tokens, K);
+                        DPRINT("Selected: idx={} kept={} K={}\n", selected_index, kept_tokens, K);
 
                         auto output_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::output_addr);
                         output_ptr[0] = selected_index;

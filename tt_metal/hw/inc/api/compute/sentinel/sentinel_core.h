@@ -187,7 +187,7 @@ ALWI void SentinelCore::inject_single_operand(uint32_t cb) {
             reconfig_data_format_srca<false /* to_from_int8 */, true /* is_tile_dim_reconfig_en */>(m_srca_cb, cb);
         }
 
-        DEVICE_PRINT("reconfig_data_format_srca - ");
+        DPRINT("reconfig_data_format_srca - ");
         m_srca_cb = cb;
     } else if constexpr (operand == Operand::SRCB) {
         if (m_srcb_cb == cb) {
@@ -197,7 +197,7 @@ ALWI void SentinelCore::inject_single_operand(uint32_t cb) {
             reconfig_data_format_srcb<false /* to_from_int8 */, true /* is_tile_dim_reconfig_en */>(m_srcb_cb, cb);
         }
 
-        DEVICE_PRINT("reconfig_data_format_srcb - ");
+        DPRINT("reconfig_data_format_srcb - ");
         m_srcb_cb = cb;
     } else if constexpr (operand == Operand::PACK) {
         if (m_pack_cb == cb) {
@@ -207,13 +207,13 @@ ALWI void SentinelCore::inject_single_operand(uint32_t cb) {
             pack_reconfig_data_format<false /* is_tile_dim_reconfig_en */>(m_pack_cb, cb);
         }
 
-        DEVICE_PRINT("pack_reconfig_data_format - ");
+        DPRINT("pack_reconfig_data_format - ");
         m_pack_cb = cb;
     }
     if (m_enabled) {
-        DEVICE_PRINT("happened on line - {}\n", m_last_call_line);
+        DPRINT("happened on line - {}\n", m_last_call_line);
     } else {
-        DEVICE_PRINT("should be called before line - {}\n", m_last_call_line);
+        DPRINT("should be called before line - {}\n", m_last_call_line);
     }
 
 #ifdef TT_METAL_COMPUTE_KERNEL_SENTINEL_TESTING_ENABLED

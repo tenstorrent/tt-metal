@@ -38,7 +38,7 @@ void kernel_main() {
     constexpr bool write_scatter_mode = get_compile_time_arg_val(4) == 1;
     constexpr uint32_t num_pages_per_send = (write_scatter_mode ? 2 : 1);
 
-    DEVICE_PRINT(
+    DPRINT(
         "sws: args "
         "\n\tnum_pages_to_send={}\n\tpage_size={}\n\tdest_is_dram={}\n\tmcast_mode={}\n\twrite_scatter_mode={}\n",
         total_pages_to_send,

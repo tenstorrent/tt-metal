@@ -15,7 +15,7 @@ void dprint_cb_tile(uint32_t cb_id, uint32_t tile_id) {
     noc_async_read_barrier();
     noc_async_write_barrier();
     for (uint8_t i = 0; i < 32; ++i) {
-        DEVICE_PRINT(
+        DPRINT(
             "{}",
             TileSlice(
                 cb_id,
@@ -272,8 +272,8 @@ void kernel_main() {
     noc_async_read_barrier();  // Wait until reads are done
     cb_push_back(cb_cu_window_seqlens_in, 1);
     DPRINT_ARRAY_VIEW({
-        DEVICE_PRINT("cu_window_seqlens_eles: {}\n", cu_window_seqlens_eles);
-        DEVICE_PRINT("cu_window_seqlens:\n");
+        DPRINT("cu_window_seqlens_eles: {}\n", cu_window_seqlens_eles);
+        DPRINT("cu_window_seqlens:\n");
         cb_cu_window_seqlens_ptr.print();
     });
     // [INFO] all windows are diagonal
@@ -427,7 +427,7 @@ void kernel_main() {
                                      covered_window_k_end_idx < k_end_idx);
 
                             DPRINT_ARRAY_VIEW({
-                                DEVICE_PRINT("  [COL ITER] WINDOW tile: in_mask_tile_id: {}\n", in_mask_tile_id);
+                                DPRINT("  [COL ITER] WINDOW tile: in_mask_tile_id: {}\n", in_mask_tile_id);
                                 (dprint_cb_tile<true, true>(cb_mask_in, in_mask_tile_id));
                             });
                         }

@@ -25,7 +25,7 @@ void generate_bcast_scaler() {
         uint32_t u;
     } u;
     u.u = scaler;
-    // DEVICE_PRINT("basic Scaler = {}\n", u.f);
+    // DPRINT("basic Scaler = {}\n", u.f);
     constexpr uint32_t onetile = 1;
 #ifdef ARCH_QUASAR
     dfb1.reserve_back(onetile);
@@ -91,7 +91,7 @@ void kernel_main() {
 #else
     constexpr uint32_t tile_offset = 0;
 #endif
-    // DEVICE_PRINT("Reader Tile offset={}\n", tile_offset);
+    // DPRINT("Reader Tile offset={}\n", tile_offset);
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     uint32_t i_tile = 0;

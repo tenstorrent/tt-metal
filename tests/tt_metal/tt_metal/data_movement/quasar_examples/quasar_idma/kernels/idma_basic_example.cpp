@@ -43,5 +43,5 @@ void kernel_main() {
     /* wait on IDMA to finish */
     while (!idma_acked_cmdbuf_0());
 
-    DEVICE_PRINT("IDMA basic done: {} elements ({} B)\n", num_elements, total_bytes);
+    DPRINT("IDMA basic done: {} elements ({} B)\n", num_elements, total_bytes);
 }

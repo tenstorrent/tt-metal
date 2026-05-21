@@ -23,17 +23,17 @@ void kernel_main() {
 #endif
 
 #ifdef DEBUG
-    DEVICE_PRINT("dst_addr: {}\n", dst_addr);
-    DEVICE_PRINT("output_stick_size: {}\n", output_stick_size);
-    DEVICE_PRINT("input_stick_size: {}\n", input_stick_size);
-    DEVICE_PRINT("stick_size_offset: {}\n", stick_size_offset);
-    DEVICE_PRINT("num_dims: {}\n", num_dims);
-    DEVICE_PRINT("start_id: {}\n", start_id);
-    DEVICE_PRINT("num_sticks_per_core: {}\n", num_sticks_per_core);
-    DEVICE_PRINT("num_sticks_per_core_read: {}\n", num_sticks_per_core_read);
-    DEVICE_PRINT("num_read_per_barrier: {}\n", num_read_per_barrier);
+    DPRINT("dst_addr: {}\n", dst_addr);
+    DPRINT("output_stick_size: {}\n", output_stick_size);
+    DPRINT("input_stick_size: {}\n", input_stick_size);
+    DPRINT("stick_size_offset: {}\n", stick_size_offset);
+    DPRINT("num_dims: {}\n", num_dims);
+    DPRINT("start_id: {}\n", start_id);
+    DPRINT("num_sticks_per_core: {}\n", num_sticks_per_core);
+    DPRINT("num_sticks_per_core_read: {}\n", num_sticks_per_core_read);
+    DPRINT("num_read_per_barrier: {}\n", num_read_per_barrier);
 #ifdef UNPAD_INPUT_WIDTH
-    DEVICE_PRINT("padding_width_ntiles: {}\n", padding_width_ntiles);
+    DPRINT("padding_width_ntiles: {}\n", padding_width_ntiles);
 #endif
 
 #endif
@@ -69,7 +69,7 @@ void kernel_main() {
                 cb_out0, s0, noc_write_size, {.offset_bytes = src_offset + page_offset}, {.page_id = dst_stick_id});
 #endif
 #ifdef DEBUG
-            DEVICE_PRINT(
+            DPRINT(
                 "SRC L1 : {} Dst Stick ID {} sticks_read: {} Coord {}, {}, {}, {}\n",
                 src_offset,
                 dst_stick_id,

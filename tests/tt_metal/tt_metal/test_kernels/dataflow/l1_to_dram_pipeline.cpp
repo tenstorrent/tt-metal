@@ -29,7 +29,7 @@ void kernel_main() {
         sem.down(1);
 
         const uint32_t offset = i * static_cast<uint32_t>(sizeof(uint32_t));
-        DEVICE_PRINT(
+        DPRINT(
             "Reading {} bytes from L1 address {} and writing it to DRAM address {} in bank {}\n",
             sizeof(uint32_t),
             l1_src_address + offset,

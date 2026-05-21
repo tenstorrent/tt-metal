@@ -626,7 +626,7 @@ bool DPrintServer::Impl::poll_device_print_data(
             const uint32_t required = rw[3];
             log_warning(
                 tt::LogMetal,
-                "DEVICE_PRINT: dispatch DRAM aggregation self-disabled on device {} — L1 cache buffer was {} bytes but "
+                "DPRINT: dispatch DRAM aggregation self-disabled on device {} — L1 cache buffer was {} bytes but "
                 "{} bytes or more are required. Increase the size via TT_METAL_DEVICE_PRINT_DISPATCH_L1_CACHE_BYTES. "
                 "Falling back to per-core L1 polling.",
                 device_id,
@@ -645,7 +645,7 @@ bool DPrintServer::Impl::poll_device_print_data(
         // Log that dispatch is running on this device, bug only once.
         if (!data.running_logged) {
             data.running_logged = true;
-            log_info(tt::LogMetal, "DEVICE_PRINT: dispatch DRAM aggregation running on device {}", device_id);
+            log_info(tt::LogMetal, "DPRINT: dispatch DRAM aggregation running on device {}", device_id);
         }
 
         // Is there something in DRAM that we should read?
@@ -664,7 +664,7 @@ bool DPrintServer::Impl::poll_device_print_data(
         if (wpos >= data.buffer_size || rpos >= data.buffer_size) {
             log_warning(
                 tt::LogMetal,
-                "DEVICE_PRINT: dispatch DRAM cell out of range on device {} — wpos={} rpos={} buffer_size={}.",
+                "DPRINT: dispatch DRAM cell out of range on device {} — wpos={} rpos={} buffer_size={}.",
                 device_id,
                 wpos,
                 rpos,
@@ -709,7 +709,7 @@ bool DPrintServer::Impl::poll_device_print_data(
             if (align == 0 && length == 0 && !buffer_wrapped) {
                 log_warning(
                     tt::LogMetal,
-                    "DEVICE_PRINT: dispatch DRAM chunk has zero align+length at pos={} (likely "
+                    "DPRINT: dispatch DRAM chunk has zero align+length at pos={} (likely "
                     "stale ring bytes); skipping rest of window",
                     pos);
                 break;
@@ -721,7 +721,7 @@ bool DPrintServer::Impl::poll_device_print_data(
             if (core_it == data.noc_to_core.end()) {
                 log_warning(
                     tt::LogMetal,
-                    "DEVICE_PRINT: dispatch DRAM chunk references unknown core ({},{})",
+                    "DPRINT: dispatch DRAM chunk references unknown core ({},{})",
                     static_cast<uint32_t>(header.x),
                     static_cast<uint32_t>(header.y));
             }
@@ -729,7 +729,7 @@ bool DPrintServer::Impl::poll_device_print_data(
             // Check if whole message is here.
             const size_t body_start = pos + align;
             if (body_start + length > payload.size()) {
-                log_warning(tt::LogMetal, "DEVICE_PRINT: dispatch DRAM chunk truncated; stopping");
+                log_warning(tt::LogMetal, "DPRINT: dispatch DRAM chunk truncated; stopping");
                 break;
             }
 
@@ -746,12 +746,11 @@ bool DPrintServer::Impl::poll_device_print_data(
                 if (!buffer_wrapped) {
                     if (body_start % sizeof(uint32_t) != 0) {
                         log_warning(
-                            tt::LogMetal,
-                            "DEVICE_PRINT: dispatch DRAM chunk body not word-aligned; skipping this chunk");
+                            tt::LogMetal, "DPRINT: dispatch DRAM chunk body not word-aligned; skipping this chunk");
                     } else if (length % sizeof(uint32_t) != 0) {
                         log_warning(
                             tt::LogMetal,
-                            "DEVICE_PRINT: dispatch DRAM chunk body length not multiple of word size; skipping this "
+                            "DPRINT: dispatch DRAM chunk body length not multiple of word size; skipping this "
                             "chunk");
                     } else {
                         std::span<uint32_t> data =
@@ -761,8 +760,7 @@ bool DPrintServer::Impl::poll_device_print_data(
                 } else {
                     size_t rw_offset = rw_ptrs_inside_align ? (pos + header_size) : (body_start + length);
                     if (rw_offset + rw_ptrs_size > payload.size()) {
-                        log_warning(
-                            tt::LogMetal, "DEVICE_PRINT: dispatch DRAM wrap chunk rw_pointers truncated; stopping");
+                        log_warning(tt::LogMetal, "DPRINT: dispatch DRAM wrap chunk rw_pointers truncated; stopping");
                         break;
                     }
                     uint16_t wrap_wpos = 0, wrap_rpos = 0;
@@ -771,17 +769,16 @@ bool DPrintServer::Impl::poll_device_print_data(
                     if (wrap_rpos <= length && wrap_wpos <= length) {
                         if (body_start % sizeof(uint32_t) != 0) {
                             log_warning(
-                                tt::LogMetal,
-                                "DEVICE_PRINT: dispatch DRAM chunk body not word-aligned; skipping this chunk");
+                                tt::LogMetal, "DPRINT: dispatch DRAM chunk body not word-aligned; skipping this chunk");
                         } else if (length % sizeof(uint32_t) != 0) {
                             log_warning(
                                 tt::LogMetal,
-                                "DEVICE_PRINT: dispatch DRAM chunk body length not multiple of word size; skipping "
+                                "DPRINT: dispatch DRAM chunk body length not multiple of word size; skipping "
                                 "this chunk");
                         } else if (wrap_rpos % sizeof(uint32_t) != 0 || wrap_wpos % sizeof(uint32_t) != 0) {
                             log_warning(
                                 tt::LogMetal,
-                                "DEVICE_PRINT: dispatch DRAM chunk wrap pointers not word-aligned; skipping this "
+                                "DPRINT: dispatch DRAM chunk wrap pointers not word-aligned; skipping this "
                                 "chunk");
                         } else {
                             if (wrap_rpos > wrap_wpos) {

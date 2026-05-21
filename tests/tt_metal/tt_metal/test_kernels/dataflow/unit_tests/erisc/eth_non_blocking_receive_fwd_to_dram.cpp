@@ -60,7 +60,7 @@ bool eth_initiate_noc_write_sequence(
         if (next_payload_received) {
             // Can initialize a new write if data is at this buffer location (eth num_bytes != 0)
             // and the receiver ackptr != next write pointer
-            // // DEVICE_PRINT("rx: accepting payload, sending receive ack on channel {}\n",
+            // // DPRINT("rx: accepting payload, sending receive ack on channel {}\n",
             // (uint32_t)noc_writer_buffer_wrptr);
             write_chunk_legacy(
                 transaction_channel_receiver_buffer_addresses[noc_writer_buffer_wrptr.index()],
@@ -170,42 +170,39 @@ void kernel_main() {
                     num_context_switches++;
                     if (num_context_switches > max_num_context_switches) {
                         if (!printed_hang) {
-                            DEVICE_PRINT("rx: HANG\n");
-                            DEVICE_PRINT("rx: HANG num_eth_sends_acked {}\n", (uint32_t)num_eth_sends_acked);
-                            DEVICE_PRINT("rx: HANG total_num_message_sends {}\n", (uint32_t)total_num_message_sends);
+                            DPRINT("rx: HANG\n");
+                            DPRINT("rx: HANG num_eth_sends_acked {}\n", (uint32_t)num_eth_sends_acked);
+                            DPRINT("rx: HANG total_num_message_sends {}\n", (uint32_t)total_num_message_sends);
                             for (uint32_t i = 0; i < MAX_NUM_CHANNELS; i++) {
-                                DEVICE_PRINT(
-                                    "rx: HANG channel [{}] bytes_sent {}\n", i, erisc_info->channels[0].bytes_sent);
-                                DEVICE_PRINT(
+                                DPRINT("rx: HANG channel [{}] bytes_sent {}\n", i, erisc_info->channels[0].bytes_sent);
+                                DPRINT(
                                     "rx: HANG channel [{}] bytes_receiver_ack {}\n",
                                     i,
                                     erisc_info->channels[0].receiver_ack);
-                                DEVICE_PRINT(
+                                DPRINT(
                                     "rx: HANG eth_is_receiver_channel_send_acked ({}) {}\n",
                                     i,
                                     eth_is_receiver_channel_send_acked(i));
-                                DEVICE_PRINT(
+                                DPRINT(
                                     "rx: HANG eth_is_receiver_channel_send_done({}) {}\n",
                                     i,
                                     eth_is_receiver_channel_send_done(i));
                             }
-                            DEVICE_PRINT(
+                            DPRINT(
                                 "rx: HANG noc_writer_buffer_ackptr {}\n", (uint32_t)noc_writer_buffer_ackptr.index());
-                            DEVICE_PRINT(
+                            DPRINT(
                                 "rx: HANG (raw) noc_writer_buffer_ackptr {}\n",
                                 (uint32_t)noc_writer_buffer_ackptr.raw_index());
-                            DEVICE_PRINT(
-                                "rx: HANG noc_writer_buffer_wrptr {}\n", (uint32_t)noc_writer_buffer_wrptr.index());
-                            DEVICE_PRINT(
+                            DPRINT("rx: HANG noc_writer_buffer_wrptr {}\n", (uint32_t)noc_writer_buffer_wrptr.index());
+                            DPRINT(
                                 "rx: HANG (raw) noc_writer_buffer_wrptr {}\n",
                                 (uint32_t)noc_writer_buffer_wrptr.raw_index());
-                            DEVICE_PRINT("rx: HANG eth_receiver_rdptr {}\n", (uint32_t)eth_receiver_rdptr.index());
-                            DEVICE_PRINT(
-                                "rx: HANG (raw) eth_receiver_rdptr {}\n", (uint32_t)eth_receiver_rdptr.raw_index());
-                            DEVICE_PRINT("rx: HANG eth_receiver_ackptr {}\n", (uint32_t)eth_receiver_ackptr.index());
-                            DEVICE_PRINT(
+                            DPRINT("rx: HANG eth_receiver_rdptr {}\n", (uint32_t)eth_receiver_rdptr.index());
+                            DPRINT("rx: HANG (raw) eth_receiver_rdptr {}\n", (uint32_t)eth_receiver_rdptr.raw_index());
+                            DPRINT("rx: HANG eth_receiver_ackptr {}\n", (uint32_t)eth_receiver_ackptr.index());
+                            DPRINT(
                                 "rx: HANG (raw) eth_receiver_ackptr {}\n", (uint32_t)eth_receiver_ackptr.raw_index());
-                            DEVICE_PRINT("rx: HANG num_receives_acked {}\n", (uint32_t)num_receives_acked);
+                            DPRINT("rx: HANG num_receives_acked {}\n", (uint32_t)num_receives_acked);
                             printed_hang = true;
                             num_context_switches = 0;
                         }
@@ -221,28 +218,26 @@ void kernel_main() {
         while (!ncrisc_noc_nonposted_writes_sent(noc_index));
         while (!ncrisc_noc_nonposted_writes_flushed(noc_index));
 
-        DEVICE_PRINT("rx: DONE\n");
-        DEVICE_PRINT("rx: DONE eth_sends_completed {}\n", (uint32_t)num_eth_sends_acked);
-        DEVICE_PRINT("rx: DONE total_num_message_sends {}\n", (uint32_t)total_num_message_sends);
+        DPRINT("rx: DONE\n");
+        DPRINT("rx: DONE eth_sends_completed {}\n", (uint32_t)num_eth_sends_acked);
+        DPRINT("rx: DONE total_num_message_sends {}\n", (uint32_t)total_num_message_sends);
 
-        DEVICE_PRINT("rx: DONE num_eth_sends_acked {}\n", (uint32_t)num_eth_sends_acked);
-        DEVICE_PRINT("rx: DONE total_num_message_sends {}\n", (uint32_t)total_num_message_sends);
+        DPRINT("rx: DONE num_eth_sends_acked {}\n", (uint32_t)num_eth_sends_acked);
+        DPRINT("rx: DONE total_num_message_sends {}\n", (uint32_t)total_num_message_sends);
         for (uint32_t i = 0; i < MAX_NUM_CHANNELS; i++) {
-            DEVICE_PRINT("rx: DONE channel [{}] bytes_sent {}\n", i, erisc_info->channels[0].bytes_sent);
-            DEVICE_PRINT("rx: DONE channel [{}] bytes_receiver_ack {}\n", i, erisc_info->channels[0].receiver_ack);
-            DEVICE_PRINT(
-                "rx: DONE eth_is_receiver_channel_send_acked ({}) {}\n", i, eth_is_receiver_channel_send_acked(i));
-            DEVICE_PRINT(
-                "rx: DONE eth_is_receiver_channel_send_done({}) {}\n", i, eth_is_receiver_channel_send_done(i));
+            DPRINT("rx: DONE channel [{}] bytes_sent {}\n", i, erisc_info->channels[0].bytes_sent);
+            DPRINT("rx: DONE channel [{}] bytes_receiver_ack {}\n", i, erisc_info->channels[0].receiver_ack);
+            DPRINT("rx: DONE eth_is_receiver_channel_send_acked ({}) {}\n", i, eth_is_receiver_channel_send_acked(i));
+            DPRINT("rx: DONE eth_is_receiver_channel_send_done({}) {}\n", i, eth_is_receiver_channel_send_done(i));
         }
-        DEVICE_PRINT("rx: DONE noc_writer_buffer_ackptr {}\n", (uint32_t)noc_writer_buffer_ackptr.index());
-        DEVICE_PRINT("rx: DONE (raw) noc_writer_buffer_ackptr {}\n", (uint32_t)noc_writer_buffer_ackptr.raw_index());
-        DEVICE_PRINT("rx: DONE noc_writer_buffer_wrptr {}\n", (uint32_t)noc_writer_buffer_wrptr.index());
-        DEVICE_PRINT("rx: DONE (raw) noc_writer_buffer_wrptr {}\n", (uint32_t)noc_writer_buffer_wrptr.raw_index());
-        DEVICE_PRINT("rx: DONE eth_receiver_rdptr {}\n", (uint32_t)eth_receiver_rdptr.index());
-        DEVICE_PRINT("rx: DONE (raw) eth_receiver_rdptr {}\n", (uint32_t)eth_receiver_rdptr.raw_index());
-        DEVICE_PRINT("rx: DONE eth_receiver_ackptr {}\n", (uint32_t)eth_receiver_ackptr.index());
-        DEVICE_PRINT("rx: DONE (raw) eth_receiver_ackptr {}\n", (uint32_t)eth_receiver_ackptr.raw_index());
-        DEVICE_PRINT("rx: DONE num_receives_acked {}\n", (uint32_t)num_receives_acked);
+        DPRINT("rx: DONE noc_writer_buffer_ackptr {}\n", (uint32_t)noc_writer_buffer_ackptr.index());
+        DPRINT("rx: DONE (raw) noc_writer_buffer_ackptr {}\n", (uint32_t)noc_writer_buffer_ackptr.raw_index());
+        DPRINT("rx: DONE noc_writer_buffer_wrptr {}\n", (uint32_t)noc_writer_buffer_wrptr.index());
+        DPRINT("rx: DONE (raw) noc_writer_buffer_wrptr {}\n", (uint32_t)noc_writer_buffer_wrptr.raw_index());
+        DPRINT("rx: DONE eth_receiver_rdptr {}\n", (uint32_t)eth_receiver_rdptr.index());
+        DPRINT("rx: DONE (raw) eth_receiver_rdptr {}\n", (uint32_t)eth_receiver_rdptr.raw_index());
+        DPRINT("rx: DONE eth_receiver_ackptr {}\n", (uint32_t)eth_receiver_ackptr.index());
+        DPRINT("rx: DONE (raw) eth_receiver_ackptr {}\n", (uint32_t)eth_receiver_ackptr.raw_index());
+        DPRINT("rx: DONE num_receives_acked {}\n", (uint32_t)num_receives_acked);
     }
 }

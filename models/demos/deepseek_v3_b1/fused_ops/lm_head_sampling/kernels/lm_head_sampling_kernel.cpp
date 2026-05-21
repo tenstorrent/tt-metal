@@ -870,7 +870,7 @@ void kernel_main() {
             //     volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata* md =
             //         reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(metadata_src);
             //     invalidate_l1_cache();
-            //     DEVICE_PRINT("MD_INPUT iter={} pos={} slot={} tok={} k={}\n", iteration_count, md->position_id,
+            //     DPRINT("MD_INPUT iter={} pos={} slot={} tok={} k={}\n", iteration_count, md->position_id,
             //     md->slot_id, md->token_id, md->k);
             // }
 

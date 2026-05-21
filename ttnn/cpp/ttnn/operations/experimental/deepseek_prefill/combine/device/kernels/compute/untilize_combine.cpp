@@ -14,7 +14,7 @@
 
 #define ENABLE_COMBINE_DEBUG 0
 #if ENABLE_COMBINE_DEBUG
-#define DPRINT_COMBINE(...) DEVICE_PRINT(__VA_ARGS__)
+#define DPRINT_COMBINE(...) DPRINT(__VA_ARGS__)
 #else
 #define DPRINT_COMBINE(...)
 #endif

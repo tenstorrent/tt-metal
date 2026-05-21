@@ -38,29 +38,29 @@ constexpr uint16_t NUM_ROWS_PER_TILE = NUM_FACES_PER_TILE * NUM_ROWS_PER_FACE;
 // Helper function to print array
 template <uint32_t count>
 inline void dprint_array_with_data_type(uint32_t data_format, uint32_t* data) {
-    DEVICE_PRINT("{}\n", dp_typed_array_t<count>(data_format, data));
+    DPRINT("{}\n", dp_typed_array_t<count>(data_format, data));
 }
 
 // Dprints data format as string given an uint
 inline void dprint_data_format(uint8_t data_format) {
     switch (data_format) {
-        case (uint8_t)DataFormat::Float32: DEVICE_PRINT("Float32"); break;
-        case (uint8_t)DataFormat::Float16: DEVICE_PRINT("Float16"); break;
-        case (uint8_t)DataFormat::Bfp8: DEVICE_PRINT("Bfp8"); break;
-        case (uint8_t)DataFormat::Bfp4: DEVICE_PRINT("Bfp4"); break;
-        case (uint8_t)DataFormat::Bfp2: DEVICE_PRINT("Bfp2"); break;
-        case (uint8_t)DataFormat::Float16_b: DEVICE_PRINT("Float16_b"); break;
-        case (uint8_t)DataFormat::Bfp8_b: DEVICE_PRINT("Bfp8_b"); break;
-        case (uint8_t)DataFormat::Bfp4_b: DEVICE_PRINT("Bfp4_b"); break;
-        case (uint8_t)DataFormat::Bfp2_b: DEVICE_PRINT("Bfp2_b"); break;
-        case (uint8_t)DataFormat::Lf8: DEVICE_PRINT("Lf8"); break;
-        case (uint8_t)DataFormat::Int8: DEVICE_PRINT("Int8"); break;
-        case (uint8_t)DataFormat::UInt8: DEVICE_PRINT("UInt8"); break;
-        case (uint8_t)DataFormat::UInt16: DEVICE_PRINT("UInt16"); break;
-        case (uint8_t)DataFormat::Int32: DEVICE_PRINT("Int32"); break;
-        case (uint8_t)DataFormat::UInt32: DEVICE_PRINT("UInt32"); break;
-        case (uint8_t)DataFormat::Tf32: DEVICE_PRINT("Tf32"); break;
-        default: DEVICE_PRINT("INVALID DATA FORMAT"); break;
+        case (uint8_t)DataFormat::Float32: DPRINT("Float32"); break;
+        case (uint8_t)DataFormat::Float16: DPRINT("Float16"); break;
+        case (uint8_t)DataFormat::Bfp8: DPRINT("Bfp8"); break;
+        case (uint8_t)DataFormat::Bfp4: DPRINT("Bfp4"); break;
+        case (uint8_t)DataFormat::Bfp2: DPRINT("Bfp2"); break;
+        case (uint8_t)DataFormat::Float16_b: DPRINT("Float16_b"); break;
+        case (uint8_t)DataFormat::Bfp8_b: DPRINT("Bfp8_b"); break;
+        case (uint8_t)DataFormat::Bfp4_b: DPRINT("Bfp4_b"); break;
+        case (uint8_t)DataFormat::Bfp2_b: DPRINT("Bfp2_b"); break;
+        case (uint8_t)DataFormat::Lf8: DPRINT("Lf8"); break;
+        case (uint8_t)DataFormat::Int8: DPRINT("Int8"); break;
+        case (uint8_t)DataFormat::UInt8: DPRINT("UInt8"); break;
+        case (uint8_t)DataFormat::UInt16: DPRINT("UInt16"); break;
+        case (uint8_t)DataFormat::Int32: DPRINT("Int32"); break;
+        case (uint8_t)DataFormat::UInt32: DPRINT("UInt32"); break;
+        case (uint8_t)DataFormat::Tf32: DPRINT("Tf32"); break;
+        default: DPRINT("INVALID DATA FORMAT"); break;
     }
 }
 
@@ -184,7 +184,7 @@ inline void dprint_tensix_dest_reg_row_int32(uint16_t row) {
     }
     dprint_array_with_data_type<ARRAY_LEN>((uint32_t)DataFormat::Int32, rd_data);
 #else
-    DEVICE_PRINT("Int32 format not supported on this architecture\n");
+    DPRINT("Int32 format not supported on this architecture\n");
 #endif
 }
 
@@ -227,13 +227,12 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
         if (READ_HW_CFG_0_REG_FIELD(ALU_ACC_CTRL_Fp32_enabled)) {
             data_format_reg_field_value = (uint32_t)DataFormat::Float32;
 #if defined(ARCH_WORMHOLE)
-            DEVICE_PRINT(
-                "WARNING: Float32 on Wormhole displays limited precision - lower 16 mantissa bits are not shown\n");
+            DPRINT("WARNING: Float32 on Wormhole displays limited precision - lower 16 mantissa bits are not shown\n");
 #endif
         }
 
         // Print the contents
-        DEVICE_PRINT("Tile ID = {}\n", tile_id);
+        DPRINT("Tile ID = {}\n", tile_id);
 
         uint32_t row = tile_id * NUM_ROWS_PER_TILE;
         for (int face_id = 0; face_id < NUM_FACES_PER_TILE; ++face_id) {
@@ -253,12 +252,12 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
                     case (uint32_t)DataFormat::Int8:
                         dprint_tensix_dest_reg_row_int8(data_format_reg_field_value, row);
                         break;
-                    default: DEVICE_PRINT("Unsupported data format: {}\n", data_format_reg_field_value); break;
+                    default: DPRINT("Unsupported data format: {}\n", data_format_reg_field_value); break;
                 }
                 row++;
             }
             if constexpr (print_by_face) {
-                DEVICE_PRINT("\n");
+                DPRINT("\n");
             }
         }
     })
@@ -271,7 +270,7 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
 #define dprint_cfg_reg_field(bank, reg_field_name)                                          \
     {                                                                                       \
         uint32_t field_val = READ_CFG_REG_FIELD(ckernel::dbg_cfgreg::bank, reg_field_name); \
-        DEVICE_PRINT(#reg_field_name " = {}\n", field_val);                                 \
+        DPRINT(#reg_field_name " = {}\n", field_val);                                       \
     }
 
 // Print the contents of the whole configuration register. The register is specified by
@@ -281,7 +280,7 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
 #define dprint_cfg_reg(bank, reg_field_name)                                                    \
     {                                                                                           \
         uint32_t reg_val = dbg_read_cfgreg(ckernel::dbg_cfgreg::bank, reg_field_name##_ADDR32); \
-        DEVICE_PRINT(#reg_field_name " = 0x{:x}\n", reg_val);                                   \
+        DPRINT(#reg_field_name " = 0x{:x}\n", reg_val);                                         \
     }
 
 // Print the content of the register field given the value in the register.
@@ -289,17 +288,17 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
     {                                                                                       \
         uint32_t field_value = (reg_val & reg_field_name##_MASK) >> reg_field_name##_SHAMT; \
         if (printDec) {                                                                     \
-            DEVICE_PRINT(name " = {}; ", field_value);                                      \
+            DPRINT(name " = {}; ", field_value);                                            \
         } else {                                                                            \
-            DEVICE_PRINT(name " = 0x{:x}; ", field_value);                                  \
+            DPRINT(name " = 0x{:x}; ", field_value);                                        \
         }                                                                                   \
     }
 
-#define dprint_tensix_struct_field(word, mask, shamt, name, printDec)      \
-    {                                                                      \
-        if (printDec) {                                                    \
-            DEVICE_PRINT(name ": {}\n", ((word) & (mask)) >> (shamt));     \
-        } else {                                                           \
-            DEVICE_PRINT(name ": 0x{:x}\n", ((word) & (mask)) >> (shamt)); \
-        }                                                                  \
+#define dprint_tensix_struct_field(word, mask, shamt, name, printDec) \
+    {                                                                 \
+        if (printDec) {                                               \
+            DPRINT(name ": {}\n", ((word) & (mask)) >> (shamt));      \
+        } else {                                                      \
+            DPRINT(name ": 0x{:x}\n", ((word) & (mask)) >> (shamt));  \
+        }                                                             \
     }

@@ -19,15 +19,15 @@ void kernel_main() {
     const uint32_t num_read_per_barrier = get_arg_val<uint32_t>(8);
 
 #ifdef DEBUG
-    DEVICE_PRINT("dst_addr: {}\n", dst_addr);
-    DEVICE_PRINT("output_stick_size: {}\n", output_stick_size);
-    DEVICE_PRINT("input_stick_size: {}\n", input_stick_size);
-    DEVICE_PRINT("stick_size_offset: {}\n", stick_size_offset);
-    DEVICE_PRINT("num_dims: {}\n", num_dims);
-    DEVICE_PRINT("start_id: {}\n", start_id);
-    DEVICE_PRINT("num_sticks_per_core: {}\n", num_sticks_per_core);
-    DEVICE_PRINT("num_sticks_per_core_read: {}\n", num_sticks_per_core_read);
-    DEVICE_PRINT("num_read_per_barrier: {}\n", num_read_per_barrier);
+    DPRINT("dst_addr: {}\n", dst_addr);
+    DPRINT("output_stick_size: {}\n", output_stick_size);
+    DPRINT("input_stick_size: {}\n", input_stick_size);
+    DPRINT("stick_size_offset: {}\n", stick_size_offset);
+    DPRINT("num_dims: {}\n", num_dims);
+    DPRINT("start_id: {}\n", start_id);
+    DPRINT("num_sticks_per_core: {}\n", num_sticks_per_core);
+    DPRINT("num_sticks_per_core_read: {}\n", num_sticks_per_core_read);
+    DPRINT("num_read_per_barrier: {}\n", num_read_per_barrier);
 
 #endif
     tt_l1_ptr uint32_t* num_unpadded_sticks = (tt_l1_ptr uint32_t*)(get_arg_addr(9));
@@ -36,23 +36,23 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* rev_stride = id_per_dim + num_dims;
 
 #ifdef DEBUG
-    DEVICE_PRINT("num_input_sticks_per_dim: ");
+    DPRINT("num_input_sticks_per_dim: ");
     for (uint32_t i = 0; i < num_dims; i++) {
-        DEVICE_PRINT("{} ", num_unpadded_sticks[i]);
+        DPRINT("{} ", num_unpadded_sticks[i]);
     }
-    DEVICE_PRINT("\nnum_output_sticks_per_dim: ");
+    DPRINT("\nnum_output_sticks_per_dim: ");
     for (uint32_t i = 0; i < num_dims; i++) {
-        DEVICE_PRINT("{} ", num_padded_sticks[i]);
+        DPRINT("{} ", num_padded_sticks[i]);
     }
-    DEVICE_PRINT("\nrev_stride: ");
+    DPRINT("\nrev_stride: ");
     for (uint32_t i = 0; i < num_dims; i++) {
-        DEVICE_PRINT("{} ", rev_stride[i]);
+        DPRINT("{} ", rev_stride[i]);
     }
-    DEVICE_PRINT("\nid_per_dim: ");
+    DPRINT("\nid_per_dim: ");
     for (uint32_t i = 0; i < num_dims; i++) {
-        DEVICE_PRINT("{} ", id_per_dim[i]);
+        DPRINT("{} ", id_per_dim[i]);
     }
-    DEVICE_PRINT("\n");
+    DPRINT("\n");
 #endif
     constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
     constexpr uint32_t alignment_offset = get_compile_time_arg_val(1);
@@ -130,12 +130,11 @@ void kernel_main() {
                 {.page_id = dst_stick_id, .offset_bytes = page_begins_offset});
 #endif
 #ifdef DEBUG
-            DEVICE_PRINT(
-                "SRC L1 : {} Dst Stick ID {} sticks_written: {} Coord ", src_offset, dst_stick_id, sticks_written);
+            DPRINT("SRC L1 : {} Dst Stick ID {} sticks_written: {} Coord ", src_offset, dst_stick_id, sticks_written);
             for (uint32_t j = 0; j < num_dims; j++) {
-                DEVICE_PRINT(", {} ", id_per_dim[j]);
+                DPRINT(", {} ", id_per_dim[j]);
             }
-            DEVICE_PRINT("\n");
+            DPRINT("\n");
 #endif
             src_offset += stick_size_offset;
             dst_stick_id += rev_stride[1];

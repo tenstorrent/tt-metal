@@ -19,7 +19,7 @@ void kernel_main() {
     uint32_t value = get_arg(args::value);
     uint32_t num_words = get_arg(args::num_words);
 
-    DEVICE_PRINT("START mode={} words={}\n", test_mode, num_words);
+    DPRINT("START mode={} words={}\n", test_mode, num_words);
 
     // Write values to cacheable addresses
     volatile uint32_t* ptr = (volatile uint32_t*)(uintptr_t)base_addr;
@@ -27,7 +27,7 @@ void kernel_main() {
         ptr[i] = value + i;
     }
 
-    DEVICE_PRINT("WRITES DONE\n");
+    DPRINT("WRITES DONE\n");
 
     // Flush/invalidate based on test mode
     switch (test_mode) {
@@ -83,5 +83,5 @@ void kernel_main() {
             while (1);
     }
 
-    DEVICE_PRINT("DONE\n");
+    DPRINT("DONE\n");
 }

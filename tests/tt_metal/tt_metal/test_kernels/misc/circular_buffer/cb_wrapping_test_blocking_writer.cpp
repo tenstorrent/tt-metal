@@ -75,7 +75,7 @@ void core_agnostic_main() {
     }
 
     if (*get_cb_tiles_received_ptr(CB_ID) != CHURN_TARGET) {
-        DEVICE_PRINT(
+        DPRINT(
             "Not stopping at churn target as expected! Got: 0x{:x}, Expected: 0x{:x}. Exiting\n",
             *get_cb_tiles_received_ptr(CB_ID),
             (std::uint32_t)CHURN_TARGET);
@@ -99,8 +99,7 @@ void core_agnostic_main() {
     // Acked counter should stay at CHURN_TARGET.
     auto expected_acked = CHURN_TARGET;
     if (*get_cb_tiles_acked_ptr(CB_ID) != expected_acked) {
-        DEVICE_PRINT(
-            "Got: Acked: 0x{:x}, Expected: 0x{:x}\n", *get_cb_tiles_acked_ptr(CB_ID), (std::uint32_t)expected_acked);
+        DPRINT("Got: Acked: 0x{:x}, Expected: 0x{:x}\n", *get_cb_tiles_acked_ptr(CB_ID), (std::uint32_t)expected_acked);
         return;
     }
 

@@ -7,7 +7,7 @@
 #include "api/debug/dprint.h"
 
 void kernel_main() {
-    DEVICE_PRINT(
+    DPRINT(
         "Kernel Compile Time Args\n{}\n{}\n{}\n{}\n",
         get_compile_time_arg_val(0),
         get_compile_time_arg_val(1),

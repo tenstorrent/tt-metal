@@ -89,7 +89,7 @@ class OldStyleDevicePrint {
 
 template <typename Type>
 __attribute__((__noinline__)) OldStyleDevicePrint operator<<(OldStyleDevicePrint dp, Type) {
-    static_assert(sizeof(Type) == 0, "Old style DPRINT is deprecated. Use DEVICE_PRINT instead.");
+    static_assert(sizeof(Type) == 0, "Old style DPRINT is deprecated. Use DPRINT(format, ...) instead.");
     return dp;
 }
 
@@ -98,8 +98,13 @@ __attribute__((__noinline__)) OldStyleDevicePrint operator<<(OldStyleDevicePrint
 #include "dprint_tile.h"
 #endif
 
-// Support for DEVICE_PRINT.
+// DPRINT is the user-facing printf-style debug print API. The macros below forward to the
+// internal DEVICE_PRINT implementation in device_print.h.
 #include "device_print.h"
 
-// Forward declaration of DEVICE_PRINT's internal implementation, which we will call from the public API.
 #define DPRINT(format, ...) DEVICE_PRINT(format, ##__VA_ARGS__)
+#define DPRINT_UNPACK(format, ...) DEVICE_PRINT_UNPACK(format, ##__VA_ARGS__)
+#define DPRINT_MATH(format, ...) DEVICE_PRINT_MATH(format, ##__VA_ARGS__)
+#define DPRINT_PACK(format, ...) DEVICE_PRINT_PACK(format, ##__VA_ARGS__)
+#define DPRINT_DATA0(format, ...) DEVICE_PRINT_DATA0(format, ##__VA_ARGS__)
+#define DPRINT_DATA1(format, ...) DEVICE_PRINT_DATA1(format, ##__VA_ARGS__)

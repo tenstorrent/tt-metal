@@ -75,21 +75,21 @@ void kernel_main() {
     const uint32_t pad_src_l1_addr = pad_addr + output_row_size_bytes - padded_channels_bytes;
 
 #ifdef DEBUG
-    DEVICE_PRINT(
+    DPRINT(
         "total_num_tiles: {}, num_tiles_per_read: {}, tile_size: {}, read_size: {}, block_row_size: {}\n",
         total_num_tiles,
         num_tiles_per_read,
         tile_size,
         read_size,
         block_row_size);
-    DEVICE_PRINT("untilized CB ID: {} Out CB ID: {}\n", cb_untilized_id, cb_out_id);
-    DEVICE_PRINT(
+    DPRINT("untilized CB ID: {} Out CB ID: {}\n", cb_untilized_id, cb_out_id);
+    DPRINT(
         "pad_addr : {} pad_src_l1_addr : {} padded_channels_elems: {}\n",
         pad_addr,
         pad_src_l1_addr,
         padded_channels_elems);
-    DEVICE_PRINT("Unaligned {}\n", is_non_aligned);
-    DEVICE_PRINT(
+    DPRINT("Unaligned {}\n", is_non_aligned);
+    DPRINT(
         "Output Row Size Elems {} Bytes: {} Output Elem Size: {}\n",
         output_row_size_elems,
         output_row_size_bytes,
@@ -113,7 +113,7 @@ void kernel_main() {
         rows_remaining -= read_rows_size;
 
 #ifdef DEBUG
-        DEVICE_PRINT(
+        DPRINT(
             "Width Start in Input: {} Width Tile Start in Input: {} Read Start Offset: {} Read Rows Size: {} Remaining "
             "{}\n",
             width_start_in_input,
@@ -122,14 +122,14 @@ void kernel_main() {
             read_rows_size,
             rows_remaining);
 
-        DEVICE_PRINT(
+        DPRINT(
             "Tiles Read {} Output Coord: {} {} {} {}\n",
             tiles_read,
             output_coord[0],
             output_coord[1],
             output_coord[2],
             output_coord[3]);
-        DEVICE_PRINT("Write Offset {}\n", write_offset);
+        DPRINT("Write Offset {}\n", write_offset);
 
 #endif
 
@@ -162,12 +162,12 @@ void kernel_main() {
 #ifdef DEBUG
             volatile tt_l1_ptr uint16_t* pad_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
                 pad_addr + output_row_size_bytes - padded_channels_bytes);
-            DEVICE_PRINT("Pad Data = ");
+            DPRINT("Pad Data = ");
             for (uint32_t i = 0; i < padded_channels_elems; ++i) {
-                DEVICE_PRINT("{} ", pad_ptr[i]);
+                DPRINT("{} ", pad_ptr[i]);
             }
-            DEVICE_PRINT("\n");
-            DEVICE_PRINT("Pad Write Offset : {}\n", pad_write_offset);
+            DPRINT("\n");
+            DPRINT("Pad Write Offset : {}\n", pad_write_offset);
 #endif
             const auto pad_src = experimental::local_addr(pad_src_l1_addr, noc.get_noc_id());
             for (uint32_t row_index = 0; row_index < read_rows_size; row_index++) {

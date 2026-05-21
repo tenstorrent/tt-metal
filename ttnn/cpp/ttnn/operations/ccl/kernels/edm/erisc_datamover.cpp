@@ -33,14 +33,14 @@
 // Intended only for (performance) test use cases
 FORCE_INLINE void eth_setup_handshake2(std::uint32_t handshake_register_address, bool is_sender) {
     if (is_sender) {
-        DEVICE_PRINT("eth_send_bytes\n");
+        DPRINT("eth_send_bytes\n");
         eth_send_bytes(handshake_register_address, handshake_register_address, 16);
-        DEVICE_PRINT("eth_wait_for_receiver_done\n");
+        DPRINT("eth_wait_for_receiver_done\n");
         eth_wait_for_receiver_done();
     } else {
-        DEVICE_PRINT("eth_wait_for_bytes\n");
+        DPRINT("eth_wait_for_bytes\n");
         eth_wait_for_bytes(16);
-        DEVICE_PRINT("wait eth_receiver_done\n");
+        DPRINT("wait eth_receiver_done\n");
         eth_receiver_channel_done(0);
     }
 }

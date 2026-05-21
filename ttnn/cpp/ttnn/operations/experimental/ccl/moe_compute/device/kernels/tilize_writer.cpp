@@ -45,10 +45,10 @@ void print_tile_rows(
     uint16_t end_row = 32,
     uint8_t start_col = 0,
     uint8_t end_col = 32) {
-    DEVICE_PRINT("cb_idx: {} tile_idx: {}\n", cb_idx, tile_idx);
-    DEVICE_PRINT("======\n");
+    DPRINT("cb_idx: {} tile_idx: {}\n", cb_idx, tile_idx);
+    DPRINT("======\n");
     for (uint16_t r = start_row; r < end_row; ++r) {
-        DEVICE_PRINT(
+        DPRINT(
             "{} : {}\n",
             r,
             TileSlice(
@@ -64,7 +64,7 @@ void print_tile_rows(
                 true,
                 untilize));
     }
-    DEVICE_PRINT("++++++\n");
+    DPRINT("++++++\n");
 }
 
 template <

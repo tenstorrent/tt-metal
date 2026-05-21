@@ -99,17 +99,17 @@ struct ArrayView {
     void print() const {
         auto ptr = _ptr;
         for (uint32_t i = 0; i < _size; ++i) {
-            DEVICE_PRINT("{} ", ptr[i]);
+            DPRINT("{} ", ptr[i]);
         }
-        DEVICE_PRINT("\n");
+        DPRINT("\n");
     }
 
     void print_hex() const {
         auto ptr = _ptr;
         for (uint32_t i = 0; i < _size; ++i) {
-            DEVICE_PRINT("{:X} ", ptr[i]);
+            DPRINT("{:X} ", ptr[i]);
         }
-        DEVICE_PRINT("\n");
+        DPRINT("\n");
     }
 #endif
 

@@ -62,7 +62,7 @@ void kernel_main() {
                     // what is the source address for the current tile?
                     // c32 = intra-C-tile loop
                     // every 32 C's acquire a new output tile address
-                    //    DEVICE_PRINT("8B h={} ct={} wt={} W={} HW2={}\n", h, ct, wt, W, HW2);
+                    //    DPRINT("8B h={} ct={} wt={} W={} HW2={}\n", h, ct, wt, W, HW2);
 
                     cb_reserve_back(operand0, onetile);
 

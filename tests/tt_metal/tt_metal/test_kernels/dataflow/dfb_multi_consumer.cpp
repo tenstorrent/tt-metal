@@ -40,16 +40,16 @@ void kernel_main() {
                 dfb, tensor_accessor, {}, {.page_id = page_id});
 #endif
         } else {
-            DEVICE_PRINT("consumer wait page id: {}\n", page_id);
+            DPRINT("consumer wait page id: {}\n", page_id);
             dfb.wait_front(1);
             noc.async_write(dfb, tensor_accessor, entry_size, {}, {.page_id = page_id});
             noc.async_write_barrier();
             dfb.pop_front(1);
         }
     }
-    DEVICE_PRINT("consumer before finish\n");
+    DPRINT("consumer before finish\n");
     dfb.finish();
-    DEVICE_PRINT("consumer after finish before write barrier\n");
+    DPRINT("consumer after finish before write barrier\n");
     dfb.write_barrier(noc);
-    DEVICE_PRINT("finished write barrier\n");
+    DPRINT("finished write barrier\n");
 }
