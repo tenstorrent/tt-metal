@@ -145,7 +145,7 @@ def generate_report(
         time.sleep(1)
     csvexport_exe = resolve_tracy_tool_path(binFolder, TRACY_CSVEXPROT_TOOL)
     if csvexport_exe is None:
-        logger.error("tracy-csvexport was not found under build/bin or build/csvexport")
+        logger.error("tracy-csvexport was not found under build/bin")
         sys.exit(1)
     with open(logsFolder / TRACY_OPS_TIMES_FILE_NAME, "w") as csvFile:
         childCallStr = ""
