@@ -41,12 +41,33 @@ _TUNED_FC1_PROGRAM_CONFIGS = {
         transpose_mcast=False,
         fused_activation=(ttnn.UnaryOpType.GELU, True),
     ),
+    # Stage 0: input (1, 160, 160, 192) -> M_tiles=800, K=6, N=24.
+    # 2D mcast doesn't fit (would require pcm=100 -> L1 overflow). 1D mcast distributes
+    # M=800 tiles across 64 cores (pcm=13 with one core handling the remainder).
+    # Standalone sweep: default 2D = 1281us; tuned 1D pcm=13 pcn=24 ibw=2 sub=1x8 = 550us (-57%).
+    # 2 Stage-0 calls/iter -> ~1.5 ms iter savings.
+    (192, 768): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=2,
+        out_subblock_h=1,
+        out_subblock_w=8,
+        per_core_M=13,
+        per_core_N=24,
+        fuse_batch=True,
+        fused_activation=(ttnn.UnaryOpType.GELU, True),
+        mcast_in0=False,
+        gather_in0=False,
+        hop_cores=ttnn.CoreRangeSet([]),
+        num_global_cb_receivers=0,
+        untilize_out=False,
+    ),
 }
 
 # Each (K, N) entry's expected M_tiles_effective for the canonical input shape.
 _EXPECTED_M_TILES = {
     (768, 3072): 80,    # Stage 2: 40 * 2
     (384, 1536): 240,   # Stage 1: 80 * 3
+    (192, 768): 800,    # Stage 0: 160 * 5
 }
 
 
