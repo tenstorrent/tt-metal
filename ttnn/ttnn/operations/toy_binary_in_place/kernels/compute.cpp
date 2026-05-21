@@ -1,101 +1,131 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Compute kernel for toy_binary_in_place.
+// Compute kernel for toy_binary_in_place — migrated to the eltwise helper
+// surface (eltwise_chain + eltwise_convenience + eltwise_misc::Square).
 //
-// Single full init (compute_kernel_hw_startup) at kernel start.
-// Phase transitions use reconfig (inside the helpers) instead of
-// a second full init.
+// One compute_kernel_hw_startup at MAIN entry; each chain call emits its own
+// per-element reconfigs via the prev-CB fold.
 //
-// Supports: add(0), sub(1), mul(2), square(3)
-// Supports: in_place(1) and normal(0) modes
+// Supports: add(0), sub(1), mul(2), square(3 — FPU mul same-CB), sfpu_square(4)
+// Supports: in_place(1) and normal(0) modes, with NONE / ROW / COL / SCALAR broadcast.
 
 #include <cstdint>
 
-#include "api/compute/eltwise_binary.h"
 #include "api/compute/compute_kernel_api.h"
-#include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/copy_tile_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_helpers.hpp"
 
-// Dispatch macro: calls the correct in-place helper based on op_code and bcast_code.
-// SQUARE ignores broadcast and B policy.
-#define DISPATCH_IN_PLACE(op_code, bcast_code, cb_work, cb_b, shape)                                                \
-    do {                                                                                                            \
-        if constexpr (op_code == 3) {                                                                               \
-            square_in_place(cb_work, shape);                                                                        \
-        } else if constexpr (bcast_code == 0) {                                                                     \
-            OP_IN_PLACE<BroadcastDim::NONE, BinaryInputPolicy::WaitUpfrontPopAtEnd>(op_code, cb_work, cb_b, shape); \
-        } else if constexpr (bcast_code == 1) {                                                                     \
-            OP_IN_PLACE<BroadcastDim::ROW, BinaryInputPolicy::WaitUpfrontNoPop>(op_code, cb_work, cb_b, shape);     \
-        } else if constexpr (bcast_code == 2) {                                                                     \
-            OP_IN_PLACE<BroadcastDim::COL, BinaryInputPolicy::WaitUpfrontPopAtEnd>(op_code, cb_work, cb_b, shape);  \
-        } else {                                                                                                    \
-            OP_IN_PLACE<BroadcastDim::SCALAR, BinaryInputPolicy::WaitUpfrontNoPop>(op_code, cb_work, cb_b, shape);  \
-        }                                                                                                           \
-    } while (0)
+namespace ckl = compute_kernel_lib;
 
-// Dispatch macro: calls the correct normal (non-in-place) helper.
-#define DISPATCH_NORMAL(op_code, bcast_code, cb_input, cb_b, cb_out, shape)                                            \
-    do {                                                                                                               \
-        if constexpr (op_code == 3) {                                                                                  \
-            square(cb_input, cb_out, shape);                                                                           \
-        } else if constexpr (bcast_code == 0) {                                                                        \
-            OP_NORMAL<BroadcastDim::NONE, BinaryInputPolicy::WaitAndPopPerTile>(                                       \
-                op_code, cb_input, cb_b, cb_out, shape);                                                               \
-        } else if constexpr (bcast_code == 1) {                                                                        \
-            OP_NORMAL<BroadcastDim::ROW, BinaryInputPolicy::WaitUpfrontNoPop>(op_code, cb_input, cb_b, cb_out, shape); \
-        } else if constexpr (bcast_code == 2) {                                                                        \
-            OP_NORMAL<BroadcastDim::COL, BinaryInputPolicy::WaitAndPopPerTile>(                                        \
-                op_code, cb_input, cb_b, cb_out, shape);                                                               \
-        } else {                                                                                                       \
-            OP_NORMAL<BroadcastDim::SCALAR, BinaryInputPolicy::WaitUpfrontNoPop>(                                      \
-                op_code, cb_input, cb_b, cb_out, shape);                                                               \
-        }                                                                                                              \
-    } while (0)
+namespace {
 
-using namespace compute_kernel_lib;
+template <uint32_t Code>
+struct BcastFor;
+template <>
+struct BcastFor<0> {
+    static constexpr auto value = ckl::BroadcastDim::None;
+};
+template <>
+struct BcastFor<1> {
+    static constexpr auto value = ckl::BroadcastDim::Row;
+};
+template <>
+struct BcastFor<2> {
+    static constexpr auto value = ckl::BroadcastDim::Col;
+};
+template <>
+struct BcastFor<3> {
+    static constexpr auto value = ckl::BroadcastDim::Scalar;
+};
 
-// op_code: 0=add, 1=sub, 2=mul
-template <BroadcastDim bcast_dim, BinaryInputPolicy b_policy, uint32_t op_code>
-ALWI void op_in_place_impl(uint32_t cb_work, uint32_t cb_b, BinaryInputBlockShape shape) {
-    if constexpr (op_code == 0) {
-        add_in_place<bcast_dim, b_policy>(cb_work, cb_b, shape);
-    } else if constexpr (op_code == 1) {
-        sub_in_place<bcast_dim, b_policy>(cb_work, cb_b, shape);
-    } else {
-        mul_in_place<bcast_dim, b_policy>(cb_work, cb_b, shape);
-    }
+// B-side operand kind + lifecycle per broadcast.
+//   NONE   — B is per-tile streamed (cb_b sized Ht*Wt+1, reader pushes Ht*Wt).
+//   ROW    — B is Wt tiles, read by `wt` each iter — wait upfront, pop at end.
+//   COL    — B is Ht tiles, read by `ht` each iter — wait upfront, pop at end.
+//   SCALAR — B is 1 tile, read at index 0 — wait upfront, pop at end.
+template <ckl::BroadcastDim D>
+struct BSide;
+template <>
+struct BSide<ckl::BroadcastDim::None> {
+    static constexpr auto kind = ckl::OperandKind::Scalar;  // FirstTile (per-tile pop chase)
+    static constexpr auto policy = ckl::Streaming;
+};
+template <>
+struct BSide<ckl::BroadcastDim::Row> {
+    static constexpr auto kind = ckl::OperandKind::Row;
+    static constexpr auto policy = ckl::Bulk;
+};
+template <>
+struct BSide<ckl::BroadcastDim::Col> {
+    static constexpr auto kind = ckl::OperandKind::Col;
+    static constexpr auto policy = ckl::Bulk;
+};
+template <>
+struct BSide<ckl::BroadcastDim::Scalar> {
+    static constexpr auto kind = ckl::OperandKind::Scalar;
+    static constexpr auto policy = ckl::Bulk;
+};
+
+template <uint32_t Code>
+struct FpuOpFor;
+template <>
+struct FpuOpFor<0> {
+    static constexpr auto value = ckl::BinaryFpuOp::Add;
+};
+template <>
+struct FpuOpFor<1> {
+    static constexpr auto value = ckl::BinaryFpuOp::Sub;
+};
+template <>
+struct FpuOpFor<2> {
+    static constexpr auto value = ckl::BinaryFpuOp::Mul;
+};
+
+template <
+    uint32_t CbA,
+    uint32_t CbB,
+    uint32_t CbOut,
+    ckl::BinaryFpuOp Op,
+    ckl::BroadcastDim Bcast,
+    ckl::InputLifecycle BPolicy,
+    ckl::OperandKind BIndex>
+ALWI void run_binary(ckl::EltwiseShape shape) {
+    ckl::eltwise_chain(
+        shape,
+        ckl::BinaryFpu<
+            CbA,
+            CbB,
+            Op,
+            Bcast,
+            ckl::BinaryDataFormatReconfig::Input,
+            ckl::Streaming,            // A: per-tile pop chase (in-place safe)
+            BPolicy,                   // B: depends on broadcast
+            ckl::OperandKind::Scalar,  // AIndex = FirstTile (Streaming requires it)
+            ckl::Dst::D0,
+            BIndex>{},
+        ckl::PackTile<CbOut, ckl::Dst::D0, ckl::OutStreaming>{});
 }
 
-template <BroadcastDim bcast_dim, BinaryInputPolicy b_policy, uint32_t op_code>
-ALWI void op_normal_impl(uint32_t cb_input, uint32_t cb_b, uint32_t cb_out, BinaryInputBlockShape shape) {
-    if constexpr (op_code == 0) {
-        add<bcast_dim, BinaryInputPolicy::WaitAndPopPerTile, b_policy>(cb_input, cb_b, cb_out, shape);
-    } else if constexpr (op_code == 1) {
-        sub<bcast_dim, BinaryInputPolicy::WaitAndPopPerTile, b_policy>(cb_input, cb_b, cb_out, shape);
-    } else {
-        mul<bcast_dim, BinaryInputPolicy::WaitAndPopPerTile, b_policy>(cb_input, cb_b, cb_out, shape);
-    }
+// FPU square: x*x via same-CB BinaryFpu (chain dedups B-side wait/pop when CbA == CbB).
+template <uint32_t Cb, uint32_t CbOut>
+ALWI void run_fpu_square(ckl::EltwiseShape shape) {
+    ckl::eltwise_chain(
+        shape,
+        ckl::BinaryFpu<
+            Cb,
+            Cb,
+            ckl::BinaryFpuOp::Mul,
+            ckl::BroadcastDim::None,
+            ckl::BinaryDataFormatReconfig::Input,
+            ckl::Streaming,
+            ckl::Streaming,
+            ckl::OperandKind::Scalar,
+            ckl::Dst::D0,
+            ckl::OperandKind::Scalar>{},
+        ckl::PackTile<CbOut, ckl::Dst::D0, ckl::OutStreaming>{});
 }
 
-// Workaround: macros that forward constexpr op_code to template parameter
-#define OP_IN_PLACE(bcast, bpol, opc, w, b, s)     \
-    if constexpr (opc == 0) {                      \
-        op_in_place_impl<bcast, bpol, 0>(w, b, s); \
-    } else if constexpr (opc == 1) {               \
-        op_in_place_impl<bcast, bpol, 1>(w, b, s); \
-    } else {                                       \
-        op_in_place_impl<bcast, bpol, 2>(w, b, s); \
-    }
-
-#define OP_NORMAL(bcast, bpol, opc, i, b, o, s)     \
-    if constexpr (opc == 0) {                       \
-        op_normal_impl<bcast, bpol, 0>(i, b, o, s); \
-    } else if constexpr (opc == 1) {                \
-        op_normal_impl<bcast, bpol, 1>(i, b, o, s); \
-    } else {                                        \
-        op_normal_impl<bcast, bpol, 2>(i, b, o, s); \
-    }
+}  // namespace
 
 void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(0);
@@ -110,70 +140,46 @@ void kernel_main() {
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
     constexpr uint32_t total_a_tiles = Ht * Wt;
-    constexpr auto shape = BinaryInputBlockShape::of(Ht, Wt);
+    constexpr auto shape = ckl::EltwiseShape::of(Ht, Wt);
+    constexpr auto Bcast = BcastFor<bcast_code>::value;
+    constexpr auto BKind = BSide<Bcast>::kind;
+    constexpr auto BPol = BSide<Bcast>::policy;
 
     if constexpr (in_place_flag == 1) {
         // === IN-PLACE MODE ===
-        compute_kernel_hw_startup(cb_input, cb_work);
+        // Boot once covering Phase 1 (cb_input → cb_work) — Phase 2/3 reconfigs
+        // are emitted by the chain's prev-CB fold at each chain call's entry.
+        compute_kernel_hw_startup(cb_input, cb_b, cb_work);
 
-        // Phase 1: Copy A tiles from cb_input → cb_work
-        copy_tiles<CopyInputPolicy::WaitAndPop, CopyDataFormatReconfig::NONE>(cb_input, cb_work, total_a_tiles);
+        // Phase 1: stream A into the working CB.
+        ckl::copy<cb_input, cb_work>(total_a_tiles);
 
-        // Phase 2: In-place op on cb_work (reconfig handles format transition)
+        // Phase 2: in-place transform on cb_work.
         if constexpr (op_code == 4) {
-            // SFPU SQUARE: unary square via SFPU (copy to DEST, square_tile, pack back)
-            // In-place pop-before-pack cycle, same as binary but using SFPU math.
-            square_tile_init();
-            for (uint32_t i = 0; i < total_a_tiles; ++i) {
-                cb_wait_front(cb_work, 1);
-                tile_regs_acquire();
-                copy_tile(cb_work, 0, 0);
-                square_tile(0);
-                cb_pop_front(cb_work, 1);
-                tile_regs_commit();
-                tile_regs_wait();
-                cb_reserve_back(cb_work, 1);
-                pack_tile(0, cb_work);
-                cb_push_back(cb_work, 1);
-                tile_regs_release();
-            }
+            // SFPU SQUARE: copy → square → pack, all on cb_work (pop-chase in-place).
+            ckl::unary<ckl::Square<>, cb_work, cb_work>(total_a_tiles);
         } else if constexpr (op_code == 3) {
-            // FPU SQUARE: cb_work = cb_work * cb_work (binary MUL with same operand)
-            square_in_place(cb_work, shape);
-        } else if constexpr (bcast_code == 0) {
-            OP_IN_PLACE(BroadcastDim::NONE, BinaryInputPolicy::WaitUpfrontPopAtEnd, op_code, cb_work, cb_b, shape)
-        } else if constexpr (bcast_code == 1) {
-            OP_IN_PLACE(BroadcastDim::ROW, BinaryInputPolicy::WaitUpfrontNoPop, op_code, cb_work, cb_b, shape)
-        } else if constexpr (bcast_code == 2) {
-            OP_IN_PLACE(BroadcastDim::COL, BinaryInputPolicy::WaitUpfrontPopAtEnd, op_code, cb_work, cb_b, shape)
+            // FPU SQUARE: same-CB BinaryFpu mul, packs back to cb_work.
+            run_fpu_square<cb_work, cb_work>(shape);
         } else {
-            OP_IN_PLACE(BroadcastDim::SCALAR, BinaryInputPolicy::WaitUpfrontNoPop, op_code, cb_work, cb_b, shape)
+            constexpr auto Op = FpuOpFor<op_code>::value;
+            run_binary<cb_work, cb_b, cb_work, Op, Bcast, BPol, BKind>(shape);
         }
 
-        // Phase 3: Copy modified tiles from cb_work → cb_out
-        copy_tile_to_dst_init_short(cb_work);
-        copy_tiles<CopyInputPolicy::WaitAndPop, CopyDataFormatReconfig::OUTPUT>(cb_work, cb_out, total_a_tiles);
+        // Phase 3: drain cb_work → cb_out.
+        ckl::copy<cb_work, cb_out>(total_a_tiles);
 
     } else {
         // === NORMAL (NON-IN-PLACE) MODE ===
         compute_kernel_hw_startup(cb_input, cb_b, cb_out);
 
         if constexpr (op_code == 4) {
-            // SFPU SQUARE (non-in-place): copy to DEST, square_tile, pack to cb_out
-            square_tile_init();
-            copy_tiles<CopyInputPolicy::WaitAndPop, CopyDataFormatReconfig::NONE>(
-                cb_input, cb_out, total_a_tiles, [](uint32_t dst_idx) { square_tile(dst_idx); });
+            ckl::unary<ckl::Square<>, cb_input, cb_out>(total_a_tiles);
         } else if constexpr (op_code == 3) {
-            // FPU SQUARE: cb_out = cb_input * cb_input
-            square(cb_input, cb_out, shape);
-        } else if constexpr (bcast_code == 0) {
-            OP_NORMAL(BroadcastDim::NONE, BinaryInputPolicy::WaitAndPopPerTile, op_code, cb_input, cb_b, cb_out, shape)
-        } else if constexpr (bcast_code == 1) {
-            OP_NORMAL(BroadcastDim::ROW, BinaryInputPolicy::WaitUpfrontNoPop, op_code, cb_input, cb_b, cb_out, shape)
-        } else if constexpr (bcast_code == 2) {
-            OP_NORMAL(BroadcastDim::COL, BinaryInputPolicy::WaitAndPopPerTile, op_code, cb_input, cb_b, cb_out, shape)
+            run_fpu_square<cb_input, cb_out>(shape);
         } else {
-            OP_NORMAL(BroadcastDim::SCALAR, BinaryInputPolicy::WaitUpfrontNoPop, op_code, cb_input, cb_b, cb_out, shape)
+            constexpr auto Op = FpuOpFor<op_code>::value;
+            run_binary<cb_input, cb_b, cb_out, Op, Bcast, BPol, BKind>(shape);
         }
     }
 }
