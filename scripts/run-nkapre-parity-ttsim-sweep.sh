@@ -155,7 +155,9 @@ for t in unit_tests_ttnn unit_tests_ttnn_tensor unit_tests_ttnn_ccl \
     run_cmd "1.ttnn_cpp/$t" "env -u TT_METAL_MOCK_CLUSTER_DESC_PATH ./build/test/ttnn/$t"
 done
 
-run_cmd "1.ttnn_py/unit_tests" "env -u TT_METAL_MOCK_CLUSTER_DESC_PATH $PYTHON -m pytest tests/ttnn/unit_tests/ -xvvv --timeout-method=thread"
+if [ "${PARITY_SKIP_PYTEST:-0}" != 1 ]; then
+    run_cmd "1.ttnn_py/unit_tests" "env -u TT_METAL_MOCK_CLUSTER_DESC_PATH $PYTHON -m pytest tests/ttnn/unit_tests/ -xvvv --timeout-method=thread"
+fi
 
 fi
 
