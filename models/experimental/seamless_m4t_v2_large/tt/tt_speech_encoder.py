@@ -111,6 +111,8 @@ class TTSeamlessM4Tv2SpeechEncoder:
         # passed every call. Cache prepared (device) weights per conv geometry so trace capture
         # (which forbids ``write_shard_to_device``) reuses them — same pattern as SDXL / vadv2.
         self._conv1d_prepared_cache: Dict[Tuple[Any, ...], Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]] = {}
+        self._conv_config_cache: Dict[Tuple[Any, ...], ttnn.Conv1dConfig] = {}
+        self._conv_jit_warmed: set[Tuple[int, int]] = set()
         # Stage 1 (TTNN model bringup): LoFi linears, HiFi2 attention matmuls, sharded LN cache.
         self._linear_compute_cfg = ttnn.init_device_compute_kernel_config(
             device.arch(),
@@ -350,6 +352,108 @@ class TTSeamlessM4Tv2SpeechEncoder:
             return x
         return str(x)
 
+    @staticmethod
+    def _is_depthwise_conv(*, in_channels: int, out_channels: int, groups: int) -> bool:
+        return groups > 1 and groups == in_channels and groups == out_channels
+
+    def _conv1d_config(
+        self,
+        *,
+        batch: int,
+        input_length: int,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int,
+        groups: int,
+    ) -> ttnn.Conv1dConfig:
+        """Per-shape ``Conv1dConfig`` tuned from Tracy (exp6).
+
+        Conformer depthwise (k=31, g=1024) must not use ``act_block_h_override=32``: that
+        forces ABH=1 height-sharded programs on ~2 cores (~3.4% of peak). Leave auto-shard
+        to pick the 1-D depthwise height layout. Pointwise 1x1 uses the conv2d matmul path.
+        """
+        key = (batch, input_length, in_channels, out_channels, kernel_size, groups)
+        cached = self._conv_config_cache.get(key)
+        if cached is not None:
+            return cached
+
+        is_depthwise = self._is_depthwise_conv(in_channels=in_channels, out_channels=out_channels, groups=groups)
+        conv_kwargs: Dict[str, Any] = dict(
+            weights_dtype=ttnn.bfloat8_b,
+            shard_layout=None,
+            deallocate_activation=True,
+            enable_weights_double_buffer=True,
+            enable_act_double_buffer=True,
+            reallocate_halo_output=True,
+        )
+        if not is_depthwise and kernel_size > 1 and (input_length > 64 or in_channels >= 512):
+            conv_kwargs["act_block_h_override"] = 32
+
+        conv_config = ttnn.Conv1dConfig(**conv_kwargs)
+        self._conv_config_cache[key] = conv_config
+        return conv_config
+
+    def _warm_conv_jit(self, batch: int, seq_len: int) -> None:
+        """JIT-compile depthwise + adapter strided conv programs once per ``(batch, seq_len)``."""
+        key = (batch, seq_len)
+        if key in self._conv_jit_warmed:
+            return
+
+        enc = self.parameters.encoder
+        dw = enc.layers[0].conv_module.depthwise_conv
+        lp = int(dw.left_pad)
+        t_len = seq_len + lp
+        h = ttnn.zeros(
+            (batch, t_len, self.hidden_size),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        out, _ = self._conv1d(
+            h,
+            weight=dw.weight,
+            bias=dw.bias,
+            batch=batch,
+            input_length=t_len,
+            in_channels=int(dw.in_channels),
+            out_channels=int(dw.out_channels),
+            kernel_size=int(dw.kernel_size),
+            stride=int(dw.stride),
+            padding=int(dw.padding),
+            groups=int(dw.groups),
+        )
+        ttnn.deallocate(h)
+        ttnn.deallocate(out)
+
+        if self.has_adapter:
+            al = self.parameters.adapter.layers[0]
+            rc = al.residual_conv
+            h2 = ttnn.zeros(
+                (batch, seq_len, self.hidden_size),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            out2, _ = self._conv1d(
+                h2,
+                weight=rc.weight,
+                bias=rc.bias,
+                batch=batch,
+                input_length=seq_len,
+                in_channels=int(rc.in_channels),
+                out_channels=int(rc.out_channels),
+                kernel_size=int(rc.kernel_size),
+                stride=int(rc.stride),
+                padding=int(rc.padding),
+                groups=int(rc.groups),
+            )
+            ttnn.deallocate(h2)
+            ttnn.deallocate(out2)
+
+        self._conv_jit_warmed.add(key)
+
     def _conv1d(
         self,
         x_nlc: ttnn.Tensor,
@@ -366,16 +470,14 @@ class TTSeamlessM4Tv2SpeechEncoder:
         groups: int,
         dilation: int = 1,
     ) -> Tuple[ttnn.Tensor, int]:
-        conv_kwargs: Dict[str, Any] = dict(
-            weights_dtype=ttnn.bfloat8_b,
-            shard_layout=None,
-            deallocate_activation=True,
-            enable_weights_double_buffer=True,
-            enable_act_double_buffer=True,
+        conv_config = self._conv1d_config(
+            batch=batch,
+            input_length=input_length,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            groups=groups,
         )
-        if input_length > 64 or in_channels >= 512:
-            conv_kwargs["act_block_h_override"] = 32
-        conv_config = ttnn.Conv1dConfig(**conv_kwargs)
         mc = x_nlc.memory_config()
         if mc is None:
             mem_key = (-1, -1)
@@ -1301,7 +1403,9 @@ class TTSeamlessM4Tv2SpeechEncoder:
         * ``_rel_pos_tab_cache``   — ``[S, D, S]`` tables (host embedding + TILE upload)
         * ``_chunk_attn_mask_cache`` — chunk mask (skipped when ``S <= chunk_size``)
         * ``_encoder_additive_mask_cache`` — no-padding-mask entry (``mask_id=-1``)
+        * conv JIT — depthwise k=31 + adapter strided conv (amortises Halo + Conv2d compile)
         """
+        self._warm_conv_jit(batch, seq_len)
         enc = self.parameters.encoder
         for i in range(self.speech_encoder_layers):
             lp = int(enc.layers[i].conv_module.depthwise_conv.left_pad)
