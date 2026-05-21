@@ -93,7 +93,7 @@ def _get_tensors(
 @pytest.mark.parametrize(
     "device_params, topology, cluster_axis",
     [
-        ({"fabric_config": get_fabric_config(), "trace_region_size": 1171456}, ttnn.Topology.Linear, 1),
+        ({"fabric_config": get_fabric_config(), "trace_region_size": 0}, ttnn.Topology.Linear, 1),
     ],
     indirect=["device_params"],
     ids=["fabric_linear"],
