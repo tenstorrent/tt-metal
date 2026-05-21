@@ -178,8 +178,7 @@ After all resources are built, assemble the `ProgramSpec` (collecting `kernels`,
 **Stop signals**: any urge to —
 
 - Demote a CTA to a runtime arg to make a single `KernelSpec` work where the legacy had multiple. ([Anti-pattern](metal2_port_patterns.md#anti-pattern-demoting-per-group-cta-to-rta).)
-- Add an `#ifdef` to the kernel source to gate optional binding usage. ([Pattern: Conditional / optional DFB bindings](metal2_port_patterns.md#pattern-conditional--optional-dfb-bindings).)
-- Bind an optional DFB unconditionally on the host and gate the *uses* with `if constexpr`. ([Anti-pattern](metal2_port_patterns.md#anti-pattern-always-bind-optional-dfb--gate-uses-only).)
+- Add an `#ifdef` to the kernel source to gate optional binding usage. ([Anti-pattern: `#ifdef`-gated DFB references](metal2_port_patterns.md#anti-pattern-ifdef-gated-dfb-references).) The correct shape is unconditional host binding + `if constexpr`-gated uses — see [Pattern: Conditional / optional DFB bindings](metal2_port_patterns.md#pattern-conditional--optional-dfb-bindings).
 - Extract `.id` from a `dfb::name`, or construct a temporary `DataflowBuffer` to retrieve its underlying id. ([Anti-pattern](metal2_port_patterns.md#anti-pattern-id-extraction-or-temp-dfb-wrappers-at-llk-call-sites).)
 - Pack data into varargs that should be named arguments. ([Caution](metal2_port_patterns.md#caution-avoid-varargs-unless-absolutely-necessary).)
 - Thread a buffer address through an RTA because the binding mechanism doesn't fit.
@@ -227,7 +226,7 @@ Scan the ported code against this checklist. Each item is a Metal 2.0 design-int
 - [ ] **No `tensor.buffer()->address()` survived.** Search the factory `.cpp` for this string; if present, the corresponding tensor needs a `TensorBinding` instead.
 - [ ] **No magic-number CB indices in CTAs.** Search `compile_time_arg_bindings` for values that are CB indices (typically small integers or `CBIndex::c_*`); if found, the value should come from a `DFBBinding` instead.
 - [ ] **No `TensorAccessorArgs<N>()` survived in any ported kernel.** Search for this; if present, the kernel needs `TensorAccessor(ta::name)` instead.
-- [ ] **No `#ifdef` newly added to gate optional bindings in kernel.** Search the ported kernels for `#ifdef` blocks gating DFB wrapper declarations; if present, convert to `if constexpr` on a named CTA. (Pre-existing `#ifdef`s that pre-date the port are out of scope; this audit catches *newly introduced* ones.)
+- [ ] **No `#ifdef` newly added to gate optional bindings in kernel.** Search the ported kernels for `#ifdef` blocks gating DFB wrapper declarations or uses; if present, bind the DFB unconditionally on the host and convert the `#ifdef` to `if constexpr` on a named CTA. See [Anti-pattern: `#ifdef`-gated DFB references](metal2_port_patterns.md#anti-pattern-ifdef-gated-dfb-references). (Pre-existing `#ifdef`s that pre-date the port are out of scope; this audit catches *newly introduced* ones.)
 - [ ] **No `.id` extraction at LLK call sites.** Search for `.id` on `dfb::` handles; if present, pass `dfb::name` directly.
 - [ ] **No CTA→RTA demotion in compute kernels.** If a per-group dimension was moved from CTA to RTA in the port, the structural decision is wrong; revisit planning.
 - [ ] **All CTAs are named.** Search the factory for positional `compile_time_args = {...}`; should be `compile_time_arg_bindings = {{name, value}, ...}` only.
