@@ -77,16 +77,51 @@ def _default_dispatch_input_expert_scores_memory_config(
     )
 
 
-def _default_post_combine_tilize_memory_config(effective_experts_k: int) -> ttnn.MemoryConfig:
+_POST_COMBINE_TILIZE_MAX_CORES_X = 7  # original (deepseek) used 7 cores @ 1024 wide for hidden=7168
+_POST_COMBINE_TILIZE_SHARD_WIDTH_MULTIPLE = (
+    128  # kernel reads 4 tiles wide; shard_width must be a multiple of 4*TILE_SIZE
+)
+
+# RS-axis size that selects the fused deepseek_moe_reduce_scatter path (consumes a list of
+# N pre-split outputs from fast_reduce_nc_fused). Any other size falls through to a single
+# input ttnn.reduce_scatter, so fast_reduce should produce one output instead of N.
+_DEEPSEEK_RS_DP_DIM = 8
+
+
+def _default_post_combine_tilize_memory_config(
+    effective_experts_k: int, hidden_size: int
+) -> Optional[ttnn.MemoryConfig]:
     """`post_combine_tilize_output_memory_config` from test_optimized_moe_decode_block.py.
 
-    NdShard L1 with grid extending to `(6, effective_experts_k - 1)`.
+    NdShard L1 grid is `[num_cores_x, effective_experts_k]`. `num_cores_x` and the
+    inner shard width are chosen so the shards evenly tile `hidden_size` and the
+    width is a multiple of 128 (the kernel's 4-tile read granularity). Prefer the
+    widest grid (≤ MAX_CORES_X) that satisfies both. Matches the deepseek default
+    of 7×1024 for hidden=7168.
+
+    Returns None when no `num_cores_x` ∈ [1, MAX_CORES_X] yields a width that is
+    a multiple of 128 — caller is expected to fall back to the
+    `tilize_with_val_padding` path. For gpt_oss (hidden=2880) no split works,
+    so this returns None.
     """
+    num_cores_x = None
+    for n in range(_POST_COMBINE_TILIZE_MAX_CORES_X, 0, -1):
+        if hidden_size % n != 0:
+            continue
+        width = hidden_size // n
+        if width % _POST_COMBINE_TILIZE_SHARD_WIDTH_MULTIPLE == 0:
+            num_cores_x = n
+            break
+    if num_cores_x is None:
+        return None
+    shard_width = hidden_size // num_cores_x
     return ttnn.MemoryConfig(
         buffer_type=ttnn.BufferType.L1,
         nd_shard_spec=ttnn.NdShardSpec(
-            shard_shape=[32, 1024],
-            grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, effective_experts_k - 1))}),
+            shard_shape=[ttnn.TILE_SIZE, shard_width],
+            grid=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, effective_experts_k - 1))}
+            ),
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
@@ -229,7 +264,6 @@ class ReduceScatterConfig(_TTOpKwargs):
     """
 
     dim: int = -1
-    math_op: Any = None
     num_links: int
     cluster_axis: int = Field(validation_alias="rs_cluster_axis")
     topology: Topology
@@ -365,6 +399,17 @@ class TTMoEDecodeConfig(BaseModel):
     num_shared_experts: int
     has_bias: bool
 
+    # Post-combine path selection. True → fused `deepseek_moe_post_combine_tilize`
+    # (requires `batch_per_device == TILE_SIZE` and a valid sharded memory config).
+    # False → generic `tilize_with_val_padding` fallback. Auto-computed in the
+    # pre-validator from those preconditions when left as None.
+    use_post_combine_tilize: Optional[bool] = None
+
+    # Number of outputs fast_reduce_nc_fused will produce. Equals the RS-axis size
+    # only when the deepseek RS path is taken; otherwise 1 (downstream ttnn.reduce_scatter
+    # consumes a single tensor and splits internally). Auto-computed in pre-validator.
+    num_fast_reduce_outputs: Optional[int] = None
+
     # Shared ccl kwargs adopted by sub-configs
     num_links: int = 4
     topology: Topology = ttnn.Topology.Ring
@@ -419,11 +464,31 @@ class TTMoEDecodeConfig(BaseModel):
                 resolved[name] = finfo.default
             # else: required & missing — bail check upstream returned already
 
+        # Pick num_fast_reduce_outputs and split_size based on which post-compute RS
+        # path forward() will take:
+        #   - rs_axis == _DEEPSEEK_RS_DP_DIM → deepseek_moe_reduce_scatter consumes the
+        #     full list, so fast_reduce pre-splits into N=rs_axis_size outputs. Each
+        #     per-output split must be TILE_SIZE-aligned (fast_reduce's constraint).
+        #   - otherwise → ttnn.reduce_scatter (or SKIP) takes a single tensor and does
+        #     the per-device split internally. fast_reduce produces N=1 wide output
+        #     covering the whole hidden dim; padding it to a multiple of
+        #     num_replicated * TILE_SIZE keeps each post-RS device chunk tile-aligned.
+        num_replicated = resolved["mesh_shape"][1 - resolved["cluster_axis"]]
+        if num_replicated == _DEEPSEEK_RS_DP_DIM:
+            num_fast_reduce_outputs = num_replicated
+            align_unit = ttnn.TILE_SIZE
+        else:
+            num_fast_reduce_outputs = 1
+            align_unit = ttnn.TILE_SIZE * num_replicated
+        pre_split_chunk = resolved["hidden_size"] // num_fast_reduce_outputs
+        split_size = ((pre_split_chunk + align_unit - 1) // align_unit) * align_unit
+
         return {
             **resolved,
             # derived
             "rs_cluster_axis": 1 - resolved["cluster_axis"],
-            "split_size": resolved["hidden_size"] // resolved["mesh_shape"][1 - resolved["cluster_axis"]],
+            "split_size": split_size,
+            "num_fast_reduce_outputs": num_fast_reduce_outputs,
             "effective_experts_k": resolved["select_experts_k"] + resolved["num_shared_experts"],
         }
 
@@ -479,9 +544,29 @@ class TTMoEDecodeConfig(BaseModel):
                 select_experts_k=adoptable["select_experts_k"],
             )
 
-        post_combine_default = _default_post_combine_tilize_memory_config(adoptable["effective_experts_k"])
-        _fill_default_if_missing(data, "post_combine_tilize", "output_memory_config", post_combine_default)
-        _fill_default_if_missing(data, "tilize_with_val_padding", "memory_config", post_combine_default)
+        post_combine_default = _default_post_combine_tilize_memory_config(
+            adoptable["effective_experts_k"], adoptable["hidden_size"]
+        )
+        # Only fill the post_combine_tilize default if we actually have one — otherwise
+        # leave the field None and let the tilize_with_val_padding fallback own it.
+        if post_combine_default is not None:
+            _fill_default_if_missing(data, "post_combine_tilize", "output_memory_config", post_combine_default)
+            _fill_default_if_missing(data, "tilize_with_val_padding", "memory_config", post_combine_default)
+
+        # Auto-pick the post-combine path when the user didn't pin it.
+        # `deepseek_moe_post_combine_tilize` requires batch_per_device == TILE_SIZE AND
+        # a sharded memory config (either default-computable or user-supplied).
+        if data.get("use_post_combine_tilize") is None:
+            user_pct = data.get("post_combine_tilize")
+            user_mc_present = (isinstance(user_pct, dict) and user_pct.get("output_memory_config") is not None) or (
+                isinstance(user_pct, BaseModel) and getattr(user_pct, "output_memory_config", None) is not None
+            )
+            data["use_post_combine_tilize"] = adoptable["batch_per_device"] == ttnn.TILE_SIZE and (
+                post_combine_default is not None or user_mc_present
+            )
+
+        if data.get("num_fast_reduce_outputs") is None:
+            data["num_fast_reduce_outputs"] = adoptable["num_fast_reduce_outputs"]
 
         return data
 

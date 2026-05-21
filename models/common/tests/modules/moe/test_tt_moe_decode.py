@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import faulthandler
 import random
+import sys
+import traceback
 from pathlib import Path
 
 import pytest
@@ -34,7 +36,33 @@ from models.demos.deepseek_v3.tests.fused_op_unit_tests.moe.test_optimized_moe_d
 from tests.nightly.tg.ccl.moe.test_moe_compute_6U import _swiglu_reference
 
 faulthandler.enable()
-faulthandler.dump_traceback_later(30, repeat=True)  # dump tracebacks every 30s
+
+
+@pytest.fixture(autouse=True)
+def _hang_watchdog():
+    # If a test wedges (typically on device teardown after an async failure),
+    # dump tracebacks and SIGABRT the process instead of hanging indefinitely.
+    faulthandler.dump_traceback_later(300, exit=True)
+    try:
+        yield
+    finally:
+        faulthandler.cancel_dump_traceback_later()
+
+
+def _print_exception_and_fail(reason: str) -> None:
+    """Print the active exception to the original (uncaptured) stderr and pytest.fail.
+
+    pytest's stderr capture buffers `logger.exception()` output and only flushes it
+    after the test exits. When the watchdog `_exit()`s the process (e.g. because
+    a ttnn tensor `__repr__` was waiting on a wedged device), that buffer is lost.
+    Writing to `sys.__stderr__` and flushing bypasses capture so the trace survives.
+    Then pytest.fail(pytrace=False) skips pytest's own saferepr-driven traceback
+    rendering, which is itself prone to deadlocking on hung device tensors.
+    """
+    traceback.print_exc(file=sys.__stderr__)
+    sys.__stderr__.flush()
+    pytest.fail(reason, pytrace=False)
+
 
 # ---------------------------------------------------------------------------
 # torch reference helpers
@@ -238,6 +266,9 @@ def test_tt_moe_decode(
     print("Created inputs")
 
     # --- build module ---
+    # Wrap in try/except + pytest.fail(pytrace=False) — pytest's pretty-traceback
+    # saferepr'ing the deeply nested config/mesh args takes long enough that the
+    # 300s faulthandler watchdog _exit()s the process before any output is shown.
     try:
         decode = TTMoEDecode(
             mesh_device=mesh_device,
@@ -250,8 +281,7 @@ def test_tt_moe_decode(
             torch_b2=torch_b2,
         )
     except Exception as e:
-        logger.exeption(e)
-        raise
+        _print_exception_and_fail(f"TTMoEDecode init failed: {type(e).__name__}")
 
     logger.info("Module Setup complete")
 
@@ -329,12 +359,12 @@ def test_tt_moe_decode(
                     layer_id=0,
                 )
             )
+            # Surface async device errors immediately rather than letting them
+            # silently corrupt state and then deadlock at mesh_device teardown.
+            ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
         except Exception as e:
-            logger.exception(e)
-            raise
+            _print_exception_and_fail(f"forward iteration {it} failed: {type(e).__name__}")
         logger.info(f"Op iteration {it} complete")
-
-    ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
 
     # --- verify ---
     logger.info("Verifying outputs")
