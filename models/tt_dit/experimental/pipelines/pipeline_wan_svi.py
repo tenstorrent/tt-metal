@@ -281,7 +281,7 @@ class WanPipelineSVI(WanPipelineI2VLora):
         """
         if num_clips < 1:
             raise ValueError("num_clips must be >= 1")
-        call_kwargs.setdefault("output_type", "pt")
+        call_kwargs.setdefault("output_type", "pt_with_last_latent")
 
         defaults = _REGIMES[self._regime]["call_defaults"]
         for k, v in defaults.items():
@@ -343,7 +343,6 @@ class WanPipelineSVI(WanPipelineI2VLora):
                 seed=spec.seed,
                 guidance_scale=spec.guidance_scale,
                 guidance_scale_2=spec.guidance_scale_2,
-                return_last_latent=True,
                 anchor_image=anchor_image,
                 prev_last_latent=prev_last_latent,
                 **call_kwargs,
@@ -352,7 +351,7 @@ class WanPipelineSVI(WanPipelineI2VLora):
             frames = result.frames if hasattr(result, "frames") else result[0]
             prev_last_latent = getattr(result, "last_latent", None)
             if prev_last_latent is None:
-                raise RuntimeError("SVI requires return_last_latent=True from the inner pipeline.")
+                raise RuntimeError("SVI requires output_type='pt_with_last_latent' from the inner pipeline.")
 
             clips.append(frames[0] if frames.ndim == 5 else frames)
 

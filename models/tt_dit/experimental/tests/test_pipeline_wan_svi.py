@@ -172,8 +172,8 @@ def _save_outputs(video: torch.Tensor, output_basename: str) -> None:
     try:
         from models.tt_dit.utils.video import export_to_video
 
-        # output_type='pt' returns (T, C, H, W) float; export_to_video wants
-        # (T, H, W, C) uint8.
+        # output_type='pt_with_last_latent' decodes frames as (T, C, H, W) float;
+        # export_to_video wants (T, H, W, C) uint8.
         arr = video
         if arr.ndim == 4 and arr.shape[1] in (1, 3):
             arr = arr.permute(0, 2, 3, 1).contiguous()

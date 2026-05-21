@@ -775,7 +775,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         traced: bool = False,
         profiler: BenchmarkProfiler = None,
         profiler_iteration: int = 0,
-        return_last_latent: bool = False,
     ):
         r"""
         The call function to the pipeline for generation.
@@ -1028,8 +1027,11 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             profiler.end("denoising", profiler_iteration)
             profiler.start("vae", profiler_iteration)
 
+        include_last_latent = output_type == "pt_with_last_latent"
+        output_type = "pt" if include_last_latent else output_type
+
         # Captured before applying the VAE std-rescale to `latents`.
-        last_latent_out = latents.detach().clone() if return_last_latent else None
+        last_latent_out = latents.detach().clone() if include_last_latent else None
 
         if not output_type == "latent":
             latents = latents.to(self.vae.dtype)
@@ -1091,10 +1093,10 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             profiler.end("vae", profiler_iteration)
 
         if not return_dict:
-            return (video, last_latent_out) if return_last_latent else (video,)
+            return (video, last_latent_out) if include_last_latent else (video,)
 
         output = WanPipelineOutput(frames=video)
-        if return_last_latent:
+        if include_last_latent:
             output.last_latent = last_latent_out
         return output
 
