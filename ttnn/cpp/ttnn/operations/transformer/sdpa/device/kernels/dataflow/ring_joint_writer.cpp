@@ -510,7 +510,10 @@ void kernel_main() {
             // Issue NOC reads to fill staging for Q[pf_q_index] of the current ring_iter (or
             // ring_iter+1 for cross-ring at q==last_q_index, when the caller passes 0). Optionally
             // barriers on pf_trid first to ensure the prior save with that TRID has landed.
-            auto prefetch_for = [&](uint32_t pf_q_index, uint32_t pf_trid, bool barrier_first) {
+            // noinline: callers sit on multi-hundred-cycle DRAM stalls, so amortizing the body
+            // across call sites trims brisc .text without measurable perf impact.
+            auto prefetch_for = [&](uint32_t pf_q_index, uint32_t pf_trid, bool barrier_first) __attribute__((
+                                    noinline)) {
                 if (barrier_first) {
                     noc_async_write_barrier_with_trid(pf_trid);
                 }
@@ -562,7 +565,8 @@ void kernel_main() {
             // Drain pending deferred save (raw accumulators -> DRAM) for the prior Q. Called at
             // the early-flush site (before prefetch when total_valid_kv<=1 or q_per_core==2) and
             // the late-flush site (after prefetch in the K-loop window).
-            auto flush_deferred_save = [&]() {
+            // noinline: same rationale as prefetch_for — body is amortized across call sites.
+            auto flush_deferred_save = [&]() __attribute__((noinline)) {
                 constexpr uint32_t all_tiles_valid = 0xFFFFFFFF;
                 const auto& gen = [&]() -> const auto& {
                     if constexpr (has_joint_q) {
