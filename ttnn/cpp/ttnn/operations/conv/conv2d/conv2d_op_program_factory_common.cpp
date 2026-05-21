@@ -8,8 +8,6 @@
 #include <algorithm>
 #include <cstdint>
 #include <optional>
-#include <tuple>
-#include <unordered_map>
 #include <variant>
 #include <vector>
 #include <tt_stl/assert.hpp>
@@ -17,15 +15,11 @@
 #include "tt-metalium/hal.hpp"
 #include "tt-metalium/program_descriptors.hpp"
 #include "tt-metalium/tt_backend_api_types.hpp"
-#include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::prim {
 
-using ttnn::operations::conv::conv_skip_mcast;
-using ttnn::operations::conv::is_1d_depthwise_conv;
 using ttnn::operations::conv::should_coalesce_1d_depthwise_conv_reads;
-using ttnn::operations::conv::SkipMcast;
 
 constexpr uint32_t l1_scratchpad_CB_size = 64;
 
@@ -209,7 +203,8 @@ std::vector<CBInfo> get_cb_info(
     }
 
     // Matmul partials CB. 1D depthwise compute uses dest-reuse accumulation, so the CB is unused
-    // for that path — emit a 0-page entry so allocate_cbs skips the device allocation.
+    // for that path — emit a 0-page entry so allocate_cbs_to_program_descriptor skips the device
+    // allocation.
     cb_info.emplace_back(CBInfo{
         .name = Conv2dCb::MATMUL_PARTIALS,
         .num_pages = is_1d_depthwise_conv ? 0 : per_core_out_ntiles,
@@ -338,58 +333,6 @@ std::vector<CBInfo> get_cb_info(
     return cb_info;
 }
 
-void allocate_cbs(
-    std::vector<CBInfo>& cb_info,
-    tt::tt_metal::Program& program,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& all_cores,
-    const Tensor& input_tensor,
-    const Tensor& output_tensor,
-    const Tensor& l1_indices_tensor) {
-    uint32_t cb_index = 0;
-    for (auto& cb : cb_info) {
-        if (cb.num_pages == 0) {
-            // Skip circular buffers with zero pages
-            continue;
-        }
-
-        // cbs for sharded tensors.
-        Buffer* buffer = nullptr;
-        if (cb.is_globally_allocated) {
-            if (cb.name == Conv2dCb::ACT_SHARDED) {
-                buffer = input_tensor.buffer();
-            } else if (cb.name == Conv2dCb::OUT || cb.name == Conv2dCb::MATMUL_PARTIALS) {
-                buffer = output_tensor.buffer();
-            } else if (cb.name == Conv2dCb::READER_INDICES) {
-                buffer = l1_indices_tensor.buffer();
-            } else {
-                TT_THROW(
-                    "Unexpected circular buffer name {}. Expected one of: SHARDED_ACT_CB, OUT0_CB, READER_INDICES_CB",
-                    enchantum::to_string(cb.name));
-            }
-        }
-
-        std::tie(cb.index, cb.handle) =
-            tt::tt_metal::create_cb(cb_index++, program, all_cores, cb.page_size, cb.num_pages, cb.data_format, buffer);
-        log_trace(
-            tt::LogOp,
-            "Allocated circular buffer {} with index {}, num pages {}, page size {}, globally allocated: {}",
-            enchantum::to_string(cb.name),
-            cb.index,
-            cb.num_pages,
-            cb.page_size,
-            cb.is_globally_allocated);
-    }
-
-    for (auto& cb : cb_info) {
-        if (cb.overlapped_by_cb.has_value()) {
-            // If this CB is overlapped by another CB, set the handle to the overlapped CB's handle
-            const CBInfo& overlapped_cb = get_cb_info_by_name(cb_info, cb.overlapped_by_cb.value());
-            cb.handle = overlapped_cb.handle;
-            cb.index = overlapped_cb.index;
-        }
-    }
-}
-
 void allocate_cbs_to_program_descriptor(
     std::vector<CBInfo>& cb_info,
     tt::tt_metal::ProgramDescriptor& desc,
@@ -398,8 +341,8 @@ void allocate_cbs_to_program_descriptor(
     const Tensor& output_tensor,
     const Tensor& l1_indices_tensor) {
     // CBDescriptor::core_ranges is a CoreRangeSet; widen single CoreCoord /
-    // CoreRange inputs so callers can pass the same variant they already use
-    // with the legacy allocate_cbs().
+    // CoreRange inputs so callers can pass the same variant accepted by the
+    // public API.
     const tt::tt_metal::CoreRangeSet core_ranges = std::visit(
         [](const auto& v) -> tt::tt_metal::CoreRangeSet {
             using T = std::decay_t<decltype(v)>;
@@ -416,7 +359,7 @@ void allocate_cbs_to_program_descriptor(
     uint32_t cb_index = 0;
     for (auto& cb : cb_info) {
         if (cb.num_pages == 0) {
-            // Skip circular buffers with zero pages (same as allocate_cbs()).
+            // Skip circular buffers with zero pages.
             // Overlapped CBs always fall in this bucket and pick up their
             // sibling's index in the second pass below.
             continue;
@@ -467,9 +410,9 @@ void allocate_cbs_to_program_descriptor(
         if (cb.overlapped_by_cb.has_value()) {
             // Overlapped CBs do not get their own CBDescriptor; they reuse the
             // overlap target's buffer_index so kernels addressing the overlapped
-            // CB hit the shared underlying allocation. CBInfo::handle is left
-            // default-initialised — the descriptor flow does not expose CBHandle
-            // back to factories.
+            // CB hit the shared underlying allocation. The descriptor flow does
+            // not expose CBHandle back to factories — the framework owns the CB
+            // handles inside the cached `tt::tt_metal::Program`.
             const CBInfo& overlapped_cb = get_cb_info_by_name(cb_info, cb.overlapped_by_cb.value());
             cb.index = overlapped_cb.index;
         }
@@ -773,93 +716,6 @@ bool is_split_reader_viable(
         is_viable);
 
     return is_viable;
-}
-
-void post_conv2d_op_memory_checks(
-    tt::tt_metal::Program& program,
-    const Conv2dParams& operation_attributes,
-    const Conv2dInputs& tensor_args,
-    Tensor& /*output_tensor*/,
-    std::optional<uint32_t> reader_indices_actual_page_size) {
-    const auto& input_tensor_a = tensor_args.a;
-    const auto& input_tensor_b = tensor_args.b;
-    const auto& input_tensor_bias = tensor_args.bias;
-    const bool has_bias = input_tensor_bias.has_value();
-    auto *device = input_tensor_a.device();
-    const auto& weights_shape = input_tensor_b.padded_shape();
-    const auto& sliding_window_config = operation_attributes.sliding_window_config;
-    const auto& parallelization_config = operation_attributes.parallelization_config;
-    const auto& memory_config = operation_attributes.memory_config;
-    const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
-    const auto& block_config = operation_attributes.block_config;
-    const auto dtype = operation_attributes.dtype;
-    const auto& input_tensor_shape = operation_attributes.input_tensor_shape;
-    const auto& enable_act_double_buffer = operation_attributes.enable_act_double_buffer;
-    const auto& enable_weights_double_buffer = operation_attributes.enable_weights_double_buffer;
-    const auto& enable_activation_reuse = operation_attributes.enable_activation_reuse;
-    const auto& config_tensors_in_dram = operation_attributes.config_tensors_in_dram;
-    const auto& pre_op_l1_allocation_size_bytes = operation_attributes.pre_op_l1_allocation_size_bytes;
-    const auto& force_split_reader = operation_attributes.force_split_reader;
-    const auto output_channels = operation_attributes.output_channels;
-    const auto groups = operation_attributes.groups;
-    const auto untilize_out = operation_attributes.untilize_out;
-
-    const uint32_t post_op_l1_allocation_size =
-        device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
-
-    auto actual_cb_size = calculate_total_cb_size(program);
-
-    auto kernel_dims =
-        std::array<uint32_t, 2>({sliding_window_config.window_hw.first, sliding_window_config.window_hw.second});
-
-    const SkipMcast skip_mcast = conv_skip_mcast(parallelization_config, memory_config.memory_layout());
-    const uint32_t output_image_width = sliding_window_config.get_output_shape()[2];
-
-    const std::array<uint32_t, 2> shard_shape = input_tensor_a.shard_spec().value().shape;
-    const uint32_t input_channels_padded = shard_shape[1];
-    conv_op_l1_usage l1_usage = calculate_L1_usage(
-        compute_kernel_config,
-        block_config,
-        parallelization_config,
-        weights_shape,
-        sliding_window_config,
-        std::array<uint32_t, 2>({sliding_window_config.dilation_hw.first, sliding_window_config.dilation_hw.second}),
-        Conv2dConfig{
-            .weights_dtype = input_tensor_b.dtype(),
-            .config_tensors_in_dram = config_tensors_in_dram,
-            .shard_layout = memory_config.memory_layout(),
-            .output_layout = (untilize_out ? Layout::ROW_MAJOR : Layout::TILE),
-            .enable_act_double_buffer = enable_act_double_buffer,
-            .enable_weights_double_buffer = enable_weights_double_buffer,
-            .enable_activation_reuse = enable_activation_reuse,
-            .force_split_reader = force_split_reader},
-        input_tensor_a.dtype(),
-        dtype,
-        output_image_width,
-        has_bias,
-        is_1d_depthwise_conv(
-            groups, input_tensor_shape[3], output_channels, kernel_dims[0], input_tensor_shape[1], has_bias),
-        input_channels_padded,
-        skip_mcast.skip_activation_mcast,
-        reader_indices_actual_page_size);
-
-    TT_FATAL(
-        actual_cb_size == l1_usage.CB_allocation_size,
-        "Calculated CB size {} does not match with the actual CB size {}",
-        l1_usage.CB_allocation_size,
-        actual_cb_size);
-
-    // For now assume that if post_op_l1_allocation_size == 0 op is being run
-    // in graph capture NO_DISPATCH mode.
-    // ToDo: Device should offer an API to inform the op if it is running in NO_DISPATCH mode.
-    bool is_graph_capture_no_dispatch_mode = post_op_l1_allocation_size == 0;
-    TT_FATAL(
-        post_op_l1_allocation_size == (pre_op_l1_allocation_size_bytes + l1_usage.tensor_allocation_size) ||
-            is_graph_capture_no_dispatch_mode,
-        "Mismatch!! L1 Allocation Pre Op =  {}, Post Op = {} Calculated Size = {}",
-        pre_op_l1_allocation_size_bytes,
-        post_op_l1_allocation_size,
-        l1_usage.tensor_allocation_size);
 }
 
 }  // namespace ttnn::prim

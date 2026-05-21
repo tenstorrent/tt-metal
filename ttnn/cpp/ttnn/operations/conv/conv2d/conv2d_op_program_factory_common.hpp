@@ -38,8 +38,6 @@ enum class Conv2dCb {
 struct CBInfo {
     // Index of CB that will be passed in to the kernel.
     uint32_t index = kInvalidCBIndex;
-    // CB handle
-    tt::tt_metal::CBHandle handle{};
     // Type of the CB
     Conv2dCb name{Conv2dCb::COUNT};
     // Number of pages in the circular buffer.
@@ -58,7 +56,7 @@ struct CBInfo {
 
 // Returns a vector of CBInfo objects for the Conv2d operation.
 // The vector will contain information about all circular buffers used in the Conv2d operation.
-// CBInfo::index and CBInfo::handle won't be valid until allocate_cbs() is called.
+// CBInfo::index won't be valid until allocate_cbs_to_program_descriptor() is called.
 // When the program factory has the real reader indices DRAM buffer, it can pass its actual page
 // size so the predicted READER_INDICES CB footprint matches the CB the factory creates. Auto-shard
 // L1 estimation passes std::nullopt and falls back to the worst case (1 uint16 index per output row).
@@ -81,35 +79,20 @@ std::vector<CBInfo> get_cb_info(
     uint32_t input_channels_padded,
     std::optional<uint32_t> reader_indices_actual_page_size = std::nullopt);
 
-// Allocates circular buffers for the Conv2d operation.
-// This function will populate index and handle fields of each CBInfo in the cb_info vector,
-// and add these circular buffers to the provided program.
-void allocate_cbs(
-    std::vector<CBInfo>& cb_info,
-    tt::tt_metal::Program& program,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& all_cores,
-    const Tensor& input_tensor,
-    const Tensor& output_tensor,
-    const Tensor& l1_indices_tensor);
-
-// Descriptor-flow equivalent of allocate_cbs(): instead of allocating
-// circular buffers directly on a `tt::tt_metal::Program`, appends one
-// `CBDescriptor` per non-empty CBInfo to `desc.cbs` and fills in the
-// `CBInfo::index` field on every entry (overlapped CBs adopt their
-// overlap target's index, mirroring the legacy helper).
+// Appends one `CBDescriptor` per non-empty CBInfo to `desc.cbs` and fills in
+// the `CBInfo::index` field on every entry (overlapped CBs adopt their
+// overlap target's index).
 //
 // For globally-allocated CBs (sharded tensors), the corresponding tensor
 // buffer pointer is recorded on `CBDescriptor::buffer` so the framework's
 // `apply_descriptor_runtime_args` patches the dynamic CB address from the
 // live buffer on every dispatch.
 //
-// `CBInfo::handle` is left default-initialised: in the descriptor flow the
-// framework owns the CB handles inside the cached `tt::tt_metal::Program`,
-// so factory code never needs to look them up.
+// In the descriptor flow the framework owns the CB handles inside the cached
+// `tt::tt_metal::Program`, so factory code never needs to look them up.
 //
 // Intended to be called from a Conv2d program factory's `create_descriptor()`
-// after `get_cb_info(...)`.  The legacy `allocate_cbs()` is preserved for any
-// not-yet-migrated factory.
+// after `get_cb_info(...)`.
 void allocate_cbs_to_program_descriptor(
     std::vector<CBInfo>& cb_info,
     tt::tt_metal::ProgramDescriptor& desc,
@@ -139,16 +122,5 @@ bool is_split_reader_viable(
     bool fp32_dest_acc,
     DataType output_datatype,
     bool act_reuse_enabled);
-
-// reader_indices_actual_page_size lets the factory communicate the in-DRAM config tensor's true
-// per-core page size so the post-build CB-size equality check matches what was allocated. When
-// std::nullopt, the worst-case READER_INDICES CB size is used (matches the factory's previous
-// behaviour for the in-DRAM path).
-void post_conv2d_op_memory_checks(
-    tt::tt_metal::Program& program,
-    const Conv2dParams& operation_attributes,
-    const Conv2dInputs& tensor_args,
-    Tensor& output_tensor,
-    std::optional<uint32_t> reader_indices_actual_page_size = std::nullopt);
 
 }  // namespace ttnn::prim
