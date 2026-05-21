@@ -158,17 +158,21 @@ ttnn::device_operation::ProgramArtifacts ReduceDeviceOperation::ReduceMultiCoreW
         .tile_format_metadata = output.tensor_spec().tile(),
     });
     if (operation_attributes.negate) {
+        // ACC and INEG DFBs are compute self-loops (intra-tensix); implicit sync
+        // is not supported for intra-tensix DFBs.
         dataflow_buffers.push_back(m2::DataflowBufferSpec{
             .unique_id = ACC_DFB,
             .entry_size = dst_single_tile_size,
             .num_entries = kNumNegateEntries,
             .data_format_metadata = dst_cb_data_format,
+            .disable_implicit_sync = true,
         });
         dataflow_buffers.push_back(m2::DataflowBufferSpec{
             .unique_id = INEG_DFB,
             .entry_size = dst_single_tile_size,
             .num_entries = kNumNegateEntries,
             .data_format_metadata = dst_cb_data_format,
+            .disable_implicit_sync = true,
         });
     }
 
@@ -266,12 +270,26 @@ ttnn::device_operation::ProgramArtifacts ReduceDeviceOperation::ReduceMultiCoreW
                      .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER},
                 },
             .compile_time_arg_bindings = {{"Ht", this_Ht}, {"Wt", Wt}, {"NC", 1u}},
-            .config_spec =
-                m2::ComputeConfiguration{
-                    .math_fidelity = math_fidelity,
-                    .fp32_dest_acc_en = fp32_dest_acc_en,
-                },
         };
+        m2::ComputeConfiguration cc{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+        };
+        // When fp32_dest_acc_en, any FP32 DFB the compute kernel CONSUMES needs an explicit
+        // unpack_to_dest_mode choice. Use Default (matches legacy behavior pre-Metal 2.0).
+        if (fp32_dest_acc_en) {
+            if (src0_cb_data_format == tt::DataFormat::Float32) {
+                cc.unpack_to_dest_mode.push_back({INPUT_DFB, tt::tt_metal::UnpackToDestMode::Default});
+            }
+            if (scaler_cb_data_format == tt::DataFormat::Float32) {
+                cc.unpack_to_dest_mode.push_back({SCALER_DFB, tt::tt_metal::UnpackToDestMode::Default});
+            }
+            if (operation_attributes.negate && dst_cb_data_format == tt::DataFormat::Float32) {
+                cc.unpack_to_dest_mode.push_back({ACC_DFB, tt::tt_metal::UnpackToDestMode::Default});
+                cc.unpack_to_dest_mode.push_back({INEG_DFB, tt::tt_metal::UnpackToDestMode::Default});
+            }
+        }
+        spec.config_spec = cc;
         if (use_post_mul) {
             spec.compile_time_arg_bindings.push_back({"post_mul_scaler_bits", post_mul_scaler_bits});
         }

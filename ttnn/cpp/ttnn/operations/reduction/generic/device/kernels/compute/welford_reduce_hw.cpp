@@ -35,7 +35,7 @@ void kernel_main() {
     constexpr uint32_t H = get_arg(args::H);
     constexpr uint32_t tile_height = get_arg(args::tile_height);
     constexpr uint32_t Wt = get_arg(args::Wt);
-    constexpr bool do_scale = get_arg(args::do_scale) != 0;
+    // do_scale is gated by the DO_SCALE define (host-side, in welford_reduce factory).
     constexpr uint32_t reduce_batch_size = get_arg(args::reduce_batch_size);
     constexpr bool is_std = get_arg(args::is_std) != 0;
 
@@ -45,6 +45,9 @@ void kernel_main() {
     DataflowBuffer cb_out_obj(dfb::output);
     DataflowBuffer cb_partial_obj(dfb::partial);
     DataflowBuffer cb_combined_obj(dfb::combined);
+    // Scaler DFB is bound on the compute kernel as CONSUMER unconditionally so the DFB
+    // has a balanced producer/consumer pair; the value is only used when do_scale.
+    DataflowBuffer cb_scalar_obj(dfb::scaler);
 
     constexpr uint32_t input_dst = 0;
     constexpr uint32_t mean_dst = 1;
@@ -59,10 +62,9 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb::input, dfb::partial);
     pack_reconfig_data_format(dfb::partial);
 
-    if constexpr (do_scale) {
-        DataflowBuffer cb_scalar_obj(dfb::scaler);
-        cb_scalar_obj.wait_front(onetile);
-    }
+    // Wait on scaler unconditionally to balance the producer (reader's prepare_reduce_scaler).
+    // The value is only used when do_scale.
+    cb_scalar_obj.wait_front(onetile);
 
     uint32_t num_outputs = NC_per_core / reduce_batch_size;
 
@@ -77,35 +79,35 @@ void kernel_main() {
                 uint32_t start_N = 0;
                 welford_init();
 
-                if constexpr (!do_scale) {
-                    copy_tile_to_dst_init_short(dfb::input);
-                    tile_regs_acquire();
-                }
+#ifndef DO_SCALE
+                copy_tile_to_dst_init_short(dfb::input);
+                tile_regs_acquire();
+#endif
 
                 for (uint32_t ht = 0; ht < Ht; ++ht) {
-                    if constexpr (do_scale) {
-                        cb_in_obj.wait_front(onetile);
-                        tile_regs_acquire();
-                        mul_tiles_bcast_scalar_init_short(dfb::input, dfb::scaler);
-                        mul_tiles_bcast_scalar(dfb::input, dfb::scaler, 0, 0, input_dst);
-                        cb_in_obj.pop_front(1);
+#ifdef DO_SCALE
+                    cb_in_obj.wait_front(onetile);
+                    tile_regs_acquire();
+                    mul_tiles_bcast_scalar_init_short(dfb::input, dfb::scaler);
+                    mul_tiles_bcast_scalar(dfb::input, dfb::scaler, 0, 0, input_dst);
+                    cb_in_obj.pop_front(1);
 
-                        // Reconfigure the compute setup from scalar-multiply mode back to the
-                        // SFPU state that Welford expects.
-                        welford_reinit(dfb::input);
-                    } else {
-                        cb_in_obj.wait_front(onetile);
-                        copy_tile(dfb::input, 0, input_dst);
-                        cb_in_obj.pop_front(onetile);
-                    }
+                    // Reconfigure the compute setup from scalar-multiply mode back to the
+                    // SFPU state that Welford expects.
+                    welford_reinit(dfb::input);
+#else
+                    cb_in_obj.wait_front(onetile);
+                    copy_tile(dfb::input, 0, input_dst);
+                    cb_in_obj.pop_front(onetile);
+#endif
 
                     if (ht < (Ht - 1)) {
                         welford_update<0>(input_dst, start_N, {});
-                        if constexpr (do_scale) {
-                            tile_regs_commit();
-                            tile_regs_wait();
-                            tile_regs_release();
-                        }
+#ifdef DO_SCALE
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        tile_regs_release();
+#endif
                     } else {
                         welford_update_rows<0>(input_dst, start_N, 0, last_tile_rows, {});
                         welford_finalize_to_row<0>(mean_dst, scale_idx, {});

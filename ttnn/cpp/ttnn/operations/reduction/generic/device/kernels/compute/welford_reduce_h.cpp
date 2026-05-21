@@ -24,7 +24,7 @@ void kernel_main() {
     constexpr uint32_t Ht = get_arg(args::Ht);
     constexpr uint32_t H = get_arg(args::H);
     constexpr uint32_t tile_height = get_arg(args::tile_height);
-    constexpr bool do_scale = get_arg(args::do_scale) != 0;
+    // do_scale is gated by the DO_SCALE define (host-side, in welford_reduce factory).
     constexpr bool correction = get_arg(args::correction) != 0;
     constexpr bool is_std = get_arg(args::is_std) != 0;
 
@@ -32,6 +32,9 @@ void kernel_main() {
 
     DataflowBuffer cb_in_obj(dfb::input);
     DataflowBuffer cb_out_obj(dfb::output);
+    // Scaler DFB is bound on the compute kernel as CONSUMER unconditionally so the DFB
+    // has a balanced producer/consumer pair; the value is only used when do_scale.
+    DataflowBuffer cb_scalar_obj(dfb::scaler);
 
     // Destination register indices inside the Tensix DST register file.
     constexpr uint32_t input_dst = 0;
@@ -44,11 +47,9 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb::input, dfb::output);
     pack_reconfig_data_format(dfb::output);
 
-    if constexpr (do_scale) {
-        // Scalar tile stays resident across all columns
-        DataflowBuffer cb_scalar_obj(dfb::scaler);
-        cb_scalar_obj.wait_front(onetile);
-    }
+    // Scalar tile stays resident across all columns (waited unconditionally so the scaler DFB
+    // has a producer/consumer pair; the value is only used when do_scale).
+    cb_scalar_obj.wait_front(onetile);
 
     for (uint32_t ncwt = 0; ncwt < NCWt; ncwt++) {
         // Welford accumulation along the H dimension for one column of tiles.
@@ -57,34 +58,34 @@ void kernel_main() {
         // Programs SFPU replay buffer + clears LREG4/5
         welford_init();
 
-        if constexpr (!do_scale) {
-            copy_tile_to_dst_init_short(dfb::input);
-            tile_regs_acquire();
-        }
+#ifndef DO_SCALE
+        copy_tile_to_dst_init_short(dfb::input);
+        tile_regs_acquire();
+#endif
 
         for (uint32_t ht = 0; ht < Ht; ++ht) {
             cb_in_obj.wait_front(onetile);
 
-            if constexpr (do_scale) {
-                tile_regs_acquire();
-                mul_tiles_bcast_scalar_init_short(dfb::input, dfb::scaler);
-                mul_tiles_bcast_scalar(dfb::input, dfb::scaler, 0, 0, input_dst);
+#ifdef DO_SCALE
+            tile_regs_acquire();
+            mul_tiles_bcast_scalar_init_short(dfb::input, dfb::scaler);
+            mul_tiles_bcast_scalar(dfb::input, dfb::scaler, 0, 0, input_dst);
 
-                // Reconfigure the compute setup from scalar-multiply mode back to the
-                // SFPU state that Welford expects.
-                welford_reinit(dfb::input);
-            } else {
-                copy_tile(dfb::input, 0, input_dst);
-            }
+            // Reconfigure the compute setup from scalar-multiply mode back to the
+            // SFPU state that Welford expects.
+            welford_reinit(dfb::input);
+#else
+            copy_tile(dfb::input, 0, input_dst);
+#endif
             cb_in_obj.pop_front(onetile);
 
             if (ht < (Ht - 1)) {
                 welford_update<0>(input_dst, start_N, {});
-                if constexpr (do_scale) {
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    tile_regs_release();
-                }
+#ifdef DO_SCALE
+                tile_regs_commit();
+                tile_regs_wait();
+                tile_regs_release();
+#endif
             } else {
                 // Last tile: process only valid rows, then finalize
                 welford_update_rows<0>(input_dst, start_N, 0, last_tile_rows, {});

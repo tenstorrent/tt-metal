@@ -264,12 +264,14 @@ ttnn::device_operation::ProgramArtifacts ReduceDeviceOperation::ReduceMultiCoreH
             .entry_size = dst_single_tile_size,
             .num_entries = per_cb_num_entries,
             .data_format_metadata = dst_cb_data_format,
+            .disable_implicit_sync = true,
         });
         dataflow_buffers.push_back(m2::DataflowBufferSpec{
             .unique_id = H_INEG_DFB,
             .entry_size = dst_single_tile_size,
             .num_entries = per_cb_num_entries,
             .data_format_metadata = dst_cb_data_format,
+            .disable_implicit_sync = true,
         });
     }
 
@@ -406,13 +408,25 @@ ttnn::device_operation::ProgramArtifacts ReduceDeviceOperation::ReduceMultiCoreH
                      .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER},
                 },
             .compile_time_arg_bindings = {{"Ht", Ht}, {"Wt", compute_Wt}, {"NC", compute_NC}},
-            .config_spec =
-                m2::ComputeConfiguration{
-                    .math_fidelity = math_fidelity,
-                    .fp32_dest_acc_en = fp32_dest_acc_en,
-                    .dst_full_sync_en = dst_full_sync_en,
-                },
         };
+        m2::ComputeConfiguration cc{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = dst_full_sync_en,
+        };
+        if (fp32_dest_acc_en) {
+            if (src0_cb_data_format == tt::DataFormat::Float32) {
+                cc.unpack_to_dest_mode.push_back({H_INPUT_DFB, tt::tt_metal::UnpackToDestMode::Default});
+            }
+            if (scaler_cb_data_format == tt::DataFormat::Float32) {
+                cc.unpack_to_dest_mode.push_back({H_SCALER_DFB, tt::tt_metal::UnpackToDestMode::Default});
+            }
+            if (operation_attributes.negate && dst_cb_data_format == tt::DataFormat::Float32) {
+                cc.unpack_to_dest_mode.push_back({H_ACC_DFB, tt::tt_metal::UnpackToDestMode::Default});
+                cc.unpack_to_dest_mode.push_back({H_INEG_DFB, tt::tt_metal::UnpackToDestMode::Default});
+            }
+        }
+        spec.config_spec = cc;
         if (use_post_mul) {
             spec.compile_time_arg_bindings.push_back({"post_mul_scaler_bits", post_mul_scaler_bits});
         }

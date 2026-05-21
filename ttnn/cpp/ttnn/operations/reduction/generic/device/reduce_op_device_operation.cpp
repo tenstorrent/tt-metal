@@ -167,6 +167,12 @@ ttsl::hash::hash_t ReduceDeviceOperation::compute_program_hash(
         tensor_args.dtype(),
         tensor_args.memory_config(),
         tensor_args.padded_shape(),
+        // logical_shape is also factored in: the Metal 2.0 framework requires
+        // full TensorSpec equality at cache-hit (program_run_params.cpp), and the
+        // ProgramSpec pins tensor_parameters[].spec to the input/output specs at
+        // create-time, so different logical_shapes for the same padded_shape must
+        // produce different cache entries.
+        tensor_args.logical_shape(),
         tensor_args.tensor_spec().tile());
 }
 

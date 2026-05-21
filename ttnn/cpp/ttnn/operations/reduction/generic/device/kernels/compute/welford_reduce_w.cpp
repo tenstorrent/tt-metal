@@ -38,7 +38,10 @@ void kernel_main() {
     constexpr uint32_t Wt = get_arg(args::Wt);
     constexpr uint32_t W = get_arg(args::W);
     constexpr uint32_t tile_width = get_arg(args::tile_width);
-    constexpr bool do_scale = get_arg(args::do_scale) != 0;
+    // do_scale is gated by the DO_SCALE define (host-side, in welford_reduce factory).
+    // Using #ifdef rather than `if constexpr` means the dfb::scaled accessor is only
+    // referenced when the host actually binds the SCALED DFB; otherwise the name need
+    // not exist in kernel_args_generated.h.
     constexpr bool correction = get_arg(args::correction) != 0;
     constexpr bool is_std = get_arg(args::is_std) != 0;
 
@@ -47,6 +50,10 @@ void kernel_main() {
     DataflowBuffer cb_in_obj(dfb::input);
     DataflowBuffer cb_out_obj(dfb::output);
     DataflowBuffer cb_var_obj(dfb::scratch);
+    // Scaler DFB is bound on the compute kernel as CONSUMER unconditionally.
+    // The reader unconditionally produces a scaler tile (via prepare_reduce_scaler);
+    // when do_scale=false we still pop it so the DFB has a balanced producer/consumer.
+    DataflowBuffer cb_scalar_obj(dfb::scaler);
 
     // Destination register indices inside the Tensix DST register file.
     // Welford's LLK uses three adjacent dst registers:
@@ -65,11 +72,9 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb::input, dfb::output);
     pack_reconfig_data_format(dfb::output);
 
-    if constexpr (do_scale) {
-        // Scalar tile stays resident across all rows
-        DataflowBuffer cb_scalar_obj(dfb::scaler);
-        cb_scalar_obj.wait_front(onetile);
-    }
+    // Scalar tile stays resident across all rows (waited unconditionally so the scaler DFB
+    // has a producer/consumer pair; the value is only used when do_scale).
+    cb_scalar_obj.wait_front(onetile);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         // Simultaneous calculation of E[x] and Var[x] using Welford's algorithm.
@@ -79,53 +84,53 @@ void kernel_main() {
         // Programs SFPU replay buffer + clears LREG4/5
         welford_init();
 
-        if constexpr (!do_scale) {
-            // Explicit srca reconfig is required because the output packing
-            // phase (below) calls reconfig_data_format_srca(dfb::scratch) which
-            // changes the format on the 2nd+ NCHt iterations.
-            reconfig_data_format_srca(dfb::input);
-            transpose_wh_init_short(dfb::input);
-            tile_regs_acquire();
-        }
+#ifndef DO_SCALE
+        // Explicit srca reconfig is required because the output packing
+        // phase (below) calls reconfig_data_format_srca(dfb::scratch) which
+        // changes the format on the 2nd+ NCHt iterations.
+        reconfig_data_format_srca(dfb::input);
+        transpose_wh_init_short(dfb::input);
+        tile_regs_acquire();
+#endif
 
         for (uint32_t wt = 0; wt < Wt; ++wt) {
-            if constexpr (do_scale) {
-                // --- Scale step: multiply input tile by scalar ---
-                cb_in_obj.wait_front(onetile);
-                tile_regs_acquire();
-                reconfig_data_format_srca(dfb::input);
-                mul_tiles_bcast_scalar_init_short(dfb::input, dfb::scaler);
-                mul_tiles_bcast_scalar(dfb::input, dfb::scaler, 0, 0, input_dst);
-                tile_regs_commit();
-                cb_in_obj.pop_front(1);
-                DataflowBuffer cb_scaled_obj(dfb::scaled);
-                cb_scaled_obj.reserve_back(onetile);
-                tile_regs_wait();
-                pack_reconfig_data_format(dfb::scaled);
-                pack_tile(input_dst, dfb::scaled);
-                tile_regs_release();
-                cb_scaled_obj.push_back(onetile);
+#ifdef DO_SCALE
+            // --- Scale step: multiply input tile by scalar ---
+            cb_in_obj.wait_front(onetile);
+            tile_regs_acquire();
+            reconfig_data_format_srca(dfb::input);
+            mul_tiles_bcast_scalar_init_short(dfb::input, dfb::scaler);
+            mul_tiles_bcast_scalar(dfb::input, dfb::scaler, 0, 0, input_dst);
+            tile_regs_commit();
+            cb_in_obj.pop_front(1);
+            DataflowBuffer cb_scaled_obj(dfb::scaled);
+            cb_scaled_obj.reserve_back(onetile);
+            tile_regs_wait();
+            pack_reconfig_data_format(dfb::scaled);
+            pack_tile(input_dst, dfb::scaled);
+            tile_regs_release();
+            cb_scaled_obj.push_back(onetile);
 
-                // --- Transpose scaled tile back into DST ---
-                cb_scaled_obj.wait_front(onetile);
-                tile_regs_acquire();
-                reconfig_data_format_srca(dfb::scaled);
-                transpose_wh_init_short(dfb::scaled);
-                transpose_wh_tile(dfb::scaled, 0, input_dst);
-                cb_scaled_obj.pop_front(onetile);
-            } else {
-                cb_in_obj.wait_front(onetile);
-                transpose_wh_tile(dfb::input, 0, input_dst);
-                cb_in_obj.pop_front(onetile);
-            }
+            // --- Transpose scaled tile back into DST ---
+            cb_scaled_obj.wait_front(onetile);
+            tile_regs_acquire();
+            reconfig_data_format_srca(dfb::scaled);
+            transpose_wh_init_short(dfb::scaled);
+            transpose_wh_tile(dfb::scaled, 0, input_dst);
+            cb_scaled_obj.pop_front(onetile);
+#else
+            cb_in_obj.wait_front(onetile);
+            transpose_wh_tile(dfb::input, 0, input_dst);
+            cb_in_obj.pop_front(onetile);
+#endif
 
             if (wt < (Wt - 1)) {
                 welford_update<0>(input_dst, start_N, {});
-                if constexpr (do_scale) {
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    tile_regs_release();
-                }
+#ifdef DO_SCALE
+                tile_regs_commit();
+                tile_regs_wait();
+                tile_regs_release();
+#endif
             } else {
                 // Last tile: finalize and keep DST acquired for variance packing
                 welford_update_rows<0>(input_dst, start_N, 0, last_tile_rows, {});

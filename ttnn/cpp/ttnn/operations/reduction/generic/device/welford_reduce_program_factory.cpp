@@ -142,6 +142,12 @@ ttnn::device_operation::ProgramArtifacts WelfordReduceDeviceOperation::WelfordRe
         reduce_op_utils::get_defines(operation_attributes.math_op, operation_attributes.reduce_dim);
     reduce_defines["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
     reduce_defines["DST_SYNC_FULL"] = dst_full_sync_en ? "1" : "0";
+    // DO_SCALE / IS_STD compile-time gates: used by the Welford compute kernels to
+    // statically eliminate references to optionally-bound DFBs (dfb::scaled) so
+    // they don't need to exist in kernel_args_generated.h when not bound.
+    if (do_scale) {
+        reduce_defines["DO_SCALE"] = "1";
+    }
 
     // ----- DataflowBufferSpecs -----
 
@@ -169,7 +175,8 @@ ttnn::device_operation::ProgramArtifacts WelfordReduceDeviceOperation::WelfordRe
     });
 
     if (reduce_w) {
-        // c_19 scratch (W-reduce only).
+        // c_19 scratch (W-reduce only). Self-loop on compute -> intra-tensix DFB
+        // (implicit sync not supported for intra-tensix).
         const tt::DataFormat scratch_cb_data_format =
             fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
         const uint32_t scratch_single_tile_size = tt::tile_size(scratch_cb_data_format);
@@ -178,16 +185,18 @@ ttnn::device_operation::ProgramArtifacts WelfordReduceDeviceOperation::WelfordRe
             .entry_size = scratch_single_tile_size,
             .num_entries = 1,
             .data_format_metadata = scratch_cb_data_format,
+            .disable_implicit_sync = true,
         });
     }
 
     if (do_scale && reduce_w) {
-        // c_20 scaled (W-reduce + do_scale only).
+        // c_20 scaled (W-reduce + do_scale only). Self-loop on compute.
         dataflow_buffers.push_back(m2::DataflowBufferSpec{
             .unique_id = WF_SCALED_DFB,
             .entry_size = input_single_tile_size,
             .num_entries = 1,
             .data_format_metadata = input_cb_data_format,
+            .disable_implicit_sync = true,
         });
     }
 
@@ -387,21 +396,19 @@ ttnn::device_operation::ProgramArtifacts WelfordReduceDeviceOperation::WelfordRe
                     {.dfb_spec_name = WF_OUTPUT_DFB,
                      .local_accessor_name = "output",
                      .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER},
+                    // Always bind scaler as CONSUMER on compute: the reader unconditionally
+                    // produces a scaler tile via prepare_reduce_scaler, so the DFB needs a
+                    // matching consumer. The compute kernel waits on it unconditionally and
+                    // uses the value only when do_scale.
+                    {.dfb_spec_name = WF_SCALER_DFB,
+                     .local_accessor_name = "scaler",
+                     .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER},
                 },
             .compile_time_arg_bindings = base_compute_ctas,
-            .config_spec =
-                m2::ComputeConfiguration{
-                    .math_fidelity = math_fidelity,
-                    .fp32_dest_acc_en = fp32_dest_acc_en,
-                },
+            .runtime_arguments_schema =
+                {.named_runtime_args =
+                     {reduce_w ? std::string("NCHt") : (reduce_hw ? std::string("NC_per_core") : std::string("NCWt"))}},
         };
-        // Scaler DFB: bound on the compute kernel only when do_scale (the kernels read it via `dfb::scaler`).
-        if (do_scale) {
-            spec.dfb_bindings.push_back(
-                {.dfb_spec_name = WF_SCALER_DFB,
-                 .local_accessor_name = "scaler",
-                 .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER});
-        }
         if (reduce_w) {
             // Scratch DFB self-loop (welford_reduce_w writes then transposes back).
             spec.dfb_bindings.push_back(
@@ -435,6 +442,31 @@ ttnn::device_operation::ProgramArtifacts WelfordReduceDeviceOperation::WelfordRe
                  .local_accessor_name = "combined",
                  .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER});
         }
+        // Build ComputeConfiguration with required unpack_to_dest_mode entries for FP32 DFBs
+        // consumed by the compute kernel (when fp32_dest_acc_en is true).
+        m2::ComputeConfiguration cc{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+        };
+        if (fp32_dest_acc_en) {
+            if (input_cb_data_format == tt::DataFormat::Float32) {
+                cc.unpack_to_dest_mode.push_back({WF_INPUT_DFB, tt::tt_metal::UnpackToDestMode::Default});
+            }
+            // scaler_cb_data_format is Float16_b (hardcoded) — never Float32, no entry needed.
+            if (reduce_w) {
+                // scratch DFB format is Float32 when fp32_dest_acc_en is true.
+                cc.unpack_to_dest_mode.push_back({WF_SCRATCH_DFB, tt::tt_metal::UnpackToDestMode::Default});
+                if (do_scale && input_cb_data_format == tt::DataFormat::Float32) {
+                    cc.unpack_to_dest_mode.push_back({WF_SCALED_DFB, tt::tt_metal::UnpackToDestMode::Default});
+                }
+            }
+            if (reduce_hw) {
+                // combined DFB is Float32 (always); partial is Float32 but PRODUCER-only on
+                // compute (no unpack needed for PRODUCER).
+                cc.unpack_to_dest_mode.push_back({WF_COMBINED_DFB, tt::tt_metal::UnpackToDestMode::Default});
+            }
+        }
+        spec.config_spec = cc;
         return spec;
     };
 
