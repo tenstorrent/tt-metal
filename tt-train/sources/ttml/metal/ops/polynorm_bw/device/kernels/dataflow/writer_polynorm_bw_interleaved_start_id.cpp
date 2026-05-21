@@ -26,7 +26,7 @@ void kernel_main() {
     constexpr auto cb_packed_partials_output = tt::CBIndex::c_22;
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr uint32_t dL_dx_Wt = get_compile_time_arg_val(1);
-    constexpr uint32_t packed_partials_wt = get_compile_time_arg_val(2);
+    constexpr uint32_t packed_partials_tiles_per_row = get_compile_time_arg_val(2);
 
     const uint32_t dL_dx_tile_bytes = get_tile_size(cb_dL_dx_output);
     const uint32_t packed_partials_tile_bytes = get_tile_size(cb_packed_partials_output);
@@ -44,13 +44,15 @@ void kernel_main() {
         write_full_row_tiles(
             cb_dL_dx_output, dL_dx_output_addr_generator, dL_dx_Wt, block_size, dL_dx_tile_bytes, r * dL_dx_Wt);
 
-        // Write packed partial-gradient tiles [dw0, dw1, dw2, db]
-        write_full_row_tiles(
+        // Write packed partial-gradient tiles [dw0, dw1, dw2, db].
+        // These are always 4 scalar tiles per row and must be consumed as a 4-tile block
+        // independent of dL/dx block_size.
+        write_tiles_by_row(
             cb_packed_partials_output,
             packed_partials_output_addr_generator,
-            packed_partials_wt,
-            block_size,
+            r * packed_partials_tiles_per_row,
+            packed_partials_tiles_per_row,
             packed_partials_tile_bytes,
-            r * packed_partials_wt);
+            packed_partials_tiles_per_row);
     }
 }

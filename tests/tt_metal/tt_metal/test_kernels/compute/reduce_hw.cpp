@@ -7,21 +7,28 @@
 #include "api/compute/reduce.h"
 #ifdef ARCH_QUASAR
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #else
 #include "api/dataflow/circular_buffer.h"
 #endif
 
 void kernel_main() {
+#ifdef ARCH_QUASAR
+    constexpr uint32_t Ht = get_arg(args::Ht);
+    constexpr uint32_t Wt = get_arg(args::Wt);
+    constexpr uint32_t NC = get_arg(args::NC);
+#else
     constexpr uint32_t Ht = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t NC = get_compile_time_arg_val(2);
+#endif
 
     constexpr uint32_t onetile = 1;
 
 #ifdef ARCH_QUASAR
-    DataflowBuffer dfb_in(0);
-    DataflowBuffer dfb_in_scaler(1);
-    DataflowBuffer dfb_out(2);
+    DataflowBuffer dfb_in(dfb::in_data);
+    DataflowBuffer dfb_in_scaler(dfb::in_scaler);
+    DataflowBuffer dfb_out(dfb::out);
     compute_kernel_hw_startup(dfb_in.get_id(), dfb_in_scaler.get_id(), dfb_out.get_id());
     reduce_init<REDUCE_OP, REDUCE_DIM>(dfb_in.get_id(), dfb_in_scaler.get_id(), dfb_out.get_id());
 #else

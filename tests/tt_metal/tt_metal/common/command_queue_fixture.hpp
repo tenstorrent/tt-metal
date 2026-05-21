@@ -26,6 +26,9 @@ namespace tt::tt_metal {
 // #22835: These Fixtures will be removed once tests are fully migrated, and replaced by UnitMeshCQFixtures
 class UnitMeshCQFixture : public MeshDispatchFixture {
 protected:
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
+
     void SetUp() override {
         if (!this->validate_dispatch_mode()) {
             GTEST_SKIP();
@@ -321,6 +324,9 @@ using UnitMeshCQSingleCardSharedBufferFixture = UnitMeshCQSingleCardSharedFixtur
 
 class UnitMeshCQMultiDeviceFixture : public MeshDispatchFixture {
 protected:
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
+
     void SetUp() override {
         this->slow_dispatch_ = false;
         auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");

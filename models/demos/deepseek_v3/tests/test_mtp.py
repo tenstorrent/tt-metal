@@ -196,13 +196,13 @@ def _run_reference_decode_replay_consistency(
 
 # Test: mtp=on must not perturb base greedy decode replay against the stored reference stream.
 @pytest.mark.timeout(TIMEOUT_S)
-@pytest.mark.requires_device(["DUAL", "QUAD"])
+@pytest.mark.requires_device(["QUAD"])
 @pytest.mark.parametrize(
     "device_params",
     [
         pytest.param(
             {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_config": get_fabric_config(),
                 "trace_region_size": TRACE_REGION_SIZE,
             },
             marks=SKIP_IN_CI,
@@ -230,13 +230,13 @@ def test_mtp_reference_decode_replay_consistency(
 
 # Test: mtp=off baseline decode must still replay the saved reference stream exactly.
 @pytest.mark.timeout(TIMEOUT_S)
-@pytest.mark.requires_device(["DUAL", "QUAD"])
+@pytest.mark.requires_device(["QUAD"])
 @pytest.mark.parametrize(
     "device_params",
     [
         pytest.param(
             {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_config": get_fabric_config(),
                 "trace_region_size": TRACE_REGION_SIZE,
             },
             marks=SKIP_IN_CI,
@@ -1097,13 +1097,13 @@ class _MtpTraceRunner:
 
 # Test: generate the hidden-state and next-token oracle payload used by the MTP checks below.
 @pytest.mark.timeout(TIMEOUT_S)
-@pytest.mark.requires_device(["DUAL", "QUAD"])
+@pytest.mark.requires_device(["QUAD"])
 @pytest.mark.parametrize(
     "device_params",
     [
         pytest.param(
             {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_config": get_fabric_config(),
                 "trace_region_size": TRACE_REGION_SIZE,
             },
             marks=SKIP_IN_CI,
@@ -1201,7 +1201,7 @@ def test_generate_mtp_reference_io(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": get_fabric_config(),
             "trace_region_size": TRACE_REGION_SIZE,
         }
     ],
@@ -1322,12 +1322,12 @@ def test_mtp_accept_rate_and_perf(
 
 # Test: prefill priming must seed the MTP cache correctly so post-prefill predictions stay accurate.
 @pytest.mark.timeout(TIMEOUT_S)
-@pytest.mark.requires_device(["DUAL", "QUAD"])
+@pytest.mark.requires_device(["QUAD"])
 @pytest.mark.parametrize(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": get_fabric_config(),
             "trace_region_size": TRACE_REGION_SIZE,
         }
     ],
@@ -1453,12 +1453,12 @@ def test_mtp_prefill_priming(
 
 # Test: verify batching with aliased page tables must preserve prompt predictions, accept masks, and accepted verify outputs.
 @pytest.mark.timeout(TIMEOUT_S)
-@pytest.mark.requires_device(["DUAL", "QUAD"])
+@pytest.mark.requires_device(["QUAD"])
 @pytest.mark.parametrize(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": get_fabric_config(),
             "trace_region_size": TRACE_REGION_SIZE,
         }
     ],

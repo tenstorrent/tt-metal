@@ -10,9 +10,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_ops.h"
 #include "cpack_common.h"
-#include "llk_assert.h"
 #include "llk_defs.h"
-#include "llk_memory_checks.h"
 
 using namespace ckernel;
 using namespace ckernel::packer;
@@ -103,7 +101,7 @@ inline void _llk_pack_reconfig_l1_acc_(const std::uint32_t enable)
     reconfigure_packer_l1_acc(enable);
 }
 
-template <bool untilize = false, ReduceDim dim>
+template <ReduceDim dim, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_reduce_mask_config_()
 {
     ckernel::packer::pck_edge_offset_u pack_edge_offset = {.val = 0};
@@ -124,7 +122,7 @@ inline void _llk_pack_reduce_mask_config_()
 
         // PCK_EDGE_OFFSET_SEC1 mask will clear out all the datums in the row except the first one
         edge_offset_sec1_mask = 0x0001;
-        if constexpr (untilize)
+        if constexpr (pack_mode == PackMode::Untilize)
         {
             row_set_mapping_1 = 0x11111111; // each packer packs 1x32 row
         }
@@ -144,7 +142,7 @@ inline void _llk_pack_reduce_mask_config_()
         pack_edge_offset.f.tile_row_set_select_pack0 = 1;
         pack_edge_offset.f.tile_row_set_select_pack1 = 1;
 
-        if constexpr (untilize)
+        if constexpr (pack_mode == PackMode::Untilize)
         {
             row_set_mapping_1 = 0x00000005; // each packer packs 1x32 row
         }
