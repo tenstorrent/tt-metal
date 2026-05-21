@@ -46,13 +46,14 @@ constexpr static std::uint32_t TRISC_ID               = 0;
  * Whether reprogramming OUT_DATA_FORMAT from buffer-descriptor \p unpack_src_format (L1) to
  * \p unpack_dst_format is supported on Quasar for the given unpack path.
  *
- * \param en_32bit_dest   Reserved; caller passes EN_32BIT_DEST (unused in table rows).
+ * \tparam EN_32BIT_DEST  FP32 dest accumulation mode (from unpack reconfig entry points).
  * \param unpack_to_dest  True: Unpack-to-Dest or Unpack-to-SrcS; false: SrcA/SrcB.
  *
  * Rules follow the Quasar Unpacker Format Conversions table (gasket outside TDMA).
  */
+template <bool EN_32BIT_DEST>
 __attribute__((noinline, optimize("no-jump-tables"))) bool is_quasar_unpack_reconfig_pair_supported(
-    const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format, [[maybe_unused]] const bool en_32bit_dest, const bool unpack_to_dest)
+    const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format, const bool unpack_to_dest)
 {
     const DataFormat src = static_cast<DataFormat>(unpack_src_format);
     const DataFormat dst = static_cast<DataFormat>(unpack_dst_format);

@@ -102,7 +102,7 @@ inline void _llk_unpack_reconfig_data_format_src_(const std::uint32_t unpack_src
         (UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B) || (UNP_SEL == p_unpacr::UNP_S), "UNP_SEL must be p_unpacr::UNP_A, UNP_B, or UNP_S");
 
     LLK_ASSERT(
-        ckernel::unpack::is_quasar_unpack_reconfig_pair_supported(unpack_src_format, unpack_dst_format, EN_32BIT_DEST, false /* unpack_to_dest */),
+        ckernel::unpack::is_quasar_unpack_reconfig_pair_supported<EN_32BIT_DEST>(unpack_src_format, unpack_dst_format, false /* unpack_to_dest */),
         "Unsupported Quasar unpacker OUT_DATA_FORMAT for this L1 format and unpack path.");
 
     const auto out_fmt = static_cast<std::uint8_t>(unpack_dst_format);
