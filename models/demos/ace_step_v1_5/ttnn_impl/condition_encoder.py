@@ -25,7 +25,7 @@ import ttnn
 
 from .math_perf_env import (
     ace_step_cond_linear_program_config,
-    ace_step_init_hifi2_linear_compute_kernel_config,
+    ace_step_init_hifi4_linear_compute_kernel_config,
     ace_step_linear_l1_memory_config,
     ace_step_reshape_kwargs,
 )
@@ -294,7 +294,7 @@ class TtAceStepInstrumentalConditionEncoder:
         mapper = ttnn.ReplicateTensorToMesh(device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
         self.weights_np = load_condition_weights_np(str(checkpoint_safetensors_path))
         init_ck = getattr(ttnn, "init_device_compute_kernel_config", None)
-        linear_compute_kernel_config = ace_step_init_hifi2_linear_compute_kernel_config(device)
+        linear_compute_kernel_config = ace_step_init_hifi4_linear_compute_kernel_config(device)
         l1_mc = ace_step_linear_l1_memory_config(ttnn)
         sdpa_compute_kernel_config = None
         if callable(init_ck):
