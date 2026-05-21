@@ -216,16 +216,6 @@ def test_run_host_io_decoder_sweep_chunked_trace_smoke(trace_root: Path, model_i
 
 @pytest.mark.parametrize(("trace_root", "model_id", "prompt_id"), TRACE_CASES)
 def test_run_host_io_decoder_sweep_chunked_trace_world_size_4(trace_root: Path, model_id: str, prompt_id: str) -> None:
-    rank_raw = os.environ.get("OMPI_COMM_WORLD_RANK")
-    world_size_raw = os.environ.get("OMPI_COMM_WORLD_SIZE")
-    if rank_raw is None or world_size_raw is None:
-        pytest.skip("world-size-4 smoke must be launched under tt-run/mpirun")
-    rank = int(rank_raw)
-    world_size = int(world_size_raw)
-    if world_size != 4:
-        pytest.skip(f"world-size-4 smoke requires exactly 4 launcher ranks, got {world_size}")
-    assert 0 <= rank < world_size
-
     _assert_chunked_trace_is_readable(trace_root, model_id, prompt_id)
     _require_host_io_sweep_env()
     if ttnn.get_num_devices() < 8:
@@ -251,7 +241,9 @@ def test_run_host_io_decoder_sweep_chunked_trace_world_size_4(trace_root: Path, 
             "--validate-hidden-states-cross-trace",
             "--pcc-threshold",
             "0.97",
-            "--no-validate-kv-cache-cross-trace",
+            "--validate-kv-cache-cross-trace",
+            "--kv-cache-pcc-threshold",
+            "0.97",
             "--no-validate-kv-cache-cross-slot",
             "--no-dump-hidden-states",
             "--no-dump-kv-cache",
