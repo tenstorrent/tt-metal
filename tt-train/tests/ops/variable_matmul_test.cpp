@@ -391,6 +391,23 @@ TEST_F(VariableMatmulTest, MinimalParity_NoTranspose) {
     EXPECT_EQ(max_abs_error(result, ref), 0.0F) << "variable vs minimal (no transpose) not bit-exact";
 }
 
+// Non-tile-aligned M (matches DeepSeek 16B with TP=8: moe_inter_dim=1408/8 = 176). The
+// TILE-layout physical storage rounds to ceil(176/32)*32 = 192; variable_matmul must
+// process all 6 M-tiles, write the same as minimal_matmul, and present logical_shape M=176
+// to the caller. Output's physical tile 5 has 16 valid rows + 16 padded zeros.
+TEST_F(VariableMatmulTest, MinimalParity_NoTranspose_NonTileAlignedM_176) {
+    const uint32_t M = 176, K = 128, N = 256;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto input = create_random_device_tensor(M, K, device);
+    auto weight = create_random_device_tensor(K, N, device);
+
+    auto result = ttml::metal::variable_matmul(input, weight, kConfig);
+    auto ref = minimal_matmul_hifi4(input, weight, kConfig);
+
+    EXPECT_EQ(max_abs_error(result, ref), 0.0F) << "variable vs minimal (M=176, non-tile-aligned) not bit-exact";
+}
+
 TEST_F(VariableMatmulTest, MinimalParity_TransposeB) {
     const uint32_t M = 128, K = 128, N = 512;
     auto* device = &ttml::autograd::ctx().get_device();
@@ -646,6 +663,60 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndWeightK_TransposeA) {
     auto ref = minimal_matmul_hifi4(in0_sliced_mk, in1_sliced, kConfig);
 
     EXPECT_EQ(max_abs_error(result, ref), 0.0F) << "variable(InputAndWeightK,tA) vs minimal not bit-exact";
+}
+
+// Non-tile-aligned matmul-M on the InputAndWeightK + transpose_a path. This is the
+// DeepSeek 16B / TP=8 moe_ffn bwd dW_gate (and dW_up) pattern: in0 = d_gate_proj
+// stored [count, I/TP=176], read as [I/TP, count] under transpose_a. matmul-M = I/TP = 176
+// (off-tile), matmul-N = H (tile-aligned), matmul-K = expert's count-tiles (tile-aligned,
+// from offsets[start..start+2]). Output [176, H] gets logical M=176 / padded 192; the
+// tail 16 padded rows are zero, downstream readers see only 176.
+TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndWeightK_TransposeA_NonTileAlignedM_176) {
+    const uint32_t K_parent_in0 = 512, M = 176, K_parent_in1 = 512, N = 64;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    // in0 stored [K_parent, M=176]; physical [K_parent, 192] in TILE layout.
+    auto in0_km = create_random_device_tensor(K_parent_in0, M, device);
+    auto in1 = create_random_device_tensor(K_parent_in1, N, device);
+
+    const std::vector<uint32_t> offsets_host = {0U, 64U, 128U, 256U, 384U};
+    auto offsets = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        offsets_host, ttnn::Shape({static_cast<uint32_t>(offsets_host.size())}), device, ttnn::Layout::ROW_MAJOR);
+    constexpr uint32_t kStart = 2U;
+    constexpr uint32_t k_lo = 128;
+    constexpr uint32_t K_active = 128;
+
+    auto cfg = kConfig;
+    cfg.transpose_a = true;
+    auto result = ttml::metal::variable_matmul(
+        in0_km,
+        in1,
+        cfg,
+        /*bias=*/std::nullopt,
+        /*in0_row_offset_tiles=*/0,
+        /*effective_M_tiles=*/0,
+        /*in0_k_offset_tiles=*/0,
+        /*in1_k_offset_tiles=*/0,
+        /*output_tensor=*/std::nullopt,
+        /*out_row_offset_tiles=*/0,
+        /*offsets_tensor=*/offsets,
+        /*offsets_role=*/ttml::metal::OffsetsRole::InputAndWeightK,
+        /*offsets_start_index=*/kStart);
+
+    auto in0_sliced_km = ttnn::slice(
+        in0_km,
+        ttsl::SmallVector<uint32_t>{0, 0, k_lo, 0},
+        ttsl::SmallVector<uint32_t>{1, 1, k_lo + K_active, M},
+        ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
+    auto in0_sliced_mk = ttnn::transpose(in0_sliced_km, -2, -1);
+    auto in1_sliced = ttnn::slice(
+        in1,
+        ttsl::SmallVector<uint32_t>{0, 0, k_lo, 0},
+        ttsl::SmallVector<uint32_t>{1, 1, k_lo + K_active, N},
+        ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
+    auto ref = minimal_matmul_hifi4(in0_sliced_mk, in1_sliced, cfg);
+
+    EXPECT_EQ(max_abs_error(result, ref), 0.0F) << "variable(InputAndWeightK,tA,M=176) vs minimal not bit-exact";
 }
 
 // ---------------------------------------------------------------------------

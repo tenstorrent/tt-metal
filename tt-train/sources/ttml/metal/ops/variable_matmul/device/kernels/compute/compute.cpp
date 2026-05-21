@@ -2,228 +2,31 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "api/compute/bcast.h"
 #include "api/compute/cb_api.h"
 #include "api/compute/compute_kernel_api.h"
-#include "api/compute/eltwise_binary.h"
-#include "api/compute/eltwise_binary_sfpu.h"
-#include "api/compute/eltwise_unary/binop_with_scalar.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/fill.h"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/tilize.h"
 #include "api/compute/transpose_wh.h"
-#include "api/compute/untilize.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
 void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     copy_tile_to_dst_init_short(in_cb);
     reconfig_data_format_srca(in_cb);
     pack_reconfig_data_format(out_cb);
-    uint32_t fused_act_dst_id = 0;
+    constexpr uint32_t fused_act_dst_id = 0;
 
     uint32_t tile_id = 0;
     for (uint32_t m = 0; m < M_block_tiles; m++) {
         for (uint32_t n = 0; n < N_block_tiles; n++) {
             acquire_dst();
             copy_tile(in_cb, tile_id, fused_act_dst_id /*dst*/);
-#ifdef SFPU_OP_INIT_ACTIVATION
-            SFPU_OP_FUNC_ACTIVATION
-#endif
             pack_tile(fused_act_dst_id, out_cb);
             release_dst();
             tile_id++;
         }
         cb_push_back(out_cb, N_block_tiles);
     }
-}
-
-// For caller: if FUSE_TERNARY defined then out_cb == in_cb
-/**
- * Add bias to input block
- * Performs: output = input + bias (row broadcast)
- *
- * stream_output:
- *   - true: Pushes tiles one row at a time (for intermediate output to next stage)
- *   - false: Pushes all tiles at end (for final output)
- */
-void add_bias_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
-    add_bcast_rows_init_short(in_cb, bias_cb);
-    reconfig_data_format(in_cb, bias_cb);
-    pack_reconfig_data_format(out_cb);
-    uint32_t fused_act_dst_id = 0;
-
-    uint32_t tile_id = 0;
-    for (uint32_t m = 0; m < M_block_tiles; m++) {
-        for (uint32_t n = 0; n < N_block_tiles; n++) {
-            acquire_dst();
-            add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, tile_id, n, fused_act_dst_id /*dst*/);
-#ifdef SFPU_OP_INIT_ACTIVATION
-            SFPU_OP_FUNC_ACTIVATION
-#endif
-            pack_tile(fused_act_dst_id, out_cb);
-            release_dst();
-            tile_id++;
-        }
-        cb_push_back(out_cb, N_block_tiles);
-    }
-}
-
-void add_bias_and_addcmul_block(
-    uint32_t intermediate_cb,
-    uint32_t bias_cb,
-    uint32_t ternary_a_cb,
-    uint32_t ternary_b_cb,
-    uint32_t scalar_value,
-    uint32_t out_cb,
-    uint32_t M_block_tiles,
-    uint32_t N_block_tiles) {
-    // Note: unary_bcast_tile does not work with fp32_acc_to_dest=True.
-    // As a workaround, we perform addcmul through multiple LLKs calls (mul_tiles, mul_unary_tile, add_tiles_bcast).
-
-    const uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
-
-    constexpr uint32_t DST_ID = 0;
-#ifdef FUSE_BIAS
-    // ============================================
-    // STEP 1: Add bias block
-    // Read from intermediate_cb and write back to intermediate_cb
-    // ============================================
-
-    add_bcast_rows_init_short(intermediate_cb, bias_cb);
-    reconfig_data_format(intermediate_cb, bias_cb);
-    pack_reconfig_data_format(intermediate_cb);
-
-    // Wait for ALL input data ONCE at the beginning
-    cb_wait_front(bias_cb, N_block_tiles);
-
-    // Unpacker waits for intermediate_cb to be ready
-    cb_wait_front(intermediate_cb, out_block_num_tiles);
-
-    for (uint32_t m = 0; m < M_block_tiles; m++) {
-        for (uint32_t n = 0; n < N_block_tiles; n++) {
-            uint32_t tile_id = m * N_block_tiles + n;
-
-            tile_regs_acquire();
-            add_tiles_bcast<BroadcastType::ROW>(intermediate_cb, bias_cb, tile_id, n, DST_ID);
-
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile(DST_ID, intermediate_cb);
-            tile_regs_release();
-        }
-    }
-
-    // Pop input and push output ONCE at the end
-    // cb_wait_front(intermediate_cb, out_block_num_tiles); // Unpacker-Packer sync
-    // cb_pop_front(intermediate_cb, out_block_num_tiles);
-    cb_pop_front(bias_cb, N_block_tiles);
-
-    cb_pop_front(intermediate_cb, out_block_num_tiles);
-
-    // Restore intermediate_cb to ready (+ sync packer/unpacker)
-    cb_reserve_back(intermediate_cb, out_block_num_tiles);
-    cb_push_back(intermediate_cb, out_block_num_tiles);
-#endif  // FUSE_BIAS
-
-    // ============================================
-    // STEP 2: Multiply by ternary_b (broadcast) and scalar
-    // Read from intermediate_cb and write back to intermediate_cb
-    // ============================================
-
-    cb_wait_front(intermediate_cb, out_block_num_tiles);
-    cb_wait_front(ternary_b_cb, N_block_tiles);
-
-#ifndef TERNARY_B_IS_FLOAT32
-    mul_bcast_rows_init_short(intermediate_cb, ternary_b_cb);
-#else
-    unary_bcast_init<BroadcastType::ROW>(ternary_b_cb, intermediate_cb);
-#endif  // TERNARY_B_IS_FLOAT32
-
-    binop_with_scalar_tile_init();
-    reconfig_data_format(intermediate_cb, ternary_b_cb);
-    pack_reconfig_data_format(intermediate_cb);
-
-    uint32_t tile_id = 0;
-    for (uint32_t m = 0; m < M_block_tiles; m++) {
-        for (uint32_t n = 0; n < N_block_tiles; n++) {
-            tile_regs_acquire();
-
-#ifndef TERNARY_B_IS_FLOAT32
-            // LLK BUG: unary_bcast gives bad values if mixing fp32_acc_to_dest=True and bfloat16 circular buffer
-            // (https://github.com/tenstorrent/tt-llk/issues/1338)
-            // To avoid the bug, we use:
-            // - unary_bcast/mul_binary_tile for fp32 (more accurate)
-            // - mul_tiles_bcast for bfloat16 (LLK bug workaround).
-
-            // ternary_b_cb is [1, N], broadcast across M rows
-            mul_tiles_bcast<BroadcastType::ROW>(intermediate_cb, ternary_b_cb, tile_id, n, DST_ID);
-#else
-            constexpr uint32_t TERNARY_B_DST_ID = 1;
-            unary_bcast_init<BroadcastType::ROW>(ternary_b_cb, intermediate_cb);
-
-            // ternary_b_cb is [1, N], broadcast across M rows
-            unary_bcast<BroadcastType::ROW>(ternary_b_cb, n, TERNARY_B_DST_ID);
-
-            copy_tile_to_dst_init_short(intermediate_cb);
-            copy_tile(intermediate_cb, tile_id, DST_ID);
-
-            mul_binary_tile_init();
-            mul_binary_tile(DST_ID, TERNARY_B_DST_ID, DST_ID);
-#endif  // TERNARY_B_IS_FLOAT32
-
-            mul_unary_tile(DST_ID, scalar_value);
-
-            tile_regs_commit();
-            tile_regs_wait();
-
-            pack_tile(DST_ID, intermediate_cb);
-
-            tile_regs_release();
-            tile_id++;
-        }
-    }
-
-    cb_pop_front(ternary_b_cb, N_block_tiles);
-    cb_pop_front(intermediate_cb, out_block_num_tiles);
-
-    // 'refill' intermediate_cb (also synchronize packer/unpacker)
-    cb_reserve_back(intermediate_cb, out_block_num_tiles);
-    cb_push_back(intermediate_cb, out_block_num_tiles);
-
-    cb_wait_front(intermediate_cb, out_block_num_tiles);
-
-    add_tiles_init(intermediate_cb, ternary_a_cb);
-    reconfig_data_format(intermediate_cb, ternary_a_cb);
-    pack_reconfig_data_format(out_cb);
-
-    tile_id = 0;
-    for (uint32_t m = 0; m < M_block_tiles; m++) {
-        // Wait for one row of ternary_a tiles
-        cb_wait_front(ternary_a_cb, N_block_tiles);
-
-        for (uint32_t n = 0; n < N_block_tiles; n++) {
-            tile_regs_acquire();
-
-            // ternary_a_cb is pushed one row at a time, so use column index n
-            add_tiles(intermediate_cb, ternary_a_cb, tile_id, n, DST_ID);
-
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile(DST_ID, out_cb);
-            tile_regs_release();
-            tile_id++;
-        }
-
-        cb_pop_front(ternary_a_cb, N_block_tiles);
-        cb_push_back(out_cb, N_block_tiles);
-    }
-
-    cb_pop_front(intermediate_cb, out_block_num_tiles);
 }
 
 // Transpose every tile of a block from src_cb into dst_cb. Modeled after ttnn::matmul's
@@ -323,10 +126,10 @@ void matmul_blocks(
             tile_regs_wait();
             uint32_t write_dst_index = 0;
             for (uint32_t h = 0; h < subblock_h; h++) {
-                uint32_t h_tile_id = M_start + h;
+                const uint32_t h_tile_id = M_start + h;
                 for (uint32_t w = 0; w < subblock_w; w++) {
-                    uint32_t w_tile_id = N_start + w;
-                    uint32_t out_tile_id = h_tile_id * full_N_block_tiles + w_tile_id;
+                    const uint32_t w_tile_id = N_start + w;
+                    const uint32_t out_tile_id = h_tile_id * full_N_block_tiles + w_tile_id;
                     pack_tile<true>(write_dst_index, out_cb, out_tile_id);
                     write_dst_index++;
                     dst_index++;
@@ -366,10 +169,10 @@ void zero_blocks(
             tile_regs_wait();
             uint32_t write_dst_index = 0;
             for (uint32_t h = 0; h < subblock_h; h++) {
-                uint32_t h_tile_id = M_start + h;
+                const uint32_t h_tile_id = M_start + h;
                 for (uint32_t w = 0; w < subblock_w; w++) {
-                    uint32_t w_tile_id = N_start + w;
-                    uint32_t out_tile_id = h_tile_id * full_N_block_tiles + w_tile_id;
+                    const uint32_t w_tile_id = N_start + w;
+                    const uint32_t out_tile_id = h_tile_id * full_N_block_tiles + w_tile_id;
                     pack_tile<true>(write_dst_index, out_cb, out_tile_id);
                     write_dst_index++;
                 }
@@ -380,16 +183,15 @@ void zero_blocks(
 }
 
 void kernel_main() {
-    // Index 0 (K_num_blocks): kept for arg layout compat; actual value from runtime args.
-    constexpr uint32_t M_block_tiles = get_compile_time_arg_val(1);
-    constexpr uint32_t K_block_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t N_block_tiles = get_compile_time_arg_val(3);
-    // Index 4 is unused placeholder (kept for arg layout compat). Actual M_blocks_per_core from runtime args.
-    constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(5);
-    constexpr uint32_t subblock_h = get_compile_time_arg_val(6);
-    constexpr uint32_t subblock_w = get_compile_time_arg_val(7);
-    constexpr uint32_t transpose_b = get_compile_time_arg_val(8);
-    constexpr bool transpose_a = static_cast<bool>(get_compile_time_arg_val(9));
+    // K_num_blocks and M_blocks_per_core come from runtime args.
+    constexpr uint32_t M_block_tiles = get_compile_time_arg_val(0);
+    constexpr uint32_t K_block_tiles = get_compile_time_arg_val(1);
+    constexpr uint32_t N_block_tiles = get_compile_time_arg_val(2);
+    constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(3);
+    constexpr uint32_t subblock_h = get_compile_time_arg_val(4);
+    constexpr uint32_t subblock_w = get_compile_time_arg_val(5);
+    constexpr uint32_t transpose_b = get_compile_time_arg_val(6);
+    constexpr bool transpose_a = static_cast<bool>(get_compile_time_arg_val(7));
 
     uint32_t argidx = 0;
     // OFFSET_M_AXIS overrides M_start/M_end/M_blocks_per_core via cb_ctrl below.
@@ -397,9 +199,7 @@ void kernel_main() {
     uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
-    // Variable-M: actual M_blocks_per_core from runtime args
     uint32_t M_blocks_per_core = get_arg_val<uint32_t>(argidx++);
-    // Variable-K: K extent comes from runtime; K_num_blocks derived using K_block_tiles (CTA).
     // OFFSET_IN0_K / OFFSET_IN1_K overrides K_tiles from cb_ctrl[3].
     uint32_t K_tiles = get_arg_val<uint32_t>(argidx++);
 
@@ -408,8 +208,7 @@ void kernel_main() {
     //   OFFSET_M_AXIS:                       ctrl[0..2] = (M_start, M_end, M_blocks_per_core)
     //   OFFSET_IN0_K or OFFSET_IN1_K:        ctrl[3]    = K_tiles
     // M-axis and K-axis are not currently combined in a single role, so the cb_ctrl publish
-    // is exclusive — exactly one of the two payloads is written per invocation. See
-    // docs/VARIABLE_MATMUL_REFACTOR.md (#1).
+    // is exclusive — exactly one of the two payloads is written per invocation.
     {
         constexpr uint32_t cb_ctrl_id = tt::CBIndex::c_8;
         cb_wait_front(cb_ctrl_id, 1U);
@@ -426,30 +225,16 @@ void kernel_main() {
     const uint32_t padded_K_tiles = ((K_tiles + K_block_tiles - 1U) / K_block_tiles) * K_block_tiles;
     const uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
 
-#ifdef FUSE_TERNARY
-    const uint32_t fused_ternary_scalar_uint = get_arg_val<uint32_t>(argidx++);
-#else
-    // Default value when ternary is not fused (not used, helps compiler optimize)
-    constexpr uint32_t fused_ternary_scalar_uint = 0;
-#endif
-
     constexpr uint32_t in0_cb = tt::CBIndex::c_0;
     constexpr uint32_t in1_cb = tt::CBIndex::c_1;
     constexpr uint32_t out_cb = tt::CBIndex::c_2;
     constexpr uint32_t intermediate_cb = tt::CBIndex::c_3;
 
-    constexpr uint32_t in2_cb = tt::CBIndex::c_4;
-    constexpr uint32_t ternary_a_cb = tt::CBIndex::c_5;
-    constexpr uint32_t ternary_b_cb = tt::CBIndex::c_6;
     // When transpose_a is set, the dataflow writes the raw [K, M]-stored block into in0_cb,
     // and the compute kernel transposes each tile into in0_transposed_cb (c_7), which is
     // what the matmul actually consumes. `in0_cb_for_matmul` selects the right one.
     constexpr uint32_t in0_transposed_cb = tt::CBIndex::c_7;
     constexpr uint32_t in0_cb_for_matmul = transpose_a ? in0_transposed_cb : in0_cb;
-
-#ifdef SFPU_OP_INIT_ACTIVATION
-    SFPU_OP_INIT_ACTIVATION
-#endif
 
     mm_init(in0_cb_for_matmul, in1_cb, intermediate_cb);
 
@@ -468,14 +253,14 @@ void kernel_main() {
     uint32_t current_subblock_w = subblock_w;
 
     for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
-        uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
-        uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
+        const uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
+        const uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
         current_M_block_tiles = m_tile_end - m_tile;
         current_subblock_h = std::min(current_M_block_tiles, subblock_h);
 
         for (uint32_t n_block_iter = 0; n_block_iter < N_blocks_per_core; n_block_iter++) {
-            uint32_t n_tile = N_start_tile + n_block_iter * N_block_tiles;
-            uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
+            const uint32_t n_tile = N_start_tile + n_block_iter * N_block_tiles;
+            const uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
             current_N_block_tiles = n_tile_end - n_tile;
             current_subblock_w = std::min(current_N_block_tiles, subblock_w);
 
@@ -580,28 +365,9 @@ void kernel_main() {
             PACK((llk_pack_reconfig_l1_acc(0)));
 
             cb_reserve_back(out_cb, out_block_num_tiles);
-#ifndef FUSE_TERNARY
             cb_wait_front(intermediate_cb, out_block_num_tiles);
-#ifndef FUSE_BIAS
             copy_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
-#else
-            cb_wait_front(in2_cb, N_block_tiles);
-            add_bias_block(intermediate_cb, in2_cb, out_cb, M_block_tiles, N_block_tiles);
-            cb_pop_front(in2_cb, N_block_tiles);
-#endif  // FUSE_BIAS
             cb_pop_front(intermediate_cb, out_block_num_tiles);
-
-#else   // FUSE_TERNARY is set
-            add_bias_and_addcmul_block(
-                intermediate_cb,
-                in2_cb,
-                ternary_a_cb,
-                ternary_b_cb,
-                fused_ternary_scalar_uint,
-                out_cb,
-                M_block_tiles,
-                N_block_tiles);
-#endif  // FUSE_TERNARY
         }
     }
 }
