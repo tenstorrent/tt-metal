@@ -522,11 +522,25 @@ void kernel_main() {
         cb_ex2pe_obj.wait_front(onetile);
         cb_ex_obj.wait_front(onetile);
 
+        // Lockstep the cb_x_welford alias's fifo pointers with cb_in's across the eltwise pass.
+        // The reader pushes cb_x_welford in pass 2 to match its pass 1 push (see
+        // reader_unary_interleaved_ln_large_tensor_welford.cpp); compute pops it here to match
+        // cb_in's pop. Both share L1 but have independent (rd_ptr, wr_ptr, semaphore) state;
+        // popping cb_x_welford keeps it aligned with cb_in so the welford section of the next
+        // NCHt iteration reads from the right L1 offset after CB wrap.
+        CircularBuffer cb_x_welford_obj_eltwise(cb_x_welford);
+
         for (auto block : generic::blocks(Wt, blk)) {
             // Last block may only be partially-filled,
             // and only tiles that have data in them are
             // processed, but need to sync with reader on full blocks
             cb_in_obj.wait_front(block.full_block_size());
+            if constexpr (welford_fp32_alias && !fuse_pre_add) {
+                // cb_x_welford was pushed by the reader in pass 2; wait for the push and pop in
+                // lockstep with cb_in. We do not actually read cb_x_welford in the eltwise pass
+                // (FPU consumes cb_in via SrcA); this is purely a fifo-pointer sync.
+                cb_x_welford_obj_eltwise.wait_front(block.full_block_size());
+            }
             tile_regs_acquire();
             reconfig_data_format(cb_in, cb_ex);
             sub_bcast_cols_init_short(cb_in, cb_ex);
@@ -535,6 +549,9 @@ void kernel_main() {
                 sub_tiles_bcast_cols(cb_in, cb_ex, i, 0, i);
             }
             cb_in_obj.pop_front(block.full_block_size());
+            if constexpr (welford_fp32_alias && !fuse_pre_add) {
+                cb_x_welford_obj_eltwise.pop_front(block.full_block_size());
+            }
 
             if constexpr (fuse_pre_add) {
                 // Fuse in = in + b

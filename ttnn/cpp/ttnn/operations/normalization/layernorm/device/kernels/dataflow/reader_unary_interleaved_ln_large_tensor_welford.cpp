@@ -104,6 +104,21 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
             layernorm_dataflow_utils::read_block_to_cb(
                 noc, cb_in1, src_b, src1_tile_bytes, offs + block.start() + tile_offset, block);
+#else
+            // Keep cb_x_welford's fifo pointers in lockstep with cb_in0's across passes.
+            // cb_x_welford and cb_in0 share the same L1 allocation via multi-buffer-index aliasing;
+            // each has its own (fifo_rd_ptr, fifo_wr_ptr, semaphore) state. cb_in0 is pushed in
+            // both passes (Wt+Wt tiles per NCHt) and popped in both (welford + eltwise). If
+            // cb_x_welford were pushed only in pass 1 and popped only in the welford section, its
+            // pointers would drift relative to cb_in0's by Wt tiles per NCHt iteration. Once the
+            // CB wraps (cb_in0 holds only Wt_next_block_up = 28 tiles for fp32 vs Wt up to 130+),
+            // the welford section of the NEXT NCHt would read stale L1 data from cb_x_welford's
+            // out-of-date rd_ptr. We don't actually need the alias's data here (the eltwise pass
+            // reads cb_in0 directly), but we push the semaphore so compute can pop it in lockstep.
+            if constexpr (welford_fp32_alias) {
+                cb_x_welford.reserve_back(block.full_block_size());
+                cb_x_welford.push_back(block.full_block_size());
+            }
 #endif
 #ifdef FUSE_GAMMA
             {
