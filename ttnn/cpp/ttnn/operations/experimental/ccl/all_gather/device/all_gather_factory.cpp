@@ -16,7 +16,7 @@ namespace ttnn::experimental::prim {
 
 using namespace ::ttnn::ccl;
 
-namespace {
+namespace {  // anonymous namespace for internal helpers
 
 CoreRangeSet get_cores_close_to_erisc(uint32_t num_workers, bool row_wise) {
     CoreRangeSet worker_cores;
@@ -51,8 +51,21 @@ AllGatherFactory::cached_mesh_workload_t AllGatherFactory::create_mesh_workload(
     const auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
     ttnn::SmallVector<tt::tt_metal::SubDeviceId> subdevices = {subdevice_id};
 
-    auto init_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
-    auto final_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
+    // Allocate global semaphores for devices to sync between each other, since Fabric doesn't provide
+    // a native "wait for all devices to be ready" kernel functionality.
+    // Allocate semaphores in L1_SMALL to avoid fragmenting the larger L1 memory pool.
+    bool l1_small_size = mesh_device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1_SMALL);
+    auto sem_buffer_type = l1_small_size > 0 ? tt::tt_metal::BufferType::L1_SMALL : tt::tt_metal::BufferType::L1;
+    if (sem_buffer_type != tt::tt_metal::BufferType::L1_SMALL) {
+        log_warning(
+            tt::LogOp,
+            "Allocating semaphores in L1, which may cause memory fragmentation and lead to memory allocation failures "
+            "for subsequent operations. Configure an L1_SMALL region to avoid this.");
+    }
+    auto init_barrier_semaphore =
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
+    auto final_barrier_semaphore =
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
     log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready");
     tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevices);
     log_debug(tt::LogOp, "All devices are ready, starting program execution");
@@ -86,20 +99,11 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
     uint32_t device_idx = ::ttnn::ccl::get_linearized_index_from_physical_coord(
         input_tensor, sender_device_coord, operation_attributes.cluster_axis);
 
-    [[maybe_unused]] bool is_first_chip = device_idx == 0;
-    [[maybe_unused]] bool is_last_chip = device_idx == num_devices - 1;
-    log_trace(
-        tt::LogOp,
-        "DEBUG: device coord: {}, is_first_chip: {}, is_last_chip: {}",
-        sender_device_coord,
-        is_first_chip,
-        is_last_chip);
-
     std::optional<MeshCoordinate> forward_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
         input_tensor, sender_device_coord, 1, operation_attributes.topology, operation_attributes.cluster_axis);
     std::optional<MeshCoordinate> backward_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
         input_tensor, sender_device_coord, -1, operation_attributes.topology, operation_attributes.cluster_axis);
-    TT_FATAL(forward_coord.has_value() || backward_coord.has_value(), "DEBUG: forward_coord or backward_coord is null");
+    TT_FATAL(forward_coord.has_value() || backward_coord.has_value(), "No neighboring devices");
 
     // Get OP Config, topology config
     auto [num_targets_forward, num_targets_backward] = ::ttnn::ccl::get_forward_backward_line_mcast_distance(
@@ -111,8 +115,7 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
         get_cores_close_to_erisc(operation_attributes.num_links * num_workers_per_link, true);
     auto sender_worker_cores = corerange_to_cores(sender_worker_core_range);
 
-    // TODO tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
-    const uint32_t MAX_PACKET_SIZE_BYTES = 6144;
+    const uint32_t MAX_PACKET_SIZE_BYTES = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
     const uint32_t output_page_size = output_tensor.buffer()->aligned_page_size();
     uint32_t cb_page_size = std::lcm(std::lcm(input_page_size, output_page_size), MAX_PACKET_SIZE_BYTES);
