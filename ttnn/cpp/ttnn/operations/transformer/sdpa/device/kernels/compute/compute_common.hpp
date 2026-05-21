@@ -1261,10 +1261,20 @@ ALWI void matmul_blocks(
 }
 
 template <uint32_t M>
-void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
-    // precondition: in1_cb has 1 produced (column identity)
-    // precondition: out_cb has M produced (input rows)
-    // postcondition: out_cb has M produced (reduced rows, in-place)
+void matmul_reduce(uint32_t in1_cb, uint32_t in_cb, uint32_t out_cb) {
+    // precondition: in1_cb has 1 produced (column-identity tile, retained across calls)
+    // precondition: in_cb has M produced (per-tile partial sums to fold)
+    // postcondition: in_cb has M consumed (all input tiles popped)
+    // postcondition: out_cb has M produced (each tile = within-tile row sum of input)
+    //
+    // matmul_block requires in_cb != out_cb (see matmul_block_helpers.hpp CB-contract
+    // section). Prior history used an in-place helper (matmul_reduce_inplace) which
+    // was removed in favor of the canonical contract; callers must allocate a separate
+    // out_cb. Sized cb_reduced_sum identically to cb_sum_A/B (Sq_chunk_t tiles).
+    //
+    // Math: matmul_block with num_k_blocks=1 and a single column-of-ones in1 tile
+    // folds each input tile's W dim into column 0 — same FPU per-tile row-sum as the
+    // original matmul_reduce_inplace, now expressed through the standard helper.
 #ifdef STATS_GRANULARITY
     constexpr uint32_t subblock_h = STATS_GRANULARITY;
     constexpr uint32_t in0_num_subblocks = M / STATS_GRANULARITY;
@@ -1272,9 +1282,29 @@ void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
     constexpr uint32_t subblock_h = 1;
     constexpr uint32_t in0_num_subblocks = M;
 #endif
-    CircularBuffer in_out_buf(out_cb);
+    CircularBuffer in_buf(in_cb);
     CircularBuffer in1_buf(in1_cb);
-    compute_kernel_lib::matmul_reduce_inplace(in_out_buf, in1_buf, in0_num_subblocks, subblock_h);
+    CircularBuffer out_buf(out_cb);
+    compute_kernel_lib::matmul_block<
+        /*transpose=*/false,
+        /*packer_l1_acc=*/false,
+        compute_kernel_lib::LastBlockTarget::Out,
+        compute_kernel_lib::OutputLayout::SubblockMajor,
+        compute_kernel_lib::matmul_config::InitMode::Short,
+        compute_kernel_lib::InputPolicy::WaitAndPopPerKBlock,        // consume in_cb (M tiles total)
+        compute_kernel_lib::InputPolicy::WaitAndRetainOnLastBlock>(  // keep col-identity fronted
+        in_buf,
+        in1_buf,
+        out_buf,
+        in_buf,  // interm placeholder — unused at num_k_blocks=1
+        compute_kernel_lib::MatmulBlockShape::of(
+            in0_num_subblocks,
+            /*in1_num_subblocks=*/1,
+            subblock_h,
+            /*subblock_w=*/1,
+            /*in0_block_w=*/1,
+            /*num_k_blocks=*/1,
+            /*batch=*/1));
 }
 
 /**
@@ -1686,6 +1716,7 @@ void sdpa_inner_loop(
     const uint32_t cb_max_B,
     const uint32_t cb_sum_A,
     const uint32_t cb_sum_B,
+    const uint32_t cb_reduced_sum,
     const uint32_t cb_exp_max_diff,
     const uint32_t cb_lse_in,
     const uint32_t cb_lse_out,
@@ -1948,8 +1979,14 @@ void sdpa_inner_loop(
 
         /**
          * Performs final row-reduction on the partial sum.
+         *
+         * matmul_reduce consumes alias_prev_sum's tiles and writes the reduced
+         * result to cb_reduced_sum (separate CB per matmul_block's in!=out contract).
+         * Re-point alias_prev_sum so the downstream rescale / recip / mul chain
+         * operates on the reduced data without renaming every reference below.
          */
-        matmul_reduce<Sq_chunk_t>(cb_col_identity, alias_prev_sum);
+        matmul_reduce<Sq_chunk_t>(cb_col_identity, alias_prev_sum, cb_reduced_sum);
+        alias_prev_sum = cb_reduced_sum;
 
         /**
          * Process attention sink as a virtual K chunk.
@@ -2152,6 +2189,7 @@ void sdpa_standard(
     const uint32_t cb_max_B,
     const uint32_t cb_sum_A,
     const uint32_t cb_sum_B,
+    const uint32_t cb_reduced_sum,
     const uint32_t cb_exp_max_diff,
     const uint32_t cb_out,
     const LightweightMaskContext& lw_mask = {}) {
@@ -2223,6 +2261,7 @@ void sdpa_standard(
         cb_max_B,
         cb_sum_A,
         cb_sum_B,
+        cb_reduced_sum,
         cb_exp_max_diff,
         0,  // cb_lse_in (not used)
         0,  // cb_lse_out (not used)
@@ -2277,6 +2316,7 @@ void sdpa_joint(
     const uint32_t cb_max_B,
     const uint32_t cb_sum_A,
     const uint32_t cb_sum_B,
+    const uint32_t cb_reduced_sum,
     const uint32_t cb_exp_max_diff,
     const uint32_t cb_out) {
     sdpa_inner_loop<
@@ -2346,6 +2386,7 @@ void sdpa_joint(
         cb_max_B,
         cb_sum_A,
         cb_sum_B,
+        cb_reduced_sum,
         cb_exp_max_diff,
         0,  // cb_lse_in (not used)
         0,  // cb_lse_out (not used)
@@ -2412,6 +2453,7 @@ void sdpa_ring(
     const uint32_t cb_max_B,
     const uint32_t cb_sum_A,
     const uint32_t cb_sum_B,
+    const uint32_t cb_reduced_sum,
     const uint32_t cb_exp_max_diff,
     const uint32_t cb_lse_in,
     const uint32_t cb_lse_out,
@@ -2490,6 +2532,7 @@ void sdpa_ring(
         cb_max_B,
         cb_sum_A,
         cb_sum_B,
+        cb_reduced_sum,
         cb_exp_max_diff,
         cb_lse_in,
         cb_lse_out,
@@ -2543,6 +2586,7 @@ void sdpa_windowed(
     const uint32_t cb_max_B,
     const uint32_t cb_sum_A,
     const uint32_t cb_sum_B,
+    const uint32_t cb_reduced_sum,
     const uint32_t cb_exp_max_diff,
     const uint32_t cb_out) {
     sdpa_inner_loop<
@@ -2612,6 +2656,7 @@ void sdpa_windowed(
         cb_max_B,
         cb_sum_A,
         cb_sum_B,
+        cb_reduced_sum,
         cb_exp_max_diff,
         0,  // cb_lse_in (not used)
         0,  // cb_lse_out (not used)

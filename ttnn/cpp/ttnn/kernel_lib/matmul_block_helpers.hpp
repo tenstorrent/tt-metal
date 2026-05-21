@@ -240,6 +240,32 @@ struct NoIn1BaseOffset {
  *   #include "api/compute/compute_kernel_hw_startup.h"  // for compute_kernel_hw_startup()
  *   #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
  *
+ * ── CB Contract ────────────────────────────────────────────────────────────
+ * matmul_block requires in0_buf, in1_buf, and out_buf to be DISTINCT circular
+ * buffers — in-place aliasing (in0 == out or in1 == out) is NOT supported and
+ * will silently corrupt FIFO state. The helper reserves the entire output
+ * block upfront (out_block_num_tiles per call) and only pops in0 / in1 at the
+ * end (or per-K-block under InputPolicy::WaitAndPopPerKBlock), so a writer
+ * landing on the same CB as a still-fronted reader will overwrite live tiles.
+ *
+ * In particular, matmul-as-reduce patterns (e.g. SDPA's row-sum fold against
+ * a column-identity tile) MUST allocate a separate output CB. Earlier history
+ * had a dedicated `matmul_reduce_inplace` helper that aliased in == out via
+ * an interleaved pop / reserve-back ordering; that helper was removed in
+ * favor of this canonical contract. Callers needing the reduce-via-matmul
+ * pattern should call matmul_block with num_k_blocks=1 + an in1 column of
+ * ones + a separate output CB sized identically to the input — see SDPA's
+ * `matmul_reduce` wrapper in
+ * `ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp`
+ * for the canonical pattern. This separation is the same design decision
+ * applied to `row_major_output` in commit 908a4dc3592 (factory-side forced
+ * separate L1 regions for out_cb and interm0_cb when row-major pack is on).
+ *
+ * The one supported aliasing is interm_buf overlaying out_buf in L1 (conv2d's
+ * `partials_cb_uses_output` path); opt in via `pin_interm_to_captured_base=true`,
+ * which adds explicit base-reset code per K-block to keep the writer pinned
+ * to a fixed L1 base. See pin_interm_to_captured_base docstring below.
+ *
  * One helper serving both standard matmul (non-multicast bmm) and SDPA. Supports two
  * output-pack strategies selected at compile time via layout:
  *
@@ -490,8 +516,8 @@ struct NoIn1BaseOffset {
  * @example
  *   // SDPA-style: row-major pack, retain in0 to reuse Q across K chunks, masked post-compute.
  *   // The SDPA-side wrapper does its own [mm_block_init_short, reconfig_data_format]
- *   // pair externally (for ordering parity with matmul_reduce_inplace.inl and
- *   // OptionalMaskPostCompute), so the helper is invoked with init_mode=None.
+ *   // pair externally (for ordering parity with OptionalMaskPostCompute), so the
+ *   // helper is invoked with init_mode=None.
  *   // Template slot order: transpose, packer_l1_acc, last_block_target, layout,
  *   // init_mode, in0_policy, in1_policy, PostComputeFn.
  *   matmul_block<transpose, false, LastBlockTarget::Out, OutputLayout::RowMajor,
@@ -619,44 +645,6 @@ ALWI void matmul_block(
     KBlockInnerDimFn k_block_inner_dim = {},
     In0SourceFn in0_source_fn = {},
     In1BaseOffsetFn in1_base_offset_fn = {});
-
-/**
- * matmul_reduce_inplace: in-place reduce via matmul using a single-tile column identity.
- *
- * Consumes subblock_h×subblock_w tiles from the front of `in_out_cb`, computes
- *   DST = matmul(in_out_cb[0..subblock_h], in1_cb[0]) × block_kt accumulation
- * and packs back onto `in_out_cb` — repeated num_subblocks times to reduce the CB in
- * place. This pattern breaks the standard in0_cb != out_cb invariant that `matmul_block`
- * enforces, so it lives in a dedicated helper; SDPA uses this to fold partial-sum
- * results along M via a column-identity tile in in1_cb.
- *
- * The helper absorbs mm_block_init_short + reconfig_data_format + wait_front on both
- * CBs — the caller only needs to have produced the requisite tiles.
- *
- * ── Runtime Parameters ─────────────────────────────────────────────────────
- *
- *   in_out_buf      Buffer serving as both input and output (in-place).
- *   in1_buf         Buffer with the single column-identity tile (kept
- *                   fronted, not popped).
- *   num_subblocks   Number of subblock iterations (= rows / subblock_h).
- *   subblock_h      Subblock height in tiles (matmul rt_dim).
- *   subblock_w      Subblock width in tiles (matmul ct_dim; typically 1).
- *   block_kt        K dimension in tiles for each matmul call (typically 1 = subblock_w).
- *
- * @example
- *   // SDPA fold M partial-sums using a column-identity tile in in1_buf.
- *   // Before: out_accum_buf has (STATS_GRANULARITY * Wt) tiles;
- *   // After:  out_accum_buf has Wt tiles (one reduced row).
- *   matmul_reduce_inplace(out_accum_buf, col_identity_buf, Wt, STATS_GRANULARITY);
- */
-template <typename Buf = ::CircularBuffer>
-ALWI void matmul_reduce_inplace(
-    Buf& in_out_buf,
-    Buf& in1_buf,
-    uint32_t num_subblocks,
-    uint32_t subblock_h,
-    uint32_t subblock_w = 1,
-    uint32_t block_kt = 1);
 
 }  // namespace compute_kernel_lib
 
