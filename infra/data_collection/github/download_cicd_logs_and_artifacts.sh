@@ -144,7 +144,9 @@ main() {
 
     set_up_dirs "$workflow_run_id"
     download_artifacts "$repo" "$workflow_run_id"
-    download_logs_for_all_jobs "$repo" "$workflow_run_id" "$attempt_number"
+    for attempt in $(seq 1 $attempt_number); do
+    download_logs_for_all_jobs "$repo" "$workflow_run_id" "$attempt"
+    done
 }
 
 main "$@"
