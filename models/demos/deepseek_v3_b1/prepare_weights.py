@@ -807,8 +807,6 @@ _LM_HEAD_MATMUL_CORE_GRID = ttnn.CoreRangeSet(
 _LM_HEAD_B_TILE = ttnn.Tile([32, 32])
 _LM_HEAD_A_TILE = ttnn.Tile([1, 32])
 _LM_HEAD_N_PER_CORE = 160
-_LM_HEAD_MCAST_CORE = ttnn.CoreCoord(10, 9)
-_LM_HEAD_MCAST_CORE_GRID = ttnn.CoreRangeSet([ttnn.CoreRange(_LM_HEAD_MCAST_CORE, _LM_HEAD_MCAST_CORE)])
 
 
 def _to_tt_lm_head_matrix(
@@ -837,12 +835,19 @@ def _to_tt_lm_head_matrix(
     )
 
 
-def _to_tt_lm_head_final_norm(norm_torch: torch.Tensor, device, *, move_to_device: bool = False) -> ttnn.Tensor:
+def _to_tt_lm_head_final_norm(
+    norm_torch: torch.Tensor,
+    device,
+    *,
+    mcast_core: ttnn.CoreCoord = ttnn.CoreCoord(10, 9),
+    move_to_device: bool = False,
+) -> ttnn.Tensor:
     """Convert (1, K) final norm torch tensor to TT (HEIGHT_SHARDED on mcast core). Shared by prepare and synthetic."""
+    mcast_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(mcast_core, mcast_core)])
     norm_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
-        ttnn.ShardSpec(_LM_HEAD_MCAST_CORE_GRID, (1, _LM_HEAD_K), ttnn.ShardOrientation.ROW_MAJOR),
+        ttnn.ShardSpec(mcast_core_grid, (1, _LM_HEAD_K), ttnn.ShardOrientation.ROW_MAJOR),
     )
     return ttnn.from_torch(
         norm_torch.contiguous(),
@@ -859,6 +864,7 @@ def prepare_lm_head_weights(
     state_dict: dict[str, torch.Tensor],
     device,
     *,
+    mcast_core: ttnn.CoreCoord = ttnn.CoreCoord(10, 9),
     move_to_device: bool = False,
 ) -> DeepSeekV3LMHeadWeights:
     """Prepare LM head and final norm weights from state dict.
@@ -884,7 +890,9 @@ def prepare_lm_head_weights(
     norm_w = state_dict["model.norm.weight"]
     assert norm_w.shape == (7168,), f"Expected final norm shape (7168,), got {norm_w.shape}"
 
-    final_norm_tt = _to_tt_lm_head_final_norm(norm_w.unsqueeze(0), device, move_to_device=move_to_device)
+    final_norm_tt = _to_tt_lm_head_final_norm(
+        norm_w.unsqueeze(0), device, mcast_core=mcast_core, move_to_device=move_to_device
+    )
     return DeepSeekV3LMHeadWeights(lm_head=lm_head_tt, final_norm=final_norm_tt)
 
 
