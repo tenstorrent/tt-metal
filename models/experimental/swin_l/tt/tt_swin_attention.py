@@ -10,6 +10,22 @@ Initial version: correctness-first (no hardcoded sharding configs).
 import ttnn
 
 
+def _to_torch_replica(t):
+    """to_torch that also works for tensors replicated across a mesh device.
+
+    Replicated weights have N identical shards. ttnn.to_torch without a composer
+    refuses to compose; ConcatMeshToTensor would yield N concatenated copies.
+    We instead pull a single shard via get_device_tensors and convert that.
+    """
+    try:
+        return ttnn.to_torch(t)
+    except RuntimeError as e:
+        if "mesh" not in str(e).lower():
+            raise
+        shards = ttnn.get_device_tensors(t)
+        return ttnn.to_torch(shards[0])
+
+
 def roll(tensor, shifts, dims):
     """Cyclic shift — uses native ttnn.roll (single op), with a slice+concat fallback."""
     if isinstance(shifts, int):
@@ -47,8 +63,8 @@ class TtSwinAttention:
         # need a per-call `q *= scale` pass on the full (B*nW, H, S, D) tensor.
         head_dim = dim // num_heads
         scale = head_dim**-0.5
-        qkv_w = ttnn.to_torch(parameters["qkv"]["weight"]).float()  # (C, 3C) in linear-ready form
-        qkv_b = ttnn.to_torch(parameters["qkv"]["bias"]).float()  # (1, 3C)
+        qkv_w = _to_torch_replica(parameters["qkv"]["weight"]).float()  # (C, 3C) in linear-ready form
+        qkv_b = _to_torch_replica(parameters["qkv"]["bias"]).float()  # (1, 3C)
         qkv_w[:, :dim] *= scale
         qkv_b[:, :dim] *= scale
         self.parameters["qkv"] = {
@@ -65,8 +81,8 @@ class TtSwinAttention:
         # two adds with broadcast). For shift==0 layers we keep rpb as-is.
         rpb = parameters["relative_position_bias"]  # (1, num_heads, N, N) TILE bf16 on device
         if attn_mask is not None and sum(self.shift_size) > 0:
-            rpb_t = ttnn.to_torch(rpb).float()  # (1, H, N, N)
-            mask_t = ttnn.to_torch(attn_mask).float()  # 5D, last two dims are (N, N)
+            rpb_t = _to_torch_replica(rpb).float()  # (1, H, N, N)
+            mask_t = _to_torch_replica(attn_mask).float()  # 5D, last two dims are (N, N)
             N = mask_t.shape[-1]
             nW = mask_t.numel() // (N * N)
             mask_t = mask_t.reshape(nW, 1, N, N)
