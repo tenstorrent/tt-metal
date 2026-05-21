@@ -1075,7 +1075,15 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
     cb_reserve_back(out_cb, num_tiles);
     sub_tiles_init(in0_cb, in1_cb);
     exp_tile_init<false>();
-    // recip_tile_init<false>(); // Can omit this because accurate exp_tile_init performs reduce_tile_init
+    // recip_tile_first_column<false>() calls the scalar _sfpu_reciprocal_ path, so initialize exactly
+    // that SFPU state here. Blackhole needs vConstFloatPrgm0 = 2.0 for Newton-Raphson; Wormhole
+    // needs vConstFloatPrgm0/1/2 loaded with reciprocal polynomial coefficients.
+    // This init programs persistent SFPU constants, not per-tile data. It intentionally comes after
+    // exp_tile_init<false>() because the exp call below is the custom exp_tile_first_column<false>(),
+    // whose polynomial implementation loads the constants it consumes into LREGs in the tile body; it
+    // does not depend on vConstFloatPrgm* state from exp_tile_init. Conversely, that exp body also
+    // does not clobber the reciprocal constants, so one reciprocal init before the tile loop is enough.
+    MATH((ckernel::sfpu::sfpu_reciprocal_init<false>()));
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         acquire_dst();
