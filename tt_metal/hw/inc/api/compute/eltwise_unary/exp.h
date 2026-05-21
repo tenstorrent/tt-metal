@@ -6,14 +6,11 @@
 
 #include "api/compute/common_globals.h"
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
-#ifndef ARCH_QUASAR
 #include "ckernel_sfpu_exp.h"
-#endif
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
-#ifndef ARCH_QUASAR
 /**
  * Controls whether the fast approximate exponential clamps very negative inputs.
  *
@@ -82,6 +79,8 @@ ALWI void exp_tile(uint32_t idst, int vector_mode = (int)VectorMode::RC, uint16_
         vector_mode,
         scale));
 }
+
+#ifndef ARCH_QUASAR
 
 /**
  * Pack-thread variant of exp_tile_init. Runs the init on the pack thread

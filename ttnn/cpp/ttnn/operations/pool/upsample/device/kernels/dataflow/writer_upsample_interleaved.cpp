@@ -31,7 +31,7 @@ void kernel_main() {
     const auto s0 = TensorAccessor(dst_args, dst_addr);
 
     experimental::CB out_cb(cb_id_out0);
-    experimental::Noc noc;
+    Noc noc;
 
     constexpr uint32_t in_width = width / scale_w;
     constexpr uint32_t in_height = height / scale_h;

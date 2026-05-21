@@ -6,7 +6,7 @@
 
 #include "api/compute/matmul.h"
 #include "api/compute/compute_kernel_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     const uint32_t in0_cb = get_compile_time_arg_val(0);
@@ -19,9 +19,9 @@ void kernel_main() {
     const uint32_t out_c = get_compile_time_arg_val(7);
     const uint32_t in0_k = get_compile_time_arg_val(8);
 
-    experimental::CircularBuffer cb0(in0_cb);
-    experimental::CircularBuffer cb1(in1_cb);
-    experimental::CircularBuffer cb_out(out_cb);
+    CircularBuffer cb0(in0_cb);
+    CircularBuffer cb1(in1_cb);
+    CircularBuffer cb_out(out_cb);
 
     // we are looking at block
     // out = in0[r x k]*in1[k x c]

@@ -8,6 +8,9 @@ set(TTNN_OP_EXPERIMENTAL_REDUCTION_SRCS
     deepseek_moe_fast_reduce_nc/device/deepseek_moe_fast_reduce_nc_device_operation.cpp
     deepseek_moe_fast_reduce_nc/device/deepseek_moe_fast_reduce_nc_program_factory.cpp
     deepseek_moe_fast_reduce_nc/deepseek_moe_fast_reduce_nc.cpp
+    deepseek_moe_fast_reduce_nc_fused/device/deepseek_moe_fast_reduce_nc_fused_device_operation.cpp
+    deepseek_moe_fast_reduce_nc_fused/device/deepseek_moe_fast_reduce_nc_fused_program_factory.cpp
+    deepseek_moe_fast_reduce_nc_fused/deepseek_moe_fast_reduce_nc_fused.cpp
     integral_image/device/intimg_device_operation.cpp
     integral_image/device/intimg_program_factory.cpp
     integral_image/intimg.cpp

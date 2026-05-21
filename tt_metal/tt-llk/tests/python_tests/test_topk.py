@@ -41,7 +41,7 @@ from helpers.golden_generators import (
 from helpers.llk_params import DestAccumulation, TopKSortDirection, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator_v2 import StimuliSpec, generate_stimuli_v2
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
@@ -305,12 +305,14 @@ def test_topk_sfpu(
             "Stable sort is currently not broken in LLK API."
         )  # TODO: Check tenstorrent/tt-metal#33492 and remove this once fixed.
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+    sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli_v2(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
-        sfpu=False,
+        spec_A=sfpu_false_spec,
+        spec_B=sfpu_false_spec,
     )
 
     golden_generator = get_golden_generator(TopKGolden)

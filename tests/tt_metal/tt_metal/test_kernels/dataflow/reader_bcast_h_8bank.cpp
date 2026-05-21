@@ -4,9 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/noc.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t src0_addr  = get_arg_val<uint32_t>(0);
@@ -39,9 +39,9 @@ void kernel_main() {
     uint32_t i = 0;
     uint32_t i1 = 0;
 
-    experimental::CircularBuffer cb_in0(cb_id_in0);
-    experimental::CircularBuffer cb_in1(cb_id_in1);
-    experimental::Noc noc;
+    CircularBuffer cb_in0(cb_id_in0);
+    CircularBuffer cb_in1(cb_id_in1);
+    Noc noc;
 
     for (uint32_t nc = 0; nc < NC; nc++) {
         for (uint32_t ht = 0; ht < Ht; ht++) {

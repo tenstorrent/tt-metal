@@ -6,6 +6,8 @@
 
 #include <string>
 #include <tuple>
+#include <variant>
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::rotate {
@@ -28,53 +30,14 @@ struct RotateDeviceOperation {
     using tensor_return_value_t = Tensor;
 
     struct NearestProgramFactory {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle reader_kernel_id{};
-            tt::tt_metal::KernelHandle writer_kernel_id{};
-            std::size_t num_cores{};
-            std::size_t num_cores_y{};
-            bool is_sharded{};
-            std::vector<CoreCoord> logical_cores;
-            tt::tt_metal::CBHandle input_cb_handle{};
-            tt::tt_metal::CBHandle output_cb_handle{};
-        };
-
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& output);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output);
     };
 
     struct BilinearProgramFactory {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle reader_kernel_id{};
-            tt::tt_metal::KernelHandle compute_kernel_id{};
-            tt::tt_metal::KernelHandle writer_kernel_id{};
-            std::size_t num_cores{};
-            std::size_t num_cores_y{};
-            bool is_input_sharded{};
-            bool is_output_sharded{};
-            std::vector<CoreCoord> logical_cores;
-            tt::tt_metal::CBHandle output_cb_handle{};
-        };
-
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& output);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output);

@@ -9,7 +9,7 @@ import ttnn
 from models.common.sampling.generator import SamplingGenerator
 from models.common.utility_functions import nearest_32
 from models.demos.gpt_oss.config import MeshConfig, Mode, ModeConfig
-from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
+from models.demos.gpt_oss.utils.general_utils import get_cache_file_name, get_default_num_links
 from models.demos.gpt_oss.utils.substate import substate
 from models.tt_transformers.tt.common import copy_host_to_device, rope_scaling_model_factory
 from models.tt_transformers.tt.rope import RotarySetup
@@ -293,7 +293,7 @@ class Model:
         # Create a dummy CCL manager for GPT-OSS
         from models.demos.gpt_oss.tt.ccl import CCLManager
 
-        ccl_manager = CCLManager(mesh_device, num_links=4 if mesh_device.shape[0] > 1 else 1)
+        ccl_manager = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device))
 
         # Create instance using direct initialization
         instance = cls.__new__(cls)

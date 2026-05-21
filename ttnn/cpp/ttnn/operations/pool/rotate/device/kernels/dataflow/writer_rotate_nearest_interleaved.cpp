@@ -21,7 +21,7 @@ void kernel_main() {
     const auto output_tensor_accessor = TensorAccessor(dst_args, output_addr);
 
     experimental::CB output_cb(output_cb_id);
-    experimental::Noc noc;
+    Noc noc;
 
     for (uint32_t local_stick_idx = 0; local_stick_idx < num_sticks;) {
         uint32_t sticks_this_burst =

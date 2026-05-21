@@ -8,10 +8,10 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/endpoints.h"
-#include "experimental/core_local_mem.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 
 // Zero-fills the entire L1 region backing a local circular buffer by issuing
 // a sequence of NOC reads from MEM_ZEROS into successive chunks of the CB.
@@ -40,18 +40,18 @@
 //     NOC coordinates of this core (the kernel invoking the helper). Used as
 //     the source of the MEM_ZEROS read; this core's MEM_ZEROS_BASE is the
 //     canonical zero source on Tensix.
-inline void zero_whole_cb(uint32_t cb_id, const experimental::Noc& noc, uint32_t local_noc_x, uint32_t local_noc_y) {
+inline void zero_whole_cb(uint32_t cb_id, const Noc& noc, uint32_t local_noc_x, uint32_t local_noc_y) {
     auto& iface = get_local_cb_interface(cb_id);
     // start writing at base CB address, which is the limit - size.
     uint32_t sram_write_addr = iface.fifo_limit - iface.fifo_size;
     uint32_t bytes_remaining = iface.fifo_size;
 
-    experimental::UnicastEndpoint zeros_ep;
+    UnicastEndpoint zeros_ep;
     while (bytes_remaining > 0) {
         const uint32_t chunk = bytes_remaining > MEM_ZEROS_SIZE ? MEM_ZEROS_SIZE : bytes_remaining;
         noc.async_read(
             zeros_ep,
-            experimental::CoreLocalMem<uint32_t>(sram_write_addr),
+            CoreLocalMem<uint32_t>(sram_write_addr),
             chunk,
             {.noc_x = local_noc_x, .noc_y = local_noc_y, .addr = MEM_ZEROS_BASE},
             {});

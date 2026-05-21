@@ -264,7 +264,8 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
     const std::optional<Tensor>& optional_rs_output_tensor,
     const std::optional<float> fused_ternary_scalar,
     const std::optional<const Tensor>& addcmul_input_tensor1,
-    const std::optional<const Tensor>& addcmul_input_tensor2) {
+    const std::optional<const Tensor>& addcmul_input_tensor2,
+    std::optional<tt::tt_metal::DataType> dtype) {
     using OperationType = ttnn::experimental::prim::MinimalMatmulStridedReduceScatterAsync;
 
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
@@ -280,6 +281,7 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
             .config = config,
             .fused_activation = std::move(fused_activation),
             .output_mem_config = memory_config_mm,
+            .output_dtype = dtype,
             .compute_kernel_config = compute_kernel_config};
 
     auto operation_attributes = OperationType::operation_attributes_t{

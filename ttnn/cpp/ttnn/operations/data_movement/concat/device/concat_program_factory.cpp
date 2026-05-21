@@ -108,7 +108,21 @@ tt::tt_metal::ProgramDescriptor ConcatProgramFactory::create_descriptor(
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     const uint32_t src0_cb_index = 0;
-    const uint32_t num_input_pages = 2;
+    // Depth=2 is a prefetch optimization; fall back to depth=1 when it would overflow L1.
+    const uint32_t l1_budget =
+        (device->l1_size_per_core() / 2) - device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t l1_capacity =
+        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    TT_FATAL(
+        single_page_size <= l1_capacity,
+        "ttnn.concat: required CB page size ({} B) exceeds per-core L1 capacity ({} B); "
+        "op cannot fit on this device.",
+        single_page_size,
+        l1_capacity);
+    uint32_t num_input_pages = 2;
+    if (num_input_pages * single_page_size > l1_budget) {
+        num_input_pages = 1;
+    }
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_input_pages * single_page_size,
         .core_ranges = all_cores,

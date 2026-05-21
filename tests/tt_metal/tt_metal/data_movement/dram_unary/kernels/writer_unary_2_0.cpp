@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/endpoints.h"
-#include "experimental/noc_semaphore.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "internal/dataflow/dataflow_api_common.h"
 
 // L1 to DRAM write
@@ -21,10 +21,10 @@ void kernel_main() {
 
     constexpr uint32_t bytes_per_transaction = pages_per_transaction * bytes_per_page;
 
-    experimental::Noc noc(noc_index);
-    experimental::UnicastEndpoint unicast_endpoint;
-    experimental::Semaphore semaphore(sem_id);
-    constexpr experimental::AllocatorBankType bank_type = experimental::AllocatorBankType::DRAM;
+    Noc noc(noc_index);
+    UnicastEndpoint unicast_endpoint;
+    Semaphore semaphore(sem_id);
+    constexpr AllocatorBankType bank_type = AllocatorBankType::DRAM;
 
     // Wait for semaphore to be set by the reader
     semaphore.down(1);
@@ -34,7 +34,7 @@ void kernel_main() {
         for (uint32_t i = 0; i < num_of_transactions; i++) {
             noc.async_write(
                 unicast_endpoint,
-                experimental::AllocatorBank<bank_type>(),
+                AllocatorBank<bank_type>(),
                 bytes_per_transaction,
                 {
                     .addr = local_l1_addr,

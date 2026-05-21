@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t N = get_named_compile_time_arg_val("N");
@@ -100,7 +100,7 @@ void kernel_main() {
         }
 
         // Reserve space in the circular buffer for the X-block length
-        experimental::CircularBuffer cb(tt::CBIndex::c_0);
+        CircularBuffer cb(tt::CBIndex::c_0);
         cb.reserve_back(x_block_size);
         uint32_t src_buffer_l1_addr = cb.get_write_ptr();
 

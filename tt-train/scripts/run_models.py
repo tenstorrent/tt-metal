@@ -12,14 +12,17 @@ import os
 import shlex
 import subprocess
 import time
+from datetime import timedelta
 from pathlib import Path
 from typing import List
 
-import yaml
 import git
+import pandas as pd
+import yaml
 import tt_train_metrics
 import analyze_memory
 import analyze_steps
+from model_tracer.generic_ops_tracer import get_machine_info
 
 
 def _verify_path(path: str, allowed_root: str) -> str:
@@ -46,11 +49,12 @@ def get_git_commit_hash() -> str:
     return sha
 
 
-def run_and_save_log(args: list[str], log_path: Path):
+def run_and_save_log(cmd: list[str], log_path: Path) -> int:
     """Run a command, writing stdout to log_path and to this process's stdout. Return exit code."""
+    print(f"Running: {' '.join(cmd)}")
     with open(log_path, "w") as log_file:
         proc = subprocess.Popen(
-            args,
+            cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -110,6 +114,24 @@ def parse_args() -> argparse.Namespace:
         default="generated/tt-train-metrics",
         help="Directory for generated logs and JSON (default: generated/tt-train-metrics)",
     )
+    parser.add_argument(
+        "--filter-filenames",
+        type=str,
+        default="",
+        help='Comma separated string of tests to run. Matches the filename in config. Cannot be used with --exclude-filenames. Example: --filter-filenames "nanogpt_shakespeare,nanollama_shakespeare"',
+    )
+    parser.add_argument(
+        "--exclude-filenames",
+        type=str,
+        default="",
+        help='Comma separated string of tests to exclude. Matches the filename in config. Cannot be used with --filter-filenames. Example: --exclude-filenames "nanogpt_shakespeare,nanollama_shakespeare"',
+    )
+    parser.add_argument(
+        "--extra-args",
+        type=str,
+        default="",
+        help='String of args that will be concatenated and passed to all models. You can combine this with --filter-filenames or --exclude-filenames to avoid passing invalid args. Example --extra-args "--max_steps 50 --batch_size 32" --exclude-filenames linear_regression',
+    )
     return parser.parse_args()
 
 
@@ -124,12 +146,37 @@ def main() -> int:
     # Save current git commit hash
     git_commit_hash = get_git_commit_hash()
 
+    # Get additional metadata
+    machine_info = get_machine_info()
+    arch_name = machine_info["board_type"]
+    card_type = machine_info["device_series"]
+
     # Create output directory to store metrics
     output_dir = Path(_verify_path(parsed_args.output_dir, tt_metal_runtime_root))
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Report failing models
-    failing_models = []
+    # Collect model status
+    model_status = []
+
+    def set_model_status(filename, status, elapsed_time, log_path):
+        model_status.append(
+            {
+                "filename": filename,
+                "run status": status,
+                "elapsed time (hh::mm::ss)": elapsed_time,
+                "log path": log_path,
+            }
+        )
+
+    # Check that both --filter-filenames and --exclude-filenames are not used together
+    if parsed_args.filter_filenames and parsed_args.exclude_filenames:
+        raise Exception("Using both --filter-filenames and --exclude-filenames is not supported.")
+
+    filter_filenames = parsed_args.filter_filenames.split(",") if parsed_args.filter_filenames else []
+    exclude_filenames = parsed_args.exclude_filenames.split(",") if parsed_args.exclude_filenames else []
+
+    # Pass extra args
+    extra_args = process_args([parsed_args.extra_args])
 
     model_config = _verify_path(parsed_args.model_config, tt_metal_runtime_root)
     with open(model_config) as f:
@@ -143,8 +190,24 @@ def main() -> int:
     for model in models["models"]:
         model_name = model["name"]
         model_filename = model["filename"]
+        # Skip if not included in filter list
+        if filter_filenames:
+            if model_filename not in filter_filenames:
+                continue
+        # Skip if included in exclude list
+        if exclude_filenames:
+            if model_filename in exclude_filenames:
+                continue
+
         binary = os.path.expandvars(model["binary"])
         args = process_args(model["args"]) if model["args"] is not None else []
+
+        # Check if model should be skipped if not supported by card
+        if (skip_cards := model.get("skip-card")) is not None:
+            skip_card = skip_cards if isinstance(skip_cards, list) else [skip_cards]
+            if any(card.strip().lower() in card_type for card in skip_card):
+                print(f"Skipping {model_filename}")
+                continue
 
         # Microseconds since epoch (same as shell: date +%s%N | cut -b1-16)
         current_time = int(time.time_ns() // 1_000)
@@ -152,15 +215,39 @@ def main() -> int:
         log_basename = f"{model_filename}_memory_analysis_{current_time}"
         log_path = output_dir / f"{log_basename}.log"
 
-        cmd = process_binary_path(binary, tt_metal_runtime_root) + args
-        print(f"Running {model_filename}: {' '.join(cmd)}")
+        # Check if tokenization is needed
+        tokenize = model.get("tokenize")
+        if tokenize is not None:
+            tokenizer_args = (
+                [f"--text_file {tokenize['text_file']}"]
+                + [f"--hf_tokenizer {tokenize['hf_tokenizer']}"]
+                + [f"--output_file {tokenize['output_file']}"]
+            )
+            cmd = process_binary_path(
+                str(Path(tt_metal_runtime_root) / "tt-train/tools/dataset_to_tokens.py"), tt_metal_runtime_root
+            ) + process_args(tokenizer_args)
+            ret_code = run_and_save_log(cmd, os.devnull)
+            # Record failing model run but continue to run remaining models
+            if ret_code != 0:
+                # failing_models.append(str(log_path))
+                set_model_status(filename=model_filename, status="❌", elapsed_time=None, log_path=str(log_path))
+                print(f"Subprocess dataset_to_tokens.py failed. Return code {ret_code}")
+                continue
+
+        cmd = process_binary_path(binary, tt_metal_runtime_root) + args + extra_args
+        print("=" * 100)
+        print(f"Running {model_filename}")
+        print("-" * 100)
+        print(f"cmd: {' '.join(cmd)}")
+        print()
         cmd_start = time.time()
         ret_code = run_and_save_log(cmd, log_path)
-        print(f"{model_filename} elapsed time: {time.time() - cmd_start}")
+        elapsed_time = str(timedelta(seconds=(int(time.time() - cmd_start))))
+        print(f"{model_filename} elapsed time: {elapsed_time}")
 
         # Record failing model run but continue to run remaining models
         if ret_code != 0:
-            failing_models.append(str(log_path))
+            set_model_status(filename=model_filename, status="❌", elapsed_time=elapsed_time, log_path=str(log_path))
             print(f"Subprocess {binary} failed. Return code {ret_code}")
             continue
 
@@ -175,17 +262,13 @@ def main() -> int:
             raise Exception(f"analyze_steps returned None. Please check the log {log_path}.")
         print(step_data)
 
-        # Get additional metadata from CI ENV
-        arch_name = get_env("CI_ARCH_NAME", required=False)
-        ci_runner_label = get_env("CI_RUNNER_LABEL", required=False)
-
         # Build metrics payload and write JSON alongside the log
         pydantic_data = tt_train_metrics.TtTrainMetricsData(
             test_ts=current_time,
             model_name=model_name,
             model_filename=model_filename,
             binary_name=binary,
-            args=" ".join(args),
+            args=" ".join(args + extra_args),
             git_commit_hash=git_commit_hash,
             model_dram_mb=memory_data["model"],
             optimizer_dram_mb=memory_data["optimizer"],
@@ -201,21 +284,25 @@ def main() -> int:
             step_time_p50=step_data["step_time_p50"],
             step_time_p95=step_data["step_time_p95"],
             step_time_p99=step_data["step_time_p99"],
+            mfu=step_data["mfu"],
             arch_name=arch_name,
-            ci_runner_label=ci_runner_label,
+            ci_runner_label=card_type,
         )
         print(pydantic_data)
 
         output_filename = output_dir / log_path.with_suffix(".json").name
         tt_train_metrics.write_json(pydantic_data, output_filename)
 
-    if failing_models:
-        # Fail the run if any model binary exited non-zero
-        raise Exception(
-            "{} model(s) failed with error code != 0. Check the following logs: \n{}".format(
-                len(failing_models), "\n".join(failing_models)
-            )
-        )
+        set_model_status(filename=model_filename, status="✅", elapsed_time=elapsed_time, log_path=str(log_path))
+
+    # Show summary and display to Github if environment variable exists
+    df = pd.DataFrame(model_status)
+    df_md = df.to_markdown(index=False)
+    print("Summary:")
+    print(df_md)
+    if "GITHUB_STEP_SUMMARY" in os.environ:
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as fh:
+            print(df_md, file=fh)
 
 
 if __name__ == "__main__":

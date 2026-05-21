@@ -47,7 +47,7 @@ on:
 
   schedule:
     # Run daily at 6 AM UTCP_a
-    - cron: "0 6 * * 1-5"
+    - cron: "0 7 * * 1-5"
 
 permissions:
   contents: write
@@ -66,6 +66,7 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
       build-wheel: true
+      tracy: true  # required for device-perf tests (e.g. galaxy DeepSeek Prefill PERF)
 
   deepseek-prefill-tests:
     name: "DeepSeek Prefill Tests"
@@ -92,7 +93,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      enabled-skus: bh_p150b_civ2_viommu,bh_p300
+      enabled-skus: bh_p300,bh_galaxy
       model: deepseek_decode
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
       job-prefix: "[DeepSeek Decode] "
@@ -112,7 +113,7 @@ jobs:
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
       job-prefix: "[Wan2.2] "
 
-  # NOTE: Disabled SP1 tests for now as we debug SP4 pipeline
+  # NOTE: focus on SP4 first
   # deepseek-sp1-tests:
   #   name: "SP1 DeepSeek Tests"
   #   needs: build-artifact
