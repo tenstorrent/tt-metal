@@ -14,7 +14,6 @@ from models.tt_transformers.tt.prefetcher import Prefetcher
 
 # Use HfRotarySetupOld + legacy rotary_embedding (new HF rope misrotates Q/K here).
 from models.tt_transformers.tt.rope import HfRotarySetupOld as HfRotarySetup
-from ttnn import replicate_tensor_to_mesh_mapper
 
 
 def _compute_default_inv_freq_numpy(config: Any) -> Tuple[np.ndarray, float]:
@@ -151,7 +150,7 @@ def _upload_hf_cos_sin_4d(
 ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
     cos_4d = cos_hf[np.newaxis, np.newaxis, ...]
     sin_4d = sin_hf[np.newaxis, np.newaxis, ...]
-    mapper = replicate_tensor_to_mesh_mapper(device)
+    mapper = ttnn.replicate_tensor_to_mesh_mapper(device)
     cos_tt = ttnn.from_torch(
         cos_4d,
         device=device,
