@@ -63,6 +63,9 @@ private:
     std::vector<std::vector<std::shared_ptr<KernelGroup>>> kernel_groups_;
     std::vector<Semaphore> semaphores_;
     std::unordered_map<MeshCoordinateRange, Program> programs_;
+    // Programs targeting service cores (FD idle dispatch-column cores claimed via ServiceCoreClaims).
+    // Dispatched via slow-dispatch MMIO path rather than the FD command queue.
+    std::unordered_map<MeshCoordinateRange, Program> service_programs_;
     bool finalized_ = false;
     std::unordered_map<MeshCoordinateRange, std::unordered_map<KernelHandle, RuntimeArgsPerCore>> runtime_args_;
     MeshCommandQueue* last_used_command_queue_ = nullptr;
@@ -86,6 +89,8 @@ public:
     void add_program(const MeshCoordinateRange& device_range, Program&& program);
     std::unordered_map<MeshCoordinateRange, Program>& get_programs() { return programs_; }
     const std::unordered_map<MeshCoordinateRange, Program>& get_programs() const { return programs_; }
+    std::unordered_map<MeshCoordinateRange, Program>& get_service_programs() { return service_programs_; }
+    const std::unordered_map<MeshCoordinateRange, Program>& get_service_programs() const { return service_programs_; }
 
     // For testing purposes only
     void set_last_used_command_queue_for_testing(MeshCommandQueue* mesh_cq);
