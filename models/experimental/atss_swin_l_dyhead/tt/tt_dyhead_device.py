@@ -694,7 +694,10 @@ class TtDyHeadDevice:
             self.blocks.append(TtDyHeadBlockDevice(device, pt_dyhead.dyhead_blocks[i], level_shapes))
 
     def __call__(self, x_list_nhwc: List["ttnn.Tensor"]) -> List["ttnn.Tensor"]:
+        import tracy
+
         x = x_list_nhwc
-        for block in self.blocks:
+        for i, block in enumerate(self.blocks):
+            tracy.signpost(f"dyhead_block_{i}")
             x = block(x)
         return x

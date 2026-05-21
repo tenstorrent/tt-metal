@@ -9,7 +9,7 @@ import models.perf.device_perf_utils
 
 def _run_device_profiler_large_op_count(*args, **kwargs):
     if "op_support_count" not in kwargs:
-        kwargs["op_support_count"] = 5000
+        kwargs["op_support_count"] = 50000
     return run_device_profiler(*args, **kwargs)
 
 
@@ -29,7 +29,7 @@ def test_perf_device_bare_metal_atss_swin_l_dyhead(batch_size, model_name, expec
     num_iterations = 1
     margin = 0.04
 
-    command = f"pytest models/experimental/atss_swin_l_dyhead/tests/pcc/test_ttnn_e2e.py"
+    command = f"pytest models/experimental/atss_swin_l_dyhead/tests/pcc/test_ttnn_e2e_device_dyhead.py"
 
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 

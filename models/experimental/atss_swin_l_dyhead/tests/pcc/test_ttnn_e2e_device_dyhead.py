@@ -5,6 +5,7 @@
 
 import pytest
 import torch
+import tracy
 import ttnn
 
 from loguru import logger
@@ -38,7 +39,12 @@ def test_ttnn_atss_e2e_device_pcc(device, atss_ckpt_path, atss_ref_model):
 
     # forward_device — should be host-roundtrip-free with device DyHead.
     logger.info("Running forward_device (host-free)...")
+    # One untimed warmup to fill program caches, then timed run between signposts so the
+    # device profiler can isolate the steady-state pass.
+    _ = ttnn_model.forward_device(x_on_device)
+    tracy.signpost("start")
     cls_scores_ttnn, bbox_preds_ttnn, centernesses_ttnn = ttnn_model.forward_device(x_on_device)
+    tracy.signpost("stop")
 
     # Reference outputs
     with torch.no_grad():
