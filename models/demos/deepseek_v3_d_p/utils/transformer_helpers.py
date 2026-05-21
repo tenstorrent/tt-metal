@@ -47,12 +47,13 @@ def _log_memory(label: str):
 
 # --- Constants ---
 
-PROMPTS_PATH = Path("models/demos/deepseek_v3/demo/test_prompts_1024.json")
+PROMPT_1K_PATH = Path("models/demos/deepseek_v3/demo/test_prompts_1024.json")
 ABC_1K_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_prompt_ABC_1k.json")
 ABC_SHORT_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_prompt_ABC_short.json")
 P64TOK_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_prompt_64tok.json")
 P960TOK_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_prompt_960tok.json")
 PIE960_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_pie_960tok.json")
+PROMPT_25K_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_prompt_25k.json")
 
 # Subset name -> JSONL filename on HuggingFace
 INFINITEBENCH_SUBSETS = {
@@ -345,10 +346,10 @@ def load_and_compute_layer_by_layer(
     from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
     from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict
     from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
-    from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block import TtPrefillBlock
     from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
     from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
     from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
+    from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
 
     if gate_fallback_mode is None:
         gate_fallback_mode = GateComputeMode.HOST_ALL

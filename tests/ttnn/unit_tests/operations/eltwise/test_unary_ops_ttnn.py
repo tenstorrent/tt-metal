@@ -940,3 +940,38 @@ def test_unary_celu(input_shapes, param, device):
         assert_with_pcc(output_torch[finite_mask], golden_tensor[finite_mask], pcc=0.999)
     else:
         assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
+
+
+@pytest.mark.parametrize(
+    "ttnn_op",
+    (ttnn.eqz, ttnn.nez, ttnn.gtz, ttnn.ltz, ttnn.gez, ttnn.lez),
+)
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.float32])
+def test_unary_comp_ops(ttnn_op, ttnn_dtype, device):
+    dtype = torch.float32 if ttnn_dtype == ttnn.float32 else torch.bfloat16
+    tor_a = torch.tensor(
+        [
+            [
+                float("nan"),
+                -float("nan"),
+                -1.0,
+                -0.0,
+                0.0,
+                1.0,
+                -float("inf"),
+                float("inf"),
+            ]
+        ],
+        dtype=dtype,
+    )
+
+    torch_input = tor_a.repeat(32, 4)
+    torch_fn = ttnn.get_golden_function(ttnn_op)
+    tor_res = torch_fn(torch_input)
+
+    tt_a = ttnn.from_torch(
+        torch_input, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    result = ttnn_op(tt_a)
+    tt_res = ttnn.to_torch(result)
+    assert torch.equal(tt_res, tor_res)

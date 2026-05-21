@@ -66,6 +66,7 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
       build-wheel: true
+      tracy: true  # required for device-perf tests (e.g. galaxy DeepSeek Prefill PERF)
 
   deepseek-prefill-tests:
     name: "DeepSeek Prefill Tests"

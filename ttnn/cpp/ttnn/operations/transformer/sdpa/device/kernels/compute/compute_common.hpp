@@ -1737,18 +1737,8 @@ void sdpa_inner_loop(
         uint32_t q_high_tile = 0;     // STANDARD: upper tile bound for K iteration
         uint32_t causal_k_limit = 0;  // RING: K-chunk index beyond which all K is above the diagonal
         if constexpr (sdpa_type == STANDARD) {
-            uint32_t q_chunk;
-#if defined BALANCED_Q_PARALLEL
-            uint32_t q_chunk_div_2 = iter_q_end / 2;  // q_chunks_per_core / 2.
-            if (q_iter < q_chunk_div_2) {             // bottom half
-                q_chunk = local_q_start + q_iter;
-            } else {
-                uint32_t back_q_iter = q_iter - q_chunk_div_2;  // Back half should start at 0
-                q_chunk = q_num_chunks - 1 - (local_q_start + back_q_iter);
-            }
-#else
-            q_chunk = local_q_start + q_iter;
-#endif
+            const uint32_t linear_q_chunk = local_q_start + (q_iter - iter_q_start);
+            uint32_t q_chunk = remap_q_index(linear_q_chunk, q_num_chunks, use_zigzag_balancing);
             // Get Q chunk
             if constexpr (is_chunked) {
                 q_chunk = chunked_q_chunk_offset + q_chunk;
@@ -2194,7 +2184,8 @@ void sdpa_standard(
     const uint32_t cb_sum_B,
     const uint32_t cb_exp_max_diff,
     const uint32_t cb_out,
-    const LightweightMaskContext& lw_mask = {}) {
+    const LightweightMaskContext& lw_mask = {},
+    const bool use_zigzag_balancing = false) {
     sdpa_inner_loop<
         STANDARD,
         cb_qk_im,
@@ -2269,7 +2260,9 @@ void sdpa_standard(
         0,  // cb_prev_out (not used)
         cb_out,
         lw_mask,
-        is_causal);
+        is_causal,
+        false,  // is_balanced (not used)
+        use_zigzag_balancing);
 }
 
 /**

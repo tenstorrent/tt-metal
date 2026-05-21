@@ -1270,7 +1270,8 @@ void sdpa_standard_v2(
     const uint32_t local_q_start = 0,
     const uint32_t chunked_q_chunk_offset = 0,
     const LightweightMaskContext& lw_mask = {},
-    const uint32_t q_num_chunks = 0) {
+    const uint32_t q_num_chunks = 0,
+    const bool use_zigzag_balancing = false) {
     // use_padded_mask + is_causal_sdpa is handled at the host level (mutually exclusive).
     static_assert(
         !(use_padded_mask && is_causal_sdpa), "use_padded_mask and is_causal_sdpa are mutually exclusive in v2");
@@ -1304,23 +1305,16 @@ void sdpa_standard_v2(
         constexpr bool can_reduce_trigger_padded = (padded_k_tiles_inner > 0) && (last_chunk_Sk % padded_sbw == 0) &&
                                                    (last_chunk_Sk / padded_sbw > 1) && (last_chunk_Sk % 2 == 0);
 
-        // Causal-only: BALANCED_Q_PARALLEL Q-chunk remap, per-Q diagonal K-chunk limit, and
+        // Causal-only: optional zigzag Q-chunk remap, per-Q diagonal K-chunk limit, and
         // q_start_tile (the only causal-mask consumer downstream). Non-causal builds skip
         // the whole block — q_chunk_local stays in-order, q_start_tile=0, k_loop_end=full.
         uint32_t q_chunk_local = local_q_start + q;
         uint32_t q_start_tile = 0;
         uint32_t k_loop_end = k_num_chunks;
         if constexpr (is_causal_sdpa) {
-#if defined BALANCED_Q_PARALLEL
-            // Pair a light (top-half) Q chunk with a heavy (bottom-half) Q chunk per core to
-            // balance causal work. Reader and writer apply the same remap; compute must agree
-            // or causal masks + output positions desync.
-            const uint32_t q_chunk_div_2 = q_chunks_per_core / 2;
-            if (q >= q_chunk_div_2) {
-                const uint32_t back_q_iter = q - q_chunk_div_2;
-                q_chunk_local = q_num_chunks - 1 - (local_q_start + back_q_iter);
-            }
-#endif
+            // Reader and writer apply the same remap; compute must agree or causal
+            // masks and output positions desync.
+            q_chunk_local = remap_q_index(q_chunk_local, q_num_chunks, use_zigzag_balancing);
             // q_chunk_global is the absolute Q chunk index (used for the diagonal);
             // chunked-prefill shifts this via chunked_q_chunk_offset.
             const uint32_t q_chunk_global = q_chunk_local + chunked_q_chunk_offset;

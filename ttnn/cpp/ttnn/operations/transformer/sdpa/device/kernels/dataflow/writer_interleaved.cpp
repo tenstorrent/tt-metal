@@ -32,8 +32,9 @@ void kernel_main() {
     constexpr bool use_streaming_compute = get_compile_time_arg_val(21) == 1;
     constexpr uint32_t out_subblock_h = get_compile_time_arg_val(22);
     constexpr uint32_t k_partial_col = get_compile_time_arg_val(23);
+    constexpr bool use_zigzag_balancing = get_compile_time_arg_val(24) == 1;
 
-    constexpr auto out_args = TensorAccessorArgs<24>();
+    constexpr auto out_args = TensorAccessorArgs<25>();
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t core_id = get_arg_val<uint32_t>(1);
@@ -118,18 +119,7 @@ void kernel_main() {
             const uint32_t q_batch_offset = nb * NQH * Sqt * DHt;
             for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
                 for (uint32_t q_iter = 0; q_iter < q_chunks_per_core; ++q_iter) {
-                    uint32_t q_chunk;
-#if defined BALANCED_Q_PARALLEL
-                    uint32_t q_chunk_div_2 = q_chunks_per_core / 2;
-                    if (q_iter < q_chunk_div_2) {  // bottom half
-                        q_chunk = local_q_start + q_iter;
-                    } else {
-                        uint32_t back_q_iter = q_iter - q_chunk_div_2;  // Back half should start at 0
-                        q_chunk = q_num_chunks - 1 - (local_q_start + back_q_iter);
-                    }
-#else
-                    q_chunk = local_q_start + q_iter;
-#endif
+                    uint32_t q_chunk = remap_q_index(local_q_start + q_iter, q_num_chunks, use_zigzag_balancing);
 
                     // Generate mask only when user didn't provide one.
                     // Lightweight path already has a single -inf tile fronted — skip generate_mask.
