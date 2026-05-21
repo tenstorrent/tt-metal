@@ -32,9 +32,7 @@ from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
             (4, 1),
             ttnn.Topology.Linear,
             1,
-            marks=pytest.mark.skip(
-                reason="Disabled by issue #44770"
-            ),
+            marks=pytest.mark.skip(reason="Disabled by issue #44770"),
         ),
         [(4, 8), (2, 1), (4, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 4],
     ],
