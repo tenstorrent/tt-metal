@@ -301,7 +301,7 @@ class TTNNPagedAttentionKVCache(Cache):
             scale=scale,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
     def update(

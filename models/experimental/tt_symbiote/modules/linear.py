@@ -70,6 +70,162 @@ def _out_subblock_w(per_core_n: int, out_subblock_h: int = 1) -> int:
     return 1
 
 
+def _core_grid_for_num_cores(num_cores: int):
+    for x in range(8, 0, -1):
+        if num_cores % x == 0:
+            y = num_cores // x
+            if y <= 8:
+                return ttnn.CoreGrid(y=y, x=x)
+    return None
+
+
+def _core_range_set_for_grid(core_grid):
+    return ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(int(core_grid.x) - 1, int(core_grid.y) - 1))}
+    )
+
+
+def _decode_mixed_l1_dram_sharded_linear_configs(device, input_shape, weight_shape):
+    if int(input_shape[-2]) > 32:
+        return None
+
+    k_dim = int(weight_shape[-2])
+    n_dim = int(weight_shape[-1])
+    tile = ttnn.TILE_SIZE
+    if k_dim % tile != 0 or n_dim % tile != 0:
+        return None
+
+    # Shape-specific winners from matmul_tests/*_matmul_configs.py.
+    if k_dim == 8960 and n_dim == 1536:
+        num_compute_cores, in0_block_w = 8, 7  # mlp_down
+    elif k_dim == 1536 and n_dim == 2048:
+        num_compute_cores, in0_block_w = 16, 3  # attn_qkv
+    elif k_dim == 1536 and n_dim == 17920:
+        num_compute_cores, in0_block_w = 16, 3  # mlp_gate_up
+    elif k_dim == 1536 and n_dim == 1536:
+        num_compute_cores, in0_block_w = 8, 6  # attn_o_proj
+    else:
+        k_tiles = k_dim // tile
+        n_tiles = n_dim // tile
+        valid_cores = [c for c in range(8, 65, 8) if k_tiles % c == 0 and n_tiles % c == 0]
+        if not valid_cores:
+            return None
+        num_compute_cores = min(max(valid_cores), 16)
+        in0_block_w = _largest_divisor_at_most(k_tiles // num_compute_cores, 8)
+
+    if num_compute_cores % 8 != 0:
+        return None
+    compute_grid = ttnn.CoreGrid(y=num_compute_cores // 8, x=8)
+
+    core_range_set = _core_range_set_for_grid(compute_grid)
+    if int(input_shape[-2]) < tile:
+        input_memory_config = ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            buffer_type=ttnn.BufferType.L1,
+            shard_spec=ttnn.ShardSpec(
+                core_range_set, [tile, k_dim // num_compute_cores], ttnn.ShardOrientation.ROW_MAJOR
+            ),
+        )
+    else:
+        input_memory_config = ttnn.create_sharded_memory_config(
+            tuple(input_shape),
+            core_grid=compute_grid,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+
+    dram_grid = device.dram_grid_size()
+    num_banks = int(dram_grid.x) * int(dram_grid.y)
+    n_padded = math.ceil(n_dim / (tile * num_banks)) * tile * num_banks
+    in1_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(int(dram_grid.x) - 1, int(dram_grid.y) - 1),
+            )
+        }
+    )
+    weight_memory_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.DRAM,
+        shard_spec=ttnn.ShardSpec(in1_grid, [k_dim, n_padded // num_banks], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    output_memory_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+    )
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+        in0_block_w=in0_block_w,
+        per_core_M=max(1, math.ceil(int(input_shape[-2]) / tile)),
+        per_core_N=(n_dim // tile) // num_compute_cores,
+        fused_activation=None,
+    )
+    return input_memory_config, weight_memory_config, output_memory_config, program_config
+
+
+def _maybe_decode_l1_sharded_linear(
+    module,
+    input_tensor,
+    input_shape,
+    *,
+    bias,
+    dtype,
+    compute_kernel_config,
+):
+    if not bool(getattr(module, "use_decode_l1_sharded_matmul", False)):
+        return None
+
+    configs = _decode_mixed_l1_dram_sharded_linear_configs(module.device, input_shape, module.tt_weight.shape)
+    if configs is None:
+        return None
+
+    input_memory_config, weight_memory_config, output_memory_config, program_config = configs
+    input_l1 = ttnn.to_memory_config(input_tensor, input_memory_config)
+    weight_attr = "_decode_dram_sharded_weight"
+    weight_l1 = getattr(module, weight_attr, None)
+    if weight_l1 is None:
+        weight_l1 = ttnn.to_device(module.tt_weight_host, module.device, memory_config=weight_memory_config)
+        setattr(module, weight_attr, weight_l1)
+
+    tt_output = ttnn.linear(
+        input_l1,
+        weight_l1,
+        bias=None,
+        dtype=dtype,
+        memory_config=output_memory_config,
+        compute_kernel_config=compute_kernel_config,
+        program_config=program_config,
+    )
+
+    bias_l1 = None
+    if bias is not None:
+        bias_l1 = ttnn.to_memory_config(bias, tt_output.memory_config())
+        tt_output_with_bias = ttnn.add(tt_output, bias_l1, memory_config=tt_output.memory_config())
+        ttnn.deallocate(tt_output)
+        tt_output = tt_output_with_bias
+
+    if input_l1 is not input_tensor:
+        ttnn.deallocate(input_l1)
+    if bias_l1 is not None and bias_l1 is not bias:
+        ttnn.deallocate(bias_l1)
+
+    return tt_output
+
+
+def _precompute_decode_dram_sharded_weight(module):
+    if not bool(getattr(module, "use_decode_l1_sharded_matmul", False)):
+        return
+    configs = _decode_mixed_l1_dram_sharded_linear_configs(
+        module.device, (1, 1, ttnn.TILE_SIZE, module.tt_weight.shape[-2]), module.tt_weight.shape
+    )
+    if configs is None:
+        return
+    _, weight_memory_config, _, _ = configs
+    module._decode_dram_sharded_weight = ttnn.to_device(
+        module.tt_weight_host, module.device, memory_config=weight_memory_config
+    )
+
+
 def _dp_prefill_matmul_program_config(device, input_shape, weight_shape):
     seq_len = int(input_shape[2])
     if seq_len <= 32:
@@ -263,6 +419,10 @@ class TTNNLinear(TTNNModule):
 
     def deallocate_weights_impl(self):
         """Deallocate weights from device."""
+        decode_weight = getattr(self, "_decode_dram_sharded_weight", None)
+        if decode_weight is not None:
+            ttnn.deallocate(decode_weight)
+            self._decode_dram_sharded_weight = None
         ttnn.deallocate(self.tt_weight)
         if self.tt_bias is not None:
             ttnn.deallocate(self.tt_bias)
@@ -403,18 +563,37 @@ class TTNNLinearIColShardedWAllReduced(TTNNLinearIColShardedWRowSharded):
         # bias on each N-shard). For single-device, bias is already fused.
         bias_fused = bool(getattr(self, "_bias_fused_into_matmul", False))
         fused_bias = self.tt_bias if (not needs_ccl) or bias_fused else None
-        tt_output = ttnn.linear(
+        output_dtype = getattr(self, "output_dtype", None)
+        linear_kwargs = {"dtype": output_dtype} if output_dtype is not None else {}
+        used_l1_sharded_matmul = False
+        tt_output = _maybe_decode_l1_sharded_linear(
+            self,
             input_tensor,
-            self.tt_weight,
-            bias=fused_bias,
-            memory_config=_decode_linear_output_memory_config(self.device, input_shape),
+            input_shape,
+            bias=None if needs_ccl else fused_bias,
+            dtype=output_dtype or ttnn.bfloat16,
             compute_kernel_config=self.compute_kernel_config,
-            program_config=_dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
         )
+        used_l1_sharded_matmul = tt_output is not None
+        if tt_output is None:
+            tt_output = ttnn.linear(
+                input_tensor,
+                self.tt_weight,
+                bias=fused_bias,
+                memory_config=_decode_linear_output_memory_config(self.device, input_shape),
+                compute_kernel_config=self.compute_kernel_config,
+                program_config=_dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
+                **linear_kwargs,
+            )
         # Decompose all_reduce into reduce_scatter + all_gather for trace compatibility.
         # ttnn.all_reduce internally allocates an intermediate buffer dynamically, which
         # is incompatible with TTNN trace capture (requires stable buffer addresses).
         if needs_ccl:
+            if tt_output.memory_config().buffer_type != ttnn.BufferType.DRAM:
+                tt_output_dram = ttnn.to_memory_config(tt_output, ttnn.DRAM_MEMORY_CONFIG)
+                if tt_output_dram is not tt_output:
+                    ttnn.deallocate(tt_output)
+                tt_output = tt_output_dram
             num_links = _ccl_num_links(self.device)
             tt_output = ttnn.reduce_scatter(
                 tt_output,
@@ -436,6 +615,8 @@ class TTNNLinearIColShardedWAllReduced(TTNNLinearIColShardedWRowSharded):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 topology=ttnn.Topology.Linear,
             )
+            if used_l1_sharded_matmul and bias_fused and getattr(self, "tt_bias_post_ccl", None) is not None:
+                tt_output += self.tt_bias_post_ccl
 
         tt_output = ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
         return tt_output
@@ -599,10 +780,12 @@ class TTNNLinearLLamaIColShardedWAllReduced(TTNNLinearIColShardedWAllReduced):
             num_devices = _linear_mesh_num_devices(self.device)
             multi_device_ccl = num_devices > 1 and _tp_requires_ccl(self.device)
             if multi_device_ccl:
+                full_bias_torch = self.tt_bias_host
                 bias_torch = self.tt_bias_host / float(num_devices)
                 bias_mapper = ttnn.replicate_tensor_to_mesh_mapper(self.device)
                 self._bias_fused_into_matmul = True
             else:
+                full_bias_torch = None
                 bias_torch = self.tt_bias_host
                 bias_mapper = _tp_mesh_mapper(self.device, self.input_dim)
                 self._bias_fused_into_matmul = False
@@ -612,16 +795,33 @@ class TTNNLinearLLamaIColShardedWAllReduced(TTNNLinearIColShardedWAllReduced):
                 layout=ttnn.TILE_LAYOUT,
                 weights_mesh_mapper=bias_mapper,
             )
+            if multi_device_ccl:
+                tt_bias_post_ccl_host = preprocess_linear_bias(
+                    full_bias_torch,
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    weights_mesh_mapper=bias_mapper,
+                )
+                self.tt_bias_post_ccl = ttnn.to_device(tt_bias_post_ccl_host, self.device)
         else:
             self._bias_fused_into_matmul = False
+            self.tt_bias_post_ccl = None
         self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
         self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None
+        _precompute_decode_dram_sharded_weight(self)
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
+
+    def deallocate_weights_impl(self):
+        tt_bias_post_ccl = getattr(self, "tt_bias_post_ccl", None)
+        if tt_bias_post_ccl is not None:
+            ttnn.deallocate(tt_bias_post_ccl)
+            self.tt_bias_post_ccl = None
+        super().deallocate_weights_impl()
 
 
 class TTNNLinearLLamaIColShardedWAllReducedFusedGateUp(TTNNLinearLLamaIColShardedWAllReduced):
@@ -689,8 +889,8 @@ class TTNNLinearLLamaIColShardedWAllReducedFusedGateUp(TTNNLinearLLamaIColSharde
             self.tt_bias = None
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
@@ -699,8 +899,8 @@ class TTNNLinearLLamaIColShardedWAllReducedFusedGateUp(TTNNLinearLLamaIColSharde
 class TTNNLinearLLamaIReplicatedWColSharded(TTNNLinearIReplicatedWColSharded):
     """Weight column-sharded linear with configurable low-precision weights.
 
-    See TTNNLinearLLamaIColShardedWAllReduced for the compute-kernel rationale —
-    HiFi2 + fp32_dest_acc_en=False matches the BF16×BFP4/BFP8 matmul schedule on Wormhole.
+    See TTNNLinearLLamaIColShardedWAllReduced for the compute-kernel rationale.
+    Dots OCR requests BFP8 outputs so the decoder residual stream stays low precision.
     """
 
     def set_weight_dtype(self, dtype):
@@ -725,16 +925,17 @@ class TTNNLinearLLamaIReplicatedWColSharded(TTNNLinearIReplicatedWColSharded):
             )
         self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
         self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None
+        _precompute_decode_dram_sharded_weight(self)
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
 
     @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
-        """bf16 output for residual stream; weights are ``bfloat4_b``."""
+        """Forward pass; callers can request BFP8 output via ``output_dtype``."""
         if input_tensor.layout != ttnn.TILE_LAYOUT:
             input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         input_tensor_shape = list(input_tensor.shape)
@@ -743,15 +944,25 @@ class TTNNLinearLLamaIReplicatedWColSharded(TTNNLinearIReplicatedWColSharded):
             input_shape.insert(1, 1)
         input_tensor = ttnn.reshape(input_tensor, input_shape)
         program_config = _dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape)
-        tt_output = ttnn.linear(
+        output_dtype = getattr(self, "output_dtype", ttnn.bfloat16)
+        tt_output = _maybe_decode_l1_sharded_linear(
+            self,
             input_tensor,
-            self.tt_weight,
+            input_shape,
             bias=self.tt_bias,
-            dtype=ttnn.bfloat16,
-            memory_config=_decode_linear_output_memory_config(self.device, input_shape),
+            dtype=output_dtype,
             compute_kernel_config=self.compute_kernel_config,
-            program_config=program_config,
         )
+        if tt_output is None:
+            tt_output = ttnn.linear(
+                input_tensor,
+                self.tt_weight,
+                bias=self.tt_bias,
+                dtype=output_dtype,
+                memory_config=_decode_linear_output_memory_config(self.device, input_shape),
+                compute_kernel_config=self.compute_kernel_config,
+                program_config=program_config,
+            )
         tt_output = ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
         return tt_output
 

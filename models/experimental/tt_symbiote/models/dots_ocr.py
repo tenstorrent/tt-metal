@@ -122,39 +122,23 @@ def _profile_graph_stage(device, name: str):
 def _dp_repack_batch_sharded_hidden_for_device(device, batch_input_mapper, tt_hidden: ttnn.Tensor) -> ttnn.Tensor:
     """Re-materialize a DP batch-sharded hidden tensor with the pipeline batch mapper.
 
-    Some TTNN ops preserve a global logical batch shape even though DP owns one
-    row per device. A host compose + re-upload makes the local shard layout
-    match the token-id/embedding mapper before traced decoder execution.
+    Older versions composed the mesh tensor to host and uploaded it again here.
+    That made prefill pay a full device sync + D2H + H2D on the critical path.
+    The decoder layer already slices to the local DP batch row on device, so keep
+    the existing mesh-resident tensor and avoid the host round-trip.
     """
     if batch_input_mapper is None:
         return tt_hidden
-
-    t = _unwrap_ttnn_tensor(tt_hidden)
-    ttnn.synchronize_device(device)
-    owned = ttnn.clone(t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    mesh_shape = tuple(int(x) for x in device.shape)
-    full = ttnn.to_torch(
-        owned,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(device, mesh_shape, (0, -1)),
-    )
-    ttnn.deallocate(owned)
-    return ttnn.from_torch(
-        full,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        mesh_mapper=batch_input_mapper,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    return _unwrap_ttnn_tensor(tt_hidden)
 
 
 def _dp_readback_batch_size() -> int:
-    raw = os.environ.get("DOTS_OCR_DP_READBACK_BATCH", "1").strip().lower()
+    raw = os.environ.get("DOTS_OCR_DP_READBACK_BATCH", "32").strip().lower()
     try:
         k = int(raw)
     except ValueError:
         k = 1
-    return max(1, min(k, 32))
+    return max(1, min(k, 512))
 
 
 def _normalize_image_grid_thw_torch(grid: torch.Tensor) -> torch.Tensor:
@@ -572,6 +556,7 @@ class TTNNDotsOCRPipeline(TTNNModule):
         self._decode_seq_counter: int = 0
         self._dp_readback_ring: Optional[List[ttnn.Tensor]] = None
         self._dp_readback_ring_n: int = 0
+        self._dp_readback_ring_streams: int = 0
 
     # ------------------------------------------------------------------
     # Factory
@@ -720,7 +705,8 @@ class TTNNDotsOCRPipeline(TTNNModule):
             module.preprocess_weights()
             module.move_weights_to_device()
 
-        # LM head: HiFi2 + packer_l1_acc + FP32 dest accum (matches stable argmax path).
+        # LM head: keep BF16 input + HiFi2 + FP32 dest accumulation. Greedy
+        # argmax is sensitive here; LoFi/BFP8 input produces corrupted tokens.
         self.lm_head.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
@@ -776,6 +762,33 @@ class TTNNDotsOCRPipeline(TTNNModule):
 
     def _dp_repack_batch_sharded_hidden(self, tt_hidden: ttnn.Tensor) -> ttnn.Tensor:
         return _dp_repack_batch_sharded_hidden_for_device(self.device, self._batch_input_mapper, tt_hidden)
+
+    def _ensure_dp_readback_slots(self, num_slots: int, num_streams: int) -> List[ttnn.Tensor]:
+        if (
+            self._dp_readback_ring is not None
+            and self._dp_readback_ring_n >= int(num_slots)
+            and self._dp_readback_ring_streams == int(num_streams)
+        ):
+            return self._dp_readback_ring[: int(num_slots)]
+
+        if self._dp_readback_ring is not None:
+            for slot in self._dp_readback_ring:
+                ttnn.deallocate(slot)
+            self._dp_readback_ring = None
+
+        proto = ttnn.from_torch(
+            torch.zeros(num_streams, 1, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            mesh_mapper=self._batch_input_mapper,
+        )
+        slots = [ttnn.clone(proto, memory_config=ttnn.DRAM_MEMORY_CONFIG) for _ in range(int(num_slots))]
+        ttnn.deallocate(proto)
+        self._dp_readback_ring = slots
+        self._dp_readback_ring_n = int(num_slots)
+        self._dp_readback_ring_streams = int(num_streams)
+        return slots
 
     # ------------------------------------------------------------------
     # Prefill
@@ -1169,7 +1182,6 @@ class TTNNDotsOCRPipeline(TTNNModule):
         self._decode_token_buffer = None
         self._decode_token_buffer_has_next = False
         self._decode_seq_counter = 0
-        self._dp_readback_ring = None
         first_out = self.prefill(input_ids, pixel_values, image_grid_thw)
 
         if self._mesh_dp_dual_stream():
@@ -1180,6 +1192,7 @@ class TTNNDotsOCRPipeline(TTNNModule):
             active = [True] * len(currents)
             num_streams = len(currents)
             rb_k = _dp_readback_batch_size()
+            total_decode = max_new_tokens - 1
             if rb_k <= 1:
                 for _ in range(max_new_tokens - 1):
                     if stop_on_eos and not any(active):
@@ -1196,18 +1209,7 @@ class TTNNDotsOCRPipeline(TTNNModule):
                     currents = list(next_toks)
                 return generated
 
-            proto = ttnn.from_torch(
-                torch.zeros(num_streams, 1, dtype=torch.int32),
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.device,
-                mesh_mapper=self._batch_input_mapper,
-            )
-            slots = [ttnn.clone(proto, memory_config=ttnn.DRAM_MEMORY_CONFIG) for _ in range(rb_k)]
-            ttnn.deallocate(proto)
-            self._dp_readback_ring = slots
-
-            total_decode = max_new_tokens - 1
+            slots = self._ensure_dp_readback_slots(rb_k, num_streams)
             decodes_done = 0
             for it in range(total_decode):
                 if stop_on_eos and not any(active):
@@ -1261,10 +1263,6 @@ class TTNNDotsOCRPipeline(TTNNModule):
                         if stop_on_eos and tid in self.config.eos_token_ids:
                             active[bi] = False
                     currents = list(flat)
-
-            for s in slots:
-                ttnn.deallocate(s)
-            self._dp_readback_ring = None
             return generated
 
         if not isinstance(first_out, int):
@@ -1405,4 +1403,10 @@ class TTNNDotsOCRPipeline(TTNNModule):
         """Release all traced runs and deallocate pre-allocated buffers."""
         TracedRun.release_all()
         self._decode_cache_position = None
+        if self._dp_readback_ring is not None:
+            for slot in self._dp_readback_ring:
+                ttnn.deallocate(slot)
+            self._dp_readback_ring = None
+            self._dp_readback_ring_n = 0
+            self._dp_readback_ring_streams = 0
         self.graph_prefill.release_scatter_cache()

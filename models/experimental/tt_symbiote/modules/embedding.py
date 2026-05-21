@@ -105,6 +105,9 @@ class TTNNEmbedding(TTNNModule):
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        output_dtype = getattr(self, "output_dtype", None)
+        if output_dtype is not None and out.dtype != output_dtype:
+            out = ttnn.typecast(out, output_dtype, memory_config=out.memory_config())
         if self._scale_factor is not None:
             out = ttnn.multiply(out, self._scale_factor)
         return out

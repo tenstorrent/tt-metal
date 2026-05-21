@@ -13,6 +13,8 @@ from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinearLLamaIColShardedWAllReducedFusedGateUp,
     TTNNLinearLLamaIColShardedWRowSharded,
     _dp_matmul_program_config,
+    _maybe_decode_l1_sharded_linear,
+    _precompute_decode_dram_sharded_weight,
     _tp_requires_ccl,
     _tp_mesh_mapper,
     _linear_mesh_num_devices,
@@ -27,7 +29,47 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
 
     def move_weights_to_device_impl(self):
         if not _tp_requires_ccl(self.device):
-            return super().move_weights_to_device_impl()
+            weight = torch.cat([self._gate_weight_torch, self._up_weight_torch], dim=0)
+            self.tt_weight_host = preprocess_linear_weight(
+                weight,
+                dtype=getattr(self, "_weight_dtype", ttnn.bfloat4_b),
+                layout=ttnn.TILE_LAYOUT,
+                weights_mesh_mapper=_tp_mesh_mapper(self.device, self.weight_dim),
+            )
+            self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
+
+            if self._gate_bias_torch is not None or self._up_bias_torch is not None:
+                intermediate = self._gate_weight_torch.shape[0]
+                zeros_dtype = self._gate_weight_torch.dtype
+                gate_bias = (
+                    self._gate_bias_torch
+                    if self._gate_bias_torch is not None
+                    else torch.zeros(intermediate, dtype=zeros_dtype)
+                )
+                up_bias = (
+                    self._up_bias_torch
+                    if self._up_bias_torch is not None
+                    else torch.zeros(intermediate, dtype=zeros_dtype)
+                )
+                bias = torch.cat([gate_bias, up_bias], dim=0)
+                self.tt_bias_host = preprocess_linear_bias(
+                    bias,
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    weights_mesh_mapper=_tp_mesh_mapper(self.device, self.input_dim),
+                )
+                self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device)
+            else:
+                self.tt_bias = None
+
+            self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
+            _precompute_decode_dram_sharded_weight(self)
+            return
 
         num_devices = self.device.get_num_devices() if hasattr(self.device, "get_num_devices") else 1
         intermediate = self._gate_weight_torch.shape[0]
@@ -79,6 +121,7 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
+        _precompute_decode_dram_sharded_weight(self)
 
     @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, input_tensor: ttnn.Tensor, output_memory_config=None) -> ttnn.Tensor:
@@ -96,16 +139,30 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
         # Fuse bias into the matmul kernel on single-device (no CCL would scale
         # the bias by num_devices). Saves one BinaryNg per layer when bias is set.
         fused_bias = None if needs_ccl else self.tt_bias
-        tt_output = ttnn.linear(
+        tt_output = _maybe_decode_l1_sharded_linear(
+            self,
             input_tensor,
-            self.tt_weight,
+            input_shape,
             bias=fused_bias,
             dtype=ttnn.bfloat8_b,
-            memory_config=matmul_mc,
             compute_kernel_config=self.compute_kernel_config,
-            program_config=_dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
         )
+        if tt_output is None:
+            tt_output = ttnn.linear(
+                input_tensor,
+                self.tt_weight,
+                bias=fused_bias,
+                dtype=ttnn.bfloat8_b,
+                memory_config=matmul_mc,
+                compute_kernel_config=self.compute_kernel_config,
+                program_config=_dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
+            )
         if needs_ccl:
+            if tt_output.memory_config().buffer_type != ttnn.BufferType.DRAM:
+                tt_output_dram = ttnn.to_memory_config(tt_output, ttnn.DRAM_MEMORY_CONFIG)
+                if tt_output_dram is not tt_output:
+                    ttnn.deallocate(tt_output)
+                tt_output = tt_output_dram
             tt_output = ttnn.reduce_scatter(
                 tt_output,
                 dim=3,
@@ -148,6 +205,7 @@ class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
+        _precompute_decode_dram_sharded_weight(self)
 
     @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, input_tensor: ttnn.Tensor, output_memory_config=None) -> ttnn.Tensor:
@@ -161,16 +219,30 @@ class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
         needs_ccl = _linear_mesh_num_devices(self.device) > 1 and _tp_requires_ccl(self.device)
         fused_bias = None if needs_ccl else self.tt_bias
         matmul_mc = ttnn.DRAM_MEMORY_CONFIG if needs_ccl else (output_memory_config or ttnn.DRAM_MEMORY_CONFIG)
-        tt_output = ttnn.linear(
+        tt_output = _maybe_decode_l1_sharded_linear(
+            self,
             input_tensor,
-            self.tt_weight,
+            input_shape,
             bias=fused_bias,
             dtype=ttnn.bfloat8_b,
-            memory_config=matmul_mc,
             compute_kernel_config=self.compute_kernel_config,
-            program_config=_dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
         )
+        if tt_output is None:
+            tt_output = ttnn.linear(
+                input_tensor,
+                self.tt_weight,
+                bias=fused_bias,
+                dtype=ttnn.bfloat8_b,
+                memory_config=matmul_mc,
+                compute_kernel_config=self.compute_kernel_config,
+                program_config=_dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
+            )
         if needs_ccl:
+            if tt_output.memory_config().buffer_type != ttnn.BufferType.DRAM:
+                tt_output_dram = ttnn.to_memory_config(tt_output, ttnn.DRAM_MEMORY_CONFIG)
+                if tt_output_dram is not tt_output:
+                    ttnn.deallocate(tt_output)
+                tt_output = tt_output_dram
             tt_output = ttnn.reduce_scatter(
                 tt_output,
                 dim=3,
@@ -216,12 +288,14 @@ class TTNNDotsOCRMLP(TTNNModule):
         tt_module.fused_gate_up_proj = TTNNDotsOCRFusedGateUpRowSharded.from_two_torch(
             torch_mlp.gate_proj, torch_mlp.up_proj
         )
+        tt_module.fused_gate_up_proj.use_decode_l1_sharded_matmul = True
         # Keep individual proj refs for compatibility with anything that
         # introspects the module; they are no longer used in forward.
         tt_module.gate_proj = None
         tt_module.up_proj = None
 
         tt_module.down_proj = TTNNDotsOCRRowShardedNoAllGather.from_torch(torch_mlp.down_proj)
+        tt_module.down_proj.use_decode_l1_sharded_matmul = True
         return tt_module
 
     def set_weight_dtype(self, dtype):
@@ -237,6 +311,8 @@ class TTNNDotsOCRMLP(TTNNModule):
         seq_len = hidden_states.shape[1]
         is_decode = int(seq_len) == 1
         activation_mc = ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG
+        if is_decode and hidden_states.memory_config().buffer_type != ttnn.BufferType.L1:
+            hidden_states = ttnn.to_memory_config(hidden_states, activation_mc)
 
         gate_up = self.fused_gate_up_proj(hidden_states, output_memory_config=activation_mc if is_decode else None)
 

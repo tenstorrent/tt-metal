@@ -100,9 +100,13 @@ class TTNNDotsOCRAttention(TTNNModule):
         if has_any_bias:
             fused_linear.bias.data = new_attn._qkv_bias_torch
         new_attn.qkv_proj = TTNNLinearLLamaIColShardedWAllReduced.from_torch(fused_linear)
+        new_attn.qkv_proj.output_dtype = ttnn.bfloat16
 
         # O projection
         new_attn.o_proj = TTNNLinearLLamaIReplicatedWColSharded.from_torch(hf_attn.o_proj)
+        new_attn.o_proj.output_dtype = ttnn.bfloat8_b
+        new_attn.qkv_proj.use_decode_l1_sharded_matmul = True
+        new_attn.o_proj.use_decode_l1_sharded_matmul = True
 
         new_attn.sdpa = TTNNSDPAAttention()
         new_attn.core_grid = ttnn.CoreGrid(y=8, x=8)
@@ -142,12 +146,9 @@ class TTNNDotsOCRAttention(TTNNModule):
                 fp32_dest_acc_en=False,
                 packer_l1_acc=True,
             )
-            # Decode SDPA: HiFi2 (was LoFi in commit d1b17d1a3c6 -- swapped back
-            # because LoFi at the per-token batch=1 K/V cache reads produces
-            # off-by-many-tokens argmax errors visible as garbled output. The
-            # earlier "validation" run that approved LoFi was confounded by the
-            # broken DRAM-sharded LM head also in that commit, so the LoFi delta
-            # was masked. Keep at HiFi2 until a clean A/B confirms it's safe.)
+            # Decode SDPA is quality-sensitive on dots.ocr. Keep HiFi2 here:
+            # LoFi produces visibly corrupted OCR text even when Q/K/V cache
+            # operands are cast back to BF16 at the paged-attention boundary.
             self.sdpa.decode_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi2,
                 math_approx_mode=True,
@@ -155,12 +156,19 @@ class TTNNDotsOCRAttention(TTNNModule):
                 packer_l1_acc=True,
             )
 
-        # Override QKV compute config: HiFi2 for decode
+        # QKV is token-quality sensitive in decode. Keep BFP8 output, but use
+        # the prior HiFi2 multiply path to avoid corrupting generated text.
         self.qkv_proj.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
-            packer_l1_acc=True,
+            packer_l1_acc=False,
+        )
+        self.o_proj.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
         )
 
         mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
@@ -226,7 +234,10 @@ class TTNNDotsOCRAttention(TTNNModule):
         qkv_states = self.qkv_proj(hidden_states)
 
         is_decode = int(seq_length) == 1
-        if is_decode and qkv_states.memory_config().buffer_type != ttnn.BufferType.L1:
+        if is_decode and (
+            qkv_states.memory_config().buffer_type != ttnn.BufferType.L1
+            or qkv_states.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
+        ):
             qkv_states = ttnn.to_memory_config(qkv_states, ttnn.L1_MEMORY_CONFIG)
 
         qkv_states = ttnn.reshape(qkv_states, (batch_size, 1, seq_length, -1))
@@ -331,11 +342,6 @@ class TTNNDotsOCRAttention(TTNNModule):
         )
         ttnn.deallocate(qkv_states)
 
-        if isinstance(query_states, ttnn.Tensor) and query_states.dtype != ttnn.bfloat16:
-            query_states = ttnn.typecast(query_states, ttnn.bfloat16)
-        if isinstance(key_states, ttnn.Tensor) and key_states.dtype != ttnn.bfloat16:
-            key_states = ttnn.typecast(key_states, ttnn.bfloat16)
-
         if decode_cos_sin is not None:
             cos, sin = decode_cos_sin
         else:
@@ -363,6 +369,15 @@ class TTNNDotsOCRAttention(TTNNModule):
         kv_key = ttnn.permute(key_states, (2, 0, 1, 3))
         kv_value = ttnn.permute(value_states, (2, 0, 1, 3))
 
+        # GQA paged SDPA decode requires BF16 Q. Keep upstream projection and
+        # residual activations BFP8, then cast only at the paged-attention boundary.
+        if isinstance(query_states, ttnn.Tensor) and query_states.dtype != ttnn.bfloat16:
+            query_states = ttnn.typecast(query_states, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        # paged_update_cache only accepts BF16/FP32 update inputs, so keep the
+        # residual/Q path BFP8 but store K/V cache entries in the existing BF16 format.
+        if isinstance(kv_key, ttnn.Tensor) and kv_key.dtype != ttnn.bfloat16:
+            kv_key = ttnn.typecast(kv_key, ttnn.bfloat16)
         if isinstance(kv_value, ttnn.Tensor) and kv_value.dtype != ttnn.bfloat16:
             kv_value = ttnn.typecast(kv_value, ttnn.bfloat16)
 
@@ -408,6 +423,8 @@ class TTNNDotsOCRAttention(TTNNModule):
 
         attn_output = self.o_proj(attn_output)
         attn_output = ttnn.squeeze(attn_output, 1)
+        if attn_output.memory_config().buffer_type != ttnn.BufferType.L1:
+            attn_output = ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
         return attn_output, None
 
     def forward(

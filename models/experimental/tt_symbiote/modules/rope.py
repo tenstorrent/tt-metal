@@ -582,13 +582,13 @@ class BailingRotarySetup:
             pos_ttnn,
             self.cos_cache_row_major,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         sin = ttnn.embedding(
             pos_ttnn,
             self.sin_cache_row_major,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         # Reshape [1, batch, rotary_dim] -> [1, batch, 1, rotary_dim]
