@@ -148,14 +148,14 @@ class TtSwinAttention:
                 math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False, packer_l1_acc=True
             ),
             core_grid=ttnn.CoreGrid(y=8, x=8),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
         )
         ttnn.deallocate(q)
         ttnn.deallocate(k_t)
 
-        attn = ttnn.add(attn, self.combined_attn_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        attn = ttnn.softmax(attn, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn = ttnn.add(attn, self.combined_attn_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
+        attn = ttnn.softmax(attn, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         output = ttnn.matmul(
             attn,
