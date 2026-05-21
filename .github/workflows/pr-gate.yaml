@@ -527,7 +527,6 @@ jobs:
          needs.find-changed-files.outputs.llk-quasar-changed == 'true' ||
          needs.find-changed-files.outputs.llk-common-changed == 'true' ||
          needs.find-changed-files.outputs.llk-sfpi-changed == 'true' ||
-         needs.find-changed-files.outputs.llk-tests-changed == 'true' ||
          needs.find-changed-files.outputs.llk-ci-changed == 'true')
       }}
     uses: ./.github/workflows/llk-build-quasar.yaml
