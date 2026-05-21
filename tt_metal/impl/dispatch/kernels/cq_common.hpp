@@ -7,7 +7,7 @@
 #include "core_config.h"
 #include "internal/risc_attribs.h"
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc_semaphore.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "cq_helpers.hpp"
 
 #include "internal/debug/sanitize.h"
@@ -384,7 +384,7 @@ public:
 #endif
         DPRINT << "release_pages: n=" << n << " sem_addr: " << (uintptr_t)get_semaphore<fd_core_type>(downstream_sem_id)
                << "sem id: " << downstream_sem_id << ENDL();
-        experimental::Semaphore<fd_core_type>(downstream_sem_id).up(n);
+        Semaphore<fd_core_type>(downstream_sem_id).up(n);
     }
 
     uint32_t additional_count{0};

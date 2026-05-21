@@ -159,7 +159,7 @@ struct NocReleasePolicy {
     template <uint8_t noc_idx, uint32_t noc_xy, uint32_t sem_id>
     static FORCE_INLINE void release(uint32_t pages) {
         DPRINT << "NocReleasePolicy: release: pages=" << pages << " sem_id=" << sem_id << ENDL();
-        experimental::Semaphore<fd_core_type>(sem_id).up(pages);
+        Semaphore<fd_core_type>(sem_id).up(pages);
     }
 };
 
