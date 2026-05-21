@@ -5,9 +5,8 @@
 // Standalone debug dump utilities for inspecting CB state and L1 memory.
 //
 // These functions can be called from any kernel at any point — no barrier or
-// synchronization required. Both DPRINT and DEVICE_PRINT calls are present —
-// the compiler disables whichever backend is not active.
-// When no print backend is enabled, they are no-ops.
+// synchronization required. They use DPRINT (printf-style alias for DEVICE_PRINT)
+// internally. When the print backend is not enabled, they are no-ops.
 //
 // Usage:
 //   #include "api/debug/dump.h"

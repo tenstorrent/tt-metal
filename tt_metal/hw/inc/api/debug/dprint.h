@@ -8,20 +8,25 @@
 
 /*
  * Device-side debug print API for device kernels.
- * Works on either one of NC/BR/TR threads.
+ * Works on any hardware thread (BR/NC/TR0-2/ER).
  * On device the use is as follows:
  *
- * DPRINT << SETW(2) << 0 << 0.1f << "string" << ENDL();
+ *   DPRINT("formatted value = {:.3f}, hex = {:#x}\n", x, y);
  *
- * This DebugPrinter object can be created multiple times.
+ * DPRINT is a thin alias for DEVICE_PRINT (see device_print.h), accepting an `fmt`-style format
+ * string with compile-time format/argument checking. Format strings are stored host-side in
+ * dedicated ELF sections, so they do not consume device L1.
  *
- * On the host it's required to start the print server first, otherwise the behavior will be incorrect.
- * This is because the host print server writes a special value that is used in DebugPrinter() constructor
- * to initialize the read/write pointers to 0 only once.
- * It is also needed to empty the print buffer, otherwise device code will stall waiting on the host to flush it.
+ * The legacy stream-style API (`DPRINT << ... << ENDL();`) has been removed. Existing call sites
+ * trip a static_assert pointing at the deprecation. See
+ * tech_reports/Debugging/DEVICE_PRINT_replaces_DPRINT.md for the migration guide.
  *
- * Use impl/debug/dprint_server.h APIs to start the host-side print server.
+ * On the host it's required to start the print server first, otherwise the behavior will be
+ * incorrect. The host server writes the starting magic into the device print buffer so the
+ * kernel-side writer knows it can proceed; it also drains the buffer, otherwise device code
+ * stalls waiting on the host to flush it.
  *
+ * Use impl/debug/dprint_server.hpp APIs to start the host-side print server.
  */
 
 #include <cstdint>

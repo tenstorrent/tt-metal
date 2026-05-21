@@ -117,12 +117,10 @@ self-triaged failure:
      - Allows the triage scripts (including ``dump_lightweight_asserts``) to execute even
        when running under CI-like conditions where they are otherwise gated off.
    * - ``TT_METAL_DPRINT_CORES=all``
-     - Subscribes the host dprint server to every core. Without this, ``DEVICE_PRINT``
+     - Subscribes the host dprint server to every core. Without this, ``DPRINT``
        statements on TRISCs would not be captured.
-   * - ``TT_METAL_DEVICE_PRINT=1``
-     - Enables the ``DEVICE_PRINT`` macro at compile-time in JIT-built kernels.
    * - ``TT_METAL_DPRINT_FILE=<dprint_output_path>``
-     - Redirects all ``DEVICE_PRINT`` output to the file you specified instead of stdout,
+     - Redirects all ``DPRINT`` output to the file you specified instead of stdout,
        making it easy to grep/diff after the run.
 
 The end-to-end flow is:

@@ -18,8 +18,6 @@ Device debug printing can be enabled and configured using the environment variab
 environment variable, ``TT_METAL_DPRINT_CORES`` specifies which cores the host-side will read print data from, and
 whether this environment variable is defined determines whether printing is enabled during kernel compilation.
 Note that the core coordinates are logical coordinates, so worker cores and ethernet cores both start at (0, 0).
-IMPORTANT: During deprecation period, ``TT_METAL_DEVICE_PRINT`` must also be set to 1 to use the new DEVICE_PRINT system.
-If only TT_METAL_DPRINT_CORES is set, the legacy DPRINT system will be used.
 
 .. code-block::
 
@@ -32,7 +30,6 @@ If only TT_METAL_DPRINT_CORES is set, the legacy DPRINT system will be used.
     export TT_METAL_DPRINT_FILE=log.txt                 # optional, default is to print to the screen
     export TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC=0   # optional, enabled by default. Prepends prints with <device id>:(<core x>, <core y>):<RISC>:.
     export TT_METAL_DPRINT_ONE_FILE_PER_RISC=1          # optional, splits DPRINT data on a per-RISC basis into files under $TT_METAL_HOME/generated/dprint/. Overrides TT_METAL_DPRINT_FILE and disables TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC.
-    export TT_METAL_DEVICE_PRINT=1                      # required, use new DEVICE_PRINT system instead of legacy DPRINT. This option is available only during deprecation period of DPRINT, and will be removed in a future release.
 
 To generate device debug prints on the device, include the ``api/debug/device_print.h`` header and use the APIs defined there.
 An example with the different features available is shown below:
