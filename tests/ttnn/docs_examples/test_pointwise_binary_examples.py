@@ -538,8 +538,8 @@ def test_maximum(device):
 
 
 def test_outer(device):
-    # Create two 1D tensors for outer product. Under ttnn.outer's contract the
-    # last dim of each input is the vector; leading dims (if any) are batch dims.
+    # Create two 1D tensors for outer product.
+    # Last dim of each input is the vector; leading dims (if any) are batch dims.
     tensor1 = ttnn.from_torch(torch.rand([32], dtype=torch.bfloat16), device=device)
     tensor2 = ttnn.from_torch(torch.rand([32], dtype=torch.bfloat16), device=device)
 
