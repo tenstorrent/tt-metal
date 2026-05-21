@@ -35,7 +35,7 @@ tracy::TTDeviceMarker make_marker(
     marker.marker_type = type;
     marker.file = file_str;
     marker.line = 0;
-    marker.color = tracy::Color::LightBlue;
+    marker.color = static_cast<uint32_t>(tracy::Color::LightBlue);
     return marker;
 }
 #endif
