@@ -371,7 +371,7 @@ void kernel_main() {
                     route_info[1] = distance;
                     route_info[2] = output_page_idx;
                     {
-                        DeviceZoneScopedN("combine-reader-sending-data-writer-CB");
+                        DeviceZoneScopedN("sending-for-FABRIC-write");
                         uint32_t output_dst = cb_base + l1_alignment;
                         noc_async_read(buffer_scratch_noc_addr, output_dst, aligned_output_page_size);
                         noc_async_read_barrier();

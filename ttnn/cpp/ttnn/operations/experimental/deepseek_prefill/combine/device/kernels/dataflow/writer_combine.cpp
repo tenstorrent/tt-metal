@@ -216,7 +216,7 @@ void kernel_main() {
 
 #ifdef DEST_CHIP_ID
             {
-                DeviceZoneScopedN("combine-fabric-send");
+                DeviceZoneScopedN("FABRIC-send");
                 fabric_set_unicast_route<false>(
                     (volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
                 fabric_send_noc_unicast<fabric_max_packet_size>(
