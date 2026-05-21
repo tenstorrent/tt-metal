@@ -104,11 +104,8 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
     const auto& sparsity_shape = sparsity.logical_shape();
 
     TT_FATAL(sparsity_shape.rank() == 4, "sparsity tensor must have rank 4, got {}", sparsity_shape.rank());
-    TT_FATAL(
-        sparsity_shape[-2] == 1,
-        "sparsity shape[-2] must be 1 (expected [..., 1, num_experts]), got {}",
-        sparsity_shape[-2]);
 
+    TT_FATAL(b_shape.rank() >= 2, "sparse_matmul input B must have rank >= 2, got {}", b_shape.rank());
     const uint32_t num_experts = b_shape[1];
     TT_FATAL(
         sparsity_shape[-1] == num_experts,
@@ -128,19 +125,18 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
             sparsity_shape);
         TT_FATAL(
             sparsity_shape[2] == a_shape[0] && sparsity_shape[3] == a_shape[1],
-            "sparsity batch dimensions ({}, {}) must match input A batch dimensions ({}, {})",
+            "sparsity shape[2] ({}) must match a_shape[0] ({}), and expert dim sparsity[3] ({}) must match a_shape[1] "
+            "({})",
             sparsity_shape[2],
-            sparsity_shape[3],
             a_shape[0],
+            sparsity_shape[3],
             a_shape[1]);
     } else {
         TT_FATAL(
-            sparsity_shape[0] == a_shape[0] && sparsity_shape[1] == a_shape[1],
-            "sparsity batch dimensions ({}, {}) must match input A batch dimensions ({}, {})",
-            sparsity_shape[0],
-            sparsity_shape[1],
-            a_shape[0],
-            a_shape[1]);
+            sparsity_shape[0] == a_shape[0] && sparsity_shape[1] == a_shape[1] && sparsity_shape[2] == 1,
+            "sparsity shape must be [A0, A1, 1, num_experts] when input B is sparse, got sparsity_shape={} a_shape={}",
+            sparsity_shape,
+            a_shape);
     }
 
     const auto& a_shape_padded = get_matmul_tensor_padded_shape(input_tensor_a, /*transpose=*/false);
