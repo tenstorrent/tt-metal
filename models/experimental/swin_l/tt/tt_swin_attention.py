@@ -174,7 +174,10 @@ class TtSwinAttention:
         ttnn.deallocate(k_t)
 
         attn = ttnn.add(attn, self.combined_attn_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
-        attn = ttnn.softmax(attn, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # numeric_stable=False skips the max-subtract reduction pass before exp.
+        # Safe here because attn = q@k_t / sqrt(d) + bias has bounded magnitude (~|q|*|k|/sqrt(d) ~ O(1))
+        # for the bf16/bf8 ranges used in Swin-L. Saves one reduction kernel per softmax call (24/iter).
+        attn = ttnn.softmax(attn, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG, numeric_stable=False)
 
         output = ttnn.matmul(
             attn,
