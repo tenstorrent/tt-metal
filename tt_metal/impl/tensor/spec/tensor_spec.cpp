@@ -95,7 +95,7 @@ std::optional<std::string> get_shape_fits_shard_grid_error(
 
 void validate_dtype_and_layout(DataType dtype, Layout layout) {
     auto supported_dtype = [&dtype]() {
-        TT_ASSERT(
+        TT_FATAL(
             (dtype == DataType::UINT32 || dtype == DataType::INT32 || dtype == DataType::FLOAT32 ||
              dtype == DataType::UINT8 || dtype == DataType::UINT16 || dtype == DataType::BFLOAT16 ||
              dtype == DataType::BFLOAT8_B || dtype == DataType::BFLOAT4_B || dtype == DataType::FP8_E4M3),
@@ -112,7 +112,7 @@ void validate_dtype_and_layout(DataType dtype, Layout layout) {
             case DataType::BFLOAT16: break;
             case DataType::BFLOAT8_B:
             case DataType::BFLOAT4_B:
-                TT_ASSERT(layout == Layout::TILE, "Only TILE layout is supported for BFLOAT8_B dtype!");
+                TT_FATAL(layout == Layout::TILE, "Only TILE layout is supported for BFLOAT8_B dtype!");
                 break;
             case DataType::FP8_E4M3:
                 // Layout gate only: arch support is the producer's policy and is enforced by
@@ -123,7 +123,7 @@ void validate_dtype_and_layout(DataType dtype, Layout layout) {
                 TT_FATAL(layout == Layout::ROW_MAJOR, "Only ROW_MAJOR layout is supported for FP8_E4M3 dtype!");
                 break;
             default:
-                TT_ASSERT(
+                TT_FATAL(
                     false,
                     "Only UINT32, INT32, FLOAT32, UINT16, BFLOAT16, BFLOAT8_B, BFLOAT4_B, or FP8_E4M3 dtypes are "
                     "supported on device!");

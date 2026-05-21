@@ -132,6 +132,14 @@ class TtCombineModule(LightweightModule):
                 BFLOAT16 ROW_MAJOR. Token slots for experts outside this dispatch group contain
                 uninitialized values.
         """
+        # FP8 output only works when the dispatched buffer is TILE: the BF16 -> FP8 conversion
+        # happens in the packer at the untilize stage, which only exists on the TILE path.
+        # The C++ validator enforces this too; checking here gives a clearer Python-side error.
+        if self.fp8_output and dispatched_buffer.layout != ttnn.TILE_LAYOUT:
+            raise ValueError(
+                f"fp8_output=True requires dispatched_buffer in TILE_LAYOUT (got {dispatched_buffer.layout})"
+            )
+
         output = ttnn.experimental.deepseek_prefill.combine(
             dispatched_buffer,
             dispatched_metadata,
