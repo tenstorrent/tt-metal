@@ -22,6 +22,7 @@ from ..layers.normalization import RMSNorm
 from ..parallel.config import EncoderParallelConfig
 from ..parallel.manager import CCLManager
 from ..utils import tensor
+from ..utils.tracing import traced_function
 
 if TYPE_CHECKING:
     from collections.abc import Hashable, Mapping, Sequence
@@ -121,7 +122,12 @@ class TransformerEncoder(Module):
         self._device = ctx.device
         self._tp_axis = ctx.tp_axis
         self._ccl_manager = ctx.ccl_manager
+        self._cached_position_embeddings = {}
+        self._cached_causal_cond = {}  # (max_seq_len,) -> [1, 1, max_seq_len, max_seq_len] bool tensor
+        self._cached_attn_zeros = {}  # (batch, query_length, kv_length, dtype) -> zeros tensor
 
+    # TODO: Remove the mask buffer generation from the function to prevent trace assertion errors.
+    @traced_function(device=lambda self: self._device, clone_prep_inputs=False)
     def forward(
         self,
         tokens: ttnn.Tensor,
@@ -155,8 +161,7 @@ class TransformerEncoder(Module):
             )
 
         if pos_embeds is None:
-            pos = _make_positions(start=start_pos, sequence_length=seq_len, device=device)
-            pos_embeds = self.pos_embedding.forward(pos, dtype=dtype)
+            pos_embeds = self.get_embeddings(start=start_pos, sequence_length=seq_len, device=device)
 
         # padding is only required by `ttnn.transformer.scaled_dot_product_attention` when
         # using an attention mask
@@ -170,7 +175,13 @@ class TransformerEncoder(Module):
             if start_pos == 0:
                 assert mask.shape[1] == seq_len
 
-            attn_bias = _prepare_attn_bias(mask, query_length=seq_len, query_pos=start_pos)
+            attn_bias = self._prepare_attn_bias(
+                mask,
+                query_length=seq_len,
+                query_pos=start_pos,
+                kv_length=mask.shape[1],
+                device=device,
+            )
 
             if start_pos == 0:
                 bias_padding = padded_seq_len - seq_len
@@ -222,6 +233,72 @@ class TransformerEncoder(Module):
 
         return hidden_states if output_hidden_states else x
 
+    def get_embeddings(self, start, sequence_length, device: ttnn.MeshDevice) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        cache_key = (start, sequence_length)
+        if cache_key not in self._cached_position_embeddings:
+            positions = _make_positions(start=start, sequence_length=sequence_length, device=device)
+            cos, sin = self.pos_embedding.forward(positions, dtype=self.token_embedding.weight.dtype)
+            self._cached_position_embeddings[cache_key] = (cos, sin)
+        return self._cached_position_embeddings[cache_key]
+
+    def _get_causal_cond(self, max_seq_len: int, device: ttnn.MeshDevice) -> ttnn.Tensor:
+        """Return a [1, 1, max_seq_len, max_seq_len] bool tensor (True = keep).
+
+        Built once per max_seq_len and cached; avoids calling ttnn.tril inside a trace.
+        Entry [q, k] is True when k <= q (standard lower-triangular causal mask).
+        """
+        if max_seq_len not in self._cached_causal_cond:
+            row = ttnn.reshape(
+                ttnn.arange(0, max_seq_len, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device),
+                [1, 1, max_seq_len, 1],
+            )
+            col = ttnn.reshape(
+                ttnn.arange(0, max_seq_len, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device),
+                [1, 1, 1, max_seq_len],
+            )
+            self._cached_causal_cond[max_seq_len] = ttnn.le(col, row)
+        return self._cached_causal_cond[max_seq_len]
+
+    def _prepare_attn_bias(
+        self,
+        mask: ttnn.Tensor,
+        *,
+        query_length: int,
+        query_pos: int,
+        kv_length: int,
+        device: ttnn.MeshDevice,
+    ) -> ttnn.Tensor:
+        """Build the additive attention bias from a padding mask without using ttnn.tril.
+
+        Uses a pre-built causal condition tensor (cached on self) and ttnn.where so that
+        no dynamic allocation happens inside a captured trace on subsequent calls.
+        """
+        batch_size = mask.shape[0]
+
+        # Reshape padding mask to [batch, 1, 1, kv_length]
+        mask = ttnn.to_layout(mask, ttnn.ROW_MAJOR_LAYOUT)
+        mask = ttnn.reshape(mask, [batch_size, 1, 1, kv_length])
+        mask = ttnn.to_layout(mask, ttnn.TILE_LAYOUT)
+        # Broadcast to [batch, 1, query_length, kv_length]
+        mask = ttnn.expand(mask, [batch_size, 1, query_length, kv_length])
+
+        # Slice the pre-built causal cond to [1, 1, query_length, kv_length],
+        # offsetting columns by query_pos (key positions 0..query_pos-1 are always visible).
+        max_len = max(query_length + query_pos, kv_length)
+        causal = self._get_causal_cond(max_len, device)
+        # rows q=0..query_length-1, cols k=0..kv_length-1, diagonal shifted by query_pos
+        # i.e. keep k <= q + query_pos  →  use rows [query_pos : query_pos+query_length]
+        causal = causal[:, :, query_pos : query_pos + query_length, :kv_length]
+
+        zeros_key = tuple(mask.shape)
+        if zeros_key not in self._cached_attn_zeros:
+            self._cached_attn_zeros[zeros_key] = ttnn.zeros_like(mask)
+        zeros = self._cached_attn_zeros[zeros_key]
+
+        mask = ttnn.where(causal, mask, zeros)
+
+        return (mask - 1.0) * math.inf
+
     def generate(
         self,
         tokens: ttnn.Tensor,
@@ -235,6 +312,7 @@ class TransformerEncoder(Module):
         use_cache: bool = True,
         return_logits: bool = False,
         guide: torch.Tensor | None = None,
+        traced: bool = False,
     ) -> GenerationOutput:
         # The original Llama implementation starts generation after the shortest input, thereby
         # overwriting any padding tokens that are on the right, resuing that space. We use a
@@ -243,7 +321,6 @@ class TransformerEncoder(Module):
 
         batch_size, input_length = tokens.shape
         device = tokens.device()
-        dtype = self.token_embedding.weight.dtype
 
         padded_seq_len = _padded_sequence_length(max_length - 1)
 
@@ -259,8 +336,7 @@ class TransformerEncoder(Module):
 
         eos_token_tensor = torch.tensor(eos_tokens, dtype=torch.uint32) if eos_tokens else None
 
-        positions = _make_positions(start=0, sequence_length=padded_seq_len, device=device)
-        cos, sin = self.pos_embedding.forward(positions, dtype=dtype)
+        cos, sin = self.get_embeddings(start=0, sequence_length=padded_seq_len, device=device)
 
         finished = torch.zeros([batch_size], dtype=torch.bool)
         cache = Cache(device=device, size=padded_seq_len) if use_cache else None
@@ -274,6 +350,7 @@ class TransformerEncoder(Module):
                 mask=mask[:, :pos] if prev_pos == 0 and mask is not None else mask,
                 pos_embeds=(cos[:, prev_pos:pos], sin[:, prev_pos:pos]),
                 cache=cache,
+                traced=traced,
             )
             if prev_pos == 0:
                 current_logits = current_logits[:, -1]
@@ -797,19 +874,6 @@ def _rotate_half(x: ttnn.Tensor) -> ttnn.Tensor:
     x1 = x[..., : x.shape[-1] // 2]
     x2 = x[..., x.shape[-1] // 2 :]
     return ttnn.concat([ttnn.neg(x2), x1], dim=-1)
-
-
-def _prepare_attn_bias(mask: ttnn.Tensor, *, query_length: int, query_pos: int) -> ttnn.Tensor:
-    batch_size, kv_length = mask.shape
-
-    # convert to causal attention mask
-    mask = ttnn.to_layout(mask, ttnn.ROW_MAJOR_LAYOUT)
-    mask = mask.reshape([batch_size, 1, 1, kv_length])
-    mask = ttnn.to_layout(mask, ttnn.TILE_LAYOUT)
-    mask = ttnn.expand(mask, [batch_size, 1, query_length, kv_length])
-    mask = ttnn.tril(mask, diagonal=query_pos)
-
-    return (mask - 1.0) * math.inf
 
 
 def _make_positions(*, start: int, sequence_length: int, device: ttnn.MeshDevice) -> ttnn.Tensor:
