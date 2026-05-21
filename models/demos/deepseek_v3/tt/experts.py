@@ -9,9 +9,8 @@ import torch
 from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 from ttnn.experimental.moe_compute_utils import (
-    determine_compute_matmul_cores,
-    get_w0_w1_memory_config,
-    get_w2_memory_config,
+    get_weight_core_shard_maps,
+    get_weight_mem_configs,
     prepare_w0_w1_tensor_for_moe_compute,
     prepare_w2_tensor_for_moe_compute,
 )
@@ -167,46 +166,86 @@ class Experts(AbstractModule):
         num_experts_per_device = cls._get_num_experts_per_device(hf_config, mesh_device)
         num_routed_experts = hf_config.n_routed_experts
 
-        w0 = cls._load_expert_weight(state_dict, "gate_proj", num_routed_experts).unsqueeze(0).transpose(-1, -2)
-        w1 = cls._load_expert_weight(state_dict, "up_proj", num_routed_experts).unsqueeze(0).transpose(-1, -2)
-        w2 = cls._load_expert_weight(state_dict, "down_proj", num_routed_experts).unsqueeze(0).transpose(-1, -2)
-
         hidden_size = hf_config.hidden_size
-        matmul_N = w0.shape[-1]
-        ring2cores, compute_matmul_dram_core_range_set = determine_compute_matmul_cores(mesh_device)
-
-        prepared_w0_w1 = []
-        prepared_w2 = []
-        for i in range(0, num_routed_experts, num_experts_per_device):
-            prepared_w0_w1_tensor = prepare_w0_w1_tensor_for_moe_compute(
-                w0[:, i : i + num_experts_per_device, :, :],
-                w1[:, i : i + num_experts_per_device, :, :],
-                num_layers,
-                num_experts_per_device,
-                hidden_size,
-                matmul_N,
-                ring2cores,
-            )
-            prepared_w2_tensor = prepare_w2_tensor_for_moe_compute(
-                w2[:, i : i + num_experts_per_device, :, :],
-                num_layers,
-                num_experts_per_device,
-                matmul_N,
-                hidden_size,
-                ring2cores,
-            )
-
-            prepared_w0_w1.append(prepared_w0_w1_tensor)
-            prepared_w2.append(prepared_w2_tensor)
-
-        prepared_w0_w1 = torch.cat(prepared_w0_w1, dim=2)
-        prepared_w2 = torch.cat(prepared_w2, dim=2)
-
-        w0_w1_memory_config = get_w0_w1_memory_config(
-            num_layers, num_experts_per_device, hidden_size, compute_matmul_dram_core_range_set
+        matmul_N = hf_config.moe_intermediate_size
+        w0_w1_shard_map, w2_shard_map, compute_matmul_dram_core_range_set = get_weight_core_shard_maps(
+            mesh_device, hidden_size, matmul_N
         )
-        w2_memory_config = get_w2_memory_config(
-            num_layers, num_experts_per_device, matmul_N, compute_matmul_dram_core_range_set
+
+        view_with_prefix = getattr(state_dict, "view_with_prefix", None)
+        prepared_state_dict = view_with_prefix("experts_quad_ring.") if callable(view_with_prefix) else state_dict
+        prepared_w0_w1_key = "w0_w1.weight" if callable(view_with_prefix) else "experts_quad_ring.w0_w1.weight"
+        prepared_w2_key = "w2.weight" if callable(view_with_prefix) else "experts_quad_ring.w2.weight"
+        has_prepared_w0_w1 = prepared_w0_w1_key in prepared_state_dict
+        has_prepared_w2 = prepared_w2_key in prepared_state_dict
+
+        if has_prepared_w0_w1 or has_prepared_w2:
+            if not (has_prepared_w0_w1 and has_prepared_w2):
+                raise ValueError(
+                    "Checkpoint contains partial quad-ring prepared expert tensors. "
+                    f"Expected both '{prepared_w0_w1_key}' and '{prepared_w2_key}'."
+                )
+            prepared_w0_w1 = get_dequantized_tensor(
+                prepared_state_dict, prepared_w0_w1_key, dtype=cls.WEIGHT_TORCH_DTYPE
+            )
+            prepared_w2 = get_dequantized_tensor(prepared_state_dict, prepared_w2_key, dtype=cls.WEIGHT_TORCH_DTYPE)
+        else:
+            allow_repack = os.getenv("DEEPSEEK_V3_ALLOW_QUAD_RING_WEIGHT_REPACK", "0").lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+            if not allow_repack:
+                raise ValueError(
+                    "Quad-ring MoE weight loading requires prepacked HF expert tensors "
+                    f"'{prepared_w0_w1_key}' and '{prepared_w2_key}' so cold TTNN weight-cache loads stay fast. "
+                    "Run `python models/demos/deepseek_v3/scripts/prepare_quad_ring_hf_checkpoint.py "
+                    "<stacked-dequantized-model>` and point DEEPSEEK_V3_HF_MODEL at the generated "
+                    "`*-quad-ring` checkpoint, or set DEEPSEEK_V3_ALLOW_QUAD_RING_WEIGHT_REPACK=1 "
+                    "to allow slow in-process repacking."
+                )
+
+            w0 = cls._load_expert_weight(state_dict, "gate_proj", num_routed_experts).unsqueeze(0).transpose(-1, -2)
+            w1 = cls._load_expert_weight(state_dict, "up_proj", num_routed_experts).unsqueeze(0).transpose(-1, -2)
+            w2 = cls._load_expert_weight(state_dict, "down_proj", num_routed_experts).unsqueeze(0).transpose(-1, -2)
+
+            prepared_w0_w1 = []
+            prepared_w2 = []
+            for i in range(0, num_routed_experts, num_experts_per_device):
+                prepared_w0_w1_tensor = prepare_w0_w1_tensor_for_moe_compute(
+                    w0[:, i : i + num_experts_per_device, :, :],
+                    w1[:, i : i + num_experts_per_device, :, :],
+                    num_layers,
+                    num_experts_per_device,
+                    hidden_size,
+                    matmul_N,
+                    w0_w1_shard_map,
+                )
+                prepared_w2_tensor = prepare_w2_tensor_for_moe_compute(
+                    w2[:, i : i + num_experts_per_device, :, :],
+                    num_layers,
+                    num_experts_per_device,
+                    matmul_N,
+                    hidden_size,
+                    w2_shard_map,
+                    w0_w1_shard_map,
+                )
+
+                prepared_w0_w1.append(prepared_w0_w1_tensor)
+                prepared_w2.append(prepared_w2_tensor)
+
+            prepared_w0_w1 = torch.cat(prepared_w0_w1, dim=2)
+            prepared_w2 = torch.cat(prepared_w2, dim=2)
+
+        w0_w1_memory_config, w2_memory_config, _, _ = get_weight_mem_configs(
+            num_layers,
+            num_experts_per_device,
+            hidden_size,
+            matmul_N,
+            w0_w1_shard_map,
+            w2_shard_map,
+            compute_matmul_dram_core_range_set,
         )
 
         return {

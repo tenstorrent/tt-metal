@@ -1112,12 +1112,88 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             tensor_bytes);
     }
 
-    // DFB aliasing is not supported yet
-    for (const auto& dfb : spec.dataflow_buffers) {
-        TT_FATAL(
-            dfb.alias_with.empty(),
-            "DFB '{}' has a non-empty alias_with, but DFB aliasing is not yet implemented",
-            dfb.unique_id);
+    // Validate DFB alias groups.
+    // Rules:
+    //  1. Transitivity: every DFB in an alias group must list every other member in its
+    //     alias_with field. This strict requirement is redundant by design. This is a
+    //     "dangerous" feature that a kernel author should use deliberately.
+    //  2. Same total size: entry_size * num_entries must match within a group.
+    //  3. Same node coverage: each DFB in the group must cover the same set of nodes
+    //  4. Consistent borrowed_from: either no member borrows, or all members borrow from
+    //     the same TensorParameter. (Aliased borrows from the same memory object is a
+    //     weird-but-valid scenario.)
+    {
+        // The "extended group" of a DFB is its alias_with plus the DFB itself. Two DFBs
+        // are in the same alias group iff their extended groups are equal.
+        auto extended_group = [](const DataflowBufferSpec& d) {
+            std::set<DFBSpecName> s(d.alias_with.begin(), d.alias_with.end());
+            s.insert(d.unique_id);
+            return s;
+        };
+
+        // Pre-pass: every name in every alias_with must refer to a real DFB and must not
+        // be self-referential.
+        for (const auto& dfb : spec.dataflow_buffers) {
+            for (const auto& alias_name : dfb.alias_with) {
+                TT_FATAL(
+                    collected.dfb_by_name.contains(alias_name),
+                    "DFB '{}' lists unknown alias '{}' in alias_with",
+                    dfb.unique_id,
+                    alias_name);
+                TT_FATAL(alias_name != dfb.unique_id, "DFB '{}' lists itself in alias_with", dfb.unique_id);
+            }
+        }
+
+        for (const auto& dfb : spec.dataflow_buffers) {
+            if (dfb.alias_with.empty()) {
+                continue;
+            }
+            const size_t total_size_a = static_cast<size_t>(dfb.entry_size) * static_cast<size_t>(dfb.num_entries);
+            const auto group_a = extended_group(dfb);
+            const auto& nodes_a = collected.dfb_node_set.at(dfb.unique_id);
+
+            for (const auto& alias_name : dfb.alias_with) {
+                const DataflowBufferSpec* alias_spec = collected.dfb_by_name.at(alias_name);
+
+                // Rule 1: full clique declaration.
+                const auto group_b = extended_group(*alias_spec);
+                if (group_a != group_b) {
+                    TT_THROW(
+                        "DFBs '{}' and '{}' do not declare the same alias group. Every DFB in an "
+                        "alias group must list every other member in its alias_with field.",
+                        dfb.unique_id,
+                        alias_name);
+                }
+
+                // Rule 2: same total size.
+                const size_t total_size_b =
+                    static_cast<size_t>(alias_spec->entry_size) * static_cast<size_t>(alias_spec->num_entries);
+                TT_FATAL(
+                    total_size_a == total_size_b,
+                    "Aliased DFBs '{}' and '{}' have different total sizes ({} vs {} bytes). "
+                    "Aliased DFBs must have the same total size (entry_size * num_entries).",
+                    dfb.unique_id, alias_name, total_size_a, total_size_b);
+
+                // Rule 3: same node coverage.
+                const auto& nodes_b = collected.dfb_node_set.at(alias_name);
+                TT_FATAL(
+                    nodes_a == nodes_b,
+                    "Aliased DFBs '{}' and '{}' cover different sets of nodes. Aliased DFBs must "
+                    "cover the same node coverage (their bound kernels' WorkUnitSpec membership "
+                    "must yield identical target_nodes unions) — the shared L1 region must be "
+                    "reserved at the same cores for all members.",
+                    dfb.unique_id,
+                    alias_name);
+
+                // Rule 4: consistent borrowed_from.
+                TT_FATAL(
+                    dfb.borrowed_from == alias_spec->borrowed_from,
+                    "Aliased DFBs '{}' and '{}' have inconsistent borrowed_from. Either no member "
+                    "of an alias group borrows, or all members borrow from the same TensorParameter.",
+                    dfb.unique_id,
+                    alias_name);
+            }
+        }
     }
 
     // Data format metadata (optional param) MUST be specified for a DFB with a compute endpoint
@@ -2222,6 +2298,33 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         // at runtime (analog of dynamic CB's UpdateDynamicCircularBufferAddress).
         if (dfb_spec.borrowed_from.has_value()) {
             program_impl->register_dfb_borrowed_binding(dfb_id, *dfb_spec.borrowed_from);
+        }
+    }
+
+    // Wire alias groups: for each DFB that has alias_with entries, make the first
+    // encountered DFB in the group the primary and call set_dfb_alias for each secondary.
+    // handled_as_secondary prevents a DFB from being treated as a primary when it was
+    // already registered as a secondary by an earlier DFB in the group. Soundness relies
+    // on the strict-clique invariant enforced by ValidateProgramSpec: every group member
+    // lists every other member, so the primary's alias_with covers the whole group.
+    {
+        std::unordered_set<DFBSpecName> handled_as_secondary;
+        for (const auto& dfb_spec : spec.dataflow_buffers) {
+            if (handled_as_secondary.contains(dfb_spec.unique_id)) {
+                continue;
+            }
+            if (dfb_spec.alias_with.empty()) {
+                continue;
+            }
+            const uint32_t primary_id = dfb_name_to_id.at(dfb_spec.unique_id);
+            for (const auto& alias_name : dfb_spec.alias_with) {
+                if (handled_as_secondary.contains(alias_name)) {
+                    continue;
+                }
+                const uint32_t secondary_id = dfb_name_to_id.at(alias_name);
+                program_impl->set_dfb_alias(primary_id, secondary_id);
+                handled_as_secondary.insert(alias_name);
+            }
         }
     }
 

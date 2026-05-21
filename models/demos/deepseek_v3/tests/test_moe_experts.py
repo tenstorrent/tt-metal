@@ -280,7 +280,7 @@ def test_convert_weights_rejects_partial_stacked_expert_checkpoint(monkeypatch: 
         )
 
 
-def test_convert_weights_quad_ring_uses_prepared_checkpoint_tensors(
+def test_convert_weights_quad_ring_prepares_stacked_checkpoint_tensors(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     class _FakeMeshDevice:
@@ -289,49 +289,95 @@ def test_convert_weights_quad_ring_uses_prepared_checkpoint_tensors(
         def get_num_devices(self) -> int:
             return 1
 
-    prepared_w0_w1 = torch.arange(12 * 1 * 2 * 3 * 4 * (4 * ttnn.TILE_SIZE), dtype=torch.bfloat16).reshape(
-        12, 1, 2, 3, 4, 4 * ttnn.TILE_SIZE
-    )
-    prepared_w2 = torch.arange(12 * 1 * 2 * 5 * 6 * (4 * ttnn.TILE_SIZE), dtype=torch.bfloat16).reshape(
-        12, 1, 2, 5, 6, 4 * ttnn.TILE_SIZE
-    )
+    raw_w0 = torch.arange(2 * 6 * 4, dtype=torch.bfloat16).reshape(2, 6, 4)
+    raw_w1 = torch.arange(2 * 6 * 4, dtype=torch.bfloat16).reshape(2, 6, 4) + 100
+    raw_w2 = torch.arange(2 * 4 * 6, dtype=torch.bfloat16).reshape(2, 4, 6) + 200
+    prepared_w0_w1 = torch.arange(1 * 1 * 2 * 3, dtype=torch.bfloat16).reshape(1, 1, 2, 3)
+    prepared_w2 = torch.arange(1 * 1 * 2 * 5, dtype=torch.bfloat16).reshape(1, 1, 2, 5)
 
     state_dict = {
-        "experts_quad_ring.w0_w1.weight": prepared_w0_w1,
-        "experts_quad_ring.w2.weight": prepared_w2,
+        "experts_stacked.gate_proj.weight": raw_w0,
+        "experts_stacked.up_proj.weight": raw_w1,
+        "experts_stacked.down_proj.weight": raw_w2,
     }
+    captured = {}
+    saved_tensors = []
 
     monkeypatch.setattr("models.demos.deepseek_v3.tt.experts.is_quad_mesh", lambda mesh_device: True)
     monkeypatch.setattr("models.demos.deepseek_v3.tt.experts.is_ring_fabric", lambda fabric_config: True)
     monkeypatch.setattr("models.demos.deepseek_v3.tt.experts.get_fabric_config", lambda: object())
+    monkeypatch.setenv("DEEPSEEK_V3_ALLOW_QUAD_RING_WEIGHT_REPACK", "1")
     monkeypatch.setattr(
         "models.demos.deepseek_v3.tt.experts.get_dequantized_tensor",
         lambda state_dict, key, dtype=None: state_dict[key],
     )
+
+    def fake_get_weight_core_shard_maps(mesh_device, hidden_size, matmul_N):
+        captured["core_shard_maps"] = (mesh_device, hidden_size, matmul_N)
+        return "w0_w1_shard_map", "w2_shard_map", "dram-core-range-set"
+
+    def fake_prepare_w0_w1_tensor_for_moe_compute(
+        w0, w1, num_layers, experts_per_device, hidden_size, matmul_N, shard_map
+    ):
+        captured["prepare_w0_w1"] = (w0, w1, num_layers, experts_per_device, hidden_size, matmul_N, shard_map)
+        return prepared_w0_w1
+
+    def fake_prepare_w2_tensor_for_moe_compute(
+        w2, num_layers, experts_per_device, matmul_N, hidden_size, w2_shard_map, w0_w1_shard_map
+    ):
+        captured["prepare_w2"] = (
+            w2,
+            num_layers,
+            experts_per_device,
+            matmul_N,
+            hidden_size,
+            w2_shard_map,
+            w0_w1_shard_map,
+        )
+        return prepared_w2
+
+    def fake_get_weight_mem_configs(
+        num_layers,
+        experts_per_device,
+        hidden_size,
+        matmul_N,
+        w0_w1_shard_map,
+        w2_shard_map,
+        dram_core_range_set,
+    ):
+        captured["weight_mem_configs"] = (
+            num_layers,
+            experts_per_device,
+            hidden_size,
+            matmul_N,
+            w0_w1_shard_map,
+            w2_shard_map,
+            dram_core_range_set,
+        )
+        return "w0_w1_mem_config", "w2_mem_config", None, None
+
     monkeypatch.setattr(
-        "models.demos.deepseek_v3.tt.experts.determine_compute_matmul_cores",
-        lambda mesh_device: ({"ring": "unused"}, "dram-core-range-set"),
+        "models.demos.deepseek_v3.tt.experts.get_weight_core_shard_maps",
+        fake_get_weight_core_shard_maps,
     )
     monkeypatch.setattr(
-        "models.demos.deepseek_v3.tt.experts.get_w0_w1_memory_config",
-        lambda *args, **kwargs: "w0_w1_mem_config",
+        "models.demos.deepseek_v3.tt.experts.prepare_w0_w1_tensor_for_moe_compute",
+        fake_prepare_w0_w1_tensor_for_moe_compute,
     )
     monkeypatch.setattr(
-        "models.demos.deepseek_v3.tt.experts.get_w2_memory_config",
-        lambda *args, **kwargs: "w2_mem_config",
+        "models.demos.deepseek_v3.tt.experts.prepare_w2_tensor_for_moe_compute",
+        fake_prepare_w2_tensor_for_moe_compute,
     )
     monkeypatch.setattr(
-        "models.demos.deepseek_v3.tt.experts.prepare_w0_w1_tensor",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("prepare_w0_w1_tensor should not run")),
+        "models.demos.deepseek_v3.tt.experts.get_weight_mem_configs",
+        fake_get_weight_mem_configs,
     )
-    monkeypatch.setattr(
-        "models.demos.deepseek_v3.tt.experts.prepare_w2_tensor",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("prepare_w2_tensor should not run")),
-    )
-    monkeypatch.setattr(
-        "models.demos.deepseek_v3.tt.experts.shard_and_save",
-        lambda path, tensor, *args, **kwargs: tensor,
-    )
+
+    def fake_shard_and_save(path, tensor, *args, **kwargs):
+        saved_tensors.append((path, tensor, kwargs))
+        return tensor
+
+    monkeypatch.setattr("models.demos.deepseek_v3.tt.experts.shard_and_save", fake_shard_and_save)
 
     converted = TTExperts.convert_weights(
         SimpleNamespace(
@@ -348,6 +394,202 @@ def test_convert_weights_quad_ring_uses_prepared_checkpoint_tensors(
     assert torch.equal(converted["quad_ring_w0_w1_experts"]["input_tensor_b"], prepared_w0_w1)
     assert torch.equal(converted["quad_ring_w2_experts"]["input_tensor_b"], prepared_w2)
 
+    mesh_device, hidden_size, matmul_N = captured["core_shard_maps"]
+    assert isinstance(mesh_device, _FakeMeshDevice)
+    assert hidden_size == 4
+    assert matmul_N == 6
+
+    expected_w0 = raw_w0.unsqueeze(0).transpose(-1, -2)
+    expected_w1 = raw_w1.unsqueeze(0).transpose(-1, -2)
+    expected_w2 = raw_w2.unsqueeze(0).transpose(-1, -2)
+
+    w0, w1, num_layers, experts_per_device, hidden_size, matmul_N, shard_map = captured["prepare_w0_w1"]
+    assert torch.equal(w0, expected_w0)
+    assert torch.equal(w1, expected_w1)
+    assert (num_layers, experts_per_device, hidden_size, matmul_N, shard_map) == (
+        1,
+        2,
+        4,
+        6,
+        "w0_w1_shard_map",
+    )
+
+    w2, num_layers, experts_per_device, matmul_N, hidden_size, w2_shard_map, w0_w1_shard_map = captured["prepare_w2"]
+    assert torch.equal(w2, expected_w2)
+    assert (num_layers, experts_per_device, matmul_N, hidden_size, w2_shard_map, w0_w1_shard_map) == (
+        1,
+        2,
+        6,
+        4,
+        "w2_shard_map",
+        "w0_w1_shard_map",
+    )
+    assert captured["weight_mem_configs"] == (
+        1,
+        2,
+        4,
+        6,
+        "w0_w1_shard_map",
+        "w2_shard_map",
+        "dram-core-range-set",
+    )
+    assert [(path.name, kwargs["memory_config"]) for path, _, kwargs in saved_tensors] == [
+        ("quad_ring_w0_w1_experts.input_tensor_b", "w0_w1_mem_config"),
+        ("quad_ring_w2_experts.input_tensor_b", "w2_mem_config"),
+    ]
+    assert torch.equal(saved_tensors[0][1], prepared_w0_w1)
+    assert torch.equal(saved_tensors[1][1], prepared_w2)
+
+
+def test_convert_weights_quad_ring_rejects_implicit_stacked_repack(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class _FakeMeshDevice:
+        shape = (16, 8)
+
+        def get_num_devices(self) -> int:
+            return 1
+
+    state_dict = {
+        "experts_stacked.gate_proj.weight": torch.zeros((2, 6, 4), dtype=torch.bfloat16),
+        "experts_stacked.up_proj.weight": torch.zeros((2, 6, 4), dtype=torch.bfloat16),
+        "experts_stacked.down_proj.weight": torch.zeros((2, 4, 6), dtype=torch.bfloat16),
+    }
+
+    monkeypatch.setattr("models.demos.deepseek_v3.tt.experts.is_quad_mesh", lambda mesh_device: True)
+    monkeypatch.setattr("models.demos.deepseek_v3.tt.experts.is_ring_fabric", lambda fabric_config: True)
+    monkeypatch.setattr("models.demos.deepseek_v3.tt.experts.get_fabric_config", lambda: object())
+    monkeypatch.setattr(
+        "models.demos.deepseek_v3.tt.experts.get_weight_core_shard_maps",
+        lambda mesh_device, hidden_size, matmul_N: ("w0_w1_shard_map", "w2_shard_map", "dram-core-range-set"),
+    )
+    monkeypatch.setattr(
+        "models.demos.deepseek_v3.tt.experts.prepare_w0_w1_tensor_for_moe_compute",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("raw W0/W1 preparation should not run")),
+    )
+    monkeypatch.setattr(
+        "models.demos.deepseek_v3.tt.experts.prepare_w2_tensor_for_moe_compute",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("raw W2 preparation should not run")),
+    )
+
+    with pytest.raises(ValueError, match="requires prepacked HF expert tensors"):
+        TTExperts.convert_weights(
+            SimpleNamespace(
+                n_routed_experts=2,
+                hidden_size=4,
+                moe_intermediate_size=6,
+            ),
+            (state_dict,),
+            tmp_path,
+            _FakeMeshDevice(),
+        )
+
+
+def test_convert_weights_quad_ring_uses_prepared_checkpoint_tensors(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class _FakeMeshDevice:
+        shape = (16, 8)
+
+        def get_num_devices(self) -> int:
+            return 1
+
+    prepared_w0_w1 = torch.arange(1 * 1 * 2 * 3, dtype=torch.bfloat16).reshape(1, 1, 2, 3)
+    prepared_w2 = torch.arange(1 * 1 * 2 * 5, dtype=torch.bfloat16).reshape(1, 1, 2, 5)
+    state_dict = {
+        "experts_quad_ring.w0_w1.weight": prepared_w0_w1,
+        "experts_quad_ring.w2.weight": prepared_w2,
+    }
+    captured = {}
+    saved_tensors = []
+
+    monkeypatch.setattr("models.demos.deepseek_v3.tt.experts.is_quad_mesh", lambda mesh_device: True)
+    monkeypatch.setattr("models.demos.deepseek_v3.tt.experts.is_ring_fabric", lambda fabric_config: True)
+    monkeypatch.setattr("models.demos.deepseek_v3.tt.experts.get_fabric_config", lambda: object())
+    monkeypatch.setattr(
+        "models.demos.deepseek_v3.tt.experts.get_dequantized_tensor",
+        lambda state_dict, key, dtype=None: state_dict[key],
+    )
+
+    def fake_get_weight_core_shard_maps(mesh_device, hidden_size, matmul_N):
+        captured["core_shard_maps"] = (mesh_device, hidden_size, matmul_N)
+        return "w0_w1_shard_map", "w2_shard_map", "dram-core-range-set"
+
+    def fake_get_weight_mem_configs(
+        num_layers,
+        experts_per_device,
+        hidden_size,
+        matmul_N,
+        w0_w1_shard_map,
+        w2_shard_map,
+        dram_core_range_set,
+    ):
+        captured["weight_mem_configs"] = (
+            num_layers,
+            experts_per_device,
+            hidden_size,
+            matmul_N,
+            w0_w1_shard_map,
+            w2_shard_map,
+            dram_core_range_set,
+        )
+        return "w0_w1_mem_config", "w2_mem_config", None, None
+
+    monkeypatch.setattr(
+        "models.demos.deepseek_v3.tt.experts.get_weight_core_shard_maps",
+        fake_get_weight_core_shard_maps,
+    )
+    monkeypatch.setattr(
+        "models.demos.deepseek_v3.tt.experts.get_weight_mem_configs",
+        fake_get_weight_mem_configs,
+    )
+    monkeypatch.setattr(
+        "models.demos.deepseek_v3.tt.experts.prepare_w0_w1_tensor_for_moe_compute",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("raw W0/W1 preparation should not run")),
+    )
+    monkeypatch.setattr(
+        "models.demos.deepseek_v3.tt.experts.prepare_w2_tensor_for_moe_compute",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("raw W2 preparation should not run")),
+    )
+
+    def fake_shard_and_save(path, tensor, *args, **kwargs):
+        saved_tensors.append((path, tensor, kwargs))
+        return tensor
+
+    monkeypatch.setattr("models.demos.deepseek_v3.tt.experts.shard_and_save", fake_shard_and_save)
+
+    converted = TTExperts.convert_weights(
+        SimpleNamespace(
+            n_routed_experts=2,
+            hidden_size=4,
+            moe_intermediate_size=6,
+        ),
+        (state_dict,),
+        tmp_path,
+        _FakeMeshDevice(),
+    )
+
+    mesh_device, hidden_size, matmul_N = captured["core_shard_maps"]
+    assert isinstance(mesh_device, _FakeMeshDevice)
+    assert (hidden_size, matmul_N) == (4, 6)
+    assert captured["weight_mem_configs"] == (
+        1,
+        2,
+        4,
+        6,
+        "w0_w1_shard_map",
+        "w2_shard_map",
+        "dram-core-range-set",
+    )
+    assert torch.equal(converted["quad_ring_w0_w1_experts"]["input_tensor_b"], prepared_w0_w1)
+    assert torch.equal(converted["quad_ring_w2_experts"]["input_tensor_b"], prepared_w2)
+    assert [(path.name, kwargs["memory_config"]) for path, _, kwargs in saved_tensors] == [
+        ("quad_ring_w0_w1_experts.input_tensor_b", "w0_w1_mem_config"),
+        ("quad_ring_w2_experts.input_tensor_b", "w2_mem_config"),
+    ]
+    assert torch.equal(saved_tensors[0][1], prepared_w0_w1)
+    assert torch.equal(saved_tensors[1][1], prepared_w2)
+
 
 def test_convert_weights_quad_ring_rejects_partial_prepared_checkpoint(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -359,12 +601,16 @@ def test_convert_weights_quad_ring_rejects_partial_prepared_checkpoint(
             return 1
 
     state_dict = {
-        "experts_quad_ring.w0_w1.weight": torch.zeros((12, 1, 2, 3, 4, 4 * ttnn.TILE_SIZE), dtype=torch.bfloat16),
+        "experts_quad_ring.w0_w1.weight": torch.zeros((1, 1, 2, 3), dtype=torch.bfloat16),
     }
 
     monkeypatch.setattr("models.demos.deepseek_v3.tt.experts.is_quad_mesh", lambda mesh_device: True)
     monkeypatch.setattr("models.demos.deepseek_v3.tt.experts.is_ring_fabric", lambda fabric_config: True)
     monkeypatch.setattr("models.demos.deepseek_v3.tt.experts.get_fabric_config", lambda: object())
+    monkeypatch.setattr(
+        "models.demos.deepseek_v3.tt.experts.get_weight_core_shard_maps",
+        lambda mesh_device, hidden_size, matmul_N: ("w0_w1_shard_map", "w2_shard_map", "dram-core-range-set"),
+    )
 
     with pytest.raises(ValueError, match="partial quad-ring prepared"):
         TTExperts.convert_weights(

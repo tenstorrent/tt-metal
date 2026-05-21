@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -113,6 +113,7 @@ void kernel_main() {
     constexpr uint32_t packet_header_cb_id = get_named_compile_time_arg_val("packet_header_cb_id");
     constexpr uint32_t num_token_parallel_cores = get_named_compile_time_arg_val("num_token_parallel_cores");
     constexpr uint32_t num_data_parallel_cores = get_named_compile_time_arg_val("num_data_parallel_cores");
+    constexpr bool use_init_semaphore = get_named_compile_time_arg_val("use_init_semaphore") == 1;
     constexpr uint32_t noc_x_start = get_named_compile_time_arg_val("noc_x_start");
     constexpr uint32_t noc_y_start = get_named_compile_time_arg_val("noc_y_start");
     constexpr uint32_t noc_x_end = get_named_compile_time_arg_val("noc_x_end");
@@ -122,7 +123,6 @@ void kernel_main() {
     constexpr uint32_t source_token_segment_buffer_size_bytes =
         get_named_compile_time_arg_val("source_token_segment_buffer_size_bytes");
     constexpr uint32_t source_block_size_bytes = get_named_compile_time_arg_val("source_expert_block_size_bytes");
-    constexpr uint32_t token_size_bytes = get_named_compile_time_arg_val("token_size_bytes");
     constexpr uint32_t dense_token_maps_stride_elm = get_named_compile_time_arg_val("dense_token_maps_stride_elm");
     constexpr uint32_t alignment = get_named_compile_time_arg_val("alignment");
     constexpr uint32_t num_devices = get_named_compile_time_arg_val("num_devices");
@@ -184,12 +184,12 @@ void kernel_main() {
         fabric_mux_channel_buffer_size_bytes,
         fabric_mux_status_address>(directions, fabric_connections, rt_arg_count);
 
-    const auto output_addrgen = TensorAccessor(output_ta_args, output_base_addr, token_size_bytes);
+    const auto output_addrgen = TensorAccessor(output_ta_args, output_base_addr);
 
     volatile PACKET_HEADER_TYPE* packet_headers[3];
     for (uint8_t i = 0; i < 3; ++i) {
         cb_reserve_back(packet_header_cb_id, 1);
-        const uint32_t packet_header_addr = get_read_ptr(packet_header_cb_id);
+        const uint32_t packet_header_addr = get_write_ptr(packet_header_cb_id);
         packet_headers[i] = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_addr);
         cb_push_back(packet_header_cb_id, 1);
     }
@@ -199,7 +199,7 @@ void kernel_main() {
         directions, fabric_connections, rt_arg_count);
 
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_addr);
-    if (is_init_sync_core) {
+    if (is_init_sync_core && use_init_semaphore) {
         send_init_semaphore_to_configured_targets<
             linearized_mesh_coord,
             topology,
@@ -224,7 +224,7 @@ void kernel_main() {
     cb_pop_front(token_counts_cb_id, 1);
 
     cb_reserve_back(data_cb_id, 1);
-    const uint32_t src_data_l1_base_addr = get_read_ptr(data_cb_id);
+    const uint32_t src_data_l1_base_addr = get_write_ptr(data_cb_id);
 
     cb_wait_front(dense_token_maps_cb_id, num_local_experts);
     const uint32_t dense_token_maps_l1_addr = get_write_ptr(dense_token_maps_cb_id);
@@ -234,24 +234,26 @@ void kernel_main() {
     const uint32_t token_activations_l1_addr = get_write_ptr(token_activations_cb_id);
     auto* token_activations_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(token_activations_l1_addr);
 
-    auto* init_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_semaphore_addr);
-    if (is_init_sync_core) {
-        noc_semaphore_wait(init_semaphore_ptr, replicate_group_devices - 1);
-        // swap start/end coordinates because this kernel is using NOC1
-        const uint64_t semaphore_mc_addr =
-            get_noc_multicast_addr(noc_x_end, noc_y_end, noc_x_start, noc_y_start, init_semaphore_addr, /*noc=*/1);
-        noc_semaphore_set_multicast(
-            init_semaphore_addr,
-            semaphore_mc_addr,
-            num_token_parallel_cores * num_data_parallel_cores - 1,
-            /*linked=*/false,
-            /*noc=*/1);
-        noc_async_writes_flushed(/*noc=*/1);
+    if constexpr (use_init_semaphore) {
+        auto* init_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_semaphore_addr);
+        if (is_init_sync_core) {
+            noc_semaphore_wait(init_semaphore_ptr, replicate_group_devices - 1);
+            // swap start/end coordinates because this kernel is using NOC1
+            const uint64_t semaphore_mc_addr =
+                get_noc_multicast_addr(noc_x_end, noc_y_end, noc_x_start, noc_y_start, init_semaphore_addr, /*noc=*/1);
+            noc_semaphore_set_multicast(
+                init_semaphore_addr,
+                semaphore_mc_addr,
+                num_token_parallel_cores * num_data_parallel_cores - 1,
+                /*linked=*/false,
+                /*noc=*/1);
+            noc_async_writes_flushed(/*noc=*/1);
 
-    } else {
-        noc_semaphore_wait(init_semaphore_ptr, replicate_group_devices - 1);
+        } else {
+            noc_semaphore_wait(init_semaphore_ptr, replicate_group_devices - 1);
+        }
+        noc_semaphore_set(init_semaphore_ptr, 0);
     }
-    noc_semaphore_set(init_semaphore_ptr, 0);
 
     auto* compute_sync_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(compute_sync_semaphore_addr);
     uint32_t compute_sync_semaphore_val = compute_cores_per_combine_core;
@@ -260,6 +262,7 @@ void kernel_main() {
             token_activations_l1_ptr + token_activation_offsets[e] * activations_stride_elm;
 
         noc_semaphore_wait(compute_sync_semaphore_ptr, compute_sync_semaphore_val);
+
         for (uint32_t dt = 0; dt < token_split_counts[e]; ++dt) {
             const uint32_t st = dense_token_maps_l1_ptr
                 [(e * (global_num_tokens + 1) + token_split_offsets[e] + dt) * dense_token_maps_stride_elm];

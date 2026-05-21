@@ -503,7 +503,8 @@ class MoEComputeConfig(OpConfigBase):
     """Common parameters for a ttnn.moe_compute op"""
 
     output_height_shard_dim: int
-    output_width_shard_dim: int
+    intermediate_size: int
+    has_bias: bool
     mux_core_range_set: ttnn.CoreRangeSet
     cluster_axis: int | None = None
     topology: ttnn.Topology = ttnn.Topology.Ring

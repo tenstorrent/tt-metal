@@ -285,7 +285,8 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
         )
         config["quad_ring_moe_compute"] = MoEComputeConfig(
             output_height_shard_dim=4,
-            output_width_shard_dim=4,
+            intermediate_size=hf_config.moe_intermediate_size,
+            has_bias=False,
             cluster_axis=0,
             mux_core_range_set=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(4, 7))}),
         )
