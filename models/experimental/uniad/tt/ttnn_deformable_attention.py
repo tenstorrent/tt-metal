@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import torch
 import ttnn
 
 from models.experimental.uniad.tt.ttnn_utils import multi_scale_deformable_attn_pytorch
@@ -95,20 +96,24 @@ class TtCustomMSDeformableAttention:
         )
 
         if reference_points.shape[-1] == 2:
-            offset_normalizer = ttnn.stack([spatial_shapes[..., 1], spatial_shapes[..., 0]], dim=-1)
+            # `ttnn.divide(sampling_offsets, [w, h])` on bf16 loses precision
+            # against the host-fp32 reference. Precompute reciprocal
+            # `[1/w, 1/h]` in fp32 and multiply.
+            _shapes_torch = ttnn.to_torch(spatial_shapes).to(torch.float32)
+            _recip = torch.stack([1.0 / _shapes_torch[..., 1], 1.0 / _shapes_torch[..., 0]], dim=-1)
+            _recip = _recip.reshape(1, 1, 1, _recip.shape[0], 1, _recip.shape[1])
+            offset_normalizer_xy_recip = ttnn.from_torch(
+                _recip, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+            )
             bs_r, num_query, num_levels, _ = reference_points.shape
             reference_xy = ttnn.reshape(reference_points, (bs_r, num_query, 1, num_levels, 1, 2))
-            offset_normalizer_xy = ttnn.reshape(
-                offset_normalizer, (1, 1, 1, offset_normalizer.shape[0], 1, offset_normalizer.shape[1])
-            )
             sampling_offsets = ttnn.to_layout(sampling_offsets, ttnn.TILE_LAYOUT)
-            offset_normalizer_xy = ttnn.to_layout(offset_normalizer_xy, ttnn.TILE_LAYOUT)
             sampling_offsets = ttnn.squeeze(sampling_offsets, 0)
             sampling_offsets = ttnn.squeeze(sampling_offsets, 2)
-            offset_normalizer_xy = ttnn.squeeze(offset_normalizer_xy, 0)
-            offset_normalizer_xy = ttnn.squeeze(offset_normalizer_xy, 0)
+            offset_normalizer_xy_recip = ttnn.squeeze(offset_normalizer_xy_recip, 0)
+            offset_normalizer_xy_recip = ttnn.squeeze(offset_normalizer_xy_recip, 0)
 
-            sampling_locations = ttnn.divide(sampling_offsets, offset_normalizer_xy)
+            sampling_locations = ttnn.multiply(sampling_offsets, offset_normalizer_xy_recip)
 
             sampling_locations = ttnn.unsqueeze(sampling_locations, 2)
             sampling_locations = ttnn.unsqueeze(sampling_locations, 0)

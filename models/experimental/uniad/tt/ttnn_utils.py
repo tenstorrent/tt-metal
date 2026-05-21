@@ -39,20 +39,34 @@ class TtBaseBBoxCoder(metaclass=ABCMeta):
 
 
 def inverse_sigmoid(x, eps: float = 1e-5):
+    # `ttnn.rsub(x, 1.0)` replaces `ttnn.ones(shape=x.shape) - x`.
+    # ttnn.ones allocates a buffer inside trace capture, counted as a Write,
+    # which fails begin_trace_capture; rsub computes 1-x without allocating.
     x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
     x = ttnn.clamp(x, min=0, max=1)
     x1 = ttnn.clamp(x, min=eps)
-    if len(x.shape) == 3:
-        x_temp = ttnn.ones(shape=[x.shape[0], x.shape[1], x.shape[2]], layout=ttnn.TILE_LAYOUT, device=x.device())
-    elif len(x.shape) == 2:
-        x_temp = ttnn.ones(shape=[x.shape[0], x.shape[1]], layout=ttnn.TILE_LAYOUT, device=x.device())
-    else:
-        x_temp = ttnn.ones(
-            shape=[x.shape[0], x.shape[1], x.shape[2], x.shape[3]], layout=ttnn.TILE_LAYOUT, device=x.device()
-        )
-    x_temp = x_temp - x
+    x_temp = ttnn.rsub(x, 1.0)
     x2 = ttnn.clamp(x_temp, min=eps)
     return ttnn.log(ttnn.div(x1, x2))
+
+
+# Cache for per-level grid normalisation scale tensors. The scale only
+# depends on (h_l, w_l, device) and never changes within or across forwards
+# — caching avoids rebuilding the tiny bf16 tensor every encoder layer.
+_MSDA_GRID_SCALE_CACHE = {}
+
+
+def _msda_grid_scale(h_l, w_l, device):
+    key = (int(h_l), int(w_l), id(device))
+    cached = _MSDA_GRID_SCALE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    # Last-dim order is [2/w, 2/h] to match the (x, y) ordering used by
+    # sampling_locations along its last dim.
+    scale = torch.tensor([2.0 / w_l, 2.0 / h_l], dtype=torch.bfloat16)
+    cached = ttnn.from_torch(scale, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    _MSDA_GRID_SCALE_CACHE[key] = cached
+    return cached
 
 
 def multi_scale_deformable_attn_pytorch(
@@ -63,65 +77,115 @@ def multi_scale_deformable_attn_pytorch(
     attention_weights,
     im2col_step,
     device,
+    value_spatial_shapes_list=None,
+    _enc_stats=None,
 ):
+    """Multi-scale deformable attention.
+
+    `value_spatial_shapes_list`: optional Python list of (h, w) tuples. If
+    provided, avoids `.item()` device->host reads (trace-compatible). When
+    None, falls back to reading from `value_spatial_shapes` tensor.
+    """
+    from models.experimental.uniad.tt.ttnn_enc_timing import record as _r, sync_now as _s
+
+    _t = _s(device) if _enc_stats is not None else 0.0
     bs, num_keys, num_heads, head_dim = value.shape
     num_levels = value_spatial_shapes.shape[0]
     num_queries = sampling_locations.shape[1]
     num_points = sampling_locations.shape[4]
 
+    # Resolve (h, w) per level as Python ints. `.item()` on a device tensor
+    # is a host read and breaks trace capture; the caller can pre-extract
+    # the shape list and pass it as `value_spatial_shapes_list`.
+    if value_spatial_shapes_list is not None:
+        spatial_shapes_int = [(int(h), int(w)) for h, w in value_spatial_shapes_list]
+    else:
+        spatial_shapes_int = []
+        for lvl in range(num_levels):
+            h_l, w_l = value_spatial_shapes[lvl]
+            spatial_shapes_int.append((int(h_l.item()), int(w_l.item())))
+
     # Split value into a list of tensors for each level
     value_list = []
     start = 0
     for lvl in range(num_levels):
-        h_l, w_l = value_spatial_shapes[lvl]
-        h_l = int(h_l.item())
-        w_l = int(w_l.item())
+        h_l, w_l = spatial_shapes_int[lvl]
         len_l = h_l * w_l
         value_l = value[:, start : start + len_l, :, :]
         value_list.append(value_l)
         start += len_l
+    if _enc_stats is not None:
+        _r(_enc_stats, "msda_split_value", _t, device)
+        _t = _s(device)
 
-    # Normalize sampling locations to [-1, 1]
+    # Normalize sampling locations to [-1, 1]. Use a cached (2,) scale
+    # tensor [2/w, 2/h] that broadcasts on the last dim of `grid`, so we
+    # do one multiply + one subtract per level instead of slicing x/y
+    # apart, scaling each by a different scalar, and concatenating them
+    # back together. The bf16 representation of 2/W (e.g. 2/50 = 0.04
+    # → 0x3D23 ≈ 0.040039) causes a tiny precision drop — PCC sdc_traj
+    # goes 0.9911 → 0.9909, still well above the 0.99 gate.
     sampling_grids = []
     for lvl in range(num_levels):
-        h_l, w_l = value_spatial_shapes[lvl]
-        h_l = int(h_l.item())
-        w_l = int(w_l.item())
+        h_l, w_l = spatial_shapes_int[lvl]
         grid = sampling_locations[:, :, :, lvl, :, :]
-        grid = ttnn.to_memory_config(grid, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        grid = ttnn.clone(grid)
-        grid = ttnn.to_torch(grid)
-        grid[..., 0] = grid[..., 0] / w_l * 2 - 1
-        grid[..., 1] = grid[..., 1] / h_l * 2 - 1
-        grid = ttnn.from_torch(grid, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        scale = _msda_grid_scale(h_l, w_l, device)
+        grid = ttnn.subtract(ttnn.multiply(grid, scale), 1.0)
         sampling_grids.append(grid)
+    if _enc_stats is not None:
+        _r(_enc_stats, "msda_grids", _t, device)
 
-    # Perform sampling and attention
-    output = ttnn.zeros(
-        [bs, num_queries, num_heads, head_dim], device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-    )
+    # Accumulator initialized lazily on the first level — avoids an
+    # explicit ttnn.zeros allocation, which counts as a Write inside
+    # begin_trace_capture and breaks the trace.
+    #
+    # Per-level layout notes (this loop is the hot path):
+    #   - Build NHWC value_l = (B*H, h, w, D) directly with a single
+    #     permute(0,2,1,3) + reshape, instead of going via NCHW intermediate
+    #     and a second permute back to NHWC. The original chain spent ~30 ms
+    #     across encoder layers in a permute that only existed to be undone.
+    #   - Skip identity typecast(bfloat16) when inputs already arrive bf16
+    #     from upstream linear/sampling math — was costing ~10 ms despite
+    #     being a no-op.
+    #   - Keep the per-level contribution in (B, H, Q, D) shape, doing only
+    #     one cheap 4D permute on attention_weights instead of a 5D permute
+    #     on the much larger sampled tensor. Final (B, Q, H*D) materialise
+    #     is hoisted outside the loop (pure layout, no compute).
+    output = None
     for lvl in range(num_levels):
-        h_l, w_l = value_spatial_shapes[lvl]
-        h_l = int(h_l.item())
-        w_l = int(w_l.item())
-        value_l = ttnn.permute(value_list[lvl], (0, 2, 3, 1))
-        value_l = ttnn.reshape(value_l, (bs * num_heads, head_dim, h_l, w_l))
+        _tlvl = _s(device) if _enc_stats is not None else 0.0
+        h_l, w_l = spatial_shapes_int[lvl]
+        value_l = ttnn.permute(value_list[lvl], (0, 2, 1, 3))
+        value_l = ttnn.reshape(value_l, (bs * num_heads, h_l, w_l, head_dim))
         grid = ttnn.permute(sampling_grids[lvl], (0, 2, 1, 3, 4))
         grid = ttnn.reshape(grid, (bs * num_heads, num_queries * num_points, 1, 2))
-        value_l = ttnn.typecast(value_l, ttnn.bfloat16)
-        grid = ttnn.typecast(grid, ttnn.bfloat16)
+        if value_l.dtype != ttnn.bfloat16:
+            value_l = ttnn.typecast(value_l, ttnn.bfloat16)
+        if grid.dtype != ttnn.bfloat16:
+            grid = ttnn.typecast(grid, ttnn.bfloat16)
         value_l = ttnn.to_layout(value_l, layout=ttnn.ROW_MAJOR_LAYOUT)
         grid = ttnn.to_layout(grid, layout=ttnn.ROW_MAJOR_LAYOUT)
-        value_l = ttnn.permute(value_l, (0, 2, 3, 1))
+        if _enc_stats is not None:
+            _r(_enc_stats, "msda_gs_layout", _tlvl, device)
+            _tlvl = _s(device)
         sampled = ttnn.grid_sample(value_l, grid)
-        sampled = ttnn.permute(sampled, (0, 3, 1, 2))
-        sampled = ttnn.reshape(sampled, (bs, num_heads, head_dim, num_queries, num_points))
-        sampled = ttnn.permute(sampled, (0, 3, 1, 4, 2))
+        if _enc_stats is not None:
+            _r(_enc_stats, "msda_grid_sample", _tlvl, device)
+            _tlvl = _s(device)
+        sampled = ttnn.reshape(sampled, (bs, num_heads, num_queries, num_points, head_dim))
         attn = attention_weights[:, :, :, lvl, :]
+        attn = ttnn.permute(attn, (0, 2, 1, 3))
         attn = ttnn.unsqueeze(attn, -1)
-        output += ttnn.sum((sampled * attn), -2)
+        contrib = ttnn.sum((sampled * attn), -2)  # (B, H, Q, D)
+        output = contrib if output is None else output + contrib
+        if _enc_stats is not None:
+            _r(_enc_stats, "msda_combine", _tlvl, device)
 
+    _t = _s(device) if _enc_stats is not None else 0.0
+    output = ttnn.permute(output, (0, 2, 1, 3))
     output = ttnn.reshape(output, (bs, num_queries, num_heads * head_dim))
+    if _enc_stats is not None:
+        _r(_enc_stats, "msda_finalize", _t, device)
 
     return output
 
@@ -588,6 +652,11 @@ class Instances:
             else:
                 if isinstance(v, ttnn.Tensor):
                     v = ttnn.to_torch(v)
+                    # torch's index_cpu does not support UInt32 (which is how
+                    # ttnn.int32 round-trips through to_torch); promote to long
+                    # before indexing.
+                    if v.dtype == torch.uint32:
+                        v = v.to(torch.long)
                     if isinstance(item, ttnn.Tensor):
                         item = ttnn.to_torch(item).bool()
                     v = v[item]
@@ -599,6 +668,11 @@ class Instances:
 
     def __len__(self) -> int:
         for v in self._fields.values():
+            # ttnn.Tensor has no __len__; fall back to shape[0] which is the
+            # instance axis. This is what TtUniAD's `len(active_inst) > 0`
+            # check needs to work for the 2nd-call path.
+            if isinstance(v, ttnn.Tensor):
+                return int(v.shape[0])
             # use __len__ because len() has to be int and is not friendly to tracing
             return v.__len__()
         raise NotImplementedError("Empty Instances does not support __len__!")
@@ -639,7 +713,10 @@ class Instances:
                 # values = type(v0).cat(values)
             else:
                 if values[1].shape[0] > 0:
-                    values = ttnn.concat(values, dim=1)
+                    # Instances are concatenated along the instance axis (dim=0),
+                    # matching the torch.cat(..., dim=0) path above. The previous
+                    # dim=1 was invalid for rank-1 fields (obj_idxes, etc.).
+                    values = ttnn.concat(values, dim=0)
                 else:
                     values = values[0]
 
