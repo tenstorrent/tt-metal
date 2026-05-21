@@ -185,6 +185,12 @@ class TtDeformConv2dV2:
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        # If H_in == W_in (square FPN levels), scale_y == scale_x == 2/H_in is a uniform scalar.
+        # Cache it so the runtime path can use ttnn.addalpha (1 fused op instead of multiply+add).
+        if H_in == W_in:
+            self._scale_alpha = 2.0 / H_in
+        else:
+            self._scale_alpha = None
 
         # Prepare matmul weight in (K*C_in, C_out) layout for the final 1x1 mul.
         # matmul: (1, H*W, K*C_in) @ (K*C_in, C_out) -> (1, H*W, C_out)
@@ -237,9 +243,15 @@ class TtDeformConv2dV2:
             offset_nhwc = ttnn.to_layout(offset_nhwc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # 1. grid = base_grid + offset * scale  (interleaved in self.offset_layout order)
-        off_scaled = ttnn.multiply(offset_nhwc, self.scale, memory_config=ttnn.L1_MEMORY_CONFIG)
-        grid = ttnn.add(self.base_grid, off_scaled, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(off_scaled)
+        # Square FPN levels: scale_y == scale_x == 2/H_in is a SCALAR alpha, so ttnn.addalpha
+        # (lhs + alpha*rhs in one kernel) replaces the multiply+add pair. Saves 1 op per DCN call.
+        if self._scale_alpha is not None:
+            grid = ttnn.addalpha(self.base_grid, offset_nhwc, self._scale_alpha, memory_config=ttnn.L1_MEMORY_CONFIG)
+        else:
+            # Non-square fallback (kept for correctness; not exercised in current ATSS DyHead).
+            off_scaled = ttnn.multiply(offset_nhwc, self.scale, memory_config=ttnn.L1_MEMORY_CONFIG)
+            grid = ttnn.add(self.base_grid, off_scaled, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(off_scaled)
 
         if self.offset_layout == "yx":
             # 2. Swap interleaved (y_k, x_k) -> (x_k, y_k) for grid_sample.
