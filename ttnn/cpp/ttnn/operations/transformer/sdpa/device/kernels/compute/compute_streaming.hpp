@@ -797,13 +797,13 @@ static void sdpa_inner_loop_step(
                 if constexpr (!uniform_pack_format) {
                     pack_reconfig_data_format(cb_qkt_im);
                 }
+                if constexpr (!uniform_unpack_format) {
+                    reconfig_data_format(cb_qkt_im, cb_kt_in, cb_qkt_im, cb_q_in);
+                }
                 mm_no_mop_reinit_short(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
             }
             {
                 MaybeDeviceZoneScopedN(profiling_enabled, "Q@KT MM+Pack");
-                if constexpr (!uniform_unpack_format) {
-                    reconfig_data_format(cb_qkt_im, cb_kt_in, cb_qkt_im, cb_q_in);
-                }
                 // The last subblock posts the semaphore — one post per reduce.
                 bool kt_trigger_reduce = reduce_trigger && (kt_subblock == kt_num_full_subblocks - 1);
                 blocked_matmul_and_pack<true, KT_stride, KT_stride>(
