@@ -30,12 +30,33 @@ from ...utils.conv3d import (
     get_conv3d_config,
 )
 from ...utils.substate import pop_substate, rename_substate
-from ...utils.tensor import local_device_to_torch
+from ...utils.tensor import local_device_to_torch, typed_tensor
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
 CACHE_T = 2
+
+
+def _get_w_mask(cache, x_BTHWC, logical_w, parallel_config, mesh_device, dtype):
+    """
+    Return a cached mask that zeros width-padding columns beyond logical_w.
+    """
+    sharded_w = x_BTHWC.shape[3]
+    key = (sharded_w, logical_w)
+    if key not in cache:
+        padded_w = sharded_w * parallel_config.width_parallel.factor
+        mask = torch.ones(1, 1, 1, padded_w, 1)
+        mask[:, :, :, logical_w:, :] = 0.0
+        cache[key] = typed_tensor(
+            mask,
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_axis=parallel_config.width_parallel.mesh_axis,
+            shard_dim=3,
+            dtype=dtype,
+        )
+    return cache[key]
 
 
 def conv3d_to_linear_weight(state):
@@ -338,6 +359,8 @@ class WanCausalConv3d(Module):
         )
         self.bias = Parameter(total_shape=[1, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
 
+        self._w_mask_cache: dict[tuple, ttnn.Tensor] = {}
+
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "weight" in state:
             weight_tt = ttnn.from_torch(state["weight"], dtype=self.dtype, pad_value=0)
@@ -374,9 +397,21 @@ class WanCausalConv3d(Module):
         # while still draining the CB, so the 2-phase pipeline (H then W) correctly propagates zeros.
         # This is valid for linear H topology: the last device (which has padded rows) is is_last_device
         # and never sends those rows via H fabric; phase-2 W exchange reads from the already-zeroed output.
-        # NOTE: logical_w is tracked but not passed to neighbor_pad (no C++ kernel support yet).
+        # NOTE: logical_w is not yet fused into neighbor_pad (no C++ kernel support). Pre-conv mul-mask
+        # workaround zeros width-padding columns before the halo exchange.
         h_pad_needed = self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1
         w_pad_needed = self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
+
+        # Width pre-conv masking: zero padding columns so neighbor_pad doesn't propagate non-zero padding.
+        if (
+            logical_w > 0
+            and self.parallel_config.width_parallel.factor > 1
+            and x_BTHWC.shape[3] * self.parallel_config.width_parallel.factor > logical_w
+        ):
+            x_BTHWC = ttnn.mul(
+                x_BTHWC,
+                _get_w_mask(self._w_mask_cache, x_BTHWC, logical_w, self.parallel_config, self.mesh_device, self.dtype),
+            )
 
         # T-front causal zero padding: fuse into neighbor_pad when h_pad_needed (avoids a
         # separate reshape+pad+reshape and an intermediate tensor allocation).
@@ -769,6 +804,8 @@ class WanConv2d(Module):
             dtype=dtype,
         )
 
+        self._w_mask_cache: dict[tuple, ttnn.Tensor] = {}
+
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "weight" in state:
             weight_tt = ttnn.from_torch(state["weight"].unsqueeze(2), dtype=self.dtype, pad_value=0)
@@ -784,9 +821,20 @@ class WanConv2d(Module):
 
         # Halo exchange (height and/or width padding)
         # Masking fused into neighbor_pad via logical_h (see WanCausalConv3d.forward for details).
-        # NOTE: logical_w is tracked but not passed to neighbor_pad (no C++ kernel support yet).
+        # NOTE: logical_w is not yet fused into neighbor_pad. Pre-conv mul-mask workaround zeros width-padding columns.
         h_pad_needed = self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1
         w_pad_needed = self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
+
+        # Width pre-conv masking: zero padding columns so neighbor_pad doesn't propagate non-zero padding.
+        if (
+            logical_w > 0
+            and self.parallel_config.width_parallel.factor > 1
+            and x_BTHWC.shape[3] * self.parallel_config.width_parallel.factor > logical_w
+        ):
+            x_BTHWC = ttnn.mul(
+                x_BTHWC,
+                _get_w_mask(self._w_mask_cache, x_BTHWC, logical_w, self.parallel_config, self.mesh_device, self.dtype),
+            )
 
         if h_pad_needed or w_pad_needed:
             dims, pad_left, pad_right = [], [], []
