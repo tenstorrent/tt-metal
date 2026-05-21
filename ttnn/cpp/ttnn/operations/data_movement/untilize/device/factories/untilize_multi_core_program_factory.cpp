@@ -143,24 +143,14 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
 
     // Reader compile-time args and kernel
     KernelHandle unary_reader_kernel_id;
-    if (input_is_dram_sharded) {
+    if (use_block_reader) {
+        // Block reader: copies from L1 shard into double-buffered CB one block at a time
+        // or reads from DRAM shards via TensorAccessor.
         std::vector<uint32_t> reader_compile_time_args = {
             (uint32_t)src0_cb_index,
             (uint32_t)num_tiles_per_input_block,
         };
         TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
-        unary_reader_kernel_id = CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
-            "reader_unary_dram_sharded_blocks.cpp",
-            compute_core_range,
-            ReaderDataMovementConfig(reader_compile_time_args));
-    } else if (use_block_reader) {
-        // Block reader: copies from L1 shard into double-buffered CB one block at a time
-        std::vector<uint32_t> reader_compile_time_args = {
-            (uint32_t)src0_cb_index,
-            (uint32_t)num_tiles_per_input_block,
-        };
         unary_reader_kernel_id = CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
@@ -317,16 +307,14 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
         // Reader run-time args
         uint32_t num_tiles_to_read = num_tiles_per_input_block * num_input_blocks_to_process;
         std::vector<uint32_t> reader_run_time_args;
-        if (input_is_dram_sharded) {
-            reader_run_time_args = {
-                src0_buffer->address(),
-                i,
-                num_input_blocks_to_process,
-            };
-        } else if (use_block_reader) {
+        if (use_block_reader) {
+            uint32_t start_page =
+                height_wise_input_block_start_index * num_tiles_per_input_block +
+                width_wise_input_block_index * (num_input_blocks_per_full_core * num_tiles_per_input_block);
             reader_run_time_args = {
                 src0_buffer->address(),
                 num_input_blocks_to_process,
+                start_page,
             };
         } else if (input_is_sharded) {
             reader_run_time_args = {num_tiles_to_read};
