@@ -8,9 +8,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import fnmatch
 import re
 import shlex
-import subprocess
 import types
 import urllib.error
 import urllib.parse
@@ -72,8 +72,6 @@ DEFAULT_SYSTEM_PROMPT = (
 )
 DEFAULT_AGENT_RULES = """
 You have these tools available:
-- terminal(command)
-- bash(command)
 - read_file(path, offset=1, limit=200)
 - write_file(path, content, append=false)
 - search_replace(path, search, replace, max_replacements=0)
@@ -84,7 +82,6 @@ You have these tools available:
 - ask_user_question(question)
 - load_skill(path)
 - inspect_codebase(path=".", max_entries=300)
-- delegate_task(command, description="")
 
 Tool-call format (only this content when calling a tool):
 <tool_call>
@@ -92,7 +89,7 @@ Tool-call format (only this content when calling a tool):
 </tool_call>
 
 When you receive <tool_result>, use it and continue.
-Prefer read_file/write_file/search_replace/grep for repository tasks over generic terminal commands.
+Use read_file/write_file/search_replace/grep/inspect_codebase for repository tasks (shell/terminal tools are not available).
 """
 
 
@@ -145,42 +142,14 @@ def _resolve_workspace_path(workspace_root: str, raw_path: str) -> Path:
     return candidate
 
 
-def run_shell(command: str | List[str], workspace_root: str, timeout_sec: int) -> Dict[str, Any]:
-    if isinstance(command, str):
-        argv = shlex.split(command)
-    else:
-        argv = list(command)
-    if not argv:
-        return {"ok": False, "exit_code": None, "output": "", "error": "empty command"}
-    try:
-        completed = subprocess.run(
-            argv,
-            cwd=workspace_root,
-            capture_output=True,
-            text=True,
-            timeout=timeout_sec,
-            check=False,
-        )
-        output = (
-            (completed.stdout or "")
-            + ("\n" if completed.stdout and completed.stderr else "")
-            + (completed.stderr or "")
-        ).strip()
-        return {
-            "ok": completed.returncode == 0,
-            "exit_code": completed.returncode,
-            "output": _limit_text(output),
-        }
-    except subprocess.TimeoutExpired as exc:
-        partial = ((exc.stdout or "") + ("\n" if exc.stdout and exc.stderr else "") + (exc.stderr or "")).strip()
-        return {
-            "ok": False,
-            "exit_code": None,
-            "output": _limit_text(partial),
-            "error": f"Command timed out after {timeout_sec} seconds.",
-        }
-    except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "exit_code": None, "output": "", "error": str(exc)}
+_SHELL_DISABLED_MSG = (
+    "Shell execution is disabled in this demo for security. "
+    "Use read_file, write_file, search_replace, grep, or inspect_codebase instead."
+)
+
+
+def _tool_shell_disabled() -> Dict[str, Any]:
+    return {"ok": False, "exit_code": None, "output": "", "error": _SHELL_DISABLED_MSG}
 
 
 def tool_read_file(args: Dict[str, Any], config: ChatConfig) -> Dict[str, Any]:
@@ -233,16 +202,44 @@ def tool_search_replace(args: Dict[str, Any], config: ChatConfig) -> Dict[str, A
 def tool_grep(args: Dict[str, Any], config: ChatConfig) -> Dict[str, Any]:
     pattern = str(args.get("pattern", ""))
     rel_path = str(args.get("path", "."))
-    glob = str(args.get("glob", "*"))
+    glob_pattern = str(args.get("glob", "*"))
     case_insensitive = bool(args.get("case_insensitive", False))
     max_results = int(args.get("max_results", 200))
     if not pattern:
         return {"ok": False, "error": "pattern is required"}
-    target = _resolve_workspace_path(config.workspace_root, rel_path)
-    cmd = ["rg", "-n", "--glob", glob, "--max-count", str(max_results), pattern, str(target)]
-    if case_insensitive:
-        cmd.insert(1, "-i")
-    return run_shell(cmd, config.workspace_root, config.command_timeout_sec)
+    try:
+        flags = re.IGNORECASE if case_insensitive else 0
+        regex = re.compile(pattern, flags)
+    except re.error as exc:
+        return {"ok": False, "error": f"invalid pattern: {exc}"}
+    try:
+        root = Path(config.workspace_root).resolve()
+        target = _resolve_workspace_path(config.workspace_root, rel_path)
+        paths = [target] if target.is_file() else sorted(p for p in target.rglob("*") if p.is_file())
+        hits: List[str] = []
+        for path in paths:
+            if ".git" in path.parts:
+                continue
+            try:
+                rel = path.relative_to(root)
+            except ValueError:
+                continue
+            if not fnmatch.fnmatch(str(rel), glob_pattern) and not fnmatch.fnmatch(path.name, glob_pattern):
+                continue
+            try:
+                lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            except OSError as exc:
+                continue
+            for lineno, line in enumerate(lines, 1):
+                if regex.search(line):
+                    hits.append(f"{path}:{lineno}:{line}")
+                    if len(hits) >= max_results:
+                        break
+            if len(hits) >= max_results:
+                break
+        return {"ok": True, "output": _limit_text("\n".join(hits))}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc)}
 
 
 def tool_web_fetch(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -365,9 +362,7 @@ def execute_tool_call(tool_call: Dict[str, Any], config: ChatConfig, state: Agen
         return {"ok": False, "error": "arguments must be an object"}
 
     if name in ("terminal", "bash"):
-        if "command" not in args:
-            return {"ok": False, "error": "command is required"}
-        return run_shell(str(args["command"]), config.workspace_root, config.command_timeout_sec)
+        return _tool_shell_disabled()
     if name == "read_file":
         return tool_read_file(args, config)
     if name == "write_file":
@@ -389,9 +384,7 @@ def execute_tool_call(tool_call: Dict[str, Any], config: ChatConfig, state: Agen
     if name == "inspect_codebase":
         return tool_inspect_codebase(args, config)
     if name == "delegate_task":
-        if "command" not in args:
-            return {"ok": False, "error": "command is required"}
-        result = run_shell(str(args["command"]), config.workspace_root, config.command_timeout_sec)
+        result = _tool_shell_disabled()
         result["description"] = str(args.get("description", ""))
         result["delegated"] = True
         return result
