@@ -176,22 +176,18 @@ def get_github_job_ids_to_tt_smi_versions(workflow_outputs_dir, workflow_run_id:
         github_job_id = int(filename)
         assert github_job_id > 0
 
-        workflow_attempt_from_file = workflow_attempt
-
         tt_smi_version = search_for_tt_smi_version_in_log_file_(log_file)
         if tt_smi_version:
             github_job_ids_to_tt_smi_versions[github_job_id] = tt_smi_version
 
         tt_smi_reset = search_for_tt_smi_reset_in_log_file_(log_file)
         for reset in tt_smi_reset:
-            reset["workflow_attempt"] = workflow_attempt_from_file
+            reset["workflow_attempt"] = workflow_attempt
         assert tt_smi_reset is not None, f"Parser returned None for {log_file}"
 
-        key = (workflow_attempt_from_file, github_job_id)
+        assert github_job_id not in github_job_ids_to_tt_smi_resets, f"Duplicate reset key detected: {github_job_id}"
 
-        assert key not in github_job_ids_to_tt_smi_resets, f"Duplicate reset key detected: {key}"
-
-        github_job_ids_to_tt_smi_resets[key] = tt_smi_reset
+        github_job_ids_to_tt_smi_resets[github_job_id] = tt_smi_reset
 
     return github_job_ids_to_tt_smi_versions, github_job_ids_to_tt_smi_resets
 

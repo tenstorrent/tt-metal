@@ -101,7 +101,7 @@ def create_cicd_json_for_data_analysis(
         raw_job.pop("steps", None)
         raw_job.pop("tt_smi_reset", None)
 
-        reset_data = github_job_id_to_smi_resets.get((workflow_attempt, github_job_id))
+        reset_data = github_job_id_to_smi_resets.get(github_job_id)
 
         if reset_data:
             for tt_smi_reset_attempt in reset_data:
@@ -117,20 +117,6 @@ def create_cicd_json_for_data_analysis(
             steps=steps,
         )
         jobs.append(job)
-
-    # Collect SMI reset data for all earlier workflow attempts.
-    # raw_jobs only contains jobs from the latest attempt (workflow_jobs.json is overwritten
-    # per attempt during log download). Log files for all attempts are downloaded, so
-    # github_job_id_to_smi_resets contains keys for every attempt. We iterate over those
-    # earlier-attempt keys here so their reset data is captured in the pipeline record.
-    for (attempt_num, job_id), reset_entries in github_job_id_to_smi_resets.items():
-        if attempt_num == workflow_attempt:
-            continue  # Already handled in the job loop above
-        for tt_smi_reset_attempt in reset_entries:
-            tt_smi_reset_attempt = dict(tt_smi_reset_attempt)
-            tt_smi_reset_attempt["github_job_id"] = job_id
-            tt_smi_reset_attempt["workflow_attempt"] = attempt_num
-            tt_smi_resets.append(TtSmiReset(**tt_smi_reset_attempt))
 
     pipeline = pydantic_models.Pipeline(
         **raw_pipeline,
