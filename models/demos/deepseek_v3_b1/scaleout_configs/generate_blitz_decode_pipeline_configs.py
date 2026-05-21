@@ -19,13 +19,13 @@ DEVICES_PER_SLICE = 8
 SLICES_PER_STAGE = {
     "4x2": 1,
     "4x4": 2,
-    "4x8": 4,
+    "8x4": 4,
 }
 
 ALLOWED_STAGE_SLICE_SPLITS = {
     "4x2": {(1,)},
     "4x4": {(2,), (1, 1)},
-    "4x8": {(4,)},
+    "8x4": {(4,)},
 }
 
 
@@ -138,7 +138,7 @@ def _validate_stage_contributions(stage_contributions, stage_size):
     same validation step:
       - 4x2 stages must resolve to [1]
       - 4x4 stages must resolve to [2] or [1, 1]
-      - 4x8 stages must resolve to [4]
+      - 8x4 stages must resolve to [4]
     """
     expected_slices_per_stage = SLICES_PER_STAGE[stage_size]
     allowed_slice_splits = ALLOWED_STAGE_SLICE_SPLITS[stage_size]

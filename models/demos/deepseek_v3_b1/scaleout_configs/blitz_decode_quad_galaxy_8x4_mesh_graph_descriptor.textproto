@@ -1,5 +1,5 @@
 # --- Meshes ---------------------------------------------------------------
-# Quad-galaxy 4x8 torus pipeline bring-up:
+# Quad-galaxy 8x4 torus pipeline bring-up:
 # - each mesh id is a single-host full-galaxy torus stage
 
 mesh_descriptors {

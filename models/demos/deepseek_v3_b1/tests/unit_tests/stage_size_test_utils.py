@@ -15,7 +15,7 @@ import ttnn
 class StageFamily(str, Enum):
     STAGE_4X2 = "4x2"
     STAGE_4X4 = "4x4"
-    STAGE_4X8 = "4x8"
+    STAGE_8X4 = "8x4"
 
 
 class EdgeTransport(str, Enum):
@@ -84,10 +84,10 @@ GENERIC_STAGE_SIZE_LOOPBACK_TOPOLOGY_CONFIGS = {
         initialize_loopback=True,
         fabric_router_max_payload_size=15232,
     ),
-    StageFamily.STAGE_4X8: PhysicalTopologyConfig(
-        name="generic-4x8-loopback",
-        stage_family=StageFamily.STAGE_4X8,
-        mesh_device_param=(4, 8),
+    StageFamily.STAGE_8X4: PhysicalTopologyConfig(
+        name="generic-8x4-loopback",
+        stage_family=StageFamily.STAGE_8X4,
+        mesh_device_param=(8, 4),
         fabric_config=ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
         initialize_loopback=True,
         fabric_router_max_payload_size=15232,
