@@ -145,8 +145,12 @@ pytest models/experimental/atss_swin_l_dyhead/tests/perf/test_atss_swin_l_dyhead
 # E2E single-device pipeline, 2 CQs + TRACE (matches what demo_slice_4dev.py runs per-device).
 pytest models/experimental/atss_swin_l_dyhead/tests/perf/test_atss_swin_l_dyhead_e2e_perf.py::test_atss_swinl_dyhead_perf_single_device_trace_2cq -v
 
-# E2E multi-device pipeline (1x4 mesh), 2 CQs, no trace.
+# E2E multi-device pipeline, 2 CQs, no trace.
 pytest models/experimental/atss_swin_l_dyhead/tests/perf/test_atss_swin_l_dyhead_e2e_perf.py::test_atss_swinl_dyhead_perf_multi_device_2cq -v
+
+# E2E multi-device pipeline, 2 CQs + TRACE (matches demo_slice_4dev.py end-to-end).
+# Reports per-iteration host roundtrip and total-mesh FPS (e.g. 32 inputs on Galaxy).
+pytest models/experimental/atss_swin_l_dyhead/tests/perf/test_atss_swin_l_dyhead_e2e_perf.py::test_atss_swinl_dyhead_perf_multi_device_trace_2cq -v
 ```
 
 **Trace note:** the slice demo (`demo_slice_4dev.py`) runs with **trace enabled by default**

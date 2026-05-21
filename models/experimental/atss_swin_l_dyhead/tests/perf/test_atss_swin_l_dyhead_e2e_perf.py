@@ -250,3 +250,37 @@ def test_atss_swinl_dyhead_perf_multi_device_2cq(
         expected_inference_throughput,
         num_command_queues=2,
     )
+
+
+@run_for_wormhole_b0()
+@pytest.mark.models_performance_bare_metal
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 32768, "num_command_queues": 2, "trace_region_size": 400000000}],
+    indirect=True,
+)
+@pytest.mark.parametrize("batch_size_per_device", (1,))
+@pytest.mark.parametrize(
+    "resolution, expected_inference_throughput",
+    [((640, 640), 20)],
+)
+def test_atss_swinl_dyhead_perf_multi_device_trace_2cq(
+    mesh_device,
+    batch_size_per_device,
+    model_location_generator,
+    resolution,
+    expected_inference_throughput,
+):
+    """End-to-end perf with TRACE + 2CQ on a 1x4 mesh. Matches what demo_slice_4dev.py
+    runs (4 tiles in parallel, one per device) — steady-state host roundtrip ~172 ms
+    -> ~23 tiles/s -> batch FPS ~5.8."""
+    run_perf_e2e_atss_swinl_dyhead(
+        mesh_device,
+        batch_size_per_device,
+        model_location_generator,
+        resolution,
+        expected_inference_throughput,
+        use_trace=True,
+        num_command_queues=2,
+    )
