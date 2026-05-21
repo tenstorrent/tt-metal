@@ -1738,7 +1738,9 @@ void sdpa_inner_loop(
         uint32_t causal_k_limit = 0;  // RING: K-chunk index beyond which all K is above the diagonal
         if constexpr (sdpa_type == STANDARD) {
             const uint32_t linear_q_chunk = local_q_start + (q_iter - iter_q_start);
-            uint32_t q_chunk = remap_q_index(linear_q_chunk, q_num_chunks, use_zigzag_balancing);
+            // Mod is a no-op when the input is per-head ([0, q_num_chunks)) and extracts the
+            // per-head q_chunk when it's a flat global index (global Q scheduling spans heads).
+            uint32_t q_chunk = remap_q_index(linear_q_chunk, q_num_chunks, use_zigzag_balancing) % q_num_chunks;
             // Get Q chunk
             if constexpr (is_chunked) {
                 q_chunk = chunked_q_chunk_offset + q_chunk;
@@ -2107,6 +2109,13 @@ void sdpa_inner_loop(
         if (q_per_core > 1 || is_last_ring_iter) {
             cb_pop_front(cb_q_in, q_chunk_tiles);
         }
+
+        // Under global Q scheduling the reader pushes one cb_attention_sink slot per Q iter,
+        // so we must drain matching slots inside this loop. Pre-PR the push/pop pair was
+        // 1:1 outside the loop; the new cadence is 1:1 per iter.
+        if constexpr (use_attention_sink) {
+            cb_pop_front(cb_attention_sink, Sq_chunk_t);
+        }
     }
 
     if constexpr (sdpa_type == RING) {
@@ -2116,10 +2125,6 @@ void sdpa_inner_loop(
             cb_pop_front(cb_k_in, k_chunk_tiles);
             cb_pop_front(cb_v_in, v_chunk_tiles);
         }
-    }
-
-    if constexpr (use_attention_sink) {
-        cb_pop_front(cb_attention_sink, Sq_chunk_t);
     }
 }
 

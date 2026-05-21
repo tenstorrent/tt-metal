@@ -4,7 +4,12 @@
 
 """Tests for orchestrator internals — diff filtering."""
 
-from bug_checker.orchestrator import _filter_diff_for_rule
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from bug_checker.github_client import PRInfo
+from bug_checker.orchestrator import BugCheckFailed, _filter_diff_for_rule, run_bug_check
 from bug_checker.rules import Rule
 
 
@@ -101,3 +106,42 @@ def test_single_file_diff():
 def test_empty_diff_returns_empty():
     rule = _rule(["foo/**"])
     assert _filter_diff_for_rule("", ["foo/bar.cpp"], rule) == ""
+
+
+@patch("bug_checker.orchestrator.post_pr_comment")
+@patch("bug_checker.orchestrator.LLMSession")
+@patch("bug_checker.orchestrator.select_rules")
+@patch("bug_checker.orchestrator.load_rules")
+def test_run_bug_check_fails_closed_when_llm_rule_errors(mock_load, mock_select, mock_llm_cls, mock_post):
+    rule = _rule(["foo/**"])
+    mock_load.return_value = [rule]
+    mock_select.return_value = [rule]
+
+    mock_session = MagicMock()
+    mock_session.analyze_rule.side_effect = RuntimeError("rate limited")
+    mock_llm_cls.side_effect = [MagicMock(), mock_session]
+
+    pr = PRInfo(
+        number=99,
+        title="Test PR",
+        base_sha="aaa",
+        head_sha="bbb",
+        diff=DIFF_TWO_FILES,
+        changed_files=["foo/bar.cpp", "baz/qux.cpp"],
+        labels=[],
+    )
+
+    with patch("bug_checker.orchestrator.print_failure") as mock_print_failure:
+        with pytest.raises(BugCheckFailed):
+            run_bug_check(pr, post_comments=True)
+
+    mock_print_failure.assert_called_once_with(
+        "Bug Checker failed because one or more LLM analyses did not complete",
+        ["test-rule"],
+    )
+
+    mock_post.assert_called_once()
+    body = mock_post.call_args[1]["body"]
+    assert "Bug Checker Failed" in body
+    assert "`test-rule`" in body
+    assert "exits non-zero" in body
