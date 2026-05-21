@@ -6,11 +6,21 @@
 
 from __future__ import annotations
 
+import os
+
 from .._ttnn import get_ttnn
 from .block import TtOobleckDecoderBlock, _strip_prefix
 from .conv1d import TtConv1d
 from .snake import TtSnake1d
 from .weight_utils import fused_oobleck_decoder_weights
+
+
+def _vae_trace_enabled() -> bool:
+    # conv2d_L1 internally calls ttnn::prim::move (kernel-binary write) inside the trace-capture
+    # window, which is forbidden.  The second call triggers a program-cache miss because the
+    # in_buf clone has a different device address, making the L1-shard move program hash differ
+    # from warmup.  Disable until the VAE conv path is made trace-compatible.
+    return os.environ.get("ACE_STEP_VAE_TRACE", "0") not in ("0", "false", "False")
 
 
 def _require_ttnn():
@@ -113,6 +123,42 @@ class TtOobleckDecoder:
             weights_dtype=self.weights_dtype,
         )
 
+        # Per-shape trace cache: (B, T, C) -> (trace_id, in_buf, out_buf).
+        # Populated on the 2nd call with a given shape (1st call is warmup so programs compile
+        # before capture); replayed on the 3rd+ call.  ``deallocate_activation`` is only triggered
+        # for L1 tensors (not DRAM), so the DRAM ``in_buf`` survives the trace intact.
+        self._trace_cache: dict = {}
+        self._shape_warmup: set = set()
+        self._trace_api: bool | None = None  # lazily checked
+
+    def _has_trace_api(self) -> bool:
+        if self._trace_api is None:
+            ttnn = self.ttnn
+            self._trace_api = all(
+                hasattr(ttnn, name)
+                for name in (
+                    "begin_trace_capture",
+                    "end_trace_capture",
+                    "execute_trace",
+                    "clone",
+                    "copy",
+                    "record_event",
+                    "wait_for_event",
+                )
+            )
+        return self._trace_api  # type: ignore[return-value]
+
+    def _forward(self, x):
+        """Core decode computation without normalization; used for both eager and traced paths."""
+        ttnn = self.ttnn
+        x = self.conv1(x)
+        for block in self.blocks:
+            x = block(x)
+        x = self.snake1(x)
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        x = self.conv2(x)
+        return x
+
     def __call__(self, x):
         """Decode latents to raw audio. Input: ``[B, T, C_in]`` row-major; output: ``[B, T_out, C_audio]``."""
         ttnn = self.ttnn
@@ -125,13 +171,34 @@ class TtOobleckDecoder:
         # Diffusion latents arrive as float32; typecast to bfloat16 for correct conv computation.
         if x.dtype != self.activation_dtype:
             x = ttnn.typecast(x, self.activation_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        x = self.conv1(x)
-        for block in self.blocks:
-            x = block(x)
-        x = self.snake1(x)
-        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-        x = self.conv2(x)
-        return x
+
+        if not (_vae_trace_enabled() and self._has_trace_api()):
+            return self._forward(x)
+
+        key = (int(x.shape[0]), int(x.shape[1]), int(x.shape[2]))
+
+        cached = self._trace_cache.get(key)
+        if cached is not None:
+            # Replay: copy new latent data into the persistent input buffer, then replay trace.
+            tid, in_buf, out_buf = cached
+            ttnn.copy(x, in_buf)
+            write_event = ttnn.record_event(self.device, 1)
+            ttnn.wait_for_event(0, write_event)
+            ttnn.execute_trace(self.device, tid, cq_id=0, blocking=True)
+            return out_buf
+
+        if key not in self._shape_warmup:
+            # First call with this shape: run eagerly so all programs compile before capture.
+            self._shape_warmup.add(key)
+            return self._forward(x)
+
+        # Second call with this shape: capture trace against a persistent input buffer.
+        in_buf = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=self.activation_dtype)
+        tid = ttnn.begin_trace_capture(self.device, cq_id=0)
+        out_buf = self._forward(in_buf)
+        ttnn.end_trace_capture(self.device, tid, cq_id=0)
+        self._trace_cache[key] = (tid, in_buf, out_buf)
+        return out_buf
 
     def forward(self, x):
         return self(x)

@@ -205,9 +205,25 @@ def ace_step_init_hifi2_linear_compute_kernel_config(device: Any):
     )
 
 
+def ace_step_init_hifi4_linear_compute_kernel_config(device: Any):
+    """HiFi4 linear config for FLOP-bound projections (condition encoder small-seq linears)."""
+    import ttnn
+
+    init_ck = getattr(ttnn, "init_device_compute_kernel_config", None)
+    if not callable(init_ck):
+        return None
+    return init_ck(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+
+
 def ace_step_init_dit_linear_compute_kernel_config(device: Any):
-    """Alias for :func:`ace_step_init_hifi2_linear_compute_kernel_config`."""
-    return ace_step_init_hifi2_linear_compute_kernel_config(device)
+    """HiFi4 linear config for DiT attention and MLP projections (DRAM-bound at seq=256)."""
+    return ace_step_init_hifi4_linear_compute_kernel_config(device)
 
 
 def _mcast_1d_linear_program_config(
@@ -242,7 +258,9 @@ def _mcast_1d_linear_program_config(
     tile = int(getattr(ttnn, "TILE_SIZE", 32))
     bsz = max(1, int(batch_size))
     seq = max(1, int(seq_len))
-    # Match get_M_dim for fuse_batch: batch × sequence span in tile rows (~ceil(S_pad / tile)).
+    # mcast_in0 requires num_blocks_y == 1: every core must hold all M tiles (per_core_M = total M).
+    # Do NOT reduce per_core_M to split M across y-rows — that violates the constraint.
+    # Instead, use extra y-rows as additional N-workers so the full grid participates.
     s_tiles = (seq + tile - 1) // tile
     per_core_m = max(1, bsz * s_tiles)
     k = max(tile, int(in_dim))
@@ -250,13 +268,30 @@ def _mcast_1d_linear_program_config(
     k_tiles = max(1, k // tile)
     in0_block_w = min(int(in0_block_w_cap), k_tiles)
 
-    # per_core_N is in TILE columns along N (same units as Nt in MatmulReuseMcast1D factory).
-    # Spreading ceil(out_dim / tile) across grid.x avoids the old stripe formula mixing element
-    # widths with a large (grid.x * tile) denominator—it could set per_core_N too low on wide
-    # grids so num_blocks_x exceeded available cores.
     n_width_tiles = max(1, (int(out_dim) + tile - 1) // tile)
     gx = max(1, int(grid.x))
-    per_core_n = max(1, (n_width_tiles + gx - 1) // gx)
+    gy = max(1, int(grid.y))
+
+    # Use y-rows as additional N-workers: with (gx, y_rows) grid, N is distributed across
+    # gx*y_rows cores.  When N tiles fit within gx*gy we can set per_core_n=1 and just pick
+    # enough rows; when N tiles exceed total cores we use the full grid with per_core_n>1.
+    if n_width_tiles <= gx * gy:
+        y_rows = min(gy, max(1, (n_width_tiles + gx - 1) // gx))
+        per_core_n = max(1, (n_width_tiles + gx * y_rows - 1) // (gx * y_rows))
+    else:
+        y_rows = gy
+        per_core_n = max(1, (n_width_tiles + gx * gy - 1) // (gx * gy))
+
+    # When M=1 tile (e.g. seq_len=32), out_subblock_h is forced to 1.  TTNN recommends
+    # out_subblock_h * out_subblock_w >= 2, so we need per_core_n >= 2 for out_subblock_w=2.
+    # Reduce y_rows (fewer cores) until each core handles at least 2 N tiles.
+    if per_core_m == 1 and per_core_n < 2 and n_width_tiles >= 2:
+        for cand_y in range(y_rows - 1, 0, -1):
+            cand_pcn = max(1, (n_width_tiles + gx * cand_y - 1) // (gx * cand_y))
+            if cand_pcn >= 2:
+                y_rows = cand_y
+                per_core_n = cand_pcn
+                break
 
     out_subblock_h = min(int(out_subblock_h_cap), per_core_m)
     while per_core_m % out_subblock_h != 0 and out_subblock_h > 1:
@@ -274,7 +309,7 @@ def _mcast_1d_linear_program_config(
         out_subblock_w_eff -= 1
 
     return cfg_cls(
-        compute_with_storage_grid_size=(int(grid.x), 1),
+        compute_with_storage_grid_size=(gx, y_rows),
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
         out_subblock_w=out_subblock_w_eff,
@@ -424,6 +459,31 @@ def ace_step_dit_mlp_down_proj_linear_program_config(
         seq_len=seq_len,
         in_dim=intermediate_size,
         out_dim=hidden_size,
+        batch_size=batch_size,
+        in0_block_w_cap=2,
+        out_subblock_h_cap=4,
+        out_subblock_w=1,
+    )
+
+
+def ace_step_dense_linear_program_config(
+    device: Any,
+    *,
+    seq_len: int,
+    in_dim: int,
+    out_dim: int,
+    batch_size: int = 1,
+):
+    """General 1D mcast program config for dense linears not covered by a dedicated helper.
+
+    Used for: condition_embedder (256×2048×1024), depatchify proj_out (256×1024×4096),
+    text projector, and any other linear where shapes are not known at module init time.
+    """
+    return _mcast_1d_linear_program_config(
+        device,
+        seq_len=seq_len,
+        in_dim=in_dim,
+        out_dim=out_dim,
         batch_size=batch_size,
         in0_block_w_cap=2,
         out_subblock_h_cap=4,

@@ -104,6 +104,7 @@ from .math_perf_env import (
     _mcast_1d_linear_program_config,
     ace_step_add_one,
     ace_step_binary_kwargs,
+    ace_step_dense_linear_program_config,
     ace_step_dit_attn_linear_program_config,
     ace_step_dit_fused_wkv_linear_program_config,
     ace_step_dit_linear_l1_memory_config,
@@ -1247,6 +1248,9 @@ class TtQwen3MLP:
         gate = self._l1_activation(gate)
         up = self._l1_activation(up)
         h = ttnn.multiply(gate, up, memory_config=_silu_mc)
+        _bf16 = getattr(ttnn, "bfloat16", None)
+        if _bf16 is not None:
+            h = ttnn.typecast(h, _bf16, memory_config=_silu_mc)
         h = self._l1_activation(h)
         lin_down = self._down_linear_kwargs(batch_size=b_x, seq_len=s)
         out = ttnn.linear(h, self.w_down, bias=None, transpose_b=True, **lin_down)
@@ -1576,6 +1580,9 @@ class TtAceStepDiTCore:
 
         linear_ck = ace_step_init_dit_linear_compute_kernel_config(mesh_device)
         l1_mc = ace_step_dit_linear_l1_memory_config(ttnn)
+        self._linear_ck = linear_ck
+        self._l1_mc = l1_mc
+        self._cond_embed_pc_cache: dict = {}
 
         self.layers: List[TtAceStepDiTLayer] = [
             TtAceStepDiTLayer(
@@ -1607,9 +1614,31 @@ class TtAceStepDiTCore:
         enc = ttnn.unsqueeze(enc, 1)
         enc = ttnn.to_layout(enc, ttnn.TILE_LAYOUT)
         l1_mc = ace_step_dit_linear_l1_memory_config(ttnn)
+        # Build program_config for condition_embedder (e.g. 256×2048→1024).
         # Do not pass L1 ``memory_config`` into ``linear`` here: bias broadcast validation fails
         # on small test shapes (e.g. ``[1,1,4,128]`` @ ``[256,128]`` + ``[1,1,1,256]`` bias).
-        enc = ttnn.linear(enc, self.cond_w, bias=self.cond_b, transpose_b=True)
+        _b_enc = int(enc.shape[0])
+        _s_enc = int(enc.shape[2])
+        _d_enc = int(enc.shape[-1])
+        _d_out = int(self.cond_w.shape[0])
+        _ce_key = (_b_enc, _s_enc, _d_enc, _d_out)
+        _ce_pc = self._cond_embed_pc_cache.get(_ce_key)
+        if _ce_pc is None:
+            _ce_pc = ace_step_dense_linear_program_config(
+                self.mesh_device,
+                seq_len=_s_enc,
+                in_dim=_d_enc,
+                out_dim=_d_out,
+                batch_size=_b_enc,
+            )
+            if _ce_pc is not None:
+                self._cond_embed_pc_cache[_ce_key] = _ce_pc
+        _ce_kw: dict = {}
+        if self._linear_ck is not None:
+            _ce_kw["compute_kernel_config"] = self._linear_ck
+        if _ce_pc is not None:
+            _ce_kw["program_config"] = _ce_pc
+        enc = ttnn.linear(enc, self.cond_w, bias=self.cond_b, transpose_b=True, **_ce_kw)
         if l1_mc is not None:
             enc = ace_step_ensure_l1_activation(ttnn, enc, l1_mc)
         if debug is not None and debug.get("enabled", False):

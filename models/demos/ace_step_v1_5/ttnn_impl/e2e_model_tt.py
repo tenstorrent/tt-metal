@@ -79,6 +79,7 @@ from .dit_sampling_ttnn import (
     typecast_bf16_any_to_fp32_tile,
 )
 from .full_pipeline import AceStepV15TTNNPipeline
+from .math_perf_env import ace_step_reshape_kwargs
 from .oobleck_vae_decoder import TtOobleckVaeDecoder
 from .qwen3_embedding_ace_step import AceStepQwen3Encoder as TtQwen3EmbeddingEncoder
 
@@ -1024,6 +1025,8 @@ class AceStepE2EModel:
         self._condition_encoder: Optional[TtAceStepInstrumentalConditionEncoder] = None
         self._tt_vae: Optional[TtOobleckVaeDecoder] = None
         self._ctx_bt128_cached: Optional[ttnn.Tensor] = None
+        # CFG null embedding expanded to encoder seq length; keyed by (hidden_dim, seq_len).
+        self._null_rep_by_shape: dict[tuple[int, int], ttnn.Tensor] = {}
         # ``ACE_STEP_USE_TRACE=1`` opts the DiT body (``pipe.forward_with_temb_tp``) into a
         # captured TTNN trace + 2CQ replay. Captured lazily on the first ``generate()`` after two
         # eager warmup steps; reused for every subsequent step + every subsequent generate of the
@@ -1131,6 +1134,24 @@ class AceStepE2EModel:
         else:
             raise RuntimeError(f"Unexpected silence_latent shape: {tuple(silence.shape)}")
         self._silence_np = silence.contiguous().numpy()
+
+    def _expanded_null_emb(self, null_emb_tt: "ttnn.Tensor", *, s_enc: int, d_enc: int) -> "ttnn.Tensor":
+        """Expand null condition embedding to ``[1, s_enc, d_enc]`` (cached per shape)."""
+        key = (d_enc, s_enc)
+        cached = self._null_rep_by_shape.get(key)
+        if cached is not None:
+            return cached
+        _sr = ace_step_reshape_kwargs(ttnn)
+        null_4d = ttnn.reshape(null_emb_tt, (1, 1, 1, d_enc), **_sr)
+        null_rep_4d = ttnn.repeat(null_4d, (1, 1, s_enc, 1))
+        null_rep = ttnn.reshape(null_rep_4d, (1, s_enc, d_enc), **_sr)
+        try:
+            ttnn.deallocate(null_4d)
+            ttnn.deallocate(null_rep_4d)
+        except Exception:
+            pass
+        self._null_rep_by_shape[key] = null_rep
+        return null_rep
 
     def encode_text(self, prompt: str) -> tuple[ttnn.Tensor, np.ndarray]:
         """Encode a text prompt with TTNN Qwen (HF tokenizer → NumPy tokens only).
@@ -1356,30 +1377,12 @@ class AceStepE2EModel:
         if do_cfg:
             d_enc = int(enc_hs_tt_one.shape[-1])
             s_enc = int(enc_hs_tt_one.shape[1])
-            # ``null_emb_tt`` is the persistent ``self._condition_encoder.null_condition_emb``
-            # initialized once at construction. ``ttnn.reshape`` returns a view in this build, so
-            # deallocating ``null_4d`` previously freed the cached buffer and broke subsequent
-            # ``generate`` calls with "Tensor is not allocated". Clone first so we own a temp buffer
-            # and can free it safely.
-            if not hasattr(ttnn, "clone"):
-                raise RuntimeError(
-                    "ttnn.clone is required to safely copy null_condition_emb before reshape/deallocate. "
-                    "This TTNN build does not expose ttnn.clone."
-                )
-            null_owned = ttnn.clone(null_emb_tt)
-            null_4d = ttnn.reshape(null_owned, (1, 1, 1, d_enc))
-            null_rep_4d = ttnn.repeat(null_4d, (1, 1, s_enc, 1))
-            null_rep = ttnn.reshape(null_rep_4d, (1, s_enc, d_enc))
+            # ``_expanded_null_emb`` caches the repeated null embedding per shape so the
+            # reshape+repeat is done once across all generate calls (avoids per-generate clone).
+            null_rep = self._expanded_null_emb(null_emb_tt, s_enc=s_enc, d_enc=d_enc)
             # ``ttnn.concat`` allocates a new tensor; the cached ``enc_hs_tt_one`` is only READ.
             enc_tt_pipe = ttnn.concat([enc_hs_tt_one, null_rep], dim=0)
             ctx_tt_pipe = concat_duplicate_batch(ctx_tt_one)
-            try:
-                # ``null_4d`` is a view of ``null_owned`` and ``null_rep`` is a view of ``null_rep_4d``;
-                # deallocating the owners is sufficient (and avoids double-free on the views).
-                ttnn.deallocate(null_rep_4d)
-                ttnn.deallocate(null_owned)
-            except Exception:
-                pass
         else:
             # Non-CFG: ``enc_tt_pipe`` would alias the cache directly, and the loop's terminal
             # ``ttnn.deallocate(enc_tt_pipe)`` would free the cached buffer. Clone it into a
