@@ -127,7 +127,7 @@ void kernel_main() {
 #endif
 
     DPRINT_DISPATCH(
-        "Writer kernel: dispatch_core={} / {} dispatch_devices={}",
+        "Writer kernel: dispatch_core={} / {} dispatch_devices={}\n",
         dispatch_core_idx,
         num_dispatch_cores,
         dispatch_devices);
@@ -162,7 +162,7 @@ void kernel_main() {
     noc_semaphore_wait(init_sem_ptr, dispatch_devices - 1);
     noc_semaphore_set(init_sem_ptr, 0);
 
-    DPRINT_DISPATCH("Fabric setup complete");
+    DPRINT_DISPATCH("Fabric setup complete\n");
 #endif
 
     const auto output_addr_gen = TensorAccessor(output_args, output_tensor_address);
@@ -188,7 +188,7 @@ void kernel_main() {
         uint32_t payload_addr = get_read_ptr(cb_payload_for_writer_id);
         uint32_t metadata_addr = get_read_ptr(cb_metadata_for_writer_id);
 
-        DPRINT_DISPATCH("Fabric send: route={} distance={} page_idx={}", route, distance, page_idx);
+        DPRINT_DISPATCH("Fabric send: route={} distance={} page_idx={}\n", route, distance, page_idx);
 
 #ifdef DEST_CHIP_ID
         // Send payload

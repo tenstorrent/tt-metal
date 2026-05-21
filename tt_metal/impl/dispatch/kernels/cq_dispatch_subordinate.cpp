@@ -468,7 +468,7 @@ void set_go_signal_noc_data() {
 FORCE_INLINE
 void merge_dispatch_d_noc_counter_deltas() {
     if constexpr (distributed_dispatcher) {
-        DPRINT("merge_dispatch_d_noc_counter_deltas is only supported when dispatch_d runs on the same core");
+        DPRINT("merge_dispatch_d_noc_counter_deltas is only supported when dispatch_d runs on the same core\n");
         ASSERT(0);
         return;
     }
