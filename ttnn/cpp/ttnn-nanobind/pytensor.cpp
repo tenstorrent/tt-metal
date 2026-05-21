@@ -1560,6 +1560,14 @@ void pytensor_module(nb::module_& mod) {
                             std::is_same_v<T, bfloat8_b> || std::is_same_v<T, bfloat4_b> ||
                             std::is_same_v<T, bfloat16>) {
                             return self.to_vector<float>();
+                        } else if constexpr (std::is_same_v<T, float8_e4m3>) {
+                            // to_vector<float>() doesn't yet handle FP8 source (see
+                            // host_tensor_factory.cpp::to_vector_float). Until that gains an
+                            // FP8 case, to_list() on an FP8 tensor isn't wired up. Print path
+                            // (Tensor::__repr__) still works via the to_dtype float pivot in
+                            // ttnn/core/tensor/tensor_impl.cpp.
+                            TT_THROW("Tensor.to_list(): FP8_E4M3 is not supported");
+                            return self.to_vector<float>();  // unreachable, satisfies return type
                         } else {
                             return self.to_vector<T>();
                         }

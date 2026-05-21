@@ -540,6 +540,17 @@ HostTensor to_layout_impl<tensor_impl::bfloat4_b>(const HostTensor& tensor, Layo
     return to_layout_bfloat_impl<tensor_impl::bfloat4_b>(tensor, target_layout);
 }
 
+template <>
+HostTensor to_layout_impl<float8_e4m3>(const HostTensor& tensor, Layout target_layout) {
+    // FP8_E4M3 is constrained to ROW_MAJOR layout in tensor_spec.cpp, so the source tensor
+    // is already ROW_MAJOR by construction. The only legal call is therefore ROW_MAJOR ->
+    // ROW_MAJOR (a no-op); any other target layout is a caller error.
+    if (target_layout == Layout::ROW_MAJOR) {
+        return tensor;
+    }
+    TT_THROW("to_layout: FP8_E4M3 only supports ROW_MAJOR layout (got target {})", target_layout);
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
@@ -838,6 +849,14 @@ HostTensor pad_impl<tensor_impl::bfloat4_b>(
     return pad_bfloat4_b(tensor, output_padded_shape, input_tensor_start, pad_value);
 }
 
+template <>
+HostTensor pad_impl<float8_e4m3>(const HostTensor&, const tt::tt_metal::Shape&, const tt::tt_metal::Shape&, float) {
+    // FP8_E4M3 host-side pad is not wired up; no current op needs it. The generic body
+    // would actually compile (float8_e4m3 is a 1-byte trivially-copyable type with a float
+    // constructor), but leaving this as an explicit throw documents the intentional scope.
+    TT_THROW("pad: FP8_E4M3 is not supported");
+}
+
 template <typename T>
 HostTensor unpad_impl(
     const HostTensor& tensor,
@@ -910,6 +929,12 @@ HostTensor unpad_impl<tensor_impl::bfloat4_b>(
     const tt::tt_metal::Shape& output_tensor_start,
     const tt::tt_metal::Shape& output_tensor_end) {
     return unpad_bfloat4_b(tensor, output_tensor_start, output_tensor_end);
+}
+
+template <>
+HostTensor unpad_impl<float8_e4m3>(const HostTensor&, const tt::tt_metal::Shape&, const tt::tt_metal::Shape&) {
+    // See pad_impl<float8_e4m3>: not wired up, no current op needs it.
+    TT_THROW("unpad: FP8_E4M3 is not supported");
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
@@ -1023,11 +1048,34 @@ tt::tt_metal::DistributedHostBuffer transform_buffers(
     if constexpr (std::is_same_v<SrcType, DstType>) {
         return input_buffer;
     } else if constexpr (std::is_same_v<SrcType, float8_e4m3> || std::is_same_v<DstType, float8_e4m3>) {
+<<<<<<< HEAD
         // FP8_E4M3 is currently used exclusively by the DeepSeek V3 prefill combine and dispatch
         // ops (row-major) and consumed bit-for-bit by the Python dlpack path. No host-side
         // conversion to/from other dtypes is supported. Add it explicitly when a use case appears.
         TT_THROW("to_dtype: cross-type conversion involving FP8_E4M3 is not supported");
         return input_buffer;  // unreachable, satisfies return type
+=======
+        // FP8_E4M3 only has a direct bridge to/from FLOAT32 (operator float() and the float
+        // constructor in float8.hpp). Other dtypes would need a float pivot, which is not wired
+        // up yet because the only host-side consumer today is the print path in tensor_impl.cpp,
+        // which already converts through FLOAT32. Add the broader lattice when a use case appears.
+        if constexpr (
+            (std::is_same_v<SrcType, float8_e4m3> && std::is_same_v<DstType, float>) ||
+            (std::is_same_v<SrcType, float> && std::is_same_v<DstType, float8_e4m3>)) {
+            auto transform_fn = [&](const tt::tt_metal::HostBuffer& buffer) {
+                auto data = buffer.view_as<const SrcType>();
+                std::vector<DstType> output_vector(data.size());
+                std::transform(data.begin(), data.end(), output_vector.begin(), [](SrcType value) {
+                    return static_cast<DstType>(value);
+                });
+                return tt::tt_metal::HostBuffer(std::move(output_vector));
+            };
+            return input_buffer.transform(transform_fn);
+        } else {
+            TT_THROW("to_dtype: FP8_E4M3 cross-type conversion is only supported to/from FLOAT32");
+            return input_buffer;  // unreachable, satisfies return type
+        }
+>>>>>>> ec0a357f087 (Added printing support and associated tests)
     } else if constexpr (std::is_same_v<DstType, bfloat4_tag> || std::is_same_v<DstType, bfloat8_tag>) {
         auto transform_fn = [&](const tt::tt_metal::HostBuffer& buffer) {
             ttsl::Span<const SrcType> data = buffer.view_as<const SrcType>();
