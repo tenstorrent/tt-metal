@@ -543,7 +543,11 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             use_signpost=use_signpost,
         )
     else:
+        if use_signpost:
+            signpost(f"L{layer_idx}_dense_mlp-start")
         mlp_out = dense_mlp_forward(x, w, device=device, cfg=cfg, profile=profile)
+        if use_signpost:
+            signpost(f"L{layer_idx}_dense_mlp-end")
 
     x_out = ttnn.add(residual, mlp_out, memory_config=cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG)
     ttnn.deallocate(mlp_out, force=False)
@@ -620,7 +624,7 @@ def run_decoder_layer_prefill_update_cache_tt(
     num_heads = int(hparams.num_attention_heads)
     t_layer0 = time.perf_counter() if profile is not None else 0.0
 
-    # Optional precision knob for MLP/router matmuls during bring-up. Controlled
+    # Optional precision knob for MLP matmuls during bring-up. Controlled
     # by the same env var as decode.
     mlp_compute_kernel_config = None
     if os.environ.get("GLM4_MOE_LITE_MOE_FP32_ACC", "").strip() == "1":
@@ -1060,7 +1064,6 @@ def run_decoder_layer_prefill_update_cache_tt(
                 x=x,
                 moe_w=w.moe,
                 hparams=hparams,
-                compute_kernel_config=mlp_compute_kernel_config,
             )
         _profile_add(profile, "moe_router_s", time.perf_counter() - t0 if profile is not None else 0.0)
         t0 = time.perf_counter() if profile is not None else 0.0
