@@ -3,25 +3,44 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <map>
+#include <memory>
 #include <string>
-#include "ttnn/operations/conv/conv2d/conv2d_op_program_factory_common.hpp"
-#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
-#include "ttnn/operations/conv/conv2d/device/conv2d_op_width_sharded_program_factory.hpp"
-#include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
-#include "ttnn/operations/sliding_window/sliding_window.hpp"
-#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
-#include <tt-metalium/work_split.hpp>
+#include <utility>
+#include <vector>
+
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
+
 #include "ttnn/operations/compute_throttle_utils.hpp"
+#include "ttnn/operations/conv/conv2d/conv2d_op_program_factory_common.hpp"
+#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_op_width_sharded_program_factory.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include "ttnn/operations/sliding_window/sliding_window.hpp"
 
 namespace ttnn::prim {
 
 namespace unary = ttnn::operations::unary;
 using ttnn::operations::conv::conv_skip_mcast;
 using ttnn::operations::conv::SkipMcast;
+
+using tt::tt_metal::CBDescriptor;
+using tt::tt_metal::CBFormatDescriptor;
+using tt::tt_metal::ComputeConfigDescriptor;
+using tt::tt_metal::DataMovementConfigDescriptor;
+using tt::tt_metal::KernelDescriptor;
+using tt::tt_metal::ProgramDescriptor;
+using tt::tt_metal::SemaphoreDescriptor;
+using tt::tt_metal::WorkloadBuffer;
+using tt::tt_metal::WorkloadDescriptor;
 
 std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_opt_conv_activation_as_mm_shape(
     const ttnn::Shape& conv_activation_shape,
@@ -44,9 +63,11 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_opt_conv_activat
     return {{1, num_rows_padded, num_cols_padded}, {1, num_rows, num_cols}};
 }
 
-Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFactory::create(
-    const Conv2dParams& operation_attributes, const Conv2dInputs& tensor_args, Tensor& output_tensor) {
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+WorkloadDescriptor Conv2dWidthShardedProgramFactory::create_workload_descriptor(
+    const Conv2dParams& operation_attributes,
+    const Conv2dInputs& tensor_args,
+    Tensor& output_tensor,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     const auto& a = tensor_args.a;
     const auto& b = tensor_args.b;
 
@@ -314,7 +335,7 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
         (p_config.per_core_out_matrix_height_ntile + act_block_h_ntiles - 1) / act_block_h_ntiles;
     uint32_t num_blocks_weight_w_per_core = p_config.per_core_out_matrix_width_ntile / weight_block_w_ntiles;
 
-    std::map<std::string, std::string> reader_defines;
+    KernelDescriptor::Defines reader_defines;
 
     uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / (input_num_cores * per_core_num_blocks_act_w);
 
@@ -341,8 +362,14 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
         (uint32_t)weights_noc,
         (uint32_t)device->arch());
 
-    uint32_t act_mcast_sender_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores, 0);    // 0==INVALID
-    uint32_t act_mcast_receiver_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores, 0);  // 0==INVALID.
+    // Program-scoped semaphore IDs assigned sequentially.  The framework
+    // allocates the actual L1 addresses when realising the descriptor into a
+    // Program (see SemaphoreDescriptor entries appended to `desc.semaphores`
+    // below).  The kernel reads these ids the same way it did when the
+    // legacy CreateSemaphore() return value was passed through compile-time
+    // args (both forms are 0-INVALID semaphores on `all_cores`).
+    const uint32_t act_mcast_sender_semaphore = 0;
+    const uint32_t act_mcast_receiver_semaphore = 1;
 
     CoreCoord act_mcast_start_core_logical(0, 0);
     CoreCoord act_mcast_end_core_logical(all_cores.bounding_box().end_coord.x, all_cores.bounding_box().end_coord.y);
@@ -364,18 +391,18 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
 
     TT_FATAL(act_block_h_datums % 2 == 0, "2 Indices are packed in one uint32_t word.");
 
-    std::map<std::string, std::string> writer_defines;
-    std::map<std::string, std::string> writer_mcast_sender_defines;
+    KernelDescriptor::Defines writer_defines;
+    KernelDescriptor::Defines writer_mcast_sender_defines;
     std::map<std::string, std::string> compute_defines;
 
     const SkipMcast skip_mcast = conv_skip_mcast(parallelization_config, a.memory_config().memory_layout());
     const bool skip_activation_mcast = skip_mcast.skip_activation_mcast;
     const bool skip_weights_mcast = skip_mcast.skip_weights_mcast;
     if (skip_activation_mcast) {
-        reader_defines["SKIP_MCAST"] = "1";
+        reader_defines.emplace_back("SKIP_MCAST", "1");
     }
     if (skip_weights_mcast) {
-        writer_mcast_sender_defines["SKIP_MCAST"] = "1";
+        writer_mcast_sender_defines.emplace_back("SKIP_MCAST", "1");
     }
 
     bool pack_relu = fused_activation.has_value() && fused_activation.value().op_type == unary::UnaryOpType::RELU;
@@ -404,20 +431,31 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
         ttnn::operations::sliding_window::generate_sliding_window_op_config(
             op_trace_metadata, shard_boundaries, stride_w, true, act_block_h_datums, 0);
 
-    // create sharded ttnn config tensors
-    Tensor conv_reader_indices_tensor = ttnn::operations::sliding_window::construct_on_host_config_tensor(
+    // Build the reader-indices config Tensor on host and upload it.
+    // The resulting device buffer must outlive the cached MeshWorkload because
+    // the activation kernel references it either via a globally-allocated CB
+    // (L1 path) or via compile-time args (DRAM path) — both bake the buffer
+    // address into the cached Program.  We wrap the Tensor in a shared_ptr
+    // and park it on `workload_descriptor.buffers`; otherwise the Tensor's
+    // destructor would force-free the device storage at the end of this
+    // function via DeviceStorage::deallocate, leaving the kernel reading from
+    // freed memory on cache hits.
+    Tensor conv_reader_indices_tensor_local = ttnn::operations::sliding_window::construct_on_host_config_tensor(
         conv_sharded_input_top_left_indices, parallel_config, config_tensors_in_dram);
-    conv_reader_indices_tensor = ttnn::operations::sliding_window::move_config_tensor_to_device(
-        conv_reader_indices_tensor, parallel_config, false, a.device(), config_tensors_in_dram);
+    conv_reader_indices_tensor_local = ttnn::operations::sliding_window::move_config_tensor_to_device(
+        conv_reader_indices_tensor_local, parallel_config, false, a.device(), config_tensors_in_dram);
 
-    log_trace(tt::LogOp, "Conv2D Config Tensor : {}", conv_reader_indices_tensor);
-    const tt::tt_metal::DeviceStorage& conv_reader_indices_storage = conv_reader_indices_tensor.device_storage();
+    log_trace(tt::LogOp, "Conv2D Config Tensor : {}", conv_reader_indices_tensor_local);
+
+    auto conv_reader_indices_owner = std::make_shared<Tensor>(std::move(conv_reader_indices_tensor_local));
+    const Tensor& conv_reader_indices_tensor = *conv_reader_indices_owner;
+    tt::tt_metal::Buffer* conv_reader_indices_buffer = conv_reader_indices_owner->buffer();
 
     // Pass the actual DRAM/L1-small config buffer page size into get_cb_info so the predicted
     // READER_INDICES CB footprint matches the CB this factory creates. Without this, the in-DRAM
     // path was sized to the worst case (1 uint16 per output row), holding spare L1 that is never
     // populated by the reader kernel.
-    const uint32_t reader_indices_actual_page_size = conv_reader_indices_storage.get_buffer()->page_size();
+    const uint32_t reader_indices_actual_page_size = conv_reader_indices_buffer->page_size();
     std::vector<CBInfo> cb_info = get_cb_info(
         compute_kernel_config,
         block_config,
@@ -437,12 +475,16 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
         input_channels_padded,
         reader_indices_actual_page_size);
 
-    // call function to allocate circular buffers
-    allocate_cbs(cb_info, program, all_reader_cores, a, output, conv_reader_indices_tensor);
-    const tt::tt_metal::CBHandle cb_sharded_act = get_cb_info_by_name(cb_info, Conv2dCb::ACT_SHARDED).handle;
-    const tt::tt_metal::CBHandle cb_output = get_cb_info_by_name(cb_info, Conv2dCb::OUT).handle;
+    ProgramDescriptor desc;
+
+    // Descriptor-flow CB allocation: appends one CBDescriptor per non-empty
+    // CBInfo entry to `desc.cbs` and fills `CBInfo::index`.  Sharded CBs are
+    // backed by tensor `Buffer*` (recorded on `CBDescriptor::buffer`) so the
+    // framework patches their base addresses on cache hits.  The reader-
+    // indices Tensor is the workload-scoped buffer parked above; the L1 path
+    // (config_tensors_in_dram == false) picks it up via this CB binding.
+    allocate_cbs_to_program_descriptor(cb_info, desc, all_reader_cores, a, output, conv_reader_indices_tensor);
     const bool partials_cb_uses_output = get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).is_globally_allocated;
-    const tt::tt_metal::CBHandle cb_partials = get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).handle;
 
     std::vector<uint32_t> compute_kernel_args = {
         act_block_w_ntiles,                         // in0_block_w
@@ -537,11 +579,14 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
         (uint32_t)has_bias};
 
     if (config_tensors_in_dram) {
-        reader_defines["CONFIG_TENSOR_IN_DRAM"] = "1";
-        activation_kernel_compile_args.push_back(conv_reader_indices_storage.get_buffer()->address());
-        activation_kernel_compile_args.push_back(conv_reader_indices_storage.get_buffer()->page_size());
-        tt::tt_metal::TensorAccessorArgs(conv_reader_indices_storage.get_buffer())
-            .append_to(activation_kernel_compile_args);
+        reader_defines.emplace_back("CONFIG_TENSOR_IN_DRAM", "1");
+        // The reader-indices buffer is kept alive by `workload_descriptor.buffers`,
+        // so baking its address into compile-time args is safe across cache
+        // hits (the buffer's allocation is not freed until the cached
+        // MeshWorkload is evicted).
+        activation_kernel_compile_args.push_back(conv_reader_indices_buffer->address());
+        activation_kernel_compile_args.push_back(conv_reader_indices_buffer->page_size());
+        tt::tt_metal::TensorAccessorArgs(conv_reader_indices_buffer).append_to(activation_kernel_compile_args);
     }
 
     for (uint32_t index = 0; index < activation_kernel_compile_args.size(); index++) {
@@ -551,35 +596,38 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
     tt::tt_metal::TensorAccessorArgs(b.buffer()).append_to(weights_kernel_compile_args);
     tt::tt_metal::TensorAccessorArgs(bias ? bias->buffer() : nullptr).append_to(weights_kernel_compile_args);
 
-    auto act_kernel_id = CreateKernel(
-        program,
-        activation_kernel_path,
-        all_reader_cores,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = act_noc,
-            .compile_args = activation_kernel_compile_args,
-            .defines = reader_defines});
+    KernelDescriptor act_kernel_desc;
+    act_kernel_desc.kernel_source = activation_kernel_path;
+    act_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    act_kernel_desc.core_ranges = CoreRangeSet(all_reader_cores);
+    act_kernel_desc.compile_time_args = std::move(activation_kernel_compile_args);
+    act_kernel_desc.defines = reader_defines;
+    act_kernel_desc.config = DataMovementConfigDescriptor{
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+        .noc = act_noc,
+    };
 
-    auto weights_kernel_id = CreateKernel(
-        program,
-        weights_kernel_path,
-        all_cores,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = weights_noc,
-            .compile_args = weights_kernel_compile_args,
-            .defines = writer_defines});
+    KernelDescriptor weights_kernel_desc;
+    weights_kernel_desc.kernel_source = weights_kernel_path;
+    weights_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    weights_kernel_desc.core_ranges = all_cores;
+    weights_kernel_desc.compile_time_args = std::move(weights_kernel_compile_args);
+    weights_kernel_desc.defines = std::move(writer_defines);
+    weights_kernel_desc.config = DataMovementConfigDescriptor{
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+        .noc = weights_noc,
+    };
 
-    CreateKernel(
-        program,
-        compute_kernel_path,
-        all_cores,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .compile_args = compute_kernel_args,
-            .defines = compute_defines});
+    KernelDescriptor compute_kernel_desc;
+    compute_kernel_desc.kernel_source = compute_kernel_path;
+    compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_kernel_desc.core_ranges = all_cores;
+    compute_kernel_desc.compile_time_args = std::move(compute_kernel_args);
+    compute_kernel_desc.defines = KernelDescriptor::Defines{compute_defines.begin(), compute_defines.end()};
+    compute_kernel_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+    };
 
     auto full_core_grid = device->compute_with_storage_grid_size();
     std::vector<uint32_t> act_mcast_noc_y;
@@ -595,10 +643,6 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
         act_mcast_noc_y.push_back(device->worker_core_from_logical_core(CoreCoord(0, core_index)).y);
     }
 
-    uint32_t bias_base_address = 0;
-    if (bias) {
-        bias_base_address = bias.value().buffer()->address();
-    }
     auto total_num_active_cores = std::max(input_num_cores, output_num_cores);
     auto total_num_cores = all_reader_cores.size();
     for (uint32_t core_index = 0; core_index < total_num_cores; core_index++) {
@@ -616,65 +660,79 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
         // Mcast Y Lookup Table
         rt_args.insert(rt_args.end(), act_mcast_noc_y.begin(), act_mcast_noc_y.end());
 
-        SetRuntimeArgs(program, act_kernel_id, CoreCoord(core_x, core_y), rt_args);
+        act_kernel_desc.runtime_args.emplace_back(CoreCoord(core_x, core_y), std::move(rt_args));
 
         // Weights kernel is not placed on inactive cores.
         if (core_index < total_num_active_cores) {
-            SetRuntimeArgs(
-                program,
-                weights_kernel_id,
-                CoreCoord(core_x, core_y),
-                {core_index * weight_block_w_ntiles,
-                 b.buffer()->address(),
-                 bias_base_address,
-                 (uint32_t)(core_index < output_num_cores)});
+            // Slots 1 (weights buffer address) and 2 (bias buffer address, if
+            // present) are dispatched as `Buffer*` so the framework's cache-hit
+            // fast path patches them directly into the cached Program without
+            // re-running this factory.  When `has_bias == false` slot 2 is a
+            // literal zero, matching the legacy `bias_base_address = 0` path.
+            if (has_bias) {
+                weights_kernel_desc.emplace_runtime_args(
+                    CoreCoord(core_x, core_y),
+                    {core_index * weight_block_w_ntiles,
+                     b.buffer(),
+                     bias.value().buffer(),
+                     (uint32_t)(core_index < output_num_cores)});
+            } else {
+                weights_kernel_desc.emplace_runtime_args(
+                    CoreCoord(core_x, core_y),
+                    {core_index * weight_block_w_ntiles,
+                     b.buffer(),
+                     static_cast<uint32_t>(0),
+                     (uint32_t)(core_index < output_num_cores)});
+            }
         }
     }
 
-    post_conv2d_op_memory_checks(
-        program, operation_attributes, tensor_args, output_tensor, reader_indices_actual_page_size);
-    return cached_program_t{
-        std::move(program),
-        shared_variables_t{
-            .cb_sharded_act = cb_sharded_act,
-            .cb_output = cb_output,
-            .cb_partials = cb_partials,
-            .partials_cb_uses_output = partials_cb_uses_output,
-            .has_bias = has_bias,
-            .full_core_grid = full_core_grid,
-            .weights_kernel_id = weights_kernel_id,
-            .total_num_active_cores = total_num_active_cores,
-            .conv_reader_indices_storage = conv_reader_indices_storage,
-        }};
-}
+    desc.kernels.push_back(std::move(act_kernel_desc));
+    desc.kernels.push_back(std::move(weights_kernel_desc));
+    desc.kernels.push_back(std::move(compute_kernel_desc));
 
-void Conv2dWidthShardedProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const Conv2dParams& /*operation_attributes*/,
-    const Conv2dInputs& tensor_args,
-    Tensor& output_tensor) {
-    auto* src_buffer_a = tensor_args.a.buffer();
-    auto* src_buffer_b = tensor_args.b.buffer();
-    auto& program = cached_program.program;
-    const auto& shared_variables = cached_program.shared_variables;
+    // Semaphore Descriptors — match the legacy CreateSemaphore(... 0 /*INVALID*/)
+    // pair above.  Both semaphores live on `all_cores` and are referenced from
+    // the activation kernel by their compile-time-arg ids (0 and 1).
+    desc.semaphores.push_back(SemaphoreDescriptor{
+        .id = act_mcast_sender_semaphore,
+        .core_ranges = all_cores,
+        .initial_value = 0,
+    });
+    desc.semaphores.push_back(SemaphoreDescriptor{
+        .id = act_mcast_receiver_semaphore,
+        .core_ranges = all_cores,
+        .initial_value = 0,
+    });
 
-    auto& weights_kernel_runtime_args = GetRuntimeArgs(program, shared_variables.weights_kernel_id);
-    for (uint32_t core_index = 0; core_index < shared_variables.total_num_active_cores; core_index++) {
-        uint32_t core_x = core_index % shared_variables.full_core_grid.x;
-        uint32_t core_y = core_index / shared_variables.full_core_grid.x;
+    // post_conv2d_op_memory_checks() is intentionally NOT called here: it
+    // takes a built `tt::tt_metal::Program&` (it inspects the realised CB
+    // allocation), which is not available inside a descriptor factory.  The
+    // legacy `Conv2dShardedProgramFactory` (still on the old path) keeps the
+    // check; once that variant is also migrated the check can be re-expressed
+    // against the descriptor or hoisted into the framework.
 
-        auto& this_core_weights_kernel_runtime_args = weights_kernel_runtime_args[core_x][core_y];
-        this_core_weights_kernel_runtime_args[1] = src_buffer_b->address();
-        if (shared_variables.has_bias) {
-            this_core_weights_kernel_runtime_args[2] = tensor_args.bias.value().buffer()->address();
-        }
+    WorkloadDescriptor workload_descriptor;
+    // Park the reader-indices Tensor so the framework keeps it alive for the
+    // cached MeshWorkload's lifetime (see comment above the Tensor allocation).
+    // The shared_ptr<Tensor> ownership defers ~Tensor (which would force-free
+    // the underlying device memory) until the cached workload is evicted.
+    workload_descriptor.buffers.push_back(
+        WorkloadBuffer{.owner = std::move(conv_reader_indices_owner), .buffer = conv_reader_indices_buffer});
+
+    // Replicate the single ProgramDescriptor across every coordinate range —
+    // every coord in the workload runs the same conv2d program.  Move the
+    // descriptor into the final entry to avoid an extra copy.
+    auto ranges = tensor_coords.ranges();
+    workload_descriptor.programs.reserve(ranges.size());
+    for (size_t i = 0; i + 1 < ranges.size(); ++i) {
+        workload_descriptor.programs.push_back({ranges[i], desc});
+    }
+    if (!ranges.empty()) {
+        workload_descriptor.programs.push_back({ranges.back(), std::move(desc)});
     }
 
-    UpdateDynamicCircularBufferAddress(program, shared_variables.cb_sharded_act, *src_buffer_a);
-    UpdateDynamicCircularBufferAddress(program, shared_variables.cb_output, *output_tensor.buffer());
-    if (shared_variables.partials_cb_uses_output) {
-        UpdateDynamicCircularBufferAddress(program, shared_variables.cb_partials, *output_tensor.buffer());
-    }
+    return workload_descriptor;
 }
 
 }  // namespace ttnn::prim
