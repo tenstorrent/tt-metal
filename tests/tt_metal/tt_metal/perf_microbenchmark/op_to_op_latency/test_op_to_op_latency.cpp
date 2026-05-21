@@ -44,13 +44,24 @@
 //   --no-warmup             skip the warmup enqueue
 //   --trace-region-size N   trace buffer size, bytes (default 1 MiB)
 //   --device-id N           device under test (default 0)
+//   --output-cb-depth-tiles N  output CB depth in tiles (default 2)
+//   --buffer-tune           Buffer sizing study: reader push-2 (double buffer),
+//                           sweep --buffer-tune-input-depths for DRAM BW, pick smallest
+//                           depth at peak BW, then run --num-programs with profiler flags
+//   --buffer-tune-input-depths LIST  comma-separated input CB depths (default 2,4,6,8,12,16,24,32)
+//   --buffer-tune-output-depths LIST optional output CB depth sweep after input tune
+//   --buffer-tune-pages-per-core N   tiles/core for BW phase (default 32; NOP compute → DRAM bound)
+//   --buffer-tune-bw-tolerance PCT   depths within PCT%% of peak BW count as peak (default 2)
 
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
+#include <fstream>
+#include <iomanip>
 #include <map>
+#include <sstream>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -104,10 +115,22 @@ namespace {
 //                        programs; tunable via --trace-region-size if
 //                        --num-programs is bumped a lot.
 struct BenchmarkConfig {
-    uint32_t num_pages_per_core = 2;
+    uint32_t num_pages_per_core = 4;
     uint32_t num_nops_per_tile = 0;
     uint32_t num_programs = 8;
     uint32_t device_id = 0;
+    uint32_t reader_push_tile_count = 2;
+    // 0 = auto (2 * reader_push_tile_count) for input CB depth.
+    uint32_t input_cb_depth_tiles = 0;
+    // 0 = default 2 tiles (compute->writer still pops 1 at a time).
+    uint32_t output_cb_depth_tiles = 0;
+    // 0 = reserve N then read+push one tile at a time; 1 = reserve N, read all, push N.
+    uint32_t reader_mode = 0;
+    bool buffer_tune = false;
+    std::string buffer_tune_input_depths = "2,4,6,8,12,16,24,32";
+    std::string buffer_tune_output_depths;
+    uint32_t buffer_tune_pages_per_core = 32;
+    double buffer_tune_bw_tolerance_pct = 2.0;
     bool warmup = true;
     bool use_trace = false;
     bool use_device_profiler = false;
@@ -118,6 +141,28 @@ struct BenchmarkConfig {
 BenchmarkConfig parse_args(const std::vector<std::string>& args) {
     BenchmarkConfig cfg;
     cfg.num_pages_per_core = test_args::get_command_option_uint32(args, "--num-pages-per-core", cfg.num_pages_per_core);
+    cfg.reader_push_tile_count =
+        test_args::get_command_option_uint32(args, "--reader-push-tiles", cfg.reader_push_tile_count);
+    cfg.input_cb_depth_tiles =
+        test_args::get_command_option_uint32(args, "--input-cb-depth-tiles", cfg.input_cb_depth_tiles);
+    cfg.output_cb_depth_tiles =
+        test_args::get_command_option_uint32(args, "--output-cb-depth-tiles", cfg.output_cb_depth_tiles);
+    if (test_args::has_command_option(args, "--reader-batch-push")) {
+        cfg.reader_mode = 1;
+    }
+    if (test_args::has_command_option(args, "--buffer-tune")) {
+        cfg.buffer_tune = true;
+    }
+    if (test_args::has_command_option(args, "--buffer-tune-input-depths")) {
+        cfg.buffer_tune_input_depths = test_args::get_command_option(args, "--buffer-tune-input-depths");
+    }
+    if (test_args::has_command_option(args, "--buffer-tune-output-depths")) {
+        cfg.buffer_tune_output_depths = test_args::get_command_option(args, "--buffer-tune-output-depths");
+    }
+    cfg.buffer_tune_pages_per_core =
+        test_args::get_command_option_uint32(args, "--buffer-tune-pages-per-core", cfg.buffer_tune_pages_per_core);
+    cfg.buffer_tune_bw_tolerance_pct =
+        test_args::get_command_option_double(args, "--buffer-tune-bw-tolerance", cfg.buffer_tune_bw_tolerance_pct);
     cfg.num_nops_per_tile = test_args::get_command_option_uint32(args, "--compute-nops", cfg.num_nops_per_tile);
     cfg.num_programs = test_args::get_command_option_uint32(args, "--num-programs", cfg.num_programs);
     cfg.device_id = test_args::get_command_option_uint32(args, "--device-id", cfg.device_id);
@@ -140,6 +185,31 @@ BenchmarkConfig parse_args(const std::vector<std::string>& args) {
 
 // Real-time profiler callbacks run on a worker thread; collect records here
 // and analyse after UnregisterProgramRealtimeProfilerCallback.
+void log_realtime_program_go_done(const std::vector<tt::tt_metal::experimental::ProgramRealtimeRecord>& records) {
+    std::map<uint32_t, std::vector<tt::tt_metal::experimental::ProgramRealtimeRecord>> by_chip;
+    for (const auto& r : records) {
+        by_chip[r.chip_id].push_back(r);
+    }
+    for (auto& [chip_id, chip_records] : by_chip) {
+        std::sort(chip_records.begin(), chip_records.end(), [](const auto& a, const auto& b) {
+            return a.start_timestamp < b.start_timestamp;
+        });
+        for (const auto& r : chip_records) {
+            const uint64_t duration_cycles =
+                (r.end_timestamp >= r.start_timestamp) ? (r.end_timestamp - r.start_timestamp) : 0;
+            const double duration_ns = (r.frequency > 0.0) ? static_cast<double>(duration_cycles) / r.frequency : 0.0;
+            log_info(
+                LogTest,
+                "Real-time profiler chip {} program {}: go_cycles={} done_cycles={} duration={:.2f} ns",
+                chip_id,
+                r.program_id,
+                r.start_timestamp,
+                r.end_timestamp,
+                duration_ns);
+        }
+    }
+}
+
 void log_realtime_op_to_op_gaps(const std::vector<tt::tt_metal::experimental::ProgramRealtimeRecord>& records) {
     if (records.size() < 2) {
         log_info(LogTest, "Real-time profiler: got {} record(s); need >= 2 to compute op-to-op gaps.", records.size());
@@ -160,6 +230,15 @@ void log_realtime_op_to_op_gaps(const std::vector<tt::tt_metal::experimental::Pr
         for (size_t i = 1; i < chip_records.size(); ++i) {
             const auto& prev = chip_records[i - 1];
             const auto& cur = chip_records[i];
+            if (cur.program_id == prev.program_id) {
+                log_warning(
+                    LogTest,
+                    "Real-time profiler chip {}: skipping dispatch gap between duplicate program_id {} "
+                    "(trace replay may report the same host runtime id twice)",
+                    chip_id,
+                    cur.program_id);
+                continue;
+            }
             if (cur.start_timestamp < prev.end_timestamp) {
                 log_warning(
                     LogTest,
@@ -225,6 +304,41 @@ struct RealtimeProfilerSession {
     }
 };
 
+void write_realtime_profiler_csv(
+    const std::vector<tt::tt_metal::experimental::ProgramRealtimeRecord>& records, const std::string& path) {
+    std::ofstream out(path);
+    if (!out) {
+        log_warning(LogTest, "Real-time profiler: could not open {} for write", path);
+        return;
+    }
+    out << "program_id,chip_id,go_cycles,done_cycles,gap_to_next_go_cycles,duration_cycles,duration_ns,frequency_ghz\n";
+    std::map<uint32_t, std::vector<tt::tt_metal::experimental::ProgramRealtimeRecord>> by_chip;
+    for (const auto& r : records) {
+        by_chip[r.chip_id].push_back(r);
+    }
+    for (auto& [chip_id, chip_records] : by_chip) {
+        std::sort(chip_records.begin(), chip_records.end(), [](const auto& a, const auto& b) {
+            return a.start_timestamp < b.start_timestamp;
+        });
+        for (size_t i = 0; i < chip_records.size(); ++i) {
+            const auto& r = chip_records[i];
+            const uint64_t duration_cycles =
+                (r.end_timestamp >= r.start_timestamp) ? (r.end_timestamp - r.start_timestamp) : 0;
+            const double duration_ns = (r.frequency > 0.0) ? static_cast<double>(duration_cycles) / r.frequency : 0.0;
+            uint64_t gap_to_next_go = 0;
+            if (i + 1 < chip_records.size()) {
+                const auto& next = chip_records[i + 1];
+                if (next.program_id != r.program_id && next.start_timestamp >= r.end_timestamp) {
+                    gap_to_next_go = next.start_timestamp - r.end_timestamp;
+                }
+            }
+            out << r.program_id << "," << chip_id << "," << r.start_timestamp << "," << r.end_timestamp << ","
+                << gap_to_next_go << "," << duration_cycles << "," << duration_ns << "," << r.frequency << "\n";
+        }
+    }
+    log_info(LogTest, "Real-time profiler: wrote {} record(s) to {}", records.size(), path);
+}
+
 // Registers RT profiler callback after warmup; on destruction quiesces, waits for
 // D2H records, unregisters, then logs per-chip op-to-op gaps (Mo's metric:
 // next start - previous end). Must outlive the timed enqueue burst only.
@@ -260,37 +374,68 @@ struct RealtimeProfilerDrainGuard {
         mesh->quiesce_devices();
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         session->unregister_and_drain();
-        log_realtime_op_to_op_gaps(session->copy_records());
+        const auto records = session->copy_records();
+        log_realtime_program_go_done(records);
+        log_realtime_op_to_op_gaps(records);
+        const char* metal_home = std::getenv("TT_METAL_HOME");
+        if (metal_home != nullptr) {
+            write_realtime_profiler_csv(
+                records, std::string(metal_home) + "/generated/profiler/.logs/profile_log_device_rt.csv");
+        }
     }
 };
 
 struct BuiltProgram {
     Program program;
+    KernelHandle reader_kernel = 0;
+    KernelHandle writer_kernel = 0;
     KernelHandle compute_kernel = 0;
+    CoreRangeSet core_group_1;
+    CoreRangeSet core_group_2;
+    uint32_t tiles_per_core_group_1 = 0;
+    uint32_t tiles_per_core_group_2 = 0;
+    uint32_t reader_push_tile_count = 2;
+    uint32_t reader_mode = 0;
+    uint32_t input_cb_depth_tiles = 0;
+    uint32_t output_cb_depth_tiles = 2;
 };
 
-// Set compute runtime arg 1 (program_id) on every core. program_id 0 marks
-// pre-compile / warmup rows in the device CSV; timed launches use 1..N.
-void set_compute_program_id(
+// Set reader/writer/compute runtime args (including program_id) on every active core.
+void set_program_launch_args(
     Program& program,
-    KernelHandle compute_kernel,
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    uint32_t total_num_tiles,
-    uint32_t program_id) {
-    const auto grid = mesh_device->compute_with_storage_grid_size();
-    constexpr bool kRowMajor = true;
-    auto [_num_cores, _all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        split_work_to_cores(grid, total_num_tiles, kRowMajor);
+    const BuiltProgram& built,
+    uint32_t input_buffer_addr,
+    uint32_t output_buffer_addr,
+    uint32_t program_id,
+    uint32_t reader_push_tile_count,
+    uint32_t reader_mode) {
     const auto work_groups = {
-        std::make_pair(core_group_1, num_tiles_per_core_group_1),
-        std::make_pair(core_group_2, num_tiles_per_core_group_2)};
+        std::make_pair(built.core_group_1, built.tiles_per_core_group_1),
+        std::make_pair(built.core_group_2, built.tiles_per_core_group_2)};
+    uint32_t start_tile_id = 0;
     for (const auto& [group, tiles_per_core] : work_groups) {
         if (tiles_per_core == 0) {
             continue;
         }
         for (const auto& range : group.ranges()) {
             for (const auto& core : range) {
-                SetRuntimeArgs(program, compute_kernel, core, {tiles_per_core, program_id});
+                SetRuntimeArgs(
+                    program,
+                    built.reader_kernel,
+                    core,
+                    {input_buffer_addr,
+                     tiles_per_core,
+                     start_tile_id,
+                     program_id,
+                     reader_push_tile_count,
+                     reader_mode});
+                SetRuntimeArgs(
+                    program,
+                    built.writer_kernel,
+                    core,
+                    {output_buffer_addr, tiles_per_core, start_tile_id, program_id});
+                SetRuntimeArgs(program, built.compute_kernel, core, {tiles_per_core, program_id});
+                start_tile_id += tiles_per_core;
             }
         }
     }
@@ -299,12 +444,19 @@ void set_compute_program_id(
 // Configure host runtime id (RT profiler) and device CSV program_id before each launch.
 void configure_program_launch(
     Program& program,
-    KernelHandle compute_kernel,
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    uint32_t total_num_tiles,
+    const BuiltProgram& built,
+    uint32_t input_buffer_addr,
+    uint32_t output_buffer_addr,
     uint32_t profiler_program_id,
     uint32_t host_runtime_id) {
-    set_compute_program_id(program, compute_kernel, mesh_device, total_num_tiles, profiler_program_id);
+    set_program_launch_args(
+        program,
+        built,
+        input_buffer_addr,
+        output_buffer_addr,
+        profiler_program_id,
+        built.reader_push_tile_count,
+        built.reader_mode);
     program.set_runtime_id(host_runtime_id);
 }
 
@@ -334,20 +486,43 @@ BuiltProgram build_program(
         num_tiles_per_core_group_1,
         num_tiles_per_core_group_2);
 
-    // CBs: c_0 is reader -> compute, c_16 is compute -> writer. Sized at 2
-    // tiles each (double-buffered) so the reader/compute/writer can overlap.
+    // Input CB depth defaults to 2x reader push chunk (e.g. push 2 -> depth 4).
     constexpr uint32_t kInputCbId = tt::CBIndex::c_0;
     constexpr uint32_t kOutputCbId = tt::CBIndex::c_16;
-    constexpr uint32_t kCbDepthInTiles = 2;
     constexpr auto kDataFormat = tt::DataFormat::Float16_b;
 
+    const uint32_t push_tiles = cfg.reader_push_tile_count > 0 ? cfg.reader_push_tile_count : 1;
+    const uint32_t input_cb_depth = cfg.input_cb_depth_tiles > 0 ? cfg.input_cb_depth_tiles : (2 * push_tiles);
+    // Compute -> writer unchanged: still wait_front(1) / pack one tile at a time.
+    const uint32_t output_cb_depth = cfg.output_cb_depth_tiles > 0 ? cfg.output_cb_depth_tiles : 2;
+
+    TT_FATAL(
+        input_cb_depth >= push_tiles,
+        "input CB depth ({}) must be >= --reader-push-tiles ({})",
+        input_cb_depth,
+        push_tiles);
+    TT_FATAL(
+        cfg.num_pages_per_core >= push_tiles,
+        "--num-pages-per-core ({}) must be >= --reader-push-tiles ({})",
+        cfg.num_pages_per_core,
+        push_tiles);
+
+    log_info(
+        LogTest,
+        "Reader: push_tiles={}, input_cb_depth={}, output_cb_depth={} (compute->writer still 1 tile at a time), "
+        "reader_mode={} (0=incremental read+push, 1=batch read then push)",
+        push_tiles,
+        input_cb_depth,
+        output_cb_depth,
+        cfg.reader_mode);
+
     CircularBufferConfig cb_in_config =
-        CircularBufferConfig(kCbDepthInTiles * single_tile_size_bytes, {{kInputCbId, kDataFormat}})
+        CircularBufferConfig(input_cb_depth * single_tile_size_bytes, {{kInputCbId, kDataFormat}})
             .set_page_size(kInputCbId, single_tile_size_bytes);
     CreateCircularBuffer(program, all_cores, cb_in_config);
 
     CircularBufferConfig cb_out_config =
-        CircularBufferConfig(kCbDepthInTiles * single_tile_size_bytes, {{kOutputCbId, kDataFormat}})
+        CircularBufferConfig(output_cb_depth * single_tile_size_bytes, {{kOutputCbId, kDataFormat}})
             .set_page_size(kOutputCbId, single_tile_size_bytes);
     CreateCircularBuffer(program, all_cores, cb_out_config);
 
@@ -394,9 +569,14 @@ BuiltProgram build_program(
         }
         for (const auto& range : group.ranges()) {
             for (const auto& core : range) {
-                SetRuntimeArgs(program, reader_kernel, core, {input_buffer->address(), tiles_per_core, start_tile_id});
-                SetRuntimeArgs(program, writer_kernel, core, {output_buffer->address(), tiles_per_core, start_tile_id});
-                SetRuntimeArgs(program, compute_kernel, core, {tiles_per_core, /*program_id=*/0});
+                SetRuntimeArgs(
+                    program,
+                    reader_kernel,
+                    core,
+                    {input_buffer->address(), tiles_per_core, start_tile_id, 0, push_tiles, cfg.reader_mode});
+                SetRuntimeArgs(
+                    program, writer_kernel, core, {output_buffer->address(), tiles_per_core, start_tile_id, 0});
+                SetRuntimeArgs(program, compute_kernel, core, {tiles_per_core, 0});
                 start_tile_id += tiles_per_core;
             }
         }
@@ -407,7 +587,465 @@ BuiltProgram build_program(
         start_tile_id,
         total_num_tiles);
 
-    return BuiltProgram{std::move(program), compute_kernel};
+    BuiltProgram built;
+    built.program = std::move(program);
+    built.reader_kernel = reader_kernel;
+    built.writer_kernel = writer_kernel;
+    built.compute_kernel = compute_kernel;
+    built.core_group_1 = core_group_1;
+    built.core_group_2 = core_group_2;
+    built.tiles_per_core_group_1 = num_tiles_per_core_group_1;
+    built.tiles_per_core_group_2 = num_tiles_per_core_group_2;
+    built.reader_push_tile_count = push_tiles;
+    built.reader_mode = cfg.reader_mode;
+    built.input_cb_depth_tiles = input_cb_depth;
+    built.output_cb_depth_tiles = output_cb_depth;
+    return built;
+}
+
+struct BufferTuneBwRow {
+    uint32_t input_cb_depth = 0;
+    uint32_t output_cb_depth = 0;
+    long long elapsed_us = 0;
+    double gbps = 0.0;
+};
+
+std::vector<uint32_t> parse_uint32_list(const std::string& list_str, const std::vector<uint32_t>& fallback) {
+    if (list_str.empty()) {
+        return fallback;
+    }
+    std::vector<uint32_t> out;
+    std::stringstream ss(list_str);
+    std::string item;
+    while (std::getline(ss, item, ',')) {
+        if (item.empty()) {
+            continue;
+        }
+        out.push_back(static_cast<uint32_t>(std::stoul(item)));
+    }
+    if (out.empty()) {
+        return fallback;
+    }
+    std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+    return out;
+}
+
+double pipeline_dram_gbps(uint64_t bytes_moved, long long elapsed_us) {
+    if (elapsed_us <= 0) {
+        return 0.0;
+    }
+    const double seconds = static_cast<double>(elapsed_us) * 1e-6;
+    return static_cast<double>(bytes_moved) / seconds / 1e9;
+}
+
+void log_buffer_tune_row(
+    const char* phase,
+    const BenchmarkConfig& cfg,
+    uint32_t input_cb_depth,
+    uint32_t output_cb_depth,
+    uint32_t pages_per_core,
+    long long elapsed_us,
+    uint64_t bytes_moved,
+    double gbps) {
+    log_info(
+        LogTest,
+        "BUFFER_TUNE,phase={},input_cb_depth={},output_cb_depth={},reader_push={},reader_mode={},"
+        "pages_per_core={},compute_nops={},num_programs={},elapsed_us={},bytes_moved={},dram_pipeline_gbps={:.4f}",
+        phase,
+        input_cb_depth,
+        output_cb_depth,
+        cfg.reader_push_tile_count,
+        cfg.reader_mode,
+        pages_per_core,
+        cfg.num_nops_per_tile,
+        cfg.num_programs,
+        elapsed_us,
+        bytes_moved,
+        gbps);
+}
+
+long long execute_timed_workload(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshCommandQueue& cq,
+    distributed::MeshWorkload& workload,
+    Program& program,
+    const BuiltProgram& built,
+    const BenchmarkConfig& cfg,
+    uint32_t input_buffer_addr,
+    uint32_t output_buffer_addr,
+    uint32_t num_programs,
+    bool use_realtime_profiler,
+    bool rt_profiler_active) {
+    constexpr uint32_t kPrecompileProfilerProgramId = 0;
+    auto launch = [&](uint32_t profiler_program_id, uint32_t host_runtime_id) {
+        configure_program_launch(
+            program, built, input_buffer_addr, output_buffer_addr, profiler_program_id, host_runtime_id);
+    };
+
+    constexpr uint8_t kCqId = 0;
+    long long elapsed_us = 0;
+
+    if (cfg.use_trace) {
+        if (!cfg.warmup) {
+            launch(kPrecompileProfilerProgramId, 1);
+            distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+            distributed::Finish(cq);
+        }
+        const distributed::MeshTraceId tid = distributed::BeginTraceCapture(mesh_device.get(), kCqId);
+        for (uint32_t i = 0; i < num_programs; ++i) {
+            const uint32_t program_index = i + 1;
+            launch(program_index, program_index);
+            distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+        }
+        mesh_device->end_mesh_trace(kCqId, tid);
+        distributed::Finish(cq);
+
+        {
+            RealtimeProfilerDrainGuard rt_guard(mesh_device.get(), use_realtime_profiler, rt_profiler_active);
+            const auto t_begin = std::chrono::steady_clock::now();
+            mesh_device->replay_mesh_trace(kCqId, tid, /*blocking=*/false);
+            distributed::Finish(cq);
+            const auto t_end = std::chrono::steady_clock::now();
+            elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_begin).count();
+        }
+        mesh_device->release_mesh_trace(tid);
+    } else {
+        RealtimeProfilerDrainGuard rt_guard(mesh_device.get(), use_realtime_profiler, rt_profiler_active);
+        const auto t_begin = std::chrono::steady_clock::now();
+        for (uint32_t i = 0; i < num_programs; ++i) {
+            const uint32_t program_index = i + 1;
+            launch(program_index, program_index);
+            distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+        }
+        distributed::Finish(cq);
+        const auto t_end = std::chrono::steady_clock::now();
+        elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_begin).count();
+    }
+    return elapsed_us;
+}
+
+uint32_t pick_smallest_depth_at_peak_bw(
+    const std::vector<BufferTuneBwRow>& rows, double tolerance_fraction, double* peak_gbps_out) {
+    double peak_gbps = 0.0;
+    for (const auto& row : rows) {
+        peak_gbps = std::max(peak_gbps, row.gbps);
+    }
+    if (peak_gbps_out != nullptr) {
+        *peak_gbps_out = peak_gbps;
+    }
+    const double threshold = peak_gbps * (1.0 - tolerance_fraction);
+
+    bool found = false;
+    uint32_t best_depth = 0;
+    for (const auto& row : rows) {
+        if (row.gbps >= threshold) {
+            if (!found || row.input_cb_depth < best_depth) {
+                best_depth = row.input_cb_depth;
+                found = true;
+            }
+        }
+    }
+    if (!found) {
+        // No depth met tolerance; use shallowest depth that hit peak BW.
+        uint32_t fallback = rows.front().input_cb_depth;
+        for (const auto& row : rows) {
+            if (row.gbps >= peak_gbps - 1e-6 && row.input_cb_depth < fallback) {
+                fallback = row.input_cb_depth;
+            }
+        }
+        return fallback;
+    }
+    return best_depth;
+}
+
+bool verify_output_matches_input(
+    distributed::MeshCommandQueue& cq,
+    std::shared_ptr<distributed::MeshBuffer>& output_buffer,
+    const std::vector<uint32_t>& input_data) {
+    std::vector<uint32_t> output_data;
+    distributed::EnqueueReadMeshBuffer(cq, output_data, output_buffer, /*blocking=*/true);
+    if (output_data.size() != input_data.size()) {
+        log_error(LogTest, "Output size mismatch: got {} elems, expected {}", output_data.size(), input_data.size());
+        return false;
+    }
+    if (!std::equal(input_data.begin(), input_data.end(), output_data.begin())) {
+        log_error(LogTest, "Output data mismatch after pipeline run");
+        return false;
+    }
+    return true;
+}
+
+// Buffer-tune mode: double-buffer reader, NOP compute (DRAM bound), sweep input CB depth for
+// peak DRAM pipeline BW, then measure op-to-op latency at the smallest depth that reaches peak BW.
+bool run_buffer_tune_mode(const BenchmarkConfig& cfg) {
+    bool pass = true;
+    BenchmarkConfig tune_cfg = cfg;
+    tune_cfg.reader_push_tile_count = std::max<uint32_t>(2u, tune_cfg.reader_push_tile_count);
+    tune_cfg.num_pages_per_core = tune_cfg.buffer_tune_pages_per_core;
+    tune_cfg.num_nops_per_tile = 0;
+    tune_cfg.warmup = true;
+
+    const std::vector<uint32_t> default_input_depths = {2, 4, 6, 8, 12, 16, 24, 32};
+    const std::vector<uint32_t> input_depths =
+        parse_uint32_list(tune_cfg.buffer_tune_input_depths, default_input_depths);
+
+    log_info(
+        LogTest,
+        "buffer_tune: pages_per_core={}, reader_push={}, compute_nops=0, input_depths=[{}], "
+        "output_depth_sweep={}, bw_tolerance={:.1f}%",
+        tune_cfg.num_pages_per_core,
+        tune_cfg.reader_push_tile_count,
+        tune_cfg.buffer_tune_input_depths,
+        tune_cfg.buffer_tune_output_depths.empty() ? "none" : tune_cfg.buffer_tune_output_depths.c_str(),
+        tune_cfg.buffer_tune_bw_tolerance_pct);
+
+    if (tune_cfg.use_device_profiler) {
+        const bool profiler_runtime_enabled = tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_enabled();
+        TT_FATAL(
+            profiler_runtime_enabled,
+            "--buffer-tune latency phase needs TT_METAL_DEVICE_PROFILER=1 when --use-device-profiler is set");
+    }
+
+    const size_t trace_region_size = tune_cfg.use_trace ? tune_cfg.trace_region_size : 0;
+    auto mesh_device =
+        distributed::MeshDevice::create_unit_mesh(tune_cfg.device_id, DEFAULT_L1_SMALL_SIZE, trace_region_size);
+
+    log_info(LogTest, "Clock: {} MHz", get_tt_npu_clock(mesh_device->get_devices()[0]));
+
+    const auto grid = mesh_device->compute_with_storage_grid_size();
+    const uint32_t num_cores = grid.x * grid.y;
+    const uint32_t total_num_tiles = num_cores * tune_cfg.num_pages_per_core;
+
+    constexpr auto kDataFormat = tt::DataFormat::Float16_b;
+    const uint32_t single_tile_size_bytes = tile_size(kDataFormat);
+    const uint32_t buffer_size_bytes = total_num_tiles * single_tile_size_bytes;
+    const uint64_t bytes_per_program = 2ull * total_num_tiles * single_tile_size_bytes;
+
+    distributed::DeviceLocalBufferConfig dram_local_config{
+        .page_size = single_tile_size_bytes,
+        .buffer_type = BufferType::DRAM,
+    };
+    distributed::ReplicatedBufferConfig dram_buf_config{.size = buffer_size_bytes};
+
+    auto input_buffer = distributed::MeshBuffer::create(dram_buf_config, dram_local_config, mesh_device.get());
+    auto output_buffer = distributed::MeshBuffer::create(dram_buf_config, dram_local_config, mesh_device.get());
+
+    const auto seed = static_cast<int>(std::chrono::system_clock::now().time_since_epoch().count());
+    std::vector<uint32_t> input_data =
+        create_random_vector_of_bfloat16(buffer_size_bytes, /*rand_max_float=*/100, seed);
+
+    auto& cq = mesh_device->mesh_command_queue();
+    distributed::EnqueueWriteMeshBuffer(cq, input_buffer, input_data, /*blocking=*/false);
+    distributed::Finish(cq);
+
+    const uint32_t input_buffer_addr = input_buffer->address();
+    const uint32_t output_buffer_addr = output_buffer->address();
+    const bool rt_profiler_active = tt::tt_metal::experimental::IsProgramRealtimeProfilerActive();
+
+    std::vector<BufferTuneBwRow> input_bw_rows;
+    for (const uint32_t depth : input_depths) {
+        TT_FATAL(
+            depth >= tune_cfg.reader_push_tile_count,
+            "buffer_tune input_cb_depth {} must be >= reader_push {}",
+            depth,
+            tune_cfg.reader_push_tile_count);
+
+        BenchmarkConfig sweep_cfg = tune_cfg;
+        sweep_cfg.input_cb_depth_tiles = depth;
+        sweep_cfg.num_programs = 1;
+
+        BuiltProgram built =
+            build_program(mesh_device, sweep_cfg, input_buffer, output_buffer, total_num_tiles, single_tile_size_bytes);
+
+        distributed::MeshWorkload workload;
+        const distributed::MeshCoordinateRange device_range(mesh_device->shape());
+        workload.add_program(device_range, std::move(built.program));
+        Program& program = workload.get_programs().begin()->second;
+
+        configure_program_launch(program, built, input_buffer_addr, output_buffer_addr, 0, 0);
+        distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+        distributed::Finish(cq);
+
+        const long long elapsed_us = execute_timed_workload(
+            mesh_device,
+            cq,
+            workload,
+            program,
+            built,
+            sweep_cfg,
+            input_buffer_addr,
+            output_buffer_addr,
+            /*num_programs=*/1,
+            /*use_realtime_profiler=*/false,
+            rt_profiler_active);
+
+        const double gbps = pipeline_dram_gbps(bytes_per_program, elapsed_us);
+        input_bw_rows.push_back({depth, built.output_cb_depth_tiles, elapsed_us, gbps});
+        log_buffer_tune_row(
+            "input_bw_sweep",
+            sweep_cfg,
+            depth,
+            built.output_cb_depth_tiles,
+            tune_cfg.num_pages_per_core,
+            elapsed_us,
+            bytes_per_program,
+            gbps);
+    }
+
+    double peak_gbps = 0.0;
+    const double tolerance_fraction = tune_cfg.buffer_tune_bw_tolerance_pct / 100.0;
+    const uint32_t best_input_depth = pick_smallest_depth_at_peak_bw(input_bw_rows, tolerance_fraction, &peak_gbps);
+
+    const double threshold_gbps = peak_gbps * (1.0 - tolerance_fraction);
+    log_info(
+        LogTest,
+        "buffer_tune: peak_dram_pipeline_gbps={:.4f}, threshold_gbps={:.4f} (within {:.1f}% of peak), "
+        "smallest_input_cb_depth_at_peak={}",
+        peak_gbps,
+        threshold_gbps,
+        tune_cfg.buffer_tune_bw_tolerance_pct,
+        best_input_depth);
+
+    uint32_t best_output_depth = tune_cfg.output_cb_depth_tiles > 0 ? tune_cfg.output_cb_depth_tiles : 2;
+
+    if (!tune_cfg.buffer_tune_output_depths.empty()) {
+        const std::vector<uint32_t> default_output_depths = {2, 4, 8, 16};
+        const std::vector<uint32_t> output_depths =
+            parse_uint32_list(tune_cfg.buffer_tune_output_depths, default_output_depths);
+
+        std::vector<BufferTuneBwRow> output_bw_rows;
+        for (const uint32_t out_depth : output_depths) {
+            BenchmarkConfig sweep_cfg = tune_cfg;
+            sweep_cfg.input_cb_depth_tiles = best_input_depth;
+            sweep_cfg.output_cb_depth_tiles = out_depth;
+            sweep_cfg.num_programs = 1;
+
+            BuiltProgram built = build_program(
+                mesh_device, sweep_cfg, input_buffer, output_buffer, total_num_tiles, single_tile_size_bytes);
+
+            distributed::MeshWorkload workload;
+            const distributed::MeshCoordinateRange device_range(mesh_device->shape());
+            workload.add_program(device_range, std::move(built.program));
+            Program& program = workload.get_programs().begin()->second;
+
+            configure_program_launch(program, built, input_buffer_addr, output_buffer_addr, 0, 0);
+            distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+            distributed::Finish(cq);
+
+            const long long elapsed_us = execute_timed_workload(
+                mesh_device,
+                cq,
+                workload,
+                program,
+                built,
+                sweep_cfg,
+                input_buffer_addr,
+                output_buffer_addr,
+                /*num_programs=*/1,
+                /*use_realtime_profiler=*/false,
+                rt_profiler_active);
+
+            const double gbps = pipeline_dram_gbps(bytes_per_program, elapsed_us);
+            output_bw_rows.push_back({best_input_depth, out_depth, elapsed_us, gbps});
+            log_buffer_tune_row(
+                "output_bw_sweep",
+                sweep_cfg,
+                best_input_depth,
+                out_depth,
+                tune_cfg.num_pages_per_core,
+                elapsed_us,
+                bytes_per_program,
+                gbps);
+        }
+
+        double output_peak_gbps = 0.0;
+        for (const auto& row : output_bw_rows) {
+            output_peak_gbps = std::max(output_peak_gbps, row.gbps);
+        }
+        const double out_thresh = output_peak_gbps * (1.0 - tolerance_fraction);
+        best_output_depth = output_bw_rows.front().output_cb_depth;
+        for (const auto& row : output_bw_rows) {
+            if (row.gbps >= out_thresh && row.output_cb_depth < best_output_depth) {
+                best_output_depth = row.output_cb_depth;
+            }
+        }
+        log_info(
+            LogTest,
+            "buffer_tune: output sweep peak_gbps={:.4f}, smallest_output_cb_depth_at_peak={}",
+            output_peak_gbps,
+            best_output_depth);
+    }
+
+    // Op-to-op latency at the smallest input (and output) buffer sizes that reach peak BW.
+    BenchmarkConfig latency_cfg = tune_cfg;
+    latency_cfg.input_cb_depth_tiles = best_input_depth;
+    latency_cfg.output_cb_depth_tiles = best_output_depth;
+    latency_cfg.num_programs = std::max<uint32_t>(2u, cfg.num_programs);
+    latency_cfg.num_pages_per_core = cfg.num_pages_per_core;
+    latency_cfg.num_nops_per_tile = cfg.num_nops_per_tile;
+
+    log_info(
+        LogTest,
+        "buffer_tune: latency_phase input_cb_depth={}, output_cb_depth={}, pages_per_core={}, "
+        "num_programs={}, compute_nops={}",
+        latency_cfg.input_cb_depth_tiles,
+        latency_cfg.output_cb_depth_tiles,
+        latency_cfg.num_pages_per_core,
+        latency_cfg.num_programs,
+        latency_cfg.num_nops_per_tile);
+
+    TT_FATAL(
+        latency_cfg.num_pages_per_core <= tune_cfg.num_pages_per_core,
+        "buffer_tune latency --num-pages-per-core ({}) must be <= --buffer-tune-pages-per-core ({})",
+        latency_cfg.num_pages_per_core,
+        tune_cfg.num_pages_per_core);
+
+    const uint32_t latency_total_tiles = num_cores * latency_cfg.num_pages_per_core;
+    BuiltProgram latency_built = build_program(
+        mesh_device, latency_cfg, input_buffer, output_buffer, latency_total_tiles, single_tile_size_bytes);
+
+    distributed::MeshWorkload latency_workload;
+    const distributed::MeshCoordinateRange device_range(mesh_device->shape());
+    latency_workload.add_program(device_range, std::move(latency_built.program));
+    Program& latency_program = latency_workload.get_programs().begin()->second;
+
+    configure_program_launch(latency_program, latency_built, input_buffer_addr, output_buffer_addr, 0, 0);
+    distributed::EnqueueMeshWorkload(cq, latency_workload, /*blocking=*/false);
+    distributed::Finish(cq);
+
+    const long long latency_elapsed_us = execute_timed_workload(
+        mesh_device,
+        cq,
+        latency_workload,
+        latency_program,
+        latency_built,
+        latency_cfg,
+        input_buffer_addr,
+        output_buffer_addr,
+        latency_cfg.num_programs,
+        latency_cfg.use_realtime_profiler,
+        rt_profiler_active);
+
+    log_info(
+        LogTest,
+        "buffer_tune: latency_phase {} program(s) in {} us (avg {:.2f} us/program)",
+        latency_cfg.num_programs,
+        latency_elapsed_us,
+        static_cast<double>(latency_elapsed_us) / latency_cfg.num_programs);
+
+    if (latency_cfg.use_device_profiler) {
+        tt::tt_metal::ReadMeshDeviceProfilerResults(*mesh_device);
+        log_info(
+            LogTest,
+            "buffer_tune: device profiler CSV at $TT_METAL_HOME/generated/profiler/.logs/profile_log_device.csv "
+            "(export with export_op_to_op_profiler_csv.py)");
+    }
+
+    pass = verify_output_matches_input(cq, output_buffer, input_data) && pass;
+
+    mesh_device->close();
+    return pass;
 }
 
 }  // namespace
@@ -420,19 +1058,36 @@ int main(int argc, char** argv) {
 
         log_info(
             LogTest,
-            "op_to_op_latency: device_id={}, pages_per_core={}, compute_nops={}, num_programs={}, warmup={}, "
-            "use_trace={}, use_device_profiler={}, use_realtime_profiler={}, trace_region_size={}",
+            "op_to_op_latency: device_id={}, pages_per_core={}, reader_push_tiles={}, input_cb_depth_tiles={}, "
+            "output_cb_depth_tiles={}, reader_mode={}, compute_nops={}, num_programs={}, warmup={}, use_trace={}, "
+            "use_device_profiler={}, use_realtime_profiler={}, trace_region_size={}, buffer_tune={}",
             cfg.device_id,
             cfg.num_pages_per_core,
+            cfg.reader_push_tile_count,
+            cfg.input_cb_depth_tiles,
+            cfg.output_cb_depth_tiles,
+            cfg.reader_mode,
             cfg.num_nops_per_tile,
             cfg.num_programs,
             cfg.warmup,
             cfg.use_trace,
             cfg.use_device_profiler,
             cfg.use_realtime_profiler,
-            cfg.trace_region_size);
+            cfg.trace_region_size,
+            cfg.buffer_tune);
         TT_FATAL(cfg.num_programs >= 1, "--num-programs must be >= 1");
         TT_FATAL(cfg.num_pages_per_core >= 1, "--num-pages-per-core must be >= 1");
+        TT_FATAL(cfg.reader_push_tile_count >= 1, "--reader-push-tiles must be >= 1");
+
+        if (cfg.buffer_tune) {
+            const bool tune_pass = run_buffer_tune_mode(cfg);
+            if (tune_pass) {
+                log_info(LogTest, "op_to_op_latency: PASSED (buffer_tune)");
+                return 0;
+            }
+            log_error(LogTest, "op_to_op_latency: FAILED (buffer_tune)");
+            return 1;
+        }
 
         // If the user asked for a CSV dump, make sure the runtime profiler is
         // actually enabled (Tracy-enabled build + TT_METAL_DEVICE_PROFILER=1
@@ -500,19 +1155,22 @@ int main(int argc, char** argv) {
         workload.add_program(device_range, std::move(built.program));
         Program& program = workload.get_programs().begin()->second;
 
-        // Real-time profiler drops id==0; timed launches use host_runtime_id 1..N.
+        // Device CSV uses PROG_ID=0 for warmup/pre-compile; export skips id < 1.
+        // Host runtime_id=0 is not reported by the real-time profiler (dropped by Metal).
         constexpr uint32_t kPrecompileProfilerProgramId = 0;
 
+        const uint32_t input_buffer_addr = input_buffer->address();
+        const uint32_t output_buffer_addr = output_buffer->address();
         auto launch = [&](uint32_t profiler_program_id, uint32_t host_runtime_id) {
             configure_program_launch(
-                program, built.compute_kernel, mesh_device, total_num_tiles, profiler_program_id, host_runtime_id);
+                program, built, input_buffer_addr, output_buffer_addr, profiler_program_id, host_runtime_id);
         };
 
         // Warmup (untimed): one eager enqueue absorbs the JIT-load /
         // dispatcher prefetch cost so they do not pollute either the FD timing
         // loop or the trace-capture step.
         if (cfg.warmup) {
-            launch(kPrecompileProfilerProgramId, 1);
+            launch(kPrecompileProfilerProgramId, kPrecompileProfilerProgramId);
             distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
             distributed::Finish(cq);
         }
@@ -602,7 +1260,8 @@ int main(int argc, char** argv) {
                 LogTest,
                 "Device profiler results dumped. Inspect "
                 "$TT_METAL_HOME/generated/profiler/.logs/profile_log_device.csv "
-                "(PROG_ID, TRISC_0 TILE_IDX, TRISC_2 FINISH_LAST_PUSH; chip gaps: --use-realtime-profiler).");
+                "(PROG_ID, read/write barriers, TRISC_0 TILE_IDX, TRISC_2 FINISH_LAST_PUSH; "
+                "dispatch done/go: --use-realtime-profiler -> profile_log_device_rt.csv).");
         }
 
         std::vector<uint32_t> output_data;
