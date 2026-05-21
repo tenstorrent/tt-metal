@@ -105,7 +105,7 @@ void kernel_main() {
             for (uint32_t block = 0; block < num_blocks; block++) {
                 cb_wait_front(cb_in_id, block_ct_dim);
                 {
-                    DeviceZoneScopedN("combine-packing");
+                    DeviceZoneScopedN("UNTILIZING");
                     pack_untilize_block<block_ct_dim, full_ct_dim>(cb_in_id, 1, cb_untilize_id, block);
                 }
                 cb_pop_front(cb_in_id, block_ct_dim);
