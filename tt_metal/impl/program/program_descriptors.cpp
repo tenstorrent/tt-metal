@@ -205,17 +205,28 @@ void apply_descriptor_runtime_args(Program& program, const ProgramDescriptor& de
         const uint32_t cached_total_size = cached_cb_config.total_size();
         const auto cached_page_sizes = cached_cb_config.page_sizes();  // copy, not ref
 
-        if (cb_desc.buffer) {
-            UpdateDynamicCircularBufferAddress(program, cb_handle, *cb_desc.buffer, cb_desc.address_offset);
-        }
-
         // Re-apply CB total_size / per-format page_size on cache-hit slow-path rebuild.
         // CBDescriptor::total_size is not in the program hash (see hash_cb_descriptor), so
         // factories that compute total_size from runtime-varying op attributes (e.g.
         // attn_matmul, group_attn_matmul, slice_rm, generic_op) must have their fresh size
         // applied here — otherwise the cached program keeps the first-build size and the
         // kernel reads from / writes to mismatched memory.
-        if (cached_total_size != cb_desc.total_size) {
+        //
+        // For sharded CBs (.buffer != nullptr) where total_size ALSO changes, use the
+        // combined UpdateDynamicCircularBufferAddressAndTotalSize.  Separate Address +
+        // TotalSize calls would trip the `total_size <= max_size_` assertion because
+        // max_size_ is bound to the OLD buffer's bank size between the two updates.
+        const bool total_size_changed = cached_total_size != cb_desc.total_size;
+        if (cb_desc.buffer && total_size_changed) {
+            UpdateDynamicCircularBufferAddressAndTotalSize(program, cb_handle, *cb_desc.buffer, cb_desc.total_size);
+            if (cb_desc.address_offset != 0) {
+                // The combined call sets address (without offset) and total_size.  Apply
+                // address_offset separately if requested (uncommon — generic_op pattern).
+                UpdateDynamicCircularBufferAddress(program, cb_handle, *cb_desc.buffer, cb_desc.address_offset);
+            }
+        } else if (cb_desc.buffer) {
+            UpdateDynamicCircularBufferAddress(program, cb_handle, *cb_desc.buffer, cb_desc.address_offset);
+        } else if (total_size_changed) {
             UpdateCircularBufferTotalSize(program, cb_handle, cb_desc.total_size);
         }
         // CBFormatDescriptor::page_size IS in the program hash today, so by construction

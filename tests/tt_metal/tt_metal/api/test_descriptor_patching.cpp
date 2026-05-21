@@ -673,5 +673,44 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ApplyDescriptorRuntimeArgs_RemoteFor
     EXPECT_EQ(program.circular_buffers()[0]->page_size(1), 128u);
 }
 
+// Regression: when a sharded CB rebinds its buffer AND grows total_size beyond
+// the OLD buffer's bank size, the patcher must use the combined
+// UpdateDynamicCircularBufferAddressAndTotalSize so max_size_ is refreshed
+// atomically with total_size_.  Two separate Update* calls would trip the
+// "total_size <= max_size_" assertion inside set_total_size against the stale
+// max_size from the smaller previous buffer.  Surfaced by
+// test_group_attn_matmul_with_program_cache when shape changes shrink/grow
+// the sharded src0 CB across cache hits.
+TEST_F(DescriptorPatchingDeviceTest, Tensix_ApplyDescriptorRuntimeArgs_ShardedRebind_LargerTotalSize_DoesNotThrow) {
+    // Cached: total_size=2048 (1 tile), backed by a 2048-byte L1 buffer.
+    auto small_buf = MakeL1Buffer(device(), /*size=*/2048);
+    ProgramDescriptor desc;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 2048,
+        .core_ranges = CoreRangeSet{CoreRange{CoreCoord{0, 0}}},
+        .format_descriptors = {CBFormatDescriptor{
+            .buffer_index = 0,
+            .data_format = tt::DataFormat::Float16_b,
+            .page_size = 2048,
+        }},
+        .buffer = small_buf.get(),
+    });
+    desc.kernels = {MakeBlankReaderKernel({0, 0})};
+    Program program{desc};
+    EXPECT_EQ(program.circular_buffers()[0]->size(), 2048u);
+
+    // New: total_size=4096 backed by a larger 4096-byte buffer.  If the patcher
+    // calls UpdateDynamicCircularBufferAddress (rebinds to large_buf, but does
+    // not refresh max_size_) and then UpdateCircularBufferTotalSize(4096), the
+    // latter trips the cached max_size_ (still 2048 from small_buf).  The
+    // combined Update*AndTotalSize path resets max_size_ from large_buf.
+    auto large_buf = MakeL1Buffer(device(), /*size=*/4096);
+    desc.cbs[0].buffer = large_buf.get();
+    desc.cbs[0].total_size = 4096;
+    EXPECT_NO_THROW(apply_descriptor_runtime_args(program, desc));
+
+    EXPECT_EQ(program.circular_buffers()[0]->size(), 4096u);
+}
+
 }  // namespace
 }  // namespace tt::tt_metal
