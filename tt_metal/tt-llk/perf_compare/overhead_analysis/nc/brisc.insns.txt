@@ -1,0 +1,295 @@
+  auipc	gp,0xffb01
+  addi	gp,gp,-2048
+  auipc	sp,0xffb02
+  addi	sp,sp,-8
+  lui	a5,0xffb00
+  lui	a4,0xffb00
+  addi	a5,a5,36
+  addi	a4,a4,76
+  bgeu	a5,a4,44 <_start+0x44>
+  addi	a4,a4,-1
+  sub	a4,a4,a5
+  andi	a4,a4,-4
+  addi	a4,a4,4
+  add	a4,a4,a5
+  sw	zero,0(a5)
+  addi	a5,a5,4
+  bne	a5,a4,38 <_start+0x38>
+  lui	a5,0x4
+  lui	a4,0x6
+  mv	a5,a5
+  mv	a4,a4
+  beq	a5,a4,94 <_start+0x94>
+  lui	a4,0xffb00
+  lui	a3,0xffb00
+  mv	a4,a4
+  addi	a3,a3,36
+  bgeu	a4,a3,94 <_start+0x94>
+  addi	a3,a3,-1
+  sub	a3,a3,a4
+  andi	a3,a3,-4
+  addi	a3,a3,4
+  add	a3,a3,a5
+  lw	a1,0(a5)
+  addi	a5,a5,4
+  sw	a1,0(a4)
+  addi	a4,a4,4
+  bne	a5,a3,80 <_start+0x80>
+  lui	s0,0xffb00
+  lui	s1,0xffb00
+  mv	s0,s0
+  addi	s1,s1,4
+  bgeu	s0,s1,b8 <_start+0xb8>
+  lw	a5,0(s0)
+  addi	s0,s0,4
+  jalr	a5
+  bltu	s0,s1,a8 <_start+0xa8>
+  jal	bc <main>
+  addi	sp,sp,-16
+  lw	a5,-1976(gp)
+  sw	s0,12(sp)
+  sw	s1,8(sp)
+  sw	s2,4(sp)
+  sw	s3,0(sp)
+  lui	a4,0xffef0
+  beqz	a5,e0 <main+0x24>
+  addi	a4,a4,896
+  lw	a3,8(a4)
+  lui	a2,0x400
+  li	a5,0
+  or	a3,a3,a2
+  sw	a3,8(a4)
+  lw	a3,-2000(gp)
+  mv	a4,a5
+  sw	a4,0(a3)
+  lw	a4,0(a3)
+  and	zero,zero,a4
+  lw	a4,-2000(gp)
+  mv	a3,a5
+  addi	a4,a4,4
+  sw	a3,0(a4)
+  lw	a3,0(a4)
+  and	zero,zero,a3
+  mv	a4,a5
+  lw	a3,-2008(gp)
+  sw	a4,0(a3)
+  lw	a4,0(a3)
+  and	zero,zero,a4
+  lw	a4,-2012(gp)
+  sw	a5,0(a4)
+  lw	a5,0(a4)
+  and	zero,zero,a5
+  lui	a4,0xb001d
+  addi	a4,a4,-1282
+  mv	a5,a4
+  lw	a3,-2004(gp)
+  sw	a5,0(a3)
+  lw	a5,0(a3)
+  and	zero,zero,a5
+  nop
+  lw	a5,0(a3)
+  and	zero,zero,a5
+  bne	a5,a4,160 <main+0xa4>
+  lui	t4,0xffff9
+  addi	t4,t4,-1
+  li	a2,0
+  li	s2,0
+  lui	a7,0xffb00
+  li	a6,2
+  lui	a5,0xffb12
+  lui	t0,0x7
+  li	t1,1
+  fence
+  lw	a4,-2000(gp)
+  sh2add	a4,s2,a4
+  lw	a4,0(a4)
+  and	zero,zero,a4
+  beq	a4,a6,1f4 <main+0x138>
+  andi	a4,a4,-3
+  beq	a4,t1,278 <main+0x1bc>
+  lw	a3,496(a5)
+  lw	a4,504(a5)
+  addi	s3,a3,1350
+  sltu	a3,s3,a3
+  add	a3,a3,a4
+  lw	a1,496(a5)
+  lw	a4,504(a5)
+  bltu	a4,a3,1c8 <main+0x10c>
+  bne	a3,a4,194 <main+0xd8>
+  bltu	a1,s3,1c8 <main+0x10c>
+  fence
+  lw	a4,-2000(gp)
+  sh2add	a4,s2,a4
+  lw	a4,0(a4)
+  and	zero,zero,a4
+  bne	a4,a6,1ac <main+0xf0>
+  lw	a3,432(a5)
+  or	a3,a3,t0
+  sw	a3,432(a5)
+  nop
+  lw	a4,432(a5)
+  bne	a3,a4,200 <main+0x144>
+  lw	a3,-2000(gp)
+  addi	a2,a2,1
+  andi	s2,a2,1
+  li	a4,0
+  sh2add	a3,s2,a3
+  sw	a4,0(a3)
+  lw	a4,0(a3)
+  and	zero,zero,a4
+  lw	a3,-2004(gp)
+  mv	a4,a2
+  sw	a4,0(a3)
+  lw	a4,0(a3)
+  and	zero,zero,a4
+  nop
+  lw	a4,0(a3)
+  and	zero,zero,a4
+  bne	a2,a4,240 <main+0x184>
+  lw	a3,-2012(gp)
+  mv	a4,a2
+  sw	a4,0(a3)
+  lw	a4,0(a3)
+  and	zero,zero,a4
+  nop
+  lw	a4,0(a3)
+  and	zero,zero,a4
+  bne	a4,a2,264 <main+0x1a8>
+  j	1b4 <main+0xf8>
+  li	a4,0
+  lw	a3,-1992(gp)
+  sw	a4,0(a3)
+  lw	a4,0(a3)
+  and	zero,zero,a4
+  nop
+  lw	a4,0(a3)
+  and	zero,zero,a4
+  bnez	a4,28c <main+0x1d0>
+  lw	a3,-1988(gp)
+  sw	a4,0(a3)
+  lw	a4,0(a3)
+  and	zero,zero,a4
+  nop
+  lw	a4,0(a3)
+  and	zero,zero,a4
+  bnez	a4,2ac <main+0x1f0>
+  lw	a3,-1996(gp)
+  sw	a4,0(a3)
+  lw	a4,0(a3)
+  and	zero,zero,a4
+  nop
+  lw	a4,0(a3)
+  and	zero,zero,a4
+  bnez	a4,2cc <main+0x210>
+  lw	a3,4(a7)
+  sw	a4,0(a3)
+  lw	a4,0(a3)
+  and	zero,zero,a4
+  nop
+  lw	a4,0(a3)
+  and	zero,zero,a4
+  bnez	a4,2ec <main+0x230>
+  lw	a3,4(a7)
+  addi	a3,a3,4
+  sw	a4,0(a3)
+  lw	a4,0(a3)
+  and	zero,zero,a4
+  nop
+  lw	a4,0(a3)
+  and	zero,zero,a4
+  bnez	a4,310 <main+0x254>
+  lw	a3,4(a7)
+  addi	a3,a3,8
+  sw	a4,0(a3)
+  lw	a4,0(a3)
+  and	zero,zero,a4
+  nop
+  lw	a4,0(a3)
+  and	zero,zero,a4
+  bnez	a4,334 <main+0x278>
+  sw	zero,576(a5)
+  .insn	2, 0x0000
+  .insn	2, 0x4061
+  .insn	2, 0xc02a
+  .insn	2, 0x2800
+  .insn	2, 0x0000
+  .insn	2, 0x0800
+  .insn	2, 0x02c6
+  .insn	2, 0x4400
+  .insn	2, 0x0042
+  .insn	2, 0x8c40
+  .insn	2, 0x0802
+  .insn	2, 0x8c40
+  .insn	2, 0x0102
+  .insn	2, 0x8c40
+  lw	a3,432(a5)
+  and	a3,a3,t4
+  sw	a3,432(a5)
+  nop
+  lw	a4,432(a5)
+  bne	a3,a4,370 <main+0x2b4>
+  lw	a3,-2000(gp)
+  addi	a2,a2,1
+  andi	s2,a2,1
+  li	a4,0
+  sh2add	a3,s2,a3
+  sw	a4,0(a3)
+  lw	a4,0(a3)
+  and	zero,zero,a4
+  lw	a3,-2004(gp)
+  mv	a4,a2
+  sw	a4,0(a3)
+  lw	a4,0(a3)
+  and	zero,zero,a4
+  nop
+  lw	a4,0(a3)
+  and	zero,zero,a4
+  bne	a2,a4,3b0 <main+0x2f4>
+  lw	a3,-2008(gp)
+  mv	a4,a2
+  sw	a4,0(a3)
+  lw	a4,0(a3)
+  and	zero,zero,a4
+  nop
+  lw	a4,0(a3)
+  and	zero,zero,a4
+  bne	a4,a2,3d4 <main+0x318>
+  j	1b4 <main+0xf8>
+  lw	a5,-2040(gp)
+  sw	a5,-1988(gp)
+  addi	t5,a5,4
+  addi	t3,a5,8
+  addi	a7,a5,12
+  addi	a0,a5,20
+  addi	a2,a5,24
+  addi	a5,a5,28
+  sw	t5,-1992(gp)
+  sw	t3,-1996(gp)
+  sw	a7,-2000(gp)
+  sw	a0,-2004(gp)
+  sw	a2,-2008(gp)
+  sw	a5,-2012(gp)
+  ret
+  ret
+  ret
+  lw	a4,0(a0)
+  lw	a2,-2000(gp)
+  addi	a4,a4,1
+  andi	a3,a4,1
+  li	a5,0
+  sh2add	a3,a3,a2
+  sw	a4,0(a0)
+  sw	a5,0(a3)
+  lw	a5,0(a3)
+  and	zero,zero,a5
+  lw	a5,0(a0)
+  lw	a3,-2004(gp)
+  sw	a5,0(a3)
+  lw	a5,0(a3)
+  and	zero,zero,a5
+  nop
+  lw	a4,0(a3)
+  and	zero,zero,a4
+  lw	a5,0(a0)
+  bne	a4,a5,468 <reset_state(unsigned long&)+0x3c>
+  ret

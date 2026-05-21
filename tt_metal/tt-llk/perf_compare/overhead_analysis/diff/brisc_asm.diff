@@ -1,0 +1,1192 @@
+--- /tmp/perf_overhead_artifacts/nc/brisc.asm	2026-05-21 01:50:57.193532254 +0000
++++ /tmp/perf_overhead_artifacts/wc/brisc.asm	2026-05-21 01:50:57.463531695 +0000
+@@ -1,5 +1,5 @@
+
+-/tmp/perf_overhead_artifacts/nc/brisc.elf:     file format elf32-littleriscv
++/tmp/perf_overhead_artifacts/wc/brisc.elf:     file format elf32-littleriscv
+
+
+ Disassembly of section .init:
+@@ -26,8 +26,8 @@
+     for (volatile std::uint32_t* p = (volatile std::uint32_t*)__ldm_bss_start; p < (volatile std::uint32_t*)__ldm_bss_end; p++)
+   10:	lui	a5,0xffb00
+   14:	lui	a4,0xffb00
+-  18:	addi	a5,a5,36 # ffb00024 <brisc_bread1>
+-  1c:	addi	a4,a4,76 # ffb0004c <__gcov_info_end>
++  18:	addi	a5,a5,712 # ffb002c8 <brisc_bread1>
++  1c:	addi	a4,a4,752 # ffb002f0 <__fw_export_ldm_end>
+   20:	bgeu	a5,a4,44 <_start+0x44>
+   24:	addi	a4,a4,-1
+   28:	sub	a4,a4,a5
+@@ -57,7 +57,7 @@
+   58:	lui	a4,0xffb00
+   5c:	lui	a3,0xffb00
+   60:	mv	a4,a4
+-  64:	addi	a3,a3,36 # ffb00024 <brisc_bread1>
++  64:	addi	a3,a3,712 # ffb002c8 <brisc_bread1>
+   68:	bgeu	a4,a3,94 <_start+0x94>
+   6c:	addi	a3,a3,-1
+   70:	sub	a3,a3,a4
+@@ -68,7 +68,7 @@
+             *dst++ = *src++;
+   80:	lw	a1,0(a5) # 4000 <__loader_init_start>
+   84:	addi	a5,a5,4
+-  88:	sw	a1,0(a4) # ffb00000 <LOCAL_MEM_BASE>
++  88:	sw	a1,0(a4) # ffb00000 <llk_perf::BUILTIN_COUNTER_CONFIG>
+   8c:	addi	a4,a4,4
+         while (dst < end)
+   90:	bne	a5,a3,80 <_start+0x80>
+@@ -79,12 +79,12 @@
+     for (void (**temp_constructor)(void) = __init_array_start; temp_constructor < __init_array_end; temp_constructor++)
+   94:	lui	s0,0xffb00
+   98:	lui	s1,0xffb00
+-  9c:	mv	s0,s0
+-  a0:	addi	s1,s1,4 # ffb00004 <profiler_barrier>
++  9c:	addi	s0,s0,676 # ffb002a4 <__init_array_start>
++  a0:	addi	s1,s1,680 # ffb002a8 <profiler_barrier>
+   a4:	bgeu	s0,s1,b8 <_start+0xb8>
+     {
+         (*temp_constructor)();
+-  a8:	lw	a5,0(s0) # ffb00000 <LOCAL_MEM_BASE>
++  a8:	lw	a5,0(s0)
+     for (void (**temp_constructor)(void) = __init_array_start; temp_constructor < __init_array_end; temp_constructor++)
+   ac:	addi	s0,s0,4
+         (*temp_constructor)();
+@@ -103,428 +103,874 @@
+
+ 000000bc <main>:
+ {
+-  bc:	addi	sp,sp,-16
++  bc:	addi	sp,sp,-96
+ }
+
+ // Return pointer to CFG with the right base address for the current state
+ inline volatile std::uint32_t *tt_reg_ptr get_cfg_pointer()
+ {
+     if (cfg_state_id == 0)
+-  c0:	lw	a5,-1976(gp) # ffb00048 <ckernel::cfg_state_id>
+-  c4:	sw	s0,12(sp)
+-  c8:	sw	s1,8(sp)
+-  cc:	sw	s2,4(sp)
+-  d0:	sw	s3,0(sp)
++  c0:	lw	a5,-1300(gp) # ffb002ec <ckernel::cfg_state_id>
++  c4:	sw	s0,92(sp)
++  c8:	sw	s1,88(sp)
++  cc:	sw	s2,84(sp)
++  d0:	sw	s3,80(sp)
++  d4:	sw	s4,76(sp)
++  d8:	sw	s5,72(sp)
++  dc:	sw	s6,68(sp)
++  e0:	sw	s7,64(sp)
++  e4:	sw	s8,60(sp)
++  e8:	sw	s9,56(sp)
++  ec:	sw	s10,52(sp)
++  f0:	sw	s11,48(sp)
+     {
+         return reinterpret_cast<volatile std::uint32_t tt_reg_ptr *>(TENSIX_CFG_BASE);
+-  d4:	lui	a4,0xffef0
++  f4:	lui	a4,0xffef0
+     if (cfg_state_id == 0)
+-  d8:	beqz	a5,e0 <main+0x24>
++  f8:	beqz	a5,100 <main+0x44>
+     }
+
+     return reinterpret_cast<volatile std::uint32_t tt_reg_ptr *>(TENSIX_CFG_BASE + CFG_STATE_SIZE * 16);
+-  dc:	addi	a4,a4,896 # ffef0380 <__stack_top+0x3ee380>
++  fc:	addi	a4,a4,896 # ffef0380 <__stack_top+0x3ee380>
+ }
+
+ TT_ALWAYS_INLINE void disable_branch_prediction()
+ {
+     volatile std::uint32_t* tt_reg_ptr cfg_ptr = ckernel::get_cfg_pointer();
+     cfg_ptr[DISABLE_RISC_BP_Disable_main_ADDR32] |= DISABLE_RISC_BP_Disable_main_MASK;
+-  e0:	lw	a3,8(a4)
+-  e4:	lui	a2,0x400
++ 100:	lw	a3,8(a4)
++ 104:	lui	a2,0x400
+     asm volatile(
+-  e8:	li	a5,0
+-  ec:	or	a3,a3,a2
+-  f0:	sw	a3,8(a4)
+-  f4:	lw	a3,-2000(gp) # ffb00030 <brisc_command_buffer>
+-  f8:	mv	a4,a5
+-  fc:	sw	a4,0(a3)
+- 100:	lw	a4,0(a3)
+- 104:	and	zero,zero,a4
++ 108:	li	a5,0
++ 10c:	or	a3,a3,a2
++ 110:	sw	a3,8(a4)
++ 114:	lw	a3,-1324(gp) # ffb002d4 <brisc_command_buffer>
++ 118:	mv	a4,a5
++ 11c:	sw	a4,0(a3)
++ 120:	lw	a4,0(a3)
++ 124:	and	zero,zero,a4
+     ckernel::store_blocking(brisc_command_buffer + 1, 0);
+- 108:	lw	a4,-2000(gp) # ffb00030 <brisc_command_buffer>
+- 10c:	mv	a3,a5
+- 110:	addi	a4,a4,4
+- 114:	sw	a3,0(a4)
+- 118:	lw	a3,0(a4)
+- 11c:	and	zero,zero,a3
+- 120:	mv	a4,a5
+- 124:	lw	a3,-2008(gp) # ffb00028 <brisc_bread0>
+- 128:	sw	a4,0(a3)
+- 12c:	lw	a4,0(a3)
+- 130:	and	zero,zero,a4
+- 134:	lw	a4,-2012(gp) # ffb00024 <brisc_bread1>
+- 138:	sw	a5,0(a4)
+- 13c:	lw	a5,0(a4)
+- 140:	and	zero,zero,a5
+- 144:	lui	a4,0xb001d
+- 148:	addi	a4,a4,-1282 # b001cafe <__runtime_args_end+0xafffc6fe>
+- 14c:	mv	a5,a4
++ 128:	lw	a4,-1324(gp) # ffb002d4 <brisc_command_buffer>
++ 12c:	mv	a3,a5
++ 130:	addi	a4,a4,4
++ 134:	sw	a3,0(a4)
++ 138:	lw	a3,0(a4)
++ 13c:	and	zero,zero,a3
++ 140:	mv	a4,a5
++ 144:	lw	a3,-1332(gp) # ffb002cc <brisc_bread0>
++ 148:	sw	a4,0(a3)
++ 14c:	lw	a4,0(a3)
++ 150:	and	zero,zero,a4
++ 154:	lw	a4,-1336(gp) # ffb002c8 <brisc_bread1>
++ 158:	sw	a5,0(a4)
++ 15c:	lw	a5,0(a4)
++ 160:	and	zero,zero,a5
++ 164:	lui	a5,0xb001d
++ 168:	addi	a5,a5,-1282 # b001cafe <__runtime_args_end+0xafffc6fe>
++ 16c:	mv	a4,a5
+     commit_store(brisc_counter, BRISC_BOOT_READY_SENTINEL);
+- 150:	lw	a3,-2004(gp) # ffb0002c <brisc_counter>
+- 154:	sw	a5,0(a3)
+- 158:	lw	a5,0(a3)
+- 15c:	and	zero,zero,a5
++ 170:	lw	a3,-1328(gp) # ffb002d0 <brisc_counter>
++ 174:	sw	a4,0(a3)
++ 178:	lw	a4,0(a3)
++ 17c:	and	zero,zero,a4
+ {
+     ckernel::store_blocking(ptr, val);
+
+     do
+     {
+         asm volatile("nop");
+- 160:	nop
++ 180:	nop
+     asm volatile(
+- 164:	lw	a5,0(a3)
+- 168:	and	zero,zero,a5
++ 184:	lw	a4,0(a3)
++ 188:	and	zero,zero,a4
+     } while (ckernel::load_blocking(ptr) != val);
+- 16c:	bne	a5,a4,160 <main+0xa4>
++ 18c:	bne	a4,a5,180 <main+0xc4>
++ 190:	lui	s2,0xffb00
++ 194:	mv	s2,s2
++inline void configure_and_arm_from_brisc()
++{
++    volatile std::uint32_t* shared_config = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_SHARED_CONFIG_ADDR);
++    for (std::uint32_t i = 0; i < BUILTIN_COUNTER_COUNT; i++)
++    {
++        shared_config[i] = BUILTIN_COUNTER_CONFIG[i];
++ 198:	lui	s1,0x169
++    for (std::uint32_t i = BUILTIN_COUNTER_COUNT; i < COUNTER_SLOT_COUNT; i++)
++    {
++        shared_config[i] = 0;
++    }
++
++    for (std::uint32_t zone = 0; zone < PERF_COUNTERS_MAX_ZONES; ++zone)
++ 19c:	lui	t0,0x16b
+ #endif
+
+ TT_ALWAYS_INLINE void clear_trisc_soft_reset()
+ {
+     std::uint32_t soft_reset = ckernel::reg_read(RISCV_DEBUG_REG_SOFT_RESET_0);
+     soft_reset &= ~TRISC_SOFT_RESET_MASK;
+- 170:	lui	t4,0xffff9
+- 174:	addi	t4,t4,-1 # ffff8fff <__stack_top+0x4f6fff>
++ 1a0:	lui	s4,0xffff9
++        shared_config[i] = BUILTIN_COUNTER_CONFIG[i];
++ 1a4:	sub	a4,s1,s2
++ 1a8:	addi	t3,gp,-1372 # ffb002a4 <__init_array_start>
++    for (std::uint32_t zone = 0; zone < PERF_COUNTERS_MAX_ZONES; ++zone)
++ 1ac:	addi	t2,t0,308 # 16b134 <__runtime_args_end+0x14ad34>
++ 1b0:	addi	s4,s4,-1 # ffff8fff <__stack_top+0x4f6fff>
+     std::uint32_t counter = 0;
+- 178:	li	a2,0
+- 17c:	li	s2,0
+- 180:	lui	a7,0xffb00
++ 1b4:	li	t4,0
++ 1b8:	li	a0,0
+         switch (static_cast<BriscCommandState>(ckernel::load_blocking(brisc_command_buffer + (counter & 1))))
+- 184:	li	a6,2
++ 1bc:	li	t5,2
+ // now handled by the compiler)
+ // workaround is needed only for GS
+ inline std::uint32_t reg_read(std::uint32_t addr)
+ {
+     volatile std::uint32_t tt_reg_ptr *p_reg = reinterpret_cast<volatile std::uint32_t tt_reg_ptr *>(addr);
+     return p_reg[0];
+- 188:	lui	a5,0xffb12
+-}
+-
+-TT_ALWAYS_INLINE void set_triscs_soft_reset()
+-{
+-    std::uint32_t soft_reset = ckernel::reg_read(RISCV_DEBUG_REG_SOFT_RESET_0);
+-    soft_reset |= TRISC_SOFT_RESET_MASK;
+- 18c:	lui	t0,0x7
+- 190:	li	t1,1
++ 1c0:	lui	t1,0xffb12
++ 1c4:	li	a2,1
++    *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(addr) = value;
++ 1c8:	li	t6,-1
+  * On Blackhole this happens as a side effect of the FENCE instruction.
+  */
+ inline void invalidate_data_cache()
+ {
+     // clobber memory to prevent code reordering by the compiler.
+     asm volatile("fence" ::: "memory");
+- 194:	fence
+- 198:	lw	a4,-2000(gp) # ffb00030 <brisc_command_buffer>
+- 19c:	sh2add	a4,s2,a4
+-    asm volatile(
+- 1a0:	lw	a4,0(a4)
+- 1a4:	and	zero,zero,a4
+- 1a8:	beq	a4,a6,1f4 <main+0x138>
+- 1ac:	andi	a4,a4,-3
+- 1b0:	beq	a4,t1,278 <main+0x1bc>
++ 1cc:	fence
++ 1d0:	lw	a5,-1324(gp) # ffb002d4 <brisc_command_buffer>
++ 1d4:	sh2add	a5,a0,a5
++    asm volatile(
++ 1d8:	lw	a5,0(a5)
++ 1dc:	and	zero,zero,a5
++ 1e0:	beq	a5,t5,22c <main+0x170>
++ 1e4:	andi	a5,a5,-3
++ 1e8:	beq	a5,a2,2b4 <main+0x1f8>
+     std::uint64_t wall_clock_timestamp          = clock_lo[0] | (static_cast<std::uint64_t>(clock_hi[0]) << 32);
+- 1b4:	lw	a3,496(a5) # ffb121f0 <__stack_top+0x101f0>
+- 1b8:	lw	a4,504(a5)
++ 1ec:	lw	a5,496(t1) # ffb121f0 <__stack_top+0x101f0>
++ 1f0:	lw	a3,504(t1)
+     } while (wall_clock < (wall_clock_timestamp + cycles));
+- 1bc:	addi	s3,a3,1350
+- 1c0:	sltu	a3,s3,a3
+- 1c4:	add	a3,a3,a4
++ 1f4:	addi	a6,a5,1350
++ 1f8:	sltu	a5,a6,a5
++ 1fc:	add	a3,a5,a3
+         wall_clock = clock_lo[0] | (static_cast<std::uint64_t>(clock_hi[0]) << 32);
+- 1c8:	lw	a1,496(a5)
+- 1cc:	lw	a4,504(a5)
++ 200:	lw	a1,496(t1)
++ 204:	lw	a5,504(t1)
+     } while (wall_clock < (wall_clock_timestamp + cycles));
+- 1d0:	bltu	a4,a3,1c8 <main+0x10c>
+- 1d4:	bne	a3,a4,194 <main+0xd8>
+- 1d8:	bltu	a1,s3,1c8 <main+0x10c>
++ 208:	bltu	a5,a3,200 <main+0x144>
++ 20c:	bne	a3,a5,1cc <main+0x110>
++ 210:	bltu	a1,a6,200 <main+0x144>
+     asm volatile("fence" ::: "memory");
+- 1dc:	fence
+- 1e0:	lw	a4,-2000(gp) # ffb00030 <brisc_command_buffer>
+- 1e4:	sh2add	a4,s2,a4
+-    asm volatile(
+- 1e8:	lw	a4,0(a4)
+- 1ec:	and	zero,zero,a4
+- 1f0:	bne	a4,a6,1ac <main+0xf0>
++ 214:	fence
++ 218:	lw	a5,-1324(gp) # ffb002d4 <brisc_command_buffer>
++ 21c:	sh2add	a5,a0,a5
++    asm volatile(
++ 220:	lw	a5,0(a5)
++ 224:	and	zero,zero,a5
++ 228:	bne	a5,t5,1e4 <main+0x128>
+     return p_reg[0];
+- 1f4:	lw	a3,432(a5)
+- 1f8:	or	a3,a3,t0
++ 22c:	lw	a3,432(t1)
++}
++
++TT_ALWAYS_INLINE void set_triscs_soft_reset()
++{
++    std::uint32_t soft_reset = ckernel::reg_read(RISCV_DEBUG_REG_SOFT_RESET_0);
++    soft_reset |= TRISC_SOFT_RESET_MASK;
++ 230:	lui	a5,0x7
++ 234:	or	a3,a3,a5
+     p_reg[0]                                 = data;
+- 1fc:	sw	a3,432(a5)
++ 238:	sw	a3,432(t1)
+     ckernel::reg_write(RISCV_DEBUG_REG_SOFT_RESET_0, soft_reset);
+     do
+     {
+         asm volatile("nop");
+- 200:	nop
++ 23c:	nop
+     return p_reg[0];
+- 204:	lw	a4,432(a5)
++ 240:	lw	a5,432(t1)
+     } while (ckernel::reg_read(RISCV_DEBUG_REG_SOFT_RESET_0) != soft_reset);
+- 208:	bne	a3,a4,200 <main+0x144>
++ 244:	bne	a3,a5,23c <main+0x180>
+     ckernel::store_blocking(brisc_command_buffer + (counter & 1), static_cast<std::uint32_t>(BriscCommandState::IDLE_STATE));
+- 20c:	lw	a3,-2000(gp) # ffb00030 <brisc_command_buffer>
++ 248:	lw	a3,-1324(gp) # ffb002d4 <brisc_command_buffer>
+     counter++;
+- 210:	addi	a2,a2,1 # 400001 <__runtime_args_end+0x3dfc01>
++ 24c:	addi	t4,t4,1
+     ckernel::store_blocking(brisc_command_buffer + (counter & 1), static_cast<std::uint32_t>(BriscCommandState::IDLE_STATE));
+- 214:	andi	s2,a2,1
++ 250:	andi	a0,t4,1
+     asm volatile(
+- 218:	li	a4,0
+- 21c:	sh2add	a3,s2,a3
+- 220:	sw	a4,0(a3)
+- 224:	lw	a4,0(a3)
+- 228:	and	zero,zero,a4
++ 254:	li	a5,0
++ 258:	sh2add	a3,a0,a3
++ 25c:	sw	a5,0(a3)
++ 260:	lw	a5,0(a3)
++ 264:	and	zero,zero,a5
+     commit_store(brisc_counter, counter);
+- 22c:	lw	a3,-2004(gp) # ffb0002c <brisc_counter>
+- 230:	mv	a4,a2
+- 234:	sw	a4,0(a3)
+- 238:	lw	a4,0(a3)
+- 23c:	and	zero,zero,a4
++ 268:	lw	a3,-1328(gp) # ffb002d0 <brisc_counter>
++ 26c:	mv	a5,t4
++ 270:	sw	a5,0(a3)
++ 274:	lw	a5,0(a3)
++ 278:	and	zero,zero,a5
+         asm volatile("nop");
+- 240:	nop
++ 27c:	nop
+     asm volatile(
+- 244:	lw	a4,0(a3)
+- 248:	and	zero,zero,a4
++ 280:	lw	a5,0(a3)
++ 284:	and	zero,zero,a5
+     } while (ckernel::load_blocking(ptr) != val);
+- 24c:	bne	a2,a4,240 <main+0x184>
++ 288:	bne	t4,a5,27c <main+0x1c0>
+                 commit_store(brisc_bread1, counter);
+- 250:	lw	a3,-2012(gp) # ffb00024 <brisc_bread1>
++ 28c:	lw	a3,-1336(gp) # ffb002c8 <brisc_bread1>
+     asm volatile(
+- 254:	mv	a4,a2
+- 258:	sw	a4,0(a3)
+- 25c:	lw	a4,0(a3)
+- 260:	and	zero,zero,a4
++ 290:	mv	a5,t4
++ 294:	sw	a5,0(a3)
++ 298:	lw	a5,0(a3)
++ 29c:	and	zero,zero,a5
+         asm volatile("nop");
+- 264:	nop
++ 2a0:	nop
+     asm volatile(
+- 268:	lw	a4,0(a3)
+- 26c:	and	zero,zero,a4
++ 2a4:	lw	a5,0(a3)
++ 2a8:	and	zero,zero,a5
+     } while (ckernel::load_blocking(ptr) != val);
+- 270:	bne	a4,a2,264 <main+0x1a8>
+- 274:	j	1b4 <main+0xf8>
++ 2ac:	bne	a5,t4,2a0 <main+0x1e4>
++ 2b0:	j	1ec <main+0x130>
+     asm volatile(
+- 278:	li	a4,0
++ 2b4:	li	a5,0
+                 commit_store(mailbox_math, ckernel::RESET_VAL);
+- 27c:	lw	a3,-1992(gp) # ffb00038 <mailbox_math>
+- 280:	sw	a4,0(a3)
+- 284:	lw	a4,0(a3)
+- 288:	and	zero,zero,a4
++ 2b8:	lw	a3,-1316(gp) # ffb002dc <mailbox_math>
++ 2bc:	sw	a5,0(a3)
++ 2c0:	lw	a5,0(a3)
++ 2c4:	and	zero,zero,a5
+         asm volatile("nop");
+- 28c:	nop
++ 2c8:	nop
+     asm volatile(
+- 290:	lw	a4,0(a3)
+- 294:	and	zero,zero,a4
++ 2cc:	lw	a5,0(a3)
++ 2d0:	and	zero,zero,a5
+     } while (ckernel::load_blocking(ptr) != val);
+- 298:	bnez	a4,28c <main+0x1d0>
++ 2d4:	bnez	a5,2c8 <main+0x20c>
+                 commit_store(mailbox_unpack, ckernel::RESET_VAL);
+- 29c:	lw	a3,-1988(gp) # ffb0003c <mailbox_unpack>
++ 2d8:	lw	a3,-1312(gp) # ffb002e0 <mailbox_unpack>
+     asm volatile(
+- 2a0:	sw	a4,0(a3)
+- 2a4:	lw	a4,0(a3)
+- 2a8:	and	zero,zero,a4
++ 2dc:	sw	a5,0(a3)
++ 2e0:	lw	a5,0(a3)
++ 2e4:	and	zero,zero,a5
+         asm volatile("nop");
+- 2ac:	nop
++ 2e8:	nop
+     asm volatile(
+- 2b0:	lw	a4,0(a3)
+- 2b4:	and	zero,zero,a4
++ 2ec:	lw	a5,0(a3)
++ 2f0:	and	zero,zero,a5
+     } while (ckernel::load_blocking(ptr) != val);
+- 2b8:	bnez	a4,2ac <main+0x1f0>
++ 2f4:	bnez	a5,2e8 <main+0x22c>
+                 commit_store(mailbox_pack, ckernel::RESET_VAL);
+- 2bc:	lw	a3,-1996(gp) # ffb00034 <mailbox_pack>
++ 2f8:	lw	a3,-1320(gp) # ffb002d8 <mailbox_pack>
+     asm volatile(
+- 2c0:	sw	a4,0(a3)
+- 2c4:	lw	a4,0(a3)
+- 2c8:	and	zero,zero,a4
++ 2fc:	sw	a5,0(a3)
++ 300:	lw	a5,0(a3)
++ 304:	and	zero,zero,a5
+         asm volatile("nop");
+- 2cc:	nop
++ 308:	nop
+     asm volatile(
+- 2d0:	lw	a4,0(a3)
+- 2d4:	and	zero,zero,a4
++ 30c:	lw	a5,0(a3)
++ 310:	and	zero,zero,a5
+     } while (ckernel::load_blocking(ptr) != val);
+- 2d8:	bnez	a4,2cc <main+0x210>
++ 314:	bnez	a5,308 <main+0x24c>
+                 commit_store(profiler_barrier, 0U);
+- 2dc:	lw	a3,4(a7) # ffb00004 <profiler_barrier>
++ 318:	lw	a3,-1368(gp) # ffb002a8 <profiler_barrier>
+     asm volatile(
+- 2e0:	sw	a4,0(a3)
+- 2e4:	lw	a4,0(a3)
+- 2e8:	and	zero,zero,a4
++ 31c:	sw	a5,0(a3)
++ 320:	lw	a5,0(a3)
++ 324:	and	zero,zero,a5
+         asm volatile("nop");
+- 2ec:	nop
++ 328:	nop
+     asm volatile(
+- 2f0:	lw	a4,0(a3)
+- 2f4:	and	zero,zero,a4
++ 32c:	lw	a5,0(a3)
++ 330:	and	zero,zero,a5
+     } while (ckernel::load_blocking(ptr) != val);
+- 2f8:	bnez	a4,2ec <main+0x230>
++ 334:	bnez	a5,328 <main+0x26c>
+                 commit_store(profiler_barrier + 1, 0U);
+- 2fc:	lw	a3,4(a7)
+- 300:	addi	a3,a3,4
++ 338:	lw	a3,-1368(gp) # ffb002a8 <profiler_barrier>
++ 33c:	addi	a3,a3,4
+     asm volatile(
+- 304:	sw	a4,0(a3)
+- 308:	lw	a4,0(a3)
+- 30c:	and	zero,zero,a4
++ 340:	sw	a5,0(a3)
++ 344:	lw	a5,0(a3)
++ 348:	and	zero,zero,a5
+         asm volatile("nop");
+- 310:	nop
++ 34c:	nop
+     asm volatile(
+- 314:	lw	a4,0(a3)
+- 318:	and	zero,zero,a4
++ 350:	lw	a5,0(a3)
++ 354:	and	zero,zero,a5
+     } while (ckernel::load_blocking(ptr) != val);
+- 31c:	bnez	a4,310 <main+0x254>
++ 358:	bnez	a5,34c <main+0x290>
+                 commit_store(profiler_barrier + 2, 0U);
+- 320:	lw	a3,4(a7)
+- 324:	addi	a3,a3,8
++ 35c:	lw	a3,-1368(gp) # ffb002a8 <profiler_barrier>
++ 360:	addi	a3,a3,8
+     asm volatile(
+- 328:	sw	a4,0(a3)
+- 32c:	lw	a4,0(a3)
+- 330:	and	zero,zero,a4
++ 364:	sw	a5,0(a3)
++ 368:	lw	a5,0(a3)
++ 36c:	and	zero,zero,a5
+         asm volatile("nop");
+- 334:	nop
++ 370:	nop
+     asm volatile(
+- 338:	lw	a4,0(a3)
+- 33c:	and	zero,zero,a4
++ 374:	lw	a1,0(a3)
++ 378:	and	zero,zero,a1
+     } while (ckernel::load_blocking(ptr) != val);
+- 340:	bnez	a4,334 <main+0x278>
++ 37c:	bnez	a1,370 <main+0x2b4>
+     p_reg[0]                                 = data;
+- 344:	sw	zero,576(a5)
++ 380:	sw	zero,576(t1)
+     TTI_ZEROACC(ckernel::p_zeroacc::CLR_ALL, 0, 0, 1, 0);
+- 348:	.insn	2, 0x0000
+- 34a:	.insn	2, 0x4061
++ 384:	.insn	2, 0x0000
++ 386:	.insn	2, 0x4061
+     TTI_SFPENCC(3, 0, 0, 10);
+- 34c:	.insn	2, 0xc02a
+- 34e:	.insn	2, 0x2800
++ 388:	.insn	2, 0xc02a
++ 38a:	.insn	2, 0x2800
+     TTI_NOP;
+- 350:	.insn	2, 0x0000
+- 352:	.insn	2, 0x0800
++ 38c:	.insn	2, 0x0000
++ 38e:	.insn	2, 0x0800
+     TTI_SFPCONFIG(0, 11, 1); // loading -1 to LREG11 where sfpi expects it
+- 354:	.insn	2, 0x02c6
+- 356:	.insn	2, 0x4400
++ 390:	.insn	2, 0x02c6
++ 392:	.insn	2, 0x4400
+     TTI_SEMINIT(max_value, min_value, semaphore::t6_sem(index));
+- 358:	.insn	2, 0x0042
+- 35a:	.insn	2, 0x8c40
+- 35c:	.insn	2, 0x0802
+- 35e:	.insn	2, 0x8c40
+- 360:	.insn	2, 0x0102
+- 362:	.insn	2, 0x8c40
++ 394:	.insn	2, 0x0042
++ 396:	.insn	2, 0x8c40
++ 398:	.insn	2, 0x0802
++ 39a:	.insn	2, 0x8c40
++ 39c:	.insn	2, 0x0102
++ 39e:	.insn	2, 0x8c40
++ 3a0:	mv	a5,s2
++        shared_config[i] = BUILTIN_COUNTER_CONFIG[i];
++ 3a4:	lw	a0,0(a5) # 7000 <__loader_init_end+0x1000>
++ 3a8:	add	a3,a4,a5
++ 3ac:	sw	a0,0(a3)
++    for (std::uint32_t i = 0; i < BUILTIN_COUNTER_COUNT; i++)
++ 3b0:	addi	a5,a5,4
++ 3b4:	bne	t3,a5,3a4 <main+0x2e8>
++ 3b8:	addi	a5,s1,676 # 1692a4 <__runtime_args_end+0x148ea4>
++    for (std::uint32_t i = BUILTIN_COUNTER_COUNT; i < COUNTER_SLOT_COUNT; i++)
++ 3bc:	addi	a3,s1,800
++        shared_config[i] = 0;
++ 3c0:	sw	zero,0(a5)
++    for (std::uint32_t i = BUILTIN_COUNTER_COUNT; i < COUNTER_SLOT_COUNT; i++)
++ 3c4:	addi	a5,a5,4
++ 3c8:	bne	a5,a3,3c0 <main+0x304>
++ 3cc:	addi	a3,s1,1620
++    {
++        volatile std::uint32_t* data_mem = reinterpret_cast<volatile std::uint32_t*>(perf_counters_zone_data_addr(zone));
++        for (std::uint32_t i = 0; i < PERF_COUNTERS_BANK_CYCLES_WORDS + PERF_COUNTERS_DATA_WORDS; i++)
++ 3d0:	addi	a5,a3,-820
++        {
++            data_mem[i] = 0;
++ 3d4:	sw	zero,0(a5)
++        for (std::uint32_t i = 0; i < PERF_COUNTERS_BANK_CYCLES_WORDS + PERF_COUNTERS_DATA_WORDS; i++)
++ 3d8:	addi	a5,a5,4
++ 3dc:	bne	a5,a3,3d4 <main+0x318>
++        }
++        volatile std::uint32_t* sync_mem = reinterpret_cast<volatile std::uint32_t*>(perf_counters_sync_ctrl_addr(zone));
++        for (std::uint32_t i = 0; i < 10; i++)
++        {
++            sync_mem[i] = 0;
++ 3e0:	sw	zero,0(a5)
++ 3e4:	sw	zero,4(a5)
++ 3e8:	sw	zero,8(a5)
++ 3ec:	sw	zero,12(a5)
++ 3f0:	sw	zero,16(a5)
++ 3f4:	sw	zero,20(a5)
++ 3f8:	sw	zero,24(a5)
++ 3fc:	sw	zero,28(a5)
++ 400:	sw	zero,32(a5)
++ 404:	sw	zero,36(a5)
++    for (std::uint32_t zone = 0; zone < PERF_COUNTERS_MAX_ZONES; ++zone)
++ 408:	addi	a3,a5,860
++ 40c:	bne	a3,t2,3d0 <main+0x314>
++        std::uint32_t valid_counts[PERF_COUNTERS_MAX_ZONES] = {};
++ 410:	sw	zero,16(sp)
++ 414:	sw	zero,20(sp)
++ 418:	sw	zero,24(sp)
++ 41c:	sw	zero,28(sp)
++ 420:	sw	zero,32(sp)
++ 424:	sw	zero,36(sp)
++ 428:	sw	zero,40(sp)
++ 42c:	sw	zero,44(sp)
++        for (std::uint32_t zone = 0; zone < PERF_COUNTERS_MAX_ZONES; ++zone)
++ 430:	addi	s10,sp,16
++        std::uint32_t bank_mask                             = 0;
++ 434:	li	a7,0
++        bool found_valid                                    = false;
++ 438:	li	s9,0
++            for (std::uint32_t i = 0; i < COUNTER_SLOT_COUNT; i++)
++ 43c:	addi	a0,s1,800
++            std::uint32_t count                      = 0;
++ 440:	li	s11,0
++ 444:	lui	a5,0x169
++                const std::uint32_t metadata = config_mem[i];
++ 448:	lw	a3,0(a5) # 169000 <__runtime_args_end+0x148c00>
++            for (std::uint32_t i = 0; i < COUNTER_SLOT_COUNT; i++)
++ 44c:	addi	a5,a5,4
++                    bank_mask |= (1u << (metadata & 0xFFu));
++ 450:	sll	a6,a2,a3
++                if (metadata & 0x80000000u)
++ 454:	bltz	a3,53c <main+0x480>
++            for (std::uint32_t i = 0; i < COUNTER_SLOT_COUNT; i++)
++ 458:	bne	a5,a0,448 <main+0x38c>
++            valid_counts[zone] = count;
++ 45c:	sw	s11,0(s10)
++        for (std::uint32_t zone = 0; zone < PERF_COUNTERS_MAX_ZONES; ++zone)
++ 460:	addi	a5,sp,48
++ 464:	addi	s10,s10,4
++ 468:	bne	s10,a5,440 <main+0x384>
++        *reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_ENABLED_FLAG_ADDR) = found_valid ? 1u : 0u;
++ 46c:	sw	s9,-512(t0)
++        *reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_BANK_MASK_ADDR)    = bank_mask;
++ 470:	sw	a7,-508(t0)
++            valid_count_ptr[zone] = valid_counts[zone];
++ 474:	lw	a5,16(sp)
++ 478:	sw	a5,-504(t0)
++ 47c:	lw	a5,20(sp)
++ 480:	sw	a5,-500(t0)
++ 484:	lw	a5,24(sp)
++ 488:	sw	a5,-496(t0)
++ 48c:	lw	a5,28(sp)
++ 490:	sw	a5,-492(t0)
++ 494:	lw	a5,32(sp)
++ 498:	sw	a5,-488(t0)
++ 49c:	lw	a5,36(sp)
++ 4a0:	sw	a5,-484(t0)
++ 4a4:	lw	a5,40(sp)
++ 4a8:	sw	a5,-480(t0)
++ 4ac:	lw	a5,44(sp)
++ 4b0:	sw	a5,-476(t0)
++        if (found_valid)
++ 4b4:	bnez	s9,550 <main+0x494>
+     return p_reg[0];
+- 364:	lw	a3,432(a5)
++ 4b8:	lw	a3,432(t1)
+     soft_reset &= ~TRISC_SOFT_RESET_MASK;
+- 368:	and	a3,a3,t4
++ 4bc:	and	a3,a3,s4
+     p_reg[0]                                 = data;
+- 36c:	sw	a3,432(a5)
++ 4c0:	sw	a3,432(t1)
+         asm volatile("nop");
+- 370:	nop
++ 4c4:	nop
+     return p_reg[0];
+- 374:	lw	a4,432(a5)
++ 4c8:	lw	a5,432(t1)
+     } while (ckernel::reg_read(RISCV_DEBUG_REG_SOFT_RESET_0) != soft_reset);
+- 378:	bne	a3,a4,370 <main+0x2b4>
++ 4cc:	bne	a3,a5,4c4 <main+0x408>
+     ckernel::store_blocking(brisc_command_buffer + (counter & 1), static_cast<std::uint32_t>(BriscCommandState::IDLE_STATE));
+- 37c:	lw	a3,-2000(gp) # ffb00030 <brisc_command_buffer>
++ 4d0:	lw	a3,-1324(gp) # ffb002d4 <brisc_command_buffer>
+     counter++;
+- 380:	addi	a2,a2,1
++ 4d4:	addi	t4,t4,1
+     ckernel::store_blocking(brisc_command_buffer + (counter & 1), static_cast<std::uint32_t>(BriscCommandState::IDLE_STATE));
+- 384:	andi	s2,a2,1
++ 4d8:	andi	a0,t4,1
+     asm volatile(
+- 388:	li	a4,0
+- 38c:	sh2add	a3,s2,a3
+- 390:	sw	a4,0(a3)
+- 394:	lw	a4,0(a3)
+- 398:	and	zero,zero,a4
++ 4dc:	li	a5,0
++ 4e0:	sh2add	a3,a0,a3
++ 4e4:	sw	a5,0(a3)
++ 4e8:	lw	a5,0(a3)
++ 4ec:	and	zero,zero,a5
+     commit_store(brisc_counter, counter);
+- 39c:	lw	a3,-2004(gp) # ffb0002c <brisc_counter>
+- 3a0:	mv	a4,a2
+- 3a4:	sw	a4,0(a3)
+- 3a8:	lw	a4,0(a3)
+- 3ac:	and	zero,zero,a4
++ 4f0:	lw	a3,-1328(gp) # ffb002d0 <brisc_counter>
++ 4f4:	mv	a5,t4
++ 4f8:	sw	a5,0(a3)
++ 4fc:	lw	a5,0(a3)
++ 500:	and	zero,zero,a5
+         asm volatile("nop");
+- 3b0:	nop
++ 504:	nop
+     asm volatile(
+- 3b4:	lw	a4,0(a3)
+- 3b8:	and	zero,zero,a4
++ 508:	lw	a5,0(a3)
++ 50c:	and	zero,zero,a5
+     } while (ckernel::load_blocking(ptr) != val);
+- 3bc:	bne	a2,a4,3b0 <main+0x2f4>
++ 510:	bne	t4,a5,504 <main+0x448>
+                 commit_store(brisc_bread0, counter);
+- 3c0:	lw	a3,-2008(gp) # ffb00028 <brisc_bread0>
+-    asm volatile(
+- 3c4:	mv	a4,a2
+- 3c8:	sw	a4,0(a3)
+- 3cc:	lw	a4,0(a3)
+- 3d0:	and	zero,zero,a4
+-        asm volatile("nop");
+- 3d4:	nop
++ 514:	lw	a3,-1332(gp) # ffb002cc <brisc_bread0>
+     asm volatile(
+- 3d8:	lw	a4,0(a3)
+- 3dc:	and	zero,zero,a4
+-    } while (ckernel::load_blocking(ptr) != val);
+- 3e0:	bne	a4,a2,3d4 <main+0x318>
+- 3e4:	j	1b4 <main+0xf8>
++ 518:	mv	a5,t4
++ 51c:	sw	a5,0(a3)
++ 520:	lw	a5,0(a3)
++ 524:	and	zero,zero,a5
++        asm volatile("nop");
++ 528:	nop
++    asm volatile(
++ 52c:	lw	a5,0(a3)
++ 530:	and	zero,zero,a5
++    } while (ckernel::load_blocking(ptr) != val);
++ 534:	bne	a5,t4,528 <main+0x46c>
++ 538:	j	1ec <main+0x130>
++                    count++;
++ 53c:	addi	s11,s11,1
++                    bank_mask |= (1u << (metadata & 0xFFu));
++ 540:	or	a7,a7,a6
++                    found_valid = true;
++ 544:	li	s9,1
++            for (std::uint32_t i = 0; i < COUNTER_SLOT_COUNT; i++)
++ 548:	bne	a5,a0,448 <main+0x38c>
++ 54c:	j	45c <main+0x3a0>
++    *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(addr) = value;
++ 550:	sw	zero,104(t1)
++ 554:	lui	a3,0x169
++            if (bank == counter_bank::l1)
++ 558:	li	s9,3
++    if (b == 4)
++ 55c:	li	s11,4
++        for (std::uint32_t i = 0; i < COUNTER_SLOT_COUNT; i++)
++ 560:	addi	a6,s1,800
++ 564:	j	5a4 <main+0x4e8>
++    if (b == 1)
++ 568:	lw	a5,12(sp)
++ 56c:	beq	a5,a2,5f4 <main+0x538>
++    if (b == 2)
++ 570:	lw	a5,12(sp)
++ 574:	beq	a5,t5,600 <main+0x544>
++    if (b == 3)
++ 578:	lw	a5,12(sp)
++ 57c:	beq	a5,s9,60c <main+0x550>
++    if (b == 4)
++ 580:	lw	a5,12(sp)
++ 584:	beq	a5,s11,618 <main+0x55c>
++ 588:	li	a5,4
++ 58c:	li	a7,0
++    *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(addr) = value;
++ 590:	sw	t6,0(a7)
++ 594:	sw	zero,0(a5)
++            configured_mask |= bank_bit;
++ 598:	or	a1,a1,a0
++        for (std::uint32_t i = 0; i < COUNTER_SLOT_COUNT; i++)
++ 59c:	addi	a3,a3,4 # 169004 <__runtime_args_end+0x148c04>
++ 5a0:	beq	a3,a6,624 <main+0x568>
++            const std::uint32_t metadata = config_mem[i];
++ 5a4:	lw	a5,0(a3)
++            if ((metadata & 0x80000000u) == 0)
++ 5a8:	bgez	a5,59c <main+0x4e0>
++            const std::uint32_t bank_bit = 1u << bank_id;
++ 5ac:	sll	a0,a2,a5
++            if (configured_mask & bank_bit)
++ 5b0:	and	s10,a0,a1
++ 5b4:	zext.b	a7,a5
++ 5b8:	bnez	s10,59c <main+0x4e0>
++            if (bank == counter_bank::l1)
++ 5bc:	zext.b	s10,a5
++ 5c0:	bne	s10,s9,5dc <main+0x520>
++    return *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(addr);
++ 5c4:	lw	s10,536(t1)
++                hw_access::write_reg(RISCV_DEBUG_REG_PERF_CNT_MUX_CTRL, (cur & ~(0x7u << 4)) | ((l1_mux & 0x7u) << 4));
++ 5c8:	srli	a5,a5,0xd
++ 5cc:	andi	a5,a5,112
++ 5d0:	andi	s10,s10,-113
++ 5d4:	or	a5,a5,s10
++    *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(addr) = value;
++ 5d8:	sw	a5,536(t1)
++    volatile auto b = static_cast<std::uint32_t>(bank);
++ 5dc:	sw	a7,12(sp)
++    if (b == 0)
++ 5e0:	lw	a5,12(sp)
++ 5e4:	bnez	a5,568 <main+0x4ac>
++ 5e8:	addi	a5,t1,4
++ 5ec:	lui	a7,0xffb12
++ 5f0:	j	590 <main+0x4d4>
++ 5f4:	addi	a5,t1,28
++ 5f8:	addi	a7,t1,24
++ 5fc:	j	590 <main+0x4d4>
++ 600:	addi	a5,t1,16
++ 604:	addi	a7,t1,12
++ 608:	j	590 <main+0x4d4>
++ 60c:	addi	a5,t1,52
++ 610:	addi	a7,t1,48
++ 614:	j	590 <main+0x4d4>
++ 618:	addi	a5,t1,244
++ 61c:	addi	a7,t1,240
++ 620:	j	590 <main+0x4d4>
++        return *reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_BANK_MASK_ADDR);
++ 624:	lw	a5,-508(t0)
++            if (!(get_active_bank_mask() & (1u << b)))
++ 628:	andi	a5,a5,1
++ 62c:	beqz	a5,670 <main+0x5b4>
++    volatile auto b = static_cast<std::uint32_t>(bank);
++ 630:	sw	zero,8(sp)
++    if (b == 0)
++ 634:	lw	a5,8(sp)
++ 638:	beqz	a5,7b4 <main+0x6f8>
++    if (b == 1)
++ 63c:	lw	a5,8(sp)
++ 640:	beq	a5,a2,864 <__firmware_stack_size+0x64>
++    if (b == 2)
++ 644:	lw	a5,8(sp)
++ 648:	beq	a5,t5,87c <__firmware_stack_size+0x7c>
++    if (b == 3)
++ 64c:	lw	a3,8(sp)
++ 650:	li	a5,3
++ 654:	beq	a3,a5,870 <__firmware_stack_size+0x70>
++    if (b == 4)
++ 658:	lw	a3,8(sp)
++ 65c:	li	a5,4
++ 660:	beq	a3,a5,888 <__firmware_stack_size+0x88>
++ 664:	li	a5,8
++    *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(addr) = value;
++ 668:	sw	a2,0(a5)
++ 66c:	sw	zero,0(a5)
++        return *reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_BANK_MASK_ADDR);
++ 670:	lw	a5,-508(t0)
++            if (!(get_active_bank_mask() & (1u << b)))
++ 674:	andi	a5,a5,2
++ 678:	beqz	a5,6bc <main+0x600>
++    volatile auto b = static_cast<std::uint32_t>(bank);
++ 67c:	sw	a2,8(sp)
++    if (b == 0)
++ 680:	lw	a5,8(sp)
++ 684:	beqz	a5,7bc <main+0x700>
++    if (b == 1)
++ 688:	lw	a5,8(sp)
++ 68c:	beq	a5,a2,7f8 <main+0x73c>
++    if (b == 2)
++ 690:	lw	a5,8(sp)
++ 694:	beq	a5,t5,84c <__firmware_stack_size+0x4c>
++    if (b == 3)
++ 698:	lw	a3,8(sp)
++ 69c:	li	a5,3
++ 6a0:	beq	a3,a5,840 <__firmware_stack_size+0x40>
++    if (b == 4)
++ 6a4:	lw	a3,8(sp)
++ 6a8:	li	a5,4
++ 6ac:	beq	a3,a5,8b8 <__firmware_stack_size+0xb8>
++ 6b0:	li	a5,8
++    *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(addr) = value;
++ 6b4:	sw	a2,0(a5)
++ 6b8:	sw	zero,0(a5)
++        return *reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_BANK_MASK_ADDR);
++ 6bc:	lw	a5,-508(t0)
++            if (!(get_active_bank_mask() & (1u << b)))
++ 6c0:	andi	a5,a5,4
++ 6c4:	beqz	a5,708 <main+0x64c>
++    volatile auto b = static_cast<std::uint32_t>(bank);
++ 6c8:	sw	t5,8(sp)
++    if (b == 0)
++ 6cc:	lw	a5,8(sp)
++ 6d0:	beqz	a5,7c4 <main+0x708>
++    if (b == 1)
++ 6d4:	lw	a5,8(sp)
++ 6d8:	beq	a5,a2,804 <__firmware_stack_size+0x4>
++    if (b == 2)
++ 6dc:	lw	a5,8(sp)
++ 6e0:	beq	a5,t5,81c <__firmware_stack_size+0x1c>
++    if (b == 3)
++ 6e4:	lw	a3,8(sp)
++ 6e8:	li	a5,3
++ 6ec:	beq	a3,a5,810 <__firmware_stack_size+0x10>
++    if (b == 4)
++ 6f0:	lw	a3,8(sp)
++ 6f4:	li	a5,4
++ 6f8:	beq	a3,a5,8ac <__firmware_stack_size+0xac>
++ 6fc:	li	a5,8
++    *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(addr) = value;
++ 700:	sw	a2,0(a5)
++ 704:	sw	zero,0(a5)
++        return *reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_BANK_MASK_ADDR);
++ 708:	lw	a5,-508(t0)
++            if (!(get_active_bank_mask() & (1u << b)))
++ 70c:	andi	a5,a5,8
++ 710:	beqz	a5,754 <main+0x698>
++    volatile auto b = static_cast<std::uint32_t>(bank);
++ 714:	li	a5,3
++ 718:	sw	a5,8(sp)
++    if (b == 0)
++ 71c:	lw	a3,8(sp)
++ 720:	beqz	a3,7cc <main+0x710>
++    if (b == 1)
++ 724:	lw	a3,8(sp)
++ 728:	beq	a3,a2,7d4 <main+0x718>
++    if (b == 2)
++ 72c:	lw	a3,8(sp)
++ 730:	beq	a3,t5,7ec <main+0x730>
++    if (b == 3)
++ 734:	lw	a3,8(sp)
++ 738:	beq	a3,a5,7e0 <main+0x724>
++    if (b == 4)
++ 73c:	lw	a3,8(sp)
++ 740:	li	a5,4
++ 744:	beq	a3,a5,8a0 <__firmware_stack_size+0xa0>
++ 748:	li	a5,8
++    *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(addr) = value;
++ 74c:	sw	a2,0(a5)
++ 750:	sw	zero,0(a5)
++        return *reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_BANK_MASK_ADDR);
++ 754:	lw	a5,-508(t0)
++            if (!(get_active_bank_mask() & (1u << b)))
++ 758:	andi	a5,a5,16
++ 75c:	beqz	a5,7a0 <main+0x6e4>
++    volatile auto b = static_cast<std::uint32_t>(bank);
++ 760:	li	a5,4
++ 764:	sw	a5,8(sp)
++    if (b == 0)
++ 768:	lw	a3,8(sp)
++ 76c:	beqz	a3,7ac <main+0x6f0>
++    if (b == 1)
++ 770:	lw	a3,8(sp)
++ 774:	beq	a3,a2,858 <__firmware_stack_size+0x58>
++    if (b == 2)
++ 778:	lw	a3,8(sp)
++ 77c:	beq	a3,t5,834 <__firmware_stack_size+0x34>
++    if (b == 3)
++ 780:	lw	a1,8(sp)
++ 784:	li	a3,3
++ 788:	beq	a1,a3,828 <__firmware_stack_size+0x28>
++    if (b == 4)
++ 78c:	lw	a3,8(sp)
++ 790:	beq	a3,a5,894 <__firmware_stack_size+0x94>
++ 794:	li	a5,8
++    *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(addr) = value;
++ 798:	sw	a2,0(a5)
++ 79c:	sw	zero,0(a5)
++ 7a0:	sw	a2,60(t1)
++ 7a4:	sw	zero,60(t1)
++    }
++ 7a8:	j	4b8 <main+0x3fc>
++    if (b == 0)
++ 7ac:	addi	a5,t1,8
++ 7b0:	j	798 <main+0x6dc>
++ 7b4:	addi	a5,t1,8
++ 7b8:	j	668 <main+0x5ac>
++ 7bc:	addi	a5,t1,8
++ 7c0:	j	6b4 <main+0x5f8>
++ 7c4:	addi	a5,t1,8
++ 7c8:	j	700 <main+0x644>
++ 7cc:	addi	a5,t1,8
++ 7d0:	j	74c <main+0x690>
++    if (b == 1)
++ 7d4:	lui	a5,0xffb12
++ 7d8:	addi	a5,a5,32 # ffb12020 <__stack_top+0x10020>
++ 7dc:	j	74c <main+0x690>
++    if (b == 3)
++ 7e0:	lui	a5,0xffb12
++ 7e4:	addi	a5,a5,56 # ffb12038 <__stack_top+0x10038>
++ 7e8:	j	74c <main+0x690>
++    if (b == 2)
++ 7ec:	lui	a5,0xffb12
++ 7f0:	addi	a5,a5,20 # ffb12014 <__stack_top+0x10014>
++ 7f4:	j	74c <main+0x690>
++    if (b == 1)
++ 7f8:	lui	a5,0xffb12
++ 7fc:	addi	a5,a5,32 # ffb12020 <__stack_top+0x10020>
++ 800:	j	6b4 <main+0x5f8>
++ 804:	lui	a5,0xffb12
++ 808:	addi	a5,a5,32 # ffb12020 <__stack_top+0x10020>
++ 80c:	j	700 <main+0x644>
++    if (b == 3)
++ 810:	lui	a5,0xffb12
++ 814:	addi	a5,a5,56 # ffb12038 <__stack_top+0x10038>
++ 818:	j	700 <main+0x644>
++    if (b == 2)
++ 81c:	lui	a5,0xffb12
++ 820:	addi	a5,a5,20 # ffb12014 <__stack_top+0x10014>
++ 824:	j	700 <main+0x644>
++    if (b == 3)
++ 828:	lui	a5,0xffb12
++ 82c:	addi	a5,a5,56 # ffb12038 <__stack_top+0x10038>
++ 830:	j	798 <main+0x6dc>
++    if (b == 2)
++ 834:	lui	a5,0xffb12
++ 838:	addi	a5,a5,20 # ffb12014 <__stack_top+0x10014>
++ 83c:	j	798 <main+0x6dc>
++    if (b == 3)
++ 840:	lui	a5,0xffb12
++ 844:	addi	a5,a5,56 # ffb12038 <__stack_top+0x10038>
++ 848:	j	6b4 <main+0x5f8>
++    if (b == 2)
++ 84c:	lui	a5,0xffb12
++ 850:	addi	a5,a5,20 # ffb12014 <__stack_top+0x10014>
++ 854:	j	6b4 <main+0x5f8>
++    if (b == 1)
++ 858:	lui	a5,0xffb12
++ 85c:	addi	a5,a5,32 # ffb12020 <__stack_top+0x10020>
++ 860:	j	798 <main+0x6dc>
++ 864:	lui	a5,0xffb12
++ 868:	addi	a5,a5,32 # ffb12020 <__stack_top+0x10020>
++ 86c:	j	668 <main+0x5ac>
++    if (b == 3)
++ 870:	lui	a5,0xffb12
++ 874:	addi	a5,a5,56 # ffb12038 <__stack_top+0x10038>
++ 878:	j	668 <main+0x5ac>
++    if (b == 2)
++ 87c:	lui	a5,0xffb12
++ 880:	addi	a5,a5,20 # ffb12014 <__stack_top+0x10014>
++ 884:	j	668 <main+0x5ac>
++    if (b == 4)
++ 888:	lui	a5,0xffb12
++ 88c:	addi	a5,a5,248 # ffb120f8 <__stack_top+0x100f8>
++ 890:	j	668 <main+0x5ac>
++ 894:	lui	a5,0xffb12
++ 898:	addi	a5,a5,248 # ffb120f8 <__stack_top+0x100f8>
++ 89c:	j	798 <main+0x6dc>
++ 8a0:	lui	a5,0xffb12
++ 8a4:	addi	a5,a5,248 # ffb120f8 <__stack_top+0x100f8>
++ 8a8:	j	74c <main+0x690>
++ 8ac:	lui	a5,0xffb12
++ 8b0:	addi	a5,a5,248 # ffb120f8 <__stack_top+0x100f8>
++ 8b4:	j	700 <main+0x644>
++ 8b8:	lui	a5,0xffb12
++ 8bc:	addi	a5,a5,248 # ffb120f8 <__stack_top+0x100f8>
++ 8c0:	j	6b4 <main+0x5f8>
+
+-000003e8 <_GLOBAL__sub_I__ZN7ckernel11pc_buf_baseE>:
++000008c4 <_GLOBAL__sub_I__ZN7ckernel11pc_buf_baseE>:
+ mailbox_t mailbox_unpack = mailboxes_arr;
+- 3e8:	lw	a5,-2040(gp) # ffb00008 <mailboxes_arr>
+- 3ec:	sw	a5,-1988(gp) # ffb0003c <mailbox_unpack>
++ 8c4:	lw	a5,-1364(gp) # ffb002ac <mailboxes_arr>
++ 8c8:	sw	a5,-1312(gp) # ffb002e0 <mailbox_unpack>
+ mailbox_t mailbox_math   = mailboxes_arr + 1;
+- 3f0:	addi	t5,a5,4
++ 8cc:	addi	t5,a5,4
+ mailbox_t mailbox_pack   = mailboxes_arr + 2;
+- 3f4:	addi	t3,a5,8
++ 8d0:	addi	t3,a5,8
+ mailbox_t brisc_command_buffer = mailboxes_arr + 3; // 2 entries
+- 3f8:	addi	a7,a5,12
++ 8d4:	addi	a7,a5,12
+ mailbox_t brisc_counter        = mailboxes_arr + 5;
+- 3fc:	addi	a0,a5,20
++ 8d8:	addi	a0,a5,20
+ mailbox_t brisc_bread0 = mailboxes_arr + 6;
+- 400:	addi	a2,a5,24
++ 8dc:	addi	a2,a5,24
+ mailbox_t brisc_bread1 = mailboxes_arr + 7;
+- 404:	addi	a5,a5,28
++ 8e0:	addi	a5,a5,28
+ mailbox_t mailbox_math   = mailboxes_arr + 1;
+- 408:	sw	t5,-1992(gp) # ffb00038 <mailbox_math>
++ 8e4:	sw	t5,-1316(gp) # ffb002dc <mailbox_math>
+ mailbox_t mailbox_pack   = mailboxes_arr + 2;
+- 40c:	sw	t3,-1996(gp) # ffb00034 <mailbox_pack>
++ 8e8:	sw	t3,-1320(gp) # ffb002d8 <mailbox_pack>
+ mailbox_t brisc_command_buffer = mailboxes_arr + 3; // 2 entries
+- 410:	sw	a7,-2000(gp) # ffb00030 <brisc_command_buffer>
++ 8ec:	sw	a7,-1324(gp) # ffb002d4 <brisc_command_buffer>
+ mailbox_t brisc_counter        = mailboxes_arr + 5;
+- 414:	sw	a0,-2004(gp) # ffb0002c <brisc_counter>
++ 8f0:	sw	a0,-1328(gp) # ffb002d0 <brisc_counter>
+ mailbox_t brisc_bread0 = mailboxes_arr + 6;
+- 418:	sw	a2,-2008(gp) # ffb00028 <brisc_bread0>
++ 8f4:	sw	a2,-1332(gp) # ffb002cc <brisc_bread0>
+ mailbox_t brisc_bread1 = mailboxes_arr + 7;
+- 41c:	sw	a5,-2012(gp) # ffb00024 <brisc_bread1>
++ 8f8:	sw	a5,-1336(gp) # ffb002c8 <brisc_bread1>
+
+     for (;;)
+     {
+     } // Loop forever
+ }
+- 420:	ret
++ 8fc:	ret
+
+-00000424 <_init()>:
++00000900 <_init()>:
+ }
+- 424:	ret
++ 900:	ret
+
+-00000428 <_fini()>:
++00000904 <_fini()>:
+ void _fini(void)
+- 428:	ret
++ 904:	ret
+
+-0000042c <reset_state(unsigned long&)>:
++00000908 <reset_state(unsigned long&)>:
+     counter++;
+- 42c:	lw	a4,0(a0)
++ 908:	lw	a4,0(a0)
+     ckernel::store_blocking(brisc_command_buffer + (counter & 1), static_cast<std::uint32_t>(BriscCommandState::IDLE_STATE));
+- 430:	lw	a2,-2000(gp) # ffb00030 <brisc_command_buffer>
++ 90c:	lw	a2,-1324(gp) # ffb002d4 <brisc_command_buffer>
+     counter++;
+- 434:	addi	a4,a4,1
++ 910:	addi	a4,a4,1
+     ckernel::store_blocking(brisc_command_buffer + (counter & 1), static_cast<std::uint32_t>(BriscCommandState::IDLE_STATE));
+- 438:	andi	a3,a4,1
++ 914:	andi	a3,a4,1
+     asm volatile(
+- 43c:	li	a5,0
+- 440:	sh2add	a3,a3,a2
++ 918:	li	a5,0
++ 91c:	sh2add	a3,a3,a2
+     counter++;
+- 444:	sw	a4,0(a0)
+- 448:	sw	a5,0(a3)
+- 44c:	lw	a5,0(a3)
+- 450:	and	zero,zero,a5
+- 454:	lw	a5,0(a0)
++ 920:	sw	a4,0(a0)
++ 924:	sw	a5,0(a3)
++ 928:	lw	a5,0(a3)
++ 92c:	and	zero,zero,a5
++ 930:	lw	a5,0(a0)
+     commit_store(brisc_counter, counter);
+- 458:	lw	a3,-2004(gp) # ffb0002c <brisc_counter>
+- 45c:	sw	a5,0(a3)
+- 460:	lw	a5,0(a3)
+- 464:	and	zero,zero,a5
++ 934:	lw	a3,-1328(gp) # ffb002d0 <brisc_counter>
++ 938:	sw	a5,0(a3)
++ 93c:	lw	a5,0(a3)
++ 940:	and	zero,zero,a5
+         asm volatile("nop");
+- 468:	nop
++ 944:	nop
+     asm volatile(
+- 46c:	lw	a4,0(a3)
+- 470:	and	zero,zero,a4
++ 948:	lw	a4,0(a3)
++ 94c:	and	zero,zero,a4
+     } while (ckernel::load_blocking(ptr) != val);
+- 474:	lw	a5,0(a0)
+- 478:	bne	a4,a5,468 <reset_state(unsigned long&)+0x3c>
++ 950:	lw	a5,0(a0)
++ 954:	bne	a4,a5,944 <reset_state(unsigned long&)+0x3c>
+ }
+- 47c:	ret
++ 958:	ret

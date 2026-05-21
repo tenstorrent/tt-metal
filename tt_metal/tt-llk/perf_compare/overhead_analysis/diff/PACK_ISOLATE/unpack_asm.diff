@@ -1,0 +1,1264 @@
+--- /tmp/perf_overhead_artifacts/nc/PACK_ISOLATE/unpack.asm	2026-05-21 01:50:57.139532366 +0000
++++ /tmp/perf_overhead_artifacts/wc/PACK_ISOLATE/unpack.asm	2026-05-21 01:50:57.404531818 +0000
+@@ -1,5 +1,5 @@
+
+-/tmp/perf_overhead_artifacts/nc/PACK_ISOLATE/unpack.elf:     file format elf32-littleriscv
++/tmp/perf_overhead_artifacts/wc/PACK_ISOLATE/unpack.elf:     file format elf32-littleriscv
+
+
+ Disassembly of section .init:
+@@ -27,7 +27,7 @@
+     6010:	lui	a5,0xffb00
+     6014:	lui	a4,0xffb00
+     6018:	addi	a5,a5,32 # ffb00020 <llk_profiler::open_zone_cnt>
+-    601c:	addi	a4,a4,64 # ffb00040 <__fw_export_ldm_end>
++    601c:	addi	a4,a4,100 # ffb00064 <__gcov_info_end>
+     6020:	bgeu	a5,a4,6044 <_start+0x44>
+     6024:	addi	a4,a4,-1
+     6028:	sub	a4,a4,a5
+@@ -187,7 +187,7 @@
+     open_zone_cnt = 0;
+     612c:	sw	zero,-2016(gp) # ffb00020 <llk_profiler::open_zone_cnt>
+     memset(buffer[TRISC_ID], 0, BUFFER_LENGTH * sizeof(buffer[TRISC_ID][0]));
+-    6130:	jal	6a40 <memset>
++    6130:	jal	6cb8 <memset>
+     auto& barrier = *barrier_ptr;
+     6134:	lw	a2,4(s3)
+     barrier[TRISC_ID] = 1;
+@@ -690,618 +690,861 @@
+ void run_kernel(RUNTIME_PARAMETERS params)
+ {
+     65b8:	addi	sp,sp,-48
+-    65bc:	sw	ra,44(sp)
+-    65c0:	sw	s0,40(sp)
+-    65c4:	sw	s1,36(sp)
+-    65c8:	sw	s2,32(sp)
+-    65cc:	sw	s3,28(sp)
+-    65d0:	sw	s4,24(sp)
++    65bc:	sw	s1,36(sp)
++#endif
++} // namespace detail
++
++__attribute__((always_inline)) inline std::uint32_t get_zone_id(std::uint32_t hash_val)
++{
++    std::uint32_t n = detail::next_zone_id;
++    65c0:	addi	s1,gp,-1984 # ffb00040 <llk_perf::detail::next_zone_id>
++    65c4:	lw	a5,0(s1) # ffb00000 <llk_profiler::buffer>
++    65c8:	sw	ra,44(sp)
++    65cc:	sw	s0,40(sp)
++    65d0:	sw	s2,32(sp)
++    65d4:	sw	s3,28(sp)
++    65d8:	sw	s4,24(sp)
++    65dc:	sw	s5,20(sp)
++    for (std::uint32_t i = 0; i < n; ++i)
++    65e0:	beqz	a5,6b98 <run_kernel(RuntimeParams const&)+0x5e0>
+     {
+-    65d4:	sb	zero,0(sp)
++        if (detail::zone_hashes[i] == hash_val)
++    65e4:	lui	a4,0x7c867
++    65e8:	lw	a3,4(s1)
++    65ec:	addi	a4,a4,-839 # 7c866cb9 <__runtime_args_end+0x7c8468b9>
++    65f0:	beq	a3,a4,6674 <run_kernel(RuntimeParams const&)+0xbc>
++    for (std::uint32_t i = 0; i < n; ++i)
++    65f4:	li	a3,1
++    65f8:	beq	a5,a3,6b98 <run_kernel(RuntimeParams const&)+0x5e0>
++        if (detail::zone_hashes[i] == hash_val)
++    65fc:	lw	a3,8(s1)
++    6600:	beq	a3,a4,6674 <run_kernel(RuntimeParams const&)+0xbc>
++    for (std::uint32_t i = 0; i < n; ++i)
++    6604:	li	a3,2
++    6608:	beq	a5,a3,6b98 <run_kernel(RuntimeParams const&)+0x5e0>
++        if (detail::zone_hashes[i] == hash_val)
++    660c:	lw	a3,12(s1)
++    6610:	beq	a3,a4,6674 <run_kernel(RuntimeParams const&)+0xbc>
++    for (std::uint32_t i = 0; i < n; ++i)
++    6614:	li	a3,3
++    6618:	beq	a5,a3,6b98 <run_kernel(RuntimeParams const&)+0x5e0>
++        if (detail::zone_hashes[i] == hash_val)
++    661c:	lw	a3,16(s1)
++    6620:	beq	a3,a4,6674 <run_kernel(RuntimeParams const&)+0xbc>
++    for (std::uint32_t i = 0; i < n; ++i)
++    6624:	li	a3,4
++    6628:	beq	a5,a3,6b98 <run_kernel(RuntimeParams const&)+0x5e0>
++        if (detail::zone_hashes[i] == hash_val)
++    662c:	lw	a3,20(s1)
++    6630:	beq	a3,a4,6674 <run_kernel(RuntimeParams const&)+0xbc>
++    for (std::uint32_t i = 0; i < n; ++i)
++    6634:	li	a4,5
++    6638:	beq	a5,a4,6b98 <run_kernel(RuntimeParams const&)+0x5e0>
++        if (detail::zone_hashes[i] == hash_val)
++    663c:	lui	a4,0x7c867
++    6640:	lw	a3,24(s1)
++    6644:	addi	a4,a4,-839 # 7c866cb9 <__runtime_args_end+0x7c8468b9>
++    6648:	beq	a3,a4,6674 <run_kernel(RuntimeParams const&)+0xbc>
++    for (std::uint32_t i = 0; i < n; ++i)
++    664c:	li	a3,6
++    6650:	beq	a5,a3,6b98 <run_kernel(RuntimeParams const&)+0x5e0>
++        if (detail::zone_hashes[i] == hash_val)
++    6654:	lw	a3,28(s1)
++    6658:	beq	a3,a4,6674 <run_kernel(RuntimeParams const&)+0xbc>
++    for (std::uint32_t i = 0; i < n; ++i)
++    665c:	li	a3,7
++    6660:	beq	a5,a3,6b98 <run_kernel(RuntimeParams const&)+0x5e0>
++        if (detail::zone_hashes[i] == hash_val)
++    6664:	lw	a3,32(s1)
++    6668:	beq	a3,a4,6674 <run_kernel(RuntimeParams const&)+0xbc>
++        {
++            return i;
++        }
++    }
++    if (n < PERF_COUNTERS_MAX_ZONES)
++    666c:	li	a4,8
++    6670:	bne	a5,a4,6b98 <run_kernel(RuntimeParams const&)+0x5e0>
++    return pc_buf_base[PC_BUF_SEMAPHORE_BASE + index];
++    6674:	lw	a4,-2036(gp) # ffb0000c <ckernel::pc_buf_base>
++    6678:	lw	a5,32(a4)
++                ckernel::semaphore_post(PERF_ENTRY_SEM);
++            }
++        }
++        else
++        {
++            while (ckernel::semaphore_read(PERF_ENTRY_SEM) == 0)
++    667c:	zext.b	a5,a5
++    6680:	bnez	a5,6698 <run_kernel(RuntimeParams const&)+0xe0>
++            {
++                asm volatile("nop");
++    6684:	nop
++    6688:	lw	a4,-2036(gp) # ffb0000c <ckernel::pc_buf_base>
++    668c:	lw	a5,32(a4)
++            while (ckernel::semaphore_read(PERF_ENTRY_SEM) == 0)
++    6690:	zext.b	a5,a5
++    6694:	beqz	a5,6684 <run_kernel(RuntimeParams const&)+0xcc>
++    6698:	lw	a5,32(a4)
++    LLK_ASSERT(semaphore_read(index) > 0, "Semaphore must not be already at 0.");
++    669c:	zext.b	a5,a5
++    66a0:	beqz	a5,6bd8 <run_kernel(RuntimeParams const&)+0x620>
++    pc_buf_base[PC_BUF_SEMAPHORE_BASE + index] = 1; // LSB set → SEMGET: decrement (only if > 0)
++    66a4:	li	a2,1
++    66a8:	sw	a2,32(a4)
++    {
++    66ac:	sb	zero,0(sp)
+     return (BUFFER_LENGTH - (write_idx + open_zone_cnt)) < 4;
+-    65d8:	lw	a5,-2012(gp) # ffb00024 <llk_profiler::write_idx>
+-    65dc:	lw	a3,-2016(gp) # ffb00020 <llk_profiler::open_zone_cnt>
++    66b0:	lw	a4,-2012(gp) # ffb00024 <llk_profiler::write_idx>
++    66b4:	lw	a3,-2016(gp) # ffb00020 <llk_profiler::open_zone_cnt>
+         if (!is_buffer_full())
+-    65e0:	li	a2,3
++    66b8:	li	a1,3
+     return (BUFFER_LENGTH - (write_idx + open_zone_cnt)) < 4;
+-    65e4:	add	a4,a5,a3
+-    65e8:	addi	a4,a4,-1021
++    66bc:	add	a5,a4,a3
++    66c0:	addi	a5,a5,-1021
+         if (!is_buffer_full())
+-    65ec:	bgeu	a2,a4,6638 <run_kernel(RuntimeParams const&)+0x80>
+-    65f0:	lui	a4,0xffb12
+-    65f4:	lw	a1,496(a4) # ffb121f0 <__stack_top+0x111f0>
+-    65f8:	lw	a4,504(a4)
++    66c4:	bgeu	a1,a5,670c <run_kernel(RuntimeParams const&)+0x154>
++    return p_reg[0];
++    66c8:	lui	a5,0xffb12
++    66cc:	lw	a1,496(a5) # ffb121f0 <__stack_top+0x111f0>
++    66d0:	lw	a5,504(a5)
++            is_opened = true;
++    66d4:	sb	a2,0(sp)
+     buffer[TRISC_ID][write_idx++] = meta | (timestamp_high & ~ENTRY_META_MASK);
+-    65fc:	lui	a2,0xffb00
+-    6600:	lw	a2,0(a2) # ffb00000 <llk_profiler::buffer>
+-    6604:	lui	a0,0xaa3a0
+-    6608:	slli	a4,a4,0x14
+-    660c:	srli	a4,a4,0x14
+-    6610:	or	a4,a4,a0
++    66d8:	lui	a2,0xffb00
++    66dc:	lw	a2,0(a2) # ffb00000 <llk_profiler::buffer>
++    66e0:	lui	a0,0xaa3a0
++    66e4:	slli	a5,a5,0x14
++    66e8:	srli	a5,a5,0x14
++    66ec:	or	a5,a5,a0
+             ++open_zone_cnt;
+-    6614:	addi	a3,a3,1
+-    6618:	sh2add	a2,a5,a2
++    66f0:	addi	a3,a3,1
++    66f4:	sh2add	a2,a4,a2
+     buffer[TRISC_ID][write_idx++] = meta | (timestamp_high & ~ENTRY_META_MASK);
+-    661c:	sw	a4,0(a2)
++    66f8:	sw	a5,0(a2)
+     buffer[TRISC_ID][write_idx++] = static_cast<std::uint32_t>(timestamp);
+-    6620:	addi	a5,a5,2
+-            is_opened = true;
+-    6624:	li	a4,1
++    66fc:	addi	a4,a4,2
+             ++open_zone_cnt;
+-    6628:	sw	a3,-2016(gp) # ffb00020 <llk_profiler::open_zone_cnt>
++    6700:	sw	a3,-2016(gp) # ffb00020 <llk_profiler::open_zone_cnt>
+     buffer[TRISC_ID][write_idx++] = static_cast<std::uint32_t>(timestamp);
+-    662c:	sw	a1,4(a2)
+-    6630:	sw	a5,-2012(gp) # ffb00024 <llk_profiler::write_idx>
+-            is_opened = true;
+-    6634:	sb	a4,0(sp)
++    6704:	sw	a1,4(a2)
++    6708:	sw	a4,-2012(gp) # ffb00024 <llk_profiler::write_idx>
+     const std::uint32_t unpB_num_faces  = 4)
+ {
+     LLK_ASSERT(unpA_num_faces == 1 || unpA_num_faces == 2 || unpA_num_faces == 4, "unpA_num_faces must be 1, 2, or 4");
+     LLK_ASSERT(unpB_num_faces == 1 || unpB_num_faces == 2 || unpB_num_faces == 4, "unpB_num_faces must be 1, 2, or 4");
+
+     LLK_ASSERT(
+-    6638:	li	a1,6
+-    663c:	mv	a0,a1
+-    6640:	li	a2,1
+-    6644:	jal	62dc <ckernel::unpacker::is_unpacker_format_conversion_supported_fp32_acc(DataFormat, DataFormat, bool)>
+-    6648:	beqz	a0,69ec <run_kernel(RuntimeParams const&)+0x434>
++    670c:	li	a1,6
++    6710:	mv	a0,a1
++    6714:	li	a2,1
++    6718:	jal	62dc <ckernel::unpacker::is_unpacker_format_conversion_supported_fp32_acc(DataFormat, DataFormat, bool)>
++    671c:	beqz	a0,6be4 <run_kernel(RuntimeParams const&)+0x62c>
+     return pc_buf_base[PC_BUF_SEMAPHORE_BASE + index];
+-    664c:	lw	a4,-2036(gp) # ffb0000c <ckernel::pc_buf_base>
+-    6650:	lw	a5,52(a4)
++    6720:	lw	a4,-2036(gp) # ffb0000c <ckernel::pc_buf_base>
++    6724:	lw	a5,52(a4)
+     while (semaphore_read(semaphore::UNPACK_SYNC) > 0)
+-    6654:	zext.b	a5,a5
+-    6658:	bnez	a5,6650 <run_kernel(RuntimeParams const&)+0x98>
++    6728:	zext.b	a5,a5
++    672c:	bnez	a5,6724 <run_kernel(RuntimeParams const&)+0x16c>
+     TTI_SETADCXY(p_setadc::UNP_A | p_setadc::UNP_B, 0, 0, 0, 0, 0b1011);
+-    665c:	ttsetadcxy	3,0,0,0,0,11
++    6730:	ttsetadcxy	3,0,0,0,0,11
+     TTI_SETADCZW(p_setadc::UNP_A | p_setadc::UNP_B, 0, 0, 0, 0, 0b1111);
+-    6660:	ttsetadczw	3,0,0,0,0,15
++    6734:	ttsetadczw	3,0,0,0,0,15
+     if (cfg_state_id == 0)
+-    6664:	lw	a4,-2000(gp) # ffb00030 <ckernel::cfg_state_id>
++    6738:	lw	a4,-2000(gp) # ffb00030 <ckernel::cfg_state_id>
+         return reinterpret_cast<volatile std::uint32_t tt_reg_ptr *>(TENSIX_CFG_BASE);
+-    6668:	lui	a5,0xffef0
++    673c:	lui	a5,0xffef0
+     if (cfg_state_id == 0)
+-    666c:	beqz	a4,6674 <run_kernel(RuntimeParams const&)+0xbc>
++    6740:	beqz	a4,6748 <run_kernel(RuntimeParams const&)+0x190>
+     return reinterpret_cast<volatile std::uint32_t tt_reg_ptr *>(TENSIX_CFG_BASE + CFG_STATE_SIZE * 16);
+-    6670:	addi	a5,a5,896 # ffef0380 <__instrn_buffer+0xb0380>
++    6744:	addi	a5,a5,896 # ffef0380 <__instrn_buffer+0xb0380>
+     std::uint32_t unpA_ch1_z_stride = FACE_C_DIM * FACE_R_DIM * unpA_ch1_x_stride;
+     std::uint32_t unpB_ch1_z_stride = FACE_C_DIM * FACE_R_DIM * unpB_ch1_x_stride;
+     std::uint32_t exp_width         = (static_cast<std::uint32_t>(unpA_dst_format_masked) >> 2) & 0x1; // 0=5-bit, 1=8-bit
+
+     // Strides for incrementing ch1 address to srcA and srcB
+     cfg[UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32] =
+-    6674:	li	a1,256
+-    6678:	sw	a1,228(a5)
++    6748:	li	a1,256
++    674c:	sw	a1,228(a5)
+         (0 << UNP0_ADDR_CTRL_ZW_REG_1_Wstride_SHAMT) |
+         (unpA_ch1_z_stride << UNP0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT); // Z and W(not used) stride for dest address (ch1)
+
+     cfg[UNP1_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32] =
+-    667c:	sw	a1,236(a5)
++    6750:	sw	a1,236(a5)
+     TTI_ATGETM(index);
+-    6680:	ttatgetm	0
++    6754:	ttatgetm	0
+     std::uint8_t mask_b0 = Mask & 0xff;
+
+     if (mask_b0 != 0)
+     {
+         std::uint8_t data_b0 = wrdata & 0xff;
+         TT_RMWCIB0(mask_b0, data_b0, CfgAddr32);
+-    6684:	lui	s0,0xffe40
+-    6688:	mv	s0,s0
+-    668c:	lui	a4,0xb3ff0
+-    6690:	sw	a4,0(s0) # ffe40000 <__instrn_buffer>
++    6758:	lui	s2,0xffe40
++    675c:	mv	s2,s2
++    6760:	lui	a4,0xb3ff0
++    6764:	sw	a4,0(s2) # ffe40000 <__instrn_buffer>
+     std::uint8_t mask_b1 = (Mask >> 8) & 0xff;
+
+     if (mask_b1 != 0)
+     {
+         std::uint8_t data_b1 = (wrdata) & 0xff;
+         TT_RMWCIB1(mask_b1, data_b1, CfgAddr32);
+-    6694:	lui	a4,0xb47f0
+-    6698:	sw	a4,0(s0)
++    6768:	lui	a4,0xb47f0
++    676c:	sw	a4,0(s2)
+         TT_RMWCIB0(mask_b0, data_b0, CfgAddr32);
+-    669c:	lui	a4,0xb3070
+-    66a0:	addi	a4,a4,1 # b3070001 <__runtime_args_end+0xb304fc01>
+-    66a4:	sw	a4,0(s0)
++    6770:	lui	a4,0xb3070
++    6774:	addi	a4,a4,1 # b3070001 <__runtime_args_end+0xb304fc01>
++    6778:	sw	a4,0(s2)
+         TT_RMWCIB1(mask_b1, data_b1, CfgAddr32);
+-    66a8:	lui	a4,0xb4800
+-    66ac:	addi	a4,a4,1 # b4800001 <__runtime_args_end+0xb47dfc01>
+-    66b0:	sw	a4,0(s0)
++    677c:	lui	a4,0xb4800
++    6780:	addi	a4,a4,1 # b4800001 <__runtime_args_end+0xb47dfc01>
++    6784:	sw	a4,0(s2)
+     std::uint8_t mask_b2 = (Mask >> 16) & 0xff;
+
+     if (mask_b2 != 0)
+     {
+         std::uint8_t data_b2 = (wrdata) & 0xff;
+         TT_RMWCIB2(mask_b2, data_b2, CfgAddr32);
+-    66b4:	lui	a4,0xb5010
+-    66b8:	addi	a4,a4,1 # b5010001 <__runtime_args_end+0xb4fefc01>
+-    66bc:	sw	a4,0(s0)
++    6788:	lui	a4,0xb5010
++    678c:	addi	a4,a4,1 # b5010001 <__runtime_args_end+0xb4fefc01>
++    6790:	sw	a4,0(s2)
+         TT_RMWCIB0(mask_b0, data_b0, CfgAddr32);
+-    66c0:	lui	a4,0xb3010
+-    66c4:	addi	a4,a4,2 # b3010002 <__runtime_args_end+0xb2fefc02>
+-    66c8:	sw	a4,0(s0)
++    6794:	lui	a4,0xb3010
++    6798:	addi	a4,a4,2 # b3010002 <__runtime_args_end+0xb2fefc02>
++    679c:	sw	a4,0(s2)
+         TT_RMWCIB2(mask_b2, data_b2, CfgAddr32);
+-    66cc:	lui	a4,0xb5400
+-    66d0:	addi	a3,a4,71 # b5400047 <__runtime_args_end+0xb53dfc47>
+-    66d4:	sw	a3,0(s0)
+-    66d8:	addi	a4,a4,119
+-    66dc:	sw	a4,0(s0)
++    67a0:	lui	a4,0xb5400
++    67a4:	addi	a3,a4,71 # b5400047 <__runtime_args_end+0xb53dfc47>
++    67a8:	sw	a3,0(s2)
++    67ac:	addi	a4,a4,119
++    67b0:	sw	a4,0(s2)
+     TTI_ATRELM(index);
+-    66e0:	ttatrelm	0
++    67b4:	ttatrelm	0
+     tile_descriptor.f.z_dim          = unpA_num_faces;
+     // tile_descriptor.f.blobs_per_xy_plane = 0;
+     // tile_descriptor.f.blobs_y_start = 0;
+     for (std::uint32_t i = 0; i < TILE_DESC_SIZE; i++)
+     {
+         cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32 + i] = tile_descriptor.val[i];
+-    66e4:	li	a4,22
+-    66e8:	sw	a4,256(a5)
+-    66ec:	lui	a4,0x40
+-    66f0:	addi	a4,a4,1 # 40001 <__runtime_args_end+0x1fc01>
++    67b8:	li	a4,22
++    67bc:	sw	a4,256(a5)
++    67c0:	lui	a4,0x40
++    67c4:	addi	a4,a4,1 # 40001 <__runtime_args_end+0x1fc01>
+     tile_descriptor.f.in_data_format = row_pool ? to_underlying(DataFormat::Float32) : unpB_src_format_masked;
+     tile_descriptor.f.x_dim          = unpB_face_r_dim * FACE_C_DIM;
+     tile_descriptor.f.z_dim          = unpB_num_faces;
+     for (std::uint32_t i = 0; i < TILE_DESC_SIZE; i++)
+     {
+         cfg[THCON_SEC1_REG0_TileDescriptor_ADDR32 + i] = tile_descriptor.val[i];
+-    66f4:	lui	a3,0x1000
++    67c8:	lui	a3,0x1000
+         cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32 + i] = tile_descriptor.val[i];
+-    66f8:	sw	a4,260(a5)
++    67cc:	sw	a4,260(a5)
+         cfg[THCON_SEC1_REG0_TileDescriptor_ADDR32 + i] = tile_descriptor.val[i];
+-    66fc:	addi	a2,a3,22 # 1000016 <__runtime_args_end+0xfdfc16>
+-    6700:	sw	a2,448(a5)
+-    6704:	sw	a4,452(a5)
++    67d0:	addi	a2,a3,22 # 1000016 <__runtime_args_end+0xfdfc16>
++    67d4:	sw	a2,448(a5)
++    67d8:	sw	a4,452(a5)
+     config.f.uncompress_cntx4_7 = 0xf;
+     // config.f.limit_addr = 0; // Set dynamically
+     // config.f.fifo_size = 0; // Set dynamically
+     for (std::uint32_t i = 0; i < CONFIG_SIZE; i++)
+     {
+         cfg[THCON_SEC0_REG2_Out_data_format_ADDR32 + i] = config.val[i];
+-    6708:	li	a2,38
+-    670c:	lui	a4,0xf0
+-    6710:	sw	a2,288(a5)
+-    6714:	addi	a4,a4,15 # f000f <__runtime_args_end+0xcfc0f>
+-    6718:	sw	a4,292(a5)
++    67dc:	li	a2,38
++    67e0:	lui	a4,0xf0
++    67e4:	sw	a2,288(a5)
++    67e8:	addi	a4,a4,15 # f000f <__runtime_args_end+0xcfc0f>
++    67ec:	sw	a4,292(a5)
+     config.f.out_data_format = row_pool ? (to_underlying(DataFormat::Float16) | (exp_width << 2)) : unpB_dst_format_masked;
+     config.f.haloize_mode    = 0;
+
+     for (std::uint32_t i = 0; i < CONFIG_SIZE; i++)
+     {
+         cfg[THCON_SEC1_REG2_Out_data_format_ADDR32 + i] = config.val[i];
+-    671c:	sw	a2,480(a5)
+-    6720:	sw	a4,484(a5)
++    67f0:	sw	a2,480(a5)
++    67f4:	sw	a4,484(a5)
+     }
+
+     std::uint32_t unpA_x_end = (unpA_face_r_dim == 0) ? 1 : (unpA_face_r_dim << 4) - 1;
+     TT_SETADCXX(p_setadc::UNP_A, unpA_x_end, 0x0);
+-    6724:	lui	a4,0x5e240
+-    6728:	addi	a4,a4,-1024 # 5e23fc00 <__runtime_args_end+0x5e21f800>
+-    672c:	sw	a4,0(s0)
++    67f8:	lui	a4,0x5e240
++    67fc:	addi	a4,a4,-1024 # 5e23fc00 <__runtime_args_end+0x5e21f800>
++    6800:	sw	a4,0(s2)
+     TT_SETADCXX(p_setadc::UNP_B, (unpB_face_r_dim << 4) - 1, 0x0);
+-    6730:	lui	a4,0x5e440
+-    6734:	addi	a4,a4,-1024 # 5e43fc00 <__runtime_args_end+0x5e41f800>
++    6804:	lui	a4,0x5e440
++    6808:	addi	a4,a4,-1024 # 5e43fc00 <__runtime_args_end+0x5e41f800>
+
+     // Program base address for all 2 sections (each section address is loaded to corresponding context)
+     // Load dummy data to unused location if face height is 0
+     const std::uint32_t Dest_cntx0_address         = unpA_face_r_dim == 0 ? 22 * 16 : 4 * 16;
+     const std::uint32_t Dest_cntx1_address         = unpA_face_r_dim == 0 ? 22 * 16 : 4 * 16;
+     cfg[THCON_SEC0_REG5_Dest_cntx0_address_ADDR32] = Dest_cntx0_address | (Dest_cntx1_address << 16);
+-    6738:	lui	a2,0x400
++    680c:	lui	a2,0x400
+     TT_SETADCXX(p_setadc::UNP_B, (unpB_face_r_dim << 4) - 1, 0x0);
+-    673c:	sw	a4,0(s0)
++    6810:	sw	a4,0(s2)
+     cfg[THCON_SEC0_REG5_Dest_cntx0_address_ADDR32] = Dest_cntx0_address | (Dest_cntx1_address << 16);
+-    6740:	addi	a2,a2,64 # 400040 <__runtime_args_end+0x3dfc40>
+-    6744:	sw	a2,336(a5)
++    6814:	addi	a2,a2,64 # 400040 <__runtime_args_end+0x3dfc40>
++    6818:	sw	a2,336(a5)
+     // Overrides value set by tile descriptor when thread override bit is set in unpack instruction
+     const std::uint32_t face_dim                 = unpA_face_r_dim * FACE_C_DIM;
+     cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32] = face_dim | (face_dim << 16);
+
+     constexpr std::uint32_t face_dim_16x16 = FACE_R_DIM * FACE_C_DIM;
+     regfile[p_gpr_unpack::FACE_DIM_16x16]  = (face_dim_16x16 / 1) | ((face_dim_16x16 / 1) << 16);
+-    6748:	lw	a4,-2040(gp) # ffb00008 <ckernel::regfile>
++    681c:	lw	a4,-2040(gp) # ffb00008 <ckernel::regfile>
+     cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32] = face_dim | (face_dim << 16);
+-    674c:	add	a3,a3,a1
+-    6750:	sw	a3,344(a5)
++    6820:	add	a3,a3,a1
++    6824:	sw	a3,344(a5)
+     regfile[p_gpr_unpack::FACE_DIM_8x16]   = (face_dim_16x16 / 2) | ((face_dim_16x16 / 2) << 16);
+-    6754:	lui	a0,0x800
++    6828:	lui	a0,0x800
+     regfile[p_gpr_unpack::FACE_DIM_16x16]  = (face_dim_16x16 / 1) | ((face_dim_16x16 / 1) << 16);
+-    6758:	sw	a3,160(a4)
++    682c:	sw	a3,160(a4)
+     regfile[p_gpr_unpack::FACE_DIM_8x16]   = (face_dim_16x16 / 2) | ((face_dim_16x16 / 2) << 16);
+-    675c:	addi	a3,a0,128 # 800080 <__runtime_args_end+0x7dfc80>
+-    6760:	sw	a3,164(a4)
++    6830:	addi	a3,a0,128 # 800080 <__runtime_args_end+0x7dfc80>
++    6834:	sw	a3,164(a4)
+     regfile[p_gpr_unpack::FACE_DIM_4x16]   = (face_dim_16x16 / 4) | ((face_dim_16x16 / 4) << 16);
+     regfile[p_gpr_unpack::FACE_DIM_2x16]   = (face_dim_16x16 / 8) | ((face_dim_16x16 / 8) << 16);
+-    6764:	lui	a3,0x200
++    6838:	lui	a3,0x200
+     regfile[p_gpr_unpack::FACE_DIM_4x16]   = (face_dim_16x16 / 4) | ((face_dim_16x16 / 4) << 16);
+-    6768:	sw	a2,168(a4)
++    683c:	sw	a2,168(a4)
+     regfile[p_gpr_unpack::FACE_DIM_2x16]   = (face_dim_16x16 / 8) | ((face_dim_16x16 / 8) << 16);
+-    676c:	addi	a2,a3,32 # 200020 <__runtime_args_end+0x1dfc20>
++    6840:	addi	a2,a3,32 # 200020 <__runtime_args_end+0x1dfc20>
+     regfile[p_gpr_unpack::FACE_DIM_1x16]   = (face_dim_16x16 / 16) | ((face_dim_16x16 / 16) << 16);
+-    6770:	lui	a3,0x100
++    6844:	lui	a3,0x100
+     regfile[p_gpr_unpack::FACE_DIM_2x16]   = (face_dim_16x16 / 8) | ((face_dim_16x16 / 8) << 16);
+-    6774:	sw	a2,172(a4)
++    6848:	sw	a2,172(a4)
+     regfile[p_gpr_unpack::FACE_DIM_1x16]   = (face_dim_16x16 / 16) | ((face_dim_16x16 / 16) << 16);
+-    6778:	addi	a3,a3,16 # 100010 <__runtime_args_end+0xdfc10>
+-    677c:	sw	a3,176(a4)
++    684c:	addi	a3,a3,16 # 100010 <__runtime_args_end+0xdfc10>
++    6850:	sw	a3,176(a4)
+     volatile std::uint32_t foo     = 0x0;
+-    6780:	sw	zero,8(sp)
++    6854:	sw	zero,8(sp)
+     *fooptr                        = regfile[index];
+-    6784:	lw	a4,176(a4)
+-    6788:	sw	a4,8(sp)
++    6858:	lw	a4,176(a4)
++    685c:	sw	a4,8(sp)
+     sync_regfile_write(p_gpr_unpack::FACE_DIM_1x16);
+
+     TTI_SETC16(SRCA_SET_Base_ADDR32, 0x4);
+-    678c:	ttsetc16	5,4
++    6860:	ttsetc16	5,4
+
+     // Enable address counter for unpacker ch1/dst address
+     // final address is calculated as: Dest_cntx0/1_address + address_counter_ch1
+     // used for face by face unpacking of entire tile into srcA
+     cfg[UNP0_ADD_DEST_ADDR_CNTR_add_dest_addr_cntr_ADDR32] = 0x1 << UNP0_ADD_DEST_ADDR_CNTR_add_dest_addr_cntr_SHAMT;
+-    6790:	sw	a1,200(a5)
++    6864:	sw	a1,200(a5)
+     unp_cfg_context = 0;
+-    6794:	sw	zero,-1988(gp) # ffb0003c <unp_cfg_context>
++    6868:	sw	zero,-1988(gp) # ffb0003c <unp_cfg_context>
+     TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0000);
+-    6798:	ttsetc16	41,0
++    686c:	ttsetc16	41,0
+     LLK_ASSERT(unpA_num_faces == 1 || unpA_num_faces == 2 || unpA_num_faces == 4, "unpA_num_faces must be 1, 2, or 4");
+     LLK_ASSERT(unpB_num_faces == 1 || unpB_num_faces == 2 || unpB_num_faces == 4, "unpB_num_faces must be 1, 2, or 4");
+     configure_unpack_AB<is_fp32_dest_acc_en, false, false, false, disable_src_zero_flag>(
+         unpA_src_format, unpB_src_format, unpA_dst_format, unpB_dst_format, unpA_face_r_dim, unpB_face_r_dim, 0, unpA_num_faces, unpB_num_faces);
+
+     TT_SETDMAREG(0, LOWER_HALFWORD(unpA_tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_A));
+-    679c:	lui	a5,0x45000
+-    67a0:	addi	a3,a5,72 # 45000048 <__runtime_args_end+0x44fdfc48>
+-    67a4:	sw	a3,0(s0)
+-    67a8:	lui	a4,0x2021
++    6870:	lui	a5,0x45000
++    6874:	addi	a3,a5,72 # 45000048 <__runtime_args_end+0x44fdfc48>
++    6878:	sw	a3,0(s2)
++    687c:	lui	a4,0x2021
+     TT_SETDMAREG(0, LOWER_HALFWORD(unpB_tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_B));
+-    67ac:	addi	a5,a5,74
+-    67b0:	addi	a4,a4,16 # 2021010 <__runtime_args_end+0x2000c10>
+-    67b4:	sw	a5,0(s0)
++    6880:	addi	a5,a5,74
++    6884:	addi	a4,a4,16 # 2021010 <__runtime_args_end+0x2000c10>
++    6888:	sw	a5,0(s2)
+  */
+ template <BroadcastType BType = BroadcastType::NONE>
+ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const ckernel::Transpose transpose)
+ {
+     // TODO: Remove this assert after testing >4 num_faces because there is no reason to limit this for non-broadcast versions
+     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+-    67b8:	addi	a0,sp,4
+-    67bc:	sw	a4,4(sp)
+-    67c0:	jal	627c <ckernel::validate_tensor_shape_tile_dependent_ops_(ckernel::TensorShape const&)>
+-    67c4:	beqz	a0,69b4 <run_kernel(RuntimeParams const&)+0x3fc>
++    688c:	addi	a0,sp,4
++    6890:	sw	a4,4(sp)
++    6894:	jal	627c <ckernel::validate_tensor_shape_tile_dependent_ops_(ckernel::TensorShape const&)>
++    6898:	beqz	a0,6bf0 <run_kernel(RuntimeParams const&)+0x638>
+         TT_RMWCIB1(mask_b1, data_b1, CfgAddr32);
+-    67c8:	lui	a5,0xb4010
+-    67cc:	addi	a5,a5,72 # b4010048 <__runtime_args_end+0xb3fefc48>
+-    67d0:	sw	a5,0(s0)
+-    67d4:	li	a5,16
+-{
+-    static_assert(UNP_SEL == p_setadc::UNP_A || UNP_SEL == p_setadc::UNP_B || UNP_SEL == p_setadc::UNP_AB, "UNP_SEL must be UNP_A, UNP_B, or UNP_AB");
+-    LLK_ASSERT(
+-        face_r_dim == 1 || face_r_dim == 2 || face_r_dim == 4 || face_r_dim == 8 || face_r_dim == FACE_R_DIM, "face_r_dim must be 1, 2, 4, 8, or FACE_R_DIM");
+-
+-    switch (face_r_dim)
+-    67d8:	li	a4,4
+-    67dc:	bltu	a4,a5,67f8 <run_kernel(RuntimeParams const&)+0x240>
+-    67e0:	li	a4,1
+-    67e4:	beq	a5,a4,69dc <run_kernel(RuntimeParams const&)+0x424>
+-    67e8:	li	a4,2
+-    67ec:	bne	a5,a4,69d4 <run_kernel(RuntimeParams const&)+0x41c>
+-    {
+-        case 1:
+-            TTI_SETADCXX(UNP_SEL, 1 * FACE_C_DIM - 1, 0x0);
+-            break;
+-        case 2:
+-            TTI_SETADCXX(UNP_SEL, 2 * FACE_C_DIM - 1, 0x0);
+-    67f0:	ttsetadcxx	3,31,0
+-            break;
+-    67f4:	j	6804 <run_kernel(RuntimeParams const&)+0x24c>
+-    switch (face_r_dim)
+-    67f8:	li	a4,8
+-    67fc:	bne	a5,a4,69d4 <run_kernel(RuntimeParams const&)+0x41c>
+-        case 4:
+-            TTI_SETADCXX(UNP_SEL, 4 * FACE_C_DIM - 1, 0x0);
++    689c:	lui	a5,0xb4010
++    68a0:	addi	a5,a5,72 # b4010048 <__runtime_args_end+0xb3fefc48>
++    68a4:	sw	a5,0(s2)
+             break;
+         case 8:
+             TTI_SETADCXX(UNP_SEL, 8 * FACE_C_DIM - 1, 0x0);
+-    6800:	ttsetadcxx	3,127,0
+-    6804:	lw	a5,4(sp)
++            break;
++        default:
++            TTI_SETADCXX(UNP_SEL, FACE_R_DIM * FACE_C_DIM - 1, 0x0);
++    68a8:	ttsetadcxx	3,255,0
++    68ac:	lw	a5,4(sp)
+     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+-    6808:	addi	a0,sp,12
+-    680c:	srli	s4,a5,0x10
+-    6810:	sw	a5,12(sp)
++    68b0:	addi	a0,sp,12
++    68b4:	srli	s5,a5,0x10
++    68b8:	sw	a5,12(sp)
+     const std::uint32_t num_faces_r_dim = tensor_shape.num_faces_r_dim;
+-    6814:	zext.b	s4,s4
++    68bc:	zext.b	s5,s5
+     const std::uint32_t num_faces_c_dim = tensor_shape.num_faces_c_dim;
+-    6818:	srli	s0,a5,0x18
++    68c0:	srli	s2,a5,0x18
+     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+-    681c:	jal	627c <ckernel::validate_tensor_shape_tile_dependent_ops_(ckernel::TensorShape const&)>
+-    6820:	beqz	a0,69e4 <run_kernel(RuntimeParams const&)+0x42c>
++    68c4:	jal	627c <ckernel::validate_tensor_shape_tile_dependent_ops_(ckernel::TensorShape const&)>
++    68c8:	beqz	a0,6bd0 <run_kernel(RuntimeParams const&)+0x618>
+     store_blocking(&pc_buf_base[2], 0);
+-    6824:	lw	a5,-2036(gp) # ffb0000c <ckernel::pc_buf_base>
++    68cc:	lw	a5,-2036(gp) # ffb0000c <ckernel::pc_buf_base>
+     asm volatile(
+-    6828:	li	a3,0
++    68d0:	li	a3,0
+     store_blocking(&pc_buf_base[2], 0);
+-    682c:	addi	a5,a5,8
++    68d4:	addi	a5,a5,8
+     asm volatile(
+-    6830:	sw	a3,0(a5)
+-    6834:	lw	a3,0(a5)
+-    6838:	and	zero,zero,a3
++    68d8:	sw	a3,0(a5)
++    68dc:	lw	a3,0(a5)
++    68e0:	and	zero,zero,a3
+ {
+     volatile std::uint32_t *mop_cfg = reinterpret_cast<volatile std::uint32_t *>(TENSIX_MOP_CFG_BASE);
+
+     mop_sync(); // wait until previous mops have completed
+
+     mop_cfg[0] = m_outer_loop_len;
+-    683c:	lui	a5,0xffb80
+-    6840:	sw	s4,0(a5) # ffb80000 <__stack_top+0x7f000>
++    68e4:	lui	a5,0xffb80
++    68e8:	sw	s5,0(a5) # ffb80000 <__stack_top+0x7f000>
+     mop_cfg[1] = m_inner_loop_len;
+-    6844:	sw	s0,4(a5)
++    68ec:	sw	s2,4(a5)
+     mop_cfg[2] = m_start_op0;
+-    6848:	lui	a3,0x2000
+-    684c:	sw	a3,8(a5)
++    68f0:	lui	a3,0x2000
++    68f4:	sw	a3,8(a5)
+     mop_cfg[3] = m_end_op0;
+-    6850:	sw	a3,12(a5)
++    68f8:	sw	a3,12(a5)
+     mop_cfg[4] = m_end_op1;
+     mop_cfg[5] = m_loop_op0;
+-    6854:	lui	a2,0x42008
++    68fc:	lui	a2,0x42008
+     mop_cfg[4] = m_end_op1;
+-    6858:	sw	a3,16(a5)
++    6900:	sw	a3,16(a5)
+     mop_cfg[5] = m_loop_op0;
+-    685c:	addi	a2,a2,193 # 420080c1 <__runtime_args_end+0x41fe7cc1>
++    6904:	addi	a2,a2,193 # 420080c1 <__runtime_args_end+0x41fe7cc1>
+     mop_cfg[6] = m_loop_op1;
+-    6860:	lui	a3,0x42808
++    6908:	lui	a3,0x42808
+     mop_cfg[5] = m_loop_op0;
+-    6864:	sw	a2,20(a5)
++    690c:	sw	a2,20(a5)
+     mop_cfg[6] = m_loop_op1;
+-    6868:	addi	a3,a3,193 # 428080c1 <__runtime_args_end+0x427e7cc1>
+-    686c:	sw	a3,24(a5)
++    6910:	addi	a3,a3,193 # 428080c1 <__runtime_args_end+0x427e7cc1>
++    6914:	sw	a3,24(a5)
+     mop_cfg[7] = m_loop0_last_instr;
+-    6870:	sw	a3,28(a5)
++    6918:	sw	a3,28(a5)
+     mop_cfg[8] = m_loop1_last_instr;
+-    6874:	sw	a3,32(a5)
++    691c:	sw	a3,32(a5)
+     store_blocking(&pc_buf_base[1], 0);
+-    6878:	lw	a3,-2036(gp) # ffb0000c <ckernel::pc_buf_base>
++    6920:	lw	a3,-2036(gp) # ffb0000c <ckernel::pc_buf_base>
+     asm volatile(
+-    687c:	li	a5,0
++    6924:	li	a5,0
+     store_blocking(&pc_buf_base[1], 0);
+-    6880:	addi	a4,a3,4
++    6928:	addi	a4,a3,4
+     asm volatile(
+-    6884:	sw	a5,0(a4)
+-    6888:	lw	a5,0(a4)
+-    688c:	and	zero,zero,a5
++    692c:	sw	a5,0(a4)
++    6930:	lw	a5,0(a4)
++    6934:	and	zero,zero,a5
+         if (is_opened)
+-    6890:	lbu	a5,0(sp)
+-    6894:	beqz	a5,68e0 <run_kernel(RuntimeParams const&)+0x328>
++    6938:	lbu	a5,0(sp)
++    693c:	beqz	a5,6988 <run_kernel(RuntimeParams const&)+0x3d0>
+     return p_reg[0];
+-    6898:	lui	a5,0xffb12
+-    689c:	lw	a1,496(a5) # ffb121f0 <__stack_top+0x111f0>
+-    68a0:	lw	a5,504(a5)
++    6940:	lui	a5,0xffb12
++    6944:	lw	a1,496(a5) # ffb121f0 <__stack_top+0x111f0>
++    6948:	lw	a5,504(a5)
+     buffer[TRISC_ID][write_idx++] = meta | (timestamp_high & ~ENTRY_META_MASK);
+-    68a4:	lui	a4,0xffb00
+-    68a8:	lw	a3,0(a4) # ffb00000 <llk_profiler::buffer>
++    694c:	lui	a4,0xffb00
++    6950:	lw	a3,0(a4) # ffb00000 <llk_profiler::buffer>
+             --open_zone_cnt;
+-    68ac:	lw	a2,-2016(gp) # ffb00020 <llk_profiler::open_zone_cnt>
++    6954:	lw	a2,-2016(gp) # ffb00020 <llk_profiler::open_zone_cnt>
+     buffer[TRISC_ID][write_idx++] = meta | (timestamp_high & ~ENTRY_META_MASK);
+-    68b0:	lw	a4,-2012(gp) # ffb00024 <llk_profiler::write_idx>
+-    68b4:	lui	a0,0xba3a0
+-    68b8:	slli	a5,a5,0x14
+-    68bc:	srli	a5,a5,0x14
+-    68c0:	or	a5,a5,a0
+-    68c4:	sh2add	a3,a4,a3
+-    68c8:	sw	a5,0(a3)
++    6958:	lw	a4,-2012(gp) # ffb00024 <llk_profiler::write_idx>
++    695c:	lui	a0,0xba3a0
++    6960:	slli	a5,a5,0x14
++    6964:	srli	a5,a5,0x14
++    6968:	or	a5,a5,a0
++    696c:	sh2add	a3,a4,a3
++    6970:	sw	a5,0(a3)
+     buffer[TRISC_ID][write_idx++] = static_cast<std::uint32_t>(timestamp);
+-    68cc:	addi	a4,a4,2
++    6974:	addi	a4,a4,2
+             --open_zone_cnt;
+-    68d0:	addi	a5,a2,-1
++    6978:	addi	a5,a2,-1
+     buffer[TRISC_ID][write_idx++] = static_cast<std::uint32_t>(timestamp);
+-    68d4:	sw	a1,4(a3)
+-    68d8:	sw	a4,-2012(gp) # ffb00024 <llk_profiler::write_idx>
++    697c:	sw	a1,4(a3)
++    6980:	sw	a4,-2012(gp) # ffb00024 <llk_profiler::write_idx>
+             --open_zone_cnt;
+-    68dc:	sw	a5,-2016(gp) # ffb00020 <llk_profiler::open_zone_cnt>
++    6984:	sw	a5,-2016(gp) # ffb00020 <llk_profiler::open_zone_cnt>
++    return pc_buf_base[PC_BUF_SEMAPHORE_BASE + index];
++    6988:	lw	a4,-2036(gp) # ffb0000c <ckernel::pc_buf_base>
++    698c:	lw	a5,40(a4)
++                ckernel::semaphore_post(PERF_EXIT_SEM);
++            }
++        }
++        else
++        {
++            while (ckernel::semaphore_read(PERF_EXIT_SEM) == 0)
++    6990:	zext.b	a5,a5
++    6994:	bnez	a5,69ac <run_kernel(RuntimeParams const&)+0x3f4>
++            {
++                asm volatile("nop");
++    6998:	nop
++    699c:	lw	a4,-2036(gp) # ffb0000c <ckernel::pc_buf_base>
++    69a0:	lw	a5,40(a4)
++            while (ckernel::semaphore_read(PERF_EXIT_SEM) == 0)
++    69a4:	zext.b	a5,a5
++    69a8:	beqz	a5,6998 <run_kernel(RuntimeParams const&)+0x3e0>
++    69ac:	lw	a5,40(a4)
++    LLK_ASSERT(semaphore_read(index) > 0, "Semaphore must not be already at 0.");
++    69b0:	zext.b	a5,a5
++    69b4:	beqz	a5,6c2c <run_kernel(RuntimeParams const&)+0x674>
++    pc_buf_base[PC_BUF_SEMAPHORE_BASE + index] = 1; // LSB set → SEMGET: decrement (only if > 0)
++    69b8:	li	a3,1
++    69bc:	sw	a3,40(a4)
++    std::uint32_t n = detail::next_zone_id;
++    69c0:	lw	a5,0(s1)
++    for (std::uint32_t i = 0; i < n; ++i)
++    69c4:	beqz	a5,6bb4 <run_kernel(RuntimeParams const&)+0x5fc>
++        if (detail::zone_hashes[i] == hash_val)
++    69c8:	lui	a4,0xbd77
++    69cc:	lw	a2,4(s1)
++    69d0:	addi	a4,a4,-244 # bd76f0c <__runtime_args_end+0xbd56b0c>
++    69d4:	beq	a2,a4,6a54 <run_kernel(RuntimeParams const&)+0x49c>
++    for (std::uint32_t i = 0; i < n; ++i)
++    69d8:	beq	a5,a3,6bb4 <run_kernel(RuntimeParams const&)+0x5fc>
++        if (detail::zone_hashes[i] == hash_val)
++    69dc:	lw	a3,8(s1)
++    69e0:	beq	a3,a4,6a54 <run_kernel(RuntimeParams const&)+0x49c>
++    for (std::uint32_t i = 0; i < n; ++i)
++    69e4:	li	a3,2
++    69e8:	beq	a5,a3,6bb4 <run_kernel(RuntimeParams const&)+0x5fc>
++        if (detail::zone_hashes[i] == hash_val)
++    69ec:	lw	a3,12(s1)
++    69f0:	beq	a3,a4,6a54 <run_kernel(RuntimeParams const&)+0x49c>
++    for (std::uint32_t i = 0; i < n; ++i)
++    69f4:	li	a3,3
++    69f8:	beq	a5,a3,6bb4 <run_kernel(RuntimeParams const&)+0x5fc>
++        if (detail::zone_hashes[i] == hash_val)
++    69fc:	lw	a3,16(s1)
++    6a00:	beq	a3,a4,6a54 <run_kernel(RuntimeParams const&)+0x49c>
++    for (std::uint32_t i = 0; i < n; ++i)
++    6a04:	li	a3,4
++    6a08:	beq	a5,a3,6bb4 <run_kernel(RuntimeParams const&)+0x5fc>
++        if (detail::zone_hashes[i] == hash_val)
++    6a0c:	lw	a3,20(s1)
++    6a10:	beq	a3,a4,6a54 <run_kernel(RuntimeParams const&)+0x49c>
++    for (std::uint32_t i = 0; i < n; ++i)
++    6a14:	li	a4,5
++    6a18:	beq	a5,a4,6bb4 <run_kernel(RuntimeParams const&)+0x5fc>
++        if (detail::zone_hashes[i] == hash_val)
++    6a1c:	lui	a4,0xbd77
++    6a20:	lw	a3,24(s1)
++    6a24:	addi	a4,a4,-244 # bd76f0c <__runtime_args_end+0xbd56b0c>
++    6a28:	beq	a3,a4,6a54 <run_kernel(RuntimeParams const&)+0x49c>
++    for (std::uint32_t i = 0; i < n; ++i)
++    6a2c:	li	a3,6
++    6a30:	beq	a5,a3,6bb4 <run_kernel(RuntimeParams const&)+0x5fc>
++        if (detail::zone_hashes[i] == hash_val)
++    6a34:	lw	a3,28(s1)
++    6a38:	beq	a3,a4,6a54 <run_kernel(RuntimeParams const&)+0x49c>
++    for (std::uint32_t i = 0; i < n; ++i)
++    6a3c:	li	a3,7
++    6a40:	beq	a5,a3,6bb4 <run_kernel(RuntimeParams const&)+0x5fc>
++        if (detail::zone_hashes[i] == hash_val)
++    6a44:	lw	a3,32(s1)
++    6a48:	beq	a3,a4,6a54 <run_kernel(RuntimeParams const&)+0x49c>
++    if (n < PERF_COUNTERS_MAX_ZONES)
++    6a4c:	li	a4,8
++    6a50:	bne	a5,a4,6bb4 <run_kernel(RuntimeParams const&)+0x5fc>
++    return pc_buf_base[PC_BUF_SEMAPHORE_BASE + index];
++    6a54:	lw	a4,-2036(gp) # ffb0000c <ckernel::pc_buf_base>
++    6a58:	lw	a5,32(a4)
++            while (ckernel::semaphore_read(PERF_ENTRY_SEM) == 0)
++    6a5c:	zext.b	a5,a5
++    6a60:	bnez	a5,6a78 <run_kernel(RuntimeParams const&)+0x4c0>
++                asm volatile("nop");
++    6a64:	nop
++    6a68:	lw	a4,-2036(gp) # ffb0000c <ckernel::pc_buf_base>
++    6a6c:	lw	a5,32(a4)
++            while (ckernel::semaphore_read(PERF_ENTRY_SEM) == 0)
++    6a70:	zext.b	a5,a5
++    6a74:	beqz	a5,6a64 <run_kernel(RuntimeParams const&)+0x4ac>
++    6a78:	lw	a5,32(a4)
++    LLK_ASSERT(semaphore_read(index) > 0, "Semaphore must not be already at 0.");
++    6a7c:	zext.b	a5,a5
++    6a80:	beqz	a5,6c20 <run_kernel(RuntimeParams const&)+0x668>
++    pc_buf_base[PC_BUF_SEMAPHORE_BASE + index] = 1; // LSB set → SEMGET: decrement (only if > 0)
++    6a84:	li	a2,1
++    6a88:	sw	a2,32(a4)
+     {
+-    68e0:	sb	zero,12(sp)
++    6a8c:	sb	zero,12(sp)
+     return (BUFFER_LENGTH - (write_idx + open_zone_cnt)) < 4;
+-    68e4:	lw	a5,-2012(gp) # ffb00024 <llk_profiler::write_idx>
+-    68e8:	lw	a3,-2016(gp) # ffb00020 <llk_profiler::open_zone_cnt>
++    6a90:	lw	a4,-2012(gp) # ffb00024 <llk_profiler::write_idx>
++    6a94:	lw	a3,-2016(gp) # ffb00020 <llk_profiler::open_zone_cnt>
+         if (!is_buffer_full())
+-    68ec:	li	a2,3
++    6a98:	li	a1,3
+     return (BUFFER_LENGTH - (write_idx + open_zone_cnt)) < 4;
+-    68f0:	add	a4,a5,a3
+-    68f4:	addi	a4,a4,-1021
++    6a9c:	add	a5,a4,a3
++    6aa0:	addi	a5,a5,-1021
+         if (!is_buffer_full())
+-    68f8:	bgeu	a2,a4,6944 <run_kernel(RuntimeParams const&)+0x38c>
+-    68fc:	lui	a4,0xffb12
+-    6900:	lw	a1,496(a4) # ffb121f0 <__stack_top+0x111f0>
+-    6904:	lw	a4,504(a4)
+-    buffer[TRISC_ID][write_idx++] = meta | (timestamp_high & ~ENTRY_META_MASK);
+-    6908:	lui	a2,0xffb00
+-    690c:	lw	a2,0(a2) # ffb00000 <llk_profiler::buffer>
+-            is_opened = true;
+-    6910:	li	a0,1
+-    buffer[TRISC_ID][write_idx++] = meta | (timestamp_high & ~ENTRY_META_MASK);
+-    6914:	lui	a6,0xa99a8
++    6aa4:	bgeu	a1,a5,6aec <run_kernel(RuntimeParams const&)+0x534>
++    return p_reg[0];
++    6aa8:	lui	a5,0xffb12
++    6aac:	lw	a1,496(a5) # ffb121f0 <__stack_top+0x111f0>
++    6ab0:	lw	a5,504(a5)
+             is_opened = true;
+-    6918:	sb	a0,12(sp)
++    6ab4:	sb	a2,12(sp)
+     buffer[TRISC_ID][write_idx++] = meta | (timestamp_high & ~ENTRY_META_MASK);
+-    691c:	slli	a4,a4,0x14
+-    6920:	srli	a4,a4,0x14
+-    6924:	or	a4,a4,a6
++    6ab8:	lui	a2,0xffb00
++    6abc:	lw	a2,0(a2) # ffb00000 <llk_profiler::buffer>
++    6ac0:	lui	a0,0xa99a8
++    6ac4:	slli	a5,a5,0x14
++    6ac8:	srli	a5,a5,0x14
++    6acc:	or	a5,a5,a0
+             ++open_zone_cnt;
+-    6928:	add	a3,a3,a0
+-    692c:	sh2add	a2,a5,a2
++    6ad0:	addi	a3,a3,1
++    6ad4:	sh2add	a2,a4,a2
+     buffer[TRISC_ID][write_idx++] = meta | (timestamp_high & ~ENTRY_META_MASK);
+-    6930:	sw	a4,0(a2)
++    6ad8:	sw	a5,0(a2)
+     buffer[TRISC_ID][write_idx++] = static_cast<std::uint32_t>(timestamp);
+-    6934:	addi	a5,a5,2
++    6adc:	addi	a4,a4,2
+             ++open_zone_cnt;
+-    6938:	sw	a3,-2016(gp) # ffb00020 <llk_profiler::open_zone_cnt>
++    6ae0:	sw	a3,-2016(gp) # ffb00020 <llk_profiler::open_zone_cnt>
+     buffer[TRISC_ID][write_idx++] = static_cast<std::uint32_t>(timestamp);
+-    693c:	sw	a1,4(a2)
+-    6940:	sw	a5,-2012(gp) # ffb00024 <llk_profiler::write_idx>
++    6ae4:	sw	a1,4(a2)
++    6ae8:	sw	a4,-2012(gp) # ffb00024 <llk_profiler::write_idx>
+         if (is_opened)
+-    6944:	lbu	a5,12(sp)
+-    6948:	beqz	a5,6994 <run_kernel(RuntimeParams const&)+0x3dc>
+-    694c:	lui	a5,0xffb12
+-    6950:	lw	a1,496(a5) # ffb121f0 <__stack_top+0x111f0>
+-    6954:	lw	a5,504(a5)
++    6aec:	lbu	a5,12(sp)
++    6af0:	beqz	a5,6b3c <run_kernel(RuntimeParams const&)+0x584>
++    6af4:	lui	a5,0xffb12
++    6af8:	lw	a1,496(a5) # ffb121f0 <__stack_top+0x111f0>
++    6afc:	lw	a5,504(a5)
+     buffer[TRISC_ID][write_idx++] = meta | (timestamp_high & ~ENTRY_META_MASK);
+-    6958:	lui	a4,0xffb00
+-    695c:	lw	a3,0(a4) # ffb00000 <llk_profiler::buffer>
++    6b00:	lui	a4,0xffb00
++    6b04:	lw	a3,0(a4) # ffb00000 <llk_profiler::buffer>
+             --open_zone_cnt;
+-    6960:	lw	a2,-2016(gp) # ffb00020 <llk_profiler::open_zone_cnt>
++    6b08:	lw	a2,-2016(gp) # ffb00020 <llk_profiler::open_zone_cnt>
+     buffer[TRISC_ID][write_idx++] = meta | (timestamp_high & ~ENTRY_META_MASK);
+-    6964:	lw	a4,-2012(gp) # ffb00024 <llk_profiler::write_idx>
+-    6968:	lui	a0,0xb99a8
+-    696c:	slli	a5,a5,0x14
+-    6970:	srli	a5,a5,0x14
+-    6974:	or	a5,a5,a0
+-    6978:	sh2add	a3,a4,a3
+-    697c:	sw	a5,0(a3)
++    6b0c:	lw	a4,-2012(gp) # ffb00024 <llk_profiler::write_idx>
++    6b10:	lui	a0,0xb99a8
++    6b14:	slli	a5,a5,0x14
++    6b18:	srli	a5,a5,0x14
++    6b1c:	or	a5,a5,a0
++    6b20:	sh2add	a3,a4,a3
++    6b24:	sw	a5,0(a3)
+     buffer[TRISC_ID][write_idx++] = static_cast<std::uint32_t>(timestamp);
+-    6980:	addi	a4,a4,2
++    6b28:	addi	a4,a4,2
+             --open_zone_cnt;
+-    6984:	addi	a5,a2,-1
++    6b2c:	addi	a5,a2,-1
+     buffer[TRISC_ID][write_idx++] = static_cast<std::uint32_t>(timestamp);
+-    6988:	sw	a1,4(a3)
+-    698c:	sw	a4,-2012(gp) # ffb00024 <llk_profiler::write_idx>
++    6b30:	sw	a1,4(a3)
++    6b34:	sw	a4,-2012(gp) # ffb00024 <llk_profiler::write_idx>
+             --open_zone_cnt;
+-    6990:	sw	a5,-2016(gp) # ffb00020 <llk_profiler::open_zone_cnt>
++    6b38:	sw	a5,-2016(gp) # ffb00020 <llk_profiler::open_zone_cnt>
++    return pc_buf_base[PC_BUF_SEMAPHORE_BASE + index];
++    6b3c:	lw	a4,-2036(gp) # ffb0000c <ckernel::pc_buf_base>
++    6b40:	lw	a5,40(a4)
++            while (ckernel::semaphore_read(PERF_EXIT_SEM) == 0)
++    6b44:	zext.b	a5,a5
++    6b48:	bnez	a5,6b60 <run_kernel(RuntimeParams const&)+0x5a8>
++                asm volatile("nop");
++    6b4c:	nop
++    6b50:	lw	a4,-2036(gp) # ffb0000c <ckernel::pc_buf_base>
++    6b54:	lw	a5,40(a4)
++            while (ckernel::semaphore_read(PERF_EXIT_SEM) == 0)
++    6b58:	zext.b	a5,a5
++    6b5c:	beqz	a5,6b4c <run_kernel(RuntimeParams const&)+0x594>
++    6b60:	lw	a5,40(a4)
++    LLK_ASSERT(semaphore_read(index) > 0, "Semaphore must not be already at 0.");
++    6b64:	zext.b	a5,a5
++    6b68:	beqz	a5,6c14 <run_kernel(RuntimeParams const&)+0x65c>
++    pc_buf_base[PC_BUF_SEMAPHORE_BASE + index] = 1; // LSB set → SEMGET: decrement (only if > 0)
++    6b6c:	li	a5,1
++    6b70:	sw	a5,40(a4)
+                 _llk_unpack_AB_<>(PERF_ADDRESS(PERF_INPUT_A, tile), PERF_ADDRESS(PERF_INPUT_B, tile));
+             }
+         }
+         PROFILER_SYNC();
+     }
+ }
+-    6994:	lw	ra,44(sp)
+-    6998:	lw	s0,40(sp)
+-    699c:	lw	s1,36(sp)
+-    69a0:	lw	s2,32(sp)
+-    69a4:	lw	s3,28(sp)
+-    69a8:	lw	s4,24(sp)
+-    69ac:	addi	sp,sp,48
+-    69b0:	ret
++    6b74:	lw	ra,44(sp)
++    6b78:	lw	s0,40(sp)
++    6b7c:	lw	s1,36(sp)
++    6b80:	lw	s2,32(sp)
++    6b84:	lw	s3,28(sp)
++    6b88:	lw	s4,24(sp)
++    6b8c:	lw	s5,20(sp)
++    6b90:	addi	sp,sp,48
++    6b94:	ret
++        detail::zone_hashes[n] = hash_val;
++    6b98:	lui	a4,0x7c867
++    6b9c:	sh2add	a3,a5,s1
++    6ba0:	addi	a4,a4,-839 # 7c866cb9 <__runtime_args_end+0x7c8468b9>
++        detail::next_zone_id   = n + 1;
++    6ba4:	addi	a5,a5,1
++        detail::zone_hashes[n] = hash_val;
++    6ba8:	sw	a4,4(a3)
++        detail::next_zone_id   = n + 1;
++    6bac:	sw	a5,0(s1)
++        return n;
++    6bb0:	j	6674 <run_kernel(RuntimeParams const&)+0xbc>
++        detail::zone_hashes[n] = hash_val;
++    6bb4:	lui	a4,0xbd77
++    6bb8:	sh2add	a3,a5,s1
++    6bbc:	addi	a4,a4,-244 # bd76f0c <__runtime_args_end+0xbd56b0c>
++        detail::next_zone_id   = n + 1;
++    6bc0:	addi	a5,a5,1
++        detail::zone_hashes[n] = hash_val;
++    6bc4:	sw	a4,4(a3)
++        detail::next_zone_id   = n + 1;
++    6bc8:	sw	a5,0(s1)
++        return n;
++    6bcc:	j	6a54 <run_kernel(RuntimeParams const&)+0x49c>
++    6bd0:	ebreak
++    6bd4:	j	68cc <run_kernel(RuntimeParams const&)+0x314>
++    LLK_ASSERT(semaphore_read(index) > 0, "Semaphore must not be already at 0.");
++    6bd8:	ebreak
++    pc_buf_base[PC_BUF_SEMAPHORE_BASE + index] = 1; // LSB set → SEMGET: decrement (only if > 0)
++    6bdc:	lw	a4,-2036(gp) # ffb0000c <ckernel::pc_buf_base>
++    6be0:	j	66a4 <run_kernel(RuntimeParams const&)+0xec>
++    LLK_ASSERT(
++    6be4:	ebreak
++    LLK_ASSERT(
++    6be8:	ebreak
++    6bec:	j	6720 <run_kernel(RuntimeParams const&)+0x168>
+     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+-    69b4:	ebreak
++    6bf0:	ebreak
+         TT_RMWCIB1(mask_b1, data_b1, CfgAddr32);
+-    69b8:	lui	a4,0xb4010
+-    69bc:	addi	a4,a4,72 # b4010048 <__runtime_args_end+0xb3fefc48>
++    6bf4:	lui	a4,0xb4010
++    6bf8:	addi	a4,a4,72 # b4010048 <__runtime_args_end+0xb3fefc48>
+     const bool within_face_16x16_transpose = transpose == ckernel::Transpose::IntraFace || transpose == ckernel::Transpose::Both;
+     const bool transpose_of_faces          = transpose == ckernel::Transpose::InterFace || transpose == ckernel::Transpose::Both;
+     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose); // transpose within the face
+
+     config_unpacker_x_end<p_setadc::UNP_AB>(tensor_shape.face_r_dim);
+-    69c0:	lbu	a5,4(sp)
+-    69c4:	sw	a4,0(s0)
++    6bfc:	lbu	a5,4(sp)
++    6c00:	sw	a4,0(s2)
+     LLK_ASSERT(
+-    69c8:	li	a4,16
+-    69cc:	bgeu	a4,a5,69f8 <run_kernel(RuntimeParams const&)+0x440>
+-    69d0:	ebreak
++    6c04:	li	a4,16
++    6c08:	bgeu	a4,a5,6c38 <run_kernel(RuntimeParams const&)+0x680>
++    6c0c:	ebreak
++    6c10:	j	68a8 <run_kernel(RuntimeParams const&)+0x2f0>
++    LLK_ASSERT(semaphore_read(index) > 0, "Semaphore must not be already at 0.");
++    6c14:	ebreak
++    pc_buf_base[PC_BUF_SEMAPHORE_BASE + index] = 1; // LSB set → SEMGET: decrement (only if > 0)
++    6c18:	lw	a4,-2036(gp) # ffb0000c <ckernel::pc_buf_base>
++    6c1c:	j	6b6c <run_kernel(RuntimeParams const&)+0x5b4>
++    LLK_ASSERT(semaphore_read(index) > 0, "Semaphore must not be already at 0.");
++    6c20:	ebreak
++    pc_buf_base[PC_BUF_SEMAPHORE_BASE + index] = 1; // LSB set → SEMGET: decrement (only if > 0)
++    6c24:	lw	a4,-2036(gp) # ffb0000c <ckernel::pc_buf_base>
++    6c28:	j	6a84 <run_kernel(RuntimeParams const&)+0x4cc>
++    LLK_ASSERT(semaphore_read(index) > 0, "Semaphore must not be already at 0.");
++    6c2c:	ebreak
++    pc_buf_base[PC_BUF_SEMAPHORE_BASE + index] = 1; // LSB set → SEMGET: decrement (only if > 0)
++    6c30:	lw	a4,-2036(gp) # ffb0000c <ckernel::pc_buf_base>
++    6c34:	j	69b8 <run_kernel(RuntimeParams const&)+0x400>
++    6c38:	lui	a4,0xffff0
++    6c3c:	addi	a4,a4,-279 # fffefee9 <__instrn_buffer+0x1afee9>
++    6c40:	sra	a4,a4,a5
++    6c44:	andi	a4,a4,1
++    6c48:	bnez	a4,6c80 <run_kernel(RuntimeParams const&)+0x6c8>
++    switch (face_r_dim)
++    6c4c:	li	a4,4
++    6c50:	beq	a5,a4,6c70 <run_kernel(RuntimeParams const&)+0x6b8>
++    6c54:	bltu	a4,a5,6c88 <run_kernel(RuntimeParams const&)+0x6d0>
++    6c58:	li	a4,1
++    6c5c:	beq	a5,a4,6c78 <run_kernel(RuntimeParams const&)+0x6c0>
++    6c60:	li	a4,2
++    6c64:	bne	a5,a4,68a8 <run_kernel(RuntimeParams const&)+0x2f0>
++            TTI_SETADCXX(UNP_SEL, 2 * FACE_C_DIM - 1, 0x0);
++    6c68:	ttsetadcxx	3,31,0
+             break;
+-        default:
+-            TTI_SETADCXX(UNP_SEL, FACE_R_DIM * FACE_C_DIM - 1, 0x0);
+-    69d4:	ttsetadcxx	3,255,0
++    6c6c:	j	68ac <run_kernel(RuntimeParams const&)+0x2f4>
++            TTI_SETADCXX(UNP_SEL, 4 * FACE_C_DIM - 1, 0x0);
++    6c70:	ttsetadcxx	3,63,0
+             break;
+-    69d8:	j	6804 <run_kernel(RuntimeParams const&)+0x24c>
++    6c74:	j	68ac <run_kernel(RuntimeParams const&)+0x2f4>
+             TTI_SETADCXX(UNP_SEL, 1 * FACE_C_DIM - 1, 0x0);
+-    69dc:	ttsetadcxx	3,15,0
++    6c78:	ttsetadcxx	3,15,0
+             break;
+-    69e0:	j	6804 <run_kernel(RuntimeParams const&)+0x24c>
+-    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+-    69e4:	ebreak
+-    69e8:	j	6824 <run_kernel(RuntimeParams const&)+0x26c>
+-    LLK_ASSERT(
+-    69ec:	ebreak
++    6c7c:	j	68ac <run_kernel(RuntimeParams const&)+0x2f4>
+     LLK_ASSERT(
+-    69f0:	ebreak
+-    69f4:	j	664c <run_kernel(RuntimeParams const&)+0x94>
+-    LLK_ASSERT(
+-    69f8:	lui	a4,0xffff0
+-    69fc:	addi	a4,a4,-279 # fffefee9 <__instrn_buffer+0x1afee9>
+-    6a00:	sra	a4,a4,a5
+-    6a04:	andi	a4,a4,1
+-    6a08:	beqz	a4,6a10 <run_kernel(RuntimeParams const&)+0x458>
+-    6a0c:	ebreak
++    6c80:	ebreak
++    6c84:	j	6c4c <run_kernel(RuntimeParams const&)+0x694>
+     switch (face_r_dim)
+-    6a10:	li	a4,4
+-    6a14:	bne	a5,a4,67d8 <run_kernel(RuntimeParams const&)+0x220>
+-            TTI_SETADCXX(UNP_SEL, 4 * FACE_C_DIM - 1, 0x0);
+-    6a18:	ttsetadcxx	3,63,0
++    6c88:	li	a4,8
++    6c8c:	bne	a5,a4,68a8 <run_kernel(RuntimeParams const&)+0x2f0>
++            TTI_SETADCXX(UNP_SEL, 8 * FACE_C_DIM - 1, 0x0);
++    6c90:	ttsetadcxx	3,127,0
+             break;
+-    6a1c:	j	6804 <run_kernel(RuntimeParams const&)+0x24c>
++    6c94:	j	68ac <run_kernel(RuntimeParams const&)+0x2f4>
+
+-00006a20 <_init()>:
++00006c98 <_init()>:
+     }
+ }
+
+ void _init(void)
+ {
+ }
+-    6a20:	ret
++    6c98:	ret
+
+-00006a24 <_fini()>:
++00006c9c <_fini()>:
+
+ void _fini(void)
+-    6a24:	ret
++    6c9c:	ret
+
+-00006a28 <copy_runtimes_from_L1(RuntimeParams*)>:
++00006ca0 <copy_runtimes_from_L1(RuntimeParams*)>:
+         dstc[i] = srcc[i];
+-    6a28:	lui	a5,0x20
+-    6a2c:	lbu	a5,0(a5) # 20000 <RUNTIME_ARGS_START>
+-    6a30:	sb	a5,0(a0) # b99a8000 <__runtime_args_end+0xb9987c00>
++    6ca0:	lui	a5,0x20
++    6ca4:	lbu	a5,0(a5) # 20000 <RUNTIME_ARGS_START>
++    6ca8:	sb	a5,0(a0) # b99a8000 <__runtime_args_end+0xb9987c00>
+         (void)(dstc[i]);
+-    6a34:	lbu	a5,0(a0)
++    6cac:	lbu	a5,0(a0)
+     asm volatile("fence" ::: "memory");
+-    6a38:	fence
++    6cb0:	fence
+ }
+-    6a3c:	ret
++    6cb4:	ret
+
+-00006a40 <memset>:
+-    6a40:	li	t1,15
+-    6a44:	mv	a4,a0
+-    6a48:	bgeu	t1,a2,6a84 <memset+0x44>
+-    6a4c:	andi	a5,a4,15
+-    6a50:	bnez	a5,6af0 <memset+0xb0>
+-    6a54:	bnez	a1,6ad8 <memset+0x98>
+-    6a58:	andi	a3,a2,-16
+-    6a5c:	andi	a2,a2,15
+-    6a60:	add	a3,a3,a4
+-    6a64:	sw	a1,0(a4)
+-    6a68:	sw	a1,4(a4)
+-    6a6c:	sw	a1,8(a4)
+-    6a70:	sw	a1,12(a4)
+-    6a74:	addi	a4,a4,16
+-    6a78:	bltu	a4,a3,6a64 <memset+0x24>
+-    6a7c:	bnez	a2,6a84 <memset+0x44>
+-    6a80:	ret
+-    6a84:	sub	a3,t1,a2
+-    6a88:	slli	a3,a3,0x2
+-    6a8c:	auipc	t0,0x0
+-    6a90:	add	a3,a3,t0
+-    6a94:	jr	12(a3)
+-    6a98:	sb	a1,14(a4)
+-    6a9c:	sb	a1,13(a4)
+-    6aa0:	sb	a1,12(a4)
+-    6aa4:	sb	a1,11(a4)
+-    6aa8:	sb	a1,10(a4)
+-    6aac:	sb	a1,9(a4)
+-    6ab0:	sb	a1,8(a4)
+-    6ab4:	sb	a1,7(a4)
+-    6ab8:	sb	a1,6(a4)
+-    6abc:	sb	a1,5(a4)
+-    6ac0:	sb	a1,4(a4)
+-    6ac4:	sb	a1,3(a4)
+-    6ac8:	sb	a1,2(a4)
+-    6acc:	sb	a1,1(a4)
+-    6ad0:	sb	a1,0(a4)
+-    6ad4:	ret
+-    6ad8:	zext.b	a1,a1
+-    6adc:	slli	a3,a1,0x8
+-    6ae0:	or	a1,a1,a3
+-    6ae4:	slli	a3,a1,0x10
+-    6ae8:	or	a1,a1,a3
+-    6aec:	j	6a58 <memset+0x18>
+-    6af0:	slli	a3,a5,0x2
+-    6af4:	auipc	t0,0x0
+-    6af8:	add	a3,a3,t0
+-    6afc:	mv	t0,ra
+-    6b00:	jalr	-96(a3)
+-    6b04:	mv	ra,t0
+-    6b08:	addi	a5,a5,-16
+-    6b0c:	sub	a4,a4,a5
+-    6b10:	add	a2,a2,a5
+-    6b14:	bgeu	t1,a2,6a84 <memset+0x44>
+-    6b18:	j	6a54 <memset+0x14>
++00006cb8 <memset>:
++    6cb8:	li	t1,15
++    6cbc:	mv	a4,a0
++    6cc0:	bgeu	t1,a2,6cfc <memset+0x44>
++    6cc4:	andi	a5,a4,15
++    6cc8:	bnez	a5,6d68 <memset+0xb0>
++    6ccc:	bnez	a1,6d50 <memset+0x98>
++    6cd0:	andi	a3,a2,-16
++    6cd4:	andi	a2,a2,15
++    6cd8:	add	a3,a3,a4
++    6cdc:	sw	a1,0(a4)
++    6ce0:	sw	a1,4(a4)
++    6ce4:	sw	a1,8(a4)
++    6ce8:	sw	a1,12(a4)
++    6cec:	addi	a4,a4,16
++    6cf0:	bltu	a4,a3,6cdc <memset+0x24>
++    6cf4:	bnez	a2,6cfc <memset+0x44>
++    6cf8:	ret
++    6cfc:	sub	a3,t1,a2
++    6d00:	slli	a3,a3,0x2
++    6d04:	auipc	t0,0x0
++    6d08:	add	a3,a3,t0
++    6d0c:	jr	12(a3)
++    6d10:	sb	a1,14(a4)
++    6d14:	sb	a1,13(a4)
++    6d18:	sb	a1,12(a4)
++    6d1c:	sb	a1,11(a4)
++    6d20:	sb	a1,10(a4)
++    6d24:	sb	a1,9(a4)
++    6d28:	sb	a1,8(a4)
++    6d2c:	sb	a1,7(a4)
++    6d30:	sb	a1,6(a4)
++    6d34:	sb	a1,5(a4)
++    6d38:	sb	a1,4(a4)
++    6d3c:	sb	a1,3(a4)
++    6d40:	sb	a1,2(a4)
++    6d44:	sb	a1,1(a4)
++    6d48:	sb	a1,0(a4)
++    6d4c:	ret
++    6d50:	zext.b	a1,a1
++    6d54:	slli	a3,a1,0x8
++    6d58:	or	a1,a1,a3
++    6d5c:	slli	a3,a1,0x10
++    6d60:	or	a1,a1,a3
++    6d64:	j	6cd0 <memset+0x18>
++    6d68:	slli	a3,a5,0x2
++    6d6c:	auipc	t0,0x0
++    6d70:	add	a3,a3,t0
++    6d74:	mv	t0,ra
++    6d78:	jalr	-96(a3)
++    6d7c:	mv	ra,t0
++    6d80:	addi	a5,a5,-16
++    6d84:	sub	a4,a4,a5
++    6d88:	add	a2,a2,a5
++    6d8c:	bgeu	t1,a2,6cfc <memset+0x44>
++    6d90:	j	6ccc <memset+0x14>

@@ -1,0 +1,811 @@
+  auipc	gp,0xffaf1
+  addi	gp,gp,-2048
+  auipc	sp,0xffaf1
+  addi	sp,sp,-8
+  lui	a5,0xffb00
+  lui	a4,0xffb00
+  addi	a5,a5,32
+  addi	a4,a4,64
+  bgeu	a5,a4,10044 <_start+0x44>
+  addi	a4,a4,-1
+  sub	a4,a4,a5
+  andi	a4,a4,-4
+  addi	a4,a4,4
+  add	a4,a4,a5
+  sw	zero,0(a5)
+  addi	a5,a5,4
+  bne	a5,a4,10038 <_start+0x38>
+  lui	a5,0x14
+  lui	a4,0x15
+  mv	a5,a5
+  mv	a4,a4
+  beq	a5,a4,10094 <_start+0x94>
+  lui	a4,0xffb00
+  lui	a3,0xffb00
+  mv	a4,a4
+  addi	a3,a3,32
+  bgeu	a4,a3,10094 <_start+0x94>
+  addi	a3,a3,-1
+  sub	a3,a3,a4
+  andi	a3,a3,-4
+  addi	a3,a3,4
+  add	a3,a3,a5
+  lw	a1,0(a5)
+  addi	a5,a5,4
+  sw	a1,0(a4)
+  addi	a4,a4,4
+  bne	a5,a3,10080 <_start+0x80>
+  lui	s0,0xffb00
+  lui	s1,0xffb00
+  mv	s0,s0
+  mv	s1,s1
+  bgeu	s0,s1,100b8 <_start+0xb8>
+  lw	a5,0(s0)
+  addi	s0,s0,4
+  jalr	a5
+  bltu	s0,s1,100a8 <_start+0xa8>
+  jal	100c0 <main>
+  j	100bc <_start+0xbc>
+  lui	a5,0x20
+  lbu	a5,0(a5)
+  addi	sp,sp,-48
+  sb	a5,8(sp)
+  sw	ra,44(sp)
+  sw	s0,40(sp)
+  sw	s1,36(sp)
+  sw	s2,32(sp)
+  sw	s3,28(sp)
+  lbu	a5,8(sp)
+  fence
+  lw	a5,-2040(gp)
+  addi	a4,a5,256
+  sw	zero,0(a5)
+  addi	a5,a5,4
+  bne	a5,a4,100f4 <main+0x34>
+  lui	a5,0x16b
+  lui	s2,0xffb00
+  addi	a4,a5,-12
+  sw	a5,0(s2)
+  lui	s3,0xffb00
+  sw	zero,-2000(gp)
+  lui	a2,0x1
+  li	a1,0
+  lui	a0,0x16d
+  sw	zero,-2004(gp)
+  sw	a4,4(s3)
+  sw	zero,-2012(gp)
+  sw	zero,-2016(gp)
+  jal	10bd0 <memset>
+  lw	a5,4(s3)
+  li	a3,1
+  sw	a3,8(a5)
+  fence
+  lw	a4,0(a5)
+  bne	a4,a3,10144 <main+0x84>
+  lw	a4,4(a5)
+  li	a3,1
+  beq	a4,a3,10168 <main+0xa8>
+  fence
+  lw	a4,4(a5)
+  bne	a4,a3,1015c <main+0x9c>
+  sb	zero,12(sp)
+  lw	a4,-2012(gp)
+  lw	a3,-2016(gp)
+  li	a2,3
+  add	a5,a4,a3
+  addi	a5,a5,-1021
+  bgeu	a2,a5,101d0 <main+0x110>
+  lui	a5,0xffb12
+  lw	a0,496(a5)
+  lw	a5,504(a5)
+  lw	a2,0(s2)
+  lui	a1,0x2
+  lui	a6,0xa5104
+  addi	a3,a3,1
+  sh2add	a2,a4,a2
+  add	a2,a2,a1
+  addi	a4,a4,2
+  li	a1,1
+  sw	a3,-2016(gp)
+  sw	a4,-2012(gp)
+  slli	a5,a5,0x14
+  srli	a5,a5,0x14
+  or	a5,a5,a6
+  sw	a5,0(a2)
+  sw	a0,4(a2)
+  sb	a1,12(sp)
+  addi	a0,sp,8
+  jal	104f0 <run_kernel(RuntimeParams const&)>
+  lw	a4,-2036(gp)
+  li	a5,0
+  addi	a4,a4,4
+  sw	a5,0(a4)
+  lw	a5,0(a4)
+  and	zero,zero,a5
+  lbu	a5,12(sp)
+  beqz	a5,10244 <main+0x184>
+  lui	a5,0xffb12
+  lw	a1,496(a5)
+  lw	a5,504(a5)
+  lw	a3,-2012(gp)
+  lw	a2,-2016(gp)
+  lw	a4,0(s2)
+  lui	a6,0xb5104
+  lui	a0,0x2
+  sh2add	a4,a3,a4
+  add	a4,a4,a0
+  addi	a3,a3,2
+  sw	a3,-2012(gp)
+  slli	a5,a5,0x14
+  srli	a5,a5,0x14
+  or	a5,a5,a6
+  sw	a5,0(a4)
+  sw	a1,4(a4)
+  addi	a2,a2,-1
+  sw	a2,-2016(gp)
+  lui	a5,0x20
+  lw	ra,44(sp)
+  lw	s0,40(sp)
+  li	a4,255
+  sw	a4,-64(a5)
+  lw	s1,36(sp)
+  lw	s2,32(sp)
+  lw	s3,28(sp)
+  li	a0,0
+  addi	sp,sp,48
+  ret
+  lbu	a5,3(a0)
+  lbu	a4,2(a0)
+  mv	a3,a0
+  mul	a4,a4,a5
+  zext.b	a4,a4
+  addi	a5,a4,-1
+  addi	a4,a4,-4
+  sltiu	a5,a5,2
+  seqz	a4,a4
+  or	a0,a5,a4
+  beqz	a0,102cc <ckernel::validate_tensor_shape_tile_dependent_ops_(ckernel::TensorShape const&)+0x5c>
+  lbu	a4,0(a3)
+  li	a5,16
+  li	a0,0
+  bltu	a5,a4,102cc <ckernel::validate_tensor_shape_tile_dependent_ops_(ckernel::TensorShape const&)+0x5c>
+  lui	a5,0x10
+  addi	a5,a5,278
+  srl	a5,a5,a4
+  andi	a0,a5,1
+  beqz	a0,102cc <ckernel::validate_tensor_shape_tile_dependent_ops_(ckernel::TensorShape const&)+0x5c>
+  lbu	a0,1(a3)
+  addi	a0,a0,-16
+  seqz	a0,a0
+  ret
+  li	a5,15
+  bltu	a5,a0,102ec <ckernel::packer::is_packer_fp32_late_column_output(DataFormat)+0x1c>
+  lui	a5,0x9
+  addi	a5,a5,-785
+  srl	a0,a5,a0
+  andi	a0,a0,1
+  ret
+  li	a0,0
+  ret
+  li	a5,4
+  beq	a0,a5,10300 <ckernel::packer::is_packer_combined_late_column_output(DataFormat)+0xc>
+  j	102d0 <ckernel::packer::is_packer_fp32_late_column_output(DataFormat)>
+  li	a0,1
+  ret
+  li	a5,5
+  beq	a0,a5,103a8 <ckernel::packer::is_packer_to_L1_early_conversion_supported(DataFormat, DataFormat)+0xa0>
+  bgeu	a5,a0,10334 <ckernel::packer::is_packer_to_L1_early_conversion_supported(DataFormat, DataFormat)+0x2c>
+  li	a5,8
+  beq	a0,a5,10368 <ckernel::packer::is_packer_to_L1_early_conversion_supported(DataFormat, DataFormat)+0x60>
+  addi	a0,a0,-9
+  addi	a1,a1,-9
+  seqz	a1,a1
+  seqz	a0,a0
+  and	a0,a0,a1
+  ret
+  beqz	a0,1038c <ckernel::packer::is_packer_to_L1_early_conversion_supported(DataFormat, DataFormat)+0x84>
+  li	a5,1
+  bne	a0,a5,10360 <ckernel::packer::is_packer_to_L1_early_conversion_supported(DataFormat, DataFormat)+0x58>
+  li	a5,14
+  li	a0,0
+  bltu	a5,a1,10388 <ckernel::packer::is_packer_to_L1_early_conversion_supported(DataFormat, DataFormat)+0x80>
+  lui	a0,0x4
+  addi	a0,a0,1030
+  srl	a0,a0,a1
+  andi	a0,a0,1
+  ret
+  li	a0,0
+  ret
+  bltu	a0,a1,1037c <ckernel::packer::is_packer_to_L1_early_conversion_supported(DataFormat, DataFormat)+0x74>
+  li	a0,305
+  srl	a0,a0,a1
+  andi	a0,a0,1
+  bnez	a0,10388 <ckernel::packer::is_packer_to_L1_early_conversion_supported(DataFormat, DataFormat)+0x80>
+  andi	a1,a1,239
+  addi	a1,a1,-14
+  seqz	a0,a1
+  ret
+  li	a5,30
+  bltu	a5,a1,10388 <ckernel::packer::is_packer_to_L1_early_conversion_supported(DataFormat, DataFormat)+0x80>
+  lui	a0,0x40004
+  addi	a0,a0,369
+  srl	a0,a0,a1
+  andi	a0,a0,1
+  ret
+  addi	a0,a1,-4
+  addi	a1,a1,-14
+  seqz	a1,a1
+  sltiu	a0,a0,3
+  or	a0,a0,a1
+  ret
+  li	a5,9
+  beq	a0,a5,10444 <ckernel::packer::is_packer_to_L1_late_conversion_supported(DataFormat, DataFormat)+0x84>
+  bgeu	a5,a0,103fc <ckernel::packer::is_packer_to_L1_late_conversion_supported(DataFormat, DataFormat)+0x3c>
+  li	a5,24
+  beq	a0,a5,10450 <ckernel::packer::is_packer_to_L1_late_conversion_supported(DataFormat, DataFormat)+0x90>
+  bltu	a5,a0,10410 <ckernel::packer::is_packer_to_L1_late_conversion_supported(DataFormat, DataFormat)+0x50>
+  li	a5,14
+  beq	a0,a5,10418 <ckernel::packer::is_packer_to_L1_late_conversion_supported(DataFormat, DataFormat)+0x58>
+  bltu	a5,a0,10428 <ckernel::packer::is_packer_to_L1_late_conversion_supported(DataFormat, DataFormat)+0x68>
+  addi	a5,a0,-10
+  zext.b	a5,a5
+  li	a4,1
+  bltu	a4,a5,10430 <ckernel::packer::is_packer_to_L1_late_conversion_supported(DataFormat, DataFormat)+0x70>
+  mv	a0,a1
+  j	102f4 <ckernel::packer::is_packer_combined_late_column_output(DataFormat)>
+  li	a5,8
+  beq	a0,a5,10438 <ckernel::packer::is_packer_to_L1_late_conversion_supported(DataFormat, DataFormat)+0x78>
+  bnez	a0,103f4 <ckernel::packer::is_packer_to_L1_late_conversion_supported(DataFormat, DataFormat)+0x34>
+  mv	a0,a1
+  j	102d0 <ckernel::packer::is_packer_fp32_late_column_output(DataFormat)>
+  li	a5,30
+  bne	a0,a5,10430 <ckernel::packer::is_packer_to_L1_late_conversion_supported(DataFormat, DataFormat)+0x70>
+  andi	a1,a1,239
+  addi	a1,a1,-14
+  seqz	a0,a1
+  ret
+  li	a5,15
+  beq	a0,a5,103f4 <ckernel::packer::is_packer_to_L1_late_conversion_supported(DataFormat, DataFormat)+0x34>
+  li	a0,0
+  ret
+  addi	a1,a1,-8
+  seqz	a0,a1
+  ret
+  addi	a1,a1,-9
+  seqz	a0,a1
+  ret
+  addi	a1,a1,-24
+  seqz	a0,a1
+  ret
+  addi	sp,sp,-16
+  sw	s0,8(sp)
+  sw	s1,4(sp)
+  sw	ra,12(sp)
+  mv	s1,a0
+  mv	s0,a1
+  jal	10308 <ckernel::packer::is_packer_to_L1_early_conversion_supported(DataFormat, DataFormat)>
+  bnez	a0,10498 <ckernel::packer::is_packer_to_L1_conversion_supported(DataFormat, DataFormat)+0x3c>
+  mv	a1,s0
+  lw	s0,8(sp)
+  lw	ra,12(sp)
+  mv	a0,s1
+  lw	s1,4(sp)
+  addi	sp,sp,16
+  j	103c0 <ckernel::packer::is_packer_to_L1_late_conversion_supported(DataFormat, DataFormat)>
+  lw	ra,12(sp)
+  lw	s0,8(sp)
+  lw	s1,4(sp)
+  addi	sp,sp,16
+  ret
+  lw	a4,-2000(gp)
+  lui	a5,0xffef0
+  beqz	a4,104bc <ckernel::packer::read_pack_config()+0x10>
+  addi	a5,a5,896
+  lw	a3,272(a5)
+  lw	a4,276(a5)
+  lw	a5,280(a5)
+  sw	a3,0(a0)
+  sw	a4,4(a0)
+  sw	a5,8(a0)
+  ret
+  lw	a4,-2000(gp)
+  lui	a5,0xffef0
+  beqz	a4,104e8 <ckernel::packer::read_pack_counters()+0x10>
+  addi	a5,a5,896
+  lw	a0,112(a5)
+  ret
+  addi	sp,sp,-32
+  sw	ra,28(sp)
+  sw	s0,24(sp)
+  sw	s1,20(sp)
+  sb	zero,4(sp)
+  lw	a4,-2012(gp)
+  lw	a2,-2016(gp)
+  li	a3,3
+  add	a5,a4,a2
+  addi	a5,a5,-1021
+  bgeu	a3,a5,1056c <run_kernel(RuntimeParams const&)+0x7c>
+  lui	a5,0xffb12
+  lw	a1,496(a5)
+  lw	a5,504(a5)
+  lui	a3,0xffb00
+  lw	a3,0(a3)
+  li	a0,1
+  lui	a7,0xa91eb
+  lui	a6,0x2
+  sb	a0,4(sp)
+  add	a2,a2,a0
+  sw	a2,-2016(gp)
+  sh2add	a3,a4,a3
+  add	a3,a3,a6
+  addi	a4,a4,2
+  sw	a4,-2012(gp)
+  slli	a5,a5,0x14
+  srli	a5,a5,0x14
+  or	a5,a5,a7
+  sw	a5,0(a3)
+  sw	a1,4(a3)
+  li	a1,6
+  mv	a0,a1
+  jal	1045c <ckernel::packer::is_packer_to_L1_conversion_supported(DataFormat, DataFormat)>
+  beqz	a0,10ba8 <run_kernel(RuntimeParams const&)+0x6b8>
+  lw	a5,-2000(gp)
+  lui	a4,0xffef0
+  beqz	a5,1058c <run_kernel(RuntimeParams const&)+0x9c>
+  addi	a4,a4,896
+  lui	a5,0xffe40
+  lui	a3,0x45000
+  mv	a5,a5
+  addi	a3,a3,56
+  sw	a3,0(a5)
+  lui	a3,0x45001
+  addi	a3,a3,57
+  sw	a3,0(a5)
+  lui	a3,0x45010
+  addi	a3,a3,58
+  sw	a3,0(a5)
+  lui	a3,0x45040
+  addi	a3,a3,59
+  sw	a3,0(a5)
+  ttstallwait	128,1
+  ttwrcfg	28,0,12
+  ttwrcfg	29,0,13
+  ttnop
+  ttnop
+  ttatgetm	0
+  lui	a3,0xb5800
+  addi	a3,a3,71
+  sw	a3,0(a5)
+  lui	a3,0xb61e1
+  addi	a3,a3,-1023
+  sw	a3,0(a5)
+  lui	a3,0xb3fc0
+  addi	a3,a3,2
+  sw	a3,0(a5)
+  lui	a3,0xb4ff0
+  addi	a3,a3,2
+  sw	a3,0(a5)
+  lui	a3,0xb53f0
+  addi	a3,a3,2
+  sw	a3,0(a5)
+  ttatrelm	0
+  lui	a3,0xb5100
+  addi	a3,a3,71
+  sw	a3,0(a5)
+  lui	a3,0xb6ff0
+  addi	a3,a3,71
+  sw	a3,0(a5)
+  lui	a2,0x40
+  sw	a2,272(a4)
+  li	a3,1633
+  sw	a3,280(a4)
+  ttstallwait	128,8
+  lui	a3,0xb3040
+  addi	a3,a3,70
+  sw	a3,0(a5)
+  lui	a3,0xb5080
+  addi	a3,a3,71
+  sw	a3,0(a5)
+  lw	a3,-2040(gp)
+  li	a1,1
+  sw	a1,72(a4)
+  sw	a2,208(a3)
+  sw	zero,12(sp)
+  lw	a0,208(a3)
+  lui	a6,0x1
+  lui	a2,0x10
+  addi	a2,a2,-1
+  sw	zero,80(a4)
+  li	a1,1024
+  sw	a0,12(sp)
+  sw	a6,112(a4)
+  sw	a2,96(a4)
+  sw	a1,64(a3)
+  lw	a4,76(a3)
+  sw	zero,68(a3)
+  sw	zero,72(a3)
+  sw	zero,76(a3)
+  sw	zero,8(sp)
+  sw	a4,8(sp)
+  ttsetadcxx	4,15,0
+  ttsetc16	37,260
+  ttsetc16	38,10272
+  ttsetc16	39,4384
+  lw	a4,-2036(gp)
+  li	a3,0
+  addi	a4,a4,8
+  mv	a2,a3
+  sw	a2,0(a4)
+  lw	a2,0(a4)
+  and	zero,zero,a2
+  lui	a4,0xffb80
+  li	a2,4
+  sw	a2,0(a4)
+  sw	a2,4(a4)
+  lui	a2,0x2000
+  sw	a2,8(a4)
+  sw	a2,12(a4)
+  sw	a2,16(a4)
+  lui	a0,0x41000
+  sw	a0,20(a4)
+  lui	a0,0x41008
+  sw	a2,24(a4)
+  addi	a2,a0,1
+  sw	a2,28(a4)
+  lui	a2,0x41010
+  sw	a2,32(a4)
+  lw	a4,-2036(gp)
+  mv	a2,a3
+  addi	a4,a4,4
+  sw	a2,0(a4)
+  lw	a2,0(a4)
+  and	zero,zero,a2
+  sw	zero,-2004(gp)
+  ttstallwait	33,8
+  ttsetdmareg	0,0,0,8
+  ttsetdmareg	0,512,0,16
+  ttstallwait	128,1
+  lui	a4,0xb0048
+  addi	a4,a4,180
+  sw	a4,0(a5)
+  ttdmanop
+  ttdmanop
+  ttsetadcxy	4,0,0,0,0,11
+  ttsetadczw	4,0,0,0,0,15
+  lw	a4,-2036(gp)
+  addi	a4,a4,4
+  sw	zero,-1992(gp)
+  sw	a3,0(a4)
+  lw	a3,0(a4)
+  and	zero,zero,a3
+  lbu	a4,4(sp)
+  beqz	a4,107d8 <run_kernel(RuntimeParams const&)+0x2e8>
+  lui	a4,0xffb12
+  lw	a7,496(a4)
+  lw	a3,504(a4)
+  lui	a4,0xffb00
+  lw	a2,-2012(gp)
+  lw	a0,-2016(gp)
+  addi	a6,a6,-1
+  lw	a4,0(a4)
+  lui	t1,0xb91eb
+  and	a3,a3,a6
+  lui	a6,0x2
+  or	a3,a3,t1
+  addi	a0,a0,-1
+  sh2add	a4,a2,a4
+  add	a4,a4,a6
+  addi	a2,a2,2
+  sw	a2,-2012(gp)
+  sw	a3,0(a4)
+  sw	a7,4(a4)
+  sw	a0,-2016(gp)
+  sb	zero,4(sp)
+  lw	a3,-2012(gp)
+  lw	a0,-2016(gp)
+  li	a2,3
+  add	a4,a0,a3
+  addi	a4,a4,-1021
+  bgeu	a2,a4,10844 <run_kernel(RuntimeParams const&)+0x354>
+  lui	a4,0xffb12
+  lw	a6,496(a4)
+  lw	a4,504(a4)
+  lui	a2,0xffb00
+  lw	a2,0(a2)
+  li	a7,1
+  lui	t3,0xac6d0
+  lui	t1,0x2
+  sb	a7,4(sp)
+  add	a0,a0,a7
+  sw	a0,-2016(gp)
+  sh2add	a2,a3,a2
+  add	a2,a2,t1
+  addi	a3,a3,2
+  sw	a3,-2012(gp)
+  slli	a4,a4,0x14
+  srli	a4,a4,0x14
+  or	a4,a4,t3
+  sw	a4,0(a2)
+  sw	a6,4(a2)
+  lui	a2,0x508c0
+  lui	a4,0x45510
+  sw	a2,0(a5)
+  addi	a4,a4,-232
+  lui	a3,0x45800
+  sw	a4,0(a5)
+  addi	a3,a3,25
+  sw	a3,0(a5)
+  ttstallwait	128,1
+  ttwrcfg	12,0,69
+  lui	a4,0x45000
+  addi	a4,a4,25
+  sw	a4,0(a5)
+  ttdmanop
+  ttmop	1,0,0
+  ttsetadczw	4,0,0,0,0,5
+  lui	a0,0x45520
+  addi	a7,a2,1
+  sw	a7,0(a5)
+  addi	a0,a0,-232
+  sw	a0,0(a5)
+  sw	a3,0(a5)
+  ttstallwait	128,1
+  ttwrcfg	12,0,69
+  sw	a4,0(a5)
+  ttdmanop
+  ttmop	1,0,0
+  ttsetadczw	4,0,0,0,0,5
+  lui	a0,0x45530
+  addi	a6,a2,2
+  sw	a6,0(a5)
+  addi	a0,a0,-232
+  sw	a0,0(a5)
+  sw	a3,0(a5)
+  ttstallwait	128,1
+  ttwrcfg	12,0,69
+  sw	a4,0(a5)
+  ttdmanop
+  ttmop	1,0,0
+  ttsetadczw	4,0,0,0,0,5
+  lui	t1,0x45540
+  addi	a0,a2,3
+  sw	a0,0(a5)
+  addi	t1,t1,-232
+  sw	t1,0(a5)
+  sw	a3,0(a5)
+  ttstallwait	128,1
+  ttwrcfg	12,0,69
+  sw	a4,0(a5)
+  ttdmanop
+  ttmop	1,0,0
+  ttsetadczw	4,0,0,0,0,5
+  lui	t1,0x45550
+  sw	a2,0(a5)
+  addi	t1,t1,-232
+  sw	t1,0(a5)
+  sw	a3,0(a5)
+  ttstallwait	128,1
+  ttwrcfg	12,0,69
+  sw	a4,0(a5)
+  ttdmanop
+  ttmop	1,0,0
+  ttsetadczw	4,0,0,0,0,5
+  lui	t1,0x45560
+  sw	a7,0(a5)
+  addi	t1,t1,-232
+  sw	t1,0(a5)
+  sw	a3,0(a5)
+  ttstallwait	128,1
+  ttwrcfg	12,0,69
+  sw	a4,0(a5)
+  ttdmanop
+  ttmop	1,0,0
+  ttsetadczw	4,0,0,0,0,5
+  lui	t1,0x45570
+  sw	a6,0(a5)
+  addi	t1,t1,-232
+  sw	t1,0(a5)
+  sw	a3,0(a5)
+  ttstallwait	128,1
+  ttwrcfg	12,0,69
+  sw	a4,0(a5)
+  ttdmanop
+  ttmop	1,0,0
+  ttsetadczw	4,0,0,0,0,5
+  lui	t1,0x45580
+  sw	a0,0(a5)
+  addi	t1,t1,-232
+  sw	t1,0(a5)
+  sw	a3,0(a5)
+  ttstallwait	128,1
+  ttwrcfg	12,0,69
+  sw	a4,0(a5)
+  ttdmanop
+  ttmop	1,0,0
+  ttsetadczw	4,0,0,0,0,5
+  lui	t1,0x45590
+  sw	a2,0(a5)
+  addi	t1,t1,-232
+  sw	t1,0(a5)
+  sw	a3,0(a5)
+  ttstallwait	128,1
+  ttwrcfg	12,0,69
+  sw	a4,0(a5)
+  ttdmanop
+  ttmop	1,0,0
+  ttsetadczw	4,0,0,0,0,5
+  lui	t1,0x455a0
+  sw	a7,0(a5)
+  addi	t1,t1,-232
+  sw	t1,0(a5)
+  sw	a3,0(a5)
+  ttstallwait	128,1
+  ttwrcfg	12,0,69
+  sw	a4,0(a5)
+  ttdmanop
+  ttmop	1,0,0
+  ttsetadczw	4,0,0,0,0,5
+  lui	t1,0x455b0
+  sw	a6,0(a5)
+  addi	t1,t1,-232
+  sw	t1,0(a5)
+  sw	a3,0(a5)
+  ttstallwait	128,1
+  ttwrcfg	12,0,69
+  sw	a4,0(a5)
+  ttdmanop
+  ttmop	1,0,0
+  ttsetadczw	4,0,0,0,0,5
+  lui	t1,0x455c0
+  sw	a0,0(a5)
+  addi	t1,t1,-232
+  sw	t1,0(a5)
+  sw	a3,0(a5)
+  ttstallwait	128,1
+  ttwrcfg	12,0,69
+  sw	a4,0(a5)
+  ttdmanop
+  ttmop	1,0,0
+  ttsetadczw	4,0,0,0,0,5
+  lui	t1,0x455d0
+  sw	a2,0(a5)
+  addi	a2,t1,-232
+  sw	a2,0(a5)
+  sw	a3,0(a5)
+  ttstallwait	128,1
+  ttwrcfg	12,0,69
+  sw	a4,0(a5)
+  ttdmanop
+  ttmop	1,0,0
+  ttsetadczw	4,0,0,0,0,5
+  lui	a2,0x455e0
+  sw	a7,0(a5)
+  addi	a2,a2,-232
+  sw	a2,0(a5)
+  sw	a3,0(a5)
+  ttstallwait	128,1
+  ttwrcfg	12,0,69
+  sw	a4,0(a5)
+  ttdmanop
+  ttmop	1,0,0
+  ttsetadczw	4,0,0,0,0,5
+  lui	a2,0x455f0
+  sw	a6,0(a5)
+  addi	a2,a2,-232
+  sw	a2,0(a5)
+  sw	a3,0(a5)
+  ttstallwait	128,1
+  ttwrcfg	12,0,69
+  sw	a4,0(a5)
+  ttdmanop
+  ttmop	1,0,0
+  ttsetadczw	4,0,0,0,0,5
+  lui	a2,0x45600
+  sw	a0,0(a5)
+  addi	a2,a2,-232
+  sw	a2,0(a5)
+  sw	a3,0(a5)
+  ttstallwait	128,1
+  ttwrcfg	12,0,69
+  sw	a4,0(a5)
+  ttdmanop
+  ttmop	1,0,0
+  ttsetadczw	4,0,0,0,0,5
+  lw	a4,-2036(gp)
+  li	a5,0
+  addi	a4,a4,4
+  sw	a5,0(a4)
+  lw	a5,0(a4)
+  and	zero,zero,a5
+  lbu	a5,4(sp)
+  beqz	a5,10b94 <run_kernel(RuntimeParams const&)+0x6a4>
+  lui	a5,0xffb12
+  lw	a1,496(a5)
+  lw	a5,504(a5)
+  lui	a4,0xffb00
+  lw	a3,-2012(gp)
+  lw	a2,-2016(gp)
+  lw	a4,0(a4)
+  lui	a6,0xbc6d0
+  lui	a0,0x2
+  sh2add	a4,a3,a4
+  add	a4,a4,a0
+  addi	a3,a3,2
+  sw	a3,-2012(gp)
+  slli	a5,a5,0x14
+  srli	a5,a5,0x14
+  or	a5,a5,a6
+  sw	a5,0(a4)
+  sw	a1,4(a4)
+  addi	a2,a2,-1
+  sw	a2,-2016(gp)
+  lw	ra,28(sp)
+  lw	s0,24(sp)
+  lw	s1,20(sp)
+  addi	sp,sp,32
+  ret
+  ebreak
+  j	1057c <run_kernel(RuntimeParams const&)+0x8c>
+  ret
+  ret
+  lui	a5,0x20
+  lbu	a5,0(a5)
+  sb	a5,0(a0)
+  lbu	a5,0(a0)
+  fence
+  ret
+  li	t1,15
+  mv	a4,a0
+  bgeu	t1,a2,10c14 <memset+0x44>
+  andi	a5,a4,15
+  bnez	a5,10c80 <memset+0xb0>
+  bnez	a1,10c68 <memset+0x98>
+  andi	a3,a2,-16
+  andi	a2,a2,15
+  add	a3,a3,a4
+  sw	a1,0(a4)
+  sw	a1,4(a4)
+  sw	a1,8(a4)
+  sw	a1,12(a4)
+  addi	a4,a4,16
+  bltu	a4,a3,10bf4 <memset+0x24>
+  bnez	a2,10c14 <memset+0x44>
+  ret
+  sub	a3,t1,a2
+  slli	a3,a3,0x2
+  auipc	t0,0x0
+  add	a3,a3,t0
+  jr	12(a3)
+  sb	a1,14(a4)
+  sb	a1,13(a4)
+  sb	a1,12(a4)
+  sb	a1,11(a4)
+  sb	a1,10(a4)
+  sb	a1,9(a4)
+  sb	a1,8(a4)
+  sb	a1,7(a4)
+  sb	a1,6(a4)
+  sb	a1,5(a4)
+  sb	a1,4(a4)
+  sb	a1,3(a4)
+  sb	a1,2(a4)
+  sb	a1,1(a4)
+  sb	a1,0(a4)
+  ret
+  zext.b	a1,a1
+  slli	a3,a1,0x8
+  or	a1,a1,a3
+  slli	a3,a1,0x10
+  or	a1,a1,a3
+  j	10be8 <memset+0x18>
+  slli	a3,a5,0x2
+  auipc	t0,0x0
+  add	a3,a3,t0
+  mv	t0,ra
+  jalr	-96(a3)
+  mv	ra,t0
+  addi	a5,a5,-16
+  sub	a4,a4,a5
+  add	a2,a2,a5
+  bgeu	t1,a2,10c14 <memset+0x44>
+  j	10be4 <memset+0x14>

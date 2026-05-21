@@ -1,0 +1,978 @@
+--- /tmp/elf_compare/nc/MATH_ISOLATE/pack.asm	2026-05-20 22:16:50.730948958 +0000
++++ /tmp/elf_compare/wc/MATH_ISOLATE/pack.asm	2026-05-20 22:16:50.767948881 +0000
+@@ -1,5 +1,5 @@
+
+-/tmp/elf_compare/nc/MATH_ISOLATE/pack.elf:     file format elf32-littleriscv
++/tmp/elf_compare/wc/MATH_ISOLATE/pack.elf:     file format elf32-littleriscv
+
+
+ Disassembly of section .init:
+@@ -27,7 +27,7 @@
+    10010:	lui	a5,0xffb00
+    10014:	lui	a4,0xffb00
+    10018:	addi	a5,a5,32 # ffb00020 <llk_profiler::open_zone_cnt>
+-   1001c:	addi	a4,a4,64 # ffb00040 <__fw_export_ldm_end>
++   1001c:	addi	a4,a4,100 # ffb00064 <__gcov_info_end>
+    10020:	bgeu	a5,a4,10044 <_start+0x44>
+    10024:	addi	a4,a4,-1
+    10028:	sub	a4,a4,a5
+@@ -191,7 +191,7 @@
+     open_zone_cnt = 0;
+    10130:	sw	zero,-2016(gp) # ffb00020 <llk_profiler::open_zone_cnt>
+     memset(buffer[TRISC_ID], 0, BUFFER_LENGTH * sizeof(buffer[TRISC_ID][0]));
+-   10134:	jal	108d8 <memset>
++   10134:	jal	10a4c <memset>
+     auto& barrier = *barrier_ptr;
+    10138:	lw	a5,4(s3)
+     barrier[TRISC_ID] = 1;
+@@ -663,492 +663,642 @@
+ void run_kernel(RUNTIME_PARAMETERS params)
+ {
+    104f0:	addi	sp,sp,-32
+-   104f4:	sw	ra,28(sp)
+-   104f8:	sw	s0,24(sp)
+-   104fc:	sw	s1,20(sp)
++   104f4:	sw	s0,24(sp)
++#endif
++} // namespace detail
++
++__attribute__((always_inline)) inline std::uint32_t get_zone_id(std::uint32_t hash_val)
++{
++    std::uint32_t n = detail::next_zone_id;
++   104f8:	addi	s0,gp,-1984 # ffb00040 <llk_perf::detail::next_zone_id>
++   104fc:	lw	a5,0(s0)
++   10500:	sw	ra,28(sp)
++   10504:	sw	s1,20(sp)
++   10508:	sw	s2,16(sp)
++    for (std::uint32_t i = 0; i < n; ++i)
++   1050c:	beqz	a5,109ec <run_kernel(RuntimeParams const&)+0x4fc>
++    {
++        if (detail::zone_hashes[i] == hash_val)
++   10510:	lui	a4,0x7c867
++   10514:	lw	a3,4(s0)
++   10518:	addi	a4,a4,-839 # 7c866cb9 <__runtime_args_end+0x7c8468b9>
++   1051c:	beq	a3,a4,105a0 <run_kernel(RuntimeParams const&)+0xb0>
++    for (std::uint32_t i = 0; i < n; ++i)
++   10520:	li	a3,1
++   10524:	beq	a5,a3,109ec <run_kernel(RuntimeParams const&)+0x4fc>
++        if (detail::zone_hashes[i] == hash_val)
++   10528:	lw	a3,8(s0)
++   1052c:	beq	a3,a4,105a0 <run_kernel(RuntimeParams const&)+0xb0>
++    for (std::uint32_t i = 0; i < n; ++i)
++   10530:	li	a3,2
++   10534:	beq	a5,a3,109ec <run_kernel(RuntimeParams const&)+0x4fc>
++        if (detail::zone_hashes[i] == hash_val)
++   10538:	lw	a3,12(s0)
++   1053c:	beq	a3,a4,105a0 <run_kernel(RuntimeParams const&)+0xb0>
++    for (std::uint32_t i = 0; i < n; ++i)
++   10540:	li	a3,3
++   10544:	beq	a5,a3,109ec <run_kernel(RuntimeParams const&)+0x4fc>
++        if (detail::zone_hashes[i] == hash_val)
++   10548:	lw	a3,16(s0)
++   1054c:	beq	a3,a4,105a0 <run_kernel(RuntimeParams const&)+0xb0>
++    for (std::uint32_t i = 0; i < n; ++i)
++   10550:	li	a3,4
++   10554:	beq	a5,a3,109ec <run_kernel(RuntimeParams const&)+0x4fc>
++        if (detail::zone_hashes[i] == hash_val)
++   10558:	lw	a3,20(s0)
++   1055c:	beq	a3,a4,105a0 <run_kernel(RuntimeParams const&)+0xb0>
++    for (std::uint32_t i = 0; i < n; ++i)
++   10560:	li	a4,5
++   10564:	beq	a5,a4,109ec <run_kernel(RuntimeParams const&)+0x4fc>
++        if (detail::zone_hashes[i] == hash_val)
++   10568:	lui	a4,0x7c867
++   1056c:	lw	a3,24(s0)
++   10570:	addi	a4,a4,-839 # 7c866cb9 <__runtime_args_end+0x7c8468b9>
++   10574:	beq	a3,a4,105a0 <run_kernel(RuntimeParams const&)+0xb0>
++    for (std::uint32_t i = 0; i < n; ++i)
++   10578:	li	a3,6
++   1057c:	beq	a5,a3,109ec <run_kernel(RuntimeParams const&)+0x4fc>
++        if (detail::zone_hashes[i] == hash_val)
++   10580:	lw	a3,28(s0)
++   10584:	beq	a3,a4,105a0 <run_kernel(RuntimeParams const&)+0xb0>
++    for (std::uint32_t i = 0; i < n; ++i)
++   10588:	li	a3,7
++   1058c:	beq	a5,a3,109ec <run_kernel(RuntimeParams const&)+0x4fc>
++        if (detail::zone_hashes[i] == hash_val)
++   10590:	lw	a3,32(s0)
++   10594:	beq	a3,a4,105a0 <run_kernel(RuntimeParams const&)+0xb0>
++        {
++            return i;
++        }
++    }
++    if (n < PERF_COUNTERS_MAX_ZONES)
++   10598:	li	a4,8
++   1059c:	bne	a5,a4,109ec <run_kernel(RuntimeParams const&)+0x4fc>
+     {
+-   10500:	sb	zero,4(sp)
++   105a0:	sb	zero,4(sp)
+     return (BUFFER_LENGTH - (write_idx + open_zone_cnt)) < 4;
+-   10504:	lw	a4,-2012(gp) # ffb00024 <llk_profiler::write_idx>
+-   10508:	lw	a2,-2016(gp) # ffb00020 <llk_profiler::open_zone_cnt>
++   105a4:	lw	a4,-2012(gp) # ffb00024 <llk_profiler::write_idx>
++   105a8:	lw	a3,-2016(gp) # ffb00020 <llk_profiler::open_zone_cnt>
+         if (!is_buffer_full())
+-   1050c:	li	a3,3
++   105ac:	li	a2,3
+     return (BUFFER_LENGTH - (write_idx + open_zone_cnt)) < 4;
+-   10510:	add	a5,a4,a2
+-   10514:	addi	a5,a5,-1021
++   105b0:	add	a5,a4,a3
++   105b4:	addi	a5,a5,-1021
+         if (!is_buffer_full())
+-   10518:	bgeu	a3,a5,1056c <run_kernel(RuntimeParams const&)+0x7c>
++   105b8:	bgeu	a2,a5,1060c <run_kernel(RuntimeParams const&)+0x11c>
+     return p_reg[0];
+-   1051c:	lui	a5,0xffb12
+-   10520:	lw	a1,496(a5) # ffb121f0 <__stack_top+0x111f0>
+-   10524:	lw	a5,504(a5)
++   105bc:	lui	a5,0xffb12
++   105c0:	lw	a1,496(a5) # ffb121f0 <__stack_top+0x111f0>
++   105c4:	lw	a5,504(a5)
+     buffer[TRISC_ID][write_idx++] = meta | (timestamp_high & ~ENTRY_META_MASK);
+-   10528:	lui	a3,0xffb00
+-   1052c:	lw	a3,0(a3) # ffb00000 <llk_profiler::buffer>
++   105c8:	lui	a2,0xffb00
++   105cc:	lw	a2,0(a2) # ffb00000 <llk_profiler::buffer>
+             is_opened = true;
+-   10530:	li	a0,1
++   105d0:	li	a0,1
+     buffer[TRISC_ID][write_idx++] = meta | (timestamp_high & ~ENTRY_META_MASK);
+-   10534:	lui	a7,0xaa8fb
+-   10538:	lui	a6,0x2
++   105d4:	lui	a7,0xaa8fb
++   105d8:	lui	a6,0x2
+             is_opened = true;
+-   1053c:	sb	a0,4(sp)
++   105dc:	sb	a0,4(sp)
+             ++open_zone_cnt;
+-   10540:	add	a2,a2,a0
+-   10544:	sw	a2,-2016(gp) # ffb00020 <llk_profiler::open_zone_cnt>
+-   10548:	sh2add	a3,a4,a3
++   105e0:	add	a3,a3,a0
++   105e4:	sw	a3,-2016(gp) # ffb00020 <llk_profiler::open_zone_cnt>
++   105e8:	sh2add	a2,a4,a2
+     buffer[TRISC_ID][write_idx++] = meta | (timestamp_high & ~ENTRY_META_MASK);
+-   1054c:	add	a3,a3,a6
++   105ec:	add	a2,a2,a6
+     buffer[TRISC_ID][write_idx++] = static_cast<std::uint32_t>(timestamp);
+-   10550:	addi	a4,a4,2
+-   10554:	sw	a4,-2012(gp) # ffb00024 <llk_profiler::write_idx>
++   105f0:	addi	a4,a4,2
++   105f4:	sw	a4,-2012(gp) # ffb00024 <llk_profiler::write_idx>
+     buffer[TRISC_ID][write_idx++] = meta | (timestamp_high & ~ENTRY_META_MASK);
+-   10558:	slli	a5,a5,0x14
+-   1055c:	srli	a5,a5,0x14
+-   10560:	or	a5,a5,a7
+-   10564:	sw	a5,0(a3)
++   105f8:	slli	a5,a5,0x14
++   105fc:	srli	a5,a5,0x14
++   10600:	or	a5,a5,a7
++   10604:	sw	a5,0(a2)
+     buffer[TRISC_ID][write_idx++] = static_cast<std::uint32_t>(timestamp);
+-   10568:	sw	a1,4(a3)
++   10608:	sw	a1,4(a2)
+     LLK_ASSERT(
+-   1056c:	li	a1,1
+-   10570:	mv	a0,a1
+-   10574:	jal	1045c <ckernel::packer::is_packer_to_L1_conversion_supported(DataFormat, DataFormat)>
+-   10578:	beqz	a0,108b0 <run_kernel(RuntimeParams const&)+0x3c0>
++   1060c:	li	a1,1
++   10610:	mv	a0,a1
++   10614:	jal	1045c <ckernel::packer::is_packer_to_L1_conversion_supported(DataFormat, DataFormat)>
++   10618:	beqz	a0,10a24 <run_kernel(RuntimeParams const&)+0x534>
+     if (cfg_state_id == 0)
+-   1057c:	lw	a5,-2000(gp) # ffb00030 <ckernel::cfg_state_id>
++   1061c:	lw	a5,-2000(gp) # ffb00030 <ckernel::cfg_state_id>
+         return reinterpret_cast<volatile std::uint32_t tt_reg_ptr *>(TENSIX_CFG_BASE);
+-   10580:	lui	a4,0xffef0
++   10620:	lui	a4,0xffef0
+     if (cfg_state_id == 0)
+-   10584:	beqz	a5,1058c <run_kernel(RuntimeParams const&)+0x9c>
++   10624:	beqz	a5,1062c <run_kernel(RuntimeParams const&)+0x13c>
+     return reinterpret_cast<volatile std::uint32_t tt_reg_ptr *>(TENSIX_CFG_BASE + CFG_STATE_SIZE * 16);
+-   10588:	addi	a4,a4,896 # ffef0380 <__instrn_buffer+0xb0380>
++   10628:	addi	a4,a4,896 # ffef0380 <__instrn_buffer+0xb0380>
+     TT_SETDMAREG(0, LOWER_HALFWORD((y_stride << PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT)), 0, LO_16(p_gpr_pack::TMP0)); // x-stride not used!
+-   1058c:	lui	a5,0xffe40
+-   10590:	lui	a3,0x45000
+-   10594:	mv	a5,a5
+-   10598:	addi	a3,a3,56 # 45000038 <__runtime_args_end+0x44fdfc38>
+-   1059c:	sw	a3,0(a5) # ffe40000 <__instrn_buffer>
++   1062c:	lui	a5,0xffe40
++   10630:	lui	a3,0x45000
++   10634:	mv	a5,a5
++   10638:	addi	a3,a3,56 # 45000038 <__runtime_args_end+0x44fdfc38>
++   1063c:	sw	a3,0(a5) # ffe40000 <__instrn_buffer>
+     TT_SETDMAREG(0, UPPER_HALFWORD((y_stride << PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT)), 0, HI_16(p_gpr_pack::TMP0));
+-   105a0:	lui	a3,0x45002
+-   105a4:	addi	a3,a3,57 # 45002039 <__runtime_args_end+0x44fe1c39>
+-   105a8:	sw	a3,0(a5)
++   10640:	lui	a3,0x45002
++   10644:	addi	a3,a3,57 # 45002039 <__runtime_args_end+0x44fe1c39>
++   10648:	sw	a3,0(a5)
+     TT_SETDMAREG(0, LOWER_HALFWORD((z_stride << PCK0_ADDR_CTRL_ZW_REG_0_Zstride_SHAMT)), 0, LO_16(p_gpr_pack::TMP1));
+-   105ac:	lui	a3,0x45020
+-   105b0:	addi	a3,a3,58 # 4502003a <__runtime_args_end+0x44fffc3a>
+-   105b4:	sw	a3,0(a5)
++   1064c:	lui	a3,0x45020
++   10650:	addi	a3,a3,58 # 4502003a <__runtime_args_end+0x44fffc3a>
++   10654:	sw	a3,0(a5)
+     TT_SETDMAREG(0, UPPER_HALFWORD((w_stride << PCK0_ADDR_CTRL_ZW_REG_0_Wstride_SHAMT)), 0, HI_16(p_gpr_pack::TMP1));
+-   105b8:	lui	a3,0x45080
+-   105bc:	addi	a3,a3,59 # 4508003b <__runtime_args_end+0x4505fc3b>
+-   105c0:	sw	a3,0(a5)
++   10658:	lui	a3,0x45080
++   1065c:	addi	a3,a3,59 # 4508003b <__runtime_args_end+0x4505fc3b>
++   10660:	sw	a3,0(a5)
+     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+-   105c4:	ttstallwait	128,1
++   10664:	ttstallwait	128,1
+     TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32);
+-   105c8:	ttwrcfg	28,0,12
++   10668:	ttwrcfg	28,0,12
+     TTI_WRCFG(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_0_Zstride_ADDR32);
+-   105cc:	ttwrcfg	29,0,13
++   1066c:	ttwrcfg	29,0,13
+     TTI_NOP;
+-   105d0:	ttnop
++   10670:	ttnop
+     TTI_NOP;
+-   105d4:	ttnop
++   10674:	ttnop
+     TTI_ATGETM(index);
+-   105d8:	ttatgetm	0
++   10678:	ttatgetm	0
+     std::uint8_t mask_b2 = (Mask >> 16) & 0xff;
+
+     if (mask_b2 != 0)
+     {
+         std::uint8_t data_b2 = (wrdata) & 0xff;
+         TT_RMWCIB2(mask_b2, data_b2, CfgAddr32);
+-   105dc:	lui	a3,0xb5800
+-   105e0:	addi	a3,a3,71 # b5800047 <__runtime_args_end+0xb57dfc47>
+-   105e4:	sw	a3,0(a5)
++   1067c:	lui	a3,0xb5800
++   10680:	addi	a3,a3,71 # b5800047 <__runtime_args_end+0xb57dfc47>
++   10684:	sw	a3,0(a5)
+     wrdata >>= 8;
+     std::uint8_t mask_b3 = (Mask >> 24) & 0xff;
+     if (mask_b3 != 0)
+     {
+         std::uint8_t data_b3 = (wrdata) & 0xff;
+         TT_RMWCIB3(mask_b3, data_b3, CfgAddr32);
+-   105e8:	lui	a3,0xb61e0
+-   105ec:	addi	a3,a3,513 # b61e0201 <__runtime_args_end+0xb61bfe01>
+-   105f0:	sw	a3,0(a5)
++   10688:	lui	a3,0xb61e0
++   1068c:	addi	a3,a3,513 # b61e0201 <__runtime_args_end+0xb61bfe01>
++   10690:	sw	a3,0(a5)
+         TT_RMWCIB0(mask_b0, data_b0, CfgAddr32);
+-   105f4:	lui	a3,0xb3fc0
+-   105f8:	addi	a3,a3,2 # b3fc0002 <__runtime_args_end+0xb3f9fc02>
+-   105fc:	sw	a3,0(a5)
++   10694:	lui	a3,0xb3fc0
++   10698:	addi	a3,a3,2 # b3fc0002 <__runtime_args_end+0xb3f9fc02>
++   1069c:	sw	a3,0(a5)
+         TT_RMWCIB1(mask_b1, data_b1, CfgAddr32);
+-   10600:	lui	a3,0xb4ff0
+-   10604:	addi	a3,a3,2 # b4ff0002 <__runtime_args_end+0xb4fcfc02>
+-   10608:	sw	a3,0(a5)
++   106a0:	lui	a3,0xb4ff0
++   106a4:	addi	a3,a3,2 # b4ff0002 <__runtime_args_end+0xb4fcfc02>
++   106a8:	sw	a3,0(a5)
+         TT_RMWCIB2(mask_b2, data_b2, CfgAddr32);
+-   1060c:	lui	a3,0xb53f0
+-   10610:	addi	a3,a3,2 # b53f0002 <__runtime_args_end+0xb53cfc02>
+-   10614:	sw	a3,0(a5)
++   106ac:	lui	a3,0xb53f0
++   106b0:	addi	a3,a3,2 # b53f0002 <__runtime_args_end+0xb53cfc02>
++   106b4:	sw	a3,0(a5)
+     TTI_ATRELM(index);
+-   10618:	ttatrelm	0
++   106b8:	ttatrelm	0
+         TT_RMWCIB2(mask_b2, data_b2, CfgAddr32);
+-   1061c:	lui	a3,0xb5100
+-   10620:	addi	a3,a3,71 # b5100047 <__runtime_args_end+0xb50dfc47>
+-   10624:	sw	a3,0(a5)
++   106bc:	lui	a3,0xb5100
++   106c0:	addi	a3,a3,71 # b5100047 <__runtime_args_end+0xb50dfc47>
++   106c4:	sw	a3,0(a5)
+         TT_RMWCIB3(mask_b3, data_b3, CfgAddr32);
+-   10628:	lui	a3,0xb6ff0
+-   1062c:	addi	a3,a3,71 # b6ff0047 <__runtime_args_end+0xb6fcfc47>
+-   10630:	sw	a3,0(a5)
++   106c8:	lui	a3,0xb6ff0
++   106cc:	addi	a3,a3,71 # b6ff0047 <__runtime_args_end+0xb6fcfc47>
++   106d0:	sw	a3,0(a5)
+     cfg[THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 0] = config.val[0];
+-   10634:	lui	a2,0x40
+-   10638:	sw	a2,272(a4)
++   106d4:	lui	a2,0x40
++   106d8:	sw	a2,272(a4)
+     cfg[THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 2] = config.val[2];
+-   1063c:	li	a3,273
+-   10640:	sw	a3,280(a4)
++   106dc:	li	a3,273
++   106e0:	sw	a3,280(a4)
+     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
+-   10644:	ttstallwait	128,8
++   106e4:	ttstallwait	128,8
+         TT_RMWCIB0(mask_b0, data_b0, CfgAddr32);
+-   10648:	lui	a3,0xb3040
+-   1064c:	addi	a3,a3,70 # b3040046 <__runtime_args_end+0xb301fc46>
+-   10650:	sw	a3,0(a5)
++   106e8:	lui	a3,0xb3040
++   106ec:	addi	a3,a3,70 # b3040046 <__runtime_args_end+0xb301fc46>
++   106f0:	sw	a3,0(a5)
+         TT_RMWCIB2(mask_b2, data_b2, CfgAddr32);
+-   10654:	lui	a3,0xb5080
+-   10658:	addi	a3,a3,71 # b5080047 <__runtime_args_end+0xb505fc47>
+-   1065c:	sw	a3,0(a5)
++   106f4:	lui	a3,0xb5080
++   106f8:	addi	a3,a3,71 # b5080047 <__runtime_args_end+0xb505fc47>
++   106fc:	sw	a3,0(a5)
+     regfile[p_gpr_pack::EXP0_SEC_SIZE_BFP] = (partial_face ? 1 : num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+-   10660:	lw	a3,-2040(gp) # ffb00008 <ckernel::regfile>
++   10700:	lw	a3,-2040(gp) # ffb00008 <ckernel::regfile>
+     cfg[PCK_DEST_RD_CTRL_Read_32b_data_ADDR32] = dest_rd_ctrl.val;
+-   10664:	li	a1,9
+-   10668:	sw	a1,72(a4)
++   10704:	li	a1,9
++   10708:	sw	a1,72(a4)
+     regfile[p_gpr_pack::EXP0_SEC_SIZE_BFP] = (partial_face ? 1 : num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+-   1066c:	sw	a2,208(a3)
++   1070c:	sw	a2,208(a3)
+     volatile std::uint32_t foo     = 0x0;
+-   10670:	sw	zero,12(sp)
++   10710:	sw	zero,12(sp)
+     *fooptr                        = regfile[index];
+-   10674:	lw	a0,208(a3)
++   10714:	lw	a0,208(a3)
+         cfg[PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32 + i] = pack_counters.val; // disable auto last generation
+-   10678:	lui	a6,0x1
++   10718:	lui	a6,0x1
+     cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32]                = pck_edge_offset.val;
+-   1067c:	lui	a2,0x10
+-   10680:	addi	a2,a2,-1 # ffff <BRISC_LOCAL_MEM_LENGTH+0xdfff>
++   1071c:	lui	a2,0x10
++   10720:	addi	a2,a2,-1 # ffff <BRISC_LOCAL_MEM_LENGTH+0xdfff>
+     cfg[TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32] = 0x0; // All packers use row set mapping 0, edge offset 0 mask
+-   10684:	sw	zero,80(a4)
++   10724:	sw	zero,80(a4)
+     regfile[p_gpr_pack::TILE_HEADER]     = tile_size;
+-   10688:	li	a1,1024
+-   1068c:	sw	a0,12(sp)
++   10728:	li	a1,1024
++   1072c:	sw	a0,12(sp)
+         cfg[PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32 + i] = pack_counters.val; // disable auto last generation
+-   10690:	sw	a6,112(a4)
++   10730:	sw	a6,112(a4)
+     cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32]                = pck_edge_offset.val;
+-   10694:	sw	a2,96(a4)
++   10734:	sw	a2,96(a4)
+     regfile[p_gpr_pack::TILE_HEADER]     = tile_size;
+-   10698:	sw	a1,64(a3)
+-   1069c:	lw	a4,76(a3)
++   10738:	sw	a1,64(a3)
++   1073c:	lw	a4,76(a3)
+     regfile[p_gpr_pack::TILE_HEADER + 1] = 0;
+-   106a0:	sw	zero,68(a3)
++   10740:	sw	zero,68(a3)
+     regfile[p_gpr_pack::TILE_HEADER + 2] = 0;
+-   106a4:	sw	zero,72(a3)
++   10744:	sw	zero,72(a3)
+     regfile[p_gpr_pack::TILE_HEADER + 3] = 0;
+-   106a8:	sw	zero,76(a3)
++   10748:	sw	zero,76(a3)
+     volatile std::uint32_t foo     = 0x0;
+-   106ac:	sw	zero,8(sp)
++   1074c:	sw	zero,8(sp)
+     *fooptr                        = regfile[index];
+-   106b0:	sw	a4,8(sp)
++   10750:	sw	a4,8(sp)
+     TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
+-   106b4:	ttsetadcxx	4,15,0
++   10754:	ttsetadcxx	4,15,0
+         ADDR_MOD_PACK_SEC0_YsrcIncr_ADDR32, ADDR_MOD_PACK_SEC1_YsrcIncr_ADDR32, ADDR_MOD_PACK_SEC2_YsrcIncr_ADDR32, ADDR_MOD_PACK_SEC3_YsrcIncr_ADDR32};
+
+     // Program source and dest registers
+     __attribute__((always_inline)) inline void set(const std::uint8_t mod_index) const
+     {
+         TTI_SETC16(addr_mod_pack_reg_addr[mod_index], pack_val());
+-   106b8:	ttsetc16	37,260
+-   106bc:	ttsetc16	38,10272
+-   106c0:	ttsetc16	39,4384
++   10758:	ttsetc16	37,260
++   1075c:	ttsetc16	38,10272
++   10760:	ttsetc16	39,4384
+     store_blocking(&pc_buf_base[2], 0);
+-   106c4:	lw	a4,-2036(gp) # ffb0000c <ckernel::pc_buf_base>
++   10764:	lw	a4,-2036(gp) # ffb0000c <ckernel::pc_buf_base>
+     asm volatile(
+-   106c8:	li	a3,0
++   10768:	li	a3,0
+     store_blocking(&pc_buf_base[2], 0);
+-   106cc:	addi	a4,a4,8
++   1076c:	addi	a4,a4,8
+     asm volatile(
+-   106d0:	mv	a2,a3
+-   106d4:	sw	a2,0(a4)
+-   106d8:	lw	a2,0(a4)
+-   106dc:	and	zero,zero,a2
++   10770:	mv	a2,a3
++   10774:	sw	a2,0(a4)
++   10778:	lw	a2,0(a4)
++   1077c:	and	zero,zero,a2
+ {
+     volatile std::uint32_t *mop_cfg = reinterpret_cast<volatile std::uint32_t *>(TENSIX_MOP_CFG_BASE);
+
+     mop_sync(); // wait until previous mops have completed
+
+     mop_cfg[0] = m_outer_loop_len;
+-   106e0:	lui	a4,0xffb80
+-   106e4:	li	a2,4
+-   106e8:	sw	a2,0(a4) # ffb80000 <__stack_top+0x7f000>
++   10780:	lui	a4,0xffb80
++   10784:	li	a2,4
++   10788:	sw	a2,0(a4) # ffb80000 <__stack_top+0x7f000>
+     mop_cfg[1] = m_inner_loop_len;
+-   106ec:	sw	a2,4(a4)
++   1078c:	sw	a2,4(a4)
+     mop_cfg[2] = m_start_op0;
+-   106f0:	lui	a2,0x2000
+-   106f4:	sw	a2,8(a4)
++   10790:	lui	a2,0x2000
++   10794:	sw	a2,8(a4)
+     mop_cfg[3] = m_end_op0;
+-   106f8:	sw	a2,12(a4)
++   10798:	sw	a2,12(a4)
+     mop_cfg[4] = m_end_op1;
+-   106fc:	sw	a2,16(a4)
++   1079c:	sw	a2,16(a4)
+     mop_cfg[5] = m_loop_op0;
+-   10700:	lui	a0,0x41000
+-   10704:	sw	a0,20(a4)
++   107a0:	lui	a0,0x41000
++   107a4:	sw	a0,20(a4)
+     mop_cfg[6] = m_loop_op1;
+     mop_cfg[7] = m_loop0_last_instr;
+-   10708:	lui	a0,0x41008
++   107a8:	lui	a0,0x41008
+     mop_cfg[6] = m_loop_op1;
+-   1070c:	sw	a2,24(a4)
++   107ac:	sw	a2,24(a4)
+     mop_cfg[7] = m_loop0_last_instr;
+-   10710:	addi	a2,a0,1 # 41008001 <__runtime_args_end+0x40fe7c01>
+-   10714:	sw	a2,28(a4)
++   107b0:	addi	a2,a0,1 # 41008001 <__runtime_args_end+0x40fe7c01>
++   107b4:	sw	a2,28(a4)
+     mop_cfg[8] = m_loop1_last_instr;
+-   10718:	lui	a2,0x41010
+-   1071c:	sw	a2,32(a4)
++   107b8:	lui	a2,0x41010
++   107bc:	sw	a2,32(a4)
+     store_blocking(&pc_buf_base[1], 0);
+-   10720:	lw	a4,-2036(gp) # ffb0000c <ckernel::pc_buf_base>
++   107c0:	lw	a4,-2036(gp) # ffb0000c <ckernel::pc_buf_base>
+     asm volatile(
+-   10724:	mv	a2,a3
++   107c4:	mv	a2,a3
+     store_blocking(&pc_buf_base[1], 0);
+-   10728:	addi	a4,a4,4
++   107c8:	addi	a4,a4,4
+     asm volatile(
+-   1072c:	sw	a2,0(a4)
+-   10730:	lw	a2,0(a4)
+-   10734:	and	zero,zero,a2
++   107cc:	sw	a2,0(a4)
++   107d0:	lw	a2,0(a4)
++   107d4:	and	zero,zero,a2
+     dest_offset_id = 0;
+-   10738:	sw	zero,-2004(gp) # ffb0002c <ckernel::dest_offset_id>
++   107d8:	sw	zero,-2004(gp) # ffb0002c <ckernel::dest_offset_id>
+ inline void _llk_init_packer_dest_offset_registers_(
+     [[maybe_unused]] const std::uint32_t face_r_dim = FACE_R_DIM, [[maybe_unused]] const bool narrow_tile = false)
+ {
+     LLK_ASSERT(face_r_dim == FACE_R_DIM, "face_r_dim: this parameter is unused");
+     LLK_ASSERT(!narrow_tile, "narrow_tile: this parameter is unused");
+     TTI_STALLWAIT(p_stall::STALL_TDMA | p_stall::STALL_THCON, p_stall::PACK); // wait for pack to finish
+-   1073c:	ttstallwait	33,8
++   107dc:	ttstallwait	33,8
+
+     // RowMajor order
+     TTI_SETDMAREG(0, 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));
+-   10740:	ttsetdmareg	0,0,0,8
++   107e0:	ttsetdmareg	0,0,0,8
+     TTI_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 0));
+-   10744:	ttsetdmareg	0,512,0,16
++   107e4:	ttsetdmareg	0,512,0,16
+
+     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+-   10748:	ttstallwait	128,1
++   107e8:	ttstallwait	128,1
+         TT_WRCFG(get_packer_dest_offset_index(), p_cfg::WRCFG_128b, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
+-   1074c:	lui	a4,0xb0048
+-   10750:	addi	a4,a4,180 # b00480b4 <__runtime_args_end+0xb0027cb4>
+-   10754:	sw	a4,0(a5)
++   107ec:	lui	a4,0xb0048
++   107f0:	addi	a4,a4,180 # b00480b4 <__runtime_args_end+0xb0027cb4>
++   107f4:	sw	a4,0(a5)
+     TTI_DMANOP;
+-   10758:	ttdmanop
++   107f8:	ttdmanop
+     TTI_DMANOP;
+-   1075c:	ttdmanop
++   107fc:	ttdmanop
+     TTI_SETADCXY(0b100, 0, 0, 0, 0, 0b1011);
+-   10760:	ttsetadcxy	4,0,0,0,0,11
++   10800:	ttsetadcxy	4,0,0,0,0,11
+     TTI_SETADCZW(0b100, 0, 0, 0, 0, 0b1111);
+-   10764:	ttsetadczw	4,0,0,0,0,15
++   10804:	ttsetadczw	4,0,0,0,0,15
+     store_blocking(&pc_buf_base[1], 0);
+-   10768:	lw	a5,-2036(gp) # ffb0000c <ckernel::pc_buf_base>
+-   1076c:	addi	a5,a5,4
++   10808:	lw	a5,-2036(gp) # ffb0000c <ckernel::pc_buf_base>
++   1080c:	addi	a5,a5,4
+ {
+     tensix_sync();
+     reset_dest_offset_id();
+     _llk_init_packer_dest_offset_registers_<Dst>(face_r_dim, narrow_tile);
+     packer_addr_counter_init();
+     pack_sync_tile_dst_ptr = 0;
+-   10770:	sw	zero,-1992(gp) # ffb00038 <pack_sync_tile_dst_ptr>
++   10810:	sw	zero,-1992(gp) # ffb00038 <pack_sync_tile_dst_ptr>
+     asm volatile(
+-   10774:	sw	a3,0(a5)
+-   10778:	lw	a3,0(a5)
+-   1077c:	and	zero,zero,a3
++   10814:	sw	a3,0(a5)
++   10818:	lw	a3,0(a5)
++   1081c:	and	zero,zero,a3
+         if (is_opened)
+-   10780:	lbu	a5,4(sp)
+-   10784:	beqz	a5,107d8 <run_kernel(RuntimeParams const&)+0x2e8>
++   10820:	lbu	a5,4(sp)
++   10824:	beqz	a5,10878 <run_kernel(RuntimeParams const&)+0x388>
+     return p_reg[0];
+-   10788:	lui	a5,0xffb12
+-   1078c:	lw	a1,496(a5) # ffb121f0 <__stack_top+0x111f0>
+-   10790:	lw	a4,504(a5)
++   10828:	lui	a5,0xffb12
++   1082c:	lw	a1,496(a5) # ffb121f0 <__stack_top+0x111f0>
++   10830:	lw	a4,504(a5)
+     buffer[TRISC_ID][write_idx++] = meta | (timestamp_high & ~ENTRY_META_MASK);
+-   10794:	lui	a5,0xffb00
+-   10798:	lw	a3,-2012(gp) # ffb00024 <llk_profiler::write_idx>
++   10834:	lui	a5,0xffb00
++   10838:	lw	a3,-2012(gp) # ffb00024 <llk_profiler::write_idx>
+             --open_zone_cnt;
+-   1079c:	lw	a2,-2016(gp) # ffb00020 <llk_profiler::open_zone_cnt>
++   1083c:	lw	a2,-2016(gp) # ffb00020 <llk_profiler::open_zone_cnt>
+     buffer[TRISC_ID][write_idx++] = meta | (timestamp_high & ~ENTRY_META_MASK);
+-   107a0:	addi	a6,a6,-1 # fff <__firmware_stack_size+0xdff>
+-   107a4:	lw	a5,0(a5) # ffb00000 <llk_profiler::buffer>
+-   107a8:	lui	a0,0x2
+-   107ac:	sh2add	a5,a3,a5
+-   107b0:	add	a5,a5,a0
++   10840:	addi	a6,a6,-1 # fff <__firmware_stack_size+0xdff>
++   10844:	lw	a5,0(a5) # ffb00000 <llk_profiler::buffer>
++   10848:	lui	a0,0x2
++   1084c:	sh2add	a5,a3,a5
++   10850:	add	a5,a5,a0
+     buffer[TRISC_ID][write_idx++] = static_cast<std::uint32_t>(timestamp);
+-   107b4:	addi	a3,a3,2
+-   107b8:	sw	a3,-2012(gp) # ffb00024 <llk_profiler::write_idx>
++   10854:	addi	a3,a3,2
++   10858:	sw	a3,-2012(gp) # ffb00024 <llk_profiler::write_idx>
+     buffer[TRISC_ID][write_idx++] = meta | (timestamp_high & ~ENTRY_META_MASK);
+-   107bc:	and	a4,a4,a6
+-   107c0:	lui	a6,0xba8fb
+-   107c4:	or	a4,a4,a6
+-   107c8:	sw	a4,0(a5)
++   1085c:	and	a4,a4,a6
++   10860:	lui	a6,0xba8fb
++   10864:	or	a4,a4,a6
++   10868:	sw	a4,0(a5)
+     buffer[TRISC_ID][write_idx++] = static_cast<std::uint32_t>(timestamp);
+-   107cc:	sw	a1,4(a5)
++   1086c:	sw	a1,4(a5)
+             --open_zone_cnt;
+-   107d0:	addi	a2,a2,-1 # 4100ffff <__runtime_args_end+0x40fefbff>
+-   107d4:	sw	a2,-2016(gp) # ffb00020 <llk_profiler::open_zone_cnt>
++   10870:	addi	a2,a2,-1 # 4100ffff <__runtime_args_end+0x40fefbff>
++   10874:	sw	a2,-2016(gp) # ffb00020 <llk_profiler::open_zone_cnt>
++    std::uint32_t n = detail::next_zone_id;
++   10878:	lw	a5,0(s0)
++    for (std::uint32_t i = 0; i < n; ++i)
++   1087c:	beqz	a5,10a08 <run_kernel(RuntimeParams const&)+0x518>
++        if (detail::zone_hashes[i] == hash_val)
++   10880:	lui	a4,0xbd77
++   10884:	lw	a3,4(s0)
++   10888:	addi	a4,a4,-244 # bd76f0c <__runtime_args_end+0xbd56b0c>
++   1088c:	beq	a3,a4,10910 <run_kernel(RuntimeParams const&)+0x420>
++    for (std::uint32_t i = 0; i < n; ++i)
++   10890:	li	a3,1
++   10894:	beq	a5,a3,10a08 <run_kernel(RuntimeParams const&)+0x518>
++        if (detail::zone_hashes[i] == hash_val)
++   10898:	lw	a3,8(s0)
++   1089c:	beq	a3,a4,10910 <run_kernel(RuntimeParams const&)+0x420>
++    for (std::uint32_t i = 0; i < n; ++i)
++   108a0:	li	a3,2
++   108a4:	beq	a5,a3,10a08 <run_kernel(RuntimeParams const&)+0x518>
++        if (detail::zone_hashes[i] == hash_val)
++   108a8:	lw	a3,12(s0)
++   108ac:	beq	a3,a4,10910 <run_kernel(RuntimeParams const&)+0x420>
++    for (std::uint32_t i = 0; i < n; ++i)
++   108b0:	li	a3,3
++   108b4:	beq	a5,a3,10a08 <run_kernel(RuntimeParams const&)+0x518>
++        if (detail::zone_hashes[i] == hash_val)
++   108b8:	lw	a3,16(s0)
++   108bc:	beq	a3,a4,10910 <run_kernel(RuntimeParams const&)+0x420>
++    for (std::uint32_t i = 0; i < n; ++i)
++   108c0:	li	a3,4
++   108c4:	beq	a5,a3,10a08 <run_kernel(RuntimeParams const&)+0x518>
++        if (detail::zone_hashes[i] == hash_val)
++   108c8:	lw	a3,20(s0)
++   108cc:	beq	a3,a4,10910 <run_kernel(RuntimeParams const&)+0x420>
++    for (std::uint32_t i = 0; i < n; ++i)
++   108d0:	li	a4,5
++   108d4:	beq	a5,a4,10a08 <run_kernel(RuntimeParams const&)+0x518>
++        if (detail::zone_hashes[i] == hash_val)
++   108d8:	lui	a4,0xbd77
++   108dc:	lw	a3,24(s0)
++   108e0:	addi	a4,a4,-244 # bd76f0c <__runtime_args_end+0xbd56b0c>
++   108e4:	beq	a3,a4,10910 <run_kernel(RuntimeParams const&)+0x420>
++    for (std::uint32_t i = 0; i < n; ++i)
++   108e8:	li	a3,6
++   108ec:	beq	a5,a3,10a08 <run_kernel(RuntimeParams const&)+0x518>
++        if (detail::zone_hashes[i] == hash_val)
++   108f0:	lw	a3,28(s0)
++   108f4:	beq	a3,a4,10910 <run_kernel(RuntimeParams const&)+0x420>
++    for (std::uint32_t i = 0; i < n; ++i)
++   108f8:	li	a3,7
++   108fc:	beq	a5,a3,10a08 <run_kernel(RuntimeParams const&)+0x518>
++        if (detail::zone_hashes[i] == hash_val)
++   10900:	lw	a3,32(s0)
++   10904:	beq	a3,a4,10910 <run_kernel(RuntimeParams const&)+0x420>
++    if (n < PERF_COUNTERS_MAX_ZONES)
++   10908:	li	a4,8
++   1090c:	bne	a5,a4,10a08 <run_kernel(RuntimeParams const&)+0x518>
+     {
+-   107d8:	sb	zero,4(sp)
++   10910:	sb	zero,4(sp)
+     return (BUFFER_LENGTH - (write_idx + open_zone_cnt)) < 4;
+-   107dc:	lw	a4,-2012(gp) # ffb00024 <llk_profiler::write_idx>
+-   107e0:	lw	a2,-2016(gp) # ffb00020 <llk_profiler::open_zone_cnt>
++   10914:	lw	a4,-2012(gp) # ffb00024 <llk_profiler::write_idx>
++   10918:	lw	a3,-2016(gp) # ffb00020 <llk_profiler::open_zone_cnt>
+         if (!is_buffer_full())
+-   107e4:	li	a3,3
++   1091c:	li	a2,3
+     return (BUFFER_LENGTH - (write_idx + open_zone_cnt)) < 4;
+-   107e8:	add	a5,a4,a2
+-   107ec:	addi	a5,a5,-1021
++   10920:	add	a5,a4,a3
++   10924:	addi	a5,a5,-1021
+         if (!is_buffer_full())
+-   107f0:	bgeu	a3,a5,10844 <run_kernel(RuntimeParams const&)+0x354>
+-   107f4:	lui	a5,0xffb12
+-   107f8:	lw	a1,496(a5) # ffb121f0 <__stack_top+0x111f0>
+-   107fc:	lw	a5,504(a5)
++   10928:	bgeu	a2,a5,1097c <run_kernel(RuntimeParams const&)+0x48c>
++   1092c:	lui	a5,0xffb12
++   10930:	lw	a1,496(a5) # ffb121f0 <__stack_top+0x111f0>
++   10934:	lw	a5,504(a5)
+     buffer[TRISC_ID][write_idx++] = meta | (timestamp_high & ~ENTRY_META_MASK);
+-   10800:	lui	a3,0xffb00
+-   10804:	lw	a3,0(a3) # ffb00000 <llk_profiler::buffer>
++   10938:	lui	a2,0xffb00
++   1093c:	lw	a2,0(a2) # ffb00000 <llk_profiler::buffer>
+             is_opened = true;
+-   10808:	li	a0,1
++   10940:	li	a0,1
+     buffer[TRISC_ID][write_idx++] = meta | (timestamp_high & ~ENTRY_META_MASK);
+-   1080c:	lui	a7,0xa21b2
+-   10810:	lui	a6,0x2
++   10944:	lui	a7,0xa21b2
++   10948:	lui	a6,0x2
+             is_opened = true;
+-   10814:	sb	a0,4(sp)
++   1094c:	sb	a0,4(sp)
+             ++open_zone_cnt;
+-   10818:	add	a2,a2,a0
+-   1081c:	sw	a2,-2016(gp) # ffb00020 <llk_profiler::open_zone_cnt>
+-   10820:	sh2add	a3,a4,a3
++   10950:	add	a3,a3,a0
++   10954:	sw	a3,-2016(gp) # ffb00020 <llk_profiler::open_zone_cnt>
++   10958:	sh2add	a2,a4,a2
+     buffer[TRISC_ID][write_idx++] = meta | (timestamp_high & ~ENTRY_META_MASK);
+-   10824:	add	a3,a3,a6
++   1095c:	add	a2,a2,a6
+     buffer[TRISC_ID][write_idx++] = static_cast<std::uint32_t>(timestamp);
+-   10828:	addi	a4,a4,2
+-   1082c:	sw	a4,-2012(gp) # ffb00024 <llk_profiler::write_idx>
++   10960:	addi	a4,a4,2
++   10964:	sw	a4,-2012(gp) # ffb00024 <llk_profiler::write_idx>
+     buffer[TRISC_ID][write_idx++] = meta | (timestamp_high & ~ENTRY_META_MASK);
+-   10830:	slli	a5,a5,0x14
+-   10834:	srli	a5,a5,0x14
+-   10838:	or	a5,a5,a7
+-   1083c:	sw	a5,0(a3)
++   10968:	slli	a5,a5,0x14
++   1096c:	srli	a5,a5,0x14
++   10970:	or	a5,a5,a7
++   10974:	sw	a5,0(a2)
+     buffer[TRISC_ID][write_idx++] = static_cast<std::uint32_t>(timestamp);
+-   10840:	sw	a1,4(a3)
++   10978:	sw	a1,4(a2)
+         if (is_opened)
+-   10844:	lbu	a5,4(sp)
+-   10848:	beqz	a5,1089c <run_kernel(RuntimeParams const&)+0x3ac>
+-   1084c:	lui	a5,0xffb12
+-   10850:	lw	a1,496(a5) # ffb121f0 <__stack_top+0x111f0>
+-   10854:	lw	a5,504(a5)
++   1097c:	lbu	a5,4(sp)
++   10980:	beqz	a5,109d4 <run_kernel(RuntimeParams const&)+0x4e4>
++   10984:	lui	a5,0xffb12
++   10988:	lw	a1,496(a5) # ffb121f0 <__stack_top+0x111f0>
++   1098c:	lw	a5,504(a5)
+     buffer[TRISC_ID][write_idx++] = meta | (timestamp_high & ~ENTRY_META_MASK);
+-   10858:	lui	a4,0xffb00
+-   1085c:	lw	a3,-2012(gp) # ffb00024 <llk_profiler::write_idx>
++   10990:	lui	a4,0xffb00
++   10994:	lw	a3,-2012(gp) # ffb00024 <llk_profiler::write_idx>
+             --open_zone_cnt;
+-   10860:	lw	a2,-2016(gp) # ffb00020 <llk_profiler::open_zone_cnt>
+-   10864:	lw	a4,0(a4) # ffb00000 <llk_profiler::buffer>
++   10998:	lw	a2,-2016(gp) # ffb00020 <llk_profiler::open_zone_cnt>
++   1099c:	lw	a4,0(a4) # ffb00000 <llk_profiler::buffer>
+     buffer[TRISC_ID][write_idx++] = meta | (timestamp_high & ~ENTRY_META_MASK);
+-   10868:	lui	a6,0xb21b2
+-   1086c:	lui	a0,0x2
+-   10870:	sh2add	a4,a3,a4
+-   10874:	add	a4,a4,a0
++   109a0:	lui	a6,0xb21b2
++   109a4:	lui	a0,0x2
++   109a8:	sh2add	a4,a3,a4
++   109ac:	add	a4,a4,a0
+     buffer[TRISC_ID][write_idx++] = static_cast<std::uint32_t>(timestamp);
+-   10878:	addi	a3,a3,2
+-   1087c:	sw	a3,-2012(gp) # ffb00024 <llk_profiler::write_idx>
++   109b0:	addi	a3,a3,2
++   109b4:	sw	a3,-2012(gp) # ffb00024 <llk_profiler::write_idx>
+     buffer[TRISC_ID][write_idx++] = meta | (timestamp_high & ~ENTRY_META_MASK);
+-   10880:	slli	a5,a5,0x14
+-   10884:	srli	a5,a5,0x14
+-   10888:	or	a5,a5,a6
+-   1088c:	sw	a5,0(a4)
++   109b8:	slli	a5,a5,0x14
++   109bc:	srli	a5,a5,0x14
++   109c0:	or	a5,a5,a6
++   109c4:	sw	a5,0(a4)
+     buffer[TRISC_ID][write_idx++] = static_cast<std::uint32_t>(timestamp);
+-   10890:	sw	a1,4(a4)
++   109c8:	sw	a1,4(a4)
+             --open_zone_cnt;
+-   10894:	addi	a2,a2,-1
+-   10898:	sw	a2,-2016(gp) # ffb00020 <llk_profiler::open_zone_cnt>
++   109cc:	addi	a2,a2,-1
++   109d0:	sw	a2,-2016(gp) # ffb00020 <llk_profiler::open_zone_cnt>
+                 _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+             }
+         }
+         PROFILER_SYNC();
+     }
+ }
+-   1089c:	lw	ra,28(sp)
+-   108a0:	lw	s0,24(sp)
+-   108a4:	lw	s1,20(sp)
+-   108a8:	addi	sp,sp,32
+-   108ac:	ret
++   109d4:	lw	ra,28(sp)
++   109d8:	lw	s0,24(sp)
++   109dc:	lw	s1,20(sp)
++   109e0:	lw	s2,16(sp)
++   109e4:	addi	sp,sp,32
++   109e8:	ret
++    {
++        detail::zone_hashes[n] = hash_val;
++   109ec:	lui	a4,0x7c867
++   109f0:	sh2add	a3,a5,s0
++   109f4:	addi	a4,a4,-839 # 7c866cb9 <__runtime_args_end+0x7c8468b9>
++        detail::next_zone_id   = n + 1;
++   109f8:	addi	a5,a5,1
++        detail::zone_hashes[n] = hash_val;
++   109fc:	sw	a4,4(a3)
++        detail::next_zone_id   = n + 1;
++   10a00:	sw	a5,0(s0)
++        return n;
++   10a04:	j	105a0 <run_kernel(RuntimeParams const&)+0xb0>
++        detail::zone_hashes[n] = hash_val;
++   10a08:	lui	a4,0xbd77
++   10a0c:	sh2add	a3,a5,s0
++   10a10:	addi	a4,a4,-244 # bd76f0c <__runtime_args_end+0xbd56b0c>
++        detail::next_zone_id   = n + 1;
++   10a14:	addi	a5,a5,1
++        detail::zone_hashes[n] = hash_val;
++   10a18:	sw	a4,4(a3)
++        detail::next_zone_id   = n + 1;
++   10a1c:	sw	a5,0(s0)
++        return n;
++   10a20:	j	10910 <run_kernel(RuntimeParams const&)+0x420>
+     LLK_ASSERT(
+-   108b0:	ebreak
+-   108b4:	j	1057c <run_kernel(RuntimeParams const&)+0x8c>
++   10a24:	ebreak
++   10a28:	j	1061c <run_kernel(RuntimeParams const&)+0x12c>
+
+-000108b8 <_init()>:
++00010a2c <_init()>:
+     }
+ }
+
+ void _init(void)
+ {
+ }
+-   108b8:	ret
++   10a2c:	ret
+
+-000108bc <_fini()>:
++00010a30 <_fini()>:
+
+ void _fini(void)
+-   108bc:	ret
++   10a30:	ret
+
+-000108c0 <copy_runtimes_from_L1(RuntimeParams*)>:
++00010a34 <copy_runtimes_from_L1(RuntimeParams*)>:
+         dstc[i] = srcc[i];
+-   108c0:	lui	a5,0x20
+-   108c4:	lbu	a5,0(a5) # 20000 <RUNTIME_ARGS_START>
+-   108c8:	sb	a5,0(a0) # 2000 <BRISC_LOCAL_MEM_LENGTH>
++   10a34:	lui	a5,0x20
++   10a38:	lbu	a5,0(a5) # 20000 <RUNTIME_ARGS_START>
++   10a3c:	sb	a5,0(a0) # 2000 <BRISC_LOCAL_MEM_LENGTH>
+         (void)(dstc[i]);
+-   108cc:	lbu	a5,0(a0)
++   10a40:	lbu	a5,0(a0)
+     asm volatile("fence" ::: "memory");
+-   108d0:	fence
++   10a44:	fence
+ }
+-   108d4:	ret
++   10a48:	ret
+
+-000108d8 <memset>:
+-   108d8:	li	t1,15
+-   108dc:	mv	a4,a0
+-   108e0:	bgeu	t1,a2,1091c <memset+0x44>
+-   108e4:	andi	a5,a4,15
+-   108e8:	bnez	a5,10988 <memset+0xb0>
+-   108ec:	bnez	a1,10970 <memset+0x98>
+-   108f0:	andi	a3,a2,-16
+-   108f4:	andi	a2,a2,15
+-   108f8:	add	a3,a3,a4
+-   108fc:	sw	a1,0(a4)
+-   10900:	sw	a1,4(a4)
+-   10904:	sw	a1,8(a4)
+-   10908:	sw	a1,12(a4)
+-   1090c:	addi	a4,a4,16
+-   10910:	bltu	a4,a3,108fc <memset+0x24>
+-   10914:	bnez	a2,1091c <memset+0x44>
+-   10918:	ret
+-   1091c:	sub	a3,t1,a2
+-   10920:	slli	a3,a3,0x2
+-   10924:	auipc	t0,0x0
+-   10928:	add	a3,a3,t0
+-   1092c:	jr	12(a3)
+-   10930:	sb	a1,14(a4)
+-   10934:	sb	a1,13(a4)
+-   10938:	sb	a1,12(a4)
+-   1093c:	sb	a1,11(a4)
+-   10940:	sb	a1,10(a4)
+-   10944:	sb	a1,9(a4)
+-   10948:	sb	a1,8(a4)
+-   1094c:	sb	a1,7(a4)
+-   10950:	sb	a1,6(a4)
+-   10954:	sb	a1,5(a4)
+-   10958:	sb	a1,4(a4)
+-   1095c:	sb	a1,3(a4)
+-   10960:	sb	a1,2(a4)
+-   10964:	sb	a1,1(a4)
+-   10968:	sb	a1,0(a4)
+-   1096c:	ret
+-   10970:	zext.b	a1,a1
+-   10974:	slli	a3,a1,0x8
+-   10978:	or	a1,a1,a3
+-   1097c:	slli	a3,a1,0x10
+-   10980:	or	a1,a1,a3
+-   10984:	j	108f0 <memset+0x18>
+-   10988:	slli	a3,a5,0x2
+-   1098c:	auipc	t0,0x0
+-   10990:	add	a3,a3,t0
+-   10994:	mv	t0,ra
+-   10998:	jalr	-96(a3)
+-   1099c:	mv	ra,t0
+-   109a0:	addi	a5,a5,-16
+-   109a4:	sub	a4,a4,a5
+-   109a8:	add	a2,a2,a5
+-   109ac:	bgeu	t1,a2,1091c <memset+0x44>
+-   109b0:	j	108ec <memset+0x14>
++00010a4c <memset>:
++   10a4c:	li	t1,15
++   10a50:	mv	a4,a0
++   10a54:	bgeu	t1,a2,10a90 <memset+0x44>
++   10a58:	andi	a5,a4,15
++   10a5c:	bnez	a5,10afc <memset+0xb0>
++   10a60:	bnez	a1,10ae4 <memset+0x98>
++   10a64:	andi	a3,a2,-16
++   10a68:	andi	a2,a2,15
++   10a6c:	add	a3,a3,a4
++   10a70:	sw	a1,0(a4)
++   10a74:	sw	a1,4(a4)
++   10a78:	sw	a1,8(a4)
++   10a7c:	sw	a1,12(a4)
++   10a80:	addi	a4,a4,16
++   10a84:	bltu	a4,a3,10a70 <memset+0x24>
++   10a88:	bnez	a2,10a90 <memset+0x44>
++   10a8c:	ret
++   10a90:	sub	a3,t1,a2
++   10a94:	slli	a3,a3,0x2
++   10a98:	auipc	t0,0x0
++   10a9c:	add	a3,a3,t0
++   10aa0:	jr	12(a3)
++   10aa4:	sb	a1,14(a4)
++   10aa8:	sb	a1,13(a4)
++   10aac:	sb	a1,12(a4)
++   10ab0:	sb	a1,11(a4)
++   10ab4:	sb	a1,10(a4)
++   10ab8:	sb	a1,9(a4)
++   10abc:	sb	a1,8(a4)
++   10ac0:	sb	a1,7(a4)
++   10ac4:	sb	a1,6(a4)
++   10ac8:	sb	a1,5(a4)
++   10acc:	sb	a1,4(a4)
++   10ad0:	sb	a1,3(a4)
++   10ad4:	sb	a1,2(a4)
++   10ad8:	sb	a1,1(a4)
++   10adc:	sb	a1,0(a4)
++   10ae0:	ret
++   10ae4:	zext.b	a1,a1
++   10ae8:	slli	a3,a1,0x8
++   10aec:	or	a1,a1,a3
++   10af0:	slli	a3,a1,0x10
++   10af4:	or	a1,a1,a3
++   10af8:	j	10a64 <memset+0x18>
++   10afc:	slli	a3,a5,0x2
++   10b00:	auipc	t0,0x0
++   10b04:	add	a3,a3,t0
++   10b08:	mv	t0,ra
++   10b0c:	jalr	-96(a3)
++   10b10:	mv	ra,t0
++   10b14:	addi	a5,a5,-16
++   10b18:	sub	a4,a4,a5
++   10b1c:	add	a2,a2,a5
++   10b20:	bgeu	t1,a2,10a90 <memset+0x44>
++   10b24:	j	10a60 <memset+0x14>

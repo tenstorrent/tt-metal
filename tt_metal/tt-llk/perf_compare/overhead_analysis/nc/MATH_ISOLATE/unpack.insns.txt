@@ -1,0 +1,716 @@
+  auipc	gp,0xffafb
+  addi	gp,gp,-2048
+  auipc	sp,0xffafb
+  addi	sp,sp,-8
+  lui	a5,0xffb00
+  lui	a4,0xffb00
+  addi	a5,a5,32
+  addi	a4,a4,64
+  bgeu	a5,a4,6044 <_start+0x44>
+  addi	a4,a4,-1
+  sub	a4,a4,a5
+  andi	a4,a4,-4
+  addi	a4,a4,4
+  add	a4,a4,a5
+  sw	zero,0(a5)
+  addi	a5,a5,4
+  bne	a5,a4,6038 <_start+0x38>
+  lui	a5,0xa
+  lui	a4,0xb
+  mv	a5,a5
+  mv	a4,a4
+  beq	a5,a4,6094 <_start+0x94>
+  lui	a4,0xffb00
+  lui	a3,0xffb00
+  mv	a4,a4
+  addi	a3,a3,32
+  bgeu	a4,a3,6094 <_start+0x94>
+  addi	a3,a3,-1
+  sub	a3,a3,a4
+  andi	a3,a3,-4
+  addi	a3,a3,4
+  add	a3,a3,a5
+  lw	a1,0(a5)
+  addi	a5,a5,4
+  sw	a1,0(a4)
+  addi	a4,a4,4
+  bne	a5,a3,6080 <_start+0x80>
+  lui	s0,0xffb00
+  lui	s1,0xffb00
+  mv	s0,s0
+  mv	s1,s1
+  bgeu	s0,s1,60b8 <_start+0xb8>
+  lw	a5,0(s0)
+  addi	s0,s0,4
+  jalr	a5
+  bltu	s0,s1,60a8 <_start+0xa8>
+  jal	60c0 <main>
+  j	60bc <_start+0xbc>
+  lui	a5,0x20
+  lbu	a5,0(a5)
+  addi	sp,sp,-48
+  sb	a5,8(sp)
+  sw	ra,44(sp)
+  sw	s0,40(sp)
+  sw	s1,36(sp)
+  sw	s2,32(sp)
+  sw	s3,28(sp)
+  lbu	a5,8(sp)
+  fence
+  lw	a5,-2040(gp)
+  addi	a4,a5,256
+  sw	zero,0(a5)
+  addi	a5,a5,4
+  bne	a4,a5,60f4 <main+0x34>
+  lui	a0,0x16b
+  addi	a5,a0,-12
+  lui	s3,0xffb00
+  sw	a5,4(s3)
+  lui	s2,0xffb00
+  sw	zero,-2000(gp)
+  lui	a2,0x1
+  li	a1,0
+  sw	a0,0(s2)
+  sw	zero,-2004(gp)
+  sw	zero,-2012(gp)
+  sw	zero,-2016(gp)
+  jal	6a54 <memset>
+  lw	a2,4(s3)
+  li	a5,1
+  sw	a5,0(a2)
+  fence
+  lw	a1,4(a2)
+  beq	a1,a5,6164 <main+0xa4>
+  mv	a1,a5
+  addi	a4,a2,4
+  li	a3,1
+  fence
+  lw	a5,0(a4)
+  bne	a5,a3,6158 <main+0x98>
+  li	a5,2
+  beq	a1,a5,6184 <main+0xc4>
+  lw	a3,8(a2)
+  li	a4,1
+  beq	a3,a4,6184 <main+0xc4>
+  mv	a1,a5
+  addi	a4,a2,8
+  j	6154 <main+0x94>
+  sb	zero,12(sp)
+  lw	a4,-2012(gp)
+  lw	a3,-2016(gp)
+  li	a2,3
+  add	a5,a4,a3
+  addi	a5,a5,-1021
+  bgeu	a2,a5,61e4 <main+0x124>
+  lui	a5,0xffb12
+  lw	a1,496(a5)
+  lw	a5,504(a5)
+  lw	a2,0(s2)
+  lui	a0,0xa5104
+  addi	a3,a3,1
+  sh2add	a2,a4,a2
+  slli	a5,a5,0x14
+  srli	a5,a5,0x14
+  or	a5,a5,a0
+  sw	a5,0(a2)
+  addi	a4,a4,2
+  li	a5,1
+  sw	a3,-2016(gp)
+  sw	a1,4(a2)
+  sw	a4,-2012(gp)
+  sb	a5,12(sp)
+  addi	a0,sp,8
+  jal	65b8 <run_kernel(RuntimeParams const&)>
+  lw	a4,-2036(gp)
+  li	a5,0
+  addi	a4,a4,4
+  sw	a5,0(a4)
+  lw	a5,0(a4)
+  and	zero,zero,a5
+  lbu	a5,12(sp)
+  beqz	a5,6250 <main+0x190>
+  lui	a5,0xffb12
+  lw	a1,496(a5)
+  lw	a5,504(a5)
+  lw	a4,-2012(gp)
+  lw	a2,-2016(gp)
+  lw	a3,0(s2)
+  lui	a0,0xb5104
+  slli	a5,a5,0x14
+  srli	a5,a5,0x14
+  or	a5,a5,a0
+  sh2add	a3,a4,a3
+  sw	a5,0(a3)
+  addi	a4,a4,2
+  addi	a5,a2,-1
+  sw	a1,4(a3)
+  sw	a4,-2012(gp)
+  sw	a5,-2016(gp)
+  lui	a5,0x20
+  lw	ra,44(sp)
+  lw	s0,40(sp)
+  li	a4,255
+  sw	a4,-72(a5)
+  lw	s1,36(sp)
+  lw	s2,32(sp)
+  lw	s3,28(sp)
+  li	a0,0
+  addi	sp,sp,48
+  ret
+  lbu	a5,3(a0)
+  lbu	a4,2(a0)
+  mv	a3,a0
+  mul	a4,a4,a5
+  zext.b	a4,a4
+  addi	a5,a4,-1
+  addi	a4,a4,-4
+  sltiu	a5,a5,2
+  seqz	a4,a4
+  or	a0,a5,a4
+  beqz	a0,62d8 <ckernel::validate_tensor_shape_tile_dependent_ops_(ckernel::TensorShape const&)+0x5c>
+  lbu	a4,0(a3)
+  li	a5,16
+  li	a0,0
+  bltu	a5,a4,62d8 <ckernel::validate_tensor_shape_tile_dependent_ops_(ckernel::TensorShape const&)+0x5c>
+  lui	a5,0x10
+  addi	a5,a5,278
+  srl	a5,a5,a4
+  andi	a0,a5,1
+  beqz	a0,62d8 <ckernel::validate_tensor_shape_tile_dependent_ops_(ckernel::TensorShape const&)+0x5c>
+  lbu	a0,1(a3)
+  addi	a0,a0,-16
+  seqz	a0,a0
+  ret
+  li	a4,9
+  mv	a5,a0
+  beq	a0,a4,6404 <ckernel::unpacker::is_unpacker_format_conversion_supported_fp32_acc(DataFormat, DataFormat, bool)+0x128>
+  bltu	a4,a0,6324 <ckernel::unpacker::is_unpacker_format_conversion_supported_fp32_acc(DataFormat, DataFormat, bool)+0x48>
+  li	a4,4
+  beq	a0,a4,63cc <ckernel::unpacker::is_unpacker_format_conversion_supported_fp32_acc(DataFormat, DataFormat, bool)+0xf0>
+  bgeu	a4,a0,6378 <ckernel::unpacker::is_unpacker_format_conversion_supported_fp32_acc(DataFormat, DataFormat, bool)+0x9c>
+  addi	a0,a1,-8
+  li	a3,8
+  seqz	a0,a0
+  beq	a5,a3,6374 <ckernel::unpacker::is_unpacker_format_conversion_supported_fp32_acc(DataFormat, DataFormat, bool)+0x98>
+  li	a3,5
+  bne	a5,a3,6410 <ckernel::unpacker::is_unpacker_format_conversion_supported_fp32_acc(DataFormat, DataFormat, bool)+0x134>
+  mv	a0,a2
+  beq	a1,a4,6374 <ckernel::unpacker::is_unpacker_format_conversion_supported_fp32_acc(DataFormat, DataFormat, bool)+0x98>
+  addi	a1,a1,-5
+  seqz	a0,a1
+  ret
+  li	a4,15
+  beq	a0,a4,6410 <ckernel::unpacker::is_unpacker_format_conversion_supported_fp32_acc(DataFormat, DataFormat, bool)+0x134>
+  bgeu	a4,a0,639c <ckernel::unpacker::is_unpacker_format_conversion_supported_fp32_acc(DataFormat, DataFormat, bool)+0xc0>
+  li	a4,26
+  beq	a0,a4,6384 <ckernel::unpacker::is_unpacker_format_conversion_supported_fp32_acc(DataFormat, DataFormat, bool)+0xa8>
+  li	a4,30
+  beq	a0,a4,6430 <ckernel::unpacker::is_unpacker_format_conversion_supported_fp32_acc(DataFormat, DataFormat, bool)+0x154>
+  addi	a5,a0,-24
+  addi	a1,a1,-24
+  seqz	a1,a1
+  seqz	a5,a5
+  and	a0,a1,a5
+  ret
+  li	a4,5
+  li	a0,1
+  beq	a1,a4,6374 <ckernel::unpacker::is_unpacker_format_conversion_supported_fp32_acc(DataFormat, DataFormat, bool)+0x98>
+  beq	a1,a5,6374 <ckernel::unpacker::is_unpacker_format_conversion_supported_fp32_acc(DataFormat, DataFormat, bool)+0x98>
+  addi	a1,a1,-4
+  seqz	a1,a1
+  and	a0,a2,a1
+  ret
+  beqz	a0,63e8 <ckernel::unpacker::is_unpacker_format_conversion_supported_fp32_acc(DataFormat, DataFormat, bool)+0x10c>
+  li	a4,1
+  bne	a0,a4,63b4 <ckernel::unpacker::is_unpacker_format_conversion_supported_fp32_acc(DataFormat, DataFormat, bool)+0xd8>
+  sub	a5,a5,a1
+  addi	a1,a1,-1
+  seqz	a5,a5
+  seqz	a1,a1
+  or	a0,a1,a5
+  ret
+  li	a4,14
+  beq	a0,a4,6358 <ckernel::unpacker::is_unpacker_format_conversion_supported_fp32_acc(DataFormat, DataFormat, bool)+0x7c>
+  li	a4,10
+  beq	a0,a4,6384 <ckernel::unpacker::is_unpacker_format_conversion_supported_fp32_acc(DataFormat, DataFormat, bool)+0xa8>
+  li	a4,11
+  bne	a0,a4,6440 <ckernel::unpacker::is_unpacker_format_conversion_supported_fp32_acc(DataFormat, DataFormat, bool)+0x164>
+  li	a4,1
+  mv	a0,a1
+  beq	a1,a4,6374 <ckernel::unpacker::is_unpacker_format_conversion_supported_fp32_acc(DataFormat, DataFormat, bool)+0x98>
+  sub	a5,a5,a1
+  seqz	a0,a5
+  ret
+  mv	a0,a2
+  beq	a1,a5,6374 <ckernel::unpacker::is_unpacker_format_conversion_supported_fp32_acc(DataFormat, DataFormat, bool)+0x98>
+  bltu	a5,a1,6318 <ckernel::unpacker::is_unpacker_format_conversion_supported_fp32_acc(DataFormat, DataFormat, bool)+0x3c>
+  beqz	a1,6374 <ckernel::unpacker::is_unpacker_format_conversion_supported_fp32_acc(DataFormat, DataFormat, bool)+0x98>
+  addi	a1,a1,-1
+  seqz	a0,a1
+  ret
+  mv	a0,a2
+  beq	a1,a4,6374 <ckernel::unpacker::is_unpacker_format_conversion_supported_fp32_acc(DataFormat, DataFormat, bool)+0x98>
+  addi	a0,a1,-5
+  seqz	a0,a0
+  bltu	a4,a1,6374 <ckernel::unpacker::is_unpacker_format_conversion_supported_fp32_acc(DataFormat, DataFormat, bool)+0x98>
+  sltiu	a0,a1,2
+  ret
+  addi	a1,a1,-9
+  seqz	a0,a1
+  ret
+  li	a4,4
+  mv	a0,a2
+  beq	a1,a4,6374 <ckernel::unpacker::is_unpacker_format_conversion_supported_fp32_acc(DataFormat, DataFormat, bool)+0x98>
+  addi	a4,a1,-5
+  zext.b	a4,a4
+  li	a0,1
+  bltu	a0,a4,63c0 <ckernel::unpacker::is_unpacker_format_conversion_supported_fp32_acc(DataFormat, DataFormat, bool)+0xe4>
+  ret
+  andi	a1,a1,239
+  addi	a1,a1,-14
+  seqz	a0,a1
+  ret
+  li	a0,0
+  ret
+  li	a4,9
+  mv	a5,a0
+  beq	a0,a4,65a8 <ckernel::unpacker::is_unpacker_format_conversion_supported_dest(DataFormat, DataFormat, bool)+0x160>
+  bltu	a4,a0,6484 <ckernel::unpacker::is_unpacker_format_conversion_supported_dest(DataFormat, DataFormat, bool)+0x3c>
+  li	a4,4
+  beq	a0,a4,654c <ckernel::unpacker::is_unpacker_format_conversion_supported_dest(DataFormat, DataFormat, bool)+0x104>
+  bgeu	a4,a0,6528 <ckernel::unpacker::is_unpacker_format_conversion_supported_dest(DataFormat, DataFormat, bool)+0xe0>
+  li	a3,8
+  beq	a0,a3,64c8 <ckernel::unpacker::is_unpacker_format_conversion_supported_dest(DataFormat, DataFormat, bool)+0x80>
+  li	a3,5
+  bne	a0,a3,6588 <ckernel::unpacker::is_unpacker_format_conversion_supported_dest(DataFormat, DataFormat, bool)+0x140>
+  beq	a1,a4,64f8 <ckernel::unpacker::is_unpacker_format_conversion_supported_dest(DataFormat, DataFormat, bool)+0xb0>
+  addi	a1,a1,-5
+  seqz	a0,a1
+  ret
+  li	a4,24
+  beq	a0,a4,6570 <ckernel::unpacker::is_unpacker_format_conversion_supported_dest(DataFormat, DataFormat, bool)+0x128>
+  bltu	a4,a0,6500 <ckernel::unpacker::is_unpacker_format_conversion_supported_dest(DataFormat, DataFormat, bool)+0xb8>
+  li	a4,14
+  beq	a0,a4,64d8 <ckernel::unpacker::is_unpacker_format_conversion_supported_dest(DataFormat, DataFormat, bool)+0x90>
+  bltu	a4,a0,6580 <ckernel::unpacker::is_unpacker_format_conversion_supported_dest(DataFormat, DataFormat, bool)+0x138>
+  addi	a4,a0,-10
+  zext.b	a4,a4
+  li	a3,1
+  li	a0,0
+  bltu	a3,a4,65b4 <ckernel::unpacker::is_unpacker_format_conversion_supported_dest(DataFormat, DataFormat, bool)+0x16c>
+  sub	a5,a5,a1
+  addi	a1,a1,-1
+  seqz	a5,a5
+  seqz	a1,a1
+  or	a0,a1,a5
+  ret
+  addi	a1,a1,-8
+  seqz	a1,a1
+  and	a0,a2,a1
+  ret
+  li	a4,5
+  li	a0,1
+  beq	a1,a4,64f4 <ckernel::unpacker::is_unpacker_format_conversion_supported_dest(DataFormat, DataFormat, bool)+0xac>
+  beq	a1,a5,64f4 <ckernel::unpacker::is_unpacker_format_conversion_supported_dest(DataFormat, DataFormat, bool)+0xac>
+  li	a5,4
+  beq	a1,a5,64f8 <ckernel::unpacker::is_unpacker_format_conversion_supported_dest(DataFormat, DataFormat, bool)+0xb0>
+  li	a0,0
+  ret
+  xori	a0,a2,1
+  ret
+  li	a4,26
+  beq	a0,a4,64b0 <ckernel::unpacker::is_unpacker_format_conversion_supported_dest(DataFormat, DataFormat, bool)+0x68>
+  addi	a5,a0,-30
+  andi	a1,a1,239
+  addi	a1,a1,-14
+  seqz	a5,a5
+  seqz	a0,a1
+  neg	a5,a5
+  and	a0,a0,a5
+  ret
+  bnez	a0,64b0 <ckernel::unpacker::is_unpacker_format_conversion_supported_dest(DataFormat, DataFormat, bool)+0x68>
+  li	a5,1
+  mv	a0,a1
+  beq	a1,a5,64f4 <ckernel::unpacker::is_unpacker_format_conversion_supported_dest(DataFormat, DataFormat, bool)+0xac>
+  mv	a0,a2
+  bgeu	a5,a1,64f4 <ckernel::unpacker::is_unpacker_format_conversion_supported_dest(DataFormat, DataFormat, bool)+0xac>
+  addi	a1,a1,-4
+  sltiu	a0,a1,2
+  ret
+  beq	a1,a0,64f8 <ckernel::unpacker::is_unpacker_format_conversion_supported_dest(DataFormat, DataFormat, bool)+0xb0>
+  addi	a0,a1,-5
+  seqz	a0,a0
+  bltu	a5,a1,64f4 <ckernel::unpacker::is_unpacker_format_conversion_supported_dest(DataFormat, DataFormat, bool)+0xac>
+  mv	a0,a2
+  beqz	a1,64f4 <ckernel::unpacker::is_unpacker_format_conversion_supported_dest(DataFormat, DataFormat, bool)+0xac>
+  addi	a1,a1,-1
+  seqz	a0,a1
+  ret
+  addi	a1,a1,-24
+  seqz	a1,a1
+  and	a0,a2,a1
+  ret
+  li	a4,15
+  bne	a0,a4,64f0 <ckernel::unpacker::is_unpacker_format_conversion_supported_dest(DataFormat, DataFormat, bool)+0xa8>
+  li	a4,4
+  beq	a1,a4,64f8 <ckernel::unpacker::is_unpacker_format_conversion_supported_dest(DataFormat, DataFormat, bool)+0xb0>
+  sub	a5,a5,a1
+  addi	a1,a1,-5
+  seqz	a5,a5
+  sltiu	a1,a1,2
+  or	a0,a1,a5
+  ret
+  addi	a1,a1,-9
+  seqz	a0,a1
+  ret
+  ret
+  addi	sp,sp,-48
+  sw	ra,44(sp)
+  sw	s0,40(sp)
+  sw	s1,36(sp)
+  sw	s2,32(sp)
+  sw	s3,28(sp)
+  sw	s4,24(sp)
+  sb	zero,0(sp)
+  lw	a5,-2012(gp)
+  lw	a3,-2016(gp)
+  li	a2,3
+  add	a4,a5,a3
+  addi	a4,a4,-1021
+  bgeu	a2,a4,6638 <run_kernel(RuntimeParams const&)+0x80>
+  lui	a4,0xffb12
+  lw	a1,496(a4)
+  lw	a4,504(a4)
+  lui	a2,0xffb00
+  lw	a2,0(a2)
+  lui	a0,0xaa3a0
+  slli	a4,a4,0x14
+  srli	a4,a4,0x14
+  or	a4,a4,a0
+  addi	a3,a3,1
+  sh2add	a2,a5,a2
+  sw	a4,0(a2)
+  addi	a5,a5,2
+  li	a4,1
+  sw	a3,-2016(gp)
+  sw	a1,4(a2)
+  sw	a5,-2012(gp)
+  sb	a4,0(sp)
+  li	a1,6
+  mv	a0,a1
+  li	a2,1
+  jal	62dc <ckernel::unpacker::is_unpacker_format_conversion_supported_fp32_acc(DataFormat, DataFormat, bool)>
+  beqz	a0,6a00 <run_kernel(RuntimeParams const&)+0x448>
+  lw	a4,-2036(gp)
+  lw	a5,52(a4)
+  zext.b	a5,a5
+  bnez	a5,6650 <run_kernel(RuntimeParams const&)+0x98>
+  ttsetadcxy	3,0,0,0,0,11
+  ttsetadczw	3,0,0,0,0,15
+  lw	a4,-2000(gp)
+  lui	a5,0xffef0
+  beqz	a4,6674 <run_kernel(RuntimeParams const&)+0xbc>
+  addi	a5,a5,896
+  li	a1,256
+  sw	a1,228(a5)
+  sw	a1,236(a5)
+  ttatgetm	0
+  lui	s0,0xffe40
+  mv	s0,s0
+  lui	a4,0xb3ff0
+  sw	a4,0(s0)
+  lui	a4,0xb47f0
+  sw	a4,0(s0)
+  lui	a4,0xb3070
+  addi	a4,a4,1
+  sw	a4,0(s0)
+  lui	a4,0xb4800
+  addi	a4,a4,1
+  sw	a4,0(s0)
+  lui	a4,0xb5010
+  addi	a4,a4,1
+  sw	a4,0(s0)
+  lui	a4,0xb3010
+  addi	a4,a4,2
+  sw	a4,0(s0)
+  lui	a4,0xb5400
+  addi	a3,a4,71
+  sw	a3,0(s0)
+  addi	a4,a4,119
+  sw	a4,0(s0)
+  ttatrelm	0
+  li	a4,22
+  sw	a4,256(a5)
+  lui	a4,0x40
+  addi	a4,a4,1
+  lui	a3,0x1000
+  sw	a4,260(a5)
+  addi	a2,a3,22
+  sw	a2,448(a5)
+  sw	a4,452(a5)
+  li	a2,38
+  lui	a4,0xf0
+  sw	a2,288(a5)
+  addi	a4,a4,15
+  sw	a4,292(a5)
+  sw	a2,480(a5)
+  sw	a4,484(a5)
+  lui	a4,0x5e240
+  addi	a4,a4,-1024
+  sw	a4,0(s0)
+  lui	a4,0x5e440
+  addi	a4,a4,-1024
+  lui	a2,0x400
+  sw	a4,0(s0)
+  addi	a2,a2,64
+  sw	a2,336(a5)
+  lw	a4,-2040(gp)
+  add	a3,a3,a1
+  sw	a3,344(a5)
+  lui	a0,0x800
+  sw	a3,160(a4)
+  addi	a3,a0,128
+  sw	a3,164(a4)
+  lui	a3,0x200
+  sw	a2,168(a4)
+  addi	a2,a3,32
+  lui	a3,0x100
+  sw	a2,172(a4)
+  addi	a3,a3,16
+  sw	a3,176(a4)
+  sw	zero,8(sp)
+  lw	a4,176(a4)
+  sw	a4,8(sp)
+  ttsetc16	5,4
+  sw	a1,200(a5)
+  sw	zero,-1988(gp)
+  ttsetc16	41,0
+  lui	a5,0x45000
+  addi	a3,a5,72
+  sw	a3,0(s0)
+  lui	a4,0x2021
+  addi	a5,a5,74
+  addi	a4,a4,16
+  sw	a5,0(s0)
+  addi	a0,sp,4
+  sw	a4,4(sp)
+  jal	627c <ckernel::validate_tensor_shape_tile_dependent_ops_(ckernel::TensorShape const&)>
+  beqz	a0,69d0 <run_kernel(RuntimeParams const&)+0x418>
+  lui	a5,0xb4010
+  addi	a5,a5,72
+  sw	a5,0(s0)
+  li	a5,16
+  li	a4,4
+  bltu	a4,a5,69b8 <run_kernel(RuntimeParams const&)+0x400>
+  li	a4,1
+  beq	a5,a4,69c8 <run_kernel(RuntimeParams const&)+0x410>
+  li	a4,2
+  bne	a5,a4,69f0 <run_kernel(RuntimeParams const&)+0x438>
+  ttsetadcxx	3,31,0
+  lw	a5,4(sp)
+  addi	a0,sp,12
+  srli	s4,a5,0x10
+  sw	a5,12(sp)
+  zext.b	s4,s4
+  srli	s0,a5,0x18
+  jal	627c <ckernel::validate_tensor_shape_tile_dependent_ops_(ckernel::TensorShape const&)>
+  beqz	a0,69f8 <run_kernel(RuntimeParams const&)+0x440>
+  lw	a5,-2036(gp)
+  li	a3,0
+  addi	a5,a5,8
+  sw	a3,0(a5)
+  lw	a3,0(a5)
+  and	zero,zero,a3
+  lui	a5,0xffb80
+  sw	s4,0(a5)
+  sw	s0,4(a5)
+  lui	a3,0x2000
+  sw	a3,8(a5)
+  sw	a3,12(a5)
+  lui	a2,0x42008
+  sw	a3,16(a5)
+  addi	a2,a2,193
+  lui	a3,0x42808
+  sw	a2,20(a5)
+  addi	a3,a3,193
+  sw	a3,24(a5)
+  sw	a3,28(a5)
+  sw	a3,32(a5)
+  lw	a3,-2036(gp)
+  li	a5,0
+  addi	a4,a3,4
+  sw	a5,0(a4)
+  lw	a5,0(a4)
+  and	zero,zero,a5
+  lbu	a5,0(sp)
+  beqz	a5,68d0 <run_kernel(RuntimeParams const&)+0x318>
+  lui	a5,0xffb12
+  lw	a1,496(a5)
+  lw	a5,504(a5)
+  lui	a4,0xffb00
+  lw	a3,0(a4)
+  lw	a2,-2016(gp)
+  lw	a4,-2012(gp)
+  lui	a0,0xba3a0
+  slli	a5,a5,0x14
+  srli	a5,a5,0x14
+  or	a5,a5,a0
+  sh2add	a3,a4,a3
+  sw	a5,0(a3)
+  addi	a4,a4,2
+  addi	a5,a2,-1
+  sw	a1,4(a3)
+  sw	a4,-2012(gp)
+  sw	a5,-2016(gp)
+  sb	zero,12(sp)
+  lw	a5,-2012(gp)
+  lw	a3,-2016(gp)
+  li	a2,3
+  add	a4,a5,a3
+  addi	a4,a4,-1021
+  bgeu	a2,a4,6934 <run_kernel(RuntimeParams const&)+0x37c>
+  lui	a4,0xffb12
+  lw	a1,496(a4)
+  lw	a4,504(a4)
+  lui	a2,0xffb00
+  lw	a2,0(a2)
+  li	a0,1
+  lui	a6,0xa99a8
+  sb	a0,12(sp)
+  slli	a4,a4,0x14
+  srli	a4,a4,0x14
+  or	a4,a4,a6
+  add	a3,a3,a0
+  sh2add	a2,a5,a2
+  sw	a4,0(a2)
+  addi	a5,a5,2
+  sw	a3,-2016(gp)
+  sw	a1,4(a2)
+  sw	a5,-2012(gp)
+  li	a5,64
+  ttstallwait	1,96
+  ttsetdvalid	3
+  addi	a5,a5,-1
+  bnez	a5,6938 <run_kernel(RuntimeParams const&)+0x380>
+  lbu	a5,12(sp)
+  beqz	a5,6998 <run_kernel(RuntimeParams const&)+0x3e0>
+  lui	a5,0xffb12
+  lw	a1,496(a5)
+  lw	a5,504(a5)
+  lui	a4,0xffb00
+  lw	a3,0(a4)
+  lw	a2,-2016(gp)
+  lw	a4,-2012(gp)
+  lui	a0,0xb99a8
+  slli	a5,a5,0x14
+  srli	a5,a5,0x14
+  or	a5,a5,a0
+  sh2add	a3,a4,a3
+  sw	a5,0(a3)
+  addi	a4,a4,2
+  addi	a5,a2,-1
+  sw	a1,4(a3)
+  sw	a4,-2012(gp)
+  sw	a5,-2016(gp)
+  lw	ra,44(sp)
+  lw	s0,40(sp)
+  lw	s1,36(sp)
+  lw	s2,32(sp)
+  lw	s3,28(sp)
+  lw	s4,24(sp)
+  addi	sp,sp,48
+  ret
+  li	a4,8
+  bne	a5,a4,69f0 <run_kernel(RuntimeParams const&)+0x438>
+  ttsetadcxx	3,127,0
+  j	67f4 <run_kernel(RuntimeParams const&)+0x23c>
+  ttsetadcxx	3,15,0
+  j	67f4 <run_kernel(RuntimeParams const&)+0x23c>
+  ebreak
+  lui	a4,0xb4010
+  addi	a4,a4,72
+  lbu	a5,4(sp)
+  sw	a4,0(s0)
+  li	a4,16
+  bgeu	a4,a5,6a0c <run_kernel(RuntimeParams const&)+0x454>
+  ebreak
+  ttsetadcxx	3,255,0
+  j	67f4 <run_kernel(RuntimeParams const&)+0x23c>
+  ebreak
+  j	6814 <run_kernel(RuntimeParams const&)+0x25c>
+  ebreak
+  ebreak
+  j	664c <run_kernel(RuntimeParams const&)+0x94>
+  lui	a4,0xffff0
+  addi	a4,a4,-279
+  sra	a4,a4,a5
+  andi	a4,a4,1
+  beqz	a4,6a24 <run_kernel(RuntimeParams const&)+0x46c>
+  ebreak
+  li	a4,4
+  bne	a5,a4,67d8 <run_kernel(RuntimeParams const&)+0x220>
+  ttsetadcxx	3,63,0
+  j	67f4 <run_kernel(RuntimeParams const&)+0x23c>
+  ret
+  ret
+  lui	a5,0x20
+  lbu	a5,0(a5)
+  sb	a5,0(a0)
+  lbu	a5,0(a0)
+  fence
+  ret
+  li	t1,15
+  mv	a4,a0
+  bgeu	t1,a2,6a98 <memset+0x44>
+  andi	a5,a4,15
+  bnez	a5,6b04 <memset+0xb0>
+  bnez	a1,6aec <memset+0x98>
+  andi	a3,a2,-16
+  andi	a2,a2,15
+  add	a3,a3,a4
+  sw	a1,0(a4)
+  sw	a1,4(a4)
+  sw	a1,8(a4)
+  sw	a1,12(a4)
+  addi	a4,a4,16
+  bltu	a4,a3,6a78 <memset+0x24>
+  bnez	a2,6a98 <memset+0x44>
+  ret
+  sub	a3,t1,a2
+  slli	a3,a3,0x2
+  auipc	t0,0x0
+  add	a3,a3,t0
+  jr	12(a3)
+  sb	a1,14(a4)
+  sb	a1,13(a4)
+  sb	a1,12(a4)
+  sb	a1,11(a4)
+  sb	a1,10(a4)
+  sb	a1,9(a4)
+  sb	a1,8(a4)
+  sb	a1,7(a4)
+  sb	a1,6(a4)
+  sb	a1,5(a4)
+  sb	a1,4(a4)
+  sb	a1,3(a4)
+  sb	a1,2(a4)
+  sb	a1,1(a4)
+  sb	a1,0(a4)
+  ret
+  zext.b	a1,a1
+  slli	a3,a1,0x8
+  or	a1,a1,a3
+  slli	a3,a1,0x10
+  or	a1,a1,a3
+  j	6a6c <memset+0x18>
+  slli	a3,a5,0x2
+  auipc	t0,0x0
+  add	a3,a3,t0
+  mv	t0,ra
+  jalr	-96(a3)
+  mv	ra,t0
+  addi	a5,a5,-16
+  sub	a4,a4,a5
+  add	a2,a2,a5
+  bgeu	t1,a2,6a98 <memset+0x44>
+  j	6a68 <memset+0x14>

@@ -1,0 +1,284 @@
+--- /tmp/elf_compare/diff/nc_MATH_ISOLATE_pack.insns	2026-05-20 22:30:08.211283197 +0000
++++ /tmp/elf_compare/diff/wc_MATH_ISOLATE_pack.insns	2026-05-20 22:30:08.217283184 +0000
+@@ -5,7 +5,7 @@
+ lui	a5,0xffb00
+ lui	a4,0xffb00
+ addi	a5,a5,32
+-addi	a4,a4,64
++addi	a4,a4,100
+ bgeu	a5,a4,10044 <_start+0x44>
+ addi	a4,a4,-1
+ sub	a4,a4,a5
+@@ -75,7 +75,7 @@
+ sw	a4,4(s3)
+ sw	zero,-2012(gp)
+ sw	zero,-2016(gp)
+-jal	108d8 <memset>
++jal	10a4c <memset>
+ lw	a5,4(s3)
+ li	a3,1
+ sw	a3,8(a5)
+@@ -315,43 +315,83 @@
+ lw	a0,112(a5)
+ ret
+ addi	sp,sp,-32
+-sw	ra,28(sp)
+ sw	s0,24(sp)
++addi	s0,gp,-1984
++lw	a5,0(s0)
++sw	ra,28(sp)
+ sw	s1,20(sp)
++sw	s2,16(sp)
++beqz	a5,109ec <run_kernel(RuntimeParams const&)+0x4fc>
++lui	a4,0x7c867
++lw	a3,4(s0)
++addi	a4,a4,-839
++beq	a3,a4,105a0 <run_kernel(RuntimeParams const&)+0xb0>
++li	a3,1
++beq	a5,a3,109ec <run_kernel(RuntimeParams const&)+0x4fc>
++lw	a3,8(s0)
++beq	a3,a4,105a0 <run_kernel(RuntimeParams const&)+0xb0>
++li	a3,2
++beq	a5,a3,109ec <run_kernel(RuntimeParams const&)+0x4fc>
++lw	a3,12(s0)
++beq	a3,a4,105a0 <run_kernel(RuntimeParams const&)+0xb0>
++li	a3,3
++beq	a5,a3,109ec <run_kernel(RuntimeParams const&)+0x4fc>
++lw	a3,16(s0)
++beq	a3,a4,105a0 <run_kernel(RuntimeParams const&)+0xb0>
++li	a3,4
++beq	a5,a3,109ec <run_kernel(RuntimeParams const&)+0x4fc>
++lw	a3,20(s0)
++beq	a3,a4,105a0 <run_kernel(RuntimeParams const&)+0xb0>
++li	a4,5
++beq	a5,a4,109ec <run_kernel(RuntimeParams const&)+0x4fc>
++lui	a4,0x7c867
++lw	a3,24(s0)
++addi	a4,a4,-839
++beq	a3,a4,105a0 <run_kernel(RuntimeParams const&)+0xb0>
++li	a3,6
++beq	a5,a3,109ec <run_kernel(RuntimeParams const&)+0x4fc>
++lw	a3,28(s0)
++beq	a3,a4,105a0 <run_kernel(RuntimeParams const&)+0xb0>
++li	a3,7
++beq	a5,a3,109ec <run_kernel(RuntimeParams const&)+0x4fc>
++lw	a3,32(s0)
++beq	a3,a4,105a0 <run_kernel(RuntimeParams const&)+0xb0>
++li	a4,8
++bne	a5,a4,109ec <run_kernel(RuntimeParams const&)+0x4fc>
+ sb	zero,4(sp)
+ lw	a4,-2012(gp)
+-lw	a2,-2016(gp)
+-li	a3,3
+-add	a5,a4,a2
++lw	a3,-2016(gp)
++li	a2,3
++add	a5,a4,a3
+ addi	a5,a5,-1021
+-bgeu	a3,a5,1056c <run_kernel(RuntimeParams const&)+0x7c>
++bgeu	a2,a5,1060c <run_kernel(RuntimeParams const&)+0x11c>
+ lui	a5,0xffb12
+ lw	a1,496(a5)
+ lw	a5,504(a5)
+-lui	a3,0xffb00
+-lw	a3,0(a3)
++lui	a2,0xffb00
++lw	a2,0(a2)
+ li	a0,1
+ lui	a7,0xaa8fb
+ lui	a6,0x2
+ sb	a0,4(sp)
+-add	a2,a2,a0
+-sw	a2,-2016(gp)
+-sh2add	a3,a4,a3
+-add	a3,a3,a6
++add	a3,a3,a0
++sw	a3,-2016(gp)
++sh2add	a2,a4,a2
++add	a2,a2,a6
+ addi	a4,a4,2
+ sw	a4,-2012(gp)
+ slli	a5,a5,0x14
+ srli	a5,a5,0x14
+ or	a5,a5,a7
+-sw	a5,0(a3)
+-sw	a1,4(a3)
++sw	a5,0(a2)
++sw	a1,4(a2)
+ li	a1,1
+ mv	a0,a1
+ jal	1045c <ckernel::packer::is_packer_to_L1_conversion_supported(DataFormat, DataFormat)>
+-beqz	a0,108b0 <run_kernel(RuntimeParams const&)+0x3c0>
++beqz	a0,10a24 <run_kernel(RuntimeParams const&)+0x534>
+ lw	a5,-2000(gp)
+ lui	a4,0xffef0
+-beqz	a5,1058c <run_kernel(RuntimeParams const&)+0x9c>
++beqz	a5,1062c <run_kernel(RuntimeParams const&)+0x13c>
+ addi	a4,a4,896
+ lui	a5,0xffe40
+ lui	a3,0x45000
+@@ -479,7 +519,7 @@
+ lw	a3,0(a5)
+ and	zero,zero,a3
+ lbu	a5,4(sp)
+-beqz	a5,107d8 <run_kernel(RuntimeParams const&)+0x2e8>
++beqz	a5,10878 <run_kernel(RuntimeParams const&)+0x388>
+ lui	a5,0xffb12
+ lw	a1,496(a5)
+ lw	a4,504(a5)
+@@ -500,35 +540,73 @@
+ sw	a1,4(a5)
+ addi	a2,a2,-1
+ sw	a2,-2016(gp)
++lw	a5,0(s0)
++beqz	a5,10a08 <run_kernel(RuntimeParams const&)+0x518>
++lui	a4,0xbd77
++lw	a3,4(s0)
++addi	a4,a4,-244
++beq	a3,a4,10910 <run_kernel(RuntimeParams const&)+0x420>
++li	a3,1
++beq	a5,a3,10a08 <run_kernel(RuntimeParams const&)+0x518>
++lw	a3,8(s0)
++beq	a3,a4,10910 <run_kernel(RuntimeParams const&)+0x420>
++li	a3,2
++beq	a5,a3,10a08 <run_kernel(RuntimeParams const&)+0x518>
++lw	a3,12(s0)
++beq	a3,a4,10910 <run_kernel(RuntimeParams const&)+0x420>
++li	a3,3
++beq	a5,a3,10a08 <run_kernel(RuntimeParams const&)+0x518>
++lw	a3,16(s0)
++beq	a3,a4,10910 <run_kernel(RuntimeParams const&)+0x420>
++li	a3,4
++beq	a5,a3,10a08 <run_kernel(RuntimeParams const&)+0x518>
++lw	a3,20(s0)
++beq	a3,a4,10910 <run_kernel(RuntimeParams const&)+0x420>
++li	a4,5
++beq	a5,a4,10a08 <run_kernel(RuntimeParams const&)+0x518>
++lui	a4,0xbd77
++lw	a3,24(s0)
++addi	a4,a4,-244
++beq	a3,a4,10910 <run_kernel(RuntimeParams const&)+0x420>
++li	a3,6
++beq	a5,a3,10a08 <run_kernel(RuntimeParams const&)+0x518>
++lw	a3,28(s0)
++beq	a3,a4,10910 <run_kernel(RuntimeParams const&)+0x420>
++li	a3,7
++beq	a5,a3,10a08 <run_kernel(RuntimeParams const&)+0x518>
++lw	a3,32(s0)
++beq	a3,a4,10910 <run_kernel(RuntimeParams const&)+0x420>
++li	a4,8
++bne	a5,a4,10a08 <run_kernel(RuntimeParams const&)+0x518>
+ sb	zero,4(sp)
+ lw	a4,-2012(gp)
+-lw	a2,-2016(gp)
+-li	a3,3
+-add	a5,a4,a2
++lw	a3,-2016(gp)
++li	a2,3
++add	a5,a4,a3
+ addi	a5,a5,-1021
+-bgeu	a3,a5,10844 <run_kernel(RuntimeParams const&)+0x354>
++bgeu	a2,a5,1097c <run_kernel(RuntimeParams const&)+0x48c>
+ lui	a5,0xffb12
+ lw	a1,496(a5)
+ lw	a5,504(a5)
+-lui	a3,0xffb00
+-lw	a3,0(a3)
++lui	a2,0xffb00
++lw	a2,0(a2)
+ li	a0,1
+ lui	a7,0xa21b2
+ lui	a6,0x2
+ sb	a0,4(sp)
+-add	a2,a2,a0
+-sw	a2,-2016(gp)
+-sh2add	a3,a4,a3
+-add	a3,a3,a6
++add	a3,a3,a0
++sw	a3,-2016(gp)
++sh2add	a2,a4,a2
++add	a2,a2,a6
+ addi	a4,a4,2
+ sw	a4,-2012(gp)
+ slli	a5,a5,0x14
+ srli	a5,a5,0x14
+ or	a5,a5,a7
+-sw	a5,0(a3)
+-sw	a1,4(a3)
++sw	a5,0(a2)
++sw	a1,4(a2)
+ lbu	a5,4(sp)
+-beqz	a5,1089c <run_kernel(RuntimeParams const&)+0x3ac>
++beqz	a5,109d4 <run_kernel(RuntimeParams const&)+0x4e4>
+ lui	a5,0xffb12
+ lw	a1,496(a5)
+ lw	a5,504(a5)
+@@ -552,10 +630,25 @@
+ lw	ra,28(sp)
+ lw	s0,24(sp)
+ lw	s1,20(sp)
++lw	s2,16(sp)
+ addi	sp,sp,32
+ ret
++lui	a4,0x7c867
++sh2add	a3,a5,s0
++addi	a4,a4,-839
++addi	a5,a5,1
++sw	a4,4(a3)
++sw	a5,0(s0)
++j	105a0 <run_kernel(RuntimeParams const&)+0xb0>
++lui	a4,0xbd77
++sh2add	a3,a5,s0
++addi	a4,a4,-244
++addi	a5,a5,1
++sw	a4,4(a3)
++sw	a5,0(s0)
++j	10910 <run_kernel(RuntimeParams const&)+0x420>
+ ebreak
+-j	1057c <run_kernel(RuntimeParams const&)+0x8c>
++j	1061c <run_kernel(RuntimeParams const&)+0x12c>
+ ret
+ ret
+ lui	a5,0x20
+@@ -566,10 +659,10 @@
+ ret
+ li	t1,15
+ mv	a4,a0
+-bgeu	t1,a2,1091c <memset+0x44>
++bgeu	t1,a2,10a90 <memset+0x44>
+ andi	a5,a4,15
+-bnez	a5,10988 <memset+0xb0>
+-bnez	a1,10970 <memset+0x98>
++bnez	a5,10afc <memset+0xb0>
++bnez	a1,10ae4 <memset+0x98>
+ andi	a3,a2,-16
+ andi	a2,a2,15
+ add	a3,a3,a4
+@@ -578,8 +671,8 @@
+ sw	a1,8(a4)
+ sw	a1,12(a4)
+ addi	a4,a4,16
+-bltu	a4,a3,108fc <memset+0x24>
+-bnez	a2,1091c <memset+0x44>
++bltu	a4,a3,10a70 <memset+0x24>
++bnez	a2,10a90 <memset+0x44>
+ ret
+ sub	a3,t1,a2
+ slli	a3,a3,0x2
+@@ -607,7 +700,7 @@
+ or	a1,a1,a3
+ slli	a3,a1,0x10
+ or	a1,a1,a3
+-j	108f0 <memset+0x18>
++j	10a64 <memset+0x18>
+ slli	a3,a5,0x2
+ auipc	t0,0x0
+ add	a3,a3,t0
+@@ -617,5 +710,5 @@
+ addi	a5,a5,-16
+ sub	a4,a4,a5
+ add	a2,a2,a5
+-bgeu	t1,a2,1091c <memset+0x44>
+-j	108ec <memset+0x14>
++bgeu	t1,a2,10a90 <memset+0x44>
++j	10a60 <memset+0x14>
