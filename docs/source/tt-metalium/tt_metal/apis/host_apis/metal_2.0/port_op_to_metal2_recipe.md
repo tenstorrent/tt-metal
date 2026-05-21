@@ -35,7 +35,7 @@ In particular: if you find yourself constructing a clever workaround during the 
 
 - `METAL2_PREPORT_AUDIT.md` — the audit report. (Written by the [audit doc](port_op_to_metal2_audit.md), not this one; included here so you know it's expected to be present as input.)
 - `METAL2_PORT_PLAN.md` — the port plan (this recipe's load-bearing artifact). Externalizes structural decisions before mechanical translation begins. Read by you during construction and verification, by human reviewers during PR review, and by future debuggers. See [Appendix A](#appendix-a--metal2_port_planmd-template) for the template.
-- `METAL2_PORT_REPORT.md` — the post-port report. Records handoff points, vindications, friction, and open items observed during the port. Written at the end of the port; feeds doc evolution and informs the kernel-lib / API teams. See [Capture the port report](#capture-the-port-report) for the structure.
+- `METAL2_PORT_REPORT.md` — the post-port report. Records handoff points, successes, friction, and open items observed during the port. Written at the end of the port; feeds doc evolution and informs the kernel-lib / API teams. See [Capture the port report](#capture-the-port-report) for the structure.
 
 All three are committed alongside the port.
 
@@ -45,7 +45,7 @@ All three are committed alongside the port.
 2. [**Plan the spec**](#plan-the-spec) — Apply host-side specialization principles; identify legacy plumbing that should evaporate. Externalize all structural decisions to the plan.
 3. [**Construct paired spec + run-params**](#construct-paired-spec--run-params) — Construct the spec and run-params, paired by resource. Mechanical translation per the plan.
 4. [**Verification**](#verification) — Build, run tests, run anti-pattern self-audit against the [patterns catalog](metal2_port_patterns.md).
-5. [**Capture the port report**](#capture-the-port-report) — Write `METAL2_PORT_REPORT.md` recording handoff points, vindications, friction, and open items for downstream.
+5. [**Capture the port report**](#capture-the-port-report) — Write `METAL2_PORT_REPORT.md` recording handoff points, successes, friction, and open items for downstream.
 
 **Reference material** the recipe relies on, loaded on demand:
 
@@ -257,7 +257,7 @@ Includes (not exhaustive):
 
 Each handoff entry should be writable as a standalone ticket. The porter is the original reporter; the listed team is the owner.
 
-### Vindications
+### Successes
 
 Places where the docs steered the port right. Especially valuable when the porter almost did something the catalog warned against and the warning fired correctly — these are the entries that justify keeping a doc section in its current form.
 
