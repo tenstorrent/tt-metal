@@ -361,10 +361,10 @@ jobs:
           ]'
 
           # Filter matrix based on model selection. Substring match (not exact)
-          # so a family-level dropdown entry like "gemma-4" picks up every
-          # google/gemma-4-*-it variant in the matrix above, while explicit
-          # hub IDs ("meta-llama/Llama-3.1-8B-Instruct") still trivially match
-          # themselves.
+          # so a family-level dropdown entry like "google/gemma-4" picks up
+          # every google/gemma-4-*-it variant in the matrix above, while
+          # explicit hub IDs ("meta-llama/Llama-3.1-8B-Instruct") still
+          # trivially match themselves.
           if [ "${{ inputs.model }}" = "all" ]; then
             matrix="$all_tests"
           else
