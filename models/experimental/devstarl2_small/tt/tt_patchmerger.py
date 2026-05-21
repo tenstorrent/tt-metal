@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from models.common.lightweightmodule import LightweightModule
+from models.experimental.devstarl2_small.devstral_utils.pixtral_seq_chunk import vision_slice_memcfg
 import ttnn
 import torch
 
@@ -78,12 +79,23 @@ class TTMistral3PatchMerger(LightweightModule):
             merged_w = w // self.spatial_merge_size
 
             image_tokens = ttnn.to_layout(image_tokens, ttnn.ROW_MAJOR_LAYOUT)
+            slice_mem_cfg = vision_slice_memcfg(h * w)
+            if (
+                slice_mem_cfg.buffer_type == ttnn.BufferType.L1
+                and image_tokens.memory_config().buffer_type != ttnn.BufferType.L1
+            ):
+                image_tokens = ttnn.to_memory_config(image_tokens, slice_mem_cfg)
 
             image_grid = ttnn.view(image_tokens, (h, w, d))
             grid = ttnn.reshape(
                 image_grid,
                 (merged_h, self.spatial_merge_size, merged_w, self.spatial_merge_size, d),
             )
+            if (
+                slice_mem_cfg.buffer_type == ttnn.BufferType.L1
+                and grid.memory_config().buffer_type != ttnn.BufferType.L1
+            ):
+                grid = ttnn.to_memory_config(grid, slice_mem_cfg)
             merged_patches = merged_h * merged_w
             merged_patch_tiles = (merged_patches + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
             use_small_config = merged_patch_tiles <= self._small_m_per_core_tiles
@@ -97,9 +109,10 @@ class TTMistral3PatchMerger(LightweightModule):
                         grid,
                         (0, inner_h, 0, inner_w, 0),
                         (merged_h, inner_h + 1, merged_w, inner_w + 1, d),
+                        memory_config=slice_mem_cfg,
                     )
                     patch = ttnn.reshape(patch, (merged_h * merged_w, d))
-                    patch = ttnn.to_layout(patch, ttnn.TILE_LAYOUT)
+                    patch = ttnn.to_layout(patch, ttnn.TILE_LAYOUT, memory_config=slice_mem_cfg)
                     linear_kwargs = dict(
                         dtype=ttnn.bfloat16,
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,

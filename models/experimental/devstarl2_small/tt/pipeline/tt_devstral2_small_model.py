@@ -78,6 +78,8 @@ class TtDevstral2SmallModel(LightweightModule):
         vt = self.vision_tower(pixel_values, image_sizes, position_ids_tt)
         seq_len, hidden = int(vt.shape[2]), int(vt.shape[3])
         tokens = ttnn.reshape(vt, (seq_len, hidden))
+        if tokens.memory_config().buffer_type == ttnn.BufferType.L1:
+            tokens = ttnn.to_memory_config(tokens, ttnn.DRAM_MEMORY_CONFIG)
         return self.multi_modal_projector(tokens, image_sizes)
 
 

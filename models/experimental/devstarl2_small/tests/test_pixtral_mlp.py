@@ -14,6 +14,7 @@ from transformers.models.pixtral.modeling_pixtral import PixtralMLP
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.experimental.devstarl2_small.tt.tt_pixtralmlp import MistralTTVisionMLP
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.load_checkpoints import (
     convert_vision_hf_to_meta,
     load_hf_state_dict_filtered,
@@ -81,6 +82,7 @@ def test_pixtral_mlp_pcc_devstral_weights(mesh_device, seq_len, batch_size, monk
         weight_cache_path=model_args.weight_cache_path(dtype),
         state_dict_prefix=pref,
         dtype=dtype,
+        tt_ccl=TT_CCL(mesh_device),
     )
 
     hidden_size = model_args.vision_dim

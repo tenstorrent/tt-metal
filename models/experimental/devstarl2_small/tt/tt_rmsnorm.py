@@ -90,9 +90,29 @@ class RMSNorm(LightweightModule):
         )
         self.simplified_rms = simplified_rms
 
-    def forward(self, x: ttnn.Tensor, mode, in_sharded=False, out_sharded=False) -> ttnn.Tensor:
+    def forward(
+        self,
+        x: ttnn.Tensor,
+        mode,
+        in_sharded=False,
+        out_sharded=False,
+        memory_config=None,
+    ) -> ttnn.Tensor:
         program_config = self.sharded_program_config if in_sharded else None
-        memory_config = self.sharded_output_config if out_sharded else None
+        if memory_config is None:
+            memory_config = self.sharded_output_config if out_sharded else self.output_mem_config
+        if (
+            memory_config is not None
+            and memory_config.buffer_type == ttnn.BufferType.L1
+            and x.memory_config().buffer_type != ttnn.BufferType.L1
+        ):
+            x = ttnn.to_memory_config(x, memory_config)
+        elif (
+            memory_config is not None
+            and memory_config.buffer_type == ttnn.BufferType.DRAM
+            and x.memory_config().buffer_type == ttnn.BufferType.L1
+        ):
+            x = ttnn.to_memory_config(x, memory_config)
         distributed = self.is_distributed and self.is_distributed(mode)
         norm = (
             self._simplified_rmsnorm

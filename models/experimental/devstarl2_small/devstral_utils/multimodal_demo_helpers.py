@@ -233,7 +233,7 @@ def tt_replicated_ids_to_torch_long(_mesh_device, ids_tt: ttnn.Tensor, length: i
     """Read first ``length`` token ids from replicated ``[1,1,1,>=L]`` tensor to host ``[length]`` int64."""
     if length <= 0:
         return torch.empty(0, dtype=torch.long)
-    sub = ttnn.slice(ids_tt, (0, 0, 0, 0), (1, 1, 1, length))
+    sub = ttnn.slice(ids_tt, (0, 0, 0, 0), (1, 1, 1, length), memory_config=ttnn.L1_MEMORY_CONFIG)
     th = ttnn.to_torch(ttnn.get_device_tensors(sub)[0]).reshape(-1)[:length].to(torch.long)
     ttnn.deallocate(sub)
     return th
@@ -295,6 +295,7 @@ def cpu_lm_head_logits_last_token(
         tt_hidden_prefill_out,
         (0, 0, get_last, 0),
         (1, 1, get_last + 32, tt_hidden_prefill_out.shape[-1]),
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     h_block = ttnn.to_memory_config(h_block, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     h_t = ttnn.to_torch(h_block, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0]
@@ -337,6 +338,7 @@ def tt_lm_head_logits_block(
         tt_hidden_prefill_out,
         (0, 0, get_last, 0),
         (1, 1, get_last + 32, tt_hidden_prefill_out.shape[-1]),
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     lm_head_input_mem_cfg = model_args.get_lm_head_input_mem_config(Mode.PREFILL, None)
     if lm_head_input_mem_cfg.is_sharded():
@@ -700,7 +702,7 @@ def tt_sequence_last_uint32_token_id(mesh_device, ids_tt: ttnn.Tensor, seq_len: 
     """Token id at index ``seq_len - 1`` from replicated ids ``[1,1,1,*]``."""
     if seq_len < 1:
         raise ValueError("seq_len must be >= 1")
-    tail = ttnn.slice(ids_tt, (0, 0, 0, seq_len - 1), (1, 1, 1, seq_len))
+    tail = ttnn.slice(ids_tt, (0, 0, 0, seq_len - 1), (1, 1, 1, seq_len), memory_config=ttnn.L1_MEMORY_CONFIG)
     v = int(ttnn.to_torch(ttnn.get_device_tensors(tail)[0]).reshape(-1)[0].item())
     ttnn.deallocate(tail)
     return v
