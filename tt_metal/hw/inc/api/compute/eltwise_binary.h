@@ -208,7 +208,7 @@ ALWI void add_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itil
           EltwiseBinaryType::ELWADD,
           BroadcastType::NONE,
           DST_ACCUM_MODE,
-          MATH_FIDELITY,
+          MathFidelity::LoFi,
           EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true /* clear_fp32_dst_acc */)));
 }
 
@@ -236,7 +236,7 @@ ALWI void sub_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itil
           EltwiseBinaryType::ELWSUB,
           BroadcastType::NONE,
           DST_ACCUM_MODE,
-          MATH_FIDELITY,
+          MathFidelity::LoFi,
           EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true /* clear_fp32_dst_acc */)));
 }
 
