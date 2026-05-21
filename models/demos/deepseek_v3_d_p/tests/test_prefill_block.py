@@ -11,6 +11,8 @@ Uses HF DeepseekV3Model layer as the reference: creates a model with random weig
 extracts those weights into our TT state_dict format, and compares forward passes.
 """
 
+from pathlib import Path
+
 import pytest
 import torch
 from loguru import logger
@@ -150,8 +152,6 @@ def test_prefill_block(
     )
 
     # --- Build HF reference model and extract weights ---
-    profiler.start("weights_creation")
-    torch.manual_seed(42)
     num_layers = layer_idx + 1
     hf_model = None
     if need_hf_model:
