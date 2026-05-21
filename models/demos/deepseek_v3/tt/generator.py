@@ -106,6 +106,18 @@ def _strip_model_prefix(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.
     return out
 
 
+def _apply_teacher_forcing_tokens(
+    tokens: torch.Tensor,
+    teacher_forcing,
+    num_of_prompts: int,
+    prompt_user_ids: torch.Tensor | None = None,
+) -> None:
+    for prompt_idx in range(num_of_prompts):
+        token_idx = int(prompt_user_ids[prompt_idx].item()) if prompt_user_ids is not None else prompt_idx
+        forced = teacher_forcing.collect_predicted_tokens(int(tokens[token_idx].item()), user_idx=prompt_idx)
+        tokens[token_idx] = int(forced)
+
+
 class _MtpPromptLayout(NamedTuple):
     use_mtp_path: bool
     tokens_batched: torch.Tensor
@@ -2178,10 +2190,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                         next_tokens = prefill_tokens
                         positions = lengths.clone()
                 if teacher_forcing is not None:
-                    # Record user-0 prediction for accuracy, but force teacher token for alignment.
-                    tf_idx = int(prompt_user_ids[0].item()) if (prompt_user_ids is not None) else 0
-                    forced0 = teacher_forcing.collect_predicted_tokens(int(next_tokens[tf_idx].item()))
-                    next_tokens[tf_idx] = int(forced0)
+                    _apply_teacher_forcing_tokens(next_tokens, teacher_forcing, num_of_prompts, prompt_user_ids)
 
                 # Record token 0
                 for i in range(num_of_prompts):
@@ -2264,9 +2273,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                         else:
                             pred_tokens = self._sample_on_host(decode_logits)
                         if teacher_forcing is not None:
-                            # Record user-0 prediction for accuracy, then force teacher token.
-                            forced = teacher_forcing.collect_predicted_tokens(int(pred_tokens[0].item()))
-                            pred_tokens[0] = int(forced)
+                            _apply_teacher_forcing_tokens(pred_tokens, teacher_forcing, num_of_prompts, prompt_user_ids)
                         next_tokens = pred_tokens
                         positions += 1
 
