@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "api/compute/eltwise_binary.h"
+#include "api/compute/matmul.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/dataflow/dataflow_buffer.h"
 
@@ -25,7 +25,7 @@ void kernel_main() {
     DataflowBuffer d5(in5);
     DataflowBuffer dout(out);
 
-    binary_op_init_common(d0.get_id(), d1.get_id(), dout.get_id());
+    mm_init(d0.get_id(), d1.get_id(), dout.get_id());
 
     d0.wait_front(1);
     d1.wait_front(1);
@@ -35,26 +35,24 @@ void kernel_main() {
     d5.wait_front(1);
     dout.reserve_back(3);
 
-    // Three real ops with reconfig_data_format between each:
-    //   OP[0]: add_tiles(d0, d1) -> dst[0]   [Float16_b srcA/B]
-    //   OP[1]: add_tiles(d2, d3) -> dst[1]   [Float32   srcA/B]
-    //   OP[2]: add_tiles(d4, d5) -> dst[2]   [Float16_b srcA/B]
+    // Three matmul_tiles ops with reconfig_data_format between operand pairs.
+    // OP[1] uses Float32 operands; OP[0] and OP[2] use Float16_b.
+    // Between ops we reconfig srcA/srcB formats and reprime the unpack MOP for
+    // the new buf descriptors (mm_init_short is a stub on Quasar).
+    //   OP[0]: matmul_tiles(d0, d1) -> dst[0]   [Float16_b srcA/B]
+    //   OP[1]: matmul_tiles(d2, d3) -> dst[1]   [Float32   srcA/B, reconfig Float16_b -> Float32]
+    //   OP[2]: matmul_tiles(d4, d5) -> dst[2]   [Float16_b srcA/B, reconfig Float32   -> Float16_b]
     tile_regs_acquire();
 
-    add_tiles(d0.get_id(), d1.get_id(), 0, 0, 0);
+    matmul_tiles(d0.get_id(), d1.get_id(), 0, 0, 0);
 
     reconfig_data_format(d0.get_id(), d2.get_id(), d1.get_id(), d3.get_id());
-    binary_tiles_init<true, EltwiseBinaryType::ELWADD>(d2.get_id(), d3.get_id());
-    add_tiles(d2.get_id(), d3.get_id(), 0, 0, 1);
+    UNPACK((llk_unpack_AB_matmul_init(d2.get_id(), d3.get_id())));
+    matmul_tiles(d2.get_id(), d3.get_id(), 0, 0, 1);
 
     reconfig_data_format(d2.get_id(), d4.get_id(), d3.get_id(), d5.get_id());
-    binary_tiles_init<true, EltwiseBinaryType::ELWADD>(d4.get_id(), d5.get_id());
-    add_tiles(d4.get_id(), d5.get_id(), 0, 0, 2);
-
-    // Workaround: on Quasar, the last add_tiles in a single tile_regs_acquire window
-    // races maybe with the math->pack handshake and pack_tile reads zeros for that slot.
-    // This dummy add_tiles takes the hit so OP[2] above survives.
-    add_tiles(d4.get_id(), d5.get_id(), 0, 0, 3);
+    UNPACK((llk_unpack_AB_matmul_init(d4.get_id(), d5.get_id())));
+    matmul_tiles(d4.get_id(), d5.get_id(), 0, 0, 2);
 
     tile_regs_commit();
 

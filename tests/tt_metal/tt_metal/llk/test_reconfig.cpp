@@ -358,12 +358,11 @@ bool single_core_reconfig(
 }
 
 bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    // THREE ops in a single acquire window, with reconfig_data_format between each:
-    //   OP[0]: add_tiles(d0, d1) -> dst[0]  [Float16_b srcA/B]
-    //   OP[1]: add_tiles(d2, d3) -> dst[1]  [Float32   srcA/B]   (reconfig Float16_b -> Float32)
-    //   OP[2]: add_tiles(d4, d5) -> dst[2]  [Float16_b srcA/B]   (reconfig Float32   -> Float16_b)
-    // The kernel adds a trailing dummy add_tiles -> dst[3] (not packed) to absorb the
-    // Quasar math->pack drain race for the last in-flight op.
+    // THREE matmul_tiles ops with reconfig_data_format between operand pairs.
+    // OP[1] uses Float32 operands (d2/d3); OP[0] and OP[2] use Float16_b.
+    //   OP[0]: matmul_tiles(d0, d1) -> dst[0]   [Float16_b srcA/B]
+    //   OP[1]: matmul_tiles(d2, d3) -> dst[1]   [Float32   srcA/B, reconfig Float16_b -> Float32]
+    //   OP[2]: matmul_tiles(d4, d5) -> dst[2]   [Float16_b srcA/B, reconfig Float32   -> Float16_b]
     constexpr uint32_t kNumOps = 3;
     const uint32_t f16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
     const uint32_t f32_tile_size = tt::tile_size(tt::DataFormat::Float32);
@@ -394,10 +393,8 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
     auto inp5_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
     auto out_dram = distributed::MeshBuffer::create(out_buf_cfg, f16_dram_cfg, mesh_device.get());
 
-    // OP[0] inputs (inp0/inp1) are Float16_b; OP[1] inputs (inp2/inp3) are Float32;
-    // OP[2] inputs (inp4/inp5) are Float16_b. The reconfig_data_format calls between ops
-    // exercise both Float16_b -> Float32 and Float32 -> Float16_b unpacker transitions.
-    // Output stays Float16_b.
+    // d0/d1, d4/d5 are Float16_b; d2/d3 are Float32. Kernel uses reconfig_data_format
+    // between ops to switch the unpacker formats. Output stays Float16_b.
     tt_metal::experimental::dfb::DataflowBufferConfig f16_input_dfb_cfg = {
         .entry_size = f16_tile_size,
         .num_entries = 1,
@@ -462,7 +459,7 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
         tt_metal::experimental::quasar::QuasarComputeConfig{
             .num_threads_per_cluster = 1,
             .math_fidelity = MathFidelity::HiFi4,
-            .fp32_dest_acc_en = false,
+            .fp32_dest_acc_en = true,
             .compile_args = compute_cta});
 
     tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
@@ -480,14 +477,13 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
     tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
         program_, out_dfb, compute_kernel, writer_kernel);
 
-    // Random stimulus: U(0, 2) per element. inp0/inp1 and inp4/inp5 are bfloat16
-    // (Float16_b tile); inp2/inp3 are float32 (Float32 tile). All srcN are
-    // vector<uint32_t> (the on-wire representation each format gets packed into for DRAM transfer).
-    constexpr int kRandMax = 2;
+    // Random stimulus: U(0, 1) per element (keep magnitudes small so matmul output
+    // stays in a sensible bfloat16 range; each output element is sum of 32 products).
+    // d0/d1, d4/d5 are bfloat16 (Float16_b tile); d2/d3 are float32 (Float32 tile).
+    constexpr int kRandMax = 1;
+    constexpr uint32_t elems_per_tile = 1024;  // 32x32 tile, format-independent
     auto src0 = create_random_vector_of_bfloat16(f16_tile_size, kRandMax, /*seed=*/0x1001);
     auto src1 = create_random_vector_of_bfloat16(f16_tile_size, kRandMax, /*seed=*/0x1002);
-
-    constexpr uint32_t elems_per_tile = 1024;  // 32x32 tile, format-independent
     auto gen_random_f32 = [&](uint32_t seed) {
         std::vector<uint32_t> packed(elems_per_tile);
         std::mt19937 rng(seed);
@@ -523,13 +519,39 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
     auto in4 = unpack_uint32_vec_into_bfloat16_vec(src4);
     auto in5 = unpack_uint32_vec_into_bfloat16_vec(src5);
 
+    // Face-aware index for a 32x32 tile laid out as 4 faces of 16x16 (face-row-major,
+    // then row-major within face). Matches how the device sees a tile in DRAM/L1.
+    auto face_idx = [](uint32_t row, uint32_t col) -> uint32_t {
+        const uint32_t face = (row / 16) * 2 + (col / 16);
+        const uint32_t r = row % 16;
+        const uint32_t c = col % 16;
+        return face * 256 + r * 16 + c;
+    };
+
+    // Matmul of two face-layout tiles. Inputs are converted to float for the
+    // sum; output is bfloat16-truncated (pack format is Float16_b).
+    auto matmul_face = [&](auto& A, auto& B) -> std::vector<bfloat16> {
+        std::vector<bfloat16> C(elems_per_tile);
+        for (uint32_t i = 0; i < 32; ++i) {
+            for (uint32_t j = 0; j < 32; ++j) {
+                float sum = 0.0f;
+                for (uint32_t k = 0; k < 32; ++k) {
+                    sum += static_cast<float>(A[face_idx(i, k)]) * static_cast<float>(B[face_idx(k, j)]);
+                }
+                C[face_idx(i, j)] = bfloat16(sum);
+            }
+        }
+        return C;
+    };
+
+    auto golden_op0 = matmul_face(in0, in1);
+    auto golden_op1 = matmul_face(in2, in3);
+    auto golden_op2 = matmul_face(in4, in5);
     std::vector<bfloat16> golden(kNumOps * elems_per_tile);
     for (uint32_t e = 0; e < elems_per_tile; ++e) {
-        // OP[0] and OP[2] inputs are bfloat16; OP[1] inputs are float32. All ops produce
-        // bfloat16 output (pack format is Float16_b), so golden is bfloat16-truncated either way.
-        golden[0 * elems_per_tile + e] = bfloat16(static_cast<float>(in0[e]) + static_cast<float>(in1[e]));
-        golden[1 * elems_per_tile + e] = bfloat16(in2[e] + in3[e]);
-        golden[2 * elems_per_tile + e] = bfloat16(static_cast<float>(in4[e]) + static_cast<float>(in5[e]));
+        golden[0 * elems_per_tile + e] = golden_op0[e];
+        golden[1 * elems_per_tile + e] = golden_op1[e];
+        golden[2 * elems_per_tile + e] = golden_op2[e];
     }
     auto packed_golden = pack_vector<uint32_t, bfloat16>(golden);
 
@@ -573,15 +595,15 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
         tt::DataFormat out_fmt;
     };
     const std::array<OpStep, kNumOps> op_chain = {{
-        {"OP[0]: add_tiles(d0, d1) -> dst[0]  [Float16_b srcA/B, initial binary_op_init_common]",
+        {"OP[0]: matmul_tiles(d0, d1) -> dst[0]  [Float16_b srcA/B]",
          tt::DataFormat::Float16_b,
          tt::DataFormat::Float16_b,
          tt::DataFormat::Float16_b},
-        {"OP[1]: add_tiles(d2, d3) -> dst[1]  [Float32 srcA/B, reconfig_data_format Float16_b->Float32]",
+        {"OP[1]: matmul_tiles(d2, d3) -> dst[1]  [Float32 srcA/B, reconfig Float16_b->Float32]",
          tt::DataFormat::Float32,
          tt::DataFormat::Float32,
          tt::DataFormat::Float16_b},
-        {"OP[2]: add_tiles(d4, d5) -> dst[2]  [Float16_b srcA/B, reconfig_data_format Float32->Float16_b]",
+        {"OP[2]: matmul_tiles(d4, d5) -> dst[2]  [Float16_b srcA/B, reconfig Float32->Float16_b]",
          tt::DataFormat::Float16_b,
          tt::DataFormat::Float16_b,
          tt::DataFormat::Float16_b},
