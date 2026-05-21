@@ -201,7 +201,9 @@ def pack_bfp8_b(tensor, block_size=16, num_faces=4, face_r_dim=16):
         List of packed bytes: [exponents...] + [mantissas...]
     """
     flattened_tensor = _bfp_prepare_blocks(tensor, block_size, num_faces, face_r_dim)
-    exponents, mantissas = _bfp_collect_blocks(flattened_tensor, block_size, float_to_bfp8_block)
+    exponents, mantissas = _bfp_collect_blocks(
+        flattened_tensor, block_size, float_to_bfp8_block
+    )
     return exponents + mantissas
 
 
@@ -250,7 +252,9 @@ def pack_bfp4_b(tensor, block_size=16, num_faces=4, face_r_dim=16):
         List of packed bytes: [exponents...] + [packed_mantissas...]
     """
     flattened_tensor = _bfp_prepare_blocks(tensor, block_size, num_faces, face_r_dim)
-    exponents, all_mantissas = _bfp_collect_blocks(flattened_tensor, block_size, float_to_bfp4_block)
+    exponents, all_mantissas = _bfp_collect_blocks(
+        flattened_tensor, block_size, float_to_bfp4_block
+    )
 
     packed_mantissas = []
     for i in range(0, len(all_mantissas), 2):
@@ -308,7 +312,9 @@ def pack_bfp2_b(tensor, block_size=16, num_faces=4, face_r_dim=16):
         List of packed bytes: [exponents...] + [packed_mantissas...]
     """
     flattened_tensor = _bfp_prepare_blocks(tensor, block_size, num_faces, face_r_dim)
-    exponents, all_mantissas = _bfp_collect_blocks(flattened_tensor, block_size, float_to_bfp2_block)
+    exponents, all_mantissas = _bfp_collect_blocks(
+        flattened_tensor, block_size, float_to_bfp2_block
+    )
 
     packed_mantissas = []
     for i in range(0, len(all_mantissas), 4):
