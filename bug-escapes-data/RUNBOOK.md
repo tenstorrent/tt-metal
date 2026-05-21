@@ -46,6 +46,45 @@ Example: `42847291__1ee8c3ca`
 Before touching any candidate, check `seen-escapes.json`. If ID is present, skip entirely.
 After any verdict (confirmed, refuted, unverifiable), write the ID to `seen-escapes.json`.
 
+### campaign-state.json schema
+
+Top-level: object keyed by `escape_id`. Each entry:
+
+```json
+{
+  "escape_id": "42847291__1ee8c3ca",
+  "status": "bisect_in_progress",
+  "step": "bisect",
+  "test_name": "test_foo::test_bar",
+  "test_filepath": "tests/models/...",
+  "workflow": ".github/workflows/blackhole-e2e-tests.yaml",
+  "job_name": "...",
+  "build_variant": "standard",
+  "bisect_range": ["sha1", "sha2", "..."],
+  "bisect_low": 0,
+  "bisect_high": 12,
+  "bisect_probes": [
+    {"sha": "...", "run_id": 12345678, "result": "FAIL", "dispatched_at": "2026-05-14T02:00:00Z"}
+  ],
+  "fix_commit_sha": null,
+  "before_run_id": null,
+  "after_run_id": null,
+  "dispatch_time": "2026-05-14T02:00:00Z"
+}
+```
+
+Valid `status` values:
+- `bisect_in_progress` — dispatched at least one midpoint probe, bisect not complete
+- `awaiting_verification` — bisect complete, fix_commit_sha known, before/after not yet dispatched
+- `verification_in_progress` — before_run_id and/or after_run_id dispatched, waiting for results
+- `confirmed` — before=FAIL, after=PASS, written to confirmed-escapes.json
+- `refuted` — bisect or verification showed test wasn't broken/fixed by suspected commit
+- `inconclusive_timeout` — a run exceeded 90 min or was cancelled
+- `skipped_*` — pre-filtered out (see seen-escapes.json)
+
+**Recovery rule:** On any session start, for every entry with `status` containing `in_progress`:
+check the run_id via GitHub API before taking any new action. See Context Reset Protocol in MEMORY.md.
+
 ---
 
 ## MANDATORY DISPATCH RULES (Evan's explicit requirements)
@@ -479,6 +518,16 @@ triggers builds that can take 60+ min. Before probing any midpoint:
 4. Only dispatch when no existing run covers the midpoint commit.
 
 **Step 4b — Probe branch dispatch (only when no existing run covers a midpoint)**
+
+**⚠️ DISPATCH SAFETY GUARD — check before EVERY workflow_dispatch call:**
+1. Confirm the target `ref` starts with `brain/` — NEVER dispatch on `main`, `ebanerjee/*`, or any non-probe branch
+2. Confirm the branch was just created or verified to contain the pruned YAML — not a stale branch from a previous run
+3. If the branch already exists: check for an existing in-flight or completed run on it before dispatching:
+   ```
+   GET /repos/tenstorrent/tt-metal/actions/runs?branch={branch_name}&per_page=5
+   ```
+   If a run is already queued or in_progress: DO NOT dispatch again — wait for it.
+   If a completed run exists with the same workflow: read its result instead of re-dispatching.
 
 Never modify `test-dispatch.yaml` or any shared workflow. Instead:
 
