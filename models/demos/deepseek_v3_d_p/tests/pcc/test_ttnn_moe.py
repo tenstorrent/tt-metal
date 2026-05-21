@@ -22,7 +22,9 @@ import ttnn
 from conftest import is_galaxy
 from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k26_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import TorchMoe
+from models.demos.deepseek_v3_d_p.tests.model_variants import MOE_MODEL_CONFIGS, apply_gate_overrides_moe
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
     compute_constants,
@@ -54,19 +56,36 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import (
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from tests.ttnn.utils_for_testing import comp_pcc
 
+# Variant configs (DSv3 / Kimi K2.6) live in models/.../tests/model_variants.py.
+# Test selection: `pytest -k dsv3` or `pytest -k kimi`.
+
 
 # dispatch_buffer_capacity_factor below is ceil(N/2) of the most conservative
 # integer N such that dgs*seq*N >= theoretical worst-case dispatch buffer.
 # Real traffic never approaches the worst case, so half-capacity is sufficient.
 @pytest.mark.parametrize(
-    "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, gate_fallback_mode, run_pcc_check",
+    (
+        "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, "
+        "dispatch_buffer_capacity_factor, gate_fallback_mode, run_pcc_check, model_config"
+    ),
     [
         # fmt: off
+<<<<<<< HEAD
         pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 8, GateComputeMode.DEVICE, False, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-device-256"),
         pytest.param(1600, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 8, 5, GateComputeMode.HOST_ALL, True, marks=pytest.mark.timeout(900)),
         pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 5, GateComputeMode.HOST_ALL, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.skipif(not is_galaxy(), reason="Requires Galaxy")]),
         # Perf: LB 8x1 dispatch/combine proxy. 64 experts + 2 picks/tok match one glx column's per-chip traffic (balanced_load=800).
         pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 2, 8, GateComputeMode.HOST_ALL, False, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-host-64"),
+=======
+        # DSv3 cases
+        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 5, GateComputeMode.DEVICE,   False, MOE_MODEL_CONFIGS["dsv3"], marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="dsv3-device-256-3200"),
+        pytest.param(1600, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,  64, 8, 5, GateComputeMode.HOST_ALL, True,  MOE_MODEL_CONFIGS["dsv3"], marks=pytest.mark.timeout(900),                                       id="dsv3-host-64-1600"),
+        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 5, GateComputeMode.HOST_ALL, True,  MOE_MODEL_CONFIGS["dsv3"], marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.skipif(not is_galaxy(), reason="Requires Galaxy")], id="dsv3-host-256-3200"),
+        # Kimi K2.6 cases
+        pytest.param( 128, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, KimiK26Config.NUM_ROUTED_EXPERTS, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.HOST_ALL, True, MOE_MODEL_CONFIGS["kimi"], marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi-1k"),
+        pytest.param( 640, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, KimiK26Config.NUM_ROUTED_EXPERTS, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.HOST_ALL, True, MOE_MODEL_CONFIGS["kimi"], marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi-5k"),
+        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, KimiK26Config.NUM_ROUTED_EXPERTS, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.HOST_ALL, True, MOE_MODEL_CONFIGS["kimi"], marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi-25k"),
+>>>>>>> b2c6fcdbc4c (Add parametrized Kimi tests)
         # fmt: on
     ],
 )
@@ -130,6 +149,7 @@ def test_ttnn_moe(
     num_experts_per_tok,
     dispatch_buffer_capacity_factor,
     run_pcc_check,
+    model_config,
     num_links,
     topology,
     gate_fallback_mode,
@@ -137,9 +157,16 @@ def test_ttnn_moe(
     """
     Test TtMoe PCC against TorchMoe reference.
 
-    Both TtMoe and TorchMoe create their gate internally from gate_weights
-    and run forward(x) end-to-end. Validation compares intermediates directly.
+    The gate's grouping (n_group, topk_group) and route_scale are patched in
+    place from `model_config` after TT/Torch MoE construction. DSv3 values
+    are a no-op patch; Kimi values switch the gate routing rule.
     """
+
+    is_kimi = model_config.n_expert_groups == 1
+    if is_kimi:
+        if tuple(mesh_device.shape) != (8, 4):
+            pytest.skip("Kimi MoE PCC tests only run on mesh 8x4")
+        assert gate_fallback_mode == GateComputeMode.HOST_ALL, "Kimi gate (n_group=1) is only supported via HOST_ALL"
 
     # Scoped: only the linear-8 / 64-expert / HOST_ALL / pcc-check case OOMs without this.
     # Cached all-gather semaphores get placed at the wrong offset for that specific config.
@@ -303,6 +330,7 @@ def test_ttnn_moe(
             shared_expert_weights=shared_expert_weights,
             gate_weights=gate_weights,
         )
+        apply_gate_overrides_moe(tt_moe=None, torch_moe=torch_moe, model_config=model_config)
         profiler.end("torch_moe_creation")
 
         profiler.start("torch_forward")
@@ -340,6 +368,7 @@ def test_ttnn_moe(
         weight_cache_path=moe_cache_dir,
         layer_idx=layer_idx,
     )
+    apply_gate_overrides_moe(tt_moe=tt_moe, torch_moe=None, model_config=model_config)
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_moe_creation")
 
@@ -532,6 +561,27 @@ def test_ttnn_moe(
 
     logger.debug("Note: Final PCC expected to be low until full pipeline is enabled")
     profiler.end("pcc_validation")
+
+    # Variant-specific HF upstream cross-check. Each model uses the HF reference
+    # from its own folder (DSv3 vendor or Kimi vendor), bound in MOE_MODEL_CONFIGS.
+    if model_config.hf_ref is not None and tt_output is not None:
+        profiler.start("hf_ref_xref")
+        logger.info("Running upstream HF MoE reference (cross-check)")
+        hf_out = model_config.hf_ref(
+            gate_weights=gate_weights,
+            routed_expert_weights=all_routed_weights,
+            shared_expert_weights=shared_expert_weights,
+            x=x,
+        )
+        tt_final_host = ttnn.to_torch(tt_output, mesh_composer=get_tp_mesh_composer(mesh_device), dtype=torch.bfloat16)
+        _, hf_pcc = comp_pcc(hf_out.float(), tt_final_host.float())
+        if hf_pcc >= model_config.hf_pcc_threshold:
+            logger.info(f"[hf_output] PASSED - PCC: {hf_pcc:.6f} (threshold: {model_config.hf_pcc_threshold})")
+        else:
+            logger.error(f"[hf_output] FAILED - PCC: {hf_pcc:.6f} below threshold {model_config.hf_pcc_threshold}")
+            all_passed = False
+        del hf_out
+        profiler.end("hf_ref_xref")
 
     assert all_passed, "One or more comparisons failed. See logs for details."
 

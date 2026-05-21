@@ -17,6 +17,7 @@ from ttnn.device import is_blackhole
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
+from models.demos.deepseek_v3_d_p.tests.model_variants import MLA_MODEL_CONFIGS
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
@@ -26,6 +27,9 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
 )
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from tests.ttnn.utils_for_testing import assert_with_pcc
+
+# Variant configs (DSv3 / Kimi K2.6) live in models/.../tests/model_variants.py.
+# Test selection: `pytest -k dsv3` or `pytest -k kimi`.
 
 
 def run_mla_inference(
@@ -145,6 +149,7 @@ def run_mla_inference(
 @pytest.mark.parametrize("seq_len", [128 * 1024, 100 * 1024], ids=["seq128k", "seq100k"])
 @pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
 @pytest.mark.parametrize("is_balanced", [False, True], ids=["sequential", "balanced"])
+@pytest.mark.parametrize("model_config", MLA_MODEL_CONFIGS.values(), ids=MLA_MODEL_CONFIGS.keys())
 @pytest.mark.timeout(0)  # Disable timeout — first run computes and caches CPU reference for large seq lengths
 def test_mla(
     use_pretrained,
@@ -157,6 +162,7 @@ def test_mla(
     is_ci_env,
     is_ci_v2_env,
     device_params,
+    model_config,
 ):
     """
     Test comparing reference and TT MLA modules with same weights.
@@ -167,9 +173,13 @@ def test_mla(
         mesh_device: Mesh device fixture
         seq_len: Sequence length
     """
+    # Variant-specific skips: Kimi only supports random weights today.
+    if model_config.config_builder is not None and use_pretrained:
+        pytest.skip(f"{model_config.name}: only random-weight path is supported")
+
     weight_type = "Pretrained" if use_pretrained else "Random"
     logger.info("=" * 80)
-    logger.info(f"Test: Reference vs TT Comparison ({weight_type} Weights)")
+    logger.info(f"Test: Reference vs TT Comparison ({weight_type} Weights, model_config={model_config.name})")
     logger.info("=" * 80)
 
     # Conditionally load fixtures - only load what we need!
@@ -177,7 +187,9 @@ def test_mla(
         config, sd = request.getfixturevalue("pretrained_transformer_weights")
         weights = sd["layers"][0]["mla_weights"]
     else:
-        config, weights = request.getfixturevalue("random_weights")
+        # `random_weights_for_model` dispatches on `model_config.config_builder`:
+        # DSv3 falls back to the `config_only` fixture; Kimi calls the Kimi builder.
+        config, weights = request.getfixturevalue("random_weights_for_model")
 
     fabric_config = device_params.get("fabric_config", ttnn.FabricConfig.FABRIC_1D)
     topology = ttnn.Topology.Ring if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING else ttnn.Topology.Linear
@@ -251,7 +263,7 @@ def test_mla(
     if skip_host_comparison == False:
         # Check for cached reference results to avoid expensive host attention computation
         cache_dir = Path(os.environ.get("DEEPSEEK_V3_MLA_REF_CACHE", "/tmp/deepseek_v3_mla_ref_cache"))
-        cache_key = f"{weight_type.lower()}_seq{seq_len}"
+        cache_key = f"{model_config.name}_{weight_type.lower()}_seq{seq_len}"
         cache_path = cache_dir / f"{cache_key}.pt"
 
         if cache_path.exists():
@@ -341,6 +353,22 @@ def test_mla(
             ref_kvpe[:, :, :, kv_lora_rank:], tt_kvpe_cache_torch[:, :, :, kv_lora_rank:], 0.99
         )
         logger.info(f"KVPE cache PE part PCC is {pe_pcc_message}")
+
+        # Variant-specific HF upstream cross-check. Each model uses the HF
+        # reference from its own folder (DSv3 vendor or Kimi vendor), bound in
+        # MLA_MODEL_CONFIGS. Catches drift between tt-metal's `create_mla_reference`
+        # and the canonical upstream MLA forward.
+        if model_config.hf_ref is not None:
+            logger.info(f"Running upstream HF MLA reference (model={model_config.name})")
+            position_ids_hf = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
+            hf_out = model_config.hf_ref(
+                weights=weights,
+                hidden_states=hidden_states,
+                position_ids=position_ids_hf,
+            )
+            _, hf_pcc_message = assert_with_pcc(hf_out.unsqueeze(0), tt_output_cpu, model_config.hf_pcc_threshold)
+            logger.info(f"[hf_output] PCC: {hf_pcc_message}")
+            del hf_out
     else:
         logger.info("Starting synchronize call")
         ttnn.synchronize_device(mesh_device)

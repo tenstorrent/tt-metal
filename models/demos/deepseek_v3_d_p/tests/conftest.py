@@ -554,6 +554,61 @@ def random_weights(config_only):
 
 
 @pytest.fixture
+def random_weights_for_model(model_config, config_only):
+    """Model-variant aware twin of `random_weights`.
+
+    `model_config` comes from the test's parametrize (e.g. MlaModelConfig). If
+    `model_config.config_builder` is None, falls back to the DSv3 `config_only`
+    fixture; otherwise calls the builder to construct the variant's config (e.g.
+    Kimi K2.6). Weight tensors are shaped by whichever config is selected.
+
+    Kept separate from `random_weights` so existing tests are unaffected.
+    """
+    builder = getattr(model_config, "config_builder", None)
+    config = builder() if builder is not None else config_only
+
+    torch.manual_seed(42)
+    std = config.initializer_range
+
+    weights = {
+        "q_a_proj.weight": (torch.randn(config.q_lora_rank, config.hidden_size) * std).to(torch.bfloat16),
+        "q_a_layernorm.weight": torch.ones(config.q_lora_rank, dtype=torch.bfloat16),
+        "q_b_proj.weight": (
+            torch.randn(
+                config.num_attention_heads * (config.qk_nope_head_dim + config.qk_rope_head_dim),
+                config.q_lora_rank,
+            )
+            * std
+        ).to(torch.bfloat16),
+        "kv_a_proj_with_mqa.weight": (
+            torch.randn(
+                config.kv_lora_rank + config.qk_rope_head_dim,
+                config.hidden_size,
+            )
+            * std
+        ).to(torch.bfloat16),
+        "kv_a_layernorm.weight": torch.ones(config.kv_lora_rank, dtype=torch.bfloat16),
+        "kv_b_proj.weight": (
+            torch.randn(
+                config.num_attention_heads * (config.qk_nope_head_dim + config.v_head_dim),
+                config.kv_lora_rank,
+            )
+            * std
+        ).to(torch.bfloat16),
+        "o_proj.weight": (
+            torch.randn(
+                config.hidden_size,
+                config.num_attention_heads * config.v_head_dim,
+            )
+            * std
+        ).to(torch.bfloat16),
+    }
+
+    logger.info(f"Generated {len(weights)} random weight tensors using config dimensions")
+    return config, weights
+
+
+@pytest.fixture
 def pretrained_transformer_weights(model_path, hf_config, state_dict, request):
     """
     Dequantized pretrained weights for N-layer transformer in TT state_dict format.
