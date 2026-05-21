@@ -318,7 +318,13 @@ def _terminate_components(mesh_device, host_io, forwarders):
     ttnn.synchronize_device(mesh_device)
 
 
-@pytest.mark.parametrize("tensor_size_bytes,fifo_size,num_iterations", [(64, 128, 64)])
+@pytest.mark.parametrize(
+    "tensor_size_bytes,fifo_size,num_iterations",
+    [
+        (64, 128, 64),
+        (32768, 65536, 64),
+    ],
+)
 @pytest.mark.parametrize("h2d_mode", [ttnn.H2DMode.HOST_PUSH, ttnn.H2DMode.DEVICE_PULL])
 @pytest.mark.parametrize(
     ("topology_config", "mesh_device", "device_params"),
