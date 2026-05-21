@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "sfpi.h"
+
 namespace ckernel::sfpu
 {
 

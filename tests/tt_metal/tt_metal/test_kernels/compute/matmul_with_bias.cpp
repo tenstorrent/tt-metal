@@ -9,7 +9,7 @@
 
 #include "api/compute/matmul.h"
 #include "api/compute/bcast.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     uint32_t block_tile_dim = get_compile_time_arg_val(0);
@@ -23,9 +23,9 @@ void kernel_main() {
 
     acquire_dst();
 
-    experimental::CircularBuffer cb0(tt::CBIndex::c_0);
-    experimental::CircularBuffer cb1(tt::CBIndex::c_1);
-    experimental::CircularBuffer cb16(tt::CBIndex::c_16);
+    CircularBuffer cb0(tt::CBIndex::c_0);
+    CircularBuffer cb1(tt::CBIndex::c_1);
+    CircularBuffer cb16(tt::CBIndex::c_16);
 
     mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
     for (uint32_t b = 0; b < block_cnt; ++b) {
@@ -55,8 +55,8 @@ void kernel_main() {
 
     // add bias in2 to intermed0 and load to dst
     if (with_bias) {
-        experimental::CircularBuffer cb24(tt::CBIndex::c_24);
-        experimental::CircularBuffer cb2(tt::CBIndex::c_2);
+        CircularBuffer cb24(tt::CBIndex::c_24);
+        CircularBuffer cb2(tt::CBIndex::c_2);
         // Pack out
         cb24.reserve_back(out_block_tile_cnt);
         for (uint32_t i = 0; i < out_block_tile_cnt; ++i) {

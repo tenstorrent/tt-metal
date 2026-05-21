@@ -6,7 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include <tt-metalium/constants.hpp>
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
-#include "experimental/noc_semaphore.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/conv3d_weight_share.hpp"
 
 template <
@@ -17,7 +17,7 @@ template <
     typename WeightReader,
     typename WeightCB>
 FORCE_INLINE void read_weight_block(
-    experimental::Noc noc,
+    Noc noc,
     const WeightReader& weight_reader,
     const WeightCB& cb_weight,
     uint32_t c_in_offset_t,
@@ -94,16 +94,16 @@ void kernel_main() {
     const uint32_t mcast_num_iters = get_arg_val<uint32_t>(argidx++);
     const uint32_t num_workers = get_arg_val<uint32_t>(argidx++);
 
-    experimental::Noc noc;
+    Noc noc;
     experimental::CB cb_out(cb_matmul_result_rm);
     experimental::CB cb_weight(cb_weight_tiled);
     experimental::CB cb_bias(cb_bias_tiled);
     experimental::CB cb_interm(cb_matmul_interm_tiled);
     experimental::CB cb_reduction(cb_reduction_tiled);
     experimental::CB cb_ack(cb_worker_ack_back);
-    experimental::Semaphore<> sem(semaphore_id);
-    experimental::Semaphore<> weights_mcast_sender_sem(weights_mcast_sender_sem_id);
-    experimental::Semaphore<> weights_mcast_receiver_sem(weights_mcast_receiver_sem_id);
+    Semaphore<> sem(semaphore_id);
+    Semaphore<> weights_mcast_sender_sem(weights_mcast_sender_sem_id);
+    Semaphore<> weights_mcast_receiver_sem(weights_mcast_receiver_sem_id);
 
     // Reducer coordinates and worker core coordinates are only present when num_workers > 0
     uint32_t reducer_core_x = 0, reducer_core_y = 0;
@@ -180,9 +180,9 @@ void kernel_main() {
 
                             const uint32_t weight_block_bytes = weight_tiles * tile_bytes;
                             const uint32_t local_addr = cb_weight.get_write_ptr();
-                            experimental::UnicastEndpoint ep;
+                            UnicastEndpoint ep;
                             noc.async_write(
-                                experimental::use<experimental::CircularBuffer::AddrSelector::WRITE_PTR>(cb_weight),
+                                use<CircularBuffer::AddrSelector::WRITE_PTR>(cb_weight),
                                 ep,
                                 weight_block_bytes,
                                 {.offset_bytes = 0},
@@ -215,9 +215,9 @@ void kernel_main() {
                         // (~324 KiB → ~20 × 16 KiB on BH) amortize per-burst setup.
                         const uint32_t weight_block_bytes = weight_tiles * tile_bytes;
                         const uint32_t local_addr = cb_weight.get_write_ptr();
-                        experimental::MulticastEndpoint mcast_dst;
-                        noc.async_write_multicast<experimental::Noc::McastMode::EXCLUDE_SRC>(
-                            experimental::use<experimental::CircularBuffer::AddrSelector::WRITE_PTR>(cb_weight),
+                        MulticastEndpoint mcast_dst;
+                        noc.async_write_multicast<Noc::McastMode::EXCLUDE_SRC>(
+                            use<CircularBuffer::AddrSelector::WRITE_PTR>(cb_weight),
                             mcast_dst,
                             weight_block_bytes,
                             mcast_num_dests,
@@ -236,7 +236,7 @@ void kernel_main() {
                         // not a destination, so the data already in cb_weight from the DRAM read
                         // is what compute consumes.
                         weights_mcast_receiver_sem.set(VALID);
-                        weights_mcast_receiver_sem.set_multicast<experimental::Noc::McastMode::EXCLUDE_SRC>(
+                        weights_mcast_receiver_sem.set_multicast<Noc::McastMode::EXCLUDE_SRC>(
                             noc,
                             mcast_bbox_start_x,
                             mcast_bbox_start_y,
@@ -315,7 +315,7 @@ void kernel_main() {
                                         cb_reduction.reserve_back(output_tiles);
                                         const uint16_t worker_x = worker_core_xs[worker_idx];
                                         const uint16_t worker_y = worker_core_ys[worker_idx];
-                                        experimental::UnicastEndpoint ep;
+                                        UnicastEndpoint ep;
                                         noc.async_read(
                                             ep,
                                             cb_reduction,

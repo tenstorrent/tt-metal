@@ -93,10 +93,25 @@ def test_batch_norm_tests(
         if check_var:
             tt_updated_var = ttnn.to_torch(var_tensor)
 
+    # PyTorch 2.11+ requires running_mean and running_var to both be None or both not-None.
+    # When only one stat is requested (e.g. check_mean=True, check_var=False), supply a neutral
+    # dummy for the missing stat in the reference call. Assertions still only cover the stats
+    # that were actually generated.
+    channels = input_shapes[1]
+    ref_dtype = in_data.dtype
+    ref_mean_data = (
+        mean_data
+        if mean_data is not None
+        else (torch.zeros(channels, dtype=ref_dtype) if var_data is not None else None)
+    )
+    ref_var_data = (
+        var_data if var_data is not None else (torch.ones(channels, dtype=ref_dtype) if mean_data is not None else None)
+    )
+
     torch_result = torch.nn.functional.batch_norm(
         input=in_data,
-        running_mean=mean_data,
-        running_var=var_data,
+        running_mean=ref_mean_data,
+        running_var=ref_var_data,
         weight=weight_data,
         bias=bias_data,
         training=training,
@@ -105,10 +120,9 @@ def test_batch_norm_tests(
     )
     assert_numeric_metrics(torch_result, tt_output, pcc_threshold=0.99, rtol=0.1, atol=4.0, frobenius_threshold=0.15)
     if training:
-        channels = input_shapes[1]
         if check_mean:
             assert_numeric_metrics(
-                mean_data.view(1, channels, 1, 1),
+                ref_mean_data.view(1, channels, 1, 1),
                 tt_updated_mean,
                 rtol=0.1,
                 atol=4.0,
@@ -117,7 +131,7 @@ def test_batch_norm_tests(
             )
         if check_var:
             assert_numeric_metrics(
-                var_data.view(1, channels, 1, 1),
+                ref_var_data.view(1, channels, 1, 1),
                 tt_updated_var,
                 rtol=0.1,
                 atol=4.0,
@@ -230,6 +244,8 @@ def test_batch_norm_fp32(
         bias=bias_tensor,
     )
     tt_output = ttnn.to_torch(tt_output_tensor_on_device)
+    # PyTorch 2.11+ requires eps > 0; substitute a negligible positive value for the reference call.
+    ref_eps = eps if eps > 0 else 1e-12
     torch_result = torch.nn.functional.batch_norm(
         input=in_data,
         running_mean=mean_data,
@@ -237,7 +253,7 @@ def test_batch_norm_fp32(
         weight=weight_data,
         bias=bias_data,
         training=training,
-        eps=eps,
+        eps=ref_eps,
     )
     assert_numeric_metrics(torch_result, tt_output, pcc_threshold=0.99, rtol=1e-3, atol=1e-6, frobenius_threshold=0.05)
 
@@ -300,10 +316,25 @@ def test_batch_norm(input_shapes, training, check_mean, check_var, weight, bias,
         if check_var:
             tt_updated_var = ttnn.to_torch(var_tensor)
 
+    # PyTorch 2.11+ requires running_mean and running_var to both be None or both not-None.
+    # When only one stat is requested (e.g. check_mean=True, check_var=False), supply a neutral
+    # dummy for the missing stat in the reference call. Assertions still only cover the stats
+    # that were actually generated.
+    channels = input_shapes[1]
+    ref_dtype = in_data.dtype
+    ref_mean_data = (
+        mean_data
+        if mean_data is not None
+        else (torch.zeros(channels, dtype=ref_dtype) if var_data is not None else None)
+    )
+    ref_var_data = (
+        var_data if var_data is not None else (torch.ones(channels, dtype=ref_dtype) if mean_data is not None else None)
+    )
+
     torch_result = torch.nn.functional.batch_norm(
         input=in_data,
-        running_mean=mean_data,
-        running_var=var_data,
+        running_mean=ref_mean_data,
+        running_var=ref_var_data,
         weight=weight_data,
         bias=bias_data,
         training=training,
@@ -312,10 +343,9 @@ def test_batch_norm(input_shapes, training, check_mean, check_var, weight, bias,
     )
     assert_numeric_metrics(torch_result, tt_output, pcc_threshold=0.99, rtol=0.1, atol=4.0, frobenius_threshold=0.15)
     if training:
-        channels = input_shapes[1]
         if check_mean:
             assert_numeric_metrics(
-                mean_data.view(1, channels, 1, 1),
+                ref_mean_data.view(1, channels, 1, 1),
                 tt_updated_mean,
                 rtol=0.1,
                 atol=4.0,
@@ -324,7 +354,7 @@ def test_batch_norm(input_shapes, training, check_mean, check_var, weight, bias,
             )
         if check_var:
             assert_numeric_metrics(
-                var_data.view(1, channels, 1, 1),
+                ref_var_data.view(1, channels, 1, 1),
                 tt_updated_var,
                 rtol=0.1,
                 atol=4.0,
@@ -679,10 +709,22 @@ def test_batch_norm_mixed_precision(
     var_ref = var_data.float() if var_data is not None else None
     weight_ref = weight_data.float() if weight_data is not None else None
     bias_ref = bias_data.float() if bias_data is not None else None
+    # PyTorch 2.11+ requires running_mean and running_var to both be None or both not-None.
+    # Supply a neutral dummy for the missing stat; assertions still only check the stats actually
+    # generated.
+    channels_ref = input_shapes[1]
+    if mean_ref is None and var_ref is not None:
+        mean_ref_call = torch.zeros(channels_ref, dtype=torch.float32)
+    else:
+        mean_ref_call = mean_ref
+    if var_ref is None and mean_ref is not None:
+        var_ref_call = torch.ones(channels_ref, dtype=torch.float32)
+    else:
+        var_ref_call = var_ref
     torch_result = torch.nn.functional.batch_norm(
         input=in_ref,
-        running_mean=mean_ref,
-        running_var=var_ref,
+        running_mean=mean_ref_call,
+        running_var=var_ref_call,
         weight=weight_ref,
         bias=bias_ref,
         training=training,

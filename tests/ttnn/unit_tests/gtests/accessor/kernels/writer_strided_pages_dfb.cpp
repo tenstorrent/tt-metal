@@ -17,9 +17,9 @@ Runtime args (positional, accessed via get_arg_val):
 DFB binding: local accessor name "my_dfb" (CONSUMER endpoint)
 */
 
-#include "experimental/noc.h"
-#include "experimental/tensor.h"
-#include "experimental/dataflow_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/tensor_accessor.h"
 
 void kernel_main() {
@@ -28,8 +28,8 @@ void kernel_main() {
     uint32_t total_pages = get_arg_val<uint32_t>(1);
 
     auto accessor = TensorAccessor(args_dst, base_addr);
-    experimental::DataflowBuffer buf(dfb::my_dfb);
-    experimental::Noc noc;
+    DataflowBuffer buf(dfb::my_dfb);
+    Noc noc;
     uint32_t page_size = args_dst.get_aligned_page_size();
 
     for (const auto& page : accessor.strided_pages(total_pages)) {

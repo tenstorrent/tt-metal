@@ -3,22 +3,23 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+
 import ttnn
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_model_traced_mesh_shape,
-    create_mesh_device,
-    create_tensor_on_mesh,
-    mesh_tensor_to_torch,
-    reconcile_golden_to_actual,
-)
 
 # Import V2 master config loader and helpers for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import (
     MasterConfigLoader,
     dict_to_memory_config,
 )
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    create_mesh_device,
+    create_tensor_on_mesh,
+    get_model_traced_mesh_shape,
+    mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
+)
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 
 # Override the default timeout in seconds for hang detection.
 # Linear operations with large shapes can take longer, increase timeout
@@ -229,7 +230,7 @@ def run(
     from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
 
     if isinstance(memory_config, dict):
-        memory_config = parse_dict_value("memory_config", memory_config)
+        memory_config = dict_to_memory_config(memory_config) or parse_dict_value("memory_config", memory_config)
     if isinstance(core_grid, dict):
         core_grid = parse_dict_value("core_grid", core_grid)
     if isinstance(compute_kernel_config, dict):
@@ -530,29 +531,32 @@ def run(
         if transpose_b:
             linear_kwargs["transpose_b"] = transpose_b
 
-        if memory_config is not None:
+        # Forward memory_config when master had it (not __ABSENT__)
+        if memory_config != "__ABSENT__" and memory_config is not None:
             linear_kwargs["memory_config"] = memory_config
         elif output_memory_config is not None:
             linear_kwargs["memory_config"] = output_memory_config
 
-        if dtype is not None:
+        _absent = set(kwargs.get("__absent_keys__") or [])
+        if dtype is not None and dtype != "__ABSENT__":
             linear_kwargs["dtype"] = dtype
+        elif dtype is None and "dtype" not in _absent:
+            linear_kwargs["dtype"] = None
 
-        if program_config is not None:
+        if program_config is not None and program_config != "__ABSENT__":
             linear_kwargs["program_config"] = program_config
 
         # Pass compute_kernel_config even when None — the master trace records it
         # when the model explicitly passed it (including None). Use __absent_keys__
         # (injected by execute_test) to distinguish "master had ckc=None" from
         # "master never passed ckc". Falls back to value-based check for older callers.
-        absent_keys = kwargs.get("__absent_keys__", set())
-        if "compute_kernel_config" not in absent_keys:
-            linear_kwargs["compute_kernel_config"] = compute_kernel_config
-        elif compute_kernel_config is not None:
+        if compute_kernel_config is not None and compute_kernel_config != "__ABSENT__":
             linear_kwargs["compute_kernel_config"] = compute_kernel_config
 
-        if core_grid is not None:
+        if core_grid is not None and core_grid != "__ABSENT__":
             linear_kwargs["core_grid"] = core_grid
+        elif core_grid is None and "core_grid" not in _absent:
+            linear_kwargs["core_grid"] = None
 
         if activation is not None:
             linear_kwargs["activation"] = activation
@@ -576,27 +580,7 @@ def run(
                 return ttnn.linear(_a, input_tensor_b=_b, **_kw)
             return ttnn.linear(_a, _b, **_kw)
 
-        try:
-            output_tensor = _do_linear(ttnn_a, ttnn_b, **linear_kwargs)
-        except Exception:
-            ttnn_a, ttnn_b = _make_dram_tensors()
-            # First try keeping program_config so the trace records it (drop only
-            # memory_config + core_grid, which depend on shard layout).
-            fallback_kwargs = {k: v for k, v in linear_kwargs.items() if k not in ("memory_config", "core_grid")}
-            try:
-                output_tensor = _do_linear(ttnn_a, ttnn_b, **fallback_kwargs)
-            except Exception:
-                # Drop program_config too if it's also incompatible.
-                fallback_kwargs2 = {
-                    k: v for k, v in linear_kwargs.items() if k not in ("memory_config", "program_config", "core_grid")
-                }
-                try:
-                    output_tensor = _do_linear(ttnn_a, ttnn_b, **fallback_kwargs2)
-                except Exception:
-                    minimal_kwargs = {"bias": ttnn_bias}
-                    if dtype is not None:
-                        minimal_kwargs["dtype"] = dtype
-                    output_tensor = _do_linear(ttnn_a, ttnn_b, **minimal_kwargs)
+        output_tensor = _do_linear(ttnn_a, ttnn_b, **linear_kwargs)
 
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
 

@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 using uint32_t = std::uint32_t;
 
@@ -43,8 +43,8 @@ void kernel_main() {
 
     const auto s0 = TensorAccessor(src_args, src0_addr);
 
-    experimental::CircularBuffer cb(cb_id_in0);
-    experimental::CircularBuffer cb_scratch(1);
+    CircularBuffer cb(cb_id_in0);
+    CircularBuffer cb_scratch(1);
 
     uint32_t intermed_l1_scratch = MISALIGNED ? cb_scratch.get_write_ptr() : 0;
     volatile tt_l1_ptr uint8_t* intermed_l1_scratch_ptr = (volatile uint8_t*)intermed_l1_scratch;

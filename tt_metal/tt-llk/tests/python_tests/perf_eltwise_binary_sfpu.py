@@ -15,7 +15,7 @@ from helpers.llk_params import (
 from helpers.param_config import input_output_formats, parametrize
 from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import calculate_tile_and_face_counts
+from helpers.stimuli_generator_v2 import calculate_tile_and_face_counts
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     ITERATIONS,

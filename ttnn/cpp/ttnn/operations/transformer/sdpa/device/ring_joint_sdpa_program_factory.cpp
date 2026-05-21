@@ -9,6 +9,8 @@
 #include <optional>
 #include <cmath>
 #include <string>
+#include <deque>
+#include <limits>
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
@@ -1212,12 +1214,16 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         }
     }
 
-    // K multicast pass: check if full grid can use 2D multicast for K
-    // Enabled when NHK == 1 (MLA mode) and B == 1 (single batch)
-    // The logical grid is always a rectangle by construction (CoreRange from 0,0 to grid_size-1)
+    // K multicast pass: one mcast chain per logical row. Each chain's injector is
+    // the greedy max-work core in its row, picked under a FIFO-windowed physical-
+    // column exclusion (window size grid_size.x - 1): successive chains always land
+    // in a column distinct from the previous chain's. On a square grid this gives a
+    // clean diagonal; when grid_size.y > grid_size.x the window cycles columns
+    // naturally (e.g. 3x6 -> cols 0,1,2,0,1,2). Per-core loop padding lets each
+    // chain pad to its own injector's iteration count.
     bool k_mcast_enabled = false;
-    uint32_t max_global_q_count = 0;
     std::string k_mcast_fallback_reason;
+    std::vector<uint32_t> k_chain_max_q(num_cores, 0);  // per-core loop-padding count
 
     if (NHK != 1) {
         // Not MLA mode - no K sharing needed
@@ -1225,58 +1231,103 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         k_mcast_fallback_reason = "B > 1 (multi-batch not supported)";
     } else if (num_cores < 2) {
         k_mcast_fallback_reason = "num_cores < 2";
+    } else if (grid_size.x < 2) {
+        // Each chain would be a singleton (1 core, no sinks) — mcast is degenerate.
+        k_mcast_fallback_reason = "grid_size.x < 2 (singleton chains)";
     } else {
-        // Find injector (core with max work)
-        uint32_t injector_idx = 0;
-        for (uint32_t ci = 0; ci < num_cores; ++ci) {
-            if (core_work[ci].global_q_count > max_global_q_count) {
-                max_global_q_count = core_work[ci].global_q_count;
-                injector_idx = ci;
+        std::vector<uint32_t> chain_injector_idx(grid_size.y, 0);
+        std::vector<uint32_t> chain_max_q(grid_size.y, 0);
+        std::deque<uint32_t> recent_cols;  // FIFO of <= grid.x-1 most-recent claimed phys_x
+
+        bool all_chains_picked = true;
+        for (uint32_t row = 0; row < grid_size.y; ++row) {
+            if (recent_cols.size() >= grid_size.x) {
+                recent_cols.pop_front();
             }
-        }
-
-        if (max_global_q_count == 0) {
-            k_mcast_fallback_reason = "no work (max_global_q_count == 0)";
-        } else {
-            k_mcast_enabled = true;
-            uint32_t num_receivers = num_cores - 1;
-            CoreCoord injector_physical = core_work[injector_idx].physical_core;
-
-            // Get physical bounds from logical grid corners
-            // Logical grid is always rectangular: (0,0) to (grid_size.x-1, grid_size.y-1)
-            CoreCoord phys_start = device->worker_core_from_logical_core(CoreCoord{0, 0});
-            CoreCoord phys_end = device->worker_core_from_logical_core(CoreCoord{grid_size.x - 1, grid_size.y - 1});
-
-            // Configure multicast for ALL cores
-            for (uint32_t ci = 0; ci < num_cores; ++ci) {
-                auto& kc = batch_chain_configs[ci];
-                kc.participates = true;  // All cores participate in K mcast
-                kc.mcast_start = phys_start;
-                kc.mcast_end = phys_end;
-                kc.injector_physical = injector_physical;
-                kc.batch = 0;  // Single batch case
-
-                kc.is_injector = (ci == injector_idx);
-                kc.is_sink = !kc.is_injector;  // All non-injectors are sinks in mcast
-
-                if (kc.is_injector) {
-                    kc.mcast_num_dests = num_receivers;
-                    kc.mcast_sender_wait = num_receivers;
-                    // Injector forwards on every iteration (loop padded to max_q_per_core)
-                    kc.next_core_q_chunks = max_global_q_count;
+            // Row-wide max work. The injector MUST be a core with this max, because
+            // K is read from DRAM by the injector and mcast to all row sinks. If the
+            // injector had fewer real iters than some sink, its padded iters would
+            // read K with an out-of-bounds nb derived from a wrapped global_q_chunk
+            // (in MLA mode K is broadcast across heads, but `nb = global_q_chunk /
+            // (NH*num_q_chunks)` becomes >0 once linear_index exceeds the head span)
+            // and mcast garbage K bytes to sinks that are still on real iters.
+            uint32_t row_max_q = 0;
+            for (uint32_t col = 0; col < grid_size.x; ++col) {
+                const uint32_t ci = row * grid_size.x + col;
+                row_max_q = std::max(row_max_q, core_work[ci].global_q_count);
+            }
+            if (row_max_q == 0) {
+                k_mcast_fallback_reason = fmt::format("row {} has no work", row);
+                all_chains_picked = false;
+                break;
+            }
+            // Among max-work cores in the row, prefer one in an un-claimed column
+            // (keeps the FIFO column cycling for NoC diversity); if all max-work
+            // cores live in excluded columns, fall back to the first one — correctness
+            // (valid K from a real-iter injector) trumps column diversity.
+            uint32_t best_idx = std::numeric_limits<uint32_t>::max();
+            for (uint32_t col = 0; col < grid_size.x; ++col) {
+                const uint32_t ci = row * grid_size.x + col;
+                if (core_work[ci].global_q_count != row_max_q) {
+                    continue;
+                }
+                const uint32_t phys_x = core_work[ci].physical_core.x;
+                const bool excluded = (std::find(recent_cols.begin(), recent_cols.end(), phys_x) != recent_cols.end());
+                if (!excluded) {
+                    best_idx = ci;
+                    break;
+                }
+                if (best_idx == std::numeric_limits<uint32_t>::max()) {
+                    best_idx = ci;  // first excluded max-work core, kept as fallback
                 }
             }
+            chain_injector_idx[row] = best_idx;
+            chain_max_q[row] = row_max_q;
+            recent_cols.push_back(core_work[best_idx].physical_core.x);
+        }
 
-            log_debug(
-                tt::LogOp,
-                "K mcast enabled: {} cores, injector=core {} (max_q={}), rect ({},{}) to ({},{})",
-                num_cores,
-                injector_idx,
-                max_global_q_count,
-                phys_start.x,
-                phys_start.y,
-                phys_end.x,
-                phys_end.y);
+        if (all_chains_picked) {
+            k_mcast_enabled = true;
+            const uint32_t num_receivers = grid_size.x - 1;
+
+            for (uint32_t row = 0; row < grid_size.y; ++row) {
+                const uint32_t injector_idx = chain_injector_idx[row];
+                const uint32_t chain_max_q_v = chain_max_q[row];
+                const CoreCoord injector_physical = core_work[injector_idx].physical_core;
+                const CoreCoord phys_start = device->worker_core_from_logical_core(CoreCoord{0, row});
+                const CoreCoord phys_end = device->worker_core_from_logical_core(CoreCoord{grid_size.x - 1, row});
+
+                for (uint32_t col = 0; col < grid_size.x; ++col) {
+                    const uint32_t ci = row * grid_size.x + col;
+                    auto& kc = batch_chain_configs[ci];
+                    kc.participates = true;
+                    kc.mcast_start = phys_start;
+                    kc.mcast_end = phys_end;
+                    kc.injector_physical = injector_physical;
+                    kc.batch = 0;  // reset: unicast K pass may have set this to a real batch id
+                    kc.is_injector = (ci == injector_idx);
+                    kc.is_sink = !kc.is_injector;
+                    if (kc.is_injector) {
+                        kc.mcast_num_dests = num_receivers;
+                        kc.mcast_sender_wait = num_receivers;
+                        kc.next_core_q_chunks = chain_max_q_v;
+                    }
+                    k_chain_max_q[ci] = chain_max_q_v;
+                }
+
+                log_debug(
+                    tt::LogOp,
+                    "K mcast row {}: injector core {} phys=({},{}) max_q={}, rect ({},{})-({},{})",
+                    row,
+                    injector_idx,
+                    injector_physical.x,
+                    injector_physical.y,
+                    chain_max_q_v,
+                    phys_start.x,
+                    phys_start.y,
+                    phys_end.x,
+                    phys_end.y);
+            }
         }
     }
 
@@ -1377,7 +1428,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         // Batch chain (K chain in MLA mode): 18 args + 1 for loop padding (only when NHK == 1)
         if (k_uses_batch_chain) {
             batch_chain.append_to_args(reader_args);
-            reader_args.push_back(max_global_q_count);  // For K mcast loop padding
+            reader_args.push_back(k_chain_max_q[i]);
         }
 
         // Inject fused-op synchronization RT args (AllGather) here; it will append to reader_args

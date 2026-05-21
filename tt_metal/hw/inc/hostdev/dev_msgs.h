@@ -274,6 +274,7 @@ enum debug_assert_type_t {
     DebugAssertRtaOutOfBounds = 8,
     DebugAssertCrtaOutOfBounds = 9,
     DebugAssertHwFault = 10,
+    DebugAssertNCriscNOCPacketTagClearedTripped = 11,
 };
 
 enum debug_transaction_type_t { TransactionRead = 0, TransactionWrite = 1, TransactionAtomic = 2, TransactionNumTypes };

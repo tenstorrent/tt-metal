@@ -43,6 +43,7 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
+#include "tt_metal/distributed/pinned_memory_cache.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal::distributed::test {
@@ -55,6 +56,22 @@ static_assert(std::is_move_assignable_v<MeshBuffer>, "MeshBuffer should be move 
 
 using MeshBufferTest2x4 = MeshDevice2x4Fixture;
 using MeshBufferTestSuite = GenericMeshDeviceFixture;
+
+class ScopedPinnedMemoryCacheLimit {
+public:
+    explicit ScopedPinnedMemoryCacheLimit(size_t limit_bytes) :
+        previous_limit_bytes_(
+            tt::tt_metal::MetalContext::instance().rtoptions().get_pinned_memory_cache_limit_bytes()) {
+        tt::tt_metal::MetalContext::instance().rtoptions().set_pinned_memory_cache_limit_bytes(limit_bytes);
+    }
+
+    ~ScopedPinnedMemoryCacheLimit() {
+        tt::tt_metal::MetalContext::instance().rtoptions().set_pinned_memory_cache_limit_bytes(previous_limit_bytes_);
+    }
+
+private:
+    size_t previous_limit_bytes_;
+};
 
 struct DeviceLocalShardedBufferTestConfig {
     Shape2D num_pages_per_core;
@@ -882,6 +899,112 @@ TEST_F(MeshBufferTestSuite, EnqueueReadWithDistributedHostBufferAndPinnedMemory)
     std::vector<uint32_t> dst_aligned(dst_ptr_aligned, dst_ptr_aligned + (bytes_per_device / sizeof(uint32_t)));
 
     EXPECT_EQ(dst_aligned, src);
+}
+
+TEST_F(MeshBufferTestSuite, PinnedMemoryCacheUpgradesCoverageForSameHostBuffer) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_pinned_memory_cache_limit_bytes() == 0) {
+        GTEST_SKIP() << "Pinned memory cache is disabled";
+        return;
+    }
+    if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
+        GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+        return;
+    }
+
+    if (mesh_device_->num_devices() < 2) {
+        GTEST_SKIP() << "Requires at least two devices in the mesh";
+        return;
+    }
+
+    constexpr int device_read_align = 64;
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    ASSERT_TRUE(device_read_align % hal.get_read_alignment(HalMemType::HOST) == 0)
+        << "Source vector alignment must be equal to PCIE read alignment: " << hal.get_read_alignment(HalMemType::HOST)
+        << std::endl;
+
+    const uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
+    const auto num_words = single_tile_size / sizeof(uint32_t);
+    auto src =
+        std::make_shared<std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, device_read_align>>>(num_words, 0);
+    std::iota(src->begin(), src->end(), 0);
+
+    HostBuffer host_buffer(tt::stl::Span<uint32_t>(src->data(), num_words), MemoryPin(src));
+
+    const auto first_coord = *MeshCoordinateRange(mesh_device_->shape()).begin();
+    const auto single_coord_range = MeshCoordinateRangeSet(MeshCoordinateRange(first_coord, first_coord));
+    auto single_coord_pin =
+        experimental::PinnedMemoryCache::instance().try_pin(*mesh_device_, single_coord_range, host_buffer, true);
+    ASSERT_TRUE(single_coord_pin);
+    EXPECT_EQ(single_coord_pin->get_device_ids().size(), 1);
+    single_coord_pin.reset();
+
+    const auto full_range = MeshCoordinateRangeSet(MeshCoordinateRange(mesh_device_->shape()));
+    auto full_mesh_pin =
+        experimental::PinnedMemoryCache::instance().try_pin(*mesh_device_, full_range, host_buffer, true);
+    ASSERT_TRUE(full_mesh_pin);
+    EXPECT_EQ(full_mesh_pin->get_device_ids().size(), mesh_device_->num_devices());
+
+    auto repeated_full_mesh_pin =
+        experimental::PinnedMemoryCache::instance().try_pin(*mesh_device_, full_range, host_buffer, true);
+    ASSERT_TRUE(repeated_full_mesh_pin);
+    EXPECT_EQ(repeated_full_mesh_pin.get(), full_mesh_pin.get());
+}
+
+TEST_F(MeshBufferTestSuite, PinnedMemoryCacheEvictsOldestEntryToStayWithinLimit) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_pinned_memory_cache_limit_bytes() == 0) {
+        GTEST_SKIP() << "Pinned memory cache is disabled";
+        return;
+    }
+    const auto pinning_params = experimental::GetMemoryPinningParameters(*mesh_device_);
+    if (!pinning_params.can_map_to_noc) {
+        GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+        return;
+    }
+    if (pinning_params.max_pins < 2) {
+        GTEST_SKIP() << "Requires enough pin slots to keep two cache entries resident";
+        return;
+    }
+
+    constexpr int device_read_align = 64;
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    ASSERT_TRUE(device_read_align % hal.get_read_alignment(HalMemType::HOST) == 0)
+        << "Source vector alignment must be equal to PCIE read alignment: " << hal.get_read_alignment(HalMemType::HOST)
+        << std::endl;
+
+    const uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
+    const auto num_words = single_tile_size / sizeof(uint32_t);
+    using AlignedVector = std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, device_read_align>>;
+    auto src0 = std::make_shared<AlignedVector>(num_words, 0);
+    auto src1 = std::make_shared<AlignedVector>(num_words, 1);
+    auto src2 = std::make_shared<AlignedVector>(num_words, 2);
+
+    HostBuffer host_buffer0(tt::stl::Span<uint32_t>(src0->data(), num_words), MemoryPin(src0));
+    HostBuffer host_buffer1(tt::stl::Span<uint32_t>(src1->data(), num_words), MemoryPin(src1));
+    HostBuffer host_buffer2(tt::stl::Span<uint32_t>(src2->data(), num_words), MemoryPin(src2));
+
+    const auto first_coord = *MeshCoordinateRange(mesh_device_->shape()).begin();
+    const auto single_coord_range = MeshCoordinateRangeSet(MeshCoordinateRange(first_coord, first_coord));
+    ScopedPinnedMemoryCacheLimit cache_limit(2 * single_tile_size);
+
+    auto first_pin =
+        experimental::PinnedMemoryCache::instance().try_pin(*mesh_device_, single_coord_range, host_buffer0, true);
+    ASSERT_TRUE(first_pin);
+    std::weak_ptr<experimental::PinnedMemory> first_weak = first_pin;
+    first_pin.reset();
+
+    auto second_pin =
+        experimental::PinnedMemoryCache::instance().try_pin(*mesh_device_, single_coord_range, host_buffer1, true);
+    ASSERT_TRUE(second_pin);
+    std::weak_ptr<experimental::PinnedMemory> second_weak = second_pin;
+    second_pin.reset();
+
+    auto third_pin =
+        experimental::PinnedMemoryCache::instance().try_pin(*mesh_device_, single_coord_range, host_buffer2, true);
+    ASSERT_TRUE(third_pin);
+    third_pin.reset();
+
+    EXPECT_TRUE(first_weak.expired());
+    EXPECT_FALSE(second_weak.expired());
 }
 
 TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRangeUnaligned) {

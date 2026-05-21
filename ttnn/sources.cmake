@@ -189,6 +189,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.cpp
     cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.cpp
     cpp/ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/deepseek_moe_fast_reduce_nc_nanobind.cpp
+    cpp/ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc_fused/deepseek_moe_fast_reduce_nc_fused_nanobind.cpp
     cpp/ttnn/operations/experimental/reshape/view_nanobind.cpp
     cpp/ttnn/operations/experimental/slice_write/slice_write_nanobind.cpp
     cpp/ttnn/operations/experimental/padded_slice/padded_slice_nanobind.cpp
@@ -274,7 +275,6 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_distributed_nanobind.cpp
     cpp/ttnn/operations/normalization/softmax/softmax_nanobind.cpp
     cpp/ttnn/operations/pool/generic/generic_pools_nanobind.cpp
-    cpp/ttnn/operations/pool/global_avg_pool/global_avg_pool_nanobind.cpp
     cpp/ttnn/operations/pool/grid_sample/grid_sample_nanobind.cpp
     cpp/ttnn/operations/pool/rotate/rotate_nanobind.cpp
     cpp/ttnn/operations/pool/upsample/upsample_nanobind.cpp
@@ -452,6 +452,7 @@ set(TTNNCPP_API_HEADERS
     api/ttnn/graph/levelized_graph.hpp
     api/ttnn/mesh_device_operation_adapter.hpp
     api/ttnn/mesh_device_operation_utils.hpp
+    api/ttnn/metal2_artifacts.hpp
     api/ttnn/operation.hpp
     api/ttnn/operation_concepts.hpp
     api/ttnn/reports.hpp

@@ -208,7 +208,7 @@ void kernel_main() {
 
                     fast_tilize_init(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
                     fast_tilize_block(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
-                    fast_tilize_uninit(pre_tilize_cb_id, out_cb_id);
+                    fast_tilize_uninit(pre_tilize_cb_id, out_cb_id, in_ntiles_c);
 
                     out_cb.push_back(in_ntiles_c);
                     pre_tilize_cb.pop_front(TILE_HEIGHT * in_ntiles_c);
@@ -227,7 +227,7 @@ void kernel_main() {
 
                     constexpr uint32_t PACKER_FACE_R_DIM_STICK = 1;  // face_r_dim = 1 => one-row faces (stick packing)
                     if constexpr (is_output_block_format) {
-                        PACK((llk_pack_untilize_hw_configure_disaggregated<DST_ACCUM_MODE, false /*untilize*/>(
+                        PACK((llk_pack_untilize_hw_configure_disaggregated<DST_ACCUM_MODE, ckernel::PackMode::Default>(
                             pre_tilize_cb_id, PACKER_FACE_R_DIM_STICK, num_faces_in_output_tile)));
                     }
                     PACK((llk_pack_untilize_init<max_tiles_per_iter, max_tiles_per_iter, false, false, TILE_C_DIM>(

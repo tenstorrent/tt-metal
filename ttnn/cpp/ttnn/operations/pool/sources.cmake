@@ -5,7 +5,6 @@ set(TTNN_OP_POOL_SRCS
     generic/device/pool_multi_core_program_factory.cpp
     generic/device/pool_op.cpp
     generic/generic_pools.cpp
-    global_avg_pool/global_avg_pool.cpp
     grid_sample/device/grid_sample_device_operation.cpp
     grid_sample/device/grid_sample_bilinear_program_factory.cpp
     grid_sample/device/grid_sample_nearest_program_factory.cpp

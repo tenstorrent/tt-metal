@@ -146,7 +146,7 @@ def run_decode_reduce_scatter_deepseek_impl(
 
 @pytest.mark.requires_device(["TG"])
 @pytest.mark.skipif(
-    (os.getenv("USE_TORUS_MODE") is None),
+    (os.getenv("USE_TORUS_MODE", "0") == "0"),
     reason=f"Requires ring fabric",
 )
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)

@@ -20,22 +20,26 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "llk_device_fixture.hpp"
+#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
+#include <tt-metalium/experimental/host_api.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "test_golden_impls.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include "tt_metal/test_utils/env_vars.hpp"
+#include <umd/device/types/arch.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/float32.hpp"
-#include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include <umd/device/types/arch.hpp>
 
 namespace tt::tt_metal {
 class IDevice;
@@ -200,18 +204,25 @@ std::vector<bfloat16> gold_broadcast(
     return golden;
 }
 
+constexpr uint32_t k_num_tiles_broadcast_test = 1;
+
+auto CreateDramBufferForPageSize(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t page_size_bytes, uint32_t num_pages) {
+    distributed::DeviceLocalBufferConfig dram_config{
+        .page_size = page_size_bytes, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
+    distributed::ReplicatedBufferConfig buffer_config{.size = page_size_bytes * num_pages};
+    return distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+}
+
 void run_single_core_broadcast(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const BroadcastConfig& test_config) {
-    if (test_config.eltwise_op == EltwiseOp::SUB && test_config.broadcast_dim == BroadcastDim::ROW &&
-        test_config.api_convention != ApiConvention::DEFAULT) {
-        GTEST_SKIP();  // FIXME sub_tiles_bcast_rows and sub_bcast_rows_init_short dont exist
-    }
-
-    distributed::MeshWorkload workload;
+    auto& cq = mesh_device->mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshWorkload workload;
     Program program = tt_metal::CreateProgram();
-    auto& cq = mesh_device->mesh_command_queue();
+    workload.add_program(device_range, std::move(program));
+    auto& program_ = workload.get_programs().at(device_range);
 
     CoreCoord core = {0, 0};
 
@@ -224,33 +235,70 @@ void run_single_core_broadcast(
 
     uint32_t single_tile_size = tile_width * tile_height * sizeof(bfloat16);
 
-    distributed::DeviceLocalBufferConfig dram_config{
-        .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
-    distributed::ReplicatedBufferConfig buffer_config{.size = single_tile_size};
-
-    auto src_a_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+    auto src_a_dram_buffer = CreateDramBufferForPageSize(mesh_device, single_tile_size, k_num_tiles_broadcast_test);
     uint32_t dram_buffer_src_a_addr = src_a_dram_buffer->address();
-    tt_metal::CircularBufferConfig l1_src_a_cb_config =
-        tt_metal::CircularBufferConfig(single_tile_size, {{0, tt::DataFormat::Float16_b}})
-            .set_page_size(0, single_tile_size)
-            .set_tile_dims(0, tile_dims);
-    tt_metal::CreateCircularBuffer(program, core, l1_src_a_cb_config);
 
-    auto src_b_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+    auto src_b_dram_buffer = CreateDramBufferForPageSize(mesh_device, single_tile_size, k_num_tiles_broadcast_test);
     uint32_t dram_buffer_src_b_addr = src_b_dram_buffer->address();
-    tt_metal::CircularBufferConfig l1_src_b_cb_config =
-        tt_metal::CircularBufferConfig(single_tile_size, {{1, tt::DataFormat::Float16_b}})
-            .set_page_size(1, single_tile_size)
-            .set_tile_dims(1, tile_dims);
-    tt_metal::CreateCircularBuffer(program, core, l1_src_b_cb_config);
 
-    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+    auto dst_dram_buffer = CreateDramBufferForPageSize(mesh_device, single_tile_size, k_num_tiles_broadcast_test);
     uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
-    tt_metal::CircularBufferConfig l1_dst_cb_config =
-        tt_metal::CircularBufferConfig(single_tile_size, {{16, tt::DataFormat::Float16_b}})
-            .set_page_size(16, single_tile_size)
-            .set_tile_dims(16, tile_dims);
-    tt_metal::CreateCircularBuffer(program, core, l1_dst_cb_config);
+
+    auto* device = mesh_device->get_devices().empty() ? nullptr : mesh_device->get_devices().front();
+    TT_FATAL(device != nullptr, "mesh_device has no backing devices");
+    const bool is_quasar = device->arch() == ARCH::QUASAR;
+
+    uint32_t inp0_dfb = 0;
+    uint32_t inp1_dfb = 0;
+    uint32_t out_dfb = 0;
+
+    if (!is_quasar) {
+        tt_metal::CircularBufferConfig l1_src_a_cb_config =
+            tt_metal::CircularBufferConfig(single_tile_size, {{0, tt::DataFormat::Float16_b}})
+                .set_page_size(0, single_tile_size)
+                .set_tile_dims(0, tile_dims);
+        tt_metal::CreateCircularBuffer(program_, core, l1_src_a_cb_config);
+
+        tt_metal::CircularBufferConfig l1_src_b_cb_config =
+            tt_metal::CircularBufferConfig(single_tile_size, {{1, tt::DataFormat::Float16_b}})
+                .set_page_size(1, single_tile_size)
+                .set_tile_dims(1, tile_dims);
+        tt_metal::CreateCircularBuffer(program_, core, l1_src_b_cb_config);
+
+        tt_metal::CircularBufferConfig l1_dst_cb_config =
+            tt_metal::CircularBufferConfig(single_tile_size, {{16, tt::DataFormat::Float16_b}})
+                .set_page_size(16, single_tile_size)
+                .set_tile_dims(16, tile_dims);
+        tt_metal::CreateCircularBuffer(program_, core, l1_dst_cb_config);
+    } else {
+        // Match Quasar eltwise binary bring-up: one entry per tile, explicit input vs output formats.
+        tt_metal::experimental::dfb::DataflowBufferConfig common_input_dfb_config = {
+            .entry_size = single_tile_size,
+            .num_entries = k_num_tiles_broadcast_test,
+            .num_producers = 1,
+            .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .num_consumers = 1,
+            .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .enable_implicit_sync = false,
+            .data_format = tt::DataFormat::Float16_b,
+            .tile = tile_dims,
+        };
+        tt_metal::experimental::dfb::DataflowBufferConfig common_output_dfb_config = {
+            .entry_size = single_tile_size,
+            .num_entries = k_num_tiles_broadcast_test,
+            .num_producers = 1,
+            .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .num_consumers = 1,
+            .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .enable_implicit_sync = false,
+            .data_format = tt::DataFormat::Float16_b,
+            .tile = tile_dims,
+        };
+
+        inp0_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, common_input_dfb_config);
+        inp1_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, common_input_dfb_config);
+        out_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, common_output_dfb_config);
+    }
 
     std::map<std::string, std::string> defines = {
         {"BCAST_LLKOP", eltwise_op_to_type.at(test_config.eltwise_op)},
@@ -296,46 +344,99 @@ void run_single_core_broadcast(
 
     log_info(tt::LogTest, "Compute function is {}", defines["BCAST_OP"]);
 
-    auto reader_kernel = tt_metal::CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary.cpp",
-        core,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+    std::vector<uint32_t> writer_compile_args = {
+        is_quasar ? out_dfb : static_cast<uint32_t>(tt::CBIndex::c_16),
+    };
+    if (!is_quasar) {
+        TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_args);
+    }
 
-    auto writer_kernel = tt_metal::CreateKernel(
-        program,
-        "tt_metal/kernels/dataflow/writer_unary.cpp",
-        core,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+    KernelHandle reader_kernel, writer_kernel, binary_kernel;
 
-    tt_metal::CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/compute/broadcast.cpp",
-        core,
-        tt_metal::ComputeConfig{.math_fidelity = test_config.math_fidelity, .compile_args = {}, .defines = defines});
+    std::vector<uint32_t> reader_cta;
+    std::vector<uint32_t> writer_cta;
+    std::vector<uint32_t> compute_cta;
 
+    if (is_quasar) {
+        reader_cta = {inp0_dfb, inp1_dfb};
+        reader_kernel = tt_metal::experimental::quasar::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary.cpp",
+            core,
+            tt_metal::experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1, .compile_args = reader_cta, .defines = defines});
+
+        writer_cta = {out_dfb};
+        writer_kernel = tt_metal::experimental::quasar::CreateKernel(
+            program_,
+            "tt_metal/kernels/dataflow/writer_unary.cpp",
+            core,
+            tt_metal::experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1, .compile_args = writer_cta});
+
+        compute_cta = {inp0_dfb, inp1_dfb, out_dfb};
+        binary_kernel = tt_metal::experimental::quasar::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/compute/broadcast.cpp",
+            core,
+            tt_metal::experimental::quasar::QuasarComputeConfig{
+                .num_threads_per_cluster = 1,
+                .math_fidelity = test_config.math_fidelity,
+                .compile_args = compute_cta,
+                .defines = defines});
+
+        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+            program_, inp0_dfb, reader_kernel, binary_kernel);
+        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+            program_, inp1_dfb, reader_kernel, binary_kernel);
+        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+            program_, out_dfb, binary_kernel, writer_kernel);
+    } else {
+        reader_kernel = tt_metal::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary.cpp",
+            core,
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+
+        writer_kernel = tt_metal::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
+            core,
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt_metal::NOC::RISCV_0_default,
+                .compile_args = writer_compile_args});
+
+        binary_kernel = tt_metal::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/compute/broadcast.cpp",
+            core,
+            tt_metal::ComputeConfig{
+                .math_fidelity = test_config.math_fidelity, .compile_args = {}, .defines = defines});
+    }
+
+    // reader_binary.cpp runtime layout (indices 0..4).
     tt_metal::SetRuntimeArgs(
-        program,
+        program_,
         reader_kernel,
         core,
         {
             (uint32_t)dram_buffer_src_a_addr,
-            (uint32_t)0,  // dram bank id
+            (uint32_t)0,
             (uint32_t)dram_buffer_src_b_addr,
-            (uint32_t)0,  // dram bank id
-            (uint32_t)1,  // num tiles
+            (uint32_t)0,
+            (uint32_t)k_num_tiles_broadcast_test,
         });
 
     tt_metal::SetRuntimeArgs(
-        program,
+        program_,
         writer_kernel,
         core,
         {
             (uint32_t)dram_buffer_dst_addr,
-            (uint32_t)0,  // dram bank id
-            (uint32_t)1,  // num tiles
+            (uint32_t)0,  // dram bank id (currently always 0)
+            (uint32_t)k_num_tiles_broadcast_test,
         });
 
     std::vector<bfloat16> input0 = generate_uniform_random_vector<bfloat16>(
@@ -369,8 +470,7 @@ void run_single_core_broadcast(
     distributed::WriteShard(cq, src_a_dram_buffer, tilized_input0, zero_coord);
     distributed::WriteShard(cq, src_b_dram_buffer, tilized_input1, zero_coord);
 
-    workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::EnqueueMeshWorkload(cq, workload, is_quasar);
     distributed::Finish(cq);
 
     std::vector<uint32_t> dest_buffer_data;
@@ -390,6 +490,9 @@ class BroadcastParameterizedDeviceFixture
       public testing::WithParamInterface<unit_tests::compute::broadcast::BroadcastConfig> {};
 
 TEST_P(BroadcastParameterizedDeviceFixture, TensixComputeSingleTileBroadcast) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Quasar uses TensixComputeBinaryBroadcastQuasarDfb";
+    }
     unit_tests::compute::broadcast::BroadcastConfig test_config = GetParam();
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
@@ -449,9 +552,6 @@ INSTANTIATE_TEST_SUITE_P(
         (BroadcastConfig){ApiConvention::SHORT_INIT, EltwiseOp::ADD, BroadcastDim::COL, TileShape::TINY_TILE_16x32},
         (BroadcastConfig){ApiConvention::SHORT_INIT, EltwiseOp::SUB, BroadcastDim::COL, TileShape::TINY_TILE_16x32},
         (BroadcastConfig){ApiConvention::SHORT_INIT, EltwiseOp::MUL, BroadcastDim::COL, TileShape::TINY_TILE_16x32},
-        (BroadcastConfig){ApiConvention::SHORT_INIT, EltwiseOp::ADD, BroadcastDim::COL, TileShape::TINY_TILE_16x32},
-        (BroadcastConfig){ApiConvention::SHORT_INIT, EltwiseOp::SUB, BroadcastDim::COL, TileShape::TINY_TILE_16x32},
-        (BroadcastConfig){ApiConvention::SHORT_INIT, EltwiseOp::MUL, BroadcastDim::COL, TileShape::TINY_TILE_16x32},
         (BroadcastConfig){ApiConvention::SHORT_BOTH, EltwiseOp::ADD, BroadcastDim::COL, TileShape::TINY_TILE_16x32},
         (BroadcastConfig){ApiConvention::SHORT_BOTH, EltwiseOp::SUB, BroadcastDim::COL, TileShape::TINY_TILE_16x32},
         (BroadcastConfig){ApiConvention::SHORT_BOTH, EltwiseOp::MUL, BroadcastDim::COL, TileShape::TINY_TILE_16x32},
@@ -485,5 +585,38 @@ INSTANTIATE_TEST_SUITE_P(
                           TileShape::FULL_TILE,
                           MathFidelity::HiFi4,
                           20}));  // Row 20
+
+TEST_F(QuasarMeshDeviceSingleCardFixture, TensixComputeBinaryBroadcastQuasarDfb) {
+    for (uint8_t op = uint8_t(EltwiseOp::ADD); op <= uint8_t(EltwiseOp::MUL); op++) {
+        for (uint8_t dim = uint8_t(BroadcastDim::ROW); dim <= uint8_t(BroadcastDim::SCALAR); dim++) {
+            for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
+                // MathFidelity : {0, 2, 3, 4};
+                if (math_fid == 1) {
+                    continue;
+                }
+                if (!(EltwiseOp(op) == EltwiseOp::ADD && BroadcastDim(dim) == BroadcastDim::ROW &&
+                      MathFidelity(math_fid) == MathFidelity::LoFi)) {
+                    // TODO (#38092): Remove when we can run back to back tests on Quasar
+                    continue;
+                }
+                unit_tests::compute::broadcast::BroadcastConfig cfg = {
+                    .api_convention = ApiConvention::DEFAULT,
+                    .eltwise_op = EltwiseOp(op),
+                    .broadcast_dim = BroadcastDim(dim),
+                    .tile_shape = TileShape::FULL_TILE,
+                    .math_fidelity = MathFidelity(math_fid),
+                    .bcast_row_idx = 0,
+                };
+                log_info(
+                    tt::LogTest,
+                    "Quasar binary broadcast DFB op={} dim={} math_fid={}",
+                    eltwise_op_to_type.at(EltwiseOp(op)),
+                    broadcast_dim_to_type.at(BroadcastDim(dim)),
+                    math_fid);
+                unit_tests::compute::broadcast::run_single_core_broadcast(this->devices_.at(0), cfg);
+            }
+        }
+    }
+}
 
 }  // namespace tt::tt_metal

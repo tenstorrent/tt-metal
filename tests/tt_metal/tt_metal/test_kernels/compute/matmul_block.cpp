@@ -6,10 +6,24 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
 #ifdef ARCH_QUASAR
-#include "experimental/dataflow_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #endif
 
 void kernel_main() {
+#ifdef ARCH_QUASAR
+    constexpr uint32_t block_tile_dim = get_arg(args::block_tile_dim);
+    constexpr uint32_t dst_tile_rows = get_arg(args::dst_tile_rows);
+    constexpr uint32_t dst_tile_cols = get_arg(args::dst_tile_cols);
+    constexpr uint32_t block_cnt = get_arg(args::block_cnt);
+    constexpr uint32_t in0_block_tile_cnt = get_arg(args::in0_block_tile_cnt);
+    constexpr uint32_t in1_block_tile_cnt = get_arg(args::in1_block_tile_cnt);
+    constexpr uint32_t out_block_tile_cnt = get_arg(args::out_block_tile_cnt);
+
+    DataflowBuffer dfb0(dfb::in0);
+    DataflowBuffer dfb1(dfb::in1);
+    DataflowBuffer dfb_out(dfb::out);
+#else
     uint32_t block_tile_dim = get_compile_time_arg_val(0);
     uint32_t dst_tile_rows = get_compile_time_arg_val(1);
     uint32_t dst_tile_cols = get_compile_time_arg_val(2);
@@ -17,14 +31,6 @@ void kernel_main() {
     uint32_t in0_block_tile_cnt = get_compile_time_arg_val(4);
     uint32_t in1_block_tile_cnt = get_compile_time_arg_val(5);
     uint32_t out_block_tile_cnt = get_compile_time_arg_val(6);
-
-#ifdef ARCH_QUASAR
-    constexpr uint32_t dfb0_id = get_compile_time_arg_val(7);
-    constexpr uint32_t dfb1_id = get_compile_time_arg_val(8);
-    constexpr uint32_t dfb_out_id = get_compile_time_arg_val(9);
-    experimental::DataflowBuffer dfb0(dfb0_id);
-    experimental::DataflowBuffer dfb1(dfb1_id);
-    experimental::DataflowBuffer dfb_out(dfb_out_id);
 #endif
 
 #if (TEST_INIT_SHORT == 1)

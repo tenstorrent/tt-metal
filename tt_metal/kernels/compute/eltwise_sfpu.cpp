@@ -9,25 +9,25 @@
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 
 #ifdef ARCH_QUASAR
-#include "experimental/dataflow_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #else
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #endif
 
 void kernel_main() {
-    uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
-    uint32_t per_core_block_dim = get_compile_time_arg_val(1);
-
 #ifdef ARCH_QUASAR
-    constexpr uint32_t dfb_in_id = get_compile_time_arg_val(2);
-    constexpr uint32_t dfb_out_id = get_compile_time_arg_val(3);
-    experimental::DataflowBuffer buff_in(dfb_in_id);
-    experimental::DataflowBuffer buff_out(dfb_out_id);
+    constexpr uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
+    constexpr uint32_t per_core_block_dim = get_arg(args::per_core_block_dim);
+    DataflowBuffer buff_in(dfb::in);
+    DataflowBuffer buff_out(dfb::out);
     const uint32_t in_id = buff_in.get_id();
     const uint32_t out_id = buff_out.get_id();
 #else
-    experimental::CircularBuffer buff_in(tt::CBIndex::c_0);
-    experimental::CircularBuffer buff_out(tt::CBIndex::c_16);
+    uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
+    uint32_t per_core_block_dim = get_compile_time_arg_val(1);
+    CircularBuffer buff_in(tt::CBIndex::c_0);
+    CircularBuffer buff_out(tt::CBIndex::c_16);
     const uint32_t in_id = tt::CBIndex::c_0;
     const uint32_t out_id = tt::CBIndex::c_16;
 #endif

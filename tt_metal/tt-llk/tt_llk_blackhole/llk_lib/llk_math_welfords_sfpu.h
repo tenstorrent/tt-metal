@@ -10,7 +10,6 @@
 #include "ckernel_include.h"
 #include "ckernel_ops.h"
 #include "ckernel_sfpu.h"
-#include "ckernel_template.h"
 #include "cmath_common.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"

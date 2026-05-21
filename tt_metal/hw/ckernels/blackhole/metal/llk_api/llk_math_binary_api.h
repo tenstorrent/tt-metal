@@ -49,7 +49,14 @@ template <
     MathFidelity math_fidelity,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void llk_math_eltwise_binary(uint dst_index, const bool clear_fp32_dst_acc = true) {
-    LLK_ASSERT((dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "");
+    // DEVICE_PRINT("llk_math_eltwise_binary: dst_index = {}, max dest tiles = {}\n",
+    //     dst_index,
+    //     get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>());
+
+    LLK_ASSERT(
+        (dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()),
+        "llk_math_eltwise_binary: dst index exceeds available dest register capacity. Uncomment the DEVICE_PRINT "
+        "block above and enable DEVICE_PRINT support to inspect the dst index and max dest tile values.");
 
     _llk_math_eltwise_binary_<
         eltwise_binary_type,
@@ -68,7 +75,14 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void llk_math_eltwise_binary(
     const std::uint32_t operand_A, const std::uint32_t operand_B, uint dst_index, const bool clear_fp32_dst_acc) {
-    LLK_ASSERT((dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "");
+    // DEVICE_PRINT("llk_math_eltwise_binary: dst_index = {}, max dest tiles = {}\n",
+    //     dst_index,
+    //     get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>());
+
+    LLK_ASSERT(
+        (dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()),
+        "llk_math_eltwise_binary: dst index exceeds available dest register capacity. Uncomment the DEVICE_PRINT "
+        "block above and enable DEVICE_PRINT support to inspect the dst index and max dest tile values.");
 
     const std::uint32_t operand_id = get_operand_id(operand_A);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);

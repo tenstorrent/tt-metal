@@ -6,13 +6,8 @@ import math
 import torch
 
 from .bfp_format_utils import bfp4b_to_float16b
-from .format_config import (
-    MXFP8_E4M3_MAX_NORMAL,
-    MXFP8_E4M3_MIN_MAGNITUDE,
-    MXFP8_E5M2_MAX_NORMAL,
-    MXFP8_E5M2_MIN_MAGNITUDE,
-    DataFormat,
-)
+from .deprecation import deprecated
+from .format_config import MX_FORMAT_MAX_NORMAL, MX_FORMAT_MIN_MAGNITUDE, DataFormat
 from .llk_params import format_dict
 from .tile_constants import (
     DEFAULT_TILE_C_DIM,
@@ -70,6 +65,11 @@ def generate_random_face(
     if stimuli_format in [DataFormat.MxFp8R, DataFormat.MxFp8P]:
         # MXFP8 optimized stimuli generation
         return _generate_mxfp8_face(stimuli_format, size, const_face, const_value, sfpu)
+    elif stimuli_format == DataFormat.MxFp4:
+        # MXFP4 optimized stimuli generation
+        return _generate_mxfp4_face(
+            size, const_face, const_value, sfpu, negative_values
+        )
     elif stimuli_format not in (DataFormat.Bfp8_b, DataFormat.Bfp4_b):
         if stimuli_format.is_integer():
             if const_face:
@@ -133,6 +133,18 @@ def generate_random_face(
     return srcA_face
 
 
+def _exclude_mx_subnormals(
+    face_data: torch.Tensor, mx_format: DataFormat
+) -> torch.Tensor:
+    """Bump magnitudes below MX_FORMAT_MIN_MAGNITUDE up to that threshold, preserving sign.
+
+    Ensures generated stimuli never land in `mx_format`'s subnormal range. Zeros stay zero.
+    """
+    min_magnitude = MX_FORMAT_MIN_MAGNITUDE[mx_format]
+    bumped = torch.sign(face_data) * min_magnitude
+    return torch.where(face_data.abs() < min_magnitude, bumped, face_data)
+
+
 def _generate_mxfp8_face(stimuli_format, size, const_face, const_value, sfpu):
     """
     Generate test data for MXFP8 formats using normal distribution scaled to format range.
@@ -146,9 +158,9 @@ def _generate_mxfp8_face(stimuli_format, size, const_face, const_value, sfpu):
     # Scale factor: use 5% of format's max normal value
     # This ensures values are well within representable range while maintaining diversity
     if stimuli_format == DataFormat.MxFp8R:
-        scale = 0.05 * MXFP8_E5M2_MAX_NORMAL
+        scale = 0.05 * MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8R]
     else:  # MxFp8P
-        scale = 0.05 * MXFP8_E4M3_MAX_NORMAL
+        scale = 0.05 * MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8P]
 
     face_data = torch.randn(size, dtype=torch.bfloat16) * scale
 
@@ -156,7 +168,51 @@ def _generate_mxfp8_face(stimuli_format, size, const_face, const_value, sfpu):
     if sfpu:
         face_data += 0.1
 
-    return face_data
+    return _exclude_mx_subnormals(face_data, stimuli_format)
+
+
+def _generate_mxfp4_face(size, const_face, const_value, sfpu, negative_values=False):
+    """
+    Generate test data for MXFP4 format (E2M1) using normal distribution scaled to format range.
+
+    MXFP4 E2M1 has a very limited representable range:
+    - Max normal: ±6.0
+    - Min normal: ±1.0
+    - Max/Min subnormal: ±0.5
+
+    Uses conservative scaling (50% of max normal = 3.0) to avoid saturation while creating
+    diverse test data. This larger percentage (vs 5% for FP8) is needed due to FP4's
+    extremely limited range and precision (only 16 possible values).
+
+    Args:
+        size: Number of elements to generate
+        const_face: If True, generate constant values
+        const_value: Value to use if const_face is True
+        sfpu: If True, add SFPU-friendly offset
+        negative_values: If True, include negative values in the distribution
+
+    Returns:
+        torch.Tensor of bfloat16 values suitable for MXFP4 quantization
+    """
+    if const_face:
+        return torch.ones(size, dtype=torch.bfloat16) * const_value
+
+    # Scale factor: use 50% of format's max normal value (6.0)
+    # This gives us a range of approximately [-3.0, 3.0] for normal distribution
+    # which provides good coverage of FP4's representable range without excessive saturation
+    scale = 0.5 * MX_FORMAT_MAX_NORMAL[DataFormat.MxFp4]  # 0.5 * 6.0 = 3.0
+
+    face_data = torch.randn(size, dtype=torch.bfloat16) * scale
+
+    # If negative_values is False, use absolute values to keep data positive
+    if not negative_values:
+        face_data = torch.abs(face_data)
+
+    # Add SFPU-friendly offset if needed
+    if sfpu:
+        face_data += 0.1
+
+    return _exclude_mx_subnormals(face_data, DataFormat.MxFp4)
 
 
 def generate_identity_face_tensor(
@@ -425,35 +481,53 @@ def _clamp_mx_tensors(
     Returns:
         tuple: (clamped_srcA_tensor, clamped_srcB_tensor)
     """
-    # Clamp inputs if both are different MX formats (use more restrictive MxFp8P)
-    if stimuli_format_A.is_mx_format() and stimuli_format_B.is_mx_format():
-        if stimuli_format_A != stimuli_format_B:
-            srcA_tensor = torch.clamp(
-                srcA_tensor, -MXFP8_E4M3_MAX_NORMAL, MXFP8_E4M3_MAX_NORMAL
-            )
-            srcB_tensor = torch.clamp(
-                srcB_tensor, -MXFP8_E4M3_MAX_NORMAL, MXFP8_E4M3_MAX_NORMAL
-            )
+    # Determine the most restrictive clamp format needed
+    clamp_format = None
 
-    # Clamp inputs based on output format to prevent excessive rounding errors
-    if output_format == DataFormat.MxFp8P:
+    # Check if we need to clamp based on mixed input formats
+    if (
+        stimuli_format_A.is_mx_format()
+        and stimuli_format_B.is_mx_format()
+        and stimuli_format_A != stimuli_format_B
+    ):
+        # Use MxFp4 if either input is MxFp4 (most restrictive: ±6.0)
+        # Otherwise use MxFp8P (±448.0, more restrictive than MxFp8R's ±57344.0)
+        if DataFormat.MxFp4 in [stimuli_format_A, stimuli_format_B]:
+            clamp_format = DataFormat.MxFp4
+        else:
+            clamp_format = DataFormat.MxFp8P
+
+    # Check if output format requires more restrictive clamping
+    if output_format in [DataFormat.MxFp4, DataFormat.MxFp8P, DataFormat.MxFp8R]:
+        if clamp_format is None:
+            clamp_format = output_format
+        else:
+            # Use the most restrictive between input-based and output-based clamping
+            format_priority = {
+                DataFormat.MxFp4: 0,
+                DataFormat.MxFp8P: 1,
+                DataFormat.MxFp8R: 2,
+            }
+            if format_priority[output_format] < format_priority[clamp_format]:
+                clamp_format = output_format
+
+    # Apply clamping once if needed
+    if clamp_format is not None:
         srcA_tensor = torch.clamp(
-            srcA_tensor, -MXFP8_E4M3_MAX_NORMAL, MXFP8_E4M3_MAX_NORMAL
+            srcA_tensor,
+            -MX_FORMAT_MAX_NORMAL[clamp_format],
+            MX_FORMAT_MAX_NORMAL[clamp_format],
         )
         srcB_tensor = torch.clamp(
-            srcB_tensor, -MXFP8_E4M3_MAX_NORMAL, MXFP8_E4M3_MAX_NORMAL
-        )
-    elif output_format == DataFormat.MxFp8R:
-        srcA_tensor = torch.clamp(
-            srcA_tensor, -MXFP8_E5M2_MAX_NORMAL, MXFP8_E5M2_MAX_NORMAL
-        )
-        srcB_tensor = torch.clamp(
-            srcB_tensor, -MXFP8_E5M2_MAX_NORMAL, MXFP8_E5M2_MAX_NORMAL
+            srcB_tensor,
+            -MX_FORMAT_MAX_NORMAL[clamp_format],
+            MX_FORMAT_MAX_NORMAL[clamp_format],
         )
 
     return srcA_tensor, srcB_tensor
 
 
+@deprecated("Use generate_stimuli_v2 from helpers.stimuli_generator_v2 instead.")
 def generate_stimuli(
     stimuli_format_A=DataFormat.Float16_b,
     input_dimensions_A=[DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM],
@@ -540,6 +614,7 @@ def generate_stimuli(
     return srcA_tensor, tile_cnt_A, srcB_tensor, tile_cnt_B
 
 
+@deprecated("Use generate_stimuli_v2 from helpers.stimuli_generator_v2 instead.")
 def generate_stimuli_w_tile_dimensions(
     stimuli_format_A=DataFormat.Float16_b,
     input_dimensions_A=[DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM],
@@ -641,10 +716,9 @@ def format_elem_max(data_format: DataFormat) -> float:
 
     Falls back to `torch.finfo(format_dict[data_format]).max` for non-MX formats.
     """
-    if data_format == DataFormat.MxFp8R:
-        return MXFP8_E5M2_MAX_NORMAL
-    if data_format == DataFormat.MxFp8P:
-        return MXFP8_E4M3_MAX_NORMAL
+    if data_format.is_mx_format():
+        return MX_FORMAT_MAX_NORMAL[data_format]
+
     return float(torch.finfo(format_dict[data_format]).max)
 
 
@@ -656,10 +730,9 @@ def _format_elem_min_magnitude(data_format: DataFormat) -> float:
     For MX formats uses the element type's documented minimum magnitude; for other
     formats returns `max(1e-6, finfo(torch_dtype).tiny * 100)`.
     """
-    if data_format == DataFormat.MxFp8P:
-        return MXFP8_E4M3_MIN_MAGNITUDE
-    if data_format == DataFormat.MxFp8R:
-        return MXFP8_E5M2_MIN_MAGNITUDE
+    if data_format.is_mx_format():
+        return MX_FORMAT_MIN_MAGNITUDE[data_format]
+
     return max(1e-6, float(torch.finfo(format_dict[data_format]).tiny) * 100)
 
 

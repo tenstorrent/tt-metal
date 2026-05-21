@@ -14,6 +14,8 @@ struct PagedFillCacheParams {
     const uint32_t batch_idx_fallback;
     const std::optional<std::set<ttnn::MeshCoordinate>> mesh_coords;
     const bool noop = false;  // When true, kernels early exit
+    // Optional per-call block_size override; see PagedUpdateCacheParams::block_size_override.
+    const std::optional<uint32_t> block_size_override = std::nullopt;
 };
 
 struct PagedFillCacheInputs {

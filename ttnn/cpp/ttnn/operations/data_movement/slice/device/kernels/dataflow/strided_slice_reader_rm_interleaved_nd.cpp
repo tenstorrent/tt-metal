@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t dims = get_compile_time_arg_val(1);
@@ -37,9 +37,9 @@ void kernel_main() {
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_out0 = 24;
 
-    // Create experimental CircularBuffers for Device 2.0 API
-    experimental::CircularBuffer cb_in0(cb_id_in0);
-    experimental::CircularBuffer cb_out0(cb_id_out0);
+    // Create CircularBuffers for Device 2.0 API
+    CircularBuffer cb_in0(cb_id_in0);
+    CircularBuffer cb_out0(cb_id_out0);
 
     uint32_t src_buffer_l1_addr = cb_in0.get_write_ptr();
     volatile tt_l1_ptr uint8_t* in_stick = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(src_buffer_l1_addr);

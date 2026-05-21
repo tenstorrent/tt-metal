@@ -36,6 +36,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     PREFILL_WARMUP_MODE_LINEAR_ADDITIVE,
     PREFILL_WARMUP_MODE_LINEAR_MULTIPLES,
     USERS_PER_ROW,
+    align_prefill_padded_seq_len,
     align_up,
     even_int_div,
     get_min_alignment_value_for_prefill,
@@ -1348,9 +1349,7 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
         max_len = max(len(t) for t in tokens_list)
         if self.prefill_max_tokens is not None:
             max_len = min(self.prefill_max_tokens, max_len)  # truncate all sequences to the prefill_max_tokens
-        # Round up to nearest multiple of TILE_SIZE.
-        alignment = ttnn.TILE_SIZE
-        max_len = ((max_len + alignment - 1) // alignment) * alignment
+        max_len = align_prefill_padded_seq_len(max_len, self.mesh_device.shape[0])
 
         pad_id = self._get_pad_id()
 
