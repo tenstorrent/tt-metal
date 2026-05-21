@@ -209,6 +209,7 @@ class CallstackProvider:
         self.full_callstack = full_callstack
         self.gdb_callstack = gdb_callstack
         self.gdb_server = gdb_server
+        self._gdb_lock = threading.Lock()
         self.force_active_eth = force_active_eth
         self._callstack_cache: dict[tuple, CallstacksData] = {}
         self.lock = threading.Lock()  # For thread-safe cache access
@@ -311,16 +312,19 @@ class CallstackProvider:
                     if dispatcher_core_data.kernel_path is not None:
                         elf_paths.append(dispatcher_core_data.kernel_path)
                         offsets.append(dispatcher_core_data.kernel_offset)
-                    gdb_callstack = get_gdb_callstack(location, risc_name, elf_paths, offsets, self.gdb_server)
-                    callstack_with_message = KernelCallstackWithMessage(callstack=gdb_callstack, message=None)
-                    # If GDB failed to get callstack, surface errors and default to top callstack
-                    if len(gdb_callstack) == 0:
-                        error_message = ""
+
+                    with self._gdb_lock:
+                        gdb_callstack = get_gdb_callstack(location, risc_name, elf_paths, offsets, self.gdb_server)
                         if self.gdb_server.error_stream:
                             error_message = f"\n  {self.gdb_server.error_stream.getvalue().strip()}"
                             # Clear after read so we don't repeat the same errors next time
                             self.gdb_server.error_stream.seek(0)
                             self.gdb_server.error_stream.truncate(0)
+                        else:
+                            error_message = ""
+                    if len(gdb_callstack) > 0:
+                        callstack_with_message = KernelCallstackWithMessage(callstack=gdb_callstack, message=None)
+                    else:
                         # Default to top callstack
                         callstack_with_message = get_callstack(
                             location,

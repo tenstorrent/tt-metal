@@ -307,17 +307,24 @@ class DispatcherData:
         key = (location, risc_name)
         with self.lock:
             value = self._core_data_cache.get(key)
-        if value is None:
+        if value is not None:
+            return value
+
+        # Compute outside self.lock so threads on different (location, risc_name) keys
+        # don't serialize on the expensive read_mailboxes / get_core_data hardware reads.
+        # We don't expect different threads running on the same device.
+        # But if that gets broken in the future, in the worst case, two threads may compute
+        # the same key; the cache insert below resolves the race by keeping the first inserted value.
+        with self.lock:
+            mailboxes = self._mailboxes_cache.get(location)
+        if mailboxes is None:
+            mailboxes = self.read_mailboxes(location)
             with self.lock:
-                value = self._core_data_cache.get(key)
-                if value is None:
-                    mailboxes = self._mailboxes_cache.get(location)
-                    if mailboxes is None:
-                        mailboxes = self.read_mailboxes(location)
-                        self._mailboxes_cache[location] = mailboxes
-                    value = self.get_core_data(location, risc_name, mailboxes=mailboxes)
-                    self._core_data_cache[key] = value
-        return value
+                mailboxes = self._mailboxes_cache.setdefault(location, mailboxes)
+
+        value = self.get_core_data(location, risc_name, mailboxes=mailboxes)
+        with self.lock:
+            return self._core_data_cache.setdefault(key, value)
 
     def read_mailboxes(self, location: OnChipCoordinate) -> ElfVariable:
         block_type = self._get_block_type(location)
