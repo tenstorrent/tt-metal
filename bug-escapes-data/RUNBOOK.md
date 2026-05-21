@@ -166,10 +166,65 @@ Top-level structure (array-based, NOT keyed by escape_id):
 }
 ```
 
-**Recovery rule:** On any session start:
-- Check every entry in `bisects_in_progress` — for each `manual_bisect.runs` entry with a `run_id`, poll its GitHub Actions status before dispatching a new probe
-- Check every entry in `verification_in_progress` — for each `before_run_id`/`after_run_id`, poll status before dispatching
-- See Context Reset Protocol in MEMORY.md for full procedure
+---
+
+## Session Start Decision Tree (MANDATORY — run this in order, every activation)
+
+**Step S0 — Announce (first action, no exceptions):**
+```
+send_message:
+  🤖 Bug escape cron activated.
+  Current time: {UTC now}
+  Next activation: {next scheduled UTC time}
+  Checking campaign state...
+```
+
+**Step S1 — Read state:**
+Load `campaign-state.json`. If the file is missing or corrupt, DM Evan and exit.
+
+**Step S2 — Poll in-flight bisect probes:**
+For every entry in `bisects_in_progress`:
+- For each run in `manual_bisect.runs` that has a `run_id` but `result: null`:
+  ```
+  GET /repos/tenstorrent/tt-metal/actions/runs/{run_id}
+  ```
+  - `in_progress` or `queued` → still running, do nothing for this entry
+  - `completed` → read job log, record PASS/FAIL result, advance bisect algorithm:
+    - PASS → set `high = mid - 1`
+    - FAIL → set `low = mid + 1`
+    - If `low == high` or range exhausted → bisect complete, record fix commit, move to `verification_in_progress`
+    - Otherwise → dispatch next midpoint probe (Step 4b)
+
+**Step S3 — Poll in-flight verification runs:**
+For every entry in `verification_in_progress`:
+- Poll `before_run_id` and `after_run_id` (same API call as above)
+- If either is still running → do nothing for this entry
+- If both completed → determine verdict:
+  - BEFORE=FAIL + AFTER=PASS → confirmed: run Step 6 (record + Confluence)
+  - BEFORE=PASS → refuted: mark `refuted` in seen-escapes.json, update Confluence
+  - BEFORE=FAIL + AFTER=FAIL → refuted: same
+  - Either timed out/cancelled → inconclusive: mark `inconclusive_timeout`, schedule retry
+
+**Step S4 — Dispatch pending bisects (only if nothing is blocking):**
+If `bisects_in_progress` has no entries with `result: null` (i.e. nothing actively waiting on hardware):
+- Take the highest-priority entry from `pending`
+- Run Steps 2–3 (layer filter + Opus) if not already done
+- Dispatch bisect probe (Step 4b), move entry from `pending` to `bisects_in_progress`
+- Observe hardware parallelism rules (single-card: parallel OK; T3K/Galaxy: one at a time)
+
+**Step S5 — Fresh scan (only if everything is idle):**
+If `bisects_in_progress` is empty AND `verification_in_progress` is empty AND `pending` is empty:
+- Run Step 1 (Snowflake, last 1 day)
+- If 0 new candidates:
+  ```
+  send_message: "No new candidates found. Campaign idle. Exiting."
+  ```
+  Exit.
+- If new candidates found: run Steps 2–3, add survivors to `pending`, then go to S4.
+
+**Step S6 — Write state and exit:**
+- Update `campaign-state.json` with all changes made this session
+- Post a one-line summary to Slack: what was polled, what advanced, what was dispatched
 
 ---
 
