@@ -65,6 +65,16 @@ def ace_step_needs_split_device(mesh_sku: str | None) -> bool:
     return int(rows) * int(cols) > 1
 
 
+def ace_step_mesh_use_split_ttnn_preprocess(mesh_sku: str | None) -> bool:
+    """Run LM + Qwen + condition on a 1×1 TTNN device before opening the DiT mesh (BH_QB Phase A).
+
+    Set ``ACE_STEP_MESH_HOST_PREPROCESS=1`` to restore legacy CPU ``prepare_condition`` on mesh.
+    """
+    if os.environ.get("ACE_STEP_MESH_HOST_PREPROCESS", "").lower() in ("1", "true", "yes", "on"):
+        return False
+    return ace_step_needs_split_device(mesh_sku)
+
+
 def ace_step_mesh_use_host_temb_precompute(device: Any) -> bool:
     """Precompute timestep embeddings on CPU; device ``time_embed`` linears stall on BH 2×2."""
     return ace_step_device_num_chips(device) > 1
@@ -400,6 +410,12 @@ def ace_step_log_mesh_quality_hints(
     )
     rows, cols = ace_step_mesh_shape(mesh_sku)
     if int(rows) * int(cols) > 1:
+        if ace_step_mesh_use_split_ttnn_preprocess(mesh_sku):
+            print(
+                "[ace_step_v1_5] mesh: split TTNN preprocess (1×1 LM/Qwen/condition) → full mesh DiT/VAE; "
+                "set ACE_STEP_MESH_HOST_PREPROCESS=1 for legacy CPU preprocess",
+                flush=True,
+            )
         print(
             "[ace_step_v1_5] mesh: host APG/ADG + Euler after each DiT step "
             "(DiT trace/eager on device; set ACE_STEP_MESH_HOST_CFG_EULER=0 to disable)",
