@@ -35,24 +35,9 @@ def _pick_safetensors_file(vae_dir: Path) -> Path:
 
 
 def _load_state_dict_torch(path: Path) -> dict[str, Any]:
-    try:
-        from safetensors.torch import load_file
+    from models.demos.ace_step_v1_5.weight_cache import get_torch_state_dict
 
-        return load_file(str(path), device="cpu")
-    except ImportError:
-        import torch
-
-        try:
-            return torch.load(str(path), map_location="cpu", weights_only=True)
-        except TypeError:
-            return torch.load(str(path), map_location="cpu")
-    except Exception:
-        import torch
-
-        try:
-            return torch.load(str(path), map_location="cpu", weights_only=True)
-        except TypeError:
-            return torch.load(str(path), map_location="cpu")
+    return get_torch_state_dict(str(path), component="vae-safetensors")
 
 
 class TtOobleckVaeDecoder:

@@ -18,19 +18,17 @@ from .qwen3_embedding_encoder import Qwen3EmbeddingEncoderConfig, _TtQwen3Encode
 
 
 def load_audio_detokenizer_weights_np(safetensors_path: str) -> Dict[str, np.ndarray]:
-    import torch
-    from safetensors import safe_open
+    from models.demos.ace_step_v1_5.weight_cache import load_prefix_weights_np
 
-    prefixes = (
-        "tokenizer.quantizer.project_out.",
-        "detokenizer.",
+    return load_prefix_weights_np(
+        safetensors_path,
+        (
+            "tokenizer.quantizer.project_out.",
+            "detokenizer.",
+        ),
+        component="audio-code-detokenizer-weights",
+        tag="audio_detokenizer_np",
     )
-    out: Dict[str, np.ndarray] = {}
-    with safe_open(str(safetensors_path), framework="pt", device="cpu") as sf:
-        for k in sf.keys():
-            if k.startswith(prefixes):
-                out[k] = sf.get_tensor(k).detach().to(torch.float32).cpu().numpy()
-    return out
 
 
 _FSQ_LEVELS: tuple[int, ...] = (8, 8, 8, 5, 5, 5)
