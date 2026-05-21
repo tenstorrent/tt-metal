@@ -240,20 +240,22 @@ class TtDeformConv2dV2:
         ttnn.deallocate(grid_xy)
 
         # 4. Apply modulation mask via broadcast multiply.
-        # Reshape to (H*W, K, C_in) and (H*W, K, 1) so the mask broadcasts
-        # across C_in without materializing the full K*C_in expanded tensor.
+        # Reshape to (1, H*W*K, C_in) so the broadcast dimension C_in is tile-aligned
+        # (C_in=256 is a multiple of 32). This avoids the slow K=9 broadcast path and
+        # expensive 3D→2D reshape that together cost ~25ms at L0 (160×160).
         big_tensor_bytes = H_out * W_out * K * C_in * 2  # bf16
         big_mem_config = ttnn.DRAM_MEMORY_CONFIG if big_tensor_bytes > 4 * 1024 * 1024 else ttnn.L1_MEMORY_CONFIG
 
         if samples.memory_config().buffer_type != ttnn.BufferType.DRAM and big_mem_config == ttnn.DRAM_MEMORY_CONFIG:
             samples = ttnn.to_memory_config(samples, big_mem_config)
-        samples_3d = ttnn.reshape(samples, (H_out * W_out, K, C_in))
-        mask_3d = ttnn.reshape(mask_nhwc, (H_out * W_out, K, 1))
-        modulated_3d = ttnn.multiply(samples_3d, mask_3d, memory_config=big_mem_config)
-        ttnn.deallocate(samples_3d)
+        HW_K = H_out * W_out * K
+        samples_flat = ttnn.reshape(samples, (1, HW_K, C_in))
+        mask_flat = ttnn.reshape(mask_nhwc, (1, HW_K, 1))
+        modulated = ttnn.multiply(samples_flat, mask_flat, memory_config=big_mem_config)
+        ttnn.deallocate(samples_flat)
 
         # 5. Final 1x1 weighted sum via matmul.
-        modulated_flat = ttnn.reshape(modulated_3d, (1, H_out * W_out, K * C_in))
+        modulated_flat = ttnn.reshape(modulated, (1, H_out * W_out, K * C_in))
         modulated_tiled = ttnn.to_layout(modulated_flat, ttnn.TILE_LAYOUT, memory_config=big_mem_config)
 
         out_bytes = H_out * W_out * C_out * 2

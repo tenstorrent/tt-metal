@@ -14,11 +14,29 @@ from models.experimental.swin_l.tt.tt_swin_mlp import TtSwinMLP
 class TtSwinBlock:
     """Pre-norm Swin Transformer block: LN -> Attention -> residual -> LN -> MLP -> residual."""
 
-    def __init__(self, device, parameters, dim, num_heads, window_size, shift_size, mlp_ratio=4.0, attn_mask=None):
+    def __init__(
+        self,
+        device,
+        parameters,
+        dim,
+        num_heads,
+        window_size,
+        shift_size,
+        mlp_ratio=4.0,
+        attn_mask=None,
+        use_fused_qkv_split=True,
+    ):
         self.device = device
         self.parameters = parameters
         self.attn = TtSwinAttention(
-            device, parameters["attn"], dim, window_size, shift_size, num_heads, attn_mask=attn_mask
+            device,
+            parameters["attn"],
+            dim,
+            window_size,
+            shift_size,
+            num_heads,
+            attn_mask=attn_mask,
+            use_fused_qkv_split=use_fused_qkv_split,
         )
         self.mlp = TtSwinMLP(device, parameters["mlp"], dim, mlp_ratio=mlp_ratio)
 

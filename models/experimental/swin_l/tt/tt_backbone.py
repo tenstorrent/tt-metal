@@ -77,6 +77,7 @@ class TtSwinLBackbone:
                         shift_size=shift,
                         mlp_ratio=mlp_ratio,
                         attn_mask=mask,
+                        use_fused_qkv_split=(depths[s] <= 4),
                     )
                 )
             self.stages.append(blocks)

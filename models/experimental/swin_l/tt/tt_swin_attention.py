@@ -46,7 +46,9 @@ def roll(tensor, shifts, dims):
 class TtSwinAttention:
     """Shifted window multi-head self-attention using fused SDPA kernel."""
 
-    def __init__(self, device, parameters, dim, window_size, shift_size, num_heads, attn_mask=None):
+    def __init__(
+        self, device, parameters, dim, window_size, shift_size, num_heads, attn_mask=None, use_fused_qkv_split=True
+    ):
         self.device = device
         self.parameters = parameters
         self.dim = dim
@@ -55,6 +57,7 @@ class TtSwinAttention:
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
         self.attn_mask = attn_mask
+        self.use_fused_qkv_split = use_fused_qkv_split
         self._sdpa_mask = None
         self._compute_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -123,27 +126,35 @@ class TtSwinAttention:
         )
         ttnn.deallocate(input_tensor)
 
-        qkv = ttnn.to_layout(qkv, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        q = ttnn.slice(qkv, [0, 0, 0], [B * num_windows, seq_len, C])
-        k = ttnn.slice(qkv, [0, 0, C], [B * num_windows, seq_len, 2 * C])
-        v = ttnn.slice(qkv, [0, 0, 2 * C], [B * num_windows, seq_len, 3 * C])
-        ttnn.deallocate(qkv)
-
-        q = ttnn.to_layout(
-            ttnn.transpose(ttnn.reshape(q, (B * num_windows, seq_len, self.num_heads, self.head_dim)), 1, 2),
-            ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        k = ttnn.to_layout(
-            ttnn.transpose(ttnn.reshape(k, (B * num_windows, seq_len, self.num_heads, self.head_dim)), 1, 2),
-            ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        v = ttnn.to_layout(
-            ttnn.transpose(ttnn.reshape(v, (B * num_windows, seq_len, self.num_heads, self.head_dim)), 1, 2),
-            ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        if self.use_fused_qkv_split:
+            q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
+                qkv,
+                num_heads=self.num_heads,
+                transpose_key=False,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(qkv)
+        else:
+            qkv = ttnn.to_layout(qkv, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            q = ttnn.slice(qkv, [0, 0, 0], [B * num_windows, seq_len, C])
+            k = ttnn.slice(qkv, [0, 0, C], [B * num_windows, seq_len, 2 * C])
+            v = ttnn.slice(qkv, [0, 0, 2 * C], [B * num_windows, seq_len, 3 * C])
+            ttnn.deallocate(qkv)
+            q = ttnn.to_layout(
+                ttnn.transpose(ttnn.reshape(q, (B * num_windows, seq_len, self.num_heads, self.head_dim)), 1, 2),
+                ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            k = ttnn.to_layout(
+                ttnn.transpose(ttnn.reshape(k, (B * num_windows, seq_len, self.num_heads, self.head_dim)), 1, 2),
+                ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            v = ttnn.to_layout(
+                ttnn.transpose(ttnn.reshape(v, (B * num_windows, seq_len, self.num_heads, self.head_dim)), 1, 2),
+                ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
         if self._sdpa_mask is None:
             self._prepare_sdpa_mask(num_windows)
