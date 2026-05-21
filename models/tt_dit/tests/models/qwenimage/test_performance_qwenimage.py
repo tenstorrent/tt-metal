@@ -33,7 +33,7 @@ from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
             ttnn.Topology.Linear,
             1,
             marks=pytest.mark.skip(
-                reason="Disabled by issue #44770: vae_decoding_time perf regression (expected 0.75s, actual 2.69s)"
+                reason="Disabled by issue #44770"
             ),
         ),
         [(4, 8), (2, 1), (4, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 4],
