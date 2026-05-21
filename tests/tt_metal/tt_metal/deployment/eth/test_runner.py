@@ -1,5 +1,6 @@
 from typing import Optional, AsyncIterator, Iterator
 from dataclasses import dataclass, asdict
+from argparse import ArgumentParser
 from dateutil import parser
 from enum import Enum, auto
 import fileinput
@@ -28,6 +29,8 @@ testl1datacmp = re.compile(
 )
 locinfo = "sdev: \[(.*)\], rdev: \[(.*)\], score: \[(.*)\], rcore: \[(.*)\], processor: \[(.*)\]"
 testcheck = re.compile(f"({timeregex}).*Test \| core_check: {locinfo} .*")
+
+print_logs = True
 
 
 class TestCase(str, Enum):
@@ -269,7 +272,8 @@ def parse_setup(l: str) -> Optional[Event]:
 
 
 def parse_line(l: str) -> Optional[Event]:
-    print(f"l: {l}")
+    if print_logs:
+        print(f"l: {l}")
 
     parsers = [
         parse_testdevices,
@@ -353,7 +357,7 @@ def parse_evs(evs: list[Event]) -> Iterator[TestRun]:
             errors = []
             bw = {}
         elif e.typ == EventType.CORES:
-            if test in noprocs and score != "":
+            if (test in noprocs and score != "") or proc != "":
                 links.append(TestedLink(sdev, score, rdev, rcore, proc, bw, errors))
             score = e.extra["score"]
             rcore = e.extra["rcore"]
@@ -365,6 +369,7 @@ def parse_evs(evs: list[Event]) -> Iterator[TestRun]:
                 links.append(TestedLink(sdev, score, rdev, rcore, proc, bw, errors))
             proc = e.extra["proc"]
             bw = {}
+            errors = []
         elif e.typ == EventType.BW:
             bw = e.extra
         elif e.typ == EventType.BWFAIL:
@@ -396,8 +401,141 @@ def prepare_filter(tests: list[TestCase]) -> str:
     return ":".join(map(lambda x: f"*TensixDeploymentEthernet*{x}", tests))
 
 
+def table(title: str, headers: list[str], rows: list[list]) -> str:
+    rows_str = [[str(x) for x in row] for row in rows]
+    all_rows = [headers] + rows_str
+    widths = [max(len(row[i]) for row in all_rows) for i in range(len(headers))]
+
+    sep = "+-" + "-+-".join("-" * w for w in widths) + "-+"
+    out = []
+    out.append("")
+    out.append(title)
+    out.append(sep)
+    out.append("| " + " | ".join(headers[i].ljust(widths[i]) for i in range(len(headers))) + " |")
+    out.append(sep)
+    for row in rows_str:
+        out.append("| " + " | ".join(row[i].ljust(widths[i]) for i in range(len(headers))) + " |")
+    out.append(sep)
+    return "\n".join(out)
+
+
+def shortname(n: str) -> str:
+    return n if "." not in n else n.split(".")[1]
+
+
+def print_summary(runs: list[TestRun]):
+    headers = ["test name", "status"]
+    rows = []
+    for r in runs:
+        rows.append([shortname(r.name), r.status])
+
+    print(table("Test summary", headers, rows))
+
+
+def link_name(l: TestedLink) -> str:
+    names = [
+        f"{l.src_dev}:{l.src_core}",
+        f"{l.dst_dev}:{l.dst_core}",
+    ]
+    return "->".join(sorted(names))
+
+
+def print_test_summary(t: TestCase, runs: list[TestRun]):
+    for r in runs:
+        if not r.name.endswith(t):
+            continue
+
+        links: dict[str, dict] = {}
+        bw = False
+
+        for l in r.links:
+            name = link_name(l)
+            if name not in links:
+                links[name] = {"count": 0, "pass": True, "errors": 0, "bw": 0.0}
+
+            links[name]["count"] += 1
+            if "bw" in l.bw:
+                links[name]["bw"] += l.bw["bw"]
+                bw = True
+
+            if len(l.errors):
+                links[name]["errors"] += 1
+                links[name]["pass"] = False
+
+        headers = ["link name", "test count"]
+        if bw:
+            headers += ["avg bw"]
+        headers += ["errors", "pass"]
+        rows = []
+        for k in sorted(links.keys()):
+            row = [
+                k,
+                links[k]["count"],
+            ]
+
+            if bw:
+                row += [f'{links[k]["bw"] / links[k]["count"]:.3f}']
+
+            row += [links[k]["errors"], "OK" if links[k]["pass"] else "FAIL"]
+            rows.append(row)
+
+        print(table(f"{t} test summary", headers, rows))
+
+
+def print_failing(runs: list[TestRun]):
+    headers = ["test name", "link", "direction", "processor", "errors"]
+    rows = []
+    for r in runs:
+        for l in r.links:
+            if len(l.errors):
+                name = link_name(l)
+                d = f"{l.src_dev}->{l.dst_dev}"
+                errors = "; ".join(json.dumps(e) for e in l.errors)
+                # print(name, l)
+                rows.append([r.name, name, d, l.proc, errors])
+
+    print(table("Failing tests/links", headers, rows))
+
+
+def print_results(runs: list[TestRun]):
+    for t in TestCase:
+        print_test_summary(t, runs)
+    print_summary(runs)
+    print_failing(runs)
+
+
 async def main():
-    filters = prepare_filter([t for t in TestCase])
+    parser = ArgumentParser()
+    parser.add_argument("-t", type=str, help="Comma separated list of tests to run")
+    parser.add_argument("-l", action="store_true", help="List all of the available tests")
+    parser.add_argument("-q", action="store_true", help="Don't print the logs as the tests run")
+    parser.add_argument("-n", action="store_true", help="Don't print the summary")
+    parser.add_argument("-o", type=str, help="Output path for the json file")
+    opts = parser.parse_args()
+
+    tests = [TestCase.LINK_UP, TestCase.BANDWIDTH_BIDIR]
+
+    if opts.l:
+        print("Available tests:")
+        for t in (t.value for t in TestCase):
+            print(f"\t{t}")
+
+        print("Default tests:", ",".join(t.value for t in tests))
+
+        exit()
+
+    if opts.q:
+        global print_logs
+        print_logs = False
+
+    if opts.t:
+        tests = [TestCase(t) for t in opts.t.split(",")]
+    print("Running tests: ", ", ".join(t.value for t in tests))
+
+    outfile = opts.o if opts.o else "out.json"
+    print(f"Writing results to '{outfile}'")
+
+    filters = prepare_filter([t for t in tests])
     program = "build/test/tt_metal/unit_tests_deployment"
     args = [f"--gtest_filter={filters}"]
 
@@ -409,7 +547,9 @@ async def main():
     runs = list(parse_evs(evs))
     # pprint.pp(runs)
     # print(runs_to_json(runs, sort_keys=True, indent=4))
-    runs_to_jsonf("out.json", runs, sort_keys=True, indent=4)
+    if not opts.n:
+        print_results(runs)
+    runs_to_jsonf(outfile, runs, sort_keys=True, indent=4)
 
 
 if __name__ == "__main__":
