@@ -44,13 +44,13 @@ constexpr Rev operator|(Rev a, Rev b)
 
 void run_kernel(RUNTIME_PARAMETERS)
 {
-    DEVICE_PRINT("unpack: i8={} u8={} i16={} u16={}\n", (std::int8_t)-1, (std::uint8_t)255, (std::int16_t)-100, (std::uint16_t)65535);
-    DEVICE_PRINT("unpack: str={}\n", CTSTR("_unpack"));
-    DEVICE_PRINT("unpack: enum={}\n", Color::Green);
-    DEVICE_PRINT("unpack: flag={}\n", Perm::R | Perm::X);
-    DEVICE_PRINT("unpack: flag_full={:#}\n", Perm::R | Perm::W);
-    DEVICE_PRINT("unpack: flag_unk={}\n", static_cast<Perm>(0x18));
-    DEVICE_PRINT("unpack: flag_rev={}\n", Rev::X | Rev::Y | Rev::Z);
+    DEVICE_PRINT("unpack: i8={} u8={} i16={} u16={}", (std::int8_t)-1, (std::uint8_t)255, (std::int16_t)-100, (std::uint16_t)65535);
+    DEVICE_PRINT("unpack: str={}", CTSTR("_unpack"));
+    DEVICE_PRINT("unpack: enum={}", Color::Green);
+    DEVICE_PRINT("unpack: flag={}", Perm::R | Perm::X);
+    DEVICE_PRINT("unpack: flag_full={:#}", Perm::R | Perm::W);
+    DEVICE_PRINT("unpack: flag_unk={}", static_cast<Perm>(0x18));
+    DEVICE_PRINT("unpack: flag_rev={}", Rev::X | Rev::Y | Rev::Z);
 }
 
 #endif
@@ -60,18 +60,18 @@ void run_kernel(RUNTIME_PARAMETERS)
 void run_kernel(RUNTIME_PARAMETERS)
 {
     // Print a value from each type category.
-    DEVICE_PRINT("math: i32={} u32={}\n", (std::int32_t)-1, (std::uint32_t)65536);
-    DEVICE_PRINT("math: float={}\n", 1.0f);
-    DEVICE_PRINT("math: bool={} {}\n", true, false);
-    DEVICE_PRINT("math: ptr={}\n", reinterpret_cast<std::uint32_t*>(0xDEADBEEF));
-    DEVICE_PRINT("math: str={}\n", CTSTR("_math"));
-    DEVICE_PRINT("math: hex={:08x}\n", (std::uint32_t)0xABC);
-    DEVICE_PRINT("math: pad={:>8}\n", CTSTR("test"));
+    DEVICE_PRINT("math: i32={} u32={}", (std::int32_t)-1, (std::uint32_t)65536);
+    DEVICE_PRINT("math: float={}", 1.0f);
+    DEVICE_PRINT("math: bool={} {}", true, false);
+    DEVICE_PRINT("math: ptr={}", reinterpret_cast<std::uint32_t*>(0xDEADBEEF));
+    DEVICE_PRINT("math: str={}", CTSTR("_math"));
+    DEVICE_PRINT("math: hex={:08x}", (std::uint32_t)0xABC);
+    DEVICE_PRINT("math: pad={:>8}", CTSTR("test"));
 
     // Flood the buffer to force a drain.
     for (std::uint32_t i = 0; i < 2048; ++i)
     {
-        DEVICE_PRINT("w={}\n", i);
+        DEVICE_PRINT("w={}", i);
     }
 }
 
@@ -81,8 +81,8 @@ void run_kernel(RUNTIME_PARAMETERS)
 
 void run_kernel(RUNTIME_PARAMETERS)
 {
-    DEVICE_PRINT("pack: i64={}\n", (std::int64_t)-1000000LL);
-    DEVICE_PRINT("pack: str={}\n", CTSTR("_pack"));
+    DEVICE_PRINT("pack: i64={}", (std::int64_t)-1000000LL);
+    DEVICE_PRINT("pack: str={}", CTSTR("_pack"));
 }
 
 #endif
@@ -91,8 +91,8 @@ void run_kernel(RUNTIME_PARAMETERS)
 
 void run_kernel(RUNTIME_PARAMETERS)
 {
-    DEVICE_PRINT("sfpu: u8={} i8={}\n", (std::uint8_t)3, (std::int8_t)-1);
-    DEVICE_PRINT("sfpu: str={}\n", CTSTR("_sfpu"));
+    DEVICE_PRINT("sfpu: u8={} i8={}", (std::uint8_t)3, (std::int8_t)-1);
+    DEVICE_PRINT("sfpu: str={}", CTSTR("_sfpu"));
 }
 
 #endif

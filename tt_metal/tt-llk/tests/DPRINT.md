@@ -36,7 +36,7 @@ outcome, lines = run_with_device_print(config)
 assert "test: i32=-1 hex=deadbeef" in "".join(lines)
 ```
 
-Each line is also written to the loguru session log at `INFO` level, so you see them in `test_run.log` without needing to inspect `lines` yourself.
+Each line is printed at the `DEBUG` level, so pass `--logging-level=debug` to `pytest`. Your prints will be saved in `test_run.log`.
 
 You can take a look at the dprint test for a full example:
 - [sources/device_print_test.cpp](sources/device_print_test.cpp)

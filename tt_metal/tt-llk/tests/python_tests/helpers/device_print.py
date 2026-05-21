@@ -693,13 +693,13 @@ def run_with_device_print(configuration):
         batch = parser.poll(TestConfig.TENSIX_LOCATION)
         all_lines.extend(batch)
         for line in batch:
-            logger.info(line)
+            logger.debug(line)
 
     outcome = configuration.run(poll_callback=_drain)
 
     final = parser.final_drain(TestConfig.TENSIX_LOCATION)
     all_lines.extend(final)
     for line in final:
-        logger.info(line)
+        logger.debug(line)
 
     return outcome, all_lines
