@@ -200,14 +200,14 @@ def from_torch_bfloat16_tile(
     *,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
 ) -> ttnn.Tensor:
-    return ttnn.from_torch(
+    """Upload bf16 host data already in TILE layout (avoids per-chip ``TilizeDeviceOperation`` on mesh)."""
+    host = ttnn.from_torch(
         t.to(torch.bfloat16).cpu().contiguous(),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=memory_config,
         mesh_mapper=mesh_mapper(device),
     )
+    return ttnn.to_device(host, device, memory_config=memory_config)
 
 
 def from_torch_bfloat16_rm(

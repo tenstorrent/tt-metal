@@ -13,9 +13,9 @@ from models.experimental.seamless_m4t_v2_large.reference.torch_text_encoder impo
 )
 from models.experimental.seamless_m4t_v2_large.scripts.download_weights import ensure_seamless_m4t_v2_large_weights
 from models.experimental.seamless_m4t_v2_large.tt.common import to_torch_replicated_first_shard
+from models.experimental.seamless_m4t_v2_large.tt.common import encoder_self_additive_mask_all_zeros_4d
 from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import (
     MESH_DEVICE_PARAMETRIZE_TEXT,
-    from_torch_bfloat16_tile,
     from_torch_uint32_rm,
     mesh_default_device,
 )
@@ -23,18 +23,6 @@ from models.experimental.seamless_m4t_v2_large.tt.model_preprocessing import cre
 from models.experimental.seamless_m4t_v2_large.tt.tt_text_encoder import TTSeamlessM4Tv2Encoder
 
 PCC_THRESHOLD = 0.99
-
-
-def _create_bidirectional_additive_mask(attention_mask: torch.Tensor, *, dtype: torch.dtype) -> torch.Tensor:
-    """
-    Build HF-style additive encoder mask with shape [B, 1, S, S].
-    Input mask convention: 1 = keep, 0 = masked.
-    """
-    bsz, seq = attention_mask.shape
-    mask = 1.0 - attention_mask[:, None, None, :].to(dtype=dtype)
-    mask = mask.expand(bsz, 1, seq, seq)
-    mask = mask * torch.finfo(dtype).min
-    return mask
 
 
 def _create_position_ids_from_input_ids(
@@ -65,11 +53,6 @@ def _run_text_encoder_pcc(device) -> None:
     attn_mask = torch.ones(batch, seq, dtype=torch.long)
 
     with torch.no_grad():
-        inputs_embeds = encoder.embed_tokens(input_ids)
-        bidir_mask = _create_bidirectional_additive_mask(
-            attn_mask,
-            dtype=inputs_embeds.dtype,
-        )
         position_ids = _create_position_ids_from_input_ids(input_ids, cfg.pad_token_id, past_key_values_length=0)
 
     ref = forward_torch_reference(encoder, input_ids, attn_mask).to(torch.bfloat16)
@@ -86,7 +69,11 @@ def _run_text_encoder_pcc(device) -> None:
 
     input_ids_tt = from_torch_uint32_rm(device, input_ids)
     position_ids_tt = from_torch_uint32_rm(device, position_ids)
-    bidir_tt = from_torch_bfloat16_tile(device, bidir_mask)
+    # All-ones ``attn_mask`` → additive mask is all zeros. Build TILE on device (same as E2E
+    # ``encoder_self_additive_mask_all_zeros_4d``) instead of ``from_torch_bfloat16_tile``, which
+    # leaves ROW_MAJOR per mesh chip and emits one ``TilizeDeviceOperation`` per device.
+    assert attn_mask.min() == 1, "PCC test uses a fully valid attention mask"
+    bidir_tt = encoder_self_additive_mask_all_zeros_4d(batch, seq, device)
 
     out_tt = tt_enc.forward(input_ids_tt, position_ids_tt, bidir_tt)
     tt_cpu = (
