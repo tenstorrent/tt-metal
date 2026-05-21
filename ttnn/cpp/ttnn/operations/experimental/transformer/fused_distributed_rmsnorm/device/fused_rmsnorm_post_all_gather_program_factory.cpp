@@ -118,11 +118,6 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPostAllGatherProgramFactory::create_
     log_debug(tt::LogOp, "rope_cos_data_format: {}", rope_cos_data_format);
     log_debug(tt::LogOp, "rope_sin_data_format: {}", rope_sin_data_format);
 
-    const uint32_t weight_addr = has_weight ? weight_tensor.value().buffer()->address() : 0u;
-    const uint32_t transformation_mat_addr = fuse_rope ? transformation_mat.value().buffer()->address() : 0u;
-    const uint32_t rope_cos_addr = fuse_rope ? rope_cos.value().buffer()->address() : 0u;
-    const uint32_t rope_sin_addr = fuse_rope ? rope_sin.value().buffer()->address() : 0u;
-
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     //////////////////////////////////////////////////////////////////////////
@@ -293,16 +288,26 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPostAllGatherProgramFactory::create_
         const uint32_t tile_row_end = std::min(tile_row_start + num_tile_rows_per_core, num_tile_rows);
         const uint32_t num_tile_rows_to_process = tile_row_end - tile_row_start;
 
-        reader_kernel_desc.emplace_runtime_args(
-            core,
-            {input_tensor.buffer(),
-             stats_tensor.buffer(),
-             weight_addr,
-             transformation_mat_addr,
-             rope_cos_addr,
-             rope_sin_addr,
-             tile_row_start,
-             tile_row_end});
+        KernelDescriptor::RTArgList reader_args;
+        reader_args.push_back(input_tensor.buffer());
+        reader_args.push_back(stats_tensor.buffer());
+        if (has_weight) {
+            reader_args.push_back(weight_tensor.value().buffer());
+        } else {
+            reader_args.push_back(0u);
+        }
+        if (fuse_rope) {
+            reader_args.push_back(transformation_mat.value().buffer());
+            reader_args.push_back(rope_cos.value().buffer());
+            reader_args.push_back(rope_sin.value().buffer());
+        } else {
+            reader_args.push_back(0u);
+            reader_args.push_back(0u);
+            reader_args.push_back(0u);
+        }
+        reader_args.push_back(tile_row_start);
+        reader_args.push_back(tile_row_end);
+        reader_kernel_desc.emplace_runtime_args(core, reader_args);
 
         compute_kernel_desc.emplace_runtime_args(core, {num_tile_rows_to_process});
 
