@@ -286,7 +286,9 @@ Each `local_accessor_name` is independent per binding; the producer and consumer
 
 **Borrowed-memory DFBs.** A DFB can be built on top of an existing `Buffer`'s memory rather than allocating its own L1 storage — the Metal 2.0 form of the legacy "dynamic circular buffer." Set `DataflowBufferSpec::borrowed_from` to the name of a `TensorParameter` whose buffer backs the DFB; the DFB's L1 address resolves at runtime from the corresponding `TensorArg` in `ProgramRunParams::tensor_args`.
 
-Other advanced cases (aliased DFBs, remote DFBs) are exposed in `dataflow_buffer_spec.hpp` but aren't supported yet.
+**Aliased DFBs.** Two or more DFBs can share backing L1 memory via `DataflowBufferSpec::alias_with`. The aliased DFBs are logically distinct (each has its own `unique_id` and bindings) but physically occupy the same L1 region — useful when same-shape DFBs are produced and consumed in non-overlapping phases. All aliased DFBs must have the same total size (`num_entries * entry_size`), must be bound to the same kernels, and must mutually declare each other in `alias_with`. Aliased DFBs offer no guarantee against data clobbering; correctness is the kernel author's responsibility.
+
+Remote DFBs are exposed in `dataflow_buffer_spec.hpp` but aren't supported yet.
 
 ---
 

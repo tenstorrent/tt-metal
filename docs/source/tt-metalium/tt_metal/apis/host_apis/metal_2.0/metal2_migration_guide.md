@@ -288,7 +288,9 @@ KernelSpec consumer{ /* ... */
 
 **Borrowed-memory DFBs.** A DFB can be built on top of an existing `Buffer`'s memory rather than allocating its own L1 storage — the Metal 2.0 form of the legacy "dynamic circular buffer." Set `DataflowBufferSpec::borrowed_from` to the name of a `TensorParameter` whose buffer backs the DFB; the DFB's L1 address resolves at runtime from the corresponding `TensorArg` in `ProgramRunParams::tensor_args`.
 
-Other advanced features (aliased DFBs, remote DFBs spanning nodes) are described in `dataflow_buffer_spec.hpp` but are not yet supported.
+**Aliased DFBs.** Two or more DFBs can share backing L1 memory via `DataflowBufferSpec::alias_with`. The aliased DFBs are logically distinct (each has its own `unique_id` and bindings) but physically occupy the same L1 region. Useful when two same-shape DFBs are produced and consumed in non-overlapping phases of the kernel — the L1 footprint collapses. All aliased DFBs must have the same total size (`num_entries * entry_size`), must be bound to the same kernels, and must mutually declare each other in `alias_with`. Aliased DFBs offer no guarantee against data clobbering between the logical buffers; correctness is the kernel author's responsibility.
+
+Remote DFBs spanning nodes are described in `dataflow_buffer_spec.hpp` but are not yet supported.
 
 > **`tile_format_metadata` (the legacy `format_descriptors[i].tile` field).** `DataflowBufferSpec` carries a second optional metadata field, `std::optional<tt::tt_metal::Tile> tile_format_metadata`, that mirrors the legacy `CBFormatDescriptor::tile`. It is load-bearing for non-default tile geometry — tiny tiles, non-32x32, transposed-face, narrow-tile configurations (introduced for matmul tiny tiles in PR #12908). The value threads through the JIT path into per-CB `constexpr uint8_t unpack_tile_r_dim[]` / `unpack_tile_c_dim[]` / `unpack_num_faces[]` (and pack-side equivalents) inside the compute kernel's generated `chlkc_descriptors.h`, where LLK unpacker / packer init reads it.
 >
