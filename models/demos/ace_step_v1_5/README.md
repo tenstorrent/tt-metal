@@ -35,6 +35,7 @@ into `~/.cache/huggingface/hub/ACE-Step-1.5-checkpoints/`.
 | `--variant` | `str` | `acestep-v15-base` | DiT model variant. Choices: `acestep-v15-base`, `acestep-v15-sft`, `acestep-v15-turbo`. |
 | `--lm_variant` | `str` | `acestep-5Hz-lm-1.7B` | 5 Hz Language Model variant. Choices: `acestep-5Hz-lm-0.6B`, `acestep-5Hz-lm-1.7B`, `acestep-5Hz-lm-4B`. |
 | `--device_id` | `int` | `0` | TT device index. |
+| `--mesh-device` | `str` | env | DiT/VAE mesh SKU (`P150`, `BH_QB`, `BH_LB`, …). Also `ACE_STEP_MESH_DEVICE` or `MESH_DEVICE`. |
 | `--duration_sec` | `float` | `10.0` | Duration of the generated audio in seconds. |
 | `--infer_steps` | `int` | auto | Number of diffusion inference steps. Defaults to 8 for turbo, 50 for base/sft. |
 | `--seed` | `int` | `0` | Random seed for reproducibility. |
@@ -160,8 +161,25 @@ python -m pytest models/demos/ace_step_v1_5/tests \
 If you have TT hardware/runtime, set:
 
 ```bash
-export MESH_DEVICE=N150   # or N300 / T3K
+export MESH_DEVICE=N150   # or N300 / T3K / BH_QB
 ```
+
+### Blackhole QB (2×2 mesh)
+
+Same algorithm as P150 (batch=2 CFG, trace, TTNN VAE). Preprocess (5 Hz LM + handler) runs on **host CPU**; DiT and VAE use the full **2×2** mesh.
+
+```bash
+export MESH_DEVICE=BH_QB
+python3 models/demos/ace_step_v1_5/run_prompt_to_wav.py \
+  --mesh-device BH_QB \
+  --no-experimental-5hz-ttnn-causal-lm \
+  --variant acestep-v15-base \
+  --lm_variant acestep-5Hz-lm-1.7B \
+  --duration_sec 15 --infer_steps 4 \
+  --out /tmp/ttnn_wav.wav
+```
+
+DiT init on 2×2 can take several minutes on first run (24 decoder layers). Progress lines (`DiT core: layer N/24`) indicate forward motion, not a hang.
 
 ## Notes
 

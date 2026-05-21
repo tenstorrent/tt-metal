@@ -9,6 +9,9 @@ Enable module-level timing with either:
 - ``ACE_STEP_DEMO_PERF_LOG=1`` (or ``ACE_STEP_PERF_LOG=1``), or
 - ``--perf-log`` on ``run_prompt_to_wav.py``.
 
+On multi-device mesh (e.g. ``BH_QB``), perf logging is **on by default** unless
+``ACE_STEP_DEMO_PERF_LOG=0``.
+
 Optional per-Euler-step lines: ``ACE_STEP_DEMO_PERF_LOG_STEPS=1``.
 
 Logs go to stdout (``[ace_step_v1_5][perf]``) and loguru at INFO.
@@ -51,9 +54,16 @@ def sync_device(device: Any) -> None:
 
 def _emit_line(label: str, elapsed_ms: float, *, extra: str = "") -> None:
     suffix = f" {extra}" if extra else ""
-    line = f"[ace_step_v1_5][perf] {label}: {elapsed_ms:.2f} ms{suffix}"
+    line = f"[ace_step_v1_5][perf] {label:40s} {elapsed_ms:10.2f} ms{suffix}"
     print(line, flush=True)
     logger.info("ACE-Step perf: {}: {:.2f} ms{}", label, elapsed_ms, suffix)
+
+
+def _perf_banner(title: str) -> None:
+    bar = "=" * 72
+    print(f"[ace_step_v1_5][perf] {bar}", flush=True)
+    print(f"[ace_step_v1_5][perf] {title}", flush=True)
+    print(f"[ace_step_v1_5][perf] {bar}", flush=True)
 
 
 class AceStepPerfRecorder:
@@ -64,6 +74,8 @@ class AceStepPerfRecorder:
         self.params: Dict[str, Any] = dict(params or {})
         self.timings_ms: List[Tuple[str, float]] = []
         self._t0 = time.perf_counter()
+        if self.enabled:
+            _perf_banner("wall-clock timing enabled (module lines stream as each stage completes)")
 
     def set_params(self, **kwargs: Any) -> None:
         self.params.update(kwargs)
@@ -94,11 +106,15 @@ class AceStepPerfRecorder:
         if not self.enabled:
             return
         total_ms = self.total_ms()
-        self.record(label, total_ms)
+        self.timings_ms.append((label, total_ms))
+
+        _perf_banner("RUN SUMMARY")
 
         param_parts = [f"{k}={v}" for k, v in sorted(self.params.items())]
         if param_parts:
-            print(f"[ace_step_v1_5][perf] parameters: {' '.join(param_parts)}", flush=True)
+            print(f"[ace_step_v1_5][perf] parameters:", flush=True)
+            for part in param_parts:
+                print(f"[ace_step_v1_5][perf]   {part}", flush=True)
             logger.info("ACE-Step perf parameters: {}", " ".join(param_parts))
 
         if not self.timings_ms:
@@ -111,13 +127,17 @@ class AceStepPerfRecorder:
                 continue
             accounted += ms
             pct = (ms / total_ms * 100.0) if total_ms > 0 else 0.0
-            row = f"  {name:40s} {ms:10.2f} ms  ({pct:5.1f}%)"
+            row = f"[ace_step_v1_5][perf]   {name:40s} {ms:10.2f} ms  ({pct:5.1f}%)"
             print(row, flush=True)
         unaccounted = max(0.0, total_ms - accounted)
         if unaccounted > 0.5:
             pct = unaccounted / total_ms * 100.0 if total_ms > 0 else 0.0
-            print(f"  {'(other/overhead)':40s} {unaccounted:10.2f} ms  ({pct:5.1f}%)", flush=True)
-        print(f"  {'TOTAL':40s} {total_ms:10.2f} ms", flush=True)
+            print(
+                f"[ace_step_v1_5][perf]   {'(other/overhead)':40s} {unaccounted:10.2f} ms  ({pct:5.1f}%)",
+                flush=True,
+            )
+        print(f"[ace_step_v1_5][perf]   {'TOTAL (wall)':40s} {total_ms:10.2f} ms", flush=True)
+        _perf_banner("end perf summary")
 
 
 @contextmanager

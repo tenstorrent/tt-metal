@@ -100,10 +100,13 @@ def mesh_device():
     ttnn = require_ttnn()
     # Prefer a mesh device when supported.
     if hasattr(ttnn, "open_mesh_device") and hasattr(ttnn, "MeshShape") and os.environ.get("MESH_DEVICE"):
-        # open_mesh_device does not accept device_id; strip it from the common kwargs.
+        from models.demos.ace_step_v1_5.tt_device import ace_step_mesh_shape, resolve_ace_step_mesh_sku
+
+        mesh_sku = resolve_ace_step_mesh_sku()
+        rows, cols = ace_step_mesh_shape(mesh_sku)
         mesh_kw = {k: v for k, v in _open_kwargs().items() if k != "device_id"}
         mesh = ttnn.open_mesh_device(
-            ttnn.MeshShape(1, 1),
+            ttnn.MeshShape(int(rows), int(cols)),
             **mesh_kw,
         )
         if hasattr(mesh, "enable_program_cache"):
