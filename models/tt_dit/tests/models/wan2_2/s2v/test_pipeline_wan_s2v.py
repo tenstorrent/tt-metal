@@ -103,10 +103,11 @@ def test_pipeline_inference(
     ref_image = PIL.Image.open(_REF_IMAGE_PATH)
 
     # ``num_clips`` matches the reference's per-clip ``infer_frames=80``
-    # (speech2video.py:404). ``S2V_CLIPS=4`` makes the test run a 20-second
-    # generation on the same audio; default keeps it at 1 clip (~5 s) for the
-    # smoke-test budget.
-    num_clips = int(os.environ.get("S2V_CLIPS", 1))
+    # (speech2video.py:404). Unset env → ``None`` so the pipeline uses
+    # ``num_repeat`` (one clip per 5 s of audio, derived from the
+    # canonicalized waveform). Pass ``S2V_CLIPS=1`` for a smoke-test budget.
+    _clips_env = os.environ.get("S2V_CLIPS")
+    num_clips = int(_clips_env) if _clips_env is not None else None
     num_inference_steps = int(os.environ.get("S2V_STEPS", 40))
     guidance_scale = 4.5  # reference wan_s2v_14B.py:59
 

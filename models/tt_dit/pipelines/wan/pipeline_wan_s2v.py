@@ -67,7 +67,7 @@ from diffusers.pipelines.wan.pipeline_output import WanPipelineOutput
 from diffusers.schedulers import UniPCMultistepScheduler
 from diffusers.video_processor import VideoProcessor
 from loguru import logger
-from PIL import Image
+from PIL import Image, ImageOps
 from transformers import AutoTokenizer, UMT5EncoderModel, Wav2Vec2Model, Wav2Vec2Processor
 
 import ttnn
@@ -1062,7 +1062,12 @@ class WanPipelineS2V(WanPipeline):
         with _stage("prepare_latents"):
             # 2. Reference image VAE encode (once).
             with _stage("s2v_vae_encode_ref"):
-                ref_tensor = self.video_processor.preprocess(image_prompt, height=height, width=width).to(
+                # Aspect-preserving resize + center-crop to ``(height, width)``
+                # so arbitrary-aspect input images aren't stretched by the
+                # downstream ``VideoProcessor.preprocess`` (which uses
+                # ``resize_mode='default'`` = stretch).
+                image_prompt_cropped = ImageOps.fit(image_prompt, (width, height), method=Image.Resampling.LANCZOS)
+                ref_tensor = self.video_processor.preprocess(image_prompt_cropped, height=height, width=width).to(
                     "cpu", dtype=torch.float32
                 )
                 ref_video = ref_tensor.unsqueeze(2)  # [1, 3, 1, H, W]
