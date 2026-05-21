@@ -20,6 +20,7 @@ import torch
 import ttnn
 from models.experimental.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
 from models.experimental.glm4_moe_lite.tt.linear_helpers import (
+    attn_kva_linear,
     attn_linear,
     attn_wo_linear,
     mlp_linear,
@@ -98,7 +99,7 @@ def kv_cache_update(
         qkv = None
         w_q_kv_a = getattr(w, "w_q_kv_a", None)
         if w_q_kv_a is not None:
-            qkv = attn_linear(x, w_q_kv_a, device=device, cfg=cfg, force_no_tp=cfg.attn_dp)
+            qkv = attn_kva_linear(x, w_q_kv_a, device=device, cfg=cfg, force_no_tp=cfg.attn_dp)
             q_a = _safe_slice(
                 qkv, [0, 0, 0, 0], [1, 1, batch, int(hparams.q_lora_rank)], skip_clones=cfg.skip_defensive_clones
             )
@@ -112,7 +113,7 @@ def kv_cache_update(
                 ttnn.deallocate(qkv, force=False)
                 qkv = None
         else:
-            kv = attn_linear(x, w.w_kv_a, device=device, cfg=cfg, force_no_tp=cfg.attn_dp)
+            kv = attn_kva_linear(x, w.w_kv_a, device=device, cfg=cfg, force_no_tp=cfg.attn_dp)
 
         kv_nope = _safe_slice(
             kv, [0, 0, 0, 0], [1, 1, batch, int(hparams.kv_lora_rank)], skip_clones=cfg.skip_defensive_clones
