@@ -152,6 +152,13 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(not tensor_args.attn_mask.has_value(), "Must not have attn_mask tensor for non-causal attention");
     }
 
+    if (operation_attributes.num_kv_heads_override.has_value()) {
+        TT_FATAL(
+            tensor_args.page_table_tensor.has_value(),
+            "num_kv_heads_override is only supported in paged mode (when page_table is provided)");
+        TT_FATAL(operation_attributes.num_kv_heads_override.value() > 0, "num_kv_heads must be > 0");
+    }
+
     if (operation_attributes.paged_attention) {
         // Paged attention verification
         TT_FATAL(
@@ -228,7 +235,8 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
                     v_shape[3],
                     operation_attributes.head_dim_v.value());
             }
-        } else if (operation_attributes.block_size_override.has_value()) {
+        } else if (
+            operation_attributes.block_size_override.has_value() || operation_attributes.num_kv_heads_override.has_value()) {
             // Shared-buffer path: the K/V cache was allocated for a different layer's
             // (block_size, head_dim) shape, and this call reads through its own view.
             // Q's last dim drives head_dim; block_size_override drives block_size.
@@ -237,14 +245,14 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
             // what the cache was allocated for.
             TT_FATAL(
                 k_shape[3] == v_shape[3],
-                "K and V cache must have same hidden size with block_size_override, got {} and {}",
+                "K and V cache must have same hidden size with geometry overrides, got {} and {}",
                 k_shape[3],
                 v_shape[3]);
             const uint32_t cache_num_kv_heads = k_shape[1];
             const uint32_t cache_block_size = k_shape[2];
             const uint32_t cache_head_dim = k_shape[3];
             const uint32_t q_head_dim = q_shape[3];
-            const uint32_t effective_block_size = operation_attributes.block_size_override.value();
+            const uint32_t effective_block_size = operation_attributes.block_size_override.value_or(cache_block_size);
             // num_kv_heads on the call-view side may differ from the cache when the
             // caller is reading an HMA cross-group buffer (e.g. Gemma4-26B-A4B sliding
             // kv=8 cache read by a full layer with kv=2). Earlier versions of this
@@ -253,6 +261,7 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
             // when num_kv_heads_override was set, and rejecting legitimate asymmetric
             // calls when it wasn't. Use the override (or default to cache when unset).
             const uint32_t view_num_kv_heads = operation_attributes.num_kv_heads_override.value_or(cache_num_kv_heads);
+            TT_FATAL(view_num_kv_heads > 0, "num_kv_heads must be > 0");
             const uint64_t cache_elems_per_block =
                 static_cast<uint64_t>(cache_num_kv_heads) * cache_block_size * cache_head_dim;
             const uint64_t view_elems_per_block =
