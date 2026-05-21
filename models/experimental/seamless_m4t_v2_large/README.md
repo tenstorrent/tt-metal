@@ -197,11 +197,11 @@ Measured on a four-chip Blackhole QB system (`1x4` parametrization). Inputs are 
 
 | Task | `forward()` non-traced | `forward()` traced | `generate()` non-traced |
 |------|------------------------:|-------------------:|------------------------:|
-| T2TT | 76.09 | 239.89 | 4.11 |
-| S2TT | 48.21 | 146.50 | 9.28 |
-| T2ST | 76.04 | 122.43 | 2.94 |
-| S2ST | 47.78 | 92.66 | 4.86 |
-| ASR | 47.87 | 147.41 | 9.22 |
+| T2TT | 93.98 | 262.34 | 5.19 |
+| S2TT | 54.32 | 153.57 | 10.59 |
+| T2ST | 95.48 | 127.83 | 3.53 |
+| S2ST | 54.43 | 96.00 | 5.25 |
+| ASR | 54.18 | 153.30 | 10.51 |
 
 BH QB run (all `1x4` cases):
 
@@ -234,11 +234,11 @@ Measured on a four-chip Blackhole QB system. The profiler aggregates kernel time
 
 | Task | Device kernel samples/s | Avg kernel duration (ms) |
 |------|------------------------:|-------------------------:|
-| T2TT | 20.72 | 48.27 |
-| S2TT | 10.92 | 91.60 |
-| T2ST | 9.80 | 102.07 |
-| S2ST | 6.88 | 145.39 |
-| ASR  | 10.91 | 91.62 |
+| T2TT | 23.47 | 42.61 |
+| S2TT | 11.64 | 85.94 |
+| T2ST | 10.37 | 96.40 |
+| S2ST | 7.16 | 139.72 |
+| ASR  | 11.63 | 85.95 |
 
 These are pure kernel execution (no host dispatch, no transfer overlap), so they are always higher than the E2E `forward()` numbers above. No FPS lower bound is hard-coded in the test (`expected_results={}` in `test_perf_device_bare_metal_seamless`); the test logs the measured number so regressions can be tracked across runs.
 
