@@ -739,7 +739,17 @@ void RiscFirmwareInitializer::erisc_send_exit_signal(tt::ChipId device_id, CoreC
     }
 }
 
+// TODO: this can be removed once base FW removes interrupts entirely.
 void RiscFirmwareInitializer::disable_eth_interrupts(tt::ChipId device_id, const CoreCoord& virtual_core) {
+    // We only switch back to base FW on active eth cores; on idle eth nothing can re-enable
+    // these interrupts after we zero them. Guard against misuse on active eth.
+    const auto logical_core = cluster_.get_logical_ethernet_core_from_virtual(device_id, virtual_core);
+    TT_ASSERT(
+        !this->get_control_plane_().get_active_ethernet_cores(device_id).contains(logical_core),
+        "disable_eth_interrupts must only be called on idle eth cores (device {}, virtual core {})",
+        device_id,
+        virtual_core.str());
+
     const uint32_t zero = 0;
     const auto base = hal_.get_eth_interrupt_mode_base_reg();
     const auto num_vecs = hal_.get_eth_interrupt_num_vecs();
@@ -748,6 +758,7 @@ void RiscFirmwareInitializer::disable_eth_interrupts(tt::ChipId device_id, const
     }
 }
 
+// TODO: this can be removed once the base-FW readiness check is lowered into UMD.
 bool RiscFirmwareInitializer::wait_for_eth_fw_ready(
     tt::ChipId device_id, const CoreCoord& virtual_core, int timeout_ms) {
     // skip for Non-BH archs and simulation (which has no base FW running)
