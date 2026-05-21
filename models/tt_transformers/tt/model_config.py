@@ -3567,6 +3567,11 @@ class ModelArgs:
             # Phi-3-mini uses "<|end|>" as EOS token
             if "phi-3-mini" in self.base_model_name.lower():
                 tokenizer.stop_tokens.append(tokenizer.encode("<|end|>")[0])
+            # Qwen models use ChatML format; <|im_start|> signals a new turn and should stop generation
+            if "qwen" in self.base_model_name.lower():
+                im_start_ids = tokenizer.encode("<|im_start|>", add_special_tokens=False)
+                if im_start_ids:
+                    tokenizer.stop_tokens.append(im_start_ids[0])
         return tokenizer
 
     def create_processor(self):
