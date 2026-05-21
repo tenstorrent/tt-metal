@@ -1,0 +1,25 @@
+---
+description: Run tt-metal parity and LLK tests on Galaxy Slurm compute nodes only, never on the login node.
+alwaysApply: true
+---
+
+# Galaxy Slurm compute only
+
+Never run parity sweeps, multiprocess tests, LLK pytest sweeps, or craq-sim ttsim workloads on the **login node**.
+
+## From the login node
+
+Submit Slurm jobs only:
+
+- `./scripts/submit-nkapre-parity-ttsim-slurm.sh` — full parity sweep
+- `./scripts/submit-nkapre-llk-ttsim-slurm.sh` — LLK weekly + nightly WH
+- `./scripts/submit-nkapre-llk-smoke-ttsim-slurm.sh` — quick LLK smoke
+- `sbatch scripts/slurm-nkapre-mp-ttsim-job.sh` — multiprocess only
+
+Default Galaxy node: `bh-glx-b06u08` (partition `bh_sc5_B2B9_D12`).
+
+## On compute
+
+All sweep runners call `require_bh_glx_compute()` and exit unless `hostname` matches `bh-glx-*`.
+
+Do not add `ALLOW_LOGIN_RUN` bypasses or run `llk-pytest-sweep.sh` / `setup-llk-ttsim-env.sh` directly on login.
