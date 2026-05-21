@@ -393,14 +393,14 @@ void kernel_main() {
 
             // Only wait if the idle core will actually send data back.
             if (has_non_local) {
-                DPRINT_DISPATCH("Waiting for idle core {} batch {}", C, B);
+                DPRINT_DISPATCH("Waiting for idle core {} batch {}\n", C, B);
                 noc_semaphore_wait(data_ready_sem_ptr, 1);
                 noc_semaphore_set(data_ready_sem_ptr, 0);
-                DPRINT_DISPATCH("Got batch {} from idle core {}", B, C);
+                DPRINT_DISPATCH("Got batch {} from idle core {}\n", B, C);
             }
         } else {
             // ---- Self-batch: read tiles, untilize locally, no NOC transfer ----
-            DPRINT_DISPATCH("Self-untilize batch {}", B);
+            DPRINT_DISPATCH("Self-untilize batch {}\n", B);
             uint32_t tile_base_page = B * tiles_per_row;
 
             // Signal compute to untilize (before streaming tiles so compute is ready)
@@ -432,7 +432,7 @@ void kernel_main() {
             // Wait for compute to finish (it writes untilized data into cb_untilize_id / c_18)
             cb_wait_front(cb_untilize_id, read_batch_size);
             noc_async_read_barrier();
-            DPRINT_DISPATCH("Self-untilize batch {} done", B);
+            DPRINT_DISPATCH("Self-untilize batch {} done\n", B);
         }
 #endif
 
