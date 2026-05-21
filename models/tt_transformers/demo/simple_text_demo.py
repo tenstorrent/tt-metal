@@ -32,7 +32,8 @@ from models.tt_transformers.tt.model_config import DecodersPrecision, determine_
 from models.tt_transformers.tt.prefetcher import is_prefetcher_supported
 
 # Issue: https://github.com/tenstorrent/tt-metal/issues/34763
-models_not_supported_for_device_sampling = ["Mistral-7B"]
+# Phi-1 bring-up currently validates decode with host-side sampling in this demo.
+models_not_supported_for_device_sampling = ["Mistral-7B", "phi-1"]
 
 
 def get_test_mesh_shape():
