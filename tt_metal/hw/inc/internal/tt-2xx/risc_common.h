@@ -406,8 +406,10 @@ inline __attribute__((interrupt, hot)) void handle_interrupt() {
         (error_code > 3 && error_code < 32 && trisc_id == 0)) {
         ASSERT(0 == 1, debug_assert_type_t::DebugAssertHwFault);
         uint32_t hirv = *(RISC_PIC_BRISC_HW_INT_REG(trisc_id));  // clears the interrupt after handling the error
+        (void)hirv;
     } else {
         uint32_t hirv = *(RISC_PIC_BRISC_HW_INT_REG(trisc_id));  // clears the interrupt
+        (void)hirv;
         return;
     }
 #if !defined(WATCHER_ENABLED)  // hang anyway
