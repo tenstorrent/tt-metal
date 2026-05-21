@@ -508,6 +508,115 @@ def dram_sharded_mlp(
     return result_dram
 
 
+# Gate/up projection decode tuning — M=32, K=2048, N=3072
+# Nt=96 / per_core_N=2 => 48 cores (fits 8×6 sub-grid on WH-B0).
+# WIDTH_SHARDED output avoids cross-NOC DRAM writes during the matmul kernel.
+_GATE_UP_PER_CORE_N = 2
+_GATE_UP_OUT_SUBBLOCK_W = 2
+
+
+def mlp_gate_up_linear(
+    a: ttnn.Tensor,
+    b: ttnn.Tensor,
+    *,
+    device: Any,
+    cfg: Glm4RuntimeConfig,
+    memory_config: ttnn.MemoryConfig | None = None,
+) -> ttnn.Tensor:
+    """Gate/up projection linear, optimized for decode (M <= TILE_SIZE).
+
+    When M <= TILE_SIZE, N-tiles divisible by _GATE_UP_PER_CORE_N, and the
+    resulting core count fits the physical grid: runs with per_core_N=2,
+    out_subblock_w=2, mcast_in0=True, and WIDTH_SHARDED L1 output.
+    Each compute core writes its output shard to its own L1 bank (no NOC
+    hop during the matmul); one to_memory_config then gathers the shards
+    to the downstream format.  Falls back to mlp_linear if any constraint
+    is not satisfied (prefill, large N, or grid too small).
+    """
+    m_total = 1
+    for i in range(len(a.shape) - 1):
+        m_total *= int(a.shape[i])
+    b_batch = 1
+    for i in range(len(b.shape) - 2):
+        b_batch *= int(b.shape[i])
+
+    N = int(b.shape[-1])
+    K = int(b.shape[-2])
+    n_tiles = (N + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+    k_tiles = (K + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+    m_tiles = max(1, (m_total + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE)
+
+    if (
+        m_total > ttnn.TILE_SIZE
+        or b_batch != 1
+        or n_tiles % _GATE_UP_PER_CORE_N != 0
+        or _GATE_UP_PER_CORE_N % _GATE_UP_OUT_SUBBLOCK_W != 0
+    ):
+        return mlp_linear(a, b, device=device, cfg=cfg, memory_config=memory_config)
+
+    num_cores = n_tiles // _GATE_UP_PER_CORE_N
+    grid = device.compute_with_storage_grid_size()
+    max_x, max_y = int(grid.x), int(grid.y)
+    core_x, core_y = None, None
+    for gx in range(min(max_x, num_cores), 0, -1):
+        if num_cores % gx != 0:
+            continue
+        gy = num_cores // gx
+        if gy <= max_y:
+            core_x, core_y = gx, gy
+            break
+
+    if core_x is None:
+        return mlp_linear(a, b, device=device, cfg=cfg, memory_config=memory_config)
+
+    in0_bw = 1
+    for candidate in (4, 3, 2):
+        if k_tiles % candidate == 0:
+            in0_bw = candidate
+            break
+
+    prog_cfg = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
+        in0_block_w=in0_bw,
+        out_subblock_h=1,
+        out_subblock_w=_GATE_UP_OUT_SUBBLOCK_W,
+        out_block_h=1,
+        out_block_w=_GATE_UP_OUT_SUBBLOCK_W,
+        per_core_M=m_tiles,
+        per_core_N=_GATE_UP_PER_CORE_N,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+    # WIDTH_SHARDED output: each of num_cores compute cores writes its
+    # [m_tiles*TILE x per_core_N*TILE] result to its own L1 bank (core-local,
+    # no NOC hop during the matmul kernel).  to_memory_config below gathers
+    # all shards to the downstream interleaved format in one amortized pass.
+    out_shard_h = m_tiles * ttnn.TILE_SIZE
+    out_shard_w = _GATE_UP_PER_CORE_N * ttnn.TILE_SIZE
+    out_mc = ttnn.create_sharded_memory_config(
+        shape=(out_shard_h, out_shard_w),
+        core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_x - 1, core_y - 1))]),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    out_sharded = ttnn.linear(
+        a,
+        b,
+        program_config=prog_cfg,
+        compute_kernel_config=cfg.mlp_compute_kernel_config(),
+        memory_config=out_mc,
+    )
+
+    downstream_mc = memory_config if memory_config is not None else (cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG)
+    out = ttnn.to_memory_config(out_sharded, downstream_mc)
+    ttnn.deallocate(out_sharded, force=False)
+    return out
+
+
 def attn_linear(
     a: ttnn.Tensor,
     b: ttnn.Tensor,
