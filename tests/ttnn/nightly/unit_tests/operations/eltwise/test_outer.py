@@ -384,7 +384,13 @@ def test_outer_value_range_stress(a_shape, b_shape, dtype, low, high, device):
 # Test 9: bfloat4_b is intentionally not supported
 # ---------------------------------------------------------------------------
 
-
+@pytest.mark.xfail(                                                                                        
+    strict=True,                                                                                           
+    raises=RuntimeError,                                                                                   
+    reason="ttnn.unsqueeze routes through reshape_device_operation which only accepts "                    
+    "BFLOAT16/UINT32/FLOAT32/INT32. Tracked in "                                                           
+    "https://github.com/tenstorrent/tt-metal/issues/44919",                                                     
+)
 def test_outer_bfloat4b_unsupported(device):
     """ttnn.unsqueeze routes through reshape_device_operation which only
     accepts BFLOAT16/UINT32/FLOAT32/INT32. bfloat4_b inputs to ttnn.outer
@@ -395,5 +401,4 @@ def test_outer_bfloat4b_unsupported(device):
     b_pt = torch.rand([32], dtype=torch.bfloat16)
     a_tt = ttnn.from_torch(a_pt, dtype=ttnn.bfloat4_b, device=device, layout=ttnn.TILE_LAYOUT)
     b_tt = ttnn.from_torch(b_pt, dtype=ttnn.bfloat4_b, device=device, layout=ttnn.TILE_LAYOUT)
-    with pytest.raises(RuntimeError, match="Can only work with bfloat16/float32 or int32/uint32 tensors"):
-        ttnn.outer(a_tt, b_tt)
+    ttnn.outer(a_tt, b_tt)
