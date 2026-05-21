@@ -16,6 +16,9 @@ import matplotlib
 
 matplotlib.use("Agg")
 
+import os
+from pathlib import Path
+
 import matplotlib.pyplot as plt
 import pytest
 import torch
@@ -32,6 +35,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
+from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     PROMPT_1K_PATH,
@@ -68,7 +72,7 @@ PLOT_DIR = "models/demos/deepseek_v3_d_p/tests"
         "layer8",
     ],
 )
-@pytest.mark.parametrize("isl_total", [1024, 6400, 25 * 1024], ids=["isl_1k", "isl_6k4", "isl_25k"])
+@pytest.mark.parametrize("isl_total", [1024, 7680, 25 * 1024], ids=["isl_1k", "isl_6k4", "isl_25k"])
 @pytest.mark.parametrize("skip_reference", [False, True], ids=["with_ref", "no_ref"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
@@ -198,175 +202,206 @@ def test_prefill_block_loop(
     # ------------------------------------------------------------------
     # 1. Load only embed_tokens + target layer weights (bypass full dequant)
     # ------------------------------------------------------------------
+    # TTNN weight cache: skips per-expert torch→.tensorbin conversion on subsequent runs.
+    # Mirrors the /tmp pattern in test_prefill_block.py so it works even when model_path
+    # is read-only. Sub-key by dtype mode because cache files don't encode dtype, and
+    # skip_reference toggles bf16 (PCC) vs bfp8/bfp4 (perf). Synthetic-experts variants
+    # construct their own weights and would corrupt the real-weight cache, so disable
+    # for those. Override the root via TT_DS_PREFILL_BLOCK_LOOP_CACHE for shared caches.
+    if not synthetic_experts:
+        cache_root = Path(os.getenv("TT_DS_PREFILL_BLOCK_LOOP_CACHE", "/tmp/deepseek_v3_prefill_block_loop"))
+        dtype_mode = "bf16" if not skip_reference else "prod"
+        block_cache_dir = cache_root / f"{sp_factor}x{tp_factor}_layer{real_layer_idx}_{dtype_mode}"
+        block_cache_dir.mkdir(parents=True, exist_ok=True)
+        init_checker(block_cache_dir)  # required by check_cache_complete()
+        experts_per_chip_for_cache = n_routed // mesh_device.get_num_devices()
+        ttnn_cache_complete = TtPrefillBlock.check_cache_complete(
+            block_cache_dir, real_layer_idx, is_dense, experts_per_chip_for_cache
+        )
+        logger.info(f"TTNN weight cache: dir={block_cache_dir}, complete={ttnn_cache_complete}")
+    else:
+        block_cache_dir = None
+        ttnn_cache_complete = False
+
     logger.info(f"Loading embed_tokens weights...")
     embed_sd = sub_state_dict(state_dict, "model.embed_tokens.")
     embed_dequant = dequantize_state_dict(embed_sd, hf_config)
     embed_weight = embed_dequant["weight"].float()
 
-    logger.info(f"Loading layer {real_layer_idx} weights...")
-    layer_raw = sub_state_dict(state_dict, f"model.layers.{real_layer_idx}.")
-    layer_dequant = dequantize_state_dict(layer_raw, hf_config)
-
-    # --- Build TT state dict for TtPrefillBlock ---
-    layer_sd = {
-        "attn_norm_weight": layer_dequant["input_layernorm.weight"],
-        "mla_weights": {
-            "q_a_proj.weight": layer_dequant["self_attn.q_a_proj.weight"],
-            "q_a_layernorm.weight": layer_dequant["self_attn.q_a_layernorm.weight"],
-            "q_b_proj.weight": layer_dequant["self_attn.q_b_proj.weight"],
-            "kv_a_proj_with_mqa.weight": layer_dequant["self_attn.kv_a_proj_with_mqa.weight"],
-            "kv_a_layernorm.weight": layer_dequant["self_attn.kv_a_layernorm.weight"],
-            "kv_b_proj.weight": layer_dequant["self_attn.kv_b_proj.weight"],
-            "o_proj.weight": layer_dequant["self_attn.o_proj.weight"],
-        },
-        "ffn_norm_weight": layer_dequant["post_attention_layernorm.weight"],
-    }
-
-    synthetic_routed = False
-    if is_dense:
-        layer_sd["ffn_weights"] = {
-            "gate_proj": layer_dequant["mlp.gate_proj.weight"],
-            "up_proj": layer_dequant["mlp.up_proj.weight"],
-            "down_proj": layer_dequant["mlp.down_proj.weight"],
-        }
+    # Layer dequant is only needed when the TTNN cache is missing (to populate it) or
+    # when the HF reference is being built (skip_reference=False). On a cache hit in
+    # perf mode, TtPrefillBlock loads tensors directly from the .tensorbin cache.
+    skip_layer_dequant = ttnn_cache_complete and skip_reference
+    synthetic_routed = synthetic_experts and layer_idx != -7
+    hf_model = None
+    if skip_layer_dequant:
+        logger.info(f"TTNN cache hit + skip_reference: skipping layer {real_layer_idx} dequant")
+        layer_sd = {}
     else:
-        if layer_idx == -6:
-            # Zero gate weights to produce zero routing scores
-            gate_shape = layer_dequant["mlp.gate.weight"].shape
-            bias_shape = layer_dequant["mlp.gate.e_score_correction_bias"].shape
-            layer_sd["gate_weights"] = {
-                "weight": torch.zeros(gate_shape, dtype=torch.bfloat16),
-                "e_score_correction_bias": torch.zeros(bias_shape, dtype=torch.bfloat16),
-            }
-            logger.info(f"Zeroed gate weights: weight={gate_shape}, bias={bias_shape}")
-        else:
-            layer_sd["gate_weights"] = {
-                "weight": layer_dequant["mlp.gate.weight"],
-                "e_score_correction_bias": layer_dequant["mlp.gate.e_score_correction_bias"],
-            }
+        logger.info(f"Loading layer {real_layer_idx} weights...")
+        layer_raw = sub_state_dict(state_dict, f"model.layers.{real_layer_idx}.")
+        layer_dequant = dequantize_state_dict(layer_raw, hf_config)
 
-        synthetic_routed = synthetic_experts and layer_idx != -7
-        if synthetic_routed:
-            moe_hidden = config.moe_intermediate_size  # 2048
-            if layer_idx in (-1, -4, -5, -6):
-                # All 256 experts identical: constant value
-                val = 0.0 if layer_idx in (-4, -5, -6) else 1.0 / emb_dim
-                expert_vals = [val] * n_routed
-                logger.info(f"Creating {n_routed} {'zero' if val == 0 else 'uniform'} expert weights (val={val})")
-            elif layer_idx in (-2, -12):
-                # Column-varying: each dispatch group (64 experts) gets a different constant
-                # Group 0 (experts 0-63): 1/7168, Group 1 (64-127): -1/7168
-                # Group 2 (128-191): 0, Group 3 (192-255): 1/2048
-                group_vals = [1.0 / emb_dim, -1.0 / emb_dim, 0.0, 1.0 / moe_hidden]
-                experts_per_group = n_routed // len(group_vals)  # 64
-                expert_vals = []
-                for gv in group_vals:
-                    expert_vals.extend([gv] * experts_per_group)
-                logger.info(
-                    f"Creating {n_routed} column-varying expert weights: "
-                    f"group vals={group_vals}, {experts_per_group} experts/group"
-                )
-            else:
-                # Row-varying (-3, -13): within each dispatch group (64 experts),
-                # row 0 (first 32 experts) gets val_a, row 1 (next 32) gets val_b.
-                # All 4 groups use the same row pattern.
-                val_a = 1.0 / emb_dim
-                val_b = -1.0 / emb_dim
-                experts_per_chip = n_routed // mesh_device.get_num_devices()  # 32
-                experts_per_group = experts_per_chip * mesh_shape[sp_axis]  # 64
-                num_groups = n_routed // experts_per_group  # 4
-                expert_vals = []
-                for _ in range(num_groups):
-                    expert_vals.extend([val_a] * experts_per_chip)  # row 0: first 32
-                    expert_vals.extend([val_b] * experts_per_chip)  # row 1: next 32
-                logger.info(
-                    f"Creating {n_routed} row-varying expert weights: "
-                    f"row0={val_a}, row1={val_b}, {experts_per_chip} experts/chip, {num_groups} groups"
-                )
+        # --- Build TT state dict for TtPrefillBlock ---
+        layer_sd = {
+            "attn_norm_weight": layer_dequant["input_layernorm.weight"],
+            "mla_weights": {
+                "q_a_proj.weight": layer_dequant["self_attn.q_a_proj.weight"],
+                "q_a_layernorm.weight": layer_dequant["self_attn.q_a_layernorm.weight"],
+                "q_b_proj.weight": layer_dequant["self_attn.q_b_proj.weight"],
+                "kv_a_proj_with_mqa.weight": layer_dequant["self_attn.kv_a_proj_with_mqa.weight"],
+                "kv_a_layernorm.weight": layer_dequant["self_attn.kv_a_layernorm.weight"],
+                "kv_b_proj.weight": layer_dequant["self_attn.kv_b_proj.weight"],
+                "o_proj.weight": layer_dequant["self_attn.o_proj.weight"],
+            },
+            "ffn_norm_weight": layer_dequant["post_attention_layernorm.weight"],
+        }
 
-            layer_sd["routed_expert_weights"] = []
-            for j in range(n_routed):
-                v = expert_vals[j]
-                layer_sd["routed_expert_weights"].append(
-                    {
-                        "gate_proj": torch.full((moe_hidden, emb_dim), v, dtype=torch.bfloat16),
-                        "up_proj": torch.full((moe_hidden, emb_dim), v, dtype=torch.bfloat16),
-                        "down_proj": torch.full((emb_dim, moe_hidden), v, dtype=torch.bfloat16),
-                    }
-                )
+        if is_dense:
+            layer_sd["ffn_weights"] = {
+                "gate_proj": layer_dequant["mlp.gate_proj.weight"],
+                "up_proj": layer_dequant["mlp.up_proj.weight"],
+                "down_proj": layer_dequant["mlp.down_proj.weight"],
+            }
         else:
-            layer_sd["routed_expert_weights"] = [
-                {
-                    "gate_proj": layer_dequant[f"mlp.experts.{j}.gate_proj.weight"],
-                    "up_proj": layer_dequant[f"mlp.experts.{j}.up_proj.weight"],
-                    "down_proj": layer_dequant[f"mlp.experts.{j}.down_proj.weight"],
+            if layer_idx == -6:
+                # Zero gate weights to produce zero routing scores
+                gate_shape = layer_dequant["mlp.gate.weight"].shape
+                bias_shape = layer_dequant["mlp.gate.e_score_correction_bias"].shape
+                layer_sd["gate_weights"] = {
+                    "weight": torch.zeros(gate_shape, dtype=torch.bfloat16),
+                    "e_score_correction_bias": torch.zeros(bias_shape, dtype=torch.bfloat16),
                 }
-                for j in range(n_routed)
-            ]
+                logger.info(f"Zeroed gate weights: weight={gate_shape}, bias={bias_shape}")
+            else:
+                layer_sd["gate_weights"] = {
+                    "weight": layer_dequant["mlp.gate.weight"],
+                    "e_score_correction_bias": layer_dequant["mlp.gate.e_score_correction_bias"],
+                }
 
-        if layer_idx in (-5, -6, -7):
-            # Zero shared expert weights
-            shared_hidden = config.moe_intermediate_size
-            layer_sd["shared_expert_weights"] = {
-                "gate_proj": torch.zeros(shared_hidden, emb_dim, dtype=torch.bfloat16),
-                "up_proj": torch.zeros(shared_hidden, emb_dim, dtype=torch.bfloat16),
-                "down_proj": torch.zeros(emb_dim, shared_hidden, dtype=torch.bfloat16),
-            }
-            logger.info("Zeroed shared expert weights")
-        else:
-            layer_sd["shared_expert_weights"] = {
-                "gate_proj": layer_dequant["mlp.shared_experts.gate_proj.weight"],
-                "up_proj": layer_dequant["mlp.shared_experts.up_proj.weight"],
-                "down_proj": layer_dequant["mlp.shared_experts.down_proj.weight"],
-            }
+            if synthetic_routed:
+                moe_hidden = config.moe_intermediate_size  # 2048
+                if layer_idx in (-1, -4, -5, -6):
+                    # All 256 experts identical: constant value
+                    val = 0.0 if layer_idx in (-4, -5, -6) else 1.0 / emb_dim
+                    expert_vals = [val] * n_routed
+                    logger.info(f"Creating {n_routed} {'zero' if val == 0 else 'uniform'} expert weights (val={val})")
+                elif layer_idx in (-2, -12):
+                    # Column-varying: each dispatch group (64 experts) gets a different constant
+                    # Group 0 (experts 0-63): 1/7168, Group 1 (64-127): -1/7168
+                    # Group 2 (128-191): 0, Group 3 (192-255): 1/2048
+                    group_vals = [1.0 / emb_dim, -1.0 / emb_dim, 0.0, 1.0 / moe_hidden]
+                    experts_per_group = n_routed // len(group_vals)  # 64
+                    expert_vals = []
+                    for gv in group_vals:
+                        expert_vals.extend([gv] * experts_per_group)
+                    logger.info(
+                        f"Creating {n_routed} column-varying expert weights: "
+                        f"group vals={group_vals}, {experts_per_group} experts/group"
+                    )
+                else:
+                    # Row-varying (-3, -13): within each dispatch group (64 experts),
+                    # row 0 (first 32 experts) gets val_a, row 1 (next 32) gets val_b.
+                    # All 4 groups use the same row pattern.
+                    val_a = 1.0 / emb_dim
+                    val_b = -1.0 / emb_dim
+                    experts_per_chip = n_routed // mesh_device.get_num_devices()  # 32
+                    experts_per_group = experts_per_chip * mesh_shape[sp_axis]  # 64
+                    num_groups = n_routed // experts_per_group  # 4
+                    expert_vals = []
+                    for _ in range(num_groups):
+                        expert_vals.extend([val_a] * experts_per_chip)  # row 0: first 32
+                        expert_vals.extend([val_b] * experts_per_chip)  # row 1: next 32
+                    logger.info(
+                        f"Creating {n_routed} row-varying expert weights: "
+                        f"row0={val_a}, row1={val_b}, {experts_per_chip} experts/chip, {num_groups} groups"
+                    )
 
-    # --- Build HF model with only the target layer ---
-    num_layers_hf = real_layer_idx + 1
-    hf_sd = {"embed_tokens.weight": embed_weight}
-    for k, v in layer_dequant.items():
-        hf_sd[f"layers.{real_layer_idx}.{k}"] = v
+                layer_sd["routed_expert_weights"] = []
+                for j in range(n_routed):
+                    v = expert_vals[j]
+                    layer_sd["routed_expert_weights"].append(
+                        {
+                            "gate_proj": torch.full((moe_hidden, emb_dim), v, dtype=torch.bfloat16),
+                            "up_proj": torch.full((moe_hidden, emb_dim), v, dtype=torch.bfloat16),
+                            "down_proj": torch.full((emb_dim, moe_hidden), v, dtype=torch.bfloat16),
+                        }
+                    )
+            else:
+                layer_sd["routed_expert_weights"] = [
+                    {
+                        "gate_proj": layer_dequant[f"mlp.experts.{j}.gate_proj.weight"],
+                        "up_proj": layer_dequant[f"mlp.experts.{j}.up_proj.weight"],
+                        "down_proj": layer_dequant[f"mlp.experts.{j}.down_proj.weight"],
+                    }
+                    for j in range(n_routed)
+                ]
 
-    # For synthetic experts, override HF expert weights too
-    if synthetic_routed:
-        moe_hidden = config.moe_intermediate_size
-        for j in range(n_routed):
-            v = expert_vals[j]
-            hf_sd[f"layers.{real_layer_idx}.mlp.experts.{j}.gate_proj.weight"] = torch.full(
-                (moe_hidden, emb_dim), v, dtype=torch.bfloat16
+            if layer_idx in (-5, -6, -7):
+                # Zero shared expert weights
+                shared_hidden = config.moe_intermediate_size
+                layer_sd["shared_expert_weights"] = {
+                    "gate_proj": torch.zeros(shared_hidden, emb_dim, dtype=torch.bfloat16),
+                    "up_proj": torch.zeros(shared_hidden, emb_dim, dtype=torch.bfloat16),
+                    "down_proj": torch.zeros(emb_dim, shared_hidden, dtype=torch.bfloat16),
+                }
+                logger.info("Zeroed shared expert weights")
+            else:
+                layer_sd["shared_expert_weights"] = {
+                    "gate_proj": layer_dequant["mlp.shared_experts.gate_proj.weight"],
+                    "up_proj": layer_dequant["mlp.shared_experts.up_proj.weight"],
+                    "down_proj": layer_dequant["mlp.shared_experts.down_proj.weight"],
+                }
+
+        # --- Build HF model with only the target layer (only when computing torch ref) ---
+        if not skip_reference:
+            num_layers_hf = real_layer_idx + 1
+            hf_sd = {"embed_tokens.weight": embed_weight}
+            for k, v in layer_dequant.items():
+                hf_sd[f"layers.{real_layer_idx}.{k}"] = v
+
+            # For synthetic experts, override HF expert weights too
+            if synthetic_routed:
+                moe_hidden = config.moe_intermediate_size
+                for j in range(n_routed):
+                    v = expert_vals[j]
+                    hf_sd[f"layers.{real_layer_idx}.mlp.experts.{j}.gate_proj.weight"] = torch.full(
+                        (moe_hidden, emb_dim), v, dtype=torch.bfloat16
+                    )
+                    hf_sd[f"layers.{real_layer_idx}.mlp.experts.{j}.up_proj.weight"] = torch.full(
+                        (moe_hidden, emb_dim), v, dtype=torch.bfloat16
+                    )
+                    hf_sd[f"layers.{real_layer_idx}.mlp.experts.{j}.down_proj.weight"] = torch.full(
+                        (emb_dim, moe_hidden), v, dtype=torch.bfloat16
+                    )
+            if layer_idx in (-5, -6, -7):
+                # Zero shared expert in HF model too
+                moe_hidden = config.moe_intermediate_size
+                for key in ("gate_proj", "up_proj"):
+                    hf_sd[f"layers.{real_layer_idx}.mlp.shared_experts.{key}.weight"] = torch.zeros(
+                        moe_hidden, emb_dim, dtype=torch.bfloat16
+                    )
+                hf_sd[f"layers.{real_layer_idx}.mlp.shared_experts.down_proj.weight"] = torch.zeros(
+                    emb_dim, moe_hidden, dtype=torch.bfloat16
+                )
+            if layer_idx == -6:
+                # Zero gate in HF model too
+                gate_shape = layer_dequant["mlp.gate.weight"].shape
+                bias_shape = layer_dequant["mlp.gate.e_score_correction_bias"].shape
+                hf_sd[f"layers.{real_layer_idx}.mlp.gate.weight"] = torch.zeros(gate_shape, dtype=torch.bfloat16)
+                hf_sd[f"layers.{real_layer_idx}.mlp.gate.e_score_correction_bias"] = torch.zeros(
+                    bias_shape, dtype=torch.bfloat16
+                )
+            if synthetic_experts:
+                logger.info(f"Overrode HF model weights with synthetic values")
+
+            logger.info(
+                f"Creating HF model with {num_layers_hf} layers (only layer {real_layer_idx} has real weights)..."
             )
-            hf_sd[f"layers.{real_layer_idx}.mlp.experts.{j}.up_proj.weight"] = torch.full(
-                (moe_hidden, emb_dim), v, dtype=torch.bfloat16
-            )
-            hf_sd[f"layers.{real_layer_idx}.mlp.experts.{j}.down_proj.weight"] = torch.full(
-                (emb_dim, moe_hidden), v, dtype=torch.bfloat16
-            )
-    if layer_idx in (-5, -6, -7):
-        # Zero shared expert in HF model too
-        moe_hidden = config.moe_intermediate_size
-        for key in ("gate_proj", "up_proj"):
-            hf_sd[f"layers.{real_layer_idx}.mlp.shared_experts.{key}.weight"] = torch.zeros(
-                moe_hidden, emb_dim, dtype=torch.bfloat16
-            )
-        hf_sd[f"layers.{real_layer_idx}.mlp.shared_experts.down_proj.weight"] = torch.zeros(
-            emb_dim, moe_hidden, dtype=torch.bfloat16
-        )
-    if layer_idx == -6:
-        # Zero gate in HF model too
-        gate_shape = layer_dequant["mlp.gate.weight"].shape
-        bias_shape = layer_dequant["mlp.gate.e_score_correction_bias"].shape
-        hf_sd[f"layers.{real_layer_idx}.mlp.gate.weight"] = torch.zeros(gate_shape, dtype=torch.bfloat16)
-        hf_sd[f"layers.{real_layer_idx}.mlp.gate.e_score_correction_bias"] = torch.zeros(
-            bias_shape, dtype=torch.bfloat16
-        )
-    if synthetic_experts:
-        logger.info(f"Overrode HF model weights with synthetic values")
+            hf_model = create_hf_model_with_weights(config, num_layers_hf, hf_sd)
 
     if skip_reference:
         logger.info("skip_reference=True: skipping HF reference model build (perf-only mode)")
-        hf_model = None
-    else:
-        logger.info(f"Creating HF model with {num_layers_hf} layers (only layer {real_layer_idx} has real weights)...")
-        hf_model = create_hf_model_with_weights(config, num_layers_hf, hf_sd)
 
     # ------------------------------------------------------------------
     # 2. Tokenize & embed (shared initial input)
@@ -426,6 +461,7 @@ def test_prefill_block_loop(
         topology=topology,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
+        weight_cache_path=block_cache_dir,
     )
     block_kwargs["is_balanced"] = True  # MLA/RoPE layout — must match RotarySetup(is_balanced=True) below
     if not is_dense:
