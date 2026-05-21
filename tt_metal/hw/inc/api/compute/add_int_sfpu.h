@@ -35,7 +35,15 @@ namespace ckernel {
 // clang-format on
 template <DataFormat data_format>
 ALWI void add_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_add_int<APPROX, 8, data_format, false>(idst0, idst1, odst)));
+#if defined(SFPU_ADD_INT_SIGN_MAG_DEST)
+    // Int8 copy_tile + fp32_dest_acc FPU (throgh ELWADD) writes sign-magnitude Int32 into dest.
+    // Native Int32 tiles use 2's-comp dest and keep SIGN_MAGNITUDE_FORMAT=false.
+    MATH((llk_math_eltwise_binary_sfpu_add_int<APPROX, 8 /*ITERATIONS*/, data_format, true /*SIGN_MAGNITUDE_FORMAT*/>(
+        idst0, idst1, odst)));
+#else
+    MATH((llk_math_eltwise_binary_sfpu_add_int<APPROX, 8 /*ITERATIONS*/, data_format, false /*SIGN_MAGNITUDE_FORMAT*/>(
+        idst0, idst1, odst)));
+#endif
 }
 
 /**

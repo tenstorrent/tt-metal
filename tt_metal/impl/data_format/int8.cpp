@@ -7,6 +7,19 @@
 #include <random>
 #include <tt_stl/assert.hpp>
 
+int sign_mag_byte_to_int8(uint8_t byte) {
+    const int mag = static_cast<int>(byte & 0x7F);
+    const bool neg = (byte & 0x80) != 0;
+    return neg ? -mag : mag;
+}
+
+uint32_t int32_to_sign_mag_word(int32_t value) {
+    if (value >= 0) {
+        return static_cast<uint32_t>(value);
+    }
+    return 0x80000000u | static_cast<uint32_t>(-static_cast<int64_t>(value));
+}
+
 uint32_t pack_four_int8_into_uint32(int8_t a, int8_t b, int8_t c, int8_t d) {
     return static_cast<uint32_t>(static_cast<uint8_t>(a)) | (static_cast<uint32_t>(static_cast<uint8_t>(b)) << 8) |
            (static_cast<uint32_t>(static_cast<uint8_t>(c)) << 16) |

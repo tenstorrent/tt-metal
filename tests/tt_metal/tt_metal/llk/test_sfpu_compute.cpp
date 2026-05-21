@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -40,6 +40,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/int8.hpp>
 
 namespace tt::tt_metal {
 
@@ -68,16 +69,26 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
 
 // Binary SFPU ops driven by `run_sfpu_binary_two_input_buffer`.
 //
-// Each entry maps an op name to a single kernel define:
-//   SFPU_OP_CHAIN_0 — expanded once per tile inside acquire/release; contains
-//                     both the init call and the op call. LHS at DST[0], RHS at
-//                     DST[1], result written to DST[2] for the packer.
+// Each entry maps an op name (the test parameter) to the kernel-side macro
+// substitutions expanded by the SFPU binary compute kernel
+// (`eltwise_binary_sfpu.cpp`, Metal 2.0 dataflow-buffer based):
+//
+//   * SFPU_OP_INIT_0  — runs once before the per-pair loop. Used to set up
+//                       SFPU lookup tables / state (e.g. div reciprocal LUT).
+//   * SFPU_OP_CHAIN_0 — runs once per (LHS, RHS) pair, inside an
+//                       acquire/release section. By convention LHS lives at
+//                       DST[0] and RHS at DST[1]; the result is written back
+//                       to DST[0] so the packer reads from there.
 //
 // To add a new binary SFPU op: add an entry here, add a matching arm in
 // sfpu_binary_function() for the golden compute, and (if its valid input
 // range differs from div) add an arm in generate_packed_sfpu_binary_inputs().
 const map<std::string, std::map<std::string, std::string>> sfpu_binary_op_to_op_name = {
-    {"div_binary", {{"SFPU_OP_CHAIN_0", "div_binary_tile_init(); div_binary_tile(0, 1, 2);"}}},
+    {"div_binary", {{"SFPU_OP_INIT_0", "div_binary_tile_init();"}, {"SFPU_OP_CHAIN_0", "div_binary_tile(0, 1, 0);"}}},
+    // add_int: Int8 L1 inputs are promoted to sign-magnitude Int32 in DEST via copy_tile + fp32_dest_acc;
+    // add_int_tile<Int32> with SFPU_ADD_INT_SIGN_MAG_DEST then adds in sign-mag space. Result in DST[0].
+    {"add_int",
+     {{"SFPU_OP_INIT_0", "add_int_tile_init();"}, {"SFPU_OP_CHAIN_0", "add_int_tile<DataFormat::Int32>(0, 1, 0);"}}},
 };
 
 bfloat16 sfpu_function(const std::string& op_name, const bfloat16& input) {
@@ -127,7 +138,8 @@ bfloat16 sfpu_function(const std::string& op_name, const bfloat16& input) {
     TT_THROW("Unsupported op_name in test");
 }
 
-// Reference implementation for binary SFPU ops.
+// Reference implementation for float-typed binary SFPU ops. Integer ops
+// (e.g. add_int) bypass this helper; golden is computed in run_sfpu_binary_two_input_buffer.
 bfloat16 sfpu_binary_function(const std::string& op_name, const bfloat16& lhs, const bfloat16& rhs) {
     if (op_name == "div_binary") {
         return bfloat16(static_cast<float>(lhs) / static_cast<float>(rhs));
@@ -172,11 +184,19 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_packed_sfpu_binary_inputs
         auto rhs = generate_div_operand(numel, seed + 1);
         return {lhs, rhs};
     }
+    if (op_name == "add_int") {
+        auto lhs = create_random_vector_of_int8(numel, seed);
+        auto rhs = create_random_vector_of_int8(numel, seed + 1);
+        return {lhs, rhs};
+    }
     TT_THROW("Unsupported binary op_name in test");
 }
 
 bool is_close_packed_sfpu_output(
     const std::vector<uint32_t>& vec_a, const std::vector<uint32_t>& vec_b, const std::string& op_name) {
+    if (op_name == "add_int") {
+        return vec_a == vec_b;
+    }
     if (op_name == "tanh") {
         return is_close_packed_vectors<bfloat16, uint32_t>(
             vec_a, vec_b, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.175f, 0.1f); });
@@ -230,7 +250,7 @@ bool run_sfpu_all_same_buffer(
     auto input_dram_buffer = CreateBuffer(dram_config);
     auto output_dram_buffer = CreateBuffer(dram_config);
 
-    // Input
+    // Host input + golden generation
     std::vector<uint32_t> packed_input = sfpu_util::generate_packed_sfpu_input(
         byte_size / sizeof(bfloat16), test_config.sfpu_op, std::chrono::system_clock::now().time_since_epoch().count());
 
@@ -424,7 +444,7 @@ bool run_sfpu_all_same_buffer(
 /// High-level flow:
 ///
 ///   DRAM(LHS) ─┐
-///              ├─> Reader ─> in0/in1 DFB ─> SFPU Compute ─> out DFB ─> Writer ─> DRAM(out)
+///              ├─> Reader ─> in0/in1 DFB ─> SFPU Compute (eltwise_binary_sfpu.cpp) ─> out DFB ─> Writer ─> DRAM(out)
 ///   DRAM(RHS) ─┘
 ///
 /// @param mesh_device Device under test.
@@ -432,35 +452,70 @@ bool run_sfpu_all_same_buffer(
 /// @return
 bool run_sfpu_binary_two_input_buffer(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const SfpuConfig& test_config) {
-    const size_t per_buffer_byte_size = test_config.num_tiles * test_config.tile_byte_size;
+    // Input/output tiles may differ in width (add_int: Int8 in, Int32 out), so size each buffer by its own format.
+    const size_t input_tile_byte_size = tt::tile_size(test_config.l1_input_data_format);
+    const size_t output_tile_byte_size = tt::tile_size(test_config.l1_output_data_format);
+    const size_t per_buffer_byte_size_input = test_config.num_tiles * input_tile_byte_size;
+    const size_t per_buffer_byte_size_output = test_config.num_tiles * output_tile_byte_size;
     auto& cq = mesh_device->mesh_command_queue();
 
-    tt::tt_metal::InterleavedBufferConfig dram_config{
+    tt::tt_metal::InterleavedBufferConfig dram_config_input{
         .device = mesh_device->get_devices()[0],
-        .size = per_buffer_byte_size,
-        .page_size = per_buffer_byte_size,
+        .size = per_buffer_byte_size_input,
+        .page_size = per_buffer_byte_size_input,
+        .buffer_type = tt::tt_metal::BufferType::DRAM};
+    tt::tt_metal::InterleavedBufferConfig dram_config_output{
+        .device = mesh_device->get_devices()[0],
+        .size = per_buffer_byte_size_output,
+        .page_size = per_buffer_byte_size_output,
         .buffer_type = tt::tt_metal::BufferType::DRAM};
 
-    auto input0_dram_buffer = CreateBuffer(dram_config);
-    auto input1_dram_buffer = CreateBuffer(dram_config);
-    auto output_dram_buffer = CreateBuffer(dram_config);
+    auto input0_dram_buffer = CreateBuffer(dram_config_input);
+    auto input1_dram_buffer = CreateBuffer(dram_config_input);
+    auto output_dram_buffer = CreateBuffer(dram_config_output);
 
-    const uint32_t numel = per_buffer_byte_size / sizeof(bfloat16);
+    // add_int uses Int8 L1 inputs (promoted to sign-magnitude Int32 in dest); div_binary stays bfloat16.
+    const bool is_int_op = (test_config.sfpu_op == "add_int");
+    const size_t element_size = is_int_op ? sizeof(int8_t) : sizeof(bfloat16);
+    const uint32_t numel = per_buffer_byte_size_input / element_size;
     const int seed = std::chrono::system_clock::now().time_since_epoch().count();
     auto [packed_lhs, packed_rhs] = sfpu_util::generate_packed_sfpu_binary_inputs(numel, test_config.sfpu_op, seed);
 
-    auto lhs = unpack_vector<bfloat16, uint32_t>(packed_lhs);
-    auto rhs = unpack_vector<bfloat16, uint32_t>(packed_rhs);
-    std::vector<bfloat16> golden(lhs.size());
-    std::transform(lhs.begin(), lhs.end(), rhs.begin(), golden.begin(), [&](const bfloat16& a, const bfloat16& b) {
-        return sfpu_util::sfpu_binary_function(test_config.sfpu_op, a, b);
-    });
-    std::vector<uint32_t> packed_golden = pack_vector<uint32_t, bfloat16>(golden);
+    std::vector<uint32_t> packed_golden;
+    if (is_int_op) {
+        // HW interprets each Int8 datum as sign-mag on the wire (bit7=sign, bits[6:0]=mag),
+        // promotes to sign-mag Int32 in dest via copy_tile + fp32_dest_acc, then SFPU add
+        // (SFPU_ADD_INT_SIGN_MAG_DEST) writes sign-mag Int32 to DRAM.
+        TT_FATAL(packed_lhs.size() == packed_rhs.size(), "lhs/rhs packed size mismatch");
+        const size_t num_words = packed_lhs.size() * 4;
+        packed_golden.resize(num_words);
+        for (size_t w = 0; w < packed_lhs.size(); ++w) {
+            for (int b = 0; b < 4; ++b) {
+                const auto lhs_byte = static_cast<uint8_t>((packed_lhs[w] >> (b * 8)) & 0xFF);
+                const auto rhs_byte = static_cast<uint8_t>((packed_rhs[w] >> (b * 8)) & 0xFF);
+                const int sum = sign_mag_byte_to_int8(lhs_byte) + sign_mag_byte_to_int8(rhs_byte);
+                packed_golden[w * 4 + b] = int32_to_sign_mag_word(static_cast<int32_t>(sum));
+            }
+        }
+    } else {
+        auto lhs = unpack_vector<bfloat16, uint32_t>(packed_lhs);
+        auto rhs = unpack_vector<bfloat16, uint32_t>(packed_rhs);
+        std::vector<bfloat16> golden(lhs.size());
+        std::transform(lhs.begin(), lhs.end(), rhs.begin(), golden.begin(), [&](const bfloat16& a, const bfloat16& b) {
+            return sfpu_util::sfpu_binary_function(test_config.sfpu_op, a, b);
+        });
+        packed_golden = pack_vector<uint32_t, bfloat16>(golden);
+    }
 
     std::map<std::string, std::string> sfpu_defines = sfpu_util::sfpu_binary_op_to_op_name.at(test_config.sfpu_op);
     sfpu_defines["SFPU_BINARY_OP"] = "1";
-    // TODO(add_int PR): integer ops set SFPU_OP_BINARY_ADD_INT_INCLUDE here instead
-    sfpu_defines["SFPU_OP_BINARY_DIV_INCLUDE"] = "1";
+    if (is_int_op) {
+        sfpu_defines["SFPU_OP_BINARY_ADD_INT_INCLUDE"] = "1";
+        // Int8 copy_tile + fp32_dest_acc promotes to sign-mag Int32 in dest.
+        sfpu_defines["SFPU_ADD_INT_SIGN_MAG_DEST"] = "1";
+    } else {
+        sfpu_defines["SFPU_OP_BINARY_DIV_INCLUDE"] = "1";
+    }
 
     TT_FATAL(
         test_config.cores.ranges().size() == 1,
@@ -481,7 +536,7 @@ bool run_sfpu_binary_two_input_buffer(
     auto make_input_dfb = [&](const char* name) {
         return experimental::metal2_host_api::DataflowBufferSpec{
             .unique_id = name,
-            .entry_size = static_cast<uint32_t>(test_config.tile_byte_size),
+            .entry_size = static_cast<uint32_t>(input_tile_byte_size),
             .num_entries = static_cast<uint32_t>(test_config.num_tiles),
             .data_format_metadata = test_config.l1_input_data_format,
         };
@@ -491,7 +546,7 @@ bool run_sfpu_binary_two_input_buffer(
     experimental::metal2_host_api::DataflowBufferSpec in1_dfb_spec = make_input_dfb(IN1_DFB);
     experimental::metal2_host_api::DataflowBufferSpec out_dfb_spec{
         .unique_id = OUT_DFB,
-        .entry_size = static_cast<uint32_t>(test_config.tile_byte_size),
+        .entry_size = static_cast<uint32_t>(output_tile_byte_size),
         .num_entries = static_cast<uint32_t>(test_config.num_tiles),
         .data_format_metadata = test_config.l1_output_data_format,
     };
@@ -559,7 +614,7 @@ bool run_sfpu_binary_two_input_buffer(
         .unique_id = COMPUTE,
         .source =
 
-            "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_sfpu_2_0.cpp",
+            "tt_metal/kernels/compute/eltwise_binary_sfpu.cpp",
         .num_threads = 1,
         .compiler_options = {.defines = std::move(compute_defines)},
         .dfb_bindings =
@@ -585,7 +640,7 @@ bool run_sfpu_binary_two_input_buffer(
             {{"per_core_block_cnt", 1u}, {"per_core_block_size", static_cast<uint32_t>(test_config.num_tiles)}},
         .config_spec =
             experimental::metal2_host_api::ComputeConfiguration{
-                .fp32_dest_acc_en = false,
+                .fp32_dest_acc_en = is_int_op,
                 .math_approx_mode = test_config.approx_mode,
             },
     };
@@ -770,19 +825,22 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuBinaryParameterizedFixture, TensixSfpuBinar
 
     if (MetalContext::instance().get_cluster().arch() == ARCH::WORMHOLE_B0 ||
         MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE) {
-        GTEST_SKIP() << "Binary Div op test not fixed for WH/BH";
+        GTEST_SKIP() << "Binary SFPU op test (div_binary / add_int) not fixed for WH/BH";
     }
 
-    const tt::DataFormat data_format = tt::DataFormat::Float16_b;
-    const size_t tile_byte_size = 2 * 32 * 32;
+    // add_int: Int8 L1 inputs promoted to sign-mag Int32 output. div_binary stays bfloat16.
+    const bool is_int_op = (sfpu_op == "add_int");
+    const tt::DataFormat data_format_input = is_int_op ? tt::DataFormat::Int8 : tt::DataFormat::Float16_b;
+    const tt::DataFormat data_format_output = is_int_op ? tt::DataFormat::Int32 : tt::DataFormat::Float16_b;
+    const size_t tile_byte_size = is_int_op ? tt::tile_size(tt::DataFormat::Int8) : 2 * 32 * 32;
 
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
     unit_tests::compute::sfpu::SfpuConfig test_config = {
         .num_tiles = num_tiles,
         .tile_byte_size = tile_byte_size,
-        .l1_input_data_format = data_format,
-        .l1_output_data_format = data_format,
+        .l1_input_data_format = data_format_input,
+        .l1_output_data_format = data_format_output,
         .cores = core_range_set,
         .sfpu_op = sfpu_op,
         .approx_mode = false};
@@ -795,6 +853,10 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuBinaryParameterizedFixture, TensixSfpuBinar
 INSTANTIATE_TEST_SUITE_P(
     SingleCoreSfpuBinaryCompute,
     SingleCoreSingleMeshDeviceSfpuBinaryParameterizedFixture,
-    ::testing::Values(std::make_tuple(1, "div_binary"), std::make_tuple(4, "div_binary")));
+    ::testing::Values(
+        std::make_tuple(1, "div_binary"),
+        std::make_tuple(4, "div_binary"),
+        std::make_tuple(1, "add_int"),
+        std::make_tuple(4, "add_int")));
 
 }  // namespace tt::tt_metal
