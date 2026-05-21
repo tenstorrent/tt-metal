@@ -532,10 +532,6 @@ all_gather_minimal_matmul_async_factory_helper(
     std::map<std::string, std::string> in0_defines;
     std::map<std::string, std::string> in0_injector_defines;
     std::map<std::string, std::string> in0_fabric_defines;
-    const bool agmm_uni_ring = (topology == ttnn::ccl::Topology::Linear);
-    if (agmm_uni_ring) {
-        defines["AGMM_UNI_RING"] = "1";
-    }
     if (use_bias) {
         defines["FUSE_BIAS"] = "1";
     }
@@ -555,11 +551,11 @@ all_gather_minimal_matmul_async_factory_helper(
     in0_fabric_defines = in0_defines;
     in0_fabric_defines["USE_MUX"] = "1";
 
-    // Uni-ring routing override: Dev 0's "forward" unicast goes N-1 hops (long send) to
-    // Dev N-1, instead of 1 hop to Dev 1. fabric_set_unicast_route<false>(hdr, distance)
-    // routes the packet to the device `distance` hops away, with no intermediate
-    // deliveries — exactly what we want.
-    if (agmm_uni_ring && ring_index == 0) {
+    // Linear uni-ring routing: Dev 0's forward unicast routes N-1 hops to Dev N-1
+    // (rather than 1 hop to Dev 1). fabric_set_unicast_route<false>(hdr, distance)
+    // sends the packet to the device `distance` hops away, with no intermediate
+    // deliveries.
+    if (topology == ttnn::ccl::Topology::Linear && ring_index == 0) {
         unicast_forward_args[1] = ring_size - 1;  // distance_in_hops = N-1
     }
 

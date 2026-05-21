@@ -222,7 +222,6 @@ void kernel_main() {
                         K_tiles_per_device,
                         num_devices,
                         k_forward,
-                        num_targets_forward_direction,
                         k_left_tiles,
                         k_block_left_tile,
                         k_block_right_tile);

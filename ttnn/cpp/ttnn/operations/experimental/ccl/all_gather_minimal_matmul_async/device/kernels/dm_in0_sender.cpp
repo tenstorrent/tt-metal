@@ -365,7 +365,6 @@ void kernel_main() {
                     sem_target_backward,
                     is_injector_core,
                     1,
-                    num_targets_forward_direction,
                     k_left_tiles,
                     k_block_left_tile,
                     k_block_right_tile);
@@ -426,96 +425,41 @@ void kernel_main() {
                     noc_semaphore_set_remote(in0_valid_semaphore_addr, in0_receiver_semaphore_noc_addr);
                 }
 #ifdef USE_MUX
-#ifdef AGMM_UNI_RING
-                // Uni-ring: every iter, every device sends ONE full K-block to its predecessor
-                // in the virtual ring. Dev 0 (num_targets_backward_direction == 0) long-sends
-                // to Dev N-1 via mux_backward (forward direction, N-1 hops; the routing was
-                // overridden in the program factory to set distance_in_hops = N-1). Other
-                // devices short-send to my_rank-1 via mux_forward (backward direction, 1 hop).
-                // All sends signal out_ready_semaphore_forward at the receiver (single sem).
                 if (n_block_iter == 0) {
-                    if constexpr (num_targets_backward_direction == 0) {
-                        // Dev 0 (chain head): long send via mux_backward + pkt_hdrs_forward
-                        if constexpr (num_targets_forward_direction > 0) {
-                            if (in0_core_order_index >= backward_in0_core_order_index &&
-                                in0_core_order_index < forward_in0_core_order_index) {
-                                forward_half_block_to_fabric_neighbor(
-                                    m_tile,
-                                    k_block_left_tile,
-                                    current_M_block_tiles,
-                                    k_left_tiles,
-                                    k_right_tiles,
-                                    num_tiles_to_write_per_packet,
-                                    in0_start_address,
-                                    K_tiles,
-                                    in0_reader,
-                                    mux_connection_handle_backward,
-                                    pkt_hdrs_forward,
-                                    in0_tile_size,
-                                    out_ready_sem_injector_noc_addr_forward_in_pkt,
-                                    true,
-                                    M_tiles,
-                                    true);
-                            }
-                        }
-                    } else {
-                        // Dev k > 0: short send via mux_forward + pkt_hdrs_backward
-                        if (in0_core_order_index >= forward_in0_core_order_index) {
-                            forward_half_block_to_fabric_neighbor(
-                                m_tile,
-                                k_block_left_tile,
-                                current_M_block_tiles,
-                                k_left_tiles,
-                                k_right_tiles,
-                                num_tiles_to_write_per_packet,
-                                in0_start_address,
-                                K_tiles,
-                                in0_reader,
-                                mux_connection_handle_forward,
-                                pkt_hdrs_backward,
-                                in0_tile_size,
-                                out_ready_sem_injector_noc_addr_forward_in_pkt,
-                                true,
-                                M_tiles,
-                                true);
-                        }
-                    }
-                }
-#else
-                if (n_block_iter == 0) {
-                    bool forward_slice = false;
                     if constexpr (is_linear) {
-                        // Linear: always relay — every device must propagate each K-block
-                        // hop-by-hop to the end of the chain. Endpoint guards (num_targets_*
-                        // compile-time guards) prevent sends beyond the chain boundaries.
-                        forward_slice = true;
-                    } else {
-                        // Ring: skip the last K_blocks_per_device iterations — those K-blocks
-                        // have already reached all devices via wrap-around relay.
-                        if (k_block_iter < (K_num_blocks - (K_num_blocks / num_devices))) {
-                            forward_slice = true;
-                        }
-                    }
-                    if (forward_slice) {
-                        // Linear: gate relay direction by source device.
-                        //   dev_iter == 0 (local): both directions (initial dispatch).
-                        //   dev_iter <= num_targets_fwd: source forward of me; relay backward only.
-                        //   dev_iter > num_targets_fwd: source backward of me; relay forward only.
-                        // Ring: relay both directions every iter.
-                        bool send_via_mux_forward = true;   // sends to dev-1 (backward neighbor)
-                        bool send_via_mux_backward = true;  // sends to dev+1 (forward neighbor)
-                        if constexpr (is_linear) {
-                            uint32_t device_iter = k_block_iter / K_blocks_per_device;
-                            if (device_iter > 0) {
-                                if (device_iter <= num_targets_forward_direction) {
-                                    send_via_mux_backward = false;
-                                } else {
-                                    send_via_mux_forward = false;
+                        // Linear uni-ring: every iter, every device sends ONE full K-block to its
+                        // predecessor in the virtual ring. Dev 0 (num_targets_backward_direction == 0)
+                        // long-sends to Dev N-1 via mux_backward (forward direction, N-1 hops; the
+                        // routing was overridden in the program factory to set distance_in_hops = N-1).
+                        // Other devices short-send to my_rank-1 via mux_forward (backward direction,
+                        // 1 hop). All sends signal out_ready_semaphore_forward at the receiver.
+                        if constexpr (num_targets_backward_direction == 0) {
+                            // Dev 0 (chain head): long send via mux_backward + pkt_hdrs_forward
+                            if constexpr (num_targets_forward_direction > 0) {
+                                if (in0_core_order_index >= backward_in0_core_order_index &&
+                                    in0_core_order_index < forward_in0_core_order_index) {
+                                    forward_half_block_to_fabric_neighbor(
+                                        m_tile,
+                                        k_block_left_tile,
+                                        current_M_block_tiles,
+                                        k_left_tiles,
+                                        k_right_tiles,
+                                        num_tiles_to_write_per_packet,
+                                        in0_start_address,
+                                        K_tiles,
+                                        in0_reader,
+                                        mux_connection_handle_backward,
+                                        pkt_hdrs_forward,
+                                        in0_tile_size,
+                                        out_ready_sem_injector_noc_addr_forward_in_pkt,
+                                        true,
+                                        M_tiles,
+                                        true);
                                 }
                             }
-                        }
-                        if constexpr (num_targets_backward_direction > 0) {
-                            if (send_via_mux_forward && in0_core_order_index >= forward_in0_core_order_index) {
+                        } else {
+                            // Dev k > 0: short send via mux_forward + pkt_hdrs_backward
+                            if (in0_core_order_index >= forward_in0_core_order_index) {
                                 forward_half_block_to_fabric_neighbor(
                                     m_tile,
                                     k_block_left_tile,
@@ -535,31 +479,57 @@ void kernel_main() {
                                     true);
                             }
                         }
-                        if constexpr (num_targets_forward_direction > 0) {
-                            if (send_via_mux_backward && in0_core_order_index >= backward_in0_core_order_index &&
-                                in0_core_order_index < forward_in0_core_order_index) {
-                                forward_half_block_to_fabric_neighbor(
-                                    m_tile,
-                                    is_linear ? k_block_left_tile : k_block_right_tile,
-                                    current_M_block_tiles,
-                                    k_left_tiles,
-                                    k_right_tiles,
-                                    num_tiles_to_write_per_packet,
-                                    in0_start_address,
-                                    K_tiles,
-                                    in0_reader,
-                                    mux_connection_handle_backward,
-                                    pkt_hdrs_forward,
-                                    in0_tile_size,
-                                    out_ready_sem_injector_noc_addr_backward_in_pkt,
-                                    is_linear,
-                                    M_tiles,
-                                    true);
+                    } else {
+                        // Ring: relay each K-block both directions every iter. Skip the last
+                        // K_blocks_per_device iterations — those K-blocks have already reached
+                        // all devices via wrap-around relay.
+                        if (k_block_iter < (K_num_blocks - (K_num_blocks / num_devices))) {
+                            if constexpr (num_targets_backward_direction > 0) {
+                                if (in0_core_order_index >= forward_in0_core_order_index) {
+                                    forward_half_block_to_fabric_neighbor(
+                                        m_tile,
+                                        k_block_left_tile,
+                                        current_M_block_tiles,
+                                        k_left_tiles,
+                                        k_right_tiles,
+                                        num_tiles_to_write_per_packet,
+                                        in0_start_address,
+                                        K_tiles,
+                                        in0_reader,
+                                        mux_connection_handle_forward,
+                                        pkt_hdrs_backward,
+                                        in0_tile_size,
+                                        out_ready_sem_injector_noc_addr_forward_in_pkt,
+                                        true,
+                                        M_tiles,
+                                        true);
+                                }
+                            }
+                            if constexpr (num_targets_forward_direction > 0) {
+                                if (in0_core_order_index >= backward_in0_core_order_index &&
+                                    in0_core_order_index < forward_in0_core_order_index) {
+                                    forward_half_block_to_fabric_neighbor(
+                                        m_tile,
+                                        k_block_right_tile,
+                                        current_M_block_tiles,
+                                        k_left_tiles,
+                                        k_right_tiles,
+                                        num_tiles_to_write_per_packet,
+                                        in0_start_address,
+                                        K_tiles,
+                                        in0_reader,
+                                        mux_connection_handle_backward,
+                                        pkt_hdrs_forward,
+                                        in0_tile_size,
+                                        out_ready_sem_injector_noc_addr_backward_in_pkt,
+                                        false,
+                                        M_tiles,
+                                        true);
+                                }
                             }
                         }
                     }
                 }
-#endif  // AGMM_UNI_RING
 #endif  // USE_MUX
             }
 #ifdef FUSE_BIAS
