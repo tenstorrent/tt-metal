@@ -15,8 +15,8 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    generate_sfpu_format_dest_acc_combinations,
     input_output_formats,
-    is_invalid_quasar_sfpu_format_combination,
     parametrize,
 )
 from helpers.stimuli_config import StimuliConfig
@@ -59,59 +59,26 @@ _ELEMENTS_PER_TILE = 1024
 def generate_sfpu_binary_div_combinations(
     formats_list: List[FormatConfig],
 ):
-    """
-    Generate SFPU binary-div test combinations.
-
-    Mirrors the structure used by `test_sfpu_where_quasar` so format /
-    dest_acc / implied_math_format coverage is enumerated identically. The
-    div-specific axis is the (src0_idx, src1_idx, dst_idx) tile-index
-    permutation rather than a condition regime.
-    """
     combinations = []
 
-    for fmt in formats_list:
+    for fmt, dest_acc in generate_sfpu_format_dest_acc_combinations(formats_list):
         in_fmt = fmt.input_format
 
-        dest_acc_modes = (
-            (DestAccumulation.Yes,)
-            if in_fmt.is_32_bit()
-            else (DestAccumulation.No, DestAccumulation.Yes)
-        )
-        for dest_acc in dest_acc_modes:
-            if is_invalid_quasar_sfpu_format_combination(fmt, dest_acc):
+        if fmt.input_format == DataFormat.Float16 and dest_acc == DestAccumulation.Yes:
+            continue
+
+        for implied_math_format in [ImpliedMathFormat.No, ImpliedMathFormat.Yes]:
+            if in_fmt.is_mx_format() and implied_math_format == ImpliedMathFormat.No:
                 continue
 
-            if (
-                fmt.input_format == DataFormat.Float16
-                and dest_acc == DestAccumulation.Yes
-            ):
-                continue
-
-            for implied_math_format in [ImpliedMathFormat.No, ImpliedMathFormat.Yes]:
-                # MX formats require implied_math_format=Yes
-                if (
-                    in_fmt.is_mx_format()
-                    and implied_math_format == ImpliedMathFormat.No
-                ):
-                    continue
-
-                for src0_idx, src1_idx, dst_idx in _TILE_INDEX_VARIANTS:
-                    combinations.append(
-                        (
-                            fmt,
-                            dest_acc,
-                            implied_math_format,
-                            src0_idx,
-                            src1_idx,
-                            dst_idx,
-                        )
-                    )
+            for src0_idx, src1_idx, dst_idx in _TILE_INDEX_VARIANTS:
+                combinations.append(
+                    (fmt, dest_acc, implied_math_format, src0_idx, src1_idx, dst_idx)
+                )
 
     return combinations
 
 
-# Start with the canonical float matrix that every Quasar SFPU test uses.
-# Integer / MX coverage can be widened once the baseline passes.
 SFPU_BINARY_DIV_FORMATS = input_output_formats(
     [
         DataFormat.Float16,
@@ -205,7 +172,6 @@ def test_sfpu_binary_div_quasar(formats_dest_acc_implied_tile_indices):
     num_faces = 4
     mathop = MathOperation.SfpuElwdiv
 
-    elements_per_tile = 1024  # 4 faces * 16 rows * 16 cols
     generate_golden = get_golden_generator(BinarySFPUGolden)
     golden_full = generate_golden(
         mathop,
@@ -217,8 +183,8 @@ def test_sfpu_binary_div_quasar(formats_dest_acc_implied_tile_indices):
         input_dimensions,
         formats.input_format,
     ).flatten()
-    dst_start = dst_idx * elements_per_tile
-    golden_tensor = golden_full[dst_start : dst_start + elements_per_tile]
+    dst_start = dst_idx * _ELEMENTS_PER_TILE
+    golden_tensor = golden_full[dst_start : dst_start + _ELEMENTS_PER_TILE]
 
     # Convert golden to output format for comparison.
     torch_format_out = format_dict[formats.output_format]
@@ -226,9 +192,8 @@ def test_sfpu_binary_div_quasar(formats_dest_acc_implied_tile_indices):
 
     tile_count_res = 1  # we only pack the single output tile
 
-    # The C++ source streams operands straight into DEST — there's no datacopy
-    # stage — so the unpack engine must always be UnpDest. Width-mismatched
-    # configurations are pre-filtered by `_is_invalid_quasar_combination`.
+    # SFPU reads from DEST directly, so we use UnpDest to load operands there —
+    # no need to route through SRC registers and the FPU.
     configuration = TestConfig(
         "sources/quasar/sfpu_binary_div_quasar_test.cpp",
         formats,

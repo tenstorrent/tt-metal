@@ -25,7 +25,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_tiles_per_unpack = params.TILE_CNT;
 
     set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
-    _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*is_int_fpu_en*/>();
+    _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /* EN_INT32_MATH_FORMAT */>();
 
     buffer_descriptor_u bd_val = {0};
 
@@ -43,7 +43,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(td_val);
 
-    _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, num_tiles_per_unpack);
+    _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /* transpose */, is_fp32_dest_acc_en>(buf_desc_id, num_tiles_per_unpack);
     _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0);
 
     _llk_unpack_dest_dvalid_section_done_<dest_sync>();
@@ -72,11 +72,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     set_up_dest_dvalid_per_thread<dest_dvalid_client::SFPU>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
 
     DataFormat src_format = static_cast<DataFormat>(formats.math);
-    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false>(src_format, src_format);
+    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /* EN_INT32_MATH_FORMAT */>(src_format, src_format);
 
     // The BH-style div helper iterates 1 face's worth of SFP rows per call and
-    // is invoked once per face from the harness loop below. SFP_ROWS = 2 on
-    // Quasar, so a face (TEST_FACE_R_DIM = 16 rows) corresponds to 8 SFP iters.
+    // is invoked once per face. SFP_ROWS = 2 on Quasar,
+    // so a face (TEST_FACE_R_DIM = 16 rows) corresponds to 8 SFP iters.
     const std::uint32_t num_sfpu_iterations = params.TEST_FACE_R_DIM / ckernel::math::SFP_ROWS;
 
     _llk_math_eltwise_sfpu_init_();
@@ -86,21 +86,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Newton-Raphson refinement). No-op when APPROXIMATION_MODE = true.
     _sfpu_binary_init_<false /*APPROXIMATION_MODE*/, SFPU_BINARY_OPERATION>();
 
-    _llk_math_eltwise_sfpu_start_(0);
-
-    for (std::uint32_t face = 0; face < NUM_FACES; face++)
-    {
-        // BH-style sfpi vFloat divide: reads operand tiles via
-        // `dst_reg[idx * 32]` (sfpi tile stride) from the current dest base
-        // and writes the result at `dst_reg[dst_idx * 32]`. The dest base is
-        // advanced one face between calls by `_llk_math_eltwise_sfpu_
-        // inc_dst_face_addr_()` below.
-        _calculate_sfpu_binary_div_<false /*APPROXIMATION_MODE*/, SFPU_BINARY_OPERATION, is_fp32_dest_acc_en>(
-            num_sfpu_iterations, params.SRC0_TILE_IDX, params.SRC1_TILE_IDX, params.DST_TILE_IDX);
-        _llk_math_eltwise_sfpu_inc_dst_face_addr_();
-    }
-
-    _llk_math_eltwise_sfpu_done_();
+    // BH-style sfpi vFloat divide: reads operand tiles via
+    // `dst_reg[idx * 32]` (sfpi tile stride) from the current dest base
+    // and writes the result at `dst_reg[dst_idx * 32]`
+    _llk_math_eltwise_sfpu_params_(
+        _calculate_sfpu_binary_div_<false /*APPROXIMATION_MODE*/, SFPU_BINARY_OPERATION, is_fp32_dest_acc_en>,
+        0 /* DST base tile index */,
+        num_sfpu_iterations,
+        params.SRC0_TILE_IDX,
+        params.SRC1_TILE_IDX,
+        params.DST_TILE_IDX);
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
 }
@@ -139,7 +134,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
     _llk_pack_init_(buf_desc_id, 1);
 
-    _llk_pack_(params.DST_TILE_IDX, 0);
+    _llk_pack_(params.DST_TILE_IDX, 0 /* tile index */);
 
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }

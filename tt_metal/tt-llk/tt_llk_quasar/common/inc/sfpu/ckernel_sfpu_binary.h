@@ -14,13 +14,15 @@
 namespace ckernel::sfpu
 {
 
-// Convert float32 to bfloat16 using IEEE 754 Round-to-Nearest-Even (RNE).
-// Implements the "add 0x7fff + LSB" algorithm for correct tie-breaking. Ported
-// verbatim from BH (`tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/
-// ckernel_sfpu_binary.h`) so that the bf16 output of the vectorized div helper
-// below matches the FPU's RNE rounding behaviour (the BH FPU exposes RNE for
-// bf16 store; SFPSTORE on Quasar truncates by default, so we apply the
-// software RNE conversion before the final store when Dest is in bf16 mode).
+/**
+ * @brief Converts float32 to bfloat16 using IEEE 754 Round-to-Nearest-Even (RNE).
+ * Implements the "add 0x7fff + LSB" algorithm for correct tie-breaking, ported
+ * from BH. Applied before SFPSTORE because Quasar truncates by default (BH FPU
+ * exposes RNE for bf16 store natively).
+ *
+ * @param in: float32 value to convert
+ * @return bf16 value packed in the upper 16 bits of a float32
+ */
 sfpi_inline sfpi::vFloat _float32_to_bf16_rne_(sfpi::vFloat in)
 {
     sfpi::vUInt bits = sfpi::reinterpret<sfpi::vUInt>(in);
@@ -43,32 +45,26 @@ sfpi_inline sfpi::vFloat _float32_to_bf16_rne_(sfpi::vFloat in)
     return sfpi::reinterpret<sfpi::vFloat>(bits);
 }
 
-// Vectorized binary divide (in0 / in1), ported from BH
-// (`tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_binary.h`,
-// `calculate_sfpu_binary_div`).
-//
-// Special cases (matching the BH semantics):
-//     0   /   0  -> NaN
-//     x   /   0  -> ±inf, sign of x
-//     x   /   x  -> 1.0 (forced exact, regardless of reciprocal rounding)
-//
-// `iterations` is a runtime parameter on Quasar (matches the
-// `_calculate_*_(const int iterations, ...)` convention used by the existing
-// Quasar SFPU kernels and `_llk_math_sfpu_params_` / `_llk_math_eltwise_binary_
-// sfpu_params_`, which call this helper once per face).
-//
-// `dst_index_in0` / `dst_index_in1` / `dst_index_out` are tile indices into
-// DEST; `dst_tile_size_sfpi = 32` is the per-tile sfpi-row stride (a tile
-// occupies 64 hw rows in DEST when accessed via sfpi load/store, and
-// SFP_DESTREG_STRIDE = 2). The advance through a face is performed with
-// `sfpi::dst_reg++` inside the inner loop; the per-face dst-counter advance
-// between calls is handled by the caller (e.g. via
-// `_llk_math_eltwise_sfpu_inc_dst_face_addr_()`).
-//
-// Note: BINOP is preserved as a template parameter to match the BH metal
-// signature (which lets the same wrapper template fan out to all binary ops),
-// but it is unused in the body — this helper is the dedicated DIV path.
-template <bool APPROXIMATION_MODE, BinaryOp BINOP, bool is_fp32_dest_acc_en = false>
+/**
+ * @brief Vectorized binary divide (in0 / in1), ported from BH
+ * (`tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_binary.h`,
+ * `calculate_sfpu_binary_div`).
+ *
+ * @note Special cases (matching BH semantics):
+ *
+ *   - 0 / 0 -> NaN
+ *   - x / 0 -> ±inf, sign of x
+ *   - x / x -> 1.0 (forced exact, regardless of reciprocal rounding)
+ *
+ * @tparam APPROXIMATION_MODE: unused, preserved to match the BH metal signature
+ * @tparam BINOP: unused, preserved to match the BH metal signature
+ * @tparam is_fp32_dest_acc_en: enables FP32 DEST accumulation
+ * @param iterations: number of sfpi rows to process (runtime, one call per face)
+ * @param dst_index_in0: tile index into DEST for in0
+ * @param dst_index_in1: tile index into DEST for in1
+ * @param dst_index_out: tile index into DEST for output
+ */
+template <bool APPROXIMATION_MODE /* unused */, BinaryOp BINOP /* unused */, bool is_fp32_dest_acc_en = false>
 inline void _calculate_sfpu_binary_div_(
     const int iterations, const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out)
 {
@@ -79,7 +75,9 @@ inline void _calculate_sfpu_binary_div_(
     {
         sfpi::vFloat in0    = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1    = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
-        sfpi::vFloat result = in0 * _sfpu_reciprocal_<2>(in1);
+
+        constexpr int reciprocal_iterations = 2; // Two Newton-Raphson iterations
+        sfpi::vFloat result                 = in0 * _sfpu_reciprocal_<reciprocal_iterations>(in1);
 
         v_if (in1 == 0)
         {
@@ -112,11 +110,13 @@ inline void _calculate_sfpu_binary_div_(
     }
 }
 
-// Initialisation hook for binary SFPU kernels.
-// For DIV, programs `sfpi::vConstFloatPrgm0 = 2.0f` so the reciprocal helper's
-// Newton-Raphson refinement uses the correct constant. Other binops added in
-// the future (RSUB / POW / XLOGY ...) can extend this dispatch the same way
-// the BH `_sfpu_binary_init_` does.
+/**
+ * @brief Initialisation hook for binary SFPU kernels.
+ * For DIV, programs `sfpi::vConstFloatPrgm0 = 2.0f` for Newton-Raphson reciprocal.
+ *
+ * @tparam APPROXIMATION_MODE: forwarded to the op-specific init
+ * @tparam BINOP: selects which op's init to run
+ */
 template <bool APPROXIMATION_MODE /*unused*/, BinaryOp BINOP>
 inline void _sfpu_binary_init_()
 {
