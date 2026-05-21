@@ -58,10 +58,13 @@ class TtOobleckDecoder:
         if self.activation_dtype is None or self.weights_dtype is None:
             raise RuntimeError("TTNN build missing bfloat16; supply activation_dtype/weights_dtype")
 
+        from models.demos.ace_step_v1_5.tt_device import ace_step_device_num_chips, ace_step_synchronize_device
+
         weights = fused_oobleck_decoder_weights(
             state_dict, upsampling_ratios=self.upsampling_ratios, decoder_prefix=decoder_prefix
         )
 
+        print("[ace_step_v1_5] VAE: loading conv_in …", flush=True)
         self.conv1 = TtConv1d(
             weight_host=weights["conv1.weight"],
             bias_host=weights.get("conv1.bias"),
@@ -77,7 +80,9 @@ class TtOobleckDecoder:
         )
 
         self.blocks = []
+        num_blocks = len(self.upsampling_ratios)
         for i, stride in enumerate(self.upsampling_ratios):
+            print(f"[ace_step_v1_5] VAE: upsample block {i + 1}/{num_blocks} …", flush=True)
             in_dim = self.channels * cm[len(self.upsampling_ratios) - i]
             out_dim = self.channels * cm[len(self.upsampling_ratios) - i - 1]
             block_weights = _strip_prefix(weights, f"block.{i}.")
@@ -112,6 +117,9 @@ class TtOobleckDecoder:
             activation_dtype=self.activation_dtype,
             weights_dtype=self.weights_dtype,
         )
+        if ace_step_device_num_chips(device) > 1:
+            ace_step_synchronize_device(ttnn, device)
+        print("[ace_step_v1_5] VAE: decoder ready", flush=True)
 
     def __call__(self, x):
         """Decode latents to raw audio. Input: ``[B, T, C_in]`` row-major; output: ``[B, T_out, C_audio]``."""

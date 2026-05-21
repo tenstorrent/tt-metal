@@ -99,6 +99,12 @@ def _ace_step_log_ttnn_tensor(tag: str, t, *, ttnn) -> None:
         print(f"[ace_step_v1_5][attn_trace][ttnn] {tag} log_failed={ex!r}", flush=True)
 
 
+from models.demos.ace_step_v1_5.tt_device import (
+    ace_step_device_num_chips,
+    ace_step_dit_weight_mesh_mapper,
+    ace_step_synchronize_device,
+)
+
 from ._ttnn import get_ttnn
 from .math_perf_env import (
     _mcast_1d_linear_program_config,
@@ -217,7 +223,7 @@ class TtTimestepEmbedding:
 
         # Load weights (host arrays) and transfer once.
         mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
-        mapper = ttnn.ReplicateTensorToMesh(mesh_device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
+        mapper = ace_step_dit_weight_mesh_mapper(mesh_device)
 
         def as_w(key: str):
             return ttnn.as_tensor(
@@ -424,7 +430,7 @@ class TtHfRotaryEmbedding:
             self.sin_cached = sin_hf
             return
 
-        mapper = ttnn.ReplicateTensorToMesh(mesh_device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
+        mapper = ace_step_dit_weight_mesh_mapper(mesh_device)
         mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
         self.cos_cached = ttnn.from_torch(
             cos_hf,
@@ -587,7 +593,7 @@ class TtAceStepAttentionSDPA:
         self._rotary = rotary_embedding
 
         mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
-        mapper = ttnn.ReplicateTensorToMesh(mesh_device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
+        mapper = ace_step_dit_weight_mesh_mapper(mesh_device)
 
         def as_w(suffix: str):
             return ttnn.as_tensor(
@@ -697,7 +703,7 @@ class TtAceStepAttentionSDPA:
         pad_np = np.zeros((int(batch), 1, int(target_sdpa), int(target_sdpa)), dtype=np.float32)
         pad_np[:, :, :, int(s_rope) :] = np.float32(-1e9)
         mem_m = ace_step_sdpa_mask_memory_config(ttnn) or getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
-        mapper_m = ttnn.ReplicateTensorToMesh(self.mesh_device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
+        mapper_m = ace_step_dit_weight_mesh_mapper(self.mesh_device)
         pad_m = ttnn.as_tensor(
             pad_np,
             device=self.mesh_device,
@@ -719,7 +725,7 @@ class TtAceStepAttentionSDPA:
         pad_np = np.zeros((int(batch), 1, int(s_q0), int(w)), dtype=np.float32)
         pad_np[:, :, :, int(s_enc_log) : int(w)] = np.float32(-1e9)
         mem_m = ace_step_sdpa_mask_memory_config(ttnn) or getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
-        mapper_m = ttnn.ReplicateTensorToMesh(self.mesh_device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
+        mapper_m = ace_step_dit_weight_mesh_mapper(self.mesh_device)
         pad_m = ttnn.as_tensor(
             pad_np,
             device=self.mesh_device,
@@ -1148,7 +1154,7 @@ class TtQwen3MLP:
             raise RuntimeError("TTNN build missing a usable dtype (bfloat16/float16)")
 
         mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
-        mapper = ttnn.ReplicateTensorToMesh(mesh_device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
+        mapper = ace_step_dit_weight_mesh_mapper(mesh_device)
 
         def as_w(name: str):
             return ttnn.as_tensor(
@@ -1283,7 +1289,7 @@ class TtAceStepDiTLayer:
 
         d = int(cfg.hidden_size)
         mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
-        mapper = ttnn.ReplicateTensorToMesh(mesh_device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
+        mapper = ace_step_dit_weight_mesh_mapper(mesh_device)
 
         # Norm weights stay DRAM (small); rms_norm outputs use ``memory_config=_el_mc`` for activations.
         self.self_norm_w = ttnn.as_tensor(
@@ -1543,9 +1549,9 @@ class TtAceStepDiTCore:
             raise RuntimeError("TTNN build missing a usable dtype (bfloat16/float16)")
 
         mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
-        mapper = ttnn.ReplicateTensorToMesh(mesh_device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
+        mapper = ace_step_dit_weight_mesh_mapper(mesh_device)
 
-        # condition_embedder: Linear(condition_dim -> hidden_size)
+        print("[ace_step_v1_5] DiT core: condition embedder …", flush=True)
         self.cond_w = ttnn.as_tensor(
             _maybe_get(state_dict, "condition_embedder.weight"),
             device=mesh_device,
@@ -1562,7 +1568,11 @@ class TtAceStepDiTCore:
             memory_config=mem,
             mesh_mapper=mapper,
         )
+        if ace_step_device_num_chips(mesh_device) > 1:
+            ace_step_synchronize_device(ttnn, mesh_device)
+        print("[ace_step_v1_5] DiT core: condition embedder ready", flush=True)
 
+        print("[ace_step_v1_5] DiT core: RoPE cache …", flush=True)
         self._rotary = TtHfRotaryEmbedding(
             mesh_device=mesh_device,
             head_dim=int(cfg.head_dim),
@@ -1573,24 +1583,36 @@ class TtAceStepDiTCore:
             num_key_value_heads=int(cfg.num_key_value_heads),
             dtype=self.dtype,
         )
+        print("[ace_step_v1_5] DiT core: RoPE ready", flush=True)
+        if ace_step_device_num_chips(mesh_device) > 1:
+            ace_step_synchronize_device(ttnn, mesh_device)
 
         linear_ck = ace_step_init_dit_linear_compute_kernel_config(mesh_device)
         l1_mc = ace_step_dit_linear_l1_memory_config(ttnn)
 
-        self.layers: List[TtAceStepDiTLayer] = [
-            TtAceStepDiTLayer(
-                cfg=cfg,
-                state_dict=state_dict,
-                layer_idx=i,
-                mesh_device=mesh_device,
-                dtype=self.dtype,
-                rotary_embedding=self._rotary,
-                linear_compute_kernel_config=linear_ck,
-                activation_l1_memory_config=l1_mc,
-                linear_output_l1_memory_config=l1_mc,
+        num_layers = int(cfg.num_hidden_layers)
+        _init_sync = _ace_step_env_truthy("ACE_STEP_DIT_INIT_SYNC")
+        self.layers: List[TtAceStepDiTLayer] = []
+        for i in range(num_layers):
+            print(f"[ace_step_v1_5] DiT core: layer {i + 1}/{num_layers} …", flush=True)
+            self.layers.append(
+                TtAceStepDiTLayer(
+                    cfg=cfg,
+                    state_dict=state_dict,
+                    layer_idx=i,
+                    mesh_device=mesh_device,
+                    dtype=self.dtype,
+                    rotary_embedding=self._rotary,
+                    linear_compute_kernel_config=linear_ck,
+                    activation_l1_memory_config=l1_mc,
+                    linear_output_l1_memory_config=l1_mc,
+                )
             )
-            for i in range(int(cfg.num_hidden_layers))
-        ]
+            if _init_sync or (i == 0 and ace_step_device_num_chips(mesh_device) > 1):
+                ace_step_synchronize_device(ttnn, mesh_device)
+        print(f"[ace_step_v1_5] DiT core: {num_layers} layers uploaded", flush=True)
+        if ace_step_device_num_chips(mesh_device) > 1:
+            ace_step_synchronize_device(ttnn, mesh_device)
 
     def __call__(
         self,

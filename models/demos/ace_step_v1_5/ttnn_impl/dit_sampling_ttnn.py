@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
+import torch
 
 import ttnn
 
@@ -48,6 +49,8 @@ def to_tile_fp32(t: ttnn.Tensor, *, dram: Any) -> ttnn.Tensor:
 
 
 def tile_fp32_from_numpy_bc(arr: np.ndarray, *, device: Any, dram: Any) -> ttnn.Tensor:
+    from models.demos.ace_step_v1_5.tt_device import ace_step_device_num_chips, ace_step_synchronize_device
+
     tt = ttnn.as_tensor(
         np.asarray(arr, dtype=np.float32),
         device=device,
@@ -55,17 +58,261 @@ def tile_fp32_from_numpy_bc(arr: np.ndarray, *, device: Any, dram: Any) -> ttnn.
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=dram,
     )
-    return ttnn.to_layout(tt, layout=ttnn.TILE_LAYOUT)
+    tt = ttnn.to_layout(tt, layout=ttnn.TILE_LAYOUT)
+    if ace_step_device_num_chips(device) > 1:
+        ace_step_synchronize_device(ttnn, device)
+    return tt
+
+
+def _host_gaussian_latents_f32(shape: tuple[int, ...], *, seed: int) -> np.ndarray:
+    """Standard-normal latents on CPU (parity with ``ttnn.randn`` / ``torch.randn``)."""
+    rng = np.random.default_rng(int(seed) & 0xFFFFFFFF)
+    return rng.standard_normal(size=tuple(int(x) for x in shape)).astype(np.float32)
+
+
+def dit_init_latents_host_f32(
+    *,
+    batch: int,
+    frames: int,
+    channels: int,
+    seed: int,
+) -> torch.Tensor:
+    """Host FLOAT32 latents ``[B, T, C]`` for multi-device eager sampling."""
+    shape = (int(batch), int(frames), int(channels))
+    return torch.from_numpy(_host_gaussian_latents_f32(shape, seed=int(seed)))
+
+
+def dit_init_latents_fp32_tile(
+    *,
+    batch: int,
+    frames: int,
+    channels: int,
+    device: Any,
+    dram: Any,
+    seed: int,
+) -> ttnn.Tensor:
+    """Initialize DiT latent noise as FLOAT32 TILE on device.
+
+    On multi-device meshes use :func:`dit_init_latents_host_f32` with the host latent sampler
+    (``ace_step_mesh_use_host_latent_sampler``); device-side latent init is not supported there.
+    """
+    from models.demos.ace_step_v1_5.tt_device import ace_step_device_num_chips
+
+    shape = (int(batch), int(frames), int(channels))
+    if ace_step_device_num_chips(device) > 1:
+        host = _host_gaussian_latents_f32(shape, seed=int(seed))
+        return tile_fp32_from_numpy_bc(host, device=device, dram=dram)
+    if not hasattr(ttnn, "randn"):
+        raise RuntimeError("This path needs ``ttnn.randn`` (Gaussian) for latent init; ``ttnn.rand`` is uniform-only.")
+    return ttnn.randn(
+        shape,
+        device,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=dram,
+        seed=int(np.uint32(int(seed))),
+    )
+
+
+def _load_temb_weights_np_f32(
+    *, checkpoint_safetensors_path: str, decoder_prefix: str = "decoder."
+) -> dict[str, np.ndarray]:
+    """Load only ``time_embed`` / ``time_embed_r`` MLP weights (not the full DiT checkpoint)."""
+    import torch
+    from safetensors import safe_open
+
+    prefix = str(decoder_prefix)
+    bases = ("time_embed.", "time_embed_r.")
+    suffixes = (
+        "linear_1.weight",
+        "linear_1.bias",
+        "linear_2.weight",
+        "linear_2.bias",
+        "time_proj.weight",
+        "time_proj.bias",
+    )
+    out: dict[str, np.ndarray] = {}
+    with safe_open(str(checkpoint_safetensors_path), framework="pt", device="cpu") as sf:
+        for key in sf.keys():
+            if prefix and not str(key).startswith(prefix):
+                continue
+            rel = str(key)[len(prefix) :] if prefix else str(key)
+            if not rel.startswith(bases):
+                continue
+            if not any(rel.endswith(s) for s in suffixes):
+                continue
+            out[rel] = sf.get_tensor(key).detach().to(torch.float32).cpu().numpy()
+    if not out:
+        raise KeyError(f"No time_embed / time_embed_r weights under prefix {prefix!r} in {checkpoint_safetensors_path}")
+    return out
+
+
+def _numpy_silu(x: np.ndarray) -> np.ndarray:
+    x = np.asarray(x, dtype=np.float32)
+    return (x * (1.0 / (1.0 + np.exp(-x)))).astype(np.float32, copy=False)
+
+
+def _numpy_temb_mlp(
+    *,
+    sd: dict[str, np.ndarray],
+    base: str,
+    t_freq_4d: np.ndarray,
+    hidden_size: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Run the timestep MLP on CPU (matches ``TorchTimestepEmbeddingRef``)."""
+    w1 = sd[f"{base}.linear_1.weight"]
+    b1 = sd[f"{base}.linear_1.bias"].reshape(1, 1, 1, hidden_size)
+    w2 = sd[f"{base}.linear_2.weight"]
+    b2 = sd[f"{base}.linear_2.bias"].reshape(1, 1, 1, hidden_size)
+    wt = sd[f"{base}.time_proj.weight"]
+    bt = sd[f"{base}.time_proj.bias"].reshape(1, 1, 1, 6 * hidden_size)
+
+    temb = np.matmul(t_freq_4d.astype(np.float32), w1.T.astype(np.float32)) + b1
+    temb = _numpy_silu(temb)
+    temb = np.matmul(temb, w2.T.astype(np.float32)) + b2
+    h = _numpy_silu(temb)
+    tp = np.matmul(h, wt.T.astype(np.float32)) + bt
+    tp_out = tp.reshape(1, 6, hidden_size).astype(np.float32, copy=False)
+    temb_out = temb.reshape(1, hidden_size).astype(np.float32, copy=False)
+    return temb_out, tp_out
+
+
+def _numpy_sinusoidal_t_freq(*, timestep_value: float, in_channels: int = 256, scale: float = 1000.0) -> np.ndarray:
+    t = np.float32(float(timestep_value) * float(scale))
+    half = int(in_channels) // 2
+    freqs = np.exp((-np.log(10000.0)) * (np.arange(half, dtype=np.float32) / float(half)))
+    args = t * freqs
+    emb = np.concatenate([np.cos(args), np.sin(args)], axis=-1)
+    return emb.reshape(1, 1, 1, int(in_channels)).astype(np.float32, copy=False)
+
+
+def stage_host_temb_tp_row(
+    temb_host: np.ndarray | torch.Tensor,
+    tp_host: np.ndarray | torch.Tensor,
+    *,
+    device: Any,
+    dram: Any,
+) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    """Upload host ``(temb, tp)`` as ROW_MAJOR BF16 (no ``to_layout`` — safe on BH mesh)."""
+
+    def _to_f32_np(x) -> np.ndarray:
+        if isinstance(x, np.ndarray):
+            return np.asarray(x, dtype=np.float32)
+        return np.asarray(x.detach().to(dtype=torch.float32).cpu().numpy(), dtype=np.float32)
+
+    temb_tt = bf16_row_from_numpy_bc(_to_f32_np(temb_host), device=device, dram=dram)
+    tp_tt = bf16_row_from_numpy_bc(_to_f32_np(tp_host), device=device, dram=dram)
+    return temb_tt, tp_tt
+
+
+def stage_host_temb_steps_to_device(
+    temb_host_steps: list[Any],
+    tp_host_steps: list[Any],
+    *,
+    device: Any,
+    dram: Any,
+) -> tuple[list[ttnn.Tensor], list[ttnn.Tensor]]:
+    """Upload host-precomputed ``(temb, tp)`` lists for trace / device-side denoise loops."""
+    temb_dev: list[ttnn.Tensor] = []
+    tp_dev: list[ttnn.Tensor] = []
+    for temb_h, tp_h in zip(temb_host_steps, tp_host_steps):
+        temb_tt, tp_tt = stage_host_temb_tp_row(temb_h, tp_h, device=device, dram=dram)
+        temb_dev.append(temb_tt)
+        tp_dev.append(tp_tt)
+    return temb_dev, tp_dev
+
+
+def precompute_dit_temb_steps_host(
+    *,
+    checkpoint_safetensors_path: str,
+    timesteps_host: np.ndarray,
+    num_steps: int,
+    decoder_prefix: str = "decoder.",
+) -> tuple[list[np.ndarray], list[np.ndarray]]:
+    """Pure NumPy temb precompute; only loads the 12 small time-embed weight tensors."""
+    print("[ace_step_v1_5] loading time_embed weights from checkpoint …", flush=True)
+    sd = _load_temb_weights_np_f32(
+        checkpoint_safetensors_path=str(checkpoint_safetensors_path),
+        decoder_prefix=str(decoder_prefix),
+    )
+    print(f"[ace_step_v1_5] time_embed weights ready ({len(sd)} tensors)", flush=True)
+    hidden_size = int(sd["time_embed.linear_1.weight"].shape[0])
+    ts_host = np.asarray(timesteps_host, dtype=np.float32)
+
+    print("[ace_step_v1_5] computing time_embed_r (delta=0) on host …", flush=True)
+    t_freq_r = _numpy_sinusoidal_t_freq(timestep_value=0.0)
+    temb_r, tp_r = _numpy_temb_mlp(sd=sd, base="time_embed_r", t_freq_4d=t_freq_r, hidden_size=hidden_size)
+
+    temb_per_step: list[np.ndarray] = []
+    tp_per_step: list[np.ndarray] = []
+    for idx in range(int(num_steps)):
+        half = 128
+        freqs = np.exp((-np.log(10000.0)) * (np.arange(half, dtype=np.float32) / float(half)))
+        t_val = np.float32(float(ts_host[int(idx)]) * 1000.0)
+        args = t_val * freqs
+        emb = np.concatenate([np.cos(args), np.sin(args)], axis=-1)
+        t_freq = emb.reshape(1, 1, 1, 256).astype(np.float32, copy=False)
+        temb_t, tp_t = _numpy_temb_mlp(sd=sd, base="time_embed", t_freq_4d=t_freq, hidden_size=hidden_size)
+        temb_per_step.append((temb_t + temb_r).astype(np.float32, copy=False))
+        tp_per_step.append((tp_t + tp_r).astype(np.float32, copy=False))
+        print(f"[ace_step_v1_5] host temb step {idx + 1}/{int(num_steps)} done", flush=True)
+    return temb_per_step, tp_per_step
+
+
+def precompute_dit_temb_steps(
+    pipe: Any,
+    *,
+    num_steps: int,
+    target_batch: int,
+    device: Any,
+    checkpoint_safetensors_path: str | None = None,
+    timesteps_host: np.ndarray | None = None,
+) -> tuple[list[Any], list[Any], bool]:
+    """Precompute per-Euler-step ``(temb, timestep_proj)``; returns ``(temb, tp, on_host)``."""
+    from models.demos.ace_step_v1_5.tt_device import (
+        ace_step_device_num_chips,
+        ace_step_mesh_use_host_temb_precompute,
+        ace_step_synchronize_device,
+    )
+
+    if ace_step_mesh_use_host_temb_precompute(device):
+        if checkpoint_safetensors_path is None or timesteps_host is None:
+            raise ValueError("Host temb precompute requires checkpoint_safetensors_path and timesteps_host.")
+        print("[ace_step_v1_5] precomputing timestep embeddings on host CPU …", flush=True)
+        temb_per_step, tp_per_step = precompute_dit_temb_steps_host(
+            checkpoint_safetensors_path=str(checkpoint_safetensors_path),
+            timesteps_host=np.asarray(timesteps_host, dtype=np.float32),
+            num_steps=int(num_steps),
+        )
+        print("[ace_step_v1_5] host timestep embeddings ready (upload per denoise step)", flush=True)
+        return temb_per_step, tp_per_step, True
+
+    if ace_step_device_num_chips(device) > 1:
+        ace_step_synchronize_device(ttnn, device)
+    temb_per_step_dev: list[ttnn.Tensor] = []
+    tp_per_step_dev: list[ttnn.Tensor] = []
+    for idx in range(int(num_steps)):
+        temb, tp = pipe.compute_temb_tp(int(idx), target_batch=int(target_batch))
+        temb_per_step_dev.append(temb)
+        tp_per_step_dev.append(tp)
+        if ace_step_device_num_chips(device) > 1:
+            ace_step_synchronize_device(ttnn, device)
+    return temb_per_step_dev, tp_per_step_dev, False
 
 
 def bf16_row_from_numpy_bc(arr_f32_np: np.ndarray, *, device: Any, dram: Any) -> ttnn.Tensor:
-    return ttnn.as_tensor(
+    from models.demos.ace_step_v1_5.tt_device import ace_step_device_num_chips, ace_step_synchronize_device
+
+    tt = ttnn.as_tensor(
         np.asarray(arr_f32_np, dtype=np.float32),
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=dram,
     )
+    if ace_step_device_num_chips(device) > 1:
+        ace_step_synchronize_device(ttnn, device)
+    return tt
 
 
 def typecast_bf16_any_to_fp32_tile(tt_bf16: ttnn.Tensor, *, dram: Any) -> ttnn.Tensor:
@@ -82,6 +329,52 @@ def fp32_tile_to_row_bf16(x_f32_tile: ttnn.Tensor, *, dram: Any) -> ttnn.Tensor:
     return out
 
 
+def prepare_latents_for_ttnn_vae(latents_tt: ttnn.Tensor, *, dram: Any) -> ttnn.Tensor:
+    """Convert DiT denoise output to ROW_MAJOR FP32 ``[B,T,C]`` for ``decode_tiled``."""
+    from models.demos.ace_step_v1_5.tt_device import ace_step_device_num_chips, ace_step_synchronize_device
+
+    tt = latents_tt
+    if tt.layout != ttnn.ROW_MAJOR_LAYOUT:
+        tt = ttnn.to_layout(tt, layout=ttnn.ROW_MAJOR_LAYOUT)
+    if tt.dtype != ttnn.float32:
+        tt = ttnn.typecast(tt, ttnn.float32, memory_config=dram)
+    try:
+        dev = tt.device()
+    except Exception:
+        dev = None
+    if dev is not None and ace_step_device_num_chips(dev) > 1:
+        ace_step_synchronize_device(ttnn, dev)
+    return tt
+
+
+def refresh_fp32_tile_from_host(
+    xt_host: "torch.Tensor",
+    *,
+    device: Any,
+    dram: Any,
+    buf: ttnn.Tensor | None,
+) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    """Upload host ``[B,T,C]`` latents to a persistent FP32 TILE buffer (stable mesh denoise)."""
+
+    host_np = xt_host.detach().float().cpu().contiguous().numpy()
+    fresh = tile_fp32_from_numpy_bc(host_np, device=device, dram=dram)
+    if buf is None:
+        return fresh, fresh
+    try:
+        ttnn.copy(fresh, buf)
+        try:
+            ttnn.deallocate(fresh)
+        except Exception:
+            pass
+        return buf, buf
+    except Exception:
+        try:
+            ttnn.deallocate(buf)
+        except Exception:
+            pass
+        return fresh, fresh
+
+
 def slice_batch_btc(vol: ttnn.Tensor, b0: int, b1_exc: int, t_: int, c: int) -> ttnn.Tensor:
     # ttnn.slice(input, slice_start, slice_end) — not starts=/ends= keyword args.
     return ttnn.slice(vol, (int(b0), 0, 0), (int(b1_exc), int(t_), int(c)))
@@ -92,6 +385,52 @@ def euler_subtract_v_dt(*, xt: ttnn.Tensor, vt: ttnn.Tensor, dt: float, dram: An
     xt_new = ttnn.subtract(xt, step, memory_config=dram)
     ttnn.deallocate(step)
     return xt_new
+
+
+def euler_subtract_v_dt_host(*, xt: torch.Tensor, vt: torch.Tensor, dt: float) -> torch.Tensor:
+    return xt - vt.to(dtype=xt.dtype) * float(dt)
+
+
+def apg_guidance_velocity_host(
+    pred_cond: torch.Tensor,
+    pred_uncond: torch.Tensor,
+    guidance_scale: float,
+    *,
+    momentum_buffer: Any | None,
+    dims: list[int] | None = None,
+) -> torch.Tensor:
+    """APG on host ``[B, T, C]`` tensors (permutes to ``[B, C, T]`` for the torch ref)."""
+    from models.demos.ace_step_v1_5.torch_ref._vendored_acestep.acestep.models.common.apg_guidance import apg_forward
+
+    dim = int((dims or [1])[0])
+    if dim == 1:
+        p_c = pred_cond.permute(0, 2, 1)
+        p_u = pred_uncond.permute(0, 2, 1)
+        guided = apg_forward(p_c, p_u, float(guidance_scale), momentum_buffer=momentum_buffer, dims=[-1])
+        return guided.permute(0, 2, 1)
+    guided = apg_forward(
+        pred_cond, pred_uncond, float(guidance_scale), momentum_buffer=momentum_buffer, dims=dims or [-1]
+    )
+    return guided
+
+
+def adg_guidance_velocity_host(
+    xt: torch.Tensor,
+    pred_cond: torch.Tensor,
+    pred_uncond: torch.Tensor,
+    sigma_scalar: float,
+    guidance_scale: float,
+) -> torch.Tensor:
+    from models.demos.ace_step_v1_5.torch_ref._vendored_acestep.acestep.models.common.apg_guidance import adg_forward
+
+    return adg_forward(
+        xt,
+        pred_cond,
+        pred_uncond,
+        float(sigma_scalar),
+        float(guidance_scale),
+        apply_norm=False,
+    )
 
 
 def _sum_keepdim(x: ttnn.Tensor, dim: int, *, dram: Any) -> ttnn.Tensor:
