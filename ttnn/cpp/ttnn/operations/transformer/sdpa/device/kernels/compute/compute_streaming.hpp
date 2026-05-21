@@ -797,9 +797,6 @@ static void sdpa_inner_loop_step(
                 if constexpr (!uniform_pack_format) {
                     pack_reconfig_data_format(cb_qkt_im);
                 }
-                if constexpr (!uniform_unpack_format) {
-                    reconfig_data_format(cb_kt_in, cb_q_in);
-                }
                 mm_no_mop_reinit_short(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
             }
             {
