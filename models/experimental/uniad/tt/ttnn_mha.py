@@ -4,6 +4,7 @@
 
 import ttnn
 import math
+from models.experimental.uniad.tt.matmul_helpers import linear_flatten_batch
 
 
 class TtMultiheadAttention:
@@ -103,13 +104,15 @@ class TtMultiheadAttention:
         q_weight = ttnn.permute(q_weight, (1, 0))
         k_weight = ttnn.permute(k_weight, (1, 0))
         v_weight = ttnn.permute(v_weight, (1, 0))
-        query = ttnn.linear(query, q_weight, bias=q_bias)
+        # Flatten leading dims into M (e.g. (901, 1, 256) -> (1, 1, 901, 256))
+        # so the matmul heuristic sees the full row count instead of bsz=1.
+        query = linear_flatten_batch(query, q_weight, bias=q_bias)
 
-        key = ttnn.linear(key, k_weight, bias=k_bias)
+        key = linear_flatten_batch(key, k_weight, bias=k_bias)
 
         if value.get_layout() != ttnn.TILE_LAYOUT:
             value = ttnn.to_layout(value, ttnn.TILE_LAYOUT)
-        value = ttnn.linear(value, v_weight, bias=v_bias)
+        value = linear_flatten_batch(value, v_weight, bias=v_bias)
 
         query = ttnn.reshape(query, (tgt_len, bsz * self.num_heads, q_head_size))
         query = ttnn.permute(query, (1, 0, 2))

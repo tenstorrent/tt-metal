@@ -9,6 +9,8 @@ from torch import Tensor
 
 import ttnn
 
+from models.experimental.uniad.tt.matmul_helpers import linear_flatten_batch
+
 
 def _canonical_mask(
     mask: Optional[Tensor],
@@ -37,9 +39,9 @@ def _in_projection_packed(
     w_k, b_k = ttnn.permute(w_k, (1, 0)), ttnn.reshape(b_k, (1, -1))
     w_v, b_v = ttnn.permute(w_v, (1, 0)), ttnn.reshape(b_v, (1, -1))
 
-    a = ttnn.linear(q, w_q, bias=b_q)
-    b = ttnn.linear(k, w_k, bias=b_k)
-    c = ttnn.linear(v, w_v, bias=b_v)
+    a = linear_flatten_batch(q, w_q, bias=b_q)
+    b = linear_flatten_batch(k, w_k, bias=b_k)
+    c = linear_flatten_batch(v, w_v, bias=b_v)
     return a, b, c
 
 
