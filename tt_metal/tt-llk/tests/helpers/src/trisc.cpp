@@ -86,7 +86,6 @@ int main(void)
     llk_profiler::reset();
     llk_profiler::sync_threads();
 #endif
-
     {
         ZONE_SCOPED("KERNEL")
 

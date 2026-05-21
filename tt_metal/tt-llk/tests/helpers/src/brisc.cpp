@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "boot.h"
+#include "counters.h" // heavy machinery is gated internally by PERF_COUNTERS_COMPILED
 
 #ifdef LLK_BOOT_MODE_BRISC
 
@@ -117,6 +118,12 @@ int main()
                 commit_store(profiler_barrier + 2, 0U);
 
                 device_setup();
+
+#ifdef PERF_COUNTERS_COMPILED
+                // Configure + arm counters before releasing TRISCs.
+                llk_perf::configure_and_arm_from_brisc();
+#endif
+
                 clear_trisc_soft_reset();
 
                 reset_state(counter);

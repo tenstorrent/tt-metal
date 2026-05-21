@@ -10,6 +10,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_ops.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "params.h"
 #include "perf.h"
@@ -46,6 +47,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const EltwiseBinaryReuseDestType reuse_dest_type = EltwiseBinaryReuseDestType::NONE;
 
     {
+        MEASURE_PERF_COUNTERS("INIT")
         ZONE_SCOPED("INIT")
 
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -56,6 +58,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
+        MEASURE_PERF_COUNTERS("TILE_LOOP")
         ZONE_SCOPED("TILE_LOOP")
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
@@ -112,6 +115,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const DataCopyType data_copy_type = DataCopyType::A2D;
 
     {
+        MEASURE_PERF_COUNTERS("INIT")
         ZONE_SCOPED("INIT")
 
         _llk_math_eltwise_unary_datacopy_init_<data_copy_type, is_fp32_dest_acc_en>(num_faces, formats.math);
@@ -122,6 +126,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
+        MEASURE_PERF_COUNTERS("TILE_LOOP")
         ZONE_SCOPED("TILE_LOOP")
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
@@ -269,6 +274,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
 #endif
     {
+        MEASURE_PERF_COUNTERS("INIT")
         ZONE_SCOPED("INIT")
 
         // Configure packer hardware
@@ -285,6 +291,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
+        MEASURE_PERF_COUNTERS("TILE_LOOP")
         ZONE_SCOPED("TILE_LOOP")
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)

@@ -169,21 +169,25 @@ public:
 
     inline __attribute__((always_inline)) zone_scoped()
     {
+        asm volatile("" ::: "memory");
         if (!is_buffer_full())
         {
             is_opened = true;
             write_entry(EntryType::ZONE_START, id16);
             ++open_zone_cnt;
         }
+        asm volatile("" ::: "memory");
     }
 
     ~zone_scoped()
     {
+        asm volatile("" ::: "memory");
         if (is_opened)
         {
             write_entry(EntryType::ZONE_END, id16);
             --open_zone_cnt;
         }
+        asm volatile("" ::: "memory");
     }
 };
 
