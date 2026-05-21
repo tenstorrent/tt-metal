@@ -126,6 +126,19 @@ class Talker(LightweightModule):
             weight_dtype=ttnn.bfloat16,
             weight_cache_path=weight_cache_path,
         )
+        # Sharded LN configs for the FINAL norm (mirrors per-layer setup).
+        # Drops the final norm from 1-core (~26 µs) to 64-core (~6 µs).
+        from models.demos.qwen3_tts.tt.decoder_layer import _PREFILL_SEQS, _build_sharded_rmsnorm_configs
+
+        _dim_tiles = config.hidden_size // 32
+        _final_ln_num_cores = next(c for c in (64, 32, 16, 8, 4, 2, 1) if _dim_tiles % c == 0)
+        self._final_ln_decode_in_memcfg, self._final_ln_decode_progcfg = _build_sharded_rmsnorm_configs(
+            device, config.hidden_size, _final_ln_num_cores, m=32
+        )
+        self._final_ln_prefill_configs = {
+            m: _build_sharded_rmsnorm_configs(device, config.hidden_size, _final_ln_num_cores, m=m)
+            for m in _PREFILL_SEQS
+        }
 
         # Codec head for predicting first RVQ codebook (vocab 3072)
         # This is used during autoregressive generation
@@ -379,8 +392,21 @@ class Talker(LightweightModule):
             if updated_kv_caches is not None:
                 updated_kv_caches.append(updated_kv_cache)
 
-        # Final norm
-        hidden_states = self.norm(hidden_states)
+        # Final norm — sharded multi-core for both decode (M=32) and prefill (seq_len).
+        _is_decode = mode == "decode"
+        if _is_decode or (not _is_decode and hidden_states.shape[-2] in self._final_ln_prefill_configs):
+            if _is_decode:
+                _ln_in_mc, _ln_pc = self._final_ln_decode_in_memcfg, self._final_ln_decode_progcfg
+            else:
+                _ln_in_mc, _ln_pc = self._final_ln_prefill_configs[hidden_states.shape[-2]]
+            h_sh = ttnn.to_memory_config(hidden_states, _ln_in_mc)
+            ttnn.deallocate(hidden_states)
+            normed_sh = self.norm(h_sh, program_config=_ln_pc, memory_config=_ln_in_mc)
+            ttnn.deallocate(h_sh)
+            hidden_states = ttnn.to_memory_config(normed_sh, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(normed_sh)
+        else:
+            hidden_states = self.norm(hidden_states)
 
         return hidden_states, updated_kv_caches
 
