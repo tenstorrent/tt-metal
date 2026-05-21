@@ -106,6 +106,12 @@ def get_job_failure_signature_(github_job, failure_description, workflow_outputs
         "Error response from daemon": str(InfraErrorV1.DOCKER_REGISTRY_FAILURE),
         "Failed to CreateArtifact": str(InfraErrorV1.ARTIFACT_UPLOAD_FAILURE),
         "device timeout, potential hang detected, the device is unrecoverable": str(InfraErrorV1.TT_TRIAGE_JOB_HANG),
+        # Git checkout / submodule clone failures (transient GitHub infra issues)
+        "fatal: clone of": str(InfraErrorV1.CHECKOUT_FAILURE),
+        "Failed to clone": str(InfraErrorV1.CHECKOUT_FAILURE),
+        "could not read Username": str(InfraErrorV1.CHECKOUT_FAILURE),
+        "terminal prompts disabled": str(InfraErrorV1.CHECKOUT_FAILURE),
+        "Fetched in submodule path": str(InfraErrorV1.CHECKOUT_FAILURE),
     }
 
     # Check the mapping dictionary for specific failure signature types
@@ -136,6 +142,16 @@ def get_job_failure_signature_(github_job, failure_description, workflow_outputs
         )
         if is_generic_setup_failure:
             return str(InfraErrorV1.GENERIC_SET_UP_FAILURE)
+
+    # If failure occurred in a checkout step, classify as checkout failure
+    for step in github_job.get("steps", []):
+        step_name = step.get("name", "")
+        step_conclusion = step.get("conclusion", "")
+
+        is_checkout_failure = "checkout" in step_name.lower() and step_conclusion == "failure"
+
+        if is_checkout_failure:
+            return str(InfraErrorV1.CHECKOUT_FAILURE)
 
     # If failure occurred in clang-tidy step, classify as code quality failure
     for step in github_job.get("steps", []):
