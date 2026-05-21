@@ -41,7 +41,7 @@ NUM_PERF_RUNS = 3
         [(2, 2), 0, 1, 1, 1, ttnn.Topology.Linear, 2, True, False, line_params_flux2],
         [(2, 4), 0, 1, 1, 1, ttnn.Topology.Linear, 2, False, False, line_params_flux2],
         [(4, 8), 0, 1, 1, 1, ttnn.Topology.Linear, 2, False, False, line_params_8k_flux2],
-        [(4, 8), 0, 1, 1, 1, ttnn.Topology.Ring, 2, False, False, ring_params_8k_flux2],
+        [(4, 8), 0, 1, 1, 0, ttnn.Topology.Ring, 2, False, False, ring_params_8k_flux2],
     ],
     ids=[
         "bh_qb",
