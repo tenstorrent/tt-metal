@@ -331,19 +331,133 @@ def test_s2v_weight_load(
 
 
 # ---------------------------------------------------------------------------
-# TODO: integration test for ``WanS2VTransformer3DModel.inner_step``.
+# Additional torch reference modules for the inner_step integration test.
+# Ports of WanS2VAttentionBlock + Head_S2V + audio injector cross-attn.
+# ---------------------------------------------------------------------------
+
+
+class _TorchWanS2VAttentionBlock(_TorchWanAttentionBlock):
+    """Port of upstream ``WanS2VAttentionBlock`` (s2v/model_s2v.py:184-244).
+
+    Differs from the base block by supporting **segmented timestep
+    modulation**: ``e`` is a 2-tuple ``(e_full, seg_idx)`` where ``e_full``
+    has shape ``[B, 6, 2, dim]`` (two segments) and ``seg_idx`` splits
+    ``x`` along the sequence axis. Each segment gets its own modulation.
+    With ``seg_idx == x.size(1)`` (single segment), reduces to t2v.
+    """
+
+    def forward(  # type: ignore[override]
+        self,
+        x: torch.Tensor,
+        e: tuple[torch.Tensor, int],
+        grid_sizes: torch.Tensor,
+        freqs: torch.Tensor,
+        context: torch.Tensor,
+    ) -> torch.Tensor:
+        e_full, seg_idx_raw = e
+        seg_idx = min(max(0, int(seg_idx_raw)), x.size(1))
+        seg_idx = [0, seg_idx, x.size(1)]
+        # modulation: [1, 6, dim] + [B, 6, 2, dim] → 6 chunks each [B, 1, 2, dim]
+        e_mod = (self.modulation.unsqueeze(2) + e_full.float()).chunk(6, dim=1)
+        e_mod = [chunk.squeeze(1) for chunk in e_mod]  # 6 × [B, 2, dim]
+
+        # Self-attn with per-segment scale+shift.
+        norm_x = self.norm1(x).float()
+        parts = [
+            norm_x[:, seg_idx[i] : seg_idx[i + 1]] * (1 + e_mod[1][:, i : i + 1]) + e_mod[0][:, i : i + 1]
+            for i in range(2)
+        ]
+        norm_x = torch.cat(parts, dim=1)
+        y = self.self_attn(norm_x, grid_sizes, freqs)
+        z = [y[:, seg_idx[i] : seg_idx[i + 1]] * e_mod[2][:, i : i + 1] for i in range(2)]
+        x = x + torch.cat(z, dim=1)
+
+        # Cross-attn (no modulation).
+        x = x + self.cross_attn(self.norm3(x), context)
+
+        # FFN with per-segment scale+shift.
+        norm2_x = self.norm2(x).float()
+        parts = [
+            norm2_x[:, seg_idx[i] : seg_idx[i + 1]] * (1 + e_mod[4][:, i : i + 1]) + e_mod[3][:, i : i + 1]
+            for i in range(2)
+        ]
+        norm2_x = torch.cat(parts, dim=1)
+        y = self.ffn(norm2_x)
+        z = [y[:, seg_idx[i] : seg_idx[i + 1]] * e_mod[5][:, i : i + 1] for i in range(2)]
+        x = x + torch.cat(z, dim=1)
+        return x
+
+
+class _TorchHead_S2V(nn.Module):
+    """Port of upstream ``Head`` / ``Head_S2V`` (model.py:262-291)."""
+
+    def __init__(self, dim: int, out_dim: int, patch_size: tuple[int, int, int], eps: float = 1e-6) -> None:
+        super().__init__()
+        out_dim = patch_size[0] * patch_size[1] * patch_size[2] * out_dim
+        self.norm = _TorchWanLayerNorm(dim, eps)
+        self.head = nn.Linear(dim, out_dim)
+        self.modulation = nn.Parameter(torch.randn(1, 2, dim) / dim**0.5)
+
+    def forward(self, x: torch.Tensor, e: torch.Tensor) -> torch.Tensor:
+        # e: [B, dim] from time_embedding output (full timestep, not chunked).
+        e_full = self.modulation.unsqueeze(0) + e.float().unsqueeze(2)  # [1, 1, 2, dim] + [B, 1, 1, dim] → broadcast
+        e_mod = e_full.chunk(2, dim=2)
+        return self.head(self.norm(x) * (1 + e_mod[1].squeeze(2)) + e_mod[0].squeeze(2))
+
+
+class _TorchAudioInjectorLayer(nn.Module):
+    """One layer's audio cross-attention injector. Mirrors the reference's
+    ``injector_pre_norm_feat[id] + injector[id]`` pair (LayerNorm + WanCrossAttention).
+    """
+
+    def __init__(self, dim: int, num_heads: int, qk_norm: bool = True, eps: float = 1e-6) -> None:
+        super().__init__()
+        self.pre_norm = _TorchWanLayerNorm(dim, eps)
+        self.attn = _TorchWanCrossAttention(dim, num_heads, qk_norm, eps)
+
+    def forward(self, x: torch.Tensor, audio_emb: torch.Tensor) -> torch.Tensor:
+        """Per-frame cross-attention. ``x``: [B, T*N, dim] spatial noisy
+        tokens, rearranged outside as ``[B*T, N, dim]``. ``audio_emb``:
+        ``[B*T, audio_tokens, dim]``.
+        """
+        return self.attn(self.pre_norm(x), audio_emb)
+
+
+# ---------------------------------------------------------------------------
+# Inner-step integration test — TODO follow-on.
 #
-# Scope: build tt model with num_layers=1 and audio_inject_layers=[0], call
-# prepare_audio_emb + prepare_cond_emb + inner_step on synthesized inputs,
-# compare against a torch reference forward built from the modules above
-# plus the s2v-specific bits still to port:
-#   - TorchCausalAudioEncoder (learned weighted layer sum + MotionEncoder_tc)
-#   - TorchMotionEncoder_tc (3-stage causal Conv1d + LayerNorm + SiLU)
-#   - TorchAudioInjector (cross-attention modules; mirror of WanCrossAttention)
-#   - TorchFramePackMotionerWan (3 patch projections + rope freqs)
-#   - TorchCondEncoder (WanPatchEmbed for pose)
-#   - Top-level orchestration matching WanModel_S2V.forward (~250 lines)
+# The torch reference modules above (_TorchWanS2VAttentionBlock,
+# _TorchHead_S2V, _TorchAudioInjectorLayer) cover the s2v-specific math
+# needed for a parity test against ``WanS2VTransformer3DModel.inner_step``.
 #
-# Estimated ~500 lines of additional torch reference + ~150 lines test
-# scaffolding. Track under a follow-on commit.
+# What's still missing to actually wire up the test:
+#
+#   1. Populating the tt model's per-clip caches without calling
+#      ``prepare_cond_emb`` (which expects host inputs and runs the full
+#      pre-processing chain). Either:
+#         (a) Call ``prepare_cond_emb`` with synthesized noisy/ref/motion
+#             latents and let it populate caches normally. Then port
+#             ``cond_encoder`` + ``trainable_cond_mask`` + segmented mod
+#             mask construction on the torch side to match.
+#         (b) Reach into the tt model and manually set the ``_cached_*``
+#             attributes from pre-computed tensors. Bypasses prepare_cond_emb
+#             but couples the test to internal tt state.
+#
+#   2. Equivalent torch reference for the cond_encoder (``WanPatchEmbed``
+#      for pose video) + the trainable_cond_mask add + segmented timestep
+#      modulation table construction (real vs zero timestep for noisy vs
+#      const tokens).
+#
+#   3. Audio injection — feed pre-computed ``merged_audio_emb`` to the tt
+#      model's ``self.audio_injector`` state and call its forward with the
+#      same audio tokens on the torch side.
+#
+#   4. Block-diagonal frame mask construction for the tt side (which uses
+#      a single flat K/V + mask) vs the torch reference's per-frame
+#      rearrange (already proven equivalent by
+#      ``test_audio_injector_block_diagonal_vs_per_frame.py``).
+#
+# Realistic effort estimate: ~6-10 hours of focused implementation +
+# debugging. Tracked as a separate session-of-work — not iterable in
+# back-and-forth chat turns.
 # ---------------------------------------------------------------------------
