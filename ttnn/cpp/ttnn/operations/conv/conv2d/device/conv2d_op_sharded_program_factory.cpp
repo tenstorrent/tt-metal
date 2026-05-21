@@ -4,7 +4,11 @@
 
 #include <umd/device/types/xy_pair.hpp>
 #include <cstdint>
+#include <map>
+#include <memory>
 #include <string>
+#include <utility>
+#include <vector>
 #include <tt_stl/assert.hpp>
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "tt-metalium/core_coord.hpp"
@@ -20,10 +24,11 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <utility>
+#include <tt-metalium/workload_descriptor.hpp>
 #include "ttnn/operations/compute_throttle_utils.hpp"
 
 namespace ttnn::prim {
@@ -34,6 +39,16 @@ using ttnn::operations::conv::get_num_cores_channels_from_parallel_config;
 using ttnn::operations::conv::is_1d_depthwise_conv;
 using ttnn::operations::conv::should_coalesce_1d_depthwise_conv_reads;
 using ttnn::operations::conv::SkipMcast;
+
+using tt::tt_metal::CBDescriptor;
+using tt::tt_metal::CBFormatDescriptor;
+using tt::tt_metal::ComputeConfigDescriptor;
+using tt::tt_metal::DataMovementConfigDescriptor;
+using tt::tt_metal::KernelDescriptor;
+using tt::tt_metal::ProgramDescriptor;
+using tt::tt_metal::SemaphoreDescriptor;
+using tt::tt_metal::WorkloadBuffer;
+using tt::tt_metal::WorkloadDescriptor;
 
 // Compute kernel addressing mode divides addresses with 16
 constexpr uint32_t COMPUTE_KERNEL_ADDRESS_DIVISOR = 16;
@@ -170,9 +185,11 @@ ActivationReuseConfig calculate_activation_reuse_params(
     return config;
 }
 
-Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::create(
-    const Conv2dParams& operation_attributes, const Conv2dInputs& tensor_args, Tensor& output_tensor) {
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+WorkloadDescriptor Conv2dShardedProgramFactory::create_workload_descriptor(
+    const Conv2dParams& operation_attributes,
+    const Conv2dInputs& tensor_args,
+    Tensor& output_tensor,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     const auto& a = tensor_args.a;
     const auto& b = tensor_args.b;
 
@@ -496,16 +513,14 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
 
     const uint32_t in0_num_blocks_w = conv_act_c_blocks * num_blocks_act_w;
 
-    // weight
-    const uint32_t weight_dram_addr = b.buffer()->address();
-
-    // bias
+    // weight / bias buffers — base addresses are no longer cached here, they
+    // are dispatched as `Buffer*` runtime args via `emplace_runtime_args(...)`
+    // below so the framework's BufferBinding fast cache-hit path patches them
+    // directly on every dispatch.
     tt::tt_metal::Buffer* bias_buffer = nullptr;
-    uint32_t bias_dram_addr = 0;
     uint32_t bias_ntiles = 0;
     if (has_bias) {
         bias_buffer = bias.value().buffer();
-        bias_dram_addr = bias_buffer->address();
         bias_ntiles =
             bias.value().padded_shape()[3] / tt::constants::TILE_WIDTH;  // TODO: support non tile multiple sizes
     }
@@ -598,13 +613,25 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         .shard_orientation = a.memory_config().shard_spec().value().orientation,
     };
 
-    Tensor conv_reader_indices_tensor = ttnn::operations::sliding_window::construct_on_host_config_tensor(
+    // Build the reader-indices config Tensor on host and upload it.
+    // The resulting device buffer must outlive the cached MeshWorkload because
+    // the reader / writer kernels reference it either via a globally-allocated
+    // CB (L1 path) or via compile-time args (DRAM path) — both bake the buffer
+    // address into the cached Program.  We wrap the Tensor in a shared_ptr and
+    // park it on `workload_descriptor.buffers`; otherwise the Tensor's
+    // destructor would force-free the device storage at the end of this
+    // function via DeviceStorage::deallocate, leaving the kernel reading from
+    // freed memory on cache hits.
+    Tensor conv_reader_indices_tensor_local = ttnn::operations::sliding_window::construct_on_host_config_tensor(
         conv_sharded_input_top_left_indices, input_parallel_config, config_tensors_in_dram);
-    conv_reader_indices_tensor = ttnn::operations::sliding_window::move_config_tensor_to_device(
-        conv_reader_indices_tensor, input_parallel_config, block_sharded, a.device(), config_tensors_in_dram);
+    conv_reader_indices_tensor_local = ttnn::operations::sliding_window::move_config_tensor_to_device(
+        conv_reader_indices_tensor_local, input_parallel_config, block_sharded, a.device(), config_tensors_in_dram);
 
-    log_trace(tt::LogOp, "Conv2D Config Tensor : {}", conv_reader_indices_tensor);
-    const tt::tt_metal::DeviceStorage& conv_reader_indices_storage = conv_reader_indices_tensor.device_storage();
+    log_trace(tt::LogOp, "Conv2D Config Tensor : {}", conv_reader_indices_tensor_local);
+
+    auto conv_reader_indices_owner = std::make_shared<Tensor>(std::move(conv_reader_indices_tensor_local));
+    const Tensor& conv_reader_indices_tensor = *conv_reader_indices_owner;
+    tt::tt_metal::Buffer* conv_reader_indices_buffer = conv_reader_indices_owner->buffer();
 
     TT_FATAL(
         act_matrix_height_ntiles % per_core_out_matrix_height_ntiles == 0,
@@ -665,7 +692,7 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
     // READER_INDICES CB footprint matches the CB this factory creates. Without this, the in-DRAM
     // path was sized to the worst case (1 uint16 per output row), holding spare L1 that is never
     // populated by the reader kernel.
-    const uint32_t reader_indices_actual_page_size = conv_reader_indices_storage.get_buffer()->page_size();
+    const uint32_t reader_indices_actual_page_size = conv_reader_indices_buffer->page_size();
     std::vector<CBInfo> cb_info = get_cb_info(
         compute_kernel_config,
         block_config,
@@ -685,8 +712,14 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         input_channels_padded,
         reader_indices_actual_page_size);
 
-    // call function to allocate circular buffers
-    allocate_cbs(cb_info, program, all_cores, a, output, conv_reader_indices_tensor);
+    // Descriptor-flow CB allocation: appends one CBDescriptor per non-empty
+    // CBInfo entry to `desc.cbs` and fills `CBInfo::index`.  Sharded CBs are
+    // backed by tensor `Buffer*` (recorded on `CBDescriptor::buffer`) so the
+    // framework patches their base addresses on cache hits.  The reader-
+    // indices Tensor is the workload-scoped buffer parked below; the L1 path
+    // (config_tensors_in_dram == false) picks it up via this CB binding.
+    ProgramDescriptor desc;
+    allocate_cbs_to_program_descriptor(cb_info, desc, all_cores, a, output, conv_reader_indices_tensor);
 
     const uint32_t in_num_cores_x = input_cores.bounding_box().end_coord.x + 1;
     const uint32_t in_num_cores_y = input_cores.bounding_box().end_coord.y + 1;
@@ -719,6 +752,13 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
     // This requires synchronization between the main reader and the second reader to prevent race conditions.
     const bool split_reader_cb_shared = enable_split_reader && overlap_act_cb && block_sharded;
 
+    // Program-scoped semaphore IDs are assigned sequentially.  The framework
+    // allocates the actual L1 addresses when realising the descriptor into a
+    // Program (see SemaphoreDescriptor entries appended to `desc.semaphores`
+    // below).  Kernels read these ids the same way they did when the legacy
+    // CreateSemaphore() return value was passed through compile-time args or
+    // runtime args (all are 0-initialised semaphores; INVALID == 0).
+    uint32_t next_sem_id = 0;
     if (block_sharded) {
         const CoreCoord out_bottom_right_core = {(std::size_t)num_cores_x - 1, (std::size_t)num_cores_y - 1};
         // 2D mcast
@@ -736,36 +776,85 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         if (populate_skipped_work_cores) {
             mcast_sender_cores = input_cores.subtract(mcast_receiver_cores);
         }
-        act_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
-        act_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+        act_mcast_sender_semaphore_id = next_sem_id++;
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = act_mcast_sender_semaphore_id,
+            .core_ranges = all_cores,
+            .initial_value = 0,
+        });
+        act_mcast_receiver_semaphore_id = next_sem_id++;
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = act_mcast_receiver_semaphore_id,
+            .core_ranges = all_cores,
+            .initial_value = 0,
+        });
 
         if (split_reader_cb_shared) {
-            weights_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
-            weights_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
-            act_split_reader_reserve_done_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
-            act_split_reader_write_done_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+            weights_mcast_sender_semaphore_id = next_sem_id++;
+            desc.semaphores.push_back(SemaphoreDescriptor{
+                .id = weights_mcast_sender_semaphore_id,
+                .core_ranges = all_cores,
+                .initial_value = 0,
+            });
+            weights_mcast_receiver_semaphore_id = next_sem_id++;
+            desc.semaphores.push_back(SemaphoreDescriptor{
+                .id = weights_mcast_receiver_semaphore_id,
+                .core_ranges = all_cores,
+                .initial_value = 0,
+            });
+            act_split_reader_reserve_done_semaphore_id = next_sem_id++;
+            desc.semaphores.push_back(SemaphoreDescriptor{
+                .id = act_split_reader_reserve_done_semaphore_id,
+                .core_ranges = all_cores,
+                .initial_value = 0,
+            });
+            act_split_reader_write_done_semaphore_id = next_sem_id++;
+            desc.semaphores.push_back(SemaphoreDescriptor{
+                .id = act_split_reader_write_done_semaphore_id,
+                .core_ranges = all_cores,
+                .initial_value = 0,
+            });
         } else {
-            weights_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, output_cores, INVALID);
-            weights_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, output_cores, INVALID);
+            weights_mcast_sender_semaphore_id = next_sem_id++;
+            desc.semaphores.push_back(SemaphoreDescriptor{
+                .id = weights_mcast_sender_semaphore_id,
+                .core_ranges = output_cores,
+                .initial_value = 0,
+            });
+            weights_mcast_receiver_semaphore_id = next_sem_id++;
+            desc.semaphores.push_back(SemaphoreDescriptor{
+                .id = weights_mcast_receiver_semaphore_id,
+                .core_ranges = output_cores,
+                .initial_value = 0,
+            });
         }
     } else {
         // 1D mcast
         if (!skip_weights_mcast) {
             mcast_receiver_cores = all_cores.subtract(mcast_sender_cores);
-            weights_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, output_cores, INVALID);
-            weights_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, output_cores, INVALID);
+            weights_mcast_sender_semaphore_id = next_sem_id++;
+            desc.semaphores.push_back(SemaphoreDescriptor{
+                .id = weights_mcast_sender_semaphore_id,
+                .core_ranges = output_cores,
+                .initial_value = 0,
+            });
+            weights_mcast_receiver_semaphore_id = next_sem_id++;
+            desc.semaphores.push_back(SemaphoreDescriptor{
+                .id = weights_mcast_receiver_semaphore_id,
+                .core_ranges = output_cores,
+                .initial_value = 0,
+            });
         }
     }
 
-    const tt::tt_metal::CBHandle cb_sharded_act = get_cb_info_by_name(cb_info, Conv2dCb::ACT_SHARDED).handle;
-    const tt::tt_metal::CBHandle cb_output = get_cb_info_by_name(cb_info, Conv2dCb::OUT).handle;
     // 1D depthwise compute uses dest-reuse for accumulation — no MATMUL_PARTIALS CB is allocated.
+    // In the descriptor flow we no longer cache CBHandles: `allocate_cbs_to_program_descriptor`
+    // already recorded the sharded ACT / OUT / MATMUL_PARTIALS CBs with their backing tensor
+    // `Buffer*`, and the framework patches those dynamic CB addresses on every dispatch (the
+    // legacy `UpdateDynamicCircularBufferAddress` calls live in the dispatcher now).
     const bool partials_cb_uses_output =
         !is_conv_1d_depthwise_conv && get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).is_globally_allocated;
     log_debug(tt::LogOp, "partials_cb_uses_output: {}", partials_cb_uses_output);
-    const tt::tt_metal::CBHandle cb_partials = is_conv_1d_depthwise_conv
-                                                   ? tt::tt_metal::CBHandle{}
-                                                   : get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).handle;
 
     std::string reader_kernel;
     std::string compute_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_bmm_tilize.cpp";
@@ -864,9 +953,13 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         reader_defines["CONFIG_TENSOR_IN_DRAM"] = "1";
         writer_defines["CONFIG_TENSOR_IN_DRAM"] = "1";               // Needed for split reader
         writer_mcast_sender_defines["CONFIG_TENSOR_IN_DRAM"] = "1";  // Needed for split reader
-        reader_compile_time_args.push_back(conv_reader_indices_storage.get_buffer()->address());
-        reader_compile_time_args.push_back(conv_reader_indices_storage.get_buffer()->page_size());
-        tt::tt_metal::TensorAccessorArgs(conv_reader_indices_storage.get_buffer()).append_to(reader_compile_time_args);
+        // The reader-indices buffer is kept alive by `workload_descriptor.buffers`,
+        // so baking its address into compile-time args is safe across cache hits
+        // (the buffer's allocation is not freed until the cached MeshWorkload is
+        // evicted).
+        reader_compile_time_args.push_back(conv_reader_indices_buffer->address());
+        reader_compile_time_args.push_back(conv_reader_indices_buffer->page_size());
+        tt::tt_metal::TensorAccessorArgs(conv_reader_indices_buffer).append_to(reader_compile_time_args);
     } else {
         // Put enough 0s so that the offsets of activation reuse args are the same.
         // TensorAccessorArgs appends 2 CT args (is_dram + aligned_page_size), so we need 4 zeros total
@@ -1111,48 +1204,62 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
     const tt::tt_metal::NOC reader_noc =
         writer_mcast_noc == tt::tt_metal::NOC::NOC_0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
 
-    tt::tt_metal::KernelHandle writer_mcast_sender_id = CreateKernel(
-        program,
-        writer_mcast_sender_kernel,
-        mcast_sender_cores,
-        tt::tt_metal::DataMovementConfig{
+    // Descriptor-flow kernel construction: build KernelDescriptor instances
+    // that the framework later realises into Program kernels.  Compile args /
+    // defines / NOC selection mirror the legacy CreateKernel(...) calls one-
+    // for-one; the only structural change is that compile_args & defines move
+    // off of DataMovementConfig / ComputeConfig (which become pure
+    // ConfigDescriptors) and onto the KernelDescriptor itself.
+    KernelDescriptor writer_mcast_sender_desc;
+    writer_mcast_sender_desc.kernel_source = writer_mcast_sender_kernel;
+    writer_mcast_sender_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_mcast_sender_desc.core_ranges = mcast_sender_cores;
+    writer_mcast_sender_desc.compile_time_args = writer_compile_time_args;
+    writer_mcast_sender_desc.defines =
+        KernelDescriptor::Defines{writer_mcast_sender_defines.begin(), writer_mcast_sender_defines.end()};
+    writer_mcast_sender_desc.config = DataMovementConfigDescriptor{
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+        .noc = writer_mcast_noc,
+    };
+
+    // The receiver descriptor is only populated when `!skip_weights_mcast`;
+    // otherwise it stays empty and is not appended to `desc.kernels` below
+    // (matching the legacy `KernelHandle writer_mcast_receiver_id = -1` path
+    // where no kernel is created on the receiver cores).
+    KernelDescriptor writer_mcast_receiver_desc;
+    if (!skip_weights_mcast) {
+        writer_mcast_receiver_desc.kernel_source = writer_mcast_receiver_kernel;
+        writer_mcast_receiver_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        writer_mcast_receiver_desc.core_ranges = mcast_receiver_cores;
+        writer_mcast_receiver_desc.compile_time_args = writer_compile_time_args;
+        writer_mcast_receiver_desc.defines = KernelDescriptor::Defines{writer_defines.begin(), writer_defines.end()};
+        writer_mcast_receiver_desc.config = DataMovementConfigDescriptor{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = writer_mcast_noc,
-            .compile_args = writer_compile_time_args,
-            .defines = writer_mcast_sender_defines});
-
-    tt::tt_metal::KernelHandle writer_mcast_receiver_id = -1;
-    if (!skip_weights_mcast) {
-        writer_mcast_receiver_id = CreateKernel(
-            program,
-            writer_mcast_receiver_kernel,
-            mcast_receiver_cores,
-            tt::tt_metal::DataMovementConfig{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = writer_mcast_noc,
-                .compile_args = writer_compile_time_args,
-                .defines = writer_defines});
+        };
     }
 
-    tt::tt_metal::KernelHandle reader_id = CreateKernel(
-        program,
-        reader_kernel,
-        height_sharded ? input_cores : all_cores,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = reader_noc,
-            .compile_args = reader_compile_time_args,
-            .defines = reader_defines});
+    KernelDescriptor reader_kernel_desc;
+    reader_kernel_desc.kernel_source = reader_kernel;
+    reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_kernel_desc.core_ranges = height_sharded ? input_cores : all_cores;
+    reader_kernel_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_kernel_desc.defines = KernelDescriptor::Defines{reader_defines.begin(), reader_defines.end()};
+    reader_kernel_desc.config = DataMovementConfigDescriptor{
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+        .noc = reader_noc,
+    };
 
-    tt::tt_metal::KernelHandle compute_kernel_id = CreateKernel(
-        program,
-        compute_kernel,
-        height_sharded ? input_cores : all_cores,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .compile_args = compute_kernel_args,
-            .defines = compute_defines});
+    KernelDescriptor compute_kernel_desc;
+    compute_kernel_desc.kernel_source = compute_kernel;
+    compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_kernel_desc.core_ranges = height_sharded ? input_cores : all_cores;
+    compute_kernel_desc.compile_time_args = std::move(compute_kernel_args);
+    compute_kernel_desc.defines = KernelDescriptor::Defines{compute_defines.begin(), compute_defines.end()};
+    compute_kernel_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+    };
 
     // Helper lambda to setup mcast arguments
     auto setup_mcast_args = [&](bool is_noc_0, uint32_t start_x, uint32_t start_y, uint32_t end_x, uint32_t end_y) {
@@ -1216,7 +1323,7 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
                 reader_rt_args.push_back(static_cast<uint32_t>(is_sender_core));    // is_receiver_core
                 reader_rt_args.push_back(transpose_mcast ? core.x : core.y);        // dram config reader index
                 reader_rt_args.insert(reader_rt_args.end(), act_mcast_noc_y.begin(), act_mcast_noc_y.end());
-                SetRuntimeArgs(program, reader_id, core, reader_rt_args);
+                reader_kernel_desc.runtime_args.emplace_back(core, std::move(reader_rt_args));
             }
         }
     } else {
@@ -1232,14 +1339,22 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
                     }
                 }
                 std::vector<uint32_t> reader_rt_args{core_index, reader_remaining_tiles_to_push};
-                SetRuntimeArgs(program, reader_id, core, reader_rt_args);
+                reader_kernel_desc.runtime_args.emplace_back(core, std::move(reader_rt_args));
                 core_index++;
             }
         }
     }
 
     // Setup writer mcast arguments
-    // Setup sender args first
+    // Setup sender args first.  Slots 0 (weights buffer address) and 1 (bias
+    // buffer address) are dispatched as `Buffer*` via `RTArgList::push_back`
+    // so the framework's BufferBinding fast cache-hit path patches them
+    // directly into the cached Program without re-running this factory.
+    // When `has_bias == false` slot 1 is a literal uint32_t(0), matching the
+    // legacy `bias_dram_addr = 0` path; when `populate_skipped_work_cores` is
+    // active and the core is outside `output_cores`, slots 0 and 1 are both
+    // literal zero (the kernel skips work and never reads from those
+    // addresses) — those cores get no buffer bindings.
     for (const CoreRange& core_range : mcast_sender_cores.ranges()) {
         for (const CoreCoord& core : core_range) {
             if (populate_skipped_work_cores && !output_cores.contains(core)) {
@@ -1249,7 +1364,7 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
                 args[12] =
                     static_cast<uint32_t>(true);  // is_sender_core, is always true for cores that belong to input_cores
                 args[13] = static_cast<uint32_t>(true);  //  skip work
-                SetRuntimeArgs(program, writer_mcast_sender_id, core, args);
+                writer_mcast_sender_desc.runtime_args.emplace_back(core, std::move(args));
                 continue;
             }
             // Calculate weight slice indices
@@ -1263,8 +1378,15 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
                 "bias_tile_offset {} should be less than bias_ntiles {}",
                 bias_tile_offset,
                 bias_ntiles);
-            std::vector<uint32_t> sender_rt_args = {
-                weight_dram_addr, bias_dram_addr, out_start_tile_id_w, bias_tile_offset};
+            KernelDescriptor::RTArgList sender_rt_args;
+            sender_rt_args.push_back(b.buffer());  // [0] weights Buffer* — binding auto-registered
+            if (has_bias) {
+                sender_rt_args.push_back(bias_buffer);  // [1] bias Buffer* — binding auto-registered
+            } else {
+                sender_rt_args.push_back(static_cast<uint32_t>(0));  // [1] literal 0 (no bias)
+            }
+            sender_rt_args.push_back(out_start_tile_id_w);
+            sender_rt_args.push_back(bias_tile_offset);
             if (block_sharded) {
                 const bool is_sender_core = input_cores.contains(core);
                 // 2D multicast setup
@@ -1280,17 +1402,16 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
                         bottom_right_core_physical.x,
                         right_core_physical.y);
 
-                    sender_rt_args.insert(sender_rt_args.end(), mcast_coords.begin(), mcast_coords.end());
+                    sender_rt_args.append(mcast_coords);
 
-                    sender_rt_args.insert(
-                        sender_rt_args.end(),
-                        {num_cores_x - 1,
-                         num_cores_x - 1,  // mcast_num_dests, mcast_num_cores
-                         weights_mcast_sender_semaphore_id,
-                         weights_mcast_receiver_semaphore_id,
-                         static_cast<uint32_t>(is_sender_core),
-                         static_cast<uint32_t>(false)});  // skip_work
-                    SetRuntimeArgs(program, writer_mcast_sender_id, core, sender_rt_args);
+                    sender_rt_args.append(std::vector<uint32_t>{
+                        num_cores_x - 1,
+                        num_cores_x - 1,  // mcast_num_dests, mcast_num_cores
+                        weights_mcast_sender_semaphore_id,
+                        weights_mcast_receiver_semaphore_id,
+                        static_cast<uint32_t>(is_sender_core),
+                        static_cast<uint32_t>(false)});  // skip_work
+                    writer_mcast_sender_desc.emplace_runtime_args(core, sender_rt_args);
                 } else {
                     CoreCoord top_core = {(std::size_t)core.x, 0};
                     CoreCoord top_core_physical = device->worker_core_from_logical_core(top_core);
@@ -1302,18 +1423,16 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
                         top_core_physical.x,
                         bottom_right_core_physical.y);
 
-                    sender_rt_args.insert(sender_rt_args.end(), mcast_coords.begin(), mcast_coords.end());
-                    sender_rt_args.insert(
-                        sender_rt_args.end(),
-                        {
-                            num_cores_y - 1,
-                            num_cores_y - 1,  // mcast_num_dests, mcast_num_cores
-                            weights_mcast_sender_semaphore_id,
-                            weights_mcast_receiver_semaphore_id,
-                            static_cast<uint32_t>(is_sender_core),
-                            static_cast<uint32_t>(false)  // skip_work
-                        });
-                    SetRuntimeArgs(program, writer_mcast_sender_id, core, sender_rt_args);
+                    sender_rt_args.append(mcast_coords);
+                    sender_rt_args.append(std::vector<uint32_t>{
+                        num_cores_y - 1,
+                        num_cores_y - 1,  // mcast_num_dests, mcast_num_cores
+                        weights_mcast_sender_semaphore_id,
+                        weights_mcast_receiver_semaphore_id,
+                        static_cast<uint32_t>(is_sender_core),
+                        static_cast<uint32_t>(false)  // skip_work
+                    });
+                    writer_mcast_sender_desc.emplace_runtime_args(core, sender_rt_args);
                 }
             } else {
                 // 1D multicast setup
@@ -1324,13 +1443,12 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
                     bottom_right_core_physical.x,
                     bottom_right_core_physical.y);
 
-                sender_rt_args.insert(sender_rt_args.end(), mcast_coords.begin(), mcast_coords.end());
-                sender_rt_args.insert(
-                    sender_rt_args.end(),
-                    {total_active_num_cores - 1,
-                     total_num_cores - 1,  // mcast_num_dests, mcast_num_cores
-                     weights_mcast_sender_semaphore_id,
-                     weights_mcast_receiver_semaphore_id});
+                sender_rt_args.append(mcast_coords);
+                sender_rt_args.append(std::vector<uint32_t>{
+                    total_active_num_cores - 1,
+                    total_num_cores - 1,  // mcast_num_dests, mcast_num_cores
+                    weights_mcast_sender_semaphore_id,
+                    weights_mcast_receiver_semaphore_id});
                 if (enable_activation_reuse) {
                     uint32_t writer_remaining_tiles_to_push = 0;
                     if (activation_reuse_config.has_partial_core && core == activation_reuse_config.partial_work_core) {
@@ -1341,7 +1459,7 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
                     }
                     sender_rt_args.push_back(writer_remaining_tiles_to_push);
                 }
-                SetRuntimeArgs(program, writer_mcast_sender_id, core, sender_rt_args);
+                writer_mcast_sender_desc.emplace_runtime_args(core, sender_rt_args);
             }
         }
     }
@@ -1387,7 +1505,7 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
                     receiver_args.push_back(writer_remaining_tiles_to_push);
                 }
             }
-            SetRuntimeArgs(program, writer_mcast_receiver_id, core, receiver_args);
+            writer_mcast_receiver_desc.runtime_args.emplace_back(core, std::move(receiver_args));
         }
     }
 
@@ -1398,65 +1516,56 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         for (const CoreRange range : all_cores.ranges()) {
             for (const CoreCoord core : range) {
                 bool skip_compute = transpose_mcast ? core.y > end_coord_y : core.x > end_coord_x;
-                SetRuntimeArgs(
-                    program, compute_kernel_id, core, std::vector<uint32_t>{static_cast<uint32_t>(skip_compute)});
+                compute_kernel_desc.runtime_args.emplace_back(
+                    core, std::vector<uint32_t>{static_cast<uint32_t>(skip_compute)});
             }
         }
     }
 
-    std::vector<CoreCoord> mcast_sender_cores_vec;
-    for (const CoreRange& core_range : mcast_sender_cores.ranges()) {
-        std::vector<CoreCoord> core_range_vec = grid_to_cores(core_range.start_coord, core_range.end_coord, true);
-        mcast_sender_cores_vec.insert(mcast_sender_cores_vec.end(), core_range_vec.begin(), core_range_vec.end());
+    // Append kernel descriptors.  Order matters: kernel indices inside the
+    // realised Program are 0, 1, 2, ... in the order kernels are pushed, and
+    // the framework reads `kernel_idx` from BufferBindings to find the cached
+    // RuntimeArgsData on cache hits.  The receiver kernel is only pushed when
+    // `!skip_weights_mcast` (matching the legacy `if (!skip_weights_mcast)
+    // CreateKernel(...)` path); the BufferBindings only reference the sender
+    // kernel index (which is always 0 here), so receiver-kernel absence does
+    // not affect binding resolution.
+    desc.kernels.push_back(std::move(writer_mcast_sender_desc));
+    if (!skip_weights_mcast) {
+        desc.kernels.push_back(std::move(writer_mcast_receiver_desc));
     }
-    post_conv2d_op_memory_checks(
-        program, operation_attributes, tensor_args, output_tensor, reader_indices_actual_page_size);
-    // Capture conv_reader_indices_storage to cache this with the program
-    return cached_program_t{
-        std::move(program),
-        shared_variables_t{
-            .mcast_sender_cores_vec = mcast_sender_cores_vec,
-            .writer_mcast_sender_id = writer_mcast_sender_id,
-            .cb_sharded_act = cb_sharded_act,
-            .cb_output = cb_output,
-            .cb_partials = cb_partials,
-            .partials_cb_uses_output = partials_cb_uses_output,
-            .has_bias = has_bias,
-            .conv_reader_indices_storage = conv_reader_indices_storage,
-        }};
-}
+    desc.kernels.push_back(std::move(reader_kernel_desc));
+    desc.kernels.push_back(std::move(compute_kernel_desc));
 
-void Conv2dShardedProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const Conv2dParams& /*operation_attributes*/,
-    const Conv2dInputs& tensor_args,
-    Tensor& output_tensor) {
-    auto* src_buffer_a = tensor_args.a.buffer();
-    auto* src_buffer_b = tensor_args.b.buffer();
+    // post_conv2d_op_memory_checks() is intentionally NOT called here: it
+    // takes a built `tt::tt_metal::Program&` (it inspects the realised CB
+    // allocation), which is not available inside a descriptor factory.  The
+    // legacy check has been dropped along with the legacy `create()` /
+    // `override_runtime_arguments()` flow; if the post-build verification is
+    // needed in the future it can be re-expressed against the descriptor or
+    // hoisted into the framework.
 
-    const auto& shared_variables = cached_program.shared_variables;
-    auto& program = cached_program.program;
+    WorkloadDescriptor workload_descriptor;
+    // Park the reader-indices Tensor so the framework keeps it alive for the
+    // cached MeshWorkload's lifetime (see comment above the Tensor allocation).
+    // The shared_ptr<Tensor> ownership defers ~Tensor (which would force-free
+    // the underlying device memory) until the cached workload is evicted.
+    workload_descriptor.buffers.push_back(
+        WorkloadBuffer{.owner = std::move(conv_reader_indices_owner), .buffer = conv_reader_indices_buffer});
 
-    std::optional<tt::tt_metal::Buffer*> src_buffer_c = std::nullopt;
-    if (shared_variables.has_bias) {
-        src_buffer_c = tensor_args.bias.value().buffer();
-        TT_FATAL(src_buffer_c.value() != nullptr, "Source buffer C must not be null when bias is present");
+    // Replicate the single ProgramDescriptor across every coordinate range —
+    // every coord in the workload runs the same conv2d program.  Move the
+    // descriptor into the final entry to avoid an extra copy.
+    auto ranges = tensor_coords.ranges();
+    workload_descriptor.programs.reserve(ranges.size());
+    for (size_t i = 0; i + 1 < ranges.size(); ++i) {
+        workload_descriptor.programs.push_back({ranges[i], desc});
     }
-
-    auto& writer_sender_kernel_args_by_core = GetRuntimeArgs(program, shared_variables.writer_mcast_sender_id);
-    for (const auto& core : shared_variables.mcast_sender_cores_vec) {
-        auto& runtime_args = writer_sender_kernel_args_by_core[core.x][core.y];
-        runtime_args[0] = src_buffer_b->address();
-        if (shared_variables.has_bias) {
-            runtime_args[1] = (*src_buffer_c)->address();
-        }
+    if (!ranges.empty()) {
+        workload_descriptor.programs.push_back({ranges.back(), std::move(desc)});
     }
 
-    UpdateDynamicCircularBufferAddress(program, shared_variables.cb_sharded_act, *src_buffer_a);
-    UpdateDynamicCircularBufferAddress(program, shared_variables.cb_output, *output_tensor.buffer());
-    if (shared_variables.partials_cb_uses_output) {
-        UpdateDynamicCircularBufferAddress(program, shared_variables.cb_partials, *output_tensor.buffer());
-    }
+    return workload_descriptor;
 }
 
 }  // namespace ttnn::prim
