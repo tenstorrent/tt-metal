@@ -47,7 +47,8 @@ def run_yolov8s(
         signpost(header="start")
 
     t0 = time.time()
-    for _ in range(10):
+    warmup_runs = 100
+    for _ in range(warmup_runs):
         _ = performant_runner.run(torch_input_tensor)
     ttnn.synchronize_device(device)
     t1 = time.time()
@@ -56,7 +57,7 @@ def run_yolov8s(
         signpost(header="stop")
 
     performant_runner.release()
-    inference_time_avg = round((t1 - t0) / 10, 6)
+    inference_time_avg = round((t1 - t0) / warmup_runs, 6)
     logger.info(
         f"Model: ttnn_yolov8s - batch_size: {batch_size}. One inference iteration time (sec): {inference_time_avg}, FPS: {round((batch_size) / inference_time_avg)}"
     )

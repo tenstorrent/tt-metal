@@ -93,8 +93,8 @@ def ttnn_decode_bboxes(device, distance, anchor_points, xywh=True, dim=1):
     x2y2 = anchor_points + rb
     if xywh:
         c_xy = x1y1 + x2y2
-        c_xy = ttnn.div(c_xy, 2, dtype=ttnn.bfloat8_b)
-        wh = ttnn.subtract(x2y2, x1y1, dtype=ttnn.bfloat8_b)
+        c_xy = ttnn.div(c_xy, 2, dtype=ttnn.bfloat16)
+        wh = ttnn.subtract(x2y2, x1y1, dtype=ttnn.bfloat16)
         return ttnn.concat([c_xy, wh], 1, memory_config=ttnn.L1_MEMORY_CONFIG)
 
 

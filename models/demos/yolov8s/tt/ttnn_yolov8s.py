@@ -107,6 +107,7 @@ class TtConv:
         enable_act_double_buffer=True,
         reshard_if_not_optimal=False,
         batch_size=1,
+        high_fidelity=False,
     ):
         self.device = device
         self.parameters = parameters
@@ -117,6 +118,7 @@ class TtConv:
         self.act_block_h = act_block_h
         self.block_shard = block_shard
         self.bfloat8 = bfloat8
+        self.high_fidelity = high_fidelity
         self.change_shard = change_shard
         self.deallocate_activation = deallocate_activation
         self.output_layout = output_layout
@@ -171,9 +173,9 @@ class TtConv:
     def _initialize_compute_config(self):
         return ttnn.init_device_compute_kernel_config(
             self.device.arch(),
-            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_fidelity=ttnn.MathFidelity.HiFi2 if self.high_fidelity else ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
-            fp32_dest_acc_en=False,
+            fp32_dest_acc_en=self.high_fidelity,
             packer_l1_acc=False,
         )
 
@@ -442,27 +444,41 @@ class TtSppf:
 
 
 class TtDetectCv2:
-    def __init__(self, device, parameters, path, input_params, block_shard=False):
+    def __init__(self, device, parameters, path, input_params, block_shard=False, high_fidelity=False):
         self.device = device
         self.parameters = parameters
         self.path = path
         self.input_params = input_params
+        bf8 = not high_fidelity
         self.conv0 = TtConv(
-            device, parameters, f"{path}.0", input_params=input_params[0], bfloat8=True, block_shard=block_shard
+            device,
+            parameters,
+            f"{path}.0",
+            input_params=input_params[0],
+            bfloat8=bf8,
+            block_shard=block_shard,
+            high_fidelity=high_fidelity,
         )
         self.conv1 = TtConv(
-            device, parameters, f"{path}.1", input_params=input_params[1], bfloat8=True, block_shard=block_shard
+            device,
+            parameters,
+            f"{path}.1",
+            input_params=input_params[1],
+            bfloat8=bf8,
+            block_shard=block_shard,
+            high_fidelity=high_fidelity,
         )
         self.conv2 = TtConv(
             device,
             parameters,
             path,
             input_params=input_params[2],
-            bfloat8=True,
+            bfloat8=bf8,
             is_fused=False,
             change_shard=True,
             block_shard=block_shard,
             is_detect_cv2=True,
+            high_fidelity=high_fidelity,
         )
 
     def __call__(self, x):
@@ -478,7 +494,7 @@ class TtDFL:
         self.parameters = parameters
         self.path = path
         self.input_params = input_params
-        self.conv = TtConv(device, parameters, path, input_params, bfloat8=True, is_fused=False, change_shard=False)
+        self.conv = TtConv(device, parameters, path, input_params, bfloat8=False, is_fused=False, change_shard=False)
 
     def __call__(self, x, c1=16):
         b, _, a = x.shape
@@ -511,10 +527,24 @@ class TtDetect:
             cv3_params = input_params["cv3_params"][i]["input_params"]
 
             self.detect_cv2_modules.append(
-                TtDetectCv2(device, parameters, f"{path}.cv2.{i}", input_params=cv2_params, block_shard=block_shard)
+                TtDetectCv2(
+                    device,
+                    parameters,
+                    f"{path}.cv2.{i}",
+                    input_params=cv2_params,
+                    block_shard=block_shard,
+                    high_fidelity=True,
+                )
             )
             self.detect_cv3_modules.append(
-                TtDetectCv2(device, parameters, f"{path}.cv3.{i}", input_params=cv3_params, block_shard=block_shard)
+                TtDetectCv2(
+                    device,
+                    parameters,
+                    f"{path}.cv3.{i}",
+                    input_params=cv3_params,
+                    block_shard=block_shard,
+                    high_fidelity=True,
+                )
             )
 
         self.dfl_module = TtDFL(
@@ -547,11 +577,11 @@ class TtDetect:
         cls = ttnn.slice(x_cat, [0, 64, 0], [1, 144, x_cat.shape[2]], memory_config=ttnn.L1_MEMORY_CONFIG)
         dfl = self.dfl_module(box)
 
-        anchors = ttnn.to_memory_config(anchors, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
+        anchors = ttnn.to_memory_config(anchors, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
         dbox = ttnn_decode_bboxes(self.device, dfl, anchors)
         # dbox = ttnn.to_dtype(dbox, dtype=ttnn.bfloat8_b)
-        strides = ttnn.to_memory_config(strides, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
-        dbox = ttnn.multiply(dbox, strides, dtype=ttnn.bfloat8_b)
+        strides = ttnn.to_memory_config(strides, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+        dbox = ttnn.multiply(dbox, strides, dtype=ttnn.bfloat16)
 
         return [ttnn.concat((dbox, ttnn.sigmoid(cls)), dim=1, memory_config=ttnn.L1_MEMORY_CONFIG), x]
 
