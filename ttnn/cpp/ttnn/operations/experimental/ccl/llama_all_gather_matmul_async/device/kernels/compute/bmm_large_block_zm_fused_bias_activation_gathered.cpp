@@ -392,7 +392,7 @@ void kernel_main() {
             in1_transpose_tile,
             l1_acc,
             last_block_target,
-            OutputLayout::SubblockMajor,
+            OutputCbTileOrder::SubblockGrouped,
             matmul_config::InitMode::None,
             InputPolicy::WaitAndPopPerKBlock,
             in1_policy_const,
@@ -419,7 +419,7 @@ void kernel_main() {
             PostComputeFnT{},
             pre_fn,
             /*in1_per_core_w=*/in1_per_core_w,
-            /*out_row_width=*/0,  // unused on SubblockMajor; defaults to in1_per_core_w
+            /*out_row_width=*/0,  // unused on SubblockGrouped; defaults to in1_per_core_w
             post_fn,
             NoKBlockInnerDimFn{},
             NoIn0Source{},

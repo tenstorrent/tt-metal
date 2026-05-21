@@ -383,7 +383,7 @@ Conv2dParallelizationConfig determine_conv_op_parallel_config_from_conv_output_m
 
 static std::pair<uint32_t, uint32_t> determine_largest_subblock_size(
     uint32_t block_height, uint32_t block_width, bool fp32_accum) {
-    // Conv kernels emit OutputLayout::SubblockMajor at every matmul_block /
+    // Conv kernels emit OutputCbTileOrder::SubblockGrouped at every matmul_block /
     // add_bias_bcast_rows call site (conv_bmm_tilize.cpp), which requires
     // out_subblock_w == per_core_N OR out_subblock_h == 1. Synthesize a kernel
     // config from fp32_accum so the tuner derives DST capacity via

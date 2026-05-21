@@ -273,7 +273,7 @@ void add_bias_and_addcmul_block(
 // absolute offsets, and the kernel below wrapped that in a K-loop with
 // L1_ACC accumulation into a single pre-reserved intermediate buffer. The K-loop
 // helper now covers all of that via:
-//   LastBlockTarget::Interm + OutputLayout::RowMajor → pack_subblock_row_major_strided
+//   LastBlockTarget::Interm + OutputCbTileOrder::RowGrouped → pack_subblock_row_major_strided
 //     packs each subblock at absolute row positions inside the row group;
 //   packer_l1_acc + pack_last_to_interm → llk_pack_reconfig_l1_acc(0 → 1) per K-block
 //     so block 0 writes fresh and blocks 1..N-1 accumulate into the same L1 cells;
@@ -388,7 +388,7 @@ void kernel_main() {
                     /*transpose=*/false,
                     /*packer_l1_acc=*/true,
                     LastBlockTarget::Interm,
-                    OutputLayout::RowMajor,
+                    OutputCbTileOrder::RowGrouped,
                     matmul_config::InitMode::None,
                     InputPolicy::WaitAndRetainOnLastBlock,
                     InputPolicy::WaitAndPopPerKBlock,
@@ -419,7 +419,7 @@ void kernel_main() {
                     /*transpose=*/false,
                     /*packer_l1_acc=*/true,
                     LastBlockTarget::Interm,
-                    OutputLayout::RowMajor,
+                    OutputCbTileOrder::RowGrouped,
                     matmul_config::InitMode::None,
                     InputPolicy::WaitAndPopPerKBlock,
                     InputPolicy::WaitAndPopPerKBlock,

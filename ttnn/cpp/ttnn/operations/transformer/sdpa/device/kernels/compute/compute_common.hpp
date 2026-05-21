@@ -1232,9 +1232,8 @@ ALWI void matmul_blocks(
 
     // num_blocks == 1 in SDPA, so the helper's K-accumulation path is inert; in0_cb is
     // forwarded as the interm_cb placeholder — it is unused when num_k_blocks == 1.
-    mm_block_init_short(in0_cb, in1_cb, transpose, subblock_w, subblock_h, in0_block_w);
-    reconfig_data_format(in1_cb, in0_cb);
-
+    // InitMode::Short with default reconfig=INPUT_AND_OUTPUT handles the reconfig +
+    // mm_block_init_short internally (formerly hand-paired here before the call).
     CircularBuffer in0_buf(in0_cb);
     CircularBuffer in1_buf(in1_cb);
     CircularBuffer out_buf(out_cb);
@@ -1243,8 +1242,8 @@ ALWI void matmul_blocks(
         transpose,
         /*packer_l1_acc=*/false,
         compute_kernel_lib::LastBlockTarget::Out,
-        compute_kernel_lib::OutputLayout::RowMajor,
-        compute_kernel_lib::matmul_config::InitMode::None,
+        compute_kernel_lib::OutputCbTileOrder::RowGrouped,
+        compute_kernel_lib::matmul_config::InitMode::Short,
         compute_kernel_lib::InputPolicy::WaitAndRetainOnLastBlock,
         compute_kernel_lib::InputPolicy::WaitAndPopPerKBlock,
         OptionalMaskPostCompute,
@@ -1289,7 +1288,7 @@ void matmul_reduce(uint32_t in1_cb, uint32_t in_cb, uint32_t out_cb) {
         /*transpose=*/false,
         /*packer_l1_acc=*/false,
         compute_kernel_lib::LastBlockTarget::Out,
-        compute_kernel_lib::OutputLayout::SubblockMajor,
+        compute_kernel_lib::OutputCbTileOrder::SubblockGrouped,
         compute_kernel_lib::matmul_config::InitMode::Short,
         compute_kernel_lib::InputPolicy::WaitAndPopPerKBlock,        // consume in_cb (M tiles total)
         compute_kernel_lib::InputPolicy::WaitAndRetainOnLastBlock>(  // keep col-identity fronted

@@ -548,7 +548,7 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
                 /*transpose=*/false,
                 /*packer_l1_acc=*/false,
                 compute_kernel_lib::LastBlockTarget::Out,
-                compute_kernel_lib::OutputLayout::SubblockMajor,
+                compute_kernel_lib::OutputCbTileOrder::SubblockGrouped,
                 compute_kernel_lib::matmul_config::InitMode::None,
                 compute_kernel_lib::InputPolicy::WaitAndPopPerKBlock,
                 compute_kernel_lib::InputPolicy::WaitAndRetainOnLastBlock,
