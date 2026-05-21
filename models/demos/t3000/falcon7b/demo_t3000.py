@@ -9,17 +9,17 @@ from models.demos.falcon7b_common.demo.demo import run_falcon_demo_kv
 
 
 @pytest.mark.parametrize(
-    "perf_mode, max_seq_len, expected_perf_metrics, greedy_sampling, expected_greedy_output_path",
+    "perf_mode, max_seq_len, has_expected_perf_metrics, greedy_sampling, expected_greedy_output_path",
     (
-        (True, 128, {"prefill_t/s": 15500, "decode_t/s": 3737, "decode_t/s/u": 14.6}, False, None),
-        (True, 1024, {"prefill_t/s": 22100, "decode_t/s": 3379, "decode_t/s/u": 13.2}, False, None),
-        (True, 2048, {"prefill_t/s": 19150, "decode_t/s": 3174, "decode_t/s/u": 12.4}, False, None),
-        (True, 128, None, False, None),
-        (True, 1024, None, False, None),
-        (True, 2048, None, False, None),
-        (False, 1024, None, True, "models/demos/t3000/falcon7b/expected_greedy_output.json"),
-        (False, 1024, None, True, None),
-        (False, 1024, None, False, None),
+        (True, 128, True, False, None),
+        (True, 1024, True, False, None),
+        (True, 2048, True, False, None),
+        (True, 128, False, False, None),
+        (True, 1024, False, False, None),
+        (True, 2048, False, False, None),
+        (False, 1024, False, True, "models/demos/t3000/falcon7b/expected_greedy_output.json"),
+        (False, 1024, False, True, None),
+        (False, 1024, False, False, None),
     ),
     ids=[
         "perf_mode_128_stochastic_verify",
@@ -37,7 +37,7 @@ from models.demos.falcon7b_common.demo.demo import run_falcon_demo_kv
 def test_demo_multichip(
     perf_mode,  # Option to measure perf using max seq length (with invalid outputs) and expected perf (t/s)
     max_seq_len,
-    expected_perf_metrics,  # Expected perf (t/s) for prefill and decode in perf mode
+    has_expected_perf_metrics,
     greedy_sampling,  # Option to use greedy decoding instead of top-k/p
     expected_greedy_output_path,  # Path for expected outputs for greedy decoding
     user_input,
@@ -46,9 +46,9 @@ def test_demo_multichip(
 ):
     num_devices = mesh_device.get_num_devices()
     if is_ci_env:
-        if num_devices != 8 or (not expected_greedy_output_path and not expected_perf_metrics):
+        if num_devices != 8 or (not expected_greedy_output_path and not has_expected_perf_metrics):
             pytest.skip("Skipping test in CI since it provides redundant testing")
-    elif expected_greedy_output_path or expected_perf_metrics:
+    elif expected_greedy_output_path or has_expected_perf_metrics:
         assert num_devices == 8, "8 devices are expected for perf and greedy output verification"
 
     assert is_wormhole_b0(), "Multi-chip is only supported for Wormhole B0"
@@ -60,8 +60,14 @@ def test_demo_multichip(
             "decode_t/s": 26 * batch_size * num_devices,
             "decode_t/s/u": 26,
         }  # performance targets that we aim for (t3000)
+        verify_sku = "wh_llmbox_perf"
+        verify_batch_size = batch_size * num_devices
+        verify_seq_len = max_seq_len
     else:
         json_perf_targets = {}
+        verify_sku = None
+        verify_batch_size = None
+        verify_seq_len = None
 
     return run_falcon_demo_kv(
         user_input=user_input,
@@ -71,8 +77,12 @@ def test_demo_multichip(
         mesh_device=mesh_device,
         perf_mode=perf_mode,
         greedy_sampling=greedy_sampling,
-        expected_perf_metrics=expected_perf_metrics,
+        expected_perf_metrics=None,
         expected_greedy_output_path=expected_greedy_output_path,
         json_perf_targets=json_perf_targets,
         is_ci_env=is_ci_env,
+        model_name="falcon-7b" if has_expected_perf_metrics else None,
+        sku=verify_sku if has_expected_perf_metrics else None,
+        target_batch_size=verify_batch_size if has_expected_perf_metrics else None,
+        target_seq_len=verify_seq_len if has_expected_perf_metrics else None,
     )

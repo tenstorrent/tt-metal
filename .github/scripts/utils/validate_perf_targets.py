@@ -20,12 +20,6 @@ except ModuleNotFoundError:
     sys.path.insert(0, str(REPO_ROOT))
     from models.demos.utils import model_targets
 
-LOWER_IS_BETTER_METRICS = {
-    "prefill_time_to_token",
-    "compile_prefill",
-    "compile_decode",
-}
-
 TARGETS_YAML_RELATIVE_PATH = Path("models/model_targets.yaml")
 BENCHMARK_DIR_RELATIVE_PATH = Path("generated/benchmark_data")
 TESTS_YAML_RELATIVE_PATH = Path("tests/pipeline_reorg/models_e2e_tests.yaml")
@@ -41,6 +35,7 @@ METRIC_NAME_MAP = {
     "compile_decode": ("compile_decode", "time(s)"),
     "prefill_t/s": ("inference_prefill", "tokens/s"),
     "prefill_time_to_token": ("inference_prefill", "time_to_token"),
+    "prefill_time_to_first_token": ("inference_prefill", "time_to_token"),
     "prefill_decode_t/s/u": ("inference_prefill_decode", "tokens/s/user"),
     "decode_t/s": ("inference_decode", "tokens/s"),
     "decode_t/s/u": ("inference_decode", "tokens/s/user"),
@@ -56,13 +51,13 @@ ALLOWED_TARGET_METRIC_NAMES = {
     "prefill_decode_t/s/u",
     "prefill_t/s",
     "prefill_time_to_token",
+    "prefill_time_to_first_token",
     "top1",
     "top5",
 }
-TOLERANCE_FAMILY_ALIASES = {
-    "decode_t/s": "decode_tolerance",
-    "decode_t/s/u": "decode_tolerance",
-}
+
+PREFILL_TIME_TO_TOKEN_KEY = "prefill_time_to_token"
+PREFILL_TIME_TO_FIRST_TOKEN_KEY = "prefill_time_to_first_token"
 
 
 def _is_number(value: Any) -> bool:
@@ -125,50 +120,58 @@ def _extract_metric_value(metric_name: str, lookup: dict[tuple[str, str], float]
     return matches[0][2]
 
 
-def _metric_tolerance(metric_name: str, thresholds: dict[str, Any], default_high_tolerance: float) -> float:
-    """Resolve effective tolerance for a metric using explicit and family aliases."""
-    explicit_candidates = [
-        f"{metric_name}_tolerance",
-        f"{metric_name.replace('/', '_')}_tolerance",
-    ]
-    metric_family_alias = TOLERANCE_FAMILY_ALIASES.get(metric_name)
-    if metric_family_alias:
-        explicit_candidates.append(metric_family_alias)
-    for explicit_key in explicit_candidates:
-        explicit = thresholds.get(explicit_key)
-        if _is_number(explicit):
-            return float(explicit)
-    generic = thresholds.get("tolerance")
-    if _is_number(generic):
-        return float(generic)
-    return default_high_tolerance
+def _normalize_ttft_thresholds(
+    thresholds: dict[str, Any],
+    benchmark_file_name: str,
+    model_name: str,
+    sku: str,
+) -> dict[str, Any]:
+    """
+    Normalize TTFT aliases in thresholds and enforce `prefill_time_to_first_token` precedence.
+
+    `prefill_time_to_first_token` targets are stored in milliseconds and converted to seconds
+    for comparison with benchmark payload `time_to_token`.
+    """
+    normalized_thresholds = dict(thresholds)
+    has_ttft_ms = _is_number(normalized_thresholds.get(PREFILL_TIME_TO_FIRST_TOKEN_KEY))
+    has_ttft_s = _is_number(normalized_thresholds.get(PREFILL_TIME_TO_TOKEN_KEY))
+
+    if has_ttft_ms and has_ttft_s:
+        print(
+            "::warning::"
+            f"{benchmark_file_name}: both {PREFILL_TIME_TO_FIRST_TOKEN_KEY} and {PREFILL_TIME_TO_TOKEN_KEY} are set "
+            f"for model={model_name}, sku={sku}; using {PREFILL_TIME_TO_FIRST_TOKEN_KEY} and ignoring "
+            f"{PREFILL_TIME_TO_TOKEN_KEY}"
+        )
+        normalized_thresholds.pop(PREFILL_TIME_TO_TOKEN_KEY, None)
+
+    if has_ttft_ms:
+        normalized_thresholds[PREFILL_TIME_TO_FIRST_TOKEN_KEY] = (
+            float(normalized_thresholds[PREFILL_TIME_TO_FIRST_TOKEN_KEY]) / 1000.0
+        )
+
+    return normalized_thresholds
 
 
 def _check_metric(
     metric_name: str,
     expected_value: float,
     measured_value: float,
-    high_tolerance: float,
+    tolerance: float,
 ) -> str | None:
-    """Compare measured and expected values using asymmetric regression bounds."""
-    if metric_name in LOWER_IS_BETTER_METRICS:
-        if measured_value > expected_value:
-            return f"{metric_name}: measured={measured_value} > expected={expected_value}"
-        lower_bound = expected_value * (2 - high_tolerance)
-        if measured_value < lower_bound:
-            return (
-                f"{metric_name}: measured={measured_value} < lower_bound={lower_bound} "
-                f"(expected={expected_value}, high_tolerance={high_tolerance})"
-            )
-        return None
+    """Compare measured and expected values using directional tolerance bands."""
 
-    if measured_value < expected_value:
-        return f"{metric_name}: measured={measured_value} < expected={expected_value}"
-    upper_bound = expected_value * high_tolerance
+    lower_bound = expected_value * (1 - tolerance)
+    upper_bound = expected_value * (1 + tolerance)
+    if measured_value < lower_bound:
+        return (
+            f"{metric_name}: measured={measured_value} < lower_bound={lower_bound} "
+            f"(expected={expected_value}, tolerance={tolerance})"
+        )
     if measured_value > upper_bound:
         return (
             f"{metric_name}: measured={measured_value} > upper_bound={upper_bound} "
-            f"(expected={expected_value}, high_tolerance={high_tolerance})"
+            f"(expected={expected_value}, tolerance={tolerance})"
         )
     return None
 
@@ -224,19 +227,15 @@ def _validate_targets_schema(targets_yaml: dict[str, Any]) -> list[str]:
                         )
                         continue
                     for metric_name, metric_value in block.items():
-                        is_tolerance_key = (
-                            metric_name == "tolerance"
-                            or metric_name == "decode_tolerance"
-                            or metric_name.endswith("_tolerance")
-                        )
+                        is_tolerance_key = model_targets.is_tolerance_key(metric_name)
                         if is_tolerance_key:
                             if not _is_number(metric_value):
                                 errors.append(
                                     f"Model '{model_name}' sku '{sku_name}' entry #{idx} has non-numeric tolerance '{metric_name}'"
                                 )
-                            elif float(metric_value) <= 1.0:
+                            elif not (0.0 <= float(metric_value) <= 1.0):
                                 errors.append(
-                                    f"Model '{model_name}' sku '{sku_name}' entry #{idx} has tolerance '{metric_name}' <= 1.0"
+                                    f"Model '{model_name}' sku '{sku_name}' entry #{idx} has tolerance '{metric_name}' outside [0.0, 1.0]"
                                 )
                             continue
                         if metric_name not in ALLOWED_TARGET_METRIC_NAMES:
@@ -348,11 +347,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sku", default=None, help="Override SKU for this job (recommended in CI matrix jobs)")
     # TODO: Enable strict-missing by default in CI once model targets migration is complete.
     parser.add_argument("--strict-missing", action="store_true", help="Fail when matching target is TODO or missing")
-    parser.add_argument("--high-tol-percentage", type=float, default=1.15)
-    args = parser.parse_args()
-    if args.high_tol_percentage <= 1.0:
-        parser.error("--high-tol-percentage must be > 1.0")
-    return args
+    return parser.parse_args()
 
 
 def _resolve_paths(path_profile: PathProfile) -> tuple[Path, Path, Path]:
@@ -443,9 +438,15 @@ def main() -> int:
             thresholds.update(perf)
         if isinstance(accuracy, dict):
             thresholds.update(accuracy)
+        thresholds = _normalize_ttft_thresholds(
+            thresholds=thresholds,
+            benchmark_file_name=benchmark_file.name,
+            model_name=model_name,
+            sku=sku,
+        )
 
         for metric_name, expected in thresholds.items():
-            if metric_name.endswith("_tolerance") or metric_name in {"tolerance", "decode_tolerance"}:
+            if model_targets.is_tolerance_key(metric_name):
                 continue
             if not _is_number(expected):
                 continue
@@ -462,12 +463,16 @@ def main() -> int:
                     f"model={model_name}, sku={sku}"
                 )
                 continue
-            tolerance = _metric_tolerance(metric_name, thresholds, args.high_tol_percentage)
+            tolerance = model_targets.resolve_metric_tolerance(
+                metric_name=metric_name,
+                thresholds=thresholds,
+                default_tolerance=model_targets.DEFAULT_PERF_TOLERANCE,
+            )
             metric_failure = _check_metric(
                 metric_name=metric_name,
                 expected_value=float(expected),
                 measured_value=float(measured_value),
-                high_tolerance=tolerance,
+                tolerance=tolerance,
             )
             if metric_failure:
                 hard_failures.append(f"{benchmark_file.name}: {metric_failure}")

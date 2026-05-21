@@ -23,6 +23,7 @@ import torch
 
 import ttnn
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
+from models.demos.utils.model_targets import resolve_perf_targets
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import get_base_model_name
 from models.tt_transformers.tt.generator import Generator, create_submeshes
@@ -622,29 +623,30 @@ def test_multimodal_demo_text(
         tt_device_name = model_args[0].device_name
         base_model_name = model_args[0].base_model_name
 
-        run_config = (tt_device_name, base_model_name, max_batch_size)
-        targets_prefill_tok_s = {
-            ("N300", "Llama-3.2-11B", 16): 19.3,
-            ("T3K", "Llama-3.2-90B", 1): 10.0,
-        }
-        targets_decode_tok_s_u = {
-            ("N300", "Llama-3.2-11B", 16): (15.9, None),  # None to default to tolerance percentage (1.15)
-            ("T3K", "Llama-3.2-90B", 1): (8.0, None),
-        }
+        resolved_perf_targets = resolve_perf_targets(
+            model_name=base_model_name,
+            sku=tt_device_name,
+            batch_size=max_batch_size,
+            seq_len=max_seq_len,
+        )
+        if resolved_perf_targets is None and max_seq_len != max(prefill_lens).item():
+            resolved_perf_targets = resolve_perf_targets(
+                model_name=base_model_name,
+                sku=tt_device_name,
+                batch_size=max_batch_size,
+                seq_len=max(prefill_lens).item(),
+            )
 
         perf_targets = {}
-        if run_config in targets_prefill_tok_s:
-            assert (
-                run_config in targets_decode_tok_s_u
-            ), f"Prefill targets exist, but decode targets are missing for {run_config}"
-
-            perf_targets = {
-                "prefill_t/s": targets_prefill_tok_s[run_config],
-                "decode_t/s": targets_decode_tok_s_u[run_config][0] * max_batch_size,
-                "decode_t/s/u": targets_decode_tok_s_u[run_config][0],
-            }
-
-            perf_tolerance = targets_decode_tok_s_u[run_config][1] or 1.15  # default to 15% tolerance
+        if resolved_perf_targets:
+            if resolved_perf_targets.get("prefill_t/s") is not None:
+                perf_targets["prefill_t/s"] = float(resolved_perf_targets["prefill_t/s"])
+            if resolved_perf_targets.get("decode_t/s/u") is not None:
+                perf_targets["decode_t/s/u"] = float(resolved_perf_targets["decode_t/s/u"])
+            if resolved_perf_targets.get("decode_t/s") is not None:
+                perf_targets["decode_t/s"] = float(resolved_perf_targets["decode_t/s"])
+            elif "decode_t/s/u" in perf_targets:
+                perf_targets["decode_t/s"] = perf_targets["decode_t/s/u"] * max_batch_size
 
         # Save benchmark data for CI
         N_warmup_iter = {"inference_prefill": 0, "inference_decode": 0}
@@ -663,4 +665,14 @@ def test_multimodal_demo_text(
         )
 
         if perf_targets:
-            verify_perf(measurements, perf_targets, high_tol_percentage=perf_tolerance)
+            expected_measurements = {
+                key: True for key in ("prefill_t/s", "decode_t/s", "decode_t/s/u") if key in perf_targets
+            }
+            verify_perf(
+                measurements,
+                expected_measurements=expected_measurements,
+                model_name=base_model_name,
+                sku=tt_device_name,
+                batch_size=max_batch_size,
+                seq_len=max_seq_len,
+            )

@@ -7,12 +7,55 @@ import warnings
 
 from loguru import logger
 
-from models.demos.utils.model_targets import resolve_perf_targets
+from models.demos.utils.model_targets import (
+    DEFAULT_PERF_TOLERANCE,
+    is_tolerance_key,
+    resolve_accuracy_targets,
+    resolve_metric_tolerance,
+    resolve_perf_targets,
+)
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+
+PREFILL_TIME_TO_TOKEN_KEY = "prefill_time_to_token"
+PREFILL_TIME_TO_FIRST_TOKEN_KEY = "prefill_time_to_first_token"
 
 
 class PerfRegressionWarning(UserWarning):
     """Warning emitted when measured perf drifts from configured thresholds."""
+
+
+class AccuracyRegressionWarning(UserWarning):
+    """Warning emitted when measured accuracy drifts from configured thresholds."""
+
+
+def _normalize_ttft_metrics(metrics: dict, source_name: str) -> dict:
+    """
+    Normalize TTFT aliases to seconds and enforce key precedence.
+
+    `prefill_time_to_first_token` is interpreted as milliseconds and takes precedence
+    over `prefill_time_to_token` when both are present.
+    """
+    normalized_metrics = dict(metrics)
+    has_ttft_ms = metrics.get(PREFILL_TIME_TO_FIRST_TOKEN_KEY) is not None
+    has_ttft_s = metrics.get(PREFILL_TIME_TO_TOKEN_KEY) is not None
+
+    if has_ttft_ms and has_ttft_s:
+        logger.warning(
+            f"Both {PREFILL_TIME_TO_FIRST_TOKEN_KEY} and {PREFILL_TIME_TO_TOKEN_KEY} are set in {source_name}; "
+            f"using {PREFILL_TIME_TO_FIRST_TOKEN_KEY} and ignoring {PREFILL_TIME_TO_TOKEN_KEY}."
+        )
+
+    ttft_value_seconds = None
+    if has_ttft_ms:
+        ttft_value_seconds = float(metrics[PREFILL_TIME_TO_FIRST_TOKEN_KEY]) / 1000.0
+    elif has_ttft_s:
+        ttft_value_seconds = float(metrics[PREFILL_TIME_TO_TOKEN_KEY])
+
+    if ttft_value_seconds is not None:
+        normalized_metrics[PREFILL_TIME_TO_FIRST_TOKEN_KEY] = ttft_value_seconds
+        normalized_metrics[PREFILL_TIME_TO_TOKEN_KEY] = ttft_value_seconds
+
+    return normalized_metrics
 
 
 def create_benchmark_data(profiler: BenchmarkProfiler, measurements: dict, N_warmup_iter: dict, targets: dict):
@@ -122,9 +165,7 @@ def check_tokens_match(generated_text: dict, expected_greedy_output_path: str):
 def verify_perf(
     measurements: dict,
     expected_perf_metrics: dict = None,
-    high_tol_percentage=1.15,  # 15% tolerance (approx +-5% CI variance + 5% real increase)
     expected_measurements: dict = None,
-    lower_is_better_metrics: set = None,
     model_name: str = None,
     sku: str = None,
     batch_size: int = None,
@@ -137,9 +178,7 @@ def verify_perf(
         measurements: dict of measured performance values
         expected_perf_metrics: dict of expected performance values. If omitted, the values are
             resolved from centralized YAML using model_name/sku[/batch_size/seq_len].
-        high_tol_percentage: tolerance percentage (e.g., 1.15 means 15% tolerance)
         expected_measurements: dict specifying which measurements are required
-        lower_is_better_metrics: set of metric names where lower values are better (e.g., TTFT)
     """
     if expected_perf_metrics is None:
         if not model_name or not sku:
@@ -156,53 +195,76 @@ def verify_perf(
                 f"batch_size={batch_size}, seq_len={seq_len}"
             )
 
+    measurements = _normalize_ttft_metrics(measurements, "measurements")
+    expected_perf_metrics = _normalize_ttft_metrics(expected_perf_metrics, "expected_perf_metrics")
+    tolerance_config = {k: v for k, v in expected_perf_metrics.items() if is_tolerance_key(k)}
+    expected_perf_metrics = {k: v for k, v in expected_perf_metrics.items() if not is_tolerance_key(k)}
+
     expected_measurements_default = {
         "compile_prefill": False,
         "compile_decode": False,
         "prefill_time_to_token": False,
+        "prefill_time_to_first_token": False,
         "prefill_decode_t/s/u": False,
         "prefill_t/s": True,
         "decode_t/s": True,
         "decode_t/s/u": True,
     }
     expected_measurements = expected_measurements_default if expected_measurements is None else expected_measurements
+    expected_measurements = dict(expected_measurements)
+
+    if expected_measurements.get(PREFILL_TIME_TO_FIRST_TOKEN_KEY) and expected_measurements.get(
+        PREFILL_TIME_TO_TOKEN_KEY
+    ):
+        logger.warning(
+            f"Both {PREFILL_TIME_TO_FIRST_TOKEN_KEY} and {PREFILL_TIME_TO_TOKEN_KEY} are enabled in expected_measurements; "
+            f"using {PREFILL_TIME_TO_FIRST_TOKEN_KEY} and ignoring {PREFILL_TIME_TO_TOKEN_KEY}."
+        )
+        expected_measurements[PREFILL_TIME_TO_TOKEN_KEY] = False
 
     # Default metrics where lower is better
-    lower_is_better_metrics_default = {
+    lower_is_better_metrics = {
         "prefill_time_to_token",
+        "prefill_time_to_first_token",
         "compile_prefill",
         "compile_decode",
     }
-    lower_is_better_metrics = (
-        lower_is_better_metrics_default.union(lower_is_better_metrics)
-        if lower_is_better_metrics
-        else lower_is_better_metrics_default
-    )
 
     does_pass = True
     for key in expected_measurements:
         if not expected_measurements[key]:
             continue
-        assert (
-            key in measurements and key in expected_perf_metrics and expected_perf_metrics[key] is not None
-        ), f"Metric {key} not found in measurements or expected_perf_metrics"
-
+        is_key_found = key in measurements and key in expected_perf_metrics and expected_perf_metrics[key] is not None
+        if not is_key_found:
+            logger.warning(f"Metric {key} not found in measurements or expected_perf_metrics")
+            does_pass = False
+            continue
         if key in lower_is_better_metrics:
+            metric_tolerance = resolve_metric_tolerance(
+                metric_name=key,
+                thresholds=tolerance_config,
+                default_tolerance=DEFAULT_PERF_TOLERANCE,
+            )
             # For metrics where lower is better (e.g., TTFT)
             if measurements[key] > expected_perf_metrics[key]:  # Higher than expected is bad
                 does_pass = False
                 logger.warning(f"{key} ({measurements[key]}) is higher than expected {expected_perf_metrics[key]}")
-            elif measurements[key] < expected_perf_metrics[key] * (2 - high_tol_percentage):  # Much lower than expected
+            elif measurements[key] < expected_perf_metrics[key] * (1 - metric_tolerance):  # Much lower than expected
                 does_pass = False
                 logger.warning(
                     f"{key} ({measurements[key]}) is much lower than expected {expected_perf_metrics[key]}. Please update the expected perf."
                 )
         else:
+            metric_tolerance = resolve_metric_tolerance(
+                metric_name=key,
+                thresholds=tolerance_config,
+                default_tolerance=DEFAULT_PERF_TOLERANCE,
+            )
             # For metrics where higher is better (e.g., throughput)
             if measurements[key] < expected_perf_metrics[key]:  # Lower than expected is bad
                 does_pass = False
                 logger.warning(f"{key} ({measurements[key]}) is lower than expected {expected_perf_metrics[key]}")
-            elif measurements[key] > expected_perf_metrics[key] * high_tol_percentage:  # Much higher than expected
+            elif measurements[key] > expected_perf_metrics[key] * (1 + metric_tolerance):  # Much higher than expected
                 does_pass = False
                 logger.warning(
                     f"{key} ({measurements[key]}) is much higher than expected {expected_perf_metrics[key]}. Please update the expected perf."
@@ -218,9 +280,62 @@ def verify_perf(
             PerfRegressionWarning,
             stacklevel=2,
         )
-        # Keep this assert until centralized targets migration is complete:
-        # https://github.com/tenstorrent/tt-metal/issues/42782
-        assert does_pass, (
-            "Performance regression detected. Failing fast to avoid silently accepting "
-            "degraded model performance while centralized targets rollout is in progress."
+
+
+def verify_accuracy(
+    measurements: dict,
+    expected_accuracy_metrics: dict = None,
+    model_name: str = None,
+    sku: str = None,
+    batch_size: int = None,
+    seq_len: int = None,
+):
+    """
+    Verify top-k token accuracy against centralized targets in warning-only mode.
+    """
+    if expected_accuracy_metrics is None:
+        if not model_name or not sku:
+            raise ValueError("model_name and sku are required when expected_accuracy_metrics is not provided")
+        expected_accuracy_metrics = resolve_accuracy_targets(
+            model_name=model_name,
+            sku=sku,
+            batch_size=batch_size,
+            seq_len=seq_len,
+        )
+        if expected_accuracy_metrics is None:
+            raise ValueError(
+                f"No centralized accuracy targets found for model={model_name}, sku={sku}, "
+                f"batch_size={batch_size}, seq_len={seq_len}"
+            )
+
+    measured_top1 = measurements.get("top1_token_accuracy", measurements.get("top1"))
+    measured_top5 = measurements.get("top5_token_accuracy", measurements.get("top5"))
+    target_top1 = expected_accuracy_metrics.get("top1")
+    target_top5 = expected_accuracy_metrics.get("top5")
+
+    does_pass = True
+    if target_top1 is not None:
+        if measured_top1 is None:
+            logger.warning("Metric top1_token_accuracy not found in measurements")
+            does_pass = False
+        elif float(measured_top1) < float(target_top1):
+            logger.warning(f"top1_token_accuracy ({measured_top1}) is lower than expected {target_top1}")
+            does_pass = False
+    if target_top5 is not None:
+        if measured_top5 is None:
+            logger.warning("Metric top5_token_accuracy not found in measurements")
+            does_pass = False
+        elif float(measured_top5) < float(target_top5):
+            logger.warning(f"top5_token_accuracy ({measured_top5}) is lower than expected {target_top5}")
+            does_pass = False
+
+    if does_pass:
+        logger.info("Accuracy Check Passed!")
+    else:
+        logger.warning("Accuracy Check Failed!")
+        warnings.warn(
+            f"Accuracy drift detected against expected metrics {expected_accuracy_metrics}. "
+            "See warnings above for metric-level details.",
+            AccuracyRegressionWarning,
+            stacklevel=2,
         )

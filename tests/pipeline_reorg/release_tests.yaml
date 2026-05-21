@@ -461,7 +461,7 @@
     uv pip install -r models/demos/gpt_oss/requirements.txt
     export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/
     pytest --timeout 1500 models/demos/gpt_oss/tests/unit -k "decode_high_throughput"
-  model-name: gpt-oss-120b-high-batch-galaxy
+  model-name: gpt-oss-120b
   skus:
     wh_galaxy_release:
       timeout: 25
@@ -508,7 +508,7 @@
     uv pip install -r models/demos/gpt_oss/requirements.txt
     export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/
     pytest models/demos/gpt_oss/demo/text_demo.py -k "batch128" --timeout 1200
-  model-name: gpt-oss-120b-high-batch-galaxy
+  model-name: gpt-oss-120b
   skus:
     wh_galaxy_release:
       timeout: 20
