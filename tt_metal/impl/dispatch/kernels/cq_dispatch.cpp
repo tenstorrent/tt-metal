@@ -1309,7 +1309,8 @@ re_run_command:
             // cmd->set_write_offset.offset1,
             //              cmd->set_write_offset.offset2, cmd->set_write_offset.program_host_id);
             DeviceTimestampedData("runtime_host_id_dispatch", cmd->set_write_offset.program_host_id);
-            if (rt_profiler_msg->realtime_profiler_core_noc_xy != 0) {
+            if (rt_profiler_msg->realtime_profiler_core_noc_xy != 0 &&
+                cmd->set_write_offset.program_host_id != REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID) {
                 while (!program_id_fifo_append(rt_profiler_msg, cmd->set_write_offset.program_host_id)) {
                     invalidate_l1_cache();
                 }
