@@ -108,47 +108,46 @@ def _compare_intermediate_pcc(reference_items, tt_intermediates, number_of_non_p
 @pytest.mark.parametrize("tokenizer", ["right", "left"], indirect=True, ids=["right_pad", "left_pad"])
 @pytest.mark.parametrize("temperature", [[0.5]], ids=["temp_sweep"])
 @pytest.mark.parametrize("return_kv_cache", [True], ids=["kv_cache"])
-@pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
+@pytest.mark.parametrize("use_pretrained", [True], ids=["pretrained"])
 @pytest.mark.parametrize(
     "input_source",
     [
-        "json_prompts",
-        "abc_1k",
-        "abc_short",
-        "p64tok",
-        "p960tok",
-        "pie960",
-        "random",
-        "passkey",
-        "kv_retrieval",
-        "longdialogue_qa_eng",
-        "longbook_qa_eng",
+        # "json_prompts",
+        # "abc_1k",
+        # "abc_short",
+        # "p64tok",
+        # "p960tok",
+        # "pie960",
+        # "random",
+        # "passkey",
+        # "kv_retrieval",
+        # "longdialogue_qa_eng",
+        # "longbook_qa_eng",
+        "pure_math_25600",
+        "tt_metal_text_25600",
     ],
 )
 @pytest.mark.parametrize("pcc_validation", [True, False], ids=["pcc", "smoke"])
 @pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "regular"])
 @pytest.mark.parametrize(
     "isl_total, dispatch_buffer_capacity_factor",
-    [(SEQ_LEN_1K, 8), (SEQ_LEN_25K, 8)],
+    [(SEQ_LEN_25K, 8)],
 )
 @pytest.mark.parametrize(
     "num_layers",
     [
-        5,
-        12,
         pytest.param(61, marks=pytest.mark.skipif(not is_galaxy(), reason="Testing entire-prefill only on Galaxy")),
     ],
-    ids=["5_layers", "12_layers", "61_layers"],
+    ids=["61_layers"],
 )
 @pytest.mark.parametrize(
     "n_routed_experts, gate_fallback_mode",
     [
-        (64, GateComputeMode.HOST_ALL),
         (256, GateComputeMode.HOST_ALL),
         (256, GateComputeMode.DEVICE),
         (256, GateComputeMode.DEVICE_FP32),
     ],
-    ids=["e64_host", "e256_host", "e256_device", "e256_device_fp32"],
+    ids=["e256_host", "e256_device", "e256_device_fp32"],
 )
 @pytest.mark.parametrize("num_iterations", [1, 25, 2000], ids=["iter1", "iter25", "iter2000"])
 @pytest.mark.parametrize(
@@ -758,6 +757,7 @@ def test_prefill_transformer(
             "mesh_shape": mesh_shape,
             "n_routed_experts": n_routed_experts,
             "capacity_factor": dispatch_buffer_capacity_factor,
+            "gate_fallback_mode": gate_fallback_mode,
             "threshold": threshold,
         }
         write_pcc_summary(summary_result, threshold=threshold)

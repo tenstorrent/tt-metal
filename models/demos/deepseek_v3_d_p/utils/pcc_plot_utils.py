@@ -38,6 +38,8 @@ def _build_run_name(result: dict) -> str:
         parts.append(f"e{result['n_routed_experts']}")
     if "capacity_factor" in result:
         parts.append(f"cf{result['capacity_factor']}")
+    if "gate_fallback_mode" in result:
+        parts.append(result["gate_fallback_mode"].name)
     return "_".join(parts) if parts else "run"
 
 
