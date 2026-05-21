@@ -16,6 +16,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/compute_throttle_utils.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/matmul/shared_with_host/activation_type.hpp"
 
@@ -50,6 +52,8 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
+    bool dst_full_sync_en,
+    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
     uint32_t B,
     uint32_t /* M */,
     uint32_t K,
@@ -357,6 +361,11 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
     }
     mm_kernel_defines["MATMUL_DRAM_SHARDED"] = "1";
 
+    ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
+        device->arch(), num_cores, mm_kernel_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(), num_cores, mm_kernel_defines, throttle_level);
+
     // Helper to convert std::map defines to KernelDescriptor::Defines
     auto map_to_defines = [](const std::map<std::string, std::string>& m) -> KernelDescriptor::Defines {
         KernelDescriptor::Defines result;
@@ -496,7 +505,10 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
         compute_kernel_desc.named_compile_time_args = std::move(named_compile_args);
     }
     compute_kernel_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode};
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .math_approx_mode = math_approx_mode};
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Runtime Args (per-core loop)
@@ -681,6 +693,8 @@ ProgramDescriptor MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::create
         fp32_dest_acc_en,
         math_approx_mode,
         packer_l1_acc,
+        dst_full_sync_en,
+        ttnn::get_throttle_level(operation_attributes.compute_kernel_config),
         B,
         M,
         K,

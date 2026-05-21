@@ -9,6 +9,12 @@ knob in :class:`HostIoDecoderSweepConfig` is exposed as a flag; boolean knobs
 use ``argparse.BooleanOptionalAction`` so each is toggleable with
 ``--knob`` / ``--no-knob``.
 
+The same entrypoint supports one local decoder-layer sweep and rank-parallel
+layer verification under ``tt-run`` /
+``mpirun`` / ``srun``. When multiple ``--decoder-layer-indices`` values are supplied
+rank ``i`` verifies the i-th layer id, and the launcher world size must match
+the number of layer ids.
+
 Environment variables (read only as fallback defaults; flags always win):
     DEEPSEEK_V3_HIDDEN_STATES_DIR   -> --hidden-states-dir
     DEEPSEEK_V3_KV_CACHE_DUMP_DIR   -> --dump-dir
@@ -25,29 +31,58 @@ Mode A (single slot), one prompt, dump everything to ``./dumps``::
 
     TT_METAL_SLOW_DISPATCH_MODE=1 \\
     python -m models.demos.deepseek_v3_b1.tests.unit_tests.run_host_io_decoder_sweep \\
-        --decoder-layer-idx 4 \\
+        --decoder-layer-indices 4 \\
         --hidden-states-dir /data/asaigal/pipeclean_traces \\
         --prompt pipeclean_seq_8192 \\
         --num-replication-slots 1 \\
         --dump-dir ./dumps
 
-Mode B (8 replication slots), two-prompt multi-turn, validate everything,
-no dumps, use real GPU reference traces for cross-trace PCC::
+Mode B (8 replication slots), two-prompt multi-turn, validate everything
+(including cross-trace PCC of both hidden states AND KV cache against the
+GPU/HF reference), no dumps.  For single-layer runs the ``--hidden-states-dir``
+must point directly at the directory containing ``<prompt>.pt`` and
+``kv_cache_reference_<prompt>.pt`` files (e.g. the layer-specific subdirectory)::
 
     TT_METAL_SLOW_DISPATCH_MODE=1 \\
-    DEEPSEEK_V3_HIDDEN_STATES_DIR=/data/gpu_reference \\
     python -m models.demos.deepseek_v3_b1.tests.unit_tests.run_host_io_decoder_sweep \\
-        --decoder-layer-idx 4 \\
+        --decoder-layer-indices 4 \\
+        --hidden-states-dir /data/gpu_reference/layer_04 \\
         --prompt q_what_is_python q_quick_brown_fox \\
         --num-replication-slots 8 \\
         --validate-hidden-states-cross-trace \\
+        --validate-kv-cache-cross-trace \\
+        --pcc-threshold 0.97 --kv-cache-pcc-threshold 0.97 \\
         --no-dump-hidden-states --no-dump-kv-cache
+
+Note: ``--validate-kv-cache-cross-trace`` requires
+``kv_cache_reference_{prompt}.pt`` files in ``--hidden-states-dir``;
+they are slot-agnostic and stored in the
+HF/split-halves RoPE layout (the harness applies the permutation to TT's
+interleaved layout in-memory before the compare).
 
 Dry-run (print resolved config and exit, no device opened)::
 
     python -m models.demos.deepseek_v3_b1.tests.unit_tests.run_host_io_decoder_sweep \\
-        --decoder-layer-idx 4 \\
+        --decoder-layer-indices 4 \\
         --hidden-states-dir /tmp/x --prompt foo --dry-run
+
+Four-layer rank-parallel verification, one rank per host::
+
+    export TRACE_ROOT=/data/username/pipeclean_traces/cache_design_gen8192
+    export PROMPT=cache_design_gen8192
+
+    TT_METAL_SLOW_DISPATCH_MODE=1 python -m ttnn.distributed.ttrun \\
+      --tcp-interface ens5f0np0 \\
+      --rank-bindings-mapping decoder_verify_4x_rank_bindings_mapping.yaml \\
+      --mpi-args "--map-by rankfile:file=decoder_verify_4x_rank_file_current --bind-to none --tag-output" \\
+      python -m models.demos.deepseek_v3_b1.tests.unit_tests.run_host_io_decoder_sweep \\
+        --decoder-layer-indices 4 5 6 7 \\
+        --hidden-states-dir "${TRACE_ROOT}" \\
+        --prompt "${PROMPT}" \\
+        --validate-hidden-states-cross-trace \\
+        --validate-kv-cache-cross-trace \\
+        --pcc-threshold 0.97 --kv-cache-pcc-threshold 0.97
+
 """
 
 from __future__ import annotations
@@ -76,6 +111,7 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.host_io_decoder_harness import
 # L1 size are not currently exposed as CLI knobs because no caller has needed
 # to vary them; promote any of these to flags later if that changes.
 _FABRIC_CONFIG = ttnn.FabricConfig.FABRIC_2D_TORUS_X
+_LAYER_PARALLEL_FABRIC_CONFIG = ttnn.FabricConfig.FABRIC_2D_TORUS_Y
 _FABRIC_ROUTER_MAX_PAYLOAD_BYTES = 15232
 _WORKER_L1_SIZE = 1431568
 
@@ -99,19 +135,26 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     # --- required: prompt source + identifying knobs ---
     required = parser.add_argument_group("required")
     required.add_argument(
-        "--decoder-layer-idx",
+        "--decoder-layer-indices",
+        dest="decoder_layer_indices",
         type=int,
+        nargs="+",
         required=True,
-        help="DeepSeek V3 decoder layer index to instantiate (e.g. 4 for the first MoE layer).",
+        metavar="LAYER",
+        help=(
+            "DeepSeek V3 decoder layer index or indices to instantiate. A single value runs the normal "
+            "local sweep; multiple values require one launcher rank per layer."
+        ),
     )
     required.add_argument(
         "--hidden-states-dir",
         type=Path,
         default=None,
         help=(
-            f"Directory containing per-prompt reference traces (*.pt files with bf16 "
-            f"{{'input', 'output'}} tensors). Falls back to ${HIDDEN_STATES_DIR_ENV} if omitted; "
-            f"required if neither flag nor env is set."
+            f"Directory containing per-prompt reference traces (*.pt files with bf16 {{'input', 'output'}} "
+            f"tensors). In rank-parallel mode, this should be the root containing layer_<id> subdirectories. "
+            f"Falls back to ${HIDDEN_STATES_DIR_ENV} if omitted; required if neither this flag nor the env var "
+            f"is set."
         ),
     )
     required.add_argument(
@@ -138,8 +181,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--num-replication-slots",
         type=int,
-        default=8,
-        help="Replication slots (1 = Mode A; >1 = Mode B); must be < --num-slots.",
+        default=None,
+        help=(
+            "Replication slots (1 = Mode A; >1 = Mode B); must be < --num-slots. Defaults to 8 for a "
+            "single local layer and 1 for rank-parallel layer verification."
+        ),
     )
 
     # --- validation knobs ---
@@ -153,26 +199,52 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     val.add_argument(
         "--validate-hidden-states-cross-slot",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Mode B only: per-prompt torch.equal of every replicated slot's collected output against slot 0.",
+        default=None,
+        help=(
+            "Mode B only: per-prompt torch.equal of every replicated slot's collected output against slot 0. "
+            "Defaults to on for a single local layer and off for rank-parallel layer verification."
+        ),
     )
     val.add_argument(
         "--validate-kv-cache-cross-slot",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Mode B only: per-prompt torch.equal of every replicated slot's KV-cache slice against slot 0.",
+        default=None,
+        help=(
+            "Mode B only: per-prompt torch.equal of every replicated slot's KV-cache slice against slot 0. "
+            "Defaults to on for a single local layer and off for rank-parallel layer verification."
+        ),
     )
     val.add_argument(
         "--validate-hidden-states-cross-trace",
         action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Per-(prompt, slot) PCC of collected output against the prompt's reference 'output' trace.",
+        default=None,
+        help=(
+            "Per-(prompt, slot) PCC of collected output against the prompt's reference 'output' trace. "
+            "Defaults to off for a single local layer and on for rank-parallel verification."
+        ),
     )
     val.add_argument(
         "--pcc-threshold",
         type=float,
         default=0.97,
         help="PCC threshold used only when --validate-hidden-states-cross-trace is set.",
+    )
+    val.add_argument(
+        "--validate-kv-cache-cross-trace",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Per-(prompt, slot) PCC of the on-device KV-cache slice against a "
+            "kv_cache_reference_<prompt>.pt sibling in --hidden-states-dir "
+            "(produced by convert_bit_sculpt_trace.py). Forces the host KV-cache "
+            "pull even when no KV-cache dump is requested."
+        ),
+    )
+    val.add_argument(
+        "--kv-cache-pcc-threshold",
+        type=float,
+        default=0.97,
+        help="PCC threshold used only when --validate-kv-cache-cross-trace is set.",
     )
 
     # --- dump knobs ---
@@ -201,8 +273,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help=(
-            f"Output directory for dumps. Falls back to ${KV_CACHE_DUMP_DIR_ENV} if omitted; "
-            f"required if any dump knob is on."
+            f"Output directory for dumps. Falls back to ${KV_CACHE_DUMP_DIR_ENV} if omitted; required if any "
+            f"dump knob is on. May contain {{layer}}, {{layer_idx}}, and/or {{rank}} format fields; in "
+            f"rank-parallel mode, a plain directory gets per-layer subdirectories."
         ),
     )
 
@@ -244,47 +317,103 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 # ---------------------------------------------------------------------------
 
 
-def _resolve_hidden_states_dir(args: argparse.Namespace) -> Path:
-    """Flag wins; env is fallback; error if neither set."""
+def _layer_ids_from_args(args: argparse.Namespace) -> list[int]:
+    """Return decoder layer ids as a list."""
+    if isinstance(args.decoder_layer_indices, int):
+        return [args.decoder_layer_indices]
+    return list(args.decoder_layer_indices)
+
+
+def _format_path(raw: str | Path, *, layer_idx: int, rank: int) -> Path:
+    text = str(raw)
+    if "{" not in text:
+        return Path(text)
+    try:
+        return Path(text.format(layer=layer_idx, layer_idx=layer_idx, rank=rank))
+    except KeyError as e:
+        raise ValueError(
+            f"Unsupported path format field {e!s}; supported fields are {{layer}}, {{layer_idx}}, and {{rank}}"
+        ) from e
+
+
+def _resolve_hidden_states_dir(args: argparse.Namespace, *, layer_idx: int, layer_parallel: bool) -> Path:
+    """Resolve trace dir for the selected layer."""
     if args.hidden_states_dir is not None:
-        return args.hidden_states_dir
-    raw = os.environ.get(HIDDEN_STATES_DIR_ENV)
-    if raw:
-        return Path(raw)
-    raise ValueError(f"--hidden-states-dir is required (or set ${HIDDEN_STATES_DIR_ENV})")
+        resolved = Path(args.hidden_states_dir)
+    else:
+        raw = os.environ.get(HIDDEN_STATES_DIR_ENV)
+        if not raw:
+            raise ValueError(f"--hidden-states-dir is required (or set ${HIDDEN_STATES_DIR_ENV})")
+        resolved = Path(raw)
+
+    if layer_parallel:
+        return resolved / f"layer_{layer_idx:02d}"
+    return resolved
 
 
-def _resolve_dump_dir(args: argparse.Namespace) -> Path | None:
-    """Flag wins; env is fallback; None permitted iff both dump knobs are off."""
-    if args.dump_dir is not None:
-        return args.dump_dir
-    raw = os.environ.get(KV_CACHE_DUMP_DIR_ENV)
-    if raw:
-        return Path(raw)
-    return None
+def _resolve_dump_dir(
+    args: argparse.Namespace,
+    *,
+    layer_idx: int,
+    rank: int,
+    layer_parallel: bool,
+) -> Path | None:
+    """Resolve dump dir, adding layer subdirs only for plain paths in parallel mode."""
+    raw = args.dump_dir if args.dump_dir is not None else os.environ.get(KV_CACHE_DUMP_DIR_ENV)
+    if raw is None:
+        return None
+
+    resolved = _format_path(raw, layer_idx=layer_idx, rank=rank)
+    if "{" in str(raw) or not layer_parallel:
+        return resolved
+    return resolved / f"layer_{layer_idx:02d}"
 
 
-def _config_from_args(args: argparse.Namespace) -> HostIoDecoderSweepConfig:
-    """Build a frozen :class:`HostIoDecoderSweepConfig` from parsed argparse args."""
-    hidden_states_dir = _resolve_hidden_states_dir(args)
-    dump_dir = _resolve_dump_dir(args)
+def _config_from_args_for_rank(
+    args: argparse.Namespace,
+    *,
+    rank: int,
+) -> HostIoDecoderSweepConfig:
+    """Build a frozen config for either local single-layer or rank-selected layer mode."""
+    layer_ids = _layer_ids_from_args(args)
+    layer_parallel = len(layer_ids) > 1
+    layer_idx = _layer_for_rank(layer_ids, rank=rank)
+
+    num_replication_slots = args.num_replication_slots
+    if num_replication_slots is None:
+        num_replication_slots = 1 if layer_parallel else 8
+
+    validate_hidden_states_cross_slot = args.validate_hidden_states_cross_slot
+    if validate_hidden_states_cross_slot is None:
+        validate_hidden_states_cross_slot = not layer_parallel
+
+    validate_kv_cache_cross_slot = args.validate_kv_cache_cross_slot
+    if validate_kv_cache_cross_slot is None:
+        validate_kv_cache_cross_slot = not layer_parallel
+
+    validate_hidden_states_cross_trace = args.validate_hidden_states_cross_trace
+    if validate_hidden_states_cross_trace is None:
+        validate_hidden_states_cross_trace = layer_parallel
+
     return HostIoDecoderSweepConfig(
-        decoder_layer_idx=args.decoder_layer_idx,
-        hidden_states_dir=hidden_states_dir,
+        decoder_layer_index=layer_idx,
+        hidden_states_dir=_resolve_hidden_states_dir(args, layer_idx=layer_idx, layer_parallel=layer_parallel),
         prompt_names=tuple(args.prompt_names),
         max_seq_len=args.max_seq_len,
         num_slots=args.num_slots,
         mesh_rows=args.mesh_rows,
         mesh_cols=args.mesh_cols,
-        num_replication_slots=args.num_replication_slots,
+        num_replication_slots=num_replication_slots,
         validate_metadata_roundtrip=args.validate_metadata_roundtrip,
-        validate_hidden_states_cross_slot=args.validate_hidden_states_cross_slot,
-        validate_kv_cache_cross_slot=args.validate_kv_cache_cross_slot,
-        validate_hidden_states_cross_trace=args.validate_hidden_states_cross_trace,
+        validate_hidden_states_cross_slot=validate_hidden_states_cross_slot,
+        validate_kv_cache_cross_slot=validate_kv_cache_cross_slot,
+        validate_hidden_states_cross_trace=validate_hidden_states_cross_trace,
         pcc_threshold=args.pcc_threshold,
+        validate_kv_cache_cross_trace=args.validate_kv_cache_cross_trace,
+        kv_cache_pcc_threshold=args.kv_cache_pcc_threshold,
         dump_hidden_states=args.dump_hidden_states,
         dump_kv_cache=args.dump_kv_cache,
-        dump_dir=dump_dir,
+        dump_dir=_resolve_dump_dir(args, layer_idx=layer_idx, rank=rank, layer_parallel=layer_parallel),
         hf_model_path=args.hf_model_path,
         cache_path=args.cache_path,
         seed=args.seed,
@@ -292,7 +421,15 @@ def _config_from_args(args: argparse.Namespace) -> HostIoDecoderSweepConfig:
     )
 
 
-def _build_device_params(config: HostIoDecoderSweepConfig) -> dict:
+def _config_from_args(args: argparse.Namespace) -> HostIoDecoderSweepConfig:
+    """Build a single local-layer config; retained for callers/tests that import this helper."""
+    layer_ids = _layer_ids_from_args(args)
+    if len(layer_ids) != 1:
+        raise ValueError("_config_from_args expects exactly one --decoder-layer-indices value")
+    return _config_from_args_for_rank(args, rank=0)
+
+
+def _build_device_params(config: HostIoDecoderSweepConfig, *, layer_parallel: bool = False) -> dict:
     """Return the device_params dict consumed by :func:`open_mesh_device`.
 
     Production fabric / worker-l1 constants ported from the original pytest's
@@ -300,17 +437,48 @@ def _build_device_params(config: HostIoDecoderSweepConfig) -> dict:
     today; promote if a caller needs to vary them.
     """
     return {
-        "fabric_config": _FABRIC_CONFIG,
+        "fabric_config": _LAYER_PARALLEL_FABRIC_CONFIG if layer_parallel else _FABRIC_CONFIG,
         "fabric_router_config": create_fabric_router_config(_FABRIC_ROUTER_MAX_PAYLOAD_BYTES),
         "worker_l1_size": _WORKER_L1_SIZE,
     }
+
+
+def _init_rank_context_or_error() -> tuple[int, int]:
+    """Return launcher rank/size without initializing TTNN distributed context.
+
+    Rank-parallel verification runs independent single-stage decoder sweeps. If
+    we initialize TTNN distributed context here, PipelineBlock sees the launcher
+    world as a multi-stage pipeline and selects the embedding first-stage path
+    instead of the single-stage injected-hidden-states path.
+    """
+
+    rank = os.environ.get("OMPI_COMM_WORLD_RANK")
+    world_size = os.environ.get("OMPI_COMM_WORLD_SIZE")
+    return int(rank), int(world_size)
+
+
+def _validate_layer_world_size(layer_ids: list[int], *, world_size: int) -> None:
+    if len(layer_ids) != world_size:
+        raise ValueError(
+            f"Number of --decoder-layer-indices values ({len(layer_ids)}) must match launcher world size "
+            f"({world_size}). Launch {len(layer_ids)} ranks or pass exactly {world_size} layers."
+        )
+
+
+def _layer_for_rank(layer_ids: list[int], *, rank: int, world_size: int | None = None) -> int:
+    if world_size is None:
+        world_size = len(layer_ids)
+    _validate_layer_world_size(layer_ids, world_size=world_size)
+    if rank < 0 or rank >= world_size:
+        raise ValueError(f"Rank {rank} is outside launcher world size {world_size}.")
+    return layer_ids[rank]
 
 
 def _log_resolved_config(config: HostIoDecoderSweepConfig) -> None:
     """Render the resolved config in a human-readable block, before the run."""
     logger.info("Resolved HostIoDecoderSweepConfig:")
     for field, value in (
-        ("decoder_layer_idx", config.decoder_layer_idx),
+        ("decoder_layer_index", config.decoder_layer_index),
         ("hidden_states_dir", config.hidden_states_dir),
         ("prompt_names", list(config.prompt_names)),
         ("max_seq_len", config.max_seq_len),
@@ -322,6 +490,8 @@ def _log_resolved_config(config: HostIoDecoderSweepConfig) -> None:
         ("validate_kv_cache_cross_slot", config.validate_kv_cache_cross_slot),
         ("validate_hidden_states_cross_trace", config.validate_hidden_states_cross_trace),
         ("pcc_threshold", config.pcc_threshold),
+        ("validate_kv_cache_cross_trace", config.validate_kv_cache_cross_trace),
+        ("kv_cache_pcc_threshold", config.kv_cache_pcc_threshold),
         ("dump_hidden_states", config.dump_hidden_states),
         ("dump_kv_cache", config.dump_kv_cache),
         ("dump_dir", config.dump_dir),
@@ -341,26 +511,48 @@ def _log_resolved_config(config: HostIoDecoderSweepConfig) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
+    layer_ids = _layer_ids_from_args(args)
+    multi_layer_requested = len(layer_ids) > 1
+    rank: int | None = None
+    world_size: int | None = None
+    layer_parallel = False
 
     try:
-        config = _config_from_args(args)
-    except (ValueError, FileNotFoundError) as e:
+        if multi_layer_requested:
+            rank, world_size = _init_rank_context_or_error()
+            _validate_layer_world_size(layer_ids, world_size=world_size)
+            layer_parallel = True
+            config = _config_from_args_for_rank(
+                args,
+                rank=rank,
+            )
+        else:
+            config = _config_from_args_for_rank(
+                args,
+                rank=0,
+            )
+    except (ValueError, FileNotFoundError, RuntimeError) as e:
         parser.error(str(e))
         return 2  # pragma: no cover (parser.error sys.exits 2)
 
+    if rank is not None and world_size is not None:
+        logger.info(f"rank={rank}/{world_size}: verifying decoder layer {config.decoder_layer_index}")
     _log_resolved_config(config)
 
     if args.dry_run:
         logger.info("--dry-run set; exiting before opening device")
         return 0
 
-    device_params = _build_device_params(config)
+    device_params = _build_device_params(config, layer_parallel=layer_parallel)
     with open_mesh_device(device_params) as parent_mesh:
         result = run_sweep(config, parent_mesh)
 
     # Result summary so the CLI ends with an audit-friendly digest of what ran.
     logger.info("=" * 80)
-    logger.info("SUMMARY")
+    if rank is not None and world_size is not None:
+        logger.info(f"SUMMARY rank={rank}/{world_size} layer={config.decoder_layer_index}")
+    else:
+        logger.info("SUMMARY")
     logger.info("=" * 80)
     logger.info(f"prompts run: {list(result.collected.keys())}")
     logger.info(f"prompt_lengths: {result.schedule.prompt_lengths}")
@@ -369,6 +561,37 @@ def main(argv: list[str] | None = None) -> int:
         logger.info(f"kv_cache shape: {tuple(result.kv_cache.shape)} dtype={result.kv_cache.dtype}")
     else:
         logger.info("kv_cache: not pulled (no KV-cache validation, no KV-cache dump)")
+    # Per-validation-gate summary so the CLI tail makes it obvious which gates
+    # actually ran and (where applicable) what threshold they used.
+    hidden_states_cross_slot_status = (
+        "disabled"
+        if not config.validate_hidden_states_cross_slot
+        else ("enabled" if config.num_replication_slots > 1 else "skipped/no-op (num_replication_slots=1)")
+    )
+    hidden_states_cross_trace_status = (
+        f"enabled (threshold={config.pcc_threshold})" if config.validate_hidden_states_cross_trace else "disabled"
+    )
+    kv_cache_cross_slot_status = (
+        "disabled"
+        if not config.validate_kv_cache_cross_slot
+        else ("enabled" if config.num_replication_slots > 1 else "skipped/no-op (num_replication_slots=1)")
+    )
+    kv_cache_cross_trace_status = (
+        f"enabled (threshold={config.kv_cache_pcc_threshold})" if config.validate_kv_cache_cross_trace else "disabled"
+    )
+    logger.info(
+        f"validation gates: "
+        f"metadata_roundtrip={'enabled' if config.validate_metadata_roundtrip else 'disabled'}, "
+        f"hidden_states_cross_slot={hidden_states_cross_slot_status}, "
+        f"hidden_states_cross_trace={hidden_states_cross_trace_status}, "
+        f"kv_cache_cross_slot={kv_cache_cross_slot_status}, "
+        f"kv_cache_cross_trace={kv_cache_cross_trace_status}"
+    )
+    if result.kv_cache_references is not None:
+        logger.info(
+            f"kv_cache_references loaded for {len(result.kv_cache_references)} prompt(s): "
+            f"{sorted(result.kv_cache_references.keys())}"
+        )
     if config.dump_dir is not None and (config.dump_hidden_states or config.dump_kv_cache):
         logger.info(f"dumps written under: {config.dump_dir}")
     logger.info("=" * 80)

@@ -8,6 +8,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "tt_stl/assert.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
+#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 
 #include <cmath>
 #include <map>
@@ -142,6 +143,14 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     // Combined core set for shared circular buffer allocation
     auto all_cores_range_set = local_cores_range_set;
     all_cores_range_set = all_cores_range_set.merge(final_cores_range_set);
+
+    validate_reduce_op_program_grid(
+        "TopK multi-core",
+        all_cores_range_set,
+        device->compute_with_storage_grid_size(),
+        &first_core_range_set,
+        false,
+        {});
 
     // Calculate processing dimensions in tile units
     const uint32_t Wt_local = local_topk_input_size / tile_width;  // Width tiles per local core
