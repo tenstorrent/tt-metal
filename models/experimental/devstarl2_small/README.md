@@ -2,7 +2,7 @@
 
 ## Platforms
 
-Blackhole only.
+P150 and Blackhole QuietBox.
 
 ## Introduction
 
@@ -47,7 +47,7 @@ pytest models/experimental/devstarl2_small/tests/test_ministralattn.py -k pcc
 
 ## Demos
 
-Run from repo root on BH-QB or P150.
+Run from repo root on Blackhole QuietBox or P150.
 
 ### Execution
 
@@ -62,9 +62,9 @@ Run from repo root on BH-QB or P150.
 | Demo | System | Mesh | New tokens | t/s/u | t/s (e2e) | TTFT (ms) |
 |:-----|:-------|:-----|----------:|------:|----------:|----------:|
 | Image + text | BH-QB | 1x4 | 100 | 15.8 | 14.9 | 875 |
-| Image + text | P150 | 1x4 | 100 | 2.4 | 2.3 | 6585 |
+| Image + text | P150 | 1x1 | 100 | 2.4 | 2.3 | 6585 |
 | Text LM | BH-QB | 1x4 | 200 | 17.5 | 17.1 | 198 |
-| Text LM | P150 | 1x4 | 200 | 2.8 | 2.8 | 533 |
+| Text LM | P150 | 1x1 | 200 | 2.8 | 2.8 | 533 |
 
 ## Resources
 
