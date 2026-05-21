@@ -7,7 +7,7 @@
 #   skus: A mapping of SKU names to their configuration (each SKU has timeout in minutes).
 #   owner_id: The Slack user ID to notify on failure.
 #   team: The team that owns the test.
-#   sp_config: Single pod configuration (sp1, sp4, sp5) to run this test on.
+#   sp_config: Single pod configuration (spsg, sp1, sp4) to run this test on.
 
 # For max allowed timeout refer to .github/time_budget.yaml (scaleout -> e2e)
 
@@ -28,11 +28,11 @@
         --tb=short \
         --timeout=1200
   skus:
-    bh_sp_single_galaxy:
+    bh_spsg:
       timeout: 20
   owner_id: U08E1JCMAJF
   team: scaleout
-  sp_config: sp_single_galaxy
+  sp_config: spsg
 
 # ============================================================================
 # BH SP1 Multihost Pipeline Tests (4 connected galaxies)

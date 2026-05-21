@@ -123,7 +123,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      sp-config: sp_single_galaxy
+      sp-config: spsg
 
   deepseek-sp1-tests:
     name: "SP1 DeepSeek Tests"
