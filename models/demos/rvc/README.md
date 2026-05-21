@@ -119,9 +119,25 @@ python -m models.demos.rvc.evaluate \
 
 ### Tests
 
+Run each file as a separate pytest invocation — co-executing them in one
+session accumulates TTNN device state and segfaults (this does not
+reproduce in real demo runs, where the device is opened once per process):
+
 ```bash
-pytest models/demos/rvc/tests/ -v
+pytest models/demos/rvc/tests/test_runtime.py -v
+pytest models/demos/rvc/tests/test_production_shapes.py -v
+pytest models/demos/rvc/tests/test_ttnn_ops.py -v
 ```
+
+### End-to-end benchmark
+
+```bash
+python -m models.demos.rvc.benchmark --max_secs 10.0
+```
+
+Runs the exact `demo.py` graph with cold/warm separation and a strict
+no-fallback guard. This is the authoritative RTF measurement path —
+microbenchmarks are not used for headline numbers.
 
 ## Stage 1 Results
 
@@ -134,7 +150,7 @@ pytest models/demos/rvc/tests/ -v
 | Speaker similarity¹ | 0.999 | > 0.75 | ✅ |
 | WER | 0.000 | < 2.5 | ✅ |
 | Flow throughput | ~1973 frames/s | 30 tokens/s | ✅ |
-| Tests | 44/44 | — | ✅ |
+| Tests | 53/53 | — | ✅ |
 
 ¹ Speaker similarity measured between TTNN and Torch outputs (cosine similarity
 of speaker embeddings). This validates that TTNN faithfully reproduces the
@@ -215,6 +231,7 @@ accumulation that does not reproduce in real demo runs.
 ```
 models/demos/rvc/
 ├── demo.py                  # End-to-end inference with timing
+├── benchmark.py             # Authoritative RTF benchmark (cold/warm, no-fallback)
 ├── evaluate.py              # PCC, speaker similarity, WER evaluation
 ├── profile.py               # Detailed per-component runtime profiling
 ├── README.md
@@ -242,8 +259,9 @@ models/demos/rvc/
 ├── tests/
 │   ├── conftest.py          # Device fixture
 │   ├── pcc_utils.py         # PCC assertion utilities
-│   ├── test_runtime.py      # Runtime lifecycle + correctness (5 tests)
-│   └── test_ttnn_ops.py     # Per-operator PCC validation (39 tests)
+│   ├── test_runtime.py              # Runtime lifecycle + correctness (5 tests)
+│   ├── test_production_shapes.py    # k=11 + demo chunk regression (9 tests)
+│   └── test_ttnn_ops.py             # Per-operator PCC validation (39 tests)
 │
 └── utils/
     ├── audio.py             # Audio loading/resampling
@@ -263,22 +281,21 @@ models/demos/rvc/
 
 5. **RMVPE from official source** — Pitch model from the official [RVC-Project repository](https://huggingface.co/lj1995/VoiceConversionWebUI), ensuring checkpoint compatibility.
 
-## Stage 2 Optimization Path
+## Stage 2 Optimization — outcomes
 
-Profiling identifies these optimization opportunities to reach RTF < 0.5.
-These are documented future directions based on profiling evidence, not
-speculative guarantees.
+Stage 2 investigated several optimization directions against the generator
+(the ~87% of TTNN time). Each was either landed and measured, or
+investigated and deferred with a concrete reason — not left as a
+speculative estimate.
 
-| Optimization | Expected Impact | Description |
+| Optimization | Status | Outcome |
 |---|---|---|
-| Device-resident activations | 2-3× | Keep tensors on device between consecutive ops |
-| Metal Trace | 3-5× (stacked) | Record dispatch sequence, replay from DRAM |
-| Op fusion | 1.5-2× | Fuse conv + activation + bias into single kernel |
-| Sharding | 1.3-1.5× | Height/block sharding per TTNN bringup guide |
-| LoFi math fidelity | 1.1× | Config-level change, minimal code impact |
+| Device-resident ResBlock inner loop | **Landed** | Keeps activations on device across the 3-iteration ResBlock loop; one `from_torch`/`to_torch` per call instead of a host roundtrip per conv. Validated at all production seq_lens; PCC preserved (~0.998). See "How the optimization works" above. |
+| Metal Trace | **Deferred** | `ttnn.conv1d` does an internal weight upload that fails during trace capture ("Writes are not supported during trace capture"). `prepare_conv_weights` works, but `prepare_conv_bias` fails with "bad optional access". Not worth the complexity until those APIs stabilize. |
+| ConvTranspose1d optimization | **Deferred** | Per-stage profiling shows the upsample/ConvTranspose path is ≤3% of real-pipeline time; `prepare_conv_transpose2d_weights` has the same weights-dtype config gap. Effort not justified by the measured share. |
+| Sharding / op fusion / LoFi fidelity | **Not pursued** | Standard TT bringup levers; not required to meet the RTF < 0.5 target, which the device-resident path already achieves on TTNN-only at both 3s and 10s. |
 
-Combined theoretical improvement: 6-15× → RTF 0.21-0.52.
-
-Key maintainer discussion point: the remaining RTF gap is entirely
-dispatch-bound, and the optimization path aligns with standard TT
-model bringup progression (Stage 2 = memory/sharding/optimization).
+The remaining full-pipeline gap at short clips is preprocessing-bound
+(torch HuBERT + RMVPE), not dispatch-bound on the device — see the
+performance tables above. At 10s the full pipeline already meets
+RTF < 0.5.

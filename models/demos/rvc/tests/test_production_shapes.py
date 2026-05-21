@@ -1,3 +1,4 @@
+
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -122,7 +123,11 @@ def test_resblock_k11_at_production_seq_len(fresh_gen, stage):
     ch = fresh_gen._resblocks[rb_idx]["channels"]
 
     x = torch.randn(1, ch, seq_len)
-    out = fresh_gen._resblock1(x, rb_idx, RESBLOCK_DILATIONS[k_idx], seq_len)
+    # _resblock1_device is the production code path (Phase 2). It is the path
+    # that hits the conv1d Layout.TILE rejection at (k=11, d=5, ch=128, seq=7200)
+    # without the to_layout(ROW_MAJOR) fix, so this test must exercise it
+    # directly — not the earlier host-mediated baseline that was retired.
+    out = fresh_gen._resblock1_device(x, rb_idx, RESBLOCK_DILATIONS[k_idx], seq_len)
 
     assert out.shape == (1, ch, seq_len), f"shape mismatch: {out.shape}"
     assert torch.isfinite(out).all(), "non-finite values in ResBlock output"

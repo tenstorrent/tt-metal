@@ -74,10 +74,6 @@ NUM_KERNELS = 3
 NUM_UPSAMPLES = 4
 LRELU_SLOPE = 0.1
 
-# Fused activation config: eliminates separate leaky_relu dispatch per conv
-_FUSED_LRELU_CONFIG = ttnn.Conv2dConfig(
-    activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.LEAKY_RELU, LRELU_SLOPE)
-)
 
 def _linear_channel_first(x, weight, bias):
     """Matrix multiply for channels-first: weight @ x + bias."""
@@ -406,32 +402,6 @@ class TTNNGeneratorNSF:
             out = out + b_torch.unsqueeze(0).unsqueeze(0)
         return out, out_len
 
-    def _conv1d_fused(self, x_tt_host, w_tt, b_tt, in_ch, out_ch, k, seq_len,
-                      dilation=1, fuse_relu=True):
-        """Conv1d with fused LeakyReLU and native bias — minimal host roundtrips.
-
-        Takes a ttnn host tensor, returns a ttnn host tensor.
-        LeakyReLU is fused into the conv kernel (zero extra dispatch).
-        Bias is handled by conv1d natively (zero extra dispatch).
-        """
-        padding = dilation * (k - 1) // 2
-        config = _FUSED_LRELU_CONFIG if fuse_relu else None
-        result = ttnn.conv1d(
-            input_tensor=x_tt_host, weight_tensor=w_tt, device=self._device,
-            in_channels=in_ch, out_channels=out_ch, batch_size=1,
-            input_length=seq_len, kernel_size=k, stride=1,
-            padding=padding, dilation=dilation, groups=1,
-            dtype=DEFAULT_DTYPE, return_output_dim=True,
-            bias_tensor=b_tt,
-            conv_config=config,
-        )
-        out_tt = result[0]
-        try:
-            out_tt = ttnn.sharded_to_interleaved(out_tt)
-        except RuntimeError:
-            pass
-        return ttnn.from_device(out_tt), result[1]
-
     def _conv1d_device(self, x_in, w_tt, b_tt, in_ch, out_ch, k, seq_len,
                        dilation=1):
         """Conv1d that returns a device tensor in interleaved DRAM.
@@ -461,17 +431,29 @@ class TTNNGeneratorNSF:
         return out_tt
 
     def _resblock1_device(self, x_cf, block_idx, dilations, seq_len):
-        """ResBlock1 device-resident inner loop.
+        """ResBlock1 inner loop, executed entirely on device.
 
-        lrelu → to_layout(ROW_MAJOR) → conv1 → lrelu → to_layout(ROW_MAJOR)
-        → conv2 → add(residual), all on device. The ROW_MAJOR conversion
-        between every leaky_relu and conv1d is mandatory: ttnn.conv1d
-        rejects TILE-layout input at (k=11, d=5, ch=128, seq=7200).
-        leaky_relu requires TILE for its compute kernel. Both constraints
-        are satisfied by the per-step relayout.
+        Performs three dilation iterations of
+            leaky_relu → conv1 → leaky_relu → conv2 → add(residual)
+        keeping every intermediate as a device tensor. Only two host↔device
+        transfers occur per call: one `from_torch` at entry, one `to_torch`
+        at exit. Each iteration explicitly deallocates its intermediates so
+        device memory doesn't grow across the 3-iter loop.
 
-        Single from_torch at entry, single to_torch at exit, regardless of
-        the 3 dilation iterations. All intermediates explicitly deallocated.
+        Two layout constraints must be honored on every step:
+
+          - `ttnn.leaky_relu` requires `Layout.TILE` for its compute kernel.
+          - `ttnn.conv1d` rejects `Layout.TILE` input with
+            `program.cpp:1403: tt::exception` at certain
+            (kernel_size, dilation, channels, input_width) combinations —
+            confirmed at (k=11, d=5, ch=128, seq=7200), independent of
+            storage or memory_config.
+
+        The fix is a `ttnn.to_layout(x, ROW_MAJOR_LAYOUT)` between every
+        leaky_relu output and the conv1d that follows it. Cheap, device-side.
+
+        See README "How the optimization works" for the why; see
+        `tests/test_production_shapes.py` for the regression guard.
         """
         block = self._resblocks[block_idx]
         ch = block["channels"]
@@ -517,40 +499,6 @@ class TTNNGeneratorNSF:
         out = ttnn.to_torch(x_dev).float().squeeze(1).permute(0, 2, 1)
         ttnn.deallocate(x_dev)
         return out
-
-    def _resblock1(self, x_cf, block_idx, dilations, seq_len):
-        """ResBlock1 — optimized with native conv1d bias.
-
-        Keeps leaky_relu on host (torch) since device relu + roundtrip
-        costs more than it saves. Uses conv1d native bias parameter
-        to eliminate separate host bias add.
-        """
-        block = self._resblocks[block_idx]
-        ch = block["channels"]
-
-        for idx in range(3):
-            d = dilations[idx]
-            c1 = block["convs1"][idx]
-            c2 = block["convs2"][idx]
-
-            xt = F.leaky_relu(x_cf, LRELU_SLOPE)
-            xt_cl = xt.permute(0, 2, 1).unsqueeze(1)  # [1, 1, T, C]
-            xt_tt = ttnn.from_torch(xt_cl, dtype=DEFAULT_DTYPE)
-            xt_tt, _ = self._conv1d_fused(
-                xt_tt, c1["w"], c1["b_tt"], ch, ch, c1["kernel"], seq_len,
-                dilation=d, fuse_relu=False)
-            xt = ttnn.to_torch(xt_tt).float().squeeze(1).permute(0, 2, 1)
-
-            xt = F.leaky_relu(xt, LRELU_SLOPE)
-            xt_cl = xt.permute(0, 2, 1).unsqueeze(1)
-            xt_tt = ttnn.from_torch(xt_cl, dtype=DEFAULT_DTYPE)
-            xt_tt, _ = self._conv1d_fused(
-                xt_tt, c2["w"], c2["b_tt"], ch, ch, c2["kernel"], seq_len,
-                fuse_relu=False)
-            xt = ttnn.to_torch(xt_tt).float().squeeze(1).permute(0, 2, 1)
-
-            x_cf = xt + x_cf
-        return x_cf
 
     def forward(self, z, har_source, g):
         """Execute full generator with persistent weights.
