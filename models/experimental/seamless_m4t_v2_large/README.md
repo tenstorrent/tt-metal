@@ -193,15 +193,15 @@ Measured on a single Blackhole P150 (`1x1` pytest parametrization). The `forward
 
 ### BH QB — `MeshShape(1, 4)`, replicated batch-1 (`batch_size` metric = 4)
 
-Measured on a four-chip Blackhole QB system (`1x4` parametrization6). Inputs are **replicated** on all four devices (same single-batch forward as P150, not batch-4 data parallel). Logged FPS therefore uses `batch_size=4`; divide by four for a rough per-device throughput comparison to P150.
+Measured on a four-chip Blackhole QB system (`1x4` parametrization). Inputs are **replicated** on all four devices (same single-batch forward as P150, not batch-4 data parallel). Logged FPS therefore uses `batch_size=4`; divide by four for a rough per-device throughput comparison to P150.
 
 | Task | `forward()` non-traced | `forward()` traced | `generate()` non-traced |
 |------|------------------------:|-------------------:|------------------------:|
-| T2TT | 80.31 | 198.98 | 4.20 |
-| S2TT | 45.79 | 118.62 | 9.38 |
-| T2ST | 80.66 | 110.79 | 3.00 |
-| S2ST | 46.32 | 80.76 | 4.86 |
-| ASR | 45.87 | 118.43 | 9.09 |
+| T2TT | 76.39 | 239.44 | 4.09 |
+| S2TT | 43.71 | 118.72 | 8.99 |
+| T2ST | 74.87 | 122.44 | 2.94 |
+| S2ST | 44.11 | 80.72 | 4.76 |
+| ASR | 43.76 | 118.08 | 9.13 |
 
 BH QB run (all `1x4` cases):
 
