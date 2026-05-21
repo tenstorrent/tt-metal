@@ -185,11 +185,11 @@ Measured on a single Blackhole P150 (`1x1` pytest parametrization). The `forward
 
 | Task | `forward()` non-traced | `forward()` traced | `generate()` non-traced |
 |------|------------------------:|-------------------:|------------------------:|
-| T2TT | 54.94 |  54.94 | 0.5 |
-| S2TT | 22.92 |  22.92 | 0.5 |
-| T2ST | 29.61 |  29.61 | 0.25 |
-| S2ST | 16.73 |  16.73 | 0.25 |
-| ASR | 22.25 |  22.25 | 0.5 |
+| T2TT | 12.67 |  54.94 | 0.5 |
+| S2TT |  6.47 |  22.92 | 0.5 |
+| T2ST | 12.95 |  29.61 | 0.25 |
+| S2ST |  6.56 |  16.73 | 0.25 |
+| ASR  |  6.43 |  22.25 | 0.5 |
 
 ### BH QB — `MeshShape(1, 4)`, replicated batch-1 (`batch_size` metric = 4)
 
@@ -222,11 +222,11 @@ pytest models/experimental/seamless_m4t_v2_large/tests/perf/test_seamless_device
 
 | Task | Device kernel samples/s | Avg kernel duration (ms) |
 |------|------------------------:|-------------------------:|
-| T2TT | 50.52 | 19.79 |
-| S2TT | 28.36 | 35.26 |
-| T2ST | 28.10 | 35.59 |
-| S2ST | 19.60 | 51.03 |
-| ASR  | 28.37 | 35.25 |
+| T2TT | 63.06 | 15.86 |
+| S2TT | 33.94 | 29.47 |
+| T2ST | 31.29 | 31.96 |
+| S2ST | 21.94 | 45.58 |
+| ASR  | 33.95 | 29.45 |
 
 #### BH QB — `MeshShape(1, 4)`, replicated batch-1
 
