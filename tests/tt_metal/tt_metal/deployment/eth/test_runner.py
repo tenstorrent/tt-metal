@@ -500,8 +500,8 @@ def print_failing(runs: list[TestRun]):
 def print_results(runs: list[TestRun]):
     for t in TestCase:
         print_test_summary(t, runs)
-    print_summary(runs)
     print_failing(runs)
+    print_summary(runs)
 
 
 async def main():
