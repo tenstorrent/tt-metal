@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from enum import Enum
 from typing import Annotated, Callable, Dict, List, Literal, Optional, Set, Tuple, Union
 
 from fuser.compute_node import ComputeNode
@@ -20,6 +19,7 @@ from helpers.llk_params import (
     L1Accumulation,
     MathFidelity,
     MathOperation,
+    MathOpType,
     PackerReluType,
     ReduceDimension,
     ReducePool,
@@ -34,70 +34,39 @@ from pydantic import (
 )
 
 
-class UnaryOperationEnum(str, Enum):
-    Abs = "Abs"
-    Acosh = "Acosh"
-    Asinh = "Asinh"
-    Atanh = "Atanh"
-    Celu = "Celu"
-    Cos = "Cos"
-    Elu = "Elu"
-    Exp = "Exp"
-    Exp2 = "Exp2"
-    Fill = "Fill"
-    Gelu = "Gelu"
-    Hardsigmoid = "Hardsigmoid"
-    Log = "Log"
-    Log1p = "Log1p"
-    Neg = "Neg"
-    Reciprocal = "Reciprocal"
-    ReluMax = "ReluMax"
-    ReluMin = "ReluMin"
-    Rsqrt = "Rsqrt"
-    Silu = "Silu"
-    Sin = "Sin"
-    Sqrt = "Sqrt"
-    Square = "Square"
-    Tanh = "Tanh"
-    Threshold = "Threshold"
-
-    def to_math_operation(self):
-        return getattr(MathOperation, self.value)
-
-
-class BinaryOperationEnum(str, Enum):
-    SfpuElwadd = "SfpuElwadd"
-    SfpuElwmul = "SfpuElwmul"
-    SfpuElwsub = "SfpuElwsub"
-    SfpuElwLeftShift = "SfpuElwLeftShift"
-    SfpuElwRightShift = "SfpuElwRightShift"
-    SfpuElwLogicalRightShift = "SfpuElwLogicalRightShift"
-    SfpuXlogy = "SfpuXlogy"
-    SfpuAddTopRow = "SfpuAddTopRow"
-
-    def to_math_operation(self):
-        return getattr(MathOperation, self.value)
-
-
-LOFI_ONLY_OPS = {"Elwadd", "Elwsub"}
-
-
 class UnarySfpuMathSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["UnarySfpu"]
-    operation: UnaryOperationEnum
+    operation: MathOperation
     approximation_mode: ApproximationMode = ApproximationMode.No
     iterations: Annotated[int, Field(ge=1)] = 8
     dst_dest_tile_index: Annotated[int, Field(ge=0)] = 0
     fill_const_value: float = 1.0
+
+    @field_validator("operation", mode="before")
+    @classmethod
+    def parse_operation(cls, v):
+        if isinstance(v, MathOperation):
+            if v.operation_type != MathOpType.SFPU_UNARY:
+                raise ValueError(f"{v.name} is not a unary SFPU operation")
+            return v
+        if isinstance(v, str):
+            try:
+                op = MathOperation[v]
+            except KeyError:
+                raise ValueError(f"Unknown operation: {v}")
+            if op.operation_type != MathOpType.SFPU_UNARY:
+                raise ValueError(f"{v} is not a unary SFPU operation")
+            return op
+        raise ValueError(f"Invalid operation: {v}")
 
     def _sfpu_class(self):
         raise NotImplementedError
 
     def to_compute_node(self, operands, output):
         sfpu = self._sfpu_class()(
-            self.operation.to_math_operation(),
+            self.operation,
             self.approximation_mode,
             self.iterations,
             self.dst_dest_tile_index,
@@ -105,7 +74,7 @@ class UnarySfpuMathSchema(BaseModel):
         )
         return ComputeNode(unpacker=None, fpu=None, sfpu=sfpu)
 
-    def get_output_dimensions(self, operands) -> Tuple[int, int]:
+    def get_output_dimensions(self, operands) -> Optional[Tuple[int, int]]:
         return None
 
 
@@ -113,19 +82,42 @@ class BinarySfpuMathSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["BinarySfpu"]
-    operation: BinaryOperationEnum
+    operation: MathOperation
     approximation_mode: ApproximationMode = ApproximationMode.No
     iterations: Annotated[int, Field(ge=1)] = 8
     src1_dest_tile_index: Annotated[int, Field(ge=0)] = 0
     src2_dest_tile_index: Annotated[int, Field(ge=0)] = 0
     dst_dest_tile_index: Annotated[int, Field(ge=0)] = 0
 
+    @field_validator("operation", mode="before")
+    @classmethod
+    def parse_operation(cls, v):
+        if isinstance(v, MathOperation):
+            if v.operation_type not in (
+                MathOpType.SFPU_BINARY,
+                MathOpType.SFPU_BINARY_INT,
+            ):
+                raise ValueError(f"{v.name} is not a binary SFPU operation")
+            return v
+        if isinstance(v, str):
+            try:
+                op = MathOperation[v]
+            except KeyError:
+                raise ValueError(f"Unknown operation: {v}")
+            if op.operation_type not in (
+                MathOpType.SFPU_BINARY,
+                MathOpType.SFPU_BINARY_INT,
+            ):
+                raise ValueError(f"{v} is not a binary SFPU operation")
+            return op
+        raise ValueError(f"Invalid operation: {v}")
+
     def _sfpu_class(self):
         raise NotImplementedError
 
     def to_compute_node(self, operands, output):
         sfpu = self._sfpu_class()(
-            self.operation.to_math_operation(),
+            self.operation,
             self.approximation_mode,
             self.iterations,
             self.src1_dest_tile_index,
@@ -134,7 +126,7 @@ class BinarySfpuMathSchema(BaseModel):
         )
         return ComputeNode(unpacker=None, fpu=None, sfpu=sfpu)
 
-    def get_output_dimensions(self, operands) -> Tuple[int, int]:
+    def get_output_dimensions(self, operands) -> Optional[Tuple[int, int]]:
         return None
 
 
@@ -173,9 +165,10 @@ def validate_fpu_math(
     eltwise_ops: Set[str],
     reduce_ops: Set[str],
     forced_row_reduce_ops: Set[str],
+    supported_fidelities: Dict[str, Set],
     unpacker_rules: Dict[str, Union[str, Set[str]]],
 ):
-    op = schema.operation.value
+    op = schema.operation
 
     if op in reduce_ops and schema.reduce_pool is None:
         raise ValueError(f"Reduce operations require reduce_pool: {ReducePool}")
@@ -191,7 +184,7 @@ def validate_fpu_math(
                 f'Reduce operations require reduce_dim: "{ReduceDimension.Row.value}"'
             )
 
-    unpacker_name = schema.unpacker.name if schema.unpacker is not None else None
+    unpacker_name = schema.unpacker
 
     if schema.unpacker is not None:
         rule = unpacker_rules.get(op)
@@ -200,7 +193,7 @@ def validate_fpu_math(
             if unpacker_name not in allowed:
                 expected = " or ".join(sorted(allowed))
                 raise ValueError(
-                    f"{op}: unpacker must be {expected}, got '{schema.unpacker.value}'"
+                    f"{op}: unpacker must be {expected}, got '{unpacker_name}'"
                 )
         elif op in eltwise_ops:
             if (
@@ -209,11 +202,11 @@ def validate_fpu_math(
             ):
                 if unpacker_name != "UnpackerA":
                     raise ValueError(
-                        f"Eltwise with reuse_dest: unpacker must be UnpackerA, got '{schema.unpacker.value}'"
+                        f"Eltwise with reuse_dest: unpacker must be UnpackerA, got '{unpacker_name}'"
                     )
             elif unpacker_name != "UnpackerAB":
                 raise ValueError(
-                    f"Eltwise: unpacker must be UnpackerAB, got '{schema.unpacker.value}'"
+                    f"Eltwise: unpacker must be UnpackerAB, got '{unpacker_name}'"
                 )
 
     if unpacker_name == "UnpackerTilizeA":
@@ -238,7 +231,11 @@ def validate_fpu_math(
         ):
             raise ValueError("SrcA transpose is not supported with scalar broadcast")
 
-    if op in LOFI_ONLY_OPS and schema.math_fidelity != MathFidelity.LoFi:
+    allowed_fidelities = supported_fidelities.get(op)
+    if (
+        allowed_fidelities is not None
+        and schema.math_fidelity not in allowed_fidelities
+    ):
         raise ValueError(f"{schema.operation} does not support {schema.math_fidelity}")
 
     if (
@@ -262,10 +259,11 @@ def validate_fpu_math(
 def build_compute_node(
     schema,
     operands,
-    fpu_map: Dict[str, Callable],
+    fpu_map: Dict[str, Tuple[Callable, Set[str]]],
     matmul_ops: Set[str],
+    unpacker_map: Dict[str, type],
 ):
-    op = schema.operation.value
+    op = schema.operation
     src_a = operands.get(schema.src_a)
     src_b = operands.get(schema.src_b)
 
@@ -282,9 +280,10 @@ def build_compute_node(
             f"they must be unpacked directly to DEST."
         )
 
-    factory = fpu_map.get(op)
-    if factory is None:
+    entry = fpu_map.get(op)
+    if entry is None:
         raise ValueError(f"Unknown FPU operation: {schema.operation}")
+    factory, _ = entry
     fpu = factory()
 
     clear_fp32_dst_acc = (
@@ -296,7 +295,7 @@ def build_compute_node(
 
     kwargs = {}
     if schema.unpacker:
-        kwargs["unpacker"] = schema.unpacker.to_runtime()
+        kwargs["unpacker"] = unpacker_map[schema.unpacker]
     if schema.unpack_transpose_within_face:
         kwargs["unpack_transpose_within_face"] = schema.unpack_transpose_within_face
     if schema.unpack_transpose_faces:
@@ -326,22 +325,14 @@ def build_compute_node(
 def compute_output_dimensions(
     schema,
     operands,
-    eltwise_ops: Set[str],
-    matmul_ops: Set[str],
-    src_a_dim_ops: Set[str],
+    output_dims: Dict[str, Callable],
 ) -> Optional[Tuple[int, int]]:
-    op = schema.operation.value
+    fn = output_dims.get(schema.operation)
+    if fn is None:
+        return None
     src_a = operands.get(schema.src_a).dimensions
     src_b = operands.get(schema.src_b).dimensions
-
-    if op in matmul_ops:
-        return (src_a[0], src_b[1])
-    elif op in src_a_dim_ops:
-        return src_a
-    elif op in eltwise_ops:
-        return (min(src_a[0], src_b[0]), min(src_a[1], src_b[1]))
-
-    return None
+    return fn(src_a, src_b)
 
 
 class OperationSchemaBase(BaseModel):
@@ -359,6 +350,9 @@ class OperationSchemaBase(BaseModel):
 
     def _arch_kwargs(self) -> dict:
         return {}
+
+    def _get_packer_class(self):
+        raise NotImplementedError
 
     def to_fused_operation(self, operands):
         output = operands.get(name=self.output)
@@ -398,7 +392,7 @@ class OperationSchemaBase(BaseModel):
         kwargs.update(self._arch_kwargs())
 
         return FusedOperation(
-            math=ComputePipeline(math_ops, self.packer.to_runtime()),
+            math=ComputePipeline(math_ops, self._get_packer_class()),
             output=output,
             max_output_dimensions=resolved_max_out_dims,
             **kwargs,

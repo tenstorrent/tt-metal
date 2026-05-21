@@ -2,8 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from enum import Enum
-from typing import Annotated, List, Optional, Type, Union
+from typing import Annotated, List, Optional, Union
 
 from fuser.validator import (
     BinarySfpuMathSchema,
@@ -14,7 +13,7 @@ from fuser.validator import (
     compute_output_dimensions,
     validate_fpu_math,
 )
-from helpers.llk_params import MathOperation
+from helpers.llk_params import MathFidelity, MathOperation
 from pydantic import (
     Field,
     field_validator,
@@ -41,55 +40,44 @@ from .unpacker.tilize_a import UnpackerTilizeA
 from .unpacker.unpack_a import UnpackerA
 from .unpacker.unpack_ab import UnpackerAB
 
+UNPACKER_MAP = {
+    "UnpackerA": UnpackerA,
+    "UnpackerAB": UnpackerAB,
+    "UnpackerTilizeA": UnpackerTilizeA,
+    "MatmulUnpacker": MatmulUnpacker,
+    "ReduceUnpacker": ReduceUnpacker,
+    "ReduceBlockMaxUnpacker": ReduceBlockMaxUnpacker,
+    "ReduceBlockMaxRuntimeUnpacker": ReduceBlockMaxRuntimeUnpacker,
+    "SubBcastColCustomUnpacker": SubBcastColCustomUnpacker,
+}
 
-class UnpackerEnum(Enum):
-    UnpackerA = UnpackerA
-    UnpackerAB = UnpackerAB
-    UnpackerTilizeA = UnpackerTilizeA
-    MatmulUnpacker = MatmulUnpacker
-    ReduceUnpacker = ReduceUnpacker
-    ReduceBlockMaxUnpacker = ReduceBlockMaxUnpacker
-    ReduceBlockMaxRuntimeUnpacker = ReduceBlockMaxRuntimeUnpacker
-    SubBcastColCustomUnpacker = SubBcastColCustomUnpacker
-
-    def to_runtime(self) -> Type:
-        return self.value
-
-
-class PackerEnum(Enum):
-    Packer = Packer
-
-    def to_runtime(self) -> Type:
-        return self.value
-
-
-class FpuOperationEnum(str, Enum):
-    Elwadd = "Elwadd"
-    Elwmul = "Elwmul"
-    Elwsub = "Elwsub"
-    Datacopy = "Datacopy"
-    Matmul = "Matmul"
-    MatmulNoMop = "MatmulNoMop"
-    Reduce = "Reduce"
-    ReduceBlockMax = "ReduceBlockMax"
-    ReduceBlockMaxRuntime = "ReduceBlockMaxRuntime"
-    SubBcastColCustom = "SubBcastColCustom"
-
-    def to_math_operation(self):
-        return getattr(MathOperation, self.value)
-
+PACKER_MAP = {
+    "Packer": Packer,
+}
 
 FPU_MAP = {
-    "Elwadd": lambda: EltwiseFpu(MathOperation.Elwadd),
-    "Elwmul": lambda: EltwiseFpu(MathOperation.Elwmul),
-    "Elwsub": lambda: EltwiseFpu(MathOperation.Elwsub),
-    "Datacopy": DatacopyFpu,
-    "Matmul": MatmulFpu,
-    "MatmulNoMop": MatmulNoMopFpu,
-    "Reduce": ReduceFpu,
-    "ReduceBlockMax": ReduceBlockMaxFpu,
-    "ReduceBlockMaxRuntime": ReduceBlockMaxRuntimeFpu,
-    "SubBcastColCustom": SubBcastColCustomFpu,
+    "Elwadd": (lambda: EltwiseFpu(MathOperation.Elwadd), {"eltwise"}),
+    "Elwmul": (lambda: EltwiseFpu(MathOperation.Elwmul), {"eltwise"}),
+    "Elwsub": (lambda: EltwiseFpu(MathOperation.Elwsub), {"eltwise"}),
+    "Datacopy": (DatacopyFpu, set()),
+    "Matmul": (MatmulFpu, {"matmul"}),
+    "MatmulNoMop": (MatmulNoMopFpu, {"matmul"}),
+    "Reduce": (ReduceFpu, {"reduce"}),
+    "ReduceBlockMax": (ReduceBlockMaxFpu, {"forced_row_reduce"}),
+    "ReduceBlockMaxRuntime": (ReduceBlockMaxRuntimeFpu, {"forced_row_reduce"}),
+    "SubBcastColCustom": (SubBcastColCustomFpu, set()),
+}
+
+_tagged = lambda tag: {op for op, (_, tags) in FPU_MAP.items() if tag in tags}
+
+ELTWISE_OPS = _tagged("eltwise")
+MATMUL_OPS = _tagged("matmul")
+REDUCE_OPS = _tagged("reduce")
+FORCED_ROW_REDUCE_OPS = _tagged("forced_row_reduce")
+
+SUPPORTED_FIDELITIES = {
+    "Elwadd": {MathFidelity.LoFi},
+    "Elwsub": {MathFidelity.LoFi},
 }
 
 UNPACKER_RULES = {
@@ -102,54 +90,120 @@ UNPACKER_RULES = {
     "SubBcastColCustom": "SubBcastColCustomUnpacker",
 }
 
-ELTWISE_OPS = {"Elwadd", "Elwmul", "Elwsub"}
-MATMUL_OPS = {"Matmul", "MatmulNoMop"}
-REDUCE_OPS = {"Reduce"}
-FORCED_ROW_REDUCE_OPS = {"ReduceBlockMax", "ReduceBlockMaxRuntime"}
-SRC_A_DIM_OPS = {
-    "Datacopy",
-    "Reduce",
-    "ReduceBlockMax",
-    "ReduceBlockMaxRuntime",
-    "SubBcastColCustom",
+_eltwise_dims = lambda a, b: (min(a[0], b[0]), min(a[1], b[1]))
+_matmul_dims = lambda a, b: (a[0], b[1])
+_src_a_dims = lambda a, b: a
+
+OUTPUT_DIMS = {
+    "Elwadd": _eltwise_dims,
+    "Elwmul": _eltwise_dims,
+    "Elwsub": _eltwise_dims,
+    "Datacopy": _src_a_dims,
+    "Matmul": _matmul_dims,
+    "MatmulNoMop": _matmul_dims,
+    "Reduce": _src_a_dims,
+    "ReduceBlockMax": _src_a_dims,
+    "ReduceBlockMaxRuntime": _src_a_dims,
+    "SubBcastColCustom": _src_a_dims,
+}
+
+UNARY_SFPU_OPS = {
+    MathOperation.Abs,
+    MathOperation.Acosh,
+    MathOperation.Asinh,
+    MathOperation.Atanh,
+    MathOperation.Celu,
+    MathOperation.Cos,
+    MathOperation.Elu,
+    MathOperation.Exp,
+    MathOperation.Exp2,
+    MathOperation.Fill,
+    MathOperation.Gelu,
+    MathOperation.Hardsigmoid,
+    MathOperation.Log,
+    MathOperation.Log1p,
+    MathOperation.Neg,
+    MathOperation.Reciprocal,
+    MathOperation.ReluMax,
+    MathOperation.ReluMin,
+    MathOperation.Rsqrt,
+    MathOperation.Silu,
+    MathOperation.Sin,
+    MathOperation.Sqrt,
+    MathOperation.Square,
+    MathOperation.Tanh,
+    MathOperation.Threshold,
+}
+
+BINARY_SFPU_OPS = {
+    MathOperation.SfpuElwadd,
+    MathOperation.SfpuElwmul,
+    MathOperation.SfpuElwsub,
+    MathOperation.SfpuElwLeftShift,
+    MathOperation.SfpuElwRightShift,
+    MathOperation.SfpuElwLogicalRightShift,
+    MathOperation.SfpuXlogy,
+    MathOperation.SfpuAddTopRow,
 }
 
 
 class FpuMathSchema(FpuMathSchemaBase):
-    operation: FpuOperationEnum
-    unpacker: Optional[UnpackerEnum] = None
+    operation: str
+    unpacker: Optional[str] = None
 
-    @field_validator("unpacker", mode="before")
+    @field_validator("operation", mode="after")
     @classmethod
-    def parse_unpacker(cls, v):
-        if isinstance(v, UnpackerEnum):
-            return v
-        if isinstance(v, str) and v in UnpackerEnum.__members__:
-            return UnpackerEnum[v]
+    def validate_operation(cls, v):
+        if v not in FPU_MAP:
+            raise ValueError(f"Unknown FPU operation: {v}")
+        return v
+
+    @field_validator("unpacker", mode="after")
+    @classmethod
+    def validate_unpacker(cls, v):
+        if v is not None and v not in UNPACKER_MAP:
+            raise ValueError(f"Unknown unpacker: {v}")
         return v
 
     @model_validator(mode="after")
     def validate_fpu_config(self) -> "FpuMathSchema":
         validate_fpu_math(
-            self, ELTWISE_OPS, REDUCE_OPS, FORCED_ROW_REDUCE_OPS, UNPACKER_RULES
+            self,
+            ELTWISE_OPS,
+            REDUCE_OPS,
+            FORCED_ROW_REDUCE_OPS,
+            SUPPORTED_FIDELITIES,
+            UNPACKER_RULES,
         )
         return self
 
     def to_compute_node(self, operands, output):
-        return build_compute_node(self, operands, FPU_MAP, MATMUL_OPS)
+        return build_compute_node(self, operands, FPU_MAP, MATMUL_OPS, UNPACKER_MAP)
 
     def get_output_dimensions(self, operands):
-        return compute_output_dimensions(
-            self, operands, ELTWISE_OPS, MATMUL_OPS, SRC_A_DIM_OPS
-        )
+        return compute_output_dimensions(self, operands, OUTPUT_DIMS)
 
 
 class WormholeUnarySfpuMathSchema(UnarySfpuMathSchema):
+    @field_validator("operation", mode="after")
+    @classmethod
+    def validate_arch_operation(cls, v):
+        if v not in UNARY_SFPU_OPS:
+            raise ValueError(f"Unsupported unary SFPU operation: {v.name}")
+        return v
+
     def _sfpu_class(self):
         return UnarySfpu
 
 
 class WormholeBinarySfpuMathSchema(BinarySfpuMathSchema):
+    @field_validator("operation", mode="after")
+    @classmethod
+    def validate_arch_operation(cls, v):
+        if v not in BINARY_SFPU_OPS:
+            raise ValueError(f"Unsupported binary SFPU operation: {v.name}")
+        return v
+
     def _sfpu_class(self):
         return BinarySfpu
 
@@ -162,16 +216,17 @@ MathSchema = Annotated[
 
 class OperationSchema(OperationSchemaBase):
     math: List[MathSchema] = Field(..., min_length=1)
-    packer: PackerEnum = PackerEnum.Packer
+    packer: str = "Packer"
 
-    @field_validator("packer", mode="before")
+    @field_validator("packer", mode="after")
     @classmethod
-    def parse_packer(cls, v):
-        if isinstance(v, PackerEnum):
-            return v
-        if isinstance(v, str) and v in PackerEnum.__members__:
-            return PackerEnum[v]
+    def validate_packer(cls, v):
+        if v not in PACKER_MAP:
+            raise ValueError(f"Unknown packer: {v}")
         return v
+
+    def _get_packer_class(self):
+        return PACKER_MAP[self.packer]
 
     @model_validator(mode="after")
     def validate_operation(self) -> "OperationSchema":
