@@ -5880,8 +5880,12 @@ TEST_F(TopologySolverTest, TopologySolver_SolveNextAndIncrementalSatSession) {
 
     RecordProperty("fresh_session_total_ms", static_cast<int>(fresh_ms));
     RecordProperty("reuse_session_total_ms", static_cast<int>(reuse_ms));
-    EXPECT_LT(reuse_ms, fresh_ms);
-    EXPECT_LT(reuse_ms * 2, fresh_ms);
+    // Only assert timing benefits when the workload is large enough to measure (>0ms).
+    // On fast machines the whole test completes in <1ms and both values round to 0.
+    if (fresh_ms > 0) {
+        EXPECT_LT(reuse_ms, fresh_ms);
+        EXPECT_LT(reuse_ms * 2, fresh_ms);
+    }
 }
 
 }  // namespace tt::tt_fabric
