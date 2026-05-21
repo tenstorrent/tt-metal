@@ -73,7 +73,7 @@ ALWI void pack_untilize_dest_init(
     PACK((llk_pack_reconfig_data_format_disaggregated<DST_ACCUM_MODE>(ocb, face_r_dim, num_faces)));
     PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim, false, narrow_row, row_num_datums, dense>(
         ocb, face_r_dim, num_faces)));
-    PACK((llk_init_packer_dest_offset_registers<true, false>()));
+    PACK((llk_init_packer_dest_offset_registers<PackMode::Untilize, false>()));
 #else
     LLK_ASSERT(narrow_row == false, "narrow_row not supported on Quasar");
     PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim>(ocb)));
@@ -250,7 +250,7 @@ ALWI void pack_untilize_uninit(uint32_t ocb) {
 #ifndef ARCH_QUASAR
     // Reconfigure data format to match the initial configuration, before calling init.
     // Init is called to ensure special untilize init overrides are cleaned up.
-    PACK((llk_init_packer_dest_offset_registers<false>()));
+    PACK((llk_init_packer_dest_offset_registers<PackMode::Default>()));
     PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(ocb)));
     PACK((llk_pack_init(ocb)));
 

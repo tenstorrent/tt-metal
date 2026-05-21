@@ -14,7 +14,18 @@
 #include "llk_pack_untilize.h"
 
 using ckernel::FACE_R_DIM;
+using ckernel::PackMode;
 using ckernel::TILE_C_DIM;
+
+/// Maps legacy LLK test (untilize, tilize) constexpr flags to a single \ref PackMode for wrapper templates.
+template <bool untilize, bool tilize>
+inline constexpr PackMode llk_test_pack_mode_v = untilize ? PackMode::Untilize
+                                                 : tilize ? PackMode::Tilize
+                                                          : PackMode::Default;
+
+/// Legacy ``untilize`` flag for `_llk_pack_` (Default vs Untilize only).
+template <bool untilize>
+inline constexpr PackMode pack_exec_mode_v = untilize ? PackMode::Untilize : PackMode::Default;
 
 #ifdef ARCH_WORMHOLE
 
@@ -25,7 +36,12 @@ inline bool _llk_pack_skip_bh_tilize_workaround_wrapper_([[maybe_unused]] const 
     return false;
 }
 
-template <bool is_fp32_dest_acc_en, bool untilize = false, [[maybe_unused]] bool tilize = false>
+/// Pack configure/init \ref PackMode for unpack-tilize sweep-style tests. Wormhole B0 pack does not support
+/// \c PackMode::Tilize in \c configure_pack / \c _llk_pack_init_; Blackhole uses \ref llk_test_pack_mode_v.
+template <[[maybe_unused]] bool untilize, [[maybe_unused]] bool tilize>
+inline constexpr PackMode llk_unpack_tilize_sweep_pack_cfg_mode_v = PackMode::Default;
+
+template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_hw_configure_wrapper_(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
@@ -37,7 +53,8 @@ inline void _llk_pack_hw_configure_wrapper_(
     const bool narrow_tile                          = false,
     const std::uint32_t relu_config                 = 0)
 {
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, untilize>(
+    static_assert(pack_mode != PackMode::Tilize, "Wormhole B0 LLK tests: pack hw configure supports PackMode::Default or PackMode::Untilize only");
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, pack_mode>(
         pack_src_format, pack_dst_format, tile_size, face_r_dim, num_faces, partial_face, narrow_tile, relu_config);
 }
 
@@ -56,7 +73,7 @@ inline void _llk_pack_reconfig_data_format_wrapper_(
     _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, face_r_dim, num_faces, partial_face, narrow_tile);
 }
 
-template <bool untilize = false, bool zero_output = false, [[maybe_unused]] bool tilize = false>
+template <PackMode pack_mode = PackMode::Default, bool zero_output = false>
 inline void _llk_pack_init_wrapper_(
     const std::uint32_t pack_dst_format,
     const std::uint32_t face_r_dim                  = FACE_R_DIM,
@@ -66,10 +83,11 @@ inline void _llk_pack_init_wrapper_(
     const bool narrow_tile                          = false,
     const std::uint32_t num_tiles                   = 1)
 {
-    _llk_pack_init_<untilize, zero_output>(pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile, num_tiles);
+    static_assert(pack_mode != PackMode::Tilize, "Wormhole B0 LLK tests: pack init supports PackMode::Default or PackMode::Untilize only");
+    _llk_pack_init_<pack_mode, zero_output>(pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile, num_tiles);
 }
 
-template <bool untilize = false, bool zero_output = false, [[maybe_unused]] bool tilize = false>
+template <PackMode pack_mode = PackMode::Default, bool zero_output = false>
 inline void _llk_pack_init_with_src_wrapper_(
     [[maybe_unused]] const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
@@ -81,13 +99,15 @@ inline void _llk_pack_init_with_src_wrapper_(
     const std::uint32_t num_tiles                         = 1,
     [[maybe_unused]] const bool skip_bh_tilize_workaround = false)
 {
-    _llk_pack_init_<untilize, zero_output>(pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile, num_tiles);
+    static_assert(pack_mode != PackMode::Tilize, "Wormhole B0 LLK tests: pack init supports PackMode::Default or PackMode::Untilize only");
+    _llk_pack_init_<pack_mode, zero_output>(pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile, num_tiles);
 }
 
-template <DstSync Dst, bool is_fp32_dest_acc_en, bool untilize = false>
+template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_dest_init_wrapper_(const std::uint32_t face_r_dim = FACE_R_DIM, const bool narrow_tile = false)
 {
-    _llk_pack_dest_init_<Dst, is_fp32_dest_acc_en, untilize>(face_r_dim, narrow_tile);
+    static_assert(pack_mode != PackMode::Tilize, "Wormhole B0 LLK tests: pack dest init supports PackMode::Default or PackMode::Untilize only");
+    _llk_pack_dest_init_<Dst, is_fp32_dest_acc_en, pack_mode>(face_r_dim, narrow_tile);
 }
 
 template <
@@ -139,7 +159,11 @@ inline bool _llk_pack_skip_bh_tilize_workaround_wrapper_(const std::uint32_t pac
     return IS_8BIT_FORMAT(pack_src_format);
 }
 
-template <bool is_fp32_dest_acc_en, bool untilize = false, bool tilize = false>
+/// Pack configure/init \ref PackMode for unpack-tilize sweep-style tests (maps legacy untilize/tilize flags).
+template <bool untilize, bool tilize>
+inline constexpr PackMode llk_unpack_tilize_sweep_pack_cfg_mode_v = llk_test_pack_mode_v<untilize, tilize>;
+
+template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_hw_configure_wrapper_(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
@@ -151,7 +175,7 @@ inline void _llk_pack_hw_configure_wrapper_(
     [[maybe_unused]] const bool narrow_tile = false,
     const std::uint32_t relu_config         = 0)
 {
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, untilize, tilize>(
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, pack_mode>(
         pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim, num_faces, partial_face, relu_config);
 }
 
@@ -170,7 +194,7 @@ inline void _llk_pack_reconfig_data_format_wrapper_(
     _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim, num_faces, partial_face);
 }
 
-template <bool untilize = false, bool zero_output = false, bool tilize = false>
+template <PackMode pack_mode = PackMode::Default, bool zero_output = false>
 inline void _llk_pack_init_wrapper_(
     [[maybe_unused]] const std::uint32_t pack_dst_format,
     const std::uint32_t face_r_dim           = FACE_R_DIM,
@@ -180,10 +204,10 @@ inline void _llk_pack_init_wrapper_(
     [[maybe_unused]] const bool narrow_tile  = false,
     const std::uint32_t num_tiles            = 1)
 {
-    _llk_pack_init_<untilize, zero_output, tilize>(face_r_dim, tile_c_dim, num_faces, num_tiles);
+    _llk_pack_init_<pack_mode, zero_output>(face_r_dim, tile_c_dim, num_faces, num_tiles);
 }
 
-template <bool untilize = false, bool zero_output = false, bool tilize = false>
+template <PackMode pack_mode = PackMode::Default, bool zero_output = false>
 inline void _llk_pack_init_with_src_wrapper_(
     const std::uint32_t pack_src_format,
     [[maybe_unused]] const std::uint32_t pack_dst_format,
@@ -195,10 +219,10 @@ inline void _llk_pack_init_with_src_wrapper_(
     const std::uint32_t num_tiles            = 1,
     const bool skip_bh_tilize_workaround     = false)
 {
-    _llk_pack_init_<untilize, zero_output, tilize>(pack_src_format, face_r_dim, tile_c_dim, num_faces, num_tiles, skip_bh_tilize_workaround);
+    _llk_pack_init_<pack_mode, zero_output>(pack_src_format, face_r_dim, tile_c_dim, num_faces, num_tiles, skip_bh_tilize_workaround);
 }
 
-template <DstSync Dst, bool is_fp32_dest_acc_en, bool untilize = false>
+template <DstSync Dst, bool is_fp32_dest_acc_en, [[maybe_unused]] PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_dest_init_wrapper_([[maybe_unused]] const std::uint32_t face_r_dim = FACE_R_DIM, [[maybe_unused]] const bool narrow_tile = false)
 {
     _llk_pack_dest_init_<Dst, is_fp32_dest_acc_en>();

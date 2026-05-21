@@ -11,6 +11,7 @@ Tests decoder fused operation with full pipeline:
 """
 
 import os
+from pathlib import Path
 
 import pytest
 import torch
@@ -87,6 +88,14 @@ def _build_sram_hot_expert_kwargs(state_dict, submesh, layer_idx: int):
         len(sram_hot_experts.get(layer_idx, [])),
     )
     return sram_hot_experts, sram_core_grids, sram_assigner
+
+
+def _optional_bspm_dir():
+    """Return model-specific BSPM directory when BSPM_DIR/BSPM_RESULTS_DIR is configured."""
+    raw = os.getenv("BSPM_DIR") or os.getenv("BSPM_RESULTS_DIR")
+    if not raw or not raw.strip():
+        return None
+    return Path(raw.strip()) / "deepseek-r1-0528"
 
 
 def _decode_expert_upload_mode(expert_upload_mode: str) -> tuple[int, int | None]:
@@ -624,6 +633,8 @@ def test_decoder(
         sram_core_grids=sram_core_grids,
         sram_assigner=sram_assigner,
         worker_l1_size=device_params.get("worker_l1_size") if sram_hot_experts is not None else None,
+        compressed_tp8=True,
+        bspm_dir=_optional_bspm_dir(),
     )
 
     logger.info("Creating decoder block tensors...")
