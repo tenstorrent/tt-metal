@@ -24,7 +24,7 @@ inline void llk_math_eltwise_binary_sfpu_quant_int32(
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_requant_int32_init(const uint zero_point) {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::requant_int32>(sfpu::quant_init<APPROXIMATE>, zero_point);
+    llk_math_eltwise_binary_sfpu_init<SfpuType::requant_int32>(sfpu::requant_init<APPROXIMATE>, zero_point);
 }
 
 template <bool APPROXIMATE>
@@ -36,7 +36,7 @@ inline void llk_math_eltwise_binary_sfpu_requant_int32(
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_dequant_int32_init(const uint zero_point) {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::dequant_int32>(sfpu::quant_init<APPROXIMATE>, zero_point);
+    llk_math_eltwise_binary_sfpu_init<SfpuType::dequant_int32>(sfpu::dequant_init<APPROXIMATE>, zero_point);
 }
 
 template <bool APPROXIMATE>

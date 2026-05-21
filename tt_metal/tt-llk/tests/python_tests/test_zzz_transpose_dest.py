@@ -3,7 +3,6 @@
 
 from itertools import product
 
-import pytest
 import torch
 from helpers.format_config import DataFormat, is_dest_acc_needed
 from helpers.golden_generators import (
@@ -52,7 +51,9 @@ def generate_transpose_dest_float_combinations(formats_list):
     1. Lossless transpose of 32-bit values in dest -> input_format=Float32, dest_acc=DestAccumulation.Yes and unpack_to_dest=True.
     2. Transpose of 32-bit values in dest with precision loss (unpacks Float32 to src registers, Float32 truncates to Tf32) ->
        input_format=Float32, dest_acc=DestAccumulation.Yes and unpack_to_dest=False.
-    3. Transpose of 16-bit values in dest -> input_format=[Float16, Float16_b, Bfp8_b],
+    3. Transpose of 32-bit values in dest with potential precision loss -> input_format=[Bfp8_b, Float16_b], output_format=[Float16]
+       dest_acc=DestAccumulation.Yes and unpack_to_dest=False (intermediate data is 32-bit in dest).
+    4. Transpose of 16-bit values in dest -> input_format=[Float16, Float16_b, Bfp8_b],
        dest_acc=DestAccumulation.No and unpack_to_dest=False.
 
     Args:
@@ -114,7 +115,7 @@ def test_transpose_dest_float(
 
 
 @parametrize(
-    formats=input_output_formats([DataFormat.Int32]),
+    formats=input_output_formats([DataFormat.Int32], same=True),
     dest_acc=[DestAccumulation.Yes],
     math_transpose_faces=[Transpose.Yes, Transpose.No],
     unpack_to_dest=[True],
@@ -129,9 +130,6 @@ def test_transpose_dest_int(
 
 
 def transpose_dest(formats, dest_acc, math_transpose_faces, unpack_to_dest):
-
-    if dest_acc == DestAccumulation.Yes and formats.input_format != DataFormat.Int32:
-        pytest.skip("32-bit dest tests fail for Float formats due to bit No.11 issue.")
 
     input_dimensions = [64, 64]
 
@@ -212,6 +210,15 @@ def transpose_dest(formats, dest_acc, math_transpose_faces, unpack_to_dest):
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
-    assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
-    ), "Assert against golden failed"
+    if (
+        unpack_to_dest == True
+        and dest_acc == DestAccumulation.Yes
+        and formats.input_format in (DataFormat.Int32, DataFormat.Float32)
+        and formats.output_format in (DataFormat.Int32, DataFormat.Float32)
+    ):
+        is_equal = torch.equal(res_tensor, golden_tensor)
+        assert is_equal, "Assert against golden failed"
+    else:
+        assert passed_test(
+            golden_tensor, res_tensor, formats.output_format
+        ), "Assert against golden failed"

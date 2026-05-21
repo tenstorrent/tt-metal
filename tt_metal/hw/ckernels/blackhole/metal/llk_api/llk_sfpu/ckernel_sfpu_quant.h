@@ -29,9 +29,19 @@ inline void calculate_dequant_int32(const uint dst_index_in0, const uint dst_ind
     _dequant_int32_<APPROXIMATION_MODE, ITERATIONS, SIGN_MAGNITUDE_FORMAT>(dst_index_in0, dst_index_in1, dst_index_out);
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool SIGN_MAGNITUDE_FORMAT = false>
 void quant_init(const uint zero_point) {
-    _init_quant_zero_point_<APPROXIMATION_MODE>(zero_point);
+    _init_quant_int32_<APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT>(zero_point);
+}
+
+template <bool APPROXIMATION_MODE, bool SIGN_MAGNITUDE_FORMAT = false>
+void requant_init(const uint zero_point) {
+    _init_requant_int32_<APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT>(zero_point);
+}
+
+template <bool APPROXIMATION_MODE, bool SIGN_MAGNITUDE_FORMAT = false>
+void dequant_init(const uint zero_point) {
+    _init_dequant_int32_<APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT>(zero_point);
 }
 
 }  // namespace sfpu
