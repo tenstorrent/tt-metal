@@ -12,9 +12,9 @@ trace+2CQ path.
 
 Differences from :mod:`models.demos.ace_step_v1_5.perf.test_perf_e2e_wall_time`:
 
-- The wall-time test exposes the eager-vs-trace toggle via ``ACE_STEP_USE_TRACE``
-  and reports compile/warmup/perf separately. Here tracing is **always on** (the
-  runner force-enables it) and we report a single average + FPS, matching SwinV2.
+- The wall-time test uses :class:`AceStepE2EModel` with default ``use_trace=True`` and
+  reports compile/warmup/perf separately. Here tracing is **always on** via
+  :class:`AceStepPerformantRunner` and we report a single average + FPS, matching SwinV2.
 - The runner amortizes the trace capture into ``__init__``, so the timed loop has
   no compile-pass tail blending into the average.
 

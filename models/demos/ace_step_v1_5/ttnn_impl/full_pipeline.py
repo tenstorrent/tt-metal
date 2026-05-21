@@ -24,6 +24,7 @@ if _ttnn_concat_fn is None:
 from .dit_decoder_core import AceStepDecoderConfigTTNN, TtAceStepDiTCore, TtTimestepEmbedding
 from .math_perf_env import (
     ace_step_dit_linear_l1_memory_config,
+    ace_step_dit_prefers_dram_activations,
     ace_step_ensure_l1_activation,
     ace_step_sdpa_mask_memory_config,
 )
@@ -615,6 +616,9 @@ class AceStepV15TTNNPipeline:
                 f"temb={tuple(temb_bd.shape)} timestep_proj={tuple(timestep_proj_b6d.shape)}"
             )
 
+        patch_seq = int(self._logical_seq_len_dim1(patches))
+        _use_dram_act = ace_step_dit_prefers_dram_activations(batch_size=B, seq_len=patch_seq)
+
         patches_out = self.core(
             patches,
             timestep_proj_b6d,
@@ -632,7 +636,13 @@ class AceStepV15TTNNPipeline:
             except Exception:
                 pass
 
-        acoustic = self.output_head.forward(patches_out, temb_bd, meta, debug=debug_intermediates)
+        acoustic = self.output_head.forward(
+            patches_out,
+            temb_bd,
+            meta,
+            debug=debug_intermediates,
+            use_dram_activations=_use_dram_act,
+        )
         if debug_intermediates is not None and debug_intermediates.get("enabled", False):
             debug_intermediates["acoustic_out"] = acoustic
         if debug:

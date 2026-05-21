@@ -14,11 +14,8 @@ Mirrors ``models/experimental/swin_v2/runner/performant_runner.py``:
   condition encoder + SDPA mask build + N traced DiT replays + VAE decode.
 - ``release()`` releases the captured trace id + persistent DiT buffers.
 
-Unlike :mod:`models.demos.ace_step_v1_5.ttnn_impl.e2e_model_tt`, this runner does
-not require ``ACE_STEP_USE_TRACE=1`` on the command line — tracing is force-enabled
-at construction time. The env var is only set within the runner's own process so
-external scripts (e.g. ``run_prompt_to_wav.py``) that bypass the runner keep the
-opt-in semantics they already document.
+Unlike :mod:`models.demos.ace_step_v1_5.ttnn_impl.e2e_model_tt` with ``use_trace=False``,
+this runner always constructs :class:`AceStepE2EModel` with trace enabled (the default).
 
 Device requirements (same as the SwinV2 runner):
 
@@ -31,7 +28,6 @@ The ``perf/conftest.py`` ``device`` fixture already satisfies both.
 
 from __future__ import annotations
 
-import os
 import time
 from typing import Optional, Union
 
@@ -45,10 +41,7 @@ class AceStepPerformantRunner:
     """SwinV2-style perf runner wrapping :class:`AceStepE2EModel`.
 
     Construction:
-        1. Sets ``ACE_STEP_USE_TRACE=1`` in the current process so the e2e model
-           opts into the DiT body trace path during ``__init__`` (the model reads
-           the env var via :func:`_e2e_trace_enabled`).
-        2. Builds :class:`AceStepE2EModel` — uploads weights, prepares convs,
+        1. Builds :class:`AceStepE2EModel` with ``use_trace=True`` — uploads weights, prepares convs,
            precomputes per-step time embeddings, caches the silence-context.
         3. Runs one warmup ``generate(warmup_prompt)`` to:
               - drive the first two eager Euler steps (program-cache fill)
@@ -108,11 +101,6 @@ class AceStepPerformantRunner:
                 "AceStepPerformantRunner requires a TTNN build with begin_trace_capture / "
                 "execute_trace. Rebuild TTNN with trace support enabled."
             )
-        # Force-enable the DiT body trace inside ``AceStepE2EModel.__init__``. The model
-        # reads the env var once during construction; setting it here makes tracing the
-        # default for every runner instance without callers having to remember the flag.
-        os.environ["ACE_STEP_USE_TRACE"] = "1"
-
         self.device = device
         self.config = config
         self._warmup_prompt = warmup_prompt or self._DEFAULT_WARMUP_PROMPT
@@ -123,7 +111,7 @@ class AceStepPerformantRunner:
         # time ``__init__`` returns, ``self.model._trace_state.has_buffers()`` is True
         # and subsequent ``run(prompt)`` calls only pay for ``recapture`` (no fresh
         # buffer clones, no two-step warmup).
-        self.model: Optional[AceStepE2EModel] = AceStepE2EModel(config, device)
+        self.model: Optional[AceStepE2EModel] = AceStepE2EModel(config, device, use_trace=True)
         self._warmup_seconds: float = 0.0
         self._capture_dit_trace()
 

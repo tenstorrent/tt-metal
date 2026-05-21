@@ -58,7 +58,14 @@ from models.demos.ace_step_v1_5.ttnn_impl.lm_logits_debug import (
 class AceStepFiveHzExperimentalTtnnCausalLM(nn.Module):
     """HF-compatible thin wrapper around the stock ``tt_transformers`` ACE-Step 5 Hz LM body."""
 
-    def __init__(self, hf_model_dir: str, ttnn_device: Any, *, max_seq_len: int = 16384) -> None:
+    def __init__(
+        self,
+        hf_model_dir: str,
+        ttnn_device: Any,
+        *,
+        max_seq_len: int = 16384,
+        use_trace: bool = False,
+    ) -> None:
         super().__init__()
         from models.demos.ace_step_v1_5.ttnn_impl.qwen_tt_transformers_lm import QwenModelTtTransformers
 
@@ -67,7 +74,9 @@ class AceStepFiveHzExperimentalTtnnCausalLM(nn.Module):
             ttnn_device,
             max_seq_len=int(max_seq_len),
             validate_against_hf=False,
+            use_trace=bool(use_trace),
         )
+        self._use_trace = bool(use_trace)
         self.config = self.qwen.config
         self.generation_config = SimpleNamespace(use_cache=True)
         self._cursor = 0
@@ -77,6 +86,10 @@ class AceStepFiveHzExperimentalTtnnCausalLM(nn.Module):
     def reset_decode_state(self) -> None:
         self.qwen.reset_kv_cache()
         self._cursor = 0
+
+    def release_trace(self) -> None:
+        if hasattr(self.qwen, "release_trace"):
+            self.qwen.release_trace()
 
     def forward(
         self,

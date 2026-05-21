@@ -120,6 +120,18 @@ def ace_step_linear_l1_memory_config(ttnn: Any):
     return getattr(ttnn, "L1_MEMORY_CONFIG", None)
 
 
+def ace_step_linear_kwargs_memory_config(
+    program_config: Any | None,
+    *,
+    linear_out_l1: Any | None,
+    dram: Any | None,
+) -> Any | None:
+    """L1 linear outputs only when the 1D-mcast program is active; DRAM matmul must not use L1."""
+    if program_config is not None and linear_out_l1 is not None:
+        return linear_out_l1
+    return dram
+
+
 def ace_step_dit_linear_l1_memory_config(ttnn: Any):
     """Alias for :func:`ace_step_linear_l1_memory_config`."""
     return ace_step_linear_l1_memory_config(ttnn)
@@ -183,6 +195,52 @@ def ace_step_ensure_l1_activation(ttnn: Any, tensor: Any, l1_mc: Any | None = No
     return ttnn.to_memory_config(tensor, mc)
 
 
+def ace_step_ensure_dram_activation(ttnn: Any, tensor: Any, dram_mc: Any | None = None) -> Any:
+    """Move a device tensor to DRAM so matmul programs do not clash with L1 activation buffers."""
+    if tensor is None:
+        return tensor
+    mc = dram_mc if dram_mc is not None else getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+    if mc is None or not hasattr(ttnn, "to_memory_config"):
+        return tensor
+    return ttnn.to_memory_config(tensor, mc)
+
+
+def ace_step_dit_fused_m_tiles(*, batch_size: int, seq_len: int, tile: int = 32) -> int:
+    """Fused batch×seq tile rows used by 1D-mcast matmul (``fuse_batch=True``)."""
+    tile_size = max(1, int(tile))
+    s_tiles = (max(1, int(seq_len)) + tile_size - 1) // tile_size
+    return max(1, int(batch_size)) * s_tiles
+
+
+def ace_step_dit_prefers_dram_activations(*, batch_size: int, seq_len: int, max_fused_m: int = 16) -> bool:
+    """True when DiT should keep activations in DRAM (long clips; avoids L1/DRAM mixing noise)."""
+    return ace_step_dit_fused_m_tiles(batch_size=int(batch_size), seq_len=int(seq_len)) > int(max_fused_m)
+
+
+def ace_step_dit_body_trace_safe(*, batch_size: int, patch_seq_len: int, max_fused_m: int = 16) -> bool:
+    """Return False when DiT body trace replay is known to drift vs eager (audible noise).
+
+    Long clips fall back to DRAM matmul (``per_core_M`` > 16) with ``to_memory_config`` in the
+    graph; body trace capture/replay is not bit-accurate in that regime (same class of issue as
+    traced VAE tiles / ``DitCfgPrepTrace``).
+    """
+    return ace_step_dit_fused_m_tiles(batch_size=int(batch_size), seq_len=int(patch_seq_len)) <= int(max_fused_m)
+
+
+def ace_step_matmul_activation(
+    ttnn: Any,
+    tensor: Any,
+    linear_kwargs: dict,
+    *,
+    l1_fn,
+    dram_mc: Any | None = None,
+) -> Any:
+    """Place matmul ``in0`` in L1 when a 1D-mcast program is active, else DRAM."""
+    if "program_config" in linear_kwargs:
+        return l1_fn(tensor)
+    return ace_step_ensure_dram_activation(ttnn, tensor, dram_mc)
+
+
 def ace_step_binary_kwargs(ttnn: Any, l1_mc: Any | None = None) -> dict:
     """``memory_config`` for ``add`` / ``multiply`` / ``softmax`` with L1 output."""
     mc = l1_mc if l1_mc is not None else ace_step_eltwise_l1_memory_config(ttnn)
@@ -236,6 +294,7 @@ def _mcast_1d_linear_program_config(
     in0_block_w_cap: int = 2,
     out_subblock_h_cap: int = 4,
     out_subblock_w: int = 1,
+    max_per_core_m: int = 16,
 ):
     """Shared 1D mcast matmul program config builder for ACE-Step linears.
 
@@ -263,6 +322,14 @@ def _mcast_1d_linear_program_config(
     # Instead, use extra y-rows as additional N-workers so the full grid participates.
     s_tiles = (seq + tile - 1) // tile
     per_core_m = max(1, bsz * s_tiles)
+
+    # Guard against L1 CB overflow on WH cores (~1.5 MB each).
+    # Static CBs grow ~28 KB per per_core_M tile row; at per_core_M=48 they reach 1339 KB,
+    # leaving no room for L1 activation tensors (observed clash at 865 KB with duration=30).
+    # per_core_M<=16 is safe for short clips (~10s, fused_M<=16). Longer clips use DRAM matmul.
+    if per_core_m > int(max_per_core_m):
+        return None
+
     k = max(tile, int(in_dim))
 
     k_tiles = max(1, k // tile)
