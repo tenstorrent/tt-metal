@@ -606,8 +606,6 @@ def import_graph(
     """
     from collections import defaultdict, deque
 
-    r = rank
-
     # Collect data for batch inserts
     nodes_batch = []
     stack_traces_batch = []
@@ -758,7 +756,7 @@ def import_graph(
                 all_scope_output_ids = set()
                 all_nested_input_ids = set()
                 first_child_arguments = None
-                nodes_batch.append((base_operation_id + operation_counter, counter, operation_counter, name, r))
+                nodes_batch.append((base_operation_id + operation_counter, counter, operation_counter, name, rank))
 
             else:
                 op_nesting_depth += 1
@@ -823,7 +821,7 @@ def import_graph(
             duration_s = duration_ns / 1e9 if duration_ns else 0
 
             operation_id = base_operation_id + operation_counter
-            operations_batch.append((operation_id, name, duration_s, r))
+            operations_batch.append((operation_id, name, duration_s, rank))
 
             if start_node:
                 graph_counter_to_op_id[start_node["counter"]] = operation_id
@@ -833,18 +831,18 @@ def import_graph(
 
             if py_io and py_io.get("arguments"):
                 for key, val in py_io["arguments"].items():
-                    operation_arguments_batch.append((operation_id, str(key), str(val), r))
+                    operation_arguments_batch.append((operation_id, str(key), str(val), rank))
             elif start_node:
                 for idx, arg in enumerate(start_node.get("arguments", [])):
-                    operation_arguments_batch.append((operation_id, f"arg_{idx}", str(arg), r))
+                    operation_arguments_batch.append((operation_id, f"arg_{idx}", str(arg), rank))
 
             if py_io and py_io.get("python_stack_trace"):
                 py_trace = "\n".join(py_io["python_stack_trace"])
-                stack_traces_batch.append((operation_id, py_trace, r))
+                stack_traces_batch.append((operation_id, py_trace, rank))
 
             if py_io and py_io.get("input_tensor_ids"):
                 for idx, tid in enumerate(py_io["input_tensor_ids"]):
-                    input_tensors_batch.append((operation_id, idx, int(tid), r))
+                    input_tensors_batch.append((operation_id, idx, int(tid), rank))
             elif start_node:
                 direct_inputs = []
                 for node_counter in start_node.get("input_tensors", []):
@@ -857,7 +855,7 @@ def import_graph(
 
                 if direct_inputs:
                     for idx, tid in enumerate(direct_inputs):
-                        input_tensors_batch.append((operation_id, idx, tid, r))
+                        input_tensors_batch.append((operation_id, idx, tid, rank))
                 elif nested_input_tensor_ids:
                     seen = set()
                     lifted_inputs = []
@@ -869,7 +867,7 @@ def import_graph(
                         seen.add(tid)
                         lifted_inputs.append(tid)
                     for idx, tid in enumerate(lifted_inputs):
-                        input_tensors_batch.append((operation_id, idx, tid, r))
+                        input_tensors_batch.append((operation_id, idx, tid, rank))
 
             # ----- Outputs -----
             output_tensor_nodes = []
@@ -886,7 +884,7 @@ def import_graph(
                     cpp_output_nodes = nested_output_tensor_nodes
 
                 for i, tid in enumerate(py_io["output_tensor_ids"]):
-                    output_tensors_batch.append((operation_id, output_idx, int(tid), r))
+                    output_tensors_batch.append((operation_id, output_idx, int(tid), rank))
                     emitted_output_tids.add(int(tid))
                     output_idx += 1
                     if i < len(cpp_output_nodes):
@@ -900,7 +898,7 @@ def import_graph(
                             tid = conn_node.get("params", {}).get("tensor_id", "")
                             if tid:
                                 itid = int(tid)
-                                output_tensors_batch.append((operation_id, output_idx, itid, r))
+                                output_tensors_batch.append((operation_id, output_idx, itid, rank))
                                 emitted_output_tids.add(itid)
                                 output_idx += 1
                                 output_tensor_nodes.append(conn_node)
@@ -916,7 +914,7 @@ def import_graph(
                         tensor_node = nested_output_tensor_nodes[i]
                         if tid not in seen:
                             seen.add(tid)
-                            output_tensors_batch.append((operation_id, output_idx, tid, r))
+                            output_tensors_batch.append((operation_id, output_idx, tid, rank))
                             emitted_output_tids.add(tid)
                             output_idx += 1
                             kept_nodes.append(tensor_node)
@@ -961,7 +959,7 @@ def import_graph(
             for snode in subgraph:
                 if "counter" in snode:
                     snode["id"] = snode["counter"]
-            captured_graph_batch.append((operation_id, json.dumps(subgraph), r))
+            captured_graph_batch.append((operation_id, json.dumps(subgraph), rank))
             current_op_nodes = []
 
             # Use real buffer snapshot from get_buffers() when available;
@@ -982,12 +980,12 @@ def import_graph(
                             buf.get("max_size_per_bank", 0),
                             buf.get("buffer_type", 0),
                             buf.get("buffer_layout", 0),
-                            r,
+                            rank,
                         )
                     )
             else:
                 for buf in active_buffers:
-                    buffers_batch.append((operation_id, *buf, r))
+                    buffers_batch.append((operation_id, *buf, rank))
 
             operation_counter += 1
 
@@ -1017,7 +1015,7 @@ def import_graph(
                         device_id,
                         address,
                         buffer_type,
-                        r,
+                        rank,
                     )
                 )
 
@@ -1026,7 +1024,7 @@ def import_graph(
                     device_tensors = json.loads(device_tensors_str)
                     for dt in device_tensors:
                         device_tensors_batch.append(
-                            (tensor_id, dt.get("mesh_device_id", dt.get("device_id")), dt.get("address"), r)
+                            (tensor_id, dt.get("mesh_device_id", dt.get("device_id")), dt.get("address"), rank)
                         )
 
         elif node_type == "buffer_allocate":
@@ -1080,14 +1078,14 @@ def import_graph(
                 # Synthesize a deallocate operation if not inside a function_start/end pair
                 operation_id = base_operation_id + operation_counter
                 op_name = "ttnn::deallocate"
-                operations_batch.append((operation_id, op_name, 0, r))
-                nodes_batch.append((base_operation_id + operation_counter, counter, operation_counter, op_name, r))
+                operations_batch.append((operation_id, op_name, 0, rank))
+                nodes_batch.append((base_operation_id + operation_counter, counter, operation_counter, op_name, rank))
 
                 if dealloc_tensor_id is not None:
-                    input_tensors_batch.append((operation_id, 0, dealloc_tensor_id, r))
+                    input_tensors_batch.append((operation_id, 0, dealloc_tensor_id, rank))
 
                 for buf in active_buffers:
-                    buffers_batch.append((operation_id, *buf, r))
+                    buffers_batch.append((operation_id, *buf, rank))
 
                 node_copy = dict(node)
                 node_copy["counter"] = 1
@@ -1115,7 +1113,7 @@ def import_graph(
                     "stacking_level": 0,
                 }
                 dealloc_subgraph = [capture_start, node_copy, capture_end]
-                captured_graph_batch.append((operation_id, json.dumps(dealloc_subgraph), r))
+                captured_graph_batch.append((operation_id, json.dumps(dealloc_subgraph), rank))
 
                 operation_counter += 1
             else:
@@ -1128,7 +1126,7 @@ def import_graph(
             error_type = params.get("error_type", "unknown")
             error_message = params.get("error_message", "")
             error_operation = params.get("error_operation", "")
-            errors_batch.append((base_operation_id, error_operation, error_type, error_message, "", "", r))
+            errors_batch.append((base_operation_id, error_operation, error_type, error_message, "", "", rank))
 
     # Detect orphan function_start nodes (started but never ended = operation error).
     already_errored = {e[1] for e in errors_batch}
@@ -1144,7 +1142,7 @@ def import_graph(
                         f"Operation '{op_name}' started but never completed (likely crashed)",
                         "",
                         "",
-                        r,
+                        rank,
                     )
                 )
 
@@ -1188,7 +1186,7 @@ def import_graph(
             addr = tensor_address.get(mtid)
             if addr is not None and addr in addr_to_tensor:
                 _, shape, dtype, layout, mem_cfg, dev_id, _, bt, _tr = addr_to_tensor[addr]
-                tensors_batch.append((mtid, shape, dtype, layout, mem_cfg, dev_id, addr, bt, r))
+                tensors_batch.append((mtid, shape, dtype, layout, mem_cfg, dev_id, addr, bt, rank))
             elif mtid in pyid_to_cpp_tensor:
                 cpp_node = pyid_to_cpp_tensor[mtid]
                 p = cpp_node.get("params", {})
@@ -1203,7 +1201,7 @@ def import_graph(
                         _int_param(p, "device_id"),
                         _int_param(p, "address"),
                         btv,
-                        r,
+                        rank,
                     )
                 )
 
