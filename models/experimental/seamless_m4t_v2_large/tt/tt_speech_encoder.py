@@ -228,6 +228,9 @@ class TTSeamlessM4Tv2SpeechEncoder:
 
     @staticmethod
     def _linear_token_rows(x: ttnn.Tensor) -> int:
+        if len(x.shape) == 4:
+            # ``nlp_concat_heads`` output ``[B, 1, S, H]`` — matmul M = B * S.
+            return int(x.shape[0]) * int(x.shape[2])
         if len(x.shape) == 3:
             return int(x.shape[0]) * int(x.shape[1])
         if len(x.shape) == 2:
@@ -588,15 +591,11 @@ class TTSeamlessM4Tv2SpeechEncoder:
         right_max: int,
         scale: float,
     ) -> ttnn.Tensor:
-        """Return pre-scaled ``[1, 1, S, S, head_dim]`` relative position table.
+        """Return pre-scaled ``[S, head_dim, S]`` relative position table for batched matmul.
 
-        Stage 4: the full embedded table is cached per ``(seq_len, weight_id, scale)``.
-        Stage 7: ``scale`` is pre-folded into the cached table so the caller skips
-        the extra multiply on ``rel_logits``; the table is stored in L1 when it fits
-        (≤ 1 MB) to avoid DRAM access on the downstream 5-D multiply.
-        Stage 14: the table is now cached in its final 5-D shape ``[1, 1, S, S, D]``
-        so the per-call ``ttnn.reshape`` in ``_mh_attention`` is eliminated entirely
-        (saves 24 × ~23 µs ≈ 565 µs per forward pass).
+        Cached per ``(seq_len, weight_id, scale)``. Layout is ``pos[s_q, d, s_k]`` so
+        ``ttnn.bmm`` over query index ``s_q`` computes relative logits without a 5-D
+        ``reshape + multiply + sum`` on activations.
         """
         weight_id = self._tensor_stable_id(distance_weight)
         tab_key = (seq_len, weight_id, scale)
@@ -607,7 +606,12 @@ class TTSeamlessM4Tv2SpeechEncoder:
         head_dim = self.hidden_size // self.speech_encoder_attention_heads
         idx_flat = self._relative_position_index_flat_torch(seq_len, left_max=left_max, right_max=right_max)
         w_cpu = to_torch_replicated_first_shard(distance_weight).to(torch.bfloat16).contiguous()
-        emb_cpu = torch.nn.functional.embedding(idx_flat, w_cpu).reshape(1, 1, seq_len, seq_len, head_dim)
+        emb_cpu = (
+            torch.nn.functional.embedding(idx_flat, w_cpu)
+            .reshape(seq_len, seq_len, head_dim)
+            .permute(0, 2, 1)
+            .contiguous()
+        )
         # Host TILE upload — avoids per-layer ``EmbeddingsDeviceOperation`` + cold tilize gaps in Tracy.
         emb = from_torch_bfloat16_tile(self.device, emb_cpu, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
@@ -617,7 +621,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
             ttnn.deallocate(emb)
             emb = emb_scaled
 
-        # Move to L1 when the tensor fits (≤ 1 MB): [1, 1, S, S, D] × 2 bytes.
+        # Move to L1 when the tensor fits (≤ 1 MB): [S, D, S] × 2 bytes.
         _L1_POS_TAB_LIMIT = 1 * 1024 * 1024
         if seq_len * seq_len * head_dim * 2 <= _L1_POS_TAB_LIMIT:
             emb_l1 = ttnn.to_memory_config(emb, ttnn.L1_MEMORY_CONFIG)
@@ -626,6 +630,27 @@ class TTSeamlessM4Tv2SpeechEncoder:
 
         self._rel_pos_tab_cache[tab_key] = emb
         return emb
+
+    @staticmethod
+    def _relative_logits_bmm(
+        q: ttnn.Tensor,
+        pos_bmm: ttnn.Tensor,
+        *,
+        batch: int,
+        num_heads: int,
+        seq_len: int,
+        memory_config: ttnn.MemoryConfig,
+    ) -> ttnn.Tensor:
+        """``einsum('bhld,lrd->bhlr', q, pos)`` via ``bmm`` over query positions (no 5-D broadcast)."""
+        head_dim = int(q.shape[-1])
+        q_bh = ttnn.reshape(q, (batch * num_heads, seq_len, head_dim))
+        q_sid = ttnn.permute(q_bh, (1, 0, 2), memory_config=memory_config)
+        ttnn.deallocate(q_bh)
+        rel_sid = ttnn.operations.moreh.bmm(q_sid, pos_bmm, memory_config=memory_config)
+        ttnn.deallocate(q_sid)
+        rel_bh = ttnn.permute(rel_sid, (1, 0, 2), memory_config=memory_config)
+        ttnn.deallocate(rel_sid)
+        return ttnn.reshape(rel_bh, (batch, num_heads, seq_len, seq_len))
 
     def _mh_attention(
         self,
@@ -692,23 +717,24 @@ class TTSeamlessM4Tv2SpeechEncoder:
 
             # Stage 8: Q is pre-scaled by 1/√head_dim, so pos_tab uses scale=1.0 here —
             # the einsum over the pre-scaled Q already provides the single correct factor.
-            pos_tab = self._relative_embedding_table(
+            pos_bmm = self._relative_embedding_table(
                 seq_len,
                 distance_weight=attn_module.distance_embedding.weight,
                 left_max=int(attn_module.left_max_position_embeddings),
                 right_max=int(attn_module.right_max_position_embeddings),
                 scale=1.0,
             )
-            # prod shape [B, H, S, S, D] must stay on DRAM (too large for L1 at production seq).
-            # Stage 14: pos_tab is already [1, 1, S, S, D] from cache — no reshape needed.
-            q_exp = ttnn.reshape(q, (batch, num_heads, seq_len, 1, head_dim))
-            prod = ttnn.multiply(q_exp, pos_tab, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(q_exp)
-            rel_logits = ttnn.sum(prod, dim=-1, memory_config=scores_mc)
-            ttnn.deallocate(prod)
+            rel_logits = self._relative_logits_bmm(
+                q,
+                pos_bmm,
+                batch=batch,
+                num_heads=num_heads,
+                seq_len=seq_len,
+                memory_config=scores_mc,
+            )
+            ttnn.deallocate(q)
             scores = ttnn.add(scores, rel_logits, memory_config=scores_mc)
             ttnn.deallocate(rel_logits)
-            ttnn.deallocate(q)
 
             if attention_mask_4d is not None:
                 scores = ttnn.add(scores, attention_mask_4d, memory_config=scores_mc)
@@ -727,10 +753,17 @@ class TTSeamlessM4Tv2SpeechEncoder:
 
         merged_4d = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(attn_out)
-        merged = ttnn.reshape(merged_4d, (batch, seq_len, hsz))
+        out = self._linear(
+            merged_4d,
+            attn_module.linear_out.weight,
+            attn_module.linear_out.bias,
+            program_config=pc_out,
+        )
         ttnn.deallocate(merged_4d)
-        out = self._linear(merged, attn_module.linear_out.weight, attn_module.linear_out.bias, program_config=pc_out)
-        ttnn.deallocate(merged)
+        if len(out.shape) == 4:
+            out_3d = ttnn.reshape(out, (batch, seq_len, hsz))
+            ttnn.deallocate(out)
+            out = out_3d
         if qkv_src is not None:
             ttnn.deallocate(qkv_src)
         return out
@@ -1235,7 +1268,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
         """Populate ``_rel_pos_tab_cache`` and ``_rel_pos_idx_cache`` for each seq len.
 
         Conformer self-attention always uses ``scale=1.0`` (Stage 8: Q weights are
-        pre-scaled during preprocessing).  Stage 11: the cached table is ``[1,S,D,S]``.
+        pre-scaled during preprocessing). Cached tables are ``[S, D, S]`` for ``bmm``.
         """
         enc = self.parameters.encoder
         for slen in seq_lens:
@@ -1265,7 +1298,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
 
         Caches populated:
         * ``_dw_left_pad_cache``   — L1 zero tensors for depthwise conv left pad
-        * ``_rel_pos_tab_cache``   — ``[1, 1, S, S, D]`` tables (host embedding + TILE upload)
+        * ``_rel_pos_tab_cache``   — ``[S, D, S]`` tables (host embedding + TILE upload)
         * ``_chunk_attn_mask_cache`` — chunk mask (skipped when ``S <= chunk_size``)
         * ``_encoder_additive_mask_cache`` — no-padding-mask entry (``mask_id=-1``)
         """
