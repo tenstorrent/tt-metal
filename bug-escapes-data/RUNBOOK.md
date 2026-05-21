@@ -1013,6 +1013,18 @@ Hard stop:
 07:05Z  Post summary to Slack #ai-sw-infra
 ```
 
+**Session start announcement (MANDATORY — first action every cron activation):**
+
+Before doing any work, post to Slack:
+```
+🤖 Bug escape cron activated.
+Current time: {current UTC time, e.g. 2026-05-22 00:15 UTC}
+Next activation: {next scheduled UTC time, e.g. 2026-05-23 00:15 UTC}
+Starting incremental scan...
+```
+
+Use `mcp__nanoclaw__send_message` for this. Do it before reading any state files.
+
 All dispatches happen in the nightly window when P300-viommu, LoudBox, and LLMBox runners
 are online. The watchdog task at 07:00Z checks for stalled campaigns (no progress in 3+ hours)
 and posts an alert.
