@@ -10,7 +10,11 @@ from typing import Optional
 
 import ttnn
 
-from models.experimental.seamless_m4t_v2_large.tt.common import build_ln_sharded_config, core_grid, sdpa_program_config
+from models.experimental.seamless_m4t_v2_large.tt.common import (
+    build_ln_sharded_config,
+    matmul_program_config,
+    sdpa_program_config,
+)
 
 
 class TTSeamlessM4Tv2Encoder:
@@ -68,9 +72,38 @@ class TTSeamlessM4Tv2Encoder:
         self._ln_sharded_cache: dict = {}
         # Reuse ``SDPAProgramConfig`` per (seq_q, seq_k) across encoder layers.
         self._sdpa_pc_cache: dict = {}
+        # ``MatmulMultiCoreReuseMultiCast1DProgramConfig`` keyed by (token_rows, in_dim, out_dim).
+        self._matmul_pc_cache: dict = {}
 
     def _sdpa_program_config(self, seq_q: int, seq_k: int) -> ttnn.SDPAProgramConfig:
         return sdpa_program_config(self.device, seq_q, seq_k, self._sdpa_pc_cache)
+
+    @staticmethod
+    def _linear_token_rows(x: ttnn.Tensor) -> int:
+        if len(x.shape) == 3:
+            return int(x.shape[0]) * int(x.shape[1])
+        if len(x.shape) == 2:
+            return int(x.shape[0])
+        return int(x.shape[-2])
+
+    def _matmul_pc(
+        self,
+        token_rows: int,
+        in_dim: int,
+        out_dim: int,
+    ) -> ttnn.ProgramConfig:
+        key = (token_rows, in_dim, out_dim)
+        cached = self._matmul_pc_cache.get(key)
+        if cached is not None:
+            return cached
+        cached = matmul_program_config(
+            self.device,
+            token_rows=token_rows,
+            in_dim=in_dim,
+            out_dim=out_dim,
+        )
+        self._matmul_pc_cache[key] = cached
+        return cached
 
     def _linear(
         self,
@@ -79,25 +112,22 @@ class TTSeamlessM4Tv2Encoder:
         bias: ttnn.Tensor,
         *,
         activation: Optional[str] = None,
+        program_config: Optional[ttnn.ProgramConfig] = None,
     ) -> ttnn.Tensor:
+        if program_config is None:
+            program_config = self._matmul_pc(
+                self._linear_token_rows(x),
+                int(weight.shape[-2]),
+                int(weight.shape[-1]),
+            )
         return ttnn.linear(
             x,
             weight,
             bias=bias,
             activation=activation,
-            core_grid=core_grid(self.device),
+            program_config=program_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self._linear_ln_compute_cfg,
-        )
-
-    def _layer_norm(self, x: ttnn.Tensor, *, weight: ttnn.Tensor, bias: ttnn.Tensor) -> ttnn.Tensor:
-        return ttnn.layer_norm(
-            x,
-            weight=weight,
-            bias=bias,
-            epsilon=self.layer_norm_eps,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self._layernorm_compute_cfg,
         )
 
     def _build_ln_sharded_config(self, m_tiles: int, n_tiles: int):
@@ -112,7 +142,7 @@ class TTSeamlessM4Tv2Encoder:
         m_tiles: int,
         n_tiles: int,
     ) -> ttnn.Tensor:
-        """Width-sharded LN: reshard -> sharded LN -> L1 interleaved (feeds linears without DRAM ``in0``)."""
+        """Width-sharded multicore LN (8 cores at H=1024). Needs one layout round-trip per call."""
         sharded_mem_config, sharded_pc = self._build_ln_sharded_config(m_tiles, n_tiles)
 
         x_sharded = ttnn.to_memory_config(x, sharded_mem_config)
@@ -146,7 +176,14 @@ class TTSeamlessM4Tv2Encoder:
     ) -> ttnn.Tensor:
         # Fused QKV projection: one matmul producing
         # ``[B, S, 3 * hidden]`` instead of three separate Q/K/V matmuls.
-        qkv = self._linear(hidden_states, attn_module.qkv.weight, attn_module.qkv.bias)
+        token_m = batch * seq_q
+        pc_qkv = self._matmul_pc(token_m, hidden_size, 3 * hidden_size)
+        qkv = self._linear(
+            hidden_states,
+            attn_module.qkv.weight,
+            attn_module.qkv.bias,
+            program_config=pc_qkv,
+        )
 
         # ``nlp_create_qkv_heads`` consumes a 4-D ``[B, 1, S, 3*H]`` input and
         # returns Q/K/V already shaped as ``[B, num_heads, S, head_dim]`` --
@@ -187,7 +224,13 @@ class TTSeamlessM4Tv2Encoder:
         ttnn.deallocate(attn_out)
         merged = ttnn.reshape(merged_4d, (batch, seq_q, hidden_size))
 
-        proj = self._linear(merged, attn_module.out_proj.weight, attn_module.out_proj.bias)
+        pc_out = self._matmul_pc(token_m, hidden_size, hidden_size)
+        proj = self._linear(
+            merged,
+            attn_module.out_proj.weight,
+            attn_module.out_proj.bias,
+            program_config=pc_out,
+        )
         ttnn.deallocate(merged)
         return proj
 
@@ -252,11 +295,12 @@ class TTSeamlessM4Tv2Encoder:
 
         sdpa_self = self._sdpa_program_config(seq, seq)
 
-        # M tiles count for the activation -- folded ``[B*S, hidden]`` view.
-        # padded up to a multiple of 32 to match TILE layout.  N tiles is the
-        # tile count of ``hidden_size`` (always a multiple of 32 in this model).
         m_tiles = (batch * seq + 31) // 32
         n_tiles = hidden_size // 32
+        token_m = batch * seq
+        ffn_dim = int(self.parameters.layers[0].ffn.fc1.weight.shape[-1])
+        pc_ffn_fc1 = self._matmul_pc(token_m, hidden_size, ffn_dim)
+        pc_ffn_fc2 = self._matmul_pc(token_m, ffn_dim, hidden_size)
 
         for i in range(num_layers):
             layer = parameters.layers[i]
@@ -296,9 +340,15 @@ class TTSeamlessM4Tv2Encoder:
                 layer.ffn.fc1.weight,
                 layer.ffn.fc1.bias,
                 activation="relu",
+                program_config=pc_ffn_fc1,
             )
             ttnn.deallocate(normed)
-            ff = self._linear(ff, layer.ffn.fc2.weight, layer.ffn.fc2.bias)
+            ff = self._linear(
+                ff,
+                layer.ffn.fc2.weight,
+                layer.ffn.fc2.bias,
+                program_config=pc_ffn_fc2,
+            )
             hidden = ttnn.add(hidden, ff, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(ff)
 
