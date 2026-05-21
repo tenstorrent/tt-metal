@@ -350,6 +350,8 @@ Three pieces, paralleling the DFB / Semaphore pattern with one deliberate asymme
 
 One thing to be aware of: `TensorSpec` is a property of a `MeshTensor`. This pre-exists Metal 2.0; it is not part of the "Spec" object pattern in the rest of the Metal 2.0 APIs.
 
+**Spec-validator: every TensorParameter needs ≥1 TensorBinding across the program's kernels.** Symmetric sibling of the DFB producer/consumer rule. A `TensorParameter` declared on `ProgramSpec` but never bound by any kernel is rejected by the validator. If you find yourself with an unbound `TensorParameter`, either drop the declaration (the tensor isn't actually needed by the program) or add the missing `TensorBinding` on the kernel that uses it.
+
 > **⚠ Pre-migration check.** Before migrating an op, grep its kernel sources for `ArgConfig::Runtime`. If any kernel uses **`ArgConfig::RuntimeTensorShape`**, this op cannot migrate to Metal 2.0 yet. Metal 2.0 has no positional-CTA mechanism, so the legacy `TensorAccessorArgs(buffer, ArgConfig::RuntimeTensorShape).append_to(...)` plumbing has no equivalent in the current API. Stay on the legacy `ProgramDescriptor` path until the follow-up PR adds runtime-shape support. (The other deferred flavors — `RuntimeRank`, `RuntimeNumBanks`, `RuntimeShardShape`, `RuntimeBankCoords` — have zero user sites outside tests, so this check almost always reduces to "is `RuntimeTensorShape` present?".)
 
 #### Legacy
