@@ -49,6 +49,92 @@ from collections.abc import Sequence
 import torch
 
 
+def get_rope_index(
+    input_ids: torch.Tensor,
+    *,
+    image_grid_thw: torch.Tensor | None = None,
+    image_token_id: int = 248056,
+    spatial_merge_size: int = 2,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Build 3D position_ids `[3, B, S]` for a multimodal input sequence.
+
+    Simplified port of HF's `Qwen3VLModel.get_rope_index` covering the
+    text + image case (video deferred to a follow-up). For each batch:
+      - Text tokens get (t, h, w) = (k, k, k) where k advances monotonically.
+      - Each image_pad token range gets replaced by a 3D grid of patch
+        coordinates (t, h, w) offset by the running position.
+      - After each image, the running position advances by max(t,h,w)+1.
+
+    qwen3.6 vision_config: spatial_merge_size=2. Image inserts `llm_grid_h *
+    llm_grid_w = (h/2)*(w/2)` patch tokens per frame.
+
+    Returns:
+      position_ids: `[3, B, S]` torch.long.
+      mrope_position_deltas: `[B, 1]` torch.long — for incremental decode,
+        the offset between the running token count and the max(position_id+1).
+    """
+    assert input_ids.ndim == 2, f"input_ids must be [B, S], got {input_ids.shape}"
+    B, S = input_ids.shape
+    position_ids = torch.zeros(3, B, S, dtype=torch.long, device=input_ids.device)
+    mrope_deltas: list[int] = []
+
+    for b in range(B):
+        tokens = input_ids[b].tolist()
+        image_indices_in_grid = 0
+        running = 0
+        st = 0
+        out_t: list[torch.Tensor] = []
+        out_h: list[torch.Tensor] = []
+        out_w: list[torch.Tensor] = []
+
+        # Walk through the sequence finding image_pad ranges.
+        while st < S:
+            try:
+                ed = tokens.index(image_token_id, st)
+            except ValueError:
+                ed = S  # no more images; rest is text
+            # Text segment [st, ed)
+            text_len = ed - st
+            if text_len > 0:
+                ramp = torch.arange(text_len, dtype=torch.long) + running
+                out_t.append(ramp)
+                out_h.append(ramp)
+                out_w.append(ramp)
+                running += text_len
+            if ed >= S:
+                break
+            # Image segment: image_grid_thw[image_indices_in_grid] tells us (T, H, W)
+            if image_grid_thw is None:
+                raise ValueError(f"image_token_id={image_token_id} found in input but no image_grid_thw provided")
+            t, h, w = image_grid_thw[image_indices_in_grid].tolist()
+            image_indices_in_grid += 1
+            llm_grid_t = t
+            llm_grid_h = h // spatial_merge_size
+            llm_grid_w = w // spatial_merge_size
+            n_image_tokens = llm_grid_t * llm_grid_h * llm_grid_w
+            t_idx = torch.arange(llm_grid_t).view(-1, 1).expand(-1, llm_grid_h * llm_grid_w).flatten()
+            h_idx = torch.arange(llm_grid_h).view(1, -1, 1).expand(llm_grid_t, -1, llm_grid_w).flatten()
+            w_idx = torch.arange(llm_grid_w).view(1, 1, -1).expand(llm_grid_t, llm_grid_h, -1).flatten()
+            out_t.append(t_idx + running)
+            out_h.append(h_idx + running)
+            out_w.append(w_idx + running)
+            # Running position advances past the image's max (h_idx and w_idx
+            # peak at llm_grid_h-1 and llm_grid_w-1; the max+1 is the bigger
+            # of the two for grid_t=1).
+            running += max(llm_grid_t, llm_grid_h, llm_grid_w)
+            st = ed + n_image_tokens
+
+        pos_t = torch.cat(out_t)[:S]
+        pos_h = torch.cat(out_h)[:S]
+        pos_w = torch.cat(out_w)[:S]
+        position_ids[0, b, : pos_t.shape[0]] = pos_t
+        position_ids[1, b, : pos_h.shape[0]] = pos_h
+        position_ids[2, b, : pos_w.shape[0]] = pos_w
+        mrope_deltas.append(int(pos_t.max().item()) + 1 - S)
+
+    return position_ids, torch.tensor(mrope_deltas, dtype=torch.long).unsqueeze(1)
+
+
 def build_mrope_inv_freq(rope_theta: float, partial_rotary_dim: int) -> torch.Tensor:
     """Compute inverse-frequency tensor for M-RoPE.
 

@@ -18,7 +18,7 @@ import torch
 from transformers.models.qwen3_vl.configuration_qwen3_vl import Qwen3VLTextConfig
 from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLTextRotaryEmbedding
 
-from models.demos.qwen3_6_galaxy_v2.tt.qwen36_mrope import build_mrope_cos_sin
+from models.demos.qwen3_6_galaxy_v2.tt.qwen36_mrope import build_mrope_cos_sin, get_rope_index
 
 _SNAPSHOT = Path(
     "/home/tt-admin/.cache/huggingface/hub/models--Qwen--Qwen3.6-27B/"
@@ -126,3 +126,49 @@ def test_mrope_multimodal_3axis_matches_hf():
         f"divergent-axis M-RoPE matches HF: cos sample {cos_ours[0, 12, :4].tolist()}, "
         f"sin sample {sin_ours[0, 12, :4].tolist()}"
     )
+
+
+@torch.no_grad()
+def test_get_rope_index_text_only():
+    """Pure-text sequence: all 3 axes equal a 1D ramp."""
+    input_ids = torch.tensor([[1, 2, 3, 4, 5]], dtype=torch.long)
+    pos_ids, deltas = get_rope_index(input_ids)
+    assert pos_ids.shape == (3, 1, 5)
+    ramp = torch.arange(5, dtype=torch.long)
+    torch.testing.assert_close(pos_ids[0, 0], ramp)
+    torch.testing.assert_close(pos_ids[1, 0], ramp)
+    torch.testing.assert_close(pos_ids[2, 0], ramp)
+    assert deltas.tolist() == [[5 - 5]] == [[0]]  # max+1 = 5, len = 5
+
+
+@torch.no_grad()
+def test_get_rope_index_text_image_text():
+    """Text + image + text: image_pad positions get 3D grid coords."""
+    IMG = 248056
+    # 2 text tokens, image (grid_thw=[[1,4,4]] → 2x2=4 patch tokens after merger), 2 text tokens
+    n_img = (4 // 2) * (4 // 2)  # 2*2 = 4
+    input_ids = torch.tensor([[100, 101] + [IMG] * n_img + [200, 201]], dtype=torch.long)
+    image_grid_thw = torch.tensor([[1, 4, 4]], dtype=torch.long)
+    pos_ids, deltas = get_rope_index(input_ids, image_grid_thw=image_grid_thw)
+    S = input_ids.shape[1]
+    assert pos_ids.shape == (3, 1, S)
+
+    # First 2 tokens: text [0, 1] on all axes
+    torch.testing.assert_close(pos_ids[0, 0, :2], torch.tensor([0, 1]))
+    torch.testing.assert_close(pos_ids[1, 0, :2], torch.tensor([0, 1]))
+    torch.testing.assert_close(pos_ids[2, 0, :2], torch.tensor([0, 1]))
+
+    # Image: running starts at 2. grid_t=1, grid_h=2, grid_w=2.
+    # t_idx = [0,0,0,0], h_idx = [0,0,1,1], w_idx = [0,1,0,1], each +2
+    torch.testing.assert_close(pos_ids[0, 0, 2:6], torch.tensor([2, 2, 2, 2]))
+    torch.testing.assert_close(pos_ids[1, 0, 2:6], torch.tensor([2, 2, 3, 3]))
+    torch.testing.assert_close(pos_ids[2, 0, 2:6], torch.tensor([2, 3, 2, 3]))
+
+    # After image, running advances by max(1, 2, 2) = 2 → running = 4.
+    # Next 2 text tokens: [4, 5] all axes.
+    torch.testing.assert_close(pos_ids[0, 0, 6:8], torch.tensor([4, 5]))
+    torch.testing.assert_close(pos_ids[1, 0, 6:8], torch.tensor([4, 5]))
+    torch.testing.assert_close(pos_ids[2, 0, 6:8], torch.tensor([4, 5]))
+    print(f"pos_ids[0,0]={pos_ids[0, 0].tolist()}")
+    print(f"pos_ids[1,0]={pos_ids[1, 0].tolist()}")
+    print(f"pos_ids[2,0]={pos_ids[2, 0].tolist()}")
