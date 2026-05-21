@@ -64,7 +64,8 @@ models/experimental/atss_swin_l_dyhead/
 ├── demo/                               # Demo scripts
 │   ├── demo_inference.py              #   Single-image inference + visualization
 │   ├── demo_batch.py                  #   Multi-image batch inference
-│   └── demo_perf.py                   #   Performance benchmark (PyTorch vs TTNN)
+│   ├── demo_perf.py                   #   Performance benchmark (PyTorch vs TTNN)
+│   └── demo_sahi_4dev.py              #   SAHI-style 4-device sliced demo (1280x1280 → 2x2 of 640)
 └── README.md
 
 models/experimental/swin_l/             # Reusable Swin-L backbone (separate module)
@@ -168,6 +169,73 @@ python models/experimental/atss_swin_l_dyhead/demo/generate_report.py
 ```
 
 Output is saved to `atss_swin_l_dyhead/results/` by default. Override with `--output-dir`.
+
+### Multi-device slicing demo (SAHI 4-device)
+
+`demo_sahi_4dev.py` runs sliced inference on a **1×4 Wormhole sub-mesh** (Galaxy or T3K).
+The input image is resized to 1280×1280, sliced into a 2×2 grid of 640×640 tiles, and
+all 4 tiles run **in parallel** across the 4 devices with 2 command queues + trace.
+Per-tile detections are post-processed on the host and merged via cross-tile greedy NMM
+into a single 1280×1280 frame.
+
+```bash
+# Baseline — exact 2x2 of 640x640 (no overlap, no seam-merge).
+# Best for aerial/top-down scenes with many small objects that don't cross tile seams.
+python models/experimental/atss_swin_l_dyhead/demo/demo_sahi_4dev.py \
+    --image path/to/1280x1280_image.jpg \
+    --output-dir path/to/output_dir
+
+# Overlapping tiles + seam-aware merge.
+# Best for street-level scenes where large objects (persons, buses) span tile boundaries.
+# The input is resized to (2*640 - overlap) = 1200x1200 before tiling so adjacent
+# tiles share an 80px band; boxes are scaled back to 1280x1280 for output.
+python models/experimental/atss_swin_l_dyhead/demo/demo_sahi_4dev.py \
+    --image path/to/1280x1280_image.jpg \
+    --overlap 80 --seam-merge \
+    --output-dir path/to/output_dir
+```
+
+**Key flags:**
+
+| Flag | Default | Description |
+|---|---|---|
+| `--image` | *(required)* | Input image (auto-resized to 1280×1280 if needed). |
+| `--overlap` | `0` | Tile overlap in px. `0` = exact 2×2 of 640×640 (no overlap). When `> 0`, image is resized to `(2*640 - overlap)` so tiles overlap by that many px in each axis. |
+| `--seam-merge` | off | Run a second merge pass that knows the exact seam positions. Catches objects split across a tile seam that don't have enough IoS for the normal merger. See "Choosing flags" below. |
+| `--seam-tol` | `-1` (auto) | Abutting-edge tolerance in px for seam-merge. `-1` auto-picks `max(overlap, 20)`. |
+| `--merge-iou` | `0.5` | IoU/IoS threshold for the first-pass cross-tile NMM. |
+| `--merge-match` | `ios` | `iou` or `ios` (intersection-over-smaller). |
+| `--score-thr` | `0.3` | Visualization-only score threshold; postprocess uses `ATSS_SCORE_THR=0.05`. |
+| `--class-agnostic` | off | If set, the merger ignores class labels. |
+| `--no-trace` | off | Disable trace (2CQ only). |
+| `--output-dir` | `results/sahi_4dev/` | Output directory for the annotated JPEG. |
+
+**Choosing flags by scene type:**
+
+- **Aerial / top-down / small dense objects (boats from above, parking lots)**:
+  *no overlap, no seam-merge* — objects rarely cross tile seams; overlap and seam-merge
+  would just risk merging adjacent small objects.
+- **Street-level with large objects spanning seams (persons, vehicles)**:
+  `--overlap 80 --seam-merge` — overlap gives each tile a wider context so a single
+  object isn't split, and seam-merge catches the residual cases (e.g. a person tall
+  enough that head + body land in different tiles).
+
+**Expected performance** on a healthy Galaxy 1×4 sub-mesh:
+
+| Phase | Time |
+|---|---|
+| `open_mesh_device` | ~0.9 s (one-time) |
+| `build model + ttnn.from_torch` | ~3.5 s (one-time) |
+| `pipeline.compile` (warm cache) | ~3.9 s (one-time) |
+| `pipeline.enqueue + pop_all` (steady-state) | **~290 ms / frame** (the number shown in the title) |
+| `ttnn.to_torch` on outputs | ~9 ms |
+| Host postprocess + cross-tile NMM | ~40 ms (CPU, depends on detection count) |
+| `cv2.imwrite` | ~40 ms |
+| **Steady-state full e2e** | **~435 ms / frame  → ~2.3 fps** |
+
+The `(infer …ms)` value in the title is the **host↔device round-trip** for one frame
+(input DMA + 4-tile parallel device compute + output DMA), not pure device time and
+not full end-to-end. The first cold compile (no JIT cache) takes ~140 s.
 
 ### Usage
 

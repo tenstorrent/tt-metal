@@ -165,6 +165,118 @@ def cross_tile_greedy_nmm(
     return torch.stack(out_b), torch.stack(out_s), torch.stack(out_c)
 
 
+def _seam_axis_match(
+    g_min: float,
+    g_max: float,
+    b_min: float,
+    b_max: float,
+    end: float,
+    start: float,
+    tol: float,
+) -> bool:
+    """Adapted from sdawle/yolo_bh_demos. `end` = prev-tile inner edge, `start` = next-tile
+    inner edge. Hard cut: end==start. Overlapping tiles: end > start.
+
+    Match is abutting (edges near end/start, within tol) or crossing — but crossing is
+    tightened here vs the yolo reference to require *both* boxes to span the *entire*
+    (start, end) seam band, not just the midpoint. With ATSS's low score_thr (0.05) the
+    reference's midpoint-crossing test let low-conf "bridge" boxes link unrelated objects."""
+    abutting = (abs(g_max - end) <= tol and abs(b_min - start) <= tol) or (
+        abs(b_max - end) <= tol and abs(g_min - start) <= tol
+    )
+    crossing = (g_min < start and g_max > end) and (b_min < start and b_max > end)
+    return abutting or crossing
+
+
+def merge_seam_adjacent(
+    boxes: torch.Tensor,
+    scores: torch.Tensor,
+    cls_ids: torch.Tensor,
+    seams_x: tuple = (),
+    seams_y: tuple = (),
+    tol: int = 20,
+    perp_overlap_frac: float = 0.15,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Ported from sdawle/yolo_bh_demos: yolov8l_sahi_640_pipelined._merge_seam_adjacent.
+    Same-class union-of-extents merge for boxes split across known tile seams. Uses
+    leaf-based group chaining (a candidate joins only if it seam-matches an existing
+    leaf, not the group's extent) to prevent snowballing into a whole-frame box.
+    Designed to catch the cases IoU/IoS NMM misses — wide objects sliced into thin
+    halves, or tall objects sliced top/bottom, where pairwise overlap is well below
+    the 0.5 merge threshold."""
+    n = boxes.shape[0]
+    if n < 2 or (not seams_x and not seams_y):
+        return boxes, scores, cls_ids
+
+    x1s = boxes[:, 0].tolist()
+    y1s = boxes[:, 1].tolist()
+    x2s = boxes[:, 2].tolist()
+    y2s = boxes[:, 3].tolist()
+    cls_list = cls_ids.tolist()
+
+    def _leaf_seam_match(k: int, j: int) -> bool:
+        kx1, ky1, kx2, ky2 = x1s[k], y1s[k], x2s[k], y2s[k]
+        jx1, jy1, jx2, jy2 = x1s[j], y1s[j], x2s[j], y2s[j]
+        k_w = max(kx2 - kx1, 1.0)
+        k_h = max(ky2 - ky1, 1.0)
+        j_w = max(jx2 - jx1, 1.0)
+        j_h = max(jy2 - jy1, 1.0)
+        y_inter = max(0.0, min(ky2, jy2) - max(ky1, jy1))
+        x_inter = max(0.0, min(kx2, jx2) - max(kx1, jx1))
+        if seams_x and y_inter >= perp_overlap_frac * min(k_h, j_h):
+            for end_x, start_x in seams_x:
+                if _seam_axis_match(kx1, kx2, jx1, jx2, float(end_x), float(start_x), float(tol)):
+                    return True
+        if seams_y and x_inter >= perp_overlap_frac * min(k_w, j_w):
+            for end_y, start_y in seams_y:
+                if _seam_axis_match(ky1, ky2, jy1, jy2, float(end_y), float(start_y), float(tol)):
+                    return True
+        return False
+
+    consumed = [False] * n
+    out_b, out_s, out_c = [], [], []
+    for i in range(n):
+        if consumed[i]:
+            continue
+        group = [i]
+        g_cls = cls_list[i]
+        while True:
+            added = False
+            for j in range(n):
+                if consumed[j] or j in group or cls_list[j] != g_cls:
+                    continue
+                for k in group:
+                    if _leaf_seam_match(k, j):
+                        group.append(j)
+                        added = True
+                        break
+                if added:
+                    break
+            if not added:
+                break
+        gb = boxes[group]
+        out_b.append(torch.stack([gb[:, 0].min(), gb[:, 1].min(), gb[:, 2].max(), gb[:, 3].max()]))
+        out_s.append(scores[group].max())
+        out_c.append(cls_ids[group[0]])
+        for k in group:
+            consumed[k] = True
+    return torch.stack(out_b), torch.stack(out_s), torch.stack(out_c)
+
+
+def compute_seams(tiles: List[TileSpec], frame_h: int, frame_w: int) -> Tuple[tuple, tuple]:
+    """Build (seams_x, seams_y) (end, start) pairs from the tile grid. Interior splits
+    only — ends < frame edge, starts > 0."""
+    col_starts = sorted({ts.col_start for ts in tiles})
+    col_ends = sorted({ts.col_start + ts.src_w for ts in tiles})
+    row_starts = sorted({ts.row_start for ts in tiles})
+    row_ends = sorted({ts.row_start + ts.src_h for ts in tiles})
+    int_col_ends = [e for e in col_ends if e < frame_w]
+    int_col_starts = [s for s in col_starts if s > 0]
+    int_row_ends = [e for e in row_ends if e < frame_h]
+    int_row_starts = [s for s in row_starts if s > 0]
+    return tuple(zip(int_col_ends, int_col_starts)), tuple(zip(int_row_ends, int_row_starts))
+
+
 def preprocess_tiles(tiles_bgr_nchw: np.ndarray) -> torch.Tensor:
     """BGR [N,3,H,W] float[0,255] -> normalized RGB [N,3,H,W] torch tensor."""
     x = torch.from_numpy(tiles_bgr_nchw).float()
@@ -224,7 +336,8 @@ def run_4dev_inference(
 ):
     """Slice img into 4 tiles, run on the 1x4 mesh with 2CQ+trace, return per-tile head outputs."""
     h, w = img_bgr.shape[:2]
-    assert h == FRAME_SIZE and w == FRAME_SIZE, f"Demo expects {FRAME_SIZE}x{FRAME_SIZE} input (got {h}x{w})"
+    assert h == w, f"Demo expects a square input (got {h}x{w})"
+    assert h >= TILE_SIZE, f"Frame {h}x{w} smaller than tile size {TILE_SIZE}"
 
     tiles = build_overlap_grid(h, w, TILE_SIZE, TILE_SIZE)
     n_tiles = len(tiles)
@@ -315,11 +428,14 @@ def postprocess_and_merge(
     cls_scores,
     bbox_preds,
     centernesses,
+    frame_size: int = FRAME_SIZE,
     score_thr: float = ATSS_SCORE_THR,
     per_tile_nms_iou: float = ATSS_NMS_IOU_THR,
     merge_iou_thr: float = 0.5,
     merge_match: str = "ios",
     class_agnostic: bool = False,
+    seam_merge: bool = False,
+    seam_tol: int = 20,
 ):
     """Per-tile atss_postprocess (anchors cached internally), shift boxes to frame
     coordinates, then greedy NMM across tiles."""
@@ -362,8 +478,8 @@ def postprocess_and_merge(
     scores = torch.cat(all_scores, dim=0)
     labels = torch.cat(all_labels, dim=0)
 
-    boxes[:, 0::2].clamp_(0, FRAME_SIZE)
-    boxes[:, 1::2].clamp_(0, FRAME_SIZE)
+    boxes[:, 0::2].clamp_(0, frame_size)
+    boxes[:, 1::2].clamp_(0, frame_size)
 
     mb, ms, mc = cross_tile_greedy_nmm(
         boxes,
@@ -374,6 +490,23 @@ def postprocess_and_merge(
         class_agnostic=class_agnostic,
         max_det=ATSS_MAX_PER_IMG,
     )
+
+    if seam_merge:
+        seams_x, seams_y = compute_seams(tiles, frame_size, frame_size)
+        if seams_x or seams_y:
+            n_before = mb.shape[0]
+            mb, ms, mc = merge_seam_adjacent(
+                mb,
+                ms,
+                mc,
+                seams_x=seams_x,
+                seams_y=seams_y,
+                tol=seam_tol,
+            )
+            logger.info(
+                f"seam-merge: {n_before} -> {mb.shape[0]} dets (seams_x={seams_x}, seams_y={seams_y}, tol={seam_tol})"
+            )
+
     return {"bboxes": mb, "scores": ms, "labels": mc.long()}
 
 
@@ -386,6 +519,27 @@ def main():
     parser.add_argument("--merge-match", choices=["iou", "ios"], default="ios")
     parser.add_argument("--class-agnostic", action="store_true")
     parser.add_argument("--no-trace", action="store_true", help="Disable trace (2CQ only)")
+    parser.add_argument(
+        "--overlap",
+        type=int,
+        default=0,
+        help="Tile overlap in pixels (0 = exact 2x2 of 640x640). When >0 the input is "
+        "resized to (2*640 - overlap) before tiling so adjacent tiles overlap by `overlap` "
+        "px; detections are scaled back to 1280x1280 for output.",
+    )
+    parser.add_argument(
+        "--seam-merge",
+        action="store_true",
+        help="Run seam-adjacent merge pass after IoS-NMM — catches wide/tall objects "
+        "split across a tile seam that don't have enough IoS to merge normally. Ported "
+        "from sdawle/yolo_bh_demos/yolov8l_sahi_640_pipelined.py.",
+    )
+    parser.add_argument(
+        "--seam-tol",
+        type=int,
+        default=-1,
+        help="Seam-merge abutting tolerance in px. -1 (default) auto-picks max(overlap, 20).",
+    )
     _default_out = str(Path(__file__).resolve().parent.parent / "results" / "sahi_4dev")
     parser.add_argument("--output-dir", default=_default_out)
     args = parser.parse_args()
@@ -401,6 +555,18 @@ def main():
     if (h, w) != (FRAME_SIZE, FRAME_SIZE):
         logger.info(f"Resizing input {w}x{h} -> {FRAME_SIZE}x{FRAME_SIZE}")
         img_bgr = cv2.resize(img_bgr, (FRAME_SIZE, FRAME_SIZE), interpolation=cv2.INTER_LINEAR)
+
+    overlap = int(args.overlap)
+    if overlap < 0 or overlap >= TILE_SIZE:
+        raise ValueError(f"--overlap must be in [0, {TILE_SIZE}), got {overlap}")
+    infer_size = 2 * TILE_SIZE - overlap  # 1280 when overlap=0
+    if infer_size != FRAME_SIZE:
+        logger.info(
+            f"Overlap={overlap}px -> inference frame {infer_size}x{infer_size} (tile starts 0 and {TILE_SIZE - overlap})"
+        )
+        img_bgr_infer = cv2.resize(img_bgr, (infer_size, infer_size), interpolation=cv2.INTER_LINEAR)
+    else:
+        img_bgr_infer = img_bgr
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -418,7 +584,7 @@ def main():
     try:
         tiles, cls_scores, bbox_preds, centernesses, timings = run_4dev_inference(
             mesh_device,
-            img_bgr,
+            img_bgr_infer,
             checkpoint,
             use_trace=(not args.no_trace),
             num_command_queues=2,
@@ -428,13 +594,22 @@ def main():
             cls_scores,
             bbox_preds,
             centernesses,
+            frame_size=infer_size,
             score_thr=ATSS_SCORE_THR,
             merge_iou_thr=args.merge_iou,
             merge_match=args.merge_match,
             class_agnostic=args.class_agnostic,
+            seam_merge=args.seam_merge,
+            seam_tol=(max(overlap, 20) if args.seam_tol < 0 else args.seam_tol),
         )
     finally:
         ttnn.close_mesh_device(mesh_device)
+
+    if infer_size != FRAME_SIZE and results["bboxes"].numel() > 0:
+        scale = FRAME_SIZE / infer_size
+        results["bboxes"] = results["bboxes"] * scale
+        results["bboxes"][:, 0::2].clamp_(0, FRAME_SIZE)
+        results["bboxes"][:, 1::2].clamp_(0, FRAME_SIZE)
 
     n = int(results["bboxes"].shape[0])
     logger.info(f"Merged detections: {n}")
@@ -445,21 +620,25 @@ def main():
         b = results["bboxes"][i].tolist()
         logger.info(f"  {name:>14}  {sc:.3f}  [{b[0]:.0f},{b[1]:.0f},{b[2]:.0f},{b[3]:.0f}]")
 
+    title_suffix = ""
+    if overlap > 0:
+        title_suffix += f" overlap={overlap}px"
+    if args.seam_merge:
+        title_suffix += " seam-merge"
     vis = draw_detections(
         img_bgr,
         results,
-        title=f"ATSS-SAHI 4dev (infer {timings['infer_ms']:.0f}ms)",
+        title=f"atss_swin_l_dyhead slice 4 WH devices (infer {timings['infer_ms']:.0f}ms){title_suffix}",
         score_thr=args.score_thr,
     )
     # Draw tile seams in faint white to make slicing visible.
+    vis_scale = FRAME_SIZE / infer_size
     for ts in tiles:
-        cv2.rectangle(
-            vis,
-            (ts.col_start, ts.row_start),
-            (ts.col_start + TILE_SIZE - 1, ts.row_start + TILE_SIZE - 1),
-            (200, 200, 200),
-            1,
-        )
+        x0 = int(round(ts.col_start * vis_scale))
+        y0 = int(round(ts.row_start * vis_scale))
+        x1 = int(round((ts.col_start + TILE_SIZE) * vis_scale)) - 1
+        y1 = int(round((ts.row_start + TILE_SIZE) * vis_scale)) - 1
+        cv2.rectangle(vis, (x0, y0), (x1, y1), (200, 200, 200), 1)
     out_path = out_dir / "atss_sahi_4dev_detections.jpg"
     cv2.imwrite(str(out_path), vis)
     logger.info(f"Saved: {out_path}")
