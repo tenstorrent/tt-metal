@@ -5,7 +5,7 @@
 //
 // Lightweight data-movement kernel that zeroes a page range of an interleaved
 // DRAM output tensor, then signals the combine reader cores via semaphore.
-// Deployed on idle cores to speed up zero-init process by spreading out across more banks.
+// Deployed on untilizer cores to speed up zero-init process by spreading out across more banks.
 //
 // In TILE_LAYOUT, after zero-init completes this kernel also owns the per-row routing
 // decision.  It walks the same expert/batch iteration as reader_untilize and the compute
@@ -15,12 +15,12 @@
 // cb_metadata_batch_id, then walks the batch's metadata one row at a time.  Local rows
 // (dst_chip == this chip) are written straight to the output tensor in DRAM with no
 // sender involvement.  Non-local rows run a credit-based per-row handshake against the
-// sender's receive_buf: we hold a k_s-way slice of receive_buf (SLOTS_PER_IDLE deep),
+// sender's receive_buf: we hold a k_s-way slice of receive_buf (SLOTS_PER_UNTILIZER deep),
 // consume one credit, write the row to the next slot in our ring, barrier, then inc
 // data_ready so the sender can read and fabric-forward that row.  The sender ++
 // credits_sem on this core when it frees a slot.  After the expert/batch loop the
 // kernel writes a ROUTE_INFO_SENTINEL into the sender's metadata ring to signal
-// per-idle-core completion.
+// per-untilizer-core completion.
 //
 
 #include <cstdint>
@@ -128,27 +128,27 @@ void kernel_main() {
     // Runtime args appended after the sender_sem_noc_addrs loop above:
     //   counter_ready_semaphore_id   - sem the sender increments once after its counter multicast
     //   sender_noc_x / sender_noc_y  - NOC coords of the owning sender core
-    //   data_ready_semaphore_id      - sender-side sem dedicated to THIS idle core (one per
-    //                                  (sender, idle) pair); this kernel ++ once per non-local
+    //   data_ready_semaphore_id      - sender-side sem dedicated to THIS untilizer core (one per
+    //                                  (sender, untilizer) pair); this kernel ++ once per non-local
     //                                  row after the row has landed in receive_buf.  Sender
     //                                  atomically dec(-1) per row consumed.
-    //   credits_semaphore_id         - local sem (init SLOTS_PER_IDLE) the sender increments
+    //   credits_semaphore_id         - local sem (init SLOTS_PER_UNTILIZER) the sender increments
     //                                  each time it frees a row slot in our ring on its
     //                                  receive_buf.  This kernel maintains a local credit
     //                                  counter; when it hits 0 we wait for credits to come
     //                                  back, atomically suck the value, and dec(-N).
-    //   core_id                      - this idle's local index (0..k_s-1) inside the sender's
+    //   core_id                      - this untilizer's local index (0..k_s-1) inside the sender's
     //                                  group; used to pick our k_s-way slice of receive_buf.
-    //   num_idle_cores               - k_s, size of the owning sender's idle group (for round-robin)
+    //   num_untilizer_cores               - k_s, size of the owning sender's untilizer group (for round-robin)
     //   expert_start_idx / expert_end_idx - expert range owned by the sender (drives batch iteration)
-    constexpr uint32_t SLOTS_PER_IDLE = 16;
+    constexpr uint32_t SLOTS_PER_UNTILIZER = 16;
     uint32_t counter_ready_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t sender_noc_x = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t sender_noc_y = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t data_ready_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t credits_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t core_id = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t num_idle_cores = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t num_untilizer_cores = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t expert_start_idx = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t expert_end_idx = get_arg_val<uint32_t>(rt_args_idx++);
 
@@ -171,18 +171,19 @@ void kernel_main() {
     const volatile tt_l1_ptr uint32_t* trailer =
         reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(counter_cb_base + counter_data_total_size);
     uint32_t sender_receive_buf_l1_offset = trailer[0];
-    // Our k_s-way slice in the sender's receive_buf starts at core_id * SLOTS_PER_IDLE rows
+    // Our k_s-way slice in the sender's receive_buf starts at core_id * SLOTS_PER_UNTILIZER rows
     // in.  All non-local row writes for this batch (and every future batch routed through
-    // this (sender, idle) pair) cycle through slots 0..SLOTS_PER_IDLE-1 within that slice.
-    uint32_t our_slice_l1_offset = sender_receive_buf_l1_offset + core_id * SLOTS_PER_IDLE * aligned_output_page_size;
+    // this (sender, untilizer) pair) cycle through slots 0..SLOTS_PER_UNTILIZER-1 within that slice.
+    uint32_t our_slice_l1_offset =
+        sender_receive_buf_l1_offset + core_id * SLOTS_PER_UNTILIZER * aligned_output_page_size;
     uint64_t our_slice_noc_addr = get_noc_addr(sender_noc_x, sender_noc_y, our_slice_l1_offset);
 
     uint32_t sender_metadata_buf_l1_offset = trailer[1];
     uint32_t our_metadata_slice_l1_offset =
-        sender_metadata_buf_l1_offset + core_id * SLOTS_PER_IDLE * aligned_dispatched_metadata_page_size;
+        sender_metadata_buf_l1_offset + core_id * SLOTS_PER_UNTILIZER * aligned_dispatched_metadata_page_size;
     uint64_t our_metadata_slice_noc_addr = get_noc_addr(sender_noc_x, sender_noc_y, our_metadata_slice_l1_offset);
 
-    uint32_t local_credits = SLOTS_PER_IDLE;
+    uint32_t local_credits = SLOTS_PER_UNTILIZER;
     uint32_t write_slot = 0;
     constexpr uint32_t TRID_NON_LOCAL_WRITE = 1;
 
@@ -221,7 +222,7 @@ void kernel_main() {
 
         uint32_t actual_batches = (expert_tokens + read_batch_size - 1) / read_batch_size;
 
-        for (uint32_t batch_idx = core_id; batch_idx < actual_batches; batch_idx += num_idle_cores) {
+        for (uint32_t batch_idx = core_id; batch_idx < actual_batches; batch_idx += num_untilizer_cores) {
             uint32_t batch_token_start = batch_idx * read_batch_size;
             uint32_t batch_count = ((batch_token_start + read_batch_size) <= expert_tokens)
                                        ? read_batch_size
@@ -283,7 +284,7 @@ void kernel_main() {
 
                         noc_semaphore_inc<true>(sender_data_ready_noc_addr, 1);
 
-                        write_slot = (write_slot + 1) % SLOTS_PER_IDLE;
+                        write_slot = (write_slot + 1) % SLOTS_PER_UNTILIZER;
                         local_credits--;
                     }
                 }
@@ -299,10 +300,10 @@ void kernel_main() {
         start_page_tiled += ((expert_tokens + tile_height - 1) / tile_height) * tiles_per_batch;
     }
 
-    // All batches processed — send job-done sentinel to sender so it knows this idle
+    // All batches processed — send job-done sentinel to sender so it knows this untilizer
     // core has finished completely.  Uses one ring slot (credit consumed, data_ready++).
 
-    noc_semaphore_wait_min(credits_sem_ptr, SLOTS_PER_IDLE - local_credits);
+    noc_semaphore_wait_min(credits_sem_ptr, SLOTS_PER_UNTILIZER - local_credits);
     uint32_t n = *credits_sem_ptr;
     noc_semaphore_inc(self_credits_noc_addr, (uint32_t)(-(int32_t)n));
     noc_semaphore_set(counter_ready_sem_ptr, 0);

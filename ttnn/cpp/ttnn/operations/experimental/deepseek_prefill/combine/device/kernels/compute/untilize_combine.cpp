@@ -22,7 +22,7 @@
     DebugPrinter()
 #endif
 
-// Compile-time args (shared across idle cores):
+// Compile-time args (shared across untilizer cores):
 //   0: cb_untilize_id                  - CB for compute's untilized output (c_2)
 //   1: cb_in_id                        - CB for untilize input tile data (c_0)
 //   2: cb_experts_tok_counter_id       - CB holding multicasted per-expert token counts (c_1)
@@ -34,11 +34,11 @@
 //   8: full_ct_dim                     - hidden_size / tile_width (tiles per batch)
 //   9: block_ct_dim                    - tiles per pack call (largest divisor of full_ct_dim <= 8)
 //
-// Runtime args (per idle core):
+// Runtime args (per untilizer core):
 //   0: expert_start_idx                - first expert handled by the owning sender
 //   1: expert_end_idx                  - one past the last expert handled by the owning sender
-//   2: core_id                         - local index in the owning sender's idle group (0..k_s-1)
-//   3: num_idle_cores                  - k_s, size of the owning sender's idle group
+//   2: core_id                         - local index in the owning sender's untilizer group (0..k_s-1)
+//   3: num_untilizer_cores                  - k_s, size of the owning sender's untilizer group
 void kernel_main() {
     constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(0);
     constexpr uint32_t cb_in_id = get_compile_time_arg_val(1);
@@ -59,7 +59,7 @@ void kernel_main() {
     uint32_t expert_start_idx = get_arg_val<uint32_t>(rt_idx++);
     uint32_t expert_end_idx = get_arg_val<uint32_t>(rt_idx++);
     uint32_t core_id = get_arg_val<uint32_t>(rt_idx++);
-    uint32_t num_idle_cores = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t num_untilizer_cores = get_arg_val<uint32_t>(rt_idx++);
 
     compute_kernel_hw_startup(cb_in_id, cb_untilize_id);
     pack_untilize_init<block_ct_dim, full_ct_dim>(cb_in_id, cb_untilize_id);
@@ -98,9 +98,9 @@ void kernel_main() {
 
         uint32_t actual_batches = (expert_tokens + read_batch_size - 1) / read_batch_size;
 
-        // Round-robin within the owning sender's idle group:
+        // Round-robin within the owning sender's untilizer group:
         // this core handles batches {core_id, core_id + k_s, core_id + 2k_s, ...}.
-        for (uint32_t batch_idx = core_id; batch_idx < actual_batches; batch_idx += num_idle_cores) {
+        for (uint32_t batch_idx = core_id; batch_idx < actual_batches; batch_idx += num_untilizer_cores) {
             cb_reserve_back(cb_untilize_id, read_batch_size);
             for (uint32_t block = 0; block < num_blocks; block++) {
                 cb_wait_front(cb_in_id, block_ct_dim);
