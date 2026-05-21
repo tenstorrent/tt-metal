@@ -67,7 +67,6 @@ def create_cicd_json_for_data_analysis(
         workflow_attempt,
     )
     jobs = []
-    tt_smi_resets = []
 
     for raw_job in raw_jobs:
         github_job_id = int(raw_job["github_job_id"])
@@ -102,7 +101,7 @@ def create_cicd_json_for_data_analysis(
         raw_job.pop("tt_smi_reset", None)
 
         reset_data = github_job_id_to_smi_resets.get(github_job_id)
-
+        tt_smi_resets = []
         if reset_data:
             for tt_smi_reset_attempt in reset_data:
                 tt_smi_reset_attempt = dict(tt_smi_reset_attempt)
@@ -115,13 +114,13 @@ def create_cicd_json_for_data_analysis(
             tt_smi_version=github_job_id_to_smi_versions.get(github_job_id),
             tests=tests,
             steps=steps,
+            tt_smi_reset=tt_smi_resets,
         )
         jobs.append(job)
 
     pipeline = pydantic_models.Pipeline(
         **raw_pipeline,
         jobs=jobs,
-        tt_smi_resets=tt_smi_resets,
     )
 
     return pipeline

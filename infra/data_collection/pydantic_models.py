@@ -122,6 +122,7 @@ class Job(BaseModel):
     tt_smi_version: Optional[str] = Field(
         None, description="Version of the tt-smi tool in order to check consistency across CI fleets."
     )
+    tt_smi_reset: List[TtSmiReset] = []
 
     # Model validator to check the unique combination constraint
     @model_validator(mode="before")
@@ -193,7 +194,6 @@ class Pipeline(BaseModel):
     git_author: str = Field(description="Author of the Git commit.")
     orchestrator: Optional[str] = Field(None, description="CI/CD pipeline orchestration platform.")
     jobs: List[Job] = []
-    tt_smi_resets: List[TtSmiReset] = []
 
     # Model validator to check the unique combination constraint
     @model_validator(mode="before")
