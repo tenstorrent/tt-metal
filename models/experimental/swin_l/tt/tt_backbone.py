@@ -154,12 +154,23 @@ class TtSwinLBackbone:
         ttnn.deallocate(nhwc)
         output = ttnn.reshape(output, (N, out_h, out_w, self.embed_dim))
 
+        # Match the per-block LN compute config (HiFi2 + math_approx + packer_l1_acc)
+        # for the patch-embed and per-stage output layer norms so they don't fall back
+        # to the default fidelity heuristic.
+        ln_compute_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+
         # Post-embed layer norm
         output = ttnn.layer_norm(
             ttnn.to_layout(output, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG),
             weight=self.parameters["patch_embed"]["norm"]["weight"],
             bias=self.parameters["patch_embed"]["norm"]["bias"],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=ln_compute_config,
         )
 
         # Run 4 stages, collecting features only for stages in out_indices
@@ -176,6 +187,7 @@ class TtSwinLBackbone:
                     weight=self.parameters[f"norm{s}"]["weight"],
                     bias=self.parameters[f"norm{s}"]["bias"],
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    compute_kernel_config=ln_compute_config,
                 )
                 features.append(normed)
 
