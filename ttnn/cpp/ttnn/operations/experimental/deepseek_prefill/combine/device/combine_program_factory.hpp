@@ -16,21 +16,21 @@ struct CombineSharedVariables {
     std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;  // one per sender core
     tt::tt_metal::KernelHandle writer_kernel_id = 0;
     tt::tt_metal::KernelHandle zero_init_kernel_id = 0;
-    std::vector<tt::tt_metal::KernelHandle> reader_untilize_kernel_ids;  // one per idle core
+    std::vector<tt::tt_metal::KernelHandle> reader_untilize_kernel_ids;  // one per untilizer core
     std::vector<CoreCoord> cores;
     std::vector<CoreCoord> zero_init_cores;
-    std::vector<CoreCoord> idle_cores;
+    std::vector<CoreCoord> untilizer_cores;
     GlobalSemaphore init_semaphore;       // Initialized in create_at()
     GlobalSemaphore exit_semaphore;       // Separate sem for the exit handshake (avoids
                                           // init/exit race on combine_devices==2 pairs)
     uint32_t zero_init_semaphore_id = 0;  // Local semaphore ID for reader->writer sync
     uint32_t zero_init_barrier_semaphore_id = 0;     // Barrier: writer signals reader after global init
-    uint32_t counter_ready_semaphore_id = 0;         // Sender signals idle cores after token count multicast
+    uint32_t counter_ready_semaphore_id = 0;         // Sender signals untilizer cores after token count multicast
     std::vector<std::vector<uint32_t>>
-        data_ready_semaphore_ids;  // [sender][local_idle]: each idle core signals its own sender-side sem
+        data_ready_semaphore_ids;  // [sender][local_untilizer]: each untilizer core signals its own sender-side sem
     std::vector<std::vector<uint32_t>>
-        credits_semaphore_ids;  // [sender][local_idle]: sender increments idle's copy each time it
-                                // frees one row in the per-idle 16-slot ring on receive_buf
+        credits_semaphore_ids;  // [sender][local_untilizer]: sender increments untilizer's copy each time it
+                                // frees one row in the per-untilizer 16-slot ring on receive_buf
 };
 
 struct CombineProgramFactory {

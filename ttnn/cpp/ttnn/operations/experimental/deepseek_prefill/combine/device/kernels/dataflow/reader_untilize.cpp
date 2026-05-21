@@ -3,15 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //
-// Reader kernel for idle cores.
-// Each idle core is permanently bound to ONE sender core (its owning sender).
-// The owning sender multicasts the expert token counts + its receive_buf_addr to this idle
-// core's group, then each idle core untilizes the tiles for its assigned expert batches.
+// Reader kernel for untilizer cores.
+// Each untilizer core is permanently bound to ONE sender core (its owning sender).
+// The owning sender multicasts the expert token counts + its receive_buf_addr to this untilizer
+// core's group, then each untilizer core untilizes the tiles for its assigned expert batches.
 //
-// Expert range: each idle group handles experts [expert_start_idx, expert_end_idx) which maps
+// Expert range: each untilizer group handles experts [expert_start_idx, expert_end_idx) which maps
 // 1:1 to the owning sender's expert range.
 //
-// Batch splitting within the group: batches are distributed round-robin across the k_s idle
+// Batch splitting within the group: batches are distributed round-robin across the k_s untilizer
 // cores in the group.  Core i (local 0-based) processes batches i, i+k_s, i+2*k_s, …
 //
 // For each assigned batch:
@@ -50,8 +50,8 @@ void kernel_main() {
     //   9: tile_height                           - tile height in rows (e.g. 32)
     //  10: tile_width                            - tile width in columns (e.g. 32)
     //  11: max_dispatch_buffer_token_size        - total per-chip dispatch buffer capacity (overflow guard)
-    //  12: core_id                               - local index within the owning sender's idle group (0-based)
-    //  13: num_idle_cores                        - size of the owning sender's idle group (k_s)
+    //  12: core_id                               - local index within the owning sender's untilizer group (0-based)
+    //  13: num_untilizer_cores                        - size of the owning sender's untilizer group (k_s)
     //  14: aligned_output_page_size              - aligned page size of output tensor (bytes per untilized row)
     //  15: aligned_experts_tok_counter_page_size - aligned page size of expert_token_counts tensor
     //  16: cb_metadata_batch_id                  - CB this kernel pushes per-batch metadata pages into
@@ -74,7 +74,7 @@ void kernel_main() {
     constexpr uint32_t tile_width = get_compile_time_arg_val(10);
     constexpr uint32_t max_dispatch_buffer_token_size = get_compile_time_arg_val(11);
     constexpr uint32_t core_id = get_compile_time_arg_val(12);
-    constexpr uint32_t num_idle_cores = get_compile_time_arg_val(13);
+    constexpr uint32_t num_untilizer_cores = get_compile_time_arg_val(13);
     constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(14);
     constexpr uint32_t aligned_experts_tok_counter_page_size = get_compile_time_arg_val(15);
     constexpr uint32_t cb_metadata_batch_id = get_compile_time_arg_val(16);
@@ -87,7 +87,7 @@ void kernel_main() {
     constexpr uint32_t tiles_per_batch = hidden_size / tile_width;
 
     // ===== Runtime args =====
-    //   0: counter_ready_semaphore_id  - idle core waits for this before reading token counts
+    //   0: counter_ready_semaphore_id  - untilizer core waits for this before reading token counts
     //                                    (incremented by the owning sender after its multicast)
     //   1: dispatched_buffer_addr
     //   2: expert_start_idx
@@ -163,14 +163,14 @@ void kernel_main() {
 
         uint32_t actual_batches = (expert_tokens + read_batch_size - 1) / read_batch_size;
 
-        // Round-robin batch assignment across the idle cores in this sender's group.
-        // Each idle core starts at its own core_id and strides by num_idle_cores, so:
+        // Round-robin batch assignment across the untilizer cores in this sender's group.
+        // Each untilizer core starts at its own core_id and strides by num_untilizer_cores, so:
         //   core 0 processes batches 0, k, 2k, ...
         //   core 1 processes batches 1, k+1, 2k+1, ...
         //   core j processes batches j, j+k, j+2k, ...
-        // where k = num_idle_cores.  This spreads the work evenly and ensures the
-        // owning sender can predict which idle core handles each batch (batch_idx % k).
-        for (uint32_t batch_idx = core_id; batch_idx < actual_batches; batch_idx += num_idle_cores) {
+        // where k = num_untilizer_cores.  This spreads the work evenly and ensures the
+        // owning sender can predict which untilizer core handles each batch (batch_idx % k).
+        for (uint32_t batch_idx = core_id; batch_idx < actual_batches; batch_idx += num_untilizer_cores) {
             uint32_t batch_tile_start = start_page_tiled + batch_idx * tiles_per_batch;
             uint32_t batch_token_start = batch_idx * read_batch_size;
             uint32_t batch_count = ((batch_token_start + read_batch_size) <= expert_tokens)

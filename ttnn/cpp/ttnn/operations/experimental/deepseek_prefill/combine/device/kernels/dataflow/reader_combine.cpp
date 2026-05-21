@@ -100,7 +100,7 @@ void kernel_main() {
 #if INIT_ZEROS
     // Zero-init args follow immediately after the TensorAccessorArgs block
     constexpr uint32_t zi_cb_id = get_compile_time_arg_val(expert_region_offsets_args.next_compile_time_args_offset());
-    constexpr uint32_t num_total_idle_cores =
+    constexpr uint32_t num_total_untilizer_cores =
         get_compile_time_arg_val(expert_region_offsets_args.next_compile_time_args_offset() + 1);
     constexpr uint32_t tile_layout_args_base = expert_region_offsets_args.next_compile_time_args_offset() + 2;
 #else
@@ -108,7 +108,7 @@ void kernel_main() {
 #endif
 
 #if IS_TILE_LAYOUT
-    constexpr uint32_t num_idle_cores_group = get_compile_time_arg_val(tile_layout_args_base);
+    constexpr uint32_t num_untilizer_cores_group = get_compile_time_arg_val(tile_layout_args_base);
     constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(tile_layout_args_base + 1);
     constexpr uint32_t cb_metadata_buf_id = get_compile_time_arg_val(tile_layout_args_base + 2);
 #endif
@@ -134,7 +134,7 @@ void kernel_main() {
     const auto output_addr_gen = TensorAccessor(output_args, output_addr);
 
 #if INIT_ZEROS
-    // Hybrid row zero-init: this core zeroes its assigned page range, then waits for idle row cores
+    // Hybrid row zero-init: this core zeroes its assigned page range, then waits for untilizer row cores
     {
         uint32_t page_start = get_arg_val<uint32_t>(rt_args++);
         uint32_t page_end = get_arg_val<uint32_t>(rt_args++);
@@ -150,7 +150,7 @@ void kernel_main() {
 
         volatile tt_l1_ptr uint32_t* zi_done_sem_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zi_done_sem_address);
-        noc_semaphore_wait(zi_done_sem_ptr, num_total_idle_cores);
+        noc_semaphore_wait(zi_done_sem_ptr, num_total_untilizer_cores);
         noc_semaphore_set(zi_done_sem_ptr, 0);
     }
 #endif
@@ -161,37 +161,37 @@ void kernel_main() {
     uint32_t mcast_start_y = get_arg_val<uint32_t>(rt_args++);
     uint32_t mcast_end_x = get_arg_val<uint32_t>(rt_args++);
     uint32_t mcast_end_y = get_arg_val<uint32_t>(rt_args++);
-    uint32_t idle_counter_l1_offset = get_write_ptr(cb_dispatched_metadata_id);
+    uint32_t untilizer_counter_l1_offset = get_write_ptr(cb_dispatched_metadata_id);
     uint32_t counter_ready_sem_l1_offset = get_semaphore(counter_ready_semaphore_id);
     uint64_t mcast_counter_noc_addr =
-        get_noc_multicast_addr(mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, idle_counter_l1_offset);
+        get_noc_multicast_addr(mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, untilizer_counter_l1_offset);
     uint64_t mcast_counter_sem_noc_addr =
         get_noc_multicast_addr(mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, counter_ready_sem_l1_offset);
 
-    // Per-idle semaphores (each scoped to just the (this sender, idle) pair):
-    //   data_ready: idle ++ after each non-local row it writes into receive_buf.  We do
+    // Per-untilizer semaphores (each scoped to just the (this sender, untilizer) pair):
+    //   data_ready: untilizer ++ after each non-local row it writes into receive_buf.  We do
     //               wait(>=1) + atomic dec(-1) to consume exactly one per row.
-    //   credits:    init SLOTS_PER_IDLE on idle's L1; we ++ idle's copy each time we free
+    //   credits:    init SLOTS_PER_UNTILIZER on untilizer's L1; we ++ untilizer's copy each time we free
     //               a row slot in its 16-deep ring on our receive_buf.
-    // Both the wait-side L1 ptr (on this sender) and the inc-side NOC address (on idle)
+    // Both the wait-side L1 ptr (on this sender) and the inc-side NOC address (on untilizer)
     // refer to the same logical sem; pair-scoped allocation guarantees the L1 offset is
     // identical on both cores.
-    constexpr uint32_t SLOTS_PER_IDLE = 16;
-    volatile tt_l1_ptr uint32_t* data_ready_sem_ptrs[num_idle_cores_group];
-    uint64_t self_data_ready_noc_addrs[num_idle_cores_group];
-    uint64_t idle_credits_noc_addrs[num_idle_cores_group];
-    uint32_t idle_noc_x[num_idle_cores_group];
-    uint32_t idle_noc_y[num_idle_cores_group];
-    for (uint32_t c = 0; c < num_idle_cores_group; c++) {
+    constexpr uint32_t SLOTS_PER_UNTILIZER = 16;
+    volatile tt_l1_ptr uint32_t* data_ready_sem_ptrs[num_untilizer_cores_group];
+    uint64_t self_data_ready_noc_addrs[num_untilizer_cores_group];
+    uint64_t untilizer_credits_noc_addrs[num_untilizer_cores_group];
+    uint32_t untilizer_noc_x[num_untilizer_cores_group];
+    uint32_t untilizer_noc_y[num_untilizer_cores_group];
+    for (uint32_t c = 0; c < num_untilizer_cores_group; c++) {
         uint32_t data_ready_semaphore_id = get_arg_val<uint32_t>(rt_args++);
         uint32_t credits_semaphore_id = get_arg_val<uint32_t>(rt_args++);
-        idle_noc_x[c] = get_arg_val<uint32_t>(rt_args++);
-        idle_noc_y[c] = get_arg_val<uint32_t>(rt_args++);
+        untilizer_noc_x[c] = get_arg_val<uint32_t>(rt_args++);
+        untilizer_noc_y[c] = get_arg_val<uint32_t>(rt_args++);
         uint32_t data_ready_l1 = get_semaphore(data_ready_semaphore_id);
         uint32_t credits_l1 = get_semaphore(credits_semaphore_id);
         data_ready_sem_ptrs[c] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(data_ready_l1);
         self_data_ready_noc_addrs[c] = get_noc_addr(my_x[noc_index], my_y[noc_index], data_ready_l1);
-        idle_credits_noc_addrs[c] = get_noc_addr(idle_noc_x[c], idle_noc_y[c], credits_l1);
+        untilizer_credits_noc_addrs[c] = get_noc_addr(untilizer_noc_x[c], untilizer_noc_y[c], credits_l1);
     }
 #endif
 
@@ -232,14 +232,14 @@ void kernel_main() {
     constexpr uint32_t dispatch_group_idx = mesh_col % num_dispatch_groups;
     constexpr uint32_t experts_per_dispatch_group = experts_per_chip * num_chips;
     constexpr uint32_t offset = dispatch_group_idx * experts_per_dispatch_group + mesh_row * experts_per_chip;
-    // Multicast expert token counts + receive_buf_addr to all idle cores
+    // Multicast expert token counts + receive_buf_addr to all untilizer cores
 #if IS_TILE_LAYOUT
-    // Each sender multicasts token counts + its own receive_buf_addr to its dedicated idle
-    // group. The mcast destination covers only this sender's k_s idle cores (per-sender
+    // Each sender multicasts token counts + its own receive_buf_addr to its dedicated untilizer
+    // group. The mcast destination covers only this sender's k_s untilizer cores (per-sender
     // bounding box), so all senders can multicast in parallel.
     // Trailer layout (one l1_alignment region after counter_total_size bytes):
-    //   [0]: receive_buf_addr  — sender's c_18 L1 offset (where idle NOC-writes untilized data)
-    //   [1]: metadata_buf_addr — sender's c_19 L1 offset (where idle NOC-writes routing metadata)
+    //   [0]: receive_buf_addr  — sender's c_18 L1 offset (where untilizer NOC-writes untilized data)
+    //   [1]: metadata_buf_addr — sender's c_19 L1 offset (where untilizer NOC-writes routing metadata)
     {
         // DeviceZoneScopedN("combine-sender-multicast-sending");
         constexpr uint32_t counter_total_size = experts_tok_counter_pages * aligned_experts_tok_counter_page_size;
@@ -255,11 +255,11 @@ void kernel_main() {
             uint32_t chunk = ((mcast_total_size - off) > (uint32_t)NOC_MAX_BURST_SIZE) ? (uint32_t)NOC_MAX_BURST_SIZE
                                                                                        : (mcast_total_size - off);
             noc_async_write_multicast(
-                counter_base_addr + off, mcast_counter_noc_addr + off, chunk, num_idle_cores_group);
+                counter_base_addr + off, mcast_counter_noc_addr + off, chunk, num_untilizer_cores_group);
             off += chunk;
         }
         noc_async_write_barrier();
-        noc_semaphore_inc_multicast(mcast_counter_sem_noc_addr, 1, num_idle_cores_group);
+        noc_semaphore_inc_multicast(mcast_counter_sem_noc_addr, 1, num_untilizer_cores_group);
     }
 #else
     volatile tt_l1_ptr uint32_t* experts_tok_counter_l1 =
@@ -275,12 +275,12 @@ void kernel_main() {
     uint32_t untilize_base = get_write_ptr(cb_untilize_id);
     uint32_t metadata_buf_base = get_write_ptr(cb_metadata_buf_id);
     // Both receive_buf (c_18) and metadata_ring (c_19) are partitioned k_s ways:
-    // idle c owns a SLOTS_PER_IDLE-deep ring starting at
-    //   untilize_base    + c * SLOTS_PER_IDLE * aligned_output_page_size
-    //   metadata_buf_base + c * SLOTS_PER_IDLE * aligned_dispatched_metadata_page_size
-    // read_slots[c] tracks the next slot index (mod SLOTS_PER_IDLE) to pull from for idle c.
-    uint32_t read_slots[num_idle_cores_group];
-    for (uint32_t c = 0; c < num_idle_cores_group; c++) {
+    // untilizer c owns a SLOTS_PER_UNTILIZER-deep ring starting at
+    //   untilize_base    + c * SLOTS_PER_UNTILIZER * aligned_output_page_size
+    //   metadata_buf_base + c * SLOTS_PER_UNTILIZER * aligned_dispatched_metadata_page_size
+    // read_slots[c] tracks the next slot index (mod SLOTS_PER_UNTILIZER) to pull from for untilizer c.
+    uint32_t read_slots[num_untilizer_cores_group];
+    for (uint32_t c = 0; c < num_untilizer_cores_group; c++) {
         read_slots[c] = 0;
     }
 #else
@@ -291,29 +291,30 @@ void kernel_main() {
 #endif
 
 #if IS_TILE_LAYOUT
-    // Round-robin polling loop — sender polls all idle core CBs without blocking on any
-    // single one.  Each idle core writes routing metadata + row data for every non-local row,
+    // Round-robin polling loop — sender polls all untilizer core CBs without blocking on any
+    // single one.  Each untilizer core writes routing metadata + row data for every non-local row,
     // then sends ROUTE_INFO_SENTINEL when all its batches are complete.  Sender exits when
-    // every idle core has signalled done, eliminating head-of-line blocking between cores.
+    // every untilizer core has signalled done, eliminating head-of-line blocking between cores.
     {
-        static_assert((SLOTS_PER_IDLE & (SLOTS_PER_IDLE - 1)) == 0, "SLOTS_PER_IDLE must be a power of 2");
-        constexpr uint32_t SLOTS_PER_IDLE_MASK = SLOTS_PER_IDLE - 1;
+        static_assert(
+            (SLOTS_PER_UNTILIZER & (SLOTS_PER_UNTILIZER - 1)) == 0, "SLOTS_PER_UNTILIZER must be a power of 2");
+        constexpr uint32_t SLOTS_PER_UNTILIZER_MASK = SLOTS_PER_UNTILIZER - 1;
 
-        uint32_t idle_done_count = 0;
-        bool idle_finished[num_idle_cores_group];
-        // consumed[c] tracks how many data_ready increments we've processed for idle core c.
-        // The idle core only ever INCREMENTS data_ready_sem; the sender never decrements it.
+        uint32_t untilizer_done_count = 0;
+        bool untilizer_finished[num_untilizer_cores_group];
+        // consumed[c] tracks how many data_ready increments we've processed for untilizer core c.
+        // The untilizer core only ever INCREMENTS data_ready_sem; the sender never decrements it.
         // Replaces the per-row noc_semaphore_inc(-1) + noc_async_atomic_barrier round-trip
         // with a local register-resident counter compare.
-        uint32_t consumed[num_idle_cores_group];
-        uint32_t ring_meta_addr[num_idle_cores_group][SLOTS_PER_IDLE];
-        uint64_t buffer_scratch_noc_addr_table[num_idle_cores_group][SLOTS_PER_IDLE];
-        for (uint32_t c = 0; c < num_idle_cores_group; c++) {
-            idle_finished[c] = false;
+        uint32_t consumed[num_untilizer_cores_group];
+        uint32_t ring_meta_addr[num_untilizer_cores_group][SLOTS_PER_UNTILIZER];
+        uint64_t buffer_scratch_noc_addr_table[num_untilizer_cores_group][SLOTS_PER_UNTILIZER];
+        for (uint32_t c = 0; c < num_untilizer_cores_group; c++) {
+            untilizer_finished[c] = false;
             consumed[c] = 0;
-            uint32_t meta_addr = metadata_buf_base + c * SLOTS_PER_IDLE * aligned_dispatched_metadata_page_size;
-            uint32_t out_addr = untilize_base + c * SLOTS_PER_IDLE * aligned_output_page_size;
-            for (uint32_t s = 0; s < SLOTS_PER_IDLE; s++) {
+            uint32_t meta_addr = metadata_buf_base + c * SLOTS_PER_UNTILIZER * aligned_dispatched_metadata_page_size;
+            uint32_t out_addr = untilize_base + c * SLOTS_PER_UNTILIZER * aligned_output_page_size;
+            for (uint32_t s = 0; s < SLOTS_PER_UNTILIZER; s++) {
                 ring_meta_addr[c][s] = meta_addr;
                 buffer_scratch_noc_addr_table[c][s] = get_noc_addr(out_addr);
                 meta_addr += aligned_dispatched_metadata_page_size;
@@ -321,14 +322,14 @@ void kernel_main() {
             }
         }
 
-        while (idle_done_count < num_idle_cores_group) {
-            for (uint32_t c = 0; c < num_idle_cores_group; c++) {
-                if (idle_finished[c]) {
+        while (untilizer_done_count < num_untilizer_cores_group) {
+            for (uint32_t c = 0; c < num_untilizer_cores_group; c++) {
+                if (untilizer_finished[c]) {
                     continue;
                 }
 
                 // Non-blocking check: data_ready lives in sender L1.  Invalidate L1 cache so the
-                // load picks up any NoC-written increments from the idle core (the prior atomic
+                // load picks up any NoC-written increments from the untilizer core (the prior atomic
                 // barrier used to do this for us; now we do it explicitly).
                 invalidate_l1_cache();
                 if (*data_ready_sem_ptrs[c] == consumed[c]) {
@@ -343,7 +344,7 @@ void kernel_main() {
                 uint32_t meta1 = ring_meta[1];
                 uint32_t meta2 = ring_meta[2];
                 uint64_t buffer_scratch_noc_addr = buffer_scratch_noc_addr_table[c][slot];
-                read_slots[c] = (slot + 1) & SLOTS_PER_IDLE_MASK;
+                read_slots[c] = (slot + 1) & SLOTS_PER_UNTILIZER_MASK;
 
                 if (meta0 == ROUTE_INFO_SENTINEL) {
                     // Reset the sem so a subsequent kernel invocation starts at 0 even if the
@@ -351,8 +352,8 @@ void kernel_main() {
                     // consumed[c] being a local that resets at kernel entry.
                     noc_semaphore_set(data_ready_sem_ptrs[c], 0);
                     noc_async_atomic_barrier();
-                    idle_finished[c] = true;
-                    idle_done_count++;
+                    untilizer_finished[c] = true;
+                    untilizer_done_count++;
                     continue;
                 }
 
@@ -378,7 +379,7 @@ void kernel_main() {
                     }
                     cb_push_back(cb_route_info_id, 1);
                 }
-                noc_semaphore_inc<true>(idle_credits_noc_addrs[c], 1);
+                noc_semaphore_inc<true>(untilizer_credits_noc_addrs[c], 1);
             }
         }
     }
