@@ -128,63 +128,47 @@ struct dp_typed_array_t {
 #endif
 
 #if defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF) && defined(USE_DEVICE_PRINT)
-// Each DEVICE_PRINT call site declares a local Tag struct inside its own scope and hands
-// its type to register_string_info. As two struct definitions in distinct scopes are
-// distinct types, each call site gets its own instantiation.
-// The Tag carries fmt/file/line as constexpr static members, and the argument types
-// are passed as additional template parameters with decltype(args)..., where args is the
-// lambda's parameter pack. We strip the type qualifiers.
-#define DEVICE_PRINT_GET_STRING_INFO_ADDRESS(variable_name, format)                     \
-    std::uintptr_t variable_name = 0;                                                   \
-    {                                                                                   \
-        struct _DevicePrintStringInfoTag {                                              \
-            static constexpr const auto& fmt() { return format; }                       \
-            static constexpr auto file() {                                              \
-                device_print_detail::helpers::static_string<sizeof(__FILE__)> file_str; \
-                for (std::size_t i = 0; i < sizeof(__FILE__); ++i) {                    \
-                    file_str.push_back(__FILE__[i]);                                    \
-                }                                                                       \
-                return file_str.to_array();                                             \
-            }                                                                           \
-            static constexpr std::size_t line() { return __LINE__; }                    \
-        };                                                                              \
-        variable_name = device_print_detail::register_string_info<                      \
-            _DevicePrintStringInfoTag,                                                  \
-            std::remove_cv_t<std::remove_reference_t<decltype(args)>>...>();            \
-    }
-
-#define DEVICE_PRINT(format, ...)                                                                                  \
+#define DEVICE_PRINT(input_format, ...)                                                                            \
     {                                                                                                              \
         auto device_print_info_address = device_print_detail::invoke_by_value(                                     \
             [](auto&&... args) __attribute__((always_inline)) {                                                    \
                 /* Validate format string syntax */                                                                \
                 static_assert(                                                                                     \
-                    device_print_detail::checks::is_valid_format_string(format),                                   \
+                    device_print_detail::checks::is_valid_format_string(input_format),                             \
                     "Invalid format string: unescaped '{' must be followed by '{', '}', or a digit");              \
                 /* Validate placeholder format */                                                                  \
                 static_assert(                                                                                     \
-                    !device_print_detail::checks::has_mixed_placeholders(format),                                  \
+                    !device_print_detail::checks::has_mixed_placeholders(input_format),                            \
                     "Cannot mix indexed ({0}) and non-indexed ({}) placeholders in the same format string");       \
                 /* For indexed placeholders, validate no index exceeds argument count */                           \
                 static_assert(                                                                                     \
-                    !device_print_detail::checks::has_indexed_placeholders(format) ||                              \
-                        device_print_detail::checks::get_max_index(format) <                                       \
+                    !device_print_detail::checks::has_indexed_placeholders(input_format) ||                        \
+                        device_print_detail::checks::get_max_index(input_format) <                                 \
                             device_print_detail::helpers::count_arguments(args...),                                \
                     "Placeholder index exceeds number of arguments");                                              \
                 /* For indexed placeholders, validate all arguments are referenced */                              \
                 static_assert(                                                                                     \
-                    !device_print_detail::checks::has_indexed_placeholders(format) ||                              \
-                        device_print_detail::checks::all_arguments_referenced(format, args...),                    \
+                    !device_print_detail::checks::has_indexed_placeholders(input_format) ||                        \
+                        device_print_detail::checks::all_arguments_referenced(input_format, args...),              \
                     "All arguments must be referenced when using indexed placeholders");                           \
                 /* For non-indexed placeholders, count must match argument count */                                \
                 static_assert(                                                                                     \
-                    device_print_detail::checks::has_indexed_placeholders(format) ||                               \
-                        device_print_detail::checks::count_placeholders(format) ==                                 \
+                    device_print_detail::checks::has_indexed_placeholders(input_format) ||                         \
+                        device_print_detail::checks::count_placeholders(input_format) ==                           \
                             device_print_detail::helpers::count_arguments(args...),                                \
                     "Number of {} placeholders must match number of arguments");                                   \
-                /* Store updated format string in a special section for device_print. */                           \
-                DEVICE_PRINT_GET_STRING_INFO_ADDRESS(device_print_info_address, format);                           \
-                return device_print_info_address;                                                                  \
+                /* A local Tag struct carries format/file/line as static constexprs. Two struct                    \
+                 * definitions in distinct scopes are distinct types, so each DEVICE_PRINT call                    \
+                 * site gets its own register_string_info instantiation. Argument types are                        \
+                 * passed via decltype(args)... with cv/ref stripped. */                                           \
+                struct _DevicePrintStringInfoTag {                                                                 \
+                    static constexpr const auto& format() { return input_format; }                                 \
+                    static constexpr const auto& file() { return __FILE__; }                                       \
+                    static constexpr std::size_t line() { return __LINE__; }                                       \
+                };                                                                                                 \
+                return device_print_detail::register_string_info<                                                  \
+                    _DevicePrintStringInfoTag,                                                                     \
+                    std::remove_cv_t<std::remove_reference_t<decltype(args)>>...>();                               \
             },                                                                                                     \
             ##__VA_ARGS__);                                                                                        \
         auto header = device_print_detail::invoke_by_value(                                                        \
@@ -239,6 +223,16 @@ __attribute__((always_inline)) inline auto invoke_by_value(F&& f, Args... args) 
     return f(static_cast<Args&&>(args)...);
 }
 
+// Helper to copy a string literal into a std::array.
+template <std::size_t N>
+constexpr std::array<char, N> literal_to_array(const char (&s)[N]) {
+    std::array<char, N> a{};
+    for (std::size_t i = 0; i < N; ++i) {
+        a[i] = s[i];
+    }
+    return a;
+}
+
 // Helper function to solve linkage problem. Marked `static` so the template — and therefore
 // every instantiation and every static local inside it — has internal linkage. Without
 // internal linkage, statics inside a DEVICE_PRINT expanded in a vague-linkage caller (inline
@@ -251,8 +245,9 @@ __attribute__((always_inline)) inline auto invoke_by_value(F&& f, Args... args) 
 template <typename Tag, typename... ArgsT>
 static std::uintptr_t register_string_info() {
     static constexpr auto kFormat =
-        device_print_detail::formatting::update_format_string<sizeof(Tag::fmt()), ArgsT...>(Tag::fmt()).to_array();
-    static constexpr auto kFile = Tag::file();
+        device_print_detail::formatting::update_format_string<sizeof(Tag::format()), ArgsT...>(Tag::format())
+            .to_array();
+    static constexpr auto kFile = literal_to_array(Tag::file()); // constexpr init has to be in one statement
     static const auto allocated_string __attribute__((section(DEVICE_PRINT_STRINGS_SECTION_NAME), used)) = kFormat;
     static const auto allocated_file_string __attribute__((section(DEVICE_PRINT_STRINGS_SECTION_NAME), used)) = kFile;
     static structures::DevicePrintStringInfo allocated_string_info
