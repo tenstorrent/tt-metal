@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
 // Block-by-block reader for sharded inputs.
 //
@@ -12,10 +13,10 @@
 //   - L1 sharded input
 //   - DRAM sharded input
 //
-// Source addressing is page-based via TensorAccessor:
-//   - Runtime arg `start_page` is the first page for this core.
-//   - Each loop iteration reads one block (`tiles_per_block` pages).
-//   - TensorAccessor resolves the correct NOC address for each page based on compile-time buffer properties.
+// Source addressing is shard-based via TensorAccessor:
+//   - Runtime arg `start_shard_id` selects the shard for this core.
+//   - Each loop iteration reads one block (`tiles_per_block` pages) from that shard.
+//   - TensorAccessor resolves the correct NOC address based on compile-time buffer properties.
 //
 // The kernel still streams one block at a time into a double-buffered CB, so the CB only needs up to
 // two blocks rather than an entire shard.
@@ -39,8 +40,8 @@
 //   +------------------+
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t num_blocks = get_arg_val<uint32_t>(1);
-    const uint32_t start_page = get_arg_val<uint32_t>(2);
+    const uint32_t start_shard_id = get_arg_val<uint32_t>(1);
+    const uint32_t num_blocks = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
     constexpr uint32_t tiles_per_block = get_compile_time_arg_val(1);
@@ -50,12 +51,14 @@ void kernel_main() {
     const auto accessor_src = TensorAccessor(src_args, src_addr);
 
     CircularBuffer cb_in(cb_id_in0);
+    auto shard_pages = accessor_src.shard_pages(start_shard_id);
+    auto page_iter = shard_pages.begin();
     for (uint32_t b = 0; b < num_blocks; ++b) {
-        const uint32_t page_id = start_page + b * tiles_per_block;
         cb_in.reserve_back(tiles_per_block);
         uint32_t cb_write_addr = cb_in.get_write_ptr();
-        const uint64_t src_noc_addr = accessor_src.get_noc_addr(page_id);
+        const uint64_t src_noc_addr = page_iter->noc_addr();
         noc_async_read(src_noc_addr, cb_write_addr, block_size_bytes);
+        page_iter += tiles_per_block;
         noc_async_read_barrier();
         cb_in.push_back(tiles_per_block);
     }

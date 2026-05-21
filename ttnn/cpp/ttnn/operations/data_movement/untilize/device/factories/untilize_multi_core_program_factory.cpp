@@ -308,13 +308,10 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
         uint32_t num_tiles_to_read = num_tiles_per_input_block * num_input_blocks_to_process;
         std::vector<uint32_t> reader_run_time_args;
         if (use_block_reader) {
-            uint32_t start_page =
-                height_wise_input_block_start_index * num_tiles_per_input_block +
-                width_wise_input_block_index * (num_input_blocks_per_full_core * num_tiles_per_input_block);
             reader_run_time_args = {
                 src0_buffer->address(),
+                i,
                 num_input_blocks_to_process,
-                start_page,
             };
         } else if (input_is_sharded) {
             reader_run_time_args = {num_tiles_to_read};
