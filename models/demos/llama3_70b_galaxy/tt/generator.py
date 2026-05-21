@@ -1079,7 +1079,6 @@ class Generator(WarmupForwardMixin):
             self.prev_page_table = (
                 page_table.clone()
             )  # Make sure we reference a fresh page table, in case it has changed
-            reset_inputs = True  # First decode ever also needs to load inputs
         if torch.any(self.prev_page_table != page_table).item():
             reset_inputs = True  # doesn't this do what reset_batch does?
             self.prev_page_table = (
@@ -1100,6 +1099,7 @@ class Generator(WarmupForwardMixin):
             "is_page_table_sharded": is_page_table_sharded,
         }
         self.model.sampling.seed_manager.get_new_values()
+        #TODO this will not load if we changed batch contents but randomly the page table matches, this is a bug
         if reset_inputs and sampling_params is not None:
             # If we have new inputs, we need to set up the sampling module again
             sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
