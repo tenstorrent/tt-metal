@@ -653,6 +653,131 @@ def attn_linear(
             return mlp_linear(a, b, device=device, cfg=cfg)
 
 
+# ---------------------------------------------------------------------------
+# w_kv_a decode matmul tuning — M=32, K=2048, N=1344
+# Default 64-core path gives per_core_N=1 → out_subblock_h*w==1 (SLOW).
+# 21 cores → per_core_N=2 → out_subblock_w=2, matching the down/wo pattern.
+#
+# Nt=42 tiles (N=1344); 42 / per_core_N=2 = 21 cores (fits 7×3 sub-grid).
+# WIDTH_SHARDED L1 output keeps each core's [32×64] result in its own bank;
+# a single to_memory_config gather then materializes to the downstream format,
+# replacing 21 cross-NOC DRAM writes with 21 core-local L1 stores.
+#
+# Edit these constants directly to retune without touching function bodies.
+# ---------------------------------------------------------------------------
+_KVA_NUM_CORES = 21  # N=1344 → 42 N-tiles / per_core_N=2 = 21 cores
+_KVA_PER_CORE_N = 2  # N-tiles per core; must divide n_tiles (42 % 2 == 0)
+_KVA_PER_CORE_M = 1  # M=32 → 1 M-tile (decode batch fits in one tile row)
+_KVA_IN0_BLOCK_W = 4  # K=2048 → 64 k-tiles; 64 % 4 == 0 ✓
+_KVA_OUT_SUBBLOCK_H = 1
+_KVA_OUT_SUBBLOCK_W = 2  # avoids out_subblock_h * out_subblock_w == 1 penalty
+_KVA_MCAST_IN0 = True  # broadcast activation to all cores (weight-stationary)
+
+
+def attn_kva_linear(
+    a: ttnn.Tensor,
+    b: ttnn.Tensor,
+    *,
+    device: Any,
+    cfg: Glm4RuntimeConfig,
+    force_no_tp: bool = False,
+) -> ttnn.Tensor:
+    """w_kv_a / w_q_kv_a decode linear: M=32, K=2048, N=1344.
+
+    21-core 1D multicast (7×3 grid), per_core_N=2, out_subblock_w=2,
+    WIDTH_SHARDED L1 output.  Avoids the per_core_N=1 / out_subblock_h*w==1
+    SLOW penalty from the default 64-core heuristic.
+
+    Output is gathered to the downstream interleaved format via a single
+    to_memory_config call so that downstream ttnn.slice remains unchanged.
+
+    DRAM-sharded, TP, and prefill (M > TILE_SIZE) routes fall back to their
+    existing helpers.  If _KVA_NUM_CORES does not fit the physical grid the
+    function also falls back gracefully.
+    """
+    if cfg.dram_sharded_attn:
+        if cfg.tp_enabled and not force_no_tp:
+            a_tp = ttnn.mesh_partition(a, dim=3, cluster_axis=cfg.tp_axis)
+            out = dram_sharded_linear(a_tp, b, device=device, cfg=cfg)
+            ttnn.deallocate(a_tp, force=False)
+            out_reduced = ttnn.all_reduce(
+                out,
+                num_links=cfg.ccl_num_links,
+                topology=cfg.ccl_topology,
+                cluster_axis=cfg.tp_axis,
+                memory_config=cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(out, force=False)
+            return out_reduced
+        return dram_sharded_linear(a, b, device=device, cfg=cfg)
+
+    if cfg.tp_enabled and not force_no_tp:
+        return tp_row_parallel_linear(a, b, device=device, cfg=cfg)
+
+    # Decode heuristic: only optimize for M fitting in a single tile row.
+    m_total = 1
+    for i in range(len(a.shape) - 1):
+        m_total *= int(a.shape[i])
+    if m_total > ttnn.TILE_SIZE:
+        return mlp_linear(a, b, device=device, cfg=cfg)
+
+    # Fit _KVA_NUM_CORES into the physical grid.
+    grid = device.compute_with_storage_grid_size()
+    max_x, max_y = int(grid.x), int(grid.y)
+    core_x, core_y = max_x, max_y
+    found = False
+    for gx in range(min(max_x, _KVA_NUM_CORES), 0, -1):
+        if _KVA_NUM_CORES % gx != 0:
+            continue
+        gy = _KVA_NUM_CORES // gx
+        if gy <= max_y:
+            core_x, core_y = gx, gy
+            found = True
+            break
+    if not found:
+        return mlp_linear(a, b, device=device, cfg=cfg)
+
+    prog_cfg = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(core_x, core_y),
+        in0_block_w=_KVA_IN0_BLOCK_W,
+        out_subblock_h=_KVA_OUT_SUBBLOCK_H,
+        out_subblock_w=_KVA_OUT_SUBBLOCK_W,
+        per_core_M=_KVA_PER_CORE_M,
+        per_core_N=_KVA_PER_CORE_N,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=_KVA_MCAST_IN0,
+    )
+
+    # WIDTH_SHARDED output: each of _KVA_NUM_CORES cores stores its
+    # [per_core_M*TILE × per_core_N*TILE] = [32 × 64] result in its own
+    # L1 bank (core-local write, no NOC hop during the matmul kernel).
+    out_shard_h = _KVA_PER_CORE_M * ttnn.TILE_SIZE
+    out_shard_w = _KVA_PER_CORE_N * ttnn.TILE_SIZE
+    out_mc = ttnn.create_sharded_memory_config(
+        shape=(out_shard_h, out_shard_w),
+        core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_x - 1, core_y - 1))]),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    out_sharded = ttnn.linear(
+        a,
+        b,
+        program_config=prog_cfg,
+        compute_kernel_config=cfg.mlp_compute_kernel_config(),
+        memory_config=out_mc,
+    )
+
+    # Gather the _KVA_NUM_CORES WIDTH_SHARDED L1 shards to interleaved.
+    # Downstream ttnn.slice requires non-sharded layout; keeping in L1 where
+    # possible avoids an extra DRAM round-trip before the nope/rope splits.
+    out = ttnn.to_memory_config(out_sharded, cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(out_sharded, force=False)
+    return out
+
+
 def attn_wo_linear(
     a: ttnn.Tensor,
     b: ttnn.Tensor,
