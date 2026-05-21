@@ -15,19 +15,39 @@ using namespace ckernel::math;
 
 // DO NOT call this unless absolutely necessary
 // Bit 11 enables 32 bit mode for dest as a workaround for budabackend#1372.
-// We need to wait for math to be fully idle before writing this bit.
+// We need to wait for both math and pack to be fully idle before writing this bit
+// because it affects dest bank access which is shared by both pipelines.
+// Changing it while either pipeline is active can cause a race condition.
 inline void _llk_math_dbg_feature_disable_()
 {
+    const std::uint32_t val = reg_read(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE);
+    if (val & (1 << 11))
+    {
+        return;
+    }
     tensix_sync();
-    reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1 << 11);
+    while (semaphore_read(semaphore::MATH_PACK) > 0)
+    {
+        asm volatile("nop");
+    };
+    reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, val | (1 << 11));
 }
 
 // Clears bit 11 to disable 32 bit mode for dest.
 // Same synchronization is needed here to avoid racing.
 inline void _llk_math_dbg_feature_enable_()
 {
+    const std::uint32_t val = reg_read(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE);
+    if (!(val & (1 << 11)))
+    {
+        return;
+    }
     tensix_sync();
-    reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0);
+    while (semaphore_read(semaphore::MATH_PACK) > 0)
+    {
+        asm volatile("nop");
+    };
+    reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, val & ~(1 << 11));
 }
 
 inline void _llk_math_set_fp32_dest_acc_(bool enable)
