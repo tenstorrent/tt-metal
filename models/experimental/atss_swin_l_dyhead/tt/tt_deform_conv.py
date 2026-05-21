@@ -267,6 +267,11 @@ class TtDeformConv2dV2:
         # tile-aligns cleanly (no K=9 padding overhead like batch_output_channels=True had).
         # Credit: gtobarTT (e7c65ab) — saves ~16 ms across all DCN calls vs the 5D reshape
         # path because the post-multiply reshape becomes a pure byte-view.
+        # Place grid_sample's output directly in DRAM for the big spatial sizes — the
+        # downstream multiply needs it there anyway, and skipping the L1->DRAM ttnn.copy
+        # eliminates a 2.57 ms / 6-call P3 op.
+        big_tensor_bytes = H_out * W_out * K * C_in * 2  # bf16
+        big_mem_config = ttnn.DRAM_MEMORY_CONFIG if big_tensor_bytes > 4 * 1024 * 1024 else ttnn.L1_MEMORY_CONFIG
         samples = ttnn.grid_sample(
             x_nhwc,
             grid_xy,
@@ -274,6 +279,7 @@ class TtDeformConv2dV2:
             padding_mode="zeros",
             align_corners=False,  # ttnn.grid_sample uses align_corners=False semantics regardless
             batch_output_channels=False,
+            memory_config=big_mem_config,
         )
         ttnn.deallocate(grid_xy)
 
@@ -281,11 +287,6 @@ class TtDeformConv2dV2:
         # Multiply samples (1, H, W*K, C_in) by mask (1, H, W*K, 1) broadcasts on the last dim.
         # Stay in ROW_MAJOR so the next reshape to (1, H*W, K*C_in) is also a pure byte-view
         # (no tile repacking).
-        big_tensor_bytes = H_out * W_out * K * C_in * 2  # bf16
-        big_mem_config = ttnn.DRAM_MEMORY_CONFIG if big_tensor_bytes > 4 * 1024 * 1024 else ttnn.L1_MEMORY_CONFIG
-
-        if samples.memory_config().buffer_type != ttnn.BufferType.DRAM and big_mem_config == ttnn.DRAM_MEMORY_CONFIG:
-            samples = ttnn.to_memory_config(samples, big_mem_config)
         if mask_nhwc.layout != ttnn.ROW_MAJOR_LAYOUT:
             mask_nhwc = ttnn.to_layout(mask_nhwc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         mask_extended = ttnn.reshape(mask_nhwc, (1, H_out, W_out * K, 1))
