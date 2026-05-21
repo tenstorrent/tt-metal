@@ -212,7 +212,7 @@ def load_backbone_weights(
                     "bias": _to_ttnn_norm_param(norm_b),
                 },
                 "reduction": {
-                    "weight": _to_ttnn_linear_weight(red_w),
+                    "weight": _to_ttnn_linear_weight(red_w, dtype=ttnn.bfloat8_b),
                 },
             }
 
