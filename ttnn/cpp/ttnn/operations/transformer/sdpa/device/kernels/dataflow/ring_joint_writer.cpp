@@ -34,7 +34,7 @@ void read_prev_output_and_lse(
     const uint32_t nb,
     const uint32_t nq,
     const uint32_t Sq_chunk_t,
-    const Slice out_slice,
+    const Slice& out_slice,
     const uint32_t end_seq_tile,
     const uint32_t stats_seq_start_tile,
     const uint32_t stats_seq_end_tile,
@@ -68,7 +68,7 @@ void issue_restore_reads(
     const uint32_t nb,
     const uint32_t nq,
     const uint32_t Sq_chunk_t,
-    const Slice out_slice,
+    const Slice& out_slice,
     const uint32_t stats_seq_start_tile,
     const uint32_t stats_seq_end_tile,
     const uint32_t sum_offset,
@@ -77,43 +77,49 @@ void issue_restore_reads(
     const uint32_t cb_sum_in,
     const uint32_t tile_bytes,
     const uint32_t stats_tile_bytes) {
-    // All accumulator tiles are valid (we wrote them), so bypass maybe_read_tile's
-    // padding logic. This decouples restore from ring_id, enabling cross-ring prefetch.
-    constexpr uint32_t end_seq_tile = 0xFFFFFFFF;
-
-    // Issue output reads (reserve + async reads, no barrier)
+    // All accumulator tiles are valid (we wrote them) — bypass issue_reads' bound/valid_rows
+    // compute and the zero-fill stub; dispatch directly to issue_block_reads. Decouples
+    // restore from ring_id, enabling cross-ring prefetch.
     const uint32_t out_rows = out_slice.get_d2_size();
     const uint32_t out_cols = out_slice.get_d3_size();
     const uint32_t out_num_tiles = out_rows * out_cols;
     cb_reserve_back(cb_prev_out, out_num_tiles);
-    const uint32_t out_base_ptr = get_write_ptr(cb_prev_out);
-    for (uint32_t row = 0; row < out_rows; ++row) {
-        uint32_t write_ptr = out_base_ptr + row * out_cols * tile_bytes;
-        for (uint32_t col = 0; col < out_cols; ++col) {
-            cat_out_generator.maybe_read_tile(
-                out_slice.d0,
-                out_slice.d1,
-                out_slice.d2_start + row,
-                out_slice.d3_start + col,
-                end_seq_tile,
-                write_ptr);
-            write_ptr += tile_bytes;
-        }
-    }
+    uint32_t out_barrier_count = 0;
+    issue_block_reads(
+        cat_out_generator.reader,
+        cat_out_generator.tensor_shape.id_of(out_slice.d0, out_slice.d1, out_slice.d2_start, out_slice.d3_start),
+        cat_out_generator.tensor_shape.strides[2],
+        out_rows,
+        out_cols,
+        /*dst_row_origin=*/0,
+        get_write_ptr(cb_prev_out),
+        /*outer_stride=*/out_cols * tile_bytes,
+        /*inner_stride=*/tile_bytes,
+        /*barrier_threshold=*/0,
+        out_barrier_count);
+
+    // Stats drains: single-column linear reads. Hoist id_of once per drain; advance by
+    // strides[2] per row. All tiles assumed valid (no bounds clamp needed).
+    const uint32_t stats_rows = stats_seq_end_tile - stats_seq_start_tile;
+    const uint32_t stats_row_stride = stats_tile_logical.strides[2];
 
     // Issue max reads
     cb_reserve_back(cb_max_in, Sq_chunk_t);
+    uint32_t max_tile_id = stats_tile_logical.id_of(nb, nq, stats_seq_start_tile, 0);
     uint32_t max_addr = get_write_ptr(cb_max_in);
-    for (uint32_t i = stats_seq_start_tile; i < stats_seq_end_tile; i++) {
-        noc_async_read_tile(stats_tile_logical.id_of(nb, nq, i, 0), stats_writer, max_addr);
+    for (uint32_t r = 0; r < stats_rows; ++r) {
+        noc_async_read_tile(max_tile_id, stats_writer, max_addr);
+        max_tile_id += stats_row_stride;
         max_addr += stats_tile_bytes;
     }
 
     // Issue sum reads
     cb_reserve_back(cb_sum_in, Sq_chunk_t);
+    uint32_t sum_tile_id = stats_tile_logical.id_of(nb, nq, sum_offset + stats_seq_start_tile, 0);
     uint32_t sum_addr = get_write_ptr(cb_sum_in);
-    for (uint32_t i = stats_seq_start_tile; i < stats_seq_end_tile; i++) {
-        noc_async_read_tile(stats_tile_logical.id_of(nb, nq, sum_offset + i, 0), stats_writer, sum_addr);
+    for (uint32_t r = 0; r < stats_rows; ++r) {
+        noc_async_read_tile(sum_tile_id, stats_writer, sum_addr);
+        sum_tile_id += stats_row_stride;
         sum_addr += stats_tile_bytes;
     }
     // NO barrier, NO push — caller must call complete_restore()
@@ -137,39 +143,11 @@ void complete_restore(
 // Only 3 barriers fire per ring iteration (one per TRID):
 //   Q[0]: wB(TRID_INNER), Q[N-2]: wB(TRID_LAST), Q[N-1]: wB(TRID_FIRST).
 // Start from 1 — TRID 0 is the default for all NOC writes and must not be used
-// for per-TRID barriers, as unrelated writes (e.g. write_out_row_by_row
+// for per-TRID barriers, as unrelated writes (e.g. write_block_row_grouped_trid
 // on last ring iter) would inflate the outstanding count and stall the barrier.
 constexpr uint32_t TRID_FIRST = 1;
 constexpr uint32_t TRID_INNER = 2;
 constexpr uint32_t TRID_LAST = 3;
-
-// Row-by-row drain of cb_out to DRAM; writes overlap with compute's next row-group push.
-// Padding past end_seq_tile is silently skipped by maybe_write_tile.
-//
-// flush_trid: TRID the caller stamped writes with via noc_async_write_set_trid (0 = default).
-// Save path passes save_trid; last-iter write_out path passes 0. Caller handles any final
-// NoC barrier (per-Q write_out path or the trid'd flush in save_accumulators).
-template <typename ReaderType>
-void write_out_row_by_row(
-    const PaddedAddrGenerator<ReaderType>& cat_out_generator,
-    const Slice& out_slice,
-    const uint32_t end_seq_tile,
-    const uint32_t cb_out,
-    const uint32_t tile_bytes,
-    const uint32_t sbh,
-    const uint32_t flush_trid) {
-    drain_cb_row_grouped(
-        cb_out,
-        out_slice.get_d2_size(),
-        out_slice.get_d3_size(),
-        tile_bytes,
-        sbh,
-        flush_trid,
-        [&](uint32_t row, uint32_t col, uint32_t l1_addr) {
-            cat_out_generator.maybe_write_tile(
-                out_slice.d0, out_slice.d1, out_slice.d2_start + row, out_slice.d3_start + col, end_seq_tile, l1_addr);
-        });
-}
 
 // Save all 3 accumulators (out, max, sum) to DRAM, tagged with a TRID for prefetch barriers.
 // Output is drained row-by-row (overlapping with compute's SALAD pushes); max/sum are bulk-drained.
@@ -195,7 +173,7 @@ void save_accumulators_with_trid(
     const uint32_t save_trid) {
     noc_async_write_set_trid(save_trid);
 
-    write_out_row_by_row(cat_out_generator, out_slice, end_seq_tile, cb_out, tile_bytes, sbh, save_trid);
+    write_block_row_grouped_trid(cat_out_generator, out_slice, end_seq_tile, cb_out, tile_bytes, sbh, save_trid);
 
     // Bulk drain of max/sum
     cb_wait_front(cb_max_out, Sq_chunk_t);
@@ -214,10 +192,10 @@ void save_accumulators_with_trid(
     }
 
     noc_async_write_flushed_with_trid(save_trid);
-    // Reset TRID to 0 to avoid leaking it to unrelated writes (e.g. write_out_row_by_row_no_pop on last ring iter).
+    // Reset TRID to 0 to avoid leaking it to unrelated writes (e.g. write_block_row_grouped_trid on last ring iter).
     // Without this, subsequent noc_async_write calls would inflate save_trid's outstanding count,
     // causing noc_async_write_barrier_with_trid(save_trid) to wait for unrelated writes.
-    // cb_out was already popped per-group inside write_out_row_by_row (via drain_cb_row_grouped).
+    // cb_out was already popped per-group inside write_block_row_grouped_trid.
     noc_async_write_set_trid(0);
     cb_pop_front(cb_max_out, Sq_chunk_t);
     cb_pop_front(cb_sum_out, Sq_chunk_t);
@@ -249,7 +227,7 @@ void write_output_and_lse(
     const uint32_t nb,
     const uint32_t nq,
     const uint32_t Sq_chunk_t,
-    const Slice out_slice,
+    const Slice& out_slice,
     const uint32_t end_seq_tile,
     const uint32_t stats_seq_start_tile,
     const uint32_t stats_seq_end_tile,
@@ -655,7 +633,7 @@ void kernel_main() {
                 if (is_last_ring_iter) {
                     // Last-iter writes carry default trid (caller never set a non-zero trid here);
                     // pass 0 so the per-group flush waits exactly for these writes.
-                    write_out_row_by_row(
+                    write_block_row_grouped_trid(
                         qi.is_joint_q ? joint_out_generator : out_generator,
                         qi.out_slice,
                         end_seq_tile,
@@ -679,7 +657,7 @@ void kernel_main() {
                     prefetch_intra_ring(q_index + 1);
                 }
             }
-            // Hoisted DRAM-arrival barrier: on the last ring iter, write_out_row_by_row_no_pop
+            // Hoisted DRAM-arrival barrier: on the last ring iter, write_block_row_grouped_trid
             // issued N untagged NOC writes (one per Q on this core). Wait once at the end of the
             // Q loop for all of them to land in DRAM, before the outer ring-iter loop advances
             // or the op teardown runs. Previously this was a per-Q barrier inside the loop.

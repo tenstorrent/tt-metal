@@ -697,3 +697,33 @@ def test_rotary_embedding_hf_decode_fp32(
 def test_rotary_embedding_hf_row_major(W, Z, Y, X, cache_size, device):
     """``rotary_embedding_hf`` validates TILE layout; row-major inputs are unsupported."""
     pytest.skip("rotary_embedding_hf requires TILE layout inputs (see device op validate)")
+
+
+@pytest.mark.parametrize(
+    "input_seq, head_dim",
+    [
+        (32, 64),
+        (64, 64),
+        (128, 64),
+    ],
+)
+def test_rotary_embedding_hf_prefill_rejects_cos_seq_smaller_than_input_seq(input_seq, head_dim, device):
+    torch.manual_seed(0)
+    num_heads = 8
+    x = torch.randn([1, num_heads, input_seq, head_dim]).bfloat16().float()
+    cos = torch.randn([1, 1, 1, head_dim]).bfloat16().float()
+    sin = torch.randn([1, 1, 1, head_dim]).bfloat16().float()
+
+    xt = ttnn.Tensor(x, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+    cost = ttnn.Tensor(cos, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+    sint = ttnn.Tensor(sin, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+
+    rope_cfg = _hf_rope_compute_kernel_config()
+    with pytest.raises(RuntimeError, match="Cos seq_len must be >= input seq_len"):
+        ttnn.experimental.rotary_embedding_hf(
+            xt,
+            cost,
+            sint,
+            is_decode_mode=False,
+            compute_kernel_config=rope_cfg,
+        )

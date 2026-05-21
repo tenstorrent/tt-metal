@@ -7,34 +7,35 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     constexpr uint32_t dfb_ids[6] = {
-        get_compile_time_arg_val(0),
-        get_compile_time_arg_val(1),
-        get_compile_time_arg_val(2),
-        get_compile_time_arg_val(3),
-        get_compile_time_arg_val(4),
-        get_compile_time_arg_val(5),
+        dfb::in0,
+        dfb::in1,
+        dfb::in2,
+        dfb::in3,
+        dfb::in4,
+        dfb::in5,
     };
 
     const uint32_t src_addrs[6] = {
-        get_arg_val<uint32_t>(0),
-        get_arg_val<uint32_t>(2),
-        get_arg_val<uint32_t>(4),
-        get_arg_val<uint32_t>(6),
-        get_arg_val<uint32_t>(8),
-        get_arg_val<uint32_t>(10),
+        get_arg(args::src0_addr),
+        get_arg(args::src1_addr),
+        get_arg(args::src2_addr),
+        get_arg(args::src3_addr),
+        get_arg(args::src4_addr),
+        get_arg(args::src5_addr),
     };
     const uint32_t src_bank_ids[6] = {
-        get_arg_val<uint32_t>(1),
-        get_arg_val<uint32_t>(3),
-        get_arg_val<uint32_t>(5),
-        get_arg_val<uint32_t>(7),
-        get_arg_val<uint32_t>(9),
-        get_arg_val<uint32_t>(11),
+        get_arg(args::src0_bank_id),
+        get_arg(args::src1_bank_id),
+        get_arg(args::src2_bank_id),
+        get_arg(args::src3_bank_id),
+        get_arg(args::src4_bank_id),
+        get_arg(args::src5_bank_id),
     };
-    const uint32_t num_tiles = get_arg_val<uint32_t>(12);
+    const uint32_t num_tiles = get_arg(args::num_tiles);
 
     Noc noc;
     AllocatorBank<AllocatorBankType::DRAM> dram_src;

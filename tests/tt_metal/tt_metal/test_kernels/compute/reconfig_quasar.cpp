@@ -9,21 +9,13 @@
 #include "api/dataflow/dataflow_buffer.h"
 
 void kernel_main() {
-    constexpr uint32_t in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t in1 = get_compile_time_arg_val(1);
-    constexpr uint32_t in2 = get_compile_time_arg_val(2);
-    constexpr uint32_t in3 = get_compile_time_arg_val(3);
-    constexpr uint32_t in4 = get_compile_time_arg_val(4);
-    constexpr uint32_t in5 = get_compile_time_arg_val(5);
-    constexpr uint32_t out = get_compile_time_arg_val(6);
-
-    DataflowBuffer d0(in0);
-    DataflowBuffer d1(in1);
-    DataflowBuffer d2(in2);
-    DataflowBuffer d3(in3);
-    DataflowBuffer d4(in4);
-    DataflowBuffer d5(in5);
-    DataflowBuffer dout(out);
+    DataflowBuffer d0(dfb::in0);
+    DataflowBuffer d1(dfb::in1);
+    DataflowBuffer d2(dfb::in2);
+    DataflowBuffer d3(dfb::in3);
+    DataflowBuffer d4(dfb::in4);
+    DataflowBuffer d5(dfb::in5);
+    DataflowBuffer dout(dfb::out);
 
     mm_init(d0.get_id(), d1.get_id(), dout.get_id());
 

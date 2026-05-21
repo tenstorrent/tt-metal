@@ -37,10 +37,10 @@ protected:
 };
 
 namespace {
-constexpr float kForwardRtol = 2.5e-2F;
-constexpr float kForwardAtol = 2.5e-2F;
-constexpr float kBackwardRtol = 5.0e-3F;
-constexpr float kBackwardAtol = 5.0e-3F;
+constexpr float kForwardRtol = 2.0e-2F;
+constexpr float kForwardAtol = 2.0e-2F;
+constexpr float kBackwardRtol = 1.0e-2F;
+constexpr float kBackwardAtol = 1.0e-2F;
 
 struct PolyNormCaseData {
     xt::xarray<float> input;

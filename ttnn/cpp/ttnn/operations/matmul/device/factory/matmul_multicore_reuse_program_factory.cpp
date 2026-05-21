@@ -2,12 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <map>
+#include <string>
+
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_program_factory.hpp"
+#include "ttnn/operations/compute_throttle_utils.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 
 using namespace tt::constants;
@@ -21,6 +26,8 @@ static MatmulMultiCoreReuseProgramFactory::cached_program_t create_program(
     tt::DataFormat in1_cb_data_format,
     tt::DataFormat out_cb_data_format,
     MathFidelity math_fidelity,
+    bool dst_full_sync_en,
+    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
     uint32_t num_cores_x,
     uint32_t B,
     uint32_t M,
@@ -134,13 +141,22 @@ static MatmulMultiCoreReuseProgramFactory::cached_program_t create_program(
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, {}, {{"cb_out", tt::CBIndex::c_16}}));
 
     // Create compute kernel
+    std::map<std::string, std::string> mm_kernel_defines;
+    const uint32_t num_cores = all_cores.num_cores();
+    ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
+        device->arch(), num_cores, mm_kernel_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(), num_cores, mm_kernel_defines, throttle_level);
+
     tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm.cpp",
         all_cores,
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
+            .dst_full_sync_en = dst_full_sync_en,
             .compile_args = compute_kernel_args,
+            .defines = mm_kernel_defines,
             .named_compile_args = {
                 {"cb_in0", tt::CBIndex::c_0},
                 {"cb_in1", tt::CBIndex::c_1},
@@ -333,6 +349,8 @@ MatmulMultiCoreReuseProgramFactory::cached_program_t MatmulMultiCoreReuseProgram
         in1_cb_data_format,
         out_cb_data_format,
         math_fidelity,
+        ttnn::get_dst_full_sync_en(operation_attributes.compute_kernel_config),
+        ttnn::get_throttle_level(operation_attributes.compute_kernel_config),
         num_cores_x,
         B,
         Mt,

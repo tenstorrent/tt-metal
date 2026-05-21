@@ -32,7 +32,7 @@ inline void _calculate_elu_(std::uint32_t slope)
 
         if constexpr (!is_fp32_dest_acc_en)
         {
-            result = sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven);
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
         }
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
