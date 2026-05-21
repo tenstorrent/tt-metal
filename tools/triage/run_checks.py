@@ -5,10 +5,11 @@
 
 """
 Usage:
-    run_checks [--dev=<device_id>]...
+    run_checks [--dev=<device_id>]... [--execute-sequential]
 
 Options:
-    --dev=<device_id>   Specify the device id. 'all' is also an option  [default: in_use]
+    --dev=<device_id>      Specify the device id. 'all' is also an option  [default: in_use]
+    --execute-sequential   Force fully sequential execution. By default checks run in parallel across MMIO devices: one worker thread per local MMIO device, with its remote devices on the same thread.
 
 Description:
      Data provider script for running checks on devices, block locations and RISC cores. This script provides a single interface for:
@@ -28,9 +29,12 @@ Owner:
 import os
 from collections import defaultdict
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import cached_property
 from dataclasses import dataclass
 from typing import Literal, TypeAlias, get_args
+
+from rich.progress import Progress, TaskID
 
 from inspector_data import run as get_inspector_data, InspectorData
 from triage import (
@@ -227,6 +231,7 @@ class RunChecks:
         devices: list[Device],
         block_locations: dict[Device, dict[BlockType, list[OnChipCoordinate]]],
         metal_device_id_mapping: MetalDeviceIdMapping | None,
+        execute_in_parallel: bool = True,
     ):
         self.devices = devices
         self.metal_device_id_mapping = metal_device_id_mapping
@@ -239,6 +244,15 @@ class RunChecks:
         # Pre-compute unique_id to device mapping for fast lookup
         self._unique_id_to_device: dict[int, Device] = {device.unique_id: device for device in devices}
         self._session = get_triage_session()
+        self._execute_in_parallel = execute_in_parallel and len(self._mmio_groups) > 1
+
+    @cached_property
+    def _mmio_groups(self) -> list[list[Device]]:
+        """Group devices by their MMIO access. Each group runs on one worker thread."""
+        groups: dict[int, list[Device]] = defaultdict(list)
+        for device in self.devices:
+            groups[device.local_device.id].append(device)
+        return list(groups.values())
 
     @cached_property
     def _location_to_block_type_map(self) -> dict[OnChipCoordinate, BlockType]:
@@ -283,46 +297,76 @@ class RunChecks:
         self, check: Callable[[Device], object], print_broken_devices: bool = True
     ) -> list[PerDeviceCheckResult] | None:
         """Run a check function on each device, collecting results."""
-        result: list[PerDeviceCheckResult] = []
+
+        def process_one(device: Device) -> list[PerDeviceCheckResult]:
+            """Run the check on a single device, applying the broken-cascade rules."""
+            local_result: list[PerDeviceCheckResult] = []
+            if self._session.is_device_broken(device):
+                return local_result
+            try:
+                check_result = check(device)
+            except TimeoutDeviceRegisterError as e:
+                self._session.add_broken_device(device)
+                if print_broken_devices:
+                    log_warning_device(
+                        device, f"Triage broke device with: {e}. This device will be skipped from now on."
+                    )
+                if device.is_local:
+                    # Cascade: cannot reach remote devices once their local MMIO parent is broken.
+                    for remote_device in device.remote_devices:
+                        self._session.add_broken_device(remote_device)
+                        if print_broken_devices:
+                            log_warning_device(
+                                remote_device,
+                                f"Will be skipped from now on due to its local device (device {device.id}) being broken.",
+                            )
+                return local_result
+            except Exception as e:
+                log_warning_device(device, f"Skipping: {str(e)}")
+                return local_result
+            self._collect_results(
+                local_result,
+                check_result,
+                PerDeviceCheckResult,
+                device_description=DeviceDescription(device, self._use_unique_id),
+            )
+            return local_result
+
         with create_progress() as progress:
             device_task = progress.add_task(
                 "Processing devices", total=len(self.devices), visible=len(self.devices) > 1
             )
             try:
-                for device in self.devices:
-                    # Skipping broken devices
-                    if self._session.is_device_broken(device):
-                        continue
-                    try:
-                        check_result = check(device)
-                    except TimeoutDeviceRegisterError as e:
-                        self._session.add_broken_device(device)
-                        if print_broken_devices:
-                            log_warning_device(
-                                device, f"Triage broke device with: {e}. This device will be skipped from now on."
-                            )
-                        if device.is_local:
-                            # We are classifying remote devices as broken since we cannot access them if their local device is broken
-                            for remote_device in device.remote_devices:
-                                # Broken remote devices will inherit the error from the local device
-                                self._session.add_broken_device(remote_device)
-                                if print_broken_devices:
-                                    log_warning_device(
-                                        remote_device,
-                                        f"Will be skipped from now on due to its local device (device {device.id}) being broken.",
-                                    )
-                        continue
-                    except Exception as e:
-                        log_warning_device(device, f"Skipping: {str(e)}")
-                        continue
-                    # Use the common result collection helper
-                    self._collect_results(
-                        result,
-                        check_result,
-                        PerDeviceCheckResult,
-                        device_description=DeviceDescription(device, self._use_unique_id),
-                    )
-                    progress.advance(device_task)
+                if not self._execute_in_parallel:
+                    # Sequential execution
+                    result: list[PerDeviceCheckResult] = []
+                    for device in self.devices:
+                        result.extend(process_one(device))
+                        progress.advance(device_task)
+                    return result if len(result) > 0 else None
+
+                # Parallel execution: one worker per MMIO group.
+                def process_group(group: list[Device]) -> list[tuple[int, list[PerDeviceCheckResult]]]:
+                    per_device: list[tuple[int, list[PerDeviceCheckResult]]] = []
+                    for device in group:
+                        items = process_one(device)
+                        if items:
+                            per_device.append((device.id, items))
+                    return per_device
+
+                groups = self._mmio_groups
+                per_device_results: list[tuple[int, list[PerDeviceCheckResult]]] = []
+                with ThreadPoolExecutor(max_workers=len(groups)) as executor:
+                    futures = {executor.submit(process_group, g): g for g in groups}
+                    for future in as_completed(futures):
+                        per_device_results.extend(future.result())
+                        for _ in futures[future]:
+                            progress.advance(device_task)
+
+                per_device_results.sort(key=lambda x: x[0])
+                result: list[PerDeviceCheckResult] = []
+                for _, items in per_device_results:
+                    result.extend(items)
                 return result if len(result) > 0 else None
             finally:
                 progress.remove_task(device_task)
@@ -338,25 +382,35 @@ class RunChecks:
         def per_device_blocks_check(device: Device) -> list[PerBlockCheckResult] | None:
             """Check all block locations for a single device."""
             result: list[PerBlockCheckResult] = []
-            with create_progress() as progress:
-                progress_count = 0
+
+            def run_iterations(progress: Progress | None = None, device_task: TaskID | None = None) -> None:
                 for block_type in block_types_to_check:
                     for location in self.block_locations[device][block_type]:
-                        progress_count += 1
+                        check_result = check(location)
+                        if progress is not None and device_task is not None:
+                            progress.advance(device_task)
+                        self._collect_results(
+                            result,
+                            check_result,
+                            PerBlockCheckResult,
+                            device_description=DeviceDescription(device, self._use_unique_id),
+                            location=location,
+                        )
+
+            # Suppress this sub-progress when running in parallel: concurrent rich.Progress
+            # instances on a shared Console clash. Stage 4 replaces it with a single shared
+            # two-line progress bar. `_execute_in_parallel` already accounts for the
+            # single-MMIO-group case (where the parallel path collapses to one worker on
+            # the main thread), so it doubles as "are we inside the worker pool right now?".
+            if self._execute_in_parallel:
+                run_iterations()
+                return result if len(result) > 0 else None
+
+            with create_progress() as progress:
+                progress_count = sum(len(self.block_locations[device][bt]) for bt in block_types_to_check)
                 device_task = progress.add_task(f"Processing NOC locations", total=progress_count)
                 try:
-                    for block_type in block_types_to_check:
-                        for location in self.block_locations[device][block_type]:
-                            check_result = check(location)
-                            progress.advance(device_task)
-                            # Use the common result collection helper
-                            self._collect_results(
-                                result,
-                                check_result,
-                                PerBlockCheckResult,
-                                device_description=DeviceDescription(device, self._use_unique_id),
-                                location=location,
-                            )
+                    run_iterations(progress, device_task)
                     return result if len(result) > 0 else None
                 finally:
                     progress.remove_task(device_task)
@@ -424,6 +478,7 @@ class RunChecks:
 @triage_singleton
 def run(args, context: Context):
     devices_to_check = args["--dev"]
+    execute_in_parallel = not bool(args["--execute-sequential"])
     try:
         inspector_data = get_inspector_data(args, context)
         metal_device_id_mapping = get_metal_device_id_mapping(args, context)
@@ -432,7 +487,7 @@ def run(args, context: Context):
         metal_device_id_mapping = None
     devices = get_devices(devices_to_check, inspector_data, metal_device_id_mapping, context)
     block_locations = get_block_locations(devices, inspector_data, metal_device_id_mapping)
-    return RunChecks(devices, block_locations, metal_device_id_mapping)
+    return RunChecks(devices, block_locations, metal_device_id_mapping, execute_in_parallel=execute_in_parallel)
 
 
 if __name__ == "__main__":
