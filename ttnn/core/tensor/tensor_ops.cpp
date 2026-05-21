@@ -22,6 +22,7 @@
 #include "ttnn/graph/graph_serialization.hpp"
 
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace tt::tt_metal {
 
@@ -133,6 +134,71 @@ void copy_to_device(
     GraphTracker::instance().track_function_start("tt::tt_metal::copy_to_device", queue, src, device_tensor, region);
     enqueue_write_tensor(queue, src, device_tensor.device_storage().get_mesh_tensor(), region);
     GraphTracker::instance().track_function_end(device_tensor);
+}
+
+void copy_tensor_over_socket(
+    const Tensor& host_tensor, Tensor& device_tensor, std::vector<distributed::H2DSocket*> sockets) {
+    // Launch H2D mesh workload here using sockets
+    // Issue a socket write to each device
+    // Tear serice down
+
+    // In reality: Launch meshworkload once with H2D kernel
+    // Allow multiple writes
+    TT_FATAL(sockets.size() == 1, "Only one socket is supported for now");
+    TT_FATAL(sockets[0] != nullptr, "Socket pointer must not be null");
+    auto& socket = *sockets[0];
+
+    auto xfer_program = CreateProgram();
+    auto xfer_size_bytes = host_tensor.logical_volume() * host_tensor.element_size();
+    std::cout << "Transfer size bytes in API: " << xfer_size_bytes << std::endl;
+    socket.set_page_size(xfer_size_bytes);
+
+    auto tensor_accessor_args = TensorAccessorArgs(*device_tensor.buffer());
+    auto tensor_accessor_compile_args = tensor_accessor_args.get_compile_time_args();
+
+    tt::CBIndex scratch_cb_index = tt::CBIndex::c_0;
+
+    auto cb_scratch_buffer_config =
+        CircularBufferConfig(
+            socket.get_page_size(),
+            {{scratch_cb_index, tt::tt_metal::datatype_to_dataformat_converter(device_tensor.dtype())}})
+            .set_page_size(scratch_cb_index, socket.get_page_size());
+    CreateCircularBuffer(xfer_program, socket.get_active_cores()[0].core_coord, cb_scratch_buffer_config);
+
+    std::vector<uint32_t> xfer_compile_args = {
+        static_cast<uint32_t>(socket.get_config_buffer_address()),
+        static_cast<uint32_t>(xfer_size_bytes),
+        static_cast<uint32_t>(socket.get_page_size()),
+        static_cast<uint32_t>(device_tensor.buffer()->address()),
+        static_cast<uint32_t>(device_tensor.buffer()->num_pages()),
+        static_cast<uint32_t>(device_tensor.buffer()->page_size()),
+        static_cast<uint32_t>(scratch_cb_index)};
+
+    xfer_compile_args.insert(
+        xfer_compile_args.end(), tensor_accessor_compile_args.begin(), tensor_accessor_compile_args.end());
+
+    CreateKernel(
+        xfer_program,
+        "models/demos/deepseek_v3_b1/micro_ops/host_io/kernels/fused_h2d_receiver_embedding.cpp",
+        socket.get_active_cores()[0].core_coord,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = xfer_compile_args});
+
+    auto mesh_workload = distributed::MeshWorkload();
+    mesh_workload.add_program(
+        distributed::MeshCoordinateRange(socket.get_active_cores()[0].device_coord), std::move(xfer_program));
+    std::cout << "Enqueuing mesh workload" << std::endl;
+    EnqueueMeshWorkload(device_tensor.device()->mesh_command_queue(), mesh_workload, false);
+
+    auto host_buf = tt::tt_metal::host_buffer::get_host_buffer(host_tensor);
+    auto data_span = host_buf.view_bytes();
+
+    socket.write(data_span.data(), 1);
+    std::cout << "calling finish" << std::endl;
+    distributed::Finish(device_tensor.device()->mesh_command_queue());
+    std::cout << "finish called" << std::endl;
 }
 
 void copy_to_host(

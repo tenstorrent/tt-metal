@@ -4,14 +4,19 @@
 
 #include <optional>
 #include <variant>
+#include <vector>
 
 #include "gtest/gtest.h"
 #include "gmock/gmock.h"
 
 #include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/experimental/sockets/h2d_socket.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
 #include "ttnn/operations/creation/creation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn_test_fixtures.hpp"
@@ -25,10 +30,18 @@ using ::testing::FloatEq;
 using ::testing::Pointwise;
 using ::testing::SizeIs;
 using ::tt::tt_metal::BufferType;
+using ::tt::tt_metal::DataType;
 using ::tt::tt_metal::Layout;
 using ::tt::tt_metal::MemoryConfig;
+using ::tt::tt_metal::PageConfig;
 using ::tt::tt_metal::StorageType;
+using ::tt::tt_metal::TensorLayout;
 using ::tt::tt_metal::TensorMemoryLayout;
+using ::tt::tt_metal::TensorSpec;
+using ::tt::tt_metal::distributed::H2DMode;
+using ::tt::tt_metal::distributed::H2DSocket;
+using ::tt::tt_metal::distributed::MeshCoordinate;
+using ::tt::tt_metal::distributed::MeshCoreCoord;
 
 using MultiDeviceTensorCreationTest = GenericMeshDeviceFixture;
 
@@ -183,6 +196,49 @@ TEST_F(MultiDeviceTensorCreationTest, Arange) {
         EXPECT_THAT(values, SizeIs(1024));
         EXPECT_THAT(values, Pointwise(FloatEq(), expected));
     }
+}
+
+TEST_F(MultiDeviceTensorCreationTest, CopyTensorOverH2DSocket_Uint32_RowMajor_Dram) {
+    MeshDevice* mesh_device = this->mesh_device_.get();
+
+    const ttnn::Shape logical_shape({1, 1, 1, 640});
+    auto tensor_layout = TensorLayout(
+        DataType::UINT32,
+        PageConfig(Layout::ROW_MAJOR),
+        MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
+    auto spec = TensorSpec(logical_shape, tensor_layout);
+
+    std::vector<uint32_t> src(logical_shape.volume());
+    std::iota(src.begin(), src.end(), 0u);
+    Tensor host_tensor = Tensor::from_vector<uint32_t>(src, spec);
+
+    Tensor device_tensor = tt::tt_metal::create_device_tensor(spec, mesh_device);
+
+    ASSERT_NE(device_tensor.buffer(), nullptr);
+    ASSERT_EQ(device_tensor.dtype(), DataType::UINT32);
+    ASSERT_EQ(device_tensor.layout(), Layout::ROW_MAJOR);
+    ASSERT_EQ(device_tensor.memory_config().buffer_type(), BufferType::DRAM);
+
+    const uint32_t xfer_bytes = device_tensor.buffer()->num_pages() * device_tensor.buffer()->page_size();
+
+    std::cout << "Transfer Bytes in test: " << xfer_bytes << std::endl;
+    ASSERT_EQ(xfer_bytes, src.size() * sizeof(uint32_t));
+
+    const MeshCoreCoord recv_core{MeshCoordinate(0, 0), CoreCoord(0, 0)};
+    H2DSocket socket(
+        this->mesh_device_,
+        recv_core,
+        BufferType::L1,
+        /*fifo_size=*/xfer_bytes,
+        H2DMode::DEVICE_PULL);
+
+    tt::tt_metal::copy_tensor_over_socket(host_tensor, device_tensor, {&socket});
+
+    socket.barrier();
+
+    auto readback = device_tensor.to_vector<uint32_t>();
+    ASSERT_THAT(readback, SizeIs(src.size()));
+    EXPECT_EQ(readback, src);
 }
 
 }  // namespace
