@@ -13,9 +13,9 @@
  *************************************************************************/
 
 /**
- * @brief Programs packer0 l1 info & math destination register format
+ * @brief Programs packer0 L1 information & math destination register format
  *
- * @param pack_output The output circular buffer
+ * @param pack_output The output DataFlow Buffer identifier
  */
 inline void llk_pack_hw_configure(const std::uint32_t pack_output) {
     const std::uint32_t output_id = get_output_id(pack_output);
@@ -93,3 +93,9 @@ TT_ALWAYS_INLINE void llk_pack_relu_config(const std::uint32_t config) {
 TT_ALWAYS_INLINE void llk_pack_relu_config(const ckernel::ReluConfig& relu_config) {
     _llk_pack_relu_config_<p_pacr::PACK0, false /* EN_32B_DEST */>(relu_config);
 }
+
+/**
+ * @brief: Configure packer0 to enable or disable l1 accumulation
+ * @param l1_acc_en: if false -> l1 acc is disabled, true -> l1 acc enabled
+ **/
+inline void llk_pack_reconfig_l1_acc(const std::uint32_t l1_acc_en) { _llk_pack_set_l1_acc_<p_pacr::PACK0>(l1_acc_en); }

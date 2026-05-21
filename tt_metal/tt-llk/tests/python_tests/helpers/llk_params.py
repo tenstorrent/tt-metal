@@ -32,6 +32,7 @@ class MathOpType(Enum):
 
     SFPU_UNARY = auto()
     SFPU_BINARY = auto()
+    SFPU_BINARY_INT = auto()
     SFPU_TERNARY = auto()
 
     FPU_BINARY = auto()
@@ -118,6 +119,11 @@ class MathOperation(Enum):
     SfpuElwdiv = OpSpec("DIV", MathOpType.SFPU_BINARY)
     SfpuElwrsub = OpSpec("RSUB", MathOpType.SFPU_BINARY)
     SfpuElwpow = OpSpec("POW", MathOpType.SFPU_BINARY)
+    SfpuElwmulInt = OpSpec("MUL", MathOpType.SFPU_BINARY_INT)
+    SfpuGtInt = OpSpec("GT_INT", MathOpType.SFPU_BINARY_INT)
+    SfpuLtInt = OpSpec("LT_INT", MathOpType.SFPU_BINARY_INT)
+    SfpuLeInt = OpSpec("LE_INT", MathOpType.SFPU_BINARY_INT)
+    SfpuGeInt = OpSpec("GE_INT", MathOpType.SFPU_BINARY_INT)
 
     # =============================================================================
     # SFPU TERNARY OPERATIONS

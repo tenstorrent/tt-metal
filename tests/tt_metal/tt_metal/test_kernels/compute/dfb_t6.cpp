@@ -7,6 +7,12 @@
 #include "api/debug/dprint.h"
 #include "experimental/kernel_args.h"
 
+// Quick check that DFBAccessor implicitly converts to uint32_t at compile time.
+// This is a shim to enable DFB to work with WH/BH LLK compute APIs that expect raw CB ids.
+// If implicit conversion (or its constexpr-ness) regressed, this line would fail to compile.
+// NOTE: This check is piggybacking along on an unrelated test kernel.
+[[maybe_unused]] constexpr uint32_t implicit_id = dfb::in;
+
 void kernel_main() {
     constexpr uint32_t num_entries = get_arg(args::num_entries);
     DataflowBuffer dfb_in(dfb::in);

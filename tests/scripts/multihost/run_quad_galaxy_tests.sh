@@ -32,7 +32,7 @@ default_mpi_tcp_interface() {
     for n in /sys/class/net/*; do
         n="${n##*/}"
         case "${n}" in
-            lo | docker* | br-* | veth* | tailscale*) continue ;;
+            lo | docker* | br-* | veth* | tailscale* | cali* | flannel*) continue ;;
         esac
         state="$(cat "/sys/class/net/${n}/operstate" 2>/dev/null || true)"
         if [[ "${state}" == "up" ]]; then
