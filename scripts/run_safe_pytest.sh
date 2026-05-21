@@ -9,17 +9,25 @@
 #
 # Simulator mode (TT_METAL_SIMULATOR set):
 #   Exports TT_METAL_SLOW_DISPATCH_MODE=1 and TT_METAL_DISABLE_SFPLOADMACRO=1.
-#   Skips flock, device resets, and triage (these require real hardware).
-#   No hang protection — sim runs at kHz, so wall-clock timeouts are meaningless.
+#   Skips flock, device resets, and HW dispatch-timeout triage (these require
+#   real hardware).
+#   Enables the libttsim hang watchdog via TTSIM_HANG_WATCHDOG_CLOCKS (default
+#   50000; pre-existing env wins). On hang the watchdog _Exit(1)'s the child;
+#   we classify that as HANG and dump the watchdog message.
 #
-# Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] <test_path> [extra_pytest_args...]
+# Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--sim-workers N] <test_path> [extra_pytest_args...]
 #
 # Options:
-#   --dev       Enables polling watcher (NoC sanitizer, waypoints, CB
-#               sanitization), lightweight ebreak asserts, and auto-triage
-#               on hang with full triage + watcher log dump.
-#   --run-all   Run all tests instead of stopping on first failure (-x).
-#               Useful for eval scoring where you need full pass/fail counts.
+#   --dev            Enables polling watcher (NoC sanitizer, waypoints, CB
+#                    sanitization), lightweight ebreak asserts, and auto-triage
+#                    on hang with full triage + watcher log dump.
+#   --run-all        Run all tests instead of stopping on first failure (-x).
+#                    Useful for eval scoring where you need full pass/fail counts.
+#   --sim-workers N  Sim only: pytest-xdist worker count. Each worker dlopens
+#                    its own libttsim (no shared device state). Default is 16.
+#                    Pass 1 to serialize (e.g. when DPRINT ordering matters or
+#                    you suspect cross-worker contention). Errors out if used
+#                    outside sim mode.
 #
 # Modes:
 #   default  - Dispatch timeout only. Lean, no debug overhead.
@@ -48,8 +56,9 @@ TRIAGE_JSON="${TRIAGE_JSON_DIR}/triage.json"
 #   {source, pid, started_at_ms, wait_ms, run_ms, test_path, exit_code}
 # wait_ms = script entry → flock acquired (contention)
 # run_ms  = flock acquired → script exit  (device occupied)
-# Skipped on sim mode (no flock contention) and when the script exits before
-# acquiring the lock (TT_TIMING_LOCK_ACQUIRED_MS stays 0).
+# On sim, flock is skipped so we seed TT_TIMING_LOCK_ACQUIRED_MS=entry below;
+# wait_ms is 0 and run_ms is the full pytest wall-clock. Skipped only when the
+# script exits before that seed runs.
 TT_TIMING_ENTRY_MS=$(date +%s%3N)
 TT_TIMING_LOCK_ACQUIRED_MS=0
 TT_TIMING_SOURCE="run_safe_pytest"
@@ -81,11 +90,21 @@ if [[ -n "${TT_METAL_SIMULATOR:-}" ]]; then
     SIM_MODE=true
     export TT_METAL_SLOW_DISPATCH_MODE=1
     export TT_METAL_DISABLE_SFPLOADMACRO=1
+    # libttsim's own hang watchdog (clocks of no RISC-V / Tensix progress with
+    # pending work before the sim _Exit(1)'s). User-set env wins.
+    : "${TTSIM_HANG_WATCHDOG_CLOCKS:=50000}"
+    export TTSIM_HANG_WATCHDOG_CLOCKS
+    # No flock on sim, but we still want device_timings: seed the marker so the
+    # exit trap emits with wait_ms=0 and run_ms=full wall-clock.
+    TT_TIMING_LOCK_ACQUIRED_MS=$TT_TIMING_ENTRY_MS
 fi
+PYTEST_STDOUT_LOG="/tmp/safe-pytest-stdout-$$.log"
 
 # --- Parse flags ---
 DEV_MODE=false
 FAIL_FAST=true
+SIM_WORKERS=""
+SIM_WORKERS_GIVEN=false
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dev)
@@ -96,11 +115,37 @@ while [[ $# -gt 0 ]]; do
             FAIL_FAST=false
             shift
             ;;
+        --sim-workers)
+            if [[ $# -lt 2 ]]; then
+                echo "SAFE_PYTEST_ERROR: --sim-workers requires an integer argument"
+                exit 3
+            fi
+            SIM_WORKERS="$2"
+            SIM_WORKERS_GIVEN=true
+            shift 2
+            ;;
         *)
             break
             ;;
     esac
 done
+
+# --- Validate --sim-workers ---
+if [[ "$SIM_WORKERS_GIVEN" == true ]]; then
+    if [[ "$SIM_MODE" == false ]]; then
+        echo "SAFE_PYTEST_ERROR: --sim-workers is only valid when TT_METAL_SIMULATOR is set"
+        exit 3
+    fi
+    if ! [[ "$SIM_WORKERS" =~ ^[1-9][0-9]*$ ]]; then
+        echo "SAFE_PYTEST_ERROR: --sim-workers must be a positive integer (got: $SIM_WORKERS)"
+        exit 3
+    fi
+fi
+
+# --- Default sim worker count: 16 ---
+if [[ "$SIM_MODE" == true && -z "$SIM_WORKERS" ]]; then
+    SIM_WORKERS=16
+fi
 
 # --- Argument validation ---
 if [[ $# -eq 0 ]]; then
@@ -188,6 +233,16 @@ else
     echo "SAFE_PYTEST: WARNING: python_env not found; using system Python"
 fi
 
+# --- Pre-flight: pytest-xdist required for sim parallelism (SIM_WORKERS > 1) ---
+if [[ "$SIM_MODE" == true && "$SIM_WORKERS" -gt 1 ]]; then
+    if ! python3 -c "import xdist" 2>/dev/null; then
+        echo "SAFE_PYTEST_ERROR: --sim-workers=${SIM_WORKERS} requires pytest-xdist."
+        echo "                   Install with: pip install pytest-xdist"
+        echo "                   Or pass --sim-workers 1 to run serially."
+        exit 3
+    fi
+fi
+
 # --- Hang detection setup (hardware only) ---
 # On timeout, the dispatch layer runs tt-triage. Fires only on actual hang —
 # zero overhead for passing tests. On sim there is no hang detection because
@@ -247,12 +302,16 @@ if [[ "$DEV_MODE" == true ]]; then
     export TT_METAL_WATCHER_DISABLE_DISPATCH=1
 
     if [[ "$SIM_MODE" == true ]]; then
-        echo "SAFE_PYTEST: [sim+dev] asserts=ebreak llk_asserts=ON watcher=polling (no hang detection on sim)"
+        # NoC sanitizer is intentionally disabled on sim — the sanitizer is
+        # tuned for HW behavior and hits false positives under libttsim.
+        # (Mirrors tt-probe.sh.)
+        export TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1
+        echo "SAFE_PYTEST: [sim+dev] asserts=ebreak llk_asserts=ON watcher=polling(noc_sanitize=OFF) watchdog=${TTSIM_HANG_WATCHDOG_CLOCKS} clocks workers=${SIM_WORKERS}"
     else
         echo "SAFE_PYTEST: [dev] asserts=ebreak llk_asserts=ON watcher=polling triage=ON timeout=${DISPATCH_TIMEOUT}s"
     fi
 elif [[ "$SIM_MODE" == true ]]; then
-    echo "SAFE_PYTEST: [sim] no hang detection"
+    echo "SAFE_PYTEST: [sim] watchdog=${TTSIM_HANG_WATCHDOG_CLOCKS} clocks workers=${SIM_WORKERS}"
 else
     echo "SAFE_PYTEST: dispatch_timeout=${DISPATCH_TIMEOUT}s"
 fi
@@ -273,6 +332,12 @@ fi
 PYTEST_CMD=(pytest "${TEST_PATH}")
 if [[ "$FAIL_FAST" == true ]]; then
     PYTEST_CMD+=(-x)
+fi
+# Sim parallelism via pytest-xdist. Each worker dlopens its own libttsim;
+# DRAM is MAP_PRIVATE per-process so workers don't interfere. Skip when
+# workers=1 to avoid xdist setup overhead.
+if [[ "$SIM_MODE" == true && "$SIM_WORKERS" -gt 1 ]]; then
+    PYTEST_CMD+=(-n "$SIM_WORKERS")
 fi
 PYTEST_CMD+=("$@")
 
@@ -299,10 +364,15 @@ trap '_signal_cleanup INT'  SIGINT
 
 # Run pytest in background so `wait` can be interrupted by a signal. Bash
 # blocks signal delivery while a synchronous foreground command is running.
-"${PYTEST_CMD[@]}" &
+# Mirror stdout/stderr to PYTEST_STDOUT_LOG via process substitution so we can
+# grep for the libttsim watchdog message after a sim hang. Process substitution
+# leaves $! pointing at pytest itself (not tee), so the signal trap still kills
+# the right process tree.
+"${PYTEST_CMD[@]}" > >(tee "$PYTEST_STDOUT_LOG") 2>&1 &
 CHILD_PID=$!
 wait "$CHILD_PID"
 EXIT_CODE=$?
+wait 2>/dev/null  # let tee flush before we grep
 CHILD_PID=
 
 echo "========================================"
@@ -311,6 +381,7 @@ echo "========================================"
 if [[ $EXIT_CODE -eq 0 ]]; then
     rm -f "$DIRTY_FLAG"
     rm -f "$TRIAGE_LOG"
+    rm -f "$PYTEST_STDOUT_LOG"
     echo "SAFE_PYTEST_RESULT: PASS"
     exit 0
 fi
@@ -321,6 +392,7 @@ fi
 if [[ $EXIT_CODE -eq 4 || $EXIT_CODE -eq 5 ]]; then
     rm -f "$DIRTY_FLAG"
     rm -f "$TRIAGE_LOG"
+    rm -f "$PYTEST_STDOUT_LOG"
     if [[ $EXIT_CODE -eq 4 ]]; then
         echo "SAFE_PYTEST_ERROR: Pytest usage error (invalid path or arguments)"
     else
@@ -333,24 +405,31 @@ fi
 pkill -9 -P $$ 2>/dev/null || true
 
 # Determine if this was a hang:
-#   Triage log non-empty = dispatch timeout handler ran tt-triage (definitive hang signal)
-# On sim there is no hang detection, so IS_HANG always stays false.
+#   HW:  Triage log non-empty = dispatch timeout handler ran tt-triage.
+#   Sim: pytest stdout contains "hang watchdog fired" = libttsim watchdog _Exit(1)'d.
+# In the sim case we stage the watchdog message into TRIAGE_LOG so the HANG
+# branch below dumps it identically to a HW triage report.
 IS_HANG=false
 if [[ -s "$TRIAGE_LOG" ]]; then
     IS_HANG=true
+elif [[ "$SIM_MODE" == true ]] && grep -q "hang watchdog fired" "$PYTEST_STDOUT_LOG" 2>/dev/null; then
+    IS_HANG=true
+    grep -A4 "hang watchdog fired" "$PYTEST_STDOUT_LOG" > "$TRIAGE_LOG"
 fi
 
 # Only reset device when the failure might have left it dirty.
 # Hangs and crashes corrupt device state. Normal test failures (PCC mismatch,
 # assertion errors) and collection errors don't touch the device.
 if [[ "$IS_HANG" == true ]]; then
-    echo "SAFE_PYTEST: Resetting device..."
-    if tt-smi -r; then
-        sleep 2
-        rm -f "$DIRTY_FLAG"
-        echo "SAFE_PYTEST: Device reset complete"
-    else
-        echo "SAFE_PYTEST: Device reset FAILED; leaving device marked dirty"
+    if [[ "$SIM_MODE" == false ]]; then
+        echo "SAFE_PYTEST: Resetting device..."
+        if tt-smi -r; then
+            sleep 2
+            rm -f "$DIRTY_FLAG"
+            echo "SAFE_PYTEST: Device reset complete"
+        else
+            echo "SAFE_PYTEST: Device reset FAILED; leaving device marked dirty"
+        fi
     fi
 
     echo "SAFE_PYTEST_RESULT: HANG (exit code: $EXIT_CODE)"
@@ -376,11 +455,13 @@ if [[ "$IS_HANG" == true ]]; then
     fi
 
     rm -f "$TRIAGE_LOG"
+    rm -f "$PYTEST_STDOUT_LOG"
     exit 2
 fi
 
 rm -f "$DIRTY_FLAG"
 rm -f "$TRIAGE_LOG"
+rm -f "$PYTEST_STDOUT_LOG"
 # Note: $EXIT_CODE here is pytest's internal exit code (e.g. 1 = test failure,
 # 2 = collection error / user interrupt). The wrapper's own exit code is
 # always 1 for this branch — exit 2 is reserved for real dispatch-timeout
