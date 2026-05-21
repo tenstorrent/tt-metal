@@ -9,6 +9,8 @@ import torch
 from helpers.llk_params import (
     DestSync,
     GoldenType,
+    L1Accumulation,
+    PackerReluType,
     StochasticRounding,
     Tilize,
 )
@@ -24,12 +26,14 @@ class FusedOperation:
     max_output_dimensions: Tuple[int, int]
     stage_id: int = 0
     num_stages: int = 1
-    unpack_to_dest: bool = False
     throttle: int = 0
     stochastic_rnd: StochasticRounding = StochasticRounding.No
     tiny_tiles: bool = False
     dest_sync: DestSync = DestSync.Half
     block_size: Tuple[int, int] = (32, 32)
+    pack_relu: PackerReluType = PackerReluType.NoRelu
+    relu_threshold: float = 0.0
+    pack_l1_accumulation: L1Accumulation = L1Accumulation.No
     bh_tilize: Tilize = Tilize.No
 
     def __post_init__(self):
@@ -55,7 +59,7 @@ class FusedOperation:
         )
         l1_golden_tensor = self.math.packer().golden(l1_golden_tensor, self, config)
 
-        self.output.l1_golden = l1_golden_tensor.flatten()
+        self.output.l1_golden = l1_golden_tensor
 
         # calculate master golden
         master_golden_tensor = self.math.golden(
@@ -65,7 +69,7 @@ class FusedOperation:
             master_golden_tensor, self, config
         )
 
-        self.output._master_golden = master_golden_tensor.flatten()
+        self.output._master_golden = master_golden_tensor
 
         return master_golden_tensor
 
@@ -78,4 +82,5 @@ class FusedOperation:
             f"  Output: {self.output}\n"
             f"  Block Size: {self.block_size}\n"
             f"  Dest Sync: {self.dest_sync}\n"
+            f"  Pack L1 Accumulation: {self.pack_l1_accumulation}\n"
         )

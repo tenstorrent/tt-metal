@@ -9,7 +9,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack.h"
 #include "api/debug/assert.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #include "tt-metalium/circular_buffer_constants.h"
 #include "ttnn/cpp/ttnn/kernel_lib/cb_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
@@ -29,7 +29,7 @@ ALWI void reduce_with_matmul_init(uint32_t in0_cb_id, uint32_t in1_cb_id) {
 }
 
 ALWI void reduce_with_matmul_init_with_dt(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t c_in_old_srca) {
-    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(c_in_old_srca, in1_cb_id)));
+    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(c_in_old_srca, in1_cb_id)));
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(c_in_old_srca, in1_cb_id)));
     reduce_with_matmul_init(in0_cb_id, in1_cb_id);
 }
@@ -75,7 +75,7 @@ constexpr bool manages_cb(ReduceInputPolicy p) {
 template <PoolType reduce_type, ReduceDim reduce_dim>
 ALWI void reduce_init_short_with_dt(uint32_t old_cb_id, uint32_t input_cb_id, uint32_t scaler_cb_id) {
     // Reconfigure SRCA data format from old_cb_id to input_cb_id (similar to copy_tile_to_dst_init_short_with_dt)
-    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(old_cb_id, input_cb_id)));
+    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(old_cb_id, input_cb_id)));
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(old_cb_id, input_cb_id)));
 
     // Reconfigure unpacker for reduce operation (SRCA and SRCB)
@@ -102,12 +102,13 @@ template <
     typename AccumulateT,
     bool use_matmul = false>
 ALWI void reload_accumulator_if_needed(
-    ::experimental::CircularBuffer& accum_cb, uint32_t input_cb_id, uint32_t scaler_cb_id, const AccumulateT& accumulate) {
+    CircularBuffer& accum_cb, uint32_t input_cb_id, uint32_t scaler_cb_id, const AccumulateT& accumulate) {
     if constexpr (is_accumulate_v<AccumulateT>) {
         if (!accumulate.is_first()) {  // Reload on all iterations except first
             constexpr uint32_t onetile = 1;
             accum_cb.wait_front(onetile);
-            copy_tile_to_dst_init_short_with_dt(input_cb_id, accumulate.config.cb_accumulator);
+            const uint32_t prev_srca_cb = use_matmul ? scaler_cb_id : input_cb_id;
+            copy_tile_to_dst_init_short_with_dt(prev_srca_cb, accumulate.config.cb_accumulator);
             copy_tile(accumulate.config.cb_accumulator, 0, accumulate.config.dst_index);
             accum_cb.pop_front(onetile);
 
@@ -212,10 +213,10 @@ ALWI void reduce(
 
     constexpr bool use_matmul = reduce_uses_matmul<reduce_type, reduce_dim>();
 
-    ::experimental::CircularBuffer input_cb(input_cb_id);
-    ::experimental::CircularBuffer scaler_cb(scaler_cb_id);
-    ::experimental::CircularBuffer output_cb(output_cb_id);
-    ::experimental::CircularBuffer accum_cb([&]() -> uint32_t {
+    CircularBuffer input_cb(input_cb_id);
+    CircularBuffer scaler_cb(scaler_cb_id);
+    CircularBuffer output_cb(output_cb_id);
+    CircularBuffer accum_cb([&]() -> uint32_t {
         if constexpr (enable_accumulation) { return accumulate.config.cb_accumulator; }
         else { return 0; }
     }());
@@ -296,6 +297,11 @@ ALWI void reduce(
                     }
                 }
             }
+
+            // Call post-reduce operation on the single accumulated DST register.
+            // No-op when PostReduceOp is the default NoOp.
+            post_reduce_op(dst_idx);
+
             // Pop modes: reserve per-batch
             if constexpr (should_pop(input_policy)) {
                 output_cb.reserve_back(onetile);

@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -71,6 +72,11 @@ enum class EnvVarID {
     // ========================================
     TT_METAL_CLEAR_L1,    // Clear L1 memory on device init
     TT_METAL_CLEAR_DRAM,  // Clear DRAM on device init
+
+    // ========================================
+    // HOST MEMORY
+    // ========================================
+    TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES,  // Maximum cached pinned host memory
 
     // ========================================
     // DEBUG & TESTING
@@ -176,17 +182,20 @@ enum class EnvVarID {
     // ========================================
     // DEBUG PRINTING (DPRINT)
     // ========================================
-    TT_METAL_DPRINT_CORES,                     // Worker cores for debug printing
-    TT_METAL_DPRINT_ETH_CORES,                 // Ethernet cores for debug printing
-    TT_METAL_DPRINT_DRAM_CORES,                // DRAM cores for debug printing
-    TT_METAL_DPRINT_CHIPS,                     // Chip IDs for debug printing
-    TT_METAL_DPRINT_NODES,                     // Fabric node IDs for debug printing
-    TT_METAL_DPRINT_MESH_COORDS,               // Global system mesh (row,col) coordinates for debug printing
-    TT_METAL_DPRINT_RISCVS,                    // RISC-V processors for debug printing
-    TT_METAL_DPRINT_FILE,                      // Debug print output file
-    TT_METAL_DPRINT_ONE_FILE_PER_RISC,         // Separate file per RISC-V processor
-    TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC,  // Prepend device/core/RISC info
-    TT_METAL_DEVICE_PRINT,                     // Use new DEVICE_PRINT instead of legacy DPRINT
+    TT_METAL_DPRINT_CORES,                          // Worker cores for debug printing
+    TT_METAL_DPRINT_ETH_CORES,                      // Ethernet cores for debug printing
+    TT_METAL_DPRINT_DRAM_CORES,                     // DRAM cores for debug printing
+    TT_METAL_DPRINT_CHIPS,                          // Chip IDs for debug printing
+    TT_METAL_DPRINT_NODES,                          // Fabric node IDs for debug printing
+    TT_METAL_DPRINT_MESH_COORDS,                    // Global system mesh (row,col) coordinates for debug printing
+    TT_METAL_DPRINT_RISCVS,                         // RISC-V processors for debug printing
+    TT_METAL_DPRINT_FILE,                           // Debug print output file
+    TT_METAL_DPRINT_ONE_FILE_PER_RISC,              // Separate file per RISC-V processor
+    TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC,       // Prepend device/core/RISC info
+    TT_METAL_DEVICE_PRINT,                          // Use new DEVICE_PRINT instead of legacy DPRINT
+    TT_METAL_DEVICE_PRINT_DISPATCH_STALL_US,        // dispatch_s DevicePrintDispatch stall-detection period (us)
+    TT_METAL_DEVICE_PRINT_DISPATCH_FULL_US,         // dispatch_s DevicePrintDispatch full-dispatch period (us)
+    TT_METAL_DEVICE_PRINT_DISPATCH_L1_CACHE_BYTES,  // dispatch_s DevicePrintDispatch L1 cache size override (bytes)
 
     // ========================================
     // LIGHTWEIGHT KERNEL DEBUGGING
@@ -208,6 +217,7 @@ enum class EnvVarID {
     // ========================================
     TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS,  // Timeout for fabric router sync in milliseconds
     TT_METAL_FABRIC_OPT_LEVEL,               // Override fabric kernel compiler optimization level
+    TT_TOPOLOGY_SOLVER_ENGINE,               // sat|dfs: topology mapping backend (fabric)
 
     // ========================================
     // JIT BUILD CONFIGURATION
@@ -516,6 +526,39 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: 0 (don't clear)
         // Usage: export TT_METAL_CLEAR_DRAM=1
         case EnvVarID::TT_METAL_CLEAR_DRAM: this->clear_dram = is_env_enabled(value); break;
+
+        // ========================================
+        // HOST MEMORY
+        // ========================================
+
+        // TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES
+        // Maximum host memory bytes held by the pinned memory cache.
+        // Default: 4GB
+        // Usage: export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=4294967296
+        case EnvVarID::TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES: {
+            std::string limit_value = trim_copy(value);
+            if (limit_value.empty() || limit_value.front() == '-') {
+                TT_THROW("TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES must be a non-negative byte count: {}", value);
+            }
+
+            try {
+                size_t parse_pos = 0;
+                unsigned long long parsed_limit = std::stoull(limit_value, &parse_pos, 0);
+                if (parse_pos != limit_value.size()) {
+                    TT_THROW("TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES must be a byte count: {}", value);
+                }
+                if (parsed_limit > std::numeric_limits<size_t>::max()) {
+                    TT_THROW("TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES value out of range: {}", value);
+                }
+                this->pinned_memory_cache_limit_bytes = static_cast<size_t>(parsed_limit);
+            } catch (const std::invalid_argument&) {
+                TT_THROW("Invalid TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES: {}", value);
+            } catch (const std::out_of_range&) {
+                TT_THROW("TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES value out of range: {}", value);
+            }
+            break;
+        }
+
         // ========================================
         // DEBUG & TESTING
         // ========================================
@@ -1421,6 +1464,17 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
         }
 
+        // TT_TOPOLOGY_SOLVER_ENGINE
+        // If set to sat/1/true/yes, topology mapping uses the SAT backend when solver_engine is Auto (same rule as
+        // tt::tt_fabric::topology_mapping_use_sat_engine). Value is snapshotted here at Metal init.
+        // Usage: export TT_TOPOLOGY_SOLVER_ENGINE=sat
+        case EnvVarID::TT_TOPOLOGY_SOLVER_ENGINE: {
+            const std::string lowered = to_lower_copy(trim_copy(std::string(value)));
+            this->topology_mapping_use_sat_engine_ =
+                lowered == "sat" || lowered == "1" || lowered == "true" || lowered == "yes";
+            break;
+        }
+
         // TT_METAL_DISABLE_XIP_DUMP
         // Disable XIP dump
         // Default: false
@@ -1447,6 +1501,28 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (legacy DPRINT is used)
         // Usage: export TT_METAL_DEVICE_PRINT=1
         case EnvVarID::TT_METAL_DEVICE_PRINT: this->use_device_print = is_env_enabled(value); break;
+
+        // TT_METAL_DEVICE_PRINT_DISPATCH_STALL_US
+        // Period in microseconds between dispatch_s DEVICE_PRINT stall-detection passes.
+        // Default: 50
+        case EnvVarID::TT_METAL_DEVICE_PRINT_DISPATCH_STALL_US:
+            this->device_print_dispatch_stall_us = std::stoul(value);
+            break;
+
+        // TT_METAL_DEVICE_PRINT_DISPATCH_FULL_US
+        // Period in microseconds between dispatch_s DEVICE_PRINT full-dispatch passes.
+        // Default: 100000 (100 ms)
+        case EnvVarID::TT_METAL_DEVICE_PRINT_DISPATCH_FULL_US:
+            this->device_print_dispatch_full_us = std::stoul(value);
+            break;
+
+        // TT_METAL_DEVICE_PRINT_DISPATCH_L1_CACHE_BYTES
+        // Override the dispatch_s DEVICE_PRINT dispatch L1 cache buffer size (bytes).
+        // 0 (default) means use the per-arch HAL default. Set this if dispatch_s logs
+        // that aggregation self-disabled because the cache was too small.
+        case EnvVarID::TT_METAL_DEVICE_PRINT_DISPATCH_L1_CACHE_BYTES:
+            this->device_print_dispatch_l1_cache_bytes = std::stoul(value);
+            break;
 
         // TT_METAL_ALLOCATOR_MODE_HYBRID
         // Enable hybrid lockstep + per-core L1 allocator mode.

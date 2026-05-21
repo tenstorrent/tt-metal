@@ -12,9 +12,9 @@ interfaces for forwarding data between pipeline stages across hosts.
 Pipeline topology is determined by generate_blitz_decode_pipeline(), which
 maps physical ASIC locations to logical mesh coordinates for each stage.
 
-There are four distinct stage configurations:
+There are five distinct stage configurations:
 
-  1. First stage (mesh_id == 0):
+  1. First stage (mesh_id == 0, num_procs > 1):
      H2D socket receives tokens from host, looks up embedding in DRAM,
      forwards embedding rows downstream via exit D2D socket.
      If loopback is enabled, also receives results from the last stage
@@ -34,6 +34,15 @@ There are four distinct stage configurations:
      socket is wired to the D2H kernel's upstream socket so data flows
      through a single shared socket pair.
 
+  5. Combined H2D + D2H stage (num_procs == 1, no loopback):
+     Single-process pipeline that owns both host sockets on the same stage.
+     H2D delivers each token + metadata to ``entry_node_downstream`` (compute
+     input core); compute produces N output shards on ``exit_node_upstream``
+     cores; the multi-upstream D2H sender (BRISC kernel) reads one page from
+     each upstream and assembles them into a single D2H page back to host.
+     No D2D socket interfaces are constructed — all I/O is through ``host_io``.
+     Intended for plumbing a ``DecoderStage``-shaped compute directly to host.
+
 Per-device parallel mode (pipeline_device_coords):
   When a list of MeshCoordinate device coordinates is provided, each channel
   maps to a different device in the mesh. Within each device, pipeline_core_coord
@@ -50,6 +59,9 @@ entry_socket_interface / exit_socket_interface can be any of:
 """
 
 from dataclasses import dataclass
+from typing import Protocol, runtime_checkable
+
+import torch
 
 import ttnn
 from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata
@@ -131,6 +143,48 @@ class LoopbackConfig:
         return self._mode == "fabric"
 
 
+@runtime_checkable
+class PipelineBlockKind(Protocol):
+    """Structural interface for any pipeline-block-like object that ``Pipeline`` can drive.
+
+    Both :class:`PipelineBlock` and the combined-stage block in
+    ``demo/stage.py`` implement this. Methods listed here are the ones consumed by
+    :class:`Pipeline` and by stage ``setup`` / ``launch_compute`` / ``terminate``;
+    parallel-mode-only methods (``get_upstream_sockets`` etc.) are intentionally
+    omitted because they're stage-specific and the caller knows the concrete type.
+    """
+
+    def run(self) -> None:
+        ...
+
+    def terminate(self) -> None:
+        ...
+
+    def is_first_pipeline_stage(self) -> bool:
+        ...
+
+    def write_token(self, token_tensor: ttnn.Tensor) -> None:
+        ...
+
+    def read_output(self, output_tensor: ttnn.Tensor) -> None:
+        ...
+
+    def push_dummy_token(self) -> None:
+        ...
+
+    def drain_dummy_output(self) -> None:
+        ...
+
+    def get_upstream_socket(self):
+        ...
+
+    def get_downstream_socket(self):
+        ...
+
+    def export_host_socket_descriptors(self, io_socket_descriptor_prefix: str) -> None:
+        ...
+
+
 class PipelineBlock:
     def __init__(
         self,
@@ -141,6 +195,7 @@ class PipelineBlock:
         upstream_d2d_socket_page_size,
         downstream_d2d_socket_page_size,
         h2d_socket_fifo_size=None,
+        h2d_socket_page_size=None,
         d2h_socket_fifo_size=None,
         d2h_socket_page_size=None,
         entry_node_downstream=None,
@@ -200,9 +255,37 @@ class PipelineBlock:
         self.d2h_socket = None
         self.entry_socket_interface = None
         self.exit_socket_interface = None
+        self._h2d_page_size_bytes = None
+        self._d2h_page_size_bytes = None
 
-        token_size_bytes = 64
-        if self.is_pipeline_start:
+        # Default H2D page = DeepseekMetadata struct (256 B). Callers like the combined
+        # H2D+D2H stage in inject-hidden-states mode override this to fit a full
+        # (activation || metadata) payload directly on the H2D wire.
+        token_size_bytes = (
+            h2d_socket_page_size if h2d_socket_page_size is not None else DeepseekMetadata.aligned_size_bytes()
+        )
+        if self.is_pipeline_start and self.is_last_stage and not self.initialize_loopback:
+            # Single-process pipeline (one stage spanning the mesh) with both H2D and D2H on
+            # the same stage. Plugs a decoder-shaped compute (entry_node_downstream /
+            # exit_node_upstream-list) directly into host I/O, with the D2H sender pulling
+            # from N upstream cores. None of the upstream/downstream D2D parameters apply
+            # here — only the H2D / D2H sizes and the H2D-to-compute local socket size do.
+            self._init_combined_h2d_d2h_stage(
+                mesh_device,
+                pipeline_config,
+                token_size_bytes,
+                h2d_socket_fifo_size,
+                d2h_socket_fifo_size,
+                d2h_socket_page_size,
+                h2d_to_compute_socket_buffer_size=downstream_d2d_socket_fifo_size,
+                embedding_tensor=embedding_tensor,
+                forward_metadata=forward_metadata,
+                entry_node_downstream=entry_node_downstream,
+                exit_node_upstream=exit_node_upstream,
+                exit_upstream_page_size=exit_upstream_page_size,
+                host_io_placement=loopback.host_io_placement,
+            )
+        elif self.is_pipeline_start:
             self._init_first_stage(
                 mesh_device,
                 pipeline_config,
@@ -311,12 +394,14 @@ class PipelineBlock:
             h2d_socket_fifo_size,
             ttnn.H2DMode.HOST_PUSH,
         )
+        self._h2d_page_size_bytes = token_size_bytes
 
         if self.initialize_loopback:
             d2h_device_coord = pipeline_config[self.num_procs].exit_node_coord
             self.d2h_socket = ttnn.D2HSocket(
                 mesh_device, ttnn.MeshCoreCoord(d2h_device_coord, host_io_placement.d2h_core), d2h_socket_fifo_size
             )
+            self._d2h_page_size_bytes = d2h_socket_page_size
 
         self.host_io = HostInterface(
             self.h2d_socket,
@@ -327,11 +412,11 @@ class PipelineBlock:
             h2d_downstream_core=ttnn.MeshCoreCoord(
                 pipeline_config[self.my_stage_idx].exit_node_coord, host_io_placement.fwd_d2d_core
             ),
-            d2h_upstream_core=ttnn.MeshCoreCoord(
-                pipeline_config[self.num_procs].entry_node_coord, host_io_placement.lb_d2d_core
-            )
-            if self.initialize_loopback
-            else None,
+            d2h_upstream_core=(
+                ttnn.MeshCoreCoord(pipeline_config[self.num_procs].entry_node_coord, host_io_placement.lb_d2d_core)
+                if self.initialize_loopback
+                else None
+            ),
             embedding_tensor=embedding_tensor,
             metadata_size_bytes=downstream_d2d_socket_page_size - embedding_size_bytes,
         )
@@ -362,6 +447,95 @@ class PipelineBlock:
                 sender_mesh=MeshWrapper(rank=ls.rank, mesh_id=ls.mesh_id),
                 receiver_mesh=MeshWrapper(mesh_device),
             )
+
+    def _init_combined_h2d_d2h_stage(
+        self,
+        mesh_device,
+        pipeline_config,
+        token_size_bytes,
+        h2d_socket_fifo_size,
+        d2h_socket_fifo_size,
+        d2h_socket_page_size,
+        h2d_to_compute_socket_buffer_size,
+        embedding_tensor,
+        forward_metadata,
+        entry_node_downstream,
+        exit_node_upstream,
+        exit_upstream_page_size,
+        host_io_placement,
+    ):
+        """Combined H2D + multi-upstream D2H stage for a single-process pipeline.
+
+        The stage spans the mesh: H2D lives on the stage's entry node and D2H lives on its
+        exit node. H2D delivers each token + metadata to ``entry_node_downstream`` (the
+        compute input core, on the entry node); the compute produces N output shards on
+        ``exit_node_upstream`` cores (on the exit node); the multi-upstream D2H sender
+        (BRISC kernel) reads one page from each upstream and assembles them into a single
+        D2H page sent back to host. No D2D socket interfaces are constructed — all I/O
+        flows through ``self.host_io``.
+
+        ``h2d_to_compute_socket_buffer_size`` sizes the local FIFO of the H2D→compute
+        socket pair on the entry node.
+        """
+        assert h2d_socket_fifo_size is not None, "h2d_socket_fifo_size must be provided"
+        assert d2h_socket_fifo_size is not None, "d2h_socket_fifo_size must be provided"
+        assert d2h_socket_page_size is not None, "d2h_socket_page_size must be provided"
+        assert d2h_socket_fifo_size >= d2h_socket_page_size
+        assert h2d_socket_fifo_size >= token_size_bytes
+        # embedding_tensor is optional: when None, HostInterface skips the fused embedding
+        # kernel and uses h2d_receiver.cpp to forward the host-supplied page verbatim
+        # (used by inject-hidden-states mode where the host pushes a full
+        # `activation || metadata` page instead of just a token id).
+        assert (
+            entry_node_downstream is not None
+        ), "entry_node_downstream is required for the combined H2D+D2H stage (the compute input core)"
+        assert (
+            isinstance(exit_node_upstream, list) and len(exit_node_upstream) >= 1
+        ), "exit_node_upstream must be a non-empty list of MeshCoreCoord (compute output cores feeding D2H)"
+        assert exit_upstream_page_size is not None, "exit_upstream_page_size is required for the combined H2D+D2H stage"
+
+        metadata_size_bytes = DeepseekMetadata.aligned_size_bytes() if forward_metadata else 0
+        assert d2h_socket_page_size == len(exit_node_upstream) * exit_upstream_page_size + metadata_size_bytes, (
+            f"d2h_socket_page_size ({d2h_socket_page_size}) must equal len(exit_node_upstream) "
+            f"({len(exit_node_upstream)}) * exit_upstream_page_size ({exit_upstream_page_size}) "
+            f"+ metadata_size_bytes ({metadata_size_bytes})"
+        )
+
+        # H2D on the entry node, D2H on the exit node. HostInterface's same_device check
+        # falls through to two separate per-device programs in this layout.
+        h2d_device_coord = pipeline_config[self.my_stage_idx].entry_node_coord
+        d2h_device_coord = pipeline_config[self.my_stage_idx].exit_node_coord
+
+        self.h2d_socket = ttnn.H2DSocket(
+            mesh_device,
+            ttnn.MeshCoreCoord(h2d_device_coord, host_io_placement.h2d_core),
+            ttnn.BufferType.L1,
+            h2d_socket_fifo_size,
+            ttnn.H2DMode.HOST_PUSH,
+        )
+        self._h2d_page_size_bytes = token_size_bytes
+
+        self.d2h_socket = ttnn.D2HSocket(
+            mesh_device,
+            ttnn.MeshCoreCoord(d2h_device_coord, host_io_placement.d2h_core),
+            d2h_socket_fifo_size,
+        )
+        self._d2h_page_size_bytes = d2h_socket_page_size
+
+        self.host_io = HostInterface(
+            self.h2d_socket,
+            self.d2h_socket,
+            token_size_bytes,
+            d2h_socket_page_size,
+            core_to_core_socket_buffer_size=h2d_to_compute_socket_buffer_size,
+            h2d_downstream_core=entry_node_downstream,
+            embedding_tensor=embedding_tensor,
+            metadata_size_bytes=metadata_size_bytes,
+            d2h_upstream_cores=exit_node_upstream,
+            d2h_upstream_page_size=exit_upstream_page_size,
+            d2h_socket_fifo_size=d2h_socket_fifo_size,
+            d2h_forward_metadata_size_bytes=metadata_size_bytes,
+        )
 
     def _init_last_stage_with_d2h(
         self,
@@ -396,6 +570,7 @@ class PipelineBlock:
         self.d2h_socket = ttnn.D2HSocket(
             mesh_device, ttnn.MeshCoreCoord(d2h_device_coord, d2h_core), d2h_socket_fifo_size
         )
+        self._d2h_page_size_bytes = d2h_socket_page_size
 
         # HostInterface creates an upstream_socket_pair (entry_core → exit_core) for its D2H
         # kernel. We then wire the entry_socket_interface's downstream to the same pair so that
@@ -459,9 +634,11 @@ class PipelineBlock:
             upstream_d2d_socket_page_size,
             ttnn.MeshCoreCoord(pipeline_config[prev_stage].exit_node_coord, pipeline_core_coord),
             ttnn.MeshCoreCoord(pipeline_config[self.my_stage_idx].entry_node_coord, pipeline_core_coord),
-            downstream_core_coord=entry_node_downstream
-            if entry_node_downstream
-            else ttnn.MeshCoreCoord(pipeline_config[self.my_stage_idx].exit_node_coord, pipeline_core_coord),
+            downstream_core_coord=(
+                entry_node_downstream
+                if entry_node_downstream
+                else ttnn.MeshCoreCoord(pipeline_config[self.my_stage_idx].exit_node_coord, pipeline_core_coord)
+            ),
             sender_mesh=MeshWrapper(rank=ps.rank, mesh_id=ps.mesh_id),
             receiver_mesh=MeshWrapper(mesh_device),
         )
@@ -626,9 +803,16 @@ class PipelineBlock:
             mesh_program_descriptor[ttnn.MeshCoordinateRange(device_coord, device_coord)] = merged
         return ttnn.generic_op([dummy_tensor, dummy_tensor], mesh_program_descriptor)
 
+    def _is_combined_h2d_d2h_stage(self):
+        return (
+            self.is_pipeline_start and self.is_last_stage and not self.initialize_loopback and not self.parallel_devices
+        )
+
     def run(self):
         if self.parallel_devices:
             self._dispatch_parallel_device_programs()
+        elif self._is_combined_h2d_d2h_stage():
+            self.host_io.run()
         elif self.is_pipeline_start:
             self.host_io.run()
             self.exit_socket_interface.run()
@@ -647,7 +831,10 @@ class PipelineBlock:
             for si in self.entry_socket_interface:
                 si.terminate(False)
             for i, si in enumerate(self.exit_socket_interface):
-                si.terminate(i == len(self.exit_socket_interface) - 1)
+                last = i == len(self.exit_socket_interface) - 1
+                si.terminate(last)
+        elif self._is_combined_h2d_d2h_stage():
+            self.host_io.terminate(True)
         elif self.is_pipeline_start:
             self.host_io.terminate(False)
             if self.initialize_loopback:
@@ -656,7 +843,8 @@ class PipelineBlock:
         else:
             self.entry_socket_interface.terminate(False)
             if self.has_exit:
-                self.exit_socket_interface.terminate(not self.has_d2h)
+                sync = not self.has_d2h
+                self.exit_socket_interface.terminate(sync)
             if self.host_io is not None:
                 self.host_io.terminate(True)
 
@@ -695,6 +883,35 @@ class PipelineBlock:
             result = ttnn.to_torch(output_tensor).reshape(-1).contiguous()
             send_bytes(result.view(torch.uint8).numpy().tobytes(), 0)
 
+    def push_dummy_token(self):
+        """Push a single zeroed token through the H2D socket.
+
+        Used during pipeline teardown to wake every stage's compute loop one last
+        iteration so each persistent kernel returns to its top-of-loop termination
+        check and breaks cleanly.
+        """
+        assert self.is_first_pipeline_stage(), "push_dummy_token() requires the first pipeline stage"
+        assert self.h2d_socket is not None and self._h2d_page_size_bytes is not None
+        page_words = self._h2d_page_size_bytes // 4
+        dummy = ttnn.from_torch(
+            torch.zeros(1, page_words, dtype=torch.uint32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        self.h2d_socket.write_tensor(dummy)
+
+    def drain_dummy_output(self):
+        """Drain one page from the D2H socket — pairs with :meth:`push_dummy_token` during teardown."""
+        if self.d2h_socket is None or self._d2h_page_size_bytes is None:
+            return
+        page_words = self._d2h_page_size_bytes // 4
+        sink = ttnn.from_torch(
+            torch.zeros(1, page_words, dtype=torch.uint32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        self.d2h_socket.read_tensor(sink)
+
     def get_upstream_socket(self):
         """Return a single upstream socket (non-parallel mode only)."""
         assert not self.parallel_devices, "Use get_upstream_sockets() for parallel mode"
@@ -706,12 +923,18 @@ class PipelineBlock:
     def get_downstream_socket(self):
         """Return a single downstream socket (non-parallel mode only)."""
         assert not self.parallel_devices, "Use get_downstream_sockets() for parallel mode"
+        if self.entry_socket_interface is None:
+            # Combined H2D+D2H stage: compute reads from the H2D's downstream socket directly.
+            return self.host_io.get_downstream_socket()
         return self.entry_socket_interface.get_downstream_socket()
 
     def get_upstream_sockets(self):
         """Return list of upstream sockets (per-device parallel or multi-upstream modes)."""
         if self.parallel_devices:
             return [si.get_upstream_sockets() for si in self.exit_socket_interface]
+        if self.exit_socket_interface is None:
+            # Combined H2D+D2H stage: compute writes into the multi-upstream D2H feeders.
+            return self.host_io.get_upstream_sockets()
         return self.exit_socket_interface.get_upstream_sockets()
 
     def get_downstream_sockets(self):

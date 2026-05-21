@@ -15,23 +15,53 @@
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/base_types.hpp>    // For MathFidelity, UnpackToDestMode (global scope)
 #include <tt-metalium/kernel_types.hpp>  // For DataMovementProcessor, NOC, etc.
 
 namespace tt::tt_metal::experimental::metal2_host_api {
 
 struct ComputeConfiguration {
-    // Tensix hardware resource configuration (configured by compute kernels)
-    // Gen1 and Gen2 configurations are currently identical.
+    // Tensix hardware resource configuration for compute kernels.
+    // Gen1 and Gen2 configurations are identical.
+    //
+    // The Tensix Engine is a 3-stage pipeline (Unpack → Math → Pack).
+    // There are two math engines:
+    //  - FPU reads operands from the SrcA / SrcB register files (~19-bit),
+    //    writes to the Dest register file (16- or 32-bit, configurable).
+    //  - SFPU runs SIMD transcendentals. It can only access Dest.
+    // The fields below configure this pipeline.
 
+    // Number of multiply passes the FPU runs to use more mantissa bits
     MathFidelity math_fidelity = MathFidelity::HiFi4;
+
+    // Configure Dest register to hold 32-bit elements (instead of the default 16-bit)
     bool fp32_dest_acc_en = false;
+
+    // Dest register sync mode:
+    //   false (Half) — Dest is split in half; math and pack pipeline (double-buffered)
+    //   true  (Full) — Dest is one buffer; twice the capacity, no math/pack overlap
     bool dst_full_sync_en = false;
+
+    // Pack-side precision tweak for the Bfp8 block-float format.
+    // (Affects how exponents are reconciled when converting Dest contents to Bfp8)
     bool bfp8_pack_precise = false;
+
+    // Select fast-and-approximate vs slow-and-precise variants of SFPU transcendentals
     bool math_approx_mode = false;
 
-    // "Unpack to dest" mode must be specified on a per-DFB basis
-    // unpack_to_dest_mode maps DFB identifier to UnpackToDestMode
+    // Per-DFB choice of how the unpacker delivers data into the math stage:
+    //   Default          — unpack via SrcA/B regs (~19-bit elements; full FPU access)
+    //   UnpackToDestFp32 — unpack via Dest regs with full FP32 precision (SFPU only)
+    //
+    // This choice matters only when ALL of the following hold for the DFB binding:
+    //   1. The kernel is the consumer endpoint (unpacking data into the kernel)
+    //   2. The DFB's data format is Float32.
+    //   3. fp32_dest_acc_en is true (Dest must be 32-bit-wide to hold FP32).
+    //
+    // You MUST provide an unpack_to_dest_mode entry for the DFB if these conditions hold;
+    // failing to do so will trigger an error. Otherwise, supplying an entry is optional
+    // and only Default is accepted.
     using UnpackToDestModeEntry = std::pair<DFBSpecName, tt::tt_metal::UnpackToDestMode>;
     std::vector<UnpackToDestModeEntry> unpack_to_dest_mode;
 };
@@ -50,7 +80,7 @@ struct DataMovementConfiguration {
 
     struct Gen2DataMovementConfig {
         // Currently, no configuration is needed for Gen2!
-        // Might want to revisit the API if so....
+        // The empty struct is still used to express a Gen2 DM kernel.
     };
     std::optional<Gen2DataMovementConfig> gen2_data_movement_config = std::nullopt;
 };
@@ -63,6 +93,28 @@ struct DataMovementConfiguration {
 // Reusing a single constant helps catch typos and errors at compile time.
 using KernelSpecName = std::string;
 
+// A KernelSpec is a descriptor for a Tenstorrent kernel:
+// A single computational task compiled into one or more executable files that work
+// collaboratively on a single node.
+//
+// The KernelSpec describes the properties of a compute or data movement kernel:
+//  - Source code
+//  - Compiler options for generating the kernel binary/binaries
+//  - Resource bindings (access to DFBs, semaphores, etc.)
+//  - Kernel argument schema (for arguments specified when the Program is enqueued)
+//  - Kernel argument bindings (for compile-time constant arguments)
+//  - The configuration of any hardware resources controlled by the kernel
+//
+// Specialization: A single kernel source may be represented by multiple KernelSpecs in
+// the same ProgramSpec — for example with different CTA bindings, different DFB endpoint
+// bindings, different semaphore bindings, etc. Each KernelSpec compiles independently
+// and is placed independently via WorkUnitSpec membership.
+//
+// Instancing: A KernelSpec is a *per-node template*. At runtime, one independent
+// instance runs on each node where the kernel is placed, with its own runtime arguments.
+//
+// Placement: The nodes the kernel runs on is derived from WorkUnitSpec membership.
+//
 struct KernelSpec {
     ///////////////////////////////////////////////////////////////////
     // Basic kernel info
@@ -72,8 +124,7 @@ struct KernelSpec {
     KernelSpecName unique_id;
 
     // Kernel source: either a path to a source file, or the source code itself.
-    // (Wrapper types disambiguate the string-constructible variant alternatives,
-    // ensuring compile-time enforcement.)
+    // (Force callers to choose explicitly between path and inline code.)
     struct SourceFilePath {
         std::filesystem::path path;
     };
@@ -82,17 +133,19 @@ struct KernelSpec {
     };
     std::variant<SourceFilePath, SourceCode> source;
 
-    // Target nodes
-    // The logical coordinates for the set of device nodes on which the kernel will run
-    using Nodes = std::variant<NodeCoord, NodeRange, NodeRangeSet>;
-    Nodes target_nodes;
+    // NOTE: The kernel's target node set is a DERIVED property, based on the
+    //       WorkUnitSpec(s) that include this kernel.
 
-    // Threading
-    // Number of kernel threads (this can be specified globally or per-node)
+    // Kernel threading:
+    // Number of kernel threads
     uint8_t num_threads = 1;
-    // Optional per-node thread count specification (overrides global num_threads)
-    // This is currently unsupported, and an open question if we ever want to support it.
-    using NodeSpecificThreadCount = std::pair<Nodes, uint8_t>;  // {node, num_threads}
+
+    // (Optional) Per-node thread count specification
+    // The default threading is num_threads. However, you may override this on a per-node basis.
+    // NOTE: This feature is currently unsupported. It's an open question if we EVER want to support it.
+    //       Here as a placeholder; specifying it will trigger a runtime error.
+    using Nodes = std::variant<NodeCoord, NodeRange, NodeRangeSet>;
+    using NodeSpecificThreadCount = std::pair<Nodes, uint8_t>;  // {node_set, num_threads}
     using NodeSpecificThreadCounts = std::vector<NodeSpecificThreadCount>;
     std::optional<NodeSpecificThreadCounts> node_specific_thread_counts = std::nullopt;
 
@@ -104,7 +157,7 @@ struct KernelSpec {
     // Kernel compiler options
     ///////////////////////////////////////////////////////////////////
     struct CompilerOptions {
-        using IncludePaths = std::vector<std::string>;
+        using IncludePaths = std::vector<std::filesystem::path>;
         using Defines = std::vector<std::pair<std::string, std::string>>;
         using OptLevel = tt::tt_metal::KernelBuildOptLevel;
 
@@ -120,21 +173,34 @@ struct KernelSpec {
     //////////////////////////////////////////////////////////////////
 
     // DFB bindings
+    // Declares that this kernel requires a DFB resource (declared at the ProgramSpec level)
+    // The kernel constructs the accessor via DataflowBufferAccessor(dfb::<local_accessor_name>)
     enum class DFBEndpointType { PRODUCER, CONSUMER, RELAY };
     struct DFBBinding {
         DFBSpecName dfb_spec_name;        // identify the DFB within the ProgramSpec
         std::string local_accessor_name;  // DFB accessor name (used in the kernel source code)
         DFBEndpointType endpoint_type;    // producer, consumer, or relay
-        DFBAccessPattern access_pattern;  // strided, blocked, or contiguous
+        DFBAccessPattern access_pattern = DFBAccessPattern::STRIDED;  // strided, all, or blocked
     };
     std::vector<DFBBinding> dfb_bindings;
 
     // Semaphore bindings
+    // Declares that this kernel accesses a semaphore resource (declared at the ProgramSpec level)
+    // The kernel constructs the accessor via SemaphoreAccessor(sem::<local_accessor_name>)
     struct SemaphoreBinding {
         SemaphoreSpecName semaphore_spec_name;  // identify the semaphore within the ProgramSpec
         std::string accessor_name;              // semaphore accessor name (used in the kernel source code)
     };
     std::vector<SemaphoreBinding> semaphore_bindings;
+
+    // Tensor bindings
+    // Declares that this kernel accesses a tensor parameter (declared at the ProgramSpec level)
+    // The kernel constructs the accessor via TensorAccessor(ta::<accessor_name>)
+    struct TensorBinding {
+        TensorParameterName tensor_parameter_name;  // identify the TensorBinding within the ProgramSpec
+        std::string accessor_name;                  // tensor accessor name (used in the kernel source code)
+    };
+    std::vector<TensorBinding> tensor_bindings;
 
     // TODO -- GlobalSemaphore bindings
     // TODO -- GlobalDataflowBuffer bindings
@@ -202,6 +268,34 @@ struct KernelSpec {
     //////////////////////////////////////////////////////////////////////////////
     using ConfigSpec = std::variant<DataMovementConfiguration, ComputeConfiguration>;
     ConfigSpec config_spec;
+
+    //////////////////////////////////////////////////////////////////////////////
+    // Advanced options / niche use cases
+    //////////////////////////////////////////////////////////////////////////////
+
+    // Niche use case: Self-loop DFBs on compute kernels only
+    // This applies only to compute kernels that bind BOTH the producer and consumer
+    // endpoints of the same DFB (self-loop).
+    //
+    // The compute kernel threads can communicate via the DFB in two topologies:
+    //
+    //   INTRA (intra-thread): Each kernel thread uses the DFB in its own self-loop.
+    //         (no cross-thread communication). This is the common case.
+    //   INTER (inter-thread): Within the kernel, some threads produce data for other
+    //          threads to consume.
+    //
+    // Only the INTRA case is currently supported. INTER will trigger a validation error.
+    // There are currently no known use cases for an INTER-thread self-loop. This option
+    // is present in the API for completeness, to surface any use cases that may arise.
+    //
+    struct DFBComputeSelfLoopScope {
+        DFBSpecName dfb_spec_name;
+        enum class Scope { INTRA, INTER };
+        Scope scope = Scope::INTRA;
+        // If the INTER case were enabled, we would need an additional field to describe
+        // the inter-thread communication pattern here.
+    };
+    std::vector<DFBComputeSelfLoopScope> dfb_compute_self_loop_scopes;
 };
 
 }  // namespace tt::tt_metal::experimental::metal2_host_api

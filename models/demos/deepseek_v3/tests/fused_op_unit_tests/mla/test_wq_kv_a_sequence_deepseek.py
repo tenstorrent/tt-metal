@@ -8,6 +8,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -236,7 +237,7 @@ def run_wq_kv_a_sequence_with_trace(
         {
             "trace_region_size": 2154500,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": get_fabric_config(),
         }
     ],
     indirect=True,

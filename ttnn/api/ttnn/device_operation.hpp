@@ -119,7 +119,8 @@ struct CheckDeviceBufferIsAllocated {
 
     void operator()(const Tensor& tensor) {
         if (not tensor.is_allocated()) {
-            log_debug(tt::LogOp, "Tensor at index {} is not allocated", index);
+            // TODO(#40550): This should be a TT_FATAL
+            log_warning(tt::LogOp, "Tensor at index {} is not allocated", index);
         }
         index++;
     }
@@ -208,8 +209,9 @@ void enqueue_mesh_workload(
                 [&](const Tensor& t) { spec_copies.emplace_back(t.tensor_spec()); }, tensor_args);
         }
 
+        auto trace_id = tt::tt_metal::experimental::inspector::GetCurrentMeshTraceId(mesh_device);
         tt::tt_metal::experimental::inspector::EmitMeshWorkloadDebugEntry(
-            workload, runtime_id, operation_name, std::move(spec_copies));
+            workload, runtime_id, operation_name, std::move(spec_copies), trace_id);
     }
 
     if (mesh_device_operation_utils::track_workload(workload, mesh_device)) {
@@ -229,7 +231,7 @@ void enqueue_mesh_workload(
 }
 
 // Dispatches `fn` to `program_factory` through either the `MeshWorkloadFactoryConcept` directly, or through the adapted
-// path for `ProgramFactoryConcept` / `ProgramDescriptorFactoryConcept` factories.
+// path for `ProgramFactoryConcept` / `ProgramDescriptorFactoryConcept` / `ProgramSpecFactoryConcept` factories.
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t, typename ProgramFactory, typename Fn>
 void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, const Fn& fn) {
     std::visit(
@@ -240,8 +242,12 @@ void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, co
                 fn.template operator()<AdaptedMeshWorkloadFactory>();
             },
             [&]<ProgramDescriptorFactoryConcept T>(const T&) {
+                using AdaptedMeshWorkloadFactory = mesh_device_operation_t::template DescriptorMeshWorkloadAdapter<T>;
+                fn.template operator()<AdaptedMeshWorkloadFactory>();
+            },
+            [&]<ProgramSpecFactoryConcept T>(const T&) {
                 using AdaptedMeshWorkloadFactory =
-                    mesh_device_operation_t::template DescriptorMeshWorkloadFactoryAdapter<T>;
+                    mesh_device_operation_t::template ProgramSpecMeshWorkloadFactoryAdapter<T>;
                 fn.template operator()<AdaptedMeshWorkloadFactory>();
             },
             [&]<MeshWorkloadFactoryConcept WorkloadFactory>(const WorkloadFactory&) {

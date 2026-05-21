@@ -1,6 +1,9 @@
 name: "(Runtime) Performance Tests"
 
+# Every 4 hours for dispatch perf baselines (matches prior fast-dispatch-frequent cadence).
 on:
+  schedule:
+    - cron: "0 */4 * * *" # every 4 hours
   workflow_dispatch:
     inputs:
       wormhole:

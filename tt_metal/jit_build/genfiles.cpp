@@ -87,30 +87,105 @@ void write_file(const string& path, const string& content) {
 }
 
 // METAL 2.0 only:
-// NOTE: This is only invoked for Metal 2.0 kernels created via the new host API.
-//       Legacy kernels do not get kernel_bindings_generated.h.
+// This is only invoked for Metal 2.0 kernels created via the new ProgramSpec host APIs.
+// Legacy kernels (created via CreateKernel) do not get kernel_bindings_generated.h.
 void write_kernel_bindings_generated_header(const string& out_dir, const JitBuildSettings& settings) {
     const string path = out_dir + "kernel_bindings_generated.h";
-    vector<pair<string, uint16_t>> entries;
-    settings.process_dataflow_buffer_local_accessor_handles(
-        [&entries](const string& name, uint16_t id) { entries.emplace_back(name, id); });
-    sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
 
+    // Get the DFB bindings from the settings callback
+    // Sort them to ensure the file output is deterministic for the JIT build cache
+    // (aka the on-disk per-object dephash cache)
+    vector<pair<string, uint16_t>> dfb_entries;
+    settings.process_dataflow_buffer_local_accessor_handles(
+        [&dfb_entries](const string& name, uint16_t id) { dfb_entries.emplace_back(name, id); });
+    sort(dfb_entries.begin(), dfb_entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+
+    // Get the semaphore bindings from the settings callback
+    // Sort them to ensure the file output is deterministic, as explained above
+    vector<pair<string, uint16_t>> sem_entries;
+    settings.process_semaphore_local_accessor_handles(
+        [&sem_entries](const string& name, uint16_t id) { sem_entries.emplace_back(name, id); });
+    sort(sem_entries.begin(), sem_entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+
+    // Get the tensor binding handles from the settings callback
+    // Tensor bindings come from a std::vector populated in user-specified order, so no sort is needed here.
+    // (Kernel::compute_hash also hashes them in the same order... these two must be the same.)
+    struct TaEntry {
+        string name;
+        uint32_t cta_offset;
+        uint32_t addr_crta_offset;
+    };
+    vector<TaEntry> ta_entries;
+    settings.process_tensor_binding_handles(
+        [&ta_entries](const string& name, uint32_t cta_offset, uint32_t addr_crta_offset) {
+            ta_entries.push_back({name, cta_offset, addr_crta_offset});
+        });
+
+    // Emit the header content:
+    //  - DFB accessors are emitted into the dfb namespace
+    //  - Semaphore accessors are emitted into the sem namespace
+    //  - TensorBindings are emitted into the ta namespace
+    //
+    // NOTE: DFB and Semaphore accessors are emitted as constexpr variables, i.e. as implicit CTAs.
+    //       This is a design decision; we could alternatively emit them as implicit CRTAs.
+    //       (Or, we could give the user the choice via the Metal 2.0 host API, on a per-kernel or per-accessor basis.)
+    //       Implicit CTA is simpler and cheaper, but could theoretically cause unnecessary kernel cache hit misses.
+    //       We are starting simple and can adjust later if problems arise.
+    //       Legacy kernels passed semaphores both ways, kernel folks think this was more random than intentional.
+    //
+    //       TensorBindings are the first accessor category to use implicit CRTAs (for the tensor base address).
+    //       Each binding's tensor base address is specified per-enqueue, from the corresponding TensorArg.
+    //       The static layout tensor metadata (rank, shape, bank coords, etc.) comes in through positional CTAs,
+    //       added automatically by the Metal 2.0 host API machinery.
     ostringstream content;
-    content << "// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.\n"
-               "//\n"
-               "// SPDX-License-Identifier: Apache-2.0\n\n"
-               "// AUTO-GENERATED — do not edit.\n\n"
+    content << "// AUTO-GENERATED — do not edit.\n\n"
                "#pragma once\n\n";
-    if (entries.empty()) {
+    if (dfb_entries.empty() && sem_entries.empty() && ta_entries.empty()) {
         content << "// No bindings for this kernel.\n";
     } else {
-        content << "#include \"experimental/dataflow_buffer.h\"\n\n"
-                   "namespace dfb {\n";
-        for (const auto& [name, id] : entries) {
-            content << "constexpr experimental::DFBAccessor " << name << "{" << id << "};\n";
+        if (!dfb_entries.empty()) {
+            content << "#include \"api/dataflow/dataflow_buffer.h\"\n";
         }
-        content << "}  // namespace dfb\n";
+        if (!sem_entries.empty()) {
+            content << "#include <cstdint>\n";
+        }
+        if (!ta_entries.empty()) {
+            content << "#include \"api/tensor/tensor_accessor.h\"\n";
+        }
+        content << "\n";
+
+        if (!dfb_entries.empty()) {
+            content << "namespace dfb {\n";
+            for (const auto& [name, id] : dfb_entries) {
+                content << "constexpr DFBAccessor " << name << "{" << id << "};\n";
+            }
+            content << "}  // namespace dfb\n";
+        }
+
+        if (!sem_entries.empty()) {
+            content << "namespace sem {\n";
+            for (const auto& [name, id] : sem_entries) {
+                content << "constexpr std::uint32_t " << name << " = " << id << "u;\n";
+            }
+            content << "}  // namespace sem\n";
+        }
+
+        if (!ta_entries.empty()) {
+            // TensorAccessorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>: pairs the binding's
+            // static layout metadata (TensorAccessorArgs<CTA_OFFSET>) with the byte offset of
+            // its implicit base-address CRTA. The kernel-side TensorAccessor(token) constructor
+            // unpacks both pieces.
+            //
+            // Per-binding type alias (`<name>_t`) lets the framework extend the underlying token
+            // template with extra metadata in the future without touching kernel source.
+            content << "namespace ta {\n";
+            for (const auto& entry : ta_entries) {
+                content << "using " << entry.name << "_t = ::tensor_accessor::TensorAccessorBindingToken<"
+                        << entry.cta_offset << "u, " << entry.addr_crta_offset << "u>;\n";
+                content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
+            }
+            content << "}  // namespace ta\n";
+        }
     }
     write_file(path, content.str());
 }
@@ -119,11 +194,6 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
 // Emits per-kernel accessors for named RTAs, CRTAs, and CTAs inside the `args` namespace.
 // Also emits get_vararg() / get_common_vararg() helpers with the named-args offset baked
 // in, so that vararg indices in kernel code are stable across schema changes.
-//
-// The generated header itself is never hashed; the kernel cache key is derived in
-// Kernel::compute_hash() from the input data (kernel source, schema, CTA bindings, etc).
-// So we don't need to massage the generation order for hash stability — we just emit what
-// we're given.
 //
 // NOTE: This is only invoked for Metal 2.0 kernels created via the new host API.
 //       Legacy kernels do not get kernel_args_generated.h.
@@ -134,9 +204,18 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
     const vector<string>& rta_names = settings.get_named_runtime_args();
     const vector<string>& crta_names = settings.get_named_common_runtime_args();
 
+    // TensorBinding addresses occupy a structurally-separate, position-indexed section appended
+    // immediately after the user-named CRTAs in the kernel's CRTA buffer.
+    // We need to know how many there are so the vararg helpers below skip past the binding
+    // section to land at the first user vararg.
+    uint32_t tensor_binding_count = 0;
+    settings.process_tensor_binding_handles(
+        [&tensor_binding_count](const std::string&, uint32_t, uint32_t) { ++tensor_binding_count; });
+
     // Named CTAs come through the legacy unordered_map path (Kernel internal storage).
-    // The order in which we emit them doesn't matter: CTA values are baked into the header
-    // as independent constexpr constants; they don't affect RTA/CRTA byte offsets.
+    // The order in which we emit them DOES matter!
+    // We sort them to ensure the file output is deterministic for the JIT build cache
+    // (aka the on-disk per-object dephash cache)
     vector<pair<string, uint32_t>> cta_entries;
     settings.process_named_compile_time_args(
         [&cta_entries](const std::unordered_map<std::string, uint32_t>& named_args) {
@@ -144,6 +223,7 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
                 cta_entries.emplace_back(name, value);
             }
         });
+    sort(cta_entries.begin(), cta_entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
 
     ostringstream content;
     content << "// AUTO-GENERATED — do not edit.\n\n"
@@ -166,6 +246,8 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
             rta_offset += sizeof(uint32_t);
         }
         // Named CRTAs
+        // The TensorBinding address section follows immediately after the named CRTA slots in the CRTA
+        // buffer (see vararg-offset computation below).
         uint32_t crta_offset = 0;
         for (const auto& name : crta_names) {
             content << "constexpr experimental::CrtaArg<uint32_t> " << name << "{" << crta_offset << "};\n";
@@ -185,8 +267,10 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
     // indexing: get_vararg(0) is the first vararg, regardless of named-arg count. When
     // there are no named args, the offset is zero and these helpers are just thin wrappers
     // around get_arg_val / get_common_arg_val.
+    // CRTA-side note: the kernel's CRTA buffer holds [user-named CRTAs, TensorBinding
+    // address section, varargs]. The vararg base must skip past the binding section as well.
     const uint32_t named_rta_words = static_cast<uint32_t>(rta_names.size());
-    const uint32_t named_crta_words = static_cast<uint32_t>(crta_names.size());
+    const uint32_t named_crta_words = static_cast<uint32_t>(crta_names.size()) + tensor_binding_count;
     content << "FORCE_INLINE uint32_t get_vararg(uint32_t idx) { return get_arg_val<uint32_t>(" << named_rta_words
             << " + idx); }\n"
             << "FORCE_INLINE uint32_t get_common_vararg(uint32_t idx) { return get_common_arg_val<uint32_t>("
@@ -431,6 +515,12 @@ ComputedDataFormats compute_data_formats(const JitBuildOptions& options, tt::ARC
         unpack_conditional_dst_format = DataFormat::Tf32;
     }
 
+    if (std::any_of(desc.buf_dataformat_arr.begin(), desc.buf_dataformat_arr.end(), [](DataFormat f) {
+            return f == DataFormat::MxFp4;
+        })) {
+        TT_FATAL(arch == tt::ARCH::QUASAR, "MxFp4 format is only supported on Quasar");
+    }
+
     tt::check_valid_formats_in_out_data_formats(desc.buf_dataformat_arr);
     auto [unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs] = generate_unpack_data_formats(
         desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.unpack_to_dest_mode, max_cbs);
@@ -555,6 +645,11 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
 
     out << "#pragma once\n\n"
            "#if defined(UCK_CHLKC_MATH)\n"
+           "#include \"llk_defs.h\"\n";
+    emit_math_scalar_descriptors(out, desc);
+    out << "#endif\n\n";
+
+    out << "#if defined(UCK_CHLKC_PACK)\n"
            "#include \"llk_defs.h\"\n";
     emit_math_scalar_descriptors(out, desc);
     out << "#endif\n\n";

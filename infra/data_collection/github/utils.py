@@ -105,6 +105,7 @@ def get_job_failure_signature_(github_job, failure_description, workflow_outputs
         "No space left on device": str(InfraErrorV1.DISK_SPACE_FAILURE),
         "API rate limit exceeded": str(InfraErrorV1.API_RATE_LIMIT_FAILURE),
         "Tenstorrent cards seem to be in use": str(InfraErrorV1.RUNNER_CARD_IN_USE_FAILURE),
+        "Error response from daemon": str(InfraErrorV1.DOCKER_REGISTRY_FAILURE),
         "device timeout, potential hang detected, the device is unrecoverable": str(InfraErrorV1.TT_TRIAGE_JOB_HANG),
     }
 
@@ -487,10 +488,11 @@ def create_json_with_github_benchmark_environment(
     logger.warning("Hardcoded null for device_memory_size")
     device_memory_size = ""
 
-    device_info = {"card_type": device_type, "dram_size": device_memory_size}
-
     with open(github_partial_benchmark_data_filename, "rb") as f:
         partial_benchmark_data = pickle.load(f)
+
+    existing_device_info = partial_benchmark_data.device_info or {}
+    device_info = existing_device_info | {"card_type": device_type, "dram_size": device_memory_size}
 
     partial_benchmark_data = partial_benchmark_data.model_copy(
         update={

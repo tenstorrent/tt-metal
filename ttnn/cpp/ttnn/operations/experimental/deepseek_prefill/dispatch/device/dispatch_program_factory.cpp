@@ -44,6 +44,11 @@ void create_tensor_cb(
     auto num_pages = detail::get_num_pages(tensor);
     auto aligned_page_size = get_aligned_page_size(tensor);
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
+    if (data_format == tt::DataFormat::UInt8) {
+        // TODO: remove once FP8 has a dedicated dtype. In this op, UINT8 tensors only appear
+        // on the FP8 dispatch path (DRAM is allocated as UINT8 but content is Fp8_e4m3).
+        data_format = tt::DataFormat::Fp8_e4m3;
+    }
 
     uint32_t cb_size = buffering_factor * aligned_page_size;
 
@@ -78,6 +83,7 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
     DispatchProgramFactory::tensor_return_value_t& tensor_return_value,
     const MeshCoordinateRangeSet& tensor_coords,
     const GlobalSemaphore& init_semaphore,
+    const GlobalSemaphore& exit_semaphore,
     const GlobalSemaphore& cross_device_semaphore) {
     tt::tt_metal::Program program{};
 
@@ -271,6 +277,7 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
         tt::tt_metal::CreateCircularBuffer(program, idle_core_grid, signal_cb_config);
     }
     // c_11: untilize output (compute → writer)
+    // FP8 path: pack_untilize converts BF16 tiles → FP8 row-major; page size is one aligned FP8 row.
     detail::create_tensor_cb(
         program,
         idle_core_grid,
@@ -391,7 +398,8 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
         /*buffering_factor=*/detail::get_num_pages(dispatch_table_tensor),
         /*cb_id=*/tt::CBIndex::c_9,
         "dispatch_table_tensor");
-    // c_18: receive buffer for untilized data from idle cores
+    // c_18: receive buffer for untilized data from idle cores (also sender self-untilize output)
+    // FP8 path: pack_untilize converts BF16 tiles → FP8 row-major; page size is one aligned FP8 row.
     detail::create_tensor_cb(
         program,
         sender_core_grid,
@@ -472,14 +480,13 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
         detail::get_page_size(metadata_tensor),
         detail::get_page_size(dispatch_table_tensor),
 
-        // Operation parameters (8)
+        // Operation parameters (7)
         mesh_view.num_devices(),  // num_devices
         (uint32_t)hidden_size,
         operation_attributes.experts_per_chip,
         operation_attributes.num_routed_experts,
         operation_attributes.num_experts_per_tok,
         operation_attributes.metadata_len,
-        operation_attributes.max_dispatched_tokens_per_expert,
         (uint32_t)tokens_per_device,
 
         // Mesh information (5)
@@ -506,6 +513,10 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
 
         // Batch configuration (1)
         read_batch_size,
+
+        // Dispatch buffer total token capacity (1) — used by the reader's
+        // in-kernel bounds check.
+        operation_attributes.max_dispatch_buffer_token_size,
     };
 
     // Append TensorAccessorArgs for all 7 tensors
@@ -618,7 +629,6 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
             static_cast<uint32_t>(tt::CBIndex::c_13),        // cb_metadata_scratch_id
             detail::get_aligned_page_size(metadata_tensor),  // aligned_metadata_page_size
             operation_attributes.num_experts_per_tok,
-            operation_attributes.max_dispatched_tokens_per_expert,
             linearized_mesh_coord,
         };
         tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(idle_writer_compile_args);
@@ -646,7 +656,7 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
                 .compile_args = idle_writer_compile_args}));
     }
 
-    // Compute kernel on idle cores (same untilize kernel, unchanged)
+    // Compute kernel on idle cores
     tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/device/kernels/compute/"
@@ -734,6 +744,11 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
 
         reader_runtime_args[11] = core_idx;  // dispatch_core_idx
         writer_runtime_args[11] = core_idx;
+
+        // Writer-only: exit semaphore address (separate from init_semaphore to avoid
+        // init/exit reuse race where a fast peer's exit-inc lands during the post-init
+        // set(0) window).
+        writer_runtime_args.push_back((uint32_t)exit_semaphore.address());
 
         // Inter-core sync args for reader
         reader_runtime_args.push_back(data_ready_semaphore_ids[core_idx]);
@@ -823,6 +838,7 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
          .cores = sender_cores,
          .idle_cores = all_idle_cores,
          .init_semaphore = init_semaphore,
+         .exit_semaphore = exit_semaphore,
          .cross_device_semaphore = cross_device_semaphore,
          .data_ready_semaphore_ids = std::move(data_ready_semaphore_ids),
          .start_semaphore_ids = std::move(start_semaphore_ids)}};
@@ -836,6 +852,7 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_row_maj
     DispatchProgramFactory::tensor_return_value_t& tensor_return_value,
     const MeshCoordinateRangeSet& tensor_coords,
     const GlobalSemaphore& init_semaphore,
+    const GlobalSemaphore& exit_semaphore,
     const GlobalSemaphore& cross_device_semaphore) {
     tt::tt_metal::Program program{};
 
@@ -1054,14 +1071,13 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_row_maj
         detail::get_page_size(metadata_tensor),
         detail::get_page_size(dispatch_table_tensor),
 
-        // Operation parameters (8)
+        // Operation parameters (7)
         mesh_view.num_devices(),  // num_devices
         (uint32_t)hidden_size,
         operation_attributes.experts_per_chip,
         operation_attributes.num_routed_experts,
         operation_attributes.num_experts_per_tok,
         operation_attributes.metadata_len,
-        operation_attributes.max_dispatched_tokens_per_expert,
         (uint32_t)tokens_per_device,
 
         // Mesh information (5)
@@ -1088,6 +1104,10 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_row_maj
 
         // Batch configuration (1)
         read_batch_size,
+
+        // Dispatch buffer total token capacity (1) — used by the reader's
+        // in-kernel bounds check.
+        operation_attributes.max_dispatch_buffer_token_size,
     };
 
     // Append TensorAccessorArgs for all 7 tensors
@@ -1160,6 +1180,10 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_row_maj
         reader_runtime_args[11] = core_idx;
         writer_runtime_args[11] = core_idx;
 
+        // Writer-only: exit semaphore address (separate from init_semaphore to avoid
+        // init/exit reuse race; mirrors the combine fix).
+        writer_runtime_args.push_back((uint32_t)exit_semaphore.address());
+
         if (operation_attributes.num_links > 0) {
             uint32_t core_link = core_idx % num_links;
             for (const auto& neighbor_coordinate : neighbors) {
@@ -1200,6 +1224,7 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_row_maj
          .cores = sender_cores,
          .idle_cores = {},
          .init_semaphore = init_semaphore,
+         .exit_semaphore = exit_semaphore,
          .cross_device_semaphore = cross_device_semaphore,
          .data_ready_semaphore_ids = {},
          .start_semaphore_ids = {}}};
@@ -1221,6 +1246,8 @@ DispatchProgramFactory::cached_mesh_workload_t DispatchProgramFactory::create_me
                                                                             : tt::tt_metal::BufferType::L1;
     auto init_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(
         mesh_device, operation_attributes.worker_core_range_set, 0, sem_buffer_type);
+    auto exit_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(
+        mesh_device, operation_attributes.worker_core_range_set, 0, sem_buffer_type);
     auto final_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(
         mesh_device, operation_attributes.worker_core_range_set, 0, sem_buffer_type);
     tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
@@ -1233,6 +1260,7 @@ DispatchProgramFactory::cached_mesh_workload_t DispatchProgramFactory::create_me
             tensor_return_value,
             tensor_coords,
             init_barrier_semaphore,
+            exit_barrier_semaphore,
             final_barrier_semaphore);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(coord, std::move(cached_program.shared_variables));
@@ -1247,9 +1275,16 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> DispatchProgramFa
     DispatchProgramFactory::tensor_return_value_t& tensor_return_value,
     const MeshCoordinateRangeSet& tensor_coords,
     const GlobalSemaphore& init_semaphore,
+    const GlobalSemaphore& exit_semaphore,
     const GlobalSemaphore& cross_device_semaphore) {
     const bool is_tile_layout = tensor_args.input_tensor.layout() == tt::tt_metal::Layout::TILE;
     log_info(tt::LogOp, "Prefill dispatch: input tensor is {} layout", is_tile_layout ? "TILE" : "ROW_MAJOR");
+    if (operation_attributes.use_fp8_dispatch) {
+        log_warning(
+            tt::LogOp,
+            "Prefill dispatch: FP8 path — output buffer is allocated as UINT8 but content is Fp8_e4m3. "
+            "CBs reinterpret UINT8 tensors as Fp8_e4m3 (temporary, until FP8 has a dedicated dtype).");
+    }
     if (is_tile_layout) {
         return create_at_tile_layout(
             operation_attributes,
@@ -1258,6 +1293,7 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> DispatchProgramFa
             tensor_return_value,
             tensor_coords,
             init_semaphore,
+            exit_semaphore,
             cross_device_semaphore);
     }
     return create_at_row_major(
@@ -1267,6 +1303,7 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> DispatchProgramFa
         tensor_return_value,
         tensor_coords,
         init_semaphore,
+        exit_semaphore,
         cross_device_semaphore);
 }
 
@@ -1309,6 +1346,9 @@ void DispatchProgramFactory::override_runtime_arguments(
             writer_runtime_args.at(6) = tensor_args.expert_dispatch_table_tensor.buffer()->address();
             writer_runtime_args.at(7) = (uint32_t)shared_variables.cross_device_semaphore.address();
             writer_runtime_args.at(8) = (uint32_t)shared_variables.init_semaphore.address();
+            // Index 13 is the writer-only exit_semaphore.address() pushed in create_at_*.
+            // base_runtime_args has 13 entries (0..12), then writer push_back's exit_semaphore at 13.
+            writer_runtime_args.at(13) = (uint32_t)shared_variables.exit_semaphore.address();
         }
 
         // Idle cores only exist on the tile-layout path.

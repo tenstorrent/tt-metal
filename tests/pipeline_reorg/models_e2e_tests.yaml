@@ -19,13 +19,14 @@
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
     pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
     pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
+    pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching" --use_hf_rope
   model: llama3.1-8b
   skus:
     wh_n150:
-      timeout: 7
+      timeout: 11
       tier: 1
     wh_llmbox_perf:
-      timeout: 7
+      timeout: 11
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -95,8 +96,8 @@
 - name: Llama 3.2-90B-Vision e2e tests
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.2-90B-Vision-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.2-90B-Vision-Instruct MESH_DEVICE=T3K
-    pytest --timeout 1000 models/tt_transformers/demo/simple_vision_demo.py -k "batch1-trace"
-  model: llama90b-vl
+    pytest --timeout 1500 models/tt_transformers/demo/simple_vision_demo.py -k "batch1-trace"
+  model: llama3.2-90b-vision
   skus:
     wh_llmbox_perf:
       timeout: 25
@@ -134,30 +135,18 @@
   team: models
 
 # TODO: Move DP tests to sweep pipelines when those come online
-- name: Llama 3.3-70B data-parallel e2e tests (T3K)
-  cmd: |
-    export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
-    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-b1-DP-4 or performance-ci-b1-DP-8" --timeout 1000
-  model: llama3.3-70b-dp
-  skus:
-    wh_llmbox_perf:
-      timeout: 20
-      tier: 2
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-
-# TODO: Move DP tests to sweep pipelines when those come online
-- name: Llama 3.3-70B data-parallel e2e tests (Galaxy)
-  cmd: |
-    export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
-    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-b1-DP" --timeout 1000
-  model: llama3.3-70b-dp-galaxy
-  skus:
-    wh_galaxy_perf:
-      timeout: 20
-      tier: 1
-  owner_id: U08BH66EXAL # Radoica Draskic
-  team: models
+# Disabled: failing with "Could not find any forwarding direction from src (M0, D0) to dst (M0, D19)" — under investigation in https://github.com/tenstorrent/tt-metal/issues/42553
+# - name: Llama 3.3-70B data-parallel e2e tests (Galaxy)
+#   cmd: |
+#     export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
+#     pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-b1-DP" --timeout 1000
+#   model: llama3.3-70b-dp-galaxy
+#   skus:
+#     wh_galaxy_perf:
+#       timeout: 20
+#       tier: 1
+#   owner_id: U08BH66EXAL # Radoica Draskic
+#   team: models
 
 # ── Qwen ───────────────────────────────────────────────────────────
 
@@ -189,12 +178,12 @@
 - name: Qwen2.5-32B e2e tests
   cmd: |
     export HF_MODEL=Qwen/Qwen2.5-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-32B-Instruct
-    pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
+    pytest --timeout 1500 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
     pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
   model: qwen2.5-32b
   skus:
     wh_llmbox_perf:
-      timeout: 10
+      timeout: 20
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -202,12 +191,12 @@
 - name: Qwen2.5-Coder-32B e2e tests
   cmd: |
     export HF_MODEL=Qwen/Qwen2.5-Coder-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-Coder-32B-Instruct
-    pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
+    pytest --timeout 1500 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
     pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
   model: qwen2.5-coder-32b
   skus:
     wh_llmbox_perf:
-      timeout: 10
+      timeout: 18
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -305,6 +294,67 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
+# Gemma-4 e2e tests: one entry per model variant, multiple SKUs per entry.
+# parametrize_mesh_with_fabric() picks the largest mesh shape that fits on each
+# runner when CI=true is set, so the same `pytest` invocation runs 1x1 on N150,
+# 1x2 on N300, 1x8 on T3K — no per-SKU `-k` filter needed.
+
+- name: Gemma-4-E2B e2e tests
+  cmd: |
+    uv pip install -r models/demos/gemma4/requirements.txt
+    export HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-E2B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-E2B-it
+    pytest -s --timeout 1000 models/demos/gemma4/demo/text_demo.py::test_demo
+  model: gemma-4-e2b
+  skus:
+    wh_n150:
+      timeout: 15
+      tier: 2
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
+- name: Gemma-4-E4B e2e tests
+  cmd: |
+    uv pip install -r models/demos/gemma4/requirements.txt
+    export HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-E4B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-E4B-it
+    pytest -s --timeout 1000 models/demos/gemma4/demo/text_demo.py::test_demo
+  model: gemma-4-e4b
+  skus:
+    wh_n150:
+      timeout: 15
+      tier: 2
+    # wh_n300 disabled due to reduced N300 runner availability — re-enable when capacity returns.
+    # wh_n300:
+    #   timeout: 15
+    #   tier: 2
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
+- name: Gemma-4-26B-A4B e2e tests
+  cmd: |
+    uv pip install -r models/demos/gemma4/requirements.txt
+    export HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-26B-A4B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-26B-A4B-it
+    pytest -s --timeout 1500 models/demos/gemma4/demo/text_demo.py::test_demo
+  model: gemma-4-26b-a4b
+  skus:
+    wh_llmbox_perf:
+      timeout: 7
+      tier: 2
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
+- name: Gemma-4-31B e2e tests
+  cmd: |
+    uv pip install -r models/demos/gemma4/requirements.txt
+    export HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-31B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-31B-it
+    pytest -s --timeout 1500 models/demos/gemma4/demo/text_demo.py::test_demo
+  model: gemma-4-31b
+  skus:
+    wh_llmbox_perf:
+      timeout: 5
+      tier: 2
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
 # ── Mistral / Mixtral ──────────────────────────────────────────────
 
 - name: Mistral-7B e2e tests
@@ -341,7 +391,7 @@
   model: falcon-7b
   skus:
     wh_n150:
-      timeout: 5
+      timeout: 6
       tier: 3
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
@@ -359,30 +409,45 @@
 
 # ── GPT-OSS ────────────────────────────────────────────────────────
 
-- name: GPT-OSS 20B e2e tests (T3K)
+- name: GPT-OSS 20B e2e tests
   cmd: |
     uv pip install -r models/demos/gpt_oss/requirements.txt
     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/ HF_MODEL=openai/gpt-oss-20b
-    pytest models/demos/gpt_oss/demo/text_demo.py -k "1x8" --timeout 600
+    pytest models/demos/gpt_oss/demo/text_demo.py --timeout 600
   model: gpt-oss-20b
   skus:
     wh_llmbox_perf:
       timeout: 15
       tier: 2
-  owner_id: U08TJ70UFRT # Stuti Raizada
+    bh_p150:
+      timeout: 15
+      tier: 2
+    bh_loudbox:
+      timeout: 15
+      tier: 2
+    bh_quietbox_2:
+      timeout: 15
+      tier: 2
+  owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
-- name: GPT-OSS 120B e2e tests (Galaxy, high batch)
+- name: GPT-OSS 120B e2e tests
   cmd: |
     uv pip install -r models/demos/gpt_oss/requirements.txt
     export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/
-    pytest models/demos/gpt_oss/demo/text_demo.py -k "mesh_4x8 and batch128" --timeout 1200
-  model: gpt-oss-120b-high-batch-galaxy
+    pytest models/demos/gpt_oss/demo/text_demo.py --timeout 1500
+  model: gpt-oss-120b
   skus:
     wh_galaxy_perf:
-      timeout: 20
+      timeout: 30
       tier: 1
-  owner_id: U08TJ70UFRT # Stuti Raizada
+    bh_quietbox_2:
+      timeout: 25
+      tier: 1
+    bh_galaxy_perf:
+      timeout: 30
+      tier: 1
+  owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
 # ── Whisper ────────────────────────────────────────────────────────

@@ -7,7 +7,6 @@
 #include "ckernel_globals.h"
 #include "ckernel_include.h"
 #include "llk_defs.h"
-#include "llk_operands.h"
 
 using namespace ckernel;
 

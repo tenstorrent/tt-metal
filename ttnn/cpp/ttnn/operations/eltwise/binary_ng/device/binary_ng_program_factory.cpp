@@ -429,6 +429,14 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
 
     auto compute_kernel_defines = op_config.as_defines(a_dtype);
 
+    // Indices 3 and 4 in the compute runtime args vector are reserved for rtol and atol bits.
+    if (operation_attributes.binary_op_type == BinaryOpType::ISCLOSE) {
+        compute_kernel_defines["ISCLOSE_OP"] = "1";
+        compute_kernel_defines["ISCLOSE_EQUAL_NAN"] = operation_attributes.equal_nan ? "1" : "0";
+        compute_kernel_defines["ISCLOSE_RTOL_RT_ARG_IDX"] = "3";
+        compute_kernel_defines["ISCLOSE_ATOL_RT_ARG_IDX"] = "4";
+    }
+
     {
         ttnn::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations = operation_attributes.lhs_activations;
         ttnn::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations = operation_attributes.rhs_activations;
@@ -680,9 +688,12 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     writer_desc.common_runtime_args = writer_common_runtime_args;
 
     // COMPUTE KERNEL
+    // fp32 dest accumulation must be enabled whenever any input or output is fp32, otherwise
+    // loading fp32 tiles into a DST configured for bf16 produces tile-aligned corruption
+    // for broadcast multiply (issue 43196).
     bool fp32_dest_acc_en = c_data_format == tt::DataFormat::UInt32 || c_data_format == tt::DataFormat::Int32 ||
-                            c_data_format == tt::DataFormat::Float32 ||
-                            (a_data_format == tt::DataFormat::Float32 && b_data_format == tt::DataFormat::Float32) ||
+                            c_data_format == tt::DataFormat::Float32 || a_data_format == tt::DataFormat::Float32 ||
+                            b_data_format == tt::DataFormat::Float32 ||
                             (a_data_format == tt::DataFormat::Int32 && b_data_format == tt::DataFormat::Int32) ||
                             (a_data_format == tt::DataFormat::UInt32 && b_data_format == tt::DataFormat::UInt32);
 
@@ -999,8 +1010,15 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                     std::array<uint32_t, 12> dummy_writer{0};
                     writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{dummy_writer.begin(), dummy_writer.end()});
                 }
-                std::array<uint32_t, 4> dummy_compute{0};
-                compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{dummy_compute.begin(), dummy_compute.end()});
+                if (op_type == BinaryOpType::ISCLOSE) {
+                    std::array<uint32_t, 5> dummy_compute{0};
+                    compute_desc.runtime_args.emplace_back(
+                        core, KernelDescriptor::CoreRuntimeArgs{dummy_compute.begin(), dummy_compute.end()});
+                } else {
+                    std::array<uint32_t, 4> dummy_compute{0};
+                    compute_desc.runtime_args.emplace_back(
+                        core, KernelDescriptor::CoreRuntimeArgs{dummy_compute.begin(), dummy_compute.end()});
+                }
                 continue;
             }
 
@@ -1092,8 +1110,24 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                     freq = 1;
                     counter = 0;
                 }
-                std::array compute_runtime_args = {compute_tiles, freq, counter, compute_scalar_value};
-                compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{compute_runtime_args.begin(), compute_runtime_args.end()});
+                if (operation_attributes.binary_op_type == BinaryOpType::ISCLOSE) {
+                    const std::array<uint32_t, 5> compute_runtime_args = {
+                        compute_tiles,
+                        freq,
+                        counter,
+                        // rtol and atol are float variables
+                        std::bit_cast<uint32_t>(operation_attributes.rtol),
+                        std::bit_cast<uint32_t>(operation_attributes.atol)};
+                    compute_desc.runtime_args.emplace_back(
+                        core,
+                        KernelDescriptor::CoreRuntimeArgs{compute_runtime_args.begin(), compute_runtime_args.end()});
+                } else {
+                    const std::array<uint32_t, 4> compute_runtime_args = {
+                        compute_tiles, freq, counter, compute_scalar_value};
+                    compute_desc.runtime_args.emplace_back(
+                        core,
+                        KernelDescriptor::CoreRuntimeArgs{compute_runtime_args.begin(), compute_runtime_args.end()});
+                }
             } else {
                 const auto scalar = *operation_attributes.scalar;
                 const auto packed_scalar = pack_scalar_runtime_arg(scalar, a.dtype(), rt_is_quant_op);

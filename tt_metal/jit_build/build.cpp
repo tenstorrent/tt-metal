@@ -17,6 +17,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <iterator>
 #include <mutex>
 #include <string>
@@ -54,13 +55,24 @@ namespace tt::tt_metal {
 
 namespace {
 
-void build_failure(const string& target_name, const string& op, const string& cmd, const string& log_file) {
-    log_error(tt::LogBuildKernels, "{} {} failure -- cmd: {}", target_name, op, cmd);
+void report_result(const string& target_name, string_view op, const string& cmd, const string& log_file, bool result) {
+    if (!result) {
+        log_error(tt::LogBuildKernels, "{} {} failure -- cmd: {}", target_name, op, cmd);
+    }
+
     std::ifstream file{log_file};
     if (file.is_open()) {
-        std::string log_contents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-        TT_THROW("{} build failed. Log: {}", target_name, log_contents);
-    } else {
+        std::string log_contents{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+        if (!result) {
+            TT_THROW("{} build failed. Log: {}", target_name, log_contents);
+        }
+        if (!log_contents.empty()) {
+            // Don't mix warnings from parallel compilations.
+            static std::mutex mutex;
+            std::lock_guard lock(mutex);
+            std::cerr << "Building " << target_name << ", " << op << " step:\n" << cmd << "\n" << log_contents;
+        }
+    } else if (!result) {
         TT_THROW("Failed to open {} failure log file {}", op, log_file);
     }
 }
@@ -129,8 +141,8 @@ void JitBuildEnv::init(
 
     // Flags
     string common_flags =
-        "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval"
-        " -flto=auto -ffast-math -fno-exceptions ";
+        "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval "
+        "-flto=auto -ffast-math -fno-exceptions ";
 
     if (rtoptions.get_jit_analytics_enabled()) {
         common_flags += "-fdump-rtl-all -fdump-tree-original ";
@@ -144,8 +156,9 @@ void JitBuildEnv::init(
     this->cflags_ +=
         "-MMD "
         "-fno-use-cxa-atexit "
-        "-Wall -Werror -Wno-unknown-pragmas "
-        "-Wno-deprecated-declarations "
+        "-ftt-no-dyninit "
+        "-Wall -Werror "
+        "-Wno-error=deprecated-declarations "
         "-Wno-error=multistatement-macros -Wno-error=parentheses "
         "-Wno-error=unused-but-set-variable -Wno-unused-variable "
         "-Wno-unused-function ";
@@ -552,9 +565,9 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     // needs to be renamed after link step to avoid LTO reading inconsistent object files.
     jit_build::utils::FileRenamer log_file(obj_path + ".log");
     fs::remove(log_file.path());
-    if (!tt::jit_build::utils::run_command(cmd, log_file.path(), env_.get_rtoptions().get_dump_build_commands())) {
-        build_failure(this->target_name_, "compile", cmd, log_file.path());
-    }
+    bool result =
+        tt::jit_build::utils::run_command(cmd, log_file.path(), env_.get_rtoptions().get_dump_build_commands());
+    report_result(this->target_name_, "compile", cmd, log_file.path(), result);
     jit_build::write_dependency_hashes(out_dir, obj_temp_path, obj_temp_path + ".dephash");
     fs::remove(temp_d_path);  // .d file not needed after hash is written
 }
@@ -636,9 +649,9 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
     }
     jit_build::utils::FileRenamer log_file(elf_name + ".log");
     fs::remove(log_file.path());
-    if (!tt::jit_build::utils::run_command(cmd, log_file.path(), env_.get_rtoptions().get_dump_build_commands())) {
-        build_failure(this->target_name_, "link", cmd, log_file.path());
-    }
+    bool result =
+        tt::jit_build::utils::run_command(cmd, log_file.path(), env_.get_rtoptions().get_dump_build_commands());
+    report_result(this->target_name_, "link", cmd, log_file.path(), result);
     jit_build::utils::FileRenamer dephash_file(elf_name + ".dephash");
     std::ofstream hash_file(dephash_file.path());
     jit_build::write_dependency_hashes({{elf_name, std::move(link_deps)}}, out_dir, elf_name, hash_file);

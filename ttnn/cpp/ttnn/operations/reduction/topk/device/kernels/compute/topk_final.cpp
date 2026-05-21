@@ -8,6 +8,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
+#include "api/dataflow/circular_buffer.h"
 
 #include "topk_common_funcs.hpp"
 
@@ -73,10 +74,15 @@ void kernel_main() {
     init_sfpu(input_cb_index, values_cb_index);
     ckernel::topk_tile_init();
 
+    CircularBuffer input_cb(input_cb_index);
+    CircularBuffer index_cb(index_cb_index);
+    CircularBuffer input_transposed_cb(input_transposed_cb_index);
+    CircularBuffer index_transposed_cb(index_transposed_cb_index);
+
     // Aggregate results from all local cores for each height row
     for (uint32_t ht = 0; ht < Ht; ++ht) {
-        cb_wait_front(input_cb_index, Wt);  // Wait for all local TopK results (values)
-        cb_wait_front(index_cb_index, Wt);  // Wait for all local TopK results (indices)
+        input_cb.wait_front(Wt);  // Wait for all local TopK results (values)
+        index_cb.wait_front(Wt);  // Wait for all local TopK results (indices)
 
         // Use separate buffers to avoid racing conditions with reader kernel.
         // The reader kernel manages input_cb_index/index_cb_index, while compute
@@ -86,28 +92,28 @@ void kernel_main() {
         // Copy all received value tiles from local cores to transposed staging buffer
         for (uint32_t wt = 0; wt < Wt; wt++) {
             acquire_dst();
-            cb_reserve_back(input_transposed_cb_index, 1);
+            input_transposed_cb.reserve_back(1);
             copy_tile(input_cb_index, wt, 0);         // Copy tile from local core wt
             pack_tile(0, input_transposed_cb_index);  // Pack to staging buffer
             release_dst();
         }  // wt loop
-        cb_push_back(input_transposed_cb_index, Wt);
-        cb_wait_front(input_transposed_cb_index, Wt);
-        cb_pop_front(input_cb_index, Wt);  // Release input buffer space
+        input_transposed_cb.push_back(Wt);
+        input_transposed_cb.wait_front(Wt);
+        input_cb.pop_front(Wt);  // Release input buffer space
 
         // Copy all received index tiles from local cores to transposed staging buffer
         copy_tile_to_dst_init_short_with_dt(input_cb_index, index_cb_index);
         pack_reconfig_data_format(index_transposed_cb_index);
         for (uint32_t wt = 0; wt < Wt; wt++) {
             acquire_dst();
-            cb_reserve_back(index_transposed_cb_index, 1);
+            index_transposed_cb.reserve_back(1);
             copy_tile(index_cb_index, wt, 0);         // Copy index tile from local core wt
             pack_tile(0, index_transposed_cb_index);  // Pack to staging buffer
-            cb_push_back(index_transposed_cb_index, 1);
+            index_transposed_cb.push_back(1);
             release_dst();
         }  // wt loop
-        cb_wait_front(index_transposed_cb_index, Wt);
-        cb_pop_front(index_cb_index, Wt);  // Release input buffer space
+        index_transposed_cb.wait_front(Wt);
+        index_cb.pop_front(Wt);  // Release input buffer space
 
         uint32_t num_k_sequences = (Wt * 32) / K;  // K-element sequences across all local results
 

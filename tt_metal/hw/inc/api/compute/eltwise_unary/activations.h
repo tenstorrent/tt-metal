@@ -5,7 +5,7 @@
 #pragma once
 
 #include "api/compute/common_globals.h"
-#ifdef TRISC_MATH
+#if defined(TRISC_MATH) || defined(TRISC_PACK)
 #include "llk_math_eltwise_unary_sfpu_activations.h"
 #endif
 
@@ -28,10 +28,16 @@ ALWI void hardsigmoid_tile(uint32_t idst) {
     MATH((llk_math_eltwise_unary_sfpu_hardsigmoid<APPROX, ckernel::ActivationType::Hardsigmoid>(idst)));
 }
 
+ALWI void hardsigmoid_tile_pack(uint32_t idst) {
+    PACK((llk_math_eltwise_unary_sfpu_hardsigmoid<APPROX, ckernel::ActivationType::Hardsigmoid>(idst)));
+}
+
 /**
  * Please refer to documentation for any_init.
  */
 ALWI void hardsigmoid_tile_init() { MATH((llk_math_eltwise_unary_sfpu_hardsigmoid_init<APPROX>())); }
+
+ALWI void hardsigmoid_tile_init_pack() { PACK((llk_math_eltwise_unary_sfpu_hardsigmoid_init<APPROX>())); }
 
 // clang-format off
 /**

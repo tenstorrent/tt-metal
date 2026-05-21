@@ -12,6 +12,7 @@
 #include "ttnn/operations/experimental/conv3d/conv3d_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/deepseek_moe_fast_reduce_nc_nanobind.hpp"
+#include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc_fused/deepseek_moe_fast_reduce_nc_fused_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/integral_image/intimg_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/deepseek_grouped_gate/deepseek_grouped_gate_nanobind.hpp"
 #include "ttnn/operations/experimental/slice_write/slice_write_nanobind.hpp"
@@ -38,6 +39,7 @@
 #include "ttnn/operations/experimental/transformer/dit_minimal_matmul_addcmul_fused/dit_minimal_matmul_addcmul_fused_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/dit_rms_norm_unary_fused/dit_rms_norm_unary_fused_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding/rotary_embedding_nanobind.hpp"
+#include "ttnn/operations/experimental/transformer/rotary_embedding_hf/rotary_embedding_hf_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/rotary_embedding_llama_fused_qk_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotate_half/rotate_half_nanobind.hpp"
@@ -100,6 +102,7 @@ void py_module(nb::module_& mod) {
     transformer::bind_dit_minimal_matmul_addcmul_fused(mod);
     transformer::bind_dit_rms_norm_unary_fused(mod);
     transformer::bind_rotary_embedding(mod);
+    transformer::bind_rotary_embedding_hf(mod);
     transformer::bind_rotary_embedding_llama(mod);
     transformer::bind_rotary_embedding_llama_fused_qk(mod);
     transformer::bind_rotate_half(mod);
@@ -108,6 +111,7 @@ void py_module(nb::module_& mod) {
 
     reduction::detail::bind_fast_reduce_nc(mod);
     reduction::detail::bind_deepseek_moe_fast_reduce_nc(mod);
+    reduction::detail::bind_deepseek_moe_fast_reduce_nc_fused(mod);
     reduction::detail::bind_reduction_intimg_operation(mod);
     reduction::detail::bind_deepseek_grouped_gate(mod);
 

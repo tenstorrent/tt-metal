@@ -24,16 +24,21 @@
     } while (0)
 
 void kernel_main() {
+    constexpr bool has_bias = get_named_compile_time_arg_val("has_bias") == 1;
+    constexpr uint32_t Ht = get_named_compile_time_arg_val("hidden_tiles");
+    constexpr uint32_t Nt = get_named_compile_time_arg_val("intermediate_tiles");
+    constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
+
+    using Cfg = moe_ring::MoeRingConfig<Ht, Nt, num_cores, has_bias>;
+
     // Compile time arguments
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
-    constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
 
     // For synchronization with tilize cores
     constexpr uint32_t metadata_ready_semaphore_id = get_named_compile_time_arg_val("metadata_ready_semaphore_id");
     constexpr uint32_t per_expert_total_tokens_cb_id = get_named_compile_time_arg_val("per_expert_total_tokens_cb_id");
     constexpr uint32_t tokens_per_chunk = get_named_compile_time_arg_val("tokens_per_chunk");
-    constexpr uint32_t has_bias = get_named_compile_time_arg_val("has_bias");
 
     constexpr auto w0_w1_args = TensorAccessorArgs<0>();
     constexpr auto w2_args = TensorAccessorArgs<w0_w1_args.next_compile_time_args_offset()>();
@@ -69,16 +74,6 @@ void kernel_main() {
     constexpr uint32_t w2_tile_size = get_tile_size(cb_r2c_w2);
     constexpr uint32_t in2_tile_size = get_tile_size(cb_s2c_in2);
 
-    // Constants for MoE
-    constexpr uint32_t num_w0_w1_tiles_h = moe_ring::NUM_W0_W1_TILES_H;
-    constexpr uint32_t num_w2_tiles_h = moe_ring::NUM_W2_TILES_H;
-
-    const uint32_t num_w0_w1_tiles_w = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_B[ring_core_id][0];
-    const uint32_t num_w2_tiles_w = moe_ring::W2_TILES_PER_CORE_B[ring_core_id];
-
-    const uint32_t num_in2_tiles = num_w2_tiles_w;
-    const uint32_t num_mm2_tiles = num_w2_tiles_w;
-
     //-------------------------------------------------------------------------
     // W0 and W1 reading constants
     //-------------------------------------------------------------------------
@@ -86,21 +81,10 @@ void kernel_main() {
     constexpr uint32_t w0_w1_tiles_per_txn = moe_ring::W0_W1_TILES_PER_TXN;
     constexpr uint32_t w0_w1_tiles_per_block = w0_w1_tiles_per_txn * w0_w1_txns_per_block;  // 14 * 2 = 28
 
-    // When has_bias, DRAM contains (num_w0_w1_tiles_h + 1) tiles per column (weights + 1 bias row).
-    constexpr uint32_t w0_w1_dram_tiles_h = has_bias ? (num_w0_w1_tiles_h + 1) : num_w0_w1_tiles_h;
-    constexpr uint32_t w0_w1_blocks_per_two_elt_tile =
-        4 * ((w0_w1_dram_tiles_h + w0_w1_tiles_per_txn - 1) / w0_w1_tiles_per_txn) / w0_w1_txns_per_block;
-    constexpr uint32_t w0_w1_blocks_per_expert = w0_w1_blocks_per_two_elt_tile * moe_ring::IN2_TILES_PER_STEP_B / 2;
-
     // W2 reading constants
     constexpr uint32_t w2_txns_per_block = moe_ring::W2_TXNS_PER_BLOCK;
     constexpr uint32_t w2_tiles_per_txn = moe_ring::W2_TILES_PER_TXN;
-    constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;               // 14 * 2 = 28
-    constexpr uint32_t w2_dram_tiles_h = has_bias ? (num_w2_tiles_h + 1) : num_w2_tiles_h;
-    constexpr uint32_t w2_txns_h = (w2_dram_tiles_h + w2_tiles_per_txn - 1) / w2_tiles_per_txn;
-    constexpr uint32_t w2_blocks_per_four_mm2_tile = 4 * w2_txns_h / w2_txns_per_block;
-    constexpr uint32_t w2_blocks_per_expert =
-        has_bias ? (w2_blocks_per_four_mm2_tile * moe_ring::NUM_A2A_ITERS_B) : moe_ring::W2_BLOCKS_PER_EXPERT;
+    constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;  // 14 * 2 = 28
 
     //-------------------------------------------------------------------------
     // DRAM Reading constants
@@ -111,15 +95,13 @@ void kernel_main() {
     constexpr uint32_t w2_bytes_per_txn = w2_tiles_per_txn * w2_tile_size;
 
     // Offsets for layer_id
-    // w0_w1_total_size_per_expert must equal the total bytes dm0 reads per expert
-    // (w0_w1_blocks_per_expert blocks × 2 txns/block × bytes/txn) so expert boundaries
-    // align with the sequential DRAM read pointer.
-    constexpr uint32_t w0_w1_total_size_per_expert = w0_w1_blocks_per_expert * 2 * w0_w1_bytes_per_txn;
+
+    constexpr uint32_t w0_w1_total_size_per_expert = Cfg::w0_w1_blocks_per_expert * 2 * w0_w1_bytes_per_txn;
     constexpr uint32_t w0_w1_total_size_per_layer = num_experts * w0_w1_total_size_per_expert;
     constexpr uint32_t w0_w1_layer_offset = layer_id * w0_w1_total_size_per_layer;
 
     // W2: same approach
-    constexpr uint32_t w2_total_size_per_expert = w2_blocks_per_expert * 2 * w2_bytes_per_txn;
+    constexpr uint32_t w2_total_size_per_expert = Cfg::w2_blocks_per_expert * 2 * w2_bytes_per_txn;
     constexpr uint32_t w2_total_size_per_layer = num_experts * w2_total_size_per_expert;
     constexpr uint32_t w2_layer_offset = layer_id * w2_total_size_per_layer;
 
@@ -186,7 +168,7 @@ void kernel_main() {
             //-------------------------------------------------------------------------
             uint32_t w0_w1_dram_read_offset = w0_w1_expert_offset;
 
-            for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_expert; ++block_id) {
+            for (uint32_t block_id = 0; block_id < Cfg::w0_w1_blocks_per_expert; ++block_id) {
                 // Issue reads with current trid
                 noc_async_read_set_trid(trid_to_issue);
                 noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
@@ -223,7 +205,7 @@ void kernel_main() {
             //-------------------------------------------------------------------------
             uint32_t w2_dram_read_offset = w2_expert_offset;
 
-            for (uint32_t block_id = 0; block_id < w2_blocks_per_expert; ++block_id) {
+            for (uint32_t block_id = 0; block_id < Cfg::w2_blocks_per_expert; ++block_id) {
                 // Issue reads with current trid
                 noc_async_read_set_trid(trid_to_issue);
                 noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(

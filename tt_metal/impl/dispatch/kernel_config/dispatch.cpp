@@ -99,6 +99,8 @@ void DispatchKernel::GenerateStaticConfigs() {
     static_config_.fabric_header_rb_entries = DispatchSettings::FABRIC_HEADER_RB_ENTRIES;
     static_config_.my_fabric_sync_status_addr =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS);
+    static_config_.realtime_profiler_msg_addr =
+        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG);
 
     if (static_config_.is_h_variant.value() && this->static_config_.is_d_variant.value()) {
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
@@ -288,10 +290,13 @@ void DispatchKernel::GenerateDependentConfigs() {
             auto* dispatch_s_kernel = dynamic_cast<DispatchSKernel*>(downstream_kernels_[0]);
             TT_ASSERT(dispatch_s_kernel);
             dependent_config_.downstream_s_logical_core = dispatch_s_kernel->GetLogicalCore();
+            dependent_config_.dispatch_d_shutdown_sem_id =
+                dispatch_s_kernel->GetStaticConfig().dispatch_d_shutdown_sem_id;
         } else {
             // If no dispatch_s, no downstream
             TT_ASSERT(downstream_kernels_.empty());
             dependent_config_.downstream_s_logical_core = UNUSED_LOGICAL_CORE;
+            dependent_config_.dispatch_d_shutdown_sem_id = UNUSED_SEM_ID;
         }
         dependent_config_.downstream_logical_core = UNUSED_LOGICAL_CORE;  // Unused
         dependent_config_.downstream_cb_base = 0;                         // Unused
@@ -347,6 +352,7 @@ void DispatchKernel::GenerateDependentConfigs() {
 
         dependent_config_.downstream_logical_core = UNUSED_LOGICAL_CORE;
         dependent_config_.downstream_s_logical_core = UNUSED_LOGICAL_CORE;
+        dependent_config_.dispatch_d_shutdown_sem_id = UNUSED_SEM_ID;
         dependent_config_.split_prefetch = true;
         dependent_config_.downstream_cb_base = 0;    // Unused
         dependent_config_.downstream_cb_size = 0;    // Unused
@@ -387,6 +393,8 @@ void DispatchKernel::GenerateDependentConfigs() {
             if (auto* dispatch_s_kernel = dynamic_cast<DispatchSKernel*>(ds_kernel)) {
                 TT_ASSERT(!found_dispatch_s, "DISPATCH_D has multiple downstream DISPATCH_S kernels.");
                 dependent_config_.downstream_s_logical_core = dispatch_s_kernel->GetLogicalCore();
+                dependent_config_.dispatch_d_shutdown_sem_id =
+                    dispatch_s_kernel->GetStaticConfig().dispatch_d_shutdown_sem_id;
                 found_dispatch_s = true;
             } else if (auto* dispatch_h_kernel = dynamic_cast<DispatchKernel*>(ds_kernel)) {
                 TT_ASSERT(!found_dispatch_h, "DISPATCH_D has multiple downstream DISPATCH_H kernels.");
@@ -419,6 +427,7 @@ void DispatchKernel::GenerateDependentConfigs() {
 
         if (!found_dispatch_s) {
             dependent_config_.downstream_s_logical_core = UNUSED_LOGICAL_CORE;
+            dependent_config_.dispatch_d_shutdown_sem_id = UNUSED_SEM_ID;
         }
     } else {
         TT_FATAL(false, "DispatchKernel must be one of (or both) H and D variants");
@@ -479,6 +488,7 @@ void DispatchKernel::CreateKernel() {
         {"DISPATCH_CB_PAGES", std::to_string(static_config_.dispatch_cb_pages.value())},
         {"MY_DISPATCH_CB_SEM_ID", std::to_string(static_config_.my_dispatch_cb_sem_id.value())},
         {"UPSTREAM_DISPATCH_CB_SEM_ID", std::to_string(dependent_config_.upstream_dispatch_cb_sem_id.value())},
+        {"DISPATCH_D_SHUTDOWN_SEM_ID", std::to_string(dependent_config_.dispatch_d_shutdown_sem_id.value())},
         {"DISPATCH_CB_BLOCKS", std::to_string(static_config_.dispatch_cb_blocks.value())},
         {"UPSTREAM_SYNC_SEM", std::to_string(dependent_config_.upstream_sync_sem.value())},
         {"IS_CQ_DRAM_BACKED", std::to_string(device_->sysmem_manager().is_dram_backed())},
@@ -513,6 +523,7 @@ void DispatchKernel::CreateKernel() {
         {"FABRIC_HEADER_RB_BASE", std::to_string(static_config_.fabric_header_rb_base.value())},
         {"FABRIC_HEADER_RB_ENTRIES", std::to_string(static_config_.fabric_header_rb_entries.value())},
         {"MY_FABRIC_SYNC_STATUS_ADDR", std::to_string(static_config_.my_fabric_sync_status_addr.value())},
+        {"REALTIME_PROFILER_MSG_ADDR", std::to_string(static_config_.realtime_profiler_msg_addr.value())},
         {"FABRIC_MUX_X", std::to_string(dependent_config_.fabric_mux_client_config.virtual_x.value_or(0))},
         {"FABRIC_MUX_Y", std::to_string(dependent_config_.fabric_mux_client_config.virtual_y.value_or(0))},
         {"FABRIC_MUX_NUM_BUFFERS_PER_CHANNEL",

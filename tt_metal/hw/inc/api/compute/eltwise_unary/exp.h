@@ -11,7 +11,6 @@
 #endif
 
 namespace ckernel {
-
 /**
  * Controls whether the fast approximate exponential clamps very negative inputs.
  *
@@ -81,6 +80,8 @@ ALWI void exp_tile(uint32_t idst, int vector_mode = (int)VectorMode::RC, uint16_
         scale));
 }
 
+#ifndef ARCH_QUASAR
+
 /**
  * Pack-thread variant of exp_tile_init. Runs the init on the pack thread
  * to enable FPU/SFPU overlap with math-thread matmul operations.
@@ -116,5 +117,5 @@ ALWI void exp_packthread_tile(
         vector_mode,
         scale));
 }
-
+#endif
 }  // namespace ckernel

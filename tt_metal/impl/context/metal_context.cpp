@@ -229,10 +229,10 @@ void MetalContext::initialize(
         dispatch_core_config_, num_hw_cqs, MetalEnvAccessor(*this->env_).impl());
     dispatch_query_manager_ =
         std::make_unique<DispatchQueryManager>(*this->env_, *dispatch_core_manager_, dispatch_core_config_, num_hw_cqs);
-    dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] = std::make_unique<DispatchMemMap>(
-        CoreType::WORKER, num_hw_cqs, hal(), is_galaxy_cluster, rtoptions().get_dram_backed_cq());
-    dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] = std::make_unique<DispatchMemMap>(
-        CoreType::ETH, num_hw_cqs, hal(), is_galaxy_cluster, rtoptions().get_dram_backed_cq());
+    dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] =
+        std::make_unique<DispatchMemMap>(CoreType::WORKER, num_hw_cqs, hal(), is_galaxy_cluster, rtoptions());
+    dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] =
+        std::make_unique<DispatchMemMap>(CoreType::ETH, num_hw_cqs, hal(), is_galaxy_cluster, rtoptions());
     // Initialize debug servers. Attaching individual devices done below
     rtoptions().resolve_fabric_node_ids_to_chip_ids(this->get_control_plane());
     rtoptions().resolve_mesh_coords_to_chip_ids(this->get_system_mesh());
@@ -250,7 +250,7 @@ void MetalContext::initialize(
         }
         TT_FATAL(!rtoptions().get_profiler_enabled(), "Both DPRINT and Profiler cannot be enabled at the same time.");
         rtoptions().set_disable_dma_ops(true);  // DMA is not thread-safe
-        dprint_server_ = std::make_unique<DPrintServer>(*this->env_, num_hw_cqs, dispatch_core_config_);
+        dprint_server_ = std::make_unique<DPrintServer>(this, *this->env_, num_hw_cqs, dispatch_core_config_);
     }
     // Watcher server always created, since we use it to register kernels
     watcher_server_ = std::make_unique<WatcherServer>(*this->env_);
@@ -725,7 +725,8 @@ bool MetalContext::is_coord_in_range(CoreCoord coord, CoreType core_type) {
     }
 
     CoreCoord virtual_coord = get_cluster().get_virtual_coordinate_from_logical_coordinates(id, coord, core_type);
-    return get_cluster().is_ethernet_core(virtual_coord, id) || get_cluster().is_worker_core(virtual_coord, id);
+    return get_cluster().is_ethernet_core(virtual_coord, id) || get_cluster().is_worker_core(virtual_coord, id) ||
+           get_cluster().is_dram_core(virtual_coord, id);
 }
 
 void MetalContext::on_dispatch_timeout_detected() {

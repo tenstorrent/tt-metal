@@ -144,7 +144,6 @@ class Llama(AbstractModuleBase):
                 config.hidden_size,
                 self.padded_vocab_size,
                 has_bias=False,
-                weight_init=ttml.init.normal(0.0, 0.02),
                 gather_output=True,
                 axis_name="tp",
             )
@@ -154,7 +153,6 @@ class Llama(AbstractModuleBase):
                 config.hidden_size,
                 self.padded_vocab_size,
                 False,
-                weight_init=ttml.init.normal(0.0, 0.02),
             )
 
         self.tok_emb = Embedding(
@@ -261,6 +259,7 @@ from _ttml.models.llama import (
 )
 
 from .safetensors_loader import load_from_safetensors
+from .flops import calculate_flops_per_token
 
 __all__ = [
     # C++ bindings
@@ -271,5 +270,6 @@ __all__ = [
     "Llama",
     "LlamaConfig",
     "LlamaRopeScalingConfig",
+    "calculate_flops_per_token",
     "load_from_safetensors",
 ]

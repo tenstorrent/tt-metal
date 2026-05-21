@@ -4,7 +4,6 @@
 
 #include "copy_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
-#include "copy_same_memory_config_program_factory.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"  // common_tm_bw_model
 #include "ttnn/tensor/tensor_ops.hpp"
 
@@ -66,12 +65,12 @@ bool can_use_specialized_factory(const CopyParams& operation_attributes, const C
 CopyDeviceOperation::program_factory_t CopyDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (CMAKE_UNIQUE_NAMESPACE::can_use_specialized_factory(operation_attributes, tensor_args)) {
-        return CopySameMemoryConfigProgramFactory{};
+        return SameMemoryConfig{};
     }
     if (tensor_args.input.layout() == Layout::ROW_MAJOR) {
-        return CopyDefaultRowMajorProgramFactory{};
+        return DefaultRowMajor{};
     }
-    return CopyDefaultTilizedProgramFactory{};
+    return DefaultTilized{};
 }
 
 void CopyDeviceOperation::validate_on_program_cache_miss(
@@ -82,8 +81,9 @@ void CopyDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         input_tensor_a.dtype() == DataType::BFLOAT16 or input_tensor_a.dtype() == DataType::BFLOAT8_B or
             input_tensor_a.dtype() == DataType::FLOAT32 or input_tensor_a.dtype() == DataType::BFLOAT4_B or
-            input_tensor_a.dtype() == DataType::UINT32 or input_tensor_a.dtype() == DataType::INT32,
-        "ttnn.copy only supports float, bfloat and int32 inputs but got {}",
+            input_tensor_a.dtype() == DataType::UINT32 or input_tensor_a.dtype() == DataType::INT32 or
+            input_tensor_a.dtype() == DataType::UINT16,
+        "ttnn.copy only supports float, bfloat, int32 and uint16 inputs but got {}",
         input_tensor_a.dtype());
     TT_FATAL(
         operation_attributes.output_dtype == DataType::BFLOAT16 or
@@ -91,8 +91,9 @@ void CopyDeviceOperation::validate_on_program_cache_miss(
             operation_attributes.output_dtype == DataType::FLOAT32 or
             operation_attributes.output_dtype == DataType::BFLOAT4_B or
             operation_attributes.output_dtype == DataType::UINT32 or
-            operation_attributes.output_dtype == DataType::INT32,
-        "ttnn.copy only supports float, bfloat and int32 output tensors but got {}",
+            operation_attributes.output_dtype == DataType::INT32 or
+            operation_attributes.output_dtype == DataType::UINT16,
+        "ttnn.copy only supports float, bfloat, int32 and uint16 output tensors but got {}",
         operation_attributes.output_dtype);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to copy need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to copy need to be allocated in buffers on device!");

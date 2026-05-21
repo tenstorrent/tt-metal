@@ -71,6 +71,11 @@ FORCE_INLINE void semaphore_dec(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t 
     __atomic_fetch_sub(sem_addr, val, __ATOMIC_RELAXED);
 }
 
+// Atomic semaphore increment
+FORCE_INLINE void semaphore_inc(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val = 1) {
+    __atomic_fetch_add(sem_addr, val, __ATOMIC_RELAXED);
+}
+
 #endif
 
 // Atomic L1 semaphore primitives by address — callable from any RISC
@@ -108,7 +113,7 @@ FORCE_INLINE void sem_atomic_dec(uint32_t sem_addr, uint32_t v = 1) {
 // Phase 2 (exit):  NC adds N to high half → participants each spin until high != 0,
 //                  then subtract 1. The last one drains high to 0 for next iteration.
 
-template <bool sync_math_risc = true>
+template <bool sync_math_risc = true, bool sync_tensix = true>
 FORCE_INLINE void sync_riscs_enter(volatile uint32_t tt_l1_ptr* sem_addr) {
 #if defined(UCK_CHLKC_MATH)
     if constexpr (sync_math_risc)
@@ -116,7 +121,9 @@ FORCE_INLINE void sync_riscs_enter(volatile uint32_t tt_l1_ptr* sem_addr) {
     {
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_TRISC)
 #if defined(COMPILE_FOR_TRISC)
-        tensix_sync();
+        if constexpr (sync_tensix) {
+            tensix_sync();
+        }
 #endif
         __atomic_fetch_add(&sem_addr[0], 1, __ATOMIC_RELAXED);
 #elif defined(COMPILE_FOR_NCRISC)
@@ -154,6 +161,20 @@ FORCE_INLINE void sync_riscs_exit(volatile uint32_t tt_l1_ptr* sem_addr) {
 // Read a CB's current read pointer as a byte address.
 FORCE_INLINE uint32_t get_cb_rd_ptr(uint32_t cb_id) {
     return get_local_cb_interface(cb_id).fifo_rd_ptr << cb_addr_shift;
+}
+
+// Read a CB's static buffer base L1 address in bytes. Stable across per-expert
+// push/pop and loop iterations. LocalCBInterface stores fifo_limit and
+// fifo_size; init sets fifo_limit = fifo_addr + fifo_size (see
+// tt_metal/hw/inc/internal/circular_buffer_init.h), so base = fifo_limit - fifo_size.
+FORCE_INLINE uint32_t get_cb_buf_addr(uint32_t cb_id) {
+    auto& cb = get_local_cb_interface(cb_id);
+    return (cb.fifo_limit - cb.fifo_size) << cb_addr_shift;
+}
+
+// Read a CB's page size in bytes.
+FORCE_INLINE uint32_t get_cb_page_size(uint32_t cb_id) {
+    return get_local_cb_interface(cb_id).fifo_page_size << cb_addr_shift;
 }
 
 // Override a CB's read pointer to a byte address (converted to cb_addr_shift units).

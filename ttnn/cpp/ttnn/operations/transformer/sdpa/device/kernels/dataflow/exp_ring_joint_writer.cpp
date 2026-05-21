@@ -19,41 +19,6 @@
 using namespace tt::tt_fabric::linear::experimental;
 #endif
 
-// Row-by-row drain of output tiles from cb_out to DRAM.
-// Waits for each row group (sbh tile-rows), writes to DRAM, pops.
-// Overlaps DMA with compute: writes issue as soon as each row is ready.
-template <typename ReaderType>
-void write_out_row_by_row(
-    const PaddedAddrGenerator<ReaderType>& cat_out_generator,
-    const Slice& out_slice,
-    const uint32_t end_seq_tile,
-    const uint32_t cb_out,
-    const uint32_t tile_bytes,
-    const uint32_t sbh) {
-    const uint32_t out_rows = out_slice.get_d2_size();
-    const uint32_t out_cols = out_slice.get_d3_size();
-    const uint32_t row_tiles = sbh * out_cols;
-    const uint32_t num_row_groups = out_rows / sbh;
-
-    for (uint32_t rg = 0; rg < num_row_groups; ++rg) {
-        cb_wait_front(cb_out, row_tiles);
-        uint32_t read_ptr = get_read_ptr(cb_out);
-        for (uint32_t r = 0; r < sbh; r++) {
-            for (uint32_t col = 0; col < out_cols; ++col) {
-                cat_out_generator.maybe_write_tile(
-                    out_slice.d0,
-                    out_slice.d1,
-                    out_slice.d2_start + rg * sbh + r,
-                    out_slice.d3_start + col,
-                    end_seq_tile,
-                    read_ptr);
-                read_ptr += tile_bytes;
-            }
-        }
-        cb_pop_front(cb_out, row_tiles);
-    }
-}
-
 struct QChunkInfo {
     bool is_joint_q;
     Slice out_slice;
@@ -491,13 +456,15 @@ void kernel_main() {
 
                 // On last ring iteration, drain normalized output to DRAM.
                 if (is_last_ring_iter) {
-                    write_out_row_by_row(
+                    // Default trid here → pass 0 so per-group flush waits exactly for these writes.
+                    write_block_row_grouped_trid(
                         qi.is_joint_q ? joint_out_generator : out_generator,
                         qi.out_slice,
                         qi.end_seq_tile,
                         cb_out,
                         tile_bytes,
-                        out_subblock_h);
+                        out_subblock_h,
+                        /*flush_trid=*/0);
                     noc_async_write_barrier();
                 }
             }

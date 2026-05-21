@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -39,7 +39,7 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<2>();
     constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 
-    experimental::CircularBuffer cb(cb_id);
+    CircularBuffer cb(cb_id);
 
     const auto src_addrgen = TensorAccessor(src_args, src_addr);
     const auto dst_addrgen = TensorAccessor(dst_args, dst_addr);

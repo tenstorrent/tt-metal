@@ -44,6 +44,7 @@ from .device import (
     handle_if_assert_hit,
     reset_mailboxes,
     set_tensix_soft_reset,
+    wait_brisc_boot_ready,
 )
 from .format_config import (
     BLACKHOLE_DATA_FORMAT_ENUM_VALUES,
@@ -118,6 +119,7 @@ class TestConfig:
     ARCH_DEFINE: ClassVar[str]
     ARCH_LLK_ROOT: ClassVar[str]
     ARCH: ClassVar[str]
+    ARCH_SPECIFIC_OPTIONS: ClassVar[str] = ""
     CHIP_ARCH: ClassVar[ChipArchitecture]
     DATA_FORMAT_ENUM: ClassVar[dict]
 
@@ -794,6 +796,9 @@ class TestConfig:
         if self.profiler_build == ProfilerBuild.Yes:
             OPTIONS_COMPILE += "-DLLK_PROFILER "
 
+        if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1":
+            OPTIONS_COMPILE += "-DDISABLE_SFPLOADMACRO "
+
         return (OPTIONS_COMPILE, MEMORY_LAYOUT_LD_SCRIPT, NON_COVERAGE_OPTIONS_COMPILE)
 
     def build_shared_artefacts(self):
@@ -1011,7 +1016,7 @@ class TestConfig:
 
             if self.variant_stimuli:
                 header_content.extend(
-                    self.variant_stimuli.generate_stimuli_ONLY_header_addresses()
+                    self.variant_stimuli.generate_stimuli_header_addresses()
                 )
 
         for parameter in self.templates:
@@ -1118,7 +1123,7 @@ class TestConfig:
                 )
                 trisc_define = "ISOLATE_SFPU" if name == "sfpu" else name.upper()
                 compile_command = (
-                    f"{TestConfig.GXX} {TestConfig.ARCH_COMPUTE} {TestConfig.OPTIONS_ALL} -I{TestConfig.TESTS_WORKING_DIR} "
+                    f"{TestConfig.GXX} {TestConfig.ARCH_COMPUTE} {TestConfig.ARCH_SPECIFIC_OPTIONS} {TestConfig.OPTIONS_ALL} -I{TestConfig.TESTS_WORKING_DIR} "
                     f"-I{TestConfig.RISCV_SOURCES} -I{VARIANT_DIR} {local_options_compile} {optional_kernel_flags} "
                     f"-DLLK_TRISC_{trisc_define} {TestConfig.OPTIONS_LINK} {COVERAGES_DEPS} "
                     f"-T{local_memory_layout_ld} -T{TestConfig.LINKER_SCRIPTS / name}.ld -T{TestConfig.LINKER_SCRIPTS}/sections.ld "
@@ -1219,13 +1224,23 @@ class TestConfig:
                     risc_name="brisc",
                     verify_write=True,
                 )
+                # Pre-clear BriscCounter so we cannot latch onto a stale
+                # boot-ready sentinel left in L1 by a prior pytest process —
+                # mailboxes live at fixed L1 addresses outside any ELF
+                # section, so they survive ELF reload.
+                write_words_to_device(
+                    TestConfig.TENSIX_LOCATION,
+                    device_module.Mailboxes.BriscCounter.value,
+                    [0],
+                )
                 commit_tensix_soft_reset(
                     0, [RiscCore.BRISC], TestConfig.TENSIX_LOCATION
                 )
+                wait_brisc_boot_ready(TestConfig.TENSIX_LOCATION)
             if TestConfig.ARCH != ChipArchitecture.QUASAR:
                 commit_brisc_command(TestConfig.TENSIX_LOCATION, BriscCmd.RESET_TRISCS)
         else:
-            set_tensix_soft_reset(1, location=TestConfig.TENSIX_LOCATION)
+            commit_tensix_soft_reset(1, location=TestConfig.TENSIX_LOCATION)
 
         VARIANT_ELF_DIR = (
             TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"

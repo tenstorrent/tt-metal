@@ -31,12 +31,11 @@ ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transp
         transpose, true /*transpose within 16x16 face*/, cbid)));
 
     MATH((llk_math_eltwise_unary_datacopy_init<
-          A2D,
+          DataCopyType::A2D,
           DST_ACCUM_MODE,
           BroadcastType::NONE,
           false,  // is_int_fpu_en
-          false   // tilize
-          >(cbid)));
+          PackMode::Default>(cbid)));
 }
 
 /**
@@ -234,28 +233,26 @@ void calculate_recip_first_column() {
             //     out = -out;
             // }
             // v_endif;
-            if constexpr (DST_ACCUM_MODE || APPROX) {
-                sfpi::dst_reg[0] = out;
-            } else {
-                sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, RoundMode::NearestEven));
+            if constexpr (!(DST_ACCUM_MODE || APPROX)) {
+                out = sfpi::convert<sfpi::vFloat16b>(out, RoundMode::NearestEven);
             }
+            sfpi::dst_reg[0] = out;
             sfpi::dst_reg += 2;
         }
     } else {
         for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
             sfpi::vFloat in = sfpi::dst_reg[0];
+            sfpi::vFloat out;
 
             if constexpr (APPROX) {
-                sfpi::dst_reg[0] = ckernel::sfpu::_sfpu_reciprocal_<0>(in);
+                out = ckernel::sfpu::_sfpu_reciprocal_<0>(in);
+            } else if constexpr (DST_ACCUM_MODE) {
+                out = ckernel::sfpu::_sfpu_reciprocal_<2>(in);
             } else {
-                if constexpr (DST_ACCUM_MODE) {
-                    sfpi::dst_reg[0] = ckernel::sfpu::_sfpu_reciprocal_<2>(in);
-                } else {
-                    sfpi::vFloat out = ckernel::sfpu::_sfpu_reciprocal_<1>(in);
-                    sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, RoundMode::NearestEven));
-                }
+                out = ckernel::sfpu::_sfpu_reciprocal_<1>(in);
+                out = sfpi::convert<sfpi::vFloat16b>(out, RoundMode::NearestEven);
             }
-
+            sfpi::dst_reg[0] = out;
             sfpi::dst_reg += 2;
         }
     }
@@ -1412,23 +1409,23 @@ void apply_causal_mask_lightweight(
     PACK((llk_pack_reconfig_l1_acc(1)));
 
     for (uint32_t row = 0; row < num_rows; row++) {
-        int32_t diag_col = (int32_t)(q_start_tile + row) - (int32_t)k_start_tile;
+        int32_t diag_col = static_cast<int32_t>(q_start_tile + row) - static_cast<int32_t>(k_start_tile);
         uint32_t row_offset = row * num_cols;
 
         if (diag_col < 0) {
             // Entire row above diagonal -> stamp all neginf
             stamp_tile_range_l1_acc<dst_batch>(mask_cb, neginf_idx, out_cb, row_offset, num_cols);
-        } else if ((uint32_t)diag_col < num_cols) {
+        } else if (static_cast<uint32_t>(diag_col) < num_cols) {
             // Stamp the diagonal tile
             tile_regs_acquire();
             copy_tile(mask_cb, diag_idx, 0);
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile<true>(0, out_cb, row_offset + (uint32_t)diag_col);
+            pack_tile<true>(0, out_cb, row_offset + static_cast<uint32_t>(diag_col));
             tile_regs_release();
 
             // Stamp neginf tiles to the right of diagonal
-            uint32_t neginf_start = (uint32_t)diag_col + 1;
+            uint32_t neginf_start = static_cast<uint32_t>(diag_col) + 1;
             if (neginf_start < num_cols) {
                 stamp_tile_range_l1_acc<dst_batch>(
                     mask_cb, neginf_idx, out_cb, row_offset + neginf_start, num_cols - neginf_start);
@@ -1447,7 +1444,7 @@ void apply_causal_mask_lightweight(
  * template parameter(s), not by default-constructing this context.
  */
 struct LightweightMaskContext {
-    bool is_causal = false;                  // True only on ring_iter 0 for causal configs
+    bool is_causal = false;                  // Causal masking active for this context instance
     uint32_t neginf_tile_idx = 0;            // Index of -inf tile in the mask CB
     uint32_t causal_diag_tile_idx = 0;       // Index of causal diagonal tile in the mask CB
     uint32_t global_n_padded_tiles = 0;      // Fully padded K tile columns for global_n chunk
@@ -1740,25 +1737,19 @@ void sdpa_inner_loop(
         uint32_t q_high_tile = 0;     // STANDARD: upper tile bound for K iteration
         uint32_t causal_k_limit = 0;  // RING: K-chunk index beyond which all K is above the diagonal
         if constexpr (sdpa_type == STANDARD) {
-            uint32_t q_chunk;
-#if defined BALANCED_Q_PARALLEL
-            uint32_t q_chunk_div_2 = iter_q_end / 2;  // q_chunks_per_core / 2.
-            if (q_iter < q_chunk_div_2) {             // bottom half
-                q_chunk = local_q_start + q_iter;
-            } else {
-                uint32_t back_q_iter = q_iter - q_chunk_div_2;  // Back half should start at 0
-                q_chunk = q_num_chunks - 1 - (local_q_start + back_q_iter);
-            }
-#else
-            q_chunk = local_q_start + q_iter;
-#endif
+            const uint32_t linear_q_chunk = local_q_start + (q_iter - iter_q_start);
+            uint32_t q_chunk = remap_q_index(linear_q_chunk, q_num_chunks, use_zigzag_balancing);
             // Get Q chunk
             if constexpr (is_chunked) {
                 q_chunk = chunked_q_chunk_offset + q_chunk;
             }
             q_start_tile = q_chunk * Sq_chunk_t;
             if (is_causal) {
-                q_high_tile = q_start_tile + Sq_chunk_t;
+                // Clamp to total K-tile extent. Mirrors reader_interleaved's clamp; without
+                // both, the reader and compute disagree on K-chunk count when Q-chunk extends
+                // past total K (Sq_chunk_t > Skt) → CB deadlock.
+                const uint32_t q_high_unclamped = q_start_tile + Sq_chunk_t;
+                q_high_tile = q_high_unclamped < Skt ? q_high_unclamped : Skt;
             } else {
                 q_high_tile = Skt;
             }
@@ -2193,7 +2184,8 @@ void sdpa_standard(
     const uint32_t cb_sum_B,
     const uint32_t cb_exp_max_diff,
     const uint32_t cb_out,
-    const LightweightMaskContext& lw_mask = {}) {
+    const LightweightMaskContext& lw_mask = {},
+    const bool use_zigzag_balancing = false) {
     sdpa_inner_loop<
         STANDARD,
         cb_qk_im,
@@ -2268,7 +2260,9 @@ void sdpa_standard(
         0,  // cb_prev_out (not used)
         cb_out,
         lw_mask,
-        is_causal);
+        is_causal,
+        false,  // is_balanced (not used)
+        use_zigzag_balancing);
 }
 
 /**
@@ -2495,7 +2489,7 @@ void sdpa_ring(
         out_num_blocks,
         global_q_start,  // iter_q_start
         global_q_end,    // iter_q_end
-        q_num_chunks,    // q_num_chunks (number of local q chunks)
+        q_num_chunks,    // q_num_chunks (total per-head chunks: local + joint)
         0,               // local_q_start (not used)
         0,               // chunked_q_chunk_offset (not used)
         0,

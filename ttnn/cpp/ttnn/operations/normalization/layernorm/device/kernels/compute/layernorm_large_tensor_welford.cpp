@@ -18,7 +18,7 @@
 #include "api/compute/transpose_wh.h"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 namespace generic = norm::kernel_util::generic;
 
@@ -36,11 +36,11 @@ template <
     uint32_t W,
     uint32_t blk>
 void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
-    experimental::CircularBuffer cb_in_obj(cb_in);
-    experimental::CircularBuffer cb_inb_obj(cb_inb);
-    experimental::CircularBuffer cb_interm_pre_add_obj(cb_interm_pre_add);
-    experimental::CircularBuffer cb_ex_obj(cb_ex);
-    experimental::CircularBuffer cb_ex2_obj(cb_ex2);
+    CircularBuffer cb_in_obj(cb_in);
+    CircularBuffer cb_inb_obj(cb_inb);
+    CircularBuffer cb_interm_pre_add_obj(cb_interm_pre_add);
+    CircularBuffer cb_ex_obj(cb_ex);
+    CircularBuffer cb_ex2_obj(cb_ex2);
 
     // The number of valid columns in the last tile in width dimension.
     // Because the Welford's llk is given transposed data, skip some rows when
@@ -174,7 +174,7 @@ template <
     uint32_t W,
     uint32_t blk>
 void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
-    experimental::CircularBuffer cb_in_obj(cb_in);
+    CircularBuffer cb_in_obj(cb_in);
 
     // The number of valid columns in the last tile in width dimension.
     // Because the Welford's llk is given transposed data, skip some rows when
@@ -251,15 +251,15 @@ void kernel_main() {
     constexpr auto cb_interm_pre_add = get_named_compile_time_arg_val("cb_x");         // intermediate for fused pre-add
     constexpr auto cb_reciprocals = get_named_compile_time_arg_val("cb_reciprocals");  // Pre-computed reciprocals
 
-    experimental::CircularBuffer cb_eps_obj(cb_eps);
-    experimental::CircularBuffer cb_in_obj(cb_in);
-    experimental::CircularBuffer cb_inb_obj(cb_inb);
-    experimental::CircularBuffer cb_out_obj(cb_out);
-    experimental::CircularBuffer cb_gamma_obj(cb_gamma);
-    experimental::CircularBuffer cb_beta_obj(cb_beta);
-    experimental::CircularBuffer cb_ex_obj(cb_ex);
-    experimental::CircularBuffer cb_ex2_obj(cb_ex2);
-    experimental::CircularBuffer cb_ex2pe_obj(cb_ex2pe);
+    CircularBuffer cb_eps_obj(cb_eps);
+    CircularBuffer cb_in_obj(cb_in);
+    CircularBuffer cb_inb_obj(cb_inb);
+    CircularBuffer cb_out_obj(cb_out);
+    CircularBuffer cb_gamma_obj(cb_gamma);
+    CircularBuffer cb_beta_obj(cb_beta);
+    CircularBuffer cb_ex_obj(cb_ex);
+    CircularBuffer cb_ex2_obj(cb_ex2);
+    CircularBuffer cb_ex2pe_obj(cb_ex2pe);
 
     constexpr uint32_t onetile = 1;
 
@@ -428,12 +428,12 @@ void kernel_main() {
 
             pack_reconfig_data_format(cb_xmm);
             // Sync with writer on full blocks
-            experimental::CircularBuffer(cb_xmm).reserve_back(block.full_block_size());
+            CircularBuffer(cb_xmm).reserve_back(block.full_block_size());
             tile_regs_wait();
             for (auto i : block.local()) {
                 pack_tile(i, cb_xmm);
             }
-            experimental::CircularBuffer(cb_xmm).push_back(block.full_block_size());
+            CircularBuffer(cb_xmm).push_back(block.full_block_size());
             tile_regs_release();
 
             if constexpr (do_gamma == 1) {
@@ -441,14 +441,14 @@ void kernel_main() {
                 reconfig_data_format(cb_xmm, cb_gamma);
                 tile_regs_acquire();
                 cb_gamma_obj.wait_front(block.full_block_size());
-                experimental::CircularBuffer(cb_xmm).wait_front(block.full_block_size());
+                CircularBuffer(cb_xmm).wait_front(block.full_block_size());
                 mul_bcast_rows_init_short(cb_xmm, cb_gamma);
                 for (auto i : block.local()) {
                     mul_tiles_bcast_rows(cb_xmm, cb_gamma, i, i, i);
                 }
                 tile_regs_commit();
                 cb_gamma_obj.pop_front(block.full_block_size());
-                experimental::CircularBuffer(cb_xmm).pop_front(block.full_block_size());
+                CircularBuffer(cb_xmm).pop_front(block.full_block_size());
 
                 if constexpr (!do_beta) {
                     pack_reconfig_data_format(cb_out);
@@ -461,11 +461,11 @@ void kernel_main() {
                     }
                     cb_out_obj.push_back(block.full_block_size());
                 } else {
-                    experimental::CircularBuffer(cb_xmm).reserve_back(block.full_block_size());
+                    CircularBuffer(cb_xmm).reserve_back(block.full_block_size());
                     for (auto i : block.local()) {
                         pack_tile(i, cb_xmm);
                     }
-                    experimental::CircularBuffer(cb_xmm).push_back(block.full_block_size());
+                    CircularBuffer(cb_xmm).push_back(block.full_block_size());
                 }
                 tile_regs_release();
             }
@@ -475,14 +475,14 @@ void kernel_main() {
                 tile_regs_acquire();
                 reconfig_data_format(cb_xmm, cb_beta);
                 add_bcast_rows_init_short(cb_xmm, cb_beta);
-                experimental::CircularBuffer(cb_xmm).wait_front(block.full_block_size());
+                CircularBuffer(cb_xmm).wait_front(block.full_block_size());
                 cb_beta_obj.wait_front(block.full_block_size());
                 for (auto i : block.local()) {
                     add_tiles_bcast_rows(cb_xmm, cb_beta, i, i, i);
                 }
                 tile_regs_commit();
                 cb_beta_obj.pop_front(block.full_block_size());
-                experimental::CircularBuffer(cb_xmm).pop_front(block.full_block_size());
+                CircularBuffer(cb_xmm).pop_front(block.full_block_size());
 
                 pack_reconfig_data_format(cb_out);
                 cb_out_obj.reserve_back(block.full_block_size());
