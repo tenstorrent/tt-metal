@@ -259,10 +259,12 @@ TileSparseMatmulDeviceOperation::invoke(
         tile_sparse_attributes,
         {optional_output_tensor});
 
+    // Sparsity masks are parsed into TileSparseMatmulParams (host-side) and not needed
+    // as device tensors. The factory reads from operation_attributes.input_*_sparsity_mask.
     return {
         parameters,
         TileSparseMatmulInputs{
-            {input_tensor_a, input_tensor_b}, {sparsity_mask_a, sparsity_mask_b}, {optional_output_tensor}}};
+            {input_tensor_a, input_tensor_b}, {std::nullopt, std::nullopt}, {optional_output_tensor}}};
 }
 
 TileSparseMatmulParams create_tile_sparse_matmul_attributes(

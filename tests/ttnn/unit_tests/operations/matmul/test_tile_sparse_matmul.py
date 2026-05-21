@@ -103,7 +103,7 @@ def test_tile_sparse_matmul_with_mask_b(device, m, k, n):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    # Create sparsity mask tensor (on host for now)
+    # Create sparsity mask tensor on host (parsed by device op during setup)
     mask_b_t = ttnn.from_torch(
         mask_b,
         dtype=ttnn.uint8,
