@@ -6,6 +6,93 @@
 #include "patterns/sync_mailbox.hpp"
 #include "timestamp.hpp"
 
+// NCRISC_OBSERVED_CORRUPTION_PATCH
+// Error insertion belongs to the NCRISC read path. NCRISC reads DDR into observed L1,
+// then deliberately corrupts observed words before compare consumes them.
+
+// 0 = disabled, 1 = enabled
+#define INSERT_WRITE_ERRORS 1
+#define INSERT_READ_ERRORS 1
+
+// Number of observed words to corrupt after each NCRISC read.
+#define WRITE_ERROR_COUNT 20u
+#define READ_ERROR_COUNT 20u
+
+// Optional selection knobs live here, not in BRISC.
+#define WRITE_ERROR_STRIDE_WORDS 262144u
+#define READ_ERROR_STRIDE_WORDS 393216u
+#define WRITE_ERROR_START_WORD 0u
+#define READ_ERROR_START_WORD 20u
+
+static inline bool ncrisc_should_insert_write_error(uint32_t global_word_index) {
+#if INSERT_WRITE_ERRORS
+    (void)global_word_index;
+    return true;
+#else
+    (void)global_word_index;
+    return false;
+#endif
+}
+
+static inline bool ncrisc_should_insert_read_error(uint32_t global_word_index) {
+#if INSERT_READ_ERRORS
+    (void)global_word_index;
+    return true;
+#else
+    (void)global_word_index;
+    return false;
+#endif
+}
+
+static inline void corrupt_observed_words_after_ncrisc_read(
+    uint32_t observe_l1_addr,
+    volatile tt_l1_ptr uint32_t* mb,
+    uint32_t current_pattern_id,
+    uint32_t base_word_index,
+    uint32_t word_count) {
+    const uint32_t selected_pattern_id = mb[MB_INSERT_ERRORS_PATTERN_ID];
+
+    if (selected_pattern_id == 0u) {
+        return;
+    }
+
+    if (mb[MB_INSERT_ERRORS_DONE] != 0u) {
+        return;
+    }
+
+    if (selected_pattern_id != current_pattern_id) {
+        return;
+    }
+
+    // Inject only once, at the first pass/repeat and only on DRAM bank 0.
+    if (mb[MB_REPEAT_INDEX_GLOBAL] != 0u) {
+        return;
+    }
+
+    if (mb[MB_PASS_INDEX_GLOBAL] != 0u) {
+        return;
+    }
+
+    if (mb[MB_BANK_ID] != 0u) {
+        return;
+    }
+
+    // Only corrupt the beginning of the selected pattern/job.
+    if (base_word_index != 0u) {
+        return;
+    }
+
+    // Mark done before writing observed words so this mailbox cannot inject again.
+    mb[MB_INSERT_ERRORS_DONE] = 1u;
+
+    // Local L1 overwrite only. No NoC operation is issued here.
+    volatile tt_l1_ptr uint32_t* observed_words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(observe_l1_addr);
+
+    for (uint32_t i = 0; (i < WRITE_ERROR_COUNT) && (i < word_count); ++i) {
+        observed_words[i] = 0xDEADBEEFu ^ i;
+    }
+}
+
 static inline void prof_add_u64(volatile tt_l1_ptr uint32_t* mb, uint32_t lo_idx, uint64_t delta) {
     const uint64_t cur = (static_cast<uint64_t>(mb[lo_idx + 1u]) << 32) | static_cast<uint64_t>(mb[lo_idx]);
     const uint64_t nxt = cur + delta;
@@ -194,6 +281,7 @@ void kernel_main() {
 
             const uint64_t write_t0 = timestamp();
             noc_async_write(expect_l1_addr, write_dram_noc_addr, transfer_bytes);
+            // Protect real DDR write over NoC. Do not start DDR readback until this is complete.
             noc_async_write_barrier();
             prof_add_u64(mb, MB_PROF_NCRISC_WRITE_ACTIVE_LO, timestamp() - write_t0);
         }
@@ -204,7 +292,17 @@ void kernel_main() {
 
             const uint64_t read_t0 = timestamp();
             noc_async_read(read_dram_noc_addr, observe_l1_addr, transfer_bytes);
+            // Protect real DDR read over NoC. observed L1 is valid only after this barrier.
             noc_async_read_barrier();
+
+            // After DDR -> observed L1 is complete, overwrite first words locally in L1.
+            corrupt_observed_words_after_ncrisc_read(
+                observe_l1_addr,
+                mb,
+                mb[MB_PATTERN_ID_GLOBAL],
+                offset / sizeof(uint32_t),
+                transfer_bytes / sizeof(uint32_t));
+
             prof_add_u64(mb, MB_PROF_NCRISC_READ_ACTIVE_LO, timestamp() - read_t0);
 
             // Compare the first quarter while data is hot in L1. BRISC consumes this

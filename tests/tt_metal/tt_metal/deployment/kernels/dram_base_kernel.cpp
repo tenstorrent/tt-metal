@@ -156,30 +156,6 @@ static inline void dram_consume_compare_helper_result(
     result->failures += helper_failures;
 }
 
-static inline bool dram_should_inject_write_error(uint32_t global_word_index) {
-#if INSERT_WRITE_ERRORS
-    for (uint32_t n = 0; n < WRITE_ERROR_COUNT; ++n) {
-        const uint32_t target = WRITE_ERROR_START_WORD + n * WRITE_ERROR_STRIDE_WORDS;
-        if (global_word_index == target) {
-            return true;
-        }
-    }
-#endif
-    return false;
-}
-
-static inline bool dram_should_inject_read_error(uint32_t global_word_index) {
-#if INSERT_READ_ERRORS
-    for (uint32_t n = 0; n < READ_ERROR_COUNT; ++n) {
-        const uint32_t target = READ_ERROR_START_WORD + n * READ_ERROR_STRIDE_WORDS;
-        if (global_word_index == target) {
-            return true;
-        }
-    }
-#endif
-    return false;
-}
-
 [[maybe_unused]] static inline void dprint_top_2kb_of_bank_if_in_range(
     const DramTestParameters& p,
     uint64_t bank_offset_base,
@@ -311,6 +287,7 @@ static inline void dram_reset_result(volatile DramBaseResult* result, const Dram
     result->math_compare_active_ticks = 0u;
     result->pack_compare_active_ticks = 0u;
     result->unpack_compare_active_ticks = 0u;
+    result->job_total_ticks = 0u;
 
     for (uint32_t i = 0; i < 5u; ++i) {
         result->readback_data[i] = 0u;
@@ -493,6 +470,7 @@ static inline bool dram_finish_compare_chunk(
     uint64_t* total_compare_wait_ticks,
     uint64_t* total_compare_total_ticks) {
     const uint64_t compare_t0 = timestamp();
+    const uint32_t failures_before_compare = result->failures;
 
     // BRISC no longer compares locally. NCRISC already compared the first quarter
     // immediately after its read phase; MATH/PACK/UNPACK compare the remaining
@@ -537,6 +515,10 @@ static inline bool dram_finish_compare_chunk(
         MB_COMPARE_UNPACK_FIRST_EXPECTED,
         MB_COMPARE_UNPACK_FIRST_OBSERVED);
 
+    if (result->failures > failures_before_compare) {
+        // Mismatch is reported through DramBaseResult and host log_info.
+    }
+
     const uint64_t compare_done_t = timestamp();
     *total_compare_brisc_ticks += (compare_brisc_done_t - compare_t0);
     *total_compare_wait_ticks += (compare_done_t - compare_brisc_done_t);
@@ -555,6 +537,7 @@ static inline bool run_one_dram_job(
     (void)expect_words;
     (void)observe_words;
 
+    const uint64_t job_total_t0 = timestamp();
     const uint64_t bank_offset_base = dram_test_bank_offset(p);
 
     dram_reset_result(result, p);
@@ -698,6 +681,7 @@ static inline bool run_one_dram_job(
         sync_mb[MB_FIRST_EXPECTED] = result->first_expected;
         sync_mb[MB_FIRST_OBSERVED] = result->first_observed;
 
+        result->job_total_ticks = timestamp() - job_total_t0;
         noc_async_write_barrier();
         result->job_id = p.job_id;
         noc_async_write_barrier();
@@ -1067,6 +1051,7 @@ static inline bool run_one_dram_job(
     sync_mb[MB_SUSPECTED_WRITE_FAILURES] = result->suspected_write_failures;
     sync_mb[MB_SUSPECTED_READ_FAILURES] = result->suspected_read_failures;
 
+    result->job_total_ticks = timestamp() - job_total_t0;
     noc_async_write_barrier();
     result->job_id = p.job_id;
     noc_async_write_barrier();

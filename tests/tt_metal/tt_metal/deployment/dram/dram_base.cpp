@@ -20,6 +20,21 @@
 #include <cstdlib>
 #include <umd/device/types/telemetry.hpp>
 
+static uint32_t get_dram_insert_errors_pattern_id_from_env_once() {
+    const char* env = std::getenv("DRAM_INSERT_ERRORS_PATTERN_ID");
+    if (env == nullptr || env[0] == '\0') {
+        return 0u;
+    }
+
+    char* end = nullptr;
+    const unsigned long value = std::strtoul(env, &end, 0);
+    if (end == env || value == 0ul) {
+        return 0u;
+    }
+
+    return static_cast<uint32_t>(value);
+}
+
 namespace tt::tt_metal {
 
 extern std::atomic<bool> g_stop_requested;
@@ -199,6 +214,7 @@ static inline void accumulate_result_into_summary(DramRunSummary& summary, const
     summary.math_compare_active_ticks += result->math_compare_active_ticks;
     summary.pack_compare_active_ticks += result->pack_compare_active_ticks;
     summary.unpack_compare_active_ticks += result->unpack_compare_active_ticks;
+    summary.job_total_ticks += result->job_total_ticks;
 }
 
 static inline double dram_result_write_error_pct(const DramBaseResult* result) {
@@ -1012,6 +1028,7 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
         std::vector<uint32_t> zero_mailbox(kDramSyncMailboxWords, 0u);
         zero_mailbox[MB_MAGIC] = DRAM_SYNC_MAILBOX_MAGIC;
         zero_mailbox[MB_VERSION] = 1u;
+        zero_mailbox[MB_INSERT_ERRORS_PATTERN_ID] = get_dram_insert_errors_pattern_id_from_env_once();
         zero_mailbox[MB_STOP] = 0u;
         zero_mailbox[MB_NCRISC_START] = 0u;
         zero_mailbox[MB_NCRISC_DONE] = 0u;
