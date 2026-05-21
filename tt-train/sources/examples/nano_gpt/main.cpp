@@ -799,7 +799,8 @@ int main(int argc, char **argv) {
             float loss_float = 0.0F;
             if (needs_to_call_loss) {
                 auto loss = use_vocab_parallel_loss
-                                ? ttml::ops::distributed::vocab_parallel_cross_entropy_loss(output, target, 1U)
+                                ? ttml::ops::distributed::vocab_parallel_cross_entropy_loss(
+                                      output, target, ttml::autograd::ctx().get_parallelism_context().get_tp_axis())
                                 : ttml::ops::cross_entropy_loss(output, target);
                 loss = gradient_accumulator_helper.scale(loss);
                 loss_float = get_loss_value(loss);
