@@ -194,16 +194,25 @@ ProgramDescriptor RingDistributedSdpaDeviceOperation::RingDistributedSdpaProgram
         chunked_q_chunk_offset_phase_2 += chunk_start_idx.value() / q_chunk_size;
     }
 
-    // Parallelization scheme
-    // We will choose parallelization factors for batch, num_heads, and q_seq_len in that order
-    uint32_t batch_parallel_factor = std::min(B, num_cores);
-    uint32_t nh_parallel_factor = std::min(num_cores / batch_parallel_factor, NQH);
-    uint32_t q_parallel_factor = std::min(num_cores / (batch_parallel_factor * nh_parallel_factor), q_num_chunks);
-
-    // Ceiling divide to allow for non-perfect divisions
-    const uint32_t batch_per_core = (B + batch_parallel_factor - 1) / batch_parallel_factor;
-    const uint32_t nh_per_core = (NQH + nh_parallel_factor - 1) / nh_parallel_factor;
-    const uint32_t q_per_core = (q_num_chunks + q_parallel_factor - 1) / q_parallel_factor;
+    // Global Q scheduling: distribute the flat B*NQH*q_num_chunks Q-chunk space evenly across cores
+    // (one linear range per core). Ring is always causal, so pair-distribute when q_num_chunks is
+    // even — that keeps the shared zigzag remap balancing light/heavy work across cores. The same
+    // (global_q_start, global_q_count) range is walked once per ring phase (num_phases=2 below).
+    const uint32_t total_q_chunks = B * NQH * q_num_chunks;
+    const bool global_q_pair_distribute = (q_num_chunks % 2 == 0);
+    uint32_t global_q_base_chunks_per_core = 0;
+    uint32_t global_q_cores_doing_extra = 0;
+    uint32_t global_q_extra_chunks_per_core = 0;
+    if (global_q_pair_distribute) {
+        const uint32_t total_pairs = total_q_chunks / 2;
+        global_q_base_chunks_per_core = (total_pairs / num_cores) * 2;
+        global_q_cores_doing_extra = total_pairs % num_cores;
+        global_q_extra_chunks_per_core = 2;
+    } else {
+        global_q_base_chunks_per_core = total_q_chunks / num_cores;
+        global_q_cores_doing_extra = total_q_chunks % num_cores;
+        global_q_extra_chunks_per_core = 1;
+    }
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * 2;
@@ -610,27 +619,23 @@ ProgramDescriptor RingDistributedSdpaDeviceOperation::RingDistributedSdpaProgram
     // Set reader rt args
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
-        uint32_t core_id = i;
 
         uint32_t read_offset_phase_1 = chunk_1 * Sqt;
         uint32_t read_offset_phase_2 = chunk_2 * Sqt;
         uint32_t write_offset_phase_1 = 0;
         uint32_t write_offset_phase_2 = Sqt;
 
-        uint32_t local_batch_start = (core_id / (nh_parallel_factor * q_parallel_factor)) * batch_per_core;
-        uint32_t local_batch_end = local_batch_start + batch_per_core;
-        uint32_t local_nh_start = ((core_id / q_parallel_factor) % nh_parallel_factor) * nh_per_core;
-        uint32_t local_nh_end = local_nh_start + nh_per_core;
-        uint32_t local_q_start = (core_id % q_parallel_factor) * q_per_core;
-        uint32_t local_q_end = local_q_start + q_per_core;
-
-        // clamp all to max values for non-even partitioning
-        local_batch_start = std::min(local_batch_start, B);
-        local_batch_end = std::min(local_batch_end, B);
-        local_nh_start = std::min(local_nh_start, NQH);
-        local_nh_end = std::min(local_nh_end, NQH);
-        local_q_start = std::min(local_q_start, q_num_chunks);
-        local_q_end = std::min(local_q_end, q_num_chunks);
+        // Per-core slice of the flat B*NQH*q_num_chunks Q-chunk space (walked once per phase).
+        uint32_t global_q_start = i * global_q_base_chunks_per_core +
+                                  std::min(i, global_q_cores_doing_extra) * global_q_extra_chunks_per_core;
+        uint32_t global_q_count =
+            global_q_base_chunks_per_core + ((i < global_q_cores_doing_extra) ? global_q_extra_chunks_per_core : 0u);
+        if (global_q_start >= total_q_chunks) {
+            global_q_start = total_q_chunks;
+            global_q_count = 0;
+        } else if (global_q_start + global_q_count > total_q_chunks) {
+            global_q_count = total_q_chunks - global_q_start;
+        }
 
         reader_desc.emplace_runtime_args(
             core,
@@ -642,48 +647,36 @@ ProgramDescriptor RingDistributedSdpaDeviceOperation::RingDistributedSdpaProgram
              static_cast<Buffer*>(nullptr),  // attention_sink
              static_cast<Buffer*>(nullptr),  // chunk_start_idx (ring has none)
              i,
-             local_batch_start,
-             local_batch_end,
-             local_nh_start,
-             local_nh_end,
-             local_q_start,
-             local_q_end,
              2u,
              chunked_q_chunk_offset_phase_1,
              read_offset_phase_1,
              chunked_q_chunk_offset_phase_2,
-             read_offset_phase_2});
+             read_offset_phase_2,
+             global_q_start,
+             global_q_count});
 
         writer_desc.emplace_runtime_args(
             core,
             {out0_buffer,
              i,
-             local_batch_start,
-             local_batch_end,
-             local_nh_start,
-             local_nh_end,
-             local_q_start,
-             local_q_end,
              2u,
              0u,  // use_chunk_start_idx_tensor (ring has no chunk_start_idx_tensor)
              chunked_q_chunk_offset_phase_1,
              write_offset_phase_1,
              chunked_q_chunk_offset_phase_2,
-             write_offset_phase_2});
+             write_offset_phase_2,
+             global_q_start,
+             global_q_count});
 
         compute_desc.emplace_runtime_args(
             core,
             {i,
-             local_batch_start,
-             local_batch_end,
-             local_nh_start,
-             local_nh_end,
-             local_q_start,
-             local_q_end,
              2u,
              0u,  // use_chunk_start_idx_tensor (ring has no chunk_start_idx_tensor)
              chunked_q_chunk_offset_phase_1,
-             chunked_q_chunk_offset_phase_2});
+             chunked_q_chunk_offset_phase_2,
+             global_q_start,
+             global_q_count});
     }
 
     desc.kernels.push_back(std::move(reader_desc));
