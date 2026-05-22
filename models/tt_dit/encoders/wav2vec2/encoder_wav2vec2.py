@@ -18,12 +18,13 @@ from ...parallel.manager import CCLManager
 from ...utils.conv3d import ALIGNMENT, get_conv3d_config, register_conv3d_configs
 from .config_wav2vec2 import Wav2Vec2Config
 
+# C_in_block=64 is forced by the grouped-conv constraint (must equal
+# in_per_group=1024/16). C_out_block=32 keeps the per-core CB under the
+# 1.5 MB L1 cap given kernel=128's large per-shard weight residency.
+register_conv3d_configs({(1024, 1024, (128, 1, 1)): (64, 32, 1, 1, 1)})
+
 # Register the wav2vec2-large-xlsr-53 pos_conv blocking. in_per_group = 1024/16
 # = 64 which already satisfies C_in_block % 32 == 0 — no padding hack needed.
-# C_in_block=64 is forced by the grouped-conv constraint (must equal
-# in_per_group=1024/16). Keep C_out_block small to bound per-core CB size
-# under the 1.5 MB L1 cap (kernel=128 makes per-shard weight residency large).
-register_conv3d_configs({(1024, 1024, (128, 1, 1)): (64, 32, 1, 1, 1)})
 
 
 class Wav2Vec2FeatureProjection(Module):
@@ -315,61 +316,31 @@ class Wav2Vec2EncoderLayer(Module):
 
 
 class Wav2Vec2PositionalConvEmbedding(Module):
-    """HF ``Wav2Vec2PositionalConvEmbedding`` ported to ``ttnn.experimental.conv3d``.
+    """HF ``Wav2Vec2PositionalConvEmbedding`` on ``ttnn.experimental.conv3d``.
 
-    Grouped Conv1d (groups=16, kernel=128, padding=64, bias=True) modeled as a
-    3D conv with kernel=(128,1,1) so we can use ttnn's native grouped path
-    (``ttnn.conv1d`` would otherwise dense-inflate the weight to 1024x1024x128,
-    overflowing the conv2d CB budget). For wav2vec2-large-xlsr-53,
-    ``in_per_group = 1024/16 = 64`` already satisfies the kernel's
-    ``C_in_block % 32 == 0`` requirement — no padding tricks needed.
-
-    The HF weight is ``weight_norm``-parametrized; we materialize it in
-    ``_prepare_torch_state``, then ``SamePadLayer`` drops 1 trailing frame
-    (even kernel) and exact GELU runs on device.
+    Modeled as 3D conv with kernel=(128,1,1) so the native grouped path
+    applies; ``ttnn.conv1d`` would dense-inflate to 1024x1024x128 and
+    overflow the conv2d CB page budget.
     """
 
-    def __init__(
-        self,
-        config: Wav2Vec2Config,
-        *,
-        mesh_device: ttnn.MeshDevice,
-    ) -> None:
+    KERNEL = 128
+    PADDING = 64
+    GROUPS = 16
+
+    def __init__(self, config: Wav2Vec2Config, *, mesh_device: ttnn.MeshDevice) -> None:
         super().__init__()
         self.config = config
         self.mesh_device = mesh_device
-        # HF wav2vec2 pos_conv constants — identical for base / large / large-xlsr.
-        self.in_channels = config.hidden_size
-        self.kernel_size = 128
-        self.padding = self.kernel_size // 2
-        self.groups = 16
-        self._num_pad_remove = 1 if self.kernel_size % 2 == 0 else 0
-        in_per_group = self.in_channels // self.groups
-        if in_per_group % ALIGNMENT != 0:
-            raise NotImplementedError(
-                f"wav2vec2 pos_conv on-device path requires in_per_group ({in_per_group}) "
-                f"to be a multiple of {ALIGNMENT} (got hidden_size={self.in_channels}, "
-                f"groups={self.groups}). large-xlsr-53 has hidden_size=1024 so this holds; "
-                f"wav2vec2-base (768) would need a padded variant."
-            )
-
-        # Set in _prepare_torch_state. We hold the ready-to-use, prepared
-        # weight on device; conv3d doesn't have a per-call weight-prep cache,
-        # so prep happens once at load time (like the feature extractor).
         self._weight_dev: ttnn.Tensor | None = None
         self._bias_dev: ttnn.Tensor | None = None
 
         self.conv_config = get_conv3d_config(
-            self.in_channels,
-            self.in_channels,
-            (self.kernel_size, 1, 1),
+            config.hidden_size,
+            config.hidden_size,
+            (self.KERNEL, 1, 1),
             ttnn.bfloat16,
             grid_size=mesh_device.compute_with_storage_grid_size(),
-            h_factor=1,
-            w_factor=1,
         )
-        # Mirror Wav2Vec2Attention's precision tuning: HiFi4 + fp32_dest_acc +
-        # packer_l1_acc — critical for matching fp32 HF reference under PCC>=0.99.
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -379,22 +350,13 @@ class Wav2Vec2PositionalConvEmbedding(Module):
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        g_key = "conv.parametrizations.weight.original0"
-        v_key = "conv.parametrizations.weight.original1"
-        b_key = "conv.bias"
-        if g_key not in state or v_key not in state or b_key not in state:
-            return
-        g = state.pop(g_key)  # [1, 1, kernel]
-        v = state.pop(v_key)  # [out, in/groups, kernel]
-        b = state.pop(b_key)  # [out]
-        # weight_norm: w = (g / ||v||_2-along-kernel) * v
-        w = torch._weight_norm(v, g, dim=2)  # [out, in/groups, kernel]
-        # conv3d weight layout: [out, in/groups, kT, kH, kW] — kH=kW=1.
-        w_5d = w.unsqueeze(-1).unsqueeze(-1).contiguous()  # [out, in/groups, kernel, 1, 1]
-        w_tt = ttnn.from_torch(w_5d, dtype=ttnn.bfloat16, pad_value=0)
+        g = state.pop("conv.parametrizations.weight.original0")  # [1, 1, kernel]
+        v = state.pop("conv.parametrizations.weight.original1")  # [out, in/groups, kernel]
+        b = state.pop("conv.bias")  # [out]
+        w = torch._weight_norm(v, g, dim=2).unsqueeze(-1).unsqueeze(-1).contiguous()
         self._weight_dev = ttnn.experimental.prepare_conv3d_weights(
-            weight_tensor=w_tt,
-            groups=self.groups,
+            weight_tensor=ttnn.from_torch(w, dtype=ttnn.bfloat16, pad_value=0),
+            groups=self.GROUPS,
             C_in_block=self.conv_config.C_in_block,
             alignment=ALIGNMENT,
             device=self.mesh_device,
@@ -408,35 +370,26 @@ class Wav2Vec2PositionalConvEmbedding(Module):
         )
 
     def forward(self, hidden_BTC: ttnn.Tensor) -> ttnn.Tensor:
-        if self._weight_dev is None:
-            raise RuntimeError("Wav2Vec2PositionalConvEmbedding weights not loaded")
         B, T, C = hidden_BTC.shape
-        # conv3d wants [B, T, H=1, W=1, C] in ROW_MAJOR.
-        x = ttnn.to_layout(hidden_BTC, ttnn.ROW_MAJOR_LAYOUT)
-        x = ttnn.reshape(x, (B, T, 1, 1, C))
-
+        x = ttnn.reshape(ttnn.to_layout(hidden_BTC, ttnn.ROW_MAJOR_LAYOUT), (B, T, 1, 1, C))
         out = ttnn.experimental.conv3d(
             input_tensor=x,
             weight_tensor=self._weight_dev,
             bias_tensor=self._bias_dev,
             device=self.mesh_device,
             config=self.conv_config,
-            output_channels=self.in_channels,
-            kernel_size=(self.kernel_size, 1, 1),
+            output_channels=C,
+            kernel_size=(self.KERNEL, 1, 1),
             stride=(1, 1, 1),
-            padding=(self.padding, 0, 0),
+            padding=(self.PADDING, 0, 0),
             padding_mode="zeros",
-            groups=self.groups,
+            groups=self.GROUPS,
             dtype=ttnn.bfloat16,
             compute_kernel_config=self.compute_kernel_config,
         )
-        # out is [B, T_out, 1, 1, C]; T_out = T + 2*padding - kernel + 1 = T + 1.
-        T_out = T + 2 * self.padding - self.kernel_size + 1
-        out = ttnn.reshape(out, (B, T_out, C))
-        out = ttnn.to_layout(out, ttnn.TILE_LAYOUT)
-        if self._num_pad_remove > 0:
-            keep = T_out - self._num_pad_remove
-            out = ttnn.slice(out, [0, 0, 0], [B, keep, C])
+        # Even kernel: T_out = T + 1. SamePadLayer drops the trailing frame.
+        out = ttnn.to_layout(ttnn.reshape(out, (B, T + 1, C)), ttnn.TILE_LAYOUT)
+        out = ttnn.slice(out, [0, 0, 0], [B, T, C])
         return ttnn.gelu(out, fast_and_approximate_mode=False)
 
 
