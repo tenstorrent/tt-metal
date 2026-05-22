@@ -80,6 +80,7 @@ def _build_pipeline_config(weight_provider, num_procs):
     return PipelineConfiguration(factories)
 
 
+@pytest.mark.requires_device(["QUAD_BH"])
 @pytest.mark.parametrize("deepseek_pipeline_mesh_device", [(4, 2)], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
