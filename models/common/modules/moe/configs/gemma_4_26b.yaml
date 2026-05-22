@@ -10,7 +10,7 @@ has_bias: false
 
 compute:
   intermediate_size: 704
-  activation_type: SILU
+  activation_type: GELU
 
 reduce:
   shared_expert_scale: 1.0

@@ -15,7 +15,7 @@ Pipeline overview (one decode step):
     1. `all_to_all_dispatch_metadata`: route each token to its `select_experts_k` chosen
        routed experts (cross-cluster send) plus all shared experts (local broadcast).
     2. `moe_compute`: per-device per-token-slot matmul `x @ w0`, `x @ w1`, activation
-       (SiLU/SWIGLU), `intermediate @ w2`, optionally with bias.
+       (SiLU/SWIGLU/GELU), `intermediate @ w2`, optionally with bias.
     3. `deepseek_moe_fast_reduce_nc_fused`: score-weighted combine of the per-expert
        outputs back to per-token results, with a fixed scalar `shared_expert_scale`
        applied to shared-expert contributions.
