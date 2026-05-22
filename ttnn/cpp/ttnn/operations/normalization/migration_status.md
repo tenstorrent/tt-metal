@@ -10,9 +10,9 @@ kernels under `ttnn/cpp/ttnn/operations/normalization/`.
 
 | Status | Count |
 |---|---|
-| Migrated | 3 |
+| Migrated | 4 |
 | Easy (single FPU pattern matches batch_norm) | 0 |
-| Medium (chunked-output or held-bcast operands) | ~10 |
+| Medium (chunked-output or held-bcast operands) | ~9 |
 | Hard (mixed SFPU DEST-DEST + manual `last_srca_cb` threading) | ~5 |
 | Out-of-scope under current taxonomy (welford / transpose / raw reduce_tile) | ~8 |
 | Structural anomaly (semantic ambiguity) | 1 |
@@ -27,6 +27,7 @@ kernels under `ttnn/cpp/ttnn/operations/normalization/`.
 | `batch_norm/.../batch_norm_kernel.cpp` | 4 | `17056fe08cb` | Template on `<WeightHas, BiasHas>`. Stage 1 = 1-tile BinaryFpu<Add>+Rsqrt+PackTile. Stages 2-4 fused via DestReuseBinary; cb_tmp_1 staging eliminated. 20/20 PASS on `test_batch_norm`. |
 | `layernorm_distributed/.../layernorm_pre_allgather.cpp` | 1 | `189ef03f223` | Squaring chain over `EltwiseShape::of(Wt/blk, blk)`. cb_inp = HeldCumulative on Block (same-CB BinaryFpu<Mul>); cb_x2 = OutChunked on Block. Verified bit-exact (max diff 0.000000) against original via single-device probe; full pytest needs 4 PCIe devices. |
 | `rmsnorm_distributed/.../rmsnorm_pre_allgather.cpp` | 1 | `c41aca20b88` | Same squaring chain as `layernorm_pre_allgather`. Only difference: explicit `cb_pop_front(cb_inp, Wt)` post-reduce vs. layernorm's second reduce. Verified bit-exact against original; full pytest needs 4 PCIe devices. |
+| `rmsnorm_distributed/.../rmsnorm_post_allgather.cpp` | 4 | _pending_ | Full migration. Stage 1 (add(var,eps)+rsqrt) onetile chain (Streaming A / CallerManaged B / Rsqrt / OutStreaming). Stages 2-4 each one `eltwise_chain<blk>(Wt, ...)` call — chain owns A-side Bulk wait/pop-at-end, B-side CallerManaged (caller waits cb_recip_sqrt_var per ncht, cb_gamma/cb_beta once), pack-side OutBulk reserve/push-at-end. B index = Scalar for cb_recip_sqrt_var (col-bcast pinned at 0), Block for cb_gamma/cb_beta (row-bcast walks 0..Wt-1). ACQ/REL helpers + dead `onetile`/`dst0` locals removed. Verified 36/36 PASS on `test_distributed_layernorm_post_allgather.py::test_layernorm_part_2_with_program_cache` (rmsnorm subset — full bf16/bf8/mixed × 3 shapes × {4,8} devices × {fp32 on,off}). |
 
 ### Bit-exact-probe verification pattern
 
@@ -44,12 +45,9 @@ A bit-exact zero-diff result is strong evidence the chain's CB/DEST/dtype-reconf
 | Kernel | Sites | Pattern | Blocker(s) |
 |---|---|---|---|
 | `layernorm_distributed/.../layernorm_post_allgather.cpp` | 3 + chain_llk | Stage A: E[x]² = mul(stats_reduced[1], stats_reduced[1]) → cb_mean_squared. Stage B: var = sub(stats_reduced[0], mean_squared) → cb_var. Stage C: rsqrt(var + eps) → cb_recip_sqrt_var. Then chain_llk template for the 4 final stages. | The 3 1-tile FPU stages map cleanly to BinaryFpu+Rsqrt+PackTile (same as batch_norm Stage 1). The final 4 stages use the `chain_llk` template, which is itself a hand-rolled mini-chain — migrating those means replacing chain_llk callers with `eltwise_chain` directly. Practical PARTIAL migration: stages A/B/C, leave chain_llk. |
-| `rmsnorm_distributed/.../rmsnorm_post_allgather.cpp` | 4 | Stage 1: rsqrt(var+eps). Stages 2-4: bcast-cols mul, bcast-rows mul (gamma), bcast-rows add (beta). Each chunked-output per-blk. | Stage 1 maps cleanly. Stages 2-4 need chain support for chunked-streaming-input + held-bulk-bcast-operand + chunked-output — chain HAS this surface (Chunked input lifecycle + CallerManaged + OutChunked + OperandKind::Row/Col), needs careful lifecycle wiring. |
 | `layernorm/.../layernorm_sharded_pre_allgather.cpp` | 2 | Subblock pattern: process `subblock_w` tiles per tile_regs window. Pre-add FPU add + squaring FPU mul (cb_in × cb_in). | Chain element BlockSize / subblock support exists; needs `EltwiseShape::of(block_h, block_w)` with subblock dispatch. Both pack sites are inside the per-block loop. |
 | `layernorm_distributed/.../layernorm_pre_allgather_2d.cpp` | 2 | Squaring (mul cb_inp × cb_inp) with cumulative wait + chunked pack. + merge-core final-sum accumulate. | Squaring: chain `BinaryFpu<Mul, same-cb>` with HeldCumulative + OutChunked. Merge-core: DEST-accumulating add_tiles (acc_to_dest=true) — chain elements don't support DEST-accumulating binary, would need a new helper. |
 | `rmsnorm_distributed/.../rmsnorm_pre_allgather_2d.cpp` | 2 | Same shape as layernorm_pre_allgather_2d (squaring + merge-core). | Same blockers as layernorm_pre_allgather_2d. |
-| `layernorm_distributed/.../layernorm_pre_allgather.cpp` | 1 | Squaring with cumulative wait + chunked pack with absolute output_tile_index (`pack_tile(wtr, cb_x2, wt + wtr)`). | Chain `PackTile<OutChunked, OperandKind::Block>` emits `base + i` (absolute index), matching this pattern. Lifecycle: cb_inp = HeldCumulative on Block (caller pops Wt via downstream reduce); cb_x2 = OutChunked. |
-| `rmsnorm_distributed/.../rmsnorm_pre_allgather.cpp` | 1 | Same pattern as `layernorm_pre_allgather.cpp`. cb_inp popped explicitly post-chain. | Same as `layernorm_pre_allgather.cpp`. cb_inp lifecycle = Pipelined ({Cumulative, AtEnd}) instead of HeldCumulative. |
 | `layernorm/.../layernorm.cpp` | 7 | Multi-stage layernorm: variance via E[(x-mean)²], rsqrt(var+eps), x*recip, [gamma], [beta]. Uses raw ACQ/REL macros. | Each stage maps to known chain patterns. ~3 distinct stage types repeated across the loop. |
 | `layernorm/.../layernorm_large_tensor.cpp` | 9 | Same as layernorm.cpp but with multi-block tiling. | Same patterns as layernorm.cpp at larger scale. |
 | `layernorm/.../layernorm_sharded.cpp` | 7 | Sharded variant of layernorm.cpp. | Same stage patterns; sharded memory layout doesn't affect compute kernel. |
@@ -129,13 +127,9 @@ surrounding eltwise stages, document blocker):
 
 ## Suggested migration order (resume from here)
 
-1. `layernorm_distributed/layernorm_pre_allgather.cpp` (1 site) — cleanest
-   chunked-output validation of the OutChunked + HeldCumulative pattern.
-2. `rmsnorm_distributed/rmsnorm_pre_allgather.cpp` (1 site) — replicate
-   pattern with Pipelined input lifecycle.
-3. `rmsnorm_distributed/rmsnorm_post_allgather.cpp` (4 sites) — Stage 1
-   already validated against batch_norm; stages 2-4 are the chunked-bcast
-   pattern.
+1. ~~`layernorm_distributed/layernorm_pre_allgather.cpp`~~ — DONE (`189ef03f223`).
+2. ~~`rmsnorm_distributed/rmsnorm_pre_allgather.cpp`~~ — DONE (`c41aca20b88`).
+3. ~~`rmsnorm_distributed/rmsnorm_post_allgather.cpp`~~ — DONE. Bulk + CallerManaged + OutBulk pattern with B index walking 0..Wt-1 (Block) or pinned at 0 (Scalar). Full migration (4 sites) — no PARTIAL needed.
 4. `layernorm_distributed/layernorm_post_allgather.cpp` (3 sites +
    chain_llk callers) — PARTIAL migration; chain_llk callers blocked
    pending gap #3 resolution.
