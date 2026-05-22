@@ -73,17 +73,13 @@ ttnn::Tensor routed_expert_ffn_bh(
         .fuse_batch = false,
     };
 
-    // Fuse silu into the gate matmul via the program config (the matmul-level
-    // `activation` param applies silu as a separate unary op on this path; the
-    // program-config field bakes it into the compute kernel).
-    auto gate_up_config_silu = gate_up_config_no_act;
-    gate_up_config_silu.fused_activation = ttnn::operations::unary::UnaryWithParam(
-        ttnn::operations::unary::UnaryOpType::SILU);
-
     auto gate_up_shard = tt::tt_metal::ShardSpec(
         gate_up_grid, {gate_up_per_core_M * ttnn::TILE_SIZE, gate_up_per_core_N * ttnn::TILE_SIZE});
     auto gate_up_mem = MemoryConfig{TensorMemoryLayout::BLOCK_SHARDED, BufferType::L1, gate_up_shard};
 
+    // Gate matmul: leave silu un-fused here so we can fuse it into the
+    // downstream multiply (which lets us collapse silu + multiply + reshard
+    // into a single op).
     auto gate_result = ttnn::matmul(
         /*input_tensor_a=*/x,
         /*input_tensor_b=*/gate_proj,
@@ -91,7 +87,7 @@ ttnn::Tensor routed_expert_ffn_bh(
         /*transpose_b=*/false,
         /*memory_config=*/gate_up_mem,
         /*dtype=*/std::nullopt,
-        /*program_config=*/gate_up_config_silu,
+        /*program_config=*/gate_up_config_no_act,
         /*activation=*/std::nullopt,
         /*compute_kernel_config=*/compute_kernel_config);
 
@@ -106,18 +102,27 @@ ttnn::Tensor routed_expert_ffn_bh(
         /*activation=*/std::nullopt,
         /*compute_kernel_config=*/compute_kernel_config);
 
-    // In-place multiply: writes into gate_result's block-sharded L1 buffer.
-    // Reshard to L1 interleaved afterwards so the down matmul sees an unsharded
-    // input A (logical Kt = N_gate_tiles, no divisor constraint on in0_block_w).
-    ttnn::multiply_(/*lhs=*/gate_result, /*rhs=*/up_result);
-    up_result.deallocate();
-
-    auto activated = ttnn::to_memory_config(
-        /*tensor=*/gate_result,
+    // Fused silu + multiply + reshard: multiply applies silu to lhs (gate)
+    // before the elementwise product and writes the result directly into L1
+    // interleaved layout — collapsing what used to be three separate ops
+    // (gate-matmul fused-silu, multiply_, to_memory_config) into the single
+    // BinaryNg dispatch. The down matmul reads the L1-interleaved buffer
+    // (no in0_block_w divisor constraint).
+    using ttnn::operations::unary::EltwiseUnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
+    const std::array<EltwiseUnaryWithParam, 1> lhs_silu{
+        EltwiseUnaryWithParam(UnaryOpType::SILU)};
+    auto activated = ttnn::multiply(
+        /*lhs=*/gate_result,
+        /*rhs=*/up_result,
+        /*output_dtype=*/std::nullopt,
         /*memory_config=*/ttnn::L1_MEMORY_CONFIG,
-        /*dtype=*/std::nullopt,
-        /*output_tensor=*/std::nullopt);
+        /*output=*/std::nullopt,
+        /*post_activations=*/{},
+        /*lhs_activations=*/lhs_silu,
+        /*rhs_activations=*/{});
     gate_result.deallocate();
+    up_result.deallocate();
 
     // --- Down matmul config ---
     // Input A is L1-interleaved (not sharded) so in0_block_w only needs to
