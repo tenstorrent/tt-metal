@@ -21,6 +21,16 @@ bool is_cpu_tensor(const Tensor& tensor);
 // Returns true if tensor is on device.
 bool is_device_tensor(const Tensor& tensor);
 
+// Returns an optional_reference to the underlying MeshTensor of `opt`.
+//
+// - If `opt` is empty, returns an empty optional_reference.
+// - If `opt` holds a device tensor, returns a reference to its MeshTensor.
+// - If `opt` holds a non-device (host) tensor, TT_FATALs.
+//
+// The returned reference borrows from the Tensor inside `opt`; the caller must
+// keep `opt` alive for as long as the returned reference is used.
+ttsl::optional_reference<const MeshTensor> as_optional_mesh_tensor(const std::optional<Tensor>& opt);
+
 // Returns the optimal worker cores for a sharded tensor.
 std::vector<CoreCoord> get_optimal_worker_cores_for_sharded_tensor(
     const Tensor& tensor, NOC noc = NOC::RISCV_0_default);
