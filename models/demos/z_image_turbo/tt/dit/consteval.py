@@ -79,17 +79,6 @@ def run_const_evals(weights, device):
     mem = ttnn.DRAM_MEMORY_CONFIG
     replicated = ttnn.ReplicateTensorToMesh(device)
 
-    def _sf32(v):
-        t = torch.tensor([[v]], dtype=torch.float32)
-        return ttnn.from_torch(
-            t,
-            dtype=ttnn.DataType.FLOAT32,
-            layout=ttnn.Layout.TILE,
-            device=device,
-            memory_config=mem,
-            mesh_mapper=replicated,
-        )
-
     def _sbf16(v):
         t = torch.tensor([[v]], dtype=torch.bfloat16)
         return ttnn.from_torch(
