@@ -21,7 +21,7 @@
 - name: bh_multicard_eth
   cmd: |
     ./build/test/tt_metal/unit_tests_eth
-    TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_eth
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_eth
     TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_eth
   skus:
     bh_quietbox:
