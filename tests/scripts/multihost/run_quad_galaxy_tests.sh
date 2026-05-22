@@ -520,6 +520,7 @@ _run_deepseekv3_tt() {
     local allow_quad_repack="${DEEPSEEK_V3_ALLOW_QUAD_RING_WEIGHT_REPACK:-}"
     local max_seq_len_override="${DEEPSEEK_MAX_SEQ_LEN_OVERRIDE:-}"
     local tt_metal_cache="${TT_METAL_CACHE:-}"
+    local ci_val="${CI-__UNSET__}"
 
     tt_run "${tt_run_args[@]}" env \
         _DS_MESH_DEVICE="${MESH_DEVICE:-}" \
@@ -530,6 +531,7 @@ _run_deepseekv3_tt() {
         _DS_ALLOW_QUAD_REPACK="${allow_quad_repack}" \
         _DS_MAX_SEQ_LEN_OVERRIDE="${max_seq_len_override}" \
         _DS_TT_METAL_CACHE="${tt_metal_cache}" \
+        _DS_CI="${ci_val}" \
         bash -c '
             if [[ -n "${_DS_MESH_DEVICE}" ]]; then
                 export MESH_DEVICE="${_DS_MESH_DEVICE}"
@@ -556,6 +558,9 @@ _run_deepseekv3_tt() {
             fi
             if [[ -n "${_DS_TT_METAL_CACHE}" ]]; then
                 export TT_METAL_CACHE="${_DS_TT_METAL_CACHE}"
+            fi
+            if [[ "${_DS_CI}" != "__UNSET__" ]]; then
+                export CI="${_DS_CI}"
             fi
             exec "$@"
         ' _ "$@"
