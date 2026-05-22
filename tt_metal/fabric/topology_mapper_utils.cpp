@@ -1093,10 +1093,17 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
             solution_counts +=
                 fmt::format("{}={}{}", mesh_order[d], s.solutions.size(), s.exhausted ? "(exhausted)" : "");
         }
+        std::string mesh_names_str;
+        for (std::size_t d = 0; d < n_meshes; ++d) {
+            if (d) {
+                mesh_names_str += ", ";
+            }
+            mesh_names_str += mesh_order[d];
+        }
         TT_THROW(
             "Topology mapper failed to find disjoint placements for mesh descriptors [{}] on a system with {} ASICs. "
             "Solution counts per mesh: [{}]",
-            fmt::join(mesh_order, ", "),
+            mesh_names_str,
             cluster_asic_count,
             solution_counts);
     }
