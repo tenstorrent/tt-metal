@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "tt_metal/test_utils/env_vars.hpp"
 #include <fmt/base.h>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/constants.hpp>
@@ -176,7 +177,7 @@ void test_raw_host_memory_pointer() {
 }
 
 int main() {
-    if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
+    if (!tt::test_utils::is_slow_dispatch_mode_enabled()) {
         test_raw_host_memory_pointer();
     }
     return 0;

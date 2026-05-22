@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "tt_metal/test_utils/env_vars.hpp"
 #include <algorithm>
 #include <functional>
 #include <random>
@@ -347,8 +348,7 @@ bool move_tiles_to_dram(
 int main(int argc, char** argv) {
     bool pass = true;
 
-    auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
+    TT_FATAL(tt::test_utils::is_slow_dispatch_mode_enabled(), "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
     try {
         int device_id = 0;

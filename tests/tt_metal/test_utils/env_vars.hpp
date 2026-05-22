@@ -10,6 +10,7 @@
 #include "impl/context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"  // Full definition needed for Cluster::is_mock_or_emulated()
 
+#include <cstring>
 #include <string>
 
 inline std::string get_string_lowercase(tt::ARCH arch) {
@@ -62,6 +63,15 @@ inline std::string get_umd_arch_name() {
 
     return get_string_lowercase(arch);
 
+}
+
+inline bool is_slow_dispatch_mode_enabled() {
+    const char* v = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    if (!v || v[0] == '\0') {
+        return false;
+    }
+    return v[0] == '1' || strcasecmp(v, "true") == 0 || strcasecmp(v, "yes") == 0 ||
+           strcasecmp(v, "on") == 0;
 }
 
 }  // namespace tt::test_utils

@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstring>
+
 #include "strided_all_gather_async_op.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/operations/functions.hpp"
@@ -72,7 +74,7 @@ Tensor strided_all_gather_async(
     using OperationType = ttnn::experimental::prim::StridedAllGatherAsync;
 
     TT_FATAL(
-        [] { const char* v = std::getenv("TT_METAL_SLOW_DISPATCH_MODE"); return !v || v[0] != '1'; }(),
+        [] { const char* v = std::getenv("TT_METAL_SLOW_DISPATCH_MODE"); return !v || v[0] == '\0' || !(v[0] == '1' || strcasecmp(v, "true") == 0 || strcasecmp(v, "yes") == 0 || strcasecmp(v, "on") == 0); }(),
         "strided_all_gather_async op is only supported for Fast Dispatch");
 
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);

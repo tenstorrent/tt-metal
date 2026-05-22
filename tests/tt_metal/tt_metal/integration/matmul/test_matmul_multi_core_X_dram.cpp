@@ -602,7 +602,7 @@ bool matmul_multi_core_multi_dram(
 }  // namespace unit_tests_common::matmul::test_matmul_multi_core_X_dram
 
 TEST_F(MeshDispatchFixture, TensixMatmulMultiCoreSingleDRAM) {
-    if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
+    if (!tt::test_utils::is_slow_dispatch_mode_enabled()) {
         log_info(LogTest, "This test is only supported in slow dispatch mode");
         GTEST_SKIP();
     }
@@ -618,7 +618,7 @@ TEST_F(MeshDispatchFixture, TensixMatmulMultiCoreSingleDRAM) {
 
 TEST_F(MeshDispatchFixture, TensixMatmulMultiCoreMultiDRAM) {
     // need to update move_tiles_to_dram to support both slow and fast
-    if (getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
+    if (tt::test_utils::is_slow_dispatch_mode_enabled()) {
         log_info(LogTest, "This test is not supported in slow dispatch mode, need to update move_tiles_to_dram..");
         GTEST_SKIP();
     }

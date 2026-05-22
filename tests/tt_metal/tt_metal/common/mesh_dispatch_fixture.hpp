@@ -173,7 +173,7 @@ protected:
     }
 
     void DetectDispatchMode() {
-        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        bool slow_dispatch = tt::test_utils::is_slow_dispatch_mode_enabled();
         if (slow_dispatch) {
             log_info(tt::LogTest, "Running test using Slow Dispatch");
             this->slow_dispatch_ = true;

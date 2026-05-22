@@ -1764,7 +1764,7 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteWithNullFilterIsEquivalent) {
 class SDMeshBufferFixture : public ::testing::Test {
 protected:
     void SetUp() override {
-        if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
+        if (!tt::test_utils::is_slow_dispatch_mode_enabled()) {
             GTEST_SKIP() << "Requires TT_METAL_SLOW_DISPATCH_MODE=1";
         }
         const auto system_shape = MetalContext::instance().get_system_mesh().shape();

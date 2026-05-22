@@ -173,7 +173,7 @@ void run(
     tt::tt_metal::distributed::MeshWorkload mesh_workload1;
     mesh_workload1.add_program(device_range1, std::move(program1));
 
-    if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
+    if (tt::test_utils::is_slow_dispatch_mode_enabled()) {
         // For slow dispatch mode, use threads with mesh workloads
         std::thread th2 = std::thread([&] {
             tt::tt_metal::distributed::EnqueueMeshWorkload(device0->mesh_command_queue(), mesh_workload0, true);

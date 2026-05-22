@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "tt_metal/test_utils/env_vars.hpp"
 #include <fmt/base.h>
 #include <cstdint>
 #include <cstdlib>
@@ -64,7 +65,7 @@ void measure_latency(const std::string& kernel_name) {
 }
 
 int main() {
-    if (getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
+    if (!tt::test_utils::is_slow_dispatch_mode_enabled()) {
         TT_THROW("Test not supported w/ fast dispatch, exiting");
     }
 

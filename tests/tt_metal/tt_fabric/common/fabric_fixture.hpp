@@ -27,8 +27,7 @@ class ControlPlaneFixture : public ::testing::Test {
    protected:
        tt::ARCH arch_{tt::ARCH::Invalid};
        void SetUp() override {
-           auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-           if (not slow_dispatch) {
+           if (not tt::test_utils::is_slow_dispatch_mode_enabled()) {
                log_info(
                    tt::LogTest,
                    "Control plane test suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
@@ -80,7 +79,7 @@ public:
         std::optional<uint8_t> num_routing_planes = std::nullopt,
         tt_fabric::FabricTensixConfig fabric_tensix_config = tt_fabric::FabricTensixConfig::DISABLED,
         tt_fabric::FabricUDMMode fabric_udm_mode = tt_fabric::FabricUDMMode::DISABLED) {
-        slow_dispatch_ = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        slow_dispatch_ = tt::test_utils::is_slow_dispatch_mode_enabled();
         if (slow_dispatch_) {
             log_info(tt::LogTest, "Running fabric api tests with slow dispatch");
         } else {

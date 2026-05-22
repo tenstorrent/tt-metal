@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "tt_metal/test_utils/env_vars.hpp"
 #include <chrono>
 #include <cerrno>
 #include <fmt/base.h>
@@ -117,7 +118,7 @@ bool validation(
 uint32_t get_dram_bandwidth(tt::ARCH arch);
 
 int main(int argc, char** argv) {
-    if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
+    if (tt::test_utils::is_slow_dispatch_mode_enabled()) {
         log_error(tt::LogTest, "Test not supported w/ slow dispatch, exiting");
     }
 

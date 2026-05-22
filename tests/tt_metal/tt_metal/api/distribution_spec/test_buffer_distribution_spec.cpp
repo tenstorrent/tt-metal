@@ -26,8 +26,7 @@ public:
 
 protected:
     static void SetUpTestSuite() {
-        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (slow_dispatch) {
+        if (tt::test_utils::is_slow_dispatch_mode_enabled()) {
             // Cannot skip in SetUpTestSuite, will be handled in SetUp
             return;
         }
@@ -53,8 +52,7 @@ protected:
     }
 
     void SetUp() override {
-        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (slow_dispatch) {
+        if (tt::test_utils::is_slow_dispatch_mode_enabled()) {
             GTEST_SKIP() << "Skipping test suite, since it can only be run in Fast Dispatch Mode.";
         }
         if (!mesh_device_) {

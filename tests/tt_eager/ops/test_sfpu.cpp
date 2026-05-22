@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "tt_metal/test_utils/env_vars.hpp"
 #include <chrono>
 #include <cctype>
 #include <cerrno>
@@ -255,8 +256,7 @@ bool run_unit_test(std::string op_name, int tile_factor, bool use_DRAM) {
 }
 
 int main(int argc, char** argv) {
-    const char* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    TT_FATAL(slow_dispatch_mode && slow_dispatch_mode[0] == '1', "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
+    TT_FATAL(tt::test_utils::is_slow_dispatch_mode_enabled(), "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
     bool pass = true;
     int arg_tile_factor = 1;

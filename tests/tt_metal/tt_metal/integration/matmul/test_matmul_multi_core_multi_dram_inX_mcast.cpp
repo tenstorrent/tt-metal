@@ -472,7 +472,7 @@ bool matmul_multi_core_multi_dram_inX_mcast(
 }  // namespace unit_tests_common::matmul::test_matmul_multi_core_multi_dram_inX_mcast
 
 TEST_F(MeshDispatchFixture, TensixMatmulMultiCoreMultiDRAMIn0MCast) {
-    if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
+    if (!tt::test_utils::is_slow_dispatch_mode_enabled()) {
         log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
         GTEST_SKIP();
     }
@@ -484,7 +484,7 @@ TEST_F(MeshDispatchFixture, TensixMatmulMultiCoreMultiDRAMIn0MCast) {
 }
 
 TEST_F(MeshDispatchFixture, TensixMatmulMultiCoreMultiDRAMIn1MCast) {
-    if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
+    if (!tt::test_utils::is_slow_dispatch_mode_enabled()) {
         log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
         GTEST_SKIP();
     }

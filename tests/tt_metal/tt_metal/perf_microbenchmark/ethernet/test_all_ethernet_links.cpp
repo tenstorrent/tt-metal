@@ -235,7 +235,7 @@ private:
         auto all_eth_connections = tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_connections();
 
         std::set<ChipId> sender_chips, receiver_chips;
-        bool slow_dispath_mode = (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr);
+        bool slow_dispath_mode = (tt::test_utils::is_slow_dispatch_mode_enabled());
 
         std::queue<ChipId> chip_q;
         chip_q.push(this->devices[0]->get_devices()[0]->id());  // Start with the first device's chip ID
@@ -602,7 +602,7 @@ void run(
     std::map<tt_cxy_pair, std::vector<LinkStats>> receiver_stats;
 
     // Create MeshWorkloads from programs for this iteration
-    bool slow_dispath_mode = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
+    bool slow_dispath_mode = tt::test_utils::is_slow_dispatch_mode_enabled();
     for (uint32_t iteration = 0; iteration < params.num_iterations; iteration++) {
         dump_eth_link_stats(
             device_helper, iteration, sender_stats, receiver_stats, params.num_iterations, false, iteration == 0);

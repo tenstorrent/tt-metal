@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <cstring>
 #include <map>
 #include <string>
 #include <vector>
@@ -78,8 +79,7 @@ int main() {
         int device_id = 0;
         std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
-        const char* slow_dispatch_env = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        const bool slow_dispatch_enabled = slow_dispatch_env != nullptr && slow_dispatch_env[0] == '1';
+        const bool slow_dispatch_enabled = [] { const char* v = std::getenv("TT_METAL_SLOW_DISPATCH_MODE"); return v && (v[0]=='1' || strcasecmp(v,"true")==0 || strcasecmp(v,"yes")==0 || strcasecmp(v,"on")==0); }();
         const auto USE_FAST_DISPATCH = !slow_dispatch_enabled;
 
         constexpr int device_loop_count = 150;

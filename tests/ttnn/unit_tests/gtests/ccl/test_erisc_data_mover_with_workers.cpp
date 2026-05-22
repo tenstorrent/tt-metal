@@ -619,7 +619,7 @@ bool RunWriteBWTest(
 
     log_info(tt::LogTest, "Compiling and Running...");
 
-    if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
+    if (tt::test_utils::is_slow_dispatch_mode_enabled()) {
         std::thread th2 = std::thread([&] { distributed::EnqueueMeshWorkload(sender_cq, sender_workload, false); });
         std::thread th1 = std::thread([&] { distributed::EnqueueMeshWorkload(receiver_cq, receiver_workload, false); });
 
