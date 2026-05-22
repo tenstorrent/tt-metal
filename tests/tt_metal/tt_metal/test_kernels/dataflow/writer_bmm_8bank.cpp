@@ -5,6 +5,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
 #include "api/kernel_thread_globals.h"
 #include "experimental/kernel_args.h"
 
@@ -19,6 +20,9 @@ void kernel_main() {
 
     constexpr int onetile = 1;
     DataflowBuffer dfb(dfb::dst);
+#ifndef ARCH_QUASAR
+    const uint32_t entry_size = dfb.get_entry_size();
+#endif
 
     const auto s = TensorAccessor(ta::dst);
 
@@ -30,11 +34,16 @@ void kernel_main() {
         for (uint32_t mt_C = 0; mt_C < Mt; ++mt_C) {  // output tile row of C
             for (uint32_t nt_C = 0; nt_C < Nt; ++nt_C) {  // output tile col of C
                 if (mt_C % num_writers == writer_id) {
+#ifdef ARCH_QUASAR
+                    // Quasar: implicit-sync write. The DFB credit advances via the per-trid
+                    // completion ISR; no wait_front / barrier / pop_front required.
+                    noc.async_write<Noc::TxnIdMode::ENABLED>(dfb, s, {}, {.page_id = itileC});
+#else
                     dfb.wait_front(onetile);
-                    uint32_t l1_read_addr = dfb.get_read_ptr();
-                    noc_async_write_page(itileC, s, l1_read_addr);
+                    noc.async_write(dfb, s, entry_size, {}, {.page_id = itileC});
                     noc.async_write_barrier();
                     dfb.pop_front(onetile);
+#endif
                 }
                 itileC++;
             }

@@ -79,10 +79,13 @@ BmmTensors create_bmm_tensors(distributed::MeshDevice& mesh_device, const BmmPar
 
 template <typename TargetNodes>
 experimental::metal2_host_api::ProgramSpec build_bmm_program_spec(
-    const BmmParams& p, const BmmTensors& tensors, const TargetNodes& target_nodes) {
+    const BmmParams& p, const BmmTensors& tensors, const TargetNodes& target_nodes, bool use_implicit_sync) {
     // Both kernels expose Gen1 + Gen2 data movement configs so the same spec runs on WH/BH and
     // Quasar; the runtime picks the right one per arch. The kernel sources use the unified
     // DataflowBuffer device API on both arches (CB-backed on Gen1, DFB-backed on Gen2).
+    // On Quasar we also enable implicit sync on each DFB so the reader/writer kernels can drop
+    // explicit reserve_back/wait_front/push_back/pop_front; on WH/BH implicit sync is unsupported
+    // and must be disabled to match the explicit-sync kernel branch.
     experimental::metal2_host_api::DataMovementConfiguration reader_config{
         .gen1_data_movement_config =
             experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
@@ -101,21 +104,21 @@ experimental::metal2_host_api::ProgramSpec build_bmm_program_spec(
         .entry_size = p.single_tile_size,
         .num_entries = p.num_input_tiles,
         .data_format_metadata = tt::DataFormat::Float16_b,
-        .disable_implicit_sync = true,
+        .disable_implicit_sync = !use_implicit_sync,
     };
     experimental::metal2_host_api::DataflowBufferSpec src1_dfb_spec{
         .unique_id = SRC1_DFB,
         .entry_size = p.single_tile_size,
         .num_entries = p.num_input_tiles,
         .data_format_metadata = tt::DataFormat::Float16_b,
-        .disable_implicit_sync = true,
+        .disable_implicit_sync = !use_implicit_sync,
     };
     experimental::metal2_host_api::DataflowBufferSpec dst_dfb_spec{
         .unique_id = DST_DFB,
         .entry_size = p.single_tile_size,
         .num_entries = p.num_output_tiles,
         .data_format_metadata = tt::DataFormat::Float16_b,
-        .disable_implicit_sync = true,
+        .disable_implicit_sync = !use_implicit_sync,
     };
 
     experimental::metal2_host_api::KernelSpec reader_spec{
@@ -247,7 +250,8 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
     const uint32_t bytesB = p.single_tile_size * p.Kt * p.Nt * p.B_total;
 
     const experimental::metal2_host_api::NodeCoord node{0, 0};
-    auto spec = build_bmm_program_spec(p, tensors, node);
+    const bool use_implicit_sync = (dev->arch() == ARCH::QUASAR);
+    auto spec = build_bmm_program_spec(p, tensors, node, use_implicit_sync);
     auto program = experimental::metal2_host_api::MakeProgramFromSpec(mesh_device, spec);
 
     constexpr uint32_t do_bcast = 0;
@@ -316,7 +320,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, BmmMultinode) {
     const experimental::metal2_host_api::NodeCoord node1{1, 0};
     const experimental::metal2_host_api::NodeRange node_range{node0, node1};
 
-    auto spec = build_bmm_program_spec(p, tensors, node_range);
+    // QuasarMeshDeviceSingleCardFixture only opens Quasar devices, so implicit sync is always on.
+    auto spec = build_bmm_program_spec(p, tensors, node_range, /*use_implicit_sync=*/true);
     auto program = experimental::metal2_host_api::MakeProgramFromSpec(mesh_device, spec);
 
     constexpr uint32_t do_bcast = 0;

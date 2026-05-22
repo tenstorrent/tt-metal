@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
 #include "api/kernel_thread_globals.h"
 #include "experimental/kernel_args.h"
 
@@ -27,6 +28,10 @@ void kernel_main() {
     Noc noc;
     DataflowBuffer dfb0(dfb::src0);
     DataflowBuffer dfb1(dfb::src1);
+#ifndef ARCH_QUASAR
+    const uint32_t entry_size0 = dfb0.get_entry_size();
+    const uint32_t entry_size1 = dfb1.get_entry_size();
+#endif
 
     const auto s0 = TensorAccessor(ta::src0);
     const auto s1 = TensorAccessor(ta::src1);
@@ -42,20 +47,28 @@ void kernel_main() {
                 for (uint32_t kt = 0; kt < Kt; kt++) { // col of in0, row of in1
                     // Read A's tile at (mt, kt)
                     if (mt % num_readers == reader_id) {
+#ifdef ARCH_QUASAR
+                        // Quasar: implicit-sync read. The DFB credit advances via the per-trid
+                        // completion ISR; no reserve_back / barrier / push_back required.
+                        noc.async_read<Noc::TxnIdMode::ENABLED>(s0, dfb0, {.page_id = itileA}, {});
+#else
                         dfb0.reserve_back(onetile);
-                        uint32_t l1_write_addr_in0 = dfb0.get_write_ptr();
-                        noc_async_read_page(itileA, s0, l1_write_addr_in0);
+                        noc.async_read(s0, dfb0, entry_size0, {.page_id = itileA}, {});
                         noc.async_read_barrier();
                         dfb0.push_back(onetile);
+#endif
                     }
 
                     // Read B's tile at (kt, nt)
                     if (mt % num_readers == reader_id && kt % num_readers == reader_id) {
+#ifdef ARCH_QUASAR
+                        noc.async_read<Noc::TxnIdMode::ENABLED>(s1, dfb1, {.page_id = itileB}, {});
+#else
                         dfb1.reserve_back(onetile);
-                        uint32_t l1_write_addr_in1 = dfb1.get_write_ptr();
-                        noc_async_read_page(itileB, s1, l1_write_addr_in1);
+                        noc.async_read(s1, dfb1, entry_size1, {.page_id = itileB}, {});
                         noc.async_read_barrier();
                         dfb1.push_back(onetile);
+#endif
                     }
 
                     itileA += 1;   // A is MK
