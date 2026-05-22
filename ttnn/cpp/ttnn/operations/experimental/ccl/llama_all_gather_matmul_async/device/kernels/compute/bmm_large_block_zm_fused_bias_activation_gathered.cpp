@@ -7,10 +7,18 @@
 #include "api/compute/matmul.h"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/dataflow/circular_buffer.h"
 #include "internal/mod_div_lib.h"
 
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
+
+// Legacy CB primitives retained (#45003 item 4): this compute kernel passes cb_id values directly into the
+// compute API (matmul_block, copy_block_matmul_partials, mm_block_init, pack_*, etc.) and into internal
+// helpers (reload_from_cb_to_dst, get_local_cb_*, update_local_cb_*) — those interfaces take cb_id as a
+// runtime argument and don't accept a CircularBuffer wrapper. The mm_out_cb_id / mm_partials_cb_id values
+// are also runtime-indexed from per-batch arrays. Migrating would require restructuring the helpers and
+// the matmul-API call sites, so cb_*(cb_id, ...) primitives stay on legacy here.
 
 enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 

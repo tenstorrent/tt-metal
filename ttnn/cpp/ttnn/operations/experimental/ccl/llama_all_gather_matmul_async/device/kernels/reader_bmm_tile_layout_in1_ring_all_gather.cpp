@@ -5,6 +5,8 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "hostdevcommon/common_values.hpp"
 #include "api/remote_circular_buffer.h"
 #include "api/debug/dprint.h"
@@ -22,6 +24,9 @@ void read_block_from_dram(
     uint32_t block_w_t,
     uint32_t block_h_t,
     uint32_t tile_size_bytes) {
+    // Legacy primitives retained (#45003 item 4): helper takes cb_id as a runtime parameter and is called
+    // without a Noc handle in scope; threading a CircularBuffer/Noc through the signature would change the
+    // helper interface, so the legacy get_write_ptr / noc_async_read_barrier stay here.
     uint32_t l1_write_addr = get_write_ptr(cb_id);
 
     // Horizontal idx + vertical idx * width = row major index
@@ -29,6 +34,9 @@ void read_block_from_dram(
     for (uint32_t h = 0; h < block_h_t; ++h) {
         uint32_t tile_id = block_tile_id + h * tensor_width_in_tiles;
         for (uint32_t w = 0; w < block_w_t; ++w) {
+            // Legacy primitive retained (#45003 item 4): noc_async_read_tile has no documented Device 2.0
+            // direct equivalent in the migration guide; the closest pattern (Noc::async_read with a TensorAccessor
+            // + page-id endpoint) would not preserve the per-tile incremental L1 write address tracked here.
             noc_async_read_tile(tile_id + w, s1, l1_write_addr);
             l1_write_addr += tile_size_bytes;
         }
@@ -36,6 +44,10 @@ void read_block_from_dram(
     noc_async_read_barrier();
 }
 
+// Legacy primitives retained (#45003 item 4): noc_semaphore_set_multicast and the multicast NoC address
+// composition pattern have no direct Device 2.0 equivalents — multicast semaphore set remains on legacy.
+// pv_semaphore is a runtime-resolved id-based L1 address but used both as a local volatile pointer and
+// as a multicast source address; Semaphore<> wrappers don't cover this dual-use pattern.
 void do_signaling(uint32_t& rt_args_idx) {
     const uint32_t pv_core_x = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t pv_core_y = get_arg_val<uint32_t>(rt_args_idx++);
@@ -82,6 +94,7 @@ void kernel_main() {
     if (core_type == (uint32_t)CORE_TYPE::IDLE_CORE || core_type == (uint32_t)CORE_TYPE::HOP_CORE) {
         if constexpr (needs_signaler) {
             do_signaling(rt_args_idx);
+            // Legacy barrier here predates the Noc handle; the early-return path doesn't construct one.
             noc_async_write_barrier();
         }
         return;
@@ -102,6 +115,11 @@ void kernel_main() {
     constexpr uint32_t sync_cb = get_compile_time_arg_val(12);
     constexpr uint32_t sync_cb2 = get_compile_time_arg_val(13);
     constexpr uint32_t remote_cb_id = get_compile_time_arg_val(14);
+
+    Noc noc_obj;
+    CircularBuffer cb_in1(cb_id_in1);
+    CircularBuffer cb_sync(sync_cb);
+    CircularBuffer cb_sync2(sync_cb2);
 
     constexpr auto src_args = TensorAccessorArgs<16>();
 
@@ -126,18 +144,19 @@ void kernel_main() {
     }
 
     for (uint32_t b = 0; b < batch; ++b) {
-        cb_reserve_back(sync_cb2, 1);
+        cb_sync2.reserve_back(1);
 #ifdef ENABLE_GLOBAL_CB
+        // Legacy primitive retained (#45003 item 4): experimental::remote_cb_wait_front has no Device 2.0 wrapper.
         experimental::remote_cb_wait_front(remote_cb_id, num_blocks);
 #endif
 
-        cb_push_back(sync_cb2, 1);
+        cb_sync2.push_back(1);
 
         if constexpr (in1_is_dram_interleaved) {
             for (uint32_t block = 0; block < num_blocks; ++block) {
                 uint32_t block_idx = (ring_idx + block) % num_blocks;
 
-                cb_reserve_back(cb_id_in1, in1_block_num_tiles);
+                cb_in1.reserve_back(in1_block_num_tiles);
                 read_block_from_dram(
                     cb_id_in1,
                     s1,
@@ -147,7 +166,7 @@ void kernel_main() {
                     in1_block_width_in_tiles,
                     in1_block_height_in_tiles,
                     in1_single_tile_size_bytes);
-                cb_push_back(cb_id_in1, in1_block_num_tiles);
+                cb_in1.push_back(in1_block_num_tiles);
             }
         } else if constexpr (in1_is_dram_sharded) {  // when in1 is sharded in DRAM, each core reads from its own bank,
                                                      // two cores on the same row share one bank.
@@ -155,9 +174,12 @@ void kernel_main() {
                 uint32_t block_idx = (ring_idx + block) % num_blocks;
                 l1_read_addr_in1 = block_idx * in1_dram_shard_block_size_bytes + dram_read_offset_bytes;
                 // Operand 1
-                cb_reserve_back(cb_id_in1, in1_block_num_tiles);
-                l1_write_addr_in1 = get_write_ptr(cb_id_in1);
+                cb_in1.reserve_back(in1_block_num_tiles);
+                l1_write_addr_in1 = cb_in1.get_write_ptr();
 
+                // Legacy primitives retained (#45003 item 4): noc_async_read_one_packet_set_state and
+                // noc_async_read_one_packet_with_state have no Device 2.0 wrapper equivalents — the one_packet
+                // state-machine pattern is not modeled by the new Noc class.
                 for (uint32_t h = 0; h < in1_block_height_in_tiles; ++h) {
                     uint32_t curr_l1_read_addr_in1 = l1_read_addr_in1;
                     for (uint32_t w = 0; w < in1_block_width_num_pages; ++w) {
@@ -173,15 +195,16 @@ void kernel_main() {
                     l1_read_addr_in1 += in1_shard_width_offset_bytes;
                 }
 
-                noc_async_read_barrier();
-                cb_push_back(cb_id_in1, in1_block_num_tiles);
+                noc_obj.async_read_barrier();
+                cb_in1.push_back(in1_block_num_tiles);
             }
         }
 
 #ifdef ENABLE_GLOBAL_CB
-        cb_wait_front(sync_cb, 1);
+        cb_sync.wait_front(1);
+        // Legacy primitive retained (#45003 item 4): experimental::remote_cb_pop_front has no Device 2.0 wrapper.
         experimental::remote_cb_pop_front(remote_cb_id, num_blocks);
-        cb_pop_front(sync_cb, 1);
+        cb_sync.pop_front(1);
 #endif
         // Signal Here
         if constexpr (needs_signaler) {
@@ -192,8 +215,9 @@ void kernel_main() {
     }
 
 #ifdef ENABLE_GLOBAL_CB
+    // Legacy primitive retained (#45003 item 4): experimental::update_remote_cb_config_in_l1 has no Device 2.0 wrapper.
     experimental::update_remote_cb_config_in_l1(remote_cb_id);
-    noc_async_atomic_barrier();
+    noc_obj.async_atomic_barrier();
 #endif
-    noc_async_write_barrier();
+    noc_obj.async_write_barrier();
 }

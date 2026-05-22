@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/debug/dprint.h"
 #include "ckernel.h"
 
@@ -38,6 +40,13 @@ void kernel_main() {
     const uint32_t next_core_id_to_left = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t next_core_id_to_right = get_arg_val<uint32_t>(arg_idx++);
 
+    Noc noc_obj;
+    CircularBuffer cb_inter(inter_cb_index);
+
+    // Legacy primitives retained (#45003 item 4): signal_semaphore_addr is a raw cross-device semaphore
+    // address passed via runtime args; fused_op_receiver_signal_semaphore_addr[] is a runtime-indexed
+    // array of L1 semaphore addresses (derived from get_semaphore(id)) used both for local set/wait and
+    // as a noc multicast target — direct id-based Semaphore<> wrappers don't fit the array-indexed pattern.
     volatile tt_l1_ptr uint32_t* signal_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(signal_semaphore_addr);
 
@@ -63,17 +72,20 @@ void kernel_main() {
         noc_semaphore_set(fused_op_receiver_signal_semaphore_addr_ptr_next_core_right, 0);
     }
 
-    size_t l1_read_addr = get_read_ptr(inter_cb_index);
+    size_t l1_read_addr = cb_inter.get_read_ptr();
     const uint64_t multicast_addr_noc = get_noc_multicast_addr(bbox_start_x, bbox_start_y, bbox_end_x, bbox_end_y, 0);
     uint64_t aggregated_tensor_addr_this_core =
         (uint64_t)aggregated_tensor_addr + mm_core_offset * intermediate_tensor_shard_num_pages * tensor0_page_size;
     const uint64_t multicast_addr = multicast_addr_noc | aggregated_tensor_addr_this_core;
 
+    // Legacy primitives retained (#45003 item 4): noc_async_write_multicast_loopback_src and
+    // noc_semaphore_set_multicast_loopback_src have no Device 2.0 wrapper equivalents — loopback multicast
+    // remains on the legacy noc surface.
     noc_async_write_multicast_loopback_src(
         l1_read_addr, multicast_addr, intermediate_tensor_shard_num_pages * tensor0_page_size, bbox_size, true);
 
     uint64_t multicast_sema_addr = multicast_addr_noc | (uint64_t)fused_op_receiver_signal_semaphore_addr[core_id];
     noc_semaphore_set_multicast_loopback_src(
         fused_op_receiver_signal_semaphore_addr[core_id], multicast_sema_addr, bbox_size, false);
-    noc_async_write_barrier();
+    noc_obj.async_write_barrier();
 }
