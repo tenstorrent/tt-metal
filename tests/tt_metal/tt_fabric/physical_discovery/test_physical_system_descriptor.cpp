@@ -10,7 +10,10 @@
 #include <map>
 #include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
+
+#include <tools/scaleout/board/board.hpp>
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -26,6 +29,18 @@
 #include <fstream>
 
 namespace tt::tt_fabric::physical_discovery {
+
+namespace {
+
+PortType expected_port_type_for_connection(const tt::tt_metal::ASICDescriptor& asic_descriptor, uint8_t src_chan) {
+    auto board = tt::scaleout_tools::create_board(asic_descriptor.board_type);
+    return board
+        .get_port_for_asic_channel(
+            tt::scaleout_tools::AsicChannel{*asic_descriptor.asic_location, tt::scaleout_tools::ChanId{src_chan}})
+        .port_type;
+}
+
+}  // namespace
 
 TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
     using namespace tt::tt_metal::distributed::multihost;
@@ -112,8 +127,26 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
                 EXPECT_NE(eth_links.find(eth_conn.src_chan), eth_links.end());
                 EXPECT_EQ(dst_chip, remote_chip);
                 EXPECT_EQ(eth_conn.dst_chan, remote_chan);
+
+                const auto& src_desc = asic_descs.at(asic);
+                auto expected_port_type = expected_port_type_for_connection(src_desc, eth_conn.src_chan);
+                EXPECT_EQ(eth_conn.port_type, expected_port_type)
+                    << "port_type should match board lookup for local link on channel " << +eth_conn.src_chan;
+                EXPECT_EQ(physical_system_desc.get_port_type(asic, neighbor, eth_conn.src_chan), eth_conn.port_type);
+                EXPECT_TRUE(physical_system_desc.has_port_type(asic, neighbor, eth_conn.port_type));
             }
         }
+
+        std::unordered_set<PortType> expected_port_types;
+        for (auto neighbor : physical_system_desc.get_asic_neighbors(asic)) {
+            for (const auto& eth_conn : physical_system_desc.get_eth_connections(asic, neighbor)) {
+                expected_port_types.insert(eth_conn.port_type);
+            }
+        }
+        auto available_port_types = physical_system_desc.get_available_port_types(asic);
+        std::unordered_set<PortType> actual_port_types(available_port_types.begin(), available_port_types.end());
+        EXPECT_EQ(actual_port_types, expected_port_types)
+            << "get_available_port_types should return unique port types from outgoing links";
     }
 
     // Host to Host Connectivity
@@ -143,6 +176,33 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
             // Verify that remote asic belongs to a neighbor host
             EXPECT_NE(
                 std::find(my_host_neighbors.begin(), my_host_neighbors.end(), remote_host), my_host_neighbors.end());
+
+            const auto& src_desc = asic_descs.at(src_asic);
+            auto expected_port_type = expected_port_type_for_connection(src_desc, src_chan);
+            EXPECT_EQ(exit_node.eth_conn.port_type, expected_port_type)
+                << "port_type should match board lookup for cross-host exit node on channel " << +src_chan;
+            EXPECT_EQ(physical_system_desc.get_port_type(src_asic, dst_asic, src_chan), exit_node.eth_conn.port_type);
+            EXPECT_TRUE(physical_system_desc.has_port_type(src_asic, dst_asic, exit_node.eth_conn.port_type));
+        }
+    }
+
+    // Validate port_type is preserved through protobuf serialize/deserialize roundtrip
+    auto serialized_bytes = tt::tt_metal::serialize_physical_system_descriptor_to_bytes(physical_system_desc);
+    auto deserialized_psd = tt::tt_metal::deserialize_physical_system_descriptor_from_bytes(serialized_bytes);
+    for (auto asic : physical_system_desc.get_asics_connected_to_host(my_host)) {
+        for (auto neighbor : physical_system_desc.get_asic_neighbors(asic)) {
+            auto eth_conns = physical_system_desc.get_eth_connections(asic, neighbor);
+            for (const auto& eth_conn : eth_conns) {
+                auto deserialized_conns = deserialized_psd.get_eth_connections(asic, neighbor);
+                auto conn_it =
+                    std::find_if(deserialized_conns.begin(), deserialized_conns.end(), [&](const auto& conn) {
+                        return conn.src_chan == eth_conn.src_chan;
+                    });
+                ASSERT_NE(conn_it, deserialized_conns.end())
+                    << "connection should exist after serialize/deserialize roundtrip";
+                EXPECT_EQ(conn_it->port_type, eth_conn.port_type)
+                    << "port_type should be preserved after serialize/deserialize roundtrip";
+            }
         }
     }
 
