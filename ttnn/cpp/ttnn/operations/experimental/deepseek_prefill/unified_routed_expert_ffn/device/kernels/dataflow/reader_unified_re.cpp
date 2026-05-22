@@ -38,7 +38,8 @@ void kernel_main() {
     const uint32_t counts_addr = get_arg_val<uint32_t>(4);
     const uint32_t idx_table_addr = get_arg_val<uint32_t>(5);
     const uint32_t scratch_addr = get_arg_val<uint32_t>(6);  // activated scratch DRAM tensor
-    const uint32_t sem_addr = get_arg_val<uint32_t>(7);      // local L1 address of the global semaphore
+    const uint32_t sem_id = get_arg_val<uint32_t>(7);        // semaphore id (resolves to L1 addr via get_semaphore)
+    const uint32_t sem_addr = get_semaphore(sem_id);
 
     const uint32_t my_mt = get_arg_val<uint32_t>(8);
     const uint32_t my_nt_gu = get_arg_val<uint32_t>(9);
@@ -186,11 +187,12 @@ void kernel_main() {
         cb_push_back(cb_in1_up, g_in1_block_num_tiles);
     }
 
-    // DIAGNOSTIC: skip the sem wait. Phase 4 will read whatever happens to
-    // be in scratch DRAM at this point (likely zeros / stale data). Lets us
-    // confirm the matmul / multiply / down phases run end-to-end.
+    // Wait for the controller writer to broadcast "go" (sem == 1).
+    {
+        volatile tt_l1_ptr uint32_t* sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
+        noc_semaphore_wait(sem_ptr, 1);
+    }
     (void)total_cores;
-    (void)sem_addr;
 
     // -------- PHASE 4 — down matmul feed (activated scratch + down_proj) --
     for (uint32_t kb = 0; kb < num_blocks_d; ++kb) {

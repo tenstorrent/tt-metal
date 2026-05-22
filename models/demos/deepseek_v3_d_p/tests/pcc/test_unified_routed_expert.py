@@ -115,6 +115,18 @@ def test_unified_routed_expert(
         mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
     )
 
+    print(
+        f"[unified] tt out: shape={tt_output_torch.shape}, "
+        f"min={tt_output_torch.min().item():.4f}, max={tt_output_torch.max().item():.4f}, "
+        f"abs_mean={tt_output_torch.float().abs().mean().item():.4f}, "
+        f"nz_frac={(tt_output_torch.float().abs() > 1e-6).float().mean().item():.4f}",
+        flush=True,
+    )
+    print(
+        f"[unified] torch out: min={torch_output.min().item():.4f}, max={torch_output.max().item():.4f}, "
+        f"abs_mean={torch_output.float().abs().mean().item():.4f}",
+        flush=True,
+    )
     _, pcc = comp_pcc(torch_output, tt_output_torch)
     logger.info(f"unified routed expert PCC: {pcc:.6f}")
     assert pcc >= 0.95, f"PCC {pcc:.6f} below threshold 0.95"

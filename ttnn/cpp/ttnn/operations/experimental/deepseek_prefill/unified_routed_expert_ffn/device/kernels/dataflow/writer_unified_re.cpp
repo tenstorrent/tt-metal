@@ -24,7 +24,8 @@ constexpr uint32_t TILE_HEIGHT = 32;
 void kernel_main() {
     const uint32_t output_addr = get_arg_val<uint32_t>(0);
     const uint32_t scratch_addr = get_arg_val<uint32_t>(1);
-    const uint32_t sem_addr = get_arg_val<uint32_t>(2);  // L1 offset of the semaphore on every core
+    const uint32_t sem_id = get_arg_val<uint32_t>(2);  // semaphore id (resolves via get_semaphore)
+    const uint32_t sem_addr = get_semaphore(sem_id);
     const uint32_t num_sync_cores = get_arg_val<uint32_t>(3);
     // Multicast destination grid (one rectangle covering every compute core)
     // and the number of dests inside it. After the phase-3 drain, every
@@ -58,6 +59,11 @@ void kernel_main() {
     constexpr uint32_t d_in1_num_subblocks_M = per_core_M / d_out_subblock_h;
     constexpr uint32_t d_in1_num_subblocks_N = per_core_N_d / d_out_subblock_w;
 
+    // NoC virtual coords of every compute core live in runtime args at index
+    // CORE_COORDS_RT_OFFSET (interleaved x, y). Used by the controller writer
+    // to unicast-set each other core's sem slot directly (avoids multicast).
+    constexpr uint32_t CORE_COORDS_RT_OFFSET = 12;
+
     constexpr uint32_t out_accessor_offset = 11;
     constexpr auto out_args = TensorAccessorArgs<out_accessor_offset>();
     const auto out_acc = TensorAccessor(out_args, output_addr, get_tile_size(cb_out));
@@ -69,29 +75,69 @@ void kernel_main() {
     const uint32_t out_tile_bytes = get_tile_size(cb_out);
     const uint32_t scratch_tile_bytes = get_tile_size(cb_activated);
 
-    // DIAGNOSTIC: skip the activated drain entirely. We still pop the CB
-    // to keep CB protocol in sync with the compute kernel's pushes.
+    // Drain cb_activated subblock-by-subblock, writing each tile into the
+    // scratch DRAM tensor so phase 4's down matmul can pull this core's
+    // full K_down = N_gate_tiles_full activated columns back via the
+    // reader.
     {
         const uint32_t gu_in0_num_subblocks = per_core_M / gu_out_subblock_h;
         const uint32_t gu_in1_num_subblocks = per_core_N_gu / gu_out_subblock_w;
-        (void)chunk_start_tile_row;
-        (void)scratch_acc;
-        (void)scratch_tile_bytes;
+        const uint32_t row0 = chunk_start_tile_row + my_mt * per_core_M;
+        const uint32_t col0 = my_nt_gu * per_core_N_gu;
         for (uint32_t sb_m = 0; sb_m < gu_in0_num_subblocks; ++sb_m) {
             for (uint32_t sb_n = 0; sb_n < gu_in1_num_subblocks; ++sb_n) {
                 cb_wait_front(cb_activated, gu_out_subblock_num_tiles);
+                uint32_t l1_read = get_read_ptr(cb_activated);
+                for (uint32_t i = 0; i < gu_out_subblock_h; ++i) {
+                    for (uint32_t j = 0; j < gu_out_subblock_w; ++j) {
+                        const uint32_t row = row0 + sb_m * gu_out_subblock_h + i;
+                        const uint32_t col = col0 + sb_n * gu_out_subblock_w + j;
+                        const uint32_t tile_idx = row * N_gate_tiles_full + col;
+                        noc_async_write_tile(tile_idx, scratch_acc, l1_read);
+                        l1_read += scratch_tile_bytes;
+                    }
+                }
+                noc_async_write_barrier();
                 cb_pop_front(cb_activated, gu_out_subblock_num_tiles);
             }
         }
     }
 
-    // DIAGNOSTIC: skip semaphore broadcast.
-    (void)mcast_x_start;
-    (void)mcast_y_start;
-    (void)mcast_x_end;
-    (void)mcast_y_end;
-    (void)sem_addr;
-
+    // Cross-core barrier (controller pattern with explicit unicast set).
+    //
+    //   * Controller = core at (mcast_x_start, mcast_y_start) (logical (0,0)).
+    //   * Every worker writer issues a single non-posted unicast atomic inc
+    //     on the controller's sem slot.
+    //   * The controller's writer waits until its local sem == N-1, then
+    //     unicasts a "set 1" to each of the other cores' sem slots using
+    //     the NoC-coord table we received in compile-time args. This avoids
+    //     multicast which can drop destinations on harvested grids.
+    //   * Every reader waits until its local sem == 1.
+    {
+        const bool is_controller = (my_x[0] == mcast_x_start) && (my_y[0] == mcast_y_start);
+        volatile tt_l1_ptr uint32_t* local_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
+        if (is_controller) {
+            noc_semaphore_wait(local_sem, num_sync_cores - 1);
+            // Stage value 1 in our own sem slot; then DMA-write it out to
+            // every other core's sem slot.
+            *local_sem = 1;
+            for (uint32_t c = 0; c < num_sync_cores; ++c) {
+                const uint32_t nx = get_arg_val<uint32_t>(CORE_COORDS_RT_OFFSET + 2 * c);
+                const uint32_t ny = get_arg_val<uint32_t>(CORE_COORDS_RT_OFFSET + 2 * c + 1);
+                if (nx == my_x[0] && ny == my_y[0]) {
+                    continue;
+                }
+                const uint64_t dst = get_noc_addr(nx, ny, sem_addr);
+                noc_async_write(reinterpret_cast<uint32_t>(local_sem), dst, 4);
+            }
+            noc_async_write_barrier();
+            (void)num_sync_cores;
+        } else {
+            const uint64_t ctrl_sem_addr = get_noc_addr(mcast_x_start, mcast_y_start, sem_addr);
+            noc_semaphore_inc(ctrl_sem_addr, 1);
+            noc_async_atomic_barrier();
+        }
+    }
     // ----- Phase 4 drain -> DRAM output ------------------------------------
     {
         const uint32_t row0 = chunk_start_tile_row + my_mt * per_core_M;
