@@ -222,8 +222,14 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         worker_core_set = worker_core_set.merge(CoreRangeSet({CoreRange(c, c)}));
     }
 
+    // chunk_size_rows: aim for ≥2 chunks per worker so Phase 5's double-buffered
+    // input_cb can overlap chunk N+1's reader fill + chunk N+1's AG with chunk
+    // N's compute and chunk N's output drain. When the worker has ≥2 rows, pick
+    // ceil(rows/2) as the chunk size (capped at kMaxChunkSizeRows); when only
+    // 1 row, chunk=1 (no overlap possible at all).
     constexpr uint32_t kMaxChunkSizeRows = 4u;
-    const uint32_t chunk_size_rows = std::min<uint32_t>(num_tile_rows_per_worker, kMaxChunkSizeRows);
+    const uint32_t chunk_for_two_chunks = std::max(1u, (num_tile_rows_per_worker + 1u) / 2u);
+    const uint32_t chunk_size_rows = std::min<uint32_t>(chunk_for_two_chunks, kMaxChunkSizeRows);
 
     // ------------------------------------------------------------------------
     // Compute kernel config + dtype/format setup
@@ -264,7 +270,13 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     constexpr uint32_t rotated_input_cb_id = tt::CBIndex::c_14;
     constexpr uint32_t reserved_packet_header_cb_id = tt::CBIndex::c_15;
 
-    const uint32_t input_cb_tiles = chunk_size_rows * num_tile_cols;
+    // Double-buffer input_cb (Phase 5): reader can fill chunk N+1 while compute
+    // is in chunk N's post phase. Cumulative cb_wait_front in compute (Phase 4)
+    // pairs naturally with this — compute uses absolute indices within the
+    // current chunk, and cb_pop_front at end of chunk frees that chunk's slots
+    // back to the reader.
+    const uint32_t chunk_input_tiles = chunk_size_rows * num_tile_cols;
+    const uint32_t input_cb_tiles = 2 * chunk_input_tiles;
     create_cb(input_cb_id, program, worker_core_set, input_tile_size, input_cb_tiles, input_format);
 
     const uint32_t stats_local_tiles = (args.ring_size > 1) ? chunk_size_rows : 1;
@@ -298,8 +310,14 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         create_cb(rope_sin_cb_id, program, worker_core_set, fp32_tile_size, 1, fp32_format);
     }
 
-    create_cb(intermediate_cb_id, program, worker_core_set, bf16_tile_size, block_size * 2, bf16_format);
-    create_cb(rotated_input_cb_id, program, worker_core_set, bf16_tile_size, block_size * 2, bf16_format);
+    // intermediate_cb and rotated_input_cb are compute-only (producer and
+    // consumer are the same TRISC pipeline within the post phase). Each
+    // col-block iteration pushes block_size tiles and pops them within the
+    // same iteration before the next push, so a single buffer is enough.
+    create_cb(intermediate_cb_id, program, worker_core_set, bf16_tile_size, block_size, bf16_format);
+    create_cb(rotated_input_cb_id, program, worker_core_set, bf16_tile_size, block_size, bf16_format);
+    // output_cb is double-buffered so the writer can drain block N while compute
+    // produces block N+1.
     create_cb(output_cb_id, program, worker_core_set, output_tile_size, block_size * 2, output_format);
 
     // Packet header CB — needed by the legacy writer's TP>1 fabric forwarder
