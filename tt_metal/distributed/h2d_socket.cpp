@@ -140,8 +140,10 @@ void H2DSocket::init_data_buffer(const std::shared_ptr<MeshDevice>& mesh_device,
     MeshBufferConfig data_mesh_buffer_specs = ReplicatedBufferConfig{
         .size = total_data_buffer_size,
     };
-    data_buffer_ = MeshBuffer::create(data_mesh_buffer_specs, data_buffer_specs, mesh_device.get());
-    aligned_data_buf_start_ = tt::align(data_buffer_->address(), pcie_alignment);
+    if (h2d_mode_ == H2DMode::HOST_PUSH) {
+        data_buffer_ = MeshBuffer::create(data_mesh_buffer_specs, data_buffer_specs, mesh_device.get());
+        aligned_data_buf_start_ = tt::align(data_buffer_->address(), pcie_alignment);
+    }
     write_ptr_ = 0;
 }
 

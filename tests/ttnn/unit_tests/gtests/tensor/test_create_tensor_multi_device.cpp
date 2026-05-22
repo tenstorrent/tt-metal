@@ -45,6 +45,47 @@ using ::tt::tt_metal::distributed::MeshCoreCoord;
 
 using MultiDeviceTensorCreationTest = GenericMeshDeviceFixture;
 
+// Helper for sweeping copy_tensor_over_socket over (shape, scratch CB budget, FIFO size)
+// combinations. Mirrors the test_h2d_socket / test_d2h_socket pattern in
+// tests/tt_metal/distributed/test_hd_sockets.cpp.
+//
+// Hardcoded to ROW_MAJOR UINT32 DRAM today; templatize on dtype if/when we need it.
+void test_copy_tensor_over_socket(
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
+    const ttnn::Shape& logical_shape,
+    uint32_t scratch_cb_size_bytes,
+    uint32_t fifo_size_bytes,
+    H2DMode mode = H2DMode::DEVICE_PULL,
+    const MeshCoreCoord& recv_core = MeshCoreCoord(MeshCoordinate(0, 0), CoreCoord(0, 0))) {
+    auto tensor_layout = TensorLayout(
+        DataType::UINT32,
+        PageConfig(Layout::ROW_MAJOR),
+        MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
+    auto spec = TensorSpec(logical_shape, tensor_layout);
+
+    std::vector<uint32_t> src(logical_shape.volume());
+    std::iota(src.begin(), src.end(), 0u);
+    Tensor host_tensor = Tensor::from_vector<uint32_t>(src, spec);
+
+    Tensor device_tensor = tt::tt_metal::create_device_tensor(spec, mesh_device.get());
+    ASSERT_NE(device_tensor.buffer(), nullptr);
+    ASSERT_EQ(device_tensor.dtype(), DataType::UINT32);
+    ASSERT_EQ(device_tensor.layout(), Layout::ROW_MAJOR);
+    ASSERT_EQ(device_tensor.memory_config().buffer_type(), BufferType::DRAM);
+    ASSERT_EQ(device_tensor.buffer()->num_pages() * device_tensor.buffer()->page_size(), src.size() * sizeof(uint32_t));
+
+    H2DSocket socket(mesh_device, recv_core, BufferType::L1, fifo_size_bytes, mode);
+
+    tt::tt_metal::copy_tensor_over_socket(host_tensor, device_tensor, {&socket}, scratch_cb_size_bytes);
+
+    socket.barrier();
+
+    auto readback = device_tensor.to_vector<uint32_t>();
+    ASSERT_THAT(readback, SizeIs(src.size()));
+    EXPECT_EQ(readback, src) << "shape=" << logical_shape << " scratch_cb_size_bytes=" << scratch_cb_size_bytes
+                             << " fifo_size_bytes=" << fifo_size_bytes;
+}
+
 TEST_F(MultiDeviceTensorCreationTest, Empty) {
     MeshDevice* mesh_device = this->mesh_device_.get();
 
@@ -199,46 +240,112 @@ TEST_F(MultiDeviceTensorCreationTest, Arange) {
 }
 
 TEST_F(MultiDeviceTensorCreationTest, CopyTensorOverH2DSocket_Uint32_RowMajor_Dram) {
-    MeshDevice* mesh_device = this->mesh_device_.get();
+    // Per-row physical size for ROW_MAJOR UINT32 with innermost dim 640: 640 * 4 = 2560 B.
+    // Each (shape, scratch_cb_size, fifo) tuple below exercises a different code path in the
+    // chunk picker. The FIFO is sized generously (>= 2 * socket_page_size) so the host can
+    // overlap fills with the kernel's NoC writes after the early-release.
 
-    const ttnn::Shape logical_shape({1, 1, 1, 640});
-    auto tensor_layout = TensorLayout(
-        DataType::UINT32,
-        PageConfig(Layout::ROW_MAJOR),
-        MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
-    auto spec = TensorSpec(logical_shape, tensor_layout);
+    // Single chunk: budget >= total bytes. Baseline regression for the original test.
+    test_copy_tensor_over_socket(this->mesh_device_, ttnn::Shape({1, 1, 1, 640}), /*scratch_cb=*/2560, /*fifo=*/2560);
 
-    std::vector<uint32_t> src(logical_shape.volume());
-    std::iota(src.begin(), src.end(), 0u);
-    Tensor host_tensor = Tensor::from_vector<uint32_t>(src, spec);
+    // Multi-chunk, even split: 16 tensor pages, budget for 4 -> 4 chunks of 4 pages each.
+    test_copy_tensor_over_socket(
+        this->mesh_device_, ttnn::Shape({1, 1, 16, 640}), /*scratch_cb=*/4 * 2560, /*fifo=*/16 * 2560);
 
-    Tensor device_tensor = tt::tt_metal::create_device_tensor(spec, mesh_device);
+    // Multi-chunk, page-at-a-time: budget == tensor_page_size -> pages_per_chunk = 1.
+    // Stresses iteration count and the per-iteration socket/CB overhead.
+    test_copy_tensor_over_socket(
+        this->mesh_device_, ttnn::Shape({1, 1, 32, 640}), /*scratch_cb=*/2560, /*fifo=*/8 * 2560);
 
-    ASSERT_NE(device_tensor.buffer(), nullptr);
-    ASSERT_EQ(device_tensor.dtype(), DataType::UINT32);
-    ASSERT_EQ(device_tensor.layout(), Layout::ROW_MAJOR);
-    ASSERT_EQ(device_tensor.memory_config().buffer_type(), BufferType::DRAM);
+    // Divisor fallback: 7 tensor pages (prime). Budget-max would give 4, but 7 % 4 != 0,
+    // 7 % 3 != 0, 7 % 2 != 0 -> the loop falls back to pages_per_chunk = 1, num_socket_pages = 7.
+    test_copy_tensor_over_socket(
+        this->mesh_device_, ttnn::Shape({1, 1, 7, 640}), /*scratch_cb=*/4 * 2560, /*fifo=*/8 * 2560);
 
-    const uint32_t xfer_bytes = device_tensor.buffer()->num_pages() * device_tensor.buffer()->page_size();
-
-    std::cout << "Transfer Bytes in test: " << xfer_bytes << std::endl;
-    ASSERT_EQ(xfer_bytes, src.size() * sizeof(uint32_t));
-
-    const MeshCoreCoord recv_core{MeshCoordinate(0, 0), CoreCoord(0, 0)};
-    H2DSocket socket(
+    // Oversized budget: budget far exceeds total bytes -> still a single chunk.
+    test_copy_tensor_over_socket(
         this->mesh_device_,
-        recv_core,
-        BufferType::L1,
-        /*fifo_size=*/xfer_bytes,
-        H2DMode::DEVICE_PULL);
+        ttnn::Shape({1, 1, 8, 640}),
+        /*scratch_cb=*/1024 * 1024,
+        /*fifo=*/1024 * 1024);
 
-    tt::tt_metal::copy_tensor_over_socket(host_tensor, device_tensor, {&socket});
+    // Large multi-chunk: 256 tensor pages (640 KB total). Budget for 16 pages -> 16 chunks of
+    // 16 pages each. Exercises early-release + writes_flushed at non-trivial iteration count.
+    test_copy_tensor_over_socket(
+        this->mesh_device_, ttnn::Shape({1, 1, 256, 640}), /*scratch_cb=*/16 * 2560, /*fifo=*/64 * 2560);
+}
 
-    socket.barrier();
+TEST_F(MultiDeviceTensorCreationTest, CopyTensorOverH2DSocket_Uint32_RowMajor_Dram_Stress) {
+    // Move MB-scale data through every interesting (volume, chunk-size, page-size) combination.
+    // Each case asserts byte-exact round-trip, so this also catches drift in the chunking math
+    // and early-release ordering at scale.
+    //
+    // L1 budget note: even in DEVICE_PULL mode H2DSocket::init_data_buffer allocates a
+    // (fifo_size + pcie_alignment) L1 buffer per worker core (see h2d_socket.cpp:124).
+    // On Blackhole the usable L1 is ~1.3 MB, so we cap `scratch_cb + fifo_size` per case
+    // to ~768 KB to leave room for dispatch overhead. Without this cap, large FIFOs
+    // collide with the scratch CB on the recv core.
+    //
+    // For ROW_MAJOR UINT32:
+    //   tensor_page_size = innermost_dim * 4
+    //   tensor_num_pages = product(outer dims)
+    //   total bytes      = num_pages * page_size
 
-    auto readback = device_tensor.to_vector<uint32_t>();
-    ASSERT_THAT(readback, SizeIs(src.size()));
-    EXPECT_EQ(readback, src);
+    // 1 MB / 2 chunks.    page=1 KB,  1024 pages. budget 512 KB   -> 2 chunks of 512 pages each.
+    // Large fat chunk: the most data we can push per PCIe read without blowing the L1 budget.
+    test_copy_tensor_over_socket(
+        this->mesh_device_,
+        ttnn::Shape({1, 1, 1024, 256}),
+        /*scratch_cb=*/512 * 1024,
+        /*fifo=*/512 * 1024);
+
+    // 1 MB / 256 chunks.  page=1 KB,  1024 pages. budget 4 KB     -> 256 chunks of 4 pages each.
+    // FIFO holds only 4 chunks, so host write loop has to block on reserve_bytes repeatedly.
+    test_copy_tensor_over_socket(
+        this->mesh_device_,
+        ttnn::Shape({1, 1, 1024, 256}),
+        /*scratch_cb=*/4 * 1024,
+        /*fifo=*/16 * 1024);
+
+    // 4 MB / 32 chunks.   page=4 KB,  1024 pages. budget 128 KB   -> 32 chunks of 32 pages each.
+    // Balanced "fat chunk" config: each chunk fans out 32 NoC writes after one PCIe read.
+    test_copy_tensor_over_socket(
+        this->mesh_device_,
+        ttnn::Shape({1, 1, 1024, 1024}),
+        /*scratch_cb=*/128 * 1024,
+        /*fifo=*/512 * 1024);
+
+    // 4 MB / 1024 chunks. page=4 KB,  1024 pages. budget 4 KB     -> 1024 chunks of 1 page each.
+    // Same total bytes as the row above but maximum chunk count; stresses per-iter overhead.
+    test_copy_tensor_over_socket(
+        this->mesh_device_,
+        ttnn::Shape({1, 1, 1024, 1024}),
+        /*scratch_cb=*/4 * 1024,
+        /*fifo=*/16 * 1024);
+
+    // 16 MB / 128 chunks. page=4 KB,  4096 pages. budget 128 KB   -> 128 chunks of 32 pages each.
+    // Largest single-test volume; useful for catching anything that degrades super-linearly.
+    test_copy_tensor_over_socket(
+        this->mesh_device_,
+        ttnn::Shape({1, 1, 4096, 1024}),
+        /*scratch_cb=*/128 * 1024,
+        /*fifo=*/512 * 1024);
+
+    // 256 KB / 4 chunks.  page=16 KB, 16 pages.   budget 64 KB    -> 4 chunks of 4 pages each.
+    // Wide-innermost-dim regime: big tensor pages, few of them, large per-NoC-write payload.
+    test_copy_tensor_over_socket(
+        this->mesh_device_,
+        ttnn::Shape({1, 1, 16, 4096}),
+        /*scratch_cb=*/64 * 1024,
+        /*fifo=*/256 * 1024);
+
+    // 1 MB / 2048 chunks. page=512 B, 2048 pages. budget 512 B    -> 2048 chunks of 1 page each.
+    // Smallest-page x highest-chunk-count combo. Worst case for per-iteration overhead.
+    test_copy_tensor_over_socket(
+        this->mesh_device_,
+        ttnn::Shape({1, 1, 2048, 128}),
+        /*scratch_cb=*/512,
+        /*fifo=*/4 * 1024);
 }
 
 }  // namespace

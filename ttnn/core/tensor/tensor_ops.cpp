@@ -137,7 +137,10 @@ void copy_to_device(
 }
 
 void copy_tensor_over_socket(
-    const Tensor& host_tensor, Tensor& device_tensor, std::vector<distributed::H2DSocket*> sockets) {
+    const Tensor& host_tensor,
+    Tensor& device_tensor,
+    std::vector<distributed::H2DSocket*> sockets,
+    uint32_t scratch_cb_size_bytes) {
     // Launch H2D mesh workload here using sockets
     // Issue a socket write to each device
     // Tear serice down
@@ -148,10 +151,66 @@ void copy_tensor_over_socket(
     TT_FATAL(sockets[0] != nullptr, "Socket pointer must not be null");
     auto& socket = *sockets[0];
 
+    TT_FATAL(device_tensor.buffer() != nullptr, "device_tensor is not allocated");
+    TT_FATAL(
+        device_tensor.device() == socket.get_mesh_device(), "device_tensor and socket must be on the same mesh device");
+
+    const uint32_t tensor_page_size = device_tensor.buffer()->page_size();
+    const uint32_t tensor_num_pages = device_tensor.buffer()->num_pages();
+    TT_FATAL(tensor_page_size > 0, "device_tensor page size must be > 0");
+    TT_FATAL(tensor_num_pages > 0, "device_tensor must have at least one page");
+
+    TT_FATAL(
+        scratch_cb_size_bytes >= tensor_page_size,
+        "scratch_cb_size_bytes ({} B) must be >= tensor page size ({} B); "
+        "consider a layout with smaller pages or a larger CB budget",
+        scratch_cb_size_bytes,
+        tensor_page_size);
+
+    // Pick the largest pages_per_chunk that:
+    //   - is <= scratch_cb_size_bytes / tensor_page_size  (fits in the CB budget)
+    //   - divides tensor_num_pages evenly                  (no partial last chunk)
+    // Falls back to 1 in the worst case (e.g. tensor_num_pages is prime). Because
+    // scratch_cb_size_bytes >= tensor_page_size (asserted above), max_pages_per_chunk_by_cb
+    // and tensor_num_pages are both >= 1, and the loop only decrements while > 1, so
+    // pages_per_chunk is guaranteed to exit the loop >= 1.
+    const uint32_t max_pages_per_chunk_by_cb = scratch_cb_size_bytes / tensor_page_size;
+    uint32_t pages_per_chunk = std::min(tensor_num_pages, max_pages_per_chunk_by_cb);
+    while (pages_per_chunk > 1 && (tensor_num_pages % pages_per_chunk) != 0) {
+        --pages_per_chunk;
+    }
+
+    const uint32_t socket_page_size = pages_per_chunk * tensor_page_size;
+    const uint32_t num_socket_pages = tensor_num_pages / pages_per_chunk;
+
+    log_debug(
+        tt::LogOp,
+        "copy_tensor_over_socket: tensor_pages={} tensor_page_size={} B "
+        "scratch_cb_budget={} B -> socket_page_size={} B pages_per_chunk={} num_socket_pages={}",
+        tensor_num_pages,
+        tensor_page_size,
+        scratch_cb_size_bytes,
+        socket_page_size,
+        pages_per_chunk,
+        num_socket_pages);
+
+    // Step 4: assert that the host buffer's encoded bytes match the device buffer's physical
+    // bytes. This kills the "logical vs physical size" class of bug (TILE padding, block-float
+    // encoding, etc.) before we touch the device.
+    auto host_buf = tt::tt_metal::host_buffer::get_host_buffer(host_tensor);
+    auto data_span = host_buf.view_bytes();
+    const uint64_t total_physical_bytes =
+        static_cast<uint64_t>(tensor_num_pages) * static_cast<uint64_t>(tensor_page_size);
+    TT_FATAL(
+        data_span.size() == total_physical_bytes,
+        "Host encoded bytes ({}) != device physical bytes ({} pages * {} B = {} B)",
+        data_span.size(),
+        tensor_num_pages,
+        tensor_page_size,
+        total_physical_bytes);
+
     auto xfer_program = CreateProgram();
-    auto xfer_size_bytes = host_tensor.logical_volume() * host_tensor.element_size();
-    std::cout << "Transfer size bytes in API: " << xfer_size_bytes << std::endl;
-    socket.set_page_size(xfer_size_bytes);
+    socket.set_page_size(socket_page_size);
 
     auto tensor_accessor_args = TensorAccessorArgs(*device_tensor.buffer());
     auto tensor_accessor_compile_args = tensor_accessor_args.get_compile_time_args();
@@ -160,18 +219,27 @@ void copy_tensor_over_socket(
 
     auto cb_scratch_buffer_config =
         CircularBufferConfig(
-            socket.get_page_size(),
+            socket_page_size,
             {{scratch_cb_index, tt::tt_metal::datatype_to_dataformat_converter(device_tensor.dtype())}})
-            .set_page_size(scratch_cb_index, socket.get_page_size());
+            .set_page_size(scratch_cb_index, socket_page_size);
     CreateCircularBuffer(xfer_program, socket.get_active_cores()[0].core_coord, cb_scratch_buffer_config);
 
+    // CT-arg layout (must stay in sync with fused_h2d_receiver_embedding.cpp):
+    //   [0] socket_config_addr
+    //   [1] socket_page_size
+    //   [2] num_socket_pages
+    //   [3] output_tensor_addr
+    //   [4] output_tensor_page_size
+    //   [5] pages_per_chunk
+    //   [6] scratch_buffer_cb_index
+    //   [7..] TensorAccessorArgs
     std::vector<uint32_t> xfer_compile_args = {
         static_cast<uint32_t>(socket.get_config_buffer_address()),
-        static_cast<uint32_t>(xfer_size_bytes),
-        static_cast<uint32_t>(socket.get_page_size()),
+        static_cast<uint32_t>(socket_page_size),
+        static_cast<uint32_t>(num_socket_pages),
         static_cast<uint32_t>(device_tensor.buffer()->address()),
-        static_cast<uint32_t>(device_tensor.buffer()->num_pages()),
-        static_cast<uint32_t>(device_tensor.buffer()->page_size()),
+        static_cast<uint32_t>(tensor_page_size),
+        static_cast<uint32_t>(pages_per_chunk),
         static_cast<uint32_t>(scratch_cb_index)};
 
     xfer_compile_args.insert(
@@ -189,16 +257,29 @@ void copy_tensor_over_socket(
     auto mesh_workload = distributed::MeshWorkload();
     mesh_workload.add_program(
         distributed::MeshCoordinateRange(socket.get_active_cores()[0].device_coord), std::move(xfer_program));
-    std::cout << "Enqueuing mesh workload" << std::endl;
     EnqueueMeshWorkload(device_tensor.device()->mesh_command_queue(), mesh_workload, false);
 
-    auto host_buf = tt::tt_metal::host_buffer::get_host_buffer(host_tensor);
-    auto data_span = host_buf.view_bytes();
+    // Step 8: paced socket writes. H2DSocket::write enforces num_pages*page_size <= fifo_size
+    // per call (single-shot fit, not chunked-internally), so for transfers larger than one
+    // FIFO we must loop and let reserve_bytes() block on device acks. Writing one socket page
+    // per call is the simplest correct pacing; per-call overhead is negligible compared to
+    // the actual PCIe traffic. The invariant below is implied by the step 4 check but
+    // documents the contract with socket.write.
+    const uint64_t total_socket_bytes =
+        static_cast<uint64_t>(num_socket_pages) * static_cast<uint64_t>(socket_page_size);
+    TT_FATAL(
+        data_span.size() == total_socket_bytes,
+        "Host bytes ({}) must equal num_socket_pages * socket_page_size ({} * {} = {})",
+        data_span.size(),
+        num_socket_pages,
+        socket_page_size,
+        total_socket_bytes);
 
-    socket.write(data_span.data(), 1);
-    std::cout << "calling finish" << std::endl;
+    auto* base = const_cast<std::byte*>(data_span.data());
+    for (uint32_t i = 0; i < num_socket_pages; ++i) {
+        socket.write(base + static_cast<size_t>(i) * socket_page_size, /*num_pages=*/1);
+    }
     distributed::Finish(device_tensor.device()->mesh_command_queue());
-    std::cout << "finish called" << std::endl;
 }
 
 void copy_to_host(
