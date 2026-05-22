@@ -266,7 +266,8 @@ ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descript
             DUMMY_CB_ID,
             1U,
             1U,
-            0U};
+            0U,
+            0U};  // ct_arg[37]: force_max_tiles_per_reduction_4 (off for rotate)
 
         const auto pool_defines_map = pool::get_defines(pool::Pool2DType::AVG_POOL2D);
         KernelDescriptor::Defines compute_defines(pool_defines_map.begin(), pool_defines_map.end());
