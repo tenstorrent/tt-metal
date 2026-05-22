@@ -1476,112 +1476,70 @@ void ring_strided_reduce_scatter_async_helper_override_runtime_arguments(
 // Implementations for the TMP namespace - wrappers to ttnn namespace functions
 namespace ttnn::operations::experimental::ccl::strided_reduce_scatter_async::detail {
 
-// Mesh Workload Factory implementations
-RingStridedReduceScatterMeshWorkloadFactory::cached_mesh_workload_t
-RingStridedReduceScatterMeshWorkloadFactory::create_mesh_workload(
+// Contract-2 Mesh Workload Factory implementation.  Per-coord ProgramDescriptors
+// are built via the ProgramDescriptor variant of the ring builder.  No
+// workload-scoped resources are needed -- GlobalSemaphores live on
+// operation_attributes (caller-allocated) and intermediate / output tensors are
+// supplied by the operation framework (create_output_tensors).
+tt::tt_metal::WorkloadDescriptor RingStridedReduceScatterMeshWorkloadFactory::create_workload_descriptor(
     const operation_attributes_t& operation_attributes,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    tt::tt_metal::distributed::MeshWorkload mesh_workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    tensor_return_value_t& tensor_return_value,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    tt::tt_metal::WorkloadDescriptor workload_descriptor;
 
-    for (const auto& coord : tensor_coords.coords()) {
-        auto cached_program = create_at(operation_attributes, coord, tensor_args, tensor_return_value);
-        mesh_workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
-        shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
-    }
-
-    return {std::move(mesh_workload), std::move(shared_variables)};
-}
-
-ttnn::device_operation::CachedProgram<RingStridedReduceScatterMeshWorkloadFactory::shared_variables_t>
-RingStridedReduceScatterMeshWorkloadFactory::create_at(
-    const operation_attributes_t& operation_attributes,
-    const ttnn::MeshCoordinate& mesh_coordinate,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
     const auto& input_tensor = tensor_args.input_tensor;
     auto& intermediate_tensor = tensor_return_value.at(0);
     auto& output_tensor = tensor_return_value.at(1);
 
-    const auto forward_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
-        input_tensor, mesh_coordinate, 1, operation_attributes.topology, operation_attributes.cluster_axis);
-    const auto backward_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
-        input_tensor, mesh_coordinate, -1, operation_attributes.topology, operation_attributes.cluster_axis);
-    TT_FATAL(forward_coord.has_value() || backward_coord.has_value(), "forward_coord or backward_coord is null");
+    for (const auto& coord : tensor_coords.coords()) {
+        const auto forward_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
+            input_tensor, coord, 1, operation_attributes.topology, operation_attributes.cluster_axis);
+        const auto backward_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
+            input_tensor, coord, -1, operation_attributes.topology, operation_attributes.cluster_axis);
+        TT_FATAL(forward_coord.has_value() || backward_coord.has_value(), "forward_coord or backward_coord is null");
 
-    const uint32_t ring_index = ::ttnn::ccl::get_linearized_index_from_physical_coord(
-        input_tensor, mesh_coordinate, operation_attributes.cluster_axis);
+        const uint32_t ring_index = ::ttnn::ccl::get_linearized_index_from_physical_coord(
+            input_tensor, coord, operation_attributes.cluster_axis);
 
-    std::optional<ttnn::experimental::ccl::ReduceScatterFusedOpSignaler> fused_op_signaler = std::nullopt;
-    std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler> mm_fused_op_signaler = std::nullopt;
-    tt::tt_metal::Program program{};
-    auto shared_vars = ::ttnn::build_ring_strided_reduce_scatter_async_program_artifacts(
-        program,
-        input_tensor,
-        intermediate_tensor,
-        mesh_coordinate,
-        forward_coord,
-        backward_coord,
-        output_tensor,
-        operation_attributes.dim,
-        operation_attributes.num_links,
-        operation_attributes.ring_size,
-        ring_index,
-        operation_attributes.topology,
-        operation_attributes.semaphore,
-        operation_attributes.barrier_semaphore,
-        operation_attributes.using_persistent_buffers,
-        operation_attributes.sub_device_id,
-        fused_op_signaler,
-        mm_fused_op_signaler,
-        operation_attributes.num_workers_per_link,
-        operation_attributes.num_buffers_per_channel,
-        CoreCoord(0, 0),
-        operation_attributes.mm_cores_y,
-        operation_attributes.mm_block_ht,
-        operation_attributes.mm_block_wt,
-        operation_attributes.mm_N_full_block_wt,
-        operation_attributes.chunk_width_in_mm_blocks,
-        std::nullopt,   // fused_ternary_scalar
-        std::nullopt,   // addcmul_input_tensor1
-        std::nullopt);  // addcmul_input_tensor2
-
-    return {std::move(program), std::move(shared_vars)};
-}
-
-void RingStridedReduceScatterMeshWorkloadFactory::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    const auto& input = tensor_args.input_tensor;
-    const auto& intermediate = tensor_return_value.at(0);
-    const auto& output = tensor_return_value.at(1);
-
-    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
-
-        ::ttnn::ring_strided_reduce_scatter_async_helper_override_runtime_arguments(
-            program,
-            shared_vars.reader_kernel_id,
-            shared_vars.writer_kernel_id,
-            shared_vars.all_cores,
+        std::optional<ttnn::experimental::ccl::ReduceScatterFusedOpSignaler> fused_op_signaler = std::nullopt;
+        std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler> mm_fused_op_signaler = std::nullopt;
+        tt::tt_metal::ProgramDescriptor desc;
+        (void)::ttnn::build_ring_strided_reduce_scatter_async_program_artifacts_descriptor(
+            desc,
+            input_tensor,
+            intermediate_tensor,
+            coord,
+            forward_coord,
+            backward_coord,
+            output_tensor,
+            operation_attributes.dim,
             operation_attributes.num_links,
-            shared_vars.num_directions_per_link,
-            shared_vars.num_workers_per_direction,
-            shared_vars.num_mux_cores_per_direction_per_link,
-            shared_vars.num_cores_per_link,
-            operation_attributes.barrier_semaphore,
+            operation_attributes.ring_size,
+            ring_index,
+            operation_attributes.topology,
             operation_attributes.semaphore,
-            input,
-            intermediate,
-            output,
-            shared_vars.reader_addcmul_rt_arg_offset,
-            std::nullopt,   // addcmul_a
-            std::nullopt);  // addcmul_b
+            operation_attributes.barrier_semaphore,
+            operation_attributes.using_persistent_buffers,
+            operation_attributes.sub_device_id,
+            fused_op_signaler,
+            mm_fused_op_signaler,
+            operation_attributes.num_workers_per_link,
+            operation_attributes.num_buffers_per_channel,
+            CoreCoord(0, 0),
+            operation_attributes.mm_cores_y,
+            operation_attributes.mm_block_ht,
+            operation_attributes.mm_block_wt,
+            operation_attributes.mm_N_full_block_wt,
+            operation_attributes.chunk_width_in_mm_blocks,
+            std::nullopt,   // fused_ternary_scalar
+            std::nullopt,   // addcmul_input_tensor1
+            std::nullopt);  // addcmul_input_tensor2
+
+        workload_descriptor.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
     }
+
+    return workload_descriptor;
 }
 
 }  // namespace ttnn::operations::experimental::ccl::strided_reduce_scatter_async::detail
