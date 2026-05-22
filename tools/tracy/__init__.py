@@ -29,7 +29,6 @@ from .common import (
     TRACY_OPS_DATA_FILE_NAME,
     TRACY_CAPTURE_TOOL,
     TRACY_CSVEXPROT_TOOL,
-    LD_LIBRARY_PATH,
     generate_logs_folder,
     resolve_tracy_tool_path,
 )
@@ -108,9 +107,7 @@ def run_report_setup(verbose, outputFolder, binFolder, port):
         if port:
             options += f"-p {port}"
 
-        captureCommand = (
-            f"LD_LIBRARY_PATH={LD_LIBRARY_PATH} {capture_exe} -o {logsFolder / TRACY_FILE_NAME} -f {options}",
-        )
+        captureCommand = (f"{capture_exe} -o {logsFolder / TRACY_FILE_NAME} -f {options}",)
         if verbose:
             logger.info(f"Capture command: {captureCommand}")
             captureProcess = subprocess.Popen(captureCommand, shell=True)
@@ -155,7 +152,7 @@ def generate_report(
         if childCallsList:
             childCallStr = f"-x {','.join(childCallsList)}"
         subprocess.run(
-            f"LD_LIBRARY_PATH={LD_LIBRARY_PATH} {csvexport_exe} -u -t TT_ {childCallStr} {logsFolder / TRACY_FILE_NAME}",
+            f"{csvexport_exe} -u -t TT_ {childCallStr} {logsFolder / TRACY_FILE_NAME}",
             shell=True,
             check=True,
             stdout=csvFile,
@@ -166,7 +163,7 @@ def generate_report(
 
     with open(logsFolder / TRACY_OPS_DATA_FILE_NAME, "w") as csvFile:
         subprocess.run(
-            f'LD_LIBRARY_PATH={LD_LIBRARY_PATH} {csvexport_exe} -m -s ";" {logsFolder / TRACY_FILE_NAME}',
+            f'{csvexport_exe} -m -s ";" {logsFolder / TRACY_FILE_NAME}',
             shell=True,
             check=True,
             stdout=csvFile,

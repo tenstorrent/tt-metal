@@ -41,8 +41,6 @@ TRACY_FILE_NAME = "tracy_profile_log_host.tracy"
 TRACY_CAPTURE_TOOL = "tracy-capture"
 TRACY_CSVEXPROT_TOOL = "tracy-csvexport"
 
-LD_LIBRARY_PATH = TT_METAL_HOME / "build/_deps/capstone-build"
-
 
 def resolve_tracy_tool_path(bin_folder: Path, tool_name: str) -> Path | None:
     """Find tracy-capture or tracy-csvexport under the CMake install bindir (build/bin)."""
