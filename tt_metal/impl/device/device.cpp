@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/fmt.hpp>
-#include <tt-metalium/experimental/service_core_claims.hpp>
+#include <tt-metalium/internal/service/service_core_manager.hpp>
 #include "context/context_types.hpp"
 #include "context/metal_env_accessor.hpp"
 #include "device_impl.hpp"
@@ -540,7 +540,7 @@ bool Device::close() {
         TT_THROW("Cannot close device {} that has not been initialized!", this->id_);
     }
 
-    tt::tt_metal::experimental::service::ServiceCoreClaims::get().on_device_close(this->id_);
+    tt::tt_metal::internal::ServiceCoreManager::get().on_device_close(this->id_);
 
     this->disable_and_clear_program_cache();
     this->set_program_cache_misses_allowed(true);
@@ -597,7 +597,7 @@ CoreCoord Device::compute_with_storage_grid_size() const {
     auto grid = tt::get_compute_grid_size(MetalEnvAccessor(*env_).impl(), id_, num_hw_cqs_, dispatch_core_config);
     // Cap to FD-mode grid when service cores are claimed — prevents SD workloads
     // from targeting dispatch-column cores running persistent service kernels.
-    if (auto safe = experimental::service::ServiceCoreClaims::get().get_safe_compute_grid(id_)) {
+    if (auto safe = internal::ServiceCoreManager::get().get_safe_compute_grid(id_)) {
         grid.x = std::min(grid.x, safe->x);
         grid.y = std::min(grid.y, safe->y);
     }

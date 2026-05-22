@@ -89,7 +89,7 @@
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <llrt/tt_cluster.hpp>
 #include "impl/allocator/allocator.hpp"
-#include <tt-metalium/experimental/service_core_claims.hpp>
+#include <tt-metalium/internal/service/service_core_manager.hpp>
 
 namespace tt {
 class tt_hlk_desc;
@@ -127,7 +127,7 @@ void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel>
     if (not slow_dispatch and not force_slow_dispatch) {
         const std::vector<CoreCoord>& dispatch_cores =
             MetalContext::instance().get_dispatch_query_manager().get_logical_dispatch_cores_on_user_chips();
-        const auto& service_claims = experimental::service::ServiceCoreClaims::get();
+        const auto& service_claims = internal::ServiceCoreManager::get();
         bool on_dispatch_core = std::any_of(
             dispatch_cores.begin(),
             dispatch_cores.end(),

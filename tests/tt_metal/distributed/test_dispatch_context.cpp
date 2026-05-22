@@ -19,7 +19,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
-#include <tt-metalium/experimental/service_core_claims.hpp>
+#include <tt-metalium/internal/service/service_core_manager.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -312,21 +312,21 @@ TEST_F(DispatchContextFixture, ServiceCoreGridCap) {
     ASSERT_LT(fd_grid.x * fd_grid.y, sd_grid.x * sd_grid.y)
         << "FD grid must be smaller than SD grid (dispatch column excluded by YAML)";
 
-    const auto free_cores = experimental::service::ServiceCoreClaims::get().get_claimable_cores(device);
+    const auto free_cores = internal::ServiceCoreManager::get().get_claimable_cores(device);
     ASSERT_FALSE(free_cores.empty()) << "Expected at least one free dispatch core";
 
-    experimental::service::ServiceCoreClaims::get().claim(device, free_cores);
+    internal::ServiceCoreManager::get().claim(device, free_cores);
 
     // Attempting to claim the same cores again must fail — claim guard is independent
     // of the pool filter and catches double-claim regardless of FD state.
-    EXPECT_THROW(experimental::service::ServiceCoreClaims::get().claim(device, free_cores), std::exception);
+    EXPECT_THROW(internal::ServiceCoreManager::get().claim(device, free_cores), std::exception);
 
     // Phase 3: terminate + re-init FD — pool filter must exclude all claimed cores,
     // leaving no idle dispatch cores for new FD kernels.
     experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device.get());
     experimental::DispatchContext::get().initialize_fast_dispatch(mesh_device.get());
 
-    EXPECT_TRUE(experimental::service::ServiceCoreClaims::get().get_claimable_cores(device).empty())
+    EXPECT_TRUE(internal::ServiceCoreManager::get().get_claimable_cores(device).empty())
         << "All free dispatch cores were claimed; none should be available in FD";
 
     experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device.get());
@@ -337,8 +337,8 @@ TEST_F(DispatchContextFixture, ServiceCoreGridCap) {
     EXPECT_EQ(capped_grid.y, fd_grid.y) << "SD grid y must be capped to FD grid y when service cores are claimed";
 
     // Cleanup.
-    experimental::service::ServiceCoreClaims::get().release(device, free_cores);
-    experimental::service::ServiceCoreClaims::get().on_device_close(device->id());
+    internal::ServiceCoreManager::get().release(device, free_cores);
+    internal::ServiceCoreManager::get().on_device_close(device->id());
 }
 
 // Persistent service pipecleaner: test a Persistent kernel on FD cores (survive multiple FD init + teardown cycles)
@@ -381,17 +381,15 @@ TEST_F(DispatchContextFixture, PersistentServiceMultiCycle) {
         // Phase 1: FD up, claim a free core, drop FD.
         experimental::DispatchContext::get().initialize_fast_dispatch(mesh_device.get());
 
-        auto free = experimental::service::ServiceCoreClaims::get().get_claimable_cores(device);
+        auto free = internal::ServiceCoreManager::get().get_claimable_cores(device);
         ASSERT_FALSE(free.empty()) << "No free dispatch cores on cycle " << cycle;
         CoreCoord svc_core = free[free.size() / 2];
 
-        experimental::service::ServiceCoreClaims::get().claim(device, free);
-        DeviceAddr stop_addr =
-            experimental::service::ServiceCoreClaims::get().allocate_l1(device, svc_core, sizeof(uint32_t));
-        DeviceAddr counter_addr =
-            experimental::service::ServiceCoreClaims::get().allocate_l1(device, svc_core, sizeof(uint32_t));
+        internal::ServiceCoreManager::get().claim(device, free);
+        DeviceAddr stop_addr = internal::ServiceCoreManager::get().allocate_l1(device, svc_core, sizeof(uint32_t));
+        DeviceAddr counter_addr = internal::ServiceCoreManager::get().allocate_l1(device, svc_core, sizeof(uint32_t));
         DeviceAddr service_done_addr =
-            experimental::service::ServiceCoreClaims::get().allocate_l1(device, svc_core, sizeof(uint32_t));
+            internal::ServiceCoreManager::get().allocate_l1(device, svc_core, sizeof(uint32_t));
 
         experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device.get());
 
@@ -458,7 +456,6 @@ TEST_F(DispatchContextFixture, PersistentServiceMultiCycle) {
         // Run random workloads to stress the dispatch path and dirty compute state.
         auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(num_programs, grid, 0);
         for (uint32_t i = 0; i < num_programs; i++) {
-            std::cout << "creating program " << i << '\n';
             auto random_workload = std::make_shared<MeshWorkload>();
             random_workload->add_program(
                 MeshCoordinateRange(
@@ -466,9 +463,7 @@ TEST_F(DispatchContextFixture, PersistentServiceMultiCycle) {
                 std::move(*programs[i]));
             EnqueueMeshWorkload(mesh_device->mesh_command_queue(), *random_workload, true);
         }
-        std::cout << "entering finish SD programs " << '\n';
         Finish(mesh_device->mesh_command_queue());
-        std::cout << "Done" << '\n';
 
         // Phase 4: stop kernel, wait via service_done_addr
         const uint32_t one = 1;
@@ -486,14 +481,15 @@ TEST_F(DispatchContextFixture, PersistentServiceMultiCycle) {
             ASSERT_LT(elapsed + kPollMs, kTimeoutMs) << "Service kernel stop timed out on cycle " << cycle;
         }
 
-        experimental::service::ServiceCoreClaims::get().release(device, free);
+        internal::ServiceCoreManager::get().release(device, free);
     }
 }
 
 // Launch a persistent service kernel on a claimed FD-idle core while simultaneously
 // running standard FD workloads on the normal worker grid. Verifies both paths are
-// independent: the service counter keeps incrementing while FD programs dispatch.
-TEST(DispatchContext, FDWorkloadAndServiceKernelConcurrent) {
+// independent needed for prefill in Blitz.
+// The service counter keeps incrementing while FD programs dispatch.
+TEST_F(DispatchContextFixture, FDWorkloadAndServiceKernelConcurrent) {
     const auto& rt_options = MetalContext::instance().rtoptions();
     if (!rt_options.get_fast_dispatch()) {
         GTEST_SKIP() << "This test requires Fast Dispatch mode.";
@@ -506,9 +502,9 @@ TEST(DispatchContext, FDWorkloadAndServiceKernelConcurrent) {
     auto mesh_device = MeshDevice::create(MeshDeviceConfig(MeshShape(1, 1)));
     IDevice* device = mesh_device->get_device(MeshCoordinate(0, 0));
 
-    auto claimable = experimental::service::ServiceCoreClaims::get().get_claimable_cores(device);
+    auto claimable = internal::ServiceCoreManager::get().get_claimable_cores(device);
     ASSERT_FALSE(claimable.empty()) << "No claimable service cores available";
-    experimental::service::ServiceCoreClaims::get().claim(device, claimable);
+    internal::ServiceCoreManager::get().claim(device, claimable);
 
     // Allocate L1 communication words on each service core.
     struct CoreAddrs {
@@ -517,9 +513,9 @@ TEST(DispatchContext, FDWorkloadAndServiceKernelConcurrent) {
     std::unordered_map<CoreCoord, CoreAddrs> core_addrs;
     for (const auto& core : claimable) {
         core_addrs[core] = {
-            .stop = experimental::service::ServiceCoreClaims::get().allocate_l1(device, core, sizeof(uint32_t)),
-            .counter = experimental::service::ServiceCoreClaims::get().allocate_l1(device, core, sizeof(uint32_t)),
-            .service_done = experimental::service::ServiceCoreClaims::get().allocate_l1(device, core, sizeof(uint32_t)),
+            .stop = internal::ServiceCoreManager::get().allocate_l1(device, core, sizeof(uint32_t)),
+            .counter = internal::ServiceCoreManager::get().allocate_l1(device, core, sizeof(uint32_t)),
+            .service_done = internal::ServiceCoreManager::get().allocate_l1(device, core, sizeof(uint32_t)),
         };
         const uint32_t zero = 0;
         CoreCoord phys = device->worker_core_from_logical_core(core);
@@ -607,11 +603,11 @@ TEST(DispatchContext, FDWorkloadAndServiceKernelConcurrent) {
         }
     }
 
-    experimental::service::ServiceCoreClaims::get().release(device, claimable);
+    internal::ServiceCoreManager::get().release(device, claimable);
 }
 
 // Verify allocator correctness: alignment, non-overlap, bytes_available accounting, and deallocation.
-TEST(DispatchContext, ServiceCoreAllocatorCorrectness) {
+TEST_F(DispatchContextFixture, ServiceCoreAllocatorCorrectness) {
     const auto& rt_options = MetalContext::instance().rtoptions();
     if (!rt_options.get_fast_dispatch()) {
         GTEST_SKIP() << "This test requires Fast Dispatch mode.";
@@ -624,20 +620,20 @@ TEST(DispatchContext, ServiceCoreAllocatorCorrectness) {
     auto mesh_device = MeshDevice::create(MeshDeviceConfig(MeshShape(1, 1)));
     IDevice* device = mesh_device->get_device(MeshCoordinate(0, 0));
 
-    auto claimable = experimental::service::ServiceCoreClaims::get().get_claimable_cores(device);
+    auto claimable = internal::ServiceCoreManager::get().get_claimable_cores(device);
     ASSERT_FALSE(claimable.empty());
     CoreCoord core = claimable[0];
-    experimental::service::ServiceCoreClaims::get().claim(device, {core});
+    internal::ServiceCoreManager::get().claim(device, {core});
 
     const DeviceAddr dram_align = MetalContext::instance().hal().get_alignment(HalMemType::DRAM);
 
     // Allocate several buffers of varying sizes and verify properties.
     const std::vector<size_t> sizes = {64, 128, 32, 256};
     std::vector<DeviceAddr> addrs;
-    size_t initial_available = experimental::service::ServiceCoreClaims::get().bytes_available(device, core);
+    size_t initial_available = internal::ServiceCoreManager::get().bytes_available(device, core);
 
     for (size_t sz : sizes) {
-        DeviceAddr addr = experimental::service::ServiceCoreClaims::get().allocate_l1(device, core, sz);
+        DeviceAddr addr = internal::ServiceCoreManager::get().allocate_l1(device, core, sz);
         EXPECT_EQ(addr % dram_align, 0u) << "Allocation not DRAM-aligned";
         addrs.push_back(addr);
     }
@@ -652,19 +648,19 @@ TEST(DispatchContext, ServiceCoreAllocatorCorrectness) {
     }
 
     // bytes_available should have decreased.
-    size_t after_alloc = experimental::service::ServiceCoreClaims::get().bytes_available(device, core);
+    size_t after_alloc = internal::ServiceCoreManager::get().bytes_available(device, core);
     EXPECT_LT(after_alloc, initial_available);
 
     // Deallocate one allocation and verify space is recovered.
-    experimental::service::ServiceCoreClaims::get().deallocate_l1(device, core, addrs[1]);
-    size_t after_dealloc = experimental::service::ServiceCoreClaims::get().bytes_available(device, core);
+    internal::ServiceCoreManager::get().deallocate_l1(device, core, addrs[1]);
+    size_t after_dealloc = internal::ServiceCoreManager::get().bytes_available(device, core);
     EXPECT_GT(after_dealloc, after_alloc);
 
     // OOM: requesting more than the full L1 space must TT_FATAL.
     constexpr size_t k1p5MB = 1536 * 1024;
-    EXPECT_THROW(experimental::service::ServiceCoreClaims::get().allocate_l1(device, core, k1p5MB), std::runtime_error);
+    EXPECT_THROW(internal::ServiceCoreManager::get().allocate_l1(device, core, k1p5MB), std::runtime_error);
 
-    experimental::service::ServiceCoreClaims::get().release(device, {core});
+    internal::ServiceCoreManager::get().release(device, {core});
 }
 
 }  // namespace tt::tt_metal::distributed::test
