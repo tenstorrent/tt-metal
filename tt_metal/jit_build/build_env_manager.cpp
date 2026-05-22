@@ -158,6 +158,10 @@ std::map<std::string, std::string> initialize_device_kernel_defines(const JitDev
     device_kernel_defines.emplace("PCIE_NOC_X", std::to_string(config.pcie_core.x));
     device_kernel_defines.emplace("PCIE_NOC_Y", std::to_string(config.pcie_core.y));
 
+    if (config.quasar_dm_only) {
+        device_kernel_defines.emplace("QUASAR_DM_ONLY", "1");
+    }
+
     return device_kernel_defines;
 }
 
@@ -179,6 +183,7 @@ uint64_t compute_build_key(const JitDeviceConfig& config, const llrt::RunTimeOpt
     }
 
     hasher.update(rtoptions.get_compile_hash_string());
+    hasher.update(static_cast<uint32_t>(config.quasar_dm_only));
 
     return hasher.digest();
 }

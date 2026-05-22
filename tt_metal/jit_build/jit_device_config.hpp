@@ -50,6 +50,12 @@ struct JitDeviceConfig {
 
     bool routing_fw_enabled = false;
 
+    // True when the device is a DM-only Quasar configuration (e.g. 9x4 sim) that has
+    // no TRISC compute hardware.  Causes QUASAR_DM_ONLY to be defined for all firmware
+    // and kernel JIT compilations so that dm.cc can skip TRISC register accesses that
+    // do not exist on such devices.
+    bool quasar_dm_only = false;
+
     // Pre-computed in the factory so that JitBuildEnv::init can consume it without
     // calling get_profiler_dram_bank_size_per_risc_bytes(), which has a side-effect
     // of mutating rtoptions (set_profiler_program_support_count). The build module

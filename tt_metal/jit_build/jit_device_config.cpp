@@ -47,6 +47,9 @@ JitDeviceConfig create_jit_device_config(ChipId device_id, uint8_t num_hw_cqs, C
     auto pcie_cores = soc_d.get_cores(CoreType::PCIE, CoordSystem::TRANSLATED);
     CoreCoord pcie_core = pcie_cores.empty() ? soc_d.grid_size : pcie_cores[0];
 
+    const bool quasar_dm_only =
+        (cluster.arch() == tt::ARCH::QUASAR) && (soc_d.grid_size.x == 9 && soc_d.grid_size.y == 4);
+
     return {
         .hal = &hal,
         .arch = cluster.arch(),
@@ -61,6 +64,7 @@ JitDeviceConfig create_jit_device_config(ChipId device_id, uint8_t num_hw_cqs, C
         .max_cbs = hal.get_arch_num_circular_buffers(),
         .num_hw_cqs = num_hw_cqs,
         .routing_fw_enabled = cluster.is_base_routing_fw_enabled(),
+        .quasar_dm_only = quasar_dm_only,
         .profiler_dram_bank_size_per_risc_bytes = get_profiler_dram_bank_size_per_risc_bytes(ctx.rtoptions())};
 }
 

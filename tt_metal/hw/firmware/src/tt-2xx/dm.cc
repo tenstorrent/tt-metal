@@ -70,6 +70,7 @@ inline void invalidate_kernel_binary_l2_cache(uintptr_t kernel_lma, launch_msg_t
 }
 
 void set_deassert_addresses() {
+#ifndef QUASAR_DM_ONLY
     WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_TRISC0_RESET_PC_REG_ADDR, MEM_TRISC0_FIRMWARE_BASE);
     WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_TRISC1_RESET_PC_REG_ADDR, MEM_TRISC1_FIRMWARE_BASE);
     WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_TRISC2_RESET_PC_REG_ADDR, MEM_TRISC2_FIRMWARE_BASE);
@@ -90,25 +91,31 @@ void set_deassert_addresses() {
     WRITE_REG(NEO_REGS_3__LOCAL_REGS_DEBUG_REGS_TRISC2_RESET_PC_REG_ADDR, MEM_TRISC2_FIRMWARE_BASE);
     WRITE_REG(NEO_REGS_3__LOCAL_REGS_DEBUG_REGS_TRISC3_RESET_PC_REG_ADDR, MEM_TRISC3_FIRMWARE_BASE);
     WRITE_REG(NEO_REGS_3__LOCAL_REGS_DEBUG_REGS_TRISC_RESET_PC_OVERRIDE_REG_ADDR, 0b1111);
+#endif
 }
 
 void invalidate_trisc_instruction_cache() {
-    // invalidate TRISCs
+#ifndef QUASAR_DM_ONLY
     WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_RISCV_IC_INVALIDATE_REG_ADDR, RISCV_IC_TRISC_ALL_MASK);
     WRITE_REG(NEO_REGS_1__LOCAL_REGS_DEBUG_REGS_RISCV_IC_INVALIDATE_REG_ADDR, RISCV_IC_TRISC_ALL_MASK);
     WRITE_REG(NEO_REGS_2__LOCAL_REGS_DEBUG_REGS_RISCV_IC_INVALIDATE_REG_ADDR, RISCV_IC_TRISC_ALL_MASK);
     WRITE_REG(NEO_REGS_3__LOCAL_REGS_DEBUG_REGS_RISCV_IC_INVALIDATE_REG_ADDR, RISCV_IC_TRISC_ALL_MASK);
+#endif
 }
 
 void deassert_trisc() {
+#ifndef QUASAR_DM_ONLY
     // Temporary workaround due to race vs. host deasserting TRISC reset.
     // https://github.com/tenstorrent/tt-metal/issues/48064
     assert_trisc_reset();
+    // allNeo slots are already 0 (= RUN_SYNC_MSG_ALL_SUBORDINATES_DONE) in DM-only mode;
+    // only set them to INIT (and release TRISC reset) when TRISC hardware is present.
     subordinate_sync->allNeo0 = RUN_SYNC_MSG_ALL_INIT;
     subordinate_sync->allNeo1 = RUN_SYNC_MSG_ALL_INIT;
     subordinate_sync->allNeo2 = RUN_SYNC_MSG_ALL_INIT;
     subordinate_sync->allNeo3 = RUN_SYNC_MSG_ALL_INIT;
     deassert_trisc_reset();
+#endif
 }
 
 thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS] __attribute__((used));
@@ -132,7 +139,8 @@ inline __attribute__((always_inline)) void signal_subordinate_completion() {
     *((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) = RUN_SYNC_MSG_DONE;
 }
 
-inline void run_triscs(uint32_t enables) {
+inline void run_triscs([[maybe_unused]] uint32_t enables) {
+#ifndef QUASAR_DM_ONLY
     // Wait for init_sync_registers to complete. Should always be done by the time we get here.
     DPRINT("DM-FW: waiting for TRISCs to complete\n");
     while (subordinate_sync->allNeo0 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
@@ -170,6 +178,7 @@ inline void run_triscs(uint32_t enables) {
         subordinate_sync->neo3_trisc2 = RUN_SYNC_MSG_GO;
         subordinate_sync->neo3_trisc3 = RUN_SYNC_MSG_GO;
     }
+#endif
 }
 
 inline void start_subordinate_kernel_run_early(uint32_t enables) {
@@ -184,15 +193,26 @@ inline void wait_subordinates() {
     WAYPOINT("NTW");
     // Set subordinate_sync->padding to 0 to make checks against subordinate_sync->allDMs correct.
     subordinate_sync->padding = 0;
+#ifdef QUASAR_DM_ONLY
+    while (subordinate_sync->allDMs != RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_DONE);
+#else
     while (subordinate_sync->allDMs != RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_DONE ||
            subordinate_sync->allNeo0 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
            subordinate_sync->allNeo1 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
            subordinate_sync->allNeo2 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
            subordinate_sync->allNeo3 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE);
+#endif
     WAYPOINT("NTD");
 }
 
-inline void trigger_sync_register_init() { subordinate_sync->neo0_trisc0 = RUN_SYNC_MSG_INIT_SYNC_REGISTERS; }
+inline void trigger_sync_register_init() {
+#ifndef QUASAR_DM_ONLY
+    // Signals NEO0's TRISC0 to initialize sync registers.  In DM-only mode there
+    // are no TRISCs, so writing this would leave neo0_trisc0 (= byte 0 of allNeo0)
+    // permanently non-zero, causing wait_subordinates() to spin forever.
+    subordinate_sync->neo0_trisc0 = RUN_SYNC_MSG_INIT_SYNC_REGISTERS;
+#endif
+}
 
 extern "C" uint32_t _start1() {
     configure_csr();
