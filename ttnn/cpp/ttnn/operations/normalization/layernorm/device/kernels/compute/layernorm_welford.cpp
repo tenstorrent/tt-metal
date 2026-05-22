@@ -17,6 +17,8 @@
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
 namespace kutil = norm::kernel_util;
 namespace generic = kutil::generic;
@@ -226,24 +228,34 @@ void kernel_main() {
             reconfig_data_format_srca(cb_x, cb_xmm);
         }
 
-        // Var(x) + eps
-        if constexpr (FLOAT32_DTYPE) {
-            reconfig_data_format(cb_ex2, cb_eps);
-        }
-        cb_ex2_obj.wait_front(onetile);  // should have 1 tile
-        tile_regs_acquire();
-        add_tiles_init(cb_ex2, cb_eps);
-        add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
-        rsqrt_tile_init();
-        rsqrt_tile(dst0);
-        tile_regs_commit();
-        cb_ex2_obj.pop_front(onetile);
-
-        cb_ex2pe_obj.reserve_back(onetile);
-        tile_regs_wait();
-        pack_tile(dst0, cb_ex2pe);
-        tile_regs_release();
-        cb_ex2pe_obj.push_back(onetile);
+        // Var(x) + eps  ->  1/sqrt(Var(x) + eps)
+        // PARTIAL migration: BinaryFpu(Add, cb_ex2, cb_eps) + Rsqrt + PackTile(cb_ex2pe).
+        // Reconfig audit: add_tiles_init reconfigs srca/srcb regardless (matches Input);
+        // no explicit pack_reconfig in original -> PackTileReconfig::None.
+        // cb_ex2: Streaming. cb_eps: CallerManaged. cb_ex2pe: OutStreaming.
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::BinaryFpu<
+                cb_ex2,
+                cb_eps,
+                compute_kernel_lib::BinaryFpuOp::Add,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::Streaming,
+                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar>{},
+            compute_kernel_lib::Rsqrt<
+                compute_kernel_lib::Approx::Exact,
+                compute_kernel_lib::Legacy::Off,
+                compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::PackTile<
+                cb_ex2pe,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::PackTileReconfig::None>{});
 
         // Remainder of the layernorm operation
         // norm(x) * gamma + beta,
