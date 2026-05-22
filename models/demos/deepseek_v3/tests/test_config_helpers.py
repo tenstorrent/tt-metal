@@ -41,6 +41,7 @@ def test_get_fabric_config_parses_use_torus_mode(monkeypatch: pytest.MonkeyPatch
         (131072, 16, PrefillChunkSizes(model_chunk=1024, mla_chunk=256, wkv_b2_chunk=256)),
         (8192, 8, PrefillChunkSizes(model_chunk=8192, mla_chunk=8192, wkv_b2_chunk=2048)),
         (12000, 8, PrefillChunkSizes(model_chunk=8192, mla_chunk=8192, wkv_b2_chunk=2048)),
+        (32768, 4, PrefillChunkSizes(model_chunk=32768, mla_chunk=32768, wkv_b2_chunk=2048)),
     ],
 )
 def test_get_prefill_chunk_sizes_uses_lower_bound_thresholds(max_seq_len, num_rows, expected) -> None:

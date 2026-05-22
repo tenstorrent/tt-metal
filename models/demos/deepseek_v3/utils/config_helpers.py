@@ -95,7 +95,10 @@ PREFILL_CHUNK_SIZES = {
         (32 * 1024, PrefillChunkSizes(model_chunk=1024, mla_chunk=512, wkv_b2_chunk=512)),
     ),
     # TG
-    4: ((0, PrefillChunkSizes(model_chunk=DEFAULT_MAX_SEQ_LEN, mla_chunk=DEFAULT_MAX_SEQ_LEN, wkv_b2_chunk=2 * 1024)),),
+    4: (
+        (0, PrefillChunkSizes(model_chunk=DEFAULT_MAX_SEQ_LEN, mla_chunk=DEFAULT_MAX_SEQ_LEN, wkv_b2_chunk=2 * 1024)),
+        (32 * 1024, PrefillChunkSizes(model_chunk=32 * 1024, mla_chunk=32 * 1024, wkv_b2_chunk=2 * 1024)),
+    ),
 }
 
 
