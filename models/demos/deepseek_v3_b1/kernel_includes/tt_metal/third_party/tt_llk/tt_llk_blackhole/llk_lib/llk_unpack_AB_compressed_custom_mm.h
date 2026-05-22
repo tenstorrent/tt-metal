@@ -56,10 +56,7 @@ inline void _llk_unpack_AB_compressed_custom_mm_mop_config_() {
         TTI_NOP;
         TTI_UNPACR_COMMON(SrcB, 0b00010001, 0);
         TTI_UNPACR_COMMON(SrcB, 0b00110100, set_dvadlid);
-        TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);  // Only one of this or the next line should
-                                                                           // be uncommented to test the two stall
-                                                                           // mechanisms, but this one should work
-        // TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
+        TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
     });
 }
 
@@ -104,9 +101,9 @@ constexpr std::uint32_t get_replay_insn_for_combo(const std::uint8_t combo) {
 
     if (curr == 0) {
         if (use_b) {
-            return lltt::replay_insn(22, 3);
+            return lltt::replay_insn(22, need_stall ? 3 : 2);
         } else {
-            return lltt::replay_insn(24, 1);
+            return need_stall ? lltt::replay_insn(24, 1) : TT_OP_NOP;
         }
     }
 
