@@ -3,10 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "hang_device_operation.hpp"
+
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::prim {
-ExecuteTestHangDeviceOperation::SingleCore::cached_program_t ExecuteTestHangDeviceOperation::SingleCore::create(
+
+tt::tt_metal::ProgramDescriptor ExecuteTestHangDeviceOperation::SingleCore::create_descriptor(
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& /*tensor_return_value*/) {
@@ -15,27 +19,23 @@ ExecuteTestHangDeviceOperation::SingleCore::cached_program_t ExecuteTestHangDevi
 
     constexpr CoreCoord core = {0, 0};
 
-    tt::tt_metal::Program program{};
+    ProgramDescriptor desc;
 
-    std::vector<uint32_t> compute_kernel_args = {};
-    CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/test/hang_device/device/kernels/compute/hang_device_kernel.cpp",
-        core,
-        ComputeConfig{
-            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-            .fp32_dest_acc_en = false,
-            .math_approx_mode = false,
-            .compile_args = compute_kernel_args,
-            .opt_level = KernelBuildOptLevel::O3});
+    KernelDescriptor compute_desc;
+    compute_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/experimental/test/hang_device/device/kernels/compute/hang_device_kernel.cpp";
+    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = CoreRangeSet{CoreRange{core, core}};
+    compute_desc.opt_level = KernelBuildOptLevel::O3;
+    compute_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = MathFidelity::HiFi4,
+        .fp32_dest_acc_en = false,
+        .math_approx_mode = false,
+    };
 
-    return {std::move(program), {}};
+    desc.kernels.push_back(std::move(compute_desc));
+
+    return desc;
 }
-
-void ExecuteTestHangDeviceOperation::SingleCore::override_runtime_arguments(
-    cached_program_t& /*cached_program*/,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& /*tensor_args*/,
-    tensor_return_value_t& /*tensor_return_value*/) {}
 
 }  // namespace ttnn::prim
