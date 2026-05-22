@@ -69,10 +69,8 @@ void kernel_main() {
         // Reconfig audit: sub_bcast_rows_init_short_with_dt reconfigs srca/srcb -> Input.
         //   pack_tile_with_dt -> Output.
         // Lifecycles: cb_in0 Bulk + Block (chain owns wait Ht + pop Ht). cb_max
-        //   CallerManaged + Scalar — kept outside the chain because Bulk + Scalar
-        //   would over-wait (chain emits cb_wait_front(cb_max, n_tiles) which would
-        //   wait Ht tiles, but cb_max only ever has 1 tile). cb_x_m_max OutBulk + Block.
-        cb_max_obj.wait_front(1);
+        //   Bulk + Scalar — chain emits cb_wait_front(cb_max, 1) thanks to the
+        //   OperandKind-aware window_1d helper. cb_x_m_max OutBulk + Block.
         compute_kernel_lib::eltwise_chain(
             Ht,
             compute_kernel_lib::BinaryFpu<
@@ -82,7 +80,7 @@ void kernel_main() {
                 compute_kernel_lib::BroadcastDim::Row,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
                 compute_kernel_lib::Bulk,
-                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::Bulk,
                 compute_kernel_lib::OperandKind::Block,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Scalar>{},
@@ -92,7 +90,6 @@ void kernel_main() {
                 compute_kernel_lib::OutBulk,
                 compute_kernel_lib::OperandKind::Block,
                 compute_kernel_lib::PackTileReconfig::Output>{});
-        cb_max_obj.pop_front(1);
 
         // compute exp(x - max(x))
         cb_exps_obj.reserve_back(Ht);
