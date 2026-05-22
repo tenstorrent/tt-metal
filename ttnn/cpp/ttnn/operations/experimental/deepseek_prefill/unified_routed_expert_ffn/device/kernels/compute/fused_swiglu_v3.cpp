@@ -2,25 +2,32 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// v2 fused SwiGLU compute kernel — based on the simpler bmm_large_block_zm.cpp
-// pattern instead of the more complex bmm_large_block_zm_fused_bias_activation.
+// v3 fused SwiGLU compute kernel — PACKER_L1_ACC variant.
 //
-// Key insight: matmul_tiles ADDS to dst[dst_index] (accumulates). To
-// accumulate across K-blocks, we spill each block's dst to intermed CB and
-// reload on the NEXT block via copy_tile (which loads intermed into dst).
-// The new matmul_tiles then accumulates on top.
+// Pattern (modelled on bmm_large_block_zm_fused_bias_activation.cpp without
+// FUSE_BIAS):
+//   * Each matmul phase has num_blocks K-blocks. dst is acquired/released
+//     once per (sb_m, sb_n) subblock pair within each K-block.
+//   * For K-blocks [0..num_blocks-2]:
+//        - The K-loop accumulates the block's per-output-tile dot products
+//          into a fresh dst (acquire_dst clears via dst_section_done).
+//        - The packer is configured with L1_ACC=0 on block 0 (overwrite) and
+//          L1_ACC=1 on block 1+ (add to existing L1). Each subblock packs
+//          into mm_partials_cb, then the kernel pops what it just pushed so
+//          the CB ring stays bounded. Because the CB is sized exactly to
+//          one full block, the next K-block's packer writes land back in
+//          the SAME L1 slots, accumulating physically into the same region.
+//   * For the LAST K-block:
+//        - L1_ACC stays enabled. The block's dst is added into the partials.
+//        - Subblocks push into mm_partials WITHOUT popping, so after the
+//          K-loop the partials CB has out_block_num_tiles tiles available
+//          holding the final accumulated sum.
+//   * After the K-loop, a second pass copies each subblock from partials_cb
+//     into dst, optionally applies SILU on the pack, and packs into the
+//     final CB (cb_gate_intermed / cb_up_intermed / cb_out).
 //
-// Pattern per phase:
-//   for each K-block:
-//     for each (sub_m, sub_n) subblock:
-//       acquire_dst
-//       if not first block: copy from intermed_cb to dst (loads prior partial)
-//       for each output tile (h, w) of the subblock:
-//         for each K iteration: matmul_tiles accumulating to dst[h*w + w]
-//       if last K-block: pack to final_cb
-//       else: pack to intermed_cb (overwriting prior partial with new sum)
-//       release_dst
-//     pop in0 + in1 K-block
+// This avoids the dst-reload pattern from v2 (which was producing Inf
+// outputs) by letting the packer handle cross-K-block accumulation.
 
 #include <cstdint>
 
@@ -30,6 +37,8 @@
 #include "api/dataflow/circular_buffer.h"
 
 #include "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_fused_activation.hpp"
+
+namespace {
 
 template <
     uint32_t in0_block_w,
@@ -43,36 +52,22 @@ template <
     uint32_t out_subblock_h,
     uint32_t out_subblock_w,
     uint32_t out_subblock_num_tiles,
+    uint32_t out_block_num_tiles,
     bool apply_silu_on_final>
-FORCE_INLINE void matmul_phase_v2(
-    uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t intermed_cb_id, uint32_t final_cb_id) {
-    constexpr bool spill = num_blocks > 1;
-    bool enable_reload = false;
-
+FORCE_INLINE void matmul_phase_v3(
+    uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t partials_cb_id, uint32_t final_cb_id) {
     for (uint32_t block = 0; block < num_blocks; ++block) {
         const bool last_out = (block == num_blocks - 1);
 
         cb_wait_front(in0_cb_id, in0_block_num_tiles);
-
         cb_wait_front(in1_cb_id, in1_block_num_tiles);
 
         int in0_index_subblock_offset = 0;
-        for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
+        for (uint32_t sb_m = 0; sb_m < in0_num_subblocks; ++sb_m) {
             int in1_index_subblock_offset = 0;
-            for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
-                acquire_dst();
+            for (uint32_t sb_n = 0; sb_n < in1_num_subblocks; ++sb_n) {
+                tile_regs_acquire();
 
-                if (enable_reload) {
-                    copy_tile_to_dst_init_short_with_dt(in1_cb_id, intermed_cb_id);
-                    cb_wait_front(intermed_cb_id, out_subblock_num_tiles);
-                    for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
-                        copy_tile(intermed_cb_id, i, i);
-                    }
-                    cb_pop_front(intermed_cb_id, out_subblock_num_tiles);
-                    mm_init_short_with_dt(in0_cb_id, in1_cb_id, intermed_cb_id);
-                }
-
-                // Compute output sub-block via per-tile inner-product accumulation.
                 int dst_index = 0;
                 int in0_index_h_offset = 0;
                 for (uint32_t h = 0; h < out_subblock_h; ++h) {
@@ -84,48 +79,82 @@ FORCE_INLINE void matmul_phase_v2(
                             matmul_tiles(in0_cb_id, in1_cb_id, in0_index, in1_index, dst_index);
                             in1_index_inner_dim_offset += in1_per_core_w;
                         }
-                        dst_index++;
+                        ++dst_index;
                     }
                     in0_index_h_offset += in0_block_w;
                 }
 
-                if (last_out) {
-                    if constexpr (apply_silu_on_final) {
-                        apply_activation_from_pack<KernelActivation::SILU>(out_subblock_num_tiles);
-                    }
-                    cb_reserve_back(final_cb_id, out_subblock_num_tiles);
+                tile_regs_commit();
+                tile_regs_wait();
 
-                    for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
-                        pack_tile(i, final_cb_id);
-                    }
-                    cb_push_back(final_cb_id, out_subblock_num_tiles);
-
-                } else {
-                    cb_reserve_back(intermed_cb_id, out_subblock_num_tiles);
-
-                    for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
-                        pack_tile(i, intermed_cb_id);
-                    }
-                    cb_push_back(intermed_cb_id, out_subblock_num_tiles);
+                // Configure packer L1_ACC: OFF on block 0 (overwrite), ON
+                // from block 1 onwards (accumulate).
+                if (block == 0) {
+                    PACK((llk_pack_reconfig_l1_acc(0)));
+                } else if (block == 1) {
+                    PACK((llk_pack_reconfig_l1_acc(1)));
                 }
 
-                release_dst();
+                cb_reserve_back(partials_cb_id, out_subblock_num_tiles);
+                for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
+                    pack_tile(i, partials_cb_id);
+                }
+                cb_push_back(partials_cb_id, out_subblock_num_tiles);
+
+                tile_regs_release();
                 in1_index_subblock_offset += out_subblock_w;
             }
             in0_index_subblock_offset += in0_subblock_num_tiles;
         }
 
-        if constexpr (spill) {
-            enable_reload = true;
+        // Pop what we just pushed on all but the LAST block. This keeps the
+        // partials CB ring at the same WP=RP modulo so the next K-block's
+        // packer L1_ACC writes hit the same physical L1 slots.
+        if (!last_out) {
+            for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
+                cb_wait_front(partials_cb_id, out_subblock_num_tiles);
+                cb_pop_front(partials_cb_id, out_subblock_num_tiles);
+            }
         }
 
         cb_pop_front(in0_cb_id, in0_block_num_tiles);
         cb_pop_front(in1_cb_id, in1_block_num_tiles);
     }
+
+    // After the K-loop: partials_cb_id has out_block_num_tiles tiles holding
+    // the final accumulated sum. Move them through dst into final_cb_id,
+    // applying silu on the way if requested.
+    PACK((llk_pack_reconfig_l1_acc(0)));  // future packs (to final_cb) must overwrite
+    copy_tile_to_dst_init_short_with_dt(in1_cb_id, partials_cb_id);
+
+    for (uint32_t sb = 0; sb < (out_block_num_tiles / out_subblock_num_tiles); ++sb) {
+        tile_regs_acquire();
+        cb_wait_front(partials_cb_id, out_subblock_num_tiles);
+        for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
+            copy_tile(partials_cb_id, i, i);
+        }
+        cb_pop_front(partials_cb_id, out_subblock_num_tiles);
+
+        tile_regs_commit();
+
+        if constexpr (apply_silu_on_final) {
+            apply_activation_from_pack<KernelActivation::SILU>(out_subblock_num_tiles);
+        } else {
+            tile_regs_wait();
+        }
+
+        cb_reserve_back(final_cb_id, out_subblock_num_tiles);
+        for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
+            pack_tile(i, final_cb_id);
+        }
+        cb_push_back(final_cb_id, out_subblock_num_tiles);
+
+        tile_regs_release();
+    }
 }
 
 template <uint32_t out_block_num_tiles, uint32_t out_subblock_num_tiles>
-FORCE_INLINE void multiply_phase_v2(uint32_t gate_cb_id, uint32_t up_cb_id, uint32_t activated_cb_id) {
+FORCE_INLINE void multiply_phase_v3(uint32_t gate_cb_id, uint32_t up_cb_id, uint32_t activated_cb_id) {
     cb_wait_front(gate_cb_id, out_block_num_tiles);
     cb_wait_front(up_cb_id, out_block_num_tiles);
 
@@ -134,21 +163,25 @@ FORCE_INLINE void multiply_phase_v2(uint32_t gate_cb_id, uint32_t up_cb_id, uint
     constexpr uint32_t num_subblocks = out_block_num_tiles / out_subblock_num_tiles;
     uint32_t base = 0;
     for (uint32_t sb = 0; sb < num_subblocks; ++sb) {
-        acquire_dst();
+        tile_regs_acquire();
         for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
             mul_tiles(gate_cb_id, up_cb_id, base + i, base + i, i);
         }
+        tile_regs_commit();
+        tile_regs_wait();
         cb_reserve_back(activated_cb_id, out_subblock_num_tiles);
         for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
             pack_tile(i, activated_cb_id);
         }
         cb_push_back(activated_cb_id, out_subblock_num_tiles);
-        release_dst();
+        tile_regs_release();
         base += out_subblock_num_tiles;
     }
     cb_pop_front(gate_cb_id, out_block_num_tiles);
     cb_pop_front(up_cb_id, out_block_num_tiles);
 }
+
+}  // namespace
 
 void kernel_main() {
     // Phase 1 (gate)
@@ -202,10 +235,10 @@ void kernel_main() {
     constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
 
     silu_tile_init_pack();
-    mm_init(cb_in0_x, cb_in1_gate, cb_gate_intermed);
+    mm_init(cb_in0_x, cb_in1_gate, cb_partials_gu);
 
-    // Phase 1: gate matmul (silu fused on final pack)
-    matmul_phase_v2<
+    // Phase 1: gate matmul with silu fused on the final pack into gate_intermed.
+    matmul_phase_v3<
         g_in0_block_w,
         g_in0_num_subblocks,
         g_in0_block_num_tiles,
@@ -217,11 +250,12 @@ void kernel_main() {
         gu_out_subblock_h,
         gu_out_subblock_w,
         gu_out_subblock_num_tiles,
-        /*apply_silu_on_final=*/false>(cb_in0_x, cb_in1_gate, cb_partials_gu, cb_gate_intermed);
+        gu_out_block_num_tiles,
+        /*apply_silu_on_final=*/true>(cb_in0_x, cb_in1_gate, cb_partials_gu, cb_gate_intermed);
 
-    // Phase 2: up matmul
-    mm_init_short_with_dt(cb_in0_x, cb_in1_up, cb_in1_gate);
-    matmul_phase_v2<
+    // Phase 2: up matmul (no activation), output to up_intermed.
+    mm_init_short_with_dt(cb_in0_x, cb_in1_up, cb_partials_gu);
+    matmul_phase_v3<
         u_in0_block_w,
         u_in0_num_subblocks,
         u_in0_block_num_tiles,
@@ -233,15 +267,16 @@ void kernel_main() {
         gu_out_subblock_h,
         gu_out_subblock_w,
         gu_out_subblock_num_tiles,
+        gu_out_block_num_tiles,
         /*apply_silu_on_final=*/false>(cb_in0_x, cb_in1_up, cb_partials_gu, cb_up_intermed);
 
-    // Phase 3: elementwise multiply
-    multiply_phase_v2<gu_out_block_num_tiles, gu_out_subblock_num_tiles>(
+    // Phase 3: elementwise multiply, output to activated.
+    multiply_phase_v3<gu_out_block_num_tiles, gu_out_subblock_num_tiles>(
         cb_gate_intermed, cb_up_intermed, cb_activated);
 
-    // Phase 4: down matmul
-    mm_init(cb_in0_down_full, cb_in1_down, cb_out);
-    matmul_phase_v2<
+    // Phase 4: down matmul, output to cb_out.
+    mm_init(cb_in0_down_full, cb_in1_down, cb_partials_d);
+    matmul_phase_v3<
         d_in0_block_w,
         d_in0_num_subblocks,
         d_in0_block_num_tiles,
@@ -253,5 +288,6 @@ void kernel_main() {
         d_out_subblock_h,
         d_out_subblock_w,
         d_out_subblock_num_tiles,
+        d_out_block_num_tiles,
         /*apply_silu_on_final=*/false>(cb_in0_down_full, cb_in1_down, cb_partials_d, cb_out);
 }

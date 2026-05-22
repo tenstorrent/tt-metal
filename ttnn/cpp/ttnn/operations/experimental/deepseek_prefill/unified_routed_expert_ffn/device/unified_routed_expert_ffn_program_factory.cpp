@@ -79,17 +79,24 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         K_down_tiles,
         in0_block_w_d);
 
-    // Subblock dims (out_subblock_h * out_subblock_w <= 8 for safe dst alloc).
+    // Subblock dims. With bf16 dst (fp32_dest_acc_en=false), capacity is 8.
+    constexpr uint32_t DST_CAPACITY = 8;
     const uint32_t gu_out_subblock_h = 1;
-    const uint32_t gu_out_subblock_w = per_core_N_gu;  // per_core_N_gu * 1 <= 8 for v1 (per_core_N_gu=8)
+    uint32_t gu_sub_w = 1;
+    for (uint32_t cand = DST_CAPACITY; cand >= 1; --cand) {
+        if (per_core_N_gu % cand == 0) {
+            gu_sub_w = cand;
+            break;
+        }
+    }
+    const uint32_t gu_out_subblock_w = gu_sub_w;
     TT_FATAL(
-        gu_out_subblock_h * gu_out_subblock_w <= 8,
+        gu_out_subblock_h * gu_out_subblock_w <= DST_CAPACITY,
         "gu subblock h*w ({}) exceeds dst capacity",
         gu_out_subblock_h * gu_out_subblock_w);
     const uint32_t d_out_subblock_h = 1;
-    // Largest divisor of per_core_N_d that is <= 8.
     uint32_t d_sub_w = 1;
-    for (uint32_t cand = 8; cand >= 1; --cand) {
+    for (uint32_t cand = DST_CAPACITY; cand >= 1; --cand) {
         if (per_core_N_d % cand == 0) {
             d_sub_w = cand;
             break;
@@ -348,15 +355,16 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         {"cb_out", CB_OUT},
     };
 
-    // PACKER_L1_ACC would let the per-K-block partials accumulate via the
-    // packer (read-modify-write into the same L1 slot), but doesn't seem to
-    // play nicely with our current CB/pack layout — disabled for now.
+    // PACKER_L1_ACC lets the per-K-block partials accumulate via the packer
+    // (read-modify-write into the same L1 slot). The v3 kernel relies on
+    // this define to gate the llk_pack_reconfig_l1_acc(0/1) calls.
     std::map<std::string, std::string> compute_defines{};
+    compute_defines["PACKER_L1_ACC"] = "1";
 
     auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/"
-        "fused_swiglu_v2.cpp",
+        "fused_swiglu_v3.cpp",
         core_range_set,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::LoFi,
@@ -458,6 +466,14 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             my_nt_d,
             chunk_start_tile_row,
         };
+        // Append the NoC virtual coords of every compute core (interleaved
+        // x, y). The controller writer uses this to unicast-set each other
+        // core's sem slot directly.
+        for (const auto& c : cores) {
+            const auto noc_coord = device->worker_core_from_logical_core(c);
+            writer_args.push_back(static_cast<uint32_t>(noc_coord.x));
+            writer_args.push_back(static_cast<uint32_t>(noc_coord.y));
+        }
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_args);
     }
 
