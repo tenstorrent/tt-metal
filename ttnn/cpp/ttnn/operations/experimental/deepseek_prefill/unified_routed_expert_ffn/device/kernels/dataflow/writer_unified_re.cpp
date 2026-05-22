@@ -95,20 +95,20 @@ void kernel_main() {
         }
     }
 
-    // ----- Increment every core's semaphore slot ---------------------------
-    // Each core's slot lives at the same L1 offset on every core because
-    // CreateSemaphore reserved a uniform slot. We send `posted=true` atomics
-    // (no ack-back) so the writer doesn't block on 64 round-trips, then a
-    // single noc_async_atomic_barrier at the end ensures every increment has
-    // landed before this writer proceeds (and so before the corresponding
-    // reader's noc_semaphore_wait could observe the wrong value).
-    for (uint32_t i = 0; i < num_sync_cores; ++i) {
-        const uint32_t target_x = get_arg_val<uint32_t>(sync_coords_base + 2 * i + 0);
-        const uint32_t target_y = get_arg_val<uint32_t>(sync_coords_base + 2 * i + 1);
+    // DIAGNOSTIC: For now, just increment THIS core's own sem so reader on
+    // this same core can proceed. Each core syncs only with itself (= local
+    // barrier between phases 3 and 4). True cross-core sync (every writer
+    // increments every reader's slot) is the path forward; this self-only
+    // variant is to isolate whether the NoC sem broadcast pattern is what's
+    // wedging the kernel.
+    {
+        const uint32_t target_x = get_arg_val<uint32_t>(sync_coords_base + 0);
+        const uint32_t target_y = get_arg_val<uint32_t>(sync_coords_base + 1);
         const uint64_t remote_sem = get_noc_addr(target_x, target_y, sem_addr);
-        noc_semaphore_inc</*posted=*/true>(remote_sem, 1);
+        noc_semaphore_inc(remote_sem, 1);
     }
-    noc_async_atomic_barrier();
+    // Suppress unused-var warning until full cross-core sync is wired back.
+    (void)num_sync_cores;
 
     // ----- Phase 4 drain -> DRAM output ------------------------------------
     {
