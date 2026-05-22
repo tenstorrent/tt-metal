@@ -54,6 +54,19 @@ for the rule.
 | `layernorm/.../layernorm_large_tensor.cpp` | PARTIAL | `66c0ea6590b`, `0b0ca49146e` | 2 chains migrated: Var(X)+eps -> rsqrt + UnaryBcast<COL> on cb_ex2pe. **Real blocker for remaining blocks A/D/E/F**: (1) Block A (pass-1 variance calc) has interleaved FPU(sub_bcast/binary_dest_reuse(ELWADD)) + SFPU(square_tile) + reduce_init/reduce_tile + scalar mul_unary in one DEST window; cite: HQ §"Control-flow shape" "Interleaved op classes in one DEST window — only migratable if helper exposes a fusion point". (2) Blocks D/E/F have macro-injected SFPU activation (SFPU_OP_INIT/FUNC_ACTIVATION at line 335) and same fusion-point blocker. 52 PASS. |
 | `layernorm/.../layernorm_large_tensor_welford.cpp` | PARTIAL | `decf009afc0`, `3016a1d484f` | 2 chains migrated: Var(X)+eps -> rsqrt + UnaryBcast<COL> on cb_ex2pe. Welford accumulator + transpose_wh OOS. **PARTIAL-DEFER (specific patterns, not lazy)**: Blocks A (FUSE_PRE_ADD add+pack), F (pass-2 sub_bcast + binary_dest_reuse(ELWMUL) + pack), G (gamma mul_bcast_rows), H (beta add_bcast_rows) all have structural patterns identified; deferred for focused follow-up. cite: lines 71-94, 407-451, 455-487, 489-511. 52 PASS. |
 
+### moreh adam/adamw
+
+| Kernel | Status | Commit | Notes |
+|---|---|---|---|
+| `moreh/moreh_adam/.../moreh_adam.cpp` | PARTIAL | `d0dae745ea1` | 4 in-DEST stages migrated: 1/(1-cb_tmp1), AMSGRAD max, 1/(cb_tmp1+eps) with TileBaseCompileTime<eps_tile>, 1/(1-cb_tmp2). Skipped: moreh *_tiles_to_cb composite stages, runtime-step power_tile (needs PowerIterative chain element), sqrt(*) mid-stage. 132 PASS on `test_moreh_adam.py`. |
+| `moreh/moreh_adamw/.../moreh_adamw.cpp` | PARTIAL | `d07becaaf42` | 3 in-DEST stages migrated (same patterns as moreh_adam): AMSGRAD max, 1/(cb_tmp1+eps), 1/(1-cb_beta1_exponent). Other stages stay raw (composite *_tiles_to_cb helpers). 19 PASS, 8 skipped. |
+
+### attempted but reverted
+
+| Kernel | Reverted | Symptom | Notes |
+|---|---|---|---|
+| `moreh/moreh_softmax/.../moreh_softmax_h.cpp` (sub-by-max stage) | yes — uncommitted | Dispatch timeout on shape `[3, 160, 32]` dim=1 (Ht=5); writer stuck at `cb_wait_front` on output, compute stuck at chain's `cb_wait_front(cb_in0, Ht)` | Migrated `BinaryFpu(Sub, BroadcastDim::Row)` with Bulk+Block on cb_in0 + Bulk+Scalar on cb_max + OutBulk+Block on cb_x_m_max. First 5 test cases passed (smaller shapes); shape with Ht=5 hung. Suspected cause: outer loop reuses cb_in0 across iterations + chain's per-iter init may interact poorly with the preceding `compute_kernel_lib::reduce` call (which uses cb_in0). Needs deeper debug before re-attempting. |
+
 ### rotary_embedding family
 
 | Kernel | Status | Commit | Notes |
