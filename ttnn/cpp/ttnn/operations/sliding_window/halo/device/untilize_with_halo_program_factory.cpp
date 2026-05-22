@@ -97,7 +97,6 @@ ProgramDescriptor build_halo_program(
     const bool remote_read = operation_attributes.remote_read;
     const bool transpose_mcast = operation_attributes.transpose_mcast;
 
-    const bool is_in_tiled = input_tensor.layout() == Layout::TILE;
     const bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
 
     Buffer* src_buffer = input_tensor.buffer();
