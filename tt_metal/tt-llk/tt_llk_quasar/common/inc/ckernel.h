@@ -4,6 +4,8 @@
 #pragma once
 
 #define TT_ALWAYS_INLINE    inline __attribute__((always_inline))
+#define NOINLINE            __attribute__((noinline))
+#define NOCLONE             __attribute__((noclone))
 #define tt_l1_ptr           __attribute__((rvtt_l1_ptr))
 #define tt_reg_ptr          __attribute__((rvtt_reg_ptr))
 #include <cstdint>
