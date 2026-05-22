@@ -526,6 +526,9 @@ def _make_generate_fn(
         num_beams=1,
         pad_token_id=int(pad_token_id),
         eos_token_id=eos_token_id,
+        use_kv_cache=True,
+        use_decode_trace=True,
+        prewarm_conv1d_weights=True,
     )
 
     def generate(_device_input: ttnn.Tensor) -> Any:
