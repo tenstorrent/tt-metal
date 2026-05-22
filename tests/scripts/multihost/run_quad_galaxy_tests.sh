@@ -599,15 +599,67 @@ run_quad_deepseekv3_unit_tests() {
 # DeepSeek V3 module tests (models/demos/deepseek_v3/tests)
 ###############################################################################
 
+deepseekv3_module_test_files() {
+    find models/demos/deepseek_v3/tests \
+        -maxdepth 1 \
+        -type f \
+        -name 'test_*.py' \
+        ! -name 'test_mtp.py' \
+        | sort
+}
+
+is_deepseekv3_module_local_test_file() {
+    case "$1" in
+        models/demos/deepseek_v3/tests/test_get_weight_config.py)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+run_deepseekv3_module_test_files() {
+    local step_prefix="$1"
+    local fail=0
+    local count=0
+    local test_path stem junit_path ec
+    local -a test_files
+
+    mapfile -t test_files < <(deepseekv3_module_test_files)
+
+    for test_path in "${test_files[@]}"; do
+        count=$((count + 1))
+        stem="$(basename "${test_path}" .py)"
+        junit_path="$(_test_run_summary_junit_path "${step_prefix}_${stem}")"
+        if is_deepseekv3_module_local_test_file "${test_path}"; then
+            # These tests assert single-process filesystem semantics that distributed TTNN intentionally changes.
+            _test_run_summary_exec "${PYTHON:-python3}" -m pytest -svvv --junitxml="${junit_path}" "${test_path}"
+        else
+            _test_run_summary_exec _run_deepseekv3_tt pytest -svvv --junitxml="${junit_path}" "${test_path}"
+        fi
+        ec="${_TEST_RUN_LAST_EC}"
+        fail=$((fail + ec))
+        _test_run_summary_append_junit_rows "${step_prefix}_${stem}" "${junit_path}" "${ec}"
+    done
+
+    if [[ "${count}" -eq 0 ]]; then
+        echo "Error: no DeepSeek V3 module test files found." >&2
+        return 1
+    fi
+    if [[ "${fail}" -ne 0 ]]; then
+        return 1
+    fi
+    return 0
+}
+
 run_dual_deepseekv3_module_tests() {
     fail=0
     setup_dual_galaxy_env
 
-    local junit_path="$(_test_run_summary_junit_path deepseekv3_module_dual)"
-    _test_run_summary_exec _run_deepseekv3_tt pytest -svvv --junitxml="${junit_path}" models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests --ignore=models/demos/deepseek_v3/tests/test_mtp.py
-    local ec="${_TEST_RUN_LAST_EC}"
-    fail=$((fail + ec))
-    _test_run_summary_append_junit_rows "deepseekv3_module_dual" "${junit_path}" "${ec}"
+    if ! run_deepseekv3_module_test_files "deepseekv3_module_dual"; then
+        fail=$((fail + 1))
+    fi
 
     if [[ $fail -ne 0 ]]; then
         exit 1
@@ -618,11 +670,9 @@ run_quad_deepseekv3_module_tests() {
     fail=0
     setup_quad_galaxy_env
 
-    local junit_path="$(_test_run_summary_junit_path deepseekv3_module_quad)"
-    _test_run_summary_exec _run_deepseekv3_tt pytest -svvv --junitxml="${junit_path}" models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests --ignore=models/demos/deepseek_v3/tests/test_mtp.py
-    local ec="${_TEST_RUN_LAST_EC}"
-    fail=$((fail + ec))
-    _test_run_summary_append_junit_rows "deepseekv3_module_quad" "${junit_path}" "${ec}"
+    if ! run_deepseekv3_module_test_files "deepseekv3_module_quad"; then
+        fail=$((fail + 1))
+    fi
 
     if [[ $fail -ne 0 ]]; then
         exit 1

@@ -84,8 +84,10 @@ def generate_reference_io(
     if not moe_state_dict:
         pytest.skip(f"Checkpoint does not contain routed MoE weights under '{module_path}'")
 
-    state_dict_out = moe_state_dict
-    reference_model.load_state_dict(state_dict_out)
+    reference_state_dict = {
+        name: tensor for name, tensor in moe_state_dict.items() if not name.startswith("experts_quad_ring.")
+    }
+    reference_model.load_state_dict(reference_state_dict)
     torch_input = load_real_moe_input(mode, module_path, num_tokens)
 
     reference_model.eval()
@@ -93,7 +95,7 @@ def generate_reference_io(
     with torch.no_grad():
         reference_output = reference_model(torch_input)
 
-    return state_dict_out, torch_input, reference_output
+    return moe_state_dict, torch_input, reference_output
 
 
 _max_seq_len_env = os.getenv("DEEPSEEK_MAX_SEQ_LEN_OVERRIDE")
