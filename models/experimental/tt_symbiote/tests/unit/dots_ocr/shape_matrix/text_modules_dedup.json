@@ -1,0 +1,1094 @@
+[
+  {
+    "call_id": 1,
+    "phase": "text",
+    "module_class": "TTNNEmbedding",
+    "module_name": "model.embed_tokens",
+    "module_path": "TTNNEmbedding[model.embed_tokens]",
+    "inputs": [
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          14
+        ],
+        "dtype": "DataType.INT32",
+        "layout": "Layout.ROW_MAJOR",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      }
+    ],
+    "output": [
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          14,
+          1536
+        ],
+        "dtype": "DataType.BFLOAT16",
+        "layout": "Layout.TILE",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      }
+    ],
+    "count": 2,
+    "representative_call_ids": [
+      1,
+      1589
+    ]
+  },
+  {
+    "call_id": 7,
+    "phase": "text",
+    "module_class": "TTNNDotsOCRLocalShardRMSNorm",
+    "module_name": "model.layers.0.input_layernorm",
+    "module_path": "TTNNDotsOCRPrefillGraph[dots_ocr_graph_prefill]/TTNNDotsOCRLocalShardRMSNorm[model.layers.0.input_layernorm]",
+    "inputs": [
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          14,
+          1536
+        ],
+        "dtype": "DataType.BFLOAT16",
+        "layout": "Layout.TILE",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      }
+    ],
+    "output": [
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          14,
+          1536
+        ],
+        "dtype": "DataType.BFLOAT16",
+        "layout": "Layout.TILE",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      }
+    ],
+    "count": 112,
+    "representative_call_ids": [
+      7,
+      25,
+      36,
+      54,
+      65
+    ]
+  },
+  {
+    "call_id": 10,
+    "phase": "text",
+    "module_class": "TTNNLinearLLamaIColShardedWAllReduced",
+    "module_name": "model.layers.0.self_attn.qkv_proj",
+    "module_path": "TTNNDotsOCRPrefillGraph[dots_ocr_graph_prefill]/TTNNDotsOCRAttention[model.layers.0.self_attn]/TTNNLinearLLamaIColShardedWAllReduced[model.layers.0.self_attn.qkv_proj]",
+    "inputs": [
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          14,
+          1536
+        ],
+        "dtype": "DataType.BFLOAT16",
+        "layout": "Layout.TILE",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      }
+    ],
+    "output": [
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          14,
+          2048
+        ],
+        "dtype": "DataType.BFLOAT16",
+        "layout": "Layout.TILE",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      }
+    ],
+    "count": 56,
+    "representative_call_ids": [
+      10,
+      39,
+      68,
+      97,
+      126
+    ]
+  },
+  {
+    "call_id": 19,
+    "phase": "text",
+    "module_class": "TTNNSDPAAttention",
+    "module_name": "model.layers.0.self_attn.sdpa",
+    "module_path": "TTNNDotsOCRPrefillGraph[dots_ocr_graph_prefill]/TTNNDotsOCRAttention[model.layers.0.self_attn]/TTNNSDPAAttention[model.layers.0.self_attn.sdpa]",
+    "inputs": [
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          12,
+          14,
+          128
+        ],
+        "dtype": "DataType.BFLOAT16",
+        "layout": "Layout.TILE",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      },
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          2,
+          14,
+          128
+        ],
+        "dtype": "DataType.BFLOAT16",
+        "layout": "Layout.TILE",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      },
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          2,
+          14,
+          128
+        ],
+        "dtype": "DataType.BFLOAT16",
+        "layout": "Layout.TILE",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      }
+    ],
+    "output": [
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          12,
+          14,
+          128
+        ],
+        "dtype": "DataType.BFLOAT16",
+        "layout": "Layout.TILE",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      }
+    ],
+    "count": 56,
+    "representative_call_ids": [
+      19,
+      48,
+      77,
+      106,
+      135
+    ]
+  },
+  {
+    "call_id": 22,
+    "phase": "text",
+    "module_class": "TTNNLinearLLamaIReplicatedWColSharded",
+    "module_name": "model.layers.0.self_attn.o_proj",
+    "module_path": "TTNNDotsOCRPrefillGraph[dots_ocr_graph_prefill]/TTNNDotsOCRAttention[model.layers.0.self_attn]/TTNNLinearLLamaIReplicatedWColSharded[model.layers.0.self_attn.o_proj]",
+    "inputs": [
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          14,
+          1536
+        ],
+        "dtype": "DataType.BFLOAT16",
+        "layout": "Layout.TILE",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      }
+    ],
+    "output": [
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          14,
+          1536
+        ],
+        "dtype": "DataType.BFLOAT16",
+        "layout": "Layout.TILE",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      }
+    ],
+    "count": 56,
+    "representative_call_ids": [
+      22,
+      51,
+      80,
+      109,
+      138
+    ]
+  },
+  {
+    "call_id": 9,
+    "phase": "text",
+    "module_class": "TTNNDotsOCRAttention",
+    "module_name": "model.layers.0.self_attn",
+    "module_path": "TTNNDotsOCRPrefillGraph[dots_ocr_graph_prefill]/TTNNDotsOCRAttention[model.layers.0.self_attn]",
+    "inputs": [
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          14,
+          1536
+        ],
+        "dtype": "DataType.BFLOAT16",
+        "layout": "Layout.TILE",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      },
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          14
+        ],
+        "dtype": "DataType.INT32",
+        "layout": "Layout.ROW_MAJOR",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      }
+    ],
+    "output": [
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          14,
+          1536
+        ],
+        "dtype": "DataType.BFLOAT16",
+        "layout": "Layout.TILE",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      }
+    ],
+    "count": 56,
+    "representative_call_ids": [
+      9,
+      38,
+      67,
+      96,
+      125
+    ]
+  },
+  {
+    "call_id": 28,
+    "phase": "text",
+    "module_class": "TTNNDotsOCRFusedGateUpRowSharded",
+    "module_name": "model.layers.0.mlp.fused_gate_up_proj",
+    "module_path": "TTNNDotsOCRPrefillGraph[dots_ocr_graph_prefill]/TTNNDotsOCRMLP[model.layers.0.mlp]/TTNNDotsOCRFusedGateUpRowSharded[model.layers.0.mlp.fused_gate_up_proj]",
+    "inputs": [
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          14,
+          1536
+        ],
+        "dtype": "DataType.BFLOAT16",
+        "layout": "Layout.TILE",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      }
+    ],
+    "output": [
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          14,
+          17920
+        ],
+        "dtype": "DataType.BFLOAT8_B",
+        "layout": "Layout.TILE",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      }
+    ],
+    "count": 56,
+    "representative_call_ids": [
+      28,
+      57,
+      86,
+      115,
+      144
+    ]
+  },
+  {
+    "call_id": 33,
+    "phase": "text",
+    "module_class": "TTNNDotsOCRRowShardedNoAllGather",
+    "module_name": "model.layers.0.mlp.down_proj",
+    "module_path": "TTNNDotsOCRPrefillGraph[dots_ocr_graph_prefill]/TTNNDotsOCRMLP[model.layers.0.mlp]/TTNNDotsOCRRowShardedNoAllGather[model.layers.0.mlp.down_proj]",
+    "inputs": [
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          14,
+          8960
+        ],
+        "dtype": "DataType.BFLOAT8_B",
+        "layout": "Layout.TILE",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      }
+    ],
+    "output": [
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          14,
+          1536
+        ],
+        "dtype": "DataType.BFLOAT8_B",
+        "layout": "Layout.TILE",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      }
+    ],
+    "count": 56,
+    "representative_call_ids": [
+      33,
+      62,
+      91,
+      120,
+      149
+    ]
+  },
+  {
+    "call_id": 27,
+    "phase": "text",
+    "module_class": "TTNNDotsOCRMLP",
+    "module_name": "model.layers.0.mlp",
+    "module_path": "TTNNDotsOCRPrefillGraph[dots_ocr_graph_prefill]/TTNNDotsOCRMLP[model.layers.0.mlp]",
+    "inputs": [
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          14,
+          1536
+        ],
+        "dtype": "DataType.BFLOAT16",
+        "layout": "Layout.TILE",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      }
+    ],
+    "output": [
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          14,
+          1536
+        ],
+        "dtype": "DataType.BFLOAT8_B",
+        "layout": "Layout.TILE",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      }
+    ],
+    "count": 56,
+    "representative_call_ids": [
+      27,
+      56,
+      85,
+      114,
+      143
+    ]
+  },
+  {
+    "call_id": 6,
+    "phase": "text",
+    "module_class": "TTNNDotsOCRPrefillGraph",
+    "module_name": "dots_ocr_graph_prefill",
+    "module_path": "TTNNDotsOCRPrefillGraph[dots_ocr_graph_prefill]",
+    "inputs": [
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          14,
+          1536
+        ],
+        "dtype": "DataType.BFLOAT16",
+        "layout": "Layout.TILE",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      },
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          14
+        ],
+        "dtype": "DataType.INT32",
+        "layout": "Layout.ROW_MAJOR",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      }
+    ],
+    "output": [
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          1
+        ],
+        "dtype": "DataType.UINT32",
+        "layout": "Layout.ROW_MAJOR",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      }
+    ],
+    "count": 2,
+    "representative_call_ids": [
+      6,
+      1594
+    ]
+  },
+  {
+    "call_id": 844,
+    "phase": "text",
+    "module_class": "TTNNDotsOCRLocalShardRMSNorm",
+    "module_name": "model.layers.0.input_layernorm",
+    "module_path": "TTNNDotsOCRDecodeGraph[dots_ocr_graph_decode]/TTNNDotsOCRLocalShardRMSNorm[model.layers.0.input_layernorm]",
+    "inputs": [
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          1,
+          1536
+        ],
+        "dtype": "DataType.BFLOAT16",
+        "layout": "Layout.TILE",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      }
+    ],
+    "output": [
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          1,
+          1536
+        ],
+        "dtype": "DataType.BFLOAT16",
+        "layout": "Layout.TILE",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      }
+    ],
+    "count": 112,
+    "representative_call_ids": [
+      844,
+      859,
+      870,
+      885,
+      896
+    ]
+  },
+  {
+    "call_id": 847,
+    "phase": "text",
+    "module_class": "TTNNLinearLLamaIColShardedWAllReduced",
+    "module_name": "model.layers.0.self_attn.qkv_proj",
+    "module_path": "TTNNDotsOCRDecodeGraph[dots_ocr_graph_decode]/TTNNDotsOCRAttention[model.layers.0.self_attn]/TTNNLinearLLamaIColShardedWAllReduced[model.layers.0.self_attn.qkv_proj]",
+    "inputs": [
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          1,
+          1536
+        ],
+        "dtype": "DataType.BFLOAT16",
+        "layout": "Layout.TILE",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      }
+    ],
+    "output": [
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          1,
+          2048
+        ],
+        "dtype": "DataType.BFLOAT16",
+        "layout": "Layout.TILE",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      }
+    ],
+    "count": 56,
+    "representative_call_ids": [
+      847,
+      873,
+      899,
+      925,
+      951
+    ]
+  },
+  {
+    "call_id": 856,
+    "phase": "text",
+    "module_class": "TTNNLinearLLamaIReplicatedWColSharded",
+    "module_name": "model.layers.0.self_attn.o_proj",
+    "module_path": "TTNNDotsOCRDecodeGraph[dots_ocr_graph_decode]/TTNNDotsOCRAttention[model.layers.0.self_attn]/TTNNLinearLLamaIReplicatedWColSharded[model.layers.0.self_attn.o_proj]",
+    "inputs": [
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          1,
+          1,
+          1536
+        ],
+        "dtype": "DataType.BFLOAT16",
+        "layout": "Layout.TILE",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.L1",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      }
+    ],
+    "output": [
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          1,
+          1,
+          1536
+        ],
+        "dtype": "DataType.BFLOAT16",
+        "layout": "Layout.TILE",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      }
+    ],
+    "count": 56,
+    "representative_call_ids": [
+      856,
+      882,
+      908,
+      934,
+      960
+    ]
+  },
+  {
+    "call_id": 846,
+    "phase": "text",
+    "module_class": "TTNNDotsOCRAttention",
+    "module_name": "model.layers.0.self_attn",
+    "module_path": "TTNNDotsOCRDecodeGraph[dots_ocr_graph_decode]/TTNNDotsOCRAttention[model.layers.0.self_attn]",
+    "inputs": [
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          1,
+          1536
+        ],
+        "dtype": "DataType.BFLOAT16",
+        "layout": "Layout.TILE",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      },
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1
+        ],
+        "dtype": "DataType.INT32",
+        "layout": "Layout.ROW_MAJOR",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      },
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1
+        ],
+        "dtype": "DataType.INT32",
+        "layout": "Layout.ROW_MAJOR",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      },
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          1,
+          1,
+          128
+        ],
+        "dtype": "DataType.BFLOAT16",
+        "layout": "Layout.TILE",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      },
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          1,
+          1,
+          128
+        ],
+        "dtype": "DataType.BFLOAT16",
+        "layout": "Layout.TILE",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      }
+    ],
+    "output": [
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          1,
+          1536
+        ],
+        "dtype": "DataType.BFLOAT16",
+        "layout": "Layout.TILE",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      }
+    ],
+    "count": 56,
+    "representative_call_ids": [
+      846,
+      872,
+      898,
+      924,
+      950
+    ]
+  },
+  {
+    "call_id": 862,
+    "phase": "text",
+    "module_class": "TTNNDotsOCRFusedGateUpRowSharded",
+    "module_name": "model.layers.0.mlp.fused_gate_up_proj",
+    "module_path": "TTNNDotsOCRDecodeGraph[dots_ocr_graph_decode]/TTNNDotsOCRMLP[model.layers.0.mlp]/TTNNDotsOCRFusedGateUpRowSharded[model.layers.0.mlp.fused_gate_up_proj]",
+    "inputs": [
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          1,
+          1536
+        ],
+        "dtype": "DataType.BFLOAT16",
+        "layout": "Layout.TILE",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      }
+    ],
+    "output": [
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          1,
+          17920
+        ],
+        "dtype": "DataType.BFLOAT8_B",
+        "layout": "Layout.TILE",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.L1",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      }
+    ],
+    "count": 56,
+    "representative_call_ids": [
+      862,
+      888,
+      914,
+      940,
+      966
+    ]
+  },
+  {
+    "call_id": 867,
+    "phase": "text",
+    "module_class": "TTNNDotsOCRRowShardedNoAllGather",
+    "module_name": "model.layers.0.mlp.down_proj",
+    "module_path": "TTNNDotsOCRDecodeGraph[dots_ocr_graph_decode]/TTNNDotsOCRMLP[model.layers.0.mlp]/TTNNDotsOCRRowShardedNoAllGather[model.layers.0.mlp.down_proj]",
+    "inputs": [
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          1,
+          8960
+        ],
+        "dtype": "DataType.BFLOAT8_B",
+        "layout": "Layout.TILE",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.L1",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      }
+    ],
+    "output": [
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          1,
+          1536
+        ],
+        "dtype": "DataType.BFLOAT8_B",
+        "layout": "Layout.TILE",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      }
+    ],
+    "count": 56,
+    "representative_call_ids": [
+      867,
+      893,
+      919,
+      945,
+      971
+    ]
+  },
+  {
+    "call_id": 861,
+    "phase": "text",
+    "module_class": "TTNNDotsOCRMLP",
+    "module_name": "model.layers.0.mlp",
+    "module_path": "TTNNDotsOCRDecodeGraph[dots_ocr_graph_decode]/TTNNDotsOCRMLP[model.layers.0.mlp]",
+    "inputs": [
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          1,
+          1536
+        ],
+        "dtype": "DataType.BFLOAT16",
+        "layout": "Layout.TILE",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      }
+    ],
+    "output": [
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          1,
+          1536
+        ],
+        "dtype": "DataType.BFLOAT8_B",
+        "layout": "Layout.TILE",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      }
+    ],
+    "count": 56,
+    "representative_call_ids": [
+      861,
+      887,
+      913,
+      939,
+      965
+    ]
+  },
+  {
+    "call_id": 837,
+    "phase": "text",
+    "module_class": "TTNNDotsOCRDecodeGraph",
+    "module_name": "dots_ocr_graph_decode",
+    "module_path": "TTNNDotsOCRDecodeGraph[dots_ocr_graph_decode]",
+    "inputs": [
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          1
+        ],
+        "dtype": "DataType.UINT32",
+        "layout": "Layout.ROW_MAJOR",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      },
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1
+        ],
+        "dtype": "DataType.INT32",
+        "layout": "Layout.ROW_MAJOR",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      }
+    ],
+    "output": [
+      {
+        "kind": "ttnn.Tensor",
+        "shape": [
+          1,
+          1
+        ],
+        "dtype": "DataType.UINT32",
+        "layout": "Layout.ROW_MAJOR",
+        "memory_config": {
+          "repr": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+          "buffer_type": "BufferType.DRAM",
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED"
+        },
+        "device_shape": "MeshShape([8, 1])",
+        "storage_type": "StorageType.DEVICE"
+      }
+    ],
+    "count": 2,
+    "representative_call_ids": [
+      837,
+      2425
+    ]
+  }
+]
