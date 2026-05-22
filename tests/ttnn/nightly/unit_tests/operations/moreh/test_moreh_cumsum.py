@@ -120,13 +120,8 @@ def test_moreh_cumsum_backward(input_shape, dim, device):
     torch_output = torch.cumsum(torch_input, dim)
     torch_output.backward(torch_output_grad)
 
-    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
-    tt_input_grad_cpu = (
+    tt_input_grad_cpu = ttnn.to_torch(
         ttnn.operations.moreh.cumsum_backward(tt_output_grad, dim, input_grad=tt_input_grad)
-        .cpu()
-        .to(cpu_layout)
-        .unpad_from_tile(input_shape)
-        .to_torch()
     )
 
     # test for equivalance
@@ -225,13 +220,8 @@ def test_moreh_cumsum_backward(input_shape, dim, device):
     torch_output = torch.cumsum(torch_input, dim)
     torch_output.backward(torch_output_grad)
 
-    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
-    tt_input_grad_cpu = (
+    tt_input_grad_cpu = ttnn.to_torch(
         ttnn.operations.moreh.cumsum_backward(tt_output_grad, dim, input_grad=tt_input_grad)
-        .cpu()
-        .to(cpu_layout)
-        .unpad_from_tile(input_shape)
-        .to_torch()
     )
 
     # test for equivalance
@@ -303,3 +293,4 @@ def test_moreh_cumsum_backward_callback(input_shape, dim, device):
 
             assert passing
         assert device.num_program_cache_entries() >= 1
+
