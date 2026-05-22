@@ -186,6 +186,9 @@ public:
     // ASIC Topology Query APIs
     std::vector<AsicID> get_asic_neighbors(AsicID asic_id) const;
     std::vector<EthConnection> get_eth_connections(AsicID src_asic_id, AsicID dst_asic_id) const;
+    PortType get_port_type(AsicID src_asic, AsicID dst_asic, uint8_t src_chan) const;
+    std::vector<PortType> get_available_port_types(AsicID src_asic) const;
+    bool has_port_type(AsicID src_asic, AsicID dst_asic, PortType port_type) const;
     const AsicTopology& get_asic_topology(const std::string& hostname) const;
     TrayID get_tray_id(AsicID asic_id) const;
     ASICLocation get_asic_location(AsicID asic_id) const;
