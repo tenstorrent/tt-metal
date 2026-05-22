@@ -3,12 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include <cstdint>
 #include <utility>
+
+// Legacy primitives retained (#45003 item 4): all fabric APIs (FabricConnectionManager, fabric_set_unicast_route,
+// tt::tt_fabric::linear::to_noc_unicast_write, perform_atomic_fabric_write, perform_payload_send,
+// send_payload_flush_blocking_from_address, NocUnicastAtomicIncCommandHeader and the raw PACKET_HEADER_TYPE
+// composition) remain on the fabric API because the Device 2.0 NoC wrappers do not target EDM/fabric endpoints.
 
 using address_t = uint32_t;
 
@@ -65,16 +72,20 @@ void kernel_main() {
     uint32_t out_row_end = out_row_start + input_shard_row_tiles;
     uint32_t out_col_end = out_col_start + input_shard_col_tiles;
 
+    Noc noc_obj;
+    CircularBuffer pkt_hdr_cb(reserved_packet_header_cb_id);
+    CircularBuffer cb0(cb0_id);
+
     // packet header cb
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_addr_forward = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_addr_backward = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_seminc = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
+    pkt_hdr_cb.reserve_back(1);
+    auto packet_header_buffer_addr_forward = pkt_hdr_cb.get_write_ptr();
+    pkt_hdr_cb.push_back(1);
+    pkt_hdr_cb.reserve_back(1);
+    auto packet_header_buffer_addr_backward = pkt_hdr_cb.get_write_ptr();
+    pkt_hdr_cb.push_back(1);
+    pkt_hdr_cb.reserve_back(1);
+    auto packet_header_buffer_seminc = pkt_hdr_cb.get_write_ptr();
+    pkt_hdr_cb.push_back(1);
 
     // pre-populate packet headers
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward =
@@ -127,8 +138,8 @@ void kernel_main() {
 
         for (uint32_t out_row_id = out_row_start; out_row_id < out_row_end; out_row_id++) {
             for (uint32_t out_col_id = out_col_start; out_col_id < out_col_end; out_col_id += packet_size_in_pages) {
-                cb_wait_front(cb0_id, packet_size_in_pages);
-                size_t l1_read_addr = get_read_ptr(cb0_id);
+                cb0.wait_front(packet_size_in_pages);
+                size_t l1_read_addr = cb0.get_read_ptr();
                 uint32_t num_pages_to_read = std::min(out_col_end - out_col_id, packet_size_in_pages);
 
                 constexpr uint32_t payload_size_bytes = contig_pages_advanced * tensor0_page_size;
@@ -163,13 +174,13 @@ void kernel_main() {
                         perform_payload_send(cur_connection, l1_read_addr, payload_size_bytes, cur_pkt_header);
                     }
 
-                    noc_async_writes_flushed();
+                    noc_obj.async_writes_flushed();
 
                     // Advance local read address
                     l1_read_addr += payload_size_bytes;
                 }
 
-                cb_pop_front(cb0_id, packet_size_in_pages);
+                cb0.pop_front(packet_size_in_pages);
             }
         }
 
@@ -188,5 +199,5 @@ void kernel_main() {
         fabric_connection.close();
     }
 
-    noc_async_write_barrier();
+    noc_obj.async_write_barrier();
 }

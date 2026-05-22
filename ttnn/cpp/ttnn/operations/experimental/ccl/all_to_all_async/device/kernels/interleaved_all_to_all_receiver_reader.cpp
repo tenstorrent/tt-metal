@@ -3,6 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
+
+// Legacy primitives retained (#45003 item 4):
+// - noc_async_read_tile + paired noc_async_read_barrier (per-tile incremental L1 write address tracked here, no
+//   documented Device 2.0 direct equivalent).
+// - noc_async_read with a precomposed uint64_t packet address (computed by get_noc_addr on a per-bank tile id) is kept
+//   on legacy; the wrapper-level Noc::async_read targets the TensorAccessor endpoint, not a precomposed raw address.
+// - noc_semaphore_wait_min and noc_semaphore_set on a raw tt_l1_ptr semaphore pointer remain on legacy because the
+//   Semaphore<> wrapper is keyed by a compile-time semaphore index, not a runtime L1 address received from the host.
 
 using address_t = uint32_t;
 
@@ -50,6 +59,8 @@ void kernel_main() {
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
     auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_buffer_addr);
 
+    CircularBuffer cb(cb_id);
+
     if (my_ring_id == remote_device_ring_id) {
         // Follows same logic as sender reader for local copy.
         uint32_t shard_row_start_id = my_ring_id * input_row_device_stride;
@@ -61,8 +72,8 @@ void kernel_main() {
             for (uint32_t col_tile_id = shard_col_start_id; col_tile_id < shard_col_end_id;
                  col_tile_id += num_pages_per_packet) {
                 uint32_t tile_id = row_tile_id * in_col_tiles + col_tile_id;
-                cb_reserve_back(cb_id, num_pages_per_packet);
-                const uint32_t l1_write_addr_base = get_write_ptr(cb_id);
+                cb.reserve_back(num_pages_per_packet);
+                const uint32_t l1_write_addr_base = cb.get_write_ptr();
                 uint32_t l1_write_addr = l1_write_addr_base;
 
                 uint32_t num_pages_to_read = std::min(shard_col_end_id - col_tile_id, num_pages_per_packet);
@@ -73,7 +84,7 @@ void kernel_main() {
                 }
 
                 noc_async_read_barrier();
-                cb_push_back(cb_id, num_pages_per_packet);
+                cb.push_back(num_pages_per_packet);
             }
         }
     } else {
@@ -90,8 +101,8 @@ void kernel_main() {
 
         for (uint32_t out_row_id = out_row_start; out_row_id < out_row_end; out_row_id++) {
             for (uint32_t out_col_id = out_col_start; out_col_id < out_col_end; out_col_id += num_pages_per_packet) {
-                cb_reserve_back(cb_id, num_pages_per_packet);
-                size_t l1_write_addr = get_write_ptr(cb_id);
+                cb.reserve_back(num_pages_per_packet);
+                size_t l1_write_addr = cb.get_write_ptr();
                 uint32_t num_pages_to_read = std::min(out_col_end - out_col_id, num_pages_per_packet);
 
                 constexpr uint32_t payload_size_bytes = contig_pages_advanced * page_size;
@@ -114,7 +125,7 @@ void kernel_main() {
                 }
                 noc_async_read_barrier();
 
-                cb_push_back(cb_id, num_pages_per_packet);
+                cb.push_back(num_pages_per_packet);
             }
         }
     }

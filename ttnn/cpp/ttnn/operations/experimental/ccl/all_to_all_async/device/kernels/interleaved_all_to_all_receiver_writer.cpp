@@ -3,6 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+
+// Legacy primitive retained (#45003 item 4): noc_async_write_tile has no documented Device 2.0 direct equivalent
+// that preserves the per-tile (tile_id, l1_read_addr) write pattern used here.
 
 using address_t = uint32_t;
 
@@ -42,12 +47,15 @@ void kernel_main() {
     constexpr auto output_tensor_args = TensorAccessorArgs<8>();
     auto output_tensor_addrgen = TensorAccessor(output_tensor_args, output_buffer_addr);
 
+    Noc noc_obj;
+    CircularBuffer cb(cb_id);
+
     if (my_ring_id == remote_device_ring_id) {
         // Follows same logic as sender reader for local copy.
         for (uint32_t out_row_id = out_row_start; out_row_id < out_row_end; out_row_id++) {
             for (uint32_t out_col_id = out_col_start; out_col_id < out_col_end; out_col_id += num_pages_per_packet) {
-                cb_wait_front(cb_id, num_pages_per_packet);
-                size_t l1_read_addr = get_read_ptr(cb_id);
+                cb.wait_front(num_pages_per_packet);
+                size_t l1_read_addr = cb.get_read_ptr();
                 uint32_t num_pages_to_read = std::min(out_col_end - out_col_id, num_pages_per_packet);
 
                 constexpr uint32_t contig_pages_advanced = 1;  // always 1 for interleaved
@@ -59,8 +67,8 @@ void kernel_main() {
 
                     l1_read_addr += payload_size_bytes;
                 }
-                noc_async_writes_flushed();
-                cb_pop_front(cb_id, num_pages_per_packet);
+                noc_obj.async_writes_flushed();
+                cb.pop_front(num_pages_per_packet);
             }
         }
 
@@ -71,8 +79,8 @@ void kernel_main() {
 
         for (uint32_t out_row_id = out_row_start; out_row_id < out_row_end; out_row_id++) {
             for (uint32_t out_col_id = out_col_start; out_col_id < out_col_end; out_col_id += num_pages_per_packet) {
-                cb_wait_front(cb_id, num_pages_per_packet);
-                size_t l1_read_addr = get_read_ptr(cb_id);
+                cb.wait_front(num_pages_per_packet);
+                size_t l1_read_addr = cb.get_read_ptr();
                 uint32_t num_pages_to_read = std::min(out_col_end - out_col_id, num_pages_per_packet);
 
                 constexpr uint32_t contig_pages_advanced = 1;  // always write 1 tile at a time to output
@@ -82,11 +90,11 @@ void kernel_main() {
                     noc_async_write_tile(tile_id, output_tensor_addrgen, l1_read_addr);
                     l1_read_addr += page_size;
                 }
-                noc_async_writes_flushed();
+                noc_obj.async_writes_flushed();
 
-                cb_pop_front(cb_id, num_pages_per_packet);
+                cb.pop_front(num_pages_per_packet);
             }
         }
     }
-    noc_async_write_barrier();
+    noc_obj.async_write_barrier();
 }
