@@ -120,6 +120,36 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         total_sampling_batch = group_batch * sampling_dp if group_batch is not None else None
         return sampling_module, sampling_dp, group_batch, total_sampling_batch
 
+    @staticmethod
+    def _slice_bitmask_rows(bitmask: torch.Tensor | None, start: int, length: int) -> torch.Tensor | None:
+        if bitmask is None:
+            return None
+        bitmask = torch.as_tensor(bitmask)
+        if bitmask.ndim != 2:
+            raise ValueError(f"Expected bitmask with shape [batch, packed_vocab], got {tuple(bitmask.shape)}")
+        if start >= bitmask.shape[0]:
+            return bitmask[:0]
+        end = min(bitmask.shape[0], start + max(0, length))
+        return bitmask[start:end]
+
+    @staticmethod
+    def _scatter_bitmask_to_slots(
+        bitmask_rows: torch.Tensor | None, slots: list[int], slot_count: int
+    ) -> torch.Tensor | None:
+        if bitmask_rows is None:
+            return None
+        bitmask_rows = torch.as_tensor(bitmask_rows)
+        if bitmask_rows.ndim != 2:
+            raise ValueError(f"Expected bitmask rows with shape [batch, packed_vocab], got {tuple(bitmask_rows.shape)}")
+        packed_width = bitmask_rows.shape[1]
+        out = torch.full((slot_count, packed_width), -1, dtype=torch.int32, device=bitmask_rows.device)
+        for row_idx, slot in enumerate(slots):
+            if row_idx >= bitmask_rows.shape[0]:
+                break
+            if 0 <= int(slot) < slot_count:
+                out[int(slot)] = bitmask_rows[row_idx].to(torch.int32)
+        return out
+
     def _mock_tokens(self, batch_size, seq_len, kv_cache, model_id):
         ret = dict()
         ret["tokens"] = torch.zeros(batch_size, seq_len, dtype=torch.long)
@@ -1071,7 +1101,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         else:
             return output_tensor
 
-    def sample_prefill_on_device(self, deferred_sampling_tasks, batch_size, sampling_params):
+    def sample_prefill_on_device(self, deferred_sampling_tasks, batch_size, sampling_params, bitmask=None):
         output_tokens = torch.zeros(batch_size, 1, dtype=torch.int64)
         output_log_probs = [None] * batch_size
 
@@ -1095,6 +1125,18 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 empty_slots=task["empty_slots"],
                 replicate_seeds=task.get("replicate_seeds", True),
             )
+            if bitmask is not None:
+                if task["kind"] == "batched":
+                    request_rows = self._slice_bitmask_rows(bitmask, 0, len(task["empty_slots"]))
+                    task_bitmask = self._scatter_bitmask_to_slots(
+                        request_rows, task["empty_slots"], task["sampling_batch"]
+                    )
+                else:
+                    request_row = self._slice_bitmask_rows(bitmask, task["request_index"], 1)
+                    task_bitmask = self._scatter_bitmask_to_slots(
+                        request_row, task["empty_slots"], task["total_batch"]
+                    )
+                task["logits"] = sampling_module.apply_bitmask_to_logits(task["logits"], task_bitmask)
             tt_tokens, tt_log_probs = sampling_module.sample(
                 task["logits"],
                 enable_trace=False,
@@ -1547,10 +1589,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 if sampling_module is None or not getattr(sampling_module, "enable_internal_trace", False):
                     new_outputs.append(outputs[i])
                     continue
-
+                logits_i = outputs[i]
                 new_outputs.append(
                     sampling_module.sample(
-                        logits=outputs[i],
+                        logits=logits_i,
                         tt_out_tok=self.trace_inputs_decode[sampling_on_device][i][0],
                     )
                 )
@@ -1566,6 +1608,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         output_tokens: torch.Tensor | None = None,
         slot_remap=None,
         enable_trace=False,
+        bitmask=None,
     ):
         sampling_dp_values = [getattr(self.model[i], "sampling_dp", 1) for i in range(self.data_parallel)]
         assert (
@@ -1622,6 +1665,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             logits_i = tt_logits[i]
             if isinstance(logits_i, tuple):
                 logits_i = logits_i[0]
+            if bitmask is not None:
+                model_batch = sampling_module.seed_manager.max_batch_size
+                model_bitmask = self._slice_bitmask_rows(bitmask, i * model_batch, model_batch)
+                logits_i = sampling_module.apply_bitmask_to_logits(logits_i, model_bitmask)
             sampled_outputs.append(
                 sampling_module.sample(
                     logits=logits_i,
