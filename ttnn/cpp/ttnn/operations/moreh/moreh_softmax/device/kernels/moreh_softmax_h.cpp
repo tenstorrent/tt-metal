@@ -152,43 +152,58 @@ void kernel_main() {
                 });
 #endif
 
-        // compute final result
-        cb_out0_obj.reserve_back(Ht);
+        // compute final result — ROW bcast on cb_recipsumexps (1 tile).
+        // LOG path: out = (x - max) - log(sum_exp). Reads cb_x_m_max (held by
+        //   external wait/pop) and cb_recipsumexps.
+        // !LOG path: out = exp(x-max) / sum_exp. Reads cb_exps (chain-owned bulk
+        //   wait+pop) and cb_recipsumexps; cb_x_m_max held externally because
+        //   the chain doesn't touch it.
+        // cb_x_m_max wait/pop wrap the chain symmetrically in both paths (chain
+        // uses CallerManaged on it in LOG path).
+        // Reconfig: *_bcast_rows_init_short_with_dt -> Input.
+        //   pack_tile_with_dt -> Output.
         cb_x_m_max_obj.wait_front(Ht);
-        cb_recipsumexps_obj.wait_front(1);
-#ifndef LOG
-        cb_exps_obj.wait_front(Ht);
-#endif
-
-        for (uint32_t h = 0; h < Ht; h += onetile) {
 #ifdef LOG
-            // x - max - log(sum)
-            tile_regs_acquire();
-            sub_bcast_rows_init_short_with_dt(cb_x_m_max, cb_recipsumexps);
-            sub_tiles_bcast<BroadcastType::ROW>(cb_x_m_max, cb_recipsumexps, h, 0, dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_out0);
-            tile_regs_release();
+        compute_kernel_lib::eltwise_chain(
+            Ht,
+            compute_kernel_lib::BinaryFpu<
+                cb_x_m_max,
+                cb_recipsumexps,
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                compute_kernel_lib::BroadcastDim::Row,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::Bulk,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar>{},
+            compute_kernel_lib::PackTile<
+                cb_out0,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutBulk,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 #else
-            // exp(x - max) / psum
-            tile_regs_acquire();
-            mul_bcast_rows_init_short_with_dt(cb_exps, cb_recipsumexps);
-            mul_tiles_bcast_rows(cb_exps, cb_recipsumexps, h, 0, dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_out0);
-            tile_regs_release();
+        compute_kernel_lib::eltwise_chain(
+            Ht,
+            compute_kernel_lib::BinaryFpu<
+                cb_exps,
+                cb_recipsumexps,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::BroadcastDim::Row,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::Bulk,
+                compute_kernel_lib::Bulk,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar>{},
+            compute_kernel_lib::PackTile<
+                cb_out0,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutBulk,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 #endif
-        }
-
-        cb_recipsumexps_obj.pop_front(1);
         cb_x_m_max_obj.pop_front(Ht);
-        cb_out0_obj.push_back(Ht);
-#ifndef LOG
-        cb_exps_obj.pop_front(Ht);
-#endif
     }
 }
