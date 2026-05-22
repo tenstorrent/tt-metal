@@ -560,6 +560,14 @@ def main(
         help="Repeat the timed generation N times in the same session (after warmup if set).",
     )
     ap.add_argument(
+        "--close-dit-between-passes",
+        action="store_true",
+        help=(
+            "Close the DiT mesh after every session pass (legacy). Default: keep the mesh open "
+            "when the next pass reuses cached preprocess (same prompt/duration/seed)."
+        ),
+    )
+    ap.add_argument(
         "--serve",
         action="store_true",
         help="Keep the session alive and read prompts from stdin until EOF or a blank line.",
@@ -791,6 +799,8 @@ def main(
     if session_pass == 0:
         demo_session.run_specs = build_demo_run_specs(args)
     run_specs = getattr(demo_session, "run_specs", None) or build_demo_run_specs(args)
+    if session_active and session_pass > 0:
+        demo_session.mark_pass_started()
     if session_pass == 0 and session_active:
         print("[ace_step_v1_5] session mode: handlers + DiT/VAE reused across passes", flush=True)
     if session_pass < len(run_specs):
@@ -1510,6 +1520,19 @@ def main(
     pred_latents: Any = None
     wav_bct_cpu: Any = None
 
+    _more_session_passes = session_pass + 1 < len(run_specs)
+    _keep_dit_mesh_for_next = (
+        session_active
+        and _more_session_passes
+        and demo_session.should_keep_dit_mesh_open(
+            run_specs=run_specs,
+            session_pass=session_pass,
+            duration_sec=float(args.duration_sec),
+            seed=int(args.seed),
+            force_close=bool(getattr(args, "close_dit_between_passes", False)),
+        )
+    )
+
     try:
         if demo_session.pipe is None:
             with perf.timed("dit_pipeline_init", device=dev):
@@ -1787,7 +1810,10 @@ def main(
                         _trace_loop_kw["encoder_attention_mask_b1qk"] = mask_tt
                     _trace_result = run_ttnn_denoise_loop(**_trace_loop_kw)
             finally:
-                trace_state.release(dev)
+                if _keep_dit_mesh_for_next:
+                    trace_state.release_trace_only(dev)
+                else:
+                    trace_state.release(dev)
 
             # ``run_ttnn_denoise_loop`` deallocated ``enc_tt_pipe`` / ``ctx_tt_pipe`` on exit;
             # mark them consumed so the bottom-of-block cleanup does not double-free.
@@ -2135,10 +2161,16 @@ def main(
                     ttnn.deallocate(_maybe_tt)
                 except Exception:
                     pass
-        _more_session_passes = session_pass + 1 < len(run_specs)
         if _more_session_passes and session_active:
-            demo_session.close_dit_device(ttnn)
-            print("[ace_step_v1_5] closed DiT mesh; cached preprocess reused on next pass", flush=True)
+            if _keep_dit_mesh_for_next:
+                print(
+                    "[ace_step_v1_5] keeping DiT mesh open for next pass "
+                    "(reuse pipe/VAE/trace; cached preprocess on next pass)",
+                    flush=True,
+                )
+            else:
+                demo_session.close_dit_device(ttnn)
+                print("[ace_step_v1_5] closed DiT mesh before next pass", flush=True)
         elif not _more_session_passes:
             demo_session.release(ttnn)
 
