@@ -79,8 +79,9 @@ int main() {
         int device_id = 0;
         std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
-        const bool slow_dispatch_enabled = [] { const char* v = std::getenv("TT_METAL_SLOW_DISPATCH_MODE"); return v && (v[0]=='1' || strcasecmp(v,"true")==0 || strcasecmp(v,"yes")==0 || strcasecmp(v,"on")==0); }();
-        const auto USE_FAST_DISPATCH = !slow_dispatch_enabled;
+        // TT_METAL_SLOW_DISPATCH_MODE being set to a truthy value disables fast dispatch.
+        // TODO(#2518): replace with MetalEnv::IsSlowDispatch() once MetalContext project lands.
+        const auto USE_FAST_DISPATCH = !std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
 
         constexpr int device_loop_count = 150;
 
