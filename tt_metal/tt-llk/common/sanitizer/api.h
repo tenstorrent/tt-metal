@@ -183,7 +183,7 @@ static inline void operation_init(Ts... args)
 {
     fsm_advance_impl<FsmState::INITIALIZED>(thread_context_get(), sanitizer->fsm[COMPILE_FOR_TRISC], sanitizer->operation[COMPILE_FOR_TRISC]);
 
-    operation_init_impl<op, Ts...>(sanitizer->operation[COMPILE_FOR_TRISC], args...);
+    operation_init_impl<op, Ts...>(thread_context_get(), sanitizer->operation[COMPILE_FOR_TRISC], args...);
 }
 
 // Goes in LLK_LIB in Execute

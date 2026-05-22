@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstring>
+
 #include "ckernel.h"
 #include "sanitizer/output.h"
 #include "sanitizer/types.h"
@@ -94,6 +96,64 @@ TT_ALWAYS_INLINE void operand_assert(const State<T> expected, const State<T> act
     _print_operand_expected(expected);
     _print_compute_info(update);
     _print_operand_actual(actual);
+    _print_compute_info(current);
+
+    DEVICE_PRINT("└─────────────────────────────\n");
+}
+
+NOINLINE NOCLONE void operation_assert(const Operation expected, const Operation actual, const UnwindContext update, const UnwindContext current)
+{
+    if (expected == actual)
+    {
+        return;
+    }
+
+    DEVICE_PRINT(
+        "┌─[ llk::san ]─[ error ]──────\r"
+        "│  Called execute or uninit for operation that is not initialized\r");
+
+    _print_full_kernel();
+
+    DEVICE_PRINT(
+        "│\r"
+        "│  ┌[ Last init call ]─\r"
+        "│  ├── Operation ── {}\r",
+        expected);
+    _print_compute_info(update);
+
+    DEVICE_PRINT(
+        "│\r"
+        "│  ┌[ Violating execute / uninit call ]─\r"
+        "│  ├── Operation ── {}\r",
+        actual);
+    _print_compute_info(current);
+
+    DEVICE_PRINT("└─────────────────────────────\n");
+}
+
+NOINLINE NOCLONE void operation_argument_assert(
+    const void* lhs, const void* rhs, size_t size, size_t idx, const UnwindContext update, const UnwindContext current)
+{
+    if (std::memcmp(lhs, rhs, size) == 0)
+    {
+        return;
+    }
+
+    DEVICE_PRINT(
+        "┌─[ llk::san ]─[ error ]──────\r"
+        "│  Argument {} of llk::san::operation_init and llk::san::operation_check is mismatched\r",
+        idx);
+
+    _print_full_kernel();
+
+    DEVICE_PRINT(
+        "│\r"
+        "│  ┌[ llk::san::operation_init called from ]─\r");
+    _print_compute_info(update);
+
+    DEVICE_PRINT(
+        "│\r"
+        "│  ┌[ llk::san::operation_check called from ]─\r");
     _print_compute_info(current);
 
     DEVICE_PRINT("└─────────────────────────────\n");
