@@ -178,17 +178,20 @@ void kernel_main() {
             tile_regs_release();
             cb_push_back(reduce_result_cb, 1);
 
-            // x * (1/rms): input is L1-resident, absolute indices within chunk.
+            // Phase 7: hoist reconfig_data_format + *_init_short out of the
+            // col-tile loop. Each sub-phase (mul_rms / weight / matmul / cos /
+            // sin / add) does ONE reconfig at its start, then a tight col-tile
+            // loop. intermediate_cb and rotated_input_cb are sized num_tile_cols
+            // (not block_size) to hold a full row between phases.
+
+            cb_wait_front(reduce_result_cb, 1);
+
+            // ----- Sub-phase 1: x * (1/rms) → mul_rms_result_cb -----
             reconfig_data_format(input_cb, reduce_result_cb);
             pack_reconfig_data_format(mul_rms_result_cb);
             mul_bcast_cols_init_short(input_cb, reduce_result_cb);
-            cb_wait_front(reduce_result_cb, 1);
-
             for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
                 cb_reserve_back(mul_rms_result_cb, block_size);
-
-                // Fuse math + pack into a single tile_regs cycle so MATH and
-                // PACK TRISCs can overlap (composite post_allgather pattern).
                 tile_regs_acquire();
                 tile_regs_wait();
                 for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
@@ -199,64 +202,63 @@ void kernel_main() {
                 tile_regs_commit();
                 tile_regs_release();
                 cb_push_back(mul_rms_result_cb, block_size);
+            }
 
-                if constexpr (has_weight) {
-                    reconfig_data_format(mul_rms_result_cb, weight_cb);
-                    pack_reconfig_data_format(mul_weight_result_cb);
-                    mul_bcast_rows_init_short(mul_rms_result_cb, weight_cb);
-                    // Clamp to num_tile_cols — the reader pushes exactly num_tile_cols
-                    // weight tiles total, so waiting for more than that deadlocks when
-                    // num_tile_cols < block_size (e.g. TP=2 H_per_device=128 → 4 < 8).
-                    const uint32_t weight_wait_target =
-                        ((col_tile + block_size) < num_tile_cols) ? (col_tile + block_size) : num_tile_cols;
-                    cb_wait_front(weight_cb, weight_wait_target);
+            if constexpr (has_weight) {
+                // ----- Sub-phase 2: (x * 1/rms) * weight → mul_weight_result_cb -----
+                // weight is row-broadcast (same per col), pushed to weight_cb by
+                // the reader once on the worker's first row. cb_wait_front it
+                // here at row granularity; pop happens at end of kernel.
+                reconfig_data_format(mul_rms_result_cb, weight_cb);
+                pack_reconfig_data_format(mul_weight_result_cb);
+                mul_bcast_rows_init_short(mul_rms_result_cb, weight_cb);
+                cb_wait_front(weight_cb, num_tile_cols);
+
+                for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
                     cb_wait_front(mul_rms_result_cb, block_size);
-
                     tile_regs_acquire();
                     for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
                         mul_tiles_bcast_rows(mul_rms_result_cb, weight_cb, i, col_tile + i, i);
                     }
                     tile_regs_commit();
-
                     cb_pop_front(mul_rms_result_cb, block_size);
                     cb_reserve_back(mul_weight_result_cb, block_size);
-
                     tile_regs_wait();
                     for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
                         pack_tile(i, mul_weight_result_cb);
                     }
                     tile_regs_release();
                     cb_push_back(mul_weight_result_cb, block_size);
-
-                    reconfig_data_format(input_cb, reduce_result_cb);
-                    pack_reconfig_data_format(mul_rms_result_cb);
-                    mul_bcast_cols_init_short(input_cb, reduce_result_cb);
                 }
+            }
 
-                if constexpr (fuse_rope) {
-                    reconfig_data_format(transformation_mat_cb, intermediate_cb);
-                    pack_reconfig_data_format(rotated_input_cb);
-                    mm_init_short(intermediate_cb, transformation_mat_cb);
-                    cb_wait_front(intermediate_cb, block_size);
+            if constexpr (fuse_rope) {
+                // ----- Sub-phase 3a: matmul(intermediate, trans_mat) → rotated -----
+                reconfig_data_format(transformation_mat_cb, intermediate_cb);
+                pack_reconfig_data_format(rotated_input_cb);
+                mm_init_short(intermediate_cb, transformation_mat_cb);
+                for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                    // Don't pop intermediate — Phase 3b needs to read it again.
+                    cb_wait_front(intermediate_cb, col_tile + block_size);
                     cb_reserve_back(rotated_input_cb, block_size);
-
-                    // Fuse matmul + pack — output CB (rotated_input_cb) is fresh,
-                    // no in-place dependency.
                     tile_regs_acquire();
                     tile_regs_wait();
                     for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                        matmul_tiles(intermediate_cb, transformation_mat_cb, i, 0, i);
+                        matmul_tiles(intermediate_cb, transformation_mat_cb, col_tile + i, 0, i);
                         pack_tile(i, rotated_input_cb);
                     }
                     tile_regs_commit();
                     tile_regs_release();
                     cb_push_back(rotated_input_cb, block_size);
+                }
 
-                    reconfig_data_format(intermediate_cb, rope_cos_cb);
-                    pack_reconfig_data_format(intermediate_cb);
-                    mul_tiles_init(intermediate_cb, rope_cos_cb);
-                    cb_wait_front(rope_cos_cb, head_dim_tiles);
-
+                // ----- Sub-phase 3b: intermediate * cos → intermediate (in-place) -----
+                reconfig_data_format(intermediate_cb, rope_cos_cb);
+                pack_reconfig_data_format(intermediate_cb);
+                mul_tiles_init(intermediate_cb, rope_cos_cb);
+                cb_wait_front(rope_cos_cb, head_dim_tiles);
+                for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                    cb_wait_front(intermediate_cb, block_size);
                     tile_regs_acquire();
                     for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
                         mul_tiles(intermediate_cb, rope_cos_cb, i, rope_cos_tile_in_head, i);
@@ -274,13 +276,15 @@ void kernel_main() {
                     }
                     tile_regs_release();
                     cb_push_back(intermediate_cb, block_size);
+                }
 
-                    reconfig_data_format(rotated_input_cb, rope_sin_cb);
-                    pack_reconfig_data_format(rotated_input_cb);
-                    mul_tiles_init(rotated_input_cb, rope_sin_cb);
-                    cb_wait_front(rope_sin_cb, head_dim_tiles);
+                // ----- Sub-phase 3c: rotated * sin → rotated (in-place) -----
+                reconfig_data_format(rotated_input_cb, rope_sin_cb);
+                pack_reconfig_data_format(rotated_input_cb);
+                mul_tiles_init(rotated_input_cb, rope_sin_cb);
+                cb_wait_front(rope_sin_cb, head_dim_tiles);
+                for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
                     cb_wait_front(rotated_input_cb, block_size);
-
                     tile_regs_acquire();
                     for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
                         mul_tiles(rotated_input_cb, rope_sin_cb, i, rope_sin_tile_in_head, i);
@@ -298,15 +302,16 @@ void kernel_main() {
                     }
                     tile_regs_release();
                     cb_push_back(rotated_input_cb, block_size);
+                }
 
-                    reconfig_data_format(intermediate_cb, rotated_input_cb);
-                    pack_reconfig_data_format(output_cb);
-                    add_tiles_init(intermediate_cb, rotated_input_cb);
+                // ----- Sub-phase 3d: intermediate + rotated → output -----
+                reconfig_data_format(intermediate_cb, rotated_input_cb);
+                pack_reconfig_data_format(output_cb);
+                add_tiles_init(intermediate_cb, rotated_input_cb);
+                for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
                     cb_wait_front(intermediate_cb, block_size);
                     cb_wait_front(rotated_input_cb, block_size);
                     cb_reserve_back(output_cb, block_size);
-
-                    // Fuse add + pack — output_cb is fresh, no in-place dep.
                     tile_regs_acquire();
                     tile_regs_wait();
                     for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
@@ -316,13 +321,8 @@ void kernel_main() {
                     tile_regs_commit();
                     tile_regs_release();
                     cb_push_back(output_cb, block_size);
-
                     cb_pop_front(intermediate_cb, block_size);
                     cb_pop_front(rotated_input_cb, block_size);
-
-                    reconfig_data_format(input_cb, reduce_result_cb);
-                    pack_reconfig_data_format(mul_rms_result_cb);
-                    mul_bcast_cols_init_short(input_cb, reduce_result_cb);
                 }
             }
             cb_pop_front(reduce_result_cb, 1);
