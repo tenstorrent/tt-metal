@@ -31,6 +31,8 @@
 #include "mesh_device.hpp"
 #include <tt_stl/reflection.hpp>
 #include "impl/context/metal_context.hpp"
+#include "llrt/metal_soc_descriptor.hpp"
+#include "llrt/tt_cluster.hpp"
 #include <umd/device/types/xy_pair.hpp>
 
 namespace tt::tt_metal::experimental {
@@ -346,14 +348,20 @@ const std::vector<std::vector<CoreCoord>>& GlobalCircularBufferDramSenderInterna
 namespace {
 
 // Map (bank_id, receivers) pairs to (DRAM-logical CoreCoord, receivers) pairs by picking
-// an unused subchannel for each bank.
+// an unused hardware subchannel for each bank.
+// logical.y must index dram_bank_endpoint_coords (worker endpoint at y=0), not the raw
+// subchannel number — see metal_SocDescriptor::get_logical_dram_core_for_subchannel.
 std::vector<std::pair<CoreCoord, CoreRangeSet>> build_dram_sender_mapping(
     distributed::MeshDevice* mesh_device, const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers) {
+    IDevice* ref_device = mesh_device->get_devices().front();
+    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(ref_device->build_id());
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping;
     mapping.reserve(bank_to_receivers.size());
     for (const auto& [bank_id, receivers] : bank_to_receivers) {
-        uint32_t sub = mesh_device->impl().pick_unused_dram_subchannel(bank_id);
-        mapping.emplace_back(CoreCoord{bank_id, sub}, receivers);
+        const uint32_t sub = mesh_device->impl().pick_unused_dram_subchannel(bank_id);
+        const CoreCoord sender_logical =
+            soc_desc.get_logical_dram_core_for_subchannel(static_cast<int>(bank_id), static_cast<int>(sub));
+        mapping.emplace_back(sender_logical, receivers);
     }
     return mapping;
 }
