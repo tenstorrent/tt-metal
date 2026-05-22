@@ -311,6 +311,8 @@ manifest):
 
 Every helper that wraps a CB-consuming or CB-producing block exposes some form of policy enum that selects the wait/pop or reserve/push pattern it emits. The names differ per helper; the underlying lifecycles are the same. Use this taxonomy to read the raw kernel, then look up the matching enum in the target helper's header.
 
+> **Eltwise helper note (post-policy-alias collapse):** the eltwise chain helper exposes lifecycles as low-level `InputLifecycle` / `OutputLifecycle` constants only (`Streaming`, `Bulk`, `Chunked`, `CallerManaged`, `HeldBulk`, `HeldCumulative`, `HeldStream`, `Pipelined`, `BulkDrain`, `DeferredPop`, `NoWaitPop`; `OutStreaming`, `OutBulk`, `OutChunked`, `OutCallerManaged`, `OutHeldReserve`, `OutDeferredReserve`). The legacy `CopyTilePolicy::*` / `CbIndexMode::*` / `PackTilePolicy::*` / `PackTileIndexMode::*` alias wrappers were removed; do not reintroduce them. Index kinds are spelled `OperandKind::Scalar` / `OperandKind::Block` / `OperandKind::Row` / `OperandKind::Col`. See `kernel_lib/policy_alias_collapse_proposal.md` for the rename table and rationale.
+
 **Input lifecycles**
 
 | Raw pattern | Lifecycle |

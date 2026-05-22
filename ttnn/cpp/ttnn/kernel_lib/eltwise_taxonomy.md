@@ -400,7 +400,7 @@ NOT SUPPORTABLE                              ~6 / 666   ~0.9%
 ```
 
 Coverage progression:
-- Single-axis design (CopyTilePolicy enum):     97.7%
+- Single-axis design (pre-collapse 9-cell `CopyTilePolicy` alias surface): 97.7%
 - Two-axis, named full-edge only:               97.7% (same)
 - Two-axis + 5 half-edge named constants:       ~99%
 - Two-axis + half-edge + OutCallerManaged:      ~99% (one more cell named)
