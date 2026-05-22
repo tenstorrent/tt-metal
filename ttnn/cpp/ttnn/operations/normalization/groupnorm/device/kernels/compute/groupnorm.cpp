@@ -18,6 +18,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 #include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/groupnorm_constants.hpp"
 
 void kernel_main() {
@@ -510,23 +512,39 @@ void kernel_main() {
 
             // Start Variance Calc
             //  global reduce results
+            // PARTIAL migration: (Var + eps) -> 1/sqrt(...) becomes
+            // BinaryFpu(Add) + Rsqrt + PackTile. Reconfig audit:
+            //   - add_tiles_init reconfigs srca/srcb (no explicit reconfig_data_format)
+            //     -> BinaryDataFormatReconfig::Input.
+            //   - No pack_reconfig_data_format in original -> PackTileReconfig::None.
+            //   - rsqrt_tile_init<true> -> Legacy::On.
+            //   - cb_ex2pe.reserve_back + push_back present -> OutStreaming.
+            // Lifecycles: cb_ex2_global Streaming (wait+pop per iter); cb_eps held outside
+            // the chain via the unchanged cb_eps.wait_front(1) above -> CallerManaged.
             cb_eps.wait_front(1);
-            cb_ex2_global.wait_front(1);
-            cb_ex2pe.reserve_back(1);
-            // (Var + eps)
-            tile_regs_acquire();
-            add_tiles_init(cb_ex2_global_id, cb_eps_id);
-            add_tiles(cb_ex2_global_id, cb_eps_id, 0, 0, dst0);
-            tile_regs_wait();
-            // 1/[sqrt(Var + eps)]
-            rsqrt_tile_init<true>();
-            rsqrt_tile<true>(dst0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(dst0, cb_ex2pe_id);
-            tile_regs_release();
-            cb_ex2pe.push_back(1);
-            cb_ex2_global.pop_front(1);
+            compute_kernel_lib::eltwise_chain(
+                1,
+                compute_kernel_lib::BinaryFpu<
+                    cb_ex2_global_id,
+                    cb_eps_id,
+                    compute_kernel_lib::BinaryFpuOp::Add,
+                    compute_kernel_lib::BroadcastDim::None,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::Streaming,
+                    compute_kernel_lib::CallerManaged,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OperandKind::Scalar>{},
+                compute_kernel_lib::Rsqrt<
+                    compute_kernel_lib::Approx::Exact,
+                    compute_kernel_lib::Legacy::On,
+                    compute_kernel_lib::Dst::D0>{},
+                compute_kernel_lib::PackTile<
+                    cb_ex2pe_id,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OutStreaming,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::PackTileReconfig::None>{});
             // End Variance Calc
 
             bool start_copy_or_add = copy_or_add;
