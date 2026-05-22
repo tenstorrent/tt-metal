@@ -28,18 +28,15 @@ namespace tt::tt_metal::internal {
 // kernels on these cores concurrently with FD workloads on the regular worker grid — two
 // disjoint worker spaces, no overlap.
 //
-// Supported configurations: Blackhole or UBB Galaxy, with an active manual FD session
-// (initialize_fast_dispatch called, terminate_fast_dispatch not yet called). claim() and
-// get_claimable_cores() TT_FATAL outside these conditions.
+// Supported configurations: Blackhole or UBB Galaxy, with an active manual FD session.
+// claim() and get_claimable_cores() TT_FATAL outside these conditions.
 //
-// Not thread-safe. Expected usage is sequential calls from the main thread during
+// NOTE: not thread-safe api. Expected usage is sequential calls from the main thread during
 // application setup/teardown.
 //
 // Runtime flow:
 //
-//   // 1. Bring up FD, load weights
-//   DispatchContext::get().initialize_fast_dispatch(mesh_device);
-//   EnqueueMeshWorkload(mesh_cq, weights_workload, true);
+//   // 1. Launch App in FD
 //
 //   // 2. Claim service cores (must be done while FD is active)
 //   auto& svc = ServiceCoreManager::get();
@@ -96,10 +93,10 @@ public:
     // Called from Device::close() to drop all claims for a device.
     void on_device_close(ChipId device_id);
 
-    // Per-core L1 allocator. Valid only for currently-claimed cores; TT_FATALs otherwise.
-    // Alignment is fixed at claim() time to HalMemType::DRAM so NoC rd/wr to allocations
+    // Per-core L1 allocator. Valid only for currently claimed cores - TT_FATALs otherwise.
+    // Alignment is fixed at claim() time to HalMemType::DRAM so NoC read/write to allocations
     // are always valid (mirrors BankManager's lockstep L1 path). TT_FATALs on OOM.
-    // Each service core owns a completely independent L1 range — no interaction with
+    // Each service core owns a completely independent L1 range - no interaction with
     // the worker-grid BankManager.
     DeviceAddr allocate_l1(IDevice* device, CoreCoord core, size_t size);
     void deallocate_l1(IDevice* device, CoreCoord core, DeviceAddr addr);
@@ -108,17 +105,17 @@ public:
     // Returns the FD-mode compute grid snapshotted at first claim() for a device, or
     // nullopt if no service cores are currently claimed. Used internally to cap
     // compute_with_storage_grid_size() in SD mode so SD workloads don't accidentally
-    // target dispatch-column cores running persistent service kernels — preserving the
+    // target dispatch column cores running persistent service kernels - preserving the
     // disjoint worker-set invariant between the regular worker grid and service cores.
     std::optional<CoreCoord> get_safe_compute_grid(ChipId device_id) const;
 
     // Block until the service kernel on the given core signals completion (RUN_MSG_DONE).
-    // Only meaningful for non-persistent kernels that are expected to return; hangs
-    // indefinitely if the kernel loops forever.
+    // Only meaningful for non-persistent kernels that are expected to return;.
+    //  NOTE: Will hang indefinitely if the kernel loops forever.
     void wait_done(IDevice* device, CoreCoord core) const;
 
-    // --- Internal dispatch routing (not user-facing) ---
-    // Called on every EnqueueMeshWorkload; must be O(1).
+    // NOTE: Internal dispatch routing (not user-facing)
+    // Called on every EnqueueMeshWorkload
     bool has_any_claims() const;
     // Called at add_program time to route programs targeting service cores to the SD path.
     bool is_service_core(CoreCoord core) const;
