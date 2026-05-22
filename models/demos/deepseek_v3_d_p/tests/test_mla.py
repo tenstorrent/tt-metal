@@ -543,8 +543,8 @@ def test_mla_chunked_prefill(
 # sp x tp
 @pytest.mark.parametrize(
     "mesh_device",
-    [(2, 4)],
-    ids=["2x4"],
+    [(8, 4), (2, 4)],
+    ids=["8x4", "2x4"],
     indirect=True,
 )
 @pytest.mark.parametrize(
