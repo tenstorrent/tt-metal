@@ -293,4 +293,3 @@ def test_moreh_cumsum_backward_callback(input_shape, dim, device):
 
             assert passing
         assert device.num_program_cache_entries() >= 1
-
