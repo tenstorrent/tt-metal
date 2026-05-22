@@ -18,9 +18,6 @@ from ...parallel.manager import CCLManager
 from ...utils.conv3d import ALIGNMENT, get_conv3d_config
 from .config_wav2vec2 import Wav2Vec2Config
 
-# Register the wav2vec2-large-xlsr-53 pos_conv blocking. in_per_group = 1024/16
-# = 64 which already satisfies C_in_block % 32 == 0 — no padding hack needed.
-
 
 class Wav2Vec2FeatureProjection(Module):
     """`feature_projection`: LayerNorm + Linear(512 -> 768)."""
@@ -282,11 +279,6 @@ class Wav2Vec2EncoderLayer(Module):
         )
 
     def forward(self, hidden_BLC: ttnn.Tensor) -> ttnn.Tensor:
-        # HF `Wav2Vec2EncoderLayerStableLayerNorm` (pre-LN):
-        #   r = hidden
-        #   hidden = attention(layer_norm(hidden))
-        #   hidden = r + hidden
-        #   hidden = hidden + feed_forward(final_layer_norm(hidden))
         attn_residual = hidden_BLC
         normed = self.layer_norm(hidden_BLC)
         hidden = self.attention(normed)

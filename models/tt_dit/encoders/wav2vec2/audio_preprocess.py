@@ -18,15 +18,8 @@ WAV2VEC2_HZ = 50  # wav2vec2 outputs hidden states at 50 Hz (16 kHz / 320 stride
 WAV2VEC2_FE_STRIDE = 320  # feature extractor stride (raw samples → 50 Hz hidden states)
 S2V_VIDEO_RATE = 30  # reference WAN 2.2 S2V resamples wav2vec2 features to 30 Hz before bucketing.
 
-# Canonical audio sequence length for S2V, sized to one clip.
-#   _INFER_FRAMES_PIXEL = 80 video frames per clip (pipeline_wan_s2v.py:642)
-#   S2V_VIDEO_FPS       = 16 fps
-#   → one clip duration = 80 / 16 = 5.0 s
-#   → one clip audio    = 5.0 s × 16 kHz = 80 000 samples
-# All wav2vec2 forward passes are normalized to an integer multiple of this
-# length so the on-device transformer always sees a shape it has already
-# warmed (250 features × N) and reuses the program cache instead of
-# rebuilding programs for every audio-file length variation.
+# Wav2vec2 forwards are padded to an integer multiple of one clip so the on-device
+# transformer hits the program cache instead of recompiling per audio-length.
 S2V_INFER_FRAMES_PIXEL = 80
 S2V_VIDEO_FPS = 16
 S2V_AUDIO_SAMPLES_PER_CLIP = S2V_INFER_FRAMES_PIXEL * WAV2VEC2_SAMPLE_RATE // S2V_VIDEO_FPS  # 80 000
@@ -47,15 +40,10 @@ def load_audio_to_input_values(
     waveform, _sr = librosa.load(audio_path, sr=target_sr, mono=True)
     inputs = processor(waveform, sampling_rate=target_sr, return_tensors="pt")
     iv = inputs.input_values
-    # Snap up to the next multiple of S2V_AUDIO_SAMPLES_PER_CLIP so wav2vec2
-    # sees a fixed canonical shape per clip (matches what the warmup primes)
-    # without ever truncating real audio. The reference implementation
-    # (``wan/modules/s2v/audio_encoder.py``) runs wav2vec2 on the full
-    # waveform and zero-pads at the feature-bucketing step; here we pad at
-    # the raw-audio step instead so every wav2vec2 forward sees the same
-    # 80 000-sample shape. ``ceil`` (not ``round``) avoids the silent
-    # truncation bug where ``round(15.997/5)=3`` chopped 1 s off the end of
-    # 16 s audio.
+    # The reference (``wan/modules/s2v/audio_encoder.py``) zero-pads at the
+    # feature-bucketing step; we pad at the raw-audio step so every wav2vec2
+    # forward sees a canonical per-clip shape. ``ceil`` (not ``round``):
+    # ``round(15.997/5)=3`` silently truncated 1 s off a 16 s clip.
     canonical = S2V_AUDIO_SAMPLES_PER_CLIP
     T_raw = iv.shape[-1]
     n_clips = max(1, math.ceil(T_raw / canonical))
