@@ -142,6 +142,10 @@ def _run(
     *,
     use_device_op: bool,
 ) -> ttnn.Tensor:
+    # Fused op uses 2 fabric links per direction (multi-link MUX). Composite
+    # uses default (1 link) to keep its baseline numbers stable across this
+    # optimization sweep.
+    num_preferred_links = 2 if use_device_op else None
     return ttnn.experimental.wan_fused_distributed_rmsnorm(
         inp.tt_input,
         TP_AXIS,
@@ -155,6 +159,7 @@ def _run(
         rope_cos=inp.tt_rope_cos,
         rope_sin=inp.tt_rope_sin,
         dtype=None,
+        num_preferred_links=num_preferred_links,
         use_device_op=use_device_op,
     )
 

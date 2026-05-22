@@ -167,43 +167,59 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     }
     use_mux = !is_tp_1 && (num_workers > 1);
 
+    // Multi-link MUX: allocate one MUX core per (direction, link). Workers are
+    // partitioned round-robin: worker i uses link (i % num_links_eff) for both
+    // its fwd and bwd MUX. We round num_workers down to a multiple of
+    // num_links_eff so each link's MUX has the same number of clients (the
+    // num_mux_clients CT arg in the writer is a single value).
+    const uint32_t num_links_requested = std::max<uint32_t>(1u, args.num_links);
+    uint32_t num_links_eff = use_mux ? std::min<uint32_t>(num_links_requested, num_workers) : 1u;
+    if (use_mux && num_links_eff > 1) {
+        num_workers = (num_workers / num_links_eff) * num_links_eff;
+        if (num_workers == 0) {
+            num_workers = num_links_eff;
+        }
+    }
+
     const bool fwd_mux_valid = use_mux && forward_fabric_node_id.has_value();
     const bool bwd_mux_valid = use_mux && backward_fabric_node_id.has_value();
-    const uint32_t num_mux_cores = (fwd_mux_valid ? 1u : 0u) + (bwd_mux_valid ? 1u : 0u);
+    const uint32_t num_mux_per_direction = use_mux ? num_links_eff : 0u;
+    const uint32_t num_mux_cores =
+        (fwd_mux_valid ? num_mux_per_direction : 0u) + (bwd_mux_valid ? num_mux_per_direction : 0u);
     const uint32_t total_cores_needed = num_workers + num_mux_cores;
     TT_FATAL(
         total_cores_needed <= max_cores,
-        "wan_fused_distributed_rmsnorm needs {} cores (workers + mux) but only {} available",
+        "wan_fused_distributed_rmsnorm needs {} cores ({} workers + {} mux) but only {} available",
         total_cores_needed,
+        num_workers,
+        num_mux_cores,
         max_cores);
 
     const uint32_t num_tile_rows_per_worker = tt::div_up(num_tile_rows, num_workers);
 
-    // Layout: [worker_0..worker_N-1, fwd_mux (if any), bwd_mux (if any)].
+    // Layout: [worker_0..worker_N-1, fwd_mux_0..fwd_mux_L-1, bwd_mux_0..bwd_mux_L-1]
+    // where L = num_links_eff (only if that direction is valid).
     const auto all_cores_vec = corerange_to_cores(core_grid, max_cores, /*row_major=*/true);
     std::vector<CoreCoord> worker_cores(all_cores_vec.begin(), all_cores_vec.begin() + num_workers);
-    std::optional<CoreCoord> fwd_mux_core = std::nullopt;
-    std::optional<CoreCoord> bwd_mux_core = std::nullopt;
+    std::vector<CoreCoord> fwd_mux_cores;  // size = num_links_eff if valid
+    std::vector<CoreCoord> bwd_mux_cores;
     {
         uint32_t next_core_idx = num_workers;
         if (fwd_mux_valid) {
-            fwd_mux_core = all_cores_vec[next_core_idx++];
+            for (uint32_t lnk = 0; lnk < num_mux_per_direction; lnk++) {
+                fwd_mux_cores.push_back(all_cores_vec[next_core_idx++]);
+            }
         }
         if (bwd_mux_valid) {
-            bwd_mux_core = all_cores_vec[next_core_idx++];
+            for (uint32_t lnk = 0; lnk < num_mux_per_direction; lnk++) {
+                bwd_mux_cores.push_back(all_cores_vec[next_core_idx++]);
+            }
         }
     }
 
     CoreRangeSet worker_core_set;
     for (const auto& c : worker_cores) {
         worker_core_set = worker_core_set.merge(CoreRangeSet({CoreRange(c, c)}));
-    }
-    CoreRangeSet mux_core_set;
-    if (fwd_mux_core.has_value()) {
-        mux_core_set = mux_core_set.merge(CoreRangeSet({CoreRange(fwd_mux_core.value(), fwd_mux_core.value())}));
-    }
-    if (bwd_mux_core.has_value()) {
-        mux_core_set = mux_core_set.merge(CoreRangeSet({CoreRange(bwd_mux_core.value(), bwd_mux_core.value())}));
     }
 
     constexpr uint32_t kMaxChunkSizeRows = 4u;
@@ -345,13 +361,16 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
 
     // ------------------------------------------------------------------------
     // FabricMuxConfig (only when use_mux: TP>1 AND num_workers>1)
+    // One MUX kernel per (direction, link); each has num_workers_per_link
+    // channels (one per worker assigned to that link).
     // ------------------------------------------------------------------------
     const size_t mux_base_l1_address = mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const uint32_t num_workers_per_link = use_mux ? (num_workers / num_links_eff) : 0u;
     std::unique_ptr<tt::tt_fabric::FabricMuxConfig> mux_kernel_config;
     if (use_mux) {
         mux_kernel_config = std::make_unique<tt::tt_fabric::FabricMuxConfig>(
-            /*num_full_size_channels=*/static_cast<uint8_t>(num_workers),
+            /*num_full_size_channels=*/static_cast<uint8_t>(num_workers_per_link),
             /*num_header_only_channels=*/0,
             /*num_buffers_full_size_channel=*/1,
             /*num_buffers_header_only_channel=*/0,
@@ -404,8 +423,11 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
             num_targets_backward,
             chunk_size_rows,
         };
+        // Each link's MUX has num_workers_per_link clients; the writer kernel's
+        // num_mux_clients CT arg uses this per-link count (termination master
+        // waits for num_workers_per_link - 1 incs on its sem).
         ttnn::ccl::fabric_mux_connection_ct_args(
-            num_workers,
+            num_workers_per_link,
             tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
             *mux_kernel_config,
             writer_compile_args);
@@ -462,33 +484,35 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         });
 
     // ------------------------------------------------------------------------
-    // MUX kernel (only TP>1; one per direction with valid neighbor)
+    // MUX kernels (only TP>1; one per (direction, link))
     // ------------------------------------------------------------------------
-    KernelHandle fwd_mux_kernel_id = 0;
-    KernelHandle bwd_mux_kernel_id = 0;
+    std::vector<KernelHandle> fwd_mux_kernel_ids(num_mux_per_direction, 0);
+    std::vector<KernelHandle> bwd_mux_kernel_ids(num_mux_per_direction, 0);
     if (fwd_mux_valid || bwd_mux_valid) {
         const auto mux_ct_args = mux_kernel_config->get_fabric_mux_compile_time_args();
-        if (fwd_mux_valid) {
-            fwd_mux_kernel_id = tt::tt_metal::CreateKernel(
-                program,
-                "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
-                CoreRangeSet({CoreRange(fwd_mux_core.value(), fwd_mux_core.value())}),
-                tt::tt_metal::DataMovementConfig{
-                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-                    .noc = tt::tt_metal::NOC::RISCV_0_default,
-                    .compile_args = mux_ct_args,
-                    .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
-        }
-        if (bwd_mux_valid) {
-            bwd_mux_kernel_id = tt::tt_metal::CreateKernel(
-                program,
-                "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
-                CoreRangeSet({CoreRange(bwd_mux_core.value(), bwd_mux_core.value())}),
-                tt::tt_metal::DataMovementConfig{
-                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-                    .noc = tt::tt_metal::NOC::RISCV_0_default,
-                    .compile_args = mux_ct_args,
-                    .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+        for (uint32_t lnk = 0; lnk < num_mux_per_direction; lnk++) {
+            if (fwd_mux_valid) {
+                fwd_mux_kernel_ids[lnk] = tt::tt_metal::CreateKernel(
+                    program,
+                    "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
+                    CoreRangeSet({CoreRange(fwd_mux_cores[lnk], fwd_mux_cores[lnk])}),
+                    tt::tt_metal::DataMovementConfig{
+                        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                        .noc = tt::tt_metal::NOC::RISCV_0_default,
+                        .compile_args = mux_ct_args,
+                        .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+            }
+            if (bwd_mux_valid) {
+                bwd_mux_kernel_ids[lnk] = tt::tt_metal::CreateKernel(
+                    program,
+                    "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
+                    CoreRangeSet({CoreRange(bwd_mux_cores[lnk], bwd_mux_cores[lnk])}),
+                    tt::tt_metal::DataMovementConfig{
+                        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                        .noc = tt::tt_metal::NOC::RISCV_0_default,
+                        .compile_args = mux_ct_args,
+                        .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+            }
         }
     }
 
@@ -511,35 +535,47 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     }
 
     // ------------------------------------------------------------------------
-    // MUX runtime args (TP>1 only)
+    // MUX runtime args (TP>1 only). One termination master per (direction, link):
+    // the first worker assigned to each link (worker i = link itself). Workers
+    // are partitioned round-robin: worker i → link (i % num_links_eff).
     // ------------------------------------------------------------------------
-    // Designate worker 0 as the termination master for both MUX cores
-    // (matches the all_gather_async pattern). Its virtual NoC coord is what
-    // non-master workers will atomic_inc to signal completion.
-    CoreCoord termination_master_logical = worker_cores[0];
-    CoreCoord termination_master_virtual = mesh_device->worker_core_from_logical_core(termination_master_logical);
-
-    CoreCoord fwd_mux_virtual = {0, 0};
-    CoreCoord bwd_mux_virtual = {0, 0};
-    if (fwd_mux_valid) {
-        fwd_mux_virtual = mesh_device->worker_core_from_logical_core(fwd_mux_core.value());
-    }
-    if (bwd_mux_valid) {
-        bwd_mux_virtual = mesh_device->worker_core_from_logical_core(bwd_mux_core.value());
+    // Per-link termination master logical/virtual core.
+    std::vector<CoreCoord> link_master_logical(use_mux ? num_links_eff : 0u);
+    std::vector<CoreCoord> link_master_virtual(use_mux ? num_links_eff : 0u);
+    if (use_mux) {
+        for (uint32_t lnk = 0; lnk < num_links_eff; lnk++) {
+            link_master_logical[lnk] = worker_cores[lnk];  // worker_id == lnk
+            link_master_virtual[lnk] = mesh_device->worker_core_from_logical_core(link_master_logical[lnk]);
+        }
     }
 
-    // Wire MUX kernel RT args.
-    if (fwd_mux_valid) {
-        const auto src_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
-        auto mux_rt_args = mux_kernel_config->get_fabric_mux_run_time_args(
-            src_node_id, forward_fabric_node_id.value(), /*link_idx=*/0, program, {fwd_mux_core.value()});
-        tt::tt_metal::SetRuntimeArgs(program, fwd_mux_kernel_id, {fwd_mux_core.value()}, mux_rt_args);
+    std::vector<CoreCoord> fwd_mux_virtual(num_mux_per_direction, CoreCoord{0, 0});
+    std::vector<CoreCoord> bwd_mux_virtual(num_mux_per_direction, CoreCoord{0, 0});
+    for (uint32_t lnk = 0; lnk < num_mux_per_direction; lnk++) {
+        if (fwd_mux_valid) {
+            fwd_mux_virtual[lnk] = mesh_device->worker_core_from_logical_core(fwd_mux_cores[lnk]);
+        }
+        if (bwd_mux_valid) {
+            bwd_mux_virtual[lnk] = mesh_device->worker_core_from_logical_core(bwd_mux_cores[lnk]);
+        }
     }
-    if (bwd_mux_valid) {
+
+    // Wire MUX kernel RT args: one set per (direction, link), each with the
+    // correct link_idx into the fabric.
+    if (fwd_mux_valid || bwd_mux_valid) {
         const auto src_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
-        auto mux_rt_args = mux_kernel_config->get_fabric_mux_run_time_args(
-            src_node_id, backward_fabric_node_id.value(), /*link_idx=*/0, program, {bwd_mux_core.value()});
-        tt::tt_metal::SetRuntimeArgs(program, bwd_mux_kernel_id, {bwd_mux_core.value()}, mux_rt_args);
+        for (uint32_t lnk = 0; lnk < num_mux_per_direction; lnk++) {
+            if (fwd_mux_valid) {
+                auto mux_rt_args = mux_kernel_config->get_fabric_mux_run_time_args(
+                    src_node_id, forward_fabric_node_id.value(), /*link_idx=*/lnk, program, {fwd_mux_cores[lnk]});
+                tt::tt_metal::SetRuntimeArgs(program, fwd_mux_kernel_ids[lnk], {fwd_mux_cores[lnk]}, mux_rt_args);
+            }
+            if (bwd_mux_valid) {
+                auto mux_rt_args = mux_kernel_config->get_fabric_mux_run_time_args(
+                    src_node_id, backward_fabric_node_id.value(), /*link_idx=*/lnk, program, {bwd_mux_cores[lnk]});
+                tt::tt_metal::SetRuntimeArgs(program, bwd_mux_kernel_ids[lnk], {bwd_mux_cores[lnk]}, mux_rt_args);
+            }
+        }
     }
 
     // ------------------------------------------------------------------------
@@ -568,29 +604,33 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
             tile_row_end,
         };
         if (use_mux) {
-            // MUX path: append out_ready_sem + 2x17 MUX connection rt args.
+            // Round-robin link assignment: worker i uses link (i % num_links_eff).
+            // channel_id within the assigned MUX is i / num_links_eff.
+            const uint32_t link = i % num_links_eff;
+            const uint32_t channel_id_in_link = i / num_links_eff;
+            const bool is_term_master_of_link = (channel_id_in_link == 0);
             writer_rt_args.push_back(out_ready_sem_bank_addr);
             ttnn::ccl::fabric_mux_connection_rt_args(
                 /*mux_connection_valid=*/fwd_mux_valid,
-                /*is_termination_master=*/(i == 0),
+                /*is_termination_master=*/is_term_master_of_link,
                 tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-                fwd_mux_virtual,
-                /*worker_id=*/i,
+                fwd_mux_valid ? fwd_mux_virtual[link] : CoreCoord{0, 0},
+                /*worker_id=*/channel_id_in_link,
                 core,
                 *mux_kernel_config,
                 program,
-                termination_master_virtual,
+                link_master_virtual[link],
                 writer_rt_args);
             ttnn::ccl::fabric_mux_connection_rt_args(
                 /*mux_connection_valid=*/bwd_mux_valid,
-                /*is_termination_master=*/(i == 0),
+                /*is_termination_master=*/is_term_master_of_link,
                 tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-                bwd_mux_virtual,
-                /*worker_id=*/i,
+                bwd_mux_valid ? bwd_mux_virtual[link] : CoreCoord{0, 0},
+                /*worker_id=*/channel_id_in_link,
                 core,
                 *mux_kernel_config,
                 program,
-                termination_master_virtual,
+                link_master_virtual[link],
                 writer_rt_args);
         } else if (!is_tp_1) {
             // TP>1 single-worker path: append out_ready_sem + direct fabric
