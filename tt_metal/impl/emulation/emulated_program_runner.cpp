@@ -128,68 +128,32 @@ thread_local uint8_t __emule_trisc_id = 0;
 thread_local uint32_t __emule_num_threads = 1;
 thread_local uint32_t __emule_my_thread_id = 0;
 
+// Mirrored definitions of the sanitizer thread-locals declared extern in the
+// tt-emule jit_hw headers. Also defined in tt-emule/src/kernel_runner.cpp so
+// that JIT .so files loaded via tt-emule's own jit_compile_kernel path can
+// resolve the symbols even when libtt_metal.so isn't loaded. The two libraries
+// are never linked into the same binary today, so the duplicate is benign
+// (same pattern already used for __processor_id, __rt_args, etc. above).
 thread_local uint32_t __emule_sem_l1_range_start = 0;
 thread_local uint32_t __emule_sem_l1_range_end = 0;
-
-// Outstanding-NOC-read counter for missing-barrier detection. Incremented by
-// noc_async_read / noc_async_read_page (JIT inlines), zeroed by
-// noc_async_read_barrier, checked at cb_push_back.
 thread_local uint32_t __emule_pending_noc_reads = 0;
-
-// Per-kernel-thread out-of-bounds-tensor sanitizer state. Populated below
-// when emule_strict_tensor_enabled() returns true; otherwise the pointer is
-// left null and the inline check in __emule_local_l1_to_ptr is a no-op.
 thread_local uint32_t __emule_l1_unreserved_base = 0;
 thread_local const uint64_t* __emule_l1_tensor_ranges = nullptr;
 thread_local uint32_t __emule_l1_tensor_ranges_count = 0;
-
-// DRAM mirror of the L1 OOB-tensor state. Consumed by the check inside
-// __emule_dram_ptr below. dram_unreserved_base is the start of user-
-// allocatable DRAM as reported by the allocator (mirrors l1_unreserved_base);
-// accesses below it are reserved system regions and pass through.
-thread_local uint32_t __emule_dram_unreserved_base = 0;
-thread_local const uint64_t* __emule_dram_tensor_ranges = nullptr;
-thread_local uint32_t __emule_dram_tensor_ranges_count = 0;
-
-// Per-kernel-thread tensor-padding sanitizer state. Populated below when
-// emule_strict_padding_enabled() returns true; otherwise the pointer is left
-// null and the inline check in __emule_local_l1_to_ptr is a no-op. Each
-// uint64_t entry is packed (logical_end << 32) | physical_end — an access
-// that falls in [logical_end, physical_end) is reported as a padding
-// violation.
 thread_local const uint64_t* __emule_l1_padding_ranges = nullptr;
 thread_local uint32_t __emule_l1_padding_ranges_count = 0;
-
-// Per-kernel-thread "resolved ranges" log for the object-intent provenance
-// sanitizer. Allocated in the kernel-thread closure inside launch_cores when
-// emule_strict_object_intent_enabled(); the inline append in
-// __emule_local_l1_to_ptr records each distinct live-tensor extent the kernel
-// resolves. Exact attribution is only supported when there is one kernel on a
-// core for the launch: after that kernel exits, the core thread memcmp's every
-// live tensor extent NOT in this array against its pre-launch byte snapshot —
-// any mismatch is reported as an Object Intent Violation.
 thread_local uint64_t* __emule_l1_resolved_ranges = nullptr;
 thread_local uint32_t* __emule_l1_resolved_ranges_count = nullptr;
 thread_local uint32_t __emule_l1_resolved_ranges_capacity = 0;
-
-// Per-kernel-thread CB-boundary sanitizer state. Two windows per CB:
-//   __emule_cb_reserved_pages[i] — active write reservation: page count
-//       starting at cb.write_idx (mod num_pages). Bumped on cb_reserve_back,
-//       drained on cb_push_back. Catches NoC reads/writes into CB pages that
-//       have not yet been cb_reserve_back'd.
-//   __emule_cb_waited_pages[i]   — active read window: page count starting
-//       at cb.read_idx (mod num_pages). Bumped on cb_wait_front, drained on
-//       cb_pop_front. Catches NoC reads/writes that source from CB pages the
-//       consumer has not yet waited on (producer may still be writing).
-// Both windows are checked together: the access is OOB only if it falls
-// outside BOTH. Producer threads only populate reserved; consumer threads
-// only populate waited — the unused window is zero on each side, so the
-// combined check Just Works without distinguishing reads from writes.
-// The strict flag gates both — off by default since legacy kernels that
-// NoC into unreserved CB pages would false-positive until audited.
 thread_local uint32_t __emule_cb_reserved_pages[32] = {};
 thread_local uint32_t __emule_cb_waited_pages[32] = {};
 thread_local bool __emule_cb_boundary_strict = false;
+
+// DRAM mirror of the L1 OOB-tensor state. Consumed only by this file's
+// __emule_dram_ptr; not referenced from JIT headers, so storage stays here.
+thread_local uint32_t __emule_dram_unreserved_base = 0;
+thread_local const uint64_t* __emule_dram_tensor_ranges = nullptr;
+thread_local uint32_t __emule_dram_tensor_ranges_count = 0;
 
 // Core map for cross-core NOC address resolution (shared across all threads).
 thread_local std::unordered_map<uint64_t, tt_emule::Core*>* __emule_core_map = nullptr;
