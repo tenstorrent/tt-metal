@@ -322,6 +322,166 @@ def _conv1d_prep_tensor_id(t: ttnn.Tensor) -> int:
     return id(t)
 
 
+def _conv1d_config_for(
+    *,
+    sequence_length: int,
+    in_channels: int,
+    activation: Optional[str] = None,
+) -> ttnn.Conv1dConfig:
+    conv_kwargs: dict = dict(
+        weights_dtype=ttnn.bfloat8_b,
+        shard_layout=None,
+        deallocate_activation=True,
+        enable_weights_double_buffer=True,
+        enable_act_double_buffer=True,
+    )
+    if activation:
+        _ACTIVATION_OP_TYPES = {
+            "relu": ttnn.UnaryOpType.RELU,
+            "silu": ttnn.UnaryOpType.SILU,
+            "gelu": ttnn.UnaryOpType.GELU,
+        }
+        op_type = _ACTIVATION_OP_TYPES.get(activation.lower())
+        if op_type is None:
+            raise ValueError(f"_conv1d_config_for: unsupported activation {activation!r}")
+        conv_kwargs["activation"] = ttnn.UnaryWithParam(op_type)
+    if sequence_length > 64 or in_channels >= 512:
+        conv_kwargs["act_block_h_override"] = 32
+    return ttnn.Conv1dConfig(**conv_kwargs)
+
+
+def _conv1d_prep_cache_key(
+    *,
+    weight_rm: ttnn.Tensor,
+    bias_rm: Optional[ttnn.Tensor],
+    batch: int,
+    sequence_length: int,
+    in_channels: int,
+    out_channels: int,
+    kernel_size: int,
+    padding: int,
+    activation: Optional[str] = None,
+) -> Tuple[Any, ...]:
+    act_block_h = 32 if (sequence_length > 64 or in_channels >= 512) else 0
+    return (
+        _conv1d_prep_tensor_id(weight_rm),
+        _conv1d_prep_tensor_id(bias_rm) if bias_rm is not None else 0,
+        batch,
+        sequence_length,
+        in_channels,
+        out_channels,
+        kernel_size,
+        padding,
+        activation or "",
+        act_block_h,
+    )
+
+
+def _prepare_conv1d_weights_on_device(
+    device: ttnn.Device,
+    *,
+    weight_rm: ttnn.Tensor,
+    bias_rm: Optional[ttnn.Tensor],
+    batch: int,
+    sequence_length: int,
+    in_channels: int,
+    out_channels: int,
+    kernel_size: int,
+    padding: int,
+    compute_kernel_config: ttnn.DeviceComputeKernelConfig,
+    activation: Optional[str] = None,
+    prep_cache: Dict[Tuple[Any, ...], Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]],
+) -> None:
+    """``prepare_conv_weights`` + DRAM ``clone`` only — no Conv2d forward (speech-encoder recipe)."""
+    cache_key = _conv1d_prep_cache_key(
+        weight_rm=weight_rm,
+        bias_rm=bias_rm,
+        batch=batch,
+        sequence_length=sequence_length,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        kernel_size=kernel_size,
+        padding=padding,
+        activation=activation,
+    )
+    if cache_key in prep_cache:
+        return
+
+    conv_config = _conv1d_config_for(
+        sequence_length=sequence_length,
+        in_channels=in_channels,
+        activation=activation,
+    )
+    prep_w = ttnn.prepare_conv_weights(
+        weight_tensor=weight_rm,
+        input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        input_layout=ttnn.ROW_MAJOR_LAYOUT,
+        weights_format="OIHW",
+        in_channels=in_channels,
+        out_channels=out_channels,
+        batch_size=batch,
+        input_height=1,
+        input_width=sequence_length,
+        kernel_size=(1, kernel_size),
+        stride=(1, 1),
+        padding=(0, padding),
+        dilation=(1, 1),
+        has_bias=bias_rm is not None,
+        groups=1,
+        device=device,
+        input_dtype=ttnn.bfloat16,
+        output_dtype=ttnn.bfloat16,
+        conv_config=conv_config,
+        compute_config=compute_kernel_config,
+    )
+    prep_b = None
+    if bias_rm is not None:
+        prep_b = ttnn.prepare_conv_bias(
+            bias_tensor=bias_rm,
+            input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            input_layout=ttnn.ROW_MAJOR_LAYOUT,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            batch_size=batch,
+            input_height=1,
+            input_width=sequence_length,
+            kernel_size=(1, kernel_size),
+            stride=(1, 1),
+            padding=(0, padding),
+            dilation=(1, 1),
+            groups=1,
+            device=device,
+            input_dtype=ttnn.bfloat16,
+            output_dtype=ttnn.bfloat16,
+            conv_config=conv_config,
+            compute_config=compute_kernel_config,
+        )
+    prep_cache[cache_key] = (
+        ttnn.clone(prep_w, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+        ttnn.clone(prep_b, memory_config=ttnn.DRAM_MEMORY_CONFIG) if prep_b is not None else None,
+    )
+
+
+def _cached_frame_idx_f32(
+    device: ttnn.Device,
+    sum_r: int,
+    cache: Dict[int, ttnn.Tensor],
+) -> ttnn.Tensor:
+    key = int(sum_r)
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
+    frame_idx = ttnn.arange(
+        start=0,
+        end=key,
+        step=1,
+        dtype=ttnn.float32,
+        device=device,
+    )
+    cache[key] = frame_idx
+    return frame_idx
+
+
 def _hard_upsample_nlc(
     enc: ttnn.Tensor,
     repeats: Sequence[int],
@@ -331,6 +491,7 @@ def _hard_upsample_nlc(
     cumsum_inc_tile: Optional[ttnn.Tensor] = None,
     cumsum_prev_tile: Optional[ttnn.Tensor] = None,
     frame_idx_f32: Optional[ttnn.Tensor] = None,
+    frame_idx_cache: Optional[Dict[int, ttnn.Tensor]] = None,
 ) -> ttnn.Tensor:
     """HF ``_hard_upsample`` for batch 1: ``enc`` is ``[1, T, H]`` tile; ``repeats`` length ``T``.
 
@@ -374,6 +535,9 @@ def _hard_upsample_nlc(
 
     if frame_idx_f32 is not None:
         frame_idx = frame_idx_f32
+        owns_frame_idx = False
+    elif frame_idx_cache is not None:
+        frame_idx = _cached_frame_idx_f32(device, sum_r, frame_idx_cache)
         owns_frame_idx = False
     else:
         frame_idx = ttnn.arange(
@@ -478,129 +642,60 @@ def _conv1d_same(
         ttnn.deallocate(x_tile)
     else:
         x_rm = x_tile
-    # Host ROW_MAJOR conv weights: pass through to conv1d so conv2d prepares + uploads (no invalid device weights).
-
-    # stream conv weights from DRAM as ``bfloat8_b`` (block-float8).
-    # The decoder convs are DRAM-bandwidth-bound -- ``PM FPU UTIL`` is ~5% per
-    # call and the kernel spends most of its time streaming a ``[7168, 1024]``
-    # weight tensor (14 MB at bf16) per call across 12 conv calls per forward.
-    # bf8 halves the per-weight byte count, which directly halves the DRAM
-    # bytes the kernel waits on.  Activations and accumulators stay at bf16/fp32
-    # (``fp32_dest_acc_en=True`` in the compute config), so per-tile rounding is
-    # preserved -- the bf8 hit is a one-time weight quantization, the same
-    # Same recipe used for FFN/attention matmuls elsewhere in this model.
-    #
-    # enable conv-side double buffering.
-    # ``enable_weights_double_buffer`` allocates two L1 slots for incoming
-    # weight tiles so the data-movement kernel can prefetch tile ``N+1`` while
-    # the matrix engine multiplies tile ``N``.  For a bandwidth-bound conv this
-    # turns the serial ``read -> compute -> read -> compute`` pattern into an
-    # overlapped pipeline (~30% less DRAM-stall time per call).
-    # ``enable_act_double_buffer`` does the same for activation tiles.
-    # Both flags are pure scheduling optimizations; no math changes, so PCC is
-    # unaffected.
-    #
-    # ``enable_activation_reuse`` is intentionally NOT enabled: the runtime
-    # check ``act_block_h_ntiles > output_image_width_ntiles`` fails for these
-    # convs (auto-sharding gives ``act_block_h=1 tile`` while output width is
-    # 18 tiles), so the kernel refuses the flag with ``TT_FATAL``.
-    conv_kwargs = dict(
-        weights_dtype=ttnn.bfloat8_b,
-        shard_layout=None,
-        deallocate_activation=True,
-        enable_weights_double_buffer=True,
-        enable_act_double_buffer=True,
-    )
-    if activation:
-        # ``Conv1dConfig.activation`` is bound as ``UnaryWithParam`` in Python;
-        # the friendly ``"relu"`` string is mapped here so call sites remain
-        # compact.  Extend the mapping if/when other fused activations are needed.
-        _ACTIVATION_OP_TYPES = {
-            "relu": ttnn.UnaryOpType.RELU,
-            "silu": ttnn.UnaryOpType.SILU,
-            "gelu": ttnn.UnaryOpType.GELU,
-        }
-        op_type = _ACTIVATION_OP_TYPES.get(activation.lower())
-        if op_type is None:
-            raise ValueError(f"_conv1d_same: unsupported activation {activation!r}")
-        conv_kwargs["activation"] = ttnn.UnaryWithParam(op_type)
-    if seq > 64 or in_channels >= 512:
-        conv_kwargs["act_block_h_override"] = 32
-    conv_config = ttnn.Conv1dConfig(**conv_kwargs)
-    # Prepared conv weights depend on the *weight* tensor and conv geometry, not the activation's
-    # DRAM/L1 memory_config. Including activation layout in the key caused cache misses when the
-    # standalone T2U probe ran before the full E2E graph (or between compile vs trace replay), which
-    # forced ``return_weights_and_bias=True`` and ``write_shard_to_device`` — illegal during trace capture.
-    cache_key = (
-        _conv1d_prep_tensor_id(weight_rm),
-        _conv1d_prep_tensor_id(bias_rm) if bias_rm is not None else 0,
-        batch,
-        seq,
-        in_channels,
-        out_channels,
-        kernel_size,
-        padding,
-        activation or "",
-        int(conv_kwargs.get("act_block_h_override", 0)),
+    conv_config = _conv1d_config_for(
+        sequence_length=seq,
+        in_channels=in_channels,
+        activation=activation,
     )
     if prep_cache is not None:
+        cache_key = _conv1d_prep_cache_key(
+            weight_rm=weight_rm,
+            bias_rm=bias_rm,
+            batch=batch,
+            sequence_length=seq,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            padding=padding,
+            activation=activation,
+        )
         cached = prep_cache.get(cache_key)
-        if cached is not None:
-            prep_w, prep_b = cached
-            out_tt, _out_len = ttnn.conv1d(
-                input_tensor=x_rm,
-                weight_tensor=prep_w,
+        if cached is None:
+            _prepare_conv1d_weights_on_device(
+                device,
+                weight_rm=weight_rm,
+                bias_rm=bias_rm,
+                batch=batch,
+                sequence_length=seq,
                 in_channels=in_channels,
                 out_channels=out_channels,
-                device=device,
-                bias_tensor=prep_b,
                 kernel_size=kernel_size,
-                stride=1,
                 padding=padding,
-                batch_size=batch,
-                input_length=seq,
-                conv_config=conv_config,
-                compute_config=compute_kernel_config,
-                groups=1,
-                dtype=ttnn.bfloat16,
-                return_output_dim=True,
-                return_weights_and_bias=False,
+                compute_kernel_config=compute_kernel_config,
+                activation=activation,
+                prep_cache=prep_cache,
             )
-        else:
-            packed = ttnn.conv1d(
-                input_tensor=x_rm,
-                weight_tensor=weight_rm,
-                in_channels=in_channels,
-                out_channels=out_channels,
-                device=device,
-                bias_tensor=bias_rm,
-                kernel_size=kernel_size,
-                stride=1,
-                padding=padding,
-                batch_size=batch,
-                input_length=seq,
-                conv_config=conv_config,
-                compute_config=compute_kernel_config,
-                groups=1,
-                dtype=ttnn.bfloat16,
-                return_output_dim=True,
-                return_weights_and_bias=True,
-            )
-            out_tt, _out_len, wb = packed
-            if isinstance(wb, (list, tuple)) and len(wb) >= 1:
-                pw = wb[0]
-                pb = wb[1] if len(wb) > 1 else None
-            else:
-                pw, pb = wb, None
-            # ``conv1d`` may return prepared weights tied to internal buffers. After the compile
-            # forward frees the output graph, those handles can become invalid while ``prep_cache``
-            # still references them; the trace replay then hits ``cache hit`` but
-            # ``is_valid_device_conv_weights`` fails and conv2d re-prepares (``write_shard_to_device``),
-            # which is illegal during trace capture. Own copies in DRAM for the cache.
-            prep_cache[cache_key] = (
-                ttnn.clone(pw, memory_config=ttnn.DRAM_MEMORY_CONFIG),
-                ttnn.clone(pb, memory_config=ttnn.DRAM_MEMORY_CONFIG) if pb is not None else None,
-            )
+            cached = prep_cache[cache_key]
+        prep_w, prep_b = cached
+        out_tt, _out_len = ttnn.conv1d(
+            input_tensor=x_rm,
+            weight_tensor=prep_w,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            device=device,
+            bias_tensor=prep_b,
+            kernel_size=kernel_size,
+            stride=1,
+            padding=padding,
+            batch_size=batch,
+            input_length=seq,
+            conv_config=conv_config,
+            compute_config=compute_kernel_config,
+            groups=1,
+            dtype=ttnn.bfloat16,
+            return_output_dim=True,
+            return_weights_and_bias=False,
+        )
     else:
         out_tt, _out_len = ttnn.conv1d(
             input_tensor=x_rm,
@@ -927,6 +1022,15 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         self._unit_pad_tail_cache: Dict[Tuple[int, int, int], ttnn.Tensor] = {}
         self._decoder_mask_cache: Dict[Tuple[int, int], Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]] = {}
         self._repeat_cum_cache: Dict[Tuple[int, ...], Tuple[ttnn.Tensor, ttnn.Tensor]] = {}
+        self._frame_idx_cache: Dict[int, ttnn.Tensor] = {}
+        self._char_prefill_cache: Dict[Tuple[int, int, int], Tuple[ttnn.Tensor, ttnn.Tensor]] = {}
+        self._lm_head_compute_cfg = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
 
     def _cached_repeat_cumsums(self, repeats: Sequence[int]) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
         key = tuple(int(r) for r in repeats)
@@ -936,6 +1040,113 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         inc, prev = _upload_repeat_cumsum_tiles(self.device, repeats)
         self._repeat_cum_cache[key] = (inc, prev)
         return inc, prev
+
+    def prewarm_conv1d_weights(self, *, char_len: int, padded_unit_seq: int) -> None:
+        """Prepare conv1d weights for duration + decoder stacks (host upload only, no Conv2d forward).
+
+        Call before trace capture so replay avoids ``CloneOperation`` + illegal host writes on the
+        first decoder conv per layer.  Unlike the reverted ``warmup_conv1d_cache``, this does **not**
+        run a dummy forward through Conv2d (that doubled device time in exp1).
+        """
+        batch = 1
+        p = self.parameters.decoder.duration_predictor
+        dec = self.parameters.decoder
+        k = self.variance_predictor_kernel_size
+        pad = k // 2
+        hidden = self.hidden_size
+
+        def _prep(
+            *,
+            weight_rm: ttnn.Tensor,
+            bias_rm: Optional[ttnn.Tensor],
+            seq: int,
+            in_ch: int,
+            out_ch: int,
+            kernel: int,
+            padding: int,
+            act: Optional[str],
+        ) -> None:
+            _prepare_conv1d_weights_on_device(
+                self.device,
+                weight_rm=weight_rm,
+                bias_rm=bias_rm,
+                batch=batch,
+                sequence_length=seq,
+                in_channels=in_ch,
+                out_channels=out_ch,
+                kernel_size=kernel,
+                padding=padding,
+                compute_kernel_config=self._conv_compute_cfg,
+                activation=act,
+                prep_cache=self._conv1d_prepared_cache,
+            )
+
+        _prep(
+            weight_rm=p.conv1.weight,
+            bias_rm=p.conv1.bias,
+            seq=char_len,
+            in_ch=self.variance_predictor_embed_dim,
+            out_ch=self.variance_predictor_hidden_dim,
+            kernel=k,
+            padding=pad,
+            act="relu",
+        )
+        _prep(
+            weight_rm=p.conv2.weight,
+            bias_rm=p.conv2.bias,
+            seq=char_len,
+            in_ch=self.variance_predictor_hidden_dim,
+            out_ch=self.variance_predictor_hidden_dim,
+            kernel=k,
+            padding=pad,
+            act="relu",
+        )
+        for layer in dec.layers:
+            _prep(
+                weight_rm=layer.conv1.weight,
+                bias_rm=layer.conv1.bias,
+                seq=padded_unit_seq,
+                in_ch=hidden,
+                out_ch=hidden,
+                kernel=7,
+                padding=3,
+                act="relu",
+            )
+            _prep(
+                weight_rm=layer.conv2.weight,
+                bias_rm=layer.conv2.bias,
+                seq=padded_unit_seq,
+                in_ch=hidden,
+                out_ch=hidden,
+                kernel=7,
+                padding=3,
+                act=None,
+            )
+
+    def _cached_char_prefill(self, *, char_w: int, char_len: int) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Reuse char padding mask + position ids when ``(char_w, char_len, pad_token)`` is stable."""
+        key = (char_w, char_len, int(self.pad_token_id))
+        cached = self._char_prefill_cache.get(key)
+        if cached is not None:
+            return cached
+        char_pad = _mask_row_valid_prefix(self.device, char_w, char_len)
+        if char_len < char_w:
+            char_pad = ttnn.slice(char_pad, [0, 0], [1, char_len], [1, 1])
+        pos_ids = ttnn.reshape(
+            ttnn.arange(
+                self.pad_token_id + 1,
+                self.pad_token_id + 1 + char_len,
+                step=1,
+                dtype=ttnn.uint32,
+                device=self.device,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            ),
+            (1, char_len),
+        )
+        cached = (char_pad, pos_ids)
+        self._char_prefill_cache[key] = cached
+        return cached
 
     def _sdpa_program_config(self, seq_q: int, seq_k: int) -> ttnn.SDPAProgramConfig:
         key = (seq_q, seq_k)
@@ -1290,9 +1501,7 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         if full_trace_prebuf:
             char_pad = tb.char_pad_bf16_tile
         else:
-            char_pad = _mask_row_valid_prefix(self.device, char_w, char_seq_total)
-            if char_seq_total < char_w:
-                char_pad = ttnn.slice(char_pad, [0, 0], [1, char_seq_total], [1, 1])
+            char_pad, _cached_pos = self._cached_char_prefill(char_w=char_w, char_len=char_seq_total)
 
         char_frame_f32 = tb.char_frame_idx_f32 if full_trace_prebuf else None
         if tb is not None:
@@ -1307,6 +1516,7 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             cumsum_inc_tile=char_inc,
             cumsum_prev_tile=char_prev,
             frame_idx_f32=char_frame_f32,
+            frame_idx_cache=None if full_trace_prebuf else self._frame_idx_cache,
         )
         # Upsampled character length equals ``sum(char_count_per_id)`` (batch 1); do not rely on
         # ``up1.shape[1]`` alone — tile layout can report incorrect logical widths to Python.
@@ -1315,8 +1525,6 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             raise RuntimeError(
                 f"char upsample width mismatch: up1.shape[1]={int(up1.shape[1])} vs sum(char_count)={char_len}."
             )
-        if not full_trace_prebuf and char_len < char_w:
-            char_pad = ttnn.slice(char_pad, [0, 0], [1, char_len], [1, 1])
         elif char_len > char_w:
             raise ValueError(f"Upsampled char length {char_len} exceeds char_input_ids width {char_w}; pad HF inputs.")
 
@@ -1328,25 +1536,12 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         if full_trace_prebuf:
             pos_ids = tb.char_pos_ids
         else:
-            pos_ids = ttnn.reshape(
-                ttnn.arange(
-                    self.pad_token_id + 1,
-                    self.pad_token_id + 1 + char_len,
-                    step=1,
-                    dtype=ttnn.uint32,
-                    device=self.device,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                ),
-                (1, char_len),
-            )
+            _, pos_ids = self._cached_char_prefill(char_w=char_w, char_len=char_len)
         pos_emb_tt = ttnn.embedding(
             pos_ids,
             weight=dec.embed_char_positions.weight,
             layout=ttnn.TILE_LAYOUT,
         )
-        if not full_trace_prebuf:
-            ttnn.deallocate(pos_ids)
 
         char_ids_slice = char_input_ids
         if char_w > char_len:
@@ -1377,9 +1572,6 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         for j in range(char_len):
             if j < len(char_pad_valid_host) and char_pad_valid_host[j] < 0.5:
                 dur_list[j] = 0
-        if not full_trace_prebuf:
-            ttnn.deallocate(char_pad)
-
         # Drain the device profiler buffer at the natural encoder/decoder boundary.  The
         # duration readback above already syncs host<->device, so this adds no extra wait
         # in profiler builds and compiles to a no-op in normal builds.  Without it, the
@@ -1401,6 +1593,7 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             cumsum_inc_tile=unit_inc,
             cumsum_prev_tile=unit_prev,
             frame_idx_f32=unit_frame_f32,
+            frame_idx_cache=None if full_trace_prebuf else self._frame_idx_cache,
         )
         ttnn.deallocate(char_h)
         unit_seq = int(sum(dur_list))
@@ -1494,12 +1687,19 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         )
         vocab = int(self.parameters.lm_head.weight.shape[-1])
         pc_lm = self._matmul_pc(batch * padded_unit_seq, self.hidden_size, vocab)
-        logits = self._linear(
+        lm_kwargs: dict = dict(
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self._lm_head_compute_cfg,
+        )
+        if pc_lm is not None:
+            lm_kwargs["program_config"] = pc_lm
+        else:
+            lm_kwargs["core_grid"] = core_grid(self.device)
+        logits = ttnn.linear(
             hidden,
             self.parameters.lm_head.weight,
             bias=None,
-            program_config=pc_lm,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **lm_kwargs,
         )
         ttnn.deallocate(hidden)
         # Slice back to the logical unit-seq so callers see ``[..., unit_seq, vocab]``. ``ttnn.slice``
@@ -1516,5 +1716,6 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             strides = [1] * rank
             logits = ttnn.slice(logits, begins, ends, strides)
 
-        pad_out = pad_unit
+        # Return a copy so callers may ``deallocate`` without invalidating ``_decoder_mask_cache``.
+        pad_out = ttnn.clone(pad_unit, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return logits, pad_out
