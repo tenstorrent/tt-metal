@@ -575,6 +575,11 @@ jobs:
         run: |
           # --target install is for the tarball that should get replaced by proper packaging later
           cmake --build build --target install
+          # WASM viewer is an ALL custom target, not part of install; required for profiler CI HTTP tests.
+          if [ "${{ inputs.tracy }}" = "true" ]; then
+            source build/emsdk/emsdk_env.sh
+            cmake --build build --target tracy_profiler_wasm
+          fi
 
       - name: 🛠️ Profile
         if: ${{ inputs.profile }}
@@ -629,6 +634,26 @@ jobs:
           ARTIFACT_PATHS+=" build/test build/tools runtime tt_metal/pre-compiled"
           if [[ "${{ inputs.tracy }}" = "true" ]]; then
             ARTIFACT_PATHS="$ARTIFACT_PATHS build/bin"
+            WASM_ROOT="build/profiler/build_wasm"
+            for wasm_asset in index.html tracy-profiler.js tracy-profiler.wasm favicon.svg; do
+              if [ ! -f "${WASM_ROOT}/${wasm_asset}" ]; then
+                echo "ERROR: Missing Tracy WASM asset ${WASM_ROOT}/${wasm_asset}"
+                echo "Build tracy_profiler_wasm before packaging the profiler artifact."
+                exit 1
+              fi
+            done
+            # Package only static server assets (~20MB), not the full Emscripten CMake tree (~500MB).
+            cd "${WASM_ROOT}"
+            find . -mindepth 1 -maxdepth 1 \
+              ! -name index.html \
+              ! -name tracy-profiler.js \
+              ! -name tracy-profiler.wasm \
+              ! -name favicon.svg \
+              ! -name traces \
+              -exec rm -rf {} +
+            mkdir -p traces
+            cd -
+            ARTIFACT_PATHS="$ARTIFACT_PATHS ${WASM_ROOT}"
           fi
           if [[ "${{ inputs.skip-tt-train }}" != "true" ]]; then
             ARTIFACT_PATHS="$ARTIFACT_PATHS build/tt-train data"
