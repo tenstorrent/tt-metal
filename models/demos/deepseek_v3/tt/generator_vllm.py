@@ -59,6 +59,24 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
             )
         tokenizer = load_tokenizer(model_path)
 
+        mesh_rows, mesh_cols = mesh_device.shape[0], mesh_device.shape[1]
+        mesh_world = mesh_rows * mesh_cols
+        if tt_data_parallel <= 0:
+            raise ValueError(f"tt_data_parallel must be > 0, got {tt_data_parallel}")
+        if tt_data_parallel != mesh_world:
+            raise ValueError(
+                "Unsupported tt_data_parallel/mesh layout for Deepseek vLLM bridge: "
+                f"tt_data_parallel={tt_data_parallel}, mesh_shape={mesh_device.shape}. "
+                f"Expected tt_data_parallel to equal mesh world size ({mesh_world}) so that "
+                "vLLM global max_batch_size matches DeepseekGenerator.batch_size."
+            )
+        if max_batch_size % tt_data_parallel != 0:
+            raise ValueError(
+                f"Global max_batch_size {max_batch_size} must be divisible by tt_data_parallel {tt_data_parallel}"
+            )
+        per_dp_batch = max_batch_size // tt_data_parallel
+        batch_size_per_row = per_dp_batch * mesh_cols
+
         model = cls(
             hf_config=hf_config,
             mesh_device=mesh_device,
@@ -67,6 +85,7 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
             tokenizer=tokenizer,
             max_seq_len=max_seq_len,
             vllm_context=True,
+            batch_size_per_row=batch_size_per_row,
         )
 
         return model
@@ -140,10 +159,10 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
                 local_user_id=i,
                 sample_on_device=sample_on_device,
                 return_last_hidden=False,
+                prompt_len=prompt_len,
             )
 
             if sample_on_device:
-                prefill_logits = self._slice_last_token_logits(prefill_logits, prompt_len, expand_to_batch=True)
                 prefill_logits_sampled_device = self._sample_tokens_device(
                     prefill_logits, user_slots=[user_id], skip_precompile=True
                 )
@@ -184,13 +203,14 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         read_from_device = kwargs.get("read_from_device", True)
         sampling_params = kwargs.get("sampling_params", None)
         sample_on_device = bool(sampling_params is not None)
+        reset_batch = kwargs.get("reset_batch", False)
 
         # Set kv_cache if provided and all entries are valid
         if kv_cache is not None and not any(entry is None for entry in kv_cache):
             self.set_kv_cache(kv_cache)
 
         tokens_step = kwargs["tokens"].squeeze(1)
-        if sample_on_device:
+        if sample_on_device and reset_batch:
             self._validate_and_initialize_sampling(
                 sampling_params,
                 sample_on_device,
