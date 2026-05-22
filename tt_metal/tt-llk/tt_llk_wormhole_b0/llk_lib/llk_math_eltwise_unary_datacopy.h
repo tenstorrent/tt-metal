@@ -47,8 +47,6 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
             // MOVB2D(DEST_32B_LOW) with SrcAFmt!=TF32 writes lo16 to Dst32b.
             // Process one source row at a time so B data is consumed before overwrite.
 
-            cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_RMW>(to_underlying(DataFormat::Float16_b));
-
             // Source row 0 → faces 0 (rows 0-15) and 2 (rows 32-47)
             TT_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movd2b::MOV_1_ROW, tile_base + 0);
             TT_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movd2b::MOV_1_ROW, tile_base + 0);
@@ -66,8 +64,6 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
             TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, tile_base + 8);
             TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, tile_base + 32);
             TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, tile_base + 40);
-
-            cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_RMW>(to_underlying(DataFormat::Float16_b));
 
             // Source row 16 → faces 1 (rows 16-31) and 3 (rows 48-63)
             TT_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movd2b::MOV_1_ROW, tile_base + 16);
@@ -92,8 +88,6 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
         else if constexpr (src_b_bcast_type == BroadcastType::SCALAR)
         {
             TTI_SETDVALID(0b10);
-
-            cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_RMW>(to_underlying(DataFormat::Float16_b));
 
             TT_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movd2b::MOV_1_ROW, tile_base + 0);
             TT_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movd2b::MOV_1_ROW, tile_base + 0);
@@ -131,8 +125,6 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
             {
                 // Face base row in Dst32b: offset 0 = faces 0+1 (rows 0-31), offset 1 = faces 2+3 (rows 32-63).
                 const std::uint32_t face_base = tile_base + offset * 32;
-
-                cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_RMW>(to_underlying(DataFormat::Float16_b));
 
                 TT_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, face_base + 0);
                 TT_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET + 4, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, face_base + 4);
