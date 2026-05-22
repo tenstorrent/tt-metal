@@ -86,6 +86,17 @@ _MESH_FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
 DEVICE_PARAMS_P150_FULL = {"l1_small_size": 65536}
 DEVICE_PARAMS_BH_QB_FULL = {"l1_small_size": 65536, **_MESH_FABRIC}
 
+# Demo / ``generate(use_decode_trace=True)``: KV-decode Metal trace replay.
+DEVICE_PARAMS_P150_FULL_DECODE_TRACE = {
+    "l1_small_size": 65536,
+    "trace_region_size": 450_000_000,
+}
+DEVICE_PARAMS_BH_QB_FULL_DECODE_TRACE = {
+    "l1_small_size": 65536,
+    "trace_region_size": 450_000_000,
+    **_MESH_FABRIC,
+}
+
 DEVICE_PARAMS_P150_TEXT = {"l1_small_size": 32768}
 DEVICE_PARAMS_BH_QB_TEXT = {"l1_small_size": 32768, "num_command_queues": 2, **_MESH_FABRIC}
 
@@ -104,9 +115,14 @@ DEVICE_PARAMS_BH_QB_E2E_2CQ_TRACE = {
     **_MESH_FABRIC,
 }
 
-DEVICE_PARAMS_P150_E2E_2CQ_GENERATE = {"l1_small_size": 65536, "num_command_queues": 2}
+DEVICE_PARAMS_P150_E2E_2CQ_GENERATE = {
+    "l1_small_size": 65536,
+    "trace_region_size": 450_000_000,
+    "num_command_queues": 2,
+}
 DEVICE_PARAMS_BH_QB_E2E_2CQ_GENERATE = {
     "l1_small_size": 65536,
+    "trace_region_size": 450_000_000,
     "num_command_queues": 2,
     **_MESH_FABRIC,
 }
@@ -232,15 +248,19 @@ def from_torch_bfloat16_rm(
 # ---------------------------------------------------------------------------
 
 
-def open_seamless_mesh_device():
-    """Open mesh for ``demo.py``: (1,1) on P150, (1,4) on BH QB."""
+def open_seamless_mesh_device(*, enable_decode_trace: bool = False):
+    """Open mesh for ``demo.py``: (1,1) on P150, (1,4) on BH QB.
+
+    When ``enable_decode_trace=True``, reserve ``trace_region_size`` for
+    ``TTSeamlessM4Tv2Model.generate(..., use_decode_trace=True)``.
+    """
     num_devices = ttnn.get_num_devices()
     if num_devices >= 4:
         mesh_shape = ttnn.MeshShape(*MESH_SHAPE_BH_QB)
-        device_params = dict(DEVICE_PARAMS_BH_QB_FULL)
+        device_params = dict(DEVICE_PARAMS_BH_QB_FULL_DECODE_TRACE if enable_decode_trace else DEVICE_PARAMS_BH_QB_FULL)
     else:
         mesh_shape = ttnn.MeshShape(*MESH_SHAPE_P150)
-        device_params = dict(DEVICE_PARAMS_P150_FULL)
+        device_params = dict(DEVICE_PARAMS_P150_FULL_DECODE_TRACE if enable_decode_trace else DEVICE_PARAMS_P150_FULL)
 
     fabric_config = device_params.pop("fabric_config", None)
     if fabric_config is not None:
