@@ -1,0 +1,32 @@
+name: "BrAIn Probe — bad-optional-access cluster (BEFORE)"
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  packages: write
+  contents: write
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-type: Release
+      build-wheel: true
+      platform: "Ubuntu 22.04"
+      use-artifacts-from-run: "26033881278"
+      dev-docker-image: "ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:ce7f42d864b9aeed08c8af2aaf16067713e8b7ec"
+
+  t3000-unit-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/t3000-unit-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: "wh_llmbox"
+      model: "tttv2 modules"
