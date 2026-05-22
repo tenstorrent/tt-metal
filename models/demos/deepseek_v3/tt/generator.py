@@ -476,7 +476,6 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 "top-k=0 is not supported when sampling on device. Sampling on host instead. See https://github.com/tenstorrent/tt-metal/issues/40236"
             )
         if sample_on_device:
-            enable_internal_trace_sampling = enable_trace and self.sample_on_device
             self.sampling_args = make_deepseek_sampling_args(
                 self.mesh_device,
                 self.hf_config.vocab_size,
@@ -486,7 +485,6 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 args=self.sampling_args,
                 mesh_device=self.mesh_device,
                 tt_ccl=self.ccl,
-                enable_internal_trace=enable_internal_trace_sampling,
             )
 
             self._reset_sampling_state(self.sampling_params, self.batch_size, self.batch_size_per_row)
@@ -930,7 +928,6 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
             ttnn.deallocate(filler)
 
         self.sampling_generator.seed_manager.get_new_values(user_slots)
-        self.sampling_generator.enable_internal_trace = enable_trace
         try:
             tt_out = self.sampling_generator.sample(sampling_logits, enable_trace=enable_trace)
         finally:

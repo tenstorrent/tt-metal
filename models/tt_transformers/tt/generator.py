@@ -98,20 +98,12 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         self.trace_output_decode = defaultdict(lambda: None)
         self.prefill_traces_warmup = False
         self.already_warmed_up_prefill = False
-        # By default, enable split sampling (break the decode trace into two parts: upto logits, then sampling step)
-        self.enable_split_sampling = True
         self.mode = None
 
     # Class-level capabilities (VLLM specific, to be overridden by subclasses)
     model_capabilities = {
         "supports_prefix_caching": True,
     }
-
-    def _set_sampling_trace_mode(self, enabled: bool):
-        for model_instance in self.model:
-            sampling_module = getattr(model_instance, "sampling", None)
-            if sampling_module is not None:
-                sampling_module.enable_internal_trace = enabled
 
     def _get_sampling_contract(self, model_id: int):
         sampling_module = getattr(self.model[model_id], "sampling", None)
@@ -575,11 +567,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             # Only paged attention is supported for prefill
             enable_trace = False
 
-        sampling_on_device_requested = (sampling_params is not None) or defer_device_sampling
+        on_device_sampling_requested = (sampling_params is not None) or defer_device_sampling
 
         # we need this here because of tt-metal tests
         if warmup_prefill:
-            sampling_on_device_enabled = (
+            on_device_sampling_enabled = (
                 getattr(self.model[0], "_supports_on_device_sampling", False)
                 and getattr(self.model[0], "sampling", None) is not None
             )
@@ -587,8 +579,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             self.warmup_model_prefill(
                 kv_cache=kv_cache,
                 enable_trace=enable_trace,
-                can_sample_on_device=sampling_on_device_enabled,
-                non_greedy_decoding_on_device=sampling_on_device_enabled,
+                can_sample_on_device=on_device_sampling_enabled,
+                non_greedy_decoding_on_device=on_device_sampling_enabled,
             )
 
         batch_size, batch_seq_len = tokens.shape
@@ -667,7 +659,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             )  # batched path feeds full tokens; incompatible with cached prefixes
         )
 
-        if use_batched_prefill and sampling_on_device_requested:
+        if use_batched_prefill and on_device_sampling_requested:
             sampling_module, sampling_dp, _, _ = self._get_sampling_contract(0)
             if sampling_module is not None and sampling_dp > 1:
                 # NOTE: Batched prefill disabled: on-device sampling
@@ -723,7 +715,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             if getattr(self.model[model_id], "users_row_sharded", False):
                 local_kwargs["global_user_id"] = batch_user_ids if use_batched_prefill else user_id
             sampling_enabled = (
-                sampling_on_device_requested
+                on_device_sampling_requested
                 and getattr(self.model[model_id], "_supports_on_device_sampling", False)
                 and getattr(self.model[model_id], "sampling", None) is not None
             )
@@ -1330,11 +1322,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         for i in range(len(self.model)):
             self.model[i].switch_mode(Mode.DECODE)
 
-        sampling_on_device = (sampling_params is not None) or defer_device_sampling
-        # Trace the sampling module whenever possible
-        split_sampling_enabled = bool(self.enable_split_sampling and sampling_on_device)
-        self._set_sampling_trace_mode(split_sampling_enabled)
-
+        on_device_sampling = (sampling_params is not None) or defer_device_sampling
         B = tokens.shape[0]
 
         tokens = torch.chunk(tokens, self.data_parallel, 0)
@@ -1403,24 +1391,34 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             "tokens": tokens,
             "page_table": page_table,
             "kv_cache": kv_cache,
-            "sampling_on_device": sampling_on_device,
+            "on_device_sampling": on_device_sampling,
         }
 
         if enable_trace:
             tt_decode_output = self._decode_forward_trace_text(
                 **decode_kwargs,
                 reset_batch=mode_switched,
-                defer_device_sampling=defer_device_sampling,
             )
         else:
             tt_decode_output = self._decode_forward_no_trace_text(
                 **decode_kwargs,
-                defer_device_sampling=defer_device_sampling,
             )
 
-        if defer_device_sampling and sampling_on_device:
+        # Device deferred
+        if defer_device_sampling and on_device_sampling:
             return tt_decode_output
-
+        # Device immediate
+        if sampling_params is not None:
+            tt_decode_output = self.sample_decode_on_device(
+                tt_decode_output,
+                sampling_params=sampling_params,
+                reset_batch=reset_batch,
+                prompt_tokens=prompt_tokens,
+                output_tokens=output_tokens,
+                slot_remap=slot_remap,
+                enable_trace=enable_trace,
+            )
+        # Host sampling
         if read_from_device:
             to_host = self.read_decode_output(tt_decode_output)
             return self.process_decode_output_host(to_host, is_tokens=(sampling_params is not None))
@@ -1432,8 +1430,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         current_pos,
         page_table=None,
         kv_cache=None,
-        sampling_on_device=False,
-        defer_device_sampling=False,
+        on_device_sampling=False,
     ):
         """
         Performs text decode step.
@@ -1466,8 +1463,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 rot_mat_idxs=tt_rot_mat_idxs[i],
                 page_table=tt_page_table[i],
                 kv_cache=user_kv_cache,
-                sampling_on_device=sampling_on_device,
-                capture_sampling_trace=defer_device_sampling,
+                on_device_logits=on_device_sampling,
             )
             if isinstance(decode_out, tuple):
                 tt_logits_i, tt_log_probs_i = decode_out
@@ -1483,7 +1479,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         current_pos,
         page_table=None,
         kv_cache=None,
-        sampling_on_device=False,
+        on_device_sampling=False,
     ):
         """
         Captures a trace for the decode_forward method.
@@ -1495,7 +1491,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             current_pos,
             page_table=page_table,
             kv_cache=kv_cache,
-            sampling_on_device=sampling_on_device,
+            on_device_sampling=on_device_sampling,
         )
         logger.info("Done Compiling Model")
 
@@ -1515,10 +1511,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
         for i in range(self.data_parallel):
             sampling_module = getattr(self.model[i], "sampling", None)
-            split_enabled = (
-                sampling_on_device
+            sampling_trace_enabled = (
+                on_device_sampling
                 and sampling_module is not None
-                and getattr(sampling_module, "enable_internal_trace", False)
             )
             trace_id = ttnn.begin_trace_capture(self.model_args[i].mesh_device, cq_id=0)
             trace_ids[i] = trace_id
@@ -1527,13 +1522,12 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 self.model[i].ttnn_decode_forward(
                     *device_inputs[i],
                     kv_cache=user_kv_cache,
-                    sampling_on_device=sampling_on_device,
-                    capture_sampling_trace=split_enabled,
+                    on_device_logits=on_device_sampling,
                 )
             )
             ttnn.end_trace_capture(self.model_args[i].mesh_device, trace_id, cq_id=0)
 
-            if split_enabled:
+            if sampling_trace_enabled:
                 sampling_module.capture_trace(logits=tt_out_trace[i], tt_out_tok=device_inputs[i][0])
         logger.info("Done Capturing Decode Trace")
 
@@ -1545,28 +1539,29 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         current_pos,
         page_table=None,
         kv_cache=None,
-        sampling_on_device=False,
+        on_device_sampling=False,
         reset_batch=False,
-        defer_device_sampling=False,
     ):
         """
         Run decode forward text with tracing
         """
         # The trace is different depending on whether we are doing device sampling or not
-        if not self.trace_ids_decode[sampling_on_device]:
+        if not self.trace_ids_decode[on_device_sampling]:
             trace_ids, tt_out_trace, *device_inputs = self._capture_decode_trace_text(
-                tokens, current_pos, page_table=page_table, kv_cache=kv_cache, sampling_on_device=sampling_on_device
+                tokens, current_pos, page_table=page_table, kv_cache=kv_cache, on_device_sampling=on_device_sampling
             )
-            self.trace_ids_decode[sampling_on_device] = trace_ids
-            self.trace_inputs_decode[sampling_on_device] = device_inputs
-            self.trace_output_decode[sampling_on_device] = tt_out_trace
+            self.trace_ids_decode[on_device_sampling] = trace_ids
+            self.trace_inputs_decode[on_device_sampling] = device_inputs
+            self.trace_output_decode[on_device_sampling] = tt_out_trace
 
         # reset inputs when mode switches from prefill to decode,
-        # or when sampling_on_device changes (different trace has stale inputs)
-        prev_sampling_on_device = getattr(self, "_prev_sampling_on_device", None)
-        self._prev_sampling_on_device = sampling_on_device
-        sampling_mode_changed = prev_sampling_on_device is not None and prev_sampling_on_device != sampling_on_device
-        reset_inputs = reset_batch or not sampling_on_device or sampling_mode_changed
+        # or when sampling mode changes (different trace has stale inputs)
+        prev_on_device_sampling = getattr(self, "_prev_on_device_sampling", None)
+        self._prev_on_device_sampling = on_device_sampling
+        sampling_mode_changed = (
+            prev_on_device_sampling is not None and prev_on_device_sampling != on_device_sampling
+        )
+        reset_inputs = reset_batch or not on_device_sampling or sampling_mode_changed
         if self.prev_page_table is None or any(
             not torch.equal(prev, curr) for prev, curr in zip(self.prev_page_table, page_table)
         ):
@@ -1582,29 +1577,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
                 copy_host_to_device(
                     host_tensors=host_inputs_i,
-                    device_tensors=self.trace_inputs_decode[sampling_on_device][i],
+                    device_tensors=self.trace_inputs_decode[on_device_sampling][i],
                 )
-        for i, trace_id in self.trace_ids_decode[sampling_on_device].items():
+        for i, trace_id in self.trace_ids_decode[on_device_sampling].items():
             ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
-        outputs = self.trace_output_decode[sampling_on_device]
-        if sampling_on_device:
-            if defer_device_sampling:
-                return outputs
-            new_outputs = []
-            for i in range(self.data_parallel):
-                sampling_module = getattr(self.model[i], "sampling", None)
-                if sampling_module is None or not getattr(sampling_module, "enable_internal_trace", False):
-                    new_outputs.append(outputs[i])
-                    continue
-                logits_i = outputs[i]
-                new_outputs.append(
-                    sampling_module.sample(
-                        logits=logits_i,
-                        tt_out_tok=self.trace_inputs_decode[sampling_on_device][i][0],
-                    )
-                )
-            return new_outputs
-        return outputs
+        return self.trace_output_decode[on_device_sampling]
 
     def sample_decode_on_device(
         self,
