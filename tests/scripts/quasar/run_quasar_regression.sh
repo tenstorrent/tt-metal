@@ -26,7 +26,7 @@ Run Quasar emulator regression tests defined in a YAML file.
 Required environment variables:
   TT_METAL_SIMULATOR_BASE   Base path containing simulator build directories
                            (e.g. the parent of emu-quasar-1x3/, emu-quasar-2x3/,
-                           emu-quasar-2x3_DISPATCH/)
+                           emu-quasar-2x3_DISPATCH/, emu-quasar-9x4/)
                            The script sets TT_METAL_SIMULATOR per test automatically.
                            If TT_METAL_SIMULATOR is already set, the base is
                            derived automatically (one directory up).
@@ -35,7 +35,7 @@ Required environment variables:
 
 Options:
   --build                          Run build_metal.sh --build-tests before testing
-  --config <1x3|2x3|2x3_DISPATCH>  Only run tests for the specified configuration
+  --config <1x3|2x3|2x3_DISPATCH|9x4>  Only run tests for the specified configuration
   --group <name>                   Only run tests from the specified test group
   --tests <path>                   Path to YAML test file (default: quasar_regression_tests.yaml)
   --build-dir <path>               Path to build directory (default: $BUILD_DIR)
@@ -61,8 +61,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ -n "$FILTER_CONFIG" && "$FILTER_CONFIG" != "1x3" && "$FILTER_CONFIG" != "2x3" && "$FILTER_CONFIG" != "2x3_DISPATCH" ]]; then
-    echo "ERROR: invalid --config value '$FILTER_CONFIG'. Supported: 1x3, 2x3, 2x3_DISPATCH"
+if [[ -n "$FILTER_CONFIG" && "$FILTER_CONFIG" != "1x3" && "$FILTER_CONFIG" != "2x3" && "$FILTER_CONFIG" != "2x3_DISPATCH" && "$FILTER_CONFIG" != "9x4" ]]; then
+    echo "ERROR: invalid --config value '$FILTER_CONFIG'. Supported: 1x3, 2x3, 2x3_DISPATCH, 9x4"
     exit 1
 fi
 
@@ -134,7 +134,7 @@ skipped=0
 declare -a results=()
 
 # Load tests from YAML into an array (single-pass read via yq)
-VALID_CONFIGS=("1x3" "2x3" "2x3_DISPATCH")
+VALID_CONFIGS=("1x3" "2x3" "2x3_DISPATCH" "9x4")
 
 is_valid_config() {
     local cfg="$1"
