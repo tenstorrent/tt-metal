@@ -157,7 +157,16 @@ class SparseMoEEP(MoE):
             x_shared = self._memory_snapshot(x, "BEFORE_SHARED")
             shared_out = self.shared_experts(x_shared)
             shared_out = self._memory_snapshot(shared_out, "AFTER_SHARED")
-            output = ttml.ops.binary.add(output, shared_out)
+            pre_add_output = output
+            output = ttml.ops.binary.add(pre_add_output, shared_out)
+            # binary.add's backward is just d_a = d_b = d_out (no read of inputs);
+            # the all_reduce above has noop_backward (identity), so its forward
+            # output is never read in bwd either; shared_out's parent linear (w2)
+            # also doesn't read shared_out itself for its weight grad (it reads w2's
+            # input, which is saved separately). All three sources confirm these
+            # two tensor values are not needed downstream — release them now.
+            pre_add_output.get_value().deallocate(force=True)
+            shared_out.get_value().deallocate(force=True)
 
         output = self._memory_snapshot(output, "END")
         return output

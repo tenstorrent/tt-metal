@@ -25,7 +25,7 @@ class RMSNormLayer(AbstractModuleBase):
 class DeepSeekMLP(AbstractModuleBase):
     """SwiGLU feed-forward network: w2(silu(w1(x)) * w3(x))."""
 
-    def __init__(self, dim: int, inter_dim: int, *, use_tp: bool = False) -> None:
+    def __init__(self, dim: int, inter_dim: int, *, use_tp: bool = False, tp_axis_name: str = "tp") -> None:
         super().__init__()
         if use_tp:
             self.w1 = ColumnParallelLinear(
@@ -33,21 +33,21 @@ class DeepSeekMLP(AbstractModuleBase):
                 inter_dim,
                 has_bias=False,
                 gather_output=False,
-                axis_name="tp",
+                axis_name=tp_axis_name,
             )
             self.w3 = ColumnParallelLinear(
                 dim,
                 inter_dim,
                 has_bias=False,
                 gather_output=False,
-                axis_name="tp",
+                axis_name=tp_axis_name,
             )
             self.w2 = RowParallelLinear(
                 inter_dim,
                 dim,
                 has_bias=False,
                 input_is_parallel=True,
-                axis_name="tp",
+                axis_name=tp_axis_name,
             )
         else:
             self.w1 = LinearLayer(dim, inter_dim, has_bias=False)

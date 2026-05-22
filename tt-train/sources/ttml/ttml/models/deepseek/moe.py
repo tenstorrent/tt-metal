@@ -242,9 +242,20 @@ class MoE(AbstractModuleBase):
                 [Expert(config.dim, config.moe_inter_dim) for _ in range(config.n_routed_experts)]
             )
 
-        # Shared expert(s)
+        # Shared expert(s). If MoE is running with a TP / EP axis (i.e. the
+        # routed experts are TP- or EP-sharded), shard the shared MLP across
+        # the same axis so it stops being a fully-replicated FFN duplicating
+        # weights, optimizer state, and compute on every chip in the TP row.
+        # Uses whichever MoE axis is active — works for full-model TP
+        # (axis="tp"), MoE-only TP (axis="moe_tp" or similar), and EP.
+        shared_axis = expert_tp_axis_name or expert_ep_axis_name
         if config.n_shared_experts > 0:
-            self.shared_experts = DeepSeekMLP(config.dim, config.n_shared_experts * config.moe_inter_dim)
+            self.shared_experts = DeepSeekMLP(
+                config.dim,
+                config.n_shared_experts * config.moe_inter_dim,
+                use_tp=(shared_axis is not None),
+                tp_axis_name=(shared_axis or "tp"),
+            )
         else:
             self.shared_experts = None
 

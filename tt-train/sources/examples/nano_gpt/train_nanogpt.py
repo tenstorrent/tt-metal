@@ -435,6 +435,40 @@ def collate_fn(samples: list, sequence_length: int) -> Tuple[ttml.autograd.Tenso
     targets_np = np.array(targets, dtype=np.uint32).reshape(actual_batch_size, sequence_length)
 
     mesh = ttml.mesh()
+
+    # SP path: shard batch on dp axis (if dp_size>1) AND shard seq on tp axis.
+    # Each TP chip then receives a different seq slice, matching the SP
+    # block-boundary layout. SP-off code path below is byte-identical to the
+    # pre-SP collate_fn.
+    from ttml.models.deepseek.sp_utils import sp_enabled as _sp_enabled
+
+    if _sp_enabled():
+        tp_size = mesh.axis_size("tp") if mesh.has_axis("tp") else 1
+        if tp_size <= 1:
+            raise ValueError("SP enabled but mesh has no 'tp' axis with size > 1")
+        if sequence_length % tp_size != 0:
+            raise ValueError(f"SP requires sequence_length ({sequence_length}) divisible by tp_size ({tp_size})")
+        device = ttml.autograd.AutoContext.get_instance().get_device()
+        names = list(mesh.axis_names)
+        tp_idx = names.index("tp")
+        dp_idx = names.index("dp") if ("dp" in names and mesh.axis_size("dp") > 1) else None
+        # ShardTensor2dMesh(dims=(...)) places each tensor dim on a mesh axis.
+        # Data is [B, 1, 1, S] → seq is dim 3; targets are [B, S] → seq is dim 1.
+        data_dims = [None, None]
+        targets_dims = [None, None]
+        if dp_idx is not None:
+            data_dims[dp_idx] = 0
+            targets_dims[dp_idx] = 0
+        data_dims[tp_idx] = 3
+        targets_dims[tp_idx] = 1
+        data_mapper = ttnn.distributed.ShardTensor2dMesh(device, tuple(mesh.shape), tuple(data_dims))
+        targets_mapper = ttnn.distributed.ShardTensor2dMesh(device, tuple(mesh.shape), tuple(targets_dims))
+        data_tensor = ttml.autograd.Tensor.from_numpy(data_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, data_mapper)
+        targets_tensor = ttml.autograd.Tensor.from_numpy(
+            targets_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, targets_mapper
+        )
+        return data_tensor, targets_tensor
+
     mapper = None
     if mesh.has_axis("dp") and mesh.axis_size("dp") > 1:
         mapper = mesh.axis_mapper("dp", tdim=0)

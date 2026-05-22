@@ -137,7 +137,14 @@ class SparseMoETP(MoE):
             x_shared = self._memory_snapshot(x, "BEFORE_SHARED")
             shared_out = self.shared_experts(x_shared)
             shared_out = self._memory_snapshot(shared_out, "AFTER_SHARED")
-            output = ttml.ops.binary.add(output, shared_out)
+            pre_add_output = output
+            output = ttml.ops.binary.add(pre_add_output, shared_out)
+            # binary.add backward is d_a = d_b = d_out (no read of inputs);
+            # all_reduce above has noop_backward (identity, no read of its fwd
+            # output); shared_out's parent linear (w2) reads w2's input for its
+            # weight grad, not shared_out. Safe to release these values now.
+            pre_add_output.get_value().deallocate(force=True)
+            shared_out.get_value().deallocate(force=True)
 
         output = self._memory_snapshot(output, "END")
         return output
