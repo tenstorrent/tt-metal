@@ -11,6 +11,7 @@
 #include "api/compute/untilize.h"
 #include "ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -113,18 +114,32 @@ void kernel_main() {
             in1_idx = j;
 #endif
             if (j < half_Wt) {
-                // Multiply half of the rotated input by scalar (-1)
-                reconfig_data_format(rotated_in_cb, scalar_cb);
-                pack_reconfig_data_format(rotated_in_interm_cb);
-                cb_wait_front(rotated_in_cb, onetile);
-                cb_reserve_back(rotated_in_interm_cb, onetile);
-                ACQ();
-                mul_tiles_bcast_scalar_init_short(rotated_in_cb, scalar_cb);
-                mul_tiles_bcast_scalar(rotated_in_cb, scalar_cb, 0, 0, 0);
-                pack_tile(0, rotated_in_interm_cb);
-                REL();
-                cb_push_back(rotated_in_interm_cb, onetile);
-                cb_pop_front(rotated_in_cb, onetile);
+                // Multiply half of the rotated input by scalar (-1).
+                // Reconfig audit: explicit reconfig_data_format(rotated_in_cb, scalar_cb) +
+                //   mul_tiles_bcast_scalar_init_short reconfigs srca/srcb -> Input.
+                //   Explicit pack_reconfig_data_format(rotated_in_interm_cb) -> Output.
+                // Lifecycles: rotated_in_cb Streaming (wait+pop per iter); scalar_cb
+                //   CallerManaged (waited once at line 85, never popped); rotated_in_interm_cb
+                //   OutStreaming.
+                compute_kernel_lib::eltwise_chain(
+                    onetile,
+                    compute_kernel_lib::BinaryFpu<
+                        rotated_in_cb,
+                        scalar_cb,
+                        compute_kernel_lib::BinaryFpuOp::Mul,
+                        compute_kernel_lib::BroadcastDim::Scalar,
+                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                        compute_kernel_lib::Streaming,
+                        compute_kernel_lib::CallerManaged,
+                        compute_kernel_lib::OperandKind::Scalar,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OperandKind::Scalar>{},
+                    compute_kernel_lib::PackTile<
+                        rotated_in_interm_cb,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OutStreaming,
+                        compute_kernel_lib::OperandKind::Scalar,
+                        compute_kernel_lib::PackTileReconfig::Output>{});
                 reconfig_data_format_srcb(scalar_cb, updated_sin_cb);
                 pack_reconfig_data_format(rotated_in_interm_cb, sin_interm_cb);
                 // Multiply rotated input by sin
@@ -139,22 +154,31 @@ void kernel_main() {
             // Multiply input by cos
             MUL_TILES(in_cb, updated_cos_cb, cos_interm_cb, onetile, in1_idx);
 
-            // Add applied sin/cos tensors
-            cb_wait_front(cos_interm_cb, onetile);
-            cb_wait_front(sin_interm_cb, onetile);
-            cb_reserve_back(out_cb, onetile);
-
-            reconfig_data_format_srca(rotated_in_cb, cos_interm_cb);
-            pack_reconfig_data_format(cos_interm_cb, out_cb);
-            ACQ();
-            add_tiles_init(cos_interm_cb, sin_interm_cb);
-            add_tiles(cos_interm_cb, sin_interm_cb, 0, 0, 0);
-            pack_tile(0, out_cb);
-            REL();
-
-            cb_push_back(out_cb, onetile);
-            cb_pop_front(cos_interm_cb, onetile);
-            cb_pop_front(sin_interm_cb, onetile);
+            // Add applied sin/cos tensors -> out_cb.
+            // Reconfig audit: reconfig_data_format_srca(rotated_in_cb, cos_interm_cb)
+            //   reconfigs srca to cos_interm_cb; add_tiles_init reconfigs srca/srcb to
+            //   (cos_interm, sin_interm) -> Input. Explicit pack_reconfig to out_cb -> Output.
+            // Lifecycles: cos_interm_cb/sin_interm_cb Streaming (per-iter wait+pop);
+            //   out_cb OutStreaming.
+            compute_kernel_lib::eltwise_chain(
+                onetile,
+                compute_kernel_lib::BinaryFpu<
+                    cos_interm_cb,
+                    sin_interm_cb,
+                    compute_kernel_lib::BinaryFpuOp::Add,
+                    compute_kernel_lib::BroadcastDim::None,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::Streaming,
+                    compute_kernel_lib::Streaming,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OperandKind::Scalar>{},
+                compute_kernel_lib::PackTile<
+                    out_cb,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OutStreaming,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::PackTileReconfig::Output>{});
         }
     }
 }
