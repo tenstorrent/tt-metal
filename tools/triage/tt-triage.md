@@ -6,6 +6,20 @@
 
 You can run `tt-triage` by executing `tools/tt-triage.py`.
 
+By default checks are parallelised across MMIO devices — see [Parallel execution](#parallel-execution) for the threading model and how to disable it.
+
+# Parallel execution
+
+`run_checks` runs checks in parallel across MMIO devices by default: one worker thread per local MMIO device.
+
+To force fully sequential execution (single thread, devices processed in tt-exalens iteration order, the pre-parallelism behaviour):
+
+```bash
+./tools/tt-triage.py --execute-sequential
+```
+
+This is useful for bisecting suspected concurrency regressions or for debugging a check that misbehaves under threading.
+
 # Script discovery
 
 `tt-triage` will search for scripts in the `tools/triage` directory. It will attempt to load all scripts and look for the following signature:
