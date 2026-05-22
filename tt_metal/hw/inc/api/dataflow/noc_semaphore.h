@@ -33,9 +33,8 @@
  */
 template <ProgrammableCoreType core_type = ProgrammableCoreType::TENSIX>
 class Semaphore {
-    // Cross-instantiation friend: lets set_multicast(dst_sem) / set_unicast(dst_sem)
-    // read dst_sem.local_l1_addr_ without a public accessor (which would leak the
-    // ARCH_QUASAR uncached-base adjustment to callers).
+    // Lets set_multicast(dst_sem) / set_unicast(dst_sem)
+    // read dst_sem.local_l1_addr_ without a public accessor.
     template <ProgrammableCoreType OT>
     friend class Semaphore;
 
