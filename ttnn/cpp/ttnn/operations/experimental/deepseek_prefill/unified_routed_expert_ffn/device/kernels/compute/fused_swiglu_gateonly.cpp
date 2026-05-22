@@ -88,12 +88,15 @@ void kernel_main() {
                     b_idx += g_in1_block_w;
                 }
                 tile_regs_commit();
+                // tile_regs MUST be waited+released on PACK side every iteration,
+                // even when we don't actually pack — otherwise MATH's next
+                // tile_regs_acquire will block waiting for PACK to consume dst.
+                tile_regs_wait();
                 if (kb == g_num_blocks - 1) {
                     // Last K-block: pack to cb_out (one-time, doesn't accumulate
                     // across K — so the result is just the last K-block's
                     // contribution, but it confirms matmul_block is working).
                     cb_reserve_back(cb_out, gu_out_subblock_num_tiles);
-                    tile_regs_wait();
                     pack_tile_block(0, cb_out, gu_out_subblock_num_tiles);
                     cb_push_back(cb_out, gu_out_subblock_num_tiles);
                 }
