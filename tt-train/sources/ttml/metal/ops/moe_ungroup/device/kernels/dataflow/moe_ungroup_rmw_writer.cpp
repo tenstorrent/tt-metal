@@ -171,9 +171,14 @@ void kernel_main() {
             //   3. cb_wait_front(cb_out0) — compute has already done mul + add + untilize
             //   4. NOC-write cb_out0 rows back to ungrouped[plan[r]]
             // BRISC does ZERO scalar arithmetic; all math is on FPU/SFPU.
-            for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+            //
+            // Prime chunk 0, then enqueue chunk N+1 before waiting/writing chunk N.
+            // This keeps compute fed while BRISC handles the RMW data movement for
+            // the previous chunk; chunks are disjoint H slices, so this does not
+            // change the per-expert RMW ordering.
+            auto enqueue_chunk = [&](const uint32_t chunk) {
                 bool is_last_chunk = (chunk == num_chunks - 1U);
-                uint32_t write_bytes = is_last_chunk ? last_chunk_bytes : hidden_chunk_bytes;
+                uint32_t chunk_bytes = is_last_chunk ? last_chunk_bytes : hidden_chunk_bytes;
 
                 // (1) Build w_tile and push to cb_w.
                 cb_reserve_back(cb_w, 1U);
@@ -197,13 +202,13 @@ void kernel_main() {
 
                 // (2) Read existing rows from ungrouped DRAM into cb_existing_rm.
                 // CB has 32 pages per chunk (asymmetric, one page per row).
-                // For the last chunk, write_bytes < hidden_chunk_bytes when h
+                // For the last chunk, chunk_bytes < hidden_chunk_bytes when h
                 // isn't tile-aligned — zero-pad the L1 tail so tilize sees
                 // zeros in the partial last tile column (otherwise it'd read
                 // uninit bytes that round-trip into the writer's RMW).
                 cb_reserve_back(cb_existing_rm, tt::constants::TILE_HEIGHT);
                 uint32_t existing_l1 = get_write_ptr(cb_existing_rm);
-                uint32_t pad_bytes = hidden_chunk_bytes - write_bytes;
+                uint32_t pad_bytes = hidden_chunk_bytes - chunk_bytes;
                 for (uint32_t r = 0; r < tt::constants::TILE_HEIGHT; ++r) {
                     uint32_t flat = plan_buf[r];
                     uint32_t row_buf = existing_l1 + r * hidden_chunk_bytes;
@@ -213,7 +218,7 @@ void kernel_main() {
                         continue;
                     }
                     uint64_t dst_noc = get_noc_addr(flat, ungrouped_addrgen) + chunk * hidden_chunk_bytes;
-                    noc_async_read(dst_noc, row_buf, write_bytes);
+                    noc_async_read(dst_noc, row_buf, chunk_bytes);
                 }
                 noc_async_read_barrier();
                 // Zero the partial-last-tile tail AFTER the reads complete:
@@ -227,31 +232,42 @@ void kernel_main() {
                             continue;
                         }
                         volatile tt_l1_ptr uint16_t* tail = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
-                            existing_l1 + r * hidden_chunk_bytes + write_bytes);
+                            existing_l1 + r * hidden_chunk_bytes + chunk_bytes);
                         for (uint32_t i = 0; i < pad_bytes / sizeof(uint16_t); ++i) {
                             tail[i] = 0U;
                         }
                     }
                 }
                 cb_push_back(cb_existing_rm, tt::constants::TILE_HEIGHT);
+            };
 
-                // (3) Wait for compute's combined+untilized output.
-                cb_wait_front(cb_out0, tiles_per_chunk);
+            auto write_chunk = [&](const uint32_t chunk) {
+                bool is_last_chunk = (chunk == num_chunks - 1U);
+                uint32_t write_bytes = is_last_chunk ? last_chunk_bytes : hidden_chunk_bytes;
 
-                // (4) NOC-write cb_out0 rows back to ungrouped DRAM. Pure data
+                // NOC-write cb_out0 rows back to ungrouped DRAM. Pure data
                 // movement — no scalar arithmetic.
-                {
-                    uint32_t src_l1 = get_read_ptr(cb_out0);
-                    for (uint32_t r = 0; r < tt::constants::TILE_HEIGHT; ++r) {
-                        uint32_t flat = plan_buf[r];
-                        if (flat == SENTINEL) {
-                            continue;
-                        }
-                        uint64_t dst_noc = get_noc_addr(flat, ungrouped_addrgen) + chunk * hidden_chunk_bytes;
-                        noc_async_write(src_l1 + r * hidden_chunk_bytes, dst_noc, write_bytes);
+                uint32_t src_l1 = get_read_ptr(cb_out0);
+                for (uint32_t r = 0; r < tt::constants::TILE_HEIGHT; ++r) {
+                    uint32_t flat = plan_buf[r];
+                    if (flat == SENTINEL) {
+                        continue;
                     }
-                    noc_async_write_barrier();
+                    uint64_t dst_noc = get_noc_addr(flat, ungrouped_addrgen) + chunk * hidden_chunk_bytes;
+                    noc_async_write(src_l1 + r * hidden_chunk_bytes, dst_noc, write_bytes);
                 }
+                noc_async_write_barrier();
+            };
+
+            enqueue_chunk(0U);
+            for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+                if (chunk + 1U < num_chunks) {
+                    enqueue_chunk(chunk + 1U);
+                }
+
+                // Wait for compute's combined+untilized output for this chunk.
+                cb_wait_front(cb_out0, tiles_per_chunk);
+                write_chunk(chunk);
                 cb_pop_front(cb_out0, tiles_per_chunk);
             }
         }

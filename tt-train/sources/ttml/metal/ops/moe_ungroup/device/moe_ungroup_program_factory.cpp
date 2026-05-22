@@ -31,7 +31,6 @@ constexpr uint32_t kCbW = tt::CBIndex::c_5;             // weight tile (32×32 b
 constexpr uint32_t kCbExistingRm = tt::CBIndex::c_6;    // row-major existing rows from ungrouped (writer fills)
 constexpr uint32_t kCbExistingTile = tt::CBIndex::c_7;  // tilized existing (compute internal)
 constexpr uint32_t kCbCombined = tt::CBIndex::c_8;      // mul+add output tiles (untilize input)
-constexpr uint32_t kCbScaled = tt::CBIndex::c_9;        // scaled-only tiles (mul output, add input)
 constexpr uint32_t kCbCtrl = tt::CBIndex::c_10;         // NCRISC->compute: per-core active-block count
 
 constexpr uint32_t kTargetChunkBytes = 128U * 1024U;
@@ -131,9 +130,9 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
 
     // cb_existing_rm: row-major existing rows from ungrouped DRAM (writer fills,
     // compute tilizes). Asymmetric pages: one page per ROW (hidden_chunk_bytes).
-    // 32 pages per chunk (one per tile-row's row), so tilize sees the data as
-    // row-major with each row = block_width_tiles*32 cols contiguous.
-    constexpr uint32_t cb_existing_rm_pages = 32U;  // 32 rows per chunk
+    // Double-buffered by chunk so BRISC can DMA chunk N+1 while compute
+    // tilizes/mul/add/untilizes chunk N.
+    constexpr uint32_t cb_existing_rm_pages = 2U * tt::constants::TILE_HEIGHT;  // two chunks, one page per row
     create_circular_buffer_bytes(
         program,
         worker_all,
@@ -142,16 +141,17 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
         cb_existing_rm_pages * hidden_chunk_bytes,
         hidden_chunk_bytes);
 
-    // cb_existing_tile: compute's tilize output, fed into mul+add.
+    // Compute-private intermediates stay single-buffered: they are produced
+    // and consumed by the same compute kernel, so extra depth would spend L1
+    // without adding reader/writer overlap.
+    // cb_existing_tile: compute's tilize output, fed into mul+add. One TILE_HEIGHT-row
+    // block produces tiles_per_chunk tiles.
     create_circular_buffer(
         program, worker_all, kCbExistingTile, tt::DataFormat::Float16_b, bf16_tile_bytes, tiles_per_chunk);
 
     // cb_combined: compute's add output, untilize input.
     create_circular_buffer(
         program, worker_all, kCbCombined, tt::DataFormat::Float16_b, bf16_tile_bytes, tiles_per_chunk);
-
-    // cb_scaled: compute's mul output, add input.
-    create_circular_buffer(program, worker_all, kCbScaled, tt::DataFormat::Float16_b, bf16_tile_bytes, tiles_per_chunk);
 
     // cb_ctrl: NCRISC reader publishes per-core active-block count once at
     // startup; compute reads it to size its outer loop. 16B page (one uint32
@@ -268,14 +268,13 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
     }
 
     // -------------------------------------------------------------------------
-    // Compute kernel — does scaled untilize: mul cb_src * cb_w → cb_inter,
-    // then untilize cb_inter → cb_out. Removes the per-element scalar multiply
-    // from BRISC; writer only does scalar add for RMW after this.
+    // Compute kernel — tilizes existing rows, does scaled accumulation with DST
+    // reuse, then untilizes to row-major output for the BRISC writer.
     // -------------------------------------------------------------------------
     [[maybe_unused]] auto compute_g1 = create_compute_kernel(
         program,
         worker_group_1,
-        {kCbSrc0, kCbOut, tiles_per_chunk, kCbW, kCbExistingRm, kCbExistingTile, kCbCombined, kCbScaled, kCbCtrl},
+        {kCbSrc0, kCbOut, tiles_per_chunk, kCbW, kCbExistingRm, kCbExistingTile, kCbCombined, kCbCtrl},
         {},
         kComputeKernelPath,
         false);
@@ -283,7 +282,7 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
         [[maybe_unused]] auto compute_g2 = create_compute_kernel(
             program,
             worker_group_2,
-            {kCbSrc0, kCbOut, tiles_per_chunk, kCbW, kCbExistingRm, kCbExistingTile, kCbCombined, kCbScaled, kCbCtrl},
+            {kCbSrc0, kCbOut, tiles_per_chunk, kCbW, kCbExistingRm, kCbExistingTile, kCbCombined, kCbCtrl},
             {},
             kComputeKernelPath,
             false);
