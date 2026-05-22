@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <bit>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -27,7 +28,7 @@ struct BlockStats {
 };
 
 inline void update_block_stats(BlockStats& s, float f) {
-    uint32_t bits = __builtin_bit_cast(uint32_t, f);
+    uint32_t bits = std::bit_cast<uint32_t>(f);
     uint32_t abs_bits = bits & 0x7FFFFFFFu;
     uint32_t exp_field = abs_bits >> 23;
     uint32_t mant_field = abs_bits & 0x7FFFFFu;

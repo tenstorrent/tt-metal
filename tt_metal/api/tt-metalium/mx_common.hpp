@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -65,7 +66,7 @@ struct TileWordCounts {
 // defer to std::ldexp so behavior matches at boundaries.
 inline float pow2_f32(int k) {
     if (k >= -126 && k <= 127) {
-        return __builtin_bit_cast(float, static_cast<uint32_t>(127 + k) << 23);
+        return std::bit_cast<float>(static_cast<uint32_t>(127 + k) << 23);
     }
     return std::ldexp(1.0f, k);
 }
@@ -114,7 +115,7 @@ inline BlockScaleResult finalize_block_scale(
         if (exp_field != 0) {
             max_abs_exp = static_cast<int>(exp_field) - 127;
         } else {
-            float max_abs = __builtin_bit_cast(float, max_abs_bits);
+            float max_abs = std::bit_cast<float>(max_abs_bits);
             max_abs_exp = static_cast<int>(std::floor(std::log2(max_abs)));
         }
     }
@@ -143,7 +144,7 @@ inline BlockScaleResult finalize_block_scale(
 TileWordCounts compute_tile_word_counts(uint32_t elem_count, const FormatParams& params);
 
 inline uint32_t convert_to_mx_elem_bits(float datum, const FormatParams& params) {
-    uint32_t ui32 = __builtin_bit_cast(uint32_t, datum);
+    uint32_t ui32 = std::bit_cast<uint32_t>(datum);
     uint8_t sign = static_cast<uint8_t>((ui32 >> 31) & 0x1u);
     uint32_t fp32_exp_biased = (ui32 >> 23) & 0xFFu;
     uint32_t fp32_mant = ui32 & 0x7FFFFFu;
