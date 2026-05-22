@@ -4,6 +4,7 @@
 
 #include "dprint_parser.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -11,6 +12,8 @@
 #include <iomanip>
 #include <string>
 #include <string_view>
+#include <unordered_map>
+#include <vector>
 
 #include <enchantum/enchantum.hpp>
 #include <enchantum/scoped.hpp>
@@ -556,12 +559,39 @@ private:
     const EnumInfo* get_enum_info(std::string_view type_name);
     void load_enum_info_from_dwarf();
 
+    // Reconstructs a callstack from the captured (pc, ra) pair. The chain at PC gives
+    // the frames currently active (outer subprogram + nested inlined frames down to
+    // the auipc capture site); the chain at RA gives the caller's frames (where we
+    // return to). Concatenated innermost-first, this is "as much of the stack as
+    // possible." Each frame carries the function name and a best-effort source
+    // location.
+    struct InlineFrame {
+        std::string name;
+        // Where this frame's function was *called from* (the line in the caller's body
+        // that inlined this frame). For DW_TAG_inlined_subroutine this comes from
+        // DW_AT_call_file / DW_AT_call_line.
+        std::string call_file;
+        uint32_t call_line = 0;
+        // Where this frame's function is *defined*. From DW_AT_decl_file /
+        // DW_AT_decl_line on the DIE or its DW_AT_abstract_origin / DW_AT_specification
+        // target.
+        std::string decl_file;
+        uint32_t decl_line = 0;
+    };
+    const std::vector<InlineFrame>& resolve_combined_stack(uint32_t pc, uint32_t ra);
+    void format_callstack_field(
+        fmt::memory_buffer& out, const std::string& fmt_format, uint32_t pc, uint32_t ra, char type_id);
+
     std::string elf_path;
     ll_api::ElfFile elf_file;
     std::span<std::byte> format_strings_info_bytes;
     uint64_t format_strings_info_address{};
     std::span<std::byte> format_strings_bytes;
     uint64_t format_strings_address{};
+    // VMA of the kernel's .text section. Added back to device-normalized PC/RA before
+    // DWARF lookup. 0 if no segments were loaded.
+    uint32_t text_base_address{};
+    std::unordered_map<uint64_t, std::vector<InlineFrame>> callstack_cache_;
     DevicePrintStringInfo* string_info_ptr{};
     size_t string_info_size{};
     std::vector<ParsedStringInfo> parsed_string_info;
@@ -579,6 +609,12 @@ DevicePrintParserImpl<PointerSize>::DevicePrintParserImpl(const std::string& elf
         string_info_ptr = reinterpret_cast<DevicePrintStringInfo*>(format_strings_info_bytes.data());
         string_info_size = format_strings_info_bytes.size() / sizeof(DevicePrintStringInfo);
         parsed_string_info.resize(string_info_size);
+
+        // First segment is the text segment (see tt_elffile.hpp).
+        const auto& segments = elf_file.GetSegments();
+        if (!segments.empty()) {
+            text_base_address = segments[0].address;
+        }
     } catch (...) {
         // Failed to load ELF file
         log_warning(tt::LogMetal, "Failed to load ELF file {}", elf_path);
@@ -1311,6 +1347,17 @@ std::string_view DevicePrintParserImpl<PointerSize>::format_message(
                 fmt::format_to(std::back_inserter(buffer.buffer), "0x{:x}", ptr_val);
                 break;
             }
+            case device_print_detail::structures::DevicePrintCallstackTypeChars::pc_file:
+            case device_print_detail::structures::DevicePrintCallstackTypeChars::pc_line:
+            case device_print_detail::structures::DevicePrintCallstackTypeChars::pc_func:
+            case device_print_detail::structures::DevicePrintCallstackTypeChars::ra_file:
+            case device_print_detail::structures::DevicePrintCallstackTypeChars::ra_line:
+            case device_print_detail::structures::DevicePrintCallstackTypeChars::ra_func: {
+                const auto& frame = std::get<CallstackFrame>(buffer.argument_values[placeholder.arg_id]);
+                format_callstack_field(
+                    buffer.buffer, placeholder.fmt_format, frame.pc, frame.ra, placeholder.type_id);
+                break;
+            }
             default: TT_THROW("Unsupported type_id in format placeholder (format_message): {}", placeholder.type_id);
         }
     }
@@ -1392,6 +1439,17 @@ DevicePrintParser::ArgumentValue DevicePrintParserImpl<PointerSize>::read_argume
         case 's':  // string pointer (resolved from ELF section if possible, else hex)
         case 'p':  // generic pointer
             return read_value_from_payload<pointer_t>(payload_bytes, offset);
+        case device_print_detail::structures::DevicePrintCallstackTypeChars::pc_file:
+        case device_print_detail::structures::DevicePrintCallstackTypeChars::pc_line:
+        case device_print_detail::structures::DevicePrintCallstackTypeChars::pc_func:
+        case device_print_detail::structures::DevicePrintCallstackTypeChars::ra_file:
+        case device_print_detail::structures::DevicePrintCallstackTypeChars::ra_line:
+        case device_print_detail::structures::DevicePrintCallstackTypeChars::ra_func: {
+            CallstackFrame frame;
+            frame.pc = read_value_from_payload<uint32_t>(payload_bytes, offset);
+            frame.ra = read_value_from_payload<uint32_t>(payload_bytes, offset);
+            return frame;
+        }
         default: TT_THROW("Unsupported type_id in format placeholder (read_argument_from_payload): {}", type_id);
     }
 }
@@ -1568,6 +1626,594 @@ void DevicePrintParserImpl<PointerSize>::load_enum_info_from_dwarf() {
     }
 
     dwarf_finish(dbg);
+}
+
+// Does a DW_AT_ranges attribute cover `addr` under DWARF 5 (.debug_rnglists)?
+static bool rnglist_covers_address(Dwarf_Attribute attr, Dwarf_Addr addr) {
+    Dwarf_Error err = nullptr;
+    Dwarf_Half form = 0;
+    if (dwarf_whatform(attr, &form, &err) != DW_DLV_OK) {
+        return false;
+    }
+    Dwarf_Unsigned index_or_off = 0;
+    if (form == DW_FORM_rnglistx) {
+        if (dwarf_formudata(attr, &index_or_off, &err) != DW_DLV_OK) {
+            return false;
+        }
+    } else {
+        Dwarf_Off off = 0;
+        if (dwarf_global_formref(attr, &off, &err) != DW_DLV_OK) {
+            return false;
+        }
+        index_or_off = off;
+    }
+    Dwarf_Rnglists_Head head = nullptr;
+    Dwarf_Unsigned count = 0;
+    Dwarf_Unsigned global_off = 0;
+    if (dwarf_rnglists_get_rle_head(attr, form, index_or_off, &head, &count, &global_off, &err) != DW_DLV_OK) {
+        return false;
+    }
+    bool covered = false;
+    for (Dwarf_Unsigned i = 0; i < count && !covered; ++i) {
+        unsigned entrylen = 0;
+        unsigned rle = 0;
+        Dwarf_Unsigned raw1 = 0, raw2 = 0;
+        Dwarf_Bool unavailable = 0;
+        Dwarf_Unsigned cooked1 = 0, cooked2 = 0;
+        if (dwarf_get_rnglists_entry_fields_a(
+                head, i, &entrylen, &rle, &raw1, &raw2, &unavailable, &cooked1, &cooked2, &err) != DW_DLV_OK ||
+            unavailable) {
+            continue;
+        }
+        if (rle == DW_RLE_end_of_list || rle == DW_RLE_base_address || rle == DW_RLE_base_addressx) {
+            continue;
+        }
+        const Dwarf_Addr lo = cooked1;
+        const Dwarf_Addr hi =
+            (rle == DW_RLE_startx_length || rle == DW_RLE_start_length) ? cooked1 + cooked2 : cooked2;
+        if (addr >= lo && addr < hi) {
+            covered = true;
+        }
+    }
+    dwarf_dealloc_rnglists_head(head);
+    return covered;
+}
+
+// DWARF 3/4 fallback for DW_AT_ranges using .debug_ranges.
+static bool ranges_cover_address(Dwarf_Debug dbg, Dwarf_Die die, Dwarf_Attribute attr, Dwarf_Addr addr) {
+    Dwarf_Error err = nullptr;
+    Dwarf_Off off = 0;
+    if (dwarf_global_formref(attr, &off, &err) != DW_DLV_OK) {
+        return false;
+    }
+    Dwarf_Ranges* ranges = nullptr;
+    Dwarf_Signed range_count = 0;
+    Dwarf_Unsigned bytes = 0;
+    Dwarf_Off real_off = 0;
+    if (dwarf_get_ranges_b(dbg, off, die, &real_off, &ranges, &range_count, &bytes, &err) != DW_DLV_OK) {
+        return false;
+    }
+    Dwarf_Addr base = 0;
+    bool covered = false;
+    for (Dwarf_Signed i = 0; i < range_count && !covered; ++i) {
+        const Dwarf_Ranges& r = ranges[i];
+        if (r.dwr_type == DW_RANGES_END) {
+            break;
+        }
+        if (r.dwr_type == DW_RANGES_ADDRESS_SELECTION) {
+            base = r.dwr_addr2;
+            continue;
+        }
+        const Dwarf_Addr lo = base + r.dwr_addr1;
+        const Dwarf_Addr hi = base + r.dwr_addr2;
+        if (addr >= lo && addr < hi) {
+            covered = true;
+        }
+    }
+    dwarf_dealloc_ranges(dbg, ranges, range_count);
+    return covered;
+}
+
+// Does a DIE's PC range cover `addr`? Handles low_pc/high_pc and DW_AT_ranges in both
+// the DWARF 5 (.debug_rnglists) and DWARF 3/4 (.debug_ranges) encodings — necessary
+// because inlined_subroutines under -O3 are frequently discontiguous.
+static bool die_covers_address(Dwarf_Debug dbg, Dwarf_Die die, Dwarf_Addr addr) {
+    Dwarf_Error err = nullptr;
+    Dwarf_Addr low = 0;
+    if (dwarf_lowpc(die, &low, &err) == DW_DLV_OK) {
+        Dwarf_Addr high = 0;
+        Dwarf_Half form = 0;
+        enum Dwarf_Form_Class form_class = DW_FORM_CLASS_UNKNOWN;
+        if (dwarf_highpc_b(die, &high, &form, &form_class, &err) == DW_DLV_OK) {
+            if (form_class == DW_FORM_CLASS_CONSTANT) {
+                high += low;
+            }
+            return high > low && addr >= low && addr < high;
+        }
+    }
+    Dwarf_Attribute attr = nullptr;
+    if (dwarf_attr(die, DW_AT_ranges, &attr, &err) != DW_DLV_OK) {
+        return false;
+    }
+    bool covered = rnglist_covers_address(attr, addr);
+    if (!covered) {
+        covered = ranges_cover_address(dbg, die, attr, addr);
+    }
+    dwarf_dealloc_attribute(attr);
+    return covered;
+}
+
+// Read the source-level function name from a DIE. Inlined_subroutines carry the name
+// indirectly via DW_AT_abstract_origin (referencing the original DW_TAG_subprogram);
+// out-of-line member function definitions reference the declaration via DW_AT_specification.
+// Walk the chain.
+static std::string read_die_name(Dwarf_Debug dbg, Dwarf_Die die) {
+    Dwarf_Error err = nullptr;
+    char* name = nullptr;
+    if (dwarf_diename(die, &name, &err) == DW_DLV_OK && name) {
+        std::string out = name;
+        dwarf_dealloc(dbg, name, DW_DLA_STRING);
+        return out;
+    }
+    for (Dwarf_Half attr_id : {DW_AT_abstract_origin, DW_AT_specification}) {
+        Dwarf_Attribute attr = nullptr;
+        if (dwarf_attr(die, attr_id, &attr, &err) != DW_DLV_OK) {
+            continue;
+        }
+        Dwarf_Off ref_off = 0;
+        Dwarf_Die ref_die = nullptr;
+        std::string sub;
+        if (dwarf_global_formref(attr, &ref_off, &err) == DW_DLV_OK &&
+            dwarf_offdie_b(dbg, ref_off, /*is_info=*/true, &ref_die, &err) == DW_DLV_OK) {
+            sub = read_die_name(dbg, ref_die);
+            dwarf_dealloc_die(ref_die);
+        }
+        dwarf_dealloc_attribute(attr);
+        if (!sub.empty()) {
+            return sub;
+        }
+    }
+    return {};
+}
+
+// Read DW_AT_call_file on an inlined_subroutine and resolve it to a file path. The
+// file index encoding differs by DWARF version: DWARF 4 and earlier use 1-based
+// indices (with the entry for index 1 being the first entry in dwarf_srcfiles's
+// return array, i.e. array index 0); DWARF 5 uses 0-based indices that match array
+// position directly. Detect via the CU's version stamp.
+static std::string read_call_file(Dwarf_Debug dbg, Dwarf_Die die, Dwarf_Die cu_die) {
+    Dwarf_Error err = nullptr;
+    Dwarf_Attribute attr = nullptr;
+    if (dwarf_attr(die, DW_AT_call_file, &attr, &err) != DW_DLV_OK) {
+        return {};
+    }
+    Dwarf_Unsigned file_idx = 0;
+    int ok = dwarf_formudata(attr, &file_idx, &err);
+    dwarf_dealloc_attribute(attr);
+    if (ok != DW_DLV_OK) {
+        return {};
+    }
+    Dwarf_Half version = 0;
+    Dwarf_Half offset_size = 0;
+    dwarf_get_version_of_die(cu_die, &version, &offset_size);
+    const Dwarf_Signed slot = (version >= 5)
+                                  ? static_cast<Dwarf_Signed>(file_idx)
+                                  : static_cast<Dwarf_Signed>(file_idx) - 1;
+    if (slot < 0) {
+        return {};
+    }
+    std::string out;
+    char** srcfiles = nullptr;
+    Dwarf_Signed nfiles = 0;
+    if (dwarf_srcfiles(cu_die, &srcfiles, &nfiles, &err) == DW_DLV_OK) {
+        if (slot < nfiles && srcfiles[slot]) {
+            out = srcfiles[slot];
+        }
+        for (Dwarf_Signed i = 0; i < nfiles; ++i) {
+            dwarf_dealloc(dbg, srcfiles[i], DW_DLA_STRING);
+        }
+        dwarf_dealloc(dbg, srcfiles, DW_DLA_LIST);
+    }
+    return out;
+}
+
+static uint32_t read_call_line(Dwarf_Die die) {
+    Dwarf_Error err = nullptr;
+    Dwarf_Attribute attr = nullptr;
+    if (dwarf_attr(die, DW_AT_call_line, &attr, &err) != DW_DLV_OK) {
+        return 0;
+    }
+    Dwarf_Unsigned v = 0;
+    int ok = dwarf_formudata(attr, &v, &err);
+    dwarf_dealloc_attribute(attr);
+    return ok == DW_DLV_OK ? static_cast<uint32_t>(v) : 0;
+}
+
+// Read an unsigned attribute (decl_file, decl_line, etc.) from a DIE, following
+// DW_AT_abstract_origin / DW_AT_specification chains if the attribute isn't directly
+// on this DIE. Necessary for inlined_subroutine, which carries decl info only on its
+// abstract_origin target.
+static bool read_udata_following_origin(
+    Dwarf_Debug dbg, Dwarf_Die die, Dwarf_Half attr_id, Dwarf_Unsigned& out) {
+    Dwarf_Error err = nullptr;
+    Dwarf_Attribute attr = nullptr;
+    if (dwarf_attr(die, attr_id, &attr, &err) == DW_DLV_OK) {
+        int ok = dwarf_formudata(attr, &out, &err);
+        dwarf_dealloc_attribute(attr);
+        if (ok == DW_DLV_OK) {
+            return true;
+        }
+    }
+    for (Dwarf_Half ref_attr_id : {DW_AT_abstract_origin, DW_AT_specification}) {
+        Dwarf_Attribute ref = nullptr;
+        if (dwarf_attr(die, ref_attr_id, &ref, &err) != DW_DLV_OK) {
+            continue;
+        }
+        Dwarf_Off ref_off = 0;
+        Dwarf_Die ref_die = nullptr;
+        bool found = false;
+        if (dwarf_global_formref(ref, &ref_off, &err) == DW_DLV_OK &&
+            dwarf_offdie_b(dbg, ref_off, /*is_info=*/true, &ref_die, &err) == DW_DLV_OK) {
+            found = read_udata_following_origin(dbg, ref_die, attr_id, out);
+            dwarf_dealloc_die(ref_die);
+        }
+        dwarf_dealloc_attribute(ref);
+        if (found) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Resolve a DWARF file index (1-based in DWARF 4 and earlier, 0-based in DWARF 5)
+// against the CU's source file table.
+static std::string resolve_file_index(Dwarf_Debug dbg, Dwarf_Die cu_die, Dwarf_Unsigned file_idx) {
+    Dwarf_Error err = nullptr;
+    Dwarf_Half version = 0;
+    Dwarf_Half offset_size = 0;
+    dwarf_get_version_of_die(cu_die, &version, &offset_size);
+    const Dwarf_Signed slot = (version >= 5)
+                                  ? static_cast<Dwarf_Signed>(file_idx)
+                                  : static_cast<Dwarf_Signed>(file_idx) - 1;
+    if (slot < 0) {
+        return {};
+    }
+    char** srcfiles = nullptr;
+    Dwarf_Signed nfiles = 0;
+    std::string out;
+    if (dwarf_srcfiles(cu_die, &srcfiles, &nfiles, &err) == DW_DLV_OK) {
+        if (slot < nfiles && srcfiles[slot]) {
+            out = srcfiles[slot];
+        }
+        for (Dwarf_Signed i = 0; i < nfiles; ++i) {
+            dwarf_dealloc(dbg, srcfiles[i], DW_DLA_STRING);
+        }
+        dwarf_dealloc(dbg, srcfiles, DW_DLA_LIST);
+    }
+    return out;
+}
+
+// Find the CU DIE that owns `die`. The DW_AT_decl_file index is relative to that CU's
+// file table — and for inlined_subroutines that follow DW_AT_abstract_origin into a
+// DIE that lives in a *different* CU, we need that other CU's file table, not the
+// caller's.
+static Dwarf_Die get_owning_cu_die(Dwarf_Debug dbg, Dwarf_Die die) {
+    Dwarf_Error err = nullptr;
+    Dwarf_Off cu_header_offset = 0;
+    Dwarf_Off cu_length = 0;
+    if (dwarf_die_CU_offset_range(die, &cu_header_offset, &cu_length, &err) != DW_DLV_OK) {
+        return nullptr;
+    }
+    Dwarf_Off cu_die_offset = 0;
+    if (dwarf_get_cu_die_offset_given_cu_header_offset_b(
+            dbg, cu_header_offset, /*is_info=*/true, &cu_die_offset, &err) != DW_DLV_OK) {
+        return nullptr;
+    }
+    Dwarf_Die cu_die = nullptr;
+    if (dwarf_offdie_b(dbg, cu_die_offset, /*is_info=*/true, &cu_die, &err) != DW_DLV_OK) {
+        return nullptr;
+    }
+    return cu_die;
+}
+
+// Walk the DW_AT_abstract_origin / DW_AT_specification chain looking for a DIE that
+// carries DW_AT_decl_file, then resolve the index against *that* DIE's CU file table.
+static std::string read_decl_file(Dwarf_Debug dbg, Dwarf_Die die) {
+    Dwarf_Error err = nullptr;
+    Dwarf_Attribute attr = nullptr;
+    if (dwarf_attr(die, DW_AT_decl_file, &attr, &err) == DW_DLV_OK) {
+        Dwarf_Unsigned file_idx = 0;
+        int ok = dwarf_formudata(attr, &file_idx, &err);
+        dwarf_dealloc_attribute(attr);
+        if (ok == DW_DLV_OK) {
+            Dwarf_Die owning_cu = get_owning_cu_die(dbg, die);
+            std::string result;
+            if (owning_cu) {
+                result = resolve_file_index(dbg, owning_cu, file_idx);
+                dwarf_dealloc_die(owning_cu);
+            }
+            return result;
+        }
+    }
+    for (Dwarf_Half ref_attr_id : {DW_AT_abstract_origin, DW_AT_specification}) {
+        Dwarf_Attribute ref = nullptr;
+        if (dwarf_attr(die, ref_attr_id, &ref, &err) != DW_DLV_OK) {
+            continue;
+        }
+        Dwarf_Off ref_off = 0;
+        Dwarf_Die ref_die = nullptr;
+        std::string result;
+        if (dwarf_global_formref(ref, &ref_off, &err) == DW_DLV_OK &&
+            dwarf_offdie_b(dbg, ref_off, /*is_info=*/true, &ref_die, &err) == DW_DLV_OK) {
+            result = read_decl_file(dbg, ref_die);
+            dwarf_dealloc_die(ref_die);
+        }
+        dwarf_dealloc_attribute(ref);
+        if (!result.empty()) {
+            return result;
+        }
+    }
+    return {};
+}
+
+static uint32_t read_decl_line(Dwarf_Debug dbg, Dwarf_Die die) {
+    Dwarf_Unsigned v = 0;
+    return read_udata_following_origin(dbg, die, DW_AT_decl_line, v) ? static_cast<uint32_t>(v) : 0;
+}
+
+// One frame in the half-built chain. `call_die` is a duplicate handle to the same DIE,
+// taken via dwarf_offdie_b so it survives the recursive walk's local DIE cleanup. Owned
+// by find_inline_chain; the caller must dealloc.
+struct ChainFrame {
+    std::string name;
+    bool is_inlined = false;
+    Dwarf_Die call_die = nullptr;
+};
+
+// Walks the DIE tree rooted at `die` looking for the inlining chain that contains
+// `addr`. Returns the chain ordered outer→inner (subprogram first, deepest inlined
+// last) or empty if no subprogram covers `addr`. Mirrors the Python prototype's
+// `_inline_chain`: only descends into DW_TAG_inlined_subroutine children, so the chain
+// reflects actual inlining containment.
+static std::vector<ChainFrame> find_inline_chain(Dwarf_Debug dbg, Dwarf_Die die, Dwarf_Addr addr) {
+    Dwarf_Error err = nullptr;
+    Dwarf_Half tag = 0;
+    if (dwarf_tag(die, &tag, &err) != DW_DLV_OK) {
+        return {};
+    }
+    const bool is_func = (tag == DW_TAG_subprogram || tag == DW_TAG_inlined_subroutine);
+    if (is_func) {
+        if (!die_covers_address(dbg, die, addr)) {
+            return {};
+        }
+        ChainFrame frame;
+        frame.name = read_die_name(dbg, die);
+        frame.is_inlined = (tag == DW_TAG_inlined_subroutine);
+        // Stash a duplicate handle to this DIE so the caller can later read call_file /
+        // call_line — the local walk will dealloc the original.
+        Dwarf_Off gbl_off = 0;
+        if (dwarf_dieoffset(die, &gbl_off, &err) == DW_DLV_OK) {
+            Dwarf_Die copy = nullptr;
+            if (dwarf_offdie_b(dbg, gbl_off, /*is_info=*/true, &copy, &err) == DW_DLV_OK) {
+                frame.call_die = copy;
+            }
+        }
+        // Recurse into ALL children, not just inlined_subroutine. Inlined frames are
+        // often wrapped in DW_TAG_lexical_block (one per scope where any local is
+        // declared) — at -O3 / DWARF 5 this is the common case. The recursive call
+        // sorts out whether each child contributes a frame.
+        Dwarf_Die child = nullptr;
+        if (dwarf_child(die, &child, &err) == DW_DLV_OK) {
+            while (child) {
+                auto deeper = find_inline_chain(dbg, child, addr);
+                if (!deeper.empty()) {
+                    std::vector<ChainFrame> result;
+                    result.reserve(1 + deeper.size());
+                    result.push_back(std::move(frame));
+                    for (auto& f : deeper) {
+                        result.push_back(std::move(f));
+                    }
+                    dwarf_dealloc_die(child);
+                    return result;
+                }
+                Dwarf_Die sibling = nullptr;
+                if (dwarf_siblingof_b(dbg, child, true, &sibling, &err) != DW_DLV_OK) {
+                    dwarf_dealloc_die(child);
+                    break;
+                }
+                dwarf_dealloc_die(child);
+                child = sibling;
+            }
+        }
+        std::vector<ChainFrame> single;
+        single.push_back(std::move(frame));
+        return single;
+    }
+    // Not a function tag — try children. This is how we descend from the CU DIE into
+    // its subprogram children.
+    Dwarf_Die child = nullptr;
+    if (dwarf_child(die, &child, &err) == DW_DLV_OK) {
+        while (child) {
+            auto result = find_inline_chain(dbg, child, addr);
+            if (!result.empty()) {
+                dwarf_dealloc_die(child);
+                return result;
+            }
+            Dwarf_Die sibling = nullptr;
+            if (dwarf_siblingof_b(dbg, child, true, &sibling, &err) != DW_DLV_OK) {
+                dwarf_dealloc_die(child);
+                break;
+            }
+            dwarf_dealloc_die(child);
+            child = sibling;
+        }
+    }
+    return {};
+}
+
+template <uint8_t PointerSize>
+const std::vector<typename DevicePrintParserImpl<PointerSize>::InlineFrame>&
+DevicePrintParserImpl<PointerSize>::resolve_combined_stack(uint32_t pc, uint32_t ra) {
+    const uint64_t key = (static_cast<uint64_t>(pc) << 32) | static_cast<uint64_t>(ra);
+    auto [it, inserted] = callstack_cache_.try_emplace(key);
+    std::vector<InlineFrame>& result = it->second;
+    if (!inserted) {
+        return result;
+    }
+    if (text_base_address == 0) {
+        return result;
+    }
+
+    Dwarf_Debug dbg = nullptr;
+    Dwarf_Error err = nullptr;
+    if (dwarf_init_path(elf_path.c_str(), nullptr, 0, DW_GROUPNUMBER_ANY, nullptr, nullptr, &dbg, &err) != DW_DLV_OK) {
+        return result;
+    }
+
+    auto resolve_one = [&](uint32_t normalized_addr) -> std::vector<InlineFrame> {
+        if (normalized_addr == 0xFFFFFFFFu || normalized_addr == 0xFFFFFFFEu) {
+            return {};
+        }
+        const Dwarf_Addr abs_addr = static_cast<Dwarf_Addr>(normalized_addr) + text_base_address;
+
+        Dwarf_Unsigned cu_header_length = 0;
+        Dwarf_Half version_stamp = 0;
+        Dwarf_Off abbrev_offset = 0;
+        Dwarf_Half address_size = 0;
+        Dwarf_Half offset_size = 0;
+        Dwarf_Half extension_size = 0;
+        Dwarf_Sig8 type_signature;
+        Dwarf_Unsigned typeoffset = 0;
+        Dwarf_Unsigned next_cu_header = 0;
+        Dwarf_Half header_cu_type = 0;
+        // Restart CU iteration cleanly.
+        while (dwarf_next_cu_header_d(
+                   dbg, true, &cu_header_length, &version_stamp, &abbrev_offset, &address_size, &offset_size,
+                   &extension_size, &type_signature, &typeoffset, &next_cu_header, &header_cu_type, &err) ==
+               DW_DLV_OK) {
+            Dwarf_Die cu_die = nullptr;
+            if (dwarf_siblingof_b(dbg, nullptr, true, &cu_die, &err) != DW_DLV_OK) {
+                continue;
+            }
+            auto chain = find_inline_chain(dbg, cu_die, abs_addr);
+            if (chain.empty()) {
+                dwarf_dealloc_die(cu_die);
+                continue;
+            }
+            // Populate both "call" (where this frame was inlined from) and "decl" (where
+            // this frame's function is defined). The format dispatcher decides which to
+            // surface for each slot.
+            std::vector<InlineFrame> frames;
+            frames.reserve(chain.size());
+            for (size_t i = 0; i < chain.size(); ++i) {
+                InlineFrame f;
+                f.name = std::move(chain[i].name);
+                if (chain[i].call_die) {
+                    f.call_file = read_call_file(dbg, chain[i].call_die, cu_die);
+                    f.call_line = read_call_line(chain[i].call_die);
+                    f.decl_file = read_decl_file(dbg, chain[i].call_die);
+                    f.decl_line = read_decl_line(dbg, chain[i].call_die);
+                }
+                frames.push_back(std::move(f));
+            }
+            // Drain the chain so DIE handles are freed.
+            for (auto& cf : chain) {
+                if (cf.call_die) {
+                    dwarf_dealloc_die(cf.call_die);
+                    cf.call_die = nullptr;
+                }
+            }
+            // Innermost first, matching the Python prototype's reversed output.
+            std::reverse(frames.begin(), frames.end());
+            dwarf_dealloc_die(cu_die);
+            // Reset CU iteration for any subsequent caller.
+            while (dwarf_next_cu_header_d(
+                       dbg, true, &cu_header_length, &version_stamp, &abbrev_offset, &address_size, &offset_size,
+                       &extension_size, &type_signature, &typeoffset, &next_cu_header, &header_cu_type, &err) ==
+                   DW_DLV_OK) {
+            }
+            return frames;
+        }
+        return {};
+    };
+
+    auto pc_chain = resolve_one(pc);
+    auto ra_chain = resolve_one(ra);
+
+    // Combined stack, innermost first: [PC innermost...PC outermost, RA innermost...RA outermost].
+    result.reserve(pc_chain.size() + ra_chain.size());
+    for (auto& f : pc_chain) {
+        result.push_back(std::move(f));
+    }
+    for (auto& f : ra_chain) {
+        result.push_back(std::move(f));
+    }
+
+    dwarf_finish(dbg);
+    return result;
+}
+
+template <uint8_t PointerSize>
+void DevicePrintParserImpl<PointerSize>::format_callstack_field(
+    fmt::memory_buffer& out, const std::string& fmt_format, uint32_t pc, uint32_t ra, char type_id) {
+    using TC = device_print_detail::structures::DevicePrintCallstackTypeChars;
+    auto format = fmt::runtime(fmt_format);
+    auto sink = std::back_inserter(out);
+
+    const auto& stack = resolve_combined_stack(pc, ra);
+    // The PC/RA are captured by FunctionZone's constructor (LLK_SAN_FUNCTION) inside
+    // the user's Compute API function. The chain at the auipc is:
+    //   [0] write_unwind_context
+    //   [1] thread_context_push_impl
+    //   [2] thread_context_push
+    //   [3] FunctionZone::FunctionZone
+    //   [4] Compute API (e.g. mm_block_init in matmul.h)
+    //   [5] kernel_main (caller of the Compute API)
+    // We surface a single call edge — callee=[4], caller=[5] — so the user sees:
+    //   "Compute API"  = name of [4] + where [4] is *defined*  (decl_file/decl_line)
+    //   "Callsite"     = name of [5] + where in [5]'s body the call happened
+    //                                   (= [4]'s call_file/call_line)
+    auto pick = [&](size_t idx) -> const InlineFrame* {
+        if (idx < stack.size()) {
+            return &stack[idx];
+        }
+        if (!stack.empty()) {
+            return &stack.back();
+        }
+        return nullptr;
+    };
+    const InlineFrame* callee = pick(4);
+    const InlineFrame* caller = pick(5);
+    auto unresolved_for = [&](char tid) -> std::string {
+        const bool is_pc = tid == TC::pc_file || tid == TC::pc_line || tid == TC::pc_func;
+        return fmt::format("<unresolved 0x{:x}>", is_pc ? pc : ra);
+    };
+    auto field_or_unresolved = [&](const std::string& field, char tid) -> std::string {
+        return field.empty() ? unresolved_for(tid) : field;
+    };
+    switch (type_id) {
+        case TC::pc_file:
+            fmt::format_to(sink, format, callee ? field_or_unresolved(callee->decl_file, type_id) : unresolved_for(type_id));
+            break;
+        case TC::pc_line:
+            fmt::format_to(sink, format, callee ? callee->decl_line : 0u);
+            break;
+        case TC::pc_func:
+            fmt::format_to(sink, format, callee ? field_or_unresolved(callee->name, type_id) : unresolved_for(type_id));
+            break;
+        case TC::ra_file:
+            // Where in the caller's body the call to the callee was made — that's
+            // the callee's call_file (the callee was inlined from this location).
+            fmt::format_to(sink, format, callee ? field_or_unresolved(callee->call_file, type_id) : unresolved_for(type_id));
+            break;
+        case TC::ra_line:
+            fmt::format_to(sink, format, callee ? callee->call_line : 0u);
+            break;
+        case TC::ra_func:
+            fmt::format_to(sink, format, caller ? field_or_unresolved(caller->name, type_id) : unresolved_for(type_id));
+            break;
+        default: break;
+    }
 }
 
 }  // namespace tt::tt_metal

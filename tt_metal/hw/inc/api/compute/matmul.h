@@ -91,6 +91,7 @@ ALWI void mm_init(
     uint32_t out_cb_id,
     const uint32_t transpose = 0,
     uint32_t call_line = __builtin_LINE()) {
+        LLK_SAN_FUNCTION(ttttt);
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, out_cb_id, call_line);
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(in1_cb_id, in0_cb_id)));
@@ -239,6 +240,7 @@ ALWI void mm_block_init(
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1,
     uint32_t call_line = __builtin_LINE()) {
+        LLK_SAN_FUNCTION(ttttt);
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, out_cb_id, call_line);
 

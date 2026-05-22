@@ -71,12 +71,12 @@ NOINLINE NOCLONE void _print_compute_info(const UnwindContext context)
         "│  │                └ {}:{}\r"
         "│  └── Callsite ────┬ {}\r"
         "│                   └ {}:{}\r",
-        DevicePrintTopCallstack<0>(context),
-        DevicePrintTopCallstack<1>(context),
-        DevicePrintTopCallstack<2>(context),
-        DevicePrintTopCallstack<3>(context),
-        DevicePrintTopCallstack<4>(context),
-        DevicePrintTopCallstack<5>(context));
+        DevicePrintTopCallstack<2>(context),  // pc func first
+        DevicePrintTopCallstack<0>(context),  // pc file
+        DevicePrintTopCallstack<1>(context),  // pc line
+        DevicePrintTopCallstack<5>(context),  // ra func first
+        DevicePrintTopCallstack<3>(context),  // ra file
+        DevicePrintTopCallstack<4>(context)); // ra line
 }
 
 template <typename T>

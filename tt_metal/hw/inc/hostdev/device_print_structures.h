@@ -59,4 +59,27 @@ struct DevicePrintHeader {
 
 static_assert(sizeof(DevicePrintHeader) == sizeof(uint32_t));
 
+// Top-of-callstack frame: 8-byte payload (PC then RA, each 32-bit) emitted by
+// DevicePrintTopCallstack<Type> on the device. PC and RA are normalized by the
+// kernel base on the device side.
+struct DevicePrintCallstackFrame {
+    uint32_t pc;
+    uint32_t ra;
+};
+static_assert(sizeof(DevicePrintCallstackFrame) == 8);
+
+// Type chars for the six DevicePrintTopCallstack<Type> specializations on the device.
+// Device-side `device_print_type<DevicePrintTopCallstack<Type>>::get_char()` returns
+// '0' + Type, so the chars are literally '0' through '5'. All six render via DWARF.
+//   <0>, <1>, <2> read from `pc` — Compute API frame  (file / line / function)
+//   <3>, <4>, <5> read from `ra` — Callsite frame     (file / line / function)
+struct DevicePrintCallstackTypeChars {
+    static constexpr char pc_file = '0';
+    static constexpr char pc_line = '1';
+    static constexpr char pc_func = '2';
+    static constexpr char ra_file = '3';
+    static constexpr char ra_line = '4';
+    static constexpr char ra_func = '5';
+};
+
 }  // namespace device_print_detail::structures
