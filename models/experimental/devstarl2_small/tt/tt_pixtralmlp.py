@@ -111,7 +111,6 @@ class MistralTTVisionMLP(LightweightModule):
 
         def run_chunk(xc: ttnn.Tensor, m_len: int) -> ttnn.Tensor:
             chunk_seq_len = int(xc.shape[-2])
-            fuse_batch = m_len <= mm_seq_len
             pc_w13 = self.model_config["IMAGE_MLP_FC_PROGCFG"](m_len, mm_seq_len)
             pc_w2 = self.model_config["IMAGE_MLP_PROJ_PROGCFG"](m_len, mm_seq_len)
 
