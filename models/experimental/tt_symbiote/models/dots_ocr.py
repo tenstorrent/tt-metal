@@ -496,9 +496,13 @@ def _create_paged_kv_cache(model_config, device, batch_size: int = 1):
         "head_dim",
         model_config.hidden_size // model_config.num_attention_heads,
     )
-    # Keep at least 64 pages per DP stream. The vision prompt is ~2.8K tokens;
-    # a fixed 256 global block pool gives only 2K tokens/stream at batch 8.
-    blocks_per_sequence = 64
+    # Per-stream cap = blocks_per_sequence * block_size positions. Full-page
+    # layout OCR prefill is ~3K tokens (e.g. a 1241x1755 page with patch=14
+    # merge_size=2 yields ~2.8K imgpad tokens) and the JSON layout response
+    # can run another ~2K decode tokens, so 64 blocks (4K cap) overflows the
+    # page table mid-generation and stalls the dispatcher. 128 blocks gives
+    # 8K positions of headroom for full-page layout runs.
+    blocks_per_sequence = 128
     config = PagedAttentionConfig(
         block_size=64,
         max_num_blocks=max(256, batch_size * blocks_per_sequence),
