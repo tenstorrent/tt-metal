@@ -33,11 +33,15 @@ namespace tt::tt_fabric::physical_discovery {
 namespace {
 
 PortType expected_port_type_for_connection(const tt::tt_metal::ASICDescriptor& asic_descriptor, uint8_t src_chan) {
-    auto board = tt::scaleout_tools::create_board(asic_descriptor.board_type);
-    return board
-        .get_port_for_asic_channel(
-            tt::scaleout_tools::AsicChannel{*asic_descriptor.asic_location, tt::scaleout_tools::ChanId{src_chan}})
-        .port_type;
+    try {
+        auto board = tt::scaleout_tools::create_board(asic_descriptor.board_type);
+        return board
+            .get_port_for_asic_channel(
+                tt::scaleout_tools::AsicChannel{*asic_descriptor.asic_location, tt::scaleout_tools::ChanId{src_chan}})
+            .port_type;
+    } catch (const std::runtime_error&) {
+        return PortType::TRACE;
+    }
 }
 
 }  // namespace
