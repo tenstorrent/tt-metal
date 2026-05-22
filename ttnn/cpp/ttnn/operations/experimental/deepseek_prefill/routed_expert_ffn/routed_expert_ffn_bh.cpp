@@ -7,6 +7,7 @@
 #include "tt-metalium/math.hpp"
 #include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn::detail {
@@ -59,7 +60,7 @@ ttnn::Tensor routed_expert_ffn_bh(
 
     auto gate_up_grid = CoreRangeSet({CoreRange({0, 0}, {GRID_X - 1, gate_up_grid_y - 1})});
 
-    auto gate_up_config = ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
+    auto gate_up_config_no_act = ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
         .compute_with_storage_grid_size = {GRID_X, gate_up_grid_y},
         .in0_block_w = gate_up_in0_bw,
         .out_subblock_h = 1,
@@ -72,6 +73,13 @@ ttnn::Tensor routed_expert_ffn_bh(
         .fuse_batch = false,
     };
 
+    // Fuse silu into the gate matmul via the program config (the matmul-level
+    // `activation` param applies silu as a separate unary op on this path; the
+    // program-config field bakes it into the compute kernel).
+    auto gate_up_config_silu = gate_up_config_no_act;
+    gate_up_config_silu.fused_activation = ttnn::operations::unary::UnaryWithParam(
+        ttnn::operations::unary::UnaryOpType::SILU);
+
     auto gate_up_shard = tt::tt_metal::ShardSpec(
         gate_up_grid, {gate_up_per_core_M * ttnn::TILE_SIZE, gate_up_per_core_N * ttnn::TILE_SIZE});
     auto gate_up_mem = MemoryConfig{TensorMemoryLayout::BLOCK_SHARDED, BufferType::L1, gate_up_shard};
@@ -83,8 +91,8 @@ ttnn::Tensor routed_expert_ffn_bh(
         /*transpose_b=*/false,
         /*memory_config=*/gate_up_mem,
         /*dtype=*/std::nullopt,
-        /*program_config=*/gate_up_config,
-        /*activation=*/std::string("silu"),
+        /*program_config=*/gate_up_config_silu,
+        /*activation=*/std::nullopt,
         /*compute_kernel_config=*/compute_kernel_config);
 
     auto up_result = ttnn::matmul(
@@ -94,7 +102,7 @@ ttnn::Tensor routed_expert_ffn_bh(
         /*transpose_b=*/false,
         /*memory_config=*/gate_up_mem,
         /*dtype=*/std::nullopt,
-        /*program_config=*/gate_up_config,
+        /*program_config=*/gate_up_config_no_act,
         /*activation=*/std::nullopt,
         /*compute_kernel_config=*/compute_kernel_config);
 
