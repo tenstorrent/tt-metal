@@ -327,7 +327,6 @@ class Gemma4Model:
                     args=self._make_sampling_args(hf_config, mesh_device, tp),
                     mesh_device=mesh_device,
                     tt_ccl=None,
-                    enable_internal_trace=False,
                 )
                 logger.info(
                     f"On-device sampling initialized (vocab={hf_config.vocab_size}, per_device={per_device_padded})"
@@ -740,8 +739,7 @@ class Gemma4Model:
         rot_mat_idxs=None,
         page_table=None,
         kv_cache=None,
-        sampling_on_device=False,
-        capture_sampling_trace=False,
+        on_device_logits=False,
         pli_combined=None,
     ):
         """Decode forward — matches tt_transformers Generator interface.
@@ -755,8 +753,7 @@ class Gemma4Model:
             rot_mat_idxs: Unused (RoPE computed internally from current_pos).
             page_table: Optional paged attention table.
             kv_cache: Optional KV cache override.
-            sampling_on_device: If True and self.sampling exists, sample on device.
-            capture_sampling_trace: If True, return logits for split-trace sampling.
+            on_device_logits: If True, return logits in on-device sampling layout.
             pli_combined: Optional [1,1,n_layers,pli_size] device tensor of host-precomputed
                 per-layer inputs (E2B/E4B). Required for Gemma3n-style models in decode.
         """
@@ -779,14 +776,10 @@ class Gemma4Model:
             pli_combined=ttnn.to_layout(pli_combined, ttnn.TILE_LAYOUT) if pli_combined is not None else None,
         )
 
-        # On-device sampling
-        if sampling_on_device and self.sampling is not None:
-            if capture_sampling_trace:
-                return logits  # Split-trace: return logits for separate sampling trace
+        if on_device_logits and self.sampling is not None:
             batch_dim = logits.shape[2]
             if batch_dim < 32:
                 logits = ttnn.pad(logits, padding=[(0, 0), (0, 0), (0, 32 - batch_dim), (0, 0)], value=0.0)
-            tt_tokens, tt_log_probs = self.sampling.sample(logits, enable_trace=False)
-            return tt_tokens, tt_log_probs
+            return logits
 
         return logits, None

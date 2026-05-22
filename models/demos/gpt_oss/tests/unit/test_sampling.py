@@ -294,7 +294,7 @@ def test_gpt_oss_stochastic_sampling(sampling_params, batch_size, mesh_device, d
     # SamplingGenerator manages seeds between iterations (TTSampling re-seeds
     # from seeds_tt_tensor each forward call, so seeds must be updated via
     # SeedManager.get_new_values() to get different random samples).
-    sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None, enable_internal_trace=False)
+    sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None)
     params = format_sampling_params(
         SamplingParams(temperature=temperature, top_k=top_k, top_p=top_p, seed=seed),
         batch_size,
@@ -386,7 +386,7 @@ def test_gpt_oss_penalties(penalty_params, mesh_device, device_params, reset_see
     # Shard and create SamplingGenerator with penalties
     tt_input = make_sharded_logits(torch_input, mesh_device, args.cluster_shape, dtype=ttnn.bfloat16)
 
-    sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None, enable_internal_trace=False)
+    sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None)
 
     params = format_sampling_params(
         SamplingParams(
@@ -448,7 +448,7 @@ def test_gpt_oss_logprobs(mesh_device, device_params, reset_seeds):
 
     tt_input = make_sharded_logits(torch_input, mesh_device, args.cluster_shape, dtype=ttnn.bfloat16)
 
-    sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None, enable_internal_trace=False)
+    sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None)
 
     seed = 42
     params = format_sampling_params(
@@ -515,7 +515,7 @@ def test_gpt_oss_topk_logprobs(mesh_device, device_params, reset_seeds):
     tt_input = make_sharded_logits(torch_input, mesh_device, args.cluster_shape, dtype=ttnn.bfloat16)
 
     # Create SamplingGenerator with use_topk_logprobs enabled
-    sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None, enable_internal_trace=False)
+    sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None)
 
     num_logprobs = 5
     params = format_sampling_params(
@@ -588,7 +588,7 @@ def _make_seeded_generator(args, mesh_device, batch_size, per_user_seeds):
     caller is responsible for calling it before each sample() to advance the
     RNG state and copy fresh seeds to the device.
     """
-    sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None, enable_internal_trace=False)
+    sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None)
     params = format_sampling_params(
         SamplingParams(temperature=1.0, top_k=32, top_p=0.95, seed=0),
         batch_size,

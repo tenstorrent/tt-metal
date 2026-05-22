@@ -471,7 +471,6 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 top_k=[DEFAULT_SAMPLING_TOP_K] * self.batch_size,
             )
         )
-
         if self.sample_on_device:
             params_same = previous_sampling_params is not None and self._are_sampling_params_same(
                 normalized_sampling_params, previous_sampling_params
@@ -488,7 +487,6 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     self._reset_sampling_state(normalized_sampling_params, self.batch_size, self.batch_size_per_row)
             else:
                 # create new sampling generator
-                enable_internal_trace_sampling = enable_trace
                 self.sampling_args = make_deepseek_sampling_args(
                     self.mesh_device,
                     self.hf_config.vocab_size,
@@ -499,7 +497,6 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     args=self.sampling_args,
                     mesh_device=self.mesh_device,
                     tt_ccl=self.ccl,
-                    enable_internal_trace=enable_internal_trace_sampling,
                 )
                 self._reset_sampling_state(normalized_sampling_params, self.batch_size, self.batch_size_per_row)
 
@@ -992,7 +989,6 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 sampling_logits = padded_logits
 
         self.sampling_generator.seed_manager.get_new_values(self._sampling_device_slots(user_slots))
-        self.sampling_generator.enable_internal_trace = enable_trace
         try:
             tt_out = self.sampling_generator.sample(
                 sampling_logits, enable_trace=enable_trace, skip_precompile=skip_precompile

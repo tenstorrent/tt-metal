@@ -165,7 +165,7 @@ class Generator(WarmupForwardMixin):
         self.prev_page_table = None
         self.already_warmed_up_prefill = False
         self.warming_up_prefill = False
-        self.trace_ids_decode = defaultdict(lambda: None)  # {return_logits: {device_id: trace_id}}
+        self.trace_ids_decode = defaultdict(lambda: None)  # {on_device_logits: {device_id: trace_id}}
         self.trace_inputs_decode = defaultdict(lambda: None)
         self.trace_output_decode = defaultdict(lambda: None)
         self._disable_prefill_tracing = False  # Whether to disable prefill traces
@@ -208,7 +208,7 @@ class Generator(WarmupForwardMixin):
         self.warming_up_prefill = True
 
         # Llama70b always supports on-device sampling from metal
-        sampling_on_device_enabled = True
+        on_device_sampling_enabled = True
 
         # Sweep all sampling parameters for prefill warmup just once since it is sequence length agnostic
         sampling_parameters_sweeped = False
@@ -247,8 +247,8 @@ class Generator(WarmupForwardMixin):
 
                 if not sampling_parameters_sweeped:
                     sampling_params_list = self._create_sampling_params(
-                        can_sample_on_device=sampling_on_device_enabled,
-                        non_greedy_decoding_on_device=sampling_on_device_enabled,
+                        can_sample_on_device=on_device_sampling_enabled,
+                        non_greedy_decoding_on_device=on_device_sampling_enabled,
                         batch_size=batch,
                     )
                 else:
@@ -419,8 +419,8 @@ class Generator(WarmupForwardMixin):
             tt_out_logits_all_users = torch.zeros(batch, 1, self.model.args.padded_vocab_size)
 
         # Prefill has two main modes:
-        # - return_logits=True: return logits to host (no on-device sampling)
-        # - return_logits=False: produce next-token ids; we only run on-device sampling when logits are not requested
+        # - host-logits mode: return logits to host (no on-device sampling)
+        # - on-device sampling mode: produce next-token ids when logits are not requested
         save_logits_to_host = tt_out_logits_all_users is not None
         do_device_sampling = (not return_logits) and (not save_logits_to_host)
 
@@ -1107,17 +1107,17 @@ class Generator(WarmupForwardMixin):
             enable_trace = False
 
         if sampling_params is None and not defer_device_sampling:
-            return_logits = True
+            on_device_logits = False
             reset_inputs = True  # We didn't sample on device, so we need to load inputs.
         else:
-            return_logits = False
+            on_device_logits = True
 
         # Track sampling mode changes to reset inputs when switching
         # between host sampling and device sampling (different trace has stale inputs)
-        sampling_on_device = (sampling_params is not None) or defer_device_sampling
-        prev_sampling_on_device = getattr(self, "_prev_sampling_on_device", None)
-        self._prev_sampling_on_device = sampling_on_device
-        if prev_sampling_on_device is not None and prev_sampling_on_device != sampling_on_device:
+        on_device_sampling = (sampling_params is not None) or defer_device_sampling
+        prev_on_device_sampling = getattr(self, "_prev_on_device_sampling", None)
+        self._prev_on_device_sampling = on_device_sampling
+        if prev_on_device_sampling is not None and prev_on_device_sampling != on_device_sampling:
             reset_inputs = True
         if self.prev_page_table is None:
             self.prev_page_table = (
@@ -1142,22 +1142,6 @@ class Generator(WarmupForwardMixin):
             "is_cur_pos_sharded": is_cur_pos_sharded,
             "is_page_table_sharded": is_page_table_sharded,
         }
-        # Apply slot remap from condense before advancing seeds.
-        if slot_remap is not None:
-            sm_bs = self.model.sampling.seed_manager.max_batch_size
-            rank_remap = slot_remap[0:sm_bs]
-            self.model.sampling.seed_manager.apply_slot_remap(rank_remap)
-        self.model.sampling.seed_manager.get_new_values()
-        if reset_inputs and sampling_params is not None:
-            # If we have new inputs, we need to set up the sampling module again
-            sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
-
-            sampling_module = self.model.sampling
-            sampling_module.reset_sampling_params(sampling_params)
-            if reset_batch:
-                sampling_module.reset_prompt_tokens(prompt_tokens)
-                sampling_module.reset_output_state(output_tokens)
-
         if tt_out_logits_saved is not None:
             decode_kwargs["tt_out_logits_saved"] = tt_out_logits_saved
 
@@ -1165,18 +1149,30 @@ class Generator(WarmupForwardMixin):
             tt_tok, tt_log_probs = self._decode_easy_trace_text(
                 **decode_kwargs,
                 reset_inputs=reset_inputs,
-                return_logits=return_logits,
+                on_device_logits=on_device_logits,
                 defer_device_sampling=defer_device_sampling,
             )
         else:
             tt_tok, tt_log_probs = self._decode_forward_no_trace_text(
                 **decode_kwargs,
-                return_logits=return_logits,
+                on_device_logits=on_device_logits,
                 defer_device_sampling=defer_device_sampling,
             )
 
         if defer_device_sampling:
             return tt_tok
+        if sampling_params is not None:
+            tt_out_tok = self.trace_inputs_decode[on_device_logits][0] if enable_trace else None
+            tt_tok, tt_log_probs = self.sample_decode_on_device(
+                tt_tok,
+                sampling_params=sampling_params,
+                reset_batch=reset_batch,
+                prompt_tokens=prompt_tokens,
+                output_tokens=output_tokens,
+                slot_remap=slot_remap,
+                tt_out_tok=tt_out_tok,
+                enable_trace=enable_trace,
+            )
 
         if read_from_device:
             # IMPORTANT: If split sampling is enabled, `tt_log_probs` is produced by the sampling
@@ -1188,7 +1184,7 @@ class Generator(WarmupForwardMixin):
             if async_read:
                 return tt_out
             else:
-                return self.process_decode_output_host(tt_out, is_tokens=(not return_logits))
+                return self.process_decode_output_host(tt_out, is_tokens=on_device_logits)
 
         return tt_tok, tt_log_probs
 
@@ -1201,7 +1197,7 @@ class Generator(WarmupForwardMixin):
         tt_out_logits_saved=None,
         is_cur_pos_sharded=False,
         is_page_table_sharded=False,
-        return_logits=False,
+        on_device_logits=False,
         defer_device_sampling=False,
     ):
         """
@@ -1219,16 +1215,11 @@ class Generator(WarmupForwardMixin):
             kv_cache=kv_cache,
             tt_out_logits_saved=tt_out_logits_saved,
             is_cur_pos_sharded=is_cur_pos_sharded,
-            return_logits=return_logits,
+            on_device_logits=on_device_logits,
         )
 
-        if not return_logits:
-            if defer_device_sampling:
-                return tt_tok[0], None
-            return self.model.sampling.sample(
-                logits=tt_tok[0],
-                enable_trace=False,
-            )
+        if on_device_logits:
+            return tt_tok[0], None
         return tt_tok
 
     def _capture_trace_text(
@@ -1239,7 +1230,7 @@ class Generator(WarmupForwardMixin):
         kv_cache=None,
         is_cur_pos_sharded=False,
         is_page_table_sharded=False,
-        return_logits=False,
+        on_device_logits=False,
     ):
         """
         Captures a trace for the decode_forward method.
@@ -1253,7 +1244,7 @@ class Generator(WarmupForwardMixin):
             kv_cache=kv_cache,
             is_cur_pos_sharded=is_cur_pos_sharded,
             is_page_table_sharded=is_page_table_sharded,
-            return_logits=return_logits,
+            on_device_logits=on_device_logits,
         )
         logger.info("Done Compiling Model")
 
@@ -1271,7 +1262,7 @@ class Generator(WarmupForwardMixin):
             page_table_tt,
             kv_cache=kv_cache,
             is_cur_pos_sharded=is_cur_pos_sharded,
-            return_logits=return_logits,
+            on_device_logits=on_device_logits,
         )
 
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
@@ -1304,15 +1295,15 @@ class Generator(WarmupForwardMixin):
         reset_inputs=False,
         is_cur_pos_sharded=False,
         is_page_table_sharded=False,
-        return_logits=False,
+        on_device_logits=False,
         defer_device_sampling=False,
     ):
         """
         Run decode forward text with tracing
         """
         tokens = tokens.view(-1, 1)
-        # The trace is different depending on whether we are returning logits or sampling on device
-        if not self.trace_ids_decode[return_logits]:
+        # The trace is different depending on whether decode returns sampling-layout logits.
+        if not self.trace_ids_decode[on_device_logits]:
             trace_id, tt_out_tok, *device_inputs = self._capture_trace_text(
                 tokens,
                 current_pos,
@@ -1320,11 +1311,11 @@ class Generator(WarmupForwardMixin):
                 kv_cache=kv_cache,
                 is_cur_pos_sharded=is_cur_pos_sharded,
                 is_page_table_sharded=is_page_table_sharded,
-                return_logits=return_logits,
+                on_device_logits=on_device_logits,
             )
-            self.trace_ids_decode[return_logits] = trace_id
-            self.trace_inputs_decode[return_logits] = device_inputs
-            self.trace_output_decode[return_logits] = tt_out_tok
+            self.trace_ids_decode[on_device_logits] = trace_id
+            self.trace_inputs_decode[on_device_logits] = device_inputs
+            self.trace_output_decode[on_device_logits] = tt_out_tok
         if reset_inputs:
             host_inputs = self.model.prepare_decode_inputs_host(
                 tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded
@@ -1332,26 +1323,21 @@ class Generator(WarmupForwardMixin):
             shard_specs = self.model.prepare_decode_shard_configs(is_cur_pos_sharded, is_page_table_sharded)
             device_inputs = copy_host_to_device(
                 host_tensors=host_inputs,
-                device_tensors=self.trace_inputs_decode[return_logits],
+                device_tensors=self.trace_inputs_decode[on_device_logits],
                 shard_specs=shard_specs,
             )
 
         trace_tok_rm = self._decode_forward_trace_text(
-            self.trace_ids_decode[return_logits],
-            self.trace_inputs_decode[return_logits],
-            self.trace_output_decode[return_logits],
+            self.trace_ids_decode[on_device_logits],
+            self.trace_inputs_decode[on_device_logits],
+            self.trace_output_decode[on_device_logits],
             tokens,
             current_pos,
             page_table=page_table,
         )
 
-        if not return_logits:
-            if defer_device_sampling:
-                return trace_tok_rm[0], None
-            return self.model.sampling.sample(
-                logits=trace_tok_rm[0],
-                tt_out_tok=self.trace_inputs_decode[return_logits][0],
-            )
+        if on_device_logits:
+            return trace_tok_rm[0], None
 
         return trace_tok_rm
 
