@@ -6,9 +6,13 @@
 Scenarios
 ---------
 1. in0=DRAM interleaved, in1=DRAM interleaved, out=L1 interleaved
+1b. all four shapes — in0/in1/out all DRAM interleaved (``test_matmul_dram_all_interleaved``)
+1c. all four shapes — in0=L1 interleaved, in1/out=DRAM interleaved (``test_matmul_l1_dram_dram_interleaved``)
 2a. in0=L1 interleaved,  in1=DRAM interleaved, out=L1 interleaved
 2b. in0=L1 sharded (height / width / block), in1=DRAM interleaved, out=L1 interleaved
 2c. in0=L1 interleaved,  in1=DRAM interleaved, explicit per-core-M/N grid variants
+2d. in0=L1 width sharded, in1=DRAM sharded (height / width / block), out=L1 width sharded
+    (``test_matmul_l1_ws_dram_in1_sharded_l1_ws_out``)
 
 Shapes
 ------
@@ -18,7 +22,12 @@ Shapes
   mlp_fc2    : 12288 × 4224 × 1536   BFP8 × BFP8 → BFP8   ~1485 μs
 
 Results are written to models/experimental/tt_symbiote/tests/new_report/
-as a timestamped CSV with one row per matmul run.
+as a timestamped CSV with one row per matmul run (includes program-config fields,
+shard details, timing, and status for every attempt).
+
+Memory combo sweep (``test_matmul_memory_combo_sweep``):
+  L1 in0 × DRAM interleaved in1 × L1 out × {interleaved, height, width, block} × core grids.
+  ~100 combos per shape (~400 tests total). Filter with ``-k test_matmul_memory_combo``.
 
 Run all::
 
@@ -33,16 +42,90 @@ Filter by shape::
 
     pytest models/experimental/tt_symbiote/tests/test_dots_ocr_matmul_unit.py \
         -k "mlp_fc2" -s
+
+Run one vision_qkv config at a time (use ``-s`` to see program-config prints)::
+
+    # Scenario 1 — DRAM in0 / DRAM in1 / L1 out (production prog config)
+    pytest models/experimental/tt_symbiote/tests/test_dots_ocr_matmul_unit.py \
+        -k "test_matmul_dram_in0_dram_in1_l1_out and vision_qkv" -s
+
+    # Scenario 1b — all shapes: DRAM in0 / DRAM in1 / DRAM out (all interleaved)
+    pytest models/experimental/tt_symbiote/tests/test_dots_ocr_matmul_unit.py \
+        -k "test_matmul_dram_all_interleaved" -s
+
+    # Scenario 1c — all shapes: L1 in0 / DRAM in1 / DRAM out (all interleaved)
+    pytest models/experimental/tt_symbiote/tests/test_dots_ocr_matmul_unit.py \
+        -k "test_matmul_l1_dram_dram_interleaved" -s
+
+    # Scenario 2d — L1 width in0/out, DRAM-sharded in1 (height/width/block × 4/8c)
+    pytest models/experimental/tt_symbiote/tests/test_dots_ocr_matmul_unit.py \
+        -k "test_matmul_l1_ws_dram_in1_sharded_l1_ws_out and vision_qkv" -s
+
+    # Scenario 2a — L1 interleaved in0
+    pytest models/experimental/tt_symbiote/tests/test_dots_ocr_matmul_unit.py \
+        -k "test_matmul_l1_in0_interleaved and vision_qkv" -s
+
+    # Scenario 2b — one shard variant (pick hs_8c, hs_32c, ws_4c, bs_6x8, ...)
+    pytest models/experimental/tt_symbiote/tests/test_dots_ocr_matmul_unit.py \
+        -k "test_matmul_l1_in0_sharded and vision_qkv and hs_8c" -s
+
+    # Scenario 2c — one explicit grid (pick gx6_gy6, gx8_gy8, ...)
+    pytest models/experimental/tt_symbiote/tests/test_dots_ocr_matmul_unit.py \
+        -k "test_matmul_compute_grid_variants and vision_qkv and gx6_gy6" -s
+
+    # Or target an exact parametrized node (no -k ambiguity):
+    pytest models/experimental/tt_symbiote/tests/test_dots_ocr_matmul_unit.py::test_matmul_dram_in0_dram_in1_l1_out[vision_qkv-device_params0] -s
+    pytest models/experimental/tt_symbiote/tests/test_dots_ocr_matmul_unit.py::test_matmul_l1_in0_sharded[vision_qkv-hs_8c-device_params0] -s
+    pytest models/experimental/tt_symbiote/tests/test_dots_ocr_matmul_unit.py::test_matmul_compute_grid_variants[vision_qkv-gx8_gy8-device_params0] -s
+
+    # List all vision_qkv nodes: pytest ... --collect-only -q | grep vision_qkv
+
+vision_qkv nodes (what each one tests)
+--------------------------------------
+All nodes use shape 12288×1536×4608 (BF16 activations × BFP8 weights → BFP8 out),
+LoFi math, in1=DRAM interleaved. Tracy ref ≈ 1903 μs for the production path.
+
+Program-config fields printed with ``-s``:
+
+  in0_block_w   — K-direction tile blocks loaded into L1 per iteration (larger → fewer DRAM reads)
+  per_core_M    — M tiles each core owns (M_tiles=384; grid_y=8 → 48)
+  per_core_N    — N tiles each core owns (N_tiles=144; grid_x=8 → 18 for vision_qkv)
+  out_subblock_w — output sub-block width in the matmul kernel (affects DST register use)
+
+Scenario 1 — ``test_matmul_dram_in0_dram_in1_l1_out[vision_qkv-*]``
+  Matches dots.ocr production: activations and weights in DRAM, output in L1.
+  Uses ``_vision_matmul_program_config`` (tuned 8×8 grid, typically ibw=8 pcM=48 pcN=18).
+
+Scenario 2a — ``test_matmul_l1_in0_interleaved[vision_qkv-*]``
+  Activations pre-staged in L1 interleaved (no DRAM read for in0). Same production prog config.
+  Isolates DRAM BW savings when in0 is already on-chip.
+
+Scenario 2b — ``test_matmul_l1_in0_sharded[vision_qkv-<shard>-*]``
+  Activations in L1 with sharding; TTNN auto program config (prog_cfg=None → prints ``auto``).
+
+  hs_8c / hs_32c / hs_64c — HEIGHT sharded in0: split M across 8 / 32 / 64 cores.
+  ws_4c / ws_8c           — WIDTH sharded in0: split K across 4 / 8 cores (often OOM-skipped).
+  bs_6x8 / bs_4x8         — BLOCK sharded in0: 6×8 or 4×8 core grid over M and K.
+
+Scenario 2c — ``test_matmul_compute_grid_variants[vision_qkv-<grid>-*]``
+  L1 interleaved in0 with explicit ``MatmulMultiCoreReuseMultiCastProgramConfig`` per grid.
+  Sweeps compute grid (grid_x × grid_y) and derived per_core_M / per_core_N:
+
+  gx6_gy6 → 36 cores, pcM=64, pcN=24   |  gx6_gy8 → 48 cores, pcM=48, pcN=24
+  gx8_gy6 → 48 cores, pcM=64, pcN=18   |  gx8_gy8 → 64 cores, pcM=48, pcN=18  (production grid)
+  gx4_gy8 → 32 cores, pcM=48, pcN=36   |  gx4_gy6 → 24 cores, pcM=64, pcN=36
 """
 
 from __future__ import annotations
 
 import csv
+import itertools
+import math
 import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 import pytest
 import torch
@@ -111,6 +194,9 @@ _CSV_HEADERS = [
     "in0 Memory Config",
     "in1 Memory Config",
     "Output Memory Config",
+    "in0 Shard Detail",
+    "in1 Shard Detail",
+    "out Shard Detail",
     "Status",
     "Device Time (us)",
     "Compute Cores",
@@ -153,16 +239,150 @@ def _l1_shard_fits(shard_h: int, shard_w: int, dtype: ttnn.DataType) -> bool:
     return shard_h * shard_w * _elem_bytes(dtype) <= _L1_PER_CORE_BYTES
 
 
+_LAYOUT_NAMES = {
+    ttnn.TensorMemoryLayout.INTERLEAVED: "INTERLEAVED",
+    ttnn.TensorMemoryLayout.HEIGHT_SHARDED: "HEIGHT_SHARDED",
+    ttnn.TensorMemoryLayout.WIDTH_SHARDED: "WIDTH_SHARDED",
+    ttnn.TensorMemoryLayout.BLOCK_SHARDED: "BLOCK_SHARDED",
+}
+
+
+def _describe_mem_config(mem: ttnn.MemoryConfig) -> str:
+    """One-line buffer + layout + shard summary for in0 / in1 / out."""
+    buf = "DRAM" if mem.buffer_type == ttnn.BufferType.DRAM else "L1"
+    layout = _LAYOUT_NAMES.get(mem.memory_layout, str(mem.memory_layout).split(".")[-1])
+    parts = [f"{buf} {layout}"]
+
+    if mem.shard_spec is not None:
+        shard_h, shard_w = mem.shard_spec.shape
+        nc = mem.shard_spec.grid.num_cores()
+        ranges = list(mem.shard_spec.grid.ranges())
+        if ranges:
+            gs = ranges[0].grid_size()
+            parts.append(f"grid={int(gs.x)}x{int(gs.y)}")
+        parts.append(f"cores={nc}")
+        parts.append(f"shard=[{shard_h}x{shard_w}]")
+
+    return " ".join(parts)
+
+
+def _div_up(n: int, d: int) -> int:
+    return (n + d - 1) // d
+
+
+def _infer_out_subblock_w(per_core_n: int) -> int:
+    """Best-effort out_subblock_w (mirrors TTNN subblock divisibility heuristic)."""
+    for w in range(min(8, per_core_n), 0, -1):
+        if per_core_n % w == 0:
+            return w
+    return 1
+
+
+def _infer_sharded_matmul_pc(shape: _Shape, in0_mem: ttnn.MemoryConfig) -> Optional[Tuple[int, int, int, int]]:
+    """Infer TTNN auto matmul program config from sharded in0 (see get_matmul_program_config)."""
+    if in0_mem.shard_spec is None:
+        return None
+
+    shard_h, shard_w = in0_mem.shard_spec.shape
+    nc = in0_mem.shard_spec.grid.num_cores()
+    ranges = list(in0_mem.shard_spec.grid.ranges())
+    grid_x = int(ranges[0].grid_size().x) if ranges else 1
+    grid_y = int(ranges[0].grid_size().y) if ranges else 1
+
+    m_tiles = shape.m // _TILE
+    k_tiles = shape.k // _TILE
+    n_tiles = shape.n // _TILE
+    layout = in0_mem.memory_layout
+
+    if layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        per_core_m = shard_h // _TILE
+        per_core_n = n_tiles
+        in0_block_w = k_tiles
+    elif layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+        per_core_m = m_tiles
+        per_core_n = _div_up(n_tiles, nc)
+        in0_block_w = math.gcd(shard_w // _TILE, k_tiles)
+    elif layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+        per_core_m = _div_up(m_tiles, grid_y)
+        per_core_n = _div_up(n_tiles, grid_x)
+        k_per_shard = shard_w // _TILE
+        cores_along_k = grid_x == k_tiles // k_per_shard if k_per_shard else False
+        in0_block_w = math.gcd(k_per_shard, k_tiles) if cores_along_k else 1
+    else:
+        return None
+
+    out_subblock_w = _infer_out_subblock_w(per_core_n)
+    return in0_block_w, per_core_m, per_core_n, out_subblock_w
+
+
+def _resolve_pc_meta(
+    prog_cfg,
+    shape: Optional[_Shape] = None,
+    in0_mem: Optional[ttnn.MemoryConfig] = None,
+) -> Tuple[str, str, str, str]:
+    """(in0_block_w, per_core_M, per_core_N, out_subblock_w) from explicit or sharded-auto config."""
+    if prog_cfg is not None:
+        return _extract_pc_meta(prog_cfg)
+
+    if shape is not None and in0_mem is not None:
+        inferred = _infer_sharded_matmul_pc(shape, in0_mem)
+        if inferred is not None:
+            ibw, pcm, pcn, osw = inferred
+            return str(ibw), str(pcm), str(pcn), str(osw)
+
+    return "", "", "", ""
+
+
 def _extract_pc_meta(prog_cfg) -> Tuple[str, str, str, str]:
-    """(in0_block_w, per_core_M, per_core_N, out_subblock_w) from a program config."""
-    if prog_cfg is None:
-        return "", "", "", ""
+    """(in0_block_w, per_core_M, per_core_N, out_subblock_w) from an explicit program config."""
     return (
         str(getattr(prog_cfg, "in0_block_w", "")),
         str(getattr(prog_cfg, "per_core_M", "")),
         str(getattr(prog_cfg, "per_core_N", "")),
         str(getattr(prog_cfg, "out_subblock_w", "")),
     )
+
+
+def _print_program_config(
+    shape: _Shape,
+    config_name: str,
+    prog_cfg,
+    *,
+    in0_mem: Optional[ttnn.MemoryConfig] = None,
+    in1_mem: Optional[ttnn.MemoryConfig] = None,
+    out_mem: Optional[ttnn.MemoryConfig] = None,
+    core_grid: str = "",
+    compute_cores: Optional[int] = None,
+) -> None:
+    """Print matmul program-config knobs and in0/in1/out sharding (pytest -s)."""
+    inferred_auto = prog_cfg is None and in0_mem is not None and in0_mem.shard_spec is not None
+    in0_block_w, per_core_m, per_core_n, out_subblock_w = _resolve_pc_meta(prog_cfg, shape, in0_mem)
+    pc_grid = getattr(prog_cfg, "compute_with_storage_grid_size", None) if prog_cfg is not None else None
+    if pc_grid is not None:
+        gx, gy = int(pc_grid.x), int(pc_grid.y)
+        grid = core_grid or f"{gx}x{gy}"
+        cores = compute_cores if compute_cores is not None else gx * gy
+    else:
+        grid = core_grid or "auto"
+        cores = compute_cores if compute_cores is not None else "auto"
+
+    pc_tag = " (TTNN auto, inferred from in0 shard)" if inferred_auto else ""
+    lines = [
+        f"[{shape.name}] {config_name}{pc_tag}: "
+        f"in0_block_w={in0_block_w or 'auto'}  "
+        f"per_core_M={per_core_m or 'auto'}  "
+        f"per_core_N={per_core_n or 'auto'}  "
+        f"out_subblock_w={out_subblock_w or 'auto'}  "
+        f"matmul_grid={grid}  matmul_cores={cores}",
+    ]
+    if in0_mem is not None and in1_mem is not None and out_mem is not None:
+        lines.append(f"  in0: {_describe_mem_config(in0_mem)}")
+        lines.append(f"  in1: {_describe_mem_config(in1_mem)}")
+        lines.append(f"  out: {_describe_mem_config(out_mem)}")
+
+    for line in lines:
+        print(line)
+        logger.info(line)
 
 
 def _skip_oom(
@@ -178,6 +398,28 @@ def _skip_oom(
 ) -> None:
     """Write a SKIPPED_OOM row to the CSV then call pytest.skip."""
     size_kb = shard_h * shard_w * _elem_bytes(shape.in0_dtype) // 1024
+    # Best-effort PC inference for skip logging (no MemoryConfig object yet).
+    try:
+        if "Height" in in0_desc:
+            tmp_mem = _height_shard_mem(shape.m, shape.k, num_cores=cores)
+        elif "Width" in in0_desc:
+            tmp_mem = _width_shard_mem(shape.m, shape.k, num_cores=cores)
+        elif "Block" in in0_desc:
+            gx, gy = (int(grid.split("x")[0]), int(grid.split("x")[1]))
+            tmp_mem = _block_shard_mem(shape.m, shape.k, gx=gx, gy=gy)
+        else:
+            tmp_mem = None
+        ibw, pcm, pcn, osw = _resolve_pc_meta(None, shape, tmp_mem) if tmp_mem else ("", "", "", "")
+    except (ValueError, AssertionError):
+        ibw, pcm, pcn, osw = "", "", "", ""
+    print(
+        f"[{shape.name}] {config_name}: SKIPPED_OOM\n"
+        f"  in0_block_w={ibw or 'n/a'}  per_core_M={pcm or 'n/a'}  "
+        f"per_core_N={pcn or 'n/a'}  out_subblock_w={osw or 'n/a'}  (inferred)\n"
+        f"  in0: {in0_desc}  shard=[{shard_h}x{shard_w}]  (~{size_kb} KB/core)\n"
+        f"  in1: {in1_desc}\n"
+        f"  out: {out_desc}"
+    )
     _write_csv_row(
         shape,
         config_name,
@@ -222,14 +464,20 @@ def _write_csv_row(
     per_core_m: str,
     per_core_n: str,
     out_subblock_w: str,
+    in0_shard_detail: str = "",
+    in1_shard_detail: str = "",
+    out_shard_detail: str = "",
     # Which tensors live in DRAM (affects DRAM BW calculation)
     in0_in_dram: bool = True,
+    in1_in_dram: bool = True,
     out_in_dram: bool = False,
 ) -> None:
     """Compute derived metrics and append one row to the timestamped CSV."""
     if status == "PASS" and device_time_us is not None and device_time_us > 0:
         # DRAM traffic: in1 always DRAM; in0/out only if they reside in DRAM.
-        dram_bytes = shape.k * shape.n * _elem_bytes(shape.in1_dtype)
+        dram_bytes = 0
+        if in1_in_dram:
+            dram_bytes += shape.k * shape.n * _elem_bytes(shape.in1_dtype)
         if in0_in_dram:
             dram_bytes += shape.m * shape.k * _elem_bytes(shape.in0_dtype)
         if out_in_dram:
@@ -256,6 +504,9 @@ def _write_csv_row(
         in0_desc,
         in1_desc,
         out_desc,
+        in0_shard_detail,
+        in1_shard_detail,
+        out_shard_detail,
         status,
         t_str,
         compute_cores if compute_cores else "",
@@ -290,49 +541,51 @@ def _compact_grid(num_cores: int) -> ttnn.CoreRangeSet:
     return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(best_gx - 1, best_gy - 1))})
 
 
-def _height_shard_mem(m: int, k: int, num_cores: int) -> ttnn.MemoryConfig:
-    """HEIGHT_SHARDED L1: split M across num_cores, each shard is [m/nc, k]."""
+def _height_shard_mem(m: int, dim: int, num_cores: int, buf: ttnn.BufferType = ttnn.BufferType.L1) -> ttnn.MemoryConfig:
+    """HEIGHT_SHARDED: split m across num_cores, each shard is [m/nc, dim]."""
     if m % num_cores != 0:
         raise ValueError(f"M={m} not divisible by {num_cores}")
     shard_h = m // num_cores
     if shard_h % _TILE != 0:
         raise ValueError(f"shard_h={shard_h} not tile-aligned (M={m}, nc={num_cores})")
-    if k % _TILE != 0:
-        raise ValueError(f"k={k} not tile-aligned")
+    if dim % _TILE != 0:
+        raise ValueError(f"dim={dim} not tile-aligned")
     return ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(_compact_grid(num_cores), [shard_h, k], ttnn.ShardOrientation.ROW_MAJOR),
+        buf,
+        ttnn.ShardSpec(_compact_grid(num_cores), [shard_h, dim], ttnn.ShardOrientation.ROW_MAJOR),
     )
 
 
-def _width_shard_mem(m: int, k: int, num_cores: int) -> ttnn.MemoryConfig:
-    """WIDTH_SHARDED L1: split K across num_cores, each shard is [m, k/nc]."""
-    if k % num_cores != 0:
-        raise ValueError(f"K={k} not divisible by {num_cores}")
-    shard_w = k // num_cores
+def _width_shard_mem(m: int, dim: int, num_cores: int, buf: ttnn.BufferType = ttnn.BufferType.L1) -> ttnn.MemoryConfig:
+    """WIDTH_SHARDED: split dim across num_cores, each shard is [m, dim/nc]."""
+    if dim % num_cores != 0:
+        raise ValueError(f"dim={dim} not divisible by {num_cores}")
+    shard_w = dim // num_cores
     if shard_w % _TILE != 0:
-        raise ValueError(f"shard_w={shard_w} not tile-aligned (K={k}, nc={num_cores})")
+        raise ValueError(f"shard_w={shard_w} not tile-aligned (dim={dim}, nc={num_cores})")
     if m % _TILE != 0:
         raise ValueError(f"m={m} not tile-aligned")
     return ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
+        buf,
         ttnn.ShardSpec(_compact_grid(num_cores), [m, shard_w], ttnn.ShardOrientation.ROW_MAJOR),
     )
 
 
-def _block_shard_mem(m: int, k: int, gx: int, gy: int) -> ttnn.MemoryConfig:
-    """BLOCK_SHARDED L1: split M by gy rows and K by gx cols, shard=[m/gy, k/gx]."""
-    if m % gy != 0 or k % gx != 0:
-        raise ValueError(f"M={m} not divisible by gy={gy} or K={k} not divisible by gx={gx}")
-    shard_h, shard_w = m // gy, k // gx
+def _block_shard_mem(
+    m: int, dim: int, gx: int, gy: int, buf: ttnn.BufferType = ttnn.BufferType.L1
+) -> ttnn.MemoryConfig:
+    """BLOCK_SHARDED: split m by gy rows and dim by gx cols, shard=[m/gy, dim/gx]."""
+    if m % gy != 0 or dim % gx != 0:
+        raise ValueError(f"M={m} not divisible by gy={gy} or dim={dim} not divisible by gx={gx}")
+    shard_h, shard_w = m // gy, dim // gx
     if shard_h % _TILE != 0 or shard_w % _TILE != 0:
         raise ValueError(f"shard [{shard_h}, {shard_w}] not tile-aligned for block({gx}x{gy})")
     grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))})
     return ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-        ttnn.BufferType.L1,
+        buf,
         ttnn.ShardSpec(grid, [shard_h, shard_w], ttnn.ShardOrientation.ROW_MAJOR),
     )
 
@@ -418,6 +671,7 @@ def _run_matmul(
     grid_override: Optional[str] = None,
     # Which tensors are sourced from DRAM (for BW calculation).
     in0_in_dram: bool = True,
+    in1_in_dram: bool = True,
     out_in_dram: bool = False,
 ) -> Tuple[str, Optional[float]]:
     """Allocate, warm up, time the matmul, write one CSV row.  Never raises."""
@@ -441,7 +695,10 @@ def _run_matmul(
         compute_cores = int(g.x) * int(g.y)
         core_grid = f"{int(g.x)}x{int(g.y)}"
 
-    in0_block_w, per_core_m, per_core_n, out_subblock_w = _extract_pc_meta(prog_cfg)
+    in0_block_w, per_core_m, per_core_n, out_subblock_w = _resolve_pc_meta(prog_cfg, shape, in0_mem)
+    in0_shard_detail = _describe_mem_config(in0_mem)
+    in1_shard_detail = _describe_mem_config(in1_mem)
+    out_shard_detail = _describe_mem_config(out_mem)
 
     def _csv(run_status: str, t_us: Optional[float]):
         _write_csv_row(
@@ -459,7 +716,11 @@ def _run_matmul(
             per_core_m,
             per_core_n,
             out_subblock_w,
+            in0_shard_detail=in0_shard_detail,
+            in1_shard_detail=in1_shard_detail,
+            out_shard_detail=out_shard_detail,
             in0_in_dram=in0_in_dram,
+            in1_in_dram=in1_in_dram,
             out_in_dram=out_in_dram,
         )
 
@@ -520,6 +781,13 @@ def _run_matmul(
         f"[{shape.name:<11}] {config_name:<45}  "
         f"{device_time_us:>8.1f} μs  ref={shape.ref_us:>5} μs  {tflops:>6.1f} TFLOPs"
     )
+    auto_note = "  (matmul PC inferred from in0 shard)" if prog_cfg is None and in0_mem.shard_spec is not None else ""
+    print(
+        f"[{shape.name}] {config_name}: PASS  "
+        f"in0_block_w={in0_block_w}  per_core_M={per_core_m}  per_core_N={per_core_n}  "
+        f"out_subblock_w={out_subblock_w}{auto_note}  "
+        f"device_time_us={device_time_us:.1f}  ref_us={shape.ref_us}  tflops={tflops:.1f}"
+    )
 
     _csv("PASS", device_time_us)
 
@@ -540,13 +808,17 @@ def test_matmul_dram_in0_dram_in1_l1_out(device, shape: _Shape):
     """Scenario 1 — in0=DRAM, in1=DRAM, out=L1 (all interleaved), production program config."""
     compute_cfg = _vision_matmul_compute_config(device, math_fidelity=ttnn.MathFidelity.LoFi)
     prog_cfg = _vision_matmul_program_config(device, shape.m, shape.k, shape.n)
+    in0_mem = ttnn.DRAM_MEMORY_CONFIG
+    in1_mem = ttnn.DRAM_MEMORY_CONFIG
+    out_mem = ttnn.L1_MEMORY_CONFIG
+    _print_program_config(shape, "dram_dram_l1_production", prog_cfg, in0_mem=in0_mem, in1_mem=in1_mem, out_mem=out_mem)
 
     status, _ = _run_matmul(
         device,
         shape,
-        in0_mem=ttnn.DRAM_MEMORY_CONFIG,
-        in1_mem=ttnn.DRAM_MEMORY_CONFIG,
-        out_mem=ttnn.L1_MEMORY_CONFIG,
+        in0_mem=in0_mem,
+        in1_mem=in1_mem,
+        out_mem=out_mem,
         prog_cfg=prog_cfg,
         compute_cfg=compute_cfg,
         config_name="dram_dram_l1_production",
@@ -555,6 +827,82 @@ def test_matmul_dram_in0_dram_in1_l1_out(device, shape: _Shape):
         out_desc="L1 Interleaved",
         in0_in_dram=True,
         out_in_dram=False,
+    )
+    if status == "KERNEL_FAIL":
+        pytest.skip(f"{shape.name}: kernel not supported with this config — KERNEL_FAIL")
+    assert status == "PASS", f"{shape.name}: expected PASS, got {status}"
+
+
+# ---------------------------------------------------------------------------
+# Scenario 1b: in0/in1/out all DRAM interleaved (all four shapes)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("device_params", [{"num_command_queues": 1}], indirect=True)
+@pytest.mark.parametrize("shape", _SHAPES, ids=_SHAPE_IDS)
+def test_matmul_dram_all_interleaved(device, shape: _Shape):
+    """Scenario 1b — in0=DRAM, in1=DRAM, out=DRAM (all interleaved), production program config."""
+    compute_cfg = _vision_matmul_compute_config(device, math_fidelity=ttnn.MathFidelity.LoFi)
+    prog_cfg = _vision_matmul_program_config(device, shape.m, shape.k, shape.n)
+    in0_mem = ttnn.DRAM_MEMORY_CONFIG
+    in1_mem = ttnn.DRAM_MEMORY_CONFIG
+    out_mem = ttnn.DRAM_MEMORY_CONFIG
+    _print_program_config(
+        shape, "dram_dram_dram_production", prog_cfg, in0_mem=in0_mem, in1_mem=in1_mem, out_mem=out_mem
+    )
+
+    status, _ = _run_matmul(
+        device,
+        shape,
+        in0_mem=in0_mem,
+        in1_mem=in1_mem,
+        out_mem=out_mem,
+        prog_cfg=prog_cfg,
+        compute_cfg=compute_cfg,
+        config_name="dram_dram_dram_production",
+        in0_desc="DRAM Interleaved",
+        in1_desc="DRAM Interleaved",
+        out_desc="DRAM Interleaved",
+        in0_in_dram=True,
+        in1_in_dram=True,
+        out_in_dram=True,
+    )
+    if status == "KERNEL_FAIL":
+        pytest.skip(f"{shape.name}: kernel not supported with this config — KERNEL_FAIL")
+    assert status == "PASS", f"{shape.name}: expected PASS, got {status}"
+
+
+# ---------------------------------------------------------------------------
+# Scenario 1c: in0=L1 interleaved, in1/out=DRAM interleaved (all four shapes)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("device_params", [{"num_command_queues": 1}], indirect=True)
+@pytest.mark.parametrize("shape", _SHAPES, ids=_SHAPE_IDS)
+def test_matmul_l1_dram_dram_interleaved(device, shape: _Shape):
+    """Scenario 1c — in0=L1 interleaved, in1=DRAM interleaved, out=DRAM interleaved."""
+    compute_cfg = _vision_matmul_compute_config(device, math_fidelity=ttnn.MathFidelity.LoFi)
+    prog_cfg = _vision_matmul_program_config(device, shape.m, shape.k, shape.n)
+    in0_mem = ttnn.L1_MEMORY_CONFIG
+    in1_mem = ttnn.DRAM_MEMORY_CONFIG
+    out_mem = ttnn.DRAM_MEMORY_CONFIG
+    _print_program_config(shape, "l1_dram_dram_production", prog_cfg, in0_mem=in0_mem, in1_mem=in1_mem, out_mem=out_mem)
+
+    status, _ = _run_matmul(
+        device,
+        shape,
+        in0_mem=in0_mem,
+        in1_mem=in1_mem,
+        out_mem=out_mem,
+        prog_cfg=prog_cfg,
+        compute_cfg=compute_cfg,
+        config_name="l1_dram_dram_production",
+        in0_desc="L1 Interleaved",
+        in1_desc="DRAM Interleaved",
+        out_desc="DRAM Interleaved",
+        in0_in_dram=False,
+        in1_in_dram=True,
+        out_in_dram=True,
     )
     if status == "KERNEL_FAIL":
         pytest.skip(f"{shape.name}: kernel not supported with this config — KERNEL_FAIL")
@@ -572,13 +920,19 @@ def test_matmul_l1_in0_interleaved(device, shape: _Shape):
     """Scenario 2a — in0=L1 interleaved, in1=DRAM interleaved, out=L1 interleaved."""
     compute_cfg = _vision_matmul_compute_config(device, math_fidelity=ttnn.MathFidelity.LoFi)
     prog_cfg = _vision_matmul_program_config(device, shape.m, shape.k, shape.n)
+    in0_mem = ttnn.L1_MEMORY_CONFIG
+    in1_mem = ttnn.DRAM_MEMORY_CONFIG
+    out_mem = ttnn.L1_MEMORY_CONFIG
+    _print_program_config(
+        shape, "l1_interleaved_production", prog_cfg, in0_mem=in0_mem, in1_mem=in1_mem, out_mem=out_mem
+    )
 
     status, _ = _run_matmul(
         device,
         shape,
-        in0_mem=ttnn.L1_MEMORY_CONFIG,
-        in1_mem=ttnn.DRAM_MEMORY_CONFIG,
-        out_mem=ttnn.L1_MEMORY_CONFIG,
+        in0_mem=in0_mem,
+        in1_mem=in1_mem,
+        out_mem=out_mem,
         prog_cfg=prog_cfg,
         compute_cfg=compute_cfg,
         config_name="l1_interleaved_production",
@@ -688,13 +1042,25 @@ def test_matmul_l1_in0_sharded(device, shape: _Shape, shard_param):
     # Sharded in0 uses TTNN auto program config — the production 2D-mcast config
     # requires DRAM-interleaved in0 and will reject sharded tensors.
     prog_cfg = None
+    in1_mem = ttnn.DRAM_MEMORY_CONFIG
+    out_mem = ttnn.L1_MEMORY_CONFIG
+    _print_program_config(
+        shape,
+        config_name,
+        prog_cfg,
+        in0_mem=in0_mem,
+        in1_mem=in1_mem,
+        out_mem=out_mem,
+        core_grid=grid_hint,
+        compute_cores=cores_hint,
+    )
 
     status, device_time_us = _run_matmul(
         device,
         shape,
         in0_mem=in0_mem,
-        in1_mem=ttnn.DRAM_MEMORY_CONFIG,
-        out_mem=ttnn.L1_MEMORY_CONFIG,
+        in1_mem=in1_mem,
+        out_mem=out_mem,
         prog_cfg=prog_cfg,
         compute_cfg=compute_cfg,
         config_name=config_name,
@@ -759,13 +1125,17 @@ def test_matmul_compute_grid_variants(device, shape: _Shape, grid):
 
     compute_cfg = _vision_matmul_compute_config(device, math_fidelity=ttnn.MathFidelity.LoFi)
     config_name = f"l1_grid_{gx}x{gy}_pcM{prog_cfg.per_core_M}_pcN{prog_cfg.per_core_N}"
+    in0_mem = ttnn.L1_MEMORY_CONFIG
+    in1_mem = ttnn.DRAM_MEMORY_CONFIG
+    out_mem = ttnn.L1_MEMORY_CONFIG
+    _print_program_config(shape, config_name, prog_cfg, in0_mem=in0_mem, in1_mem=in1_mem, out_mem=out_mem)
 
     status, device_time_us = _run_matmul(
         device,
         shape,
-        in0_mem=ttnn.L1_MEMORY_CONFIG,
-        in1_mem=ttnn.DRAM_MEMORY_CONFIG,
-        out_mem=ttnn.L1_MEMORY_CONFIG,
+        in0_mem=in0_mem,
+        in1_mem=in1_mem,
+        out_mem=out_mem,
         prog_cfg=prog_cfg,
         compute_cfg=compute_cfg,
         config_name=config_name,
@@ -779,3 +1149,420 @@ def test_matmul_compute_grid_variants(device, shape: _Shape, grid):
         pytest.skip(f"{shape.name} grid({gx},{gy}): kernel not supported — KERNEL_FAIL")
     assert status == "PASS", f"{shape.name} grid({gx},{gy}): expected PASS, got {status}"
     assert device_time_us is not None and device_time_us > 0
+
+
+# ---------------------------------------------------------------------------
+# Scenario 2d: in0=L1 width, in1=DRAM sharded, out=L1 width
+# ---------------------------------------------------------------------------
+#
+# in0/out split K / N across 4 or 8 cores (WIDTH sharding).  in1 sweeps DRAM
+# height (8/32/64c), width (4/8c), and block (4×8, 6×8, 4×6, 8×8) on [K, N].
+# Large per-core L1 shards often hit SKIPPED_OOM (same as scenario 2b width).
+
+_IN1_DRAM_SHARD_PARAMS: list[Tuple[str, Union[int, Tuple[int, int]]]] = [
+    ("height", 8),
+    ("height", 32),
+    ("height", 64),
+    ("width", 4),
+    ("width", 8),
+    ("block", (4, 8)),
+    ("block", (6, 8)),
+    ("block", (4, 6)),
+    ("block", (8, 8)),
+]
+
+_L1_WS_CORES = (4, 8)
+
+
+def _in1_dram_shard_label(shard_type: str, param: Union[int, Tuple[int, int]]) -> str:
+    if shard_type == "height":
+        return f"hs_{param}c"
+    if shard_type == "width":
+        return f"ws_{param}c"
+    gx, gy = param
+    return f"bs_{gx}x{gy}"
+
+
+def _build_dram_in1_shard_mem(shape: _Shape, shard_type: str, param: Union[int, Tuple[int, int]]) -> ttnn.MemoryConfig:
+    if shard_type == "height":
+        return _height_shard_mem(shape.k, shape.n, int(param), ttnn.BufferType.DRAM)
+    if shard_type == "width":
+        return _width_shard_mem(shape.k, shape.n, int(param), ttnn.BufferType.DRAM)
+    gx, gy = param
+    return _block_shard_mem(shape.k, shape.n, gx, gy, ttnn.BufferType.DRAM)
+
+
+def _dram_in1_shard_desc(shard_type: str, param: Union[int, Tuple[int, int]]) -> str:
+    if shard_type == "height":
+        return f"DRAM Height Sharded ({param}c)"
+    if shard_type == "width":
+        return f"DRAM Width Sharded ({param}c)"
+    gx, gy = param
+    return f"DRAM Block Sharded ({gx}x{gy})"
+
+
+def _generate_l1_ws_dram_in1_cases() -> List[Tuple[str, Union[int, Tuple[int, int]], int]]:
+    cases: List[Tuple[str, Union[int, Tuple[int, int]], int]] = []
+    for shard_type, param in _IN1_DRAM_SHARD_PARAMS:
+        for ws_nc in _L1_WS_CORES:
+            cases.append((shard_type, param, ws_nc))
+    return cases
+
+
+_L1_WS_DRAM_IN1_CASES = _generate_l1_ws_dram_in1_cases()
+_L1_WS_DRAM_IN1_IDS = [
+    f"l1ws_{ws_nc}c_dram_{_in1_dram_shard_label(st, pr)}_l1ws_{ws_nc}c" for st, pr, ws_nc in _L1_WS_DRAM_IN1_CASES
+]
+
+logger.info(f"[matmul_unit] L1-WS / DRAM-in1-shard / L1-WS sweep: {len(_L1_WS_DRAM_IN1_CASES)} cases per shape")
+
+
+@pytest.mark.parametrize("device_params", [{"num_command_queues": 1}], indirect=True)
+@pytest.mark.parametrize("case", _L1_WS_DRAM_IN1_CASES, ids=_L1_WS_DRAM_IN1_IDS)
+@pytest.mark.parametrize("shape", _SHAPES, ids=_SHAPE_IDS)
+def test_matmul_l1_ws_dram_in1_sharded_l1_ws_out(device, shape: _Shape, case):
+    """Scenario 2d — in0/out L1 width-sharded; in1 DRAM height/width/block-sharded."""
+    shard_type, in1_param, ws_nc = case
+    in0_desc = f"L1 Width Sharded ({ws_nc}c)"
+    out_desc = f"L1 Width Sharded ({ws_nc}c)"
+    in1_desc = _dram_in1_shard_desc(shard_type, in1_param)
+    in1_id = _in1_dram_shard_label(shard_type, in1_param)
+    config_name = f"l1_ws_{ws_nc}c_dram_{in1_id}_l1_ws_{ws_nc}c"
+    cores_hint = ws_nc
+    grid_hint = _grid_str_from_cores(ws_nc)
+
+    in0_shard_h, in0_shard_w = shape.m, shape.k // ws_nc
+    out_shard_h, out_shard_w = shape.m, shape.n // ws_nc
+
+    if not _l1_shard_fits(in0_shard_h, in0_shard_w, shape.in0_dtype):
+        _skip_oom(shape, config_name, in0_desc, in1_desc, out_desc, cores_hint, grid_hint, in0_shard_h, in0_shard_w)
+    if not _l1_shard_fits(out_shard_h, out_shard_w, shape.out_dtype):
+        _skip_oom(shape, config_name, in0_desc, in1_desc, out_desc, cores_hint, grid_hint, out_shard_h, out_shard_w)
+
+    try:
+        in0_mem = _width_shard_mem(shape.m, shape.k, ws_nc, ttnn.BufferType.L1)
+        out_mem = _width_shard_mem(shape.m, shape.n, ws_nc, ttnn.BufferType.L1)
+        in1_mem = _build_dram_in1_shard_mem(shape, shard_type, in1_param)
+    except (ValueError, AssertionError) as exc:
+        print(f"[{shape.name}] {config_name}: SPEC_ERROR — {exc}")
+        _write_csv_row(
+            shape,
+            config_name,
+            in0_desc,
+            in1_desc,
+            out_desc,
+            "LoFi",
+            "SPEC_ERROR",
+            None,
+            0,
+            "",
+            "",
+            "",
+            "",
+            "",
+        )
+        pytest.skip(f"SPEC_ERROR — {exc}")
+
+    compute_cfg = _vision_matmul_compute_config(device, math_fidelity=ttnn.MathFidelity.LoFi)
+    prog_cfg = None
+    _print_program_config(
+        shape,
+        config_name,
+        prog_cfg,
+        in0_mem=in0_mem,
+        in1_mem=in1_mem,
+        out_mem=out_mem,
+        core_grid=grid_hint,
+        compute_cores=cores_hint,
+    )
+
+    status, device_time_us = _run_matmul(
+        device,
+        shape,
+        in0_mem=in0_mem,
+        in1_mem=in1_mem,
+        out_mem=out_mem,
+        prog_cfg=prog_cfg,
+        compute_cfg=compute_cfg,
+        config_name=config_name,
+        in0_desc=in0_desc,
+        in1_desc=in1_desc,
+        out_desc=out_desc,
+        cores_override=cores_hint,
+        grid_override=grid_hint,
+        in0_in_dram=False,
+        in1_in_dram=True,
+        out_in_dram=False,
+    )
+    assert status in {"PASS", "KERNEL_FAIL", "ALLOC_FAIL"}, f"{shape.name} {config_name}: unexpected status {status}"
+    if status == "PASS":
+        assert device_time_us is not None and device_time_us > 0
+
+
+# ---------------------------------------------------------------------------
+# Memory layout combination sweep (in0 / out × core grids; in1 = DRAM interleaved)
+# ---------------------------------------------------------------------------
+#
+# Sweeps L1 in0 × DRAM interleaved in1 × L1 out across interleaved / height /
+# width / block layouts and valid core-grid sizes (production-style weights).
+#
+# Every run is recorded in the same matmul_unit_*.csv (including OOM / kernel fail).
+# Use -k to filter, e.g.:
+#   pytest ... -k "test_matmul_memory_combo and vision_qkv" -s
+#   pytest ... -k "combo_l1_height_8c_dram_interleaved_l1_block_6x8" -s
+
+_LAYOUTS = ("interleaved", "height", "width", "block")
+_HS_CORES = (8, 32, 64)
+_WS_CORES = (4, 8)
+_BLOCK_GRIDS = ((4, 8), (6, 8), (4, 6), (8, 8))
+_IN0_BUF = ttnn.BufferType.L1
+_IN1_BUF = ttnn.BufferType.DRAM
+_OUT_BUF = ttnn.BufferType.L1
+
+GridParam = Union[None, int, Tuple[int, int]]
+
+
+@dataclass(frozen=True)
+class _MemComboSpec:
+    """One tensor memory choice (buffer + layout + shard grid)."""
+
+    role: str
+    layout: str
+    buf: ttnn.BufferType
+    grid_param: GridParam = None
+
+    @property
+    def label(self) -> str:
+        buf_s = "dram" if self.buf == ttnn.BufferType.DRAM else "l1"
+        if self.layout == "interleaved":
+            return f"{buf_s}_interleaved"
+        if self.layout == "height":
+            return f"{buf_s}_height_{self.grid_param}c"
+        if self.layout == "width":
+            return f"{buf_s}_width_{self.grid_param}c"
+        gx, gy = self.grid_param
+        return f"{buf_s}_block_{gx}x{gy}"
+
+    def human_desc(self) -> str:
+        buf_s = "DRAM" if self.buf == ttnn.BufferType.DRAM else "L1"
+        if self.layout == "interleaved":
+            return f"{buf_s} interleaved"
+        if self.layout == "height":
+            return f"{buf_s} height_sharded ({self.grid_param}c)"
+        if self.layout == "width":
+            return f"{buf_s} width_sharded ({self.grid_param}c)"
+        gx, gy = self.grid_param
+        return f"{buf_s} block_sharded ({gx}x{gy})"
+
+    def matmul_grid_hint(self) -> Tuple[str, int]:
+        if self.layout == "interleaved":
+            return "interleaved", 0
+        if self.layout == "height":
+            nc = int(self.grid_param)
+            return _grid_str_from_cores(nc), nc
+        if self.layout == "width":
+            nc = int(self.grid_param)
+            return _grid_str_from_cores(nc), nc
+        gx, gy = self.grid_param
+        return f"{gx}x{gy}", gx * gy
+
+    def build_in0(self, shape: _Shape) -> ttnn.MemoryConfig:
+        if self.layout == "interleaved":
+            return ttnn.L1_MEMORY_CONFIG if self.buf == ttnn.BufferType.L1 else ttnn.DRAM_MEMORY_CONFIG
+        if self.layout == "height":
+            return _height_shard_mem(shape.m, shape.k, int(self.grid_param), self.buf)
+        if self.layout == "width":
+            return _width_shard_mem(shape.m, shape.k, int(self.grid_param), self.buf)
+        gx, gy = self.grid_param
+        return _block_shard_mem(shape.m, shape.k, gx, gy, self.buf)
+
+    def build_in1(self, shape: _Shape) -> ttnn.MemoryConfig:
+        if self.layout == "interleaved":
+            return ttnn.DRAM_MEMORY_CONFIG if self.buf == ttnn.BufferType.DRAM else ttnn.L1_MEMORY_CONFIG
+        if self.layout == "height":
+            return _height_shard_mem(shape.k, shape.n, int(self.grid_param), self.buf)
+        if self.layout == "width":
+            return _width_shard_mem(shape.k, shape.n, int(self.grid_param), self.buf)
+        gx, gy = self.grid_param
+        return _block_shard_mem(shape.k, shape.n, gx, gy, self.buf)
+
+    def build_out(self, shape: _Shape) -> ttnn.MemoryConfig:
+        if self.layout == "interleaved":
+            return ttnn.L1_MEMORY_CONFIG if self.buf == ttnn.BufferType.L1 else ttnn.DRAM_MEMORY_CONFIG
+        if self.layout == "height":
+            return _height_shard_mem(shape.m, shape.n, int(self.grid_param), self.buf)
+        if self.layout == "width":
+            return _width_shard_mem(shape.m, shape.n, int(self.grid_param), self.buf)
+        gx, gy = self.grid_param
+        return _block_shard_mem(shape.m, shape.n, gx, gy, self.buf)
+
+
+@dataclass(frozen=True)
+class _MemComboCase:
+    in0: _MemComboSpec
+    in1: _MemComboSpec
+    out: _MemComboSpec
+
+    @property
+    def config_name(self) -> str:
+        return f"combo_{self.in0.label}_{self.in1.label}_{self.out.label}"
+
+    @property
+    def case_id(self) -> str:
+        return self.config_name
+
+
+# Weights stay DRAM interleaved (matches model path); only in0/out are swept.
+_IN1_INTERLEAVED = _MemComboSpec("in1", "interleaved", _IN1_BUF, None)
+
+
+def _grid_options(layout: str) -> List[GridParam]:
+    if layout == "interleaved":
+        return [None]
+    if layout == "height":
+        return list(_HS_CORES)
+    if layout == "width":
+        return list(_WS_CORES)
+    return list(_BLOCK_GRIDS)
+
+
+def _generate_mem_combo_cases() -> List[_MemComboCase]:
+    """in0/out layout × core grids; in1 fixed to DRAM interleaved."""
+    cases: List[_MemComboCase] = []
+    for i0_l, o_l in itertools.product(_LAYOUTS, repeat=2):
+        for i0_g, o_g in itertools.product(_grid_options(i0_l), _grid_options(o_l)):
+            cases.append(
+                _MemComboCase(
+                    in0=_MemComboSpec("in0", i0_l, _IN0_BUF, i0_g),
+                    in1=_IN1_INTERLEAVED,
+                    out=_MemComboSpec("out", o_l, _OUT_BUF, o_g),
+                )
+            )
+    return cases
+
+
+_MEM_COMBO_CASES = _generate_mem_combo_cases()
+_MEM_COMBO_IDS = [c.case_id for c in _MEM_COMBO_CASES]
+
+logger.info(f"[matmul_unit] memory combo sweep: {len(_MEM_COMBO_CASES)} cases per shape")
+
+
+def _l1_shard_bytes(shape: _Shape, spec: _MemComboSpec) -> Optional[int]:
+    """Per-core shard bytes for L1 tensors (None if interleaved)."""
+    if spec.buf != ttnn.BufferType.L1 or spec.layout == "interleaved":
+        return None
+    dt = {"in0": shape.in0_dtype, "in1": shape.in1_dtype, "out": shape.out_dtype}[spec.role]
+    m_dim, dim = {
+        "in0": (shape.m, shape.k),
+        "in1": (shape.k, shape.n),
+        "out": (shape.m, shape.n),
+    }[spec.role]
+    if spec.layout == "height":
+        nc = int(spec.grid_param)
+        return (m_dim // nc) * dim * _elem_bytes(dt)
+    if spec.layout == "width":
+        nc = int(spec.grid_param)
+        return m_dim * (dim // nc) * _elem_bytes(dt)
+    gx, gy = spec.grid_param
+    return (m_dim // gy) * (dim // gx) * _elem_bytes(dt)
+
+
+@pytest.mark.parametrize("device_params", [{"num_command_queues": 1}], indirect=True)
+@pytest.mark.parametrize("combo", _MEM_COMBO_CASES, ids=_MEM_COMBO_IDS)
+@pytest.mark.parametrize("shape", _SHAPES, ids=_SHAPE_IDS)
+def test_matmul_memory_combo_sweep(device, shape: _Shape, combo: _MemComboCase):
+    """Sweep in0/in1/out memory layouts (L1/DRAM × interleaved/height/width/block) × core grids."""
+    in0_desc = combo.in0.human_desc()
+    in1_desc = combo.in1.human_desc()
+    out_desc = combo.out.human_desc()
+    config_name = combo.config_name
+
+    for spec, desc in ((combo.in0, in0_desc), (combo.out, out_desc)):
+        shard_b = _l1_shard_bytes(shape, spec)
+        if shard_b is not None and shard_b > _L1_PER_CORE_BYTES:
+            size_kb = shard_b // 1024
+            print(
+                f"[{shape.name}] {config_name}: SKIPPED_OOM\n"
+                f"  {spec.role}: {desc}  (~{size_kb} KB/core > L1 budget)\n"
+            )
+            _write_csv_row(
+                shape,
+                config_name,
+                in0_desc,
+                in1_desc,
+                out_desc,
+                "LoFi",
+                "SKIPPED_OOM",
+                None,
+                0,
+                "",
+                "",
+                "",
+                "",
+                "",
+            )
+            pytest.skip(f"L1 OOM — {spec.role} shard ~{size_kb} KB/core")
+
+    try:
+        in0_mem = combo.in0.build_in0(shape)
+        in1_mem = combo.in1.build_in1(shape)
+        out_mem = combo.out.build_out(shape)
+    except (ValueError, AssertionError) as exc:
+        print(f"[{shape.name}] {config_name}: SPEC_ERROR — {exc}")
+        _write_csv_row(
+            shape,
+            config_name,
+            in0_desc,
+            in1_desc,
+            out_desc,
+            "LoFi",
+            "SPEC_ERROR",
+            None,
+            0,
+            "",
+            "",
+            "",
+            "",
+            "",
+        )
+        pytest.skip(f"SPEC_ERROR — {exc}")
+
+    if combo.in0.layout == "interleaved":
+        prog_cfg = _vision_matmul_program_config(device, shape.m, shape.k, shape.n)
+    else:
+        prog_cfg = None
+
+    compute_cfg = _vision_matmul_compute_config(device, math_fidelity=ttnn.MathFidelity.LoFi)
+    _, matmul_cores = combo.in0.matmul_grid_hint()
+    matmul_grid = combo.in0.matmul_grid_hint()[0] if prog_cfg is None else ""
+
+    _print_program_config(
+        shape,
+        config_name,
+        prog_cfg,
+        in0_mem=in0_mem,
+        in1_mem=in1_mem,
+        out_mem=out_mem,
+        core_grid=matmul_grid or combo.in0.matmul_grid_hint()[0],
+        compute_cores=matmul_cores or None,
+    )
+
+    status, _ = _run_matmul(
+        device,
+        shape,
+        in0_mem=in0_mem,
+        in1_mem=in1_mem,
+        out_mem=out_mem,
+        prog_cfg=prog_cfg,
+        compute_cfg=compute_cfg,
+        config_name=config_name,
+        in0_desc=in0_desc,
+        in1_desc=in1_desc,
+        out_desc=out_desc,
+        cores_override=matmul_cores if matmul_cores > 0 else None,
+        grid_override=combo.in0.matmul_grid_hint()[0] if prog_cfg is None and matmul_cores > 0 else None,
+        in0_in_dram=combo.in0.buf == ttnn.BufferType.DRAM,
+        in1_in_dram=combo.in1.buf == ttnn.BufferType.DRAM,
+        out_in_dram=combo.out.buf == ttnn.BufferType.DRAM,
+    )
+    assert status in {"PASS", "KERNEL_FAIL", "ALLOC_FAIL", "OOM", "SKIPPED_OOM"}
