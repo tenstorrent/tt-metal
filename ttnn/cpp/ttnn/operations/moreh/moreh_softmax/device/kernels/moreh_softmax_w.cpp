@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
 
@@ -99,24 +100,30 @@ void kernel_main() {
             cb_max_obj.push_back(1);
         }
 
-        // compute x - max(x)
-        cb_x_m_max_obj.reserve_back(Wt);
-        cb_in0_obj.wait_front(Wt);
-        cb_max_obj.wait_front(1);
-
-        for (uint32_t w = 0; w < Wt; ++w) {
-            tile_regs_acquire();
-            sub_bcast_cols_init_short_with_dt(cb_in0, cb_max);
-            sub_tiles_bcast<BroadcastType::COL>(cb_in0, cb_max, w, 0, dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_x_m_max);
-            tile_regs_release();
-        }
-        cb_max_obj.pop_front(1);
-        cb_in0_obj.pop_front(Wt);
-        cb_x_m_max_obj.push_back(Wt);
+        // compute x - max(x)  — COL bcast: cb_max is 1 tile broadcast across Wt cols.
+        // Reconfig: sub_bcast_cols_init_short_with_dt -> Input. pack_tile_with_dt -> Output.
+        // Lifecycles: cb_in0 Bulk + Block; cb_max Bulk + Scalar (chain emits
+        //   wait/pop(1) via window_1d<Scalar> — commit 14a5a61e462 made the
+        //   OperandKind drive the wait count); cb_x_m_max OutBulk + Block.
+        compute_kernel_lib::eltwise_chain(
+            Wt,
+            compute_kernel_lib::BinaryFpu<
+                cb_in0,
+                cb_max,
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                compute_kernel_lib::BroadcastDim::Col,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::Bulk,
+                compute_kernel_lib::Bulk,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar>{},
+            compute_kernel_lib::PackTile<
+                cb_x_m_max,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutBulk,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 
         // compute exp(x - max(x))
         cb_exps_obj.reserve_back(Wt);
