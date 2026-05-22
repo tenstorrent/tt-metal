@@ -114,6 +114,52 @@ The MoE win is dominated by per-expert FFN no longer matmuling the padded
     the existing buffer size and is a no-op. Adds one ~100us host-device sync
     per forward; device kernel times unchanged (still 528-556us/2k).
 
+## Phase B WIP: unified custom op (kgrujcic/unified_rexpert)
+
+Added a new ttnn op location:
+  `ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/`
+exposed as `ttnn.experimental.deepseek_prefill.unified_routed_expert_ffn`. The
+op takes `(x, gate_proj, up_proj, down_proj, counts, idx_table, local_expert_id)`
+and returns a single Program containing reader + writer + a fused TRISC compute
+kernel `fused_swiglu.cpp` that does gate matmul (with silu in pack) → up matmul
+→ elementwise multiply → down matmul in one pass.
+
+Scaffolding lands and compiles end-to-end (Python sees the new op via
+`ttnn.experimental.deepseek_prefill.unified_routed_expert_ffn`, the device op
+machinery validates inputs, the program factory creates CBs + kernels). The
+first end-to-end test hangs on device — root cause identified:
+
+**Open design issue (Phase B blocker):** the down matmul's in0 is `cb_activated`,
+which is the block-sharded multiply output. Each core only holds `per_core_N_gu`
+tiles of activated columns (= 8 tiles for the 8x8 grid), but the down matmul's
+K is the full hidden dimension (= 64 tiles). The compute kernel as written waits
+for K_down K-blocks worth of in0 tiles to land in `cb_activated`, which never
+happens because the multiply only writes `per_core_M * per_core_N_gu` tiles to
+the local CB.
+
+The fix requires cross-core sharing of the activated tensor — either:
+  (a) NoC multicast of each core's activated columns to its row mates after the
+      multiply phase (real mcast plumbing inside the compute pass), or
+  (b) round-trip activated through DRAM with a per-core write/read cycle in
+      between phases 3 and 4 (loses some L1 residency but is simpler to wire),
+  (c) restructure so each core owns the full K_down activated slice (requires
+      gate/up matmul phases to consume the full K=K_gate per core, which blows
+      the L1 budget for ds-v3 dims).
+
+(a) is the right answer for performance; it's the same mcast pattern that the
+existing `routed_expert_ffn_bh.cpp` uses for its in1 transfers via the matmul
+factory. Implementing it on top of the current single-program kernel is the
+next step.
+
+Files committed for the unified op (still WIP, not the production path):
+- `unified_routed_expert_ffn/{unified_routed_expert_ffn.hpp,cpp}`
+- `unified_routed_expert_ffn/unified_routed_expert_ffn_nanobind.{hpp,cpp}`
+- `unified_routed_expert_ffn/device/{types,program_factory,device_operation}*`
+- `unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp`
+- `unified_routed_expert_ffn/device/kernels/dataflow/reader_unified_re.cpp`
+- `unified_routed_expert_ffn/device/kernels/dataflow/writer_unified_re.cpp`
+- `tests/pcc/test_unified_routed_expert.py` (currently hangs at first run).
+
 ## Final summary (state at end of session)
 
 Branch: `kgrujcic/unified_rexpert`. Commits since `main`:
