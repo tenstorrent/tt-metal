@@ -7,6 +7,35 @@
 #include "api/compute/tile_move_copy.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+
+namespace {
+
+// Chain replacement for moreh's `*_tiles_to_cb` helpers — emits a single-tile
+// BinaryFpu + PackTile with Input+Output reconfig, matching the moreh helper's
+// internal `*_init_with_dt` + `pack_tile_with_dt`. PopA/PopB select Streaming
+// (wait+pop per call) vs HeldStream (wait, no pop) — matches the moreh helper's
+// pop_a / pop_b runtime flags but expressed at compile time.
+template <compute_kernel_lib::BinaryFpuOp Op, uint32_t CbA, uint32_t CbB, uint32_t CbOut, bool PopA, bool PopB>
+ALWI void fpu_binary_to_cb_chain() {
+    using namespace compute_kernel_lib;
+    eltwise_chain(
+        1,
+        BinaryFpu<
+            CbA,
+            CbB,
+            Op,
+            BroadcastDim::None,
+            BinaryDataFormatReconfig::Input,
+            PopA ? Streaming : HeldStream,
+            PopB ? Streaming : HeldStream,
+            OperandKind::Scalar,
+            Dst::D0,
+            OperandKind::Scalar>{},
+        PackTile<CbOut, Dst::D0, OutStreaming, OperandKind::Scalar, PackTileReconfig::Output>{});
+}
+
+}  // namespace
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -40,16 +69,44 @@ void kernel_main() {
         tile_regs_acquire();
         // updated_running_stat = (1 − momentum) × running_stat + momentum × batch_stat
 
+        // Migrated: first three stages of each branch (sub + 2× mul) replaced with
+        // chain calls. Final add_tiles_to_cb stays raw — its DEST[0] is read by the
+        // outer pack_tile(0, cb_out0) below; chain-managed acquire/release wouldn't
+        // preserve DEST[0] across the chain boundary.
         if constexpr (old_running_mean_has_value) {
-            sub_tiles_to_cb(cb_one, cb_momentum, cb_tmp1, 0, 0, 0, 0);               // 1 - momentum
-            mul_tiles_to_cb(cb_momentum, cb_batch_mean, cb_tmp2, 0, 0, 0, 1);        // momentum * batch stat
-            mul_tiles_to_cb(cb_tmp1, cb_old_running_mean, cb_tmp3, 0, 0, 1, 1);      // cb_tmp1 * running stats
+            fpu_binary_to_cb_chain<compute_kernel_lib::BinaryFpuOp::Sub, cb_one, cb_momentum, cb_tmp1, false, false>();
+            fpu_binary_to_cb_chain<
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                cb_momentum,
+                cb_batch_mean,
+                cb_tmp2,
+                false,
+                true>();
+            fpu_binary_to_cb_chain<
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                cb_tmp1,
+                cb_old_running_mean,
+                cb_tmp3,
+                true,
+                true>();
             add_tiles_to_cb(cb_tmp2, cb_tmp3, cb_updated_running_mean, 0, 0, 1, 1);  // cb_tmp2 + cb_tmp3
         }
         if constexpr (old_running_var_has_value) {
-            sub_tiles_to_cb(cb_one, cb_momentum, cb_tmp1, 0, 0, 0, 0);              // 1 - momentum
-            mul_tiles_to_cb(cb_momentum, cb_batch_var, cb_tmp2, 0, 0, 0, 1);        // momentum * batch stat
-            mul_tiles_to_cb(cb_tmp1, cb_old_running_var, cb_tmp3, 0, 0, 1, 1);      // cb_tmp1 * running stats
+            fpu_binary_to_cb_chain<compute_kernel_lib::BinaryFpuOp::Sub, cb_one, cb_momentum, cb_tmp1, false, false>();
+            fpu_binary_to_cb_chain<
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                cb_momentum,
+                cb_batch_var,
+                cb_tmp2,
+                false,
+                true>();
+            fpu_binary_to_cb_chain<
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                cb_tmp1,
+                cb_old_running_var,
+                cb_tmp3,
+                true,
+                true>();
             add_tiles_to_cb(cb_tmp2, cb_tmp3, cb_updated_running_var, 0, 0, 1, 1);  // cb_tmp2 + cb_tmp3
         }
         tile_regs_commit();
