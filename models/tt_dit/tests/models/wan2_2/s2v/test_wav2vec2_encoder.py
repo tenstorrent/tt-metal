@@ -37,6 +37,11 @@ def _bundled_wav2vec2_path() -> Path | None:
 
 _BUNDLED_PATH = _bundled_wav2vec2_path()
 
+# pos_conv runs ttnn.conv1d which allocates an L1_SMALL halo program.
+_WAV2VEC2_L1_SMALL_SIZE = 32768
+_LINE_PARAMS_W2V = {**line_params, "l1_small_size": _WAV2VEC2_L1_SMALL_SIZE}
+_RING_PARAMS_W2V = {**ring_params, "l1_small_size": _WAV2VEC2_L1_SMALL_SIZE}
+
 
 @pytest.mark.skipif(
     _BUNDLED_PATH is None,
@@ -45,8 +50,8 @@ _BUNDLED_PATH = _bundled_wav2vec2_path()
 @pytest.mark.parametrize(
     ("mesh_device", "tp_axis", "num_links", "device_params", "topology"),
     [
-        pytest.param((2, 4), 0, 2, line_params, ttnn.Topology.Linear, id="bh_2x4_tp0"),
-        pytest.param((4, 8), 0, 2, ring_params, ttnn.Topology.Ring, id="bh_4x8_tp0"),
+        pytest.param((2, 4), 0, 2, _LINE_PARAMS_W2V, ttnn.Topology.Linear, id="bh_2x4_tp0"),
+        pytest.param((4, 8), 0, 2, _RING_PARAMS_W2V, ttnn.Topology.Ring, id="bh_4x8_tp0"),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -108,8 +113,8 @@ def test_wav2vec2_encoder_s2v(
 @pytest.mark.parametrize(
     ("mesh_device", "device_params", "topology"),
     [
-        pytest.param((2, 4), line_params, ttnn.Topology.Linear, id="bh_2x4"),
-        pytest.param((4, 8), ring_params, ttnn.Topology.Ring, id="bh_4x8"),
+        pytest.param((2, 4), _LINE_PARAMS_W2V, ttnn.Topology.Linear, id="bh_2x4"),
+        pytest.param((4, 8), _RING_PARAMS_W2V, ttnn.Topology.Ring, id="bh_4x8"),
     ],
     indirect=["mesh_device", "device_params"],
 )
