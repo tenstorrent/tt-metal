@@ -25,9 +25,7 @@ from models.perf.device_perf_utils import prep_device_perf_report, run_device_pe
 
 _PCC_TEST = "models/experimental/seamless_m4t_v2_large/tests/pcc/test_seamless_m4t_v2_model.py"
 _TASKS = ("t2tt", "s2tt", "t2st", "s2st", "asr")
-# Tracy default buffer (~1333 ops) overflows on speech / T2U paths (2.5k+ device programs).
-# Sized for worst case (BH QB 4-device mesh): outer process cannot query device count without
-# opening the cluster (deadlocks the Tracy subprocess).
+# Op-support budget for Tracy (speech/T2U paths need a larger buffer than text-only).
 _MAX_MESH_DEVICES = 4
 _TASK_OP_SUPPORT_COUNT: dict[str, int] = {
     "t2tt": 1500,
