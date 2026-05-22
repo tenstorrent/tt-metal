@@ -413,7 +413,7 @@ public:
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
         size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
         size_t num_command_queues = 1,
-        const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
+        const std::optional<DispatchCoreConfig>& dispatch_core_config = std::nullopt,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
     static std::map<int, std::shared_ptr<MeshDevice>> create_unit_meshes(
@@ -421,7 +421,7 @@ public:
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
         size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
         size_t num_command_queues = 1,
-        const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
+        const std::optional<DispatchCoreConfig>& dispatch_core_config = std::nullopt,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
 
@@ -443,7 +443,7 @@ public:
         size_t l1_small_size,
         size_t trace_region_size,
         size_t num_command_queues,
-        const DispatchCoreConfig& dispatch_core_config,
+        const std::optional<DispatchCoreConfig>& dispatch_core_config,
         tt::stl::Span<const std::uint32_t> l1_bank_remap,
         size_t worker_l1_size);
     static std::map<int, std::shared_ptr<MeshDevice>> create_unit_meshes(
@@ -452,7 +452,7 @@ public:
         size_t l1_small_size,
         size_t trace_region_size,
         size_t num_command_queues,
-        const DispatchCoreConfig& dispatch_core_config,
+        const std::optional<DispatchCoreConfig>& dispatch_core_config,
         tt::stl::Span<const std::uint32_t> l1_bank_remap,
         size_t worker_l1_size);
 };

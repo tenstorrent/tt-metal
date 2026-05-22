@@ -5,6 +5,8 @@
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include <tt_stl/reflection.hpp>
 #include "dispatch_core_common.hpp"
+#include <tt-metalium/cluster.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/core_coordinates.hpp>
@@ -12,6 +14,65 @@
 #include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_metal {
+
+namespace {
+
+bool is_blackhole_arch() {
+    return tt::tt_metal::detail::get_platform_architecture_name().find("blackhole") != std::string::npos;
+}
+
+DispatchCoreAxis get_default_dispatch_core_axis(std::optional<tt::tt_fabric::FabricTensixConfig> fabric_tensix_config) {
+    if (is_blackhole_arch()) {
+        if (fabric_tensix_config.value_or(tt::tt_fabric::FabricTensixConfig::DISABLED) ==
+            tt::tt_fabric::FabricTensixConfig::MUX) {
+            return DispatchCoreAxis::ROW;
+        }
+        return DispatchCoreAxis::COL;
+    }
+    return DispatchCoreAxis::ROW;
+}
+
+}  // namespace
+
+DispatchCoreType DispatchCoreConfig::get_default_type() {
+    const auto cluster_type = tt::tt_metal::GetClusterType();
+    if (cluster_type == tt::tt_metal::ClusterType::N300 || cluster_type == tt::tt_metal::ClusterType::T3K ||
+        cluster_type == tt::tt_metal::ClusterType::N300_2x2) {
+        return DispatchCoreType::ETH;
+    }
+    return DispatchCoreType::WORKER;
+}
+
+DispatchCoreConfig DispatchCoreConfig::create_dispatch_core_config(
+    std::optional<DispatchCoreType> dispatch_core_type,
+    std::optional<DispatchCoreAxis> dispatch_core_axis,
+    std::optional<tt::tt_fabric::FabricTensixConfig> fabric_tensix_config) {
+    if (dispatch_core_type.has_value() && dispatch_core_axis.has_value() &&
+        dispatch_core_type.value() == DispatchCoreType::ETH && dispatch_core_axis.value() == DispatchCoreAxis::COL) {
+        TT_THROW("COL axis is not supported for ETH dispatch core type");
+    }
+
+    if (dispatch_core_axis.has_value() && dispatch_core_axis.value() == DispatchCoreAxis::ROW && is_blackhole_arch() &&
+        fabric_tensix_config.value_or(tt::tt_fabric::FabricTensixConfig::DISABLED) !=
+            tt::tt_fabric::FabricTensixConfig::MUX) {
+        TT_THROW("ROW dispatch core axis is not supported for blackhole arch unless fabric tensix MUX is enabled");
+    }
+
+    if (dispatch_core_type.has_value() && dispatch_core_axis.has_value()) {
+        return DispatchCoreConfig(dispatch_core_type.value(), dispatch_core_axis.value());
+    }
+    if (dispatch_core_type.has_value()) {
+        return DispatchCoreConfig(dispatch_core_type.value(), get_default_dispatch_core_axis(fabric_tensix_config));
+    }
+    if (dispatch_core_axis.has_value()) {
+        if (dispatch_core_axis.value() == DispatchCoreAxis::COL) {
+            return DispatchCoreConfig(DispatchCoreType::WORKER, dispatch_core_axis.value());
+        }
+        return DispatchCoreConfig(get_default_type(), dispatch_core_axis.value());
+    }
+
+    return DispatchCoreConfig(get_default_type(), get_default_dispatch_core_axis(fabric_tensix_config));
+}
 
 DispatchCoreAxis DispatchCoreConfig::get_default_axis() {
     // All internal callers should use resolve_dispatch_core_axis(arch, fabric_tensix_config) instead.

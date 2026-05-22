@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include "ttnn/types.hpp"
 
 namespace ttnn {
@@ -18,7 +20,7 @@ std::shared_ptr<MeshDevice> open_mesh_device(
     size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
     size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
     size_t num_command_queues = 1,
-    const tt::tt_metal::DispatchCoreConfig& dispatch_core_config = tt::tt_metal::DispatchCoreConfig{},
+    const std::optional<tt::tt_metal::DispatchCoreConfig>& dispatch_core_config = std::nullopt,
     size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
 void close_device(MeshDevice& device);
 void enable_program_cache(IDevice& device);

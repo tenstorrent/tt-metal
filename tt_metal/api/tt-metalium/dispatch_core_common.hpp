@@ -4,7 +4,10 @@
 
 #pragma once
 
+#include <optional>
+
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 
 namespace tt::tt_metal {
 
@@ -25,6 +28,12 @@ public:
     DispatchCoreConfig(DispatchCoreType type) : type_(type) {}
 
     DispatchCoreConfig(DispatchCoreType type, DispatchCoreAxis axis) : type_(type), axis_(axis) {}
+
+    static DispatchCoreType get_default_type();
+    static DispatchCoreConfig create_dispatch_core_config(
+        std::optional<DispatchCoreType> dispatch_core_type = std::nullopt,
+        std::optional<DispatchCoreAxis> dispatch_core_axis = std::nullopt,
+        std::optional<tt::tt_fabric::FabricTensixConfig> fabric_tensix_config = std::nullopt);
 
     static constexpr auto attribute_names = std::forward_as_tuple("type", "axis");
     auto attribute_values() const { return std::forward_as_tuple(this->type_, this->axis_); }

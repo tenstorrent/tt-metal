@@ -439,7 +439,7 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
     size_t l1_small_size,
     size_t trace_region_size,
     size_t num_command_queues,
-    const DispatchCoreConfig& dispatch_core_config,
+    const std::optional<DispatchCoreConfig>& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
     return MeshDeviceImpl::create_unit_meshes(
@@ -457,7 +457,7 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
     size_t l1_small_size,
     size_t trace_region_size,
     size_t num_command_queues,
-    const DispatchCoreConfig& dispatch_core_config,
+    const std::optional<DispatchCoreConfig>& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
     return create_unit_meshes(
@@ -477,9 +477,12 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
     size_t l1_small_size,
     size_t trace_region_size,
     size_t num_command_queues,
-    const DispatchCoreConfig& dispatch_core_config,
+    const std::optional<DispatchCoreConfig>& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> /*l1_bank_remap*/,
     size_t worker_l1_size) {
+    const auto effective_dispatch_core_config =
+        dispatch_core_config.value_or(DispatchCoreConfig::create_dispatch_core_config());
+
     TT_FATAL(
         !device_ids.empty(), "Cannot create unit meshes with empty device_ids. At least one device ID is required.");
 
@@ -508,7 +511,7 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
         trace_region_size,
         num_command_queues,
         worker_l1_size,
-        dispatch_core_config,
+        effective_dispatch_core_config,
         context_id);
 
     const auto root_devices = scoped_devices->root_devices();
@@ -548,7 +551,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create_unit_mesh(
     size_t l1_small_size,
     size_t trace_region_size,
     size_t num_command_queues,
-    const DispatchCoreConfig& dispatch_core_config,
+    const std::optional<DispatchCoreConfig>& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
     return MeshDeviceImpl::create_unit_mesh(
@@ -566,7 +569,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_unit_mesh(
     size_t l1_small_size,
     size_t trace_region_size,
     size_t num_command_queues,
-    const DispatchCoreConfig& dispatch_core_config,
+    const std::optional<DispatchCoreConfig>& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
     return create_unit_mesh(
@@ -586,7 +589,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_unit_mesh(
     size_t l1_small_size,
     size_t trace_region_size,
     size_t num_command_queues,
-    const DispatchCoreConfig& dispatch_core_config,
+    const std::optional<DispatchCoreConfig>& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
     return create_unit_meshes(

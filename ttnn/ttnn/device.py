@@ -13,7 +13,7 @@ from loguru import logger
 Device = ttnn._ttnn.multi_device.MeshDevice
 DispatchCoreType = ttnn._ttnn.device.DispatchCoreType
 DispatchCoreAxis = ttnn._ttnn.device.DispatchCoreAxis
-DispatchCoreConfig = ttnn._ttnn.device.DispatchCoreConfig
+_DispatchCoreConfig = ttnn._ttnn.device.DispatchCoreConfig
 Arch = ttnn._ttnn.device.Arch
 DEFAULT_L1_SMALL_SIZE = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE
 DEFAULT_TRACE_REGION_SIZE = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE
@@ -26,6 +26,33 @@ get_optimal_dram_bank_to_logical_worker_assignment = (
 enable_asynchronous_slow_dispatch = ttnn._ttnn.device.enable_asynchronous_slow_dispatch
 disable_asynchronous_slow_dispatch = ttnn._ttnn.device.disable_asynchronous_slow_dispatch
 is_asynchronous_slow_dispatch_enabled = ttnn._ttnn.device.is_asynchronous_slow_dispatch_enabled
+
+
+class DispatchCoreConfig(_DispatchCoreConfig):
+    def __init__(
+        self,
+        type: Optional[DispatchCoreType] = None,
+        axis: Optional[DispatchCoreAxis] = None,
+        fabric_tensix_config=None,
+    ):
+        if type is None and axis is None and fabric_tensix_config is None:
+            default_config = _DispatchCoreConfig.create_dispatch_core_config()
+            super().__init__(default_config.type(), default_config.axis)
+            return
+
+        # Use eager factory whenever constructor arguments need topology-aware completion.
+        if fabric_tensix_config is not None or type is None:
+            resolved_config = _DispatchCoreConfig.create_dispatch_core_config(
+                type=type, axis=axis, fabric_tensix_config=fabric_tensix_config
+            )
+            super().__init__(resolved_config.type(), resolved_config.axis)
+            return
+
+        if axis is None:
+            super().__init__(type)
+        else:
+            super().__init__(type, axis)
+
 
 open_device = ttnn._ttnn.device.open_device
 init_device_compute_kernel_config = ttnn._ttnn.operations.core.init_device_compute_kernel_config

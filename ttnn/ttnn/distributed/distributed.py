@@ -668,11 +668,14 @@ def open_mesh_device(
         ttnn._ttnn.multi_device.MeshDevice: The opened mesh device.
 
     """
+    if dispatch_core_config is None:
+        dispatch_core_config = ttnn.DispatchCoreConfig()
+
     return ttnn._ttnn.multi_device.open_mesh_device(
         l1_small_size=l1_small_size,
         trace_region_size=trace_region_size,
         num_command_queues=num_command_queues,
-        dispatch_core_config=dispatch_core_config or ttnn.DispatchCoreConfig(),
+        dispatch_core_config=dispatch_core_config,
         mesh_shape=mesh_shape,
         offset=offset,
         physical_device_ids=physical_device_ids,

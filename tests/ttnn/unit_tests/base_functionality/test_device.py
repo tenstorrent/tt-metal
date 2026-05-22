@@ -45,7 +45,7 @@ def test_dispatch_core_config_defaults_follow_cluster_policy():
     expected_type = (
         ttnn.DispatchCoreType.ETH if cluster_type in eth_default_dispatch_clusters else ttnn.DispatchCoreType.WORKER
     )
-    assert config.type() == expected_type
+    assert config.type == expected_type
 
     is_blackhole = "blackhole" in ttnn._ttnn.device.get_arch_name()
     expected_axis = ttnn.DispatchCoreAxis.COL if is_blackhole else ttnn.DispatchCoreAxis.ROW
@@ -57,7 +57,7 @@ def test_dispatch_core_config_constructor_rules():
         ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.ETH, ttnn.DispatchCoreAxis.COL)
 
     config = ttnn.DispatchCoreConfig(axis=ttnn.DispatchCoreAxis.COL)
-    assert config.type() == ttnn.DispatchCoreType.WORKER
+    assert config.type == ttnn.DispatchCoreType.WORKER
     assert config.axis == ttnn.DispatchCoreAxis.COL
 
     is_blackhole = "blackhole" in ttnn._ttnn.device.get_arch_name()
