@@ -58,20 +58,31 @@ uint32_t float_to_u32(float v) {
     return out;
 }
 
-// Upper cap on TP>1 worker cores per chip. MUX channel count is uint8_t and
-// each channel costs L1 buffer space on the MUX core, so cap short of grid
-// size. Actual count is further clamped to (max_cores - mux) and num_tile_rows.
 // Upper cap on TP>1 worker cores per chip. The MUX channel count is uint8_t
 // but in practice the fabric MUX rejects (or deadlocks) above ~64 full-size
 // channels per core. Don't raise without verifying on hardware.
 constexpr uint32_t kMaxMuxWorkersPerChip = 64u;
 constexpr uint32_t kMuxRowsThreshold = 2u;  // < this many rows → use 1 worker
 
+// Aim for ≥2 rows per worker so the chunk-size heuristic can produce ≥2
+// chunks per worker; combined with Phase 5's double-buffered input_cb this
+// gives inter-chunk AG/compute overlap. Capped at kMaxMuxWorkersPerChip.
+//
+// Guard for very small shapes: if the overlap-target would drop below
+// kMinWorkersForOverlap, fall back to max parallelism. At tiny num_tile_rows
+// (e.g. L=512 → 16 rows) the per-worker work is so small that halving the
+// worker count costs more than the overlap saves.
+constexpr uint32_t kMinWorkersForOverlap = 16u;
 uint32_t pick_num_workers_tp_gt_1(uint32_t num_tile_rows) {
     if (num_tile_rows < kMuxRowsThreshold) {
         return 1u;
     }
-    return std::min<uint32_t>(kMaxMuxWorkersPerChip, num_tile_rows);
+    const uint32_t desired = std::max(1u, (num_tile_rows + 1u) / 2u);
+    const uint32_t capped = std::min<uint32_t>(kMaxMuxWorkersPerChip, desired);
+    if (capped < kMinWorkersForOverlap) {
+        return std::min<uint32_t>(kMaxMuxWorkersPerChip, num_tile_rows);
+    }
+    return capped;
 }
 
 }  // namespace
