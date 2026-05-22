@@ -85,6 +85,16 @@ class SamplingGenerator:
 
         self.tt_sampling = TTSampling(mesh_device=mesh_device, tt_ccl=tt_ccl, args=args)
         self.tt_penalties = TTPenalties(mesh_device=mesh_device, args=args)
+        self._bitmask_packed_width = self.tt_sampling.padded_vocab_size // 32
+        if self.tt_sampling.padded_vocab_size % 32 != 0:
+            raise ValueError("Structured-output bitmask requires padded vocab size to be divisible by 32")
+        self._bitmask_arange = ttnn.from_torch(
+            torch.arange(32, dtype=torch.int32),
+            device=self.mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
 
         self._penalties_active = False
 
@@ -233,6 +243,50 @@ class SamplingGenerator:
                 sampling_params.presence_penalty, sampling_params.frequency_penalty, sampling_params.repetition_penalty
             )
         self._log_probs_active = self.tt_sampling.log_probs_calculator.enable_log_probs
+
+    def _format_bitmask_for_sampling(self, bitmask: torch.Tensor) -> torch.Tensor:
+        bitmask = torch.as_tensor(bitmask)
+        if bitmask.ndim != 2:
+            raise ValueError(f"Expected bitmask with shape [batch, packed_vocab], got {tuple(bitmask.shape)}")
+
+        total_batch = self.seed_manager.max_batch_size
+        if bitmask.shape[0] > total_batch:
+            raise ValueError(f"Bitmask batch {bitmask.shape[0]} exceeds sampling batch {total_batch}")
+
+        packed_width = bitmask.shape[1]
+        if packed_width > self._bitmask_packed_width:
+            raise ValueError(f"Bitmask packed width {packed_width} exceeds expected {self._bitmask_packed_width}")
+
+        out = torch.full((total_batch, self._bitmask_packed_width), -1, dtype=torch.int32, device=bitmask.device)
+        if packed_width > 0:
+            out[: bitmask.shape[0], :packed_width] = bitmask.to(torch.int32)
+        return out
+
+    def apply_bitmask_to_logits(self, logits: ttnn.Tensor, bitmask: torch.Tensor | None) -> ttnn.Tensor:
+        if bitmask is None:
+            return logits
+
+        bitmask = self._format_bitmask_for_sampling(bitmask)
+        op_kwargs = {"sub_core_grids": self.sub_core_grids} if self.sub_core_grids is not None else {}
+        tt_bitmask = ttnn.from_torch(
+            bitmask,
+            device=self.mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device, dims=(-1, None), mesh_shape=self.tt_sampling.cluster_shape
+            ),
+        )
+        tt_bitmask = ttnn.reshape(tt_bitmask, (self.seed_manager.max_batch_size, self._bitmask_packed_width, 1), **op_kwargs)
+        tt_bitmask = ttnn.bitwise_right_shift(tt_bitmask, self._bitmask_arange, **op_kwargs)
+        tt_bitmask = ttnn.bitwise_and(tt_bitmask, 1, **op_kwargs)
+        tt_bitmask = ttnn.reshape(tt_bitmask, (self.seed_manager.max_batch_size, -1), **op_kwargs)
+        tt_bitmask = ttnn.to_layout(tt_bitmask, ttnn.TILE_LAYOUT, **op_kwargs)
+        tt_bitmask = ttnn.where(tt_bitmask, 0.0, float("-inf"), **op_kwargs)
+
+        ttnn.add_(logits, tt_bitmask, **op_kwargs)
+        ttnn.deallocate(tt_bitmask)
+        return logits
 
     def _validate_trace_inputs(self, slot, logits: ttnn.Tensor, tt_out_tok: Optional[ttnn.Tensor]):
         if slot["input"] is None or slot["output"] is None:
