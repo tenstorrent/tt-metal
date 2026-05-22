@@ -1249,7 +1249,9 @@ class ModelArgs:
             raise ValueError(f"Invalid mode: {mode}")
 
     @lru_cache(maxsize=None)
-    def get_mlp_ff1_3_prg_config(self, mode: Mode, seq_len: int = 1, prefetcher: Prefetcher = None):
+    def get_mlp_ff1_3_prg_config(
+        self, mode: Mode, seq_len: int = 1, prefetcher: Prefetcher = None, fused_activation=None
+    ):
         if mode == Mode.DECODE:
             if self.dim >= 4096 and self.is_galaxy:
                 return self.matmul_1d_config_from_tensor_shapes(
@@ -1266,6 +1268,7 @@ class ModelArgs:
                         self.hidden_dim // 8,
                     ),
                     grid=ttnn.CoreGrid(x=8, y=2),
+                    act=fused_activation,
                     overwrite_subblock_h=1,
                     overwrite_subblock_w=1,
                 )
@@ -1278,6 +1281,7 @@ class ModelArgs:
                         self.hidden_dim // self.cluster_shape[1],  # Use padded N
                         prefetcher.ring_size,
                         num_global_cb_receivers=prefetcher.num_receiver_cores,
+                        act=fused_activation,
                     )
                 else:
                     return self.dram_matmul_config(
@@ -1285,6 +1289,7 @@ class ModelArgs:
                         k=self.dim,
                         n=self.hidden_dim // self.cluster_shape[1],
                         num_cores=self.mlp_core_grid.num_cores,
+                        fused_activation=fused_activation,
                     )
         elif mode == Mode.PREFILL:
             return self.matmul_config(
@@ -1292,6 +1297,7 @@ class ModelArgs:
                 k=self.dim // self.cluster_shape[0],
                 n=self.hidden_dim // self.cluster_shape[1],
                 grid_size=self.mlp1_3_grid(seq_len),
+                fused_activation=fused_activation,
                 per_core_N=math.ceil(
                     (self.hidden_dim // self.cluster_shape[1]) / (ttnn.TILE_SIZE * self.dram_shard_grid_width)
                 )
@@ -3342,6 +3348,7 @@ class ModelArgs:
         N,
         num_cores,
         num_global_cb_receivers,
+        act=None,
         prefetch=True,
         untilize_out=False,
     ):
@@ -3387,7 +3394,7 @@ class ModelArgs:
             per_core_M=out_block_h,
             per_core_N=out_block_w,
             fuse_batch=True,
-            fused_activation=None,
+            fused_activation=act,
             mcast_in0=False,
             gather_in0=True,
             hop_cores=hop_core_range_set,

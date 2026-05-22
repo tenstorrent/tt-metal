@@ -8,6 +8,7 @@ from models.tt_transformers.tt.model_config import (
     PrecisionSetting,
     TensorGroup,
 )
+from models.tt_transformers.tt.phi_mlp import phi_activation_to_fused_linear_activation
 
 
 def test_phi1_accuracy_uses_bf16_attention_tensors_without_broad_hifi4_override():
@@ -23,3 +24,11 @@ def test_phi1_accuracy_uses_bf16_attention_tensors_without_broad_hifi4_override(
     assert opt.op_fidelity_settings[OpGroup.LI_QKV_PREFILL] == MathFidelitySetting.HIFI2_FP16
     assert opt.op_fidelity_settings[OpGroup.SDPA_DECODE] == MathFidelitySetting.HIFI2
     assert opt.op_fidelity_settings[OpGroup.SDPA_PREFILL] == MathFidelitySetting.HIFI4
+
+
+def test_phi1_mlp_activation_maps_to_fused_linear_activation():
+    assert phi_activation_to_fused_linear_activation("gelu") == "gelu"
+    assert phi_activation_to_fused_linear_activation("gelu_new") == "gelu_approx"
+    assert phi_activation_to_fused_linear_activation("gelu_pytorch_tanh") == "gelu_approx"
+    assert phi_activation_to_fused_linear_activation("relu") == "relu"
+    assert phi_activation_to_fused_linear_activation("swish") == "silu"
