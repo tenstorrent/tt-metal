@@ -810,8 +810,6 @@ class WanPipelineS2V(WanPipeline):
             # 2. Reference image VAE encode (once).
             with _stage("s2v_vae_encode_ref"):
                 # Stretch-resize via VideoProcessor (matches pipeline_wan_i2v).
-                # Aspect-preserving letterbox is a one-line swap — see
-                # pipeline_wan_s2v.md.
                 ref_tensor = self.video_processor.preprocess(image_prompt, height=height, width=width).to(
                     "cpu", dtype=torch.float32
                 )
