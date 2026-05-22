@@ -289,20 +289,8 @@ tt::tt_metal::ProgramDescriptor EmbeddingsFusedProgramFactory::create_descriptor
 
     auto cores = corerange_to_cores(all_cores, std::nullopt, row_major);
 
-    std::vector<uint32_t> reader_runtime_args = {
-        (std::uint32_t)a.buffer()->address(),
-        (std::uint32_t)weights.buffer()->address(),
-        (std::uint32_t)0,
-        (std::uint32_t)0,
-        (std::uint32_t)0,
-        (std::uint32_t)0,
-    };
-    if (embeddings_type == EmbeddingsType::PADDED) {
-        reader_runtime_args.push_back(pad_token.value());
-    }
-
-    std::vector<uint32_t> writer_runtime_args = {
-        (std::uint32_t)output.buffer()->address(), (std::uint32_t)0, (std::uint32_t)0};
+    auto* const a_buffer = a.buffer();
+    auto* const weights_buffer = weights.buffer();
 
     reader_desc.runtime_args.reserve(cores.size());
     if (writer_desc.has_value()) {
@@ -319,19 +307,24 @@ tt::tt_metal::ProgramDescriptor EmbeddingsFusedProgramFactory::create_descriptor
 
         // Reader
         {
-            reader_runtime_args[2] = input_offset / num_blocks_per_batch;
-            reader_runtime_args[3] = input_offset % num_blocks_per_batch * input_block_size_bytes;
-            reader_runtime_args[4] = weight_offset;
-            reader_runtime_args[5] = local_num_blocks;
-            reader_desc.runtime_args.emplace_back(core, reader_runtime_args);
+            std::vector<std::variant<uint32_t, Buffer*>> args = {
+                a_buffer,
+                weights_buffer,
+                input_offset / num_blocks_per_batch,
+                input_offset % num_blocks_per_batch * input_block_size_bytes,
+                weight_offset,
+                local_num_blocks,
+            };
+            if (embeddings_type == EmbeddingsType::PADDED) {
+                args.push_back(pad_token.value());
+            }
+            reader_desc.emplace_runtime_args(core, args);
         }
 
         // Writer
         if (!output_sharded) {
-            writer_runtime_args[1] = num_tiles_per_block * local_num_blocks;
-            writer_runtime_args[2] = tile_offset;
+            writer_desc->emplace_runtime_args(core, {out_buffer, num_tiles_per_block * local_num_blocks, tile_offset});
             tile_offset += local_num_blocks * num_tiles_per_block;
-            writer_desc->runtime_args.emplace_back(core, writer_runtime_args);
             input_offset += local_num_blocks;
         } else {
             weight_offset += weight_block_size;

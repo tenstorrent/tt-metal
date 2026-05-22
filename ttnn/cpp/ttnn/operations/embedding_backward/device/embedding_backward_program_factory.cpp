@@ -183,31 +183,25 @@ tt::tt_metal::ProgramDescriptor EmbeddingBackwardProgramFactory::create_descript
     //                 Run-time arguments
     ////////////////////////////////////////////////////////////////////////////
 
-    std::vector<uint32_t> reader_runtime_args = {
-        grad_tensor_buffer->address(),
-        index_tensor_buffer->address(),
-        out_buffer->address(),
-        embedding_tiles,  // how many pages to skip to get to the next row
-        0,                // offset to the first tile in a row
-        0,                // how many tiles to process in a row
-    };
-
     auto cores = corerange_to_cores(all_cores);
     reader_desc.runtime_args.reserve(cores.size());
     compute_desc.runtime_args.reserve(cores.size());
 
     uint32_t offset = 0;
     for (auto core : cores) {
-        reader_runtime_args[4] = offset;
-        if (core_group_1.contains(core)) {
-            reader_runtime_args[5] = num_tiles_per_core_group_1;
-        } else {
-            reader_runtime_args[5] = num_tiles_per_core_group_2;
-        }
-        reader_desc.runtime_args.emplace_back(core, reader_runtime_args);
-        compute_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{reader_runtime_args[5]});
+        uint32_t num_tiles_in_row =
+            core_group_1.contains(core) ? num_tiles_per_core_group_1 : num_tiles_per_core_group_2;
+        reader_desc.emplace_runtime_args(
+            core,
+            {grad_tensor_buffer,
+             index_tensor_buffer,
+             out_buffer,
+             embedding_tiles,  // how many pages to skip to get to the next row
+             offset,           // offset to the first tile in a row
+             num_tiles_in_row});
+        compute_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{num_tiles_in_row});
 
-        offset += reader_runtime_args[5];
+        offset += num_tiles_in_row;
     }
 
     desc.kernels.push_back(std::move(reader_desc));

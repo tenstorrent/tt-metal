@@ -95,10 +95,6 @@ tt::tt_metal::ProgramDescriptor AttnMatmulProgramFactory::create_descriptor(
     uint32_t in1_KtNt_stride = transpose_hw_bool ? bshape[2] / TILE_HEIGHT * in1_Kt : in1_Kt * Nt;
     uint32_t in1_KtNt_skip = transpose_hw_bool ? (bshape[2] / TILE_HEIGHT - 1) * in1_Kt : (in1_Kt - Kt) * Nt;
 
-    uint32_t src0_addr = src0_buffer->address();
-    uint32_t src1_addr = src1_buffer->address();
-    uint32_t dst_addr = dst_buffer->address();
-
     // ---- Circular buffers ----
     // cb_src0's total_size = Kt * in0_single_tile_size is the legacy override_runtime_arguments
     // value (the framework's apply_descriptor_runtime_args re-applies this on every cache hit
@@ -233,21 +229,19 @@ tt::tt_metal::ProgramDescriptor AttnMatmulProgramFactory::create_descriptor(
             continue;
         }
 
-        reader_desc.runtime_args.emplace_back(
+        reader_desc.emplace_runtime_args(
             core,
-            std::vector<uint32_t>{
-                src0_addr,
-                src1_addr,
-                Mt,
-                Kt,
-                Nt,
-                MtKt,
-                in1_KtNt_skip,
-                in1_KtNt_stride * num_rows_in_one_tile,
-                num_output_blocks_per_core,
-                num_blocks_written * MtKt,  // itileA_start
-                0,                          // itileB_start; always read same in1 per core
-            });
+            {src0_buffer,
+             src1_buffer,
+             Mt,
+             Kt,
+             Nt,
+             MtKt,
+             in1_KtNt_skip,
+             in1_KtNt_stride * num_rows_in_one_tile,
+             num_output_blocks_per_core,
+             num_blocks_written * MtKt,  // itileA_start
+             0u});                       // itileB_start; always read same in1 per core
         compute_desc.runtime_args.emplace_back(
             core,
             std::vector<uint32_t>{
@@ -256,13 +250,8 @@ tt::tt_metal::ProgramDescriptor AttnMatmulProgramFactory::create_descriptor(
                 Kt,                                 // Kt
                 num_output_blocks_per_core * MtNt,  // Nt
             });
-        writer_desc.runtime_args.emplace_back(
-            core,
-            std::vector<uint32_t>{
-                dst_addr,
-                num_output_blocks_per_core * MtNt,
-                num_blocks_written * MtNt,
-            });
+        writer_desc.emplace_runtime_args(
+            core, {dst_buffer, num_output_blocks_per_core * MtNt, num_blocks_written * MtNt});
         num_blocks_written += num_output_blocks_per_core;
     }
 

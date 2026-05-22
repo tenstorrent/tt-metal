@@ -294,27 +294,20 @@ ProgramDescriptor create_single_tile_prefill_descriptor(
         uint32_t num_rows_per_core = i < g1_numcores ? num_rows_per_core_group_1 : num_rows_per_core_group_2;
         uint32_t cos_sin_start_id = num_tiles_written % HtWt;
 
-        std::vector<uint32_t> reader_rt_args;
         if (in_sharded) {
-            reader_rt_args = {
-                cos_buffer->address(),
-                sin_buffer->address(),
-                num_rows_per_core,
-                num_tiles_written / Wt % Ht,
-                cos_sin_start_id,
-            };
+            reader_desc.emplace_runtime_args(
+                core, {cos_buffer, sin_buffer, num_rows_per_core, num_tiles_written / Wt % Ht, cos_sin_start_id});
         } else {
-            reader_rt_args = {
-                src_buffer->address(),
-                cos_buffer->address(),
-                sin_buffer->address(),
-                num_rows_per_core,
-                num_tiles_written,
-                num_tiles_written / Wt % Ht,
-                cos_sin_start_id,
-            };
+            reader_desc.emplace_runtime_args(
+                core,
+                {src_buffer,
+                 cos_buffer,
+                 sin_buffer,
+                 num_rows_per_core,
+                 num_tiles_written,
+                 num_tiles_written / Wt % Ht,
+                 cos_sin_start_id});
         }
-        reader_desc.runtime_args.emplace_back(core, std::move(reader_rt_args));
 
         writer_desc.emplace_runtime_args(core, {dst_buffer, num_rows_per_core * Wt, num_tiles_written});
         num_tiles_written += num_rows_per_core * Wt;
@@ -615,8 +608,8 @@ ProgramDescriptor create_multi_tile_descriptor(
         reader_desc.emplace_runtime_args(
             core,
             {src_buffer,
-             cos_buffer->address(),
-             sin_buffer->address(),
+             cos_buffer,
+             sin_buffer,
              num_rows_per_core,
              num_tiles_written,
              num_tiles_written / Wt % Ht,
