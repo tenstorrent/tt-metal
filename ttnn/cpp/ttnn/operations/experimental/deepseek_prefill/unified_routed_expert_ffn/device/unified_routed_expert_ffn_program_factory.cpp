@@ -34,6 +34,7 @@ constexpr uint32_t CB_PARTIALS_D = tt::CBIndex::c_8;
 constexpr uint32_t CB_OUT = tt::CBIndex::c_9;
 constexpr uint32_t CB_COUNTS_SCRATCH = tt::CBIndex::c_10;
 constexpr uint32_t CB_IDX_SCRATCH = tt::CBIndex::c_11;
+[[maybe_unused]] constexpr uint32_t CB_IN0_DOWN_FULL = tt::CBIndex::c_12;
 }  // namespace
 
 UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnProgramFactory::create(

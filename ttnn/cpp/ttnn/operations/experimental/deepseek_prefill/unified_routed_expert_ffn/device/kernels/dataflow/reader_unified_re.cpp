@@ -4,34 +4,23 @@
 
 // Reader kernel for unified_routed_expert_ffn.
 //
-// Per-core responsibilities:
-//   - At program start: read counts and global_expert_idx_table from DRAM into
-//     L1 scratch CBs, look up count = counts[global_expert_idx_table[local_expert_id]].
-//     Compute num_active_M_tiles = ceil_tile(count) which bounds how many
-//     chunks this core has to feed. For chunks past num_active_M_tiles we still
-//     have to push tiles (the writer will discard them) so that the compute
-//     kernel's deterministic CB protocol stays in sync.
-//   - For each chunk (chunks are looped at the program-factory level: one
-//     compute kernel invocation == one chunk in v1), stream into the CBs:
-//       Phase 1 (gate matmul):
-//         For each K-block in 0..num_blocks_gu:
-//           push g_in0_block_num_tiles tiles of x (this core's per_core_M rows ×
-//                in0_block_w columns) into cb_in0_x
-//           push g_in1_block_num_tiles tiles of gate_proj (in0_block_w × per_core_N)
-//                into cb_in1_gate
-//       Phase 2 (up matmul):
-//         For each K-block in 0..num_blocks_gu:
-//           push x tiles AGAIN into cb_in0_x (kernel pops between phases)
-//           push up_proj tiles into cb_in1_up
-//       Phase 3 (multiply): compute-only, no reader involvement.
-//       Phase 4 (down matmul):
-//         For each K-block in 0..num_blocks_d:
-//           NOTE: in0 for down is already in L1 (cb_activated) — reader does
-//           NOT push to cb_in0_x. Only cb_in1_down is fed.
-//           push down_proj tiles into cb_in1_down
-//
-// This v1 reader uses no NoC multicast — each core reads its own data directly
-// from DRAM. The mcast variant is a follow-up.
+// Per-core responsibilities, sequenced in one pass:
+//   - Read counts/idx_table scratch and discover this expert's active token
+//     count (currently used only for diagnostics; the host pre-sized the
+//     output buffer, the writer drops chunks beyond the count).
+//   - Phase 1 (gate matmul): per K-block, push per_core_M * in0_block_w_gu
+//     tiles of x to cb_in0_x and per_core_N_gu * in0_block_w_gu tiles of
+//     gate_proj to cb_in1_gate.
+//   - Phase 2 (up matmul): re-stream x and stream up_proj.
+//   - WAIT on a global semaphore until it reaches `total_cores`. The writer
+//     kernel of each core increments the semaphore once it's done draining
+//     cb_activated to the per-program DRAM scratch tensor, so once the
+//     semaphore equals total_cores every core's M-rows × hidden columns of
+//     activated are coherent in scratch.
+//   - Phase 4 (down matmul): per K-block, read this core's per_core_M rows
+//     × in0_block_w_d columns from the activated scratch into
+//     cb_in0_down_full, and stream the matching in1 K-block of down_proj
+//     into cb_in1_down.
 
 #include <cstdint>
 
@@ -48,42 +37,44 @@ void kernel_main() {
     const uint32_t down_addr = get_arg_val<uint32_t>(3);
     const uint32_t counts_addr = get_arg_val<uint32_t>(4);
     const uint32_t idx_table_addr = get_arg_val<uint32_t>(5);
+    const uint32_t scratch_addr = get_arg_val<uint32_t>(6);  // activated scratch DRAM tensor
+    const uint32_t sem_addr = get_arg_val<uint32_t>(7);      // local L1 address of the global semaphore
 
-    // Which (mt, nt) block of the output this core produces. mt is the chunk-
-    // local M-row block (per_core_M tiles tall), nt is the N-col block.
-    const uint32_t my_mt = get_arg_val<uint32_t>(6);
-    const uint32_t my_nt_gu = get_arg_val<uint32_t>(7);
-    const uint32_t my_nt_d = get_arg_val<uint32_t>(8);
-    const uint32_t chunk_start_tile_row = get_arg_val<uint32_t>(9);
+    const uint32_t my_mt = get_arg_val<uint32_t>(8);
+    const uint32_t my_nt_gu = get_arg_val<uint32_t>(9);
+    const uint32_t my_nt_d = get_arg_val<uint32_t>(10);
+    const uint32_t chunk_start_tile_row = get_arg_val<uint32_t>(11);
 
     // -------------------------- compile-time args -------------------------
     constexpr uint32_t cb_in0_x = get_compile_time_arg_val(0);
     constexpr uint32_t cb_in1_gate = get_compile_time_arg_val(1);
     constexpr uint32_t cb_in1_up = get_compile_time_arg_val(2);
     constexpr uint32_t cb_in1_down = get_compile_time_arg_val(3);
-    constexpr uint32_t cb_counts_scratch = get_compile_time_arg_val(4);
-    constexpr uint32_t cb_idx_scratch = get_compile_time_arg_val(5);
+    constexpr uint32_t cb_in0_down_full = get_compile_time_arg_val(4);
+    constexpr uint32_t cb_counts_scratch = get_compile_time_arg_val(5);
+    constexpr uint32_t cb_idx_scratch = get_compile_time_arg_val(6);
 
-    constexpr uint32_t local_expert_id = get_compile_time_arg_val(6);
-    constexpr uint32_t per_core_M = get_compile_time_arg_val(7);    // tiles, gate/up/down share same M block
-    constexpr uint32_t per_core_N_gu = get_compile_time_arg_val(8);  // gate/up N tiles per core
-    constexpr uint32_t per_core_N_d = get_compile_time_arg_val(9);   // down N tiles per core
-    constexpr uint32_t K_gate_tiles = get_compile_time_arg_val(10);  // K for gate/up = emb / TILE
-    constexpr uint32_t K_down_tiles = get_compile_time_arg_val(11);  // K for down = hidden / TILE
-    constexpr uint32_t in0_block_w_gu = get_compile_time_arg_val(12);
-    constexpr uint32_t in0_block_w_d = get_compile_time_arg_val(13);
-    constexpr uint32_t N_gate_tiles_full = get_compile_time_arg_val(14);  // hidden / TILE
-    constexpr uint32_t N_down_tiles_full = get_compile_time_arg_val(15);  // emb / TILE
-    constexpr uint32_t M_tiles_full = get_compile_time_arg_val(16);       // M_max / TILE
+    constexpr uint32_t local_expert_id = get_compile_time_arg_val(7);
+    constexpr uint32_t per_core_M = get_compile_time_arg_val(8);
+    constexpr uint32_t per_core_N_gu = get_compile_time_arg_val(9);
+    constexpr uint32_t per_core_N_d = get_compile_time_arg_val(10);
+    constexpr uint32_t K_gate_tiles = get_compile_time_arg_val(11);
+    constexpr uint32_t K_down_tiles = get_compile_time_arg_val(12);
+    constexpr uint32_t in0_block_w_gu = get_compile_time_arg_val(13);
+    constexpr uint32_t in0_block_w_d = get_compile_time_arg_val(14);
+    constexpr uint32_t N_gate_tiles_full = get_compile_time_arg_val(15);
+    constexpr uint32_t N_down_tiles_full = get_compile_time_arg_val(16);
+    constexpr uint32_t M_tiles_full = get_compile_time_arg_val(17);
+    constexpr uint32_t total_cores = get_compile_time_arg_val(18);
 
-    // Tile counts pushed per K-block (per phase).
     constexpr uint32_t g_in0_block_num_tiles = per_core_M * in0_block_w_gu;
     constexpr uint32_t g_in1_block_num_tiles = per_core_N_gu * in0_block_w_gu;
+    constexpr uint32_t d_in0_block_num_tiles = per_core_M * in0_block_w_d;
     constexpr uint32_t d_in1_block_num_tiles = per_core_N_d * in0_block_w_d;
     constexpr uint32_t num_blocks_gu = K_gate_tiles / in0_block_w_gu;
     constexpr uint32_t num_blocks_d = K_down_tiles / in0_block_w_d;
 
-    constexpr uint32_t x_accessor_offset = 17;
+    constexpr uint32_t x_accessor_offset = 19;
     constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
     const auto x_acc = TensorAccessor(x_args, x_addr, get_tile_size(cb_in0_x));
 
@@ -107,6 +98,10 @@ void kernel_main() {
     constexpr auto idx_args = TensorAccessorArgs<idx_accessor_offset>();
     const auto idx_acc = TensorAccessor(idx_args, idx_table_addr);
 
+    constexpr uint32_t scratch_accessor_offset = idx_args.next_compile_time_args_offset();
+    constexpr auto scratch_args = TensorAccessorArgs<scratch_accessor_offset>();
+    const auto scratch_acc = TensorAccessor(scratch_args, scratch_addr, get_tile_size(cb_in0_down_full));
+
     // Look up active token count for this expert from device-side buffers.
     const uint32_t counts_l1 = get_write_ptr(cb_counts_scratch);
     const uint32_t idx_l1 = get_write_ptr(cb_idx_scratch);
@@ -118,35 +113,17 @@ void kernel_main() {
     const volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1);
     const uint32_t global_expert_id = idx_ptr[local_expert_id];
     const uint32_t count_value = counts_ptr[global_expert_id];
-    const uint32_t count_tiles = (count_value + TILE_HEIGHT - 1) / TILE_HEIGHT;
+    (void)count_value;  // diagnostics only for now — host-side narrowing still owns the M sizing.
 
-    // If this core's M-row block is entirely beyond the active token count,
-    // we still need to feed the CBs (the writer will discard the result).
-    // Skipping work would desynchronize the compute kernel's wait_front /
-    // pop_front pattern. We still push the same number of tile-block pushes;
-    // the data we push can be from the padded region (which the compute kernel
-    // will multiply into a result the writer discards).
     const uint32_t this_core_first_row = chunk_start_tile_row + my_mt * per_core_M;
-    const bool core_is_active = this_core_first_row < count_tiles;
-    (void)core_is_active;  // v1: always feed the same number of tiles regardless
-
-    // For v1 we always read the actual tile region (even if past count) — the
-    // padded rows contain undefined-but-safe garbage that won't corrupt valid
-    // output rows (those belong to active cores). This keeps the per-core
-    // workload constant which simplifies the kernel and matches the existing
-    // routed_expert_ffn behavior pre-Milestone 4.
 
     const uint32_t x_tile_bytes = get_tile_size(cb_in0_x);
     const uint32_t gate_tile_bytes = get_tile_size(cb_in1_gate);
     const uint32_t up_tile_bytes = get_tile_size(cb_in1_up);
     const uint32_t down_tile_bytes = get_tile_size(cb_in1_down);
+    const uint32_t scratch_tile_bytes = get_tile_size(cb_in0_down_full);
 
-    // -------------------------------------------------------------------
-    // PHASE 1 — gate matmul reader feed.
-    // For each K-block:
-    //   push per_core_M * in0_block_w_gu tiles of x to cb_in0_x
-    //   push per_core_N_gu * in0_block_w_gu tiles of gate_proj to cb_in1_gate
-    // -------------------------------------------------------------------
+    // -------- PHASE 1 — gate matmul feed (push x + gate_proj K-blocks) ----
     for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
         cb_reserve_back(cb_in0_x, g_in0_block_num_tiles);
         uint32_t l1_x = get_write_ptr(cb_in0_x);
@@ -154,7 +131,7 @@ void kernel_main() {
             for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
                 const uint32_t row = this_core_first_row + m;
                 const uint32_t col = kb * in0_block_w_gu + k;
-                const uint32_t tile_idx = row * (K_gate_tiles) + col;
+                const uint32_t tile_idx = row * K_gate_tiles + col;
                 noc_async_read_tile(tile_idx, x_acc, l1_x);
                 l1_x += x_tile_bytes;
             }
@@ -177,9 +154,7 @@ void kernel_main() {
         cb_push_back(cb_in1_gate, g_in1_block_num_tiles);
     }
 
-    // -------------------------------------------------------------------
-    // PHASE 2 — up matmul reader feed (re-streams x; pushes up_proj).
-    // -------------------------------------------------------------------
+    // -------- PHASE 2 — up matmul feed (re-stream x + up_proj K-blocks) ---
     for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
         cb_reserve_back(cb_in0_x, g_in0_block_num_tiles);
         uint32_t l1_x = get_write_ptr(cb_in0_x);
@@ -187,7 +162,7 @@ void kernel_main() {
             for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
                 const uint32_t row = this_core_first_row + m;
                 const uint32_t col = kb * in0_block_w_gu + k;
-                const uint32_t tile_idx = row * (K_gate_tiles) + col;
+                const uint32_t tile_idx = row * K_gate_tiles + col;
                 noc_async_read_tile(tile_idx, x_acc, l1_x);
                 l1_x += x_tile_bytes;
             }
@@ -210,11 +185,29 @@ void kernel_main() {
         cb_push_back(cb_in1_up, g_in1_block_num_tiles);
     }
 
-    // -------------------------------------------------------------------
-    // PHASE 4 — down matmul reader feed (in0=cb_activated already lives in
-    // L1 from the compute kernel; only cb_in1_down is fed here).
-    // -------------------------------------------------------------------
+    // -------- SYNC — wait for every core's writer to drain cb_activated --
+    // The writer increments the global semaphore exactly once after copying
+    // its activated slice to scratch. Wait until value reaches total_cores
+    // so the scratch DRAM tensor is fully coherent across all M-rows × hidden.
+    volatile tt_l1_ptr uint32_t* sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
+    noc_semaphore_wait(sem_ptr, total_cores);
+
+    // -------- PHASE 4 — down matmul feed (activated scratch + down_proj) --
     for (uint32_t kb = 0; kb < num_blocks_d; ++kb) {
+        cb_reserve_back(cb_in0_down_full, d_in0_block_num_tiles);
+        uint32_t l1_a = get_write_ptr(cb_in0_down_full);
+        for (uint32_t m = 0; m < per_core_M; ++m) {
+            for (uint32_t k = 0; k < in0_block_w_d; ++k) {
+                const uint32_t row = this_core_first_row + m;
+                const uint32_t col = kb * in0_block_w_d + k;
+                const uint32_t tile_idx = row * N_gate_tiles_full + col;  // scratch is M_full x N_gate
+                noc_async_read_tile(tile_idx, scratch_acc, l1_a);
+                l1_a += scratch_tile_bytes;
+            }
+        }
+        noc_async_read_barrier();
+        cb_push_back(cb_in0_down_full, d_in0_block_num_tiles);
+
         cb_reserve_back(cb_in1_down, d_in1_block_num_tiles);
         uint32_t l1_w = get_write_ptr(cb_in1_down);
         for (uint32_t k = 0; k < in0_block_w_d; ++k) {
