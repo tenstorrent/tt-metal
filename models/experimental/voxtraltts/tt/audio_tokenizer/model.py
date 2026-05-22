@@ -33,7 +33,10 @@ from models.experimental.voxtraltts.tt.audio_tokenizer.transformer import (
     VoxtralTTAudioTokenizerDecoderTransformerBlock,
 )
 from models.experimental.voxtraltts.tt.voxtral_tt_args import _load_safetensors_state_dict
-from models.experimental.voxtraltts.utils.config_helpers import COMPUTE_KERNEL_CONFIG_VOXTRAL_AUDIO_TOKENIZER
+from models.experimental.voxtraltts.utils.audio_tokenizer_optimizations import (
+    AudioTokenizerOptimizations,
+    voxtral_audio_tokenizer_default_optimizations,
+)
 
 AUDIO_TOKENIZER_ENCODER_OPTIONAL_PREFIXES = ("input_proj.", "encoder_blocks.")
 
@@ -56,12 +59,15 @@ class VoxtralTTAudioTokenizer:
         tokenizer_cfg: VoxtralAudioTokenizerConfig,
         dtype: ttnn.DataType = ttnn.bfloat16,
         full_checkpoint: dict | None = None,
+        optimizations: AudioTokenizerOptimizations | None = None,
     ) -> None:
         self.mesh_device = mesh_device
         self.cfg = tokenizer_cfg
-        self._dtype = dtype
+        self.optimizations = optimizations or voxtral_audio_tokenizer_default_optimizations()
+        self._dtype = self.optimizations.activation_dtype
+        self._weight_dtype = self.optimizations.weight_dtype
+        self._compute_kernel_config = self.optimizations.matmul_compute_kernel_config
         self._audio_tokenizer_sd = state_dict
-        self._compute_kernel_config = COMPUTE_KERNEL_CONFIG_VOXTRAL_AUDIO_TOKENIZER
 
         self.input_proj: VoxtralTTAudioTokenizerInputProj | None = None
         try:
@@ -73,9 +79,9 @@ class VoxtralTTAudioTokenizer:
                 kernel_size=tokenizer_cfg.patch_proj_kernel_size,
                 stride=1,
                 causal=tokenizer_cfg.causal,
-                weight_dtype=dtype,
-                activations_dtype=dtype,
-                output_dtype=dtype,
+                weight_dtype=self._weight_dtype,
+                activations_dtype=self._dtype,
+                output_dtype=self._dtype,
             )
         except KeyError:
             pass
@@ -88,9 +94,7 @@ class VoxtralTTAudioTokenizer:
                 tokenizer_cfg=tokenizer_cfg,
                 block_index=1,
                 layer_index=0,
-                weight_dtype=dtype,
-                output_dtype=dtype,
-                compute_kernel_config=self._compute_kernel_config,
+                optimizations=self.optimizations,
             )
         except KeyError:
             pass
@@ -103,9 +107,7 @@ class VoxtralTTAudioTokenizer:
                 tokenizer_cfg=tokenizer_cfg,
                 block_index=1,
                 layer_index=1,
-                weight_dtype=dtype,
-                output_dtype=dtype,
-                compute_kernel_config=self._compute_kernel_config,
+                optimizations=self.optimizations,
             )
         except KeyError:
             pass
@@ -118,9 +120,7 @@ class VoxtralTTAudioTokenizer:
                 tokenizer_cfg=tokenizer_cfg,
                 block_index=3,
                 layer_index=0,
-                weight_dtype=dtype,
-                output_dtype=dtype,
-                compute_kernel_config=self._compute_kernel_config,
+                optimizations=self.optimizations,
             )
         except KeyError:
             pass
@@ -133,9 +133,7 @@ class VoxtralTTAudioTokenizer:
                 tokenizer_cfg=tokenizer_cfg,
                 block_index=3,
                 layer_index=1,
-                weight_dtype=dtype,
-                output_dtype=dtype,
-                compute_kernel_config=self._compute_kernel_config,
+                optimizations=self.optimizations,
             )
         except KeyError:
             pass
@@ -153,9 +151,9 @@ class VoxtralTTAudioTokenizer:
                 in_channels=tokenizer_cfg.dim,
                 out_channels=tokenizer_cfg.dim,
                 output_channel_splits=16,
-                weight_dtype=dtype,
-                activations_dtype=dtype,
-                output_dtype=dtype,
+                weight_dtype=self._weight_dtype,
+                activations_dtype=self._dtype,
+                output_dtype=self._dtype,
             )
         except KeyError:
             pass
@@ -173,9 +171,9 @@ class VoxtralTTAudioTokenizer:
                 in_channels=tokenizer_cfg.dim,
                 out_channels=tokenizer_cfg.dim,
                 output_channel_splits=16,
-                weight_dtype=dtype,
-                activations_dtype=dtype,
-                output_dtype=dtype,
+                weight_dtype=self._weight_dtype,
+                activations_dtype=self._dtype,
+                output_dtype=self._dtype,
             )
         except KeyError:
             pass
@@ -188,9 +186,7 @@ class VoxtralTTAudioTokenizer:
                 tokenizer_cfg=tokenizer_cfg,
                 block_index=5,
                 layer_index=0,
-                weight_dtype=dtype,
-                output_dtype=dtype,
-                compute_kernel_config=self._compute_kernel_config,
+                optimizations=self.optimizations,
             )
         except KeyError:
             pass
@@ -203,9 +199,7 @@ class VoxtralTTAudioTokenizer:
                 tokenizer_cfg=tokenizer_cfg,
                 block_index=5,
                 layer_index=1,
-                weight_dtype=dtype,
-                output_dtype=dtype,
-                compute_kernel_config=self._compute_kernel_config,
+                optimizations=self.optimizations,
             )
         except KeyError:
             pass
@@ -223,9 +217,9 @@ class VoxtralTTAudioTokenizer:
                 in_channels=tokenizer_cfg.dim,
                 out_channels=tokenizer_cfg.dim,
                 output_channel_splits=16,
-                weight_dtype=dtype,
-                activations_dtype=dtype,
-                output_dtype=dtype,
+                weight_dtype=self._weight_dtype,
+                activations_dtype=self._dtype,
+                output_dtype=self._dtype,
             )
         except KeyError:
             pass
@@ -238,9 +232,7 @@ class VoxtralTTAudioTokenizer:
                 tokenizer_cfg=tokenizer_cfg,
                 block_index=7,
                 layer_index=0,
-                weight_dtype=dtype,
-                output_dtype=dtype,
-                compute_kernel_config=self._compute_kernel_config,
+                optimizations=self.optimizations,
             )
         except KeyError:
             pass
@@ -253,9 +245,7 @@ class VoxtralTTAudioTokenizer:
                 tokenizer_cfg=tokenizer_cfg,
                 block_index=7,
                 layer_index=1,
-                weight_dtype=dtype,
-                output_dtype=dtype,
-                compute_kernel_config=self._compute_kernel_config,
+                optimizations=self.optimizations,
             )
         except KeyError:
             pass
@@ -273,9 +263,9 @@ class VoxtralTTAudioTokenizer:
                 kernel_size=ks,
                 stride=2,
                 causal=tokenizer_cfg.causal,
-                weight_dtype=dtype,
-                activations_dtype=dtype,
-                output_dtype=dtype,
+                weight_dtype=self._weight_dtype,
+                activations_dtype=self._dtype,
+                output_dtype=self._dtype,
             )
         except KeyError:
             pass
@@ -293,9 +283,9 @@ class VoxtralTTAudioTokenizer:
                 pad_mode="replicate",
                 in_channels=audio_tokenizer_latent_dim(tokenizer_cfg),
                 out_channels=tokenizer_cfg.dim,
-                weight_dtype=dtype,
-                activations_dtype=dtype,
-                output_dtype=dtype,
+                weight_dtype=self._weight_dtype,
+                activations_dtype=self._dtype,
+                output_dtype=self._dtype,
             )
         except KeyError:
             pass
@@ -314,9 +304,9 @@ class VoxtralTTAudioTokenizer:
                 in_channels=ic,
                 out_channels=oc,
                 output_channel_splits=8,
-                weight_dtype=dtype,
-                activations_dtype=dtype,
-                output_dtype=dtype,
+                weight_dtype=self._weight_dtype,
+                activations_dtype=self._dtype,
+                output_dtype=self._dtype,
             )
         except KeyError:
             pass
@@ -337,7 +327,7 @@ class VoxtralTTAudioTokenizer:
         ):
             try:
                 self.semantic_codebook_quantizer = VoxtralTTSemanticCodebookQuantizer(
-                    mesh_device, state_dict=state_dict, dtype=dtype
+                    mesh_device, state_dict=state_dict, dtype=self._dtype
                 )
             except (KeyError, ValueError, RuntimeError):
                 pass
@@ -392,6 +382,7 @@ class VoxtralTTAudioTokenizer:
         *,
         model_name_or_path: str = DEFAULT_VOXTRAL_MODEL,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        optimizations: AudioTokenizerOptimizations | None = None,
     ) -> "VoxtralTTAudioTokenizer":
         cfg = load_voxtral_config(model_name_or_path)
         full = _load_safetensors_state_dict(model_name_or_path)
@@ -402,6 +393,7 @@ class VoxtralTTAudioTokenizer:
             tokenizer_cfg=cfg.audio_tokenizer_args,
             dtype=dtype,
             full_checkpoint=full,
+            optimizations=optimizations,
         )
 
     def input_projection(self, mel_b1tc: ttnn.Tensor) -> ttnn.Tensor:

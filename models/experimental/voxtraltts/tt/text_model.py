@@ -10,7 +10,14 @@ from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import TensorGroup
 
 from models.experimental.voxtraltts.tt.text_decoder_layer import remap_voxtral_text_state_dict
-from models.experimental.voxtraltts.tt.voxtral_tt_args import get_VoxtralTTArgs
+from models.experimental.voxtraltts.tt.voxtral_tt_args import (
+    get_VoxtralTTArgs,
+    voxtral_text_default_optimizations,
+)
+
+
+def _decode_activation_dtype(args) -> ttnn.DataType | None:
+    return args.decoders_optimizations.get_tensor_dtype(decoder_id=0, tensor=TensorGroup.ACTIVATION)
 
 
 class VoxtralTTTextModel:
@@ -54,10 +61,10 @@ class VoxtralTTTextModel:
         *,
         mesh_device,
         model_name_or_path: str,
-        dtype: ttnn.DataType = ttnn.bfloat8_b,
+        dtype: ttnn.DataType = ttnn.bfloat16,
         max_batch_size: int = 1,
         max_seq_len: int = 4096,
-        optimizations=None,
+        optimizations=voxtral_text_default_optimizations,
         preloaded_state_dict: dict[str, torch.Tensor] | None = None,
         paged_attention_config=None,
         use_paged_kv_cache: bool = False,
@@ -107,11 +114,11 @@ class VoxtralTTTextModel:
     ) -> torch.Tensor:
         """Prefill via per-token decode (KV-safe; avoids P150 prefill L1 overflow). Returns ``[dim]`` hidden."""
         S = inputs_embeds.shape[0]
-        embeds_bf16 = inputs_embeds.to(dtype=torch.bfloat16)
+        embeds = inputs_embeds.to(dtype=torch.bfloat16)
 
         last_hidden: torch.Tensor | None = None
         for i in range(S):
-            last_hidden = self.decode_step_from_embeds(embeds_bf16[i], start_pos + i)
+            last_hidden = self.decode_step_from_embeds(embeds[i], start_pos + i)
 
         return last_hidden
 
@@ -122,15 +129,9 @@ class VoxtralTTTextModel:
     ) -> torch.Tensor:
         """One decode step from a CPU embedding; returns post-norm ``[dim]`` hidden (pre-LM-head)."""
         dim = self.inner.args.dim
+        args = self.inner.args
+        activation_dtype = _decode_activation_dtype(args) or ttnn.bfloat16
         x_4d = x_embed.reshape(1, 1, 1, dim).to(dtype=torch.bfloat16).contiguous()
-        emb_tt = ttnn.from_torch(
-            x_4d,
-            device=self.inner.mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.inner.mesh_device),
-        )
 
         dummy_token = torch.zeros(1, dtype=torch.int64)
         current_pos_t = torch.tensor([current_pos_idx], dtype=torch.int64)
@@ -141,18 +142,17 @@ class VoxtralTTTextModel:
             self.inner.rope_local_setup.get_rot_mats(rope_idxs) if hasattr(self.inner, "rope_local_setup") else None
         )
 
-        decode_mem_cfg = self.inner.args.get_residual_mem_config(Mode.DECODE, self.inner.prefetcher)
-        x_tt = ttnn.to_memory_config(emb_tt, decode_mem_cfg)
-        ttnn.deallocate(emb_tt)
+        decode_mem_cfg = args.get_residual_mem_config(Mode.DECODE, self.inner.prefetcher)
+        x_tt = ttnn.from_torch(
+            x_4d,
+            device=self.inner.mesh_device,
+            dtype=activation_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=decode_mem_cfg,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.inner.mesh_device),
+        )
 
         for i, layer in enumerate(self.inner.layers):
-            activation_dtype = self.inner.args.decoders_optimizations.get_tensor_dtype(
-                decoder_id=i, tensor=TensorGroup.ACTIVATION
-            )
-            if not self.inner.args.is_galaxy:
-                x_tt = ttnn.to_memory_config(x_tt, decode_mem_cfg, activation_dtype)
-            elif activation_dtype is not None and x_tt.dtype != activation_dtype:
-                x_tt = ttnn.typecast(x_tt, activation_dtype)
             x_tt = layer(
                 x_tt,
                 current_pos_tt,
@@ -164,24 +164,11 @@ class VoxtralTTTextModel:
                 kv_cache=None,
             )
 
-        x_norm = self.inner.norm(
-            x_tt,
-            mode=Mode.DECODE,
-            norm_config=self.inner.args.get_norm_config("lm_head", Mode.DECODE, self.inner.prefetcher),
-        )
+        lm_norm_cfg = args.get_norm_config("lm_head", Mode.DECODE, self.inner.prefetcher)
+        x_norm = self.inner.norm(x_tt, mode=Mode.DECODE, norm_config=lm_norm_cfg)
         ttnn.deallocate(x_tt)
-        try:
-            is_sharded = x_norm.memory_config().is_sharded()
-        except RuntimeError:
-            is_sharded = False
-        if is_sharded:
-            x_norm_interleaved = ttnn.sharded_to_interleaved(x_norm, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(x_norm)
-            x_norm = x_norm_interleaved
-        x_rm = ttnn.to_layout(x_norm, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        host = self.inner.concat_host_output(x_norm)
         ttnn.deallocate(x_norm)
-        host = self.inner.concat_host_output(x_rm)
-        ttnn.deallocate(x_rm)
         return host[0, 0, 0, :dim].to(dtype=torch.bfloat16)
 
     def decode_step_from_embeds_tt(
@@ -194,16 +181,13 @@ class VoxtralTTTextModel:
     ) -> ttnn.Tensor:
         """One DECODE step for trace replay; returns device hidden (post-norm) without host readback."""
         decode_mem_cfg = self.inner.args.get_residual_mem_config(Mode.DECODE, self.inner.prefetcher)
-        x_tt = ttnn.to_memory_config(x_embed_tt, decode_mem_cfg)
+        activation_dtype = _decode_activation_dtype(self.inner.args)
+        if activation_dtype is not None and x_embed_tt.dtype != activation_dtype:
+            x_tt = ttnn.to_memory_config(x_embed_tt, decode_mem_cfg, activation_dtype)
+        else:
+            x_tt = ttnn.to_memory_config(x_embed_tt, decode_mem_cfg)
 
         for i, layer in enumerate(self.inner.layers):
-            activation_dtype = self.inner.args.decoders_optimizations.get_tensor_dtype(
-                decoder_id=i, tensor=TensorGroup.ACTIVATION
-            )
-            if not self.inner.args.is_galaxy:
-                x_tt = ttnn.to_memory_config(x_tt, decode_mem_cfg, activation_dtype)
-            elif activation_dtype is not None and x_tt.dtype != activation_dtype:
-                x_tt = ttnn.typecast(x_tt, activation_dtype)
             x_tt = layer(
                 x_tt,
                 current_pos_tt,
@@ -221,12 +205,4 @@ class VoxtralTTTextModel:
             norm_config=self.inner.args.get_norm_config("lm_head", Mode.DECODE, self.inner.prefetcher),
         )
         ttnn.deallocate(x_tt)
-        try:
-            is_sharded = x_norm.memory_config().is_sharded()
-        except RuntimeError:
-            is_sharded = False
-        if is_sharded:
-            x_norm_interleaved = ttnn.sharded_to_interleaved(x_norm, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(x_norm)
-            x_norm = x_norm_interleaved
-        return ttnn.to_layout(x_norm, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return x_norm
