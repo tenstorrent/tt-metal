@@ -579,7 +579,6 @@ class WanPipelineS2V(WanPipeline):
             mesh_shape=tuple(self.mesh_device.shape),
             get_torch_state_dict=lambda: self.torch_audio_encoder.state_dict(),
         )
-        self.tt_audio_encoder.bind_cpu_modules(self.torch_audio_encoder)
 
     # ----------------------------------------------------------------------
     # Reference-faithful frame-count constants (wan_s2v_14B + speech2video.py).

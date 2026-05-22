@@ -15,11 +15,12 @@ from transformers import Wav2Vec2Model, Wav2Vec2Processor
 import ttnn
 
 from .....encoders.wav2vec2.config_wav2vec2 import Wav2Vec2Config
+from .....encoders.wav2vec2.encoder_wav2vec2 import Wav2Vec2PositionalConvEmbedding
 from .....encoders.wav2vec2.model_wav2vec2 import Wav2Vec2Encoder
 from .....parallel.config import EncoderParallelConfig, ParallelFactor
 from .....parallel.manager import CCLManager
 from .....utils.check import assert_quality
-from .....utils.tensor import to_torch
+from .....utils.tensor import from_torch, to_torch
 from .....utils.test import line_params, ring_params
 
 
@@ -93,9 +94,66 @@ def test_wav2vec2_encoder_s2v(
         parallel_config=parallel_config,
     )
     tt_model.load_torch_state_dict(hf_model.state_dict())
-    tt_model.bind_cpu_modules(hf_model)
 
     tt_hidden = tt_model(input_values)
     tt_hidden_torch = to_torch(tt_hidden)
     logger.info(f"TT hidden shape: {tuple(tt_hidden_torch.shape)}")
     assert_quality(tt_hidden_torch.float(), golden, pcc=0.99)
+
+
+@pytest.mark.skipif(
+    _BUNDLED_PATH is None,
+    reason="Wan-AI/Wan2.2-S2V-14B bundled wav2vec2 weights not found.",
+)
+@pytest.mark.parametrize(
+    ("mesh_device", "device_params", "topology"),
+    [
+        pytest.param((2, 4), line_params, ttnn.Topology.Linear, id="bh_2x4"),
+        pytest.param((4, 8), ring_params, ttnn.Topology.Ring, id="bh_4x8"),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "T",
+    [pytest.param(50, id="T50"), pytest.param(250, id="T250")],
+)
+def test_pos_conv_embed_s2v(mesh_device: ttnn.MeshDevice, topology: ttnn.Topology, T: int) -> None:
+    """Unit-level PCC parity for Wav2Vec2PositionalConvEmbedding alone.
+
+    Stage-1 of the on-device pos_conv migration. Drives the new tt_dit module
+    with a random [B=1, T, 768] input and compares its output bit-for-bit
+    (within PCC=0.99) against HF's `Wav2Vec2PositionalConvEmbedding` reference.
+    """
+    model_path = str(_BUNDLED_PATH)
+    hf_model = Wav2Vec2Model.from_pretrained(model_path).eval()
+    config = Wav2Vec2Config.from_hf(hf_model.config)
+
+    torch.manual_seed(0)
+    x_torch = torch.randn(1, T, config.hidden_size, dtype=torch.float32)
+
+    # HF reference: must transpose [B, T, C] -> [B, C, T] then back, per
+    # the HF forward (modeling_wav2vec2.py:374).
+    with torch.no_grad():
+        ref = hf_model.encoder.pos_conv_embed(x_torch)
+    logger.info(f"HF pos_conv output shape: {tuple(ref.shape)}")
+
+    parallel_config = EncoderParallelConfig(
+        tensor_parallel=ParallelFactor(mesh_axis=0, factor=tuple(mesh_device.shape)[0]),
+    )
+    _ = CCLManager(mesh_device=mesh_device, num_links=2, topology=topology)
+
+    tt_pos = Wav2Vec2PositionalConvEmbedding(config, mesh_device=mesh_device)
+    pos_sd = {
+        k.removeprefix("encoder.pos_conv_embed."): v
+        for k, v in hf_model.state_dict().items()
+        if k.startswith("encoder.pos_conv_embed.")
+    }
+    tt_pos.load_torch_state_dict(pos_sd)
+
+    x_tt = from_torch(x_torch, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_out = tt_pos(x_tt)
+    tt_out_torch = to_torch(tt_out).float()
+    logger.info(f"TT pos_conv output shape: {tuple(tt_out_torch.shape)}")
+
+    assert tt_out_torch.shape == ref.shape, f"shape mismatch tt={tt_out_torch.shape} ref={ref.shape}"
+    assert_quality(tt_out_torch, ref, pcc=0.99)

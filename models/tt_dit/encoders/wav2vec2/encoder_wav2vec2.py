@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import math
 
+import torch
+
 import ttnn
 
 from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear
@@ -14,11 +16,6 @@ from ...layers.normalization import LayerNorm
 from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
 from .config_wav2vec2 import Wav2Vec2Config
-
-# Pos-conv runs on CPU inside `Wav2Vec2Encoder.forward`. Its in_per_group=48
-# isn't a tile multiple, so ttnn.experimental.conv3d's grouped path can't
-# satisfy `C_in_block == in_per_group` AND `C_in_block % 32 == 0`. ~3 MFLOP
-# one-shot per clip — CPU is fine.
 
 
 class Wav2Vec2FeatureProjection(Module):
@@ -309,11 +306,118 @@ class Wav2Vec2EncoderLayer(Module):
         return self.final_layer_norm(hidden)
 
 
-class Wav2Vec2EncoderStack(Module):
-    """N transformer encoder layers. Pos-conv runs CPU-side in ``Wav2Vec2Encoder``.
+class Wav2Vec2PositionalConvEmbedding(Module):
+    """HF ``Wav2Vec2PositionalConvEmbedding`` ported to ``ttnn.conv1d``.
 
-    ``layer_norm`` placement: post-LN (base) folds into the CPU pre-norm step;
-    pre-LN/stable (large-xlsr) is owned by this module and runs on device.
+    Grouped Conv1d (groups=16, in=out=768, kernel=128, padding=64, bias=True)
+    + ``SamePadLayer`` (drops 1 trailing frame for the even kernel) + exact GELU.
+    The HF conv weight is ``weight_norm``-parametrized; we materialize it once
+    in ``_prepare_torch_state``.
+    """
+
+    def __init__(
+        self,
+        config: Wav2Vec2Config,
+        *,
+        mesh_device: ttnn.MeshDevice,
+    ) -> None:
+        super().__init__()
+        self.config = config
+        self.mesh_device = mesh_device
+        # Hardcoded to the HF wav2vec2 positional-conv constants (matches every
+        # checkpoint we load: base, large, large-xlsr-53). HF defaults to
+        # kernel=128, groups=16.
+        self.in_channels = config.hidden_size
+        self.kernel_size = 128
+        self.padding = self.kernel_size // 2
+        self.groups = 16
+        self._num_pad_remove = 1 if self.kernel_size % 2 == 0 else 0
+
+        # Set in _prepare_torch_state; cached prepared device tensors set on
+        # first forward via conv1d's return_weights_and_bias.
+        self._weight_host: ttnn.Tensor | None = None
+        self._bias_host: ttnn.Tensor | None = None
+        self._weight_device: ttnn.Tensor | None = None
+        self._bias_device: ttnn.Tensor | None = None
+
+        # Match the precision tuning used elsewhere in this encoder (see
+        # Wav2Vec2Attention): HiFi4 + fp32_dest_acc + packer_l1_acc. Critical
+        # for PCC parity against the fp32 HF reference.
+        self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+        self.conv_config = ttnn.Conv1dConfig(
+            weights_dtype=ttnn.bfloat16,
+        )
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        g_key = "conv.parametrizations.weight.original0"
+        v_key = "conv.parametrizations.weight.original1"
+        b_key = "conv.bias"
+        if g_key not in state or v_key not in state or b_key not in state:
+            return  # missing-key reporting handled by Module parent
+        g = state.pop(g_key)  # [1, 1, kernel]
+        v = state.pop(v_key)  # [out, in/groups, kernel]
+        b = state.pop(b_key)  # [out]
+        # weight_norm: w = (g / ||v||_2-along-kernel) * v
+        w = torch._weight_norm(v, g, dim=2)  # [out, in/groups, kernel]
+        # conv2d weight layout (conv1d delegates): [out, in/groups, kH=1, kW=kernel].
+        w_4d = w.unsqueeze(2).contiguous()
+        self._weight_host = ttnn.from_torch(w_4d, dtype=ttnn.float32)
+        # Conv2d bias layout: [1, 1, 1, out].
+        self._bias_host = ttnn.from_torch(b.reshape(1, 1, 1, -1).contiguous(), dtype=ttnn.float32)
+
+    def forward(self, hidden_BTC: ttnn.Tensor) -> ttnn.Tensor:
+        if self._weight_host is None:
+            raise RuntimeError("Wav2Vec2PositionalConvEmbedding weights not loaded")
+        B, T, C = hidden_BTC.shape
+        weight = self._weight_device if self._weight_device is not None else self._weight_host
+        bias = self._bias_device if self._bias_device is not None else self._bias_host
+
+        out, T_out, (weight_dev, bias_dev) = ttnn.conv1d(
+            input_tensor=hidden_BTC,
+            weight_tensor=weight,
+            bias_tensor=bias,
+            device=self.mesh_device,
+            in_channels=C,
+            out_channels=C,
+            batch_size=B,
+            input_length=T,
+            kernel_size=self.kernel_size,
+            stride=1,
+            padding=self.padding,
+            groups=self.groups,
+            dtype=ttnn.bfloat16,
+            conv_config=self.conv_config,
+            compute_config=self.compute_kernel_config,
+            return_output_dim=True,
+            return_weights_and_bias=True,
+        )
+        # Cache device-prepared weights so subsequent calls skip the upload+reshard.
+        if self._weight_device is None:
+            self._weight_device = weight_dev
+            self._bias_device = bias_dev
+
+        # conv1d output is sharded, flat-along-T. Move to interleaved + reshape
+        # to the standard [B, T_out, C] layout (matches whisper/squeezebert).
+        out = ttnn.sharded_to_interleaved(out)
+        out = ttnn.reshape(out, (B, T_out, C))
+        if self._num_pad_remove > 0:
+            keep = T_out - self._num_pad_remove
+            out = ttnn.slice(out, [0, 0, 0], [B, keep, C])
+        return ttnn.gelu(out, fast_and_approximate_mode=False)
+
+
+class Wav2Vec2EncoderStack(Module):
+    """N transformer encoder layers preceded by on-device pos_conv_embed.
+
+    Owns the HF ``encoder.pos_conv_embed`` (grouped Conv1d), the residual add,
+    and the final ``encoder.layer_norm`` (pre-LN/stable variants only —
+    post-LN's pre-layers LN is not supported on device yet).
     """
 
     def __init__(
@@ -325,11 +429,19 @@ class Wav2Vec2EncoderStack(Module):
         parallel_config: EncoderParallelConfig,
     ) -> None:
         super().__init__()
+        if not config.do_stable_layer_norm:
+            raise NotImplementedError(
+                "post-LN wav2vec2 variants (e.g. wav2vec2-base) require an on-device "
+                "encoder.layer_norm pre-norm step that hasn't been ported. Only "
+                "do_stable_layer_norm=True (large-xlsr-53) is supported."
+            )
+
         self.config = config
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
 
+        self.pos_conv_embed = Wav2Vec2PositionalConvEmbedding(config, mesh_device=mesh_device)
         self.layers = ModuleList(
             Wav2Vec2EncoderLayer(
                 config,
@@ -340,45 +452,30 @@ class Wav2Vec2EncoderStack(Module):
             for _ in range(config.num_hidden_layers)
         )
 
-        # In stable mode the encoder's ``layer_norm`` follows the stack; we
-        # own it on device. In post-LN mode the same-named module is applied
-        # *before* the stack and is handled on CPU by ``Wav2Vec2Encoder``.
-        self.layer_norm = (
-            LayerNorm(
-                embedding_dim=config.hidden_size,
-                norm_eps=config.layer_norm_eps,
-                norm_elementwise_affine=True,
-                bias=True,
-                mesh_device=mesh_device,
-            )
-            if config.do_stable_layer_norm
-            else None
+        # Pre-LN / stable mode: final layer_norm follows the stack.
+        self.layer_norm = LayerNorm(
+            embedding_dim=config.hidden_size,
+            norm_eps=config.layer_norm_eps,
+            norm_elementwise_affine=True,
+            bias=True,
+            mesh_device=mesh_device,
         )
-
-    def _prepare_torch_state(self, state):
-        # Post-LN mode pulls the ``layer_norm.*`` weights via the CPU path —
-        # drop them here so the device loader doesn't trip on missing keys.
-        if not self.config.do_stable_layer_norm:
-            for k in list(state):
-                if k.startswith("layer_norm."):
-                    state.pop(k)
 
     def forward(
         self, hidden_BLC: ttnn.Tensor, *, output_hidden_states: bool = False
     ) -> ttnn.Tensor | list[ttnn.Tensor]:
+        pos = self.pos_conv_embed(hidden_BLC)
+        hidden = ttnn.add(hidden_BLC, pos)
+        ttnn.deallocate(pos)
+
         if output_hidden_states:
-            all_states = [hidden_BLC]
-            hidden = hidden_BLC
+            all_states = [hidden]
             for layer in self.layers:
                 hidden = layer(hidden)
                 all_states.append(hidden)
-            if self.layer_norm is not None:
-                all_states[-1] = self.layer_norm(all_states[-1])
+            all_states[-1] = self.layer_norm(all_states[-1])
             return all_states
 
-        hidden = hidden_BLC
         for layer in self.layers:
             hidden = layer(hidden)
-        if self.layer_norm is not None:
-            hidden = self.layer_norm(hidden)
-        return hidden
+        return self.layer_norm(hidden)
