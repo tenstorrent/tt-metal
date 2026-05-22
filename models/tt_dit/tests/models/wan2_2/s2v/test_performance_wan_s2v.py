@@ -1,26 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Performance benchmark for the multi-clip S2V pipeline.
-
-Mirrors ``tests/models/wan2_2/test_performance_wan.py`` (T2V perf benchmark)
-at the same granularity. Reports per-clip and aggregate wall-clock for each
-stage emitted by ``WanPipelineS2V.__call__``:
-
-  * ``encoder``                       — UMT5 text encoder forward (once).
-  * ``prepare_latents``               — wav2vec2 + audio bucketing + ref VAE
-                                        encode + initial-motion VAE encode (once).
-  * ``s2v_clip_{r}_prepare_audio_emb``— on-device CausalAudioEncoder (per clip).
-  * ``s2v_clip_{r}_prepare_cond_emb`` — cond/ref/motion prep (per clip).
-  * ``s2v_clip_{r}_denoise``          — diffusion loop (per clip).
-  * ``s2v_clip_{r}_vae_decode``       — VAE decode (per clip).
-  * ``s2v_clip_{r}_vae_encode_motion``— VAE encode of next-clip motion (per clip).
-"""
+"""Multi-clip S2V pipeline performance benchmark."""
 
 from __future__ import annotations
 
 import os
-import statistics
 
 import numpy as np
 import PIL
@@ -172,84 +157,25 @@ def test_pipeline_performance_s2v(
     sum_prep_cond = sum(per_clip_prepare_cond_emb)
     total_denoise_steps = max(1, num_clips * num_inference_steps)
 
-    print("\n" + "=" * 88)
     print(
-        f"WAN 2.2 S2V PERFORMANCE — BH-LB ({mesh_shape[0]}x{mesh_shape[1]}), "
-        f"{num_clips} clip{'s' if num_clips != 1 else ''} × {num_inference_steps} steps, {height}p"
+        f"\nS2V PERF {mesh_shape[0]}x{mesh_shape[1]} {width}x{height} "
+        f"{num_clips}c x {num_inference_steps}s  sp={sp_factor} tp={tp_factor}"
     )
-    print("=" * 88)
-    print(f"Resolution:        {width}x{height}")
-    print(f"Output frames:     {num_clips * WanPipelineS2V._INFER_FRAMES_PIXEL - WanPipelineS2V._S2V_VAE_CLIP0_TRIM}")
-    print(f"DiT Parallel:      sp={sp_factor}, tp={tp_factor}, topology={topology}")
-    print("-" * 88)
-
-    def row(name: str, value: float, *, per_step: bool = False, indent: int = 2) -> None:
-        prefix = " " * indent
-        if per_step and total_denoise_steps > 0:
-            extra = f"   {value / total_denoise_steps:6.3f}s/step"
-        else:
-            extra = ""
-        print(f"{prefix}{name:38}  {value:8.3f}s{extra}")
-
-    print("TOP-LEVEL")
-    row("Text encoder (UMT5)", encoder_t)
-    row("prepare_latents (one-time, audio+ref)", prepare_latents_t)
-    row("Sum denoise (across clips)", sum_denoise, per_step=True)
-    row("Sum VAE decode (across clips)", sum_vae_decode)
-    row("Sum VAE motion-encode (across clips)", sum_vae_encode_motion)
-    row("TOTAL pipeline", total)
-
-    print()
-    print("ONE-TIME PREPARE_LATENTS BREAKDOWN")
-    row("VAE encode (ref image)", vae_encode_ref_t)
-    row("wav2vec2 + bucketing", wav2vec2_t)
-    row("VAE encode (initial zero motion)", vae_encode_initial_motion_t)
-
-    print()
-    print("PER-CLIP BREAKDOWN")
-    print(
-        f"  {'clip':4} {'total':>9} {'prep_audio':>11} {'prep_cond':>10} {'denoise':>9} {'vae_dec':>9} {'vae_mot_enc':>12}"
-    )
+    for name, value in [
+        ("encoder", encoder_t),
+        ("prepare_latents", prepare_latents_t),
+        ("  vae_encode_ref", vae_encode_ref_t),
+        ("  wav2vec2", wav2vec2_t),
+        ("  vae_encode_motion0", vae_encode_initial_motion_t),
+        ("denoise (sum)", sum_denoise),
+        ("vae_decode (sum)", sum_vae_decode),
+        ("vae_encode_motion (sum)", sum_vae_encode_motion),
+        ("TOTAL", total),
+    ]:
+        print(f"  {name:30}  {value:8.3f}s")
+    print(f"  per-step denoise: {sum_denoise / total_denoise_steps:.3f}s")
     for r in range(num_clips):
         print(
-            f"  {r:4d} {per_clip_total[r]:>8.2f}s "
-            f"{per_clip_prepare_audio_emb[r]:>10.2f}s "
-            f"{per_clip_prepare_cond_emb[r]:>9.2f}s "
-            f"{per_clip_denoise[r]:>8.2f}s "
-            f"{per_clip_vae_decode[r]:>8.2f}s "
-            f"{per_clip_vae_encode_motion[r]:>11.2f}s"
+            f"  clip {r}: total={per_clip_total[r]:.2f}s denoise={per_clip_denoise[r]:.2f}s "
+            f"vae_dec={per_clip_vae_decode[r]:.2f}s"
         )
-    if num_clips > 1:
-        print(
-            f"  {'mean':>4} {statistics.mean(per_clip_total):>8.2f}s "
-            f"{statistics.mean(per_clip_prepare_audio_emb):>10.2f}s "
-            f"{statistics.mean(per_clip_prepare_cond_emb):>9.2f}s "
-            f"{statistics.mean(per_clip_denoise):>8.2f}s "
-            f"{statistics.mean(per_clip_vae_decode):>8.2f}s "
-            f"{statistics.mean(per_clip_vae_encode_motion):>11.2f}s"
-        )
-
-    print()
-    print("DENOISE-LOOP AGGREGATES")
-    print(f"  Total denoise: {sum_denoise:8.3f}s   {sum_denoise / total_denoise_steps:6.3f}s/step")
-
-    if total > 0:
-        print()
-        print("STAGE SHARE OF TOTAL PIPELINE")
-        for name, value in [
-            ("text encoder", encoder_t),
-            ("prepare_latents (one-time)", prepare_latents_t),
-            ("  ↳ VAE encode (ref)", vae_encode_ref_t),
-            ("  ↳ wav2vec2", wav2vec2_t),
-            ("  ↳ VAE encode (initial motion)", vae_encode_initial_motion_t),
-            ("per-clip prepare_audio_emb (sum)", sum_prep_audio),
-            ("per-clip prepare_cond_emb (sum)", sum_prep_cond),
-            ("per-clip denoise (sum)", sum_denoise),
-            ("per-clip vae_decode (sum)", sum_vae_decode),
-            ("per-clip vae_encode_motion (sum)", sum_vae_encode_motion),
-        ]:
-            if value > 0:
-                print(f"  {name:38}  {100.0 * value / total:5.1f}%")
-    print("=" * 88)
-
-    logger.info("S2V performance test completed!")

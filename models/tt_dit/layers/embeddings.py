@@ -596,9 +596,6 @@ class WanTimeTextImageEmbedding(Module):
         time_proj_weight = state.pop("time_proj.weight", None)
         time_proj_bias = state.pop("time_proj.bias", None)
 
-        if time_proj_weight is None and time_proj_bias is None:
-            return
-
         # view as expected output shape
         time_proj_weight = time_proj_weight.unflatten(0, (6, -1))
         time_proj_bias = time_proj_bias.unflatten(0, (6, -1))

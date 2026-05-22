@@ -2,28 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""WAN 2.2 Speech-to-Video DiT.
-
-Subclasses ``WanTransformer3DModel`` and adds every S2V-specific
-conditioning module from the reference ``WanModel_S2V``
-(``wan/modules/s2v/model_s2v.py``) as on-device tt_dit modules:
-
-  * ``audio_encoder`` — :class:`CausalAudioEncoder`.
-  * ``audio_injector`` — :class:`AudioInjector_WAN` cross-attention slots
-    invoked at the inject layer indices via :meth:`after_transformer_block`.
-  * ``frame_packer`` — :class:`FramePackMotionerWan`.
-  * ``cond_encoder`` — :class:`WanPatchEmbed` for the pose video.
-  * ``trainable_cond_mask`` — :class:`Parameter` shape ``[3, dim]``.
-
-:meth:`prepare_cond_emb` builds the per-clip device-side caches (pose
-embedding, ref+motion+mask const tokens, noisy-mask broadcast). The
-``inner_step`` block loop runs on the extended ``Sq = noisy + ref + motion``
-sequence with audio cross-attention masked to noisy positions, then slices
-off ref+motion before the output head.
-
-The production config uses ``enable_framepack=True`` and
-``enable_motioner=False``; the constructor refuses any other combination.
-"""
+"""WAN 2.2 Speech-to-Video DiT."""
 
 from __future__ import annotations
 

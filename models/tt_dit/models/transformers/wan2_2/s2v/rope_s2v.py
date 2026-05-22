@@ -1,16 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Vendored rope helpers from the WAN 2.2 reference repo.
-
-Ported verbatim (with light cleanup) from
-``wan/modules/model.py:rope_params`` and
-``wan/modules/s2v/s2v_utils.py:rope_precompute``. The reference repo's
-top-level ``wan/__init__.py`` eagerly evaluates ``flash_attn``,
-``decord``, and ``torch.cuda.current_device()`` at import time; vendoring
-keeps tt_dit free of those runtime dependencies for CPU-only rope
-construction.
-"""
+"""Vendored rope helpers from the WAN 2.2 reference repo."""
 
 from __future__ import annotations
 

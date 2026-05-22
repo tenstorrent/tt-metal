@@ -2,30 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""On-device port of the S2V motion-frame encoder.
-
-The production Wan2.2-S2V-14B config uses ``FramePackMotioner`` from
-``wan/modules/s2v/motioner.py``: three ``Conv3d`` layers with
-``kernel == stride`` (patch-style projections):
-
-  * ``proj``     — kernel (1, 2, 2), most-recent frame
-  * ``proj_2x``  — kernel (2, 4, 4), next 2 frames
-  * ``proj_4x``  — kernel (4, 8, 8), oldest 16 frames
-
-Each maps ``in_channels=16`` motion-latent channels to ``inner_dim`` (5120
-for the production checkpoint). Because stride equals kernel, every op is
-an unfold + matmul — same pattern as :class:`WanPatchEmbed`.
-
-The forward takes a motion-latent tensor, pads/zips into the three buckets,
-runs each projection, and concatenates the token sequences. Rope-precompute
-for the motion tokens is done by the surrounding transformer's
-``prepare_rope_features`` (which rebuilds rope from scratch using
-``self.freqs`` as reference data); the motioner does not produce its own
-rope.
-
-The alternative ``MotionerTransformers`` path (``enable_motioner=True``) is
-rejected by :class:`WanS2VTransformer3DModel.__init__` and is not in scope.
-"""
+"""On-device port of the S2V FramePackMotioner."""
 
 from __future__ import annotations
 

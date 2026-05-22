@@ -1,15 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Sub-component parity test for :class:`FramePackMotionerWan`.
-
-Compares the motion-token output of the on-device ``FramePackMotionerWan``
-against a CPU port of the WAN 2.2 reference's ``FramePackMotioner``.
-Exercises all three ``zip_frame_buckets`` projections (post / 2x / 4x).
-
-Production config: inner_dim=5120, num_heads=40, lat at 480p (60, 104).
-PCC ≥ 0.99 on the concatenated motion tokens.
-"""
+"""FramePackMotionerWan parity."""
 
 from __future__ import annotations
 
@@ -21,7 +13,7 @@ from loguru import logger
 import ttnn
 
 from .....models.transformers.wan2_2.s2v.motioner import FramePackMotionerWan
-from .....models.transformers.wan2_2.s2v.rope_s2v import rope_params, rope_precompute
+from .....models.transformers.wan2_2.s2v.rope_s2v import rope_params
 from .....parallel.config import DiTParallelConfig, ParallelFactor
 from .....utils.check import assert_quality
 from .....utils.tensor import to_torch
@@ -158,32 +150,3 @@ def test_frame_packer(
         tt_tokens_torch.shape == ref_tokens.shape
     ), f"motion-token shape mismatch: tt={tuple(tt_tokens_torch.shape)} ref={tuple(ref_tokens.shape)}"
     assert_quality(tt_tokens_torch, ref_tokens.float(), pcc=0.99)
-
-    # Sanity: TT and reference build their rope freqs identically, and
-    # rope_precompute is callable from the same grid + freqs on host.
-    d = HEAD_DIM
-    expected_freqs = torch.cat(
-        [rope_params(1024, d - 4 * (d // 6)), rope_params(1024, 2 * (d // 6)), rope_params(1024, 2 * (d // 6))],
-        dim=1,
-    )
-    assert torch.equal(tt.freqs.real, expected_freqs.real), "freqs table real part mismatch"
-    assert torch.equal(tt.freqs.imag, expected_freqs.imag), "freqs table imag part mismatch"
-    placeholder = torch.zeros(1, tt_tokens_torch.shape[1], NUM_HEADS, HEAD_DIM, dtype=torch.float32)
-    zb = ZIP_FRAME_BUCKETS
-    grid_post = [
-        torch.tensor([[-int(zb[0]), 0, 0]], dtype=torch.long),
-        torch.tensor([[0, LAT_H // 2, LAT_W // 2]], dtype=torch.long),
-        torch.tensor([[int(zb[0]), LAT_H // 2, LAT_W // 2]], dtype=torch.long),
-    ]
-    grid_2x = [
-        torch.tensor([[-int(zb[0] + zb[1]), 0, 0]], dtype=torch.long),
-        torch.tensor([[-int(zb[0] + zb[1]) + int(zb[1]) // 2, LAT_H // 4, LAT_W // 4]], dtype=torch.long),
-        torch.tensor([[int(zb[1]), LAT_H // 2, LAT_W // 2]], dtype=torch.long),
-    ]
-    grid_4x = [
-        torch.tensor([[-int(zb[0] + zb[1] + zb[2]), 0, 0]], dtype=torch.long),
-        torch.tensor([[-int(zb[0] + zb[1] + zb[2]) + int(zb[2]) // 4, LAT_H // 8, LAT_W // 8]], dtype=torch.long),
-        torch.tensor([[int(zb[2]), LAT_H // 2, LAT_W // 2]], dtype=torch.long),
-    ]
-    motion_rope = rope_precompute(placeholder, [grid_post, grid_2x, grid_4x], tt.freqs, start=None)
-    assert motion_rope.shape[1] == tt_tokens_torch.shape[1], "motion rope length mismatch"

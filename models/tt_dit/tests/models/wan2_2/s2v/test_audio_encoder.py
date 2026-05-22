@@ -1,14 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Sub-component parity test for the S2V audio path.
-
-Tests ``CausalAudioEncoder`` (the production audio module that consumes
-wav2vec2 hidden states and produces per-frame audio tokens). Wav2Vec2 itself
-is tested in ``test_wav2vec2_encoder.py``.
-
-Production config: audio_dim=1024, num_audio_layers=25, out_dim=5120, num_token=4.
-"""
+"""CausalAudioEncoder parity."""
 
 from __future__ import annotations
 
@@ -54,10 +47,7 @@ class TorchCausalConv1d(nn.Module):
 
 
 class TorchMotionEncoderTC(nn.Module):
-    """Three causal-conv stages (stride 1, 2, 2) → 4× temporal downsample.
-
-    Output: ``[B, T/4, num_heads + 1, hidden]``. ``need_global=False`` only.
-    """
+    """Three causal-conv stages with 4x temporal downsample (need_global=False)."""
 
     def __init__(self, in_dim: int, hidden_dim: int, num_heads: int) -> None:
         super().__init__()
@@ -93,10 +83,7 @@ class TorchMotionEncoderTC(nn.Module):
 
 
 class TorchCausalAudioEncoder(nn.Module):
-    """Per-layer learned weighted sum of wav2vec2 hidden states → MotionEncoder_tc.
-
-    ``need_global=False`` only.
-    """
+    """Weighted-sum of wav2vec2 hidden states + MotionEncoder_tc (need_global=False)."""
 
     def __init__(self, *, dim: int, num_layers: int, out_dim: int, num_token: int) -> None:
         super().__init__()

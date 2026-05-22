@@ -2,31 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Wan2.2-S2V-14B checkpoint loading + naming translation.
-
-The reference checkpoint at ``Wan-AI/Wan2.2-S2V-14B`` is **not** published as
-a Diffusers wrapper — there's no ``transformer/`` subfolder with the standard
-Diffusers config + per-module weight layout. Instead, the repo ships:
-
-  * ``config.json`` — the ``WanModel_S2V`` constructor kwargs.
-  * ``diffusion_pytorch_model.safetensors.index.json`` + 4 safetensors shards
-    holding all 1260 weight keys in the reference repo's native naming
-    convention (``blocks.0.self_attn.q.weight``, ``head.head.weight``, etc.).
-
-Two pieces are needed to feed this into ``WanS2VTransformer3DModel``:
-
-1. **Snapshot + state-dict loading** (this file, top section) — locate the HF
-   cache snapshot, parse ``config.json``, merge the 4 safetensors shards into
-   one flat CPU ``state_dict``.
-2. **HF → tt-dit name translation** (this file, bottom section) — rename keys
-   from the reference's native scheme to tt_dit's Diffusers-style hierarchy.
-   Tensor shapes are left as-is; the receiving tt_dit modules'
-   ``_prepare_torch_state`` methods handle splitting / fusing q/k/v, weight
-   transposes, Conv1d→Conv3d reshapes, etc.
-
-Only key names change here. Every reference module is loaded into an
-on-device tt_dit module — no keys are excluded.
-"""
+"""Wan2.2-S2V-14B checkpoint loading + naming translation."""
 
 from __future__ import annotations
 
@@ -49,12 +25,7 @@ except ImportError:  # pragma: no cover - safetensors should be available with d
 
 
 def find_s2v_snapshot(model_id: str = "Wan-AI/Wan2.2-S2V-14B") -> Path:
-    """Locate the latest HF cache snapshot for the S2V model.
-
-    Raises ``FileNotFoundError`` if the model isn't on disk. Download with:
-
-        huggingface-cli download Wan-AI/Wan2.2-S2V-14B
-    """
+    """Latest HF cache snapshot for the S2V model (download via ``hf download``)."""
     cache_root = Path.home() / ".cache" / "huggingface" / "hub"
     repo_dir = cache_root / f"models--{model_id.replace('/', '--')}" / "snapshots"
     if not repo_dir.exists():
@@ -73,16 +44,7 @@ def load_s2v_config(snapshot_dir: Path | str) -> dict[str, Any]:
 
 
 def load_s2v_state_dict(snapshot_dir: Path | str) -> dict[str, torch.Tensor]:
-    """Merge the 4 safetensors shards into a single CPU ``state_dict``.
-
-    The resulting dict is keyed by the reference repo's native module names
-    (e.g. ``blocks.0.self_attn.q.weight``, ``head.modulation``,
-    ``casual_audio_encoder.encoder.conv1_local.conv.weight``,
-    ``audio_injector.injector.0.norm_q.weight``).
-
-    Pass the result through :func:`translate_s2v_state_dict` to convert to
-    tt_dit's naming before calling ``load_torch_state_dict``.
-    """
+    """Merge the 4 safetensors shards into a single CPU ``state_dict`` (native naming)."""
     if _load_safetensors_file is None:
         raise ImportError("safetensors is required to load Wan2.2-S2V-14B weights")
 
@@ -115,33 +77,9 @@ def load_s2v_state_dict(snapshot_dir: Path | str) -> dict[str, torch.Tensor]:
     return merged
 
 
-# ---------------------------------------------------------------------------
-# HF → tt-dit name translation
-# ---------------------------------------------------------------------------
-#
-# The reference checkpoint is published with the ``WanModel_S2V`` module names
-# from ``wan/modules/s2v/model_s2v.py``, NOT in Diffusers' ``WanTransformer3DModel``
-# layout. tt_dit's ``WanS2VTransformer3DModel`` is built on top of the Diffusers
-# layout, so we need a key rename pass before ``load_torch_state_dict`` will
-# accept the checkpoint.
-#
-# This mapper's only job is to produce keys in the *Diffusers* naming convention
-# (e.g. ``blocks.{i}.attn1.to_q.weight``, ``ffn.net.0.proj.weight``,
-# ``condition_embedder.time_embedder.linear_1.weight``). The receiving tt_dit
-# modules' ``_prepare_torch_state`` methods handle the tensor-side work:
-#   * splitting / TP-aware head-interleaved fusing of q/k/v into ``to_qkv``
-#     (or ``k/v`` into ``to_kv``) — done by ``WanAttention._prepare_torch_state``,
-#   * transposing Linear weights from HF ``[out, in]`` to ttnn ``[in, out]`` —
-#     done by ``Linear._prepare_torch_state`` (and friends),
-#   * reshaping ``Conv1d`` weight to the 5-D form ``ttnn.experimental.conv3d``
-#     expects — done by ``CausalConv1d._prepare_torch_state``,
-#   * permuting/reshaping ``LayerNorm`` weight for distributed sharding —
-#     done by ``DistributedLayerNorm._prepare_torch_state``,
-#   * the ``ffn.0 → ffn.net.0.proj`` / ``ffn.2 → ffn.net.2`` Diffusers ↔ raw
-#     layout dance — done by ``WanTransformerBlock._prepare_torch_state``.
+# Native WanModel_S2V key → Diffusers-layout key. The receiving modules'
+# ``_prepare_torch_state`` methods handle all tensor-side reshaping.
 
-
-# Top-level renames that don't depend on a block index.
 _FLAT_RENAMES: dict[str, str] = {
     "head.head.weight": "proj_out.weight",
     "head.head.bias": "proj_out.bias",
@@ -166,21 +104,8 @@ _FLAT_RENAMES: dict[str, str] = {
 }
 
 
-# Inside a transformer block, the ref ↔ tt name mapping. The ``self_attn`` /
-# ``cross_attn`` and ``norm{1,2,3}`` renames are listed explicitly because the
-# index-shuffling of the norms is the one place where it's easy to get wrong.
-#
-# Ref layout (wan/modules/model.py:WanAttentionBlock):
-#   norm1 (no-affine) → self_attn → norm3 (with-affine) → cross_attn
-#                                  → norm2 (no-affine) → ffn
-#
-# tt layout (transformer_wan.py:WanTransformerBlock):
-#   norm1 (no-affine) → attn1     → norm2 (with-affine) → attn2
-#                                  → norm3 (no-affine) → ffn
-#
-# So ``ref.norm3 ↔ tt.norm2`` (the cross-attention pre-norm). The other two
-# layernorms have ``elementwise_affine=False`` and therefore no state to map,
-# but we still rename them for cleanliness if they're ever materialized.
+# Inside a block, ref.norm3 ↔ tt.norm2 (the cross-attn pre-norm). Other norms
+# are no-affine so they don't appear in the state dict.
 
 _ATTN_SUFFIX_RENAMES: dict[str, str] = {
     "q.weight": "to_q.weight",
@@ -204,74 +129,36 @@ _AI_ADAIN_RE = re.compile(r"^audio_injector\.injector_adain_layers\.(\d+)\.(.+)$
 
 
 def _translate_attn_suffix(piece: str, rest: str) -> str | None:
-    """Translate a ``self_attn.*`` / ``cross_attn.*`` suffix to its tt_dit name.
-
-    ``piece`` is either ``self_attn`` or ``cross_attn``. ``rest`` is the
-    remainder (e.g. ``q.weight``, ``norm_k.weight``, ``o.bias``).
-    """
     target_attn = "attn1" if piece == "self_attn" else "attn2"
     if rest in _ATTN_SUFFIX_RENAMES:
         return f"{target_attn}.{_ATTN_SUFFIX_RENAMES[rest]}"
-    return None  # unrecognized; caller decides what to do
+    return None
 
 
 def _translate_block_key(idx: int, rest: str) -> str | None:
-    """Map a per-block key suffix (after ``blocks.{idx}.``) to its tt_dit name."""
-    # Modulation parameter → scale_shift_table (the block's _prepare_torch_state
-    # unsqueezes to [1, 1, 6, dim]).
     if rest == "modulation":
         return f"blocks.{idx}.scale_shift_table"
-
-    # The cross-attention pre-norm: ref.norm3 ↔ tt.norm2.
     if rest in ("norm3.weight", "norm3.bias"):
         return f"blocks.{idx}.norm2.{rest.split('.', 1)[1]}"
-
-    # FFN: ref ffn.{0,2}.{w,b} ↔ Diffusers ffn.net.{0.proj, 2}.{w,b}. The block's
-    # _prepare_torch_state then renames to ffn.{ff1,ff2}.
     if rest.startswith("ffn.0."):
         return f"blocks.{idx}.ffn.net.0.proj.{rest.split('.', 2)[2]}"
     if rest.startswith("ffn.2."):
         return f"blocks.{idx}.ffn.net.2.{rest.split('.', 2)[2]}"
-
-    # Self-/cross-attention substates.
     if rest.startswith("self_attn.") or rest.startswith("cross_attn."):
         piece, sub = rest.split(".", 1)
         tt_suffix = _translate_attn_suffix(piece, sub)
-        if tt_suffix is None:
-            return None
-        return f"blocks.{idx}.{tt_suffix}"
-
+        return f"blocks.{idx}.{tt_suffix}" if tt_suffix else None
     return None
 
 
 def _translate_audio_injector_key(idx: int, rest: str) -> str | None:
-    """Map ``audio_injector.injector.{idx}.<rest>`` → tt_dit name.
-
-    The injector is a ``ModuleList`` of cross-attention layers. The mapping is
-    the same as for cross_attn inside a transformer block (q/k/v/o → to_q/...).
-    """
     if rest in _ATTN_SUFFIX_RENAMES:
         return f"audio_injector.injector.{idx}.{_ATTN_SUFFIX_RENAMES[rest]}"
     return None
 
 
 def translate_s2v_state_dict(ref_state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-    """Translate a Wan2.2-S2V-14B native state_dict to tt_dit's naming.
-
-    Args:
-        ref_state_dict: ``{key: tensor}`` keyed by the reference repo's native
-            module names (output of :func:`load_s2v_state_dict`).
-
-    Returns:
-        A new dict keyed by tt_dit module names. CPU-shadow keys are excluded.
-        Tensors are NOT copied or cast — they're the same Python objects as in
-        the input.
-
-    Raises:
-        KeyError: if a key in the input doesn't match any known translation
-            rule. We fail loud rather than silently dropping unknown keys so a
-            new reference version doesn't slip past unnoticed.
-    """
+    """Translate a Wan2.2-S2V-14B native state_dict to tt_dit's naming."""
     out: dict[str, torch.Tensor] = {}
 
     for key, tensor in ref_state_dict.items():

@@ -1,27 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Parity tests for ``WanS2VTransformer3DModel``.
-
-Mirrors ``tests/models/wan2_2/test_transformer_wan.py`` (T2V transformer parity)
-with three escalating granularity levels:
-
-  * ``test_wan_s2v_transformer_block``      — single block + segmented modulation.
-  * ``test_wan_s2v_transformer_model``      — full model weight-load + forward smoke.
-  * ``test_wan_s2v_transformer_inner_step`` — ``inner_step`` API + cached state.
-
-PCC bars:
-  * block:      PCC 0.99 — full parity against the torch reference for the
-                segmented-modulation S2V math.
-  * model:      strict weight-load smoke (no PCC; no torch reference).
-  * inner_step: functional smoke (no PCC; no torch reference).
-
-The model + inner_step tests load the full production checkpoint and validate
-shape / dtype / finiteness end-to-end. Full numerical parity against a ported
-``WanModel_S2V`` would require ~6-10h additional work (cond_encoder +
-trainable_cond_mask + segmented mod table + multi-clip threading on the torch
-side); tracked as a separate follow-up.
-"""
+"""Parity tests for ``WanS2VTransformer3DModel`` (block / model / inner_step)."""
 
 from __future__ import annotations
 
@@ -204,12 +184,7 @@ class TorchWanCrossAttention(TorchWanSelfAttention):
 
 
 class TorchWanS2VAttentionBlock(nn.Module):
-    """Port of upstream ``WanS2VAttentionBlock`` (s2v/model_s2v.py:184-244).
-
-    Segmented timestep modulation: ``e`` is a 2-tuple ``(e_full, seg_idx)`` where
-    ``e_full`` has shape ``[B, 6, 2, dim]`` (two segments) and ``seg_idx`` splits
-    ``x`` along the sequence axis. Each segment gets its own modulation.
-    """
+    """Port of upstream ``WanS2VAttentionBlock`` with segmented timestep modulation."""
 
     def __init__(
         self,
@@ -309,14 +284,7 @@ def test_wan_s2v_transformer_block(
     BLOCK_W: int,
     reset_seeds,
 ) -> None:
-    """Single-block forward parity through ``_s2v_segmented_block_forward``.
-
-    Tests the S2V-unique segmented modulation path with a two-segment sequence
-    (noisy + const). Audio cross-attn injection is NOT exercised here — that's
-    covered by ``test_attention_wan_s2v.py``. This test focuses on the
-    per-token shift/scale/gate modulation math: real-t over noisy tokens,
-    zero-t over const tokens.
-    """
+    """Single-block parity through ``_s2v_segmented_block_forward`` (two-segment modulation)."""
     torch.manual_seed(0)
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
@@ -572,12 +540,7 @@ def test_wan_s2v_transformer_model(
     is_fsdp: bool,
     topology: ttnn.Topology,
 ) -> None:
-    """Production weight-load + functional verification of the full S2V model.
-
-    Validates that ``translate_s2v_state_dict`` produces a state dict that
-    ``WanS2VTransformer3DModel.load_torch_state_dict`` accepts in strict mode.
-    Skipped if the production checkpoint isn't cached locally.
-    """
+    """Strict production weight load."""
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
@@ -638,13 +601,7 @@ def test_wan_s2v_transformer_inner_step(
     H_lat: int,
     W_lat: int,
 ) -> None:
-    """Production weight load + end-to-end ``inner_step`` functional smoke.
-
-    Loads the production checkpoint, runs ``prepare_audio_emb`` +
-    ``prepare_cond_emb`` + ``inner_step`` with synthetic but production-shape
-    inputs, and validates the output tensor is the right shape, finite, and
-    on-device.
-    """
+    """``inner_step`` smoke with production weights + synthetic inputs."""
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 

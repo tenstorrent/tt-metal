@@ -1,16 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Parity test for the on-device AdaIN modulation path.
-
-Verifies that the ``ColParallelLinear`` + ``chunk`` + ``E``-matmul flow in
-``WanS2VTransformer3DModel._build_adain_modulation_for_layer`` produces
-shift/scale tensors that match a torch reference.
-
-Catches subtle issues in the chunk-on-shard weight interleave fix
-(``prepare_chunked_linear_output``) and in how the TP-sharded projection
-composes with the SP-sharded ``E`` matrix.
-"""
+"""S2V AdaIN modulation parity (ColParallel chunk-on-shard)."""
 
 from __future__ import annotations
 
@@ -47,13 +38,7 @@ def test_adain_projection_s2v(
     num_links: int,
     topology: ttnn.Topology,
 ) -> None:
-    """``silu(audio) @ W + b`` via ColParallelLinear → chunk on last axis.
-
-    Each chip's chunked output must equal the corresponding slice of the
-    torch reference's ``(shift, scale)`` produced from a regular Linear
-    projection. Then the full ``E @ extended`` expansion is gathered and
-    compared against a host-only repeat-interleave reference.
-    """
+    """ColParallelLinear chunk + E-matmul expansion parity."""
     torch.manual_seed(0)
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
@@ -151,13 +136,7 @@ def test_adain_projection_s2v(
 
 
 def test_prepare_chunked_linear_output_s2v() -> None:
-    """Pure-CPU verification of the permutation logic that ``AdaLayerNormZero``
-    relies on. No device involved — fast safety net for the chunk-on-shard
-    transformation rule.
-
-    See [[project-adain-colparallel-fix]] for the canonical bug this guards
-    against (chunks-vs-device interleave).
-    """
+    """CPU check of the chunk-on-shard permutation rule."""
     torch.manual_seed(0)
     dim = 5120
     in_features = 1024

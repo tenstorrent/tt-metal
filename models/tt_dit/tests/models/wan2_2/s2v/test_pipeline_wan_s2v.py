@@ -1,15 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Full pipeline E2E test for ``WanPipelineS2V``.
-
-Mirrors ``tests/models/wan2_2/test_pipeline_wan.py`` (T2V pipeline E2E)
-at the same granularity. Runs the full S2V inference pipeline end-to-end,
-exports a ``.mp4`` with audio, validates output shape and range.
-
-No numerical PCC bar — output is a video, not a tensor we can compare.
-Smoke + visual verification only.
-"""
+"""S2V pipeline E2E smoke test."""
 
 from __future__ import annotations
 

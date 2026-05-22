@@ -194,14 +194,8 @@ _BLOCKINGS = {
     (4, 8, 192, 192, (3, 3, 3), 83, 60, 52): (96, 96, 3, 16, 2),  # up2_res — 7547us
     (4, 8, 192, 96, (1, 3, 3), 81, 120, 104): (192, 96, 1, 8, 4),  # up2_spatial — table 5755us
     (4, 8, 96, 96, (3, 3, 3), 83, 120, 104): (96, 96, 7, 4, 8),  # up3_res — 6839us
-    # NOTE: do NOT use T_out_block > 1 here. The original swept (8, 4, 4)
-    # blocking shows a visible twitch around pixel frame 24 (start of the
-    # 3rd T-block when T_block=8). Setting (1, 4, 4) also misbehaved
-    # silently — ref-image identity was lost in the decoded video — so
-    # ad-hoc tweaks of any of these tile values can hit untested code paths
-    # in ttnn.experimental.conv3d. (1, 8, 4) copied from the 4x8 480p
-    # t_chunk=1 entry below is the safe, swept choice.
-    (4, 8, 96, 3, (3, 3, 3), 83, 120, 104): (96, 32, 1, 8, 4),  # conv_out — avoids twitch; copied from t_chunk=1
+    # T_out_block > 1 here produces a visible twitch ~frame 24; (1, 8, 4) is the safe swept choice.
+    (4, 8, 96, 3, (3, 3, 3), 83, 120, 104): (96, 32, 1, 8, 4),  # conv_out
     # ===================================================================
     # BH Galaxy 4x8, 720p, 81 frames full-T (latent T=21)
     # Per-device (H,W): stage0(23,20) stage1(46,40) stage2(92,80) stage3(184,160)
@@ -314,11 +308,6 @@ _BLOCKINGS = {
     # (2, 4, 96, 3, (3, 3, 3), 30, 240, 208): (96, 32, 4, 16, 2),  # conv_out — partial 5990us
     # ===================================================================
     # BH Loud Box 2x4, 480p, VAE encoder with encoder_t_chunk_size=4
-    # h_factor=2, w_factor=4. Per-device (H,W): stage0(240,208) stage1(120,104)
-    # stage2(60,52) stage3(30,26). cur_T flow: 4 → 2 → 1 → 1 across 4 stages
-    # (temperal_downsample=[T,T,F]).
-    # Swept 2026-05-18 with max_combos=20, hw_product=32. Each layer in its own
-    # pytest process with tt-smi -r between runs (fixture re-init constraint).
     # ===================================================================
     # Stage 0 (cur_T=4): T_res=6, T_spatial=4 at (240,208); tconv at (120,104) T=4
     (2, 4, 32, 96, (3, 3, 3), 6, 240, 208): (32, 96, 4, 2, 16),  # conv_in — 864us
@@ -329,17 +318,12 @@ _BLOCKINGS = {
     (2, 4, 96, 192, (3, 3, 3), 4, 120, 104): (96, 96, 2, 2, 16),  # down1_res0 — 386us
     (2, 4, 192, 192, (3, 3, 3), 4, 120, 104): (96, 96, 2, 8, 4),  # down1_res1 — 821us
     (2, 4, 192, 192, (1, 3, 3), 2, 120, 104): (192, 96, 1, 16, 2),  # down1_spatial — 251us
-    # down1_tconv swept with stride=(2,1,1) padding=(1,0,0) to match production
-    # WanResample call (cur_T=2 + cache → T_in=3, T_out=1); stride-1 padding-0
-    # gives T_out=0 (invalid).
     (2, 4, 192, 192, (3, 1, 1), 2, 60, 52): (192, 96, 1, 8, 4),  # down1_tconv — 137us
     # Stage 2 (cur_T=1): T_res=3, T_spatial=1 at (60,52); no tconv (downsample2d)
     (2, 4, 192, 384, (3, 3, 3), 3, 60, 52): (96, 96, 1, 16, 2),  # down2_res0 — 316us
     (2, 4, 384, 384, (3, 3, 3), 3, 60, 52): (96, 96, 1, 16, 2),  # down2_res1 — 515us
     (2, 4, 384, 384, (1, 3, 3), 1, 60, 52): (192, 96, 1, 4, 8),  # down2_spatial — 233us
     # Stage 3 (cur_T=1): T_res=3 at (30,26); no downsample
-    # down3_res / mid_res: channel-key DEFAULT (96,96,1,8,4) won at 272us; no entry
-    # needed beyond what _DEFAULT_BLOCKINGS provides.
     (2, 4, 384, 32, (3, 3, 3), 3, 30, 26): (192, 32, 1, 2, 16),  # conv_out — 134us
     # ===================================================================
     # BH Galaxy 4x8, 720p image encoder, T=33 output frames
@@ -456,22 +440,20 @@ _DEFAULT_BLOCKINGS = {
 
 
 def register_conv3d_configs(configs: dict) -> None:
-    """Register additional conv3d blocking configs from external models.
-
-    Entries are added to the fallback table keyed by ``(in_channels, out_channels, kernel_size)``.
-
-    Args:
-        configs: Mapping from ``(in_channels, out_channels, kernel_size)``
-            to ``(C_in_block, C_out_block, T_out_block, H_out_block, W_out_block)``.
-
-    Example::
-
-        register_conv3d_configs({
-            (32, 96, (3, 3, 3)): (32, 96, 1, 8, 16),
-            (384, 768, (3, 1, 1)): (384, 384, 1, 16, 4),
-        })
-    """
+    """Register additional conv3d blocking configs from external models."""
     _DEFAULT_BLOCKINGS.update({(c_in, c_out, _ntuple(ks, 3)): tuple(v) for (c_in, c_out, ks), v in configs.items()})
+
+
+# S2V audio encoder (MotionEncoder_tc CausalConv1d): kernel-3 temporal convs.
+# Channel pairs match WAN 2.2 5120-hidden / 4-token config (5120/4=1280, 5120/2=2560).
+register_conv3d_configs(
+    {
+        (5120, 5120, (3, 1, 1)): (320, 64, 1, 1, 1),
+        (1280, 2560, (3, 1, 1)): (320, 64, 1, 1, 1),
+        (2560, 5120, (3, 1, 1)): (320, 64, 1, 1, 1),
+        (768, 5120, (3, 1, 1)): (256, 64, 1, 1, 1),
+    }
+)
 
 
 def get_conv3d_config(

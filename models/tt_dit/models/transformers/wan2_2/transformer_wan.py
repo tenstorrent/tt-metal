@@ -285,7 +285,6 @@ class WanTransformer3DModel(Module):
         if model_type == "i2v":
             in_channels = 36
         else:
-            # t2v and s2v both use the standard 16-channel noisy-latent input.
             assert in_channels == 16, f"in_channels must be 16 for {model_type}"
 
         self.patch_size = patch_size
@@ -463,14 +462,6 @@ class WanTransformer3DModel(Module):
         return tt_temb_11BD, tt_timestep_proj_1BTD, tt_prompt_1BLP
 
     def preprocess_spatial_input_host(self, spatial, *, pad: bool = True):
-        """Host-side patchify of ``[B, C, F, H, W]`` → ``[1, B, N, pF*pH*pW*C]``.
-
-        With ``pad=True`` (default), the sequence dim is padded to the per-
-        device SP-shard boundary via :func:`pad_vision_seq_parallel`. S2V
-        passes ``pad=False`` for the reference-image latent, which keeps its
-        natural ``N_ref`` length so the on-device concat with the noisy
-        sequence is exact.
-        """
         B, C, F, H, W = spatial.shape
         logger.info(f"Preprocessing spatial input with shape {spatial.shape}")
         assert B == 1, "Batch size must be 1"

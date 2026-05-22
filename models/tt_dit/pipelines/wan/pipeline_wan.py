@@ -715,45 +715,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             latents = ttnn.typecast(latents, ttnn.bfloat16)
         return latents
 
-    def _round_num_frames(self, num_frames):
-        """Normalize the requested pixel-frame count to a VAE-compatible value.
-
-        The WAN VAE temporal decoder is causal stride-4: ``N`` latents decode
-        to ``4N - 3`` pixel frames, so the natural output sizes are
-        ``1, 5, 9, ..., 77, 81, 85`` (i.e. ``num_frames % 4 == 1``). Base
-        T2V/I2V round any other request up to the nearest valid count.
-
-        ``WanPipelineS2V`` overrides this to skip the round because S2V
-        prepends ``ref_latents`` before VAE decode and trims a few frames
-        after, which makes any ``num_frames >= 1`` usable.
-        """
-        if num_frames % self.vae_scale_factor_temporal != 1:
-            logger.warning(
-                f"`num_frames - 1` has to be divisible by {self.vae_scale_factor_temporal}. Rounding to the nearest number."
-            )
-            num_frames = num_frames // self.vae_scale_factor_temporal * self.vae_scale_factor_temporal + 1
-        return max(num_frames, 1)
-
-    def _postprocess_latents_for_vae(self, latents):
-        """Subclass hook called right before VAE decode.
-
-        Default no-op. ``WanPipelineS2V`` overrides this to prepend the
-        reference-image latent so the causal VAE decoder has temporal past
-        context (matches ``wan/speech2video.py:651-652``).
-        """
-        return latents
-
-    def _postprocess_video(self, video_torch, *, d2h_permute):
-        """Subclass hook called right after VAE decode + host transfer.
-
-        ``video_torch`` is shape ``[B, T, H, W, C]`` when ``d2h_permute is not
-        None`` (uint8 / np output) or ``[B, C, T, H, W]`` otherwise. Default
-        no-op. ``WanPipelineS2V`` overrides this to trim the extra pixel
-        frames produced by the ref-latent prepend plus the residual decoder
-        transient (matches ``wan/speech2video.py:654-656``).
-        """
-        return video_torch
-
     def prepare_latents(
         self,
         batch_size: int,
@@ -882,7 +843,12 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             guidance_scale_2,
         )
 
-        num_frames = self._round_num_frames(num_frames)
+        if num_frames % self.vae_scale_factor_temporal != 1:
+            logger.warning(
+                f"`num_frames - 1` has to be divisible by {self.vae_scale_factor_temporal}. Rounding to the nearest number."
+            )
+            num_frames = num_frames // self.vae_scale_factor_temporal * self.vae_scale_factor_temporal + 1
+        num_frames = max(num_frames, 1)
 
         if self.config.boundary_ratio is not None and guidance_scale_2 is None:
             guidance_scale_2 = guidance_scale
@@ -1070,11 +1036,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         if not output_type == "latent":
             latents = latents.to(self.vae.dtype)
             latents = latents * self._vae_latents_std + self._vae_latents_mean
-            # Subclass hook (S2V): may prepend ref/motion latents so the
-            # causal VAE decoder has temporal past context for the first
-            # clip — eliminates the otherwise-visible color/exposure shift
-            # on the first decoded pixel frames. Default no-op.
-            latents = self._postprocess_latents_for_vae(latents)
 
             tt_latents_BTHWC, logical_h, logical_w = self.tt_vae.prepare_input(latents)
 

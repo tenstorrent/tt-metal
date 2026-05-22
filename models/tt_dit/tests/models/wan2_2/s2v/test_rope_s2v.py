@@ -1,16 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Unit-op test for the S2V grid-based ``rope_precompute``.
-
-Mirrors ``tests/models/wan2_2/test_rope.py`` (T2V RoPE op test) at the same
-granularity. Verifies that ``WanS2VTransformer3DModel.prepare_rope_features``
-produces the right per-device-interleaved cos/sin tensors for the extended
-``[noisy | ref | motion]`` sequence used by S2V's audio-conditioned DiT.
-
-Production config: dim=5120, num_heads=40, head_dim=128, 480p latent (60, 104).
-PCC bar: 0.99.
-"""
+"""S2V grid-based ``rope_precompute`` parity."""
 
 from __future__ import annotations
 
@@ -117,11 +108,7 @@ def test_rope_s2v_precompute(
     W_latent: int,
     include_motion: bool,
 ) -> None:
-    """``prepare_rope_features`` produces correct per-device-interleaved rope.
-
-    ``include_motion=False`` covers clip 0 (``drop_first_motion=True``);
-    ``include_motion=True`` covers subsequent clips with motion threading.
-    """
+    """Per-device-interleaved rope parity (with/without motion)."""
     torch.manual_seed(0)
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))

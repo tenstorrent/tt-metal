@@ -2,32 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""S2V audio conditioning modules.
-
-Mirrors ``wan/modules/s2v/audio_utils.py`` and
-``wan/modules/s2v/auxi_blocks.py`` from the Wan-Video/Wan2.2 reference:
-
-  * :class:`CausalConv1d` — ``Conv1d`` with left-only ("causal") temporal
-    padding, expressed as ``ttnn.experimental.conv3d`` with kernel
-    ``(k, 1, 1)``.
-  * :class:`MotionEncoder_tc` — 3-stage causal conv stack mapping the
-    learned-weighted wav2vec2 features to per-frame multi-token audio
-    embeddings. Reduces temporal rate by 4 (two ``stride=2`` convs).
-  * :class:`CausalAudioEncoder` — learned per-layer weighted sum across
-    wav2vec2 hidden states, followed by SiLU + :class:`MotionEncoder_tc`.
-  * :class:`AudioInjector_WAN` — :class:`ModuleList` of cross-attention
-    modules indexed by transformer-block id. The DiT calls
-    ``injector[id]`` directly via :meth:`after_transformer_block`.
-  * :class:`AdaLayerNormZero` — holds the per-layer Linear used by the
-    production ``adain_mode="attn_norm"`` path; the spatial modulation
-    runs in :meth:`WanS2VTransformer3DModel.after_transformer_block`.
-
-The reference's ``injector_pre_norm_feat`` / ``injector_pre_norm_vec`` are
-``nn.LayerNorm(elementwise_affine=False)`` with zero parameters; we
-represent them as empty :class:`ModuleList` slots (no state-dict keys to
-load) and the spatial pre-norm is done via the surrounding block's
-``norm1`` (a ``DistributedLayerNorm(elementwise_affine=False)``).
-"""
+"""S2V audio conditioning: causal MotionEncoder + AudioInjector."""
 
 from __future__ import annotations
 
@@ -39,41 +14,13 @@ from .....layers.linear import ColParallelLinear, Linear, prepare_chunked_linear
 from .....layers.module import Module, ModuleList, Parameter
 from .....parallel.config import DiTParallelConfig
 from .....parallel.manager import CCLManager
-from .....utils.conv3d import get_conv3d_config, register_conv3d_configs
+from .....utils.conv3d import get_conv3d_config
 from .....utils.tensor import local_device_to_torch
 from ..attention_wan import WanAttention
 
-# Custom conv3d blockings for the MotionEncoder's CausalConv1d shapes. All are
-# kernel-3 stride-{1,2} temporal convs over short sequences (T ≤ ~100 frames at
-# the bucketed audio rate); spatial dims are H=W=1. Channel pairs match the
-# WAN 2.2 5120-hidden / 4-token reference config (5120/4 = 1280, 5120/2 = 2560).
-register_conv3d_configs(
-    {
-        # CausalAudioEncoder default: in=audio_dim=5120, head-expanded out=1280*num_heads=5120 (num_heads=4)
-        (5120, 5120, (3, 1, 1)): (320, 64, 1, 1, 1),
-        (1280, 2560, (3, 1, 1)): (320, 64, 1, 1, 1),
-        (2560, 5120, (3, 1, 1)): (320, 64, 1, 1, 1),
-        # wav2vec2-base feeds 768 (post-weighted-sum) -> conv1_local maps to 1280*4=5120
-        (768, 5120, (3, 1, 1)): (256, 64, 1, 1, 1),
-    }
-)
-
 
 class CausalConv1d(Module):
-    """Conv1d with causal (left-only) temporal padding.
-
-    HF: ``nn.Conv1d(chan_in, chan_out, kernel, stride)`` preceded by
-    ``F.pad(x, (kernel-1, 0), mode='replicate')``.
-
-    Here we re-express the op as ``ttnn.experimental.conv3d`` with
-    ``kernel_size=(kernel, 1, 1)`` and ``padding=(0, 0, 0)``. The replicate-pad
-    is applied on the host before upload — the audio encoder runs once per
-    clip, so a small CPU pad before the device upload is negligible.
-
-    Forward shape: ``[B, T_pre_pad, 1, 1, chan_in]`` ROW_MAJOR →
-    ``[B, T_out, 1, 1, chan_out]`` TILE_LAYOUT (where
-    ``T_out = (T_pre_pad - kernel) / stride + 1``).
-    """
+    """Conv1d with causal (left-only) temporal padding via ``ttnn.experimental.conv3d``."""
 
     def __init__(
         self,
@@ -94,13 +41,7 @@ class CausalConv1d(Module):
         self.stride = stride
         self.mesh_device = mesh_device
         self.dtype = dtype
-        # TP sharding splits the weight's ``chan_out`` axis across ``tp_mesh_axis``
-        # (ColParallelLinear-style). Each chip's local weight is
-        # ``[chan_out/tp_factor, chan_in, k, 1, 1]`` and the conv3d runs locally
-        # producing ``[B, T, 1, 1, chan_out/tp_factor]`` per chip. An all-gather
-        # at the end re-replicates the output so downstream code sees a
-        # replicated tensor unchanged. Eliminates the 32× redundant compute on
-        # the previously-replicated path.
+        # TP-shard ``chan_out`` (ColParallel-style); all-gather at the end re-replicates.
         self.tp_mesh_axis = tp_mesh_axis
         self.ccl_manager = ccl_manager
         if tp_mesh_axis is not None:
@@ -132,14 +73,8 @@ class CausalConv1d(Module):
             packer_l1_acc=True,
         )
 
-        # Weight storage strategy depends on TP sharding:
-        #   * Replicated path: kept as rank-5 ``[chan_out, chan_in, k, 1, 1]``
-        #     on host. ``ttnn.experimental.conv3d`` prepares it internally on
-        #     first call. Matches the original audio-encoder design.
-        #   * TP-sharded path: pre-prepare via ``prepare_conv3d_weights`` and
-        #     store as ``[d, chan_out]`` (mirrors WanCausalConv3d in the VAE
-        #     decoder), so ``mesh_axes`` can shard ``chan_out`` on tp_axis
-        #     cleanly. The conv3d kernel sees the prepared form on device.
+        # Replicated path: rank-5 on host, conv3d prepares internally. TP-sharded
+        # path: pre-prepare to ``[d, chan_out]`` so ``chan_out`` shards cleanly.
         if tp_mesh_axis is not None:
             in_aligned = ((chan_in + 31) // 32) * 32
             d = kernel_size * 1 * 1 * in_aligned
@@ -216,14 +151,7 @@ class CausalConv1d(Module):
 
 
 class MotionEncoder_tc(Module):
-    """3-stage causal-conv encoder. Maps ``[B, T, in_dim]`` features to
-    ``[B, T//4, num_heads + 1, hidden_dim]`` audio tokens.
-
-    Matches the HF ``MotionEncoder_tc`` in
-    ``wan/modules/s2v/auxi_blocks.py``. With ``need_global=True``, runs a
-    parallel branch through ``conv1_global`` + ``final_linear`` (used by
-    the production AdaIN path) and returns a ``(global, local)`` tuple.
-    """
+    """3-stage causal-conv encoder; ``[B, T, in_dim]`` → ``[B, T//4, num_heads + 1, hidden_dim]``."""
 
     def __init__(
         self,
@@ -441,29 +369,7 @@ class MotionEncoder_tc(Module):
 
 
 class CausalAudioEncoder(Module):
-    """Learned per-layer weighted sum of wav2vec2 hidden states followed by
-    the causal MotionEncoder.
-
-    Output shape depends on ``need_global``:
-
-      * ``need_global=False``: ``[B, T_video, num_token+1, out_dim]``.
-      * ``need_global=True``: ``(global, local)`` tuple where ``global`` and
-        ``local`` are both ``[B, T_video, num_token+1, out_dim]``. The
-        ``global`` tensor is what the production S2V model's AdaIN branch
-        consumes; ``local`` feeds the cross-attention K/V slot.
-
-    Args:
-        dim: wav2vec2 hidden size (``768`` for wav2vec2-base; ``1024`` for
-            wav2vec2-large-xlsr-53, which is the production audio encoder).
-        num_layers: Number of wav2vec2 hidden states
-            (``num_hidden_layers + 1``).
-        out_dim: DiT hidden size; what the AudioInjector cross-attention will
-            consume.
-        num_token: Number of audio tokens per frame (typically ``4``).
-        need_global: When ``True``, additionally produces the global audio
-            embedding used by AdaIN. Set from
-            ``WanS2VTransformer3DModel.enable_adain``.
-    """
+    """Weighted-sum of wav2vec2 hidden states + MotionEncoder_tc."""
 
     def __init__(
         self,
@@ -539,23 +445,7 @@ class CausalAudioEncoder(Module):
 
 
 class AdaLayerNormZero(Module):
-    """Parameter holder for the ``Linear(adain_dim, 2*dim)`` projection used by
-    the ``adain_mode="attn_norm"`` path.
-
-    The SP-aware modulation runs in
-    :meth:`WanS2VTransformer3DModel.after_transformer_block`; this class only
-    exists so the state-dict path
-    ``audio_injector.injector_adain_layers[i].linear.{weight,bias}`` lands.
-
-    Uses ``ColParallelLinear`` (TP-sharded along ``out_features``) so the
-    projection ``silu(audio) @ W`` produces a TP-sharded output directly. This
-    lets the downstream per-token expansion (matmul with a precomputed
-    SP-sharded indicator matrix in ``WanS2VTransformer3DModel``) produce a
-    naturally 2D-sharded modulation tensor entirely on-device — no per-clip
-    H→D upload of the ~40 MB expanded tensors. State-dict format is identical
-    to plain ``Linear``: weight shape ``[in_features, out_features]`` with
-    ``_prepare_torch_state`` transposing from torch's ``[out, in]``.
-    """
+    """ColParallel-sharded ``Linear(adain_dim, 2*dim)`` for AdaIN modulation."""
 
     def __init__(
         self,
@@ -580,18 +470,8 @@ class AdaLayerNormZero(Module):
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        # Reference layout for ``proj = silu(audio) @ W``:
-        #   proj[..., 0:dim]   → shift
-        #   proj[..., dim:2*dim] → scale
-        # ColParallelLinear shards the last (out) axis contiguously across
-        # ``tp_factor`` chips → chip i holds proj[..., i*2*dim/tp : (i+1)*2*dim/tp].
-        # A naive ``chunk(proj, 2, dim=-1)`` on that local slice would split
-        # each chip's chunk into halves that mix shift/scale incorrectly
-        # (chips 0..tp/2-1 hold only shift, chips tp/2..tp-1 only scale).
-        # Pre-interleave the projection rows so each chip's local slice is
-        # ``[shift_dev_i (dim/tp cols) | scale_dev_i (dim/tp cols)]``; then
-        # ``chunk(_, 2, dim=-1)`` correctly produces (local_shift, local_scale).
-        # Mirrors the ``norm1_linear`` pattern in ``blocks/transformer_block.py``.
+        # Pre-interleave proj rows so each chip's local chunk(2, -1) yields
+        # (local_shift, local_scale) instead of mixing them across chips.
         prepare_chunked_linear_output(
             state,
             prefix="linear",
@@ -604,25 +484,7 @@ class AdaLayerNormZero(Module):
 
 
 class AudioInjector_WAN(Module):
-    """Per-DiT-layer audio cross-attention injectors.
-
-    Constructs an injector slot for each transformer block index listed in
-    ``inject_layer``. Each slot has:
-
-      * ``injector_pre_norm_feat[i]`` — LayerNorm (no affine) over spatial Q.
-      * ``injector_pre_norm_vec[i]`` — LayerNorm (no affine) over audio K/V.
-        Unused in v1 (the audio embeddings are pre-normalized by
-        ``MotionEncoder_tc``) but kept for parity with the HF state dict.
-      * ``injector[i]`` — ``WanAttention(is_self=False, qk_norm=True)``: standard
-        cross-attention with the same num_heads as the DiT.
-
-    When ``enable_adain=True`` (production Wan2.2-S2V-14B config), an
-    additional ``injector_adain_layers[i]`` slot holds an :class:`AdaLayerNormZero`
-    that modulates the spatial pre-norm with the global audio embedding.
-
-    No ``forward`` is provided; the DiT's ``after_transformer_block`` calls
-    these submodules directly at the chosen layers.
-    """
+    """Per-DiT-layer audio cross-attention slots + optional AdaIN modulators."""
 
     def __init__(
         self,

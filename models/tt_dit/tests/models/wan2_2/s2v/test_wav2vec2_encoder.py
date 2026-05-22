@@ -1,14 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Parity test for wav2vec2-large-xlsr-53-english (production S2V audio encoder).
-
-Uses the weights bundled in ``Wan-AI/Wan2.2-S2V-14B``. Exercises the
-``feat_extract_norm="layer"`` + ``do_stable_layer_norm=True`` code paths.
-
-Skips if the bundled HF cache is not present. PCC ≥ 0.99 against the HF
-``Wav2Vec2Model.last_hidden_state`` reference.
-"""
+"""wav2vec2-large-xlsr-53-english parity using bundled S2V weights."""
 
 from __future__ import annotations
 

@@ -5,51 +5,7 @@
 # Adapted from https://github.com/huggingface/diffusers/blob/main/src/diffusers/pipelines/wan/pipeline_wan.py
 # and from https://github.com/Wan-Video/Wan2.2/blob/main/wan/speech2video.py
 
-"""WAN 2.2 Speech-to-Video pipeline.
-
-The production checkpoint ``Wan-AI/Wan2.2-S2V-14B`` is **not** published with
-a Diffusers wrapper — the safetensors at the root are keyed by the reference
-repo's native module names, the T5 text encoder is a raw `.pth` file, the VAE
-is a raw `.pth` file, and there is no `scheduler/`, `tokenizer/`, or
-`transformer/` subfolder. The parent :class:`WanPipeline` therefore cannot
-load this checkpoint directly. This pipeline:
-
-  * **Reuses** the Diffusers-style ``Wan-AI/Wan2.2-T2V-A14B-Diffusers`` repo
-    for the UMT5 tokenizer + text encoder and the VAE decoder/encoder
-    (these components are weight-compatible across T2V / I2V / S2V).
-  * **Loads** the S2V DiT transformer weights from the native S2V snapshot
-    via :func:`wan_s2v_checkpoint.load_s2v_state_dict` and the name translator
-    at :func:`wan_s2v_checkpoint.translate_s2v_state_dict`.
-  * **Loads** the wav2vec2-large-xlsr-53 audio encoder from the bundled copy
-    inside the S2V snapshot.
-  * **Builds** ``UniPCMultistepScheduler`` from scratch with the S2V-specific
-    ``flow_shift=3.0`` (from ``wan_s2v_14B.py:57``: ``sample_shift = 3``).
-    Single value for S2V at all resolutions, unlike T2V (12.0) or I2V (5.0).
-
-The denoise loop and end-to-end inference are inherited from
-:meth:`WanPipeline.__call__`; ``WanS2VTransformer3DModel.prepare_cond_emb`` is
-invoked once per clip from :meth:`prepare_latents` to build the conditioning
-caches that ``inner_step`` consumes.
-
-Latent-space rationale for the conditioning constants
------------------------------------------------------
-S2V conditions on a reference image, motion latents, and a pose video
-(``cond_states``). All three are produced in **normalized latent space** —
-the VAE encoder's mean output ``mu`` minus ``latents_mean`` divided by
-``latents_std`` (matches ``wan/modules/vae2_1.py:WanVAE_.encode``). The
-"no motion" default is *not* literal latent zeros but
-``vae_encode(zeros_in_pixel_space)`` after normalization (~−3.0 mean). Pose
-conditioning, when absent, is literal latent zeros (matches the reference's
-``COND[0] * 0`` shortcut for the no-pose case). See
-:meth:`WanPipelineS2V._encode_normalized` for the VAE encode + normalize
-helper used by both the reference latent and the motion-latent paths.
-
-Not supported (production HF path only)
----------------------------------------
-Any non-default S2V option raises :class:`NotImplementedError`:
-``pose_video`` (only zero pose conditioning), ``enable_tts``,
-``init_first_frame=True``, and ``adain_mode != "attn_norm"``.
-"""
+"""WAN 2.2 Speech-to-Video pipeline."""
 
 from __future__ import annotations
 
@@ -57,7 +13,6 @@ import os
 import tempfile
 import wave
 from contextlib import nullcontext
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -99,7 +54,7 @@ from ...utils.tensor import (
     local_device_to_torch,
     typed_tensor_2dshard,
 )
-from ...utils.video import export_to_video, export_to_video_with_audio
+from ...utils.video import export_to_video
 from ...utils.wan_s2v_checkpoint import (
     find_s2v_snapshot,
     load_s2v_config,
@@ -113,16 +68,6 @@ _DEFAULT_S2V_CHECKPOINT = "Wan-AI/Wan2.2-S2V-14B"
 # Companion checkpoint used for tokenizer + text encoder + VAE (these are
 # weight-compatible across the WAN 2.2 family).
 _DEFAULT_AUX_CHECKPOINT = "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
-
-
-@dataclass
-class _S2VTransformerState:
-    """Single-stage analog of :class:`pipeline_wan.TransformerState`."""
-
-    model: WanS2VTransformer3DModel
-    guidance_scale: float = 5.0
-    prompt_buffer: object = field(default=None)
-    negative_prompt_buffer: object = field(default=None)
 
 
 class WanPipelineS2V(WanPipeline):
@@ -167,21 +112,10 @@ class WanPipelineS2V(WanPipeline):
         self.model_type = "s2v"
         self.vae_t_chunk_size = vae_t_chunk_size
 
-        # Per-call state populated by ``__call__`` / ``prepare_latents`` /
-        # ``_postprocess_latents_for_vae`` and consumed downstream in the same
-        # ``__call__``. Declared here so attribute access doesn't need
-        # ``getattr(self, name, default)``.
-        self._audio_prompt: Optional[str] = None
         self._s2v_profiler: Optional[BenchmarkProfiler] = None
         self._s2v_profiler_iteration: int = 0
-        self._ref_latent_torch: Optional[torch.Tensor] = None
-        self._s2v_prepended_latents: int = 0
 
-        # ------------------------------------------------------------------
-        # 1. Tokenizer + text encoder + VAE — load from the companion
-        #    Diffusers-style WAN 2.2 T2V repo (the weights are
-        #    interchangeable; the S2V repo only ships the raw `.pth` blobs).
-        # ------------------------------------------------------------------
+        # Tokenizer + text encoder + VAE from the companion Diffusers T2V repo.
         self.tokenizer = AutoTokenizer.from_pretrained(
             aux_checkpoint_name, subfolder="tokenizer", trust_remote_code=True
         )
@@ -190,9 +124,6 @@ class WanPipelineS2V(WanPipeline):
         )
         self.vae = AutoencoderKLWan.from_pretrained(aux_checkpoint_name, subfolder="vae", trust_remote_code=True)
 
-        # ------------------------------------------------------------------
-        # 2. CCL managers.
-        # ------------------------------------------------------------------
         self.dit_ccl_manager = CCLManager(
             mesh_device=mesh_device,
             num_links=num_links,
@@ -212,9 +143,7 @@ class WanPipelineS2V(WanPipeline):
         self.mesh_device = mesh_device
         self.dynamic_load = dynamic_load
 
-        # ------------------------------------------------------------------
-        # 3. UMT5 text encoder on device.
-        # ------------------------------------------------------------------
+        # UMT5 text encoder on device.
         umt5_config = UMT5Config(
             vocab_size=self.text_encoder.config.vocab_size,
             embed_dim=self.text_encoder.config.d_model,
@@ -234,9 +163,7 @@ class WanPipelineS2V(WanPipeline):
             parallel_config=self.encoder_parallel_config,
         )
 
-        # ------------------------------------------------------------------
-        # 4. S2V transformer (single stage) on device.
-        # ------------------------------------------------------------------
+        # S2V transformer (single stage) on device.
         s2v_snapshot = find_s2v_snapshot(checkpoint_name)
         s2v_cfg = load_s2v_config(s2v_snapshot)
         if s2v_cfg.get("adain_mode", "attn_norm") != "attn_norm":
@@ -280,9 +207,7 @@ class WanPipelineS2V(WanPipeline):
             model_type="s2v",
         )
 
-        # ------------------------------------------------------------------
-        # 5. VAE decoder + reference-image encoder on device.
-        # ------------------------------------------------------------------
+        # VAE decoder + reference-image encoder on device.
         self.tt_vae = WanDecoder(
             base_dim=self.vae.config.base_dim,
             z_dim=self.vae.config.z_dim,
@@ -317,9 +242,7 @@ class WanPipelineS2V(WanPipeline):
             parallel_config=self.vae_parallel_config,
         )
 
-        # ------------------------------------------------------------------
-        # 6. Wav2Vec2 audio encoder (production large-xlsr-53 bundled in S2V).
-        # ------------------------------------------------------------------
+        # Wav2Vec2 audio encoder (production large-xlsr-53 bundled in S2V).
         bundled_wav2vec2 = s2v_snapshot / "wav2vec2-large-xlsr-53-english"
         if not bundled_wav2vec2.exists():
             msg = f"bundled wav2vec2 weights not found at {bundled_wav2vec2}"
@@ -341,9 +264,7 @@ class WanPipelineS2V(WanPipeline):
             parallel_config=audio_parallel_config,
         )
 
-        # ------------------------------------------------------------------
-        # 7. Scheduler — built manually since the S2V repo has no scheduler/.
-        # ------------------------------------------------------------------
+        # Scheduler — built manually since the S2V repo has no scheduler/.
         # Reference uses ``wan/utils/fm_solvers_unipc.py:FlowUniPCMultistepScheduler``
         # with ``sample_shift=3`` (wan_s2v_14B.py:57). Diffusers'
         # ``UniPCMultistepScheduler`` with ``use_flow_sigmas=True``,
@@ -364,12 +285,7 @@ class WanPipelineS2V(WanPipeline):
             )
         self._solver = UniPCSolver(scheduler=scheduler)
 
-        # ------------------------------------------------------------------
-        # 8. Build the transformer state list. The parent's call() expects a
-        #    two-entry list keyed on boundary_ratio; with a single stage we
-        #    populate both slots with the same model so the boundary check is
-        #    a no-op. (boundary_ratio=None makes the loop always pick index 0.)
-        # ------------------------------------------------------------------
+        # Build the transformer state list. The parent's call() expects a
         self.transformer_2 = self.transformer  # alias — single-stage S2V
         # Reference s2v_14B sample_guide_scale=4.5 (wan_s2v_14B.py:59).
         self.transformer_states = [
@@ -384,9 +300,7 @@ class WanPipelineS2V(WanPipeline):
         self.register_to_config(boundary_ratio=0.0)
         self.register_to_config(expand_timesteps=False)
 
-        # ------------------------------------------------------------------
-        # 9. VAE bookkeeping.
-        # ------------------------------------------------------------------
+        # VAE bookkeeping.
         self.vae_scale_factor_temporal = self.vae.config.scale_factor_temporal
         self.vae_scale_factor_spatial = self.vae.config.scale_factor_spatial
         self.video_processor = VideoProcessor(vae_scale_factor=self.vae_scale_factor_spatial)
@@ -409,11 +323,7 @@ class WanPipelineS2V(WanPipeline):
         self._multi_clip_warmed: bool = False
         self._warming_up: bool = False
 
-        # ------------------------------------------------------------------
-        # 10. Load weights: text encoder + VAE via the existing cache helpers;
-        #     S2V transformer via the native loader + mapper; audio encoder
-        #     via cache (its state dict comes from the HF model directly).
-        # ------------------------------------------------------------------
+        # Load weights: text encoder + VAE via the existing cache helpers;
         self._prepare_text_encoder_aux()
         self._prepare_vae_aux()
         self._load_s2v_transformer(s2v_snapshot)
@@ -1235,12 +1145,42 @@ class WanPipelineS2V(WanPipeline):
             return (video,)
         return WanPipelineOutput(frames=video)
 
-    def get_model_input(self, latents, cond_latents):
-        return super().get_model_input(latents, None)
-
     @staticmethod
     def export(frames, output_path: str, *, audio_path: Optional[str] = None, fps: int = 16) -> str:
-        """Encode pipeline output to MP4, optionally muxing in ``audio_path``."""
-        if audio_path is not None:
-            return export_to_video_with_audio(frames, output_path, audio_path=audio_path, fps=fps)
-        return export_to_video(frames, output_path, fps=fps)
+        export_to_video(frames, output_path, fps=fps)
+        if audio_path is None:
+            return output_path
+        # Mux audio via ffmpeg -c:v copy (no video re-encode).
+        import os
+        import subprocess
+
+        from imageio_ffmpeg import get_ffmpeg_exe
+
+        base, ext = os.path.splitext(output_path)
+        temp_output = f"{base}_with_audio{ext}"
+        cmd = [
+            get_ffmpeg_exe(),
+            "-y",
+            "-i",
+            output_path,
+            "-i",
+            audio_path,
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-shortest",
+            "-v",
+            "warning",
+            temp_output,
+        ]
+        result = subprocess.run(cmd, capture_output=True)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"ffmpeg audio mux failed (rc={result.returncode}): "
+                f"{result.stderr.decode('utf-8', errors='ignore')}"
+            )
+        os.replace(temp_output, output_path)
+        return output_path
