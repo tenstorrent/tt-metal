@@ -15,6 +15,7 @@
 #include "ttnn/global_semaphore.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
 namespace ttnn::operations::experimental::ccl {
@@ -77,6 +78,19 @@ struct LlamaReduceScatterDeviceOperation {
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value,
             tt::tt_metal::Program& program,
+            const std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& signaler);
+
+        // ProgramDescriptor variant of create_at_program_processing.  Mirrors the
+        // legacy Program& builder above but constructs the per-coord
+        // ProgramDescriptor in-place (CBs/kernels/semaphores/runtime args
+        // recorded as descriptor pushes) so it can be consumed by Contract-2
+        // factories.  Used by descriptor-based llama_reduce_scatter and
+        // rs_matmul migrations.
+        static tt::tt_metal::ProgramDescriptor create_at_program_processing_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const ttnn::MeshCoordinate& mesh_coordinate,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
             const std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& signaler);
         static void override_runtime_arguments_per_program(
             const shared_variables_t& shared_variables,
