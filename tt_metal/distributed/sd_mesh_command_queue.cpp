@@ -119,6 +119,7 @@ void SDMeshCommandQueue::read_shard_from_device(
     const std::optional<BufferRegion>& region,
     std::unordered_map<IDevice*, uint32_t>&,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    std::cout << "Read shard from device" << std::endl;
     if (!mesh_device_->impl().is_local(device_coord)) {
         return;
     }
@@ -136,6 +137,7 @@ void SDMeshCommandQueue::read_shard_from_device(
     }
 
     tt::tt_metal::detail::ReadFromBuffer(*shard_view, static_cast<uint8_t*>(dst));
+    std::cout << "Read shard from device done" << std::endl;
 }
 
 void SDMeshCommandQueue::submit_memcpy_request(
@@ -148,14 +150,14 @@ WorkerConfigBufferMgr& SDMeshCommandQueue::get_config_buffer_mgr(uint32_t /*inde
 }
 
 void SDMeshCommandQueue::wait_for_cores_idle() {
-    if (!logical_cores_for_previous_workload_.empty()) {
-        // In emulated mode this map is always empty (LaunchProgram is synchronous),
-        // so this block is effectively a no-op for emulated devices.
-        for (const auto& [device_id, logical_cores] : logical_cores_for_previous_workload_) {
-            tt::llrt::internal_::wait_for_idle(device_id, logical_cores);
-        }
-        logical_cores_for_previous_workload_.clear();
-    }
+    // if (!logical_cores_for_previous_workload_.empty()) {
+    //     // In emulated mode this map is always empty (LaunchProgram is synchronous),
+    //     // so this block is effectively a no-op for emulated devices.
+    //     for (const auto& [device_id, logical_cores] : logical_cores_for_previous_workload_) {
+    //         tt::llrt::internal_::wait_for_idle(device_id, logical_cores);
+    //     }
+    //     logical_cores_for_previous_workload_.clear();
+    // }
 }
 
 void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range, Program& program, bool blocking) {
