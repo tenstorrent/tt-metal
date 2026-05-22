@@ -3117,7 +3117,13 @@ class ModelArgs:
             state_dict = standardize_hf_keys(state_dict)
             if self.use_hf_rope:
                 # For Attention: skip QKV format conversion
-                state_dict = convert_hf_to_meta_no_qkv_permute(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
+                state_dict = convert_hf_to_meta_no_qkv_permute(
+                    state_dict,
+                    self.head_dim,
+                    self.n_heads,
+                    self.n_kv_heads,
+                    model_type=self.model_type,
+                )
             else:
                 # Standard: convert to Meta format
                 state_dict = convert_hf_to_meta(
@@ -3633,7 +3639,9 @@ class ModelArgs:
         layer = model.lm_head
         layer._load_state_dict = layer.load_state_dict
         if self.use_hf_rope:
-            layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf_no_qkv_permute(x))
+            layer.load_state_dict = lambda x: layer._load_state_dict(
+                convert_meta_to_hf_no_qkv_permute(x, model_type=self.model_type)
+            )
         else:
             layer.load_state_dict = lambda x: layer._load_state_dict(
                 convert_meta_to_hf(x, self.head_dim, rotary_dim=self.rotary_dim, model_type=self.model_type)
@@ -3765,7 +3773,9 @@ class ModelArgs:
         layer = layers[0].input_layernorm
         layer._load_state_dict = layer.load_state_dict
         if self.use_hf_rope:
-            layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf_no_qkv_permute(x))
+            layer.load_state_dict = lambda x: layer._load_state_dict(
+                convert_meta_to_hf_no_qkv_permute(x, model_type=self.model_type)
+            )
         else:
             layer.load_state_dict = lambda x: layer._load_state_dict(
                 convert_meta_to_hf(x, self.head_dim, rotary_dim=self.rotary_dim, model_type=self.model_type)
@@ -3965,7 +3975,7 @@ class ModelArgs:
         layer._load_state_dict = layer.load_state_dict
         if self.use_hf_rope:
             layer.load_state_dict = lambda x: layer._load_state_dict(
-                convert_meta_to_hf_no_qkv_permute(x, fuse_mlp=self.fuse_mlp)
+                convert_meta_to_hf_no_qkv_permute(x, fuse_mlp=self.fuse_mlp, model_type=self.model_type)
             )
         else:
             layer.load_state_dict = lambda x: layer._load_state_dict(
@@ -3988,7 +3998,9 @@ class ModelArgs:
 
         layer._load_state_dict = layer.load_state_dict
         if self.use_hf_rope:
-            layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf_no_qkv_permute(x))
+            layer.load_state_dict = lambda x: layer._load_state_dict(
+                convert_meta_to_hf_no_qkv_permute(x, model_type=self.model_type)
+            )
         else:
             layer.load_state_dict = lambda x: layer._load_state_dict(
                 convert_meta_to_hf(x, self.head_dim, rotary_dim=self.rotary_dim, model_type=self.model_type)
@@ -4157,7 +4169,9 @@ class HfAttentionWrapper:
         except:
             fuse_qkv = False
         if self.use_hf_rope:
-            return self.attention.load_state_dict(convert_meta_to_hf_no_qkv_permute(state_dict, fuse_qkv))
+            return self.attention.load_state_dict(
+                convert_meta_to_hf_no_qkv_permute(state_dict, fuse_qkv, model_type=self.model_type)
+            )
         else:
             return self.attention.load_state_dict(
                 convert_meta_to_hf(
@@ -4262,7 +4276,9 @@ class HfDecoderWrapper:
         except:
             fuse_qkv, fuse_mlp = False, False
         if self.use_hf_rope:
-            return self.decoder.load_state_dict(convert_meta_to_hf_no_qkv_permute(state_dict, fuse_qkv, fuse_mlp))
+            return self.decoder.load_state_dict(
+                convert_meta_to_hf_no_qkv_permute(state_dict, fuse_qkv, fuse_mlp, model_type=self.model_type)
+            )
         else:
             return self.decoder.load_state_dict(
                 convert_meta_to_hf(
@@ -4347,7 +4363,9 @@ class HfModelWrapper:
             fuse_qkv, fuse_mlp = False, False
         if self.use_hf_rope:
             return self.model.load_state_dict(
-                convert_meta_to_hf_no_qkv_permute(state_dict, fuse_qkv, fuse_mlp, self.config)
+                convert_meta_to_hf_no_qkv_permute(
+                    state_dict, fuse_qkv, fuse_mlp, self.config, model_type=self.model_type
+                )
             )
         else:
             return self.model.load_state_dict(
