@@ -25,8 +25,34 @@ from models.tt_transformers.tt.model_config import (
 )
 
 
+def voxtral_text_default_optimizations(model_args):
+    """Decode perf: BFP8 weights + HiFi2 decode matmuls; activations stay BF16 for E2E PCC."""
+    opt = ModelOptimizations(
+        {
+            "TensorPrecision": {
+                TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
+                TensorGroup.FF2: PrecisionSetting.BFP8,
+                TensorGroup.WQKV: PrecisionSetting.BFP8,
+                TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
+                TensorGroup.WO: PrecisionSetting.BFP8,
+            },
+            "OpFidelity": {
+                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2_FP16,
+                OpGroup.LI_FF2: MathFidelitySetting.HIFI2_FP16,
+                OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI2,
+                OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI4,
+                OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI2,
+                OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI2,
+                OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2,
+                OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
+            },
+        }
+    )
+    return DecodersPrecision(model_args.n_layers, model_args.model_name, opt)
+
+
 def voxtral_text_high_accuracy_optimizations(model_args):
-    """BF16 weights + HiFi4 matmuls for text backbone (pipeline + logits PCC)."""
+    """BF16 weights + HiFi4 matmuls for text backbone (logits PCC tests)."""
     opt = ModelOptimizations(
         {
             "TensorPrecision": {
