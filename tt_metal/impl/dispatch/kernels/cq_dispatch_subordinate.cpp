@@ -15,6 +15,7 @@
 #include "api/debug/dprint.h"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
+#include "tt_metal/impl/dispatch/kernels/device_print_dispatch.h"
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler.hpp"
 #include "hostdevcommon/profiler_common.h"
 #include "hostdev/dev_msgs.h"
@@ -27,13 +28,13 @@
 // Reads cannot be issued by dispatch_s.
 constexpr uint32_t DISPATCH_S_WR_REG_CMD_BUF = 1;
 constexpr uint32_t DISPATCH_S_ATOMIC_CMD_BUF = 2;
-constexpr uint32_t cb_base = CB_BASE;
+constexpr uintptr_t cb_base = CB_BASE;
 constexpr uint32_t cb_log_page_size = CB_LOG_PAGE_SIZE;
 constexpr uint32_t cb_size = CB_SIZE;
 constexpr uint32_t my_dispatch_cb_sem_id = MY_DISPATCH_CB_SEM_ID;
 constexpr uint32_t upstream_dispatch_cb_sem_id = UPSTREAM_DISPATCH_CB_SEM_ID;
 constexpr uint32_t dispatch_d_shutdown_sem_id = DISPATCH_D_SHUTDOWN_SEM_ID;
-constexpr uint32_t dispatch_s_sync_sem_base_addr = DISPATCH_S_SYNC_SEM_BASE_ADDR;
+constexpr uintptr_t dispatch_s_sync_sem_base_addr = DISPATCH_S_SYNC_SEM_BASE_ADDR;
 constexpr uint32_t mcast_go_signal_addr = MCAST_GO_SIGNAL_ADDR;
 constexpr uint32_t unicast_go_signal_addr = UNICAST_GO_SIGNAL_ADDR;
 constexpr uint32_t distributed_dispatcher =
@@ -48,13 +49,83 @@ constexpr uint32_t num_physical_unicast_cores = NUM_PHYSICAL_UNICAST_CORES;
 constexpr uint32_t worker_mcast_grid = WORKER_MCAST_GRID;
 constexpr uint32_t num_worker_cores_to_mcast = NUM_WORKER_CORES_TO_MCAST;
 
+#if DEVICE_PRINT_DISPATCH_ENABLED
+constexpr uint32_t device_print_noc_locations_addr = DEVICE_PRINT_NOC_LOCATIONS_ADDR;
+constexpr uint32_t device_print_noc_locations_count = DEVICE_PRINT_NOC_LOCATIONS_COUNT;
+constexpr uint32_t device_print_l1_cache_addr = DEVICE_PRINT_L1_CACHE_ADDR;
+constexpr uint32_t device_print_l1_cache_size = DEVICE_PRINT_L1_CACHE_SIZE;
+constexpr uint16_t device_print_dram_x = DEVICE_PRINT_DRAM_X;
+constexpr uint16_t device_print_dram_y = DEVICE_PRINT_DRAM_Y;
+constexpr uint64_t device_print_dram_rw_ptrs = DEVICE_PRINT_DRAM_RW_PTRS;
+constexpr uint64_t device_print_dram_buf_addr = DEVICE_PRINT_DRAM_BUF_ADDR;
+constexpr uint32_t device_print_dram_buf_size = DEVICE_PRINT_DRAM_BUF_SIZE;
+constexpr uint64_t device_print_cycles_for_stall = DEVICE_PRINT_CYCLES_FOR_STALL;
+constexpr uint64_t device_print_cycles_for_full = DEVICE_PRINT_CYCLES_FOR_FULL;
+
+// RAII guard for dispatch_s's NOC cmd_buf state on cmd_buf 0 (NCRISC_WR_CMD_BUF, used by
+// dispatch_s for regular writes) and cmd_buf 1 (NCRISC_RD_CMD_BUF, used by dispatch_s for
+// inline writes via dispatch_s_noc_inline_dw_write).
+//
+// Why we save state: dispatch_s issues `cq_noc_async_write_with_state` calls that rely on
+// cmd_buf state programmed by a preceding `_init_state`. If our execute() runs between an
+// init_state and with_state pair, our init_state + with_state operations would clobber
+// dispatch_s's NOC_CTRL / NOC_*_ADDR_COORDINATE. The wait_for_workers reorder in
+// process_go_signal_mcast_cmd protects today's known site, but we save/restore for
+// defense-in-depth so future dispatch_s code can rely on cmd_buf state being preserved
+// across an execute() / shutdown() call.
+//
+// Constructor: snapshot the regs, then call the new-API _init_state functions to program
+// NOC_CTRL for our reads (cmd_buf 1) and writes (cmd_buf 0).
+// Destructor: restore the saved regs.
+struct DispatchSNocCmdBufGuard {
+    uint32_t saved_rd_ctrl;
+    uint32_t saved_rd_targ_coord;
+    uint32_t saved_wr_ctrl;
+    uint32_t saved_wr_ret_coord;
+
+    DispatchSNocCmdBufGuard() {
+        saved_rd_ctrl = NOC_CMD_BUF_READ_REG(NOC_INDEX, NCRISC_RD_CMD_BUF, NOC_CTRL);
+        saved_rd_targ_coord = NOC_CMD_BUF_READ_REG(NOC_INDEX, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_COORDINATE);
+        saved_wr_ctrl = NOC_CMD_BUF_READ_REG(NOC_INDEX, NCRISC_WR_CMD_BUF, NOC_CTRL);
+        saved_wr_ret_coord = NOC_CMD_BUF_READ_REG(NOC_INDEX, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_COORDINATE);
+    }
+
+    ~DispatchSNocCmdBufGuard() {
+        NOC_CMD_BUF_WRITE_REG(NOC_INDEX, NCRISC_RD_CMD_BUF, NOC_CTRL, saved_rd_ctrl);
+        NOC_CMD_BUF_WRITE_REG(NOC_INDEX, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_COORDINATE, saved_rd_targ_coord);
+        NOC_CMD_BUF_WRITE_REG(NOC_INDEX, NCRISC_WR_CMD_BUF, NOC_CTRL, saved_wr_ctrl);
+        NOC_CMD_BUF_WRITE_REG(NOC_INDEX, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_COORDINATE, saved_wr_ret_coord);
+    }
+
+    DispatchSNocCmdBufGuard(const DispatchSNocCmdBufGuard&) = delete;
+    DispatchSNocCmdBufGuard& operator=(const DispatchSNocCmdBufGuard&) = delete;
+};
+
+static DevicePrintDispatch<
+    true,
+    DEVICE_PRINT_MAX_NOC_LOCATIONS,
+    device_print_dispatch::NOC_L1_TO_L1_ALIGNMENT,
+    device_print_dispatch::NOC_L1_TO_DRAM_ALIGNMENT,
+    DispatchSNocCmdBufGuard>
+    device_print_dispatcher;
+
+void device_print_dispatcher_execute_hook() {
+    // This function shouldn't be called unless there are lots of DEVICE_PRINT
+    // calls inside dispatch_s kernel. We are not optimizing this path as it is
+    // fairly unlikely to be hit. When DEVICE_PRINT buffer is full, dispatcher
+    // will be executed to drain this buffer and check for all others as well.
+    // Here we force stall detection execution to avoid waiting for timer.
+    ::device_print_dispatcher.execute(true);
+}
+#endif
+
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
 constexpr uint32_t dispatch_d_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X, DOWNSTREAM_NOC_Y));
 constexpr uint32_t my_noc_xy = uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
 constexpr uint8_t my_noc_index = NOC_INDEX;
 
 constexpr uint32_t cb_page_size = 1 << cb_log_page_size;
-constexpr uint32_t cb_end = cb_base + cb_size;
+constexpr uintptr_t cb_end = cb_base + cb_size;
 
 // Dispatch-core-local L1 region assigned by DispatchMemMap via
 // CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG. Address comes from host through the
@@ -67,7 +138,7 @@ static bool rt_profiler_enabled = false;
 
 static uint32_t num_pages_acquired = 0;
 static uint32_t num_mcasts_sent[max_num_worker_sems] = {0};
-static uint32_t cmd_ptr;
+static uintptr_t cmd_ptr;
 
 extern "C" {
 // These variables are used by triage to help report dispatcher state.
@@ -169,12 +240,15 @@ void wait_for_workers(uint32_t wait_count, uint32_t wait_stream) {
     WAYPOINT("WCW");
     last_wait_count = wait_count;
     last_wait_stream = wait_stream;
-    volatile uint32_t* worker_sem =
-        (volatile uint32_t*)STREAM_REG_ADDR(wait_stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
+    volatile uint32_t* worker_sem = reinterpret_cast<volatile uint32_t*>(
+        static_cast<uintptr_t>(STREAM_REG_ADDR(wait_stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX)));
     while (stream_wrap_gt(wait_count, *worker_sem)) {
         if (rt_profiler_enabled) {
             record_realtime_timestamp(rt_profiler_msg, false);
         }
+#if DEVICE_PRINT_DISPATCH_ENABLED
+        device_print_dispatcher.execute();
+#endif
     }
 
     WAYPOINT("WCD");
@@ -217,6 +291,9 @@ FORCE_INLINE void cb_acquire_pages_dispatch_s(uint32_t n) {
     while (wrap_gt(num_pages_acquired + n, *sem_addr)) {
         invalidate_l1_cache();
         update_worker_completion_count_on_dispatch_d();
+#if DEVICE_PRINT_DISPATCH_ENABLED
+        device_print_dispatcher.execute();
+#endif
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
     }
     WAYPOINT("DAPD");
@@ -269,13 +346,28 @@ void process_go_signal_mcast_cmd() {
         uint32_t storage_offset = multicast_go_offset % (L1_ALIGNMENT / sizeof(uint32_t));
         aligned_go_signal_storage[storage_offset] = go_signal_value;
 
+#if DEVICE_PRINT_DISPATCH_ENABLED
+        // wait_for_workers polls device_print_dispatcher.execute() inside its busy loop when
+        // DEVICE_PRINT dispatch is enabled. That dispatcher may issue writes using
+        // NCRISC_WR_REG_CMD_BUF, which would clobber the state programmed by
+        // cq_noc_async_write_init_state below. Wait first in that build so init_state's state
+        // is the last thing touching this command buffer before the cq_noc_async_write_with_state
+        // call. In the non-DEVICE_PRINT build keep the original ordering so init_state + write
+        // accounting overlap with the worker wait.
+        wait_for_workers(wait_count, wait_stream);
+#endif
+
         cq_noc_async_write_init_state<CQ_NOC_SNDL, true>(
-            (uint32_t)&aligned_go_signal_storage[storage_offset], dst_noc_addr_multicast, sizeof(uint32_t));
+            static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&aligned_go_signal_storage[storage_offset])),
+            dst_noc_addr_multicast,
+            sizeof(uint32_t));
 
         // Multicast write accounting: increment counters for num_dests acks and one issued transaction.
         noc_increment_nonposted_writes_acked(noc_index, num_dests);
 
+#if !DEVICE_PRINT_DISPATCH_ENABLED
         wait_for_workers(wait_count, wait_stream);
+#endif
         cq_noc_async_write_with_state<CQ_NOC_sndl, CQ_NOC_wait>(0, 0, 0);
         noc_increment_nonposted_writes_issued(noc_index, 1);
     } else {
@@ -304,8 +396,16 @@ void process_go_signal_mcast_cmd() {
 
     for (uint32_t i = 0; i < num_unicasts; ++i) {
         uint64_t dst = get_noc_addr_helper(go_signal_noc_data[go_signal_noc_data_idx++], unicast_go_signal_addr);
-        noc_async_write_one_packet((uint32_t)(aligned_go_signal_storage), dst, sizeof(uint32_t));
+        noc_async_write_one_packet(
+            static_cast<uint32_t>(reinterpret_cast<uintptr_t>(aligned_go_signal_storage)), dst, sizeof(uint32_t));
     }
+
+#if DEVICE_PRINT_DISPATCH_ENABLED
+    // Workers have just been notified to start a new program; reset the stall-detection
+    // window so it measures THIS program's print activity rather than dispatch_s's
+    // overall lifetime.
+    device_print_dispatcher.notify_kernel_start();
+#endif
 
     update_worker_completion_count_on_dispatch_d();
     cmd_ptr += sizeof(CQDispatchCmd);
@@ -321,11 +421,14 @@ void process_dispatch_s_wait_cmd() {
         distributed_dispatcher);
     uint32_t stream = cmd->wait.stream;
     uint32_t index = stream - first_stream_used;
-    volatile uint32_t* worker_sem =
-        (volatile uint32_t*)STREAM_REG_ADDR(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
+    volatile uint32_t* worker_sem = reinterpret_cast<volatile uint32_t*>(
+        static_cast<uintptr_t>(STREAM_REG_ADDR(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX)));
 
     // Wait for workers to complete
     while (stream_wrap_gt(cmd->wait.count, *worker_sem)) {
+#if DEVICE_PRINT_DISPATCH_ENABLED
+        device_print_dispatcher.execute();
+#endif
     }
 
     // Send updated worker count to dispatch_d and wait for updated count to get picked up by NOC before clearing the
@@ -356,7 +459,7 @@ void set_go_signal_noc_data() {
     for (uint32_t i = 0; i < num_words; ++i) {
         go_signal_noc_data[i] = *(data_ptr++);
     }
-    cmd_ptr = round_up_pow2((uint32_t)data_ptr, L1_ALIGNMENT);
+    cmd_ptr = round_up_pow2(reinterpret_cast<uintptr_t>(data_ptr), L1_ALIGNMENT);
 }
 
 // When dispatch_d runs on the same core, it issues transactions on dispatch_s's dedicated NOC
@@ -430,6 +533,22 @@ void kernel_main() {
     cmd_ptr = cb_base;
     bool done = false;
     uint32_t total_pages_acquired = 0;
+#if DEVICE_PRINT_DISPATCH_ENABLED
+    device_print_dispatcher.init(
+        device_print_noc_locations_addr,
+        device_print_noc_locations_count,
+        device_print_l1_cache_addr,
+        device_print_l1_cache_size,
+        device_print_dram_x,
+        device_print_dram_y,
+        device_print_dram_rw_ptrs,
+        device_print_dram_buf_addr,
+        device_print_dram_buf_size,
+        device_print_cycles_for_stall,
+        device_print_cycles_for_full);
+    // notify_kernel_start() is invoked from process_go_signal_mcast_cmd, after the
+    // go signal is sent — the stall-detection window is per-program, not per-dispatch_s.
+#endif
     while (!done) {
         DeviceZoneScopedN("CQ-DISPATCH-SUBORDINATE");
         rt_profiler_enabled = (rt_profiler_msg->realtime_profiler_core_noc_xy != 0);
@@ -438,12 +557,17 @@ void kernel_main() {
             record_realtime_timestamp(rt_profiler_msg, true);
             popped_pid = pop_program_id(rt_profiler_msg);
         }
+#if DEVICE_PRINT_DISPATCH_ENABLED
+        device_print_dispatcher.execute();
+#endif
         cb_acquire_pages_dispatch_s<my_noc_xy, my_dispatch_cb_sem_id>(1);
 
         volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
         DeviceTimestampedData("process_cmd_d_dispatch_subordinate", (uint32_t)cmd->base.cmd_id);
         if (rt_profiler_enabled) {
-            uint32_t buffer_id = (cmd->base.cmd_id == CQ_DISPATCH_CMD_SEND_GO_SIGNAL) ? popped_pid : 0;
+            uint32_t buffer_id = (cmd->base.cmd_id == CQ_DISPATCH_CMD_SEND_GO_SIGNAL)
+                                     ? popped_pid
+                                     : static_cast<uint32_t>(REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID);
             write_buffer_id(rt_profiler_msg, buffer_id);
         }
         switch (cmd->base.cmd_id) {
@@ -475,7 +599,7 @@ void kernel_main() {
                 ASSERT(0);
         }
         // Dispatch s only supports single page commands for now
-        ASSERT(cmd_ptr <= ((uint32_t)cmd + cb_page_size));
+        ASSERT(cmd_ptr <= (reinterpret_cast<uintptr_t>(cmd) + cb_page_size));
         cmd_ptr = round_up_pow2(cmd_ptr, cb_page_size);
         // Release a single page to prefetcher. Assumption is that all dispatch_s commands fit inside a single page for
         // now.
@@ -500,5 +624,8 @@ void kernel_main() {
 
     DPRINT << "dispatch_s : done" << ENDL();
     DEVICE_PRINT("dispatch_s : done\n");
+#if DEVICE_PRINT_DISPATCH_ENABLED
+    device_print_dispatcher.shutdown();
+#endif
     set_l1_data_cache<false>();
 }

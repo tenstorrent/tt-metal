@@ -375,6 +375,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         height: int = 0,
         width: int = 0,
         num_frames: int = 81,
+        boundary_ratio: Optional[float] = 0.875,
+        **extra_kwargs,
     ):
         device_configs = {}
         if ttnn.device.is_blackhole():
@@ -471,7 +473,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             vae_parallel_config=vae_parallel_config,
             encoder_parallel_config=encoder_parallel_config,
             num_links=num_links or config["num_links"],
-            boundary_ratio=0.875,
+            boundary_ratio=boundary_ratio,
             scheduler=scheduler,
             dynamic_load=dynamic_load if dynamic_load is not None else config["dynamic_load"],
             topology=topology or config["topology"],
@@ -484,6 +486,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             height=height,
             width=width,
             num_frames=num_frames,
+            **extra_kwargs,
         )
 
     def _prepare_text_encoder(self):
@@ -1024,6 +1027,12 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             profiler.end("denoising", profiler_iteration)
             profiler.start("vae", profiler_iteration)
 
+        include_last_latent = output_type == "pt_with_last_latent"
+        output_type = "pt" if include_last_latent else output_type
+
+        # Captured before applying the VAE std-rescale to `latents`.
+        last_latent_out = latents.detach().clone() if include_last_latent else None
+
         if not output_type == "latent":
             latents = latents.to(self.vae.dtype)
             latents = latents * self._vae_latents_std + self._vae_latents_mean
@@ -1084,9 +1093,12 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             profiler.end("vae", profiler_iteration)
 
         if not return_dict:
-            return (video,)
+            return (video, last_latent_out) if include_last_latent else (video,)
 
-        return WanPipelineOutput(frames=video)
+        output = WanPipelineOutput(frames=video)
+        if include_last_latent:
+            output.last_latent = last_latent_out
+        return output
 
     def run_single_prompt(self, *args, **kwargs):
         return self.__call__(*args, **kwargs).frames

@@ -4,6 +4,7 @@
 
 #pragma once
 #include "llk_pack_common_api.h"
+#include "llk_pack.h"
 
 /*************************************************************************
  * LLK PACK (tile / block)
@@ -12,10 +13,10 @@
 /**
  * @brief Initialize packer to pack out a single tile
  *
- * @param pack_output The output circular buffer
+ * @param pack_output The output DataFlow Buffer identifier
  *
  * This function initializes packer0 to pack a single tile from the destination register to the output
- * circular buffer.
+ * DataFlow Buffer.
  */
 inline void llk_pack_init(const std::uint32_t pack_output) {
     const std::uint8_t output_id = static_cast<std::uint8_t>(get_output_id(pack_output));
@@ -31,10 +32,10 @@ inline void llk_pack_init(const std::uint32_t pack_output) {
  * the user in `output_tile_index`, set false for pack to operate sequentially: write to the next tile index
  * starting from index 0, and ignore the `output_tile_index` parameter
  * @tparam untilize: Selects pack or pack untilizem
- * @param output_id The output circular buffer identifier
+ * @param output_id The output DataFlow Buffer identifier
  * @param output_tile_index: The index in the output CB to write to
  *
- * This function packs tiles from the destination register to the output circular buffer.
+ * This function packs tiles from the destination register to the output DataFlow Buffer.
  *
  */
 template <bool out_of_order_output, bool untilize>
@@ -65,10 +66,10 @@ inline std::uint32_t get_output_tile_index(std::uint8_t output_id, std::uint32_t
  * the user in `output_tile_index`, set false for pack to operqate sequentially: write to the next tile index
  * starting from index 0, and ignore the `output_tile_index` parameter
  * @param tile_idx: The tile index into the math destination register from where the packer can start packing from
- * @param pack_output The output circular buffer
+ * @param pack_output The output DataFlow Buffer identifier
  * @param output_tile_index: The index in the output CB to write to
  *
- * This function packs tiles from the destination register to the output circular buffer, packer0 is used.
+ * This function packs tiles from the destination register to the output DataFlow Buffer, packer0 is used.
  */
 template <bool out_of_order_output = false>
 inline void llk_pack(
@@ -83,7 +84,7 @@ inline void llk_pack(
  * @brief Packs a block of destination tiles into the specified output buffer
  *
  * @param start_tile_index Starting destination register tile index to pack out from
- * @param pack_output Logical output dataflow buffer id
+ * @param pack_output Logical output DataFlow Buffer identifier
  * @param ntiles Number of consecutive tiles to pack
  *
  * Packs ntiles tiles starting at start_tile_index from the destination register into the L1

@@ -86,9 +86,8 @@ ALWI void configure_pack_width(uint32_t cb, uint32_t pack_width) {
     // the MOP. Skipping the packer-strides reconfig saves a THCON stall per
     // call on the SDPA streaming hot path.
     PACK((llk_pack_init<
-          false /* untilize */,
+          ckernel::PackMode::Default,
           false /* zero_output */,
-          false /* tilize */,
           true /* skip_addrmod_config */,
           true /* skip_packer_strides */>(cb, pack_width)));
 }
@@ -799,15 +798,12 @@ static void sdpa_inner_loop_step(
                     pack_reconfig_data_format(cb_qkt_im);
                 }
                 if constexpr (!uniform_unpack_format) {
-                    reconfig_data_format(cb_kt_in, cb_q_in);
+                    reconfig_data_format(cb_qkt_im, cb_kt_in, cb_qkt_im, cb_q_in);
                 }
                 mm_no_mop_reinit_short(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
             }
             {
                 MaybeDeviceZoneScopedN(profiling_enabled, "Q@KT MM+Pack");
-                if constexpr (!uniform_unpack_format) {
-                    reconfig_data_format(cb_qkt_im, cb_kt_in, cb_qkt_im, cb_q_in);
-                }
                 // The last subblock posts the semaphore — one post per reduce.
                 bool kt_trigger_reduce = reduce_trigger && (kt_subblock == kt_num_full_subblocks - 1);
                 blocked_matmul_and_pack<true, KT_stride, KT_stride>(
@@ -1271,7 +1267,8 @@ void sdpa_standard_v2(
     const uint32_t local_q_start = 0,
     const uint32_t chunked_q_chunk_offset = 0,
     const LightweightMaskContext& lw_mask = {},
-    const uint32_t q_num_chunks = 0) {
+    const uint32_t q_num_chunks = 0,
+    const bool use_zigzag_balancing = false) {
     // use_padded_mask + is_causal_sdpa is handled at the host level (mutually exclusive).
     static_assert(
         !(use_padded_mask && is_causal_sdpa), "use_padded_mask and is_causal_sdpa are mutually exclusive in v2");
@@ -1305,23 +1302,18 @@ void sdpa_standard_v2(
         constexpr bool can_reduce_trigger_padded = (padded_k_tiles_inner > 0) && (last_chunk_Sk % padded_sbw == 0) &&
                                                    (last_chunk_Sk / padded_sbw > 1) && (last_chunk_Sk % 2 == 0);
 
-        // Causal-only: BALANCED_Q_PARALLEL Q-chunk remap, per-Q diagonal K-chunk limit, and
+        // Causal-only: optional zigzag Q-chunk remap, per-Q diagonal K-chunk limit, and
         // q_start_tile (the only causal-mask consumer downstream). Non-causal builds skip
         // the whole block — q_chunk_local stays in-order, q_start_tile=0, k_loop_end=full.
         uint32_t q_chunk_local = local_q_start + q;
         uint32_t q_start_tile = 0;
         uint32_t k_loop_end = k_num_chunks;
         if constexpr (is_causal_sdpa) {
-#if defined BALANCED_Q_PARALLEL
-            // Pair a light (top-half) Q chunk with a heavy (bottom-half) Q chunk per core to
-            // balance causal work. Reader and writer apply the same remap; compute must agree
-            // or causal masks + output positions desync.
-            const uint32_t q_chunk_div_2 = q_chunks_per_core / 2;
-            if (q >= q_chunk_div_2) {
-                const uint32_t back_q_iter = q - q_chunk_div_2;
-                q_chunk_local = q_num_chunks - 1 - (local_q_start + back_q_iter);
-            }
-#endif
+            // Reader and writer apply the same remap; compute must agree or causal
+            // masks and output positions desync. The mod is a no-op when the input is per-head
+            // ([0, q_num_chunks)) and extracts the per-head q_chunk when it's a flat global index
+            // (global Q scheduling iterates across batches and heads).
+            q_chunk_local = remap_q_index(q_chunk_local, q_num_chunks, use_zigzag_balancing) % q_num_chunks;
             // q_chunk_global is the absolute Q chunk index (used for the diagonal);
             // chunked-prefill shifts this via chunked_q_chunk_offset.
             const uint32_t q_chunk_global = q_chunk_local + chunked_q_chunk_offset;

@@ -76,7 +76,7 @@ ttnn:
     wh_galaxy: 35
   e2e:
     wh_llmbox: 90
-    wh_galaxy: 70
+    wh_galaxy: 90
     bh_galaxy: 70
     bh_p150b_civ2: 55
     bh_deskbox: 145
@@ -86,7 +86,14 @@ ttnn:
     bh_quietbox_2: 145
   integration:
     wh_llmbox: 30
-    wh_galaxy: 350
+    # Placeholder allocation for wh_galaxy under integration, based on the
+    # current expected runtime of galaxy_integration_tests (~340 min) and
+    # galaxy_profiler_tests (~45 min: 30 min device + 15 min cross-reference).
+    # This comment is bookkeeping only; time-budget verification does not
+    # enforce a combined cap across multiple test YAML files. Final team /
+    # test-framework assignment tracked in
+    # https://github.com/tenstorrent/tt-metal/issues/44285
+    wh_galaxy: 385
 
 shield:
   e2e:
@@ -166,11 +173,11 @@ models:
     wh_n300: 15
     wh_galaxy_perf: 120
     bh_p150b_civ2: 55
+    bh_loudbox: 165
     bh_p150: 60
     bh_p300: 10
     bh_deskbox: 60
     bh_quietbox_2: 60
-    bh_loudbox: 70
     bh_llmbox: 40
     bh_galaxy_perf: 60
   unit:
@@ -203,7 +210,7 @@ models:
     wh_galaxy_perf: 150
     wh_galaxy_perf_uf: 45
     wh_galaxy_release: 345
-    bh_galaxy: 250
+    bh_galaxy: 280
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600

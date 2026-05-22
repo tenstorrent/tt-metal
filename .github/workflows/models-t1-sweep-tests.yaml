@@ -20,7 +20,17 @@ on:
         options:
           - all
           - "wh_n150 (N150)"
-          - "wh_galaxy (Galaxy)"
+          - "wh_n300 (N300)"
+          - "wh_llmbox (T3000)"
+          - "wh_llmbox_perf (T3000 perf)"
+          - "wh_galaxy (WH Galaxy)"
+          - "wh_galaxy_perf (WH Galaxy perf)"
+          - "bh_p150 (P150)"
+          - "bh_loudbox (BH LoudBox)"
+          - "bh_p300 (P300)"
+          - "bh_quietbox_2 (BH QB2)"
+          - "bh_galaxy (BH Galaxy)"
+          - "bh_galaxy_perf (BH Galaxy perf)"
       platform:
         required: false
         type: choice
@@ -59,7 +69,7 @@ jobs:
       - name: Resolve SKU selection
         id: resolve
         run: |
-          ALL_SKUS="wh_n150,wh_galaxy"
+          ALL_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf,bh_p150,bh_loudbox,bh_p300,bh_quietbox_2,bh_galaxy,bh_galaxy_perf"
           SKU_INPUT="${{ inputs.sku || 'all' }}"
           if [[ "$SKU_INPUT" == "all" ]]; then
             echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
