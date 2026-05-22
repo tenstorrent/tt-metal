@@ -133,15 +133,15 @@ Counterintuitively, the Tracy GUI connects as a TCP server, while the profiled a
 Capturing via Command Line
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Alternatively, use the ``capture-release`` CLI tool built under **tt-metal** when Tracy is enabled, under ``tt-metal/build/tools/profiler/bin`` when Tracy is enabled. This tool acts as a client that saves the profile to disk, which can then be copied and loaded into the GUI later. To use it, run the following command before starting the application:
+Alternatively, use the ``tracy-capture`` CLI tool built under **tt-metal** when Tracy is enabled, at ``tt-metal/build/tools/profiler/bin/tracy-capture``. This tool acts as a client that saves the profile to disk, which can then be copied and loaded into the GUI later. To use it, run the following command before starting the application:
 
 .. code-block:: bash
 
-    ./capture-release -o output_file_name.tracy
+    ./build/tools/profiler/bin/tracy-capture -o output_file_name.tracy
 
 .. note::
 
-    The output of ``capture-release`` is quite compressible. For large profile files, it is recommended to compress them before transferring over the network. You can use the ``-z`` option with rsync, ``-C`` with scp, or standalone tools like gzip or zstd.
+    The output of ``tracy-capture`` is quite compressible. For large profile files, it is recommended to compress them before transferring over the network. You can use the ``-z`` option with rsync, ``-C`` with scp, or standalone tools like gzip or zstd.
 
 Profiling Host Code
 -------------------

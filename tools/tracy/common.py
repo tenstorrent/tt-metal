@@ -23,7 +23,7 @@ if "TT_METAL_PROFILER_DIR" in ENVS.keys():
     PROFILER_ARTIFACTS_DIR = Path(ENVS["TT_METAL_PROFILER_DIR"])
 
 
-PROFILER_BIN_DIR = TT_METAL_HOME / "build/bin"
+PROFILER_BIN_DIR = TT_METAL_HOME / "build" / "tools" / "profiler" / "bin"
 PROFILER_WASM_DIR = TT_METAL_HOME / "build/profiler/build_wasm"
 
 PROFILER_WASM_TRACE_FILE_NAME = "embed.tracy"
@@ -43,7 +43,7 @@ TRACY_CSVEXPROT_TOOL = "tracy-csvexport"
 
 
 def resolve_tracy_tool_path(bin_folder: Path, tool_name: str) -> Path | None:
-    """Find tracy-capture or tracy-csvexport under the CMake install bindir (build/bin)."""
+    """Find tracy-capture or tracy-csvexport under build/tools/profiler/bin."""
     candidate = Path(bin_folder) / tool_name
     if candidate.is_file():
         return candidate
