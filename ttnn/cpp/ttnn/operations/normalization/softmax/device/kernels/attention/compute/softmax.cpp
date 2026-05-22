@@ -11,6 +11,8 @@
 #include "api/compute/reduce.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
 // for scale+mask+softmax:
 // bcast HW (mul by 1 tile)  example: (  [2,1,1024,64] * [1,1,32,32]  )
@@ -250,26 +252,33 @@ void kernel_main() {
 #ifdef NUMERIC_STABLE
             calc_numeric_stable(Wt, ndst, cb_in0, cb_max_scaler, cb_max, cb_exps);
 #else
-            for (uint32_t wt = 0; wt < Wt; wt += ndst) {
-                tile_regs_acquire();
-                cb_in0_obj.wait_front(ndst);
-                for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
-                    copy_tile(cb_in0, wt8, wt8);  // copy from c_in[0] to DST[0]
-                }
-                cb_in0_obj.pop_front(ndst);
-
-                cb_exps_obj.reserve_back(ndst);
-                for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
-                    exp_tile<EXP_APPROX>(wt8);  // exp on DST[0]
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
-                    pack_tile(wt8, cb_exps);    // DST[0]->cb_id[wt]
-                }
-                tile_regs_release();
-                cb_exps_obj.push_back(ndst);
-            }
+            // Migrated: streaming copy + exp + pack via eltwise_chain.
+            // Per-tile semantics (BlockSize=1) replaces original's per-ndst ACQ window —
+            // semantically equivalent because reads/writes are sequential and the chain
+            // re-acquires DEST per tile. ndst is a runtime arg so we can't use it as
+            // BlockSize template; perf trade-off accepted (more ACQ/REL pairs).
+            // Reconfig: copy_tile + exp_tile are SFPU/copy ops; no explicit
+            // reconfig_data_format outside this block, so CopyTileReconfig::Input matches
+            // copy_tile_init's reconfig. PackTileReconfig::None — pack format set by
+            // binary_op_init_common at line 70 to cb_exps already.
+            compute_kernel_lib::eltwise_chain(
+                Wt,
+                compute_kernel_lib::CopyTile<
+                    cb_in0,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::Streaming,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::CopyTileReconfig::Input>{},
+                compute_kernel_lib::Exp<
+                    static_cast<compute_kernel_lib::Approx>(EXP_APPROX),
+                    compute_kernel_lib::Approx::Exact,
+                    compute_kernel_lib::Dst::D0>{},
+                compute_kernel_lib::PackTile<
+                    cb_exps,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OutStreaming,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::PackTileReconfig::None>{});
 #endif
         }
 #endif
