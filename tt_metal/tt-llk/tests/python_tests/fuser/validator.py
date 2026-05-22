@@ -174,11 +174,11 @@ class FpuMathSchemaBase(BaseModel):
 
     type: Literal["Fpu"]
     broadcast_type: BroadcastType = BroadcastType.None_
-    reuse_dest: Optional[EltwiseBinaryReuseDestType] = None
+    reuse_dest: EltwiseBinaryReuseDestType = EltwiseBinaryReuseDestType.NONE
     reduce_pool: Optional[ReducePool] = None
     reduce_dim: Optional[ReduceDimension] = None
-    enforce_fp32_accumulation: Optional[EnforceFP32Accumulation] = None
-    acc_to_dest: Optional[AccToDest] = None
+    enforce_fp32_accumulation: EnforceFP32Accumulation = EnforceFP32Accumulation.No
+    acc_to_dest: AccToDest = AccToDest.No
     unpack_transpose_within_face: Transpose = Transpose.No
     unpack_transpose_faces: Transpose = Transpose.No
     math_fidelity: MathFidelity = MathFidelity.LoFi
@@ -232,7 +232,7 @@ def validate_fpu_math(
 
     unpacker_name = schema.unpacker
 
-    if schema.unpacker is not None:
+    if unpacker_name is not None:
         rule = unpacker_rules.get(op)
         if rule is not None:
             allowed = rule if isinstance(rule, set) else {rule}
@@ -242,10 +242,7 @@ def validate_fpu_math(
                     f"{op}: unpacker must be {expected}, got '{unpacker_name}'"
                 )
         elif op in eltwise_ops:
-            if (
-                schema.reuse_dest is not None
-                and schema.reuse_dest != EltwiseBinaryReuseDestType.NONE
-            ):
+            if schema.reuse_dest != EltwiseBinaryReuseDestType.NONE:
                 if unpacker_name != "UnpackerA":
                     raise ValueError(
                         f"Eltwise with reuse_dest: unpacker must be UnpackerA, got '{unpacker_name}'"
@@ -284,11 +281,7 @@ def validate_fpu_math(
     ):
         raise ValueError(f"{schema.operation} does not support {schema.math_fidelity}")
 
-    if (
-        schema.reuse_dest is not None
-        and schema.reuse_dest != EltwiseBinaryReuseDestType.NONE
-        and op not in eltwise_ops
-    ):
+    if schema.reuse_dest != EltwiseBinaryReuseDestType.NONE and op not in eltwise_ops:
         raise ValueError(f"reuse_dest: only for Eltwise operations, not '{op}'")
 
     if (
@@ -345,31 +338,23 @@ def build_compute_node(
         else ClearFP32DstAcc.No
     )
 
-    kwargs = {}
+    kwargs = {
+        "unpack_transpose_within_face": schema.unpack_transpose_within_face,
+        "unpack_transpose_faces": schema.unpack_transpose_faces,
+        "broadcast_type": schema.broadcast_type,
+        "reuse_dest": schema.reuse_dest,
+        "math_fidelity": schema.math_fidelity,
+        "enforce_fp32_accumulation": schema.enforce_fp32_accumulation,
+        "clear_fp32_dst_acc": clear_fp32_dst_acc,
+        "acc_to_dest": schema.acc_to_dest,
+        "unpack_to_dest": schema.unpack_to_dest,
+    }
     if schema.unpacker:
         kwargs["unpacker"] = unpacker_map[schema.unpacker]
-    if schema.unpack_transpose_within_face:
-        kwargs["unpack_transpose_within_face"] = schema.unpack_transpose_within_face
-    if schema.unpack_transpose_faces:
-        kwargs["unpack_transpose_faces"] = schema.unpack_transpose_faces
-    if schema.broadcast_type:
-        kwargs["broadcast_type"] = schema.broadcast_type
-    if schema.reuse_dest:
-        kwargs["reuse_dest"] = schema.reuse_dest
     if schema.reduce_dim:
         kwargs["reduce_dim"] = schema.reduce_dim
     if schema.reduce_pool:
         kwargs["reduce_pool"] = schema.reduce_pool
-    if schema.math_fidelity:
-        kwargs["math_fidelity"] = schema.math_fidelity
-    if schema.enforce_fp32_accumulation:
-        kwargs["enforce_fp32_accumulation"] = schema.enforce_fp32_accumulation
-    if clear_fp32_dst_acc:
-        kwargs["clear_fp32_dst_acc"] = clear_fp32_dst_acc
-    if schema.acc_to_dest:
-        kwargs["acc_to_dest"] = schema.acc_to_dest
-    if schema.unpack_to_dest:
-        kwargs["unpack_to_dest"] = schema.unpack_to_dest
 
     return ComputeNode(fpu=fpu, src_a=src_a, src_b=src_b, sfpu=None, **kwargs)
 
@@ -405,7 +390,7 @@ class OperationSchemaBase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     output: str = Field(..., min_length=1)
-    dest_sync: Optional[DestSync] = None
+    dest_sync: DestSync = DestSync.Half
     block_size: Annotated[List[int], Field(min_length=2, max_length=2)] = [32, 32]
     pack_relu: PackerReluType = PackerReluType.NoRelu
     relu_threshold: float = 0.0
@@ -444,17 +429,13 @@ class OperationSchemaBase(BaseModel):
         ):
             raise ValueError(f"{output.data_format} does not support L1 accumulation")
 
-        kwargs = {}
-        if self.dest_sync:
-            kwargs["dest_sync"] = self.dest_sync
-        if self.block_size:
-            kwargs["block_size"] = self.block_size
-        if self.pack_relu:
-            kwargs["pack_relu"] = self.pack_relu
-        if self.relu_threshold:
-            kwargs["relu_threshold"] = self.relu_threshold
-        if self.pack_l1_accumulation:
-            kwargs["pack_l1_accumulation"] = self.pack_l1_accumulation
+        kwargs = {
+            "block_size": self.block_size,
+            "pack_relu": self.pack_relu,
+            "relu_threshold": self.relu_threshold,
+            "pack_l1_accumulation": self.pack_l1_accumulation,
+            "dest_sync": self.dest_sync,
+        }
         kwargs.update(self._arch_kwargs())
 
         return FusedOperation(

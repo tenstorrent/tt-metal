@@ -232,7 +232,7 @@ class OperationSchema(OperationSchemaBase):
 
     math: List[MathSchema] = Field(..., min_length=1)
     packer: str = "Packer"
-    bh_tilize: Optional[Tilize] = None
+    bh_tilize: Tilize = Tilize.No
 
     @field_validator("packer", mode="after")
     @classmethod
@@ -260,8 +260,6 @@ class OperationSchema(OperationSchemaBase):
 
         if "UnpackerTilizeA" in unique_unpackers:
             self.bh_tilize = Tilize.Yes
-        else:
-            self.bh_tilize = Tilize.No
 
         if len(unique_unpackers) > 1 and "UnpackerTilizeA" in unique_unpackers:
             raise ValueError(
@@ -269,6 +267,4 @@ class OperationSchema(OperationSchemaBase):
             )
 
     def _arch_kwargs(self) -> dict:
-        if self.bh_tilize:
-            return {"bh_tilize": self.bh_tilize}
-        return {}
+        return {"bh_tilize": self.bh_tilize}
