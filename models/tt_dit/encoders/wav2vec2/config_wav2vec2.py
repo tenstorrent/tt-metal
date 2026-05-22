@@ -20,13 +20,7 @@ class Wav2Vec2Config:
         conv_bias: Whether the conv layers use bias.
         feat_extract_norm: "group" (only first layer has GroupNorm) or "layer"
             (every layer has LayerNorm). "group" is the base default.
-        num_conv_pos_embeddings: Kernel size of the positional convolution applied
-            in the encoder before the transformer stack.
-        num_conv_pos_embedding_groups: Number of groups in that positional conv.
         layer_norm_eps: Eps for all LayerNorms.
-        hidden_act: Activation for the FFN ("gelu").
-        feat_proj_layer_norm: Whether feature_projection applies LayerNorm before
-            the Linear projection. True for both base and large.
     """
 
     def __init__(
@@ -40,11 +34,8 @@ class Wav2Vec2Config:
         conv_kernel: tuple = (10, 3, 3, 3, 3, 2, 2),
         conv_bias: bool = False,
         feat_extract_norm: str = "group",
-        num_conv_pos_embeddings: int = 128,
-        num_conv_pos_embedding_groups: int = 16,
         layer_norm_eps: float = 1e-5,
         hidden_act: str = "gelu",
-        feat_proj_layer_norm: bool = True,
         do_stable_layer_norm: bool = False,
     ):
         assert len(conv_dim) == len(conv_stride) == len(conv_kernel)
@@ -60,11 +51,7 @@ class Wav2Vec2Config:
         self.conv_kernel = tuple(conv_kernel)
         self.conv_bias = conv_bias
         self.feat_extract_norm = feat_extract_norm
-        self.num_conv_pos_embeddings = num_conv_pos_embeddings
-        self.num_conv_pos_embedding_groups = num_conv_pos_embedding_groups
         self.layer_norm_eps = layer_norm_eps
-        self.hidden_act = hidden_act
-        self.feat_proj_layer_norm = feat_proj_layer_norm
         # `wav2vec2-base-960h`: False (post-LN).  `wav2vec2-large-xlsr-53`: True (pre-LN).
         self.do_stable_layer_norm = do_stable_layer_norm
 
@@ -84,10 +71,7 @@ class Wav2Vec2Config:
             conv_kernel=tuple(hf_config.conv_kernel),
             conv_bias=bool(hf_config.conv_bias),
             feat_extract_norm=hf_config.feat_extract_norm,
-            num_conv_pos_embeddings=hf_config.num_conv_pos_embeddings,
-            num_conv_pos_embedding_groups=hf_config.num_conv_pos_embedding_groups,
             layer_norm_eps=hf_config.layer_norm_eps,
             hidden_act=hf_config.hidden_act,
-            feat_proj_layer_norm=getattr(hf_config, "feat_proj_layer_norm", True),
             do_stable_layer_norm=getattr(hf_config, "do_stable_layer_norm", False),
         )
