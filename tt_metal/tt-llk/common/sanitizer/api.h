@@ -21,64 +21,34 @@ namespace llk::san
 // per thread state
 extern SanitizerState* const sanitizer;
 
-// Goes in ComputeAPI
-// State set only
-// sstanisic todo: implement support_backtrace_impl
-// static inline void support_backtrace(std::string function_name)
-// {
-//     support_backtrace_impl(function_name);
-// }
-
-// Goes in LLK_API
-// State set only
-// sstanisic todo: implement support_globals_impl
-// static inline void support_globals(bool dst_acc_mode, DstSync dst_sync, bool approx, std::int32_t math_fidelity)
-// {
-//     support_globals_impl(dst_acc_mode, dst_sync, approx, math_fidelity);
-// }
-
-// State set only
-// sstanisic todo: implement support_operand_impl
-// template <llk_san_operand operand>
-// static inline void llk_san_support_operand(
-//     std::int32_t src_fmt,
-//     std::int32_t dst_fmt,
-//     std::int32_t num_faces,
-//     std::int32_t partial_face,
-//     std::int32_t face_r_dim,
-//     std::int32_t narrow_tile,
-//     std::int32_t tile_r_dim,
-//     std::int32_t tile_c_dim,
-//     std::int32_t tile_size,
-//     std::int32_t page_size)
-// {
-//     support_operand_impl<operand>(
-//         src_fmt, dst_fmt, num_faces, partial_face, face_r_dim, narrow_tile, tile_r_dim, tile_c_dim, tile_size, page_size);
-// }
-
 static inline void thread_init()
 {
     thread_init_impl(*sanitizer);
 }
 
+static inline auto& thread_context_get()
+{
+    return thread_context_get_impl(*sanitizer);
+}
+
 static inline void thread_silent_push()
 {
-    thread_silent_push_impl(*sanitizer);
+    thread_silent_push_impl(thread_context_get());
 }
 
 static inline void thread_silent_pop()
 {
-    thread_silent_pop_impl(*sanitizer);
+    thread_silent_pop_impl(thread_context_get());
 }
 
-static inline void thread_function_push(const ct_string function)
+static inline void thread_context_push()
 {
-    thread_function_push_impl(*sanitizer, function);
+    thread_context_push_impl(thread_context_get());
 }
 
-static inline void thread_function_pop()
+static inline void thread_context_pop()
 {
-    thread_function_pop_impl(*sanitizer);
+    thread_context_pop_impl(thread_context_get());
 }
 
 // Goes in LLK_LIB in HWConfigure and HWReconfig
@@ -97,23 +67,25 @@ static inline void unpack_operand_configure(
 {
     if constexpr (!reconfig)
     {
-        fsm_advance_impl<FsmState::CONFIGURED>(
-            sanitizer->function_curr[COMPILE_FOR_TRISC],
-            thread_silent_get_impl(*sanitizer),
-            sanitizer->fsm[COMPILE_FOR_TRISC],
-            sanitizer->operation[COMPILE_FOR_TRISC]);
+        fsm_advance_impl<FsmState::CONFIGURED>(thread_context_get(), sanitizer->fsm[COMPILE_FOR_TRISC], sanitizer->operation[COMPILE_FOR_TRISC]);
     }
     else
     {
-        fsm_advance_impl<FsmState::RECONFIGURED>(
-            sanitizer->function_curr[COMPILE_FOR_TRISC],
-            thread_silent_get_impl(*sanitizer),
-            sanitizer->fsm[COMPILE_FOR_TRISC],
-            sanitizer->operation[COMPILE_FOR_TRISC]);
+        fsm_advance_impl<FsmState::RECONFIGURED>(thread_context_get(), sanitizer->fsm[COMPILE_FOR_TRISC], sanitizer->operation[COMPILE_FOR_TRISC]);
     }
 
     unpack_operand_configure_impl<reconfig>(
-        sanitizer->operand.unpack, dst_acc_en, src_fmt_A, src_fmt_B, dst_fmt_A, dst_fmt_B, face_height_A, face_height_B, num_faces_A, num_faces_B);
+        sanitizer->context.unpack,
+        sanitizer->operand.unpack,
+        dst_acc_en,
+        src_fmt_A,
+        src_fmt_B,
+        dst_fmt_A,
+        dst_fmt_B,
+        face_height_A,
+        face_height_B,
+        num_faces_A,
+        num_faces_B);
 }
 
 // State set + no hw config within kernel check
@@ -122,22 +94,14 @@ static inline void math_operand_configure(State<std::uint32_t> math_fmt_A, State
 {
     if constexpr (!reconfig)
     {
-        fsm_advance_impl<FsmState::CONFIGURED>(
-            sanitizer->function_curr[COMPILE_FOR_TRISC],
-            thread_silent_get_impl(*sanitizer),
-            sanitizer->fsm[COMPILE_FOR_TRISC],
-            sanitizer->operation[COMPILE_FOR_TRISC]);
+        fsm_advance_impl<FsmState::CONFIGURED>(thread_context_get(), sanitizer->fsm[COMPILE_FOR_TRISC], sanitizer->operation[COMPILE_FOR_TRISC]);
     }
     else
     {
-        fsm_advance_impl<FsmState::RECONFIGURED>(
-            sanitizer->function_curr[COMPILE_FOR_TRISC],
-            thread_silent_get_impl(*sanitizer),
-            sanitizer->fsm[COMPILE_FOR_TRISC],
-            sanitizer->operation[COMPILE_FOR_TRISC]);
+        fsm_advance_impl<FsmState::RECONFIGURED>(thread_context_get(), sanitizer->fsm[COMPILE_FOR_TRISC], sanitizer->operation[COMPILE_FOR_TRISC]);
     }
 
-    math_operand_configure_impl<reconfig>(sanitizer->operand.math, math_fmt_A, math_fmt_B);
+    math_operand_configure_impl<reconfig>(sanitizer->context.math, sanitizer->operand.math, math_fmt_A, math_fmt_B);
 }
 
 // State set + no hw config within kernel check
@@ -154,23 +118,15 @@ static inline void pack_operand_configure(
 {
     if constexpr (!reconfig)
     {
-        fsm_advance_impl<FsmState::CONFIGURED>(
-            sanitizer->function_curr[COMPILE_FOR_TRISC],
-            thread_silent_get_impl(*sanitizer),
-            sanitizer->fsm[COMPILE_FOR_TRISC],
-            sanitizer->operation[COMPILE_FOR_TRISC]);
+        fsm_advance_impl<FsmState::CONFIGURED>(thread_context_get(), sanitizer->fsm[COMPILE_FOR_TRISC], sanitizer->operation[COMPILE_FOR_TRISC]);
     }
     else
     {
-        fsm_advance_impl<FsmState::RECONFIGURED>(
-            sanitizer->function_curr[COMPILE_FOR_TRISC],
-            thread_silent_get_impl(*sanitizer),
-            sanitizer->fsm[COMPILE_FOR_TRISC],
-            sanitizer->operation[COMPILE_FOR_TRISC]);
+        fsm_advance_impl<FsmState::RECONFIGURED>(thread_context_get(), sanitizer->fsm[COMPILE_FOR_TRISC], sanitizer->operation[COMPILE_FOR_TRISC]);
     }
 
     pack_operand_configure_impl<reconfig>(
-        sanitizer->operand.pack, dest_acc_en, src_fmt, dst_fmt, face_height, tile_width, num_faces, partial_face, narrow_tile);
+        sanitizer->context.pack, sanitizer->operand.pack, dest_acc_en, src_fmt, dst_fmt, face_height, tile_width, num_faces, partial_face, narrow_tile);
 }
 
 // Goes in LLK_LIB in Init, Execute and Uninit
@@ -187,8 +143,7 @@ static inline void unpack_operand_check(
     State<std::uint32_t> num_faces_B)
 {
     unpack_operand_check_impl(
-        sanitizer->function_curr[COMPILE_FOR_TRISC],
-        thread_silent_get_impl(*sanitizer),
+        sanitizer->context.unpack,
         sanitizer->operand.unpack,
         dst_acc_en,
         src_fmt_A,
@@ -204,7 +159,7 @@ static inline void unpack_operand_check(
 // No state set, just check that non x arguments match the stored ones
 static inline void math_operand_check(State<std::uint32_t> math_fmt_A, State<std::uint32_t> math_fmt_B)
 {
-    math_operand_check_impl(sanitizer->function_curr[COMPILE_FOR_TRISC], thread_silent_get_impl(*sanitizer), sanitizer->operand.math, math_fmt_A, math_fmt_B);
+    math_operand_check_impl(sanitizer->context.math, sanitizer->operand.math, math_fmt_A, math_fmt_B);
 }
 
 // No state set, just check that non x arguments match the stored ones
@@ -219,17 +174,7 @@ static inline void pack_operand_check(
     State<bool> narrow_tile)
 {
     pack_operand_check_impl(
-        sanitizer->function_curr[COMPILE_FOR_TRISC],
-        thread_silent_get_impl(*sanitizer),
-        sanitizer->operand.pack,
-        dest_acc_en,
-        src_fmt,
-        dst_fmt,
-        face_height,
-        tile_width,
-        num_faces,
-        partial_face,
-        narrow_tile);
+        sanitizer->context.pack, sanitizer->operand.pack, dest_acc_en, src_fmt, dst_fmt, face_height, tile_width, num_faces, partial_face, narrow_tile);
 }
 
 // Goes in LLK_LIB in Init
@@ -237,11 +182,7 @@ static inline void pack_operand_check(
 template <Operation op, typename... Ts>
 static inline void operation_init(Ts... args)
 {
-    fsm_advance_impl<FsmState::INITIALIZED>(
-        sanitizer->function_curr[COMPILE_FOR_TRISC],
-        thread_silent_get_impl(*sanitizer),
-        sanitizer->fsm[COMPILE_FOR_TRISC],
-        sanitizer->operation[COMPILE_FOR_TRISC]);
+    fsm_advance_impl<FsmState::INITIALIZED>(thread_context_get(), sanitizer->fsm[COMPILE_FOR_TRISC], sanitizer->operation[COMPILE_FOR_TRISC]);
 
     operation_init_impl<op, Ts...>(sanitizer->operation[COMPILE_FOR_TRISC], args...);
 }
@@ -251,10 +192,8 @@ static inline void operation_init(Ts... args)
 template <Operation op, typename... Ts>
 static inline void operation_check(Ts... args)
 {
-    const bool silent = thread_silent_get_impl(*sanitizer);
-    fsm_advance_impl<FsmState::EXECUTED>(
-        sanitizer->function_curr[COMPILE_FOR_TRISC], silent, sanitizer->fsm[COMPILE_FOR_TRISC], sanitizer->operation[COMPILE_FOR_TRISC]);
-    operation_check_impl<op, Ts...>(sanitizer->function_curr[COMPILE_FOR_TRISC], silent, sanitizer->operation[COMPILE_FOR_TRISC], args...);
+    fsm_advance_impl<FsmState::EXECUTED>(thread_context_get(), sanitizer->fsm[COMPILE_FOR_TRISC], sanitizer->operation[COMPILE_FOR_TRISC]);
+    operation_check_impl<op, Ts...>(thread_context_get(), sanitizer->operation[COMPILE_FOR_TRISC], args...);
 }
 
 // Goes in LLK_LIB in Uninit
@@ -262,23 +201,21 @@ static inline void operation_check(Ts... args)
 template <Operation op>
 void operation_uninit()
 {
-    const bool silent = thread_silent_get_impl(*sanitizer);
-    fsm_advance_impl<FsmState::UNINITIALIZED>(
-        sanitizer->function_curr[COMPILE_FOR_TRISC], silent, sanitizer->fsm[COMPILE_FOR_TRISC], sanitizer->operation[COMPILE_FOR_TRISC]);
-    operation_uninit_impl<op>(sanitizer->function_curr[COMPILE_FOR_TRISC], silent, sanitizer->operation[COMPILE_FOR_TRISC]);
+    fsm_advance_impl<FsmState::UNINITIALIZED>(thread_context_get(), sanitizer->fsm[COMPILE_FOR_TRISC], sanitizer->operation[COMPILE_FOR_TRISC]);
+    operation_uninit_impl<op>(thread_context_get(), sanitizer->operation[COMPILE_FOR_TRISC]);
 }
 
 class FunctionZone
 {
 public:
-    FunctionZone(const ct_string function_name)
+    FunctionZone()
     {
-        thread_function_push(function_name);
+        thread_context_push();
     }
 
     ~FunctionZone()
     {
-        thread_function_pop();
+        thread_context_pop();
     }
 };
 
@@ -298,11 +235,7 @@ public:
 
 } // namespace llk::san
 
-#define LLK_SAN_FUNCTION(function)         \
-    llk::san::FunctionZone _function_zone_ \
-    {                                      \
-        CTSTR(function)                    \
-    }
+#define LLK_SAN_FUNCTION(function) llk::san::FunctionZone _function_zone_
 
 #define LLK_SAN_SILENT_ZONE() [[maybe_unused]] llk::san::SilentZone _silent_zone_
 
