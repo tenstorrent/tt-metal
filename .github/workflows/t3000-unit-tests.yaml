@@ -58,6 +58,8 @@ jobs:
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
+      use-artifacts-from-run: "26033881278"
+      dev-docker-image: "ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:ce7f42d864b9aeed08c8af2aaf16067713e8b7ec"
   t3000-unit-tests:
     needs: build-artifact
     secrets: inherit
