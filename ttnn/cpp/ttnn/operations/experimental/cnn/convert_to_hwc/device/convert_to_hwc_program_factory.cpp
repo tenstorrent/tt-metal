@@ -6,6 +6,7 @@
 
 #include "tt-metalium/tt_backend_api_types.hpp"
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
@@ -17,6 +18,7 @@
 namespace ttnn::experimental::prim {
 
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 namespace {
 
@@ -184,14 +186,9 @@ uint32_t calculate_effective_hw_for_sharding(
     return num_cores * padded_shard_width;
 }
 
-struct CircularBufferHandles {
-    tt::tt_metal::CBHandle cb_in;
-    tt::tt_metal::CBHandle cb_out;
-};
-
-// Helper function to create a circular buffer
-tt::tt_metal::CBHandle create_circular_buffer(
-    tt::tt_metal::Program& program,
+// Helper function to push a CB onto a ProgramDescriptor
+void add_cb_to_descriptor(
+    ProgramDescriptor& desc,
     const CoreRangeSet& core_grid,
     uint32_t index,
     uint32_t total_size,
@@ -200,8 +197,8 @@ tt::tt_metal::CBHandle create_circular_buffer(
     tt::tt_metal::Buffer* buffer = nullptr);
 
 // Setup all circular buffers for the convert_to_hwc operation
-CircularBufferHandles setup_circular_buffers(
-    tt::tt_metal::Program& program,
+void setup_circular_buffers(
+    ProgramDescriptor& desc,
     const CoreRangeSet& core_grid,
     const ConvertToHwcConfig& config,
     const Tensor& input,
@@ -303,23 +300,29 @@ void ConvertToHwcConfig::validate() const {
     }
 }
 
-tt::tt_metal::CBHandle create_circular_buffer(
-    tt::tt_metal::Program& program,
+void add_cb_to_descriptor(
+    ProgramDescriptor& desc,
     const CoreRangeSet& core_grid,
     uint32_t index,
     uint32_t total_size,
     uint32_t page_size,
     const tt::DataFormat& format,
     tt::tt_metal::Buffer* buffer) {
-    auto config = tt::tt_metal::CircularBufferConfig(total_size, {{index, format}}).set_page_size(index, page_size);
-    if (buffer != nullptr) {
-        config = config.set_globally_allocated_address(*buffer);
-    }
-    return tt::tt_metal::CreateCircularBuffer(program, core_grid, config);
+    CBDescriptor cb{
+        .total_size = total_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(index),
+            .data_format = format,
+            .page_size = page_size,
+        }}},
+        .buffer = buffer,
+    };
+    desc.cbs.push_back(std::move(cb));
 }
 
-CircularBufferHandles setup_circular_buffers(
-    tt::tt_metal::Program& program,
+void setup_circular_buffers(
+    ProgramDescriptor& desc,
     const CoreRangeSet& core_grid,
     const ConvertToHwcConfig& config,
     const Tensor& input,
@@ -331,8 +334,8 @@ CircularBufferHandles setup_circular_buffers(
     // CB_IN: full input shard per core
     const uint32_t cb_in_page_size = config.l1_input_shard_width * config.element_size_bytes;
     const uint32_t cb_in_total_size = config.l1_input_shard_height * cb_in_page_size;
-    auto cb_in = create_circular_buffer(
-        program,
+    add_cb_to_descriptor(
+        desc,
         core_grid,
         CBIndex::CB_IN,
         cb_in_total_size,
@@ -343,27 +346,27 @@ CircularBufferHandles setup_circular_buffers(
     // CB_IN_BATCH: [C x block_size_width] staging for gathered sticks
     const uint32_t cb_in_batch_page_size = block_size_width * config.element_size_bytes;
     const uint32_t cb_in_batch_total_size = config.gather_l1_output_shard_height * cb_in_batch_page_size;
-    create_circular_buffer(
-        program, core_grid, CBIndex::CB_IN_BATCH, cb_in_batch_total_size, cb_in_batch_page_size, config.input_format);
+    add_cb_to_descriptor(
+        desc, core_grid, CBIndex::CB_IN_BATCH, cb_in_batch_total_size, cb_in_batch_page_size, config.input_format);
 
     // CB_IN_TILED: intermediate tiles
     const uint32_t cb_in_tiled_page_size = intermediary_tile_size;
     const uint32_t cb_in_tiled_total_size = tt::div_up(block_size_width, TILE_WIDTH) * intermediary_tile_size;
-    create_circular_buffer(
-        program, core_grid, CBIndex::CB_IN_TILED, cb_in_tiled_total_size, cb_in_tiled_page_size, intermediary_format);
+    add_cb_to_descriptor(
+        desc, core_grid, CBIndex::CB_IN_TILED, cb_in_tiled_total_size, cb_in_tiled_page_size, intermediary_format);
 
     // CB_IN_TRANSPOSE_[0/1]
     const uint32_t cb_in_transpose_page_size = intermediary_tile_size;
     const uint32_t cb_in_transpose_total_size = tt::div_up(block_size_width, TILE_WIDTH) * intermediary_tile_size;
-    create_circular_buffer(
-        program,
+    add_cb_to_descriptor(
+        desc,
         core_grid,
         CBIndex::CB_IN_TRANSPOSE_0,
         cb_in_transpose_total_size,
         cb_in_transpose_page_size,
         intermediary_format);
-    create_circular_buffer(
-        program,
+    add_cb_to_descriptor(
+        desc,
         core_grid,
         CBIndex::CB_IN_TRANSPOSE_1,
         cb_in_transpose_total_size,
@@ -373,10 +376,8 @@ CircularBufferHandles setup_circular_buffers(
     // CB_OUT: output shard per core
     const uint32_t cb_out_page_size = config.output_shard_width * config.element_size_bytes;
     const uint32_t cb_out_total_size = cb_out_page_size * config.output_shard_height;  // same size as input
-    auto cb_out = create_circular_buffer(
-        program, core_grid, CBIndex::CB_OUT, cb_out_total_size, cb_out_page_size, config.input_format, output.buffer());
-
-    return {cb_in, cb_out};
+    add_cb_to_descriptor(
+        desc, core_grid, CBIndex::CB_OUT, cb_out_total_size, cb_out_page_size, config.input_format, output.buffer());
 }
 
 uint32_t compute_alignment_requirement_in_elements(const Tensor& input_tensor) {
@@ -389,44 +390,11 @@ uint32_t compute_alignment_requirement_in_elements(const Tensor& input_tensor) {
 
 namespace ttnn::experimental::prim {
 
-namespace {
-
-void set_runtime_arguments(
-    tt::tt_metal::Program& program,
-    const Tensor& input_tensor,
-    const Tensor& output_tensor,
-    bool is_input_in_dram,
-    const std::vector<tt::tt_metal::CoreCoord>& output_cores,
-    const std::vector<std::vector<uint32_t>>& per_core_serialized_transfers,
-    tt::tt_metal::KernelHandle writer_kernel_id0,
-    tt::tt_metal::KernelHandle writer_kernel_id1,
-    uint32_t remote_address,
-    tt::tt_metal::CBHandle cb_in,
-    tt::tt_metal::CBHandle cb_out) {
-    // Set per-core runtime arguments for writer kernels
-    for (uint32_t core_idx = 0; core_idx < output_cores.size(); core_idx++) {
-        std::vector<uint32_t> runtime_args_0 = {remote_address};
-        std::vector<uint32_t> runtime_args_1 = {remote_address};
-        const auto& transfer_args = per_core_serialized_transfers.at(core_idx);
-        runtime_args_0.insert(runtime_args_0.end(), transfer_args.begin(), transfer_args.end());
-        runtime_args_1.insert(runtime_args_1.end(), transfer_args.begin(), transfer_args.end());
-        SetRuntimeArgs(program, writer_kernel_id0, output_cores[core_idx], runtime_args_0);
-        SetRuntimeArgs(program, writer_kernel_id1, output_cores[core_idx], runtime_args_1);
-    }
-    // Only update input CB address for L1 input (DRAM input doesn't need CB update)
-    if (!is_input_in_dram) {
-        UpdateDynamicCircularBufferAddress(program, cb_in, *input_tensor.buffer());
-    }
-    UpdateDynamicCircularBufferAddress(program, cb_out, *output_tensor.buffer());
-}
-
-}  // namespace
-
-ConvertToHWCProgramFactory::cached_program_t ConvertToHWCProgramFactory::create(
+ProgramDescriptor ConvertToHWCProgramFactory::create_descriptor(
     const ConvertToHwcParams& /*operation_attributes*/,
     const ConvertToHwcInputs& tensor_args,
     Tensor& tensor_return_value) {
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    ProgramDescriptor desc;
 
     const auto& a = tensor_args.input;
     auto& output = tensor_return_value;
@@ -448,7 +416,7 @@ ConvertToHWCProgramFactory::cached_program_t ConvertToHWCProgramFactory::create(
     const auto block_width = select_block_size(config.gather_l1_output_shard_width);
 
     // Setup circular buffers on the output cores (where the kernels execute)
-    auto cb_handles = setup_circular_buffers(program, config.output_core_grid, config, a, output, block_width);
+    setup_circular_buffers(desc, config.output_core_grid, config, a, output, block_width);
     auto grouping = group_and_coalesce_transfers(config, in_cores, effective_hw_for_gather, block_width);
     const uint32_t num_blocks = grouping.num_blocks;
 
@@ -512,78 +480,50 @@ ConvertToHWCProgramFactory::cached_program_t ConvertToHWCProgramFactory::create(
     auto compute_compile_time_args =
         make_compute_compile_args(tiling.total_tiles_per_block, config.gather_l1_output_shard_height, num_blocks);
 
-    auto writer_kernel_id0 = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_hwc/device/kernels/writer_convert_to_hwc.cpp",
-        config.output_core_grid,
-        tt::tt_metal::ReaderDataMovementConfig(writer_compile_time_args0));
+    KernelDescriptor writer_desc0{
+        .kernel_source =
+            "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_hwc/device/kernels/writer_convert_to_hwc.cpp",
+        .source_type = KernelDescriptor::SourceType::FILE_PATH,
+        .core_ranges = config.output_core_grid,
+        .compile_time_args = writer_compile_time_args0,
+        .config = ReaderConfigDescriptor{},
+    };
 
-    auto writer_kernel_id1 = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_hwc/device/kernels/writer_convert_to_hwc.cpp",
-        config.output_core_grid,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args1));
+    KernelDescriptor writer_desc1{
+        .kernel_source =
+            "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_hwc/device/kernels/writer_convert_to_hwc.cpp",
+        .source_type = KernelDescriptor::SourceType::FILE_PATH,
+        .core_ranges = config.output_core_grid,
+        .compile_time_args = writer_compile_time_args1,
+        .config = WriterConfigDescriptor{},
+    };
 
-    tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_hwc/device/kernels/convert_to_hwc.cpp",
-        config.output_core_grid,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-            .fp32_dest_acc_en = false,
-            .math_approx_mode = false,
-            .compile_args = compute_compile_time_args});
+    KernelDescriptor compute_desc{
+        .kernel_source = "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_hwc/device/kernels/convert_to_hwc.cpp",
+        .source_type = KernelDescriptor::SourceType::FILE_PATH,
+        .core_ranges = config.output_core_grid,
+        .compile_time_args = compute_compile_time_args,
+        .config =
+            ComputeConfigDescriptor{
+                .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+                .fp32_dest_acc_en = false,
+                .math_approx_mode = false,
+            },
+    };
 
-    // Set runtime arguments during program creation (required to prevent hangs)
-    set_runtime_arguments(
-        program,
-        a,
-        output,
-        config.is_input_in_dram,
-        config.output_cores,
-        per_core_serialized_transfers,
-        writer_kernel_id0,
-        writer_kernel_id1,
-        config.remote_address,
-        cb_handles.cb_in,
-        cb_handles.cb_out);
+    // Set per-core runtime arguments for writer kernels (compute kernel takes no runtime args).
+    for (uint32_t core_idx = 0; core_idx < config.output_cores.size(); core_idx++) {
+        std::vector<uint32_t> runtime_args = {config.remote_address};
+        const auto& transfer_args = per_core_serialized_transfers.at(core_idx);
+        runtime_args.insert(runtime_args.end(), transfer_args.begin(), transfer_args.end());
+        writer_desc0.runtime_args.emplace_back(config.output_cores[core_idx], runtime_args);
+        writer_desc1.runtime_args.emplace_back(config.output_cores[core_idx], std::move(runtime_args));
+    }
 
-    // Store shared variables for override
-    shared_variables_t shared_variables{
-        .cb_in = cb_handles.cb_in,
-        .cb_out = cb_handles.cb_out,
-        .is_input_in_dram = config.is_input_in_dram,
-        .output_cores = config.output_cores,
-        .per_core_serialized_transfers = per_core_serialized_transfers,
-        .writer_kernel_id0 = writer_kernel_id0,
-        .writer_kernel_id1 = writer_kernel_id1,
-        .remote_address = config.remote_address};
-
-    return {std::move(program), std::move(shared_variables)};
-}
-
-void ConvertToHWCProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const ConvertToHwcParams& /*operation_attributes*/,
-    const ConvertToHwcInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    auto& program = cached_program.program;
-    const auto& shared_vars = cached_program.shared_variables;
-    const auto& a = tensor_args.input;
-    auto& output = tensor_return_value;
-
-    set_runtime_arguments(
-        program,
-        a,
-        output,
-        shared_vars.is_input_in_dram,
-        shared_vars.output_cores,
-        shared_vars.per_core_serialized_transfers,
-        shared_vars.writer_kernel_id0,
-        shared_vars.writer_kernel_id1,
-        shared_vars.remote_address,
-        shared_vars.cb_in,
-        shared_vars.cb_out);
+    desc.kernels.push_back(std::move(writer_desc0));
+    desc.kernels.push_back(std::move(writer_desc1));
+    desc.kernels.push_back(std::move(compute_desc));
+    return desc;
 }
 
 }  // namespace ttnn::experimental::prim
