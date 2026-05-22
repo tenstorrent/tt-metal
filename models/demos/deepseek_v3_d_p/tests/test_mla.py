@@ -365,14 +365,15 @@ def test_mla(
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else 1344544,
         },
     ],
     ids=["line"],
     indirect=True,
 )
-@pytest.mark.parametrize("seq_len", [8192], ids=["seq8k"])
-@pytest.mark.parametrize("num_chunks", [1, 2, 4, 8], ids=lambda n: f"N{n}")
+@pytest.mark.parametrize(
+    "seq_len", [8192, 10 * 1024, 25 * 1024, 50 * 1024], ids=["seq8k", "seq10k", "seq25k", "seq50k"]
+)
+@pytest.mark.parametrize("num_chunks", [1, 2, 4, 5, 8, 10], ids=lambda n: f"N{n}")
 def test_mla_chunked_prefill(
     request,
     mesh_device,
@@ -552,14 +553,15 @@ def test_mla_chunked_prefill(
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else 1344544,
         },
     ],
     ids=["line"],
     indirect=True,
 )
-@pytest.mark.parametrize("seq_len", [8192], ids=["seq8k"])
-@pytest.mark.parametrize("num_chunks", [2, 4], ids=lambda n: f"N{n}")
+@pytest.mark.parametrize(
+    "seq_len", [8192, 10 * 1024, 25 * 1024, 50 * 1024], ids=["seq8k", "seq10k", "seq25k", "seq50k"]
+)
+@pytest.mark.parametrize("num_chunks", [2, 4, 5, 10], ids=lambda n: f"N{n}")
 @pytest.mark.parametrize("num_users", [2], ids=lambda u: f"U{u}")
 def test_mla_chunked_prefill_multi_user(
     request,
