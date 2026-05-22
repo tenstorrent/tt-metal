@@ -338,6 +338,8 @@ Every helper that wraps a CB-consuming or CB-producing block exposes some form o
 
 > **Eltwise helper note (post-policy-alias collapse):** the eltwise chain helper exposes lifecycles as low-level `InputLifecycle` / `OutputLifecycle` constants only (`Streaming`, `Bulk`, `Chunked`, `CallerManaged`, `HeldBulk`, `HeldCumulative`, `HeldStream`, `Pipelined`, `BulkDrain`, `DeferredPop`, `NoWaitPop`; `OutStreaming`, `OutBulk`, `OutChunked`, `OutCallerManaged`, `OutHeldReserve`, `OutDeferredReserve`). The legacy `CopyTilePolicy::*` / `CbIndexMode::*` / `PackTilePolicy::*` / `PackTileIndexMode::*` alias wrappers were removed; do not reintroduce them. Index kinds are spelled `OperandKind::Scalar` / `OperandKind::Block` / `OperandKind::Row` / `OperandKind::Col`. See `kernel_lib/policy_alias_collapse_proposal.md` for the rename table and rationale.
 
+> **Bulk + Scalar deadlock gotcha:** `Bulk` and `HeldBulk` lifecycles emit `cb_wait_front(cb, n_tiles + base)` **regardless of `OperandKind`** (`eltwise_chain.inl:718-728`). Combining `Bulk + OperandKind::Scalar` over-waits — the chain waits `n_tiles` tiles for a 1-tile broadcast operand and deadlocks at runtime. The compile passes (no static_assert), so this fails silently in tests. For held 1-tile broadcast operands (scaler, eps, recip_sqrt_var, max/min stats, gamma/beta when full-row pre-pushed), use `CallerManaged + Scalar` and keep the explicit `cb_*.wait_front(1)` / `pop_front(1)` outside the chain. Confirmed deadlock pattern: moreh_softmax_h sub-by-max at Ht=5 — wait_front(cb_max, 5) never returns because cb_max only has 1 tile.
+
 **Input lifecycles**
 
 | Raw pattern | Lifecycle |
