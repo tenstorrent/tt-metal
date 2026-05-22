@@ -23,7 +23,7 @@
 #include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
-#include <tools/scaleout/board/board.hpp>
+#include <board/board.hpp>
 
 namespace tt::tt_metal {
 
