@@ -326,6 +326,12 @@ def from_torch(
         if memory_config.shard_spec is None and memory_config.nd_shard_spec is None:
             raise RuntimeError("ttnn.from_torch: Shard spec must not be None for sharded tensors")
 
+    if dtype == ttnn.DataType.FP8_E4M3 or (spec is not None and spec.dtype == ttnn.DataType.FP8_E4M3):
+        raise RuntimeError(
+            "ttnn.from_torch: FP8_E4M3 is an output-only dtype, used exclusively by the DeepSeek V3 "
+            "prefill combine and dispatch ops. Host-side construction is not supported; use the op's output instead."
+        )
+
     import torch
     import numpy as np
 
@@ -393,6 +399,17 @@ def to_torch(
         torch.Tensor: The converted `torch` tensor.
     """
     import torch
+
+    if tensor.dtype == ttnn.DataType.FP8_E4M3:
+        # Torch ≤ 2.7's dlpack importer rejects code 10 (Float8_E4M3FN) and fails deep inside
+        # torch with "RuntimeError: Unsupported code 10". Preflight the version so users see a
+        # clear actionable message instead.
+        torch_major, torch_minor = (int(p) for p in torch.__version__.split("+", 1)[0].split(".")[:2])
+        if (torch_major, torch_minor) < (2, 8):
+            raise RuntimeError(
+                f"ttnn.to_torch: converting an FP8_E4M3 tensor requires torch >= 2.8 (dlpack code 10 support); "
+                f"got torch {torch.__version__}. Update your env (tt-metal pins torch==2.11.0 in requirements-dev.txt)."
+            )
 
     if ttnn.is_tensor_storage_on_device(tensor):
         tensor = ttnn.from_device(tensor, queue_id=cq_id)

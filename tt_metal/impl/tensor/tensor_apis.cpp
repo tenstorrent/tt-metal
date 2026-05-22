@@ -1023,8 +1023,8 @@ tt::tt_metal::DistributedHostBuffer transform_buffers(
     if constexpr (std::is_same_v<SrcType, DstType>) {
         return input_buffer;
     } else if constexpr (std::is_same_v<SrcType, float8_e4m3> || std::is_same_v<DstType, float8_e4m3>) {
-        // FP8_E4M3 is currently only produced as the row-major output of the DeepSeek V3
-        // prefill combine op and consumed bit-for-bit by the Python dlpack path. No host-side
+        // FP8_E4M3 is currently used exclusively by the DeepSeek V3 prefill combine and dispatch
+        // ops (row-major) and consumed bit-for-bit by the Python dlpack path. No host-side
         // conversion to/from other dtypes is supported. Add it explicitly when a use case appears.
         TT_THROW("to_dtype: cross-type conversion involving FP8_E4M3 is not supported");
         return input_buffer;  // unreachable, satisfies return type

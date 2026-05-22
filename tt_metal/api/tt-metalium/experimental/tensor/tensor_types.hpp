@@ -35,6 +35,8 @@ enum class DataType {
     UINT8 = 5,
     UINT16 = 6,
     INT32 = 7,
+    // WARNING: narrowly supported — Blackhole only, ROW-MAJOR only for now, used exclusively
+    // by the DeepSeek V3 prefill combine and dispatch ops. Check op support before opting in.
     FP8_E4M3 = 8,
     INVALID = 9,
 };
