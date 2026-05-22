@@ -11,7 +11,7 @@
 #include <type_traits>
 
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sdpa_streaming_qktv.hpp"
-#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_utils.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chunked_prefill_utils.hpp"
 
 #if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
 #include "api/compute/experimental/matmul_custom.h"
