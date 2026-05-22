@@ -54,6 +54,24 @@ for the rule.
 | `layernorm/.../layernorm_large_tensor.cpp` | PARTIAL | `66c0ea6590b`, `0b0ca49146e` | 2 chains migrated: Var(X)+eps -> rsqrt + UnaryBcast<COL> on cb_ex2pe. **Real blocker for remaining blocks A/D/E/F**: (1) Block A (pass-1 variance calc) has interleaved FPU(sub_bcast/binary_dest_reuse(ELWADD)) + SFPU(square_tile) + reduce_init/reduce_tile + scalar mul_unary in one DEST window; cite: HQ §"Control-flow shape" "Interleaved op classes in one DEST window — only migratable if helper exposes a fusion point". (2) Blocks D/E/F have macro-injected SFPU activation (SFPU_OP_INIT/FUNC_ACTIVATION at line 335) and same fusion-point blocker. 52 PASS. |
 | `layernorm/.../layernorm_large_tensor_welford.cpp` | PARTIAL | `decf009afc0`, `3016a1d484f` | 2 chains migrated: Var(X)+eps -> rsqrt + UnaryBcast<COL> on cb_ex2pe. Welford accumulator + transpose_wh OOS. **PARTIAL-DEFER (specific patterns, not lazy)**: Blocks A (FUSE_PRE_ADD add+pack), F (pass-2 sub_bcast + binary_dest_reuse(ELWMUL) + pack), G (gamma mul_bcast_rows), H (beta add_bcast_rows) all have structural patterns identified; deferred for focused follow-up. cite: lines 71-94, 407-451, 455-487, 489-511. 52 PASS. |
 
+### rotary_embedding family
+
+| Kernel | Status | Commit | Notes |
+|---|---|---|---|
+| `experimental/.../rotary_embedding/.../rotary_embedding.cpp` | PARTIAL | `54d28d9b172` | 2 chains migrated: rotated × scalar (-1) and final add cos_interm + sin_interm. MUL_TILES helper (runtime-parameterized) stays raw — needs templated chain wrapper. 750 PASS on `test_rotary_embedding.py`. |
+| `experimental/.../rotary_embedding/.../rotary_embedding_single_tile.cpp` | PARTIAL | `c941a8bd3ce` | 3 chains migrated (rotated×sin, in×cos, cos_interm + sin_interm). Matmul rotate_half OOS. 750 PASS. |
+| `experimental/.../rotary_embedding_llama/.../rotary_embedding_llama.cpp` | PARTIAL | `e4fe7ef5795` | 3 chains migrated; matmul rotate_half OOS. RELOAD_IMPL = 0/1 use different sin/cos lifecycles (TileBaseRuntime(sin_cos_row_cnt * Wt) under 0, Bulk under 1). 424 PASS on `test_rotary_embedding_llama.py`. |
+| `experimental/.../rotary_embedding_llama/.../rotary_embedding_llama_sharded.cpp` | PARTIAL | `e1134ae5e31` | 3 chains migrated (sin/cos mul ROW bcast, add). HeldBulk + Block on sin/cos. 290 PASS. |
+| `experimental/.../rotary_embedding_llama_fused_qk/.../rotary_embedding_llama_sharded.cpp` | PARTIAL | `b0166a5e82a` | Only sin stage migrated. cos and add BLOCKED on runtime in_cb/out_cb (q vs k via runtime is_q arg) + TRISC2 size budget rules out duplication workaround. cite: file line 17 size-budget comment. 16 PASS on `test_rotary_embedding_llama_fused_qk.py`. |
+| `experimental/.../rotary_embedding_llama_fused_qk/.../rotary_embedding_llama_sharded_row_major.cpp` | PARTIAL | `d2ba9f29d82` | Same as sibling sharded — only sin stage migrates; cos/add BLOCKED on runtime CB ids. 16 PASS. |
+
+### softmax attention
+
+| Kernel | Status | Commit | Notes |
+|---|---|---|---|
+| `normalization/softmax/.../attention/compute/softmax.cpp` | PARTIAL | `d0b0d9a5f78` | Plain `else` branch (no FUSED_SCALE_MASK + no NUMERIC_STABLE) migrated: CopyTile + Exp + PackTile chain. BLOCKED: <ul><li>NUMERIC_STABLE: helper takes runtime CB ids</li><li>FUSED_SCALE_MASK: cumulative wait on cb_fused_attn (HQ §"Non-goals" OOS) + conditional add_tiles_bcast_rows on last subblock tile</li><li>mul-by-recipsumexps: cumulative wait + runtime ndst</li></ul> 24 PASS on `test_softmax_interleaved.py`. |
+| `normalization/softmax/.../attention/compute/softmax_sharded.cpp` | PARTIAL | `b1637a6cca5` | Same plain `else` branch migrated: per-subblock CopyTile + Exp + PackTile with TileBaseRuntime(index_subblock_w_offset) + HeldBulk + Block. Other paths same blockers as softmax.cpp. 13 PASS on `test_softmax_sharded.py`. |
+
 ### distributed normalization post_allgather rsqrt stages
 
 | Kernel | Status | Commit | Notes |
