@@ -81,13 +81,21 @@ The MoE win is dominated by per-expert FFN no longer matmuling the padded
 
 - [2026-05-22] **Milestone 4**: leverage device-side token-count buffer in
   `tt_routed_expert.forward`. One host-side read of expert_token_counts +
-  global_expert_idx_table per forward; per local expert, narrow the extracted
-  tokens buffer to ceil_tile(count) rows before calling the FFN. For experts
-  with count==0, skip extract/ffn/insert entirely.
+  global_expert_idx_table per forward (via `ttnn.get_device_tensors(t)[0]`
+  for mesh tensors so we don't hit the missing-rank composer path); per local
+  expert, narrow the extracted tokens buffer to the next 2k-token boundary
+  >= count before calling the FFN. For experts with count==0, skip
+  extract/ffn/insert entirely.
 
-  - `test_ttnn_moe.py` `linear-8 perf-host-64`: `tt_forward` 40413ms -> 4821ms
-    (8.4x). The win comes from per-expert FFN no longer paddedly matmul-ing
-    ~204800 rows when only ~500 are occupied.
-  - `test_single_routed_expert.py`: count == num_tokens so the narrow is a no-op.
-    Adds one ~100us host-device sync per forward; device kernel times unchanged
-    (still 528-556us/2k).
+  - Why round up to 2k (`MAX_CHUNK_M_TILES * TILE_SIZE`): the chunked BH path
+    picks per_core_M from M_tiles. If every expert's M is unique, every
+    matmul becomes a new program-config = cold JIT compile (~100ms each).
+    Rounding to the 2k chunk size collapses all per-expert configs to one
+    shared, hot-cached program.
+  - `test_ttnn_moe.py` `linear-8 perf-host-64` (cache warm): `tt_forward`
+    4821ms -> 4661ms after Milestone 4 (~160ms faster than no count opt). The
+    Milestone 4 win is bounded by the routed-expert share of MoE forward; the
+    main win came from Milestones 1-3 + the JIT cache hits.
+  - `test_single_routed_expert.py`: count == num_tokens so the narrow caps to
+    the existing buffer size and is a no-op. Adds one ~100us host-device sync
+    per forward; device kernel times unchanged (still 528-556us/2k).

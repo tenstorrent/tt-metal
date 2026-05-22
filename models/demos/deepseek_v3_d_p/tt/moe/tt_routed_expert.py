@@ -444,36 +444,30 @@ class TtRoutedExpert(LightweightModule):
         #
         # In multi-device mesh setups, each device holds its own per-chip slice
         # of the counts/idx tensors, so we use a composer that concatenates
-        # along the leading mesh axis and then index the first chip's slice as
-        # a representative. Per-chip narrowing is implicit because each chip
-        # operates on its own dispatched_buffer; only the magnitude needs to
-        # match. If reading fails for any reason (e.g. a tensor layout we
+        # along both mesh axes. The resulting host tensors carry per-chip
+        # blocks back-to-back; we then sub-index the block that belongs to this
+        # call's chip. If reading fails for any reason (e.g. a tensor layout we
         # don't recognize), fall back to processing the full max_tokens — this
         # preserves correctness while losing the speedup.
         counts_flat = None
         global_idx_host_list = None
         try:
-            counts_host = ttnn.to_torch(expert_token_counts)
+            if self.num_devices == 1:
+                counts_host = ttnn.to_torch(expert_token_counts)
+                idx_host = ttnn.to_torch(self.global_expert_idx_table)
+            else:
+                # Multi-device mesh: each device has its own slice. Grab the
+                # first device's slice (each device runs the same python loop
+                # with its own data; we just need the local-expert -> global-id
+                # mapping and the counts for THIS device's chip).
+                counts_host = ttnn.to_torch(ttnn.get_device_tensors(expert_token_counts)[0])
+                idx_host = ttnn.to_torch(ttnn.get_device_tensors(self.global_expert_idx_table)[0])
             counts_flat = counts_host.flatten().tolist()
-            global_idx_host_list = ttnn.to_torch(self.global_expert_idx_table).flatten().tolist()
-        except RuntimeError:
-            num_shards = self.mesh_device.get_num_devices() if self.num_devices > 1 else 1
-            try:
-                _composer = ttnn.create_mesh_composer(
-                    self.mesh_device,
-                    ttnn.MeshComposerConfig(dims=[1, 0], mesh_shape=ttnn.MeshShape(*self.mesh_device.shape)),
-                )
-                counts_host = ttnn.to_torch(expert_token_counts, mesh_composer=_composer)
-                idx_host = ttnn.to_torch(self.global_expert_idx_table, mesh_composer=_composer)
-                # Take the first chip's slice — global ids and counts are aligned
-                # for the chip we're running on, and ttnn dispatches the same
-                # python op on every chip with its own data.
-                counts_flat = counts_host.flatten().tolist()
-                global_idx_host_list = idx_host.flatten().tolist()
-            except Exception as e:
-                logger.warning(f"Failed to read counts host-side ({e}); falling back to max_tokens.")
-                counts_flat = None
-                global_idx_host_list = None
+            global_idx_host_list = idx_host.flatten().tolist()
+        except Exception as e:
+            logger.warning(f"Failed to read counts host-side ({e}); falling back to max_tokens.")
+            counts_flat = None
+            global_idx_host_list = None
 
         tile_h = ttnn.TILE_SIZE
         # Process each local expert
@@ -509,13 +503,20 @@ class TtRoutedExpert(LightweightModule):
             )
             logger.debug(f"Expert {local_expert}: extracted shape {tokens.shape}, count={count}")
 
-            # Narrow to ceil_tile(count) rows so the FFN only computes on the
-            # occupied tiles. ttnn.narrow is a zero-copy view that shares the
-            # extract output buffer. If we didn't get a count host-side, fall
-            # back to processing the full extract output.
+            # Narrow to the smallest count-aware row size that still hits a
+            # single cached matmul program. We round count up to a multiple of
+            # `_chunk_rows` (= 2k tokens = 64 tiles, matching the unified BH
+            # path's MAX_CHUNK_M_TILES). All experts and all chunks within an
+            # expert use the same per_core_M, so the per-shape JIT-compiled
+            # matmul kernel is reused across the routed_expert calls in one
+            # forward. Without this rounding, each expert with a different
+            # count produces a different matmul program config, triggering a
+            # cold JIT compile per shape (~100ms each).
             if count is not None and count > 0:
-                active_tiles = (count + tile_h - 1) // tile_h
-                active_rows = active_tiles * tile_h
+                _chunk_rows = 2048
+                active_rows = ((count + _chunk_rows - 1) // _chunk_rows) * _chunk_rows
+                # Don't grow beyond what extract actually populated.
+                active_rows = min(active_rows, tokens.padded_shape[-2])
                 if active_rows < tokens.padded_shape[-2]:
                     tokens = ttnn.narrow(tokens, 0, 0, active_rows)
                     logger.debug(f"Expert {local_expert}: narrowed to {tokens.shape}")
