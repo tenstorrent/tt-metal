@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """AIME-24 regression tests for the DeepSeek-V3 demo."""
