@@ -173,26 +173,10 @@ void kernel_main() {
     CircularBuffer bias_buf(bias_cb_id);
 #endif
 
-<<<<<<< HEAD
-    // Number of valid in1 columns in the last in1 subblock. For the DRAM-sharded variant the
-    // planner may pad per_core_N_compute beyond per_core_N_in1_sender so that out_subblock_w can be
-    // larger; the reader only pushes per_core_N_in1_sender tiles per block into cb_in1. To avoid
-    // reading those non-existent (padded) cb_in1 tiles, the compute kernel narrows the matmul_block
-    // call on the last in1 subblock to last_subblock_w_valid lanes. When no padding occurs this
-    // equals out_subblock_w and the original full-width path is preserved.
-#ifdef MATMUL_DRAM_SHARDED
-    constexpr uint32_t last_subblock_w_valid = get_named_compile_time_arg_val("last_subblock_w_valid");
-#else
-    constexpr uint32_t last_subblock_w_valid = out_subblock_w;
-#endif
-    constexpr bool last_subblock_padded = last_subblock_w_valid < out_subblock_w;
-
-=======
     // ── SFPU activation params (compile-time, named CT args) ────────────
     // Always declared so the helper template arguments resolve to a value either way;
     // when SFPU_ACTIVATION is undefined the values default to NONE/0 and the helpers
     // statically discard their packer-side activation paths.
->>>>>>> 91426956a0c (matmul helpers: helper implementation)
 #ifdef SFPU_ACTIVATION
     constexpr KernelActivation activation_type =
         static_cast<KernelActivation>(get_named_compile_time_arg_val("activation_type"));
@@ -335,171 +319,6 @@ void kernel_main() {
                             out_subblock_h,
                             in0_block_w);
                         PACK((pack_reconfig_data_format(mm_partials_cb_id)));
-<<<<<<< HEAD
-                    }
-
-                    in0_cb.wait_front(in0_block_num_tiles);
-                    in1_cb.wait_front(in1_block_num_tiles);
-
-                    if (block == 0 && !last_out) {
-                        out_cb.reserve_back(out_block_num_tiles);
-                    }
-
-                    int in0_index_subblock_offset = 0;
-                    for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
-                        int in1_index_subblock_offset = 0;
-                        for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
-                            // When last_subblock_padded is true the last in1 subblock has
-                            // (out_subblock_w - last_subblock_w_valid) padded lanes whose cb_in1 tiles were
-                            // never pushed by the reader. Narrow matmul_block so the unpacker only touches
-                            // tiles that exist; the padded dst lanes are left at whatever the previous
-                            // operation wrote there and the output writer (BRISC) drops those columns.
-                            const bool is_last_in1_subblock_padded =
-                                last_subblock_padded && (in1_subblock == in1_num_subblocks - 1);
-                            const uint32_t effective_subblock_w =
-                                is_last_in1_subblock_padded ? last_subblock_w_valid : out_subblock_w;
-
-                            tile_regs_acquire();
-                            if (enable_reload) {
-                                reload_from_cb_to_dst(
-                                    in0_cb_id,
-                                    in1_cb_id,
-                                    mm_partials_cb_id,
-                                    in1_transpose_tile,
-                                    out_subblock_num_tiles,
-                                    out_subblock_w,
-                                    out_subblock_h,
-                                    in0_block_w);
-                            }
-
-#ifndef SKIP_COMPUTE
-                            // Compute output sub-block
-                            uint32_t dst_index =
-                                0;  // start at 0, each call to matmul_block internally increments dst_index
-                            uint32_t in0_index = in0_index_subblock_offset;  // offset into in0 block
-                            uint32_t in1_index = in1_index_subblock_offset;  // offset into in1 block
-                            // inner dim that we accumulate is the inner dim of in0/in1, which is in0_block_w
-                            for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; ++inner_dim_idx) {
-                                // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
-                                // accumulation is done by iterating matmul_block across inner dim
-                                // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride
-                                // in0
-                                matmul_block(
-                                    in0_cb_id,
-                                    in1_cb_id,
-                                    in0_index,
-                                    in1_index,
-                                    dst_index,
-                                    in1_transpose_tile,
-                                    effective_subblock_w,
-                                    out_subblock_h,
-                                    in0_block_w);
-                                in0_index++;               // stride right by 1
-                                in1_index += in1_block_w;  // to stride down by 1 need to stride by in_per_core_w
-                                                           // (should be called in1_block_w)
-                            }
-
-#endif  // SKIP_COMPUTE
-
-                            if (last_out) {
-                                tile_regs_commit();
-                                mm_out_cb.reserve_back(out_subblock_num_tiles);
-
-#if defined SFPU_ACTIVATION and not defined FUSE_BIAS
-                                apply_activation_from_pack<
-                                    activation_type,
-                                    activation_param0,
-                                    activation_param1,
-                                    activation_param2>(out_subblock_num_tiles);
-#else
-                                tile_regs_wait();
-#endif
-
-#if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
-                                PACK((pack_reconfig_data_format(mm_out_cb_id)));
-#endif
-
-#ifdef PACKER_L1_ACC
-#ifdef FUSE_BIAS
-                                if (block == 0) {  // no accumulation for first iteration
-                                    PACK((llk_pack_reconfig_l1_acc(0)));
-                                } else {
-                                    PACK((llk_pack_reconfig_l1_acc(1)));
-                                }
-#else
-                                PACK((llk_pack_reconfig_l1_acc(0)));
-#endif
-#endif
-                                uint32_t start_dst_index = 0;
-                                pack_tile_block(start_dst_index, mm_out_cb_id, out_subblock_num_tiles);
-
-                                tile_regs_release();
-                                mm_out_cb.push_back(out_subblock_num_tiles);
-
-                            } else {
-                                tile_regs_commit();
-                                mm_partials_cb.reserve_back(out_subblock_num_tiles);
-                                tile_regs_wait();
-
-#ifdef PACKER_L1_ACC
-                                if (block == 0) {  // no accumulation for first iteration
-                                    PACK((llk_pack_reconfig_l1_acc(0)));
-                                } else if (block == 1) {
-                                    PACK((llk_pack_reconfig_l1_acc(1)));
-                                } else if (in0_transpose_tile) {
-                                    // For each block, l1_acc would have been enabled during the
-                                    // transpose stage. So let us put it back here.
-                                    PACK((llk_pack_reconfig_l1_acc(1)));
-                                }
-#endif
-
-                                uint32_t start_dst_index = 0;
-                                pack_tile_block(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);
-
-                                tile_regs_release();
-                                mm_partials_cb.push_back(out_subblock_num_tiles);
-                            }
-
-                            in1_index_subblock_offset += out_subblock_w;
-                        }
-                        in0_index_subblock_offset += in0_subblock_num_tiles;
-                    }
-
-#ifdef PACKER_L1_ACC
-#ifdef FUSE_BIAS
-                    if (block < num_blocks_inner_dim - 1) {
-                        // Wait/pop in subblock-sized steps so the step size
-                        // matches the bias section's wait_front(out_subblock_num_tiles),
-                        // satisfying the CB API requirement that all wait_front
-                        // increments on a given CB are identical.
-                        for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
-                            mm_partials_cb.wait_front(out_subblock_num_tiles);
-                            mm_partials_cb.pop_front(out_subblock_num_tiles);
-                        }
-                    }
-                    // never reload when with bias, bias uses interm buffer
-                    enable_reload = false;
-#else
-                    // Last iteration does spill and reload to output buffer
-                    if (block < num_blocks_inner_dim - 2) {
-                        for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
-                            mm_partials_cb.wait_front(out_subblock_num_tiles);
-                            mm_partials_cb.pop_front(out_subblock_num_tiles);
-                        }
-                    }
-                    if (block == num_blocks_inner_dim - 2) {
-                        enable_reload = true;
-                    }  // reload when last iteration
-#endif
-#else
-                    if constexpr (spill) {
-                        enable_reload = true;
-                    }
-#endif
-
-                    in0_cb.pop_front(in0_block_num_tiles);
-                    in1_cb.pop_front(in1_block_num_tiles);
-=======
                     };
                     matmul_block<
                         in1_transpose_tile,                // transpose
@@ -556,7 +375,6 @@ void kernel_main() {
                         NoPreKBlock{},
                         /*in1_per_core_w=*/in1_block_w,
                         /*out_row_width=*/out_block_w);
->>>>>>> 91426956a0c (matmul helpers: helper implementation)
                 }
 
                 // ── Phase 2: Bias addition ──────────────────────────────
@@ -577,38 +395,6 @@ void kernel_main() {
                 if ((b == 0 && bh == 0) || num_blocks_w_dim > 1) {
                     bias_buf.wait_front(bias_ntiles);
                 }
-<<<<<<< HEAD
-                for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
-                    int in1_index_subblock_offset = 0;
-                    for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
-                        // See matmul stage: the last in1 subblock has padded lanes whose bias tile was
-                        // never pushed by the reader. Redirect those out-of-range bias_tile_idx reads to
-                        // tile 0 of cb_bias to keep them in-bounds; the resulting padded output columns
-                        // are dropped by the writer.
-                        const bool is_last_in1_subblock_padded =
-                            last_subblock_padded && (in1_subblock == in1_num_subblocks - 1);
-                        // Redundant wait since we know data was just pushed
-                        mm_partials_cb.wait_front(out_subblock_num_tiles);
-                        tile_regs_acquire();
-                        for (uint32_t i = 0, j = 0; j < out_subblock_h; j++) {
-                            uint32_t bias_tile_idx = in1_index_subblock_offset;
-                            for (uint32_t k = 0; k < out_subblock_w; k++, i++) {
-                                const uint32_t safe_bias_tile_idx =
-                                    (is_last_in1_subblock_padded && k >= last_subblock_w_valid)
-                                        ? 0u              // Padded output columns with tile 0 of cb_bias added are
-                                        : bias_tile_idx;  // dropped by the writer.
-
-                                if constexpr (row_broadcast_bias) {
-                                    add_tiles_bcast_rows(mm_partials_cb_id, bias_cb_id, i, safe_bias_tile_idx, i);
-                                } else {
-                                    add_tiles(mm_partials_cb_id, bias_cb_id, i, safe_bias_tile_idx, i);
-                                }
-                                bias_tile_idx++;
-                            }
-                        }
-                        tile_regs_commit();
-=======
->>>>>>> 91426956a0c (matmul helpers: helper implementation)
 
                 constexpr BiasBroadcast bias_broadcast =
                     row_broadcast_bias ? BiasBroadcast::RowBroadcast : BiasBroadcast::Elementwise;

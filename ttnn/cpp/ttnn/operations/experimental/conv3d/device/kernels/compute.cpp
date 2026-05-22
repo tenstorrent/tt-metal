@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/compute/compute_kernel_api.h"
-#include <algorithm>
 #include <tt-metalium/constants.hpp>
 
 #include "api/compute/untilize.h"
@@ -18,129 +17,89 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
-<<<<<<< HEAD
-// Slightly modified from compute_common.hpp
-void matmul_blocks(
-    const uint32_t in0_cb,
-    const uint32_t in1_cb,
-    const uint32_t out_cb,
-    const uint32_t M,
-    const uint32_t N,
-    const uint32_t K,
-    const uint32_t in0_num_subblocks,
-    const uint32_t in1_num_subblocks,
-    const uint32_t in0_block_w,
-    const uint32_t subblock_h,
-    const uint32_t subblock_w,
-    const bool transpose) {
-    // precondition: in0_cb has M*K produced
-    // precondition: in1_cb has K*N produced
-    // postcondition: in0_cb is full, in1_cb is empty
-    // postcondition: out_cb has M*N produced
-    mm_block_init_short(
-        in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
-
-    uint32_t output_num_tiles = M * N;
-    uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
-    uint32_t in0_index_offset = 0;
-
-    reconfig_data_format(in1_cb, in0_cb);
-
-    for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
-        uint32_t in1_index_offset = 0;
-        for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
-            tile_regs_acquire();
-
-            uint32_t dst_index = 0;
-            uint32_t in0_index = in0_index_offset;
-            uint32_t in1_index = in1_index_offset;
-
-            for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
-                matmul_block(
-                    in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, in0_block_w);
-                in0_index++;
-                in1_index += N;
-            }
-            tile_regs_commit();
-
-            cb_reserve_back(out_cb, out_subblock_num_tiles);
-            tile_regs_wait();
-            for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                pack_tile(i, out_cb);
-            }
-            cb_push_back(out_cb, out_subblock_num_tiles);
-            tile_regs_release();
-            in1_index_offset += subblock_w;
-        }
-        in0_index_offset += subblock_h * in0_block_w;
-    }
-}
-
-ALWI void pack_tile_with_wh_destination_wait(uint32_t tile, uint32_t out_cb, uint32_t pack_sequence_idx) {
-#if defined(ARCH_WORMHOLE)
-    if (pack_sequence_idx != 0) {
-        // Workaround for https://github.com/tenstorrent/tt-metal/issues/44077:
-        // WH pack_tile reprograms the packer L1 destination. Wait before the
-        // next tile rewrites that address while the previous pack is in flight.
-        PACK(TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::PACK));
-    }
-#endif
-    pack_tile(tile, out_cb);
-}
-=======
 template <uint32_t rows, uint32_t cols>
 void add_bias_inplace(uint32_t inout_cb, uint32_t bias_cb) {
     // Math-side broadcast add (`add_tiles_bcast_rows`): used when inout_cb is not
     // physically full, so we cannot rely on pop+reserve returning the same L1 slots
     // and the pack-side L1-acc path in `add_inplace_l1_acc` is unsafe.
->>>>>>> 91426956a0c (matmul helpers: helper implementation)
 
-template <uint32_t rows, uint32_t cols, uint32_t add_dst_tiles>
-void add_bias_inplace(uint32_t inout_cb, uint32_t bias_cb) {
     constexpr uint32_t num_tiles = rows * cols;
+    constexpr uint32_t max_dst_tiles = compute_kernel_lib::DEST_AUTO_LIMIT;
 
     add_bcast_rows_init_short(inout_cb, bias_cb);
     cb_wait_front(inout_cb, num_tiles);
     cb_wait_front(bias_cb, cols);
     for (uint32_t i = 0; i < rows; ++i) {
-        for (uint32_t col_start = 0; col_start < cols; col_start += add_dst_tiles) {
-            const uint32_t cols_cur = std::min(add_dst_tiles, cols - col_start);
+        for (uint32_t col_start = 0; col_start < cols; col_start += max_dst_tiles) {
+            const uint32_t cols_cur = (cols - col_start) < max_dst_tiles ? (cols - col_start) : max_dst_tiles;
+
             tile_regs_acquire();
             for (uint32_t j = 0; j < cols_cur; ++j) {
                 add_tiles_bcast_rows(inout_cb, bias_cb, j, col_start + j, j);
             }
             tile_regs_commit();
-            tile_regs_wait();
             cb_pop_front(inout_cb, cols_cur);
             cb_reserve_back(inout_cb, cols_cur);
-            for (uint32_t j = 0; j < cols_cur; ++j) {
-                pack_tile_with_wh_destination_wait(j, inout_cb, i * cols + col_start + j);
-            }
+            tile_regs_wait();
+            pack_tile_block(0, inout_cb, cols_cur);
             cb_push_back(inout_cb, cols_cur);
             tile_regs_release();
         }
     }
 }
 
-template <uint32_t num_tiles, uint32_t add_dst_tiles>
-void add_block_inplace_math(uint32_t inout_cb, uint32_t add_cb) {
-    add_tiles_init(inout_cb, add_cb);
-    for (uint32_t i = 0; i < num_tiles; i += add_dst_tiles) {
-        const uint32_t tiles_cur = std::min(add_dst_tiles, num_tiles - i);
-        tile_regs_acquire();
-        for (uint32_t tile = 0; tile < tiles_cur; ++tile) {
-            add_tiles(inout_cb, add_cb, tile, tile, tile);
+template <uint32_t rows, uint32_t cols, bool consume_add_cb>
+void add_inplace_l1_acc(uint32_t inout_cb, uint32_t add_cb) {
+    // Pack-side L1 accumulation (`pack_reconfig_l1_acc(1)` + indexed pack): cheaper
+    // than the math add in `add_bias_inplace` because the add fuses into the pack,
+    // but requires inout_cb to be physically full — pop+reserve must return the
+    // same L1 slots so the indexed pack lands on top of the existing tiles.
+    // consume_add_cb=false: add_cb is a single bias row reused for every output row.
+    // consume_add_cb=true:  add_cb is a full block consumed tile-for-tile (reduction).
+    constexpr uint32_t num_tiles = rows * cols;
+    constexpr uint32_t add_tiles = consume_add_cb ? num_tiles : cols;
+    constexpr uint32_t max_dst_tiles = compute_kernel_lib::DEST_AUTO_LIMIT;
+    static_assert(rows > 0 && cols > 0);
+
+    cb_wait_front(inout_cb, num_tiles);
+    cb_wait_front(add_cb, add_tiles);
+
+    copy_tile_to_dst_init_short_with_dt(inout_cb, add_cb);
+    pack_reconfig_data_format(inout_cb);
+    pack_reconfig_l1_acc(1);
+    for (uint32_t i = 0; i < rows; ++i) {
+        for (uint32_t col_start = 0; col_start < cols; col_start += max_dst_tiles) {
+            const uint32_t cols_cur = (cols - col_start) < max_dst_tiles ? (cols - col_start) : max_dst_tiles;
+            const uint32_t add_offset = consume_add_cb ? 0 : col_start;
+
+            tile_regs_acquire();
+            for (uint32_t j = 0; j < cols_cur; ++j) {
+                copy_tile(add_cb, add_offset + j, j);
+            }
+            tile_regs_commit();
+            cb_pop_front(inout_cb, cols_cur);
+            if constexpr (consume_add_cb) {
+                cb_pop_front(add_cb, cols_cur);
+            }
+            cb_reserve_back(inout_cb, cols_cur);
+            tile_regs_wait();
+            for (uint32_t j = 0; j < cols_cur; ++j) {
+                pack_tile<true>(j, inout_cb, j);
+            }
+            cb_push_back(inout_cb, cols_cur);
+            tile_regs_release();
         }
-        tile_regs_commit();
-        tile_regs_wait();
-        cb_pop_front(inout_cb, tiles_cur);
-        cb_pop_front(add_cb, tiles_cur);
-        cb_reserve_back(inout_cb, tiles_cur);
-        for (uint32_t tile = 0; tile < tiles_cur; ++tile) {
-            pack_tile_with_wh_destination_wait(tile, inout_cb, i + tile);
+    }
+    pack_reconfig_l1_acc(0);
+}
+
+template <uint32_t rows, uint32_t cols, bool use_fp32_partials, bool use_bias, uint32_t inout_cb, uint32_t bias_cb>
+void add_bias_inplace_l1_acc_if_needed() {
+    if constexpr (use_bias) {
+        if constexpr (use_fp32_partials) {
+            reconfig_data_format(inout_cb, bias_cb);
         }
-        cb_push_back(inout_cb, tiles_cur);
-        tile_regs_release();
+        add_inplace_l1_acc<rows, cols, false>(inout_cb, bias_cb);
     }
 }
 
@@ -166,30 +125,35 @@ template <
     uint32_t inout_cb,
     uint32_t bias_cb,
     uint32_t out_cb>
-void bias_untilize_fullblock_math() {
+void bias_untilize_fullblock() {
     cb_wait_front(inout_cb, rows * cols);
-    if constexpr (use_bias) {
-        if constexpr (use_fp32_partials) {
-            reconfig_data_format(inout_cb, bias_cb);
+    if constexpr (rows == 1 && cols == 1) {
+        if constexpr (use_bias) {
+            if constexpr (use_fp32_partials) {
+                reconfig_data_format(inout_cb, bias_cb);
+            }
+            add_bias_inplace<rows, cols>(inout_cb, bias_cb);
         }
-        add_bias_inplace<rows, cols, compute_kernel_lib::DEST_AUTO_LIMIT>(inout_cb, bias_cb);
+    } else {
+        add_bias_inplace_l1_acc_if_needed<rows, cols, use_fp32_partials, use_bias, inout_cb, bias_cb>();
     }
     untilize_block<rows, cols, use_fp32_partials, inout_cb, out_cb>();
 }
 
 template <uint32_t rows, uint32_t cols, bool use_fp32_partials, uint32_t local_cb, uint32_t remote_cb>
-void reduce_fullblock_inplace_math(uint32_t num_workers) {
+void reduce_fullblock_inplace(uint32_t num_workers) {
     constexpr uint32_t num_tiles = rows * cols;
 
     cb_wait_front(local_cb, num_tiles);
 
     if constexpr (use_fp32_partials) {
-        reconfig_data_format(local_cb, remote_cb);
-        pack_reconfig_data_format(local_cb);
+        reconfig_data_format_srca(local_cb);
     }
     for (uint32_t i = 0; i < num_workers; i++) {
         cb_wait_front(remote_cb, num_tiles);
-        add_block_inplace_math<num_tiles, compute_kernel_lib::DEST_AUTO_LIMIT>(local_cb, remote_cb);
+        // Flatten rows x cols into one logical row so the full remote partial block is
+        // consumed tile-for-tile while preserving the physical-full inout_cb invariant.
+        add_inplace_l1_acc<1, num_tiles, true>(local_cb, remote_cb);
     }
 }
 
@@ -203,10 +167,8 @@ template <
     uint32_t bias_cb,
     uint32_t out_cb>
 void reduce_bias_untilize_fullblock(uint32_t num_workers) {
-    if (num_workers > 0) {
-        reduce_fullblock_inplace_math<rows, cols, use_fp32_partials, local_cb, remote_cb>(num_workers);
-    }
-    bias_untilize_fullblock_math<rows, cols, use_fp32_partials, use_bias, local_cb, bias_cb, out_cb>();
+    reduce_fullblock_inplace<rows, cols, use_fp32_partials, local_cb, remote_cb>(num_workers);
+    bias_untilize_fullblock<rows, cols, use_fp32_partials, use_bias, local_cb, bias_cb, out_cb>();
 }
 
 void kernel_main() {
@@ -357,17 +319,15 @@ void kernel_main() {
 
                                     if constexpr (enable_streaming_output) {
                                         // Streaming emits subblocks before cb_matmul_interm_tiled is physically full,
-                                        // so bias uses math add and untilizes immediately.
+                                        // so bias uses math add and untilizes immediately.  The full-block path below
+                                        // waits for the whole block and can use L1 pack accumulation instead.
                                         cb_wait_front(cb_matmul_interm_tiled, subblock_tiles);
 
                                         if constexpr (use_bias) {
                                             if constexpr (use_fp32_partials) {
                                                 reconfig_data_format(cb_matmul_interm_tiled, cb_bias_tiled);
                                             }
-                                            add_bias_inplace<
-                                                subblock_h,
-                                                matmul_N_t,
-                                                compute_kernel_lib::DEST_AUTO_LIMIT>(
+                                            add_bias_inplace<subblock_h, matmul_N_t>(
                                                 cb_matmul_interm_tiled, cb_bias_tiled);
                                         }
 

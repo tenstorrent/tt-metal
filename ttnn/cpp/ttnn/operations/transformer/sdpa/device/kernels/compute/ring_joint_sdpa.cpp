@@ -106,7 +106,6 @@ void kernel_main() {
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
     constexpr uint32_t cb_max_out = tt::CBIndex::c_17;  // deferred norm: running max
     constexpr uint32_t cb_lse_out = tt::CBIndex::c_17;  // eager norm: LSE
-<<<<<<< HEAD
     constexpr uint32_t cb_qk_im = tt::CBIndex::c_13;
     constexpr uint32_t cb_out_im_A = tt::CBIndex::c_14;
     constexpr uint32_t cb_out_im_B = tt::CBIndex::c_15;
@@ -115,19 +114,9 @@ void kernel_main() {
     constexpr uint32_t cb_sum_A = tt::CBIndex::c_20;
     constexpr uint32_t cb_sum_B = tt::CBIndex::c_21;
     constexpr uint32_t cb_exp_max_diff = tt::CBIndex::c_22;
-=======
-    constexpr uint32_t cb_qk_im = tt::CBIndex::c_24;
-    constexpr uint32_t cb_out_im_A = tt::CBIndex::c_25;
-    constexpr uint32_t cb_out_im_B = tt::CBIndex::c_26;
-    constexpr uint32_t cb_max_A = tt::CBIndex::c_27;
-    constexpr uint32_t cb_max_B = tt::CBIndex::c_28;
-    constexpr uint32_t cb_sum_A = tt::CBIndex::c_29;
-    constexpr uint32_t cb_sum_B = tt::CBIndex::c_30;
     // matmul_reduce's separate output CB (matmul_block requires in_cb != out_cb).
     // Sized identically to cb_sum_A/B (Sq_chunk_t stats tiles, stats_df format) in the factory.
-    constexpr uint32_t cb_reduced_sum = tt::CBIndex::c_13;
-    constexpr uint32_t cb_exp_max_diff = tt::CBIndex::c_31;
->>>>>>> 91426956a0c (matmul helpers: helper implementation)
+    constexpr uint32_t cb_reduced_sum = tt::CBIndex::c_23;
 
     mm_init(cb_q_in, cb_k_in, cb_qk_im);
 
