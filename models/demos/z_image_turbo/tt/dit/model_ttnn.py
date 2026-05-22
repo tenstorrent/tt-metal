@@ -16,31 +16,13 @@ All performance optimizations are active:
 Fixed resolution: 512×512 px (64×64 latent, 1024 image patches, 32 caption tokens).
 """
 
-import importlib.util
 import math
-import os
-import sys
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.z_image_turbo.tt.dit import consteval, model_pt, params
-
-HERE = os.path.dirname(os.path.abspath(__file__))
-
-# ── tt_dit library path (models/tt_dit has no __init__.py, so we need sys.path) ─
-_TT_DIT_PATH = os.path.normpath(os.path.join(HERE, "../../../.."))
-if _TT_DIT_PATH not in sys.path:
-    sys.path.insert(0, _TT_DIT_PATH)
-
-from tt_dit.parallel.manager import CCLManager
-
-# tt_dit minimal_matmul config (shape lookup for blocking parameters)
-_matmul_path = os.path.join(_TT_DIT_PATH, "tt_dit/utils/matmul.py")
-_spec = importlib.util.spec_from_file_location("tt_dit_matmul", _matmul_path)
-_mm_mod = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_mm_mod)
-_get_matmul_config = _mm_mod.get_matmul_config
-del _spec, _mm_mod
+from models.tt_dit.parallel.manager import CCLManager
+from models.tt_dit.utils.matmul import get_matmul_config as _get_matmul_config
 
 # ── Architecture constants ─────────────────────────────────────────────────────
 
