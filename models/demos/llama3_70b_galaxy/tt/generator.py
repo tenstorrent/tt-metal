@@ -645,6 +645,7 @@ class Generator(WarmupForwardMixin):
         sampling_params,
         empty_slots,
         prefill_ids=None,
+        bitmask=None,
     ):
         # Logits are in sharded format (before all-gather), same as decode.
         self.model.switch_mode("decode")
@@ -685,6 +686,8 @@ class Generator(WarmupForwardMixin):
         sampling_module.reset_output_state()
         sampling_module.seed_manager.reset_seed(sampling_params.seed, empty_slots)
         sampling_module.seed_manager.get_new_values(empty_slots)
+        if bitmask is not None:
+            tt_logits_batch = sampling_module.apply_bitmask_to_logits(tt_logits_batch, bitmask)
         tt_sampled, tt_log_probs = sampling_module.sample(
             tt_logits_batch,
             tt_out_tok=None,
@@ -1362,6 +1365,7 @@ class Generator(WarmupForwardMixin):
         slot_remap=None,
         tt_out_tok=None,
         enable_trace=False,
+        bitmask=None,
     ):
         sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
         sampling_module = self.model.sampling
@@ -1375,6 +1379,8 @@ class Generator(WarmupForwardMixin):
             rank_remap = slot_remap[0:sm_bs]
             sampling_module.seed_manager.apply_slot_remap(rank_remap)
         sampling_module.seed_manager.get_new_values()
+        if bitmask is not None:
+            tt_logits = sampling_module.apply_bitmask_to_logits(tt_logits, bitmask)
         return self.model.sampling.sample(
             logits=tt_logits,
             tt_out_tok=tt_out_tok,
