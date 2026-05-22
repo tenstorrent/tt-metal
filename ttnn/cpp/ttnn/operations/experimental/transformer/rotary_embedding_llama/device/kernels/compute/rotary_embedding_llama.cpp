@@ -8,6 +8,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
 #include "api/compute/matmul.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -80,44 +81,130 @@ void kernel_main() {
                 cb_push_back(rotated_in_interm_cb, Wt);
                 cb_wait_front(rotated_in_interm_cb, Wt);
 
-                mul_tiles_init(rotated_in_interm_cb, sin_cb);
-                ACQ();
-                for (uint32_t j = 0; j < Wt; ++j) {
-                    // sin_interim = rotated * sin
-                    mul_tiles(rotated_in_interm_cb, sin_cb, j, j + (sin_cos_row_cnt * Wt), j);
-                    pack_tile(j, sin_interm_cb, j);
-                }
-                REL();
-                cb_push_back(sin_interm_cb, Wt);
-                cb_pop_front(rotated_in_interm_cb, Wt);
-
-                ACQ();
-                for (uint32_t j = 0; j < Wt; ++j) {
-                    // cos_interim = x * cos
-                    mul_tiles(in_cb, cos_cb, j, j + (sin_cos_row_cnt * Wt), j);
-                    pack_tile(j, cos_interm_cb, j);
-                }
-                REL();
-                cb_push_back(cos_interm_cb, Wt);
-                cb_pop_front(in_cb, Wt);  // Done with input
-#if RELOAD_IMPL == 1
-                cb_pop_front(sin_cb, Wt);
-                cb_pop_front(cos_cb, Wt);
+                // sin_interim = rotated * sin
+                // A = rotated_in_interm_cb Bulk + Block (Wt tiles waited above, popped below).
+                // B = sin_cb: index = j + (sin_cos_row_cnt * Wt). Block + TileBaseRuntime.
+                //   RELOAD_IMPL==0: sin held externally (waited my_cos_sin_tiles outside)
+                //     -> CallerManaged; sin_cos_row_cnt increments per seq_tile so offset varies.
+                //   RELOAD_IMPL==1: sin waited Wt per iter (line 63), popped Wt below
+                //     -> Bulk; sin_cos_row_cnt always 0 so TileBaseRuntime(0).
+                // Output sin_interm_cb OutBulk + Block (Wt tiles).
+                // Reconfig audit: mul_tiles_init reconfigs srca/srcb -> Input.
+                //   No explicit pack_reconfig (relies on sin_interm_cb format == out_cb's
+                //   from startup) -> PackTileReconfig::None.
+#if RELOAD_IMPL == 0
+                compute_kernel_lib::eltwise_chain<Wt>(
+                    Wt,
+                    compute_kernel_lib::BinaryFpu<
+                        rotated_in_interm_cb,
+                        sin_cb,
+                        compute_kernel_lib::BinaryFpuOp::Mul,
+                        compute_kernel_lib::BroadcastDim::None,
+                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                        compute_kernel_lib::Bulk,
+                        compute_kernel_lib::CallerManaged,
+                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::TileBaseNone,
+                        compute_kernel_lib::TileBaseRuntime>{
+                        compute_kernel_lib::TileBaseNone{}, compute_kernel_lib::TileBaseRuntime{sin_cos_row_cnt * Wt}},
+                    compute_kernel_lib::PackTile<
+                        sin_interm_cb,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OutBulk,
+                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::PackTileReconfig::None>{});
+#else
+                compute_kernel_lib::eltwise_chain<Wt>(
+                    Wt,
+                    compute_kernel_lib::BinaryFpu<
+                        rotated_in_interm_cb,
+                        sin_cb,
+                        compute_kernel_lib::BinaryFpuOp::Mul,
+                        compute_kernel_lib::BroadcastDim::None,
+                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                        compute_kernel_lib::Bulk,
+                        compute_kernel_lib::Bulk,
+                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OperandKind::Block>{},
+                    compute_kernel_lib::PackTile<
+                        sin_interm_cb,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OutBulk,
+                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::PackTileReconfig::None>{});
 #endif
 
-                cb_wait_front(sin_interm_cb, Wt);
-                cb_wait_front(cos_interm_cb, Wt);
-                add_tiles_init(cos_interm_cb, sin_interm_cb);
-                ACQ();
-                for (uint32_t j = 0; j < Wt; ++j) {
-                    // out = cos_interim + sin_interim
-                    add_tiles(cos_interm_cb, sin_interm_cb, j, j, j);
-                    pack_tile(j, out_cb, j);
-                }
-                REL();
-                cb_push_back(out_cb, Wt);
-                cb_pop_front(sin_interm_cb, Wt);
-                cb_pop_front(cos_interm_cb, Wt);
+                // cos_interim = x * cos  — same pattern as sin_interim.
+#if RELOAD_IMPL == 0
+                compute_kernel_lib::eltwise_chain<Wt>(
+                    Wt,
+                    compute_kernel_lib::BinaryFpu<
+                        in_cb,
+                        cos_cb,
+                        compute_kernel_lib::BinaryFpuOp::Mul,
+                        compute_kernel_lib::BroadcastDim::None,
+                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                        compute_kernel_lib::Bulk,
+                        compute_kernel_lib::CallerManaged,
+                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::TileBaseNone,
+                        compute_kernel_lib::TileBaseRuntime>{
+                        compute_kernel_lib::TileBaseNone{}, compute_kernel_lib::TileBaseRuntime{sin_cos_row_cnt * Wt}},
+                    compute_kernel_lib::PackTile<
+                        cos_interm_cb,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OutBulk,
+                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::PackTileReconfig::None>{});
+#else
+                compute_kernel_lib::eltwise_chain<Wt>(
+                    Wt,
+                    compute_kernel_lib::BinaryFpu<
+                        in_cb,
+                        cos_cb,
+                        compute_kernel_lib::BinaryFpuOp::Mul,
+                        compute_kernel_lib::BroadcastDim::None,
+                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                        compute_kernel_lib::Bulk,
+                        compute_kernel_lib::Bulk,
+                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OperandKind::Block>{},
+                    compute_kernel_lib::PackTile<
+                        cos_interm_cb,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OutBulk,
+                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::PackTileReconfig::None>{});
+#endif
+
+                // out = cos_interim + sin_interim
+                // Both operands Bulk + Block (Wt tiles, popped at end), out_cb OutBulk + Block.
+                // Reconfig: add_tiles_init reconfigs srca/srcb -> Input. No pack_reconfig -> None.
+                compute_kernel_lib::eltwise_chain<Wt>(
+                    Wt,
+                    compute_kernel_lib::BinaryFpu<
+                        cos_interm_cb,
+                        sin_interm_cb,
+                        compute_kernel_lib::BinaryFpuOp::Add,
+                        compute_kernel_lib::BroadcastDim::None,
+                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                        compute_kernel_lib::Bulk,
+                        compute_kernel_lib::Bulk,
+                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OperandKind::Block>{},
+                    compute_kernel_lib::PackTile<
+                        out_cb,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OutBulk,
+                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::PackTileReconfig::None>{});
 
 #if RELOAD_IMPL == 0
                 // no-reload needs to increment this counter
