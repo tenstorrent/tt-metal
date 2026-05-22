@@ -25,7 +25,10 @@ namespace operations::grid_sample {
  *   padding_mode: How to handle out-of-bounds coordinates, currently only "zeros" is supported
  *   align_corners: Whether to align corners when mapping normalized coordinates to pixel indices
  *   use_precomputed_grid: Whether to use precomputed grid coordinates, currently only false is supported
+ *   batch_output_channels: If true, fold output channels into the batch dimension
  *   memory_config: Memory configuration for the output tensor
+ *   compute_kernel_config: Optional compute kernel configuration (math fidelity, fp32 dest
+ *     accumulation, etc.). Defaults are arch-specific.
  *
  * Returns:
  *   Output tensor of shape (N, C, H_out, W_out)

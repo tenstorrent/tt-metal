@@ -116,7 +116,7 @@ def test_grid_sample_near_uniform_grid(device, input_shape, mode, align_corners,
     theta = torch.tensor([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=torch.float32)
     theta_batched = theta.unsqueeze(0).expand(batch_size, -1, -1)
     shape = (batch_size, 1, grid_h, grid_w)
-    torch_grid = F.affine_grid(theta_batched, shape, align_corners=False)
+    torch_grid = F.affine_grid(theta_batched, shape, align_corners=align_corners)
 
     # Add small noise to the grid
     torch_grid += torch.randn(grid_shape) * 0.05

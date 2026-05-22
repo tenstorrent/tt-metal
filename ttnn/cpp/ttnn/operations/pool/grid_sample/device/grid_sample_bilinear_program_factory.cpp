@@ -259,8 +259,13 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
 
     // Resolve compute kernel config up front so we can validate fp32-accumulation requirements
     // before each compute kernel is created.
-    const auto [resolved_math_fidelity, resolved_math_approx, resolved_fp32_acc, resolved_l1_acc, user_dst_full_sync] =
-        ttnn::get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
+    const auto
+        [resolved_math_fidelity,
+         resolved_math_approx,
+         resolved_fp32_acc,
+         [[maybe_unused]] resolved_l1_acc,
+         user_dst_full_sync] =
+            ttnn::get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
 
     // pack_untilize_dest addresses DEST tile indices up to max_tiles_per_iter - 1, where
     // max_tiles_per_iter = min(in_ntiles_c, MAX_TILES_PER_REDUCTION). DEST capacity depends on

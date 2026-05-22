@@ -70,6 +70,15 @@ void bind_grid_sample_op(nb::module_& mod) {
 
             memory_config (ttnn.MemoryConfig, optional): Output memory configuration for the operation.
 
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute kernel configuration.
+                Notable fields:
+
+                - fp32_dest_acc_en: Use FP32 destination accumulation (higher precision; halves DEST tile capacity).
+                - dst_full_sync_en: Use full-sync DEST mode (doubles DEST tile capacity; auto-forced when
+                  fp32_dest_acc_en requires it).
+
+                Defaults to `None` (arch-specific defaults).
+
         Returns:
             ttnn.Tensor: Output tensor shape depends on batch_output_channels flag.
 
