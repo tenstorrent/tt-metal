@@ -17,6 +17,14 @@ from models.demos.deepseek_v3.utils.config_dataclass import ConfigWeight, Deepse
 
 # Constants
 NORM_CATEGORIES = {"attention_norm", "mlp_norm", "q_norm", "k_norm"}
+QUAD_MESH_SHAPE = (16, 8)
+
+
+def is_quad_mesh(mesh_device: ttnn.Device) -> bool:
+    """Check whether the given mesh device has a QUAD configuration (16x8)."""
+    return tuple(mesh_device.shape) == QUAD_MESH_SHAPE
+
+
 USERS_PER_ROW = 32
 DEFAULT_MAX_SEQ_LEN = 2048
 SEQ_LEN_CHUNK_SIZE = 1024  # NOTE: should be 512 for blackhole (in case of future bring-up)
