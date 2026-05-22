@@ -198,16 +198,27 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
                 "invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This "
                 "will become a hard error in a future release.");
         }
-        CoreCoord grid = program_config.allowed_worker_cores.has_value()
-                             ? program_config.allowed_worker_cores.value().bounding_box().grid_size()
-                             : program_config.compute_with_storage_grid_size;
-        std::tie(
-            num_cores,
-            all_cores,
-            core_group_1,
-            core_group_2,
-            num_blocks_per_core_group_1,
-            num_blocks_per_core_group_2) = tt::tt_metal::split_work_to_cores(grid, num_output_blocks_total);
+        // Use the CoreRangeSet overload so the output core ranges carry the actual
+        // absolute coordinates (e.g. (4,0)-(7,0)) rather than always starting at (0,0).
+        if (program_config.allowed_worker_cores.has_value()) {
+            std::tie(
+                num_cores,
+                all_cores,
+                core_group_1,
+                core_group_2,
+                num_blocks_per_core_group_1,
+                num_blocks_per_core_group_2) =
+                tt::tt_metal::split_work_to_cores(program_config.allowed_worker_cores.value(), num_output_blocks_total);
+        } else {
+            CoreCoord grid = program_config.compute_with_storage_grid_size;
+            std::tie(
+                num_cores,
+                all_cores,
+                core_group_1,
+                core_group_2,
+                num_blocks_per_core_group_1,
+                num_blocks_per_core_group_2) = tt::tt_metal::split_work_to_cores(grid, num_output_blocks_total);
+        }
         num_blocks_per_core_group_1 *= batch_scale_factor;
         num_blocks_per_core_group_2 *= batch_scale_factor;
     }

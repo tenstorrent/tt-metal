@@ -25,6 +25,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/debug/dprint.h"
 
 #include "layernorm_compute_utils.h"
 
@@ -122,6 +123,10 @@ void kernel_main() {
     // Intermediate buffers need to be reserved/pushed/popped
     // in full blocks
     const auto total_buffer_size = generic::blocks(Wt, block_size).total_with_remainder();
+
+#ifdef TRISC_PACK
+    DPRINT << "[LN_PK] enter NCHt=" << NCHt << " Wt=" << (uint32_t)Wt << " blk=" << (uint32_t)block_size << ENDL();
+#endif
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
 #ifdef TILIZE_IN
@@ -252,6 +257,9 @@ void kernel_main() {
             } else {
                 pack_reconfig_data_format(cb_fusion);
             }
+#ifdef TRISC_PACK
+            DPRINT << "[LN_PK] ncht=" << ncht << " reserve cb_im_or_out blk=" << block.start() << ENDL();
+#endif
             cb_im_or_out_obj.reserve_back(block.full_block_size());
 #if defined RMSNORM and not defined FUSE_PRE_ADD
             reconfig_data_format_srca(cb_fusion, cb_xmm);
@@ -274,6 +282,9 @@ void kernel_main() {
             cb_im_or_out_obj.push_back(
                 block.full_block_size());  // if no gamma/beta are provided, this will be passed on to the writer
             REL();
+#ifdef TRISC_PACK
+            DPRINT << "[LN_PK] ncht=" << ncht << " pushed cb_im_or_out blk=" << block.start() << ENDL();
+#endif
 
             if constexpr (!(do_gamma == 0 && do_beta == 0)) {
 #if defined RMSNORM and not defined FUSE_PRE_ADD
@@ -290,6 +301,9 @@ void kernel_main() {
                 uint32_t cb_outg = do_beta ? cb_fusion : cb_out;
                 CircularBuffer cb_outg_obj(cb_outg);
                 mul_bcast_rows_init_short(cb_fusion, cb_gamma);
+#ifdef TRISC_PACK
+                DPRINT << "[LN_PK] ncht=" << ncht << " reserve cb_outg(gamma) blk=" << block.start() << ENDL();
+#endif
                 cb_outg_obj.reserve_back(block.full_block_size());
                 cb_gamma_obj.wait_front(
                     block.start() + block.full_block_size());  // we don't pop, TODO: only wait on first ht
@@ -312,6 +326,9 @@ void kernel_main() {
                 cb_outg_obj.push_back(block.full_block_size());
                 // We don't pop gamma since it's 1,1,1,Wt and we reuse it for all NCHt
                 REL();
+#ifdef TRISC_PACK
+                DPRINT << "[LN_PK] ncht=" << ncht << " pushed cb_outg(gamma) blk=" << block.start() << ENDL();
+#endif
             }
             if constexpr (do_beta) {
                 pack_reconfig_data_format(cb_out);
@@ -348,4 +365,7 @@ void kernel_main() {
         untilize_all_blocks_from_cb<block_size>(cb_out, cb_out_rm, Wt);
 #endif
     }  // NCHt loop
+#ifdef TRISC_PACK
+    DPRINT << "[LN_PK] done" << ENDL();
+#endif
 }

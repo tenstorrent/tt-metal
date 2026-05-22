@@ -7,6 +7,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "api/debug/dprint.h"
 
 namespace generic = norm::kernel_util::generic;
 
@@ -29,10 +30,17 @@ void kernel_main() {
 
     const auto s = TensorAccessor(dst_args, dst_addr);
 
+    DPRINT << "[BW " << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << "] enter cb=" << cb_id_out0
+           << " fsz=" << get_local_cb_interface(cb_id_out0).fifo_size << " rows=" << num_tile_rows << " Wt=" << Wt
+           << " blk=" << blk << ENDL();
+
     uint32_t tile_id = tile_offset;
     for (uint32_t h = 0; h < num_tile_rows; h++) {
         for (auto block : generic::blocks(Wt, blk)) {
+            DPRINT << "[BW " << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << "] wait_front "
+                   << block.full_block_size() << ENDL();
             cb_out0.wait_front(block.full_block_size());
+            DPRINT << "[BW " << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << "] got tiles" << ENDL();
             uint32_t idx = 0;
             for (auto i : block.local()) {
                 noc.async_write(cb_out0, s, tile_bytes, {.offset_bytes = idx * tile_bytes}, {.page_id = tile_id});
@@ -43,4 +51,5 @@ void kernel_main() {
             cb_out0.pop_front(block.full_block_size());
         }
     }
+    DPRINT << "[BW " << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << "] done" << ENDL();
 }

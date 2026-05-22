@@ -5262,7 +5262,9 @@ ProgramDescriptor MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
     }
     auto grid_size = program_config.allowed_worker_cores.value().bounding_box().grid_size();
 
-    CoreCoord sub_device_start_core = {0, 0};
+    // When a sub-device is present use its bounding-box start; otherwise fall
+    // back to allowed_worker_cores start so non-(0,0) placements work correctly.
+    CoreCoord sub_device_start_core = program_config.allowed_worker_cores.value().bounding_box().start_coord;
     if (operation_attributes.sub_device_id.has_value()) {
         auto sd_worker_cores = device->worker_cores(
             tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.sub_device_id.value());

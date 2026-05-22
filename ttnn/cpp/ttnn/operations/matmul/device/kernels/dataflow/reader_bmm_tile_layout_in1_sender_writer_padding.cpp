@@ -13,8 +13,10 @@
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "api/debug/dprint.h"
 
 void kernel_main() {
+    DPRINT << "[MM_IN1S " << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << "] enter" << ENDL();
     // READER
     uint32_t rt_args_idx = 0;
     // in1 tensor args

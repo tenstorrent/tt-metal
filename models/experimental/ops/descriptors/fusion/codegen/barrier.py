@@ -319,7 +319,12 @@ def _build_barrier_dispatch(
                 }
             )
             cumulative_rebind_offset += len(rebinds) * 2
-    # Trailing barrier (after last phase, e.g. for parent sync in OpGraph)
+    # Trailing barrier (after last phase).
+    # When the last phase has a group sync entry (e.g. early-exit cores in
+    # OpGraph), a full group barrier is emitted.  Otherwise, a local-only
+    # trailing barrier is still needed for re-dispatch correctness: the last
+    # phase's CBs must be reset so that a subsequent dispatch starts with
+    # clean stream-register and FIFO-pointer state.
     last_phase_idx = sources[-1][0]
     if last_phase_idx in multi_barrier.transition_map:
         seg_idx, _ = multi_barrier.transition_map[last_phase_idx]
@@ -331,6 +336,17 @@ def _build_barrier_dispatch(
                 "rebinds": [],
                 "rebind_entry_offset": cumulative_rebind_offset,
                 "is_arrive": last_phase_idx not in noop_phase_indices,
+            }
+        )
+    elif len(sources) > 1:
+        dispatch.append(
+            {
+                "done_val": len(sources),
+                "seg_idx": None,
+                "next_phase_idx": None,
+                "rebinds": [],
+                "rebind_entry_offset": cumulative_rebind_offset,
+                "is_arrive": False,
             }
         )
     return dispatch
@@ -534,6 +550,8 @@ def _emit_group_sync_coordinator(dispatch: List[Dict[str, Any]]) -> List[str]:
     for entry in dispatch:
         done_val = entry["done_val"]
         seg_idx = entry["seg_idx"]
+        if seg_idx is None:
+            continue
         is_arrive = entry.get("is_arrive", True)
         mode = "SyncMode::Full" if is_arrive else "SyncMode::WaitOnly"
         lines.append(f"        if (done == {done_val}) {{")
@@ -565,7 +583,8 @@ def _emit_group_sync_follower(
         is_arrive = entry.get("is_arrive", True)
         mode = "SyncMode::Full" if is_arrive else "SyncMode::WaitOnly"
         lines.append(f"        if (done == {done_val}) {{")
-        lines.append(f"            seg_{seg_idx}::sync<{mode}>();")
+        if seg_idx is not None:
+            lines.append(f"            seg_{seg_idx}::sync<{mode}>();")
         lines.append(f"            resync_cbs(phase_{completed_phase_idx}_cbs);")
         if rebinds and next_phase_idx is not None:
             if for_compute:
