@@ -33,7 +33,7 @@ void kernel_main() {
     mm_block_init_short_with_dt(dfb::in0, dfb::in1, dfb::out, false, dst_tile_cols, dst_tile_rows, block_tile_dim);
 #elif (WITH_DT == 0)
     mm_block_init(dfb::in1, dfb::in0, dfb::out, false, dst_tile_cols - 1, dst_tile_rows - 1, block_tile_dim - 1);
-    mm_block_init_short(dfb0.get_id(), dfb1.get_id(), false, dst_tile_cols, dst_tile_rows, block_tile_dim);
+    mm_block_init_short(dfb::in0, dfb::in1, false, dst_tile_cols, dst_tile_rows, block_tile_dim);
 #endif
 #elif (TEST_INIT_SHORT == 0)
     mm_block_init(dfb::in0, dfb::in1, dfb::out, false, dst_tile_cols, dst_tile_rows, block_tile_dim);
@@ -45,7 +45,7 @@ void kernel_main() {
         dfb0.wait_front(in0_block_tile_cnt);
         dfb1.wait_front(in1_block_tile_cnt);
 
-        matmul_block(dfb0.get_id(), dfb1.get_id(), 0, 0, 0, false, dst_tile_cols, dst_tile_rows, block_tile_dim);
+        matmul_block(dfb::in0, dfb::in1, 0, 0, 0, false, dst_tile_cols, dst_tile_rows, block_tile_dim);
 
         dfb0.pop_front(in0_block_tile_cnt);
         dfb1.pop_front(in1_block_tile_cnt);
