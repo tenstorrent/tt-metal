@@ -9,6 +9,44 @@
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "dataflow_common.hpp"
 
+// #44366 diagnostic: cycle-wait probes to characterize the race window in the
+// NCRISC reader. Each probe is independently gated by a `*_CYCLES` define;
+// zero / undefined → compiles out to nothing. To run an experiment, set one
+// (or more) of these from the program factory's `reader_defines`, or from a
+// build-system -D flag, or by editing the macro defaults below.
+//
+//   SDPA_READER_WAIT_TOP_CYCLES         — at top of kernel, before *any*
+//                                          NOC op (mirrors the DPRINT
+//                                          location that hid the bug).
+//   SDPA_READER_WAIT_AFTER_CURPOS_CYCLES — after cur_pos is resolved
+//                                          (whether by RT-arg or
+//                                          noc_async_read of the cur_pos
+//                                          tensor). Tests the
+//                                          "cur_pos race" branch.
+//   SDPA_READER_WAIT_BEFORE_READ_Q_CYCLES — just before read_q<…>. Tests
+//                                          the "Q race" branch.
+//
+// riscv_wait() comes from risc_common.h; dataflow_api.h transitively
+// includes it on the data-movement RISCs.
+#include "internal/tt-1xx/risc_common.h"
+
+#ifndef SDPA_READER_WAIT_TOP_CYCLES
+#define SDPA_READER_WAIT_TOP_CYCLES 0
+#endif
+#ifndef SDPA_READER_WAIT_AFTER_CURPOS_CYCLES
+#define SDPA_READER_WAIT_AFTER_CURPOS_CYCLES 0
+#endif
+#ifndef SDPA_READER_WAIT_BEFORE_READ_Q_CYCLES
+#define SDPA_READER_WAIT_BEFORE_READ_Q_CYCLES 0
+#endif
+
+#define SDPA_READER_WAIT(cycles)            \
+    do {                                    \
+        if ((cycles) > 0) {                 \
+            riscv_wait((uint32_t)(cycles)); \
+        }                                   \
+    } while (0)
+
 void kernel_main() {
     /*
     In DRAM, Q is (B, PNHt, DHt), K is (B, St, DHt), V is (B, St, DHt), mask is (B, PNHt, PSt)
@@ -83,6 +121,11 @@ void kernel_main() {
     const uint32_t mcast_y1 = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_dests = get_arg_val<uint32_t>(arg_idx++);
 
+    // #44366 probe — TOP of kernel, after RT-args read from LOCAL but before
+    // any remote NOC op. If a wait here closes the race window, the racing
+    // read is somewhere downstream in this kernel.
+    SDPA_READER_WAIT(SDPA_READER_WAIT_TOP_CYCLES);
+
     // idle core
     if (q_addr == 0) {
         return;
@@ -116,6 +159,12 @@ void kernel_main() {
             return;
         }
     }
+
+    // #44366 probe — AFTER cur_pos is resolved (either from RT-arg or from
+    // the noc_async_read of the cur_pos tensor on line ~107). If a wait at
+    // TOP closes the race but a wait HERE does not, the racing read is the
+    // cur_pos read. If both close it (or neither), keep moving the probe.
+    SDPA_READER_WAIT(SDPA_READER_WAIT_AFTER_CURPOS_CYCLES);
 
     // When block_size < TILE_HEIGHT, each tile has zero-padded rows. Convert cur_pos from
     // the original sequence space to the padded tile space so get_runtime_args computes the
@@ -176,6 +225,13 @@ void kernel_main() {
     uint32_t k_mcast_sem_addr = get_semaphore(k_mcast_semaphore_id);
     volatile tt_l1_ptr uint32_t* k_mcast_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(k_mcast_sem_addr);
     const uint32_t q_batch_offset = cur_batch * q_chunk_tiles;
+
+    // #44366 probe — just before the Q read pipeline. If a wait TOP closes
+    // the race but a wait HERE does not, the racing read is Q (or
+    // upstream). If a wait HERE also closes it, the racing read is at or
+    // after Q (K/V/mask/page_table). Combined with the AFTER_CURPOS probe,
+    // this triangulates which read window to focus on.
+    SDPA_READER_WAIT(SDPA_READER_WAIT_BEFORE_READ_Q_CYCLES);
 
     // Read Q
     read_q<cb_q_in, cb_q_rm, q_tile_bytes, q_chunk_tiles, is_q_sharded, tilize_q, use_half_tile, barrier_threshold>(

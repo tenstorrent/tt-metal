@@ -269,7 +269,7 @@ class Model:
 
     def _increment_decode_positions_device(self, current_pos, rot_mat_idxs):
         """On-device position increment for traced decode loops with sampling."""
-        ttnn.plus_one(current_pos, skip_negative_entries=True)
+        # ttnn.plus_one(current_pos, skip_negative_entries=True)
         ttnn.plus_one(rot_mat_idxs)
 
     @classmethod
