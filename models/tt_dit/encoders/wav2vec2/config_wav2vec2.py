@@ -6,40 +6,41 @@
 class Wav2Vec2Config:
     """
     Configuration for Wav2Vec2Encoder, mirroring the HuggingFace
-    `facebook/wav2vec2-base-960h` model architecture used by the WAN 2.2 S2V
-    pipeline's reference AudioEncoder.
+    `facebook/wav2vec2-large-xlsr-53` model architecture used by the WAN 2.2
+    S2V pipeline's reference AudioEncoder. Only the pre-LN / per-layer-LN
+    variant (``do_stable_layer_norm=True``, ``feat_extract_norm="layer"``) is
+    supported.
 
     Args:
-        hidden_size: Transformer-encoder hidden dimension (768 for base, 1024 for large).
-        num_hidden_layers: Number of transformer encoder layers (12 for base, 24 for large).
+        hidden_size: Transformer-encoder hidden dimension.
+        num_hidden_layers: Number of transformer encoder layers.
         num_attention_heads: Number of self-attention heads.
         intermediate_size: FFN inner dimension.
         conv_dim: Per-conv-layer output channel sizes for the feature extractor.
         conv_stride: Strides for each conv layer.
         conv_kernel: Kernel sizes for each conv layer.
         conv_bias: Whether the conv layers use bias.
-        feat_extract_norm: "group" (only first layer has GroupNorm) or "layer"
-            (every layer has LayerNorm). "group" is the base default.
         layer_norm_eps: Eps for all LayerNorms.
     """
 
     def __init__(
         self,
-        hidden_size: int = 768,
-        num_hidden_layers: int = 12,
-        num_attention_heads: int = 12,
-        intermediate_size: int = 3072,
+        hidden_size: int = 1024,
+        num_hidden_layers: int = 24,
+        num_attention_heads: int = 16,
+        intermediate_size: int = 4096,
         conv_dim: tuple = (512, 512, 512, 512, 512, 512, 512),
         conv_stride: tuple = (5, 2, 2, 2, 2, 2, 2),
         conv_kernel: tuple = (10, 3, 3, 3, 3, 2, 2),
-        conv_bias: bool = False,
-        feat_extract_norm: str = "group",
+        conv_bias: bool = True,
+        feat_extract_norm: str = "layer",
         layer_norm_eps: float = 1e-5,
         hidden_act: str = "gelu",
-        do_stable_layer_norm: bool = False,
+        do_stable_layer_norm: bool = True,
     ):
         assert len(conv_dim) == len(conv_stride) == len(conv_kernel)
-        assert feat_extract_norm in ("group", "layer")
+        assert feat_extract_norm == "layer", "only feat_extract_norm='layer' (large-xlsr-53) is supported"
+        assert do_stable_layer_norm, "only pre-LN (large-xlsr-53) wav2vec2 is supported"
         assert hidden_act == "gelu"
 
         self.hidden_size = hidden_size
@@ -52,7 +53,6 @@ class Wav2Vec2Config:
         self.conv_bias = conv_bias
         self.feat_extract_norm = feat_extract_norm
         self.layer_norm_eps = layer_norm_eps
-        # `wav2vec2-base-960h`: False (post-LN).  `wav2vec2-large-xlsr-53`: True (pre-LN).
         self.do_stable_layer_norm = do_stable_layer_norm
 
     @property

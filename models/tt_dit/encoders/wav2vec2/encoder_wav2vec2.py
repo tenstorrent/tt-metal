@@ -244,11 +244,10 @@ class Wav2Vec2FeedForward(Module):
 
 
 class Wav2Vec2EncoderLayer(Module):
-    """Single Wav2Vec2 transformer encoder block.
+    """Single Wav2Vec2 transformer encoder block (pre-LN / stable variant).
 
-    Switches between post-LN (HF ``Wav2Vec2EncoderLayer``, used by base-960h)
-    and pre-LN (``Wav2Vec2EncoderLayerStableLayerNorm``, used by
-    large-xlsr-53) based on ``config.do_stable_layer_norm``.
+    Mirrors HF ``Wav2Vec2EncoderLayerStableLayerNorm`` used by
+    wav2vec2-large-xlsr-53.
     """
 
     def __init__(
@@ -283,31 +282,17 @@ class Wav2Vec2EncoderLayer(Module):
         )
 
     def forward(self, hidden_BLC: ttnn.Tensor) -> ttnn.Tensor:
-        if self.config.do_stable_layer_norm:
-            # HF `Wav2Vec2EncoderLayerStableLayerNorm` (pre-LN, used by
-            # wav2vec2-large-xlsr-53):
-            #   r = hidden
-            #   hidden = attention(layer_norm(hidden))
-            #   hidden = r + hidden
-            #   hidden = hidden + feed_forward(final_layer_norm(hidden))
-            attn_residual = hidden_BLC
-            normed = self.layer_norm(hidden_BLC)
-            hidden = self.attention(normed)
-            hidden = attn_residual + hidden
-            ff_input = self.final_layer_norm(hidden)
-            return hidden + self.feed_forward(ff_input)
-
-        # HF `Wav2Vec2EncoderLayer` (post-LN, used by wav2vec2-base-960h):
+        # HF `Wav2Vec2EncoderLayerStableLayerNorm` (pre-LN):
         #   r = hidden
-        #   hidden = attention(hidden)
-        #   hidden = layer_norm(r + hidden)
-        #   hidden = hidden + feed_forward(hidden)
-        #   hidden = final_layer_norm(hidden)
+        #   hidden = attention(layer_norm(hidden))
+        #   hidden = r + hidden
+        #   hidden = hidden + feed_forward(final_layer_norm(hidden))
         attn_residual = hidden_BLC
-        hidden = self.attention(hidden_BLC)
-        hidden = self.layer_norm(attn_residual + hidden)
-        hidden = hidden + self.feed_forward(hidden)
-        return self.final_layer_norm(hidden)
+        normed = self.layer_norm(hidden_BLC)
+        hidden = self.attention(normed)
+        hidden = attn_residual + hidden
+        ff_input = self.final_layer_norm(hidden)
+        return hidden + self.feed_forward(ff_input)
 
 
 class Wav2Vec2PositionalConvEmbedding(Module):
@@ -406,8 +391,8 @@ class Wav2Vec2EncoderStack(Module):
     """N transformer encoder layers preceded by on-device pos_conv_embed.
 
     Owns the HF ``encoder.pos_conv_embed`` (grouped Conv1d), the residual add,
-    and the final ``encoder.layer_norm`` (pre-LN/stable variants only —
-    post-LN's pre-layers LN is not supported on device yet).
+    and the final ``encoder.layer_norm`` for the pre-LN / stable variant
+    (wav2vec2-large-xlsr-53).
     """
 
     def __init__(
@@ -419,12 +404,7 @@ class Wav2Vec2EncoderStack(Module):
         parallel_config: EncoderParallelConfig,
     ) -> None:
         super().__init__()
-        if not config.do_stable_layer_norm:
-            raise NotImplementedError(
-                "post-LN wav2vec2 variants (e.g. wav2vec2-base) require an on-device "
-                "encoder.layer_norm pre-norm step that hasn't been ported. Only "
-                "do_stable_layer_norm=True (large-xlsr-53) is supported."
-            )
+        assert config.do_stable_layer_norm, "only pre-LN (large-xlsr-53) wav2vec2 is supported"
 
         self.config = config
         self.mesh_device = mesh_device

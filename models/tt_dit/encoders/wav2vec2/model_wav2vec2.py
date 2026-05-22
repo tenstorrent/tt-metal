@@ -23,8 +23,8 @@ class Wav2Vec2Encoder(Module):
 
     Fully on-device: feature_extractor (7 Conv1d), feature_projection, then the
     encoder stack which owns the grouped-Conv1d pos_conv_embed and the N
-    transformer layers. Only ``do_stable_layer_norm=True`` (large-xlsr-53) is
-    supported today; post-LN variants need the encoder pre-LN moved on device.
+    transformer layers. Supports the wav2vec2-large-xlsr-53 variant
+    (``do_stable_layer_norm=True``, ``feat_extract_norm="layer"``).
     """
 
     def __init__(
