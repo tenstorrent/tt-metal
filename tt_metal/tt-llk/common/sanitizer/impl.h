@@ -390,9 +390,7 @@ void operation_check_impl(const ThreadOutputContext& context, OperationState& st
 {
     if (!thread_silent_get_impl(context))
     {
-        const auto pc = context.current.pc;
-
-        LLK_SAN_ERROR_PANIC(state.operation != op, "{:#x} : operation type doesn't match stored operation", pc);
+        operation_assert(state.operation, op, context.operation, context.current);
 
         constexpr std::uint8_t args_count = _args_count<Ts...>();
 
@@ -408,17 +406,15 @@ void operation_check_impl(const ThreadOutputContext& context, OperationState& st
 
         char* ptr = state.buffer;
 
-        LLK_SAN_FAULT_ASSERT(std::memcmp(&args_count, ptr, sizeof(args_count)) == 0, "{:#x} : saved vs provided args_count mismatch", pc);
+        LLK_SAN_FAULT_ASSERT(std::memcmp(&args_count, ptr, sizeof(args_count)) == 0, "saved vs provided args_count mismatch");
         ptr += sizeof(args_count);
 
         if constexpr (args_count > 0)
         {
-            LLK_SAN_FAULT_ASSERT(
-                std::memcmp(args_sizeof.data(), ptr, args_count * sizeof(args_sizeof[0])) == 0, "{:#x} : saved vs provided args_sizeof mismatch", pc);
+            LLK_SAN_FAULT_ASSERT(std::memcmp(args_sizeof.data(), ptr, args_count * sizeof(args_sizeof[0])) == 0, "saved vs provided args_sizeof mismatch");
             ptr += args_count * sizeof(args_sizeof[0]);
 
-            LLK_SAN_FAULT_ASSERT(
-                std::memcmp(args_alignof.data(), ptr, args_count * sizeof(args_alignof[0])) == 0, "{:#x} : saved vs provided args_alignof mismatch", pc);
+            LLK_SAN_FAULT_ASSERT(std::memcmp(args_alignof.data(), ptr, args_count * sizeof(args_alignof[0])) == 0, "saved vs provided args_alignof mismatch");
             ptr += args_count * sizeof(args_alignof[0]);
 
             constexpr size_t max_align = alignof(max_align_t);
@@ -426,9 +422,13 @@ void operation_check_impl(const ThreadOutputContext& context, OperationState& st
             ptr += padding;
 
             [[maybe_unused]] size_t i = 0;
-            ([&]([[maybe_unused]] const auto& arg)
-             { LLK_SAN_ERROR_ASSERT(std::memcmp(ptr + args_offsetof[i++], &arg, sizeof(arg)) == 0, "{:#x} : saved vs provided args mismatch", pc); }(args),
-             ...);
+            (
+                [&]([[maybe_unused]] const auto& arg)
+                {
+                    operation_argument_assert(ptr + args_offsetof[i], &arg, sizeof(arg), i, context.operation, context.current);
+                    ++i;
+                }(args),
+                ...);
         }
     }
 }
@@ -440,7 +440,7 @@ void operation_uninit_impl(const ThreadOutputContext& context, OperationState& s
 {
     if (!thread_silent_get_impl(context))
     {
-        LLK_SAN_ERROR_PANIC(state.operation != op, "{:#x} : tried to uninit wrong operation type", context.current.pc);
+        operation_assert(state.operation, op, context.operation, context.current);
     }
 
     state.expect_uninit = false;
