@@ -6,7 +6,7 @@ transformer_config:
   intermediate_dim: 14336
   dropout_prob: 0.0
   num_blocks: 32
-  vocab_size: 128000  # Llama-3 full vocab: 128000 BPE + 256 special tokens (incl. BOS=128000 present in tokenized data)
+  vocab_size: 128256  # Llama-3 full vocab: 128000 BPE + 256 special tokens (incl. BOS=128000 present in tokenized data)
   max_sequence_length: 2048
   runner_type: memory_efficient
   theta: 500000.0
