@@ -114,7 +114,9 @@ The MoE win is dominated by per-expert FFN no longer matmuling the padded
     the existing buffer size and is a no-op. Adds one ~100us host-device sync
     per forward; device kernel times unchanged (still 528-556us/2k).
 
-## Phase B WIP: unified custom op (kgrujcic/unified_rexpert)
+## Phase B (WIP): unified custom op + design issue
+
+
 
 Added a new ttnn op location:
   `ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/`
