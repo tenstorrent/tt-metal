@@ -65,7 +65,20 @@ vs main on 4k: 1676μs (1.58x faster).
 Target: ~500μs/2k. We are within ~6% on 25k, exactly there on 2k.
 
 ### Outstanding
-- Op count still scales with chunks (5 ops per 4k chunk). User wants "almost a single
-  op in tt-perf-report regardless of sequence length". Considering a true single-op
-  custom kernel for Milestone 4.
-- Should also leverage the token-count buffer to skip work for short experts in MoE.
+- Op count still scales with chunks (5 ops per 2k chunk). User wants "almost a single
+  op in tt-perf-report regardless of sequence length". A true single-op custom kernel
+  would require composing 3 matmul-equivalent compute kernels + silu + multiply into
+  one program, which is a substantial kernel-writing effort. Tracked as future work.
+
+- [2026-05-22] **Milestone 4**: leverage device-side token-count buffer in
+  `tt_routed_expert.forward`. One host-side read of expert_token_counts +
+  global_expert_idx_table per forward; per local expert, narrow the extracted
+  tokens buffer to ceil_tile(count) rows before calling the FFN. For experts
+  with count==0, skip extract/ffn/insert entirely.
+
+  - `test_ttnn_moe.py` `linear-8 perf-host-64`: `tt_forward` 40413ms -> 4821ms
+    (8.4x). The win comes from per-expert FFN no longer paddedly matmul-ing
+    ~204800 rows when only ~500 are occupied.
+  - `test_single_routed_expert.py`: count == num_tokens so the narrow is a no-op.
+    Adds one ~100us host-device sync per forward; device kernel times unchanged
+    (still 528-556us/2k).

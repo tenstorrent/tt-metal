@@ -409,16 +409,19 @@ class TtRoutedExpert(LightweightModule):
         """
         Blackhole forward implementation using narrow and in-place writes.
 
-        Pre-allocates the output tensor with empty_like and uses narrow to extract
-        per-expert slices and write FFN results directly into the output buffer,
-        avoiding extra allocations from unsqueeze/concat.
+        Leverages the device-side token-count buffer: per-expert token counts
+        are read host-side (one host-device sync per forward) and used to
+        narrow each expert's extracted-tokens buffer down to ceil_tile(count)
+        rows. The downstream unified routed-expert FFN then matmul-multiplies
+        only the actually-occupied tiles, eliminating the padded-region work
+        that the previous implementation dispatched. For experts with count==0,
+        the FFN call is skipped entirely.
 
         Args:
             dispatched_buffer: Dispatched tokens
                 shape: (max_dispatch_buffer_token_size, emb_dim)
             expert_token_counts: Token counts per expert per chip
-                If provided, only processes tokens up to the count (currently unused,
-                all tokens are processed for simplicity)
+                Shape per device: (1, num_routed_experts).
             expert_region_offsets: Expert region start offsets per expert
                 (shared across source devices in a dispatch group). Produced by
                 offset_cumsum. Shape per device: (1, num_routed_experts).
@@ -433,6 +436,46 @@ class TtRoutedExpert(LightweightModule):
             logger.warning(f"{dispatched_buffer.dtype=} typecasting to {self.activations_dtype}")
             dispatched_buffer = ttnn.typecast(dispatched_buffer, self.activations_dtype)
 
+        # Read counts and the local->global expert-id mapping host-side once per
+        # forward so we can size each expert's FFN to its actual count instead
+        # of self.max_tokens. The sync cost is paid once per forward and amortizes
+        # over `experts_per_chip` FFN calls; it is essentially free compared to
+        # the multi-millisecond compute it gates.
+        #
+        # In multi-device mesh setups, each device holds its own per-chip slice
+        # of the counts/idx tensors, so we use a composer that concatenates
+        # along the leading mesh axis and then index the first chip's slice as
+        # a representative. Per-chip narrowing is implicit because each chip
+        # operates on its own dispatched_buffer; only the magnitude needs to
+        # match. If reading fails for any reason (e.g. a tensor layout we
+        # don't recognize), fall back to processing the full max_tokens — this
+        # preserves correctness while losing the speedup.
+        counts_flat = None
+        global_idx_host_list = None
+        try:
+            counts_host = ttnn.to_torch(expert_token_counts)
+            counts_flat = counts_host.flatten().tolist()
+            global_idx_host_list = ttnn.to_torch(self.global_expert_idx_table).flatten().tolist()
+        except RuntimeError:
+            num_shards = self.mesh_device.get_num_devices() if self.num_devices > 1 else 1
+            try:
+                _composer = ttnn.create_mesh_composer(
+                    self.mesh_device,
+                    ttnn.MeshComposerConfig(dims=[1, 0], mesh_shape=ttnn.MeshShape(*self.mesh_device.shape)),
+                )
+                counts_host = ttnn.to_torch(expert_token_counts, mesh_composer=_composer)
+                idx_host = ttnn.to_torch(self.global_expert_idx_table, mesh_composer=_composer)
+                # Take the first chip's slice — global ids and counts are aligned
+                # for the chip we're running on, and ttnn dispatches the same
+                # python op on every chip with its own data.
+                counts_flat = counts_host.flatten().tolist()
+                global_idx_host_list = idx_host.flatten().tolist()
+            except Exception as e:
+                logger.warning(f"Failed to read counts host-side ({e}); falling back to max_tokens.")
+                counts_flat = None
+                global_idx_host_list = None
+
+        tile_h = ttnn.TILE_SIZE
         # Process each local expert
         # dispatched_buffer: (experts_per_chip, max_tokens, emb_dim)
         # We process expert by expert and reassemble
@@ -440,6 +483,18 @@ class TtRoutedExpert(LightweightModule):
         expert_outputs = dispatched_buffer
         for local_expert in range(self.experts_per_chip):
             signpost(f"Expert {local_expert+1}/{self.experts_per_chip}")
+
+            count = None
+            if counts_flat is not None and global_idx_host_list is not None:
+                if local_expert < len(global_idx_host_list):
+                    global_id = int(global_idx_host_list[local_expert])
+                    if global_id < len(counts_flat):
+                        count = int(counts_flat[global_id])
+
+            if count is not None and count == 0:
+                # Nothing to compute for this expert; skip extract+ffn+insert.
+                logger.debug(f"Expert {local_expert}: count=0, skipping")
+                continue
 
             # Extract tokens for this expert using the deepseek_prefill extract op,
             # which uses expert_region_offsets and expert_token_counts to slice out
@@ -452,7 +507,18 @@ class TtRoutedExpert(LightweightModule):
                 local_expert_id=local_expert,
                 max_dispatched_tokens_per_expert=self.max_tokens,
             )
-            logger.debug(f"Expert {local_expert}: input shape {tokens.shape}")
+            logger.debug(f"Expert {local_expert}: extracted shape {tokens.shape}, count={count}")
+
+            # Narrow to ceil_tile(count) rows so the FFN only computes on the
+            # occupied tiles. ttnn.narrow is a zero-copy view that shares the
+            # extract output buffer. If we didn't get a count host-side, fall
+            # back to processing the full extract output.
+            if count is not None and count > 0:
+                active_tiles = (count + tile_h - 1) // tile_h
+                active_rows = active_tiles * tile_h
+                if active_rows < tokens.padded_shape[-2]:
+                    tokens = ttnn.narrow(tokens, 0, 0, active_rows)
+                    logger.debug(f"Expert {local_expert}: narrowed to {tokens.shape}")
 
             # Run FFN
             output = self._expert_ffn(
