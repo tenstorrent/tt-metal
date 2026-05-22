@@ -28,6 +28,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/debug/dprint.h"
 
 #include "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_fused_activation.hpp"
 
@@ -52,14 +53,19 @@ FORCE_INLINE void matmul_phase_v2(
     for (uint32_t block = 0; block < num_blocks; ++block) {
         const bool last_out = (block == num_blocks - 1);
 
+        DPRINT << "MM: block " << block << " wait in0 " << in0_block_num_tiles << ENDL();
         cb_wait_front(in0_cb_id, in0_block_num_tiles);
+        DPRINT << "MM: block " << block << " wait in1 " << in1_block_num_tiles << ENDL();
         cb_wait_front(in1_cb_id, in1_block_num_tiles);
+        DPRINT << "MM: block " << block << " inner loops" << ENDL();
 
         int in0_index_subblock_offset = 0;
         for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
             int in1_index_subblock_offset = 0;
             for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
+                DPRINT << "MM: sb(" << in0_subblock << "," << in1_subblock << ") acquire reload=" << (uint32_t)enable_reload << ENDL();
                 acquire_dst();
+                DPRINT << "MM: sb after acquire" << ENDL();
 
                 if (enable_reload) {
                     copy_tile_to_dst_init_short_with_dt(in1_cb_id, intermed_cb_id);
@@ -71,6 +77,7 @@ FORCE_INLINE void matmul_phase_v2(
                     mm_init_short_with_dt(in0_cb_id, in1_cb_id, intermed_cb_id);
                 }
 
+                DPRINT << "MM: sb compute start" << ENDL();
                 // Compute output sub-block via per-tile inner-product accumulation.
                 int dst_index = 0;
                 int in0_index_h_offset = 0;
@@ -87,24 +94,32 @@ FORCE_INLINE void matmul_phase_v2(
                     }
                     in0_index_h_offset += in0_block_w;
                 }
+                DPRINT << "MM: sb compute done" << ENDL();
 
                 if (last_out) {
+                    DPRINT << "MM: pack last_out reserve" << ENDL();
                     if constexpr (apply_silu_on_final) {
                         apply_activation_from_pack<KernelActivation::SILU>(out_subblock_num_tiles);
                     }
                     cb_reserve_back(final_cb_id, out_subblock_num_tiles);
+                    DPRINT << "MM: pack last_out reserved" << ENDL();
                     for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
                         pack_tile(i, final_cb_id);
                     }
                     cb_push_back(final_cb_id, out_subblock_num_tiles);
+                    DPRINT << "MM: pack last_out pushed" << ENDL();
                 } else {
+                    DPRINT << "MM: pack intermed reserve" << ENDL();
                     cb_reserve_back(intermed_cb_id, out_subblock_num_tiles);
+                    DPRINT << "MM: pack intermed reserved" << ENDL();
                     for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
                         pack_tile(i, intermed_cb_id);
                     }
                     cb_push_back(intermed_cb_id, out_subblock_num_tiles);
+                    DPRINT << "MM: pack intermed pushed" << ENDL();
                 }
 
+                DPRINT << "MM: release_dst" << ENDL();
                 release_dst();
                 in1_index_subblock_offset += out_subblock_w;
             }
@@ -197,8 +212,10 @@ void kernel_main() {
     constexpr uint32_t cb_partials_d = get_named_compile_time_arg_val("cb_mm_partials_d");
     constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
 
+    DPRINT << "FSW: entering, init silu/mm" << ENDL();
     silu_tile_init_pack();
     mm_init(cb_in0_x, cb_in1_gate, cb_gate_intermed);
+    DPRINT << "FSW: phase1 start" << ENDL();
 
     // Phase 1: gate matmul (silu fused on final pack)
     matmul_phase_v2<
