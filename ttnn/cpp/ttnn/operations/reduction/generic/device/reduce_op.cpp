@@ -109,24 +109,38 @@ Tensor reduce(
         /*default_fp32_acc=*/true));
     ttnn::verify_numerical_configuration(arch, compute_kernel_config);
 
-    // Dense row-major reduce: a fast path that consumes ROW_MAJOR input directly (no host tilize)
-    // and is currently restricted to mean (AVG) / sum (SUM) on 4D BF16/FLOAT32 tensors with
-    // interleaved I/O on both sides. Anything else — MAX/MIN, HW reduce, other dtypes, sharded
-    // input or output — falls back to the standard tilize + tile-reduce path.
+    // Dense row-major reduce: a fast path that consumes ROW_MAJOR input directly (no host tilize).
+    // Restricted to 4D BF16/FLOAT32 with interleaved I/O on both sides. Supported ops:
+    //   - AVG/SUM: both W and H reduce.
+    //   - MAX: H reduce always; W reduce only when Wt fits in DEST without W-chunking (see below).
+    //   - MIN: routed via reduce_min (-MAX(-x)) at the top of this function; inherits MAX gates.
     //
-    // MAX/MIN are excluded because the RM compute kernel accumulates partial reductions via
-    // Accumulate::at across chunks, and the cross-chunk fold uses SUM semantics. Wiring MAX
-    // accumulation through that pipeline is doable but not yet done; for now they tilize.
-    const bool both_interleaved =
-        input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
-        output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
-    const bool rm_base_eligible =
-        input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR && input_tensor.logical_shape().rank() == 4 &&
-        both_interleaved &&
-        (input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
-         input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32) &&
-        (reduce_math == tt::tt_metal::ReduceOpMath::AVG || reduce_math == tt::tt_metal::ReduceOpMath::SUM);
-    const bool use_rm_dense_w = rm_base_eligible && reduce_dim == tt::tt_metal::ReduceOpDim::W;
+    // W-reduce MAX needs `wt_tiles_per_chunk == Wt` (single-shot, no W chunking): the packer
+    // edge mask for REDUCE_ROW drops the face-row-0 spread that GMPOOL's cross-call accumulator
+    // relies on, so reloading a partial max from cb_acc after a pack produces a corrupted prior
+    // value. With no W chunks there is nothing to reload. The trade-off is that Wt must fit in
+    // the DEST register file. Conservative cap (matches fp32_dest_acc_en=true budget) is 8 tiles.
+    // Wider tensors with MAX W-reduce fall back to tilize + tile reduce.
+    //
+    // H-reduce MAX works without restriction: REDUCE_COL's edge mask preserves the column-0
+    // state that GMPOOL needs across chunks, so the existing chunked reload works as-is.
+    constexpr uint32_t k_rm_w_max_dest_cap_tiles = 8;
+    // const bool both_interleaved =
+    //     input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
+    //     output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
+    const bool rm_base_eligible = false;
+    // input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR && input_tensor.logical_shape().rank() == 4 &&
+    // both_interleaved &&
+    // (input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
+    //  input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32) &&
+    // (reduce_math == tt::tt_metal::ReduceOpMath::AVG || reduce_math == tt::tt_metal::ReduceOpMath::SUM ||
+    //  reduce_math == tt::tt_metal::ReduceOpMath::MAX);
+    const uint32_t W_padded = input_tensor.padded_shape()[3];
+    const uint32_t tile_width_for_gate = input_tensor.tensor_spec().tile().get_width();
+    const uint32_t Wt_for_gate = (W_padded + tile_width_for_gate - 1) / tile_width_for_gate;
+    const bool w_max_fits_dest =
+        reduce_math != tt::tt_metal::ReduceOpMath::MAX || Wt_for_gate <= k_rm_w_max_dest_cap_tiles;
+    const bool use_rm_dense_w = rm_base_eligible && reduce_dim == tt::tt_metal::ReduceOpDim::W && w_max_fits_dest;
     const bool use_rm_dense_h = rm_base_eligible && reduce_dim == tt::tt_metal::ReduceOpDim::H;
     const bool use_rm_dense = use_rm_dense_w || use_rm_dense_h;
 

@@ -72,12 +72,23 @@ void kernel_main() {
     //
     // Scaler tile (reduce_helpers_dataflow): pushed once, used by compute for every reduce call.
     //
+    // valid_count semantics depend on what's orthogonal to the reduction:
+    //   - SUM: always TILE_WIDTH. Input padding-identity is 0, so masking is unneeded.
+    //   - MAX + REDUCE_ROW (W reduce): W is the reduction axis. Mask to W_logical so GMPOOL
+    //     ignores the identity-padded columns (which are -inf and would otherwise win the max).
+    //   - MAX + REDUCE_COL (H reduce): W is orthogonal — every column is an independent max
+    //     over H. We want GMPOOL to process all TILE_WIDTH columns; the writer clamps the
+    //     output to W_logical positions afterward.
+    //
     const float scaler_f = __builtin_bit_cast(float, scaler_bits);
     const uint32_t scaler_valid_for_reduce = []() -> uint32_t {
         if constexpr (REDUCE_OP == ckernel::PoolType::SUM) {
             return tt::constants::TILE_WIDTH;
         }
-        return (W_logical < tt::constants::TILE_WIDTH) ? W_logical : tt::constants::TILE_WIDTH;
+        if constexpr (REDUCE_DIM == ckernel::ReduceDim::REDUCE_ROW) {
+            return (W_logical < tt::constants::TILE_WIDTH) ? W_logical : tt::constants::TILE_WIDTH;
+        }
+        return tt::constants::TILE_WIDTH;
     }();
     dataflow_kernel_lib::prepare_reduce_scaler<cb_id_scaler, REDUCE_OP, REDUCE_DIM>(scaler_f, scaler_valid_for_reduce);
 

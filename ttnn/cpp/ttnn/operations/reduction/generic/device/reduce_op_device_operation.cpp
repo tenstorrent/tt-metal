@@ -63,11 +63,12 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
             "{} only supports BFLOAT16 and FLOAT32, got {}",
             path_name,
             tensor_args.dtype());
-        // After dispatcher lowering, only SUM reaches the factory (mean=AVG → SUM + scaler).
-        // MAX/MIN are excluded from the RM path entirely; they take the tilize+tile-reduce path.
+        // Reaches the factory as SUM (mean=AVG → SUM + scaler) or MAX. MIN is rewritten by the
+        // top-level dispatcher into -MAX(-x), so it appears here as MAX with external negation.
         TT_FATAL(
-            operation_attributes.math_op == tt::tt_metal::ReduceOpMath::SUM,
-            "{}: math_op must be SUM (mean lowered from AVG), got {}",
+            operation_attributes.math_op == tt::tt_metal::ReduceOpMath::SUM ||
+                operation_attributes.math_op == tt::tt_metal::ReduceOpMath::MAX,
+            "{}: math_op must be SUM (mean lowered from AVG) or MAX, got {}",
             path_name,
             operation_attributes.math_op);
         TT_FATAL(

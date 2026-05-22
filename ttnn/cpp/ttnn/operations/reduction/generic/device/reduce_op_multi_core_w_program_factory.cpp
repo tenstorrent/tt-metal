@@ -43,8 +43,9 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
         static_cast<int>(a.memory_config().memory_layout()),
         static_cast<int>(output.memory_config().memory_layout()));
     TT_FATAL(
-        !rm_path || operation_attributes.math_op == tt::tt_metal::ReduceOpMath::SUM,
-        "Reduce W RM path only supports SUM (mean lowered from AVG), got {}",
+        !rm_path || operation_attributes.math_op == tt::tt_metal::ReduceOpMath::SUM ||
+            operation_attributes.math_op == tt::tt_metal::ReduceOpMath::MAX,
+        "Reduce W RM path only supports SUM (mean lowered from AVG) or MAX, got {}",
         operation_attributes.math_op);
     TT_FATAL(
         !(rm_path && operation_attributes.negate),
@@ -69,7 +70,12 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
     constexpr uint32_t k_rm_ht_tiles_per_chunk = 1;
     constexpr uint32_t k_rm_max_wt_tiles_per_chunk = 8;
     const uint32_t rm_rows_per_tile = tile_height;
-    const uint32_t wt_tiles_per_chunk = std::min<uint32_t>(k_rm_max_wt_tiles_per_chunk, std::max(1U, Wt));
+    // W-reduce MAX requires single-shot (wt_tiles_per_chunk == Wt) because the REDUCE_ROW packer
+    // edge mask breaks GMPOOL's cross-chunk reload (face-row-0 state lost after pack). Dispatcher
+    // gates W-MAX on Wt <= DEST cap before sending us here, so this is safe.
+    const bool rm_w_max = rm_path && operation_attributes.math_op == tt::tt_metal::ReduceOpMath::MAX;
+    const uint32_t wt_tiles_per_chunk =
+        rm_w_max ? std::max(1U, Wt) : std::min<uint32_t>(k_rm_max_wt_tiles_per_chunk, std::max(1U, Wt));
     const uint32_t datum_size = tt::datum_size(dst_cb_data_format);
     const uint32_t src_datum_size = tt::datum_size(src0_cb_data_format);
     const uint32_t chunk_row_bytes = wt_tiles_per_chunk * tile_width * src_datum_size;
@@ -122,16 +128,20 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
         });
 
         // reduce_rm.cpp accumulates partial reductions across W chunks into cb_acc (c_5).
-        constexpr uint32_t cb_acc = tt::CBIndex::c_5;
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = k_rm_ht_tiles_per_chunk * dst_single_tile_size,
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(cb_acc),
-                .data_format = dst_cb_data_format,
-                .page_size = dst_single_tile_size,
-            }}},
-        });
+        // Skip allocation for W-reduce MAX: that path is single-shot (wt_tiles_per_chunk == Wt)
+        // and the compute kernel passes NoAccumulation{} to reduce() — cb_acc is never touched.
+        if (!rm_w_max) {
+            constexpr uint32_t cb_acc = tt::CBIndex::c_5;
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = k_rm_ht_tiles_per_chunk * dst_single_tile_size,
+                .core_ranges = all_cores,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(cb_acc),
+                    .data_format = dst_cb_data_format,
+                    .page_size = dst_single_tile_size,
+                }}},
+            });
+        }
     }
 
     uint32_t src0_cb_index = 0;

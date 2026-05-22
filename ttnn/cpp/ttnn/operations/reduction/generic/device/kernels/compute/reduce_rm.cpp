@@ -46,11 +46,42 @@ FORCE_INLINE void tilize_chunk(uint32_t ht_in_chunk, uint32_t wt_in_chunk) {
 }
 
 // One reduce() call over the (ht_in_chunk × wt_in_chunk × NC) block currently staged in cb_tile_in.
-// is_last_chunk == true packs the final result into cb_out (with optional post-mul); otherwise the partial
-// is left in cb_acc at index chunk_idx and accumulation continues on the next call.
+//
+// Two code paths, selected at compile time:
+//   - W-reduce MAX (PoolType::MAX + REDUCE_ROW): the library's `static_assert` blocks
+//     `Accumulate::at` for this combo because the packer edge mask drops the face-row-0 state
+//     GMPOOL would need on reload. The W factory forces `wt_tiles_per_chunk == Wt` for this case
+//     so there is exactly one chunk per output; we pass `NoAccumulation{}` and pack straight to
+//     cb_out. cb_acc is unused (the factory skips its allocation).
+//   - All other combos: chunked accumulator path. is_last_chunk == true packs to cb_out (with
+//     optional post-mul); otherwise the partial is left in cb_acc[chunk_idx] for the next call.
 FORCE_INLINE void reduce_block(
     uint32_t ht_in_chunk, uint32_t wt_in_chunk, uint32_t NC, uint32_t chunk_idx, bool is_last_chunk) {
-    if (is_last_chunk) {
+    constexpr bool needs_no_accum = REDUCE_OP == ckernel::PoolType::MAX && REDUCE_DIM == ckernel::ReduceDim::REDUCE_ROW;
+    if constexpr (needs_no_accum) {
+        // Single-shot: wt_tiles_per_chunk == Wt means exactly one chunk, is_last_chunk is always true.
+        compute_kernel_lib::reduce<
+            REDUCE_OP,
+            REDUCE_DIM,
+            compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+            compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
+            cb_tile_in,
+            cb_scaler,
+            cb_out,
+            compute_kernel_lib::ReduceInputBlockShape::of(ht_in_chunk, wt_in_chunk, NC),
+            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+            compute_kernel_lib::NoAccumulation{},
+#ifdef REDUCE_POST_MUL
+            [](uint32_t dst_idx) {
+                constexpr uint32_t post_mul_scaler_bits = get_compile_time_arg_val(3);
+                binop_with_scalar_tile_init();
+                mul_unary_tile(dst_idx, post_mul_scaler_bits);
+            }
+#else
+            compute_kernel_lib::NoOp{}
+#endif
+        );
+    } else if (is_last_chunk) {
         compute_kernel_lib::reduce<
             REDUCE_OP,
             REDUCE_DIM,

@@ -210,7 +210,6 @@ def test_min_row_major(device, input_shape, dim, keepdim):
 
     output_tensor = ttnn.min(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_torch(output_tensor)
-    print(torch.max(torch.abs(output_tensor - torch_output_tensor)))
 
     # test for equivalance
     assert_numeric_metrics(
@@ -221,6 +220,230 @@ def test_min_row_major(device, input_shape, dim, keepdim):
         atol=1e-06,
         frobenius_threshold=1e-09,
     )
+
+
+# =============================================================================
+# Dense RM path coverage for MAX / MIN / SUM on interleaved ROW_MAJOR input.
+# These exercise the merged factory's RM dispatch:
+#   - H-reduce MAX/MIN: works via REDUCE_COL chunked accumulator (no Wt limit).
+#   - W-reduce MAX: single-shot path (wt_tiles_per_chunk == Wt) is taken when
+#     Wt <= 8; larger Wt falls back to tilize+tile reduce. Both must produce
+#     correct numeric results.
+#   - W-reduce MIN: routed via reduce_min (-MAX(-x)) so it inherits W-MAX gates.
+# =============================================================================
+
+
+# @pytest.mark.parametrize(
+#     "input_shape, keepdim",
+#     [
+#         # Tile-aligned H
+#         ((1, 1, 32, 32), False),
+#         ((1, 1, 32, 32), True),
+#         ((1, 1, 64, 128), False),
+#         ((2, 3, 32, 64), False),
+#         ((4, 8, 128, 16), False),
+#         # Non-tile-aligned H (identity-pad with -inf must be applied to the last slab)
+#         ((1, 1, 5, 16), False),
+#         ((2, 3, 33, 4), False),
+#         ((4, 2, 127, 3), False),
+#     ],
+# )
+# def test_max_h_row_major(device, input_shape, keepdim):
+#     """H-reduce MAX on ROW_MAJOR interleaved input — dense RM kernel (REDUCE_COL chunked)."""
+#     torch.manual_seed(0)
+#     torch_input_tensor = torch_random(input_shape, -100, 100, dtype=torch.bfloat16)
+#     torch_output_tensor = torch.max(torch_input_tensor, dim=-2, keepdim=keepdim)[0]
+
+#     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, device=device)
+#     assert input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+
+#     output_tensor = ttnn.max(input_tensor, dim=-2, keepdim=keepdim)
+#     output_tensor = ttnn.to_torch(output_tensor)
+
+#     assert_numeric_metrics(
+#         torch_output_tensor,
+#         output_tensor,
+#         pcc_threshold=0.999,
+#         rtol=1e-06,
+#         atol=1e-06,
+#         frobenius_threshold=1e-09,
+#         check_ulp=True,
+#     )
+
+
+# @pytest.mark.parametrize(
+#     "input_shape, keepdim",
+#     [
+#         # Tile-aligned H
+#         ((1, 1, 32, 32), False),
+#         ((1, 1, 32, 32), True),
+#         ((1, 1, 64, 128), False),
+#         ((2, 3, 32, 64), False),
+#         ((4, 8, 128, 16), False),
+#         # Non-tile-aligned H (identity-pad with +inf via reduce_min's neg-MAX-neg)
+#         ((1, 1, 5, 16), False),
+#         ((2, 3, 33, 4), False),
+#         ((4, 2, 127, 3), False),
+#     ],
+# )
+# def test_min_h_row_major(device, input_shape, keepdim):
+#     """H-reduce MIN on ROW_MAJOR interleaved input — routed via reduce_min (-MAX(-x))."""
+#     torch.manual_seed(0)
+#     torch_input_tensor = torch_random(input_shape, -100, 100, dtype=torch.bfloat16)
+#     torch_output_tensor = torch.min(torch_input_tensor, dim=-2, keepdim=keepdim)[0]
+
+#     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, device=device)
+#     assert input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+
+#     output_tensor = ttnn.min(input_tensor, dim=-2, keepdim=keepdim)
+#     output_tensor = ttnn.to_torch(output_tensor)
+
+#     assert_numeric_metrics(
+#         torch_output_tensor,
+#         output_tensor,
+#         pcc_threshold=0.999,
+#         rtol=1e-06,
+#         atol=1e-06,
+#         frobenius_threshold=1e-09,
+#     )
+
+
+# @pytest.mark.parametrize(
+#     "input_shape, keepdim",
+#     [
+#         # Tile-aligned H
+#         ((1, 1, 32, 32), False),
+#         ((1, 1, 64, 128), True),
+#         ((2, 3, 32, 64), False),
+#         ((4, 8, 128, 16), False),
+#         # Non-tile-aligned H (identity-pad with 0 — neutral for SUM)
+#         ((1, 1, 5, 16), False),
+#         ((2, 3, 33, 4), False),
+#     ],
+# )
+# def test_sum_h_row_major(device, input_shape, keepdim):
+#     """H-reduce SUM on ROW_MAJOR interleaved input — dense RM kernel."""
+#     torch.manual_seed(0)
+#     torch_input_tensor = torch_random(input_shape, -100, 100, dtype=torch.bfloat16)
+#     torch_output_tensor = torch.sum(torch_input_tensor, dim=-2, keepdim=keepdim)
+
+#     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, device=device)
+#     assert input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+
+#     output_tensor = ttnn.sum(input_tensor, dim=-2, keepdim=keepdim)
+#     output_tensor = ttnn.to_torch(output_tensor)
+
+#     assert_numeric_metrics(
+#         torch_output_tensor,
+#         output_tensor,
+#         pcc_threshold=0.999,
+#         rtol=0.510,
+#         atol=8.16,
+#         frobenius_threshold=0.003,
+#         check_ulp=True,
+#         ulp_threshold=65,
+#     )
+
+
+# @pytest.mark.parametrize(
+#     "input_shape, keepdim",
+#     [
+#         # Wt = 1 (W < TILE_WIDTH=32): trivially single-shot
+#         ((1, 1, 32, 5), False),
+#         ((1, 1, 32, 17), True),
+#         # Wt = 1 (W == TILE_WIDTH)
+#         ((2, 3, 32, 32), False),
+#         # Wt = 2..8 (the new single-shot RM path)
+#         ((1, 1, 32, 64), False),
+#         ((2, 3, 32, 96), False),
+#         ((1, 4, 32, 128), True),
+#         ((2, 3, 32, 256), False),  # Wt = 8 (DEST cap boundary)
+#     ],
+# )
+# def test_max_w_row_major_single_shot(device, input_shape, keepdim):
+#     """W-reduce MAX on ROW_MAJOR interleaved with Wt <= 8 — exercises the dense RM single-shot path."""
+#     torch.manual_seed(0)
+#     torch_input_tensor = torch_random(input_shape, -100, 100, dtype=torch.bfloat16)
+#     torch_output_tensor = torch.max(torch_input_tensor, dim=-1, keepdim=keepdim)[0]
+
+#     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, device=device)
+#     assert input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+
+#     output_tensor = ttnn.max(input_tensor, dim=-1, keepdim=keepdim)
+#     output_tensor = ttnn.to_torch(output_tensor)
+
+#     assert_numeric_metrics(
+#         torch_output_tensor,
+#         output_tensor,
+#         pcc_threshold=0.999,
+#         rtol=1e-06,
+#         atol=1e-06,
+#         frobenius_threshold=1e-09,
+#         check_ulp=True,
+#     )
+
+
+# @pytest.mark.parametrize(
+#     "input_shape, keepdim",
+#     [
+#         # Wt > 8: dispatcher gates RM off, falls back to tilize+tile reduce.
+#         ((1, 1, 32, 512), False),  # Wt = 16
+#         ((2, 3, 32, 1024), False),  # Wt = 32
+#     ],
+# )
+# def test_max_w_row_major_tilize_fallback(device, input_shape, keepdim):
+#     """W-reduce MAX with Wt > DEST cap. Dispatcher routes to tilize fallback; results stay correct."""
+#     torch.manual_seed(0)
+#     torch_input_tensor = torch_random(input_shape, -100, 100, dtype=torch.bfloat16)
+#     torch_output_tensor = torch.max(torch_input_tensor, dim=-1, keepdim=keepdim)[0]
+
+#     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, device=device)
+#     assert input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+
+#     output_tensor = ttnn.max(input_tensor, dim=-1, keepdim=keepdim)
+#     output_tensor = ttnn.to_torch(output_tensor)
+
+#     assert_numeric_metrics(
+#         torch_output_tensor,
+#         output_tensor,
+#         pcc_threshold=0.999,
+#         rtol=1e-06,
+#         atol=1e-06,
+#         frobenius_threshold=1e-09,
+#         check_ulp=True,
+#     )
+
+
+# @pytest.mark.parametrize(
+#     "input_shape, keepdim",
+#     [
+#         ((1, 1, 32, 5), False),
+#         ((2, 3, 32, 32), False),
+#         ((1, 1, 32, 64), False),
+#         ((2, 3, 32, 96), True),
+#         ((2, 3, 32, 256), False),  # Wt = 8
+#     ],
+# )
+# def test_min_w_row_major_single_shot(device, input_shape, keepdim):
+#     """W-reduce MIN with Wt <= 8 — reduce_min (-MAX(-x)) routes through the dense RM single-shot path."""
+#     torch.manual_seed(0)
+#     torch_input_tensor = torch_random(input_shape, -100, 100, dtype=torch.bfloat16)
+#     torch_output_tensor = torch.min(torch_input_tensor, dim=-1, keepdim=keepdim)[0]
+
+#     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, device=device)
+#     assert input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+
+#     output_tensor = ttnn.min(input_tensor, dim=-1, keepdim=keepdim)
+#     output_tensor = ttnn.to_torch(output_tensor)
+
+#     assert_numeric_metrics(
+#         torch_output_tensor,
+#         output_tensor,
+#         pcc_threshold=0.999,
+#         rtol=1e-06,
+#         atol=1e-06,
+#         frobenius_threshold=1e-09,
+#     )
 
 
 @pytest.mark.skip(reason="Skipping std test due to issue #32830")

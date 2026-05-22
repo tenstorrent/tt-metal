@@ -72,8 +72,9 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
         static_cast<int>(a.memory_config().memory_layout()),
         static_cast<int>(output.memory_config().memory_layout()));
     TT_FATAL(
-        !rm_path || operation_attributes.math_op == tt::tt_metal::ReduceOpMath::SUM,
-        "Reduce H RM path only supports SUM (mean lowered from AVG), got {}",
+        !rm_path || operation_attributes.math_op == tt::tt_metal::ReduceOpMath::SUM ||
+            operation_attributes.math_op == tt::tt_metal::ReduceOpMath::MAX,
+        "Reduce H RM path only supports SUM (mean lowered from AVG) or MAX, got {}",
         operation_attributes.math_op);
     TT_FATAL(
         !(rm_path && operation_attributes.negate),
