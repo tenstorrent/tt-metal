@@ -351,11 +351,16 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     }
 
     // intermediate_cb and rotated_input_cb are compute-only (producer and
-    // consumer are the same TRISC pipeline within the post phase). Each
-    // col-block iteration pushes block_size tiles and pops them within the
-    // same iteration before the next push, so a single buffer is enough.
-    create_cb(intermediate_cb_id, program, worker_core_set, bf16_tile_size, block_size, bf16_format);
-    create_cb(rotated_input_cb_id, program, worker_core_set, bf16_tile_size, block_size, bf16_format);
+    // consumer are the same TRISC pipeline within the post phase). Phase 7
+    // restructures the post phase to do each sub-phase (mul-rms, weight,
+    // matmul, cos-mul, sin-mul, add) across ALL col-blocks before moving to
+    // the next, requiring these CBs to hold a full row between sub-phases.
+    // The pack always pushes block_size tiles (LLK packer requirement) even
+    // when only `tiles_in_block = num_tile_cols % block_size` are valid, so
+    // we round the CB size UP to a multiple of block_size.
+    const uint32_t intermediate_cb_tiles = tt::div_up(num_tile_cols, block_size) * block_size;
+    create_cb(intermediate_cb_id, program, worker_core_set, bf16_tile_size, intermediate_cb_tiles, bf16_format);
+    create_cb(rotated_input_cb_id, program, worker_core_set, bf16_tile_size, intermediate_cb_tiles, bf16_format);
     // output_cb is double-buffered so the writer can drain block N while compute
     // produces block N+1.
     create_cb(output_cb_id, program, worker_core_set, output_tile_size, block_size * 2, output_format);
