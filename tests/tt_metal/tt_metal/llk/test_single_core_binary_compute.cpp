@@ -310,24 +310,9 @@ static bool single_core_binary_quasar(
         .num_threads = 1,
         .compiler_options = {.defines = defines},
         .dfb_bindings =
-            {{
-                 .dfb_spec_name = INP0_DFB,
-                 .local_accessor_name = "in0",
-                 .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
-             },
-             {
-                 .dfb_spec_name = INP1_DFB,
-                 .local_accessor_name = "in1",
-                 .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
-             },
-             {
-                 .dfb_spec_name = INP2_DFB,
-                 .local_accessor_name = "in2",
-                 .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
-             }},
+            {experimental::ProducerOf(INP0_DFB, "in0"),
+             experimental::ProducerOf(INP1_DFB, "in1"),
+             experimental::ProducerOf(INP2_DFB, "in2")},
         .runtime_arguments_schema =
             {.named_runtime_args =
                  {"src0_addr", "src0_bank_id", "src1_addr", "src1_bank_id", "num_tiles", "src2_addr", "src2_bank_id"}},
@@ -338,12 +323,7 @@ static bool single_core_binary_quasar(
         .unique_id = WRITER,
         .source = "tt_metal/kernels/dataflow/writer_unary.cpp",
         .num_threads = 1,
-        .dfb_bindings = {{
-            .dfb_spec_name = OUT_DFB,
-            .local_accessor_name = "in",
-            .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
-            .access_pattern = experimental::DFBAccessPattern::STRIDED,
-        }},
+        .dfb_bindings = {experimental::ConsumerOf(OUT_DFB, "in")},
         .runtime_arguments_schema = {.named_runtime_args = {"dst_addr", "bank_id", "num_tiles"}},
         .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
@@ -354,30 +334,10 @@ static bool single_core_binary_quasar(
         .num_threads = 1,
         .compiler_options = {.defines = defines},
         .dfb_bindings =
-            {{
-                 .dfb_spec_name = INP0_DFB,
-                 .local_accessor_name = "in0",
-                 .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
-             },
-             {
-                 .dfb_spec_name = INP1_DFB,
-                 .local_accessor_name = "in1",
-                 .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
-             },
-             {
-                 .dfb_spec_name = INP2_DFB,
-                 .local_accessor_name = "in2",
-                 .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
-             },
-             {
-                 .dfb_spec_name = OUT_DFB,
-                 .local_accessor_name = "out",
-                 .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
-             }},
+            {experimental::ConsumerOf(INP0_DFB, "in0"),
+             experimental::ConsumerOf(INP1_DFB, "in1"),
+             experimental::ConsumerOf(INP2_DFB, "in2"),
+             experimental::ProducerOf(OUT_DFB, "out")},
         .runtime_arguments_schema = {.named_runtime_args = {"per_core_block_cnt", "per_core_block_size", "acc_to_dst"}},
         .config_spec =
             experimental::ComputeConfiguration{

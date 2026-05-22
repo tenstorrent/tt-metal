@@ -214,12 +214,7 @@ void run_single_core_transpose_quasar(
         .unique_id = READER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_transpose_wh_8bank.cpp",
         .num_threads = 1,
-        .dfb_bindings = {{
-            .dfb_spec_name = INPUT_DFB,
-            .local_accessor_name = "out",
-            .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
-            .access_pattern = experimental::DFBAccessPattern::STRIDED,
-        }},
+        .dfb_bindings = {experimental::ProducerOf(INPUT_DFB, "out")},
         .tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}},
         .runtime_arguments_schema = {.named_runtime_args = {"N", "Ht", "Wt", "HtWt"}},
         .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
@@ -229,12 +224,7 @@ void run_single_core_transpose_quasar(
         .unique_id = WRITER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
         .num_threads = 1,
-        .dfb_bindings = {{
-            .dfb_spec_name = OUTPUT_DFB,
-            .local_accessor_name = "in",
-            .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
-            .access_pattern = experimental::DFBAccessPattern::STRIDED,
-        }},
+        .dfb_bindings = {experimental::ConsumerOf(OUTPUT_DFB, "in")},
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
         .runtime_arguments_schema = {.named_runtime_args = {"num_tiles"}},
         .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
@@ -250,19 +240,7 @@ void run_single_core_transpose_quasar(
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/transpose_wh.cpp",
         .num_threads = 1,
         .compiler_options = {.defines = compute_defines},
-        .dfb_bindings =
-            {{
-                 .dfb_spec_name = INPUT_DFB,
-                 .local_accessor_name = "in",
-                 .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
-             },
-             {
-                 .dfb_spec_name = OUTPUT_DFB,
-                 .local_accessor_name = "out",
-                 .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
-             }},
+        .dfb_bindings = {experimental::ConsumerOf(INPUT_DFB, "in"), experimental::ProducerOf(OUTPUT_DFB, "out")},
         .compile_time_arg_bindings = {{"NHtWt", Ht * Wt * NC}},
         .config_spec = experimental::ComputeConfiguration{},
     };

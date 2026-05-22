@@ -392,12 +392,7 @@ static bool reader_datacopy_writer_quasar(
         .unique_id = READER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
         .num_threads = num_threads,
-        .dfb_bindings = {{
-            .dfb_spec_name = INPUT_DFB,
-            .local_accessor_name = "out",
-            .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
-            .access_pattern = experimental::DFBAccessPattern::STRIDED,
-        }},
+        .dfb_bindings = {experimental::ProducerOf(INPUT_DFB, "out")},
         .compile_time_arg_bindings = {{"use_dfbs", 1u}},
         .runtime_arguments_schema =
             {.named_runtime_args = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
@@ -408,12 +403,7 @@ static bool reader_datacopy_writer_quasar(
         .unique_id = WRITER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
         .num_threads = num_threads,
-        .dfb_bindings = {{
-            .dfb_spec_name = OUTPUT_DFB,
-            .local_accessor_name = "in",
-            .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
-            .access_pattern = experimental::DFBAccessPattern::STRIDED,
-        }},
+        .dfb_bindings = {experimental::ConsumerOf(OUTPUT_DFB, "in")},
         .compile_time_arg_bindings = {{"use_dfbs", 1u}},
         .runtime_arguments_schema =
             {.named_runtime_args = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
@@ -424,19 +414,7 @@ static bool reader_datacopy_writer_quasar(
         .unique_id = COMPUTE,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
         .num_threads = num_threads,
-        .dfb_bindings =
-            {{
-                 .dfb_spec_name = INPUT_DFB,
-                 .local_accessor_name = "in",
-                 .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
-             },
-             {
-                 .dfb_spec_name = OUTPUT_DFB,
-                 .local_accessor_name = "out",
-                 .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
-             }},
+        .dfb_bindings = {experimental::ConsumerOf(INPUT_DFB, "in"), experimental::ProducerOf(OUTPUT_DFB, "out")},
         .compile_time_arg_bindings = {{"per_core_tile_cnt", per_core_tile_cnt}, {"use_dfbs", 1u}},
         .config_spec = experimental::ComputeConfiguration{},
     };

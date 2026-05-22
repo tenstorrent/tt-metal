@@ -145,14 +145,8 @@ AliasDFBProgramComponents make_alias_dfb_program_spec(
         .num_threads = num_producers,
         .dfb_bindings =
             {
-                {.dfb_spec_name = "dfb_a",
-                 .local_accessor_name = "out_a",
-                 .endpoint_type = KernelSpec::DFBEndpointType::PRODUCER,
-                 .access_pattern = DFBAccessPattern::STRIDED},
-                {.dfb_spec_name = "dfb_b",
-                 .local_accessor_name = "out_b",
-                 .endpoint_type = KernelSpec::DFBEndpointType::PRODUCER,
-                 .access_pattern = DFBAccessPattern::STRIDED},
+                ProducerOf("dfb_a", "out_a"),
+                ProducerOf("dfb_b", "out_b"),
             },
         .tensor_bindings =
             {
@@ -176,14 +170,8 @@ AliasDFBProgramComponents make_alias_dfb_program_spec(
         .num_threads = num_consumers,
         .dfb_bindings =
             {
-                {.dfb_spec_name = "dfb_a",
-                 .local_accessor_name = "in_a",
-                 .endpoint_type = KernelSpec::DFBEndpointType::CONSUMER,
-                 .access_pattern = DFBAccessPattern::STRIDED},
-                {.dfb_spec_name = "dfb_b",
-                 .local_accessor_name = "in_b",
-                 .endpoint_type = KernelSpec::DFBEndpointType::CONSUMER,
-                 .access_pattern = DFBAccessPattern::STRIDED},
+                ConsumerOf("dfb_a", "in_a"),
+                ConsumerOf("dfb_b", "in_b"),
             },
         .tensor_bindings =
             {
@@ -357,14 +345,8 @@ AliasBorrowedDFBComponents make_alias_borrowed_dfb_program_spec(
         .num_threads = 1,
         .dfb_bindings =
             {
-                {.dfb_spec_name = "dfb_borrowed",
-                 .local_accessor_name = "out_a",
-                 .endpoint_type = KernelSpec::DFBEndpointType::PRODUCER,
-                 .access_pattern = DFBAccessPattern::STRIDED},
-                {.dfb_spec_name = "dfb_alias",
-                 .local_accessor_name = "out_b",
-                 .endpoint_type = KernelSpec::DFBEndpointType::PRODUCER,
-                 .access_pattern = DFBAccessPattern::STRIDED},
+                ProducerOf("dfb_borrowed", "out_a"),
+                ProducerOf("dfb_alias", "out_b"),
             },
         .tensor_bindings =
             {
@@ -391,14 +373,8 @@ AliasBorrowedDFBComponents make_alias_borrowed_dfb_program_spec(
         .num_threads = 1,
         .dfb_bindings =
             {
-                {.dfb_spec_name = "dfb_borrowed",
-                 .local_accessor_name = "in_a",
-                 .endpoint_type = KernelSpec::DFBEndpointType::CONSUMER,
-                 .access_pattern = DFBAccessPattern::STRIDED},
-                {.dfb_spec_name = "dfb_alias",
-                 .local_accessor_name = "in_b",
-                 .endpoint_type = KernelSpec::DFBEndpointType::CONSUMER,
-                 .access_pattern = DFBAccessPattern::STRIDED},
+                ConsumerOf("dfb_borrowed", "in_a"),
+                ConsumerOf("dfb_alias", "in_b"),
             },
         .tensor_bindings =
             {

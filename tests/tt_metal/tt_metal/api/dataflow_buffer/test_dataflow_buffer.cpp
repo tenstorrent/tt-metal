@@ -241,12 +241,7 @@ void run_single_dfb_program(
             .unique_id = PRODUCER,
             .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp",
             .num_threads = static_cast<uint8_t>(dfb_config.num_producers),
-            .dfb_bindings = {{
-                .dfb_spec_name = DFB_NAME,
-                .local_accessor_name = "out",
-                .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
-                .access_pattern = experimental::DFBAccessPattern::STRIDED,
-            }},
+            .dfb_bindings = {experimental::ProducerOf(DFB_NAME, "out")},
             .tensor_bindings = {{
                 .tensor_parameter_name = IN_TENSOR,
                 .accessor_name = "src_tensor",  // kernel: ta::src_tensor
@@ -265,12 +260,7 @@ void run_single_dfb_program(
             .unique_id = PRODUCER,
             .source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_producer.cpp",
             .num_threads = static_cast<uint8_t>(dfb_config.num_producers),
-            .dfb_bindings = {{
-                .dfb_spec_name = DFB_NAME,
-                .local_accessor_name = "out",
-                .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
-                .access_pattern = experimental::DFBAccessPattern::STRIDED,
-            }},
+            .dfb_bindings = {experimental::ProducerOf(DFB_NAME, "out")},
             .compile_time_arg_bindings = {{"num_entries_per_producer", num_entries_per_producer}},
             .config_spec = experimental::ComputeConfiguration{},
         };
@@ -636,12 +626,7 @@ void run_concurrent_dfbs_program(
             .unique_id = producer_name,
             .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_multi_producer.cpp",
             .num_threads = 1,
-            .dfb_bindings = {{
-                .dfb_spec_name = dfb_name,
-                .local_accessor_name = "out",
-                .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
-                .access_pattern = experimental::DFBAccessPattern::STRIDED,
-            }},
+            .dfb_bindings = {experimental::ProducerOf(dfb_name, "out")},
             .tensor_bindings = {{
                 .tensor_parameter_name = IN_TENSOR,
                 .accessor_name = "src_tensor",
@@ -661,12 +646,7 @@ void run_concurrent_dfbs_program(
             .unique_id = consumer_name,
             .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_multi_consumer.cpp",
             .num_threads = 1,
-            .dfb_bindings = {{
-                .dfb_spec_name = dfb_name,
-                .local_accessor_name = "in",
-                .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
-                .access_pattern = experimental::DFBAccessPattern::STRIDED,
-            }},
+            .dfb_bindings = {experimental::ConsumerOf(dfb_name, "in")},
             .tensor_bindings = {{
                 .tensor_parameter_name = OUT_TENSOR,
                 .accessor_name = "dst_tensor",
@@ -782,12 +762,8 @@ void run_concurrent_tensix_dm_dfbs_program(
         .config_spec = experimental::ComputeConfiguration{},
     };
     for (uint32_t i = 0; i < num_dfbs; ++i) {
-        producer_spec.dfb_bindings.push_back(experimental::KernelSpec::DFBBinding{
-            .dfb_spec_name = "dfb_" + std::to_string(i),
-            .local_accessor_name = "dfb_" + std::to_string(i),
-            .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
-            .access_pattern = experimental::DFBAccessPattern::STRIDED,
-        });
+        producer_spec.dfb_bindings.push_back(
+            experimental::ProducerOf("dfb_" + std::to_string(i), "dfb_" + std::to_string(i)));
     }
 
     // DM concurrent consumers: one 1-thread kernel instance per DFB, each binding
@@ -827,12 +803,7 @@ void run_concurrent_tensix_dm_dfbs_program(
             .unique_id = consumer_name,
             .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_multi_consumer_sep.cpp",
             .num_threads = 1,
-            .dfb_bindings = {{
-                .dfb_spec_name = dfb_name,
-                .local_accessor_name = "in",
-                .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
-                .access_pattern = experimental::DFBAccessPattern::STRIDED,
-            }},
+            .dfb_bindings = {experimental::ConsumerOf(dfb_name, "in")},
             .tensor_bindings = {{
                 .tensor_parameter_name = out_tensor_name,
                 .accessor_name = "dst_tensor",
@@ -1049,12 +1020,7 @@ void run_sequential_dfbs_program(
             .spec = out_tensors[i].tensor_spec(),
         });
 
-        producer_spec.dfb_bindings.push_back(experimental::KernelSpec::DFBBinding{
-            .dfb_spec_name = dfb_name,
-            .local_accessor_name = "dfb_" + idx,
-            .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
-            .access_pattern = experimental::DFBAccessPattern::STRIDED,
-        });
+        producer_spec.dfb_bindings.push_back(experimental::ProducerOf(dfb_name, "dfb_" + idx));
         producer_spec.tensor_bindings.push_back(experimental::KernelSpec::TensorBinding{
             .tensor_parameter_name = in_tensor_name,
             .accessor_name = "src_" + idx,
@@ -1185,12 +1151,7 @@ void run_in_dfb_out_dfb_program(
         .unique_id = PRODUCER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp",
         .num_threads = static_cast<uint8_t>(dm2tensix_config.num_producers),
-        .dfb_bindings = {{
-            .dfb_spec_name = IN_DFB,
-            .local_accessor_name = "out",
-            .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
-            .access_pattern = experimental::DFBAccessPattern::STRIDED,
-        }},
+        .dfb_bindings = {experimental::ProducerOf(IN_DFB, "out")},
         .tensor_bindings = {{
             .tensor_parameter_name = IN_TENSOR,
             .accessor_name = "src_tensor",
@@ -1218,12 +1179,7 @@ void run_in_dfb_out_dfb_program(
                     .access_pattern =
                         in_is_all ? experimental::DFBAccessPattern::ALL : experimental::DFBAccessPattern::STRIDED,
                 },
-                {
-                    .dfb_spec_name = OUT_DFB,
-                    .local_accessor_name = "out",
-                    .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
-                    .access_pattern = experimental::DFBAccessPattern::STRIDED,
-                },
+                experimental::ProducerOf(OUT_DFB, "out"),
             },
         .compile_time_arg_bindings = {{"num_entries", num_entries_per_unpacker}},
         .config_spec = experimental::ComputeConfiguration{},
@@ -1862,18 +1818,8 @@ static void run_intra_tensix_dfb_program(
         .num_threads = static_cast<uint8_t>(num_threads),
         .dfb_bindings =
             {
-                {
-                    .dfb_spec_name = INTRA_DFB,
-                    .local_accessor_name = "out",
-                    .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
-                    .access_pattern = experimental::DFBAccessPattern::STRIDED,
-                },
-                {
-                    .dfb_spec_name = INTRA_DFB,
-                    .local_accessor_name = "in",
-                    .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
-                    .access_pattern = experimental::DFBAccessPattern::STRIDED,
-                },
+                experimental::ProducerOf(INTRA_DFB, "out"),
+                experimental::ConsumerOf(INTRA_DFB, "in"),
             },
         .compile_time_arg_bindings =
             {
@@ -2003,12 +1949,7 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
         .unique_id = DM_PRODUCER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp",
         .num_threads = 1,
-        .dfb_bindings = {{
-            .dfb_spec_name = REMAPPER_DFB,
-            .local_accessor_name = "out",
-            .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
-            .access_pattern = experimental::DFBAccessPattern::STRIDED,
-        }},
+        .dfb_bindings = {experimental::ProducerOf(REMAPPER_DFB, "out")},
         .tensor_bindings = {{
             .tensor_parameter_name = IN_TENSOR,
             .accessor_name = "src_tensor",
@@ -2032,24 +1973,9 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
         .num_threads = static_cast<uint8_t>(num_neos),
         .dfb_bindings =
             {
-                {
-                    .dfb_spec_name = REMAPPER_DFB,
-                    .local_accessor_name = "remapper_in",
-                    .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
-                    .access_pattern = experimental::DFBAccessPattern::ALL,
-                },
-                {
-                    .dfb_spec_name = INTRA_DFB,
-                    .local_accessor_name = "intra_out",
-                    .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
-                    .access_pattern = experimental::DFBAccessPattern::STRIDED,
-                },
-                {
-                    .dfb_spec_name = INTRA_DFB,
-                    .local_accessor_name = "intra_in",
-                    .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
-                    .access_pattern = experimental::DFBAccessPattern::STRIDED,
-                },
+                experimental::AllConsumerOf(REMAPPER_DFB, "remapper_in"),
+                experimental::ProducerOf(INTRA_DFB, "intra_out"),
+                experimental::ConsumerOf(INTRA_DFB, "intra_in"),
             },
         .compile_time_arg_bindings =
             {

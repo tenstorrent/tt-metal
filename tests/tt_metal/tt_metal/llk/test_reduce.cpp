@@ -497,18 +497,7 @@ void run_single_core_reduce_program_quasar(
         .num_threads = 1,
         .compiler_options = {.defines = reader_defines},
         .dfb_bindings =
-            {{
-                 .dfb_spec_name = SRC0_DFB,
-                 .local_accessor_name = "out_data",
-                 .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
-             },
-             {
-                 .dfb_spec_name = SRC1_DFB,
-                 .local_accessor_name = "out_scaler",
-                 .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
-             }},
+            {experimental::ProducerOf(SRC0_DFB, "out_data"), experimental::ProducerOf(SRC1_DFB, "out_scaler")},
         .tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}},
         .compile_time_arg_bindings = reader_cta_bindings,
         .runtime_arguments_schema = {.named_runtime_args = reader_named_runtime_args},
@@ -519,12 +508,7 @@ void run_single_core_reduce_program_quasar(
         .unique_id = WRITER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
         .num_threads = 1,
-        .dfb_bindings = {{
-            .dfb_spec_name = DST_DFB,
-            .local_accessor_name = "in",
-            .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
-            .access_pattern = experimental::DFBAccessPattern::STRIDED,
-        }},
+        .dfb_bindings = {experimental::ConsumerOf(DST_DFB, "in")},
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
         .runtime_arguments_schema = {.named_runtime_args = {"num_tiles"}},
         .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
@@ -536,24 +520,9 @@ void run_single_core_reduce_program_quasar(
         .num_threads = 1,
         .compiler_options = {.defines = build_reduce_defines(test_config)},
         .dfb_bindings =
-            {{
-                 .dfb_spec_name = SRC0_DFB,
-                 .local_accessor_name = "in_data",
-                 .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
-             },
-             {
-                 .dfb_spec_name = SRC1_DFB,
-                 .local_accessor_name = "in_scaler",
-                 .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
-             },
-             {
-                 .dfb_spec_name = DST_DFB,
-                 .local_accessor_name = "out",
-                 .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
-             }},
+            {experimental::ConsumerOf(SRC0_DFB, "in_data"),
+             experimental::ConsumerOf(SRC1_DFB, "in_scaler"),
+             experimental::ProducerOf(DST_DFB, "out")},
         .compile_time_arg_bindings = {{"Ht", dims.Ht}, {"Wt", dims.Wt}, {"NC", dims.NC}},
         .config_spec =
             experimental::ComputeConfiguration{

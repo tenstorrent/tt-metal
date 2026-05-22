@@ -235,12 +235,7 @@ bool run_sfpu_all_same_buffer(
             .unique_id = READER,
             .source = "tt_metal/kernels/dataflow/reader_unary.cpp",
             .num_threads = 1,
-            .dfb_bindings = {{
-                .dfb_spec_name = IN_DFB,
-                .local_accessor_name = "out",
-                .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
-                .access_pattern = experimental::DFBAccessPattern::STRIDED,
-            }},
+            .dfb_bindings = {experimental::ProducerOf(IN_DFB, "out")},
             .runtime_arguments_schema = {.named_runtime_args = {"src_addr", "bank_id", "num_tiles"}},
             .config_spec =
                 experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
@@ -250,12 +245,7 @@ bool run_sfpu_all_same_buffer(
             .unique_id = WRITER,
             .source = "tt_metal/kernels/dataflow/writer_unary.cpp",
             .num_threads = 1,
-            .dfb_bindings = {{
-                .dfb_spec_name = OUT_DFB,
-                .local_accessor_name = "in",
-                .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
-                .access_pattern = experimental::DFBAccessPattern::STRIDED,
-            }},
+            .dfb_bindings = {experimental::ConsumerOf(OUT_DFB, "in")},
             .runtime_arguments_schema = {.named_runtime_args = {"dst_addr", "bank_id", "num_tiles"}},
             .config_spec =
                 experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
@@ -271,19 +261,7 @@ bool run_sfpu_all_same_buffer(
             .source = "tt_metal/kernels/compute/eltwise_sfpu.cpp",
             .num_threads = 1,
             .compiler_options = {.defines = std::move(compute_defines)},
-            .dfb_bindings =
-                {{
-                     .dfb_spec_name = IN_DFB,
-                     .local_accessor_name = "in",
-                     .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
-                     .access_pattern = experimental::DFBAccessPattern::STRIDED,
-                 },
-                 {
-                     .dfb_spec_name = OUT_DFB,
-                     .local_accessor_name = "out",
-                     .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
-                     .access_pattern = experimental::DFBAccessPattern::STRIDED,
-                 }},
+            .dfb_bindings = {experimental::ConsumerOf(IN_DFB, "in"), experimental::ProducerOf(OUT_DFB, "out")},
             .compile_time_arg_bindings =
                 {{"per_core_block_cnt", static_cast<uint32_t>(test_config.num_tiles)}, {"per_core_block_dim", 1u}},
             .config_spec =
