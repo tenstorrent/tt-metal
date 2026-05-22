@@ -1440,6 +1440,8 @@ std::pair<bool, size_t> FDMeshCommandQueue::query_prefetcher_cache(uint64_t work
 
 void FDMeshCommandQueue::reset_prefetcher_cache_manager() { prefetcher_cache_manager_->reset(); }
 
+void FDMeshCommandQueue::invalidate_prefetcher_cache_after_pinned_write() { this->reset_prefetcher_cache_manager(); }
+
 int FDMeshCommandQueue::get_prefetcher_cache_sizeB() const {
     return this->prefetcher_cache_manager_->get_cache_sizeB();
 }

@@ -2187,14 +2187,26 @@ bool process_cmd(
 template <bool test_for_nonzero>
 static void relay_linear_to_downstream(
     uint32_t& downstream_data_ptr, uint32_t scratch_write_addr, uint32_t amt_to_write) {
-    // Unlike in write_pages_to_dispatcher we always round npages down, so if downstream_data_ptr is at the start of a
-    // page, that means page_residual_space is 0. This is why the logic is different from write_pages_to_dispatcher.
-    uint32_t page_residual_space = -downstream_data_ptr & (downstream_cb_page_size - 1);
+    constexpr uint32_t page_mask = downstream_cb_page_size - 1;
+    uint32_t page_offset = downstream_data_ptr & page_mask;
+    uint32_t end_page_offset = page_offset + amt_to_write;
+    uint32_t pages_touched = (end_page_offset + page_mask) >> downstream_cb_log_page_size;
+    // Acquire pages that this write newly touches. If we are already in a partially filled page, that page was acquired
+    // by the previous write and should not be acquired again.
+    uint32_t pages_to_acquire = pages_touched - static_cast<uint32_t>(page_offset != 0);
+    // Mid-stream, only fully completed pages are safe to credit to prefetch_d. The final chunk can credit its partial
+    // tail page because prefetch_d clamps consumption to the command's remaining length.
+    uint32_t pages_to_release = end_page_offset >> downstream_cb_log_page_size;
+    if constexpr (test_for_nonzero) {
+        pages_to_release = pages_touched;
+    }
 
-    // Following is fine if downstream cb block is bigger than scratch and there are at least a couple of them
-    uint32_t npages = (amt_to_write - page_residual_space + downstream_cb_page_size - 1) / downstream_cb_page_size;
-    if (!test_for_nonzero || (npages != 0)) {
-        DispatchRelayInlineState::cb_writer.acquire_pages(npages);
+    if constexpr (test_for_nonzero) {
+        if (pages_to_acquire != 0) {
+            DispatchRelayInlineState::cb_writer.acquire_pages(pages_to_acquire);
+        }
+    } else {
+        DispatchRelayInlineState::cb_writer.acquire_pages(pages_to_acquire);
     }
     uint64_t noc_addr;
     if (downstream_data_ptr == downstream_cb_end) {
@@ -2211,7 +2223,7 @@ static void relay_linear_to_downstream(
     noc_addr = get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr);
     relay_client
         .write_atomic_inc_any_len<my_noc_index, downstream_noc_xy, downstream_cb_sem_id, true, NCRISC_WR_CMD_BUF>(
-            scratch_write_addr, noc_addr, amt_to_write, npages);
+            scratch_write_addr, noc_addr, amt_to_write, pages_to_release);
     downstream_data_ptr += amt_to_write;
 }
 
