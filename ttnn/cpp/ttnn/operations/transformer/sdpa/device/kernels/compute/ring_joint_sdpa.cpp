@@ -24,9 +24,8 @@ void kernel_main() {
     constexpr uint32_t q_local_padded_Nt [[maybe_unused]] = get_compile_time_arg_val(7);
     constexpr uint32_t kv_local_padded_Nt = get_compile_time_arg_val(8);
     constexpr uint32_t padded_Nt = get_compile_time_arg_val(9);
-    // Slots 10/11: CT layout hints for the constexpr mask-CB sizing; runtime logical_nt is read below.
-    constexpr uint32_t logical_n_layout_hint = get_compile_time_arg_val(10);
-    constexpr uint32_t logical_nt_layout_hint = get_compile_time_arg_val(11);
+    constexpr uint32_t logical_n = get_compile_time_arg_val(10);
+    constexpr uint32_t logical_nt = get_compile_time_arg_val(11);
     constexpr uint32_t Lt = get_compile_time_arg_val(12);
     constexpr uint32_t L = get_compile_time_arg_val(13);
     constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(14);
@@ -66,7 +65,7 @@ void kernel_main() {
     // Lightweight mask: all mask tiles live in cb_mask_in.
     // Layout: [neginf(0)] [causal_diag?(1)] [global_n_partial?] [joint_l_partial?]
     constexpr bool local_n_has_padding = kv_local_padded_Nt % Sk_chunk_t != 0;
-    constexpr bool global_n_has_padding = logical_n_layout_hint % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
+    constexpr bool global_n_has_padding = logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
     constexpr bool joint_has_padding = L > 0 && L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
     constexpr bool needs_lightweight_mask =
         (local_n_has_padding || global_n_has_padding || joint_has_padding) || diag_tile_enabled;
@@ -80,18 +79,11 @@ void kernel_main() {
     constexpr uint32_t total_mask_tiles =
         1 + (diag_tile_enabled ? 1 : 0) + (global_n_partial_col > 0 ? 1 : 0) + (joint_l_partial_col > 0 ? 1 : 0);
 
+    constexpr uint32_t q_start_idx_t = chunked_enabled ? (kv_local_padded_Nt - q_local_padded_Nt) * ring_size : 0;
+
     uint32_t argidx = 0;
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
-    // Chunked: q_start_idx_t + logical_nt pushed as RT (vary per chunk). Non-chunked: CT hints.
-    uint32_t q_start_idx_t = 0;
-    uint32_t logical_nt;
-    if constexpr (chunked_enabled) {
-        q_start_idx_t = get_arg_val<uint32_t>(argidx++);
-        logical_nt = get_arg_val<uint32_t>(argidx++);
-    } else {
-        logical_nt = logical_nt_layout_hint;
-    }
     const uint32_t q_per_core = global_q_end - global_q_start;
 
     RingSDPAOpIndexer fused_op_indexer = RingSDPAOpIndexer(argidx);
