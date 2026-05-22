@@ -127,8 +127,8 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         # Shape-keyed dict caches (build-once across clips).
         self._frame_attn_mask_cache: dict[tuple[int, int, int], ttnn.Tensor] = {}
         self._adain_modulation_cache: dict[tuple[int, int, int], tuple[ttnn.Tensor, ttnn.Tensor]] = {}
-        self._adain_E_cache: dict[tuple[int, int, int], ttnn.Tensor] = {}
-        self._adain_Z_cache: dict[tuple[int, int, int], tuple[ttnn.Tensor, ttnn.Tensor]] = {}
+        # (E, zero_row, one_row) per (padded_noisy, padded_const, T_video).
+        self._adain_shape_cache: dict[tuple[int, int, int], tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]] = {}
         self._noisy_mask_emb_cache: dict[int, ttnn.Tensor] = {}
         self._pose_emb_zero_cache: dict[int, ttnn.Tensor] = {}
         self._mask_noisy_cache: dict[tuple[int, int, int], ttnn.Tensor] = {}
@@ -316,7 +316,7 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
 
         T_video = self.num_frames
         shape_key = (padded_noisy, padded_const, T_video)
-        if shape_key not in self._adain_E_cache:
+        if shape_key not in self._adain_shape_cache:
             padded_N = padded_noisy + padded_const
             hw_per_frame = noisy_len // T_video
             sp_axis = self.parallel_config.sequence_parallel.mesh_axis
@@ -327,7 +327,7 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
                 E_torch[i, i // hw_per_frame] = 1.0
             for i in range(noisy_len, padded_N):
                 E_torch[i, T_video] = 1.0
-            self._adain_E_cache[shape_key] = bf16_tensor(
+            E_tt = bf16_tensor(
                 E_torch.unsqueeze(0).unsqueeze(0).contiguous(),
                 device=self.mesh_device,
                 mesh_axis=sp_axis,
@@ -335,12 +335,10 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
                 layout=ttnn.TILE_LAYOUT,
             )
             sentinel_kwargs = dict(device=self.mesh_device, mesh_axis=tp_axis, shard_dim=3, layout=ttnn.TILE_LAYOUT)
-            self._adain_Z_cache[shape_key] = (
-                bf16_tensor(torch.zeros(1, 1, 1, self.dim, dtype=torch.float32), **sentinel_kwargs),
-                bf16_tensor(torch.ones(1, 1, 1, self.dim, dtype=torch.float32), **sentinel_kwargs),
-            )
-        E_tt = self._adain_E_cache[shape_key]
-        zero_row_tt, one_row_tt = self._adain_Z_cache[shape_key]
+            zero_row_tt = bf16_tensor(torch.zeros(1, 1, 1, self.dim, dtype=torch.float32), **sentinel_kwargs)
+            one_row_tt = bf16_tensor(torch.ones(1, 1, 1, self.dim, dtype=torch.float32), **sentinel_kwargs)
+            self._adain_shape_cache[shape_key] = (E_tt, zero_row_tt, one_row_tt)
+        E_tt, zero_row_tt, one_row_tt = self._adain_shape_cache[shape_key]
 
         adain_layer = self.audio_injector.injector_adain_layers[audio_attn_id]
         proj_dev = adain_layer.linear(ttnn.silu(self.audio_emb_global_token0_dev))
