@@ -122,10 +122,14 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const tt::DataFormat up_df = tt::tt_metal::datatype_to_dataformat_converter(t.up_proj.dtype());
     const tt::DataFormat down_df = tt::tt_metal::datatype_to_dataformat_converter(t.down_proj.dtype());
     const tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(tensor_return_value.dtype());
-    // Intermediate (gate/up/activated) format: use input activation format
-    // (bf8) for tightness; partials use bfloat16 for accumulation precision.
-    const tt::DataFormat intermed_df = x_df;
-    const tt::DataFormat partials_df = tt::DataFormat::Float16_b;
+    // Intermediate and partials share the same format — required by the
+    // v2 compute kernel's mm_init pattern (mm_init's 3rd arg drives the
+    // packer's data-format config; mismatched formats need explicit pack
+    // reconfig that the v2 kernel doesn't do). Use bfp8_b for both: 1KB/tile
+    // is half the bf16 cost so we fit in L1 with both intermediates and
+    // partials sized to the full per-core block.
+    const tt::DataFormat intermed_df = tt::DataFormat::Bfp8_b;
+    const tt::DataFormat partials_df = tt::DataFormat::Bfp8_b;
 
     const uint32_t x_tile_size = tt::tile_size(x_df);
     const uint32_t gate_tile_size = tt::tile_size(gate_df);
@@ -179,25 +183,27 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         return tt::tt_metal::CreateCircularBuffer(program, core_range_set, cfg);
     };
 
-    make_cb(CB_IN0_X, x_df, /*tiles=*/gu_in0_block_num_tiles * 2, x_tile_size);
-    make_cb(CB_IN1_GATE, gate_df, /*tiles=*/gu_in1_block_num_tiles * 2, gate_tile_size);
-    make_cb(CB_IN1_UP, up_df, /*tiles=*/gu_in1_block_num_tiles * 2, up_tile_size);
-    make_cb(CB_IN1_DOWN, down_df, /*tiles=*/d_in1_block_num_tiles * 2, down_tile_size);
+    // Single-buffered DRAM-streamed inputs (no double-buffer) to fit L1.
+    make_cb(CB_IN0_X, x_df, /*tiles=*/gu_in0_block_num_tiles, x_tile_size);
+    make_cb(CB_IN1_GATE, gate_df, /*tiles=*/gu_in1_block_num_tiles, gate_tile_size);
+    make_cb(CB_IN1_UP, up_df, /*tiles=*/gu_in1_block_num_tiles, up_tile_size);
+    make_cb(CB_IN1_DOWN, down_df, /*tiles=*/d_in1_block_num_tiles, down_tile_size);
     // Intermediate L1 buffers hold one full per-core block each.
     make_cb(CB_GATE_INT, intermed_df, /*tiles=*/gu_out_block_num_tiles, intermed_tile_size);
     make_cb(CB_UP_INT, intermed_df, /*tiles=*/gu_out_block_num_tiles, intermed_tile_size);
     make_cb(CB_ACTIVATED, intermed_df, /*tiles=*/gu_out_block_num_tiles, intermed_tile_size);
-    // Partials CBs: subblock-sized (2x for double-buffer) for the kernel's
-    // spill/reload between subblock iterations within a K-block.
+    // Partials CBs: subblock-sized (no double-buffer needed — the v2 kernel
+    // pushes one subblock, then pops it immediately on the next K-block's
+    // reload step). The CB just needs to hold ONE subblock at a time.
     make_cb(
         CB_PARTIALS_GU,
         partials_df,
-        /*tiles=*/gu_out_subblock_h * gu_out_subblock_w * 2,
+        /*tiles=*/gu_out_subblock_h * gu_out_subblock_w,
         partials_tile_size);
     make_cb(
         CB_PARTIALS_D,
         partials_df,
-        /*tiles=*/d_out_subblock_h * d_out_subblock_w * 2,
+        /*tiles=*/d_out_subblock_h * d_out_subblock_w,
         partials_tile_size);
     // Output CB: writer drains one subblock at a time.
     make_cb(CB_OUT, out_df, /*tiles=*/d_out_subblock_h * d_out_subblock_w * 4, out_tile_size);
