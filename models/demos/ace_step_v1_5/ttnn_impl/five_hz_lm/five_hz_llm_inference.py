@@ -108,6 +108,8 @@ class LocalFiveHzLMHandler:
         # True only after successful load of AceStepFiveHzExperimentalTtnnCausalLM (batch=1; no LM CFG).
         self._ttnn_lm_active = False
         self._ttnn_lm_use_trace = False
+        self._ttnn_lm_prefill_trace = False
+        self._ttnn_lm_decode_trace = False
         self._ttnn_causal_max_seq_len = 16384
         # Increments on each TTNN LM sample when ``_ttnn_logits_device`` is set (feeds ``ttnn.rand`` seed).
         self._ttnn_sample_counter = 0
@@ -590,17 +592,27 @@ class LocalFiveHzLMHandler:
                     AceStepFiveHzExperimentalTtnnCausalLM,
                 )
 
+                prefill_trace = bool(getattr(self, "_ttnn_lm_prefill_trace", False))
+                decode_trace = bool(getattr(self, "_ttnn_lm_decode_trace", False))
                 self.llm = AceStepFiveHzExperimentalTtnnCausalLM(
                     model_path,
                     self._ttnn_causal_device,
                     max_seq_len=int(getattr(self, "_ttnn_causal_max_seq_len", 16384)),
-                    use_trace=bool(getattr(self, "_ttnn_lm_use_trace", False)),
+                    use_prefill_trace=prefill_trace,
+                    use_decode_trace=decode_trace,
                 )
                 self.llm.eval()
                 self.llm_backend = "pt"
                 self.llm_initialized = True
                 self._ttnn_lm_active = True
-                trace_note = " trace+2cq prefill+decode on" if getattr(self, "_ttnn_lm_use_trace", False) else ""
+                if prefill_trace and decode_trace:
+                    trace_note = " trace+2cq prefill+decode on"
+                elif prefill_trace:
+                    trace_note = " trace+2cq prefill on (decode eager)"
+                elif decode_trace:
+                    trace_note = " trace+2cq decode on (prefill eager)"
+                else:
+                    trace_note = ""
                 logger.info(
                     "5Hz LM initialized using TTNN causal stack (qwen_tt_transformers_lm)%s; "
                     "batch>1 / LM CFG batched paths are unsupported.",
@@ -708,6 +720,8 @@ class LocalFiveHzLMHandler:
         use_ttnn_causal_lm: bool = True,
         ttnn_causal_max_seq_len: int = 16384,
         ttnn_lm_use_trace: bool = False,
+        ttnn_lm_prefill_trace: bool = False,
+        ttnn_lm_decode_trace: bool = False,
         experimental_ttnn_causal_lm: Optional[bool] = None,
         experimental_ttnn_lm_use_trace: Optional[bool] = None,
     ) -> Tuple[str, bool]:
@@ -726,7 +740,9 @@ class LocalFiveHzLMHandler:
                 :class:`~models.demos.ace_step_v1_5.ttnn_impl.five_hz_causal_lm_experimental.AceStepFiveHzExperimentalTtnnCausalLM`
                 instead of ``AutoModelForCausalLM`` (``backend`` must be ``pt``).
             ttnn_causal_max_seq_len: ``max_seq_len`` passed to ``QwenModelTtTransformers``.
-            ttnn_lm_use_trace: Enable decode trace replay on the TTNN LM when supported.
+            ttnn_lm_use_trace: Legacy flag: when True, enables both prefill and decode trace.
+            ttnn_lm_prefill_trace: Enable ``_prefill_traced`` on the TTNN LM when supported.
+            ttnn_lm_decode_trace: Enable per-token decode ``execute_trace`` on the TTNN LM.
 
         Returns:
             (status_message, success)
@@ -740,7 +756,13 @@ class LocalFiveHzLMHandler:
             self._ttnn_causal_device = ttnn_causal_device
             self._use_ttnn_causal_lm = bool(use_ttnn_causal_lm)
             self._ttnn_causal_max_seq_len = int(ttnn_causal_max_seq_len)
-            self._ttnn_lm_use_trace = bool(ttnn_lm_use_trace)
+            if bool(ttnn_lm_use_trace):
+                self._ttnn_lm_prefill_trace = True
+                self._ttnn_lm_decode_trace = True
+            else:
+                self._ttnn_lm_prefill_trace = bool(ttnn_lm_prefill_trace)
+                self._ttnn_lm_decode_trace = bool(ttnn_lm_decode_trace)
+            self._ttnn_lm_use_trace = bool(self._ttnn_lm_prefill_trace or self._ttnn_lm_decode_trace)
             if self._use_ttnn_causal_lm:
                 if backend != "pt":
                     return (
