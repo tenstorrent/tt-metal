@@ -44,6 +44,16 @@ from typing import Any, Optional
 import torch
 import torch.nn as nn
 
+from models.demos.ace_step_v1_5.ttnn_impl.lm_logits_debug import (
+    ace_step_debug_lm_logits_enabled,
+    ace_step_debug_lm_logits_hf_enabled,
+    debug_compare_decode_logits_stages,
+    debug_compare_prefill_logits_stages,
+    debug_hf_layer_hidden_pcc,
+    debug_hf_reference_last_logits,
+    log_lm_tensor_stats,
+)
+
 
 class AceStepFiveHzExperimentalTtnnCausalLM(nn.Module):
     """HF-compatible thin wrapper around the stock ``tt_transformers`` ACE-Step 5 Hz LM body."""
@@ -62,6 +72,7 @@ class AceStepFiveHzExperimentalTtnnCausalLM(nn.Module):
         self.generation_config = SimpleNamespace(use_cache=True)
         self._cursor = 0
         self._ttnn_device = ttnn_device
+        self._hf_model_dir = str(hf_model_dir)
 
     def reset_decode_state(self) -> None:
         self.qwen.reset_kv_cache()
@@ -104,6 +115,12 @@ class AceStepFiveHzExperimentalTtnnCausalLM(nn.Module):
         )
 
         logits_torch = to_torch_auto_compose(logits_tt).to(dtype=torch.float32, device=input_ids.device)
+        if ace_step_debug_lm_logits_enabled():
+            log_lm_tensor_stats(
+                "bridge.after_to_torch",
+                logits_torch,
+                extra=f"is_prefill={is_prefill} offset_in_tile={last_token_offset_in_tile}",
+            )
         # TTNN compose can yield extra leading singletons. Blind ``while dim>3: squeeze(0)`` can
         # turn decode logits into [1, V], so ``[:, -1, :]`` indexes the vocabulary axis as
         # "sequence" and sampling becomes multilingual garbage. Trim the trailing padded-vocab
@@ -121,6 +138,9 @@ class AceStepFiveHzExperimentalTtnnCausalLM(nn.Module):
                 )
         logits_torch = logits_torch.reshape(-1, vocab).view(1, -1, vocab)
         seq_log = int(input_ids.shape[1])
+        logits_for_debug = logits_torch
+        if ace_step_debug_lm_logits_enabled():
+            self._debug_last_raw_logits = logits_for_debug.detach().clone()
 
         if is_prefill:
             # Prefill path: [1, S_out, vocab] where S_out is one 32-tile row (or 1 if the
@@ -155,6 +175,32 @@ class AceStepFiveHzExperimentalTtnnCausalLM(nn.Module):
                 logits_torch = logits_torch[:, :seq_log, :]
             elif s_out < seq_log:
                 raise RuntimeError(f"Experimental LM decode logits seq {s_out} < input_ids seq {seq_log}")
+
+        if ace_step_debug_lm_logits_enabled():
+            if ace_step_debug_lm_logits_hf_enabled():
+                if is_prefill:
+                    hf_ref = debug_hf_reference_last_logits(self._hf_model_dir, input_ids)
+                    debug_hf_layer_hidden_pcc(self._hf_model_dir, input_ids)
+                    debug_compare_prefill_logits_stages(
+                        hf_ref_last=hf_ref,
+                        logits_tt_torch=logits_for_debug,
+                        last_token_offset_in_tile=last_token_offset_in_tile,
+                        seq_log=seq_log,
+                        vocab=vocab,
+                        lm_dir=self._hf_model_dir,
+                        input_ids=input_ids,
+                        qwen_params=getattr(self.qwen, "_last_debug_params", None),
+                    )
+                else:
+                    hf_ref = debug_hf_reference_last_logits(self._hf_model_dir, input_ids)
+                    debug_compare_decode_logits_stages(
+                        hf_ref_last=hf_ref,
+                        logits_tt_torch=logits_for_debug,
+                        seq_log=seq_log,
+                        vocab=vocab,
+                        qwen_params=getattr(self.qwen, "_last_debug_params", None),
+                    )
+            log_lm_tensor_stats("bridge.final_logits", logits_torch)
 
         return SimpleNamespace(
             logits=logits_torch,

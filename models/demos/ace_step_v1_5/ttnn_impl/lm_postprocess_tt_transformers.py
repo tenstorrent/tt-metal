@@ -294,6 +294,36 @@ class AceStepSampling1D(Sampling1D):
 
 _PENALTIES_CACHE: Dict[Tuple[int, int, int], AceStepPenalties1D] = {}
 _SAMPLING_CACHE: Dict[Tuple[int, int, int], AceStepSampling1D] = {}
+_DEFAULT_MAX_BATCH = 32
+
+
+def _penalties_max_batch_size(batch: int) -> int:
+    """``Penalties1D`` penalty tensors are ``[max_batch_size, …]``; logits must match on dim 0."""
+    return max(_DEFAULT_MAX_BATCH, int(batch))
+
+
+def _pad_logits_batch(scores: torch.Tensor, max_batch: int) -> tuple[torch.Tensor, int]:
+    """Pad ``[B, V]`` logits to ``[max_batch, V]``; return (padded, original_B)."""
+    batch = int(scores.shape[0])
+    max_batch = int(max_batch)
+    if batch > max_batch:
+        raise ValueError(f"logits batch {batch} exceeds max_batch_size {max_batch}")
+    if batch == max_batch:
+        return scores, batch
+    pad_rows = max_batch - batch
+    filler = torch.zeros((pad_rows, int(scores.shape[-1])), dtype=scores.dtype, device=scores.device)
+    return torch.cat([scores, filler], dim=0).contiguous(), batch
+
+
+def _logits_tt_to_sampling_4d(scores_tt: ttnn.Tensor) -> ttnn.Tensor:
+    """``Sampling1D`` top-k splits on dim=3; device logits must be ``[1, 1, B, V]``."""
+    rank = len(scores_tt.shape)
+    if rank == 4:
+        return scores_tt
+    if rank == 2:
+        b, v = int(scores_tt.shape[0]), int(scores_tt.shape[1])
+        return ttnn.reshape(scores_tt, (1, 1, b, v))
+    raise ValueError(f"expected rank-2 or rank-4 logits, got rank-{rank} shape={tuple(scores_tt.shape)}")
 
 
 def _device_key(device: Any) -> int:
@@ -353,19 +383,23 @@ def repetition_penalty_apply(
     """
     if penalty == 1.0:
         return scores
+    batch = int(scores.shape[0])
     vocab = int(scores.shape[-1])
+    max_batch = _penalties_max_batch_size(batch)
     # ``Penalties1D`` expects vocab to be divisible by num_devices; for the 1x1 mesh ACE-Step
     # uses, num_devices==1 so any vocab works. We pad-up to the next 32 multiple anyway so
     # the TILE math is happy; callers see the original ``vocab`` columns sliced back.
     pad_to = ((vocab + 31) // 32) * 32
     if pad_to != vocab:
-        padded = torch.full((int(scores.shape[0]), pad_to), float("-inf"), dtype=scores.dtype, device=scores.device)
+        padded = torch.full((batch, pad_to), float("-inf"), dtype=scores.dtype, device=scores.device)
         padded[:, :vocab] = scores
         scores_in = padded
     else:
         scores_in = scores
-    inst = _get_penalties(device, pad_to)
+    scores_in, batch = _pad_logits_batch(scores_in, max_batch)
+    inst = _get_penalties(device, pad_to, max_batch_size=max_batch)
     out = inst.apply_hf_repetition(scores_in, input_ids, float(penalty))
+    out = out[:batch]
     if pad_to != vocab:
         out = out[:, :vocab].contiguous()
     return out
@@ -388,21 +422,25 @@ def apply_penalty_filter_sample(
     host→device upload, one device→host token download). Returns ``[B]`` host int64
     token ids.
     """
+    batch = int(scores.shape[0])
     vocab = int(scores.shape[-1])
+    max_batch = _penalties_max_batch_size(batch)
     pad_to = ((vocab + 31) // 32) * 32
 
     if pad_to != vocab:
-        padded = torch.full((int(scores.shape[0]), pad_to), float("-inf"), dtype=scores.dtype, device=scores.device)
+        padded = torch.full((batch, pad_to), float("-inf"), dtype=scores.dtype, device=scores.device)
         padded[:, :vocab] = scores
         scores_in = padded
     else:
         scores_in = scores
+    scores_in, batch = _pad_logits_batch(scores_in, max_batch)
 
-    penalties = _get_penalties(device, pad_to)
-    sampler = _get_sampling(device, pad_to, max_top_k=max(32, int(top_k or 32)))
+    penalties = _get_penalties(device, pad_to, max_batch_size=max_batch)
+    sampler = _get_sampling(device, pad_to, max_batch_size=max_batch, max_top_k=max(32, int(top_k or 32)))
+    penalties.load_device_buffers()
 
-    # Upload logits once.
-    replicate_mapper = ttnn.ShardTensor2dMesh(device, dims=(None, None), mesh_shape=device.shape)
+    # Upload logits once (reuse Penalties1D mapper — works for 1×1 device and mesh).
+    replicate_mapper = penalties._replicate_mapper
     scores_tt = ttnn.from_torch(
         scores_in.detach().to(dtype=torch.bfloat16).contiguous(),
         device=device,
@@ -411,15 +449,16 @@ def apply_penalty_filter_sample(
         mesh_mapper=replicate_mapper,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    scores_tt = _logits_tt_to_sampling_4d(scores_tt)
 
     # Step 1: repetition penalty (if enabled). Reuses cached PenaltyParams/Accumulator.
+    # ``decode_forward`` updates logits in-place (``output_tensor=logits``); do not
+    # deallocate ``scores_tt`` here — the returned tensor is the same allocation.
     if repetition_penalty != 1.0:
         params, accum = penalties._get_or_build_state()
         penalties._set_repetition_penalty(params, float(repetition_penalty))
         penalties.init_prompt_penalties(params, accum, input_ids)
-        scores_post_penalty = penalties.decode_forward(scores_tt, params, accum)
-        ttnn.deallocate(scores_tt)
-        scores_tt = scores_post_penalty
+        scores_tt = penalties.decode_forward(scores_tt, params, accum)
 
     # Step 2: fused top-k + top-p + temperature sampling.
     tokens_tt = sampler.sample_topk_topp_temp(
@@ -433,8 +472,6 @@ def apply_penalty_filter_sample(
 
     tokens_host = ttnn.to_torch(tokens_tt).reshape(-1).to(dtype=torch.int64)
     ttnn.deallocate(tokens_tt)
-    # Row 0 is the real user (ACE-Step is batch=1; rows 1..max_batch_size-1 are padding).
-    batch = int(scores.shape[0])
     return tokens_host[:batch].contiguous()
 
 

@@ -22,6 +22,17 @@ to HuggingFace ``AutoModelForCausalLM`` (bf16). PCC uses :func:`models.common.ut
 
 The default PCC floor is ``ACE_STEP_EXPERIMENTAL_LM_PCC`` (default ``0.98``). Override the
 env var if a checkpoint or silicon path is still below parity during bring-up.
+
+**Debug staged PCC** (which pipeline stage drifts vs HF):
+
+.. code-block:: bash
+
+   ACE_STEP_DEBUG_LM_LOGITS=1 \\
+   TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/p300_mesh_graph_descriptor.textproto \\
+   pytest models/demos/ace_step_v1_5/tests/test_llm_handler_logits_pcc.py::test_llm_handler_experimental_causal_lm_prefill_decode_pcc_vs_torch -v -s
+
+Optional: ``ACE_STEP_DEBUG_LM_LOGITS_HF=1`` (rerun HF inside the bridge),
+``ACE_STEP_DEBUG_LM_LOGITS_LAYER_PCC=1`` (HF hidden-state stats per layer).
 """
 
 from __future__ import annotations
@@ -43,6 +54,12 @@ from models.demos.ace_step_v1_5.ttnn_impl.lm_constrained_logits_ttnn import (
     logits_divide_by_scalar_bf16,
     logits_keep_allowed_bf16,
 )
+from models.demos.ace_step_v1_5.ttnn_impl.lm_logits_debug import (
+    ace_step_debug_lm_logits_enabled,
+    debug_compare_decode_logits_stages,
+    debug_compare_prefill_logits_stages,
+    log_lm_pcc,
+)
 from models.demos.ace_step_v1_5.ttnn_impl.lm_logits_ttnn import cfg_linear_combination_bf16
 from models.demos.ace_step_v1_5.ttnn_impl.lm_postprocess_tt_transformers import (
     apply_penalty_filter_sample,
@@ -55,11 +72,10 @@ _PCC = 0.99
 # The experimental TTNN causal LM (``QwenModelTtTransformers`` in ``qwen_tt_transformers_lm.py``)
 # cannot match HF's bf16 reference bit-exactly: TTNN's tile-based bf16 matmul rounds at different
 # boundaries than torch's BLAS GEMM, and that error compounds across 28 layers of Qwen3 1.7B.
-# With every practical precision knob applied (HF-grade ``HiFi4 / fp32_dest_acc_en=True /
-# approx=False`` compute kernel config on every Q/K/V/O/MLP/lm_head matmul, fp32 residual stream,
-# fp32 RMSNorm weight, HF RoPE / paged SDPA / paged KV cache via ``tt_transformers`` primitives),
-# the achievable prefill PCC at ``L=24`` on Qwen3 1.7B is ``~0.984``. Floor is set just under that.
-# Override via ``ACE_STEP_EXPERIMENTAL_LM_PCC`` if you want a stricter (or looser) gate.
+# With ``models/tt_transformers/model_params/acestep-5Hz-lm-1.7B/accuracy_decoder_config.json``
+# (Qwen2.5-style HiFi4 attention + BF16 MLP weights + BF16 activations), prefill last-token PCC on
+# P150 is typically ``~0.984``. Per-layer parity is ``~0.999+``; error compounds over 28 layers.
+# Strict ``0.99`` may require upstream LMHead / residual tweaks — use ``ACE_STEP_EXPERIMENTAL_LM_PCC``.
 _PCC_EXPERIMENTAL_LM = float(os.environ.get("ACE_STEP_EXPERIMENTAL_LM_PCC", "0.98"))
 
 
@@ -303,15 +319,42 @@ def test_llm_handler_experimental_causal_lm_prefill_decode_pcc_vs_torch(device, 
     except RuntimeError as exc:
         pytest.skip(f"experimental TTNN causal LM init/load skipped: {exc}")
 
+    tt_pre: torch.Tensor | None = None
+    tt_dec: torch.Tensor | None = None
+    tt_pre_raw = None
+    tt_dec_raw = None
     try:
         exp.reset_decode_state()
         with torch.inference_mode():
             t1 = exp.forward(input_ids=ids_pre.clone(), past_key_values=None, use_cache=True)
             tt_pre = t1.logits.float().cpu()
+            tt_pre_raw = getattr(exp, "_debug_last_raw_logits", None)
             t2 = exp.forward(input_ids=ids_next.clone(), past_key_values=True, use_cache=True)
             tt_dec = t2.logits.float().cpu()
+            tt_dec_raw = getattr(exp, "_debug_last_raw_logits", None)
     finally:
-        del exp
+        if ace_step_debug_lm_logits_enabled() and tt_pre is not None:
+            vocab_dbg = int(getattr(cfg, "vocab_size", tt_pre.shape[-1]))
+            debug_compare_prefill_logits_stages(
+                hf_ref_last=ref_pre[:, -1:, :],
+                logits_tt_torch=tt_pre_raw if tt_pre_raw is not None else tt_pre,
+                last_token_offset_in_tile=getattr(exp.qwen, "_prefill_last_token_offset_in_tile", None),
+                seq_log=int(ids_pre.shape[1]),
+                vocab=vocab_dbg,
+                lm_dir=str(lm_dir),
+                input_ids=ids_pre,
+                qwen_params=getattr(exp.qwen, "_last_debug_params", None),
+            )
+            if tt_dec is not None:
+                debug_compare_decode_logits_stages(
+                    hf_ref_last=ref_dec[:, -1:, :],
+                    logits_tt_torch=tt_dec_raw if tt_dec_raw is not None else tt_dec,
+                    seq_log=int(ids_next.shape[1]),
+                    vocab=vocab_dbg,
+                    qwen_params=getattr(exp.qwen, "_last_debug_params", None),
+                )
+        if "exp" in locals():
+            del exp
         gc.collect()
 
     # IMPORTANT — prefill compares LAST-POSITION logits only.
@@ -329,6 +372,8 @@ def test_llm_handler_experimental_causal_lm_prefill_decode_pcc_vs_torch(device, 
     rp_last = rp[:, -1:, :].contiguous()
     gp_last = gp[:, -1:, :].contiguous()
     r_pre_last = _pearson(rp_last.numpy(), gp_last.numpy())
+    if ace_step_debug_lm_logits_enabled():
+        log_lm_pcc("test.prefill_last_pos", rp_last, gp_last, min_pcc=_PCC_EXPERIMENTAL_LM)
     ok_pre, pcc_pre = comp_pcc(rp_last, gp_last, pcc=_PCC_EXPERIMENTAL_LM)
     # Diagnostic: full-sequence Pearson (will be much lower; expected because most positions
     # in ``tt_pre`` are zero by design).
@@ -347,6 +392,8 @@ def test_llm_handler_experimental_causal_lm_prefill_decode_pcc_vs_torch(device, 
     # full comparison is meaningful here.
     rd, gd = _align_logits_last_dims(ref_dec, tt_dec)
     r_dec = _pearson(rd.numpy(), gd.numpy())
+    if ace_step_debug_lm_logits_enabled():
+        log_lm_pcc("test.decode_last_pos", rd, gd, min_pcc=_PCC_EXPERIMENTAL_LM)
     ok_dec, pcc_dec = comp_pcc(rd, gd, pcc=_PCC_EXPERIMENTAL_LM)
     print(
         f"[llm_handler_logits_pcc] experimental_causal_lm_decode_step comp_pcc={float(pcc_dec):.8f} "
