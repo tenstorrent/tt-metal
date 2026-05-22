@@ -22,6 +22,15 @@
 
 constexpr uint32_t onetile = 1U;
 
+// Round `a` up to the nearest multiple of `b`. Uses the bitwise fast path when
+// `b` is a power of two and the standard divmul form otherwise.
+inline constexpr uint32_t round_up(uint32_t a, uint32_t b) {
+    if ((b & (b - 1U)) == 0U) {
+        return (a + (b - 1U)) & -b;
+    }
+    return ((a + b - 1U) / b) * b;
+}
+
 // SFPU intrinsics for first-column-only operations.
 // Column vectors (from row-reduce) only have meaningful data in column 0,
 // so we process 4 SFPU iterations (half-face) instead of the standard 8,
@@ -69,29 +78,29 @@ void exp_tile_first_column(uint32_t idst) {
 }
 #endif
 
-// now we have to multiply result by scaler factor and then apply mask
-// we need to transform the attention mask for use in softmax:
-// The input `attn_mask` contains 1.0 for valid (keep) positions and 0.0 for masked (drop) positions.
-// To convert this into a format compatible with softmax masking:
-//   - Subtract 1.0 from the mask, so values become 0.0 (keep) and -1.0 (mask).
-//   - Multiply by a large negative value (e.g., 1e9F), resulting in 0.0 for valid entries and -inf for
-//   masked ones.
-// This way, after applying softmax, masked positions will effectively become zero,
-// and only the unmasked positions will retain meaningful attention weights
+// Apply an attention mask to a Q@K^T score tile already sitting in DST register `register_idx`.
+//
+// The input `attn_mask` tile holds 1.0 at valid (keep) positions and 0.0 at masked (drop)
+// positions. The function transforms it to (0.0, -1e9) in-place and adds it to the score
+// tile so that masked positions become large negative values that vanish under softmax.
+//
+// Preconditions:
+//   - The DST register buffer must be in acquired state via *acquire_dst*.
+//   - `cb_attn_mask` must have at least `mask_tile_idx + 1` tiles fronted.
+//
+// `mask_tile_idx` selects which mask tile in `cb_attn_mask` to apply:
+//   - When the writer pre-stages two causal masks in this CB, callers pass 0 for the
+//     diagonal-tile pattern and 1 for the all-masked pattern used past the diagonal.
+//   - When the host provides an arbitrary mask, callers pass the per-chunk tile offset.
+//
+// Scaling by the SDPA scaler factor is NOT done here; it is deferred to after the
+// row-max subtraction for better numerical precision.
 void apply_mask_on_reg(
     uint32_t register_idx,
     uint32_t cb_attn_mask,
     uint32_t minus_one_bits,
     uint32_t custom_inf_bits,
     uint32_t mask_tile_idx = 0U) {
-    /* The DST register buffer must be in acquired state via *acquire_dst* call.
-     * Caller is responsible for ensuring cb_attn_mask has at least mask_tile_idx + 1 tiles fronted.
-     * For F9 (Sk_chunk_t > 1) the caller selects:
-     *   mask_tile_idx == 0 : causal-diagonal pattern  (the diagonal tile of the chunk)
-     *   mask_tile_idx == 1 : all-zeros → all-(-1e9)   (post-diagonal tiles in the diagonal chunk)
-     * For USE_ATTN_MASK the caller passes the per-chunk tile offset n in [0, Sk_chunk_t).
-     */
-
     const uint32_t mask_register = register_idx + 1U;  // mask register should be next to data register
     cb_wait_front(cb_attn_mask, onetile);
     copy_tile_init(cb_attn_mask);
@@ -123,9 +132,9 @@ void apply_mask_on_reg(
 // provides SFPU row-reduce-max and sub_bcast_col. This will allow the full softmax (max, sub,
 // exp, sum, reciprocal) to stay in DST at FP32 without pack/unpack round-trips through the CB.
 //
-// Sk_chunk_t (F9): reduces over Sk_chunk_t consecutive attention-weight tiles in the same row,
-// accumulating the max into a single DST register. For Sk_chunk_t == 1 this collapses to a
-// single reduce_tile call (identical to the pre-F9 behavior).
+// Reduces over `Sk_chunk_t` consecutive attention-weight tiles in the same row, accumulating
+// the max into a single DST register. For `Sk_chunk_t == 1` this collapses to a single
+// reduce_tile call (the original single-tile behavior).
 template <PoolType pool_type, ReduceDim reduce_dim, uint32_t Sk_chunk_t = 1U>
 void update_cur_row_max_value(
     uint32_t cb_attention_weights,
@@ -232,13 +241,13 @@ void apply_exp_inplace_and_find_exp_sum(uint32_t cb_attention_weights, uint32_t 
 // Computes (attention_weights @ V) where attention_weights is a row of Sk_chunk_t score tiles
 // and V is the corresponding Sk_chunk_t × Wt block. The K-dimension reduction (over Sk_chunk_t)
 // is accumulated inside the matmul DST register across an inner loop. For Sk_chunk_t == 1 the
-// inner loop runs once and indexing collapses to the legacy single-tile-row form.
+// inner loop runs once and indexing collapses to the original single-tile-row form.
 //
-// F10 step 2: each output block of `block_size` feat tiles is produced by one matmul_block call
-// per K step (ct_dim=block_size, rt_dim=1, kt_dim=Sk_chunk_t). V is row-major in cb_value
-// (seq outer, feat inner), so the `block_size` V tiles consumed per K step at a fixed seq are
-// already contiguous in the CB — no transpose read needed (contrast with QK^T where K must be
-// col-major). The matmul_block MOP walks them contiguously starting at in1_idx = k*Wt+tile_idx.
+// Each output block of `block_size` feat tiles is produced by one matmul_block call per K step
+// (ct_dim=block_size, rt_dim=1, kt_dim=Sk_chunk_t). V is row-major in cb_value (seq outer, feat
+// inner), so the `block_size` V tiles consumed per K step at a fixed seq are already contiguous
+// in the CB — no transpose read needed (contrast with QK^T where K must be col-major). The
+// matmul_block MOP walks them contiguously starting at in1_idx = k*Wt+tile_idx.
 //
 // `block_size` here is the caller's choice. `matmul_block` writes ct_dim output tiles into
 // DST and needs no scratch register, so callers can pass up to `dst_size` (4 for fp32_acc,

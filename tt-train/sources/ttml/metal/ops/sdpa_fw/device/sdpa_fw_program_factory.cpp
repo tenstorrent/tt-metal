@@ -63,24 +63,21 @@ const std::string kUseAttnMaskDefKey = "USE_ATTN_MASK";
 const std::string kCausalMaskDefKey = "CAUSAL_MASK";
 const std::string kBalancedParallelismDefKey = "BALANCED_PARALLELISM";
 
-// Pick the multi-tile K/V chunk size (F9). Returns the number of K tiles processed per
-// inner-loop iteration of the compute kernel.
+// Pick the multi-tile K/V chunk size. Returns the number of K tiles processed per inner-loop
+// iteration of the compute kernel.
 //
 // Constraints:
 //   1. Must divide Ht (so the diagonal of the causal mask falls cleanly within a chunk,
 //      and so the reader never reads past the end of the sequence).
-//   2. Must fit DST under fp32_dest_acc_en=true (DST has 4 tiles, so {1, Sk_chunk_t}
-//      subblocks for F10 cap at 4; for pure F9 with sequential per-tile matmul this is
-//      a softer constraint, but we keep <=4 to leave headroom).
+//   2. Must fit DST under fp32_dest_acc_en=true (DST has 4 tiles): the chunked softmax
+//      holds Sk_chunk_t exp tiles live across one tile_regs cycle, so we cap at 4.
 //   3. Larger chunks amortize softmax / correction overhead more, but consume L1
 //      proportionally for cb_key, cb_value, and cb_attention_weights.
 //
-// We pick the largest power-of-2 in {1, 2, 4} that divides Ht.
+// We pick the largest power-of-2 in {1, 2, 4} that divides Ht. Bumping past 4 would require
+// either fp32_dest_acc_en=false (loses precision) or splitting the exp pass into multiple
+// DST cycles.
 uint32_t pick_sk_chunk_t(uint32_t Ht) {
-    // Cap at 4 to stay within the fp32_dest_acc_en=true DST budget (4 tiles): the chunked
-    // softmax holds Sk_chunk_t exp tiles in DST simultaneously inside one tile_regs cycle.
-    // Bumping past 4 requires either fp32_dest_acc_en=false (loses precision) or splitting
-    // the exp pass into multiple DST cycles.
     constexpr uint32_t kMaxSkChunkT = 4U;
     for (uint32_t c = kMaxSkChunkT; c > 1U; c /= 2U) {
         if (Ht % c == 0U) {
@@ -351,8 +348,8 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     }
 
     // DST register budget. fp32_dest_acc_en=true → 4 slots (FP32 accumulator);
-    // fp32_dest_acc_en=false → 8 slots (BF16). Mirrors TTNN's `dst_size` convention in
-    // `ttnn/cpp/.../sdpa_program_factory.cpp:362`. Two derived granularities follow:
+    // fp32_dest_acc_en=false → 8 slots (BF16). Mirrors TTNN's `dst_size` convention in their
+    // SDPA program factory. Two derived granularities follow:
     //
     //   * `block_size`     (cap = dst_size - 1) — for SFPU ops (`update_cur_mm_out`,
     //     final normalization) that load `block_size` data tiles plus a 1-tile scratch
@@ -367,10 +364,10 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     const uint32_t block_size = get_block_size(vWt, dst_size - 1U);
     const uint32_t pv_block_size = get_block_size(vWt, dst_size);
 
-    // Multi-tile K/V chunking factor (F9). Compute kernel processes Sk_chunk_t K and V
-    // tiles per inner-loop iteration; reader pre-stages chunk-sized K/V blocks in L1.
+    // Multi-tile K/V chunking factor. Compute kernel processes Sk_chunk_t K and V tiles per
+    // inner-loop iteration; reader pre-stages chunk-sized K/V blocks in L1.
     const uint32_t Sk_chunk_t = pick_sk_chunk_t(St);
-    TT_FATAL(Sk_chunk_t > 0U && (St % Sk_chunk_t == 0U), "Sk_chunk_t={} must be > 0 and divide Ht={}", Sk_chunk_t, St);
+    TT_FATAL(Sk_chunk_t > 0U && (St % Sk_chunk_t == 0U), "Sk_chunk_t={} must be > 0 and divide St={}", Sk_chunk_t, St);
 
     const auto data_format = input_data_format;
     const auto precise_data_format = tt::DataFormat::Float32;
@@ -382,7 +379,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     [[maybe_unused]] auto cb_query = create_circular_buffer(
         program, all_cores, kQueryCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * qWt);
 
-    // F9: K and V are read in Sk_chunk_t-tile chunks. Double-buffer the chunks so the reader
+    // K and V are read in Sk_chunk_t-tile chunks. Double-buffer the chunks so the reader
     // can overlap next-chunk DRAM with current-chunk compute.
     [[maybe_unused]] auto cb_key = create_circular_buffer(
         program, all_cores, kKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * Sk_chunk_t * kWt);
@@ -394,10 +391,12 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     // Not needed for AttentionMaskType::None.
     //
     // Sizing depends on the mask type:
-    //   - Causal (incl. balanced parallelism): two persistently-fronted tiles generated on chip
-    //       [0] = causal-diagonal (lower-triangular 1.0/0.0)
-    //       [1] = all-zeros (transformed by the same pipeline to all -1e9, used for K tiles
-    //             beyond the diagonal inside the diagonal chunk).
+    //   - Causal (incl. balanced parallelism): two persistently-fronted pre-transformed tiles
+    //     generated on chip
+    //       [0] = causal-diagonal (0.0 on/below diagonal, -1e9 above) — applied on the
+    //             diagonal K tile of every row.
+    //       [1] = all -1e9 — applied on K tiles strictly past the diagonal inside the
+    //             diagonal chunk when Sk_chunk_t > 1.
     //   - Arbitrary: Sk_chunk_t mask tiles per K chunk are streamed from DRAM; double-buffer them.
     if (mask_type != AttentionMaskType::None) {
         const uint32_t num_attn_mask_tiles =
@@ -424,7 +423,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     [[maybe_unused]] auto cb_mat_mul_reduce = create_circular_buffer(
         program, all_cores, kMatMulReduceCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
 
-    // F9: holds the Sk_chunk_t QK^T score tiles for the current K chunk. Sized to one chunk
+    // Holds the Sk_chunk_t QK^T score tiles for the current K chunk. Sized to one chunk
     // (not double-buffered) since softmax overwrites in-place, then the PV matmul consumes it.
     //
     // TODO: once LLK provides SFPU row-reduce-max and sub_bcast_col, the softmax can run
@@ -537,7 +536,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         St,               // num tile in seq len dim (S/TILE_H)
         qNH,              // number of heads in query
         heads_per_group,  // number of heads per group
-        Sk_chunk_t,       // multi-tile K/V chunking factor (F9)
+        Sk_chunk_t,       // multi-tile K/V chunking factor
     };
     tt::tt_metal::TensorAccessorArgs(query_buffer).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(key_buffer).append_to(reader_compile_args);
@@ -552,10 +551,9 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         kReaderKernelPath);
 
     std::vector<uint32_t> writer_compile_args = {
-        vWt,         // num tile in inner dim in output/value (d_v/TILE_W)
-        St,          // num tile in seq len dim (S/TILE_H)
-        qNH,         // number of heads in query
-        Sk_chunk_t,  // multi-tile K/V chunking factor (F9) - needed for mask tile generation
+        vWt,  // num tile in inner dim in output/value (d_v/TILE_W)
+        St,   // num tile in seq len dim (S/TILE_H)
+        qNH,  // number of heads in query
     };
     tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_args);
     tt::tt_metal::TensorAccessorArgs(intermediates_buffer).append_to(writer_compile_args);
@@ -590,7 +588,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
             scaler,              // sqrt(Et) - sdpa scaler factor
             minus_one,           // used to transform mask from 1/0 to 0/-1
             custom_inf,          // used to transform mask from 0/-1 to 0/-1e9F
-            Sk_chunk_t,          // multi-tile K/V chunking factor (F9)
+            Sk_chunk_t,          // multi-tile K/V chunking factor
             pv_block_size,       // PV matmul_block ct_dim (cap = dst_size, no scratch)
         };
 
@@ -618,7 +616,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
             scaler,                     // sqrt(Et) - sdpa scaler factor
             minus_one,                  // used to transform mask from 1/0 to 0/-1
             custom_inf,                 // used to transform mask from 0/-1 to 0/-1e9F
-            Sk_chunk_t,                 // multi-tile K/V chunking factor (F9)
+            Sk_chunk_t,                 // multi-tile K/V chunking factor
             pv_block_size,              // PV matmul_block ct_dim (cap = dst_size, no scratch)
         };
 
@@ -645,7 +643,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
                 scaler,                     // sqrt(Et) - sdpa scaler factor
                 minus_one,                  // used to transform mask from 1/0 to 0/-1
                 custom_inf,                 // used to transform mask from 0/-1 to 0/-1e9F
-                Sk_chunk_t,                 // multi-tile K/V chunking factor (F9)
+                Sk_chunk_t,                 // multi-tile K/V chunking factor
                 pv_block_size,              // PV matmul_block ct_dim (cap = dst_size, no scratch)
             };
 

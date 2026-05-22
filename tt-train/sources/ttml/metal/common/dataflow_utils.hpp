@@ -30,10 +30,10 @@ constexpr uint16_t BF16_ONE_BITS = 0x3F80;        // 1.0 in bfloat16
 constexpr uint16_t BF16_ZERO_BITS = 0x0000;       // 0.0 in bfloat16
 constexpr uint32_t BF16_ONE_PACKED = 0x3f803f80;  // BF16(1.0) packed twice into u32
 
-// Large-negative bit patterns used by F10 pre-transformed masks (mask values directly add to
+// Large-negative bit patterns used by SDPA pre-transformed masks (mask values directly add to
 // pre-softmax scores so a "masked" entry must dominate any plausible Q@K^T magnitude).
 // We reuse the existing 1e9F magnitude from `custom_inf` (see sdpa_fw_program_factory.cpp) so
-// post-softmax behavior is identical to the F9 apply_mask_on_reg path.
+// post-softmax behavior is identical to the runtime apply_mask_on_reg path.
 constexpr uint32_t FP32_NEG_LARGE_BITS = 0xCE6E6B28;  // bit_cast<u32>(-1e9F)
 constexpr uint16_t BF16_NEG_LARGE_BITS = 0xCE6E;      // upper 16 bits of -1e9F (bfloat16)
 

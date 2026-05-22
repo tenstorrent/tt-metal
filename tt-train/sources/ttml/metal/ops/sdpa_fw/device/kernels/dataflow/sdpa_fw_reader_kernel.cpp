@@ -33,7 +33,7 @@ void kernel_main() {
     constexpr uint32_t q_heads = get_compile_time_arg_val(3);  // num of heads in query
     constexpr uint32_t heads_per_group = get_compile_time_arg_val(4);  // num of heads per group
     [[maybe_unused]] constexpr uint32_t Sk_chunk_t =
-        get_compile_time_arg_val(5);  // F9 multi-tile K/V chunking factor (consumed in chunked reader path)
+        get_compile_time_arg_val(5);  // multi-tile K/V chunking factor (consumed in chunked reader path)
     constexpr uint32_t pairs_per_seq = Ht / 2;
     constexpr auto query_args = TensorAccessorArgs<6>();
     constexpr auto key_args = TensorAccessorArgs<query_args.next_compile_time_args_offset()>();
@@ -64,7 +64,7 @@ void kernel_main() {
     // so every core reads roughly the same amount of data.
     // Runtime args reuse: num_rows_to_process = num_pairs, start_row = start_pair_idx.
     //
-    // F9: reads K and V in Sk_chunk_t-tile chunks (one DMA + one push per chunk). For causal
+    // Reads K and V in Sk_chunk_t-tile chunks (one DMA + one push per chunk). For causal
     // we round the K-tile count UP to the next multiple of Sk_chunk_t so the diagonal chunk
     // is fully resident in L1 before compute starts processing it. Ht is constrained to be
     // a multiple of Sk_chunk_t by the program factory, so the round-up never reads OOB.
@@ -78,13 +78,13 @@ void kernel_main() {
         const uint32_t key_offset = (batch_idx * num_of_groups + kv_group_idx) * qWt * Ht;
         const uint32_t value_offset = (batch_idx * num_of_groups + kv_group_idx) * vWt * Ht;
         const uint32_t q_row_tile = global_row_idx % Ht;
-        const uint32_t num_kv_tiles_to_read = ((q_row_tile + 1U + Sk_chunk_t - 1U) / Sk_chunk_t) * Sk_chunk_t;
+        const uint32_t num_kv_tiles_to_read = round_up(q_row_tile + 1U, Sk_chunk_t);
         const uint32_t num_kv_chunks = num_kv_tiles_to_read / Sk_chunk_t;
 
         for (uint32_t k_chunk = 0; k_chunk < num_kv_chunks; ++k_chunk) {
             const uint32_t h_start = k_chunk * Sk_chunk_t;
             const uint32_t key_start_idx = key_offset + h_start * qWt;
-            // F10: lay K out col-major in cb_key (feat outer, seq inner) so `matmul_block`
+            // Lay K out col-major in cb_key (feat outer, seq inner) so `matmul_block`
             // with transpose=1 can step in1_idx by +Sk_chunk_t per feature, walking the
             // contraction direction contiguously. K source in DRAM is (Sk_chunk_t × qWt)
             // row-major; the helper writes tile (n, feat) at CB pos feat*Sk_chunk_t + n.
@@ -114,7 +114,7 @@ void kernel_main() {
     }
 #else
     // Standard mode: process rows sequentially.
-    // F9: reads K, V and (USE_ATTN_MASK) mask in Sk_chunk_t-tile chunks. Causal K-count is
+    // Reads K, V and (USE_ATTN_MASK) mask in Sk_chunk_t-tile chunks. Causal K-count is
     // rounded UP to the next Sk_chunk_t boundary; the program factory guarantees Ht is a
     // multiple of Sk_chunk_t so the round-up never reads past the sequence end.
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
@@ -139,7 +139,7 @@ void kernel_main() {
 
 #ifdef CAUSAL_MASK
         // For causal: round up to next Sk_chunk_t boundary so the diagonal chunk is fully read.
-        const uint32_t num_kv_tiles_to_read = ((q_row_tile + 1U + Sk_chunk_t - 1U) / Sk_chunk_t) * Sk_chunk_t;
+        const uint32_t num_kv_tiles_to_read = round_up(q_row_tile + 1U, Sk_chunk_t);
 #else
         const uint32_t num_kv_tiles_to_read = Ht;
 #endif
@@ -153,7 +153,7 @@ void kernel_main() {
         for (uint32_t k_chunk = 0; k_chunk < num_kv_chunks; ++k_chunk) {
             const uint32_t h_start = k_chunk * Sk_chunk_t;
             const uint32_t key_start_idx = key_offset + h_start * qWt;
-            // F10: lay K col-major in cb_key (see balanced path above for rationale).
+            // Lay K col-major in cb_key (see balanced path above for rationale).
             read_tile_block_transposed(cb_key, key_address_generator, key_start_idx, Sk_chunk_t, qWt, tile_bytes);
 
 #ifdef USE_ATTN_MASK

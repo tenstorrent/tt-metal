@@ -22,13 +22,11 @@ void kernel_main() {
     constexpr uint32_t vWt = get_compile_time_arg_val(0);      // number of tiles in output/value inner dimension
     constexpr uint32_t Ht = get_compile_time_arg_val(1);       // number of tiles in sequence dimension
     constexpr uint32_t q_heads = get_compile_time_arg_val(2);  // num of heads in query
-    [[maybe_unused]] constexpr uint32_t Sk_chunk_t =
-        get_compile_time_arg_val(3);  // F9 multi-tile K/V chunking factor (controls mask tile layout)
     constexpr uint32_t pairs_per_seq = Ht / 2;
 
     const uint32_t tile_bytes = get_tile_size(cb_output);
 
-    constexpr auto output_args = TensorAccessorArgs<4>();
+    constexpr auto output_args = TensorAccessorArgs<3>();
     const auto output_addr_generator = TensorAccessor(output_args, output_addr);
 
 #ifdef RETURN_INTERMEDIATES
@@ -49,7 +47,7 @@ void kernel_main() {
     generate_matmul_row_reduce_tile(cb_matmul_reduce);            // tile for matmul row reduce
 
 #if defined(CAUSAL_MASK) || defined(BALANCED_PARALLELISM)
-    // F10: emit *pre-transformed* mask tiles so the compute kernel can stamp them directly
+    // Emit *pre-transformed* mask tiles so the compute kernel can stamp them directly
     // onto QK^T scores via the packer's L1-accumulate path (TTNN's
     // `apply_causal_mask_lightweight` pattern). The mask values are added in FP32 in L1 by
     // the packer's read-modify-write — score never leaves FP32, no DST→SRC truncation.

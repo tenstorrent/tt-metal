@@ -966,3 +966,33 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_DifferentVDim_MultiBatch) {
         .test_name = "DifferentVDim_MultiBatch"};
     run_sdpa_test(config);
 }
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_TwoTileRows) {
+    // 64 seq len = 2 tile rows -> Ht=2 -> Sk_chunk_t=2. Forces the chunked inner loop with
+    // exactly one chunk per row and exercises the diagonal-chunk masking path for the
+    // smallest non-trivial chunk size.
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 64U,
+        .query_dim = 64U,
+        .key_value_dim = 64U,
+        .num_query_heads = 1U,
+        .num_key_heads = 1U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "CausalMask_TwoTileRows"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ArbitraryMask_TwoTileRows) {
+    // 64 seq len -> Ht=2 -> Sk_chunk_t=2 on the arbitrary-mask compute path (USE_ATTN_MASK).
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 64U,
+        .query_dim = 64U,
+        .key_value_dim = 64U,
+        .num_query_heads = 1U,
+        .num_key_heads = 1U,
+        .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
+        .test_name = "ArbitraryMask_TwoTileRows"};
+    run_sdpa_test(config);
+}
