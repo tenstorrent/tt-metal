@@ -102,10 +102,18 @@ void PagedFillCacheDeviceOperation::validate_on_program_cache_miss(
 
     if (tensor_args.batch_idx_tensor_opt.has_value()) {
         const auto& tensor = tensor_args.batch_idx_tensor_opt.value();
-        TT_FATAL(tensor.physical_volume() == 1, "Batch idx tensor must have a single element");
+        const auto input_batch = input_shape[0];
+        TT_FATAL(
+            tensor.physical_volume() == input_batch,
+            "Batch idx tensor must have input_tensor batch dim ({}) elements, got {}",
+            input_batch,
+            tensor.physical_volume());
         TT_FATAL(
             tensor.dtype() == DataType::UINT32 || tensor.dtype() == DataType::INT32,
             "Batch idx tensor must be an integer type");
+        // The writer kernel reads the tensor as a single contiguous noc page;
+        // require ROW_MAJOR so that read covers the whole 1D buffer.
+        TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "Batch idx tensor must be in ROW_MAJOR layout");
     }
 }
 
