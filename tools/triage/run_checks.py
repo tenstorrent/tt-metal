@@ -32,7 +32,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import cached_property
 from dataclasses import dataclass
-from typing import Literal, TypeAlias, get_args
+from typing import Literal, TypeAlias, cast, get_args
 
 from rich.progress import Progress, TaskID
 
@@ -294,9 +294,29 @@ class RunChecks:
         return result
 
     def run_per_device_check(
-        self, check: Callable[[Device], object], print_broken_devices: bool = True
+        self,
+        check: Callable[[Device], object],
+        print_broken_devices: bool = True,
+        *,
+        progress: Progress | None = None,
+        device_task: TaskID | None = None,
     ) -> list[PerDeviceCheckResult] | None:
         """Run a check function on each device, collecting results."""
+
+        # If progress is not provided, create our own progress and task, and call recursively with it.
+        if progress is None:
+            with create_progress() as own_progress:
+                own_task = own_progress.add_task(
+                    "Processing devices", total=len(self.devices), visible=len(self.devices) > 1
+                )
+                try:
+                    return self.run_per_device_check(
+                        check, print_broken_devices, progress=own_progress, device_task=own_task
+                    )
+                finally:
+                    own_progress.remove_task(own_task)
+
+        assert device_task is not None, "device_task must be provided when progress is provided"
 
         def process_one(device: Device) -> list[PerDeviceCheckResult]:
             """Run the check on a single device, applying the broken-cascade rules."""
@@ -332,91 +352,98 @@ class RunChecks:
             )
             return local_result
 
-        with create_progress() as progress:
-            device_task = progress.add_task(
-                "Processing devices", total=len(self.devices), visible=len(self.devices) > 1
-            )
-            try:
-                if not self._execute_in_parallel:
-                    # Sequential execution
-                    result: list[PerDeviceCheckResult] = []
-                    for device in self.devices:
-                        result.extend(process_one(device))
-                        progress.advance(device_task)
-                    return result if len(result) > 0 else None
+        if not self._execute_in_parallel:
+            # Sequential: iterate self.devices on the main thread.
+            result: list[PerDeviceCheckResult] = []
+            for device in self.devices:
+                result.extend(process_one(device))
+                progress.advance(device_task)
+            return result if len(result) > 0 else None
 
-                # Parallel execution: one worker per MMIO group.
-                def process_group(group: list[Device]) -> list[tuple[int, list[PerDeviceCheckResult]]]:
-                    per_device: list[tuple[int, list[PerDeviceCheckResult]]] = []
-                    for device in group:
-                        items = process_one(device)
-                        if items:
-                            per_device.append((device.id, items))
-                    return per_device
+        # Parallel: one worker per MMIO group.
+        def process_group(group: list[Device]) -> list[tuple[int, list[PerDeviceCheckResult]]]:
+            per_device: list[tuple[int, list[PerDeviceCheckResult]]] = []
+            for device in group:
+                items = process_one(device)
+                if items:
+                    per_device.append((device.id, items))
+            return per_device
 
-                groups = self._mmio_groups
-                per_device_results: list[tuple[int, list[PerDeviceCheckResult]]] = []
-                with ThreadPoolExecutor(max_workers=len(groups)) as executor:
-                    futures = {executor.submit(process_group, g): g for g in groups}
-                    for future in as_completed(futures):
-                        per_device_results.extend(future.result())
-                        for _ in futures[future]:
-                            progress.advance(device_task)
+        groups = self._mmio_groups
+        per_device_results: list[tuple[int, list[PerDeviceCheckResult]]] = []
+        with ThreadPoolExecutor(max_workers=len(groups)) as executor:
+            futures = {executor.submit(process_group, g): g for g in groups}
+            for future in as_completed(futures):
+                per_device_results.extend(future.result())
+                for _ in futures[future]:
+                    progress.advance(device_task)
 
-                per_device_results.sort(key=lambda x: x[0])
-                result: list[PerDeviceCheckResult] = []
-                for _, items in per_device_results:
-                    result.extend(items)
-                return result if len(result) > 0 else None
-            finally:
-                progress.remove_task(device_task)
+        per_device_results.sort(key=lambda x: x[0])
+        result = []
+        for _, items in per_device_results:
+            result.extend(items)
+        return result if len(result) > 0 else None
 
     def run_per_block_check(
-        self, check: Callable[[OnChipCoordinate], object], block_filter: list[str] | str | None = None
+        self,
+        check: Callable[[OnChipCoordinate], object],
+        block_filter: list[str] | str | None = None,
+        *,
+        progress: Progress | None = None,
+        device_task: TaskID | None = None,
+        item_task: TaskID | None = None,
     ) -> list[PerBlockCheckResult] | None:
         """Run a check function on each block location, collecting results."""
-        block_types_to_check = (
-            BLOCK_TYPES if block_filter is None else [block_filter] if isinstance(block_filter, str) else block_filter
+
+        # If progress is not provided, create our own progress and tasks, and call recursively with it.
+        block_types_to_check = cast(
+            "list[BlockType]",
+            BLOCK_TYPES if block_filter is None else [block_filter] if isinstance(block_filter, str) else block_filter,
         )
 
-        def per_device_blocks_check(device: Device) -> list[PerBlockCheckResult] | None:
-            """Check all block locations for a single device."""
-            result: list[PerBlockCheckResult] = []
-
-            def run_iterations(progress: Progress | None = None, device_task: TaskID | None = None) -> None:
-                for block_type in block_types_to_check:
-                    for location in self.block_locations[device][block_type]:
-                        check_result = check(location)
-                        if progress is not None and device_task is not None:
-                            progress.advance(device_task)
-                        self._collect_results(
-                            result,
-                            check_result,
-                            PerBlockCheckResult,
-                            device_description=DeviceDescription(device, self._use_unique_id),
-                            location=location,
-                        )
-
-            # Suppress this sub-progress when running in parallel: concurrent rich.Progress
-            # instances on a shared Console clash. Stage 4 replaces it with a single shared
-            # two-line progress bar. `_execute_in_parallel` already accounts for the
-            # single-MMIO-group case (where the parallel path collapses to one worker on
-            # the main thread), so it doubles as "are we inside the worker pool right now?".
-            if self._execute_in_parallel:
-                run_iterations()
-                return result if len(result) > 0 else None
-
-            with create_progress() as progress:
-                progress_count = sum(len(self.block_locations[device][bt]) for bt in block_types_to_check)
-                device_task = progress.add_task(f"Processing NOC locations", total=progress_count)
+        if progress is None:
+            total_blocks = sum(
+                len(self.block_locations[device][bt]) for device in self.devices for bt in block_types_to_check
+            )
+            with create_progress() as own_progress:
+                own_device_task = own_progress.add_task(
+                    "Processing devices", total=len(self.devices), visible=len(self.devices) > 1
+                )
+                own_item_task = own_progress.add_task("Processing NOC locations", total=total_blocks)
                 try:
-                    run_iterations(progress, device_task)
-                    return result if len(result) > 0 else None
+                    return self.run_per_block_check(
+                        check,
+                        block_filter,
+                        progress=own_progress,
+                        device_task=own_device_task,
+                        item_task=own_item_task,
+                    )
                 finally:
-                    progress.remove_task(device_task)
+                    own_progress.remove_task(own_device_task)
+                    own_progress.remove_task(own_item_task)
 
-        # Reuse the device iteration from run_per_device_check
-        return self.run_per_device_check(per_device_blocks_check)
+        assert device_task is not None, "device_task must be provided when progress is provided"
+
+        def per_device_blocks_check(device: Device) -> list[PerBlockCheckResult] | None:
+            result: list[PerBlockCheckResult] = []
+            for block_type in block_types_to_check:
+                for location in self.block_locations[device][block_type]:
+                    check_result = check(location)
+                    if item_task is not None:
+                        progress.advance(item_task)
+                    self._collect_results(
+                        result,
+                        check_result,
+                        PerBlockCheckResult,
+                        device_description=DeviceDescription(device, self._use_unique_id),
+                        location=location,
+                    )
+            return result if len(result) > 0 else None
+
+        return cast(
+            "list[PerBlockCheckResult] | None",
+            self.run_per_device_check(per_device_blocks_check, progress=progress, device_task=device_task),
+        )
 
     def run_per_core_check(
         self,
@@ -448,31 +475,34 @@ class RunChecks:
                 # Skipping cores we do not want to check
                 if risc_name not in cores_to_check:
                     continue
+                risc = cast("CoreType", risc_name)
                 try:
-                    check_result = check(location, risc_name)
+                    check_result = check(location, risc)
                 except RiscHaltError as e:
-                    self._session.add_broken_core(location, risc_name)
+                    self._session.add_broken_core(location, risc)
                     if print_broken_cores:
-                        log_warning_risc(risc_name, location, f"Broken: {e}.")
+                        log_warning_risc(risc, location, f"Broken: {e}.")
                     continue
                 except Exception as e:
-                    log_warning_risc(risc_name, location, f"Skipping: {str(e)}")
+                    log_warning_risc(risc, location, f"Skipping: {str(e)}")
                     continue
 
-                # Use the common result collection helper
                 self._collect_results(
-                    result,
+                    cast("list[CheckResult]", result),
                     check_result,
                     PerCoreCheckResult,
                     device_description=DeviceDescription(location._device, self._use_unique_id),
                     location=location,
-                    risc_name=risc_name,
+                    risc_name=risc,
                 )
 
             return result if len(result) > 0 else None
 
-        # Reuse the block iteration from run_per_block_check
-        return self.run_per_block_check(per_block_cores_check, block_filter)
+        # Cast: items are PerCoreCheckResult, narrowed from the parent return type.
+        return cast(
+            "list[PerCoreCheckResult] | None",
+            self.run_per_block_check(per_block_cores_check, block_filter),
+        )
 
 
 @triage_singleton
