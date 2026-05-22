@@ -26,7 +26,15 @@ from models.demos.qwen35_27b.tt.gdn_kernel.gdn_kernel_op import (
     gdn_prefill_fused,
     gdn_recurrence_fused_inplace,
 )
-from models.demos.qwen35_27b.tt.model_config import create_prefill_matmul_program_config
+from models.demos.qwen35_27b.tt.model_config import (
+    GDN_CONV_KERNEL_SIZE,
+    _replicate,
+    _shard_small,
+    _shard_w,
+    create_prefill_matmul_program_config,
+    prepare_conv_taps,
+    prepare_gdn_qkv,
+)
 from models.tt_transformers.tt.ccl import tt_all_reduce
 
 
@@ -118,7 +126,92 @@ class TtGatedDeltaNet(LightweightModule):
 
         self.compute_cfg = args.compute_kernel_config_hifi2
 
-        self.tw = self._load_weights(state_dict, layer_num, mesh_device, weight_cache_path)
+        self.tw = {}
+        # Fused QKV+Z weight
+        p = f"layers.{layer_num}."
+        cache_dir = str(weight_cache_path / "attention_mesh")
+        tp = args.num_devices
+        ld = _os.path.join(cache_dir, f"layer_{layer_num:02d}")
+        _os.makedirs(ld, exist_ok=True)
+        qkv_reordered = prepare_gdn_qkv(state_dict, p, tp)
+        z_weight = state_dict[p + "linear_attn.in_proj_z.weight"]
+        qkv_per = args.gdn_qkv_dim_tp
+        z_per = args.gdn_z_dim_tp
+        fused_parts = []
+        for d in range(tp):
+            fused_parts.append(
+                torch.cat(
+                    [
+                        qkv_reordered[d * qkv_per : (d + 1) * qkv_per, :],
+                        z_weight[d * z_per : (d + 1) * z_per, :],
+                    ],
+                    dim=0,
+                )
+            )
+        qkvz_fused = torch.cat(fused_parts, dim=0)
+        self.tw["qkvz"] = _shard_w(
+            qkvz_fused,
+            mesh_device,
+            dim=-1,
+            memory_config=args.gdn_qkvz_weight_memcfg,
+            cache_path=_os.path.join(ld, "qkvz"),
+        )
+
+        # Fused A+B projection: concat per-device shards of A and B
+        a_w = state_dict[p + "linear_attn.in_proj_a.weight"]
+        b_w = state_dict[p + "linear_attn.in_proj_b.weight"]
+        a_per = args.gdn_nv_tp
+        b_per = args.gdn_nv_tp
+        ab_parts = []
+        for d in range(tp):
+            ab_parts.append(
+                torch.cat(
+                    [
+                        a_w[d * a_per : (d + 1) * a_per, :],
+                        b_w[d * b_per : (d + 1) * b_per, :],
+                    ],
+                    dim=0,
+                )
+            )
+        ab_fused = torch.cat(ab_parts, dim=0)
+        self.tw["ab"] = _shard_w(
+            ab_fused,
+            mesh_device,
+            dim=-1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_path=_os.path.join(ld, "ab"),
+        )
+
+        # Output projection (row-parallel)
+        self.tw["out"] = _shard_w(
+            state_dict[p + "linear_attn.out_proj.weight"],
+            mesh_device,
+            dim=0,
+            memory_config=args.gdn_out_weight_memcfg,
+            cache_path=_os.path.join(ld, "out"),
+        )
+
+        # Per-head params
+        self.tw["A_log"] = _shard_small(
+            state_dict[p + "linear_attn.A_log"].float(),
+            mesh_device,
+            _os.path.join(ld, "A_log"),
+        )
+        self.tw["dt_bias"] = _shard_small(
+            state_dict[p + "linear_attn.dt_bias"].float(),
+            mesh_device,
+            _os.path.join(ld, "dt_bias"),
+        )
+        self.tw["norm_w"] = _replicate(
+            state_dict[p + "linear_attn.norm.weight"].float(),
+            mesh_device,
+            _os.path.join(ld, "norm_w"),
+        )
+        # Conv taps
+        taps = prepare_conv_taps(state_dict, p, tp)
+        self.tw["conv_taps"] = [
+            _shard_small(taps[j], mesh_device, _os.path.join(ld, f"conv_tap_{j}")) for j in range(GDN_CONV_KERNEL_SIZE)
+        ]
 
         # Mutable state buffers (conv + recurrence)
         self.conv_states = None
@@ -136,6 +229,7 @@ class TtGatedDeltaNet(LightweightModule):
         # Chunkwise prefill masks (pre-computed once, reused across layers/calls)
         self.chunk_size = args.gdn_chunk_size
         self._chunk_masks = create_chunk_masks(self.chunk_size, mesh_device)
+        self._precompute_constants()
 
     def _load_weights(self, state_dict, layer_num, mesh_device, weight_cache_path):
         if isinstance(state_dict, dict) and "qkvz" in state_dict:
