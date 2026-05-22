@@ -54,7 +54,6 @@ from ...utils.tensor import (
     local_device_to_torch,
     typed_tensor_2dshard,
 )
-from ...utils.video import export_to_video
 from ...utils.wan_s2v_checkpoint import (
     find_s2v_snapshot,
     load_s2v_config,
@@ -71,13 +70,9 @@ _DEFAULT_AUX_CHECKPOINT = "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
 
 
 class WanPipelineS2V(WanPipeline):
-    """Speech-to-video sibling of ``WanPipeline``.
-
-    ``__init__`` does not chain through ``WanPipeline.__init__`` because that
-    path is hard-wired to Diffusers-style two-stage loading. We inline the
-    relevant bits so we can skip the missing ``transformer/`` subfolders on
-    the S2V repo, load the DiT from a flat safetensors stack via the native
-    loader, and build a single transformer slot.
+    """Speech-to-video sibling of ``WanPipeline``. Bypasses the parent's
+    Diffusers-style two-stage loader to load the flat S2V safetensors stack
+    via the native mapper into a single transformer slot.
     """
 
     def __init__(
@@ -103,19 +98,14 @@ class WanPipelineS2V(WanPipeline):
         run_warmup: bool = True,
         audio_inject_layers: tuple[int, ...] | None = None,
     ):
-        # Skip the parent __init__ — it's hard-wired to Diffusers loaders we
-        # can't satisfy. DiffusionPipeline.__init__ does only attribute setup.
         DiffusionPipeline.__init__(self)
-
         self.checkpoint_name = checkpoint_name
         self.aux_checkpoint_name = aux_checkpoint_name
         self.model_type = "s2v"
         self.vae_t_chunk_size = vae_t_chunk_size
-
         self._s2v_profiler: Optional[BenchmarkProfiler] = None
         self._s2v_profiler_iteration: int = 0
 
-        # Tokenizer + text encoder + VAE from the companion Diffusers T2V repo.
         self.tokenizer = AutoTokenizer.from_pretrained(
             aux_checkpoint_name, subfolder="tokenizer", trust_remote_code=True
         )
@@ -124,16 +114,8 @@ class WanPipelineS2V(WanPipeline):
         )
         self.vae = AutoencoderKLWan.from_pretrained(aux_checkpoint_name, subfolder="vae", trust_remote_code=True)
 
-        self.dit_ccl_manager = CCLManager(
-            mesh_device=mesh_device,
-            num_links=num_links,
-            topology=topology,
-        )
-        self.vae_ccl_manager = CCLManager(
-            mesh_device=mesh_device,
-            num_links=num_links,
-            topology=ttnn.Topology.Linear,
-        )
+        self.dit_ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
+        self.vae_ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=ttnn.Topology.Linear)
         self.encoder_ccl_manager = self.vae_ccl_manager
 
         self.is_fsdp = is_fsdp
@@ -143,7 +125,6 @@ class WanPipelineS2V(WanPipeline):
         self.mesh_device = mesh_device
         self.dynamic_load = dynamic_load
 
-        # UMT5 text encoder on device.
         umt5_config = UMT5Config(
             vocab_size=self.text_encoder.config.vocab_size,
             embed_dim=self.text_encoder.config.d_model,
@@ -163,7 +144,6 @@ class WanPipelineS2V(WanPipeline):
             parallel_config=self.encoder_parallel_config,
         )
 
-        # S2V transformer (single stage) on device.
         s2v_snapshot = find_s2v_snapshot(checkpoint_name)
         s2v_cfg = load_s2v_config(s2v_snapshot)
         if s2v_cfg.get("adain_mode", "attn_norm") != "attn_norm":
@@ -206,7 +186,6 @@ class WanPipelineS2V(WanPipeline):
             model_type="s2v",
         )
 
-        # VAE decoder + reference-image encoder on device.
         self.tt_vae = WanDecoder(
             base_dim=self.vae.config.base_dim,
             z_dim=self.vae.config.z_dim,
@@ -241,7 +220,6 @@ class WanPipelineS2V(WanPipeline):
             parallel_config=self.vae_parallel_config,
         )
 
-        # Wav2Vec2 audio encoder (production large-xlsr-53 bundled in S2V).
         bundled_wav2vec2 = s2v_snapshot / "wav2vec2-large-xlsr-53-english"
         if not bundled_wav2vec2.exists():
             msg = f"bundled wav2vec2 weights not found at {bundled_wav2vec2}"
@@ -263,13 +241,9 @@ class WanPipelineS2V(WanPipeline):
             parallel_config=audio_parallel_config,
         )
 
-        # Scheduler — built manually since the S2V repo has no scheduler/.
-        # Reference uses ``wan/utils/fm_solvers_unipc.py:FlowUniPCMultistepScheduler``
-        # with ``sample_shift=3`` (wan_s2v_14B.py:57). Diffusers'
-        # ``UniPCMultistepScheduler`` with ``use_flow_sigmas=True``,
-        # ``prediction_type="flow_prediction"`` and ``flow_shift=3.0`` produces
-        # byte-identical timesteps and sigmas at 5/40 steps (verified), so the
-        # vendored scheduler isn't needed.
+        # Diffusers ``UniPCMultistepScheduler`` with ``use_flow_sigmas=True`` +
+        # ``flow_shift=3.0`` produces byte-identical timesteps/sigmas to the
+        # reference ``FlowUniPCMultistepScheduler`` (wan_s2v_14B.py:57).
         if scheduler is None:
             scheduler = UniPCMultistepScheduler(
                 num_train_timesteps=1000,
@@ -284,22 +258,17 @@ class WanPipelineS2V(WanPipeline):
             )
         self._solver = UniPCSolver(scheduler=scheduler)
 
-        # Build the transformer state list. The parent's call() expects a
-        self.transformer_2 = self.transformer  # alias — single-stage S2V
-        # Reference s2v_14B sample_guide_scale=4.5 (wan_s2v_14B.py:59).
+        # Single-stage S2V — alias transformer_2 to satisfy the parent's
+        # two-stage call(). boundary_ratio=0 keeps the parent dispatcher on
+        # idx=0 every step; guidance_scale=4.5 per wan_s2v_14B.py:59.
+        self.transformer_2 = self.transformer
         self.transformer_states = [
             TransformerState(self.transformer, "transformer", torch_model=None, guidance_scale=4.5),
             TransformerState(self.transformer_2, "transformer", torch_model=None, guidance_scale=4.5),
         ]
-        # The denoise loop in the parent picks transformer index 0 whenever
-        # ``t >= boundary_ratio * num_train_timesteps``. We want index 0 every
-        # step, so set boundary_ratio just below 0 (any value ≤ 0 works since
-        # all timesteps are ≥ 0). The CFG-only check at line 704 of
-        # ``WanPipeline.__call__`` accepts a non-None boundary_ratio.
         self.register_to_config(boundary_ratio=0.0)
         self.register_to_config(expand_timesteps=False)
 
-        # VAE bookkeeping.
         self.vae_scale_factor_temporal = self.vae.config.scale_factor_temporal
         self.vae_scale_factor_spatial = self.vae.config.scale_factor_spatial
         self.video_processor = VideoProcessor(vae_scale_factor=self.vae_scale_factor_spatial)
@@ -309,34 +278,24 @@ class WanPipelineS2V(WanPipeline):
         self._vae_latents_std = torch.tensor(self.vae.config.latents_std, dtype=self.vae.dtype).view(
             1, self.vae.config.z_dim, 1, 1, 1
         )
-
-        # persistent latent buffers (for traced calls)
         self.latent_buffer = None
         self.condition_buffer = None
 
-        # _warming_up guards against re-entrancy: lazy multi-clip warmup
-        # invokes self.__call__ recursively to compile the clip-1+ shape.
+        # _warming_up guards re-entry when lazy multi-clip warmup recurses into __call__.
         self._multi_clip_warmed: bool = False
         self._warming_up: bool = False
 
-        # Load weights: text encoder + VAE via the existing cache helpers;
         self._prepare_text_encoder_aux()
         self._prepare_vae_aux()
         self._load_s2v_transformer(s2v_snapshot)
         self._prepare_audio_encoder(audio_model_id)
 
         if dynamic_load and ttnn.device.is_blackhole():
-            # 14B transformer + wav2vec2-large + VAE + UMT5 is tight on
-            # BH 4×8. Mirror the parent's coresident-exclusion chain.
             self.transformer.register_coresident_exclusions(self.tt_vae)
             self.tt_vae.register_coresident_exclusions(self.transformer)
 
         if run_warmup:
             self.warmup_buffers(height=height, width=width)
-
-    # ----------------------------------------------------------------------
-    # create_pipeline factory.
-    # ----------------------------------------------------------------------
 
     @staticmethod
     def create_pipeline(
@@ -357,11 +316,10 @@ class WanPipelineS2V(WanPipeline):
         num_frames: int = 81,
         **_unused,
     ):
-        # Pick a sane device-aware default. We mirror the BH 4×8 / WH 4×8
-        # rows from ``WanPipeline.create_pipeline``; S2V doesn't target 4×32
-        # in this revision.
         device_configs = {}
         if ttnn.device.is_blackhole():
+            # 4×8: sp_factor=8 halves per-device H vs 2×4, giving headroom
+            # for full-T single pass.
             device_configs[(4, 8)] = {
                 "sp_axis": 1,
                 "tp_axis": 0,
@@ -369,11 +327,8 @@ class WanPipelineS2V(WanPipeline):
                 "dynamic_load": False,
                 "topology": ttnn.Topology.Ring,
                 "is_fsdp": False,
-                # Full-T single pass on 4×8 (matches t2v decoder choice); sp_factor=8
-                # halves per-device H vs 2×4, giving headroom for the full latent T=21.
                 "vae_t_chunk_size": None,
             }
-            # BH Loud Box (2x4, 8 chips): mirror the 4x8 config; sp_factor=4 / tp_factor=2.
             device_configs[(2, 4)] = {
                 "sp_axis": 1,
                 "tp_axis": 0,
@@ -440,10 +395,6 @@ class WanPipelineS2V(WanPipeline):
             num_frames=num_frames,
         )
 
-    # ----------------------------------------------------------------------
-    # Weight-load helpers.
-    # ----------------------------------------------------------------------
-
     def _prepare_text_encoder_aux(self) -> None:
         cache.load_model(
             self.tt_umt5_encoder,
@@ -454,9 +405,8 @@ class WanPipelineS2V(WanPipeline):
             get_torch_state_dict=lambda: self.text_encoder.state_dict(),
         )
 
-    # Override the parent's per-step loaders. The S2V transformer is loaded
-    # once up-front via the native mapper, so the per-step reloader is a
-    # no-op. Same for the text encoder & VAE (loaded up front).
+    # No-op overrides — S2V loads text encoder / transformer / VAE once
+    # up-front via the *_aux helpers, suppressing the parent's per-step reloader.
     def _prepare_text_encoder(self) -> None:
         return None
 
@@ -493,24 +443,11 @@ class WanPipelineS2V(WanPipeline):
         image_prompt: Optional[Image.Image] = None,
         num_clips: int = 1,
     ) -> None:
-        """Warm program caches for every S2V subsystem.
+        """Warm S2V program caches by running 2 inference steps on dummy audio.
 
-        The base ``WanPipeline.warmup_buffers`` calls ``run_single_prompt`` with
-        only text + image inputs — that signature is invalid for S2V which
-        requires ``audio_prompt``. This override synthesizes a black reference
-        image and silent audio, then runs the full pipeline once with
-        ``num_inference_steps=2``.
-
-        Two distinct shape signatures exist:
-        - Clip 0 (``drop_first_motion=True``, N_motion=0)
-        - Clip 1+ (``drop_first_motion=False``, N_motion>0)
-
-        The per-clip caches (frame_packer programs, ``_mask_constant_cache``,
-        ``_mask_noisy_cache``, ``_adain_E_cache``) are keyed by
-        ``(padded_noisy, padded_const, N_ref, N_motion)``. Default
-        ``num_clips=1`` only warms the clip-0 signature — fast init for the
-        common single-clip case. Multi-clip callers pay the second-shape
-        warmup lazily via ``__call__``'s dispatcher.
+        Two shape signatures exist (clip-0 drop_first_motion=True, clip-1+ False).
+        Default num_clips=1 warms only clip-0; multi-clip callers pay the
+        second-shape warmup lazily via __call__'s dispatcher.
         """
         sample_rate = WAV2VEC2_SAMPLE_RATE
         num_samples = num_clips * S2V_AUDIO_SAMPLES_PER_CLIP
@@ -548,13 +485,8 @@ class WanPipelineS2V(WanPipeline):
                 pass
 
     def _load_s2v_transformer(self, s2v_snapshot: Path) -> None:
-        # Use cache.load_model so the translated tt_dit state dict gets
-        # written to ``TT_DIT_CACHE_DIR`` on first run; subsequent runs skip
-        # the 1260-parameter native-mapper translation (~20-30 s).
-        # ``get_torch_state_dict`` is a lazy callback — only invoked on
-        # cache miss, so the safetensors load + translate cost is avoided
-        # on warm starts. Cache key matches the t2v/i2v pattern:
-        # ``{TT_DIT_CACHE_DIR}/Wan2.2-S2V-14B/transformer/{parallel_id}_mesh{shape}_bf16``.
+        # Lazy translate-on-cache-miss; warm runs skip the ~20-30 s native-mapper
+        # translation of 1260 params.
         cache.load_model(
             self.transformer,
             model_name=os.path.basename(self.checkpoint_name),
@@ -580,36 +512,15 @@ class WanPipelineS2V(WanPipeline):
             get_torch_state_dict=lambda: self.torch_audio_encoder.state_dict(),
         )
 
-    # ----------------------------------------------------------------------
-    # Reference-faithful frame-count constants (wan_s2v_14B + speech2video.py).
-    # ----------------------------------------------------------------------
-
-    # Per-clip pixel frame count (speech2video.py:404, ``infer_frames=80``).
-    _INFER_FRAMES_PIXEL = 80
-    # Motion-context pixel frames carried between clips
-    # (config wan_s2v_14B.py:51, ``motion_frames=73``).
-    _MOTION_FRAMES_PIXEL = 73
-    # Latent frames the motion context occupies after VAE encode
-    # (``(motion_frames + 3) // 4``, speech2video.py:491).
-    _LAT_MOTION_FRAMES = 19
-    # ``(infer_frames + 3 + motion_frames) // 4 - motion_lat_frames`` =
-    # ``(80 + 3 + 73) // 4 - 19 = 20`` (speech2video.py:544-545).
-    _LAT_TARGET_FRAMES = 20
-    # Clip-0 pixel-transient trim. With ``drop_first_motion=True`` the VAE
-    # decode is ``ref(1) + noisy(20) = 21 latents → 4*21-3 = 81 pixels``;
-    # we keep the last ``INFER_FRAMES_PIXEL = 80`` and drop 3 more transient
-    # frames at the front, matching ``speech2video.py:654-656``.
-    _S2V_VAE_CLIP0_TRIM = 3
-
-    # ----------------------------------------------------------------------
-    # Pre-denoise plumbing for S2V — invoked by __call__() once per clip.
-    # ----------------------------------------------------------------------
+    # Reference-faithful frame counts from wan_s2v_14B + speech2video.py.
+    _INFER_FRAMES_PIXEL = 80  # speech2video.py:404 ``infer_frames``
+    _MOTION_FRAMES_PIXEL = 73  # wan_s2v_14B.py:51 ``motion_frames``
+    _LAT_MOTION_FRAMES = 19  # ``(motion_frames + 3) // 4``
+    _LAT_TARGET_FRAMES = 20  # ``(infer + 3 + motion) // 4 - motion_lat``
+    _S2V_VAE_CLIP0_TRIM = 3  # transient frames dropped from clip-0 decode
 
     def _encode_normalized(self, pixels_BCTHW: torch.Tensor, *, encoder_t_chunk_size: int = 16) -> torch.Tensor:
-        """TT VAE encode + ``(mu - latents_mean) / latents_std`` normalization.
-
-        ``pixels_BCTHW`` → ``[B, z_dim=16, T_lat, H_lat, W_lat]``.
-        """
+        """TT VAE encode + ``(mu - latents_mean) / latents_std`` → [B, z_dim, T_lat, H_lat, W_lat]."""
         pixels_BTHWC = pixels_BCTHW.to(torch.float32).permute(0, 2, 3, 4, 1)
         pixels_BTHWC = conv_pad_in_channels(pixels_BTHWC)
         pixels_BTHWC, logical_h = conv_pad_height(
@@ -640,25 +551,9 @@ class WanPipelineS2V(WanPipeline):
         )
 
     def _prepare_audio_full(self, audio_prompt: str) -> tuple[torch.Tensor, int]:
-        """Run wav2vec2 + bucket the audio file to per-clip windows.
-
-        Mirrors ``wan/speech2video.py:283-294``: wav2vec2 outputs at 50 Hz
-        → linear_interpolation to 30 Hz → ``get_audio_embed_bucket_fps``
-        evenly samples one feature per video frame at 16 fps, padding to
-        ``num_repeat * INFER_FRAMES_PIXEL`` frames.
-
-        Per-clip canonical chunking: ``load_audio_to_input_values`` snaps
-        every audio file to an integer multiple of ``S2V_AUDIO_SAMPLES_PER_CLIP``
-        (= 80 video frames worth of audio = 80 000 samples). We then invoke
-        ``tt_audio_encoder`` once per 80 000-sample chunk so every wav2vec2
-        forward sees the SAME input shape regardless of total audio length,
-        and the warmup primes that canonical shape exactly. Reference
-        semantics are preserved at the per-clip slice level (each clip
-        downstream still gets exactly 80 audio frames via the unchanged
-        bucketing logic on the concatenated features).
-
-        Returns ``(audio_BLNF_full, num_repeat)`` where ``audio_BLNF_full``
-        has shape ``[1, num_layers, audio_dim, num_repeat * 80]``.
+        """Run wav2vec2 over per-clip-sized chunks (canonical shape for cache
+        hits) then bucket to ``num_repeat × 80`` features at 16 fps. Mirrors
+        speech2video.py:283-294. Returns ``([1, L, C, num_repeat*80], num_repeat)``.
         """
         input_values = load_audio_to_input_values(audio_prompt, self.audio_processor)
         T_raw = input_values.shape[-1]
@@ -667,9 +562,6 @@ class WanPipelineS2V(WanPipeline):
         ), f"load_audio_to_input_values must snap to a multiple of {S2V_AUDIO_SAMPLES_PER_CLIP}; got T_raw={T_raw}"
         n_chunks = T_raw // S2V_AUDIO_SAMPLES_PER_CLIP
 
-        # Per-chunk wav2vec2 keeps the on-device program cache hitting the
-        # same shape every call. Stack on-device so the D2H is one transfer
-        # per chunk (vs num_layers transfers).
         per_chunk_stacked_dev: list = []
         for c in range(n_chunks):
             start = c * S2V_AUDIO_SAMPLES_PER_CLIP
@@ -685,7 +577,6 @@ class WanPipelineS2V(WanPipeline):
         ]
         hidden_torch = torch.cat(per_chunk_host, dim=2).permute(1, 0, 2, 3).contiguous()
 
-        # Batched interp + bucket across all wav2vec2 layers in one F.interpolate.
         feat_LCT = hidden_torch[0].permute(0, 2, 1).contiguous()  # [L, C, T_50Hz]
         T_50Hz = feat_LCT.shape[-1]
         T_30Hz = int(T_50Hz / float(WAV2VEC2_HZ) * S2V_VIDEO_RATE)
@@ -710,12 +601,8 @@ class WanPipelineS2V(WanPipeline):
         seed: int,
         _stage,
     ) -> torch.Tensor:
-        """Set up the transformer caches for one clip and return its noise latents.
-
-        Generates clip-specific noise (``seed + clip_idx``, reference 542),
-        calls ``prepare_audio_emb`` on the audio slice, and ``prepare_cond_emb``
-        with the motion latents threaded in from the previous clip (or the
-        zero placeholder for clip 0 with ``drop_first_motion=True``).
+        """Build transformer caches for one clip and return its noise latents
+        (seed+clip_idx per speech2video.py:542).
         """
         latent_h = height // self.vae_scale_factor_spatial
         latent_w = width // self.vae_scale_factor_spatial
@@ -732,8 +619,7 @@ class WanPipelineS2V(WanPipeline):
                 target_num_frames=self._LAT_TARGET_FRAMES,
             )
 
-        # ``cond_states_torch=None`` is the no-pose path the transformer's
-        # ``prepare_cond_emb`` shape-caches WanPatchEmbed(zeros) for.
+        # cond_states_torch=None hits the transformer's WanPatchEmbed(zeros) shape cache.
         with _stage(f"s2v_clip_{clip_idx}_prepare_cond_emb"):
             self.transformer.prepare_cond_emb(
                 noisy_latents_torch=latents,
@@ -751,12 +637,9 @@ class WanPipelineS2V(WanPipeline):
         num_inference_steps: int,
         traced: bool,
     ) -> torch.Tensor:
-        """Run the diffusion loop for one clip and return the post-denoise latents.
-
-        Assumes text-conditioning buffers (``ts.prompt_buffer`` /
-        ``negative_prompt_buffer``) are already populated — they're
-        clip-invariant and built once in ``__call__``. Duplicated structure
-        from ``WanPipeline.__call__`` lines 949-1055.
+        """Per-clip denoise loop. Mirrors WanPipeline.__call__'s inline loop
+        but uses a single transformer stage and clip-invariant prompt buffers
+        (set up in __call__ before this is reached).
         """
         self._solver.set_schedule(num_inference_steps, device="cpu")
         timesteps = self._solver.timesteps
@@ -780,16 +663,12 @@ class WanPipelineS2V(WanPipeline):
 
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
-                # Refresh ``latent_buffer`` from the solver's evolving
-                # ``permuted_latent_tt`` (initial noise on i=0, then the
-                # previous step's denoised output). Matches the base
-                # ``WanPipeline.__call__`` per-iteration update.
                 if self.latent_buffer is None:
                     self.latent_buffer = permuted_latent_tt
                 else:
                     ttnn.copy(permuted_latent_tt, self.latent_buffer)
 
-                timestep = t.expand(latents_torch.shape[0])  # S2V uses expand_timesteps=False
+                timestep = t.expand(latents_torch.shape[0])
                 timestep = float32_tensor(
                     timestep.unsqueeze(1).unsqueeze(1).unsqueeze(1), device=(None if traced else self.mesh_device)
                 )
@@ -832,14 +711,10 @@ class WanPipelineS2V(WanPipeline):
         latents_torch: torch.Tensor,
         prepend_latents_torch: torch.Tensor,
     ) -> torch.Tensor:
-        """VAE-decode ``[prepend | noisy]`` and return ``[1, 3, T_decoded, H, W]`` (float).
-
-        ``prepend_latents_torch`` is either ``ref_latents`` (clip 0 with
-        ``drop_first_motion=True``) or the previous clip's motion latents.
-        Both must already be in VAE input space (denormalized).
+        """VAE-decode ``[prepend | noisy]`` → ``[1, 3, T, H, W]`` float.
+        ``prepend`` is ref_latents (clip 0) or prev-clip motion latents,
+        both in VAE input space already.
         """
-        # Caller passes latents in normalized model space; denormalize to VAE
-        # input space, prepend (also in VAE input space), and run VAE decode.
         latents = latents_torch.to(self.vae.dtype) * self._vae_latents_std + self._vae_latents_mean
         prepend = prepend_latents_torch.to(dtype=latents.dtype, device=latents.device)
         decode_latents = torch.cat([prepend, latents], dim=2)
@@ -887,24 +762,17 @@ class WanPipelineS2V(WanPipeline):
         output_type: str = "uint8",
         return_dict: bool = True,
         max_sequence_length: int = 512,
-        # Match t2v at 4×8: traced=False. T2V only enables trace at 4×32
-        # (test_performance_wan.py:191). ``ttnn.embedding(layout=TILE_LAYOUT)``
-        # in the t5 forward writes during trace capture, which fails on 4×8
-        # regardless of trace_region_size / fabric_router_config — a ttnn op-
-        # level constraint, not a pipeline-config gap. The s2v denoise loop
-        # without trace runs in 25.9 s / 5 steps; further gains come from
-        # matmul tuning + the AdaIN-fused norm1 path, not trace.
+        # Match t2v at 4×8: traced=False. ttnn.embedding(TILE_LAYOUT) in the t5
+        # forward writes during trace capture, which fails on 4×8 regardless of
+        # trace_region_size.
         traced: bool = False,
         profiler: Optional[BenchmarkProfiler] = None,
         profiler_iteration: int = 0,
-        # accepted for parity with WanPipeline.__call__ but ignored — S2V derives
-        # the latent frame count from ``num_clips`` and the reference's fixed
-        # ``infer_frames=80`` per clip.
+        # Parity arg only; S2V derives frame count from num_clips × infer_frames=80.
         num_frames: Optional[int] = None,  # noqa: ARG002
     ):
-        """S2V entry point. Multi-clip: each clip is 80 pixel frames; per-clip
-        motion latents thread the previous clip's pixel tail through the VAE
-        encoder. Matches ``wan/speech2video.py:540-670`` clip-for-clip.
+        """S2V entry point: 80 pixel frames per clip, motion latents threaded
+        between clips via VAE re-encode. Mirrors speech2video.py:540-670.
         """
         if audio_prompt is None:
             raise ValueError("audio_prompt (path to a .wav/.mp3 file) is required for S2V")
@@ -919,8 +787,7 @@ class WanPipelineS2V(WanPipeline):
         def _stage(name: str):
             return profiler(name, profiler_iteration) if profiler is not None else nullcontext()
 
-        # 1. Text encode (once across all clips). Resulting prompt + negative
-        # buffers also live across clips — they're clip-invariant.
+        # 1. Text encode (clip-invariant — once across all clips).
         with _stage("encoder"):
             self._prepare_text_encoder()
             prompt_embeds, negative_prompt_embeds = self.encode_prompt(
@@ -943,25 +810,15 @@ class WanPipelineS2V(WanPipeline):
         with _stage("prepare_latents"):
             # 2. Reference image VAE encode (once).
             with _stage("s2v_vae_encode_ref"):
-                # Aspect-preserving letterbox pad to ``(height, width)`` so
-                # arbitrary-aspect input images aren't stretched by the
-                # downstream ``VideoProcessor.preprocess`` (which uses
-                # ``resize_mode='default'`` = stretch). ``ImageOps.pad``
-                # scales-to-contain (preserves all source content) then
-                # pads with black to match exactly ``(height, width)``.
-                # Cropping (``ImageOps.fit``) was tried first but loses
-                # ~57 % of a portrait image when fit into a landscape
-                # target — typical headshots get their face cropped off.
-                # The mesh config + program caches stay fixed because
-                # ``(height, width)`` is unchanged.
+                # ImageOps.pad letterboxes to (height, width) so arbitrary-aspect
+                # input isn't stretched by VideoProcessor's default resize.
                 image_prompt_padded = ImageOps.pad(image_prompt, (width, height), method=Image.Resampling.LANCZOS)
                 ref_tensor = self.video_processor.preprocess(image_prompt_padded, height=height, width=width).to(
                     "cpu", dtype=torch.float32
                 )
                 ref_video = ref_tensor.unsqueeze(2)  # [1, 3, 1, H, W]
                 ref_latent_torch = self._encode_normalized(ref_video)
-            # Pre-denormalized form for the VAE-decode prepend on clip 0
-            # (the decode path expects VAE-input-space tensors).
+            # Pre-denormalized — _decode_clip expects VAE-input-space prepend.
             ref_latents_for_decode = (
                 ref_latent_torch.to(self.vae.dtype) * self._vae_latents_std + self._vae_latents_mean
             )
@@ -969,8 +826,7 @@ class WanPipelineS2V(WanPipeline):
             # 3. Audio: wav2vec2 + bucket the whole file.
             with _stage("s2v_wav2vec2"):
                 audio_BLNF_full, num_repeat = self._prepare_audio_full(audio_prompt)
-            # speech2video.py:488-489 — caller can request fewer clips than
-            # the audio supports (e.g. early termination); never more.
+            # Caller can request fewer clips than audio supports, never more (speech2video.py:488-489).
             if num_clips is None:
                 num_clips = num_repeat
             else:
@@ -980,14 +836,8 @@ class WanPipelineS2V(WanPipeline):
                 f"{num_clips * self._INFER_FRAMES_PIXEL - self._S2V_VAE_CLIP0_TRIM} final frames"
             )
 
-            # Lazy second-shape warmup. __init__ only warmed the 1-clip path
-            # (drop_first_motion=True). On the first real call that needs
-            # num_clips>1, run a one-shot 2-clip warmup to populate the
-            # clip-1+ shape caches (drop_first_motion=False, N_motion>0).
-            # Subsequent calls hit fully-warm caches. ``_warming_up`` guards
-            # recursion when this dispatcher is reached from inside the
-            # warmup invocation itself. The recursive call mutates several
-            # self.* fields set at the top of __call__ — restore them after.
+            # Lazy clip-1+ shape warmup (recursive call into __call__ via
+            # warmup_buffers mutates self.* — restore the call-local fields after).
             if num_clips > 1 and not self._multi_clip_warmed and not self._warming_up:
                 logger.info("Lazy multi-clip warmup: warming clip-1+ shape signature")
                 self.warmup_buffers(height=height, width=width, num_clips=2)
@@ -998,16 +848,10 @@ class WanPipelineS2V(WanPipeline):
                     guidance_scale if guidance_scale_2 is None else guidance_scale_2
                 )
 
-            # 4. Initialize motion state. Clip 0 always has ``drop_first_motion=True``
-            # which prepends ``ref_latents_for_decode`` instead of ``motion_latents``
-            # in :meth:`_decode_clip`, so the initial motion latents are never read.
-            # Use a zero placeholder of the right latent shape (skips a 8.6 s VAE
-            # encode of 73 zero pixel frames). ``videos_last_frames`` is the
-            # pixel-space motion tail that gets re-encoded after each clip; it
-            # used to be eagerly allocated as a ~350 MB fp32 zero tensor but
-            # the initial-zero contribution is always discarded by the slide
-            # (overlap=_MOTION_FRAMES_PIXEL fully covers the buffer), so we
-            # defer creation until the first slide actually needs it.
+            # 4. Motion state. Clip 0 (drop_first_motion=True) never reads
+            # motion_latents — placeholder zeros skip an 8.6 s VAE encode of
+            # 73 zero pixel frames. videos_last_frames is deferred (the first
+            # slide fully discards any prior zero contribution).
             videos_last_frames: Optional[torch.Tensor] = None
             latent_h = height // self.vae_scale_factor_spatial
             latent_w = width // self.vae_scale_factor_spatial
@@ -1046,8 +890,7 @@ class WanPipelineS2V(WanPipeline):
                     )
 
                 with _stage(f"s2v_clip_{clip_idx}_vae_decode"):
-                    # Clip 0 with drop_first_motion prepends ref; everything
-                    # else prepends the previous clip's motion latents.
+                    # Clip 0 prepends ref; subsequent clips prepend prev-clip motion latents.
                     if drop_first_motion:
                         prepend_for_decode = ref_latents_for_decode
                     else:
@@ -1059,22 +902,17 @@ class WanPipelineS2V(WanPipeline):
                         prepend_latents_torch=prepend_for_decode,
                     )
 
-                # Trim per reference 654-656.
+                # Trim per speech2video.py:654-656.
                 image_BCTHW = image_BCTHW[:, :, -self._INFER_FRAMES_PIXEL :]
                 if drop_first_motion:
                     image_BCTHW = image_BCTHW[:, :, self._S2V_VAE_CLIP0_TRIM :]
 
-                # Slide videos_last_frames forward (reference 658-663) only if
-                # there's a next clip that will consume it. On the final clip we
-                # skip the motion-tail VAE encode entirely (~6.5 s saved).
+                # Slide videos_last_frames forward only if a next clip will
+                # consume it — skip the final ~6.5 s motion-tail VAE encode.
                 if clip_idx + 1 < num_clips:
                     overlap = min(self._MOTION_FRAMES_PIXEL, image_BCTHW.shape[2])
                     if videos_last_frames is None or overlap >= self._MOTION_FRAMES_PIXEL:
-                        # First slide (or current clip's tail fully covers the
-                        # buffer): the prior ``videos_last_frames[:, :, overlap:]``
-                        # contribution is empty, so just take the current clip's
-                        # tail directly. Pad with zeros on the left only when
-                        # the current clip is short of the motion-frames target.
+                        # First slide / full overlap: prior buffer contribution is empty.
                         new_tail = image_BCTHW[:, :, -overlap:]
                         if overlap < self._MOTION_FRAMES_PIXEL:
                             zero_pad = torch.zeros(
@@ -1095,10 +933,9 @@ class WanPipelineS2V(WanPipeline):
 
                 clip_videos.append(image_BCTHW)
 
-        # 6. Concat clip outputs (reference 670).
+        # 6. Concat clip outputs (speech2video.py:670).
         videos_BCTHW = torch.cat(clip_videos, dim=2)
 
-        # 7. Final dtype / layout conversion.
         if output_type == "latent":
             video: object = videos_BCTHW
         elif output_type == "uint8":
@@ -1114,43 +951,3 @@ class WanPipelineS2V(WanPipeline):
         if not return_dict:
             return (video,)
         return WanPipelineOutput(frames=video)
-
-    @staticmethod
-    def export(frames, output_path: str, *, audio_path: Optional[str] = None, fps: int = 16) -> str:
-        export_to_video(frames, output_path, fps=fps)
-        if audio_path is None:
-            return output_path
-        # Mux audio via ffmpeg -c:v copy (no video re-encode).
-        import os
-        import subprocess
-
-        from imageio_ffmpeg import get_ffmpeg_exe
-
-        base, ext = os.path.splitext(output_path)
-        temp_output = f"{base}_with_audio{ext}"
-        cmd = [
-            get_ffmpeg_exe(),
-            "-y",
-            "-i",
-            output_path,
-            "-i",
-            audio_path,
-            "-c:v",
-            "copy",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "192k",
-            "-shortest",
-            "-v",
-            "warning",
-            temp_output,
-        ]
-        result = subprocess.run(cmd, capture_output=True)
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"ffmpeg audio mux failed (rc={result.returncode}): "
-                f"{result.stderr.decode('utf-8', errors='ignore')}"
-            )
-        os.replace(temp_output, output_path)
-        return output_path

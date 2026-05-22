@@ -15,6 +15,7 @@ from loguru import logger
 
 import ttnn
 from models.tt_dit.pipelines.wan.pipeline_wan_s2v import WanPipelineS2V
+from models.tt_dit.utils.video import export_to_video_with_audio
 
 from .....utils.test import line_params, ring_params
 
@@ -151,5 +152,5 @@ def test_pipeline_inference_s2v(
         )
 
     output_path = f"wan_s2v_{width}x{height}.mp4"
-    WanPipelineS2V.export(frames[0], output_path, audio_path=_AUDIO_PATH, fps=16)
+    export_to_video_with_audio(frames[0], output_path, audio_path=_AUDIO_PATH, fps=16)
     logger.info(f"Saved video with audio: {output_path}")
