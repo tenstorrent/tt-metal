@@ -763,12 +763,13 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         use_llk_bcast = false;
     }
 
-    // Integer relational ops (NE/EQ/GT/LT/GE/LE) on UInt16 take the FPU SUB + NEZ
-    // postprocess path with DEST configured for Fp16_b accumulation (fp32_dest_acc_en
-    // is false for UInt16).  Under SCALAR broadcast the B2D datacopy unpacker writes
-    // a single u16 lane into all DEST positions; the resulting Fp16_b-tagged DEST is
-    // then read back by the NEZ postprocess, which interprets the integer bit pattern
-    // through the format-conversion path and corrupts the comparison result (#36217).
+    // Integer relational ops on UInt16 use either the FPU SUB + {EQZ/NEZ} postprocess
+    // path (EQ/NE) or direct SFPU comparison (LT/GT/LE/GE), both with DEST configured
+    // for Fp16_b accumulation (fp32_dest_acc_en is false for UInt16).  Under SCALAR
+    // broadcast the B2D datacopy unpacker writes a single u16 lane into all DEST
+    // positions; the resulting Fp16_b-tagged DEST is then read back by the postprocess
+    // or SFPU comparison kernel, which interprets the integer bit pattern through the
+    // format-conversion path and corrupts the comparison result (#36217).
     // Fall back to software broadcast for this combination - non-broadcast u16
     // relational ops and broadcasted arithmetic u16 ops (no postprocess) are
     // unaffected.

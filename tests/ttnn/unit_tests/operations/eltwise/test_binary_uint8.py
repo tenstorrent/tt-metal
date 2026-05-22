@@ -21,28 +21,23 @@ from models.common.utility_functions import is_blackhole
     ],
 )
 @pytest.mark.parametrize(
-    "low_a, high_a, low_b, high_b",
-    [
-        (0, 255, 0, 255),
-    ],
-)
-@pytest.mark.parametrize(
     "ttnn_op",
     [ttnn.ne, ttnn.eq, ttnn.lt, ttnn.gt, ttnn.le, ttnn.ge],
 )
-def test_binary_relational_uint8(a_shape, b_shape, low_a, high_a, low_b, high_b, ttnn_op, device):
+def test_binary_relational_uint8(a_shape, b_shape, ttnn_op, device):
     # TODO: Remove this when typecasting uint8 to uint16 support is added to the BH simulator
     # issue: https://github.com/tenstorrent/tt-metal/issues/44988
     if is_blackhole() and os.environ.get("TT_METAL_SIMULATOR"):
         pytest.skip("Skipping on BH tt-sim: UINT8->UINT16 typecast not supported")
+    low, high = 0, 255
     num_elements = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
-    torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
+    torch_input_tensor_a = torch.linspace(high, low, num_elements, dtype=torch.int32)
     corner_cases = torch.tensor([0, 1, 255], dtype=torch.int32)
     torch_input_tensor_a = torch.cat([torch_input_tensor_a, corner_cases])
     torch_input_tensor_a = torch_input_tensor_a[-num_elements:].reshape(a_shape)
 
     num_elements = max(int(torch.prod(torch.tensor(b_shape)).item()), 1)
-    torch_input_tensor_b = torch.linspace(high_b, low_b, num_elements, dtype=torch.int32)
+    torch_input_tensor_b = torch.linspace(high, low, num_elements, dtype=torch.int32)
     corner_cases = torch.tensor([0, 1, 255], dtype=torch.int32)
     torch_input_tensor_b = torch.cat([torch_input_tensor_b, corner_cases])
     torch_input_tensor_b = torch_input_tensor_b[-num_elements:].reshape(b_shape)
@@ -81,6 +76,7 @@ def test_binary_relational_uint8_tensor_scalar(shape, scalar, ttnn_op, device):
     # issue: https://github.com/tenstorrent/tt-metal/issues/44988
     if is_blackhole() and os.environ.get("TT_METAL_SIMULATOR"):
         pytest.skip("Skipping on BH tt-sim: UINT8->UINT16 typecast not supported")
+    # scalar must be in [0, 255] to stay within the UINT8 value range
     num_elements = int(torch.prod(torch.tensor(shape)).item())
     torch_input = torch.arange(num_elements, dtype=torch.int32).remainder(256).reshape(shape)
 
