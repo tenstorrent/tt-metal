@@ -167,9 +167,9 @@ def test_arithmetic_operators(device):
 @pytest.mark.parametrize(
     "broadcast_shape",
     [
-        (1, 1, 1, 64),   # ROW broadcast
-        (1, 1, 32, 1),   # COL broadcast
-        (1, 1, 1, 1),    # SCALAR broadcast
+        (1, 1, 1, 64),  # ROW broadcast
+        (1, 1, 32, 1),  # COL broadcast
+        (1, 1, 1, 1),  # SCALAR broadcast
     ],
     ids=["row_bcast", "col_bcast", "scalar_bcast"],
 )
