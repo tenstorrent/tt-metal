@@ -530,7 +530,6 @@ def _make_generate_fn(
         # Decode trace capture leaves an active trace region; 2CQ ``pipeline.compile`` then fails
         # with "Tensor is not allocated". Demo uses the same eager decode path.
         use_decode_trace=False,
-        prewarm_conv1d_weights=True,
     )
 
     def generate(_device_input: ttnn.Tensor) -> Any:
