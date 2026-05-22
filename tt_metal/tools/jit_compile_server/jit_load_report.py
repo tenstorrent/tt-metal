@@ -18,6 +18,7 @@ from typing import Iterable, Sequence, TextIO
 JIT_SERVER_LOG_PATTERN = re.compile(
     r"\[jit_server addr=(?P<addr>\S+) ts=(?P<ts>\d+)\] "
     r"count=(?P<count>\d+) "
+    r"(?:dedup_hit[s]?=(?P<dedup_hits>\d+) )?"
     r"total_compile_time_ms=(?P<total_compile_time_ms>\d+) "
     r"queued=(?P<queued>\d+) "
     r"inflight=(?P<inflight>\d+) "
@@ -25,13 +26,17 @@ JIT_SERVER_LOG_PATTERN = re.compile(
     r"bytes_in=(?P<bytes_in>\d+) "
     r"bytes_out=(?P<bytes_out>\d+)"
 )
+COMPILE_LOG_PATTERN = re.compile(r"compile (?P<kernel_name>\S+): targets=\d+ genfiles=\d+ outstanding=\d+")
+KERNEL_HASH_PATTERN = re.compile(r"[0-9a-fA-F]{16,}")
 
 
 @dataclass(frozen=True)
 class JitServerSample:
+    server_id: str
     addr: str
     ts: int
     count: int
+    dedup_hits: int
     total_compile_time_ms: int
     queued: int
     inflight: int
@@ -41,13 +46,23 @@ class JitServerSample:
 
 
 @dataclass(frozen=True)
+class KernelCompileSample:
+    server_id: str
+    kernel_name: str
+    kernel_hash: str | None
+
+
+@dataclass(frozen=True)
 class ServerLoadReport:
+    server: str
     addr: str
     count: int
+    dedup_hits: int
     total_compile_time_ms: int
     peak_inflight: int
     bytes_in: int
     bytes_out: int
+    unique_kernel_hashes: int
     throughput_compiles_per_sec: float | None
 
 
@@ -61,16 +76,29 @@ class ImbalanceStats:
     coefficient_of_variation: float
 
 
-def parse_jit_server_line(line: str) -> JitServerSample | None:
+def _infer_server_id(line: str, addr: str, source_id: str | None) -> str:
+    if source_id is not None:
+        return source_id
+
+    prefix = line.split("[jit_server", maxsplit=1)[0].strip()
+    if prefix:
+        return " ".join(prefix.split())
+    return addr
+
+
+def parse_jit_server_line(line: str, source_id: str | None = None) -> JitServerSample | None:
     match = JIT_SERVER_LOG_PATTERN.search(line)
     if match is None:
         return None
 
     groups = match.groupdict()
+    addr = groups["addr"]
     return JitServerSample(
-        addr=groups["addr"],
+        server_id=_infer_server_id(line, addr, source_id),
+        addr=addr,
         ts=int(groups["ts"]),
         count=int(groups["count"]),
+        dedup_hits=0 if groups["dedup_hits"] is None else int(groups["dedup_hits"]),
         total_compile_time_ms=int(groups["total_compile_time_ms"]),
         queued=int(groups["queued"]),
         inflight=int(groups["inflight"]),
@@ -80,19 +108,64 @@ def parse_jit_server_line(line: str) -> JitServerSample | None:
     )
 
 
-def parse_jit_server_samples(lines: Iterable[str]) -> list[JitServerSample]:
+def parse_jit_server_samples(lines: Iterable[str], source_id: str | None = None) -> list[JitServerSample]:
     samples: list[JitServerSample] = []
     for line in lines:
-        sample = parse_jit_server_line(line)
+        sample = parse_jit_server_line(line, source_id=source_id)
         if sample is not None:
             samples.append(sample)
     return samples
 
 
-def group_samples_by_addr(samples: Iterable[JitServerSample]) -> dict[str, list[JitServerSample]]:
+def _extract_kernel_hash(kernel_name: str) -> str | None:
+    components = [component for component in kernel_name.split("/") if component]
+    for component in reversed(components):
+        if KERNEL_HASH_PATTERN.fullmatch(component):
+            return component.lower()
+
+    for component in reversed(components):
+        match = KERNEL_HASH_PATTERN.search(component)
+        if match is not None:
+            return match.group(0).lower()
+    return None
+
+
+def _infer_compile_server_id(line: str, source_id: str | None) -> str:
+    if source_id is not None:
+        return source_id
+
+    prefix = line.split("compile ", maxsplit=1)[0].strip()
+    if prefix:
+        return " ".join(prefix.split())
+    return "unknown"
+
+
+def parse_kernel_compile_line(line: str, source_id: str | None = None) -> KernelCompileSample | None:
+    match = COMPILE_LOG_PATTERN.search(line)
+    if match is None:
+        return None
+
+    kernel_name = match.group("kernel_name")
+    return KernelCompileSample(
+        server_id=_infer_compile_server_id(line, source_id),
+        kernel_name=kernel_name,
+        kernel_hash=_extract_kernel_hash(kernel_name),
+    )
+
+
+def parse_kernel_compile_samples(lines: Iterable[str], source_id: str | None = None) -> list[KernelCompileSample]:
+    samples: list[KernelCompileSample] = []
+    for line in lines:
+        sample = parse_kernel_compile_line(line, source_id=source_id)
+        if sample is not None:
+            samples.append(sample)
+    return samples
+
+
+def group_samples_by_server(samples: Iterable[JitServerSample]) -> dict[str, list[JitServerSample]]:
     grouped: dict[str, list[JitServerSample]] = {}
     for sample in samples:
-        grouped.setdefault(sample.addr, []).append(sample)
+        grouped.setdefault(sample.server_id, []).append(sample)
     for grouped_samples in grouped.values():
         grouped_samples.sort(key=lambda sample: sample.ts)
     return grouped
@@ -102,19 +175,24 @@ def _non_negative_delta(last: int, first: int) -> int:
     return max(0, last - first)
 
 
-def compute_server_report(samples: Sequence[JitServerSample], window_seconds: float | None) -> ServerLoadReport:
+def compute_server_report(
+    samples: Sequence[JitServerSample], window_seconds: float | None, unique_kernel_hashes: int
+) -> ServerLoadReport:
     if not samples:
         raise ValueError("compute_server_report() requires at least one sample")
 
     last = samples[-1]
     if window_seconds is None:
         return ServerLoadReport(
+            server=last.server_id,
             addr=last.addr,
             count=last.count,
+            dedup_hits=last.dedup_hits,
             total_compile_time_ms=last.total_compile_time_ms,
             peak_inflight=last.peak_inflight,
             bytes_in=last.bytes_in,
             bytes_out=last.bytes_out,
+            unique_kernel_hashes=unique_kernel_hashes,
             throughput_compiles_per_sec=None,
         )
 
@@ -129,12 +207,15 @@ def compute_server_report(samples: Sequence[JitServerSample], window_seconds: fl
     throughput = 0.0 if elapsed_ms == 0 else count_delta / (elapsed_ms / 1000.0)
 
     return ServerLoadReport(
+        server=last.server_id,
         addr=last.addr,
         count=count_delta,
+        dedup_hits=_non_negative_delta(last.dedup_hits, first.dedup_hits),
         total_compile_time_ms=_non_negative_delta(last.total_compile_time_ms, first.total_compile_time_ms),
         peak_inflight=peak_inflight,
         bytes_in=_non_negative_delta(last.bytes_in, first.bytes_in),
         bytes_out=_non_negative_delta(last.bytes_out, first.bytes_out),
+        unique_kernel_hashes=unique_kernel_hashes,
         throughput_compiles_per_sec=throughput,
     )
 
@@ -171,14 +252,39 @@ def compute_imbalance_stats(values: Sequence[int | float]) -> ImbalanceStats:
     )
 
 
-def build_report(samples: Sequence[JitServerSample], window_seconds: float | None) -> dict:
-    grouped = group_samples_by_addr(samples)
+def _build_kernel_hashes_by_server(samples: Iterable[KernelCompileSample]) -> dict[str, set[str]]:
+    hashes_by_server: dict[str, set[str]] = {}
+    for sample in samples:
+        if sample.kernel_hash is None:
+            continue
+        hashes_by_server.setdefault(sample.server_id, set()).add(sample.kernel_hash)
+    return hashes_by_server
+
+
+def build_report(
+    samples: Sequence[JitServerSample],
+    window_seconds: float | None,
+    kernel_compile_samples: Sequence[KernelCompileSample] | None = None,
+) -> dict:
+    if kernel_compile_samples is None:
+        kernel_compile_samples = []
+    grouped = group_samples_by_server(samples)
+    kernel_hashes_by_server = _build_kernel_hashes_by_server(kernel_compile_samples)
     server_reports = [
-        compute_server_report(grouped_samples, window_seconds) for _, grouped_samples in sorted(grouped.items())
+        compute_server_report(
+            grouped_samples,
+            window_seconds,
+            unique_kernel_hashes=len(kernel_hashes_by_server.get(server_id, set())),
+        )
+        for server_id, grouped_samples in sorted(grouped.items())
     ]
 
     imbalance_summary = {
         "count": asdict(compute_imbalance_stats([server.count for server in server_reports])),
+        "dedup_hits": asdict(compute_imbalance_stats([server.dedup_hits for server in server_reports])),
+        "unique_kernel_hashes": asdict(
+            compute_imbalance_stats([server.unique_kernel_hashes for server in server_reports])
+        ),
         "total_compile_time_ms": asdict(
             compute_imbalance_stats([server.total_compile_time_ms for server in server_reports])
         ),
@@ -187,6 +293,9 @@ def build_report(samples: Sequence[JitServerSample], window_seconds: float | Non
     return {
         "window_seconds": window_seconds,
         "servers": [asdict(server_report) for server_report in server_reports],
+        "unique_kernel_hashes_total": len(
+            {hash_value for hashes in kernel_hashes_by_server.values() for hash_value in hashes}
+        ),
         "imbalance_summary": imbalance_summary,
     }
 
@@ -221,19 +330,32 @@ def render_human_report(report: dict, window_seconds: float | None) -> str:
         return "No jit_server samples found."
 
     lines.append("Per-server metrics:")
-    headers = ["addr", "count", "total_compile_time_ms", "peak_inflight", "bytes_in", "bytes_out"]
+    headers = [
+        "server",
+        "addr",
+        "count",
+        "dedup_hits",
+        "total_compile_time_ms",
+        "peak_inflight",
+        "bytes_in",
+        "bytes_out",
+        "unique_kernel_hashes",
+    ]
     if window_seconds is not None:
         headers.append("throughput_compiles_per_sec")
 
     rows: list[list[str]] = []
     for server in servers:
         row = [
+            server["server"],
             server["addr"],
             str(server["count"]),
+            str(server["dedup_hits"]),
             str(server["total_compile_time_ms"]),
             str(server["peak_inflight"]),
             str(server["bytes_in"]),
             str(server["bytes_out"]),
+            str(server["unique_kernel_hashes"]),
         ]
         if window_seconds is not None:
             throughput = server["throughput_compiles_per_sec"]
@@ -247,7 +369,7 @@ def render_human_report(report: dict, window_seconds: float | None) -> str:
     imbalance = report["imbalance_summary"]
     summary_headers = ["metric", "max", "min", "mean", "stddev", "max/min_ratio", "coefficient_of_variation"]
     summary_rows: list[list[str]] = []
-    for metric_name in ("count", "total_compile_time_ms"):
+    for metric_name in ("count", "dedup_hits", "unique_kernel_hashes", "total_compile_time_ms"):
         stats = imbalance[metric_name]
         summary_rows.append(
             [
@@ -263,7 +385,12 @@ def render_human_report(report: dict, window_seconds: float | None) -> str:
 
     lines.append(_render_table(summary_headers, summary_rows))
     lines.append("")
+    lines.append(f"Unique kernel hashes (global): {report['unique_kernel_hashes_total']}")
+    lines.append("")
     lines.append("Stat definitions:")
+    lines.append("count: completed compile RPCs (includes dedup hits and on-disk cache hits).")
+    lines.append("dedup_hits: requests served by in-flight deduplication rather than owning a compile.")
+    lines.append("unique_kernel_hashes: distinct kernel hashes observed in compile kernel names per server.")
     lines.append("max/min/mean: largest, smallest, and average value across servers.")
     lines.append("stddev: spread of server values around the mean (higher means more imbalance).")
     lines.append("max/min_ratio: skew between busiest and least busy server (1.0 means perfectly balanced).")
@@ -273,11 +400,20 @@ def render_human_report(report: dict, window_seconds: float | None) -> str:
 
 def _read_samples_from_path(path: Path) -> list[JitServerSample]:
     with path.open("r", encoding="utf-8") as handle:
-        return parse_jit_server_samples(handle)
+        return parse_jit_server_samples(handle, source_id=str(path))
 
 
 def _read_samples_from_stream(stream: TextIO) -> list[JitServerSample]:
     return parse_jit_server_samples(stream)
+
+
+def _read_kernel_samples_from_path(path: Path) -> list[KernelCompileSample]:
+    with path.open("r", encoding="utf-8") as handle:
+        return parse_kernel_compile_samples(handle, source_id=str(path))
+
+
+def _read_kernel_samples_from_stream(stream: TextIO) -> list[KernelCompileSample]:
+    return parse_kernel_compile_samples(stream)
 
 
 def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
@@ -295,13 +431,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise ValueError("--window must be > 0")
 
     samples: list[JitServerSample] = []
+    kernel_samples: list[KernelCompileSample] = []
     if args.logs:
         for path in args.logs:
             samples.extend(_read_samples_from_path(Path(path)))
+            kernel_samples.extend(_read_kernel_samples_from_path(Path(path)))
     else:
-        samples.extend(_read_samples_from_stream(sys.stdin))
+        stdin_lines = list(sys.stdin)
+        samples.extend(_read_samples_from_stream(stdin_lines))
+        kernel_samples.extend(_read_kernel_samples_from_stream(stdin_lines))
 
-    report = build_report(samples, args.window)
+    report = build_report(samples, args.window, kernel_compile_samples=kernel_samples)
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
