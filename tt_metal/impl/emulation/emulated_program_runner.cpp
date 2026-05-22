@@ -317,11 +317,8 @@ static bool emule_strict_object_intent_enabled() {
 // (e.g. consumer-side speculative reads, cross-CB scratch use) and would
 // false-positive until those sites are audited.
 static bool emule_strict_cb_boundary_enabled() {
-    static const bool enabled = []() {
-        const char* v = std::getenv("TT_EMULE_STRICT_CB_BOUNDARY");
-        return v != nullptr && v[0] != '\0' && v[0] != '0';
-    }();
-    return enabled;
+    const char* v = std::getenv("TT_EMULE_STRICT_CB_BOUNDARY");
+    return v != nullptr && v[0] != '\0' && v[0] != '0';
 }
 
 // TT_EMULE_STRICT_PADDING: when set, populate the L1 padding-range thread_locals
