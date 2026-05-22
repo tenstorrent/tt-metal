@@ -1,7 +1,8 @@
 # DeepSeek-V3
 
-## Platforms:
-    Galaxy (WH) - 2x or 4x configurations
+## Platforms
+- Galaxy (WH) QUAD (4x): primary supported path for full demo and integration runs
+- Single Galaxy (TG): supported for selected module/unit tests and reduced-layer debug runs
 
 ## Introduction
 This demo targets the [deepseek-ai/DeepSeek-R1-0528](https://huggingface.co/deepseek-ai/DeepSeek-R1-0528) model and is compatible with other DeepSeek-V3 checkpoints. The TT-NN pipeline supports full-model execution, teacher-forced accuracy verification, random-weight smoke tests, and multiple prompt ingestion patterns for throughput benchmarking.
@@ -17,7 +18,8 @@ This demo targets the [deepseek-ai/DeepSeek-R1-0528](https://huggingface.co/deep
 
 The recommended DeepSeek-V3 runtime path is:
 - export a stacked dequantized checkpoint with `models/demos/deepseek_v3/scripts/dequantize_hf_checkpoint.py`
-- point `DEEPSEEK_V3_HF_MODEL` or `--model-path` at the resulting `*-dequantized-stacked` directory
+- prepare a quad-ring overlay checkpoint with `models/demos/deepseek_v3/scripts/prepare_quad_ring_hf_checkpoint.py` (recommended for QUAD/128-device runs)
+- point `DEEPSEEK_V3_HF_MODEL` or `--model-path` at the resulting `*-dequantized-stacked-quad-ring` directory (fallback: `*-dequantized-stacked`)
 - run without an on-disk TT weight cache
 
 `--cache-dir` and `DEEPSEEK_V3_CACHE` remain available for reference/test caches, but DeepSeek weights are converted
@@ -25,34 +27,79 @@ directly in memory on this path. If you explicitly want to consume a prebuilt le
 (for example BSPM output), pass `--use-weight-cache --cache-dir <cache-root>`. Legacy caches generated before the
 current DeepSeek SavedWeight metadata/versioning must be regenerated first; older-format and unversioned caches are rejected.
 
-## Running on Multi-Host Galaxy (2x or 4x)
+### DS-RC1 quad-ring checkpoint preparation
 
-DeepSeek-V3 requires a multi-host Galaxy setup. Use the `launch_multihost_galaxy.py` script to run commands across all hosts:
-
-### Quick Start
+For DeepSeek-R1-0528 / DS-RC1 on QUAD, run the quad-ring preparation script with `--num-devices 128`.
 
 ```bash
-# Run tests on 2x Galaxy (2 hosts)
-./models/demos/deepseek_v3/scripts/launch_multihost_galaxy.py 2x -- pytest models/demos/deepseek_v3/tests/test_model.py
+python models/demos/deepseek_v3/scripts/prepare_quad_ring_hf_checkpoint.py \
+  /data/deepseek/DeepSeek-R1-0528-dequantized-stacked \
+  --output-model-path /data/deepseek/DeepSeek-R1-0528-dequantized-stacked-quad-ring \
+  --num-devices 128
+```
 
-# Run tests on 4x Galaxy (4 hosts)
+Fresh prepare (overwrite/rebuild output checkpoint):
+
+```bash
+export STACKED=/data/deepseek/DeepSeek-R1-0528-dequantized-stacked
+export QUAD=/data/deepseek/DeepSeek-R1-0528-dequantized-stacked-quad-ring
+
+python_env/bin/python models/demos/deepseek_v3/scripts/prepare_quad_ring_hf_checkpoint.py \
+  "$STACKED" \
+  --output-model-path "$QUAD" \
+  --num-devices 128 \
+  --force
+```
+
+Resume after interruption (reuses existing layers and skips completed work):
+
+```bash
+python_env/bin/python models/demos/deepseek_v3/scripts/prepare_quad_ring_hf_checkpoint.py \
+  "$STACKED" \
+  --output-model-path "$QUAD" \
+  --num-devices 128 2>&1 | tee /tmp/quad_prepare_resume.log
+```
+
+After preparation, set `DEEPSEEK_V3_HF_MODEL` (or `--model-path`) to `$QUAD`.
+
+## Running on Multi-Host Galaxy (QUAD primary)
+
+DeepSeek-V3 practical multi-host support is QUAD (4x). DUAL (2x) remains in some launch tooling for legacy compatibility, but is deprecated and no longer the recommended path.
+
+### Quick Start (`launch_multihost_galaxy.py`)
+
+```bash
+# Run tests on QUAD Galaxy (4 hosts)
 ./models/demos/deepseek_v3/scripts/launch_multihost_galaxy.py 4x -- pytest models/demos/deepseek_v3/tests/test_model.py
 
-# Run the demo
-./models/demos/deepseek_v3/scripts/launch_multihost_galaxy.py 2x -- python models/demos/deepseek_v3/demo/demo.py \
+# Run the demo on QUAD Galaxy
+./models/demos/deepseek_v3/scripts/launch_multihost_galaxy.py 4x -- python models/demos/deepseek_v3/demo/demo.py \
   --model-path \$DEEPSEEK_V3_HF_MODEL \
   "Your prompt here!"
 
 # Dry run (print command without executing)
-./models/demos/deepseek_v3/scripts/launch_multihost_galaxy.py -d 2x -- pytest models/demos/deepseek_v3/tests/test_model.py
+./models/demos/deepseek_v3/scripts/launch_multihost_galaxy.py -d 4x -- pytest models/demos/deepseek_v3/tests/test_model.py
 ```
 
-### Configuration
+### Recommended QUAD runner (`run_quad_galaxy_tests.sh`)
+
+```bash
+tests/scripts/multihost/run_quad_galaxy_tests.sh quad_demo 8 \
+  --model-path /data/deepseek/DeepSeek-R1-0528-dequantized-stacked \
+  --cache-path /data/deepseek/DeepSeek-R1-0528-Cache/
+```
+
+- `quad_demo` runs the QUAD demo test entrypoint.
+- The second argument is UPR mode (`8`, `32`, or `all`).
+- `--model-path` and `--cache-path` override the default model/cache paths.
+- With torus mode enabled (default), if `<model-path>-quad-ring` exists, this script automatically switches to that prepared checkpoint.
+
+### `launch_multihost_galaxy.py` configuration
 
 The script automatically:
 - Detects the current hostname and selects the appropriate cluster configuration
 - Sources the Python virtual environment (`python_env/bin/activate`)
-- Sets `MESH_DEVICE` environment variable (`DUAL` for 2x, `QUAD` for 4x)
+- Sets `MESH_DEVICE=QUAD` when running with `4x`
 - Exports `DEEPSEEK_V3_HF_MODEL` and `DEEPSEEK_V3_CACHE`
 - Defaults `DEEPSEEK_V3_HF_MODEL` to the stacked dequantized checkpoint path
 - Leaves `DEEPSEEK_V3_CACHE` available for reference/test caches; DeepSeek weights do not use it as an on-disk TT weight cache
@@ -62,13 +109,15 @@ The script automatically:
 
 ```bash
 # Reset the Galaxy cluster (kills python processes, resets devices, clears shared memory)
-./models/demos/deepseek_v3/scripts/launch_multihost_galaxy.py 2x -- reset
+./models/demos/deepseek_v3/scripts/launch_multihost_galaxy.py 4x -- reset
 ```
 
 ### Supported Hosts
 
 Supported clusters:
-- **g05glx01-04**: 2x pairs (01-02, 03-04) and 4x (all four hosts)
+- **g05glx01-04**: QUAD (all four hosts)
+
+Legacy 2x host mappings remain in launcher scripts for compatibility, but are deprecated for DeepSeek-V3 workflows.
 
 To add new host configurations, edit `models/demos/deepseek_v3/scripts/launch_multihost_galaxy.py`.
 
@@ -82,13 +131,16 @@ pytest models/demos/deepseek_v3/tests/test_mlp.py
 pytest models/demos/deepseek_v3/tests/test_attention.py
 ```
 
-The demo can also run on a single Galaxy in data parallel mode with a reduced number of layers (5 layers instead of the full model):
+For development, you can also run a reduced-layer demo on a single Galaxy:
 
 ```bash
 MESH_DEVICE=TG python models/demos/deepseek_v3/demo/demo.py \
              --prompts-file models/demos/deepseek_v3/demo/test_prompts.json \
              --output-path deepseek_tt_out_batch_4.json \
              --max-new-tokens 128 \
+             --max-users-per-row 8 \
+             --override-num-layers 5 \
+             --disable-trace \
              --model-path $DEEPSEEK_V3_HF_MODEL
 ```
 
@@ -97,15 +149,9 @@ By default, the demo stops recording output once EOS is produced. Add `--no-stop
 
 ## Demo
 
-Running the demo on Galaxy (2x or 4x):
+Running the demo on QUAD Galaxy (4x):
 
 ```bash
-# On 2x Galaxy
-./models/demos/deepseek_v3/scripts/launch_multihost_galaxy.py 2x -- python models/demos/deepseek_v3/demo/demo.py \
-  --model-path \$DEEPSEEK_V3_HF_MODEL \
-  --early_print_first_user \
-  "Write a haiku about autumnal days by the sea"
-
 # On 4x Galaxy
 ./models/demos/deepseek_v3/scripts/launch_multihost_galaxy.py 4x -- python models/demos/deepseek_v3/demo/demo.py \
   --model-path \$DEEPSEEK_V3_HF_MODEL \
@@ -116,7 +162,7 @@ Running the demo on Galaxy (2x or 4x):
 The `launch_multihost_galaxy` script automatically sets `DEEPSEEK_V3_HF_MODEL` and `DEEPSEEK_V3_CACHE` environment variables. You can reference them directly:
 
 ```bash
-./models/demos/deepseek_v3/scripts/launch_multihost_galaxy.py 2x -- python models/demos/deepseek_v3/demo/demo.py \
+./models/demos/deepseek_v3/scripts/launch_multihost_galaxy.py 4x -- python models/demos/deepseek_v3/demo/demo.py \
   --model-path \$DEEPSEEK_V3_HF_MODEL \
   --early_print_first_user \
   "Write a haiku about autumnal days by the sea"
@@ -128,17 +174,19 @@ The `launch_multihost_galaxy` script automatically sets `DEEPSEEK_V3_HF_MODEL` a
 - `--prompts-file FILE`: Load prompts from a JSON file (see below). CLI prompts are ignored when this flag is present.
 - `--num-prompts N`: Limit the number of prompts loaded from `--prompts-file`.
 - `--output-path FILE`: Save generations/statistics to JSON when using `--prompts-file`. Defaults to `<prompts-file-stem>_output.json`.
-- `--model-path PATH`: Local HF model directory. Defaults to `$DEEPSEEK_V3_HF_MODEL` or `models/demos/deepseek_v3/reference`.
-- `--cache-dir PATH`: Optional directory for reference/test caches. Defaults to `$DEEPSEEK_V3_CACHE` when set. Also used as the legacy TT weight-cache root when `--use-weight-cache` is enabled.
+- `--model-path PATH`: Local HF model directory (required). In practice this should usually be a `*-dequantized-stacked-quad-ring` checkpoint on QUAD.
+- `--cache-dir PATH`: Optional directory for reference/test caches. Also used as the legacy TT weight-cache root when `--use-weight-cache` is enabled.
 - `--use-weight-cache`: Load a prebuilt current-format legacy TT weight cache from `--cache-dir` instead of converting weights in memory. Use this for workflows such as BSPM-generated caches. Caches generated before the current DeepSeek SavedWeight metadata/versioning must be regenerated first.
 - `--max-new-tokens N`: Number of tokens to generate (default: 32).
+- `--max-users-per-row N`: Maximum active users per row for decode (default from `USERS_PER_ROW`).
 - `--stop-at-eos`: Stop recording output tokens once EOS is generated. This is the default.
 - `--no-stop-at-eos`: Always record `max-new-tokens`, even after EOS. Use this for fixed-length stress or perf runs.
 - `--early_print_first_user`: Stream tokens for the first prompt as they are produced.
 - `--generator {bp}`: Select batch-parallel generator implementation (default: `bp`).
-- `--enable-trace`: Enable tracing for the batch-parallel generator decode path.
+- `--disable-trace`: Disable tracing for decode forward pass (trace is enabled by default).
 - `--random-weights`: Use randomly initialized weights (single dense layer only). Does not require tokenizer or safetensors.
 - `--single-layer {mlp,moe}`: When combined with `--random-weights`, request a single-layer run (`mlp` only).
+- `--override-num-layers N`: Override model depth for reduced debug/development runs (for example, TG reduced-layer runs).
 - `--token-accuracy`: Enable teacher-forcing decode and report accuracy (requires full-model mode plus tokenizer and reference file).
 - `--reference-file PATH`: Path to `.pt/.refpt` reference file (see below).
 - `--tf-prompt-len N`: Override the teacher-forcing prompt length pulled from the reference file.
@@ -166,14 +214,6 @@ The CLI accepts JSON files in either of the following layouts:
 ```
 
 Use `--num-prompts` to truncate large prompt sets. For example, there are 256 total prompts in `models/demos/deepseek_v3/demo/test_prompts.json`, but you can limit it to a subset.
-
-### Sample usage with JSON file:
-
-```bash
-python models/demos/deepseek_v3/demo/demo.py --prompts-file models/demos/deepseek_v3/demo/test_prompts.json --num-prompts 256 --output-path deepseek_tt_out.json --max-new-tokens 128
-```
-
-Use `--no-stop-at-eos` with the command above if you need fixed-length outputs for stress or benchmarking workflows.
 
 ### Programmatic usage
 
@@ -233,7 +273,7 @@ Notes:
 
 If you are not running on Tenstorrent internal infrastructure, you need to set the following environment variables:
 
-- `DEEPSEEK_V3_HF_MODEL`: Path to a directory containing the DeepSeek-V3 Hugging Face model weights. Defaults to `models/demos/deepseek_v3/reference`. In practice this should normally point at a `*-dequantized-stacked` checkpoint created by `models/demos/deepseek_v3/scripts/dequantize_hf_checkpoint.py`.
+- `DEEPSEEK_V3_HF_MODEL`: Path to a directory containing the DeepSeek-V3 Hugging Face model weights. Defaults to `models/demos/deepseek_v3/reference`. In practice this should normally point at a `*-dequantized-stacked-quad-ring` checkpoint (preferred for QUAD) produced from a stacked checkpoint created by `models/demos/deepseek_v3/scripts/dequantize_hf_checkpoint.py`.
 - `DEEPSEEK_V3_CACHE`: Path to a directory where reference outputs, test inputs/outputs, and similar artifacts can be stored. This is no longer a TT weight cache for the DeepSeek-V3 runtime.
 
 These variables are used in scripts for generating test data and running tests.
