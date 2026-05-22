@@ -58,4 +58,22 @@ matmul_multi_core_reuse_mcast_2d_optimized_helper(
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler);
 
+// ProgramDescriptor-flavored variant of matmul_multi_core_reuse_mcast_2d_optimized_helper.
+//
+// Appends the matmul kernels / CBs / semaphores to `desc` instead of inserting them into a
+// live Program. Used by CCL+matmul fused ops being migrated to the descriptor framework.
+// Mirrors the legacy helper's argument list 1:1; the existing `process_*` legacy path is
+// preserved untouched for ops that have not yet migrated.
+void matmul_multi_core_reuse_mcast_2d_optimized_helper_descriptor(
+    tt::tt_metal::ProgramDescriptor& desc,
+    const Tensor& a,
+    const Tensor& b,
+    const std::optional<const Tensor>& bias,
+    Tensor& output_tensor,
+    bool broadcast_batch,
+    DeviceComputeKernelConfig compute_kernel_config,
+    const operations::matmul::MatmulProgramConfig& program_config,
+    bool untilize_out,
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler);
+
 }  // namespace ttnn::prim

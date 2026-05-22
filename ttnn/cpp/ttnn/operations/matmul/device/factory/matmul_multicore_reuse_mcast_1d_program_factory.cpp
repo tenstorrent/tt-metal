@@ -5558,4 +5558,251 @@ matmul_multi_core_reuse_mcast_1d_optimized_helper(
     return {std::move(program), std::move(shared_vars)};
 }
 
+void matmul_multi_core_reuse_mcast_1d_optimized_helper_descriptor(
+    tt::tt_metal::ProgramDescriptor& desc,
+    const Tensor& a,
+    const std::vector<Tensor>& b_tensors,
+    const std::optional<const Tensor>& bias,
+    const std::vector<Tensor>& output_tensors,
+    bool broadcast_batch,
+    DeviceComputeKernelConfig compute_kernel_config,
+    const operations::matmul::MatmulProgramConfig& program_config,
+    bool untilize_out,
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
+    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    uint32_t start_cb_index,
+    std::optional<CoreRangeSet> restricted_cores) {
+    using namespace tt;
+    using namespace operations::matmul::utilities;
+
+    auto config = std::get<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config);
+
+    // The gather_in0 path of the legacy helper does NOT yet have a ProgramDescriptor builder.
+    // It is the path used by the current CCL+matmul fused callers (llama_reduce_scatter_matmul,
+    // rs_matmul_op, all_gather_matmul_async) and would require translating
+    // process_gather_in0_program_and_create_override_variables (~1000 LOC of ring-topology and
+    // global-CB plumbing) to descriptor form before it can be enabled here. Tracked alongside
+    // the other matmul fusion-helper work for #42193.
+    TT_FATAL(
+        !config.gather_in0,
+        "matmul_multi_core_reuse_mcast_1d_optimized_helper_descriptor: gather_in0 mode is not yet "
+        "supported via the ProgramDescriptor path. CCL fused ops that need gather_in0 must keep "
+        "using the legacy Program& helper until the gather_in0 descriptor builder lands.");
+
+    // The mcast (non-gather) descriptor builders accept a single in1_buffer/out_buffer pair,
+    // a fixed start_cb_index of c_0, no restricted_cores, and no global_cb. The legacy helper
+    // also TT_FATALs on these in the mcast branches, so we surface them here for parity.
+    TT_FATAL(
+        b_tensors.size() == 1,
+        "matmul_multi_core_reuse_mcast_1d_optimized_helper_descriptor: mcast paths only support a "
+        "single B tensor; got {} (multi-B is gather_in0-only).",
+        b_tensors.size());
+    TT_FATAL(
+        output_tensors.size() == 1,
+        "matmul_multi_core_reuse_mcast_1d_optimized_helper_descriptor: mcast paths only support a "
+        "single output tensor; got {} (multi-output is gather_in0-only).",
+        output_tensors.size());
+    TT_FATAL(
+        start_cb_index == tt::CBIndex::c_0,
+        "matmul_multi_core_reuse_mcast_1d_optimized_helper_descriptor: mcast paths require "
+        "start_cb_index == c_0 (non-zero start_cb_index is gather_in0-only). Got {}.",
+        start_cb_index);
+    TT_FATAL(
+        !restricted_cores.has_value(),
+        "matmul_multi_core_reuse_mcast_1d_optimized_helper_descriptor: restricted_cores is "
+        "gather_in0-only.");
+    TT_FATAL(
+        !global_cb.has_value(),
+        "matmul_multi_core_reuse_mcast_1d_optimized_helper_descriptor: global_cb is gather_in0-only "
+        "for the 1d helper.");
+
+    if (!config.allowed_worker_cores.has_value()) {
+        log_warning(
+            tt::LogOp,
+            "matmul_multi_core_reuse_mcast_1d_optimized_helper_descriptor: program_config."
+            "allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. "
+            "Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke "
+            "ttnn::operations::matmul::normalize_program_config() on the program config first. This "
+            "will become a hard error in a future release.");
+        config.allowed_worker_cores = CoreRangeSet(CoreRange(
+            CoreCoord(0, 0),
+            CoreCoord(config.compute_with_storage_grid_size.x - 1, config.compute_with_storage_grid_size.y - 1)));
+    }
+    auto grid_size = config.allowed_worker_cores.value().bounding_box().grid_size();
+
+    const auto& b = b_tensors[0];
+    const auto& output = output_tensors[0];
+
+    bool transpose_a = false;
+    bool transpose_b = false;
+
+    const auto& a_shape_padded = get_matmul_tensor_padded_shape(a, transpose_a);
+    const auto& b_shape_padded = get_matmul_tensor_padded_shape(b, transpose_b);
+    const auto in0_tile = get_matmul_tile(a, transpose_a);
+    const auto in1_tile = get_matmul_tile(b, transpose_b);
+
+    // cannot use the output tensor tile directly as that might be changed by user override
+    const auto output_tile = tt::tt_metal::Tile({in0_tile.get_height(), in1_tile.get_width()});
+
+    // CB dataformats
+    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());
+    tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
+
+    tt_metal::Buffer* bias_buffer = nullptr;
+    tt::DataFormat bias_data_format = tt::DataFormat::Bfp8_b;
+    if (bias.has_value()) {
+        const auto& c = bias.value();
+        bias_buffer = c.buffer();
+        bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
+    }
+
+    tt_metal::IDevice* device = a.device();
+
+    tt_metal::Buffer* in0_buffer = a.buffer();
+    tt_metal::Buffer* in1_buffer = b.buffer();
+    tt_metal::Buffer* out_buffer = output.buffer();
+
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+
+    const auto in0_B = config.fuse_batch ? 1 : get_batch_size(a_shape_padded);
+    const auto in1_B = config.fuse_batch ? 1 : get_batch_size(b_shape_padded);
+    const auto Mt = get_M_dim(a_shape_padded, in0_tile, config.fuse_batch);
+    const auto Kt = get_K_dim(a_shape_padded, in0_tile);
+    const auto Nt = get_N_dim(b_shape_padded, in1_tile);
+
+    // The 1D mcast matmul only supports rectangular sub-device worker grids, because the in0/in1
+    // multicast targets a single bounding-box rectangle and the per-core index math assumes a
+    // contiguous row-major rectangle of width `grid_size.x`.
+    CoreCoord sub_device_start_core = {0, 0};
+    if (sub_device_id.has_value()) {
+        auto sd_worker_cores =
+            device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
+        auto bbox = sd_worker_cores.bounding_box();
+        TT_FATAL(
+            sd_worker_cores.num_cores() == bbox.size(),
+            "matmul_multicore_reuse_mcast_1d only supports rectangular sub-device worker grids. "
+            "Got sub-device worker cores: {} (bounding box: {})",
+            sd_worker_cores,
+            bbox);
+        TT_FATAL(
+            bbox.start_coord.x + grid_size.x - 1 <= bbox.end_coord.x &&
+                bbox.start_coord.y + grid_size.y - 1 <= bbox.end_coord.y,
+            "matmul_multicore_reuse_mcast_1d grid_size {} anchored at sub-device start {} "
+            "extends past the sub-device's worker bounding box {}",
+            grid_size,
+            bbox.start_coord,
+            bbox);
+        sub_device_start_core = bbox.start_coord;
+    }
+
+    ProgramDescriptor produced;
+    if (config.mcast_in0) {
+        produced = reuse_mcast_1d_optimized_helpers::create_program_mcast_in0_descriptor(
+            a,
+            device,
+            math_fidelity,
+            fp32_dest_acc_en,
+            math_approx_mode,
+            packer_l1_acc,
+            grid_size,
+            ttnn::get_throttle_level(compute_kernel_config),
+            in0_B,
+            in1_B,
+            Mt,
+            Nt,
+            Kt,
+            broadcast_batch,
+            transpose_a,
+            transpose_b,
+            config.in0_block_w,
+            config.out_subblock_h,
+            config.out_subblock_w,
+            config.out_block_h,
+            config.out_block_w,
+            config.per_core_M,
+            config.per_core_N,
+            config.fused_activation,
+            in0_buffer,
+            in1_buffer,
+            bias_buffer,
+            out_buffer,
+            in0_tile,
+            in1_tile,
+            bias.has_value() ? bias->tensor_spec().tile() : output_tile,
+            output_tile,
+            in0_data_format,
+            in1_data_format,
+            bias_data_format,
+            output_data_format,
+            a.memory_config().is_sharded(),
+            b.memory_config().is_sharded(),
+            bias.has_value() ? bias->memory_config().is_sharded() : false,
+            output.memory_config().is_sharded(),
+            untilize_out,
+            fused_op_signaler,
+            fused_matmul_bias_row_broadcastable(bias),
+            sub_device_start_core);
+    } else {
+        produced = reuse_mcast_1d_optimized_helpers::create_program_mcast_in1_descriptor(
+            a,
+            device,
+            math_fidelity,
+            fp32_dest_acc_en,
+            math_approx_mode,
+            packer_l1_acc,
+            grid_size,
+            ttnn::get_throttle_level(compute_kernel_config),
+            in0_B,
+            in1_B,
+            Mt,
+            Nt,
+            Kt,
+            broadcast_batch,
+            transpose_a,
+            transpose_b,
+            config.in0_block_w,
+            config.out_subblock_h,
+            config.out_subblock_w,
+            config.out_block_h,
+            config.out_block_w,
+            config.per_core_M,
+            config.per_core_N,
+            config.fused_activation,
+            in0_buffer,
+            in1_buffer,
+            bias_buffer,
+            out_buffer,
+            in0_tile,
+            in1_tile,
+            bias.has_value() ? bias->tensor_spec().tile() : output_tile,
+            output_tile,
+            in0_data_format,
+            in1_data_format,
+            bias_data_format,
+            output_data_format,
+            a.memory_config().is_sharded(),
+            output.memory_config().is_sharded(),
+            untilize_out,
+            fused_matmul_bias_row_broadcastable(bias),
+            sub_device_start_core);
+    }
+
+    // Append produced kernels / CBs / semaphores onto the caller's descriptor without going
+    // through merge_program_descriptors() — that helper TT_FATALs on overlapping kernel core
+    // ranges, but CCL+matmul fused ops legitimately share cores between the matmul kernels
+    // and the CCL kernels appended by the caller.
+    for (auto& cb : produced.cbs) {
+        desc.cbs.push_back(std::move(cb));
+    }
+    for (auto& sem : produced.semaphores) {
+        desc.semaphores.push_back(std::move(sem));
+    }
+    for (auto& kernel : produced.kernels) {
+        desc.kernels.push_back(std::move(kernel));
+    }
+}
+
 }  // namespace ttnn::prim
