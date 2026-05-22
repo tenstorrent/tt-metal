@@ -131,5 +131,35 @@ def run(args, context: Context):
     return rows
 
 
+def merge(parts):
+    """Group rows across ranks by `op_id`; union devices, `RUNNING` if any rank says so."""
+    from aggregator import MergedResult, is_sentinel
+
+    sentinels = [p for p in parts if is_sentinel(p)]
+    grouped: dict[int, OpWindowRow] = {}
+
+    for part in parts:
+        if is_sentinel(part) or part is None or not isinstance(part, list):
+            continue
+        for row in part:
+            existing = grouped.get(row.op_id)
+            if existing is None:
+                grouped[row.op_id] = OpWindowRow(
+                    op_id=row.op_id,
+                    status=row.status,
+                    op_name=row.op_name,
+                    devices=list(row.devices),
+                )
+                continue
+            if not existing.status and row.status == "RUNNING":
+                existing.status = "RUNNING"
+            existing.devices = sorted(set(existing.devices) | set(row.devices), key=_device_sort_key)
+
+    return MergedResult(
+        rows=[grouped[op_id] for op_id in sorted(grouped.keys())],
+        sentinels=sentinels,
+    )
+
+
 if __name__ == "__main__":
     run_script()

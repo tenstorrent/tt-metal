@@ -266,5 +266,45 @@ def run(args, context: Context):
     )
 
 
+def merge(parts):
+    """Group rows across ranks by (kernel_id, formatted callstack, risc, op_id);
+    sum core_count and union the comma-joined devices/locations strings."""
+    from aggregator import MergedResult, is_sentinel
+
+    sentinels = [p for p in parts if is_sentinel(p)]
+    grouped: dict[tuple, AggregatedCallstackRow] = {}
+
+    def _split_csv(s: str) -> set[str]:
+        return {tok.strip() for tok in s.split(",") if tok.strip()}
+
+    for part in parts:
+        if is_sentinel(part) or part is None or not isinstance(part, list):
+            continue
+        for row in part:
+            callstack_text = format_callstack_with_message(row.callstack)
+            key = (row.kernel_id, callstack_text, row.risc_name, row.op_id)
+            existing = grouped.get(key)
+            if existing is None:
+                grouped[key] = AggregatedCallstackRow(
+                    kernel_id=row.kernel_id,
+                    kernel_name=row.kernel_name,
+                    op_id=row.op_id,
+                    callstack=row.callstack,
+                    core_count=row.core_count,
+                    risc_name=row.risc_name,
+                    devices=row.devices,
+                    locations=row.locations,
+                )
+                continue
+            existing.core_count += row.core_count
+            existing.devices = ", ".join(sorted(_split_csv(existing.devices) | _split_csv(row.devices)))
+            existing.locations = ", ".join(sorted(_split_csv(existing.locations) | _split_csv(row.locations)))
+
+    return MergedResult(
+        rows=sorted(grouped.values(), key=lambda r: (r.op_id is None, r.op_id)),
+        sentinels=sentinels,
+    )
+
+
 if __name__ == "__main__":
     run_script()

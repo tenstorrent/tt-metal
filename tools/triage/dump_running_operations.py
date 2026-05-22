@@ -126,5 +126,50 @@ def run(args, context: Context):
     return [_to_summary(bundle.aggregations[hid], full_cores) for hid in sorted(bundle.aggregations.keys())]
 
 
+def merge(parts):
+    """Group rows by `host_assigned_id` across ranks; union devices/cores."""
+    from aggregator import MergedResult, is_sentinel
+
+    sentinels = [p for p in parts if is_sentinel(p)]
+    grouped: dict[int, RunningOperationSummary] = {}
+
+    for part in parts:
+        if is_sentinel(part) or part is None or not isinstance(part, list):
+            continue
+        for row in part:
+            existing = grouped.get(row.host_assigned_id)
+            if existing is None:
+                grouped[row.host_assigned_id] = RunningOperationSummary(
+                    host_assigned_id=row.host_assigned_id,
+                    operation_name=row.operation_name,
+                    operation_parameters=row.operation_parameters,
+                    previous_host_assigned_id=row.previous_host_assigned_id,
+                    previous_operation_name=row.previous_operation_name,
+                    previous_operation_parameters=row.previous_operation_parameters,
+                    device_count=row.device_count,
+                    core_count=row.core_count,
+                    devices=list(row.devices),
+                    cores=list(row.cores),
+                )
+                continue
+            existing.devices = sorted(set(existing.devices) | set(row.devices))
+            # Dedup cores preserving order; drop per-rank "..." truncation markers.
+            seen: set[str] = set()
+            combined: list[str] = []
+            for c in list(existing.cores) + list(row.cores):
+                if c == "..." or c in seen:
+                    continue
+                seen.add(c)
+                combined.append(c)
+            existing.cores = combined
+            existing.device_count = len(existing.devices)
+            existing.core_count = len(combined)
+
+    return MergedResult(
+        rows=[grouped[hid] for hid in sorted(grouped.keys())],
+        sentinels=sentinels,
+    )
+
+
 if __name__ == "__main__":
     run_script()

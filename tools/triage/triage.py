@@ -42,17 +42,12 @@ Owner:
 """
 
 # Check if tt-exalens is installed
-from collections import defaultdict
-from enum import Enum
-import heapq
 import inspect
 import os
 import shutil
 import threading
 from time import time
-import traceback
 import utils
-from collections.abc import Iterable
 from pathlib import Path
 import re
 
@@ -72,9 +67,6 @@ except ImportError as e:
     exit(1)
 
 # Import necessary libraries
-from copy import deepcopy
-from dataclasses import dataclass, field
-import importlib
 import importlib.metadata as importlib_metadata
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn, TimeRemainingColumn, BarColumn, TextColumn
@@ -82,10 +74,27 @@ import sys
 from ttexalens.context import Context
 from ttexalens.device import Device
 from ttexalens.coordinate import OnChipCoordinate
-from ttexalens.elf import ElfVariable
-from ttexalens.umd_device import TimeoutDeviceRegisterError
-from typing import Any, Callable, Iterable, TypeVar
-from types import ModuleType
+from typing import Any
+
+# Script-API surface lives in triage_script.py; re-export so existing scripts
+# can keep `from triage import ScriptConfig, triage_field, ...`.
+from triage_script import (
+    ScriptArguments,
+    ScriptConfig,
+    ScriptPriority,
+    TriageScript,
+    TTTriageError,
+    collection_serializer,
+    default_serializer,
+    hex_serializer,
+    recurse_field,
+    serialize_collection,
+    triage_field,
+    triage_singleton,
+)
+from orchestrator import ScriptOrchestrator
+from process_group import get_process_group, make_process_group
+from runner import create_runner
 
 
 def _raise_open_file_limit(desired: int = 65536) -> None:
@@ -108,107 +117,6 @@ def _raise_open_file_limit(desired: int = 65536) -> None:
         )
 
 
-class ScriptPriority(Enum):
-    LOW = 0
-    MEDIUM = 1
-    HIGH = 2
-
-
-@dataclass
-class ScriptConfig:
-    data_provider: bool = False
-    disabled: bool = False
-    depends: list[str] = field(default_factory=list)
-    priority: ScriptPriority = ScriptPriority.MEDIUM
-
-
-class ScriptArguments:
-    def __init__(self, args: dict[str, Any]):
-        self.args = args
-
-    def __getitem__(self, item: str) -> Any:
-        return self.args.get(item, None)
-
-
-# Type variables for the decorator
-T = TypeVar("T")
-
-
-def triage_singleton(run_method: Callable[[ScriptArguments, Context], T], /) -> Callable[[ScriptArguments, Context], T]:
-    # Check that run method has two arguments (args, context)
-    assert callable(run_method), "run_method must be a callable function."
-    signature = inspect.signature(run_method)
-    assert (
-        len(signature.parameters) == 2 and "args" in signature.parameters and "context" in signature.parameters
-    ), "run_method must have two arguments (args, context)."
-
-    # Cache results and exceptions so repeat calls don't re-run on already-failed setup.
-    cache: dict[tuple[int, int], tuple[bool, Any]] = {}
-
-    def cache_wrapper(args: ScriptArguments, context: Context) -> T:
-        cache_key = (id(args), id(context))
-        if cache_key not in cache:
-            try:
-                cache[cache_key] = (True, run_method(args, context))
-            except Exception as e:
-                cache[cache_key] = (False, e)
-        ok, payload = cache[cache_key]
-        if not ok:
-            raise payload
-        return payload
-
-    return cache_wrapper
-
-
-# Data serialization
-def serialize_collection(items: Iterable[Any], separator: str = ", ") -> str:
-    return separator.join(default_serializer(item) for item in items)
-
-
-def default_serializer(value) -> str:
-    """Default serializer for fields."""
-    if value is None:
-        return "N/A"
-    if isinstance(value, Device):
-        return str(value.id)
-    elif isinstance(value, OnChipCoordinate):
-        return value.to_user_str()
-    elif isinstance(value, ElfVariable):
-        try:
-            return serialize_collection(value.as_list())
-        except:
-            return str(value)
-    elif isinstance(value, Iterable) and not isinstance(value, str):
-        return serialize_collection(value)
-    else:
-        return str(value)
-
-
-def hex_serializer(value: int | None) -> str:
-    if value is None:
-        return "N/A"
-    return hex(value)
-
-
-def collection_serializer(separator: str):
-    def serializer(item):
-        return serialize_collection(item, separator)
-
-    return serializer
-
-
-def triage_field(serialized_name: str | None = None, serializer: Callable[[Any], str] | None = None, verbose: int = 0):
-    if serializer is None:
-        serializer = default_serializer
-    return field(
-        metadata={"recurse": False, "serialized_name": serialized_name, "serializer": serializer, "verbose": verbose}
-    )
-
-
-def recurse_field(verbose: int = 0):
-    return field(metadata={"recurse": True, "verbose": verbose})
-
-
 # Module-level flag to control verbose field output
 # Level 0 (default): Essential fields for triage
 # Level 1 (-v): Include detailed fields
@@ -228,198 +136,6 @@ def get_verbose_level() -> int:
     return _verbose_level
 
 
-@dataclass
-class TriageScript:
-    name: str
-    path: str
-    config: ScriptConfig
-    module: ModuleType
-    run_method: Callable[..., Any]
-    documentation: str
-    depends: list["TriageScript"] = field(default_factory=list)
-    failed: bool = False
-    failure_message: str | None = None
-
-    def run(self, args: ScriptArguments, context: Context, log_error: bool = True) -> Any:
-        try:
-            result = self.run_method(args=args, context=context)
-            if self.config.data_provider and result is None:
-                if log_error:
-                    self.failed = True
-                    self.failure_message = "Data provider script did not return any data."
-                else:
-                    raise TTTriageError("Data provider script did not return any data.")
-            return result
-        except TimeoutDeviceRegisterError:
-            raise
-        except (ValueError, TTTriageError) as e:
-            # User-facing exceptions: surface the message only, no traceback noise.
-            if log_error:
-                self.failed = True
-                self.failure_message = f"{e}"
-                return None
-            else:
-                raise
-        except Exception as e:
-            if log_error:
-                self.failed = True
-                self.failure_message = traceback.format_exc()
-                return None
-            else:
-                raise
-
-    @staticmethod
-    def load(script_path: str) -> "TriageScript":
-        script_path = os.path.abspath(script_path)
-        base_path = os.path.dirname(script_path)
-        appended = False
-        if not base_path in sys.path:
-            sys.path.append(base_path)
-            appended = True
-        try:
-            script_name = os.path.splitext(os.path.basename(script_path))[0]
-            script_module = importlib.import_module(script_name)
-
-            # Check if script has a configuration
-            script_config: ScriptConfig = script_module.script_config
-            if script_config is None:
-                # This script does not have a configuration, which means it is not tt-triage script, skipping...
-                raise ValueError(f"Script {script_path} does not have script_config.")
-
-            # Check if script has a docstring and an owner
-            if not script_module.__doc__:
-                raise ValueError(f"Script {script_path} must have a docstring, see relevant scripts for examples.\n")
-
-            if not re.search(r"^Owner:\s*\S+", script_module.__doc__, re.MULTILINE):
-                raise ValueError(
-                    f"Script {script_path} docstring must include an 'Owner:' field with the corresponding owner of the script.\n"
-                )
-
-            # Check if script has a run method with two arguments (args and context)
-            run_method = script_module.run if hasattr(script_module, "run") and callable(script_module.run) else None
-            if run_method is not None:
-                signature = inspect.signature(run_method)
-                if (
-                    len(signature.parameters) != 2
-                    or "args" not in signature.parameters
-                    or "context" not in signature.parameters
-                ):
-                    run_method = None
-            if run_method is None:
-                raise ValueError(
-                    f"Script {script_path} does not have a valid run method with two arguments (args, context)."
-                )
-
-            triage_script = TriageScript(
-                name=os.path.basename(script_path),
-                path=script_path,
-                config=deepcopy(script_config),
-                module=script_module,
-                run_method=run_method,
-                documentation=script_module.__doc__,
-            )
-
-            if triage_script.config.depends is None:
-                # If script does not have dependencies, set it to empty list
-                triage_script.config.depends = []
-            else:
-                triage_script.config.depends = [
-                    dep if isinstance(dep, str) and dep.endswith(".py") else f"{dep}.py"
-                    for dep in triage_script.config.depends
-                ]
-                triage_script.config.depends = [os.path.join(base_path, dep) for dep in triage_script.config.depends]
-
-            return triage_script
-        finally:
-            if appended:
-                sys.path.remove(base_path)
-
-    @staticmethod
-    def load_all(script_path: str) -> dict[str, "TriageScript"]:
-        scripts: dict[str, TriageScript] = {}
-        loading: list[str] = []
-        script = TriageScript.load(script_path)
-        scripts[script_path] = script
-
-        # Load all dependencies
-        loading.extend(script.config.depends)
-        while len(loading) > 0:
-            loading_script = loading.pop(0)
-            if loading_script not in scripts:
-                script = TriageScript.load(loading_script)
-                scripts[loading_script] = script
-                loading.extend(script.config.depends)
-
-        # Update dependencies in scripts
-        for script in scripts.values():
-            for dep in script.config.depends:
-                assert dep in scripts, f"Dependency {dep} for script {script.name} not found."
-                script.depends.append(scripts[dep])
-        return scripts
-
-    @staticmethod
-    def discover_all_in_directory(directory: str) -> dict[str, "TriageScript"]:
-        directory = os.path.abspath(directory)
-        scripts: dict[str, TriageScript] = {}
-        for fname in os.listdir(directory):
-            if not fname.endswith(".py") or fname == os.path.basename(__file__):
-                continue
-            script_path = os.path.join(directory, fname)
-            try:
-                triage_script = TriageScript.load(script_path)
-                if triage_script.config.disabled:
-                    continue
-            except Exception:
-                continue
-            scripts[script_path] = triage_script
-        return scripts
-
-
-def resolve_execution_order(scripts: dict[str, TriageScript]) -> list[TriageScript]:
-    # Build script dependents graph and script missing dependencies map
-    script_dependents = defaultdict(list)  # dep_path -> list of scripts depending on it
-    script_missing_dependencies = defaultdict(int)  # script_path -> number of unmet dependencies
-
-    for path, script in scripts.items():
-        script_missing_dependencies[path] = len(script.config.depends)
-        for dep in script.config.depends:
-            script_dependents[dep].append(path)
-
-    # Min-heap for runnable scripts: (-priority, script name, script object)
-    # Negative priority because heapq is a min-heap
-    heap = []
-
-    # Initialize heap with scripts with in-degree 0 (no unmet dependencies)
-    for path, script in scripts.items():
-        if script_missing_dependencies[path] == 0:
-            heapq.heappush(heap, (-script.config.priority.value, path, script))
-
-    result = []
-
-    while heap:
-        # Pop the highest priority ready script
-        _, path, script = heapq.heappop(heap)
-        result.append(script)
-
-        # Decrease in-degree of dependent scripts
-        for dep_path in script_dependents[path]:
-            script_missing_dependencies[dep_path] -= 1
-            if script_missing_dependencies[dep_path] == 0:
-                dep_script = scripts[dep_path]
-                heapq.heappush(heap, (-dep_script.config.priority.value, dep_path, dep_script))
-
-    # If some scripts remain with non-zero in-degree, we have a cycle
-    if len(result) != len(scripts):
-        remaining_scripts = set(scripts.keys()) - {s.config.name for s in result}
-        raise ValueError(
-            f"Bad dependency detected in scripts: {', '.join(remaining_scripts)}\n"
-            f"  Circular dependency, dependency on disabled or non-existing script is not allowed.\n"
-            f"  Please check if all dependencies are met and scripts are enabled."
-        )
-
-    return result
-
-
 # Purposely uninitialized global console object to ensure proper initialization only once later
 console: Console = None  # type: ignore[assignment]
 progress_disabled: bool = False
@@ -432,15 +148,14 @@ def init_console_and_verbosity(args: ScriptArguments) -> None:
     if console is not None:
         return
 
+    disable_colors = bool(args["--disable-colors"]) or bool(args["--llm-output"])
     # When redirecting to file, use a larger width to avoid wrapping.
     # When in a terminal, let Rich auto-detect the terminal width.
-    # Similarly, if verbosity is increased, use larger width to avoid wrapping.
     width = None if sys.stdout.isatty() and _verbose_level == 0 else 10000
-    # --llm-output implies no colors: non-table console output (status lines,
-    # warnings) needs to stay plain text for cheap LLM consumption.
-    disable_colors = bool(args["--disable-colors"]) or bool(args["--llm-output"])
     console = Console(theme=utils.create_console_theme(disable_colors), highlight=False, width=width)
-    progress_disabled = bool(args["--disable-progress"]) or bool(args["--llm-output"])
+
+    pg = get_process_group()
+    progress_disabled = pg.is_multi or bool(args["--disable-progress"]) or bool(args["--llm-output"])
 
     # Set verbose level from -v count (controls which columns are displayed)
     verbose_level = args["-v"] or 0
@@ -625,12 +340,17 @@ _output_serializer: Any = None
 
 
 def get_output_serializer() -> Any:
-    """Return the active serializer, defaulting to a Rich-console one on first use."""
+    """Return the active serializer, defaulting on first use (Null on non-root, Rich otherwise)."""
     global _output_serializer
     if _output_serializer is None:
-        from serializers import RichSerializer
+        if not get_process_group().is_root:
+            from serializers import NullSerializer
 
-        _output_serializer = RichSerializer(console, utils, get_verbose_level)
+            _output_serializer = NullSerializer()
+        else:
+            from serializers import RichSerializer
+
+            _output_serializer = RichSerializer(console, utils, get_verbose_level)
     return _output_serializer
 
 
@@ -648,7 +368,11 @@ def init_output_serializer(args: ScriptArguments) -> None:
       --llm-output-path=<path>          -> Rich on console + CsvSerializer to file
       --llm-output --llm-output-path=.. -> CsvSerializer on console + CsvSerializer to file
     """
-    from serializers import ConsoleSink, CsvSerializer, FileSink, MultiSerializer, RichSerializer
+    from serializers import ConsoleSink, CsvSerializer, FileSink, MultiSerializer, NullSerializer, RichSerializer
+
+    if not get_process_group().is_root:
+        set_output_serializer(NullSerializer())
+        return
 
     console_sink = ConsoleSink(console)
     serializers: list[Any] = []
@@ -829,70 +553,57 @@ def run_script(
     argv: list[str] | None = None,
     return_result: bool = False,
 ) -> Any:
-    force_exit = False
+    force_exit = script_path is None
+    pg = make_process_group()
 
-    # Resolve script path
-    if script_path is None:
-        # Check if previous call on callstack is a TriageScript
-        stack = inspect.stack()
-        if stack is None or len(stack) < 2:
-            raise ValueError("No script path provided and no caller found in callstack.")
-        script_path = stack[1].filename
-        force_exit = True
-    else:
-        if not script_path.endswith(".py"):
-            script_path = script_path + ".py"
-        application_path = os.path.dirname(__file__)
-        if not os.path.isabs(script_path):
-            script_path = os.path.join(application_path, script_path)
-        script_path = os.path.abspath(script_path)
-        if not os.path.exists(script_path):
-            raise FileNotFoundError(f"Script {script_path} does not exist.")
-
-    # Load script and its dependencies (drives execution order).
-    scripts = TriageScript.load_all(script_path)
-
-    # Find execution order of scripts
-    script_queue = resolve_execution_order(scripts)
-
-    # Parse arguments using every script's options
-    if args is None:
-        all_scripts = TriageScript.discover_all_in_directory(os.path.dirname(script_path))
-        # Ensure the target and its deps are present even if discovery missed them somehow.
-        for path, script in scripts.items():
-            all_scripts.setdefault(path, script)
-        args = parse_arguments(all_scripts, script_path, argv)
-
-    # Initialize context if not provided
-    if context is None:
-        _enforce_dependencies(args)
-        context = _init_ttexalens(args)
-
-    # Run scripts in order
-    result: Any = None
-    for script in script_queue:
-        if not all(not dep.failed for dep in script.depends):
-            raise TTTriageError(f"{script.name}: Cannot run script due to failed dependencies.")
+    try:
+        if script_path is None:
+            stack = inspect.stack()
+            if stack is None or len(stack) < 2:
+                raise ValueError("No script path provided and no caller found in callstack.")
+            script_path = stack[1].filename
         else:
-            result = script.run(args=args, context=context, log_error=False)
-            if script.config.data_provider and result is None:
-                raise TTTriageError(f"{script.name}: Data provider script did not return any data.")
-    script = scripts[script_path] if script_path in scripts else None
-    if return_result:
-        return result
-    init_output_serializer(args)
-    serialize_result(script, result)
+            if not script_path.endswith(".py"):
+                script_path = script_path + ".py"
+            application_path = os.path.dirname(__file__)
+            if not os.path.isabs(script_path):
+                script_path = os.path.join(application_path, script_path)
+            script_path = os.path.abspath(script_path)
+            if not os.path.exists(script_path):
+                raise FileNotFoundError(f"Script {script_path} does not exist.")
+
+        orchestrator = ScriptOrchestrator(os.path.dirname(script_path))
+        scripts, script_queue = orchestrator.queue_for_target(script_path)
+
+        if args is None:
+            all_scripts = orchestrator.discover()
+            for path, script in scripts.items():
+                all_scripts.setdefault(path, script)
+            args = parse_arguments(all_scripts, script_path, argv)
+
+        if context is None:
+            _enforce_dependencies(args)
+            context = _init_ttexalens(args)
+
+        runner = create_runner(args, context, pg, target_paths={script_path})
+        runner.run_all(script_queue)
+        runner.finalize()
+
+        if return_result:
+            return runner.last_result
+
+        init_output_serializer(args)
+        runner.render_last_result()
+    except BaseException:
+        # Programmatic callers expect to see the exception; only firewall when we own the exit.
+        if not force_exit:
+            raise
+        pg.report_fatal()
 
     if force_exit:
         get_output_serializer().close()
-        # Remove nanobind leak check to avoid false positives on exit
+        pg.shutdown()
         os._exit(0)
-
-
-class TTTriageError(Exception):
-    """Base class for TT Triage errors."""
-
-    pass
 
 
 def _build_triage_summary(script_queue: list[TriageScript]) -> str:
@@ -907,118 +618,66 @@ def _build_triage_summary(script_queue: list[TriageScript]) -> str:
 
 def main():
     triage_start = time()
+    process_group = make_process_group()
 
-    # Parse only tt-triage script arguments first to initialize logging and console
-    parse_arguments(only_triage_script_args=True)
+    try:
+        parse_arguments(only_triage_script_args=True)
 
-    # Enumerate all scripts in application directory
-    application_path = os.path.abspath(os.path.dirname(__file__))
+        application_path = os.path.abspath(os.path.dirname(__file__))
 
-    # To avoid multiple imports of this script, we add it to sys.modules
-    my_name = os.path.splitext(os.path.basename(__file__))[0]
-    if my_name not in sys.modules:
-        sys.modules[my_name] = sys.modules["__main__"]
+        # Avoid double-importing this module when it's __main__.
+        my_name = os.path.splitext(os.path.basename(__file__))[0]
+        if my_name not in sys.modules:
+            sys.modules[my_name] = sys.modules["__main__"]
 
-    # Load tt-triage scripts
-    # TODO: do we need to check for subdirectories?
-    scripts = TriageScript.discover_all_in_directory(application_path)
+        orchestrator = ScriptOrchestrator(application_path)
+        scripts, script_queue = orchestrator.queue_for_full_triage()
 
-    # Resolve dependencies
-    for script in scripts.values():
-        for dep in script.config.depends:
-            if dep in scripts:
-                script.depends.append(scripts[dep])
+        args = parse_arguments(scripts)
+        init_output_serializer(args)
+        _enforce_dependencies(args)
+        context = _init_ttexalens(args)
+
+        with create_progress() as progress:
+            scripts_task = progress.add_task("Script execution", total=len(script_queue))
+
+            if args["--run"] is not None and (len(args["--run"]) != 1 or args["--run"][0] != "all"):
+                progress.update(scripts_task, total=len(args["--run"]))
+                for script_name in args["--run"]:
+                    progress.update(scripts_task, description=f"Running {script_name}")
+                    run_script(script_name, args, context)
+                    progress.advance(scripts_task)
             else:
-                utils.ERROR(f"Dependency {dep} for script {script.name} not found.")
-                script.failed = True
-                script.failure_message = f"Dependency {dep} not found."
+                triage_init_end = time()
+                if args["--print-script-times"]:
+                    utils.INFO(f"Triage initialization time: {triage_init_end - triage_start:.2f}s")
+                runner = create_runner(args, context, process_group, progress=progress, progress_task=scripts_task)
+                runner.run_all(script_queue)
+                runner.finalize()
+                runner.print_totals(triage_init_end - triage_start)
+            progress.remove_task(scripts_task)
 
-    # Find dependency graph of script execution
-    script_queue = resolve_execution_order(scripts)
+        if process_group.is_root:
+            triage_summary_path = args["--triage-summary-path"]
+            if triage_summary_path:
+                try:
+                    os.makedirs(os.path.dirname(triage_summary_path), exist_ok=True)
+                    with open(triage_summary_path, "w") as f:
+                        f.write(_build_triage_summary(script_queue))
+                    utils.INFO(f"Triage summary written to {triage_summary_path}")
+                except Exception as e:
+                    utils.WARN(f"Failed to write triage summary: {e}")
 
-    # Parse common command line arguments
-    args = parse_arguments(scripts)
+        from elfs_cache import run as get_elfs_cache
 
-    init_output_serializer(args)
+        get_elfs_cache(args, context).log_stats()
 
-    # Enforce debugger dependencies, then initialize
-    _enforce_dependencies(args)
-    context = _init_ttexalens(args)
+        get_output_serializer().close()
+    except BaseException:
+        process_group.report_fatal()
 
-    with create_progress() as progress:
-        scripts_task = progress.add_task("Script execution", total=len(script_queue))
-
-        # Check if we should run specific scripts
-        if args["--run"] is not None and (len(args["--run"]) != 1 or args["--run"][0] != "all"):
-            progress.update(scripts_task, total=len(args["--run"]))
-            for script_name in args["--run"]:
-                progress.update(scripts_task, description=f"Running {script_name}")
-                run_script(script_name, args, context)
-                progress.advance(scripts_task)
-        else:
-            # Execute all scripts
-            triage_init_end = time()
-            if args["--print-script-times"]:
-                utils.INFO(f"Triage initialization time: {triage_init_end - triage_start:.2f}s")
-            total_time = triage_init_end - triage_start
-            serialization_time = 0.0
-            progress.update(scripts_task, total=len(script_queue))
-            for script in script_queue:
-                progress.update(scripts_task, description=f"Running {script.name}")
-                if not all(not dep.failed for dep in script.depends):
-                    # Silently mark as skipped — the original root-cause failure already
-                    # printed its own message; cascading "Cannot run due to failed dependencies"
-                    # lines for every downstream script are noise.
-                    script.failed = True
-                    script.failure_message = "Cannot run script due to failed dependencies."
-                else:
-                    start_time = time()
-                    result = script.run(args=args, context=context)
-                    end_time = time()
-                    total_time += end_time - start_time
-                    execution_time = f" [{end_time - start_time:.2f}s]" if args["--print-script-times"] else ""
-                    if script.config.data_provider:
-                        if result is None:
-                            print()
-                            utils.INFO(f"{script.name}{execution_time}:")
-                            if script.failure_message is not None:
-                                utils.ERROR(f"  Data provider script failed: {script.failure_message}")
-                            else:
-                                utils.ERROR(f"  Data provider script did not return any data.")
-                        elif execution_time:
-                            print()
-                            utils.INFO(f"{script.name}{execution_time}:")
-                            utils.INFO("  pass")
-                    else:
-                        start_time = time()
-                        serialize_result(script, result, execution_time)
-                        end_time = time()
-                        total_time += end_time - start_time
-                        serialization_time += end_time - start_time
-                progress.advance(scripts_task)
-            if args["--print-script-times"]:
-                print()
-                utils.INFO(f"Total serialization time: {serialization_time:.2f}s")
-                utils.INFO(f"Total execution time: {total_time:.2f}s")
-        progress.remove_task(scripts_task)
-
-    triage_summary_path = args["--triage-summary-path"]
-    if triage_summary_path:
-        try:
-            os.makedirs(os.path.dirname(triage_summary_path), exist_ok=True)
-            with open(triage_summary_path, "w") as f:
-                f.write(_build_triage_summary(script_queue))
-            utils.INFO(f"Triage summary written to {triage_summary_path}")
-        except Exception as e:
-            utils.WARN(f"Failed to write triage summary: {e}")
-
-    from elfs_cache import run as get_elfs_cache
-
-    get_elfs_cache(args, context).log_stats()
-
-    get_output_serializer().close()
-
-    # Remove nanobind leak check to avoid false positives on exit
+    process_group.shutdown()
+    # Single-process re-raises (Python exits non-zero); MPI logs and falls through.
     os._exit(0)
 
 

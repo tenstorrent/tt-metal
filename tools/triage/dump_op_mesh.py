@@ -131,6 +131,65 @@ def _format_cell(
     return chip_label + "\n" + "\n".join(op_lines)
 
 
+def to_raw_data(result):
+    """`MeshRow` is built via `make_dataclass` inside `run()` and can't be
+    pickled across ranks. Flatten to `list[tuple[row_label, list[cells]]]`."""
+    if result is None:
+        return None
+    flat: list[tuple[str, list[str]]] = []
+    for mesh_row in result:
+        field_names = [f.name for f in mesh_row.__dataclass_fields__.values()]
+        if not field_names:
+            continue
+        row_label = getattr(mesh_row, field_names[0])
+        cells = [getattr(mesh_row, name) for name in field_names[1:]]
+        flat.append((row_label, cells))
+    return flat
+
+
+def merge(parts):
+    """Overlay: for each (r, c), prefer the rank's cell that isn't `(remote)`."""
+    from aggregator import MergedResult, is_sentinel
+
+    sentinels = [p for p in parts if is_sentinel(p)]
+    payloads = [p for p in parts if not is_sentinel(p) and p is not None]
+    if not payloads:
+        return MergedResult(rows=[], sentinels=sentinels)
+
+    rows = len(payloads[0])
+    cols = len(payloads[0][0][1]) if rows > 0 else 0
+    if rows == 0 or cols == 0:
+        return MergedResult(rows=[], sentinels=sentinels)
+
+    chosen: list[list[str]] = [["" for _ in range(cols)] for _ in range(rows)]
+    row_labels: list[str] = [payloads[0][r][0] for r in range(rows)]
+
+    for r in range(rows):
+        for c in range(cols):
+            owner_cell: str | None = None
+            fallback_cell: str | None = None
+            for payload in payloads:
+                if r >= len(payload):
+                    continue
+                cells = payload[r][1]
+                if c >= len(cells):
+                    continue
+                cell = cells[c]
+                if fallback_cell is None:
+                    fallback_cell = cell
+                if "(remote)" not in cell:
+                    owner_cell = cell
+                    break
+            chosen[r][c] = owner_cell if owner_cell is not None else (fallback_cell or "")
+
+    # Rebuild MeshRow with the canonical column count on root.
+    fields_spec: list[tuple[str, type, object]] = [("r", str, triage_field("R\\C"))]
+    fields_spec.extend((f"c{c}", str, triage_field(f"C{c}")) for c in range(cols))
+    MeshRow = make_dataclass("MeshRow", fields_spec)
+    merged_rows = [MeshRow(row_labels[r], *chosen[r]) for r in range(rows)]
+    return MergedResult(rows=merged_rows, sentinels=sentinels)
+
+
 def run(args, context: Context):
     inspector_data = get_inspector_data(args, context)
     try:

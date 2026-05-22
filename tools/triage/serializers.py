@@ -79,7 +79,9 @@ def extract_table_data(result: Any, verbose_level: int = 0) -> TableData | None:
                 assert "serializer" in metadata, "Serializer must be provided for combined field."
                 row.append(metadata["serializer"](all_values))
             elif "serializer" in metadata:
-                row.append(metadata["serializer"](getattr(obj, fld.name)))
+                value = getattr(obj, fld.name)
+                # If a field is already a string (e.g. pre-serialized across MPI transport),
+                row.append(value if isinstance(value, str) else metadata["serializer"](value))
 
     collect_header(result[0], fields(result[0]))
     rows: list[list[str]] = []
@@ -111,6 +113,23 @@ class OutputSerializer(ABC):
 
     def close(self) -> None:
         """Release any owned resources (e.g. file handles). Default is a no-op."""
+        pass
+
+
+class NullSerializer(OutputSerializer):
+    """No-op serializer for non-root ranks under MPI."""
+
+    def emit(
+        self,
+        script_name: str | None,
+        execution_time: str,
+        result: Any,
+        failures: list[str],
+        warnings: list[str],
+        script_failed: bool,
+        failure_message: str | None,
+        documentation: str | None,
+    ) -> None:
         pass
 
 
