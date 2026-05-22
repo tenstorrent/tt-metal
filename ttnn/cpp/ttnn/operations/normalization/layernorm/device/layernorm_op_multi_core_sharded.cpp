@@ -112,6 +112,8 @@ m2::DataflowBufferSpec MakeDFB(
     if (borrowed_from.has_value()) {
         dfb.borrowed_from = *borrowed_from;
     }
+    // Implicit sync is a Gen2-only feature; this op targets WH/BH (Gen1).
+    dfb.disable_implicit_sync = true;
     return dfb;
 }
 
@@ -510,6 +512,25 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         };
     };
 
+    // Ghost TensorBindings for borrowed-memory-backed TensorParameters. The validator
+    // requires every TensorParameter to have ≥1 TensorBinding, but for borrowed-memory
+    // DFBs the kernel doesn't actually call `TensorAccessor(ta::name)` — the data is
+    // consumed via the borrowed CB. Bind them on reader_sender (a DM kernel; compute
+    // kernels don't support TensorBindings).
+    auto bind_borrowed_tensors = [&](m2::KernelSpec& k) {
+        k.tensor_bindings.push_back({.tensor_parameter_name = TP_INPUT_A, .accessor_name = "input_a"});
+        k.tensor_bindings.push_back({.tensor_parameter_name = TP_OUTPUT, .accessor_name = "output"});
+        if (b.has_value()) {
+            k.tensor_bindings.push_back({.tensor_parameter_name = TP_RESIDUAL_B, .accessor_name = "residual_b"});
+        }
+        if (is_post_all_gather && stats.has_value()) {
+            k.tensor_bindings.push_back({.tensor_parameter_name = TP_STATS, .accessor_name = "stats"});
+        }
+        if (use_welford) {
+            k.tensor_bindings.push_back({.tensor_parameter_name = TP_RECIP, .accessor_name = "recip"});
+        }
+    };
+
     ////////////////////////////////////////////////////////////////////////////
     // Reader sender KernelSpec
     ////////////////////////////////////////////////////////////////////////////
@@ -523,6 +544,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     reader_sender.compile_time_arg_bindings.push_back({"is_all_to_all_worker", 1u});
     bind_reader_dfbs(reader_sender);
     bind_reader_semaphores(reader_sender);
+    bind_borrowed_tensors(reader_sender);
     for (auto& d : kernel_defines.reader) {
         reader_sender.compiler_options.defines.push_back(d);
     }
@@ -759,6 +781,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         // Output
         k.dfb_bindings.push_back(ProducerDFB(DFB_OUT, "cb_out"));
         if (use_welford) {
+            // Borrowed-memory DFB backed by the recip tensor — no kernel produces, but
+            // the spec validator requires a PRODUCER binding. Declare a ghost PRODUCER
+            // alongside the real CONSUMER. The kernel never calls reserve_back/push_back.
+            k.dfb_bindings.push_back(ProducerDFB(DFB_RECIPROCALS, "cb_reciprocals"));
             k.dfb_bindings.push_back(ConsumerDFB(DFB_RECIPROCALS, "cb_reciprocals"));
             k.dfb_bindings.push_back(ProducerDFB(DFB_TRANSPOSE, "cb_transpose"));
             k.dfb_bindings.push_back(ConsumerDFB(DFB_TRANSPOSE, "cb_transpose"));
@@ -766,23 +792,88 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
                 {.dfb_spec_name = DFB_TRANSPOSE, .scope = m2::KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA});
         }
         if (is_post_all_gather) {
+            // cb_stats is borrowed-memory (backed by stats tensor) — no kernel produces
+            // tiles into it. Add a ghost PRODUCER for validator + the real CONSUMER.
+            k.dfb_bindings.push_back(ProducerDFB(DFB_STATS, "cb_stats"));
             k.dfb_bindings.push_back(ConsumerDFB(DFB_STATS, "cb_stats"));
+            // cb_stats_reduced: compute is producer; reader_sender_post_allgather is the
+            // consumer (it mcasts the reduced stats). Adding both endpoints on compute as
+            // a self-loop fallback would create over-binding; for now, declare it as
+            // self-loop on compute + plus the reader_sender binding handles consumption.
             k.dfb_bindings.push_back(ProducerDFB(DFB_STATS_REDUCED, "cb_stats_reduced"));
+            k.dfb_bindings.push_back(ConsumerDFB(DFB_STATS_REDUCED, "cb_stats_reduced"));
+            k.dfb_compute_self_loop_scopes.push_back(
+                {.dfb_spec_name = DFB_STATS_REDUCED, .scope = m2::KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA});
+            // cb_var: compute self-loop (variance written and read back within compute).
             k.dfb_bindings.push_back(ProducerDFB(DFB_VAR, "cb_var"));
+            k.dfb_bindings.push_back(ConsumerDFB(DFB_VAR, "cb_var"));
+            k.dfb_compute_self_loop_scopes.push_back(
+                {.dfb_spec_name = DFB_VAR, .scope = m2::KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA});
         }
     };
 
-    m2::KernelSpec compute_a2a;
-    compute_a2a.unique_id = K_COMPUTE_A2A;
-    compute_a2a.source = m2::KernelSpec::SourceFilePath{kernel_paths.compute};
-    {
+    // Build the compute ComputeConfiguration shared across both KernelSpecs. When
+    // fp32_dest_acc_en is true, the validator requires an explicit unpack_to_dest_mode
+    // entry for every FP32 DFB the compute kernel consumes.
+    auto build_compute_config = [&]() {
         m2::ComputeConfiguration cfg{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .dst_full_sync_en = dst_full_sync_en,
             .math_approx_mode = math_approx_mode};
-        compute_a2a.config_spec = std::move(cfg);
-    }
+        if (fp32_dest_acc_en) {
+            auto add_default = [&](const char* dfb_name) {
+                cfg.unpack_to_dest_mode.push_back({dfb_name, tt::tt_metal::UnpackToDestMode::Default});
+            };
+            // cb_data_format == Float32 when fp32_dest_acc_en, so all intermediate DFBs
+            // using cb_data_format need entries. Mirror the host DFB-declaration guards.
+            add_default(DFB_X);
+            add_default(DFB_XMM);
+            if (!rms_norm) {
+                add_default(DFB_EX_PARTIAL);
+                add_default(DFB_EX);
+                add_default(DFB_EX_EXTERNAL);
+            }
+            if (!use_welford) {
+                add_default(DFB_EX_PARTIAL2);
+                add_default(DFB_EX2);
+                add_default(DFB_EX_EXTERNAL2);
+                add_default(DFB_EX2PE);
+            }
+            add_default(DFB_EX_GLOBAL);
+            if (use_welford) {
+                add_default(DFB_TRANSPOSE);
+                add_default(DFB_RECIPROCALS);  // Float32 always (Welford LUT)
+            }
+            if (is_post_all_gather) {
+                add_default(DFB_STATS_REDUCED);
+                add_default(DFB_VAR);
+                // cb_stats data format follows the stats tensor; only add if FP32.
+                if (stats_cb_data_format == tt::DataFormat::Float32) {
+                    add_default(DFB_STATS);
+                }
+            }
+            // Inputs / weights: only when their dtype is FP32.
+            if (in_data_format == tt::DataFormat::Float32) {
+                add_default(DFB_IN0);
+            }
+            if (b.has_value() && in_data_format == tt::DataFormat::Float32) {
+                add_default(DFB_INB);
+            }
+            if (gamma.has_value() && gamma_cb_data_format == tt::DataFormat::Float32) {
+                add_default(DFB_GAMMA);
+            }
+            if (beta.has_value() && beta_cb_data_format == tt::DataFormat::Float32) {
+                add_default(DFB_BETA);
+            }
+        }
+        return cfg;
+    };
+
+    m2::KernelSpec compute_a2a;
+    compute_a2a.unique_id = K_COMPUTE_A2A;
+    compute_a2a.source = m2::KernelSpec::SourceFilePath{kernel_paths.compute};
+    compute_a2a.config_spec = build_compute_config();
     compute_a2a.compile_time_arg_bindings = build_compute_ctas(true);
     bind_compute_dfbs(compute_a2a);
     for (auto& d : kernel_defines.compute) {
@@ -795,12 +886,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     if (has_not_all_to_all_workers) {
         compute_not_a2a.unique_id = K_COMPUTE_NOT_A2A;
         compute_not_a2a.source = m2::KernelSpec::SourceFilePath{kernel_paths.compute};
-        m2::ComputeConfiguration cfg{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .dst_full_sync_en = dst_full_sync_en,
-            .math_approx_mode = math_approx_mode};
-        compute_not_a2a.config_spec = std::move(cfg);
+        compute_not_a2a.config_spec = build_compute_config();
         compute_not_a2a.compile_time_arg_bindings = build_compute_ctas(false);
         bind_compute_dfbs(compute_not_a2a);
         for (auto& d : kernel_defines.compute) {

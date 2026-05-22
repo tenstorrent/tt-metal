@@ -54,14 +54,14 @@ void kernel_main() {
     const auto src_b = TensorAccessor(ta::src_b);
 #endif
 
-    if constexpr (!use_welford) {
-        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-            dfb::cb_scaler,
-            ckernel::PoolType::SUM,
-            ckernel::ReduceDim::REDUCE_ROW,
-            dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
-            /*compute_uses_reduce_tile=*/true>();
-    }
+#ifndef USE_WELFORD
+    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+        dfb::cb_scaler,
+        ckernel::PoolType::SUM,
+        ckernel::ReduceDim::REDUCE_ROW,
+        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
+        /*compute_uses_reduce_tile=*/true>();
+#endif
     const uint32_t eps = get_arg(args::eps);
     generate_bcast_col_scalar(dfb::cb_eps, eps);
 

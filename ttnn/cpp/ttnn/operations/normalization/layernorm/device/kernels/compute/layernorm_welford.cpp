@@ -35,37 +35,51 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
-    // DFB handles (implicit-convertible to uint32_t)
+    // DFB handles. Conditional bindings on the host → conditional declarations here.
     constexpr uint32_t cb_eps = dfb::cb_eps;
     constexpr uint32_t cb_in = dfb::cb_in;
-    constexpr uint32_t cb_inb = dfb::cb_inb;
     constexpr uint32_t cb_out = dfb::cb_out;
-    constexpr uint32_t cb_gamma = dfb::cb_gamma;
-    constexpr uint32_t cb_beta = dfb::cb_beta;
     constexpr uint32_t cb_xmm = dfb::cb_xmm;
-
     constexpr uint32_t cb_ex = dfb::cb_ex;
     constexpr uint32_t cb_ex2 = dfb::cb_ex2;
     constexpr uint32_t cb_ex2pe = dfb::cb_ex2pe;
-    constexpr uint32_t cb_fusion = dfb::cb_fusion;
     constexpr uint32_t cb_reciprocals = dfb::cb_reciprocals;
     DataflowBuffer cb_eps_obj(cb_eps);
     DataflowBuffer cb_in_obj(cb_in);
-    DataflowBuffer cb_inb_obj(cb_inb);
     DataflowBuffer cb_out_obj(cb_out);
-    DataflowBuffer cb_gamma_obj(cb_gamma);
-    DataflowBuffer cb_beta_obj(cb_beta);
     DataflowBuffer cb_xmm_obj(cb_xmm);
     DataflowBuffer cb_ex_obj(cb_ex);
     DataflowBuffer cb_ex2_obj(cb_ex2);
     DataflowBuffer cb_ex2pe_obj(cb_ex2pe);
-    DataflowBuffer cb_fusion_obj(cb_fusion);
 
+#ifdef FUSE_PRE_ADD
+    constexpr uint32_t cb_inb = dfb::cb_inb;
+    DataflowBuffer cb_inb_obj(cb_inb);
+#endif
+#ifdef FUSE_GAMMA
+    constexpr uint32_t cb_gamma = dfb::cb_gamma;
+    DataflowBuffer cb_gamma_obj(cb_gamma);
+#endif
+#ifdef FUSE_BETA
+    constexpr uint32_t cb_beta = dfb::cb_beta;
+    DataflowBuffer cb_beta_obj(cb_beta);
+#endif
+
+#if defined FUSE_GAMMA || defined FUSE_BETA
+    constexpr uint32_t cb_fusion = dfb::cb_fusion;
+    DataflowBuffer cb_fusion_obj(cb_fusion);
     constexpr auto cb_im_or_out = (do_gamma | do_beta) ? cb_fusion : cb_out;
+#else
+    constexpr auto cb_im_or_out = cb_out;
+#endif
     DataflowBuffer cb_im_or_out_obj(cb_im_or_out);
 
     //  Either in or in + b if doing fused pre-add
-    constexpr uint32_t cb_x = fuse_pre_add ? static_cast<uint32_t>(dfb::cb_x) : cb_in;
+#ifdef FUSE_PRE_ADD
+    constexpr uint32_t cb_x = dfb::cb_x;
+#else
+    constexpr uint32_t cb_x = cb_in;
+#endif
     DataflowBuffer cb_x_obj(cb_x);
 
     // Welford-fp32 alias of cb_x. Shares SRAM with cb_x but has its own buffer index
@@ -88,13 +102,13 @@ void kernel_main() {
 
     cb_eps_obj.wait_front(1);  // comes from the reader
 
-    if constexpr (fuse_pre_add) {
-        binary_op_init_common(cb_in, cb_inb, cb_x);
-        pack_reconfig_data_format(cb_x);
-    } else {
-        compute_kernel_hw_startup(cb_in, cb_ex);
-        pack_reconfig_data_format(cb_ex);
-    }
+#ifdef FUSE_PRE_ADD
+    binary_op_init_common(cb_in, cb_inb, cb_x);
+    pack_reconfig_data_format(cb_x);
+#else
+    compute_kernel_hw_startup(cb_in, cb_ex);
+    pack_reconfig_data_format(cb_ex);
+#endif
 
     // Get pointer to the reciprocal LUT
     using recip_lut_t = std::array<uint32_t, W>;
@@ -105,16 +119,13 @@ void kernel_main() {
     const auto total_buffer_size = generic::blocks(Wt, blk).total_with_remainder();
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        if constexpr (fuse_pre_add) {
+#ifdef FUSE_PRE_ADD
+        {
             // x = in + b
             add_tiles_init(cb_in, cb_inb);
             reconfig_data_format(cb_in, cb_inb);
             pack_reconfig_data_format(cb_x);
             for (auto block : generic::blocks(Wt, blk)) {
-                // In/inb come from the reader and need to be
-                // synced on full block size. Keep cb_x aligned
-                // to full block size as well so pre-add/no-pre-add
-                // can be handled the same way.
                 cb_in_obj.wait_front(block.full_block_size());
                 cb_inb_obj.wait_front(block.full_block_size());
                 tile_regs_acquire();
@@ -145,6 +156,7 @@ void kernel_main() {
             }
             reconfig_data_format(cb_in, cb_x, cb_inb, cb_ex);
         }
+#endif
 
         // Simultaneous calculation of E[x] and Var[x] using Welford's algorithm.
         //
@@ -339,16 +351,15 @@ void kernel_main() {
         cb_ex2pe_obj.wait_front(onetile);
         for (auto block : generic::blocks(Wt, blk)) {
             reconfig_data_format(cb_xmm, cb_ex2pe);
-            if constexpr (do_gamma == 0 && do_beta == 0) {
-                pack_reconfig_data_format(cb_out);
-            } else {
-                pack_reconfig_data_format(cb_fusion);
-            }
+#if defined FUSE_GAMMA || defined FUSE_BETA
+            pack_reconfig_data_format(cb_fusion);
+#else
+            pack_reconfig_data_format(cb_out);
+#endif
 
             mul_bcast_cols_init_short(cb_xmm, cb_ex2pe);
             tile_regs_acquire();
             for (auto i : block.local()) {
-                // cb_xmm[wt+wtr] since we pop Wt from cb_xmm after the entire loop
                 mul_tiles_bcast_cols(cb_xmm, cb_ex2pe, block.to_global(i), 0, i);
             }
             tile_regs_commit();
@@ -356,67 +367,70 @@ void kernel_main() {
             cb_im_or_out_obj.reserve_back(block.full_block_size());
             tile_regs_wait();
             for (auto i : block.local()) {
-                pack_tile(i, cb_im_or_out);  // pack either to intermediate (cb_fusion or out0)
+                pack_tile(i, cb_im_or_out);
             }
             tile_regs_release();
-            cb_im_or_out_obj.push_back(
-                block.full_block_size());  // if no gamma/beta are provided, this will be passed on to the writer
+            cb_im_or_out_obj.push_back(block.full_block_size());
 
-            if constexpr (do_gamma) {
-                if constexpr (do_beta == 0) {
-                    pack_reconfig_data_format(cb_out);
-                }
+#ifdef FUSE_GAMMA
+            {
+#ifndef FUSE_BETA
+                pack_reconfig_data_format(cb_out);
+#endif
                 reconfig_data_format_srcb(cb_ex2pe, cb_gamma);
-                uint32_t cb_outg = do_beta ? cb_fusion : cb_out;
+#ifdef FUSE_BETA
+                uint32_t cb_outg = cb_fusion;
+#else
+                uint32_t cb_outg = cb_out;
+#endif
                 DataflowBuffer cb_outg_obj(cb_outg);
                 mul_bcast_rows_init_short(cb_fusion, cb_gamma);
-                cb_gamma_obj.wait_front(
-                    block.start() + block.full_block_size());  // we don't pop, TODO: only wait on first ht
+                cb_gamma_obj.wait_front(block.start() + block.full_block_size());
                 cb_fusion_obj.wait_front(block.full_block_size());
                 tile_regs_acquire();
                 for (auto i : block.local()) {
-                    mul_tiles_bcast_rows(cb_fusion, cb_gamma, i, block.to_global(i), i);  // tile *= 1/(sum(exp(x)))
+                    mul_tiles_bcast_rows(cb_fusion, cb_gamma, i, block.to_global(i), i);
                 }
                 tile_regs_commit();
-                // We don't pop gamma since it's 1,1,1,Wt and we reuse it for all NCHt
                 cb_fusion_obj.pop_front(block.full_block_size());
 
                 cb_outg_obj.reserve_back(block.full_block_size());
                 tile_regs_wait();
                 for (auto i : block.local()) {
-                    pack_tile(i, cb_outg);  // pack either to intermediate (cb_fusion or out0)
+                    pack_tile(i, cb_outg);
                 }
                 tile_regs_release();
                 cb_outg_obj.push_back(block.full_block_size());
             }
-            if constexpr (do_beta) {
+#endif
+#ifdef FUSE_BETA
+            {
                 pack_reconfig_data_format(cb_out);
-                if constexpr (do_gamma) {
-                    reconfig_data_format_srcb(cb_gamma, cb_beta);
-                } else {
-                    reconfig_data_format_srcb(cb_ex2pe, cb_beta);
-                }
+#ifdef FUSE_GAMMA
+                reconfig_data_format_srcb(cb_gamma, cb_beta);
+#else
+                reconfig_data_format_srcb(cb_ex2pe, cb_beta);
+#endif
 
                 add_bcast_rows_init_short(cb_fusion, cb_beta);
-                cb_beta_obj.wait_front(
-                    block.start() + block.full_block_size());  // TODO: optimization - only wait on first ht
+                cb_beta_obj.wait_front(block.start() + block.full_block_size());
                 cb_fusion_obj.wait_front(block.full_block_size());
                 tile_regs_acquire();
                 for (auto i : block.local()) {
-                    add_tiles_bcast_rows(cb_fusion, cb_beta, i, block.to_global(i), i);  // tile *= 1/(sum(exp(x)))
+                    add_tiles_bcast_rows(cb_fusion, cb_beta, i, block.to_global(i), i);
                 }
                 tile_regs_commit();
                 cb_fusion_obj.pop_front(block.full_block_size());
-                // We don't pop beta since it's 1,1,1,Wt and we reuse it for all NCHt
 
                 cb_out_obj.reserve_back(block.full_block_size());
                 tile_regs_wait();
                 for (auto i : block.local()) {
-                    pack_tile(i, cb_out);  // pack either to intermediate (cb_fusion or out0)
+                    pack_tile(i, cb_out);
                 }
                 tile_regs_release();
                 cb_out_obj.push_back(block.full_block_size());
             }
+#endif
         }
         cb_ex2pe_obj.pop_front(onetile);
         cb_xmm_obj.pop_front(total_buffer_size);
