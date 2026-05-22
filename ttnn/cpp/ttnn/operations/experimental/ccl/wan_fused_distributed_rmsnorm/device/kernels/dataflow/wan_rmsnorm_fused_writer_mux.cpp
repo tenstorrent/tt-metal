@@ -224,20 +224,27 @@ void kernel_main() {
             ((row_processed + chunk_size_rows) <= num_tile_rows) ? chunk_size_rows : (num_tile_rows - row_processed);
         const uint32_t chunk_stats_tiles = rows_in_chunk * ring_size;
 
-        // ---- Phase A: AG into persistent DRAM ----
+        // Reserve CB region up front; Phase A writes our local slot directly
+        // into it (optimization #3: skip the local-DRAM round-trip).
+        cb_reserve_back(stats_gathered_cb, chunk_stats_tiles);
+        const uint32_t stats_gathered_base = get_write_ptr(stats_gathered_cb);
+
+        // ---- Phase A: AG. Local L1 copy + fabric mcast to remote DRAM ----
         for (uint32_t r = 0; r < rows_in_chunk; r++) {
             cb_wait_front(stats_local_cb, 1);
             uint32_t l1_read_addr = get_read_ptr(stats_local_cb);
 
-            // This chunk's row r, this chip's slot in DRAM.
+            // Optimization #3: copy our slot directly L1→L1 into stats_gathered_cb,
+            // skipping the local-DRAM write+read round-trip.
+            const uint32_t local_cb_slot_addr =
+                stats_gathered_base + (r * ring_size + my_device_index) * stats_tile_bytes;
+            const uint64_t local_cb_noc_addr = safe_get_noc_addr(my_x[0], my_y[0], local_cb_slot_addr, 0);
+            noc_async_write(l1_read_addr, local_cb_noc_addr, stats_tile_bytes);
+
+            // Remote DRAM target for fabric mcasts (same tile_idx on every chip).
             const uint32_t dram_tile_idx = worker_tile_base + r * ring_size + my_device_index;
             const uint64_t dram_dest_noc_addr = get_noc_addr(dram_tile_idx, stats_dram_accessor);
 
-            // Local DRAM write (this chip's own slot).
-            noc_async_write(l1_read_addr, dram_dest_noc_addr, stats_tile_bytes);
-
-            // Fabric mcasts to remote chips' matching DRAM slot. Same tile_idx,
-            // same DRAM layout → same NoC0 address on every chip.
             if constexpr (num_targets_forward > 0) {
                 if (fwd_mux_args.connection_valid) {
                     fabric_multicast_noc_fused_unicast_with_atomic_inc(
@@ -272,20 +279,19 @@ void kernel_main() {
         if (cumulative_expected_incs > 0) {
             noc_semaphore_wait_min(out_ready_sem_ptr, cumulative_expected_incs);
         }
-        // Wait for local DRAM writes to commit before reading them back.
+        // Local L1 copies must land before compute reads stats_gathered_cb.
         noc_async_write_barrier();
 
-        // ---- Phase A.5: Read DRAM stats back into stats_gathered_cb ----
-        // The compute kernel still consumes stats from stats_gathered_cb in L1
-        // (one ring_size-wide tile-row per reduce). DRAM is just the safe
-        // transport medium for cross-chip AG.
-        cb_reserve_back(stats_gathered_cb, chunk_stats_tiles);
-        uint32_t cb_wr_ptr = get_write_ptr(stats_gathered_cb);
+        // ---- Phase A.5: Read REMOTE chips' DRAM slots → stats_gathered_cb ----
+        // Skip our own slot — already filled by L1 copy in Phase A.
         for (uint32_t r = 0; r < rows_in_chunk; r++) {
             for (uint32_t d = 0; d < ring_size; d++) {
+                if (d == my_device_index) {
+                    continue;
+                }
                 const uint32_t dram_tile_idx = worker_tile_base + r * ring_size + d;
-                noc_async_read_tile(dram_tile_idx, stats_dram_accessor, cb_wr_ptr);
-                cb_wr_ptr += stats_tile_bytes;
+                const uint32_t cb_slot_addr = stats_gathered_base + (r * ring_size + d) * stats_tile_bytes;
+                noc_async_read_tile(dram_tile_idx, stats_dram_accessor, cb_slot_addr);
             }
         }
         noc_async_read_barrier();
