@@ -70,7 +70,7 @@
 #ifdef TT_METAL_USE_EMULE
 #include "impl/emulation/emulated_program_runner.hpp"
 #endif
-#include <tt-metalium/experimental/service_core_claims.hpp>
+#include <tt-metalium/internal/service/service_core_manager.hpp>
 
 namespace tt::tt_metal {
 struct RuntimeArgsData;
@@ -841,7 +841,7 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
             auto& dm = MetalContext::instance().device_manager();
             const bool fd_active = dm->is_dispatch_firmware_active();
             const bool rt_done = dm->is_rt_profiler_device_init_complete(device->id());
-            const bool service_active = tt::tt_metal::experimental::service::ServiceCoreClaims::get().has_any_claims();
+            const bool service_active = tt::tt_metal::internal::ServiceCoreManager::get().has_any_claims();
             TT_ASSERT(
                 !(fd_active && rt_done) || service_active,
                 "Cannot force slow dispatch while fast dispatch firmware is active and real-time profiler init has "
