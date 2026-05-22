@@ -223,12 +223,18 @@ void kernel_main() {
     binary_op_init_common(cb_in0_id, cb_in0_id, cb_in0_id);
 #endif
 
-    if constexpr (welford_fp32_alias) {
-        // Full transpose_wh hw init for the alias buffer index. cb_in0_welford's index wasn't
-        // seen by binary_op_init_common, so the unpack-to-DEST fp32 path for transpose_wh_tile
-        // needs explicit hw_configure here. The non-alias path (cb_in0_welford_id == cb_in0_id)
-        // is already configured by the binary_op_init_common above.
+    if constexpr (welford_unpack_fp32_active) {
+        // Full transpose_wh hw init for the welford intake CB. The factory marks this CB
+        // with UnpackToDestFp32: c_29 in the TILIZE_IN branch, c_19 in the non-TILIZE_IN
+        // alias branch.
+        // None of the inits emitted above issues hw_configure for the intake CB.
+        // Without the full transpose_wh_init below, the welford intake transpose silently
+        // falls back to the SrcA / TF32 path losing FP32 precision.
+#ifdef TILIZE_IN
+        transpose_wh_init(cb_in_id, cb_ex_partial_id);
+#else
         transpose_wh_init(cb_in0_welford_id, cb_ex_partial_id);
+#endif
     }
 
     constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
