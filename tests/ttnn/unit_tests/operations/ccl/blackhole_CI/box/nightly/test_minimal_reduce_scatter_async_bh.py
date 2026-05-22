@@ -44,6 +44,7 @@ def run_reduce_scatter_impl(
     num_workers_per_link=None,
     num_buffers_per_channel=None,
 ):
+    use_sub_devices = False
     torch.manual_seed(0)
 
     # Set the default config
@@ -63,8 +64,9 @@ def run_reduce_scatter_impl(
     worker_sub_device_id = ttnn.SubDeviceId(0)
     sub_device_stall_group = [worker_sub_device_id]
 
-    sub_device_manager = bh_1d_mesh_device.create_sub_device_manager([worker_sub_device], 0)
-    bh_1d_mesh_device.load_sub_device_manager(sub_device_manager)
+    if use_sub_devices:
+        sub_device_manager = bh_1d_mesh_device.create_sub_device_manager([worker_sub_device], 0)
+        bh_1d_mesh_device.load_sub_device_manager(sub_device_manager)
     bh_1d_mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
@@ -82,30 +84,32 @@ def run_reduce_scatter_impl(
     if rs_topology == ttnn.Topology.Linear:
         # Line RS requires double-sized input for forward/backward
         intermediate_shape.insert(0, 2)
-    persistent_intermediate_buffers = [
-        ttnn.from_torch(
-            torch.zeros(intermediate_shape),
-            device=bh_1d_mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=rs_input_dtype,
-            memory_config=mem_config_intermediate,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(bh_1d_mesh_device),
-        )
-        for _ in range(num_iters)
-    ]
+    if use_persistent_buffers:
+        persistent_intermediate_buffers = [
+            ttnn.from_torch(
+                torch.zeros(intermediate_shape),
+                device=bh_1d_mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=rs_input_dtype,
+                memory_config=mem_config_intermediate,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(bh_1d_mesh_device),
+            )
+            for _ in range(num_iters)
+        ]
     rs_output_shape = rs_input_shape[:]
     rs_output_shape[dim] //= num_devices
-    persistent_output_buffers = [
-        ttnn.from_torch(
-            torch.zeros(rs_output_shape),
-            device=bh_1d_mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=rs_input_dtype,
-            memory_config=mem_config_rs,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(bh_1d_mesh_device),
-        )
-        for _ in range(num_iters)
-    ]
+    if use_persistent_buffers:
+        persistent_output_buffers = [
+            ttnn.from_torch(
+                torch.zeros(rs_output_shape),
+                device=bh_1d_mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=rs_input_dtype,
+                memory_config=mem_config_rs,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(bh_1d_mesh_device),
+            )
+            for _ in range(num_iters)
+        ]
 
     logger.info("Done creating persistent buffers")
 
@@ -233,7 +237,8 @@ def run_reduce_scatter_impl(
         assert eq, f"{i} FAILED ag: {output}"
 
     bh_1d_mesh_device.reset_sub_device_stall_group()
-    bh_1d_mesh_device.clear_loaded_sub_device_manager()
+    if use_sub_devices:
+        bh_1d_mesh_device.remove_sub_device_manager(sub_device_manager)
 
 
 @skip_for_wormhole_b0()
