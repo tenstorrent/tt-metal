@@ -815,7 +815,7 @@ def run_ring_joint_sdpa_chunked(
     SUT: n_chunks calls; each call passes a short Q chunk at absolute positions
     [i*c, (i+1)*c) against a K/V cache holding the first (i+1)*c rows.
     """
-    torch.manual_seed(1234)
+    torch.manual_seed(CHUNKED_PREFILL_SEED)
 
     sp_size = mesh_config.sp_size
     if sp_size < 2:
