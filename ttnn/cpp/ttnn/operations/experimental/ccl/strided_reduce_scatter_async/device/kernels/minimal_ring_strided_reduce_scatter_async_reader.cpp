@@ -26,6 +26,8 @@
  */
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
@@ -170,6 +172,15 @@ void kernel_main() {
     const uint32_t effective_worker_id = worker_id + (direction ? num_workers : 0);
     const uint32_t effective_advance_by_tiles = 2 * num_workers;
 
+    Noc noc_obj;
+    CircularBuffer cb_input(cb_input_id);
+    CircularBuffer cb_intermediate(cb_intermediate_id);
+    CircularBuffer cb_reader_output(cb_reader_output_id);
+#ifdef FUSE_RS_ADDCMUL
+    CircularBuffer cb_addcmul_a(addcmul_a_cb);
+    CircularBuffer cb_addcmul_b(addcmul_b_cb);
+#endif
+
     // Snapshot the semaphore's value at startup
     uint32_t out_ready_sem_target = 0;
 
@@ -192,6 +203,7 @@ void kernel_main() {
                 // signals guarantees all N-full-blocks covering this chunk are ready.
                 const uint32_t sem_increment = (effective_chunk_width_in_tiles + mm_block_wt - 1) / mm_block_wt;
                 mm_sem_target += sem_increment;
+                // Legacy primitive retained (#45003 item 4): mm_op_ready_sem is a raw L1 address from runtime args.
                 noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mm_op_ready_sem), mm_sem_target);
 #endif
                 // Run a full bidirectional ring reduce-scatter for the current chunk.
@@ -199,7 +211,7 @@ void kernel_main() {
                 // i>0: read input -> input_cb, read intermediate -> intermediate_cb (compute reduces).
                 for (uint32_t i = 0; i < ring_size; i++) {
                     const bool do_reduce = i != 0;
-                    const uint32_t cb_in0 = do_reduce ? cb_input_id : cb_reader_output_id;
+                    auto& cb_in0 = do_reduce ? cb_input : cb_reader_output;
                     const uint32_t actual_slice_idx = wrap_slice_idx(slice_idx, direction, ring_size);
 #ifdef FUSE_RS_ADDCMUL
                     // At the final ring step the local chip's slice is written to DRAM by the writer.
@@ -213,6 +225,8 @@ void kernel_main() {
                     // Wait for the neighboring device's writer to signal that it has finished
                     // writing this chunk's tiles into our intermediate buffer.
                     if (do_reduce) {
+                        // Legacy primitive retained (#45003 item 4): out_ready_sem is a raw L1 address from runtime
+                        // args.
                         noc_semaphore_wait_min(
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), out_ready_sem_target + 1);
                         out_ready_sem_target++;
@@ -245,21 +259,21 @@ void kernel_main() {
                             const uint32_t tiles_to_read_in_this_step = std::min(tiles_to_read, tile_granularity);
                             tiles_to_read -= tiles_to_read_in_this_step;
 
-                            cb_reserve_back(cb_in0, tile_granularity);
-                            uint32_t l1_write_addr = get_write_ptr(cb_in0);
+                            cb_in0.reserve_back(tile_granularity);
+                            uint32_t l1_write_addr = cb_in0.get_write_ptr();
                             uint32_t intermediate_l1_write_addr;
                             if (do_reduce) {
-                                cb_reserve_back(cb_intermediate_id, tile_granularity);
-                                intermediate_l1_write_addr = get_write_ptr(cb_intermediate_id);
+                                cb_intermediate.reserve_back(tile_granularity);
+                                intermediate_l1_write_addr = cb_intermediate.get_write_ptr();
                             }
 #ifdef FUSE_RS_ADDCMUL
                             uint32_t addcmul_a_l1_write_addr = 0;
                             uint32_t addcmul_b_l1_write_addr = 0;
                             if (is_final_ring_step) {
-                                cb_reserve_back(addcmul_a_cb, tile_granularity);
-                                addcmul_a_l1_write_addr = get_write_ptr(addcmul_a_cb);
-                                cb_reserve_back(addcmul_b_cb, tile_granularity);
-                                addcmul_b_l1_write_addr = get_write_ptr(addcmul_b_cb);
+                                cb_addcmul_a.reserve_back(tile_granularity);
+                                addcmul_a_l1_write_addr = cb_addcmul_a.get_write_ptr();
+                                cb_addcmul_b.reserve_back(tile_granularity);
+                                addcmul_b_l1_write_addr = cb_addcmul_b.get_write_ptr();
                             }
 #endif
 
@@ -282,6 +296,8 @@ void kernel_main() {
                                     const uint32_t global_tile_idx = slice_coordinates_to_global_tile_index(
                                         slice_row, col_in_slice, actual_slice_idx, slice_Wt, input_tensor_Wt);
                                     const uint32_t input_tile_id = global_tile_idx + batch_offset;
+                                    // Legacy primitives retained (#45003 item 4): noc_async_read with precomposed
+                                    // uint64_t noc addresses from get_noc_addr(tile_id, accessor).
                                     noc_async_read(
                                         get_noc_addr(input_tile_id, input_tensor_addrgen), l1_write_addr, page_size);
                                     if (do_reduce) {
@@ -333,15 +349,15 @@ void kernel_main() {
                                     effective_chunk_width_in_tiles,
                                     current_mm_block_ht);
                             }
-                            noc_async_read_barrier();
-                            cb_push_back(cb_in0, tile_granularity);
+                            noc_obj.async_read_barrier();
+                            cb_in0.push_back(tile_granularity);
                             if (do_reduce) {
-                                cb_push_back(cb_intermediate_id, tile_granularity);
+                                cb_intermediate.push_back(tile_granularity);
                             }
 #ifdef FUSE_RS_ADDCMUL
                             if (is_final_ring_step) {
-                                cb_push_back(addcmul_a_cb, tile_granularity);
-                                cb_push_back(addcmul_b_cb, tile_granularity);
+                                cb_addcmul_a.push_back(tile_granularity);
+                                cb_addcmul_b.push_back(tile_granularity);
                             }
 #endif
                         }
@@ -352,6 +368,8 @@ void kernel_main() {
             }
         }
         // Reset between batches so the counter doesn't overflow across batches.
+        // Legacy primitives retained (#45003 item 4): out_ready_sem / mm_op_ready_sem are raw L1
+        // addresses from runtime args, not id-based semaphores.
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
         out_ready_sem_target = 0;
 

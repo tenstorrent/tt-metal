@@ -22,6 +22,8 @@
  */
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
@@ -172,6 +174,10 @@ void kernel_main() {
     auto output_addrgen = TensorAccessor(output_tensor_args, output_address);
 #endif
 
+    Noc noc_obj;
+    CircularBuffer cb_compute_output(cb_compute_output_id);
+    CircularBuffer cb_reader_output(cb_reader_output_id);
+
     if (mux_connection_valid) {
         auto mux_connection_handle =
             tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
@@ -221,6 +227,7 @@ void kernel_main() {
                 pkt_hdr_mcastseminc,
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
 
+            // Legacy primitives retained (#45003 item 4): barrier_sem is a raw L1 address from runtime args.
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
             noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
         }
@@ -278,7 +285,7 @@ void kernel_main() {
                     // i=R-1: consume output_cb, write final reduced tiles to local output.
                     for (uint32_t i = 0; i < ring_size; i++) {
                         const uint32_t actual_slice_idx = wrap_slice_idx(slice_idx, direction, ring_size);
-                        const uint32_t cb_output_id = i > 0 ? cb_compute_output_id : cb_reader_output_id;
+                        auto& cb_output = i > 0 ? cb_compute_output : cb_reader_output;
 
                         const auto [mm_N_full_blocks_per_slice, cols_before_actual_slice] =
                             get_slice_N_block_info(actual_slice_idx, slice_Wt, N_full_block_wt);
@@ -309,8 +316,8 @@ void kernel_main() {
                                 const uint32_t tiles_to_read_in_this_step = std::min(tiles_to_read, tile_granularity);
                                 tiles_to_read -= tiles_to_read_in_this_step;
 
-                                cb_wait_front(cb_output_id, tile_granularity);
-                                size_t l1_read_addr = get_read_ptr(cb_output_id);
+                                cb_output.wait_front(tile_granularity);
+                                size_t l1_read_addr = cb_output.get_read_ptr();
 
                                 uint32_t tiles_remaining_in_step = tiles_to_read_in_this_step;
                                 while (tiles_remaining_in_step > 0) {
@@ -419,6 +426,8 @@ void kernel_main() {
                                                 }
                                             }
                                         }
+                                        // Legacy primitive retained (#45003 item 4): noc_async_writes_flushed
+                                        // companions fabric send paths above and is not modeled in Device 2.0.
                                         noc_async_writes_flushed();
                                     } else {
                                         // Write the tile to the output buffer on this device.
@@ -426,13 +435,15 @@ void kernel_main() {
                                             const uint32_t output_tile_id = output_tile_id_start + slice_tile_idx_first;
                                             const uint64_t local_noc_addr =
                                                 get_noc_addr(output_tile_id, output_addrgen);
+                                            // Legacy primitive retained (#45003 item 4): precomposed uint64_t noc
+                                            // address.
                                             noc_async_write(valid_l1_addrs[0], local_noc_addr, page_size);
                                         }
                                     }
                                     l1_read_addr += page_size * tiles_to_put_in_current_packet;
                                 }
-                                noc_async_write_barrier();
-                                cb_pop_front(cb_output_id, tile_granularity);
+                                noc_obj.async_write_barrier();
+                                cb_output.pop_front(tile_granularity);
                             }
                         }
 
@@ -445,9 +456,10 @@ void kernel_main() {
                                 &mux_connection_handle,
                                 pkt_hdr_seminc,
                                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+                            // Legacy primitive retained (#45003 item 4): companions fabric atomic-inc above.
                             noc_async_writes_flushed();
                         } else {
-                            noc_async_write_barrier();
+                            noc_obj.async_write_barrier();
                         }
 
                         // Move to the next slice
@@ -464,28 +476,33 @@ void kernel_main() {
                 &mux_connection_handle,
                 pkt_hdr_mcastseminc,
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{batch_ready_sem_noc_addr_in_pkt, 0});
+            // Legacy primitive retained (#45003 item 4): companions fabric atomic-inc above.
             noc_async_writes_flushed();
 
+            // Legacy primitives retained (#45003 item 4): batch_ready_sem is a raw L1 address from runtime args.
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), ring_size - 1);
             noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);
         }
 
-        noc_async_write_barrier();
-        noc_async_atomic_barrier();
+        noc_obj.async_write_barrier();
+        noc_obj.async_atomic_barrier();
 
         tt::tt_fabric::fabric_client_disconnect(mux_connection_handle);
 
         if (is_termination_master) {
+            // Legacy primitive retained (#45003 item 4): termination_sync_address is an id-derived address
+            // used as a raw L1 pointer; the wait pairs with the inc in the else-branch below.
             auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
             noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
             tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
         } else {
             const uint64_t dest_addr =
                 safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);
+            // Legacy primitive retained (#45003 item 4): precomposed uint64_t noc address.
             noc_semaphore_inc(dest_addr, 1);
-            noc_async_atomic_barrier();
+            noc_obj.async_atomic_barrier();
         }
     }
 
-    noc_async_write_barrier();
+    noc_obj.async_write_barrier();
 }

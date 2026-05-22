@@ -21,8 +21,16 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/debug/dprint.h"
 #include "strided_ring_reduce_scatter_common.hpp"
+
+// Legacy CB primitives retained (#45003 item 4): this compute kernel passes cb_id values directly into the
+// compute API (add_tiles, mul_tiles, mul_tiles_bcast, pack_tile, add_tiles_init, binary_op_init_common,
+// reconfig_data_format, pack_reconfig_data_format, etc.) — those interfaces take cb_id as a runtime
+// argument and don't accept a CircularBuffer wrapper. Migrating cb_wait_front / cb_pop_front /
+// cb_reserve_back / cb_push_back here without also restructuring the compute-API call sites would create
+// an inconsistent mix, so CB primitives stay on legacy.
 
 void kernel_main() {
     // Compile-time arguments (must match reader/writer on same device)
