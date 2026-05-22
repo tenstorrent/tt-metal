@@ -309,6 +309,48 @@ def tt_position_ids(input_ids: ttnn.Tensor, pad_id: int) -> ttnn.Tensor:
     return pos
 
 
+def tt_position_ids_decode_step(
+    input_ids: ttnn.Tensor,
+    pad_id: int,
+    past_key_values_length: int,
+) -> ttnn.Tensor:
+    """HF ``create_position_ids_from_input_ids`` for a single decode step ``[B, 1]``.
+
+    Matches ``(cumsum(mask) + past_key_values_length) * mask + pad_id`` with ``mask = ids != pad``.
+    """
+    ids_tile = (
+        ttnn.to_layout(input_ids, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if input_ids.get_layout() != ttnn.TILE_LAYOUT
+        else input_ids
+    )
+    mask = ttnn.ne(ids_tile, pad_id)
+    if ids_tile is not input_ids:
+        ttnn.deallocate(ids_tile)
+    mask_i32 = ttnn.typecast(mask, ttnn.int32)
+    ttnn.deallocate(mask)
+    cumsum = ttnn.cumsum(mask_i32, dim=1, dtype=ttnn.int32)
+    past = ttnn.full(
+        [int(input_ids.shape[0]), 1],
+        float(past_key_values_length),
+        dtype=ttnn.int32,
+        layout=ttnn.TILE_LAYOUT,
+        device=input_ids.device(),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    inc = ttnn.add(cumsum, past, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(cumsum)
+    scaled = ttnn.multiply(inc, mask_i32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(inc)
+    ttnn.deallocate(mask_i32)
+    pos = ttnn.add(scaled, pad_id, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(scaled)
+    pos_u = ttnn.typecast(pos, ttnn.uint32)
+    ttnn.deallocate(pos)
+    if pos_u.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+        pos_u = ttnn.to_layout(pos_u, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    return pos_u
+
+
 def tt_seq_position_ids(bsz: int, seq: int, pad_id: int, device: ttnn.Device) -> ttnn.Tensor:
     """HF ``create_position_ids_from_inputs_embeds`` on device — ``[pad+1, pad+2, …, pad+seq]``."""
     pos_1d = ttnn.arange(
