@@ -15,16 +15,10 @@ from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
 from .config_wav2vec2 import Wav2Vec2Config
 
-# Note: there is no on-device `Wav2Vec2PositionalConvEmbedding` here. The HF
-# pos-conv is a grouped Conv1d with `groups=16, in_per_group=48, kernel=128`.
-# `ttnn.experimental.conv3d`'s grouped path requires `C_in_block == in_per_group`
-# AND `C_in_block` must be a multiple of TILE_WIDTH (32). Since 48 isn't a tile
-# multiple, no valid `C_in_block` satisfies both constraints simultaneously. Hardware
-# verified: `C_in_block=48` → PCC 51 %, `C_in_block=32` → PCC 95.6 %,
-# `C_in_block=96` → L1 CB overflow. A minimal grouped conv3d test with
-# `in_per_group=32=C_in_block` got PCC 99.998 %, proving the kernel itself is
-# correct when sizes align. The pos-conv therefore runs on CPU inside
-# `Wav2Vec2Encoder.forward` (~3 M FLOPs, one-shot per audio clip).
+# Pos-conv runs on CPU inside `Wav2Vec2Encoder.forward`. Its in_per_group=48
+# isn't a tile multiple, so ttnn.experimental.conv3d's grouped path can't
+# satisfy `C_in_block == in_per_group` AND `C_in_block % 32 == 0`. ~3 MFLOP
+# one-shot per clip — CPU is fine.
 
 
 class Wav2Vec2FeatureProjection(Module):
@@ -316,17 +310,10 @@ class Wav2Vec2EncoderLayer(Module):
 
 
 class Wav2Vec2EncoderStack(Module):
-    """``encoder``: N transformer encoder layers.
+    """N transformer encoder layers. Pos-conv runs CPU-side in ``Wav2Vec2Encoder``.
 
-    Pos-conv runs on CPU (kernel constraint, see ``Wav2Vec2Encoder`` docstring).
-
-    The placement of the encoder's ``layer_norm`` differs between the two HF
-    variants:
-
-      * post-LN (base): applied *before* the stack — handled on CPU in
-        ``Wav2Vec2Encoder`` and folded into the host pre-conv pre-norm step.
-      * pre-LN / stable (large-xlsr): applied *after* the stack — owned by
-        this module (``self.layer_norm``) and run on device.
+    ``layer_norm`` placement: post-LN (base) folds into the CPU pre-norm step;
+    pre-LN/stable (large-xlsr) is owned by this module and runs on device.
     """
 
     def __init__(

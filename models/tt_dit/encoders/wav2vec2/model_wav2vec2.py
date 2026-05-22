@@ -19,28 +19,13 @@ from .feature_extractor_wav2vec2 import Wav2Vec2FeatureExtractor
 
 
 class Wav2Vec2Encoder(Module):
-    """TTNN port of HuggingFace `Wav2Vec2Model` for the WAN 2.2 S2V pipeline.
+    """TTNN port of HuggingFace ``Wav2Vec2Model`` for the WAN 2.2 S2V pipeline.
 
-    On device:
-        feature_extractor: 7 Conv1d layers (``ttnn.experimental.conv3d`` with
-            ``kernel_size=(k, 1, 1)``; GroupNorm-as-InstanceNorm on layer 0).
-        feature_projection: LayerNorm + Linear(512 -> 768).
-        encoder.layers: 12 transformer encoder layers.
+    Device: feature_extractor (7 Conv1d), feature_projection, encoder.layers (N transformer).
+    CPU (one D→H→D hop per clip): pos_conv_embed + the pre-LN it feeds. See
+    ``Wav2Vec2Encoder`` comment in encoder_wav2vec2.py for the grouped-conv constraint.
 
-    On CPU (one short device→host→device hop per audio clip):
-        encoder.pos_conv_embed: grouped Conv1d (groups=16, kernel=128).
-        encoder.layer_norm: initial LayerNorm before the transformer stack.
-
-    Why pos-conv is on CPU: ``ttnn.experimental.conv3d``'s grouped path
-    requires the per-group in_channels to equal ``C_in_block``, which itself
-    must be a multiple of TILE_WIDTH (32). With ``in_per_group = 768 / 16 = 48``
-    no valid ``C_in_block`` satisfies both constraints. The initial LayerNorm
-    runs on CPU too because it directly consumes the pos-conv output. Both ops
-    are tiny (~3M FLOPs total) and run once per audio clip outside the denoise
-    loop, so the round-trip cost is negligible.
-
-    Weight loading: call ``load_torch_state_dict(hf_model.state_dict())`` and
-    ``bind_cpu_modules(hf_model)``.
+    Weight loading: ``load_torch_state_dict(hf_model.state_dict())`` then ``bind_cpu_modules(hf_model)``.
     """
 
     def __init__(

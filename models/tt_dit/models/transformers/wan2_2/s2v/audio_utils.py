@@ -235,16 +235,8 @@ class MotionEncoder_tc(Module):
             packer_l1_acc=False,
         )
 
-    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        pass
-
     def _causal_pad_host(self, x_torch: torch.Tensor, kernel_size: int) -> torch.Tensor:
-        """Left-replicate-pad the temporal dim by ``kernel_size - 1`` frames.
-
-        HF equivalent: ``F.pad(x, (kernel-1, 0), mode='replicate')`` on ``[B, C, T]``;
-        we apply it to ``[B, T, C]``. Used for the very first upload only —
-        every subsequent conv stage uses ``_causal_pad_device`` instead.
-        """
+        """Left-replicate-pad temporal dim by ``kernel_size - 1`` frames on host."""
         pad = kernel_size - 1
         if pad == 0:
             return x_torch

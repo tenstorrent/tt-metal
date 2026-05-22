@@ -314,11 +314,8 @@ class WanPipelineS2V(WanPipeline):
         self.latent_buffer = None
         self.condition_buffer = None
 
-        # Lazy multi-clip warmup tracking. ``__init__`` only warms the 1-clip
-        # path (drop_first_motion=True). The first ``__call__`` that requests
-        # num_clips>1 triggers a one-shot warmup of the clip-1+ shape
-        # (drop_first_motion=False with motion latents). ``_warming_up`` guards
-        # against re-entrancy when the lazy warmup recursively invokes self.
+        # _warming_up guards against re-entrancy: lazy multi-clip warmup
+        # invokes self.__call__ recursively to compile the clip-1+ shape.
         self._multi_clip_warmed: bool = False
         self._warming_up: bool = False
 
