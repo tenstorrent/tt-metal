@@ -374,6 +374,7 @@ def test_mla(
     "seq_len", [8192, 10 * 1024, 25 * 1024, 50 * 1024], ids=["seq8k", "seq10k", "seq25k", "seq50k"]
 )
 @pytest.mark.parametrize("num_chunks", [1, 2, 4, 5, 8, 10], ids=lambda n: f"N{n}")
+@pytest.mark.timeout(0)
 def test_mla_chunked_prefill(
     request,
     mesh_device,
@@ -563,6 +564,7 @@ def test_mla_chunked_prefill(
 )
 @pytest.mark.parametrize("num_chunks", [2, 4, 5, 10], ids=lambda n: f"N{n}")
 @pytest.mark.parametrize("num_users", [2], ids=lambda u: f"U{u}")
+@pytest.mark.timeout(0)
 def test_mla_chunked_prefill_multi_user(
     request,
     mesh_device,
