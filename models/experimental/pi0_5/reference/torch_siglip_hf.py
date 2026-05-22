@@ -111,6 +111,19 @@ class HFSigLIPVisionTower:
             if any(s in name for s in fp32_substrings):
                 p.data = p.data.to(dtype=torch.float32)
 
+        # HF SigLIP's encoder runs in bf16 (cast above) but the patch+pos
+        # embeddings are kept in fp32 to match openpi. HF doesn't bridge the
+        # dtype between embeddings -> encoder, so layer_norm1 (bf16 weights)
+        # would receive an fp32 input and raise "mixed dtype" mid-forward.
+        # Override the embeddings module's forward to downcast its output to
+        # bf16 (shows up in stack traces / dir(), unlike a forward_hook).
+        _orig_embed_forward = self.model.vision_model.embeddings.forward
+
+        def _embeddings_bf16_forward(*args, **kwargs):
+            return _orig_embed_forward(*args, **kwargs).to(torch.bfloat16)
+
+        self.model.vision_model.embeddings.forward = _embeddings_bf16_forward
+
         self.model.eval()
 
     def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
