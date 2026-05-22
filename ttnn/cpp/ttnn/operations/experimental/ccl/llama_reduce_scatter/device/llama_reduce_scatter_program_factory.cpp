@@ -833,6 +833,23 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
         .core_range = all_cores_grid};
 }
 
+// Returns-fresh-ProgramDescriptor variant.  Builds an empty descriptor and
+// forwards to the append-style overload below.  Used by Contract-2 callers
+// (LlamaReduceScatterAdd::create_workload_descriptor) that build one isolated
+// ProgramDescriptor per mesh coord.
+tt::tt_metal::ProgramDescriptor
+LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_processing_descriptor(
+    const operation_attributes_t& operation_attributes,
+    const ttnn::MeshCoordinate& mesh_coordinate,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& signaler) {
+    tt::tt_metal::ProgramDescriptor desc;
+    create_at_program_processing_descriptor(
+        desc, operation_attributes, mesh_coordinate, tensor_args, tensor_return_value, signaler);
+    return desc;
+}
+
 // ProgramDescriptor variant of create_at_program_processing.  Structurally
 // identical to the Program& version above, but every CreateCircularBuffer /
 // CreateKernel / CreateSemaphore / SetRuntimeArgs call is replaced with a
@@ -840,8 +857,15 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
 // KernelDescriptor::emplace_runtime_args).  Buffer-bearing runtime args use
 // emplace_runtime_args({Buffer*, ...}) so the framework's fast cache-hit path
 // can patch addresses without re-running this builder.
-tt::tt_metal::ProgramDescriptor
-LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_processing_descriptor(
+//
+// This is the append-style overload — it writes onto an existing `desc`
+// supplied by the caller, so a single ProgramDescriptor can hold this
+// reduce-scatter builder alongside other builders (e.g. the matmul gather_in0
+// helper in rs_matmul_op).  Semaphore IDs are allocated through
+// desc.find_available_semaphore_id() so we don't collide with semaphores the
+// caller already registered on overlapping cores.
+void LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_processing_descriptor(
+    tt::tt_metal::ProgramDescriptor& desc,
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
     const tensor_args_t& tensor_args,
@@ -1077,8 +1101,6 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
     --------------------------------------
     */
 
-    ProgramDescriptor desc;
-
     // CB 0: input sharded buffer (globally allocated against the input tensor)
     {
         CBDescriptor cb_desc;
@@ -1218,9 +1240,18 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
     reader_defines["PACKET_WORKER_CORES"] = detail::cores_to_string(to_worker_cores(packet_worker_cores));
     reader_defines["SCHEDULE"] = schedule_string;
 
-    // create local semaphore — descriptor variant allocates an ID by descriptor index
-    // and pushes a SemaphoreDescriptor onto desc.semaphores (replaces CreateSemaphore).
-    uint32_t local_semaphore = static_cast<uint32_t>(desc.semaphores.size());
+    // create local semaphore — descriptor variant allocates an ID via
+    // desc.find_available_semaphore_id() (rather than desc.semaphores.size())
+    // so we don't collide with semaphores the caller may have already
+    // registered on the same cores.  In the rs_matmul_op composition path the
+    // MatmulFusedOpSignaler's rs_semaphore is registered on the bounding box
+    // of all_cores_grid before this builder runs, and a naive size-based ID
+    // would collide at id 0.  Probing any core in all_cores_grid suffices
+    // because the rs_semaphore covers the whole bounding box.
+    auto local_semaphore_probe_core = all_cores.front();
+    auto local_semaphore_opt = desc.find_available_semaphore_id(local_semaphore_probe_core, tt::CoreType::WORKER);
+    TT_FATAL(local_semaphore_opt.has_value(), "No available semaphore ID for llama_reduce_scatter local_semaphore");
+    uint32_t local_semaphore = local_semaphore_opt.value();
     desc.semaphores.push_back(SemaphoreDescriptor{
         .id = local_semaphore, .core_ranges = all_cores_grid, .initial_value = static_cast<uint32_t>(INVALID)});
 
@@ -1427,8 +1458,6 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
     desc.kernels.push_back(std::move(unary_reader_kernel_desc));
     desc.kernels.push_back(std::move(unary_writer_kernel_desc));
     desc.kernels.push_back(std::move(compute_kernel_desc));
-
-    return desc;
 }
 
 void LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::override_runtime_arguments_per_program(

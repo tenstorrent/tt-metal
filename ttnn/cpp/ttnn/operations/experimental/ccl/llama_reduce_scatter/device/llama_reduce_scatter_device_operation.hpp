@@ -82,6 +82,27 @@ struct LlamaReduceScatterDeviceOperation {
             tensor_return_value_t& tensor_return_value,
             const std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& signaler);
 
+        // Append-style overload of create_at_program_processing_descriptor.
+        // Instead of returning a fresh ProgramDescriptor, this variant appends
+        // CBs/kernels/semaphores/runtime args onto an existing `desc` that the
+        // caller is composing.  Used by rs_matmul_op (Contract-2), which
+        // builds a single ProgramDescriptor holding both the reduce-scatter
+        // half (this builder) and the matmul half (gather_in0 descriptor
+        // helper) so they can share kernels on overlapping cores.
+        //
+        // Semaphore IDs are allocated via desc.find_available_semaphore_id()
+        // (rather than desc.semaphores.size()) so a local_semaphore allocated
+        // here cannot collide with semaphores the caller already registered on
+        // the same cores (e.g. the signaler's rs_semaphore from
+        // MatmulFusedOpSignaler::init_llama_rs_cores_rs).
+        static void create_at_program_processing_descriptor(
+            tt::tt_metal::ProgramDescriptor& desc,
+            const operation_attributes_t& operation_attributes,
+            const ttnn::MeshCoordinate& mesh_coordinate,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& signaler);
+
         // Contract-2 (WorkloadDescriptor) factory.  Builds one ProgramDescriptor
         // per mesh coord via create_at_program_processing_descriptor.  No
         // workload-scoped semaphores or intermediate Tensors are required

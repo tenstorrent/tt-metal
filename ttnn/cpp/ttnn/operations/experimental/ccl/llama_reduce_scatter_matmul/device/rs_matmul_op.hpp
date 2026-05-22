@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
@@ -47,30 +48,18 @@ struct Matmul_RS {
         using matmul_device_t = ttnn::prim::MatmulDeviceOperation;
     };
     struct Matmul_RS_PF {
-        // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
-        struct shared_variables_t {
-            LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::shared_variables_t rs_shared_vars;
-            ttnn::prim::matmul_mcast_1d_common_override_variables_t matmul_shared_vars;
-        };
-        using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
-
-        static cached_mesh_workload_t create_mesh_workload(
-            const operation_attributes_t& operation_attributes,
-            const ttnn::MeshCoordinateRangeSet& tensor_coords,
-            const tensor_args_t& tensor_args,
-            std::vector<Tensor>& tensor_return_value);
-
-        static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
-            const operation_attributes_t& operation_attributes,
-            const ttnn::MeshCoordinate& mesh_coordinate,
-            const tensor_args_t& tensor_args,
-            std::vector<Tensor>& tensor_return_value);
-
-        static void override_runtime_arguments(
-            cached_mesh_workload_t& cached_workload,
+        // Contract-2 (WorkloadDescriptor) factory.  Builds one ProgramDescriptor
+        // per mesh coord that holds both halves of the fused op (the reduce
+        // scatter builder via the append-style overload of
+        // LlamaReduceScatterAdd::create_at_program_processing_descriptor, and
+        // the matmul 1d gather_in0 descriptor helper), with a shared
+        // MatmulFusedOpSignaler bridging their semaphores.  No workload-scoped
+        // resources beyond the caller-supplied cross_device_semaphore.
+        static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            std::vector<Tensor>& tensor_return_value);
+            std::vector<Tensor>& tensor_return_value,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords);
     };
     using program_factory_t = std::variant<Matmul_RS_PF>;
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
