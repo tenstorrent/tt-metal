@@ -350,6 +350,7 @@ void kernel_main() {
     constexpr uint32_t cb_gate_intermed  = get_named_compile_time_arg_val("cb_gate_intermed");
     constexpr uint32_t cb_up_intermed    = get_named_compile_time_arg_val("cb_up_intermed");
     constexpr uint32_t cb_activated      = get_named_compile_time_arg_val("cb_activated");
+    constexpr uint32_t cb_in0_down_full   = get_named_compile_time_arg_val("cb_in0_down_full");
     constexpr uint32_t cb_mm_partials_gu = get_named_compile_time_arg_val("cb_mm_partials_gu");
     constexpr uint32_t cb_mm_partials_d  = get_named_compile_time_arg_val("cb_mm_partials_d");
     constexpr uint32_t cb_out            = get_named_compile_time_arg_val("cb_out");
@@ -445,9 +446,17 @@ void kernel_main() {
     // mm_block_init does the full HW reconfig (including pack data format
     // for cb_out, which is likely BF16/BFP8 and may differ from the
     // intermediate format we just packed into cb_activated).
+    //
+    // NOTE: in0 for this phase comes from cb_in0_down_full, NOT cb_activated.
+    // The eltwise multiply phase still packs into cb_activated as before, but
+    // NCRISC drains cb_activated to a per-program DRAM scratch tensor, syncs
+    // all cores via a global semaphore, then BRISC reads each core's full
+    // M-row × all_K columns back into cb_in0_down_full. This gives phase 4
+    // the full K-dim it needs (the per-core cb_activated only holds 8 K-cols,
+    // but down matmul needs all 64). The sync is invisible to TRISC.
     // =====================================================================
     mm_block_init(
-        cb_activated,
+        cb_in0_down_full,
         cb_in1_down,
         cb_out,
         /*transpose=*/0,
@@ -468,7 +477,7 @@ void kernel_main() {
         d_out_subblock_w,
         d_out_subblock_num_tiles,
         d_out_block_num_tiles,
-        /*apply_silu_in_pack=*/false>(cb_activated, cb_in1_down, cb_mm_partials_d, cb_out);
+        /*apply_silu_in_pack=*/false>(cb_in0_down_full, cb_in1_down, cb_mm_partials_d, cb_out);
 
     // cb_out holds the final per-core y block; the writer kernel drains it
     // into the DRAM-interleaved output.
