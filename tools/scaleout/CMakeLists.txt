@@ -62,6 +62,7 @@ target_sources(
 
 target_include_directories(scaleout_tools PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(scaleout_tools SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+target_include_directories(scaleout_tools SYSTEM PUBLIC "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>")
 
 target_include_directories(run_cluster_validation PRIVATE "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>")
 target_include_directories(run_cluster_validation PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -76,6 +77,7 @@ target_link_libraries(
     PUBLIC
         TT::STL
         umd::tt-umd
+        fmt::fmt-header-only
     PRIVATE
         enchantum::enchantum
         tt-logger::tt-logger

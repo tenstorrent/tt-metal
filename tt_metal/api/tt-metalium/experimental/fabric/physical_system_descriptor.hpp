@@ -60,15 +60,23 @@ struct EthConnection {
     uint8_t src_chan = 0;
     uint8_t dst_chan = 0;
     bool is_local = false;
+    PortType port_type = PortType::TRACE;
 
     bool operator==(const EthConnection& other) const {
-        return src_chan == other.src_chan && dst_chan == other.dst_chan && other.is_local == is_local;
+        return src_chan == other.src_chan && dst_chan == other.dst_chan && other.is_local == is_local &&
+               port_type == other.port_type;
     }
     bool operator<(const EthConnection& other) const {
         if (src_chan != other.src_chan) {
             return src_chan < other.src_chan;
         }
-        return dst_chan < other.dst_chan;
+        if (dst_chan != other.dst_chan) {
+            return dst_chan < other.dst_chan;
+        }
+        if (port_type != other.port_type) {
+            return port_type < other.port_type;
+        }
+        return is_local < other.is_local;
     }
 };
 
@@ -119,6 +127,8 @@ struct hash<tt::tt_metal::ExitNodeConnection> {
         seed ^= std::hash<uint8_t>{}(min_chan) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
         seed ^= std::hash<uint8_t>{}(max_chan) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
         seed ^= std::hash<bool>{}(conn.eth_conn.is_local) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+        seed ^= std::hash<uint8_t>{}(static_cast<uint8_t>(conn.eth_conn.port_type)) + 0x9e3779b9 + (seed << 6) +
+                (seed >> 2);
         return seed;
     }
 };
