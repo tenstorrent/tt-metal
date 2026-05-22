@@ -1331,10 +1331,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             self.model[i].switch_mode(Mode.DECODE)
 
         sampling_on_device = (sampling_params is not None) or defer_device_sampling
-        # For deferred sampling we must keep decode forward in logits mode;
-        # sampling runs later in sample_decode_on_device().
-        forward_sampling_on_device = sampling_on_device and not defer_device_sampling
-        split_sampling_enabled = bool(self.enable_split_sampling and forward_sampling_on_device)
+        # Trace the sampling module whenever possible
+        split_sampling_enabled = bool(self.enable_split_sampling and sampling_on_device)
         self._set_sampling_trace_mode(split_sampling_enabled)
 
         B = tokens.shape[0]
@@ -1405,7 +1403,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             "tokens": tokens,
             "page_table": page_table,
             "kv_cache": kv_cache,
-            "sampling_on_device": forward_sampling_on_device,
+            "sampling_on_device": sampling_on_device,
         }
 
         if enable_trace:
@@ -1415,7 +1413,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 defer_device_sampling=defer_device_sampling,
             )
         else:
-            tt_decode_output = self._decode_forward_no_trace_text(**decode_kwargs)
+            tt_decode_output = self._decode_forward_no_trace_text(
+                **decode_kwargs,
+                defer_device_sampling=defer_device_sampling,
+            )
 
         if defer_device_sampling and sampling_on_device:
             return tt_decode_output
@@ -1432,6 +1433,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         page_table=None,
         kv_cache=None,
         sampling_on_device=False,
+        defer_device_sampling=False,
     ):
         """
         Performs text decode step.
@@ -1458,14 +1460,19 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
         for i in range(self.data_parallel):
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
-            tt_logits_i, tt_log_probs_i = self.model[i].ttnn_decode_forward(
+            decode_out = self.model[i].ttnn_decode_forward(
                 tt_tokens[i],
                 tt_current_pos[i],
                 rot_mat_idxs=tt_rot_mat_idxs[i],
                 page_table=tt_page_table[i],
                 kv_cache=user_kv_cache,
                 sampling_on_device=sampling_on_device,
+                capture_sampling_trace=defer_device_sampling,
             )
+            if isinstance(decode_out, tuple):
+                tt_logits_i, tt_log_probs_i = decode_out
+            else:
+                tt_logits_i, tt_log_probs_i = decode_out, None
             tt_output.append((tt_logits_i, tt_log_probs_i))
 
         return tt_output
