@@ -108,9 +108,11 @@ def _linear_pair(
     *,
     device: ttnn.Device,
     weight_dtype: ttnn.DataType = ttnn.bfloat16,
+    bias_dtype: Optional[ttnn.DataType] = None,
 ) -> dict:
+    b_dtype = bias_dtype if bias_dtype is not None else weight_dtype
     w = preprocess_linear_weight(linear.weight.detach(), dtype=weight_dtype, layout=ttnn.TILE_LAYOUT)
-    b = preprocess_linear_bias(linear.bias.detach(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    b = preprocess_linear_bias(linear.bias.detach(), dtype=b_dtype, layout=ttnn.TILE_LAYOUT)
     return {
         "weight": ttnn.to_device(w, device),
         "bias": ttnn.to_device(b, device),
@@ -789,7 +791,14 @@ def _t2u_variance_predictor_parameters(var_pred: torch.nn.Module, *, device: ttn
             "weight": _ln_to_device(var_pred.ln2.weight, device=device),
             "bias": _ln_to_device(var_pred.ln2.bias, device=device),
         },
-        "proj": _linear_pair(var_pred.proj, device=device),
+        # fp32 proj: ``log_dur`` rounding boundary must match HF; upload once here so
+        # ``TTSeamlessM4Tv2TextToUnitForConditionalGeneration`` does not ``typecast`` at init.
+        "proj": _linear_pair(
+            var_pred.proj,
+            device=device,
+            weight_dtype=ttnn.float32,
+            bias_dtype=ttnn.float32,
+        ),
     }
     return make_parameter_dict(out)
 
