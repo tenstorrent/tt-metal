@@ -535,6 +535,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         start_pos: list[int] = None,  # Cached prefixes lengths
         return_hidden_states=False,
         warmup_prefill=True,
+        defer_device_sampling: bool = False,
         **kwargs,
     ):
         self.mode = Mode.PREFILL
@@ -544,7 +545,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             # Only paged attention is supported for prefill
             enable_trace = False
 
-        sampling_on_device_requested = sampling_params is not None
+        sampling_on_device_requested = (sampling_params is not None) or defer_device_sampling
 
         # we need this here because of tt-metal tests
         if warmup_prefill:
@@ -610,6 +611,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             and batch_size > 1
             and sampling_params is not None
             and is_harmony
+            and not defer_device_sampling
         ):
             return self._row_sharded_batched_prefill(
                 tokens,
@@ -669,6 +671,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         sampling_params_per_out: list[SamplingParams | None] = [None] * len(empty_slots)
         prompt_tokens_per_out: list[torch.Tensor | None] = [None] * len(empty_slots)
         prefill_results: list[dict] = []
+        deferred_sampling_tasks: list[dict] = []
 
         for idx, user_id in enumerate(all_users):
             model_id = user_id // max_batch_size_per_model if model_id_warmup is None else model_id_warmup
@@ -788,18 +791,21 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 sampling_executed = True
                 sampling_dp = getattr(self.model[model_id], "sampling_dp", 1)
                 total_batch = self.model[model_id].sampling.tt_sampling.max_batch_size * sampling_dp
-                per_request_params = format_sampling_params(
-                    broadcast_sampling_params(sampling_params, idx, slot_len=total_batch), total_batch
-                )
-                assert per_request_params is not None, "Sampling was executed but missing per-request sampling params"
-                # empty_slots uses max_batch_size_per_model (not total_batch) because
-                # the seed manager operates on per-row slots (0..31).  When sampling_dp > 1
-                # the params are already broadcast across all rows by broadcast_sampling_params.
-                self.model[model_id].sampling.apply_prefill_state(
-                    sampling_params=per_request_params,
-                    prompt_tokens=prefill_ids[:, :seq_len].repeat(total_batch, 1),
-                    empty_slots=[user_id % max_batch_size_per_model],
-                )
+                deferred_prefill_prompt_tokens = prefill_ids[:, :seq_len].repeat(total_batch, 1)
+                deferred_prefill_empty_slots = [user_id % max_batch_size_per_model]
+                if not defer_device_sampling:
+                    per_request_params = format_sampling_params(
+                        broadcast_sampling_params(sampling_params, idx, slot_len=total_batch), total_batch
+                    )
+                    assert per_request_params is not None, "Sampling was executed but missing per-request sampling params"
+                    # empty_slots uses max_batch_size_per_model (not total_batch) because
+                    # the seed manager operates on per-row slots (0..31).  When sampling_dp > 1
+                    # the params are already broadcast across all rows by broadcast_sampling_params.
+                    self.model[model_id].sampling.apply_prefill_state(
+                        sampling_params=per_request_params,
+                        prompt_tokens=deferred_prefill_prompt_tokens,
+                        empty_slots=deferred_prefill_empty_slots,
+                    )
 
             if enable_trace_current_prompt:
                 logits = self._easy_trace_prefill(
@@ -837,19 +843,20 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     sampling_module, sampling_dp, sampling_batch, _ = self._get_sampling_contract(model_id)
                     assert sampling_module is not None
                     assert sampling_batch is not None
-                    combined_params = format_sampling_params(sampling_params, sampling_batch)
                     max_prompt_len = max(int(prompt_lens[i]) for i in range(len(empty_slots)))
                     combined_prompt_tokens = torch.zeros(sampling_batch, max_prompt_len, dtype=torch.long)
                     for local_idx, slot in enumerate(empty_slots):
                         plen = int(prompt_lens[local_idx])
                         combined_prompt_tokens[slot, :plen] = prefill_ids[slot, :plen]
 
-                    sampling_module.apply_prefill_state(
-                        sampling_params=combined_params,
-                        prompt_tokens=combined_prompt_tokens,
-                        empty_slots=empty_slots,
-                        replicate_seeds=False,
-                    )
+                    if not defer_device_sampling:
+                        combined_params = format_sampling_params(sampling_params, sampling_batch)
+                        sampling_module.apply_prefill_state(
+                            sampling_params=combined_params,
+                            prompt_tokens=combined_prompt_tokens,
+                            empty_slots=empty_slots,
+                            replicate_seeds=False,
+                        )
 
                     user_hidden = self.model[model_id].extract_last_tokens_batched_prefill(
                         logits,
@@ -858,6 +865,20 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                         prefill_seq_len,
                         target_batch=sampling_batch,
                     )
+                    batched_logits = self.model[model_id]._apply_norm_and_lm_head(user_hidden)
+                    if defer_device_sampling:
+                        deferred_sampling_tasks.append(
+                            {
+                                "kind": "batched",
+                                "model_id": model_id,
+                                "logits": batched_logits,
+                                "prompt_tokens": combined_prompt_tokens,
+                                "empty_slots": empty_slots,
+                                "replicate_seeds": False,
+                                "sampling_batch": sampling_batch,
+                            }
+                        )
+                        break
 
                     sampling_trace_key = f"sampling_{prefill_seq_len}_{model_id}_{sampling_batch}_{sampling_dp}"
                     if enable_trace_current_prompt:
@@ -882,7 +903,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                         )
                         tt_tokens, tt_log_probs = self.trace_output_prefill_sampling[sampling_trace_key]
                     else:
-                        batched_logits = self.model[model_id]._apply_norm_and_lm_head(user_hidden)
                         tt_tokens, tt_log_probs = self.model[model_id].sampling.sample(
                             batched_logits,
                             enable_trace=False,
@@ -959,22 +979,38 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     raise NotImplementedError("return_hidden_states=True requires enable_trace=True")
 
             if sampling_enabled:
-                tt_tokens, tt_log_probs = self.model[model_id].sampling.sample(
-                    logits,
-                    enable_trace=False,
-                )
-                prefill_results.append(
-                    {
-                        "idx": idx,
-                        "model_id": model_id,
-                        "last_token_idx": last_token_idx,
-                        "logits": [
-                            tt_tokens.cpu(blocking=False),
-                            tt_log_probs.cpu(blocking=False) if tt_log_probs is not None else None,
-                        ],
-                        "sampling": sampling_enabled,
-                    }
-                )
+                if defer_device_sampling:
+                    num_cached_tokens = int(start_pos[idx]) if start_pos is not None else 0
+                    deferred_sampling_tasks.append(
+                        {
+                            "kind": "single",
+                            "idx": idx,
+                            "model_id": model_id,
+                            "sample_index": (last_token_idx - num_cached_tokens) % 32,
+                            "logits": logits,
+                            "prompt_tokens": deferred_prefill_prompt_tokens,
+                            "empty_slots": deferred_prefill_empty_slots,
+                            "request_index": idx,
+                            "total_batch": total_batch,
+                        }
+                    )
+                else:
+                    tt_tokens, tt_log_probs = self.model[model_id].sampling.sample(
+                        logits,
+                        enable_trace=False,
+                    )
+                    prefill_results.append(
+                        {
+                            "idx": idx,
+                            "model_id": model_id,
+                            "last_token_idx": last_token_idx,
+                            "logits": [
+                                tt_tokens.cpu(blocking=False),
+                                tt_log_probs.cpu(blocking=False) if tt_log_probs is not None else None,
+                            ],
+                            "sampling": sampling_enabled,
+                        }
+                    )
             else:
                 logits = ttnn.untilize(logits, use_multicore=True)
                 prefill_results.append(
@@ -1024,10 +1060,74 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
 
+        if defer_device_sampling and sampling_executed:
+            return {
+                "deferred_sampling_tasks": deferred_sampling_tasks,
+                "batch_size": batch_size,
+            }
+
         if sampling_executed:
             return output_tokens, reformat_logprobs(output_log_probs, batch_size)
         else:
             return output_tensor
+
+    def sample_prefill_on_device(self, deferred_sampling_tasks, batch_size, sampling_params):
+        output_tokens = torch.zeros(batch_size, 1, dtype=torch.int64)
+        output_log_probs = [None] * batch_size
+
+        for task in deferred_sampling_tasks:
+            model_id = task["model_id"]
+            sampling_module = self.model[model_id].sampling
+            if task["kind"] == "batched":
+                sampled_params = format_sampling_params(sampling_params, task["sampling_batch"])
+            else:
+                sampled_params = format_sampling_params(
+                    broadcast_sampling_params(
+                        sampling_params,
+                        task["request_index"],
+                        slot_len=task["total_batch"],
+                    ),
+                    task["total_batch"],
+                )
+            sampling_module.apply_prefill_state(
+                sampling_params=sampled_params,
+                prompt_tokens=task["prompt_tokens"],
+                empty_slots=task["empty_slots"],
+                replicate_seeds=task.get("replicate_seeds", True),
+            )
+            tt_tokens, tt_log_probs = sampling_module.sample(
+                task["logits"],
+                enable_trace=False,
+            )
+            ttnn.synchronize_device(self.model[model_id].mesh_device)
+
+            if task["kind"] == "batched":
+                tokens_host = ttnn.to_torch(ttnn.get_device_tensors(tt_tokens)[0]).reshape(-1)
+                log_probs_host = (
+                    ttnn.to_torch(ttnn.get_device_tensors(tt_log_probs)[0]).reshape(-1)
+                    if tt_log_probs is not None
+                    else None
+                )
+                for slot in task["empty_slots"]:
+                    output_tokens[slot] = tokens_host[slot]
+                    if log_probs_host is not None:
+                        output_log_probs[slot] = log_probs_host[slot]
+                continue
+
+            idx = task["idx"]
+            sample_index = task["sample_index"]
+            tokens_host = ttnn.to_torch(ttnn.get_device_tensors(tt_tokens)[0]).reshape(-1)[sample_index]
+            if isinstance(tt_log_probs, LogProbsResult):
+                log_probs_host = tt_log_probs.extract_user(sample_index)
+            elif tt_log_probs is not None:
+                log_probs_host = ttnn.to_torch(ttnn.get_device_tensors(tt_log_probs)[0]).reshape(-1)[sample_index]
+            else:
+                log_probs_host = None
+            output_tokens[idx] = tokens_host
+            if log_probs_host is not None:
+                output_log_probs[idx] = log_probs_host
+
+        return output_tokens, reformat_logprobs(output_log_probs, batch_size)
 
     def prefill_forward_single_user_text(
         self,
@@ -1176,6 +1276,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
         slot_remap=None,
+        defer_device_sampling: bool = False,
         **kwargs,
     ):
         mode_switched = False
@@ -1187,7 +1288,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         for i in range(len(self.model)):
             self.model[i].switch_mode(Mode.DECODE)
 
-        sampling_on_device = sampling_params is not None
+        sampling_on_device = (sampling_params is not None) or defer_device_sampling
         split_sampling_enabled = bool(self.enable_split_sampling and sampling_on_device)
         self._set_sampling_trace_mode(split_sampling_enabled)
 
@@ -1263,9 +1364,16 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         }
 
         if enable_trace:
-            tt_decode_output = self._decode_forward_trace_text(**decode_kwargs, reset_batch=mode_switched)
+            tt_decode_output = self._decode_forward_trace_text(
+                **decode_kwargs,
+                reset_batch=mode_switched,
+                defer_device_sampling=defer_device_sampling,
+            )
         else:
             tt_decode_output = self._decode_forward_no_trace_text(**decode_kwargs)
+
+        if defer_device_sampling and sampling_on_device:
+            return tt_decode_output
 
         if read_from_device:
             to_host = self.read_decode_output(tt_decode_output)
@@ -1380,7 +1488,14 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         return trace_ids, tt_out_trace, *device_inputs
 
     def _decode_forward_trace_text(
-        self, tokens, current_pos, page_table=None, kv_cache=None, sampling_on_device=False, reset_batch=False
+        self,
+        tokens,
+        current_pos,
+        page_table=None,
+        kv_cache=None,
+        sampling_on_device=False,
+        reset_batch=False,
+        defer_device_sampling=False,
     ):
         """
         Run decode forward text with tracing
@@ -1421,6 +1536,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
         outputs = self.trace_output_decode[sampling_on_device]
         if sampling_on_device:
+            if defer_device_sampling:
+                return outputs
             new_outputs = []
             for i in range(self.data_parallel):
                 sampling_module = getattr(self.model[i], "sampling", None)
@@ -1436,6 +1553,82 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 )
             return new_outputs
         return outputs
+
+    def sample_decode_on_device(
+        self,
+        tt_logits,
+        sampling_params,
+        reset_batch=False,
+        prompt_tokens: torch.Tensor | None = None,
+        output_tokens: torch.Tensor | None = None,
+        slot_remap=None,
+        enable_trace=False,
+    ):
+        sampling_dp_values = [getattr(self.model[i], "sampling_dp", 1) for i in range(self.data_parallel)]
+        assert (
+            len(set(sampling_dp_values)) == 1
+        ), f"All model instances must have the same sampling_dp, got {sampling_dp_values}"
+        sampling_dp = max(self.data_parallel, sampling_dp_values[0])
+        sampling_params_list = chunk_sampling_params(sampling_params, sampling_dp)
+        prompt_chunks = (
+            torch.chunk(prompt_tokens, sampling_dp, 0) if prompt_tokens is not None else [None] * sampling_dp
+        )
+        output_chunks = (
+            torch.chunk(output_tokens, sampling_dp, 0) if output_tokens is not None else [None] * sampling_dp
+        )
+
+        for i in range(self.data_parallel):
+            sampling_module = getattr(self.model[i], "sampling", None)
+            if sampling_module is None:
+                continue
+            assert (
+                sampling_dp % self.data_parallel == 0
+            ), f"sampling_dp ({sampling_dp}) must be divisible by data_parallel ({self.data_parallel})"
+            cpm = sampling_dp // self.data_parallel
+            start = i * cpm
+            model_chunks = sampling_params_list[start : start + cpm]
+            model_prompt = (
+                torch.cat([c for c in prompt_chunks[start : start + cpm] if c is not None], 0)
+                if prompt_tokens is not None
+                else None
+            )
+            model_output = (
+                torch.cat([c for c in output_chunks[start : start + cpm] if c is not None], 0)
+                if output_tokens is not None
+                else None
+            )
+
+            sampling_module.apply_decode_state(
+                model_chunks,
+                reset_batch=reset_batch,
+                prompt_tokens=model_prompt,
+                output_tokens=model_output,
+            )
+            if slot_remap is not None:
+                sm_bs = sampling_module.seed_manager.max_batch_size
+                rank_remap = slot_remap[i * sm_bs : (i + 1) * sm_bs]
+                sampling_module.seed_manager.apply_slot_remap(rank_remap)
+            sampling_module.seed_manager.get_new_values()
+
+        sampled_outputs = []
+        for i in range(self.data_parallel):
+            sampling_module = getattr(self.model[i], "sampling", None)
+            if sampling_module is None:
+                sampled_outputs.append(tt_logits[i])
+                continue
+            logits_i = tt_logits[i]
+            if isinstance(logits_i, tuple):
+                logits_i = logits_i[0]
+            sampled_outputs.append(
+                sampling_module.sample(
+                    logits=logits_i,
+                    tt_out_tok=self.trace_inputs_decode[True][i][0]
+                    if enable_trace and self.trace_inputs_decode[True]
+                    else None,
+                    enable_trace=enable_trace,
+                )
+            )
+        return sampled_outputs
 
     def _prefill_forward_single_user(
         self,
