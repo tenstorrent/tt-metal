@@ -68,20 +68,25 @@ FORCE_INLINE void matmul_phase_v3(
             for (uint32_t sb_n = 0; sb_n < in1_num_subblocks; ++sb_n) {
                 tile_regs_acquire();
 
-                int dst_index = 0;
-                int in0_index_h_offset = 0;
-                for (uint32_t h = 0; h < out_subblock_h; ++h) {
-                    for (uint32_t w = 0; w < out_subblock_w; ++w) {
-                        int in1_index_inner_dim_offset = 0;
-                        for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
-                            int in0_index = in0_index_subblock_offset + in0_index_h_offset + inner_dim;
-                            int in1_index = in1_index_subblock_offset + in1_index_inner_dim_offset + w;
-                            matmul_tiles(in0_cb_id, in1_cb_id, in0_index, in1_index, dst_index);
-                            in1_index_inner_dim_offset += in1_per_core_w;
-                        }
-                        ++dst_index;
-                    }
-                    in0_index_h_offset += in0_block_w;
+                // matmul_block: production-style block-granular matmul. For
+                // each inner-dim iteration, matmul_block computes the
+                // out_subblock_h × out_subblock_w output tile block.
+                uint32_t dst_index = 0;
+                uint32_t in0_index = in0_index_subblock_offset;
+                uint32_t in1_index = in1_index_subblock_offset;
+                for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
+                    matmul_block(
+                        in0_cb_id,
+                        in1_cb_id,
+                        in0_index,
+                        in1_index,
+                        dst_index,
+                        /*transpose=*/0,
+                        out_subblock_w,
+                        out_subblock_h,
+                        in0_block_w);
+                    in0_index += 1;
+                    in1_index += in1_per_core_w;
                 }
 
                 tile_regs_commit();
@@ -240,7 +245,8 @@ void kernel_main() {
     constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
 
     silu_tile_init_pack();
-    mm_init(cb_in0_x, cb_in1_gate, cb_partials_gu);
+    mm_block_init(
+        cb_in0_x, cb_in1_gate, cb_partials_gu, /*transpose=*/0, gu_out_subblock_w, gu_out_subblock_h, g_in0_block_w);
 
     // Phase 1: gate matmul with silu fused on the final pack into gate_intermed.
     matmul_phase_v3<
@@ -259,7 +265,8 @@ void kernel_main() {
         /*apply_silu_on_final=*/true>(cb_in0_x, cb_in1_gate, cb_partials_gu, cb_gate_intermed);
 
     // Phase 2: up matmul (no activation), output to up_intermed.
-    mm_init_short_with_dt(cb_in0_x, cb_in1_up, cb_partials_gu);
+    mm_block_init_short_with_dt(
+        cb_in0_x, cb_in1_up, cb_partials_gu, /*transpose=*/0, gu_out_subblock_w, gu_out_subblock_h, u_in0_block_w);
     matmul_phase_v3<
         u_in0_block_w,
         u_in0_num_subblocks,
@@ -280,7 +287,14 @@ void kernel_main() {
         cb_gate_intermed, cb_up_intermed, cb_activated);
 
     // Phase 4: down matmul, output to cb_out.
-    mm_init(cb_in0_down_full, cb_in1_down, cb_partials_d);
+    mm_block_init(
+        cb_in0_down_full,
+        cb_in1_down,
+        cb_partials_d,
+        /*transpose=*/0,
+        d_out_subblock_w,
+        d_out_subblock_h,
+        d_in0_block_w);
     matmul_phase_v3<
         d_in0_block_w,
         d_in0_num_subblocks,
