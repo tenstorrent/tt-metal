@@ -105,6 +105,8 @@ class VoxtralTTAcousticModel:
         )
 
         self._compute_kernel_config = COMPUTE_KERNEL_CONFIG_VOXTRAL_ACOUSTIC
+        # FM trunk uses short sequences (3 concat tokens); keep matmul activations in L1 (weights in DRAM).
+        self._matmul_act_mem_config = ttnn.L1_MEMORY_CONFIG
 
         def _rms(layer_num: int, key: str) -> VoxtralAcousticRMSNorm:
             return VoxtralAcousticRMSNorm(
@@ -147,6 +149,7 @@ class VoxtralTTAcousticModel:
                 weight_dtype=dtype,
                 output_dtype=dtype,
                 compute_kernel_config=self._compute_kernel_config,
+                activation_memory_config=self._matmul_act_mem_config,
             )
             for i in range(n_layers)
         ]
@@ -161,6 +164,7 @@ class VoxtralTTAcousticModel:
                 output_dtype=dtype,
                 exact_silu=True,
                 compute_kernel_config=self._compute_kernel_config,
+                activation_memory_config=self._matmul_act_mem_config,
             )
             for i in range(n_layers)
         ]
@@ -235,33 +239,35 @@ class VoxtralTTAcousticModel:
             t_emb = t_emb.to(dtype=torch.bfloat16)
             bsz = x_t.shape[0]
 
+            _act_mem = self._matmul_act_mem_config
             tt_xt = ttnn.from_torch(
                 x_t.unsqueeze(1),
                 device=self.mesh_device,
                 dtype=self.dtype,
                 layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=_act_mem,
             )
             tt_te = ttnn.from_torch(
                 t_emb.unsqueeze(1),
                 device=self.mesh_device,
                 dtype=self.dtype,
                 layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=_act_mem,
             )
             tt_llm = ttnn.from_torch(
                 llm_hidden.unsqueeze(1),
                 device=self.mesh_device,
                 dtype=self.dtype,
                 layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=_act_mem,
             )
 
+        _lin_mem = self._matmul_act_mem_config
         s0 = ttnn.linear(
             tt_xt,
             self.w_input_proj,
             dtype=self.dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=_lin_mem,
             compute_kernel_config=self._compute_kernel_config,
         )
         ttnn.deallocate(tt_xt)
@@ -269,7 +275,7 @@ class VoxtralTTAcousticModel:
             tt_te,
             self.w_time_proj,
             dtype=self.dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=_lin_mem,
             compute_kernel_config=self._compute_kernel_config,
         )
         ttnn.deallocate(tt_te)
@@ -277,7 +283,7 @@ class VoxtralTTAcousticModel:
             tt_llm,
             self.w_llm_proj,
             dtype=self.dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=_lin_mem,
             compute_kernel_config=self._compute_kernel_config,
         )
         if _tt_llm is None:
@@ -348,14 +354,14 @@ class VoxtralTTAcousticModel:
             ttnn.deallocate(out3)
             return out4
 
-        _residual_mc = ttnn.DRAM_MEMORY_CONFIG
+        _residual_mc = self._matmul_act_mem_config
 
         for i in range(self.n_layers):
             residual_attn = ttnn.clone(h, dtype=self.dtype, memory_config=_residual_mc)
             normed = self.attn_norms[i](h, mode=Mode.DECODE)
             if debug_out is not None:
                 debug_out[f"layer{i}.attn_norm"] = ttnn.to_torch(normed).float()
-            attn_out = self.attentions[i](normed, cos, sin, attention_mask=None)
+            attn_out = self.attentions[i](normed, cos, sin, attention_mask=None, activation_memory_config=_residual_mc)
             ttnn.deallocate(normed)
             attn_out = _slice_like(attn_out, h)
             attn_out = ttnn.to_memory_config(attn_out, h.memory_config())
@@ -372,7 +378,7 @@ class VoxtralTTAcousticModel:
             normed_ff = self.ffn_norms[i](h, mode=Mode.DECODE)
             if debug_out is not None:
                 debug_out[f"layer{i}.ffn_norm"] = ttnn.to_torch(normed_ff).float()
-            ff_out = self.mlps[i](normed_ff)
+            ff_out = self.mlps[i](normed_ff, activation_memory_config=_residual_mc)
             ttnn.deallocate(normed_ff)
             ff_out = _slice_like(ff_out, h)
             ff_out = ttnn.to_memory_config(ff_out, h.memory_config())
@@ -397,7 +403,7 @@ class VoxtralTTAcousticModel:
             h0,
             self.w_velocity,
             dtype=self.dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self._matmul_act_mem_config,
             compute_kernel_config=self._compute_kernel_config,
         )
         ttnn.deallocate(h0)
@@ -607,7 +613,7 @@ class VoxtralTTAcousticModel:
             llm_hidden_tt,
             self.w_semantic,
             dtype=self.dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self._matmul_act_mem_config,
             compute_kernel_config=self._compute_kernel_config,
         )
         sem_masked = ttnn.add(sem_tt, self._sem_mask_tt, dtype=self.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -676,7 +682,7 @@ class VoxtralTTAcousticModel:
             tt_llm,
             self.w_semantic,
             dtype=self.dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self._matmul_act_mem_config,
             compute_kernel_config=self._compute_kernel_config,
         )
         ttnn.deallocate(tt_llm)
