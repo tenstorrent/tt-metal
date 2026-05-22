@@ -8,6 +8,10 @@ import ttnn
 
 from models.experimental.voxtraltts.reference.voxtral_config import DEFAULT_VOXTRAL_MODEL
 from models.experimental.voxtraltts.tt.text_model import VoxtralTTTextModel
+from models.experimental.voxtraltts.tt.voxtral_tt_args import voxtral_text_default_optimizations
+from models.experimental.voxtraltts.utils.audio_tokenizer_optimizations import (
+    voxtral_audio_tokenizer_default_optimizations,
+)
 
 
 def resolve_voxtral_model_name_or_skip() -> str:
@@ -25,9 +29,10 @@ def create_real_voxtral_text_model_or_skip(
     *,
     max_seq_len: int = 256,
     max_batch_size: int = 1,
-    dtype=ttnn.bfloat8_b,
-    optimizations=None,
+    dtype=ttnn.bfloat16,
+    optimizations=voxtral_text_default_optimizations,
 ):
+    """Build the TT text model with the production config by default."""
     model_name_or_path = resolve_voxtral_model_name_or_skip()
     try:
         return VoxtralTTTextModel.create_from_model_name(
@@ -40,3 +45,27 @@ def create_real_voxtral_text_model_or_skip(
         )
     except Exception as exc:
         pytest.skip(f"Unable to build VoxtralTTTextModel from real checkpoint: {exc}")
+
+
+def create_voxtral_audio_tokenizer_or_skip(
+    device,
+    *,
+    state_dict,
+    tokenizer_cfg,
+    full_checkpoint=None,
+    optimizations=voxtral_audio_tokenizer_default_optimizations,
+):
+    """Build ``VoxtralTTAudioTokenizer`` with production optimizations by default."""
+    from models.experimental.voxtraltts.tt.audio_tokenizer.model import VoxtralTTAudioTokenizer
+
+    opt = optimizations() if callable(optimizations) else optimizations
+    try:
+        return VoxtralTTAudioTokenizer(
+            device,
+            state_dict=state_dict,
+            tokenizer_cfg=tokenizer_cfg,
+            full_checkpoint=full_checkpoint,
+            optimizations=opt,
+        )
+    except Exception as exc:
+        pytest.skip(f"Unable to build VoxtralTTAudioTokenizer: {exc}")

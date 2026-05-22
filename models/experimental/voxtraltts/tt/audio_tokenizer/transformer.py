@@ -8,6 +8,7 @@ import ttnn
 
 from models.common.rmsnorm import RMSNorm
 from models.experimental.voxtraltts.reference.voxtral_config import VoxtralAudioTokenizerConfig
+from models.experimental.voxtraltts.utils.audio_tokenizer_optimizations import AudioTokenizerOptimizations
 from models.experimental.voxtraltts.tt.attention import VoxtralTTAttention
 from models.experimental.voxtraltts.tt.mlp import VoxtralTTMLP
 from models.tt_transformers.tt.common import Mode
@@ -27,6 +28,7 @@ class VoxtralTTAudioTokenizerDecoderTransformerBlock:
         weight_dtype=ttnn.bfloat16,
         output_dtype=ttnn.bfloat16,
         compute_kernel_config=None,
+        optimizations: AudioTokenizerOptimizations | None = None,
     ) -> None:
         self.device = device
         self.block_index = block_index
@@ -34,7 +36,17 @@ class VoxtralTTAudioTokenizerDecoderTransformerBlock:
         self.dim = tokenizer_cfg.dim
         self.output_dtype = output_dtype
         self.compute_kernel_config = compute_kernel_config
+        self.optimizations = optimizations
+        if optimizations is not None:
+            weight_dtype = optimizations.weight_dtype
+            output_dtype = optimizations.activation_dtype
+            if compute_kernel_config is None:
+                compute_kernel_config = optimizations.matmul_compute_kernel_config
+            self.output_dtype = output_dtype
+            self.compute_kernel_config = compute_kernel_config
         prefix = f"decoder_blocks.{block_index}.layers.{layer_index}"
+        # RMSNorm weights stay BF16 (ROW_MAJOR); bfloat8_b requires TILE and is for matmul only.
+        norm_weight_dtype = ttnn.bfloat16
 
         self.attention_norm = RMSNorm(
             device=device,
@@ -42,7 +54,7 @@ class VoxtralTTAudioTokenizerDecoderTransformerBlock:
             eps=tokenizer_cfg.norm_eps,
             state_dict=state_dict,
             weight_key=f"{prefix}.attention_norm",
-            weight_dtype=weight_dtype,
+            weight_dtype=norm_weight_dtype,
             is_distributed=False,
         )
         self.ffn_norm = RMSNorm(
@@ -51,7 +63,7 @@ class VoxtralTTAudioTokenizerDecoderTransformerBlock:
             eps=tokenizer_cfg.norm_eps,
             state_dict=state_dict,
             weight_key=f"{prefix}.ffn_norm",
-            weight_dtype=weight_dtype,
+            weight_dtype=norm_weight_dtype,
             is_distributed=False,
         )
         self.attention = VoxtralTTAttention(
@@ -65,6 +77,9 @@ class VoxtralTTAudioTokenizerDecoderTransformerBlock:
             weight_dtype=weight_dtype,
             output_dtype=output_dtype,
             compute_kernel_config=compute_kernel_config,
+            sdpa_compute_kernel_config=(
+                optimizations.sdpa_compute_kernel_config if optimizations is not None else compute_kernel_config
+            ),
             is_causal=False,
             use_qk_norm=tokenizer_cfg.qk_norm,
             qk_norm_eps=tokenizer_cfg.qk_norm_eps,

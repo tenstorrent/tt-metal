@@ -44,6 +44,7 @@ class VoxtralTTAttention:
         weight_dtype=ttnn.bfloat16,
         output_dtype=ttnn.bfloat16,
         compute_kernel_config=None,
+        sdpa_compute_kernel_config=None,
         *,
         is_causal: bool = False,
         use_qk_norm: bool = False,
@@ -58,6 +59,7 @@ class VoxtralTTAttention:
         self.output_dtype = output_dtype
         self.scale = 1.0 / math.sqrt(head_dim)
         self.compute_kernel_config = compute_kernel_config
+        self.sdpa_compute_kernel_config = sdpa_compute_kernel_config or compute_kernel_config
         self.is_causal = is_causal
         self.use_qk_norm = use_qk_norm
         self._qk_norm_mode = qk_norm_mode
@@ -66,6 +68,7 @@ class VoxtralTTAttention:
         self.k_norm: RMSNorm | None = None
         if use_qk_norm:
             prefix = f"{weight_prefix}." if not weight_prefix.endswith(".") else weight_prefix
+            qk_norm_weight_dtype = ttnn.bfloat16
             self.q_norm = RMSNorm(
                 device=device,
                 dim=num_attention_heads * head_dim,
@@ -73,7 +76,7 @@ class VoxtralTTAttention:
                 state_dict=state_dict,
                 weight_key="q_norm",
                 state_dict_prefix=prefix,
-                weight_dtype=weight_dtype,
+                weight_dtype=qk_norm_weight_dtype,
                 is_distributed=None,
                 tt_ccl=None,
             )
@@ -84,7 +87,7 @@ class VoxtralTTAttention:
                 state_dict=state_dict,
                 weight_key="k_norm",
                 state_dict_prefix=prefix,
-                weight_dtype=weight_dtype,
+                weight_dtype=qk_norm_weight_dtype,
                 is_distributed=None,
                 tt_ccl=None,
             )
@@ -261,8 +264,8 @@ class VoxtralTTAttention:
             "is_causal": self.is_causal if mask_tt is None else False,
             "scale": self.scale,
         }
-        if self.compute_kernel_config is not None:
-            _sdpa_kw["compute_kernel_config"] = self.compute_kernel_config
+        if self.sdpa_compute_kernel_config is not None:
+            _sdpa_kw["compute_kernel_config"] = self.sdpa_compute_kernel_config
         attn_out = ttnn.transformer.scaled_dot_product_attention(q, k_rep, v_rep, **_sdpa_kw)
         if mask_owned and mask_tt is not None:
             ttnn.deallocate(mask_tt)

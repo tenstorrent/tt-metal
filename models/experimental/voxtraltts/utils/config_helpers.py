@@ -15,5 +15,10 @@ COMPUTE_KERNEL_CONFIG_VOXTRAL_ACOUSTIC = ttnn.WormholeComputeKernelConfig(
     packer_l1_acc=True,
 )
 
-# Audio tokenizer (1024-dim conv stacks): same preset until tokenizer-specific tuning is needed.
-COMPUTE_KERNEL_CONFIG_VOXTRAL_AUDIO_TOKENIZER = COMPUTE_KERNEL_CONFIG_VOXTRAL_ACOUSTIC
+# Audio tokenizer transformer matmuls: HiFi2 decode (see audio_tokenizer_optimizations.py for full preset).
+COMPUTE_KERNEL_CONFIG_VOXTRAL_AUDIO_TOKENIZER = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi2,
+    math_approx_mode=False,
+    fp32_dest_acc_en=False,
+    packer_l1_acc=True,
+)
