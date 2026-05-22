@@ -21,6 +21,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
 void kernel_main() {
     /*
@@ -335,23 +337,51 @@ void kernel_main() {
         // Start Normalization Factor Calculation
         // Wait for final welford values in cb_ex_global_id
         cb_ex_global.wait_front(2 * num_groups);
-        cb_ex2pe.reserve_back(num_groups);
-        // (Var + eps)
-        add_tiles_init(cb_ex_global_id, cb_eps_id);
-        reconfig_data_format_srcb(cb_eps_id);
+        // (Var + eps) -> 1/sqrt(...) per group, strided cb_ex_global at offset 1+(g<<1).
+        // PARTIAL migration:
+        //   - BinaryFpu(Add, cb_ex_global, cb_eps) with A=Scalar + TileBaseRuntime(1+(g<<1))
+        //     to express the strided read; B=Scalar pinned at 0.
+        //   - Rsqrt<Legacy::On> matching rsqrt_tile_init<true> / rsqrt_tile<true>.
+        //   - PackTile cb_ex2pe<Scalar, OutBulk> per call — each call reserves+packs+pushes
+        //     1 tile to cb_ex2pe; CB write pointer advances per call. End state matches
+        //     original's "reserve(num_groups) + per-g pack + push(num_groups)".
+        // Reconfig audit: add_tiles_init + explicit reconfig_data_format_srcb(cb_eps_id)
+        //   reconfig srca/srcb -> Input. No pack_reconfig in original -> None.
+        // Lifecycles: cb_ex_global HeldBulk + Scalar + TileBaseRuntime — chain emits
+        //   cb_wait_front(cb_ex_global, base + 1) per call (≤ 2*num_groups already
+        //   waited), never pops. cb_eps CallerManaged (held by cb_eps.wait_front(1)
+        //   line 224, popped line 559).
+        // The original cb_ex2pe.reserve_back(num_groups) upfront is replaced by per-call
+        // OutBulk reserve(1) — chain BlockIter/Scalar pack policy is per-call; functionally
+        // identical (same total reserves over the same window).
         for (uint32_t g = 0; g < num_groups; ++g) {
-            tile_regs_acquire();
-            add_tiles(cb_ex_global_id, cb_eps_id, 1 + (g << 1), 0, dst0);
-
-            // 1/[sqrt(Var + eps)]
-            rsqrt_tile_init<true>();
-            rsqrt_tile<true>(dst0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(dst0, cb_ex2pe_id);
-            tile_regs_release();
+            compute_kernel_lib::eltwise_chain(
+                1,
+                compute_kernel_lib::BinaryFpu<
+                    cb_ex_global_id,
+                    cb_eps_id,
+                    compute_kernel_lib::BinaryFpuOp::Add,
+                    compute_kernel_lib::BroadcastDim::None,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::HeldBulk,
+                    compute_kernel_lib::CallerManaged,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::TileBaseRuntime,
+                    compute_kernel_lib::TileBaseNone>{
+                    compute_kernel_lib::TileBaseRuntime{1u + (g << 1)}, compute_kernel_lib::TileBaseNone{}},
+                compute_kernel_lib::Rsqrt<
+                    compute_kernel_lib::Approx::Exact,
+                    compute_kernel_lib::Legacy::On,
+                    compute_kernel_lib::Dst::D0>{},
+                compute_kernel_lib::PackTile<
+                    cb_ex2pe_id,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OutBulk,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::PackTileReconfig::None>{});
         }
-        cb_ex2pe.push_back(num_groups);
         // End Normalization Factor Calculation
 
         cb_ex2pe.wait_front(num_groups);
