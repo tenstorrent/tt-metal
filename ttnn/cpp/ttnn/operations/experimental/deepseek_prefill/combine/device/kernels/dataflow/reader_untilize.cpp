@@ -190,7 +190,7 @@ void kernel_main() {
                 cb_reserve_back(cb_metadata_batch_id, batch_count);
                 uint32_t metadata_base = get_write_ptr(cb_metadata_batch_id);
                 {
-                    DeviceZoneScopedN("METADATA-read");
+                    // DeviceZoneScopedN("METADATA-read");
                     for (uint32_t t = 0; t < batch_count; t++) {
                         noc_async_read_page(
                             metadata_batch_start + t,
@@ -214,7 +214,7 @@ void kernel_main() {
                     cb_reserve_back(cb_dispatched_buffer_id, block_ct_dim);
                     uint32_t buffer_base = get_write_ptr(cb_dispatched_buffer_id);
                     {
-                        DeviceZoneScopedN("DISPATCHED-BUFFER-read");
+                        // DeviceZoneScopedN("DISPATCHED-BUFFER-read");
                         for (uint32_t t = 0; t < block_ct_dim; t++) {
                             noc_async_read_page(
                                 batch_tile + t,
