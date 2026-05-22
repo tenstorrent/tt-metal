@@ -4,31 +4,20 @@
 
 #pragma once
 
+#include <tt-metalium/program_descriptors.hpp>
+
 #include "convert_to_chw_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::experimental::prim {
 
 struct ConvertToCHWProgramFactory {
-    struct shared_variables_t {
-        tt::tt_metal::CBHandle cb_in = 0;
-        tt::tt_metal::CBHandle cb_out = 0;
-        std::vector<CoreCoord> input_cores;
-        tt::tt_metal::KernelHandle reader_kernel_id = 0;
-        tt::tt_metal::KernelHandle writer_kernel_id = 0;
-        tt::tt_metal::KernelHandle compute_kernel_id = 0;
-        uint32_t total_tiles_per_core = 0;
-    };
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
+    // Contract (1): per-coord ProgramDescriptor.  Both input and output CBs are
+    // sharded (set_globally_allocated_address bound to their respective tensor
+    // buffers); the framework re-applies CB addresses on cache-hit via
+    // apply_descriptor_runtime_args.
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
         const ConvertToCHWParams& operation_attributes, const Tensor& tensor_args, Tensor& tensor_return_value);
-
-    static void override_runtime_arguments(
-        cached_program_t& cached_program,
-        const ConvertToCHWParams& operation_attributes,
-        const Tensor& tensor_args,
-        Tensor& output);
 };
 
 }  // namespace ttnn::experimental::prim
