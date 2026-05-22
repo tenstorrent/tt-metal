@@ -66,7 +66,7 @@ void kernel_main() {
     constexpr uint32_t cb_sum_B = tt::CBIndex::c_30;
     // matmul_reduce's separate output CB (matmul_block requires in_cb != out_cb).
     // Sized identically to cb_sum_A/B (Sq_chunk_t stats tiles, stats_df format) in the factory.
-    constexpr uint32_t cb_reduced_sum = tt::CBIndex::c_13;
+    constexpr uint32_t cb_reduced_sum = tt::CBIndex::c_23;
     constexpr uint32_t cb_exp_max_diff = tt::CBIndex::c_31;
 
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
