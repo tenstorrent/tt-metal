@@ -22,8 +22,9 @@ load this checkpoint directly. This pipeline:
     at :func:`wan_s2v_checkpoint.translate_s2v_state_dict`.
   * **Loads** the wav2vec2-large-xlsr-53 audio encoder from the bundled copy
     inside the S2V snapshot.
-  * **Builds** ``UniPCMultistepScheduler`` from scratch with the WAN default
-    ``flow_shift`` (5.0 for 720p, 3.0 for 480p).
+  * **Builds** ``UniPCMultistepScheduler`` from scratch with the S2V-specific
+    ``flow_shift=3.0`` (from ``wan_s2v_14B.py:57``: ``sample_shift = 3``).
+    Single value for S2V at all resolutions, unlike T2V (12.0) or I2V (5.0).
 
 The denoise loop and end-to-end inference are inherited from
 :meth:`WanPipeline.__call__`; ``WanS2VTransformer3DModel.prepare_cond_emb`` is

@@ -1,6 +1,17 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
-
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
+
+"""Full pipeline E2E test for ``WanPipelineS2V``.
+
+Mirrors ``tests/models/wan2_2/test_pipeline_wan.py`` (T2V pipeline E2E)
+at the same granularity. Runs the full S2V inference pipeline end-to-end,
+exports a ``.mp4`` with audio, validates output shape and range.
+
+No numerical PCC bar — output is a video, not a tensor we can compare.
+Smoke + visual verification only.
+"""
+
+from __future__ import annotations
 
 import os
 
@@ -19,14 +30,13 @@ from .....utils.test import line_params, ring_params
 # Override with env vars when needed.
 _REF_IMAGE_PATH = os.environ.get("S2V_REF_IMAGE", "./prompt_image.png")
 _AUDIO_PATH = os.environ.get("S2V_AUDIO", "./prompt_audio.wav")
+_PROMPT = "a person is talking"
 _NEGATIVE_PROMPT = (
-    # s2v_14B-specific negative prompt from wan_s2v_14B.py:55 (overrides
-    # the shared_config default used by T2V/I2V).
+    # s2v_14B-specific negative prompt from reference wan_s2v_14B.py:55.
     "画面模糊，最差质量，画面模糊，细节模糊不清，情绪激动剧烈，手快速抖动，字幕，丑陋的，残缺的，"
     "多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，"
     "静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
 )
-_PROMPT = "a person is talking"
 
 
 @pytest.mark.timeout(1800)
@@ -58,7 +68,7 @@ _PROMPT = "a person is talking"
             False,
             id="bh_2x4sp1tp0",
         ),
-        # BH Galaxy (4x8, 32 chips) — sp_factor=8, tp_factor=4. Ring fabric matches t2v/i2v.
+        # BH Galaxy (4x8, 32 chips) — sp_factor=8, tp_factor=4. Ring fabric.
         pytest.param(
             (4, 8),
             (4, 8),
@@ -79,12 +89,11 @@ _PROMPT = "a person is talking"
     "width, height",
     [
         (832, 480),
+        (1280, 720),
     ],
-    ids=[
-        "resolution_480p",
-    ],
+    ids=["resolution_480p", "resolution_720p"],
 )
-def test_pipeline_inference(
+def test_pipeline_inference_s2v(
     mesh_device,
     mesh_shape,
     sp_axis,
@@ -97,15 +106,15 @@ def test_pipeline_inference(
     is_fsdp,
     sdpa_t_fracture_w_only,
 ):
+    """End-to-end S2V inference: encoder + diffusion + VAE decode + video export."""
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
     ref_image = PIL.Image.open(_REF_IMAGE_PATH)
 
-    # ``num_clips`` matches the reference's per-clip ``infer_frames=80``
-    # (speech2video.py:404). Unset env → ``None`` so the pipeline uses
-    # ``num_repeat`` (one clip per 5 s of audio, derived from the
-    # canonicalized waveform). Pass ``S2V_CLIPS=1`` for a smoke-test budget.
+    # ``num_clips`` matches reference per-clip ``infer_frames=80`` (speech2video.py:404).
+    # Unset env → ``None`` so pipeline uses ``num_repeat`` (one clip per 5 s of audio).
+    # Pass ``S2V_CLIPS=1`` for a smoke-test budget.
     _clips_env = os.environ.get("S2V_CLIPS")
     num_clips = int(_clips_env) if _clips_env is not None else None
     num_inference_steps = int(os.environ.get("S2V_STEPS", 40))
@@ -122,7 +131,7 @@ def test_pipeline_inference(
         sdpa_t_fracture_w_only=sdpa_t_fracture_w_only,
         height=height,
         width=width,
-        num_frames=81,  # reserved hook into create_pipeline's config-loading path
+        num_frames=81,
     )
 
     logger.info(f"Running S2V inference: {height}x{width}, {num_clips} clips, {num_inference_steps} steps")

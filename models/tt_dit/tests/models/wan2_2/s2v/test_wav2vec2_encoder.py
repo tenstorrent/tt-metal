@@ -1,10 +1,16 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""PCC test for wav2vec2-large-xlsr-53-english using the weights bundled in
-``Wan-AI/Wan2.2-S2V-14B`` (the production audio encoder). Exercises the
+"""Parity test for wav2vec2-large-xlsr-53-english (production S2V audio encoder).
+
+Uses the weights bundled in ``Wan-AI/Wan2.2-S2V-14B``. Exercises the
 ``feat_extract_norm="layer"`` + ``do_stable_layer_norm=True`` code paths.
+
+Skips if the bundled HF cache is not present. PCC ≥ 0.99 against the HF
+``Wav2Vec2Model.last_hidden_state`` reference.
 """
+
+from __future__ import annotations
 
 from pathlib import Path
 
@@ -21,10 +27,9 @@ from .....parallel.config import EncoderParallelConfig, ParallelFactor
 from .....parallel.manager import CCLManager
 from .....utils.check import assert_quality
 from .....utils.tensor import to_torch
-from .....utils.test import line_params
+from .....utils.test import line_params, ring_params
 
 
-# Resolve the bundled large-xlsr-53 weights inside the S2V download.
 def _bundled_wav2vec2_path() -> Path | None:
     base = Path.home() / ".cache/huggingface/hub/models--Wan-AI--Wan2.2-S2V-14B/snapshots"
     if not base.exists():
@@ -46,7 +51,8 @@ _BUNDLED_PATH = _bundled_wav2vec2_path()
 @pytest.mark.parametrize(
     ("mesh_device", "tp_axis", "num_links", "device_params", "topology"),
     [
-        pytest.param((4, 8), 0, 2, line_params, ttnn.Topology.Linear, id="bh_4x8_tp0"),
+        pytest.param((2, 4), 0, 2, line_params, ttnn.Topology.Linear, id="bh_2x4_tp0"),
+        pytest.param((4, 8), 0, 2, ring_params, ttnn.Topology.Ring, id="bh_4x8_tp0"),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -54,9 +60,10 @@ _BUNDLED_PATH = _bundled_wav2vec2_path()
     "audio_samples",
     [
         pytest.param(16000, id="1s"),
+        pytest.param(32000, id="2s"),
     ],
 )
-def test_wav2vec2_encoder(
+def test_wav2vec2_encoder_s2v(
     mesh_device: ttnn.MeshDevice,
     tp_axis: int,
     num_links: int,

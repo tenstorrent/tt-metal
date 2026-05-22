@@ -1,10 +1,15 @@
-"""Direct PCC test for the on-device AdaIN modulation path.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 
-Verifies that the ColParallelLinear + chunk + E-matmul flow in
+"""Parity test for the on-device AdaIN modulation path.
+
+Verifies that the ``ColParallelLinear`` + ``chunk`` + ``E``-matmul flow in
 ``WanS2VTransformer3DModel._build_adain_modulation_for_layer`` produces
-shift/scale tensors that match a torch reference. Catches subtle issues
-in the weight-interleave fix (``prepare_chunked_linear_output``) or in
-how the TP-sharded projection composes with the SP-sharded E matrix.
+shift/scale tensors that match a torch reference.
+
+Catches subtle issues in the chunk-on-shard weight interleave fix
+(``prepare_chunked_linear_output``) and in how the TP-sharded projection
+composes with the SP-sharded ``E`` matrix.
 """
 
 from __future__ import annotations
@@ -17,45 +22,45 @@ import ttnn
 
 from .....layers.linear import prepare_chunked_linear_output
 from .....models.transformers.wan2_2.s2v.audio_utils import AdaLayerNormZero
+from .....parallel.manager import CCLManager
 from .....utils.check import assert_quality
 from .....utils.tensor import bf16_tensor, local_device_to_torch
-from .....utils.test import ring_params
+from .....utils.test import line_params, ring_params
 
 
 @pytest.mark.parametrize(
-    ("mesh_device", "mesh_shape", "sp_axis", "tp_axis", "device_params", "topology"),
+    ("mesh_device", "mesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology"),
     [
-        pytest.param(
-            (4, 8),
-            (4, 8),
-            1,
-            0,
-            ring_params,
-            ttnn.Topology.Ring,
-            id="bh_4x8sp1tp0",
-        ),
+        # 2x4 BH-LB (tp_factor=2): chunk-on-shard with 2 chips. Less interesting
+        # than 4x8 but verifies the math works at the smaller TP factor too.
+        pytest.param((2, 4), (2, 4), 1, 0, 2, line_params, ttnn.Topology.Linear, id="bh_2x4sp1tp0"),
+        # 4x8 BH-GLX (tp_factor=4): the production configuration; tightest test.
+        pytest.param((4, 8), (4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, id="bh_4x8sp1tp0"),
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_adain_projection_pcc(
+def test_adain_projection_s2v(
     mesh_device: ttnn.MeshDevice,
     mesh_shape: tuple[int, int],
     sp_axis: int,
     tp_axis: int,
+    num_links: int,
     topology: ttnn.Topology,
 ) -> None:
-    """``silu(audio) @ W + b`` via ColParallelLinear then chunk on last axis.
+    """``silu(audio) @ W + b`` via ColParallelLinear → chunk on last axis.
 
     Each chip's chunked output must equal the corresponding slice of the
     torch reference's ``(shift, scale)`` produced from a regular Linear
-    projection.
+    projection. Then the full ``E @ extended`` expansion is gathered and
+    compared against a host-only repeat-interleave reference.
     """
     torch.manual_seed(0)
+    parent_mesh = mesh_device
+    mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
     adain_dim = 1024
     dim = 5120  # 14B model dim
     tp_factor = tuple(mesh_device.shape)[tp_axis]
-    assert tp_factor == 4, f"this test assumes tp_factor=4 (got {tp_factor})"
     T_video = 16  # canonical S2V
 
     # ---- Build torch reference ----
@@ -64,10 +69,10 @@ def test_adain_projection_pcc(
     b_torch = torch.randn(2 * dim, dtype=torch.float32) * 0.02
 
     silu = torch.nn.functional.silu(audio_emb_torch)
-    proj_ref = silu @ W_torch.transpose(0, 1) + b_torch  # [1,1,T_video,2*dim]
-    shift_ref, scale_ref = proj_ref.chunk(2, dim=-1)  # each [1,1,T_video,dim]
+    proj_ref = silu @ W_torch.transpose(0, 1) + b_torch
+    shift_ref, scale_ref = proj_ref.chunk(2, dim=-1)
 
-    # ---- Build AdaLayerNormZero on device and load via state-dict path ----
+    # ---- Build AdaLayerNormZero on device, load via state-dict path ----
     adain = AdaLayerNormZero(
         dim=dim,
         adain_dim=adain_dim,
@@ -76,43 +81,26 @@ def test_adain_projection_pcc(
     )
     adain.load_torch_state_dict({"linear.weight": W_torch.clone(), "linear.bias": b_torch.clone()})
 
-    # ---- Run on-device forward ----
+    # ---- Run on-device projection ----
     audio_emb_dev = bf16_tensor(audio_emb_torch, device=mesh_device, layout=ttnn.TILE_LAYOUT)
     proj_dev = adain.linear(ttnn.silu(audio_emb_dev))
     shift_pf_dev, scale_pf_dev = ttnn.chunk(proj_dev, 2, dim=-1)
 
-    # ---- Gather TP-sharded chunks back to host and reassemble ----
-    # Each chip i should hold shift[..., i*dim/tp:(i+1)*dim/tp] and
-    # scale[..., i*dim/tp:(i+1)*dim/tp] in its local slice.
-    shift_pf_host = local_device_to_torch(shift_pf_dev).float()
-    scale_pf_host = local_device_to_torch(scale_pf_dev).float()
-    logger.info(f"shift_pf local shape: {tuple(shift_pf_host.shape)}")
-    logger.info(f"scale_pf local shape: {tuple(scale_pf_host.shape)}")
-
-    # local_device_to_torch returns chip 0's local tensor. To compare full,
-    # we need to gather. Easier: assemble manually by reading each tp slice.
-    # Use ttnn.experimental all_gather then re-pull, or pull each chip via mesh API.
-
-    # Simplest: ttnn-side all_gather along last axis (TP) and pull back.
-    full_grid = mesh_device.compute_with_storage_grid_size()
-    from .....parallel.manager import CCLManager
-
-    ccl = CCLManager(mesh_device=mesh_device, num_links=2, topology=topology)
+    ccl = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
     shift_gather = ccl.all_gather_persistent_buffer(shift_pf_dev, dim=-1, mesh_axis=tp_axis)
     scale_gather = ccl.all_gather_persistent_buffer(scale_pf_dev, dim=-1, mesh_axis=tp_axis)
-    shift_tt = local_device_to_torch(shift_gather).float()  # [1,1,T_video,dim]
+    shift_tt = local_device_to_torch(shift_gather).float()
     scale_tt = local_device_to_torch(scale_gather).float()
     logger.info(f"shift gathered shape: {tuple(shift_tt.shape)}")
 
     assert_quality(shift_tt, shift_ref, pcc=0.99)
     assert_quality(scale_tt, scale_ref, pcc=0.99)
 
-    # ---- Now exercise the full production path: concat + E @ ext ----
-    # Build E manually for a simulated noisy_len + const_len shape, mimicking
-    # _build_adain_expansion_tensors. Production uses padded shapes; we use
-    # un-padded for simplicity since this test focuses on numerical fidelity.
+    # ---- Exercise the full E @ extended pipeline ----
+    # Per-token modulation: each spatial token of frame t picks up row t's
+    # (shift, scale) projection; const/pad tokens pick up identity (0, 1).
     noisy_len = T_video * 64  # 16 frames × 64 hw tokens/frame
-    padded_N = noisy_len  # no padding for this test
+    padded_N = noisy_len
     hw_per_frame = noisy_len // T_video
 
     E_torch = torch.zeros(padded_N, T_video + 1, dtype=torch.float32)
@@ -145,7 +133,6 @@ def test_adain_projection_pcc(
     shift_full_dev = ttnn.matmul(E_tt, shift_ext)
     scale_full_dev = ttnn.matmul(E_tt, scale_ext)
 
-    # Gather across both SP and TP to get full [1, 1, padded_N, dim] on host.
     shift_full_tp = ccl.all_gather_persistent_buffer(shift_full_dev, dim=-1, mesh_axis=tp_axis)
     shift_full_full = ccl.all_gather_persistent_buffer(shift_full_tp, dim=-2, mesh_axis=sp_axis)
     scale_full_tp = ccl.all_gather_persistent_buffer(scale_full_dev, dim=-1, mesh_axis=tp_axis)
@@ -153,20 +140,23 @@ def test_adain_projection_pcc(
     shift_full_host = local_device_to_torch(shift_full_full).float()
     scale_full_host = local_device_to_torch(scale_full_full).float()
 
-    shift_full_ref = shift_ref.squeeze(0).squeeze(0).repeat_interleave(hw_per_frame, dim=0)  # [noisy_len, dim]
+    shift_full_ref = shift_ref.squeeze(0).squeeze(0).repeat_interleave(hw_per_frame, dim=0)
     scale_full_ref = (scale_ref + 1.0).squeeze(0).squeeze(0).repeat_interleave(hw_per_frame, dim=0)
-    shift_full_ref = shift_full_ref.unsqueeze(0).unsqueeze(0)  # [1,1,noisy_len,dim]
+    shift_full_ref = shift_full_ref.unsqueeze(0).unsqueeze(0)
     scale_full_ref = scale_full_ref.unsqueeze(0).unsqueeze(0)
 
-    logger.info(f"shift_full device shape: {tuple(shift_full_host.shape)}")
-    logger.info(f"shift_full ref shape:    {tuple(shift_full_ref.shape)}")
+    logger.info(f"shift_full device shape: {tuple(shift_full_host.shape)} (tp_factor={tp_factor})")
     assert_quality(shift_full_host, shift_full_ref, pcc=0.99)
     assert_quality(scale_full_host, scale_full_ref, pcc=0.99)
 
 
-def test_prepare_chunked_linear_output_cpu_correctness() -> None:
-    """Pure-CPU verification that the permutation logic produces correct chunks
-    after a contiguous-axis shard. Catches the chunks-vs-device interleave bug.
+def test_prepare_chunked_linear_output_s2v() -> None:
+    """Pure-CPU verification of the permutation logic that ``AdaLayerNormZero``
+    relies on. No device involved — fast safety net for the chunk-on-shard
+    transformation rule.
+
+    See [[project-adain-colparallel-fix]] for the canonical bug this guards
+    against (chunks-vs-device interleave).
     """
     torch.manual_seed(0)
     dim = 5120
@@ -179,19 +169,18 @@ def test_prepare_chunked_linear_output_cpu_correctness() -> None:
     b = torch.randn(out_features, dtype=torch.float32) * 0.02
     state = {"linear.weight": W.clone(), "linear.bias": b.clone()}
     prepare_chunked_linear_output(state, prefix="linear", device_count=tp_factor, chunks=chunks)
-    W_p = state["linear.weight"]  # [out, in], permuted
+    W_p = state["linear.weight"]
     b_p = state["linear.bias"]
 
-    # Reference shift/scale from the ORIGINAL weight
     x = torch.randn(2, in_features, dtype=torch.float32)
     ref_proj = x @ W.transpose(0, 1) + b
     ref_shift, ref_scale = ref_proj.chunk(2, dim=-1)
 
-    # Simulate ColParallel: transpose then shard last axis
-    W_post = W_p.transpose(0, 1)  # [in, 2*dim]
-    proj = x @ W_post + b_p  # [2, 2*dim]
-    out_per_chip = out_features // tp_factor  # 2560
-    dim_per_chip = dim // tp_factor  # 1280
+    # Simulate ColParallel: transpose then shard last axis.
+    W_post = W_p.transpose(0, 1)
+    proj = x @ W_post + b_p
+    out_per_chip = out_features // tp_factor
+    dim_per_chip = dim // tp_factor
 
     shift_assembled = torch.empty(*proj.shape[:-1], dim)
     scale_assembled = torch.empty(*proj.shape[:-1], dim)

@@ -3,8 +3,9 @@
 
 """Performance benchmark for the multi-clip S2V pipeline.
 
-Reports per-clip and aggregate wall-clock for each stage emitted by
-``WanPipelineS2V.__call__``:
+Mirrors ``tests/models/wan2_2/test_performance_wan.py`` (T2V perf benchmark)
+at the same granularity. Reports per-clip and aggregate wall-clock for each
+stage emitted by ``WanPipelineS2V.__call__``:
 
   * ``encoder``                       — UMT5 text encoder forward (once).
   * ``prepare_latents``               — wav2vec2 + audio bucketing + ref VAE
@@ -15,6 +16,8 @@ Reports per-clip and aggregate wall-clock for each stage emitted by
   * ``s2v_clip_{r}_vae_decode``       — VAE decode (per clip).
   * ``s2v_clip_{r}_vae_encode_motion``— VAE encode of next-clip motion (per clip).
 """
+
+from __future__ import annotations
 
 import os
 import statistics
@@ -31,8 +34,6 @@ from models.tt_dit.pipelines.wan.pipeline_wan_s2v import WanPipelineS2V
 
 from .....utils.test import line_params, ring_params_8k
 
-# Inputs are expected at the repo root (same pattern as test_pipeline_wan_i2v.py).
-# Override with env vars when needed.
 _REF_IMAGE_PATH = os.environ.get("S2V_REF_IMAGE", "./prompt_image.png")
 _AUDIO_PATH = os.environ.get("S2V_AUDIO", "./prompt_audio.wav")
 _PROMPT = "a person is talking"
@@ -57,49 +58,22 @@ _NEGATIVE_PROMPT = (
         "is_fsdp",
     ),
     [
-        pytest.param(
-            (2, 4),
-            (2, 4),
-            1,
-            0,
-            2,
-            False,
-            line_params,
-            ttnn.Topology.Linear,
-            False,
-            id="bh_2x4sp1tp0",
-        ),
-        pytest.param(
-            (4, 8),
-            (4, 8),
-            1,
-            0,
-            2,
-            False,
-            ring_params_8k,
-            ttnn.Topology.Ring,
-            False,
-            id="bh_4x8sp1tp0",
-        ),
+        pytest.param((2, 4), (2, 4), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False, id="bh_2x4sp1tp0"),
+        pytest.param((4, 8), (4, 8), 1, 0, 2, False, ring_params_8k, ttnn.Topology.Ring, False, id="bh_4x8sp1tp0"),
     ],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
     "width, height",
-    [(832, 480)],
-    ids=["resolution_480p"],
+    [
+        (832, 480),
+        (1280, 720),
+    ],
+    ids=["resolution_480p", "resolution_720p"],
 )
-@pytest.mark.parametrize(
-    "num_inference_steps",
-    [1, 5, 40],
-    ids=["steps1", "steps5", "steps40"],
-)
-@pytest.mark.parametrize(
-    "num_clips",
-    [1, 4],
-    ids=["clips1", "clips4"],
-)
-def test_s2v_pipeline_performance(
+@pytest.mark.parametrize("num_inference_steps", [1, 5, 40], ids=["steps1", "steps5", "steps40"])
+@pytest.mark.parametrize("num_clips", [1, 4], ids=["clips1", "clips4"])
+def test_pipeline_performance_s2v(
     *,
     mesh_device: ttnn.MeshDevice,
     mesh_shape: tuple,
@@ -114,7 +88,7 @@ def test_s2v_pipeline_performance(
     num_inference_steps: int,
     num_clips: int,
 ) -> None:
-    """Multi-clip performance breakdown for WanPipelineS2V."""
+    """Multi-clip performance breakdown."""
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
@@ -138,13 +112,11 @@ def test_s2v_pipeline_performance(
         sdpa_t_fracture_w_only=False,
         height=height,
         width=width,
-        num_frames=81,  # reserved hook into create_pipeline's config-loading path
+        num_frames=81,
     )
 
     ref_image = PIL.Image.open(_REF_IMAGE_PATH)
-
     profiler = BenchmarkProfiler()
-
     ttnn.synchronize_device(mesh_device)
 
     logger.info(f"S2V performance run: num_clips={num_clips}, steps={num_inference_steps}")
@@ -259,9 +231,7 @@ def test_s2v_pipeline_performance(
 
     print()
     print("DENOISE-LOOP AGGREGATES")
-    print(
-        f"  Total denoise:                       {sum_denoise:8.3f}s   {sum_denoise / total_denoise_steps:6.3f}s/step"
-    )
+    print(f"  Total denoise: {sum_denoise:8.3f}s   {sum_denoise / total_denoise_steps:6.3f}s/step")
 
     if total > 0:
         print()
