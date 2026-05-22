@@ -15,7 +15,8 @@ from models.demos.deepseek_v3.utils.test_utils import create_prompt_of_length, s
 MODEL_PATH = Path(
     os.getenv("DEEPSEEK_V3_HF_MODEL", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked")
 )
-CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"))
+_ds_cache = os.getenv("DEEPSEEK_V3_CACHE")
+CACHE_DIR = Path(_ds_cache) if _ds_cache else None
 PERF_MARGIN = 0.08
 FINAL_DECODE_TPS_PER_USER = "decode_t/s/u"
 QUAD_FULL_DEMO_32UPR_DECODE_TPS_PER_USER = 7.75630117021217
