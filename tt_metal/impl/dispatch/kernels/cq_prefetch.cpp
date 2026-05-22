@@ -791,7 +791,7 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
 
                 // DPRINT << "fetch_q_get_cmds: RETIRE_START -> NOC_ASYNC_READ_BARRIER_WITH_TRID trid=" <<
                 // inflight[idx].trid << ENDL();
-                noc_async_read_barrier_with_trid(inflight[idx].trid);
+                noc_async_read_barrier();
 
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
                 // On Quasar, NoC writes land in TL1 but don't invalidate the DM core's L1 D$/L2
