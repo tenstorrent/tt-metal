@@ -9,6 +9,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
+#include "tools/profiler/kernel_profiler.hpp"
 
 #define ENABLE_DISPATCH_DEBUG 0
 
@@ -168,56 +169,63 @@ void kernel_main() {
     const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address);
 
     // Sentinel-terminated fabric send loop
-    while (true) {
-        cb_wait_front(cb_route_info_id, 1);
-        volatile tt_l1_ptr uint32_t* route_info =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_route_info_id));
+    {
+        DeviceZoneScopedSumN1("main_writer_loop");
+        while (true) {
+            cb_wait_front(cb_route_info_id, 1);
+            volatile tt_l1_ptr uint32_t* route_info =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_route_info_id));
 
-        uint32_t route = route_info[0];
-        if (route == ROUTE_INFO_SENTINEL) {
+            uint32_t route = route_info[0];
+            if (route == ROUTE_INFO_SENTINEL) {
+                cb_pop_front(cb_route_info_id, 1);
+                break;
+            }
+            uint32_t distance = route_info[1];
+            uint32_t page_idx = route_info[2];
             cb_pop_front(cb_route_info_id, 1);
-            break;
-        }
-        uint32_t distance = route_info[1];
-        uint32_t page_idx = route_info[2];
-        cb_pop_front(cb_route_info_id, 1);
 
-        cb_wait_front(cb_payload_for_writer_id, 1);
-        cb_wait_front(cb_metadata_for_writer_id, 1);
-        uint32_t payload_addr = get_read_ptr(cb_payload_for_writer_id);
-        uint32_t metadata_addr = get_read_ptr(cb_metadata_for_writer_id);
+            cb_wait_front(cb_payload_for_writer_id, 1);
+            cb_wait_front(cb_metadata_for_writer_id, 1);
+            uint32_t payload_addr = get_read_ptr(cb_payload_for_writer_id);
+            uint32_t metadata_addr = get_read_ptr(cb_metadata_for_writer_id);
 
-        DPRINT_DISPATCH << "Fabric send: route=" << route << " distance=" << distance << " page_idx=" << page_idx
-                        << ENDL();
+            DPRINT_DISPATCH << "Fabric send: route=" << route << " distance=" << distance << " page_idx=" << page_idx
+                            << ENDL();
 
 #ifdef DEST_CHIP_ID
-        // Send payload
-        fabric_set_unicast_route<false>((volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
-        fabric_send_noc_unicast<fabric_max_packet_size>(
-            output_addr_gen,
-            fabric_connections[route],
-            unicast_packet_header,
-            payload_addr,
-            page_idx,
-            (int)aligned_output_page_size,
-            l1_alignment);
+            {
+                DeviceZoneScopedSumN2("fabric_send");
+                // Send payload
+                fabric_set_unicast_route<false>(
+                    (volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
+                fabric_send_noc_unicast<fabric_max_packet_size>(
+                    output_addr_gen,
+                    fabric_connections[route],
+                    unicast_packet_header,
+                    payload_addr,
+                    page_idx,
+                    (int)aligned_output_page_size,
+                    l1_alignment);
 
-        // Send metadata
-        fabric_set_unicast_route<false>((volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
-        fabric_send_noc_unicast<fabric_max_packet_size>(
-            metadata_addr_gen,
-            fabric_connections[route],
-            unicast_packet_header,
-            metadata_addr,
-            page_idx,
-            (int)aligned_metadata_page_size,
-            l1_alignment);
-        noc_async_writes_flushed();  // Ensure payload+metadata departed L1 before freeing CB slots
-
+                // Send metadata
+                fabric_set_unicast_route<false>(
+                    (volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
+                fabric_send_noc_unicast<fabric_max_packet_size>(
+                    metadata_addr_gen,
+                    fabric_connections[route],
+                    unicast_packet_header,
+                    metadata_addr,
+                    page_idx,
+                    (int)aligned_metadata_page_size,
+                    l1_alignment);
+                noc_async_writes_flushed();  // Ensure payload+metadata departed L1 before freeing CB slots
+            }
 #endif
 
         cb_pop_front(cb_payload_for_writer_id, 1);
         cb_pop_front(cb_metadata_for_writer_id, 1);
+        }
     }
 
 #ifdef DEST_CHIP_ID
