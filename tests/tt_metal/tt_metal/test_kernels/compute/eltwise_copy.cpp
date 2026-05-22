@@ -18,7 +18,8 @@ void kernel_main() {
     CircularBuffer cb0(tt::CBIndex::c_0);
     CircularBuffer cb16(tt::CBIndex::c_16);
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
-        acquire_dst();
+        tile_regs_acquire();
+        tile_regs_wait();
 
         cb0.wait_front(1);
         cb16.reserve_back(1);
@@ -27,6 +28,7 @@ void kernel_main() {
         cb0.pop_front(1);
         cb16.push_back(1);
 
-        release_dst();
+        tile_regs_commit();
+        tile_regs_release();
     }
 }

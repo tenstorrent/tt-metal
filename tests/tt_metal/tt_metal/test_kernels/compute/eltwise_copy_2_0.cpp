@@ -27,7 +27,8 @@ void kernel_main() {
     DataflowBuffer dfb_in(dfb::in);
     DataflowBuffer dfb_out(dfb::out);
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
-        acquire_dst();
+        tile_regs_acquire();
+        tile_regs_wait();
 
         dfb_in.wait_front(1);
         dfb_out.reserve_back(1);
@@ -36,6 +37,7 @@ void kernel_main() {
         dfb_in.pop_front(1);
         dfb_out.push_back(1);
 
-        release_dst();
+        tile_regs_commit();
+        tile_regs_release();
     }
 }

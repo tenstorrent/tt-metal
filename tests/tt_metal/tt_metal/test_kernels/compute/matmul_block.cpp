@@ -39,7 +39,8 @@ void kernel_main() {
     mm_block_init(dfb::in0, dfb::in1, dfb::out, false, dst_tile_cols, dst_tile_rows, block_tile_dim);
 #endif
 
-    acquire_dst();
+    tile_regs_acquire();
+    tile_regs_wait();
     for (uint32_t b = 0; b < block_cnt; ++b) {
         dfb0.wait_front(in0_block_tile_cnt);
         dfb1.wait_front(in1_block_tile_cnt);
@@ -55,5 +56,6 @@ void kernel_main() {
         pack_tile(i, dfb::out);
     }
     dfb_out.push_back(out_block_tile_cnt);
-    release_dst();
+    tile_regs_commit();
+    tile_regs_release();
 }

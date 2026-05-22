@@ -22,7 +22,8 @@ void kernel_main() {
     for (uint32_t b = 0; b < outer_loop; ++b) {
         dfb_in.wait_front(num_single_transfer);
         dfb_out.reserve_back(num_single_transfer);
-        acquire_dst();
+        tile_regs_acquire();
+        tile_regs_wait();
 
         for (uint32_t i = 0; i < num_single_transfer; ++i) {
             copy_block_matmul_partials(dfb::in, i, i, 1);
@@ -30,7 +31,8 @@ void kernel_main() {
 
         pack_tile_block(0, dfb::out, num_single_transfer);
 
-        release_dst();
+        tile_regs_commit();
+        tile_regs_release();
         dfb_in.pop_front(num_single_transfer);
         dfb_out.push_back(num_single_transfer);
     }

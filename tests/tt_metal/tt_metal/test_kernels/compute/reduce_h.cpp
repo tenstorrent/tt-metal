@@ -28,7 +28,8 @@ void kernel_main() {
             // tiles are expected to be coming in in NCWH order (H-contiguous)
             // reducing in W means out[0][w] = sum(h=0..H-1, in[h][w])
             // in this case we just sequentially add to accumulator all the H-tiles in a column
-            acquire_dst();
+            tile_regs_acquire();
+            tile_regs_wait();
             for (uint32_t ht = 0; ht < Ht; ++ht) {
                 dfb_in.wait_front(onetile);
 #if (MATH_ONLY == 1)
@@ -48,7 +49,8 @@ void kernel_main() {
             dfb_out.reserve_back(onetile);
             pack_tile(reduce_dst_idx, dfb::out);
             dfb_out.push_back(onetile);
-            release_dst();
+            tile_regs_commit();
+            tile_regs_release();
         }
     }
     reduce_uninit();

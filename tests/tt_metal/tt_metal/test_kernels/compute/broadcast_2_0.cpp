@@ -30,7 +30,8 @@ void kernel_main() {
 
     dfb1.wait_front(onetile);
     dfb_out.reserve_back(onetile);
-    acquire_dst();
+    tile_regs_acquire();
+    tile_regs_wait();
     dfb0.wait_front(onetile);
 
 #ifndef BCAST_SPECIFIC
@@ -54,7 +55,8 @@ void kernel_main() {
     pack_tile(0, ocb);
 
     dfb0.pop_front(onetile);
-    release_dst();
+    tile_regs_commit();
+    tile_regs_release();
     dfb_out.push_back(onetile);
     dfb1.pop_front(onetile);
 }

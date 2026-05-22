@@ -24,7 +24,8 @@ void kernel_main() {
     dfb_in_scaler.wait_front(onetile);
     for (uint32_t nc = 0; nc < NC; nc++) {
         int reduce_dst_idx = 0;
-        acquire_dst();
+        tile_regs_acquire();
+        tile_regs_wait();
         for (uint32_t ht = 0; ht < Ht; ++ht) {
             // tiles are expected to be coming in in NCHW order (W-contiguous)
             // reducing in W means out[h][0] = sum(w=0..W-1, in[h][w])
@@ -49,7 +50,8 @@ void kernel_main() {
         dfb_out.reserve_back(onetile);
         pack_tile(reduce_dst_idx, dfb::out);
         dfb_out.push_back(onetile);
-        release_dst();
+        tile_regs_commit();
+        tile_regs_release();
     }
     reduce_uninit();
 }
