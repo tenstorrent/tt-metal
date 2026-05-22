@@ -84,6 +84,17 @@ void add_inplace_l1_acc(uint32_t inout_cb, uint32_t add_cb) {
             cb_reserve_back(inout_cb, cols_cur);
             tile_regs_wait();
             for (uint32_t j = 0; j < cols_cur; ++j) {
+#if defined(ARCH_WORMHOLE)
+                // tt-metal #44077: WH pack_tile reprograms the packer L1 destination.
+                // Without this stall, the next pack_tile can rewrite the destination
+                // address while the previous pack is still in flight, corrupting the
+                // L1_ACC into a different tile. Restored from PR #44079 (originally
+                // a kernel-local pack_tile_with_wh_destination_wait wrapper, lost
+                // during the matmul-helper migration).
+                if (j != 0) {
+                    PACK(TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::PACK));
+                }
+#endif
                 pack_tile<true>(j, inout_cb, j);
             }
             cb_push_back(inout_cb, cols_cur);

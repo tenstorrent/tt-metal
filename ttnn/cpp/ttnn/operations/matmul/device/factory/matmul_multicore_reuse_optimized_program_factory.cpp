@@ -9,7 +9,10 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 
+#include <map>
+#include <string>
 #include "ttnn/operations/compute_throttle_utils.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 
 using namespace tt;
@@ -188,7 +191,17 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         num_blocks_per_core_group_1 *= batch_scale_factor;
         num_blocks_per_core_group_2 *= batch_scale_factor;
     } else {
-        CoreCoord grid = program_config.compute_with_storage_grid_size;
+        if (!program_config.allowed_worker_cores.has_value()) {
+            log_warning(
+                tt::LogOp,
+                "MatmulMultiCoreReuseOptimizedProgramFactory: program_config.allowed_worker_cores not populated; "
+                "falling back to compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() should "
+                "invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This "
+                "will become a hard error in a future release.");
+        }
+        CoreCoord grid = program_config.allowed_worker_cores.has_value()
+                             ? program_config.allowed_worker_cores.value().bounding_box().grid_size()
+                             : program_config.compute_with_storage_grid_size;
         std::tie(
             num_cores,
             all_cores,
@@ -263,10 +276,6 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
     if (output_is_sharded) {
         reader_writer_defines.emplace_back("OUT_SHARDED", "1");
     }
-    // Writer reads tiles in row-major order per row-group, matching the absolute-offset
-    // pack strategy this factory enables on the compute side. Other factories that share
-    // this writer source don't emit the define and rely on the subblock-order path.
-    reader_writer_defines.emplace_back("TILE_PACK_ROW_MAJOR", "1");
 
     // Blackhole intermediate CB read workaround
     bool in0_needs_intermediate_cb_read = false;
@@ -317,17 +326,22 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
     };
 
     // Compute defines
-    KernelDescriptor::Defines compute_defines;
-    compute_defines.emplace_back("TILE_PACK_ROW_MAJOR", "1");
+    std::map<std::string, std::string> mm_kernel_defines;
     if (packer_l1_acc_en) {
-        compute_defines.emplace_back("PACKER_L1_ACC", "1");
+        mm_kernel_defines["PACKER_L1_ACC"] = "1";
     }
     if (fp32_dest_acc_en) {
-        compute_defines.emplace_back("FP32_DEST_ACC_EN", "1");
+        mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
     }
     if (in1_transpose_tile) {
-        compute_defines.emplace_back("IN1_TRANSPOSE_TILE", "1");
+        mm_kernel_defines["IN1_TRANSPOSE_TILE"] = "1";
     }
+    const auto throttle_level = ttnn::get_throttle_level(operation_attributes.compute_kernel_config);
+    ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
+        device->arch(), num_cores, mm_kernel_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(), num_cores, mm_kernel_defines, throttle_level);
+    KernelDescriptor::Defines compute_defines{mm_kernel_defines.begin(), mm_kernel_defines.end()};
 
     // Build per-core runtime args
     bool row_major = false;
@@ -423,7 +437,10 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
     compute_kernel_desc.defines = compute_defines;
     compute_kernel_desc.runtime_args = std::move(compute_runtime_args_g1);
     compute_kernel_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode};
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .math_approx_mode = math_approx_mode};
     program_descriptor.kernels.push_back(std::move(compute_kernel_desc));
 
     // Core group 2 compute kernel (if needed)
@@ -460,7 +477,10 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         compute_kernel_desc_g2.defines = compute_defines;
         compute_kernel_desc_g2.runtime_args = std::move(compute_runtime_args_g2);
         compute_kernel_desc_g2.config = ComputeConfigDescriptor{
-            .math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode};
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = dst_full_sync_en,
+            .math_approx_mode = math_approx_mode};
         program_descriptor.kernels.push_back(std::move(compute_kernel_desc_g2));
     }
 
@@ -502,24 +522,11 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         in1_tile,
         in1_is_sharded ? in1_buffer : nullptr));
 
-    // CB 4 (output) and CB 5 (K-block partials). Default layout overlays both
-    // indices on the same L1 bytes: the tile_pack_row_major helper pops partials
-    // from c_5 before packing the final output to c_4, so only one view holds
-    // live data at a time. This halves the output+partials L1 footprint vs
-    // separate CBs and is load-bearing on wormhole_b0 (L1 = 1,499,136 B) —
-    // without it, configs with large per_core_M × per_core_N (e.g. the
-    // canonical MatmulMultiCoreReuseProgramConfig per_core_M=32, per_core_N=16)
-    // overflow L1 by ~1 MB.
-    //
-    // Two cases can't share:
-    //   1. format mismatch — different byte-per-tile sizes, so the two CB views
-    //      can't overlay the same L1 bytes.
-    //   2. untilize with multiple N-subblocks — the untilize phase reads from
-    //      c_5 concurrently with the packer producing the next subblock into
-    //      c_5, so shared CBs would corrupt partials.
+    // CB 4 and CB 5: Output and intermediate accumulator
     if ((interm0_data_format != output_data_format) || (untilize_out && (in1_num_subblocks > 1))) {
         // Separate output and intermediate CBs
         program_descriptor.cbs.push_back(make_cb_descriptor(
+
             out_CB_size,
             tt::CBIndex::c_4,
             output_data_format,
@@ -529,7 +536,7 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         program_descriptor.cbs.push_back(make_cb_descriptor(
             interm0_CB_size, tt::CBIndex::c_5, interm0_data_format, interm0_single_tile_size, output_tile));
     } else {
-        // Shared L1 region: c_4 and c_5 are two format views on the same buffer.
+        // Shared output+intermediate CB
         CBDescriptor output_cb_desc;
         output_cb_desc.total_size = out_CB_size;
         output_cb_desc.core_ranges = all_cores;
