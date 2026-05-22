@@ -2697,8 +2697,8 @@ public:
             const uint64_t host_offset =
                 static_cast<uint64_t>(reinterpret_cast<char*>(host_mem_ptr) - static_cast<char*>(host_hugepage_base));
             TT_FATAL(
-                host_offset + cmd_size_bytes <= Common::SD_HUGEPAGE_ISSUE_BUFFER_SIZE,
-                "SD prefetch: command stream exceeds SD_HUGEPAGE_ISSUE_BUFFER_SIZE");
+                host_offset + cmd_size_bytes <= this->sd_hugepage_issue_buffer_size(),
+                "SD prefetch: command stream exceeds sd_hugepage_issue_buffer_size()");
             tt::tt_metal::memcpy_to_device<true>(host_mem_ptr, src, cmd_size_bytes);
             host_mem_ptr += cmd_size_bytes / sizeof(uint32_t);
 
@@ -2761,7 +2761,7 @@ public:
         auto prefetch_defines = Common::make_sd_prefetch_defines(
             this->device_,
             dev_hugepage_base,
-            Common::SD_HUGEPAGE_ISSUE_BUFFER_SIZE,
+            this->sd_hugepage_issue_buffer_size(),
             prefetch_q_base,
             prefetch_q_size,
             prefetch_q_rd_ptr_addr,
@@ -2787,7 +2787,7 @@ public:
                 .defines = prefetch_defines});
         tt_metal::SetRuntimeArgs(program, prefetch_kernel, Common::sd_prefetch_core, {0u, 0u, 0u});
 
-        const uint32_t dev_completion_base = dev_hugepage_base + Common::SD_HUGEPAGE_ISSUE_BUFFER_SIZE;
+        const uint32_t dev_completion_base = dev_hugepage_base + this->sd_hugepage_issue_buffer_size();
         auto dispatch_defines = Common::make_sd_dispatch_defines(
             this->device_,
             dispatch_buffer_pages,
@@ -2799,7 +2799,7 @@ public:
             memmap,
             memmap.dispatch_buffer_base(),
             dev_completion_base,
-            Common::SD_COMPLETION_QUEUE_SIZE);
+            this->sd_completion_queue_size());
         auto dispatch_kernel = tt_metal::CreateKernel(
             program,
             "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
@@ -2869,7 +2869,7 @@ class SDPrefetchRandomTestFixture : public SDPrefetchTestBase<RandomTestFixture>
 class SDPrefetchHostTextFixture : public SDPrefetchTestBase<PrefetcherHostTextFixture> {
 public:
     // Completion-buffer hooks: in SD mode the dispatch kernel writes to the hugepage region
-    // we set up ourselves (dev_hugepage_base + SD_HUGEPAGE_ISSUE_BUFFER_SIZE), not to a
+    // we set up ourselves (dev_hugepage_base + sd_hugepage_issue_buffer_size()), not to a
     // runtime-managed FDMeshCommandQueue completion queue.
     void* get_completion_queue_buffer() override {
         const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER);
@@ -2881,9 +2881,9 @@ public:
         char* hugepage_bar_base =
             static_cast<char*>(tt_metal::MetalContext::instance().get_cluster().host_dma_address(0, mmio_id, channel));
         hugepage_bar_base += (channel >> 2) * DispatchSettings::MAX_DEV_CHANNEL_SIZE;
-        return hugepage_bar_base + dev_hugepage_base + Common::SD_HUGEPAGE_ISSUE_BUFFER_SIZE;
+        return hugepage_bar_base + dev_hugepage_base + this->sd_hugepage_issue_buffer_size();
     }
-    uint32_t get_completion_queue_buffer_size() override { return Common::SD_COMPLETION_QUEUE_SIZE; }
+    uint32_t get_completion_queue_buffer_size() override { return this->sd_completion_queue_size(); }
 };
 
 class SDPrefetchLinearPackedReadTestFixture : public SDPrefetchTestBase<PrefetcherLinearPackedReadTestFixture> {};

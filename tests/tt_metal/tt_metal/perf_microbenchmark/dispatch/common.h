@@ -933,19 +933,13 @@ static_assert(SD_PREFETCHER_PAGE_BATCH_SIZE == 1);
 static constexpr uint32_t SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
 static constexpr uint32_t SD_PREFETCH_CMDDAT_PAGE_SIZE = 1u << SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE;
 static constexpr uint32_t SD_PREFETCH_CMDDAT_BLOCKS = DispatchSettings::PREFETCH_D_BUFFER_BLOCKS;
-// Issue + completion must fit in one device's hugepage slot (MAX_DEV_CHANNEL_SIZE = 256 MB) on
-// WH/BH. On Quasar the kSdQuasarIssueBase / kSdQuasarCompletionBase pair lives in DRAM bank 0,
-// which on this target only decodes the low 26 address bits (bits 26+ are don't-cares — see the
-// BIT-DECODE probe in test_prefetcher.cpp). Issue + completion together must therefore fit in a
-// single 64-MB addressable window, so each half is capped at 32 MB. Smoke/host tests use ~tens
-// of KB, so 32 MB is plenty; if a future bench needs more it'll have to use a different bank
-// (see Option 2 / DRAM_BACKED_CQ_BANK_ID plumbing).
-static constexpr uint32_t SD_HUGEPAGE_ISSUE_BUFFER_SIZE = DispatchSettings::MAX_DEV_CHANNEL_SIZE / 8;  // 32 MB
-static constexpr uint32_t SD_COMPLETION_QUEUE_SIZE = DispatchSettings::MAX_DEV_CHANNEL_SIZE / 8;       // 32 MB
-static_assert(
-    SD_HUGEPAGE_ISSUE_BUFFER_SIZE + SD_COMPLETION_QUEUE_SIZE <= DispatchSettings::MAX_DEV_CHANNEL_SIZE,
-    "SD issue + completion exceed per-device hugepage slot");
 inline constexpr CoreCoord sd_prefetch_core = {0, 0};  // combined prefetch_hd
+
+// Quasar simulation exposes only the low 26 address bits of each DRAM bank as backing physical
+// memory (64 MB); addresses above this alias back into the same physical space even though the
+// bank is configured as 1 GB. Code that places buffers in DRAM on Quasar must keep them within
+// this window to avoid aliasing collisions.
+static constexpr uint32_t QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE = 1u << 26;  // 64 MB
 
 // BaseTestFixture forms the basis for prefetch and dispatcher tests.
 // Inherits from GenericMeshDeviceFixture which determines the mesh device type automatically
@@ -1034,6 +1028,21 @@ protected:
         }
         const CoreCoord last_worker = multi_core ? CoreCoord{first_worker.x + 1, first_worker.y + 1} : first_worker;
         return CoreRange{first_worker, last_worker};
+    }
+
+    // SD (slow dispatch) issue + completion buffer sizes. Must fit in one device's hugepage slot
+    // (MAX_DEV_CHANNEL_SIZE = 256 MB) on WH/BH; an even 50/50 split gives 128 MB each. On Quasar simulation, command
+    // queues must be stored in DRAM due to limitations, and only 64 MB of physical DRAM space
+    // (QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE) is available even though the bank size is 1 GB. The remaining addresses
+    // alias this physical space. The SD command queue must therefore fit in a single 64-MB window, so each half is
+    // capped at 16 MB on Quasar.
+    uint32_t sd_hugepage_issue_buffer_size() const {
+        return (device_->arch() == tt::ARCH::QUASAR) ? QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE / 4
+                                                     : DispatchSettings::MAX_DEV_CHANNEL_SIZE / 2;
+    }
+    uint32_t sd_completion_queue_size() const {
+        return (device_->arch() == tt::ARCH::QUASAR) ? QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE / 4
+                                                     : DispatchSettings::MAX_DEV_CHANNEL_SIZE / 2;
     }
 
     // Helper function that polls completion queue until expected data is written into by dispatcher
