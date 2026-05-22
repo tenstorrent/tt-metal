@@ -323,7 +323,7 @@ class PatchEmbeddingTTNN:
             x,
             self._linear_weight,
             bias=self._linear_bias,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
             core_grid=self.core_grid,

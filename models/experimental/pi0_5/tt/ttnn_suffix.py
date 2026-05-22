@@ -106,6 +106,7 @@ class SuffixEmbeddingTTNN:
             noisy_actions,
             self.weights["action_in_proj.weight"],
             bias=self.weights["action_in_proj.bias"],
+            dtype=ttnn.bfloat8_b,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             core_grid=self.core_grid,
         )
@@ -294,6 +295,7 @@ class SuffixEmbeddingTTNN:
             expert_output,
             self.weights["action_out_proj.weight"],
             bias=self.weights["action_out_proj.bias"],
+            dtype=ttnn.bfloat8_b,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             core_grid=self.core_grid,
         )
@@ -420,6 +422,7 @@ class Pi0_5SuffixEmbeddingTTNN(SuffixEmbeddingTTNN):
             sincos,
             self.weights["time_mlp_in.weight"],
             bias=self.weights.get("time_mlp_in.bias"),
+            dtype=ttnn.bfloat8_b,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             core_grid=self.core_grid,
         )
@@ -428,6 +431,7 @@ class Pi0_5SuffixEmbeddingTTNN(SuffixEmbeddingTTNN):
             x,
             self.weights["time_mlp_out.weight"],
             bias=self.weights.get("time_mlp_out.bias"),
+            dtype=ttnn.bfloat8_b,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             core_grid=self.core_grid,
         )
