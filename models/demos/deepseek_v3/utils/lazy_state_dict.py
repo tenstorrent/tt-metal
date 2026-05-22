@@ -56,6 +56,17 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
     ):
         self._model_path = Path(model_path)
         self._base_prefix = base_prefix
+        self._num_layers: Optional[int] = _num_layers
+
+        # Cache of open safetensors handles keyed by filename to avoid repeated mmaps.
+        # Initialize these before parsing/validation so partially constructed objects
+        # can still be cleaned up safely if construction raises.
+        self._file_handles: dict[str, object] = {} if _file_handles is None else _file_handles
+        self._cache: dict[str, torch.Tensor] = {} if _cache is None else _cache
+        self._pinned_cache_keys: set[str] = set() if _pinned_cache_keys is None else _pinned_cache_keys
+        # Cache stacked expert counts so iteration can expose logical expert aliases
+        # without materializing the full stacked tensors.
+        self._stacked_num_experts: dict[str, int] = {} if _stacked_num_experts is None else _stacked_num_experts
 
         # If _full_to_file is provided then we are a now a view ofthe original LazyStateDict.
         if _full_to_file is None:
@@ -85,16 +96,6 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
             )
         else:
             self._full_to_file = _full_to_file
-
-        self._num_layers: Optional[int] = _num_layers
-
-        # Cache of open safetensors handles keyed by filename to avoid repeated mmaps
-        self._file_handles: dict[str, object] = {} if _file_handles is None else _file_handles
-        self._cache: dict[str, torch.Tensor] = {} if _cache is None else _cache
-        self._pinned_cache_keys: set[str] = set() if _pinned_cache_keys is None else _pinned_cache_keys
-        # Cache stacked expert counts so iteration can expose logical expert aliases
-        # without materializing the full stacked tensors.
-        self._stacked_num_experts: dict[str, int] = {} if _stacked_num_experts is None else _stacked_num_experts
 
     def _get_handle(self, filename: str):
         """
@@ -239,6 +240,20 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
             self._pinned_cache_keys.add(full_key)
         return tensor
 
+    def _load_stacked_expert_tensor(self, stacked_full_key: str, expert_idx: int) -> torch.Tensor:
+        if stacked_full_key in self._cache:
+            return self._cache[stacked_full_key][expert_idx]
+
+        filename = self._full_to_file[stacked_full_key]
+        filepath = self._model_path / filename
+        if not filepath.exists():
+            raise KeyError(
+                f"Attempted to load weight {stacked_full_key} from file {filepath} but the file does not exist."
+            )
+
+        handle = self._get_handle(filename)
+        return handle.get_slice(stacked_full_key)[expert_idx]
+
     def _passes_layer_filter(self, full_key: str) -> bool:
         if self._num_layers is None:
             return True
@@ -315,8 +330,7 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
         stacked_full_key, expert_idx = alias
         if expert_idx >= self._get_stacked_num_experts(stacked_full_key):
             raise KeyError(key)
-        stacked_tensor = self._load_tensor(stacked_full_key, pin_cache=False)
-        tensor = stacked_tensor[expert_idx]
+        tensor = self._load_stacked_expert_tensor(stacked_full_key, expert_idx)
         self._cache[full_key] = tensor
         return tensor
 

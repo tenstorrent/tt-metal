@@ -22,7 +22,7 @@ using namespace tt::tt_metal;
 
 void patch_program_from_descriptor(
     Program& program, DeepseekMoeGateSharedVariables& shared_vars, const ProgramDescriptor& program_descriptor) {
-    TT_ASSERT(
+    TT_FATAL(
         shared_vars.num_kernel_handles == program_descriptor.kernels.size(),
         "Kernel handle count mismatch: cached {} vs new {}",
         shared_vars.num_kernel_handles,

@@ -16,10 +16,12 @@
 namespace ttnn::operations::experimental::deepseek::moe::deepseek_moe_gate {
 
 struct DeepseekMoeGateDeviceOperation {
-    using operation_attributes_t = operation_attributes_t;
-    using tensor_args_t = tensor_args_t;
-    using tensor_return_value_t = tensor_return_value_t;
-    using spec_return_value_t = spec_return_value_t;
+    using operation_attributes_t =
+        ttnn::operations::experimental::deepseek::moe::deepseek_moe_gate::operation_attributes_t;
+    using tensor_args_t = ttnn::operations::experimental::deepseek::moe::deepseek_moe_gate::tensor_args_t;
+    using tensor_return_value_t =
+        ttnn::operations::experimental::deepseek::moe::deepseek_moe_gate::tensor_return_value_t;
+    using spec_return_value_t = ttnn::operations::experimental::deepseek::moe::deepseek_moe_gate::spec_return_value_t;
     using program_factory_t = std::variant<program::DeepseekMoeGateProgramFactory>;
 
     static void validate_on_program_cache_hit(const operation_attributes_t& attrs, const tensor_args_t& tensor_args);
