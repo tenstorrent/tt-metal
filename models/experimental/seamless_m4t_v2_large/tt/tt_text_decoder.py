@@ -43,7 +43,7 @@ _PROFILER_LAYER_DRAIN_INTERVAL = 8
 
 
 def _drain_device_profiler(device: ttnn.Device, *, trace_no_profiler: bool) -> None:
-    """Flush profiler markers so Tracy can match host ops without DRAM buffer overflow."""
+    """Flush on-device profiler markers when profiling is enabled."""
     if trace_no_profiler:
         return
     if os.environ.get("TT_METAL_DEVICE_PROFILER") == "1":
