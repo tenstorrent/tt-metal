@@ -199,7 +199,6 @@ class WanPipelineS2V(WanPipeline):
             enable_adain=s2v_cfg.get("enable_adain", True),
             enable_motioner=s2v_cfg.get("enable_motioner", False),
             enable_framepack=s2v_cfg.get("enable_framepack", True),
-            motion_token_num=s2v_cfg.get("motion_token_num", 1024),
             mesh_device=self.mesh_device,
             ccl_manager=self.dit_ccl_manager,
             parallel_config=self.parallel_config,

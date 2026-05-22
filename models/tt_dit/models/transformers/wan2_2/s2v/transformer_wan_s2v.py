@@ -22,80 +22,41 @@ from .rope_s2v import rope_precompute
 
 
 def _slice_and_adjust_T(
-    x: ttnn.Tensor,
-    B: int,
-    T_have: int,
-    K: int,
-    D: int,
-    mf_lat: int,
-    target_T: int | None,
+    x: ttnn.Tensor, B: int, T_have: int, K: int, D: int, mf_lat: int, target_T: int | None
 ) -> ttnn.Tensor:
-    """Trim the ``motion_frames[1]`` prefix off ``x`` and adjust to ``target_T``.
-
-    On device throughout. ``x`` has shape ``[B, T_have, K, D]``. Returns
-    ``[B, target_T, K, D]`` (or ``[B, T_have - mf_lat, K, D]`` if
-    ``target_T is None``). The motion encoder's 4× temporal downsample can
-    land one frame off when ``num_frames`` isn't a multiple of 4 — when the
-    post-slice ``T`` falls short, pad on the right by repeating the last
-    frame (matches the host fallback's previous behaviour).
-    """
+    """Trim mf_lat from front; pad/trim to target_T (right-repeat last frame if short)."""
     sliced = ttnn.slice(x, [0, mf_lat, 0, 0], [B, T_have, K, D])
     T_post = T_have - mf_lat
     if target_T is None or target_T == T_post:
         return sliced
     if target_T < T_post:
         return ttnn.slice(sliced, [0, 0, 0, 0], [B, target_T, K, D])
-    # Pad on the right: repeat the last frame ``target_T - T_post`` times.
     last_frame = ttnn.slice(sliced, [0, T_post - 1, 0, 0], [B, T_post, K, D])
     return ttnn.concat([sliced] + [last_frame] * (target_T - T_post), dim=1)
 
 
 class WanS2VTransformer3DModel(WanTransformer3DModel):
-    """Speech-to-video variant of the WAN 2.2 DiT.
-
-    Constructor mirrors ``WanTransformer3DModel`` and adds S2V-specific
-    arguments. Defaults mirror the reference WanModel_S2V config.
-    """
+    """Speech-to-video variant of the WAN 2.2 DiT."""
 
     def __init__(
         self,
         *,
-        # Audio defaults match the production Wan2.2-S2V-14B config
-        # (wav2vec2-large-xlsr-53: hidden_size=1024, num_hidden_layers=24
-        # → num_audio_layers = 24 + 1 = 25).
         audio_dim: int = 1024,
         num_audio_layers: int = 25,
         num_audio_token: int = 4,
-        audio_inject_layers: tuple[int, ...] = (
-            0,
-            4,
-            8,
-            12,
-            16,
-            20,
-            24,
-            27,
-            30,
-            33,
-            36,
-            39,
-        ),
+        audio_inject_layers: tuple[int, ...] = (0, 4, 8, 12, 16, 20, 24, 27, 30, 33, 36, 39),
         enable_adain: bool = False,
         cond_dim: int = 16,
-        # Production-only: `enable_framepack=True`, `enable_motioner=False`.
-        # We accept the kwargs to keep the call sites verbose but reject any
-        # non-production combination at construction time.
+        # Production is FramePacker-only; reject other combos at construction time.
         enable_motioner: bool = False,
         enable_framepack: bool = True,
-        motion_token_num: int = 1024,
-        motioner_dim: int = 2048,
         num_layers: int = 40,
         **kwargs,
     ) -> None:
         if enable_motioner or not enable_framepack:
             raise NotImplementedError(
-                "Only the production FramePacker path is supported "
-                f"(enable_motioner={enable_motioner}, enable_framepack={enable_framepack})"
+                f"Only enable_framepack=True is supported (got enable_motioner={enable_motioner}, "
+                f"enable_framepack={enable_framepack})"
             )
         kwargs.setdefault("model_type", "s2v")
         super().__init__(num_layers=num_layers, **kwargs)
@@ -106,8 +67,6 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         self.audio_inject_layers = tuple(audio_inject_layers)
         self.enable_adain = enable_adain
         self.cond_dim = cond_dim
-        self.motion_token_num = motion_token_num
-        self.motioner_dim = motioner_dim
 
         self.audio_encoder = CausalAudioEncoder(
             dim=audio_dim,
@@ -138,8 +97,7 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
             mesh_device=self.mesh_device,
             tp_mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
         )
-        # 3-entry {noisy=0, ref=1, motion=2} table added per-token after
-        # ref/motion concat. Replicated (not TP-sharded) — 3 * dim is tiny.
+        # [3, dim] table: rows 0/1/2 = noisy/ref/motion mask embedding.
         self.trainable_cond_mask = Parameter(
             total_shape=[3, self.dim],
             device=self.mesh_device,
@@ -177,13 +135,7 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         self._mask_constant_cache: dict[tuple[int, int, int, int], ttnn.Tensor] = {}
         self._timestep_proj_zero_cached: ttnn.Tensor | None = None
         self._cached_mask_table_torch: torch.Tensor | None = None
-        # AdaIN per-frame audio embedding (token 0), kept on device as the
-        # input to ``injector_adain_layers[i].linear``.
         self.audio_emb_global_token0_dev: ttnn.Tensor | None = None
-
-    # ----------------------------------------------------------------------
-    # Audio preparation. Called once per audio clip by the pipeline.
-    # ----------------------------------------------------------------------
 
     def prepare_audio_emb(
         self,
@@ -278,36 +230,18 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         return self.cached_rope_features[key]
 
     def prepare_rope_features(self, hidden_states):
-        """Reference-faithful rope for the extended ``noisy + ref + motion`` Sq.
-
-        Uses the reference's :func:`rope_precompute` on the same grid_sizes the
-        production ``WanModel_S2V`` constructs:
-
-          * Noisy: ``f_o=0`` … ``f=F`` over the full ``H × W`` patched grid.
-          * Ref:   ``f_o=30``, ``f=31``, ``range=(1, H, W)`` — a single frame
-            placed at temporal position 30.
-          * Motion (FramePackMotioner): three buckets with negative ``f_o``
-            offsets; ``rope_precompute`` conjugates the rope for those slots
-            (sin negated) to mark them as preceding the noisy clip.
-
-        The complex output is converted to tt_dit's real ``(cos, sin)`` pair
-        with ``repeat_interleave(2)`` so each head_dim slot holds the same
-        cos/sin value pair (matches Diffusers' ``repeat_interleave_real=True``
-        layout). Permute → pad → SP-shard → upload.
-        """
+        """RoPE for the extended noisy + ref + motion Sq (rope_precompute
+        on grid_sizes matching WanModel_S2V.forward)."""
         if self._cached_total_seq_len <= self.original_seq_len:
             return super().prepare_rope_features(hidden_states)
 
         sp_factor = self.parallel_config.sequence_parallel.factor
         sp_axis = self.parallel_config.sequence_parallel.mesh_axis
-
         _, _, F, H, W = hidden_states.shape
         pT, pH, pW = self.patch_size
         ppf, pph, ppw = F // pT, H // pH, W // pW
         N_noisy = ppf * pph * ppw
         head_dim = self.dim // self.num_heads
-
-        freqs_ref = self.frame_packer.freqs
 
         def _grid(start_xyz, end_xyz, range_xyz):
             return [
@@ -316,69 +250,52 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
                 torch.tensor(range_xyz, dtype=torch.long).unsqueeze(0),
             ]
 
-        noisy_grid = _grid([0, 0, 0], [ppf, pph, ppw], [ppf, pph, ppw])
-        # Ref at temporal slot 30, motion buckets at negative temporal offsets —
-        # exactly what ``WanModel_S2V.forward`` constructs.
-        ref_grid = _grid([30, 0, 0], [31, pph, ppw], [1, pph, ppw])
-        grid_sizes = [noisy_grid, ref_grid]
+        # Noisy + ref. Ref at temporal slot 30; motion buckets (if present) at
+        # negative offsets so rope_precompute conjugates their sin.
+        grid_sizes = [
+            _grid([0, 0, 0], [ppf, pph, ppw], [ppf, pph, ppw]),
+            _grid([30, 0, 0], [31, pph, ppw], [1, pph, ppw]),
+        ]
         N_ref = pph * ppw
         if self._cached_total_seq_len > N_noisy + N_ref:
-            # Motion-bucket spatial extents come from FramePackMotioner's
-            # Conv3d strides (1,2,2 / 2,4,4 / 4,8,8): trailing motion tokens
-            # get zero rope unless the grid matches the proj output sizes.
             zb = self.frame_packer.zip_frame_buckets
-            motion_post = _grid([-zb[0], 0, 0], [0, pph, ppw], [zb[0], pph, ppw])
-            motion_2x = _grid(
-                [-(zb[0] + zb[1]), 0, 0],
-                [-(zb[0] + zb[1]) + zb[1] // 2, pph // 2, ppw // 2],
-                [zb[1], pph, ppw],
-            )
-            motion_4x = _grid(
-                [-(zb[0] + zb[1] + zb[2]), 0, 0],
-                [-(zb[0] + zb[1] + zb[2]) + zb[2] // 4, pph // 4, ppw // 4],
-                [zb[2], pph, ppw],
-            )
-            grid_sizes += [motion_post, motion_2x, motion_4x]
+            grid_sizes += [
+                _grid([-zb[0], 0, 0], [0, pph, ppw], [zb[0], pph, ppw]),
+                _grid(
+                    [-(zb[0] + zb[1]), 0, 0],
+                    [-(zb[0] + zb[1]) + zb[1] // 2, pph // 2, ppw // 2],
+                    [zb[1], pph, ppw],
+                ),
+                _grid(
+                    [-(zb[0] + zb[1] + zb[2]), 0, 0],
+                    [-(zb[0] + zb[1] + zb[2]) + zb[2] // 4, pph // 4, ppw // 4],
+                    [zb[2], pph, ppw],
+                ),
+            ]
 
-        # rope_precompute only reads ``x.size(1)`` (total seq_len) from this.
         N_total = self._cached_total_seq_len
         N_const = N_total - N_noisy
         placeholder = torch.zeros(1, N_total, self.num_heads, head_dim, dtype=torch.float32)
-
-        freqs_complex = rope_precompute(placeholder, grid_sizes, freqs_ref, start=None)
+        freqs_complex = rope_precompute(placeholder, grid_sizes, self.frame_packer.freqs, start=None)
         # All heads carry the same rope; take head 0 and broadcast.
-        cos_half = freqs_complex.real[:, :, 0:1, :].float()
-        sin_half = freqs_complex.imag[:, :, 0:1, :].float()
-        # repeat_interleave(2) on the last dim matches Diffusers'
-        # ``repeat_interleave_real=True`` layout (each rope slot is a 2D pair).
-        cos_global = cos_half.repeat_interleave(2, dim=-1).permute(0, 2, 1, 3)
-        sin_global = sin_half.repeat_interleave(2, dim=-1).permute(0, 2, 1, 3)
+        # repeat_interleave(2) matches Diffusers' repeat_interleave_real=True layout.
+        cos_global = freqs_complex.real[:, :, 0:1, :].float().repeat_interleave(2, dim=-1).permute(0, 2, 1, 3)
+        sin_global = freqs_complex.imag[:, :, 0:1, :].float().repeat_interleave(2, dim=-1).permute(0, 2, 1, 3)
 
-        # Spatial is built as ``concat([noisy, const])`` per-device — i.e.
-        # noisy and const are independently SP-sharded, then concatenated.
-        # A naive global pad+SP-shard of [noisy, ref, motion] rope wouldn't
-        # match: rope per-segment, SP-shard each, then concat on device.
-        cos_noisy = cos_global[:, :, :N_noisy, :]
-        cos_const = cos_global[:, :, N_noisy:N_total, :]
-        sin_noisy = sin_global[:, :, :N_noisy, :]
-        sin_const = sin_global[:, :, N_noisy:N_total, :]
-        cos_noisy = pad_vision_seq_parallel(cos_noisy, num_devices=sp_factor)
-        sin_noisy = pad_vision_seq_parallel(sin_noisy, num_devices=sp_factor)
-        if N_const > 0:
-            cos_const = pad_vision_seq_parallel(cos_const, num_devices=sp_factor)
-            sin_const = pad_vision_seq_parallel(sin_const, num_devices=sp_factor)
+        # Per-segment SP-shard then on-device concat — matches the per-device
+        # spatial layout [noisy_local | const_local].
+        upload_kwargs = dict(device=self.mesh_device, dtype=ttnn.float32, mesh_axes=[..., sp_axis, None])
 
-        rope_upload_kwargs = dict(device=self.mesh_device, dtype=ttnn.float32, mesh_axes=[..., sp_axis, None])
-        cos_n_tt = from_torch(cos_noisy.contiguous(), **rope_upload_kwargs)
-        sin_n_tt = from_torch(sin_noisy.contiguous(), **rope_upload_kwargs)
+        def _seg(slice_obj):
+            return from_torch(pad_vision_seq_parallel(slice_obj, num_devices=sp_factor).contiguous(), **upload_kwargs)
+
+        cos_n_tt = _seg(cos_global[:, :, :N_noisy, :])
+        sin_n_tt = _seg(sin_global[:, :, :N_noisy, :])
         if N_const > 0:
-            cos_c_tt = from_torch(cos_const.contiguous(), **rope_upload_kwargs)
-            sin_c_tt = from_torch(sin_const.contiguous(), **rope_upload_kwargs)
-            cos_tt = ttnn.concat([cos_n_tt, cos_c_tt], dim=-2)
-            sin_tt = ttnn.concat([sin_n_tt, sin_c_tt], dim=-2)
+            cos_tt = ttnn.concat([cos_n_tt, _seg(cos_global[:, :, N_noisy:N_total, :])], dim=-2)
+            sin_tt = ttnn.concat([sin_n_tt, _seg(sin_global[:, :, N_noisy:N_total, :])], dim=-2)
         else:
-            cos_tt = cos_n_tt
-            sin_tt = sin_n_tt
+            cos_tt, sin_tt = cos_n_tt, sin_n_tt
         trans_mat = bf16_tensor(get_rot_transformation_mat(), device=self.mesh_device)
         return cos_tt, sin_tt, trans_mat
 
@@ -387,16 +304,7 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         audio_attn_id: int,
         N_total: int,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Build per-token ``(shift, scale_plus_one)`` for one inject layer.
-
-        ``E`` is a sparse {0, 1} ``[padded_N, T_video+1]`` selector:
-        ``E[i, i // hw_per_frame]`` for noisy tokens, ``E[i, T_video]`` for
-        const/pad tokens (sentinel rows: 0 for shift, 1 for scale → identity).
-        ``E`` and sentinel rows are shape-only; cache across clips.
-        """
-        if self.audio_emb_global_token0_dev is None:
-            raise RuntimeError("AdaIN enabled but audio_emb_global_token0_dev is None.")
-
+        """Per-token (shift, scale+1) for one inject layer via sparse-selector E."""
         sp_factor = self.parallel_config.sequence_parallel.factor
         noisy_len = self.original_seq_len
         const_len = N_total - noisy_len
@@ -450,41 +358,24 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         self,
         block_idx: int,
         spatial_1BND: ttnn.Tensor,
-        N: int | None = None,
+        N: int,
     ) -> ttnn.Tensor:
-        """Apply the audio cross-attention residual at the configured layers.
+        """Apply audio cross-attention residual at configured inject layers.
 
-        Instead of the reference's ``"b (t n) c -> (b t) n c"`` rearrange, we
-        keep spatial SP-fractured and feed the flattened audio K/V plus a
-        block-diagonal frame mask — each Q only attends to its own frame's
-        audio tokens. No CCL ops, no rearrange.
+        Keeps spatial SP-fractured and feeds flattened audio K/V + a block-
+        diagonal frame mask (no rearrange, no CCL).
         """
         if block_idx not in self.audio_injector.injected_block_id:
             return spatial_1BND
-        if self.merged_audio_emb_flat is None:
-            raise RuntimeError("prepare_audio_emb() must be called before forward().")
 
         audio_attn_id = self.audio_injector.injected_block_id[block_idx]
-
-        if N is None:
-            if self.original_seq_len:
-                N = self.original_seq_len
-            else:
-                sp_factor = self.parallel_config.sequence_parallel.factor
-                N = int(spatial_1BND.shape[-2]) * sp_factor
-
-        # AdaIN modulation is per-token so it can't go through norm1's
-        # ``dynamic_weight``/``dynamic_bias`` hooks (those require per-batch
-        # gamma height = TILE). Apply it post-norm as a fused ``addcmul``:
-        # ``shift + x_normed * scale_plus_one``. All three inputs share shape
-        # [1, 1, N_per_dev, D] — no broadcast, sidesteps the binary_ng
-        # subtile-broadcast classifier issue that hits addcmul on certain
-        # mismatched-padding shapes elsewhere in this file.
         block = self.blocks[block_idx]
+
+        # AdaIN modulation: per-token shift/scale fused into norm1 via addcmul.
+        # Can't use norm1's dynamic_weight hook (requires per-batch gamma).
         if self.enable_adain and self.audio_emb_global_token0_dev is not None:
             shift_full, scale_plus_one_full = self._build_adain_modulation_for_layer(audio_attn_id, N)
-            x_normed = block.norm1(spatial_1BND)
-            normed = ttnn.addcmul(shift_full, x_normed, scale_plus_one_full)
+            normed = ttnn.addcmul(shift_full, block.norm1(spatial_1BND), scale_plus_one_full)
         else:
             normed = block.norm1(spatial_1BND)
 
@@ -507,18 +398,11 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
                 cross_attn_mask=mask,
                 cached_kv_BHNE=cached_kv,
             )
-        # Zero the residual at const + pad rows so only noisy tokens get an
-        # audio contribution — const rows used uniform-0 attention to keep
-        # softmax finite, which would otherwise leak into the output.
+        # Zero the residual at const + pad rows (const used uniform-0 attention
+        # for softmax stability; we don't want that bleeding into the output).
         if self._cached_mask_noisy is not None:
             return ttnn.addcmul(spatial_1BND, residual, self._cached_mask_noisy)
         return ttnn.add(spatial_1BND, residual)
-
-    # ----------------------------------------------------------------------
-    # Conditioning prep. Called once per clip by the pipeline before the
-    # denoise loop. Builds the on-device caches that ``inner_step`` will
-    # add/concat into the noisy spatial sequence at every step.
-    # ----------------------------------------------------------------------
 
     def prepare_cond_emb(
         self,
@@ -678,49 +562,29 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         mask_noisy: ttnn.Tensor,
         mask_constant: ttnn.Tensor,
     ) -> ttnn.Tensor:
-        """One block with segmented (real-t / zero-t) modulation.
+        """Block forward with per-token segmented modulation (real-t on noisy,
+        zero-t on const). Pad slots have both masks zero so the gate zeros
+        attn/ffn out — pad passthrough is automatic.
 
-        Math-equivalent of the reference ``WanS2VAttentionBlock.forward``: per-
-        token modulation built as ``real * mask_noisy + zero * mask_constant``
-        so SP fracturing on Sq lines up trivially. Pad slots have both masks
-        zero → identity modulation + the gate zeros attn/ffn out, so pad
-        passthrough is automatic.
-
-        Uses the unfused norm + modulation path: the base block's fused
-        norm1/norm3 modulation requires a TILE_HEIGHT=32 weight tile along Sq
-        which is incompatible with per-token weights.
+        Unfused norm + modulation: base block's fused path requires TILE-aligned
+        weight along Sq which conflicts with per-token weights.
         """
-        shifted_real = ttnn.add(block.scale_shift_table.data, timestep_proj_real)
-        shifted_zero = ttnn.add(block.scale_shift_table.data, timestep_proj_zero)
 
-        shift_r, scale_r, gate_r, c_shift_r, c_scale_r, c_gate_r = ttnn.chunk(shifted_real, 6, dim=2)
-        shift_z, scale_z, gate_z, c_shift_z, c_scale_z, c_gate_z = ttnn.chunk(shifted_zero, 6, dim=2)
+        # Cast all 6 chunks to bf16 (matches T2V; fp32 gates lose accuracy and
+        # downstream multiply with the bf16 mask would otherwise auto-promote).
+        def _chunks_bf16(x):
+            return [ttnn.typecast(c, dtype=ttnn.bfloat16) for c in ttnn.chunk(x, 6, dim=2)]
 
-        # T2V casts gates to bf16 (``transformer_wan.py``: fp32 gate is less
-        # accurate). We mirror that for ALL six modulation chunks (shift,
-        # scale, gate ×2) so the downstream per-token multiply with the bf16
-        # mask doesn't trip binary_ng's mixed-dtype path or auto-promote into
-        # fp32 result (which would defeat the bf16 spatial tensor).
-        shift_r = ttnn.typecast(shift_r, dtype=ttnn.bfloat16)
-        scale_r = ttnn.typecast(scale_r, dtype=ttnn.bfloat16)
-        gate_r = ttnn.typecast(gate_r, dtype=ttnn.bfloat16)
-        c_shift_r = ttnn.typecast(c_shift_r, dtype=ttnn.bfloat16)
-        c_scale_r = ttnn.typecast(c_scale_r, dtype=ttnn.bfloat16)
-        c_gate_r = ttnn.typecast(c_gate_r, dtype=ttnn.bfloat16)
-        shift_z = ttnn.typecast(shift_z, dtype=ttnn.bfloat16)
-        scale_z = ttnn.typecast(scale_z, dtype=ttnn.bfloat16)
-        gate_z = ttnn.typecast(gate_z, dtype=ttnn.bfloat16)
-        c_shift_z = ttnn.typecast(c_shift_z, dtype=ttnn.bfloat16)
-        c_scale_z = ttnn.typecast(c_scale_z, dtype=ttnn.bfloat16)
-        c_gate_z = ttnn.typecast(c_gate_z, dtype=ttnn.bfloat16)
+        shift_r, scale_r, gate_r, c_shift_r, c_scale_r, c_gate_r = _chunks_bf16(
+            ttnn.add(block.scale_shift_table.data, timestep_proj_real)
+        )
+        shift_z, scale_z, gate_z, c_shift_z, c_scale_z, c_gate_z = _chunks_bf16(
+            ttnn.add(block.scale_shift_table.data, timestep_proj_zero)
+        )
 
         def _per_token(real_chunk, zero_chunk):
-            # real/zero: ``[1, B, 1, D/tp]``; masks: ``[1, 1, padded_N/sp, 1]``.
-            # binary_ng broadcasts to ``[1, B, padded_N/sp, D/tp]``.
-            return ttnn.add(
-                ttnn.multiply(real_chunk, mask_noisy),
-                ttnn.multiply(zero_chunk, mask_constant),
-            )
+            # [1, B, 1, D/tp] × [1, 1, padded_N/sp, 1] → [1, B, padded_N/sp, D/tp].
+            return ttnn.add(ttnn.multiply(real_chunk, mask_noisy), ttnn.multiply(zero_chunk, mask_constant))
 
         shift_msa = _per_token(shift_r, shift_z)
         scale_msa = _per_token(scale_r, scale_z)
@@ -729,51 +593,27 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         c_scale_msa = _per_token(c_scale_r, c_scale_z)
         c_gate_msa = _per_token(c_gate_r, c_gate_z)
 
-        # Self-attention. Modulation stays as add(multiply, ...) because
-        # shift/scale are fp32 and spatial is bf16 — addcmul would force an
-        # extra typecast that exceeds its savings here.
-        spatial_normed = block.norm1(spatial_1BND)
-        spatial_normed = ttnn.add(
-            ttnn.multiply(spatial_normed, ttnn.add(scale_msa, 1.0)),
-            shift_msa,
-        )
+        # Self-attention. NOTE: add(multiply, ...) instead of addcmul — addcmul's
+        # binary_ng subtile-broadcast asserts on certain padded Sq lengths from
+        # lat_target_frames=20 (e.g. 8224 tiles on (2, 4) BH 480p).
+        spatial_normed = ttnn.add(ttnn.multiply(block.norm1(spatial_1BND), ttnn.add(scale_msa, 1.0)), shift_msa)
         attn_out = block.attn1(
-            spatial_1BND=spatial_normed,
-            N=N,
-            rope_cos=rope_cos,
-            rope_sin=rope_sin,
-            trans_mat=trans_mat,
+            spatial_1BND=spatial_normed, N=N, rope_cos=rope_cos, rope_sin=rope_sin, trans_mat=trans_mat
         )
-        # ``ttnn.add(*, ttnn.multiply(*, *))`` rather than ``ttnn.addcmul``:
-        # addcmul's binary_ng subtile-broadcast classifier asserts on certain
-        # per-device padded sequence lengths that come out of the reference's
-        # ``lat_target_frames=20`` (e.g. 8224 tiles on (2, 4) BH 480p).
         spatial_1BND = ttnn.add(spatial_1BND, ttnn.multiply(attn_out, gate_msa))
 
-        # Cross-attention. norm2 keeps its learned affine — the reference
-        # calls ``norm2(x).float()`` with no per-segment scale/shift here.
-        spatial_normed = block.norm2(spatial_1BND)
-        attn_out = block.attn2(
-            spatial_1BND=spatial_normed,
-            N=N,
-            prompt_1BLP=prompt_1BLP,
-        )
+        # Cross-attention (no per-segment modulation; norm2 has learned affine).
+        attn_out = block.attn2(spatial_1BND=block.norm2(spatial_1BND), N=N, prompt_1BLP=prompt_1BLP)
         spatial_1BND = ttnn.add(spatial_1BND, attn_out)
 
         # FFN
-        spatial_normed = block.norm3(spatial_1BND)
-        spatial_normed = ttnn.add(
-            ttnn.multiply(spatial_normed, ttnn.add(c_scale_msa, 1.0)),
-            c_shift_msa,
-        )
+        spatial_normed = ttnn.add(ttnn.multiply(block.norm3(spatial_1BND), ttnn.add(c_scale_msa, 1.0)), c_shift_msa)
         if self.parallel_config.tensor_parallel.factor > 1:
             spatial_normed = self.ccl_manager.all_gather_persistent_buffer(
                 spatial_normed, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
         ffn_out = block.ffn(spatial_normed, compute_kernel_config=block.ff_compute_kernel_config)
-        spatial_1BND = ttnn.add(spatial_1BND, ttnn.multiply(ffn_out, c_gate_msa))
-
-        return spatial_1BND
+        return ttnn.add(spatial_1BND, ttnn.multiply(ffn_out, c_gate_msa))
 
     def inner_step(
         self,
@@ -786,10 +626,8 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         timestep,
         gather_output=False,
     ):
-        """S2V variant of the base block stack: noisy + (ref+motion) on Sq, with
-        audio cross-attn hooked after each block, and the const tokens sliced
-        off before the output head.
-        """
+        """S2V denoising step: [noisy | ref + motion] on Sq with audio cross-attn
+        hooked after each block; slice off const tokens before the head."""
         temb_11BD, timestep_proj_1BTD = self.prepare_timestep_conditioning(timestep)
 
         spatial_1BND = self.patch_embedding(spatial_1BNI)
