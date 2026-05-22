@@ -264,14 +264,6 @@ run_quad_galaxy_unit_tests() {
 # Environment setup helpers
 ###############################################################################
 
-# Kernel cache must be local per host (not NFS/shared home) to avoid multihost races.
-_ensure_local_tt_metal_cache() {
-    unset TT_METAL_CACHE 2>/dev/null || true
-    local rid="${GITHUB_RUN_ID:-$$}"
-    export TT_METAL_CACHE="${TMPDIR:-/tmp}/tt_metal_kernel_cache_${rid}"
-    mkdir -p "${TT_METAL_CACHE}"
-}
-
 # MLPerf weight cache is read-only in CI. Module-test jobs set MULTIHOST_DS_V3_WEIGHT_CACHE=1;
 # demos omit it so DEEPSEEK_V3_CACHE stays unset unless explicitly overridden elsewhere.
 _resolve_deepseekv3_cache() {
@@ -315,7 +307,6 @@ resolve_deepseekv3_model() {
 }
 
 setup_dual_galaxy_env() {
-    _ensure_local_tt_metal_cache
     export RANK_BINDING_YAML="tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"
     export MESH_GRAPH_DESCRIPTOR="tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto"
     export HOSTS="$(extract_hosts_from_hostfile 2)"
@@ -350,7 +341,6 @@ setup_dual_galaxy_env() {
 }
 
 setup_quad_galaxy_env() {
-    _ensure_local_tt_metal_cache
     export RANK_BINDING_YAML="tests/tt_metal/distributed/config/quad_galaxy_rank_bindings.yaml"
     export MESH_GRAPH_DESCRIPTOR="tt_metal/fabric/mesh_graph_descriptors/quad_galaxy_torus_xy_graph_descriptor.textproto"
     export HOSTS="$(extract_hosts_from_hostfile 4)"
