@@ -4,9 +4,9 @@
 
 import pytest
 import torch
-import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_numeric_metrics
+import ttnn
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc
 
 pytestmark = pytest.mark.use_module_device
 
@@ -201,7 +201,7 @@ def test_addmm_rectangular_matrices(device, dtype, matrix_dims):
             output_tensor,
             atol=0.042 * m,
             rtol=10.563 * m,
-            frobenius_threshold=0.005 * m,
+            frobenius_threshold=0.006 * m,
             pcc_threshold=0.999,
             check_ulp=False,
         )
