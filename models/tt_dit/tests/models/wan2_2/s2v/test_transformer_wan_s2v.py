@@ -140,6 +140,20 @@ def torch_rope_apply(x: torch.Tensor, grid_sizes: torch.Tensor, freqs: torch.Ten
     return torch.stack(output).float()
 
 
+def torch_rope_apply_per_token(x: torch.Tensor, freqs: torch.Tensor) -> torch.Tensor:
+    """Apply precomputed per-token rope freqs (complex). Matches upstream's
+    ``wan/modules/s2v/model_s2v.py:rope_apply`` — freqs is the complex per-token
+    table from ``rope_precompute``, shape ``[B, N, num_heads_or_1, head_dim/2]``.
+    """
+    output = []
+    for i in range(x.size(0)):
+        x_i = torch.view_as_complex(x[i].to(torch.float64).reshape(*x[i].shape[:-1], -1, 2))
+        f_i = freqs[i]
+        x_i = torch.view_as_real(x_i * f_i).flatten(2)
+        output.append(x_i)
+    return torch.stack(output).float()
+
+
 def torch_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
     """q/k/v shape ``[B, L, H, D]``; returns ``[B, L, H, D]``."""
     qh = q.transpose(1, 2)
@@ -168,7 +182,15 @@ class TorchWanSelfAttention(nn.Module):
         q = self.norm_q(self.q(x)).view(b, s, n, d)
         k = self.norm_k(self.k(x)).view(b, s, n, d)
         v = self.v(x).view(b, s, n, d)
-        out = torch_attention(torch_rope_apply(q, grid_sizes, freqs), torch_rope_apply(k, grid_sizes, freqs), v)
+        # If freqs is precomputed per-token (complex 4D), apply directly; else fall
+        # back to grid-derived 2D-table rope (block test path).
+        if freqs.is_complex() and freqs.ndim >= 3:
+            q = torch_rope_apply_per_token(q, freqs)
+            k = torch_rope_apply_per_token(k, freqs)
+        else:
+            q = torch_rope_apply(q, grid_sizes, freqs)
+            k = torch_rope_apply(k, grid_sizes, freqs)
+        out = torch_attention(q, k, v)
         return self.o(out.flatten(2))
 
 
@@ -680,15 +702,11 @@ class TorchWanS2VModel(nn.Module):
             prompt_BLP = torch.cat([prompt_BLP, prompt_BLP.new_zeros(B, pad_len, prompt_BLP.shape[2])], dim=1)
         context = self.text_embedding(prompt_BLP)
 
-        # Apply rope upfront via freqs_per_token as in upstream (block forward expects the
-        # per-token freqs; the existing TorchWanS2VAttentionBlock calls torch_rope_apply
-        # internally using freqs as a 2D table, so pass that path-compatible grid).
-        # We approximate by using the noisy-only grid for rope_apply inside blocks (matches
-        # how the existing block test exercises it).
+        # Use precomputed per-token freqs (matches upstream — applies rope to
+        # noisy AND ref tokens with their respective grid positions).
         grid_sizes_block = torch.tensor([[F_p, H_p, W_p]] * B, dtype=torch.long)
-
         for block_idx, block in enumerate(self.blocks):
-            x = block(x, e_packed, grid_sizes_block, self.freqs, context)
+            x = block(x, e_packed, grid_sizes_block, freqs_per_token, context)
             x = self.after_transformer_block(block_idx, x, merged_audio_emb, audio_emb_global, n_noisy)
 
         # Keep noisy tokens, head, unpatchify.
