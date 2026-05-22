@@ -4,7 +4,23 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
+
+// Legacy primitives retained (#45003 item 4):
+// - noc_async_write_multicast / noc_async_write_linked_multicast / noc_semaphore_set_multicast: Device 2.0
+//   has no wrapper for multicast writes or multicast semaphore sets. These implement the chunk gather/mcast
+//   fan-out from drain-sync core to matmul and tilize cores.
+// - noc_semaphore_set / noc_semaphore_wait / noc_semaphore_wait_min / noc_semaphore_inc operate on raw L1
+//   addresses obtained via get_semaphore + reinterpret_cast (and on precomposed uint64_t noc addrs for
+//   remote sets/incs), so Semaphore<> wrappers don't fit.
+// - get_safe_multicast_noc_addr / get_noc_multicast_addr compose multicast noc addresses not exposed by the
+//   new API.
+// - get_noc_addr (precomposed uint64_t form) is used to compose remote noc addresses with explicit
+//   noc parameter; Device 2.0 Noc::async_write/async_read take noc_x/noc_y/addr via args separately.
+// - noc_async_write_barrier(noc_index) / noc_async_writes_flushed(noc_index) / noc_async_atomic_barrier(
+//   noc_index) take an explicit noc parameter; the Noc::async_*_barrier wrappers don't expose this.
 
 using namespace ttnn::operations::ccl::common;
 
@@ -219,6 +235,19 @@ void kernel_main() {
     uint32_t core_token_end = get_arg_val<uint32_t>(rt_args_idx++);                           // 16
     [[maybe_unused]] uint32_t tilize_core_idx = get_arg_val<uint32_t>(rt_args_idx++);         // 17 - not used by writer
 
+    // Device 2.0 wrappers
+    Noc noc_obj;
+    CircularBuffer cb_tilize_output(tilize_output_cb_id);
+    CircularBuffer cb_per_expert_total_tokens(per_expert_total_tokens_cb_id);
+    CircularBuffer cb_total_chunks(total_chunks_cb_id);
+    CircularBuffer cb_indices(indices_tensor_cb_id);
+    CircularBuffer cb_scores(scores_tensor_cb_id);
+    CircularBuffer cb_mapping(mapping_tensor_cb_id);
+    CircularBuffer cb_brisc_e_t(brisc_e_t_cb_id);
+    CircularBuffer cb_brisc_expert_counts(brisc_expert_counts_cb_id);
+    CircularBuffer cb_brisc_expert_activation(brisc_expert_activation_cb_id);
+    CircularBuffer cb_brisc_activated_count(brisc_activated_count_cb_id);
+
     // Constants
     constexpr uint32_t one_page = 1;
     constexpr uint32_t TILE_HEIGHT = 32;
@@ -257,10 +286,10 @@ void kernel_main() {
     uint32_t brisc_tokens_capacity = tokens_this_core / 2;
 
     // Wait for NCRISC to finish reading the mapping tensor
-    cb_wait_front(mapping_tensor_cb_id, num_devices);
+    cb_mapping.wait_front(num_devices);
 
     // Get mapping base pointer (read by NCRISC)
-    const uint32_t mapping_base = get_read_ptr(mapping_tensor_cb_id);
+    const uint32_t mapping_base = cb_mapping.get_read_ptr();
 
     // Build local_expert_ids array - experts that map to this device
     uint16_t* expert_to_device_map =
@@ -278,12 +307,12 @@ void kernel_main() {
     }
 
     // Reserve BRISC's e_t buffer (single page contains all experts' token lists)
-    cb_reserve_back(brisc_e_t_cb_id, one_page);
-    const uint32_t brisc_e_t_buffer_base = get_write_ptr(brisc_e_t_cb_id);
+    cb_brisc_e_t.reserve_back(one_page);
+    const uint32_t brisc_e_t_buffer_base = cb_brisc_e_t.get_write_ptr();
 
     // Reserve BRISC's expert_activation buffer (single page contains all activation rows)
-    cb_reserve_back(brisc_expert_activation_cb_id, one_page);
-    const uint32_t brisc_expert_activation_base = get_write_ptr(brisc_expert_activation_cb_id);
+    cb_brisc_expert_activation.reserve_back(one_page);
+    const uint32_t brisc_expert_activation_base = cb_brisc_expert_activation.get_write_ptr();
 
     // Initialize BRISC's expert_activation buffer with sentinel values (selected_experts_k)
     for (uint32_t row = 0; row < brisc_tokens_capacity; row++) {
@@ -297,8 +326,8 @@ void kernel_main() {
     }
 
     // Indices and scores accessible via CB (drain has shard, non-drain read via NOC in reader)
-    const uint32_t indices_base = get_read_ptr(indices_tensor_cb_id);
-    const uint32_t scores_base = get_read_ptr(scores_tensor_cb_id);
+    const uint32_t indices_base = cb_indices.get_read_ptr();
+    const uint32_t scores_base = cb_scores.get_read_ptr();
 
     // Per-expert token counts for BRISC's half
     uint32_t brisc_num_tokens_per_expert[experts_per_device] = {0};
@@ -371,28 +400,28 @@ void kernel_main() {
     }
 
     // Push BRISC's e_t buffer (no -1 cap needed, NCRISC will cap final merged buffer)
-    cb_push_back(brisc_e_t_cb_id, one_page);
+    cb_brisc_e_t.push_back(one_page);
 
     // Push BRISC's expert_activation buffer
-    cb_push_back(brisc_expert_activation_cb_id, one_page);
+    cb_brisc_expert_activation.push_back(one_page);
 
     // Push BRISC's per-expert counts to CB for NCRISC to read
-    cb_reserve_back(brisc_expert_counts_cb_id, one_page);
-    uint32_t* brisc_counts_ptr = reinterpret_cast<uint32_t*>(get_write_ptr(brisc_expert_counts_cb_id));
+    cb_brisc_expert_counts.reserve_back(one_page);
+    uint32_t* brisc_counts_ptr = reinterpret_cast<uint32_t*>(cb_brisc_expert_counts.get_write_ptr());
     for (uint32_t e = 0; e < experts_per_device; e++) {
         brisc_counts_ptr[e] = brisc_num_tokens_per_expert[e];
     }
-    cb_push_back(brisc_expert_counts_cb_id, one_page);
+    cb_brisc_expert_counts.push_back(one_page);
 
     // Push BRISC's activated token count
-    cb_reserve_back(brisc_activated_count_cb_id, one_page);
-    *reinterpret_cast<uint32_t*>(get_write_ptr(brisc_activated_count_cb_id)) = brisc_num_activated_tokens;
-    cb_push_back(brisc_activated_count_cb_id, one_page);
+    cb_brisc_activated_count.reserve_back(one_page);
+    *reinterpret_cast<uint32_t*>(cb_brisc_activated_count.get_write_ptr()) = brisc_num_activated_tokens;
+    cb_brisc_activated_count.push_back(one_page);
 
     // Wait for reader to push per-expert token counts (includes merged NCRISC + BRISC counts)
-    cb_wait_front(per_expert_total_tokens_cb_id, 1);
+    cb_per_expert_total_tokens.wait_front(1);
     volatile tt_l1_ptr uint32_t* per_expert_counts =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(per_expert_total_tokens_cb_id));
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_per_expert_total_tokens.get_read_ptr());
 
     // Read per-expert token counts into local array
     uint32_t num_tokens_per_expert[experts_per_device];
@@ -401,9 +430,9 @@ void kernel_main() {
     }
 
     // Wait for reader to push total_chunks
-    cb_wait_front(total_chunks_cb_id, one_page);
+    cb_total_chunks.wait_front(one_page);
     [[maybe_unused]] uint32_t total_chunks =
-        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(total_chunks_cb_id));
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_total_chunks.get_read_ptr());
 
     /************************************************************************/
     /* Synchronization setup for signalling between tilize and matmul cores */
@@ -435,7 +464,7 @@ void kernel_main() {
 
     // This decides which half of the matmul input buffer we send to
     bool use_second_half_buffer = false;
-    uint32_t matmul_chunk_input_cb_base_addr = get_read_ptr(tilize_output_cb_id);
+    uint32_t matmul_chunk_input_cb_base_addr = cb_tilize_output.get_read_ptr();
     uint32_t first_half_buffer_addr = matmul_chunk_input_cb_base_addr;
     uint32_t second_half_buffer_addr =
         matmul_chunk_input_cb_base_addr + (tiles_per_global_chunk * tilize_output_page_size);
@@ -483,8 +512,8 @@ void kernel_main() {
 
         for (uint32_t chunk = 0; chunk < num_expert_chunks; chunk++) {
             // Wait for compute to push tiles_per_local_chunk tiles
-            cb_wait_front(tilize_output_cb_id, shared_cb_num_pages);
-            uint32_t l1_read_addr = get_read_ptr(tilize_output_cb_id);
+            cb_tilize_output.wait_front(shared_cb_num_pages);
+            uint32_t l1_read_addr = cb_tilize_output.get_read_ptr();
 
             /*
              * Send chunks to MM cores;
@@ -746,7 +775,7 @@ void kernel_main() {
             noc_async_writes_flushed(noc_index);
 
             // pop the tiles from CB
-            cb_pop_front(tilize_output_cb_id, shared_cb_num_pages);
+            cb_tilize_output.pop_front(shared_cb_num_pages);
             num_chunks_sent++;
             use_second_half_buffer = !use_second_half_buffer;
 
@@ -758,8 +787,8 @@ void kernel_main() {
     }
 
     // Pop the per-expert counts and total_chunks (cleanup)
-    cb_pop_front(per_expert_total_tokens_cb_id, one_page);
-    cb_pop_front(total_chunks_cb_id, one_page);
+    cb_per_expert_total_tokens.pop_front(one_page);
+    cb_total_chunks.pop_front(one_page);
 
     noc_async_write_barrier(noc_index);
     noc_async_atomic_barrier(noc_index);

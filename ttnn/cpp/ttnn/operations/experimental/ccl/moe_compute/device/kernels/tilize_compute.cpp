@@ -6,6 +6,12 @@
 
 #include "api/compute/cb_api.h"
 #include "api/compute/tilize.h"
+#include "api/dataflow/circular_buffer.h"
+
+// Legacy CB primitives retained (#45003 item 4): this compute kernel passes cb_id values directly into the
+// tilize API (fast_tilize_init, fast_tilize_block, fast_tilize_uninit, compute_kernel_hw_startup) and uses
+// get_tile_address — those interfaces take cb_id as a runtime argument and don't accept a CircularBuffer
+// wrapper. CB primitives stay on legacy.
 
 // Print a subset of a row-major bfloat16 buffer.
 // BufferWidth: total number of columns (elements) per row

@@ -4,7 +4,15 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include "moe_ring_common.h"
+
+// Legacy primitives retained (#45003 item 4): noc_async_read_one_packet_set_state /
+// noc_async_read_one_packet_with_state_with_trid / noc_async_read_set_trid / noc_async_read_barrier_with_trid
+// have no Device 2.0 wrapper equivalent — they form a transaction-id pipelined read pattern used to
+// double-buffer the W0/W1/W2 DRAM reads. The noc_semaphore_wait_min on metadata_ready_semaphore_addr also
+// stays on legacy because the same pattern is reused in the compute kernel via a CB-passed address; keeping
+// it consistent here avoids a partial Semaphore<> wrap.
 
 // Triple buffering constants
 #define NUM_SLOTS 3  // 3 slots in CB
@@ -68,6 +76,10 @@ void kernel_main() {
     constexpr auto cb_c2s_out = tt::CBIndex::c_1;  // matmul_writer_cb_id
     constexpr auto cb_r2c_w2 = tt::CBIndex::c_3;   // reuse cb_r2c_w0_w1
 
+    // Device 2.0 wrappers. cb_r2c_w0_w1 and cb_r2c_w2 both alias c_3, so one wrapper covers both.
+    CircularBuffer cb_r2c_w(cb_r2c_w0_w1);
+    CircularBuffer cb_per_expert_total_tokens(per_expert_total_tokens_cb_id);
+
     // Tile sizes
     constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in);
     constexpr uint32_t w0_w1_tile_size = get_tile_size(cb_r2c_w0_w1);
@@ -115,7 +127,7 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // CB addresses
     //-------------------------------------------------------------------------
-    const uint32_t w_cb_base_addr = get_write_ptr(cb_r2c_w0_w1);
+    const uint32_t w_cb_base_addr = cb_r2c_w.get_write_ptr();
 
     // Precompute slot addresses (avoid multiply in hot loop)
     // Each slot holds 2 transactions (28 tiles)
@@ -144,7 +156,7 @@ void kernel_main() {
 
     // Read per-expert token counts from CB
     volatile tt_l1_ptr uint32_t* num_tokens_per_expert_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(per_expert_total_tokens_cb_id));
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_per_expert_total_tokens.get_read_ptr());
 
     // Precompute NUM_CHUNKS_PER_EXPERT
     uint32_t NUM_CHUNKS_PER_EXPERT[num_experts];
@@ -158,7 +170,7 @@ void kernel_main() {
     //-------------------------------------------------------------------------
 
     // We reserve one to kick start the pipeline, and then it is steady state
-    cb_reserve_back(cb_r2c_w0_w1, w0_w1_tiles_per_block);
+    cb_r2c_w.reserve_back(w0_w1_tiles_per_block);
 
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
@@ -188,14 +200,14 @@ void kernel_main() {
                 // Only when we first start the pipeline, we don't have any txns in flight
                 if (txns_in_flight) {
                     noc_async_read_barrier_with_trid(trid_to_wait);
-                    cb_push_back(cb_r2c_w0_w1, w0_w1_tiles_per_block);
+                    cb_r2c_w.push_back(w0_w1_tiles_per_block);
 
                     ADVANCE_TRID(trid_to_wait);
 
                     // Reserve for next block
                     // Reserve back is not incremental, so to reserve one more, we need to reserve 2
                     // This accounts for the one we already have reserved (for in-flight read)
-                    cb_reserve_back(cb_r2c_w0_w1, w0_w1_tiles_per_block * 2);
+                    cb_r2c_w.reserve_back(w0_w1_tiles_per_block * 2);
                 }
                 txns_in_flight = true;
             }
@@ -220,14 +232,14 @@ void kernel_main() {
                 ADVANCE_TRID(trid_to_issue);
 
                 noc_async_read_barrier_with_trid(trid_to_wait);
-                cb_push_back(cb_r2c_w2, w2_tiles_per_block);
+                cb_r2c_w.push_back(w2_tiles_per_block);
 
                 ADVANCE_TRID(trid_to_wait);
 
                 // Reserve for next block
                 // Reserve back is not incremental, so to reserve one more, we need to reserve 2
                 // This accounts for the one we already have reserved (for in-flight read)
-                cb_reserve_back(cb_r2c_w2, w2_tiles_per_block * 2);
+                cb_r2c_w.reserve_back(w2_tiles_per_block * 2);
             }
         }
 
@@ -238,11 +250,11 @@ void kernel_main() {
 
     // Drain the pipeline - the last txn in flight
     noc_async_read_barrier_with_trid(trid_to_wait);
-    cb_push_back(cb_r2c_w2, w2_tiles_per_block);
+    cb_r2c_w.push_back(w2_tiles_per_block);
 
     // We have one extra slot reserved, which we won't use.
     // For CB hygiene, we can push it back.
-    cb_push_back(cb_r2c_w2, w2_tiles_per_block);
+    cb_r2c_w.push_back(w2_tiles_per_block);
 }
 
 #undef ADVANCE_TRID

@@ -4,8 +4,19 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "moe_ring_common.h"
+
+// Legacy primitives retained (#45003 item 4): noc_async_write_one_packet_set_state /
+// noc_async_write_one_packet_with_state / noc_inline_dw_write_set_state / noc_inline_dw_write_with_state /
+// noc_async_posted_writes_flushed have no Device 2.0 wrapper equivalent — they form the ring-step posted-
+// write pipeline and the inline semaphore-increment with shared state used between cores. The ring
+// semaphore on my_semaphore_ptr is polled inline (`while ((*my_semaphore_ptr) < semaphore_value){}`) and
+// signalled via noc_inline_dw_write_with_state, so the Semaphore<> wait/up wrappers don't fit. The combine
+// signalling path goes through safe_get_noc_addr (fabric routing helper) and a noc_semaphore_inc with a
+// precomposed noc address — also kept on legacy. matmul_chunk_available_semaphore_noc_addr is a precomposed
+// uint64_t noc address used with noc_semaphore_inc; no Device 2.0 form for that either.
 
 void kernel_main() {
     constexpr bool has_bias = get_named_compile_time_arg_val("has_bias") == 1;
@@ -70,6 +81,15 @@ void kernel_main() {
     constexpr auto cb_c2s_out = tt::CBIndex::c_1;  // matmul_writer_cb_id
     constexpr auto cb_r2c_w2 = tt::CBIndex::c_3;   // reuse cb_r2c_w0_w1
 
+    // Device 2.0 wrappers for the CBs this kernel touches via reserve/push/wait/pop or get_*_ptr.
+    CircularBuffer cb_s2c_in_obj(cb_s2c_in);
+    CircularBuffer cb_c2w_rdy_obj(cb_c2w_rdy);
+    CircularBuffer cb_w2c_rdy_obj(cb_w2c_rdy);
+    CircularBuffer cb_s2c_in2_obj(cb_s2c_in2);
+    CircularBuffer cb_w2c_md_obj(cb_w2c_md);
+    CircularBuffer cb_c2s_out_obj(cb_c2s_out);
+    CircularBuffer cb_per_expert_total_tokens(per_expert_total_tokens_cb_id);
+
     // Tile sizes
     constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in);
     constexpr uint32_t w0_w1_tile_size = get_tile_size(cb_r2c_w0_w1);
@@ -91,9 +111,9 @@ void kernel_main() {
     // constants needed for writing to combine sharded output
     constexpr uint32_t shard_offset_per_expert_bytes =
         token_expert_row_offset * combine_shard_width_tiles * tile_width_size_bytes;
-    cb_reserve_back(cb_s2c_in, 1);
-    const uint32_t output_base_l1_addr = get_write_ptr(cb_s2c_in);
-    cb_push_back(cb_s2c_in, 1);
+    cb_s2c_in_obj.reserve_back(1);
+    const uint32_t output_base_l1_addr = cb_s2c_in_obj.get_write_ptr();
+    cb_s2c_in_obj.push_back(1);
     constexpr uint32_t source_width_tiles = Cfg::w2_tiles_per_expert_w;
     const uint32_t output_width_tiles_core = w2_shard_tiles_lut[ring_core_id];
     const uint32_t width_tile_base = w2_offset_lut[ring_core_id];
@@ -128,7 +148,7 @@ void kernel_main() {
     constexpr uint32_t a2a_remainder_size = a2a_remainder_tiles * in2_tile_size;
 
     // Source and destination addresses for the all2all
-    const uint32_t local_base_addr = get_write_ptr(cb_s2c_in2);
+    const uint32_t local_base_addr = cb_s2c_in2_obj.get_write_ptr();
     const uint64_t neighbor_base_addr =
         get_noc_addr(ring_neighbor_physical_x, ring_neighbor_physical_y, local_base_addr);
 
@@ -153,16 +173,16 @@ void kernel_main() {
     // - 1: address of semaphore used to notify matmuls cores that tilized chunks have arrived
 
     // Read per-expert token counts from CB
-    const auto num_tokens_per_expert_addr = get_read_ptr(per_expert_total_tokens_cb_id);
+    const auto num_tokens_per_expert_addr = cb_per_expert_total_tokens.get_read_ptr();
     volatile tt_l1_ptr uint32_t* num_tokens_per_expert_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(num_tokens_per_expert_addr);
 
     volatile tt_l1_ptr uint32_t* cb_w2c_md_write_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_w2c_md));
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_w2c_md_obj.get_write_ptr());
     cb_w2c_md_write_ptr[0] = num_tokens_per_expert_addr;
     cb_w2c_md_write_ptr[1] = get_semaphore(matmul_chunk_ready_semaphore_id);
-    cb_reserve_back(cb_w2c_md, 2);
-    cb_push_back(cb_w2c_md, 2);
+    cb_w2c_md_obj.reserve_back(2);
+    cb_w2c_md_obj.push_back(2);
 
     // Precompute NUM_CHUNKS_PER_EXPERT
     uint32_t NUM_TOKENS_PER_EXPERT[num_experts];
@@ -228,8 +248,8 @@ void kernel_main() {
                 neighbor_semaphore_noc_addr, /*val=*/0, /*be=*/0xF, /*cmd_buf=*/write_at_cmd_buf, /*noc=*/1, vchannel);
 
             // Wait for compute core to tell us that all mm01 data is ready
-            cb_wait_front(cb_c2w_rdy, 1);
-            cb_pop_front(cb_c2w_rdy, 1);
+            cb_c2w_rdy_obj.wait_front(1);
+            cb_c2w_rdy_obj.pop_front(1);
 
             // Take the data in cb_s2c_in2 and send it to the next core in the ring
             // Ring synchronization: all cores participate regardless of whether they had CB work
@@ -246,8 +266,8 @@ void kernel_main() {
                     };
 
                     // Signal to compute core that data is ready
-                    cb_reserve_back(cb_w2c_rdy, 1);
-                    cb_push_back(cb_w2c_rdy, 1);
+                    cb_w2c_rdy_obj.reserve_back(1);
+                    cb_w2c_rdy_obj.push_back(1);
 
                     // Write tiles from local cb_s2c_in2 to neighbor's cb_s2c_in2
                     // Double buffer offset: alternate between buffer 0 and buffer 1 based on step
@@ -290,9 +310,9 @@ void kernel_main() {
 
             const uint32_t num_tokens_block = std::min(tile_height, active_tokens - chunk * tile_height);
 
-            cb_wait_front(cb_c2s_out, num_w0_w1_tiles_h);
+            cb_c2s_out_obj.wait_front(num_w0_w1_tiles_h);
 
-            const uint32_t source_base_l1_addr = get_read_ptr(cb_c2s_out);
+            const uint32_t source_base_l1_addr = cb_c2s_out_obj.get_read_ptr();
             const uint32_t elts_per_page = source_width_tiles * tile_width;
 
             while (width_tiles_to_send > 0) {
@@ -351,7 +371,7 @@ void kernel_main() {
             }
 
             noc_async_posted_writes_flushed(1);
-            cb_pop_front(cb_c2s_out, num_w0_w1_tiles_h);
+            cb_c2s_out_obj.pop_front(num_w0_w1_tiles_h);
 
             // Signal to tilize cores that they can send another chunk of tiles
             noc_semaphore_inc</*posted=*/true>(
