@@ -53,6 +53,11 @@ IsInDeviceOperation::tensor_return_value_t IsInDeviceOperation::create_output_te
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.elements_tensor.device());
 }
 
+tt::tt_metal::ProgramDescriptor IsInDeviceOperation::create_descriptor(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
+    return IsInProgramFactory::create_descriptor(args, tensor_args, output);
+}
+
 ttsl::hash::hash_t IsInDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_memory_layout = tensor_args.elements_tensor.layout();
