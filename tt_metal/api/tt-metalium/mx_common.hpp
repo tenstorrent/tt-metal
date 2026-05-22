@@ -74,7 +74,7 @@ inline float pow2_f32(int k) {
 // kMxFp6RParams) can constant-propagate field accesses, mask widths, and
 // inf/nan/sat branches. convert_to_mx_elem_bits inlines this on the per-
 // element hot path.
-inline RoundResult round_ties_even(uint32_t input_mantissa, int output_width, int input_width = 23) {
+constexpr RoundResult round_ties_even(uint32_t input_mantissa, int output_width, int input_width = 23) {
     if (output_width < 0) {
         return {0, 0};
     }
