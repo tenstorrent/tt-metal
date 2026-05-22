@@ -11,7 +11,7 @@ import torch
 import ttnn
 
 from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear
-from ...layers.module import Module, ModuleList
+from ...layers.module import Module, ModuleList, Parameter
 from ...layers.normalization import LayerNorm
 from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
@@ -331,8 +331,25 @@ class Wav2Vec2PositionalConvEmbedding(Module):
         super().__init__()
         self.config = config
         self.mesh_device = mesh_device
-        self._weight_dev: ttnn.Tensor | None = None
-        self._bias_dev: ttnn.Tensor | None = None
+        in_per_group = config.hidden_size // self.GROUPS
+
+        # Weight stored in HF/torch [out, in/groups, kT, kH, kW] convention so
+        # tensorbin save/load round-trips cleanly through cache.load_model.
+        # prepare_conv3d_weights runs lazily on first forward (one-shot).
+        self.weight = Parameter(
+            total_shape=[config.hidden_size, in_per_group, self.KERNEL, 1, 1],
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+            pad_value=0,
+        )
+        self.bias = Parameter(
+            total_shape=[1, config.hidden_size],
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            pad_value=0,
+        )
+        self._prepared_weight: ttnn.Tensor | None = None
 
         self.conv_config = get_conv3d_config(
             config.hidden_size,
@@ -353,29 +370,26 @@ class Wav2Vec2PositionalConvEmbedding(Module):
         g = state.pop("conv.parametrizations.weight.original0")  # [1, 1, kernel]
         v = state.pop("conv.parametrizations.weight.original1")  # [out, in/groups, kernel]
         b = state.pop("conv.bias")  # [out]
+        # weight_norm: w = (g / ||v||_2-along-kernel) * v
         w = torch._weight_norm(v, g, dim=2).unsqueeze(-1).unsqueeze(-1).contiguous()
-        self._weight_dev = ttnn.experimental.prepare_conv3d_weights(
-            weight_tensor=ttnn.from_torch(w, dtype=ttnn.bfloat16, pad_value=0),
-            groups=self.GROUPS,
-            C_in_block=self.conv_config.C_in_block,
-            alignment=ALIGNMENT,
-            device=self.mesh_device,
-        )
-        self._bias_dev = ttnn.from_torch(
-            b.reshape(1, -1).contiguous(),
-            device=self.mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            pad_value=0,
-        )
+        state["weight"] = w  # [out, in/groups, K, 1, 1]
+        state["bias"] = b.reshape(1, -1).contiguous()
 
     def forward(self, hidden_BTC: ttnn.Tensor) -> ttnn.Tensor:
+        if self._prepared_weight is None:
+            self._prepared_weight = ttnn.experimental.prepare_conv3d_weights(
+                weight_tensor=self.weight.data,
+                groups=self.GROUPS,
+                C_in_block=self.conv_config.C_in_block,
+                alignment=ALIGNMENT,
+                device=self.mesh_device,
+            )
         B, T, C = hidden_BTC.shape
         x = ttnn.reshape(ttnn.to_layout(hidden_BTC, ttnn.ROW_MAJOR_LAYOUT), (B, T, 1, 1, C))
         out = ttnn.experimental.conv3d(
             input_tensor=x,
-            weight_tensor=self._weight_dev,
-            bias_tensor=self._bias_dev,
+            weight_tensor=self._prepared_weight,
+            bias_tensor=self.bias.data,
             device=self.mesh_device,
             config=self.conv_config,
             output_channels=C,
