@@ -40,8 +40,6 @@ using ttnn::operations::conv::is_1d_depthwise_conv;
 using ttnn::operations::conv::should_coalesce_1d_depthwise_conv_reads;
 using ttnn::operations::conv::SkipMcast;
 
-using tt::tt_metal::CBDescriptor;
-using tt::tt_metal::CBFormatDescriptor;
 using tt::tt_metal::ComputeConfigDescriptor;
 using tt::tt_metal::DataMovementConfigDescriptor;
 using tt::tt_metal::KernelDescriptor;

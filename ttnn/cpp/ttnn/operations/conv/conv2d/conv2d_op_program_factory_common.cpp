@@ -10,6 +10,7 @@
 #include <optional>
 #include <variant>
 #include <vector>
+#include <type_traits>
 #include <tt_stl/assert.hpp>
 #include "tt-metalium/constants.hpp"
 #include "tt-metalium/hal.hpp"

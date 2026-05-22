@@ -8,7 +8,6 @@
 #include <tt-metalium/workload_descriptor.hpp>
 
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
-#include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
 
 namespace ttnn::prim {

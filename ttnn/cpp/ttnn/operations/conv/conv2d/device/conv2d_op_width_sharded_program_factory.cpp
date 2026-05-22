@@ -32,8 +32,6 @@ namespace unary = ttnn::operations::unary;
 using ttnn::operations::conv::conv_skip_mcast;
 using ttnn::operations::conv::SkipMcast;
 
-using tt::tt_metal::CBDescriptor;
-using tt::tt_metal::CBFormatDescriptor;
 using tt::tt_metal::ComputeConfigDescriptor;
 using tt::tt_metal::DataMovementConfigDescriptor;
 using tt::tt_metal::KernelDescriptor;
@@ -367,7 +365,7 @@ WorkloadDescriptor Conv2dWidthShardedProgramFactory::create_workload_descriptor(
     // Program (see SemaphoreDescriptor entries appended to `desc.semaphores`
     // below).  The kernel reads these ids the same way it did when the
     // legacy CreateSemaphore() return value was passed through compile-time
-    // args (both forms are 0-INVALID semaphores on `all_cores`).
+    // args (both forms use valid semaphore ids on `all_cores`, starting at 0).
     const uint32_t act_mcast_sender_semaphore = 0;
     const uint32_t act_mcast_receiver_semaphore = 1;
 

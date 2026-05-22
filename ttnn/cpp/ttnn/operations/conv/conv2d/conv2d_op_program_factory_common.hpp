@@ -92,7 +92,7 @@ std::vector<CBInfo> get_cb_info(
 // `tt::tt_metal::Program`, so factory code never needs to look them up.
 //
 // Intended to be called from a Conv2d program factory's `create_descriptor()`
-// after `get_cb_info(...)`.
+// or `create_workload_descriptor()` after `get_cb_info(...)`.
 void allocate_cbs_to_program_descriptor(
     std::vector<CBInfo>& cb_info,
     tt::tt_metal::ProgramDescriptor& desc,
