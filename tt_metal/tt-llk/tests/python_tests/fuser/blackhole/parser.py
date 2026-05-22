@@ -23,7 +23,7 @@ from fuser.validator import (
     compute_output_dimensions,
     validate_fpu_math,
 )
-from helpers.llk_params import MathFidelity, MathOperation, ReduceDimension, Tilize
+from helpers.llk_params import MathFidelity, MathOperation, Tilize
 from pydantic import (
     Field,
     field_validator,
@@ -46,12 +46,12 @@ from .unpacker.unpack_a import UnpackerA
 from .unpacker.unpack_ab import UnpackerAB
 
 UNPACKER_MAP = {
-    "UnpackerA": UnpackerA,
-    "UnpackerAB": UnpackerAB,
-    "UnpackerTilizeA": UnpackerTilizeA,
-    "MatmulUnpacker": MatmulUnpacker,
-    "ReduceUnpacker": ReduceUnpacker,
-    "ReduceBlockMaxUnpacker": ReduceBlockMaxUnpacker,
+    "UnpackerA": lambda s: UnpackerA(),
+    "UnpackerAB": lambda s: UnpackerAB(),
+    "UnpackerTilizeA": lambda s: UnpackerTilizeA(),
+    "MatmulUnpacker": lambda s: MatmulUnpacker(),
+    "ReduceUnpacker": lambda s: ReduceUnpacker(s.reduce_dim, s.reduce_pool),
+    "ReduceBlockMaxUnpacker": lambda s: ReduceBlockMaxUnpacker(),
 }
 
 PACKER_MAP = {
@@ -59,24 +59,19 @@ PACKER_MAP = {
 }
 
 FPU_MAP = {
-    "Elwadd": (lambda: EltwiseFpu(MathOperation.Elwadd), {"eltwise"}),
-    "Elwmul": (lambda: EltwiseFpu(MathOperation.Elwmul), {"eltwise"}),
-    "Elwsub": (lambda: EltwiseFpu(MathOperation.Elwsub), {"eltwise"}),
-    "Datacopy": (DatacopyFpu, set()),
-    "Matmul": (MatmulFpu, {"matmul"}),
-    "Reduce": (ReduceFpu, {"reduce"}),
-    "ReduceBlockMax": (ReduceBlockMaxFpu, {"reduce"}),
+    "Elwadd": (lambda s: EltwiseFpu(MathOperation.Elwadd), {"eltwise"}),
+    "Elwmul": (lambda s: EltwiseFpu(MathOperation.Elwmul), {"eltwise"}),
+    "Elwsub": (lambda s: EltwiseFpu(MathOperation.Elwsub), {"eltwise"}),
+    "Datacopy": (lambda s: DatacopyFpu(), set()),
+    "Matmul": (lambda s: MatmulFpu(), {"matmul"}),
+    "Reduce": (lambda s: ReduceFpu(s.reduce_dim, s.reduce_pool), set()),
+    "ReduceBlockMax": (lambda s: ReduceBlockMaxFpu(), set()),
 }
 
 _tagged = lambda tag: {op for op, (_, tags) in FPU_MAP.items() if tag in tags}
 
 ELTWISE_OPS = _tagged("eltwise")
 MATMUL_OPS = _tagged("matmul")
-REDUCE_OPS = _tagged("reduce")
-
-FORCED_REDUCE_DIM = {
-    "ReduceBlockMax": ReduceDimension.Row,
-}
 
 SUPPORTED_FIDELITIES = {
     "Elwadd": {MathFidelity.LoFi},
@@ -174,8 +169,6 @@ class FpuMathSchema(FpuMathSchemaBase):
         validate_fpu_math(
             self,
             ELTWISE_OPS,
-            REDUCE_OPS,
-            FORCED_REDUCE_DIM,
             SUPPORTED_FIDELITIES,
             UNPACKER_RULES,
         )

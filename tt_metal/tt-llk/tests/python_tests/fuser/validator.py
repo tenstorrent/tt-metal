@@ -8,13 +8,12 @@ Each architecture (wormhole/parser.py, blackhole/parser.py) inherits from the ba
 classes defined here and supplies plain dicts that control all validation and
 construction. The dicts are:
 
-    FPU_MAP              op name to (factory, tags) for FPU instantiation and category tagging
-    UNPACKER_MAP         unpacker name to runtime class
+    FPU_MAP              op name to (factory(schema), tags) for FPU instantiation and category tagging
+    UNPACKER_MAP         unpacker name to factory(schema) that returns an unpacker instance
     PACKER_MAP           packer name to runtime class
     UNPACKER_RULES       op name to allowed unpacker name(s), either a string or a set
     OUTPUT_DIMS          op name to a lambda(src_a, src_b) that computes output dimensions
     SUPPORTED_FIDELITIES op name to set of allowed MathFidelity values (absent means all allowed)
-    FORCED_REDUCE_DIM    op name to the ReduceDimension that gets forced (absent means user picks)
 """
 
 from typing import Annotated, Callable, Dict, List, Literal, Optional, Set, Tuple, Union
@@ -202,8 +201,6 @@ class FpuMathSchemaBase(BaseModel):
 def validate_fpu_math(
     schema,
     eltwise_ops: Set[str],
-    reduce_ops: Set[str],
-    forced_reduce_dim: Dict[str, ReduceDimension],
     supported_fidelities: Dict[str, Set],
     unpacker_rules: Dict[str, Union[str, Set[str]]],
 ):
@@ -216,19 +213,11 @@ def validate_fpu_math(
     """
     op = schema.operation
 
-    forced_dim = forced_reduce_dim.get(op)
-    if forced_dim is not None:
-        if schema.reduce_dim is None:
-            schema.reduce_dim = forced_dim
-        elif schema.reduce_dim != forced_dim:
-            raise ValueError(
-                f'Reduce operations require reduce_dim: "{forced_dim.value}"'
-            )
-    elif op in reduce_ops:
+    if schema.reduce_pool is not None or schema.reduce_dim is not None:
         if schema.reduce_pool is None:
-            raise ValueError(f"Reduce operations require reduce_pool: {ReducePool}")
+            raise ValueError(f"reduce_dim requires reduce_pool: {ReducePool}")
         if schema.reduce_dim is None:
-            raise ValueError(f"Reduce operations require reduce_dim: {ReduceDimension}")
+            raise ValueError(f"reduce_pool requires reduce_dim: {ReduceDimension}")
 
     unpacker_name = schema.unpacker
 
@@ -329,7 +318,7 @@ def build_compute_node(
     if entry is None:
         raise ValueError(f"Unknown FPU operation: {schema.operation}")
     factory, _ = entry
-    fpu = factory()
+    fpu = factory(schema)
 
     clear_fp32_dst_acc = (
         ClearFP32DstAcc.Yes
@@ -349,12 +338,8 @@ def build_compute_node(
         "acc_to_dest": schema.acc_to_dest,
         "unpack_to_dest": schema.unpack_to_dest,
     }
-    if schema.unpacker:
-        kwargs["unpacker"] = unpacker_map[schema.unpacker]
-    if schema.reduce_dim:
-        kwargs["reduce_dim"] = schema.reduce_dim
-    if schema.reduce_pool:
-        kwargs["reduce_pool"] = schema.reduce_pool
+    if schema.unpacker is not None:
+        kwargs["unpacker"] = unpacker_map[schema.unpacker](schema)
 
     return ComputeNode(fpu=fpu, src_a=src_a, src_b=src_b, sfpu=None, **kwargs)
 
@@ -429,12 +414,19 @@ class OperationSchemaBase(BaseModel):
         ):
             raise ValueError(f"{output.data_format} does not support L1 accumulation")
 
+        reduce_dim = None
+        for node in math_ops:
+            if node.fpu is not None and hasattr(node.fpu, "reduce_dim"):
+                reduce_dim = node.fpu.reduce_dim
+                break
+
         kwargs = {
             "block_size": self.block_size,
             "pack_relu": self.pack_relu,
             "relu_threshold": self.relu_threshold,
             "pack_l1_accumulation": self.pack_l1_accumulation,
             "dest_sync": self.dest_sync,
+            "reduce_dim": reduce_dim,
         }
         kwargs.update(self._arch_kwargs())
 
