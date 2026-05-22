@@ -6,42 +6,24 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation_types.hpp"
-#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation.hpp"
-#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp"
-#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_line_program_factory.hpp"
-#include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.hpp"
+
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 
 namespace ttnn::experimental::prim {
 
-struct MatmulReduceScatterAsyncSharedVariables {
-    ttnn::experimental::prim::ReduceScatterProgramArtifacts reduce_scatter_artifacts;
-    ttnn::prim::MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t matmul_shared_variables;
-};
-
+// Contract-2 (descriptor) factory for the fused Matmul + ReduceScatter op.
+// Per coord the matmul (2D mcast) and ring reduce-scatter descriptor helpers
+// both append onto the same ProgramDescriptor; the ReduceScatterFusedOpSignaler
+// / MatmulFusedOpSignaler bridge between the two halves exactly as in the
+// legacy Program& factory.
 struct MatmulReduceScatterAsyncProgramFactory {
-    using shared_variables_t = MatmulReduceScatterAsyncSharedVariables;
-    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
-
-    static cached_mesh_workload_t create_mesh_workload(
-        const MatmulReduceScatterAsyncParams& args,
-        const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const MatmulReduceScatterAsyncInputs& tensor_args,
-        MatmulReduceScatterAsyncResult& output_tensors);
-
-    static void override_runtime_arguments(
-        cached_mesh_workload_t& cached_workload,
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const MatmulReduceScatterAsyncParams& args,
         const MatmulReduceScatterAsyncInputs& tensor_args,
-        MatmulReduceScatterAsyncResult& output_tensors);
-
-private:
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create_at(
-        const MatmulReduceScatterAsyncParams& args,
-        const ttnn::MeshCoordinate& mesh_coord,
-        const MatmulReduceScatterAsyncInputs& tensor_args,
-        MatmulReduceScatterAsyncResult& output_tensors);
+        MatmulReduceScatterAsyncResult& output_tensors,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 };
 
 }  // namespace ttnn::experimental::prim
