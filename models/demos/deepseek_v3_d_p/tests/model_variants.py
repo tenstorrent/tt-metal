@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from typing import Callable, FrozenSet, Optional, Tuple
 
 import torch
+from transformers.configuration_utils import PretrainedConfig
 
 from models.demos.deepseek_v3.reference.configuration_deepseek import DeepseekV3Config as DSv3RefConfig
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Attention as DSv3RefAttention
@@ -64,7 +65,7 @@ class ModelVariant:
 
     name: str
     gate: GateRouting
-    build_reference_config: Callable[[], "PretrainedConfig"]
+    build_reference_config: Callable[[], PretrainedConfig]
 
     # Optional capabilities — None ⇒ skip that cross-check.
     reference_moe_cls: Optional[type] = None

@@ -330,7 +330,7 @@ def test_ttnn_moe(
             shared_expert_weights=shared_expert_weights,
             gate_weights=gate_weights,
         )
-        apply_gate_overrides_moe(tt_moe=None, torch_moe=torch_moe, model_config=model_config)
+        apply_gate_overrides_moe(tt_moe=None, torch_moe=torch_moe, variant=model_config)
         profiler.end("torch_moe_creation")
 
         profiler.start("torch_forward")
@@ -368,7 +368,7 @@ def test_ttnn_moe(
         weight_cache_path=moe_cache_dir,
         layer_idx=layer_idx,
     )
-    apply_gate_overrides_moe(tt_moe=tt_moe, torch_moe=None, model_config=model_config)
+    apply_gate_overrides_moe(tt_moe=tt_moe, torch_moe=None, variant=model_config)
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_moe_creation")
 
