@@ -82,10 +82,13 @@ enum class RemapMode : uint8_t {
  *   output_cb        — Output circular buffer index (0–31, tiled output, must differ from input_cb).
  *   init_uninit_mode — Init/uninit lifecycle control (default: InitAndUninit).
  *   wait_mode        — How to synchronize on input data (default: WaitBlock).
- *   reconfig_mode    — Register datatype reconfiguration (default: UnpackAndPackReconfigure).
+ *   reconfig_mode     — Register datatype reconfiguration (default: UnpackAndPackReconfigure).
  *   fp32_mode        — Float32 precision control (default: Fast).
  *                       Fast: uses fast_tilize when possible (lossy for fp32 — truncates to tf32 precision).
  *                       Lossless: forces standard tilize path, preserving exact fp32 values.
+ *   remap_mode       — BH DEST remap setup control (default: Configure).
+ *                       Configure: helper configures remap when the selected tilize path needs it.
+ *                       AssumeConfigured: caller already enabled BH DEST remap and no intervening code changes it.
  *
  * ── Block Geometry ─────────────────────────────────────────────────────────
  *

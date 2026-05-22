@@ -90,7 +90,10 @@ ALWI void untilize_uninit();
  *   output_cb         — Output circular buffer index (0–31, row-major output, must differ from input_cb).
  *   init_uninit_mode  — Init/uninit lifecycle control (default: InitAndUninit).
  *   wait_mode         — How to synchronize on input data (default: WaitBlock).
- *   reconfig_mode     — Register datatype reconfiguration (default: UnpackAndPackReconfigure).
+ *   reconfig_mode      — Register datatype reconfiguration (default: UnpackAndPackReconfigure).
+ *   remap_mode        — BH DEST remap setup control (default: Configure).
+ *                        Configure: helper configures remap during pack untilize init.
+ *                        AssumeConfigured: caller already enabled BH DEST remap and no intervening code changes it.
  *
  * ── Block Geometry ─────────────────────────────────────────────────────────
  *
