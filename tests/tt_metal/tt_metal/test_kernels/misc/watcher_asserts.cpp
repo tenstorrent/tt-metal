@@ -84,7 +84,16 @@ void kernel_main() {
 #else
         uint32_t hw_assert_cause = get_arg_val<uint32_t>(3);
 #endif
+#ifndef COMPILE_FOR_TRISC
         volatile int32_t* p = (int32_t*)0xffffffffff000000;
+#else
+#if defined(ARCH_QUASAR)
+        constexpr uint32_t compute_id = get_arg(args::trisc_id);
+        if((hw_idx - NUM_DM_CORES) != compute_id) // test always runs on neo0 cluster
+            return;
+#endif
+        volatile int32_t* p = (int32_t*)0xff000000;
+#endif
         uint32_t tmp;
         switch (hw_assert_cause) {
             case 2: asm volatile(".word 0x00000000"); break; // illegal instruction
@@ -92,8 +101,19 @@ void kernel_main() {
             case 5: tmp = *p; break; // load access fault
             case 6: asm volatile("sw %0, 0x2(x0)" : "=r"(tmp)); break; // store not aligned
             case 7: *p = 0; break; // store access fault
+#if defined(COMPILE_FOR_TRISC) and defined(ARCH_QUASAR)
+            case 8: INSTRUCTION_WORD(TT_OP(0xbc, 0)); break; // illegal instruction
+            case 9: RISCV_DEBUG_REGS->CHICKEN_BITS |= T6_DEBUG_REGS__CHICKEN_BITS__ALLOW_UNSAFE_SEMPOST_SEMGET_bm;
+                    TTI_SEMGET(0, 2); TTI_SEMINIT(3,0,0,2); break; // semaphore
+            case 10: {
+                uint32_t* stack_limit = (uint32_t*)RISCV_DEBUG_REGS->DBG_TRISC_STACK_LIMIT;
+                volatile uint32_t stack_value = *(stack_limit - 1);
+                break; // stack overflow
+            }
+#endif
             default: ASSERT(0, DebugAssertHwFault);
         }
+        // *p = 0;
     } else {
         ASSERT(a != b, static_cast<debug_assert_type_t>(assert_type));
     }

@@ -17,6 +17,7 @@ file(
     GLOB_RECURSE kernels
     deepseek_grouped_gate/device/kernels/*
     deepseek_moe_fast_reduce_nc/device/kernels/*
+    deepseek_moe_fast_reduce_nc_fused/device/kernels/*
     fast_reduce_nc/device/kernels/*
     integral_image/device/kernels/*
 )
@@ -36,7 +37,15 @@ target_sources(
         ${TTNN_OP_EXPERIMENTAL_REDUCTION_SRCS}
 )
 
-target_link_libraries(ttnn_op_experimental_reduction PRIVATE TT::Metalium PUBLIC TTNN::Core)
+target_include_directories(ttnn_op_experimental_reduction PRIVATE ${FixmeOpIncDirs})
+target_link_libraries(
+    ttnn_op_experimental_reduction
+    PUBLIC
+        TTNN::Core
+    PRIVATE
+        TT::Metalium
+        TTNN::Ops::Reduction
+)
 
 install(
     TARGETS

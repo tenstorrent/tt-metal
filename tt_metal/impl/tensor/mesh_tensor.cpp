@@ -34,7 +34,9 @@ std::shared_ptr<distributed::MeshBuffer> MeshTensor::mesh_buffer_invariant_break
     return impl().raw_mesh_buffer();
 }
 
-distributed::MeshDevice& MeshTensor::device() const { return *mesh_buffer().device(); }
+const distributed::MeshDevice& MeshTensor::device() const { return device_mut(); }
+
+distributed::MeshDevice& MeshTensor::device_mut() const { return *mesh_buffer().device(); }
 
 const TensorSpec& MeshTensor::tensor_spec() const { return impl().spec(); }
 
@@ -60,7 +62,7 @@ const MemoryConfig& MeshTensor::memory_config() const { return tensor_spec().mem
 
 bool MeshTensor::is_sharded() const { return memory_config().is_sharded(); }
 
-const std::optional<ShardSpec>& MeshTensor::legacy_shard_spec() const { return memory_config().shard_spec(); }
+const std::optional<ShardSpec>& MeshTensor::shard_spec() const { return memory_config().shard_spec(); }
 
 const std::optional<NdShardSpec>& MeshTensor::nd_shard_spec() const { return memory_config().nd_shard_spec(); }
 
