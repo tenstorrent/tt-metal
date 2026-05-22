@@ -61,6 +61,7 @@ class Yolov11Conv2D:
         is_dfl=False,
         config_override=None,
         deallocate_activation=False,
+        high_fidelity=False,
     ):
         self.is_detect = is_detect
         self.activation = activation
@@ -77,10 +78,10 @@ class Yolov11Conv2D:
         self.deallocate_activation = deallocate_activation
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=True,
-            math_approx_mode=True,
+            math_fidelity=ttnn.MathFidelity.HiFi2 if high_fidelity else ttnn.MathFidelity.LoFi,
+            fp32_dest_acc_en=high_fidelity,
+            packer_l1_acc=not high_fidelity,
+            math_approx_mode=not high_fidelity,
         )
         self.activation_dtype = activation_dtype
         # Convert activation string to proper ttnn activation object
@@ -312,6 +313,7 @@ class TtnnConv:
         shard_layout=None,
         config_override=None,
         activation_dtype=ttnn.bfloat8_b,
+        high_fidelity=False,
     ):
         self.enable_act = enable_act
         if self.enable_act:
@@ -327,6 +329,7 @@ class TtnnConv:
             shard_layout=shard_layout,
             config_override=config_override,
             activation_dtype=activation_dtype,
+            high_fidelity=high_fidelity,
         )
 
     def __call__(self, device, x):

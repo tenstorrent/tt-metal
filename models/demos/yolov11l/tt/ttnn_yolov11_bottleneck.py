@@ -7,9 +7,9 @@ from models.demos.yolov11l.tt.common import TtnnConv
 
 
 class TtnnBottleneck:
-    def __init__(self, device, parameter, conv_pt):
-        self.cv1 = TtnnConv(device, parameter.cv1, conv_pt.cv1)
-        self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2)
+    def __init__(self, device, parameter, conv_pt, high_fidelity=False):
+        self.cv1 = TtnnConv(device, parameter.cv1, conv_pt.cv1, high_fidelity=high_fidelity)
+        self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2, high_fidelity=high_fidelity)
 
     def __call__(self, device, x, tile_shape=32):
         input = x

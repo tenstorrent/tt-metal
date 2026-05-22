@@ -9,12 +9,12 @@ from models.demos.yolov11l.tt.ttnn_yolov11_bottleneck import TtnnBottleneck
 
 
 class TtnnC3K:
-    def __init__(self, device, parameter, conv_pt):
-        self.cv1 = TtnnConv(device, parameter.cv1, conv_pt.cv1)
-        self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2)
-        self.cv3 = TtnnConv(device, parameter.cv3, conv_pt.cv3, reshard=True)
-        self.k1 = TtnnBottleneck(device, parameter.m[0], conv_pt.m[0])
-        self.k2 = TtnnBottleneck(device, parameter.m[1], conv_pt.m[1])
+    def __init__(self, device, parameter, conv_pt, high_fidelity=False):
+        self.cv1 = TtnnConv(device, parameter.cv1, conv_pt.cv1, high_fidelity=high_fidelity)
+        self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2, high_fidelity=high_fidelity)
+        self.cv3 = TtnnConv(device, parameter.cv3, conv_pt.cv3, reshard=True, high_fidelity=high_fidelity)
+        self.k1 = TtnnBottleneck(device, parameter.m[0], conv_pt.m[0], high_fidelity=high_fidelity)
+        self.k2 = TtnnBottleneck(device, parameter.m[1], conv_pt.m[1], high_fidelity=high_fidelity)
 
     def __call__(self, device, x, use_shard_concat=True):
         x1 = self.cv1(device, x)

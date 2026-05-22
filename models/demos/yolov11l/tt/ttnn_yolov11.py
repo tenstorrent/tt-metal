@@ -53,6 +53,7 @@ class TtnnYoloV11:
             is_bk_enabled=False,
             reshard=True,
             use_block_sharded=True,
+            high_fidelity=True,
         )
         c3k2_6_fits_block = parameters.conv_args[16].cv1.conv.input_height <= 80
         self.c3k2_6 = TtnnC3k2(
@@ -63,6 +64,7 @@ class TtnnYoloV11:
             reshard=True,
             use_block_sharded=c3k2_6_fits_block,
             cv1_config_override={"act_block_h": 32} if c3k2_6_fits_block else None,
+            high_fidelity=True,
         )
         self.conv7 = TtnnConv(
             device,
@@ -71,6 +73,7 @@ class TtnnYoloV11:
             deallocate_activation=True,
             reshard=True,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            high_fidelity=True,
         )
         self.c3k2_7 = TtnnC3k2(
             device,
@@ -79,6 +82,7 @@ class TtnnYoloV11:
             is_bk_enabled=False,
             reshard=True,
             use_block_sharded=True,
+            high_fidelity=True,
         )
         self.conv8 = TtnnConv(
             device,
@@ -87,6 +91,7 @@ class TtnnYoloV11:
             deallocate_activation=True,
             reshard=True,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            high_fidelity=True,
         )
         self.c3k2_8 = TtnnC3k2(
             device,
@@ -95,6 +100,7 @@ class TtnnYoloV11:
             is_bk_enabled=False,
             reshard=True,
             use_block_sharded=True,
+            high_fidelity=True,
         )
         self.detect = TtnnDetect(device, parameters.model_args.model[23], parameters.model[23])
 

@@ -20,6 +20,7 @@ class TtnnC3k2:
         use_block_sharded=False,
         cv1_config_override=None,
         cv2_l1_fallback_threshold_bytes=512 * 1024,
+        high_fidelity=False,
     ):
         self.is_bk_enabled = is_bk_enabled
         self.reshard = reshard
@@ -34,6 +35,7 @@ class TtnnC3k2:
                 conv_pt.cv1,
                 reshard=False,
                 deallocate_activation=True,
+                high_fidelity=high_fidelity,
             )
             # cv2: DRAM activations + auto slice (like conv2) — L1 sharded concat + HEIGHT_SHARDED cv2 peaked L1 (tilize/matmul OOM).
             self.cv2 = TtnnConv(
@@ -43,8 +45,11 @@ class TtnnC3k2:
                 reshard=True,
                 deallocate_activation=True,
                 shard_layout=None,
+                high_fidelity=high_fidelity,
             )
-            self.inner = [TtnnBottleneck(device, parameter[i], conv_pt.m[i]) for i in range(n_inner)]
+            self.inner = [
+                TtnnBottleneck(device, parameter[i], conv_pt.m[i], high_fidelity=high_fidelity) for i in range(n_inner)
+            ]
         else:
             if reshard:
                 cv1_shard_layout = (
@@ -62,6 +67,7 @@ class TtnnC3k2:
                 deallocate_activation=True,
                 shard_layout=cv1_shard_layout,
                 config_override=cv1_config_override,
+                high_fidelity=high_fidelity,
             )
             self.cv2 = TtnnConv(
                 device,
@@ -70,8 +76,11 @@ class TtnnC3k2:
                 reshard=True,
                 deallocate_activation=True,
                 shard_layout=None,
+                high_fidelity=high_fidelity,
             )
-            self.inner = [TtnnC3K(device, parameter[i], conv_pt.m[i]) for i in range(n_inner)]
+            self.inner = [
+                TtnnC3K(device, parameter[i], conv_pt.m[i], high_fidelity=high_fidelity) for i in range(n_inner)
+            ]
 
     def __call__(self, device, x, use_shard_concat=True):
         if self.reshard:

@@ -87,6 +87,7 @@ def calculate_map(predictions, ground_truths, iou_threshold=0.5, num_classes=3):
     return mAP
 
 
+@torch.inference_mode()
 def evaluation(
     device,
     res,
@@ -97,26 +98,7 @@ def evaluation(
     save_dir,
     model_name=None,
 ):
-    # disable_persistent_kernel_cache()
-
     num_iterations = 500
-
-    # if model_type == "torch_model":
-    #     if model_name in ["YOLOv10", "YOLOv11n", "YOLOv11s", "YOLOv8s"]:
-    #         num_iterations = 105
-    #     elif model_name in ["YOLOv9c", "YOLOv7", "YOLOv6l"]:
-    #         num_iterations = 20
-    #     elif model_name in ["YOLOv12x", "YOLOv5x"]:
-    #         num_iterations = 14
-    #     elif model_name == "YOLOv8x":
-    #         num_iterations = 180
-    #     elif model_name in ["YOLOv8l", "YOLOv11l"]:
-    #         num_iterations = 20
-    #     elif model_name == "YOLOv8s_World":
-    #         num_iterations = 50
-    # elif model_type == "tt_model" and model_name in ["YOLOv8l", "YOLOv11l"]:
-    #     # Match torch subset size so mAP compares on the same val images (default tt was 500).
-    #     num_iterations = 20
 
     dataset_name = "coco-2017"
     dataset = fiftyone.zoo.load_zoo_dataset(
@@ -218,12 +200,94 @@ def evaluation(
         if model_type != "torch_model":
             preprocessed_images.append((ttnn_im, im, im0s))
         else:
-            preprocessed_images.append((im, im, im0s))
+            # Single-pass for torch: infer and collect immediately to avoid caching all
+            # preprocessed tensors in memory (at 1280x1280 each im is ~20 MB; 500 images = ~10 GB).
+            preds = model(im)
+            if model_name in ["YOLOv7", "YOLOv6l", "YOLOv8s", "YOLOv8l"]:
+                preds = preds[0]
+            if model_name == "YOLOv4":
+                from models.demos.yolov4.post_processing import get_region_boxes, post_processing
+
+                y1, y2, y3 = gen_yolov4_boxes_confs(preds)
+                output = get_region_boxes([y1, y2, y3])
+                results = post_processing(img, 0.3, 0.4, output)
+                predicted_temp = results[0]
+                for i in predicted_temp:
+                    del i[5]
+                predicted_bbox.append(predicted_temp)
+            elif model_name == "YOLOv10":
+                from models.demos.yolov10x.demo.demo_utils import postprocess as postprocess_yolov10
+
+                results = postprocess_yolov10(preds, im, im0s, batch, classes)[0]
+                pred = results["boxes"]["xyxy"].tolist()
+                h, w = results["orig_img"].shape[0], results["orig_img"].shape[1]
+                for index_of_prediction, (conf, values) in enumerate(
+                    zip(results["boxes"]["conf"].tolist(), results["boxes"]["cls"].tolist())
+                ):
+                    pred[index_of_prediction][0] /= w
+                    pred[index_of_prediction][1] /= h
+                    pred[index_of_prediction][2] /= w
+                    pred[index_of_prediction][3] /= h
+                    pred[index_of_prediction].append(conf)
+                    pred[index_of_prediction].append(int(values))
+                predicted_bbox.append(pred)
+                save_yolo_predictions_by_model(results, save_dir, source_list[index], model_type)
+            elif model_name == "YOLOv7":
+                from models.demos.yolov7.demo.demo_utils import postprocess as postprocess_yolov7
+
+                results = postprocess_yolov7(
+                    preds, im, im0s, batch, classes, source_list[index], data_set, save_dir=save_dir
+                )[0]
+                pred = results["boxes"]["xyxy"].tolist()
+                h, w = results["orig_img"].shape[0], results["orig_img"].shape[1]
+                for index_of_prediction, (conf, values) in enumerate(
+                    zip(results["boxes"]["conf"].tolist(), results["boxes"]["cls"].tolist())
+                ):
+                    pred[index_of_prediction][0] /= w
+                    pred[index_of_prediction][1] /= h
+                    pred[index_of_prediction][2] /= w
+                    pred[index_of_prediction][3] /= h
+                    pred[index_of_prediction].append(conf)
+                    pred[index_of_prediction].append(int(values))
+                predicted_bbox.append(pred)
+            elif model_name == "YOLOv6l":
+                from models.demos.yolov6l.demo.demo_utils import postprocess as postprocess_yolov6l
+
+                results = postprocess_yolov6l(preds, im, im0s, batch, classes, 0.4, 1000)[0]
+                pred = results["boxes"]["xyxy"].tolist()
+                h, w = results["orig_img"].shape[0], results["orig_img"].shape[1]
+                for index_of_prediction, (conf, values) in enumerate(
+                    zip(results["boxes"]["conf"].tolist(), results["boxes"]["cls"].tolist())
+                ):
+                    pred[index_of_prediction][0] /= w
+                    pred[index_of_prediction][1] /= h
+                    pred[index_of_prediction][2] /= w
+                    pred[index_of_prediction][3] /= h
+                    pred[index_of_prediction].append(conf)
+                    pred[index_of_prediction].append(int(values))
+                predicted_bbox.append(pred)
+                save_yolo_predictions_by_model(results, save_dir, source_list[index], model_type)
+            else:
+                results = postprocess(preds, im, im0s, batch, classes)[0]
+                pred = results["boxes"]["xyxy"].tolist()
+                h, w = results["orig_img"].shape[0], results["orig_img"].shape[1]
+                for index_of_prediction, (conf, values) in enumerate(
+                    zip(results["boxes"]["conf"].tolist(), results["boxes"]["cls"].tolist())
+                ):
+                    pred[index_of_prediction][0] /= w
+                    pred[index_of_prediction][1] /= h
+                    pred[index_of_prediction][2] /= w
+                    pred[index_of_prediction][3] /= h
+                    pred[index_of_prediction].append(conf)
+                    pred[index_of_prediction].append(int(values))
+                predicted_bbox.append(pred)
+                save_yolo_predictions_by_model(results, save_dir, source_list[index], model_type)
+            index += 1
 
         if model_name == "YOLOv7":
             img_for_yolov7.append(s)
 
-    # Model inference loop
+    # Model inference loop (tt_model only; torch_model is handled inline above)
     for ttnn_im, im, im0s in preprocessed_images:
         if model_type == "torch_model":
             preds = model(im)
