@@ -294,7 +294,7 @@ class Transformer(LightweightModule):
         tokens,
         page_table=None,
         chunk_page_table=None,
-        chunk_start_idx=0,
+        chunk_start_idx=None,
         batch_size=1,
         user_id=0,
         **kwargs,
