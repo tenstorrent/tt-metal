@@ -94,10 +94,12 @@ void kernel_main() {
         const uint32_t chunk_input_tiles = rows_in_chunk * num_tile_cols;
         const uint32_t chunk_stats_tiles = rows_in_chunk * stats_tiles_cols;
 
-        // -------- WAIT FOR CHUNK INPUT --------
-        cb_wait_front(input_cb, chunk_input_tiles);
-
         // -------- PHASE 1: PRE — sum(x**2) per row --------
+        // Cumulative input wait (Phase 4): instead of one cb_wait_front for the
+        // whole chunk, wait per col-block. Lets the reader push block N+1 while
+        // compute is processing block N. Counter resets per chunk because we
+        // cb_pop_front(input_cb, chunk_input_tiles) at the end.
+        uint32_t input_tiles_waited = 0;
         for (uint32_t r = 0; r < rows_in_chunk; r++) {
             const uint32_t row_base = r * num_tile_cols;
 
@@ -109,6 +111,11 @@ void kernel_main() {
             cb_reserve_back(pre_intermediate_cb, 1);
 
             for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                const uint32_t tiles_in_block =
+                    ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
+                input_tiles_waited += tiles_in_block;
+                cb_wait_front(input_cb, input_tiles_waited);
+
                 tile_regs_acquire();
                 for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
                     const uint32_t abs_idx = row_base + col_tile + i;
