@@ -219,19 +219,44 @@ factory. Concrete checklist:
    - `override_runtime_arguments` refreshes both scratch and output buffer
      addresses on program-cache hits.
 
-   **Still hangs on first run** even after the plumbing — looks like the
-   CB protocol between writer/reader/compute is not yet synchronizing
-   correctly. Likely diagnostic next steps:
-   - Replace the compute kernel with a dummy that just copies the first
-     tile of `cb_in0_x` into `cb_out` to isolate whether the wiring or
-     the matmul logic is the problem.
-   - Verify the writer's `num_sync_cores * sync_coord_pairs` runtime arg
-     layout matches the kernel-side `get_arg_val` reads.
-   - Confirm that `noc_semaphore_inc` with `posted=false` reaches the
-     remote core's local sem slot atomically (the default `noc_id`
-     might be wrong for the broadcast pattern).
-   - Add device-side `DPRINT` traces to the kernel and re-run with
-     `TT_METAL_DPRINT_CORES=0,0` to see if any specific phase wedges.
+   **Still hangs on first run** even after the plumbing — and a diagnostic
+   stub compute kernel (`fused_swiglu_diag.cpp`, kept in tree) that just
+   drains all reader CBs and pushes zero outputs ALSO hangs in the same
+   place. So the hang is in the reader/writer/sem wiring, not in the
+   matmul/silu/multiply logic.
+
+   The most likely culprit is the semaphore broadcast pattern. Each
+   writer does 64 sequential `noc_semaphore_inc` calls with `posted=false`
+   to every core's local sem slot, and each reader does
+   `noc_semaphore_wait(sem_ptr, total_cores)` expecting value 64 on its
+   local L1. Likely failure modes:
+   - On Blackhole, `noc_semaphore_inc` with `posted=false` may queue up
+     pending atomics that the NoC can't drain back into the local L1 cell
+     until a barrier — try `posted=true` or `noc_semaphore_inc_multicast`
+     for the broadcast pattern.
+   - The default `noc_id = noc_index` may be wrong direction for some
+     core pairs on the BH NoC; try forcing `noc_id = 0` and see.
+   - Confirm the writer's per-core runtime-args layout matches what
+     `writer_unified_re.cpp` reads:
+       arg[0]   output_addr
+       arg[1]   scratch_addr
+       arg[2]   sem_addr
+       arg[3]   num_sync_cores
+       arg[4 .. 4+2*N-1]  (sem_core_x, sem_core_y) pairs
+       arg[4+2N]  my_mt
+       ...
+     I wrote the factory side carefully but a fresh review with the
+     kernel side open is the cheapest verification.
+
+   Diagnostic next steps:
+   - Add DPRINT traces to the writer and reader and re-run with
+     `TT_METAL_DPRINT_CORES=0,0`.
+   - Replace the sem-broadcast with `noc_semaphore_inc_multicast` to one
+     rectangular destination grid (one NoC transaction, atomic to all 64
+     cores at once).
+   - Or skip the cross-core sync entirely for v1 and round-trip activated
+     through a single-core-owned chunk (sacrificing parallelism but
+     proving the rest of the pipeline).
 
 3. The "single op" / count-aware end state is then:
    - `TtRoutedExpert.forward` drops the host-side count read and just
