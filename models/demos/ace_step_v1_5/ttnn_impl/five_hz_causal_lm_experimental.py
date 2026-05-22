@@ -65,6 +65,8 @@ class AceStepFiveHzExperimentalTtnnCausalLM(nn.Module):
         *,
         max_seq_len: int = 16384,
         use_trace: bool = False,
+        use_prefill_trace: bool | None = None,
+        use_decode_trace: bool | None = None,
     ) -> None:
         super().__init__()
         from models.demos.ace_step_v1_5.ttnn_impl.qwen_tt_transformers_lm import QwenModelTtTransformers
@@ -75,8 +77,12 @@ class AceStepFiveHzExperimentalTtnnCausalLM(nn.Module):
             max_seq_len=int(max_seq_len),
             validate_against_hf=False,
             use_trace=bool(use_trace),
+            use_prefill_trace=use_prefill_trace,
+            use_decode_trace=use_decode_trace,
         )
-        self._use_trace = bool(use_trace)
+        self._use_prefill_trace = bool(self.qwen._use_prefill_trace)
+        self._use_decode_trace = bool(self.qwen._use_decode_trace)
+        self._use_trace = self._use_prefill_trace or self._use_decode_trace
         self.config = self.qwen.config
         self.generation_config = SimpleNamespace(use_cache=True)
         self._cursor = 0
