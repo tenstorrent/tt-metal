@@ -66,7 +66,11 @@ constexpr uint32_t div_up(uint32_t a, uint32_t b) {
 //
 template <uint32_t cb_id, TilizeGranularity granularity, typename Accessor>
 FORCE_INLINE void read_sticks_for_tilize(
-    const Accessor& accessor, uint32_t total_num_rows, uint32_t row_bytes, uint32_t start_page) {
+    const Accessor& accessor,
+    uint32_t total_num_rows,
+    uint32_t row_bytes,
+    uint32_t start_page,
+    uint32_t byte_offset_within_page) {
     // Derive tile geometry from CB configuration (all constexpr)
     constexpr uint32_t tile_h = unpack_tile_r_dim[cb_id];
     constexpr uint32_t tile_w = unpack_tile_c_dim[cb_id];
@@ -114,7 +118,7 @@ FORCE_INLINE void read_sticks_for_tilize(
             uint32_t l1_addr = get_write_ptr(cb_id);
 
             for (uint32_t row = 0; row < rows_this_block; row++) {
-                uint64_t noc_addr = accessor.get_noc_addr(start_page + block_row + row);
+                uint64_t noc_addr = accessor.get_noc_addr(start_page + block_row + row, byte_offset_within_page);
                 noc_async_read(noc_addr, l1_addr, row_bytes);
                 l1_addr += padded_row_bytes;
             }
@@ -145,7 +149,7 @@ FORCE_INLINE void read_sticks_for_tilize(
             cb_reserve_back(cb_id, 1);
             uint32_t l1_addr = get_write_ptr(cb_id);
 
-            uint64_t noc_addr = accessor.get_noc_addr(start_page + row);
+            uint64_t noc_addr = accessor.get_noc_addr(start_page + row, byte_offset_within_page);
             noc_async_read(noc_addr, l1_addr, row_bytes);
 
             noc_async_read_barrier();
@@ -180,7 +184,11 @@ FORCE_INLINE void read_sticks_for_tilize(
 //
 template <uint32_t cb_id, typename Accessor>
 FORCE_INLINE void write_sticks_after_untilize(
-    const Accessor& accessor, uint32_t total_num_rows, uint32_t row_bytes, uint32_t start_page) {
+    const Accessor& accessor,
+    uint32_t total_num_rows,
+    uint32_t row_bytes,
+    uint32_t start_page,
+    uint32_t byte_offset_within_page) {
     // Derive tile geometry from CB configuration (all constexpr)
     constexpr uint32_t tile_h = unpack_tile_r_dim[cb_id];
     constexpr uint32_t tile_w = unpack_tile_c_dim[cb_id];
@@ -222,7 +230,7 @@ FORCE_INLINE void write_sticks_after_untilize(
         uint32_t l1_addr = get_read_ptr(cb_id);
 
         for (uint32_t row = 0; row < rows_this_block; row++) {
-            uint64_t noc_addr = accessor.get_noc_addr(start_page + block_row + row);
+            uint64_t noc_addr = accessor.get_noc_addr(start_page + block_row + row, byte_offset_within_page);
             noc_async_write(l1_addr, noc_addr, row_bytes);
             l1_addr += padded_row_bytes;
         }
