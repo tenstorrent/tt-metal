@@ -308,7 +308,7 @@ def test_fast_tilize_overflow_guard(formats, dest_acc, dimensions):
     last_g_addr = (
         stim.buf_res_addr + (tile_count + guard_tiles - 1) * stim.buf_res_tile_size
     )
-    core_loc = "0,0"  # already "x,y" string
+    core_loc = TestConfig.TENSIX_LOCATION  # already "x,y" string
     raw = read_from_device(core_loc, last_g_addr, num_bytes=10)
     marker = struct.unpack_from("<H", raw, 0)[0]
     assert (
