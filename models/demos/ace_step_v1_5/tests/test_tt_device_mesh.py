@@ -188,6 +188,64 @@ def test_build_demo_run_specs_warmup():
     assert not session.can_reuse_preprocess(prompt="other", duration_sec=15.0, seed=0)
 
 
+def test_should_keep_dit_mesh_open_when_next_pass_reuses_preprocess():
+    from types import SimpleNamespace
+
+    from models.demos.ace_step_v1_5.demo_session import AceStepDemoSession, build_demo_run_specs
+
+    args = SimpleNamespace(
+        prompt="main prompt",
+        out="out.wav",
+        warmup=True,
+        warmup_prompt=None,
+        warmup_perf=False,
+        repeat=2,
+        serve=False,
+    )
+    specs = build_demo_run_specs(args)
+    session = AceStepDemoSession()
+    session.dit_dev = object()
+    session.store_preprocess(
+        prompt="main prompt",
+        duration_sec=30.0,
+        seed=0,
+        frames=750,
+        enc_hs=object(),
+        enc_mask=object(),
+        ctx_lat=object(),
+        null_emb=object(),
+    )
+    assert session.should_keep_dit_mesh_open(
+        run_specs=specs,
+        session_pass=0,
+        duration_sec=30.0,
+        seed=0,
+    )
+    assert not session.should_keep_dit_mesh_open(
+        run_specs=specs,
+        session_pass=0,
+        duration_sec=30.0,
+        seed=0,
+        force_close=True,
+    )
+    session.store_preprocess(
+        prompt="warmup only",
+        duration_sec=30.0,
+        seed=0,
+        frames=750,
+        enc_hs=object(),
+        enc_mask=object(),
+        ctx_lat=object(),
+        null_emb=object(),
+    )
+    assert not session.should_keep_dit_mesh_open(
+        run_specs=specs,
+        session_pass=0,
+        duration_sec=30.0,
+        seed=0,
+    )
+
+
 def test_emit_session_summary_rollup(monkeypatch):
     monkeypatch.setenv("ACE_STEP_DEMO_PERF_LOG", "1")
     from models.demos.ace_step_v1_5.ace_step_perf_log import SessionPassSnapshot, SessionPerfState, emit_session_summary
