@@ -327,7 +327,7 @@ python plugins/vllm-tt-plugin/examples/server_example_tt.py \
   --model "deepseek-ai/DeepSeek-R1-0528" \
   --max_model_len 1024 \
   --block_size 32 \
-  --plugin-config '{"tt": {"trace_mode": false}}'
+  --additional-config '{"tt": {"trace_mode": false}}'
 ```
 
 In another terminal, send a client request:
