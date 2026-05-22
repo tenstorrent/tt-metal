@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
@@ -15,6 +16,21 @@
 #include "reshard_writer.hpp"
 #include <cstdint>
 #include <utility>
+
+// Legacy primitives retained (#45003 item 4):
+// - All fabric APIs (FabricConnectionManager, MulticastRoutingCommandHeader, fused_write_atomic_*, packet header
+//   composition via PACKET_HEADER_TYPE) remain on the fabric API — the Device 2.0 NoC wrappers do not target EDM
+//   endpoints.
+// - VALID/INVALID semaphore handshake (noc_semaphore_set/wait/inc on raw tt_l1_ptr-cast addresses returned by
+//   get_semaphore()) is kept on legacy because the Semaphore<> wrapper does not target runtime L1 addresses.
+// - noc_semaphore_set_multicast_loopback_src + paired noc_async_write_barrier are kept on legacy because loopback
+//   multicast is not exposed by the Device 2.0 NoC wrapper.
+// - noc_async_read of gamma weights uses a precomposed uint64_t gamma_noc_addr (from get_noc_addr on a TensorAccessor
+//   tile id followed by raw byte-offset arithmetic), paired tightly with noc_async_read_barrier — kept together on
+//   legacy as one logical sub-tile read.
+// - dataflow_kernel_lib::calculate_and_prepare_reduce_scaler / prepare_reduce_scaler and generate_bcast_col_scalar
+//   take cb_id as a template/runtime argument and stay on the legacy CB API.
+
 void kernel_main() {
     constexpr bool is_all_to_all_worker = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t cb_in_2 = get_compile_time_arg_val(1);
@@ -48,6 +64,11 @@ void kernel_main() {
     constexpr uint32_t signaling_cb = get_compile_time_arg_val(22);
     constexpr uint32_t num_blocks = get_compile_time_arg_val(23);
     constexpr auto gamma_args = TensorAccessorArgs<24>();
+
+    CircularBuffer pkt_hdr_cb(reserved_packet_header_cb_id);
+    CircularBuffer cb_to_allgather_writer_obj(cb_to_allgather_writer);
+    CircularBuffer signaling_cb_obj(signaling_cb);
+    CircularBuffer cb_gamma_obj(cb_gamma);
 
     uint32_t stats_set_semaphore_addr = get_semaphore(stats_set_semaphore_id);
     size_t arg_idx = 0;
@@ -117,15 +138,15 @@ void kernel_main() {
                 arg_idx);
 
         // packet header cb
-        cb_reserve_back(reserved_packet_header_cb_id, 1);
-        auto packet_header_buffer_addr_forward = get_write_ptr(reserved_packet_header_cb_id);
-        cb_push_back(reserved_packet_header_cb_id, 1);
-        cb_reserve_back(reserved_packet_header_cb_id, 1);
-        auto packet_header_buffer_addr_backward = get_write_ptr(reserved_packet_header_cb_id);
-        cb_push_back(reserved_packet_header_cb_id, 1);
-        cb_reserve_back(reserved_packet_header_cb_id, 1);
-        auto packet_header_buffer_seminc = get_write_ptr(reserved_packet_header_cb_id);
-        cb_push_back(reserved_packet_header_cb_id, 1);
+        pkt_hdr_cb.reserve_back(1);
+        auto packet_header_buffer_addr_forward = pkt_hdr_cb.get_write_ptr();
+        pkt_hdr_cb.push_back(1);
+        pkt_hdr_cb.reserve_back(1);
+        auto packet_header_buffer_addr_backward = pkt_hdr_cb.get_write_ptr();
+        pkt_hdr_cb.push_back(1);
+        pkt_hdr_cb.reserve_back(1);
+        auto packet_header_buffer_seminc = pkt_hdr_cb.get_write_ptr();
+        pkt_hdr_cb.push_back(1);
         // pre-populate packet headers
         volatile PACKET_HEADER_TYPE* pkt_hdr_forward =
             reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr_forward);
@@ -145,8 +166,8 @@ void kernel_main() {
             safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr, 0);
         // Send data and the semaphore with the last tile
         uint32_t num_tiles_to_read_this_core = 1;
-        cb_wait_front(cb_to_allgather_writer, num_tiles_to_read_this_core);
-        size_t l1_read_addr = get_read_ptr(cb_to_allgather_writer);
+        cb_to_allgather_writer_obj.wait_front(num_tiles_to_read_this_core);
+        size_t l1_read_addr = cb_to_allgather_writer_obj.get_read_ptr();
         uint64_t noc0_dest_noc_addr = safe_get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], tensor_address0, 0);
         noc0_dest_noc_addr += shard_tile_id * tensor0_page_size;
         fused_write_atomic_and_advance_local_read_address_for_fabric_write(
@@ -161,7 +182,7 @@ void kernel_main() {
             false);
 
         fabric_connection.close_start();
-        cb_pop_front(cb_to_allgather_writer, num_tiles_to_read_this_core);
+        cb_to_allgather_writer_obj.pop_front(num_tiles_to_read_this_core);
         // increment locally
         uint64_t out_ready_sem_noc_addr =
             safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
@@ -192,8 +213,8 @@ void kernel_main() {
         noc_semaphore_wait(stats_set_semaphore_addr_ptr, VALID);
     }
     // Tell the compute kernel it is ok to proceed
-    cb_reserve_back(signaling_cb, 1);
-    cb_push_back(signaling_cb, 1);
+    signaling_cb_obj.reserve_back(1);
+    signaling_cb_obj.push_back(1);
 
     if constexpr (fuse_gamma) {
         const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
@@ -203,8 +224,8 @@ void kernel_main() {
         constexpr uint32_t bytes_in_two_facelines = bytes_in_faceline * 2;
         constexpr uint32_t mask_read_tile_offset_bytes = FLOAT32_DTYPE_GAMMA ? 1024 : 512;
 
-        uint32_t l1_write_addr_gamma = get_write_ptr(cb_gamma);
-        cb_reserve_back(cb_gamma, block_w);
+        uint32_t l1_write_addr_gamma = cb_gamma_obj.get_write_ptr();
+        cb_gamma_obj.reserve_back(block_w);
         for (uint32_t w = 0; w < block_w; w++) {
             uint32_t tile_id = gamma_tile_start_id + w;
             uint64_t gamma_noc_addr = get_noc_addr(tile_id, gamma);
@@ -215,7 +236,7 @@ void kernel_main() {
             l1_write_addr_gamma += gamma_tile_bytes;
         }
         noc_async_read_barrier();
-        cb_push_back(cb_gamma, block_w);
+        cb_gamma_obj.push_back(block_w);
     }
 
 #ifndef SKIP_WRITE_BACK

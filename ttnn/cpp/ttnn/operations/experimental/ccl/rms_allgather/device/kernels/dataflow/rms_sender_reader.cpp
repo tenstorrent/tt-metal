@@ -4,7 +4,19 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include "hostdevcommon/common_values.hpp"
+
+// Legacy primitives retained (#45003 item 4):
+// - VALID/INVALID semaphore handshake (*sem_addr_ptr = VALID; noc_semaphore_wait/set/inc) operates on raw
+//   tt_l1_ptr-cast L1 addresses returned by get_semaphore(), which the Semaphore<> wrapper does not target.
+// - noc_async_read_one_packet with a precomposed uint64_t source address (remote_noc_addrs[block] | l1_read_addr...)
+//   and its paired noc_async_read_barrier remain on legacy — one_packet has no documented Device 2.0 equivalent.
+// - noc_semaphore_set_multicast / noc_async_write_multicast_loopback_src + paired noc_async_write_barrier remain on
+//   legacy because the Device 2.0 NoC wrapper does not expose loopback multicast.
+// - cb_id values inside the local lambdas (global_reduce_sender, post_global_reduce_sender) are runtime lambda
+//   parameters, so the cb_* calls in those lambdas stay on the legacy free-function API; only the kernel-scope
+//   cb_* sites use the CircularBuffer wrapper.
 
 // split REDUCE across cores
 void kernel_main() {
@@ -147,10 +159,13 @@ void kernel_main() {
                                                         false);
                                                     noc_async_write_barrier();
                                                 };
-    cb_wait_front(cb_stats_reduced, 1);
-    cb_reserve_back(cb_ex_global, 1);
+    CircularBuffer cb_stats_reduced_obj(cb_stats_reduced);
+    CircularBuffer cb_ex_global_obj(cb_ex_global);
+
+    cb_stats_reduced_obj.wait_front(1);
+    cb_ex_global_obj.reserve_back(1);
     post_global_reduce_sender(cb_stats_reduced, cb_ex_global);
-    cb_push_back(cb_ex_global, 1);
-    cb_pop_front(cb_stats_reduced, 1);
+    cb_ex_global_obj.push_back(1);
+    cb_stats_reduced_obj.pop_front(1);
     global_semaphore_set();
 }

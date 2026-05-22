@@ -10,7 +10,15 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+
+// Legacy primitives retained (#45003 item 4): cb_id values are threaded through compute LLK helpers
+// (binary_op_init_common, add_tiles_init/add_tiles, mul_tiles_init/mul_tiles, mul_tiles_bcast_*,
+// reconfig_data_format/_srca/_srcb, pack_reconfig_data_format, pack_tile, reduce_init/reduce_tile/reduce_uninit,
+// rsqrt_tile_init/rsqrt_tile, mul_bcast_*_init_short, compute_kernel_lib::reduce, get_dataformat) as runtime
+// arguments, so cb_reserve_back/cb_push_back/cb_wait_front/cb_pop_front and any get_tile_size calls remain on the
+// legacy free-function API for parity with those helpers.
 
 // SPLIT REDUCE across Cores
 void kernel_main() {

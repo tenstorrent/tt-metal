@@ -6,7 +6,13 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 
+// Legacy primitive retained (#45003 item 4): noc_async_write with a precomposed uint64_t
+// remote_storage_core_write_addr (computed by get_noc_addr from storage_core_x/y + L1 addr) is kept on legacy because
+// the Noc wrapper targets endpoints, not raw precomposed addresses. The trailing barrier and the cb wrappers are on
+// the new API.
 template <
     uint32_t cb_out,
     uint32_t cb_out_resharded,
@@ -14,12 +20,16 @@ template <
     uint32_t storage_core_stride_w_bytes>
 inline void write_minimal_resharded_data(
     uint32_t num_segments_to_write_back, uint32_t storage_core_start_offset, tt_l1_ptr uint32_t* segment_args) {
+    Noc noc_obj;
+    CircularBuffer cb_out_obj(cb_out);
+    CircularBuffer cb_out_resharded_obj(cb_out_resharded);
+
     const uint32_t out_single_tile_size_bytes = get_tile_size(cb_out);
     uint32_t args_idx = 0;
     uint32_t worker_core_read_offset = 0;
 
-    uint32_t cb_out_read_base_addr = get_read_ptr(cb_out);
-    uint32_t cb_out_reshard_write_base_addr = get_write_ptr(cb_out_resharded);
+    uint32_t cb_out_read_base_addr = cb_out_obj.get_read_ptr();
+    uint32_t cb_out_reshard_write_base_addr = cb_out_resharded_obj.get_write_ptr();
 
     for (uint32_t i = 0; i < num_segments_to_write_back; ++i) {
         uint32_t write_size = segment_args[args_idx++];
@@ -39,15 +49,15 @@ inline void write_minimal_resharded_data(
             get_noc_addr(storage_core_x, storage_core_y, local_storage_core_write_addr);
 
         for (uint32_t w = 0; w < num_tiles_to_write_in_current_segment; ++w) {
-            cb_wait_front(cb_out, 1);
+            cb_out_obj.wait_front(1);
             noc_async_write(worker_core_read_addr, remote_storage_core_write_addr, out_single_tile_size_bytes);
             worker_core_read_addr += out_single_tile_size_bytes;
             remote_storage_core_write_addr += out_single_tile_size_bytes;
-            cb_pop_front(cb_out, 1);
+            cb_out_obj.pop_front(1);
         }
         worker_core_read_addr += worker_core_stride_w_bytes;
         remote_storage_core_write_addr += storage_core_stride_w_bytes;
         worker_core_read_offset += write_size * out_single_tile_size_bytes;
     }
-    noc_async_write_barrier();
+    noc_obj.async_write_barrier();
 }

@@ -4,7 +4,15 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include "hostdevcommon/common_values.hpp"
+
+// Legacy primitives retained (#45003 item 4):
+// - VALID/INVALID semaphore handshake (noc_semaphore_set/wait/inc on raw tt_l1_ptr-cast addresses returned by
+//   get_semaphore()) is kept on legacy because the Semaphore<> wrapper does not target runtime L1 addresses.
+// - noc_async_read_one_packet with precomposed uint64_t source addresses + paired noc_async_read_barrier are kept
+//   on legacy — one_packet has no documented Device 2.0 equivalent.
+// - noc_semaphore_inc on a precomposed uint64_t noc address is kept on legacy.
 
 // split REDUCE across cores
 void kernel_main() {
@@ -91,9 +99,14 @@ void kernel_main() {
     const uint64_t reduce_second_stage_receiver_semaphore_noc_addr =
         remote_noc_addrs_second_stage[0] | reduce_second_stage_semaphore_addr;
 
+    CircularBuffer cb_ex_partial2_obj(cb_ex_partial2);
+    CircularBuffer cb_ex2_obj(cb_ex2);
+    CircularBuffer cb_ex_external2_obj(cb_ex_external2);
+    CircularBuffer cb_ex_global_obj(cb_ex_global);
+
     // global reduce
     // wait for local data ready
-    cb_wait_front(cb_ex_partial2, 1);
+    cb_ex_partial2_obj.wait_front(1);
 
     // inc mcast sender
     noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
@@ -102,17 +115,17 @@ void kernel_main() {
 
     if constexpr (is_all_to_all_worker) {
         // read data from other cores - reduce first stage
-        uint32_t l1_read_addr_ex_par = get_read_ptr(cb_ex_partial2);
+        uint32_t l1_read_addr_ex_par = cb_ex_partial2_obj.get_read_ptr();
         l1_read_addr_ex_par += all_to_all_tile_offset_bytes;
         // read data from other cores - second stage reduce
         uint32_t l1_read_addr_ex = 0;
         uint32_t block_index_stride = 0;
         if constexpr (use_two_stage_reduce) {
-            l1_read_addr_ex = get_read_ptr(cb_ex2);
+            l1_read_addr_ex = cb_ex2_obj.get_read_ptr();
             block_index_stride = num_x;
         }
-        cb_reserve_back(cb_ex_external2, num_blocks_first_stage);
-        uint32_t l1_write_addr_external = get_write_ptr(cb_ex_external2);
+        cb_ex_external2_obj.reserve_back(num_blocks_first_stage);
+        uint32_t l1_write_addr_external = cb_ex_external2_obj.get_write_ptr();
 
         for (uint32_t block = 0; block < num_blocks_first_stage; block++) {
             uint64_t noc_addr_ex_par =
@@ -123,7 +136,7 @@ void kernel_main() {
         }
         l1_read_addr_ex_par += single_tile_size_bytes;
         noc_async_read_barrier();
-        cb_push_back(cb_ex_external2, num_blocks_first_stage);
+        cb_ex_external2_obj.push_back(num_blocks_first_stage);
 
         // read data from other cores - reduce first stage
         if constexpr (use_two_stage_reduce) {
@@ -138,18 +151,18 @@ void kernel_main() {
                 }
                 l1_read_addr_ex += single_tile_size_bytes;
                 noc_async_read_barrier();
-                cb_push_back(cb_ex_external2, num_blocks_second_stage - 1);
+                cb_ex_external2_obj.push_back(num_blocks_second_stage - 1);
             }
         }
 
         // sync with the gather worker
-        cb_wait_front(cb_ex2, 1);
+        cb_ex2_obj.wait_front(1);
         noc_semaphore_inc(reduce_second_stage_receiver_semaphore_noc_addr, 1);
     }
-    cb_pop_front(cb_ex_partial2, 1);
+    cb_ex_partial2_obj.pop_front(1);
     // Signal the compute kernel cb_ex_global ready
-    cb_reserve_back(cb_ex_global, 1);
+    cb_ex_global_obj.reserve_back(1);
     noc_semaphore_wait(post_reduce_sender_semaphore_addr_ptr, VALID);
-    cb_push_back(cb_ex_global, 1);
-    cb_pop_front(cb_ex2, 1);
+    cb_ex_global_obj.push_back(1);
+    cb_ex2_obj.pop_front(1);
 }
