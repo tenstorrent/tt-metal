@@ -83,10 +83,14 @@ CBDescriptor cb_descriptor_from_sharded_tensor(
  * or just address_offset when no buffer is set (manually placed CB).
  */
 inline uint32_t get_cb_address(const CBDescriptor& desc) {
-    if (desc.buffer == nullptr) {
-        return desc.address_offset;
+    auto addr_offset = desc.address_offset;
+    if (desc.buffer != nullptr) {
+        return desc.buffer->address() + addr_offset;
     }
-    return desc.buffer->address() + desc.address_offset;
+    if (desc.tensor != nullptr) {
+        return desc.tensor->address() + addr_offset;
+    }
+    return addr_offset;
 }
 
 }  // namespace tt::tt_metal

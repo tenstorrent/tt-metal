@@ -9,6 +9,10 @@
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -47,6 +51,56 @@ TEST_F(AsOptionalMeshTensorTest, HostTensorFatals) {
     EXPECT_THAT(
         ([&]() { (void)as_optional_mesh_tensor(opt); }),
         ThrowsMessage<std::runtime_error>(HasSubstr("as_optional_mesh_tensor: expected device tensor")));
+}
+
+using GetCbAddressTest = GenericMeshDeviceFixture;
+
+TEST(GetCbAddressHostTest, EmptyDescriptorReturnsAddressOffset) {
+    CBDescriptor desc{};
+    desc.address_offset = 1024;
+    EXPECT_EQ(get_cb_address(desc), 1024u);
+}
+
+TEST(GetCbAddressHostTest, EmptyDescriptorZeroOffsetReturnsZero) {
+    CBDescriptor desc{};
+    EXPECT_EQ(get_cb_address(desc), 0u);
+}
+
+TEST_F(GetCbAddressTest, BufferOnlyReturnsBufferAddressPlusOffset) {
+    Tensor input_tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    Buffer* buf = input_tensor.buffer();
+    ASSERT_NE(buf, nullptr);
+
+    CBDescriptor desc{};
+    desc.buffer = buf;
+    desc.address_offset = 64;
+
+    EXPECT_EQ(get_cb_address(desc), buf->address() + 64u);
+}
+
+TEST_F(GetCbAddressTest, TensorOnlyReturnsTensorAddressPlusOffset) {
+    Tensor input_tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    const MeshTensor* mt = &input_tensor.mesh_tensor();
+
+    CBDescriptor desc{};
+    desc.tensor = mt;
+    desc.address_offset = 128;
+
+    EXPECT_EQ(get_cb_address(desc), mt->address() + 128u);
+}
+
+TEST_F(GetCbAddressTest, BufferTakesPrecedenceOverTensor) {
+    Tensor input_tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    Buffer* buf = input_tensor.buffer();
+    const MeshTensor* mt = &input_tensor.mesh_tensor();
+    ASSERT_NE(buf, nullptr);
+
+    CBDescriptor desc{};
+    desc.buffer = buf;
+    desc.tensor = mt;
+    desc.address_offset = 32;
+
+    EXPECT_EQ(get_cb_address(desc), buf->address() + 32u);
 }
 
 }  // namespace
