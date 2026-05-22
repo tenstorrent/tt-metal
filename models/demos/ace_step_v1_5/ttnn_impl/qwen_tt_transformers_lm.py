@@ -56,8 +56,11 @@ consumers (sampling, repetition-penalty, CFG combine) keep working unchanged.
 
 **Trace**
 
-- With ``use_trace=True``, prefill uses ``_prefill_traced`` (``transform_and_embed`` + prefill in
-  capture, matching ``Generator._capture_trace_prefill``) and decode uses ``_decode_traced``.
+- With ``use_prefill_trace=True``, prefill uses ``_prefill_traced`` (``transform_and_embed`` + prefill in
+  capture, matching ``Generator._capture_trace_prefill``). Traces are keyed by ``(padded_prefill_len,
+  real_seq_len)`` because ``get_last_token`` is fixed at capture time.
+- With ``use_decode_trace=True``, decode uses ``_decode_traced`` (per-token ``execute_trace``).
+- ``use_trace=True`` enables both (legacy convenience).
 
 **Caveats**
 
@@ -163,6 +166,8 @@ class QwenModelTtTransformers:
         use_hf_rope: bool = True,
         validate_against_hf: bool = False,
         use_trace: bool = False,
+        use_prefill_trace: Optional[bool] = None,
+        use_decode_trace: Optional[bool] = None,
     ) -> None:
         if validate_against_hf:
             raise RuntimeError("QwenModelTtTransformers does not support validate_against_hf=True.")
@@ -221,9 +226,19 @@ class QwenModelTtTransformers:
         # logits row out of the ``[1, 1, 32, padded_vocab]`` tile-aligned LMHead output.
         # ``None`` until at least one prefill has run.
         self._prefill_last_token_offset_in_tile: Optional[int] = None
-        self._use_trace = bool(use_trace) and hasattr(ttnn, "begin_trace_capture") and hasattr(ttnn, "execute_trace")
+        _trace_api = hasattr(ttnn, "begin_trace_capture") and hasattr(ttnn, "execute_trace")
+        if use_prefill_trace is None and use_decode_trace is None:
+            _prefill = bool(use_trace)
+            _decode = bool(use_trace)
+        else:
+            _prefill = bool(use_prefill_trace if use_prefill_trace is not None else use_trace)
+            _decode = bool(use_decode_trace if use_decode_trace is not None else False)
+        self._use_prefill_trace = _prefill and _trace_api
+        self._use_decode_trace = _decode and _trace_api
         self._decode_trace = _DecodeTraceState()
-        self._prefill_traces: dict[int, _PrefillTraceState] = {}
+        # Keyed by (padded_prefill_len, real_seq_len): ``get_last_token`` is baked into the
+        # captured graph and must match ``seq_len``, not just the padded length bucket.
+        self._prefill_traces: dict[tuple[int, int], _PrefillTraceState] = {}
 
     # ------------------------------------------------------------------
     # KV cache lifecycle
@@ -306,7 +321,7 @@ class QwenModelTtTransformers:
     def _prefill(self, tokens: torch.Tensor) -> Any:
         # Trace capture includes ``transform_and_embed_prefill_inputs_device`` + prefill
         # (same graph as ``Generator._capture_trace_prefill``).
-        if self._use_trace:
+        if self._use_prefill_trace:
             return self._prefill_traced(tokens)
         return self._prefill_eager(tokens)
 
@@ -411,8 +426,14 @@ class QwenModelTtTransformers:
         get_last_token = (last_token_idx // 32) * 32
         last_off = int(last_token_idx % 32)
 
-        st = self._prefill_traces.get(prefill_seq_len)
-        if st is None or st.trace_id is None:
+        trace_key = (prefill_seq_len, seq_len)
+        st = self._prefill_traces.get(trace_key)
+        if (
+            st is None
+            or st.trace_id is None
+            or st.get_last_token != get_last_token
+            or st.last_token_offset_in_tile != last_off
+        ):
             host_inputs = self.tt_model.prepare_prefill_inputs_trace(
                 padded_tokens,
                 page_table=page_table_for_prefill,
@@ -441,7 +462,7 @@ class QwenModelTtTransformers:
             device_inputs = copy_host_to_device(host_tuple, mesh_device=self.device)
             trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
             x_embd, tt_page_table, _chunk_pt = self.tt_model.transform_and_embed_prefill_inputs_device(*device_inputs)
-            logits_tt = self.tt_model.ttnn_prefill_forward(
+            _ = self.tt_model.ttnn_prefill_forward(
                 x_embd,
                 rot_mats_global=tt_rot_global,
                 rot_mats_local=tt_rot_local,
@@ -457,23 +478,21 @@ class QwenModelTtTransformers:
                 device_inputs=device_inputs,
                 rot_mats_global=tt_rot_global,
                 rot_mats_local=tt_rot_local,
-                logits_tt=logits_tt,
+                logits_tt=_,
                 get_last_token=get_last_token,
                 last_token_offset_in_tile=last_off,
             )
-            self._prefill_traces[prefill_seq_len] = st
-        else:
-            host_inputs = self.tt_model.prepare_prefill_inputs_trace(
-                padded_tokens,
-                page_table=page_table_for_prefill,
-            )
-            tt_rot_global = host_inputs[1]
-            tt_rot_local = host_inputs[2]
-            host_tuple = (host_inputs[0], host_inputs[3], host_inputs[4])
-            copy_host_to_device(host_tuple, st.device_inputs, mesh_device=self.device)
-            ttnn.execute_trace(self.device, st.trace_id, cq_id=0, blocking=True)
-            ttnn.synchronize_device(self.device)
-            logits_tt = st.logits_tt
+            self._prefill_traces[trace_key] = st
+
+        host_inputs = self.tt_model.prepare_prefill_inputs_trace(
+            padded_tokens,
+            page_table=page_table_for_prefill,
+        )
+        host_tuple = (host_inputs[0], host_inputs[3], host_inputs[4])
+        copy_host_to_device(host_tuple, st.device_inputs, mesh_device=self.device)
+        ttnn.execute_trace(self.device, st.trace_id, cq_id=0, blocking=True)
+        ttnn.synchronize_device(self.device)
+        logits_tt = st.logits_tt
 
         self._prefill_last_token_offset_in_tile = last_off
         self._cursor = seq_len
@@ -484,7 +503,7 @@ class QwenModelTtTransformers:
     # ------------------------------------------------------------------
 
     def _decode(self, tokens: torch.Tensor, start_pos: int) -> Any:
-        if self._use_trace:
+        if self._use_decode_trace:
             return self._decode_traced(tokens, start_pos)
         return self._decode_eager(tokens, start_pos)
 

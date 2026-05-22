@@ -166,6 +166,7 @@ class AceStepModelRegistry:
         # 3. 5Hz LM weights ────────────────────────────────────────
         _log_load("5Hz-LM", str(ckpt_dir / lm_variant))
         self.llm_handler = LocalFiveHzLMHandler()
+        lm_trace = bool(use_trace) and bool(experimental_5hz_ttnn_lm)
         status, ok = self.llm_handler.initialize(
             checkpoint_dir=str(ckpt_dir),
             lm_model_path=lm_variant,
@@ -173,6 +174,8 @@ class AceStepModelRegistry:
             device="cpu",
             ttnn_causal_device=self.dev if experimental_5hz_ttnn_lm else None,
             experimental_ttnn_causal_lm=experimental_5hz_ttnn_lm,
+            ttnn_lm_prefill_trace=lm_trace,
+            ttnn_lm_decode_trace=lm_trace,
         )
         log.info("  5Hz-LM status: %s", status)
         if not ok:

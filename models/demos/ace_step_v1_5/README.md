@@ -132,8 +132,8 @@ With trace on, the device opens with **`num_command_queues=2`** and a **128 MiB*
 | Stage | Trace + 2CQ? | Notes |
 |-------|----------------|-------|
 | **5 Hz LM init** (`handler_init`) | **No** | Weight upload / `create_tt_model` (one-time) |
-| **5 Hz LM prefill** | **Yes** | ``QwenModelTtTransformers._prefill_traced`` |
-| **5 Hz LM decode** | **Yes** | Per-token ``execute_trace`` on CQ0 |
+| **5 Hz LM prefill** | **Yes** | ``QwenModelTtTransformers._prefill_traced`` (default with ``--use-trace``); trace cache keyed by ``(padded_len, seq_len)`` because ``get_last_token`` is baked into capture |
+| **5 Hz LM decode** | **Yes** | Per-token ``_decode_traced`` / ``execute_trace`` on CQ0 (default with ``--use-trace``) |
 | **5 Hz LM sampling / FSM** | **Partial** | Fused on-device penalties + top-k/top-p/sample (``apply_penalty_filter_sample``); constrained FSM on host — no CQ trace replay |
 | **LM CFG logit combine** | **Yes** (when used) | ``cfg_linear_combination_bf16`` trace per ``(device, K, cfg_scale)`` when ``_ttnn_lm_use_trace``; demo often sets ``lm_cfg_scale=1`` |
 | Qwen3 caption (`forward_traced`) | **Yes** | Handler / fast-preprocess text prefill |
