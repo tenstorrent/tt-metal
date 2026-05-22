@@ -436,30 +436,23 @@ _DEFAULT_BLOCKINGS = {
     (192, 384, (3, 3, 3)): (64, 128, 1, 8, 4),
     (384, 384, (3, 3, 3)): (96, 96, 1, 8, 4),
     (384, 768, (3, 3, 3)): (96, 96, 1, 8, 4),
+    # S2V MotionEncoder_tc CausalConv1d: kernel-3 temporal convs at
+    # WAN 2.2 5120-hidden / 4-token shapes (5120/4=1280, 5120/2=2560).
+    (5120, 5120, (3, 1, 1)): (320, 64, 1, 1, 1),
+    (1280, 2560, (3, 1, 1)): (320, 64, 1, 1, 1),
+    (2560, 5120, (3, 1, 1)): (320, 64, 1, 1, 1),
+    (768, 5120, (3, 1, 1)): (256, 64, 1, 1, 1),
+    # S2V wav2vec2-large-xlsr-53 pos_conv: grouped Conv1d (groups=16,
+    # in=out=1024, kernel=128). C_in_block=in_per_group=64 is forced by the
+    # grouped-conv constraint; C_out_block=32 keeps per-core CB under the
+    # 1.5 MB L1 cap (kernel=128 → large per-shard weight residency).
+    (1024, 1024, (128, 1, 1)): (64, 32, 1, 1, 1),
 }
 
 
 def register_conv3d_configs(configs: dict) -> None:
     """Register additional conv3d blocking configs from external models."""
     _DEFAULT_BLOCKINGS.update({(c_in, c_out, _ntuple(ks, 3)): tuple(v) for (c_in, c_out, ks), v in configs.items()})
-
-
-# S2V audio encoder (MotionEncoder_tc CausalConv1d): kernel-3 temporal convs.
-# Channel pairs match WAN 2.2 5120-hidden / 4-token config (5120/4=1280, 5120/2=2560).
-register_conv3d_configs(
-    {
-        (5120, 5120, (3, 1, 1)): (320, 64, 1, 1, 1),
-        (1280, 2560, (3, 1, 1)): (320, 64, 1, 1, 1),
-        (2560, 5120, (3, 1, 1)): (320, 64, 1, 1, 1),
-        (768, 5120, (3, 1, 1)): (256, 64, 1, 1, 1),
-    }
-)
-
-# wav2vec2-large-xlsr-53 Wav2Vec2PositionalConvEmbedding: grouped Conv1d
-# (groups=16, in=out=1024, kernel=128). C_in_block=in_per_group=64 is forced
-# by the grouped-conv constraint; C_out_block=32 keeps per-core CB under the
-# 1.5 MB L1 cap given kernel=128's large per-shard weight residency.
-register_conv3d_configs({(1024, 1024, (128, 1, 1)): (64, 32, 1, 1, 1)})
 
 
 def get_conv3d_config(
