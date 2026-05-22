@@ -10,6 +10,7 @@
 #include <vector>
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt_stl/strong_type.hpp>
 
 // Forward declaration and hash specialization for AsicChannel
@@ -30,15 +31,7 @@ namespace tt::scaleout_tools {
 using PortId = ttsl::StrongType<uint32_t, struct PortIdTag>;
 using ChanId = ttsl::StrongType<uint32_t, struct ChanIdTag>;
 
-enum class PortType {
-    TRACE,
-    QSFP_DD,
-    WARP100,
-    WARP400,
-    LINKING_BOARD_1,
-    LINKING_BOARD_2,
-    LINKING_BOARD_3,
-};
+using PortType = tt::tt_metal::PortType;
 
 struct AsicChannel {
     uint32_t asic_location = 0;

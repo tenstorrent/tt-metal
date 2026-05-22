@@ -2,11 +2,23 @@ syntax = "proto3";
 
 package tt.fabric.proto;
 
+// Physical port / cable type (values aligned with tt::tt_metal::PortType)
+enum PortType {
+    TRACE = 0;
+    QSFP_DD = 1;
+    WARP100 = 2;
+    WARP400 = 3;
+    LINKING_BOARD_1 = 4;
+    LINKING_BOARD_2 = 5;
+    LINKING_BOARD_3 = 6;
+}
+
 // Ethernet connection between two ASICs
 message EthConnection {
     uint32 src_chan = 1;
     uint32 dst_chan = 2;
     bool is_local = 3;
+    PortType port_type = 4;
 }
 
 // Connection edge to another ASIC with multiple ethernet connections
