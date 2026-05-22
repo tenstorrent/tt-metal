@@ -9,6 +9,7 @@ import ttnn
 from models.common.rmsnorm import RMSNorm
 from models.experimental.voxtraltts.reference.voxtral_config import VoxtralAudioTokenizerConfig
 from models.experimental.voxtraltts.utils.audio_tokenizer_optimizations import AudioTokenizerOptimizations
+from models.experimental.voxtraltts.utils.config_helpers import voxtral_matmul_activation_mem_config
 from models.experimental.voxtraltts.tt.attention import VoxtralTTAttention
 from models.experimental.voxtraltts.tt.mlp import VoxtralTTMLP
 from models.tt_transformers.tt.common import Mode
@@ -130,35 +131,38 @@ class VoxtralTTAudioTokenizerDecoderTransformerBlock:
 
     def __call__(self, x_b1td: ttnn.Tensor, *, attn_mask: ttnn.Tensor | None) -> ttnn.Tensor:
         """``[B, 1, T, D]`` tile → ``[B, 1, T, D]`` tile."""
-        residual = ttnn.clone(x_b1td, dtype=self.output_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        max_l1 = 32
+        if self.optimizations is not None:
+            max_l1 = self.optimizations.matmul_l1_max_seq_len
+        act_mem = voxtral_matmul_activation_mem_config(int(x_b1td.shape[2]), max_l1_seq_len=max_l1)
+
+        residual = ttnn.clone(x_b1td, dtype=self.output_dtype, memory_config=act_mem)
         normed = self.attention_norm(x_b1td, mode=Mode.DECODE)
-        attn = self.attention(normed, cos=None, sin=None, attn_mask=attn_mask)
+        attn = self.attention(normed, cos=None, sin=None, attn_mask=attn_mask, activation_memory_config=act_mem)
         ttnn.deallocate(normed)
         attn = self._slice_like(attn, x_b1td)
         if self.layer_scale:
             assert self.attention_scale is not None
-            scaled = ttnn.mul(
-                attn, self.attention_scale, dtype=self.output_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG
-            )
+            scaled = ttnn.mul(attn, self.attention_scale, dtype=self.output_dtype, memory_config=act_mem)
             ttnn.deallocate(attn)
             attn = scaled
         ttnn.deallocate(x_b1td)
-        h = ttnn.add(residual, attn, dtype=self.output_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        h = ttnn.add(residual, attn, dtype=self.output_dtype, memory_config=act_mem)
         ttnn.deallocate(residual)
         ttnn.deallocate(attn)
 
-        residual = ttnn.clone(h, dtype=self.output_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        residual = ttnn.clone(h, dtype=self.output_dtype, memory_config=act_mem)
         normed = self.ffn_norm(h, mode=Mode.DECODE)
-        ff = self.mlp(normed)
+        ff = self.mlp(normed, activation_memory_config=act_mem)
         ttnn.deallocate(normed)
         ff = self._slice_like(ff, h)
         if self.layer_scale:
             assert self.ffn_scale is not None
-            scaled = ttnn.mul(ff, self.ffn_scale, dtype=self.output_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            scaled = ttnn.mul(ff, self.ffn_scale, dtype=self.output_dtype, memory_config=act_mem)
             ttnn.deallocate(ff)
             ff = scaled
         ttnn.deallocate(h)
-        out = ttnn.add(residual, ff, dtype=self.output_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.add(residual, ff, dtype=self.output_dtype, memory_config=act_mem)
         ttnn.deallocate(residual)
         ttnn.deallocate(ff)
         return out

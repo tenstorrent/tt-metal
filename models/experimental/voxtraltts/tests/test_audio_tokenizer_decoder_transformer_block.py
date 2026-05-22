@@ -33,7 +33,7 @@ def _btd_to_tt_b1td(device, x_btd: torch.Tensor) -> ttnn.Tensor:
 @torch.no_grad()
 @pytest.mark.parametrize("decoder_block_index", [1, 3, 5, 7])
 @pytest.mark.parametrize("layer_index", [0, 1])
-@pytest.mark.parametrize("time_len", [16, 32])
+@pytest.mark.parametrize("time_len", [16, 32, 64])
 def test_audio_tokenizer_decoder_transformer_layer_pcc(device, reset_seeds, time_len, layer_index, decoder_block_index):
     """Each odd ``decoder_blocks.{1,3,5,7}`` transformer layer vs ``audio_tokenizer_ops`` golden."""
     model_name = resolve_voxtral_model_name_or_skip()

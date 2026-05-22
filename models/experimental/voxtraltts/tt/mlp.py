@@ -22,11 +22,13 @@ class VoxtralTTMLP:
         output_dtype=ttnn.bfloat16,
         exact_silu: bool = False,
         compute_kernel_config=None,
+        activation_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     ) -> None:
         self.device = device
         self.output_dtype = output_dtype
         self.exact_silu = exact_silu
         self.compute_kernel_config = compute_kernel_config
+        self.activation_memory_config = activation_memory_config
 
         def get_weight(key: str) -> torch.Tensor:
             if key in state_dict:
@@ -61,20 +63,21 @@ class VoxtralTTMLP:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        _lin_kw = {"dtype": self.output_dtype, "memory_config": ttnn.DRAM_MEMORY_CONFIG}
+    def __call__(self, x: ttnn.Tensor, *, activation_memory_config=None) -> ttnn.Tensor:
+        act_mem = activation_memory_config or self.activation_memory_config
+        _lin_kw = {"dtype": self.output_dtype, "memory_config": act_mem}
         if self.compute_kernel_config is not None:
             _lin_kw["compute_kernel_config"] = self.compute_kernel_config
         w1_out = ttnn.linear(x, self.w1, **_lin_kw)
         w3_out = ttnn.linear(x, self.w3, **_lin_kw)
 
         if self.exact_silu:
-            w1_act = ttnn.silu(w1_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            w1_act = ttnn.silu(w1_out, memory_config=act_mem)
             ttnn.deallocate(w1_out)
             w2_in = ttnn.mul(
                 w1_act,
                 w3_out,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=act_mem,
                 dtype=self.output_dtype,
             )
             ttnn.deallocate(w1_act)
@@ -83,7 +86,7 @@ class VoxtralTTMLP:
                 w1_out,
                 w3_out,
                 input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=act_mem,
                 dtype=self.output_dtype,
             )
             ttnn.deallocate(w1_out)

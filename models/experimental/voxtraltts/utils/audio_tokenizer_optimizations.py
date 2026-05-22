@@ -17,6 +17,8 @@ class AudioTokenizerOptimizations:
     activation_dtype: ttnn.DataType
     matmul_compute_kernel_config: ttnn.WormholeComputeKernelConfig
     sdpa_compute_kernel_config: ttnn.WormholeComputeKernelConfig
+    # Use L1 for matmul in0 when T <= this (DRAM for longer decode stacks to avoid L1 overflow).
+    matmul_l1_max_seq_len: int = 128
 
 
 def voxtral_audio_tokenizer_default_optimizations() -> AudioTokenizerOptimizations:
