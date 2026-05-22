@@ -27,6 +27,8 @@
 #include "api/dataflow/circular_buffer.h"
 
 #include "layernorm_compute_utils.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
 namespace generic = norm::kernel_util::generic;
 namespace kutil = norm::kernel_util;
@@ -221,21 +223,35 @@ void kernel_main() {
         numeric::row_wise_mean<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION, policies::FullBlockWithPopPolicy>(
             cb_xmm2, cb_scaler, cb_ex2, W, Wt, block_size, tile_width);
 
-        // Var[x] + eps
-        cb_ex2_obj.wait_front(1);
-        reconfig_data_format(cb_ex2, cb_eps);
-        ACQ();
-        add_tiles_init(cb_ex2, cb_eps);
-        add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
-
-        cb_ex2pe_obj.reserve_back(1);  // 1
-        rsqrt_tile_init<LEGACY_RSQRT>();
-        rsqrt_tile<LEGACY_RSQRT>(dst0);
-        pack_reconfig_data_format(cb_ex2pe);
-        pack_tile(dst0, cb_ex2pe);
-        cb_ex2pe_obj.push_back(1);
-        REL();
-        cb_ex2_obj.pop_front(1);
+        // Var[x] + eps  ->  1/sqrt(Var[x] + eps)
+        // PARTIAL migration: BinaryFpu(Add, cb_ex2, cb_eps) + Rsqrt + PackTile(cb_ex2pe).
+        // Original: explicit reconfig_data_format(cb_ex2, cb_eps) + add_tiles_init reconfigs
+        // srca/srcb; pack_reconfig_data_format(cb_ex2pe) explicitly reconfigs pack.
+        // cb_ex2: Streaming (chain owns wait/pop). cb_eps: CallerManaged (waited once
+        // outside the loop, never popped). cb_ex2pe: OutStreaming (chain owns reserve/push).
+        compute_kernel_lib::eltwise_chain(
+            1,
+            compute_kernel_lib::BinaryFpu<
+                cb_ex2,
+                cb_eps,
+                compute_kernel_lib::BinaryFpuOp::Add,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::Streaming,
+                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar>{},
+            compute_kernel_lib::Rsqrt<
+                compute_kernel_lib::Approx::Exact,
+                LEGACY_RSQRT ? compute_kernel_lib::Legacy::On : compute_kernel_lib::Legacy::Off,
+                compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::PackTile<
+                cb_ex2pe,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 
         // (x-E[x]) / sqrt(Var[x] + eps) * gamma + beta
         cb_ex2pe_obj.wait_front(1);
