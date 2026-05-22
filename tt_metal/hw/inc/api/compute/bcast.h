@@ -65,8 +65,13 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __bu
         (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
     if (enable_unpack_to_dest) {
         ASSERT(false);  // Quasar unpack_to_dest unary bcast not implemented yet;
-        // UNPACK((llk_unpack_A_init<bcast_type, false, EltwiseBinaryReuseDestType::NONE, true, true>(
-        //    false, false /*transpose within 16x16 face*/, icb)));
+        // TODO: this branch should mirror line 44-45 (unpack_to_dest=true), should update once Quasar unpack_to_dest is
+        // implemented
+        UNPACK((llk_unpack_A_init<
+                bcast_type,
+                false /*acc_to_dest*/,
+                EltwiseBinaryReuseDestType::NONE,
+                false /*unpack_to_dest*/>(false /*transpose_of_faces*/, false /*transpose within 16x16 face*/, icb)));
         MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, true /* IS_32b_DEST_EN */>(icb)));
     } else {
         UNPACK((llk_unpack_A_init<
