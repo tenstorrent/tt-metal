@@ -3,6 +3,39 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+"""
+JIT compile server load report tool.
+
+Quick workflow for collecting and analyzing logs:
+
+1) Enable periodic metrics on each compile server process:
+   export TT_METAL_JIT_SERVER_LOG_INTERVAL_MS=1000
+
+2) Start the server and capture logs (stdout/stderr), for example:
+   tt_metal/tools/jit_compile_server/jit_compile_server > /tmp/jit_server_a.log 2>&1
+
+3) Repeat per server (one log file per server is easiest to attribute):
+   tt_metal/tools/jit_compile_server/jit_compile_server > /tmp/jit_server_b.log 2>&1
+
+4) Run this report script:
+   python tt_metal/tools/jit_compile_server/jit_load_report.py /tmp/jit_server_a.log /tmp/jit_server_b.log
+
+5) Optional rolling-window view:
+   python tt_metal/tools/jit_compile_server/jit_load_report.py --window 30 /tmp/jit_server_*.log
+   - --window N means "use only the last N seconds ending at each server's latest sample".
+   - In window mode, count/dedup_hits/total_compile_time_ms/bytes_in/bytes_out are deltas
+     over that N-second window, and throughput is count_delta / elapsed_seconds.
+   - peak_inflight is the max value observed inside that window.
+
+6) Optional machine-readable output:
+   python tt_metal/tools/jit_compile_server/jit_load_report.py --json /tmp/jit_server_*.log
+
+Notes:
+- The script parses both "[jit_server ...]" periodic metric lines and "compile ...:" lines.
+- unique_kernel_hashes metrics are inferred from hash-like tokens in compile kernel names.
+- Without --window, metrics are lifetime totals from each server's most recent sample.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -364,6 +397,13 @@ def render_human_report(report: dict, window_seconds: float | None) -> str:
 
     lines.append(_render_table(headers, rows))
     lines.append("")
+    if window_seconds is not None:
+        lines.append(
+            "Window mode: count/dedup_hits/total_compile_time_ms/bytes_in/bytes_out are per-server deltas "
+            f"over the last {window_seconds:g}s ending at each server's latest sample; "
+            "peak_inflight is the max seen in that window."
+        )
+        lines.append("")
     lines.append("Imbalance summary:")
 
     imbalance = report["imbalance_summary"]
@@ -417,9 +457,36 @@ def _read_kernel_samples_from_stream(stream: TextIO) -> list[KernelCompileSample
 
 
 def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Report per-server and cross-server JIT load imbalance.")
+    parser = argparse.ArgumentParser(
+        description="Report per-server and cross-server JIT load imbalance.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Collection instructions:\n"
+            "  1) Set TT_METAL_JIT_SERVER_LOG_INTERVAL_MS (for example 1000).\n"
+            "  2) Capture each compile server's logs to a file.\n"
+            "  3) Run this script on one or more log files.\n\n"
+            "Window semantics (--window N):\n"
+            "  - Uses samples from the last N seconds ending at each server's latest timestamp.\n"
+            "  - Reports deltas for count/dedup_hits/total_compile_time_ms/bytes_in/bytes_out.\n"
+            "  - Reports peak_inflight as the max value seen within that window.\n"
+            "  - Adds throughput_compiles_per_sec = count_delta / elapsed_seconds.\n\n"
+            "Examples:\n"
+            "  python jit_load_report.py /tmp/jit_server_a.log /tmp/jit_server_b.log\n"
+            "  python jit_load_report.py --window 60 /tmp/jit_server_*.log\n"
+            "  tail -f /tmp/jit_server_a.log | python jit_load_report.py --window 30\n"
+            "  python jit_load_report.py --json /tmp/jit_server_*.log\n"
+        ),
+    )
     parser.add_argument("logs", nargs="*", help="Path(s) to log files. Reads stdin when omitted.")
-    parser.add_argument("--window", type=float, default=None, help="Window size in seconds for delta reporting.")
+    parser.add_argument(
+        "--window",
+        type=float,
+        default=None,
+        help=(
+            "Rolling window size in seconds. When set, report per-server deltas over the last N seconds "
+            "(count/dedup_hits/compile_time/bytes) and throughput; peak_inflight becomes window max."
+        ),
+    )
     parser.add_argument("--json", action="store_true", help="Emit JSON output.")
     return parser.parse_args(argv)
 
