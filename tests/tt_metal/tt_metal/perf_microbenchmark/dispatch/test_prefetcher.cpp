@@ -2568,11 +2568,12 @@ class PrefetcherThroughputTestFixture : public BasePrefetcherTestFixture {};
 // The upstream semaphore self-loop (MY_UPSTREAM_CB_SEM_ID == UPSTREAM_CB_SEM_ID on the prefetch_d
 // core, initialized to cmd_cb_pages) pre-signals all pages so the kernel sees them immediately.
 
-// Quasar SD DRAM layout — issue + completion packed into the single 64-MB DRAM-CQ window that
-// bank 0 decodes on this target (bits 0..25; bits 26+ are don't-cares — confirmed by an alias /
-// bit-decode probe during bringup). With SD_HUGEPAGE_ISSUE_BUFFER_SIZE = 32 MB, issue starts at
-// NOC 0x02000000 (physical 0x02000000) and completion at NOC 0x04000000 (aliases to physical
-// 0x00000000), so the two regions occupy disjoint halves of the 64-MB addressable window.
+// Quasar SD DRAM layout — issue + completion packed into the upper half of the single 64-MB
+// DRAM-CQ window that bank 0 decodes on this target (bits 0..25; bits 26+ are don't-cares —
+// confirmed by an alias / bit-decode probe during bringup). With SD_HUGEPAGE_ISSUE_BUFFER_SIZE =
+// 16 MB, issue is at NOC 0x02000000..0x02FFFFFF and completion at NOC 0x03000000..0x03FFFFFF;
+// neither address has bit 26+ set, so neither region aliases back into the allocator-reserved
+// low region near physical 0x0.
 static constexpr uint32_t kSdQuasarIssueBase = 0x2000000u;
 static constexpr uint32_t kSdQuasarCompletionBase = kSdQuasarIssueBase + Common::SD_HUGEPAGE_ISSUE_BUFFER_SIZE;
 
