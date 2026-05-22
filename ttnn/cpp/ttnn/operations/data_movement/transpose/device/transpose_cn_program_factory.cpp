@@ -91,7 +91,7 @@ tt::tt_metal::ProgramDescriptor TransposeCNProgramFactory::create_descriptor(
     reader_desc.core_ranges = total_cores;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
     reader_desc.defines = std::move(reader_defines);
-    reader_desc.config = ReaderDataMovementConfig{};
+    reader_desc.config = ReaderConfigDescriptor{};
     reader_desc.common_runtime_args = std::move(reader_common_runtime_args);
 
     KernelDescriptor writer_desc;
@@ -102,7 +102,7 @@ tt::tt_metal::ProgramDescriptor TransposeCNProgramFactory::create_descriptor(
     writer_desc.core_ranges = total_cores;
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
     writer_desc.defines = std::move(writer_defines);
-    writer_desc.config = WriterDataMovementConfig{};
+    writer_desc.config = WriterConfigDescriptor{};
     writer_desc.common_runtime_args = std::move(writer_common_runtime_args);
 
     // Set runtime arguments for each core

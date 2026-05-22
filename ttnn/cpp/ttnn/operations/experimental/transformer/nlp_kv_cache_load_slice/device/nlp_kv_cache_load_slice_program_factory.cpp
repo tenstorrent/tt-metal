@@ -118,7 +118,7 @@ tt::tt_metal::ProgramDescriptor NlpKVCacheLoadSliceProgramFactory::create_descri
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = ReaderDataMovementConfig{};
+    reader_desc.config = ReaderConfigDescriptor{};
 
     // Writer compile-time args
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)src0_cb_index};
@@ -129,7 +129,7 @@ tt::tt_metal::ProgramDescriptor NlpKVCacheLoadSliceProgramFactory::create_descri
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = all_cores;
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = WriterDataMovementConfig{};
+    writer_desc.config = WriterConfigDescriptor{};
 
     auto all_runtime_args =
         get_unpad_runtime_args_tile_sharded(a, output_tensor_start, num_cores_total, num_tiles_per_core);

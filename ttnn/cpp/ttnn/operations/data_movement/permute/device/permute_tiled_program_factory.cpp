@@ -159,7 +159,7 @@ tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreTileInvariant::
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
     reader_desc.named_compile_time_args = std::move(reader_named_compile_time_args);
-    reader_desc.config = ReaderDataMovementConfig{};
+    reader_desc.config = ReaderConfigDescriptor{};
 
     std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
@@ -170,7 +170,7 @@ tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreTileInvariant::
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = all_cores;
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = WriterDataMovementConfig{};
+    writer_desc.config = WriterConfigDescriptor{};
 
     bool has_compute = swap_hw;
     KernelDescriptor compute_desc;
@@ -427,7 +427,7 @@ tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreTileRowInvarian
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
     reader_desc.named_compile_time_args = std::move(reader_named_compile_time_args);
-    reader_desc.config = ReaderDataMovementConfig{};
+    reader_desc.config = ReaderConfigDescriptor{};
 
     bool has_compute = swap_hw;
     KernelDescriptor compute_desc;
@@ -478,7 +478,7 @@ tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreTileRowInvarian
     writer_desc.core_ranges = all_cores;
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
     writer_desc.named_compile_time_args = std::move(writer_named_compile_time_args);
-    writer_desc.config = WriterDataMovementConfig{};
+    writer_desc.config = WriterConfigDescriptor{};
 
     auto input_shape_view = input_shape.view();
 
@@ -801,7 +801,7 @@ tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreTiledGeneric::c
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
     reader_desc.named_compile_time_args = std::move(reader_named_compile_time_args);
-    reader_desc.config = ReaderDataMovementConfig{};
+    reader_desc.config = ReaderConfigDescriptor{};
 
     std::vector<uint32_t> compute_kernel_args = {};
 
@@ -854,7 +854,7 @@ tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreTiledGeneric::c
     writer_desc.core_ranges = all_cores;
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
     writer_desc.named_compile_time_args = std::move(writer_named_compile_time_args);
-    writer_desc.config = WriterDataMovementConfig{};
+    writer_desc.config = WriterConfigDescriptor{};
 
     auto input_shape_view = input_shape.view();
 

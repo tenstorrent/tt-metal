@@ -375,7 +375,7 @@ tt::tt_metal::ProgramDescriptor TransposeHCShardedProgramFactory::create_descrip
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
     reader_desc.defines = std::move(reader_defines);
-    reader_desc.config = ReaderDataMovementConfig{};
+    reader_desc.config = ReaderConfigDescriptor{};
 
     // Writer kernel only exists in the special case path; the generic path puts
     // everything through the reader (writer args returned by the generic helper
@@ -409,7 +409,7 @@ tt::tt_metal::ProgramDescriptor TransposeHCShardedProgramFactory::create_descrip
         writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         writer_desc.core_ranges = all_cores;
         writer_desc.compile_time_args = {src0_cb_index, output_cb_index, stick_size_bytes};
-        writer_desc.config = WriterDataMovementConfig{};
+        writer_desc.config = WriterConfigDescriptor{};
         writer_desc.runtime_args.reserve(num_cores);
         for (uint32_t i = 0; i < num_cores; i++) {
             CoreCoord core;

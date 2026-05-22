@@ -177,7 +177,7 @@ tt::tt_metal::ProgramDescriptor TransposeHCRMProgramFactory::create_descriptor(
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = total_cores;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = ReaderDataMovementConfig{};
+    reader_desc.config = ReaderConfigDescriptor{};
     reader_desc.common_runtime_args = std::move(reader_common_runtime_args);
 
     KernelDescriptor writer_desc;
@@ -187,7 +187,7 @@ tt::tt_metal::ProgramDescriptor TransposeHCRMProgramFactory::create_descriptor(
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = total_cores;
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = WriterDataMovementConfig{};
+    writer_desc.config = WriterConfigDescriptor{};
     writer_desc.common_runtime_args = std::move(writer_common_runtime_args);
 
     emit_runtime_args_hc_rm(

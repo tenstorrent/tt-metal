@@ -208,7 +208,7 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
     reader_desc.named_compile_time_args = std::move(reader_named_compile_time_args);
-    reader_desc.config = ReaderDataMovementConfig{};
+    reader_desc.config = ReaderConfigDescriptor{};
 
     KernelDescriptor::NamedCompileTimeArgs compute_named_compile_time_args = {
         {"cb_in_scores", cb_in_scores},
@@ -315,7 +315,7 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
     writer_desc.core_ranges = all_cores;
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
     writer_desc.named_compile_time_args = std::move(writer_named_compile_time_args);
-    writer_desc.config = WriterDataMovementConfig{};
+    writer_desc.config = WriterConfigDescriptor{};
 
     // ---- Per-core runtime args ----
     auto cores = corerange_to_cores(all_cores, std::nullopt);

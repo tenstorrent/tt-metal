@@ -216,7 +216,7 @@ tt::tt_metal::ProgramDescriptor FillPadProgramFactory::create_descriptor(
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = std::move(reader_ct);
     reader_desc.defines = kernel_defines;
-    reader_desc.config = ReaderDataMovementConfig{};
+    reader_desc.config = ReaderConfigDescriptor{};
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =
@@ -225,7 +225,7 @@ tt::tt_metal::ProgramDescriptor FillPadProgramFactory::create_descriptor(
     writer_desc.core_ranges = all_cores;
     writer_desc.compile_time_args = std::move(writer_ct);
     writer_desc.defines = kernel_defines;
-    writer_desc.config = WriterDataMovementConfig{};
+    writer_desc.config = WriterConfigDescriptor{};
 
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
@@ -547,7 +547,7 @@ tt::tt_metal::ProgramDescriptor FillPadL1ShardedProgramFactory::create_descripto
         reader_desc.compile_time_args = {
             W_tiles, rp_idx, input_element_size_bytes, static_cast<uint32_t>(cb_data_in_idx)};
         reader_desc.defines = kernel_defines;
-        reader_desc.config = ReaderDataMovementConfig{};
+        reader_desc.config = ReaderConfigDescriptor{};
         reader_kernel_idx[rp_idx] = static_cast<int>(desc.kernels.size());
         desc.kernels.push_back(std::move(reader_desc));
     }
@@ -574,7 +574,7 @@ tt::tt_metal::ProgramDescriptor FillPadL1ShardedProgramFactory::create_descripto
             static_cast<uint32_t>(cb_bot_mask_idx),
             static_cast<uint32_t>(cb_data_out_idx)};
         writer_desc.defines = kernel_defines;
-        writer_desc.config = WriterDataMovementConfig{};
+        writer_desc.config = WriterConfigDescriptor{};
         writer_kernel_idx[rp_idx] = static_cast<int>(desc.kernels.size());
         desc.kernels.push_back(std::move(writer_desc));
     }

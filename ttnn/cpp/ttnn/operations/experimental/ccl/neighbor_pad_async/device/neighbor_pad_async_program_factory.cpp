@@ -419,7 +419,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
     uint32_t num_directions = 2;
 
     // Create consolidated H fabric reader kernel (uniform compile args across all H cores)
-    auto h_reader_kernel_config = ReaderDataMovementConfig{};
+    auto h_reader_kernel_config = ReaderConfigDescriptor{};
     h_reader_kernel_config.compile_args = {
         sender_cb_index,   // cb_output_id
         is_padding_zeros,  // is_padding_zeros
@@ -439,7 +439,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
         {input_buffer->address(), output_buffer->address(), operation_attributes.h_neighbor_semaphore.address()});
 
     // Create consolidated H fabric writer kernel (uniform compile args across all H cores)
-    auto h_writer_kernel_config = WriterDataMovementConfig{};
+    auto h_writer_kernel_config = WriterConfigDescriptor{};
     h_writer_kernel_config.compile_args = {
         sender_cb_index,   // cb_output_id
         is_padding_zeros,  // is_padding_zeros
@@ -724,7 +724,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
             mesh_device);
 
         // Create consolidated W fabric reader kernel (uniform compile args across all W cores)
-        auto w_reader_kernel_config = ReaderDataMovementConfig{};
+        auto w_reader_kernel_config = ReaderConfigDescriptor{};
         w_reader_kernel_config.compile_args = {
             sender_cb_index,   // cb_output_id
             is_padding_zeros,  // is_padding_zeros
@@ -746,7 +746,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
              input_buffer->address()});
 
         // Create consolidated W fabric writer kernel (uniform compile args across all W cores)
-        auto w_writer_kernel_config = WriterDataMovementConfig{};
+        auto w_writer_kernel_config = WriterConfigDescriptor{};
         w_writer_kernel_config.compile_args = {
             sender_cb_index,   // cb_output_id
             is_padding_zeros,  // is_padding_zeros

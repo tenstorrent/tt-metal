@@ -169,7 +169,7 @@ tt::tt_metal::ProgramDescriptor EmbeddingBackwardProgramFactory::create_descript
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = ReaderDataMovementConfig{};
+    reader_desc.config = ReaderConfigDescriptor{};
 
     KernelDescriptor compute_desc;
     compute_desc.kernel_source =

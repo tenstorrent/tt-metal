@@ -193,7 +193,7 @@ tt::tt_metal::ProgramDescriptor ExtractProgramFactory::create_descriptor(
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = core_range_set;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = ReaderDataMovementConfig{};
+    reader_desc.config = ReaderConfigDescriptor{};
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =
@@ -201,7 +201,7 @@ tt::tt_metal::ProgramDescriptor ExtractProgramFactory::create_descriptor(
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = core_range_set;
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = WriterDataMovementConfig{};
+    writer_desc.config = WriterConfigDescriptor{};
 
     // Per-core runtime args: buffer addresses + trailing core_id. The core_id
     // selects which chunk of tile rows this core processes.
