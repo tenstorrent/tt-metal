@@ -532,25 +532,111 @@ def test_outer_value_range_stress(a_shape, b_shape, dtype, low, high, device):
 
 
 # ---------------------------------------------------------------------------
-# Test 9: bfloat4_b is intentionally not supported
+# Test 8b: integer dtypes (int32, uint32)
+#
+# Both downstream ops (ttnn.unsqueeze via reshape, and ttnn.multiply) accept
+# int32 and uint32, so ttnn.outer supports them too. Integer multiply is exact
+# when results stay in range, so we compare with assert_equal rather than PCC.
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=RuntimeError,
-    reason="ttnn.unsqueeze routes through reshape_device_operation which only accepts "
-    "BFLOAT16/UINT32/FLOAT32/INT32. Tracked in "
-    "https://github.com/tenstorrent/tt-metal/issues/44919",
+INTEGER_DTYPE_CASES = [
+    (ttnn.int32, -100, 100),
+    (ttnn.uint32, 0, 200),
+]
+
+
+@pytest.mark.parametrize(
+    "a_shape, b_shape",
+    [
+        ([32], [32]),
+        ([64], [128]),
+        ([2, 3, 32], [2, 3, 32]),
+        ([1, 8, 32], [4, 8, 32]),
+    ],
+    ids=["1d", "1d_asym", "batched", "broadcast_batch"],
 )
+@pytest.mark.parametrize("dtype, low, high", INTEGER_DTYPE_CASES, ids=["int32", "uint32"])
+def test_outer_integer_dtypes(a_shape, b_shape, dtype, low, high, device):
+    torch.manual_seed(0)
+    a_pt = _gen(a_shape, dtype, low=low, high=high)
+    b_pt = _gen(b_shape, dtype, low=low, high=high)
+    a_tt = _to_device(a_pt, dtype, device, ttnn.TILE_LAYOUT)
+    b_tt = _to_device(b_pt, dtype, device, ttnn.TILE_LAYOUT)
+    out_tt = ttnn.outer(a_tt, b_tt)
+    out_pt = ttnn.to_torch(out_tt)
+    golden = _golden(a_pt, b_pt)
+    assert tuple(out_pt.shape) == tuple(golden.shape), f"shape mismatch: tt={out_pt.shape}, golden={golden.shape}"
+    # ttnn.to_torch returns torch.uint32 for UINT32 inputs while gen_func_with_cast_tt
+    # casts UINT32 to torch.int32. torch.equal refuses mismatched signed/unsigned
+    # dtypes, so widen both to int64 (safe: values stay well within range).
+    assert torch.equal(out_pt.to(torch.int64), golden.to(torch.int64)), f"integer outer mismatch (dtype={dtype})"
+
+
+# ---------------------------------------------------------------------------
+# Test 9: bfloat4_b is intentionally rejected up front with a ttnn.outer message
+# ---------------------------------------------------------------------------
+
+
 def test_outer_bfloat4b_unsupported(device):
-    """ttnn.unsqueeze routes through reshape_device_operation which only
-    accepts BFLOAT16/UINT32/FLOAT32/INT32. bfloat4_b inputs to ttnn.outer
-    must therefore fail with a clear TT_FATAL at the reshape layer, not
-    crash or produce silently wrong results. This test pins that behavior
-    so any future relaxation in reshape is flagged."""
+    """ttnn.outer rejects bfloat4_b at entry with an explicit ttnn.outer error
+    rather than letting it fall through to an opaque reshape_device_operation
+    failure (related: https://github.com/tenstorrent/tt-metal/issues/44919)."""
     a_pt = torch.rand([32], dtype=torch.bfloat16)
     b_pt = torch.rand([32], dtype=torch.bfloat16)
     a_tt = ttnn.from_torch(a_pt, dtype=ttnn.bfloat4_b, device=device, layout=ttnn.TILE_LAYOUT)
     b_tt = ttnn.from_torch(b_pt, dtype=ttnn.bfloat4_b, device=device, layout=ttnn.TILE_LAYOUT)
-    ttnn.outer(a_tt, b_tt)
+    with pytest.raises(RuntimeError, match="ttnn.outer: bfloat4_b is not supported"):
+        ttnn.outer(a_tt, b_tt)
+
+
+# ---------------------------------------------------------------------------
+# Test 9b: dtype mismatch between inputs is rejected up front
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "dtype_a, dtype_b",
+    [
+        (ttnn.bfloat16, ttnn.float32),
+        (ttnn.float32, ttnn.bfloat16),
+        (ttnn.bfloat16, ttnn.bfloat8_b),
+        (ttnn.int32, ttnn.uint32),
+    ],
+    ids=["bf16_fp32", "fp32_bf16", "bf16_bf8b", "i32_u32"],
+)
+def test_outer_dtype_mismatch_rejected(device, dtype_a, dtype_b):
+    """ttnn.outer requires both inputs to have the same dtype. Pin the explicit
+    check so mismatched-dtype inputs raise a clearly attributable ttnn.outer
+    error rather than bubbling up a generic multiply dtype-mismatch."""
+    a_pt = torch.rand([32], dtype=torch.bfloat16)
+    b_pt = torch.rand([32], dtype=torch.bfloat16)
+    a_tt = ttnn.from_torch(a_pt, dtype=dtype_a, device=device, layout=ttnn.TILE_LAYOUT)
+    b_tt = ttnn.from_torch(b_pt, dtype=dtype_b, device=device, layout=ttnn.TILE_LAYOUT)
+    with pytest.raises(RuntimeError, match="ttnn.outer: inputs must have the same dtype"):
+        ttnn.outer(a_tt, b_tt)
+
+
+# ---------------------------------------------------------------------------
+# Test 10: rank-0 (scalar) inputs are rejected with a clear ttnn.outer message
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "shape_a, shape_b",
+    [
+        ([], [32]),
+        ([32], []),
+        ([], []),
+    ],
+    ids=["scalar_a", "scalar_b", "scalar_both"],
+)
+def test_outer_rank0_rejected(device, shape_a, shape_b):
+    """ttnn.outer requires both inputs to be at least 1D. Pin the explicit
+    rank check so a scalar input raises a clearly attributable ttnn.outer
+    error rather than bubbling up an opaque 'Dimension out of range' from
+    ttnn.unsqueeze."""
+    a_tt = ttnn.from_torch(torch.rand(shape_a, dtype=torch.bfloat16), dtype=ttnn.bfloat16, device=device)
+    b_tt = ttnn.from_torch(torch.rand(shape_b, dtype=torch.bfloat16), dtype=ttnn.bfloat16, device=device)
+    with pytest.raises(RuntimeError, match="ttnn.outer: inputs must be at least 1D"):
+        ttnn.outer(a_tt, b_tt)
