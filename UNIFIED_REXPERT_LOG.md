@@ -160,7 +160,57 @@ Files committed for the unified op (still WIP, not the production path):
 - `unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp`
 - `unified_routed_expert_ffn/device/kernels/dataflow/reader_unified_re.cpp`
 - `unified_routed_expert_ffn/device/kernels/dataflow/writer_unified_re.cpp`
-- `tests/pcc/test_unified_routed_expert.py` (currently hangs at first run).
+- `tests/pcc/test_unified_routed_expert.py`
+
+After the DRAM-scratch-round-trip redesign (commit `5c9bafaf818`), the
+kernels are wired for approach (b):
+- writer drains `cb_activated` to a per-program DRAM scratch tensor and
+  atomically increments a global semaphore;
+- reader waits for the semaphore to reach `total_cores`, then reads the
+  scratch back into `cb_in0_down_full` for phase 4.
+
+**What's still required to make the unified op pass:** plumb the new
+scratch tensor + semaphore + `cb_in0_down_full` CB through the program
+factory. Concrete checklist:
+
+1. In `unified_routed_expert_ffn_program_factory.cpp::create`:
+   - Allocate a DRAM-interleaved scratch buffer
+     (`chunk_M_tiles * N_gate_tiles_full * tile_size(x_dtype)` bytes).
+     Use `tt::tt_metal::CreateBuffer(InterleavedBufferConfig{...})` and
+     keep a `Buffer*` in `shared_variables_t` so `override_runtime_arguments`
+     can refresh the address on cache hits.
+   - Create a per-program semaphore on the compute grid:
+     `uint32_t sem_addr = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);`
+     and pick a single core as the "owner" — every writer NoC-increments
+     that core's semaphore; every reader does `noc_semaphore_wait` on
+     `sem_addr` because `CreateSemaphore` reserves the same L1 offset on
+     every core in the range (the owner just happens to be the one cores
+     send their NoC-inc to).
+   - Declare a new CB for `cb_in0_down_full` (= CB_IN0_DOWN_FULL, already
+     reserved as `tt::CBIndex::c_12`) sized
+     `per_core_M * in0_block_w_d` tiles double-buffered in `intermed_df`.
+   - Add `cb_in0_down_full` to the compute kernel's `named_compile_args`.
+   - Append `total_cores` to the reader CT args, and the scratch tensor's
+     TensorAccessorArgs to both reader and writer CT args.
+   - Per-core runtime args:
+     - reader: add `scratch_addr, sem_addr, my_mt, my_nt_gu, my_nt_d, chunk_start_tile_row`
+       (the new positions match the reader runtime-arg layout I wrote).
+     - writer: add `scratch_addr, sem_addr, sem_core_x, sem_core_y, my_mt,
+       my_nt_gu, my_nt_d, chunk_start_tile_row` (same).
+
+2. Once the factory is plumbed, the test in
+   `tests/pcc/test_unified_routed_expert.py` (currently hangs) should run
+   end-to-end for the 2k case. From there: validate PCC, then extend to
+   multi-chunk by making the compute kernel loop the four phases over
+   chunks and reading counts from the (already wired) counts scratch CB
+   inside the kernel to skip chunks past the count.
+
+3. The "single op" / count-aware end state is then:
+   - `TtRoutedExpert.forward` drops the host-side count read and just
+     calls `ttnn.experimental.deepseek_prefill.unified_routed_expert_ffn`,
+     passing the full max_tokens-sized x and the counts tensor verbatim.
+   - tt-perf-report shows ONE `UnifiedRoutedExpertFfnDeviceOperation` row
+     per call, regardless of chunk count.
 
 ## Final summary (state at end of session)
 
