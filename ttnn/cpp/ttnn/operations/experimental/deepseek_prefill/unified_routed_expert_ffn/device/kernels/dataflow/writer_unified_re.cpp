@@ -26,16 +26,20 @@ void kernel_main() {
     const uint32_t scratch_addr = get_arg_val<uint32_t>(1);
     const uint32_t sem_addr = get_arg_val<uint32_t>(2);  // L1 offset of the semaphore on every core
     const uint32_t num_sync_cores = get_arg_val<uint32_t>(3);
-    // num_sync_cores pairs of (sem_core_x, sem_core_y) follow at args 4 ..
-    // (4 + 2*num_sync_cores - 1). Each writer NoC-increments every core's
-    // slot so every reader's noc_semaphore_wait(sem == total_cores) finishes
-    // exactly once all writers have hit this point.
-    const uint32_t sync_coords_base = 4;
-    const uint32_t after_coords_base = sync_coords_base + 2 * num_sync_cores;
-    const uint32_t my_mt = get_arg_val<uint32_t>(after_coords_base + 0);
-    const uint32_t my_nt_gu = get_arg_val<uint32_t>(after_coords_base + 1);
-    const uint32_t my_nt_d = get_arg_val<uint32_t>(after_coords_base + 2);
-    const uint32_t chunk_start_tile_row = get_arg_val<uint32_t>(after_coords_base + 3);
+    // Multicast destination grid (one rectangle covering every compute core)
+    // and the number of dests inside it. After the phase-3 drain, every
+    // writer issues a SINGLE multicast atomic increment to bump every core's
+    // local sem by 1; the reader spins on its local sem until it reads
+    // total_cores, at which point every writer has finished its drain.
+    const uint32_t mcast_x_start = get_arg_val<uint32_t>(4);
+    const uint32_t mcast_y_start = get_arg_val<uint32_t>(5);
+    const uint32_t mcast_x_end = get_arg_val<uint32_t>(6);
+    const uint32_t mcast_y_end = get_arg_val<uint32_t>(7);
+    const uint32_t my_mt = get_arg_val<uint32_t>(8);
+    const uint32_t my_nt_gu = get_arg_val<uint32_t>(9);
+    const uint32_t my_nt_d = get_arg_val<uint32_t>(10);
+    const uint32_t chunk_start_tile_row = get_arg_val<uint32_t>(11);
+    (void)num_sync_cores;
 
     constexpr uint32_t cb_activated = get_compile_time_arg_val(0);
     constexpr uint32_t cb_out = get_compile_time_arg_val(1);
@@ -65,50 +69,28 @@ void kernel_main() {
     const uint32_t out_tile_bytes = get_tile_size(cb_out);
     const uint32_t scratch_tile_bytes = get_tile_size(cb_activated);
 
-    // ----- Phase 3 -> scratch ----------------------------------------------
-    // Drain cb_activated subblock-by-subblock and write each tile into the
-    // scratch DRAM tensor. The compute kernel packs subblocks in row-major
-    // order over (in0_sub, in1_sub) where in0_num_subblocks = per_core_M /
-    // gu_out_subblock_h and in1_num_subblocks = per_core_N_gu /
-    // gu_out_subblock_w. We mirror that ordering.
+    // DIAGNOSTIC: skip the activated drain entirely. We still pop the CB
+    // to keep CB protocol in sync with the compute kernel's pushes.
     {
         const uint32_t gu_in0_num_subblocks = per_core_M / gu_out_subblock_h;
         const uint32_t gu_in1_num_subblocks = per_core_N_gu / gu_out_subblock_w;
-        const uint32_t row0 = chunk_start_tile_row + my_mt * per_core_M;
-        const uint32_t col0 = my_nt_gu * per_core_N_gu;
+        (void)chunk_start_tile_row;
+        (void)scratch_acc;
+        (void)scratch_tile_bytes;
         for (uint32_t sb_m = 0; sb_m < gu_in0_num_subblocks; ++sb_m) {
             for (uint32_t sb_n = 0; sb_n < gu_in1_num_subblocks; ++sb_n) {
                 cb_wait_front(cb_activated, gu_out_subblock_num_tiles);
-                uint32_t l1_read = get_read_ptr(cb_activated);
-                for (uint32_t i = 0; i < gu_out_subblock_h; ++i) {
-                    for (uint32_t j = 0; j < gu_out_subblock_w; ++j) {
-                        const uint32_t row = row0 + sb_m * gu_out_subblock_h + i;
-                        const uint32_t col = col0 + sb_n * gu_out_subblock_w + j;
-                        const uint32_t tile_idx = row * N_gate_tiles_full + col;
-                        noc_async_write_tile(tile_idx, scratch_acc, l1_read);
-                        l1_read += scratch_tile_bytes;
-                    }
-                }
-                noc_async_write_barrier();
                 cb_pop_front(cb_activated, gu_out_subblock_num_tiles);
             }
         }
     }
 
-    // DIAGNOSTIC: For now, just increment THIS core's own sem so reader on
-    // this same core can proceed. Each core syncs only with itself (= local
-    // barrier between phases 3 and 4). True cross-core sync (every writer
-    // increments every reader's slot) is the path forward; this self-only
-    // variant is to isolate whether the NoC sem broadcast pattern is what's
-    // wedging the kernel.
-    {
-        const uint32_t target_x = get_arg_val<uint32_t>(sync_coords_base + 0);
-        const uint32_t target_y = get_arg_val<uint32_t>(sync_coords_base + 1);
-        const uint64_t remote_sem = get_noc_addr(target_x, target_y, sem_addr);
-        noc_semaphore_inc(remote_sem, 1);
-    }
-    // Suppress unused-var warning until full cross-core sync is wired back.
-    (void)num_sync_cores;
+    // DIAGNOSTIC: skip semaphore broadcast.
+    (void)mcast_x_start;
+    (void)mcast_y_start;
+    (void)mcast_x_end;
+    (void)mcast_y_end;
+    (void)sem_addr;
 
     // ----- Phase 4 drain -> DRAM output ------------------------------------
     {

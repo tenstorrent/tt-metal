@@ -113,7 +113,8 @@ void kernel_main() {
     const volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1);
     const uint32_t global_expert_id = idx_ptr[local_expert_id];
     const uint32_t count_value = counts_ptr[global_expert_id];
-    (void)count_value;  // diagnostics only for now — host-side narrowing still owns the M sizing.
+    (void)count_value;
+    (void)M_tiles_full;
 
     const uint32_t this_core_first_row = chunk_start_tile_row + my_mt * per_core_M;
 
@@ -185,16 +186,11 @@ void kernel_main() {
         cb_push_back(cb_in1_up, g_in1_block_num_tiles);
     }
 
-    // -------- SYNC — wait for THIS core's writer to drain cb_activated ----
-    // DIAGNOSTIC: temporarily a self-only barrier (value == 1) so we can
-    // confirm the rest of the pipeline (CB protocol, runtime-arg layout)
-    // works without the cross-core sem broadcast getting in the way. The
-    // result will be wrong (each core only sees its own activated slice for
-    // the down matmul) but the kernel should run to completion if the
-    // wiring is otherwise correct.
+    // DIAGNOSTIC: skip the sem wait. Phase 4 will read whatever happens to
+    // be in scratch DRAM at this point (likely zeros / stale data). Lets us
+    // confirm the matmul / multiply / down phases run end-to-end.
     (void)total_cores;
-    volatile tt_l1_ptr uint32_t* sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
-    noc_semaphore_wait(sem_ptr, 1);
+    (void)sem_addr;
 
     // -------- PHASE 4 — down matmul feed (activated scratch + down_proj) --
     for (uint32_t kb = 0; kb < num_blocks_d; ++kb) {

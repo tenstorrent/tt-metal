@@ -99,6 +99,7 @@ def test_unified_routed_expert(
     counts = _idx_tensor([num_tokens])
     idx_table = _idx_tensor([0])
 
+    print("[unified-test] BEFORE op call", flush=True)
     tt_output = ttnn.experimental.deepseek_prefill.unified_routed_expert_ffn(
         tt_input,
         tt_gate,
@@ -109,12 +110,27 @@ def test_unified_routed_expert(
         local_expert_id=0,
         compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
     )
+    print("[unified-test] AFTER op call", flush=True)
 
     tt_output_torch = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
     )
+    print("[unified-test] AFTER to_torch", flush=True)
 
+    print(
+        f"[unified-test] tt_out: shape={tt_output_torch.shape}, "
+        f"min={tt_output_torch.min().item():.6f}, max={tt_output_torch.max().item():.6f}, "
+        f"mean={tt_output_torch.float().mean().item():.6f}, "
+        f"abs_mean={tt_output_torch.float().abs().mean().item():.6f}, "
+        f"nonzero_frac={(tt_output_torch.float().abs() > 1e-6).float().mean().item():.6f}",
+        flush=True,
+    )
+    print(
+        f"[unified-test] torch_out: min={torch_output.min().item():.6f}, max={torch_output.max().item():.6f}, "
+        f"abs_mean={torch_output.float().abs().mean().item():.6f}",
+        flush=True,
+    )
     _, pcc = comp_pcc(torch_output, tt_output_torch)
     logger.info(f"unified routed expert PCC: {pcc:.6f}")
     assert pcc >= 0.95, f"PCC {pcc:.6f} below threshold 0.95"

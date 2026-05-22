@@ -66,8 +66,6 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const uint32_t per_core_N_gu = N_gate_tiles_full / GRID_X;
     const uint32_t per_core_N_d = N_down_tiles_full / GRID_X;
 
-    // K-block sizes. Pick the largest in0_block_w that divides K and keeps
-    // per-CB L1 in budget (we hardcode safe choices for v1).
     const uint32_t in0_block_w_gu = 16;
     const uint32_t in0_block_w_d = 8;
     TT_FATAL(
@@ -189,7 +187,8 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     make_cb(CB_GATE_INT, intermed_df, /*tiles=*/gu_out_block_num_tiles, intermed_tile_size);
     make_cb(CB_UP_INT, intermed_df, /*tiles=*/gu_out_block_num_tiles, intermed_tile_size);
     make_cb(CB_ACTIVATED, intermed_df, /*tiles=*/gu_out_block_num_tiles, intermed_tile_size);
-    // Partials CBs: subblock-sized, used for spill-and-reload between K-blocks.
+    // Partials CBs: subblock-sized (2x for double-buffer) for the kernel's
+    // spill/reload between subblock iterations within a K-block.
     make_cb(
         CB_PARTIALS_GU,
         partials_df,
@@ -341,18 +340,22 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         {"cb_out", CB_OUT},
     };
 
+    // PACKER_L1_ACC would let the per-K-block partials accumulate via the
+    // packer (read-modify-write into the same L1 slot), but doesn't seem to
+    // play nicely with our current CB/pack layout — disabled for now.
+    std::map<std::string, std::string> compute_defines{};
+
     auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        // DIAGNOSTIC: stub kernel that drains reader CBs and pushes zero
-        // outputs. Verifies CB/runtime-arg wiring without matmul logic.
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/"
-        "fused_swiglu_diag.cpp",
+        "fused_swiglu.cpp",
         core_range_set,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::LoFi,
             .fp32_dest_acc_en = false,
             .math_approx_mode = false,
             .compile_args = compute_ct_args,
+            .defines = compute_defines,
             .named_compile_args = compute_named_args,
         });
 
@@ -385,16 +388,16 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         }
     }
 
-    // Resolve each core's NoC coords (BH virtual coords) for the writer's
-    // semaphore-target list.
+    // Resolve the multicast rectangle covering the whole compute grid in
+    // NoC (virtual) coords. The writer kernel uses noc_semaphore_inc_multicast
+    // to bump every core's local sem slot in a single NoC transaction.
     auto* device = t.x.device();
-    std::vector<uint32_t> core_noc_coords_flat;
-    core_noc_coords_flat.reserve(cores.size() * 2);
-    for (const auto& core : cores) {
-        const auto virtual_core = device->worker_core_from_logical_core(core);
-        core_noc_coords_flat.push_back(virtual_core.x);
-        core_noc_coords_flat.push_back(virtual_core.y);
-    }
+    const auto top_left_noc = device->worker_core_from_logical_core(CoreCoord{0, 0});
+    const auto bot_right_noc = device->worker_core_from_logical_core(CoreCoord{GRID_X - 1, GRID_Y - 1});
+    const uint32_t mcast_x_start = top_left_noc.x;
+    const uint32_t mcast_y_start = top_left_noc.y;
+    const uint32_t mcast_x_end = bot_right_noc.x;
+    const uint32_t mcast_y_end = bot_right_noc.y;
 
     for (uint32_t idx = 0; idx < cores.size(); ++idx) {
         const auto& core = cores[idx];
@@ -424,20 +427,29 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         //   0: output_addr
         //   1: scratch_addr
         //   2: sem_addr (local L1 offset)
-        //   3..(3+2*total_cores-1): pairs of (sem_core_x, sem_core_y) for every
-        //                           core whose semaphore slot we'll increment.
-        //   then per-core (mt, nt_gu, nt_d, chunk_start_tile_row).
+        //   3: num_sync_cores (total cores covered by the multicast)
+        //   4: mcast_x_start  (NoC virtual coords of the rectangle's top-left)
+        //   5: mcast_y_start
+        //   6: mcast_x_end    (NoC virtual coords of the bottom-right)
+        //   7: mcast_y_end
+        //   8: my_mt
+        //   9: my_nt_gu
+        //  10: my_nt_d
+        //  11: chunk_start_tile_row
         std::vector<uint32_t> writer_args = {
             out_buffer->address(),
             scratch_buffer->address(),
             semaphore_addr,
             static_cast<uint32_t>(cores.size()),
+            mcast_x_start,
+            mcast_y_start,
+            mcast_x_end,
+            mcast_y_end,
+            my_mt,
+            my_nt_gu,
+            my_nt_d,
+            chunk_start_tile_row,
         };
-        writer_args.insert(writer_args.end(), core_noc_coords_flat.begin(), core_noc_coords_flat.end());
-        writer_args.push_back(my_mt);
-        writer_args.push_back(my_nt_gu);
-        writer_args.push_back(my_nt_d);
-        writer_args.push_back(chunk_start_tile_row);
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_args);
     }
 

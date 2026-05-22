@@ -183,18 +183,13 @@ FORCE_INLINE void matmul_phase(
 
                     tile_regs_wait();
                     if constexpr (apply_silu_in_pack) {
-                        // Apply silu in the pack step, riding the helper from
-                        // matmul/device/kernels/compute/bmm_fused_activation.hpp.
                         apply_activation_from_pack<KernelActivation::SILU>(out_subblock_num_tiles);
                     }
 
-                    // Pack subblock to final destination.
                     pack_tile_block(/*start_dst_index=*/0, final_out_cb_id, out_subblock_num_tiles);
                     tile_regs_release();
                     final_out_cb.push_back(out_subblock_num_tiles);
                 } else {
-                    // Intermediate K-block — pack to partials CB for reload
-                    // next iteration.
                     tile_regs_commit();
                     partials_cb.reserve_back(out_subblock_num_tiles);
                     tile_regs_wait();
