@@ -163,3 +163,88 @@ Method 1 cannot bisect further without modifying `flash_mla` itself — the doc 
 **State.** Removed.
 
 ---
+
+## Attempt 6 — Patch 2a: initialize `DEST_OFFSET_LO/HI +1..+3` GPRs in `_llk_init_packer_dest_offset_registers_`
+
+**What.** In `tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_pack_common.h:69-71`, add six more `TTI_SETDMAREG` instructions to initialize `p_gpr_pack::DEST_OFFSET_LO + {1,2,3}` to `0` and `p_gpr_pack::DEST_OFFSET_HI + {1,2,3}` to `DEST_REGISTER_HALF_SIZE`. Previously only the `+0` slots were initialized.
+
+```cpp
+TTI_SETDMAREG(0, 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 1));
+TTI_SETDMAREG(0, 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 2));
+TTI_SETDMAREG(0, 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 3));
+TTI_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 1));
+TTI_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 2));
+TTI_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 3));
+```
+
+**Motivation.** Top open-candidate from `half-dest-conversation-summary.md` §4 (#1). `select_packer_dest_registers<SyncHalf>` emits `WRCFG_128b` which writes PACK_SEC0..3 in one shot from four consecutive GPRs starting at `DEST_OFFSET_LO+0` or `DEST_OFFSET_HI+0` (see `cpack_common.h:659-668`). Currently `_llk_init_packer_dest_offset_registers_` only sets the `+0` slots — `+1..+3` carry whatever they happened to hold at kernel boot, which could differ between iterations or program-cache hits.
+
+**Result.**
+
+| Case | iter=1 PCC | iter=2 PCC |
+|---|---|---|
+| Baseline | 0.9931898601668998 | 0.9934483676630709 |
+| Patch 2a | **0.9931898601668998 (bit-identical baseline)** | **0.9934483676630709 (bit-identical baseline)** |
+
+**Conclusion.** Null effect → stale `PACK_SEC1..3` GPR contents are NOT the bug. Either `flash_mla` only uses packer 0 (so `PACK_SEC1..3` content is unread), or the stale values in those GPRs happen to be benign on this kernel layout. Candidate eliminated.
+
+**Next steps.** Move to the next open candidate. Two reasonable options:
+- **2b:** re-init the SFPU reduce-row replay buffers (`_init_sdpa_reduce_max_row_8x32_replay_buffers_` / `_init_sdpa_reduce_sum_row_8x32_replay_buffers_`) at every `compute_sdpa_chunk` invocation. Currently they're set up once per chunk too, but the *contents* persist across chunks and may encode a bank-parity-dependent address that gets reused.
+- **2c:** explicitly reset UNPACK DEST mirror in `sdpa_custom_mm_reuse_dest_srcb_block` per chunk. MM2 reads DEST through SRCB; the SRCB-reuse base pointer is set via its own `TT_SETC16` (`llk_math_sdpa_custom_mm.h:101`, `llk_math_sdpa_custom_mm_reuse_dest_srcb.h:122,130`) which might not be aware of the bank flip.
+
+**State.** Reverted.
+
+---
+
+## Attempt 7 — Patch 2c (variant): explicit `MATH_Offset` reset on both TRISC1 and TRISC2 at top of every `compute_sdpa_chunk`
+
+**What.** In `models/demos/deepseek_v3_b1/kernel_includes/tt_metal/include/compute_kernel_api/sdpa.h:263-265`, add two explicit `TT_SETC16` calls at the top of every `compute_sdpa_chunk` invocation — one on MATH (TRISC1) and one on PACK (TRISC2) — that re-write each thread's `DEST_TARGET_REG_CFG_MATH_Offset` to the current bank base.
+
+```cpp
+MATH((TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, get_dest_buffer_base())));
+PACK((TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset())));
+```
+
+**Motivation.** Note that the doc's literal "reset UNPACK DEST mirror" framing for 2c is misleading: UNPACK does not touch DEST. The MM2 op (`sdpa_custom_mm_reuse_dest_srcb_block`) reads DEST through SRCB via MOVD2B on the *MATH* side (`llk_math_sdpa_custom_mm_reuse_dest_srcb.h:119-145`), and that path is bank-aware via `get_dest_buffer_base()` captured at line 119. So the literal 2c is already correct. Adjacent test: force a known-good `MATH_Offset` on both threads at chunk entry, mirroring the explicit `matmul.hpp:167` idiom for TRISC2 alignment. If any consumer were operating from a stale `MATH_Offset` at chunk entry (despite the per-op `TT_SETC16` calls in the SDPA helpers), this would patch over it.
+
+**Result.**
+
+| Case | iter=1 PCC | iter=2 PCC |
+|---|---|---|
+| Baseline | 0.9931898601668998 | 0.9934483676630709 |
+| Patch 2c (MATH+PACK MATH_Offset reset per chunk) | **0.9931898601668998 (bit-identical baseline)** | **0.9934483676630709 (bit-identical baseline)** |
+
+**Conclusion.** Null effect. Combined with the closer reading of the LLK code:
+- The SDPA SFPU helpers all do `TT_SETC16(MATH_Offset, src + get_dest_buffer_base())` per-dispatch using their thread's own `dest_offset_id` — already correct.
+- MM2 (`_llk_math_sdpa_custom_mm_reuse_dest_srcb_`) captures `dest_buffer_base = get_dest_buffer_base()` at function entry and uses it for both the MOVD2B src and the MVMUL dst — already correct.
+- MM1 (`_llk_math_sdpa_custom_mm_`) goes through `_llk_math_sdpa_custom_mm_mask_dest_` which sets MATH_Offset to `dst_index + get_dest_buffer_base()` — already correct.
+
+→ `MATH_Offset` is consistently bank-aware across all major SDPA ops. The bug is **not** in MATH_Offset management. Combined with Patch #4 (timing fence) and Patch 2a (PACK_SEC GPRs 1..3) being null, three of the four "open candidates" from `half-dest-conversation-summary.md` §4 are now eliminated:
+- ❌ in-flight ZEROACC race
+- ❌ stale PACK_SEC1..3 GPR contents
+- ❌ MATH_Offset asymmetry across threads/ops
+
+What's left from the open list:
+- DEST replay-buffer instruction encoding leak (unlikely per code review; replay buffers are re-recorded per chunk and overwrite each other).
+- Semaphore handshake race leaving stale `MATH_Offset` from a previous tail's `sdpa_tail_l_block` packing (would need explicit instrumentation to test).
+- **Bank-half-specific HW silicon behaviour** (e.g. SerDes / shuffle pattern, or some DEST-half address calculation that's not symmetric). Worth eliminating via direct read-back of bank-0 vs bank-1 contents after identical FPU writes.
+
+**State.** Reverted.
+
+---
+
+## Where to go next (handoff)
+
+The Method 1 bisect localized the bug to `flash_mla.hpp:747-791` (chunk loop + tail + final pack) — ~40 lines of TRISC2/SFPU + TRISC1/FPU activity. Three candidate-driven patches (#4, 2a, 2c) covering the three most plausible mechanisms (timing race, stale PACK_SEC GPRs, stale MATH_Offset) all came back **null**. Method 1 cannot bisect inside the existing `tile_regs_acquire/release` block without risk of deadlock.
+
+Recommended next moves:
+
+1. **Direct DEST-bank readback experiment.** Hand-write a minimal kernel: do one full FPU + SFPU pass into bank 0, snapshot DEST→L1, repeat into bank 1 (force via `_llk_pack_dest_init_(1)`), snapshot DEST→L1. Diff the L1 dumps. If different, HW silicon asymmetry. If identical, bug is in some higher-level state.
+
+2. **Single-op skipping inside flash_mla.** Conditionally skip the `compute_sdpa_recip` path / the final `pack_block_contiguous(mm2)` loop / each SFPU phase in iter-0 only, observe which removal makes iter-0 PCC swap. Each run is ~12 min cold-JIT, but each gives a clean signal about one specific consumer.
+
+3. **Surgical equivalents to Austin's fix.** Try replacing the iter-top double reset with a *single* `select_packer_dest_registers<SyncHalf>()` on PACK and a *single* `dest_section_flip` on MATH — explicitly test whether re-writing PACK_SEC0 (the active reg) alone, with no other SW reset, is sufficient. The ablation table previously tried "HW-only" without the SW reset and it failed; this variant decouples PACK_SEC0 from PACK_SEC1..3 and from `dest_offset_id`.
+
+4. **Profiler / DEST address trace.** If tools allow it, capture the actual physical DEST address every PACK / MOVD2B / SFPLOAD references throughout one iter-0 and one iter-1, diff them. Any address that's iter-1-only different beyond the documented bank offset is a candidate.
+
+---
