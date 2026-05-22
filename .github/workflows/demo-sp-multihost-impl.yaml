@@ -99,6 +99,7 @@ jobs:
       HOME: /home/user
       PIP_CACHE_DIR: /home/user/.cache/pip
       LD_LIBRARY_PATH: /home/user/tt-metal/build/lib
+      TT_METAL_HOME: /home/user/tt-metal
       TT_METAL_RUNTIME_ROOT: /home/user/tt-metal
       TT_METAL_CACHE: /home/user/.cache
     strategy:
@@ -175,6 +176,7 @@ jobs:
       - name: Unpack artifacts & install
         run: |
           # Move the cloned directory to workers. TODO: Clone directly to NFS
+          rm -rf /ci/tt-metal
           cp -r "$GITHUB_WORKSPACE" /ci/tt-metal
           if ! command -v zstd >/dev/null 2>&1; then
             echo "zstd not found in runner context, installing fallback..."
@@ -197,7 +199,10 @@ jobs:
           # Unpack build artifact locally as well. Pipeline config generation runs on the runner
           # and expects test binaries under /ci/tt-metal/build/test.
           tar --zstd -xf "${BUILD_ARCHIVE}" -C /ci/tt-metal
-          mpirun --pernode cp -r /ci/tt-metal /home/user
+          rm -rf /home/user/tt-metal
+          mkdir -p /home/user
+          cp -r /ci/tt-metal /home/user/
+          mpirun --pernode bash -lc 'rm -rf /home/user/tt-metal && cp -r /ci/tt-metal /home/user/'
           mpirun --pernode git -C /home/user/tt-metal submodule update --init --recursive
 
           # Unpack artifacts
