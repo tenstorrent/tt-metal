@@ -33,7 +33,7 @@ from models.experimental.voxtraltts.tt.audio_tokenizer.model import (
 from models.experimental.voxtraltts.tt.text_model import VoxtralTTTextModel
 from models.experimental.voxtraltts.tt.voxtral_tt_args import (
     _load_safetensors_state_dict,
-    voxtral_text_high_accuracy_optimizations,
+    voxtral_text_default_optimizations,
 )
 
 ACOUSTIC_CFG_ALPHA_DEFAULT = 1.2
@@ -78,7 +78,7 @@ class VoxtralTTSPipeline:
         *,
         text_max_seq_len: int = 256,
         text_dtype: ttnn.DataType = ttnn.bfloat16,
-        text_optimizations=voxtral_text_high_accuracy_optimizations,
+        text_optimizations=voxtral_text_default_optimizations,
         acoustic_dtype: ttnn.DataType = ttnn.bfloat16,
         tokenizer_dtype: ttnn.DataType = ttnn.bfloat16,
     ) -> "VoxtralTTSPipeline":
