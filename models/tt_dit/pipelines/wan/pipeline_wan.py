@@ -1037,7 +1037,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             latents = latents.to(self.vae.dtype)
             latents = latents * self._vae_latents_std + self._vae_latents_mean
 
-            tt_latents_BTHWC, logical_h = self.tt_vae.prepare_input(latents)
+            tt_latents_BTHWC, logical_h, logical_w = self.tt_vae.prepare_input(latents)
 
             tt_latents_BTHWC = typed_tensor_2dshard(
                 tt_latents_BTHWC,
@@ -1050,7 +1050,12 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 dtype=self.tt_vae.dtype,
             )
             self._prepare_vae()
-            tt_video_BCTHW, new_logical_h = self.tt_vae(tt_latents_BTHWC, logical_h, t_chunk_size=self.vae_t_chunk_size)
+            tt_video_BCTHW, new_logical_h, new_logical_w = self.tt_vae(
+                tt_latents_BTHWC,
+                logical_h,
+                t_chunk_size=self.vae_t_chunk_size,
+                logical_w=logical_w,
+            )
 
             concat_dims = [None, None]
             concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
@@ -1074,11 +1079,11 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             )
 
             if d2h_permute is not None:
-                # Output is (B, T, H, W, C) — trim height in dim 2.
-                video_torch = video_torch[:, :, :new_logical_h, :, :]
+                # Output is (B, T, H, W, C) — trim height and width.
+                video_torch = video_torch[:, :, :new_logical_h, :new_logical_w, :]
             else:
-                # Output is (B, C, T, H, W) — trim height in dim 3.
-                video_torch = video_torch[:, :, :, :new_logical_h, :]
+                # Output is (B, C, T, H, W) — trim height and width.
+                video_torch = video_torch[:, :, :, :new_logical_h, :new_logical_w]
 
             if output_type == "uint8":
                 video = video_torch.numpy()
