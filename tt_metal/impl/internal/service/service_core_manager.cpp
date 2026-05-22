@@ -21,6 +21,9 @@
 
 namespace tt::tt_metal::internal {
 
+// Per-Device state holds:
+// 1. Per-core allocator for all cores per device
+// 2. Snapshot of FD worker grid per device
 struct ServiceCoreManager::Impl {
     struct CoreState {
         std::unique_ptr<allocator::FreeListOpt> alloc;
@@ -35,6 +38,7 @@ struct ServiceCoreManager::Impl {
 ServiceCoreManager::ServiceCoreManager() : impl_(std::make_unique<Impl>()) {}
 ServiceCoreManager::~ServiceCoreManager() = default;
 
+// ServiceCoreManager singleton
 ServiceCoreManager& ServiceCoreManager::get() {
     static ServiceCoreManager instance;
     return instance;
@@ -42,6 +46,7 @@ ServiceCoreManager& ServiceCoreManager::get() {
 
 namespace {
 
+// Get DRAM aligned L1 range for per-core allocator
 std::pair<DeviceAddr, DeviceAddr> l1_service_range() {
     const auto& hal = MetalContext::instance().hal();
     const DeviceAddr dram_align = hal.get_alignment(HalMemType::DRAM);
@@ -65,10 +70,13 @@ void ServiceCoreManager::claim(IDevice* device, const std::vector<CoreCoord>& co
         "Call initialize_fast_dispatch() before claim().");
 
     auto& state = impl_->devices[device->id()];
+    // Capture FD Grid snapshot. Useful to create truly disjoint-worker-sets if we switch to SD
+    // later.
     if (state.cores.empty()) {
         state.fd_compute_grid = device->compute_with_storage_grid_size();
     }
 
+    // Init per-core allocator
     auto [base, size] = l1_service_range();
     const DeviceAddr dram_align = MetalContext::instance().hal().get_alignment(HalMemType::DRAM);
     for (const auto& core : cores) {
