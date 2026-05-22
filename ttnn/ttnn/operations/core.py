@@ -326,12 +326,6 @@ def from_torch(
         if memory_config.shard_spec is None and memory_config.nd_shard_spec is None:
             raise RuntimeError("ttnn.from_torch: Shard spec must not be None for sharded tensors")
 
-    if dtype == ttnn.DataType.FP8_E4M3 or (spec is not None and spec.dtype == ttnn.DataType.FP8_E4M3):
-        raise RuntimeError(
-            "ttnn.from_torch: FP8_E4M3 is an output-only dtype, used exclusively by the DeepSeek V3 "
-            "prefill combine and dispatch ops. Host-side construction is not supported; use the op's output instead."
-        )
-
     import torch
     import numpy as np
 
@@ -342,6 +336,18 @@ def from_torch(
         # NumPy does not support bfloat16, so we use a Torch tensor instead.
         # float32 as an intermediate type is not used due to limited amount of L1 memory.
         tensor = torch.from_numpy(tensor)
+
+    # FP8_E4M3 host-side construction is narrowed to float32 input only. The FLOAT32 -> FP8_E4M3
+    # path is wired up in transform_buffers via static_cast<float8_e4m3>; other source dtypes
+    # either fail at the dlpack importer (torch.float8_e4m3fn, code 10 not yet handled) or hit
+    # "FP8_E4M3 cross-type conversion is only supported to/from FLOAT32" deeper in to_dtype.
+    # The float32 path is supported for unit tests.
+    fp8_target = dtype == ttnn.DataType.FP8_E4M3 or (spec is not None and spec.dtype == ttnn.DataType.FP8_E4M3)
+    if fp8_target and tensor.dtype != torch.float32:
+        raise RuntimeError(
+            f"ttnn.from_torch: source dtype {tensor.dtype} is not supported when target is "
+            "ttnn.fp8_e4m3; only float32 input is supported. Cast to torch.float32 first."
+        )
 
     return ttnn.Tensor(
         tensor=tensor,
