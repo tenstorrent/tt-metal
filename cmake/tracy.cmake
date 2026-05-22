@@ -58,6 +58,12 @@ endif()
 # These are CLI tools that don't need a file selector or GUI dependencies.
 set(NO_FILESELECTOR ON)
 
+# Tracy CLI tools must run from CI artifacts without build/_deps. Capstone defaults to a
+# static library when BUILD_SHARED_LIBS is OFF; tt-metal sets BUILD_SHARED_LIBS ON globally
+# (cmake/project_options.cmake), which makes Tracy's vendored capstone a shared .so.
+set(_tt_tracy_saved_build_shared_libs "${BUILD_SHARED_LIBS}")
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "Create shared libraries" FORCE)
+
 # Tracy code has warnings that the parent project's -Werror would make fatal.
 get_directory_property(_parent_compile_opts COMPILE_OPTIONS)
 add_compile_options(-Wno-error)
@@ -71,6 +77,9 @@ set_property(
             "${_parent_compile_opts}"
 )
 unset(NO_FILESELECTOR)
+
+set(BUILD_SHARED_LIBS "${_tt_tracy_saved_build_shared_libs}" CACHE BOOL "Create shared libraries" FORCE)
+unset(_tt_tracy_saved_build_shared_libs)
 
 # install(TARGETS) copies capture/csvexport into build/bin; ensure they are built on ALL.
 add_custom_target(tracy_profiler_cli_tools ALL)
