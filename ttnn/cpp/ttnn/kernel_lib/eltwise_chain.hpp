@@ -209,6 +209,7 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/reg_api.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/dataflow/circular_buffer.h"
 
 namespace compute_kernel_lib {
 
