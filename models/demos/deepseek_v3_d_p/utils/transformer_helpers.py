@@ -911,6 +911,7 @@ class DebugTraceData:
     ref_snapshots: dict[str, torch.Tensor]  # label -> [1, seq, hidden_dim] bfloat16
     ref_kvpe_list: list[torch.Tensor]  # per-layer [1, 1, seq, kv_lora_rank + qk_rope_head_dim]
     logits: torch.Tensor | None  # [seq, vocab_size] float32
+    expert_routing: dict[int, torch.Tensor] | None  # layer_idx -> [seq, n_activated_experts] int32
     metadata: dict  # raw metadata.json contents
 
 
@@ -1007,10 +1008,26 @@ def load_debug_trace(trace_dir: Path, num_layers: int | None = None) -> DebugTra
             logits = f.get_tensor("logits")
         logger.info(f"Loaded logits: shape={list(logits.shape)}, dtype={logits.dtype}")
 
+    expert_routing: dict[int, torch.Tensor] | None = None
+    expert_routing_path = trace_dir / "expert_routing.safetensors"
+    if expert_routing_path.exists():
+        expert_routing = {}
+        with safe_open(expert_routing_path, framework="pt") as f:
+            for key in f.keys():
+                if key.startswith("expert_ids_layer_"):
+                    layer_idx = int(key.rsplit("_", 1)[-1])
+                    expert_routing[layer_idx] = f.get_tensor(key).to(torch.int64)
+        logger.info(
+            f"FFF Loaded expert_routing: {len(expert_routing)} MoE layers "
+            f"FFF (layers {min(expert_routing)}..{max(expert_routing)}), "
+            f"FFF shape per layer={list(next(iter(expert_routing.values())).shape)}"
+        )
+
     return DebugTraceData(
         token_ids=token_ids,
         ref_snapshots=ref_snapshots,
         ref_kvpe_list=ref_kvpe_list,
         logits=logits,
+        expert_routing=expert_routing,
         metadata=metadata,
     )

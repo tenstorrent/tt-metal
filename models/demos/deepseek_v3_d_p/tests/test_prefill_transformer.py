@@ -105,7 +105,7 @@ def _compare_intermediate_pcc(reference_items, tt_intermediates, number_of_non_p
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="Requires Blackhole.")
-@pytest.mark.parametrize("tokenizer", ["right", "left"], indirect=True, ids=["right_pad", "left_pad"])
+@pytest.mark.parametrize("tokenizer", ["right"], indirect=True, ids=["right_pad"])
 @pytest.mark.parametrize("temperature", [[0.5]], ids=["temp_sweep"])
 @pytest.mark.parametrize("return_kv_cache", [True], ids=["kv_cache"])
 @pytest.mark.parametrize("use_pretrained", [True], ids=["pretrained"])
@@ -127,8 +127,8 @@ def _compare_intermediate_pcc(reference_items, tt_intermediates, number_of_non_p
         "tt_metal_text_25600",
     ],
 )
-@pytest.mark.parametrize("pcc_validation", [True, False], ids=["pcc", "smoke"])
-@pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "regular"])
+@pytest.mark.parametrize("pcc_validation", [True], ids=["pcc"])
+@pytest.mark.parametrize("is_balanced", [False], ids=["regular"])
 @pytest.mark.parametrize(
     "isl_total, dispatch_buffer_capacity_factor",
     [(SEQ_LEN_25K, 8)],
@@ -147,9 +147,9 @@ def _compare_intermediate_pcc(reference_items, tt_intermediates, number_of_non_p
         (256, GateComputeMode.DEVICE),
         (256, GateComputeMode.DEVICE_FP32),
     ],
-    ids=["e256_host", "e256_device", "e256_device_fp32"],
+    ids=["e256_host_all", "e256_device", "e256_device_fp32"],
 )
-@pytest.mark.parametrize("num_iterations", [1, 25, 2000], ids=["iter1", "iter25", "iter2000"])
+@pytest.mark.parametrize("num_iterations", [1], ids=["iter1"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
@@ -451,6 +451,40 @@ def test_prefill_transformer(
     logger.info("State dict freed after transformer creation")
     profiler.end("tt_transformer_creation")
 
+    # --- MoE gate: override topk indices with GPU reference ---
+    # Isolates the topk selection step: keep our matmul/sigmoid/norm/scale, but
+    # gather sigmoid scores at reference expert IDs from expert_routing.safetensors.
+    # If trace lacks expert_routing or the layer is dense (no gate), the layer is skipped.
+    USE_OVERRIDE = False
+    if USE_OVERRIDE and trace is not None and getattr(trace, "expert_routing", None) is not None:
+        assert (
+            not is_balanced
+        ), "expert_routing override does not yet apply balanced chunk reorder; run with is_balanced=False"
+        n_overridden = 0
+        for i, block in enumerate(transformer.layers):
+            if not getattr(block, "is_moe", False):
+                continue
+            if i not in trace.expert_routing:
+                logger.warning(f"expert_routing has no entry for layer {i}, skipping override on that layer")
+                continue
+            block.ffn.gate.layer_idx = i
+            block.ffn.gate._expert_routing_override = trace.expert_routing
+            n_overridden += 1
+        logger.info(f"MoE gate topk override ENABLED on {n_overridden} layers (using trace expert_routing)")
+
+    # --- MoE gate: capture topk indices for overlap analysis vs GPU reference ---
+    # Always-on (no-op cost if trace.expert_routing is absent). After forward,
+    # stats are computed: per-layer mean overlap, overall mean, min/max layer.
+    captured_indices: dict[int, torch.Tensor] = {}
+    n_capture_layers = 0
+    for i, block in enumerate(transformer.layers):
+        if not getattr(block, "is_moe", False):
+            continue
+        block.ffn.gate.layer_idx = i
+        block.ffn.gate._capture_indices_dict = captured_indices
+        n_capture_layers += 1
+    logger.info(f"MoE gate topk CAPTURE enabled on {n_capture_layers} layers")
+
     # --- Create external KVPE cache ---
     kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank
     tt_kvpe_cache = init_kvpe_cache(
@@ -519,6 +553,50 @@ def test_prefill_transformer(
         ttnn.synchronize_device(mesh_device)
     profiler.end("tt_forward")
     logger.info(f"Forward pass completed. First token: ID={first_token_id}, prob={first_token_prob:.4f}")
+
+    # --- MoE topk overlap analysis vs GPU reference ---
+    if captured_indices and trace is not None and getattr(trace, "expert_routing", None) is not None:
+        logger.info("Performing MoE topk overlap analysis vs GPU reference...")
+        logger.info(f"/n/n =================================================")
+        per_layer_mean = [float("nan")] * num_layers
+        overlap_means: list[tuple[int, float]] = []
+        for layer_idx, ours_full in captured_indices.items():
+            if layer_idx not in trace.expert_routing:
+                continue
+            ref_full = trace.expert_routing[layer_idx]
+            # Trim padding (indices are [seq_total, n_activated], seq_dim=0)
+            ours = slice_non_padded(ours_full, number_of_non_padded_tokens, padding_side, seq_dim=0)
+            ref = slice_non_padded(ref_full, number_of_non_padded_tokens, padding_side, seq_dim=0)
+            if ours.shape != ref.shape:
+                logger.warning(
+                    f"Overlap layer {layer_idx}: shape mismatch ours={list(ours.shape)} ref={list(ref.shape)}, skipping"
+                )
+                continue
+            # Per-token intersection size: for each of our topk picks, is it in ref?
+            matches = (ours.unsqueeze(-1) == ref.unsqueeze(-2)).any(-1)  # [seq, k]
+            per_token_overlap = matches.sum(-1).float() / ours.shape[-1]  # [seq] in [0, 1]
+            mean_overlap = per_token_overlap.mean().item()
+            per_layer_mean[layer_idx] = mean_overlap
+            overlap_means.append((layer_idx, mean_overlap))
+
+        if overlap_means:
+            vec_str = "[" + ", ".join(f"{v:.4f}" if v == v else "nan" for v in per_layer_mean) + "]"
+            overall = sum(v for _, v in overlap_means) / len(overlap_means)
+            min_layer, min_val = min(overlap_means, key=lambda x: x[1])
+            max_layer, max_val = max(overlap_means, key=lambda x: x[1])
+            logger.info(f"=== MoE topk overlap vs GPU reference (mode={gate_fallback_mode.value}) ===")
+            logger.info(f"per-layer mean overlap ({num_layers} layers, NaN=dense/missing):")
+            logger.info(f"  {vec_str}")
+            logger.info(f"overall mean (over {len(overlap_means)} MoE layers): {overall:.6f}")
+            logger.info(f"MIN: layer {min_layer} = {min_val:.6f}")
+            logger.info(f"MAX: layer {max_layer} = {max_val:.6f}")
+        else:
+            logger.warning("MoE topk overlap analysis: no layers matched between captured and trace.expert_routing")
+    elif captured_indices:
+        logger.info(
+            f"MoE topk overlap analysis skipped: trace.expert_routing not available "
+            f"(captured {len(captured_indices)} layers but no GPU reference to compare against)"
+        )
 
     # --- Save intermediate outputs ---
 

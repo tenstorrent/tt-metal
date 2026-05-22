@@ -465,11 +465,18 @@ class TtMoEGatePrefill(LightweightModule):
 
     def forward(self, x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         mode = self.fallback_mode
-        logger.debug(f"[MoeGate] fallback_mode={mode.value}")
+        override = getattr(self, "_expert_routing_override", None)
+        logger.debug(f"[MoeGate] fallback_mode={mode.value}, override={'ON' if override is not None else 'off'}")
 
         # ---- Phase 1: Logits (matmul) ----
         signpost(header="moe_gate_linear")
-        if mode in (GateComputeMode.DEVICE, GateComputeMode.DEVICE_FP32, GateComputeMode.HOST_GROUPED_GATE):
+        if override is not None or mode in (
+            GateComputeMode.DEVICE,
+            GateComputeMode.DEVICE_FP32,
+            GateComputeMode.HOST_GROUPED_GATE,
+        ):
+            # Override path always uses device matmul (we want to test our matmul,
+            # only replacing the topk selection with reference indices).
             logits = self._device_matmul(x)
         else:  # HOST_MATMUL, HOST_ALL
             host_logits = self._host_matmul(x)
@@ -477,7 +484,37 @@ class TtMoEGatePrefill(LightweightModule):
 
         # ---- Phase 2: Grouped gate ----
         signpost(header="moe_gate_grouped_gate")
-        if mode == GateComputeMode.DEVICE:
+        logger.info(
+            f"GGG [MoeGate] ===== GROUPED GATE (mode={mode}, override={'ON' if override is not None else 'off'}) ====="
+        )
+        if override is not None:
+            # OVERRIDE PATH: device sigmoid, replace topk with reference indices.
+            # Steps: device matmul -> device sigmoid -> compose to host -> gather -> norm -> scale.
+            # Bias is NOT used here (it only affects selection, which we are bypassing).
+            assert (
+                getattr(self, "layer_idx", None) is not None
+            ), "TtMoEGatePrefill.layer_idx must be set when _expert_routing_override is enabled"
+            assert self.layer_idx in override, f"expert_routing override missing entry for layer_idx={self.layer_idx}"
+
+            device_sigmoid = ttnn.sigmoid(logits)
+            host_sigmoid_scores = self._compose_logits_to_host(device_sigmoid)  # [seq_total, n_experts]
+            ttnn.deallocate(device_sigmoid)
+            host_indices = override[self.layer_idx].to(torch.int64)  # [seq_total, n_activated_experts]
+            assert host_indices.shape[0] == host_sigmoid_scores.shape[0], (
+                f"override seq len {host_indices.shape[0]} != composed sigmoid seq len {host_sigmoid_scores.shape[0]} "
+                f"(layer_idx={self.layer_idx})"
+            )
+            # host_logits = self._compose_logits_to_host(logits)
+            # sigmoid_scores = host_logits.float().sigmoid()
+            sigmoid_scores = host_sigmoid_scores.float()
+            chosen = sigmoid_scores.gather(-1, host_indices)
+            chosen = chosen / (chosen.sum(-1, keepdim=True) + 1e-20)
+            host_scores = chosen * self.config.route_scale
+
+            ttnn_scores = self._host_scores_to_device(host_scores)
+            ttnn_top_k_experts_indices = self._host_indices_to_device(host_indices)
+
+        elif mode == GateComputeMode.DEVICE:
             ttnn_scores, ttnn_top_k_experts_indices = self._device_grouped_gate(logits)
 
         elif mode == GateComputeMode.DEVICE_FP32:
@@ -498,6 +535,22 @@ class TtMoEGatePrefill(LightweightModule):
             ttnn_scores = self._host_scores_to_device(host_scores)
             ttnn_top_k_experts_indices = self._host_indices_to_device(host_indices)
             logits = self._host_logits_to_device(host_logits)
+
+        # --- Capture topk indices (debug/analysis): compose chosen experts back to host ---
+        capture_dict = getattr(self, "_capture_indices_dict", None)
+        if capture_dict is not None and getattr(self, "layer_idx", None) is not None:
+            captured = ttnn.to_torch(
+                ttnn_top_k_experts_indices,
+                mesh_composer=ttnn.create_mesh_composer(
+                    self.mesh_device,
+                    config=ttnn.MeshComposerConfig(
+                        dims=(0, -1),
+                        mesh_shape_override=ttnn.MeshShape(self.mesh_device.shape[0], 1),
+                    ),
+                ),
+            ).to(torch.int64)
+            capture_dict[self.layer_idx] = captured
+
         signpost(header="moe_gate_grouped_gate")
 
         # ---- Phase 3: Routing setup ----
