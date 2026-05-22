@@ -85,29 +85,28 @@ static void RunTest(
                         // others exit early. DM0/DM1 are reserved for internal use and are skipped by the
                         // outer test fixture.
                         uint32_t dm_id = static_cast<uint32_t>(processor.processor_type);
-                        experimental::metal2_host_api::KernelSpec assert_kernel_spec{
+                        experimental::KernelSpec assert_kernel_spec{
                             .unique_id = ASSERT_KERNEL_NAME,
-                            .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel},
+                            .source = kernel,
                             .num_threads = 6,
                             .compile_time_arg_bindings = {{"dm_id", dm_id}},
                             .runtime_arguments_schema =
                                 {.named_runtime_args = {"a", "b", "assert_type", "hw_assert_cause"}},
                             .config_spec =
-                                experimental::metal2_host_api::DataMovementConfiguration{
-                                    .gen2_data_movement_config = experimental::metal2_host_api::
-                                        DataMovementConfiguration::Gen2DataMovementConfig{}},
+                                experimental::DataMovementConfiguration{
+                                    .gen2 = experimental::DataMovementConfiguration::Gen2{}},
                         };
-                        experimental::metal2_host_api::WorkUnitSpec wu{
+                        experimental::WorkUnitSpec wu{
                             .unique_id = "main",
                             .kernels = {ASSERT_KERNEL_NAME},
-                            .target_nodes = experimental::metal2_host_api::NodeCoord{logical_core},
+                            .target_nodes = experimental::NodeCoord{logical_core},
                         };
-                        experimental::metal2_host_api::ProgramSpec spec{
+                        experimental::ProgramSpec spec{
                             .program_id = "watcher_assert_dm",
                             .kernels = {assert_kernel_spec},
                             .work_units = {wu},
                         };
-                        program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+                        program = experimental::MakeProgramFromSpec(*mesh_device, spec);
                     } else {
                         DataMovementConfig dm_config{};
                         dm_config.processor = static_cast<tt_metal::DataMovementProcessor>(processor.processor_type);
@@ -121,27 +120,27 @@ static void RunTest(
                 case HalProcessorClassType::COMPUTE:
                     if (is_quasar) {
                         uint32_t trisc_id = static_cast<uint32_t>(processor.processor_type);
-                        experimental::metal2_host_api::KernelSpec assert_kernel_spec{
+                        experimental::KernelSpec assert_kernel_spec{
                             .unique_id = ASSERT_KERNEL_NAME,
-                            .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel},
+                            .source = kernel,
                             .num_threads = 1,
                             .compiler_options = {.defines = {{fmt::format("TRISC{}", trisc_id), "1"}}},
                             .compile_time_arg_bindings = {{"trisc_id", trisc_id}},
                             .runtime_arguments_schema =
                                 {.named_runtime_args = {"a", "b", "assert_type", "hw_assert_cause"}},
-                            .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+                            .config_spec = experimental::ComputeConfiguration{},
                         };
-                        experimental::metal2_host_api::WorkUnitSpec wu{
+                        experimental::WorkUnitSpec wu{
                             .unique_id = "main",
                             .kernels = {ASSERT_KERNEL_NAME},
-                            .target_nodes = experimental::metal2_host_api::NodeCoord{logical_core},
+                            .target_nodes = experimental::NodeCoord{logical_core},
                         };
-                        experimental::metal2_host_api::ProgramSpec spec{
+                        experimental::ProgramSpec spec{
                             .program_id = "watcher_assert_compute",
                             .kernels = {assert_kernel_spec},
                             .work_units = {wu},
                         };
-                        program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+                        program = experimental::MakeProgramFromSpec(*mesh_device, spec);
                     } else {
                         assert_kernel = CreateKernel(
                             program,
@@ -192,15 +191,15 @@ static void RunTest(
     // Build runtime arg setter that targets either the Metal 2.0 named-name path or the legacy handle.
     auto set_args = [&](Program& prog, const std::vector<uint32_t>& args) {
         if (is_quasar) {
-            experimental::metal2_host_api::ProgramRunParams params;
+            experimental::ProgramRunParams params;
             params.kernel_run_params = {{
                 .kernel_spec_name = ASSERT_KERNEL_NAME,
                 .named_runtime_args =
-                    {{.node = experimental::metal2_host_api::NodeCoord{logical_core},
+                    {{.node = experimental::NodeCoord{logical_core},
                       .args =
                           {{"a", args[0]}, {"b", args[1]}, {"assert_type", args[2]}, {"hw_assert_cause", args[3]}}}},
             }};
-            experimental::metal2_host_api::SetProgramRunParameters(prog, params);
+            experimental::SetProgramRunParameters(prog, params);
         } else {
             SetRuntimeArgs(prog, assert_kernel, logical_core, args);
         }

@@ -29,37 +29,34 @@ bool run_im2col_test(
     const std::string& kernel_path,
     uint32_t num_of_addresses) {
     constexpr const char* DM_KERNEL = "addrgen";
-    const experimental::metal2_host_api::NodeCoord node{0, 0};
+    const experimental::NodeCoord node{0, 0};
 
-    experimental::metal2_host_api::KernelSpec dm_kernel_spec{
+    experimental::KernelSpec dm_kernel_spec{
         .unique_id = DM_KERNEL,
-        .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel_path},
+        .source = kernel_path,
         .num_threads = 1,
         .compile_time_arg_bindings = {{"num_of_addresses", num_of_addresses}},
-        .config_spec =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
 
-    experimental::metal2_host_api::WorkUnitSpec main_wu{
+    experimental::WorkUnitSpec main_wu{
         .unique_id = "main",
         .kernels = {DM_KERNEL},
         .target_nodes = node,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
+    experimental::ProgramSpec spec{
         .program_id = "im2col",
         .kernels = {dm_kernel_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::metal2_host_api::ProgramRunParams params;
+    experimental::ProgramRunParams params;
     params.kernel_run_params = {{
         .kernel_spec_name = DM_KERNEL,
     }};
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::SetProgramRunParameters(program, params);
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device->shape());

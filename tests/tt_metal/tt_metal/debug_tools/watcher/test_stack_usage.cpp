@@ -72,48 +72,46 @@ void RunOneTest(
             num_user_dms);
         uint32_t num_kernels = num_user_dms / dms_per_kernel;
 
-        std::vector<experimental::metal2_host_api::KernelSpec> kernel_specs;
-        std::vector<experimental::metal2_host_api::KernelSpecName> kernel_names;
+        std::vector<experimental::KernelSpec> kernel_specs;
+        std::vector<experimental::KernelSpecName> kernel_names;
         kernel_specs.reserve(num_kernels + 1);
         kernel_names.reserve(num_kernels + 1);
 
         for (uint32_t i = 0; i < num_kernels; i++) {
             std::string name = fmt::format("dm_{}", i);
-            kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
+            kernel_specs.push_back(experimental::KernelSpec{
                 .unique_id = name,
-                .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{path},
+                .source = path,
                 .num_threads = static_cast<uint8_t>(dms_per_kernel),
                 .compile_time_arg_bindings = {{"usage", free}},
                 .config_spec =
-                    experimental::metal2_host_api::DataMovementConfiguration{
-                        .gen2_data_movement_config =
-                            experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                    experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
             });
             kernel_names.push_back(name);
         }
         constexpr const char* COMPUTE_NAME = "compute";
-        kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
+        kernel_specs.push_back(experimental::KernelSpec{
             .unique_id = COMPUTE_NAME,
-            .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{path},
+            .source = path,
             // One thread per Neo (Quasar Tensix has 4) so the compute kernel fans out across
             // all Neos; each Neo internally runs the kernel on its 4 TRISCs.
             .num_threads = 4,
             .compile_time_arg_bindings = {{"usage", free}},
-            .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+            .config_spec = experimental::ComputeConfiguration{},
         });
         kernel_names.push_back(COMPUTE_NAME);
 
-        experimental::metal2_host_api::WorkUnitSpec wu{
+        experimental::WorkUnitSpec wu{
             .unique_id = "main",
             .kernels = kernel_names,
-            .target_nodes = experimental::metal2_host_api::NodeCoord{coord},
+            .target_nodes = experimental::NodeCoord{coord},
         };
-        experimental::metal2_host_api::ProgramSpec spec{
+        experimental::ProgramSpec spec{
             .program_id = "watcher_stack",
             .kernels = kernel_specs,
             .work_units = {wu},
         };
-        Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+        Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
         workload.add_program(device_range, std::move(program));
     } else {
         // BH/WH legacy path

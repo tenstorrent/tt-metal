@@ -98,42 +98,40 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
         // On Quasar, kernel runs on the 6 user DMs (DM2..DM7). DM0/DM1 are reserved for internal use.
         constexpr uint32_t kQuasarUserDmCores = 6;
         auto core_range = CoreRange(xy_start, xy_end);
-        experimental::metal2_host_api::KernelSpec dm_spec{
+        experimental::KernelSpec dm_spec{
             .unique_id = DM_KERNEL_NAME,
-            .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel_path},
+            .source = kernel_path,
             .num_threads = kQuasarUserDmCores,
             .runtime_arguments_schema = {.named_common_runtime_args = {"sync_flag_addr"}},
             .config_spec =
-                experimental::metal2_host_api::DataMovementConfiguration{
-                    .gen2_data_movement_config =
-                        experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
         };
-        experimental::metal2_host_api::KernelSpec compute_spec{
+        experimental::KernelSpec compute_spec{
             .unique_id = COMPUTE_KERNEL_NAME,
-            .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel_path},
+            .source = kernel_path,
             .num_threads = 4,
             .runtime_arguments_schema = {.named_common_runtime_args = {"sync_flag_addr"}},
-            .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+            .config_spec = experimental::ComputeConfiguration{},
         };
-        experimental::metal2_host_api::WorkUnitSpec wu{
+        experimental::WorkUnitSpec wu{
             .unique_id = "main",
             .kernels = {DM_KERNEL_NAME, COMPUTE_KERNEL_NAME},
-            .target_nodes = experimental::metal2_host_api::NodeRange{core_range},
+            .target_nodes = experimental::NodeRange{core_range},
         };
-        experimental::metal2_host_api::ProgramSpec spec{
+        experimental::ProgramSpec spec{
             .program_id = "watcher_waypoints",
             .kernels = {dm_spec, compute_spec},
             .work_units = {wu},
         };
-        program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+        program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-        experimental::metal2_host_api::ProgramRunParams params;
+        experimental::ProgramRunParams params;
         params.kernel_run_params = {
             {.kernel_spec_name = DM_KERNEL_NAME, .named_common_runtime_args = {{"sync_flag_addr", tensix_sync_addr}}},
             {.kernel_spec_name = COMPUTE_KERNEL_NAME,
              .named_common_runtime_args = {{"sync_flag_addr", tensix_sync_addr}}},
         };
-        experimental::metal2_host_api::SetProgramRunParameters(program, params);
+        experimental::SetProgramRunParameters(program, params);
         workload.add_program(device_range, std::move(program));
     } else {
         auto brisc_kid = CreateKernel(

@@ -206,7 +206,7 @@ bool run_sfpu_all_same_buffer(
         const CoreRange& core_range = *test_config.cores.ranges().begin();
         TT_FATAL(core_range.start_coord == core_range.end_coord, "Metal 2.0 sfpu path expects a single-core CoreRange");
         const CoreCoord core = core_range.start_coord;
-        const experimental::metal2_host_api::NodeCoord node{core.x, core.y};
+        const experimental::NodeCoord node{core.x, core.y};
 
         constexpr const char* IN_DFB = "in_dfb";
         constexpr const char* OUT_DFB = "out_dfb";
@@ -216,14 +216,14 @@ bool run_sfpu_all_same_buffer(
 
         // Legacy DataflowBufferConfig set enable_implicit_sync = false on both DFBs;
         // mirror that with disable_implicit_sync = true.
-        experimental::metal2_host_api::DataflowBufferSpec in_dfb_spec{
+        experimental::DataflowBufferSpec in_dfb_spec{
             .unique_id = IN_DFB,
             .entry_size = static_cast<uint32_t>(test_config.tile_byte_size),
             .num_entries = static_cast<uint32_t>(test_config.num_tiles),
             .data_format_metadata = test_config.l1_input_data_format,
             .disable_implicit_sync = true,
         };
-        experimental::metal2_host_api::DataflowBufferSpec out_dfb_spec{
+        experimental::DataflowBufferSpec out_dfb_spec{
             .unique_id = OUT_DFB,
             .entry_size = static_cast<uint32_t>(test_config.tile_byte_size),
             .num_entries = static_cast<uint32_t>(test_config.num_tiles),
@@ -231,92 +231,85 @@ bool run_sfpu_all_same_buffer(
             .disable_implicit_sync = true,
         };
 
-        experimental::metal2_host_api::KernelSpec reader_spec{
+        experimental::KernelSpec reader_spec{
             .unique_id = READER,
-            .source =
-                experimental::metal2_host_api::KernelSpec::SourceFilePath{"tt_metal/kernels/dataflow/reader_unary.cpp"},
+            .source = "tt_metal/kernels/dataflow/reader_unary.cpp",
             .num_threads = 1,
             .dfb_bindings = {{
                 .dfb_spec_name = IN_DFB,
                 .local_accessor_name = "out",
-                .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-                .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
+                .access_pattern = experimental::DFBAccessPattern::STRIDED,
             }},
             .runtime_arguments_schema = {.named_runtime_args = {"src_addr", "bank_id", "num_tiles"}},
             .config_spec =
-                experimental::metal2_host_api::DataMovementConfiguration{
-                    .gen2_data_movement_config =
-                        experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
         };
 
-        experimental::metal2_host_api::KernelSpec writer_spec{
+        experimental::KernelSpec writer_spec{
             .unique_id = WRITER,
-            .source =
-                experimental::metal2_host_api::KernelSpec::SourceFilePath{"tt_metal/kernels/dataflow/writer_unary.cpp"},
+            .source = "tt_metal/kernels/dataflow/writer_unary.cpp",
             .num_threads = 1,
             .dfb_bindings = {{
                 .dfb_spec_name = OUT_DFB,
                 .local_accessor_name = "in",
-                .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-                .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
+                .access_pattern = experimental::DFBAccessPattern::STRIDED,
             }},
             .runtime_arguments_schema = {.named_runtime_args = {"dst_addr", "bank_id", "num_tiles"}},
             .config_spec =
-                experimental::metal2_host_api::DataMovementConfiguration{
-                    .gen2_data_movement_config =
-                        experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
         };
 
-        experimental::metal2_host_api::KernelSpec::CompilerOptions::Defines compute_defines;
+        experimental::KernelSpec::CompilerOptions::Defines compute_defines;
         for (const auto& [k, v] : sfpu_defines) {
             compute_defines.emplace_back(k, v);
         }
 
-        experimental::metal2_host_api::KernelSpec compute_spec{
+        experimental::KernelSpec compute_spec{
             .unique_id = COMPUTE,
-            .source =
-                experimental::metal2_host_api::KernelSpec::SourceFilePath{"tt_metal/kernels/compute/eltwise_sfpu.cpp"},
+            .source = "tt_metal/kernels/compute/eltwise_sfpu.cpp",
             .num_threads = 1,
             .compiler_options = {.defines = std::move(compute_defines)},
             .dfb_bindings =
                 {{
                      .dfb_spec_name = IN_DFB,
                      .local_accessor_name = "in",
-                     .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-                     .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                     .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
+                     .access_pattern = experimental::DFBAccessPattern::STRIDED,
                  },
                  {
                      .dfb_spec_name = OUT_DFB,
                      .local_accessor_name = "out",
-                     .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-                     .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                     .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
+                     .access_pattern = experimental::DFBAccessPattern::STRIDED,
                  }},
             .compile_time_arg_bindings =
                 {{"per_core_block_cnt", static_cast<uint32_t>(test_config.num_tiles)}, {"per_core_block_dim", 1u}},
             .config_spec =
-                experimental::metal2_host_api::ComputeConfiguration{
+                experimental::ComputeConfiguration{
                     .math_approx_mode = test_config.approx_mode,
                 },
         };
 
-        experimental::metal2_host_api::WorkUnitSpec wu{
+        experimental::WorkUnitSpec wu{
             .unique_id = "main",
             .kernels = {READER, WRITER, COMPUTE},
             .target_nodes = node,
         };
 
-        experimental::metal2_host_api::ProgramSpec spec{
+        experimental::ProgramSpec spec{
             .program_id = "sfpu_compute",
             .kernels = {reader_spec, writer_spec, compute_spec},
             .dataflow_buffers = {in_dfb_spec, out_dfb_spec},
             .work_units = {wu},
         };
 
-        Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+        Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-        experimental::metal2_host_api::ProgramRunParams params;
+        experimental::ProgramRunParams params;
         params.kernel_run_params = {
-            experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+            experimental::ProgramRunParams::KernelRunParams{
                 .kernel_spec_name = READER,
                 .named_runtime_args =
                     {{.node = node,
@@ -325,7 +318,7 @@ bool run_sfpu_all_same_buffer(
                            {"bank_id", 0u},
                            {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)}}}},
             },
-            experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+            experimental::ProgramRunParams::KernelRunParams{
                 .kernel_spec_name = WRITER,
                 .named_runtime_args =
                     {{.node = node,
@@ -334,11 +327,11 @@ bool run_sfpu_all_same_buffer(
                            {"bank_id", 0u},
                            {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)}}}},
             },
-            experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+            experimental::ProgramRunParams::KernelRunParams{
                 .kernel_spec_name = COMPUTE,
             },
         };
-        experimental::metal2_host_api::SetProgramRunParameters(program, params);
+        experimental::SetProgramRunParameters(program, params);
 
         tt_metal::detail::WriteToBuffer(input_dram_buffer, packed_input);
         tt_metal::detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);

@@ -589,8 +589,8 @@ public:
     // -----------------------------------------------------------------------
     template <ProgramSpecFactoryConcept ProgramSpecFactory>
     struct ProgramSpecMeshWorkloadFactoryAdapter {
-        using TensorParameterName = tt::tt_metal::experimental::metal2_host_api::TensorParameterName;
-        using TensorArg = tt::tt_metal::experimental::metal2_host_api::ProgramRunParams::TensorArg;
+        using TensorParameterName = tt::tt_metal::experimental::TensorParameterName;
+        using TensorArg = tt::tt_metal::experimental::ProgramRunParams::TensorArg;
 
         // Stored across cache entries: for each TensorArg in a program's
         // ProgramRunParams, which io_tensor (by index into the deterministic
@@ -683,9 +683,8 @@ public:
             tt::tt_metal::distributed::MeshWorkload mesh_workload;
             std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
             for (const auto& range : tensor_coords.ranges()) {
-                auto program =
-                    tt::tt_metal::experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, artifacts.spec);
-                tt::tt_metal::experimental::metal2_host_api::SetProgramRunParameters(program, artifacts.run_params);
+                auto program = tt::tt_metal::experimental::MakeProgramFromSpec(*mesh_device, artifacts.spec);
+                tt::tt_metal::experimental::SetProgramRunParameters(program, artifacts.run_params);
                 shared_variables.emplace(range, shared_variables_t{.bindings = bindings});
                 mesh_workload.add_program(range, std::move(program));
             }
@@ -711,7 +710,7 @@ public:
                     fresh_tensor_args.push_back(TensorArg{
                         .tensor_parameter_name = b.tensor_parameter_name, .tensor = io_mesh_tensors[b.io_tensor_idx]});
                 }
-                tt::tt_metal::experimental::metal2_host_api::UpdateTensorArgs(program, fresh_tensor_args);
+                tt::tt_metal::experimental::UpdateTensorArgs(program, fresh_tensor_args);
             }
         }
     };

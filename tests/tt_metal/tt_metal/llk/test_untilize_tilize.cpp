@@ -537,7 +537,7 @@ static void run_quasar_tilize_untilize_test(
     bool is_tilize = (mode == QuasarTestMode::TILIZE);
 
     IDevice* dev = mesh_device->get_devices()[0];
-    const experimental::metal2_host_api::NodeCoord node{0, 0};
+    const experimental::NodeCoord node{0, 0};
 
     bool is_8bit_integer = (data_format == tt::DataFormat::Int8 || data_format == tt::DataFormat::UInt8);
     uint32_t num_tiles = num_tiles_r * num_tiles_c;
@@ -582,63 +582,53 @@ static void run_quasar_tilize_untilize_test(
     constexpr const char* WRITER = "writer";
     constexpr const char* COMPUTE = "compute";
 
-    experimental::metal2_host_api::DataflowBufferSpec input_dfb_spec{
+    experimental::DataflowBufferSpec input_dfb_spec{
         .unique_id = INPUT_DFB,
         .entry_size = input_single_tile_size,
         .num_entries = dfb_num_entries,
         .data_format_metadata = data_format,
     };
-    experimental::metal2_host_api::DataflowBufferSpec output_dfb_spec{
+    experimental::DataflowBufferSpec output_dfb_spec{
         .unique_id = OUTPUT_DFB,
         .entry_size = output_single_tile_size,
         .num_entries = dfb_num_entries,
         .data_format_metadata = output_data_format,
     };
 
-    experimental::metal2_host_api::KernelSpec reader_spec{
+    experimental::KernelSpec reader_spec{
         .unique_id = READER,
-        .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp"},
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = INPUT_DFB,
             .local_accessor_name = "out",
-            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-            .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+            .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
+            .access_pattern = experimental::DFBAccessPattern::STRIDED,
         }},
         .compile_time_arg_bindings = {{"use_dfbs", 1u}},
         .runtime_arguments_schema =
             {.named_runtime_args = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
-        .config_spec =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
 
-    experimental::metal2_host_api::KernelSpec writer_spec{
+    experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
-        .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp"},
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = OUTPUT_DFB,
             .local_accessor_name = "in",
-            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-            .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+            .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
+            .access_pattern = experimental::DFBAccessPattern::STRIDED,
         }},
         .compile_time_arg_bindings = {{"use_dfbs", 1u}},
         .runtime_arguments_schema =
             {.named_runtime_args = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
-        .config_spec =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
 
     std::string compute_kernel;
-    experimental::metal2_host_api::KernelSpec::CompileTimeArgBindings compute_cta_bindings;
+    experimental::KernelSpec::CompileTimeArgBindings compute_cta_bindings;
     switch (mode) {
         case QuasarTestMode::TILIZE:
             compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/tilize.cpp";
@@ -668,45 +658,45 @@ static void run_quasar_tilize_untilize_test(
         }
     }
 
-    experimental::metal2_host_api::KernelSpec compute_spec{
+    experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
-        .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{compute_kernel},
+        .source = compute_kernel,
         .num_threads = 1,
         .dfb_bindings =
             {{
                  .dfb_spec_name = INPUT_DFB,
                  .local_accessor_name = "in",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                 .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = OUTPUT_DFB,
                  .local_accessor_name = "out",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                 .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
              }},
         .compile_time_arg_bindings = compute_cta_bindings,
         .config_spec =
-            experimental::metal2_host_api::ComputeConfiguration{
+            experimental::ComputeConfiguration{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
                 .dst_full_sync_en = dst_full_sync_en,
             },
     };
 
-    experimental::metal2_host_api::WorkUnitSpec wu{
+    experimental::WorkUnitSpec wu{
         .unique_id = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = node,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
+    experimental::ProgramSpec spec{
         .program_id = "quasar_tilize_untilize",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {input_dfb_spec, output_dfb_spec},
         .work_units = {wu},
     };
 
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     std::vector<uint32_t> src_vec;
     if (data_format == tt::DataFormat::Int8) {
@@ -734,9 +724,9 @@ static void run_quasar_tilize_untilize_test(
     const uint32_t src_tile_stride_bytes = src_dram_buffer_size / num_tiles;
     const uint32_t dst_tile_stride_bytes = dst_dram_buffer_size / num_tiles;
 
-    experimental::metal2_host_api::ProgramRunParams params;
+    experimental::ProgramRunParams params;
     params.kernel_run_params = {
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+        experimental::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = READER,
             .named_runtime_args =
                 {{.node = node,
@@ -746,7 +736,7 @@ static void run_quasar_tilize_untilize_test(
                        {"num_tiles", num_tiles},
                        {"dram_page_stride", src_tile_stride_bytes}}}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+        experimental::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = WRITER,
             .named_runtime_args =
                 {{.node = node,
@@ -756,11 +746,11 @@ static void run_quasar_tilize_untilize_test(
                        {"num_tiles", num_tiles},
                        {"dram_page_stride", dst_tile_stride_bytes}}}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+        experimental::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = COMPUTE,
         },
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::SetProgramRunParameters(program, params);
 
     detail::LaunchProgram(dev, program, true);
 

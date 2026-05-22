@@ -197,8 +197,8 @@ void RunTestOnCore(
             // Quasar: user DMs (DM2..DM7) run the kernel; multi_dm_race syncs them to race, else only dm_id executes.
             // DM0/DM1 are reserved for internal use, so the test exercises 6 user DMs.
             constexpr uint32_t num_dms = 6;
-            experimental::metal2_host_api::KernelSpec::CompileTimeArgBindings cta_bindings;
-            experimental::metal2_host_api::KernelSpec::CompilerOptions::Defines defines;
+            experimental::KernelSpec::CompileTimeArgBindings cta_bindings;
+            experimental::KernelSpec::CompilerOptions::Defines defines;
             if (multi_dm_race) {
                 constexpr uint32_t multi_dm_base_addr = 0xFFFF0000;
                 constexpr uint32_t multi_dm_base_size = 0x1000;
@@ -220,9 +220,9 @@ void RunTestOnCore(
             } else {
                 cta_bindings = {{"dm_id", dm_id}};
             }
-            experimental::metal2_host_api::KernelSpec dm_spec{
+            experimental::KernelSpec dm_spec{
                 .unique_id = DRAM_COPY_KERNEL_NAME,
-                .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel},
+                .source = kernel,
                 .num_threads = static_cast<uint8_t>(num_dms),
                 .compiler_options = {.defines = defines},
                 .compile_time_arg_bindings = cta_bindings,
@@ -245,21 +245,19 @@ void RunTestOnCore(
                           "mcast_dst_end_x",
                           "mcast_dst_end_y"}},
                 .config_spec =
-                    experimental::metal2_host_api::DataMovementConfiguration{
-                        .gen2_data_movement_config =
-                            experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                    experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
             };
-            experimental::metal2_host_api::WorkUnitSpec wu{
+            experimental::WorkUnitSpec wu{
                 .unique_id = "main",
                 .kernels = {DRAM_COPY_KERNEL_NAME},
-                .target_nodes = experimental::metal2_host_api::NodeCoord{core},
+                .target_nodes = experimental::NodeCoord{core},
             };
-            experimental::metal2_host_api::ProgramSpec spec{
+            experimental::ProgramSpec spec{
                 .program_id = "watcher_sanitize",
                 .kernels = {dm_spec},
                 .work_units = {wu},
             };
-            program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+            program = experimental::MakeProgramFromSpec(*mesh_device, spec);
             // Quasar SD does not yet expose a NOC index in the same way as legacy DMs; the watcher
             // log emits "noc0" for Metal 2.0 DM kernels. Match that so expected strings line up.
             noc = 0;
@@ -368,11 +366,11 @@ void RunTestOnCore(
         mcast_dst_end_y};
 
     if (is_quasar) {
-        experimental::metal2_host_api::ProgramRunParams params;
+        experimental::ProgramRunParams params;
         params.kernel_run_params = {{
             .kernel_spec_name = DRAM_COPY_KERNEL_NAME,
             .named_runtime_args =
-                {{.node = experimental::metal2_host_api::NodeCoord{core},
+                {{.node = experimental::NodeCoord{core},
                   .args =
                       {{"local_buffer_addr", buffer_addr},
                        {"buffer_src_addr", input_buffer_addr},
@@ -391,7 +389,7 @@ void RunTestOnCore(
                        {"mcast_dst_end_x", mcast_dst_end_x},
                        {"mcast_dst_end_y", mcast_dst_end_y}}}},
         }};
-        experimental::metal2_host_api::SetProgramRunParameters(program, params);
+        experimental::SetProgramRunParameters(program, params);
     } else {
         tt_metal::SetRuntimeArgs(program, dram_copy_kernel, core, rta_values);
     }

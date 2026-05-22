@@ -238,43 +238,41 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
     std::vector<uint32_t> rtas_range2 = {0x1000, 0x1001, 0x1002};
 
     auto build_metal2_program = [&]() {
-        experimental::metal2_host_api::KernelSpec dm_spec{
+        experimental::KernelSpec dm_spec{
             .unique_id = DM_KERNEL_NAME,
-            .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{rta_crta_kernel_path},
+            .source = rta_crta_kernel_path,
             .num_threads = static_cast<uint8_t>(num_dms_),
             .compile_time_arg_bindings = {{"dm_id", 0}, {"l1_scratch_addr", l1_unreserved_base}},
             .runtime_arguments_schema =
                 {.num_runtime_varargs = default_rtas.size(), .num_common_runtime_varargs = default_crtas.size()},
             .config_spec =
-                experimental::metal2_host_api::DataMovementConfiguration{
-                    .gen2_data_movement_config =
-                        experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
         };
-        experimental::metal2_host_api::WorkUnitSpec wu{
+        experimental::WorkUnitSpec wu{
             .unique_id = "main",
             .kernels = {DM_KERNEL_NAME},
-            .target_nodes = experimental::metal2_host_api::NodeRangeSet{core_range_set},
+            .target_nodes = experimental::NodeRangeSet{core_range_set},
         };
-        experimental::metal2_host_api::ProgramSpec spec{
+        experimental::ProgramSpec spec{
             .program_id = "rta_validation",
             .kernels = {dm_spec},
             .work_units = {wu},
         };
-        program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+        program = experimental::MakeProgramFromSpec(*mesh_device, spec);
     };
 
     // Helper to set runtime arguments (per-node varargs + common varargs) on the active program
     auto set_metal2_runtime_args = [&](Program& prog) {
-        experimental::metal2_host_api::ProgramRunParams params;
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams krp{
+        experimental::ProgramRunParams params;
+        experimental::ProgramRunParams::KernelRunParams krp{
             .kernel_spec_name = DM_KERNEL_NAME,
             .common_runtime_varargs = default_crtas,
         };
         for (const auto& c : core_range1) {
-            krp.runtime_varargs.push_back({experimental::metal2_host_api::NodeCoord{c}, default_rtas});
+            krp.runtime_varargs.push_back({experimental::NodeCoord{c}, default_rtas});
         }
         params.kernel_run_params = {krp};
-        experimental::metal2_host_api::SetProgramRunParameters(prog, params);
+        experimental::SetProgramRunParameters(prog, params);
     };
 
     if (is_quasar) {
@@ -370,7 +368,7 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
     constexpr const char* OOB_KERNEL_NAME = "rta_oob";
 
     if (is_quasar) {
-        experimental::metal2_host_api::KernelSpec::CompilerOptions::Defines m2_defines;
+        experimental::KernelSpec::CompilerOptions::Defines m2_defines;
         if (params.test_rta) {
             m2_defines.push_back({"MAX_RTA_IDX", std::to_string(default_rtas.size())});
         } else {
@@ -379,63 +377,61 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
 
         // RTA test reads index == default_rtas.size() (one past the end), so the kernel must declare
         // exactly default_rtas.size() varargs to make that access OOB.
-        experimental::metal2_host_api::KernelSpec::RuntimeArgSchema schema;
+        experimental::KernelSpec::RuntimeArgSchema schema;
         if (params.test_rta) {
             schema.num_runtime_varargs = default_rtas.size();
         } else {
             schema.num_common_runtime_varargs = default_crtas.size();
         }
 
-        experimental::metal2_host_api::KernelSpec kspec;
+        experimental::KernelSpec kspec;
         if (params.processor_class == HalProcessorClassType::DM) {
-            kspec = experimental::metal2_host_api::KernelSpec{
+            kspec = experimental::KernelSpec{
                 .unique_id = OOB_KERNEL_NAME,
-                .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{rta_crta_kernel_path},
+                .source = rta_crta_kernel_path,
                 .num_threads = static_cast<uint8_t>(num_dms_),
                 .compiler_options = {.defines = m2_defines},
                 .compile_time_arg_bindings = {{"dm_id", 0}},
                 .runtime_arguments_schema = schema,
                 .config_spec =
-                    experimental::metal2_host_api::DataMovementConfiguration{
-                        .gen2_data_movement_config =
-                            experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                    experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
             };
         } else if (params.processor_class == HalProcessorClassType::COMPUTE) {
-            kspec = experimental::metal2_host_api::KernelSpec{
+            kspec = experimental::KernelSpec{
                 .unique_id = OOB_KERNEL_NAME,
-                .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{rta_crta_kernel_path},
+                .source = rta_crta_kernel_path,
                 .num_threads = 1,  // Run only on 1 NEO Cluster
                 .compiler_options = {.defines = m2_defines},
                 .runtime_arguments_schema = schema,
-                .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+                .config_spec = experimental::ComputeConfiguration{},
             };
         } else {
             TT_THROW("Unsupported processor class");
         }
 
-        experimental::metal2_host_api::WorkUnitSpec wu{
+        experimental::WorkUnitSpec wu{
             .unique_id = "main",
             .kernels = {OOB_KERNEL_NAME},
-            .target_nodes = experimental::metal2_host_api::NodeRangeSet{core_range_set},
+            .target_nodes = experimental::NodeRangeSet{core_range_set},
         };
-        experimental::metal2_host_api::ProgramSpec spec{
+        experimental::ProgramSpec spec{
             .program_id = "rta_oob",
             .kernels = {kspec},
             .work_units = {wu},
         };
-        program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+        program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-        experimental::metal2_host_api::ProgramRunParams params_m2;
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams krp{.kernel_spec_name = OOB_KERNEL_NAME};
+        experimental::ProgramRunParams params_m2;
+        experimental::ProgramRunParams::KernelRunParams krp{.kernel_spec_name = OOB_KERNEL_NAME};
         if (params.test_rta) {
             for (const auto& c : core_range) {
-                krp.runtime_varargs.push_back({experimental::metal2_host_api::NodeCoord{c}, default_rtas});
+                krp.runtime_varargs.push_back({experimental::NodeCoord{c}, default_rtas});
             }
         } else {
             krp.common_runtime_varargs = default_crtas;
         }
         params_m2.kernel_run_params = {krp};
-        experimental::metal2_host_api::SetProgramRunParameters(program, params_m2);
+        experimental::SetProgramRunParameters(program, params_m2);
     } else {
         std::map<std::string, std::string> defines;
         if (params.test_rta) {
@@ -488,38 +484,35 @@ TEST_F(RTATestFixture, QuasarMultiDMOutOfBoundsArgDetection) {
     Program program;
 
     constexpr const char* MULTI_DM_KERNEL_NAME = "multi_dm_oob";
-    experimental::metal2_host_api::KernelSpec dm_spec{
+    experimental::KernelSpec dm_spec{
         .unique_id = MULTI_DM_KERNEL_NAME,
-        .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{rta_crta_kernel_path},
+        .source = rta_crta_kernel_path,
         .num_threads = static_cast<uint8_t>(num_dms_),
         .compiler_options =
             {.defines = {{"MAX_RTA_IDX", std::to_string(default_rtas.size())}, {"TEST_MULTI_DM_RTA", "1"}}},
         .compile_time_arg_bindings = {{"num_dms", num_dms_}, {"l1_sync_addr", l1_unreserved_base}},
         .runtime_arguments_schema = {.num_runtime_varargs = default_rtas.size()},
-        .config_spec =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
-    experimental::metal2_host_api::WorkUnitSpec wu{
+    experimental::WorkUnitSpec wu{
         .unique_id = "main",
         .kernels = {MULTI_DM_KERNEL_NAME},
-        .target_nodes = experimental::metal2_host_api::NodeRangeSet{core_range_set},
+        .target_nodes = experimental::NodeRangeSet{core_range_set},
     };
-    experimental::metal2_host_api::ProgramSpec spec{
+    experimental::ProgramSpec spec{
         .program_id = "multi_dm_oob",
         .kernels = {dm_spec},
         .work_units = {wu},
     };
-    program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::metal2_host_api::ProgramRunParams params;
-    experimental::metal2_host_api::ProgramRunParams::KernelRunParams krp{.kernel_spec_name = MULTI_DM_KERNEL_NAME};
+    experimental::ProgramRunParams params;
+    experimental::ProgramRunParams::KernelRunParams krp{.kernel_spec_name = MULTI_DM_KERNEL_NAME};
     for (const auto& c : core_range) {
-        krp.runtime_varargs.push_back({experimental::metal2_host_api::NodeCoord{c}, default_rtas});
+        krp.runtime_varargs.push_back({experimental::NodeCoord{c}, default_rtas});
     }
     params.kernel_run_params = {krp};
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::SetProgramRunParameters(program, params);
 
     workload.add_program(device_range, std::move(program));
 

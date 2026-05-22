@@ -224,7 +224,7 @@ static void matmul_tile_quasar(
     vector<bfloat16> tensor_vals) {
     auto ctx = setup_matmul_tile_context(mesh_device, cfg);
 
-    const experimental::metal2_host_api::NodeCoord node{0, 0};
+    const experimental::NodeCoord node{0, 0};
 
     constexpr const char* SRC0_DFB = "src0_dfb";
     constexpr const char* SRC1_DFB = "src1_dfb";
@@ -234,21 +234,21 @@ static void matmul_tile_quasar(
     constexpr const char* COMPUTE = "compute";
 
     // Legacy DataflowBufferConfig used enable_implicit_sync = false on all DFBs.
-    experimental::metal2_host_api::DataflowBufferSpec src0_dfb_spec{
+    experimental::DataflowBufferSpec src0_dfb_spec{
         .unique_id = SRC0_DFB,
         .entry_size = ctx.single_tile_size_bfp16b,
         .num_entries = ctx.num_input_tiles,
         .data_format_metadata = tt::DataFormat::Float16_b,
         .disable_implicit_sync = true,
     };
-    experimental::metal2_host_api::DataflowBufferSpec src1_dfb_spec{
+    experimental::DataflowBufferSpec src1_dfb_spec{
         .unique_id = SRC1_DFB,
         .entry_size = ctx.single_tile_size_bfp16b,
         .num_entries = ctx.num_input_tiles,
         .data_format_metadata = tt::DataFormat::Float16_b,
         .disable_implicit_sync = true,
     };
-    experimental::metal2_host_api::DataflowBufferSpec dst_dfb_spec{
+    experimental::DataflowBufferSpec dst_dfb_spec{
         .unique_id = DST_DFB,
         .entry_size = ctx.single_tile_size_out0,
         .num_entries = ctx.num_tiles,
@@ -256,22 +256,22 @@ static void matmul_tile_quasar(
         .disable_implicit_sync = true,
     };
 
-    experimental::metal2_host_api::KernelSpec reader_spec{
+    experimental::KernelSpec reader_spec{
         .unique_id = READER,
-        .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{cfg.reader_kernel},
+        .source = cfg.reader_kernel,
         .num_threads = 1,
         .dfb_bindings =
             {{
                  .dfb_spec_name = SRC0_DFB,
                  .local_accessor_name = "in0",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                 .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = SRC1_DFB,
                  .local_accessor_name = "in1",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                 .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
              }},
         .runtime_arguments_schema =
             {.named_runtime_args =
@@ -285,28 +285,21 @@ static void matmul_tile_quasar(
                   "in0_block_size_bytes",
                   "in1_block_size_bytes",
                   "with_bias"}},
-        .config_spec =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
 
-    experimental::metal2_host_api::KernelSpec writer_spec{
+    experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
-        .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{"tt_metal/kernels/dataflow/writer_unary.cpp"},
+        .source = "tt_metal/kernels/dataflow/writer_unary.cpp",
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = DST_DFB,
             .local_accessor_name = "in",
-            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-            .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+            .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
+            .access_pattern = experimental::DFBAccessPattern::STRIDED,
         }},
         .runtime_arguments_schema = {.named_runtime_args = {"dst_addr", "bank_id", "num_tiles"}},
-        .config_spec =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
 
     // The Quasar matmul_block.cpp kernel uses named CTAs. Map cfg.compute_kernel_args (positional)
@@ -316,7 +309,7 @@ static void matmul_tile_quasar(
         cfg.compute_kernel_args.size() == 7,
         "Quasar matmul_block expects 7 compile-time args but got {}",
         cfg.compute_kernel_args.size());
-    experimental::metal2_host_api::KernelSpec::CompileTimeArgBindings compute_cta_bindings{
+    experimental::KernelSpec::CompileTimeArgBindings compute_cta_bindings{
         {"block_tile_dim", cfg.compute_kernel_args[0]},
         {"dst_tile_rows", cfg.compute_kernel_args[1]},
         {"dst_tile_cols", cfg.compute_kernel_args[2]},
@@ -326,7 +319,7 @@ static void matmul_tile_quasar(
         {"out_block_tile_cnt", cfg.compute_kernel_args[6]},
     };
 
-    experimental::metal2_host_api::KernelSpec::CompilerOptions::Defines compute_defines = {
+    experimental::KernelSpec::CompilerOptions::Defines compute_defines = {
         {"WITH_DT", cfg.with_dt ? "1" : "0"},
         {"TEST_INIT_SHORT", cfg.test_init_short ? "1" : "0"},
     };
@@ -334,53 +327,53 @@ static void matmul_tile_quasar(
         compute_defines.emplace_back("DST_ACCUM_MODE", "1");
     }
 
-    experimental::metal2_host_api::KernelSpec compute_spec{
+    experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
-        .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{cfg.compute_kernel},
+        .source = cfg.compute_kernel,
         .num_threads = 1,
         .compiler_options = {.defines = compute_defines},
         .dfb_bindings =
             {{
                  .dfb_spec_name = SRC0_DFB,
                  .local_accessor_name = "in0",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                 .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = SRC1_DFB,
                  .local_accessor_name = "in1",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                 .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = DST_DFB,
                  .local_accessor_name = "out",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                 .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
              }},
         .compile_time_arg_bindings = compute_cta_bindings,
         .config_spec =
-            experimental::metal2_host_api::ComputeConfiguration{
+            experimental::ComputeConfiguration{
                 .math_fidelity = cfg.math_fidelity,
                 .fp32_dest_acc_en = cfg.fp32_dest_acc_en,
                 .dst_full_sync_en = cfg.dst_full_sync_en,
             },
     };
 
-    experimental::metal2_host_api::WorkUnitSpec wu{
+    experimental::WorkUnitSpec wu{
         .unique_id = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = node,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
+    experimental::ProgramSpec spec{
         .program_id = "matmul_X_tile",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {src0_dfb_spec, src1_dfb_spec, dst_dfb_spec},
         .work_units = {wu},
     };
 
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     fixture->WriteBuffer(mesh_device, ctx.src0_dram_buffer, activations);
     fixture->WriteBuffer(mesh_device, ctx.src1_dram_buffer, weights);
@@ -396,9 +389,9 @@ static void matmul_tile_quasar(
         static_cast<uint32_t>((single_tile ? 1u : ctx.N) * ctx.single_tile_size_bfp16b);
     const uint32_t with_bias_arg = single_tile ? 0u : static_cast<uint32_t>(cfg.with_bias);
 
-    experimental::metal2_host_api::ProgramRunParams params;
+    experimental::ProgramRunParams params;
     params.kernel_run_params = {
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+        experimental::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = READER,
             .named_runtime_args =
                 {{.node = node,
@@ -414,18 +407,18 @@ static void matmul_tile_quasar(
                        {"in1_block_size_bytes", in1_block_size_bytes},
                        {"with_bias", with_bias_arg}}}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+        experimental::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = WRITER,
             .named_runtime_args =
                 {{.node = node,
                   .args =
                       {{"dst_addr", ctx.dst_dram_buffer->address()}, {"bank_id", 0u}, {"num_tiles", ctx.num_tiles}}}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+        experimental::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = COMPUTE,
         },
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::SetProgramRunParameters(program, params);
 
     auto* device = mesh_device->get_devices()[0];
     tt::tt_metal::detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);

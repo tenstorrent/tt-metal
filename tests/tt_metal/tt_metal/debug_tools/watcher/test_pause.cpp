@@ -77,33 +77,31 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
         // On Quasar, launch kernel on all user DMs (DM2..DM7). DM0/DM1 are reserved for internal use.
         // TODO: Watcher features for ERISCs and TRISCs are temporarily skipped on Quasar until basic runtime bring-up.
         constexpr uint32_t kQuasarUserDmCores = 6;
-        experimental::metal2_host_api::KernelSpec dm_spec{
+        experimental::KernelSpec dm_spec{
             .unique_id = DM_KERNEL_NAME,
-            .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{path},
+            .source = path,
             .num_threads = static_cast<uint8_t>(kQuasarUserDmCores),
             .runtime_arguments_schema = {.named_common_runtime_args = {"wait_cycles"}},
             .config_spec =
-                experimental::metal2_host_api::DataMovementConfiguration{
-                    .gen2_data_movement_config =
-                        experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
         };
-        experimental::metal2_host_api::WorkUnitSpec wu{
+        experimental::WorkUnitSpec wu{
             .unique_id = "main",
             .kernels = {DM_KERNEL_NAME},
-            .target_nodes = experimental::metal2_host_api::NodeRange{CoreRange(xy_start, xy_end)},
+            .target_nodes = experimental::NodeRange{CoreRange(xy_start, xy_end)},
         };
-        experimental::metal2_host_api::ProgramSpec spec{
+        experimental::ProgramSpec spec{
             .program_id = "watcher_pause",
             .kernels = {dm_spec},
             .work_units = {wu},
         };
-        program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+        program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-        experimental::metal2_host_api::ProgramRunParams params;
+        experimental::ProgramRunParams params;
         params.kernel_run_params = {
             {.kernel_spec_name = DM_KERNEL_NAME, .named_common_runtime_args = {{"wait_cycles", delay_cycles}}},
         };
-        experimental::metal2_host_api::SetProgramRunParameters(program, params);
+        experimental::SetProgramRunParameters(program, params);
         workload.add_program(device_range, std::move(program));
     } else {
         auto brisc_kid = CreateKernel(
