@@ -7,6 +7,7 @@
 #include <vector>
 #include <ranges>
 #include <algorithm>
+#include <variant>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -18,6 +19,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <limits>
 
@@ -25,16 +27,21 @@ namespace ttnn::operations::experimental::ccl {
 
 namespace detail {
 
-// Launch mux worker kernels for fabric communication
-// Returns: tuple of (mux_kernel_id, mux_kernel_config, mux_neighbor_core_maps)
-auto launch_mux_workers(
+// ProgramDescriptor (Contract-2) variant of the legacy launch_mux_workers.
+// Appends a mux KernelDescriptor onto `desc` (with its runtime args baked in
+// per logical core via emplace_runtime_args) instead of issuing imperative
+// CreateKernel / SetRuntimeArgs calls.  Returns the same triple as the legacy
+// helper -- (mux_kernel_index, mux_kernel_config, per-link
+// mesh-coord->virtual-core maps) -- with the kernel handle being the index of
+// the appended KernelDescriptor in desc.kernels.
+auto launch_mux_workers_descriptor(
     const MeshDevice& mesh_device,
     const CoreRangeSet& mux_core_range_set,
     const tt::tt_fabric::FabricNodeId src_node_id,
     const std::vector<ttnn::MeshCoordinate>& neighbors,
     const uint32_t num_links,
     const uint32_t num_workers,
-    tt::tt_metal::Program& program) {
+    tt::tt_metal::ProgramDescriptor& desc) {
     auto num_full_size_channels = num_workers;
     constexpr auto num_header_only_channels = 0;
     constexpr auto num_buffers_full_size_channels = 2;
@@ -60,15 +67,19 @@ auto launch_mux_workers(
         corerange_to_cores(mux_core_range_set).size());
     const auto needed_mux_core_range_set =
         tt::tt_metal::select_from_corerangeset(mux_core_range_set, 0, num_mux_cores_needed - 1);
-    auto mux_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
-        needed_mux_core_range_set,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
-            .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+
+    tt::tt_metal::KernelDescriptor mux_kernel_desc;
+    mux_kernel_desc.kernel_source = "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp";
+    mux_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+    mux_kernel_desc.core_ranges = needed_mux_core_range_set;
+    mux_kernel_desc.compile_time_args = mux_kernel_config.get_fabric_mux_compile_time_args();
+    mux_kernel_desc.config = tt::tt_metal::DataMovementConfigDescriptor{
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+        .noc = tt::tt_metal::NOC::RISCV_0_default,
+    };
+    mux_kernel_desc.opt_level = tt::tt_metal::KernelBuildOptLevel::O3;
+    const auto mux_kernel_index = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
+    desc.kernels.push_back(std::move(mux_kernel_desc));
 
     std::vector<std::map<ttnn::MeshCoordinate, CoreCoord>> mux_neigbor_core_maps;
     mux_neigbor_core_maps.reserve(num_links);
@@ -81,18 +92,24 @@ auto launch_mux_workers(
             auto mux_logical_core = *(mux_core_iter++);
             const auto mux_virtual_core = mesh_device.worker_core_from_logical_core(mux_logical_core);
 
-            std::vector<uint32_t> mux_rt_args = {};
             const auto dst_node_id = mesh_device.get_fabric_node_id(neighbor_coord);
-            mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                src_node_id, dst_node_id, link, program, {mux_logical_core});
+            // Templated FabricMuxConfig helper appends fabric routing args onto the
+            // ProgramDescriptor and returns the resulting per-core rt-arg vector.
+            std::vector<uint32_t> mux_rt_args =
+                mux_kernel_config.get_fabric_mux_run_time_args(src_node_id, dst_node_id, link, desc, mux_logical_core);
 
-            tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
+            std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>> mux_rt_args_variant;
+            mux_rt_args_variant.reserve(mux_rt_args.size());
+            for (uint32_t a : mux_rt_args) {
+                mux_rt_args_variant.emplace_back(a);
+            }
+            desc.kernels[mux_kernel_index].emplace_runtime_args(mux_logical_core, mux_rt_args_variant);
             mux_neigbor_core_map[neighbor_coord] = mux_virtual_core;
         }
         mux_neigbor_core_maps.push_back(mux_neigbor_core_map);
     }
 
-    return std::make_tuple(mux_kernel_id, mux_kernel_config, mux_neigbor_core_maps);
+    return std::make_tuple(mux_kernel_index, mux_kernel_config, mux_neigbor_core_maps);
 }
 
 uint32_t get_num_pages(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->num_pages(); }
@@ -158,75 +175,24 @@ std::pair<std::array<uint32_t, 7>, std::array<uint32_t, 7>> get_cb_sizes(
     return {cb_sizes, cb_page_sizes};
 }
 
-}  // namespace detail
-
-AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::cached_mesh_workload_t
-AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_mesh_workload(
-    const operation_attributes_t& operation_attributes,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    tt::tt_metal::distributed::MeshWorkload workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-
-    auto* mesh_device = tensor_args.input_tensor.device();
-
-    // Determine if we're in persistent mode:
-    // - cross_device_semaphore is provided externally
-    // - all 3 output tensors are provided (persistent buffers)
-    // In this mode, we skip the init_semaphore to avoid the barrier overhead
-    bool skip_init_semaphore =
-        operation_attributes.cross_device_semaphore.has_value() && tensor_args.optional_output_tensors.has_value();
-
-    log_debug(
-        tt::LogOp,
-        "Persistent mode: {} (cross_device_semaphore={}, optional_output_tensors={})",
-        skip_init_semaphore,
-        operation_attributes.cross_device_semaphore.has_value(),
-        tensor_args.optional_output_tensors.has_value());
-
-    std::optional<GlobalSemaphore> init_barrier_semaphore = std::nullopt;
-    GlobalSemaphore final_barrier_semaphore = skip_init_semaphore
-                                                  ? operation_attributes.cross_device_semaphore.value()
-                                                  : ttnn::global_semaphore::create_global_semaphore(
-                                                        mesh_device, operation_attributes.worker_core_range_set, 0);
-
-    if (!skip_init_semaphore) {
-        init_barrier_semaphore =
-            ttnn::global_semaphore::create_global_semaphore(mesh_device, operation_attributes.worker_core_range_set, 0);
-    }
-
-    tt::tt_metal::distributed::Synchronize(
-        mesh_device, std::nullopt, {});  // interaction with subdevice needs to be investigated
-
-    for (const auto& coord : tensor_coords.coords()) {
-        auto cached_program = create_at(
-            operation_attributes,
-            coord,
-            tensor_args,
-            tensor_return_value,
-            tensor_coords,
-            init_barrier_semaphore,
-            final_barrier_semaphore,
-            skip_init_semaphore);
-        workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
-        shared_variables.emplace(coord, std::move(cached_program.shared_variables));
-    }
-    return cached_mesh_workload_t(std::move(workload), std::move(shared_variables));
-}
-
-ttnn::device_operation::CachedProgram<
-    AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::shared_variables_t>
-AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_at(
-    const operation_attributes_t& operation_attributes,
+// Build the per-coord ProgramDescriptor.  Identical in structure to the legacy
+// create_at body; CB / kernel / runtime arg emission goes through
+// desc.{cbs,kernels,semaphores}.push_back / emplace_runtime_args instead of the
+// imperative Program-side APIs.  Tensor base addresses are bound via
+// emplace_runtime_args(Buffer*) so the framework's fast cache-hit path patches
+// them every dispatch; the cross-device + init GlobalSemaphores ride on
+// WorkloadDescriptor.semaphores and their addresses are embedded as uint32_t
+// (a different GlobalSemaphore triggers a recompile, same behavior as legacy).
+tt::tt_metal::ProgramDescriptor build_descriptor_at(
+    const AllToAllDispatchMetadataDeviceOperation::operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value,
+    const AllToAllDispatchMetadataDeviceOperation::tensor_args_t& tensor_args,
+    AllToAllDispatchMetadataDeviceOperation::tensor_return_value_t& tensor_return_value,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const std::optional<GlobalSemaphore>& init_semaphore,
     const GlobalSemaphore& cross_device_semaphore,
     bool skip_init_semaphore) {
-    tt::tt_metal::Program program{};
+    tt::tt_metal::ProgramDescriptor desc;
 
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& indices_tensor = tensor_args.expert_indices_tensor;
@@ -238,7 +204,6 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
     auto num_links = operation_attributes.num_links;
     auto topology = operation_attributes.topology;
 
-    // Debug: print metadata tensor allocation details
     log_debug(
         tt::LogOp,
         "Metadata tensor buffer address: {} size: {}",
@@ -328,90 +293,15 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
     uint32_t scores_tensor_cb_id = tt::CBIndex::c_6;
 
     uint32_t aligned_input_page_size = detail::get_aligned_page_size(input_tensor);
-    log_debug(
-        tt::LogOp,
-        "input shape: {}, input_pages: {}, input_page_size: {}, aligned_input_page_size: {}",
-        input_tensor.logical_shape(),
-        input_pages,
-        input_page_size,
-        aligned_input_page_size);
-
     uint32_t aligned_indices_page_size = detail::get_aligned_page_size(indices_tensor);
-    log_debug(
-        tt::LogOp,
-        "indices shape: {}, indices_pages: {}, indices_page_size: {}, aligned_indices_page_size: {}",
-        indices_tensor.logical_shape(),
-        indices_pages,
-        indices_page_size,
-        aligned_indices_page_size);
-
     uint32_t aligned_scores_page_size = detail::get_aligned_page_size(scores_tensor);
-    log_debug(
-        tt::LogOp,
-        "scores shape: {}, scores_pages: {}, scores_page_size: {}, aligned_scores_page_size: {}",
-        scores_tensor.logical_shape(),
-        scores_pages,
-        scores_page_size,
-        aligned_scores_page_size);
     const auto aligned_output_scores_page_size = detail::get_aligned_page_size(scores_out_tensor);
-
     uint32_t aligned_mapping_page_size = detail::get_aligned_page_size(mapping_tensor);
-    log_debug(
-        tt::LogOp,
-        "mapping shape: {}, mapping_pages: {}, mapping_page_size: {}, aligned_mapping_page_size: {}",
-        mapping_tensor.logical_shape(),
-        mapping_pages,
-        mapping_page_size,
-        aligned_mapping_page_size);
-
     uint32_t aligned_output_page_size = detail::get_aligned_page_size(output_tensor);
-    log_debug(
-        tt::LogOp,
-        "output shape: {}, output_pages: {}, output_page_size: {}, aligned_output_page_size: {}",
-        output_tensor.logical_shape(),
-        output_pages,
-        output_page_size,
-        aligned_output_page_size);
-
     uint32_t aligned_metadata_page_size = detail::get_aligned_page_size(metadata_tensor);
-    log_debug(
-        tt::LogOp,
-        "metadata shape: {}, metadata_pages: {}, metadata_page_size: {}, aligned_metadata_page_size: {}",
-        metadata_tensor.logical_shape(),
-        metadata_pages,
-        metadata_page_size,
-        aligned_metadata_page_size);
 
     auto [cb_sizes, cb_page_sizes] = detail::get_cb_sizes(
         input_tensor, metadata_tensor, scores_out_tensor, mapping_tensor, num_links, operation_attributes.axis);
-
-    tt::tt_metal::CircularBufferConfig cb_input_tensor_config =
-        tt::tt_metal::CircularBufferConfig(cb_sizes[0], {{input_tensor_cb_id, input_data_format}})
-            .set_page_size(input_tensor_cb_id, cb_page_sizes[0]);
-
-    tt::tt_metal::CircularBufferConfig cb_indices_tensor_config =
-        tt::tt_metal::CircularBufferConfig(cb_sizes[1], {{indices_tensor_cb_id, indices_data_format}})
-            .set_page_size(indices_tensor_cb_id, cb_page_sizes[1]);
-
-    tt::tt_metal::CircularBufferConfig cb_mapping_tensor_config =
-        tt::tt_metal::CircularBufferConfig(cb_sizes[2], {{mapping_tensor_cb_id, mapping_data_format}})
-            .set_page_size(mapping_tensor_cb_id, cb_page_sizes[2]);
-
-    tt::tt_metal::CircularBufferConfig cb_send_preparation_buffer_config =
-        tt::tt_metal::CircularBufferConfig(cb_sizes[3], {{send_preparation_buffer_id, tt::DataFormat::UInt8}})
-            .set_page_size(send_preparation_buffer_id, cb_page_sizes[3]);
-
-    tt::tt_metal::CircularBufferConfig cb_metadata_buffer_config =
-        tt::tt_metal::CircularBufferConfig(cb_sizes[4], {{metadata_buffer_id, mapping_data_format}})
-            .set_page_size(metadata_buffer_id, cb_page_sizes[4]);
-
-    tt::tt_metal::CircularBufferConfig packet_header_cb_config =
-        tt::tt_metal::CircularBufferConfig(cb_sizes[5], {{packet_header_cb_id, tt::DataFormat::RawUInt32}})
-            .set_page_size(packet_header_cb_id, cb_page_sizes[5]);
-
-    tt::tt_metal::CircularBufferConfig cb_scores_tensor_config =
-        tt::tt_metal::CircularBufferConfig(cb_sizes[6], {{scores_tensor_cb_id, scores_data_format}})
-            .set_page_size(scores_tensor_cb_id, cb_page_sizes[6]);
 
     auto worker_core_range_set = operation_attributes.worker_core_range_set;
 
@@ -474,14 +364,27 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
         subdevice_cores.at(0), num_cores, worker_core_range_set, true);
     std::vector<CoreCoord> sender_cores = corerange_to_cores(sender_core_grid);
 
-    // create circular buffers
-    tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_input_tensor_config);
-    tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_indices_tensor_config);
-    tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_scores_tensor_config);
-    tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_mapping_tensor_config);
-    tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, packet_header_cb_config);
-    tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_send_preparation_buffer_config);
-    tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_metadata_buffer_config);
+    // Helper to push a CB onto desc with one buffer-index and matching format/page size.
+    auto push_cb = [&](uint32_t cb_id, uint32_t total_size, uint32_t page_size, tt::DataFormat data_format) {
+        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+            .total_size = total_size,
+            .core_ranges = sender_core_grid,
+            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_id),
+                .data_format = data_format,
+                .page_size = page_size,
+            }}},
+        });
+    };
+
+    // create circular buffers (same set / sizes / formats as legacy path)
+    push_cb(input_tensor_cb_id, cb_sizes[0], cb_page_sizes[0], input_data_format);
+    push_cb(indices_tensor_cb_id, cb_sizes[1], cb_page_sizes[1], indices_data_format);
+    push_cb(scores_tensor_cb_id, cb_sizes[6], cb_page_sizes[6], scores_data_format);
+    push_cb(mapping_tensor_cb_id, cb_sizes[2], cb_page_sizes[2], mapping_data_format);
+    push_cb(packet_header_cb_id, cb_sizes[5], cb_page_sizes[5], tt::DataFormat::RawUInt32);
+    push_cb(send_preparation_buffer_id, cb_sizes[3], cb_page_sizes[3], tt::DataFormat::UInt8);
+    push_cb(metadata_buffer_id, cb_sizes[4], cb_page_sizes[4], mapping_data_format);
 
     std::vector<uint32_t> dest_mesh_id, dest_chip_id;
     for (const auto& coord : tensor_coords.coords()) {
@@ -569,39 +472,27 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
     tt::tt_metal::TensorAccessorArgs(metadata_tensor.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(scores_out_tensor.buffer()).append_to(reader_compile_time_args);
 
-    const auto& writer_compile_time_args = reader_compile_time_args;
-
-    tt::tt_metal::KernelHandle ternary_reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_dispatch_metadata/device/kernels/dataflow/"
-        "reader_all_to_all_dispatch_metadata.cpp",
-        sender_core_grid,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt::tt_metal::NOC::NOC_1,
-            .compile_args = reader_compile_time_args});
-
     // Code-gen a mesh-position to fabric chip ID array for the writer kernel
     // Code-gen a mesh-position to mesh-id array for the writer kernel
     // Code-gen a direction array that is set to true when a direction has a valid connection (when a neighbor exists or
     // if it's along a valid cluster axis)
-    std::map<std::string, std::string> writer_defines = {
+    std::vector<std::pair<std::string, std::string>> writer_defines = {
         {"DEST_CHIP_ID", ttnn::operations::ccl::common::stringify(dest_chip_id)},
         {"DEST_MESH_ID", ttnn::operations::ccl::common::stringify(dest_mesh_id)},
         {"DIRECTIONS", ttnn::operations::ccl::common::stringify(directions)},
         {"DISPATCH_ALGORITHM", std::to_string(static_cast<uint8_t>(operation_attributes.dispatch_algorithm))}};
 
     if (operation_attributes.axis.has_value()) {
-        writer_defines["AXIS"] = std::to_string(operation_attributes.axis.value());
+        writer_defines.emplace_back("AXIS", std::to_string(operation_attributes.axis.value()));
     }
 
     // Conditionally set up mux infrastructure (use_mux already defined above)
     std::optional<tt::tt_fabric::FabricMuxConfig> mux_kernel_config;
     std::vector<std::map<ttnn::MeshCoordinate, CoreCoord>> mux_neigbor_core_maps;
-    [[maybe_unused]] tt::tt_metal::KernelHandle mux_kernel_id = 0;
+    [[maybe_unused]] tt::tt_metal::KernelHandle mux_kernel_index = 0;
 
     if (use_mux) {
-        writer_defines["USE_MUX"] = "1";
+        writer_defines.emplace_back("USE_MUX", "1");
         log_debug(tt::LogOp, "Using fabric mux for dispatch");
 
         // Validate mux core range has enough cores (need 1 mux per link)
@@ -612,34 +503,35 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
             mux_cores.size(),
             num_links);
 
-        // Launch mux workers
+        // Launch mux workers via the ProgramDescriptor helper.
         // Note: num_workers passed to launch_mux_workers should be workers_per_link (clients per mux channel)
-        auto [launched_mux_kernel_id, launched_mux_config, launched_mux_neigbor_core_maps] = detail::launch_mux_workers(
-            *mesh_device,
-            operation_attributes.mux_core_range_set,
-            src_fabric_node_id,
-            neighbors,
-            num_links,
-            workers_per_link,  // workers per link = clients per mux channel
-            program);
-        mux_kernel_id = launched_mux_kernel_id;
+        auto [launched_mux_kernel_index, launched_mux_config, launched_mux_neigbor_core_maps] =
+            detail::launch_mux_workers_descriptor(
+                *mesh_device,
+                operation_attributes.mux_core_range_set,
+                src_fabric_node_id,
+                neighbors,
+                num_links,
+                workers_per_link,  // workers per link = clients per mux channel
+                desc);
+        mux_kernel_index = launched_mux_kernel_index;
         mux_kernel_config = launched_mux_config;
         mux_neigbor_core_maps = std::move(launched_mux_neigbor_core_maps);
     }
 
     if (payload_split_mode) {
-        writer_defines["PAYLOAD_SPLIT_MODE"] = "1";
-        writer_defines["WORKERS_PER_LINK"] = std::to_string(workers_per_link);
+        writer_defines.emplace_back("PAYLOAD_SPLIT_MODE", "1");
+        writer_defines.emplace_back("WORKERS_PER_LINK", std::to_string(workers_per_link));
         log_debug(tt::LogOp, "Using payload split mode with {} workers per link", workers_per_link);
     }
 
     if (skip_init_semaphore) {
-        writer_defines["SKIP_INIT_SEMAPHORE"] = "1";
+        writer_defines.emplace_back("SKIP_INIT_SEMAPHORE", "1");
         log_debug(tt::LogOp, "Skipping init semaphore (persistent mode enabled)");
     }
 
     // Build writer compile-time args - add mux args if enabled
-    std::vector<uint32_t> writer_compile_time_args_final = writer_compile_time_args;
+    std::vector<uint32_t> writer_compile_time_args_final = reader_compile_time_args;
     if (use_mux) {
         ttnn::ccl::fabric_mux_connection_ct_args(
             workers_per_link,  // num_mux_clients = workers per link sharing each mux channel
@@ -648,53 +540,43 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
             writer_compile_time_args_final);
     }
 
-    tt::tt_metal::KernelHandle binary_writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
+    // Reader kernel
+    tt::tt_metal::KernelDescriptor reader_kernel_desc;
+    reader_kernel_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_dispatch_metadata/device/kernels/dataflow/"
-        "writer_all_to_all_dispatch_metadata.cpp",
-        sender_core_grid,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::NOC_0,
-            .compile_args = writer_compile_time_args_final,
-            .defines = writer_defines});
-
-    std::vector<uint32_t> reader_runtime_args = {
-        input_tensor.buffer()->address(),
-        indices_tensor.buffer()->address(),
-        scores_tensor.buffer()->address(),
-        mapping_tensor.buffer()->address(),
-        output_tensor.buffer()->address(),
-        metadata_tensor.buffer()->address(),
-        scores_out_tensor.buffer()->address(),
-        (uint32_t)cross_device_semaphore.address(),
+        "reader_all_to_all_dispatch_metadata.cpp";
+    reader_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+    reader_kernel_desc.core_ranges = sender_core_grid;
+    reader_kernel_desc.compile_time_args = reader_compile_time_args;
+    reader_kernel_desc.config = tt::tt_metal::DataMovementConfigDescriptor{
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+        .noc = tt::tt_metal::NOC::NOC_1,
     };
+    const tt::tt_metal::KernelHandle ternary_reader_kernel_index =
+        static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
+    desc.kernels.push_back(std::move(reader_kernel_desc));
 
-    uint32_t reader_token_start_idx = reader_runtime_args.size();
-    reader_runtime_args.push_back(0);
-    uint32_t reader_token_end_idx = reader_runtime_args.size();
-    reader_runtime_args.push_back(0);
-
-    // Pre-allocate slots for payload split args (only used in payload_split_mode)
-    uint32_t reader_payload_offset_idx = reader_runtime_args.size();
-    reader_runtime_args.push_back(0);
-    uint32_t reader_payload_size_idx = reader_runtime_args.size();
-    reader_runtime_args.push_back(0);
-    uint32_t reader_is_primary_idx = reader_runtime_args.size();
-    reader_runtime_args.push_back(0);
+    // Writer kernel
+    tt::tt_metal::KernelDescriptor writer_kernel_desc;
+    writer_kernel_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_dispatch_metadata/device/kernels/dataflow/"
+        "writer_all_to_all_dispatch_metadata.cpp";
+    writer_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+    writer_kernel_desc.core_ranges = sender_core_grid;
+    writer_kernel_desc.compile_time_args = std::move(writer_compile_time_args_final);
+    writer_kernel_desc.defines = std::move(writer_defines);
+    writer_kernel_desc.config = tt::tt_metal::DataMovementConfigDescriptor{
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+        .noc = tt::tt_metal::NOC::NOC_0,
+    };
+    const tt::tt_metal::KernelHandle binary_writer_kernel_index =
+        static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
+    desc.kernels.push_back(std::move(writer_kernel_desc));
 
     // Get drain sync tilizer core NOC coordinates for direct metadata output
-    // drain_sync_tilizer_core was already resolved at the start of create_at
+    // drain_sync_tilizer_core was already resolved at the start of build_descriptor_at
     auto drain_sync_tilizer_noc_core = mesh_device->worker_core_from_logical_core(drain_sync_tilizer_core);
 
-    // Debug: print address comparison for overlap detection
-    log_debug(
-        tt::LogOp,
-        "Address comparison - metadata_tensor: {} (size: {}), cross_device_semaphore: {}, init_semaphore: {}",
-        metadata_tensor.buffer()->address(),
-        metadata_tensor.buffer()->size(),
-        cross_device_semaphore.address(),
-        init_semaphore.has_value() ? init_semaphore->address() : 0);
     log_debug(
         tt::LogOp,
         "drain_sync_tilizer_core logical: ({}, {}), NOC: ({}, {})",
@@ -705,7 +587,8 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
 
     // For mux: set up termination masters (one per link)
     // Each link has workers_per_link workers sharing the same mux cores
-    // The first worker on each link (worker_idx % workers_per_link == 0) is the termination master
+    // The first worker on each link (worker_idx % workers_per_link == 0) is the termination master.
+    // Each termination master needs its own per-core semaphore for the mux terminate handshake.
     std::vector<CoreCoord> termination_master_cores;
     std::vector<CoreCoord> termination_master_virtual_cores;
     std::vector<uint32_t> termination_master_semaphore_ids;
@@ -715,7 +598,20 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
             const auto& master_core = sender_cores[master_worker_idx];
             termination_master_cores.push_back(master_core);
             termination_master_virtual_cores.push_back(mesh_device->worker_core_from_logical_core(master_core));
-            termination_master_semaphore_ids.push_back(tt::tt_metal::CreateSemaphore(program, {master_core}, 0));
+            // Allocate a fresh per-core semaphore for this termination master.
+            auto sem_id_opt = desc.find_available_semaphore_id(master_core, tt::CoreType::WORKER);
+            TT_FATAL(
+                sem_id_opt.has_value(),
+                "Failed to find available semaphore id for termination master core {}",
+                master_core);
+            const uint32_t sem_id = sem_id_opt.value();
+            desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+                .id = sem_id,
+                .core_type = tt::CoreType::WORKER,
+                .core_ranges = CoreRangeSet({CoreRange(master_core, master_core)}),
+                .initial_value = 0,
+            });
+            termination_master_semaphore_ids.push_back(sem_id);
             log_debug(
                 tt::LogOp,
                 "Link {} termination master: worker {} at core ({}, {}), semaphore_id {}",
@@ -723,10 +619,13 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
                 master_worker_idx,
                 master_core.x,
                 master_core.y,
-                termination_master_semaphore_ids.back());
+                sem_id);
         }
     }
 
+    // Reader runtime args (per core) -- the first 7 positions are tensor buffer
+    // bindings; cross_device_semaphore is embedded as a uint32_t (recompile if
+    // the GlobalSemaphore changes, same as legacy).
     uint32_t tokens_per_core_start = 0;
     auto mux_core_map_iter = mux_neigbor_core_maps.cbegin();
     uint32_t current_link_id = 0;
@@ -736,6 +635,33 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
         uint32_t link_id = worker_idx / workers_per_link;
         uint32_t worker_idx_within_link = worker_idx % workers_per_link;
         bool is_termination_master = (worker_idx_within_link == 0);
+
+        // Build reader rt args as a uint32_t vector first (so existing arithmetic on
+        // index slots works unchanged), then convert to the variant arg list and
+        // substitute the tensor Buffer* bindings at positions 0..6.
+        std::vector<uint32_t> reader_runtime_args = {
+            input_tensor.buffer()->address(),
+            indices_tensor.buffer()->address(),
+            scores_tensor.buffer()->address(),
+            mapping_tensor.buffer()->address(),
+            output_tensor.buffer()->address(),
+            metadata_tensor.buffer()->address(),
+            scores_out_tensor.buffer()->address(),
+            (uint32_t)cross_device_semaphore.address(),
+        };
+
+        uint32_t reader_token_start_idx = reader_runtime_args.size();
+        reader_runtime_args.push_back(0);
+        uint32_t reader_token_end_idx = reader_runtime_args.size();
+        reader_runtime_args.push_back(0);
+
+        // Pre-allocate slots for payload split args (only used in payload_split_mode)
+        uint32_t reader_payload_offset_idx = reader_runtime_args.size();
+        reader_runtime_args.push_back(0);
+        uint32_t reader_payload_size_idx = reader_runtime_args.size();
+        reader_runtime_args.push_back(0);
+        uint32_t reader_is_primary_idx = reader_runtime_args.size();
+        reader_runtime_args.push_back(0);
 
         std::vector<uint32_t> writer_runtime_args = {
             input_tensor.buffer()->address(),
@@ -788,17 +714,6 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
             writer_runtime_args.push_back(payload_offset);
             writer_runtime_args.push_back(payload_size);
             writer_runtime_args.push_back(is_primary_payload_worker ? 1 : 0);
-
-            log_debug(
-                tt::LogOp,
-                "Worker {} payload split: link={}, tokens=[{},{}), offset={}, size={}, is_primary={}",
-                worker_idx,
-                link_id,
-                link_token_start,
-                link_token_end,
-                payload_offset,
-                payload_size,
-                is_primary_payload_worker);
         } else {
             // Token split mode or direct mode: distribute tokens across workers
             reader_runtime_args[reader_token_start_idx] = tokens_per_core_start;
@@ -855,6 +770,9 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
 
             for (const auto& neighbor_coordinate : neighbors) {
                 const auto& mux_virtual_core = mux_core_map_iter->at(neighbor_coordinate);
+                // ProgramDescriptor overload of fabric_mux_connection_rt_args allocates
+                // the five mux-side semaphores into desc.semaphores and bakes their IDs
+                // into writer_runtime_args.
                 ttnn::ccl::fabric_mux_connection_rt_args(
                     true,  // mux_connection_valid
                     is_termination_master,
@@ -863,7 +781,7 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
                     worker_idx_within_link,  // worker_index within the mux channel (0 to workers_per_link-1)
                     sender_core,
                     mux_kernel_config.value(),
-                    program,
+                    desc,
                     link_termination_master_virtual_core,
                     writer_runtime_args,
                     link_termination_master_semaphore_id);
@@ -879,7 +797,7 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
                 worker_idx_within_link,
                 is_termination_master);
         } else {
-            // Use direct fabric connection runtime args
+            // Use direct fabric connection runtime args (templated; supports ProgramDescriptor).
             for (const auto& neighbor_coordinate : neighbors) {
                 log_debug(
                     tt::LogOp,
@@ -894,77 +812,123 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
                     link_id,
                     reader_runtime_args[8],
                     reader_runtime_args[9]);
-                tt::tt_fabric::append_fabric_connection_rt_args(
+                tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
                     src_fabric_node_id,
                     mesh_device->get_fabric_node_id(neighbor_coordinate),
                     link_id,
-                    program,
+                    desc,
                     sender_core,
                     writer_runtime_args);
             }
         }
 
-        tt::tt_metal::SetRuntimeArgs(program, ternary_reader_kernel_id, sender_core, reader_runtime_args);
-        tt::tt_metal::SetRuntimeArgs(program, binary_writer_kernel_id, sender_core, writer_runtime_args);
-    }
-
-    return {
-        std::move(program),
-        {.ternary_reader_kernel_id = ternary_reader_kernel_id,
-         .binary_writer_kernel_id = binary_writer_kernel_id,
-         .cores = sender_cores,
-         .init_semaphore = init_semaphore,
-         .cross_device_semaphore = cross_device_semaphore,
-         .skip_init_semaphore = skip_init_semaphore}};
-}
-
-void AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    for (auto& [range, program] : cached_workload.workload.get_programs()) {
-        const auto& shared_variables = cached_workload.shared_variables.at(range);
-        const auto& ternary_reader_kernel_id = shared_variables.ternary_reader_kernel_id;
-        const auto& binary_writer_kernel_id = shared_variables.binary_writer_kernel_id;
-        const auto& cores = shared_variables.cores;
-
-        const auto& output_tensor = tensor_return_value.at(0);
-        const auto& metadata_tensor = tensor_return_value.at(1);
-        const auto& scores_out_tensor = tensor_return_value.at(2);
-
-        // Use the cross_device_semaphore from operation_attributes if provided (for double-buffering),
-        // otherwise fall back to the cached one from shared_variables
-        const auto& cross_device_semaphore = operation_attributes.cross_device_semaphore.has_value()
-                                                 ? operation_attributes.cross_device_semaphore.value()
-                                                 : shared_variables.cross_device_semaphore;
-
-        for (const auto& core : cores) {
-            auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, ternary_reader_kernel_id, core);
-            auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, binary_writer_kernel_id, core);
-            reader_runtime_args.at(0) = tensor_args.input_tensor.buffer()->address();
-            reader_runtime_args.at(1) = tensor_args.expert_indices_tensor.buffer()->address();
-            reader_runtime_args.at(2) = tensor_args.expert_scores_tensor.buffer()->address();
-            reader_runtime_args.at(3) = tensor_args.expert_mapping_tensor.buffer()->address();
-            reader_runtime_args.at(4) = output_tensor.buffer()->address();
-            reader_runtime_args.at(5) = metadata_tensor.buffer()->address();
-            reader_runtime_args.at(6) = scores_out_tensor.buffer()->address();
-            reader_runtime_args.at(7) = (uint32_t)cross_device_semaphore.address();
-
-            writer_runtime_args.at(0) = tensor_args.input_tensor.buffer()->address();
-            writer_runtime_args.at(1) = tensor_args.expert_indices_tensor.buffer()->address();
-            writer_runtime_args.at(2) = tensor_args.expert_scores_tensor.buffer()->address();
-            writer_runtime_args.at(3) = tensor_args.expert_mapping_tensor.buffer()->address();
-            writer_runtime_args.at(4) = output_tensor.buffer()->address();
-            writer_runtime_args.at(5) = metadata_tensor.buffer()->address();
-            writer_runtime_args.at(6) = scores_out_tensor.buffer()->address();
-            writer_runtime_args.at(7) = (uint32_t)cross_device_semaphore.address();
-            // init_semaphore is optional - only update if it exists (not in persistent mode)
-            if (shared_variables.init_semaphore.has_value()) {
-                writer_runtime_args.at(8) = (uint32_t)shared_variables.init_semaphore->address();
+        // Convert reader rt args to the variant arg list and substitute Buffer*
+        // bindings at the seven tensor positions so the framework patches them on
+        // every dispatch (matching the legacy override_runtime_arguments behavior
+        // -- the cross-device + init semaphore addresses remain embedded uint32s,
+        // recompile on different semaphores).
+        {
+            std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>> rt_args_variant;
+            rt_args_variant.reserve(reader_runtime_args.size());
+            rt_args_variant.emplace_back(input_tensor.buffer());
+            rt_args_variant.emplace_back(indices_tensor.buffer());
+            rt_args_variant.emplace_back(scores_tensor.buffer());
+            rt_args_variant.emplace_back(mapping_tensor.buffer());
+            rt_args_variant.emplace_back(output_tensor.buffer());
+            rt_args_variant.emplace_back(metadata_tensor.buffer());
+            rt_args_variant.emplace_back(scores_out_tensor.buffer());
+            for (size_t i = 7; i < reader_runtime_args.size(); ++i) {
+                rt_args_variant.emplace_back(reader_runtime_args[i]);
             }
+            desc.kernels[ternary_reader_kernel_index].emplace_runtime_args(sender_core, rt_args_variant);
+        }
+        {
+            std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>> rt_args_variant;
+            rt_args_variant.reserve(writer_runtime_args.size());
+            rt_args_variant.emplace_back(input_tensor.buffer());
+            rt_args_variant.emplace_back(indices_tensor.buffer());
+            rt_args_variant.emplace_back(scores_tensor.buffer());
+            rt_args_variant.emplace_back(mapping_tensor.buffer());
+            rt_args_variant.emplace_back(output_tensor.buffer());
+            rt_args_variant.emplace_back(metadata_tensor.buffer());
+            rt_args_variant.emplace_back(scores_out_tensor.buffer());
+            for (size_t i = 7; i < writer_runtime_args.size(); ++i) {
+                rt_args_variant.emplace_back(writer_runtime_args[i]);
+            }
+            desc.kernels[binary_writer_kernel_index].emplace_runtime_args(sender_core, rt_args_variant);
         }
     }
+
+    return desc;
+}
+
+}  // namespace detail
+
+tt::tt_metal::WorkloadDescriptor
+AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_workload_descriptor(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    tt::tt_metal::WorkloadDescriptor workload_descriptor;
+
+    auto* mesh_device = tensor_args.input_tensor.device();
+
+    // Determine if we're in persistent mode:
+    // - cross_device_semaphore is provided externally
+    // - all 3 output tensors are provided (persistent buffers)
+    // In this mode, we skip the init_semaphore to avoid the barrier overhead
+    bool skip_init_semaphore =
+        operation_attributes.cross_device_semaphore.has_value() && tensor_args.optional_output_tensors.has_value();
+
+    log_debug(
+        tt::LogOp,
+        "Persistent mode: {} (cross_device_semaphore={}, optional_output_tensors={})",
+        skip_init_semaphore,
+        operation_attributes.cross_device_semaphore.has_value(),
+        tensor_args.optional_output_tensors.has_value());
+
+    // Workload-scoped semaphores.  In persistent mode the caller-supplied
+    // cross_device_semaphore on operation_attributes is reused (no new
+    // allocation, no init barrier); otherwise we allocate fresh init + final
+    // GlobalSemaphores and park them on workload_descriptor.semaphores so they
+    // outlive the cached workload.
+    std::optional<GlobalSemaphore> init_barrier_semaphore = std::nullopt;
+    GlobalSemaphore final_barrier_semaphore = skip_init_semaphore
+                                                  ? operation_attributes.cross_device_semaphore.value()
+                                                  : ttnn::global_semaphore::create_global_semaphore(
+                                                        mesh_device, operation_attributes.worker_core_range_set, 0);
+
+    if (!skip_init_semaphore) {
+        init_barrier_semaphore =
+            ttnn::global_semaphore::create_global_semaphore(mesh_device, operation_attributes.worker_core_range_set, 0);
+    }
+
+    tt::tt_metal::distributed::Synchronize(
+        mesh_device, std::nullopt, {});  // interaction with subdevice needs to be investigated
+
+    if (!skip_init_semaphore) {
+        workload_descriptor.semaphores.push_back(init_barrier_semaphore.value());
+    }
+    // Always retain the final / cross-device semaphore on the workload.  When
+    // persistent mode reuses the caller-supplied semaphore the framework will
+    // simply see it twice, which is harmless (caller still owns it).
+    workload_descriptor.semaphores.push_back(final_barrier_semaphore);
+
+    for (const auto& coord : tensor_coords.coords()) {
+        auto desc = detail::build_descriptor_at(
+            operation_attributes,
+            coord,
+            tensor_args,
+            tensor_return_value,
+            tensor_coords,
+            init_barrier_semaphore,
+            final_barrier_semaphore,
+            skip_init_semaphore);
+        workload_descriptor.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
+    }
+
+    return workload_descriptor;
 }
 
 }  // namespace ttnn::operations::experimental::ccl
