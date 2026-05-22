@@ -262,6 +262,35 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     const uint32_t bf16_tile_size = tt::tile_size(bf16_format);
 
     // ------------------------------------------------------------------------
+    // Persistent DRAM stats buffer (Phase 1, TP>1 only).
+    //
+    // The previous design had each worker fabric-mcast stats tiles directly
+    // into the remote chip's `stats_gathered_cb` L1 region. That's unsafe
+    // across ops: another op on the remote chip could be using that L1 range
+    // by the time our packet arrives. With a persistent DRAM buffer, the
+    // remote chip's DRAM is the destination — a fixed allocation that's only
+    // touched by this op. After AG completes (sem hits ring_size-1 per row)
+    // the writer reads the gathered stats from local DRAM into stats_gathered_cb
+    // for compute consumption.
+    //
+    // Layout: [num_workers, chunk_size_rows, ring_size] tiles, fp32.
+    //   Worker i, row r, device d → tile_idx = i * chunk × ring + r * ring + d.
+    // Same DRAM allocation (deterministic allocator order) on every chip, so
+    // a fabric mcast packet targeting tile_idx on the source chip lands at
+    // the matching tile_idx on every remote chip.
+    std::shared_ptr<tt::tt_metal::Buffer> stats_dram_buffer;
+    if (use_mux) {
+        const uint32_t stats_dram_num_tiles = num_workers * chunk_size_rows * args.ring_size;
+        const uint32_t stats_dram_size_bytes = stats_dram_num_tiles * fp32_tile_size;
+        tt::tt_metal::InterleavedBufferConfig stats_dram_config{
+            .device = device,
+            .size = stats_dram_size_bytes,
+            .page_size = fp32_tile_size,
+            .buffer_type = tt::tt_metal::BufferType::DRAM};
+        stats_dram_buffer = tt::tt_metal::CreateBuffer(stats_dram_config);
+    }
+
+    // ------------------------------------------------------------------------
     // CB allocations (on worker cores)
     // ------------------------------------------------------------------------
     constexpr uint32_t input_cb_id = tt::CBIndex::c_0;
@@ -461,6 +490,8 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
             *mux_kernel_config,
             writer_compile_args);
         TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
+        // Persistent DRAM stats buffer accessor args (Phase 1).
+        TensorAccessorArgs(stats_dram_buffer.get()).append_to(writer_compile_args);
 
         writer_kernel_id = CreateKernel(
             program,
@@ -639,6 +670,10 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
             const uint32_t channel_id_in_link = i / num_links_eff;
             const bool is_term_master_of_link = (channel_id_in_link == 0);
             writer_rt_args.push_back(out_ready_sem_bank_addr);
+            // Persistent DRAM stats buffer address + this worker's base
+            // tile-index in it (worker i owns tiles [i*chunk*ring, (i+1)*chunk*ring)).
+            writer_rt_args.push_back(stats_dram_buffer->address());
+            writer_rt_args.push_back(i * chunk_size_rows * args.ring_size);
             ttnn::ccl::fabric_mux_connection_rt_args(
                 /*mux_connection_valid=*/fwd_mux_valid,
                 /*is_termination_master=*/is_term_master_of_link,
@@ -691,6 +726,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
             .writer_kernel_ids = {writer_kernel_id},
             .compute_kernel_ids = {compute_kernel_id},
             .cores = worker_cores,
+            .stats_dram_buffer = std::move(stats_dram_buffer),
         }};
 }
 
