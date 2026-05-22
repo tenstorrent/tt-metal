@@ -110,8 +110,18 @@ def get_activation_mem_config(args: Devstral2Args, mode: str, mesh_device) -> tt
 
     Width-sharded decode residuals match tt_transformers but conflict with our
     height-sharded Q/K/V heads (fused cache update needs non-overlapping shard grids).
+
+    On Blackhole, long prefill sequences (≥1024 tokens) cause intermediate L1 interleaved
+    tensors to land at addresses that overlap with the statically-allocated circular buffer
+    region of large matmul programs (CB ends ~1.15 MB, buffer lands ~735 KB). Routing prefill
+    activations through DRAM on BH eliminates this clash at the cost of slightly lower prefill
+    bandwidth; decode stays in L1 for performance.
+
+    ``Devstral2Args.prefill_activations_dram`` forces DRAM prefill on any mesh (e.g. agent demo).
     """
-    _ = (args, mode, mesh_device)
+    if mode == "prefill" and (args.prefill_activations_dram or is_blackhole_mesh(mesh_device)):
+        return ttnn.DRAM_MEMORY_CONFIG
+    _ = mode
     return ttnn.L1_MEMORY_CONFIG
 
 

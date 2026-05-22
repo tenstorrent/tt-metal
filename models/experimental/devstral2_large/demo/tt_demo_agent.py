@@ -3,13 +3,12 @@
 
 """Text-only Tenstorrent agent demo for Devstral-2-123B (Ministral3).
 
-Adapted from ``models/experimental/devstral2_small/demo/tt_demo_agent.py`` with all
-Pixtral / vision plumbing removed — Devstral-2-large has no image path. Same
-interactive agent tools and chat loop, but each turn runs:
+Mirrors ``models/experimental/devstral2_small/demo/tt_demo_agent.py``:
 
-  * one full TT prefill of the current chat history (non-traced, rebuilds KV cache), then
-  * **untraced** single-token decode steps (no decode trace — traced decode + large
-    ``max_seq_len`` exhaust Blackhole L1 and cause matmul circular-buffer clashes).
+  * one full TT prefill of the current chat history (untraced, rebuilds KV cache;
+    compiled on demand at the tile-aligned prompt length), then
+  * untraced single-token decode steps via persistent ``(token, current_pos)``
+    device buffers (programs are cached after first compile).
 
 Sampling is CPU-side (argmax for greedy, multinomial otherwise) on the column-parallel
 ``lm_head`` output, because :class:`TtMinistral3ForCausalLM` already returns logits.
@@ -54,7 +53,6 @@ from models.experimental.devstral2_large.tests._devstral_weights import (
 from models.experimental.devstral2_large.tt.model_args import (
     DEVSTRAL2_LARGE_L1_SMALL_SIZE,
     Devstral2Args,
-    is_blackhole_mesh,
 )
 from models.experimental.devstral2_large.tt.tt_ministral3_model import (
     TtMinistral3ForCausalLM,
@@ -74,12 +72,33 @@ DEFAULT_AGENT_RULES = """
 Tools: terminal/bash, read_file, write_file, search_replace, grep, web_search, web_fetch,
 todo, ask_user_question, load_skill, inspect_codebase, delegate_task.
 
-On a tool turn emit only:
+On a tool turn emit only one tool call, using either format:
 <tool_call>
 {"name":"<tool>","arguments":{...}}
 </tool_call>
+or Devstral native: <tool>{"path":"...","content":"..."}  (use "path", not "file_path", for files).
+Always close all JSON braces (e.g. two ``}`` for name+arguments). Keep terminal commands short.
+If the user asks to create code and run/demo it, call write_file then terminal before plain text.
 (Closing </tool_call> is optional.) After <tool_result>...</tool_result> send another tool call or plain text.
 """
+
+_KNOWN_TOOL_NAMES = frozenset(
+    {
+        "terminal",
+        "bash",
+        "read_file",
+        "write_file",
+        "search_replace",
+        "grep",
+        "web_search",
+        "web_fetch",
+        "todo",
+        "ask_user_question",
+        "load_skill",
+        "inspect_codebase",
+        "delegate_task",
+    }
+)
 
 
 @dataclass
@@ -102,13 +121,20 @@ class AgentState:
 
 
 def _extract_balanced_json_object(text: str, start: int) -> Optional[Tuple[str, int]]:
-    """Return (json substring, index after closing brace) when ``text[start]`` is ``{``."""
+    """Return (json substring, index after closing brace) when ``text[start]`` is ``{``.
+
+    Stops at ``</tool_call>`` if present. When the model truncates before the outer
+    ``}`` (common on long ``terminal`` commands), append missing closing braces so
+    ``json.loads`` can still succeed.
+    """
     if start >= len(text) or text[start] != "{":
         return None
+    close_tag = text.find("</tool_call>", start)
+    limit = close_tag if close_tag != -1 else len(text)
     depth = 0
     in_string = False
     escape = False
-    for i in range(start, len(text)):
+    for i in range(start, limit):
         ch = text[i]
         if in_string:
             if escape:
@@ -126,17 +152,38 @@ def _extract_balanced_json_object(text: str, start: int) -> Optional[Tuple[str, 
             depth -= 1
             if depth == 0:
                 return text[start : i + 1], i + 1
+    if depth > 0 and not in_string:
+        repaired = text[start:limit].strip() + ("}" * depth)
+        return repaired, limit
     return None
 
 
-def parse_tool_call(text: str) -> Optional[Dict[str, Any]]:
-    """Parse the first ``<tool_call>{...}</tool_call>`` envelope.
+def _normalize_tool_args(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    """Map Devstral-native argument names to what ``execute_tool_call`` expects."""
+    out = dict(args)
+    if name in ("write_file", "read_file", "search_replace") and "path" not in out and "file_path" in out:
+        out["path"] = out.pop("file_path")
+    return out
 
-    The model often omits ``</tool_call>`` or truncates before it (especially on
-    ``write_file`` with long ``content``). The old non-greedy-regex parser then
-    failed entirely and the tool was never executed. We locate ``<tool_call>`` and
-    brace-balance the JSON object instead; a closing XML tag is optional.
-    """
+
+def _coerce_tool_payload(name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize XML or native Devstral payloads to ``{name, arguments}``."""
+    if "name" in payload:
+        tool_name = str(payload["name"])
+        raw_args = payload.get("arguments", payload)
+    else:
+        tool_name = name
+        raw_args = payload
+    if not isinstance(raw_args, dict):
+        raw_args = {}
+    else:
+        raw_args = dict(raw_args)
+        raw_args.pop("name", None)
+    return {"name": tool_name, "arguments": _normalize_tool_args(tool_name, raw_args)}
+
+
+def _parse_xml_tool_call(text: str) -> Optional[Dict[str, Any]]:
+    """Parse ``<tool_call>{...}</tool_call>`` (closing tag optional)."""
     marker = "<tool_call>"
     idx = text.find(marker)
     if idx == -1:
@@ -154,7 +201,46 @@ def parse_tool_call(text: str) -> Optional[Dict[str, Any]]:
         return None
     if not isinstance(payload, dict) or "name" not in payload:
         return None
-    return payload
+    return _coerce_tool_payload(str(payload["name"]), payload)
+
+
+def _parse_devstral_native_tool_call(text: str) -> Optional[Dict[str, Any]]:
+    """Parse ``write_file{...}`` / ``grep{...}`` style calls (no XML wrapper)."""
+    best_idx: Optional[int] = None
+    best: Optional[Dict[str, Any]] = None
+    for tool in _KNOWN_TOOL_NAMES:
+        needle = f"{tool}{{"
+        idx = text.find(needle)
+        if idx == -1:
+            continue
+        pos = idx + len(tool)
+        extracted = _extract_balanced_json_object(text, pos)
+        if extracted is None:
+            continue
+        json_str, _ = extracted
+        try:
+            payload = json.loads(json_str)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        if best_idx is None or idx < best_idx:
+            best_idx = idx
+            best = _coerce_tool_payload(tool, payload)
+    return best
+
+
+def parse_tool_call(text: str) -> Optional[Dict[str, Any]]:
+    """Parse the first tool call from assistant text.
+
+    Supports:
+      * ``<tool_call>{"name":...,"arguments":{...}}</tool_call>`` (demo protocol)
+      * Devstral native ``tool_name{...}`` (what the HF model often emits)
+
+    Brace-balanced JSON extraction handles truncated ``</tool_call>`` and long
+    ``write_file`` content strings.
+    """
+    return _parse_xml_tool_call(text) or _parse_devstral_native_tool_call(text)
 
 
 def _limit_text(text: str, max_chars: int = 12000) -> str:
@@ -195,7 +281,11 @@ def run_shell(command: str, workspace_root: str, timeout_sec: int) -> Dict[str, 
             "output": _limit_text(output),
         }
     except subprocess.TimeoutExpired as exc:
-        partial = ((exc.stdout or "") + ("\n" if exc.stdout and exc.stderr else "") + (exc.stderr or "")).strip()
+        # TimeoutExpired attaches raw bytes even when text=True was passed to run().
+        def _s(o: object) -> str:
+            return o.decode("utf-8", errors="replace") if isinstance(o, bytes) else (o or "")
+
+        partial = (_s(exc.stdout) + ("\n" if exc.stdout and exc.stderr else "") + _s(exc.stderr)).strip()
         return {
             "ok": False,
             "exit_code": None,
@@ -206,9 +296,13 @@ def run_shell(command: str, workspace_root: str, timeout_sec: int) -> Dict[str, 
         return {"ok": False, "exit_code": None, "output": "", "error": str(exc)}
 
 
+def _tool_path_arg(args: Dict[str, Any]) -> str:
+    return str(args.get("path") or args.get("file_path") or "")
+
+
 def tool_read_file(args: Dict[str, Any], config: ChatConfig) -> Dict[str, Any]:
     try:
-        path = _resolve_workspace_path(config.workspace_root, str(args.get("path", "")))
+        path = _resolve_workspace_path(config.workspace_root, _tool_path_arg(args))
         offset = int(args.get("offset", 1))
         limit = int(args.get("limit", 200))
         lines = path.read_text(encoding="utf-8").splitlines()
@@ -222,7 +316,7 @@ def tool_read_file(args: Dict[str, Any], config: ChatConfig) -> Dict[str, Any]:
 
 def tool_write_file(args: Dict[str, Any], config: ChatConfig) -> Dict[str, Any]:
     try:
-        path = _resolve_workspace_path(config.workspace_root, str(args.get("path", "")))
+        path = _resolve_workspace_path(config.workspace_root, _tool_path_arg(args))
         content = str(args.get("content", ""))
         append = bool(args.get("append", False))
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -236,7 +330,7 @@ def tool_write_file(args: Dict[str, Any], config: ChatConfig) -> Dict[str, Any]:
 
 def tool_search_replace(args: Dict[str, Any], config: ChatConfig) -> Dict[str, Any]:
     try:
-        path = _resolve_workspace_path(config.workspace_root, str(args.get("path", "")))
+        path = _resolve_workspace_path(config.workspace_root, _tool_path_arg(args))
         search = str(args.get("search", ""))
         replace = str(args.get("replace", ""))
         max_replacements = int(args.get("max_replacements", 0))
@@ -426,12 +520,7 @@ def execute_tool_call(tool_call: Dict[str, Any], config: ChatConfig, state: Agen
 # ───────────────────────────── TT runtime (text-only) ─────────────────────────
 
 # Map of friendly --mesh-device names to (rows, cols) — matches text_demo.py.
-# KV/RoPE cap on BH (DRAM KV is fine; RoPE tables sit in L1). Prefill uses separate buckets
-# below — never run prefill at full max_seq_len (RMSNorm L1 activations OOM ~84MB at 3584).
-_BH_AGENT_MAX_SEQ_LEN = 2048
-
-# Fixed prefill lengths compiled once at startup (limits matmul program count → no L1 CB clash).
-_PREFILL_BUCKETS: Tuple[int, ...] = (1024, 1536, 2048)
+# Prefill and decode are compiled on demand (no trace capture).
 
 _MESH_SHAPES: Dict[str, Tuple[int, int]] = {
     "N150": (1, 1),
@@ -456,6 +545,7 @@ class TTAgentConfig(ChatConfig):
     max_seq_len: Optional[int] = None
     max_context_tokens: int = 2048
     seed: Optional[int] = None
+    prefill_activations_dram: bool = True
 
 
 @dataclass
@@ -468,14 +558,9 @@ class TtAgentRuntime:
     pad_token_id: int
     eos_ids: List[int]
     cfg: TTAgentConfig
-    # Persistent decode input buffers + lazily captured trace (graph is prompt-independent;
-    # KV cache contents differ per turn but the captured graph is reused session-wide).
+    # Persistent decode input buffers (reused each decode step).
     decode_tok_dev: Optional[ttnn.Tensor] = None
     decode_pos_dev: Optional[ttnn.Tensor] = None
-    decode_trace_id: Optional[int] = None
-    decode_trace_logits: Optional[ttnn.Tensor] = None
-    # Largest prefill bucket that compiled at startup (chat prompts must fit in this).
-    max_prefill_bucket: int = 1024
 
 
 def _set_fabric_1d_or_warn(enabled: bool) -> bool:
@@ -495,12 +580,12 @@ def _open_mesh(mesh_name: str) -> Tuple[ttnn.MeshDevice, bool]:
     if shape is None:
         raise ValueError(f"Unknown --mesh-device {mesh_name!r}. Supported: {sorted(_MESH_SHAPES.keys())}")
     rows, cols = shape
-    fabric_set = _set_fabric_1d_or_warn(enabled=(rows * cols > 1))
+    is_multichip = rows * cols > 1
+    fabric_set = _set_fabric_1d_or_warn(enabled=is_multichip)
     mesh_device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(rows, cols),
         l1_small_size=DEVSTRAL2_LARGE_L1_SMALL_SIZE,
-        trace_region_size=30_000_000,
-        num_command_queues=1,
+        num_command_queues=2 if is_multichip else 1,
     )
     return mesh_device, fabric_set
 
@@ -549,7 +634,8 @@ def _count_agent_system_tokens(tokenizer: Any, config: TTAgentConfig) -> int:
 
 
 def _resolve_agent_max_seq_len(tokenizer: Any, config: TTAgentConfig, mesh_device: ttnn.MeshDevice) -> int:
-    """Size KV + RoPE like ``text_demo`` (tight budget), not an oversized 8k+2048 default."""
+    """Size KV + RoPE from system + max_context + max_new + margin (mirrors text_demo)."""
+    _ = mesh_device  # BH-specific cap removed; prefill activations are routed through DRAM (mem_config).
     system_tokens = _count_agent_system_tokens(tokenizer, config)
     reserve = system_tokens + int(config.max_new_tokens) + 256
     need = reserve + int(config.max_context_tokens)
@@ -560,14 +646,6 @@ def _resolve_agent_max_seq_len(tokenizer: Any, config: TTAgentConfig, mesh_devic
     if max_seq_len < need:
         logger.warning(f"--max-seq-len {max_seq_len} < need {need}; bumping to {_round_up(need, 512)}.")
         max_seq_len = _round_up(need, 512)
-
-    if is_blackhole_mesh(mesh_device) and max_seq_len > _BH_AGENT_MAX_SEQ_LEN:
-        logger.warning(
-            f"Capping max_seq_len {max_seq_len} -> {_BH_AGENT_MAX_SEQ_LEN} for agent L1 on Blackhole "
-            "(RoPE tables are in L1; very large max_seq_len causes matmul CB clashes). "
-            "Pass --max-seq-len explicitly to override."
-        )
-        max_seq_len = _BH_AGENT_MAX_SEQ_LEN
 
     user_budget = max_seq_len - reserve
     if config.max_context_tokens > user_budget:
@@ -582,46 +660,6 @@ def _resolve_agent_max_seq_len(tokenizer: Any, config: TTAgentConfig, mesh_devic
         f"(system ~{system_tokens}, user/turn cap {config.max_context_tokens})."
     )
     return max_seq_len
-
-
-def _select_prefill_bucket(prompt_len: int, max_bucket: int) -> int:
-    """Smallest startup-compiled bucket that fits ``prompt_len`` (32-aligned)."""
-    capped = [b for b in _PREFILL_BUCKETS if b <= max_bucket]
-    if not capped:
-        return max(_round_up(prompt_len, 32), 32)
-    for bucket in capped:
-        if bucket >= prompt_len:
-            return bucket
-    return capped[-1]
-
-
-def _warmup_prefill_buckets(rt: TtAgentRuntime) -> int:
-    """Compile each prefill bucket once (with decode buffers already allocated)."""
-    pad_id = int(rt.pad_token_id)
-    last_ok = 0
-    buckets = [b for b in _PREFILL_BUCKETS if b <= int(rt.args.max_seq_len)]
-    logger.info(f"Pre-compiling agent prefill buckets {buckets}...")
-    for bucket in buckets:
-        ids = torch.full((1, bucket), pad_id, dtype=torch.long)
-        dev_ids = _input_ids_to_tt(ids, rt.mesh_device)
-        try:
-            tt_out = rt.model(dev_ids, mode="prefill", start_pos=0)
-            ttnn.synchronize_device(rt.mesh_device)
-            tt_out.deallocate(True)
-            last_ok = bucket
-            logger.info(f"  prefill bucket {bucket} OK")
-        except Exception as exc:  # noqa: BLE001
-            first_line = str(exc).splitlines()[0] if str(exc) else type(exc).__name__
-            logger.warning(
-                f"  prefill bucket {bucket} failed: {first_line}; " f"chat prefill capped at {last_ok or 'none'}."
-            )
-            break
-        finally:
-            try:
-                dev_ids.deallocate(True)
-            except Exception:  # noqa: BLE001
-                pass
-    return last_ok
 
 
 def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
@@ -649,7 +687,10 @@ def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
             mesh_shape=tuple(mesh_device.shape),
             max_seq_len=max_seq_len,
             max_batch_size=1,
+            prefill_activations_dram=config.prefill_activations_dram,
         )
+        if config.prefill_activations_dram:
+            logger.info("Prefill activations: DRAM (decode stays L1).")
 
         base_keys = model_prefill_weight_keys(num_layers)
         want_lm_head = not args.tie_word_embeddings
@@ -683,21 +724,7 @@ def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
             decode_tok_dev=decode_tok_dev,
             decode_pos_dev=decode_pos_dev,
         )
-        runtime.max_prefill_bucket = _warmup_prefill_buckets(runtime)
-        if runtime.max_prefill_bucket <= 0:
-            raise RuntimeError(
-                "No agent prefill bucket compiled on this device. " "Try a smaller --max-seq-len or fewer layers."
-            )
-        system_tokens = _count_agent_system_tokens(tokenizer, config)
-        if system_tokens > runtime.max_prefill_bucket:
-            raise RuntimeError(
-                f"System prompt is ~{system_tokens} tokens but largest prefill bucket is "
-                f"{runtime.max_prefill_bucket}. Shorten --system-prompt / DEFAULT_AGENT_RULES."
-            )
-        logger.info(
-            f"Chat prefill cap: {runtime.max_prefill_bucket} tokens per turn "
-            f"(system ~{system_tokens}; use /clear when history grows)."
-        )
+        # Prefill and decode compile on demand; TTNN caches programs after first use.
         return runtime
     except Exception:
         _close_mesh(mesh_device, fabric_was_set)
@@ -737,13 +764,8 @@ def _sample_next(logits_row: torch.Tensor, do_sample: bool, temperature: float, 
     return int(torch.multinomial(probs, num_samples=1).item())
 
 
-def _decode_one_token_untraced(
-    rt: TtAgentRuntime,
-    token_id: int,
-    pos: int,
-    config: TTAgentConfig,
-) -> int:
-    """Single decode step without TTNN trace (stable for multi-turn agent on BH)."""
+def _write_decode_inputs(rt: TtAgentRuntime, token_id: int, pos: int) -> None:
+    """Refresh the persistent ``(token, current_pos)`` device buffers for one decode step."""
     ttnn.copy_host_to_device_tensor(
         _input_ids_host(torch.tensor([[token_id]], dtype=torch.long), rt.mesh_device),
         rt.decode_tok_dev,
@@ -752,28 +774,22 @@ def _decode_one_token_untraced(
         _current_pos_host(torch.tensor([pos], dtype=torch.long), rt.mesh_device),
         rt.decode_pos_dev,
     )
+
+
+def _decode_one_token(rt: TtAgentRuntime, token_id: int, pos: int, config: TTAgentConfig) -> int:
+    """Single untraced decode step (host buffer refresh + forward + sample)."""
+    _write_decode_inputs(rt, token_id, pos)
     tt_out = rt.model(rt.decode_tok_dev, mode="decode", current_pos=rt.decode_pos_dev)
     ttnn.synchronize_device(rt.mesh_device)
     logits_torch = _logits_to_torch(tt_out, rt.mesh_device, rt.args.vocab_size)
-    tt_out.deallocate(True)
-    return _sample_next(
+    next_token = _sample_next(
         logits_torch[0],
         do_sample=bool(config.do_sample),
         temperature=float(config.temperature),
         top_p=float(config.top_p),
     )
-
-
-def _release_decode_trace(rt: TtAgentRuntime) -> None:
-    if rt.decode_trace_id is not None:
-        ttnn.release_trace(rt.mesh_device, rt.decode_trace_id)
-        rt.decode_trace_id = None
-    if rt.decode_trace_logits is not None:
-        try:
-            rt.decode_trace_logits.deallocate(True)
-        except Exception:  # noqa: BLE001
-            pass
-        rt.decode_trace_logits = None
+    tt_out.deallocate(True)
+    return next_token
 
 
 def generate_assistant_text_tt(
@@ -784,25 +800,15 @@ def generate_assistant_text_tt(
     """One turn: full TT prefill of the chat history, then untraced decode steps."""
     input_ids = _tokenize_messages(rt, messages)
     prompt_len = int(input_ids.shape[1])
-    if prompt_len > rt.max_prefill_bucket:
-        raise RuntimeError(
-            f"Prompt is {prompt_len} tokens; exceeds largest compiled prefill bucket "
-            f"({rt.max_prefill_bucket}). Use /clear to reset chat history."
-        )
-    max_prompt_tokens = int(rt.args.max_seq_len) - int(config.max_new_tokens)
-    if prompt_len > max_prompt_tokens:
-        raise RuntimeError(
-            f"Prompt is {prompt_len} tokens; exceeds KV budget ({max_prompt_tokens} for "
-            f"max_seq_len={rt.args.max_seq_len}). Use /clear or restart with --max-seq-len."
-        )
-
-    prefill_len = _select_prefill_bucket(prompt_len, rt.max_prefill_bucket)
     if prompt_len + config.max_new_tokens > int(rt.args.max_seq_len):
         raise RuntimeError(
             f"prompt({prompt_len}) + max_new_tokens({config.max_new_tokens}) exceeds "
             f"max_seq_len={rt.args.max_seq_len}. Use /clear or restart with larger --max-seq-len."
         )
 
+    # Prefill is compiled on demand at the tile-aligned prompt length (TTNN caches the
+    # program once built — see also text_demo.py which uses the same padding rule).
+    prefill_len = max(_round_up(prompt_len, 32), 32)
     pad_id = rt.pad_token_id
     input_ids_padded = torch.full((prefill_len,), int(pad_id), dtype=torch.long)
     input_ids_padded[:prompt_len] = input_ids[0]
@@ -811,7 +817,7 @@ def generate_assistant_text_tt(
     if config.seed is not None:
         torch.manual_seed(int(config.seed))
 
-    # ── Prefill at a fixed bucket size (reuses compiled programs, L1-safe length) ──
+    # ── Prefill at the actual (tile-aligned) prompt length ────────────────────
     prefill_tokens_dev = _input_ids_to_tt(input_ids_padded, rt.mesh_device)
     try:
         tt_out = rt.model(prefill_tokens_dev, mode="prefill", start_pos=0)
@@ -833,9 +839,9 @@ def generate_assistant_text_tt(
     if next_token in rt.eos_ids or config.max_new_tokens <= 1:
         return rt.tokenizer.decode(generated, skip_special_tokens=True).strip()
 
-    # ── Decode: untraced (avoids trace + oversized-RoPE L1 clashes on BH) ───
+    # ── Decode: untraced single-token steps ───────────────────────────────────
     for _ in range(1, config.max_new_tokens):
-        next_token = _decode_one_token_untraced(rt, next_token, current_pos, config)
+        next_token = _decode_one_token(rt, next_token, current_pos, config)
         if next_token in rt.eos_ids:
             break
         generated.append(next_token)
@@ -880,7 +886,6 @@ def chat_loop_tt(rt: TtAgentRuntime, config: TTAgentConfig) -> None:
         if user_input.lower() == "/clear":
             messages = [{"role": "system", "content": system_content}]
             state = AgentState()
-            _release_decode_trace(rt)
             print("Conversation history and todo state cleared.\n")
             continue
 
@@ -902,8 +907,14 @@ def chat_loop_tt(rt: TtAgentRuntime, config: TTAgentConfig) -> None:
             tool_call = parse_tool_call(assistant_text)
 
             if tool_call is None:
-                final_response = assistant_text
-                messages.append({"role": "assistant", "content": assistant_text})
+                if "<tool_call>" in assistant_text or any(f"{tool}{{" in assistant_text for tool in _KNOWN_TOOL_NAMES):
+                    final_response = (
+                        "I tried to run a tool but the tool-call JSON was incomplete. "
+                        "Please try again with a shorter command or use /clear."
+                    )
+                else:
+                    final_response = assistant_text
+                messages.append({"role": "assistant", "content": final_response})
                 break
 
             messages.append({"role": "assistant", "content": assistant_text})
@@ -991,7 +1002,7 @@ def parse_tt_args() -> TTAgentConfig:
         type=int,
         default=None,
         metavar="S",
-        help="KV/RoPE cap (default: system + max-context + max-new + 256, capped at 4096 on BH).",
+        help="KV/RoPE cap (default: system + max-context + max-new + 256, rounded up to 512).",
     )
     p.add_argument(
         "--max-context-tokens",
@@ -1001,6 +1012,12 @@ def parse_tt_args() -> TTAgentConfig:
         help="Max total prompt tokens per turn (includes the fixed system/tool rules message).",
     )
     p.add_argument("--seed", type=int, default=None)
+    p.add_argument(
+        "--prefill-dram",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Route prefill activations through DRAM (default: on). Use --no-prefill-dram for L1 prefill.",
+    )
 
     a = p.parse_args()
 
@@ -1020,6 +1037,7 @@ def parse_tt_args() -> TTAgentConfig:
         max_seq_len=a.max_seq_len,
         max_context_tokens=a.max_context_tokens,
         seed=a.seed,
+        prefill_activations_dram=a.prefill_dram,
     )
 
 
@@ -1031,19 +1049,16 @@ def main() -> None:
         chat_loop_tt(rt, config)
     finally:
         try:
-            _release_decode_trace(rt)
-        finally:
-            try:
-                if rt.decode_tok_dev is not None:
-                    rt.decode_tok_dev.deallocate(True)
-            except Exception:  # noqa: BLE001
-                pass
-            try:
-                if rt.decode_pos_dev is not None:
-                    rt.decode_pos_dev.deallocate(True)
-            except Exception:  # noqa: BLE001
-                pass
-            _close_mesh(rt.mesh_device, fabric_set)
+            if rt.decode_tok_dev is not None:
+                rt.decode_tok_dev.deallocate(True)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if rt.decode_pos_dev is not None:
+                rt.decode_pos_dev.deallocate(True)
+        except Exception:  # noqa: BLE001
+            pass
+        _close_mesh(rt.mesh_device, fabric_set)
 
 
 if __name__ == "__main__":

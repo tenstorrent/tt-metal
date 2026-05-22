@@ -356,6 +356,15 @@ class TtAttention:
 
         cos_q, sin_q, cos_k, sin_k = self.rotary_emb.get_prefill_tables(start_pos, S)
         q_heads, k_heads = self.rotary_emb.apply(q_heads, k_heads, cos_q, sin_q, cos_k, sin_k)
+        # Free the RoPE prefill slices immediately. They sit in L1 (sliced from L1 source tables)
+        # and would otherwise stay alive through SDPA + nlp_concat_heads + o_proj matmul,
+        # where a growing CB region eventually collides with their L1 address. For long contexts
+        # the four slices (each ``[1,1,seq_len,head_dim]``) add up to hundreds of KB of L1 per
+        # layer that the matmul validator sees as occupied data.
+        ttnn.deallocate(cos_q)
+        ttnn.deallocate(sin_q)
+        ttnn.deallocate(cos_k)
+        ttnn.deallocate(sin_k)
 
         # Write K/V into the cache for future decode steps. ``ttnn.fill_cache`` writes the entire
         # ``src`` tensor into the cache's ``user_id`` batch slot starting at position 0. Chunked
