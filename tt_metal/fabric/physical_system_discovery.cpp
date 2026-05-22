@@ -538,11 +538,16 @@ bool is_bh_galaxy_rev_c(tt::umd::ClusterDescriptor& cluster_desc) {
 }
 
 PortType resolve_port_type(const ASICDescriptor& asic_descriptor, uint8_t src_chan) {
-    auto board = tt::scaleout_tools::create_board(asic_descriptor.board_type);
-    return board
-        .get_port_for_asic_channel(
-            tt::scaleout_tools::AsicChannel{*asic_descriptor.asic_location, tt::scaleout_tools::ChanId{src_chan}})
-        .port_type;
+    try {
+        auto board = tt::scaleout_tools::create_board(asic_descriptor.board_type);
+        return board
+            .get_port_for_asic_channel(
+                tt::scaleout_tools::AsicChannel{*asic_descriptor.asic_location, tt::scaleout_tools::ChanId{src_chan}})
+            .port_type;
+    } catch (const std::runtime_error&) {
+        // Mock clusters and incomplete board maps may reference channels with no port mapping.
+        return PortType::TRACE;
+    }
 }
 
 }  // namespace
