@@ -765,6 +765,13 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                 }
             }
 
+            log_debug(
+                tt::LogFabric,
+                "Node-diff {}: {}/{} PGD groupings topology-matched MGD '{}'",
+                node_diff,
+                best_matches_topology.size(),
+                name_idx_pairs.size(),
+                mgd_grouping_info.name);
             if (best_matches_topology.empty()) {
                 continue;
             }

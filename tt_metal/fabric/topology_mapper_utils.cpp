@@ -558,12 +558,7 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
         !valid_groupings_map.at("MESH").empty(),
         "Internal error: Physical grouping descriptor was not able to find mesh groupings");
 
-    using GroupKey = size_t;
-
     // Find all possible mappings of mesh groupings to the PSD
-    std::vector<std::unordered_set<tt::tt_metal::AsicID>> groupings_by_index;
-    std::unordered_map<std::string, std::unordered_set<GroupKey>> mesh_type_to_index;
-    std::unordered_map<std::string, std::size_t> mesh_type_num_instances;
     std::unordered_map<std::string, PhysicalMultiMeshGraph> mesh_type_to_physical_graph;
     std::unordered_map<MeshId, std::vector<std::unordered_set<tt::tt_metal::AsicID>>> mesh_id_to_placed_groupings;
 
@@ -572,16 +567,6 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
         // Find all possible mappings of mesh groupings to the PSD
         const auto placed_groupings =
             physical_grouping_descriptor.find_all_in_psd(groupings, physical_system_descriptor);
-
-        // Count the number of instances of this mesh
-        mesh_type_num_instances[mesh_name] = mesh_graph_descriptor.instances_by_name(mesh_name).size();
-
-        // Add the groupings to the index
-        for (const auto& placed_grouping : placed_groupings) {
-            const GroupKey index = groupings_by_index.size();
-            groupings_by_index.push_back(placed_grouping);
-            mesh_type_to_index[mesh_name].insert(index);
-        }
 
         // Build a physical multi-mesh graph for this mesh; keep the same per-mesh-instance ASIC sets keyed by logical
         // MeshId (instance local_id) for later lookups without mesh descriptor name.
@@ -612,7 +597,8 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     }
 
     // For each mesh shape that's in the MGD
-    const auto [mgd_intermesh_mesh_level, _] = get_requested_intermesh_from_mgd(mesh_graph_descriptor);
+    const auto [mgd_intermesh_mesh_level, mgd_intermesh_ports] = get_requested_intermesh_from_mgd(mesh_graph_descriptor);
+    (void)mgd_intermesh_ports;
     std::unordered_map<std::string, AdjacencyGraph<MeshId>> mesh_to_logical_graph;
     // Per-mesh-descriptor lazy enumeration state. Solutions are pulled one at a time via session.next() and cached
     // here so the round-robin diagonal search below can revisit them without redoing solver work.
@@ -706,7 +692,7 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     // physical graph; that's the same set the previous implementation packed across.
     std::vector<std::string> mesh_order;
     mesh_order.reserve(mesh_enum_states.size());
-    for (const auto& [name, _state] : mesh_enum_states) {
+    for (const auto& [name, _mesh_state] : mesh_enum_states) {
         mesh_order.push_back(name);
     }
     std::sort(mesh_order.begin(), mesh_order.end());
@@ -765,6 +751,12 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
                 TT_FATAL(
                     di != asic_to_dense_index.end(), "ASIC from placement not found in PSD flat graph (dense index)");
                 const std::uint32_t i = di->second;
+                TT_FATAL(
+                    (i >> 6) < used_asic_word_count,
+                    "Dense ASIC index {} out of range for bitset of {} words ({} ASICs total)",
+                    i,
+                    used_asic_word_count,
+                    cluster_asic_count);
                 bits[i >> 6] |= (std::uint64_t{1} << (i & 63));
             }
         }
@@ -1001,6 +993,10 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
             std::vector<std::size_t>& order = try_order_per_depth[d];
             order.resize(hi);
             std::iota(order.begin(), order.end(), std::size_t{0});
+            // Sort by descending embedding size (larger mappings first), stable-tie-break by ascending raw
+            // arrival order. Preferring larger embeddings is a greedy heuristic: a solution that places
+            // more meshes onto the physical graph leaves fewer unoccupied ASICs and reduces the number of
+            // combinatorial branches the disjoint-packing search has to explore for subsequent descriptors.
             std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
                 if (s.embedding_sizes[a] != s.embedding_sizes[b]) {
                     return s.embedding_sizes[a] > s.embedding_sizes[b];
@@ -1053,7 +1049,7 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
         MeshId max_logical{0};
         for (size_t j = 0; j < mesh_order.size(); ++j) {
             const auto& mapping = mesh_enum_states.at(mesh_order[j]).solutions.at(chosen_index[j]).target_to_global;
-            for (const auto& [logical_mesh_id, _] : mapping) {
+            for (const auto& [logical_mesh_id, _physical_mesh_id] : mapping) {
                 if (logical_mesh_id.get() > max_logical.get()) {
                     max_logical = logical_mesh_id;
                 }
@@ -1078,6 +1074,9 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
                     logical_mesh_id.get());
                 const auto& asics = placed_groupings_for_mesh[physical_mesh_id.get()];
                 auto& slot = combined_mesh_groupings[logical_mesh_id.get()];
+                // Logical MeshId collisions across mesh types are guarded by the ASIC-level disjointness check
+                // above: each mesh type is placed on a disjoint ASIC set, so their logical MeshIds cannot map
+                // to the same physical grouping row. This union is therefore always correct.
                 slot.insert(asics.begin(), asics.end());
             }
         }
@@ -1085,7 +1084,21 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     }
 
     if (!found_disjoint_combination) {
-        TT_THROW("Topology mapper failed to find solution for mesh graph descriptors on this physical system");
+        std::string solution_counts;
+        for (std::size_t d = 0; d < n_meshes; ++d) {
+            if (d) {
+                solution_counts += ", ";
+            }
+            const MeshEnumState& s = *mesh_state_ptrs[d];
+            solution_counts +=
+                fmt::format("{}={}{}", mesh_order[d], s.solutions.size(), s.exhausted ? "(exhausted)" : "");
+        }
+        TT_THROW(
+            "Topology mapper failed to find disjoint placements for mesh descriptors [{}] on a system with {} ASICs. "
+            "Solution counts per mesh: [{}]",
+            fmt::join(mesh_order, ", "),
+            cluster_asic_count,
+            solution_counts);
     }
 
     return result;
