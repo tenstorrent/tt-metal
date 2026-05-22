@@ -314,7 +314,6 @@ class WanPipelineS2V(WanPipeline):
         height: int = 0,
         width: int = 0,
         num_frames: int = 81,
-        **_unused,
     ):
         device_configs = {}
         if ttnn.device.is_blackhole():
@@ -404,17 +403,6 @@ class WanPipelineS2V(WanPipeline):
             mesh_shape=tuple(self.mesh_device.shape),
             get_torch_state_dict=lambda: self.text_encoder.state_dict(),
         )
-
-    # No-op overrides — S2V loads text encoder / transformer / VAE once
-    # up-front via the *_aux helpers, suppressing the parent's per-step reloader.
-    def _prepare_text_encoder(self) -> None:
-        return None
-
-    def _prepare_transformer(self, idx: int) -> None:
-        return None
-
-    def _prepare_vae(self) -> None:
-        return None
 
     def _prepare_vae_aux(self) -> None:
         blocking_key = conv3d_blocking_hash(self.tt_vae)
@@ -587,6 +575,12 @@ class WanPipelineS2V(WanPipeline):
         audio_BLNF_full = aligned_LBC.unsqueeze(0).permute(0, 1, 3, 2)
         return audio_BLNF_full, int(num_repeat)
 
+    def _stage(self, name: str):
+        """Profiler context manager — ``nullcontext()`` when no profiler is set."""
+        if self._s2v_profiler is None:
+            return nullcontext()
+        return self._s2v_profiler(name, self._s2v_profiler_iteration)
+
     def _prepare_clip(
         self,
         *,
@@ -598,7 +592,6 @@ class WanPipelineS2V(WanPipeline):
         height: int,
         width: int,
         seed: int,
-        _stage,
     ) -> torch.Tensor:
         """Build transformer caches for one clip and return its noise latents
         (seed+clip_idx per speech2video.py:542).
@@ -611,7 +604,7 @@ class WanPipelineS2V(WanPipeline):
             1, self.vae.config.z_dim, self._LAT_TARGET_FRAMES, latent_h, latent_w, dtype=torch.float32
         )
 
-        with _stage(f"s2v_clip_{clip_idx}_prepare_audio_emb"):
+        with self._stage(f"s2v_clip_{clip_idx}_prepare_audio_emb"):
             self.transformer.prepare_audio_emb(
                 audio_clip,
                 motion_frames=(self._MOTION_FRAMES_PIXEL, self._LAT_MOTION_FRAMES),
@@ -619,7 +612,7 @@ class WanPipelineS2V(WanPipeline):
             )
 
         # cond_states_torch=None hits the transformer's WanPatchEmbed(zeros) shape cache.
-        with _stage(f"s2v_clip_{clip_idx}_prepare_cond_emb"):
+        with self._stage(f"s2v_clip_{clip_idx}_prepare_cond_emb"):
             self.transformer.prepare_cond_emb(
                 noisy_latents_torch=latents,
                 ref_latent_torch=ref_latent_torch,
@@ -729,7 +722,6 @@ class WanPipelineS2V(WanPipeline):
             },
             dtype=self.tt_vae.dtype,
         )
-        self._prepare_vae()
         tt_video_BCTHW, new_logical_h = self.tt_vae(tt_latents_BTHWC, logical_h, t_chunk_size=self.vae_t_chunk_size)
         concat_dims = [None, None]
         concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
@@ -783,12 +775,8 @@ class WanPipelineS2V(WanPipeline):
         self.transformer_states[0].guidance_scale = guidance_scale
         self.transformer_states[1].guidance_scale = guidance_scale if guidance_scale_2 is None else guidance_scale_2
 
-        def _stage(name: str):
-            return profiler(name, profiler_iteration) if profiler is not None else nullcontext()
-
         # 1. Text encode (clip-invariant — once across all clips).
-        with _stage("encoder"):
-            self._prepare_text_encoder()
+        with self._stage("encoder"):
             prompt_embeds, negative_prompt_embeds = self.encode_prompt(
                 prompt=prompt,
                 negative_prompt=negative_prompt,
@@ -800,15 +788,14 @@ class WanPipelineS2V(WanPipeline):
                 traced=traced,
             )
         ts = self.transformer_states[0]
-        self._prepare_transformer(0)
         ts.prompt_buffer = self.prepare_text_conditioning(ts.model, prompt_embeds, ts.prompt_buffer, traced)
         ts.negative_prompt_buffer = self.prepare_text_conditioning(
             ts.model, negative_prompt_embeds, ts.negative_prompt_buffer, traced
         )
 
-        with _stage("prepare_latents"):
+        with self._stage("prepare_latents"):
             # 2. Reference image VAE encode (once).
-            with _stage("s2v_vae_encode_ref"):
+            with self._stage("s2v_vae_encode_ref"):
                 # Stretch-resize via VideoProcessor (matches pipeline_wan_i2v).
                 ref_tensor = self.video_processor.preprocess(image_prompt, height=height, width=width).to(
                     "cpu", dtype=torch.float32
@@ -821,7 +808,7 @@ class WanPipelineS2V(WanPipeline):
             )
 
             # 3. Audio: wav2vec2 + bucket the whole file.
-            with _stage("s2v_wav2vec2"):
+            with self._stage("s2v_wav2vec2"):
                 audio_BLNF_full, num_repeat = self._prepare_audio_full(audio_prompt)
             # Caller can request fewer clips than audio supports, never more (speech2video.py:488-489).
             if num_clips is None:
@@ -862,7 +849,7 @@ class WanPipelineS2V(WanPipeline):
         clip_videos: list[torch.Tensor] = []
         for clip_idx in range(num_clips):
             drop_first_motion = clip_idx == 0
-            with _stage(f"s2v_clip_{clip_idx}_total"):
+            with self._stage(f"s2v_clip_{clip_idx}_total"):
                 audio_clip = audio_BLNF_full[
                     ..., clip_idx * self._INFER_FRAMES_PIXEL : (clip_idx + 1) * self._INFER_FRAMES_PIXEL
                 ]
@@ -875,17 +862,16 @@ class WanPipelineS2V(WanPipeline):
                     height=height,
                     width=width,
                     seed=seed,
-                    _stage=_stage,
                 )
 
-                with _stage(f"s2v_clip_{clip_idx}_denoise"):
+                with self._stage(f"s2v_clip_{clip_idx}_denoise"):
                     latents = self._denoise_clip(
                         latents_torch=latents,
                         num_inference_steps=num_inference_steps,
                         traced=traced,
                     )
 
-                with _stage(f"s2v_clip_{clip_idx}_vae_decode"):
+                with self._stage(f"s2v_clip_{clip_idx}_vae_decode"):
                     # Clip 0 prepends ref; subsequent clips prepend prev-clip motion latents.
                     if drop_first_motion:
                         prepend_for_decode = ref_latents_for_decode
@@ -924,7 +910,7 @@ class WanPipelineS2V(WanPipeline):
                             ],
                             dim=2,
                         )
-                    with _stage(f"s2v_clip_{clip_idx}_vae_encode_motion"):
+                    with self._stage(f"s2v_clip_{clip_idx}_vae_encode_motion"):
                         motion_latents_torch = self._encode_normalized(videos_last_frames)
 
                 clip_videos.append(image_BCTHW)
