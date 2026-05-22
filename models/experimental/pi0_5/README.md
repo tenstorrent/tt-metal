@@ -384,6 +384,97 @@ If your checkpoint uses different names, add a rename pass in `Pi0_5WeightLoader
 
 ---
 
+## Dtype mapping
+
+Per-stage map of weight / output / compute-config dtypes in the pi0.5 TTNN
+pipeline. The `Transitioned?` column flags ops that were moved from
+`bfloat16` to `bfloat8_b` during the bf8 conversion work. Two commits
+contributed (both on `sdawle/dvartanians/pi0.5_openpi_upstream`):
+
+- `8ef91d7fe60` — pi0.5 TTNN: bf8_b for SigLIP attention weights, VLM
+  expert QKV, and expert o_proj/MLP outputs.
+- `c0876acc212` — pi0.5 TTNN: bf8_b for SigLIP patch conv output and
+  the four pi0.5 suffix linear outputs.
+
+See `models/experimental/pi0_5/tt/{ttnn_siglip,ttnn_paligemma,ttnn_gemma,ttnn_suffix,ttnn_pi0_5_model}.py` for the live code.
+
+### Inputs (`ttnn_pi0_5_model.py`)
+
+| Tensor | Dtype | Transitioned? |
+|---|---|---|
+| Images / state / x_t (initial noise) | `bfloat16` | |
+| Lang tokens | `uint32` | |
+| Pre-computed `adarms_cond` + per-(step, layer) modulations | `bfloat16` | |
+
+### SigLIP encoder — `ttnn_siglip.py` · 27 layers
+
+| Op | Weight | Output | Transitioned? |
+|---|---|---|---|
+| Patch conv weight | `bfloat16` | — | |
+| Patch conv output | — | `bfloat8_b` | `c0876acc212` (line 326) |
+| Attention QKV (fused) weight | `bfloat8_b` | — | `8ef91d7fe60` (lines 410/413/416) |
+| Attention QKV output | — | `bfloat8_b` | |
+| Attention `out_proj` weight | `bfloat8_b` | — | `8ef91d7fe60` (line 438) |
+| Attention `out_proj` output | — | `bfloat8_b` | |
+| MLP `fc1` / `fc2` weight | `bfloat8_b` | `bfloat8_b` | |
+| Attention / MLP biases | `bfloat16` | — | |
+| Compute kernel | HiFi2, `fp32_dest_acc_en=True`, `packer_l1_acc=True` | | |
+
+### PaliGemma VLM prefill — Gemma-2B · 18 blocks · w=2048
+
+| Op | Weight | Output | Transitioned? |
+|---|---|---|---|
+| `embed_tokens` / RMSNorm / RoPE cos+sin | `bfloat16` | — | |
+| QKV fused | `bfloat8_b` | `bfloat8_b` | |
+| KV cache | `bfloat16` | — | intentional (hot-read path) |
+| `o_proj` | `bfloat8_b` | `bfloat8_b` | `8ef91d7fe60` (lines 617/626; shared `GemmaAttentionTTNN`) |
+| MLP gate/up/down | `bfloat8_b` | `bfloat8_b` | `8ef91d7fe60` (line 818; shared `GemmaMLPTTNN`) |
+| Compute kernel | HiFi2, `fp32_dest_acc_en=False`, `packer_l1_acc=True` | | |
+
+### Action expert with adaRMS — Gemma-300M · 18 blocks · w=1024
+
+| Op | Weight | Output | Transitioned? |
+|---|---|---|---|
+| QKV fused | `bfloat8_b` | `bfloat8_b` | `8ef91d7fe60` (ttnn_paligemma.py lines 262/268/274) |
+| `o_proj` | `bfloat8_b` | `bfloat8_b` | `8ef91d7fe60` (shared with VLM) |
+| MLP gate/up/down | `bfloat8_b` | `bfloat8_b` | `8ef91d7fe60` (shared with VLM) |
+| adaRMS modulation (precomputed scale/shift/gate per step,layer) | `bfloat16` | `bfloat16` | |
+| Sharded RMSNorm compute kernel | HiFi2, `fp32_dest_acc_en=False`, `packer_l1_acc=True` (DST budget) | | |
+
+### Suffix embedding — `ttnn_suffix.py`
+
+| Op | Weight | Output | Transitioned? |
+|---|---|---|---|
+| `action_in_proj` | `bfloat8_b` | `bfloat8_b` | `c0876acc212` (output dtype) |
+| `time_mlp_in` | `bfloat8_b` | `bfloat8_b` | `c0876acc212` (output dtype) |
+| `time_mlp_out` | `bfloat8_b` | `bfloat8_b` | `c0876acc212` (output dtype) |
+| `action_out_proj` | `bfloat8_b` | `bfloat8_b` | `c0876acc212` (output dtype) |
+| sincos(t) | — | `float32` on device → cast to `bfloat16` | |
+| `adarms_cond` (final) | — | `bfloat16` | |
+
+### Denoise loop — `ttnn_pi0_5_model.py::sample_actions`
+
+| Item | Dtype | Transitioned? |
+|---|---|---|
+| In-loop activations / x_t | `bfloat16` | (intentionally fragile to bf8 — opt-in fp32 via `PI0_DENOISE_FP32=1`) |
+| `dt` | Python float (velocity scaled via `ttnn.mul(velocity, dt)`) | |
+
+### Output
+
+| Step | Dtype | Transitioned? |
+|---|---|---|
+| Final x_t | `bfloat16` | |
+| Sliced to logical `action_horizon` → `ttnn.to_torch` | host tensor | |
+
+### Notes
+
+- The previous `Expert QKV bf16 / VLM QKV bf8_b` and `SigLIP attn bf16 weights / MLP bf8_b weights` asymmetries are gone — both are now uniformly `bfloat8_b` after `8ef91d7fe60`.
+- KV cache remains `bfloat16` intentionally; it is read on every expert step and the precision was preserved as a hot-path concession.
+- `fp32_dest_acc_en` is `True` for SigLIP / SDPA and `False` for Gemma matmuls + sharded LN. The sharded LN needs the DST budget for the 8×2 sharding.
+- More bf8 is not strictly better — see the LIBERO regression discussion in `[[pi0_5 accuracy levers]]`. Always re-run a LIBERO sweep before committing dtype flips, not just PCC.
+
+---
+
 ## License
 
 SPDX-FileCopyrightText: 2025 Tenstorrent USA, Inc.
