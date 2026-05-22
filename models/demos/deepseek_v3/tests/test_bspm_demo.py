@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """BSPM vs uniform-BFP4 output comparison for the deepseek_v3 demo (5 layers).
