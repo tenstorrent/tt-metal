@@ -11,7 +11,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_params.hpp>
 
-namespace tt::tt_metal::experimental::metal2_host_api {
+namespace tt::tt_metal::experimental {
 
 //------------------------------------------------
 // Temporary Metal 2.0 APIs
@@ -57,7 +57,7 @@ ProgramRunParamsView& GetProgramRunParamsView(Program& program);
 // Useful? Might want to expose a const view for debug/test use?
 // ProgramRunParamsConstView GetProgramRunParamsConstView(const Program& program);
 
-}  // namespace tt::tt_metal::experimental::metal2_host_api
+}  // namespace tt::tt_metal::experimental
 
 // The code below is not compiled!
 // This is a placeholder for the "post-experimental" desired Program object semantics.

@@ -209,12 +209,12 @@ void run_single_dfb_program(
             out_tensor->mesh_buffer().get_reference_buffer()->size());
     }
 
-    const auto consumer_pattern = is_all ? experimental::metal2_host_api::DFBAccessPattern::ALL
-                                         : experimental::metal2_host_api::DFBAccessPattern::STRIDED;
+    const auto consumer_pattern =
+        is_all ? experimental::DFBAccessPattern::ALL : experimental::DFBAccessPattern::STRIDED;
 
     // enable_implicit_sync: true  -> default disable_implicit_sync = false (implicit sync ON)
     // enable_implicit_sync: false -> disable_implicit_sync = true
-    experimental::metal2_host_api::DataflowBufferSpec dfb_spec{
+    experimental::DataflowBufferSpec dfb_spec{
         .unique_id = DFB_NAME,
         .entry_size = entry_size,
         .num_entries = dfb_config.num_entries,
@@ -224,30 +224,28 @@ void run_single_dfb_program(
 
     // DM kernel configs supply both Gen1 (BRISC for producer / NCRISC for consumer) and
     // Gen2 (auto-assigned) variants so the same KernelSpec runs on WH/BH and Quasar.
-    const experimental::metal2_host_api::DataMovementConfiguration dm_producer_cfg{
+    const experimental::DataMovementConfiguration dm_producer_cfg{
         .gen1 =
-            experimental::metal2_host_api::DataMovementConfiguration::Gen1{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0},
-        .gen2 = experimental::metal2_host_api::DataMovementConfiguration::Gen2{},
+            experimental::DataMovementConfiguration::Gen1{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0},
+        .gen2 = experimental::DataMovementConfiguration::Gen2{},
     };
-    const experimental::metal2_host_api::DataMovementConfiguration dm_consumer_cfg{
+    const experimental::DataMovementConfiguration dm_consumer_cfg{
         .gen1 =
-            experimental::metal2_host_api::DataMovementConfiguration::Gen1{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1},
-        .gen2 = experimental::metal2_host_api::DataMovementConfiguration::Gen2{},
+            experimental::DataMovementConfiguration::Gen1{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1},
+        .gen2 = experimental::DataMovementConfiguration::Gen2{},
     };
 
-    experimental::metal2_host_api::KernelSpec producer_spec;
+    experimental::KernelSpec producer_spec;
     if (producer_type == DFBPorCType::DM) {
-        producer_spec = experimental::metal2_host_api::KernelSpec{
+        producer_spec = experimental::KernelSpec{
             .unique_id = PRODUCER,
             .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp",
             .num_threads = static_cast<uint8_t>(dfb_config.num_producers),
             .dfb_bindings = {{
                 .dfb_spec_name = DFB_NAME,
                 .local_accessor_name = "out",
-                .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-                .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
+                .access_pattern = experimental::DFBAccessPattern::STRIDED,
             }},
             .tensor_bindings = {{
                 .tensor_parameter_name = IN_TENSOR,
@@ -263,31 +261,31 @@ void run_single_dfb_program(
             .config_spec = dm_producer_cfg,
         };
     } else {
-        producer_spec = experimental::metal2_host_api::KernelSpec{
+        producer_spec = experimental::KernelSpec{
             .unique_id = PRODUCER,
             .source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_producer.cpp",
             .num_threads = static_cast<uint8_t>(dfb_config.num_producers),
             .dfb_bindings = {{
                 .dfb_spec_name = DFB_NAME,
                 .local_accessor_name = "out",
-                .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-                .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
+                .access_pattern = experimental::DFBAccessPattern::STRIDED,
             }},
             .compile_time_arg_bindings = {{"num_entries_per_producer", num_entries_per_producer}},
-            .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+            .config_spec = experimental::ComputeConfiguration{},
         };
     }
 
-    experimental::metal2_host_api::KernelSpec consumer_spec;
+    experimental::KernelSpec consumer_spec;
     if (consumer_type == DFBPorCType::DM) {
-        consumer_spec = experimental::metal2_host_api::KernelSpec{
+        consumer_spec = experimental::KernelSpec{
             .unique_id = CONSUMER,
             .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer.cpp",
             .num_threads = static_cast<uint8_t>(dfb_config.num_consumers),
             .dfb_bindings = {{
                 .dfb_spec_name = DFB_NAME,
                 .local_accessor_name = "in",
-                .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+                .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
                 .access_pattern = consumer_pattern,
             }},
             .tensor_bindings = {{
@@ -305,28 +303,28 @@ void run_single_dfb_program(
             .config_spec = dm_consumer_cfg,
         };
     } else {
-        consumer_spec = experimental::metal2_host_api::KernelSpec{
+        consumer_spec = experimental::KernelSpec{
             .unique_id = CONSUMER,
             .source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_consumer.cpp",
             .num_threads = static_cast<uint8_t>(dfb_config.num_consumers),
             .dfb_bindings = {{
                 .dfb_spec_name = DFB_NAME,
                 .local_accessor_name = "in",
-                .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+                .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
                 .access_pattern = consumer_pattern,
             }},
             .compile_time_arg_bindings = {{"num_entries_per_consumer", num_entries_per_consumer}},
-            .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+            .config_spec = experimental::ComputeConfiguration{},
         };
     }
 
-    experimental::metal2_host_api::WorkUnitSpec wu{
+    experimental::WorkUnitSpec wu{
         .unique_id = "main",
         .kernels = {PRODUCER, CONSUMER},
         .target_nodes = core_range_set,
     };
 
-    std::vector<experimental::metal2_host_api::TensorParameter> tensor_parameters;
+    std::vector<experimental::TensorParameter> tensor_parameters;
     if (need_in_tensor) {
         tensor_parameters.push_back({.unique_id = IN_TENSOR, .spec = in_tensor->tensor_spec()});
     }
@@ -334,7 +332,7 @@ void run_single_dfb_program(
         tensor_parameters.push_back({.unique_id = OUT_TENSOR, .spec = out_tensor->tensor_spec()});
     }
 
-    experimental::metal2_host_api::ProgramSpec spec{
+    experimental::ProgramSpec spec{
         .program_id = "single_dfb",
         .kernels = {producer_spec, consumer_spec},
         .dataflow_buffers = {dfb_spec},
@@ -342,26 +340,26 @@ void run_single_dfb_program(
         .work_units = {wu},
     };
 
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    using NodeNamedRTAs = experimental::metal2_host_api::ProgramRunParams::KernelRunParams::NodeNamedRTAs;
+    using NodeNamedRTAs = experimental::ProgramRunParams::KernelRunParams::NodeNamedRTAs;
     auto build_dm_named_rtas = [&]() {
         std::vector<NodeNamedRTAs> result;
         result.reserve(core_to_chunk_offset.size());
         for (const auto& [core, chunk_offset] : core_to_chunk_offset) {
             result.push_back(NodeNamedRTAs{
-                experimental::metal2_host_api::NodeCoord{core.x, core.y},
+                experimental::NodeCoord{core.x, core.y},
                 {{"chunk_offset", chunk_offset}, {"entries_per_core", entries_per_core}}});
         }
         return result;
     };
 
-    experimental::metal2_host_api::ProgramRunParams run_params;
-    experimental::metal2_host_api::ProgramRunParams::KernelRunParams producer_params{.kernel_spec_name = PRODUCER};
+    experimental::ProgramRunParams run_params;
+    experimental::ProgramRunParams::KernelRunParams producer_params{.kernel_spec_name = PRODUCER};
     if (producer_type == DFBPorCType::DM) {
         producer_params.named_runtime_args = build_dm_named_rtas();
     }
-    experimental::metal2_host_api::ProgramRunParams::KernelRunParams consumer_params{.kernel_spec_name = CONSUMER};
+    experimental::ProgramRunParams::KernelRunParams consumer_params{.kernel_spec_name = CONSUMER};
     if (consumer_type == DFBPorCType::DM) {
         consumer_params.named_runtime_args = build_dm_named_rtas();
     }
@@ -372,7 +370,7 @@ void run_single_dfb_program(
     if (need_out_tensor) {
         run_params.tensor_args.push_back({.tensor_parameter_name = OUT_TENSOR, .tensor = std::cref(*out_tensor)});
     }
-    experimental::metal2_host_api::SetProgramRunParameters(program, run_params);
+    experimental::SetProgramRunParameters(program, run_params);
 
     // Generate input once; shared by tensor/buffer write, L1 pre-fill, and verification.
     auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, total_buffer_size / sizeof(uint32_t));
@@ -613,8 +611,8 @@ void run_concurrent_dfbs_program(
     // Each kernel instance binds to exactly its own DFB; this matches num_producers=1
     // / num_consumers=1 in the per-DFB config.  A shared kernel bound to N DFBs would
     // erroneously register all N threads as producers for every DFB.
-    std::vector<experimental::metal2_host_api::DataflowBufferSpec> dfb_specs;
-    std::vector<experimental::metal2_host_api::KernelSpec> kernel_specs;
+    std::vector<experimental::DataflowBufferSpec> dfb_specs;
+    std::vector<experimental::KernelSpec> kernel_specs;
     std::vector<std::string> kernel_names;
     dfb_specs.reserve(num_dfbs);
     kernel_specs.reserve(2 * num_dfbs);
@@ -626,7 +624,7 @@ void run_concurrent_dfbs_program(
         const std::string producer_name = "producer_" + std::to_string(i);
         const std::string consumer_name = "consumer_" + std::to_string(i);
 
-        dfb_specs.push_back(experimental::metal2_host_api::DataflowBufferSpec{
+        dfb_specs.push_back(experimental::DataflowBufferSpec{
             .unique_id = dfb_name,
             .entry_size = entry_size,
             .num_entries = entries_per_dfb,
@@ -634,15 +632,15 @@ void run_concurrent_dfbs_program(
             .disable_implicit_sync = !dfb_config.enable_implicit_sync,
         });
 
-        kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
+        kernel_specs.push_back(experimental::KernelSpec{
             .unique_id = producer_name,
             .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_multi_producer.cpp",
             .num_threads = 1,
             .dfb_bindings = {{
                 .dfb_spec_name = dfb_name,
                 .local_accessor_name = "out",
-                .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-                .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
+                .access_pattern = experimental::DFBAccessPattern::STRIDED,
             }},
             .tensor_bindings = {{
                 .tensor_parameter_name = IN_TENSOR,
@@ -655,20 +653,19 @@ void run_concurrent_dfbs_program(
                     {"chunk_offset", chunk_offset},
                 },
             .config_spec =
-                experimental::metal2_host_api::DataMovementConfiguration{
-                    .gen2 = experimental::metal2_host_api::DataMovementConfiguration::Gen2{}},
+                experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
         });
         kernel_names.push_back(producer_name);
 
-        kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
+        kernel_specs.push_back(experimental::KernelSpec{
             .unique_id = consumer_name,
             .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_multi_consumer.cpp",
             .num_threads = 1,
             .dfb_bindings = {{
                 .dfb_spec_name = dfb_name,
                 .local_accessor_name = "in",
-                .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-                .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
+                .access_pattern = experimental::DFBAccessPattern::STRIDED,
             }},
             .tensor_bindings = {{
                 .tensor_parameter_name = OUT_TENSOR,
@@ -681,19 +678,18 @@ void run_concurrent_dfbs_program(
                     {"chunk_offset", chunk_offset},
                 },
             .config_spec =
-                experimental::metal2_host_api::DataMovementConfiguration{
-                    .gen2 = experimental::metal2_host_api::DataMovementConfiguration::Gen2{}},
+                experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
         });
         kernel_names.push_back(consumer_name);
     }
 
-    experimental::metal2_host_api::WorkUnitSpec wu{
+    experimental::WorkUnitSpec wu{
         .unique_id = "main",
         .kernels = kernel_names,
         .target_nodes = core_range_set,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
+    experimental::ProgramSpec spec{
         .program_id = "concurrent_dfbs",
         .kernels = kernel_specs,
         .dataflow_buffers = dfb_specs,
@@ -705,20 +701,20 @@ void run_concurrent_dfbs_program(
         .work_units = {wu},
     };
 
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     // No per-instance runtime args needed (chunk_offset is a CTA).
-    experimental::metal2_host_api::ProgramRunParams run_params;
+    experimental::ProgramRunParams run_params;
     run_params.kernel_run_params.reserve(kernel_names.size());
     for (const auto& name : kernel_names) {
         run_params.kernel_run_params.push_back(
-            experimental::metal2_host_api::ProgramRunParams::KernelRunParams{.kernel_spec_name = name});
+            experimental::ProgramRunParams::KernelRunParams{.kernel_spec_name = name});
     }
     run_params.tensor_args = {
         {.tensor_parameter_name = IN_TENSOR, .tensor = std::cref(in_tensor)},
         {.tensor_parameter_name = OUT_TENSOR, .tensor = std::cref(out_tensor)},
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program, run_params);
+    experimental::SetProgramRunParameters(program, run_params);
 
     auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(
         0, 100, total_buf_size / sizeof(uint32_t));
@@ -777,29 +773,29 @@ void run_concurrent_tensix_dm_dfbs_program(
     // matching the number of DFB bindings declared here. Name is prefixed to avoid
     // colliding with dfb::NUM_DFBS in dataflow_buffer_config.h (transitively included
     // via risc_common.h on DM kernel builds).
-    experimental::metal2_host_api::KernelSpec producer_spec{
+    experimental::KernelSpec producer_spec{
         .unique_id = PRODUCER,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_seq_producer.cpp",
         .num_threads = 1,
         .compiler_options = {.defines = {{"TEST_NUM_DFBS", std::to_string(num_dfbs)}}},
         .compile_time_arg_bindings = {{"num_entries_per_producer", entries_per_dfb}},
-        .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+        .config_spec = experimental::ComputeConfiguration{},
     };
     for (uint32_t i = 0; i < num_dfbs; ++i) {
-        producer_spec.dfb_bindings.push_back(experimental::metal2_host_api::KernelSpec::DFBBinding{
+        producer_spec.dfb_bindings.push_back(experimental::KernelSpec::DFBBinding{
             .dfb_spec_name = "dfb_" + std::to_string(i),
             .local_accessor_name = "dfb_" + std::to_string(i),
-            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-            .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+            .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
+            .access_pattern = experimental::DFBAccessPattern::STRIDED,
         });
     }
 
     // DM concurrent consumers: one 1-thread kernel instance per DFB, each binding
     // its own per-DFB OUT_TENSOR_<i>.
-    std::vector<experimental::metal2_host_api::KernelSpec> kernel_specs;
+    std::vector<experimental::KernelSpec> kernel_specs;
     std::vector<std::string> kernel_names;
-    std::vector<experimental::metal2_host_api::DataflowBufferSpec> dfb_specs;
-    std::vector<experimental::metal2_host_api::TensorParameter> tensor_parameters;
+    std::vector<experimental::DataflowBufferSpec> dfb_specs;
+    std::vector<experimental::TensorParameter> tensor_parameters;
     kernel_specs.reserve(1 + num_dfbs);
     kernel_names.reserve(1 + num_dfbs);
     dfb_specs.reserve(num_dfbs);
@@ -814,7 +810,7 @@ void run_concurrent_tensix_dm_dfbs_program(
         const std::string consumer_name = "consumer_" + std::to_string(i);
         const std::string out_tensor_name = "out_tensor_" + std::to_string(i);
 
-        dfb_specs.push_back(experimental::metal2_host_api::DataflowBufferSpec{
+        dfb_specs.push_back(experimental::DataflowBufferSpec{
             .unique_id = dfb_name,
             .entry_size = entry_size,
             .num_entries = entries_per_dfb,
@@ -822,20 +818,20 @@ void run_concurrent_tensix_dm_dfbs_program(
             .disable_implicit_sync = !dfb_config.enable_implicit_sync,
         });
 
-        tensor_parameters.push_back(experimental::metal2_host_api::TensorParameter{
+        tensor_parameters.push_back(experimental::TensorParameter{
             .unique_id = out_tensor_name,
             .spec = out_tensors[i].tensor_spec(),
         });
 
-        kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
+        kernel_specs.push_back(experimental::KernelSpec{
             .unique_id = consumer_name,
             .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_multi_consumer_sep.cpp",
             .num_threads = 1,
             .dfb_bindings = {{
                 .dfb_spec_name = dfb_name,
                 .local_accessor_name = "in",
-                .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-                .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
+                .access_pattern = experimental::DFBAccessPattern::STRIDED,
             }},
             .tensor_bindings = {{
                 .tensor_parameter_name = out_tensor_name,
@@ -847,19 +843,18 @@ void run_concurrent_tensix_dm_dfbs_program(
                     {"implicit_sync", static_cast<uint32_t>(dfb_config.enable_implicit_sync ? 1u : 0u)},
                 },
             .config_spec =
-                experimental::metal2_host_api::DataMovementConfiguration{
-                    .gen2 = experimental::metal2_host_api::DataMovementConfiguration::Gen2{}},
+                experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
         });
         kernel_names.push_back(consumer_name);
     }
 
-    experimental::metal2_host_api::WorkUnitSpec wu{
+    experimental::WorkUnitSpec wu{
         .unique_id = "main",
         .kernels = kernel_names,
         .target_nodes = core_range_set,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
+    experimental::ProgramSpec spec{
         .program_id = "concurrent_tensix_dm_dfbs",
         .kernels = kernel_specs,
         .dataflow_buffers = dfb_specs,
@@ -867,20 +862,20 @@ void run_concurrent_tensix_dm_dfbs_program(
         .work_units = {wu},
     };
 
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::metal2_host_api::ProgramRunParams run_params;
+    experimental::ProgramRunParams run_params;
     run_params.kernel_run_params.reserve(kernel_names.size());
     for (const auto& name : kernel_names) {
         run_params.kernel_run_params.push_back(
-            experimental::metal2_host_api::ProgramRunParams::KernelRunParams{.kernel_spec_name = name});
+            experimental::ProgramRunParams::KernelRunParams{.kernel_spec_name = name});
     }
     run_params.tensor_args.reserve(num_dfbs);
     for (uint32_t i = 0; i < num_dfbs; ++i) {
         run_params.tensor_args.push_back(
             {.tensor_parameter_name = "out_tensor_" + std::to_string(i), .tensor = std::cref(out_tensors[i])});
     }
-    experimental::metal2_host_api::SetProgramRunParameters(program, run_params);
+    experimental::SetProgramRunParameters(program, run_params);
 
     // Pre-fill each DFB's L1 ring with its input slice.
     // DFBs are allocated consecutively starting at the base L1 allocator address;
@@ -994,7 +989,7 @@ void run_sequential_dfbs_program(
     // TEST_NUM_DFBS compiler define gates the per-DFB unrolled blocks; it must equal the
     // number of dfb_bindings / tensor_bindings registered here. Name is prefixed to avoid
     // colliding with dfb::NUM_DFBS in dataflow_buffer_config.h.
-    experimental::metal2_host_api::KernelSpec producer_spec{
+    experimental::KernelSpec producer_spec{
         .unique_id = PRODUCER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_seq_producer.cpp",
         .num_threads = num_producers,
@@ -1005,14 +1000,12 @@ void run_sequential_dfbs_program(
                 {"implicit_sync", static_cast<uint32_t>(configs[0].enable_implicit_sync ? 1u : 0u)},
                 {"num_producers", num_producers},
             },
-        .config_spec =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen2 = experimental::metal2_host_api::DataMovementConfiguration::Gen2{}},
+        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
 
     // Consumer kernel: same layout, plus per-DFB entries_per_consumer_<i> /
     // is_blocked_<i> CTAs (per-DFB cap is host-known so they collapse to CTAs).
-    experimental::metal2_host_api::KernelSpec consumer_spec{
+    experimental::KernelSpec consumer_spec{
         .unique_id = CONSUMER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_seq_consumer.cpp",
         .num_threads = num_consumers,
@@ -1022,15 +1015,13 @@ void run_sequential_dfbs_program(
                 {"implicit_sync", static_cast<uint32_t>(configs[0].enable_implicit_sync ? 1u : 0u)},
                 {"num_consumers", num_consumers},
             },
-        .config_spec =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen2 = experimental::metal2_host_api::DataMovementConfiguration::Gen2{}},
+        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
 
     // Build per-DFB DataflowBufferSpec, TensorParameter, and bindings (dfb_<i> /
     // src_<i> / dst_<i> / in_tensor_<i> / out_tensor_<i>).
-    std::vector<experimental::metal2_host_api::DataflowBufferSpec> dfb_specs;
-    std::vector<experimental::metal2_host_api::TensorParameter> tensor_parameters;
+    std::vector<experimental::DataflowBufferSpec> dfb_specs;
+    std::vector<experimental::TensorParameter> tensor_parameters;
     dfb_specs.reserve(num_dfbs);
     tensor_parameters.reserve(2 * num_dfbs);
 
@@ -1042,41 +1033,40 @@ void run_sequential_dfbs_program(
         const bool is_all = (configs[i].cap == dfb::AccessPattern::ALL);
         const uint32_t epc = is_all ? num_entries : (num_entries + num_consumers - 1) / num_consumers;
 
-        dfb_specs.push_back(experimental::metal2_host_api::DataflowBufferSpec{
+        dfb_specs.push_back(experimental::DataflowBufferSpec{
             .unique_id = dfb_name,
             .entry_size = entry_size,
             .num_entries = num_entries,
             .data_format_metadata = configs[i].data_format,
             .disable_implicit_sync = !configs[i].enable_implicit_sync,
         });
-        tensor_parameters.push_back(experimental::metal2_host_api::TensorParameter{
+        tensor_parameters.push_back(experimental::TensorParameter{
             .unique_id = in_tensor_name,
             .spec = in_tensors[i].tensor_spec(),
         });
-        tensor_parameters.push_back(experimental::metal2_host_api::TensorParameter{
+        tensor_parameters.push_back(experimental::TensorParameter{
             .unique_id = out_tensor_name,
             .spec = out_tensors[i].tensor_spec(),
         });
 
-        producer_spec.dfb_bindings.push_back(experimental::metal2_host_api::KernelSpec::DFBBinding{
+        producer_spec.dfb_bindings.push_back(experimental::KernelSpec::DFBBinding{
             .dfb_spec_name = dfb_name,
             .local_accessor_name = "dfb_" + idx,
-            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-            .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+            .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
+            .access_pattern = experimental::DFBAccessPattern::STRIDED,
         });
-        producer_spec.tensor_bindings.push_back(experimental::metal2_host_api::KernelSpec::TensorBinding{
+        producer_spec.tensor_bindings.push_back(experimental::KernelSpec::TensorBinding{
             .tensor_parameter_name = in_tensor_name,
             .accessor_name = "src_" + idx,
         });
 
-        consumer_spec.dfb_bindings.push_back(experimental::metal2_host_api::KernelSpec::DFBBinding{
+        consumer_spec.dfb_bindings.push_back(experimental::KernelSpec::DFBBinding{
             .dfb_spec_name = dfb_name,
             .local_accessor_name = "dfb_" + idx,
-            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-            .access_pattern = is_all ? experimental::metal2_host_api::DFBAccessPattern::ALL
-                                     : experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+            .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
+            .access_pattern = is_all ? experimental::DFBAccessPattern::ALL : experimental::DFBAccessPattern::STRIDED,
         });
-        consumer_spec.tensor_bindings.push_back(experimental::metal2_host_api::KernelSpec::TensorBinding{
+        consumer_spec.tensor_bindings.push_back(experimental::KernelSpec::TensorBinding{
             .tensor_parameter_name = out_tensor_name,
             .accessor_name = "dst_" + idx,
         });
@@ -1085,13 +1075,13 @@ void run_sequential_dfbs_program(
             {"is_blocked_" + idx, static_cast<uint32_t>(is_all ? 1u : 0u)});
     }
 
-    experimental::metal2_host_api::WorkUnitSpec wu{
+    experimental::WorkUnitSpec wu{
         .unique_id = "main",
         .kernels = {PRODUCER, CONSUMER},
         .target_nodes = core_range_set,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
+    experimental::ProgramSpec spec{
         .program_id = "sequential_dfbs",
         .kernels = {producer_spec, consumer_spec},
         .dataflow_buffers = dfb_specs,
@@ -1099,12 +1089,12 @@ void run_sequential_dfbs_program(
         .work_units = {wu},
     };
 
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::metal2_host_api::ProgramRunParams run_params;
+    experimental::ProgramRunParams run_params;
     run_params.kernel_run_params = {
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{.kernel_spec_name = PRODUCER},
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{.kernel_spec_name = CONSUMER},
+        experimental::ProgramRunParams::KernelRunParams{.kernel_spec_name = PRODUCER},
+        experimental::ProgramRunParams::KernelRunParams{.kernel_spec_name = CONSUMER},
     };
     run_params.tensor_args.reserve(2 * num_dfbs);
     for (uint32_t i = 0; i < num_dfbs; ++i) {
@@ -1114,7 +1104,7 @@ void run_sequential_dfbs_program(
         run_params.tensor_args.push_back(
             {.tensor_parameter_name = "out_tensor_" + idx, .tensor = std::cref(out_tensors[i])});
     }
-    experimental::metal2_host_api::SetProgramRunParameters(program, run_params);
+    experimental::SetProgramRunParameters(program, run_params);
 
     detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
 
@@ -1176,14 +1166,14 @@ void run_in_dfb_out_dfb_program(
     constexpr const char* IN_TENSOR = "in_tensor";
     constexpr const char* OUT_TENSOR = "out_tensor";
 
-    experimental::metal2_host_api::DataflowBufferSpec in_dfb_spec{
+    experimental::DataflowBufferSpec in_dfb_spec{
         .unique_id = IN_DFB,
         .entry_size = entry_size,
         .num_entries = num_entries,
         .data_format_metadata = dm2tensix_config.data_format,
         .disable_implicit_sync = !dm2tensix_config.enable_implicit_sync,
     };
-    experimental::metal2_host_api::DataflowBufferSpec out_dfb_spec{
+    experimental::DataflowBufferSpec out_dfb_spec{
         .unique_id = OUT_DFB,
         .entry_size = entry_size,
         .num_entries = num_entries,
@@ -1191,15 +1181,15 @@ void run_in_dfb_out_dfb_program(
         .disable_implicit_sync = !tensix2dm_config.enable_implicit_sync,
     };
 
-    experimental::metal2_host_api::KernelSpec producer_spec{
+    experimental::KernelSpec producer_spec{
         .unique_id = PRODUCER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp",
         .num_threads = static_cast<uint8_t>(dm2tensix_config.num_producers),
         .dfb_bindings = {{
             .dfb_spec_name = IN_DFB,
             .local_accessor_name = "out",
-            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-            .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+            .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
+            .access_pattern = experimental::DFBAccessPattern::STRIDED,
         }},
         .tensor_bindings = {{
             .tensor_parameter_name = IN_TENSOR,
@@ -1212,12 +1202,10 @@ void run_in_dfb_out_dfb_program(
                 {"num_producers", dm2tensix_config.num_producers},
             },
         .runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}},
-        .config_spec =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen2 = experimental::metal2_host_api::DataMovementConfiguration::Gen2{}},
+        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
 
-    experimental::metal2_host_api::KernelSpec compute_spec{
+    experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6.cpp",
         .num_threads = 1,
@@ -1226,31 +1214,31 @@ void run_in_dfb_out_dfb_program(
                 {
                     .dfb_spec_name = IN_DFB,
                     .local_accessor_name = "in",
-                    .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-                    .access_pattern = in_is_all ? experimental::metal2_host_api::DFBAccessPattern::ALL
-                                                : experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                    .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
+                    .access_pattern =
+                        in_is_all ? experimental::DFBAccessPattern::ALL : experimental::DFBAccessPattern::STRIDED,
                 },
                 {
                     .dfb_spec_name = OUT_DFB,
                     .local_accessor_name = "out",
-                    .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-                    .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                    .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
+                    .access_pattern = experimental::DFBAccessPattern::STRIDED,
                 },
             },
         .compile_time_arg_bindings = {{"num_entries", num_entries_per_unpacker}},
-        .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+        .config_spec = experimental::ComputeConfiguration{},
     };
 
-    experimental::metal2_host_api::KernelSpec consumer_spec{
+    experimental::KernelSpec consumer_spec{
         .unique_id = CONSUMER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer.cpp",
         .num_threads = static_cast<uint8_t>(tensix2dm_config.num_consumers),
         .dfb_bindings = {{
             .dfb_spec_name = OUT_DFB,
             .local_accessor_name = "in",
-            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-            .access_pattern = out_is_all ? experimental::metal2_host_api::DFBAccessPattern::ALL
-                                         : experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+            .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
+            .access_pattern =
+                out_is_all ? experimental::DFBAccessPattern::ALL : experimental::DFBAccessPattern::STRIDED,
         }},
         .tensor_bindings = {{
             .tensor_parameter_name = OUT_TENSOR,
@@ -1264,18 +1252,16 @@ void run_in_dfb_out_dfb_program(
                 {"num_consumers", tensix2dm_config.num_consumers},
             },
         .runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}},
-        .config_spec =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen2 = experimental::metal2_host_api::DataMovementConfiguration::Gen2{}},
+        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
 
-    experimental::metal2_host_api::WorkUnitSpec wu{
+    experimental::WorkUnitSpec wu{
         .unique_id = "main",
         .kernels = {PRODUCER, COMPUTE, CONSUMER},
         .target_nodes = core_range_set,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
+    experimental::ProgramSpec spec{
         .program_id = "in_dfb_out_dfb",
         .kernels = {producer_spec, compute_spec, consumer_spec},
         .dataflow_buffers = {in_dfb_spec, out_dfb_spec},
@@ -1287,28 +1273,28 @@ void run_in_dfb_out_dfb_program(
         .work_units = {wu},
     };
 
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    using NodeNamedRTAs = experimental::metal2_host_api::ProgramRunParams::KernelRunParams::NodeNamedRTAs;
+    using NodeNamedRTAs = experimental::ProgramRunParams::KernelRunParams::NodeNamedRTAs;
     auto build_named_rtas = [&]() {
         return std::vector<NodeNamedRTAs>{NodeNamedRTAs{
-            experimental::metal2_host_api::NodeCoord{logical_core.x, logical_core.y},
+            experimental::NodeCoord{logical_core.x, logical_core.y},
             {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}};
     };
 
-    experimental::metal2_host_api::ProgramRunParams::KernelRunParams producer_params{.kernel_spec_name = PRODUCER};
+    experimental::ProgramRunParams::KernelRunParams producer_params{.kernel_spec_name = PRODUCER};
     producer_params.named_runtime_args = build_named_rtas();
-    experimental::metal2_host_api::ProgramRunParams::KernelRunParams compute_params{.kernel_spec_name = COMPUTE};
-    experimental::metal2_host_api::ProgramRunParams::KernelRunParams consumer_params{.kernel_spec_name = CONSUMER};
+    experimental::ProgramRunParams::KernelRunParams compute_params{.kernel_spec_name = COMPUTE};
+    experimental::ProgramRunParams::KernelRunParams consumer_params{.kernel_spec_name = CONSUMER};
     consumer_params.named_runtime_args = build_named_rtas();
 
-    experimental::metal2_host_api::ProgramRunParams run_params;
+    experimental::ProgramRunParams run_params;
     run_params.kernel_run_params = {producer_params, compute_params, consumer_params};
     run_params.tensor_args = {
         {.tensor_parameter_name = IN_TENSOR, .tensor = std::cref(in_tensor)},
         {.tensor_parameter_name = OUT_TENSOR, .tensor = std::cref(out_tensor)},
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program, run_params);
+    experimental::SetProgramRunParameters(program, run_params);
 
     auto input =
         tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, num_entries * entry_size / sizeof(uint32_t));
@@ -1860,7 +1846,7 @@ static void run_intra_tensix_dfb_program(
     constexpr const char* INTRA_DFB = "intra_dfb";
     constexpr const char* COMPUTE = "compute";
 
-    experimental::metal2_host_api::DataflowBufferSpec intra_dfb_spec{
+    experimental::DataflowBufferSpec intra_dfb_spec{
         .unique_id = INTRA_DFB,
         .entry_size = entry_size,
         .num_entries = num_entries,
@@ -1870,7 +1856,7 @@ static void run_intra_tensix_dfb_program(
 
     // Self-looped: register both PRODUCER and CONSUMER bindings on the same kernel.
     // The kernel only references dfb::out; both bindings resolve to the same DFB.
-    experimental::metal2_host_api::KernelSpec compute_spec{
+    experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_intra.cpp",
         .num_threads = static_cast<uint8_t>(num_threads),
@@ -1879,14 +1865,14 @@ static void run_intra_tensix_dfb_program(
                 {
                     .dfb_spec_name = INTRA_DFB,
                     .local_accessor_name = "out",
-                    .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-                    .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                    .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
+                    .access_pattern = experimental::DFBAccessPattern::STRIDED,
                 },
                 {
                     .dfb_spec_name = INTRA_DFB,
                     .local_accessor_name = "in",
-                    .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-                    .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                    .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
+                    .access_pattern = experimental::DFBAccessPattern::STRIDED,
                 },
             },
         .compile_time_arg_bindings =
@@ -1894,27 +1880,27 @@ static void run_intra_tensix_dfb_program(
                 {"entries_per_neo", entries_per_neo},
                 {"words_per_entry", words_per_entry},
             },
-        .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+        .config_spec = experimental::ComputeConfiguration{},
     };
 
-    experimental::metal2_host_api::WorkUnitSpec wu{
+    experimental::WorkUnitSpec wu{
         .unique_id = "main",
         .kernels = {COMPUTE},
         .target_nodes = core_range_set,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
+    experimental::ProgramSpec spec{
         .program_id = "intra_tensix_dfb",
         .kernels = {compute_spec},
         .dataflow_buffers = {intra_dfb_spec},
         .work_units = {wu},
     };
 
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::metal2_host_api::ProgramRunParams run_params;
+    experimental::ProgramRunParams run_params;
     run_params.kernel_run_params = {{.kernel_spec_name = COMPUTE}};
-    experimental::metal2_host_api::SetProgramRunParameters(program, run_params);
+    experimental::SetProgramRunParameters(program, run_params);
 
     const uint32_t total_size = num_entries * entry_size;
     auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(
@@ -1998,14 +1984,14 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
     constexpr const char* COMPUTE = "compute";
     constexpr const char* IN_TENSOR = "in_tensor";
 
-    experimental::metal2_host_api::DataflowBufferSpec remapper_dfb_spec{
+    experimental::DataflowBufferSpec remapper_dfb_spec{
         .unique_id = REMAPPER_DFB,
         .entry_size = entry_size,
         .num_entries = num_entries,
         .data_format_metadata = remapper_dfb_config.data_format,
         .disable_implicit_sync = !remapper_dfb_config.enable_implicit_sync,
     };
-    experimental::metal2_host_api::DataflowBufferSpec intra_dfb_spec{
+    experimental::DataflowBufferSpec intra_dfb_spec{
         .unique_id = INTRA_DFB,
         .entry_size = entry_size,
         .num_entries = num_entries,
@@ -2013,15 +1999,15 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
         .disable_implicit_sync = !intra_dfb_config.enable_implicit_sync,
     };
 
-    experimental::metal2_host_api::KernelSpec dm_producer_spec{
+    experimental::KernelSpec dm_producer_spec{
         .unique_id = DM_PRODUCER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp",
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = REMAPPER_DFB,
             .local_accessor_name = "out",
-            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-            .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+            .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
+            .access_pattern = experimental::DFBAccessPattern::STRIDED,
         }},
         .tensor_bindings = {{
             .tensor_parameter_name = IN_TENSOR,
@@ -2034,15 +2020,13 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
                 {"num_producers", 1u},
             },
         .runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}},
-        .config_spec =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen2 = experimental::metal2_host_api::DataMovementConfiguration::Gen2{}},
+        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
 
     // Combined compute kernel: BLOCKED consumer of remapper DFB ("remapper_in"),
     // self-looped on intra DFB (PRODUCER "intra_out" + CONSUMER "intra_in"; the
     // kernel only references dfb::intra_out).
-    experimental::metal2_host_api::KernelSpec compute_spec{
+    experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_intra_and_consume_all.cpp",
         .num_threads = static_cast<uint8_t>(num_neos),
@@ -2051,20 +2035,20 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
                 {
                     .dfb_spec_name = REMAPPER_DFB,
                     .local_accessor_name = "remapper_in",
-                    .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-                    .access_pattern = experimental::metal2_host_api::DFBAccessPattern::ALL,
+                    .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
+                    .access_pattern = experimental::DFBAccessPattern::ALL,
                 },
                 {
                     .dfb_spec_name = INTRA_DFB,
                     .local_accessor_name = "intra_out",
-                    .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-                    .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                    .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
+                    .access_pattern = experimental::DFBAccessPattern::STRIDED,
                 },
                 {
                     .dfb_spec_name = INTRA_DFB,
                     .local_accessor_name = "intra_in",
-                    .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-                    .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                    .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
+                    .access_pattern = experimental::DFBAccessPattern::STRIDED,
                 },
             },
         .compile_time_arg_bindings =
@@ -2073,16 +2057,16 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
                 {"entries_per_neo", entries_per_neo},
                 {"words_per_entry", words_per_entry},
             },
-        .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+        .config_spec = experimental::ComputeConfiguration{},
     };
 
-    experimental::metal2_host_api::WorkUnitSpec wu{
+    experimental::WorkUnitSpec wu{
         .unique_id = "main",
         .kernels = {DM_PRODUCER, COMPUTE},
         .target_nodes = core_range_set,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
+    experimental::ProgramSpec spec{
         .program_id = "intra_and_remapper",
         .kernels = {dm_producer_spec, compute_spec},
         .dataflow_buffers = {remapper_dfb_spec, intra_dfb_spec},
@@ -2090,20 +2074,19 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
         .work_units = {wu},
     };
 
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*this->devices_.at(0), spec);
+    Program program = experimental::MakeProgramFromSpec(*this->devices_.at(0), spec);
 
-    using NodeNamedRTAs = experimental::metal2_host_api::ProgramRunParams::KernelRunParams::NodeNamedRTAs;
-    experimental::metal2_host_api::ProgramRunParams::KernelRunParams dm_producer_params{
-        .kernel_spec_name = DM_PRODUCER};
+    using NodeNamedRTAs = experimental::ProgramRunParams::KernelRunParams::NodeNamedRTAs;
+    experimental::ProgramRunParams::KernelRunParams dm_producer_params{.kernel_spec_name = DM_PRODUCER};
     dm_producer_params.named_runtime_args = std::vector<NodeNamedRTAs>{NodeNamedRTAs{
-        experimental::metal2_host_api::NodeCoord{logical_core.x, logical_core.y},
+        experimental::NodeCoord{logical_core.x, logical_core.y},
         {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}};
-    experimental::metal2_host_api::ProgramRunParams::KernelRunParams compute_params{.kernel_spec_name = COMPUTE};
+    experimental::ProgramRunParams::KernelRunParams compute_params{.kernel_spec_name = COMPUTE};
 
-    experimental::metal2_host_api::ProgramRunParams run_params;
+    experimental::ProgramRunParams run_params;
     run_params.kernel_run_params = {dm_producer_params, compute_params};
     run_params.tensor_args = {{.tensor_parameter_name = IN_TENSOR, .tensor = std::cref(in_tensor)}};
-    experimental::metal2_host_api::SetProgramRunParameters(program, run_params);
+    experimental::SetProgramRunParameters(program, run_params);
 
     // L1 layout follows DFB creation order:
     //   [l1_base + 0              ] -> remapper DFB ring  (num_entries * entry_size bytes)

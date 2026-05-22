@@ -15,7 +15,7 @@
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>  // tt::DataFormat
 
-namespace tt::tt_metal::experimental::metal2_host_api {
+namespace tt::tt_metal::experimental {
 
 // A name identifying a DataflowBufferSpec within a ProgramSpec.
 // String literals work directly; misnamed references fail at validation.
@@ -146,4 +146,4 @@ struct RemoteDataflowBufferSpec {
     ProducerConsumerMap producer_consumer_map;
 };
 
-}  // namespace tt::tt_metal::experimental::metal2_host_api
+}  // namespace tt::tt_metal::experimental

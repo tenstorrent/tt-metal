@@ -15,7 +15,7 @@
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 
-namespace tt::tt_metal::experimental::metal2_host_api {
+namespace tt::tt_metal::experimental {
 
 // ============================================================================
 // Validation Helpers
@@ -557,4 +557,4 @@ ProgramRunParamsView& GetProgramRunParamsView(Program& program) {
     //   - Or, create the view object upon Program construction.
 }
 
-}  // namespace tt::tt_metal::experimental::metal2_host_api
+}  // namespace tt::tt_metal::experimental

@@ -372,59 +372,55 @@ static bool reader_datacopy_writer_quasar(
     // Legacy DataflowBufferConfig used enable_implicit_sync = true on both DFBs;
     // keep DataflowBufferSpec::disable_implicit_sync at default (false) and set
     // the program-level reservation flag below.
-    experimental::metal2_host_api::DataflowBufferSpec input_dfb_spec{
+    experimental::DataflowBufferSpec input_dfb_spec{
         .unique_id = INPUT_DFB,
         .entry_size = static_cast<uint32_t>(test_config.tile_byte_size),
         .num_entries = static_cast<uint32_t>(test_config.num_tiles),
         .data_format_metadata = test_config.l1_input_data_format,
     };
-    experimental::metal2_host_api::DataflowBufferSpec output_dfb_spec{
+    experimental::DataflowBufferSpec output_dfb_spec{
         .unique_id = OUTPUT_DFB,
         .entry_size = static_cast<uint32_t>(test_config.tile_byte_size),
         .num_entries = static_cast<uint32_t>(test_config.num_tiles),
         .data_format_metadata = test_config.l1_output_data_format,
     };
 
-    const experimental::metal2_host_api::NodeCoord node{
+    const experimental::NodeCoord node{
         static_cast<uint32_t>(test_config.core.x), static_cast<uint32_t>(test_config.core.y)};
 
-    experimental::metal2_host_api::KernelSpec reader_spec{
+    experimental::KernelSpec reader_spec{
         .unique_id = READER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
         .num_threads = num_threads,
         .dfb_bindings = {{
             .dfb_spec_name = INPUT_DFB,
             .local_accessor_name = "out",
-            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-            .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+            .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
+            .access_pattern = experimental::DFBAccessPattern::STRIDED,
         }},
         .compile_time_arg_bindings = {{"use_dfbs", 1u}},
         .runtime_arguments_schema =
             {.named_runtime_args = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
-        .config_spec =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen2 = experimental::metal2_host_api::DataMovementConfiguration::Gen2{}},
+        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
 
-    experimental::metal2_host_api::KernelSpec writer_spec{
+    experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
         .num_threads = num_threads,
         .dfb_bindings = {{
             .dfb_spec_name = OUTPUT_DFB,
             .local_accessor_name = "in",
-            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-            .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+            .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
+            .access_pattern = experimental::DFBAccessPattern::STRIDED,
         }},
         .compile_time_arg_bindings = {{"use_dfbs", 1u}},
         .runtime_arguments_schema =
             {.named_runtime_args = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
-        .config_spec =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen2 = experimental::metal2_host_api::DataMovementConfiguration::Gen2{}},
+        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
 
-    experimental::metal2_host_api::KernelSpec compute_spec{
+    experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
         .num_threads = num_threads,
@@ -432,39 +428,39 @@ static bool reader_datacopy_writer_quasar(
             {{
                  .dfb_spec_name = INPUT_DFB,
                  .local_accessor_name = "in",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                 .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = OUTPUT_DFB,
                  .local_accessor_name = "out",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                 .endpoint_type = experimental::KernelSpec::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
              }},
         .compile_time_arg_bindings = {{"per_core_tile_cnt", per_core_tile_cnt}, {"use_dfbs", 1u}},
-        .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+        .config_spec = experimental::ComputeConfiguration{},
     };
 
-    experimental::metal2_host_api::WorkUnitSpec wu{
+    experimental::WorkUnitSpec wu{
         .unique_id = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = node,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
+    experimental::ProgramSpec spec{
         .program_id = "reader_datacopy_writer",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {input_dfb_spec, output_dfb_spec},
         .work_units = {wu},
     };
 
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     log_info(tt::LogTest, "Num tiles per thread: {}", num_tiles_per_thread);
 
-    experimental::metal2_host_api::ProgramRunParams params;
+    experimental::ProgramRunParams params;
     params.kernel_run_params = {
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+        experimental::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = READER,
             .named_runtime_args =
                 {{.node = node,
@@ -474,7 +470,7 @@ static bool reader_datacopy_writer_quasar(
                        {"num_tiles", num_tiles_per_thread},
                        {"dram_page_stride", ctx.per_tile_stride}}}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+        experimental::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = WRITER,
             .named_runtime_args =
                 {{.node = node,
@@ -484,11 +480,11 @@ static bool reader_datacopy_writer_quasar(
                        {"num_tiles", num_tiles_per_thread},
                        {"dram_page_stride", ctx.per_tile_stride}}}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+        experimental::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = COMPUTE,
         },
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::SetProgramRunParameters(program, params);
 
     tt_metal::detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
 

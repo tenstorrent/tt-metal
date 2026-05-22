@@ -19,7 +19,7 @@
 #include <tt-metalium/base_types.hpp>    // For MathFidelity, UnpackToDestMode (global scope)
 #include <tt-metalium/kernel_types.hpp>  // For DataMovementProcessor, NOC, etc.
 
-namespace tt::tt_metal::experimental::metal2_host_api {
+namespace tt::tt_metal::experimental {
 
 struct ComputeConfiguration {
     // Tensix hardware resource configuration for compute kernels.
@@ -325,4 +325,4 @@ inline KernelSpec::DFBBinding ConsumerOf(
     };
 }
 
-}  // namespace tt::tt_metal::experimental::metal2_host_api
+}  // namespace tt::tt_metal::experimental

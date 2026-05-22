@@ -12,7 +12,7 @@
 
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 
-namespace tt::tt_metal::experimental::metal2_host_api {
+namespace tt::tt_metal::experimental {
 
 // A name identifying a SemaphoreSpec within a ProgramSpec.
 // String literals work directly; misnamed references fail at validation.
@@ -54,4 +54,4 @@ struct SemaphoreSpec {
     SemaphoreMemoryType memory_type = SemaphoreMemoryType::L1;
 };
 
-}  // namespace tt::tt_metal::experimental::metal2_host_api
+}  // namespace tt::tt_metal::experimental

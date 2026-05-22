@@ -8,7 +8,7 @@
 
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 
-namespace tt::tt_metal::experimental::metal2_host_api {
+namespace tt::tt_metal::experimental {
 
 // A name identifying a TensorParameter within a ProgramSpec.
 // String literals work directly; misnamed references fail at validation
@@ -26,4 +26,4 @@ struct TensorParameter {
     tt::tt_metal::TensorSpec spec;
 };
 
-}  // namespace tt::tt_metal::experimental::metal2_host_api
+}  // namespace tt::tt_metal::experimental
