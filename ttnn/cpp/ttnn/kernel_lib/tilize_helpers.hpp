@@ -5,10 +5,8 @@
 
 #include <optional>
 
-#include "tt-metalium/circular_buffer_constants.h"
 #include "api/compute/tilize.h"
 #include "api/compute/cb_api.h"
-#include "internal/circular_buffer_interface.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
 // This is the go-to helper for all tilize usage in compute kernels.
@@ -17,7 +15,7 @@ namespace compute_kernel_lib {
 
 namespace tilize_config {
 
-constexpr uint32_t INVALID_CB = NUM_CIRCULAR_BUFFERS;
+constexpr uint32_t INVALID_DFB = 0xFFFFFFFFu;
 
 // Register datatype reconfiguration — use when switching data formats between operations.
 enum class ReconfigureRegisterDatatypeMode : uint8_t {
@@ -78,8 +76,8 @@ enum class RemapMode : uint8_t {
  * ── Template Parameters (compile-time) ──────────────────────────────────────
  *
  *   block_width_tiles — Number of output tiles per block (width in tiles, FIRST template param).
- *   input_cb         — Input circular buffer index (0–31, row-major data).
- *   output_cb        — Output circular buffer index (0–31, tiled output, must differ from input_cb).
+ *   input_dfb        — Input DataflowBuffer index (row-major data).
+ *   output_dfb       — Output DataflowBuffer index (tiled output, must differ from input_dfb).
  *   init_uninit_mode — Init/uninit lifecycle control (default: InitAndUninit).
  *   wait_mode        — How to synchronize on input data (default: WaitBlock).
  *   reconfig_mode     — Register datatype reconfiguration (default: UnpackAndPackReconfigure).
@@ -115,37 +113,37 @@ enum class RemapMode : uint8_t {
  *
  *   #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
  *
- *   // Hardware init — must come first, pass the input and output CBs
- *   compute_kernel_hw_startup(cb_in, cb_out);
+ *   // Hardware init — must come first, pass the input and output DFBs
+ *   compute_kernel_hw_startup(dfb_in, dfb_out);
  *
- *   // 1. Basic tilize (most common — symmetric, both CBs have tile-sized pages)
- *   compute_kernel_lib::tilize<block_width_tiles, cb_in, cb_out>(num_blocks);
+ *   // 1. Basic tilize (most common — symmetric, both DFBs have tile-sized entries)
+ *   compute_kernel_lib::tilize<block_width_tiles, dfb_in, dfb_out>(num_blocks);
  *
- *   // 2. Asymmetric — input CB has row-sized pages, output CB has tile-sized pages
- *   compute_kernel_lib::tilize<out_tiles_per_block, cb_in, cb_out>(num_blocks, total_rows);
+ *   // 2. Asymmetric — input DFB has row-sized entries, output DFB has tile-sized entries
+ *   compute_kernel_lib::tilize<out_tiles_per_block, dfb_in, dfb_out>(num_blocks, total_rows);
  *
  *   // 3. Asymmetric, single block — all rows tilized at once
- *   compute_kernel_lib::tilize<total_out_tiles, cb_in, cb_out>(1, total_rows);
+ *   compute_kernel_lib::tilize<total_out_tiles, dfb_in, dfb_out>(1, total_rows);
  *
  *   // 4. Register reconfiguration (switching data formats mid-kernel)
  *   using namespace compute_kernel_lib::tilize_config;
- *   compute_kernel_lib::tilize<16, new_cb, cb_out,
+ *   compute_kernel_lib::tilize<16, new_dfb, dfb_out,
  *          InitUninitMode::InitAndUninit,
  *          WaitMode::WaitBlock,
  *          ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(5);
  *
- *   // 5. Caller-managed synchronization (data already in CB)
- *   compute_kernel_lib::tilize<block_w, cb_in, cb_out,
+ *   // 5. Caller-managed synchronization (data already in DFB)
+ *   compute_kernel_lib::tilize<block_w, dfb_in, dfb_out,
  *          tilize_config::InitUninitMode::InitAndUninit,
  *          tilize_config::WaitMode::NoWait>(num_blocks);
  *
  *   // 6. Multiple back-to-back tilize calls — skip redundant init/uninit between them
- *   compute_kernel_lib::tilize<w, cb_in, cb_out, tilize_config::InitUninitMode::InitOnly>(blocks);   // first
- *   compute_kernel_lib::tilize<w, cb_in, cb_out, tilize_config::InitUninitMode::Neither>(blocks);    // middle
- *   compute_kernel_lib::tilize<w, cb_in, cb_out, tilize_config::InitUninitMode::UninitOnly>(blocks); // last
+ *   compute_kernel_lib::tilize<w, dfb_in, dfb_out, tilize_config::InitUninitMode::InitOnly>(blocks);   // first
+ *   compute_kernel_lib::tilize<w, dfb_in, dfb_out, tilize_config::InitUninitMode::Neither>(blocks);    // middle
+ *   compute_kernel_lib::tilize<w, dfb_in, dfb_out, tilize_config::InitUninitMode::UninitOnly>(blocks); // last
  *
  *   // 7. Lossless fp32 tilize — exact fp32 preservation (no truncation to tf32)
- *   compute_kernel_lib::tilize<block_w, cb_in, cb_out,
+ *   compute_kernel_lib::tilize<block_w, dfb_in, dfb_out,
  *          tilize_config::InitUninitMode::InitAndUninit,
  *          tilize_config::WaitMode::WaitBlock,
  *          tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
@@ -153,8 +151,8 @@ enum class RemapMode : uint8_t {
  */
 template <
     uint32_t block_width_tiles,
-    uint32_t input_cb,
-    uint32_t output_cb,
+    uint32_t input_dfb,
+    uint32_t output_dfb,
     tilize_config::InitUninitMode init_uninit_mode = tilize_config::InitUninitMode::InitAndUninit,
     tilize_config::WaitMode wait_mode = tilize_config::WaitMode::WaitBlock,
     tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
