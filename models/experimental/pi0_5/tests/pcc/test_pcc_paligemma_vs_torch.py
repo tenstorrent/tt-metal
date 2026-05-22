@@ -32,7 +32,10 @@ from models.experimental.pi0_5.common.weight_loader import PI0WeightLoader
 TT_METAL_HOME = os.environ.get("TT_METAL_HOME")
 if not TT_METAL_HOME:
     raise EnvironmentError("TT_METAL_HOME environment variable is not set")
-CHECKPOINT_PATH = str(Path(__file__).resolve().parents[2] / "weights" / "pi05_base")
+CHECKPOINT_PATH = os.environ.get(
+    "PI05_CHECKPOINT_DIR",
+    str(Path(__file__).resolve().parents[2] / "weights" / "pi05_base"),
+)
 SEED = 42
 PCC_THRESHOLD = 0.90
 
@@ -291,12 +294,15 @@ def test_pcc_paligemma_vlm_block(device, use_pretrained):
     cos_torch, sin_torch = model_torch.cos[:seq_len], model_torch.sin[:seq_len]
     out_torch, _ = block_torch.forward(hidden, cos_torch, sin_torch)
 
-    # RoPE tensors must be TILE_LAYOUT + bf16 + on device for the TTNN
-    # attention to consume correctly. Without these flags the cos/sin
-    # tensors stay ROW_MAJOR on host and the experimental.rotary_embedding
-    # op computes garbage rotations, dragging block PCC down to ~0.73.
-    cos_ttnn = ttnn.from_torch(cos_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    sin_ttnn = ttnn.from_torch(sin_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    # ttnn.experimental.rotary_embedding expects cos/sin shaped
+    # (1, 1, seq_len, head_dim) with the split-half layout
+    # [c0, c1, ..., c_{n/2-1}, c0, c1, ..., c_{n/2-1}].
+    # torch_gemma.precompute_freqs_cis returns (max_seq_len, head_dim//2),
+    # so duplicate the half-dim and add the two leading singleton dims.
+    cos_full = torch.cat([cos_torch, cos_torch], dim=-1).unsqueeze(0).unsqueeze(0)
+    sin_full = torch.cat([sin_torch, sin_torch], dim=-1).unsqueeze(0).unsqueeze(0)
+    cos_ttnn = ttnn.from_torch(cos_full, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    sin_ttnn = ttnn.from_torch(sin_full, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     # TTNN
     hidden_ttnn = ttnn.from_torch(hidden, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)

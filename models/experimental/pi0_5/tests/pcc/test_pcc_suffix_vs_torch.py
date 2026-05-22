@@ -35,16 +35,21 @@ from models.experimental.pi0_5.common.weight_loader import PI0WeightLoader
 TT_METAL_HOME = os.environ.get("TT_METAL_HOME")
 if not TT_METAL_HOME:
     raise EnvironmentError("TT_METAL_HOME environment variable is not set")
-CHECKPOINT_PATH = str(Path(__file__).resolve().parents[2] / "weights" / "pi05_base")
+CHECKPOINT_PATH = os.environ.get(
+    "PI05_CHECKPOINT_DIR",
+    str(Path(__file__).resolve().parents[2] / "weights" / "pi05_base"),
+)
 SEED = 42
 PCC_THRESHOLD = 0.93
 
 
 def create_suffix_config() -> SuffixConfig:
     """Create SuffixConfig matching checkpoint."""
+    from models.experimental.pi0_5.common.checkpoint_meta import action_horizon_from_checkpoint
+
     return SuffixConfig(
         action_dim=32,
-        action_horizon=50,
+        action_horizon=action_horizon_from_checkpoint(Path(CHECKPOINT_PATH)),
         expert_width=1024,
         state_dim=32,
         time_emb_dim=1024,
@@ -137,6 +142,8 @@ def test_pcc_suffix_embed_state(device, use_pretrained):
     """Test suffix state embedding: TTNN vs PyTorch."""
     torch.manual_seed(SEED)
     config = create_suffix_config()
+    if config.pi05:
+        pytest.skip("embed_state is a no-op for pi05 (state goes through prefix or continuous-state path)")
     suffix_weights = get_suffix_weights(use_pretrained, config)
 
     # Create input

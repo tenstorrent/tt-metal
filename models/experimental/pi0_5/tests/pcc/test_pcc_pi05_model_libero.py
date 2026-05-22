@@ -41,7 +41,7 @@ from models.experimental.pi0_5.common.checkpoint_meta import action_horizon_from
 TT_METAL_HOME = os.environ.get("TT_METAL_HOME", "/home/ttuser/experiments/pi0_5/tt-metal")
 CHECKPOINT_PATH = os.environ.get(
     "PI05_CHECKPOINT_DIR",
-    str(Path(__file__).resolve().parents[2] / "weights" / "pi05_base"),
+    "/storage/sdawle/pi05_weights/pi05_libero_finetuned",
 )
 BATCH_SIZE = 1
 SEED = 42
@@ -50,9 +50,10 @@ PCC_THRESHOLD = 0.93
 
 def create_pi05_config() -> PI0ModelConfig:
     """Create PI0.5 model config with adaRMS enabled."""
+    action_horizon = action_horizon_from_checkpoint(Path(CHECKPOINT_PATH))
     config = PI0ModelConfig(
         action_dim=32,
-        action_horizon=action_horizon_from_checkpoint(Path(CHECKPOINT_PATH)),
+        action_horizon=action_horizon,
         state_dim=32,
         paligemma_variant="gemma_2b",
         action_expert_variant="gemma_300m",
@@ -163,14 +164,11 @@ def main():
         print("\n4. Creating test inputs...")
         inputs = create_test_inputs(config, batch_size=BATCH_SIZE)
 
-        # Build a SHARED initial-noise tensor x_0 so both models start the
-        # flow-matching Euler integration from identical x_t. Without this,
-        # the TTNN model uses noise sampled at __init__ time while torch
-        # samples its own noise inside sample_actions — different starting
-        # points cause flow-matching trajectories to diverge, dragging
-        # single-seed e2e PCC down. Same fix as the multi-seed test.
+        # Share a single x_0 between torch and TTNN so both Euler integrators
+        # start from identical noise. Otherwise 10 denoising steps diverge
+        # and PCC collapses to ~random correlation (≈0.32 in practice).
+        torch.manual_seed(SEED)
         x_0 = torch.randn(BATCH_SIZE, config.action_horizon, config.action_dim, dtype=torch.float32)
-        # Pad to tile-aligned action_horizon for the TTNN side
         ah = config.action_horizon
         ah_padded = ((ah + 31) // 32) * 32
         if ah_padded != ah:
@@ -187,14 +185,14 @@ def main():
         )
         model_ttnn.resample_noise = False
 
-        # Run PyTorch reference — force its sample_noise to use the same x_0
+        # Run PyTorch reference — force its sample_noise to return the shared x_0
         print("\n5. Running PyTorch reference...")
         start = time.time()
         with torch.no_grad():
             saved_sample_noise = model_torch.denoising.sample_noise
             model_torch.denoising.sample_noise = lambda bs, device=None, dtype=torch.float32: x_0.clone()
             try:
-                torch_actions = model_torch.forward_inference(
+                torch_actions = model_torch.sample_actions(
                     images=inputs["images"],
                     img_masks=inputs["img_masks"],
                     lang_tokens=inputs["lang_tokens"],
@@ -250,12 +248,9 @@ def main():
         ttnn_time = (time.time() - start) * 1000
         print(f"   TTNN: time={ttnn_time:.1f}ms")
 
-        # Convert TTNN output to torch and crop to action_horizon (the pre-allocated
-        # x_t was tile-padded to ah_padded; trim the phantom rows here so PCC
-        # compares apples-to-apples with torch's action_horizon-shape output).
+        # Convert TTNN output to torch
         if isinstance(ttnn_actions, ttnn.Tensor):
             ttnn_actions = ttnn.to_torch(ttnn_actions)
-        ttnn_actions = ttnn_actions[:, : config.action_horizon, : config.action_dim]
         print(f"   TTNN output shape: {ttnn_actions.shape}")
 
         # Compute PCC
@@ -287,6 +282,11 @@ def main():
     finally:
         print("\n🔌 Closing device...")
         ttnn.close_device(device)
+
+
+def test_pcc_pi05_model_libero_e2e():
+    """Pytest entry: e2e PCC of TTNN vs torch on the configured pi0.5 checkpoint."""
+    assert main() == 0, "PI0.5 e2e PCC below threshold (see stdout)"
 
 
 if __name__ == "__main__":

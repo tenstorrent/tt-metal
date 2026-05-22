@@ -33,7 +33,10 @@ from models.experimental.pi0_5.common.weight_loader import PI0WeightLoader
 TT_METAL_HOME = os.environ.get("TT_METAL_HOME")
 if not TT_METAL_HOME:
     raise EnvironmentError("TT_METAL_HOME environment variable is not set")
-CHECKPOINT_PATH = str(Path(__file__).resolve().parents[2] / "weights" / "pi05_base")
+CHECKPOINT_PATH = os.environ.get(
+    "PI05_CHECKPOINT_DIR",
+    str(Path(__file__).resolve().parents[2] / "weights" / "pi05_base"),
+)
 SEED = 42
 PCC_THRESHOLD = 0.90
 

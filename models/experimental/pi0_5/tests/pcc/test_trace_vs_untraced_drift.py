@@ -43,12 +43,18 @@ def _build_fixed_noise(model):
 
 
 def main():
+    import os
+    from pathlib import Path
     import ttnn
     from models.experimental.pi0_5.common.configs import Pi0_5ModelConfig
     from models.experimental.pi0_5.common.weight_loader import Pi0_5WeightLoader
+    from models.experimental.pi0_5.common.checkpoint_meta import action_horizon_from_checkpoint
     from models.experimental.pi0_5.tt.ttnn_pi0_5_model import Pi0_5ModelTTNN
 
-    CHECKPOINT = "/storage/sdawle/pi05_weights/pi05_libero_finetuned"
+    CHECKPOINT = os.environ.get(
+        "PI05_CHECKPOINT_DIR",
+        "/storage/sdawle/pi05_weights/pi05_libero_finetuned",
+    )
 
     print("[setup] opening device...")
     device = ttnn.open_device(
@@ -57,7 +63,7 @@ def main():
         trace_region_size=134_217_728,
     )
     print("[setup] loading model...")
-    cfg = Pi0_5ModelConfig(action_horizon=50)
+    cfg = Pi0_5ModelConfig(action_horizon=action_horizon_from_checkpoint(Path(CHECKPOINT)))
     loader = Pi0_5WeightLoader(CHECKPOINT)
     model = Pi0_5ModelTTNN(cfg, loader, device)
     print("[setup] model loaded")

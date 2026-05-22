@@ -53,11 +53,17 @@ from models.experimental.pi0_5.reference.torch_pi0_5_model import Pi0_5Model as 
 from models.experimental.pi0_5.tt.ttnn_pi0_5_model import Pi0_5ModelTTNN as PI0ModelTTNN
 from models.experimental.pi0_5.common.configs import PI0ModelConfig, SigLIPConfig
 from models.experimental.pi0_5.common.weight_loader import PI0WeightLoader
+from models.experimental.pi0_5.common.checkpoint_meta import action_horizon_from_checkpoint
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]  # tt-metal repo root
 TT_METAL_HOME = os.environ.get("TT_METAL_HOME", str(_REPO_ROOT))
-CHECKPOINT_PATH = os.environ.get("PI0_CHECKPOINT", str(Path(__file__).resolve().parents[2] / "weights" / "pi05_base"))
+# Accept both PI05_CHECKPOINT_DIR (the canonical env name used elsewhere) and
+# PI0_CHECKPOINT (legacy for this file) for back-compat.
+CHECKPOINT_PATH = os.environ.get(
+    "PI05_CHECKPOINT_DIR",
+    os.environ.get("PI0_CHECKPOINT", str(Path(__file__).resolve().parents[2] / "weights" / "pi05_base")),
+)
 BATCH_SIZE = 1
 SEED = 42  # used for per-step velocity diagnostics (first seed in the sweep)
 
@@ -71,7 +77,7 @@ MEAN_E2E_PCC_THRESHOLD = 0.95  # primary gate: mean e2e PCC across SEEDS
 def create_pi05_config() -> PI0ModelConfig:
     config = PI0ModelConfig(
         action_dim=32,
-        action_horizon=50,
+        action_horizon=action_horizon_from_checkpoint(Path(CHECKPOINT_PATH)),
         state_dim=32,
         paligemma_variant="gemma_2b",
         action_expert_variant="gemma_300m",
