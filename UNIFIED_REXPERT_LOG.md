@@ -205,6 +205,34 @@ factory. Concrete checklist:
    chunks and reading counts from the (already wired) counts scratch CB
    inside the kernel to skip chunks past the count.
 
+   **Factory plumbing is now in place** (commit `f5c5a95ff4a`):
+   - Per-program DRAM scratch buffer allocated via
+     `tt::tt_metal::CreateBuffer(InterleavedBufferConfig{...})`, kept alive
+     by the shared_ptr in `shared_variables_t`.
+   - Per-core L1 semaphore via `CreateSemaphore` (offset stored in
+     `shared_variables_t::semaphore_addr`).
+   - New `CB_IN0_DOWN_FULL` (= c_12) declared + wired into compute named args.
+   - Reader/writer CT + runtime args updated to match the new layout.
+   - Each writer broadcast-increments every core's semaphore slot
+     (`num_sync_cores * total_cores` NoC atomic increments per program;
+     theoretically ~400us extra at 100ns each).
+   - `override_runtime_arguments` refreshes both scratch and output buffer
+     addresses on program-cache hits.
+
+   **Still hangs on first run** even after the plumbing — looks like the
+   CB protocol between writer/reader/compute is not yet synchronizing
+   correctly. Likely diagnostic next steps:
+   - Replace the compute kernel with a dummy that just copies the first
+     tile of `cb_in0_x` into `cb_out` to isolate whether the wiring or
+     the matmul logic is the problem.
+   - Verify the writer's `num_sync_cores * sync_coord_pairs` runtime arg
+     layout matches the kernel-side `get_arg_val` reads.
+   - Confirm that `noc_semaphore_inc` with `posted=false` reaches the
+     remote core's local sem slot atomically (the default `noc_id`
+     might be wrong for the broadcast pattern).
+   - Add device-side `DPRINT` traces to the kernel and re-run with
+     `TT_METAL_DPRINT_CORES=0,0` to see if any specific phase wedges.
+
 3. The "single op" / count-aware end state is then:
    - `TtRoutedExpert.forward` drops the host-side count read and just
      calls `ttnn.experimental.deepseek_prefill.unified_routed_expert_ffn`,
