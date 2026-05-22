@@ -67,16 +67,16 @@ NOINLINE NOCLONE void _print_compute_info(const UnwindContext context)
     const ct_string line    = CTSTR("<line>");
 
     DEVICE_PRINT(
-        "│  ├── Compute API ─┬ {:#x}\r"
+        "│  ├── Compute API ─┬ {}\r"
         "│  │                └ {}:{}\r"
-        "│  └── Callsite ────┬ {:#x}\r"
+        "│  └── Callsite ────┬ {}\r"
         "│                   └ {}:{}\r",
-        context.pc,
-        context.pc != UINTPTR_MAX ? file : unknown,
-        context.pc != UINTPTR_MAX ? line : unknown,
-        context.ra,
-        context.ra != UINTPTR_MAX ? file : unknown,
-        context.ra != UINTPTR_MAX ? line : unknown);
+        DevicePrintTopCallstack<0>(context),
+        DevicePrintTopCallstack<1>(context),
+        DevicePrintTopCallstack<2>(context),
+        DevicePrintTopCallstack<3>(context),
+        DevicePrintTopCallstack<4>(context),
+        DevicePrintTopCallstack<5>(context));
 }
 
 template <typename T>

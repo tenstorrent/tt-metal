@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "ckernel.h"
+#include "dev_msgs.h"
 #include "llk_defs.h"
 
 namespace llk::san
@@ -338,6 +339,25 @@ struct UnwindContext
 };
 
 inline const UnwindContext UnwindContext::UNKNOWN {UINTPTR_MAX, UINTPTR_MAX};
+
+template <size_t Type>
+struct DevicePrintTopCallstack
+{
+    // for now hardcoded to TRISC cores, if need be, this needs to become uintptr_t
+    std::uint32_t pc;
+    std::uint32_t ra;
+
+    DevicePrintTopCallstack(const UnwindContext ctx)
+    {
+        // fixme: sstanisic: this definitely won't work for qsr lol, and it's quite bad for wh/bh
+        std::uint32_t launch_index           = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
+        tt_l1_ptr launch_msg_t* const launch = GET_MAILBOX_ADDRESS_DEV(launch[launch_index]);
+        std::uint32_t kernel_offset          = launch->kernel_config.kernel_text_offset[COMPILE_FOR_TRISC + 1];
+        pc                                   = ctx.pc - kernel_offset;
+        ra                                   = ctx.ra - kernel_offset;
+    }
+
+}
 
 struct ThreadOutputContext
 {
