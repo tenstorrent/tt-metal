@@ -181,7 +181,7 @@ namespace {
 // The set of globally-allocated CBs (ACT_SHARDED/OUT/MATMUL_PARTIALS/READER_INDICES)
 // is wired to the supplied raw Buffer*s, which is what the framework's fast
 // cache-hit path patches.
-void emit_cb_descriptors(
+void emit_cb_descriptors_sharded(
     std::vector<CBInfo>& cb_info,
     tt::tt_metal::ProgramDescriptor& desc,
     const CoreRangeSet& all_cores_set,
@@ -237,7 +237,7 @@ void emit_cb_descriptors(
 // conv_reader_indices tensor is allocated once by create_workload_descriptor and
 // parked on the WorkloadDescriptor; we receive the raw Buffer* here and wire it
 // into the READER_INDICES CB and reader CT args.
-tt::tt_metal::ProgramDescriptor build_program_descriptor(
+tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     const Conv2dParams& operation_attributes,
     const Conv2dInputs& tensor_args,
     Tensor& output_tensor,
@@ -521,7 +521,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         act_block_h_nsubblocks_split = block_config.act_block_h_ntiles - act_block_h_nsubblocks_split_last;
     }
     uint32_t act_block_h_datums_split = act_block_h_nsubblocks_split * tt::constants::TILE_HEIGHT;
-    uint32_t act_block_h_datums_split_last = act_block_h_nsubblocks_split_last * tt::constants::TILE_HEIGHT;
 
     uint32_t act_block_num_tiles_split = act_block_h_nsubblocks_split * act_block_w_ntiles;
     uint32_t act_block_num_tiles_split_last = act_block_h_nsubblocks_split_last * act_block_w_ntiles;
@@ -745,7 +744,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     // output, READER_INDICES on the workload-scoped indices buffer) and patches
     // their addresses on cache hits — no per-op UpdateDynamicCircularBufferAddress
     // override needed.
-    emit_cb_descriptors(cb_info, desc, all_cores, a.buffer(), output.buffer(), conv_reader_indices_buffer);
+    emit_cb_descriptors_sharded(cb_info, desc, all_cores, a.buffer(), output.buffer(), conv_reader_indices_buffer);
 
     const uint32_t in_num_cores_x = input_cores.bounding_box().end_coord.x + 1;
     const uint32_t in_num_cores_y = input_cores.bounding_box().end_coord.y + 1;
@@ -1538,11 +1537,9 @@ tt::tt_metal::WorkloadDescriptor Conv2dShardedProgramFactory::create_workload_de
     const auto& block_config = operation_attributes.block_config;
     const auto& parallelization_config = operation_attributes.parallelization_config;
     const auto enable_activation_reuse = operation_attributes.enable_activation_reuse;
-    const auto enable_act_double_buffer = operation_attributes.enable_act_double_buffer;
     const auto force_split_reader = operation_attributes.force_split_reader;
     const bool config_tensors_in_dram = operation_attributes.config_tensors_in_dram;
     const bool block_sharded = a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
-    const bool height_sharded = a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
 
     sliding_window::ParallelConfig input_parallel_config = {
         .grid = a.memory_config().shard_spec().value().grid,
@@ -1560,10 +1557,9 @@ tt::tt_metal::WorkloadDescriptor Conv2dShardedProgramFactory::create_workload_de
 
     // Determine the (act_block_h_datums, last) pair for the host-side index
     // generator.  This must agree exactly with the enable_split_reader path
-    // computed by build_program_descriptor(), since the generated index tensor
+    // computed by build_program_descriptor_sharded(), since the generated index tensor
     // is consumed by the reader kernel.
     const auto& b = tensor_args.b;
-    const auto& bias = tensor_args.bias;
     const auto output_channels = operation_attributes.output_channels;
     const auto groups = operation_attributes.groups;
     const auto has_bias = operation_attributes.has_bias;
@@ -1639,7 +1635,7 @@ tt::tt_metal::WorkloadDescriptor Conv2dShardedProgramFactory::create_workload_de
     // coord in `tensor_coords` (conv2d doesn't depend on cluster position).
     // Build the ProgramDescriptor once and copy into each range entry.
     tt::tt_metal::ProgramDescriptor desc =
-        build_program_descriptor(operation_attributes, tensor_args, output_tensor, conv_reader_indices_buffer);
+        build_program_descriptor_sharded(operation_attributes, tensor_args, output_tensor, conv_reader_indices_buffer);
 
     auto ranges = tensor_coords.ranges();
     workload_descriptor.programs.reserve(ranges.size());
