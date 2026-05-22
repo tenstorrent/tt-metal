@@ -19,16 +19,8 @@
 #include "experimental/kernel_args.h"
 
 #if defined(ARCH_QUASAR)
-#include "internal/tt-2xx/quasar/overlay/overlay_addresses.h"
 // Quasar uses 64-bit atomics; Gen1 (BH) uses 32-bit — arch-intrinsic atomic width.
 typedef uint64_t atomic_type;
-// TODO: Remove this once cache invalidation functionality for Quasar is added
-inline __attribute__((always_inline)) void flush_l2_cache_line(atomic_type* addr) {
-    asm volatile("fence" ::: "memory");
-    volatile atomic_type* flush_reg = (volatile atomic_type*)L2_FLUSH_ADDR;
-    *flush_reg = (atomic_type)addr;
-    asm volatile("fence" ::: "memory");
-}
 #else
 typedef uint32_t atomic_type;
 #endif
@@ -59,7 +51,7 @@ void test_atomic_load_store(atomic_type* shared_value_ptr, atomic_type* result_p
         atomic_type* per_thread_result_ptr = result_ptr + (thread_idx - first_dm_id - 1);
         reader(shared_value_ptr, per_thread_result_ptr);
         // Flush the cache so host readback sees the updated L1
-        flush_l2_cache_line(per_thread_result_ptr);
+        flush_l2_cache_line(reinterpret_cast<uintptr_t>(per_thread_result_ptr));
     }
 #else
     // ON BH, BRISC runs writer(), NCRISC runs reader()
@@ -109,6 +101,6 @@ void kernel_main() {
 
 #if defined(ARCH_QUASAR) && (defined(TEST_ATOMIC_ADD_FETCH) || defined(TEST_ATOMIC_CAS))
     // Flush the cache so host readback sees the updated L1
-    flush_l2_cache_line(l1_counter_ptr);
+    flush_l2_cache_line(reinterpret_cast<uintptr_t>(l1_counter_ptr));
 #endif
 }

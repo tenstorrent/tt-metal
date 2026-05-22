@@ -71,7 +71,7 @@ static FORCE_INLINE void write_args_to_l1(uint32_t l1_write_addr) {
         ptr[i + rta_count + 2] = get_common_vararg(i);
     }
 
-#ifdef ARCH_QUASAR
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
     flush_l2_cache_line(reinterpret_cast<uintptr_t>(ptr.get_address()));
 #endif
 }
