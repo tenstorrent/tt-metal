@@ -22,7 +22,6 @@ def conv_block(x, params, device, kernel_size, stride, padding,
         reshard_if_not_optimal=True,
     )
 
-    # math_fidelity 
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi2, 
@@ -87,14 +86,12 @@ def residual_block(x, params, device, stride=1, input_height=56, input_width=56)
                 kernel_size=[2, 2], stride=[2, 2], padding=[0, 0],
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            # the conv stride becomes 1
             shortcut_stride = 1
             sh, sw = input_height // 2, input_width // 2
         else:
             shortcut_stride = 1
             sh, sw = input_height, input_width
 
-        # Now pass it through the 1x1 Conv
         skip, _ = conv_block(
             skip, params.shortcut, device,
             kernel_size=(1, 1), stride=(shortcut_stride, shortcut_stride), padding=(0, 0),
@@ -106,8 +103,7 @@ def residual_block(x, params, device, stride=1, input_height=56, input_width=56)
     out  = ttnn.to_layout(out,  ttnn.TILE_LAYOUT)
     skip = ttnn.to_layout(skip, ttnn.TILE_LAYOUT)
 
-    # add + relu in L1 (fast), then immediately evict to DRAM so the L1
-    # region is free before the next conv allocates its static CBs
+    # add + relu in L1
     result = ttnn.add(out, skip, memory_config=ttnn.L1_MEMORY_CONFIG)
     ttnn.deallocate(out)
     ttnn.deallocate(skip)
