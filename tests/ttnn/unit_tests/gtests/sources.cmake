@@ -59,10 +59,12 @@ set(UNIT_TESTS_TTNN_CCL_MULTI_TENSOR_SOURCES ccl/test_multi_tensor_ccl.cpp)
 
 set(UNIT_TESTS_TTNN_ACCESSOR_SOURCES
     accessor/common.cpp
+    accessor/test_param_sets.cpp
     accessor/test_accessor_benchmarks.cpp
     accessor/test_tensor_accessor.cpp
     accessor/test_tensor_accessor_on_device.cpp
     accessor/test_tensor_accessor_strided_dfb.cpp
+    accessor/test_tensor_accessor_addrgen.cpp
 )
 
 set(UNIT_TESTS_TTNN_TENSOR_SOURCES

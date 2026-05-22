@@ -114,11 +114,12 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         string name;
         uint32_t cta_offset;
         uint32_t addr_crta_offset;
+        uint8_t addrgen_mode;  // 0=NONE, 1=READ, 2=WRITE
     };
     vector<TaEntry> ta_entries;
     settings.process_tensor_binding_handles(
-        [&ta_entries](const string& name, uint32_t cta_offset, uint32_t addr_crta_offset) {
-            ta_entries.push_back({name, cta_offset, addr_crta_offset});
+        [&ta_entries](const string& name, uint32_t cta_offset, uint32_t addr_crta_offset, uint8_t addrgen_mode) {
+            ta_entries.push_back({name, cta_offset, addr_crta_offset, addrgen_mode});
         });
 
     // Emit the header content:
@@ -151,6 +152,12 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         }
         if (!ta_entries.empty()) {
             content << "#include \"api/tensor/tensor_accessor.h\"\n";
+            // Auto-include addrgen header if any binding uses hardware address generation
+            const bool has_addrgen = std::any_of(
+                ta_entries.begin(), ta_entries.end(), [](const TaEntry& e) { return e.addrgen_mode != 0; });
+            if (has_addrgen) {
+                content << "#include \"api/tensor/tensor_accessor_addrgen.h\"\n";
+            }
         }
         content << "\n";
 
@@ -180,8 +187,15 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             // template with extra metadata in the future without touching kernel source.
             content << "namespace ta {\n";
             for (const auto& entry : ta_entries) {
+                // Emit AddrgenMode as a template argument when mode != NONE
+                std::string mode_suffix;
+                if (entry.addrgen_mode == 1) {
+                    mode_suffix = ", AddrgenMode::READ";
+                } else if (entry.addrgen_mode == 2) {
+                    mode_suffix = ", AddrgenMode::WRITE";
+                }
                 content << "using " << entry.name << "_t = ::tensor_accessor::TensorAccessorBindingToken<"
-                        << entry.cta_offset << "u, " << entry.addr_crta_offset << "u>;\n";
+                        << entry.cta_offset << "u, " << entry.addr_crta_offset << "u" << mode_suffix << ">;\n";
                 content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
             }
             content << "}  // namespace ta\n";
@@ -210,7 +224,7 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
     // section to land at the first user vararg.
     uint32_t tensor_binding_count = 0;
     settings.process_tensor_binding_handles(
-        [&tensor_binding_count](const std::string&, uint32_t, uint32_t) { ++tensor_binding_count; });
+        [&tensor_binding_count](const std::string&, uint32_t, uint32_t, uint8_t) { ++tensor_binding_count; });
 
     // Named CTAs come through the legacy unordered_map path (Kernel internal storage).
     // The order in which we emit them DOES matter!

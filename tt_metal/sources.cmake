@@ -58,6 +58,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/lightmetal/lightmetal_capture_utils.hpp
     api/tt-metalium/experimental/lightmetal/lightmetal_replay.hpp
     api/tt-metalium/experimental/mesh_program_descriptor.hpp
+    api/tt-metalium/experimental/metal2_host_api/addrgen_support.hpp
     api/tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp
     api/tt-metalium/experimental/metal2_host_api/kernel_spec.hpp
     api/tt-metalium/experimental/metal2_host_api/node_coord.hpp

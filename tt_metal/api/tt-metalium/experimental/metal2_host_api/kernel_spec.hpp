@@ -199,6 +199,13 @@ struct KernelSpec {
     struct TensorBinding {
         TensorParameterName tensor_parameter_name;  // identify the TensorBinding within the ProgramSpec
         std::string accessor_name;                  // tensor accessor name (used in the kernel source code)
+
+        // Hardware address-generator mode for this binding.
+        // READ  — kernel reads from the tensor (src side of addrgen_0 is programmed in TensorAccessor ctor)
+        // WRITE — kernel writes to the tensor (dst side of addrgen_0 is programmed in TensorAccessor ctor)
+        // NONE  — software address generation (default)
+        enum class AddrgenMode { NONE, READ, WRITE };
+        AddrgenMode addrgen_mode = AddrgenMode::NONE;
     };
     std::vector<TensorBinding> tensor_bindings;
 

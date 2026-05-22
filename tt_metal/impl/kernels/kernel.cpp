@@ -318,10 +318,11 @@ void Kernel::process_semaphore_local_accessor_handles(
 }
 
 void Kernel::process_tensor_binding_handles(
-    const std::function<void(const std::string& accessor_name, uint32_t cta_offset, uint32_t addr_crta_offset)>
+    const std::function<void(const std::string& accessor_name, uint32_t cta_offset, uint32_t addr_crta_offset, uint8_t addrgen_mode)>
         callback) const {
     for (const auto& handle : this->tensor_binding_handles_) {
-        callback(handle.accessor_name, handle.cta_offset, handle.addr_crta_offset);
+        callback(handle.accessor_name, handle.cta_offset, handle.addr_crta_offset,
+                 static_cast<uint8_t>(handle.addrgen_mode));
     }
 }
 
@@ -523,6 +524,7 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(handle.accessor_name);
         hasher.update(static_cast<uint64_t>(handle.cta_offset));
         hasher.update(static_cast<uint64_t>(handle.addr_crta_offset));
+        hasher.update(static_cast<uint64_t>(handle.addrgen_mode));
     }
     // Named RTA/CRTA schema: order matters (determines byte offsets), so hash the sequence.
     // Named RTA and CRTA counts also need to be hashed!

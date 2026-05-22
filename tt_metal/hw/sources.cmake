@@ -25,6 +25,7 @@ set(HW_JIT_API_HEADERS
     inc/api/tensor/tensor_accessor_args.h
     inc/api/tensor/shard_pages_address_iterator.h
     inc/api/tensor/pages_address_iterator.h
+    inc/api/tensor/tensor_accessor_addrgen.h
     inc/api/tensor/page.h
     inc/api/compute/compute_kernel_api.h
     inc/api/compute/add_int_sfpu.h

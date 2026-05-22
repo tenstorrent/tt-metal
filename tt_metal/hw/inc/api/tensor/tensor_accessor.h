@@ -24,9 +24,15 @@
 template <typename T>
 T get_arg_val(int arg_idx);
 
+// Hardware address-generator mode for TensorAccessor.
+// READ  — src side of addrgen_0 is programmed in the TensorAccessor constructor; get_noc_addr pops src.
+// WRITE — dst side of addrgen_0 is programmed in the TensorAccessor constructor; get_noc_addr pops dst.
+// NONE  — software address generation (default; no addrgen hardware involved).
+enum class AddrgenMode : uint8_t { NONE = 0, READ = 1, WRITE = 2 };
+
 namespace tensor_accessor {
 
-template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
+template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET, AddrgenMode Mode = AddrgenMode::NONE>
 struct TensorAccessorBindingToken;  // definition below
 
 // This helper gets proper additional offset from interleaved_addr_gen::get_bank_offset +
@@ -44,6 +50,21 @@ uint64_t get_dram_bank_base_offset(uint32_t bank_id, uint8_t noc) {
 #endif
 }  // namespace tensor_accessor
 
+// Forward-declare TensorAccessor so configure_addrgen_src/dst declarations can reference it.
+template <typename DSpecT, AddrgenMode Mode_ = AddrgenMode::NONE>
+struct TensorAccessor;
+
+namespace tensor_accessor::detail {
+// Defined in api/tensor/tensor_accessor_addrgen.h (Quasar only).
+// Called from the TensorAccessorBindingToken constructor when Mode != NONE.
+#ifdef ARCH_QUASAR
+template <typename DSpecT, AddrgenMode Mode>
+void configure_addrgen_src(TensorAccessor<DSpecT, Mode>& acc);
+template <typename DSpecT, AddrgenMode Mode>
+void configure_addrgen_dst(TensorAccessor<DSpecT, Mode>& acc);
+#endif
+}  // namespace tensor_accessor::detail
+
 /**
  * @brief Accessor that encapsulates the logic for accessing tensors pages.
  *
@@ -53,11 +74,13 @@ uint64_t get_dram_bank_base_offset(uint32_t bank_id, uint8_t noc) {
  * 3. Providing NOC address computation and async operations
  *
  * @tparam DSpec        DistributionSpec type.
+ * @tparam Mode_        AddrgenMode — controls hardware address generator setup in the ctor.
  */
-template <typename DSpecT>
+template <typename DSpecT, AddrgenMode Mode_>
 struct TensorAccessor {
     using DSpec = DSpecT;
     static constexpr bool is_dram = DSpec::is_dram;
+    static constexpr AddrgenMode Mode = Mode_;
 
 private:
     // DSpec can be static or dynamic, so we use a conditional instance
@@ -89,12 +112,21 @@ public:
     // Construct TensorAccessor directly from a Metal 2.0 binding token.
     // The token instance is emitted by host codegen into kernel_bindings_generated.h,
     // based on the information in the user's host code (ProgramSpec).
-    // Delegates to the legacy TensorAccessorArgs ctor.
-    template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
-    TensorAccessor(tensor_accessor::TensorAccessorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>) :
+    // Delegates to the legacy TensorAccessorArgs ctor; if Mode != NONE the addrgen
+    // hardware is also programmed inside the constructor body.
+    template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET, AddrgenMode TokenMode>
+    TensorAccessor(tensor_accessor::TensorAccessorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET, TokenMode>) :
         TensorAccessor(
             TensorAccessorArgs<CTA_OFFSET>{},
-            static_cast<size_t>(get_common_arg_val<uint32_t>(ADDR_CRTA_OFFSET / sizeof(uint32_t)))) {}
+            static_cast<size_t>(get_common_arg_val<uint32_t>(ADDR_CRTA_OFFSET / sizeof(uint32_t)))) {
+#ifdef ARCH_QUASAR
+        if constexpr (TokenMode == AddrgenMode::READ) {
+            tensor_accessor::detail::configure_addrgen_src(*this);
+        } else if constexpr (TokenMode == AddrgenMode::WRITE) {
+            tensor_accessor::detail::configure_addrgen_dst(*this);
+        }
+#endif
+    }
 
     constexpr const auto& dspec() const {
         if constexpr (DSpec::is_static) {
@@ -114,6 +146,9 @@ public:
 
     FORCE_INLINE
     const uint32_t get_aligned_page_size() const { return aligned_page_size; }
+
+    FORCE_INLINE
+    uint32_t get_bank_base_address() const { return static_cast<uint32_t>(bank_base_address); }
 
     // NOC APIs
     FORCE_INLINE
@@ -338,7 +373,8 @@ template <
     typename TensorShapeWrapper,
     typename ShardShapeWrapper,
     typename BankCoordsWrapper,
-    bool IsDram>
+    bool IsDram,
+    AddrgenMode Mode_>
 struct TensorAccessor<tensor_accessor::DistributionSpec<
     RankCT,
     NumBanksCT,
@@ -346,7 +382,7 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
     ShardShapeWrapper,
     BankCoordsWrapper,
     /* IsInterleaved */ true,
-    IsDram>> : public InterleavedAddrGen<IsDram> {
+    IsDram>, Mode_> : public InterleavedAddrGen<IsDram> {
     using DSpec = tensor_accessor::DistributionSpec<
         RankCT,
         NumBanksCT,
@@ -355,6 +391,7 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
         BankCoordsWrapper,
         /* IsInterleaved */ true,
         IsDram>;
+    static constexpr AddrgenMode Mode = Mode_;
 
     template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
     TensorAccessor(
@@ -368,12 +405,21 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
     // Construct TensorAccessor directly from a Metal 2.0 binding token.
     // The token instance is emitted by host codegen into kernel_bindings_generated.h,
     // based on the information in the user's host code (ProgramSpec).
-    // Delegates to the legacy TensorAccessorArgs ctor.
-    template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
-    TensorAccessor(tensor_accessor::TensorAccessorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>) :
+    // Delegates to the legacy TensorAccessorArgs ctor; if Mode != NONE the addrgen
+    // hardware is also programmed inside the constructor body.
+    template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET, AddrgenMode TokenMode>
+    TensorAccessor(tensor_accessor::TensorAccessorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET, TokenMode>) :
         TensorAccessor(
             TensorAccessorArgs<CTA_OFFSET>{},
-            static_cast<uint32_t>(get_common_arg_val<uint32_t>(ADDR_CRTA_OFFSET / sizeof(uint32_t)))) {}
+            static_cast<uint32_t>(get_common_arg_val<uint32_t>(ADDR_CRTA_OFFSET / sizeof(uint32_t)))) {
+#ifdef ARCH_QUASAR
+        if constexpr (TokenMode == AddrgenMode::READ) {
+            tensor_accessor::detail::configure_addrgen_src(*this);
+        } else if constexpr (TokenMode == AddrgenMode::WRITE) {
+            tensor_accessor::detail::configure_addrgen_dst(*this);
+        }
+#endif
+    }
 
     template <typename DSpec_ = DSpec, std::enable_if_t<std::is_same_v<std::decay_t<DSpec_>, DSpec>, int> = 0>
     constexpr explicit TensorAccessor(
@@ -384,6 +430,9 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
 
     FORCE_INLINE
     const uint32_t get_aligned_page_size() const { return aligned_page_size; }
+
+    FORCE_INLINE
+    uint32_t get_bank_base_address() const { return InterleavedAddrGen<IsDram>::bank_base_address; }
 
     // Locality APIs
     FORCE_INLINE
@@ -485,11 +534,12 @@ TensorAccessor(const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args, size_t)
 // CTAD deduction guide for the Metal 2.0 binding-token ctor.
 // Mirrors the (args, size_t) guide above, using TensorAccessorArgs<CTA_OFFSET> as the static
 // layout source. So, the same DSpec (and same specialization) is selected.
+// The AddrgenMode from the token is propagated to the TensorAccessor template parameter.
 // NOTE: Currently Metal 2.0 tensor bindings only support CTA TensorAccessorArgs.
 //       This anticipates dynamic support (coming soon) and also maintains symmetry with the
 //       legacy API's deduction guide above.
-template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
-TensorAccessor(tensor_accessor::TensorAccessorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>)
+template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET, AddrgenMode Mode>
+TensorAccessor(tensor_accessor::TensorAccessorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET, Mode>)
     -> TensorAccessor<tensor_accessor::DistributionSpec<
         /* RankCT */ TensorAccessorArgs<CTA_OFFSET>::RankCT,
         /* NumBanksCT */ TensorAccessorArgs<CTA_OFFSET>::NumBanksCT,
@@ -509,7 +559,8 @@ TensorAccessor(tensor_accessor::TensorAccessorBindingToken<CTA_OFFSET, ADDR_CRTA
             TensorAccessorArgs<CTA_OFFSET>::BankCoordsCTAOffset,
             TensorAccessorArgs<CTA_OFFSET>::NumBanksCT>::type,
         /* IsInterleaved */ !TensorAccessorArgs<CTA_OFFSET>::is_sharded,
-        /* IsDram */ TensorAccessorArgs<CTA_OFFSET>::is_dram>>;
+        /* IsDram */ TensorAccessorArgs<CTA_OFFSET>::is_dram>,
+    Mode>;
 
 template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
 TensorAccessor(const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args, size_t, uint32_t)
@@ -610,7 +661,7 @@ namespace tensor_accessor {
 // The Metal 2.0 binding flow currently packs all DSpec metadata (shape, shard shape, bank coords)
 // as (static) CTAs; the (dynamic) CRTA-based metadata is a planned follow-up.
 //
-template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
+template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET, AddrgenMode Mode>
 struct TensorAccessorBindingToken {
     using args_t = TensorAccessorArgs<CTA_OFFSET>;
     static constexpr args_t args{};

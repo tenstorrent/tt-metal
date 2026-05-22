@@ -17,6 +17,7 @@
 #include "api/tt-metalium/device.hpp"
 #include "api/tt-metalium/experimental/host_api.hpp"
 #include "api/tt-metalium/experimental/offline_kernel_compile.hpp"
+#include "api/tt-metalium/experimental/metal2_host_api/kernel_spec.hpp"
 #include "impl/context/metal_context.hpp"
 #include "core_coord.hpp"
 #include "hal_types.hpp"
@@ -105,6 +106,8 @@ struct TensorBindingHandle {
     uint32_t cta_offset;                // first word index of this binding's payload in the kernel's compile-time args
     uint32_t addr_crta_offset;  // byte offset of this binding's base-address slot within the kernel's CRTA buffer
                                 // (binding addresses live in their own section appended after user-named CRTAs)
+    experimental::metal2_host_api::KernelSpec::TensorBinding::AddrgenMode addrgen_mode =
+        experimental::metal2_host_api::KernelSpec::TensorBinding::AddrgenMode::NONE;
 };
 
 class Kernel : public JitBuildSettings {
@@ -168,7 +171,7 @@ public:
     void process_semaphore_local_accessor_handles(
         std::function<void(const std::string& accessor_name, uint16_t semaphore_id)>) const override;
     void process_tensor_binding_handles(
-        std::function<void(const std::string& accessor_name, uint32_t cta_offset, uint32_t addr_crta_offset)>)
+        std::function<void(const std::string& accessor_name, uint32_t cta_offset, uint32_t addr_crta_offset, uint8_t addrgen_mode)>)
         const override;
     const std::vector<TensorBindingHandle>& tensor_binding_handles() const { return tensor_binding_handles_; }
     const std::vector<std::string>& get_named_runtime_args() const override { return named_runtime_args_; }

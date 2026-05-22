@@ -19,6 +19,7 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/experimental/metal2_host_api/addrgen_support.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>
@@ -424,6 +425,31 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
             collected.tensor_parameter_users.contains(tensor_parameter.unique_id),
             "TensorParameter '{}' is defined but not bound by any kernel",
             tensor_parameter.unique_id);
+    }
+
+    // Validate addrgen_mode != NONE constraints via the shared support predicate.
+    // See addrgen_support.hpp for the full matrix of supported / skipped layouts.
+    for (const auto& kernel : spec.kernels) {
+        for (const auto& binding : kernel.tensor_bindings) {
+            if (binding.addrgen_mode == KernelSpec::TensorBinding::AddrgenMode::NONE) {
+                continue;
+            }
+            const auto tp_iter = collected.tensor_parameter_by_name.find(binding.tensor_parameter_name);
+            // Existence already checked above; skip if missing to surface that error first.
+            if (tp_iter == collected.tensor_parameter_by_name.end()) {
+                continue;
+            }
+            const TensorParameter& tp = *tp_iter->second;
+            const AddrgenSupport support = addrgen_support_for(tp.spec);
+            TT_FATAL(
+                support == AddrgenSupport::kSupported,
+                "Kernel '{}' tensor binding '{}' (TensorParameter '{}') has addrgen_mode != NONE, but the "
+                "layout is not supported for hardware address generation: {}",
+                kernel.unique_id,
+                binding.accessor_name,
+                binding.tensor_parameter_name,
+                describe_skip_reason(support));
+        }
     }
 
     // Check for duplicate WorkUnitSpec unique_ids
@@ -1820,6 +1846,7 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
         handle.tensor_parameter_name = binding.tensor_parameter_name;
         handle.cta_offset = cta_word_offset;
         handle.addr_crta_offset = static_cast<uint32_t>(crta_word_index * sizeof(uint32_t));
+        handle.addrgen_mode = binding.addrgen_mode;
 
         out.cta_words.insert(out.cta_words.end(), binding_ctas.begin(), binding_ctas.end());
         cta_word_offset += static_cast<uint32_t>(binding_ctas.size());
