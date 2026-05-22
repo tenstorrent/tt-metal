@@ -426,7 +426,9 @@ def main() -> None:
     # --- Optional: full official path (LLM), no TTNN ---
     if args.use_official_lm:
         from models.demos.ace_step_v1_5.official_lm_preprocess import configure_acestep_logging
+        from models.demos.ace_step_v1_5.torch_ref.transformers_cache_compat import apply_transformers_cache_compat
 
+        apply_transformers_cache_compat()
         configure_acestep_logging()
         ref_root = _ensure_acestep_on_path()
         try:
@@ -548,23 +550,9 @@ def main() -> None:
     # Weights are pre-downloaded by ``_ensure_variant`` earlier in main(); the historical
     # ``import acestep.model_downloader as _mdl; _mdl.MAIN_MODEL_COMPONENTS = [...]``
     # mutation here was informational only and has been removed.
-
-    use_ttnn_5hz_lm = not bool(args.pytorch_lm)
-
-    tt_dev_early = None
-    if use_ttnn_5hz_lm:
-        _configure_ttnn_runtime(no_ttnn_strict=args.no_ttnn_strict)
-        import ttnn as _ttnn_pre_lm
-
-        if (
-            not args.no_ttnn_strict
-            and hasattr(_ttnn_pre_lm, "CONFIG")
-            and hasattr(_ttnn_pre_lm.CONFIG, "throw_exception_on_fallback")
-        ):
-            _ttnn_pre_lm.CONFIG.throw_exception_on_fallback = True
-        tt_dev_early = _open_tt_device(_ttnn_pre_lm, device_id=int(args.device_id))
-        if hasattr(tt_dev_early, "enable_program_cache"):
-            tt_dev_early.enable_program_cache()
+    # torch_ref.five_hz_lm is PyTorch-only (see torch_ref/five_hz_lm/README.md).
+    # --pytorch-lm is accepted for CLI parity with run_prompt_to_wav.py but has no effect here.
+    use_ttnn_5hz_lm = False
 
     dit_handler = AceStepHandler()
     llm_handler = LocalFiveHzLMHandler()
@@ -583,8 +571,7 @@ def main() -> None:
         lm_model_path=args.lm_variant,
         backend="pt",
         device=device,
-        ttnn_causal_device=tt_dev_early,
-        use_ttnn_causal_lm=bool(use_ttnn_5hz_lm),
+        experimental_ttnn_causal_lm=False,
     )
     print(status, flush=True)
     if not ok:
@@ -636,14 +623,11 @@ def main() -> None:
     if not args.no_ttnn_strict and hasattr(ttnn, "CONFIG") and hasattr(ttnn.CONFIG, "throw_exception_on_fallback"):
         ttnn.CONFIG.throw_exception_on_fallback = True
 
-    if tt_dev_early is not None:
-        dev = tt_dev_early
-        dev_opened_for_ttnn_text_encoder = True
-    else:
-        dev = _open_tt_device(ttnn, device_id=int(args.device_id))
-        if hasattr(dev, "enable_program_cache"):
-            dev.enable_program_cache()
-        dev_opened_for_ttnn_text_encoder = True
+    dev = _open_tt_device(ttnn, device_id=int(args.device_id))
+    if hasattr(dev, "enable_program_cache"):
+        dev.enable_program_cache()
+    dev_opened_for_ttnn_text_encoder = True
+    # No-op in torch_ref.five_hz_lm (PyTorch logits path only).
     llm_handler.set_ttnn_logits_device(dev)
 
     qwen_tt_encoder = TtQwen3EmbeddingEncoder(
