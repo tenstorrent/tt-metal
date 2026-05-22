@@ -150,7 +150,6 @@ def test_eltwise_binary(
     tile_cnt_B = tile_cnt_A
 
     # Generate stimuli with correct face dimensions for smaller tiles
-    # Uses generate_stimuli_w_tile_dimensions which computes face_r_dim and num_faces from tile_dimensions
     src_A, _, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
@@ -360,7 +359,6 @@ def test_eltwise_binary_bfp4_b(
     tile_cnt_B = tile_cnt_A
 
     # Generate stimuli with correct face dimensions for smaller tiles
-    # Uses generate_stimuli_w_tile_dimensions which computes face_r_dim and num_faces from tile_dimensions
     src_A, _, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
@@ -732,7 +730,6 @@ def test_eltwise_binary_int8_format(
     tile_cnt_B = tile_cnt_A
 
     # Generate stimuli with correct face dimensions for smaller tiles
-    # Uses generate_stimuli_w_tile_dimensions which computes face_r_dim and num_faces from tile_dimensions
     src_A, _, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,

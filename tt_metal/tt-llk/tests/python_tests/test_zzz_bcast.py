@@ -120,7 +120,7 @@ def test_unpack_bcast(
     input_dimensions = list(tile_dimensions)
 
     # --- Stimuli generation ----------------------------------------------
-    # generate_stimuli_w_tile_dimensions produces dense data for any tile size.
+    # generate_stimuli(..., tile_dimensions=...) produces dense data for any tile size.
     # For [32,32] this is equivalent to the legacy generate_stimuli path.
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,

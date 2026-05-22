@@ -9,7 +9,7 @@ import torch
 from helpers.llk_params import DataFormat, PartialFace, format_dict, format_tile_sizes
 from helpers.stimuli_generator import (
     StimuliSpec,
-    _default_spec_for_format,
+    default_spec_for_format,
     generate_face,
 )
 from helpers.tile_constants import (
@@ -78,7 +78,7 @@ class Operand:
         if self.const_value is not None:
             spec = StimuliSpec.constant(self.const_value)
         else:
-            spec = _default_spec_for_format(self.data_format)
+            spec = default_spec_for_format(self.data_format)
 
         for _ in range(faces_needed):
             face = generate_face(

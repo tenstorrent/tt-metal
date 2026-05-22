@@ -1658,7 +1658,7 @@ def _default_bfp4b_face(
     return integer_part.to(torch.bfloat16) + fraction
 
 
-def _default_spec_for_format(stimuli_format: DataFormat) -> StimuliSpec:
+def default_spec_for_format(stimuli_format: DataFormat) -> StimuliSpec:
     """Return the built-in default StimuliSpec for a given data format.
 
     Defaults are chosen to give reasonable value ranges and avoid overflows
@@ -1729,9 +1729,9 @@ def generate_stimuli(
     if input_dimensions_B is None:
         input_dimensions_B = [DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM]
     if spec_A is None:
-        spec_A = _default_spec_for_format(stimuli_format_A)
+        spec_A = default_spec_for_format(stimuli_format_A)
     if spec_B is None:
-        spec_B = _default_spec_for_format(stimuli_format_B)
+        spec_B = default_spec_for_format(stimuli_format_B)
 
     # ULP_SWEEP: auto-size input_dimensions_A from the count of representable values,
     # ignoring any caller-supplied value. Mirror B if the caller didn't specify spec_B.
