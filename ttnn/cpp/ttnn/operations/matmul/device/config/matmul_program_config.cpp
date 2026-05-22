@@ -307,7 +307,8 @@ MatmulProgramConfig create_matmul_1d_systolic_array_program_config(
     const TensorMemoryLayout input_layout_a,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const tt::tt_metal::DataType output_dtype,
-    uint32_t l1_safety_margin_bytes) {
+    uint32_t l1_safety_margin_bytes,
+    const bool output_is_sharded) {
     using namespace tt;
     const auto& a_padded_shape = utilities::get_matmul_tensor_padded_shape(input_tensor_a, transpose_a);
     const auto& b_padded_shape = utilities::get_matmul_tensor_padded_shape(input_tensor_b, transpose_b);
@@ -373,6 +374,7 @@ MatmulProgramConfig create_matmul_1d_systolic_array_program_config(
     // "Kt" so the gate sees Kt == in0_block_w and stays off — the deadlock requires
     // num_k_blocks > 1.
     const bool rmo_fits_systolic =
+        output_is_sharded &&
         tile_pack_row_major_fits_in_l1(
             input_tensor_a,
             input_tensor_b,
@@ -391,7 +393,7 @@ MatmulProgramConfig create_matmul_1d_systolic_array_program_config(
         .compute_kernel_config = deref_compute_kernel_config_or_default(compute_kernel_config)};
     subblock_inputs_systolic.per_core_M = out_block_h;
     subblock_inputs_systolic.per_core_N = out_block_w;
-    subblock_inputs_systolic.subblock_w_eq_per_core_n_required = !rmo_fits_systolic;
+    subblock_inputs_systolic.subblock_w_eq_per_core_n_required = output_is_sharded && !rmo_fits_systolic;
     subblock_inputs_systolic.prefer_fast_path = true;
     auto subblock_choice_systolic = auto_tune::determine_largest_subblock(subblock_inputs_systolic);
     return MatmulMultiCoreReuseMultiCast1DProgramConfig{
@@ -534,6 +536,7 @@ MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
     uint32_t out_block_w = mutlti_dim_per_core_factor[1];
 
     const bool rmo_fits =
+        out_sharded &&
         tile_pack_row_major_fits_in_l1(
             input_tensor_a,
             input_tensor_b,
@@ -552,7 +555,7 @@ MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
     subblock_inputs.per_core_M = out_block_h;
     subblock_inputs.per_core_N = out_block_w;
     subblock_inputs.subblock_h_eq_per_core_m_required = per_core_M_equals_subblock_h_constraint;
-    subblock_inputs.subblock_w_eq_per_core_n_required = !rmo_fits;
+    subblock_inputs.subblock_w_eq_per_core_n_required = out_sharded && !rmo_fits;
     subblock_inputs.prefer_fast_path = true;
     auto subblock_choice = auto_tune::determine_largest_subblock(subblock_inputs);
 
@@ -737,7 +740,8 @@ MatmulProgramConfig create_matmul_program_config(
                 a_layout,
                 compute_kernel_config,
                 output_dtype,
-                l1_margin_sys);
+                l1_margin_sys,
+                mem_config.is_sharded());
         }
     }
     if (!a_is_sharded) {
@@ -781,7 +785,8 @@ MatmulProgramConfig create_matmul_program_config(
                 a_layout,
                 compute_kernel_config,
                 output_dtype,
-                l1_margin_sys);
+                l1_margin_sys,
+                mem_config.is_sharded());
         }
         uint32_t k = a_padded_shape[-1] / ttnn::TILE_SIZE;
         uint32_t n = b_padded_shape[-1] / ttnn::TILE_SIZE;
@@ -823,7 +828,8 @@ MatmulProgramConfig create_matmul_program_config(
     // Each core sees the full K dim in 2D mcast (in0 is mcasted along the row, in1 along
     // the column), so num_k_blocks = Kt / k_tiles_per_core where in0_block_w = k_tiles_per_core.
     const uint32_t Kt_2dmcast = k_size / ttnn::TILE_SIZE;
-    const bool rmo_fits = tile_pack_row_major_fits_in_l1(
+    const bool rmo_fits = mem_config.is_sharded() &&
+                          tile_pack_row_major_fits_in_l1(
                               input_tensor_a,
                               input_tensor_b,
                               transpose_a,
@@ -841,7 +847,7 @@ MatmulProgramConfig create_matmul_program_config(
         .compute_kernel_config = deref_compute_kernel_config_or_default(compute_kernel_config)};
     subblock_inputs.per_core_M = out_block_h;
     subblock_inputs.per_core_N = out_block_w;
-    subblock_inputs.subblock_w_eq_per_core_n_required = !rmo_fits;
+    subblock_inputs.subblock_w_eq_per_core_n_required = mem_config.is_sharded() && !rmo_fits;
     subblock_inputs.prefer_fast_path = true;
     auto subblock_choice = auto_tune::determine_largest_subblock(subblock_inputs);
     uint32_t out_subblock_h = subblock_choice.out_subblock_h;
@@ -977,6 +983,7 @@ MatmulProgramConfig get_matmul_program_config(
                 output_tile_size_bytes_1dmc,
                 num_l1_banks_1dmc);
             const bool rmo_fits =
+                output_mem_config.is_sharded() &&
                 tile_pack_row_major_fits_in_l1(
                     input_tensor_a,
                     input_tensor_b,
@@ -994,7 +1001,7 @@ MatmulProgramConfig get_matmul_program_config(
                 .compute_kernel_config = deref_compute_kernel_config_or_default(compute_kernel_config)};
             subblock_inputs.per_core_M = out_block_h;
             subblock_inputs.per_core_N = out_block_w;
-            subblock_inputs.subblock_w_eq_per_core_n_required = !rmo_fits;
+            subblock_inputs.subblock_w_eq_per_core_n_required = output_mem_config.is_sharded() && !rmo_fits;
             subblock_inputs.prefer_fast_path = true;
             auto subblock_choice = auto_tune::determine_largest_subblock(subblock_inputs);
 
@@ -1087,6 +1094,7 @@ MatmulProgramConfig get_matmul_program_config(
                 output_tile_size_bytes_2dmc,
                 num_l1_banks_2dmc);
             const bool rmo_fits =
+                output_mem_config.is_sharded() &&
                 tile_pack_row_major_fits_in_l1(
                     input_tensor_a,
                     input_tensor_b,
@@ -1104,7 +1112,7 @@ MatmulProgramConfig get_matmul_program_config(
                 .compute_kernel_config = deref_compute_kernel_config_or_default(compute_kernel_config)};
             subblock_inputs.per_core_M = out_block_h;
             subblock_inputs.per_core_N = out_block_w;
-            subblock_inputs.subblock_w_eq_per_core_n_required = !rmo_fits;
+            subblock_inputs.subblock_w_eq_per_core_n_required = output_mem_config.is_sharded() && !rmo_fits;
             subblock_inputs.prefer_fast_path = true;
             auto subblock_choice = auto_tune::determine_largest_subblock(subblock_inputs);
 
@@ -1660,6 +1668,7 @@ MatmulProgramConfig create_simple_matmul_program_config(
                 output_tile_size_bytes_simple,
                 num_l1_banks_simple);
             const bool rmo_fits =
+                mem_config.is_sharded() &&
                 tile_pack_row_major_fits_in_l1(
                     input_tensor_a,
                     input_tensor_b,
@@ -1677,9 +1686,9 @@ MatmulProgramConfig create_simple_matmul_program_config(
                 .compute_kernel_config = deref_compute_kernel_config_or_default(compute_kernel_config)};
             subblock_inputs.per_core_M = out_block_h;
             subblock_inputs.per_core_N = out_block_w;
-            // When L1 is too tight for tile_pack_row_major, fall back to subblock-major
-            // layout which requires (out_subblock_w == per_core_N || out_subblock_h == 1).
-            subblock_inputs.subblock_w_eq_per_core_n_required = !rmo_fits;
+            // For interleaved output, the subblock-major writer handles arbitrary
+            // (out_subblock_h, out_subblock_w) — the constraint is sharded-only.
+            subblock_inputs.subblock_w_eq_per_core_n_required = mem_config.is_sharded() && !rmo_fits;
             subblock_inputs.prefer_fast_path = true;
             auto subblock_choice = auto_tune::determine_largest_subblock(subblock_inputs);
             out_subblock_h = subblock_choice.out_subblock_h;
