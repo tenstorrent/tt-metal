@@ -111,20 +111,6 @@ def matmul(
     # Lazy output allocation
     def _alloc_outputs(slots):
         spec = ttnn.MatmulDeviceOperation.compute_output_specs(operation_params, tensor_args)[0]
-
-        if output_mem_config is not None and output_mem_config.is_sharded():
-            factory_shard = spec.memory_config.shard_spec
-            corrected_shard = ttnn.ShardSpec(core_range_set, factory_shard.shape, factory_shard.orientation)
-            spec = ttnn.TensorSpec(
-                spec.shape,
-                spec.dtype,
-                spec.layout,
-                output_mem_config.memory_layout,
-                corrected_shard,
-                output_mem_config.buffer_type,
-                spec.tile,
-            )
-
         slots[0] = ttnn.allocate_tensor_on_device(spec, device)
 
     outputs = LazyOutputList([None], _alloc_outputs)

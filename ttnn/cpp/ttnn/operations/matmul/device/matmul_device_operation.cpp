@@ -1919,14 +1919,15 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
 
                     uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
                     uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
+                    ShardOrientation shard_orientation =
+                        program_config.transpose_mcast ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
                     CoreRangeSet all_cores;
-                    ShardOrientation shard_orientation;
-                    if (program_config.transpose_mcast) {
+                    if (attributes.output_mem_config.shard_spec().has_value()) {
+                        all_cores = attributes.output_mem_config.shard_spec()->grid;
+                    } else if (program_config.transpose_mcast) {
                         all_cores = CoreRangeSet({CoreRange({0, 0}, {num_blocks_y - 1, num_blocks_x - 1})});
-                        shard_orientation = ShardOrientation::COL_MAJOR;
                     } else {
                         all_cores = CoreRangeSet({CoreRange({0, 0}, {num_blocks_x - 1, num_blocks_y - 1})});
-                        shard_orientation = ShardOrientation::ROW_MAJOR;
                     }
                     tt::tt_metal::ShardSpec shard_spec = tt::tt_metal::ShardSpec{
                         all_cores,
@@ -1960,9 +1961,14 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         shard_orientation = input_tensor_b.shard_spec().value().orientation;
                     }
 
-                    auto cwsg_2d = program_config.allowed_worker_cores.value().bounding_box().grid_size();
-                    CoreRangeSet all_cores =
-                        num_cores_to_corerangeset(num_cores, cwsg_2d, shard_orientation == ShardOrientation::ROW_MAJOR);
+                    CoreRangeSet all_cores;
+                    if (attributes.output_mem_config.shard_spec().has_value()) {
+                        all_cores = attributes.output_mem_config.shard_spec()->grid;
+                    } else {
+                        auto cwsg_2d = program_config.allowed_worker_cores.value().bounding_box().grid_size();
+                        all_cores = num_cores_to_corerangeset(
+                            num_cores, cwsg_2d, shard_orientation == ShardOrientation::ROW_MAJOR);
+                    }
                     tt::tt_metal::ShardSpec shard_spec = tt::tt_metal::ShardSpec{
                         all_cores,
                         {per_core_M * in0_tile.get_height(), per_core_N * in1_tile.get_width()},
