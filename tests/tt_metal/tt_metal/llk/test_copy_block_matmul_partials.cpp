@@ -122,7 +122,7 @@ void run_single_core_copy_block_matmul_partials_quasar(
         .num_threads = 1,
         .dfb_bindings = {experimental::ProducerOf(SRC0_DFB, "out")},
         .runtime_arguments_schema =
-            {.named_runtime_args = {"src_addr", "src_dram_bank_id", "num_tiles", "ublock_size_tiles", "reader_only"}},
+            {.runtime_args = {"src_addr", "src_dram_bank_id", "num_tiles", "ublock_size_tiles", "reader_only"}},
         .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
 
@@ -132,7 +132,7 @@ void run_single_core_copy_block_matmul_partials_quasar(
         .num_threads = 1,
         .dfb_bindings = {experimental::ConsumerOf(DST_DFB, "in")},
         .runtime_arguments_schema =
-            {.named_runtime_args = {"dst_addr", "dst_dram_bank_id", "num_tiles", "ublock_size_tiles", "writer_only"}},
+            {.runtime_args = {"dst_addr", "dst_dram_bank_id", "num_tiles", "ublock_size_tiles", "writer_only"}},
         .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
 
@@ -147,7 +147,7 @@ void run_single_core_copy_block_matmul_partials_quasar(
         .num_threads = 1,
         .compiler_options = {.defines = compute_defines},
         .dfb_bindings = {experimental::ConsumerOf(SRC0_DFB, "in"), experimental::ProducerOf(DST_DFB, "out")},
-        .compile_time_arg_bindings = {{"num_tiles", num_tiles}, {"num_single_transfer", test_config.compute_ublock}},
+        .compile_time_args = {{"num_tiles", num_tiles}, {"num_single_transfer", test_config.compute_ublock}},
         .config_spec =
             experimental::ComputeConfiguration{
                 .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
@@ -177,7 +177,7 @@ void run_single_core_copy_block_matmul_partials_quasar(
     params.kernel_run_params = {
         experimental::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = READER,
-            .named_runtime_args =
+            .runtime_args =
                 {{.node = node,
                   .args =
                       {{"src_addr", src_dram_buffer->address()},
@@ -188,7 +188,7 @@ void run_single_core_copy_block_matmul_partials_quasar(
         },
         experimental::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = WRITER,
-            .named_runtime_args =
+            .runtime_args =
                 {{.node = node,
                   .args =
                       {{"dst_addr", dst_dram_buffer->address()},

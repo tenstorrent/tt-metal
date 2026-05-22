@@ -56,8 +56,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
         .num_threads = 2,
         .runtime_arguments_schema =
             {
-                .named_runtime_args = {"address"},
-                .named_common_runtime_args = {"value"},
+                .runtime_args = {"address"},
+                .common_runtime_args = {"value"},
             },
         .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
@@ -78,8 +78,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
     experimental::ProgramRunParams params;
     params.kernel_run_params = {{
         .kernel_spec_name = DM_KERNEL,
-        .named_runtime_args = {{.node = node, .args = {{"address", address}}}},
-        .named_common_runtime_args = {{"value", value}},
+        .runtime_args = {{.node = node, .args = {{"address", address}}}},
+        .common_runtime_args = {{"value", value}},
     }};
     experimental::SetProgramRunParameters(program, params);
     std::cout << "Hello, Core {0, 0} on Device 0, Please start execution. I will standby for your communication."

@@ -197,7 +197,7 @@ void RunTestOnCore(
             // Quasar: user DMs (DM2..DM7) run the kernel; multi_dm_race syncs them to race, else only dm_id executes.
             // DM0/DM1 are reserved for internal use, so the test exercises 6 user DMs.
             constexpr uint32_t num_dms = 6;
-            experimental::KernelSpec::CompileTimeArgBindings cta_bindings;
+            experimental::KernelSpec::CompileTimeArgs cta_bindings;
             experimental::KernelSpec::CompilerOptions::Defines defines;
             if (multi_dm_race) {
                 constexpr uint32_t multi_dm_base_addr = 0xFFFF0000;
@@ -225,9 +225,9 @@ void RunTestOnCore(
                 .source = kernel,
                 .num_threads = static_cast<uint8_t>(num_dms),
                 .compiler_options = {.defines = defines},
-                .compile_time_arg_bindings = cta_bindings,
+                .compile_time_args = cta_bindings,
                 .runtime_arguments_schema =
-                    {.named_runtime_args =
+                    {.runtime_args =
                          {"local_buffer_addr",
                           "buffer_src_addr",
                           "src_noc_x",
@@ -369,7 +369,7 @@ void RunTestOnCore(
         experimental::ProgramRunParams params;
         params.kernel_run_params = {{
             .kernel_spec_name = DRAM_COPY_KERNEL_NAME,
-            .named_runtime_args =
+            .runtime_args =
                 {{.node = experimental::NodeCoord{core},
                   .args =
                       {{"local_buffer_addr", buffer_addr},

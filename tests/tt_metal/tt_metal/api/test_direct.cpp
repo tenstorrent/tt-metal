@@ -393,9 +393,8 @@ static bool reader_datacopy_writer_quasar(
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
         .num_threads = num_threads,
         .dfb_bindings = {experimental::ProducerOf(INPUT_DFB, "out")},
-        .compile_time_arg_bindings = {{"use_dfbs", 1u}},
-        .runtime_arguments_schema =
-            {.named_runtime_args = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
+        .compile_time_args = {{"use_dfbs", 1u}},
+        .runtime_arguments_schema = {.runtime_args = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
         .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
 
@@ -404,9 +403,8 @@ static bool reader_datacopy_writer_quasar(
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
         .num_threads = num_threads,
         .dfb_bindings = {experimental::ConsumerOf(OUTPUT_DFB, "in")},
-        .compile_time_arg_bindings = {{"use_dfbs", 1u}},
-        .runtime_arguments_schema =
-            {.named_runtime_args = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
+        .compile_time_args = {{"use_dfbs", 1u}},
+        .runtime_arguments_schema = {.runtime_args = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
         .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
 
@@ -415,7 +413,7 @@ static bool reader_datacopy_writer_quasar(
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
         .num_threads = num_threads,
         .dfb_bindings = {experimental::ConsumerOf(INPUT_DFB, "in"), experimental::ProducerOf(OUTPUT_DFB, "out")},
-        .compile_time_arg_bindings = {{"per_core_tile_cnt", per_core_tile_cnt}, {"use_dfbs", 1u}},
+        .compile_time_args = {{"per_core_tile_cnt", per_core_tile_cnt}, {"use_dfbs", 1u}},
         .config_spec = experimental::ComputeConfiguration{},
     };
 
@@ -440,7 +438,7 @@ static bool reader_datacopy_writer_quasar(
     params.kernel_run_params = {
         experimental::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = READER,
-            .named_runtime_args =
+            .runtime_args =
                 {{.node = node,
                   .args =
                       {{"src_addr", ctx.input_dram_byte_address},
@@ -450,7 +448,7 @@ static bool reader_datacopy_writer_quasar(
         },
         experimental::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = WRITER,
-            .named_runtime_args =
+            .runtime_args =
                 {{.node = node,
                   .args =
                       {{"dst_addr", ctx.output_dram_byte_address},

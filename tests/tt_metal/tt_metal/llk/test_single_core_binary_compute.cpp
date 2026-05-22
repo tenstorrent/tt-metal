@@ -314,7 +314,7 @@ static bool single_core_binary_quasar(
              experimental::ProducerOf(INP1_DFB, "in1"),
              experimental::ProducerOf(INP2_DFB, "in2")},
         .runtime_arguments_schema =
-            {.named_runtime_args =
+            {.runtime_args =
                  {"src0_addr", "src0_bank_id", "src1_addr", "src1_bank_id", "num_tiles", "src2_addr", "src2_bank_id"}},
         .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
@@ -324,7 +324,7 @@ static bool single_core_binary_quasar(
         .source = "tt_metal/kernels/dataflow/writer_unary.cpp",
         .num_threads = 1,
         .dfb_bindings = {experimental::ConsumerOf(OUT_DFB, "in")},
-        .runtime_arguments_schema = {.named_runtime_args = {"dst_addr", "bank_id", "num_tiles"}},
+        .runtime_arguments_schema = {.runtime_args = {"dst_addr", "bank_id", "num_tiles"}},
         .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
 
@@ -338,7 +338,7 @@ static bool single_core_binary_quasar(
              experimental::ConsumerOf(INP1_DFB, "in1"),
              experimental::ConsumerOf(INP2_DFB, "in2"),
              experimental::ProducerOf(OUT_DFB, "out")},
-        .runtime_arguments_schema = {.named_runtime_args = {"per_core_block_cnt", "per_core_block_size", "acc_to_dst"}},
+        .runtime_arguments_schema = {.runtime_args = {"per_core_block_cnt", "per_core_block_size", "acc_to_dst"}},
         .config_spec =
             experimental::ComputeConfiguration{
                 .math_fidelity = test_config.math_fidelity,
@@ -365,7 +365,7 @@ static bool single_core_binary_quasar(
     params.kernel_run_params = {
         experimental::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = READER,
-            .named_runtime_args =
+            .runtime_args =
                 {{.node = node,
                   .args =
                       {{"src0_addr", input0_dram_buffer->address()},
@@ -378,13 +378,13 @@ static bool single_core_binary_quasar(
         },
         experimental::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = WRITER,
-            .named_runtime_args =
+            .runtime_args =
                 {{.node = node,
                   .args = {{"dst_addr", output_dram_buffer->address()}, {"bank_id", 0u}, {"num_tiles", num_tiles_u}}}},
         },
         experimental::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = COMPUTE,
-            .named_runtime_args =
+            .runtime_args =
                 {{.node = node,
                   .args = {{"per_core_block_cnt", num_tiles_u}, {"per_core_block_size", 1u}, {"acc_to_dst", 0u}}}},
         },

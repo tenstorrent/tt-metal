@@ -57,7 +57,7 @@ constexpr const char* kWriterKernelPath =
 // Returns the comma-separated CTA value string for the KERNEL_COMPILE_TIME_ARGS define.
 // This enables device kernels that use TensorAccessorArgs<0, 0>() (positional CTA access)
 // to compile correctly under the Metal 2.0 API, which does not pass positional CTAs through
-// compile_time_arg_bindings.
+// compile_time_args.
 std::string build_cta_define(const TensorAccessorArgs& accessor_args) {
     const auto ctas = accessor_args.get_compile_time_args();
     std::ostringstream ss;

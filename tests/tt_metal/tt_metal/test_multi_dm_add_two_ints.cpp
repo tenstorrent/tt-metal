@@ -52,10 +52,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
             .unique_id = id,
             .source = "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
             .num_threads = num_threads,
-            .compile_time_arg_bindings = {{"l1_address", l1_addr}},
+            .compile_time_args = {{"l1_address", l1_addr}},
             .runtime_arguments_schema =
                 {
-                    .named_runtime_args = {"a", "b"},
+                    .runtime_args = {"a", "b"},
                 },
             .config_spec =
                 experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
@@ -88,17 +88,17 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
     experimental::ProgramRunParams params;
     params.kernel_run_params = {
         {.kernel_spec_name = KERNEL_0,
-         .named_runtime_args =
+         .runtime_args =
              {{.node = experimental::NodeCoord{0, 0}, .args = {{"a", 1}, {"b", 2}}},
               {.node = experimental::NodeCoord{1, 0}, .args = {{"a", 1}, {"b", 2}}}}},
         {.kernel_spec_name = KERNEL_1,
-         .named_runtime_args =
+         .runtime_args =
              {{.node = experimental::NodeCoord{0, 0}, .args = {{"a", 3}, {"b", 4}}},
               {.node = experimental::NodeCoord{1, 0}, .args = {{"a", 3}, {"b", 4}}}}},
         {.kernel_spec_name = KERNEL_2,
-         .named_runtime_args = {{.node = experimental::NodeCoord{0, 0}, .args = {{"a", 5}, {"b", 6}}}}},
+         .runtime_args = {{.node = experimental::NodeCoord{0, 0}, .args = {{"a", 5}, {"b", 6}}}}},
         {.kernel_spec_name = KERNEL_3,
-         .named_runtime_args = {{.node = experimental::NodeCoord{1, 0}, .args = {{"a", 7}, {"b", 8}}}}},
+         .runtime_args = {{.node = experimental::NodeCoord{1, 0}, .args = {{"a", 7}, {"b", 8}}}}},
     };
     experimental::SetProgramRunParameters(program, params);
 

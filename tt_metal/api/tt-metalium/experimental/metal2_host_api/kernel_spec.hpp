@@ -141,8 +141,8 @@ struct KernelSpec {
     //----------------------------------------------------------------------------
     // Compile time argument bindings
     // (Bound argument values cannot be changed between Program executions)
-    using CompileTimeArgBindings = std::vector<std::pair<std::string, uint32_t>>;
-    CompileTimeArgBindings compile_time_arg_bindings;
+    using CompileTimeArgs = std::vector<std::pair<std::string, uint32_t>>;
+    CompileTimeArgs compile_time_args;
     // TODO -- extend to support arbitrary POD types, including user-defined structs.
 
     //----------------------------------------------------------------------------
@@ -159,10 +159,10 @@ struct KernelSpec {
     //     Vararg indices are stable across schema changes (e.g., moving a named arg from RTA→CRTA).
     struct RuntimeArgSchema {
         // Named RTAs: names in declaration order. Must be unique valid C++ identifiers.
-        std::vector<std::string> named_runtime_args;
+        std::vector<std::string> runtime_args;
 
         // Named CRTAs: names in declaration order. Must be unique valid C++ identifiers.
-        std::vector<std::string> named_common_runtime_args;
+        std::vector<std::string> common_runtime_args;
 
         //----------------------
         // Advanced options

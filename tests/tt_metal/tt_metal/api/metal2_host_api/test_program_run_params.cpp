@@ -637,8 +637,8 @@ TEST_F(ProgramRunParamsTestQuasar, MultiNode_MissingOneNodeFails) {
 inline ProgramSpec MakeSpecWithNamedArgs(
     const NodeCoord& node, const std::vector<std::string>& named_rtas, const std::vector<std::string>& named_crtas) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
-    spec.kernels[0].runtime_arguments_schema.named_runtime_args = named_rtas;
-    spec.kernels[0].runtime_arguments_schema.named_common_runtime_args = named_crtas;
+    spec.kernels[0].runtime_arguments_schema.runtime_args = named_rtas;
+    spec.kernels[0].runtime_arguments_schema.common_runtime_args = named_crtas;
     (void)node;  // node inherited from MakeMinimalValidProgramSpec (0,0)
     return spec;
 }
@@ -651,8 +651,8 @@ TEST_F(ProgramRunParamsTestQuasar, NamedRTAsAndCRTAsSucceed) {
     ProgramRunParams params;
     params.kernel_run_params.push_back({
         .kernel_spec_name = "dm_kernel",
-        .named_runtime_args = {{.node = node, .args = {{"input_ptr", 0x1000}, {"output_ptr", 0x2000}}}},
-        .named_common_runtime_args = {{"tile_count", 64}},
+        .runtime_args = {{.node = node, .args = {{"input_ptr", 0x1000}, {"output_ptr", 0x2000}}}},
+        .common_runtime_args = {{"tile_count", 64}},
     });
     params.kernel_run_params.push_back(MakeKernelRunParams("compute_kernel", node, {}, {}));
 
@@ -667,14 +667,14 @@ TEST_F(ProgramRunParamsTestQuasar, MissingNamedRTAForNodeFails) {
     ProgramRunParams params;
     params.kernel_run_params.push_back({
         .kernel_spec_name = "dm_kernel",
-        // No named_runtime_args for node (0,0) at all — but schema declares one.
+        // No runtime_args for node (0,0) at all — but schema declares one.
     });
     params.kernel_run_params.push_back(MakeKernelRunParams("compute_kernel", node, {}, {}));
 
     EXPECT_THAT(
         [&] { SetProgramRunParameters(program, params); },
         ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("has named RTAs declared but no named_runtime_args provided for node")));
+            ::testing::HasSubstr("has named RTAs declared but no runtime_args provided for node")));
 }
 
 TEST_F(ProgramRunParamsTestQuasar, MissingDeclaredNamedRTANameFails) {
@@ -686,7 +686,7 @@ TEST_F(ProgramRunParamsTestQuasar, MissingDeclaredNamedRTANameFails) {
     params.kernel_run_params.push_back({
         .kernel_spec_name = "dm_kernel",
         // Only one name provided — output_ptr missing.
-        .named_runtime_args = {{.node = node, .args = {{"input_ptr", 0x1000}}}},
+        .runtime_args = {{.node = node, .args = {{"input_ptr", 0x1000}}}},
     });
     params.kernel_run_params.push_back(MakeKernelRunParams("compute_kernel", node, {}, {}));
 
@@ -704,7 +704,7 @@ TEST_F(ProgramRunParamsTestQuasar, UndeclaredNamedRTAFails) {
     ProgramRunParams params;
     params.kernel_run_params.push_back({
         .kernel_spec_name = "dm_kernel",
-        .named_runtime_args = {{.node = node, .args = {{"input_ptr", 0x1000}, {"not_in_schema", 0}}}},
+        .runtime_args = {{.node = node, .args = {{"input_ptr", 0x1000}, {"not_in_schema", 0}}}},
     });
     params.kernel_run_params.push_back(MakeKernelRunParams("compute_kernel", node, {}, {}));
 
@@ -723,7 +723,7 @@ TEST_F(ProgramRunParamsTestQuasar, NamedCRTACountMismatchFails) {
     params.kernel_run_params.push_back({
         .kernel_spec_name = "dm_kernel",
         // Only one CRTA provided; schema declares two.
-        .named_common_runtime_args = {{"tile_count", 4}},
+        .common_runtime_args = {{"tile_count", 4}},
     });
     params.kernel_run_params.push_back(MakeKernelRunParams("compute_kernel", node, {}, {}));
 
@@ -930,8 +930,8 @@ TEST_F(ProgramRunParamsTestQuasar, VarargOnlyUnknownNodeFails) {
 // cleanly — no missing-schema TT_FATALs, no empty-buffer write attempts, no validation errors.
 TEST_F(ProgramRunParamsTestQuasar, AllEmptySchemaSucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
-    // spec.kernels already default to empty named_runtime_args / named_common_runtime_args /
-    // compile_time_arg_bindings, num_runtime_varargs = 0, num_common_runtime_varargs = 0,
+    // spec.kernels already default to empty runtime_args / common_runtime_args /
+    // compile_time_args, num_runtime_varargs = 0, num_common_runtime_varargs = 0,
     // num_runtime_varargs_per_node = nullopt.
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
@@ -946,14 +946,14 @@ TEST_F(ProgramRunParamsTestQuasar, NamedAndVarargRTAsCoexistSucceeds) {
     // A kernel with both named RTAs (schema) and varargs (num_runtime_varargs).
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeMinimalValidProgramSpec();
-    spec.kernels[0].runtime_arguments_schema.named_runtime_args = {"input_ptr"};
+    spec.kernels[0].runtime_arguments_schema.runtime_args = {"input_ptr"};
     spec.kernels[0].runtime_arguments_schema.num_runtime_varargs = 3;
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunParams params;
     params.kernel_run_params.push_back({
         .kernel_spec_name = "dm_kernel",
-        .named_runtime_args = {{.node = node, .args = {{"input_ptr", 0x1000}}}},
+        .runtime_args = {{.node = node, .args = {{"input_ptr", 0x1000}}}},
         .runtime_varargs = {{node, {7, 8, 9}}},
     });
     params.kernel_run_params.push_back(MakeKernelRunParams("compute_kernel", node, {}, {}));
@@ -1466,7 +1466,7 @@ TEST_F(ProgramRunParamsTestGen1, UpdateTensorArgs_LeavesNamedCRTAsUnchanged) {
     auto binding = MakeMinimalTensorParameter("input_tensor");
     spec.tensor_parameters = {binding};
     // Schema with a named CRTA preceding the binding-address section.
-    spec.kernels[0].runtime_arguments_schema.named_common_runtime_args = {"tile_count"};
+    spec.kernels[0].runtime_arguments_schema.common_runtime_args = {"tile_count"};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
@@ -1476,7 +1476,7 @@ TEST_F(ProgramRunParamsTestGen1, UpdateTensorArgs_LeavesNamedCRTAsUnchanged) {
     ProgramRunParams params;
     params.kernel_run_params.push_back({
         .kernel_spec_name = "dm_kernel",
-        .named_common_runtime_args = {{"tile_count", kNamedCRTAValue}},
+        .common_runtime_args = {{"tile_count", kNamedCRTAValue}},
     });
     params.kernel_run_params.push_back(MakeKernelRunParams("compute_kernel", node, {}, {}));
     params.tensor_args = {

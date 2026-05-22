@@ -35,7 +35,7 @@ bool run_im2col_test(
         .unique_id = DM_KERNEL,
         .source = kernel_path,
         .num_threads = 1,
-        .compile_time_arg_bindings = {{"num_of_addresses", num_of_addresses}},
+        .compile_time_args = {{"num_of_addresses", num_of_addresses}},
         .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
 

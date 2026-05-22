@@ -91,7 +91,7 @@ protected:
                 .compiler_options = {.defines = defines_vec},
                 .runtime_arguments_schema =
                     {
-                        .named_runtime_args = {"l1_counter_addr", "increment_times"},
+                        .runtime_args = {"l1_counter_addr", "increment_times"},
                     },
                 .config_spec =
                     experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
@@ -113,7 +113,7 @@ protected:
             experimental::ProgramRunParams params;
             params.kernel_run_params = {{
                 .kernel_spec_name = DM_KERNEL,
-                .named_runtime_args =
+                .runtime_args =
                     {{.node = core,
                       .args = {{"l1_counter_addr", l1_unreserved_base}, {"increment_times", iterations}}}},
             }};

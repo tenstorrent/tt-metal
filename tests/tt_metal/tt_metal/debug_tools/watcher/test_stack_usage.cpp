@@ -83,7 +83,7 @@ void RunOneTest(
                 .unique_id = name,
                 .source = path,
                 .num_threads = static_cast<uint8_t>(dms_per_kernel),
-                .compile_time_arg_bindings = {{"usage", free}},
+                .compile_time_args = {{"usage", free}},
                 .config_spec =
                     experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
             });
@@ -96,7 +96,7 @@ void RunOneTest(
             // One thread per Neo (Quasar Tensix has 4) so the compute kernel fans out across
             // all Neos; each Neo internally runs the kernel on its 4 TRISCs.
             .num_threads = 4,
-            .compile_time_arg_bindings = {{"usage", free}},
+            .compile_time_args = {{"usage", free}},
             .config_spec = experimental::ComputeConfiguration{},
         });
         kernel_names.push_back(COMPUTE_NAME);

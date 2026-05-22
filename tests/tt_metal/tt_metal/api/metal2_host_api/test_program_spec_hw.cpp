@@ -231,22 +231,22 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
     // varargs, 1 CRTA vararg.
     auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
     producer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/named_args_loopback_producer.cpp";
-    producer.runtime_arguments_schema.named_runtime_args = {"src_addr"};
-    producer.runtime_arguments_schema.named_common_runtime_args = {"num_entries"};
+    producer.runtime_arguments_schema.runtime_args = {"src_addr"};
+    producer.runtime_arguments_schema.common_runtime_args = {"num_entries"};
     producer.runtime_arguments_schema.num_runtime_varargs = 3;
     producer.runtime_arguments_schema.num_common_runtime_varargs = 1;
-    producer.compile_time_arg_bindings = {{"bank_id", 0}, {"entry_size", entry_size}};
+    producer.compile_time_args = {{"bank_id", 0}, {"entry_size", entry_size}};
 
     // Consumer: NCRISC reads DFB → DRAM. Uses default `args` namespace, 1 named RTA,
     // 1 named CRTA, 2 named CTAs, 2 RTA varargs (note: different count from producer —
     // this verifies the named_rta_words offset is baked per-kernel), 1 CRTA vararg.
     auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
     consumer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/named_args_loopback_consumer.cpp";
-    consumer.runtime_arguments_schema.named_runtime_args = {"dst_addr"};
-    consumer.runtime_arguments_schema.named_common_runtime_args = {"num_entries"};
+    consumer.runtime_arguments_schema.runtime_args = {"dst_addr"};
+    consumer.runtime_arguments_schema.common_runtime_args = {"num_entries"};
     consumer.runtime_arguments_schema.num_runtime_varargs = 2;
     consumer.runtime_arguments_schema.num_common_runtime_varargs = 1;
-    consumer.compile_time_arg_bindings = {{"bank_id", 0}, {"entry_size", entry_size}};
+    consumer.compile_time_args = {{"bank_id", 0}, {"entry_size", entry_size}};
 
     auto dfb = MakeMinimalDFB("loopback_dfb", entry_size, num_entries_in_dfb);
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
@@ -277,15 +277,15 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
     params.kernel_run_params = {
         ProgramRunParams::KernelRunParams{
             .kernel_spec_name = "producer",
-            .named_runtime_args = {{.node = node, .args = {{"src_addr", input_buffer->address()}}}},
-            .named_common_runtime_args = {{"num_entries", num_transfers}},
+            .runtime_args = {{.node = node, .args = {{"src_addr", input_buffer->address()}}}},
+            .common_runtime_args = {{"num_entries", num_transfers}},
             .runtime_varargs = {{node, {kProducerRta0, kProducerRta1, kProducerRta2}}},
             .common_runtime_varargs = {kProducerCrta0},
         },
         ProgramRunParams::KernelRunParams{
             .kernel_spec_name = "consumer",
-            .named_runtime_args = {{.node = node, .args = {{"dst_addr", output_buffer->address()}}}},
-            .named_common_runtime_args = {{"num_entries", num_transfers}},
+            .runtime_args = {{.node = node, .args = {{"dst_addr", output_buffer->address()}}}},
+            .common_runtime_args = {{"num_entries", num_transfers}},
             .runtime_varargs = {{node, {kConsumerRta0, kConsumerRta1}}},
             .common_runtime_varargs = {kConsumerCrta0},
         },
@@ -353,11 +353,11 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopbackCompute) {
     // named-arg accessor (RTA / CRTA / two CTAs) plus RTA + CRTA varargs.
     auto compute = MakeMinimalComputeKernel("compute");
     compute.source = "tests/tt_metal/tt_metal/test_kernels/compute/named_args_loopback_compute.cpp";
-    compute.runtime_arguments_schema.named_runtime_args = {"input_offset"};
-    compute.runtime_arguments_schema.named_common_runtime_args = {"num_tiles"};
+    compute.runtime_arguments_schema.runtime_args = {"input_offset"};
+    compute.runtime_arguments_schema.common_runtime_args = {"num_tiles"};
     compute.runtime_arguments_schema.num_runtime_varargs = 2;
     compute.runtime_arguments_schema.num_common_runtime_varargs = 1;
-    compute.compile_time_arg_bindings = {{"magic", 0xCAFE0001u}, {"entry_size", entry_size}};
+    compute.compile_time_args = {{"magic", 0xCAFE0001u}, {"entry_size", entry_size}};
 
     // Consumer: NCRISC reads out_dfb → DRAM. Reuses dfb_accessor_loopback_consumer.cpp
     // verbatim (positional varargs only).
@@ -393,8 +393,8 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopbackCompute) {
     params.kernel_run_params = {
         ProgramRunParams::KernelRunParams{
             .kernel_spec_name = "compute",
-            .named_runtime_args = {{.node = node, .args = {{"input_offset", kInputOffset}}}},
-            .named_common_runtime_args = {{"num_tiles", num_transfers}},
+            .runtime_args = {{.node = node, .args = {{"input_offset", kInputOffset}}}},
+            .common_runtime_args = {{"num_tiles", num_transfers}},
             .runtime_varargs = {{node, {kVararg0, kVararg1}}},
             .common_runtime_varargs = {kCommonVararg0},
         },

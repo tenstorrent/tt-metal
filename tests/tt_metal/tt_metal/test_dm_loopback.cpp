@@ -69,7 +69,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
             .semaphore_bindings = {{.semaphore_spec_name = "sem", .accessor_name = "sem"}},
             .runtime_arguments_schema =
                 {
-                    .named_runtime_args = {"dram_addr", "l1_addr", "dram_buffer_size", "dram_bank_id", "signal_value"},
+                    .runtime_args = {"dram_addr", "l1_addr", "dram_buffer_size", "dram_bank_id", "signal_value"},
                 },
             .config_spec =
                 experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
@@ -84,7 +84,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
             .semaphore_bindings = {{.semaphore_spec_name = "sem", .accessor_name = "sem"}},
             .runtime_arguments_schema =
                 {
-                    .named_runtime_args = {"dram_addr", "l1_addr", "dram_buffer_size", "dram_bank_id", "signal_value"},
+                    .runtime_args = {"dram_addr", "l1_addr", "dram_buffer_size", "dram_bank_id", "signal_value"},
                 },
             .config_spec =
                 experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
@@ -124,7 +124,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
     for (uint32_t i = 0; i < num_loopback_stages; i++) {
         params.kernel_run_params.push_back(
             {.kernel_spec_name = dram_to_l1_names[i],
-             .named_runtime_args = {
+             .runtime_args = {
                  {.node = node,
                   .args = {
                       {"dram_addr", dram_address},
@@ -137,7 +137,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
 
         params.kernel_run_params.push_back(
             {.kernel_spec_name = l1_to_dram_names[i],
-             .named_runtime_args = {
+             .runtime_args = {
                  {.node = node,
                   .args = {
                       {"dram_addr", dram_address},

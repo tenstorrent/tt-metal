@@ -600,9 +600,8 @@ static void run_quasar_tilize_untilize_test(
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
         .num_threads = 1,
         .dfb_bindings = {experimental::ProducerOf(INPUT_DFB, "out")},
-        .compile_time_arg_bindings = {{"use_dfbs", 1u}},
-        .runtime_arguments_schema =
-            {.named_runtime_args = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
+        .compile_time_args = {{"use_dfbs", 1u}},
+        .runtime_arguments_schema = {.runtime_args = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
         .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
 
@@ -611,14 +610,13 @@ static void run_quasar_tilize_untilize_test(
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
         .num_threads = 1,
         .dfb_bindings = {experimental::ConsumerOf(OUTPUT_DFB, "in")},
-        .compile_time_arg_bindings = {{"use_dfbs", 1u}},
-        .runtime_arguments_schema =
-            {.named_runtime_args = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
+        .compile_time_args = {{"use_dfbs", 1u}},
+        .runtime_arguments_schema = {.runtime_args = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
         .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
 
     std::string compute_kernel;
-    experimental::KernelSpec::CompileTimeArgBindings compute_cta_bindings;
+    experimental::KernelSpec::CompileTimeArgs compute_cta_bindings;
     switch (mode) {
         case QuasarTestMode::TILIZE:
             compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/tilize.cpp";
@@ -653,7 +651,7 @@ static void run_quasar_tilize_untilize_test(
         .source = compute_kernel,
         .num_threads = 1,
         .dfb_bindings = {experimental::ConsumerOf(INPUT_DFB, "in"), experimental::ProducerOf(OUTPUT_DFB, "out")},
-        .compile_time_arg_bindings = compute_cta_bindings,
+        .compile_time_args = compute_cta_bindings,
         .config_spec =
             experimental::ComputeConfiguration{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -706,7 +704,7 @@ static void run_quasar_tilize_untilize_test(
     params.kernel_run_params = {
         experimental::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = READER,
-            .named_runtime_args =
+            .runtime_args =
                 {{.node = node,
                   .args =
                       {{"src_addr", dram_buffer_src_addr},
@@ -716,7 +714,7 @@ static void run_quasar_tilize_untilize_test(
         },
         experimental::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = WRITER,
-            .named_runtime_args =
+            .runtime_args =
                 {{.node = node,
                   .args =
                       {{"dst_addr", dram_buffer_dst_addr},

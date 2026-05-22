@@ -606,13 +606,13 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 it->second,
                 kind);
         };
-        for (const auto& name : kernel.runtime_arguments_schema.named_runtime_args) {
+        for (const auto& name : kernel.runtime_arguments_schema.runtime_args) {
             check_name(name, "named RTA");
         }
-        for (const auto& name : kernel.runtime_arguments_schema.named_common_runtime_args) {
+        for (const auto& name : kernel.runtime_arguments_schema.common_runtime_args) {
             check_name(name, "named CRTA");
         }
-        for (const auto& [name, value] : kernel.compile_time_arg_bindings) {
+        for (const auto& [name, value] : kernel.compile_time_args) {
             (void)value;
             check_name(name, "named CTA");
         }
@@ -1977,8 +1977,7 @@ KernelSource MakeKernelSource(const KernelSpec& kernel_spec) {
 // This is deliberate, done so ProgramSpec stays hashable for TTNN's program caching.
 // For now, just convert to the map types that the core runtime expects.
 // TODO: Fix this inefficiency eventually.
-std::unordered_map<std::string, uint32_t> to_named_compile_args_map(
-    const KernelSpec::CompileTimeArgBindings& bindings) {
+std::unordered_map<std::string, uint32_t> to_named_compile_args_map(const KernelSpec::CompileTimeArgs& bindings) {
     return std::unordered_map<std::string, uint32_t>(bindings.begin(), bindings.end());
 }
 std::map<std::string, std::string> to_defines_map(const KernelSpec::CompilerOptions::Defines& defines) {
@@ -1996,7 +1995,7 @@ DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
         .noc_mode = gen1.noc_mode,
         .compile_args = {},  // only named_compile_args is used
         .defines = to_defines_map(kernel_spec.compiler_options.defines),
-        .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_arg_bindings),
+        .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_args),
         .opt_level = kernel_spec.compiler_options.opt_level,
         .compiler_include_paths = kernel_spec.compiler_options.include_paths,
     };
@@ -2062,7 +2061,7 @@ ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBName
         .math_approx_mode = compute_config.math_approx_mode,
         .compile_args = {},  // only named_compile_args is used
         .defines = to_defines_map(kernel_spec.compiler_options.defines),
-        .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_arg_bindings),
+        .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_args),
         .opt_level = kernel_spec.compiler_options.opt_level,
         .compiler_include_paths = kernel_spec.compiler_options.include_paths,
     };
@@ -2079,7 +2078,7 @@ experimental::quasar::QuasarDataMovementConfig MakeQuasarDataMovementConfig(cons
         .num_threads_per_cluster = static_cast<uint32_t>(kernel_spec.num_threads),
         .compile_args = {},  // only named_compile_args is used
         .defines = to_defines_map(kernel_spec.compiler_options.defines),
-        .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_arg_bindings),
+        .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_args),
         .is_legacy_kernel = false,
         .opt_level = kernel_spec.compiler_options.opt_level,
         .compiler_include_paths = kernel_spec.compiler_options.include_paths,
@@ -2108,7 +2107,7 @@ experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
         .math_approx_mode = compute_config.math_approx_mode,
         .compile_args = {},  // Compile args are passed via named_compile_args
         .defines = to_defines_map(kernel_spec.compiler_options.defines),
-        .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_arg_bindings),
+        .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_args),
         .opt_level = kernel_spec.compiler_options.opt_level,
         .compiler_include_paths = kernel_spec.compiler_options.include_paths,
     };
@@ -2350,7 +2349,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         // Resolve TensorBindings for this kernel:
         //  - pack each binding's pre-resolved CTA payload into the kernel's positional CTA buffer
         //  - assign each binding a slot in the kernel's CRTA buffer (TensorBinding address section)
-        const auto& user_named_crtas = kernel_spec.runtime_arguments_schema.named_common_runtime_args;
+        const auto& user_named_crtas = kernel_spec.runtime_arguments_schema.common_runtime_args;
         TensorBindingsForKernel ta_bindings = ResolveTensorBindingsForKernel(
             kernel_spec, resolved_binding_ctas, /*base_named_crta_count=*/user_named_crtas.size());
 
@@ -2361,7 +2360,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         // emit kernel_args_generated.h and factor into the kernel cache key. The TensorBinding
         // address section is tracked separately (via tensor_binding_handles), so we pass the user
         // CRTA list through unchanged.
-        const auto& named_rtas = kernel_spec.runtime_arguments_schema.named_runtime_args;
+        const auto& named_rtas = kernel_spec.runtime_arguments_schema.runtime_args;
 
         // Create the kernel object
         std::shared_ptr<Kernel> kernel;
@@ -2451,7 +2450,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         // Overlapping override entries (two entries covering the same node) are an error.
         const auto& user_schema = kernel_spec.runtime_arguments_schema;
         detail::ProgramImpl::KernelRTASchema runtime_schema;
-        runtime_schema.named_runtime_args = user_schema.named_runtime_args;
+        runtime_schema.named_runtime_args = user_schema.runtime_args;
 
         // Pass the user CRTA list through.
         // NOTE: The TensorBinding address section is tracked separately on the Kernel

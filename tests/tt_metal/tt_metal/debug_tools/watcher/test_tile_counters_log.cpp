@@ -84,7 +84,7 @@ void RunTest(
         .num_threads = NUM_PRODUCERS,
         .compiler_options = {.defines = {{"DFB_PRODUCER", "1"}}},
         .dfb_bindings = {experimental::ProducerOf(TILE_COUNTER_DFB, "tile_counter_dfb")},
-        .compile_time_arg_bindings = {{"num_entries", NUM_ENTRIES_PER_PRODUCER}},
+        .compile_time_args = {{"num_entries", NUM_ENTRIES_PER_PRODUCER}},
         .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
 
@@ -101,7 +101,7 @@ void RunTest(
             .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
             .access_pattern = cap,
         }},
-        .compile_time_arg_bindings =
+        .compile_time_args =
             {{"num_entries", entries_per_consumer},
              {"num_consumers_to_run", NUM_CONSUMERS_TO_RUN},
              {"sync_flag_addr", tensix_sync_addr}},

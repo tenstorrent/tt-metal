@@ -85,9 +85,8 @@ static vector<uint32_t> run_mxfp4_typecast(
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
         .num_threads = 1,
         .dfb_bindings = {experimental::ProducerOf(INPUT_DFB, "out")},
-        .compile_time_arg_bindings = {{"use_dfbs", 1}},
-        .runtime_arguments_schema =
-            {.named_runtime_args = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
+        .compile_time_args = {{"use_dfbs", 1}},
+        .runtime_arguments_schema = {.runtime_args = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
         .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
 
@@ -96,9 +95,8 @@ static vector<uint32_t> run_mxfp4_typecast(
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
         .num_threads = 1,
         .dfb_bindings = {experimental::ConsumerOf(OUTPUT_DFB, "in")},
-        .compile_time_arg_bindings = {{"use_dfbs", 1}},
-        .runtime_arguments_schema =
-            {.named_runtime_args = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
+        .compile_time_args = {{"use_dfbs", 1}},
+        .runtime_arguments_schema = {.runtime_args = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
         .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
 
@@ -107,7 +105,7 @@ static vector<uint32_t> run_mxfp4_typecast(
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
         .num_threads = 1,
         .dfb_bindings = {experimental::ConsumerOf(INPUT_DFB, "in"), experimental::ProducerOf(OUTPUT_DFB, "out")},
-        .compile_time_arg_bindings = {{"per_core_tile_cnt", num_tiles}, {"use_dfbs", 1}},
+        .compile_time_args = {{"per_core_tile_cnt", num_tiles}, {"use_dfbs", 1}},
         .config_spec =
             experimental::ComputeConfiguration{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -140,7 +138,7 @@ static vector<uint32_t> run_mxfp4_typecast(
     params.kernel_run_params = {
         experimental::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = READER,
-            .named_runtime_args =
+            .runtime_args =
                 {{.node = node,
                   .args =
                       {{"src_addr", src_buffer->address()},
@@ -150,7 +148,7 @@ static vector<uint32_t> run_mxfp4_typecast(
         },
         experimental::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = WRITER,
-            .named_runtime_args =
+            .runtime_args =
                 {{.node = node,
                   .args =
                       {{"dst_addr", dst_buffer->address()},

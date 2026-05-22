@@ -39,7 +39,7 @@ bool run_addrgen_test(
         .unique_id = DM_KERNEL,
         .source = kernel_path,
         .num_threads = 1,
-        .compile_time_arg_bindings =
+        .compile_time_args =
             {{"src_stride_en", src_stride_en},
              {"dst_stride_en", dst_stride_en},
              {"num_of_addresses", num_of_addresses}},

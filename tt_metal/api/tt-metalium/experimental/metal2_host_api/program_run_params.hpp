@@ -33,21 +33,21 @@ struct ProgramRunParams {
         KernelSpecName kernel_spec_name;
 
         // Named Runtime Argument settings
-        // Every argument in this kernel's RuntimeArgSchema::named_runtime_args must be set,
+        // Every argument in this kernel's RuntimeArgSchema::runtime_args must be set,
         // for every node the kernel runs on.
         // Missing arguments or superfluous arguments will trigger validation errors.
         //
         // NOTE: If a kernel runtime argument always has the same value for all nodes, passing
         // a common runtime argument would provide better dispatch efficiency.
-        struct NodeNamedRTAs {
+        struct NodeRuntimeArgs {
             NodeCoord node;
             std::unordered_map<std::string, uint32_t> args;
         };
-        std::vector<NodeNamedRTAs> named_runtime_args;
+        std::vector<NodeRuntimeArgs> runtime_args;
 
         // Named Common Runtime Argument settings
-        // Every arg in this kernel's RuntimeArgSchema::named_common_runtime_args must be set.
-        std::unordered_map<std::string, uint32_t> named_common_runtime_args;
+        // Every arg in this kernel's RuntimeArgSchema::common_runtime_args must be set.
+        std::unordered_map<std::string, uint32_t> common_runtime_args;
 
         // Unnamed runtime argument "varargs"
         // (these are specified per-node; length can vary per-node)
@@ -103,7 +103,7 @@ struct ProgramRunParams {
 // Namespace-level aliases for commonly-used nested types. Both the qualified
 // (ProgramRunParams::Foo) and unqualified (Foo) forms refer to the same type.
 using KernelRunParams = ProgramRunParams::KernelRunParams;
-using NodeNamedRTAs = ProgramRunParams::KernelRunParams::NodeNamedRTAs;
+using NodeRuntimeArgs = ProgramRunParams::KernelRunParams::NodeRuntimeArgs;
 using NodeVarargs = ProgramRunParams::KernelRunParams::NodeVarargs;
 
 //------------------------------------------------

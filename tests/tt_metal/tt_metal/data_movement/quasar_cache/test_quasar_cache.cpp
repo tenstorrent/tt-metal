@@ -58,8 +58,8 @@ bool run_l2_flush_test(
         .num_threads = 1,
         .runtime_arguments_schema =
             {
-                .named_runtime_args = {"base_addr", "test_mode"},
-                .named_common_runtime_args = {"value", "num_words"},
+                .runtime_args = {"base_addr", "test_mode"},
+                .common_runtime_args = {"value", "num_words"},
             },
         .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
@@ -80,9 +80,8 @@ bool run_l2_flush_test(
     experimental::ProgramRunParams params;
     params.kernel_run_params = {{
         .kernel_spec_name = DM_KERNEL,
-        .named_runtime_args =
-            {{.node = node, .args = {{"base_addr", config.base_addr}, {"test_mode", config.test_mode}}}},
-        .named_common_runtime_args = {{"value", config.value}, {"num_words", config.num_words}},
+        .runtime_args = {{.node = node, .args = {{"base_addr", config.base_addr}, {"test_mode", config.test_mode}}}},
+        .common_runtime_args = {{"value", config.value}, {"num_words", config.num_words}},
     }};
     experimental::SetProgramRunParameters(program, params);
 
@@ -145,8 +144,8 @@ bool run_l1_dcache_test(
         .num_threads = 1,
         .runtime_arguments_schema =
             {
-                .named_runtime_args = {"base_addr", "test_mode"},
-                .named_common_runtime_args = {"value", "num_words"},
+                .runtime_args = {"base_addr", "test_mode"},
+                .common_runtime_args = {"value", "num_words"},
             },
         .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
@@ -167,9 +166,8 @@ bool run_l1_dcache_test(
     experimental::ProgramRunParams params;
     params.kernel_run_params = {{
         .kernel_spec_name = DM_KERNEL,
-        .named_runtime_args =
-            {{.node = node, .args = {{"base_addr", config.base_addr}, {"test_mode", config.test_mode}}}},
-        .named_common_runtime_args = {{"value", config.value}, {"num_words", config.num_words}},
+        .runtime_args = {{.node = node, .args = {{"base_addr", config.base_addr}, {"test_mode", config.test_mode}}}},
+        .common_runtime_args = {{"value", config.value}, {"num_words", config.num_words}},
     }};
     experimental::SetProgramRunParameters(program, params);
 

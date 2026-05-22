@@ -31,7 +31,7 @@ constexpr auto kIdma1DStrided =
 static void run_kernel(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const std::string& kernel_path,
-    experimental::KernelSpec::CompileTimeArgBindings compile_time_arg_bindings) {
+    experimental::KernelSpec::CompileTimeArgs compile_time_args) {
     constexpr const char* DM_KERNEL = "idma";
     const experimental::NodeCoord node{0, 0};
 
@@ -39,7 +39,7 @@ static void run_kernel(
         .unique_id = DM_KERNEL,
         .source = kernel_path,
         .num_threads = 1,
-        .compile_time_arg_bindings = std::move(compile_time_arg_bindings),
+        .compile_time_args = std::move(compile_time_args),
         .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
 

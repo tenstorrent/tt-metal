@@ -216,7 +216,7 @@ void run_single_core_transpose_quasar(
         .num_threads = 1,
         .dfb_bindings = {experimental::ProducerOf(INPUT_DFB, "out")},
         .tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}},
-        .runtime_arguments_schema = {.named_runtime_args = {"N", "Ht", "Wt", "HtWt"}},
+        .runtime_arguments_schema = {.runtime_args = {"N", "Ht", "Wt", "HtWt"}},
         .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
 
@@ -226,7 +226,7 @@ void run_single_core_transpose_quasar(
         .num_threads = 1,
         .dfb_bindings = {experimental::ConsumerOf(OUTPUT_DFB, "in")},
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
-        .runtime_arguments_schema = {.named_runtime_args = {"num_tiles"}},
+        .runtime_arguments_schema = {.runtime_args = {"num_tiles"}},
         .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
 
@@ -241,7 +241,7 @@ void run_single_core_transpose_quasar(
         .num_threads = 1,
         .compiler_options = {.defines = compute_defines},
         .dfb_bindings = {experimental::ConsumerOf(INPUT_DFB, "in"), experimental::ProducerOf(OUTPUT_DFB, "out")},
-        .compile_time_arg_bindings = {{"NHtWt", Ht * Wt * NC}},
+        .compile_time_args = {{"NHtWt", Ht * Wt * NC}},
         .config_spec = experimental::ComputeConfiguration{},
     };
 
@@ -269,11 +269,11 @@ void run_single_core_transpose_quasar(
     params.kernel_run_params = {
         experimental::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = READER,
-            .named_runtime_args = {{.node = node, .args = {{"N", NC}, {"Ht", Ht}, {"Wt", Wt}, {"HtWt", Ht * Wt}}}},
+            .runtime_args = {{.node = node, .args = {{"N", NC}, {"Ht", Ht}, {"Wt", Wt}, {"HtWt", Ht * Wt}}}},
         },
         experimental::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = WRITER,
-            .named_runtime_args = {{.node = node, .args = {{"num_tiles", num_tensor_tiles}}}},
+            .runtime_args = {{.node = node, .args = {{"num_tiles", num_tensor_tiles}}}},
         },
         experimental::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = COMPUTE,

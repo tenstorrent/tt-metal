@@ -55,7 +55,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
         .num_threads = 4,
         .runtime_arguments_schema =
             {
-                .named_runtime_args = {"l1_address"},
+                .runtime_args = {"l1_address"},
             },
         .config_spec = experimental::ComputeConfiguration{},
     };
@@ -76,7 +76,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
     experimental::ProgramRunParams params;
     params.kernel_run_params = {{
         .kernel_spec_name = COMPUTE_KERNEL,
-        .named_runtime_args = {{.node = node, .args = {{"l1_address", l1_address}}}},
+        .runtime_args = {{.node = node, .args = {{"l1_address", l1_address}}}},
     }};
     experimental::SetProgramRunParameters(program, params);
 
@@ -129,7 +129,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
         .num_threads = 1,
         .runtime_arguments_schema =
             {
-                .named_runtime_args = {"l1_address"},
+                .runtime_args = {"l1_address"},
             },
         .config_spec = experimental::ComputeConfiguration{},
     };
@@ -150,7 +150,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
     experimental::ProgramRunParams params;
     params.kernel_run_params = {{
         .kernel_spec_name = COMPUTE_KERNEL,
-        .named_runtime_args = {{.node = node, .args = {{"l1_address", l1_address}}}},
+        .runtime_args = {{.node = node, .args = {{"l1_address", l1_address}}}},
     }};
     experimental::SetProgramRunParameters(program, params);
 

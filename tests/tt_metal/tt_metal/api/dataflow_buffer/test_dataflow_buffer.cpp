@@ -246,13 +246,13 @@ void run_single_dfb_program(
                 .tensor_parameter_name = IN_TENSOR,
                 .accessor_name = "src_tensor",  // kernel: ta::src_tensor
             }},
-            .compile_time_arg_bindings =
+            .compile_time_args =
                 {
                     {"num_entries_per_producer", num_entries_per_producer},
                     {"implicit_sync", static_cast<uint32_t>(dfb_config.enable_implicit_sync ? 1u : 0u)},
                     {"num_producers", dfb_config.num_producers},
                 },
-            .runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}},
+            .runtime_arguments_schema = {.runtime_args = {"chunk_offset", "entries_per_core"}},
             .config_spec = dm_producer_cfg,
         };
     } else {
@@ -261,7 +261,7 @@ void run_single_dfb_program(
             .source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_producer.cpp",
             .num_threads = static_cast<uint8_t>(dfb_config.num_producers),
             .dfb_bindings = {experimental::ProducerOf(DFB_NAME, "out")},
-            .compile_time_arg_bindings = {{"num_entries_per_producer", num_entries_per_producer}},
+            .compile_time_args = {{"num_entries_per_producer", num_entries_per_producer}},
             .config_spec = experimental::ComputeConfiguration{},
         };
     }
@@ -282,14 +282,14 @@ void run_single_dfb_program(
                 .tensor_parameter_name = OUT_TENSOR,
                 .accessor_name = "dst_tensor",  // kernel: ta::dst_tensor
             }},
-            .compile_time_arg_bindings =
+            .compile_time_args =
                 {
                     {"num_entries_per_consumer", num_entries_per_consumer},
                     {"blocked_consumer", static_cast<uint32_t>(is_all ? 1u : 0u)},
                     {"implicit_sync", static_cast<uint32_t>(dfb_config.enable_implicit_sync ? 1u : 0u)},
                     {"num_consumers", dfb_config.num_consumers},
                 },
-            .runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}},
+            .runtime_arguments_schema = {.runtime_args = {"chunk_offset", "entries_per_core"}},
             .config_spec = dm_consumer_cfg,
         };
     } else {
@@ -303,7 +303,7 @@ void run_single_dfb_program(
                 .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
                 .access_pattern = consumer_pattern,
             }},
-            .compile_time_arg_bindings = {{"num_entries_per_consumer", num_entries_per_consumer}},
+            .compile_time_args = {{"num_entries_per_consumer", num_entries_per_consumer}},
             .config_spec = experimental::ComputeConfiguration{},
         };
     }
@@ -332,12 +332,12 @@ void run_single_dfb_program(
 
     Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    using NodeNamedRTAs = experimental::ProgramRunParams::KernelRunParams::NodeNamedRTAs;
+    using NodeRuntimeArgs = experimental::ProgramRunParams::KernelRunParams::NodeRuntimeArgs;
     auto build_dm_named_rtas = [&]() {
-        std::vector<NodeNamedRTAs> result;
+        std::vector<NodeRuntimeArgs> result;
         result.reserve(core_to_chunk_offset.size());
         for (const auto& [core, chunk_offset] : core_to_chunk_offset) {
-            result.push_back(NodeNamedRTAs{
+            result.push_back(NodeRuntimeArgs{
                 experimental::NodeCoord{core.x, core.y},
                 {{"chunk_offset", chunk_offset}, {"entries_per_core", entries_per_core}}});
         }
@@ -347,11 +347,11 @@ void run_single_dfb_program(
     experimental::ProgramRunParams run_params;
     experimental::ProgramRunParams::KernelRunParams producer_params{.kernel_spec_name = PRODUCER};
     if (producer_type == DFBPorCType::DM) {
-        producer_params.named_runtime_args = build_dm_named_rtas();
+        producer_params.runtime_args = build_dm_named_rtas();
     }
     experimental::ProgramRunParams::KernelRunParams consumer_params{.kernel_spec_name = CONSUMER};
     if (consumer_type == DFBPorCType::DM) {
-        consumer_params.named_runtime_args = build_dm_named_rtas();
+        consumer_params.runtime_args = build_dm_named_rtas();
     }
     run_params.kernel_run_params = {producer_params, consumer_params};
     if (need_in_tensor) {
@@ -631,7 +631,7 @@ void run_concurrent_dfbs_program(
                 .tensor_parameter_name = IN_TENSOR,
                 .accessor_name = "src_tensor",
             }},
-            .compile_time_arg_bindings =
+            .compile_time_args =
                 {
                     {"num_entries_per_producer", entries_per_dfb},
                     {"implicit_sync", static_cast<uint32_t>(dfb_config.enable_implicit_sync ? 1u : 0u)},
@@ -651,7 +651,7 @@ void run_concurrent_dfbs_program(
                 .tensor_parameter_name = OUT_TENSOR,
                 .accessor_name = "dst_tensor",
             }},
-            .compile_time_arg_bindings =
+            .compile_time_args =
                 {
                     {"num_entries_per_consumer", entries_per_dfb},
                     {"implicit_sync", static_cast<uint32_t>(dfb_config.enable_implicit_sync ? 1u : 0u)},
@@ -758,7 +758,7 @@ void run_concurrent_tensix_dm_dfbs_program(
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_seq_producer.cpp",
         .num_threads = 1,
         .compiler_options = {.defines = {{"TEST_NUM_DFBS", std::to_string(num_dfbs)}}},
-        .compile_time_arg_bindings = {{"num_entries_per_producer", entries_per_dfb}},
+        .compile_time_args = {{"num_entries_per_producer", entries_per_dfb}},
         .config_spec = experimental::ComputeConfiguration{},
     };
     for (uint32_t i = 0; i < num_dfbs; ++i) {
@@ -808,7 +808,7 @@ void run_concurrent_tensix_dm_dfbs_program(
                 .tensor_parameter_name = out_tensor_name,
                 .accessor_name = "dst_tensor",
             }},
-            .compile_time_arg_bindings =
+            .compile_time_args =
                 {
                     {"num_entries_per_consumer", num_entries_per_consumer},
                     {"implicit_sync", static_cast<uint32_t>(dfb_config.enable_implicit_sync ? 1u : 0u)},
@@ -965,7 +965,7 @@ void run_sequential_dfbs_program(
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_seq_producer.cpp",
         .num_threads = num_producers,
         .compiler_options = {.defines = {{"TEST_NUM_DFBS", std::to_string(num_dfbs)}}},
-        .compile_time_arg_bindings =
+        .compile_time_args =
             {
                 {"num_entries_per_producer", num_entries_per_producer},
                 {"implicit_sync", static_cast<uint32_t>(configs[0].enable_implicit_sync ? 1u : 0u)},
@@ -981,7 +981,7 @@ void run_sequential_dfbs_program(
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_seq_consumer.cpp",
         .num_threads = num_consumers,
         .compiler_options = {.defines = {{"TEST_NUM_DFBS", std::to_string(num_dfbs)}}},
-        .compile_time_arg_bindings =
+        .compile_time_args =
             {
                 {"implicit_sync", static_cast<uint32_t>(configs[0].enable_implicit_sync ? 1u : 0u)},
                 {"num_consumers", num_consumers},
@@ -1036,9 +1036,8 @@ void run_sequential_dfbs_program(
             .tensor_parameter_name = out_tensor_name,
             .accessor_name = "dst_" + idx,
         });
-        consumer_spec.compile_time_arg_bindings.push_back({"entries_per_consumer_" + idx, epc});
-        consumer_spec.compile_time_arg_bindings.push_back(
-            {"is_blocked_" + idx, static_cast<uint32_t>(is_all ? 1u : 0u)});
+        consumer_spec.compile_time_args.push_back({"entries_per_consumer_" + idx, epc});
+        consumer_spec.compile_time_args.push_back({"is_blocked_" + idx, static_cast<uint32_t>(is_all ? 1u : 0u)});
     }
 
     experimental::WorkUnitSpec wu{
@@ -1156,13 +1155,13 @@ void run_in_dfb_out_dfb_program(
             .tensor_parameter_name = IN_TENSOR,
             .accessor_name = "src_tensor",
         }},
-        .compile_time_arg_bindings =
+        .compile_time_args =
             {
                 {"num_entries_per_producer", num_entries_per_producer},
                 {"implicit_sync", static_cast<uint32_t>(dm2tensix_config.enable_implicit_sync ? 1u : 0u)},
                 {"num_producers", dm2tensix_config.num_producers},
             },
-        .runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}},
+        .runtime_arguments_schema = {.runtime_args = {"chunk_offset", "entries_per_core"}},
         .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
 
@@ -1181,7 +1180,7 @@ void run_in_dfb_out_dfb_program(
                 },
                 experimental::ProducerOf(OUT_DFB, "out"),
             },
-        .compile_time_arg_bindings = {{"num_entries", num_entries_per_unpacker}},
+        .compile_time_args = {{"num_entries", num_entries_per_unpacker}},
         .config_spec = experimental::ComputeConfiguration{},
     };
 
@@ -1200,14 +1199,14 @@ void run_in_dfb_out_dfb_program(
             .tensor_parameter_name = OUT_TENSOR,
             .accessor_name = "dst_tensor",
         }},
-        .compile_time_arg_bindings =
+        .compile_time_args =
             {
                 {"num_entries_per_consumer", num_entries_per_consumer},
                 {"blocked_consumer", static_cast<uint32_t>(out_is_all ? 1u : 0u)},
                 {"implicit_sync", static_cast<uint32_t>(tensix2dm_config.enable_implicit_sync ? 1u : 0u)},
                 {"num_consumers", tensix2dm_config.num_consumers},
             },
-        .runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}},
+        .runtime_arguments_schema = {.runtime_args = {"chunk_offset", "entries_per_core"}},
         .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
 
@@ -1231,18 +1230,18 @@ void run_in_dfb_out_dfb_program(
 
     Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    using NodeNamedRTAs = experimental::ProgramRunParams::KernelRunParams::NodeNamedRTAs;
+    using NodeRuntimeArgs = experimental::ProgramRunParams::KernelRunParams::NodeRuntimeArgs;
     auto build_named_rtas = [&]() {
-        return std::vector<NodeNamedRTAs>{NodeNamedRTAs{
+        return std::vector<NodeRuntimeArgs>{NodeRuntimeArgs{
             experimental::NodeCoord{logical_core.x, logical_core.y},
             {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}};
     };
 
     experimental::ProgramRunParams::KernelRunParams producer_params{.kernel_spec_name = PRODUCER};
-    producer_params.named_runtime_args = build_named_rtas();
+    producer_params.runtime_args = build_named_rtas();
     experimental::ProgramRunParams::KernelRunParams compute_params{.kernel_spec_name = COMPUTE};
     experimental::ProgramRunParams::KernelRunParams consumer_params{.kernel_spec_name = CONSUMER};
-    consumer_params.named_runtime_args = build_named_rtas();
+    consumer_params.runtime_args = build_named_rtas();
 
     experimental::ProgramRunParams run_params;
     run_params.kernel_run_params = {producer_params, compute_params, consumer_params};
@@ -1821,7 +1820,7 @@ static void run_intra_tensix_dfb_program(
                 experimental::ProducerOf(INTRA_DFB, "out"),
                 experimental::ConsumerOf(INTRA_DFB, "in"),
             },
-        .compile_time_arg_bindings =
+        .compile_time_args =
             {
                 {"entries_per_neo", entries_per_neo},
                 {"words_per_entry", words_per_entry},
@@ -1954,13 +1953,13 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
             .tensor_parameter_name = IN_TENSOR,
             .accessor_name = "src_tensor",
         }},
-        .compile_time_arg_bindings =
+        .compile_time_args =
             {
                 {"num_entries_per_producer", num_entries},  // 1 producer owns all entries
                 {"implicit_sync", 1u},
                 {"num_producers", 1u},
             },
-        .runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}},
+        .runtime_arguments_schema = {.runtime_args = {"chunk_offset", "entries_per_core"}},
         .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
 
@@ -1977,7 +1976,7 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
                 experimental::ProducerOf(INTRA_DFB, "intra_out"),
                 experimental::ConsumerOf(INTRA_DFB, "intra_in"),
             },
-        .compile_time_arg_bindings =
+        .compile_time_args =
             {
                 {"num_entries_consumer", num_entries},
                 {"entries_per_neo", entries_per_neo},
@@ -2002,9 +2001,9 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
 
     Program program = experimental::MakeProgramFromSpec(*this->devices_.at(0), spec);
 
-    using NodeNamedRTAs = experimental::ProgramRunParams::KernelRunParams::NodeNamedRTAs;
+    using NodeRuntimeArgs = experimental::ProgramRunParams::KernelRunParams::NodeRuntimeArgs;
     experimental::ProgramRunParams::KernelRunParams dm_producer_params{.kernel_spec_name = DM_PRODUCER};
-    dm_producer_params.named_runtime_args = std::vector<NodeNamedRTAs>{NodeNamedRTAs{
+    dm_producer_params.runtime_args = std::vector<NodeRuntimeArgs>{NodeRuntimeArgs{
         experimental::NodeCoord{logical_core.x, logical_core.y},
         {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}};
     experimental::ProgramRunParams::KernelRunParams compute_params{.kernel_spec_name = COMPUTE};

@@ -71,10 +71,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
             .unique_id = unique_id,
             .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_tls_check.cpp",
             .num_threads = num_threads,
-            .compile_time_arg_bindings = {{"kernel_id", kernel_id}},
+            .compile_time_args = {{"kernel_id", kernel_id}},
             .runtime_arguments_schema =
                 {
-                    .named_runtime_args = {"signal_address", "dram_dst_address", "dram_dst_bank_id", "l1_result_addr"},
+                    .runtime_args = {"signal_address", "dram_dst_address", "dram_dst_bank_id", "l1_result_addr"},
                 },
             .config_spec =
                 experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
@@ -104,7 +104,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
     auto make_kernel_run_params = [&](const char* name) {
         return experimental::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = name,
-            .named_runtime_args =
+            .runtime_args =
                 {{.node = node,
                   .args =
                       {{"signal_address", signal_address},
@@ -307,7 +307,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
         .num_threads = QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER,
         .runtime_arguments_schema =
             {
-                .named_runtime_args = {"l1_result_addr"},
+                .runtime_args = {"l1_result_addr"},
             },
         .config_spec = experimental::ComputeConfiguration{},
     };
@@ -328,7 +328,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
     experimental::ProgramRunParams params;
     params.kernel_run_params = {{
         .kernel_spec_name = COMPUTE_KERNEL,
-        .named_runtime_args = {{.node = node, .args = {{"l1_result_addr", l1_result_addr}}}},
+        .runtime_args = {{.node = node, .args = {{"l1_result_addr", l1_result_addr}}}},
     }};
     experimental::SetProgramRunParameters(program, params);
 

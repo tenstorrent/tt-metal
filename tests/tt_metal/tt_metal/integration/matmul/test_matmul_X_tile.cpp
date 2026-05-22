@@ -262,7 +262,7 @@ static void matmul_tile_quasar(
         .num_threads = 1,
         .dfb_bindings = {experimental::ProducerOf(SRC0_DFB, "in0"), experimental::ProducerOf(SRC1_DFB, "in1")},
         .runtime_arguments_schema =
-            {.named_runtime_args =
+            {.runtime_args =
                  {"src0_addr",
                   "src0_dram_bank_id",
                   "src1_addr",
@@ -281,7 +281,7 @@ static void matmul_tile_quasar(
         .source = "tt_metal/kernels/dataflow/writer_unary.cpp",
         .num_threads = 1,
         .dfb_bindings = {experimental::ConsumerOf(DST_DFB, "in")},
-        .runtime_arguments_schema = {.named_runtime_args = {"dst_addr", "bank_id", "num_tiles"}},
+        .runtime_arguments_schema = {.runtime_args = {"dst_addr", "bank_id", "num_tiles"}},
         .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
 
@@ -292,7 +292,7 @@ static void matmul_tile_quasar(
         cfg.compute_kernel_args.size() == 7,
         "Quasar matmul_block expects 7 compile-time args but got {}",
         cfg.compute_kernel_args.size());
-    experimental::KernelSpec::CompileTimeArgBindings compute_cta_bindings{
+    experimental::KernelSpec::CompileTimeArgs compute_cta_bindings{
         {"block_tile_dim", cfg.compute_kernel_args[0]},
         {"dst_tile_rows", cfg.compute_kernel_args[1]},
         {"dst_tile_cols", cfg.compute_kernel_args[2]},
@@ -319,7 +319,7 @@ static void matmul_tile_quasar(
             {experimental::ConsumerOf(SRC0_DFB, "in0"),
              experimental::ConsumerOf(SRC1_DFB, "in1"),
              experimental::ProducerOf(DST_DFB, "out")},
-        .compile_time_arg_bindings = compute_cta_bindings,
+        .compile_time_args = compute_cta_bindings,
         .config_spec =
             experimental::ComputeConfiguration{
                 .math_fidelity = cfg.math_fidelity,
@@ -361,7 +361,7 @@ static void matmul_tile_quasar(
     params.kernel_run_params = {
         experimental::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = READER,
-            .named_runtime_args =
+            .runtime_args =
                 {{.node = node,
                   .args =
                       {{"src0_addr", ctx.src0_dram_buffer->address()},
@@ -377,7 +377,7 @@ static void matmul_tile_quasar(
         },
         experimental::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = WRITER,
-            .named_runtime_args =
+            .runtime_args =
                 {{.node = node,
                   .args =
                       {{"dst_addr", ctx.dst_dram_buffer->address()}, {"bank_id", 0u}, {"num_tiles", ctx.num_tiles}}}},

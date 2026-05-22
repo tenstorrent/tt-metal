@@ -102,7 +102,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
             .unique_id = DM_KERNEL_NAME,
             .source = kernel_path,
             .num_threads = kQuasarUserDmCores,
-            .runtime_arguments_schema = {.named_common_runtime_args = {"sync_flag_addr"}},
+            .runtime_arguments_schema = {.common_runtime_args = {"sync_flag_addr"}},
             .config_spec =
                 experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
         };
@@ -110,7 +110,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
             .unique_id = COMPUTE_KERNEL_NAME,
             .source = kernel_path,
             .num_threads = 4,
-            .runtime_arguments_schema = {.named_common_runtime_args = {"sync_flag_addr"}},
+            .runtime_arguments_schema = {.common_runtime_args = {"sync_flag_addr"}},
             .config_spec = experimental::ComputeConfiguration{},
         };
         experimental::WorkUnitSpec wu{
@@ -127,9 +127,8 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
 
         experimental::ProgramRunParams params;
         params.kernel_run_params = {
-            {.kernel_spec_name = DM_KERNEL_NAME, .named_common_runtime_args = {{"sync_flag_addr", tensix_sync_addr}}},
-            {.kernel_spec_name = COMPUTE_KERNEL_NAME,
-             .named_common_runtime_args = {{"sync_flag_addr", tensix_sync_addr}}},
+            {.kernel_spec_name = DM_KERNEL_NAME, .common_runtime_args = {{"sync_flag_addr", tensix_sync_addr}}},
+            {.kernel_spec_name = COMPUTE_KERNEL_NAME, .common_runtime_args = {{"sync_flag_addr", tensix_sync_addr}}},
         };
         experimental::SetProgramRunParameters(program, params);
         workload.add_program(device_range, std::move(program));

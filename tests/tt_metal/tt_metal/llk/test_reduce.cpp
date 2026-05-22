@@ -476,7 +476,7 @@ void run_single_core_reduce_program_quasar(
 
     // Build reader spec depending on reduce dim
     std::string reader_kernel_path;
-    experimental::KernelSpec::CompileTimeArgBindings reader_cta_bindings;
+    experimental::KernelSpec::CompileTimeArgs reader_cta_bindings;
     experimental::KernelSpec::CompilerOptions::Defines reader_defines;
     std::vector<std::string> reader_named_runtime_args;
     if (test_config.reduce_dim == ReduceDim::H) {
@@ -499,8 +499,8 @@ void run_single_core_reduce_program_quasar(
         .dfb_bindings =
             {experimental::ProducerOf(SRC0_DFB, "out_data"), experimental::ProducerOf(SRC1_DFB, "out_scaler")},
         .tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}},
-        .compile_time_arg_bindings = reader_cta_bindings,
-        .runtime_arguments_schema = {.named_runtime_args = reader_named_runtime_args},
+        .compile_time_args = reader_cta_bindings,
+        .runtime_arguments_schema = {.runtime_args = reader_named_runtime_args},
         .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
 
@@ -510,7 +510,7 @@ void run_single_core_reduce_program_quasar(
         .num_threads = 1,
         .dfb_bindings = {experimental::ConsumerOf(DST_DFB, "in")},
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
-        .runtime_arguments_schema = {.named_runtime_args = {"num_tiles"}},
+        .runtime_arguments_schema = {.runtime_args = {"num_tiles"}},
         .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
 
@@ -523,7 +523,7 @@ void run_single_core_reduce_program_quasar(
             {experimental::ConsumerOf(SRC0_DFB, "in_data"),
              experimental::ConsumerOf(SRC1_DFB, "in_scaler"),
              experimental::ProducerOf(DST_DFB, "out")},
-        .compile_time_arg_bindings = {{"Ht", dims.Ht}, {"Wt", dims.Wt}, {"NC", dims.NC}},
+        .compile_time_args = {{"Ht", dims.Ht}, {"Wt", dims.Wt}, {"NC", dims.NC}},
         .config_spec =
             experimental::ComputeConfiguration{
                 .math_fidelity = test_config.math_fidelity,
@@ -568,11 +568,11 @@ void run_single_core_reduce_program_quasar(
     params.kernel_run_params = {
         experimental::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = READER,
-            .named_runtime_args = {{.node = node, .args = reader_named_rtas}},
+            .runtime_args = {{.node = node, .args = reader_named_rtas}},
         },
         experimental::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = WRITER,
-            .named_runtime_args = {{.node = node, .args = {{"num_tiles", writer_num_tiles}}}},
+            .runtime_args = {{.node = node, .args = {{"num_tiles", writer_num_tiles}}}},
         },
         experimental::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = COMPUTE,

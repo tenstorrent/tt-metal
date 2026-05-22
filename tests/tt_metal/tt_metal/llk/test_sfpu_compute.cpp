@@ -236,7 +236,7 @@ bool run_sfpu_all_same_buffer(
             .source = "tt_metal/kernels/dataflow/reader_unary.cpp",
             .num_threads = 1,
             .dfb_bindings = {experimental::ProducerOf(IN_DFB, "out")},
-            .runtime_arguments_schema = {.named_runtime_args = {"src_addr", "bank_id", "num_tiles"}},
+            .runtime_arguments_schema = {.runtime_args = {"src_addr", "bank_id", "num_tiles"}},
             .config_spec =
                 experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
         };
@@ -246,7 +246,7 @@ bool run_sfpu_all_same_buffer(
             .source = "tt_metal/kernels/dataflow/writer_unary.cpp",
             .num_threads = 1,
             .dfb_bindings = {experimental::ConsumerOf(OUT_DFB, "in")},
-            .runtime_arguments_schema = {.named_runtime_args = {"dst_addr", "bank_id", "num_tiles"}},
+            .runtime_arguments_schema = {.runtime_args = {"dst_addr", "bank_id", "num_tiles"}},
             .config_spec =
                 experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
         };
@@ -262,7 +262,7 @@ bool run_sfpu_all_same_buffer(
             .num_threads = 1,
             .compiler_options = {.defines = std::move(compute_defines)},
             .dfb_bindings = {experimental::ConsumerOf(IN_DFB, "in"), experimental::ProducerOf(OUT_DFB, "out")},
-            .compile_time_arg_bindings =
+            .compile_time_args =
                 {{"per_core_block_cnt", static_cast<uint32_t>(test_config.num_tiles)}, {"per_core_block_dim", 1u}},
             .config_spec =
                 experimental::ComputeConfiguration{
@@ -289,7 +289,7 @@ bool run_sfpu_all_same_buffer(
         params.kernel_run_params = {
             experimental::ProgramRunParams::KernelRunParams{
                 .kernel_spec_name = READER,
-                .named_runtime_args =
+                .runtime_args =
                     {{.node = node,
                       .args =
                           {{"src_addr", input_dram_buffer->address()},
@@ -298,7 +298,7 @@ bool run_sfpu_all_same_buffer(
             },
             experimental::ProgramRunParams::KernelRunParams{
                 .kernel_spec_name = WRITER,
-                .named_runtime_args =
+                .runtime_args =
                     {{.node = node,
                       .args =
                           {{"dst_addr", output_dram_buffer->address()},

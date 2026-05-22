@@ -151,16 +151,16 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
         const std::unordered_set<std::string> named_rta_name_set(named_rta_names.begin(), named_rta_names.end());
 
         std::unordered_set<NodeCoord> nodes_with_named_params;
-        for (const auto& node_params : kernel_params.named_runtime_args) {
+        for (const auto& node_params : kernel_params.runtime_args) {
             auto [it_node, inserted_node] = nodes_with_named_params.insert(node_params.node);
             TT_FATAL(
                 inserted_node,
-                "Duplicate node_coord {} in named_runtime_args for kernel '{}'.",
+                "Duplicate node_coord {} in runtime_args for kernel '{}'.",
                 node_params.node.str(),
                 kernel_name);
             TT_FATAL(
                 kernel_nodes.contains(node_params.node),
-                "Kernel '{}' is setting named_runtime_args for node {}, but the kernel does not run on that node.",
+                "Kernel '{}' is setting runtime_args for node {}, but the kernel does not run on that node.",
                 kernel_name,
                 node_params.node.str());
             TT_FATAL(
@@ -184,7 +184,7 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
             for (const auto& node : kernel_nodes) {
                 TT_FATAL(
                     nodes_with_named_params.contains(node),
-                    "Kernel '{}' has named RTAs declared but no named_runtime_args provided for node {}.",
+                    "Kernel '{}' has named RTAs declared but no runtime_args provided for node {}.",
                     kernel_name,
                     node.str());
             }
@@ -197,17 +197,17 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
         const auto& named_crta_names = schema->named_common_runtime_args;
         for (const auto& name : named_crta_names) {
             TT_FATAL(
-                kernel_params.named_common_runtime_args.contains(name),
+                kernel_params.common_runtime_args.contains(name),
                 "Kernel '{}' is missing named CRTA '{}'.",
                 kernel_name,
                 name);
         }
         TT_FATAL(
-            kernel_params.named_common_runtime_args.size() == named_crta_names.size(),
+            kernel_params.common_runtime_args.size() == named_crta_names.size(),
             "Kernel '{}' expects {} user-named CRTAs, but {} were provided",
             kernel_name,
             named_crta_names.size(),
-            kernel_params.named_common_runtime_args.size());
+            kernel_params.common_runtime_args.size());
     }
 
     // Validate that all registered kernels with a non-empty RTA/CRTA schema have parameters.
@@ -375,7 +375,7 @@ void SetProgramRunParameters(Program& program, const ProgramRunParams& params) {
 
         // Build a node -> named-RTA-values-map lookup for serialization.
         std::unordered_map<NodeCoord, const std::unordered_map<std::string, uint32_t>*> named_rtas_by_node;
-        for (const auto& node_params : kernel_params.named_runtime_args) {
+        for (const auto& node_params : kernel_params.runtime_args) {
             named_rtas_by_node[node_params.node] = &node_params.args;
         }
 
@@ -424,7 +424,7 @@ void SetProgramRunParameters(Program& program, const ProgramRunParams& params) {
         }
 
         // Assemble the kernel's per-enqueue CRTA buffer in three structurally-separate sections:
-        //   1. User-named CRTAs, in schema order, sourced from named_common_runtime_args.
+        //   1. User-named CRTAs, in schema order, sourced from common_runtime_args.
         //   2. TensorBinding addresses, in binding-handle order, sourced from TensorArg via the
         //      ta_binding_addresses map. Each handle's addr_crta_offset (computed at spec
         //      resolution as (num_user_crtas + binding_index) * 4) lines up with the slot
@@ -436,9 +436,9 @@ void SetProgramRunParameters(Program& program, const ProgramRunParams& params) {
             schema->named_common_runtime_args.size() + binding_handles.size() +
             kernel_params.common_runtime_varargs.size());
         for (const auto& name : schema->named_common_runtime_args) {
-            auto v_it = kernel_params.named_common_runtime_args.find(name);
+            auto v_it = kernel_params.common_runtime_args.find(name);
             TT_FATAL(
-                v_it != kernel_params.named_common_runtime_args.end(),
+                v_it != kernel_params.common_runtime_args.end(),
                 "Internal error: named CRTA '{}' missing for kernel '{}'.",
                 name,
                 kernel_params.kernel_spec_name);

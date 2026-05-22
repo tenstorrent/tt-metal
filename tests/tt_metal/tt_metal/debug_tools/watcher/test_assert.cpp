@@ -89,9 +89,8 @@ static void RunTest(
                             .unique_id = ASSERT_KERNEL_NAME,
                             .source = kernel,
                             .num_threads = 6,
-                            .compile_time_arg_bindings = {{"dm_id", dm_id}},
-                            .runtime_arguments_schema =
-                                {.named_runtime_args = {"a", "b", "assert_type", "hw_assert_cause"}},
+                            .compile_time_args = {{"dm_id", dm_id}},
+                            .runtime_arguments_schema = {.runtime_args = {"a", "b", "assert_type", "hw_assert_cause"}},
                             .config_spec =
                                 experimental::DataMovementConfiguration{
                                     .gen2 = experimental::DataMovementConfiguration::Gen2{}},
@@ -125,9 +124,8 @@ static void RunTest(
                             .source = kernel,
                             .num_threads = 1,
                             .compiler_options = {.defines = {{fmt::format("TRISC{}", trisc_id), "1"}}},
-                            .compile_time_arg_bindings = {{"trisc_id", trisc_id}},
-                            .runtime_arguments_schema =
-                                {.named_runtime_args = {"a", "b", "assert_type", "hw_assert_cause"}},
+                            .compile_time_args = {{"trisc_id", trisc_id}},
+                            .runtime_arguments_schema = {.runtime_args = {"a", "b", "assert_type", "hw_assert_cause"}},
                             .config_spec = experimental::ComputeConfiguration{},
                         };
                         experimental::WorkUnitSpec wu{
@@ -194,7 +192,7 @@ static void RunTest(
             experimental::ProgramRunParams params;
             params.kernel_run_params = {{
                 .kernel_spec_name = ASSERT_KERNEL_NAME,
-                .named_runtime_args =
+                .runtime_args =
                     {{.node = experimental::NodeCoord{logical_core},
                       .args =
                           {{"a", args[0]}, {"b", args[1]}, {"assert_type", args[2]}, {"hw_assert_cause", args[3]}}}},

@@ -110,12 +110,12 @@ void run_borrowed_memory_dfb_program(
         ? MakeMinimalDMKernel("producer", static_cast<uint8_t>(cfg.num_producers))
         : MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
     producer_spec.source = DFB_PRODUCER_KERNEL;
-    producer_spec.compile_time_arg_bindings = {
+    producer_spec.compile_time_args = {
         {"num_entries_per_producer", entries_per_producer},
-        {"implicit_sync",            implicit_sync},
-        {"num_producers",            cfg.num_producers},
+        {"implicit_sync", implicit_sync},
+        {"num_producers", cfg.num_producers},
     };
-    producer_spec.runtime_arguments_schema.named_runtime_args = {"chunk_offset", "entries_per_core"};
+    producer_spec.runtime_arguments_schema.runtime_args = {"chunk_offset", "entries_per_core"};
     producer_spec.tensor_bindings = {
         {.tensor_parameter_name = "src_tensor",      .accessor_name = "src_tensor"},
         // dfb_ring_tensor backs the borrowed DFB; the kernel does not access it directly,
@@ -132,7 +132,7 @@ void run_borrowed_memory_dfb_program(
             ? MakeMinimalComputeKernel("consumer", static_cast<uint8_t>(cfg.num_consumers))
             : MakeMinimalComputeKernel("consumer");
         consumer_spec.source = DFB_TENSIX_CONSUMER_KERNEL;
-        consumer_spec.compile_time_arg_bindings = {
+        consumer_spec.compile_time_args = {
             {"num_entries_per_consumer", entries_per_consumer},
         };
     } else {
@@ -141,13 +141,13 @@ void run_borrowed_memory_dfb_program(
             ? MakeMinimalDMKernel("consumer", static_cast<uint8_t>(cfg.num_consumers))
             : MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
         consumer_spec.source = DFB_DM_CONSUMER_KERNEL;
-        consumer_spec.compile_time_arg_bindings = {
+        consumer_spec.compile_time_args = {
             {"num_entries_per_consumer", entries_per_consumer},
-            {"blocked_consumer",         static_cast<uint32_t>(is_all ? 1u : 0u)},
-            {"implicit_sync",            implicit_sync},
-            {"num_consumers",            cfg.num_consumers},
+            {"blocked_consumer", static_cast<uint32_t>(is_all ? 1u : 0u)},
+            {"implicit_sync", implicit_sync},
+            {"num_consumers", cfg.num_consumers},
         };
-        consumer_spec.runtime_arguments_schema.named_runtime_args = {"chunk_offset", "entries_per_core"};
+        consumer_spec.runtime_arguments_schema.runtime_args = {"chunk_offset", "entries_per_core"};
         consumer_spec.tensor_bindings = {{
             .tensor_parameter_name = "dst_tensor",
             .accessor_name         = "dst_tensor",
@@ -203,20 +203,20 @@ void run_borrowed_memory_dfb_program(
     // -----------------------------------------------------------------------
     // Build and apply run params
     // -----------------------------------------------------------------------
-    using NodeNamedRTAs = ProgramRunParams::KernelRunParams::NodeNamedRTAs;
-    const NodeNamedRTAs dm_rtas{node, {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}}};
+    using NodeRuntimeArgs = ProgramRunParams::KernelRunParams::NodeRuntimeArgs;
+    const NodeRuntimeArgs dm_rtas{node, {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}}};
 
     ProgramRunParams params;
     params.kernel_run_params.push_back({
-        .kernel_spec_name  = "producer",
-        .named_runtime_args = {dm_rtas},
+        .kernel_spec_name = "producer",
+        .runtime_args = {dm_rtas},
     });
     if (cfg.tensix_consumer) {
         params.kernel_run_params.push_back({.kernel_spec_name = "consumer"});
     } else {
         params.kernel_run_params.push_back({
-            .kernel_spec_name   = "consumer",
-            .named_runtime_args = {dm_rtas},
+            .kernel_spec_name = "consumer",
+            .runtime_args = {dm_rtas},
         });
     }
     params.tensor_args.push_back({.tensor_parameter_name = "src_tensor", .tensor = std::cref(src_tensor)});
@@ -270,12 +270,12 @@ void run_update_address_test(
         ? MakeMinimalDMKernel("producer")
         : MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
     producer_spec.source = DFB_PRODUCER_KERNEL;
-    producer_spec.compile_time_arg_bindings = {
+    producer_spec.compile_time_args = {
         {"num_entries_per_producer", num_entries},
-        {"implicit_sync",            implicit_sync},
-        {"num_producers",            1u},
+        {"implicit_sync", implicit_sync},
+        {"num_producers", 1u},
     };
-    producer_spec.runtime_arguments_schema.named_runtime_args = {"chunk_offset", "entries_per_core"};
+    producer_spec.runtime_arguments_schema.runtime_args = {"chunk_offset", "entries_per_core"};
     producer_spec.tensor_bindings = {
         {.tensor_parameter_name = "src_tensor",      .accessor_name = "src_tensor"},
         {.tensor_parameter_name = "dfb_ring_tensor", .accessor_name = "dfb_ring"},
@@ -286,13 +286,13 @@ void run_update_address_test(
         ? MakeMinimalDMKernel("consumer")
         : MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
     consumer_spec.source = DFB_DM_CONSUMER_KERNEL;
-    consumer_spec.compile_time_arg_bindings = {
+    consumer_spec.compile_time_args = {
         {"num_entries_per_consumer", num_entries},
-        {"blocked_consumer",         0u},
-        {"implicit_sync",            implicit_sync},
-        {"num_consumers",            1u},
+        {"blocked_consumer", 0u},
+        {"implicit_sync", implicit_sync},
+        {"num_consumers", 1u},
     };
-    consumer_spec.runtime_arguments_schema.named_runtime_args = {"chunk_offset", "entries_per_core"};
+    consumer_spec.runtime_arguments_schema.runtime_args = {"chunk_offset", "entries_per_core"};
     consumer_spec.tensor_bindings = {{
         .tensor_parameter_name = "dst_tensor",
         .accessor_name         = "dst_tensor",
@@ -332,8 +332,8 @@ void run_update_address_test(
     ASSERT_NE(ring_tensor_a.address(), ring_tensor_b.address())
         << "Test pre-condition: two separate L1 allocations must have distinct addresses";
 
-    using NodeNamedRTAs = ProgramRunParams::KernelRunParams::NodeNamedRTAs;
-    const NodeNamedRTAs dm_rtas{node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}};
+    using NodeRuntimeArgs = ProgramRunParams::KernelRunParams::NodeRuntimeArgs;
+    const NodeRuntimeArgs dm_rtas{node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}};
 
     // --- Run 1: ring at ring_tensor_a ---
     std::vector<uint32_t> input_a(total_words);
@@ -342,8 +342,8 @@ void run_update_address_test(
 
     ProgramRunParams params1;
     params1.kernel_run_params = {
-        {.kernel_spec_name = "producer", .named_runtime_args = {dm_rtas}},
-        {.kernel_spec_name = "consumer", .named_runtime_args = {dm_rtas}},
+        {.kernel_spec_name = "producer", .runtime_args = {dm_rtas}},
+        {.kernel_spec_name = "consumer", .runtime_args = {dm_rtas}},
     };
     params1.tensor_args = {
         {.tensor_parameter_name = "src_tensor",      .tensor = std::cref(src_tensor)},
