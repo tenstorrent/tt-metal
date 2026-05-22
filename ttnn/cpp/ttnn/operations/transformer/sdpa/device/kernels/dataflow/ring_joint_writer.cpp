@@ -255,6 +255,8 @@ struct QChunkInfo {
 };
 
 // Compute DRAM address info (output slice + stats range) for one Q chunk.
+// has_joint_q: when false, joint branch is statically dead and dropped by the compiler.
+template <bool has_joint_q>
 inline QChunkInfo get_q_chunk_info(
     const uint32_t q_chunk,
     const uint32_t nb,
@@ -265,28 +267,38 @@ inline QChunkInfo get_q_chunk_info(
     const uint32_t Lt,
     const uint32_t local_padded_Nt) {
     QChunkInfo info;
-    info.is_joint_q = q_chunk >= num_local_q_chunks;
-    if (info.is_joint_q) {
-        const uint32_t joint_out_row_start_tile = (q_chunk - num_local_q_chunks) * Sq_chunk_t;
-        info.out_slice = Slice(nb, nq, joint_out_row_start_tile, joint_out_row_start_tile + Sq_chunk_t, 0, DHt);
-        info.stats_seq_start_tile = local_padded_Nt + (q_chunk - num_local_q_chunks) * Sq_chunk_t;
-        info.stats_seq_end_tile = info.stats_seq_start_tile + Sq_chunk_t;
-        info.stats_seq_start_tile = std::min(info.stats_seq_start_tile, local_padded_Nt + Lt);
-        info.stats_seq_end_tile = std::min(info.stats_seq_end_tile, local_padded_Nt + Lt);
+    if constexpr (has_joint_q) {
+        info.is_joint_q = q_chunk >= num_local_q_chunks;
+        if (info.is_joint_q) {
+            const uint32_t joint_out_row_start_tile = (q_chunk - num_local_q_chunks) * Sq_chunk_t;
+            info.out_slice = Slice(nb, nq, joint_out_row_start_tile, joint_out_row_start_tile + Sq_chunk_t, 0, DHt);
+            info.stats_seq_start_tile = local_padded_Nt + (q_chunk - num_local_q_chunks) * Sq_chunk_t;
+            info.stats_seq_end_tile = info.stats_seq_start_tile + Sq_chunk_t;
+            info.stats_seq_start_tile = std::min(info.stats_seq_start_tile, local_padded_Nt + Lt);
+            info.stats_seq_end_tile = std::min(info.stats_seq_end_tile, local_padded_Nt + Lt);
+            return info;
+        }
     } else {
-        const uint32_t out_row_start_tile = q_chunk * Sq_chunk_t;
-        info.out_slice = Slice(nb, nq, out_row_start_tile, out_row_start_tile + Sq_chunk_t, 0, DHt);
-        info.stats_seq_start_tile = q_chunk * Sq_chunk_t;
-        info.stats_seq_end_tile = info.stats_seq_start_tile + Sq_chunk_t;
-        info.stats_seq_start_tile = std::min(info.stats_seq_start_tile, local_padded_Nt);
-        info.stats_seq_end_tile = std::min(info.stats_seq_end_tile, local_padded_Nt);
+        info.is_joint_q = false;
     }
+    const uint32_t out_row_start_tile = q_chunk * Sq_chunk_t;
+    info.out_slice = Slice(nb, nq, out_row_start_tile, out_row_start_tile + Sq_chunk_t, 0, DHt);
+    info.stats_seq_start_tile = q_chunk * Sq_chunk_t;
+    info.stats_seq_end_tile = info.stats_seq_start_tile + Sq_chunk_t;
+    info.stats_seq_start_tile = std::min(info.stats_seq_start_tile, local_padded_Nt);
+    info.stats_seq_end_tile = std::min(info.stats_seq_end_tile, local_padded_Nt);
     return info;
 }
 
 // Padding boundary for write paths — needs ring_id to know how far the valid sequence extends.
+// has_joint_q: when false, joint branch is statically dead.
+template <bool has_joint_q>
 inline uint32_t get_end_seq_tile(const QChunkInfo& qi, uint32_t ring_id, uint32_t Lt, uint32_t local_padded_Nt) {
-    return qi.is_joint_q ? Lt : local_padded_Nt * (ring_id + 1);
+    if constexpr (has_joint_q) {
+        return qi.is_joint_q ? Lt : local_padded_Nt * (ring_id + 1);
+    } else {
+        return local_padded_Nt * (ring_id + 1);
+    }
 }
 
 void kernel_main() {
@@ -320,6 +332,11 @@ void kernel_main() {
     constexpr uint32_t is_balanced = get_compile_time_arg_val(26) == 1;
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(27) == 1;
     constexpr uint32_t out_subblock_h = get_compile_time_arg_val(28);
+
+    // Joint-path compile-time gating. When zero, joint Q/K branches are statically dead
+    // and dropped by the compiler, eliminating runtime ternaries and the joint_out_generator.
+    constexpr bool has_joint_q = num_joint_q_chunks > 0;
+    constexpr bool has_joint_k = num_joint_k_chunks > 0;
 
     constexpr auto out_args = TensorAccessorArgs<29>();
     constexpr auto joint_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
@@ -408,13 +425,19 @@ void kernel_main() {
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
         const bool do_joint_kv = ring_id == ring_size - 1;
-        const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
+        uint32_t num_kv_chunks = num_local_k_chunks;
+        if constexpr (has_joint_k) {
+            if (do_joint_kv) {
+                num_kv_chunks += num_joint_k_chunks;
+            }
+        }
 
         const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
         const uint32_t ring_iter_kv_end_tile = ring_iter_kv_start_tile + num_local_k_chunks * Sk_chunk_t;
         const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;
         const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
-        const bool ring_iter_does_work = (ring_iter_processes_KV_chunks || (do_joint_kv && L != 0)) &&
+        const bool joint_contributes = (has_joint_k && L != 0) ? do_joint_kv : false;
+        const bool ring_iter_does_work = (ring_iter_processes_KV_chunks || joint_contributes) &&
                                          !(is_causal && ring_index < ring_id && !is_balanced);
         if (!ring_iter_does_work) {
             continue;
@@ -495,10 +518,18 @@ void kernel_main() {
                 const uint32_t nb_pf = gq / (NH * num_q_chunks);
                 const uint32_t nq_pf = (gq % (NH * num_q_chunks)) / num_q_chunks;
                 const uint32_t qc_pf = gq % num_q_chunks;
-                const auto qi_pf =
-                    get_q_chunk_info(qc_pf, nb_pf, nq_pf, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, local_padded_Nt);
+                const auto qi_pf = get_q_chunk_info<has_joint_q>(
+                    qc_pf, nb_pf, nq_pf, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, local_padded_Nt);
+                const auto& gen_pf = [&]() -> const auto& {
+                    if constexpr (has_joint_q) {
+                        if (qi_pf.is_joint_q) {
+                            return joint_out_generator;
+                        }
+                    }
+                    return out_generator;
+                }();
                 issue_restore_reads(
-                    qi_pf.is_joint_q ? joint_out_generator : out_generator,
+                    gen_pf,
                     stats_writer,
                     stats_tile_logical,
                     nb_pf,
@@ -533,8 +564,16 @@ void kernel_main() {
             // the late-flush site (after prefetch in the K-loop window).
             auto flush_deferred_save = [&]() {
                 constexpr uint32_t all_tiles_valid = 0xFFFFFFFF;
+                const auto& gen = [&]() -> const auto& {
+                    if constexpr (has_joint_q) {
+                        if (deferred.qi.is_joint_q) {
+                            return joint_out_generator;
+                        }
+                    }
+                    return out_generator;
+                }();
                 save_accumulators_with_trid(
-                    deferred.qi.is_joint_q ? joint_out_generator : out_generator,
+                    gen,
                     stats_writer,
                     stats_tile_logical,
                     deferred.nb,
@@ -564,9 +603,9 @@ void kernel_main() {
 
                 const bool balanced_skip_q = q_chunk < half_sequence && is_balanced && ring_index < ring_id;
 
-                const auto qi =
-                    get_q_chunk_info(q_chunk, nb, nq, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, local_padded_Nt);
-                const uint32_t end_seq_tile = get_end_seq_tile(qi, ring_id, Lt, local_padded_Nt);
+                const auto qi = get_q_chunk_info<has_joint_q>(
+                    q_chunk, nb, nq, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, local_padded_Nt);
+                const uint32_t end_seq_tile = get_end_seq_tile<has_joint_q>(qi, ring_id, Lt, local_padded_Nt);
 
                 // 1. Complete restore for all Q chunks to keep the prefetch pipeline in sync.
                 // For balanced-skip non-last-ring-iter Q chunks, barrier without pushing —
@@ -633,14 +672,16 @@ void kernel_main() {
                 if (is_last_ring_iter) {
                     // Last-iter writes carry default trid (caller never set a non-zero trid here);
                     // pass 0 so the per-group flush waits exactly for these writes.
+                    const auto& gen = [&]() -> const auto& {
+                        if constexpr (has_joint_q) {
+                            if (qi.is_joint_q) {
+                                return joint_out_generator;
+                            }
+                        }
+                        return out_generator;
+                    }();
                     write_block_row_grouped_trid(
-                        qi.is_joint_q ? joint_out_generator : out_generator,
-                        qi.out_slice,
-                        end_seq_tile,
-                        cb_out,
-                        tile_bytes,
-                        out_subblock_h,
-                        /*flush_trid=*/0);
+                        gen, qi.out_slice, end_seq_tile, cb_out, tile_bytes, out_subblock_h, /*flush_trid=*/0);
                     noc_async_write_barrier();
                 } else if (!single_q_chunk) {
                     deferred.pending = true;
@@ -673,9 +714,9 @@ void kernel_main() {
                 const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
                 const uint32_t q_chunk = global_q_chunk % num_q_chunks;
 
-                const auto qi =
-                    get_q_chunk_info(q_chunk, nb, nq, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, local_padded_Nt);
-                const uint32_t end_seq_tile = get_end_seq_tile(qi, ring_id, Lt, local_padded_Nt);
+                const auto qi = get_q_chunk_info<has_joint_q>(
+                    q_chunk, nb, nq, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, local_padded_Nt);
+                const uint32_t end_seq_tile = get_end_seq_tile<has_joint_q>(qi, ring_id, Lt, local_padded_Nt);
 
                 // Only truly causal case appear in the iteration with local KV
                 // Other iterations will just skip the computation with subsequent KV chunks
@@ -685,11 +726,20 @@ void kernel_main() {
                     continue;
                 }
 
+                const auto& gen = [&]() -> const auto& {
+                    if constexpr (has_joint_q) {
+                        if (qi.is_joint_q) {
+                            return joint_out_generator;
+                        }
+                    }
+                    return out_generator;
+                }();
+
                 // If not on the first iteration, read LSE and previous output chunk.
                 // No race condition because writer kernel writes previous output before reading it again
                 if (ring_iter > 0) {
                     read_prev_output_and_lse(
-                        qi.is_joint_q ? joint_out_generator : out_generator,
+                        gen,
                         stats_writer,
                         stats_tile_logical,
                         nb,
@@ -706,7 +756,7 @@ void kernel_main() {
                 }
 
                 write_output_and_lse(
-                    qi.is_joint_q ? joint_out_generator : out_generator,
+                    gen,
                     stats_writer,
                     stats_tile_logical,
                     nb,

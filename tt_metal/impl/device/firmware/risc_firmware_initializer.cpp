@@ -1339,7 +1339,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
 
         tt::umd::RiscType reset_val;
         if (cluster_.arch() == ARCH::QUASAR) {
-            reset_val = tt::umd::RiscType::ALL_NEO_DMS;
+            reset_val = tt::umd::RiscType::ALL;
         } else {
             reset_val = tt::umd::RiscType::BRISC;
             if (multi_risc_active_eth_cores.contains(worker_core)) {

@@ -26,7 +26,7 @@ DEVICE_PERF_TARGETS_US = {
 @pytest.mark.parametrize(
     "device_params",
     [
-        {"fabric_config": get_fabric_config(), "trace_region_size": 2967552},
+        {"fabric_config": get_fabric_config(), "trace_region_size": 0},
     ],
     indirect=True,
 )
