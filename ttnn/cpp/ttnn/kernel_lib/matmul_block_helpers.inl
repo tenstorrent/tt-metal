@@ -175,6 +175,9 @@ ALWI void matmul_block(
     const uint32_t block_w = shape.in0_block_w;
     const uint32_t num_k_blocks = shape.num_k_blocks;
     const uint32_t batch = shape.batch;
+    // 0 = no narrowing; nonzero = narrow the matmul FMA on the last in1 subblock.
+    // See MatmulBlockShape::last_in1_subblock_w_valid for the use case.
+    const uint32_t last_in1_subblock_w_valid = shape.last_in1_subblock_w_valid;
 
     // Init dispatch: helper always issues a short init (never a Full / hw_configure-bearing
     // init — those are caller's boot-time responsibility, runs once at the top of
@@ -339,6 +342,16 @@ ALWI void matmul_block(
                 for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
                     tile_regs_acquire();
 
+                    // last_in1_subblock_w_valid narrowing: on the last in1 subblock, if the
+                    // caller set the override, narrow the matmul FMA's ct_dim so the unpacker
+                    // touches only the columns the reader actually pushed. The dst/pack region
+                    // stays full-width; the writer drops padded output columns. Inert (==0)
+                    // for non-DRAM-sharded callers.
+                    const uint32_t effective_subblock_w =
+                        (last_in1_subblock_w_valid != 0 && in1_subblock == in1_num_subblocks - 1)
+                            ? last_in1_subblock_w_valid
+                            : out_subblock_w;
+
                     if (enable_reload) {
                         copy_tile_to_dst_init_short_with_dt(in1_cb_id, interm_cb_id);
                         interm_buf.wait_front(out_num_tiles);
@@ -366,7 +379,7 @@ ALWI void matmul_block(
                             in1_index,
                             dst_index,
                             transpose,
-                            out_subblock_w,
+                            effective_subblock_w,
                             out_subblock_h,
                             block_w);
 #else

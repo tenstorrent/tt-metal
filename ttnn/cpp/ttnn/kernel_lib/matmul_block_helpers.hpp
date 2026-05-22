@@ -210,6 +210,17 @@ struct MatmulBlockShape {
                                  // phase work (bias add, untilize, mailbox sync) must be
                                  // interleaved between iterations.
 
+    // Optional narrowing of the last in1 subblock's matmul FMA width. 0 = inert (use
+    // out_subblock_w throughout). Nonzero = on the last in1_subblock iteration only,
+    // pass this value as the matmul ct_dim instead of out_subblock_w so the unpacker
+    // touches exactly `last_in1_subblock_w_valid` columns. Use case: DRAM-sharded matmul
+    // that pads per_core_N_compute beyond per_core_N_in1_sender so out_subblock_w can be
+    // larger than the reader actually pushes for the last in1 subblock — without this
+    // override the unpacker over-reads padded (unpushed) cb_in1 tiles. The pack lifecycle
+    // and output region stay full-width; the writer drops the padded output columns.
+    // Mirrors the kernel-side fix from tt-metal #44872.
+    uint32_t last_in1_subblock_w_valid = 0;
+
     static constexpr MatmulBlockShape of(
         uint32_t in0_num_subblocks,
         uint32_t in1_num_subblocks,

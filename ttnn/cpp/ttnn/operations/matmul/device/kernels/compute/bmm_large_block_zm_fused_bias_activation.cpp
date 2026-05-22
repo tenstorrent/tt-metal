@@ -277,7 +277,7 @@ void kernel_main() {
 #else
                 auto& phase1_out_buf = untilize_mode_out_buf;
 #endif
-                const auto shape = MatmulBlockShape::of(
+                auto shape = MatmulBlockShape::of(
                     in0_num_subblocks,
                     in1_num_subblocks,
                     out_subblock_h,
@@ -285,6 +285,14 @@ void kernel_main() {
                     in0_block_w,
                     num_blocks_inner_dim,
                     /*batch=*/1);
+#ifdef MATMUL_DRAM_SHARDED
+                // DRAM-sharded matmul pads per_core_N_compute beyond per_core_N_in1_sender
+                // so out_subblock_w can be larger than the reader actually pushes for the
+                // last in1 subblock. Narrow the matmul FMA's ct_dim on the last subblock
+                // via the helper's last_in1_subblock_w_valid knob so the unpacker only
+                // touches tiles that exist. Mirrors tt-metal #44872's kernel-side fix.
+                shape.last_in1_subblock_w_valid = get_named_compile_time_arg_val("last_subblock_w_valid");
+#endif
                 // in1_block_w is the in1 CB read stride (= per_core_N_in1_sender on
                 // DRAM-sharded, possibly smaller than the output pack width). out_block_w
                 // = out_subblock_w * in1_num_subblocks is the row stride the compute
