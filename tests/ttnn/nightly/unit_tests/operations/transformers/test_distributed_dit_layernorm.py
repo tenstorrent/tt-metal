@@ -170,22 +170,22 @@ def run_distributed_dit_layernorm(
         out_torch = out_torch * torch_weight
         out_torch = out_torch + torch_bias
 
-    # Post-allgather layernorm output noise floor decomposition:
-    #
-    # - The final (x - mu) / sqrt(var + eps) * gamma + beta cascade is built on FPU
-    #   bcast ops (sub_tiles_bcast_cols, mul_tiles_bcast_cols, mul_tiles_bcast_rows,
-    #   add_tiles_bcast_rows). Their SrcA/SrcB reads are 19-bit (TF32, 10 mantissa),
-    #   so any FP32 routed through them is structurally truncated to ~1e-3 relative.
-    # - The test always uses bf16 stats (and the affine path uses bf16 gamma/beta),
-    #   so mean / sqrt(var + eps) carry bf16 quantization (~0.78% relative). For
-    #   per-element output of magnitude up to ~3 that gives an absolute floor of
-    #   3 * 0.0078 ~= 0.024 per element. bf16 quantization of gamma/beta gives the
-    #   same magnitude, dominating the TF32 FPU floor.
-    #
-    # atol leaves ~1.6x headroom over the structural element floor across shapes.
-    # PCC and frobenius are global metrics that come in much tighter than the
-    # element-wise atol; thresholds set close to observed (~5x headroom in 1-PCC).
     if dtype == ttnn.float32:
+        # Post-allgather layernorm output noise floor decomposition:
+        #
+        # - The final (x - mu) / sqrt(var + eps) * gamma + beta cascade is built on FPU
+        #   bcast ops (sub_tiles_bcast_cols, mul_tiles_bcast_cols, mul_tiles_bcast_rows,
+        #   add_tiles_bcast_rows). Their SrcA/SrcB reads are 19-bit (TF32, 10 mantissa),
+        #   so any FP32 routed through them is structurally truncated to ~1e-3 relative.
+        # - The test always uses bf16 stats (and the affine path uses bf16 gamma/beta),
+        #   so mean / sqrt(var + eps) carry bf16 quantization (~0.78% relative). For
+        #   per-element output of magnitude up to ~3 that gives an absolute floor of
+        #   3 * 0.0078 ~= 0.024 per element. bf16 quantization of gamma/beta gives the
+        #   same magnitude, dominating the TF32 FPU floor.
+        #
+        # atol leaves ~1.6x headroom over the structural element floor across shapes.
+        # PCC and frobenius are global metrics that come in much tighter than the
+        # element-wise atol; thresholds set close to observed (~5x headroom in 1-PCC).
         rtol = 0.005
         atol = 0.04
         pcc = 0.999994

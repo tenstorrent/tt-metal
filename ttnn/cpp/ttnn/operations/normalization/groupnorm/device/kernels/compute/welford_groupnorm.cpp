@@ -227,9 +227,13 @@ void kernel_main() {
         // Full transpose_wh hw init for the welford intake CB. The factory marks this CB
         // with UnpackToDestFp32: c_29 in the TILIZE_IN branch, c_19 in the non-TILIZE_IN
         // alias branch.
-        // None of the inits emitted above issues hw_configure for the intake CB.
-        // Without the full transpose_wh_init below, the welford intake transpose silently
-        // falls back to the SrcA / TF32 path losing FP32 precision.
+        // Neither binary_op_init_common (above) nor, on the TILIZE_IN path, the tilize<>
+        // call unpack-configure the intake CB: binary_op_init_common only configures cb_in0,
+        // and tilize<> configures its source (cb_in_rm_id), not its output (c_29). So we
+        // need the full transpose_wh_init here (not the _short variant used later in the
+        // welford loop) to emit the UnpackToDestFp32 hw_configure for the intake CB. Without
+        // it the welford intake transpose silently falls back to the SrcA / TF32 path,
+        // losing FP32 precision.
 #ifdef TILIZE_IN
         transpose_wh_init(cb_in_id, cb_ex_partial_id);
 #else

@@ -570,14 +570,19 @@ void kernel_main() {
             // Multiply by 1/(√(Var(X) + ε)).
             //
             // On Wormhole, binary_dest_reuse_tiles<ELWMUL, DEST_TO_SRCB> on c_0 (cb_in)
-            // silently corrupts when an earlier transpose_wh_tile in this kernel routed
-            // through an UnpackToDestFp32 alias CB (c_29 for the no-fuse welford, c_30/c_31
-            // for the fuse_pre_add welford state). The leaked unpacker state survives across
-            // the welford -> eltwise boundary; even-indexed DEST half blocks accumulate
-            // (output = (1+rsqrt)*(x-mean), ~1.286x), odd-indexed blocks produce mostly
-            // zeros. The standard reconfig_data_format(..., IGNORE) skip-optimization at the
-            // start of the eltwise block does not reset whatever state needs resetting.
-            // Blackhole is unaffected.
+            // silently corrupts when an earlier unpack op in this kernel routed through an
+            // UnpackToDestFp32 CB. The two triggers are different in each path:
+            //   * non-fuse welford (welford_fp32_alias): transpose_wh_tile reads cb_x_welford
+            //     (c_29, UnpackToDestFp32 alias of cb_x).
+            //   * fuse_pre_add welford state (welford_state_fp32_alias): copy_tile reads
+            //     cb_ex_welford / cb_ex2_welford (c_30 / c_31, UnpackToDestFp32 aliases of
+            //     cb_ex / cb_ex2). cb_interm_pre_add (c_23) is kept in Default mode and the
+            //     fuse path's transpose_wh_tile on it does not contribute to the trigger.
+            // The leaked unpacker state survives across the welford -> eltwise boundary;
+            // even-indexed DEST half blocks accumulate (output = (1+rsqrt)*(x-mean), ~1.286x),
+            // odd-indexed blocks produce mostly zeros. The standard reconfig_data_format(...,
+            // IGNORE) skip-optimization at the start of the eltwise block does not reset
+            // whatever state needs resetting. Blackhole is unaffected.
             //
             // When the trigger is present (Wormhole AND any UnpackToDestFp32 alias active in
             // this kernel), stage (x - mean) through cb_xmm and use the standard

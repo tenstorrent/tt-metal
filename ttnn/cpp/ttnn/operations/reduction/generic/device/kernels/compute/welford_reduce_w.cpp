@@ -194,8 +194,14 @@ void kernel_main() {
             //   2. llk_math_welfords_sfpu_init re-programs the replay buffer with the welford
             //      recurrence, without clearing LREG4/5 (which would lose the running
             //      mean/M2 accumulator).
-            welford_reinit(cb_in);
-            MATH((llk_math_welfords_sfpu_init()));
+            //
+            // For bf16 input the unpack-to-DEST fp32 path is inactive: transpose_wh_tile routes
+            // through SrcA without touching the SFPU replay buffer, so the re-init pair is gated
+            // out to avoid unintended LLK side effects on the bf16 path.
+            if constexpr (welford_fp32_input) {
+                welford_reinit(cb_in);
+                MATH((llk_math_welfords_sfpu_init()));
+            }
 
             if (wt < (Wt - 1)) {
                 welford_update<0>(input_dst, start_N, {});

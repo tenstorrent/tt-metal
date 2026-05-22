@@ -40,16 +40,22 @@ void kernel_main() {
     constexpr uint32_t num_channels_per_group = get_compile_time_arg_val(24);
     constexpr uint32_t tile_width = get_compile_time_arg_val(25);
 
-    // Welford-fp32 alias args, appended to the compile-time vector by the host. When the alias
+    // Welford-fp32 alias args, set by the host as named compile-time args. When the alias
     // is active, cb_in0_welford_id points to c_29 (shares L1 with c_0) and cb_in_welford_id
     // points to c_31 (shares L1 with c_1). Both alias indices are configured with
     // unpack_to_dest_mode=UnpackToDestFp32 so the welford intake's transpose_wh_tile takes the
     // UnpackToDest fp32 path, preserving the full 23-bit mantissa into DEST for the SFPU
     // welford. The final-stage sub_tiles_bcast_scalar still reads c_0 / c_1 (Default SrcA path).
     // When inactive, the alias ids collapse onto c_0 / c_1 and the alias-side ops are no-ops.
-    constexpr bool welford_fp32_alias = get_compile_time_arg_val(26) != 0;
-    constexpr uint32_t cb_in0_welford_id = get_compile_time_arg_val(27);
-    constexpr uint32_t cb_in_welford_id = get_compile_time_arg_val(28);
+    //
+    // Unlike the mcast / no_mcast groupnorm kernels there is no separate
+    // welford_unpack_fp32_active flag here: this kernel has no TILIZE_IN-vs-non-TILIZE_IN split
+    // that would let the unpack-to-DEST fp32 path be active on one branch but not the other,
+    // so welford_fp32_alias alone is both the "use the alias indices" and the "gate the SFPU
+    // re-init after transpose" predicate.
+    constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
+    constexpr uint32_t cb_in0_welford_id = get_named_compile_time_arg_val("cb_in0_welford");
+    constexpr uint32_t cb_in_welford_id = get_named_compile_time_arg_val("cb_in_welford");
 
     // dst regs
     constexpr uint32_t dst0 = 0;

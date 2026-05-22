@@ -39,7 +39,7 @@ void kernel_main() {
     // True iff the factory configured cb_inp with UnpackToDestFp32, i.e. transpose_wh_tile
     // below takes the unpack-to-DEST fp32 path that writes SFPU replay slot 0. Used by the
     // non-FUSE branch to gate the welford state re-establishment after the transpose.
-    constexpr bool welford_unpack_fp32_active = get_compile_time_arg_val(3) != 0;
+    constexpr bool welford_unpack_fp32_active = get_named_compile_time_arg_val("welford_unpack_fp32_active") != 0;
 
     constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_out = tt::CBIndex::c_14;

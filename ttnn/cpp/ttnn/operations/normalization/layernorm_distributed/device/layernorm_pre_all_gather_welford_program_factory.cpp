@@ -139,9 +139,15 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherWelfordProgramFactory::crea
     // kernel branch uses this to gate the welford_reinit + llk_math_welfords_sfpu_init pair
     // after each transpose_wh_tile: needed iff transpose_wh_tile took the UnpackToDest fp32
     // path (writing SFPU replay slot 0), unneeded when the transpose routes through SrcA.
+    // Passed as a named compile-time arg so it doesn't ride on a positional slot that depends
+    // on FUSE_PRE_ADD (which would shift if anything is later added inside the #if FUSE_PRE_ADD
+    // block of the compute kernel).
     const uint32_t welford_unpack_fp32_active =
         (in_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en && !fuse_pre_add) ? 1u : 0u;
-    std::vector<uint32_t> compute_args = {Wt, W, block_size, welford_unpack_fp32_active};
+    std::vector<uint32_t> compute_args = {Wt, W, block_size};
+    KernelDescriptor::NamedCompileTimeArgs compute_named_args = {
+        {"welford_unpack_fp32_active", welford_unpack_fp32_active},
+    };
 
     const auto* compute_kernel_file =
         "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"
@@ -275,6 +281,7 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherWelfordProgramFactory::crea
     compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel_desc.core_ranges = all_cores;
     compute_kernel_desc.compile_time_args = std::move(compute_args);
+    compute_kernel_desc.named_compile_time_args = std::move(compute_named_args);
     compute_kernel_desc.defines = KernelDescriptor::Defines(compute_defines.begin(), compute_defines.end());
     compute_kernel_desc.runtime_args = std::move(compute_runtime_args);
     compute_kernel_desc.config = ComputeConfigDescriptor{

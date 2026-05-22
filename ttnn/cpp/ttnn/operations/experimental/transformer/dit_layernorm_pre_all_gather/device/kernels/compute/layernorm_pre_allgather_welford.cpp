@@ -27,6 +27,14 @@ void kernel_main() {
     constexpr uint32_t W = get_compile_time_arg_val(1);
     constexpr uint32_t block_size = get_compile_time_arg_val(2);
 
+    // True iff the factory flagged cb_inp (c_0) UnpackToDestFp32 (FP32 input + fp32_dest_acc_en).
+    // When true, transpose_wh_tile(cb_inp, ...) takes the unpack-to-DEST fp32 path which
+    // clobbers SFPU replay slot 0 via llk_math_transpose_dest, so the post-transpose welford
+    // state re-establishment pair must fire. When false the transpose routes through SrcA, slot 0
+    // is untouched, and the re-init pair is gated out to avoid unintended LLK side effects on the
+    // bf16 path.
+    constexpr bool welford_unpack_fp32_active = get_named_compile_time_arg_val("welford_unpack_fp32_active") != 0;
+
     constexpr uint32_t cb_inp = tt::CBIndex::c_0;
     constexpr uint32_t cb_out = tt::CBIndex::c_14;
     constexpr uint32_t cb_x2 = tt::CBIndex::c_1;           // x**2
@@ -58,14 +66,20 @@ void kernel_main() {
         // after each transpose_wh_tile so welford_update replays welford ops, not stale
         // transpose-dest ops. LREG4/5 (running mean / M2) survive transpose_dest because it
         // only uses FPU MOVs. Same pattern as the ttnn.std/var W-reduce kernel.
+        //
+        // For bf16 input the unpack-to-DEST fp32 path is inactive: transpose_wh_tile routes
+        // through SrcA without touching the SFPU replay buffer, so the re-init pair is gated
+        // out to avoid unintended LLK side effects on the bf16 path.
         for (uint32_t wt = 0; wt < Wt; wt += block_size) {
             cb_wait_front(cb_inp, block_size);
             uint32_t r;
             for (r = 0; r < block_size && wt + r < Wt - 1; r++) {
                 transpose_wh_init_short(cb_inp);
                 transpose_wh_tile(cb_inp, r, dst0);
-                welford_reinit(cb_inp);
-                MATH((llk_math_welfords_sfpu_init()));
+                if constexpr (welford_unpack_fp32_active) {
+                    welford_reinit(cb_inp);
+                    MATH((llk_math_welfords_sfpu_init()));
+                }
                 welford_update<W>(dst0, start_N, *p_reciprocals);
                 start_N += 32;
             }
@@ -73,8 +87,10 @@ void kernel_main() {
                 // This block contains the last tile
                 transpose_wh_init_short(cb_inp);
                 transpose_wh_tile(cb_inp, r, dst0);
-                welford_reinit(cb_inp);
-                MATH((llk_math_welfords_sfpu_init()));
+                if constexpr (welford_unpack_fp32_active) {
+                    welford_reinit(cb_inp);
+                    MATH((llk_math_welfords_sfpu_init()));
+                }
                 welford_update_rows<W>(dst0, start_N, 0, last_tile_rows, *p_reciprocals);
             }
             cb_pop_front(cb_inp, block_size);

@@ -175,17 +175,26 @@ def test_var_fp32_translation_invariance(device, dim, offset, scalar):
 # two 11-bit-mantissa TF32 values can yield up to ~22 bits in the FP32 result).  Preserving
 # that mantissa through the transpose read requires UnpackToDestFp32 on cb_scaled.
 #
-# Variance of N consecutive integers 0..N-1 is (N^2 - 1) / 12 (population); with N=33 and
-# Bessel's correction sample variance = 33 * (33^2 - 1) / (12 * 32) = 374/4.  Scaled by 2,
-# expected sample variance = 374.0 exactly.  Wt = ceil(33/32) = 2, so this exercises the
-# multi-tile inner-loop path of welford_reduce_w with do_scale=true.
+# Variance of N consecutive integers 0..N-1 is (N^2 - 1) / 12 (population); with Bessel's
+# correction (sample variance) it is N * (N^2 - 1) / (12 * (N - 1)) = N * (N + 1) / 12.  The
+# torch.var below in fp64 computes the ground truth for any N; the formula is noted only to
+# make the smallest case (N=33, sample variance 93.5; scaled by 2.0 -> 374.0) easy to verify
+# by inspection.
+#
+# Parametrized across two N values to cover two Wt regimes of the wt-inner loop in
+# welford_reduce_w with do_scale=true:
+#   - N=33  -> Wt = ceil(33/32)  = 2   (smallest multi-tile case; original regression target)
+#   - N=129 -> Wt = ceil(129/32) = 5   (deeper inner loop, exercises the per-iter UNPACK
+#                                       hw_configure flip between cb_in's Default mode and
+#                                       cb_scaled's UnpackToDestFp32 mode across many
+#                                       iterations rather than just one boundary crossing)
 @pytest.mark.parametrize("scalar", [2.0, -2.0, 0.5, 4.0])
-def test_var_fp32_doscale_wt_gt_1(device, scalar):
+@pytest.mark.parametrize("N", [33, 129], ids=["Wt2", "Wt5"])
+def test_var_fp32_doscale_wt_gt_1(device, scalar, N):
     correction = True
-    N = 33
     seq = torch.arange(N, dtype=torch.float32)
     # Each row of the input tile is the sequence; reducing along W (dim=-1) gives per-row var.
-    # Shape (1, 1, 32, 33): one H tile (Ht=1), two W tiles (Wt=2 -- the regression target).
+    # Shape (1, 1, 32, N): one H tile (Ht=1), Wt = ceil(N/32) W tiles.
     torch_input = seq.unsqueeze(0).expand(32, N).contiguous().unsqueeze(0).unsqueeze(0)
 
     # Reference in fp64 so it isn't contaminated by fp32 precision loss in torch.

@@ -114,7 +114,8 @@ tt::tt_metal::ProgramDescriptor PreAllGatherWelfordProgramFactory::create_descri
     // inputs and catastrophically loses precision when |mean| >> std.
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-    if (in_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en) {
+    const bool welford_unpack_fp32_active = (in_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en);
+    if (welford_unpack_fp32_active) {
         unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_0)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 
@@ -122,10 +123,20 @@ tt::tt_metal::ProgramDescriptor PreAllGatherWelfordProgramFactory::create_descri
     // so its format mirrors out_data_format. When both that format is Float32 and DEST
     // is in fp32 mode, force fp32 unpack on c_1 too so the read-back doesn't truncate to
     // TF32. For non-fp32 outputs the final pack to c_14 truncates anyway, so unpacking to
-    // fp32 would not be useful.
+    // fp32 would not be useful. The per-CB unpack mode set here is registered by
+    // compute_kernel_hw_startup and re-applied by the kernel's reconfig_data_format call that
+    // points both the SrcA and SrcB unpackers at c_1 immediately before the post-welford
+    // transpose; the transpose_wh_init_short that follows doesn't issue hw_configure, so the
+    // mode set by reconfig_data_format carries through.
     if (out_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en) {
         unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_1)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
+
+    // Named CT arg gates the post-transpose welford state re-establishment in the kernel.
+    // It only fires on the fp32 unpack-to-DEST path (which clobbers SFPU replay slot 0).
+    KernelDescriptor::NamedCompileTimeArgs compute_named_args = {
+        {"welford_unpack_fp32_active", welford_unpack_fp32_active ? 1u : 0u},
+    };
 
     // Compute kernel
     KernelDescriptor compute_kernel_desc;
@@ -133,6 +144,7 @@ tt::tt_metal::ProgramDescriptor PreAllGatherWelfordProgramFactory::create_descri
     compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel_desc.core_ranges = all_cores;
     compute_kernel_desc.compile_time_args = std::move(compute_args);
+    compute_kernel_desc.named_compile_time_args = std::move(compute_named_args);
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,

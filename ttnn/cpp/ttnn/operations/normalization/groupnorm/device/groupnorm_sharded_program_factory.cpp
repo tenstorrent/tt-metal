@@ -760,18 +760,22 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
             tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 
-    // Append welford-fp32 alias args to the compute compile-time args vector. The kernel reads
-    // these positionally; see welford_groupnorm_sharded_v2.cpp.
+    // Welford-fp32 alias args, passed as named compile-time args so the slots aren't anchored
+    // to a position in the positional vector (which would shift if any future arg was added
+    // ahead of them). Only attached on the welford compute kernel; the non-welford
+    // groupnorm_sharded_v2.cpp never references these names. Read by welford_groupnorm_sharded_v2.cpp.
     const uint32_t cb_in0_welford_arg =
         welford_fp32_alias ? static_cast<uint32_t>(tt::CBIndex::c_29) : static_cast<uint32_t>(tt::CBIndex::c_0);
     const uint32_t cb_in_welford_arg =
         welford_fp32_alias ? static_cast<uint32_t>(tt::CBIndex::c_31) : static_cast<uint32_t>(tt::CBIndex::c_1);
-    mcast_sender_compute_compile_time_args.push_back(static_cast<uint32_t>(welford_fp32_alias));
-    mcast_sender_compute_compile_time_args.push_back(cb_in0_welford_arg);
-    mcast_sender_compute_compile_time_args.push_back(cb_in_welford_arg);
-    mcast_receiver_compute_compile_time_args.push_back(static_cast<uint32_t>(welford_fp32_alias));
-    mcast_receiver_compute_compile_time_args.push_back(cb_in0_welford_arg);
-    mcast_receiver_compute_compile_time_args.push_back(cb_in_welford_arg);
+    KernelDescriptor::NamedCompileTimeArgs welford_named_compile_time_args;
+    if (use_welford) {
+        welford_named_compile_time_args = {
+            {"welford_fp32_alias", static_cast<uint32_t>(welford_fp32_alias)},
+            {"cb_in0_welford", cb_in0_welford_arg},
+            {"cb_in_welford", cb_in_welford_arg},
+        };
+    }
 
     KernelDescriptor compute_sender_desc;
     compute_sender_desc.kernel_source =
@@ -782,6 +786,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     compute_sender_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_sender_desc.core_ranges = mcast_sender_cores;
     compute_sender_desc.compile_time_args = mcast_sender_compute_compile_time_args;
+    compute_sender_desc.named_compile_time_args = welford_named_compile_time_args;
     compute_sender_desc.defines =
         KernelDescriptor::Defines(eltwise_binary_defines.begin(), eltwise_binary_defines.end());
     compute_sender_desc.config = ComputeConfigDescriptor{
@@ -801,6 +806,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     compute_receiver_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_receiver_desc.core_ranges = mcast_receiver_cores;
     compute_receiver_desc.compile_time_args = mcast_receiver_compute_compile_time_args;
+    compute_receiver_desc.named_compile_time_args = std::move(welford_named_compile_time_args);
     compute_receiver_desc.defines =
         KernelDescriptor::Defines(eltwise_binary_defines.begin(), eltwise_binary_defines.end());
     compute_receiver_desc.config = ComputeConfigDescriptor{
