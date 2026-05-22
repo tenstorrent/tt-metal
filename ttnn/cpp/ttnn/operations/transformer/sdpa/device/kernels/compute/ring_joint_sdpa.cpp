@@ -154,7 +154,7 @@ void kernel_main() {
     uint32_t ring_index = fused_op_indexer.seq.ring_index;
     uint32_t half_sequence = num_q_chunks / 2;
     // The first active iter starts with fresh accumulators; restoring would read stale staging.
-    uint32_t active_iter_idx = 0;
+    bool seen_active_iter = false;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
         const bool do_joint_kv = ring_id == ring_size - 1;
@@ -163,6 +163,8 @@ void kernel_main() {
         // First, find out if this ring iter processes any KV chunks.
         const uint32_t ring_iter_kv_start_tile = ring_id * kv_local_padded_Nt;
         const uint32_t ring_iter_kv_end_tile = ring_iter_kv_start_tile + num_local_k_chunks * Sk_chunk_t;
+        // Last tile id holding any real K data; partial trailing tile is included here and gets
+        // its padding cells masked downstream (see same line in ring_joint_reader.cpp).
         const uint32_t global_n_tile_id = logical_nt - 1;
         const bool ring_iter_processes_KV_chunks =
             chunked_enabled ? true : (ring_iter_kv_start_tile <= global_n_tile_id);
@@ -172,8 +174,8 @@ void kernel_main() {
         if (!ring_iter_does_work) {
             continue;
         }
-        const bool is_first_active_iter = (active_iter_idx == 0);
-        active_iter_idx++;
+        const bool is_first_active_iter = !seen_active_iter;
+        seen_active_iter = true;
 
         // Tile-aligned form. Chunked: real region ends on a per-chunk-region boundary
         // (k-chunk-aligned via q_local_padded_Nt % Sk_chunk_t TT_FATAL), so the per-k_chunk-

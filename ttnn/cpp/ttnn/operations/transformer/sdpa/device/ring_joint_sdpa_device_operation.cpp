@@ -71,12 +71,12 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto& joint_k_shape = joint_tensor_k.logical_shape();
     const auto& joint_v_shape = joint_tensor_v.logical_shape();
 
-    // Chunked-prefill: Q is shorter than the per-device K shard (latest slab against a
-    // growing K cache). Chunk 0 has equal shapes and uses the regular is_causal=True path.
-    const bool chunked_enabled = tensor_args.is_chunked();
+    // Chunked-prefill (`tensor_args.is_chunked()`): Q is shorter than the per-device K shard
+    // (latest slab against a growing K cache). Chunk 0 has equal shapes and uses the regular
+    // is_causal=True path.
 
     const auto dtype = input_tensor_q.dtype();
-    if (!args.is_causal && !chunked_enabled) {
+    if (!args.is_causal && !tensor_args.is_chunked()) {
         for (const auto& tensor : sdpa_input_tensors) {
             TT_FATAL(
                 tensor.dtype() == dtype,
@@ -128,7 +128,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         N_local_kv);
 
     TT_FATAL(
-        !chunked_enabled || args.is_causal,
+        !tensor_args.is_chunked() || args.is_causal,
         "Chunked-prefill (N_local_q < N_local_kv) is mathematically causal; callers must pass is_causal=True. "
         "Got N_local_q={}, N_local_kv={}, is_causal={}",
         N_local_q,
@@ -150,7 +150,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         joint_v_shape[0]);
 
     // Chunked-prefill targets MLA (K head dim == Q != V) — use is_causal's relaxed K-only check.
-    if (!args.is_causal && !chunked_enabled) {
+    if (!args.is_causal && !tensor_args.is_chunked()) {
         TT_FATAL(
             k_shape[3] == DH && v_shape[3] == DH && joint_q_shape[3] == DH && joint_k_shape[3] == DH &&
                 joint_v_shape[3] == DH,
