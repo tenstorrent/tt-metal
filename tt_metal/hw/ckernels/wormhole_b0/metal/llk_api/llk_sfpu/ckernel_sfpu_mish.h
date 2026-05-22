@@ -14,7 +14,7 @@
 namespace ckernel::sfpu {
 
 /**
- * Mish activation function:  f(x) = x * tanh(softplus(x))
+ * Mish activation function:  mish(x) = x * tanh(softplus(x))
  *
  * Reducing to algebraic identity:
  *
@@ -22,10 +22,12 @@ namespace ckernel::sfpu {
  *
  * so that mish becomes:
  *
- *     f(x) = x * u (u + 2) / (u^2 + 2u + 2)
+ *     mish(x) = x * u (u + 2) / (u^2 + 2u + 2)
  *
- * Saturation: for x >= 8, mish(x) = x. Saturating early also keeps
- * the intermediate (1+u)^2 + 1 from overflowing fp32 for large positive x.
+ * Note: BH uses rearranged form (x - 2x/denom) for x >= 0 in order to avoid
+ * cancellation through its lower-precision approx_recip.
+ *
+ * Saturation: For x >= 8.0, mish(x) is approximated as x.
  */
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_mish() {

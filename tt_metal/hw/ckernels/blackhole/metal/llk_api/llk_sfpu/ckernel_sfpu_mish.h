@@ -20,15 +20,17 @@ namespace ckernel::sfpu {
  *
  *     tanh(softplus(x)) = u (u + 2) / (u^2 + 2u + 2),  where u = exp(x)
  *                       = 1 - 2 / (u^2 + 2u + 2)
- * We use the second form to avoid catastrophic cancellation in finite precision.
+ * In order to avoid catastrophic cancellation for sufficiently large positive x,
+ * for x >= 0, we use the rewritten form while for x < 0, we use the original form.
  *     x >= 0:  mish(x) = x - 2x / (u^2 + 2u + 2)
  *     x <  0:  mish(x) = x * u(u+2) / (u^2 + 2u + 2)
  *
  * The second form causes numerator ≈ denominator for sufficiently large positive x,
  * so any relative error in reciprocal is amplified by x. This is because _sfpu_reciprocal_<0>
  * calls sfpi::approx_recip (~7-bit mantissa, ~0.4% relative error). By using the first form
- * the relative error in reciprocal is scalled by 2x / denom instead of x.
-
+ * the relative error in reciprocal is scaled by 2x / denom instead of x.
+ * WH does not need this rearrangement since we use Sollya quadratic (~1e-5 relative error).
+ *
  * Saturation: For x >= 8.0, mish(x) is approximated as x.
  */
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
@@ -39,7 +41,7 @@ inline void calculate_mish() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
 
-        // Default to the saturated value
+        // x >= SAT_HI: mish(x) ≈ x
         sfpi::vFloat result = x;
 
         v_if(x < SAT_HI) {
@@ -64,11 +66,11 @@ inline void calculate_mish() {
             }
 
             v_if(x >= 0.0f) {
-                // Stable for x >= 0: correction term 2x/denom is small.
+                // Stable for x >= 0: correction term 2x / denom is small
                 result = x - 2.0f * x * inv_denom;
             }
             v_else {
-                // Stable for x < 0: output x * u(u+2) / denom is itself small;
+                // Stable for x < 0: output x * u(u+2) / denom is itself small
                 sfpi::vFloat numer = u * (u + 2.0f);
                 result = x * (numer * inv_denom);
             }
@@ -87,10 +89,9 @@ inline void calculate_mish() {
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void mish_init() {
     // exp does not need an init.
-    // Call _init_sfpu_reciprocal_ directly: calculate_mish uses _sfpu_reciprocal_<2>
-    // inline (not _calculate_reciprocal_internal_), so SFPLOADMACRO fast-path init is
-    // not needed. On BH, _init_reciprocal_ omits _init_sfpu_reciprocal_ (it only
-    // configures SFPLOADMACRO macros), so vConstFloatPrgm0=2.0f would be unset.
+    // calculate_mish uses the inline _sfpu_reciprocal_<N>, not _calculate_reciprocal_internal_
+    // so the SFPLOADMACRO fast-path init is not needed. But, we need _init_sfpu_reciprocal_'s
+    // vConstFloatPrgm0 = 2.0f for the inline NR step. So, call _init_sfpu_reciprocal_ directly.
     _init_sfpu_reciprocal_<APPROXIMATION_MODE>();
 }
 

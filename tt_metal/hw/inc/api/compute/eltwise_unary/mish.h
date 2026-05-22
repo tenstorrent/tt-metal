@@ -13,19 +13,25 @@ namespace ckernel {
 
 // clang-format off
 /**
- * Performs the elementwise mish activation:  mish(x) = x * tanh(softplus(x)).
+ * Performs element-wise mish activation:  mish(x) = x * tanh(softplus(x))
+ * on each element of a tile in DST register at index tile_index.
+ * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * This call is blocking and is only available on the compute engine.
  *
- * Implemented as a single fused SFPU kernel via the algebraic identity
+ * Implemented as a single SFPU kernel via the algebraic identity
  *   mish(x) = x * u (u + 2) / (u^2 + 2u + 2),  where u = exp(x).
- * This eliminates the explicit dependency on ops like tanh and softplus.
  *
- * For x >= 8, the kernel short-circuits to mish(x) = x.
+ * In BH, to avoid catastrophic cancellation for sufficiently large positive x, we use
+ *   For x >= 0, mish(x) = x - 2x / (u^2 + 2u + 2)
+ *   For x <  0, mish(x) = x * u(u+2) / (u^2 + 2u + 2)
  *
- * mish_tile<APPROXIMATION_MODE>(idst);
+ * For x >= 8.0, mish(x) is approximated as x.
  *
- * | Argument | Description                                          | Type     | Valid Range                | Required |
- * |----------|------------------------------------------------------|----------|----------------------------|----------|
- * | idst     | Destination tile index                               | uint32_t | 0 to (num_dests-1)         | Yes      |
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
 template <bool APPROXIMATION_MODE>
