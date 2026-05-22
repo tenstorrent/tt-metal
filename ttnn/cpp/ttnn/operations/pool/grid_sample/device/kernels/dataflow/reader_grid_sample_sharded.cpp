@@ -80,12 +80,13 @@ void kernel_main() {
     constexpr bool align_corners = get_compile_time_arg_val(12);
     constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(13);
     constexpr uint32_t input_chunk_nbytes = get_compile_time_arg_val(14);
-    constexpr uint32_t split_reader = get_compile_time_arg_val(15);
-    constexpr uint32_t reader_id = get_compile_time_arg_val(16);
-    constexpr uint32_t grid_nsticks_per_core = get_compile_time_arg_val(17);
+    constexpr bool tilize_reconfig_active = get_compile_time_arg_val(15);
+    constexpr uint32_t split_reader = get_compile_time_arg_val(16);
+    constexpr uint32_t reader_id = get_compile_time_arg_val(17);
+    constexpr uint32_t grid_nsticks_per_core = get_compile_time_arg_val(18);
 
     // Input tensor accessor for remote NOC reads (updated for new arg count)
-    constexpr auto input_tensor_args = TensorAccessorArgs<18>();
+    constexpr auto input_tensor_args = TensorAccessorArgs<19>();
     const auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_addr);
 
     // Calculate starting batch from global grid stick position
@@ -151,6 +152,7 @@ void kernel_main() {
                 input_stick_nbytes,
                 in_nblocks_c,
                 input_chunk_nbytes,
+                tilize_reconfig_active,
                 input_cb_index,
                 scalar_cb_index>(
                 noc, input_cb, scalar_cb, grid_stick_ptr, in_grid_row_idx, input_tensor_accessor, batch_offset);

@@ -300,6 +300,7 @@ template <
     uint32_t input_stick_nbytes,
     uint32_t in_nblocks_c,
     uint32_t input_chunk_nbytes,
+    bool tilize_reconfig_active,
     uint32_t input_cb_index,
     uint32_t scalar_cb_index,
     typename TensorAccessor,
@@ -384,13 +385,12 @@ ALWI void process_grid_point(
 
     // Iterate over channel chunks. For the common case in_nblocks_c == 1 the loop runs once and the
     // behavior matches the original non-chunked reader (chunk_bytes == input_stick_nbytes,
-    // src_byte_offset == 0, write_stride == input_stick_nbytes).
+    // src_byte_offset == 0, write_stride == input_stick_nbytes). tilize_reconfig_active is computed
+    // host-side using compute_pool_2d's exact condition so reader's per-stick write stride matches
+    // the unpacker's tiles_to_reduce; computing it independently here would silently diverge if the
+    // host ever lifted the padded_C % TILE_WIDTH == 0 invariant.
     constexpr uint32_t last_chunk_idx = in_nblocks_c - 1;
     constexpr uint32_t partial_chunk_nbytes = input_stick_nbytes - last_chunk_idx * input_chunk_nbytes;
-    // tilize_reconfig in the compute kernel switches the unpacker to partial_iter_output_tiles for
-    // the last chunk; when active, the reader must lay sticks tightly (write_stride = read_bytes)
-    // so the unpacker sees them back-to-back instead of MAX_TILES_PER_REDUCTION apart.
-    constexpr bool tilize_reconfig_active = (in_nblocks_c > 1) && (partial_chunk_nbytes != input_chunk_nbytes);
     constexpr uint32_t base_write_stride = (in_nblocks_c > 1) ? input_chunk_nbytes : input_stick_nbytes;
 
     for (uint32_t c_i = 0; c_i < in_nblocks_c; ++c_i) {
