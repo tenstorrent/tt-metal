@@ -6,6 +6,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/device_operation.hpp"
@@ -14,22 +15,7 @@
 namespace ttnn::experimental::prim {
 
 struct SplitFusedQKVAndSplitHeadsShardedProgramFactory {
-    struct shared_variables_t {
-        tt::tt_metal::CBHandle cb_in0_id{};
-        tt::tt_metal::CBHandle cb_out0_id{};
-        tt::tt_metal::CBHandle cb_out1_id{};
-        tt::tt_metal::CBHandle cb_out2_id{};
-    };
-
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
-        const SplitQueryKeyValueAndSplitHeadsParams& operation_attributes,
-        const SplitQueryKeyValueAndSplitHeadsInputs& tensor_args,
-        std::vector<Tensor>& output_tensors);
-
-    static void override_runtime_arguments(
-        cached_program_t& cached_program,
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
         const SplitQueryKeyValueAndSplitHeadsParams& operation_attributes,
         const SplitQueryKeyValueAndSplitHeadsInputs& tensor_args,
         std::vector<Tensor>& output_tensors);
