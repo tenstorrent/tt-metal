@@ -70,7 +70,8 @@ void kernel_main() {
     const auto src_b = TensorAccessor(ta::src_b);
 #endif
 
-    if constexpr (!use_welford) {
+#ifndef USE_WELFORD
+    {
         constexpr uint32_t partial_last_tile_cols = W % tt::constants::TILE_WIDTH;
 
         dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
@@ -89,6 +90,7 @@ void kernel_main() {
                 /*compute_uses_reduce_tile=*/true>(partial_last_tile_cols);
         }
     }
+#endif
 
     const uint32_t eps = get_arg(args::eps);
     generate_bcast_col_scalar(dfb::cb_eps, eps);

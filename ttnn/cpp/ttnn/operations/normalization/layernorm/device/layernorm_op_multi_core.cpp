@@ -134,6 +134,8 @@ m2::DataflowBufferSpec MakeDFB(
     if (borrowed_from.has_value()) {
         dfb.borrowed_from = *borrowed_from;
     }
+    // Implicit sync is a Gen2-only feature; this op targets WH/BH (Gen1).
+    dfb.disable_implicit_sync = true;
     return dfb;
 }
 
@@ -516,6 +518,13 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     if (beta.has_value()) {
         reader_spec.tensor_bindings.push_back({.tensor_parameter_name = TP_BETA, .accessor_name = "beta"});
     }
+    if (use_welford) {
+        // Ghost TensorBinding to satisfy the spec validator (every TensorParameter
+        // requires ≥1 TensorBinding). The reader kernel does not actually access
+        // `ta::recip` — the recip tensor's L1 data is consumed via the borrowed-memory
+        // `cb_reciprocals` DFB on the compute kernel.
+        reader_spec.tensor_bindings.push_back({.tensor_parameter_name = TP_RECIP, .accessor_name = "recip"});
+    }
     // Reader RTAs (buffer addresses are gone — auto-injected from TensorBinding).
     reader_spec.runtime_arguments_schema.named_runtime_args = {"NCHt", "Wt", "start_tile_row", "eps"};
     if (input_is_row_major) {
@@ -536,6 +545,12 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     }
     if (input_is_row_major) {
         reader_spec.compiler_options.defines.push_back({"TILIZE_IN", "1"});
+    }
+    if (use_welford) {
+        // Preprocessor-level guard: when use_welford is true, the reader doesn't bind
+        // cb_scaler, so any `if constexpr (!use_welford)` block that references
+        // `dfb::cb_scaler` fails at parse-time name lookup. #ifdef gates the block out.
+        reader_spec.compiler_options.defines.push_back({"USE_WELFORD", "1"});
     }
 
     // ---------- Writer ----------
@@ -570,8 +585,54 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = dst_full_sync_en,
         .math_approx_mode = math_approx_mode};
-    if (float32_reduction) {
-        // Large-tensor accumulator unpacks Float32 → Dest directly.
+    // Per Metal 2.0 validator: every compute-consumed FP32 DFB requires an explicit
+    // unpack_to_dest_mode entry when fp32_dest_acc_en is true. Add Default for each
+    // FP32 DFB compute consumes, then override cb_accumulate to UnpackToDestFp32 in
+    // the large-tensor non-Welford path.
+    if (fp32_dest_acc_en) {
+        auto add_default = [&](const char* dfb_name) {
+            compute_config.unpack_to_dest_mode.push_back({dfb_name, tt::tt_metal::UnpackToDestMode::Default});
+        };
+        // cb_data_format == Float32 when fp32_dest_acc_en, so all intermediate DFBs
+        // that use cb_data_format need an entry. Mirror the host-side declaration guards.
+        if (!rms_norm || fuse_pre_add || large_tensor_needed) {
+            add_default(DFB_CB_XMM);
+        }
+        if (!rms_norm) {
+            add_default(DFB_CB_EX);
+        }
+        add_default(DFB_CB_EX2);
+        if (!use_welford) {
+            add_default(DFB_CB_XMM2);
+        }
+        add_default(DFB_CB_EX2PE);
+        if (gamma.has_value() || beta.has_value()) {
+            add_default(DFB_CB_FUSION);
+        }
+        if (b.has_value() && !rms_norm) {
+            add_default(DFB_CB_X);
+        }
+        // Inputs / weights: only need an entry if their dtype happens to be FP32.
+        if (in_data_format == tt::DataFormat::Float32) {
+            add_default(DFB_CB_IN);
+        }
+        if (b.has_value() && inb_data_format == tt::DataFormat::Float32) {
+            add_default(DFB_CB_INB);
+        }
+        if (gamma.has_value() && gamma_cb_data_format == tt::DataFormat::Float32) {
+            add_default(DFB_CB_GAMMA);
+        }
+        if (beta.has_value() && beta_cb_data_format == tt::DataFormat::Float32) {
+            add_default(DFB_CB_BETA);
+        }
+        // cb_reciprocals is Float32 always (Welford LUT).
+        if (use_welford) {
+            add_default(DFB_CB_RECIPROCALS);
+        }
+    }
+    if (float32_reduction && large_tensor_needed && !use_welford) {
+        // Large-tensor non-Welford accumulator unpacks Float32 → Dest directly.
+        // Only valid when the cb_accumulate DFB is actually declared and bound on compute.
         compute_config.unpack_to_dest_mode.push_back(
             {DFB_CB_ACCUMULATE, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32});
     }
@@ -650,8 +711,12 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
         bind_compute_pair(DFB_CB_ACCUMULATE, "cb_accumulate");
     }
     if (use_welford) {
-        // Welford reciprocal LUT — read-only by compute (the backing borrowed memory is
-        // initialized from the host-supplied recip tensor).
+        // Welford reciprocal LUT — read-only by compute (data comes from the borrowed
+        // recip tensor; no kernel writes to it). The spec validator requires every DFB
+        // to have ≥1 PRODUCER binding, so declare a ghost PRODUCER alongside the real
+        // CONSUMER. The compute kernel never calls reserve_back/push_back; the data is
+        // read directly via the borrowed memory at the DFB's L1 address.
+        compute_spec.dfb_bindings.push_back(ProducerDFB(DFB_CB_RECIPROCALS, "cb_reciprocals"));
         compute_spec.dfb_bindings.push_back(ConsumerDFB(DFB_CB_RECIPROCALS, "cb_reciprocals"));
     }
     compute_spec.runtime_arguments_schema.named_runtime_args = {"NCHt"};
