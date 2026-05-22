@@ -217,8 +217,8 @@ tt::tt_metal::ProgramDescriptor build_descriptor_at(
     const ttnn::experimental::prim::MoEComputeInputs& tensor_args,
     std::vector<ttnn::Tensor>& tensor_return_value,
     const std::vector<ttnn::MeshCoordinate>& all_mesh_coordinates,
-    const GlobalSemaphore& init_barrier_semaphore,
-    const GlobalSemaphore& final_barrier_semaphore) {
+    const ttnn::GlobalSemaphore& init_barrier_semaphore,
+    const ttnn::GlobalSemaphore& final_barrier_semaphore) {
     tt::tt_metal::ProgramDescriptor desc;
 
     // Alignment
