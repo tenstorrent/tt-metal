@@ -271,9 +271,10 @@ ALWI void tilize_uninit_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t ocb
 #endif
 }
 
-template <bool configure_remap = true>
-ALWI void fast_tilize_init_with_remap_mode(
-    uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+namespace detail {
+
+template <bool configure_remap>
+ALWI void fast_tilize_init_impl(uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
 #ifdef ARCH_BLACKHOLE
     if (full_dim == 1) {
         tilize_init(icb, full_dim, ocb, call_line);
@@ -300,32 +301,38 @@ ALWI void fast_tilize_init_with_remap_mode(
 #endif
 }
 
+}  // namespace detail
+
 ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-    fast_tilize_init_with_remap_mode<true>(icb, full_dim, ocb, call_line);
+    detail::fast_tilize_init_impl<true>(icb, full_dim, ocb, call_line);
 }
 
 ALWI void fast_tilize_init_skip_remap(
     uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-    fast_tilize_init_with_remap_mode<false>(icb, full_dim, ocb, call_line);
+    detail::fast_tilize_init_impl<false>(icb, full_dim, ocb, call_line);
 }
 
-template <bool configure_remap = true>
-ALWI void fast_tilize_init_with_dt_remap_mode(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
+namespace detail {
+
+template <bool configure_remap>
+ALWI void fast_tilize_init_with_dt_impl(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
     // Reconfig both SrcA and SrcB to match WH: some activation-reuse call sites
     // leave SrcB in a prior matmul-weights config that's incompatible with the
     // fast-tilize path, producing garbage output.
     UNPACK((llk_unpack_reconfig_data_format<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(icb, icb)));
     MATH((llk_math_reconfig_data_format<true, true>(icb, icb)));
 
-    fast_tilize_init_with_remap_mode<configure_remap>(icb, full_dim, ocb);
+    fast_tilize_init_impl<configure_remap>(icb, full_dim, ocb);
 }
 
+}  // namespace detail
+
 ALWI void fast_tilize_init_with_dt(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
-    fast_tilize_init_with_dt_remap_mode<true>(icb, full_dim, ocb);
+    detail::fast_tilize_init_with_dt_impl<true>(icb, full_dim, ocb);
 }
 
 ALWI void fast_tilize_init_with_dt_skip_remap(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
-    fast_tilize_init_with_dt_remap_mode<false>(icb, full_dim, ocb);
+    detail::fast_tilize_init_with_dt_impl<false>(icb, full_dim, ocb);
 }
 
 ALWI void fast_tilize_uninit(uint32_t icb, uint32_t ocb, uint32_t full_dim) {

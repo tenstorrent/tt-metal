@@ -32,12 +32,6 @@ extern uint32_t crta_count;
 #endif
 #endif
 
-ALWI void configure_dest_remap() {
-#ifdef ARCH_BLACKHOLE
-    MATH((llk_math_reconfig_remap(true)));
-#endif
-}
-
 // clang-format off
 /**
  * Returns the address in L1 for a given runtime argument index for unique (per core) runtime arguments set via

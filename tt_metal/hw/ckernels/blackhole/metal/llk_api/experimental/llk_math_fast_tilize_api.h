@@ -12,6 +12,7 @@
  *************************************************************************/
 
 inline void llk_math_fast_tilize_init(const std::uint32_t operand) {
+    // Default fast-tilize init configures DEST remap; use the skip-remap variant only when the caller hoists it.
     const std::uint32_t operand_id = get_operand_id(operand);
     _llk_math_fast_tilize_init_<DST_ACCUM_MODE>(unpack_dst_format[operand_id]);
 }

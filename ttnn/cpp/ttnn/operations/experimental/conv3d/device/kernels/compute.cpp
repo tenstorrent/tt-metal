@@ -244,7 +244,7 @@ void kernel_main() {
     constexpr uint32_t subblock_tiles = subblock_h * matmul_N_t;
 
     mm_init(cb_vol2col_tiled, cb_weight_tiled, cb_matmul_interm_tiled);
-    configure_dest_remap();
+    MATH((llk_math_reconfig_remap(true)));
 
     // Load range parameters
     uint32_t argidx = 0;

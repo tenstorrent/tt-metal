@@ -53,9 +53,17 @@ ALWI void untilize_init() {
     constexpr bool configure_remap = (remap_mode == untilize_config::RemapMode::Configure);
 
     if constexpr (use_block_based_pack) {
-        pack_untilize_init<sub_block_width, block_width_tiles, configure_remap>(input_cb, output_cb);
+        if constexpr (configure_remap) {
+            pack_untilize_init<sub_block_width, block_width_tiles>(input_cb, output_cb);
+        } else {
+            pack_untilize_init_skip_remap<sub_block_width, block_width_tiles>(input_cb, output_cb);
+        }
     } else {
-        pack_untilize_init<block_width_tiles, block_width_tiles, configure_remap>(input_cb, output_cb);
+        if constexpr (configure_remap) {
+            pack_untilize_init<block_width_tiles, block_width_tiles>(input_cb, output_cb);
+        } else {
+            pack_untilize_init_skip_remap<block_width_tiles, block_width_tiles>(input_cb, output_cb);
+        }
     }
 }
 
@@ -137,9 +145,17 @@ ALWI void untilize(uint32_t num_blocks) {
         init_uninit_mode == untilize_config::InitUninitMode::InitAndUninit ||
         init_uninit_mode == untilize_config::InitUninitMode::InitOnly) {
         if constexpr (use_block_based_pack) {
-            pack_untilize_init<sub_block_width, block_width_tiles, configure_remap>(input_cb, output_cb);
+            if constexpr (configure_remap) {
+                pack_untilize_init<sub_block_width, block_width_tiles>(input_cb, output_cb);
+            } else {
+                pack_untilize_init_skip_remap<sub_block_width, block_width_tiles>(input_cb, output_cb);
+            }
         } else {
-            pack_untilize_init<block_width_tiles, block_width_tiles, configure_remap>(input_cb, output_cb);
+            if constexpr (configure_remap) {
+                pack_untilize_init<block_width_tiles, block_width_tiles>(input_cb, output_cb);
+            } else {
+                pack_untilize_init_skip_remap<block_width_tiles, block_width_tiles>(input_cb, output_cb);
+            }
         }
     }
 
