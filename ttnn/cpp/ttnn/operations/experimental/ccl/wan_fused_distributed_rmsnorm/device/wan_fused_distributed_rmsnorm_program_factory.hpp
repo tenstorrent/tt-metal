@@ -18,6 +18,10 @@ struct WanFusedDistributedRmsnormSharedVariables {
     std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
     std::vector<tt::tt_metal::KernelHandle> compute_kernel_ids;
     std::vector<tt::tt_metal::CoreCoord> cores;
+    // Persistent DRAM scratch for stats AG (TP>1 only). Holds it alive for
+    // the lifetime of the cached program so the address remains valid across
+    // trace replays. Allocated via tt_metal::CreateBuffer in create_at.
+    std::shared_ptr<tt::tt_metal::Buffer> stats_dram_buffer;
 };
 
 struct WanFusedDistributedRmsnormMeshWorkloadFactory {
