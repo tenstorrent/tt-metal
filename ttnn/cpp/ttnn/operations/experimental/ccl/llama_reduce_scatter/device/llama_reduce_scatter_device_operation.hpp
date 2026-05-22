@@ -42,7 +42,10 @@ struct LlamaReduceScatterDeviceOperation {
     using tensor_return_value_t = Tensor;
 
     struct LlamaReduceScatterAdd {
-        // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
+        // Legacy Program& builder.  Still used transitionally by op factories
+        // that have not yet migrated; the descriptor variant below is the
+        // preferred path.  Retained as a free declaration so the unmigrated
+        // callers compile while we cut over.
         struct shared_variables_t {
             tt::tt_metal::KernelHandle unary_reader_kernel_id;
             tt::tt_metal::KernelHandle unary_writer_kernel_id;
@@ -52,26 +55,6 @@ struct LlamaReduceScatterDeviceOperation {
             std::vector<tt::tt_metal::CBHandle> cb_handles;
             CoreRangeSet core_range;
         };
-        using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
-
-        static cached_mesh_workload_t create_mesh_workload(
-            const operation_attributes_t& operation_attributes,
-            const ttnn::MeshCoordinateRangeSet& tensor_coords,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static ttnn::device_operation::CachedProgram<shared_variables_t> create_at_helper(
-            const operation_attributes_t& operation_attributes,
-            const ttnn::MeshCoordinate& mesh_coordinate,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-        static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
-            const operation_attributes_t& operation_attributes,
-            const ttnn::MeshCoordinate& mesh_coordinate,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value,
-            tt::tt_metal::Program& program);
-
         static shared_variables_t create_at_program_processing(
             const operation_attributes_t& operation_attributes,
             const ttnn::MeshCoordinate& mesh_coordinate,
@@ -79,9 +62,15 @@ struct LlamaReduceScatterDeviceOperation {
             tensor_return_value_t& tensor_return_value,
             tt::tt_metal::Program& program,
             const std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& signaler);
+        static void override_runtime_arguments_per_program(
+            const shared_variables_t& shared_variables,
+            tt::tt_metal::Program& program,
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            LlamaReduceScatterDeviceOperation::tensor_return_value_t& tensor_return_value);
 
-        // ProgramDescriptor variant of create_at_program_processing.  Mirrors the
-        // legacy Program& builder above but constructs the per-coord
+        // ProgramDescriptor variant of create_at_program_processing.  Mirrors
+        // the legacy Program& builder above but constructs the per-coord
         // ProgramDescriptor in-place (CBs/kernels/semaphores/runtime args
         // recorded as descriptor pushes) so it can be consumed by Contract-2
         // factories.  Used by descriptor-based llama_reduce_scatter and
@@ -92,17 +81,16 @@ struct LlamaReduceScatterDeviceOperation {
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value,
             const std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& signaler);
-        static void override_runtime_arguments_per_program(
-            const shared_variables_t& shared_variables,
-            tt::tt_metal::Program& program,
+
+        // Contract-2 (WorkloadDescriptor) factory.  Builds one ProgramDescriptor
+        // per mesh coord via create_at_program_processing_descriptor.  No
+        // workload-scoped semaphores or intermediate Tensors are required
+        // beyond what the caller already provided in operation_attributes.
+        static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            LlamaReduceScatterDeviceOperation::tensor_return_value_t& tensor_return_value);
-        static void override_runtime_arguments(
-            cached_mesh_workload_t& cached_workload,
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
+            tensor_return_value_t& tensor_return_value,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords);
     };
 
     using program_factory_t = std::variant<LlamaReduceScatterAdd>;
