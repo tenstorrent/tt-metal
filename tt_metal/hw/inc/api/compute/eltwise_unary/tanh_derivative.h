@@ -44,4 +44,16 @@ ALWI void tanh_derivative_tile(uint32_t idst) {
         calculate_tanh_derivative_sech2, fast_and_approx, DST_ACCUM_MODE, idst, (int)VectorMode::RC));
 }
 
+template <bool fast_and_approx = false>
+ALWI void tanh_derivative_tile(uint32_t idst_in, uint32_t idst_out) {
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_tanh_derivative_sech2,
+        (fast_and_approx, DST_ACCUM_MODE),
+        RC,
+        idst_in,
+        idst_out)));
+}
+
 }  // namespace ckernel

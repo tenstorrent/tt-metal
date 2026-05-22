@@ -60,7 +60,7 @@ inline void _top4_configure_addrmod_() {
         .set(ADDRMOD_OFFSET + ADDR_MOD_3);
 }
 
-inline void _calculate_top4_() {
+inline void _calculate_top4_(uint32_t /*dst_index_in*/, uint32_t /*dst_index_out*/) {
     // Reset Dst RWC to 0
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 

@@ -37,7 +37,7 @@ namespace sfpu
  *
  * @param idx_addr L1 address of the mask tile containing destination row mappings (uint8_t[32])
  */
-inline void _calculate_reshuffle_rows_(const std::uint32_t idx_addr)
+inline void _calculate_reshuffle_rows_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, const std::uint32_t idx_addr)
 {
     constexpr std::uint32_t output_tile_offset = 64;
 

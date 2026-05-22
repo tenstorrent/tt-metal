@@ -33,6 +33,10 @@ ALWI void rsub_tile(uint32_t idst, uint32_t scalar) {
     MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, RSUB_UNARY>(idst, scalar)));
 }
 
+ALWI void rsub_tile(uint32_t idst_in, uint32_t idst_out, uint32_t scalar) {
+    MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, RSUB_UNARY>(idst_in, idst_out, scalar)));
+}
+
 /**
  * Please refer to documentation for any_init.
  */
@@ -55,6 +59,10 @@ ALWI void rsub_tile_init() { MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar
 // clang-format on
 ALWI void rsub_unary_int32_tile(uint32_t idst, uint32_t scalar) {
     MATH((llk_math_eltwise_unary_sfpu_rsub_int32<APPROX>(idst, scalar)));
+}
+
+ALWI void rsub_unary_int32_tile(uint32_t idst_in, uint32_t idst_out, uint32_t scalar) {
+    MATH((llk_math_eltwise_unary_sfpu_rsub_int32<APPROX>(idst_in, idst_out, scalar)));
 }
 
 /**

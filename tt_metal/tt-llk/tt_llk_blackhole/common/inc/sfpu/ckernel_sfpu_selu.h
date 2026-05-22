@@ -16,7 +16,7 @@ namespace ckernel::sfpu
 // scale ≈ 1.0507, alpha ≈ 1.6733, scale*alpha ≈ 1.7581
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
-inline void _calculate_selu_(std::uint32_t scale, std::uint32_t alpha)
+inline void _calculate_selu_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, std::uint32_t scale, std::uint32_t alpha)
 {
     const sfpi::vFloat scale_val   = Converter::as_float(scale);
     const sfpi::vFloat scale_alpha = Converter::as_float(scale) * Converter::as_float(alpha);
@@ -38,7 +38,7 @@ inline void _calculate_selu_(std::uint32_t scale, std::uint32_t alpha)
         {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
         }
-        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = result;
         sfpi::dst_reg++;
     }
 }

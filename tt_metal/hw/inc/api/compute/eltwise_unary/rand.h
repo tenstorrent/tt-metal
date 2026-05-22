@@ -32,6 +32,10 @@ ALWI void rand_tile(uint32_t idst, uint32_t from, uint32_t scale) {
     MATH(SFPU_UNARY_PARAMS_KERNEL_EXTRA_ARGS(rand, RC, APPROX, idst, from, scale));
 }
 
+ALWI void rand_tile(uint32_t idst_in, uint32_t idst_out, uint32_t from, uint32_t scale) {
+    MATH((SFPU_CALL_MODE_SPLIT(DST_SYNC_MODE, DST_ACCUM_MODE, rand, (APPROX), RC, idst_in, idst_out, from, scale)));
+}
+
 /**
  * Please refer to documentation for any_init.
  */

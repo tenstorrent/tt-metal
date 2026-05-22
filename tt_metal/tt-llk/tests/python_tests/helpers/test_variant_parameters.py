@@ -489,6 +489,22 @@ class SFPU_TILE_INDICES(RuntimeParameter):
 
 
 @dataclass
+class DST_INDEX_IN(TemplateParameter):
+    dst_index_in: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int DST_INDEX_IN = {self.dst_index_in};"
+
+
+@dataclass
+class DST_INDEX_OUT(TemplateParameter):
+    dst_index_out: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int DST_INDEX_OUT = {self.dst_index_out};"
+
+
+@dataclass
 class L1_ACC(RuntimeParameter):
     l1_acc: L1Accumulation = L1Accumulation.No
 

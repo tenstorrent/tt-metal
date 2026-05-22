@@ -116,7 +116,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
-inline void calculate_tanh() {
+inline void calculate_tanh(std::uint32_t dst_index_in, std::uint32_t dst_index_out) {
     if constexpr (APPROXIMATION_MODE) {
         // SFPU microcode
         sfpi::vUInt l0 = l_reg[sfpi::LRegs::LReg0];
@@ -127,7 +127,7 @@ inline void calculate_tanh() {
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
             val = sfpi::lut(val, l0, l1, l2);
-            sfpi::dst_reg[0] = val;
+            sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = val;
 
             sfpi::dst_reg++;
         }
@@ -150,7 +150,7 @@ inline void calculate_tanh() {
                 result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
             }
 
-            sfpi::dst_reg[0] = result;
+            sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = result;
             sfpi::dst_reg++;
         }
     }

@@ -33,4 +33,8 @@ ALWI void rpow_tile(uint32_t idst, uint32_t base_val, int vector_mode = (int)Vec
     MATH((llk_math_eltwise_unary_sfpu_rpow<APPROX, DST_ACCUM_MODE>(idst, base_val, vector_mode)));
 }
 
+ALWI void rpow_tile(uint32_t idst_in, uint32_t idst_out, uint32_t base_val, int vector_mode = (int)VectorMode::RC) {
+    MATH((llk_math_eltwise_unary_sfpu_rpow<APPROX, DST_ACCUM_MODE>(idst_in, idst_out, base_val, vector_mode)));
+}
+
 }  // namespace ckernel

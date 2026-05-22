@@ -10,15 +10,25 @@
 
 namespace ckernel {
 
-inline void llk_math_eltwise_unary_sfpu_hardtanh_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::hardtanh>();
-}
+inline void llk_math_eltwise_unary_sfpu_hardtanh_init() { llk_math_eltwise_unary_sfpu_init<SfpuType::hardtanh>(); }
 
 template <bool APPROXIMATE, int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_hardtanh(
     uint dst_index, uint param0, uint param1, int vector_mode = (int)VectorMode::RC) {
     _llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::calculate_hardtanh<APPROXIMATE, ITERATIONS>, dst_index, vector_mode, param0, param1);
+}
+
+template <bool APPROXIMATE, int ITERATIONS = 8>
+inline void llk_math_eltwise_unary_sfpu_hardtanh(
+    uint dst_index_in, uint dst_index_out, uint param0, uint param1, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_unary_sfpu_params_split_(
+        ckernel::sfpu::calculate_hardtanh<APPROXIMATE, ITERATIONS>,
+        dst_index_in,
+        dst_index_out,
+        vector_mode,
+        param0,
+        param1);
 }
 
 }  // namespace ckernel

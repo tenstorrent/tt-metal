@@ -32,6 +32,11 @@ ALWI void dropout_tile(uint32_t idst, uint32_t probability, uint32_t scale_facto
     MATH(SFPU_UNARY_PARAMS_KERNEL_EXTRA_ARGS(calculate_dropout, RC, APPROX, idst, probability, scale_factor));
 }
 
+ALWI void dropout_tile(uint32_t idst_in, uint32_t idst_out, uint32_t probability, uint32_t scale_factor) {
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_dropout, (APPROX), RC, idst_in, idst_out, probability, scale_factor)));
+}
+
 /**
  * This init should be called once in kernel
  */

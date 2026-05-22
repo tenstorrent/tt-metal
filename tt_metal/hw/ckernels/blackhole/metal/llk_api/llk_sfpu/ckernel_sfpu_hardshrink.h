@@ -10,7 +10,7 @@
 namespace ckernel::sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_hardshrink(uint32_t param0) {
+inline void calculate_hardshrink(std::uint32_t dst_index_in, std::uint32_t dst_index_out, uint32_t param0) {
     // Hardshrink(x, λ) = x if |x| > λ, else 0
     // Single comparison using abs: setsgn(v, 0) clears sign bit
     // param0 contains lambda as FP32 bits. For BF16 inputs, the host pre-rounds
@@ -23,7 +23,7 @@ inline void calculate_hardshrink(uint32_t param0) {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
         sfpi::vFloat abs_v = sfpi::setsgn(v, 0);
-        v_if(abs_v <= lambda) { sfpi::dst_reg[0] = sfpi::vConst0; }
+        v_if(abs_v <= lambda) { sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = sfpi::vConst0; }
         v_endif;
         sfpi::dst_reg++;
     }

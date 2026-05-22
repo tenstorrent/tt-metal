@@ -30,6 +30,10 @@ ALWI void lgamma_stirling_tile(uint32_t idst) {
     MATH((llk_math_eltwise_unary_sfpu_lgamma_stirling<APPROX, DST_ACCUM_MODE>(idst)));
 }
 
+ALWI void lgamma_stirling_tile(uint32_t idst_in, uint32_t idst_out) {
+    MATH((llk_math_eltwise_unary_sfpu_lgamma_stirling<APPROX, DST_ACCUM_MODE>(idst_in, idst_out)));
+}
+
 /**
  * Please refer to documentation for any_init.
  */

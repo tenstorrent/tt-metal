@@ -24,8 +24,9 @@ sfpi_inline void sfpu_reciprocal_init() {
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8, bool legacy_compat = false>
-inline void calculate_reciprocal() {
-    _calculate_reciprocal_<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en, legacy_compat>(ITERATIONS);
+inline void calculate_reciprocal(std::uint32_t dst_index_in, std::uint32_t dst_index_out) {
+    _calculate_reciprocal_<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en, legacy_compat>(
+        dst_index_in, dst_index_out, ITERATIONS);
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool legacy_compat = false>

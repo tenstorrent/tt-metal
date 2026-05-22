@@ -12,7 +12,7 @@ using namespace sfpi;
 namespace ckernel::sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_signbit() {
+inline void calculate_signbit(std::uint32_t dst_index_in, std::uint32_t dst_index_out) {
     // This uses SFPLOADMACRO to achieve a throughput of 1 cycle per input row.
     //
     // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
@@ -24,29 +24,30 @@ inline void calculate_signbit() {
     //    | ...  | [a] L16 = cast_fp32(a) |     |            |          |
     //    | ...  |                        |     |            | [a] L16  |
 
-    constexpr int offset = 0;
+    const int in_offset = 0;
+    const int out_offset = (dst_index_out - dst_index_in) * TILE_R_DIM;
 
 #ifndef DISABLE_SFPLOADMACRO
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         int a = d & 1;  // alternate between p_sfpu::LREG0 and p_sfpu::LREG1
-        TT_SFPLOADMACRO((0 << 2) | (a & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_2, offset | (a >> 2));
+        TT_SFPLOADMACRO((0 << 2) | (a & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_2, in_offset | (a >> 2));
     }
     TTI_SFPNOP;
     TTI_SFPNOP;
     TTI_SFPNOP;
 #else
     for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, offset);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, in_offset);
         TTI_SFPSHFT(-31 & 0xfff, p_sfpu::LREG0, p_sfpu::LREG0, 1);  // SFPSHFT_MOD1_ARG_IMM
         TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_2, offset);
+        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_2, out_offset);
     }
 #endif
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_signbit_int32() {
+inline void calculate_signbit_int32(std::uint32_t dst_index_in, std::uint32_t dst_index_out) {
     // This uses SFPLOADMACRO to achieve a throughput of 1 cycle per input row.
     //
     // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
@@ -57,21 +58,22 @@ inline void calculate_signbit_int32() {
     //    | ...  |        |     | [a] L16 = a >> 31 |          |
     //    | ...  |        |     |                   | [a] L16  |
 
-    constexpr int offset = 0;
+    const int in_offset = 0;
+    const int out_offset = (dst_index_out - dst_index_in) * TILE_R_DIM;
 
 #ifndef DISABLE_SFPLOADMACRO
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         constexpr int a = p_sfpu::LREG0;
-        TTI_SFPLOADMACRO((0 << 2) | (a & 3), InstrModLoadStore::INT32, ADDR_MOD_2, offset | (a >> 2));
+        TTI_SFPLOADMACRO((0 << 2) | (a & 3), InstrModLoadStore::INT32, ADDR_MOD_2, in_offset | (a >> 2));
     }
     TTI_SFPNOP;
     TTI_SFPNOP;
 #else
     for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, offset);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, in_offset);
         TTI_SFPSHFT(-31 & 0xfff, p_sfpu::LREG0, p_sfpu::LREG0, 1);  // SFPSHFT_MOD1_ARG_IMM
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_2, offset);
+        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_2, out_offset);
     }
 #endif
 }

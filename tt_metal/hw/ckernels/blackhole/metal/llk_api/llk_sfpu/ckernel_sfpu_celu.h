@@ -9,8 +9,8 @@
 namespace ckernel::sfpu {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
-inline void calculate_celu(uint32_t param0, uint32_t param1) {
-    _calculate_celu_<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>(param0, param1);
+inline void calculate_celu(std::uint32_t dst_index_in, std::uint32_t dst_index_out, uint32_t param0, uint32_t param1) {
+    _calculate_celu_<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>(dst_index_in, dst_index_out, param0, param1);
 }
 
 }  // namespace ckernel::sfpu

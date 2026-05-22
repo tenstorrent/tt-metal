@@ -40,6 +40,10 @@ ALWI void polygamma_tile(uint32_t idst, uint32_t n_packed, uint32_t scale_packed
     MATH((llk_math_eltwise_unary_sfpu_polygamma<APPROX, DST_ACCUM_MODE>(idst, n_packed, scale_packed)));
 }
 
+ALWI void polygamma_tile(uint32_t idst_in, uint32_t idst_out, uint32_t n_packed, uint32_t scale_packed) {
+    MATH((llk_math_eltwise_unary_sfpu_polygamma<APPROX, DST_ACCUM_MODE>(idst_in, idst_out, n_packed, scale_packed)));
+}
+
 /**
  * Please refer to documentation for any_init.
  */

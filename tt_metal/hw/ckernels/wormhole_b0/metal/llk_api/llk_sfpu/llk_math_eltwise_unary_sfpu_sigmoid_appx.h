@@ -19,4 +19,11 @@ inline void llk_math_eltwise_unary_sfpu_sigmoid_appx(uint dst_index, int vector_
     _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::calculate_sigmoid_appx, dst_index, vector_mode);
 }
 
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_sigmoid_appx(
+    uint dst_index_in, uint dst_index_out, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_unary_sfpu_params_split_(
+        ckernel::sfpu::calculate_sigmoid_appx, dst_index_in, dst_index_out, vector_mode);
+}
+
 }  // namespace ckernel

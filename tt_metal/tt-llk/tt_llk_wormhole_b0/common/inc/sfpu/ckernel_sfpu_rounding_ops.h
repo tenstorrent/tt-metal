@@ -7,6 +7,7 @@
 
 #include <array>
 #include <climits>
+#include <cstdint>
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
@@ -90,42 +91,42 @@ inline constexpr std::array<float, 84> PRECOMPUTED_POW10_TABLE = {
 };
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-sfpi_inline void _calculate_floor_()
+sfpi_inline void _calculate_floor_(std::uint32_t dst_index_in, std::uint32_t dst_index_out)
 {
     for (int d = 0; d < ITERATIONS; d++)
     {
-        sfpi::dst_reg[0] = _floor_body_(sfpi::dst_reg[0]);
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = _floor_body_(sfpi::dst_reg[0]);
         sfpi::dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-sfpi_inline void _calculate_ceil_()
+sfpi_inline void _calculate_ceil_(std::uint32_t dst_index_in, std::uint32_t dst_index_out)
 {
     for (int d = 0; d < ITERATIONS; d++)
     {
-        sfpi::dst_reg[0] = _ceil_body_(sfpi::dst_reg[0]);
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = _ceil_body_(sfpi::dst_reg[0]);
         sfpi::dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-sfpi_inline void _calculate_trunc_()
+sfpi_inline void _calculate_trunc_(std::uint32_t dst_index_in, std::uint32_t dst_index_out)
 {
     for (int d = 0; d < ITERATIONS; d++)
     {
-        sfpi::dst_reg[0] = _trunc_body_(sfpi::dst_reg[0]);
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = _trunc_body_(sfpi::dst_reg[0]);
         sfpi::dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-sfpi_inline void _calculate_frac_()
+sfpi_inline void _calculate_frac_(std::uint32_t dst_index_in, std::uint32_t dst_index_out)
 {
     for (int d = 0; d < ITERATIONS; d++)
     {
-        sfpi::vFloat x   = sfpi::dst_reg[0];
-        sfpi::dst_reg[0] = x - _trunc_body_(x);
+        sfpi::vFloat x                                             = sfpi::dst_reg[0];
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = x - _trunc_body_(x);
         sfpi::dst_reg++;
     }
 }
@@ -151,7 +152,7 @@ sfpi_inline sfpi::vFloat _round_even_(sfpi::vFloat v)
 }
 
 template <bool APPROXIMATE, int ITERATIONS = 8>
-void _calculate_round_(const int decimals)
+void _calculate_round_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, const int decimals)
 {
     const auto exp10i = [](int n)
     {
@@ -173,22 +174,22 @@ void _calculate_round_(const int decimals)
 
     for (int d = 0; d < ITERATIONS; ++d)
     {
-        sfpi::vFloat v      = sfpi::dst_reg[0];
-        sfpi::vFloat result = inverse * _round_even_(v * coeff);
-        sfpi::dst_reg[0]    = result;
+        sfpi::vFloat v                                             = sfpi::dst_reg[0];
+        sfpi::vFloat result                                        = inverse * _round_even_(v * coeff);
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = result;
         sfpi::dst_reg++;
     }
 }
 
 // Performs stochastic rounding of values in DST from fp32 to fp16b format.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-sfpi_inline void _calculate_stochastic_round_()
+sfpi_inline void _calculate_stochastic_round_(std::uint32_t dst_index_in, std::uint32_t dst_index_out)
 {
 #pragma GCC unroll ITERATIONS
     for (int d = 0; d < ITERATIONS; d++)
     {
-        sfpi::vFloat x   = sfpi::dst_reg[0];
-        sfpi::dst_reg[0] = sfpi::convert<sfpi::vFloat16b>(x, sfpi::RoundMode::Stochastic);
+        sfpi::vFloat x                                             = sfpi::dst_reg[0];
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = sfpi::convert<sfpi::vFloat16b>(x, sfpi::RoundMode::Stochastic);
         sfpi::dst_reg++;
     }
 }

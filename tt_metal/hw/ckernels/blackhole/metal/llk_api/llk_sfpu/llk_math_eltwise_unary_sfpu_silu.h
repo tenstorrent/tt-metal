@@ -21,4 +21,11 @@ inline void llk_math_eltwise_unary_sfpu_silu(uint dst_index, int vector_mode = (
         ckernel::sfpu::calculate_silu<is_fp32_dest_acc_en, ITERATIONS>, dst_index, vector_mode);
 }
 
+template <bool APPROXIMATE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+inline void llk_math_eltwise_unary_sfpu_silu(
+    uint dst_index_in, uint dst_index_out, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_unary_sfpu_params_split_(
+        ckernel::sfpu::calculate_silu<is_fp32_dest_acc_en, ITERATIONS>, dst_index_in, dst_index_out, vector_mode);
+}
+
 }  // namespace ckernel

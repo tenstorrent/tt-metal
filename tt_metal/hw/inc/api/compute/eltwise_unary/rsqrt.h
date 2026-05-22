@@ -38,4 +38,9 @@ ALWI void rsqrt_tile(uint32_t idst) {
     MATH((llk_math_eltwise_unary_sfpu_rsqrt<APPROX, DST_ACCUM_MODE, FAST_APPROX, legacy_compat>(idst)));
 }
 
+template <bool legacy_compat = false, bool FAST_APPROX = false>
+ALWI void rsqrt_tile(uint32_t idst_in, uint32_t idst_out) {
+    MATH((llk_math_eltwise_unary_sfpu_rsqrt<APPROX, DST_ACCUM_MODE, FAST_APPROX, legacy_compat>(idst_in, idst_out)));
+}
+
 }  // namespace ckernel

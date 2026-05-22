@@ -35,6 +35,10 @@ ALWI void ceil_tile(uint32_t idst) {
     MATH(SFPU_TWO_PARAM_KERNEL(_calculate_ceil_, APPROX, 8, idst, (int)VectorMode::RC));
 }
 
+ALWI void ceil_tile(uint32_t idst_in, uint32_t idst_out) {
+    MATH((SFPU_CALL_MODE_SPLIT(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_ceil_, (APPROX, 8), RC, idst_in, idst_out)));
+}
+
 // clang-format off
 /**
  * Performs element-wise floor computation on input x , where x is each element of a tile
@@ -51,6 +55,10 @@ ALWI void ceil_tile(uint32_t idst) {
 // clang-format on
 ALWI void floor_tile(uint32_t idst) {
     MATH(SFPU_TWO_PARAM_KERNEL(_calculate_floor_, APPROX, 8, idst, (int)VectorMode::RC));
+}
+
+ALWI void floor_tile(uint32_t idst_in, uint32_t idst_out) {
+    MATH((SFPU_CALL_MODE_SPLIT(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_floor_, (APPROX, 8), RC, idst_in, idst_out)));
 }
 
 // clang-format off
@@ -71,6 +79,10 @@ ALWI void trunc_tile(uint32_t idst) {
     MATH(SFPU_TWO_PARAM_KERNEL(_calculate_trunc_, APPROX, 8, idst, (int)VectorMode::RC));
 }
 
+ALWI void trunc_tile(uint32_t idst_in, uint32_t idst_out) {
+    MATH((SFPU_CALL_MODE_SPLIT(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_trunc_, (APPROX, 8), RC, idst_in, idst_out)));
+}
+
 // clang-format off
 /**
  * Performs element-wise computation of the round operation on each element of a tile
@@ -88,6 +100,11 @@ ALWI void trunc_tile(uint32_t idst) {
 // clang-format on
 ALWI void round_tile(uint32_t idst, int32_t decimals) {
     MATH(SFPU_TWO_PARAM_KERNEL_ONE_RUNTIME(_calculate_round_, APPROX, 8, idst, (int)VectorMode::RC, decimals));
+}
+
+ALWI void round_tile(uint32_t idst_in, uint32_t idst_out, int32_t decimals) {
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_round_, (APPROX, 8), RC, idst_in, idst_out, decimals)));
 }
 
 // clang-format off
@@ -112,6 +129,11 @@ ALWI void stochastic_round_tile(uint32_t idst) {
     MATH(SFPU_TWO_PARAM_KERNEL(_calculate_stochastic_round_, APPROX, 8, idst, (int)VectorMode::RC));
 }
 
+ALWI void stochastic_round_tile(uint32_t idst_in, uint32_t idst_out) {
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_stochastic_round_, (APPROX, 8), RC, idst_in, idst_out)));
+}
+
 // clang-format off
 /**
  * Performs element-wise frac computation on input x , where x is each element of a tile
@@ -128,6 +150,10 @@ ALWI void stochastic_round_tile(uint32_t idst) {
 // clang-format on
 ALWI void frac_tile(uint32_t idst) {
     MATH(SFPU_TWO_PARAM_KERNEL(_calculate_frac_, APPROX, 8, idst, (int)VectorMode::RC));
+}
+
+ALWI void frac_tile(uint32_t idst_in, uint32_t idst_out) {
+    MATH((SFPU_CALL_MODE_SPLIT(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_frac_, (APPROX, 8), RC, idst_in, idst_out)));
 }
 
 }  // namespace ckernel

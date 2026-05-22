@@ -36,4 +36,10 @@ ALWI void rdiv_tile(uint32_t dst_index, uint32_t value, int vector_mode = (int)V
     MATH((llk_math_eltwise_unary_sfpu_rdiv<APPROX, DST_ACCUM_MODE, rounding_mode>(dst_index, value, vector_mode)));
 }
 
+template <RoundingMode rounding_mode = RoundingMode::None>
+ALWI void rdiv_tile(uint32_t idst_in, uint32_t idst_out, uint32_t value, int vector_mode = (int)VectorMode::RC) {
+    MATH((llk_math_eltwise_unary_sfpu_rdiv<APPROX, DST_ACCUM_MODE, rounding_mode>(
+        idst_in, idst_out, value, vector_mode)));
+}
+
 }  // namespace ckernel

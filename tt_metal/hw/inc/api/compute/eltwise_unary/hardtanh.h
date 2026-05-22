@@ -35,6 +35,10 @@ ALWI void hardtanh_tile_pack(uint32_t idst, uint32_t param0, uint32_t param1) {
     PACK((llk_math_eltwise_unary_sfpu_hardtanh<APPROX>(idst, param0, param1)));
 }
 
+ALWI void hardtanh_tile(uint32_t idst_in, uint32_t idst_out, uint32_t param0, uint32_t param1) {
+    MATH((llk_math_eltwise_unary_sfpu_hardtanh<APPROX>(idst_in, idst_out, param0, param1)));
+}
+
 /**
  * Please refer to documentation for any_init.
  */

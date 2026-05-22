@@ -39,6 +39,21 @@ ALWI void softplus_tile_pack(uint32_t idst, uint32_t beta, uint32_t beta_recipro
         calculate_softplus, RC, APPROX, DST_ACCUM_MODE, idst, beta, beta_reciprocal, threshold));
 }
 
+ALWI void softplus_tile(
+    uint32_t idst_in, uint32_t idst_out, uint32_t beta, uint32_t beta_reciprocal, uint32_t threshold) {
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_softplus,
+        (APPROX, DST_ACCUM_MODE),
+        RC,
+        idst_in,
+        idst_out,
+        beta,
+        beta_reciprocal,
+        threshold)));
+}
+
 /**
  * Please refer to documentation for any_init.
  */

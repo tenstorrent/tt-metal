@@ -275,9 +275,9 @@ void gelu_derivative_init() {
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
-inline void calculate_gelu() {
+inline void calculate_gelu(std::uint32_t dst_index_in, std::uint32_t dst_index_out) {
     if constexpr (APPROXIMATION_MODE) {
-        _calculate_gelu_<APPROXIMATION_MODE, ITERATIONS>();
+        _calculate_gelu_<APPROXIMATION_MODE, ITERATIONS>(dst_index_in, dst_index_out);
     } else {
 #pragma GCC unroll 0
         for (int d = 0; d < ITERATIONS; d++) {
@@ -286,15 +286,15 @@ inline void calculate_gelu() {
             if constexpr (!is_fp32_dest_acc_en) {
                 result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
             }
-            sfpi::dst_reg[0] = result;
+            sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = result;
             sfpi::dst_reg++;
         }
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_gelu_derivative() {
-    _calculate_gelu_derivative_<APPROXIMATION_MODE, ITERATIONS>();
+inline void calculate_gelu_derivative(std::uint32_t dst_index_in, std::uint32_t dst_index_out) {
+    _calculate_gelu_derivative_<APPROXIMATION_MODE, ITERATIONS>(dst_index_in, dst_index_out);
 }
 
 // =============================================================================
@@ -392,7 +392,7 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
-inline void calculate_gelu_derivative_polynomial() {
+inline void calculate_gelu_derivative_polynomial(std::uint32_t dst_index_in, std::uint32_t dst_index_out) {
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat val = sfpi::dst_reg[0];
@@ -400,7 +400,7 @@ inline void calculate_gelu_derivative_polynomial() {
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
         }
-        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = result;
         sfpi::dst_reg++;
     }
 }

@@ -13,11 +13,12 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 4>
-inline void calculate_alt_complex_rotate90() {
+inline void calculate_alt_complex_rotate90(std::uint32_t dst_index_in, std::uint32_t dst_index_out) {
+    const int out_off = (dst_index_out - dst_index_in) * TILE_R_DIM;
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat val = dst_reg[0];
-        dst_reg[0] = -vFloat(dst_reg[1]);
-        dst_reg[1] = val;
+        dst_reg[out_off] = -dst_reg[1];
+        dst_reg[out_off + 1] = val;
         dst_reg += 2;
     }
 }

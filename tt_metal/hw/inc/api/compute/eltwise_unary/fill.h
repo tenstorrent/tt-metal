@@ -30,6 +30,11 @@ ALWI void fill_tile(uint32_t idst, float param0) {
     MATH(SFPU_UNARY_ONE_PARAM_KERNEL_EXTRA_PARAM(_calculate_fill_, RC, APPROX, 8, idst, param0));
 }
 
+ALWI void fill_tile(uint32_t idst_in, uint32_t idst_out, float param0) {
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_fill_, (APPROX, 8), RC, idst_in, idst_out, param0)));
+}
+
 // clang-format off
 /**
  * Performs element-wise fill operation. The value to be filled in the tile is provided as const param0. The DST
@@ -51,6 +56,17 @@ ALWI void fill_tile_int(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_ONE_PARAM_KERNEL_DATA_FORMAT_EXTRA_PARAM(_calculate_fill_int_, RC, APPROX, DATA_FORMAT, 8, idst, param0));
 }
 
+template <DataFormat DATA_FORMAT>
+ALWI void fill_tile_int(uint32_t idst_in, uint32_t idst_out, uint32_t param0) {
+    static_assert(
+        DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32 || DATA_FORMAT == DataFormat::UInt16,
+        "Unsupported data format. Supported: Int32, UInt32, UInt16");
+    constexpr InstrModLoadStore _INSTRUCTION_MODE =
+        (DATA_FORMAT == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_fill_int_, (APPROX, _INSTRUCTION_MODE, 8), RC, idst_in, idst_out, param0)));
+}
+
 // clang-format off
 /**
  * Performs element-wise fill operation. The value to be filled in the tile is provided as const param0, which is
@@ -68,6 +84,12 @@ ALWI void fill_tile_int(uint32_t idst, uint32_t param0) {
 ALWI void fill_tile_bitcast(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_ONE_PARAM_KERNEL_EXTRA_PARAM(_calculate_fill_bitcast_, RC, APPROX, 8, idst, param0));
 }
+
+ALWI void fill_tile_bitcast(uint32_t idst_in, uint32_t idst_out, uint32_t param0) {
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_fill_bitcast_, (APPROX, 8), RC, idst_in, idst_out, param0)));
+}
+
 /**
  * Please refer to documentation for any_init.
  */

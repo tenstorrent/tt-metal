@@ -57,6 +57,11 @@ ALWI void typecast_tile(uint32_t idst) {
     MATH((llk_math_eltwise_unary_sfpu_typecast<APPROX, IN_DTYPE, OUT_DTYPE>(idst)));
 }
 
+template <uint32_t IN_DTYPE, uint32_t OUT_DTYPE>
+ALWI void typecast_tile(uint32_t idst_in, uint32_t idst_out) {
+    MATH((llk_math_eltwise_unary_sfpu_typecast<APPROX, IN_DTYPE, OUT_DTYPE>(idst_in, idst_out)));
+}
+
 /**
  * Please refer to documentation for any_init.
  */

@@ -31,6 +31,11 @@ ALWI void left_shift_tile(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_ONE_PARAM_KERNEL_FN(calculate_left_shift, RC, APPROX, idst, param0));
 }
 
+ALWI void left_shift_tile(uint32_t idst_in, uint32_t idst_out, uint32_t param0) {
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_left_shift, (APPROX), RC, idst_in, idst_out, param0)));
+}
+
 /**
  * Please refer to documentation for any_init.
  */

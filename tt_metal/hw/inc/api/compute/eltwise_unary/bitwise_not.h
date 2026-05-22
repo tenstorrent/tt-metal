@@ -30,6 +30,10 @@ ALWI void bitwise_not_tile(uint32_t idst) {
     MATH(SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_bitwise_not, RC, APPROX, idst));
 }
 
+ALWI void bitwise_not_tile(uint32_t idst_in, uint32_t idst_out) {
+    MATH((SFPU_CALL_MODE_SPLIT(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_bitwise_not, (APPROX), RC, idst_in, idst_out)));
+}
+
 /**
  * Please refer to documentation for any_init.
  */

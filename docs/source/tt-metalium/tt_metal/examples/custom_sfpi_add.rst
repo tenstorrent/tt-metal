@@ -207,6 +207,8 @@ This layered structure keeps high-level logic separate from hardware-specific de
     There are 3 internal APIs to invoke custom SFPI functions, depending on the number of input tiles. Please view the header file for the most up-to-date information.
 
     *  ``_llk_math_eltwise_unary_sfpu_params_``: For functions with one input tile (e.g., ``sin``, ``exp``).
+       The second and third positional arguments are ``dst_index_in`` and ``dst_index_out``; pass the same value
+       for standard in-place unary ops.
     *  ``_llk_math_eltwise_binary_sfpu_params_``: For functions with two input tiles (e.g., ``add``, ``sub``, ``mul``, ``div``).
     *  ``_llk_math_eltwise_ternary_sfpu_params_``: For functions with three input tiles (e.g., ``where``).
 

@@ -27,6 +27,10 @@ ALWI void identity_tile(uint32_t idst) {
     MATH(SFPU_TWO_PARAM_KERNEL(calculate_identity, APPROX, 8, idst, (int)VectorMode::RC));
 }
 
+ALWI void identity_tile(uint32_t idst_in, uint32_t idst_out) {
+    MATH((SFPU_CALL_MODE_SPLIT(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_identity, (APPROX, 8), RC, idst_in, idst_out)));
+}
+
 /**
  * Please refer to documentation for any_init.
  */
@@ -46,6 +50,11 @@ ALWI void identity_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(unused, APPROX)); }
 // clang-format on
 ALWI void identity_tile_uint32(uint32_t idst) {
     MATH(SFPU_TWO_PARAM_KERNEL(calculate_identity_uint, APPROX, 8, idst, (int)VectorMode::RC));
+}
+
+ALWI void identity_tile_uint32(uint32_t idst_in, uint32_t idst_out) {
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_identity_uint, (APPROX, 8), RC, idst_in, idst_out)));
 }
 
 }  // namespace ckernel

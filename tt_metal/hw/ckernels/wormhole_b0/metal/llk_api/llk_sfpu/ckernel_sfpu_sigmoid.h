@@ -40,7 +40,7 @@ sfpi_inline sfpi::vFloat _sfpu_sigmoid_(sfpi::vFloat x) {
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
-inline void calculate_sigmoid() {
+inline void calculate_sigmoid(std::uint32_t dst_index_in, std::uint32_t dst_index_out) {
     if constexpr (!APPROXIMATION_MODE) {
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
@@ -52,11 +52,11 @@ inline void calculate_sigmoid() {
                 result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
             }
 
-            sfpi::dst_reg[0] = result;
+            sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = result;
             sfpi::dst_reg++;
         }
     } else {
-        calculate_sigmoid_appx<ITERATIONS>();
+        calculate_sigmoid_appx<ITERATIONS>(dst_index_in, dst_index_out);
     }
 }
 

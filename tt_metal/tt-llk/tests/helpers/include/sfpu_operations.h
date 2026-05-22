@@ -280,13 +280,15 @@ void call_unary_sfpu_operation(
     }
     else if constexpr (OPERATION == SfpuType::hardsigmoid)
     {
-        // Zero-arg _calculate_activation_ vs param overload — cast so Callable deduces.
+        // Two-arg _calculate_activation_ (dst_index_in, dst_index_out) vs param overload —
+        // cast so Callable deduces. The single-idx params path passes (dst_index, dst_index)
+        // for both slots.
         SFPU_CALL_CAST(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             _calculate_activation_,
             (APPROX_MODE, ckernel::ActivationType::Hardsigmoid, ITERATIONS),
-            (void (*)()),
+            (void (*)(std::uint32_t, std::uint32_t)),
             dst_index,
             vector_mode);
     }
@@ -413,6 +415,316 @@ void call_unary_sfpu_operation(
     else
     {
         LLK_ASSERT(false, "Unsupported operation");
+    }
+}
+
+/**
+ * Split-dest variant of call_unary_sfpu_operation: reads from dst_index_in,
+ * writes to dst_index_out. Delegates to SFPU_CALL_SPLIT / SFPU_CALL_MODE_SPLIT
+ * / SFPU_CALL_CAST_SPLIT from llk_math_eltwise_unary_sfpu_macros.h, which
+ * funnel through the split overload of ckernel::_sfpu_check_and_call_.
+ *
+ * For ops whose underlying calculate function does not accept separate in/out
+ * indices (TopK family — they reduce in place across DST), this falls back to
+ * the legacy single-idx path using dst_index_in.
+ */
+template <
+    DstSync DST_SYNC_MODE,
+    bool DST_ACCUM_MODE,
+    SfpuType OPERATION,
+    bool APPROX_MODE,
+    bool is_fp32_dest_acc_en,
+    int ITERATIONS,
+    bool FAST_MODE      = false,
+    bool STABLE_SORT    = false,
+    bool CLAMP_NEGATIVE = false>
+void call_unary_sfpu_operation_split(
+    std::uint32_t dst_index_in,
+    std::uint32_t dst_index_out,
+    std::uint32_t math_format = 0,
+    float fill_const_value    = 5.0f,
+    int vector_mode           = static_cast<int>(VectorMode::None))
+{
+    if constexpr (OPERATION == SfpuType::abs)
+    {
+        SFPU_CALL_SPLIT(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_abs_, (APPROX_MODE, ITERATIONS), dst_index_in, dst_index_out, vector_mode, ITERATIONS);
+    }
+    else if constexpr (OPERATION == SfpuType::acosh)
+    {
+        SFPU_CALL_SPLIT(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_acosh_, (APPROX_MODE, ITERATIONS), dst_index_in, dst_index_out, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::asinh)
+    {
+        SFPU_CALL_SPLIT(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_asinh_, (APPROX_MODE, ITERATIONS), dst_index_in, dst_index_out, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::atanh)
+    {
+        SFPU_CALL_SPLIT(
+            DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_atanh_, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index_in, dst_index_out, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::celu)
+    {
+        SFPU_CALL_SPLIT(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _calculate_celu_,
+            (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS),
+            dst_index_in,
+            dst_index_out,
+            vector_mode,
+            0x3f800000u /* alpha = 1.0f */,
+            0x3f800000u /* 1/alpha = 1.0f */);
+    }
+    else if constexpr (OPERATION == SfpuType::cosine)
+    {
+        SFPU_CALL_SPLIT(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_cosine_, (APPROX_MODE, ITERATIONS), dst_index_in, dst_index_out, vector_mode, ITERATIONS);
+    }
+    else if constexpr (OPERATION == SfpuType::elu)
+    {
+        SFPU_CALL_SPLIT(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _calculate_elu_,
+            (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS),
+            dst_index_in,
+            dst_index_out,
+            vector_mode,
+            0x3f800000u /* alpha = 1.0f */);
+    }
+    else if constexpr (OPERATION == SfpuType::exp2)
+    {
+        SFPU_CALL_SPLIT(
+            DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_exp2_, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index_in, dst_index_out, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::exponential && APPROX_MODE && CLAMP_NEGATIVE)
+    {
+        SFPU_CALL_MODE_SPLIT(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _calculate_exponential_,
+            (APPROX_MODE, false /* scale_en */, 8, CLAMP_NEGATIVE),
+            RC,
+            dst_index_in,
+            dst_index_out,
+            p_sfpu::kCONST_1_FP16B /* exp_base_scale_factor */);
+    }
+    else if constexpr (OPERATION == SfpuType::exponential)
+    {
+        SFPU_CALL_SPLIT(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _calculate_exponential_,
+            (APPROX_MODE, false /* scale_en */, ITERATIONS, CLAMP_NEGATIVE),
+            dst_index_in,
+            dst_index_out,
+            vector_mode,
+            p_sfpu::kCONST_1_FP16B /* exp_base_scale_factor */);
+    }
+    else if constexpr (OPERATION == SfpuType::fill)
+    {
+        if (math_format == ckernel::to_underlying(DataFormat::Int32))
+        {
+            SFPU_CALL_SPLIT(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                _calculate_fill_int_,
+                (APPROX_MODE, ckernel::InstrModLoadStore::INT32, ITERATIONS),
+                dst_index_in,
+                dst_index_out,
+                vector_mode,
+                static_cast<std::uint32_t>(fill_const_value));
+        }
+        else if (math_format == ckernel::to_underlying(DataFormat::UInt16))
+        {
+            SFPU_CALL_SPLIT(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                _calculate_fill_int_,
+                (APPROX_MODE, ckernel::InstrModLoadStore::LO16, ITERATIONS),
+                dst_index_in,
+                dst_index_out,
+                vector_mode,
+                static_cast<std::uint32_t>(fill_const_value));
+        }
+        else if (math_format == ckernel::to_underlying(DataFormat::UInt32))
+        {
+            SFPU_CALL_SPLIT(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                _calculate_fill_int_,
+                (APPROX_MODE, ckernel::InstrModLoadStore::INT32, ITERATIONS),
+                dst_index_in,
+                dst_index_out,
+                vector_mode,
+                static_cast<std::uint32_t>(fill_const_value));
+        }
+        else
+        {
+            SFPU_CALL_SPLIT(
+                DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_fill_, (APPROX_MODE, ITERATIONS), dst_index_in, dst_index_out, vector_mode, fill_const_value);
+        }
+    }
+    else if constexpr (OPERATION == SfpuType::gelu)
+    {
+        SFPU_CALL_SPLIT(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_gelu_, (APPROX_MODE, ITERATIONS), dst_index_in, dst_index_out, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::hardsigmoid)
+    {
+        SFPU_CALL_CAST_SPLIT(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _calculate_activation_,
+            (APPROX_MODE, ckernel::ActivationType::Hardsigmoid, ITERATIONS),
+            (void (*)(std::uint32_t, std::uint32_t)),
+            dst_index_in,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::log)
+    {
+        SFPU_CALL_SPLIT(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _calculate_log_,
+            (APPROX_MODE, false, ITERATIONS),
+            dst_index_in,
+            dst_index_out,
+            vector_mode,
+            ITERATIONS,
+            0u /* log_base_scale_factor */);
+    }
+    else if constexpr (OPERATION == SfpuType::log1p)
+    {
+        SFPU_CALL_SPLIT(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_log1p,
+            (APPROX_MODE, FAST_MODE, is_fp32_dest_acc_en, ITERATIONS),
+            dst_index_in,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::negative)
+    {
+        if (math_format == ckernel::to_underlying(DataFormat::Int32))
+        {
+            SFPU_CALL_SPLIT(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_negative_int_, (APPROX_MODE, ITERATIONS), dst_index_in, dst_index_out, vector_mode);
+        }
+        else
+        {
+            SFPU_CALL_SPLIT(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_negative_, (APPROX_MODE, ITERATIONS), dst_index_in, dst_index_out, vector_mode);
+        }
+    }
+    else if constexpr (OPERATION == SfpuType::reciprocal)
+    {
+        SFPU_CALL_SPLIT(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _calculate_reciprocal_,
+            (APPROX_MODE, ITERATIONS, is_fp32_dest_acc_en),
+            dst_index_in,
+            dst_index_out,
+            vector_mode,
+            ITERATIONS);
+    }
+    else if constexpr (OPERATION == SfpuType::rsqrt)
+    {
+        SFPU_CALL_SPLIT(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _calculate_rsqrt_,
+            (APPROX_MODE, ITERATIONS, is_fp32_dest_acc_en, FAST_MODE),
+            dst_index_in,
+            dst_index_out,
+            vector_mode,
+            ITERATIONS);
+    }
+    else if constexpr (OPERATION == SfpuType::silu)
+    {
+        SFPU_CALL_SPLIT(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_silu_, (APPROX_MODE, ITERATIONS), dst_index_in, dst_index_out, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::sine)
+    {
+        SFPU_CALL_SPLIT(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_sine_, (APPROX_MODE, ITERATIONS), dst_index_in, dst_index_out, vector_mode, ITERATIONS);
+    }
+    else if constexpr (OPERATION == SfpuType::sqrt)
+    {
+        SFPU_CALL_SPLIT(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _calculate_sqrt_,
+            (APPROX_MODE, ITERATIONS, is_fp32_dest_acc_en, FAST_MODE),
+            dst_index_in,
+            dst_index_out,
+            vector_mode,
+            ITERATIONS);
+    }
+    else if constexpr (OPERATION == SfpuType::square)
+    {
+        SFPU_CALL_SPLIT(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_square_, (APPROX_MODE, ITERATIONS), dst_index_in, dst_index_out, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::tanh)
+    {
+        SFPU_CALL_SPLIT(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_tanh, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index_in, dst_index_out, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::threshold)
+    {
+        SFPU_CALL_SPLIT(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _calculate_threshold_,
+            (APPROX_MODE, ITERATIONS, float),
+            dst_index_in,
+            dst_index_out,
+            vector_mode,
+            5.0f /* threshold_value */,
+            10.0f /* replacement_value */);
+    }
+    else if constexpr (OPERATION == SfpuType::topk_local_sort || OPERATION == SfpuType::topk_merge || OPERATION == SfpuType::topk_rebuild)
+    {
+        // TopK reduces in place across DST; there is no semantically meaningful
+        // (in, out) split, so we exercise the existing single-idx legacy path
+        // anchored at dst_index_in. dst_index_out is ignored for these ops.
+        (void)dst_index_out;
+        call_unary_sfpu_operation<
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            OPERATION,
+            APPROX_MODE,
+            is_fp32_dest_acc_en,
+            ITERATIONS,
+            FAST_MODE,
+            STABLE_SORT,
+            CLAMP_NEGATIVE>(dst_index_in, math_format, fill_const_value, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::relu_max)
+    {
+        SFPU_CALL_SPLIT(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _relu_max_,
+            (sfpi::vFloat, APPROX_MODE, ITERATIONS, float),
+            dst_index_in,
+            dst_index_out,
+            vector_mode,
+            5.0f /* threshold */);
+    }
+    else if constexpr (OPERATION == SfpuType::relu_min)
+    {
+        SFPU_CALL_SPLIT(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _relu_min_,
+            (sfpi::vFloat, APPROX_MODE, ITERATIONS, float),
+            dst_index_in,
+            dst_index_out,
+            vector_mode,
+            5.0f /* threshold */);
+    }
+    else
+    {
+        LLK_ASSERT(false, "Unsupported operation for split-dest path");
     }
 }
 

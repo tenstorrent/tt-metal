@@ -36,8 +36,18 @@ ALWI void negative_tile(uint32_t idst) {
     MATH(SFPU_TWO_PARAM_KERNEL(_calculate_negative_, APPROX, 8, idst, (int)VectorMode::RC));
 }
 
+ALWI void negative_tile(uint32_t idst_in, uint32_t idst_out) {
+    MATH((
+        SFPU_CALL_MODE_SPLIT(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_negative_, (APPROX, 8), RC, idst_in, idst_out)));
+}
+
 ALWI void negative_tile_int32(uint32_t idst) {
     MATH(SFPU_TWO_PARAM_KERNEL(_calculate_negative_int_, APPROX, 8, idst, (int)VectorMode::RC));
+}
+
+ALWI void negative_tile_int32(uint32_t idst_in, uint32_t idst_out) {
+    MATH((SFPU_CALL_MODE_SPLIT(
+        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_negative_int_, (APPROX, 8), RC, idst_in, idst_out)));
 }
 
 #endif

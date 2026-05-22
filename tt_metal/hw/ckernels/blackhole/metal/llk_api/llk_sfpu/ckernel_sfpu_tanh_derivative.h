@@ -19,7 +19,7 @@ namespace sfpu {
 // WARNING: This has catastrophic cancellation for |x| > ~3.4 (Max ULP = 15,140).
 // Kept for backward compatibility. Use calculate_tanh_derivative_sech2 instead.
 template <bool APPROXIMATION_MODE, int WITH_PRECOMPUTED_TANH = 0, int ITERATIONS = 8>
-inline void calculate_tanh_derivative() {
+inline void calculate_tanh_derivative(std::uint32_t dst_index_in, std::uint32_t dst_index_out) {
     vUInt l0 = l_reg[LRegs::LReg0];
     vUInt l1 = l_reg[LRegs::LReg1];
     vUInt l2 = l_reg[LRegs::LReg2];
@@ -33,7 +33,7 @@ inline void calculate_tanh_derivative() {
         }
 
         val = val * (-val) + vConst1;
-        dst_reg[0] = val;
+        dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = val;
 
         dst_reg++;
     }
@@ -170,7 +170,7 @@ constexpr float CORE_REGION_LIMIT = 3.0f;   // Polynomial ↔ exp boundary
 constexpr float TAIL_REGION_LIMIT = 45.0f;  // Exp ↔ zero saturation boundary
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
-inline void calculate_tanh_derivative_sech2() {
+inline void calculate_tanh_derivative_sech2(std::uint32_t dst_index_in, std::uint32_t dst_index_out) {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat val = sfpi::dst_reg[0];
         sfpi::vFloat result = sfpi::vConst0;
@@ -210,7 +210,7 @@ inline void calculate_tanh_derivative_sech2() {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
         }
 
-        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = result;
         sfpi::dst_reg++;
     }
 }

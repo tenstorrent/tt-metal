@@ -10,16 +10,28 @@
 
 namespace ckernel {
 
-inline void llk_math_eltwise_unary_sfpu_threshold_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::threshold>();
-}
+inline void llk_math_eltwise_unary_sfpu_threshold_init() { llk_math_eltwise_unary_sfpu_init<SfpuType::threshold>(); }
 
 template <bool APPROXIMATE, int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_threshold(
     uint dst_index, uint32_t param0, uint32_t param1, int vector_mode = (int)VectorMode::RC) {
     _llk_math_eltwise_unary_sfpu_params_(
-        static_cast<void (*)(uint32_t, uint32_t)>(ckernel::sfpu::_calculate_threshold_<APPROXIMATE, ITERATIONS>),
+        static_cast<void (*)(uint32_t, uint32_t, uint32_t, uint32_t)>(
+            ckernel::sfpu::_calculate_threshold_<APPROXIMATE, ITERATIONS, uint32_t>),
         dst_index,
+        vector_mode,
+        param0,
+        param1);
+}
+
+template <bool APPROXIMATE, int ITERATIONS = 8>
+inline void llk_math_eltwise_unary_sfpu_threshold(
+    uint dst_index_in, uint dst_index_out, uint32_t param0, uint32_t param1, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_unary_sfpu_params_split_(
+        static_cast<void (*)(uint32_t, uint32_t, uint32_t, uint32_t)>(
+            ckernel::sfpu::_calculate_threshold_<APPROXIMATE, ITERATIONS, uint32_t>),
+        dst_index_in,
+        dst_index_out,
         vector_mode,
         param0,
         param1);

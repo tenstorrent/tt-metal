@@ -13,7 +13,7 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_unary_ne(uint value) {
+inline void calculate_unary_ne(std::uint32_t dst_index_in, std::uint32_t dst_index_out, uint value) {
     // SFPU microcode
     sfpi::vFloat s = Converter::as_float(value);
 
@@ -24,14 +24,14 @@ inline void calculate_unary_ne(uint value) {
         v_else { v = 1.0f; }
         v_endif;
 
-        sfpi::dst_reg[0] = v;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = v;
 
         sfpi::dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_unary_eq(uint value) {
+inline void calculate_unary_eq(std::uint32_t dst_index_in, std::uint32_t dst_index_out, uint value) {
     // SFPU microcode
     sfpi::vFloat s = Converter::as_float(value);
 
@@ -42,14 +42,14 @@ inline void calculate_unary_eq(uint value) {
         v_else { v = 0.0f; }
         v_endif;
 
-        sfpi::dst_reg[0] = v;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = v;
 
         sfpi::dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_unary_gt(uint value) {
+inline void calculate_unary_gt(std::uint32_t dst_index_in, std::uint32_t dst_index_out, uint value) {
     // SFPU microcode
     sfpi::vFloat s = Converter::as_float(value);
 
@@ -60,14 +60,14 @@ inline void calculate_unary_gt(uint value) {
         v_else { v = 0.0f; }
         v_endif;
 
-        sfpi::dst_reg[0] = v;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = v;
 
         sfpi::dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_unary_lt(uint value) {
+inline void calculate_unary_lt(std::uint32_t dst_index_in, std::uint32_t dst_index_out, uint value) {
     // SFPU microcode
     sfpi::vFloat s = Converter::as_float(value);
 
@@ -78,14 +78,14 @@ inline void calculate_unary_lt(uint value) {
         v_else { v = 0.0f; }
         v_endif;
 
-        sfpi::dst_reg[0] = v;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = v;
 
         sfpi::dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_unary_ge(uint value) {
+inline void calculate_unary_ge(std::uint32_t dst_index_in, std::uint32_t dst_index_out, uint value) {
     // SFPU microcode
     sfpi::vFloat s = Converter::as_float(value);
 
@@ -96,14 +96,14 @@ inline void calculate_unary_ge(uint value) {
         v_else { v = 1.0f; }
         v_endif;
 
-        sfpi::dst_reg[0] = v;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = v;
 
         sfpi::dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_unary_le(uint value) {
+inline void calculate_unary_le(std::uint32_t dst_index_in, std::uint32_t dst_index_out, uint value) {
     // SFPU microcode
     sfpi::vFloat s = Converter::as_float(value);
 
@@ -114,7 +114,7 @@ inline void calculate_unary_le(uint value) {
         v_else { v = 1.0f; }
         v_endif;
 
-        sfpi::dst_reg[0] = v;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = v;
 
         sfpi::dst_reg++;
     }

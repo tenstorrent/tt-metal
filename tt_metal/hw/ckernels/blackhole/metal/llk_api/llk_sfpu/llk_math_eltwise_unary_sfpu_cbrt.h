@@ -21,4 +21,11 @@ inline void llk_math_eltwise_unary_sfpu_cbrt(uint dst_index, int vector_mode = (
         sfpu::calculate_cube_root<APPROXIMATE, fp32_dest_acc_en, ITERATIONS>, dst_index, vector_mode);
 }
 
+template <bool APPROXIMATE, bool fp32_dest_acc_en, int ITERATIONS = 8>
+inline void llk_math_eltwise_unary_sfpu_cbrt(
+    uint dst_index_in, uint dst_index_out, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_unary_sfpu_params_split_(
+        sfpu::calculate_cube_root<APPROXIMATE, fp32_dest_acc_en, ITERATIONS>, dst_index_in, dst_index_out, vector_mode);
+}
+
 }  // namespace ckernel
