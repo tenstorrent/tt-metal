@@ -4,6 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 // #include <unistd.h>
@@ -58,8 +61,11 @@ void kernel_main() {
     constexpr uint32_t total_senders = num_sender_cores * other_devices;
 
     // Runtime arguments
+    // Legacy primitive retained (#45003 item 4): program factory passes
+    // cross_device_semaphore->address() rather than a semaphore id, so Semaphore<>
+    // can't bind. Keep the raw address handle for downstream noc_semaphore_* calls.
     uint32_t receiver_semaphore_address = get_arg_val<uint32_t>(rt_arg_idx++);
-    uint32_t local_semaphore_address = get_semaphore(get_arg_val<uint32_t>(rt_arg_idx++));
+    Semaphore<> local_sem(get_arg_val<uint32_t>(rt_arg_idx++));
     bool sender_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
     bool worker_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t linear_input_packet_start_idx = get_arg_val<uint32_t>(rt_arg_idx++);
@@ -68,18 +74,21 @@ void kernel_main() {
     uint32_t sender_shard_end = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t sender_total_num_pages = get_arg_val<uint32_t>(rt_arg_idx++);
 
+    Noc noc_obj;
+    CircularBuffer cb_input_tensor(input_tensor_cb_id);
+    CircularBuffer cb_fabric_sender(fabric_sender_cb_id);
+    CircularBuffer cb_fabric_receiver(fabric_receiver_cb_id);
+
     // Get signal here
     if constexpr (needs_signaler) {
-        uint32_t signaler_semaphore_address = get_semaphore(get_arg_val<uint32_t>(rt_arg_idx++));
-        volatile tt_l1_ptr uint32_t* signaler_semaphore_address_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(signaler_semaphore_address);
-        noc_semaphore_wait(signaler_semaphore_address_ptr, 1);
+        Semaphore<> signaler_sem(get_arg_val<uint32_t>(rt_arg_idx++));
+        signaler_sem.wait(1);
     }
 
     // Bank base addresses (compute once)
-    const uint32_t bank_base_address = get_write_ptr(input_tensor_cb_id);
+    const uint32_t bank_base_address = cb_input_tensor.get_write_ptr();
 
-    uint32_t sender_read_addr = get_write_ptr(fabric_sender_cb_id);
+    uint32_t sender_read_addr = cb_fabric_sender.get_write_ptr();
 
     if (sender_core) {
         for (uint32_t target_device_id : device_order) {
@@ -103,12 +112,14 @@ void kernel_main() {
                 const uint64_t shard_noc_addr = get_noc_addr(x, y, offset_address);
                 const uint32_t transfer_size = read_size * page_size_bytes;
 
-                cb_reserve_back(fabric_sender_cb_id, num_pages_reserve_push);
+                cb_fabric_sender.reserve_back(num_pages_reserve_push);
+                // Legacy primitive retained (#45003 item 4): precomposed uint64_t shard
+                // noc address; clean mapping to UnicastEndpoint is not worth the churn.
                 noc_async_read(shard_noc_addr, sender_read_addr, transfer_size);
 
                 if (num_pages_reserve_push >= curr_packet_num_pages) {
-                    noc_async_read_barrier();
-                    cb_push_back(fabric_sender_cb_id, num_pages_reserve_push);
+                    noc_obj.async_read_barrier();
+                    cb_fabric_sender.push_back(num_pages_reserve_push);
                     num_pages_reserve_push = 0;
                 }
 
@@ -119,8 +130,8 @@ void kernel_main() {
         }
     } else if (worker_core) {
         // Calculate base addresses once
-        const uint32_t base_input_tensor_addr = get_read_ptr(input_tensor_cb_id);
-        const uint32_t base_receiver_l1_addresses = get_write_ptr(fabric_receiver_cb_id) + chip_id_offset;
+        const uint32_t base_input_tensor_addr = cb_input_tensor.get_read_ptr();
+        const uint32_t base_receiver_l1_addresses = cb_fabric_receiver.get_write_ptr() + chip_id_offset;
 
         for (uint32_t i = 0; i < num_pages_per_packet; i++) {
             const uint32_t rem = linear_input_packet_start_idx + i;
@@ -138,15 +149,18 @@ void kernel_main() {
             const uint64_t output_noc_address = get_noc_addr(core_x, core_y, base_input_tensor_addr + tile_offset);
             const uint32_t receiver_l1_address = base_receiver_l1_addresses + i * page_size_bytes;
 
+            // Legacy primitive retained (#45003 item 4): precomposed uint64_t noc address.
             noc_async_read(output_noc_address, receiver_l1_address, page_size_bytes);
         }
 
+        // Legacy primitive retained (#45003 item 4): see receiver_semaphore_address note.
         noc_semaphore_wait((uint32_t*)receiver_semaphore_address, other_devices);
 
-        noc_async_read_barrier();
-        cb_push_back(fabric_receiver_cb_id, num_pages_per_packet * num_devices);
+        noc_obj.async_read_barrier();
+        cb_fabric_receiver.push_back(num_pages_per_packet * num_devices);
     }
-    noc_semaphore_set((uint32_t*)local_semaphore_address, INVALID);
+    local_sem.set(INVALID);
+    // Legacy primitive retained (#45003 item 4): see receiver_semaphore_address note.
     noc_semaphore_set((uint32_t*)receiver_semaphore_address, INVALID);
-    noc_async_write_barrier();
+    noc_obj.async_write_barrier();
 }
