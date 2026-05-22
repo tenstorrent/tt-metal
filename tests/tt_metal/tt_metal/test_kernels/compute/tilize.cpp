@@ -16,12 +16,12 @@ void kernel_main() {
     DataflowBuffer dfb_in(dfb::in);
     DataflowBuffer dfb_out(dfb::out);
 
-    compute_kernel_hw_startup(dfb_in.get_id(), dfb_out.get_id());
+    compute_kernel_hw_startup(dfb::in, dfb::out);
 
 #ifndef FAST_TILIZE
-    tilize_init(dfb_in.get_id(), per_core_block_tile_cnt, dfb_out.get_id());
+    tilize_init(dfb::in, per_core_block_tile_cnt, dfb::out);
 #else
-    fast_tilize_init(dfb_in.get_id(), per_core_block_tile_cnt, dfb_out.get_id());
+    fast_tilize_init(dfb::in, per_core_block_tile_cnt, dfb::out);
 #endif
 
     for (uint32_t b = 0; b < per_core_block_cnt; ++b) {
@@ -29,9 +29,9 @@ void kernel_main() {
         dfb_out.reserve_back(per_core_block_tile_cnt);
 
 #ifndef FAST_TILIZE
-        tilize_block(dfb_in.get_id(), per_core_block_tile_cnt, dfb_out.get_id());
+        tilize_block(dfb::in, per_core_block_tile_cnt, dfb::out);
 #else
-        fast_tilize_block(dfb_in.get_id(), per_core_block_tile_cnt, dfb_out.get_id());
+        fast_tilize_block(dfb::in, per_core_block_tile_cnt, dfb::out);
 #endif
 
         dfb_in.pop_front(per_core_block_tile_cnt);
@@ -39,8 +39,8 @@ void kernel_main() {
     }
 
 #ifndef FAST_TILIZE
-    tilize_uninit(dfb_in.get_id(), dfb_out.get_id());
+    tilize_uninit(dfb::in, dfb::out);
 #else
-    fast_tilize_uninit(dfb_in.get_id(), dfb_out.get_id(), per_core_block_tile_cnt);
+    fast_tilize_uninit(dfb::in, dfb::out, per_core_block_tile_cnt);
 #endif
 }

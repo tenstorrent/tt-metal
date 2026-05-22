@@ -31,8 +31,8 @@ void kernel_main() {
 
         dfb_in.wait_front(1);
         dfb_out.reserve_back(1);
-        copy_tile(dfb_in.get_id(), 0, 0);
-        pack_tile(0, dfb_out.get_id());
+        copy_tile(dfb::in, 0, 0);
+        pack_tile(0, dfb::out);
         dfb_in.pop_front(1);
         dfb_out.push_back(1);
 

@@ -15,10 +15,10 @@ void kernel_main() {
     DataflowBuffer dfb_out(dfb::out);
 
 #ifndef SHORT_INIT
-    transpose_wh_init(dfb_in.get_id(), dfb_out.get_id());
+    transpose_wh_init(dfb::in, dfb::out);
 #else
-    unary_op_init_common(dfb_in.get_id(), dfb_out.get_id());
-    transpose_wh_init_short(dfb_in.get_id());
+    unary_op_init_common(dfb::in, dfb::out);
+    transpose_wh_init_short(dfb::in);
 #endif
 
     // transpose a row-major block:
@@ -30,11 +30,11 @@ void kernel_main() {
         dfb_out.reserve_back(1);
 
         tile_regs_acquire();
-        transpose_wh_tile(dfb_in.get_id(), 0, 0);
+        transpose_wh_tile(dfb::in, 0, 0);
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile(0, dfb_out.get_id());
+        pack_tile(0, dfb::out);
         tile_regs_release();
 
         dfb_in.pop_front(1);

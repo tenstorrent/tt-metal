@@ -17,7 +17,7 @@ void kernel_main() {
 
     DataflowBuffer dfb_in(dfb::in);
     DataflowBuffer dfb_out(dfb::out);
-    unary_op_init_common(dfb_in.get_id(), dfb_out.get_id());
+    unary_op_init_common(dfb::in, dfb::out);
 
     for (uint32_t b = 0; b < outer_loop; ++b) {
         dfb_in.wait_front(num_single_transfer);
@@ -25,10 +25,10 @@ void kernel_main() {
         acquire_dst();
 
         for (uint32_t i = 0; i < num_single_transfer; ++i) {
-            copy_block_matmul_partials(dfb_in.get_id(), i, i, 1);
+            copy_block_matmul_partials(dfb::in, i, i, 1);
         }
 
-        pack_tile_block(0, dfb_out.get_id(), num_single_transfer);
+        pack_tile_block(0, dfb::out, num_single_transfer);
 
         release_dst();
         dfb_in.pop_front(num_single_transfer);

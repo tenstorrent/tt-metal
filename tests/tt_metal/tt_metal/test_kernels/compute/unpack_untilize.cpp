@@ -15,18 +15,18 @@ void kernel_main() {
     DataflowBuffer dfb_in0(dfb::in);
     DataflowBuffer dfb_out0(dfb::out);
 
-    compute_kernel_hw_startup(dfb_in0.get_id(), dfb_out0.get_id());
-    untilize_init(dfb_in0.get_id());
+    compute_kernel_hw_startup(dfb::in, dfb::out);
+    untilize_init(dfb::in);
 
     for (uint32_t b = 0; b < per_core_block_cnt; ++b) {
         dfb_in0.wait_front(per_core_block_tile_cnt);
         dfb_out0.reserve_back(per_core_block_tile_cnt);
 
-        untilize_block(dfb_in0.get_id(), per_core_block_tile_cnt, dfb_out0.get_id());
+        untilize_block(dfb::in, per_core_block_tile_cnt, dfb::out);
 
         dfb_out0.push_back(per_core_block_tile_cnt);
         dfb_in0.pop_front(per_core_block_tile_cnt);
     }
 
-    untilize_uninit(dfb_in0.get_id());
+    untilize_uninit(dfb::in);
 }

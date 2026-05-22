@@ -17,9 +17,9 @@ void kernel_main() {
     DataflowBuffer dfb0(dfb::in0);
     DataflowBuffer dfb1(dfb::in1);
     DataflowBuffer dfb_out(dfb::out);
-    const uint32_t icb0 = dfb0.get_id();
-    const uint32_t icb1 = dfb1.get_id();
-    const uint32_t ocb = dfb_out.get_id();
+    constexpr uint32_t icb0 = dfb::in0;
+    constexpr uint32_t icb1 = dfb::in1;
+    constexpr uint32_t ocb = dfb::out;
 
 #ifndef BCAST_OP_INIT
     init_bcast<BCAST_LLKOP, BCAST_DIM>(icb0, icb1, ocb);

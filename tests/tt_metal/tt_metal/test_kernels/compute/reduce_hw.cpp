@@ -18,8 +18,8 @@ void kernel_main() {
     DataflowBuffer dfb_in(dfb::in_data);
     DataflowBuffer dfb_in_scaler(dfb::in_scaler);
     DataflowBuffer dfb_out(dfb::out);
-    compute_kernel_hw_startup(dfb_in.get_id(), dfb_in_scaler.get_id(), dfb_out.get_id());
-    reduce_init<REDUCE_OP, REDUCE_DIM>(dfb_in.get_id(), dfb_in_scaler.get_id(), dfb_out.get_id());
+    compute_kernel_hw_startup(dfb::in_data, dfb::in_scaler, dfb::out);
+    reduce_init<REDUCE_OP, REDUCE_DIM>(dfb::in_data, dfb::in_scaler, dfb::out);
 
     dfb_in_scaler.wait_front(onetile);
     for (uint32_t nc = 0; nc < NC; nc++) {
@@ -33,21 +33,21 @@ void kernel_main() {
                 dfb_in.wait_front(onetile);
 #if (MATH_ONLY == 1)
 #ifdef ARCH_QUASAR
-                UNPACK((llk_unpack_AB_reduce(dfb_in.get_id(), dfb_in_scaler.get_id(), 0, 0)));
+                UNPACK((llk_unpack_AB_reduce(dfb::in_data, dfb::in_scaler, 0, 0)));
 #else
-                UNPACK((llk_unpack_AB_reduce<REDUCE_OP, REDUCE_DIM>(dfb_in.get_id(), dfb_in_scaler.get_id(), 0, 0)));
+                UNPACK((llk_unpack_AB_reduce<REDUCE_OP, REDUCE_DIM>(dfb::in_data, dfb::in_scaler, 0, 0)));
 #endif
                 // REDUCE_OP and REDUCE_DIM are expected to come from add_define
                 reduce_tile_math<REDUCE_OP, REDUCE_DIM>(reduce_dst_idx);
 #elif (MATH_ONLY == 0)
                 // REDUCE_OP and REDUCE_DIM are expected to come from add_define
-                reduce_tile<REDUCE_OP, REDUCE_DIM>(dfb_in.get_id(), dfb_in_scaler.get_id(), 0, 0, reduce_dst_idx);
+                reduce_tile<REDUCE_OP, REDUCE_DIM>(dfb::in_data, dfb::in_scaler, 0, 0, reduce_dst_idx);
 #endif
                 dfb_in.pop_front(onetile);
             }
         }
         dfb_out.reserve_back(onetile);
-        pack_tile(reduce_dst_idx, dfb_out.get_id());
+        pack_tile(reduce_dst_idx, dfb::out);
         dfb_out.push_back(onetile);
         release_dst();
     }

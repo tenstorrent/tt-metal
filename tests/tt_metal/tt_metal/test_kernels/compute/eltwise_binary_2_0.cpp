@@ -20,12 +20,12 @@ void kernel_main() {
     DataflowBuffer dfb_in1(dfb::in1);
     DataflowBuffer dfb_in2(dfb::in2);
     DataflowBuffer dfb_out(dfb::out);
-    binary_op_init_common(dfb_in0.get_id(), dfb_in1.get_id(), dfb_out.get_id());
+    binary_op_init_common(dfb::in0, dfb::in1, dfb::out);
 #if not defined ELTWISE_DEST_REUSE_TYPE
 #ifdef FULL_INIT
-    binary_tiles_init<true, ELTWISE_OP_TYPE>(dfb_in0.get_id(), dfb_in1.get_id());
+    binary_tiles_init<true, ELTWISE_OP_TYPE>(dfb::in0, dfb::in1);
 #else
-    binary_tiles_init<false, ELTWISE_OP_TYPE>(dfb_in0.get_id(), dfb_in1.get_id());
+    binary_tiles_init<false, ELTWISE_OP_TYPE>(dfb::in0, dfb::in1);
 #endif
 #endif
 
@@ -41,9 +41,9 @@ void kernel_main() {
 
 #if defined(DST_ACCUM_MODE) || defined(ACC_TO_DEST) || defined(ELTWISE_DEST_REUSE_TYPE)
         dfb_in2.wait_front(per_core_block_size);
-        copy_tile_to_dst_init_short(dfb_in2.get_id());
+        copy_tile_to_dst_init_short(dfb::in2);
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            copy_tile(dfb_in2.get_id(), i, i);  // copy from c_in[0] to DST[0]
+            copy_tile(dfb::in2, i, i);  // copy from c_in[0] to DST[0]
         }
         dfb_in2.pop_front(per_core_block_size);
 #endif
@@ -51,21 +51,21 @@ void kernel_main() {
 #if defined(DST_ACCUM_MODE) || defined(ACC_TO_DEST)
 // The following define is needed for WH/BH if mul_tiles/_init is used
 #if defined(MUL_TILES_WITH_DST_ACCUM)
-        ELTWISE_OP_INIT(dfb_in0.get_id(), dfb_in1.get_id());
+        ELTWISE_OP_INIT(dfb::in0, dfb::in1);
 #else
-        ELTWISE_OP_INIT(dfb_in0.get_id(), dfb_in1.get_id(), true);
+        ELTWISE_OP_INIT(dfb::in0, dfb::in1, true);
 #endif
 #endif
 
 #ifdef ELTWISE_DEST_REUSE_TYPE
-        binary_dest_reuse_tiles_init<ELTWISE_OP_TYPE, ELTWISE_DEST_REUSE_TYPE>(dfb_in0.get_id());
+        binary_dest_reuse_tiles_init<ELTWISE_OP_TYPE, ELTWISE_DEST_REUSE_TYPE>(dfb::in0);
 #endif
 
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
 #ifdef ELTWISE_DEST_REUSE_TYPE
-            binary_dest_reuse_tiles<ELTWISE_OP_TYPE, ELTWISE_DEST_REUSE_TYPE>(dfb_in0.get_id(), i, i);
+            binary_dest_reuse_tiles<ELTWISE_OP_TYPE, ELTWISE_DEST_REUSE_TYPE>(dfb::in0, i, i);
 #else
-            ELTWISE_OP(dfb_in0.get_id(), dfb_in1.get_id(), i, i, i);
+            ELTWISE_OP(dfb::in0, dfb::in1, i, i, i);
 #endif
 
 #ifdef SFPU_OP_CHAIN_0
@@ -76,7 +76,7 @@ void kernel_main() {
 
         tile_regs_wait();
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            pack_tile(i, dfb_out.get_id());
+            pack_tile(i, dfb::out);
         }
         tile_regs_release();
 
