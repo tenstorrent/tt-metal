@@ -25,3 +25,6 @@ QWEN_TOKENIZER = "Qwen/Qwen2.5-1.5B"
 TRANSFORMERS_VERSION = "4.51.3"
 
 DEFAULT_DEVICE = os.environ.get("VIBEVOICE_DEVICE", "cpu")
+
+# Only VibeVoice checkpoint is supported for PCC tests; do not load bare Qwen weights.
+LM_WEIGHT_SOURCE = "vibevoice"
