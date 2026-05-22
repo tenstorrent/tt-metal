@@ -43,6 +43,7 @@ DEFAULT_PREFILL_LEN = int(os.getenv("DEEPSEEK_V3_MTP_PREFILL_LEN", "16"))
 DEFAULT_VERIFY_STEPS = int(os.getenv("DEEPSEEK_V3_MTP_VERIFY_STEPS", "16"))
 DEFAULT_MTP_TEST_MAX_SEQ_LEN = int(os.getenv("DEEPSEEK_V3_MTP_MAX_SEQ_LEN", "256"))
 SKIP_IN_CI = pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")
+MTP_REFERENCE_GENERATION_ISSUE = "https://github.com/tenstorrent/tt-metal/issues/45000"
 
 
 def _get_reference_dir() -> Path:
@@ -1140,6 +1141,9 @@ class _MtpTraceRunner:
 @pytest.mark.skipif(
     not GENERATE_REFERENCE,
     reason="Set DEEPSEEK_V3_MTP_GENERATE_REFERENCE=1 to generate MTP reference IO.",
+)
+@pytest.mark.skip(
+    reason=f"MTP reference generation fails on QUAD optimized MoE decode: {MTP_REFERENCE_GENERATION_ISSUE}"
 )
 def test_generate_mtp_reference_io(
     mesh_device,
