@@ -289,7 +289,8 @@ class WanTransformer3DModel(Module):
 
         self.patch_size = patch_size
         self.dim = dim
-
+        self.num_heads = num_heads
+        self.in_channels = in_channels
         self.out_channels = out_channels
 
         # NOTE: Fallback

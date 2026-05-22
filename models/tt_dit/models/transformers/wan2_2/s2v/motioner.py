@@ -19,26 +19,6 @@ from .....utils.tensor import bf16_tensor
 from .rope_s2v import rope_params
 
 
-def _patchify_for_unfolded_conv(x_BCTHW: torch.Tensor, patch_size: tuple[int, int, int]) -> torch.Tensor:
-    """Reshape ``[B, C, T, H, W]`` into ``[1, B, N, pT*pH*pW*C]``.
-
-    Mirrors :meth:`WanTransformer3DModel.preprocess_spatial_input_host`. Drops
-    edge tokens when ``T/H/W`` isn't a multiple of the corresponding patch
-    dim (the reference's ``Conv3d`` does the same — output size = ``T // pT``).
-    """
-    pT, pH, pW = patch_size
-    B, C, T, H, W = x_BCTHW.shape
-    # Trim edges to a multiple of patch_size — Conv3d with stride==kernel
-    # silently drops the remainder, so we do the same.
-    T_use, H_use, W_use = (T // pT) * pT, (H // pH) * pH, (W // pW) * pW
-    x_BCTHW = x_BCTHW[:, :, :T_use, :H_use, :W_use]
-    patch_T, patch_H, patch_W = T_use // pT, H_use // pH, W_use // pW
-    N = patch_T * patch_H * patch_W
-    x = x_BCTHW.reshape(B, C, patch_T, pT, patch_H, pH, patch_W, pW)
-    x = x.permute(0, 2, 4, 6, 3, 5, 7, 1).reshape(1, B, N, pT * pH * pW * C)
-    return x
-
-
 class FramePackMotionerWan(Module):
     """On-device :class:`FramePackMotioner` from the WAN 2.2 S2V reference.
 
@@ -112,8 +92,16 @@ class FramePackMotionerWan(Module):
 
     def _project(self, x_BCTHW: torch.Tensor, proj: WanPatchEmbed) -> ttnn.Tensor:
         """Host-patchify → upload → on-device matmul. Returns ``[1, B, N, dim]``."""
-        x_1BNI = _patchify_for_unfolded_conv(x_BCTHW, proj.patch_size)
-        x_dev = bf16_tensor(x_1BNI, device=self.mesh_device, layout=ttnn.TILE_LAYOUT)
+        pT, pH, pW = proj.patch_size
+        B, C, T, H, W = x_BCTHW.shape
+        # Conv3d with stride==kernel silently drops the remainder; do the same on host.
+        T_use, H_use, W_use = (T // pT) * pT, (H // pH) * pH, (W // pW) * pW
+        x = x_BCTHW[:, :, :T_use, :H_use, :W_use]
+        patch_T, patch_H, patch_W = T_use // pT, H_use // pH, W_use // pW
+        N = patch_T * patch_H * patch_W
+        x = x.reshape(B, C, patch_T, pT, patch_H, pH, patch_W, pW)
+        x = x.permute(0, 2, 4, 6, 3, 5, 7, 1).reshape(1, B, N, pT * pH * pW * C)
+        x_dev = bf16_tensor(x, device=self.mesh_device, layout=ttnn.TILE_LAYOUT)
         return proj(x_dev)
 
     def forward(

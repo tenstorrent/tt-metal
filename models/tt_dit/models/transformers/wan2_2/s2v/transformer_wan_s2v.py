@@ -121,7 +121,7 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         )
         self.audio_injector = AudioInjector_WAN(
             dim=self.dim,
-            num_heads=kwargs.get("num_heads", 40),
+            num_heads=self.num_heads,
             inject_layers=self.audio_inject_layers,
             enable_adain=enable_adain,
             adain_dim=self.dim,
@@ -147,54 +147,36 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         self.frame_packer = FramePackMotionerWan(
             in_channels=16,
             inner_dim=self.dim,
-            num_heads=kwargs.get("num_heads", 40),
+            num_heads=self.num_heads,
             zip_frame_buckets=(1, 2, 16),
             drop_mode="padd",
             mesh_device=self.mesh_device,
             parallel_config=self.parallel_config,
         )
 
-        # Per-clip state, populated by ``prepare_audio_emb`` / ``prepare_cond_emb``.
-        # ``merged_audio_emb_flat`` is ``[1, B, T*(N+1), dim]`` per-frame audio
-        # K/V; the block-diagonal frame mask constrains each Q to its frame.
+        # Per-clip state, set by prepare_audio_emb / prepare_cond_emb.
         self.merged_audio_emb_flat: ttnn.Tensor | None = None
         self.num_frames: int = 0
         self.original_seq_len: int = 0
-        # Spatial caches built by ``prepare_cond_emb``: pose embedding for the
-        # noisy patches, concatenated ref+motion const tokens (mask-augmented),
-        # and the broadcast noisy-mask token.
         self._cached_pose_emb_1BND: ttnn.Tensor | None = None
         self._cached_const_tokens_1BND: ttnn.Tensor | None = None
         self._cached_noisy_mask_emb_1BND: ttnn.Tensor | None = None
         self._cached_total_seq_len: int = 0
         self._cached_padded_N_noisy: int = 0
         self._cached_padded_const: int = 0
-        # Segmented timestep modulation (``zero_timestep=True``):
-        # ``mask_noisy`` is 1 over [0, original_seq_len) else 0 (incl pad);
-        # ``mask_constant`` is the complement over valid positions only;
-        # ``timestep_proj_zero`` is the zero-t modulation that combines with
-        # the real-t projection per-block to build per-token shift/scale/gate.
         self._cached_mask_noisy: ttnn.Tensor | None = None
         self._cached_mask_constant: ttnn.Tensor | None = None
-        self._cached_timestep_proj_zero: ttnn.Tensor | None = None
+        # Shape-keyed dict caches (build-once across clips).
         self._frame_attn_mask_cache: dict[tuple[int, int, int], ttnn.Tensor] = {}
         self._adain_modulation_cache: dict[tuple[int, int, int], tuple[ttnn.Tensor, ttnn.Tensor]] = {}
-        # Shape-only caches keyed by ``(padded_noisy, padded_const, ...)``.
-        # Built lazily in ``_build_adain_expansion_tensors`` / ``prepare_cond_emb``
-        # and reused across clips — same lifetime as the Parameter weight caches.
         self._adain_E_cache: dict[tuple[int, int, int], ttnn.Tensor] = {}
         self._adain_Z_cache: dict[tuple[int, int, int], tuple[ttnn.Tensor, ttnn.Tensor]] = {}
         self._noisy_mask_emb_cache: dict[int, ttnn.Tensor] = {}
-        # ``trainable_cond_mask`` is a static 3×dim Parameter — fetch from
-        # device once and reuse on every clip.
-        self._cached_mask_table_torch: torch.Tensor | None = None
-        # Cached pose embedding for the no-pose (zero ``cond_states``) path.
-        # Keyed by ``padded_N_noisy`` since the cond_encoder output is
-        # ``WanPatchEmbed(zeros) == bias`` — constant per shape signature.
         self._pose_emb_zero_cache: dict[int, ttnn.Tensor] = {}
         self._mask_noisy_cache: dict[tuple[int, int, int], ttnn.Tensor] = {}
         self._mask_constant_cache: dict[tuple[int, int, int, int], ttnn.Tensor] = {}
         self._timestep_proj_zero_cached: ttnn.Tensor | None = None
+        self._cached_mask_table_torch: torch.Tensor | None = None
         # AdaIN per-frame audio embedding (token 0), kept on device as the
         # input to ``injector_adain_layers[i].linear``.
         self.audio_emb_global_token0_dev: ttnn.Tensor | None = None
@@ -370,8 +352,7 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         pT, pH, pW = self.patch_size
         ppf, pph, ppw = F // pT, H // pH, W // pW
         N_noisy = ppf * pph * ppw
-        num_heads = self.frame_packer.num_heads  # base WanTransformer3DModel doesn't stash num_heads
-        head_dim = self.dim // num_heads
+        head_dim = self.dim // self.num_heads
 
         freqs_ref = self.frame_packer.freqs
 
@@ -409,7 +390,7 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         # rope_precompute only reads ``x.size(1)`` (total seq_len) from this.
         N_total = self._cached_total_seq_len
         N_const = N_total - N_noisy
-        placeholder = torch.zeros(1, N_total, num_heads, head_dim, dtype=torch.float32)
+        placeholder = torch.zeros(1, N_total, self.num_heads, head_dim, dtype=torch.float32)
 
         freqs_complex = rope_precompute(placeholder, grid_sizes, freqs_ref, start=None)
         # All heads carry the same rope; take head 0 and broadcast.
@@ -448,75 +429,6 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         trans_mat = bf16_tensor(get_rot_transformation_mat(), device=self.mesh_device)
         return cos_tt, sin_tt, trans_mat
 
-    def _build_adain_expansion_tensors(self, padded_noisy: int, padded_const: int) -> None:
-        """Precompute the AdaIN expansion matrix ``E`` and sentinel rows.
-
-        These tensors are **shape-only** — they depend on ``T_video``,
-        ``noisy_len``, ``padded_noisy``, ``padded_const`` but NOT on the audio
-        content. Cache them on-device like weights and reuse across every
-        clip; only the per-clip projection ``silu(audio) @ W`` changes.
-
-        ``E`` is a sparse {0, 1} matrix of shape ``[padded_N, T_video+1]``:
-
-          * ``E[i, j] = 1`` if ``i < noisy_len`` and ``j == i // hw_per_frame``
-            — selects the per-frame projection row for the noisy token ``i``.
-          * ``E[i, T_video] = 1`` if ``i >= noisy_len`` — selects the sentinel
-            (pad/const) row, which holds ``0`` for shift and ``1`` for scale.
-
-        After ``proj_ext = concat([proj, sentinel_row], dim=time)`` extends the
-        per-frame projection to ``[T_video+1, dim/tp]``, the matmul
-        ``E @ proj_ext`` produces the per-token modulation
-        ``[padded_N/sp, dim/tp]`` — naturally 2D-sharded because ``E`` is
-        sp-sharded on padded_N and ``proj_ext`` is tp-sharded on dim.
-        Zero H→D upload of the expanded modulation per clip.
-        """
-        shape_key = (padded_noisy, padded_const, self.num_frames)
-        if shape_key in self._adain_E_cache:
-            return
-
-        padded_N = padded_noisy + padded_const
-        noisy_len = self.original_seq_len
-        T_video = self.num_frames
-        hw_per_frame = noisy_len // T_video
-        sp_axis = self.parallel_config.sequence_parallel.mesh_axis
-        tp_axis = self.parallel_config.tensor_parallel.mesh_axis
-
-        # Build E on host: identity-style sparse selector.
-        E_torch = torch.zeros(padded_N, T_video + 1, dtype=torch.float32)
-        for i in range(noisy_len):
-            E_torch[i, i // hw_per_frame] = 1.0
-        for i in range(noisy_len, padded_N):
-            E_torch[i, T_video] = 1.0
-        # [1, 1, padded_N, T_video+1] for 4D matmul rank, sp-sharded on dim 2.
-        E_tt = bf16_tensor(
-            E_torch.unsqueeze(0).unsqueeze(0).contiguous(),
-            device=self.mesh_device,
-            mesh_axis=sp_axis,
-            shard_dim=2,
-            layout=ttnn.TILE_LAYOUT,
-        )
-
-        # Sentinel rows for the projection extension. Sharded on tp axis so
-        # ``ttnn.concat`` along the time dim aligns with the projection's
-        # TP-shard on the last dim.
-        zero_row_tt = bf16_tensor(
-            torch.zeros(1, 1, 1, self.dim, dtype=torch.float32),
-            device=self.mesh_device,
-            mesh_axis=tp_axis,
-            shard_dim=3,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        one_row_tt = bf16_tensor(
-            torch.ones(1, 1, 1, self.dim, dtype=torch.float32),
-            device=self.mesh_device,
-            mesh_axis=tp_axis,
-            shard_dim=3,
-            layout=ttnn.TILE_LAYOUT,
-        )
-
-        self._adain_E_cache[shape_key] = E_tt
-        self._adain_Z_cache[shape_key] = (zero_row_tt, one_row_tt)
-
     def _build_adain_modulation_for_layer(
         self,
         audio_attn_id: int,
@@ -524,29 +436,13 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Build per-token ``(shift, scale_plus_one)`` for one inject layer.
 
-        Fully on-device path, no H→D upload per clip:
-
-          1. ``proj = silu(audio_emb) @ W``      ColParallelLinear → TP-sharded
-          2. ``shift_pf, scale_pf = chunk(proj, 2, -1)``
-          3. ``scale_pf_p1 = scale_pf + 1``      Fold +1 into scale here
-          4. ``shift_ext = concat([shift_pf, zero_row], -2)``
-             ``scale_ext = concat([scale_pf_p1, one_row], -2)``  → [T_video+1, dim/tp]
-          5. ``shift_full = E @ shift_ext``      sp-sharded × TP-sharded
-             ``scale_full = E @ scale_ext``      → 2D-sharded output
-
-        ``E`` and the sentinel rows are precomputed by
-        :meth:`_build_adain_expansion_tensors` — cached like weights. Only the
-        small ``proj`` (~200 KB) is computed per layer per clip; the expensive
-        per-token expansion happens via the precomputed ``E`` matmul.
-
-        Pad/const tokens get identity modulation (scale=1, shift=0) — the
-        sentinel column of ``E`` selects the sentinel row of the extended
-        projection (0 for shift, 1 for scale).
+        ``E`` is a sparse {0, 1} ``[padded_N, T_video+1]`` selector:
+        ``E[i, i // hw_per_frame]`` for noisy tokens, ``E[i, T_video]`` for
+        const/pad tokens (sentinel rows: 0 for shift, 1 for scale → identity).
+        ``E`` and sentinel rows are shape-only; cache across clips.
         """
         if self.audio_emb_global_token0_dev is None:
             raise RuntimeError("AdaIN enabled but audio_emb_global_token0_dev is None.")
-        if self.original_seq_len == 0:
-            raise RuntimeError("prepare_cond_emb() must be called before AdaIN modulation fires.")
 
         sp_factor = self.parallel_config.sequence_parallel.factor
         noisy_len = self.original_seq_len
@@ -558,25 +454,39 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
             return self._adain_modulation_cache[cache_key]
 
         T_video = self.num_frames
-        if noisy_len % T_video != 0:
-            raise RuntimeError(f"noisy_len={noisy_len} not divisible by T_video={T_video}.")
-
-        # Ensure E + sentinel rows are precomputed for this shape signature.
-        self._build_adain_expansion_tensors(padded_noisy, padded_const)
         shape_key = (padded_noisy, padded_const, T_video)
+        if shape_key not in self._adain_E_cache:
+            padded_N = padded_noisy + padded_const
+            hw_per_frame = noisy_len // T_video
+            sp_axis = self.parallel_config.sequence_parallel.mesh_axis
+            tp_axis = self.parallel_config.tensor_parallel.mesh_axis
+
+            E_torch = torch.zeros(padded_N, T_video + 1, dtype=torch.float32)
+            for i in range(noisy_len):
+                E_torch[i, i // hw_per_frame] = 1.0
+            for i in range(noisy_len, padded_N):
+                E_torch[i, T_video] = 1.0
+            self._adain_E_cache[shape_key] = bf16_tensor(
+                E_torch.unsqueeze(0).unsqueeze(0).contiguous(),
+                device=self.mesh_device,
+                mesh_axis=sp_axis,
+                shard_dim=2,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            sentinel_kwargs = dict(device=self.mesh_device, mesh_axis=tp_axis, shard_dim=3, layout=ttnn.TILE_LAYOUT)
+            self._adain_Z_cache[shape_key] = (
+                bf16_tensor(torch.zeros(1, 1, 1, self.dim, dtype=torch.float32), **sentinel_kwargs),
+                bf16_tensor(torch.ones(1, 1, 1, self.dim, dtype=torch.float32), **sentinel_kwargs),
+            )
         E_tt = self._adain_E_cache[shape_key]
         zero_row_tt, one_row_tt = self._adain_Z_cache[shape_key]
 
-        # On-device modulation pipeline.
         adain_layer = self.audio_injector.injector_adain_layers[audio_attn_id]
         proj_dev = adain_layer.linear(ttnn.silu(self.audio_emb_global_token0_dev))
         shift_pf, scale_pf = ttnn.chunk(proj_dev, 2, dim=-1)
         scale_pf_p1 = ttnn.add(scale_pf, 1.0)
-        # Extend along time axis with sentinel rows so the E sentinel column
-        # picks up the right identity-modulation value.
-        shift_ext = ttnn.concat([shift_pf, zero_row_tt], dim=-2)  # [1, 1, T_video+1, dim/tp]
+        shift_ext = ttnn.concat([shift_pf, zero_row_tt], dim=-2)
         scale_ext = ttnn.concat([scale_pf_p1, one_row_tt], dim=-2)
-        # E @ ext: sp-sharded × TP-sharded = naturally 2D-sharded result.
         shift_tt = ttnn.matmul(E_tt, shift_ext)
         scale_tt = ttnn.matmul(E_tt, scale_ext)
 
@@ -879,7 +789,6 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
             zero_t_torch = torch.zeros(B, 1, 1, 1, dtype=torch.float32)
             zero_t_tt = float32_tensor(zero_t_torch, device=self.mesh_device)
             _, self._timestep_proj_zero_cached = self.prepare_timestep_conditioning(zero_t_tt)
-        self._cached_timestep_proj_zero = self._timestep_proj_zero_cached
 
         # Pre-build the per-layer AdaIN modulation cache so the first denoise
         # step doesn't pay it inline.
@@ -1028,7 +937,7 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         else:
             N_block = N
 
-        use_segmented = has_cond and self._cached_mask_noisy is not None and self._cached_timestep_proj_zero is not None
+        use_segmented = has_cond and self._cached_mask_noisy is not None and self._timestep_proj_zero_cached is not None
 
         for idx, block in enumerate(self.blocks):
             if use_segmented:
@@ -1041,7 +950,7 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
                     rope_sin=rope_sin_1HND,
                     trans_mat=trans_mat,
                     timestep_proj_real=timestep_proj_1BTD,
-                    timestep_proj_zero=self._cached_timestep_proj_zero,
+                    timestep_proj_zero=self._timestep_proj_zero_cached,
                     mask_noisy=self._cached_mask_noisy,
                     mask_constant=self._cached_mask_constant,
                 )
