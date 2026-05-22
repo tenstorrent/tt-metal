@@ -361,15 +361,12 @@ extern "C" uint8_t* __emule_noc_resolve(uint32_t x, uint32_t y, uint64_t addr) {
 extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
     uint32_t noc_x = (noc_addr >> NOC_LOCAL_BITS) & NOC_NODE_MASK;
     uint32_t noc_y = (noc_addr >> (NOC_LOCAL_BITS + NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
-    uint64_t l1_offset = noc_addr & NOC_LOCAL_MASK; // naming maybe changed to `local_offset`? (in the case of L1 -> DRAM)
+    uint64_t l1_offset = noc_addr & NOC_LOCAL_MASK;
 
     if (__emule_core_map) {
         uint64_t key = (uint64_t(noc_x) << 32) | noc_y;
         auto it = __emule_core_map->find(key);
         if (it != __emule_core_map->end()) {
-            // Device-side L1/DRAM alignment is enforced inside tt-emule's
-            // Core::l1_ptr (role-aware) rather than here, so this resolver
-            // only handles the address → host pointer translation.
             return it->second->l1_ptr(static_cast<uint32_t>(l1_offset));
         }
         if (emule_strict_noc_enabled()) {
@@ -380,6 +377,22 @@ extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
         }
     }
     return nullptr;
+}
+
+// Returns true if the NOC address targets a DRAM core (vs. a worker L1 core).
+// Used by the NOC alignment sanitizer in dataflow_api.h.
+extern "C" bool __emule_noc_addr_is_dram(uint64_t noc_addr) {
+    if (!__emule_core_map) {
+        return false;
+    }
+    uint32_t noc_x = (noc_addr >> NOC_LOCAL_BITS) & NOC_NODE_MASK;
+    uint32_t noc_y = (noc_addr >> (NOC_LOCAL_BITS + NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
+    uint64_t key = (uint64_t(noc_x) << 32) | noc_y;
+    auto it = __emule_core_map->find(key);
+    if (it != __emule_core_map->end()) {
+        return it->second->role() == tt_emule::CoreRole::DRAM;
+    }
+    return false;
 }
 
 // Resolve multicast: iterate over rectangle of cores and memcpy to each.
