@@ -4,30 +4,20 @@
 
 #pragma once
 
+#include <tt-metalium/program_descriptors.hpp>
+
 #include "masked_bincount_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::experimental::prim {
 
-struct MaskedBincountSharedVariables {
-    tt::tt_metal::KernelHandle kernel_id_brisc = 0;
-    tt::tt_metal::KernelHandle kernel_id_ncrisc = 0;
-    std::vector<CoreCoord> all_cores_vec;
-    CoreCoord collector_core;
-    uint32_t num_cores;
-};
-
 struct MaskedBincountProgramFactory {
-    using shared_variables_t = MaskedBincountSharedVariables;
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
-        const MaskedBincountParams& operation_attributes,
-        const MaskedBincountInputs& tensor_args,
-        Tensor& tensor_return_value);
-
-    static void override_runtime_arguments(
-        cached_program_t& cached_program,
+    // Contract (1): per-coord ProgramDescriptor.  All CBs are local scratch
+    // (per-shard input pages, output histogram, gather temp, mask).  Three
+    // semaphores (init, done, gather) coordinate the tree-reduction.  Per-core
+    // runtime args carry buffer addresses plus the per-level tree topology
+    // (parent NOC coords and per-level child NOC coords).
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
         const MaskedBincountParams& operation_attributes,
         const MaskedBincountInputs& tensor_args,
         Tensor& tensor_return_value);
