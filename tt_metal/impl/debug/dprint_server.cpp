@@ -517,6 +517,16 @@ void DevicePrintImpl::print_buffer_data(
                         formatted_message = risc_data.message_buffer;
                     }
 
+                    // DEVICE_PRINT will output '\r' when it wants to open a new line without
+                    // flushing the host buffer for that core. This allows multiple calls to DEVICE_PRINT
+                    // to span multiple lines without interleaving with prints from other cores
+                    auto last_newline_pos = formatted_message.rfind('\n');
+                    if (last_newline_pos != std::string::npos) {
+                        // replace the '\r' before the '\n' because they will be flushed in this iteration
+                        std::replace(
+                            formatted_message.begin(), formatted_message.begin() + last_newline_pos, '\r', '\n');
+                    }
+
                     // Check if we hit new line
                     auto newline_pos = formatted_message.find('\n');
 
