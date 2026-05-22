@@ -343,8 +343,10 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
 
     auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
+        // DIAGNOSTIC: stub kernel that drains reader CBs and pushes zero
+        // outputs. Verifies CB/runtime-arg wiring without matmul logic.
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/"
-        "fused_swiglu.cpp",
+        "fused_swiglu_diag.cpp",
         core_range_set,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::LoFi,

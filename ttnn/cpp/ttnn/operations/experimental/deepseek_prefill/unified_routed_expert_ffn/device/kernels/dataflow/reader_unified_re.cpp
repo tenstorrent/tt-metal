@@ -185,12 +185,16 @@ void kernel_main() {
         cb_push_back(cb_in1_up, g_in1_block_num_tiles);
     }
 
-    // -------- SYNC — wait for every core's writer to drain cb_activated --
-    // The writer increments the global semaphore exactly once after copying
-    // its activated slice to scratch. Wait until value reaches total_cores
-    // so the scratch DRAM tensor is fully coherent across all M-rows × hidden.
+    // -------- SYNC — wait for THIS core's writer to drain cb_activated ----
+    // DIAGNOSTIC: temporarily a self-only barrier (value == 1) so we can
+    // confirm the rest of the pipeline (CB protocol, runtime-arg layout)
+    // works without the cross-core sem broadcast getting in the way. The
+    // result will be wrong (each core only sees its own activated slice for
+    // the down matmul) but the kernel should run to completion if the
+    // wiring is otherwise correct.
+    (void)total_cores;
     volatile tt_l1_ptr uint32_t* sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
-    noc_semaphore_wait(sem_ptr, total_cores);
+    noc_semaphore_wait(sem_ptr, 1);
 
     // -------- PHASE 4 — down matmul feed (activated scratch + down_proj) --
     for (uint32_t kb = 0; kb < num_blocks_d; ++kb) {
