@@ -42,6 +42,7 @@ target_link_libraries(
         test_common_libs
         yaml-cpp::yaml-cpp
         spdlog::spdlog
+        TT::ScaleoutTools
 )
 
 target_include_directories(
