@@ -12,19 +12,6 @@ from models.tt_transformers.tt.mlp import MLP
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
 
-def phi_activation_to_fused_linear_activation(activation_name: str):
-    activation = activation_name.lower()
-    if activation in ("gelu_new", "gelu_pytorch_tanh"):
-        return ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 1.0)
-    if activation == "gelu":
-        return ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0)
-    if activation == "relu":
-        return ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
-    if activation in ("silu", "swish"):
-        return ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)
-    raise NotImplementedError(f"Unsupported phi MLP activation '{activation_name}'")
-
-
 class Phi1MLP(MLP):
     def __init__(
         self,
@@ -132,6 +119,18 @@ class Phi1MLP(MLP):
 
             self.prefetcher.register_callback(register_weights)
 
+    def _apply_phi_activation(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        activation = self.mlp_activation_name
+        if activation in ("gelu_new", "gelu_pytorch_tanh"):
+            return ttnn.gelu(x, fast_and_approximate_mode=True)
+        if activation == "gelu":
+            return ttnn.gelu(x, fast_and_approximate_mode=False)
+        if activation == "relu":
+            return ttnn.relu(x)
+        if activation in ("silu", "swish"):
+            return ttnn.silu(x)
+        raise NotImplementedError(f"Unsupported phi MLP activation '{activation}'")
+
     def forward(self, x: ttnn.Tensor, mode: Mode) -> ttnn.Tensor:
         seq_len = x.shape[-2]
         TG = self.args.is_galaxy
@@ -143,12 +142,7 @@ class Phi1MLP(MLP):
         if mode == Mode.PREFILL and seq_len >= self.args.prefill_len_cutoff:
             x = ttnn.reshape(x, [1, seq_len // self.args.prefill_len_cutoff, self.args.prefill_len_cutoff, -1])
 
-        pc_1 = self.args.get_mlp_ff1_3_prg_config(
-            mode,
-            seq_len,
-            self.prefetcher,
-            phi_activation_to_fused_linear_activation(self.mlp_activation_name),
-        )
+        pc_1 = self.args.get_mlp_ff1_3_prg_config(mode, seq_len, self.prefetcher)
         pc_2 = self.args.get_mlp_ff2_prg_config(mode, seq_len, self.prefetcher)
 
         li_ff1_compute_kernel_cfg = self.decoders_optimizations.get_math_fidelity(
@@ -161,7 +155,6 @@ class Phi1MLP(MLP):
         w1_out = ttnn.linear(
             x,
             self.w1,
-            bias=self.w1_bias,
             dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
             compute_kernel_config=li_ff1_compute_kernel_cfg,
             program_config=pc_1,
@@ -172,6 +165,16 @@ class Phi1MLP(MLP):
             else None,
         )
         ttnn.deallocate(x)
+
+        if self.w1_bias is not None:
+            w1_out = ttnn.add(
+                w1_out,
+                self.w1_bias,
+                memory_config=w1_out.memory_config(),
+                dtype=activation_dtype or ttnn.bfloat16,
+            )
+
+        w1_out = self._apply_phi_activation(w1_out)
 
         if seq_len > 128 and mode != Mode.DECODE:
             w2_out = ttnn.experimental.minimal_matmul(
