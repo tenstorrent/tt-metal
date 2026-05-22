@@ -16,6 +16,9 @@ MODEL_PATH = Path(
     os.getenv("DEEPSEEK_V3_HF_MODEL", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked")
 )
 CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"))
+PERF_MARGIN = 0.08
+FINAL_DECODE_TPS_PER_USER = "decode_t/s/u"
+QUAD_FULL_DEMO_32UPR_DECODE_TPS_PER_USER = 7.75630117021217
 
 
 @lru_cache(maxsize=1)
@@ -59,6 +62,23 @@ def _is_primary_artifact_writer() -> bool:
     return True
 
 
+def _assert_perf_targets(results: dict, perf_targets: dict[str, float]) -> None:
+    statistics = results.get("statistics", {})
+    assert statistics, "Expected demo statistics for performance assertion"
+
+    for metric_name, expected in perf_targets.items():
+        measured = statistics.get(metric_name)
+        assert measured is not None, f"Expected demo statistic {metric_name!r} for performance assertion"
+
+        measured = float(measured)
+        lower = expected * (1 - PERF_MARGIN)
+        upper = expected * (1 + PERF_MARGIN)
+        assert lower <= measured <= upper, (
+            f"{metric_name}={measured:.6f} is outside expected range "
+            f"[{lower:.6f}, {upper:.6f}] (expected {expected:.6f} +/- {PERF_MARGIN*100:.1f}%)"
+        )
+
+
 def _timestamped_artifact_stem(artifact_name: str) -> str:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return f"{artifact_name}_{timestamp}"
@@ -79,6 +99,7 @@ def _demo_case(
     expect_full_length: bool,
     case_id: str,
     marks=None,
+    perf_targets: dict[str, float] | None = None,
     max_seq_len: int | None = None,
     target_prompt_tokens: int | None = None,
 ):
@@ -95,6 +116,7 @@ def _demo_case(
             "profile_decode": profile_decode,
             "stop_at_eos": stop_at_eos,
             "expect_full_length": expect_full_length,
+            "perf_targets": perf_targets,
             "max_seq_len": max_seq_len,
             "target_prompt_tokens": target_prompt_tokens,
         },
@@ -163,6 +185,7 @@ def _demo_case(
             profile_decode=False,
             stop_at_eos=None,
             expect_full_length=False,
+            perf_targets={FINAL_DECODE_TPS_PER_USER: 0.986038678353197},
             case_id="dual_full_demo_32upr",
             marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(2400)],
         ),
@@ -223,6 +246,7 @@ def _demo_case(
             profile_decode=False,
             stop_at_eos=None,
             expect_full_length=False,
+            perf_targets={FINAL_DECODE_TPS_PER_USER: QUAD_FULL_DEMO_32UPR_DECODE_TPS_PER_USER},
             case_id="quad_full_demo_32upr",
             marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(3600)],
         ),
@@ -432,3 +456,5 @@ def test_demo(case: dict, force_recalculate_weight_config: bool):
         print(f"\nDemo results saved to: {output_file}")
 
     _assert_no_garbage_tokens(results)
+    if case["perf_targets"] is not None:
+        _assert_perf_targets(results, case["perf_targets"])
