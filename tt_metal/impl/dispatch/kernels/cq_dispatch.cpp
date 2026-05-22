@@ -246,15 +246,15 @@ static uint8_t go_signal_state_rd_ptr = 0;
 static uint32_t go_signal_noc_data[max_num_go_signal_noc_data_entries];
 
 FORCE_INLINE volatile uint32_t* get_cq_completion_read_ptr() {
-    return reinterpret_cast<volatile uint32_t*>(dev_completion_q_rd_ptr);
+    return reinterpret_cast<volatile uint32_t*>(l1_uncached_addr(dev_completion_q_rd_ptr));
 }
 
 FORCE_INLINE volatile uint32_t* get_cq_completion_write_ptr() {
-    return reinterpret_cast<volatile uint32_t*>(dev_completion_q_wr_ptr);
+    return reinterpret_cast<volatile uint32_t*>(l1_uncached_addr(dev_completion_q_wr_ptr));
 }
 
 FORCE_INLINE volatile uint32_t* get_dispatch_progress_ptr() {
-    return reinterpret_cast<volatile uint32_t*>(dev_dispatch_progress_ptr);
+    return reinterpret_cast<volatile uint32_t*>(l1_uncached_addr(dev_dispatch_progress_ptr));
 }
 
 FORCE_INLINE
