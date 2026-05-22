@@ -312,19 +312,29 @@ class WanAttention(Module):
         return_fresh_kv: bool = False,
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, tuple[ttnn.Tensor, ttnn.Tensor]]:
         """
-        spatial_1BND: fractured N on SP, fractured D on TP.
-        prompt_1BLP: replicated on SP/TP (cross-attn input).
-        cross_attn_mask: [B|1, nqh|1, Sq, Sk], TILE, bf16/bfp8/bfp4, DRAM.
-        rope_cos / rope_sin / trans_mat: rope inputs (self-attn).
-        addcmul_residual / addcmul_gate: fused to_out + residual addcmul (self-attn).
-        cached_kv_BHNE: post-projection + post-norm_k + post-head-split K/V to
-            reuse across steps (cross-attn only). Skips to_kv / norm_k / V
-            head-split when supplied.
-        return_fresh_kv: when set on the freshly-computed cross-attn path,
+        spatial_1BND: fractured N on SP, fracturd D on TP
+        prompt_1BLP: replicated on SP, replicated D on TP (optional)
+        cross_attn_mask: (optional, cross-attn only) mask for SDPA, shape [B|1, nqh|1, Sq, Sk].
+            Must be TILE layout, bf16/bfp8/bfp4 dtype, on device in DRAM.
+        rope_cos: fractured on SP, TP
+        rope_sin: fractured on SP, TP
+        trans_mat: replicated
+        addcmul_residual: (optional) residual tensor for fused matmul+addcmul (self-attn only)
+        addcmul_gate: (optional) gate tensor for fused matmul+addcmul (self-attn only)
+        cached_kv_BHNE: (optional, cross-attn only) post-projection + post-norm_k + post-head-split
+            K/V reused across steps. Skips to_kv / norm_k / V head-split when supplied.
+        return_fresh_kv: (cross-attn only) when set on the freshly-computed cross-attn path,
             return ``(out, (k_BHNE, v_BHNE))`` so the caller can cache the K/V.
 
-        Output: spatial_1BND fractured N on SP, D on TP — or
-        ``(spatial_1BND, (k_BHNE, v_BHNE))`` when ``return_fresh_kv`` fires.
+        If prompt_1BLP is not provided, run self-attention.
+        Otherwise, run cross-attention on prompt.
+
+        When addcmul_residual and addcmul_gate are both provided (self-attention only),
+        the to_out projection and residual addcmul are fused into a single op:
+            output = addcmul_residual + to_out(attn_output) * addcmul_gate
+
+        Outputs:
+        spatial_1BND: fractured N on SP, fractured D on TP
         """
 
         if rope_cos is not None:
@@ -332,8 +342,6 @@ class WanAttention(Module):
             assert rope_sin is not None
             assert trans_mat is not None
             assert prompt_1BLP is None
-            assert cached_kv_BHNE is None, "self-attention does not support cached_kv_BHNE"
-            assert not return_fresh_kv, "self-attention does not produce a K/V to cache"
 
         use_nonfused_agmm = (self.ccl_manager.topology == ttnn.Topology.Linear) and (
             self.parallel_config.tensor_parallel.factor > 1
@@ -342,8 +350,6 @@ class WanAttention(Module):
             spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
                 spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
-
-        emit_fresh_kv = return_fresh_kv and (not self.is_self) and (cached_kv_BHNE is None)
 
         if self.is_self:
             q_1BNF, k_1BNF, v_1BNF = self.to_qkv(
@@ -399,9 +405,7 @@ class WanAttention(Module):
             )
             v_BHNE = create_heads(v_1BNF)
 
-        # Dispatch on is_self (not ``prompt_1BLP is None``) so cached-K/V
-        # cross-attn callers — where prompt_1BLP is also None — don't get
-        # misrouted into the ring self-attn SDPA path.
+        # Dispatch on is_self: cached-KV cross-attn has prompt_1BLP=None.
         if self.is_self:
             if self.parallel_config.sequence_parallel.factor > 1:
                 # Q and K already cast by norm kernel; cast V and dummy joint inputs to match
@@ -519,6 +523,6 @@ class WanAttention(Module):
                 parallel_config=None if use_nonfused_agmm else self.parallel_config,
             )
 
-        if emit_fresh_kv:
+        if return_fresh_kv and not self.is_self and cached_kv_BHNE is None:
             return spatial_1BND, (k_BHNE, v_BHNE)
         return spatial_1BND

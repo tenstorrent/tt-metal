@@ -15,13 +15,8 @@ from ...layers.module import Module, ModuleList, Parameter
 from ...layers.normalization import LayerNorm
 from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
-from ...utils.conv3d import ALIGNMENT, get_conv3d_config, register_conv3d_configs
+from ...utils.conv3d import ALIGNMENT, get_conv3d_config
 from .config_wav2vec2 import Wav2Vec2Config
-
-# C_in_block=64 is forced by the grouped-conv constraint (must equal
-# in_per_group=1024/16). C_out_block=32 keeps the per-core CB under the
-# 1.5 MB L1 cap given kernel=128's large per-shard weight residency.
-register_conv3d_configs({(1024, 1024, (128, 1, 1)): (64, 32, 1, 1, 1)})
 
 # Register the wav2vec2-large-xlsr-53 pos_conv blocking. in_per_group = 1024/16
 # = 64 which already satisfies C_in_block % 32 == 0 — no padding hack needed.

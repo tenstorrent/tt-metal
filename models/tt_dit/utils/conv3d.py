@@ -455,6 +455,12 @@ register_conv3d_configs(
     }
 )
 
+# wav2vec2-large-xlsr-53 Wav2Vec2PositionalConvEmbedding: grouped Conv1d
+# (groups=16, in=out=1024, kernel=128). C_in_block=in_per_group=64 is forced
+# by the grouped-conv constraint; C_out_block=32 keeps per-core CB under the
+# 1.5 MB L1 cap given kernel=128's large per-shard weight residency.
+register_conv3d_configs({(1024, 1024, (128, 1, 1)): (64, 32, 1, 1, 1)})
+
 
 def get_conv3d_config(
     in_channels, out_channels, kernel_size, weights_dtype, grid_size, *, h_factor=1, w_factor=1, T=0, H=0, W=0
