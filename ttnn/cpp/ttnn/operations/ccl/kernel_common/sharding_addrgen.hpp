@@ -9,6 +9,12 @@
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 #endif
 
@@ -263,6 +269,10 @@ struct ShardedAddrGen {
         return return_val;
     }
 
+    // Legacy shim (#45003 item 4): uses the legacy noc_async_read primitive
+    // because get_sharded_addr produces a precomposed 64-bit noc address.
+    // Consumers migrating to Device 2.0 should use get_noc_addr() / its
+    // components together with Noc::async_read directly.
     FORCE_INLINE
     void noc_async_read_page(
         const uint32_t id, const uint32_t dest_addr, const uint32_t offset = 0, uint8_t noc = noc_index) const {
