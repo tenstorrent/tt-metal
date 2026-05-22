@@ -259,19 +259,19 @@ class PaliGemmaBackboneTTNN:
             # Get Q, K, V weights, transpose for TTNN linear, and convert to TTNN
             wq_ttnn = ttnn.from_torch(
                 weights[q_key].T.contiguous(),
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
             )
             wk_ttnn = ttnn.from_torch(
                 weights[k_key].T.contiguous(),
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
             )
             wv_ttnn = ttnn.from_torch(
                 weights[v_key].T.contiguous(),
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
             )
