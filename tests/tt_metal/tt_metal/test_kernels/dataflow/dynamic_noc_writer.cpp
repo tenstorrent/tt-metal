@@ -48,7 +48,7 @@ void kernel_main() {
     uint64_t addr_self_noc = get_noc_addr(noc_x, noc_y, l1_read_addr, noc_index);
     uint64_t addr_other_noc = get_noc_addr(noc_x, noc_y, l1_read_addr, 1 - noc_index);
 
-    DPRINT << "Start" <<ENDL();
+    DPRINT << "Start" << ENDL();
     DEVICE_PRINT("Start\n");
 
     // Test stateful read API
@@ -80,8 +80,8 @@ void kernel_main() {
     constexpr auto s_args = TensorAccessorArgs<2>();
     const auto s0 = TensorAccessor(s_args, l1_read_addr);
 
-    for (uint32_t i = 0; i < iteration; i ++) {
-        uint32_t noc = (i % 2) == 0 ? noc_index : 1-noc_index;
+    for (uint32_t i = 0; i < iteration; i++) {
+        uint32_t noc = (i % 2) == 0 ? noc_index : 1 - noc_index;
 
         // uint32_t noc = noc_index;
         uint64_t noc_addr = get_noc_addr(noc_x, noc_y, l1_read_addr, noc);
@@ -90,7 +90,7 @@ void kernel_main() {
         noc_async_read_one_packet(noc_addr, l1_read_addr, page_size, noc);
         noc_async_read(noc_addr, l1_read_addr, page_size, noc);
         // interleaved read
-        noc_async_read_tile(i % 1024, s0, l1_read_addr, 0, noc);
+        noc_async_read_page(i % 1024, s0, l1_read_addr, 0, noc);
 
         // Test semaphore
         noc_semaphore_inc(noc_addr, 1, noc);
@@ -187,7 +187,7 @@ void kernel_main() {
         noc_async_write_barrier_with_trid(i, 1 - noc_index);
     }
 
-    DPRINT << "END" <<ENDL();
+    DPRINT << "END" << ENDL();
     DPRINT << "noc_mode " << (uint)noc_mode << ENDL();
     DEVICE_PRINT("END\nnoc_mode {}\n", (uint)noc_mode);
 

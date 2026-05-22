@@ -87,7 +87,7 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_rows; ++i) {
         if (read_indices) {
             uint64_t noc_input_src_addr = get_noc_addr(curr_tile, input) + (offset * sizeof(uint32_t));
-            noc_async_read_tile(curr_tile, s, input_l1_addr);
+            noc_async_read_page(curr_tile, s, input_l1_addr);
             noc_async_read_barrier();
             read_indices = false;
         }

@@ -70,7 +70,7 @@ void kernel_main() {
         noc_async_read_one_packet(noc_addr, l1_read_addr, page_size, noc);
         noc_async_read(noc_addr, l1_read_addr, page_size, noc);
         // interleaved read
-        noc_async_read_tile(i % 1024, s0, l1_read_addr, 0, noc);
+        noc_async_read_page(i % 1024, s0, l1_read_addr, 0, noc);
 
         // Test semaphore
         noc_semaphore_inc(noc_addr, 1, noc);

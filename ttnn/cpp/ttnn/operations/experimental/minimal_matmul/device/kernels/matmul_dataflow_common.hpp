@@ -107,11 +107,11 @@ void read_in0_block_sync(
                 if (local_k_start <= j && j <= local_k_end) {
                     // read from self_tensor_accessor
                     uint32_t tile_id = i * input_tensor_Wt + (j - local_k_start);
-                    noc_async_read_tile(tile_id, in3_accessor, write_ptr);
+                    noc_async_read_page(tile_id, in3_accessor, write_ptr);
                 } else {
 #endif
                     uint32_t tile_id = i * shape.logical_d1 + j;
-                    noc_async_read_tile(tile_id, tensor_accessor, write_ptr);
+                    noc_async_read_page(tile_id, tensor_accessor, write_ptr);
 #ifdef READ_FROM_LOCAL_INPUT
                 }
 #endif
@@ -151,7 +151,7 @@ void read_in1_block_sync(
             }
             if (i < shape.logical_d0) {
                 uint32_t tile_id = i * shape.logical_d1 + j;
-                noc_async_read_tile(tile_id, tensor_accessor, write_ptr);
+                noc_async_read_page(tile_id, tensor_accessor, write_ptr);
             } else {
                 fill_zeros_async(write_ptr, tile_size_bytes);
             }
@@ -236,7 +236,7 @@ void read_ternary_blocks_sync(
             if (n_tile_id >= shape.logical_d1) {
                 break;
             }
-            noc_async_read_tile(n_tile_id, ternary_b_accessor, ternary_b_write_ptr);
+            noc_async_read_page(n_tile_id, ternary_b_accessor, ternary_b_write_ptr);
             ternary_b_write_ptr += b_tile_size_bytes;
         }
         noc_async_read_barrier();
@@ -254,7 +254,7 @@ void read_ternary_blocks_sync(
                 }
                 if (b_i < shape.logical_d0) {
                     uint32_t tile_id = b_i * shape.logical_d1 + j;
-                    noc_async_read_tile(tile_id, ternary_b_accessor, ternary_b_write_ptr);
+                    noc_async_read_page(tile_id, ternary_b_accessor, ternary_b_write_ptr);
                 }
                 ternary_b_write_ptr += b_tile_size_bytes;
             }
@@ -283,7 +283,7 @@ void read_ternary_blocks_sync(
             }
             if (i < shape.logical_d0) {
                 uint32_t tile_id = i * shape.logical_d1 + j;
-                noc_async_read_tile(tile_id, ternary_a_accessor, ternary_a_write_ptr);
+                noc_async_read_page(tile_id, ternary_a_accessor, ternary_a_write_ptr);
             }
             ternary_a_write_ptr += a_tile_size_bytes;
         }

@@ -148,7 +148,7 @@ void kernel_main() {
         if (!skip_update) {
             uint32_t cache_l1_write_addr = get_write_ptr(cache_cb_id);
             for (uint32_t curr_cache_id = cache_id; curr_cache_id < cache_id + Wt; ++curr_cache_id) {
-                noc_async_read_tile(curr_cache_id, s0, cache_l1_write_addr);
+                noc_async_read_page(curr_cache_id, s0, cache_l1_write_addr);
                 cache_l1_write_addr += cache_tile_bytes;
             }
 

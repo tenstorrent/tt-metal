@@ -78,7 +78,7 @@ void kernel_main() {
             // Read input value data
             cb_reserve_back(input_tensor_cb_index, one_tile);
             const uint32_t l1_write_addr_input_tensor_cb = get_write_ptr(input_tensor_cb_index);
-            noc_async_read_tile(h * Wt + w, input_tensor_addr_ger, l1_write_addr_input_tensor_cb);
+            noc_async_read_page(h * Wt + w, input_tensor_addr_ger, l1_write_addr_input_tensor_cb);
             noc_async_read_barrier();
             cb_push_back(input_tensor_cb_index, one_tile);
 

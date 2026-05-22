@@ -53,24 +53,24 @@ void kernel_main() {
 
     for (uint32_t nb = 0; nb < batch; nb++) {
         uint32_t itileA = itileA_batch;
-        for (uint32_t mt = 0; mt < Mt; mt++) { // row of in0
+        for (uint32_t mt = 0; mt < Mt; mt++) {  // row of in0
             uint32_t itileB = itileB_batch;
-            for (uint32_t nt = 0; nt < Nt; nt++) { // col of in1
-                for (uint32_t kt = 0; kt < Kt; kt++) { // col of in0, row of in1
+            for (uint32_t nt = 0; nt < Nt; nt++) {      // col of in1
+                for (uint32_t kt = 0; kt < Kt; kt++) {  // col of in0, row of in1
                     // Read A's tile at (mt, kt)
                     {
 #ifdef ARCH_QUASAR
                         if (mt % num_readers == reader_id) {
                             dfb0.reserve_back(onetile);
                             uint32_t l1_write_addr_in0 = dfb0.get_write_ptr();
-                            noc_async_read_tile(itileA, s0, l1_write_addr_in0);
+                            noc_async_read_page(itileA, s0, l1_write_addr_in0);
                             noc.async_read_barrier();
                             dfb0.push_back(onetile);
                         }
 #else
                         cb_reserve_back(cb_id_in0, onetile);
                         uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-                        noc_async_read_tile(itileA, s0, l1_write_addr_in0);
+                        noc_async_read_page(itileA, s0, l1_write_addr_in0);
                         noc_async_read_barrier();
                         cb_push_back(cb_id_in0, onetile);
 #endif
@@ -81,14 +81,14 @@ void kernel_main() {
                         if (mt % num_readers == reader_id && kt % num_readers == reader_id) {
                             dfb1.reserve_back(onetile);
                             uint32_t l1_write_addr_in1 = dfb1.get_write_ptr();
-                            noc_async_read_tile(itileB, s1, l1_write_addr_in1);
+                            noc_async_read_page(itileB, s1, l1_write_addr_in1);
                             noc.async_read_barrier();
                             dfb1.push_back(onetile);
                         }
 #else
                         cb_reserve_back(cb_id_in1, onetile);
                         uint32_t l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-                        noc_async_read_tile(itileB, s1, l1_write_addr_in1);
+                        noc_async_read_page(itileB, s1, l1_write_addr_in1);
                         noc_async_read_barrier();
                         cb_push_back(cb_id_in1, onetile);
 #endif

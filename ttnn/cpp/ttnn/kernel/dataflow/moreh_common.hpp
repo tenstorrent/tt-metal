@@ -68,7 +68,7 @@ template <typename AddrGen>
 FORCE_INLINE void noc_async_read_tile_helper(tt::CBIndex cb, uint32_t num_tiles, uint32_t tile_idx, AddrGen addr_gen) {
     cb_reserve_back(cb, num_tiles);
     uint32_t addr = get_write_ptr(cb);
-    noc_async_read_tile(tile_idx, addr_gen, addr);
+    noc_async_read_page(tile_idx, addr_gen, addr);
     noc_async_read_barrier();
     cb_push_back(cb, num_tiles);
 }

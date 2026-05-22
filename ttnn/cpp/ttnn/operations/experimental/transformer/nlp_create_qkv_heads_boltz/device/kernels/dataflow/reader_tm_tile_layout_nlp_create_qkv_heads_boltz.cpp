@@ -39,7 +39,7 @@ void kernel_main() {
         for (uint32_t i = 0; i < q_num_tiles; i++) {
             cb_reserve_back(cb_id_qv, onetile);
             uint32_t l1_write_addr = get_write_ptr(cb_id_qv);
-            noc_async_read_tile(in0_tensor_tile_id, s0, l1_write_addr);
+            noc_async_read_page(in0_tensor_tile_id, s0, l1_write_addr);
             noc_async_read_barrier();
             cb_push_back(cb_id_qv, onetile);
             in0_tensor_tile_id++;
@@ -50,10 +50,10 @@ void kernel_main() {
             cb_reserve_back(cb_id_k, onetile);
             uint32_t l1_write_addr = get_write_ptr(cb_id_k);
 #ifdef READ_FROM_INPUT_TENSOR_KV
-            noc_async_read_tile(in1_tensor_tile_id, s1, l1_write_addr);
+            noc_async_read_page(in1_tensor_tile_id, s1, l1_write_addr);
             in1_tensor_tile_id++;
 #else
-            noc_async_read_tile(in0_tensor_tile_id, s0, l1_write_addr);
+            noc_async_read_page(in0_tensor_tile_id, s0, l1_write_addr);
             in0_tensor_tile_id++;
 #endif
             noc_async_read_barrier();
@@ -65,10 +65,10 @@ void kernel_main() {
             cb_reserve_back(cb_id_qv, onetile);
             uint32_t l1_write_addr = get_write_ptr(cb_id_qv);
 #ifdef READ_FROM_INPUT_TENSOR_KV
-            noc_async_read_tile(in1_tensor_tile_id, s1, l1_write_addr);
+            noc_async_read_page(in1_tensor_tile_id, s1, l1_write_addr);
             in1_tensor_tile_id++;
 #else
-            noc_async_read_tile(in0_tensor_tile_id, s0, l1_write_addr);
+            noc_async_read_page(in0_tensor_tile_id, s0, l1_write_addr);
             in0_tensor_tile_id++;
 #endif
             noc_async_read_barrier();

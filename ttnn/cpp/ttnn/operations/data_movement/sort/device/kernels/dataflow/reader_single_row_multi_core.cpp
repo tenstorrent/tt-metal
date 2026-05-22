@@ -82,26 +82,26 @@ void kernel_main() {
                             // Read input value data
                             cb_reserve_back(input_tensor_cb_index, one_tile);
                             const uint32_t l1_input_left_tile = get_write_ptr(input_tensor_cb_index);
-                            noc_async_read_tile(h * Wt + left_tile_id, input_tensor_addr_gen, l1_input_left_tile);
+                            noc_async_read_page(h * Wt + left_tile_id, input_tensor_addr_gen, l1_input_left_tile);
                             noc_async_read_barrier();
                             cb_push_back(input_tensor_cb_index, one_tile);
 
                             cb_reserve_back(input_tensor_cb_index, one_tile);
                             const uint32_t l1_input_right_tile = get_write_ptr(input_tensor_cb_index);
-                            noc_async_read_tile(h * Wt + right_tile_id, input_tensor_addr_gen, l1_input_right_tile);
+                            noc_async_read_page(h * Wt + right_tile_id, input_tensor_addr_gen, l1_input_right_tile);
                             noc_async_read_barrier();
                             cb_push_back(input_tensor_cb_index, one_tile);
 
                             // Read index data
                             cb_reserve_back(index_tensor_cb_index, one_tile);
                             const uint32_t l1_index_left_tile = get_write_ptr(index_tensor_cb_index);
-                            noc_async_read_tile(h * Wt + left_tile_id, index_tensor_addr_gen, l1_index_left_tile);
+                            noc_async_read_page(h * Wt + left_tile_id, index_tensor_addr_gen, l1_index_left_tile);
                             noc_async_read_barrier();
                             cb_push_back(index_tensor_cb_index, one_tile);
 
                             cb_reserve_back(index_tensor_cb_index, one_tile);
                             const uint32_t l1_index_right_tile = get_write_ptr(index_tensor_cb_index);
-                            noc_async_read_tile(h * Wt + right_tile_id, index_tensor_addr_gen, l1_index_right_tile);
+                            noc_async_read_page(h * Wt + right_tile_id, index_tensor_addr_gen, l1_index_right_tile);
                             noc_async_read_barrier();
                             cb_push_back(index_tensor_cb_index, one_tile);
 

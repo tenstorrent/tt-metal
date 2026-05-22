@@ -39,7 +39,7 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_iterations; i++) {
         // Copy Input
         for (uint32_t j = 0; j < num_unpadded_tiles_head_dim; j++) {
-            noc_async_read_tile(src_tile_id, s0, src_buffer_l1_addr);
+            noc_async_read_page(src_tile_id, s0, src_buffer_l1_addr);
             src_buffer_l1_addr += tile_size;
             src_tile_id++;
             if (++barrier_count == barrier_threshold) {

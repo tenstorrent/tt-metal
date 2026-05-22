@@ -42,7 +42,7 @@ void kernel_main() {
 #ifdef BCAST_SCALAR
     cb_reserve_back(cb_id_in1, onetile);
     l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-    noc_async_read_tile(bcast_id, s1, l1_write_addr_in1);
+    noc_async_read_page(bcast_id, s1, l1_write_addr_in1);
     noc_async_read_barrier();
     cb_push_back(cb_id_in1, onetile);
 #endif
@@ -53,7 +53,7 @@ void kernel_main() {
 #ifndef IN0_SHARDED
         cb_reserve_back(cb_id_in0, onetile);
         l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-        noc_async_read_tile(curr_id, s0, l1_write_addr_in0);
+        noc_async_read_page(curr_id, s0, l1_write_addr_in0);
         noc_async_read_barrier();
         cb_push_back(cb_id_in0, onetile);
 #endif
@@ -63,7 +63,7 @@ void kernel_main() {
 #ifndef BCAST_SCALAR
         cb_reserve_back(cb_id_in1, onetile);
         l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-        noc_async_read_tile(bcast_id, s1, l1_write_addr_in1);
+        noc_async_read_page(bcast_id, s1, l1_write_addr_in1);
         noc_async_read_barrier();
         cb_push_back(cb_id_in1, onetile);
 

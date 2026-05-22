@@ -22,7 +22,7 @@ FORCE_INLINE void load_from_dram(
     WriteCBGuard write_guard{cb, num_tiles};
 
     uint32_t l1_write_addr{get_write_ptr(cb)};
-    noc_async_read_tile(read_tile_id, addr_gtor, l1_write_addr);
+    noc_async_read_page(read_tile_id, addr_gtor, l1_write_addr);
     noc_async_read_barrier();
 }
 
@@ -35,9 +35,9 @@ struct IntImgCTAs {
     const uint32_t cumsum_stage_1_cb;
     const uint32_t cumsum_stage_2_cb;
     const uint32_t output_cb;
-    const uint32_t axis_2_buffer_cb;    // covers entire propagation
-    const uint32_t axis_3_buffer_cb;    // each tile is spawned from broadcasting the last row of
-                                        // upper block across all rows of a given tile
+    const uint32_t axis_2_buffer_cb;  // covers entire propagation
+    const uint32_t axis_3_buffer_cb;  // each tile is spawned from broadcasting the last row of
+                                      // upper block across all rows of a given tile
     const uint32_t tile_height;
     const uint32_t tile_width;
     const uint32_t block_depth;

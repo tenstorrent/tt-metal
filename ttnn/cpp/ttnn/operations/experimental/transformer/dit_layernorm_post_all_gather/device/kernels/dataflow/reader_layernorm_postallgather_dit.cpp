@@ -83,7 +83,7 @@ void kernel_main() {
         DEVICE_PRINT("reserve_back stats on tile_row: {}\n", tile_row);
         uint32_t stats_wr_ptr = get_write_ptr(cb_stats);
         for (uint32_t st = 0; st < stats_tiles_cols; ++st) {
-            noc_async_read_tile(stats_tile_idx, src_stats, stats_wr_ptr);
+            noc_async_read_page(stats_tile_idx, src_stats, stats_wr_ptr);
             stats_wr_ptr += stats_tile_bytes;
             stats_tile_idx++;
         }
@@ -127,7 +127,7 @@ void kernel_main() {
             DEVICE_PRINT("reserve_back input on tile_row: {} col_tile: {}\n", tile_row, col_tile);
             uint32_t inp_wr_ptr = get_write_ptr(cb_inp);
             for (uint32_t i = 0; i < block_size && col_tile + i < Wt; i++) {
-                noc_async_read_tile(input_tile_idx, src_a, inp_wr_ptr);
+                noc_async_read_page(input_tile_idx, src_a, inp_wr_ptr);
                 inp_wr_ptr += src0_tile_bytes;
                 input_tile_idx++;
             }

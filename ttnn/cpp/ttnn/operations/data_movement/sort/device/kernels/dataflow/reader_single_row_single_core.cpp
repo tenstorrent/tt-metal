@@ -51,7 +51,7 @@ void kernel_main() {
         for (uint32_t w = 0; w < Wt; w++) {
             cb_reserve_back(input_tensor_cb_index, one_tile);
             const uint32_t l1_write_addr = get_write_ptr(input_tensor_cb_index);
-            noc_async_read_tile(h * Wt + w, interleaved_accessor0, l1_write_addr);
+            noc_async_read_page(h * Wt + w, interleaved_accessor0, l1_write_addr);
             noc_async_read_barrier();
             cb_push_back(input_tensor_cb_index, one_tile);
         }  // Wt loop

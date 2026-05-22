@@ -99,7 +99,8 @@ void fill_tile_partial(uint32_t cb_id, uint32_t tile_id, uint32_t cur_pos_in_til
 }
 
 template <uint32_t tile_bytes>
-void fill_tile_partial_sliding_window(uint32_t cb_id, uint32_t tile_id, uint32_t window_start_pos_in_tile, uint32_t partial_val) {
+void fill_tile_partial_sliding_window(
+    uint32_t cb_id, uint32_t tile_id, uint32_t window_start_pos_in_tile, uint32_t partial_val) {
     /*
     For sliding window mask: fill positions 0 to window_start_pos_in_tile - 1 with partial_val (-inf)
     This is the inverse of fill_tile_partial which fills from cur_pos_in_tile + 1 to end
@@ -152,13 +153,16 @@ void fill_tile_partial_sliding_window(uint32_t cb_id, uint32_t tile_id, uint32_t
 
         for (uint32_t face_row_idx = 0; face_row_idx < num_rows_in_face; face_row_idx++) {
             // Fill uint32 pairs from start to fill_end_pos_in_uint32_face
-            for (uint32_t uint32_face_col_idx = 0; uint32_face_col_idx < fill_end_pos_in_uint32_face; uint32_face_col_idx++) {
-                uint32_ptr[uint32_face_idx + (uint32_face_col_idx + num_cols_in_uint32_face * face_row_idx)] = partial_val;
+            for (uint32_t uint32_face_col_idx = 0; uint32_face_col_idx < fill_end_pos_in_uint32_face;
+                 uint32_face_col_idx++) {
+                uint32_ptr[uint32_face_idx + (uint32_face_col_idx + num_cols_in_uint32_face * face_row_idx)] =
+                    partial_val;
             }
 
             // Handle the odd position if fill_end_pos_in_face is odd
             if (is_odd_end_pos && fill_end_pos_in_face > 0) {
-                uint16_ptr[uint16_face_idx + ((fill_end_pos_in_face - 1) + num_cols_in_face * face_row_idx)] = datum_val;
+                uint16_ptr[uint16_face_idx + ((fill_end_pos_in_face - 1) + num_cols_in_face * face_row_idx)] =
+                    datum_val;
             }
         }
     }
@@ -185,7 +189,7 @@ uint32_t read_mask_chunk(
     for (uint32_t row = 0; row < PNHt; ++row) {
         uint32_t mask_tile_id = mask_start_tile_id + row * PSt;
         for (uint32_t col = 0; col < Sk_chunk_t; ++col) {
-            noc_async_read_tile(mask_tile_id, mask_reader, mask_write_ptr);
+            noc_async_read_page(mask_tile_id, mask_reader, mask_write_ptr);
             mask_tile_id++;
             mask_write_ptr += mask_tile_bytes;
 
@@ -607,7 +611,7 @@ uint64_t read_k(
                         : virtual_seq_tile_id_to_physical_tile_id<uint32_t, num_kv_heads, block_size_t, DHt>(
                               virtual_k_tile_row_num, cur_head, page_table_ptr_u32);
                 for (uint32_t col = 0; col < DHt; ++col) {
-                    noc_async_read_tile(physical_k_tile_id, k_reader, k_write_ptr_col);
+                    noc_async_read_page(physical_k_tile_id, k_reader, k_write_ptr_col);
                     physical_k_tile_id += 1;
                     k_write_ptr_col += Sk_chunk_t_dynamic * k_tile_bytes;
                     if (++barrier_count == barrier_threshold) {
@@ -663,7 +667,7 @@ uint64_t read_k(
                     : virtual_seq_tile_id_to_physical_tile_id<uint32_t, num_kv_heads, block_size_t, DHt>(
                           virtual_k_tile_row_num, cur_head, page_table_ptr_u32);
             for (uint32_t col = 0; col < DHt; ++col) {
-                noc_async_read_tile(physical_k_tile_id, k_reader, k_write_ptr_col);
+                noc_async_read_page(physical_k_tile_id, k_reader, k_write_ptr_col);
                 physical_k_tile_id += 1;                               // Go to next tile in row
                 k_write_ptr_col += Sk_chunk_t_dynamic * k_tile_bytes;  // Go to next column in CB
 
@@ -728,7 +732,7 @@ void read_v(
                     : virtual_seq_tile_id_to_physical_tile_id<uint32_t, num_kv_heads, block_size_t, vDHt>(
                           virtual_v_tile_row_num, cur_head, page_table_ptr_u32);
             for (uint32_t col = 0; col < vDHt; ++col) {
-                noc_async_read_tile(physical_v_tile_id, v_reader, v_write_ptr);
+                noc_async_read_page(physical_v_tile_id, v_reader, v_write_ptr);
                 physical_v_tile_id += 1;
                 v_write_ptr += v_tile_bytes;
 
@@ -784,7 +788,7 @@ void read_kv_mask_chunks(
         for (uint32_t col = 0; col < DHt; ++col) {
             uint32_t k_tile_id = k_start_tile_id + col;
             for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
-                noc_async_read_tile(k_tile_id, k_reader, k_write_ptr);
+                noc_async_read_page(k_tile_id, k_reader, k_write_ptr);
                 if (++barrier_count == barrier_threshold) {
                     noc_async_read_barrier();
                     barrier_count = 0;
@@ -824,7 +828,7 @@ void read_kv_mask_chunks(
             uint32_t v_tile_id = v_start_tile_id;
             for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
                 for (uint32_t col = 0; col < vDHt; ++col) {
-                    noc_async_read_tile(v_tile_id, v_reader, v_write_ptr);
+                    noc_async_read_page(v_tile_id, v_reader, v_write_ptr);
                     if (++barrier_count == barrier_threshold) {
                         noc_async_read_barrier();
                         barrier_count = 0;

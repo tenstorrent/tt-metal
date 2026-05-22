@@ -42,7 +42,7 @@ void kernel_main() {
             cb_reserve_back(cb_inp, input_block_size);
             uint32_t inp_wr_ptr = get_write_ptr(cb_inp);
             for (uint32_t r = 0; r < input_block_size && wt + r < Wt; r++) {
-                noc_async_read_tile(inp_tile_idx, src_a, inp_wr_ptr);
+                noc_async_read_page(inp_tile_idx, src_a, inp_wr_ptr);
                 inp_wr_ptr += src0_tile_bytes;
                 inp_tile_idx++;
             }
