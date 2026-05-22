@@ -138,6 +138,7 @@ def main(config: str, worker_type: str):
             device_config.enable_ddp,
             device_config.enable_tp,
             num_workers,
+            use_vocab_parallel_loss=model_factory.use_vocab_parallel_loss,
         )
         print(f"[Worker {rank}] Completed with {len(train_losses)} loss values")
     elif worker_type == "aggregator":
