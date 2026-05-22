@@ -567,38 +567,60 @@ void kernel_main() {
                 reconfig_data_format_srca(cb_inb, cb_ex2pe);
             }
 
-            // Workaround for WH-only LLK bug: binary_dest_reuse_tiles<ELWMUL, DEST_TO_SRCB>
-            // on c_0 (cb_in) silently corrupts when c_29 (multi-buffer-index alias on c_0's
-            // L1 allocation) has unpack_to_dest_mode=UnpackToDestFp32 and fp32_dest_acc_en
-            // is true. Even-indexed DEST half blocks accumulate (output = (1+rsqrt)*(x-mean),
-            // ~1.286x), odd-indexed blocks produce mostly zeros. Some piece of unpacker state
-            // set by c_29's UnpackToDest path leaks into c_0's dest-reuse ELWMUL path; the
-            // standard reconfig_data_format(..., IGNORE) skip-optimization at the start of
-            // the eltwise block doesn't reset whatever state needs resetting. BH works fine.
-            // Stage (x-mean) through cb_xmm and use the standard mul_tiles_bcast_cols path
-            // (no DEST_TO_SRCB reuse), matching the regular layernorm_welford.cpp pattern.
-            tile_regs_commit();
+            // Multiply by 1/(√(Var(X) + ε)).
+            //
+            // On Wormhole, binary_dest_reuse_tiles<ELWMUL, DEST_TO_SRCB> on c_0 (cb_in)
+            // silently corrupts when an earlier transpose_wh_tile in this kernel routed
+            // through an UnpackToDestFp32 alias CB (c_29 for the no-fuse welford, c_30/c_31
+            // for the fuse_pre_add welford state). The leaked unpacker state survives across
+            // the welford -> eltwise boundary; even-indexed DEST half blocks accumulate
+            // (output = (1+rsqrt)*(x-mean), ~1.286x), odd-indexed blocks produce mostly
+            // zeros. The standard reconfig_data_format(..., IGNORE) skip-optimization at the
+            // start of the eltwise block does not reset whatever state needs resetting.
+            // Blackhole is unaffected.
+            //
+            // When the trigger is present (Wormhole AND any UnpackToDestFp32 alias active in
+            // this kernel), stage (x - mean) through cb_xmm and use the standard
+            // mul_tiles_bcast_cols path so the multiply reads through SrcA instead of
+            // reusing DEST. Otherwise, keep the original DEST_TO_SRCB reuse path, which
+            // avoids an extra pack/unpack round-trip.
+            constexpr bool wh_dest_reuse_workaround_needed =
+#if defined(ARCH_WORMHOLE)
+                (welford_fp32_alias || welford_state_fp32_alias);
+#else
+                false;
+#endif
+            if constexpr (wh_dest_reuse_workaround_needed) {
+                tile_regs_commit();
 
-            const uint32_t cb_xmm_intermediate = get_named_compile_time_arg_val("cb_xmm");
-            CircularBuffer cb_xmm_intermediate_obj(cb_xmm_intermediate);
-            pack_reconfig_data_format(cb_xmm_intermediate);
-            cb_xmm_intermediate_obj.reserve_back(block.full_block_size());
-            tile_regs_wait();
-            for (auto i : block.local()) {
-                pack_tile(i, cb_xmm_intermediate);
-            }
-            cb_xmm_intermediate_obj.push_back(block.full_block_size());
-            tile_regs_release();
+                const uint32_t cb_xmm_intermediate = get_named_compile_time_arg_val("cb_xmm");
+                CircularBuffer cb_xmm_intermediate_obj(cb_xmm_intermediate);
+                pack_reconfig_data_format(cb_xmm_intermediate);
+                cb_xmm_intermediate_obj.reserve_back(block.full_block_size());
+                tile_regs_wait();
+                for (auto i : block.local()) {
+                    pack_tile(i, cb_xmm_intermediate);
+                }
+                cb_xmm_intermediate_obj.push_back(block.full_block_size());
+                tile_regs_release();
 
-            reconfig_data_format(cb_xmm_intermediate, cb_ex2pe);
-            mul_bcast_cols_init_short(cb_xmm_intermediate, cb_ex2pe);
-            cb_xmm_intermediate_obj.wait_front(block.full_block_size());
-            tile_regs_acquire();
-            for (auto i : block.local()) {
-                mul_tiles_bcast_cols(cb_xmm_intermediate, cb_ex2pe, i, 0, i);
+                reconfig_data_format(cb_xmm_intermediate, cb_ex2pe);
+                mul_bcast_cols_init_short(cb_xmm_intermediate, cb_ex2pe);
+                cb_xmm_intermediate_obj.wait_front(block.full_block_size());
+                tile_regs_acquire();
+                for (auto i : block.local()) {
+                    mul_tiles_bcast_cols(cb_xmm_intermediate, cb_ex2pe, i, 0, i);
+                }
+                cb_xmm_intermediate_obj.pop_front(block.full_block_size());
+                tile_regs_commit();
+            } else {
+                reconfig_data_format_srca(fuse_pre_add ? cb_inb : cb_in, cb_ex2pe);
+                binary_dest_reuse_tiles_init<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex2pe);
+                for (auto i : block.local()) {
+                    binary_dest_reuse_tiles<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex2pe, 0, i);
+                }
+                tile_regs_commit();
             }
-            cb_xmm_intermediate_obj.pop_front(block.full_block_size());
-            tile_regs_commit();
 
             if constexpr (!(do_gamma == 1 or do_beta == 1)) {
                 cb_xmm = cb_out;
