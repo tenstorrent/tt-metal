@@ -57,8 +57,9 @@ def _write_weight_config_json_atomically(config_path: Path, weight_config: Any) 
                     os.fsync(dfd)
                 finally:
                     os.close(dfd)
-            except OSError:
-                pass
+            except OSError as e:
+                # Best-effort durability step: if directory fsync is unavailable/fails, keep publication successful.
+                logger.debug(f"Failed to fsync weight config directory {config_path.parent}: {e}")
         finally:
             if tmp_path.exists():
                 try:
