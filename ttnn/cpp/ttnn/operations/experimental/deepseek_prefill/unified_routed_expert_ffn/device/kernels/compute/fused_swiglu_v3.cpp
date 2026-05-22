@@ -56,11 +56,11 @@ template <
     bool apply_silu_on_final>
 FORCE_INLINE void matmul_phase_v3(
     uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t partials_cb_id, uint32_t final_cb_id) {
-#ifdef PACKER_L1_ACC
-    // Start each phase with L1_ACC off. We re-enable it after block 0
-    // finishes so blocks 1..N-1 accumulate into the partials L1 slots.
-    PACK((llk_pack_reconfig_l1_acc(0)));
-#endif
+    // The packer may be configured for a previous phase's final_cb format
+    // (e.g. phase 2 inherits phase 1's gate_intermed packer config). Reconfig
+    // packer for partials format here. set_packer_config internally also
+    // resets L1_ACC=0, which is what we want for block 0.
+    PACK((pack_reconfig_data_format(partials_cb_id)));
     for (uint32_t block = 0; block < num_blocks; ++block) {
         const bool last_out = (block == num_blocks - 1);
 
@@ -171,6 +171,9 @@ FORCE_INLINE void multiply_phase_v3(uint32_t gate_cb_id, uint32_t up_cb_id, uint
     cb_wait_front(gate_cb_id, out_block_num_tiles);
     cb_wait_front(up_cb_id, out_block_num_tiles);
 
+    // Reconfigure packer for activated format (may differ from the previous
+    // phase's final_cb). Also resets L1_ACC=0 internally.
+    PACK((pack_reconfig_data_format(activated_cb_id)));
     mul_tiles_init(gate_cb_id, up_cb_id);
 
     constexpr uint32_t num_subblocks = out_block_num_tiles / out_subblock_num_tiles;
