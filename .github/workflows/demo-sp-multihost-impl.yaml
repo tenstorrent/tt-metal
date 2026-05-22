@@ -199,8 +199,9 @@ jobs:
           # Unpack build artifact locally as well. Pipeline config generation runs on the runner
           # and expects test binaries under /ci/tt-metal/build/test.
           tar --zstd -xf "${BUILD_ARCHIVE}" -C /ci/tt-metal
-          rm -rf /home/user/tt-metal
-          mkdir -p /home/user
+          sudo rm -rf /home/user/tt-metal
+          sudo mkdir -p /home/user
+          sudo chown "$(id -u):$(id -g)" /home/user
           cp -r /ci/tt-metal /home/user/
           mpirun --pernode bash -lc 'rm -rf /home/user/tt-metal && cp -r /ci/tt-metal /home/user/'
           mpirun --pernode git -C /home/user/tt-metal submodule update --init --recursive
