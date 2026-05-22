@@ -17,7 +17,7 @@ from helpers.golden_generators import TilizeGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator_v2 import StimuliSpec, generate_stimuli_v2
+from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     LOOP_FACTOR,
@@ -68,7 +68,7 @@ def test_fast_tilize_full(formats, dest_acc, dimensions):
     input_dimensions = [input_height_tiles * TILE_R, input_width_tiles * TILE_C]
     tile_count = input_height_tiles * input_width_tiles
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli_v2(
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -178,7 +178,7 @@ def test_fast_tilize_large(formats, dest_acc, dimensions):
     input_dimensions = [input_height_tiles * TILE_R, input_width_tiles * TILE_C]
     tile_count = input_height_tiles * input_width_tiles
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli_v2(
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -258,7 +258,7 @@ def test_fast_tilize_overflow_guard(formats, dest_acc, dimensions):
 
     # Use constant input (0.5) so corrupted values are identifiable:
     # if guard has 0.5 → tilize output data leaked; if 0.0 → ZeroWrite from PACR_FLUSH
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli_v2(
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,

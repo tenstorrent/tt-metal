@@ -38,11 +38,12 @@ from helpers.param_config import (
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (
+    StimuliSpec,
     apply_log_uniform_magnitudes,
     compute_safe_input_magnitude_range,
     format_elem_max,
+    generate_stimuli,
 )
-from helpers.stimuli_generator_v2 import StimuliSpec, generate_stimuli_v2
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
@@ -241,7 +242,7 @@ def test_binary_max_min_float_quasar(formats_dest_acc_implied_math_is_max_input_
     torch.manual_seed(42)
 
     spec = StimuliSpec.uniform(low=-0.9, high=1.1)
-    src_A, tile_cnt_A, src_B, _ = generate_stimuli_v2(
+    src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -401,7 +402,7 @@ def test_binary_max_min_int32_quasar(formats_dest_acc_is_max_input_dims):
     iinfo = torch.iinfo(format_dict[formats.input_format])
     half_max = iinfo.max // 2
     spec = StimuliSpec.uniform(low=float(-half_max + 1), high=float(half_max - 1))
-    src_A, tile_cnt_A, src_B, _ = generate_stimuli_v2(
+    src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,

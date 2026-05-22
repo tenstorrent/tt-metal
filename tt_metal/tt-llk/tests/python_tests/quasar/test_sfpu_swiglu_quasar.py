@@ -44,7 +44,7 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator_v2 import generate_stimuli_v2
+from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
@@ -307,7 +307,7 @@ def test_sfpu_swiglu_quasar(formats_dest_acc_implied_math, distribution):
     # 64x32 = 2 tiles; we interpret the first tile as gate, the second as up.
     input_dimensions = [64, 32]
 
-    src_A, tile_cnt_A, src_B, _ = generate_stimuli_v2(
+    src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -435,9 +435,9 @@ def test_sfpu_swiglu_nan_inf_quasar():
     num_faces = 4
     input_dimensions = [64, 32]
 
-    # We don't actually use src_A / src_B here, but generate_stimuli_v2 sets up
+    # We don't actually use src_A / src_B here, but generate_stimuli sets up
     # the framework state (tile_cnt_A, etc.) consistently with the main test.
-    src_A, tile_cnt_A, src_B, _ = generate_stimuli_v2(
+    src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
