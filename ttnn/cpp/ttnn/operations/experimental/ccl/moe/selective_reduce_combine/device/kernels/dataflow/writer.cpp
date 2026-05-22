@@ -4,6 +4,9 @@
 
 #include "api/compile_time_args.h"
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
@@ -166,7 +169,16 @@ void kernel_main() {
     const auto global_semaphore_addr = get_arg_val<uint32_t>(rt_arg_count++);
     const bool is_init_sync_core = get_arg_val<uint32_t>(rt_arg_count++);
 
+    Noc noc1(1);
+    // compute_sync_semaphore_addr (raw L1 address) is still required by DoubleBuffer<true>, which uses it both locally
+    // and as a remote noc target via safe_get_noc_addr.
     const auto compute_sync_semaphore_addr = get_semaphore(compute_sync_semaphore_id);
+    Semaphore<> compute_sync_sem(compute_sync_semaphore_id);
+    CircularBuffer cb_dense_token_maps(dense_token_maps_cb_id);
+    CircularBuffer cb_token_counts(token_counts_cb_id);
+    CircularBuffer cb_data(data_cb_id);
+    CircularBuffer cb_token_activations(token_activations_cb_id);
+    CircularBuffer cb_packet_header(packet_header_cb_id);
 
     // rt_arg_count is incremented
     detail::DoubleBuffer<double_buffer_source> db(
@@ -188,10 +200,10 @@ void kernel_main() {
 
     volatile PACKET_HEADER_TYPE* packet_headers[3];
     for (uint8_t i = 0; i < 3; ++i) {
-        cb_reserve_back(packet_header_cb_id, 1);
-        const uint32_t packet_header_addr = get_write_ptr(packet_header_cb_id);
+        cb_packet_header.reserve_back(1);
+        const uint32_t packet_header_addr = cb_packet_header.get_write_ptr();
         packet_headers[i] = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_addr);
-        cb_push_back(packet_header_cb_id, 1);
+        cb_packet_header.push_back(1);
     }
 
     // mux_rt_arg_count does not get incremented
@@ -210,8 +222,8 @@ void kernel_main() {
             num_devices>(fabric_connections, packet_headers[1], dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
     }
 
-    cb_wait_front(token_counts_cb_id, 1);
-    const uint32_t token_counts_l1_addr = get_write_ptr(token_counts_cb_id);
+    cb_token_counts.wait_front(1);
+    const uint32_t token_counts_l1_addr = cb_token_counts.get_write_ptr();
     auto* token_counts_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(token_counts_l1_addr);
     uint32_t token_split_offsets[num_local_experts];
     uint32_t token_split_counts[num_local_experts];
@@ -221,20 +233,22 @@ void kernel_main() {
         token_split_counts[e] = token_counts_l1_ptr[num_local_experts + num_local_experts + e];
         token_activation_offsets[e] = token_counts_l1_ptr[num_local_experts + 2 * num_local_experts + e];
     }
-    cb_pop_front(token_counts_cb_id, 1);
+    cb_token_counts.pop_front(1);
 
-    cb_reserve_back(data_cb_id, 1);
-    const uint32_t src_data_l1_base_addr = get_write_ptr(data_cb_id);
+    cb_data.reserve_back(1);
+    const uint32_t src_data_l1_base_addr = cb_data.get_write_ptr();
 
-    cb_wait_front(dense_token_maps_cb_id, num_local_experts);
-    const uint32_t dense_token_maps_l1_addr = get_write_ptr(dense_token_maps_cb_id);
+    cb_dense_token_maps.wait_front(num_local_experts);
+    const uint32_t dense_token_maps_l1_addr = cb_dense_token_maps.get_write_ptr();
     auto* dense_token_maps_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dense_token_maps_l1_addr);
 
-    cb_wait_front(token_activations_cb_id, 1);
-    const uint32_t token_activations_l1_addr = get_write_ptr(token_activations_cb_id);
+    cb_token_activations.wait_front(1);
+    const uint32_t token_activations_l1_addr = cb_token_activations.get_write_ptr();
     auto* token_activations_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(token_activations_l1_addr);
 
     if constexpr (use_init_semaphore) {
+        // Legacy primitive retained (#45003 item 4): init_semaphore_addr is a raw cross-device semaphore address
+        // (GlobalSemaphore::address()) from runtime args, not a semaphore id, so Semaphore<> can't bind.
         auto* init_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_semaphore_addr);
         if (is_init_sync_core) {
             noc_semaphore_wait(init_semaphore_ptr, replicate_group_devices - 1);
@@ -247,7 +261,7 @@ void kernel_main() {
                 num_token_parallel_cores * num_data_parallel_cores - 1,
                 /*linked=*/false,
                 /*noc=*/1);
-            noc_async_writes_flushed(/*noc=*/1);
+            noc1.async_writes_flushed();
 
         } else {
             noc_semaphore_wait(init_semaphore_ptr, replicate_group_devices - 1);
@@ -255,13 +269,12 @@ void kernel_main() {
         noc_semaphore_set(init_semaphore_ptr, 0);
     }
 
-    auto* compute_sync_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(compute_sync_semaphore_addr);
     uint32_t compute_sync_semaphore_val = compute_cores_per_combine_core;
     for (uint32_t e = 0; e < num_local_experts; ++e) {
         auto* expert_token_activations_ptr =
             token_activations_l1_ptr + token_activation_offsets[e] * activations_stride_elm;
 
-        noc_semaphore_wait(compute_sync_semaphore_ptr, compute_sync_semaphore_val);
+        compute_sync_sem.wait(compute_sync_semaphore_val);
 
         for (uint32_t dt = 0; dt < token_split_counts[e]; ++dt) {
             const uint32_t st = dense_token_maps_l1_ptr
@@ -290,8 +303,9 @@ void kernel_main() {
             if (dest_device_idx == linearized_mesh_coord) {
                 const uint64_t output_noc_addr =
                     get_noc_addr(output_page_idx, output_addrgen, dest_token_segment_offset_bytes, /*noc=*/1);
+                // Legacy primitive retained (#45003 item 4): precomposed uint64_t noc address.
                 noc_async_write(src_data_l1_addr, output_noc_addr, source_token_segment_size_bytes, /*noc=*/1);
-                noc_async_writes_flushed(/*noc=*/1);
+                noc1.async_writes_flushed();
             } else {
                 fabric_send_chip_unicast_noc_unicast_1d<
                     linearized_mesh_coord,
@@ -314,15 +328,17 @@ void kernel_main() {
         ++db;
     }
 
-    noc_semaphore_set(compute_sync_semaphore_ptr, 0);
+    compute_sync_sem.set(0);
 
-    cb_pop_front(dense_token_maps_cb_id, num_local_experts);
-    cb_pop_front(token_activations_cb_id, 1);
-    cb_push_back(data_cb_id, 1);
+    cb_dense_token_maps.pop_front(num_local_experts);
+    cb_token_activations.pop_front(1);
+    cb_data.push_back(1);
 
-    noc_async_write_barrier(/*noc=*/1);
+    noc1.async_write_barrier();
 
     if (sync_args.is_sync_core) {
+        // Legacy primitive retained (#45003 item 4): termination_sync_address is used both as a local L1 pointer here
+        // and as a remote noc target via safe_get_noc_addr below (dual-use; not an id).
         auto termination_sync_semaphore_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_args.termination_sync_address);
 
@@ -338,10 +354,12 @@ void kernel_main() {
             replicate_axis,
             true>(fabric_connections, packet_headers[1], packet_headers[2], global_noc_semaphore_addr);
 
+        // Legacy primitive retained (#45003 item 4): global_semaphore_addr is a raw cross-device semaphore address
+        // (GlobalSemaphore::address()) from runtime args, not a semaphore id.
         auto semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr);
 
-        noc_async_write_barrier(/*noc=*/1);
-        noc_async_atomic_barrier(/*noc=*/1);
+        noc1.async_write_barrier();
+        noc1.async_atomic_barrier();
 
         close_direction_connections<
             Num_Directions,
@@ -363,9 +381,10 @@ void kernel_main() {
             sync_args.termination_master_noc_y,
             sync_args.termination_sync_address,
             /*noc=*/1);
+        // Legacy primitive retained (#45003 item 4): precomposed uint64_t remote noc address.
         noc_semaphore_inc(safe_termination_sync_address, 1, /*noc=*/1);
 
-        noc_async_write_barrier(/*noc=*/1);
-        noc_async_atomic_barrier(/*noc=*/1);
+        noc1.async_write_barrier();
+        noc1.async_atomic_barrier();
     }
 }
