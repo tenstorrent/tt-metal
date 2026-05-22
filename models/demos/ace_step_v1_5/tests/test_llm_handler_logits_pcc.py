@@ -401,3 +401,55 @@ def test_llm_handler_experimental_causal_lm_prefill_decode_pcc_vs_torch(device, 
         flush=True,
     )
     assert ok_dec, f"decode comp_pcc {float(pcc_dec):.6f} < {_PCC_EXPERIMENTAL_LM}"
+
+
+@pytest.mark.skipif(_resolve_five_hz_lm_dir() is None, reason=_LM_SKIP)
+@pytest.mark.parametrize("seq_lens", [(24, 80), (50, 100)])
+def test_prefill_trace_last_token_matches_eager_varying_seq_len(device, torch_seed, seq_lens):
+    """Prefill trace must key on real ``seq_len``, not padded length alone (regression for noisy LM)."""
+    lm_dir = _resolve_five_hz_lm_dir()
+    assert lm_dir is not None
+    torch.manual_seed(int(torch_seed))
+    cfg = AutoConfig.from_pretrained(str(lm_dir), trust_remote_code=True)
+    vocab = int(getattr(cfg, "vocab_size", 0) or 0)
+    if vocab <= 8:
+        pytest.skip("invalid vocab_size from config")
+
+    try:
+        exp = AceStepFiveHzExperimentalTtnnCausalLM(
+            str(lm_dir),
+            device,
+            max_seq_len=1024,
+            use_prefill_trace=True,
+        )
+    except RuntimeError as exc:
+        pytest.skip(f"experimental TTNN causal LM init/load skipped: {exc}")
+
+    hi = min(8192, vocab - 1)
+    lo = max(4, min(8, hi - 1))
+    try:
+        for seq_len in seq_lens:
+            ids = torch.randint(lo, hi, (1, int(seq_len)), dtype=torch.long)
+            exp.reset_decode_state()
+            exp.qwen._use_prefill_trace = False
+            with torch.inference_mode():
+                eager = exp.forward(input_ids=ids.clone(), past_key_values=None, use_cache=True)
+            exp.reset_decode_state()
+            exp.qwen._use_prefill_trace = True
+            with torch.inference_mode():
+                traced = exp.forward(input_ids=ids.clone(), past_key_values=None, use_cache=True)
+            re, ge = _align_logits_last_dims(eager.logits.float().cpu(), traced.logits.float().cpu())
+            ok, pcc = comp_pcc(re[:, -1:, :], ge[:, -1:, :], pcc=_PCC_EXPERIMENTAL_LM)
+            print(
+                f"[llm_handler_logits_pcc] prefill_trace_vs_eager seq_len={seq_len} " f"comp_pcc={float(pcc):.8f}",
+                flush=True,
+            )
+            assert ok, (
+                f"prefill trace vs eager last-pos comp_pcc {float(pcc):.6f} < {_PCC_EXPERIMENTAL_LM} "
+                f"for seq_len={seq_len}"
+            )
+    finally:
+        if hasattr(exp, "release_trace"):
+            exp.release_trace()
+        del exp
+        gc.collect()

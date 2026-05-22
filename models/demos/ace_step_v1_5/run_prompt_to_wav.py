@@ -11,11 +11,11 @@ By default this matches ``torch_ref/run_prompt_to_wav.py --use-official-acestep`
 emitting the same style of **loguru** / model logs as the official CLI. DiT sampling runs on TTNN.
 
 With the default ``--use-trace`` flag, traceable stages use TTNN trace + 2CQ replay: Qwen3
-caption, lyric embed, audio-code detokenizer, 5 Hz LM prefill + decode (+ CFG logit combine
-when ``lm_cfg_scale>1``), handler ``forward_payload_traced`` (lyric 8L + timbre 4L + text +
-concat), and DiT ``_E2EDenoiseTrace`` body per step (APG/ADG + Euler stay eager after
-``release_trace_only``). DiT CFG enc/ctx concat and VAE decode stay eager (trace replay was
-not bit-accurate → noise). Pass ``--no-use-trace`` to disable all traces (single CQ, fully eager).
+caption, lyric embed, audio-code detokenizer, 5 Hz LM prefill + decode,
+handler ``forward_payload_traced`` (lyric 8L + timbre 4L + text + concat), and DiT
+``_E2EDenoiseTrace`` body per step (APG/ADG + Euler stay eager after ``release_trace_only``).
+DiT CFG enc/ctx concat and VAE decode stay eager (trace replay was not bit-accurate → noise).
+Pass ``--no-use-trace`` to disable all traces (single CQ, fully eager).
 
 - **5 Hz LM (`acestep-5Hz-lm-1.7B` by default)**: TTNN causal LM
   (``ttnn_impl/five_hz_causal_lm_experimental.py`` →
@@ -609,7 +609,8 @@ def main(
         action=argparse.BooleanOptionalAction,
         default=True,
         help=(
-            "Wrap the Qwen3 caption encoder (``forward_traced``), the instrumental condition "
+            "Wrap the Qwen3 caption encoder (``forward_traced``), 5 Hz LM prefill+decode "
+            "(when not using ``--pytorch-lm``), the instrumental condition "
             "encoder (``forward_payload_traced`` on the handler path), and the per-step "
             "DiT body (patch_embed + DiT core + output_head) in captured TTNN trace + 2CQ replay. "
             "DiT tracing delegates to ``run_ttnn_denoise_loop`` with ``_E2EDenoiseTrace`` "
@@ -754,45 +755,7 @@ def main(
     if args.perf_log_steps:
         os.environ["ACE_STEP_DEMO_PERF_LOG_STEPS"] = "1"
 
-    fast_preprocess = bool(args.fast_preprocess)
-    if fast_preprocess and (bool(getattr(args, "warmup", False)) or int(getattr(args, "repeat", 1)) > 1):
-        print(
-            "[ace_step_v1_5] --warmup/--repeat require the default handler path; ignoring for --fast-preprocess.",
-            flush=True,
-        )
-        args.warmup = False
-        args.repeat = 1
-
-    if not fast_preprocess:
-        import importlib.util
-
-        if importlib.util.find_spec("torchaudio") is None:
-            print(
-                "[ace_step_v1_5] torchaudio not found; using --fast-preprocess "
-                "(install torchaudio for the 5 Hz LM / AceStepHandler path).",
-                file=sys.stderr,
-                flush=True,
-            )
-            fast_preprocess = True
-        else:
-            _require_torchaudio()
-    if fast_preprocess and bool(args.ttnn_condition_embedding):
-        # The TTNN condition encoder requires the handler path; --fast-preprocess bypasses it.
-        print(
-            "[ace_step_v1_5] --fast-preprocess active: forcing --no-ttnn-condition-embedding "
-            "(HF prepare_condition on host).",
-            file=sys.stderr,
-            flush=True,
-        )
-        args.ttnn_condition_embedding = False
-    if fast_preprocess and not bool(args.pytorch_lm):
-        print(
-            "[ace_step_v1_5] --fast-preprocess active: forcing --pytorch-lm "
-            "(no 5 Hz LM forward in fast preprocess).",
-            file=sys.stderr,
-            flush=True,
-        )
-        args.pytorch_lm = True
+    _require_torchaudio()
     use_ttnn_5hz_lm = not bool(args.pytorch_lm)
 
     import torch
@@ -895,12 +858,6 @@ def main(
                 flush=True,
             )
             args.ttnn_condition_embedding = False
-        if fast_preprocess:
-            print(
-                "[ace_step_v1_5] multi-device mesh: using full handler preprocess (not --fast-preprocess TTNN Qwen).",
-                flush=True,
-            )
-            fast_preprocess = False
 
     gs = args.guidance_scale
     if gs is None:
@@ -951,7 +908,8 @@ def main(
             "torch_vae": bool(args.torch_vae),
             "use_trace": bool(args.use_trace),
             "ttnn_5hz_lm": bool(use_ttnn_5hz_lm),
-            "ttnn_5hz_lm_trace": bool(args.use_trace) and bool(use_ttnn_5hz_lm),
+            "ttnn_5hz_lm_prefill_trace": bool(args.use_trace) and bool(use_ttnn_5hz_lm),
+            "ttnn_5hz_lm_decode_trace": bool(args.use_trace) and bool(use_ttnn_5hz_lm),
             "mesh_sku": mesh_sku,
             "split_device": bool(split_device),
             "mesh_ttnn_preprocess": bool(mesh_ttnn_preprocess),
@@ -1209,7 +1167,8 @@ def main(
                 device=device,
                 ttnn_causal_device=tt_dev_early,
                 use_ttnn_causal_lm=bool(use_ttnn_5hz_lm),
-                ttnn_lm_use_trace=bool(args.use_trace) and bool(use_ttnn_5hz_lm),
+                ttnn_lm_prefill_trace=bool(args.use_trace) and bool(use_ttnn_5hz_lm),
+                ttnn_lm_decode_trace=bool(args.use_trace) and bool(use_ttnn_5hz_lm),
             )
             print(status, flush=True)
             if not ok:
@@ -1403,7 +1362,8 @@ def main(
                         flush=True,
                     )
                     print(
-                        "[preprocess] qwen caption + lyric embed + audio detokenizer + 5Hz LM prefill/decode trace enabled",
+                        "[preprocess] qwen caption + lyric embed + audio detokenizer + "
+                        "5Hz LM prefill+decode trace enabled",
                         flush=True,
                     )
                 else:
@@ -2253,9 +2213,7 @@ def main(
             )
         perf.emit_summary(label=run_spec.summary_label)
 
-    _has_more_passes = (
-        not fast_preprocess and demo_session.dit_handler is not None and session_pass + 1 < len(run_specs)
-    )
+    _has_more_passes = demo_session.dit_handler is not None and session_pass + 1 < len(run_specs)
     if _has_more_passes:
         return main(
             session_pass + 1,
