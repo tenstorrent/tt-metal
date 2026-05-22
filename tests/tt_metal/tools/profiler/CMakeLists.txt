@@ -15,6 +15,7 @@ foreach(TEST_SRC ${PROFILER_TEST_SRCS})
         PRIVATE
             "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
             ${CMAKE_CURRENT_SOURCE_DIR}
+            ${PROJECT_SOURCE_DIR}/tests
     )
 
     set_target_properties(
