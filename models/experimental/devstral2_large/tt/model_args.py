@@ -94,6 +94,9 @@ class Devstral2Args:
     # CCL topology for ttnn.experimental.* collectives.
     ccl_topology: ttnn.Topology = ttnn.Topology.Linear
 
+    # When True, route prefill activations through DRAM (see ``mem_config.get_activation_mem_config``).
+    prefill_activations_dram: bool = False
+
     @classmethod
     def from_hf_config(
         cls,
@@ -107,6 +110,7 @@ class Devstral2Args:
         activation_dtype: ttnn.DataType = ttnn.bfloat16,
         kv_cache_dtype: ttnn.DataType = ttnn.bfloat16,
         ccl_dtype: ttnn.DataType = ttnn.bfloat16,
+        prefill_activations_dram: bool = False,
     ) -> "Devstral2Args":
         """Build from a HuggingFace ``Ministral3Config`` (or the inner ``text_config`` of a wrapper)."""
         text = getattr(hf_config, "text_config", None) or hf_config
@@ -153,6 +157,7 @@ class Devstral2Args:
             activation_dtype=activation_dtype,
             kv_cache_dtype=kv_cache_dtype,
             ccl_dtype=ccl_dtype,
+            prefill_activations_dram=prefill_activations_dram,
         )
 
     # ---- Derived ----

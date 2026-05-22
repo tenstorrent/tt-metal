@@ -189,12 +189,18 @@ class TtMinistral3ForCausalLM:
 
     def __call__(self, *fwd_args, **fwd_kwargs) -> ttnn.Tensor:
         hidden_states = self.model(*fwd_args, **fwd_kwargs)
-        return ttnn.linear(
+        # DRAM avoids L1 CB clashes: logits are read-once by the host for sampling and do not
+        # benefit from L1 bandwidth. L1 lm_head output (~1 MB spread across cores at a fixed
+        # allocator-assigned address) would eventually land inside a growing prefill or decode
+        # matmul CB region as context grows, causing validate_circular_buffer_region to throw.
+        logits = ttnn.linear(
             hidden_states,
             self.lm_head,
             dtype=self.args.activation_dtype,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        ttnn.deallocate(hidden_states)
+        return logits
 
     def forward(self, *args, **kwargs):
         return self(*args, **kwargs)
