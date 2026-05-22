@@ -52,6 +52,9 @@ struct BmmTensors {
     MeshTensor dst;
 };
 
+// Flat 2D UINT32 page layout: one DRAM page per tile, tile_size bytes each. The element type
+// is UINT32 only so DRAM exposes raw tile-paged storage at the buffer level; the kernels still
+// operate on bfloat16 tiles via TensorAccessor / matmul LLKs.
 TensorSpec make_flat_dram_tensor_spec(uint32_t tile_size, uint32_t num_tiles) {
     const uint32_t tile_size_words = tile_size / sizeof(uint32_t);
     auto page_config = PageConfig(Layout::ROW_MAJOR);
@@ -133,8 +136,11 @@ experimental::metal2_host_api::ProgramSpec build_bmm_program_spec(
         .tensor_bindings =
             {{.tensor_parameter_name = SRC0_T, .accessor_name = "src0"},
              {.tensor_parameter_name = SRC1_T, .accessor_name = "src1"}},
+        // Only batch_start varies per node; everything else is identical across nodes and
+        // lives in CRTAs for better dispatch efficiency.
         .runtime_arguments_schema =
-            {.named_runtime_args = {"Mt", "Kt", "Nt", "MtKt", "KtNt", "batch", "do_bcast", "batch_start"}},
+            {.named_runtime_args = {"batch_start"},
+             .named_common_runtime_args = {"Mt", "Kt", "Nt", "MtKt", "KtNt", "batch", "do_bcast"}},
         .config_spec = reader_config,
     };
 
@@ -150,7 +156,8 @@ experimental::metal2_host_api::ProgramSpec build_bmm_program_spec(
               .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
               .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED}},
         .tensor_bindings = {{.tensor_parameter_name = DST_T, .accessor_name = "dst"}},
-        .runtime_arguments_schema = {.named_runtime_args = {"Mt", "Nt", "batch", "batch_start"}},
+        .runtime_arguments_schema =
+            {.named_runtime_args = {"batch_start"}, .named_common_runtime_args = {"Mt", "Nt", "batch"}},
         .config_spec = writer_config,
     };
 
@@ -248,22 +255,20 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
     params.kernel_run_params = {
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = READER,
-            .named_runtime_args =
-                {{.node = node,
-                  .args =
-                      {{"Mt", p.Mt},
-                       {"Kt", p.Kt},
-                       {"Nt", p.Nt},
-                       {"MtKt", p.Mt * p.Kt},
-                       {"KtNt", p.Kt * p.Nt},
-                       {"batch", p.B_per_core},
-                       {"do_bcast", do_bcast},
-                       {"batch_start", 0u}}}},
+            .named_runtime_args = {{.node = node, .args = {{"batch_start", 0u}}}},
+            .named_common_runtime_args =
+                {{"Mt", p.Mt},
+                 {"Kt", p.Kt},
+                 {"Nt", p.Nt},
+                 {"MtKt", p.Mt * p.Kt},
+                 {"KtNt", p.Kt * p.Nt},
+                 {"batch", p.B_per_core},
+                 {"do_bcast", do_bcast}},
         },
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = WRITER,
-            .named_runtime_args =
-                {{.node = node, .args = {{"Mt", p.Mt}, {"Nt", p.Nt}, {"batch", p.B_per_core}, {"batch_start", 0u}}}},
+            .named_runtime_args = {{.node = node, .args = {{"batch_start", 0u}}}},
+            .named_common_runtime_args = {{"Mt", p.Mt}, {"Nt", p.Nt}, {"batch", p.B_per_core}},
         },
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{.kernel_spec_name = COMPUTE},
     };
@@ -276,6 +281,8 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
 
     auto src0_vec = create_random_vector_of_bfloat16(bytesA, 1.0f, 0x1234);
     auto src1_vec = create_random_vector_of_bfloat16(bytesB, 1.0f, 0x1234, -0.45f);
+    // MeshTensor doesn't yet expose slow-dispatch read/write APIs, so route through the
+    // underlying reference buffer to populate / read back DRAM.
     detail::WriteToBuffer(*tensors.src0.mesh_buffer().get_reference_buffer(), src0_vec);
     detail::WriteToBuffer(*tensors.src1.mesh_buffer().get_reference_buffer(), src1_vec);
 
@@ -319,32 +326,21 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, BmmMultinode) {
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = READER,
             .named_runtime_args =
-                {{.node = node0,
-                  .args =
-                      {{"Mt", p.Mt},
-                       {"Kt", p.Kt},
-                       {"Nt", p.Nt},
-                       {"MtKt", p.Mt * p.Kt},
-                       {"KtNt", p.Kt * p.Nt},
-                       {"batch", p.B_per_core},
-                       {"do_bcast", do_bcast},
-                       {"batch_start", 0u}}},
-                 {.node = node1,
-                  .args =
-                      {{"Mt", p.Mt},
-                       {"Kt", p.Kt},
-                       {"Nt", p.Nt},
-                       {"MtKt", p.Mt * p.Kt},
-                       {"KtNt", p.Kt * p.Nt},
-                       {"batch", p.B_per_core},
-                       {"do_bcast", do_bcast},
-                       {"batch_start", 1u}}}},
+                {{.node = node0, .args = {{"batch_start", 0u}}}, {.node = node1, .args = {{"batch_start", 1u}}}},
+            .named_common_runtime_args =
+                {{"Mt", p.Mt},
+                 {"Kt", p.Kt},
+                 {"Nt", p.Nt},
+                 {"MtKt", p.Mt * p.Kt},
+                 {"KtNt", p.Kt * p.Nt},
+                 {"batch", p.B_per_core},
+                 {"do_bcast", do_bcast}},
         },
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = WRITER,
             .named_runtime_args =
-                {{.node = node0, .args = {{"Mt", p.Mt}, {"Nt", p.Nt}, {"batch", p.B_per_core}, {"batch_start", 0u}}},
-                 {.node = node1, .args = {{"Mt", p.Mt}, {"Nt", p.Nt}, {"batch", p.B_per_core}, {"batch_start", 1u}}}},
+                {{.node = node0, .args = {{"batch_start", 0u}}}, {.node = node1, .args = {{"batch_start", 1u}}}},
+            .named_common_runtime_args = {{"Mt", p.Mt}, {"Nt", p.Nt}, {"batch", p.B_per_core}},
         },
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{.kernel_spec_name = COMPUTE},
     };
@@ -357,6 +353,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, BmmMultinode) {
 
     auto src0_vec = create_random_vector_of_bfloat16(bytesA, 1.0f, 0x1234);
     auto src1_vec = create_random_vector_of_bfloat16(bytesB, 1.0f, 0x1234, -0.45f);
+    // MeshTensor doesn't yet expose slow-dispatch read/write APIs, so route through the
+    // underlying reference buffer to populate / read back DRAM.
     detail::WriteToBuffer(*tensors.src0.mesh_buffer().get_reference_buffer(), src0_vec);
     detail::WriteToBuffer(*tensors.src1.mesh_buffer().get_reference_buffer(), src1_vec);
 

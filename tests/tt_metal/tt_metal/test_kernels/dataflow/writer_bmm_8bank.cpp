@@ -32,7 +32,7 @@ void kernel_main() {
                 if (mt_C % num_writers == writer_id) {
                     dfb.wait_front(onetile);
                     uint32_t l1_read_addr = dfb.get_read_ptr();
-                    noc_async_write_tile(itileC, s, l1_read_addr);
+                    noc_async_write_page(itileC, s, l1_read_addr);
                     noc.async_write_barrier();
                     dfb.pop_front(onetile);
                 }

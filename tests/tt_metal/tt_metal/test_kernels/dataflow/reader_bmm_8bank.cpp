@@ -44,7 +44,7 @@ void kernel_main() {
                     if (mt % num_readers == reader_id) {
                         dfb0.reserve_back(onetile);
                         uint32_t l1_write_addr_in0 = dfb0.get_write_ptr();
-                        noc_async_read_tile(itileA, s0, l1_write_addr_in0);
+                        noc_async_read_page(itileA, s0, l1_write_addr_in0);
                         noc.async_read_barrier();
                         dfb0.push_back(onetile);
                     }
@@ -53,7 +53,7 @@ void kernel_main() {
                     if (mt % num_readers == reader_id && kt % num_readers == reader_id) {
                         dfb1.reserve_back(onetile);
                         uint32_t l1_write_addr_in1 = dfb1.get_write_ptr();
-                        noc_async_read_tile(itileB, s1, l1_write_addr_in1);
+                        noc_async_read_page(itileB, s1, l1_write_addr_in1);
                         noc.async_read_barrier();
                         dfb1.push_back(onetile);
                     }

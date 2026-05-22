@@ -28,7 +28,7 @@ void kernel_main() {
     DataflowBuffer dfb1(dfb::src1);
     DataflowBuffer dfb_out(dfb::dst);
 
-    mm_init(dfb0.get_id(), dfb1.get_id(), dfb_out.get_id());
+    mm_init(dfb::src0, dfb::src1, dfb::dst);
 
     // the simplest possible version of outer product blocked matmul
     // the reader is expected to read the A's and B's tile rows and tile columns for each output tile
@@ -39,20 +39,21 @@ void kernel_main() {
             }
             for (uint32_t nt_C = 0; nt_C < Nt; ++nt_C)  // output tile index of C
             {
-                acquire_dst();
+                tile_regs_acquire();
                 for (uint32_t kt = 0; kt < Kt; kt++) {
                     dfb0.wait_front(onetile);
                     dfb1.wait_front(onetile);
-                    matmul_tiles(dfb0.get_id(), dfb1.get_id(), 0, 0, 0);
+                    matmul_tiles(dfb::src0, dfb::src1, 0, 0, 0);
                     dfb0.pop_front(onetile);
                     dfb1.pop_front(onetile);
                 }
+                tile_regs_commit();
 
                 dfb_out.reserve_back(onetile);
-                pack_tile(0, dfb_out.get_id());
+                tile_regs_wait();
+                pack_tile(0, dfb::dst);
+                tile_regs_release();
                 dfb_out.push_back(onetile);
-
-                release_dst();
             }
         }
     }
