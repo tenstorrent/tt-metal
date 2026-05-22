@@ -1230,10 +1230,13 @@ ALWI void matmul_blocks(
     //   in0_cb has M*K produced; in1_cb has K*N produced.
     // Postconditions: in0_cb is full (retained), in1_cb is empty, out_cb has M*N produced.
 
-    // num_blocks == 1 in SDPA, so the helper's K-accumulation path is inert; in0_cb is
-    // forwarded as the interm_cb placeholder — it is unused when num_k_blocks == 1.
-    // InitMode::Short with default reconfig=INPUT_AND_OUTPUT handles the reconfig +
-    // mm_block_init_short internally (formerly hand-paired here before the call).
+    // num_blocks == 1 in SDPA, so the helper's K-accumulation path is inert. But the
+    // helper still uses interm_cb_id at InitMode::Short time to set the PACK FORMAT
+    // (PACK((pack_reconfig_data_format(interm_cb_id))) in matmul_block_helpers.inl).
+    // For QK matmul on bfp8 Q: in0=cb_q_in (Bfp8_b), out=cb_qk_im (Float16_b). Passing
+    // in0 as the interm placeholder would set the pack format to Bfp8_b, producing
+    // garbage in cb_qk_im. Pass out_buf instead so the pack format matches the actual
+    // pack target. Safe because interm is otherwise unused at num_k_blocks=1.
     CircularBuffer in0_buf(in0_cb);
     CircularBuffer in1_buf(in1_cb);
     CircularBuffer out_buf(out_cb);
@@ -1251,7 +1254,7 @@ ALWI void matmul_blocks(
         in0_buf,
         in1_buf,
         out_buf,
-        in0_buf,
+        out_buf,
         compute_kernel_lib::MatmulBlockShape::of(
             in0_num_subblocks, in1_num_subblocks, subblock_h, subblock_w, in0_block_w, num_blocks, /*batch=*/1),
         OptionalMaskPostCompute{
