@@ -5,11 +5,20 @@
 #pragma once
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 #include "api/debug/assert.h"
 #include "api/debug/dprint.h"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <array>
 
+// Legacy shim (#45003 item 4): consumes raw L1 addresses and uses legacy
+// noc_semaphore_* primitives. Migration to Semaphore<> requires the semaphore
+// id, which is not on the function's interface — kept as-is until callers
+// migrate, then revisited as part of the helper-shim removal PR.
 // Called by the master worker to synchronize with the slave workers
 FORCE_INLINE void master_sync_slaves(
 
@@ -67,6 +76,7 @@ FORCE_INLINE void master_sync_slaves(
     }
 }
 
+// Legacy shim (#45003 item 4): same status as master_sync_slaves above.
 // Called by the slave worker to synchronize with the master worker
 FORCE_INLINE void slave_sync_master(const uint32_t* worker_noc_coords, const uint32_t worker_sync_sem_addr) {
     // Signal the master that the slave has finished its work
@@ -206,6 +216,10 @@ struct MatmulOpReceiver {
     std::array<uint32_t, num_directions> start_page_idxs = {};
     std::array<bool, num_directions> is_clockwise_dirs = {};
     std::array<volatile tt_l1_ptr uint32_t*, num_directions> signal_op_semaphore_addr_ptrs = {};
+    // Mirrors signal_op_semaphore_addr_ptrs as semaphore ids for the Device 2.0
+    // Semaphore<> API. Both are populated; addr_ptrs preserves the public field
+    // interface for legacy consumers.
+    std::array<uint32_t, num_directions> signal_op_semaphore_ids = {};
     uint32_t curr_dir = 0;
     uint32_t curr_transfer_idx = 0;
 
@@ -230,10 +244,12 @@ struct MatmulOpReceiver {
         uint32_t is_clockwise_direction = get_arg_val<uint32_t>(rt_args_idx++);
 
         if (this->wait_for_op_signal) {
+            this->signal_op_semaphore_ids[0] = get_arg_val<uint32_t>(rt_args_idx++);
+            this->signal_op_semaphore_ids[1] = get_arg_val<uint32_t>(rt_args_idx++);
             this->signal_op_semaphore_addr_ptrs[0] =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_arg_val<uint32_t>(rt_args_idx++)));
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(this->signal_op_semaphore_ids[0]));
             this->signal_op_semaphore_addr_ptrs[1] =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_arg_val<uint32_t>(rt_args_idx++)));
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(this->signal_op_semaphore_ids[1]));
         }
 
         this->num_tensor_slices = this->num_transfers * this->num_directions;
@@ -282,7 +298,7 @@ struct MatmulOpReceiver {
 
             // Wait for a semaphore signal to start processing the tensor slice
             if (this->wait_for_op_signal) {
-                noc_semaphore_wait_min(this->signal_op_semaphore_addr_ptrs[this->curr_dir], tensor_slice_cnt + 1);
+                Semaphore<>(this->signal_op_semaphore_ids[this->curr_dir]).wait_min(tensor_slice_cnt + 1);
             }
 
             // Update the relevant internal states
@@ -320,7 +336,7 @@ struct MatmulOpReceiver {
             // Wait for a semaphore signal to start processing the tensor slice
             if (this->wait_for_op_signal && block_id == sender_id) {
                 uint32_t tensor_slice_cnt = (this->curr_transfer_idx) / this->num_directions;
-                noc_semaphore_wait_min(this->signal_op_semaphore_addr_ptrs[this->curr_dir], 1);
+                Semaphore<>(this->signal_op_semaphore_ids[this->curr_dir]).wait_min(1);
             }
 
             this->curr_transfer_idx++;
@@ -332,6 +348,9 @@ struct MatmulOpReceiver {
 
 struct ReduceScatterOpReceiver {
     volatile tt_l1_ptr uint32_t* signal_op_semaphore_addr_ptr;
+    // Mirrors signal_op_semaphore_addr_ptr as a semaphore id for the
+    // Device 2.0 Semaphore<> API; both are populated.
+    uint32_t signal_op_semaphore_id = 0;
 
     bool initialized = false;
 
@@ -339,14 +358,15 @@ struct ReduceScatterOpReceiver {
 
     ReduceScatterOpReceiver(uint32_t& rt_args_idx) {
         // Runtime args
+        this->signal_op_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
         this->signal_op_semaphore_addr_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_arg_val<uint32_t>(rt_args_idx++)));
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(this->signal_op_semaphore_id));
 
         this->initialized = true;
     }
 
     void wait_for_matmul_batch(const uint32_t& batch_idx) {
         ASSERT(this->initialized);
-        noc_semaphore_wait_min(this->signal_op_semaphore_addr_ptr, batch_idx + 1);
+        Semaphore<>(this->signal_op_semaphore_id).wait_min(batch_idx + 1);
     }
 };
