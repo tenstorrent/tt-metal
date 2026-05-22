@@ -296,14 +296,6 @@ class OperationSchemaBase(BaseModel):
             max_out_dims if max_out_dims is not None else output.dimensions
         )
 
-        if (
-            self.block_size[0] > output.dimensions[0]
-            or self.block_size[1] > output.dimensions[1]
-        ):
-            raise ValueError(
-                f"Block size {self.block_size} exceeds output dimensions {output.dimensions}"
-            )
-
         _, checks = type(self)._packer_map[self.packer]
         if checks is not None:
             for check, error_msg in checks:
