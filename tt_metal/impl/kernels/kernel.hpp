@@ -669,8 +669,8 @@ public:
 private:
     const QuasarComputeConfig config_;
     const std::vector<QuasarComputeProcessor> compute_processors_;
-    // Processors grouped by TRISC slot (enum % 4). Same slot across NEOs shares one compile
-    // (jit_build_for_processors) and one in-memory binary; each NEO gets a separate link ELF on disk.
+    // Processors grouped by TRISC slot (enum % 4). Same slot across NEOs shares one compile,
+    // one on-disk ELF, and one device transfer.
     std::vector<std::vector<QuasarComputeProcessor>> trisc_binary_groups_;
 
     void init_trisc_binary_groups();

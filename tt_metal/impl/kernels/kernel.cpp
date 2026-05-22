@@ -1190,17 +1190,12 @@ void QuasarComputeKernel::generate_binaries(IDevice* device, JitBuildOptions&) c
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
 
-    // One compile per TRISC slot (UNPACK/MATH/PACK/ISOLATE_SFPU), multiple links for each NEO that uses that slot.
-    std::vector<const JitBuildState*> targets;
+    // One compile/link per TRISC slot (UNPACK/MATH/PACK/ISOLATE_SFPU), shared across all NEOs using that slot.
     for (const auto& group : this->trisc_binary_groups_) {
-        targets.clear();
-        targets.reserve(group.size());
-        for (QuasarComputeProcessor p : group) {
-            const int processor_id = static_cast<int>(enchantum::to_underlying(p));
-            targets.push_back(&BuildEnvManager::get_instance().get_kernel_build_state(
-                device->build_id(), tensix_core_type, compute_class_idx, processor_id));
-        }
-        jit_build_for_processors(targets, this);
+        const int processor_id = static_cast<int>(enchantum::to_underlying(group[0]));
+        const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
+            device->build_id(), tensix_core_type, compute_class_idx, processor_id);
+        jit_build(build_state, this);
     }
 }
 
@@ -1251,13 +1246,12 @@ bool QuasarComputeKernel::configure(
     const uint32_t dm_count = MetalContext::instance().hal().get_processor_types_count(
         HalProgrammableCoreType::TENSIX, enchantum::to_underlying(HalProcessorClassType::DM));
     for (size_t i = 0; i < this->trisc_binary_groups_.size(); ++i) {
-        for (QuasarComputeProcessor p : this->trisc_binary_groups_[i]) {
-            llrt::write_binary_to_address(
-                *binaries[i],
-                device_id,
-                worker_core,
-                base_address + offsets[dm_count + static_cast<std::underlying_type_t<QuasarComputeProcessor>>(p)]);
-        }
+        const QuasarComputeProcessor canonical = this->trisc_binary_groups_[i][0];
+        llrt::write_binary_to_address(
+            *binaries[i],
+            device_id,
+            worker_core,
+            base_address + offsets[dm_count + static_cast<std::underlying_type_t<QuasarComputeProcessor>>(canonical)]);
     }
 
     return true;
