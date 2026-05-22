@@ -16,21 +16,21 @@
 namespace llk::san
 {
 
-// Goes in ComputeAPI
-// State set only
-// sstanisic todo: implement support_backtrace_impl
-// static inline void support_backtrace_impl(std::string function_name)
-// {
-//     LLK_SAN_ASSERT(false, "not implemented");
-// }
-
-// Goes in LLK_API
-// State set only
-// sstanisic todo: implement support_globals_impl
-// static inline void support_globals_impl(bool dst_acc_mode, DstSync dst_sync, bool approx, std::int32_t math_fidelity)
-// {
-//     LLK_SAN_ASSERT(false, "not implemented");
-// }
+static inline auto& thread_context_get_impl(SanitizerState& sanitizer) noexcept
+{
+    if constexpr (COMPILE_FOR_TRISC == 0)
+    {
+        return sanitizer.context.unpack;
+    }
+    else if constexpr (COMPILE_FOR_TRISC == 1)
+    {
+        return sanitizer.context.math;
+    }
+    else if constexpr (COMPILE_FOR_TRISC == 2)
+    {
+        return sanitizer.context.pack;
+    }
+}
 
 static inline void thread_init_impl(SanitizerState& sanitizer)
 {
@@ -38,59 +38,61 @@ static inline void thread_init_impl(SanitizerState& sanitizer)
     {
         // Unpacker thread
         new (&sanitizer.operand.unpack) llk::san::UnpackOperandState();
+        new (&sanitizer.context.unpack) llk::san::UnpackOutputContext();
     }
     else if constexpr (COMPILE_FOR_TRISC == 1)
     {
         // Math thread
         new (&sanitizer.operand.math) llk::san::MathOperandState();
+        new (&sanitizer.context.math) llk::san::MathOutputContext();
     }
     else if constexpr (COMPILE_FOR_TRISC == 2)
     {
         // Packer thread
         new (&sanitizer.operand.pack) llk::san::PackOperandState();
+        new (&sanitizer.context.pack) llk::san::PackOutputContext();
     }
 
     new (&sanitizer.operation[COMPILE_FOR_TRISC]) llk::san::OperationState();
     new (&sanitizer.fsm[COMPILE_FOR_TRISC]) llk::san::FsmState(llk::san::FsmState::INITIAL);
-
-    sanitizer.function_curr[COMPILE_FOR_TRISC]  = CTSTR("<unknown>");
-    sanitizer.function_depth[COMPILE_FOR_TRISC] = 0;
-
-    sanitizer.silent_depth[COMPILE_FOR_TRISC] = 0;
 }
 
-static inline void thread_silent_push_impl(SanitizerState& sanitizer)
+static inline void thread_silent_push_impl(ThreadOutputContext& context)
 {
-    sanitizer.silent_depth[COMPILE_FOR_TRISC]++;
+    context.silent_depth++;
 }
 
-static inline void thread_silent_pop_impl(SanitizerState& sanitizer)
+static inline void thread_silent_pop_impl(ThreadOutputContext& context)
 {
-    sanitizer.silent_depth[COMPILE_FOR_TRISC]--;
+    context.silent_depth--;
 }
 
-static inline bool thread_silent_get_impl(const SanitizerState& sanitizer)
+static inline bool thread_silent_get_impl(const ThreadOutputContext& context)
 {
-    return sanitizer.silent_depth[COMPILE_FOR_TRISC] > 0;
+    return context.silent_depth > 0;
 }
 
-static inline void thread_function_push_impl(SanitizerState& sanitizer, ct_string function)
+static TT_ALWAYS_INLINE void write_unwind_context(UnwindContext& context)
+{
+    asm volatile("auipc %[pc], 0\n" : [pc] "=r"(context.pc));
+    context.ra = (uintptr_t)__builtin_return_address(0);
+}
+
+static inline void thread_context_push_impl(ThreadOutputContext& context)
 {
     // to handle nested compute api calls, we only push for the first function.
-    if (sanitizer.function_depth[COMPILE_FOR_TRISC]++ == 0)
+    if (context.context_depth++ == 0)
     {
-        sanitizer.function_curr[COMPILE_FOR_TRISC] = function;
-        return;
+        write_unwind_context(context.current);
     }
 }
 
-static inline void thread_function_pop_impl(SanitizerState& sanitizer)
+static inline void thread_context_pop_impl(ThreadOutputContext& context)
 {
     // to handle nested compute api calls, we only pop for the first function.
-    if (--sanitizer.function_depth[COMPILE_FOR_TRISC] == 0)
+    if (--context.context_depth == 0)
     {
-        sanitizer.function_curr[COMPILE_FOR_TRISC] = CTSTR("<unknown>");
-        return;
+        context.current = UnwindContext::UNKNOWN;
     }
 }
 
@@ -98,6 +100,7 @@ static inline void thread_function_pop_impl(SanitizerState& sanitizer)
 // State set + no hw config within kernel check
 template <bool reconfig>
 static inline void unpack_operand_configure_impl(
+    UnpackOutputContext& context,
     UnpackOperandState& state,
     State<bool> dst_acc_en,
     State<std::uint32_t> src_fmt_A,
@@ -116,6 +119,11 @@ static inline void unpack_operand_configure_impl(
     src_a.face_height   = face_height_A;
     src_a.num_faces     = num_faces_A;
 
+    if (src_fmt_A.is_known() || dst_fmt_A.is_known() || face_height_A.is_known() || num_faces_A.is_known())
+    {
+        context.configure_a = context.current;
+    }
+
     UnpackSrcState& src_b = state.src_b;
 
     src_b.input_format  = src_fmt_B;
@@ -123,22 +131,40 @@ static inline void unpack_operand_configure_impl(
     src_b.face_height   = face_height_B;
     src_b.num_faces     = num_faces_B;
 
+    if (src_fmt_B.is_known() || dst_fmt_B.is_known() || face_height_B.is_known() || num_faces_B.is_known())
+    {
+        context.configure_b = context.current;
+    }
+
+    // fixme: this is shared state, only set during the configure. current assumption is that it won't change.
     state.dest_width_32 = dst_acc_en;
     state.is_configured = true;
 }
 
 // State set + no hw config within kernel check
 template <bool reconfig = false>
-static inline void math_operand_configure_impl(MathOperandState& state, State<std::uint32_t> math_fmt_A, State<std::uint32_t> math_fmt_B)
+static inline void math_operand_configure_impl(
+    MathOutputContext& context, MathOperandState& state, State<std::uint32_t> math_fmt_A, State<std::uint32_t> math_fmt_B)
 {
+    if (math_fmt_A.is_known())
+    {
+        context.configure_fpu = context.current;
+    }
     state.src_a.input_format = math_fmt_A;
+
+    if (math_fmt_B.is_known())
+    {
+        context.configure_sfpu = context.current;
+    }
     state.src_b.input_format = math_fmt_B;
+
     state.is_configured      = true;
 }
 
 // State set + no hw config within kernel check
 template <bool reconfig>
 static inline void pack_operand_configure_impl(
+    PackOutputContext& context,
     PackOperandState& state,
     State<bool> dest_acc_en,
     State<std::uint32_t> src_fmt,
@@ -149,6 +175,12 @@ static inline void pack_operand_configure_impl(
     State<bool> partial_face,
     State<bool> narrow_tile)
 {
+    if (src_fmt.is_known() || dst_fmt.is_known() || face_height.is_known() || tile_width.is_known() || num_faces.is_known() || partial_face.is_known() ||
+        narrow_tile.is_known() || dest_acc_en.is_known())
+    {
+        context.configure_pack = context.current;
+    }
+
     state.input_format  = src_fmt;
     state.output_format = dst_fmt;
     state.face_height   = face_height;
@@ -163,8 +195,7 @@ static inline void pack_operand_configure_impl(
 // Goes in LLK_LIB in Init, Execute and Uninit
 // No state set, just check that non x arguments match the stored ones
 static inline void unpack_operand_check_impl(
-    ct_string function,
-    bool silent,
+    const UnpackOutputContext& context,
     UnpackOperandState& state,
     State<bool> dest_acc_en,
     State<std::uint32_t> src_fmt_A,
@@ -176,39 +207,41 @@ static inline void unpack_operand_check_impl(
     State<std::uint32_t> num_faces_A,
     State<std::uint32_t> num_faces_B)
 {
-    if (!silent)
+    if (!thread_silent_get_impl(context))
     {
-        LLK_SAN_PEDANTIC_PANIC(!state.is_configured, "{} : executing init/execute/uninit before hwconfigure", function);
+        const auto pc = context.current.pc;
 
-        LLK_SAN_ERROR_ASSERT(state.dest_width_32.assert_cond(dest_acc_en), "{} : dest_acc_en doesn't match state.dest_width_32", function);
+        LLK_SAN_PEDANTIC_PANIC(!state.is_configured, "{:#x} : executing init/execute/uninit before hwconfigure", pc);
 
-        LLK_SAN_ERROR_ASSERT(state.src_a.input_format.assert_cond(src_fmt_A), "{} : src_fmt_A doesn't match state.src_a.input_format", function);
-        LLK_SAN_ERROR_ASSERT(state.src_b.input_format.assert_cond(src_fmt_B), "{} : src_fmt_B doesn't match state.src_b.input_format", function);
-        LLK_SAN_ERROR_ASSERT(state.src_a.output_format.assert_cond(dst_fmt_A), "{} : dst_fmt_A doesn't match state.src_a.output_format", function);
-        LLK_SAN_ERROR_ASSERT(state.src_b.output_format.assert_cond(dst_fmt_B), "{} : dst_fmt_B doesn't match state.src_b.output_format", function);
-        LLK_SAN_ERROR_ASSERT(state.src_a.face_height.assert_cond(face_height_A), "{} : face_height_A doesn't match state.src_a.face_height", function);
-        LLK_SAN_ERROR_ASSERT(state.src_b.face_height.assert_cond(face_height_B), "{} : face_height_B doesn't match state.src_b.face_height", function);
-        LLK_SAN_ERROR_ASSERT(state.src_a.num_faces.assert_cond(num_faces_A), "{} : num_faces_A doesn't match state.src_a.num_faces", function);
-        LLK_SAN_ERROR_ASSERT(state.src_b.num_faces.assert_cond(num_faces_B), "{} : num_faces_B doesn't match state.src_b.num_faces", function);
+        LLK_SAN_ERROR_ASSERT(state.dest_width_32.assert_cond(dest_acc_en), "{:#x} : dest_acc_en doesn't match state.dest_width_32", pc);
+
+        LLK_SAN_ERROR_ASSERT(state.src_a.input_format.assert_cond(src_fmt_A), "{:#x} : src_fmt_A doesn't match state.src_a.input_format", pc);
+        LLK_SAN_ERROR_ASSERT(state.src_b.input_format.assert_cond(src_fmt_B), "{:#x} : src_fmt_B doesn't match state.src_b.input_format", pc);
+        LLK_SAN_ERROR_ASSERT(state.src_a.output_format.assert_cond(dst_fmt_A), "{:#x} : dst_fmt_A doesn't match state.src_a.output_format", pc);
+        LLK_SAN_ERROR_ASSERT(state.src_b.output_format.assert_cond(dst_fmt_B), "{:#x} : dst_fmt_B doesn't match state.src_b.output_format", pc);
+        LLK_SAN_ERROR_ASSERT(state.src_a.face_height.assert_cond(face_height_A), "{:#x} : face_height_A doesn't match state.src_a.face_height", pc);
+        LLK_SAN_ERROR_ASSERT(state.src_b.face_height.assert_cond(face_height_B), "{:#x} : face_height_B doesn't match state.src_b.face_height", pc);
+        LLK_SAN_ERROR_ASSERT(state.src_a.num_faces.assert_cond(num_faces_A), "{:#x} : num_faces_A doesn't match state.src_a.num_faces", pc);
+        LLK_SAN_ERROR_ASSERT(state.src_b.num_faces.assert_cond(num_faces_B), "{:#x} : num_faces_B doesn't match state.src_b.num_faces", pc);
     }
 }
 
 // No state set, just check that non x arguments match the stored ones
 static inline void math_operand_check_impl(
-    ct_string function, bool silent, MathOperandState& state, State<std::uint32_t> math_fmt_A, State<std::uint32_t> math_fmt_B)
+    const MathOutputContext& context, MathOperandState& state, State<std::uint32_t> math_fmt_A, State<std::uint32_t> math_fmt_B)
 {
-    if (!silent)
+    if (!thread_silent_get_impl(context))
     {
-        LLK_SAN_PEDANTIC_PANIC(!state.is_configured, "{} : executing init/execute/uninit before hwconfigure", function);
-        LLK_SAN_ERROR_ASSERT(state.src_a.input_format.assert_cond(math_fmt_A), "{} : math_fmt_A doesn't match state.src_a.input_format", function);
-        LLK_SAN_ERROR_ASSERT(state.src_b.input_format.assert_cond(math_fmt_B), "{} : math_fmt_B doesn't match state.src_b.input_format", function);
+        const auto pc = context.current.pc;
+        LLK_SAN_PEDANTIC_PANIC(!state.is_configured, "{:#x} : executing init/execute/uninit before hwconfigure", pc);
+        LLK_SAN_ERROR_ASSERT(state.src_a.input_format.assert_cond(math_fmt_A), "{:#x} : math_fmt_A doesn't match state.src_a.input_format", pc);
+        LLK_SAN_ERROR_ASSERT(state.src_b.input_format.assert_cond(math_fmt_B), "{:#x} : math_fmt_B doesn't match state.src_b.input_format", pc);
     }
 }
 
 // No state set, just check that non x arguments match the stored ones
 static inline void pack_operand_check_impl(
-    ct_string function,
-    bool silent,
+    const PackOutputContext& context,
     PackOperandState& state,
     State<bool> dest_acc_en,
     State<std::uint32_t> src_fmt,
@@ -219,17 +252,18 @@ static inline void pack_operand_check_impl(
     State<bool> partial_face,
     State<bool> narrow_tile)
 {
-    if (!silent)
+    if (!thread_silent_get_impl(context))
     {
-        LLK_SAN_PEDANTIC_PANIC(!state.is_configured, "{} : executing init/execute/uninit before hwconfigure", function);
-        LLK_SAN_ERROR_ASSERT(state.dest_width_32.assert_cond(dest_acc_en), "{} : dest_acc_en doesn't match state.dest_width_32", function);
-        LLK_SAN_ERROR_ASSERT(state.input_format.assert_cond(src_fmt), "{} : src_fmt doesn't match state.input_format", function);
-        LLK_SAN_ERROR_ASSERT(state.output_format.assert_cond(dst_fmt), "{} : dst_fmt doesn't match state.output_format", function);
-        // sstanisic fixme: LLK_SAN_ERROR_ASSERT(state.face_height.assert_cond(face_height), "{} : face_height doesn't match state.face_height", function);
-        LLK_SAN_ERROR_ASSERT(state.tile_width.assert_cond(tile_width), "{} : tile_width doesn't match state.tile_width", function);
-        LLK_SAN_ERROR_ASSERT(state.num_faces.assert_cond(num_faces), "{} : num_faces doesn't match state.num_faces", function);
-        LLK_SAN_ERROR_ASSERT(state.partial_face.assert_cond(partial_face), "{} : partial_face doesn't match state.partial_face", function);
-        LLK_SAN_ERROR_ASSERT(state.narrow_tile.assert_cond(narrow_tile), "{} : narrow_tile doesn't match state.narrow_tile", function);
+        const auto pc = context.current.pc;
+        LLK_SAN_PEDANTIC_PANIC(!state.is_configured, "{:#x} : executing init/execute/uninit before hwconfigure", pc);
+        LLK_SAN_ERROR_ASSERT(state.dest_width_32.assert_cond(dest_acc_en), "{:#x} : dest_acc_en doesn't match state.dest_width_32", pc);
+        LLK_SAN_ERROR_ASSERT(state.input_format.assert_cond(src_fmt), "{:#x} : src_fmt doesn't match state.input_format", pc);
+        LLK_SAN_ERROR_ASSERT(state.output_format.assert_cond(dst_fmt), "{:#x} : dst_fmt doesn't match state.output_format", pc);
+        // sstanisic fixme: LLK_SAN_ERROR_ASSERT(state.face_height.assert_cond(face_height), "{:#x} : face_height doesn't match state.face_height", pc);
+        LLK_SAN_ERROR_ASSERT(state.tile_width.assert_cond(tile_width), "{:#x} : tile_width doesn't match state.tile_width", pc);
+        LLK_SAN_ERROR_ASSERT(state.num_faces.assert_cond(num_faces), "{:#x} : num_faces doesn't match state.num_faces", pc);
+        LLK_SAN_ERROR_ASSERT(state.partial_face.assert_cond(partial_face), "{:#x} : partial_face doesn't match state.partial_face", pc);
+        LLK_SAN_ERROR_ASSERT(state.narrow_tile.assert_cond(narrow_tile), "{:#x} : narrow_tile doesn't match state.narrow_tile", pc);
     }
 }
 
@@ -345,11 +379,13 @@ static inline void operation_init_impl(OperationState& state, const Ts... args)
 // Goes in LLK_LIB in Execute
 // Check operation type and arguments against stored ones
 template <Operation op, typename... Ts>
-void operation_check_impl(ct_string function, bool silent, OperationState& state, const Ts... args)
+void operation_check_impl(const ThreadOutputContext& context, OperationState& state, const Ts... args)
 {
-    if (!silent)
+    if (!thread_silent_get_impl(context))
     {
-        LLK_SAN_ERROR_PANIC(state.operation != op, "{} : operation type doesn't match stored operation", function);
+        const auto pc = context.current.pc;
+
+        LLK_SAN_ERROR_PANIC(state.operation != op, "{:#x} : operation type doesn't match stored operation", pc);
 
         constexpr std::uint8_t args_count = _args_count<Ts...>();
 
@@ -365,17 +401,17 @@ void operation_check_impl(ct_string function, bool silent, OperationState& state
 
         char* ptr = state.buffer;
 
-        LLK_SAN_FAULT_ASSERT(std::memcmp(&args_count, ptr, sizeof(args_count)) == 0, "{} : saved vs provided args_count mismatch", function);
+        LLK_SAN_FAULT_ASSERT(std::memcmp(&args_count, ptr, sizeof(args_count)) == 0, "{:#x} : saved vs provided args_count mismatch", pc);
         ptr += sizeof(args_count);
 
         if constexpr (args_count > 0)
         {
             LLK_SAN_FAULT_ASSERT(
-                std::memcmp(args_sizeof.data(), ptr, args_count * sizeof(args_sizeof[0])) == 0, "{} : saved vs provided args_sizeof mismatch", function);
+                std::memcmp(args_sizeof.data(), ptr, args_count * sizeof(args_sizeof[0])) == 0, "{:#x} : saved vs provided args_sizeof mismatch", pc);
             ptr += args_count * sizeof(args_sizeof[0]);
 
             LLK_SAN_FAULT_ASSERT(
-                std::memcmp(args_alignof.data(), ptr, args_count * sizeof(args_alignof[0])) == 0, "{} : saved vs provided args_alignof mismatch", function);
+                std::memcmp(args_alignof.data(), ptr, args_count * sizeof(args_alignof[0])) == 0, "{:#x} : saved vs provided args_alignof mismatch", pc);
             ptr += args_count * sizeof(args_alignof[0]);
 
             constexpr size_t max_align = alignof(max_align_t);
@@ -384,7 +420,7 @@ void operation_check_impl(ct_string function, bool silent, OperationState& state
 
             [[maybe_unused]] size_t i = 0;
             ([&]([[maybe_unused]] const auto& arg)
-             { LLK_SAN_ERROR_ASSERT(std::memcmp(ptr + args_offsetof[i++], &arg, sizeof(arg)) == 0, "{} : saved vs provided args mismatch", function); }(args),
+             { LLK_SAN_ERROR_ASSERT(std::memcmp(ptr + args_offsetof[i++], &arg, sizeof(arg)) == 0, "{:#x} : saved vs provided args mismatch", pc); }(args),
              ...);
         }
     }
@@ -393,11 +429,11 @@ void operation_check_impl(ct_string function, bool silent, OperationState& state
 // Goes in LLK_LIB in Uninit
 // Check operation type and clear must uninit flag
 template <Operation op>
-void operation_uninit_impl(ct_string function, bool silent, OperationState& state)
+void operation_uninit_impl(const ThreadOutputContext& context, OperationState& state)
 {
-    if (!silent)
+    if (!thread_silent_get_impl(context))
     {
-        LLK_SAN_ERROR_PANIC(state.operation != op, "{} : tried to uninit wrong operation type", function);
+        LLK_SAN_ERROR_PANIC(state.operation != op, "{:#x} : tried to uninit wrong operation type", context.current.pc);
     }
 
     state.expect_uninit = false;
@@ -424,45 +460,47 @@ static inline ct_string fsm_state_name(const FsmState state)
 }
 
 template <FsmState next>
-void fsm_advance_impl(ct_string function, bool silent, FsmState& current, [[maybe_unused]] const OperationState& operation)
+void fsm_advance_impl(const ThreadOutputContext& context, FsmState& current, [[maybe_unused]] const OperationState& operation)
 {
     ct_string next_name = fsm_state_name(next);
 
-    if (!silent)
+    if (!thread_silent_get_impl(context))
     {
-        LLK_SAN_ERROR_PANIC(
-            current == FsmState::INITIAL && next != FsmState::CONFIGURED, "{} : initial -> {}, expected first operation to be configure", function, next_name);
+        const auto pc = context.current.pc;
 
         LLK_SAN_ERROR_PANIC(
-            current == FsmState::CONFIGURED && next != FsmState::INITIALIZED, "{} : configured -> {}, expected init after configure", function, next_name);
+            current == FsmState::INITIAL && next != FsmState::CONFIGURED, "{:#x} : initial -> {}, expected first operation to be configure", pc, next_name);
 
         LLK_SAN_ERROR_PANIC(
-            current == FsmState::INITIALIZED && next != FsmState::EXECUTED, "{} : initialized -> {}, expected execute after init", function, next_name);
+            current == FsmState::CONFIGURED && next != FsmState::INITIALIZED, "{:#x} : configured -> {}, expected init after configure", pc, next_name);
+
+        LLK_SAN_ERROR_PANIC(
+            current == FsmState::INITIALIZED && next != FsmState::EXECUTED, "{:#x} : initialized -> {}, expected execute after init", pc, next_name);
 
         LLK_SAN_ERROR_PANIC(
             current == FsmState::EXECUTED && operation.expect_uninit && (next != FsmState::UNINITIALIZED && next != FsmState::EXECUTED),
-            "{} : executed -> {}, expected execute or uninit after execute",
-            function,
+            "{:#x} : executed -> {}, expected execute or uninit after execute",
+            pc,
             next_name);
 
         // shouldn't be possible to trigger, sanity check
         LLK_SAN_FAULT_PANIC(
             current == FsmState::EXECUTED && !operation.expect_uninit && next == FsmState::UNINITIALIZED,
-            "{} : executed -> {}, unexpected uninit after execute that doesn't require uninit",
-            function,
+            "{:#x} : executed -> {}, unexpected uninit after execute that doesn't require uninit",
+            pc,
             next_name);
 
         LLK_SAN_ERROR_PANIC(
             current == FsmState::EXECUTED && !operation.expect_uninit &&
                 (next != FsmState::EXECUTED && next != FsmState::INITIALIZED && next != FsmState::RECONFIGURED),
-            "{} : executed -> {}, expected execute, init or reconfig operation after execute",
-            function,
+            "{:#x} : executed -> {}, expected execute, init or reconfig operation after execute",
+            pc,
             next_name);
 
         LLK_SAN_ERROR_PANIC(
             current == FsmState::UNINITIALIZED && (next != FsmState::INITIALIZED && next != FsmState::RECONFIGURED),
-            "{} : uninitialized -> {}, expected init or reconfigure after uninit",
-            function,
+            "{:#x} : uninitialized -> {}, expected init or reconfigure after uninit",
+            pc,
             next_name);
     }
 
