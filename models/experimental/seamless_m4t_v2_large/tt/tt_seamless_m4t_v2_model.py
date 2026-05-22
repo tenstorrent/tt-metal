@@ -417,6 +417,20 @@ class TTSeamlessM4Tv2Model:
         self._t2u_attn_mask_cache: dict[tuple[int, int], ttnn.Tensor] = {}
 
     # ------------------------------------------------------------------
+    # Speech-path conv prewarm (T2U + vocoder)
+    # ------------------------------------------------------------------
+
+    def prewarm_t2u_conv1d_weights(self, *, char_len: int, padded_unit_seq: int) -> None:
+        """Prepare T2U duration + decoder conv weights (host upload only, no forward)."""
+        self.t2u.prewarm_conv1d_weights(char_len=int(char_len), padded_unit_seq=int(padded_unit_seq))
+        ttnn.synchronize_device(self.device)
+
+    def prewarm_vocoder_conv1d_weights(self, *, unit_seq: int, t_audio: int, batch: int = 1) -> None:
+        """Prepare vocoder conv weights for ``(unit_seq, t_audio)`` (host upload only, no forward)."""
+        self.vocoder.prewarm_conv1d_weights(batch=batch, seq=int(unit_seq), t_audio=int(t_audio))
+        ttnn.synchronize_device(self.device)
+
+    # ------------------------------------------------------------------
     # Internal pieces
     # ------------------------------------------------------------------
 
@@ -1366,6 +1380,7 @@ class TTSeamlessM4Tv2Model:
         use_kv_cache = bool(kwargs_text.get("use_kv_cache", True))
         # Metal trace replay for KV decode (requires ``trace_region_size`` in device params).
         use_decode_trace = bool(kwargs_text.get("use_decode_trace", False))
+        prewarm_speech_convs = bool(kwargs_speech.get("prewarm_conv1d_weights", True))
         gen_causal: Optional[ttnn.Tensor] = None
         gen_cross: Optional[ttnn.Tensor] = None
         gen_mask_key: Optional[Tuple[int, int, int]] = None
@@ -1519,6 +1534,13 @@ class TTSeamlessM4Tv2Model:
             cc_list = cc_list + [0] * (padded_dec_seq - len(cc_list))
         char_ids = _get_char_ids(gc, t2u_ids, subwords, cc_inner, pad_token_id=pad_token_id)
 
+        char_len = max(1, int(sum(cc_list)))
+        # Upper-bound unit length before the duration predictor runs (avoids decoder prep cache
+        # misses when ``sum(dur_list)`` exceeds ``tile_align(char_len)``).
+        padded_unit_upper = tile_align(max(char_len, char_len * 8))
+        if prewarm_speech_convs:
+            self.prewarm_t2u_conv1d_weights(char_len=char_len, padded_unit_seq=padded_unit_upper)
+
         # On-device tensors for T2U: char_input_ids and the T2U attention mask.
         char_ids_tt = _ttnn_ids_from_list([char_ids], self.device)
         t2u_mask_2d = self._cached_t2u_attention_mask(real_dec_len, padded_dec_seq)
@@ -1553,6 +1575,10 @@ class TTSeamlessM4Tv2Model:
         # while ``padding_tt`` stays at the tile-padded length. Slice ``padding_tt`` to the logical
         # ``unit_seq`` so the eq + logical_or below operate on matching shapes.
         unit_seq = int(t2u_logits_tt.shape[-2])
+        if prewarm_speech_convs:
+            # E2E trace recipe: ``t_audio`` matches total unit duration sum (``sum(dur_list)``),
+            # which equals logical ``unit_seq`` for the T2U upsample path.
+            self.prewarm_vocoder_conv1d_weights(unit_seq=unit_seq, t_audio=unit_seq, batch=batch_size)
         pad_batch = int(padding_tt.shape[0])
         if int(padding_tt.shape[1]) != unit_seq:
             padding_logical = ttnn.slice(padding_tt, [0, 0], [pad_batch, unit_seq], (1, 1))
