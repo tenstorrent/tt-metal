@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
@@ -12,6 +14,23 @@
 #include <cstdint>
 #include <array>
 #include <type_traits>
+
+// Legacy primitive(s) retained (#45003 item 4):
+//   - All fabric APIs: RoutingPlaneConnectionManager, open_connections/close_connections,
+//     PacketHeaderPool::allocate_header_n, fabric_multicast_noc_unicast_write_*,
+//     fabric_multicast_noc_scatter_write_*, fabric_multicast_noc_unicast_atomic_inc_*,
+//     NocUnicastCommandHeader/NocUnicastScatterCommandHeader/NocUnicastAtomicIncCommandHeader
+//     composition — no Device 2.0 fabric equivalent.
+//   - noc_async_writes_flushed inside the FabricUnicastWriter / FabricScatterWriter helper classes
+//     (cb_id and Noc state are not available inside those classes; the flushes are tightly paired
+//     with the fabric write primitives there).
+//   - noc_async_write of a single page to a tensor accessor-derived precomposed local noc address
+//     is paired with the fabric write of the same data — Device 2.0 wrappers expect endpoint objects
+//     rather than a precomposed uint64_t local address.
+//   - noc_semaphore_wait_min / noc_semaphore_wait / noc_semaphore_set on raw tt_l1_ptr-cast
+//     addresses — Device 2.0 Semaphore<> wrappers target semaphore-id-derived addresses.
+//   - noc_semaphore_inc on a precomposed uint64_t noc address — Device 2.0 wrappers target
+//     endpoint objects, not raw addresses.
 
 using address_t = uint32_t;
 using namespace tt::tt_fabric::linear::experimental;
@@ -200,9 +219,12 @@ void kernel_main() {
     using FabricWriter = std::conditional_t<unicast, FabricUnicastWriter, FabricScatterWriter>;
     FabricWriter writer(fabric_connection, starts, ranges, num_connections);
 
+    Noc noc_obj;
+    CircularBuffer cb0(cb0_id);
+
     for (uint32_t page_id = output_page_id_start; page_id < output_page_id_end;) {
-        cb_wait_front(cb0_id, 1);
-        auto l1_read_addr = get_read_ptr(cb0_id);
+        cb0.wait_front(1);
+        auto l1_read_addr = cb0.get_read_ptr();
 
         for (uint32_t output = 0u; output < outputs_per_cb_page; output++) {
             if (page_id + output >= output_page_id_end) [[unlikely]] {
@@ -217,8 +239,8 @@ void kernel_main() {
         }
         page_id += outputs_per_cb_page;
 
-        noc_async_writes_flushed();
-        cb_pop_front(cb0_id, 1);
+        noc_obj.async_writes_flushed();
+        cb0.pop_front(1);
     }
 
     // 2. mcast output ready semaphore
@@ -247,5 +269,5 @@ void kernel_main() {
 
     close_connections(fabric_connection);
 
-    noc_async_write_barrier();
+    noc_obj.async_write_barrier();
 }

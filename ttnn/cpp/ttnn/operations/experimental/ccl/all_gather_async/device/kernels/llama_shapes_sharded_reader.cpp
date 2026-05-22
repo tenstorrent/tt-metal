@@ -3,9 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include <tt-metalium/buffer_types.hpp>
 #include <cstdint>
 #include <utility>
+
+// Legacy primitive(s) retained (#45003 item 4):
+//   noc_async_read / noc_async_read_barrier paired with precomposed uint64_t shard noc addresses
+//   computed via get_noc_addr(x, y, base) — Device 2.0 wrappers target endpoint objects, not raw addresses.
 
 using address_t = uint32_t;
 
@@ -40,21 +45,23 @@ void kernel_main() {
 
     // interleaved addrgen
 
+    CircularBuffer cb0(cb0_id);
+
     uint32_t tiles_read = 0;
     uint32_t shard_tile_id = first_core_tile_start_offset;
     uint32_t core_id = 0;
     while (tiles_read < num_tiles_to_read) {
         uint32_t num_tiles_to_read_this_core =
             std::min(num_tiles_per_core - shard_tile_id, num_tiles_to_read - tiles_read);
-        cb_reserve_back(cb0_id, num_tiles_to_read_this_core);
-        const uint32_t l1_write_addr = get_write_ptr(cb0_id);
+        cb0.reserve_back(num_tiles_to_read_this_core);
+        const uint32_t l1_write_addr = cb0.get_write_ptr();
         uint64_t read_addr = get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], tensor_address0);
         read_addr += shard_tile_id * tensor0_page_size;
 
         noc_async_read(read_addr, l1_write_addr, num_tiles_to_read_this_core * tensor0_page_size);
         noc_async_read_barrier();
 
-        cb_push_back(cb0_id, num_tiles_to_read_this_core);
+        cb0.push_back(num_tiles_to_read_this_core);
         tiles_read += num_tiles_to_read_this_core;
         shard_tile_id = 0;
         core_id++;

@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
@@ -12,6 +14,15 @@
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include <cstdint>
 #include <utility>
+
+// Legacy primitive(s) retained (#45003 item 4):
+//   - All fabric APIs: FabricConnectionManager, ccl_routing_utils::fabric_set_*, send_payload_*,
+//     PACKET_HEADER_TYPE composition, to_noc_unicast_atomic_inc, NocUnicastAtomicIncCommandHeader,
+//     write_and_advance_local_read_address_for_fabric_write — no Device 2.0 fabric equivalent.
+//   - noc_semaphore_wait_min / noc_semaphore_set on raw tt_l1_ptr-cast addresses — Device 2.0
+//     Semaphore<> wrappers target semaphore-id-derived addresses, not arbitrary L1 addresses.
+//   - noc_semaphore_inc on a precomposed uint64_t noc address — Device 2.0 wrappers target endpoint
+//     objects, not raw addresses.
 
 using address_t = uint32_t;
 
@@ -70,15 +81,16 @@ void kernel_main() {
             arg_idx);
 
     // packet header cb
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_addr_forward = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_addr_backward = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_seminc = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
+    CircularBuffer pkt_hdr_cb(reserved_packet_header_cb_id);
+    pkt_hdr_cb.reserve_back(1);
+    auto packet_header_buffer_addr_forward = pkt_hdr_cb.get_write_ptr();
+    pkt_hdr_cb.push_back(1);
+    pkt_hdr_cb.reserve_back(1);
+    auto packet_header_buffer_addr_backward = pkt_hdr_cb.get_write_ptr();
+    pkt_hdr_cb.push_back(1);
+    pkt_hdr_cb.reserve_back(1);
+    auto packet_header_buffer_seminc = pkt_hdr_cb.get_write_ptr();
+    pkt_hdr_cb.push_back(1);
 
     // pre-populate packet headers
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward =
@@ -119,14 +131,15 @@ void kernel_main() {
     }
 
     // 1. mcast via fabric to remote tensor addresses
+    CircularBuffer cb0(cb0_id);
     uint32_t tiles_read = 0;
     uint32_t shard_tile_id = first_core_tile_start_offset;
     uint32_t core_id = 0;
     while (tiles_read < num_tiles_to_read) {
         uint32_t num_tiles_to_read_this_core = std::min(num_tiles_per_core - shard_tile_id, packet_size_in_pages);
         num_tiles_to_read_this_core = std::min(num_tiles_to_read - tiles_read, num_tiles_to_read_this_core);
-        cb_wait_front(cb0_id, num_tiles_to_read_this_core);
-        size_t l1_read_addr = get_read_ptr(cb0_id);
+        cb0.wait_front(num_tiles_to_read_this_core);
+        size_t l1_read_addr = cb0.get_read_ptr();
 
         uint64_t noc0_dest_noc_addr =
             get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], tensor_address0, 0 /*noc_id*/);
@@ -141,7 +154,7 @@ void kernel_main() {
             l1_read_addr,
             num_tiles_to_read_this_core * tensor0_page_size);
 
-        cb_pop_front(cb0_id, num_tiles_to_read_this_core);
+        cb0.pop_front(num_tiles_to_read_this_core);
         tiles_read += num_tiles_to_read_this_core;
         shard_tile_id += num_tiles_to_read_this_core;
         if (shard_tile_id >= num_tiles_per_core) {
@@ -186,5 +199,6 @@ void kernel_main() {
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr), 0);
     }
 
-    noc_async_full_barrier();
+    Noc noc_obj;
+    noc_obj.async_full_barrier();
 }

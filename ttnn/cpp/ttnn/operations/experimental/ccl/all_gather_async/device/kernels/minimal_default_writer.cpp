@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
@@ -15,6 +17,26 @@
 #include <cstdint>
 #include <utility>
 #include "tt_metal/fabric/hw/inc/linear/api.h"
+
+// Legacy primitive(s) retained (#45003 item 4):
+//   - All fabric APIs: FabricConnectionManager, WorkerToFabricMuxSender, build_connection_to_fabric_endpoint,
+//     wait_for_fabric_endpoint_ready, fabric_client_connect/disconnect, fabric_endpoint_terminate,
+//     PacketHeaderPool::allocate_header, ccl_routing_utils::fabric_set_*,
+//     fabric_unicast_noc_unicast_write_*, fabric_unicast_noc_scatter_write_*,
+//     fabric_unicast_noc_unicast_atomic_inc_*, fabric_multicast_noc_unicast_atomic_inc_*,
+//     NocUnicastCommandHeader/NocUnicastScatterCommandHeader/NocUnicastAtomicIncCommandHeader
+//     composition — no Device 2.0 fabric equivalent.
+//   - noc_async_write paired with the fabric scatter / unicast writes that share the local l1 read
+//     address — Device 2.0 wrappers target endpoint objects, not raw precomposed local noc addresses
+//     derived from the accessor.
+//   - noc_async_write_barrier tightly paired with the noc_async_write loop above.
+//   - noc_semaphore_inc on a precomposed uint64_t noc address — Device 2.0 wrappers target
+//     endpoint objects, not raw addresses.
+//   - noc_semaphore_wait / noc_semaphore_wait_min / noc_semaphore_set on raw tt_l1_ptr-cast
+//     addresses — Device 2.0 Semaphore<> wrappers target semaphore-id-derived addresses, not
+//     arbitrary L1 addresses.
+//   - OpSignaler and worker_sync_utils / sharding_addrgen helpers — Phase-1 helper migration
+//     keeps the legacy entry points working as shims.
 
 using address_t = uint32_t;
 using ttnn::ccl::Topology;
@@ -336,15 +358,17 @@ void kernel_main() {
     uint32_t num_channels_processed_in_current_batch = 0;
     uint32_t chunk_count = 0;
 
-        for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
-            chunk_count = 0;
-            while (tiles_read < tiles_to_read) {
-                uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
-                uint32_t tiles_to_put_in_current_packet =
-                    std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
+    Noc noc_obj;
+    CircularBuffer cb_output(cb_output_id);
 
-            cb_wait_front(cb_output_id, num_tiles_to_write_per_packet);
-            size_t l1_read_addr = get_read_ptr(cb_output_id);
+    for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
+        chunk_count = 0;
+        while (tiles_read < tiles_to_read) {
+            uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
+            uint32_t tiles_to_put_in_current_packet = std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
+
+            cb_output.wait_front(num_tiles_to_write_per_packet);
+            size_t l1_read_addr = cb_output.get_read_ptr();
 
             uint16_t chunk_sizes[3] = {page_size, page_size, page_size};
             uint64_t noc_addrs[4] = {0, 0, 0, 0};
@@ -409,18 +433,18 @@ void kernel_main() {
 
                 noc_async_writes_flushed();
 
-                cb_pop_front(cb_output_id, num_tiles_to_write_per_packet);
+                cb_output.pop_front(num_tiles_to_write_per_packet);
 
-            chunk_count++;
-            if (chunk_count % chunks_per_sync == 0) {
-                // 2. unicast output ready semaphore
-                if (detail::valid_targets(direction)) {
-                    fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                        fabric_direction_connection,
-                        pkt_hdr_sem_inc,
-                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+                chunk_count++;
+                if (chunk_count % chunks_per_sync == 0) {
+                    // 2. unicast output ready semaphore
+                    if (detail::valid_targets(direction)) {
+                        fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                            fabric_direction_connection,
+                            pkt_hdr_sem_inc,
+                            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+                    }
                 }
-            }
             noc_async_writes_flushed();
         }
 
@@ -449,7 +473,7 @@ void kernel_main() {
             tiles_to_read = input_tile_id_end;
             pages_read_in_row = start_pages_read_in_row;
             row_offset = start_row_offset;
-        }
+    }
 
     // increment locally
     if constexpr (fuse_op) {
@@ -560,8 +584,8 @@ void kernel_main() {
                 uint32_t tiles_to_put_in_current_packet =
                     std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
 
-                cb_wait_front(cb_output_id, num_tiles_to_write_per_packet);
-                size_t l1_read_addr = get_read_ptr(cb_output_id);
+                cb_output.wait_front(num_tiles_to_write_per_packet);
+                size_t l1_read_addr = cb_output.get_read_ptr();
 
                 uint16_t chunk_sizes[3] = {page_size, page_size, page_size};
                 uint64_t noc_addrs[4] = {0, 0, 0, 0};
@@ -595,7 +619,7 @@ void kernel_main() {
 
                 noc_async_writes_flushed();
 
-                cb_pop_front(cb_output_id, num_tiles_to_write_per_packet);
+                cb_output.pop_front(num_tiles_to_write_per_packet);
 
                 chunk_count++;
                 if (chunk_count % chunks_per_sync == 0) {
@@ -657,8 +681,8 @@ void kernel_main() {
         slice_writes++;
     }
 
-    noc_async_write_barrier();
-    noc_async_atomic_barrier();
+    noc_obj.async_write_barrier();
+    noc_obj.async_atomic_barrier();
 #ifdef USE_WORKER_MUX
     if (mux_connection_valid) {
         tt::tt_fabric::fabric_client_disconnect(*fabric_direction_connection);
@@ -679,5 +703,5 @@ void kernel_main() {
         fabric_connection.close();
     }
 #endif
-    noc_async_write_barrier();
+    noc_obj.async_write_barrier();
 }

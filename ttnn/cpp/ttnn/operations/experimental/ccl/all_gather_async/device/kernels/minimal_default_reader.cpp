@@ -3,11 +3,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include <cstdint>
 #include <utility>
+
+// Legacy primitive(s) retained (#45003 item 4):
+//   - noc_async_read / noc_async_read_barrier paired with accessor-derived precomposed uint64_t
+//     noc addresses (get_noc_addr(tile_id, addrgen)) — Device 2.0 read overloads that target a
+//     TensorAccessor endpoint do not accept a precomposed address with an existing l1 write ptr.
+//   - noc_semaphore_wait_min / noc_semaphore_set on raw tt_l1_ptr-cast addresses — Device 2.0
+//     Semaphore<> wrappers target semaphore-id-derived addresses, not arbitrary L1 addresses.
+//   - OpSignaler and worker_sync_utils / sharding_addrgen helpers — Phase-1 helper migration
+//     keeps the legacy entry points working as shims.
 
 using address_t = uint32_t;
 using ttnn::ccl::Topology;
@@ -107,6 +117,8 @@ void kernel_main() {
         op_signaler = OpSignaler(arg_idx);
     }
 
+    CircularBuffer cb_output(cb_output_id);
+
     // Push out our local slice
     uint32_t tiles_read = input_tile_id_start;
     uint32_t tiles_to_read = input_tile_id_end;
@@ -116,8 +128,8 @@ void kernel_main() {
             uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
             uint32_t num_tiles_to_read = std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
 
-            cb_reserve_back(cb_output_id, num_tiles_to_write_per_packet);
-            size_t l1_write_addr = get_write_ptr(cb_output_id);
+            cb_output.reserve_back(num_tiles_to_write_per_packet);
+            size_t l1_write_addr = cb_output.get_write_ptr();
             for (uint32_t j = 0; j < num_tiles_to_read; ++j) {
                 uint32_t tile_id = output_tile_id_start + tiles_read;
                 uint64_t noc_read_addr = get_noc_addr(tile_id, input_tensor_addrgen);
@@ -128,7 +140,7 @@ void kernel_main() {
             }
 
             noc_async_read_barrier();
-            cb_push_back(cb_output_id, num_tiles_to_write_per_packet);
+            cb_output.push_back(num_tiles_to_write_per_packet);
         }
         tiles_read = input_tile_id_start;
         tiles_to_read = input_tile_id_end;
@@ -305,8 +317,8 @@ void kernel_main() {
 
                         // Check if all tiles for this CB entry are ready
                         if (cb_tiles_pushed + num_tiles_to_read <= sem_iter_pos) {
-                            cb_reserve_back(cb_output_id, num_tiles_to_write_per_packet);
-                            size_t l1_write_addr = get_write_ptr(cb_output_id);
+                            cb_output.reserve_back(num_tiles_to_write_per_packet);
+                            size_t l1_write_addr = cb_output.get_write_ptr();
 
                             for (uint32_t j = 0; j < num_tiles_to_read; ++j) {
                                 uint32_t tile_id = output_tile_id_start + cb_row_offset + cb_pages_read_in_row;
@@ -322,7 +334,7 @@ void kernel_main() {
                             }
 
                             noc_async_read_barrier();
-                            cb_push_back(cb_output_id, num_tiles_to_write_per_packet);
+                            cb_output.push_back(num_tiles_to_write_per_packet);
                             cb_tiles_pushed += num_tiles_to_read;
                         } else {
                             // Need more semaphores before we can push this CB entry
