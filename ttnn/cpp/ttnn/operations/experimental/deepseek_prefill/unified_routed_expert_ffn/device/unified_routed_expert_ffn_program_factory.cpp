@@ -355,9 +355,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         {"cb_out", CB_OUT},
     };
 
-    // PACKER_L1_ACC lets the per-K-block partials accumulate via the packer
-    // (read-modify-write into the same L1 slot). The v3 kernel relies on
-    // this define to gate the llk_pack_reconfig_l1_acc(0/1) calls.
+    // PACKER_L1_ACC controls cross-K-block accumulation via packer L1 RMW.
     std::map<std::string, std::string> compute_defines{};
     compute_defines["PACKER_L1_ACC"] = "1";
 

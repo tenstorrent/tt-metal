@@ -87,6 +87,7 @@ FORCE_INLINE void matmul_phase_v3(
                 tile_regs_commit();
                 tile_regs_wait();
 
+#ifdef PACKER_L1_ACC
                 // Configure packer L1_ACC: OFF on block 0 (overwrite), ON
                 // from block 1 onwards (accumulate).
                 if (block == 0) {
@@ -94,6 +95,7 @@ FORCE_INLINE void matmul_phase_v3(
                 } else if (block == 1) {
                     PACK((llk_pack_reconfig_l1_acc(1)));
                 }
+#endif
 
                 cb_reserve_back(partials_cb_id, out_subblock_num_tiles);
                 for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
@@ -124,8 +126,11 @@ FORCE_INLINE void matmul_phase_v3(
     // After the K-loop: partials_cb_id has out_block_num_tiles tiles holding
     // the final accumulated sum. Move them through dst into final_cb_id,
     // applying silu on the way if requested.
+#ifdef PACKER_L1_ACC
     PACK((llk_pack_reconfig_l1_acc(0)));  // future packs (to final_cb) must overwrite
-    copy_tile_to_dst_init_short_with_dt(in1_cb_id, partials_cb_id);
+#endif
+    // Reconfigure SrcA from in0 (matmul) to partials so copy_tile reads partials.
+    copy_tile_to_dst_init_short_with_dt(in0_cb_id, partials_cb_id);
 
     for (uint32_t sb = 0; sb < (out_block_num_tiles / out_subblock_num_tiles); ++sb) {
         tile_regs_acquire();
