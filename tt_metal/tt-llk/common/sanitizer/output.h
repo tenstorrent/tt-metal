@@ -7,6 +7,10 @@
 #include "sanitizer/settings.h"
 #include "sanitizer/types.h"
 
+#if !defined(FULL_KERNEL_NAME)
+#define FULL_KERNEL_NAME "<unknown>"
+#endif
+
 #ifndef LLK_SAN_ENABLE
 
 #define LLK_SAN_ASSERT(condition, ...)
@@ -15,7 +19,7 @@
 
 #include "llk_assert.h"
 
-#define LLK_SAN_ASSERT(condition, fmt, ...) LLK_ASSERT((condition), "llk::san | " fmt)
+#define LLK_SAN_ASSERT(condition, fmt, ...) LLK_ASSERT((condition), fmt)
 
 #elif defined(LLK_SAN_SETTING_PRINT)
 
@@ -25,13 +29,13 @@
 
 #include "api/debug/device_print.h"
 
-#define LLK_SAN_ASSERT(condition, fmt, ...)                      \
-    do                                                           \
-    {                                                            \
-        if (!(condition))                                        \
-        {                                                        \
-            DEVICE_PRINT("llk::san | " fmt "\n", ##__VA_ARGS__); \
-        }                                                        \
+#define LLK_SAN_ASSERT(condition, fmt, ...)        \
+    do                                             \
+    {                                              \
+        if (!(condition))                          \
+        {                                          \
+            DEVICE_PRINT(fmt "\n", ##__VA_ARGS__); \
+        }                                          \
     } while (0)
 
 #else
@@ -44,7 +48,7 @@
 #if LLK_SAN_SETTING_PEDANTIC == 0
 #define LLK_SAN_PEDANTIC_ASSERT(condition, ...)
 #elif LLK_SAN_SETTING_PEDANTIC == 1
-#define LLK_SAN_PEDANTIC_ASSERT(condition, fmt, ...) LLK_SAN_ASSERT((condition), "pedantic | " fmt, ##__VA_ARGS__)
+#define LLK_SAN_PEDANTIC_ASSERT(condition, fmt, ...) LLK_SAN_ASSERT((condition), fmt, ##__VA_ARGS__)
 #else
 #error "llk_san: fault: invalid value for LLK_SAN_SETTING_PEDANTIC"
 #endif
@@ -55,7 +59,7 @@
 #if LLK_SAN_SETTING_WARN == 0
 #define LLK_SAN_WARN_ASSERT(condition, ...)
 #elif LLK_SAN_SETTING_WARN == 1
-#define LLK_SAN_WARN_ASSERT(condition, fmt, ...) LLK_SAN_ASSERT((condition), "warn     | " fmt, ##__VA_ARGS__)
+#define LLK_SAN_WARN_ASSERT(condition, fmt, ...) LLK_SAN_ASSERT((condition), fmt, ##__VA_ARGS__)
 #else
 #error "llk_san: fault: invalid value for LLK_SAN_SETTING_WARN"
 #endif
@@ -66,7 +70,7 @@
 #if LLK_SAN_SETTING_ERROR == 0
 #define LLK_SAN_ERROR_ASSERT(condition, ...)
 #elif LLK_SAN_SETTING_ERROR == 1
-#define LLK_SAN_ERROR_ASSERT(condition, fmt, ...) LLK_SAN_ASSERT((condition), "error    | " fmt, ##__VA_ARGS__)
+#define LLK_SAN_ERROR_ASSERT(condition, fmt, ...) LLK_SAN_ASSERT((condition), fmt, ##__VA_ARGS__)
 #else
 #error "llk_san: fault: invalid value for LLK_SAN_SETTING_ERROR"
 #endif
@@ -77,7 +81,7 @@
 #if LLK_SAN_SETTING_FAULT == 0
 #define LLK_SAN_FAULT_ASSERT(condition, ...)
 #elif LLK_SAN_SETTING_FAULT == 1
-#define LLK_SAN_FAULT_ASSERT(condition, fmt, ...) LLK_SAN_ASSERT((condition), "fault    | " fmt, ##__VA_ARGS__)
+#define LLK_SAN_FAULT_ASSERT(condition, fmt, ...) LLK_SAN_ASSERT((condition), fmt, ##__VA_ARGS__)
 #else
 #error "llk_san: fault: invalid value for LLK_SAN_SETTING_FAULT"
 #endif
@@ -88,7 +92,7 @@
 #if LLK_SAN_SETTING_INFO == 0
 #define LLK_SAN_INFO_ASSERT(condition, ...)
 #elif LLK_SAN_SETTING_INFO == 1
-#define LLK_SAN_INFO_ASSERT(condition, fmt, ...) LLK_SAN_ASSERT((condition), "info     | " fmt, ##__VA_ARGS__)
+#define LLK_SAN_INFO_ASSERT(condition, fmt, ...) LLK_SAN_ASSERT((condition), fmt, ##__VA_ARGS__)
 #else
 #error "llk_san: fault: invalid value for LLK_SAN_SETTING_INFO"
 #endif
@@ -99,7 +103,7 @@
 #if LLK_SAN_SETTING_INTERNAL == 0
 #define LLK_SAN_INTERNAL_ASSERT(condition, ...)
 #elif LLK_SAN_SETTING_INTERNAL == 1
-#define LLK_SAN_INTERNAL_ASSERT(condition, fmt, ...) LLK_SAN_ASSERT((condition), "internal | " fmt, ##__VA_ARGS__)
+#define LLK_SAN_INTERNAL_ASSERT(condition, fmt, ...) LLK_SAN_ASSERT((condition), fmt, ##__VA_ARGS__)
 #else
 #error "llk_san: fault: invalid value for LLK_SAN_SETTING_INTERNAL"
 #endif
