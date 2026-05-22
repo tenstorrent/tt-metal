@@ -15,22 +15,20 @@ void kernel_main() {
     constexpr uint32_t per_core_block_dim = get_arg(args::per_core_block_dim);
     DataflowBuffer buff_in(dfb::in);
     DataflowBuffer buff_out(dfb::out);
-    const uint32_t in_id = buff_in.get_id();
-    const uint32_t out_id = buff_out.get_id();
-    init_sfpu(in_id, out_id);
+    init_sfpu(dfb::in, dfb::out);
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
         buff_out.reserve_back(per_core_block_dim);
         for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
             tile_regs_acquire();
             // Pop tile after tile, copy to DST and pack
             buff_in.wait_front(1);
-            copy_tile(in_id, 0, 0);
+            copy_tile(dfb::in, 0, 0);
 #ifdef SFPU_OP_CHAIN_0
             SFPU_OP_CHAIN_0
 #endif
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(0, out_id);
+            pack_tile(0, dfb::out);
             buff_in.pop_front(1);
             tile_regs_release();
         }
