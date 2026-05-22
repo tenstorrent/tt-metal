@@ -313,7 +313,7 @@ def test_convert_weights_quad_ring_prepares_stacked_checkpoint_tensors(
 
     monkeypatch.setattr("models.demos.deepseek_v3.tt.experts.is_quad_mesh", lambda mesh_device: True)
     monkeypatch.setattr("models.demos.deepseek_v3.tt.experts.is_ring_fabric", lambda fabric_config: True)
-    monkeypatch.setattr("models.demos.deepseek_v3.tt.experts.get_fabric_config", lambda: object())
+    monkeypatch.setattr("models.demos.deepseek_v3.tt.experts.get_fabric_config", object)
     monkeypatch.setenv("DEEPSEEK_V3_ALLOW_QUAD_RING_WEIGHT_REPACK", "1")
     monkeypatch.setattr(
         "models.demos.deepseek_v3.tt.experts.get_dequantized_tensor",
@@ -466,7 +466,7 @@ def test_convert_weights_quad_ring_rejects_implicit_stacked_repack(
 
     monkeypatch.setattr("models.demos.deepseek_v3.tt.experts.is_quad_mesh", lambda mesh_device: True)
     monkeypatch.setattr("models.demos.deepseek_v3.tt.experts.is_ring_fabric", lambda fabric_config: True)
-    monkeypatch.setattr("models.demos.deepseek_v3.tt.experts.get_fabric_config", lambda: object())
+    monkeypatch.setattr("models.demos.deepseek_v3.tt.experts.get_fabric_config", object)
     monkeypatch.setattr(
         "models.demos.deepseek_v3.tt.experts.get_weight_core_shard_maps",
         lambda mesh_device, hidden_size, matmul_N: ("w0_w1_shard_map", "w2_shard_map", "dram-core-range-set"),
@@ -533,7 +533,7 @@ def test_convert_weights_quad_ring_uses_prepared_checkpoint_tensors(
 
     monkeypatch.setattr("models.demos.deepseek_v3.tt.experts.is_quad_mesh", lambda mesh_device: True)
     monkeypatch.setattr("models.demos.deepseek_v3.tt.experts.is_ring_fabric", lambda fabric_config: True)
-    monkeypatch.setattr("models.demos.deepseek_v3.tt.experts.get_fabric_config", lambda: object())
+    monkeypatch.setattr("models.demos.deepseek_v3.tt.experts.get_fabric_config", object)
     monkeypatch.setattr(
         "models.demos.deepseek_v3.tt.experts.get_dequantized_tensor",
         lambda state_dict, key, dtype=None: state_dict[key],
@@ -634,7 +634,7 @@ def test_convert_weights_quad_ring_rejects_partial_prepared_checkpoint(
 
     monkeypatch.setattr("models.demos.deepseek_v3.tt.experts.is_quad_mesh", lambda mesh_device: True)
     monkeypatch.setattr("models.demos.deepseek_v3.tt.experts.is_ring_fabric", lambda fabric_config: True)
-    monkeypatch.setattr("models.demos.deepseek_v3.tt.experts.get_fabric_config", lambda: object())
+    monkeypatch.setattr("models.demos.deepseek_v3.tt.experts.get_fabric_config", object)
     monkeypatch.setattr(
         "models.demos.deepseek_v3.tt.experts.get_weight_core_shard_maps",
         lambda mesh_device, hidden_size, matmul_N: ("w0_w1_shard_map", "w2_shard_map", "dram-core-range-set"),

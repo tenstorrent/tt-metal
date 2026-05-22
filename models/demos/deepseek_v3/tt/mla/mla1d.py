@@ -1626,7 +1626,6 @@ class MLA1D(AbstractModule):
         v_head_dim: int,
     ) -> ttnn.Tensor:
         # Q path: norm + wq_b (interleaved in0 + DRAM WIDTH sharded in1)
-        device = tt_q.device()
         tt_q = RMSNorm.forward_prefill(tt_q, cfg["q_norm"])
         wq_b_program_config = build_prefill_matmul_program_config(
             seq_len,
