@@ -81,7 +81,7 @@ def test_unified_routed_expert(
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
-            dtype=ttnn.bfloat4_b,
+            dtype=ttnn.bfloat8_b,
         )
 
     tt_gate = _w(weights["gate_proj"])
