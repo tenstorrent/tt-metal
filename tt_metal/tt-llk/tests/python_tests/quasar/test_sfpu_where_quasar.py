@@ -22,7 +22,7 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator_v2 import generate_stimuli_v2
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
@@ -193,31 +193,28 @@ def test_sfpu_where_quasar(formats_dest_acc_implied_test_case_input_dims):
     torch.manual_seed(42)
 
     # Build 3 tile-shaped tensors (condition, true_val, false_val) and
-    # concatenate them into buffer_A. generate_stimuli returns one 32x32
+    # concatenate them into buffer_A. generate_stimuli_v2 returns one 32x32
     # tensor per call; we call it three times with different seeds so the
     # three buffers look different.
-    src_cond_raw, tile_cnt_single, _, _ = generate_stimuli(
+    src_cond_raw, tile_cnt_single, _, _ = generate_stimuli_v2(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
-        sfpu=True,
     )
     torch.manual_seed(43)
-    src_true_raw, _, _, _ = generate_stimuli(
+    src_true_raw, _, _, _ = generate_stimuli_v2(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
-        sfpu=True,
     )
     torch.manual_seed(44)
-    src_false_raw, _, _, _ = generate_stimuli(
+    src_false_raw, _, _, _ = generate_stimuli_v2(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
-        sfpu=True,
     )
 
     condition = _build_condition_for_test_case(

@@ -26,7 +26,7 @@ from helpers.llk_params import DestAccumulation, TopKSortDirection, format_dict
 from helpers.logger import logger
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator_v2 import StimuliSpec, generate_stimuli_v2
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
@@ -210,12 +210,14 @@ def test_sort_sfpu(formats: InputOutputFormat, Wt: int):
     # so TOPK_NUM_ITERATIONS = log2(Wt) - matches our STAGES.
     sort_direction = TopKSortDirection.Ascending
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+    spec = StimuliSpec.uniform(low=0.0, high=1.0)
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli_v2(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
-        sfpu=False,
+        spec_A=spec,
+        spec_B=spec,
     )
 
     src_A = prepare_input_tensor_for_sort(src_A, formats, input_dimensions)
