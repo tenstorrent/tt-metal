@@ -341,7 +341,7 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         E_tt, zero_row_tt, one_row_tt = self._adain_shape_cache[shape_key]
 
         adain_layer = self.audio_injector.injector_adain_layers[audio_attn_id]
-        proj_dev = adain_layer.linear(ttnn.silu(self.audio_emb_global_token0_dev))
+        proj_dev = adain_layer(ttnn.silu(self.audio_emb_global_token0_dev))
         shift_pf, scale_pf = ttnn.chunk(proj_dev, 2, dim=-1)
         scale_pf_p1 = ttnn.add(scale_pf, 1.0)
         shift_ext = ttnn.concat([shift_pf, zero_row_tt], dim=-2)

@@ -186,13 +186,13 @@ def translate_s2v_state_dict(ref_state_dict: dict[str, torch.Tensor]) -> dict[st
             out[translated] = tensor
             continue
 
-        # 7. audio_injector.injector_adain_layers.{i}.linear.{weight,bias} —
-        #    name matches tt_dit; just copy through.
+        # 7. audio_injector.injector_adain_layers.{i}.linear.{weight,bias} →
+        #    drop the ".linear" — tt_dit holds these as a bare ColParallelLinear.
         m = _AI_ADAIN_RE.match(key)
         if m is not None:
             idx, rest = int(m.group(1)), m.group(2)
             if rest in ("linear.weight", "linear.bias"):
-                out[key] = tensor
+                out[f"audio_injector.injector_adain_layers.{idx}.{rest.split('.', 1)[1]}"] = tensor
                 continue
             msg = f"unrecognized audio_injector.injector_adain_layers key: {key!r}"
             raise KeyError(msg)

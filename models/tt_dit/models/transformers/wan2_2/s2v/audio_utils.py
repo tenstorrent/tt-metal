@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""S2V audio conditioning: CausalAudioEncoder + AdaLayerNormZero + AudioInjector_WAN.
+"""S2V audio conditioning: CausalAudioEncoder + AudioInjector_WAN.
 Mirrors ``wan/modules/s2v/audio_utils.py`` (the underlying CausalConv1d /
 MotionEncoder_tc live in ``auxi_blocks.py``, matching the reference layout)."""
 
@@ -38,13 +38,7 @@ class CausalAudioEncoder(Module):
         ccl_manager: CCLManager | None = None,
     ) -> None:
         super().__init__()
-        self.dim = dim
         self.num_layers = num_layers
-        self.out_dim = out_dim
-        self.num_token = num_token
-        self.need_global = need_global
-        self.mesh_device = mesh_device
-        self.dtype = dtype
 
         self.encoder = MotionEncoder_tc(
             in_dim=dim,
@@ -56,7 +50,6 @@ class CausalAudioEncoder(Module):
             tp_mesh_axis=tp_mesh_axis,
             ccl_manager=ccl_manager,
         )
-
         # Per-layer weights, initialized to 0.01 in the reference. Shape
         # [1, num_layers, 1, 1] so it broadcasts across [B, num_layers, dim, T].
         self.weights = Parameter(
@@ -65,24 +58,13 @@ class CausalAudioEncoder(Module):
             dtype=ttnn.float32,
         )
         # Host cache of the silu-normalized weights — the Parameter is a
-        # static 25-element learned table, so the silu/sum/normalize is the
-        # same every clip. Materialized on first forward (after state-dict
-        # load) and reused.
+        # static 25-element learned table, so silu/sum/normalize is the same
+        # every clip. Materialized on first forward and reused.
         self._cached_w_normalized: torch.Tensor | None = None
 
     def forward(self, features_torch: torch.Tensor) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Run the learned weighted aggregation + MotionEncoder on host then
-        upload at the boundaries.
-
-        Args:
-            features_torch: ``[B, num_layers, dim, T_video]`` float tensor with
-                the wav2vec2 hidden states stacked along dim 1 and time-aligned
-                to the target video frame rate.
-
-        Returns:
-            Either a single ``[B, T_video // 4, num_token + 1, out_dim]`` tensor
-            (``need_global=False``) or a ``(global, local)`` tuple of two such
-            tensors (``need_global=True``).
+        """``[B, num_layers, dim, T_video]`` → ``[B, T_video // 4, num_token + 1, out_dim]``
+        (or ``(global, local)`` tuple when ``need_global=True``).
         """
         if self._cached_w_normalized is None:
             with torch.no_grad():
@@ -93,51 +75,17 @@ class CausalAudioEncoder(Module):
         with torch.no_grad():
             weighted = (features_torch.float() * self._cached_w_normalized).sum(dim=1)  # [B, dim, T]
             agg = weighted.permute(0, 2, 1).contiguous()  # [B, T, dim]
-
         return self.encoder(agg)
 
 
-class AdaLayerNormZero(Module):
-    """ColParallel-sharded ``Linear(adain_dim, 2*dim)`` for AdaIN modulation."""
-
-    def __init__(
-        self,
-        *,
-        dim: int,
-        adain_dim: int,
-        mesh_device: ttnn.MeshDevice,
-        tp_mesh_axis: int,
-    ) -> None:
-        super().__init__()
-        self.dim = dim
-        self.adain_dim = adain_dim
-        self.mesh_device = mesh_device
-        self.tp_mesh_axis = tp_mesh_axis
-        self.tp_factor = mesh_device.shape[tp_mesh_axis]
-        self.linear = ColParallelLinear(
-            adain_dim,
-            dim * 2,
-            bias=True,
-            mesh_device=mesh_device,
-            mesh_axis=tp_mesh_axis,
-        )
-
-    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        # Pre-interleave proj rows so each chip's local chunk(2, -1) yields
-        # (local_shift, local_scale) instead of mixing them across chips.
-        prepare_chunked_linear_output(
-            state,
-            prefix="linear",
-            device_count=self.tp_factor,
-            chunks=2,
-        )
-
-    def forward(self, *_args, **_kwargs):
-        raise NotImplementedError("AdaLayerNormZero is a parameter holder; call .linear directly")
-
-
 class AudioInjector_WAN(Module):
-    """Per-DiT-layer audio cross-attention slots + optional AdaIN modulators."""
+    """Per-DiT-layer audio cross-attention slots + optional AdaIN projections.
+
+    Each entry in ``injector_adain_layers`` is a plain
+    ``ColParallelLinear(adain_dim, 2*dim)``; the surrounding transformer
+    block applies the silu + chunk(2, -1) split. Matches the reference's
+    use of ``diffusers.AdaLayerNorm(..., chunk_dim=1)``.
+    """
 
     def __init__(
         self,
@@ -153,12 +101,8 @@ class AudioInjector_WAN(Module):
         is_fsdp: bool = False,
     ) -> None:
         super().__init__()
-        self.dim = dim
-        self.num_heads = num_heads
-        self.inject_layers = tuple(inject_layers)
-        self.enable_adain = enable_adain
-        self.injected_block_id = {layer_idx: i for i, layer_idx in enumerate(self.inject_layers)}
-        n_inject = len(self.inject_layers)
+        self.injected_block_id = {layer_idx: i for i, layer_idx in enumerate(inject_layers)}
+        n_inject = len(inject_layers)
 
         self.injector = ModuleList(
             WanAttention(
@@ -174,29 +118,34 @@ class AudioInjector_WAN(Module):
             for _ in range(n_inject)
         )
 
-        # The reference's ``injector_pre_norm_feat`` / ``injector_pre_norm_vec``
-        # are ``nn.LayerNorm(elementwise_affine=False)`` and contribute no
-        # parameters to the state dict. The actual spatial pre-norm runs via
-        # the surrounding block's ``norm1`` (a no-affine DistributedLayerNorm)
-        # inside ``WanS2VTransformer3DModel.after_transformer_block``.
+        # Reference's ``injector_pre_norm_feat`` / ``..._vec`` are
+        # ``nn.LayerNorm(elementwise_affine=False)`` and contribute no
+        # parameters. The actual spatial pre-norm runs via the surrounding
+        # block's ``norm1`` (no-affine DistributedLayerNorm).
         self.injector_pre_norm_feat = ModuleList()
         self.injector_pre_norm_vec = ModuleList()
 
         if enable_adain:
             adain_dim = adain_dim or dim
-            tp_mesh_axis = parallel_config.tensor_parallel.mesh_axis
+            self._adain_tp_factor = mesh_device.shape[parallel_config.tensor_parallel.mesh_axis]
             self.injector_adain_layers = ModuleList(
-                AdaLayerNormZero(dim=dim, adain_dim=adain_dim, mesh_device=mesh_device, tp_mesh_axis=tp_mesh_axis)
+                ColParallelLinear(
+                    adain_dim,
+                    dim * 2,
+                    bias=True,
+                    mesh_device=mesh_device,
+                    mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+                )
                 for _ in range(n_inject)
             )
         else:
+            self._adain_tp_factor = None
             self.injector_adain_layers = ModuleList()
 
         # Per-injector slot for cached (k_BHNE, v_BHNE). Audio embedding is
-        # constant across a clip's diffusion loop, so ``to_kv`` + ``norm_k`` +
-        # head-split produce the same K/V on every step. The slot is a
-        # caller-owned 2-element list filled lazily by ``WanAttention.forward``
-        # on first call and reused after.
+        # constant across a clip's diffusion loop, so to_kv + norm_k + head
+        # split produce the same K/V on every step. Lazily filled by
+        # ``WanAttention.forward`` and reused.
         self._audio_kv_cache: dict[int, list[ttnn.Tensor]] = {}
 
     def kv_cache_slot(self, audio_attn_id: int) -> list[ttnn.Tensor]:
@@ -213,6 +162,16 @@ class AudioInjector_WAN(Module):
         for k in list(state):
             if k.startswith("injector_pre_norm_feat.") or k.startswith("injector_pre_norm_vec."):
                 state.pop(k)
+        # Pre-interleave AdaIN proj rows so each chip's local chunk(2, -1)
+        # yields (local_shift, local_scale) instead of mixing them across chips.
+        if self._adain_tp_factor is not None:
+            for i in range(len(self.injector_adain_layers)):
+                prepare_chunked_linear_output(
+                    state,
+                    prefix=f"injector_adain_layers.{i}",
+                    device_count=self._adain_tp_factor,
+                    chunks=2,
+                )
 
     def forward(self, *args, **kwargs):
         raise NotImplementedError(

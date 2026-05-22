@@ -11,8 +11,7 @@ from loguru import logger
 
 import ttnn
 
-from .....layers.linear import prepare_chunked_linear_output
-from .....models.transformers.wan2_2.s2v.audio_utils import AdaLayerNormZero
+from .....layers.linear import ColParallelLinear, prepare_chunked_linear_output
 from .....parallel.manager import CCLManager
 from .....utils.check import assert_quality
 from .....utils.tensor import bf16_tensor, local_device_to_torch
@@ -57,18 +56,21 @@ def test_adain_projection_s2v(
     proj_ref = silu @ W_torch.transpose(0, 1) + b_torch
     shift_ref, scale_ref = proj_ref.chunk(2, dim=-1)
 
-    # ---- Build AdaLayerNormZero on device, load via state-dict path ----
-    adain = AdaLayerNormZero(
-        dim=dim,
-        adain_dim=adain_dim,
+    # ---- ColParallel linear with chunked-on-shard weights, mirrors AudioInjector_WAN ----
+    chunked = {"linear.weight": W_torch.clone(), "linear.bias": b_torch.clone()}
+    prepare_chunked_linear_output(chunked, prefix="linear", device_count=tp_factor, chunks=2)
+    adain = ColParallelLinear(
+        adain_dim,
+        dim * 2,
+        bias=True,
         mesh_device=mesh_device,
-        tp_mesh_axis=tp_axis,
+        mesh_axis=tp_axis,
     )
-    adain.load_torch_state_dict({"linear.weight": W_torch.clone(), "linear.bias": b_torch.clone()})
+    adain.load_torch_state_dict({"weight": chunked["linear.weight"], "bias": chunked["linear.bias"]})
 
     # ---- Run on-device projection ----
     audio_emb_dev = bf16_tensor(audio_emb_torch, device=mesh_device, layout=ttnn.TILE_LAYOUT)
-    proj_dev = adain.linear(ttnn.silu(audio_emb_dev))
+    proj_dev = adain(ttnn.silu(audio_emb_dev))
     shift_pf_dev, scale_pf_dev = ttnn.chunk(proj_dev, 2, dim=-1)
 
     ccl = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
