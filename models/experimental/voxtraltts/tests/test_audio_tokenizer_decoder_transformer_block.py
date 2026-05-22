@@ -15,6 +15,9 @@ from models.experimental.voxtraltts.tests.common import resolve_voxtral_model_na
 from models.experimental.voxtraltts.tt.audio_tokenizer.model import extract_audio_tokenizer_state_dict
 from models.experimental.voxtraltts.tt.audio_tokenizer.transformer import VoxtralTTAudioTokenizerDecoderTransformerBlock
 from models.experimental.voxtraltts.tt.voxtral_tt_args import _load_safetensors_state_dict
+from models.experimental.voxtraltts.utils.audio_tokenizer_optimizations import (
+    voxtral_audio_tokenizer_default_optimizations,
+)
 
 
 def _btd_to_tt_b1td(device, x_btd: torch.Tensor) -> ttnn.Tensor:
@@ -48,6 +51,7 @@ def test_audio_tokenizer_decoder_transformer_layer_pcc(device, reset_seeds, time
             tokenizer_cfg=cfg,
             block_index=decoder_block_index,
             layer_index=layer_index,
+            optimizations=voxtral_audio_tokenizer_default_optimizations(),
         )
     except KeyError as exc:
         pytest.skip(f"Missing decoder_blocks.{decoder_block_index} transformer weights: {exc}")
