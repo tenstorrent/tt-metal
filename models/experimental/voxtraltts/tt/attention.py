@@ -45,6 +45,7 @@ class VoxtralTTAttention:
         output_dtype=ttnn.bfloat16,
         compute_kernel_config=None,
         sdpa_compute_kernel_config=None,
+        activation_memory_config=ttnn.DRAM_MEMORY_CONFIG,
         *,
         is_causal: bool = False,
         use_qk_norm: bool = False,
@@ -60,6 +61,7 @@ class VoxtralTTAttention:
         self.scale = 1.0 / math.sqrt(head_dim)
         self.compute_kernel_config = compute_kernel_config
         self.sdpa_compute_kernel_config = sdpa_compute_kernel_config or compute_kernel_config
+        self.activation_memory_config = activation_memory_config
         self.is_causal = is_causal
         self.use_qk_norm = use_qk_norm
         self._qk_norm_mode = qk_norm_mode
@@ -130,13 +132,15 @@ class VoxtralTTAttention:
         *,
         attn_mask: ttnn.Tensor | None = None,
         qk_norm_mode: Mode | str | None = None,
+        activation_memory_config=None,
     ) -> ttnn.Tensor:
         seq_len = hidden_states.shape[-2]
         _qk_mode = self._qk_norm_mode if qk_norm_mode is None else qk_norm_mode
+        act_mem = activation_memory_config or self.activation_memory_config
 
         _lin_kw = {
             "dtype": self.output_dtype,
-            "memory_config": ttnn.DRAM_MEMORY_CONFIG,
+            "memory_config": act_mem,
         }
         if self.compute_kernel_config is not None:
             _lin_kw["compute_kernel_config"] = self.compute_kernel_config
