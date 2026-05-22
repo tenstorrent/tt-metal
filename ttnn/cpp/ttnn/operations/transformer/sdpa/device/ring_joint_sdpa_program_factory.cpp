@@ -425,6 +425,18 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const uint32_t num_active_cores = enable_zigzag_balancing ? std::min(num_cores, all_heads_num_q_chunks / 2)
                                                               : std::min(num_cores, all_heads_num_q_chunks);
 
+    // Lower bound on q_per_core across active cores. Mirrors the q-chunk distribution
+    // below: in zigzag each active core gets a multiple of 2 (>=2 when there's any
+    // work); otherwise floor(total / num_cores) (>=1 when total>=num_cores, else 1).
+    // Used as a compile-time gate for the writer's multi-Q deferred-save protocol.
+    const uint32_t min_q_per_core =
+        (num_active_cores == 0)
+            ? 0u
+            : (enable_zigzag_balancing
+                   ? (all_heads_num_q_chunks / 2 >= num_cores ? (all_heads_num_q_chunks / 2 / num_cores) * 2 : 2u)
+                   : (all_heads_num_q_chunks >= num_cores ? all_heads_num_q_chunks / num_cores : 1u));
+    const bool all_cores_multi_q = min_q_per_core >= 2;
+
     std::vector<uint32_t> reader_compile_time_args = {
         B,
         NH,
@@ -539,6 +551,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         args.is_balanced,
         static_cast<uint32_t>(enable_zigzag_balancing),
         (std::uint32_t)out_out_subblock_h,
+        static_cast<uint32_t>(all_cores_multi_q),
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);

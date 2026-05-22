@@ -332,13 +332,17 @@ void kernel_main() {
     constexpr uint32_t is_balanced = get_compile_time_arg_val(26) == 1;
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(27) == 1;
     constexpr uint32_t out_subblock_h = get_compile_time_arg_val(28);
+    // all_cores_multi_q=1 iff every active core has q_per_core >= 2. Lets the single_q_chunk
+    // path (used only when a core owns exactly one Q chunk) compile out entirely on
+    // configs where no core is in that regime — see factory's min_q_per_core derivation.
+    constexpr bool all_cores_multi_q = get_compile_time_arg_val(29) == 1;
 
     // Joint-path compile-time gating. When zero, joint Q/K branches are statically dead
     // and dropped by the compiler, eliminating runtime ternaries and the joint_out_generator.
     constexpr bool has_joint_q = num_joint_q_chunks > 0;
     constexpr bool has_joint_k = num_joint_k_chunks > 0;
 
-    constexpr auto out_args = TensorAccessorArgs<29>();
+    constexpr auto out_args = TensorAccessorArgs<30>();
     constexpr auto joint_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto stats_args = TensorAccessorArgs<joint_out_args.next_compile_time_args_offset()>();
 
@@ -492,7 +496,10 @@ void kernel_main() {
             // Single Q-chunk: accumulators persist in L1, write final output on last ring_iter.
             // Multi Q-chunk: raw accumulators round-trip through DRAM between ring iterations.
             const bool is_last_ring_iter = (ring_iter == last_active_ring_iter);
-            const bool single_q_chunk = (global_q_end - global_q_start == 1);
+            // When all_cores_multi_q is set the factory has proved no active core runs with
+            // q_per_core==1, so the single-Q path is statically dead. Folding it through
+            // !all_cores_multi_q lets the compiler DCE every (!single_q_chunk) branch below.
+            const bool single_q_chunk = !all_cores_multi_q && (global_q_end - global_q_start == 1);
             constexpr uint32_t sum_offset = local_padded_Nt + Lt;
             constexpr uint32_t out_num_tiles = Sq_chunk_t * vDHt;
 
