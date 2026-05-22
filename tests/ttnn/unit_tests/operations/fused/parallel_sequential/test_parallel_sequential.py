@@ -2731,6 +2731,7 @@ class TestMatmulFactories:
             per_core_M=2,
             per_core_N=2,
             transpose_mcast=False,
+            allowed_worker_cores=cr,
         )
         mm = matmul_desc(
             tt(torch_a, device),
@@ -2765,6 +2766,7 @@ class TestMatmulFactories:
             fuse_batch=True,
             mcast_in0=True,
             gather_in0=False,
+            allowed_worker_cores=cr,
         )
         mm = matmul_desc(
             tt(torch_a, device),
@@ -2797,6 +2799,7 @@ class TestMatmulFactories:
             per_core_M=2,
             per_core_N=2,
             transpose_mcast=True,
+            allowed_worker_cores=cr,
         )
         mm = matmul_desc(
             tt(torch_a, device),
@@ -2880,6 +2883,7 @@ class TestMatmulFactories:
             per_core_M=2,
             per_core_N=2,
             transpose_mcast=False,
+            allowed_worker_cores=cr,
         )
 
         ln = layer_norm.layer_norm(
@@ -2940,6 +2944,7 @@ class TestMatmulFactories:
             fuse_batch=True,
             mcast_in0=True,
             gather_in0=False,
+            allowed_worker_cores=cr,
         )
 
         rms1 = rms_norm.rms_norm(tt(torch_input, device), core_range_set=cr, weight=tt(torch_w, device), epsilon=1e-5)
@@ -3005,6 +3010,7 @@ class TestMatmulFactories:
             per_core_M=2,
             per_core_N=2,
             transpose_mcast=False,
+            allowed_worker_cores=cr_b,
         )
         mm_b = matmul_desc(
             tt(torch_a, device),
@@ -3059,6 +3065,7 @@ class TestMatmulFactories:
         )
 
         # Branch B: Mcast1D on cores (4,0)-(7,0)
+        cr_b = cores(4, 0, 7, 0)
         config_b = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(4, 1),
             in0_block_w=4,
@@ -3071,11 +3078,12 @@ class TestMatmulFactories:
             fuse_batch=True,
             mcast_in0=True,
             gather_in0=False,
+            allowed_worker_cores=cr_b,
         )
         mm_b = matmul_desc(
             stem.output_tensors[0],
             tt(torch_b2, device),
-            core_range_set=cores(4, 0, 7, 0),
+            core_range_set=cr_b,
             program_config=config_b,
             compute_kernel_config=self._compute(),
         )
@@ -3122,6 +3130,7 @@ class TestMatmulFactories:
             per_core_M=2,
             per_core_N=2,
             transpose_mcast=False,
+            allowed_worker_cores=cr,
         )
 
         rms1 = rms_norm.rms_norm(tt(torch_input, device), core_range_set=cr, weight=tt(torch_w, device), epsilon=1e-5)
@@ -3203,6 +3212,7 @@ class TestMatmulFactories:
             per_core_M=1,
             per_core_N=2,
             transpose_mcast=False,
+            allowed_worker_cores=cr2,
         )
         mm2 = matmul_desc(
             tt(torch_a2, device),
@@ -3228,6 +3238,7 @@ class TestMatmulFactories:
             fuse_batch=True,
             mcast_in0=True,
             gather_in0=False,
+            allowed_worker_cores=cr3,
         )
         mm3 = matmul_desc(
             tt(torch_a, device),
@@ -3291,6 +3302,7 @@ class TestMatmulFactories:
         left = Sequential(mm_left, rms_left)
 
         # Right branch: MM(mcast2d) -> RMS on cores (4,0)-(5,1)
+        right_cr = cores(4, 0, 5, 1)
         cfg_right = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(2, 2),
             in0_block_w=4,
@@ -3301,16 +3313,17 @@ class TestMatmulFactories:
             per_core_M=2,
             per_core_N=2,
             transpose_mcast=False,
+            allowed_worker_cores=right_cr,
         )
         mm_right = matmul_desc(
             stem.output_tensors[0],
             tt(torch_b2, device),
-            core_range_set=cores(4, 0, 5, 1),
+            core_range_set=right_cr,
             program_config=cfg_right,
             compute_kernel_config=self._compute(),
         )
         rms_right = rms_norm.rms_norm(
-            mm_right.output_tensors[0], core_range_set=cores(4, 0, 5, 1), weight=tt(torch_w, device), epsilon=1e-5
+            mm_right.output_tensors[0], core_range_set=right_cr, weight=tt(torch_w, device), epsilon=1e-5
         )
         right = Sequential(mm_right, rms_right)
 
@@ -3344,6 +3357,7 @@ class TestMatmulFactories:
             fuse_batch=True,
             mcast_in0=True,
             gather_in0=True,
+            allowed_worker_cores=cr,
         )
         with pytest.raises(ValueError, match="MeshWorkload"):
             matmul_desc(
@@ -3381,6 +3395,7 @@ class TestMatmulFactories:
             per_core_M=2,
             per_core_N=2,
             transpose_mcast=False,
+            allowed_worker_cores=cr,
         )
 
         deferred = matmul_desc(core_range_set=cr, program_config=config, compute_kernel_config=self._compute())
