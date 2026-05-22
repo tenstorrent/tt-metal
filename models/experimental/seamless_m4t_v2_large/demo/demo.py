@@ -214,7 +214,7 @@ def main() -> None:
         eos_token_id=cfg.eos_token_id,
         use_kv_cache=True,
         use_decode_trace=use_decode_trace,
-        prewarm_conv1d_weights=True,
+        # Do not enable in-generate conv prewarm (see ``tt_seamless_m4t_v2_model.generate``).
     )
 
     try:

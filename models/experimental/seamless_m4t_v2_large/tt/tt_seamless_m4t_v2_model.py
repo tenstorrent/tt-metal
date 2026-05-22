@@ -1363,7 +1363,10 @@ class TTSeamlessM4Tv2Model:
         use_kv_cache = bool(kwargs_text.get("use_kv_cache", True))
         # Metal trace replay for KV decode (requires ``trace_region_size`` in device params).
         use_decode_trace = bool(kwargs_text.get("use_decode_trace", False))
-        prewarm_speech_convs = bool(kwargs_speech.get("prewarm_conv1d_weights", True))
+        # ``prewarm_conv1d_weights`` is accepted for API compat but ignored here: in-generate
+        # prewarm poisoned ``_conv1d_prepared_cache`` (wrong vocoder ``t_audio``, T2U bounds).
+        # Call ``prewarm_t2u_conv1d_weights`` / ``prewarm_vocoder_conv1d_weights`` explicitly
+        # with trace-known shapes (``test_e2e_perf_2cq.py``) before ``generate()`` or trace capture.
         gen_causal: Optional[ttnn.Tensor] = None
         gen_cross: Optional[ttnn.Tensor] = None
         gen_mask_key: Optional[Tuple[int, int, int]] = None
@@ -1517,13 +1520,6 @@ class TTSeamlessM4Tv2Model:
             cc_list = cc_list + [0] * (padded_dec_seq - len(cc_list))
         char_ids = _get_char_ids(gc, t2u_ids, subwords, cc_inner, pad_token_id=pad_token_id)
 
-        char_len = max(1, int(sum(cc_list)))
-        # Upper-bound unit length before the duration predictor runs (avoids decoder prep cache
-        # misses when ``sum(dur_list)`` exceeds ``tile_align(char_len)``).
-        padded_unit_upper = tile_align(max(char_len, char_len * 8))
-        if prewarm_speech_convs:
-            self.prewarm_t2u_conv1d_weights(char_len=char_len, padded_unit_seq=padded_unit_upper)
-
         # On-device tensors for T2U: char_input_ids and the T2U attention mask.
         char_ids_tt = _ttnn_ids_from_list([char_ids], self.device)
         t2u_mask_2d = self._cached_t2u_attention_mask(real_dec_len, padded_dec_seq)
@@ -1558,8 +1554,6 @@ class TTSeamlessM4Tv2Model:
         # while ``padding_tt`` stays at the tile-padded length. Slice ``padding_tt`` to the logical
         # ``unit_seq`` so padding slice matches T2U logits before host vocoder remap.
         unit_seq = int(t2u_logits_tt.shape[-2])
-        if prewarm_speech_convs:
-            self.prewarm_vocoder_conv1d_weights(unit_seq=unit_seq, t_audio=unit_seq, batch=batch_size)
         pad_batch = int(padding_tt.shape[0])
         if int(padding_tt.shape[1]) != unit_seq:
             padding_tt = ttnn.slice(padding_tt, [0, 0], [pad_batch, unit_seq], (1, 1))
