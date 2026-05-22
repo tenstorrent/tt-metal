@@ -356,22 +356,22 @@ def test_mla(
 # sp x tp
 @pytest.mark.parametrize(
     "mesh_device",
-    [(8, 4), (2, 4)],
-    ids=["8x4", "2x4"],
+    [(4, 1)],
+    ids=["4x1"],
     indirect=True,
 )
 @pytest.mark.parametrize(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
             "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else 1344544,
         },
     ],
-    ids=["line"],
+    ids=["ring"],
     indirect=True,
 )
-@pytest.mark.parametrize("seq_len", [8192], ids=["seq8k"])
+@pytest.mark.parametrize("seq_len", [4096, 16384], ids=["seq4k", "seq16k"])
 @pytest.mark.parametrize("num_chunks", [1, 2, 4, 8], ids=lambda n: f"N{n}")
 def test_mla_chunked_prefill(
     request,
@@ -398,7 +398,7 @@ def test_mla_chunked_prefill(
     sp_axis = 0
     tp_axis = 1
     is_balanced = False
-    topology = ttnn.Topology.Linear
+    topology = ttnn.Topology.Ring
 
     mesh_shape = list(mesh_device.shape)
     sp = mesh_shape[sp_axis]

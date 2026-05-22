@@ -293,6 +293,15 @@ class ttMLA:
         self.ccl_num_links = 2 if is_blackhole() else 1
         self.ccl_topology = topology
 
+        # Cumulative K and V buffers for chunked-prefill via ring_joint_scaled_dot_product_attention.
+        # The ring op enforces nhv == nhq, so V must be pre-expanded per head via wkv_b2.
+        # We can't slice from kvpe_cache for SDPA: slicing a larger replicated cache produces
+        # a tensor whose ring-AG semantics yield wrong data (verified empirically — only works
+        # when populated_local == cache_seq). Instead, we accumulate via ttnn.concat each chunk,
+        # producing a genuine SP-sharded tensor with correct mesh metadata.
+        self._k_cumulative: Optional[ttnn.Tensor] = None
+        self._v_cumulative: Optional[ttnn.Tensor] = None
+
         # ring attention setup
         persistent_v_shard_dims = [None, None]
         persistent_v_shard_dims[self.tp_axis] = 1  # TP heads
@@ -868,13 +877,93 @@ class ttMLA:
             local_offset = chunk_start_global // self.sp_factor
             ttnn.kv_cache.fill_cache_for_user_(kvpe_cache, tt_kvpe, cache_batch_idx, update_idx=local_offset)
 
-            attn_out = self._on_device_chunked_attention(
-                tt_q=tt_q,
-                kvpe_cache=kvpe_cache,
-                chunk_start_global=chunk_start_global,
-                chunk_end_global=chunk_end_global,
-                cache_batch_idx=cache_batch_idx,
+            # Device-side ring chunked SDPA path. Accumulate K and V via ttnn.concat
+            # each chunk so the SDPA op sees a genuinely SP-sharded tensor (not a
+            # slice of a larger replicated cache, which empirically produces wrong
+            # AG output). NHK == 1 takes the op's MLA-K fast path (batch chain + K-mcast).
+            tt_v_embedding_chunk = ttnn.linear(
+                tt_kv_nope,
+                self.wkv_b2_weight,
+                compute_kernel_config=self.default_compute_kernel_config,
+                **self._get_mm_kwargs("wkv_b2", seq_len_local),
             )
+
+            if chunk_start_global == 0:
+                # First chunk: cumulative is this chunk's data alone.
+                if self._k_cumulative is not None:
+                    ttnn.deallocate(self._k_cumulative)
+                if self._v_cumulative is not None:
+                    ttnn.deallocate(self._v_cumulative)
+                self._k_cumulative = ttnn.clone(tt_kvpe, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
+                self._v_cumulative = ttnn.clone(
+                    tt_v_embedding_chunk, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat8_b
+                )
+            else:
+                # Subsequent chunks: concat along seq dim.
+                self._k_cumulative = ttnn.concat([self._k_cumulative, tt_kvpe], dim=2)
+                self._v_cumulative = ttnn.concat([self._v_cumulative, tt_v_embedding_chunk], dim=2)
+            ttnn.deallocate(tt_v_embedding_chunk)
+
+            tt_K = self._k_cumulative
+            tt_V = self._v_cumulative
+            kvpe_dim = self.kv_lora_rank + self.qk_rope_head_dim
+
+            ag_v_shard_dims = [None, None]
+            if self.tp_factor > 1:
+                ag_v_shard_dims[self.tp_axis] = 1
+            persistent_k_buf = ttnn.from_torch(
+                torch.zeros(1, 1, chunk_end_global, kvpe_dim),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=[None, None]
+                ),
+            )
+            persistent_v_buf = ttnn.from_torch(
+                torch.zeros(1, self.num_heads, chunk_end_global, self.v_head_dim),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=ag_v_shard_dims
+                ),
+            )
+
+            attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+                tt_q,
+                tt_K,
+                tt_V,
+                self.joint_q,
+                self.joint_kv,
+                self.joint_v,
+                persistent_output_buffer_k=persistent_k_buf,
+                persistent_output_buffer_v=persistent_v_buf,
+                joint_strategy="rear",
+                logical_n=chunk_end_global,
+                program_config=self._get_sdpa_program_config(seq_len_local),
+                compute_kernel_config=self.default_compute_kernel_config,
+                dim=2,
+                multi_device_global_semaphore=self.tt_ccl.ring_attention_ccl_semaphore_handles,
+                num_links=self.ccl_num_links,
+                cluster_axis=self.sp_axis,
+                mesh_device=self.mesh_device,
+                topology=self.ccl_topology,
+                subdevice_id=self.tt_ccl.worker_sub_device_id,
+                ccl_core_grid_offset=self.tt_ccl.ring_attention_ccl_core_grid_offset,
+                use_column_major_ccl=True,
+                is_causal=True,
+                scale=self.scale,
+                is_balanced=self.is_balanced,
+            )
+            ttnn.deallocate(persistent_k_buf)
+            ttnn.deallocate(persistent_v_buf)
+            # Ring SDPA's output dtype is hardcoded bfloat16. Downstream nlp_concat_heads
+            # CBs for [1, num_heads, chunk_local, v_head_dim] at bf16 exceed L1
+            # (2.2MB > 1.5MB) at tp=1. Match Iva's effective dtype (wkv_b2 default = bf8).
+            attn_out = ttnn.typecast(attn_out, dtype=ttnn.bfloat8_b)
 
         v_out = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         v_out = ttnn.linear(
