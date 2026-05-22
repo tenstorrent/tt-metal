@@ -110,6 +110,8 @@ def test_finalize_sets_solver_state(tmp_path):
     doc = json.loads((tmp_path / "run.json").read_text())
     assert doc["solver_state"] == "working"
     assert doc["status"] == "success"
+    assert doc["final_result"] == "success"
+    assert doc["final_message"] == "done"
 
 
 def test_finalize_rejects_bad_solver_state(tmp_path):
@@ -246,13 +248,13 @@ def test_finalize_computes_duration_seconds(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# Multi-arch grouping — issue_run_id + sibling_runs
+# Legacy multi-arch grouping — issue_run_id + sibling_runs
 #
-# In the shared-design multi-arch issue-solver flow, one issue produces N
-# per-arch runs, each with its own run.json. They are grouped via an
-# `issue_run_id` (shared across the N runs) and a `sibling_runs` array that
-# names the other runs' arch + run_id. Both fields are optional and additive
-# so single-arch runs (today's default) are unaffected.
+# Older multi-arch issue-solver runs produced N per-arch runs, each with its
+# own run.json. They are grouped via an `issue_run_id` and a `sibling_runs`
+# array. New multi-arch issue-solver runs use one run.json with arch="multi",
+# target_arches, and arch_results; these fields stay optional for backwards
+# compatibility.
 # --------------------------------------------------------------------------
 
 
@@ -318,6 +320,116 @@ def test_init_accepts_sibling_runs(tmp_path):
     )
     doc = json.loads((tmp_path / "run.json").read_text())
     assert doc["sibling_runs"] == siblings
+
+
+def test_init_accepts_single_run_multi_arch_patch(tmp_path):
+    arch_results = {
+        "wormhole": {"status": "pending"},
+        "blackhole": {"status": "pending"},
+    }
+    _run(
+        tmp_path,
+        "init",
+        "--run-id",
+        "issue_11384_multi",
+        "--kernel",
+        "issue_11384",
+        "--arch",
+        "multi",
+        "--first-step",
+        "analyzer",
+        "--first-message",
+        "go",
+        "--patch-json",
+        json.dumps(
+            {
+                "target_arches": ["wormhole", "blackhole"],
+                "arch_results": arch_results,
+                "multi_arch_run": True,
+            }
+        ),
+    )
+    doc = json.loads((tmp_path / "run.json").read_text())
+    assert doc["arch"] == "multi"
+    assert doc["target_arches"] == ["wormhole", "blackhole"]
+    assert doc["arch_results"] == arch_results
+    assert doc["multi_arch_run"] is True
+    assert doc["issue_run_id"] is None
+    assert doc["sibling_runs"] == []
+
+
+def test_metric_merges_nested_arch_results(tmp_path):
+    _run(
+        tmp_path,
+        "init",
+        "--run-id",
+        "issue_11384_multi",
+        "--kernel",
+        "issue_11384",
+        "--arch",
+        "multi",
+        "--first-step",
+        "tester",
+        "--first-message",
+        "go",
+        "--patch-json",
+        json.dumps(
+            {
+                "arch_results": {
+                    "wormhole": {"status": "pending", "tests_total": 0},
+                    "blackhole": {"status": "pending", "tests_total": 0},
+                }
+            }
+        ),
+    )
+    _run(
+        tmp_path,
+        "metric",
+        "--patch-json",
+        json.dumps(
+            {
+                "arch_results": {
+                    "wormhole": {
+                        "status": "done",
+                        "verdict": "SUCCESS",
+                        "tests_total": 32,
+                    }
+                },
+                "tests_total": 32,
+            }
+        ),
+    )
+    doc = json.loads((tmp_path / "run.json").read_text())
+    assert doc["tests_total"] == 32
+    assert doc["arch_results"]["wormhole"]["status"] == "done"
+    assert doc["arch_results"]["wormhole"]["verdict"] == "SUCCESS"
+    assert doc["arch_results"]["blackhole"] == {"status": "pending", "tests_total": 0}
+
+
+def test_metric_accepts_dotted_keys_as_nested_compatibility(tmp_path):
+    _run(
+        tmp_path,
+        "init",
+        "--run-id",
+        "issue_11384_multi",
+        "--kernel",
+        "issue_11384",
+        "--arch",
+        "multi",
+        "--first-step",
+        "tester",
+        "--first-message",
+        "go",
+    )
+    _run(
+        tmp_path,
+        "metric",
+        "--patch-json",
+        '{"arch_results.wormhole.verdict": "SUCCESS"}',
+    )
+    doc = json.loads((tmp_path / "run.json").read_text())
+    assert doc["arch_results"]["wormhole"]["verdict"] == "SUCCESS"
+    assert "arch_results.wormhole.verdict" not in doc
 
 
 def test_link_siblings_replaces_sibling_runs(tmp_path):

@@ -26,11 +26,11 @@ Subcommands:
     phase-end       Finalize a per_phase[] entry (end_time, duration, test
                     result, compile_errors, test_details).
     failure         Append an entry to the top-level failures[] array.
-    metric          Patch arbitrary top-level scalar fields (compilation_attempts,
-                    debug_cycles, tests_total, tests_passed, etc.).
+    metric          Patch arbitrary fields (compilation_attempts, debug_cycles,
+                    tests_total, tests_passed, arch_results, etc.).
     link-siblings   Patch issue_run_id and sibling_runs on an existing run.json.
-                    Used by the multi-arch issue-solver flow to group N per-arch
-                    runs under one shared issue_run_id for the dashboard.
+                    Kept for historical multi-arch issue-solver runs that used
+                    one per-arch run.json under a shared issue_run_id.
     finalize        Close out the last step_history entry, set end_time, flip
                     status to a terminal value, merge in any remaining summary
                     fields passed via --patch-json.
@@ -104,6 +104,45 @@ def _json_arg(value: str | None, default: Any) -> Any:
     return json.loads(value)
 
 
+def _deep_merge(dst: dict[str, Any], src: dict[str, Any]) -> None:
+    """Merge nested dictionaries without replacing sibling keys."""
+    for key, value in src.items():
+        if isinstance(value, dict) and isinstance(dst.get(key), dict):
+            _deep_merge(dst[key], value)
+        else:
+            dst[key] = value
+
+
+def _set_dotted(dst: dict[str, Any], dotted_key: str, value: Any) -> None:
+    """Set ``a.b.c`` as nested dictionaries.
+
+    This is mostly a compatibility affordance for agent-written metric patches.
+    Prefer passing a nested JSON object in new prompts.
+    """
+    parts = [p for p in dotted_key.split(".") if p]
+    if len(parts) < 2:
+        dst[dotted_key] = value
+        return
+    cur = dst
+    for part in parts[:-1]:
+        child = cur.get(part)
+        if not isinstance(child, dict):
+            child = {}
+            cur[part] = child
+        cur = child
+    cur[parts[-1]] = value
+
+
+def _merge_patch(doc: dict[str, Any], patch: dict[str, Any]) -> None:
+    for key, value in patch.items():
+        if "." in key:
+            _set_dotted(doc, key, value)
+        elif isinstance(value, dict) and isinstance(doc.get(key), dict):
+            _deep_merge(doc[key], value)
+        else:
+            doc[key] = value
+
+
 # --------------------------------------------------------------------------
 # Subcommand: init
 # --------------------------------------------------------------------------
@@ -166,13 +205,14 @@ def cmd_init(args: argparse.Namespace) -> None:
             "cost_usd": 0,
         },
         "agents": [],
-        # Multi-arch grouping (optional).
+        # Legacy multi-arch grouping (optional).
         #   issue_run_id    — shared ID across N per-arch runs for one issue.
         #                     None for single-arch runs (today's default).
         #   sibling_runs    — list of {arch, run_id} pointers to the other
         #                     per-arch runs in the same issue. Empty for
-        #                     single-arch runs. The dashboard uses these to
-        #                     group multi-arch runs under one row.
+        #                     single-arch runs. New single-run multi-arch flows
+        #                     use arch="multi", target_arches, and arch_results
+        #                     via --patch-json instead.
         "issue_run_id": args.issue_run_id,
         "sibling_runs": _json_arg(args.sibling_runs, []),
         # Activity Monitor live-state fields.
@@ -200,9 +240,8 @@ def cmd_init(args: argparse.Namespace) -> None:
     if issue is not None:
         doc["issue"] = issue
 
-    # Apply any additional free-form patch.
     patch = _json_arg(args.patch_json, {})
-    doc.update(patch)
+    _merge_patch(doc, patch)
 
     _atomic_write(log_dir, doc)
     print(f"init: wrote {_run_json_path(log_dir)}")
@@ -380,8 +419,7 @@ def cmd_metric(args: argparse.Namespace) -> None:
     log_dir = Path(args.log_dir)
     doc = _load(log_dir)
     patch = _json_arg(args.patch_json, {})
-    for k, v in patch.items():
-        doc[k] = v
+    _merge_patch(doc, patch)
     _atomic_write(log_dir, doc)
     print(f"metric: patched {sorted(patch)}")
 
@@ -412,13 +450,14 @@ def cmd_finalize(args: argparse.Namespace) -> None:
     if doc.get("start_time"):
         doc["duration_seconds"] = _duration_seconds(doc["start_time"], now)
     doc["status"] = args.status  # success | compiled | failed | skipped
+    doc["final_result"] = args.final_result
+    doc["final_message"] = args.final_message or None
     doc["current_step_message"] = (
         args.final_message or doc.get("current_step_message") or ""
     )
 
     patch = _json_arg(args.patch_json, {})
-    for k, v in patch.items():
-        doc[k] = v
+    _merge_patch(doc, patch)
 
     # Apply typed --solver-state last so it cannot be silently overridden by
     # --patch-json (argparse choices are otherwise bypassed via that escape hatch).

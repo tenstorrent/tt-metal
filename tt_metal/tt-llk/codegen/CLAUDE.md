@@ -109,13 +109,13 @@ Route by task type and by `len(TARGET_ARCHES)`:
 | **quasar** | new kernel | `codegen/agents/quasar/orchestrator.md` | — |
 | **blackhole** | new kernel | Not yet supported — inform the user | — |
 
-The single-arch path (`orchestrator.md`) is **unchanged** from before — today's callers keep working bit-for-bit. The multi-arch path (`orchestrator-multi.md`) runs a **shared analyzer + planner** once, then forks per-arch **fixer + tester** subagents against a single shared design doc. This prevents each arch from inventing its own API shape for the same conceptual change.
+The single-arch path (`orchestrator.md`) is **unchanged** from before — today's callers keep working bit-for-bit. The multi-arch path (`orchestrator-multi.md`) creates **one dashboard run**, runs one shared analyzer, one shared fixer, and one tester that executes each selected architecture in sequence. This prevents each arch from inventing its own API shape for the same conceptual change.
 
 Pass **all** fetched issue context verbatim to the selected orchestrator: `ISSUE_NUMBER`, `ISSUE_TITLE`, `ISSUE_BODY`, `ISSUE_LABELS`, `ISSUE_COMMENTS`. Never summarize or alter any of these fields — agents need the raw content to parse error messages, stack traces, and reproduction steps.
 
 Also pass:
 - `TARGET_ARCH` (single-arch path) **or** `TARGET_ARCHES` (multi-arch path) — never both.
-- `WORKTREE_DIR` — the absolute path to the worktree where agents must make all code changes. For multi-arch issues the worktree is shared: every arch's fixer edits files under its own `tt_llk_{arch}/` subdirectory, so there's no conflict surface and the final branch carries all changes in one place.
+- `WORKTREE_DIR` — the absolute path to the worktree where agents must make all code changes. For multi-arch issues the worktree is shared and one fixer owns the combined change across every selected architecture.
 - `WORKTREE_BRANCH` — the branch name for commits and PRs.
 
 ---
@@ -135,10 +135,10 @@ If the orchestrator succeeded and changes should be preserved, commit and push f
 
 ## Orchestrators
 
-Three flows: kernel generation (arch-specific), single-arch issue solving, and multi-arch issue solving (shared design + per-arch fork).
+Three flows: kernel generation (arch-specific), single-arch issue solving, and multi-arch issue solving (one coordinated multi-arch run).
 
 | Flow | Orchestrator | Agents | Notes |
 |------|--------------|--------|-------|
 | Kernel gen | `codegen/agents/quasar/orchestrator.md` | `codegen/agents/quasar/llk-*.md` | Quasar only today. Unaffected by multi-arch issue-solver work. |
 | Issue solver (single-arch) | `codegen/agents/issue-solver/orchestrator.md` | `codegen/agents/issue-solver/*.md` | Used when `len(TARGET_ARCHES) == 1`. Parameterized by `TARGET_ARCH` — see `codegen/references/arch-profiles.md`. |
-| Issue solver (multi-arch) | `codegen/agents/issue-solver/orchestrator-multi.md` | same `codegen/agents/issue-solver/*.md` agents, spawned with a shared plan | Used when `len(TARGET_ARCHES) > 1`. Shared `issue_analyzer` + `fix_planner` produce one `issue_{N}_shared_design.md` with a locked `## API Contract`, then `fixer` + `tester` fork per-arch. One worktree, one branch, one PR. |
+| Issue solver (multi-arch) | `codegen/agents/issue-solver/orchestrator-multi.md` | same `codegen/agents/issue-solver/*.md` agents, run once with `TARGET_ARCHES` | Used when `len(TARGET_ARCHES) > 1`. One analyzer, one fixer, one tester, one dashboard run, one worktree, one branch, one optional PR. |
