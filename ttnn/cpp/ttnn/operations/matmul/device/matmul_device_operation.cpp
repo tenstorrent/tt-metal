@@ -298,17 +298,11 @@ void validate_matmul_sharded_operand_grids_within_program_compute_grid(
         [&](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseProgramConfig>) {
-                if (program_config.allowed_worker_cores.has_value()) {
-                    check_tensor_in_core_range_set(input_tensor_a, program_config.allowed_worker_cores.value());
-                    check_tensor_in_core_range_set(input_tensor_b, program_config.allowed_worker_cores.value());
-                } else {
-                    const auto& config_grid = program_config.compute_with_storage_grid_size;
-                    const auto device_grid = input_tensor_a.device()->compute_with_storage_grid_size();
-                    auto effective_grid_a = input_tensor_a.memory_config().is_sharded() ? device_grid : config_grid;
-                    auto effective_grid_b = input_tensor_b.memory_config().is_sharded() ? device_grid : config_grid;
-                    check_tensor_in_grid(input_tensor_a, effective_grid_a);
-                    check_tensor_in_grid(input_tensor_b, effective_grid_b);
-                }
+                TT_FATAL(
+                    program_config.allowed_worker_cores.has_value(),
+                    "allowed_worker_cores must be set before validation (normalize_program_config should have set it)");
+                check_tensor_in_core_range_set(input_tensor_a, program_config.allowed_worker_cores.value());
+                check_tensor_in_core_range_set(input_tensor_b, program_config.allowed_worker_cores.value());
             }
         },
         chosen_program_config);
