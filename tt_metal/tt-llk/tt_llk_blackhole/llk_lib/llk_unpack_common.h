@@ -92,6 +92,11 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
         "Unsupported unpacker to register conversion.");
 
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK0);
+
+    // Snapshot prev dst format before the REG2 write below; used by the zero-src-flag logic.
+    volatile std::uint32_t tt_reg_ptr *cfg     = get_cfg_pointer();
+    const std::uint32_t prev_unpack_dst_format = cfg[THCON_SEC0_REG2_Out_data_format_ADDR32] & THCON_SEC0_REG2_Out_data_format_MASK;
+
     if constexpr (to_from_int8)
     {
         static_assert(is_fp32_dest_acc_en, "Reconfiguring unpack to/from Int8 formats requires FP32 Dest mode enabled");
@@ -126,10 +131,17 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
         TT_SETADCXX(p_setadc::UNP_A, (unpack_face_r_dim << 4) - 1, 0x0);
     }
 
-    // Disable zero-src flag: any UInt16 with low byte 0x00 (256, 0x8000, ...) shares the bf16 -0 pattern and would be zeroed.
-    if (unpack_dst_format == static_cast<std::uint32_t>(DataFormat::UInt16))
+    // Zero-src flag is set entering UInt16 and cleared leaving it; other transitions leave it
+    // alone so paths like reduce-init with enforce_fp32_accumulation aren't clobbered.
+    const bool was_uint16 = (prev_unpack_dst_format == static_cast<std::uint32_t>(DataFormat::UInt16));
+    const bool is_uint16  = (unpack_dst_format == static_cast<std::uint32_t>(DataFormat::UInt16));
+    if (is_uint16)
     {
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+    }
+    else if (was_uint16)
+    {
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
     }
 }
 
@@ -150,6 +162,11 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
         "Unsupported unpacker to register conversion.");
 
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK1);
+
+    // Snapshot prev dst format before the REG2 write below; used by the zero-src-flag logic.
+    volatile std::uint32_t tt_reg_ptr *cfg     = get_cfg_pointer();
+    const std::uint32_t prev_unpack_dst_format = cfg[THCON_SEC1_REG2_Out_data_format_ADDR32] & THCON_SEC1_REG2_Out_data_format_MASK;
+
     if constexpr (to_from_int8)
     {
         static_assert(is_fp32_dest_acc_en, "Reconfiguring unpack to/from Int8 formats requires FP32 Dest mode enabled");
@@ -180,10 +197,16 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
         TT_SETADCXX(p_setadc::UNP_B, (unpack_face_r_dim << 4) - 1, 0x0);
     }
 
-    // Disable zero-src flag: any UInt16 with low byte 0x00 (256, 0x8000, ...) shares the bf16 -0 pattern and would be zeroed.
-    if (unpack_dst_format == static_cast<std::uint32_t>(DataFormat::UInt16))
+    // Zero-src flag: see _llk_unpack_reconfig_data_format_srca_impl_.
+    const bool was_uint16 = (prev_unpack_dst_format == static_cast<std::uint32_t>(DataFormat::UInt16));
+    const bool is_uint16  = (unpack_dst_format == static_cast<std::uint32_t>(DataFormat::UInt16));
+    if (is_uint16)
     {
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+    }
+    else if (was_uint16)
+    {
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
     }
 }
 
