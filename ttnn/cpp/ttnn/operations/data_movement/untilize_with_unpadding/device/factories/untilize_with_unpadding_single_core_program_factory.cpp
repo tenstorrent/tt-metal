@@ -201,8 +201,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingSingleCoreProgramFactory::c
     };
 
     CoreCoord core_0 = corerange_to_cores(core).at(0);
-    reader_desc.runtime_args.emplace_back(
-        core_0, std::vector<uint32_t>{src0_buffer->address(), uint32_t(num_tiles), 0});
+    reader_desc.emplace_runtime_args(core_0, {src0_buffer, uint32_t(num_tiles), 0u});
     writer_desc.runtime_args.emplace_back(core_0, writer_kernel_args);
 
     desc.kernels.push_back(std::move(reader_desc));

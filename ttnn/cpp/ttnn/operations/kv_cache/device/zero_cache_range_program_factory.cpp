@@ -126,13 +126,7 @@ tt::tt_metal::ProgramDescriptor ZeroCacheRangeProgramFactory::create_descriptor(
 
     writer_desc.runtime_args.reserve(cores.size());
     for (uint32_t i = 0; i < cores.size(); i++) {
-        writer_desc.runtime_args.emplace_back(
-            cores[i],
-            std::vector<uint32_t>{
-                dst_buffer->address(),
-                page_starts[i],
-                page_ends[i],
-            });
+        writer_desc.emplace_runtime_args(cores[i], {dst_buffer, page_starts[i], page_ends[i]});
     }
 
     desc.kernels.push_back(std::move(writer_desc));

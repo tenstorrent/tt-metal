@@ -269,11 +269,10 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreNDShardedProgramFa
             }
         }
         // Reader run-time args
-        reader_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{src0_buffer->address(), start_shard_id});
+        reader_desc.emplace_runtime_args(core, {src0_buffer, start_shard_id});
 
         // Writer run-time args
-        writer_desc.runtime_args.emplace_back(
-            core, std::vector<uint32_t>{dst_buffer->address(), src0_buffer->address(), start_shard_id});
+        writer_desc.emplace_runtime_args(core, {dst_buffer, src0_buffer->address(), start_shard_id});
         start_shard_id++;
 
         // Compute run-time args

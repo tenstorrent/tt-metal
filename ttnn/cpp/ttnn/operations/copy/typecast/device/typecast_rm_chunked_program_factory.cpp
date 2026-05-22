@@ -257,10 +257,8 @@ tt::tt_metal::ProgramDescriptor TypecastRowMajorChunkedProgramFactory::create_de
         uint32_t num_rows_for_core = is_group_1 ? num_rows_per_core_group_1 : num_rows_per_core_group_2;
         uint32_t start_row_id = row_idx;
 
-        reader_desc.runtime_args.emplace_back(
-            core, std::vector<uint32_t>{src_buffer->address(), num_rows_for_core, start_row_id});
-        writer_desc.runtime_args.emplace_back(
-            core, std::vector<uint32_t>{dst_buffer->address(), num_rows_for_core, start_row_id});
+        reader_desc.emplace_runtime_args(core, {src_buffer, num_rows_for_core, start_row_id});
+        writer_desc.emplace_runtime_args(core, {dst_buffer, num_rows_for_core, start_row_id});
 
         row_idx += num_rows_for_core;
     }

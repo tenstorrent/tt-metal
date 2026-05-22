@@ -156,23 +156,20 @@ tt::tt_metal::ProgramDescriptor UntilizeMultiCoreSubCoreGridsProgramFactory::cre
     for (auto core : cores) {
         // reader runtime args
         auto ntiles_per_core = ntiles_per_block * nblocks_per_core;
-        reader_desc.runtime_args.emplace_back(
+        reader_desc.emplace_runtime_args(
             core,
-            std::vector<uint32_t>{
-                src0_buffer->address(),  // src_addr
-                ntiles_per_core,         // ntiles
-                tile_start_id            // start_id
-            });
+            {src0_buffer,      // src_addr
+             ntiles_per_core,  // ntiles
+             tile_start_id});  // start_id
 
-        writer_desc.runtime_args.emplace_back(
+        writer_desc.emplace_runtime_args(
             core,
-            std::vector<uint32_t>{
-                dst_buffer->address(),               // dst_addr
-                nsticks_per_core,                    // nsticks
-                ntiles_per_core,                     // ntiles_per_core
-                TILE_WIDTH * output.element_size(),  // tile_width_size
-                std::uint32_t{0},                    // start stick id = 0, since parallelizing on height
-                offset_within_stick});
+            {dst_buffer,                          // dst_addr
+             nsticks_per_core,                    // nsticks
+             ntiles_per_core,                     // ntiles_per_core
+             TILE_WIDTH * output.element_size(),  // tile_width_size
+             0u,                                  // start stick id = 0, since parallelizing on height
+             offset_within_stick});
 
         tile_start_id += ntiles_per_core;
         offset_within_stick += ntiles_per_core * TILE_WIDTH * output.element_size();

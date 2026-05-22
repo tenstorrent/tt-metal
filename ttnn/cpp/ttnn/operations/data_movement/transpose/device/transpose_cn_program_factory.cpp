@@ -131,12 +131,9 @@ tt::tt_metal::ProgramDescriptor TransposeCNProgramFactory::create_descriptor(
         uint32_t n = curr_c % N;
         uint32_t start_tile = num_pages_read + (curr_c * batch_step) - (curr_c / N * channel_step);
 
-        reader_desc.runtime_args.emplace_back(
-            core,
-            std::vector<uint32_t>{
-                src0_buffer->address(), N, C, HtWt, batch_step, channel_step, num_pages_per_core, start_tile, hw, n});
-        writer_desc.runtime_args.emplace_back(
-            core, std::vector<uint32_t>{dst_buffer->address(), num_pages_per_core, num_pages_read});
+        reader_desc.emplace_runtime_args(
+            core, {src0_buffer, N, C, HtWt, batch_step, channel_step, num_pages_per_core, start_tile, hw, n});
+        writer_desc.emplace_runtime_args(core, {dst_buffer, num_pages_per_core, num_pages_read});
 
         num_pages_read += num_pages_per_core;
     }

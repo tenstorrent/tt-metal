@@ -421,10 +421,8 @@ ProgramDescriptor create_single_tile_descriptor(
         }
         reader_desc.runtime_args.emplace_back(core, std::move(reader_rt_args));
 
-        writer_desc.runtime_args.emplace_back(
-            core,
-            std::vector<uint32_t>{
-                dst_buffer->address(), num_rows_per_core * Wt, num_tiles_written, cos_sin_offset, Wt, Wbytes});
+        writer_desc.emplace_runtime_args(
+            core, {dst_buffer, num_rows_per_core * Wt, num_tiles_written, cos_sin_offset, Wt, Wbytes});
         num_tiles_written += num_rows_per_core * Wt;
     }
 
@@ -865,10 +863,8 @@ ProgramDescriptor create_multi_tile_descriptor(
         }
         reader_desc.runtime_args.emplace_back(core, std::move(reader_rt_args));
 
-        writer_desc.runtime_args.emplace_back(
-            core,
-            std::vector<uint32_t>{
-                dst_buffer->address(), num_rows_per_core * Wt, num_tiles_written, cos_sin_offset, Wt, Wbytes});
+        writer_desc.emplace_runtime_args(
+            core, {dst_buffer, num_rows_per_core * Wt, num_tiles_written, cos_sin_offset, Wt, Wbytes});
         num_tiles_written += num_rows_per_core * Wt;
     }
 

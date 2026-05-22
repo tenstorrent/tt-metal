@@ -292,36 +292,34 @@ tt::tt_metal::ProgramDescriptor UpdateCacheMultiCoreProgramFactory::create_descr
         cache_start_id = batch_start_id * cache_batch_num_tiles +
                          ((total_batched_heads * tt::constants::TILE_HEIGHT) / B) * cache_head_num_tiles;
         cache_start_id += cache_tile_idx;
-        reader_desc.runtime_args.emplace_back(
+        reader_desc.emplace_runtime_args(
             core,
-            std::vector<uint32_t>{
-                dst_buffer->address(),
-                src_buffer->address(),
-                Wt,
-                Bcache,
-                num_batched_heads_per_core,
-                cache_total_num_tiles,
-                cache_batch_num_tiles,
-                cache_head_num_tiles,
-                cache_start_id,
-                input_start_id,
-                batch_start_id});
+            {dst_buffer,
+             src_buffer->address(),
+             Wt,
+             Bcache,
+             num_batched_heads_per_core,
+             cache_total_num_tiles,
+             cache_batch_num_tiles,
+             cache_head_num_tiles,
+             cache_start_id,
+             input_start_id,
+             batch_start_id});
 
-        writer_desc.runtime_args.emplace_back(
+        writer_desc.emplace_runtime_args(
             core,
-            std::vector<uint32_t>{
-                dst_buffer->address(),
-                Wt,
-                Bcache,
-                num_batched_heads_per_core,
-                cache_total_num_tiles,
-                cache_batch_num_tiles,
-                cache_head_num_tiles,
-                cache_start_id,
-                batch_start_id,
-                Wbytes,
-                tile_update_offset,
-                batch_read_offset});
+            {dst_buffer,
+             Wt,
+             Bcache,
+             num_batched_heads_per_core,
+             cache_total_num_tiles,
+             cache_batch_num_tiles,
+             cache_head_num_tiles,
+             cache_start_id,
+             batch_start_id,
+             Wbytes,
+             tile_update_offset,
+             batch_read_offset});
         total_batched_heads += num_batched_heads_per_core;
     }
 

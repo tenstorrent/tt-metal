@@ -218,8 +218,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreInterleavedProgram
         uint32_t num_tiles_per_core = num_tiles_per_row * nblocks_per_core_core;
 
         // reader runtime args
-        reader_desc.runtime_args.emplace_back(
-            core, std::vector<uint32_t>{src0_buffer->address(), num_tiles_per_core, tile_start_id});
+        reader_desc.emplace_runtime_args(core, {src0_buffer, num_tiles_per_core, tile_start_id});
         writer_desc.runtime_args.emplace_back(core, std::move(writer_rt_args));
 
         tile_start_id += num_tiles_per_core;

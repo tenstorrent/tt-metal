@@ -245,10 +245,8 @@ tt::tt_metal::ProgramDescriptor MaskedBincountProgramFactory::create_descriptor(
         rt_brisc.insert(rt_brisc.end(), children_noc.begin(), children_noc.end());
 
         brisc_desc.runtime_args.emplace_back(all_cores_vec[i], std::move(rt_brisc));
-        ncrisc_desc.runtime_args.emplace_back(
-            all_cores_vec[i],
-            std::vector<uint32_t>{
-                src_buffer->address(), dst_buffer->address(), mask_buffer->address(), page_offset + h_brisc, 0u});
+        ncrisc_desc.emplace_runtime_args(
+            all_cores_vec[i], {src_buffer, dst_buffer->address(), mask_buffer->address(), page_offset + h_brisc, 0u});
     }
 
     desc.kernels.push_back(std::move(brisc_desc));

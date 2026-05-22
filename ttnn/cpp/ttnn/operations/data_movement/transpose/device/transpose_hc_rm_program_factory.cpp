@@ -64,21 +64,12 @@ void emit_runtime_args_hc_rm(
             num_read_per_barrier = num_sticks_per_core / num_sticks_per_core_read;
         }
 
-        reader_desc.runtime_args.emplace_back(
+        reader_desc.emplace_runtime_args(
             core,
-            std::vector<uint32_t>{
-                input_buffer->address(),
-                num_sticks_per_core_read,
-                num_read_per_barrier,
-                curr_sticks_read,
-                curr_c,
-                curr_h,
-                curr_n});
+            {input_buffer, num_sticks_per_core_read, num_read_per_barrier, curr_sticks_read, curr_c, curr_h, curr_n});
 
-        writer_desc.runtime_args.emplace_back(
-            core,
-            std::vector<uint32_t>{
-                output_buffer->address(), num_sticks_per_core_read, num_read_per_barrier, curr_sticks_write});
+        writer_desc.emplace_runtime_args(
+            core, {output_buffer, num_sticks_per_core_read, num_read_per_barrier, curr_sticks_write});
 
         curr_sticks_write += num_sticks_per_core;
 

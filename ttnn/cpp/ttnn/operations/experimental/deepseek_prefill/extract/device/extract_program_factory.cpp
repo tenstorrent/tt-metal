@@ -209,21 +209,15 @@ tt::tt_metal::ProgramDescriptor ExtractProgramFactory::create_descriptor(
     writer_desc.runtime_args.reserve(num_cores);
     for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
         const auto& core = cores[core_id];
-        reader_desc.runtime_args.emplace_back(
+        reader_desc.emplace_runtime_args(
             core,
-            std::vector<uint32_t>{
-                global_buffer->address(),
-                start_buffer->address(),
-                counts_buffer->address(),
-                global_expert_idx_table_buffer->address(),
-                core_id});
-        writer_desc.runtime_args.emplace_back(
-            core,
-            std::vector<uint32_t>{
-                output_buffer->address(),
-                counts_buffer->address(),
-                global_expert_idx_table_buffer->address(),
-                core_id});
+            {global_buffer,
+             start_buffer->address(),
+             counts_buffer->address(),
+             global_expert_idx_table_buffer->address(),
+             core_id});
+        writer_desc.emplace_runtime_args(
+            core, {output_buffer, counts_buffer->address(), global_expert_idx_table_buffer->address(), core_id});
     }
 
     desc.kernels.push_back(std::move(reader_desc));

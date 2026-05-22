@@ -109,8 +109,7 @@ tt::tt_metal::ProgramDescriptor ExampleMultipleReturnDeviceOperation::SingleCore
             TT_ASSERT(false, "Core not in specified core ranges");
         }
 
-        reader_desc.runtime_args.emplace_back(
-            core, std::vector<uint32_t>{src_buffer->address(), num_tiles_per_core, num_tiles_written});
+        reader_desc.emplace_runtime_args(core, {src_buffer, num_tiles_per_core, num_tiles_written});
 
         auto dst_buffer1_address = output_tensor1.has_value() ? output_tensor1.value().buffer()->address() : 0;
         auto dst_buffer2_address = output_tensor2.has_value() ? output_tensor2.value().buffer()->address() : 0;
