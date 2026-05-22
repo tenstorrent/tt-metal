@@ -22,3 +22,13 @@ COMPUTE_KERNEL_CONFIG_VOXTRAL_AUDIO_TOKENIZER = ttnn.WormholeComputeKernelConfig
     fp32_dest_acc_en=False,
     packer_l1_acc=True,
 )
+
+# Matmul activation staging: weights stay in DRAM; in0 uses L1 when T fits one tile row (32).
+VOXTRAL_MATMUL_L1_MAX_SEQ_LEN = 32
+
+
+def voxtral_matmul_activation_mem_config(seq_len: int, *, max_l1_seq_len: int = VOXTRAL_MATMUL_L1_MAX_SEQ_LEN):
+    """Pick L1 vs DRAM for matmul/elementwise activations from sequence length (tile M dimension)."""
+    if int(seq_len) <= int(max_l1_seq_len):
+        return ttnn.L1_MEMORY_CONFIG
+    return ttnn.DRAM_MEMORY_CONFIG
