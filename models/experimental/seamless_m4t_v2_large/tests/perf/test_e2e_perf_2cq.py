@@ -236,6 +236,10 @@ def _materialize_t2u_trace_pack(model: Any, tt_model: Any, device: ttnn.Device) 
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    char_len = int(sum(cc_list))
+    unit_seq = int(sum(ref_durs))
+    padded_unit_seq = ((unit_seq + 31) // 32) * 32
+    tt_model.t2u.prewarm_conv1d_weights(char_len=char_len, padded_unit_seq=padded_unit_seq)
     ttnn.synchronize_device(device)
     _, _ = tt_model.t2u.forward(
         inputs_embeds_tt,
