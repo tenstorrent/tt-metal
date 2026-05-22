@@ -17,6 +17,7 @@
 #include <enchantum/enchantum.hpp>
 #include <nlohmann/json.hpp>
 #include <stack>
+#include <tracy/Tracy.hpp>
 #include <tracy/TracyTTDevice.hpp>
 #include <tt_metal.hpp>
 #include <algorithm>
@@ -2269,6 +2270,11 @@ DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs [[mayb
     this->is_last_fd_read_done = false;
     this->device_tracy_contexts.reserve(
         device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y);
+
+    const CoreCoord compute_grid = device->compute_with_storage_grid_size();
+    const std::string grid_info =
+        fmt::format("tt_device_grid chip={} size={}x{}", device_id, compute_grid.x, compute_grid.y);
+    TracyAppInfo(grid_info.c_str(), grid_info.size());
 #endif
 }
 
