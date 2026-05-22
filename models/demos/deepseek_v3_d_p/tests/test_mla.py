@@ -149,7 +149,7 @@ def run_mla_inference(
 @pytest.mark.parametrize("seq_len", [128 * 1024, 100 * 1024], ids=["seq128k", "seq100k"])
 @pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
 @pytest.mark.parametrize("is_balanced", [False, True], ids=["sequential", "balanced"])
-@pytest.mark.parametrize("model_config", MODEL_VARIANTS.values(), ids=MODEL_VARIANTS.keys())
+@pytest.mark.parametrize("variant", MODEL_VARIANTS.values(), ids=MODEL_VARIANTS.keys())
 @pytest.mark.timeout(0)  # Disable timeout — first run computes and caches CPU reference for large seq lengths
 def test_mla(
     use_pretrained,
@@ -162,7 +162,7 @@ def test_mla(
     is_ci_env,
     is_ci_v2_env,
     device_params,
-    model_config,
+    variant,
 ):
     """
     Test comparing reference and TT MLA modules with same weights.
@@ -173,12 +173,12 @@ def test_mla(
         mesh_device: Mesh device fixture
         seq_len: Sequence length
     """
-    if use_pretrained and not model_config.supports_pretrained:
-        pytest.skip(f"{model_config.name!r}: pretrained weights not available")
+    if use_pretrained and not variant.supports_pretrained:
+        pytest.skip(f"{variant.name!r}: pretrained weights not available")
 
     weight_type = "Pretrained" if use_pretrained else "Random"
     logger.info("=" * 80)
-    logger.info(f"Test: Reference vs TT Comparison ({weight_type} Weights, model_config={model_config.name})")
+    logger.info(f"Test: Reference vs TT Comparison ({weight_type} Weights, variant={variant.name})")
     logger.info("=" * 80)
 
     # Conditionally load fixtures - only load what we need!
@@ -186,7 +186,7 @@ def test_mla(
         config, sd = request.getfixturevalue("pretrained_transformer_weights")
         weights = sd["layers"][0]["mla_weights"]
     else:
-        # `random_weights_for_model` derives shapes from `model_config.build_reference_config()`.
+        # `random_weights_for_model` derives shapes from `variant.build_reference_config()`.
         config, weights = request.getfixturevalue("random_weights_for_model")
 
     fabric_config = device_params.get("fabric_config", ttnn.FabricConfig.FABRIC_1D)
@@ -261,7 +261,7 @@ def test_mla(
     if skip_host_comparison == False:
         # Check for cached reference results to avoid expensive host attention computation
         cache_dir = Path(os.environ.get("DEEPSEEK_V3_MLA_REF_CACHE", "/tmp/deepseek_v3_mla_ref_cache"))
-        cache_key = f"{model_config.name}_{weight_type.lower()}_seq{seq_len}"
+        cache_key = f"{variant.name}_{weight_type.lower()}_seq{seq_len}"
         cache_path = cache_dir / f"{cache_key}.pt"
 
         if cache_path.exists():
@@ -355,14 +355,14 @@ def test_mla(
         # Upstream MLA reference cross-check. Returns None when the variant has no reference bundled.
         position_ids_ref = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
         ref_out = run_reference_mla(
-            model_config,
+            variant,
             weights=weights,
             hidden_states=hidden_states,
             position_ids=position_ids_ref,
         )
         if ref_out is not None:
-            logger.info(f"Running upstream MLA reference (model={model_config.name})")
-            _, ref_pcc_message = assert_with_pcc(ref_out.unsqueeze(0), tt_output_cpu, model_config.mla_pcc_threshold)
+            logger.info(f"Running upstream MLA reference (model={variant.name})")
+            _, ref_pcc_message = assert_with_pcc(ref_out.unsqueeze(0), tt_output_cpu, variant.mla_pcc_threshold)
             logger.info(f"[reference_output] PCC: {ref_pcc_message}")
             del ref_out
     else:

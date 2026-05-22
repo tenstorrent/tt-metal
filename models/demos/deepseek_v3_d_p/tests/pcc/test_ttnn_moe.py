@@ -24,11 +24,7 @@ from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k26_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import TorchMoe
-from models.demos.deepseek_v3_d_p.tests.model_variants import (
-    MODEL_VARIANTS,
-    apply_gate_overrides_moe,
-    run_reference_moe,
-)
+from models.demos.deepseek_v3_d_p.tests.model_variants import MODEL_VARIANTS, run_reference_moe
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
     compute_constants,
@@ -70,7 +66,7 @@ from tests.ttnn.utils_for_testing import comp_pcc
 @pytest.mark.parametrize(
     (
         "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, "
-        "dispatch_buffer_capacity_factor, gate_fallback_mode, run_pcc_check, model_config"
+        "dispatch_buffer_capacity_factor, gate_fallback_mode, run_pcc_check, variant"
     ),
     [
         # fmt: off
@@ -147,7 +143,7 @@ def test_ttnn_moe(
     num_experts_per_tok,
     dispatch_buffer_capacity_factor,
     run_pcc_check,
-    model_config,
+    variant,
     num_links,
     topology,
     gate_fallback_mode,
@@ -156,17 +152,17 @@ def test_ttnn_moe(
     Test TtMoe PCC against TorchMoe reference.
 
     The gate's grouping (n_group, topk_group) and route_scale are patched in
-    place from `model_config` after TT/Torch MoE construction. DSv3 values
+    place from `variant` after TT/Torch MoE construction. DSv3 values
     are a no-op patch; Kimi values switch the gate routing rule.
     """
 
-    if model_config.supported_meshes is not None and tuple(mesh_device.shape) not in model_config.supported_meshes:
-        pytest.skip(f"{model_config.name!r} not validated on mesh {tuple(mesh_device.shape)}")
+    if variant.supported_meshes is not None and tuple(mesh_device.shape) not in variant.supported_meshes:
+        pytest.skip(f"{variant.name!r} not validated on mesh {tuple(mesh_device.shape)}")
 
-    if model_config.required_gate_fallback_mode is not None:
+    if variant.required_gate_fallback_mode is not None:
         assert (
-            gate_fallback_mode == model_config.required_gate_fallback_mode
-        ), f"{model_config.name!r} requires {model_config.required_gate_fallback_mode}"
+            gate_fallback_mode == variant.required_gate_fallback_mode
+        ), f"{variant.name!r} requires {variant.required_gate_fallback_mode}"
 
     # Scoped: only the linear-8 / 64-expert / HOST_ALL / pcc-check case OOMs without this.
     # Cached all-gather semaphores get placed at the wrong offset for that specific config.
@@ -330,7 +326,7 @@ def test_ttnn_moe(
             shared_expert_weights=shared_expert_weights,
             gate_weights=gate_weights,
         )
-        apply_gate_overrides_moe(tt_moe=None, torch_moe=torch_moe, variant=model_config)
+        variant.apply_gate_overrides_to_torch_moe(torch_moe)
         profiler.end("torch_moe_creation")
 
         profiler.start("torch_forward")
@@ -368,7 +364,7 @@ def test_ttnn_moe(
         weight_cache_path=moe_cache_dir,
         layer_idx=layer_idx,
     )
-    apply_gate_overrides_moe(tt_moe=tt_moe, torch_moe=None, variant=model_config)
+    variant.apply_gate_overrides_to_tt_moe(tt_moe)
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_moe_creation")
 
@@ -565,17 +561,19 @@ def test_ttnn_moe(
     # Upstream MoE reference cross-check. Returns None when the variant has no reference bundled.
     profiler.start("reference")
     ref_out = run_reference_moe(
-        model_config,
+        variant,
         gate_weights=gate_weights,
         routed_expert_weights=all_routed_weights,
         shared_expert_weights=shared_expert_weights,
         x=x,
+        num_routed_experts=num_routed_experts,
+        num_experts_per_tok=num_experts_per_tok,
     )
     if ref_out is not None and tt_output is not None:
         logger.info("Running upstream MoE reference")
         tt_final_host = ttnn.to_torch(tt_output, mesh_composer=get_tp_mesh_composer(mesh_device), dtype=torch.bfloat16)
         _, ref_pcc = comp_pcc(ref_out.float(), tt_final_host.float())
-        threshold = model_config.moe_pcc_threshold
+        threshold = variant.moe_pcc_threshold
         if ref_pcc >= threshold:
             logger.info(f"[reference_output] PASSED - PCC: {ref_pcc:.6f} (threshold: {threshold})")
         else:

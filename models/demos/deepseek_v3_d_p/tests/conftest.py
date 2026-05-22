@@ -554,15 +554,15 @@ def random_weights(config_only):
 
 
 @pytest.fixture
-def random_weights_for_model(model_config):
+def random_weights_for_model(variant, request):
     """Model-variant aware twin of `random_weights`.
 
-    `model_config` comes from the test's parametrize (a `ModelVariant`).
-    The variant's `build_reference_config()` is the single source of truth for tensor
-    shapes — same for DSv3 and Kimi. Kept separate from `random_weights` so
-    existing tests (e.g. `test_mla_disaggregation.py`) are unaffected.
+    `variant` comes from the test's parametrize (a `ModelVariant`). Variants
+    that bundle their own reference config builder (Kimi) use it; variants
+    without one (DSv3) fall back to the session-scoped `config_only` HF config
+    — the same source `random_weights` uses.
     """
-    config = model_config.build_reference_config()
+    config = variant.build_reference_config() or request.getfixturevalue("config_only")
 
     torch.manual_seed(42)
     std = config.initializer_range
