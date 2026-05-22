@@ -248,7 +248,9 @@ void kernel_main() {
             }
         }
 
-        // Last real (non-padding) tile id; logical_nt-1 == (logical_n-1)/TILE_H for tile-aligned logical_n.
+        // Last tile id holding any real (non-padding) K data (logical_nt is ceil(logical_n / TILE_H)).
+        // When logical_n is not tile-aligned, this tile is partially real — its padding cells are
+        // stamped to -inf by the lightweight mask later, so we still include it as active here.
         // Chunked-prefill: balanced layout puts one slab of real K per chunk on every device → every iter is active.
         const uint32_t global_n_tile_id = logical_nt - 1;
         const uint32_t ring_iter_kv_start_tile = ring_id * kv_local_padded_Nt;

@@ -1819,10 +1819,20 @@ void sdpa_ring_v2(
                                       ring_id, k_chunk * Sk_chunk_t)
                                 : (k_chunk * Sk_chunk_t);
 
-            // Chunked-prefill: when Sk_chunk_t ∤ q_local_padded_Nt a K-chunk can straddle two
-            // per-chunk slabs in the local cache. step_k_start_tile is the global K coord of
-            // the chunk's first tile (in slab j); cols past straddle_col jump to slab j+1, an
-            // increment of chunk_size_t - q_local_padded_Nt. Stamp evaluates per-col then.
+            // Chunked-prefill straddle. Background: each device's K cache holds the per-chunk
+            // K region for every chunk back-to-back, q_local_padded_Nt tiles per region. When
+            // k_chunk_size does not divide q_local_padded_Nt, a single K-chunk can begin in
+            // one region (chunk j) and end in the next (chunk j+1). Because adjacent regions
+            // map to *non-adjacent* global K positions (jumping by chunk_size_t between them),
+            // the global K coord is no longer contiguous across the K-chunk's columns. We
+            // signal this to the diag stamp via:
+            //   - straddle_col: column index at which the jump happens (= tiles remaining in
+            //     region j from this K-chunk's start)
+            //   - straddle_jump: the global-K increment at that boundary
+            //     (= chunk_size_t - q_local_padded_Nt, i.e. the gap between region j's end and
+            //     region j+1's start in global K).
+            // When straddle_col > 0 the stamp evaluates the diagonal per column instead of
+            // per row, applying the jump for columns >= straddle_col.
             uint32_t step_straddle_col = 0;
             uint32_t step_straddle_jump = 0;
             if constexpr (chunked_enabled) {

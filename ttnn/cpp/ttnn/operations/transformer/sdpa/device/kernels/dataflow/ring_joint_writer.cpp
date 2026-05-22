@@ -429,7 +429,7 @@ void kernel_main() {
     } deferred = {};
 
     // Track non-skipped iters so the first active iter starts with fresh accumulators (matches compute).
-    uint32_t active_iter_idx = 0;
+    bool seen_active_iter = false;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
         const bool do_joint_kv = ring_id == ring_size - 1;
@@ -442,6 +442,8 @@ void kernel_main() {
 
         const uint32_t ring_iter_kv_start_tile = ring_id * kv_local_padded_Nt;
         const uint32_t ring_iter_kv_end_tile = ring_iter_kv_start_tile + num_local_k_chunks * Sk_chunk_t;
+        // Last tile id holding any real K data; partial trailing tile is included here and gets
+        // its padding cells masked downstream (see same line in ring_joint_reader.cpp).
         const uint32_t global_n_tile_id = logical_nt - 1;
         const bool ring_iter_processes_KV_chunks =
             chunked_enabled ? true : (ring_iter_kv_start_tile <= global_n_tile_id);
@@ -451,8 +453,8 @@ void kernel_main() {
         if (!ring_iter_does_work) {
             continue;
         }
-        const bool is_first_active_iter = (active_iter_idx == 0);
-        active_iter_idx++;
+        const bool is_first_active_iter = !seen_active_iter;
+        seen_active_iter = true;
 
         // When total_valid_kv == 1, compute's sole K chunk triggers save_to_staging on K0,
         // reserving staging CBs immediately. The deferred flush must happen before any
@@ -479,9 +481,10 @@ void kernel_main() {
             - If joint length L does not divide by K chunk size, the last chunk needs a mask
         */
 
-        // GLOBAL N MASK — tile-aligned form. Chunked uses the per-k_chunk-start skip
-        // (q_local_padded_Nt % Sk_chunk_t == 0 TT_FATAL guarantees the real region ends at a
-        // chunk boundary).
+        // GLOBAL N MASK — tile-aligned form. In chunked-prefill mode this whole mask path is
+        // disabled: global_n_is_within_ring_iter is gated on !chunked_enabled below, so the
+        // skip-by-per-k-chunk-start logic in compute handles the trailing real-region boundary
+        // instead.
         const int32_t global_nt_within_ring_iter =
             static_cast<int32_t>(logical_nt) - static_cast<int32_t>(ring_id * kv_local_padded_Nt);
         const bool global_n_is_within_ring_iter =

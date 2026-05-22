@@ -1956,9 +1956,13 @@ void sdpa_inner_loop(
                     uint32_t lw_straddle_jump = 0;
                     if constexpr (sdpa_type == RING && chunked_enabled) {
                         k_start_tile_for_mask = kv_global_start_tile;
-                        // When Sk_chunk_t ∤ chunked_q_local_padded_Nt a K-chunk can straddle two
-                        // per-chunk slabs; global K coord jumps by chunk_size_t - q_local_padded_Nt
-                        // at the slab boundary. Stamp evaluates per-col when straddle_col > 0.
+                        // Chunked-prefill straddle: a K-chunk can begin in one per-chunk K
+                        // region and end in the next when k_chunk_size does not divide
+                        // q_local_padded_Nt. Global K is non-contiguous across the K-chunk in
+                        // that case (jumps by chunk_size_t - q_local_padded_Nt between regions),
+                        // so we signal the column boundary (straddle_col) and the jump
+                        // (straddle_jump) to the diag stamp — see same comment block in
+                        // compute_streaming.hpp:sdpa_inner_loop_step for the full picture.
                         if (chunked_q_local_padded_Nt > 0) {
                             const uint32_t local_start = k_chunk * Sk_chunk_t;
                             const uint32_t slab_end_local =
