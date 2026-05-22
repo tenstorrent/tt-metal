@@ -170,7 +170,6 @@ class Generator(WarmupForwardMixin):
         self.trace_output_decode = defaultdict(lambda: None)
         self._disable_prefill_tracing = False  # Whether to disable prefill traces
         self._disable_decode_tracing = False  # Whether to disable decode traces
-        self.supports_split_device_sampling = True
 
     def _set_prefill_column_mask(self, tt_column_mask):
         # Keep mask available on whichever TT_CCL instance attention currently uses.
@@ -1372,6 +1371,7 @@ class Generator(WarmupForwardMixin):
             sampling_module.reset_output_state(output_tokens)
         if slot_remap is not None:
             sm_bs = sampling_module.seed_manager.max_batch_size
+            # Galaxy decode currently uses a single sampling module/rank, so slot_remap is local [0:sm_bs].
             rank_remap = slot_remap[0:sm_bs]
             sampling_module.seed_manager.apply_slot_remap(rank_remap)
         sampling_module.seed_manager.get_new_values()
