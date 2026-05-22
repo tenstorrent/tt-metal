@@ -158,8 +158,8 @@ def test_rope_s2v_precompute(
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
     )
-    model.original_seq_len = n_noisy
-    model._cached_total_seq_len = n_total
+    model._clip.original_seq_len = n_noisy
+    model._clip.total_seq_len = n_total
     hidden_states = torch.zeros(1, 16, F_noisy * pT, H_latent, W_latent, dtype=torch.float32)
 
     cos_tt, sin_tt, _trans_mat = model.prepare_rope_features(hidden_states)
