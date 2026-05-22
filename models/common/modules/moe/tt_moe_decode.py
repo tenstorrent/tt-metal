@@ -2,6 +2,33 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+"""Configurable Mixture-of-Experts decode block (`TTMoEDecode`).
+
+A single forward step of a decode-time MoE layer on a 2D device mesh, wrapping the
+ttnn `all_to_all_dispatch_metadata` → `moe_compute` → `deepseek_moe_fast_reduce_nc_fused`
+→ reduce-scatter pipeline. All op kwargs (memory configs, cluster topology, splits,
+shared-expert plumbing) are driven by `TTMoEDecodeConfig`, which derives sane defaults
+from a minimal YAML per model. This module's job is just to wire the configured pieces
+together and expose a `forward(x, scores, indices)` interface.
+
+Pipeline overview (one decode step):
+    1. `all_to_all_dispatch_metadata`: route each token to its `select_experts_k` chosen
+       routed experts (cross-cluster send) plus all shared experts (local broadcast).
+    2. `moe_compute`: per-device per-token-slot matmul `x @ w0`, `x @ w1`, activation
+       (SiLU/SWIGLU), `intermediate @ w2`, optionally with bias.
+    3. `deepseek_moe_fast_reduce_nc_fused`: score-weighted combine of the per-expert
+       outputs back to per-token results, with a fixed scalar `shared_expert_scale`
+       applied to shared-expert contributions.
+    4. Reduce-scatter across the replicated mesh axis to produce per-device output
+       chunks of width `hidden_size / num_replicated`.
+
+Weight ownership: routed experts are sharded across the dispatch axis; shared experts
+are replicated. Weights upload as `bfloat4_b` (with bf16 intermediate tiles for bias).
+
+The two private classes `_TTMoEDecodeExpertState` and `_TTMoEDecodeBuffers` exist to
+keep weight/mapping init and per-iteration scratch separated from the forward logic.
+"""
+
 from __future__ import annotations
 
 import torch
@@ -22,6 +49,12 @@ from models.common.modules.moe.tt_moe_decode_config import TTMoEDecodeConfig
 
 
 def _tt_to_torch_dtype(tt_dtype):
+    """Map a ttnn dtype to the closest host torch dtype for buffer allocation.
+
+    Only the dtypes this module actually uses are handled — `bfloat8_b` falls back to
+    `torch.bfloat16` since torch has no native 8-bit float; the host tensor is just a
+    placeholder that gets reinterpreted at upload time.
+    """
     if tt_dtype == ttnn.bfloat16 or tt_dtype == ttnn.bfloat8_b:
         return torch.bfloat16
     if tt_dtype == ttnn.float32:
@@ -32,6 +65,21 @@ def _tt_to_torch_dtype(tt_dtype):
 
 
 class _TTMoEDecodeExpertState:
+    """Owns per-layer routed + shared expert weights and the global expert-mapping table.
+
+    Holds three uploaded ttnn tensors after init:
+    - `tt_expert_mapping`: `[num_devices, num_experts]` lookup of which linearized mesh
+      coord owns each expert, replicated to every device. Used by both `dispatch` and
+      `fast_reduce` ops.
+    - `tt_w0_w1`: interleaved-and-tile-reordered w0/w1 weights for `moe_compute`'s
+      consumption, sharded across mesh devices along the expert dim. `bfloat4_b`.
+    - `tt_w2`: same idea, but with the ring-rotated N-tile layout w2 needs. `bfloat4_b`.
+
+    Bias support: when `has_bias=True`, biases are folded into the same prepared weight
+    tensors via `prepare_w0_w1_tensor_with_bias` / `prepare_w2_tensor_with_bias` (one
+    extra K/N tile each). Bias + shared experts together is not supported (raises).
+    """
+
     def _load_weights():
         # TODO eventually support caching and loading weights
         pass
@@ -48,14 +96,18 @@ class _TTMoEDecodeExpertState:
         mesh_shape: tuple[int, int],
         cluster_axis: int,
     ):
-        # [num_devices, num_experts] table where mapping[d, e] = linearized mesh coordinate
-        # of the device that owns expert e (same value across all source rows d, since
-        # ownership is global — different rows would matter only for shared experts where
-        # different src devices may pick different replicas; that is handled upstream
-        # by map_shared_experts). Replicated across all devices so each device holds the
-        # full lookup table. Matches the "new format" used by
-        # test_all_to_all_dispatch_metadata_6U.py and gen_expert_mapping in
-        # test_moe_compute_6U.py.
+        """Build and upload the `[num_devices, num_experts]` expert-mapping table.
+
+        `mapping[d, e]` = linearized mesh coord of the device that owns expert `e`.
+        Routed experts have the same value across all source rows `d` (ownership is
+        global), so we just `repeat` the 1D input. Shared experts let different source
+        devices pick different replicas based on cluster distance — `map_shared_experts`
+        rewrites those columns to the nearest replica per source row.
+
+        Matches the "new format" used by `test_all_to_all_dispatch_metadata_6U.py` and
+        `gen_expert_mapping` in `test_moe_compute_6U.py`. Replicated to every device
+        because both dispatch and fast-reduce need the full lookup locally.
+        """
         if torch_expert_mapping.ndim != 1:
             raise ValueError(
                 f"expected 1D expert_mapping (length=num_experts), got shape {tuple(torch_expert_mapping.shape)}"
@@ -85,6 +137,16 @@ class _TTMoEDecodeExpertState:
         torch_b1: "torch.Tensor" | None,
         torch_b2: "torch.Tensor" | None,
     ):
+        """Permute the expert dim so that `ShardTensorToMesh(dim=experts)` lands each
+        expert on its assigned device.
+
+        The host weights come in routed-expert-id order (`[L, num_experts, ...]`), but
+        sharding by the expert dim splits contiguously — so without reordering, device 0
+        gets experts [0..E/D), device 1 gets [E/D..2E/D), etc. `expert_mapping[e]` tells
+        us the *target* device for expert `e`; `argsort` (stable) groups experts that
+        share a target device into contiguous chunks in the right order. Same permutation
+        applies to biases when present.
+        """
         perm = torch.argsort(torch_expert_mapping, stable=True)
         mapped_tensors = [t[:, perm, :, :] for t in (torch_w0, torch_w1, torch_w2)]
 
@@ -116,6 +178,23 @@ class _TTMoEDecodeExpertState:
         torch_b1: "torch.Tensor" | None = None,
         torch_b2: "torch.Tensor" | None = None,
     ):
+        """Prepare and upload all expert state to the mesh.
+
+        Pipeline: argsort-permute routed weights to match the device assignment
+        (`_device_reorder_weights`), optionally splice in shared expert weights so each
+        device holds `routed_per_device + shared_per_device` slots (`add_shared_expert_weights`),
+        then run the prepared tensors through the bf4-tile reordering preparers and
+        upload sharded along the expert dim.
+
+        Routed weight shapes (host, post-permute): `w0/w1 = [L, num_routed, H, N]`,
+        `w2 = [L, num_routed, N, H]`. Shared weights are dicts keyed by global expert id;
+        each value has shape `[L, 1, ...]` matching the routed layout.
+
+        Biases match the routed shape minus the matmul-output dim (`[L, num_routed, N]`
+        for `b0/b1`, `[L, num_routed, H]` for `b2`). Shared experts + bias is not yet
+        supported because `add_shared_expert_weights` doesn't take a bias dict — would
+        need a parallel API.
+        """
         num_routed = torch_w0.shape[1]
         logger.info(
             f"Initializing expert state: routed_experts={num_routed} num_shared={num_shared_experts} "
@@ -187,6 +266,16 @@ class _TTMoEDecodeExpertState:
         torch_b1: "torch.Tensor" | None = None,
         torch_b2: "torch.Tensor" | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Tile-reorder and upload the routed+shared weight tensors as `bfloat4_b`.
+
+        Calls the `prepare_*_for_moe_compute` helpers (with the `_with_bias` variants
+        when bias rows are folded in), gets the per-device DRAM shard configs from
+        `get_weight_mem_configs`, then `from_torch` uploads with `ShardTensorToMesh(dim=2)`
+        — dim 2 is the expert axis after the preparers' permutations, so each device
+        receives its assigned slice of experts.
+
+        Returns the two device tensors `(tt_w0_w1, tt_w2)` ready to feed `moe_compute`.
+        """
         # TODO validate these be comparing to explicit values in the config
         num_layers = torch_w0.shape[0]
         # torch_w0 holds all experts globally [L, num_devices * experts_per_device, K, N];
@@ -312,6 +401,21 @@ class _TTMoEDecodeBuffers:
         shard_dim: int,
         compute_tilize_drain_core: ttnn.CoreCoord,
     ):
+        """Allocate the persistent buffers and semaphores reused across `forward()` calls.
+
+        Allocates four ttnn tensors and two global semaphores:
+        - `dispatch_global_semaphore` / `combine_global_semaphore`: cross-device sync
+          points. Single-use per forward (no double buffering needed — combine syncs
+          after fully reading the dispatch output, dispatch syncs at end of pipeline).
+        - `tt_dispatch_output_tensors` triple: sparse buffer (DRAM, hidden-wide token slots),
+          indices and scores (both L1 height-sharded on the drain core, narrow).
+        - `tt_combine_output`: DRAM `[effective_experts_k, batch_per_device, hidden_size]`
+          intermediate after `moe_compute`, before the post-combine tilize.
+
+        `effective_experts_k = select_experts_k + num_shared_experts` — the K dimension of
+        the per-token expert-output stack. Sized from config; passed in to keep this class
+        agnostic of where the value came from.
+        """
         # --- derived sizes (seq=1 for decode) ---
         num_dispatch_devices = mesh_shape[cluster_axis]
         total_tokens = batch_per_device * num_dispatch_devices
@@ -392,6 +496,19 @@ class _TTMoEDecodeBuffers:
 
 
 class TTMoEDecode:
+    """MoE decode block: token dispatch → expert compute → score-weighted combine → reduce-scatter.
+
+    Constructed once per layer (or per shared layer slot); `forward()` drives one
+    decode step. All shape / topology / memory-config decisions live in `config`
+    (`TTMoEDecodeConfig`) — this class only orchestrates the ttnn op sequence.
+
+    Two RS branches are auto-selected from `mesh_shape[1 - cluster_axis]`:
+    - `== DEEPSEEK_RS_DP_DIM (8)`: fused `deepseek_moe_reduce_scatter` consuming the
+      pre-split list of N outputs from `fast_reduce_nc_fused`.
+    - `== SKIP_RS_DP_DIM (1)`: no replication, RS is a no-op.
+    - else: generic `ttnn.reduce_scatter` over the single fast-reduce output.
+    """
+
     DEEPSEEK_RS_DP_DIM: int = 8
     SKIP_RS_DP_DIM: int = 1
 
@@ -409,6 +526,17 @@ class TTMoEDecode:
         torch_b1: torch.Tensor | None = None,
         torch_b2: torch.Tensor | None = None,
     ):
+        """Upload weights / biases / shared experts to the mesh and allocate scratch buffers.
+
+        Routed weight shapes: `w0/w1 = [L, num_routed_experts, hidden_size, intermediate_size]`,
+        `w2 = [L, num_routed_experts, intermediate_size, hidden_size]`. Shared weights are
+        dicts keyed by global expert id (in `[num_routed, num_routed + num_shared)`), each
+        value `[L, 1, ...]` matching the routed layout.
+
+        Bias shapes (only when `config.has_bias`): `b0/b1 = [L, num_routed_experts, intermediate_size]`,
+        `b2 = [L, num_routed_experts, hidden_size]`. Bias + shared experts together raises
+        `NotImplementedError`.
+        """
         self.config = config
         self.expert_state = _TTMoEDecodeExpertState(
             mesh_device,
@@ -496,6 +624,14 @@ class TTMoEDecode:
         tt_indices: ttnn.Tensor,
         tt_scores: ttnn.Tensor,
     ):
+        """Coerce each dispatch input into the memory config the dispatch op needs.
+
+        For each of (`tt_x`, `tt_indices`, `tt_scores`) returns a `(tensor, dealloc_flag)`
+        pair: if a `to_memory_config` was necessary, the returned tensor is a fresh
+        allocation that `forward()` should deallocate after the dispatch op; if the input
+        already matched, the original is returned with `dealloc=False` to leave caller
+        ownership intact.
+        """
         if tt_x.memory_config() != self.config.dispatch_input_memory_config:
             tt_dispatch_input_tensor_bundle = (
                 ttnn.to_memory_config(tt_x, memory_config=self.config.dispatch_input_memory_config),
@@ -535,6 +671,31 @@ class TTMoEDecode:
     def forward(
         self, tt_x: ttnn.Tensor, tt_scores: ttnn.Tensor, tt_indices: ttnn.Tensor, layer_id: int = 0
     ) -> ttnn.Tensor:
+        """Run one decode-step MoE forward.
+
+        Inputs (sharded along the dispatch axis):
+        - `tt_x`: `[1, batch_per_device, 1, hidden_size]` activations per device.
+        - `tt_indices`: `[batch_per_device, 1, 1, select_experts_k]` chosen routed experts
+          per token (uint16).
+        - `tt_scores`: `[batch_per_device, 1, 1, select_experts_k]` per-(token, k) score
+          for the routed combine; shared experts use `config.reduce.shared_expert_scale`
+          uniformly, not this tensor.
+        - `layer_id`: which slice of the layered weight tensors to use (currently
+          assumed `0` since the rest of the test/module pipeline is `num_layers=1`).
+
+        Output: `[1, 1, batch_per_device, hidden_size / num_replicated]` per device,
+        i.e. each device holds its post-reduce-scatter chunk of the combined hidden dim.
+
+        Pipeline matches the reference test_optimized_moe_decode_block:
+        1. `all_to_all_dispatch_metadata` → per-device sparse buffer of inbound tokens.
+        2. `moe_compute` → per-(k, token) expert output stack, optionally with bias.
+        3. Tilize (`deepseek_moe_post_combine_tilize` when batch_per_device == TILE_SIZE
+           and an NdShard config is available; else `tilize_with_val_padding` fallback).
+        4. `deepseek_moe_fast_reduce_nc_fused` → score-weighted sum over k, with shared
+           experts scaled by `shared_expert_scale`.
+        5. Reduce-scatter across the replicated axis (3 variants — see class docstring).
+        6. Strip the per-device-chunk padding inserted before tilize, if any.
+        """
         (
             (tt_dispatch_input_tensor, dealloc_input),
             (tt_dispatch_input_expert_indices_tensor, dealloc_indices),
@@ -554,7 +715,7 @@ class TTMoEDecode:
             # shared_expert_ids
             # cluster_axi
             # num_links
-            # drain_sync_tilizer_core ???
+            # drain_sync_tilizer_core
             # worker_mode
             # dispatch_algorithm
             output_tensors=self.buffers.tt_dispatch_output_tensors,
@@ -582,9 +743,9 @@ class TTMoEDecode:
             self.expert_state.tt_w0_w1,
             self.expert_state.tt_w2,
             layer_id=layer_id,
-            # output_height_shard_dim=compute_output_height_shard_dim,
-            # cluster_axis=cluster_axis,
-            # mux_core_range_set=combine_mux_cores,
+            # output_height_shard_dim
+            # cluster_axis
+            # mux_core_range_set
             # has_bias
             # activation_type
             **self.config.compute.model_dump(),
@@ -617,7 +778,7 @@ class TTMoEDecode:
                 tt_unsqueezed_output,
                 output_tensor_shape=output_tensor_shape,
                 pad_value=0.0,
-                # memory_config=post_combine_tilize_output_memory_config,
+                # memory_config
                 **self.config.tilize_with_val_padding.model_dump(),
             )
 
@@ -626,12 +787,12 @@ class TTMoEDecode:
             tt_tilized_compute_output,
             tt_dispatch_input_expert_indices_tensor,
             self.expert_state.tt_expert_mapping,
-            # reduce_dim=0,
-            # cluster_axis=cluster_axis,
-            # split_size=int(tt_tilized_compute_output.shape[-1] // num_replicated_devices),
-            # output_memory_config=fast_reduce_output_memory_config,
-            # num_shared_experts=num_shared_experts,
-            # shared_expert_scale=shared_expert_score,
+            # reduce_dim
+            # cluster_axis
+            # split_size
+            # output_memory_config
+            # num_shared_experts
+            # shared_expert_scale
             **self.config.reduce.model_dump(),
             scores_tensor=tt_scores,
         )
@@ -644,11 +805,11 @@ class TTMoEDecode:
         if self.config.mesh_shape[1 - self.config.cluster_axis] == self.DEEPSEEK_RS_DP_DIM:
             tt_final_output = ttnn.experimental.deepseek_moe_reduce_scatter(
                 tt_fast_reduce_output_tensors,
-                # output_memory_config=rs_output_memory_config,
-                # dim=-1,
-                # num_links=4,
-                # topology=ttnn.Topology.Ring,
-                # cluster_axis=1,
+                # output_memory_config
+                # dim
+                # num_links
+                # topology
+                # cluster_axis
                 **self.config.deepseek_moe_reduce_scatter.model_dump(),
             )
             for t in tt_fast_reduce_output_tensors:
