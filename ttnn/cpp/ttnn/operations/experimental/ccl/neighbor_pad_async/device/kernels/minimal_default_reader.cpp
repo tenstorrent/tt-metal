@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include <cstdint>
 
 using address_t = uint32_t;
@@ -21,6 +23,8 @@ constexpr uint32_t recv_cb_id = get_compile_time_arg_val(ct_after_src + 1);
 template <uint32_t stick_size_bytes>
 inline void zeroPad(uint32_t cb_output_id) {
     //  Zero-fill from MEM_ZEROS
+    // Legacy primitives retained (#45003 item 4): the precomposed uint64_t MEM_ZEROS noc address and the
+    // runtime cb_id argument keep this helper on the legacy api/dataflow_api surface.
     constexpr uint32_t num_full_reads = stick_size_bytes / MEM_ZEROS_SIZE;
     constexpr uint32_t partial_read_size = stick_size_bytes % MEM_ZEROS_SIZE;
     const uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
@@ -63,6 +67,9 @@ void kernel_main() {
     uint32_t read_size = stick_size;
     const auto src_accessor = TensorAccessor(src_ct_args, input_tensor_address);
 
+    Noc noc_obj;
+    CircularBuffer cb_output(cb_output_id);
+
     uint32_t outer_dim_offset = outer_dim_offset_start_id;
     for (uint32_t outer_dim = 0; outer_dim < outer_dim_size; outer_dim++) {
         if (is_first_chip) {
@@ -76,22 +83,23 @@ void kernel_main() {
                 }
                 src_stick_id += outer_dim_offset;
                 for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
-                    cb_reserve_back(cb_output_id, 1);
-                    uint32_t src_buffer_l1_addr = get_write_ptr(cb_output_id);
+                    cb_output.reserve_back(1);
+                    uint32_t src_buffer_l1_addr = cb_output.get_write_ptr();
 
                     uint64_t src_noc_addr = src_accessor.get_noc_addr(src_stick_id);
+                    // Legacy primitive retained (#45003 item 4): precomposed uint64_t noc address.
                     noc_async_read(src_noc_addr, src_buffer_l1_addr, read_size);
 
                     src_stick_id++;
 
-                    noc_async_read_barrier();
-                    cb_push_back(cb_output_id, 1);
+                    noc_obj.async_read_barrier();
+                    cb_output.push_back(1);
                 }
             } else {
-                cb_reserve_back(cb_output_id, 1);
+                cb_output.reserve_back(1);
                 zeroPad<stick_size>(cb_output_id);
-                noc_async_read_barrier();
-                cb_push_back(cb_output_id, 1);
+                noc_obj.async_read_barrier();
+                cb_output.push_back(1);
             }
         }
 
@@ -106,16 +114,17 @@ void kernel_main() {
                 }
                 src_stick_id += outer_dim_offset;
                 for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
-                    cb_reserve_back(cb_output_id, 1);
-                    uint32_t src_buffer_l1_addr = get_write_ptr(cb_output_id);
+                    cb_output.reserve_back(1);
+                    uint32_t src_buffer_l1_addr = cb_output.get_write_ptr();
 
                     uint64_t src_noc_addr = src_accessor.get_noc_addr(src_stick_id);
+                    // Legacy primitive retained (#45003 item 4): precomposed uint64_t noc address.
                     noc_async_read(src_noc_addr, src_buffer_l1_addr, read_size);
 
                     src_stick_id++;
 
-                    noc_async_read_barrier();
-                    cb_push_back(cb_output_id, 1);
+                    noc_obj.async_read_barrier();
+                    cb_output.push_back(1);
                 }
             }
         }
@@ -130,7 +139,8 @@ void kernel_main() {
         if constexpr (use_l1_intermediate) {
             // L1 intermediate: fabric delivered H halo data to our L1 recv buffer.
             // Push it into CB for the paired writer to write to output DRAM.
-            uint32_t recv_buf_addr = get_write_ptr(recv_cb_id);
+            CircularBuffer cb_recv(recv_cb_id);
+            uint32_t recv_buf_addr = cb_recv.get_write_ptr();
             uint32_t buf_offset = 0;  // Accumulates across all outer_dims (no L1 reuse)
 
             for (uint32_t od = 0; od < outer_dim_size; od++) {
@@ -138,25 +148,30 @@ void kernel_main() {
                 // Using cumulative waits (od+1) instead of resetting to 0 each iteration
                 // avoids a race where the writer sends multiple sem incs before the reader
                 // processes them — resetting to 0 would discard pending incs and cause a hang.
+                // Legacy primitive retained (#45003 item 4): h_neighbor_sem is a raw cross-device semaphore
+                // address (GlobalSemaphore::address()) from runtime args, not a semaphore id.
                 noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(h_neighbor_sem), od + 1);
 
                 for (uint32_t pad_id = 0; pad_id < padding; pad_id++) {
                     // Use num_l1_recv_sticks_per_row (corners-only count) instead of
                     // num_sticks_to_read (full row width) for the L1 recv path.
                     for (uint32_t iter = 0; iter < num_l1_recv_sticks_per_row; iter++) {
-                        cb_reserve_back(cb_output_id, 1);
-                        uint32_t dst_l1_addr = get_write_ptr(cb_output_id);
+                        cb_output.reserve_back(1);
+                        uint32_t dst_l1_addr = cb_output.get_write_ptr();
+                        // Legacy primitive retained (#45003 item 4): precomposed uint64_t noc address.
                         noc_async_read(get_noc_addr(recv_buf_addr + buf_offset), dst_l1_addr, stick_size);
-                        noc_async_read_barrier();
-                        cb_push_back(cb_output_id, 1);
+                        noc_obj.async_read_barrier();
+                        cb_output.push_back(1);
                         buf_offset += stick_size;
                     }
                 }
             }
             // Reset after all waits are complete (safe: no more fabric increments expected)
+            // Legacy primitive retained (#45003 item 4): h_neighbor_sem is an address, not an id.
             noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(h_neighbor_sem), 0);
         } else {
             // 1D case: fabric wrote directly to DRAM; just wait for all outer_dims
+            // Legacy primitives retained (#45003 item 4): h_neighbor_sem is an address, not an id.
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(h_neighbor_sem), outer_dim_size);
             noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(h_neighbor_sem), 0);
         }

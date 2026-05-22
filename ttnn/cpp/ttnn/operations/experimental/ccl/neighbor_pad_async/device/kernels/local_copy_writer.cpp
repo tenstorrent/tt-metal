@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include <tt-metalium/buffer_types.hpp>
 #include <cstdint>
 
@@ -17,6 +19,7 @@ template <uint32_t stick_size_bytes>
 inline void zeroWrite(uint64_t dst_noc_addr) {
     constexpr uint32_t num_full_writes = stick_size_bytes / MEM_ZEROS_SIZE;
     constexpr uint32_t partial_write_size = stick_size_bytes % MEM_ZEROS_SIZE;
+    // Legacy primitives retained (#45003 item 4): precomposed uint64_t noc address.
     for (uint32_t i = 0; i < num_full_writes; ++i) {
         noc_async_write((uint32_t)MEM_ZEROS_BASE, dst_noc_addr, MEM_ZEROS_SIZE);
         dst_noc_addr += MEM_ZEROS_SIZE;
@@ -50,12 +53,15 @@ void kernel_main() {
 
     const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address);
 
+    Noc noc_obj;
+    CircularBuffer cb_output(cb_output_id);
+
     // Phase A: zero-fill this core's slice of the T-front output region.
     // Covers all H positions (interior + H-halo) at T < t_front_pad.
     for (uint32_t s = 0; s < zero_fill_count; ++s) {
         uint64_t dst_noc_addr = dst_accessor.get_noc_addr(zero_fill_start + s);
         zeroWrite<stick_size>(dst_noc_addr);
-        noc_async_write_barrier();
+        noc_obj.async_write_barrier();
     }
 
     // Phase B: copy input sticks (from CB) to output at T-offset t_front_pad_stick_offset.
@@ -69,19 +75,20 @@ void kernel_main() {
         uint32_t dst_stick_id =
             (t + padding_left) * num_sticks_per_halo_dim + stick_start_id + outer_dim_offset + t_front_pad_stick_offset;
         for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
-            cb_wait_front(cb_output_id, 1);
-            uint32_t l1_read_addr = get_read_ptr(cb_output_id);
+            cb_output.wait_front(1);
+            uint32_t l1_read_addr = cb_output.get_read_ptr();
             uint64_t dst_noc_addr = dst_accessor.get_noc_addr(dst_stick_id);
             if (masked) {
                 zeroWrite<stick_size>(dst_noc_addr);
             } else {
+                // Legacy primitive retained (#45003 item 4): precomposed uint64_t noc address.
                 noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
             }
 
             dst_stick_id++;
-            noc_async_write_barrier();
-            cb_pop_front(cb_output_id, 1);
+            noc_obj.async_write_barrier();
+            cb_output.pop_front(1);
         }
     }
-    noc_async_write_barrier();
+    noc_obj.async_write_barrier();
 }
