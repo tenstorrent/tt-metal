@@ -100,6 +100,12 @@ struct ProgramRunParams {
     std::vector<DFBRunParams> dfb_run_params;
 };
 
+// Namespace-level aliases for commonly-used nested types. Both the qualified
+// (ProgramRunParams::Foo) and unqualified (Foo) forms refer to the same type.
+using KernelRunParams = ProgramRunParams::KernelRunParams;
+using NodeNamedRTAs = ProgramRunParams::KernelRunParams::NodeNamedRTAs;
+using NodeVarargs = ProgramRunParams::KernelRunParams::NodeVarargs;
+
 //------------------------------------------------
 // ProgramRunParamsView (for advanced users)
 //------------------------------------------------

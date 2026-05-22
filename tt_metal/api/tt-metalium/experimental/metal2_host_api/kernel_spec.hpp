@@ -291,6 +291,14 @@ struct KernelSpec {
     std::vector<DFBComputeSelfLoopScope> dfb_compute_self_loop_scopes;
 };
 
+// Namespace-level aliases for commonly-used nested types. Both the qualified
+// (KernelSpec::Foo) and unqualified (Foo) forms refer to the same type.
+using DFBBinding = KernelSpec::DFBBinding;
+using DFBEndpointType = KernelSpec::DFBEndpointType;
+using SemaphoreBinding = KernelSpec::SemaphoreBinding;
+using TensorBinding = KernelSpec::TensorBinding;
+using SourceCode = KernelSpec::SourceCode;
+
 // Convenience factories for DFBBinding. Equivalent to writing a designated-init
 // DFBBinding{...} with endpoint_type set; the access_pattern defaults to STRIDED.
 inline KernelSpec::DFBBinding ProducerOf(
