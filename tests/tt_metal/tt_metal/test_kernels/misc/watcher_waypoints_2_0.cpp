@@ -17,10 +17,6 @@
 #include "api/dataflow/dataflow_api.h"
 #endif
 
-#if defined(ARCH_QUASAR)
-#include "internal/tt-2xx/quasar/overlay/overlay_addresses.h"
-#endif
-
 void kernel_main() {
     WAYPOINT("AAAA");
 
@@ -28,12 +24,9 @@ void kernel_main() {
     volatile uint32_t* sync_flag = reinterpret_cast<volatile uint32_t*>(sync_flag_addr);
 
     while (*sync_flag != 1) {
-#if defined(ARCH_QUASAR)
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
         // On Quasar DM cores, we must invalidate L2 to see updated host writes in L1.
-        // TODO: Use invalidate_l2_cache_line() once PR #38124 is merged.
-        __asm__ __volatile__("fence" ::: "memory");
-        *reinterpret_cast<volatile uint64_t*>(L2_INVALIDATE_ADDR) = sync_flag_addr;
-        __asm__ __volatile__("fence" ::: "memory");
+        invalidate_l2_cache_line(static_cast<uintptr_t>(sync_flag_addr));
 #else
         invalidate_l1_cache();
 #endif
