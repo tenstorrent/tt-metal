@@ -574,6 +574,9 @@ class TestMatmulFusion:
             out_subblock_w=min(per_core_N, 4),
             per_core_M=per_core_M,
             per_core_N=per_core_N,
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))}
+            ),
         )
 
     def _compute(self, fp32=False, approx=True):
@@ -1083,6 +1086,7 @@ class TestParallelExecution:
             out_subblock_w=4,
             per_core_M=1,
             per_core_N=4,
+            allowed_worker_cores=cores(0, 0),
         )
         mm = matmul_desc(
             tt(torch_a, device),
@@ -1204,6 +1208,9 @@ class TestParallelExecution:
                 out_subblock_w=4,
                 per_core_M=1,
                 per_core_N=4,
+                allowed_worker_cores=ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))}
+                ),
             )
 
         # Norm inputs (4 of them)
@@ -1576,6 +1583,7 @@ class TestDocExample:
             out_subblock_w=4,
             per_core_M=1,
             per_core_N=8,
+            allowed_worker_cores=full,
         )
         op1 = descriptors.matmul(
             tt(torch_a, device),
@@ -1594,6 +1602,7 @@ class TestDocExample:
             out_subblock_w=4,
             per_core_M=2,
             per_core_N=4,
+            allowed_worker_cores=left_top,
         )
         op4 = descriptors.matmul(
             op2.output_tensors[0],
@@ -2157,6 +2166,7 @@ class TestPersistentMode:
             out_subblock_w=1,
             per_core_M=1,
             per_core_N=1,
+            allowed_worker_cores=cr,
         )
 
         # Inline matmul first (for reference)
@@ -2688,6 +2698,7 @@ class TestMatmulFactories:
             out_subblock_w=4,
             per_core_M=1,
             per_core_N=4,
+            allowed_worker_cores=cr,
         )
         mm = matmul_desc(
             tt(torch_a, device),
@@ -2823,6 +2834,7 @@ class TestMatmulFactories:
             out_subblock_w=4,
             per_core_M=1,
             per_core_N=4,
+            allowed_worker_cores=cr,
         )
 
         rms1 = rms_norm.rms_norm(tt(torch_input, device), core_range_set=cr, weight=tt(torch_w, device), epsilon=1e-5)
@@ -2971,6 +2983,7 @@ class TestMatmulFactories:
             out_subblock_w=4,
             per_core_M=1,
             per_core_N=4,
+            allowed_worker_cores=cr_a,
         )
         mm_a = matmul_desc(
             tt(torch_a, device),
@@ -3035,6 +3048,7 @@ class TestMatmulFactories:
             out_subblock_w=1,
             per_core_M=1,
             per_core_N=1,
+            allowed_worker_cores=stem_cr,
         )
         mm_a = matmul_desc(
             stem.output_tensors[0],
@@ -3096,6 +3110,7 @@ class TestMatmulFactories:
             out_subblock_w=2,
             per_core_M=2,
             per_core_N=2,
+            allowed_worker_cores=cr,
         )
         config_mcast2d = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(2, 2),
@@ -3161,6 +3176,7 @@ class TestMatmulFactories:
             out_subblock_w=1,
             per_core_M=1,
             per_core_N=1,
+            allowed_worker_cores=cr1,
         )
         mm1 = matmul_desc(
             tt(torch_a, device),
@@ -3260,6 +3276,7 @@ class TestMatmulFactories:
             out_subblock_w=4,
             per_core_M=1,
             per_core_N=4,
+            allowed_worker_cores=stem_cr,
         )
         mm_left = matmul_desc(
             stem.output_tensors[0],
