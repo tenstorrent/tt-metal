@@ -12,6 +12,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from conftest import random_weights
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
 from models.demos.deepseek_v3_d_p.tests.test_mla import run_mla_inference
 from models.demos.deepseek_v3_d_p.tt.mla.utils import reverse_reorder_tensor_chunks
@@ -74,7 +75,7 @@ def test_mla_disaggregation(
         config, sd = request.getfixturevalue("pretrained_transformer_weights")
         weights = sd["layers"][0]["mla_weights"]
     else:
-        config, weights = request.getfixturevalue("random_weights")
+        config, weights = random_weights(request.getfixturevalue("config_only"))
 
     fabric_config = device_params.get("fabric_config", ttnn.FabricConfig.FABRIC_1D)
     topology = ttnn.Topology.Ring if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING else ttnn.Topology.Linear

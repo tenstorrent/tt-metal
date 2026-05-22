@@ -16,6 +16,7 @@ from transformers.cache_utils import DynamicCache
 from ttnn.device import is_blackhole
 
 import ttnn
+from conftest import random_weights
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
 from models.demos.deepseek_v3_d_p.tests.model_variants import MODEL_VARIANTS
 from models.demos.deepseek_v3_d_p.tests.reference_runners import run_reference_mla
@@ -187,8 +188,7 @@ def test_mla(
         config, sd = request.getfixturevalue("pretrained_transformer_weights")
         weights = sd["layers"][0]["mla_weights"]
     else:
-        # `random_weights_for_model` derives shapes from `variant.build_reference_config()`.
-        config, weights = request.getfixturevalue("random_weights_for_model")
+        config, weights = random_weights(variant.build_reference_config())
 
     fabric_config = device_params.get("fabric_config", ttnn.FabricConfig.FABRIC_1D)
     topology = ttnn.Topology.Ring if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING else ttnn.Topology.Linear

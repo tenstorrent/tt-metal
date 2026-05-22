@@ -136,8 +136,18 @@ class ModelVariant(ABC):
 
 
 class DSv3Variant(ModelVariant):
-    def build_reference_config(self) -> None:
-        return None
+    def build_reference_config(self) -> KimiRefConfig:
+        c = DeepSeekV3Config
+        return KimiRefConfig(
+            hidden_size=c.EMB_SIZE,
+            num_attention_heads=c.NUM_ATTENTION_HEADS,
+            num_key_value_heads=c.NUM_ATTENTION_HEADS,
+            q_lora_rank=c.Q_LORA_RANK,
+            kv_lora_rank=c.KV_LORA_RANK,
+            qk_nope_head_dim=c.QK_NOPE_HEAD_DIM,
+            qk_rope_head_dim=c.QK_ROPE_HEAD_DIM,
+            v_head_dim=c.V_HEAD_DIM,
+        )
 
 
 class KimiVariant(ModelVariant):
