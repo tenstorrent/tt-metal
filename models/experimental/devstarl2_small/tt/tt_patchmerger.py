@@ -26,7 +26,10 @@ class TTMistral3PatchMerger(LightweightModule):
         def get_weight(name):
             return torch.transpose(state_dict[f"{state_dict_prefix}{name}.weight"], -2, -1)
 
-        def as_tensor_data(tensor_data, dtype):
+        def as_tensor_data(tensor_data, dtype, inner_h, inner_w):
+            cache_name = None
+            if weight_cache_path is not None:
+                cache_name = weight_cache_path / f"{state_dict_prefix}merging_layer.weight.{inner_h}_{inner_w}.tile"
             return ttnn.as_tensor(
                 tensor_data,
                 dtype=dtype,
@@ -34,6 +37,7 @@ class TTMistral3PatchMerger(LightweightModule):
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cache_file_name=cache_name,
             )
 
         merging_weights = get_weight("merging_layer")
@@ -46,7 +50,7 @@ class TTMistral3PatchMerger(LightweightModule):
             output_dim,
         )
         self.merging_weights = [
-            as_tensor_data(merging_weights[:, inner_h, inner_w, :].contiguous(), dtype)
+            as_tensor_data(merging_weights[:, inner_h, inner_w, :].contiguous(), dtype, inner_h, inner_w)
             for inner_h in range(self.spatial_merge_size)
             for inner_w in range(self.spatial_merge_size)
         ]
@@ -64,6 +68,13 @@ class TTMistral3PatchMerger(LightweightModule):
             mcast_in0=True,
         )
 
+    def _ensure_tile(self, tensor: ttnn.Tensor, mem_cfg: ttnn.MemoryConfig) -> ttnn.Tensor:
+        if tensor.get_layout() != ttnn.TILE_LAYOUT:
+            return ttnn.to_layout(tensor, ttnn.TILE_LAYOUT, memory_config=mem_cfg)
+        if mem_cfg.buffer_type == ttnn.BufferType.L1 and tensor.memory_config().buffer_type != ttnn.BufferType.L1:
+            return ttnn.to_memory_config(tensor, mem_cfg)
+        return tensor
+
     def forward(self, image_features: ttnn.Tensor, image_sizes) -> ttnn.Tensor:
         image_sizes = [
             (image_size[0] // self.patch_size, image_size[1] // self.patch_size) for image_size in image_sizes
@@ -78,17 +89,11 @@ class TTMistral3PatchMerger(LightweightModule):
             merged_h = h // self.spatial_merge_size
             merged_w = w // self.spatial_merge_size
 
-            image_tokens = ttnn.to_layout(image_tokens, ttnn.ROW_MAJOR_LAYOUT)
             slice_mem_cfg = vision_slice_memcfg(h * w)
-            if (
-                slice_mem_cfg.buffer_type == ttnn.BufferType.L1
-                and image_tokens.memory_config().buffer_type != ttnn.BufferType.L1
-            ):
-                image_tokens = ttnn.to_memory_config(image_tokens, slice_mem_cfg)
+            image_tokens = self._ensure_tile(image_tokens, slice_mem_cfg)
 
-            image_grid = ttnn.view(image_tokens, (h, w, d))
             grid = ttnn.reshape(
-                image_grid,
+                image_tokens,
                 (merged_h, self.spatial_merge_size, merged_w, self.spatial_merge_size, d),
             )
             if (
@@ -112,7 +117,6 @@ class TTMistral3PatchMerger(LightweightModule):
                         memory_config=slice_mem_cfg,
                     )
                     patch = ttnn.reshape(patch, (merged_h * merged_w, d))
-                    patch = ttnn.to_layout(patch, ttnn.TILE_LAYOUT, memory_config=slice_mem_cfg)
                     linear_kwargs = dict(
                         dtype=ttnn.bfloat16,
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,

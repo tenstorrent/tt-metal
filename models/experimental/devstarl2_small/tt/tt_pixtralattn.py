@@ -159,6 +159,9 @@ class TtMistralImageAttention(LightweightModule):
                 ).transpose(-1, -2)
             return packed.transpose(0, 1).reshape(self.hidden_size, -1)
 
+        wqkv_cache = None if weight_cache_path is None else weight_cache_path / f"{state_dict_prefix}wqkv.weight"
+        wo_cache = None if weight_cache_path is None else weight_cache_path / f"{state_dict_prefix}wo.weight"
+
         self.wqkv = ttnn.as_tensor(
             pack_qkv_for_sharding(wq_padded, wk_padded, wv_padded),
             device=self.mesh_device,
@@ -166,6 +169,7 @@ class TtMistralImageAttention(LightweightModule):
             dtype=self.dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
+            cache_file_name=wqkv_cache,
         )
 
         self.wo = ttnn.as_tensor(
@@ -175,6 +179,7 @@ class TtMistralImageAttention(LightweightModule):
             dtype=self.dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
+            cache_file_name=wo_cache,
         )
 
         self.scale = self.head_dim**-0.5
