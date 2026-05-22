@@ -117,7 +117,7 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
 
     // Get OP Config, topology config
     auto [num_targets_forward, num_targets_backward] = ::ttnn::ccl::get_forward_backward_line_mcast_distance(
-        num_devices, device_idx, operation_attributes.topology, true);
+        num_devices, device_idx, operation_attributes.topology, false);
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;
 
@@ -126,6 +126,10 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
     auto sender_worker_cores = corerange_to_cores(sender_worker_core_range);
 
     const uint32_t packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+
+    // In even-sized ring topology, we alternate packet sends across two routes for load balancing
+    const bool load_balance_across_alt_routes =
+        (operation_attributes.topology == ccl::Topology::Ring) && (num_devices % 2 == 0);
 
     ////////////////////////////////////////////////////////////////
     // Page indexing
@@ -243,8 +247,10 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
         output_page_stripe_jump,                                // value added to page_id at stripe boundary
         cb_page_size,                                           // cb entry size
         packet_size,                                            // packet_size
-        forward_coord.has_value() ? num_targets_forward : 0,    // range_hops
+        forward_coord.has_value() ? num_targets_forward : 0,    // range_hops (in reader's direction)
         backward_coord.has_value() ? num_targets_backward : 0,  // range_hops alternate (opposite dir)
+        load_balance_across_alt_routes,                         // load_balance_across_alt_routes
+        forward_coord.has_value(),                              // num_connections (0 = no neighbor)
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
@@ -257,8 +263,10 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
         output_page_stripe_jump,                                // value added to page_id at stripe boundary
         cb_page_size,                                           // cb entry size
         packet_size,                                            // packet_size
-        backward_coord.has_value() ? num_targets_backward : 0,  // range_hops
+        backward_coord.has_value() ? num_targets_backward : 0,  // range_hops (in writer's direction)
         forward_coord.has_value() ? num_targets_forward : 0,    // range_hops alternate (opposite dir)
+        load_balance_across_alt_routes,                         // load_balance_across_alt_routes
+        backward_coord.has_value(),                             // num_connections (0 = no neighbor)
     };
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
 
@@ -313,13 +321,20 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
                                         local_output_start % output_pages_per_stripe;
         uint32_t output_page_in_stripe_start = local_output_start % output_pages_per_stripe;
 
-        bool wait_output_semaphore = (link == 0);
-        bool reset_global_semaphore = (link == 0);
-        uint32_t out_ready_sem_wait_value = num_devices * operation_attributes.num_links;
+        // Reader of first worker is the sole owner of both global semaphores: it fires its forward sem
+        // contributions, then waits + resets. Writer just fires + local-incs its backward sem contributions.
+        bool owns_out_ready_sem = (link == 0);
+        // Per-link barrier fan-in = N-1 in every case
+        uint32_t barrier_wait_value = num_targets_forward + num_targets_backward;
+        // Per-link out_ready fan-in at link-0 drain_sync_core:
+        //   num_links * (N-1 remote mcast hits + 2 local incs from reader and writer).
+        uint32_t out_ready_sem_wait_value = operation_attributes.num_links * (num_devices + 1);
 
         std::vector<uint32_t> reader_rt_args = {
             input_tensor.buffer()->address(),   // input tensor address
             output_tensor.buffer()->address(),  // output tensor address
+            semaphore.address(),                // out_ready_sem_bank_addr (absolute address)
+            barrier_semaphore.address(),        // barrier_sem
             input_tile_id_start,                // input_page_id_start
             input_tile_id_end,                  // input_page_id_end
             output_page_id_start,               // output page start
@@ -327,7 +342,13 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
             output_page_byte_offset,            // byte offset within output page (nonzero only in page-concat)
             num_worker_output_pages,            // number of output pages for this worker
             device_idx,                         // this device's index
-            1,                                  // num_connections // TODO hardcoded
+            owns_out_ready_sem,                 // owns_out_ready_sem (wait+reset)
+            drain_sync_core.x,                  // out_ready_sem_noc0_x
+            drain_sync_core.y,                  // out_ready_sem_noc0_y
+            out_ready_sem_wait_value,           // out_ready_sem_wait_value
+            barrier_core.x,                     // barrier_sem_noc0_x
+            barrier_core.y,                     // barrier_sem_noc0_y
+            barrier_wait_value,                 // barrier_wait_value
         };
         const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
         if (forward_coord.has_value()) {
@@ -351,14 +372,10 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
             output_page_byte_offset,            // byte offset within output page (nonzero only in page-concat)
             num_worker_output_pages,            // number of output pages for this worker
             device_idx,                         // this device's index
-            wait_output_semaphore,              // wait_output_semaphore
-            reset_global_semaphore,             // reset_global_semaphore
             drain_sync_core.x,                  // out_ready_sem_noc0_x
             drain_sync_core.y,                  // out_ready_sem_noc0_y
-            out_ready_sem_wait_value,           // out_ready_sem_wait_value
             barrier_core.x,                     // barrier_sem_noc0_x
             barrier_core.y,                     // barrier_sem_noc0_y
-            1,                                  // num_connections, // TODO hardcoded
         };
 
         if (backward_coord.has_value()) {
@@ -405,11 +422,13 @@ void AllGatherFactory::override_runtime_arguments(
             GetRuntimeArgs(program, shared_vars.worker_sender_writer_kernel_id);
 
         for (const auto& core : shared_vars.sender_worker_cores) {
-            // reader: [0]=input_addr, [1]=output_addr
+            // reader: [0]=input_addr, [1]=output_addr, [2]=out_ready_sem, [3]=barrier_sem
             auto& worker_reader_sender_runtime_args = worker_reader_sender_runtime_args_by_core[core.x][core.y];
             worker_reader_sender_runtime_args[0] = tensor_args.input_tensor.buffer()->address();
             worker_reader_sender_runtime_args[1] = output_tensor.buffer()->address();
-            // writer: [0]=output_addr, [1]=semaphore, [2]=barrier_sem
+            worker_reader_sender_runtime_args[2] = shared_vars.semaphore.address();
+            worker_reader_sender_runtime_args[3] = shared_vars.barrier_semaphore.address();
+            // writer: [0]=output_addr, [1]=out_ready_sem, [2]=barrier_sem
             auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
             worker_writer_sender_runtime_args[0] = output_tensor.buffer()->address();
             worker_writer_sender_runtime_args[1] = shared_vars.semaphore.address();
