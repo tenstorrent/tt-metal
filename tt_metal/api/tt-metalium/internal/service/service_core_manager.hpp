@@ -18,7 +18,7 @@ class IDevice;
 using DeviceAddr = uint64_t;
 }  // namespace tt::tt_metal
 
-namespace tt::tt_metal::experimental::service {
+namespace tt::tt_metal::internal {
 
 // Manages reservation of free FD dispatch-column cores for long-running service kernels,
 // and per-core L1 allocation for those cores.
@@ -42,7 +42,7 @@ namespace tt::tt_metal::experimental::service {
 //   EnqueueMeshWorkload(mesh_cq, weights_workload, true);
 //
 //   // 2. Claim service cores (must be done while FD is active)
-//   auto& svc = ServiceCoreClaims::get();
+//   auto& svc = ServiceCoreManager::get();
 //   auto claimable = svc.get_claimable_cores(device);
 //   svc.claim(device, claimable);
 //
@@ -64,9 +64,9 @@ namespace tt::tt_metal::experimental::service {
 //   WriteToDeviceL1(device, stop_core, stop_addr, 1);  // or via GlobalSemaphore
 //   svc.release(device, claimable);
 //
-class ServiceCoreClaims {
+class ServiceCoreManager {
 public:
-    static ServiceCoreClaims& get();
+    static ServiceCoreManager& get();
 
     // Returns dispatch-column cores not yet allocated to FD infra or claimed as service
     // cores. TT_FATALs if no manual FD session is active — the dispatch pool is only in
@@ -123,15 +123,15 @@ public:
     // Called at add_program time to route programs targeting service cores to the SD path.
     bool is_service_core(CoreCoord core) const;
 
-    ServiceCoreClaims(const ServiceCoreClaims&) = delete;
-    ServiceCoreClaims& operator=(const ServiceCoreClaims&) = delete;
+    ServiceCoreManager(const ServiceCoreManager&) = delete;
+    ServiceCoreManager& operator=(const ServiceCoreManager&) = delete;
 
 private:
-    ServiceCoreClaims();
-    ~ServiceCoreClaims();
+    ServiceCoreManager();
+    ~ServiceCoreManager();
 
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };
 
-}  // namespace tt::tt_metal::experimental::service
+}  // namespace tt::tt_metal::internal

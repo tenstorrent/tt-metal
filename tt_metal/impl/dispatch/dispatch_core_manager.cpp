@@ -17,7 +17,7 @@
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <tt-metalium/experimental/service_core_claims.hpp>
+#include <tt-metalium/internal/service/service_core_manager.hpp>
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -274,7 +274,7 @@ void dispatch_core_manager::reset_dispatch_core_manager(
         }
 
         // Remove service-owned cores so FD never allocates them.
-        auto claimed = experimental::service::ServiceCoreClaims::get().claimed_cores(device_id);
+        auto claimed = internal::ServiceCoreManager::get().claimed_cores(device_id);
         if (!claimed.empty()) {
             logical_dispatch_cores.remove_if([&claimed](const CoreCoord& c) { return claimed.count(c) > 0; });
         }

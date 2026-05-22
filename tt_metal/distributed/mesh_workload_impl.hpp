@@ -63,7 +63,7 @@ private:
     std::vector<std::vector<std::shared_ptr<KernelGroup>>> kernel_groups_;
     std::vector<Semaphore> semaphores_;
     std::unordered_map<MeshCoordinateRange, Program> programs_;
-    // Programs targeting service cores (FD idle dispatch-column cores claimed via ServiceCoreClaims).
+    // Programs targeting service cores (FD idle dispatch-column cores claimed via ServiceCoreManager).
     // Dispatched via slow-dispatch MMIO path rather than the FD command queue.
     std::unordered_map<MeshCoordinateRange, Program> service_programs_;
     bool finalized_ = false;
