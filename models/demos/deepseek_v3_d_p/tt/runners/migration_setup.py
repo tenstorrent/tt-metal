@@ -58,27 +58,31 @@ def _import_migration():
     """Lazy import so the migration extension is only required when migration
     is actually enabled (PREFILL_ENABLE_MIGRATION=1).
 
-    KvCacheLocation, KvChunkAddressTable, KvChunkAddressTableConfig are also
-    registered with nanobind by ttnn (ttnn/cpp/ttnn-nanobind/disaggregation.cpp).
-    nanobind's global type registry rejects duplicate registrations: whichever
-    .so loads first wins, and the other module's symbols stay unbound. ttnn is
-    always loaded before _migration here, so we pull those three types from
-    ttnn.experimental.disaggregation instead. The migration-only symbols
-    (MigrationLayerEndpoint, SubordinateInfo, EndpointGrouping,
-    make_mpi_endpoint_device) come from _migration as before.
+    KvCacheLocation, KvChunkAddressTable, KvChunkAddressTableConfig are
+    registered with nanobind by both _migration and ttnn
+    (ttnn/cpp/ttnn-nanobind/disaggregation.cpp). nanobind's global type
+    registry rejects duplicate registrations: whichever .so loads first
+    wins, and the other module's symbols stay unbound. The merged-model
+    launcher (tests/disaggregation/ds_pd_merged_model_tt_run.py) imports
+    _migration before ttnn for exactly this reason, so all six types come
+    from _migration.
     """
     try:
         from _migration import MigrationLayerEndpoint  # noqa: F401  (re-exposed via factory)
-        from _migration import EndpointGrouping, SubordinateInfo, make_mpi_endpoint_device
+        from _migration import (
+            EndpointGrouping,
+            KvCacheLocation,
+            KvChunkAddressTable,
+            KvChunkAddressTableConfig,
+            SubordinateInfo,
+            make_mpi_endpoint_device,
+        )
     except ImportError as exc:
         raise ImportError(
             "Cannot import _migration. Build tt-blaze migration extension "
             "(./build_blaze.sh --with-metal) and add "
             "<tt-blaze>/build_Release/python to PYTHONPATH."
         ) from exc
-    KvCacheLocation = ttnn.experimental.disaggregation.KvCacheLocation
-    KvChunkAddressTable = ttnn.experimental.disaggregation.KvChunkAddressTable
-    KvChunkAddressTableConfig = ttnn.experimental.disaggregation.KvChunkAddressTableConfig
     return dict(
         EndpointGrouping=EndpointGrouping,
         KvCacheLocation=KvCacheLocation,
