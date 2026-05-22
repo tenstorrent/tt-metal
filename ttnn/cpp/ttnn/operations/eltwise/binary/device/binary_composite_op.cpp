@@ -552,6 +552,21 @@ Tensor floor_div(const Tensor& input_a, const Tensor& input_b, const std::option
 // the width dim, so we materialize those as interleaved DRAM first.
 // Output sharding remains caller-controlled via output_mem_config.
 Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+    TT_FATAL(
+        input_a.logical_shape().rank() >= 1 && input_b.logical_shape().rank() >= 1,
+        "ttnn.outer: inputs must be at least 1D, but got shapes {} and {}",
+        input_a.logical_shape(),
+        input_b.logical_shape());
+    TT_FATAL(
+        input_a.dtype() != DataType::BFLOAT4_B && input_b.dtype() != DataType::BFLOAT4_B,
+        "ttnn.outer: bfloat4_b is not supported (got dtypes {} and {})",
+        input_a.dtype(),
+        input_b.dtype());
+    TT_FATAL(
+        input_a.dtype() == input_b.dtype(),
+        "ttnn.outer: inputs must have the same dtype, but got {} and {}",
+        input_a.dtype(),
+        input_b.dtype());
     auto deshard_unless_height = [](const Tensor& t) {
         const auto layout = t.memory_config().memory_layout();
         const bool keep_sharded =
