@@ -1,0 +1,38 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <optional>
+
+#include <tt-metalium/kernel_types.hpp>  // For DataMovementProcessor, NOC, etc.
+
+namespace tt::tt_metal::experimental {
+
+// Hardware generations referenced in this API:
+//   Gen1 — Wormhole (WH), Blackhole (BH)
+//   Gen2 — Quasar and derivative architectures
+
+// Data movement hardware resource configuration for DM kernels
+struct DataMovementConfiguration {
+    // The DM configuration differs between hardware generations.
+    //  - Gen1 (WH/BH) requires explicit processor/NOC selection.
+    //  - Gen2 (Quasar) has no user-facing configuration yet (placeholder only).
+    // For architecture-agnostic host code, provide both.
+
+    struct Gen1 {
+        tt::tt_metal::DataMovementProcessor processor = tt::tt_metal::DataMovementProcessor::RISCV_0;
+        tt::tt_metal::NOC noc = tt::tt_metal::NOC::RISCV_0_default;
+        tt::tt_metal::NOC_MODE noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC;
+    };
+    std::optional<Gen1> gen1 = std::nullopt;
+
+    struct Gen2 {
+        // Currently, no configuration is needed for Gen2!
+        // The empty struct is still used to express a Gen2 DM kernel.
+    };
+    std::optional<Gen2> gen2 = std::nullopt;
+};
+
+}  // namespace tt::tt_metal::experimental

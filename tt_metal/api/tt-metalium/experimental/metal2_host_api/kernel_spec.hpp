@@ -12,78 +12,14 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/experimental/metal2_host_api/compute_configuration.hpp>
+#include <tt-metalium/experimental/metal2_host_api/data_movement_configuration.hpp>
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
-#include <tt-metalium/base_types.hpp>    // For MathFidelity, UnpackToDestMode (global scope)
-#include <tt-metalium/kernel_types.hpp>  // For DataMovementProcessor, NOC, etc.
 
 namespace tt::tt_metal::experimental {
-
-struct ComputeConfiguration {
-    // Tensix hardware resource configuration for compute kernels.
-    // Gen1 and Gen2 configurations are identical.
-    //
-    // The Tensix Engine is a 3-stage pipeline (Unpack → Math → Pack).
-    // There are two math engines:
-    //  - FPU reads operands from the SrcA / SrcB register files (~19-bit),
-    //    writes to the Dest register file (16- or 32-bit, configurable).
-    //  - SFPU runs SIMD transcendentals. It can only access Dest.
-    // The fields below configure this pipeline.
-
-    // Number of multiply passes the FPU runs to use more mantissa bits
-    MathFidelity math_fidelity = MathFidelity::HiFi4;
-
-    // Configure Dest register to hold 32-bit elements (instead of the default 16-bit)
-    bool fp32_dest_acc_en = false;
-
-    // Dest register sync mode:
-    //   false (Half) — Dest is split in half; math and pack pipeline (double-buffered)
-    //   true  (Full) — Dest is one buffer; twice the capacity, no math/pack overlap
-    bool dst_full_sync_en = false;
-
-    // Pack-side precision tweak for the Bfp8 block-float format.
-    // (Affects how exponents are reconciled when converting Dest contents to Bfp8)
-    bool bfp8_pack_precise = false;
-
-    // Select fast-and-approximate vs slow-and-precise variants of SFPU transcendentals
-    bool math_approx_mode = false;
-
-    // Per-DFB choice of how the unpacker delivers data into the math stage:
-    //   Default          — unpack via SrcA/B regs (~19-bit elements; full FPU access)
-    //   UnpackToDestFp32 — unpack via Dest regs with full FP32 precision (SFPU only)
-    //
-    // This choice matters only when ALL of the following hold for the DFB binding:
-    //   1. The kernel is the consumer endpoint (unpacking data into the kernel)
-    //   2. The DFB's data format is Float32.
-    //   3. fp32_dest_acc_en is true (Dest must be 32-bit-wide to hold FP32).
-    //
-    // You MUST provide an unpack_to_dest_mode entry for the DFB if these conditions hold;
-    // failing to do so will trigger an error. Otherwise, supplying an entry is optional
-    // and only Default is accepted.
-    using UnpackToDestModeEntry = std::pair<DFBSpecName, tt::tt_metal::UnpackToDestMode>;
-    std::vector<UnpackToDestModeEntry> unpack_to_dest_mode;
-};
-
-struct DataMovementConfiguration {
-    // The DM configuration is different for Gen1 and Gen2.
-    // You can provide either a Gen1 config, a Gen2 config, or both.
-    // If your host code is intended to be architecture-agnostic, provide both.
-
-    struct Gen1 {
-        tt::tt_metal::DataMovementProcessor processor = tt::tt_metal::DataMovementProcessor::RISCV_0;
-        tt::tt_metal::NOC noc = tt::tt_metal::NOC::RISCV_0_default;
-        tt::tt_metal::NOC_MODE noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC;
-    };
-    std::optional<Gen1> gen1 = std::nullopt;
-
-    struct Gen2 {
-        // Currently, no configuration is needed for Gen2!
-        // The empty struct is still used to express a Gen2 DM kernel.
-    };
-    std::optional<Gen2> gen2 = std::nullopt;
-};
 
 // A name identifying a KernelSpec within a ProgramSpec.
 // String literals work directly; misnamed references fail at validation.
@@ -291,38 +227,80 @@ struct KernelSpec {
     std::vector<DFBComputeSelfLoopScope> dfb_compute_self_loop_scopes;
 };
 
-// Namespace-level aliases for commonly-used nested types. Both the qualified
-// (KernelSpec::Foo) and unqualified (Foo) forms refer to the same type.
+//////////////////////////////////////////////////////////////////////////////
+// Namespace-level aliases for commonly-used nested types
+//////////////////////////////////////////////////////////////////////////////
+
+// The qualified (KernelSpec::Foo) and unqualified (Foo) forms refer to the same type.
 using DFBBinding = KernelSpec::DFBBinding;
 using DFBEndpointType = KernelSpec::DFBEndpointType;
 using SemaphoreBinding = KernelSpec::SemaphoreBinding;
 using TensorBinding = KernelSpec::TensorBinding;
 using SourceCode = KernelSpec::SourceCode;
 
-// Convenience factories for DFBBinding. Equivalent to writing a designated-init
-// DFBBinding{...} with endpoint_type set; the access_pattern defaults to STRIDED.
-inline KernelSpec::DFBBinding ProducerOf(
-    DFBSpecName dfb_spec_name,
-    std::string local_accessor_name,
-    DFBAccessPattern access_pattern = DFBAccessPattern::STRIDED) {
-    return KernelSpec::DFBBinding{
+//////////////////////////////////////////////////////////////////////////////
+// Convenience factories for DFBBinding
+//////////////////////////////////////////////////////////////////////////////
+
+// Ergonomic alternatives to writing a designated-init DFBBinding{...}
+
+// Creates a DFB producer binding with a STRIDED access pattern
+// (All DFB producers are STRIDED)
+inline DFBBinding ProducerOf(DFBSpecName dfb_spec_name, std::string local_accessor_name) {
+    return DFBBinding{
         .dfb_spec_name = std::move(dfb_spec_name),
         .local_accessor_name = std::move(local_accessor_name),
-        .endpoint_type = KernelSpec::DFBEndpointType::PRODUCER,
-        .access_pattern = access_pattern,
+        .endpoint_type = DFBEndpointType::PRODUCER,
+        .access_pattern = DFBAccessPattern::STRIDED};
+}
+
+// Creates a DFB consumer binding (with a default-STRIDED access pattern)
+// Use this for single-threaded kernels, where the access pattern doesn't matter.
+// For multi-threaded kernels (Quasar), prefer the explicit access pattern
+// helper factories below.
+inline DFBBinding ConsumerOf(DFBSpecName dfb_spec_name, std::string local_accessor_name) {
+    return DFBBinding{
+        .dfb_spec_name = std::move(dfb_spec_name),
+        .local_accessor_name = std::move(local_accessor_name),
+        .endpoint_type = DFBEndpointType::CONSUMER,
+        // access pattern defaults to STRIDED
     };
 }
 
-inline KernelSpec::DFBBinding ConsumerOf(
-    DFBSpecName dfb_spec_name,
-    std::string local_accessor_name,
-    DFBAccessPattern access_pattern = DFBAccessPattern::STRIDED) {
-    return KernelSpec::DFBBinding{
+// Creates a DFB consumer binding with a STRIDED access pattern
+// (The common case for multi-threaded DFB consumers)
+inline DFBBinding StridedConsumerOf(DFBSpecName dfb_spec_name, std::string local_accessor_name) {
+    return DFBBinding{
         .dfb_spec_name = std::move(dfb_spec_name),
         .local_accessor_name = std::move(local_accessor_name),
-        .endpoint_type = KernelSpec::DFBEndpointType::CONSUMER,
-        .access_pattern = access_pattern,
+        .endpoint_type = DFBEndpointType::CONSUMER,
+        .access_pattern = DFBAccessPattern::STRIDED,
     };
 }
+
+// Creates a DFB consumer binding with a ALL access pattern
+inline DFBBinding AllConsumerOf(DFBSpecName dfb_spec_name, std::string local_accessor_name) {
+    return DFBBinding{
+        .dfb_spec_name = std::move(dfb_spec_name),
+        .local_accessor_name = std::move(local_accessor_name),
+        .endpoint_type = DFBEndpointType::CONSUMER,
+        .access_pattern = DFBAccessPattern::ALL,
+    };
+}
+
+// Creates a DFB consumer binding with a BLOCKED access pattern
+// Uncomment when BLOCKED support is added (currently TT_FATALs)
+/*
+inline DFBBinding BlockedConsumerOf(
+    DFBSpecName dfb_spec_name,
+    std::string local_accessor_name) {
+    return DFBBinding{
+        .dfb_spec_name = std::move(dfb_spec_name),
+        .local_accessor_name = std::move(local_accessor_name),
+        .endpoint_type = DFBEndpointType::CONSUMER,
+        .access_pattern = DFBAccessPattern::BLOCKED,
+    };
+}
+*/
 
 }  // namespace tt::tt_metal::experimental
