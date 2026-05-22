@@ -81,7 +81,20 @@ unset(NO_FILESELECTOR)
 set(BUILD_SHARED_LIBS "${_tt_tracy_saved_build_shared_libs}" CACHE BOOL "Create shared libraries" FORCE)
 unset(_tt_tracy_saved_build_shared_libs)
 
-# install(TARGETS) copies capture/csvexport into build/bin; ensure they are built on ALL.
+# Link Tracy CLI tools into build/tools/profiler/bin (not CMAKE_INSTALL_BINDIR / build/bin).
+set(_tt_tracy_cli_output_dir "${CMAKE_BINARY_DIR}/tools/profiler/bin")
+foreach(_tt_tracy_cli_target IN ITEMS tracy-capture tracy-csvexport tracy-capture-daemon)
+    set_target_properties(
+        ${_tt_tracy_cli_target}
+        PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY
+                "${_tt_tracy_cli_output_dir}"
+            EXCLUDE_FROM_INSTALL
+                TRUE
+    )
+endforeach()
+unset(_tt_tracy_cli_output_dir)
+
 add_custom_target(tracy_profiler_cli_tools ALL)
 add_dependencies(
     tracy_profiler_cli_tools
