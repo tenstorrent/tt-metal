@@ -12,6 +12,9 @@
 #include "api/compute/tile_move_copy.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"
 
 #ifdef FP32_DEST_ACC_EN
 #define WITH_FP32_DEST_ACC(x) x
@@ -150,39 +153,64 @@ void kernel_main() {
         cb_tmp1_obj.push_back(onetile);
         tile_regs_release();
 
-        // cb_tmp1 = 1 / (1 - cb_tmp1);
-        tile_regs_acquire();
-        cb_tmp1_obj.wait_front(onetile);
-        cb_tmp1_obj.reserve_back(onetile);
-        WITH_FP32_DEST_ACC(reconfig_data_format(cb_one, cb_tmp1));
-        sub_tiles_init(cb_one, cb_tmp1);
-        sub_tiles(cb_one, cb_tmp1, first_tile, first_tile, dst0);
-        recip_tile_init();
-        recip_tile(dst0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_tmp1);
-        cb_tmp1_obj.pop_front(onetile);
-        cb_tmp1_obj.push_back(onetile);
-        tile_regs_release();
+        // cb_tmp1 = 1 / (1 - cb_tmp1)  — same-CB in/out on cb_tmp1.
+        // Reconfig audit: `WITH_FP32_DEST_ACC(reconfig_data_format(cb_one, cb_tmp1))`
+        //   is conditional but sub_tiles_init reconfigs srca/srcb unconditionally.
+        //   pack_tile_with_dt does pack reconfig. -> Input + Output.
+        // Lifecycles: cb_one CallerManaged + Scalar (held outside, popped at MAIN end).
+        //   cb_tmp1 Streaming (wait+pop per call) on read; OutStreaming (reserve+push)
+        //   on write; chain handles the same-CB in/out cleanly.
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::BinaryFpu<
+                cb_one,
+                cb_tmp1,
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::Streaming,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar>{},
+            compute_kernel_lib::Recip<compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::PackTile<
+                cb_tmp1,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 
 #ifdef AMSGRAD
-        // tmp_cb_max_exp_avg_sq = max(cb_max_exp_avg_sq_in, tmp_cb_exp_avg_sq);
-        tile_regs_acquire();
-        tmp_cb_max_exp_avg_sq_obj.reserve_back(onetile);
-        copy_tile_init_with_dt(cb_max_exp_avg_sq_in);
-        copy_tile(cb_max_exp_avg_sq_in, first_tile, dst0);
-        copy_tile_init_with_dt(tmp_cb_exp_avg_sq);
-        copy_tile(tmp_cb_exp_avg_sq, first_tile, dst1);
-        binary_max_tile_init();
-        binary_max_tile(dst0, dst1, dst0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, tmp_cb_max_exp_avg_sq);
-        tmp_cb_max_exp_avg_sq_obj.push_back(onetile);
-        tile_regs_release();
+        // tmp_cb_max_exp_avg_sq = max(cb_max_exp_avg_sq_in, tmp_cb_exp_avg_sq)
+        // Two-CB read into D0/D1 + SFPU binary_max + pack to D0.
+        // Reconfig: copy_tile_init_with_dt reconfigs srca for each copy ->
+        //   CopyTileReconfig::Input on both. pack_tile_with_dt -> PackTileReconfig::Output.
+        // Lifecycles: cb_max_exp_avg_sq_in CallerManaged (pre-pushed by reader, pop at MAIN end).
+        //   tmp_cb_exp_avg_sq CallerManaged (caller-managed lifecycle, pop later).
+        //   tmp_cb_max_exp_avg_sq OutStreaming.
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::CopyTile<
+                cb_max_exp_avg_sq_in,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::CopyTileReconfig::Input>{},
+            compute_kernel_lib::CopyTile<
+                tmp_cb_exp_avg_sq,
+                compute_kernel_lib::Dst::D1,
+                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::CopyTileReconfig::Input>{},
+            compute_kernel_lib::
+                BinaryMax<compute_kernel_lib::Dst::D0, compute_kernel_lib::Dst::D1, compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::PackTile<
+                tmp_cb_max_exp_avg_sq,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 
         // cb_max_exp_avg_sq_out
         tile_regs_acquire();
@@ -226,22 +254,35 @@ void kernel_main() {
         tmp_cb_exp_avg_sq_obj.pop_front(onetile);
         tile_regs_release();
 
-        // cb_tmp1 = 1 / (cb_tmp1 + eps)
-        tile_regs_acquire();
-        cb_tmp1_obj.wait_front(onetile);
-        cb_tmp1_obj.reserve_back(onetile);
-        WITH_FP32_DEST_ACC(reconfig_data_format(cb_tmp1, cb_scalar_args));
-        add_tiles_init(cb_tmp1, cb_scalar_args);
-        add_tiles(cb_tmp1, cb_scalar_args, first_tile, eps_tile, dst0);
-        recip_tile_init();
-        recip_tile(dst0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_tmp1);
-        cb_tmp1_obj.pop_front(onetile);
-        cb_tmp1_obj.push_back(onetile);
-        tile_regs_release();
+        // cb_tmp1 = 1 / (cb_tmp1 + eps)  — same-CB in/out on cb_tmp1; eps held in
+        // cb_scalar_args at index eps_tile.
+        // Reconfig: add_tiles_init + WITH_FP32_DEST_ACC reconfig -> Input.
+        //   pack_tile_with_dt -> Output.
+        // Lifecycles: cb_tmp1 Streaming on read + OutStreaming on write (same-CB).
+        //   cb_scalar_args CallerManaged + Scalar + TileBaseCompileTime<eps_tile>.
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::BinaryFpu<
+                cb_tmp1,
+                cb_scalar_args,
+                compute_kernel_lib::BinaryFpuOp::Add,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::Streaming,
+                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::TileBaseNone,
+                compute_kernel_lib::TileBaseCompileTime<eps_tile>>{
+                compute_kernel_lib::TileBaseNone{}, compute_kernel_lib::TileBaseCompileTime<eps_tile>{}},
+            compute_kernel_lib::Recip<compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::PackTile<
+                cb_tmp1,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 
         // bias_correction1 = 1 - pow(beta1, step);
         // cb_tmp2 = pow(beta1, step);
@@ -258,22 +299,31 @@ void kernel_main() {
         cb_tmp2_obj.push_back(onetile);
         tile_regs_release();
 
-        // cb_tmp2 = 1 / (1 - cb_tmp2);
-        tile_regs_acquire();
-        cb_tmp2_obj.wait_front(onetile);
-        WITH_FP32_DEST_ACC(reconfig_data_format(cb_one, cb_tmp2));
-        sub_tiles_init(cb_one, cb_tmp2);
-        sub_tiles(cb_one, cb_tmp2, first_tile, first_tile, dst0);
-        recip_tile_init();
-        recip_tile(dst0);
-        cb_tmp2_obj.pop_front(onetile);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        cb_tmp2_obj.reserve_back(onetile);
-        pack_tile_with_dt(dst0, cb_tmp2);
-        cb_tmp2_obj.push_back(onetile);
-        tile_regs_release();
+        // cb_tmp2 = 1 / (1 - cb_tmp2)  — same-CB in/out on cb_tmp2.
+        // Reconfig: sub_tiles_init + WITH_FP32_DEST_ACC reconfig -> Input.
+        //   pack_tile_with_dt -> Output.
+        // Lifecycles: cb_one CallerManaged + Scalar; cb_tmp2 Streaming on read +
+        //   OutStreaming on write.
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::BinaryFpu<
+                cb_one,
+                cb_tmp2,
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::Streaming,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar>{},
+            compute_kernel_lib::Recip<compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::PackTile<
+                cb_tmp2,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 
         // cb_tmp2 = lr * cb_tmp2;
         mul_tiles_to_cb(cb_scalar_args, cb_tmp2, cb_tmp2, lr_tile, first_tile, 0, 1);
