@@ -17,7 +17,7 @@ not a compute fallback.
   - Duration math (``expm1`` / ``round`` / ``minimum duration 1``) uses TTNN ops.
   - HF's ``repeat_interleave`` is ``embeddings @ H`` with ``ttnn.cumsum`` + comparisons.
   - Lang/speaker broadcast uses ``ttnn.repeat`` to that same ``t_audio``.
-  - Output lengths are an on-device ``ttnn.Tensor``; ``lengths`` stays on device for callers.
+  - Output ``lengths`` uses HF conv-length formulas on host (from ``t_audio``), then a small int32 upload.
   - Duration predictor and resblock ``conv1`` use post-conv fused ReLU / LeakyReLU via ``Conv1dConfig.activation``;
     pre-conv LeakyReLU (upsampler, resblock input, conv_post) stays as separate ``ttnn.leaky_relu`` to match HF order.
 """
@@ -29,9 +29,12 @@ from typing import Any, Optional, Tuple
 import torch
 import ttnn
 
-from models.experimental.seamless_m4t_v2_large.tt.common import to_torch_replicated_first_shard
-
-from models.experimental.seamless_m4t_v2_large.tt.common import core_grid
+from models.experimental.seamless_m4t_v2_large.tt.common import (
+    core_grid,
+    matmul_program_config,
+    MATMUL_1D_SEQ_THRESHOLD,
+    to_torch_replicated_first_shard,
+)
 
 
 def _vocoder_hf_gather_index(input_ids: ttnn.Tensor, *, batch: int, seq: int, pad_id: int) -> int:
@@ -57,6 +60,29 @@ def _fused_leaky_relu(negative_slope: float) -> ttnn.UnaryWithParam:
     return ttnn.UnaryWithParam(ttnn.UnaryOpType.LEAKY_RELU, float(negative_slope))
 
 
+def _host_conv_out_length(n: int, kernel_size: int, stride: int, pad: int, dilation: int = 1) -> int:
+    return (n + 2 * pad - dilation * (kernel_size - 1) - 1) // stride + 1
+
+
+def _host_transpose_conv_out_length(n: int, kernel_size: int, stride: int, pad: int, dilation: int = 1) -> int:
+    return (n - 1) * stride - 2 * pad + dilation * (kernel_size - 1) + 1
+
+
+def _host_hifigan_output_length(cfg: Any, unit_length: int) -> int:
+    """Port of HF ``_get_output_hifigan_lengths`` (``reference/torch_code_hifigan.py``)."""
+    x = int(unit_length)
+    x = _host_conv_out_length(x, 7, 1, 3)
+    for upsample_rate, kernel_size in zip(cfg.upsample_rates, cfg.upsample_kernel_sizes):
+        x = _host_transpose_conv_out_length(x, kernel_size, upsample_rate, (kernel_size - upsample_rate) // 2)
+    for _ in range(len(cfg.upsample_rates)):
+        for kernel_size, dilation in zip(cfg.resblock_kernel_sizes, cfg.resblock_dilation_sizes):
+            for dil in dilation:
+                x = _host_conv_out_length(x, kernel_size, 1, (kernel_size - 1) * dil // 2, dilation=dil)
+            for _ in dilation:
+                x = _host_conv_out_length(x, kernel_size, 1, (kernel_size - 1) // 2, dilation=1)
+    return _host_conv_out_length(x, 7, 1, 3)
+
+
 class TTSeamlessM4Tv2CodeHifiGan:
     """Inference forward for HF ``SeamlessM4Tv2CodeHifiGan``."""
 
@@ -74,6 +100,51 @@ class TTSeamlessM4Tv2CodeHifiGan:
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
+        )
+        self._frame_idx_cache: dict[int, ttnn.Tensor] = {}
+        self._matmul_pc_cache: dict = {}
+
+    def _matmul_pc(self, token_rows: int, in_dim: int, out_dim: int) -> Optional[ttnn.ProgramConfig]:
+        if token_rows > MATMUL_1D_SEQ_THRESHOLD:
+            return None
+        key = (token_rows, in_dim, out_dim)
+        cached = self._matmul_pc_cache.get(key)
+        if cached is not None:
+            return cached
+        cached = matmul_program_config(
+            self.device,
+            token_rows=token_rows,
+            in_dim=in_dim,
+            out_dim=out_dim,
+        )
+        self._matmul_pc_cache[key] = cached
+        return cached
+
+    def _cached_frame_idx_f32(self, t_audio: int) -> ttnn.Tensor:
+        key = int(t_audio)
+        cached = self._frame_idx_cache.get(key)
+        if cached is not None:
+            return cached
+        frame_idx = ttnn.arange(
+            start=0,
+            end=key,
+            step=1,
+            dtype=ttnn.float32,
+            device=self.device,
+        )
+        self._frame_idx_cache[key] = frame_idx
+        return frame_idx
+
+    def _output_lengths_dev(self, t_audio: int, *, batch: int) -> ttnn.Tensor:
+        """Valid waveform prefix length per row; ``t_audio`` is HF unit length (same as forward)."""
+        wav_len = _host_hifigan_output_length(self.cfg, t_audio)
+        return ttnn.full(
+            (batch,),
+            wav_len,
+            dtype=ttnn.int32,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
     def _linear(self, x: ttnn.Tensor, weight: ttnn.Tensor, bias: ttnn.Tensor) -> ttnn.Tensor:
@@ -330,7 +401,6 @@ class TTSeamlessM4Tv2CodeHifiGan:
             ttnn.deallocate(acc)
             ttnn.deallocate(h)
             h = acc_scaled
-            ttnn.ReadDeviceProfiler(self.device)
 
         # Match HF: line 2489 of ``modeling_seamless_m4t_v2.py`` calls
         # ``nn.functional.leaky_relu(hidden_states)`` with the default 0.01 slope, NOT
@@ -352,7 +422,6 @@ class TTSeamlessM4Tv2CodeHifiGan:
             groups=1,
         )
         h = ttnn.tanh(h, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.ReadDeviceProfiler(self.device)
         return h
 
     def forward(
@@ -454,13 +523,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
 
         # ---------- expansion via embeddings @ H (device) ----------
         # H[b, i, j] = 1 iff cumsum_prev[b, i] <= j < cumsum_inc[b, i].
-        frame_idx = ttnn.arange(
-            start=0,
-            end=t_audio,
-            step=1,
-            dtype=ttnn.float32,
-            device=self.device,
-        )
+        frame_idx = self._cached_frame_idx_f32(t_audio)
         # Reshape for broadcasting: [B, T_units, 1] vs [1, 1, t_audio].
         c_b = ttnn.reshape(cumsum_inc, (batch, seq, 1))
         cp_b = ttnn.reshape(cumsum_prev, (batch, seq, 1))
@@ -479,12 +542,14 @@ class TTSeamlessM4Tv2CodeHifiGan:
         # use: [B, T_units, E_unit] -> [B, E_unit, T_units]; expand to [B, E_unit, t_audio].
         use_BEC = ttnn.permute(use, (0, 2, 1))
         # Do not deallocate ``use`` here — ``permute`` may return a view; wait until after matmul/concat.
-        expanded_BCT = ttnn.matmul(
-            use_BEC,
-            H,
+        pc_expand = self._matmul_pc(batch * e_unit, seq, t_audio)
+        mm_kwargs: dict = dict(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self._compute,
         )
+        if pc_expand is not None:
+            mm_kwargs["program_config"] = pc_expand
+        expanded_BCT = ttnn.matmul(use_BEC, H, **mm_kwargs)
         # Matmul may return a tensor that aliases an input buffer; do not free ``use_BEC`` / ``H``
         # until after ``concat`` has read ``expanded_BCT``.
 
@@ -517,8 +582,8 @@ class TTSeamlessM4Tv2CodeHifiGan:
         # ---------- HiFi-GAN (device) ----------
         wav = self._hifi_gan(merged_NLC, self.p.hifi_gan, batch=batch, tlen=t_audio)
 
-        # ---------- length math (device int32) ----------
-        lengths = self._compute_output_lengths_dev(input_ids, cumsum_inc, batch=batch, seq=seq)
+        # ---------- length (host formula, single int32 upload per row) ----------
+        lengths = self._output_lengths_dev(t_audio, batch=batch)
         ttnn.deallocate(cumsum_inc)
         ttnn.deallocate(cumsum_prev)
         ttnn.deallocate(dur_bf)
@@ -592,88 +657,3 @@ class TTSeamlessM4Tv2CodeHifiGan:
             ttnn.deallocate(l)
 
         return waveform, lengths
-
-    # ------------------------------------------------------------ on-device length math
-
-    def _compute_output_lengths_dev(
-        self,
-        input_ids: ttnn.Tensor,
-        cumsum_inc: ttnn.Tensor,
-        *,
-        batch: int,
-        seq: int,
-    ) -> ttnn.Tensor:
-        """
-        Port of HF's ``_get_dur_output_lengths`` + ``_get_output_hifigan_lengths``, fully on device.
-
-        Returns an int32 device tensor of shape ``[B]`` — the valid output prefix length
-        per batch row. Nothing is moved to host.
-        """
-        pad_id = int(self.cfg.t2u_pad_token_id)
-
-        # HF ``_get_dur_output_lengths``: ``unit_lens = cumsum.gather(1, idx)`` with
-        # ``idx = clamp((input_ids != pad).sum(1), 0, seq - 1)``. Same scalar as ``_forward_one``'s
-        # ``t_audio`` (logical ``seq`` columns, then host index ``idx`` — avoids TILE slice edge cases).
-        if batch != 1:
-            raise NotImplementedError(
-                "_compute_output_lengths_dev: HF gather index is computed per row; only B==1 is wired."
-            )
-        cum_pre = ttnn.slice(cumsum_inc, [0, 0], [batch, seq], (1, 1))
-        cs_t = to_torch_replicated_first_shard(cum_pre).float()
-        idx = _vocoder_hf_gather_index(input_ids, batch=batch, seq=seq, pad_id=pad_id)
-        u = float(cs_t[0, idx].item())
-        unit_lens = ttnn.full(
-            (batch,),
-            u,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        # _get_output_hifigan_lengths: integer pipeline of conv / transpose-conv length formulas.
-        x = unit_lens
-
-        def _conv_out_length(
-            x_t: ttnn.Tensor, kernel_size: int, stride: int, pad: int, dilation: int = 1
-        ) -> ttnn.Tensor:
-            # floor((x + 2*pad - dilation*(kernel-1) - 1) / stride) + 1
-            offset = 2 * pad - dilation * (kernel_size - 1) - 1
-            num = ttnn.add(x_t, float(offset), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            div = ttnn.div(num, float(stride), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(num)
-            f = ttnn.floor(div, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(div)
-            out = ttnn.add(f, 1.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(f)
-            return out
-
-        def _transpose_conv_out_length(
-            x_t: ttnn.Tensor, kernel_size: int, stride: int, pad: int, dilation: int = 1
-        ) -> ttnn.Tensor:
-            # (x - 1) * stride - 2*pad + dilation*(kernel-1) + 1
-            const = -2 * pad + dilation * (kernel_size - 1) + 1 - stride  # since (x-1)*s = x*s - s
-            scaled = ttnn.multiply(x_t, float(stride), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            out = ttnn.add(scaled, float(const), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(scaled)
-            return out
-
-        x = _conv_out_length(x, 7, 1, 3)
-
-        for upsample_rate, kernel_size in zip(self.cfg.upsample_rates, self.cfg.upsample_kernel_sizes):
-            x = _transpose_conv_out_length(x, kernel_size, upsample_rate, (kernel_size - upsample_rate) // 2)
-
-        for _ in range(len(self.cfg.upsample_rates)):
-            for kernel_size, dilation in zip(self.cfg.resblock_kernel_sizes, self.cfg.resblock_dilation_sizes):
-                for dil in dilation:
-                    x = _conv_out_length(x, kernel_size, 1, (kernel_size - 1) * dil // 2, dilation=dil)
-                for _ in range(len(dilation)):
-                    x = _conv_out_length(x, kernel_size, 1, (kernel_size - 1) // 2, dilation=1)
-
-        x = _conv_out_length(x, 7, 1, 3)
-
-        # Cast to int32 and reshape to [B]; remains on device.
-        x_int = ttnn.typecast(x, ttnn.int32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(x)
-        x_int = ttnn.reshape(x_int, (batch,))
-        return x_int
