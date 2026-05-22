@@ -518,9 +518,17 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     // Optional input CBs (cur_pos and page_table - raw data, no tile dims)
     CBHandle cb_cur_pos_id = 0;
     if (use_cur_pos_tensor) {
+        // #44366: c_8 is consumed by both compute (cb_pop_front) and writer
+        // (cb_wait_front + read). With a single push, compute could pop the
+        // only token before the writer's cb_wait_front returned and the
+        // writer would hang forever in CWFW. For the non-sharded path we now
+        // allocate two slots so the reader can push one token per consumer
+        // and each consumer pops its own token. The sharded path stays at
+        // one slot because the CB aliases the cur_pos buffer.
+        const uint32_t cur_pos_cb_total_size = is_cur_pos_tensor_sharded ? cur_pos_stick_size : 2 * cur_pos_stick_size;
         cb_cur_pos_id = create_cb(
             CBIndex::c_8,
-            cur_pos_stick_size,
+            cur_pos_cb_total_size,
             cur_pos_df,
             cur_pos_stick_size,
             nullptr,
@@ -687,6 +695,9 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         original_block_size,
     };
     tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args_common);
+    // #44366: writer needs to know whether to cb_pop_front(c_8) — sharded
+    // path keeps the single-slot aliased CB and the writer must not pop.
+    writer_compile_time_args_common.push_back(is_cur_pos_tensor_sharded ? 1u : 0u);
 
     std::vector<uint32_t> compute_compile_time_args_common = {
         St,
