@@ -542,14 +542,26 @@ def run_prompt_to_wav(
 def main() -> None:
     ap = argparse.ArgumentParser(description="ACE-Step v1.5: prompt → wav (PyTorch reference pipeline).")
     ap.add_argument("--prompt", type=str, required=True)
-    ap.add_argument("--ckpt_dir", type=str, default=None)
+    ap.add_argument(
+        "--ckpt_dir",
+        type=str,
+        default=None,
+        help="Checkpoint root (default: ~/.cache/huggingface/hub/ACE-Step-1.5-checkpoints).",
+    )
     ap.add_argument("--variant", type=str, default="acestep-v15-base")
+    ap.add_argument(
+        "--lm_variant",
+        type=str,
+        default="acestep-5Hz-lm-1.7B",
+        choices=["acestep-5Hz-lm-0.6B", "acestep-5Hz-lm-1.7B", "acestep-5Hz-lm-4B"],
+        help="5 Hz LM variant for --use-official-acestep (default: acestep-5Hz-lm-1.7B).",
+    )
     ap.add_argument(
         "--use-official-acestep",
         action="store_true",
         help=(
             "Use ACE-Step's official Torch pipeline (LLMHandler + AceStepHandler + generate_music). "
-            "This can exceed the lightweight/HF paths when LM reasoning is enabled."
+            "Runs entirely on PyTorch (CPU/CUDA); does not open a TTNN device."
         ),
     )
     ap.add_argument("--assets-repo-id", type=str, default="ACE-Step/Ace-Step1.5")
@@ -607,7 +619,15 @@ def main() -> None:
         args.infer_steps = 8 if "turbo" in str(args.variant).lower() else 50
 
     if args.use_official_acestep:
-        ref_root = _resolve_ace_step_repo_root(ckpt_dir=args.ckpt_dir, ace_step_repo_root=args.ace_step_repo_root)
+        from models.demos.ace_step_v1_5.run_prompt_to_wav import _DEFAULT_CKPT_DIR, _ensure_variant
+        from models.demos.ace_step_v1_5.torch_ref.transformers_cache_compat import apply_transformers_cache_compat
+
+        apply_transformers_cache_compat()
+
+        ckpt_dir = Path(args.ckpt_dir).expanduser() if args.ckpt_dir else _DEFAULT_CKPT_DIR
+        os.environ["ACESTEP_CHECKPOINTS_DIR"] = str(ckpt_dir)
+
+        ref_root = _resolve_ace_step_repo_root(ckpt_dir=str(ckpt_dir), ace_step_repo_root=args.ace_step_repo_root)
         if ref_root is None:
             raise RuntimeError(
                 "Could not find ACE-Step-1.5 repo root (folder containing `acestep/`). "
@@ -619,12 +639,16 @@ def main() -> None:
         from acestep.handler import AceStepHandler
         from acestep.inference import GenerationConfig, GenerationParams, generate_music
 
-        from models.demos.ace_step_v1_5.ttnn_impl.five_hz_lm import LocalFiveHzLMHandler
+        # PyTorch-only LM (no TTNN device). ttnn_impl.five_hz_lm defaults to use_ttnn_causal_lm=True.
+        from models.demos.ace_step_v1_5.torch_ref.five_hz_lm import LocalFiveHzLMHandler
 
         dit_handler = AceStepHandler()
         llm_handler = LocalFiveHzLMHandler()
 
-        device = "cpu"
+        device = args.device if args.device else "cpu"
+        for name in (args.variant, "vae", "Qwen3-Embedding-0.6B", args.lm_variant):
+            _ensure_variant(name, ckpt_dir)
+
         status, ok = dit_handler.initialize_service(
             project_root=str(ref_root),
             config_path=args.variant,
@@ -635,10 +659,9 @@ def main() -> None:
         if not ok:
             raise RuntimeError("AceStepHandler.initialize_service failed")
 
-        lm_model = "acestep-5Hz-lm-0.6B"
         status, ok = llm_handler.initialize(
-            checkpoint_dir=str(Path(args.ckpt_dir) if args.ckpt_dir else (ref_root / "checkpoints")),
-            lm_model_path=lm_model,
+            checkpoint_dir=str(ckpt_dir),
+            lm_model_path=args.lm_variant,
             backend="pt",
             device=device,
         )

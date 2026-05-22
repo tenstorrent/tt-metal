@@ -979,6 +979,9 @@ def main(
 
     # --- Optional: full official path (LLM), no TTNN ---
     if args.use_official_lm:
+        from models.demos.ace_step_v1_5.torch_ref.transformers_cache_compat import apply_transformers_cache_compat
+
+        apply_transformers_cache_compat()
         ref_root = _ensure_acestep_on_path()
         try:
             from acestep.handler import AceStepHandler
