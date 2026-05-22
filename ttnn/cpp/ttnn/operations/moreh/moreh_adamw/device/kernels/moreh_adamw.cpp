@@ -198,30 +198,53 @@ void kernel_main() {
         copy_tile_to_cb(tmp_cb_max_exp_avg_sq, cb_max_exp_avg_sq_out, first_tile, /*pop=*/0);
 #endif
 
-        // cb_tmp1 = sqrt(exp_avg_sq / cb_tmp1);
-        tile_regs_acquire();
-        cb_tmp1_obj.wait_front(onetile);
-        cb_tmp1_obj.reserve_back(onetile);
+        // cb_tmp1 = sqrt(exp_avg_sq * cb_tmp1)  — same-CB in/out on cb_tmp1.
+        // Same pattern as moreh_adam d7edb1924ec.
 #ifdef AMSGRAD
-        mul_tiles_init_with_dt(tmp_cb_max_exp_avg_sq, cb_tmp1);
-        mul_tiles(tmp_cb_max_exp_avg_sq, cb_tmp1, first_tile, first_tile, dst0);
-#else
-        mul_tiles_init_with_dt(tmp_cb_exp_avg_sq, cb_tmp1);
-        mul_tiles(tmp_cb_exp_avg_sq, cb_tmp1, first_tile, first_tile, dst0);
-#endif
-        sqrt_tile_init();
-        sqrt_tile(dst0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_tmp1);
-        cb_tmp1_obj.pop_front(onetile);
-        cb_tmp1_obj.push_back(onetile);
-#ifdef AMSGRAD
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::BinaryFpu<
+                tmp_cb_max_exp_avg_sq,
+                cb_tmp1,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::Streaming,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar>{},
+            compute_kernel_lib::Sqrt<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::PackTile<
+                cb_tmp1,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::PackTileReconfig::Output>{});
         tmp_cb_max_exp_avg_sq_obj.pop_front(onetile);
+#else
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::BinaryFpu<
+                tmp_cb_exp_avg_sq,
+                cb_tmp1,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::Streaming,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar>{},
+            compute_kernel_lib::Sqrt<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::PackTile<
+                cb_tmp1,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 #endif
         tmp_cb_exp_avg_sq_obj.pop_front(onetile);
-        tile_regs_release();
 
         // cb_tmp1 = 1 / (cb_tmp1 + eps)  — same-CB in/out on cb_tmp1.
         // Reconfig: add_tiles_init_with_dt reconfigs srca/srcb -> Input.
