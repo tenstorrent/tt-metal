@@ -234,7 +234,11 @@ void kernel_main() {
                 acc_state,
                 is_last_ring_iter,
                 q_per_core,
-                lw_mask);
+                lw_mask,
+                /*skip_first_half_q=*/false,
+                /*use_zigzag_balancing=*/false,
+                ChunkedContext{},
+                /*is_first_active_iter=*/(ring_iter == 0));
         } else {
             sdpa_ring<
                 cb_qk_im,
