@@ -15,13 +15,13 @@ from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 def phi_activation_to_fused_linear_activation(activation_name: str):
     activation = activation_name.lower()
     if activation in ("gelu_new", "gelu_pytorch_tanh"):
-        return "gelu_approx"
+        return ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 1.0)
     if activation == "gelu":
-        return "gelu"
+        return ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0)
     if activation == "relu":
-        return "relu"
+        return ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
     if activation in ("silu", "swish"):
-        return "silu"
+        return ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)
     raise NotImplementedError(f"Unsupported phi MLP activation '{activation_name}'")
 
 
