@@ -23,9 +23,8 @@ void kernel_main() {
     constexpr uint32_t kv_local_padded_Nt = get_compile_time_arg_val(8);
     constexpr uint32_t padded_Nt = get_compile_time_arg_val(9);
     // Slot 10: reader-unused (writer/compute consume it for constexpr mask-CB sizing).
-    // Slot 11: non-chunked logical_nt fallback — reader uses an RT logical_nt only when chunked.
-    constexpr uint32_t logical_n_layout_hint [[maybe_unused]] = get_compile_time_arg_val(10);
-    constexpr uint32_t logical_nt_layout_hint = get_compile_time_arg_val(11);
+    constexpr uint32_t logical_n [[maybe_unused]] = get_compile_time_arg_val(10);
+    constexpr uint32_t logical_nt = get_compile_time_arg_val(11);
     constexpr uint32_t Lt = get_compile_time_arg_val(12);
     constexpr uint32_t L = get_compile_time_arg_val(13);
     constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(14);
@@ -68,13 +67,6 @@ void kernel_main() {
     const uint32_t joint_v_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
-    // Chunked: RT (varies per chunk, not in program-cache key). Non-chunked: CT hint keeps the skip math constexpr.
-    uint32_t logical_nt;
-    if constexpr (chunked_enabled) {
-        logical_nt = get_arg_val<uint32_t>(argidx++);
-    } else {
-        logical_nt = logical_nt_layout_hint;
-    }
     const uint32_t q_per_core = global_q_end - global_q_start;
 
     // Head chain runtime args (always present)

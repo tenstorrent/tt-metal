@@ -207,7 +207,6 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const bool chunked_enabled = tensor_args.is_chunked();
     const uint32_t ring_size_u = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
     const uint32_t chunk_size_t = chunked_enabled ? q_local_padded_Nt * ring_size_u : 0u;
-    const uint32_t q_start_idx_t = chunked_enabled ? (kv_local_padded_Nt - q_local_padded_Nt) * ring_size_u : 0u;
     const bool diag_tile_needed = args.is_causal || chunked_enabled;
     // Kernel-level is_causal flag carries the legacy local-frame causal-stamp semantics. Chunked
     // prefill is mathematically causal (args.is_causal=True) but uses absolute-coords stamps every
@@ -1430,10 +1429,6 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
             global_q_start,
             global_q_end,
         };
-        // RT logical_nt only for chunked-prefill — for non-chunked builds it lives in the CT layout hint.
-        if (chunked_enabled) {
-            reader_args.push_back(logical_nt);
-        }
         // Append chain runtime args for store-and-forward
         const auto& head_chain = head_chain_configs.at(i);
         const auto& batch_chain = batch_chain_configs.at(i);
@@ -1477,21 +1472,13 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
             global_q_start,
             global_q_end,
         };
-        if (chunked_enabled) {
-            writer_args.push_back(logical_nt);
-        }
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_args);
         SetRuntimeArgs(program, writer_kernels_id, core, writer_args);
 
-        // q_start_idx_t and RT logical_nt only pushed when chunked — non-chunked builds use CT layout hints.
         std::vector<uint32_t> compute_args = {
             global_q_start,
             global_q_end,
         };
-        if (chunked_enabled) {
-            compute_args.push_back(q_start_idx_t);
-            compute_args.push_back(logical_nt);
-        }
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(compute_args);
         SetRuntimeArgs(program, compute_kernels_id, core, compute_args);
     }
@@ -1579,25 +1566,13 @@ void RingJointSDPAProgramFactory::override_runtime_arguments(
 
         auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernels_id);
         auto& writer_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernels_id);
-        auto& compute_args_by_core = GetRuntimeArgs(program, shared_vars.compute_kernels_id);
-
-        // Refresh chunked-prefill RT slots on cached-program reuse. Slot positions mirror the gated push in create_at.
-        const bool chunked_enabled = tensor_args.is_chunked();
-        const uint32_t q_local_padded_Nt_rt = tensor_args.input_q.logical_shape()[2] / tt::constants::TILE_HEIGHT;
-        const uint32_t kv_local_padded_Nt_rt = tensor_args.input_k.logical_shape()[2] / tt::constants::TILE_HEIGHT;
-        const uint32_t ring_size_u = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
-        const uint32_t logical_nt_rt = tt::div_up(static_cast<uint32_t>(args.logical_n), tt::constants::TILE_HEIGHT);
-        const uint32_t q_start_idx_t_rt =
-            chunked_enabled ? (kv_local_padded_Nt_rt - q_local_padded_Nt_rt) * ring_size_u : 0u;
 
         for (uint32_t i = 0; i < shared_vars.num_cores; ++i) {
             CoreCoord core = {i % shared_vars.grid_size.x, i / shared_vars.grid_size.x};
 
             auto& reader_args = reader_args_by_core[core.x][core.y];
             auto& writer_args = writer_args_by_core[core.x][core.y];
-            auto& compute_args = compute_args_by_core[core.x][core.y];
 
-            // Update reader args
             reader_args[0] = q_addr;
             reader_args[1] = k_addr;
             reader_args[2] = v_addr;
@@ -1607,17 +1582,9 @@ void RingJointSDPAProgramFactory::override_runtime_arguments(
             reader_args[6] = joint_k_addr;
             reader_args[7] = joint_v_addr;
 
-            // Update writer args
             writer_args[0] = out_addr;
             writer_args[1] = joint_out_addr;
             writer_args[2] = stats_addr;
-
-            if (chunked_enabled) {
-                reader_args[10] = logical_nt_rt;
-                writer_args[5] = logical_nt_rt;
-                compute_args[2] = q_start_idx_t_rt;
-                compute_args[3] = logical_nt_rt;
-            }
         }
     }
 }

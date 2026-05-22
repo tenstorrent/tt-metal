@@ -312,9 +312,8 @@ void kernel_main() {
     constexpr uint32_t q_local_padded_Nt = get_compile_time_arg_val(7);
     constexpr uint32_t kv_local_padded_Nt = get_compile_time_arg_val(8);
     constexpr uint32_t padded_Nt = get_compile_time_arg_val(9);
-    // Slots 10/11: CT layout hints for the constexpr mask-CB sizing; runtime logical_nt is read below.
-    constexpr uint32_t logical_n_layout_hint = get_compile_time_arg_val(10);
-    constexpr uint32_t logical_nt_layout_hint = get_compile_time_arg_val(11);
+    constexpr uint32_t logical_n = get_compile_time_arg_val(10);
+    constexpr uint32_t logical_nt = get_compile_time_arg_val(11);
     constexpr uint32_t Lt = get_compile_time_arg_val(12);
     constexpr uint32_t L = get_compile_time_arg_val(13);
     constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(14);
@@ -355,13 +354,6 @@ void kernel_main() {
     const uint32_t stats_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
-    // Chunked: RT (varies per chunk). Non-chunked: CT hint keeps the skip math constexpr.
-    uint32_t logical_nt;
-    if constexpr (chunked_enabled) {
-        logical_nt = get_arg_val<uint32_t>(argidx++);
-    } else {
-        logical_nt = logical_nt_layout_hint;
-    }
 
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
         false, /* wait_for_op_signal */
@@ -412,7 +404,7 @@ void kernel_main() {
     // Lightweight mask: generate all mask tiles once into single CB before the ring loop.
     // Needed when any K/joint dimension has padding, or when causal/chunked masking is active.
     constexpr bool local_n_has_padding = kv_local_padded_Nt % Sk_chunk_t != 0;
-    constexpr bool global_n_has_padding = logical_n_layout_hint % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
+    constexpr bool global_n_has_padding = logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
     constexpr bool joint_has_padding = L > 0 && L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
     constexpr bool needs_lightweight_mask =
         (local_n_has_padding || global_n_has_padding || joint_has_padding) || diag_tile_enabled;
