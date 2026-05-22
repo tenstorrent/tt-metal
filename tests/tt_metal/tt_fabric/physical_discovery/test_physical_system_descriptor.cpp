@@ -13,7 +13,7 @@
 #include <unordered_set>
 #include <utility>
 
-#include <tools/scaleout/board/board.hpp>
+#include <board/board.hpp>
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
