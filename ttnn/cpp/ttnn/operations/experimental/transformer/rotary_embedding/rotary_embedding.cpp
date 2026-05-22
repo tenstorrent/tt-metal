@@ -6,6 +6,7 @@
 
 #include "ttnn/operations/experimental/transformer/rotary_embedding/device/rotary_embedding_device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 
 namespace ttnn::experimental {
@@ -79,12 +80,26 @@ ttnn::Tensor rotary_embedding(
     auto padded_shape_input = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
     auto padded_shape_cos = ttnn::operations::data_movement::pad_to_tile_shape(cos_cache.padded_shape());
     auto padded_shape_sin = ttnn::operations::data_movement::pad_to_tile_shape(sin_cache.padded_shape());
+    // tilize_with_val_padding is a no-op for already-TILE inputs and silently
+    // drops the requested pad value. Explicitly scrub the implicit tile
+    // padding here so the compute kernel (which processes the full padded
+    // seq_len) does not multiply uninitialized L1 garbage into the output's
+    // padded rows.
     Tensor formatted_input =
         ttnn::tilize_with_val_padding(input_tensor, padded_shape_input, PadValue(0.0f), input_tensor.memory_config());
+    if (formatted_input.layout() == Layout::TILE) {
+        formatted_input = ttnn::fill_implicit_tile_padding(formatted_input, 0.0f, formatted_input.memory_config());
+    }
     Tensor formatted_cos =
         ttnn::tilize_with_val_padding(cos_cache, padded_shape_cos, PadValue(0.0f), cos_cache.memory_config());
+    if (formatted_cos.layout() == Layout::TILE) {
+        formatted_cos = ttnn::fill_implicit_tile_padding(formatted_cos, 0.0f, formatted_cos.memory_config());
+    }
     Tensor formatted_sin =
         ttnn::tilize_with_val_padding(sin_cache, padded_shape_sin, PadValue(0.0f), sin_cache.memory_config());
+    if (formatted_sin.layout() == Layout::TILE) {
+        formatted_sin = ttnn::fill_implicit_tile_padding(formatted_sin, 0.0f, formatted_sin.memory_config());
+    }
 
     return ttnn::prim::rotary_embedding(
         formatted_input,
