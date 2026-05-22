@@ -106,6 +106,7 @@ def create_single_galaxy_spec_decode_pipeline_configuration(
     *,
     fp32_dest_acc_en: bool = True,
     persistent_mode: bool = True,
+    enable_speculative_decode: bool = True,
 ) -> PipelineConfiguration:
     """4-stage single-galaxy pipeline with SpecLMHead + Embedding fused on P0:
     P0(SpecLMHead+Embed) -> P1(BaseLMHead+MTP) -> P2(Passthrough) -> P3(Passthrough) -> back to P0."""
@@ -134,12 +135,47 @@ def create_single_galaxy_spec_decode_pipeline_configuration(
     def stage_3(device: ttnn.MeshDevice) -> StageKind:
         return PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
 
+    # make stage_0 and 1 the BaseLMHead if enable_speculative_decode is true otherwise passthrough
+    # if not enable_speculative_decode:
+    #     # stage_0 = lambda d: PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
+    #     stage_1 = lambda d: PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
+
+    return PipelineConfiguration(
+        {
+            0: stage_0,
+            1: lambda d: PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META),
+            2: stage_2,
+            3: stage_3,
+        }
+    )
+
+
+def create_single_galaxy_base_decode_pipeline_configuration(
+    weight_provider: WeightProvider,
+    *,
+    fp32_dest_acc_en: bool = True,
+    persistent_mode: bool = True,
+    host_loopback: bool = True,
+) -> PipelineConfiguration:
+    def stage_0(device: ttnn.MeshDevice) -> StageKind:
+        return EmbeddingStage(
+            weight_provider.load_embedding(device),
+            host_loopback=host_loopback,
+        )
+
+    def stage_1(device: ttnn.MeshDevice) -> StageKind:
+        return BaseLMHeadStage(
+            weights=weight_provider.load_lm_head(device),
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            persistent_mode=persistent_mode,
+        )
+
     return PipelineConfiguration(
         {
             0: stage_0,
             1: stage_1,
-            2: stage_2,
-            3: stage_3,
+            2: lambda d: PassthroughStage(PassthroughPayload.TOKEN, host_loopback=host_loopback),
+            3: lambda d: PassthroughStage(PassthroughPayload.TOKEN, host_loopback=host_loopback),
         }
     )
 
@@ -339,6 +375,7 @@ def create_single_pod_spec_decode_no_decoder_pipeline_configuration(
     )
 
 
+# use logic here
 def create_sp4_pipeline_configuration(
     weight_provider: WeightProvider,
     *,
@@ -437,12 +474,36 @@ def create_pipeline_configuration_from_num_procs(
 ) -> PipelineConfiguration:
     """Pick topology from process count (4 -> single_galaxy, 16 -> single_pod, 64 -> sp4)."""
     if num_procs == 4:
-        return create_single_galaxy_pipeline_configuration(
+        # return create_single_galaxy_pipeline_configuration(
+        #     weight_provider,
+        #     fp32_dest_acc_en=fp32_dest_acc_en,
+        #     persistent_mode=persistent_mode,
+        #     enable_mtp=enable_mtp,
+        # )
+        # TRIES BELOW
+        # return create_single_galaxy_deepseek_pipeline_configuration(
+        #     weight_provider,
+        #     lm_head_fp32_dest_acc_en=fp32_dest_acc_en,
+        #     lm_head_persistent_mode=persistent_mode,
+        # )
+        return create_single_galaxy_spec_decode_pipeline_configuration(
             weight_provider,
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
-            enable_mtp=enable_mtp,
+            enable_speculative_decode=False,
         )
+        # if enable_speculative_decode:
+        #     return create_single_galaxy_spec_decode_pipeline_configuration(
+        #         weight_provider,
+        #         fp32_dest_acc_en=fp32_dest_acc_en,
+        #         persistent_mode=persistent_mode, #enable_speculative_decode=enable_speculative_decode,
+        #     )
+        # else:
+        # return create_single_galaxy_base_decode_pipeline_configuration(
+        #     weight_provider,
+        #     fp32_dest_acc_en=fp32_dest_acc_en,
+        #     persistent_mode=persistent_mode,
+        # )
     if num_procs == 16:
         if enable_speculative_decode:
             assert enable_mtp, "16-proc pipeline currently requires enable_mtp=True and uses the spec decode topology"
