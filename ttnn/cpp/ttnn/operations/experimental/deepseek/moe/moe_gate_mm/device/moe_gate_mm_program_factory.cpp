@@ -5,8 +5,10 @@
 #include "moe_gate_mm_program_factory.hpp"
 #include "moe_gate_mm_device_operation_types.hpp"
 
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <algorithm>
@@ -17,9 +19,13 @@
 
 namespace ttnn::operations::experimental::deepseek::moe::moe_gate_mm::program {
 
-MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, tensor_return_value_t&) {
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+using namespace tt::tt_metal;
+
+tt::tt_metal::ProgramDescriptor MoEGateMMProgramFactory::create_descriptor(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& /*tensor_return_value*/) {
+    ProgramDescriptor desc;
 
     // Get the cores for the program
     const auto dram_bank2core_coords =
@@ -55,7 +61,7 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
         ------------------------------------------------------------------------------------
     */
 
-    // Define the CB configuration as a tuple: name, CBIndex, DataFormat, tiles_per_cb
+    // Define the (non-sharded) CB configuration as a tuple: name, CBIndex, DataFormat, is_tile, tiles_per_cb.
     const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t>> cb_specs0 = {
         {"cb_r2c_w", tt::CBIndex::c_0, tt::DataFormat::Float16_b, true, 32 * 3},
         {"cb_c2w_rdy", tt::CBIndex::c_2, tt::DataFormat::Float32, false, 1},
@@ -67,19 +73,20 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
         {"cb_w2c_in7", tt::CBIndex::c_9, tt::DataFormat::Float16_b, true, 4},
     };
 
-    [[maybe_unused]] std::map<std::string, tt::tt_metal::CBHandle> cb_handles, cb_handles_sharded;
-
-    // Create CBs
     for (const auto& [name, index, data_format, is_tile, tiles_per_cb] : cb_specs0) {
         const uint32_t bytes_per_tile = is_tile ? tt::tile_size(data_format) : tt::datum_size(data_format);
-        const auto cb_config = tt::tt_metal::CircularBufferConfig(tiles_per_cb * bytes_per_tile, {{index, data_format}})
-                                   .set_page_size(index, bytes_per_tile);
-
-        cb_handles[name] = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = tiles_per_cb * bytes_per_tile,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(index),
+                .data_format = data_format,
+                .page_size = bytes_per_tile,
+            }}},
+        });
     }
 
-    // Create sharded CBs
-    // Define the CB configuration as a tuple: name, CBIndex, DataFormat, tiles_per_cb, Buffer*
+    // Create sharded CBs (bound via .buffer for dynamic address re-application).
     const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t, tt::tt_metal::Buffer*>>
         sharded_cb_specs = {
             {"cb_s2c_in", tt::CBIndex::c_1, tt::DataFormat::Float16_b, true, 224, tensor_args.input_tensor.buffer()},
@@ -87,10 +94,16 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
 
     for (const auto& [name, index, data_format, is_tile, tiles_per_cb, p_buffer] : sharded_cb_specs) {
         const uint32_t bytes_per_tile = is_tile ? tt::tile_size(data_format) : tt::datum_size(data_format);
-        const auto cb_config = tt::tt_metal::CircularBufferConfig(tiles_per_cb * bytes_per_tile, {{index, data_format}})
-                                   .set_page_size(index, bytes_per_tile)
-                                   .set_globally_allocated_address(*p_buffer);
-        cb_handles_sharded[name] = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = tiles_per_cb * bytes_per_tile,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(index),
+                .data_format = data_format,
+                .page_size = bytes_per_tile,
+            }}},
+            .buffer = p_buffer,
+        });
     }
 
     // Create compile args for the program
@@ -107,7 +120,7 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
     // Sort cores by (descending y, descending x) to create a ring that flows naturally
     std::vector<uint32_t> ring_pos2bank_id(num_cores);
     std::iota(ring_pos2bank_id.begin(), ring_pos2bank_id.end(), 0);
-    auto *device = tensor_args.input_tensor.device();
+    auto* device = tensor_args.input_tensor.device();
 
     std::sort(
         ring_pos2bank_id.begin(),
@@ -147,7 +160,7 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
     const auto& collector_core = device->worker_core_from_logical_core(dram_bank2core_coords[ring_pos2bank_id[11]]);
     const auto& first_core = device->worker_core_from_logical_core(dram_bank2core_coords[ring_pos2bank_id[0]]);
 
-    std::unordered_map<std::string, uint32_t> named_compile_time_args = {
+    KernelDescriptor::NamedCompileTimeArgs named_compile_time_args = {
         {"layer_id", operation_attributes.layer_id},
         {"num_cores", static_cast<uint32_t>(num_cores)},
         {"collector_physical_x", collector_core.x},
@@ -157,64 +170,84 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
         {"column_id", operation_attributes.column_id},
     };
 
-    // Create kernels for the program
-    auto dm0_kernel_handle = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm/device/kernels/dm0.cpp",
-        all_cores,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt::tt_metal::NOC::NOC_0,
-            .compile_args = compile_args,
-            .named_compile_args = named_compile_time_args});
-
-    auto dm1_kernel_handle = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm/device/kernels/dm1.cpp",
-        all_cores,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::NOC_1,
-            .compile_args = compile_args,
-            .named_compile_args = named_compile_time_args});
-
-    auto compute_kernel_handle = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm/device/kernels/compute.cpp",
-        all_cores,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = tt::tt_metal::MathFidelity::LoFi,
-            .fp32_dest_acc_en = false,
-            .dst_full_sync_en = false,
-            .bfp8_pack_precise = false,
-            .math_approx_mode = true,
-            .compile_args = compile_args,
-            .named_compile_args = named_compile_time_args});
-
-    // Create semaphores to wait for the partial to arrive from the other core
+    // Create semaphores to wait for the partial to arrive from the other core.
     // There will be 8 cores, each waiting for partial to come from 4 other cores.
     // The 4 cores will send partial to two cores each.
-    const uint32_t partial_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
-    const uint32_t raw_scores_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
+    // Semaphore IDs are 0-based, in declaration order.
+    const uint32_t partial_semaphore_id = 0;
+    const uint32_t raw_scores_semaphore_id = 1;
+    desc.semaphores.push_back(SemaphoreDescriptor{
+        .core_ranges = all_cores,
+        .initial_value = 0,
+    });
+    desc.semaphores.push_back(SemaphoreDescriptor{
+        .core_ranges = all_cores,
+        .initial_value = 0,
+    });
 
-    // Set the runtime arguments for the kernels
-    std::vector<uint32_t> runtime_args;
-    runtime_args.push_back(0);  // DRAM Bank ID placeholder
-    runtime_args.push_back(0);  // VChannel placeholder
+    // ---- Kernels ----
+    KernelDescriptor dm0_desc;
+    dm0_desc.kernel_source = "ttnn/cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm/device/kernels/dm0.cpp";
+    dm0_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    dm0_desc.core_ranges = all_cores;
+    dm0_desc.compile_time_args = compile_args;
+    dm0_desc.named_compile_time_args = named_compile_time_args;
+    dm0_desc.config = DataMovementConfigDescriptor{
+        .processor = DataMovementProcessor::RISCV_1,
+        .noc = NOC::NOC_0,
+    };
+
+    KernelDescriptor dm1_desc;
+    dm1_desc.kernel_source = "ttnn/cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm/device/kernels/dm1.cpp";
+    dm1_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    dm1_desc.core_ranges = all_cores;
+    dm1_desc.compile_time_args = compile_args;
+    dm1_desc.named_compile_time_args = named_compile_time_args;
+    dm1_desc.config = DataMovementConfigDescriptor{
+        .processor = DataMovementProcessor::RISCV_0,
+        .noc = NOC::NOC_1,
+    };
+
+    KernelDescriptor compute_desc;
+    compute_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm/device/kernels/compute.cpp";
+    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = all_cores;
+    compute_desc.compile_time_args = compile_args;
+    compute_desc.named_compile_time_args = named_compile_time_args;
+    compute_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = MathFidelity::LoFi,
+        .fp32_dest_acc_en = false,
+        .dst_full_sync_en = false,
+        .bfp8_pack_precise = false,
+        .math_approx_mode = true,
+    };
+
+    // ---- Per-core runtime args ----
+    // Runtime args layout: [dram_bank_id, vchannel, input_addr, w_addr, output_addr,
+    //                       partial_semaphore_id, is_sender, neighbor1_x, neighbor1_y,
+    //                       neighbor2_x, neighbor2_y, core_id_or_tile_id, raw_scores_semaphore_id]
+    std::vector<uint32_t> base_runtime_args;
+    base_runtime_args.push_back(0);  // DRAM Bank ID placeholder
+    base_runtime_args.push_back(0);  // VChannel placeholder
 
     for (const auto& tensor : tensors) {
-        runtime_args.push_back(tensor->buffer()->address());
+        base_runtime_args.push_back(tensor->buffer()->address());
     }
 
     // Add placeholders for neighbor physical coords and semaphore
-    runtime_args.push_back(partial_semaphore_id);
-    runtime_args.push_back(0);  // If this is a sender core
-    runtime_args.push_back(0);  // Neighbor1 physical x
-    runtime_args.push_back(0);  // Neighbor1 physical y
-    runtime_args.push_back(0);  // Neighbor2 physical x
-    runtime_args.push_back(0);  // Neighbor2 physical y
-    runtime_args.push_back(0);  // Core ID
-    runtime_args.push_back(raw_scores_semaphore_id);
+    base_runtime_args.push_back(partial_semaphore_id);
+    base_runtime_args.push_back(0);  // If this is a sender core
+    base_runtime_args.push_back(0);  // Neighbor1 physical x
+    base_runtime_args.push_back(0);  // Neighbor1 physical y
+    base_runtime_args.push_back(0);  // Neighbor2 physical x
+    base_runtime_args.push_back(0);  // Neighbor2 physical y
+    base_runtime_args.push_back(0);  // Core ID
+    base_runtime_args.push_back(raw_scores_semaphore_id);
+
+    dm0_desc.runtime_args.reserve(dram_bank2core_coords.size());
+    dm1_desc.runtime_args.reserve(dram_bank2core_coords.size());
+    compute_desc.runtime_args.reserve(dram_bank2core_coords.size());
 
     std::vector<uint32_t> vchannels;
     uint32_t dram_bank = 0;
@@ -236,10 +269,11 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
         }
         vchannels.push_back(vchannel);
 
+        std::vector<uint32_t> runtime_args = base_runtime_args;
         runtime_args[0] = dram_bank;
         runtime_args[1] = vchannel;
         // runtime_args[2-4] are already set to tensor addresses
-        // runtime_args[5] is already set to reduce_semaphore
+        // runtime_args[5] is already set to partial_semaphore
         // Do this only if the key exists in the map.
         if (dram_bank2neighbors.contains(dram_bank)) {
             runtime_args[6] = dram_bank2neighbors[dram_bank][0];
@@ -257,43 +291,18 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
             runtime_args[11] = bank2tile_id[dram_bank];
         }
 
-        tt::tt_metal::SetRuntimeArgs(program, dm0_kernel_handle, core, runtime_args);
-        tt::tt_metal::SetRuntimeArgs(program, dm1_kernel_handle, core, runtime_args);
-        tt::tt_metal::SetRuntimeArgs(program, compute_kernel_handle, core, runtime_args);
+        dm0_desc.runtime_args.emplace_back(core, runtime_args);
+        dm1_desc.runtime_args.emplace_back(core, runtime_args);
+        compute_desc.runtime_args.emplace_back(core, std::move(runtime_args));
 
         dram_bank++;
     }
 
-    return cached_program_t{
-        std::move(program),
-        MoEGateMMSharedVariables{
-            .cb_handles_sharded = cb_handles_sharded,
-            .kernel_handles = {dm0_kernel_handle, dm1_kernel_handle, compute_kernel_handle},
-            .worker_cores = dram_bank2core_coords}};
-}
+    desc.kernels.push_back(std::move(dm0_desc));
+    desc.kernels.push_back(std::move(dm1_desc));
+    desc.kernels.push_back(std::move(compute_desc));
 
-void MoEGateMMProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t&,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t&) {
-    auto& program = cached_program.program;
-    auto& shared_variables = cached_program.shared_variables;
-
-    // Update sharded circular buffer addresses
-    tt::tt_metal::UpdateDynamicCircularBufferAddress(
-        program, shared_variables.cb_handles_sharded["cb_s2c_in"], *tensor_args.input_tensor.buffer());
-    tt::tt_metal::UpdateDynamicCircularBufferAddress(
-        program, shared_variables.cb_handles_sharded["cb_s2c_out"], *tensor_args.output_tensor.buffer());
-
-    // Update runtime args for all kernels with new tensor addresses
-    // Runtime args layout: [2] = input_tensor address, [3] = w_tensor address, [4] = output_tensor address
-    for (const auto& core : shared_variables.worker_cores) {
-        for (const auto& kernel_handle : shared_variables.kernel_handles) {
-            auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, kernel_handle, core);
-            runtime_args[3] = tensor_args.w_tensor.buffer()->address();
-        }
-    }
+    return desc;
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::moe::moe_gate_mm::program
