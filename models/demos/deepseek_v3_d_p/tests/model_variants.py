@@ -13,9 +13,10 @@ body covers both variants — see test_ttnn_moe.py and test_mla.py.
 Public surface:
 - ModelVariant (ABC), GateRouting        — variant base class + gate routing dataclass
 - ModelVariant.apply_gate_overrides_to_*  — runtime gate-config patch on TT / Torch MoE
-- run_reference_moe(variant, …)          — variant's upstream MoE reference cross-check
-- run_reference_mla(variant, …)          — variant's upstream MLA reference cross-check
 - MODEL_VARIANTS                         — {name: ModelVariant}
+
+Upstream reference runners (`run_reference_moe`, `run_reference_mla`) live
+in `reference_runners.py` — variants are a pure registry here.
 
 Adding a new variant: subclass `ModelVariant`, implement
 `build_reference_config()` (return `None` if no HF cross-check), instantiate
@@ -28,14 +29,13 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import FrozenSet, Optional, Tuple
 
-import torch
 from transformers.configuration_utils import PretrainedConfig
 
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k26.configuration_deepseek import DeepseekV3Config as KimiRefConfig
+from models.demos.deepseek_v3_d_p.reference.kimi_k26.kimi_k26_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k26.modeling_deepseek import DeepseekV3Attention as KimiRefAttention
 from models.demos.deepseek_v3_d_p.reference.kimi_k26.modeling_deepseek import DeepseekV3MoE as KimiRefMoE
-from models.demos.deepseek_v3_d_p.reference.kimi_k26_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 
 
@@ -128,86 +128,6 @@ class ModelVariant(ABC):
         gate.n_group = g.n_expert_groups
         gate.topk_group = g.n_limited_groups
         gate.routed_scaling_factor = g.route_scale
-
-
-def run_reference_moe(
-    variant: ModelVariant,
-    *,
-    gate_weights,
-    routed_expert_weights,
-    shared_expert_weights,
-    x,
-    num_routed_experts: Optional[int] = None,
-    num_experts_per_tok: Optional[int] = None,
-) -> Optional[torch.Tensor]:
-    """Forward the variant's upstream MoE reference on CPU. None if not bundled.
-
-    `num_routed_experts` / `num_experts_per_tok` override the variant's canonical
-    values — required when the test runs a scaled-down expert count (the
-    reference model and the supplied state-dict must agree on the expert count
-    or `load_state_dict(strict=True)` raises).
-    """
-    if variant.reference_moe_cls is None:
-        return None
-    config = variant.build_reference_config()
-    if num_routed_experts is not None:
-        config.n_routed_experts = num_routed_experts
-    if num_experts_per_tok is not None:
-        config.num_experts_per_tok = num_experts_per_tok
-    moe = variant.reference_moe_cls(config)
-    moe.load_state_dict(
-        _pack_reference_moe_state_dict(gate_weights, routed_expert_weights, shared_expert_weights),
-        strict=True,
-    )
-    moe = moe.eval().to(torch.bfloat16)
-    with torch.no_grad():
-        return moe(x.to(torch.bfloat16))
-
-
-def run_reference_mla(
-    variant: ModelVariant,
-    *,
-    weights,
-    hidden_states,
-    position_ids,
-) -> Optional[torch.Tensor]:
-    """Forward the variant's upstream MLA reference on CPU. None if not bundled.
-
-    Caller owns the seq_len budget: HF DeepseekV3Attention materializes
-    `[bsz, heads, q_len, q_len]` in fp32 — gate the call yourself at the test
-    site when running with a large q_len.
-    """
-    if variant.reference_attention_cls is None:
-        return None
-    _, q_len, _ = hidden_states.shape
-    attn = variant.reference_attention_cls(variant.build_reference_config(), layer_idx=0)
-    attn.load_state_dict(weights, strict=False)
-    attn = attn.eval().to(torch.bfloat16)
-    causal = torch.triu(torch.full((q_len, q_len), float("-inf"), dtype=hidden_states.dtype), diagonal=1)
-    with torch.no_grad():
-        out, _, _ = attn(
-            hidden_states=hidden_states,
-            attention_mask=causal[None, None],
-            position_ids=position_ids,
-            past_key_value=None,
-            use_cache=False,
-        )
-    return out
-
-
-def _pack_reference_moe_state_dict(gate_weights, routed_expert_weights, shared_expert_weights) -> dict:
-    sd = {
-        "gate.weight": gate_weights["weight"].to(torch.bfloat16),
-        "gate.e_score_correction_bias": gate_weights["e_score_correction_bias"].to(torch.bfloat16),
-        "shared_experts.gate_proj.weight": shared_expert_weights["gate_proj"].to(torch.bfloat16),
-        "shared_experts.up_proj.weight": shared_expert_weights["up_proj"].to(torch.bfloat16),
-        "shared_experts.down_proj.weight": shared_expert_weights["down_proj"].to(torch.bfloat16),
-    }
-    for i, w in enumerate(routed_expert_weights):
-        sd[f"experts.{i}.gate_proj.weight"] = w["gate_proj"].to(torch.bfloat16)
-        sd[f"experts.{i}.up_proj.weight"] = w["up_proj"].to(torch.bfloat16)
-        sd[f"experts.{i}.down_proj.weight"] = w["down_proj"].to(torch.bfloat16)
-    return sd
 
 
 # ---------------------------------------------------------------------------
