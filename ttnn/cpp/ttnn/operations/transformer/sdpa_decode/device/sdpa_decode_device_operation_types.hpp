@@ -34,6 +34,12 @@ struct SdpaDecodeParams {
     // with different specs on one physical buffer. num_kv_heads * block_size * head_dim
     // must be preserved across views (checked in validate_on_program_cache_miss).
     std::optional<uint32_t> block_size_override = std::nullopt;
+    // Optional per-call num_kv_heads, companion to block_size_override for HMA
+    // cross-group sharing where the cache was allocated with a different num_kv_heads
+    // from the layer's actual view (e.g. Gemma4-26B-A4B sliding kv=8 / full kv=2 at
+    // small TP). Drives both the kernel's per-block stride and its head-parallel
+    // reduction grid. When nullopt, falls back to K.padded_shape[1] (legacy behavior).
+    std::optional<uint32_t> num_kv_heads_override = std::nullopt;
 };
 
 struct SdpaDecodeInputs {

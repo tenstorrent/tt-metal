@@ -1,6 +1,8 @@
 # Source files for ttnn_op_experimental_paged_cache.
 # Module owners should update this file when adding/removing/renaming source files.
 
+set(TTNN_OP_EXPERIMENTAL_PAGED_CACHE_API_HEADERS paged_cache.hpp)
+
 set(TTNN_OP_EXPERIMENTAL_PAGED_CACHE_SRCS
     device/update_cache/paged_update_cache_device_operation.cpp
     device/update_cache/paged_update_cache_program_factory.cpp
