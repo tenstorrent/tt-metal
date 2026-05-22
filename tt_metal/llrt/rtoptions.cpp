@@ -251,8 +251,15 @@ std::string normalize_path(const char* path, const std::string& subdir = "") {
     return p.lexically_normal().string();
 }
 
-// Helper function to check if environment variable value is "1" (enabled)
-bool is_env_enabled(const char* value) { return value && value[0] == '1'; }
+// Helper function to check if environment variable value represents a truthy value.
+// Accepts "1", "true", "yes", "on" (case-insensitive).
+bool is_env_enabled(const char* value) {
+    if (!value || value[0] == '\0') {
+        return false;
+    }
+    return value[0] == '1' || strcasecmp(value, "true") == 0 || strcasecmp(value, "yes") == 0 ||
+           strcasecmp(value, "on") == 0;
+}
 
 std::string trim_copy(const std::string& input) {
     auto first = std::find_if_not(input.begin(), input.end(), [](unsigned char ch) { return std::isspace(ch); });
