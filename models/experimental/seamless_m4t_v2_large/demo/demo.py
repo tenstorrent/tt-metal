@@ -204,12 +204,19 @@ def main() -> None:
     input_ids = text_inputs["input_ids"]
     input_text_attn = text_inputs["attention_mask"]
 
+    # ``prewarm_conv1d_weights`` prepares T2U/vocoder conv weights before speech generate.
+    # ``use_decode_trace`` replays KV decode from Metal trace but recaptures once per decode
+    # position (slow for long ``max_new_tokens``); enable only when benchmarking decode.
+    use_decode_trace = False
     gen_common = dict(
         max_new_tokens=48,
         do_sample=False,
         num_beams=1,
         pad_token_id=cfg.pad_token_id,
         eos_token_id=cfg.eos_token_id,
+        use_kv_cache=True,
+        use_decode_trace=use_decode_trace,
+        prewarm_conv1d_weights=True,
     )
 
     try:
@@ -232,7 +239,7 @@ def main() -> None:
     # the device-0 result.
     from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import open_seamless_mesh_device
 
-    device, mesh_shape = open_seamless_mesh_device()
+    device, mesh_shape = open_seamless_mesh_device(enable_decode_trace=bool(gen_common.get("use_decode_trace")))
     ttnn.SetDefaultDevice(device)
     rows, cols = int(mesh_shape[0]), int(mesh_shape[1])
     print(
