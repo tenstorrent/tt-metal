@@ -411,17 +411,23 @@ class TorchCausalAudioEncoder(nn.Module):
 
 
 class TorchAdaLayerNorm(nn.Module):
-    """Diffusers-style AdaLayerNorm with chunk_dim=1: silu+linear → chunk(2)."""
+    """Diffusers ``AdaLayerNorm(output_dim=2*dim, embedding_dim, chunk_dim=1)``.
 
-    def __init__(self, output_dim: int, embedding_dim: int) -> None:
+    silu + linear + chunk(2, dim=1) → (shift, scale), then
+    ``norm(x) * (1 + scale) + shift`` broadcasting along the sequence dim.
+    """
+
+    def __init__(self, output_dim: int, embedding_dim: int, eps: float = 1e-6) -> None:
         super().__init__()
+        assert output_dim % 2 == 0
+        self.norm = nn.LayerNorm(output_dim // 2, elementwise_affine=False, eps=eps)
         self.silu = nn.SiLU()
         self.linear = nn.Linear(embedding_dim, output_dim, bias=True)
 
-    def forward(self, emb: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        proj = self.linear(self.silu(emb))
-        shift, scale = proj.chunk(2, dim=-1)
-        return shift, scale
+    def forward(self, x: torch.Tensor, temb: torch.Tensor) -> torch.Tensor:
+        proj = self.linear(self.silu(temb))
+        shift, scale = proj.chunk(2, dim=1)
+        return self.norm(x) * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
 
 
 class TorchAudioInjector_WAN(nn.Module):
@@ -552,54 +558,52 @@ class TorchWanS2VModel(nn.Module):
             dim=1,
         )
 
-    def _after_block(
+    def after_transformer_block(
         self,
         block_idx: int,
-        x: torch.Tensor,
-        audio_emb: torch.Tensor,
+        hidden_states: torch.Tensor,
+        merged_audio_emb: torch.Tensor,
         audio_emb_global: torch.Tensor | None,
-        T_video: int,
-        n_noisy: int,
+        original_seq_len: int,
     ) -> torch.Tensor:
-        """Audio cross-attention injection at the selected layer indices."""
+        """Faithful port of upstream WanModel_S2V.after_transformer_block.
+
+        Per-frame rearrange + diffusers AdaLayerNorm + cross-attention into
+        each spatial frame's own audio tokens. No global mask — the per-frame
+        batching enforces the block-diagonal structure naturally.
+        """
         if block_idx not in self.injected_block_id:
-            return x
+            return hidden_states
         aid = self.injected_block_id[block_idx]
-        # Audio K/V: [B, T_video * (num_audio_token+1), dim] (flattened over per-frame slots).
-        B, _, dim = x.shape
-        n_tok = audio_emb.shape[2]
-        kv = audio_emb.reshape(B, T_video * n_tok, dim)
-        # Build a block-diagonal frame mask so each spatial token only attends its frame's audio slots.
-        n_per_frame = n_noisy // T_video
-        sk = T_video * n_tok
-        mask = torch.full((B, 1, n_noisy, sk), -1e9, dtype=torch.float32)
-        for t in range(T_video):
-            mask[:, :, t * n_per_frame : (t + 1) * n_per_frame, t * n_tok : (t + 1) * n_tok] = 0.0
-        # AdaIN: per-token (shift, scale) from audio_emb_global, expanded by frame.
+        num_frames = merged_audio_emb.shape[1]  # T_video
+        # input_hidden_states: noisy tokens reshaped to per-frame batches.
+        input_hidden_states = hidden_states[:, :original_seq_len].clone()
+        # "b (t n) c -> (b t) n c"
+        B, _, C = input_hidden_states.shape
+        n_per_frame = original_seq_len // num_frames
+        input_hidden_states = input_hidden_states.view(B, num_frames, n_per_frame, C).reshape(
+            B * num_frames, n_per_frame, C
+        )
+
         if self.enable_adain and audio_emb_global is not None:
-            adain = self.audio_injector.injector_adain_layers[aid]
-            shift_pf, scale_pf = adain(audio_emb_global.squeeze(2))  # both [B, T_video, dim]
-            shift = shift_pf.repeat_interleave(n_per_frame, dim=1)
-            scale = scale_pf.repeat_interleave(n_per_frame, dim=1)
-            noisy_part = x[:, :n_noisy]
-            normed = self.audio_injector.injector_pre_norm_feat[aid](noisy_part)
-            normed = normed * (1 + scale) + shift
+            # audio_emb_global: [B, T, 1, C] → "(b t) n c" → take token 0: [(B*T), C].
+            T_g, K_g = audio_emb_global.shape[1], audio_emb_global.shape[2]
+            audio_emb_global_btnc = audio_emb_global.reshape(B * T_g, K_g, C)
+            attn_hidden_states = self.audio_injector.injector_adain_layers[aid](
+                input_hidden_states, temb=audio_emb_global_btnc[:, 0]
+            )
         else:
-            normed = self.audio_injector.injector_pre_norm_feat[aid](x[:, :n_noisy])
-        # Cross-attn with mask.
-        cattn = self.audio_injector.injector[aid]
-        b = normed.size(0)
-        n_h, d_h = self.num_heads, self.dim // self.num_heads
-        q = cattn.norm_q(cattn.q(normed)).view(b, -1, n_h, d_h)
-        k = cattn.norm_k(cattn.k(kv)).view(b, -1, n_h, d_h)
-        v = cattn.v(kv).view(b, -1, n_h, d_h)
-        out = F.scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), attn_mask=mask)
-        out = out.transpose(1, 2).reshape(b, -1, n_h * d_h)
-        out = cattn.o(out)
-        # Add to noisy tokens only.
-        x = x.clone()
-        x[:, :n_noisy] = x[:, :n_noisy] + out
-        return x
+            attn_hidden_states = self.audio_injector.injector_pre_norm_feat[aid](input_hidden_states)
+
+        # audio_emb: [B, T, n_tok, C] → "(b t) n c" → [(B*T), n_tok, C].
+        n_tok = merged_audio_emb.shape[2]
+        attn_audio_emb = merged_audio_emb.reshape(B * num_frames, n_tok, C)
+        residual_out = self.audio_injector.injector[aid](attn_hidden_states, attn_audio_emb)
+        # "(b t) n c -> b (t n) c"
+        residual_out = residual_out.reshape(B, num_frames * n_per_frame, C)
+        hidden_states = hidden_states.clone()
+        hidden_states[:, :original_seq_len] = hidden_states[:, :original_seq_len] + residual_out
+        return hidden_states
 
     def forward(
         self,
@@ -685,7 +689,7 @@ class TorchWanS2VModel(nn.Module):
 
         for block_idx, block in enumerate(self.blocks):
             x = block(x, e_packed, grid_sizes_block, self.freqs, context)
-            x = self._after_block(block_idx, x, merged_audio_emb, audio_emb_global, T_video, n_noisy)
+            x = self.after_transformer_block(block_idx, x, merged_audio_emb, audio_emb_global, n_noisy)
 
         # Keep noisy tokens, head, unpatchify.
         x = x[:, :n_noisy]
@@ -999,11 +1003,10 @@ def test_wan_s2v_transformer_model(
     H_lat: int,
     W_lat: int,
 ) -> None:
-    """PCC parity between TorchWanS2VModel and tt_dit at 1 layer / audio_inject=().
-
-    Skips the audio-injection path (no audio_inject_layers, no AdaIN). Exercises
-    block stacking + embeddings + head + state-dict translation end-to-end at
-    production latent dims (480p / 720p).
+    """PCC parity between TorchWanS2VModel and tt_dit at 1 layer with audio
+    injection + AdaIN enabled at block 0. Exercises block stacking +
+    embeddings + head + audio cross-attn + AdaIN modulation + state-dict
+    translation end-to-end at production latent dims (480p / 720p).
     """
     torch.manual_seed(0)
     parent_mesh = mesh_device
@@ -1032,23 +1035,14 @@ def test_wan_s2v_transformer_model(
         num_layers=1,
         audio_dim=AUDIO_DIM,
         num_audio_token=NUM_AUDIO_TOKEN,
-        audio_inject_layers=(),
-        enable_adain=False,
+        audio_inject_layers=(0,),
+        enable_adain=True,
         cond_dim=16,
         eps=EPS,
         rope_max_seq_len=ROPE_MAX_SEQ_LEN,
     ).eval()
 
-    tt_model = _make_wan_s2v_transformer(
-        mesh_device=mesh_device,
-        ccl_manager=ccl_manager,
-        parallel_config=parallel_config,
-        is_fsdp=is_fsdp,
-        num_layers=1,
-        enable_adain=False,
-    )
-    # The TT factory hardcodes audio_inject_layers=AUDIO_INJECT_LAYERS; override
-    # by rebuilding directly with audio_inject_layers=().
+    # Build TT model with matching config (audio_inject at block 0, AdaIN on).
     tt_model = WanS2VTransformer3DModel(
         patch_size=PATCH_SIZE,
         num_heads=NUM_HEADS,
@@ -1065,8 +1059,8 @@ def test_wan_s2v_transformer_model(
         audio_dim=AUDIO_DIM,
         num_audio_layers=NUM_AUDIO_LAYERS,
         num_audio_token=NUM_AUDIO_TOKEN,
-        audio_inject_layers=(),
-        enable_adain=False,
+        audio_inject_layers=(0,),
+        enable_adain=True,
         enable_motioner=False,
         enable_framepack=True,
         cond_dim=16,
