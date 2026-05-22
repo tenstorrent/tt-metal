@@ -379,20 +379,25 @@ void kernel_main() {
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::PackTileReconfig::None>{});
 
-        // broadcasts the tile since cb_ex2pe is a column vector that contains the important data
-        cb_ex2pe_obj.wait_front(onetile);
-        tile_regs_acquire();
-        reconfig_data_format_srca(cb_ex2pe);
-        unary_bcast_init<BroadcastType::COL>(cb_ex2pe, cb_ex2pe);
-        unary_bcast<BroadcastType::COL>(cb_ex2pe, 0, dst0);
-        cb_ex2pe_obj.pop_front(onetile);
-        tile_regs_commit();
-
-        cb_ex2pe_obj.reserve_back(onetile);
-        tile_regs_wait();
-        pack_tile(dst0, cb_ex2pe);
-        tile_regs_release();
-        cb_ex2pe_obj.push_back(onetile);
+        // PARTIAL migration: UnaryBcast<COL> + PackTile (same-CB in/out on cb_ex2pe).
+        // Reconfig: unary_bcast_init bundles srca + pack reconfig (chain.inl:1033) so
+        // UnaryBcastReconfig::Input covers both; PackTileReconfig::None avoids duplicate.
+        // Lifecycle: cb_ex2pe Streaming in, OutStreaming out.
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::UnaryBcast<
+                compute_kernel_lib::BroadcastDim::Col,
+                cb_ex2pe,
+                /*CbOut=*/cb_ex2pe,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::Streaming,
+                compute_kernel_lib::UnaryBcastReconfig::Input>{},
+            compute_kernel_lib::PackTile<
+                cb_ex2pe,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::PackTileReconfig::None>{});
 
         // =====================================
         // Second pass over the input.
