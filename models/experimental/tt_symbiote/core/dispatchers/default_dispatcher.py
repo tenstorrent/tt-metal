@@ -68,7 +68,14 @@ def handle_view(func, args, kwargs):
     input_tensor = args[0]
     if not isinstance(input_tensor, TorchTTNNTensor):
         input_tensor = TorchTTNNTensor(input_tensor)
-    new_shape = tuple(int(s) for s in args[1])
+    new_shape = list(int(s) for s in args[1])
+    # Resolve -1 using the logical shape (not the padded TTNN shape)
+    logical_shape = input_tensor.shape
+    logical_vol = math.prod(int(s) for s in logical_shape)
+    if -1 in new_shape:
+        known = math.prod(s for s in new_shape if s != -1)
+        new_shape[new_shape.index(-1)] = logical_vol // known
+    new_shape = tuple(new_shape)
     t = getattr(input_tensor, "ttnn_tensor", None) or input_tensor.to_ttnn
     ttnn_shp = t.shape
     new_vol = math.prod(new_shape)

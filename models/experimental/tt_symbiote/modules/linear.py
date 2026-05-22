@@ -66,6 +66,13 @@ class TTNNLinear(TTNNModule):
         """Move weights to TTNN device."""
         self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
         self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None
+        self._compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            self.device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
 
     def deallocate_weights_impl(self):
         """Deallocate weights from device."""
@@ -83,7 +90,14 @@ class TTNNLinear(TTNNModule):
         while len(input_shape) < 4:
             input_shape.insert(1, 1)  # Add batch dimensions if needed
         input_tensor = ttnn.reshape(input_tensor, input_shape)
-        tt_output = ttnn.linear(input_tensor, self.tt_weight, bias=self.tt_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        compute_cfg = getattr(self, "_compute_kernel_config", None)
+        tt_output = ttnn.linear(
+            input_tensor,
+            self.tt_weight,
+            bias=self.tt_bias,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=compute_cfg,
+        )
         tt_output = ttnn.reshape(tt_output, input_tensor_shape[:-1] + [self.out_features])
         return tt_output
 

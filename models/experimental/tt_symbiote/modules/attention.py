@@ -577,9 +577,11 @@ class TTNNFusedQKVSelfAttention(TTNNModule):
 
     def forward(self, hidden_states):
         """Forward pass through fused QKV linear layer."""
+        hidden_states = TTNNSelfAttention._to_raw_ttnn(hidden_states)
         if len(hidden_states.shape) == 3:
             hidden_states = ttnn.unsqueeze(hidden_states, 1)
-        query_key_value = self.linear(hidden_states).ttnn_tensor
+        linear_out = self.linear(hidden_states)
+        query_key_value = TTNNSelfAttention._to_raw_ttnn(linear_out)
         query_key_value = ttnn.to_memory_config(query_key_value, ttnn.L1_MEMORY_CONFIG)
         queries, keys, values = ttnn.experimental.nlp_create_qkv_heads(
             query_key_value,
@@ -646,15 +648,30 @@ class TTNNSelfAttention(TTNNModule):
             self.sdpa.program_config = program_config
             self.sdpa.compute_kernel_config = compute_kernel_config
 
+    @staticmethod
+    def _to_raw_ttnn(t):
+        """Extract raw ttnn.Tensor from TorchTTNNTensor or return as-is."""
+        if hasattr(t, "ttnn_tensor") and t.ttnn_tensor is not None:
+            return t.ttnn_tensor
+        if hasattr(t, "to_ttnn"):
+            return t.to_ttnn
+        return t
+
     def forward(self, hidden_states, head_mask=None, output_attentions: bool = False):
         """Forward pass through ViT self-attention."""
+        from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
         assert head_mask is None, "head_mask is not supported in TTNNViTSelfAttention"
         assert not output_attentions, "output_attentions is not supported in TTNNViTSelfAttention"
+        hidden_states = self._to_raw_ttnn(hidden_states)
         original_dtype = hidden_states.dtype
         if hidden_states.layout != ttnn.TILE_LAYOUT:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        query, key, value = self.query_key_value(hidden_states)
+        qkv_result = self.query_key_value(hidden_states)
+        query = self._to_raw_ttnn(qkv_result[0])
+        key = self._to_raw_ttnn(qkv_result[1])
+        value = self._to_raw_ttnn(qkv_result[2])
 
         ttnn.deallocate(hidden_states)
         if self.should_reallocate_in_attention:
@@ -670,11 +687,11 @@ class TTNNSelfAttention(TTNNModule):
             scaling=self.scaling,
             transpose_output=False,
         )
+        context_layer = self._to_raw_ttnn(context_layer)
         context_layer = ttnn.experimental.nlp_concat_heads(context_layer)
-        # context_layer = ttnn.typecast(context_layer, original_dtype)
         context_layer = ttnn.typecast(context_layer, original_dtype)
         context_layer = ttnn.squeeze(context_layer, 1)
-        return (context_layer,)
+        return (TorchTTNNTensor(context_layer),)
 
 
 class TTNNViTSelfAttention(TTNNSelfAttention):
@@ -986,6 +1003,18 @@ class LlamaAttention(TTNNModule):
             new_attn.init_fused_parameters(llama_attn.config.num_attention_heads, llama_attn.config.hidden_size)
         else:
             new_attn.init_parameters()
+            # Non-fused path uses .view()/.transpose() on child outputs,
+            # so children must return TorchTTNNTensor (not raw ttnn.Tensor).
+            for child in [
+                new_attn.q_proj,
+                new_attn.k_proj,
+                new_attn.v_proj,
+                new_attn.o_proj,
+                new_attn.rope,
+                new_attn.sdpa,
+            ]:
+                child._bypass_tensor_wrapping = False
+                child._bypass_explicitly_set = True
         return new_attn
 
     def forward(
@@ -1057,12 +1086,22 @@ class LlamaAttention(TTNNModule):
             is_causal=self.torch_layer.is_causal,
             transpose_output=False,
         )
-        attn_out = ttnn.experimental.nlp_concat_heads(attn_out)
-        attn_out = ttnn.squeeze(attn_out, 1)
+        # Unwrap TorchTTNNTensor for raw TTNN ops
+        if hasattr(attn_out, "ttnn_tensor") and attn_out.ttnn_tensor is not None:
+            attn_out_tt = attn_out.ttnn_tensor
+        elif hasattr(attn_out, "to_ttnn"):
+            attn_out_tt = attn_out.to_ttnn
+        else:
+            attn_out_tt = attn_out
+        attn_out_tt = ttnn.experimental.nlp_concat_heads(attn_out_tt)
+        attn_out_tt = ttnn.squeeze(attn_out_tt, 1)
         # Slice output if query was padded
         if self.torch_layer.is_causal and original_q_len < kv_len:
-            # Slice: [B, kv_len, D] -> [B, q_len, D]
-            attn_out = attn_out[:, -original_q_len:, :]
+            attn_out_tt = attn_out_tt[:, -original_q_len:, :]
+        # Rewrap for downstream modules
+        from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+        attn_out = TorchTTNNTensor(attn_out_tt)
 
         return self.o_proj(attn_out), None
 
