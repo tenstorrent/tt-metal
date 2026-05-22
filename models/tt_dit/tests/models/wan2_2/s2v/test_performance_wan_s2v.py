@@ -16,6 +16,7 @@ from loguru import logger
 import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_dit.pipelines.wan.pipeline_wan_s2v import WanPipelineS2V
+from models.tt_dit.utils.video import export_to_video_with_audio
 
 from .....utils.test import line_params, ring_params_8k
 
@@ -130,6 +131,10 @@ def test_pipeline_performance_s2v(
         print(f"Output shape: {frames.shape}, range: [{frames.min()}, {frames.max()}]")
     elif isinstance(frames, torch.Tensor):
         print(f"Output shape: {tuple(frames.shape)}, range: [{frames.min().item():.1f}, {frames.max().item():.1f}]")
+
+    output_path = f"wan_s2v_perf_{width}x{height}_{num_clips}c_{num_inference_steps}s.mp4"
+    export_to_video_with_audio(frames[0], output_path, audio_path=_AUDIO_PATH, fps=16)
+    logger.info(f"Saved video with audio: {output_path}")
 
     def _dur(step_name: str) -> float:
         return profiler.get_duration(step_name, 0) if profiler.contains_step(step_name, 0) else 0.0

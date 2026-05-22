@@ -352,12 +352,14 @@ class WanAttention(Module):
         kv_hit = kv_cache is not None and len(kv_cache) == 2 and not self.is_self
 
         if self.is_self:
+            # Fused QKV matmul with split output for self-attention
             q_1BNF, k_1BNF, v_1BNF = self.to_qkv(
                 spatial_1BND,
                 compute_kernel_config=self.mm_compute_kernel_config,
                 parallel_config=None if use_nonfused_agmm else self.parallel_config,
             )
         else:
+            # Cross-attention: Q from spatial, fused KV from prompt
             q_1BNF = self.to_q(
                 spatial_1BND,
                 compute_kernel_config=self.mm_compute_kernel_config,
@@ -371,6 +373,7 @@ class WanAttention(Module):
         use_ring_sdpa = self.parallel_config.sequence_parallel.factor > 1
         norm_output_dtype = sdpa_input_dtype if (use_ring_sdpa and prompt_1BLP is None) else None
 
+        # Norm spatial before splitting heads
         q_BHNE = self.norm_q(
             q_1BNF,
             num_heads_per_device=self.n_local_heads,
@@ -404,8 +407,11 @@ class WanAttention(Module):
             if kv_cache is not None and not self.is_self:
                 kv_cache[:] = [k_BHNE, v_BHNE]
 
+        # Rope
+
         # Dispatch on is_self: cached-KV cross-attn has prompt_1BLP=None.
         if self.is_self:
+            # Self attention
             if self.parallel_config.sequence_parallel.factor > 1:
                 # Q and K already cast by norm kernel; cast V and dummy joint inputs to match
                 dummy_joint = self.dummy_joint_input
