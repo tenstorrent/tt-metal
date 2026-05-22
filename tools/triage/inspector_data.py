@@ -175,8 +175,13 @@ def run(args, context) -> InspectorData:
             size = MPI.COMM_WORLD.Get_size()
             if size > 1:
                 rank = MPI.COMM_WORLD.Get_rank()
-        except Exception:
+            else:
+                rank_env = os.environ.get("TT_RUN_RANK")
+                if rank_env is not None:
+                    rank = int(rank_env)
+        except Exception as e:
             # If MPI is not available or fails, fall back to rank-less mode without aborting.
+            print(f"Warning: MPI is not available or failed to initialize, running in rank-less mode. Error: {e}")
             pass
 
     # First try to connect to Inspector RPC
