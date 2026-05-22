@@ -12,6 +12,12 @@
 
 namespace ttnn::experimental::prim {
 
+// TODO(#42193): Migrate to ProgramDescriptor.  This factory follows the
+// Contract-2 mesh-workload pattern (create_at + AdaptedCachedMeshWorkload +
+// per-MeshCoordinate program) rather than the Contract-1 ProgramDescriptor
+// pattern.  Per the descriptor-migration playbook, Contract-2 ops are
+// out of scope for the current Contract-1 batch; framework support for
+// mesh-workload descriptors is tracked separately.
 struct DeepseekMoEFastReduceNCFusedMeshWorkloadFactory {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle reader_kernel_id;
