@@ -138,7 +138,16 @@ class MLP(LightweightModule):
 
         # In decode mode (seqlen <= 32) do DRAM sharded matmuls
         # These use HiFi2; this drops 1 bit of the activations but would be FLOP-bound on 12 cores with HiFi4
-        pc_1 = self.args.get_mlp_ff1_3_prg_config(mode, seq_len, self.prefetcher)
+        w1_fuse_silu_decode = (
+            mode == Mode.DECODE
+            and getattr(self.args, "mlp_w1_fuse_silu_decode", False)
+            and hasattr(self.args, "get_mlp_ff1_w1_prg_config")
+        )
+        pc_1 = (
+            self.args.get_mlp_ff1_w1_prg_config(mode, seq_len, self.prefetcher)
+            if w1_fuse_silu_decode
+            else self.args.get_mlp_ff1_3_prg_config(mode, seq_len, self.prefetcher)
+        )
         pc_2 = self.args.get_mlp_ff2_prg_config(mode, seq_len, self.prefetcher)
         pc_3 = self.args.get_mlp_ff1_3_prg_config(mode, seq_len, self.prefetcher)
 
@@ -236,7 +245,7 @@ class MLP(LightweightModule):
         w2_in = ttnn.mul(
             w1_out,
             w3_out,
-            input_tensor_a_activations=[self.activation_type],
+            input_tensor_a_activations=[] if w1_fuse_silu_decode else [self.activation_type],
             dtype=activation_dtype or ttnn.bfloat8_b,
             memory_config=w1_out.memory_config(),
         )
