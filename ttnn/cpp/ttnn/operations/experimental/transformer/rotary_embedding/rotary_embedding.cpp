@@ -6,6 +6,7 @@
 
 #include "ttnn/operations/experimental/transformer/rotary_embedding/device/rotary_embedding_device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 
 namespace ttnn::experimental {
@@ -33,7 +34,7 @@ ttnn::Tensor rotary_embedding(
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
     TT_FATAL(
-        cos_cache.logical_shape() == sin_cache.logical_shape(),
+        cos_cache.padded_shape() == sin_cache.padded_shape(),
         "Cosine and Sine cache dimensions must match. Cos cache dimensions: {}, Sin cache dimensions: {}.",
         cos_cache.padded_shape(),
         sin_cache.padded_shape());
@@ -44,7 +45,6 @@ ttnn::Tensor rotary_embedding(
         X,
         cos_cache.padded_shape());
 
-    uint32_t cos_seq_len = cos_cache.logical_shape()[-2];
     if (token_index.has_value()) {
         seq_len = input_tensor.padded_shape()[0];
         TT_FATAL(
@@ -53,18 +53,16 @@ ttnn::Tensor rotary_embedding(
             seq_len);
 
         TT_FATAL(
-            cos_seq_len > token_index.value(),
-            "Cosine cache must cover the token index. Token index: {}, Cos cache sequence length: {}.",
+            cos_cache.padded_shape()[-2] >= token_index,
+            "Cosine cache dimensions must cover the token index. Token index: {}, Cos cache dimension: {}.",
             token_index.value(),
-            cos_seq_len);
+            cos_cache.padded_shape()[-2]);
     } else {
-        uint32_t input_seq_len = input_tensor.logical_shape()[-2];
         TT_FATAL(
-            cos_seq_len >= input_seq_len,
-            "Cosine cache must cover the input sequence length. Input sequence length: {}, "
-            "Cos cache sequence length: {}.",
-            input_seq_len,
-            cos_seq_len);
+            cos_cache.padded_shape()[-2] >= seq_len,
+            "Cosine cache dimensions must cover the sequence length. Sequence length: {}, Cos cache dimension: {}.",
+            seq_len,
+            cos_cache.padded_shape()[-2]);
     }
 
     auto arch = input_tensor.device()->arch();
@@ -79,12 +77,29 @@ ttnn::Tensor rotary_embedding(
     auto padded_shape_input = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
     auto padded_shape_cos = ttnn::operations::data_movement::pad_to_tile_shape(cos_cache.padded_shape());
     auto padded_shape_sin = ttnn::operations::data_movement::pad_to_tile_shape(sin_cache.padded_shape());
+    // tilize_with_val_padding short-circuits for already-TILE inputs and
+    // silently drops the requested pad value, so the implicit tile padding
+    // keeps whatever bytes were in L1. Only in that case do we need to
+    // explicitly scrub the implicit tile padding here, otherwise the compute
+    // kernel (which processes the full padded seq_len) would multiply
+    // uninitialized L1 garbage into the output's padded rows.
+    // For ROW_MAJOR inputs tilize_with_val_padding already zero-pads, so we
+    // skip the redundant fill.
     Tensor formatted_input =
         ttnn::tilize_with_val_padding(input_tensor, padded_shape_input, PadValue(0.0f), input_tensor.memory_config());
+    if (input_tensor.layout() == Layout::TILE) {
+        formatted_input = ttnn::fill_implicit_tile_padding(formatted_input, 0.0f, formatted_input.memory_config());
+    }
     Tensor formatted_cos =
         ttnn::tilize_with_val_padding(cos_cache, padded_shape_cos, PadValue(0.0f), cos_cache.memory_config());
+    if (cos_cache.layout() == Layout::TILE) {
+        formatted_cos = ttnn::fill_implicit_tile_padding(formatted_cos, 0.0f, formatted_cos.memory_config());
+    }
     Tensor formatted_sin =
         ttnn::tilize_with_val_padding(sin_cache, padded_shape_sin, PadValue(0.0f), sin_cache.memory_config());
+    if (sin_cache.layout() == Layout::TILE) {
+        formatted_sin = ttnn::fill_implicit_tile_padding(formatted_sin, 0.0f, formatted_sin.memory_config());
+    }
 
     return ttnn::prim::rotary_embedding(
         formatted_input,
