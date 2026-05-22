@@ -26,7 +26,9 @@
   name: Galaxy MoE tests
   cmd: |
     TT_MESH_GRAPH_DESC_PATH="tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x16_torus_graph_descriptor.textproto" pytest tests/nightly/tg/ccl/moe &&
-    TT_MESH_GRAPH_DESC_PATH="tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x8_torus_graph_descriptor.textproto" pytest tests/nightly/tg/ccl/moe/test_moe_compute_6U.py
+    TT_MESH_GRAPH_DESC_PATH="tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x8_torus_graph_descriptor.textproto" pytest tests/nightly/tg/ccl/moe/test_moe_compute_6U.py -k "1x8-torus" &&
+    TT_MESH_GRAPH_DESC_PATH="tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x16_linear_graph_descriptor.textproto" pytest tests/nightly/tg/ccl/moe/test_moe_compute_6U.py -k "1x16-linear" &&
+    TT_MESH_GRAPH_DESC_PATH="tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x8_linear_graph_descriptor.textproto" pytest tests/nightly/tg/ccl/moe/test_moe_compute_6U.py -k "1x8-linear"
   skus:
     wh_galaxy:
       timeout: 30
