@@ -4,32 +4,19 @@
 
 #pragma once
 
-#include <vector>
+#include <tt-metalium/program_descriptors.hpp>
 
 #include "insert_types.hpp"
-
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::insert {
 
-struct InsertSharedVariables {
-    tt::tt_metal::KernelHandle reader_kernel_id = 0;
-    tt::tt_metal::KernelHandle writer_kernel_id = 0;
-    std::vector<CoreCoord> cores;
-};
-
 struct InsertProgramFactory {
-    using shared_variables_t = InsertSharedVariables;
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
+    // Contract (1): per-coord ProgramDescriptor.  All CBs are local scratch
+    // (no .buffer binding); per-core runtime args carry buffer base addresses
+    // and the per-core flat core_id used by the kernel for tile-row sharding.
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
         const InsertParams& operation_attributes, const InsertInputs& tensor_args, Tensor& tensor_return_value);
-
-    static void override_runtime_arguments(
-        cached_program_t& cached_program,
-        const InsertParams& operation_attributes,
-        const InsertInputs& tensor_args,
-        Tensor& tensor_return_value);
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::insert

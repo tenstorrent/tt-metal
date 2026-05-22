@@ -10,6 +10,13 @@
 
 namespace ttnn::experimental::prim {
 
+// TODO(#42193, #42341): Migrate to ProgramDescriptor.  This factory exposes
+// minimal_matmul_factory_helper / minimal_matmul_factory_helper_common that
+// return the shared_variables_t below and are consumed externally by the
+// experimental/ccl strided_all_gather_minimal_matmul_async and
+// minimal_matmul_strided_reduce_scatter_async ops (framework-blocked
+// CCL ops per #43281).  Migrating requires refactoring those external
+// consumers, which is out of scope for the current Contract-1 batch.
 struct MinimalMatmulProgramFactory {
     struct shared_variables_t {
         uint32_t num_cores{};

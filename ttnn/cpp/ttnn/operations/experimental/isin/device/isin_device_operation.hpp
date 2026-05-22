@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tt-metalium/program_descriptors.hpp>
+
 #include "isin_device_operation_types.hpp"
 #include "isin_program_factory.hpp"
 
@@ -14,7 +16,9 @@ struct IsInDeviceOperation {
     using tensor_args_t = IsinInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<IsInProgramFactory>;
+
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
