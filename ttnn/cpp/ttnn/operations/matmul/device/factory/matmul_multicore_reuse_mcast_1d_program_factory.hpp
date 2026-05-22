@@ -90,15 +90,16 @@ matmul_multi_core_reuse_mcast_1d_optimized_helper(
 
 // ProgramDescriptor-flavored variant of matmul_multi_core_reuse_mcast_1d_optimized_helper.
 //
-// Mirrors the legacy helper's argument list. Currently supports the `mcast_in0` and
-// `!mcast_in0 && !gather_in0` paths (where `start_cb_index` must be tt::CBIndex::c_0 and
-// `restricted_cores`/`global_cb`/multi-`b_tensors` must be at their default/single-element
-// values, matching what the existing descriptor builders accept).
+// Mirrors the legacy helper's argument list and supports all three 1D paths:
+//   * `mcast_in0`        — broadcast in0 across cores (single-B, single-output, c_0 base).
+//   * `!mcast_in0 && !gather_in0` — broadcast in1; same single-B/output/c_0 constraints.
+//   * `gather_in0`       — ring topology used by CCL+matmul fused ops
+//     (llama_reduce_scatter_matmul, rs_matmul_op, all_gather_matmul_async). Supports
+//     multi-B / multi-output, a non-zero `start_cb_index` (to leave low CB slots free for
+//     the caller's CCL kernels), `restricted_cores`, and an optional GlobalCircularBuffer.
 //
-// The `gather_in0` path is the actually-used path for the current CCL fused matmul callers
-// (llama_reduce_scatter_matmul, rs_matmul_op, all_gather_matmul_async) but does not yet
-// have a descriptor builder; this variant TT_FATALs on it until that work lands. Tracked as
-// follow-up to issue #42193 alongside the 1d-mcast helper migration.
+// The mcast (non-gather) paths still TT_FATAL when callers pass gather_in0-only options
+// (multi-B, multi-output, non-zero start_cb_index, restricted_cores, global_cb).
 void matmul_multi_core_reuse_mcast_1d_optimized_helper_descriptor(
     tt::tt_metal::ProgramDescriptor& desc,
     const Tensor& a,
