@@ -179,6 +179,14 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToA
     } else {  // Unicast Sender Kernel
         sender_compile_args.push_back((uint32_t)test_config.num_virtual_channels);
         sender_kernel_path += "sender_unicast";
+
+        if (test_config.use_semaphore) {
+            sender_compile_args.insert(
+                sender_compile_args.end(),
+                {(uint32_t)sender_sem_id, (uint32_t)sender_valid_sem_id, (uint32_t)receiver_sem_id});
+
+            sender_kernel_path += "_sem";
+        }
     }
 
     if (test_config.use_2_0_api) {
@@ -1175,5 +1183,134 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedDirect
         noc_id,
         0,  // multicast_scheme_type (not used here)
         true);
+}
+
+/* ========== MULTICAST WITH SEMAPHORE 2.0 ========== */
+//
+// Exercises the new Semaphore<>::set_multicast(dst_sem, ...) overload added in
+// noc_semaphore.h. The sender's `valid_sem` and the receivers' `receiver_sem` are
+// distinct semaphore ids — i.e. they live at different L1 offsets. If the API
+// resolved the multicast NoC addr from the sender's L1 offset (the regression we
+// are guarding against), the receivers would never see an increment at
+// `receiver_sem`'s slot and the kernels would deadlock at Finish.
+//
+
+/* ========== 2x2, non-linked, EXCLUDE_SRC ========== */
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastSemaphore2x22_0) {
+    uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 10;
+
+    auto mesh_device = get_mesh_device();
+    auto [bytes_per_page, max_bytes_reservable, max_pages_reservable] =
+        unit_tests::dm::compute_physical_constraints(mesh_device);
+
+    unit_tests::dm::core_to_all::OneToAllConfig test_config = {
+        .test_id = test_case_id,
+        .mst_core_coord = {0, 0},
+        .sub_start_core_coord = {0, 0},
+        .sub_grid_size = {2, 2},
+        .num_of_transactions = 4,
+        .pages_per_transaction = 1,
+        .bytes_per_page = bytes_per_page,
+        .l1_data_format = DataFormat::Float16_b,
+        .noc_id = NOC::NOC_0,
+        .loopback = false,
+        .is_multicast = true,
+        .is_linked = false,
+        .use_2_0_api = true,
+        .use_semaphore = true,
+    };
+
+    EXPECT_TRUE(unit_tests::dm::core_to_all::run_dm(mesh_device, test_config));
+}
+
+/* ========== 2x2, linked, INCLUDE_SRC (loopback) ========== */
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaphoreLoopback2x22_0) {
+    uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 11;
+
+    auto mesh_device = get_mesh_device();
+    auto [bytes_per_page, max_bytes_reservable, max_pages_reservable] =
+        unit_tests::dm::compute_physical_constraints(mesh_device);
+
+    unit_tests::dm::core_to_all::OneToAllConfig test_config = {
+        .test_id = test_case_id,
+        .mst_core_coord = {0, 0},
+        .sub_start_core_coord = {0, 0},
+        .sub_grid_size = {2, 2},
+        .num_of_transactions = 4,
+        .pages_per_transaction = 1,
+        .bytes_per_page = bytes_per_page,
+        .l1_data_format = DataFormat::Float16_b,
+        .noc_id = NOC::NOC_0,
+        .loopback = true,
+        .is_multicast = true,
+        .is_linked = true,
+        .use_2_0_api = true,
+        .use_semaphore = true,
+    };
+
+    EXPECT_TRUE(unit_tests::dm::core_to_all::run_dm(mesh_device, test_config));
+}
+
+/* ========== 5x5, linked, EXCLUDE_SRC ========== */
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaphore5x52_0) {
+    uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 12;
+
+    auto mesh_device = get_mesh_device();
+    auto [bytes_per_page, max_bytes_reservable, max_pages_reservable] =
+        unit_tests::dm::compute_physical_constraints(mesh_device);
+
+    unit_tests::dm::core_to_all::OneToAllConfig test_config = {
+        .test_id = test_case_id,
+        .mst_core_coord = {0, 0},
+        .sub_start_core_coord = {0, 0},
+        .sub_grid_size = {5, 5},
+        .num_of_transactions = 4,
+        .pages_per_transaction = 1,
+        .bytes_per_page = bytes_per_page,
+        .l1_data_format = DataFormat::Float16_b,
+        .noc_id = NOC::NOC_0,
+        .loopback = false,
+        .is_multicast = true,
+        .is_linked = true,
+        .use_2_0_api = true,
+        .use_semaphore = true,
+    };
+
+    EXPECT_TRUE(unit_tests::dm::core_to_all::run_dm(mesh_device, test_config));
+}
+
+/* ========== UNICAST WITH SEMAPHORE 2.0 ========== */
+//
+// Exercises the new Semaphore<>::set_unicast(dst_sem, ...) method added in
+// noc_semaphore.h. Same dst-sem-L1-offset guarantee as the multicast variant.
+//
+
+/* ========== 2x2 ========== */
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicastSemaphore2x22_0) {
+    uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 13;
+
+    auto mesh_device = get_mesh_device();
+    auto [bytes_per_page, max_bytes_reservable, max_pages_reservable] =
+        unit_tests::dm::compute_physical_constraints(mesh_device);
+
+    unit_tests::dm::core_to_all::OneToAllConfig test_config = {
+        .test_id = test_case_id,
+        .mst_core_coord = {0, 0},
+        .sub_start_core_coord = {0, 0},
+        .sub_grid_size = {2, 2},
+        .num_of_transactions = 4,
+        .pages_per_transaction = 1,
+        .bytes_per_page = bytes_per_page,
+        .l1_data_format = DataFormat::Float16_b,
+        .noc_id = NOC::NOC_0,
+        .loopback = false,
+        .is_multicast = false,
+        .is_linked = false,
+        .num_virtual_channels = 1,
+        .use_2_0_api = true,
+        .use_semaphore = true,
+    };
+
+    EXPECT_TRUE(unit_tests::dm::core_to_all::run_dm(mesh_device, test_config));
 }
 }  // namespace tt::tt_metal
