@@ -76,6 +76,7 @@ def _clear_score_artifact(case_id: str) -> None:
     try:
         _score_artifact_path(case_id).unlink()
     except FileNotFoundError:
+        # It's fine if no prior score artifact exists; cleanup is best-effort.
         pass
 
 
