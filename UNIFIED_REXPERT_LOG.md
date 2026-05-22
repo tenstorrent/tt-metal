@@ -56,13 +56,22 @@ With `MAX_CHUNK_M_TILES = 64` (2k tokens per chunk; smaller per_core_M = better 
 |--------|--------|----------------------|-------|---------|
 |  1024  | 1      |  280                 |  560  | 5       |
 |  2048  | 1      |  528                 |  528  | 5       |
-|  4096  | 2      | 1060                 |  530  | 10      |
+|  4096  | 2      | 1057                 |  528  | 10      |
 |  8192  | 4      | 2120                 |  530  | 20      |
 | 16384  | 8      | 4240                 |  530  | 40      |
 | 25600  | 12+1   | 6640                 |  519  | 65      |
 
-vs main on 4k: 1676μs (1.58x faster).
-Target: ~500μs/2k. We are within ~6% on 25k, exactly there on 2k.
+vs main on 4k: 1676μs → 1057μs (1.59x faster). All sizes within ~6% of the 500μs/2k target.
+
+### MoE integration perf
+
+`test_ttnn_moe.py::test_ttnn_moe[linear-8 perf-host-64]`:
+
+- Before count-buffer awareness: `tt_forward` = 40.4 s
+- After (Milestone 4): `tt_forward` = 4.8 s (**8.4x faster**)
+
+The MoE win is dominated by per-expert FFN no longer matmuling the padded
+~204800-row dispatch slot when only ~500 tokens actually land on each expert.
 
 ### Outstanding
 - Op count still scales with chunks (5 ops per 2k chunk). User wants "almost a single
