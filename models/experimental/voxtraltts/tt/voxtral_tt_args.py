@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
+import ttnn
 import torch
 from huggingface_hub import snapshot_download
 from safetensors.torch import load_file as load_safetensors_file
@@ -14,6 +15,7 @@ from models.experimental.voxtraltts.tt.text_decoder_layer import (
     permute_voxtral_text_qk_for_hf_rope,
     remap_voxtral_text_state_dict,
 )
+from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.model_config import (
     DecodersPrecision,
     MathFidelitySetting,
@@ -113,6 +115,8 @@ def get_VoxtralTTArgs(preloaded_state_dict: Optional[dict[str, torch.Tensor]] = 
             try:
                 kwargs.setdefault("use_hf_rope", True)
                 super().__init__(*args, **kwargs)
+                # Decode: fuse SiLU into w1 DRAM-sharded matmul (SwiGLU gate); mul becomes w1_silu * w3.
+                self.mlp_w1_fuse_silu_decode = True
             finally:
                 if prev_hf_model is None:
                     os.environ.pop("HF_MODEL", None)
@@ -166,5 +170,19 @@ def get_VoxtralTTArgs(preloaded_state_dict: Optional[dict[str, torch.Tensor]] = 
                 state_dict["output.weight"] = state_dict["tok_embeddings.weight"]
 
             return state_dict
+
+        def get_mlp_ff1_w1_prg_config(self, mode: Mode, seq_len: int = 1, prefetcher=None):
+            """Voxtral decode: w1 matmul with fused SiLU (w3 uses plain ff1_3 config)."""
+            if not getattr(self, "mlp_w1_fuse_silu_decode", False) or mode != Mode.DECODE:
+                return self.get_mlp_ff1_3_prg_config(mode, seq_len, prefetcher)
+            if prefetcher is not None or self.is_galaxy:
+                return self.get_mlp_ff1_3_prg_config(mode, seq_len, prefetcher)
+            return self.dram_matmul_config(
+                m=self.tile_padded_batch_rows,
+                k=self.dim,
+                n=self.hidden_dim // self.cluster_shape[1],
+                num_cores=self.mlp_core_grid.num_cores,
+                fused_activation=ttnn.UnaryOpType.SILU,
+            )
 
     return VoxtralTTArgs
