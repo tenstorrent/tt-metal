@@ -87,9 +87,4 @@ std::vector<ttnn::CoreCoord> get_moe_combine_cores(
     const uint32_t combine_token_parallel_cores,
     const uint32_t combine_data_parallel_cores);
 
-// BH ring size resolver: validate the explicit value if provided, else return the default (12).
-// Supported values: {8, 12, 16}; any other explicit value triggers TT_FATAL.
-// WH always uses N=12 and ignores this resolver entirely.
-uint32_t resolve_bh_ring_size(std::optional<uint32_t> explicit_value);
-
 }  // namespace ttnn::experimental::prim

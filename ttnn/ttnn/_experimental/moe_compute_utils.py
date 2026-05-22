@@ -82,30 +82,13 @@ from typing import Sequence
 import ttnn
 
 
-def _resolve_bh_ring_size(explicit_value=None):
-    """BH ring size resolver. Supported: {8, 12, 16}; default 12.
-
-    Mirrors C++ resolve_bh_ring_size in moe_compute_program_factory.cpp: validate the
-    explicit value if provided, else return the default (12).
-
-    Default rationale: N=12 = LCM(3, 4) over the canonical model set (PR #43932's
-    MODELS_1x16/1x8 all have output_width_shard_dim ∈ {3, 4}). The op validates
-    matmul_num_cores % output_width_shard_dim == 0, so N=12 is the smallest BH ring
-    size that satisfies every shipped model. Matches WH's hardcoded ring=12.
-
-    All BH N values use HEIGHT_SHARDED weights with leading dim = num_banks (=8); N=8 is 1:1
-    with banks, N=12/16 cross banks via the bank-run loop in dm0.cpp.
-
-    Callers that pass an explicit `bh_ring_size` to ttnn.experimental.moe_compute MUST
-    also pass the same value here, otherwise the prepared weight tensor shape will not
-    match the op's expected layout.
-
-    Raises ValueError on an invalid explicit value.
-    """
-    n = 12 if explicit_value is None else explicit_value
-    if n not in (8, 12, 16):
-        raise ValueError(f"bh_ring_size={n} is not supported (must be 8, 12, or 16)")
-    return n
+# Supported BH matmul ring sizes. Default is 12 (= LCM(3, 4)), the smallest BH ring
+# that satisfies every shipped model's output_width_shard_dim ∈ {3, 4} divisibility
+# check (DS-family width=4 → 12%4==0; GPT-OSS width=3 → 12%3==0). N=8 maps 1:1 to
+# BH's 8 DRAM banks; N=12/16 cross banks via the bank-run loop in dm0.cpp. WH always
+# uses N=12 (12 DRAM banks, 1:1 with ring). Must stay in sync with C++ supported set
+# enforced in get_cores() (moe_compute_program_factory.cpp).
+_BH_SUPPORTED_RING_SIZES = (8, 12, 16)
 
 
 def cluster_distance(d0: int, d1: int, mesh_shape: tuple[int, int], cluster_axis: int) -> int | None:
@@ -810,7 +793,7 @@ def prepare_w2_tensor_with_bias(
     return N_with_bias
 
 
-def get_weight_core_shard_maps(mesh_device, hidden_size: int, intermediate_size: int, bh_ring_size: int = None):
+def get_weight_core_shard_maps(mesh_device, hidden_size: int, intermediate_size: int, bh_ring_size: int = 12):
     """Compute per-ring-position shard maps for W0/W1 and W2 weight tensors.
 
     Uses _shard_tiles() (Euclidean rhythm) for W0/W1 and _w2_shard_tiles()
@@ -819,7 +802,7 @@ def get_weight_core_shard_maps(mesh_device, hidden_size: int, intermediate_size:
 
     Ring length:
     - WH: target_ring_size = num_dram_banks = 12 (1:1 ring-to-bank).
-    - BH: target_ring_size = _resolve_bh_ring_size(bh_ring_size) — kwarg or default 12.
+    - BH: target_ring_size = bh_ring_size (default 12; supported {8, 12, 16}).
           When target_ring_size > num_dram_banks (=8), the shard_map has extra entries
           for the synthetic ring positions that the C++ program_factory appends via
           kBhMatmulExtras. The prepare functions emit a matching target_ring_size-slot
@@ -831,14 +814,21 @@ def get_weight_core_shard_maps(mesh_device, hidden_size: int, intermediate_size:
     regardless of target_ring_size.
 
     `bh_ring_size`: if you pass this kwarg to ttnn.experimental.moe_compute, pass the same
-    value here. Leaving it None defaults to 12 — the same default as the op's resolver, so
-    a fully-default call site stays consistent.
+    value here. The default (12) matches the op's default, so a fully-default call site
+    stays consistent. On WH this kwarg is ignored (ring is fixed at num_dram_banks).
     """
     in0_core_coords = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(mesh_device, 0)
     n_dram_banks = len(in0_core_coords)
 
     is_blackhole = mesh_device.arch() == ttnn.Arch.BLACKHOLE
-    target_ring_size = _resolve_bh_ring_size(bh_ring_size) if is_blackhole else n_dram_banks
+    if is_blackhole:
+        if bh_ring_size not in _BH_SUPPORTED_RING_SIZES:
+            raise ValueError(
+                f"bh_ring_size={bh_ring_size} is not supported (must be one of {_BH_SUPPORTED_RING_SIZES})"
+            )
+        target_ring_size = bh_ring_size
+    else:
+        target_ring_size = n_dram_banks
 
     core2dram = {cc: dram_bank_id for dram_bank_id, cc in enumerate(in0_core_coords)}
     in0_core_coords_sorted = sorted(in0_core_coords, key=lambda x: (x.y, x.x), reverse=True)

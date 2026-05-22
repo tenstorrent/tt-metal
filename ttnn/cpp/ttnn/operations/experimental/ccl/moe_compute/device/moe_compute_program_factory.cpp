@@ -30,25 +30,6 @@
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
-namespace ttnn::experimental::prim {
-
-// BH ring size resolver: validate the explicit value if provided, else return the default (12).
-// Default is 12 because it equals LCM(3, 4) over the canonical model set in PR #43932:
-// every model in MODELS_1x16/1x8 has output_width_shard_dim ∈ {3, 4}, so N=12 satisfies
-// the op-side `matmul_num_cores % output_width_shard_dim == 0` validate for all of them
-// (e.g. DS-v3 width_dim=4 → 12%4=0; GPT-OSS width_dim=3 → 12%3=0). N=8 or N=16 reject
-// shapes with width_dim=3 (GPT-OSS, future Ht%4≠0 models). Matches WH's hardcoded ring=12.
-//
-// The chosen N feeds the templatized MoeRingConfig<Ht, Nt, N, has_bias> in moe_ring_common.h.
-// N=8 maps 1:1 to BH's 8 DRAM banks; N=12/16 use HEIGHT_SHARDED (8 banks) + bank-run reads.
-uint32_t resolve_bh_ring_size(std::optional<uint32_t> explicit_value) {
-    const uint32_t n = explicit_value.value_or(12u);
-    TT_FATAL(n == 8 || n == 12 || n == 16, "moe_compute: bh_ring_size={} is not supported (must be 8, 12, or 16)", n);
-    return n;
-}
-
-}  // namespace ttnn::experimental::prim
-
 namespace {
 
 constexpr uint32_t TILE_WIDTH = 32;
