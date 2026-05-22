@@ -12,6 +12,15 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/dataflow/circular_buffer.h"
+
+// Legacy CB primitives retained (#45003 item 4): this compute kernel passes cb_id values directly into the
+// compute API (matmul_block, mm_block_init, pack_tile, pack_untilize_dest, pack_untilize_dest_init,
+// pack_untilize_uninit, pack_reconfig_data_format, reconfig_data_format_*, unary_op_init_common, fill_tile)
+// and uses get_tile_address for the matmul_chunk_ready_semaphore delivered via cb_w2c_md. Those compute
+// interfaces take cb_id as a runtime argument and don't accept a CircularBuffer wrapper, so CB primitives
+// stay on legacy. The compute-side noc_semaphore_wait_min on chunk_ready_sem_ptr operates on a raw L1
+// address, so Semaphore<> doesn't fit either.
 
 // Need these headers for running SFPU on PACK thread
 #ifdef TRISC_PACK

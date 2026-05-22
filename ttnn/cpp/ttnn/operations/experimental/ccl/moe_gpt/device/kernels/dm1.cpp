@@ -4,7 +4,19 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include "moe_gpt_ring_common.h"
+
+// Legacy primitives retained (#45003 item 4): noc_async_write_one_packet_set_state /
+// noc_async_write_one_packet_with_state / noc_inline_dw_write_set_state / noc_inline_dw_write_with_state /
+// noc_async_posted_writes_flushed(noc=1) have no Device 2.0 wrapper equivalent — they form the ring-step
+// posted-write pipeline and the inline semaphore-increment with shared state used between cores. The ring
+// semaphore on my_semaphore_ptr is polled inline (`while ((*my_semaphore_ptr) < semaphore_value){}`) and
+// signalled via noc_inline_dw_write_with_state, so the Semaphore<> wait/up wrappers don't fit. The combine
+// signalling path goes through noc_semaphore_inc with a precomposed uint64_t noc address — also kept on
+// legacy. matmul_chunk_available_noc_addr is a precomposed uint64_t with no Device 2.0 form either. The
+// per-expert metadata semaphores are accessed via get_semaphore + reinterpret_cast, which Semaphore<>
+// doesn't model.
 
 void kernel_main() {
     // Compile time arguments
@@ -52,6 +64,12 @@ void kernel_main() {
     // CB Aliases
     constexpr auto cb_r2c_w2 = tt::CBIndex::c_0;
 
+    // Device 2.0 wrappers for the CBs this kernel touches via reserve/push/wait/pop or get_*_ptr.
+    CircularBuffer cb_c2w_rdy_obj(cb_c2w_rdy);
+    CircularBuffer cb_w2c_rdy_obj(cb_w2c_rdy);
+    CircularBuffer cb_s2c_in2_obj(cb_s2c_in2);
+    CircularBuffer cb_w2c_md_obj(cb_w2c_md);
+
     // Tile sizes
     constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in);
     constexpr uint32_t w0_w1_tile_size = get_tile_size(cb_r2c_w0_w1);
@@ -89,6 +107,7 @@ void kernel_main() {
 
     // CB Aliases
     constexpr auto cb_c2s_out = tt::CBIndex::c_14;  // untilized ROW_MAJOR output
+    CircularBuffer cb_c2s_out_obj(cb_c2s_out);
 
     // Additional runtime args for fused combine mode
     const auto combine_semaphore_id = get_arg_val<uint32_t>(10);
@@ -119,16 +138,16 @@ void kernel_main() {
     // Transfer per-expert token counts + chunk_ready semaphore address to compute via cb_w2c_md:
     //   [0..num_experts-1] = raw token counts per expert
     //   [num_experts]      = matmul_chunk_ready_semaphore address
-    cb_reserve_back(cb_w2c_md, 2);
+    cb_w2c_md_obj.reserve_back(2);
     volatile tt_l1_ptr uint32_t* cb_w2c_md_write_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_w2c_md));
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_w2c_md_obj.get_write_ptr());
     for (uint32_t e = 0; e < num_experts; ++e) {
         volatile tt_l1_ptr uint32_t* count_sem_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(metadata_count_semaphore_base_id + e));
         cb_w2c_md_write_ptr[e] = *count_sem_ptr;
     }
     cb_w2c_md_write_ptr[num_experts] = get_semaphore(matmul_chunk_ready_semaphore_id);
-    cb_push_back(cb_w2c_md, 2);
+    cb_w2c_md_obj.push_back(2);
 
     // NOC address to signal tilize drain that matmul has consumed a chunk
     uint32_t local_chunk_available_sem_addr = get_semaphore(matmul_chunk_available_semaphore_id);
@@ -163,7 +182,7 @@ void kernel_main() {
     constexpr uint32_t a2a_packet_size = a2a_tiles_per_packet * in2_tile_size;
     constexpr uint32_t a2a_num_packets = tiles_per_step / a2a_tiles_per_packet;
 
-    const uint32_t local_base_addr = get_write_ptr(cb_s2c_in2);
+    const uint32_t local_base_addr = cb_s2c_in2_obj.get_write_ptr();
     const uint64_t neighbor_base_addr =
         get_noc_addr(ring_neighbor_physical_x, ring_neighbor_physical_y, local_base_addr);
 
@@ -203,8 +222,8 @@ void kernel_main() {
                 neighbor_semaphore_noc_addr, 0, 0xF, write_at_cmd_buf, 1, vchannel);
 
             // Wait for compute's SwiGLU output
-            cb_wait_front(cb_c2w_rdy, 1);
-            cb_pop_front(cb_c2w_rdy, 1);
+            cb_c2w_rdy_obj.wait_front(1);
+            cb_c2w_rdy_obj.pop_front(1);
 
             // A2A ring rotation for this chunk's SwiGLU output
             for (uint32_t i = 0; i < num_a2a_iters; ++i) {
@@ -214,8 +233,8 @@ void kernel_main() {
                     };
 
                     // Signal compute that A2A data is ready for W2 matmul
-                    cb_reserve_back(cb_w2c_rdy, 1);
-                    cb_push_back(cb_w2c_rdy, 1);
+                    cb_w2c_rdy_obj.reserve_back(1);
+                    cb_w2c_rdy_obj.push_back(1);
 
                     // Send to ring neighbor
                     const uint32_t src_buf = step % NUM_A2A_BUFFERS;
@@ -248,8 +267,8 @@ void kernel_main() {
             const uint32_t num_tokens_block =
                 std::min(tokens_per_chunk_combine, active_tokens - chunk * tokens_per_chunk_combine);
 
-            cb_wait_front(cb_c2s_out, tokens_per_chunk_combine);
-            const uint32_t source_base_l1_addr = get_read_ptr(cb_c2s_out);
+            cb_c2s_out_obj.wait_front(tokens_per_chunk_combine);
+            const uint32_t source_base_l1_addr = cb_c2s_out_obj.get_read_ptr();
 
             uint32_t width_tiles_to_send = output_width_tiles_core;
             uint32_t width_tiles_sent = 0;
@@ -305,7 +324,7 @@ void kernel_main() {
             }
 
             noc_async_posted_writes_flushed(1);
-            cb_pop_front(cb_c2s_out, tokens_per_chunk_combine);
+            cb_c2s_out_obj.pop_front(tokens_per_chunk_combine);
 
             // Signal tilize drain that this chunk has been consumed
             noc_semaphore_inc<true>(matmul_chunk_available_noc_addr, 1, 1, vchannel);

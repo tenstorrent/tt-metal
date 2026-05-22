@@ -4,7 +4,19 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
+
+// Legacy primitives retained (#45003 item 4): noc_async_write_multicast / noc_semaphore_set_multicast have
+// no Device 2.0 wrapper equivalent — they implement the drain-core fan-out of e_t, per-expert counts,
+// total_chunks, and the readiness semaphore. get_safe_multicast_noc_addr / get_noc_multicast_addr compose
+// multicast noc addresses also not exposed by the new API. The semaphore wait/set/inc sites operate on raw
+// L1 addresses obtained from get_semaphore + reinterpret_cast (and on precomposed uint64_t noc addresses
+// for remote sets/incs), so Semaphore<> wrappers don't fit. NOC_XY_ADDR + DYNAMIC_NOC_X/Y compose
+// precomposed uint64_t noc addresses for the dispatch-drain pull, also kept on legacy. The
+// init_expert_activation_buffer_async helper keeps its cb_id-based get_write_ptr lookup since it takes
+// cb_id as a runtime parameter.
 
 using namespace ttnn::operations::ccl::common;
 
@@ -281,6 +293,22 @@ void kernel_main() {
         TensorAccessor(expert_activation_output_args, expert_activation_output_address);
     const auto e_t_output_tensor_addr_gen = TensorAccessor(e_t_output_args, e_t_output_address);
 
+    // Device 2.0 wrappers
+    Noc noc_obj;
+    CircularBuffer cb_indices(indices_tensor_cb_id);
+    CircularBuffer cb_mapping(mapping_tensor_cb_id);
+    CircularBuffer cb_scores(scores_tensor_cb_id);
+    CircularBuffer cb_tilize_input(tilize_input_cb_id);
+    CircularBuffer cb_e_t(e_t_cb_id);
+    CircularBuffer cb_expert_activation(expert_activation_cb_id);
+    CircularBuffer cb_per_expert_total_tokens(per_expert_total_tokens_cb_id);
+    CircularBuffer cb_total_chunks(total_chunks_cb_id);
+    CircularBuffer cb_brisc_e_t(brisc_e_t_cb_id);
+    CircularBuffer cb_brisc_expert_counts(brisc_expert_counts_cb_id);
+    CircularBuffer cb_brisc_expert_activation(brisc_expert_activation_cb_id);
+    CircularBuffer cb_brisc_activated_count(brisc_activated_count_cb_id);
+    CircularBuffer cb_remote_counts(remote_counts_cb_id);
+
     // Constants
     constexpr uint32_t one_page = 1;
 
@@ -313,13 +341,12 @@ void kernel_main() {
     // Read the mapping tensor page for this device (linearized_mesh_coord)
     // This gives us the expert -> device mapping from this device's perspective
     // Reserve all pages (tokens)
-    cb_reserve_back(mapping_tensor_cb_id, mapping_pages);
+    cb_mapping.reserve_back(mapping_pages);
     for (uint32_t i = 0; i < mapping_pages; i++) {
-        noc_async_read_page(
-            i, mapping_tensor_addr_gen, get_write_ptr(mapping_tensor_cb_id) + i * aligned_mapping_page_size);
+        noc_async_read_page(i, mapping_tensor_addr_gen, cb_mapping.get_write_ptr() + i * aligned_mapping_page_size);
     }
 
-    cb_reserve_back(expert_activation_cb_id, tokens);
+    cb_expert_activation.reserve_back(tokens);
     init_expert_activation_buffer_async<selected_experts_k, tokens, experts_per_device, l1_alignment>(
         expert_activation_cb_id);
 
@@ -333,24 +360,24 @@ void kernel_main() {
             DYNAMIC_NOC_X(noc_index, dispatch_drain_noc_x),
             DYNAMIC_NOC_Y(noc_index, dispatch_drain_noc_y),
             indices_tensor_address);
-        noc_async_read(src_indices, get_read_ptr(indices_tensor_cb_id), aligned_indices_page_size * indices_pages);
+        noc_async_read(src_indices, cb_indices.get_read_ptr(), aligned_indices_page_size * indices_pages);
         uint64_t src_scores = NOC_XY_ADDR(
             DYNAMIC_NOC_X(noc_index, dispatch_drain_noc_x),
             DYNAMIC_NOC_Y(noc_index, dispatch_drain_noc_y),
             scores_tensor_address);
-        noc_async_read(src_scores, get_read_ptr(scores_tensor_cb_id), aligned_scores_page_size * scores_pages);
+        noc_async_read(src_scores, cb_scores.get_read_ptr(), aligned_scores_page_size * scores_pages);
     }
 
     // Wait for all reads to complete (mapping + indices/scores)
-    noc_async_read_barrier();
+    noc_obj.async_read_barrier();
 
     // Now safe to signal BRISC - all data is in place
-    cb_push_back(mapping_tensor_cb_id, mapping_pages);
-    cb_push_back(expert_activation_cb_id, tokens);
+    cb_mapping.push_back(mapping_pages);
+    cb_expert_activation.push_back(tokens);
 
     // Get pointer to the mapping data
-    uint16_t* expert_to_device_map = reinterpret_cast<uint16_t*>(
-        get_read_ptr(mapping_tensor_cb_id) + linearized_mesh_coord * aligned_mapping_page_size);
+    uint16_t* expert_to_device_map =
+        reinterpret_cast<uint16_t*>(cb_mapping.get_read_ptr() + linearized_mesh_coord * aligned_mapping_page_size);
     uint16_t local_expert_ids[experts_per_device];
     uint32_t local_expert_count = 0;
     for (uint32_t i = 0; i < experts; i++) {
@@ -368,8 +395,8 @@ void kernel_main() {
     }
 
     // Pre-compute base addresses (avoid repeated calls in hot loop)
-    const uint32_t mapping_base = get_read_ptr(mapping_tensor_cb_id);
-    const uint32_t e_t_buffer_base = get_write_ptr(e_t_cb_id);
+    const uint32_t mapping_base = cb_mapping.get_read_ptr();
+    const uint32_t e_t_buffer_base = cb_e_t.get_write_ptr();
 
     // Array to hold per-expert token counts (filled by all cores now)
     uint32_t num_activated_tokens_per_expert[experts_per_device] = {0};
@@ -385,9 +412,9 @@ void kernel_main() {
     // indices/scores are in CB - drain has shard, non-drain read via NOC in Step 2
     uint32_t num_activated_tokens = 0;
 
-    const uint32_t indices_base = get_read_ptr(indices_tensor_cb_id);
-    const uint32_t scores_base = get_read_ptr(scores_tensor_cb_id);
-    const uint32_t expert_activation_base = get_read_ptr(expert_activation_cb_id);
+    const uint32_t indices_base = cb_indices.get_read_ptr();
+    const uint32_t scores_base = cb_scores.get_read_ptr();
+    const uint32_t expert_activation_base = cb_expert_activation.get_read_ptr();
 
     // Cache source_device_mapping - only changes every tokens_per_device tokens
     // Reduces mapping loads from 512 to 16 (dispatch_devices)
@@ -476,20 +503,20 @@ void kernel_main() {
 
     // ========== ALL CORES: WAIT FOR BRISC AND MERGE ==========
     // Wait for BRISC to finish processing second half and push its counts
-    cb_wait_front(brisc_expert_counts_cb_id, one_page);
+    cb_brisc_expert_counts.wait_front(one_page);
     volatile tt_l1_ptr uint32_t* brisc_counts =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(brisc_expert_counts_cb_id));
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_brisc_expert_counts.get_read_ptr());
 
     // Wait for BRISC's e_t buffer to be ready
-    cb_wait_front(brisc_e_t_cb_id, one_page);
-    const uint32_t brisc_e_t_buffer_base = get_read_ptr(brisc_e_t_cb_id);
+    cb_brisc_e_t.wait_front(one_page);
+    const uint32_t brisc_e_t_buffer_base = cb_brisc_e_t.get_read_ptr();
 
     // Wait for BRISC's expert_activation buffer and count
-    cb_wait_front(brisc_activated_count_cb_id, one_page);
+    cb_brisc_activated_count.wait_front(one_page);
     uint32_t brisc_activated_count =
-        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(brisc_activated_count_cb_id));
-    cb_wait_front(brisc_expert_activation_cb_id, one_page);
-    const uint32_t brisc_expert_activation_base = get_read_ptr(brisc_expert_activation_cb_id);
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_brisc_activated_count.get_read_ptr());
+    cb_brisc_expert_activation.wait_front(one_page);
+    const uint32_t brisc_expert_activation_base = cb_brisc_expert_activation.get_read_ptr();
 
     // Merge BRISC's e_t buffer entries into main e_t buffer using NOC DMA
     // For each expert: copy BRISC's tokens after NCRISC's tokens
@@ -526,16 +553,16 @@ void kernel_main() {
     }
 
     // Wait for all NOC DMA copies to complete
-    noc_async_read_barrier();
+    noc_obj.async_read_barrier();
 
     // Update total activated token count to include BRISC's tokens
     num_activated_tokens += brisc_activated_count;
 
     // Pop BRISC's CBs (cleanup)
-    cb_pop_front(brisc_expert_counts_cb_id, one_page);
-    cb_pop_front(brisc_e_t_cb_id, one_page);
-    cb_pop_front(brisc_expert_activation_cb_id, one_page);
-    cb_pop_front(brisc_activated_count_cb_id, one_page);
+    cb_brisc_expert_counts.pop_front(one_page);
+    cb_brisc_e_t.pop_front(one_page);
+    cb_brisc_expert_activation.pop_front(one_page);
+    cb_brisc_activated_count.pop_front(one_page);
 
     // ========== CROSS-CORE CONSOLIDATION (Steps 4-6) ==========
     // Non-drain cores: send counts to drain and wait for consolidated buffer
@@ -550,7 +577,7 @@ void kernel_main() {
 
             // Read counts from each non-drain core and consolidate their buffers
             // tilize_noc_x and tilize_noc_y arrays were populated from runtime args earlier
-            const uint32_t remote_counts_base = get_read_ptr(remote_counts_cb_id);
+            const uint32_t remote_counts_base = cb_remote_counts.get_read_ptr();
 
             for (uint32_t core_idx = 1; core_idx < num_tilize_cores; core_idx++) {
                 // Read this core's counts from remote_counts_cb
@@ -573,7 +600,7 @@ void kernel_main() {
                     uint32_t remote_count = remote_e_t_counts[e];
                     if (remote_count > 0) {
                         // Source: remote core's e_t buffer, expert e's section starts at 0
-                        uint32_t remote_e_t_addr = get_write_ptr(e_t_cb_id) + e * (tokens + 1) * e_t_entry_size;
+                        uint32_t remote_e_t_addr = cb_e_t.get_write_ptr() + e * (tokens + 1) * e_t_entry_size;
                         uint64_t remote_e_t_noc_addr = get_noc_addr(remote_noc_x, remote_noc_y, remote_e_t_addr);
 
                         // Destination: drain's e_t buffer, after current entries for this expert
@@ -590,7 +617,7 @@ void kernel_main() {
                 // Pull this core's expert_activation buffer rows
                 if (remote_activated_count > 0) {
                     // Source: remote core's expert_activation buffer, rows start at 0
-                    uint32_t remote_activation_addr = get_read_ptr(expert_activation_cb_id);
+                    uint32_t remote_activation_addr = cb_expert_activation.get_read_ptr();
                     uint64_t remote_activation_noc_addr =
                         get_noc_addr(remote_noc_x, remote_noc_y, remote_activation_addr);
 
@@ -609,32 +636,32 @@ void kernel_main() {
             }
 
             // Wait for all consolidation reads to complete
-            noc_async_read_barrier();
+            noc_obj.async_read_barrier();
         }
 
         // cap off e_t buffer with -1 (now includes merged counts, 16B aligned entries)
         for (uint32_t e = 0; e < experts_per_device; e++) {
-            uint32_t e_t_buffer_addr = get_write_ptr(e_t_cb_id) + e * (tokens + 1) * e_t_entry_size;
+            uint32_t e_t_buffer_addr = cb_e_t.get_write_ptr() + e * (tokens + 1) * e_t_entry_size;
             uint32_t* e_t_sentinel_ptr =
                 reinterpret_cast<uint32_t*>(e_t_buffer_addr + num_activated_tokens_per_expert[e] * e_t_entry_size);
             *e_t_sentinel_ptr = static_cast<uint32_t>(-1);
         }
 
         // Push per-expert token counts to CB for writer to read
-        cb_reserve_back(per_expert_total_tokens_cb_id, 1);
-        uint32_t* per_expert_counts_ptr = reinterpret_cast<uint32_t*>(get_write_ptr(per_expert_total_tokens_cb_id));
+        cb_per_expert_total_tokens.reserve_back(1);
+        uint32_t* per_expert_counts_ptr = reinterpret_cast<uint32_t*>(cb_per_expert_total_tokens.get_write_ptr());
         for (uint32_t e = 0; e < experts_per_device; e++) {
             per_expert_counts_ptr[e] = num_activated_tokens_per_expert[e];
         }
-        cb_push_back(per_expert_total_tokens_cb_id, 1);
+        cb_per_expert_total_tokens.push_back(1);
 
-        cb_reserve_back(total_chunks_cb_id, one_page);
+        cb_total_chunks.reserve_back(one_page);
         uint32_t total_chunks = 0;
         for (uint32_t e = 0; e < experts_per_device; e++) {
             total_chunks += (num_activated_tokens_per_expert[e] + tokens_per_chunk - 1) / tokens_per_chunk;
         }
-        *reinterpret_cast<uint32_t*>(get_write_ptr(total_chunks_cb_id)) = total_chunks;
-        cb_push_back(total_chunks_cb_id, one_page);
+        *reinterpret_cast<uint32_t*>(cb_total_chunks.get_write_ptr()) = total_chunks;
+        cb_total_chunks.push_back(one_page);
 
         // ========== Write expert_activation buffer to DRAM ==========
         // Cap off expert_activation buffer with sentinel row
@@ -652,9 +679,9 @@ void kernel_main() {
 
         // Multicast e_t buffer, per_expert_counts, and total_chunks to non-drain-sync cores
         if (num_tilize_cores > 1) {
-            uint32_t e_t_cb_read_ptr = get_read_ptr(e_t_cb_id);
-            uint32_t per_expert_total_tokens_cb_read_ptr = get_read_ptr(per_expert_total_tokens_cb_id);
-            uint32_t total_chunks_cb_read_ptr = get_read_ptr(total_chunks_cb_id);
+            uint32_t e_t_cb_read_ptr = cb_e_t.get_read_ptr();
+            uint32_t per_expert_total_tokens_cb_read_ptr = cb_per_expert_total_tokens.get_read_ptr();
+            uint32_t total_chunks_cb_read_ptr = cb_total_chunks.get_read_ptr();
 
             uint64_t e_t_mcast_addr = get_safe_multicast_noc_addr(
                 tilize_mcast_start_x, tilize_mcast_start_y, tilize_mcast_end_x, tilize_mcast_end_y, e_t_cb_read_ptr);
@@ -705,7 +732,7 @@ void kernel_main() {
 
             // Flush writes since we change the local value of metadata_ready_semaphore when signalling
             // to the matmul cores (vs here where we signal to the non-drain-sync tilize cores )
-            noc_async_writes_flushed();
+            noc_obj.async_writes_flushed();
         }
 
         /*
@@ -718,7 +745,7 @@ void kernel_main() {
         // == 1 == Write per-expert token counts to individual semaphores
 
         volatile tt_l1_ptr uint32_t* num_tokens_per_expert =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(per_expert_total_tokens_cb_id));
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_per_expert_total_tokens.get_read_ptr());
 
         // Write each expert's token count to its dedicated semaphore
         for (uint32_t e = 0; e < experts_per_device; ++e) {
@@ -744,7 +771,7 @@ void kernel_main() {
 
         noc_async_write_multicast(
             count_sems_start_addr, matmul_mcast_dest, count_sems_total_bytes, matmul_bounding_box_num_cores);
-        noc_async_write_barrier();
+        noc_obj.async_write_barrier();
 
         // == 3 == Signal ready semaphore (value=1, no encoded data)
 
@@ -773,7 +800,7 @@ void kernel_main() {
         uint32_t remote_counts_offset = (tilize_core_idx - 1) * remote_counts_entry_size;
 
         // Get drain core's remote_counts_cb address
-        uint32_t local_counts_addr = get_read_ptr(remote_counts_cb_id);
+        uint32_t local_counts_addr = cb_remote_counts.get_read_ptr();
         uint64_t drain_counts_noc_addr =
             get_noc_addr(drain_core_noc_x, drain_core_noc_y, local_counts_addr + remote_counts_offset);
 
@@ -786,7 +813,7 @@ void kernel_main() {
 
         // Write counts to drain core's remote_counts_cb
         noc_async_write(local_counts_addr, drain_counts_noc_addr, remote_counts_entry_size);
-        noc_async_write_barrier();
+        noc_obj.async_write_barrier();
 
         // Signal drain core via semaphore increment
         uint64_t drain_semaphore_noc_addr =
@@ -800,17 +827,17 @@ void kernel_main() {
         // Read per-expert counts from the CB (multicast by drain core)
         // The data was written directly to our CB by the multicast
         volatile tt_l1_ptr uint32_t* per_expert_counts =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(per_expert_total_tokens_cb_id));
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_per_expert_total_tokens.get_read_ptr());
         for (uint32_t e = 0; e < experts_per_device; e++) {
             num_activated_tokens_per_expert[e] = per_expert_counts[e];
         }
 
         // Push per_expert_total_tokens_cb and total_chunks_cb so writer can read them
         // (drain core already pushed, non-drain cores need to mark as available)
-        cb_reserve_back(per_expert_total_tokens_cb_id, 1);
-        cb_push_back(per_expert_total_tokens_cb_id, 1);
-        cb_reserve_back(total_chunks_cb_id, one_page);
-        cb_push_back(total_chunks_cb_id, one_page);
+        cb_per_expert_total_tokens.reserve_back(1);
+        cb_per_expert_total_tokens.push_back(1);
+        cb_total_chunks.reserve_back(one_page);
+        cb_total_chunks.push_back(one_page);
     }
 
     // print_e_t_buffer<experts_per_device, tokens, e_t_entry_size>(e_t_cb_id);
@@ -828,7 +855,7 @@ void kernel_main() {
         for (uint32_t chunk_start = 0; chunk_start < num_tokens; chunk_start += tokens_per_chunk) {
             uint32_t tokens_in_chunk = std::min(tokens_per_chunk, num_tokens - chunk_start);
 
-            cb_reserve_back(tilize_input_cb_id, tokens_per_chunk);
+            cb_tilize_input.reserve_back(tokens_per_chunk);
 
             // Read each activated token from the sparse input buffer
             for (uint32_t i = 0; i < tokens_in_chunk; i++) {
@@ -837,11 +864,11 @@ void kernel_main() {
                 // read the token from the input tensor at the tilize subtoken offset and size
                 noc_async_read(
                     get_noc_addr(token_id, input_tensor_addr_gen) + global_subtoken_offset,
-                    get_write_ptr(tilize_input_cb_id) + i * subtoken_size,
+                    cb_tilize_input.get_write_ptr() + i * subtoken_size,
                     subtoken_size);
             }
-            noc_async_read_barrier();
-            cb_push_back(tilize_input_cb_id, tokens_per_chunk);  // Push full chunk (padding is garbage, that's OK)
+            noc_obj.async_read_barrier();
+            cb_tilize_input.push_back(tokens_per_chunk);  // Push full chunk (padding is garbage, that's OK)
             num_chunks_sent++;
 
             // Wait until previous chunk arrives on the matmul cores before reading in another chunk of tokens.
@@ -860,7 +887,7 @@ void kernel_main() {
     if (is_drain_tilize_core && e_t_output_address != 0) {
         // Write e_t directly in internal format: 1 page per expert, stride-4 with (T+1) entries.
         // This matches moe_compute's output format expected by selective_reduce_combine.
-        uint32_t l1_read_addr = get_read_ptr(e_t_cb_id);
+        uint32_t l1_read_addr = cb_e_t.get_read_ptr();
         for (uint32_t e = 0; e < experts_per_device; ++e) {
             noc_async_write_page(e, e_t_output_tensor_addr_gen, l1_read_addr);
             l1_read_addr += e_t_output_page_size;
@@ -869,12 +896,12 @@ void kernel_main() {
 
     // write out per_expert_total_tokens_output_tensor
     if (is_drain_tilize_core && per_expert_total_tokens_output_tensor_address != 0) {
-        uint32_t l1_read_addr = get_read_ptr(per_expert_total_tokens_cb_id);
+        uint32_t l1_read_addr = cb_per_expert_total_tokens.get_read_ptr();
         noc_async_write_page(0, per_expert_total_tokens_output_tensor_addr_gen, l1_read_addr);
     }
 
     // Explicit write barrier for expert_activation DRAM write, e_t L1 write, and per_expert_total_tokens L1 write
     // (drain core only issued these writes)
-    noc_async_write_barrier();
-    noc_async_atomic_barrier();
+    noc_obj.async_write_barrier();
+    noc_obj.async_atomic_barrier();
 }

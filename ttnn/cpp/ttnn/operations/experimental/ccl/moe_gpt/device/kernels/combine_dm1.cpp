@@ -6,6 +6,10 @@
 #include "api/dataflow/dataflow_api.h"
 #include "moe_gpt_ring_common.h"
 
+// Legacy primitives retained (#45003 item 4): the semaphore is allocated as a raw L1 address
+// (get_semaphore + reinterpret_cast) and polled via noc_semaphore_wait_min, which Semaphore<>'s
+// wait/up wrappers don't model. The raw-pointer pattern is the only thing this kernel does.
+
 //
 // Combine destination core dm1 kernel.
 //
