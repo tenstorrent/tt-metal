@@ -11,6 +11,8 @@
 #include "api/compute/reduce.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
 template <uint32_t block_w, uint32_t num_subblocks_w, uint32_t subblock_w>
 ALWI void calc_numeric_stable(uint32_t cb_in, uint32_t cb_max_scaler, uint32_t cb_max, uint32_t cb_out) {
@@ -188,29 +190,39 @@ void kernel_main() {
 #ifdef NUMERIC_STABLE
         calc_numeric_stable<block_w, num_subblocks_w, subblock_w>(cb_in0, cb_max_scaler, cb_max, cb_exps);
 #else
-        reconfig_data_format(cb_in0, cb_in0);
-        pack_reconfig_data_format(cb_exps);
-        // exp(x)
+        // exp(x): migrated to per-subblock eltwise_chain. Each outer iter is a
+        // CopyTile + Exp + PackTile chain with subblock_w tiles read from cb_in0
+        // at offset index_subblock_w_offset.
+        //
+        // Reconfig audit: explicit reconfig_data_format(cb_in0, cb_in0) +
+        //   pack_reconfig_data_format(cb_exps) ONCE outside the outer loop —
+        //   chain emits per-call (fold-elided after first since prev == curr).
+        //   -> CopyTileReconfig::Input + PackTileReconfig::Output.
+        // Lifecycles: cb_in0 HeldBulk + Block + TileBaseRuntime(index_subblock_w_offset)
+        //   per outer iter — chain emits cb_wait_front(base + subblock_w) per call,
+        //   matching the caller's pre-pushed sharded input. cb_exps OutBulk + Block.
+        // BlockSize=1 (subblock_w is runtime; per-tile semantics).
         index_subblock_w_offset = 0;
-        copy_tile_to_dst_init_short(cb_in0);
-        exp_tile_init<EXP_APPROX>();
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
-            tile_regs_acquire();
-            for (uint32_t w = 0; w < subblock_w; w++) {
-                index = w + index_subblock_w_offset;
-                copy_tile(cb_in0, index, w);
-            }
-            cb_exps_obj.reserve_back(subblock_w);
-            for (uint32_t w = 0; w < subblock_w; w++) {
-                exp_tile<EXP_APPROX>(w);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t w = 0; w < subblock_w; w++) {
-                pack_tile(w, cb_exps);
-            }
-            tile_regs_release();
-            cb_exps_obj.push_back(subblock_w);
+            compute_kernel_lib::eltwise_chain(
+                subblock_w,
+                compute_kernel_lib::CopyTile<
+                    cb_in0,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::HeldBulk,
+                    compute_kernel_lib::OperandKind::Block,
+                    compute_kernel_lib::CopyTileReconfig::Input,
+                    compute_kernel_lib::TileBaseRuntime>{compute_kernel_lib::TileBaseRuntime{index_subblock_w_offset}},
+                compute_kernel_lib::Exp<
+                    static_cast<compute_kernel_lib::Approx>(EXP_APPROX),
+                    compute_kernel_lib::Approx::Exact,
+                    compute_kernel_lib::Dst::D0>{},
+                compute_kernel_lib::PackTile<
+                    cb_exps,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OutBulk,
+                    compute_kernel_lib::OperandKind::Block,
+                    compute_kernel_lib::PackTileReconfig::Output>{});
             index_subblock_w_offset += subblock_w;
         }
         cb_in0_obj.pop_front(block_w);
