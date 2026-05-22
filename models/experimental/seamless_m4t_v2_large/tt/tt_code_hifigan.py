@@ -24,7 +24,7 @@ not a compute fallback.
 
 from __future__ import annotations
 
-from typing import Any, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import torch
 import ttnn
@@ -58,6 +58,40 @@ def _fused_relu() -> ttnn.UnaryWithParam:
 def _fused_leaky_relu(negative_slope: float) -> ttnn.UnaryWithParam:
     """Post-conv fused LeakyReLU with HF ``negative_slope`` (block-float param on device)."""
     return ttnn.UnaryWithParam(ttnn.UnaryOpType.LEAKY_RELU, float(negative_slope))
+
+
+def _conv1d_prep_tensor_id(t: ttnn.Tensor) -> int:
+    if t.is_allocated() and t.storage_type() == ttnn.StorageType.DEVICE:
+        return int(t.buffer_address())
+    return id(t)
+
+
+def _fused_activation_token(activation: Optional[ttnn.UnaryWithParam]) -> str:
+    if activation is None:
+        return ""
+    op = activation.op_type
+    if op == ttnn.UnaryOpType.RELU:
+        return "relu"
+    if op == ttnn.UnaryOpType.LEAKY_RELU:
+        raw = getattr(activation, "params", None)
+        if raw is None:
+            raw = getattr(activation, "param", 0.0)
+        slope = float(raw[0] if hasattr(raw, "__getitem__") else raw)
+        return f"leaky:{slope}"
+    return str(op)
+
+
+def _vocoder_conv1d_config(fused_post_activation: Optional[ttnn.UnaryWithParam]) -> ttnn.Conv1dConfig:
+    conv_kwargs: dict = dict(
+        weights_dtype=ttnn.bfloat8_b,
+        shard_layout=None,
+        deallocate_activation=False,
+        enable_weights_double_buffer=True,
+        enable_act_double_buffer=True,
+    )
+    if fused_post_activation is not None:
+        conv_kwargs["activation"] = fused_post_activation
+    return ttnn.Conv1dConfig(**conv_kwargs)
 
 
 def _host_conv_out_length(n: int, kernel_size: int, stride: int, pad: int, dilation: int = 1) -> int:
@@ -103,6 +137,8 @@ class TTSeamlessM4Tv2CodeHifiGan:
         )
         self._frame_idx_cache: dict[int, ttnn.Tensor] = {}
         self._matmul_pc_cache: dict = {}
+        # Populated only by ``prewarm_conv1d_weights`` (trace/E2E). Forward without prewarm uses raw weights (PCC path).
+        self._conv1d_prepared_cache: Dict[Tuple[Any, ...], Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]] = {}
 
     def _matmul_pc(self, token_rows: int, in_dim: int, out_dim: int) -> Optional[ttnn.ProgramConfig]:
         if token_rows > MATMUL_1D_SEQ_THRESHOLD:
@@ -166,6 +202,217 @@ class TTSeamlessM4Tv2CodeHifiGan:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+    def _conv1d_prep_cache_key(
+        self,
+        *,
+        weight: ttnn.Tensor,
+        bias: Optional[ttnn.Tensor],
+        batch: int,
+        input_length: int,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int,
+        padding: int,
+        groups: int,
+        dilation: int,
+        fused_post_activation: Optional[ttnn.UnaryWithParam],
+    ) -> Tuple[Any, ...]:
+        return (
+            _conv1d_prep_tensor_id(weight),
+            _conv1d_prep_tensor_id(bias) if bias is not None else 0,
+            batch,
+            input_length,
+            in_channels,
+            out_channels,
+            kernel_size,
+            padding,
+            groups,
+            dilation,
+            _fused_activation_token(fused_post_activation),
+        )
+
+    def _prepare_conv1d_weights_for_prewarm(
+        self,
+        *,
+        weight: ttnn.Tensor,
+        bias: Optional[ttnn.Tensor],
+        batch: int,
+        input_length: int,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int,
+        padding: int,
+        groups: int = 1,
+        dilation: int = 1,
+        fused_post_activation: Optional[ttnn.UnaryWithParam] = None,
+    ) -> None:
+        """``prepare_conv_*`` + DRAM ``clone`` only — no Conv2d forward (T2U/speech-encoder recipe)."""
+        cache_key = self._conv1d_prep_cache_key(
+            weight=weight,
+            bias=bias,
+            batch=batch,
+            input_length=input_length,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            padding=padding,
+            groups=groups,
+            dilation=dilation,
+            fused_post_activation=fused_post_activation,
+        )
+        if cache_key in self._conv1d_prepared_cache:
+            return
+
+        conv_config = _vocoder_conv1d_config(fused_post_activation)
+        prep_w = ttnn.prepare_conv_weights(
+            weight_tensor=weight,
+            input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            input_layout=ttnn.ROW_MAJOR_LAYOUT,
+            weights_format="OIHW",
+            in_channels=in_channels,
+            out_channels=out_channels,
+            batch_size=batch,
+            input_height=1,
+            input_width=input_length,
+            kernel_size=(1, kernel_size),
+            stride=(1, 1),
+            padding=(0, padding),
+            dilation=(1, dilation),
+            has_bias=bias is not None,
+            groups=groups,
+            device=self.device,
+            input_dtype=ttnn.bfloat16,
+            output_dtype=ttnn.bfloat16,
+            conv_config=conv_config,
+            compute_config=self._compute,
+        )
+        prep_b = None
+        if bias is not None:
+            prep_b = ttnn.prepare_conv_bias(
+                bias_tensor=bias,
+                input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                input_layout=ttnn.ROW_MAJOR_LAYOUT,
+                in_channels=in_channels,
+                out_channels=out_channels,
+                batch_size=batch,
+                input_height=1,
+                input_width=input_length,
+                kernel_size=(1, kernel_size),
+                stride=(1, 1),
+                padding=(0, padding),
+                dilation=(1, dilation),
+                groups=groups,
+                device=self.device,
+                input_dtype=ttnn.bfloat16,
+                output_dtype=ttnn.bfloat16,
+                conv_config=conv_config,
+                compute_config=self._compute,
+            )
+        self._conv1d_prepared_cache[cache_key] = (
+            ttnn.clone(prep_w, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            ttnn.clone(prep_b, memory_config=ttnn.DRAM_MEMORY_CONFIG) if prep_b is not None else None,
+        )
+
+    def prewarm_conv1d_weights(self, *, batch: int = 1, seq: int, t_audio: int) -> None:
+        """Prepare all vocoder ``conv1d`` weights for ``(seq, t_audio)`` (host upload only, no forward).
+
+        Call before trace capture so replay avoids first-hit weight prep inside ``ttnn.conv1d``. Does not
+        change the default PCC path when this is not called.
+        """
+        dp = self.p.dur_predictor
+        c1, c2 = dp.conv1, dp.conv2
+        self._prepare_conv1d_weights_for_prewarm(
+            weight=c1.weight,
+            bias=c1.bias,
+            batch=batch,
+            input_length=seq,
+            in_channels=c1.in_channels,
+            out_channels=c1.out_channels,
+            kernel_size=c1.kernel_size,
+            padding=c1.padding,
+            fused_post_activation=_fused_relu(),
+        )
+        self._prepare_conv1d_weights_for_prewarm(
+            weight=c2.weight,
+            bias=c2.bias,
+            batch=batch,
+            input_length=seq,
+            in_channels=c2.in_channels,
+            out_channels=c2.out_channels,
+            kernel_size=c2.kernel_size,
+            padding=c2.padding,
+            fused_post_activation=_fused_relu(),
+        )
+
+        hg = self.p.hifi_gan
+        cp = hg.conv_pre
+        tlen = int(t_audio)
+        self._prepare_conv1d_weights_for_prewarm(
+            weight=cp.weight,
+            bias=cp.bias,
+            batch=batch,
+            input_length=tlen,
+            in_channels=int(cp.in_channels),
+            out_channels=int(cp.out_channels),
+            kernel_size=int(cp.kernel_size),
+            padding=int(cp.padding),
+        )
+        tlen = _host_conv_out_length(tlen, int(cp.kernel_size), 1, int(cp.padding))
+
+        for i, up_layer in enumerate(hg.upsampler):
+            k = int(up_layer["kernel_size"])
+            s = int(up_layer["stride"])
+            p = int(up_layer["padding"])
+            tlen = _host_transpose_conv_out_length(tlen, k, s, p)
+            channels = self.cfg.upsample_initial_channel // (2 ** (i + 1))
+            for j in range(self.num_kernels):
+                rb = hg.resblocks[i * self.num_kernels + j]
+                t_rb = tlen
+                for c1p, c2p in zip(rb.convs1, rb.convs2):
+                    k1 = int(c1p["kernel_size"])
+                    p1 = int(c1p["padding"])
+                    d1 = int(c1p["dilation"])
+                    self._prepare_conv1d_weights_for_prewarm(
+                        weight=c1p["weight"],
+                        bias=c1p["bias"],
+                        batch=batch,
+                        input_length=t_rb,
+                        in_channels=channels,
+                        out_channels=channels,
+                        kernel_size=k1,
+                        padding=p1,
+                        dilation=d1,
+                        fused_post_activation=_fused_leaky_relu(self.leaky_slope),
+                    )
+                    t_rb = _host_conv_out_length(t_rb, k1, 1, p1, dilation=d1)
+                    k2 = int(c2p["kernel_size"])
+                    p2 = int(c2p["padding"])
+                    d2 = int(c2p["dilation"])
+                    self._prepare_conv1d_weights_for_prewarm(
+                        weight=c2p["weight"],
+                        bias=c2p["bias"],
+                        batch=batch,
+                        input_length=t_rb,
+                        in_channels=channels,
+                        out_channels=channels,
+                        kernel_size=k2,
+                        padding=p2,
+                        dilation=d2,
+                    )
+                    t_rb = _host_conv_out_length(t_rb, k2, 1, p2, dilation=d2)
+
+        cpost = hg.conv_post
+        self._prepare_conv1d_weights_for_prewarm(
+            weight=cpost.weight,
+            bias=cpost.bias,
+            batch=batch,
+            input_length=tlen,
+            in_channels=int(cpost.in_channels),
+            out_channels=int(cpost.out_channels),
+            kernel_size=int(cpost.kernel_size),
+            padding=int(cpost.padding),
+        )
+
     def _conv1d(
         self,
         x_nlc: ttnn.Tensor,
@@ -190,23 +437,30 @@ class TTSeamlessM4Tv2CodeHifiGan:
         if x_nlc.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
             rm_buf = ttnn.to_layout(x_nlc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             x_in = rm_buf
-        conv_kwargs: dict = dict(
-            weights_dtype=ttnn.bfloat8_b,
-            shard_layout=None,
-            deallocate_activation=False,
-            enable_weights_double_buffer=True,
-            enable_act_double_buffer=True,
+        conv_config = _vocoder_conv1d_config(fused_post_activation)
+        cache_key = self._conv1d_prep_cache_key(
+            weight=weight,
+            bias=bias,
+            batch=batch,
+            input_length=input_length,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            padding=padding,
+            groups=groups,
+            dilation=dilation,
+            fused_post_activation=fused_post_activation,
         )
-        if fused_post_activation is not None:
-            conv_kwargs["activation"] = fused_post_activation
-        conv_config = ttnn.Conv1dConfig(**conv_kwargs)
+        cached = self._conv1d_prepared_cache.get(cache_key)
+        weight_tensor = cached[0] if cached is not None else weight
+        bias_tensor = cached[1] if cached is not None else bias
         out, out_len = ttnn.conv1d(
             input_tensor=x_in,
-            weight_tensor=weight,
+            weight_tensor=weight_tensor,
             in_channels=in_channels,
             out_channels=out_channels,
             device=self.device,
-            bias_tensor=bias,
+            bias_tensor=bias_tensor,
             kernel_size=kernel_size,
             stride=stride,
             padding=padding,
@@ -507,6 +761,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         cumsum_inc = ttnn.cumsum(dur_f32, dim=-1, dtype=ttnn.float32)  # [B, T_units] inclusive
         cumsum_prev = ttnn.subtract(cumsum_inc, dur_f32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(dur_f32)
+        ttnn.deallocate(dur_bf)
 
         # HiFi-GAN ``input_length`` must match HF's ``repeat_interleave`` length: total duration
         # through the index chosen by ``_get_dur_output_lengths`` — ``cumsum.gather(1, idx)`` where
@@ -559,13 +814,13 @@ class TTSeamlessM4Tv2CodeHifiGan:
         lang_BC1 = ttnn.reshape(lang_e, (batch, lang_dim, 1))
         spk_BC1 = ttnn.reshape(sp_e, (batch, spk_dim, 1))
         # Do not deallocate ``lang_e`` / ``sp_e`` here — ``reshape`` may alias them; freeing would
-        # invalidate ``lang_BC1`` / ``spk_BC1`` before ``repeat``.
-        lang_BCT = ttnn.repeat(lang_BC1, [1, 1, t_audio])
-        spk_BCT = ttnn.repeat(spk_BC1, [1, 1, t_audio])
-        # When ``t_audio == 1``, ``ttnn.repeat`` is a no-op on the last axis; the implementation may
-        # return a new tensor handle that still aliases ``lang_BC1`` / ``spk_BC1`` storage. Do not
-        # free those inputs before ``concat`` in that case.
-        if t_audio > 1:
+        # invalidate ``lang_BC1`` / ``spk_BC1`` before broadcast.
+        if t_audio == 1:
+            lang_BCT = lang_BC1
+            spk_BCT = spk_BC1
+        else:
+            lang_BCT = ttnn.repeat(lang_BC1, [1, 1, t_audio])
+            spk_BCT = ttnn.repeat(spk_BC1, [1, 1, t_audio])
             ttnn.deallocate(lang_BC1)
             ttnn.deallocate(spk_BC1)
 
@@ -586,7 +841,6 @@ class TTSeamlessM4Tv2CodeHifiGan:
         lengths = self._output_lengths_dev(t_audio, batch=batch)
         ttnn.deallocate(cumsum_inc)
         ttnn.deallocate(cumsum_prev)
-        ttnn.deallocate(dur_bf)
         return wav, lengths
 
     # ------------------------------------------------------------------------------- B > 1
