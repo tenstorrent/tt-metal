@@ -120,12 +120,14 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
     const uint32_t input_chunk_nbytes =
         effective_max_tiles_per_reduction * tt::constants::TILE_WIDTH * input_tensor.element_size();
     const uint32_t input_cb_page_size = max_tiles_per_iter * tt::constants::TILE_HW * input_tensor.element_size();
-    // Mirror compute_pool_2d's `tilize_reconfig` exactly so the reader's per-stick write stride
-    // matches the unpacker's tiles_to_reduce. We require !last_tile_is_partial — currently
-    // guaranteed by the padded-width % TILE_WIDTH == 0 check in grid_sample_device_operation.cpp —
-    // and window_size_hw (REDUCTION_SIZE=4) <= FACE_HEIGHT, which is a static property of bilinear.
+    // When the last channel chunk holds fewer than effective_max_tiles_per_reduction tiles, the
+    // reader must pack it with a tight write stride (== chunk_bytes) so the unpacker's
+    // tiles_to_reduce matches compute_pool_2d's `tilize_reconfig` path. We require
+    // !last_tile_is_partial — currently guaranteed by the padded-width % TILE_WIDTH == 0 check in
+    // grid_sample_device_operation.cpp — and window_size_hw (REDUCTION_SIZE=4) <= FACE_HEIGHT,
+    // which is a static property of bilinear.
     const bool last_tile_is_partial = (input_shape[-1] % tt::constants::TILE_WIDTH) != 0;
-    const bool tilize_reconfig_active =
+    const bool last_chunk_partial =
         (in_nblocks_c > 1) && (in_ntiles_c % effective_max_tiles_per_reduction != 0) && !last_tile_is_partial;
     const uint32_t input_cb_index_0 = cb_idx++;
     desc.cbs.push_back(CBDescriptor{
@@ -217,7 +219,7 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
         operation_attributes.align_corners ? 1U : 0U,  // ct_arg[12]: align_corners (shared)
         in_nblocks_c,                                  // ct_arg[13]: in_nblocks_c (shared)
         input_chunk_nbytes,                            // ct_arg[14]: input_chunk_nbytes (shared)
-        tilize_reconfig_active ? 1U : 0U               // ct_arg[15]: tilize_reconfig_active (shared)
+        last_chunk_partial ? 1U : 0U                   // ct_arg[15]: last_chunk_partial (shared)
     };
 
     if (is_sharded) {

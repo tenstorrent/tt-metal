@@ -300,7 +300,7 @@ template <
     uint32_t input_stick_nbytes,
     uint32_t in_nblocks_c,
     uint32_t input_chunk_nbytes,
-    bool tilize_reconfig_active,
+    bool last_chunk_partial,
     uint32_t input_cb_index,
     uint32_t scalar_cb_index,
     typename TensorAccessor,
@@ -385,10 +385,10 @@ ALWI void process_grid_point(
 
     // Iterate over channel chunks. For the common case in_nblocks_c == 1 the loop runs once and the
     // behavior matches the original non-chunked reader (chunk_bytes == input_stick_nbytes,
-    // src_byte_offset == 0, write_stride == input_stick_nbytes). tilize_reconfig_active is computed
-    // host-side using compute_pool_2d's exact condition so reader's per-stick write stride matches
-    // the unpacker's tiles_to_reduce; computing it independently here would silently diverge if the
-    // host ever lifted the padded_C % TILE_WIDTH == 0 invariant.
+    // src_byte_offset == 0, write_stride == input_stick_nbytes). last_chunk_partial is computed
+    // host-side to mirror compute_pool_2d's tile-reduce condition so the per-stick write stride
+    // matches the unpacker's tiles_to_reduce; computing it independently here would silently diverge
+    // if the host ever lifted the padded_C % TILE_WIDTH == 0 invariant.
     constexpr uint32_t last_chunk_idx = in_nblocks_c - 1;
     constexpr uint32_t partial_chunk_nbytes = input_stick_nbytes - last_chunk_idx * input_chunk_nbytes;
     constexpr uint32_t base_write_stride = (in_nblocks_c > 1) ? input_chunk_nbytes : input_stick_nbytes;
@@ -396,8 +396,7 @@ ALWI void process_grid_point(
     for (uint32_t c_i = 0; c_i < in_nblocks_c; ++c_i) {
         const uint32_t src_byte_offset = c_i * input_chunk_nbytes;
         const uint32_t chunk_bytes = (c_i == last_chunk_idx) ? partial_chunk_nbytes : input_chunk_nbytes;
-        const uint32_t write_stride =
-            (tilize_reconfig_active && c_i == last_chunk_idx) ? chunk_bytes : base_write_stride;
+        const uint32_t write_stride = (last_chunk_partial && c_i == last_chunk_idx) ? chunk_bytes : base_write_stride;
 
         input_cb.reserve_back(1);
 
