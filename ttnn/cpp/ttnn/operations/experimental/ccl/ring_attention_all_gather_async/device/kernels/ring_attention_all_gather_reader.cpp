@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include <cstdint>
@@ -41,6 +43,8 @@ constexpr uint32_t PREFETCH_PACKETS = 4;
 // (packet_size_in_pages always divides cb_num_pages evenly).
 template <typename AddrFn>
 FORCE_INLINE void prefetch_batch_read_tiles(
+    const Noc& noc_obj,
+    CircularBuffer& cb_output,
     uint32_t& tiles_read,
     uint32_t tiles_to_read,
     uint32_t cb_fifo_limit,
@@ -53,8 +57,8 @@ FORCE_INLINE void prefetch_batch_read_tiles(
         uint32_t batch_packets = std::min(remaining_packets, PREFETCH_PACKETS);
         uint32_t batch_pages = batch_packets * packet_size_in_pages;
 
-        cb_reserve_back(cb_output_id, batch_pages);
-        uint32_t l1_write_addr = get_write_ptr(cb_output_id);
+        cb_output.reserve_back(batch_pages);
+        uint32_t l1_write_addr = cb_output.get_write_ptr();
 
         for (uint32_t p = 0; p < batch_packets; p++) {
             uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
@@ -62,15 +66,18 @@ FORCE_INLINE void prefetch_batch_read_tiles(
                 if (l1_write_addr >= cb_fifo_limit) {
                     l1_write_addr -= cb_fifo_size;
                 }
+                // Legacy primitive retained (#45003 item 4): source is a precomposed uint64_t NoC address from
+                // get_noc_addr_and_advance, and the destination is a raw L1 ring-buffer write pointer that may wrap
+                // outside the CB's normal contiguous-write assumption (see header comment).
                 noc_async_read(get_noc_addr_and_advance(tiles_read), l1_write_addr, input_tensor_page_size);
                 l1_write_addr += payload_size_bytes;
                 tiles_read += contig_pages_advanced;
             }
             l1_write_addr += (packet_size_in_pages - num_pages_to_read) * input_tensor_page_size;
         }
-        noc_async_read_barrier();
+        noc_obj.async_read_barrier();
         for (uint32_t p = 0; p < batch_packets; p++) {
-            cb_push_back(cb_output_id, packet_size_in_pages);
+            cb_output.push_back(packet_size_in_pages);
         }
     }
 }
@@ -124,6 +131,9 @@ void kernel_main() {
     const uint32_t cb_fifo_limit = get_local_cb_interface(cb_output_id).fifo_limit;
     const uint32_t cb_fifo_size = get_local_cb_interface(cb_output_id).fifo_size;
 
+    Noc noc_obj;
+    CircularBuffer cb_output(cb_output_id);
+
     // Push out our local slice
     uint32_t output_tile_id_start = 0;
     // Read local slice to our buffers, before sending them over
@@ -131,9 +141,10 @@ void kernel_main() {
         uint32_t tiles_read = input_tile_id_start[input_idx];
         uint32_t tiles_to_read = input_tile_id_end[input_idx];
         for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
-            prefetch_batch_read_tiles(tiles_read, tiles_to_read, cb_fifo_limit, cb_fifo_size, [&](uint32_t tr) {
-                return input_tensor_addrgens[input_idx].get_noc_addr(output_tile_id_start + tr);
-            });
+            prefetch_batch_read_tiles(
+                noc_obj, cb_output, tiles_read, tiles_to_read, cb_fifo_limit, cb_fifo_size, [&](uint32_t tr) {
+                    return input_tensor_addrgens[input_idx].get_noc_addr(output_tile_id_start + tr);
+                });
             tiles_read = input_tile_id_start[input_idx];
             tiles_to_read = input_tile_id_end[input_idx];
             output_tile_id_start += input_tensor_Wt[input_idx] * input_tensor_Ht[input_idx];
@@ -171,6 +182,8 @@ void kernel_main() {
         // In the linear case, I expect num_targets_forward_direction slices from the right
         // In the ring case, I expect num_targets_forward_direction slices from the right (keep in mind this differs for
         // odd/even chips)
+        // Legacy primitive retained (#45003 item 4): semaphore wait_min targets a raw L1 address (program factory
+        // passes semaphore.address(), not a semaphore id), so Semaphore<> does not apply.
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), slices_received + 1);
         // Got it
         slices_received++;
@@ -215,7 +228,13 @@ void kernel_main() {
                 }
                 for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
                     prefetch_batch_read_tiles(
-                        tiles_read, tiles_to_read, cb_fifo_limit, cb_fifo_size, [&](uint32_t /* tiles_read */) {
+                        noc_obj,
+                        cb_output,
+                        tiles_read,
+                        tiles_to_read,
+                        cb_fifo_limit,
+                        cb_fifo_size,
+                        [&](uint32_t /* tiles_read */) {
                             auto addr = output_tensor_addrgens[input_idx].get_noc_addr(
                                 output_tile_id_start + row_offset + pages_read_in_row);
                             pages_read_in_row++;
@@ -235,5 +254,6 @@ void kernel_main() {
             }
         }
     }
+    // Legacy primitive retained (#45003 item 4): semaphore set on raw L1 address (not a semaphore id).
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
 }
