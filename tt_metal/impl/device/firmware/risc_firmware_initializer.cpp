@@ -6,8 +6,10 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <chrono>
 #include <future>
 #include <set>
+#include <thread>
 
 #include <enchantum/enchantum.hpp>
 #include <tracy/Tracy.hpp>
@@ -34,6 +36,7 @@
 #include "fabric/fabric_context.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include "tt_align.hpp"
+#include <umd/device/types/blackhole_eth.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
@@ -164,6 +167,19 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
 
         for (tt::ChipId device_id : device_ids) {
             ClearNocData(descriptor_->env_impl(), device_id);
+            // Wait for base FW to finish its eth_init() on all idle ETH cores before
+            // asserting reset (otherwise we could kill it mid-init)
+            for (const auto& eth_core : this->get_control_plane_().get_inactive_ethernet_cores(device_id)) {
+                CoreCoord virtual_core =
+                    cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
+                if (!wait_for_eth_fw_ready(device_id, virtual_core)) {
+                    TT_THROW(
+                        "Device {}: eth base firmware not ready on core ({},{}), cannot proceed with reset",
+                        device_id,
+                        virtual_core.x,
+                        virtual_core.y);
+                }
+            }
             reset_cores(device_id);
             initialize_and_launch_firmware(device_id);
         }
@@ -364,7 +380,7 @@ void RiscFirmwareInitializer::terminate_active_ethernet_cores_on_all_chips() {
             CoreCoord virtual_core =
                 cluster_.get_virtual_coordinate_from_logical_coordinates(chip_id, logical_core, CoreType::ETH);
             uint32_t rd_ptr = 0;
-            cluster_.read_core(&rd_ptr, sizeof(rd_ptr), tt_cxy_pair(chip_id, virtual_core), rd_ptr_addr);
+            cluster_.read_reg(&rd_ptr, tt_cxy_pair(chip_id, virtual_core), rd_ptr_addr);
             rd_ptr &= (dev_msgs::launch_msg_buffer_num_entries - 1);
             DeviceAddr launch_slot_addr = launch_base_addr + (rd_ptr * launch_msg_size);
             cluster_.read_core(
@@ -698,8 +714,9 @@ bool RiscFirmwareInitializer::erisc_app_still_running(tt::ChipId device_id, Core
         "Invalid core {} for context switch check",
         virtual_core.str());
     std::uint32_t launch_erisc_addr = get_active_erisc_launch_flag_addr();
-    auto data = cluster_.read_core(device_id, virtual_core, launch_erisc_addr, sizeof(std::uint32_t));
-    return (data[0] != 0);
+    uint32_t launch_flag = 0;
+    cluster_.read_reg(&launch_flag, tt_cxy_pair(device_id, virtual_core), launch_erisc_addr);
+    return (launch_flag != 0);
 }
 
 void RiscFirmwareInitializer::erisc_send_exit_signal(tt::ChipId device_id, CoreCoord virtual_core, bool is_idle_eth) {
@@ -719,6 +736,80 @@ void RiscFirmwareInitializer::erisc_send_exit_signal(tt::ChipId device_id, CoreC
     if (!is_idle_eth) {
         std::vector<uint32_t> clear_flag_data = {0};
         cluster_.write_core_immediate(device_id, virtual_core, clear_flag_data, get_active_erisc_launch_flag_addr());
+    }
+}
+
+// TODO: this can be removed once base FW removes interrupts entirely.
+void RiscFirmwareInitializer::disable_eth_interrupts(tt::ChipId device_id, const CoreCoord& virtual_core) {
+    // We only switch back to base FW on active eth cores; on idle eth nothing can re-enable
+    // these interrupts after we zero them. Guard against misuse on active eth.
+    const auto logical_core = cluster_.get_logical_ethernet_core_from_virtual(device_id, virtual_core);
+    TT_ASSERT(
+        !this->get_control_plane_().get_active_ethernet_cores(device_id).contains(logical_core),
+        "disable_eth_interrupts must only be called on idle eth cores (device {}, virtual core {})",
+        device_id,
+        virtual_core.str());
+
+    const uint32_t zero = 0;
+    const auto base = hal_.get_eth_interrupt_mode_base_reg();
+    const auto num_vecs = hal_.get_eth_interrupt_num_vecs();
+    for (uint32_t i = 0; i < num_vecs; i++) {
+        cluster_.write_reg(&zero, tt_cxy_pair(device_id, virtual_core), base + (4 * i));
+    }
+}
+
+// TODO: this can be removed once the base-FW readiness check is lowered into UMD.
+bool RiscFirmwareInitializer::wait_for_eth_fw_ready(
+    tt::ChipId device_id, const CoreCoord& virtual_core, int timeout_ms) {
+    // skip for Non-BH archs and simulation (which has no base FW running)
+    if (cluster_.arch() != ARCH::BLACKHOLE || rtoptions_.get_simulator_enabled()) {
+        return true;
+    }
+    constexpr auto k_sleep_time = std::chrono::microseconds{100};
+    // Note: get_eth_fw_mailbox_val is hardcoded to the ACTIVE_ETH HAL slot, but we call this
+    // for idle eth cores too. Works because active and idle eth share the same underlying
+    // memory map.
+    const uint32_t postcode_addr = hal_.get_eth_fw_mailbox_val(FWMailboxMsg::POSTCODE);
+
+    const auto start_time = std::chrono::steady_clock::now();
+
+    while (true) {
+        uint32_t postcode = 0;
+        cluster_.read_reg(&postcode, tt_cxy_pair(device_id, virtual_core), postcode_addr);
+
+        if (postcode == tt::umd::blackhole::POSTCODE_ETH_INIT_PASS ||
+            postcode == tt::umd::blackhole::POSTCODE_ETH_INIT_FAIL ||
+            postcode == tt::umd::blackhole::POSTCODE_ETH_INIT_SKIP) {
+            log_debug(
+                tt::LogMetal,
+                "Device {}: eth base FW ready on core ({},{}) postcode={:#010x} (waited {}ms)",
+                device_id,
+                virtual_core.x,
+                virtual_core.y,
+                postcode,
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start_time)
+                    .count());
+            return true;
+        }
+
+        const auto elapsed =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start_time)
+                .count();
+
+        if (elapsed > timeout_ms) {
+            log_warning(
+                tt::LogMetal,
+                "Device {}: Timed out ({}ms) waiting for eth base firmware ready on core ({},{}). "
+                "Last postcode: {:#010x}",
+                device_id,
+                timeout_ms,
+                virtual_core.x,
+                virtual_core.y,
+                postcode);
+            return false;
+        }
+
+        std::this_thread::sleep_for(k_sleep_time);
     }
 }
 
@@ -923,9 +1014,8 @@ void RiscFirmwareInitializer::initialize_firmware(
                 launch_addr);
             cluster_.write_core(go_msg.data(), go_msg.size(), tt_cxy_pair(device_id, virtual_core), go_addr);
             uint32_t zero = 0;
-            cluster_.write_core(
-                &zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), launch_msg_buffer_read_ptr_addr);
-            cluster_.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), go_message_index_addr);
+            cluster_.write_reg(&zero, tt_cxy_pair(device_id, virtual_core), launch_msg_buffer_read_ptr_addr);
+            cluster_.write_reg(&zero, tt_cxy_pair(device_id, virtual_core), go_message_index_addr);
         } else {
             cluster_.noc_multicast_write(
                 init_launch_msg_data.data(),
@@ -1044,9 +1134,13 @@ void RiscFirmwareInitializer::initialize_firmware(
 
             if (hal_.get_eth_fw_is_cooperative() || core_type != HalProgrammableCoreType::ACTIVE_ETH ||
                 !rtoptions_.get_enable_2_erisc_mode()) {
-                cluster_.write_core(
+                if (is_idle_eth) {
+                    // Disable all ERISC interrupts on idle eth: base FW interrupts can corrupt PC when
+                    // we switch to runtime FW. Must happen before we write PC and deassert.
+                    disable_eth_interrupts(device_id, virtual_core);
+                }
+                cluster_.write_reg(
                     &jit_build_config.fw_launch_addr_value,
-                    sizeof(uint32_t),
                     tt_cxy_pair(device_id, virtual_core),
                     jit_build_config.fw_launch_addr);
             } else {
@@ -1096,9 +1190,8 @@ void RiscFirmwareInitializer::initialize_firmware(
             cluster_.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), go_message_index_addr);
 
             // Write reset PC (register address, no L1 NOC offset needed)
-            cluster_.write_core(
+            cluster_.write_reg(
                 &jit_build_config.fw_launch_addr_value,
-                sizeof(uint32_t),
                 tt_cxy_pair(device_id, virtual_core),
                 jit_build_config.fw_launch_addr);
             break;
@@ -1246,7 +1339,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
 
         tt::umd::RiscType reset_val;
         if (cluster_.arch() == ARCH::QUASAR) {
-            reset_val = tt::umd::RiscType::ALL_NEO_DMS;
+            reset_val = tt::umd::RiscType::ALL;
         } else {
             reset_val = tt::umd::RiscType::BRISC;
             if (multi_risc_active_eth_cores.contains(worker_core)) {

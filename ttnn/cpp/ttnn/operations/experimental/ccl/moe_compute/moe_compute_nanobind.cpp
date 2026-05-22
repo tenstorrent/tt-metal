@@ -21,14 +21,15 @@ void bind_moe_compute(nb::module_& mod) {
     // Bind the activation function enum
     nb::enum_<ttnn::experimental::prim::detail::MoEActivationFunction>(mod, "MoEActivationFunction")
         .value("SILU", ttnn::experimental::prim::detail::MoEActivationFunction::SILU)
-        .value("SWIGLU", ttnn::experimental::prim::detail::MoEActivationFunction::SWIGLU);
+        .value("SWIGLU", ttnn::experimental::prim::detail::MoEActivationFunction::SWIGLU)
+        .value("GELU", ttnn::experimental::prim::detail::MoEActivationFunction::GELU);
     ttnn::bind_function<"moe_compute", "ttnn.experimental.">(
         mod,
         R"doc(
         Experimental fused MoE compute supporting arbitrary ``(hidden_size, intermediate_size)`` pairs.
 
         This operation performs the expert matmuls (gate/up projection via W0/W1, down
-        projection via W2) and activation (SILU or SwiGLU) in a fused compute kernel.
+        projection via W2) and activation (SILU, SwiGLU, or GELU) in a fused compute kernel.
         Tile distribution across the 12-core ring is derived at compile time from
         ``hidden_size`` and ``intermediate_size`` using Euclidean-rhythm (Bresenham)
         shard formulas — no model-specific configuration tables are needed.
