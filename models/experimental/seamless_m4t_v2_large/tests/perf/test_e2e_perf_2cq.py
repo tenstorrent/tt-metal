@@ -88,7 +88,7 @@ _TASKS: Dict[str, Tuple[bool, str, bool]] = {
     "asr": (True, "eng", False),
 }
 
-# Measured E2E global batches/s (same units as logged ``FPS``) for ``prep_perf_report`` expected latency.
+# Expected E2E throughput (batches/s) for ``prep_perf_report`` latency bounds.
 _EXPECTED_E2E_THROUGHPUT_FPS: Dict[str, float] = {
     "t2tt": 54.94,
     "s2tt": 22.92,
@@ -527,7 +527,9 @@ def _make_generate_fn(
         pad_token_id=int(pad_token_id),
         eos_token_id=eos_token_id,
         use_kv_cache=True,
-        use_decode_trace=True,
+        # Decode trace capture leaves an active trace region; 2CQ ``pipeline.compile`` then fails
+        # with "Tensor is not allocated". Demo uses the same eager decode path.
+        use_decode_trace=False,
         prewarm_conv1d_weights=True,
     )
 
@@ -769,9 +771,7 @@ def test_seamless_m4t_v2_large_e2e_perf_2cq(
         )
 
 
-# Autoregressive ``generate`` is far slower per iteration than single-prefill ``forward``
-# (decoder loop + per-step EOS readback + for speech: host T2U→vocoder remap). These bounds
-# are intentionally loose; tighten once a steady baseline is established on hardware.
+# ``generate()`` E2E bounds (autoregressive loop + speech path); loose until tuned per hardware.
 _GENERATE_MAX_NEW_TOKENS: int = 48
 _EXPECTED_GENERATE_E2E_THROUGHPUT_FPS: Dict[str, float] = {
     "t2tt": 0.5,
@@ -803,8 +803,8 @@ def test_seamless_m4t_v2_large_e2e_perf_2cq_generate(
 
     The 2CQ overlap helps with host→device transfers between iterations, but per-step host scalar
     readbacks for the EOS check (and the speech-path host remap before the vocoder) serialise
-    most of the in-iteration work — the measured FPS is therefore full E2E generation FPS, not
-    per-prefill FPS. ``l1_small_size=65536`` matches the demo (32 KiB is fine for text-only but
+    most of the in-iteration work — reported FPS is full E2E generation, not per-prefill.
+    ``l1_small_size=65536`` matches the demo (32 KiB is fine for text-only but
     too tight for the speech-encoder → T2U → vocoder chain on s2st).
     """
     with mesh_default_device(mesh_device):

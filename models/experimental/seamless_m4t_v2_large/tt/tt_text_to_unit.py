@@ -1044,9 +1044,7 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
     def prewarm_conv1d_weights(self, *, char_len: int, padded_unit_seq: int) -> None:
         """Prepare conv1d weights for duration + decoder stacks (host upload only, no Conv2d forward).
 
-        Call before trace capture so replay avoids ``CloneOperation`` + illegal host writes on the
-        first decoder conv per layer.  Unlike the reverted ``warmup_conv1d_cache``, this does **not**
-        run a dummy forward through Conv2d (that doubled device time in exp1).
+        Call before trace capture so replay avoids first-hit weight prep inside ``ttnn.conv1d``.
         """
         batch = 1
         p = self.parameters.decoder.duration_predictor
@@ -1572,12 +1570,8 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         for j in range(char_len):
             if j < len(char_pad_valid_host) and char_pad_valid_host[j] < 0.5:
                 dur_list[j] = 0
-        # Drain the device profiler buffer at the natural encoder/decoder boundary.  The
-        # duration readback above already syncs host<->device, so this adds no extra wait
-        # in profiler builds and compiles to a no-op in normal builds.  Without it, the
-        # 12000-marker on-device buffer overflows on a full forward (~1300 ops) and
-        # ``python -m tracy`` fails post-run with "Op N not present in cpp_device_perf_report".
         if not trace_no_profiler:
+            # Drain profiler when tracing (no-op otherwise).
             ttnn.ReadDeviceProfiler(self.device)
 
         unit_frame_f32 = tb.unit_frame_idx_f32 if full_trace_prebuf else None

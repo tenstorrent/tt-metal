@@ -17,7 +17,6 @@ Tests::
 from __future__ import annotations
 
 from contextlib import contextmanager
-from typing import Optional
 
 import pytest
 import torch
@@ -224,23 +223,6 @@ def from_torch_bfloat16_tile(
         mesh_mapper=mesh_mapper(device),
     )
     return ttnn.to_device(host, device, memory_config=memory_config)
-
-
-def from_torch_bfloat16_rm(
-    device: ttnn.Device,
-    t: torch.Tensor,
-    *,
-    memory_config: Optional[ttnn.MemoryConfig] = None,
-) -> ttnn.Tensor:
-    mem = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
-    return ttnn.from_torch(
-        t.to(torch.bfloat16).cpu().contiguous(),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=mem,
-        mesh_mapper=mesh_mapper(device),
-    )
 
 
 # ---------------------------------------------------------------------------
