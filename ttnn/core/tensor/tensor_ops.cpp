@@ -136,25 +136,98 @@ void copy_to_device(
     GraphTracker::instance().track_function_end(device_tensor);
 }
 
+namespace {
+
+// Builds the single-core H2D program that consumes one socket and drains into one device
+// buffer. Centralised here so the multi-device path (B5..B8) can build N of these and add
+// them to one MeshWorkload without duplicating CB / CT-arg wiring.
+//
+// CT-arg layout (must stay in sync with fused_h2d_receiver_embedding.cpp):
+//   [0] socket_config_addr
+//   [1] socket_page_size
+//   [2] num_socket_pages
+//   [3] output_tensor_addr
+//   [4] output_tensor_page_size
+//   [5] pages_per_chunk
+//   [6] scratch_buffer_cb_index
+//   [7..] TensorAccessorArgs
+Program build_h2d_program(
+    const Buffer& device_buffer,
+    const CoreCoord& recv_core,
+    uint32_t socket_config_buffer_address,
+    uint32_t socket_page_size,
+    uint32_t num_socket_pages,
+    uint32_t tensor_page_size,
+    uint32_t pages_per_chunk,
+    DataType dtype) {
+    auto program = CreateProgram();
+
+    constexpr tt::CBIndex scratch_cb_index = tt::CBIndex::c_0;
+    auto cb_cfg = CircularBufferConfig(socket_page_size, {{scratch_cb_index, datatype_to_dataformat_converter(dtype)}})
+                      .set_page_size(scratch_cb_index, socket_page_size);
+    CreateCircularBuffer(program, recv_core, cb_cfg);
+
+    auto tensor_accessor_args = TensorAccessorArgs(device_buffer);
+    auto tensor_accessor_compile_args = tensor_accessor_args.get_compile_time_args();
+
+    std::vector<uint32_t> xfer_compile_args = {
+        socket_config_buffer_address,
+        socket_page_size,
+        num_socket_pages,
+        static_cast<uint32_t>(device_buffer.address()),
+        tensor_page_size,
+        pages_per_chunk,
+        static_cast<uint32_t>(scratch_cb_index)};
+    xfer_compile_args.insert(
+        xfer_compile_args.end(), tensor_accessor_compile_args.begin(), tensor_accessor_compile_args.end());
+
+    CreateKernel(
+        program,
+        "models/demos/deepseek_v3_b1/micro_ops/host_io/kernels/fused_h2d_receiver_embedding.cpp",
+        recv_core,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = xfer_compile_args});
+
+    return program;
+}
+
+// Per-shard state carried from the plan-build phase (B5) through workload assembly (B7)
+// and the host write loop (B9). Coords are intentionally not cached here -- they're cheap
+// to re-derive from `socket->get_active_cores()[0]` and keeping a single source of truth
+// (the socket itself) avoids invariants drifting out of sync.
+struct SocketShardInfo {
+    distributed::H2DSocket* socket = nullptr;
+    HostBuffer host_shard;                  // owns the bytes destined for this device
+    const Buffer* device_buffer = nullptr;  // per-coord device buffer
+};
+
+}  // namespace
+
 void copy_tensor_over_socket(
     const Tensor& host_tensor,
     Tensor& device_tensor,
     std::vector<distributed::H2DSocket*> sockets,
     uint32_t scratch_cb_size_bytes) {
-    // Launch H2D mesh workload here using sockets
-    // Issue a socket write to each device
-    // Tear serice down
-
-    // In reality: Launch meshworkload once with H2D kernel
-    // Allow multiple writes
-    TT_FATAL(sockets.size() == 1, "Only one socket is supported for now");
-    TT_FATAL(sockets[0] != nullptr, "Socket pointer must not be null");
-    auto& socket = *sockets[0];
+    // ------------------------------------------------------------------------------------
+    // B1: socket vector validation. Per-socket nullptr / device-match checks live in a loop
+    //     so the same validation surface scales 1..N sockets.
+    // ------------------------------------------------------------------------------------
+    TT_FATAL(!sockets.empty(), "At least one socket must be provided");
+    for (auto* sock : sockets) {
+        TT_FATAL(sock != nullptr, "Socket pointer must not be null");
+        TT_FATAL(
+            sock->get_mesh_device() == device_tensor.device(),
+            "socket and device_tensor are on different mesh devices");
+    }
 
     TT_FATAL(device_tensor.buffer() != nullptr, "device_tensor is not allocated");
-    TT_FATAL(
-        device_tensor.device() == socket.get_mesh_device(), "device_tensor and socket must be on the same mesh device");
 
+    // ------------------------------------------------------------------------------------
+    // B3: per-spec hoisting. Every device in the mesh shares one TensorSpec, so the chunk
+    //     picker runs once here and the result is reused for every socket in B5..B9.
+    // ------------------------------------------------------------------------------------
     const uint32_t tensor_page_size = device_tensor.buffer()->page_size();
     const uint32_t tensor_num_pages = device_tensor.buffer()->num_pages();
     TT_FATAL(tensor_page_size > 0, "device_tensor page size must be > 0");
@@ -185,8 +258,9 @@ void copy_tensor_over_socket(
 
     log_debug(
         tt::LogOp,
-        "copy_tensor_over_socket: tensor_pages={} tensor_page_size={} B "
+        "copy_tensor_over_socket: num_sockets={} tensor_pages={} tensor_page_size={} B "
         "scratch_cb_budget={} B -> socket_page_size={} B pages_per_chunk={} num_socket_pages={}",
+        sockets.size(),
         tensor_num_pages,
         tensor_page_size,
         scratch_cb_size_bytes,
@@ -194,91 +268,116 @@ void copy_tensor_over_socket(
         pages_per_chunk,
         num_socket_pages);
 
-    // Step 4: assert that the host buffer's encoded bytes match the device buffer's physical
-    // bytes. This kills the "logical vs physical size" class of bug (TILE padding, block-float
-    // encoding, etc.) before we touch the device.
-    auto host_buf = tt::tt_metal::host_buffer::get_host_buffer(host_tensor);
-    auto data_span = host_buf.view_bytes();
+    // ------------------------------------------------------------------------------------
+    // B2: access the distributed host buffer directly (no implicit single-shard collapse).
+    // ------------------------------------------------------------------------------------
+    TT_FATAL(host_tensor.storage_type() == StorageType::HOST, "host_tensor must be a host tensor");
+    const auto& host_mesh_tensor = host_tensor.host_storage().host_tensor();
+    TT_FATAL(
+        host_mesh_tensor.tensor_spec() == device_tensor.tensor_spec(),
+        "host_tensor and device_tensor specs must match");
+    const auto& dhb = host_mesh_tensor.buffer();
+    const auto& mesh_buffer = device_tensor.mesh_buffer();
     const uint64_t total_physical_bytes =
         static_cast<uint64_t>(tensor_num_pages) * static_cast<uint64_t>(tensor_page_size);
-    TT_FATAL(
-        data_span.size() == total_physical_bytes,
-        "Host encoded bytes ({}) != device physical bytes ({} pages * {} B = {} B)",
-        data_span.size(),
-        tensor_num_pages,
-        tensor_page_size,
-        total_physical_bytes);
 
-    auto xfer_program = CreateProgram();
-    socket.set_page_size(socket_page_size);
+    // ------------------------------------------------------------------------------------
+    // B5: build the per-socket plan. For each socket: validate, look up the matching host
+    //     shard and per-coord device buffer, assert physical size match, dedupe coords.
+    // ------------------------------------------------------------------------------------
+    std::vector<SocketShardInfo> shards;
+    shards.reserve(sockets.size());
+    std::set<distributed::MeshCoordinate> seen_coords;
 
-    auto tensor_accessor_args = TensorAccessorArgs(*device_tensor.buffer());
-    auto tensor_accessor_compile_args = tensor_accessor_args.get_compile_time_args();
+    for (auto* sock : sockets) {
+        const auto active_cores = sock->get_active_cores();
+        TT_FATAL(!active_cores.empty(), "socket has no active cores");
+        const auto& core = active_cores[0];
 
-    tt::CBIndex scratch_cb_index = tt::CBIndex::c_0;
+        TT_FATAL(
+            seen_coords.insert(core.device_coord).second, "Multiple sockets target device coord {}", core.device_coord);
 
-    auto cb_scratch_buffer_config =
-        CircularBufferConfig(
-            socket_page_size,
-            {{scratch_cb_index, tt::tt_metal::datatype_to_dataformat_converter(device_tensor.dtype())}})
-            .set_page_size(scratch_cb_index, socket_page_size);
-    CreateCircularBuffer(xfer_program, socket.get_active_cores()[0].core_coord, cb_scratch_buffer_config);
+        TT_FATAL(
+            dhb.is_local(core.device_coord),
+            "host tensor has no local shard for socket's device coord {}",
+            core.device_coord);
+        auto shard_opt = dhb.get_shard(core.device_coord);
+        TT_FATAL(shard_opt.has_value(), "host shard for coord {} is not populated", core.device_coord);
 
-    // CT-arg layout (must stay in sync with fused_h2d_receiver_embedding.cpp):
-    //   [0] socket_config_addr
-    //   [1] socket_page_size
-    //   [2] num_socket_pages
-    //   [3] output_tensor_addr
-    //   [4] output_tensor_page_size
-    //   [5] pages_per_chunk
-    //   [6] scratch_buffer_cb_index
-    //   [7..] TensorAccessorArgs
-    std::vector<uint32_t> xfer_compile_args = {
-        static_cast<uint32_t>(socket.get_config_buffer_address()),
-        static_cast<uint32_t>(socket_page_size),
-        static_cast<uint32_t>(num_socket_pages),
-        static_cast<uint32_t>(device_tensor.buffer()->address()),
-        static_cast<uint32_t>(tensor_page_size),
-        static_cast<uint32_t>(pages_per_chunk),
-        static_cast<uint32_t>(scratch_cb_index)};
+        const Buffer* dbuf = mesh_buffer.get_device_buffer(core.device_coord);
+        TT_FATAL(dbuf != nullptr, "device buffer missing for coord {}", core.device_coord);
 
-    xfer_compile_args.insert(
-        xfer_compile_args.end(), tensor_accessor_compile_args.begin(), tensor_accessor_compile_args.end());
+        auto shard_span = shard_opt->view_bytes();
+        TT_FATAL(
+            shard_span.size() == total_physical_bytes,
+            "Host shard at coord {} has {} B, expected {} ({} pages * {} B)",
+            core.device_coord,
+            shard_span.size(),
+            total_physical_bytes,
+            tensor_num_pages,
+            tensor_page_size);
 
-    CreateKernel(
-        xfer_program,
-        "models/demos/deepseek_v3_b1/micro_ops/host_io/kernels/fused_h2d_receiver_embedding.cpp",
-        socket.get_active_cores()[0].core_coord,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = xfer_compile_args});
-
-    auto mesh_workload = distributed::MeshWorkload();
-    mesh_workload.add_program(
-        distributed::MeshCoordinateRange(socket.get_active_cores()[0].device_coord), std::move(xfer_program));
-    EnqueueMeshWorkload(device_tensor.device()->mesh_command_queue(), mesh_workload, false);
-
-    // Step 8: paced socket writes. H2DSocket::write enforces num_pages*page_size <= fifo_size
-    // per call (single-shot fit, not chunked-internally), so for transfers larger than one
-    // FIFO we must loop and let reserve_bytes() block on device acks. Writing one socket page
-    // per call is the simplest correct pacing; per-call overhead is negligible compared to
-    // the actual PCIe traffic. The invariant below is implied by the step 4 check but
-    // documents the contract with socket.write.
-    const uint64_t total_socket_bytes =
-        static_cast<uint64_t>(num_socket_pages) * static_cast<uint64_t>(socket_page_size);
-    TT_FATAL(
-        data_span.size() == total_socket_bytes,
-        "Host bytes ({}) must equal num_socket_pages * socket_page_size ({} * {} = {})",
-        data_span.size(),
-        num_socket_pages,
-        socket_page_size,
-        total_socket_bytes);
-
-    auto* base = const_cast<std::byte*>(data_span.data());
-    for (uint32_t i = 0; i < num_socket_pages; ++i) {
-        socket.write(base + static_cast<size_t>(i) * socket_page_size, /*num_pages=*/1);
+        shards.push_back(SocketShardInfo{
+            .socket = sock,
+            .host_shard = std::move(*shard_opt),
+            .device_buffer = dbuf,
+        });
     }
+
+    // ------------------------------------------------------------------------------------
+    // B6: configure each socket's page size.
+    // ------------------------------------------------------------------------------------
+    for (auto& s : shards) {
+        s.socket->set_page_size(socket_page_size);
+    }
+
+    // ------------------------------------------------------------------------------------
+    // B7: build one Program per shard via the helper; add each to a single MeshWorkload.
+    //     Coords are re-derived from the socket here (called once per program build, which
+    //     is dwarfed by CB / kernel compilation cost).
+    // ------------------------------------------------------------------------------------
+    auto mesh_workload = distributed::MeshWorkload();
+    for (auto& s : shards) {
+        const auto core = s.socket->get_active_cores()[0];
+        auto program = build_h2d_program(
+            *s.device_buffer,
+            core.core_coord,
+            s.socket->get_config_buffer_address(),
+            socket_page_size,
+            num_socket_pages,
+            tensor_page_size,
+            pages_per_chunk,
+            device_tensor.dtype());
+        mesh_workload.add_program(distributed::MeshCoordinateRange(core.device_coord), std::move(program));
+    }
+
+    // ------------------------------------------------------------------------------------
+    // B8: single non-blocking enqueue covering every recv coord.
+    // ------------------------------------------------------------------------------------
+    EnqueueMeshWorkload(device_tensor.device()->mesh_command_queue(), mesh_workload, /*blocking=*/false);
+
+    // ------------------------------------------------------------------------------------
+    // B9: page-major host write loop. Send page i to every socket, then page i+1, etc., so
+    //     all device kernels can start progressing on the first round. H2DSocket::write
+    //     enforces num_pages*page_size <= fifo_size per call, so we pass num_pages=1; the
+    //     host blocks naturally inside reserve_bytes() when a FIFO fills up.
+    // ------------------------------------------------------------------------------------
+    std::vector<std::byte*> bases;
+    bases.reserve(shards.size());
+    for (auto& s : shards) {
+        bases.push_back(s.host_shard.view_bytes().data());
+    }
+
+    for (uint32_t i = 0; i < num_socket_pages; ++i) {
+        const size_t offset = static_cast<size_t>(i) * socket_page_size;
+        for (size_t s = 0; s < shards.size(); ++s) {
+            shards[s].socket->write(bases[s] + offset, /*num_pages=*/1);
+        }
+    }
+
+    // ------------------------------------------------------------------------------------
+    // B10: single drain of the mesh CQ. Waits for every per-device program to finish.
+    // ------------------------------------------------------------------------------------
     distributed::Finish(device_tensor.device()->mesh_command_queue());
 }
 
