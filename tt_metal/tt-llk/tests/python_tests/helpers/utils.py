@@ -305,9 +305,13 @@ def passed_test(
 
     if output_data_format == DataFormat.Bfp4_b:
         ulp = custom_bfp4_max_ulp_diff if custom_bfp4_max_ulp_diff is not None else 1
-        is_valid = _bfp_block_aware_compare(golden_tensor, res_tensor, mantissa_bits=3, max_ulp_diff=ulp)
+        is_valid = _bfp_block_aware_compare(
+            golden_tensor, res_tensor, mantissa_bits=3, max_ulp_diff=ulp
+        )
     elif output_data_format == DataFormat.Bfp2_b:
-        is_valid = _bfp_block_aware_compare(golden_tensor, res_tensor, mantissa_bits=1, max_ulp_diff=1)
+        is_valid = _bfp_block_aware_compare(
+            golden_tensor, res_tensor, mantissa_bits=1, max_ulp_diff=1
+        )
     else:
         is_close = torch.isclose(
             golden_tensor, res_tensor, rtol=tolerance.rtol, atol=tolerance.atol
@@ -418,7 +422,9 @@ def passed_test(
     elif output_data_format == DataFormat.Bfp4_b:
         target_pcc = 0.97
     elif output_data_format == DataFormat.Bfp2_b:
-        target_pcc = 0.90  # Bfp2_b has only 1 mantissa bit; precision is severely limited
+        target_pcc = (
+            0.90  # Bfp2_b has only 1 mantissa bit; precision is severely limited
+        )
     elif output_data_format == DataFormat.MxFp4:
         target_pcc = 0.95  # MxFp4 E2M1 has very limited precision (only 8 positive and 8 negative representable values)
 

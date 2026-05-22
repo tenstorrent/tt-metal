@@ -2303,7 +2303,10 @@ class EltwiseBinaryGolden(FidelityMasking):
         def _src_reg_format(fmt):
             if fmt is None:
                 return None
-            if fmt in (DataFormat.Bfp4_b, DataFormat.Bfp8_b, DataFormat.Bfp2_b) or fmt.is_mx_format():
+            if (
+                fmt in (DataFormat.Bfp4_b, DataFormat.Bfp8_b, DataFormat.Bfp2_b)
+                or fmt.is_mx_format()
+            ):
                 return DataFormat.Float16_b
             return fmt
 
