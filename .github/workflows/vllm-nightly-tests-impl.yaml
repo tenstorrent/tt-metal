@@ -43,6 +43,43 @@ jobs:
           # Harry Andrews (U08TJ70UFRT), Stuti Raizada (U06F3ER8X9A) - GPT-OSS
 
           # Note: This matrix must be kept in sync with the original static matrix
+          #
+          # The two Gemma4-31B vLLM entries below are temporarily disabled —
+          # vLLM auto-sizes the KV cache to fill available memory and OOMs at
+          # server startup on both 1x4 (BH-QB-GE) and 1x8 (WH-T3K) when the
+          # cache is at unquantized bfloat16. The model itself works on the
+          # same mesh shapes via the gemma4 unit / e2e tests (which set a
+          # bounded PagedAttentionConfig). Re-enable once KV cache
+          # quantization lands — TODO: file follow-up issue.
+          #
+          # Disabled entries preserved verbatim for the re-enable:
+          #
+          #   {
+          #     "name": "[WH-T3K] Gemma4-31B",
+          #     "model": "google/gemma-4-31B-it",
+          #     "server-timeout": 45,
+          #     "benchmark-timeout": 5,
+          #     "runner-label": "config-t3000",
+          #     "arch": "arch-wormhole_b0",
+          #     "mesh-device": "T3K",
+          #     "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
+          #     "additional-server-args": "--async-scheduling",
+          #     "multimodal": false,
+          #     "owner_id": "U08TJ70UFRT"
+          #   },
+          #   {
+          #     "name": "[BH-QB-GE] Gemma4-31B",
+          #     "model": "google/gemma-4-31B-it",
+          #     "server-timeout": 20,
+          #     "benchmark-timeout": 5,
+          #     "runner-label": "BH-QB-GE",
+          #     "arch": "arch-blackhole",
+          #     "mesh-device": "P150x4",
+          #     "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
+          #     "additional-server-args": "--async-scheduling",
+          #     "multimodal": false,
+          #     "owner_id": "U08TJ70UFRT"
+          #   }
           all_tests='[
             {
               "name": "[WH-T3K] Gemma3-27B",
@@ -104,32 +141,6 @@ jobs:
               "name": "[BH-QB-GE] Gemma4-26B-A4B",
               "model": "google/gemma-4-26B-A4B-it",
               "server-timeout": 15,
-              "benchmark-timeout": 5,
-              "runner-label": "BH-QB-GE",
-              "arch": "arch-blackhole",
-              "mesh-device": "P150x4",
-              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
-              "additional-server-args": "--async-scheduling",
-              "multimodal": false,
-              "owner_id": "U08TJ70UFRT"
-            },
-            {
-              "name": "[WH-T3K] Gemma4-31B",
-              "model": "google/gemma-4-31B-it",
-              "server-timeout": 45,
-              "benchmark-timeout": 5,
-              "runner-label": "config-t3000",
-              "arch": "arch-wormhole_b0",
-              "mesh-device": "T3K",
-              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
-              "additional-server-args": "--async-scheduling",
-              "multimodal": false,
-              "owner_id": "U08TJ70UFRT"
-            },
-            {
-              "name": "[BH-QB-GE] Gemma4-31B",
-              "model": "google/gemma-4-31B-it",
-              "server-timeout": 20,
               "benchmark-timeout": 5,
               "runner-label": "BH-QB-GE",
               "arch": "arch-blackhole",
