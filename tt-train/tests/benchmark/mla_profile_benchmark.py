@@ -81,6 +81,12 @@ STAGE_ORDER = [
     "output_projection",
 ]
 
+BACKWARD_STAGE_ORDER = [
+    "autograd_forward",
+    "backward",
+    "forward_backward",
+]
+
 
 def _make_config(case: MLACase) -> DeepSeekConfig:
     return DeepSeekConfig(
@@ -280,6 +286,23 @@ def _run_plain_forward(module: MultiHeadLatentAttention, x, mask, device) -> flo
     return (time.perf_counter() - start) * 1_000_000.0
 
 
+def _run_forward_backward(module: MultiHeadLatentAttention, x, mask, device) -> tuple[float, float, float]:
+    _sync(device)
+    total_start = time.perf_counter()
+    forward_start = total_start
+    output = module(x, mask)
+    loss = ttml.ops.unary.mean(output)
+    _sync(device)
+    forward_us = (time.perf_counter() - forward_start) * 1_000_000.0
+
+    backward_start = time.perf_counter()
+    loss.backward(False)
+    _sync(device)
+    backward_us = (time.perf_counter() - backward_start) * 1_000_000.0
+    forward_backward_us = (time.perf_counter() - total_start) * 1_000_000.0
+    return forward_us, backward_us, forward_backward_us
+
+
 def _stats(values: list[float]) -> dict[str, float]:
     sorted_values = sorted(values)
     return {
@@ -294,6 +317,7 @@ def _print_case(
     case: MLACase,
     timings_us: dict[str, list[float]],
     end_to_end_us: list[float] | None = None,
+    backward_timings_us: dict[str, list[float]] | None = None,
 ) -> list[dict[str, str | float]]:
     rows: list[dict[str, str | float]] = []
     total_avg = sum(_stats(timings_us[name])["avg_us"] for name in STAGE_ORDER)
@@ -338,6 +362,39 @@ def _print_case(
     if end_to_end_us:
         e2e = _stats(end_to_end_us)
         print(f"end_to_end_avg_us={e2e['avg_us']:.0f} p50_us={e2e['p50_us']:.0f} min_us={e2e['min_us']:.0f}")
+        rows.append(
+            {
+                "case": case.name,
+                "stage": "end_to_end_forward",
+                "avg_us": e2e["avg_us"],
+                "p50_us": e2e["p50_us"],
+                "min_us": e2e["min_us"],
+                "max_us": e2e["max_us"],
+                "pct_of_section_sum": 0.0,
+                "est_traffic_bytes": 0,
+                "est_flops": 0,
+                "est_tflops_per_s": 0.0,
+            }
+        )
+    if backward_timings_us:
+        print("backward measurements:")
+        for name in BACKWARD_STAGE_ORDER:
+            s = _stats(backward_timings_us[name])
+            print(f"  {name}: avg_us={s['avg_us']:.0f} p50_us={s['p50_us']:.0f} min_us={s['min_us']:.0f}")
+            rows.append(
+                {
+                    "case": case.name,
+                    "stage": name,
+                    "avg_us": s["avg_us"],
+                    "p50_us": s["p50_us"],
+                    "min_us": s["min_us"],
+                    "max_us": s["max_us"],
+                    "pct_of_section_sum": 0.0,
+                    "est_traffic_bytes": 0,
+                    "est_flops": 0,
+                    "est_tflops_per_s": 0.0,
+                }
+            )
     return rows
 
 
@@ -348,6 +405,7 @@ def run_case(
     grad_mode: str,
     seed: int,
     end_to_end: bool,
+    backward: bool,
 ) -> list[dict[str, str | float]]:
     ctx = ttml.autograd.AutoContext.get_instance()
     device = ctx.get_device()
@@ -356,9 +414,12 @@ def run_case(
     config = _make_config(case)
     rope_params = ttml.ops.rope.build_rope_params(config.max_seq_len, config.qk_rope_head_dim, config.rope_theta)
     module = MultiHeadLatentAttention(config, rope_params)
+    opt_cfg = ttml.optimizers.SGDConfig.make(0.0, 0.0, 0.0, 0.0, False)
+    zero_grad_optimizer = ttml.optimizers.SGD(module.parameters(), opt_cfg)
 
     timings_us = {name: [] for name in STAGE_ORDER}
     end_to_end_us: list[float] = []
+    backward_timings_us = {name: [] for name in BACKWARD_STAGE_ORDER}
     previous_grad_mode = ctx.get_gradient_mode()
     ctx.set_gradient_mode(ttml.autograd.GradMode.ENABLED if grad_mode == "enabled" else ttml.autograd.GradMode.DISABLED)
     try:
@@ -375,11 +436,22 @@ def run_case(
                 if iteration >= warmup:
                     end_to_end_us.append(elapsed_us)
                 ctx.reset_graph()
+        if backward:
+            ctx.set_gradient_mode(ttml.autograd.GradMode.ENABLED)
+            for iteration in range(warmup + iterations):
+                zero_grad_optimizer.zero_grad()
+                x, mask = _make_inputs(case, rng)
+                forward_us, backward_us, forward_backward_us = _run_forward_backward(module, x, mask, device)
+                if iteration >= warmup:
+                    backward_timings_us["autograd_forward"].append(forward_us)
+                    backward_timings_us["backward"].append(backward_us)
+                    backward_timings_us["forward_backward"].append(forward_backward_us)
+                ctx.reset_graph()
     finally:
         ctx.set_gradient_mode(previous_grad_mode)
         ctx.reset_graph()
 
-    return _print_case(case, timings_us, end_to_end_us)
+    return _print_case(case, timings_us, end_to_end_us, backward_timings_us if backward else None)
 
 
 def parse_args() -> argparse.Namespace:
@@ -404,6 +476,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Also time an unsplit MLA forward with a single synchronize before/after the whole call.",
     )
+    parser.add_argument(
+        "--backward",
+        action="store_true",
+        help="Also time normal forward, backward-only, and forward+backward with autograd enabled.",
+    )
     return parser.parse_args()
 
 
@@ -420,7 +497,15 @@ def main() -> int:
     try:
         for idx, name in enumerate(selected_cases):
             all_rows.extend(
-                run_case(CASES[name], args.warmup, args.iterations, args.grad_mode, args.seed + idx, args.end_to_end)
+                run_case(
+                    CASES[name],
+                    args.warmup,
+                    args.iterations,
+                    args.grad_mode,
+                    args.seed + idx,
+                    args.end_to_end,
+                    args.backward,
+                )
             )
     finally:
         ctx.close_device()
