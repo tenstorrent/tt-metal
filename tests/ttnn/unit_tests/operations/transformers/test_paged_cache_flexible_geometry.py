@@ -578,7 +578,6 @@ def _sharded_input_with_num_cores(device, x_padded, num_cores):
     """Like ``_sharded_input`` but builds a height-sharded tensor whose grid has
     ``num_cores`` cores instead of ``num_users``. Used to force the bad case the
     program factory can't handle (issue #44923)."""
-    num_users = x_padded.shape[1]
     xt = ttnn.Tensor(x_padded, ttnn.bfloat16).to(ttnn.TILE_LAYOUT)
     total_height = xt.volume() // xt.padded_shape[-1]
     assert (
