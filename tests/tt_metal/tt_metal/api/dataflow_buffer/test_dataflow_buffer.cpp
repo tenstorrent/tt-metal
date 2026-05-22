@@ -1988,7 +1988,7 @@ TEST_F(MeshDeviceFixture, TensixIntraTest1xDFB4Sx4S) {
     run_intra_tensix_dfb_program(this->devices_.at(0), /*entry_size=*/1024, /*num_entries=*/16, /*num_threads=*/4);
 }
 
-TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B) {
+TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping combined intra-tensix + remapper DFB test for WH/BH until DFB is backported";
     }
@@ -2001,9 +2001,9 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B) {
     constexpr uint32_t num_entries = 16;
     constexpr uint32_t num_neos    = 4;
     const uint32_t words_per_entry = entry_size / sizeof(uint32_t);
-    const uint32_t entries_per_neo = num_entries / num_neos;  // = 4
+    const uint32_t entries_per_neo = num_entries;
 
-    // dfb(0): DM->Tensix, 1Sx4B with remapper, implicit sync enabled.
+    // dfb(0): DM->Tensix, 1Sx4A with remapper, implicit sync enabled.
     experimental::dfb::DataflowBufferConfig remapper_dfb_config{
         .entry_size           = entry_size,
         .num_entries          = num_entries,

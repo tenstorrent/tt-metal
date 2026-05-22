@@ -41,6 +41,12 @@ struct TopologySatSolver::Impl {
 
 TopologySatSolver::TopologySatSolver() : impl_(std::make_unique<Impl>()) {}
 
+void TopologySatSolver::configure_for_blocking_clause_enumeration() {
+    // Only valid in CONFIGURING state (before the first non-config add()).
+    // ILB: incremental lazy backtracking — reuse trail across incremental clause additions (CaDiCaL NEWS 1.7.3+).
+    (void)impl_->solver.set("ilb", 2);
+}
+
 TopologySatSolver::~TopologySatSolver() = default;
 
 TopologySatSolver::TopologySatSolver(TopologySatSolver&&) noexcept = default;
