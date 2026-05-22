@@ -61,15 +61,7 @@ std::unordered_map<uint64_t, PyObject*> python_realtime_callback_refs;
 void ttnn_device(nb::module_& mod) {
     mod.def(
         "open_device",
-        [](int device_id,
-           size_t l1_small_size,
-           size_t trace_region_size,
-           uint8_t num_command_queues,
-           const std::optional<tt::tt_metal::DispatchCoreConfig>& dispatch_core_config,
-           size_t worker_l1_size) {
-            return ttnn::open_mesh_device(
-                device_id, l1_small_size, trace_region_size, num_command_queues, dispatch_core_config, worker_l1_size);
-        },
+        &ttnn::open_mesh_device,
         nb::sig("def open_device(\\*, device_id: int, l1_small_size: int, trace_region_size: int, "
                 "dispatch_core_config: ttnn.device.DispatchCoreConfig, worker_l1_size: int)"),
         nb::kw_only(),

@@ -53,7 +53,7 @@ def test_dispatch_core_config_defaults_follow_cluster_policy():
 
 
 def test_dispatch_core_config_constructor_rules():
-    with pytest.raises(ValueError, match="COL axis is not supported for ETH dispatch core type"):
+    with pytest.raises(Exception, match="COL axis is not supported for ETH dispatch core type"):
         ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.ETH, ttnn.DispatchCoreAxis.COL)
 
     config = ttnn.DispatchCoreConfig(axis=ttnn.DispatchCoreAxis.COL)
@@ -63,7 +63,7 @@ def test_dispatch_core_config_constructor_rules():
     is_blackhole = "blackhole" in ttnn._ttnn.device.get_arch_name()
     if is_blackhole:
         with pytest.raises(
-            ValueError, match="ROW dispatch core axis is not supported for blackhole arch unless fabric tensix MUX"
+            Exception, match="ROW dispatch core axis is not supported for blackhole arch unless fabric tensix MUX"
         ):
             ttnn.DispatchCoreConfig(
                 axis=ttnn.DispatchCoreAxis.ROW, fabric_tensix_config=ttnn.FabricTensixConfig.DISABLED

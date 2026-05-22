@@ -35,23 +35,10 @@ class DispatchCoreConfig(_DispatchCoreConfig):
         axis: Optional[DispatchCoreAxis] = None,
         fabric_tensix_config=None,
     ):
-        if type is None and axis is None and fabric_tensix_config is None:
-            default_config = _DispatchCoreConfig.create_dispatch_core_config()
-            super().__init__(default_config.type(), default_config.axis)
-            return
-
-        # Use eager factory whenever constructor arguments need topology-aware completion.
-        if fabric_tensix_config is not None or type is None:
-            resolved_config = _DispatchCoreConfig.create_dispatch_core_config(
-                type=type, axis=axis, fabric_tensix_config=fabric_tensix_config
-            )
-            super().__init__(resolved_config.type(), resolved_config.axis)
-            return
-
-        if axis is None:
-            super().__init__(type)
-        else:
-            super().__init__(type, axis)
+        resolved_config = _DispatchCoreConfig.create_dispatch_core_config(
+            type=type, axis=axis, fabric_tensix_config=fabric_tensix_config
+        )
+        super().__init__(resolved_config.type, resolved_config.axis)
 
 
 open_device = ttnn._ttnn.device.open_device
