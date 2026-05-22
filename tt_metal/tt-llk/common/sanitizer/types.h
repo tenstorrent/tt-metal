@@ -10,7 +10,7 @@
 #include <utility>
 
 #include "ckernel.h"
-#include "dev_msgs.h"
+#include "hostdev/dev_msgs.h"
 #include "llk_defs.h"
 
 namespace llk::san
@@ -349,15 +349,25 @@ struct DevicePrintTopCallstack
 
     DevicePrintTopCallstack(const UnwindContext ctx)
     {
+#ifdef COMPILE_FOR_TRISC
+        // Subtract kernel_lma so the host can add the ELF's .text VMA back for DWARF
+        // lookup. Index matches firmware (e.g. trisc.cc:215): MATH0 + thread_id.
         // fixme: sstanisic: this definitely won't work for qsr lol, and it's quite bad for wh/bh
         std::uint32_t launch_index           = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
         tt_l1_ptr launch_msg_t* const launch = GET_MAILBOX_ADDRESS_DEV(launch[launch_index]);
-        std::uint32_t kernel_offset          = launch->kernel_config.kernel_text_offset[COMPILE_FOR_TRISC + 1];
-        pc                                   = ctx.pc - kernel_offset;
-        ra                                   = ctx.ra - kernel_offset;
+        constexpr int processor_index =
+            static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::MATH0) +
+            COMPILE_FOR_TRISC;
+        std::uint32_t kernel_lma = launch->kernel_config.kernel_config_base[ProgrammableCoreType::TENSIX] +
+                                   launch->kernel_config.kernel_text_offset[processor_index];
+        pc                                   = ctx.pc - kernel_lma;
+        ra                                   = ctx.ra - kernel_lma - 4;
+#else
+        pc = ctx.pc;
+        ra = ctx.ra;
+#endif
     }
-
-}
+};
 
 struct ThreadOutputContext
 {

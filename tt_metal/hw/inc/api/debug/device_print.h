@@ -919,25 +919,24 @@ struct device_print_type<dp_typed_array_t<len>> {
         }
     }
 };
-#endif
 
-// Enum types: serialized as their underlying type.
-template <size_t Type>
-struct device_print_type<DevicePrintTopCallstack<Type>> {
+// Top-of-callstack render variant: 8-byte payload (pc then ra) emitted by
+// DevicePrintTopCallstack<Type>. Type char is '0' + Type.
+template <std::size_t Type>
+struct device_print_type<llk::san::DevicePrintTopCallstack<Type>> {
     static constexpr char get_char() { return '0' + Type; }
-
     static constexpr device_print_type_info value = {get_char(), 2 * sizeof(uint32_t)};
 
     static void serialize(
         device_print_buffer_ptr<uint8_t> device_print_buffer,
         uint32_t offset,
-        DevicePrintTopCallstack<Type>* argument) {
-        *reinterpret_cast<device_print_buffer_ptr<uint32_t>>(device_print_buffer + offset) =
-            reinterpret_cast<uint32_t>(argument->pc);
+        llk::san::DevicePrintTopCallstack<Type> argument) {
+        *reinterpret_cast<device_print_buffer_ptr<uint32_t>>(device_print_buffer + offset) = argument.pc;
         *reinterpret_cast<device_print_buffer_ptr<uint32_t>>(device_print_buffer + offset + sizeof(uint32_t)) =
-            reinterpret_cast<uint32_t>(argument->ra);
+            argument.ra;
     }
 };
+#endif
 
 // Enum types: serialized as their underlying type.
 template <typename T>

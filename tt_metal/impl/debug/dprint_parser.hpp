@@ -20,6 +20,7 @@
 #include "device/device_impl.hpp"
 #include "hostdevcommon/dprint_common.h"
 #include "hostdev/device_print_common.h"
+#include "hostdev/device_print_structures.h"
 
 namespace tt::tt_metal {
 
@@ -74,6 +75,8 @@ public:
         std::vector<uint32_t> data;
     };
 
+    using CallstackFrame = device_print_detail::structures::DevicePrintCallstackFrame;
+
     using ArgumentValue = std::variant<
         bool,
         int8_t,
@@ -87,7 +90,8 @@ public:
         float,
         double,
         TileSliceDynamic,
-        TypedArray>;
+        TypedArray,
+        CallstackFrame>;
     struct FormatMessageBuffer {
         fmt::memory_buffer buffer;
         std::vector<ArgumentValue> argument_values;
