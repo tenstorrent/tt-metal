@@ -143,7 +143,7 @@ void kernel_main() {
         uint32_t zero_buf = get_write_ptr(zi_cb_id);
 
         {
-            DeviceZoneScopedN("combine-zero-init-SENDER-writing");
+            // DeviceZoneScopedN("combine-zero-init-SENDER-writing");
             fill_zero_buffer(zi_cb_id);
             zero_pages(zero_buf, page_start, page_end, aligned_output_page_size, output_addr_gen);
         }
@@ -372,7 +372,7 @@ void kernel_main() {
                     route_info[1] = distance;
                     route_info[2] = output_page_idx;
                     {
-                        DeviceZoneScopedN("sending-for-FABRIC-write");
+                        // DeviceZoneScopedN("sending-for-FABRIC-write");
                         uint32_t output_dst = cb_base + l1_alignment;
                         noc_async_read(buffer_scratch_noc_addr, output_dst, aligned_output_page_size);
                         noc_async_read_barrier();
