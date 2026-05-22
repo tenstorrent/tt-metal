@@ -54,6 +54,16 @@ for the rule.
 | `layernorm/.../layernorm_large_tensor.cpp` | PARTIAL | `66c0ea6590b`, `0b0ca49146e` | 2 chains migrated: Var(X)+eps -> rsqrt + UnaryBcast<COL> on cb_ex2pe. **Real blocker for remaining blocks A/D/E/F**: (1) Block A (pass-1 variance calc) has interleaved FPU(sub_bcast/binary_dest_reuse(ELWADD)) + SFPU(square_tile) + reduce_init/reduce_tile + scalar mul_unary in one DEST window; cite: HQ §"Control-flow shape" "Interleaved op classes in one DEST window — only migratable if helper exposes a fusion point". (2) Blocks D/E/F have macro-injected SFPU activation (SFPU_OP_INIT/FUNC_ACTIVATION at line 335) and same fusion-point blocker. 52 PASS. |
 | `layernorm/.../layernorm_large_tensor_welford.cpp` | PARTIAL | `decf009afc0`, `3016a1d484f` | 2 chains migrated: Var(X)+eps -> rsqrt + UnaryBcast<COL> on cb_ex2pe. Welford accumulator + transpose_wh OOS. **PARTIAL-DEFER (specific patterns, not lazy)**: Blocks A (FUSE_PRE_ADD add+pack), F (pass-2 sub_bcast + binary_dest_reuse(ELWMUL) + pack), G (gamma mul_bcast_rows), H (beta add_bcast_rows) all have structural patterns identified; deferred for focused follow-up. cite: lines 71-94, 407-451, 455-487, 489-511. 52 PASS. |
 
+### distributed normalization post_allgather rsqrt stages
+
+| Kernel | Status | Commit | Notes |
+|---|---|---|---|
+| `layernorm_distributed/.../layernorm_post_allgather.cpp` | PARTIAL | `6277004b227` | 3 chains: E[x]² (same-CB Mul + TileBaseCompileTime<1>), E[x²]-E[x]² (Sub), Var+eps rsqrt (Add+Rsqrt). Reduce stages OOS (use reduce_helpers). chain_llk gamma/beta BLOCKED on chain_llk substitution playbook. 79 PASS on `test_distributed_layernorm_post_allgather.py -k layernorm`. |
+| `layernorm_distributed/.../layernorm_post_allgather_welford.cpp` | PARTIAL | `9ce11f1cd76` | Migrated rsqrt stage with HeldBulk+TileBaseCompileTime<1> for cb_stats_reduced (variance at index 1). combine_welford_partials OOS. chain_llk BLOCKED. 79 PASS. |
+| `experimental/.../fused_distributed_rmsnorm/rmsnorm_post_allgather.cpp` | PARTIAL | `da3f90e6f22` | rsqrt stage with same-CB in/out on reduce_result_cb. untestable_locally — no local pytest covers multi-chip op; structural isomorphism with rmsnorm_distributed (72388c98689). |
+| `experimental/ccl/rms_allgather/.../rms_compute.cpp` | PARTIAL | `0fc4bc57602` | rsqrt stage. cb_eps Streaming here (not held). untestable_locally — multi-chip CCL op. |
+| `experimental/.../dit_layernorm_post_all_gather/layernorm_post_allgather_welford.cpp` | PARTIAL | `638248c12f7` | rsqrt stage, same migration as layernorm_distributed welford counterpart. untestable_locally — multi-chip DiT path. |
+
 ## Cross-helper dependencies
 
 When a planned migration calls for an op struct / policy / reconfig mode
