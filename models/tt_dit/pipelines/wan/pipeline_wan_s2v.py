@@ -46,7 +46,7 @@ from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, Paralle
 from ...parallel.manager import CCLManager
 from ...solvers import UniPCSolver
 from ...utils import cache, tensor
-from ...utils.conv3d import conv3d_blocking_hash, conv_pad_height, conv_pad_in_channels
+from ...utils.conv3d import conv3d_blocking_hash, conv_pad_height, conv_pad_in_channels, conv_pad_width
 from ...utils.tensor import (
     bf16_tensor_2dshard,
     fast_device_to_host,
@@ -514,6 +514,10 @@ class WanPipelineS2V(WanPipeline):
             pixels_BTHWC,
             self.vae_parallel_config.height_parallel.factor * self.vae_scale_factor_spatial,
         )
+        pixels_BTHWC, logical_w = conv_pad_width(
+            pixels_BTHWC,
+            self.vae_parallel_config.width_parallel.factor * self.vae_scale_factor_spatial,
+        )
         pixels_dev = bf16_tensor_2dshard(
             pixels_BTHWC,
             self.mesh_device,
@@ -523,15 +527,15 @@ class WanPipelineS2V(WanPipeline):
                 self.vae_parallel_config.width_parallel.mesh_axis: 3,
             },
         )
-        latent_BCTHW, new_logical_h = self.tt_vae_encoder(
-            pixels_dev, logical_h, encoder_t_chunk_size=encoder_t_chunk_size
+        latent_BCTHW, new_logical_h, new_logical_w = self.tt_vae_encoder(
+            pixels_dev, logical_h, logical_w=logical_w, encoder_t_chunk_size=encoder_t_chunk_size
         )
         concat_dims = [None, None]
         concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
         concat_dims[self.vae_parallel_config.width_parallel.mesh_axis] = 4
         latent_torch = fast_device_to_host(
             latent_BCTHW, self.mesh_device, concat_dims, ccl_manager=self.vae_ccl_manager
-        )[:, :, :, :new_logical_h, :]
+        )[:, :, :, :new_logical_h, :new_logical_w]
         # tt_vae_encoder returns the mean (first z_dim channels) already.
         return ((latent_torch.float() - self._vae_latents_mean.float()) / self._vae_latents_std.float()).to(
             torch.float32
@@ -580,6 +584,123 @@ class WanPipelineS2V(WanPipeline):
         if self._s2v_profiler is None:
             return nullcontext()
         return self._s2v_profiler(name, self._s2v_profiler_iteration)
+
+    def check_inputs(self, *, audio_prompt: str, image_prompt: Image.Image) -> None:
+        if audio_prompt is None:
+            raise ValueError("audio_prompt (path to a .wav/.mp3 file) is required for S2V")
+        if image_prompt is None or not isinstance(image_prompt, Image.Image):
+            raise ValueError("image_prompt (PIL.Image) is required for S2V (reference image)")
+
+    def _prepare_prompt_buffers_for_call(
+        self,
+        *,
+        prompt: str,
+        negative_prompt: str,
+        max_sequence_length: int,
+        traced: bool,
+    ) -> None:
+        # Text conditioning is clip-invariant, so encode once for all clips.
+        with self._stage("encoder"):
+            prompt_embeds, negative_prompt_embeds = self.encode_prompt(
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                do_classifier_free_guidance=self.do_classifier_free_guidance,
+                num_videos_per_prompt=1,
+                prompt_embeds=None,
+                negative_prompt_embeds=None,
+                max_sequence_length=max_sequence_length,
+                traced=traced,
+            )
+        ts = self.transformer_states[0]
+        ts.prompt_buffer = self.prepare_text_conditioning(ts.model, prompt_embeds, ts.prompt_buffer, traced)
+        ts.negative_prompt_buffer = self.prepare_text_conditioning(
+            ts.model, negative_prompt_embeds, ts.negative_prompt_buffer, traced
+        )
+
+    def prepare_reference_latents(
+        self, *, image_prompt: Image.Image, height: int, width: int
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        # Reference image VAE encode (once).
+        with self._stage("s2v_vae_encode_ref"):
+            # Stretch-resize via VideoProcessor (matches pipeline_wan_i2v).
+            ref_tensor = self.video_processor.preprocess(image_prompt, height=height, width=width).to(
+                "cpu", dtype=torch.float32
+            )
+            ref_video = ref_tensor.unsqueeze(2)  # [1, 3, 1, H, W]
+            ref_latent_torch = self._encode_normalized(ref_video)
+        # Pre-denormalized — _decode_clip expects VAE-input-space prepend.
+        ref_latents_for_decode = ref_latent_torch.to(self.vae.dtype) * self._vae_latents_std + self._vae_latents_mean
+        return ref_latent_torch, ref_latents_for_decode
+
+    def prepare_audio_embeds(self, *, audio_prompt: str, num_clips: Optional[int]) -> tuple[torch.Tensor, int]:
+        # Audio: wav2vec2 + bucket the whole file.
+        with self._stage("s2v_wav2vec2"):
+            audio_BLNF_full, num_repeat = self._prepare_audio_full(audio_prompt)
+        # Caller can request fewer clips than audio supports, never more (speech2video.py:488-489).
+        if num_clips is None:
+            num_clips = num_repeat
+        else:
+            num_clips = min(num_clips, num_repeat)
+        logger.info(
+            f"S2V multi-clip: {num_clips} clips × {self._INFER_FRAMES_PIXEL} pixels = "
+            f"{num_clips * self._INFER_FRAMES_PIXEL - self._S2V_VAE_CLIP0_TRIM} final frames"
+        )
+        return audio_BLNF_full, num_clips
+
+    def _maybe_warm_multi_clip(self, *, num_clips: int, height: int, width: int) -> None:
+        # warmup_buffers calls __call__ recursively, which clobbers self._s2v_profiler* and
+        # the transformer guidance scales — save+restore around the call.
+        if num_clips <= 1 or self._multi_clip_warmed or self._warming_up:
+            return
+        logger.info("Lazy multi-clip warmup: warming clip-1+ shape signature")
+        saved = (
+            self._s2v_profiler,
+            self._s2v_profiler_iteration,
+            self.transformer_states[0].guidance_scale,
+            self.transformer_states[1].guidance_scale,
+        )
+        try:
+            self.warmup_buffers(height=height, width=width, num_clips=2)
+        finally:
+            (
+                self._s2v_profiler,
+                self._s2v_profiler_iteration,
+                self.transformer_states[0].guidance_scale,
+                self.transformer_states[1].guidance_scale,
+            ) = saved
+
+    def _slide_motion_buffer(
+        self,
+        prev_buffer: Optional[torch.Tensor],
+        new_frames: torch.Tensor,
+        *,
+        height: int,
+        width: int,
+    ) -> torch.Tensor:
+        """Roll the running motion-frame buffer forward by overlap frames from ``new_frames``.
+
+        On the first slide (or when ``new_frames`` fully covers the motion window) there is no prior
+        buffer to keep, so left-pad with zeros to reach ``_MOTION_FRAMES_PIXEL``.
+        """
+        overlap = min(self._MOTION_FRAMES_PIXEL, new_frames.shape[2])
+        if prev_buffer is None or overlap >= self._MOTION_FRAMES_PIXEL:
+            new_tail = new_frames[:, :, -overlap:]
+            if overlap < self._MOTION_FRAMES_PIXEL:
+                zero_pad = torch.zeros(1, 3, self._MOTION_FRAMES_PIXEL - overlap, height, width, dtype=torch.float32)
+                new_tail = torch.cat([zero_pad, new_tail], dim=2)
+            return new_tail
+        return torch.cat([prev_buffer[:, :, overlap:], new_frames[:, :, -overlap:]], dim=2)
+
+    def prepare_motion_latents(self, *, height: int, width: int) -> torch.Tensor:
+        # Clip 0 (drop_first_motion=True) never reads motion_latents — placeholder
+        # zeros skip the unused VAE encode. videos_last_frames is deferred until
+        # the first inter-clip slide.
+        latent_h = height // self.vae_scale_factor_spatial
+        latent_w = width // self.vae_scale_factor_spatial
+        motion_latents_torch = torch.zeros(
+            1, self.vae.config.z_dim, self._LAT_MOTION_FRAMES, latent_h, latent_w, dtype=torch.float32
+        )
+        return motion_latents_torch
 
     def _prepare_clip(
         self,
@@ -711,7 +832,7 @@ class WanPipelineS2V(WanPipeline):
         prepend = prepend_latents_torch.to(dtype=latents.dtype, device=latents.device)
         decode_latents = torch.cat([prepend, latents], dim=2)
 
-        tt_latents_BTHWC, logical_h = self.tt_vae.prepare_input(decode_latents)
+        tt_latents_BTHWC, logical_h, logical_w = self.tt_vae.prepare_input(decode_latents)
         tt_latents_BTHWC = typed_tensor_2dshard(
             tt_latents_BTHWC,
             self.mesh_device,
@@ -722,14 +843,16 @@ class WanPipelineS2V(WanPipeline):
             },
             dtype=self.tt_vae.dtype,
         )
-        tt_video_BCTHW, new_logical_h = self.tt_vae(tt_latents_BTHWC, logical_h, t_chunk_size=self.vae_t_chunk_size)
+        tt_video_BCTHW, new_logical_h, new_logical_w = self.tt_vae(
+            tt_latents_BTHWC, logical_h, t_chunk_size=self.vae_t_chunk_size, logical_w=logical_w
+        )
         concat_dims = [None, None]
         concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
         concat_dims[self.vae_parallel_config.width_parallel.mesh_axis] = 4
         video_BCTHW = fast_device_to_host(
             tt_video_BCTHW, self.mesh_device, concat_dims, ccl_manager=self.vae_ccl_manager
         )
-        return video_BCTHW[:, :, :, :new_logical_h, :].float()  # crop to logical_h, keep float
+        return video_BCTHW[:, :, :, :new_logical_h, :new_logical_w].float()
 
     @torch.no_grad()
     def __call__(
@@ -765,87 +888,32 @@ class WanPipelineS2V(WanPipeline):
         """S2V entry point: 80 pixel frames per clip, motion latents threaded
         between clips via VAE re-encode. Mirrors speech2video.py:540-670.
         """
-        if audio_prompt is None:
-            raise ValueError("audio_prompt (path to a .wav/.mp3 file) is required for S2V")
-        if image_prompt is None or not isinstance(image_prompt, Image.Image):
-            raise ValueError("image_prompt (PIL.Image) is required for S2V (reference image)")
-
+        self.check_inputs(audio_prompt=audio_prompt, image_prompt=image_prompt)
         self._s2v_profiler = profiler
         self._s2v_profiler_iteration = profiler_iteration
         self.transformer_states[0].guidance_scale = guidance_scale
         self.transformer_states[1].guidance_scale = guidance_scale if guidance_scale_2 is None else guidance_scale_2
 
-        # 1. Text encode (clip-invariant — once across all clips).
-        with self._stage("encoder"):
-            prompt_embeds, negative_prompt_embeds = self.encode_prompt(
-                prompt=prompt,
-                negative_prompt=negative_prompt,
-                do_classifier_free_guidance=self.do_classifier_free_guidance,
-                num_videos_per_prompt=1,
-                prompt_embeds=None,
-                negative_prompt_embeds=None,
-                max_sequence_length=max_sequence_length,
-                traced=traced,
-            )
-        ts = self.transformer_states[0]
-        ts.prompt_buffer = self.prepare_text_conditioning(ts.model, prompt_embeds, ts.prompt_buffer, traced)
-        ts.negative_prompt_buffer = self.prepare_text_conditioning(
-            ts.model, negative_prompt_embeds, ts.negative_prompt_buffer, traced
+        self._prepare_prompt_buffers_for_call(
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            max_sequence_length=max_sequence_length,
+            traced=traced,
         )
 
         with self._stage("prepare_latents"):
-            # 2. Reference image VAE encode (once).
-            with self._stage("s2v_vae_encode_ref"):
-                # Stretch-resize via VideoProcessor (matches pipeline_wan_i2v).
-                ref_tensor = self.video_processor.preprocess(image_prompt, height=height, width=width).to(
-                    "cpu", dtype=torch.float32
-                )
-                ref_video = ref_tensor.unsqueeze(2)  # [1, 3, 1, H, W]
-                ref_latent_torch = self._encode_normalized(ref_video)
-            # Pre-denormalized — _decode_clip expects VAE-input-space prepend.
-            ref_latents_for_decode = (
-                ref_latent_torch.to(self.vae.dtype) * self._vae_latents_std + self._vae_latents_mean
+            ref_latent_torch, ref_latents_for_decode = self.prepare_reference_latents(
+                image_prompt=image_prompt, height=height, width=width
             )
-
-            # 3. Audio: wav2vec2 + bucket the whole file.
-            with self._stage("s2v_wav2vec2"):
-                audio_BLNF_full, num_repeat = self._prepare_audio_full(audio_prompt)
-            # Caller can request fewer clips than audio supports, never more (speech2video.py:488-489).
-            if num_clips is None:
-                num_clips = num_repeat
-            else:
-                num_clips = min(num_clips, num_repeat)
-            logger.info(
-                f"S2V multi-clip: {num_clips} clips × {self._INFER_FRAMES_PIXEL} pixels = "
-                f"{num_clips * self._INFER_FRAMES_PIXEL - self._S2V_VAE_CLIP0_TRIM} final frames"
-            )
-
-            # Lazy clip-1+ shape warmup (recursive call into __call__ via
-            # warmup_buffers mutates self.* — restore the call-local fields after).
-            if num_clips > 1 and not self._multi_clip_warmed and not self._warming_up:
-                logger.info("Lazy multi-clip warmup: warming clip-1+ shape signature")
-                self.warmup_buffers(height=height, width=width, num_clips=2)
-                self._s2v_profiler = profiler
-                self._s2v_profiler_iteration = profiler_iteration
-                self.transformer_states[0].guidance_scale = guidance_scale
-                self.transformer_states[1].guidance_scale = (
-                    guidance_scale if guidance_scale_2 is None else guidance_scale_2
-                )
-
-            # 4. Motion state. Clip 0 (drop_first_motion=True) never reads
-            # motion_latents — placeholder zeros skip the unused VAE encode.
-            # videos_last_frames is deferred until the first inter-clip slide.
+            audio_BLNF_full, num_clips = self.prepare_audio_embeds(audio_prompt=audio_prompt, num_clips=num_clips)
+            self._maybe_warm_multi_clip(num_clips=num_clips, height=height, width=width)
+            motion_latents_torch = self.prepare_motion_latents(height=height, width=width)
             videos_last_frames: Optional[torch.Tensor] = None
-            latent_h = height // self.vae_scale_factor_spatial
-            latent_w = width // self.vae_scale_factor_spatial
-            motion_latents_torch = torch.zeros(
-                1, self.vae.config.z_dim, self._LAT_MOTION_FRAMES, latent_h, latent_w, dtype=torch.float32
-            )
 
             if seed is None:
                 seed = int(torch.seed())
 
-        # 5. Per-clip loop.
+        # Per-clip denoise → decode → (optionally) re-encode last-frames as next clip's motion.
         clip_videos: list[torch.Tensor] = []
         for clip_idx in range(num_clips):
             drop_first_motion = clip_idx == 0
@@ -889,35 +957,16 @@ class WanPipelineS2V(WanPipeline):
                 if drop_first_motion:
                     image_BCTHW = image_BCTHW[:, :, self._S2V_VAE_CLIP0_TRIM :]
 
-                # Slide videos_last_frames forward only if a next clip will
-                # consume it — the final clip skips the motion-tail VAE encode.
                 if clip_idx + 1 < num_clips:
-                    overlap = min(self._MOTION_FRAMES_PIXEL, image_BCTHW.shape[2])
-                    if videos_last_frames is None or overlap >= self._MOTION_FRAMES_PIXEL:
-                        # First slide / full overlap: prior buffer contribution is empty.
-                        new_tail = image_BCTHW[:, :, -overlap:]
-                        if overlap < self._MOTION_FRAMES_PIXEL:
-                            zero_pad = torch.zeros(
-                                1, 3, self._MOTION_FRAMES_PIXEL - overlap, height, width, dtype=torch.float32
-                            )
-                            new_tail = torch.cat([zero_pad, new_tail], dim=2)
-                        videos_last_frames = new_tail
-                    else:
-                        videos_last_frames = torch.cat(
-                            [
-                                videos_last_frames[:, :, overlap:],
-                                image_BCTHW[:, :, -overlap:],
-                            ],
-                            dim=2,
-                        )
+                    videos_last_frames = self._slide_motion_buffer(
+                        videos_last_frames, image_BCTHW, height=height, width=width
+                    )
                     with self._stage(f"s2v_clip_{clip_idx}_vae_encode_motion"):
                         motion_latents_torch = self._encode_normalized(videos_last_frames)
 
                 clip_videos.append(image_BCTHW)
 
-        # 6. Concat clip outputs (speech2video.py:670).
         videos_BCTHW = torch.cat(clip_videos, dim=2)
-
         if output_type == "latent":
             video: object = videos_BCTHW
         elif output_type == "uint8":
@@ -929,7 +978,6 @@ class WanPipelineS2V(WanPipeline):
         else:
             video = self.video_processor.postprocess_video(videos_BCTHW, output_type=output_type)
 
-        self._s2v_profiler = None
         if not return_dict:
             return (video,)
         return WanPipelineOutput(frames=video)

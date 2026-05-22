@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import math
+
 import pytest
 import torch
 import torch.nn as nn
@@ -14,6 +16,7 @@ from loguru import logger
 import ttnn
 
 from .....models.transformers.wan2_2.s2v.motioner import rope_params
+from .....models.transformers.wan2_2.s2v.rope_s2v import rope_precompute
 from .....models.transformers.wan2_2.s2v.transformer_wan_s2v import WanS2VTransformer3DModel
 from .....parallel.config import DiTParallelConfig, ParallelFactor
 from .....parallel.manager import CCLManager
@@ -29,15 +32,11 @@ from .....utils.wan_s2v_checkpoint import (
     translate_s2v_state_dict,
 )
 
-# ---------------------------------------------------------------------------
-# Production model config (matches Wan-AI/Wan2.2-S2V-14B / config.json).
-# Used by the model + inner_step tests below.
-# ---------------------------------------------------------------------------
+# Production model config (Wan-AI/Wan2.2-S2V-14B / config.json).
 PATCH_SIZE = (1, 2, 2)
 DIM = 5120
 NUM_HEADS = 40
 HEAD_DIM = DIM // NUM_HEADS  # 128
-NUM_LAYERS = 40
 IN_CHANNELS = 16
 OUT_CHANNELS = 16
 TEXT_DIM = 4096
@@ -51,49 +50,10 @@ ROPE_MAX_SEQ_LEN = 1024
 EPS = 1e-6
 
 
-def _make_wan_s2v_transformer(
-    *,
-    mesh_device,
-    ccl_manager,
-    parallel_config,
-    is_fsdp,
-    num_layers,
-    enable_adain,
-):
-    """Production-config factory used by the model + inner_step tests."""
-    return WanS2VTransformer3DModel(
-        patch_size=PATCH_SIZE,
-        num_heads=NUM_HEADS,
-        dim=DIM,
-        in_channels=IN_CHANNELS,
-        out_channels=OUT_CHANNELS,
-        text_dim=TEXT_DIM,
-        freq_dim=FREQ_DIM,
-        ffn_dim=FFN_DIM,
-        num_layers=num_layers,
-        cross_attn_norm=True,
-        eps=EPS,
-        rope_max_seq_len=ROPE_MAX_SEQ_LEN,
-        audio_dim=AUDIO_DIM,
-        num_audio_layers=NUM_AUDIO_LAYERS,
-        num_audio_token=NUM_AUDIO_TOKEN,
-        audio_inject_layers=AUDIO_INJECT_LAYERS,
-        enable_adain=enable_adain,
-        enable_motioner=False,
-        enable_framepack=True,
-        cond_dim=16,
-        mesh_device=mesh_device,
-        ccl_manager=ccl_manager,
-        parallel_config=parallel_config,
-        is_fsdp=is_fsdp,
-        model_type="s2v",
-    )
-
-
-# ---------------------------------------------------------------------------
-# Torch reference for the block test — inlined ports of upstream WAN math.
-# References: wan/modules/model.py + wan/modules/s2v/model_s2v.py.
-# ---------------------------------------------------------------------------
+# Torch reference shared by the block + model tests. Inlined ports of upstream
+# wan/modules/model.py + wan/modules/s2v/model_s2v.py with CUDA / distributed /
+# flash_attention deps replaced by plain torch ops. Class names + state_dict
+# keys match upstream so ``translate_s2v_state_dict`` round-trips cleanly.
 
 
 class TorchWanRMSNorm(nn.Module):
@@ -269,71 +229,12 @@ class TorchWanS2VAttentionBlock(nn.Module):
         return x
 
 
-# ---------------------------------------------------------------------------
-# Inline torch port of upstream WanModel_S2V for full-model PCC parity.
-# CUDA/distributed/flash_attention dependencies replaced with plain torch ops.
-# Class names + state_dict keys match upstream so ``translate_s2v_state_dict``
-# round-trips cleanly.
-# ---------------------------------------------------------------------------
-
-
 def torch_sinusoidal_embedding_1d(dim: int, position: torch.Tensor) -> torch.Tensor:
     """Vendored from wan/modules/motioner.py."""
     half = dim // 2
     position = position.type(torch.float32)
     sinusoid = torch.outer(position, torch.pow(10000, -torch.arange(half, dtype=torch.float32) / half))
     return torch.cat([torch.cos(sinusoid), torch.sin(sinusoid)], dim=1)
-
-
-def torch_rope_precompute(
-    x: torch.Tensor, grid_sizes: list, freqs: torch.Tensor, start: torch.Tensor | None = None
-) -> torch.Tensor:
-    """Vendored verbatim from wan/modules/s2v/s2v_utils.py:rope_precompute."""
-    import numpy as np
-
-    b, s, n, c = x.size(0), x.size(1), x.size(2), x.size(3) // 2
-    trainable_freqs = None
-    if isinstance(freqs, list):
-        trainable_freqs = freqs[1]
-        freqs = freqs[0]
-    freqs = freqs.split([c - 2 * (c // 3), c // 3, c // 3], dim=1)
-    output = torch.view_as_complex(x.detach().reshape(b, s, n, -1, 2).to(torch.float64))
-    seq_bucket = [0]
-    if not isinstance(grid_sizes, list):
-        grid_sizes = [grid_sizes]
-    for g in grid_sizes:
-        if not isinstance(g, list):
-            g = [torch.zeros_like(g), g]
-        batch_size = g[0].shape[0]
-        for i in range(batch_size):
-            f_o, h_o, w_o = start[i] if start is not None else g[0][i]
-            f, h, w = g[1][i]
-            t_f, t_h, t_w = g[2][i]
-            seq_f, seq_h, seq_w = f - f_o, h - h_o, w - w_o
-            seq_len = int(seq_f * seq_h * seq_w)
-            if seq_len > 0:
-                if t_f > 0:
-                    if f_o >= 0:
-                        f_sam = np.linspace(f_o.item(), (t_f + f_o).item() - 1, seq_f).astype(int).tolist()
-                    else:
-                        f_sam = np.linspace(-f_o.item(), (-t_f - f_o).item() + 1, seq_f).astype(int).tolist()
-                    h_sam = np.linspace(h_o.item(), (t_h + h_o).item() - 1, seq_h).astype(int).tolist()
-                    w_sam = np.linspace(w_o.item(), (t_w + w_o).item() - 1, seq_w).astype(int).tolist()
-                    freqs_0 = freqs[0][f_sam] if f_o >= 0 else freqs[0][f_sam].conj()
-                    freqs_0 = freqs_0.view(seq_f, 1, 1, -1)
-                    freqs_i = torch.cat(
-                        [
-                            freqs_0.expand(seq_f, seq_h, seq_w, -1),
-                            freqs[1][h_sam].view(1, seq_h, 1, -1).expand(seq_f, seq_h, seq_w, -1),
-                            freqs[2][w_sam].view(1, 1, seq_w, -1).expand(seq_f, seq_h, seq_w, -1),
-                        ],
-                        dim=-1,
-                    ).reshape(seq_len, 1, -1)
-                elif t_f < 0:
-                    freqs_i = trainable_freqs.unsqueeze(1)
-                output[i, seq_bucket[-1] : seq_bucket[-1] + seq_len] = freqs_i
-        seq_bucket.append(seq_bucket[-1] + seq_len)
-    return output
 
 
 class TorchCausalConv1d(nn.Module):
@@ -489,12 +390,10 @@ class TorchHead_S2V(nn.Module):
 
     def __init__(self, dim: int, out_dim: int, patch_size: tuple[int, int, int], eps: float = 1e-6) -> None:
         super().__init__()
-        import math as _math
-
         self.dim = dim
         self.out_dim = out_dim
         self.patch_size = patch_size
-        full_out = _math.prod(patch_size) * out_dim
+        full_out = math.prod(patch_size) * out_dim
         self.norm = TorchWanLayerNorm(dim, eps)
         self.head = nn.Linear(dim, full_out)
         self.modulation = nn.Parameter(torch.randn(1, 2, dim) / dim**0.5)
@@ -682,7 +581,7 @@ class TorchWanS2VModel(nn.Module):
         x = torch.cat([x_noisy, x_ref], dim=1)
         N_total = x.shape[1]
         placeholder = torch.zeros(B, N_total, self.num_heads, self.dim // self.num_heads, dtype=torch.float32)
-        freqs_per_token = torch_rope_precompute(placeholder, [noisy_grid, ref_grid], self.freqs, start=None)
+        freqs_per_token = rope_precompute(placeholder, [noisy_grid, ref_grid], self.freqs, start=None)
 
         # Mask: 0=noisy, 1=ref. (drop_first_motion=True so no motion=2 tokens here.)
         mask = torch.zeros(B, N_total, dtype=torch.long)
@@ -718,11 +617,6 @@ class TorchWanS2VModel(nn.Module):
         return x.reshape(B, self.out_dim, F_p * p_t, H_p * p_h, W_p * p_w)
 
 
-# ---------------------------------------------------------------------------
-# Block parity — single block at full production config.
-# ---------------------------------------------------------------------------
-# Resolution is parametrized below; T_video and patched H/W depend on it.
-# The block is configured at production model dims (DIM=5120, NUM_HEADS=40, etc.).
 BLOCK_PROMPT_SEQ_LEN = 32
 BLOCK_PCC = 0.99
 
@@ -1192,13 +1086,32 @@ def test_wan_s2v_transformer_inner_step(
     )
     ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
 
-    tt_model = _make_wan_s2v_transformer(
+    tt_model = WanS2VTransformer3DModel(
+        patch_size=PATCH_SIZE,
+        num_heads=NUM_HEADS,
+        dim=DIM,
+        in_channels=IN_CHANNELS,
+        out_channels=OUT_CHANNELS,
+        text_dim=TEXT_DIM,
+        freq_dim=FREQ_DIM,
+        ffn_dim=FFN_DIM,
+        num_layers=cfg["num_layers"],
+        cross_attn_norm=True,
+        eps=EPS,
+        rope_max_seq_len=ROPE_MAX_SEQ_LEN,
+        audio_dim=AUDIO_DIM,
+        num_audio_layers=NUM_AUDIO_LAYERS,
+        num_audio_token=NUM_AUDIO_TOKEN,
+        audio_inject_layers=AUDIO_INJECT_LAYERS,
+        enable_adain=cfg.get("enable_adain", True),
+        enable_motioner=False,
+        enable_framepack=True,
+        cond_dim=16,
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         is_fsdp=is_fsdp,
-        num_layers=cfg["num_layers"],
-        enable_adain=cfg.get("enable_adain", True),
+        model_type="s2v",
     )
     ref_sd = load_s2v_state_dict(snapshot)
     tt_sd = translate_s2v_state_dict(ref_sd)

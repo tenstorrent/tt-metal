@@ -6,8 +6,6 @@
 
 from __future__ import annotations
 
-from typing import Iterable
-
 import torch
 
 import ttnn
@@ -32,9 +30,9 @@ class FramePackMotionerWan(Module):
     """On-device :class:`FramePackMotioner` from the WAN 2.2 S2V reference.
 
     Three patch-embedding projections with different temporal/spatial strides,
-    one per ``zip_frame_buckets`` entry. Produces flat motion tokens on device
-    and returns the per-token rope embedding as a CPU complex tensor (rope is
-    applied downstream via the standard attention path).
+    one per ``zip_frame_buckets`` entry. After a single upload of the motion
+    latents, the per-bucket temporal split, patchify reshape/permute, and
+    matmul all happen on device.
     """
 
     def __init__(
@@ -52,6 +50,7 @@ class FramePackMotionerWan(Module):
         assert (
             inner_dim % num_heads == 0 and (inner_dim // num_heads) % 2 == 0
         ), "inner_dim must be divisible by num_heads and head_dim must be even"
+        assert drop_mode == "padd", f"only drop_mode='padd' is supported, got {drop_mode!r}"
         self.in_channels = in_channels
         self.inner_dim = inner_dim
         self.num_heads = num_heads
@@ -87,8 +86,8 @@ class FramePackMotionerWan(Module):
         )
 
         # Rope frequencies — same construction as ``WanModel_S2V.__init__``.
-        # Cached on host; the per-clip ``rope_precompute`` call uses these to
-        # build motion-token rotaries.
+        # Cached on host; the per-clip ``rope_precompute`` call in the parent
+        # transformer uses these to build motion-token rotaries.
         d = self.head_dim
         self.freqs = torch.cat(
             [
@@ -99,93 +98,87 @@ class FramePackMotionerWan(Module):
             dim=1,
         )
 
-    def _project(self, x_BCTHW: torch.Tensor, proj: WanPatchEmbed) -> ttnn.Tensor:
-        """Host-patchify → upload → on-device matmul. Returns ``[1, B, N, dim]``."""
-        pT, pH, pW = proj.patch_size
-        B, C, T, H, W = x_BCTHW.shape
-        # Conv3d with stride==kernel silently drops the remainder; do the same on host.
-        T_use, H_use, W_use = (T // pT) * pT, (H // pH) * pH, (W // pW) * pW
-        x = x_BCTHW[:, :, :T_use, :H_use, :W_use]
-        patch_T, patch_H, patch_W = T_use // pT, H_use // pH, W_use // pW
-        N = patch_T * patch_H * patch_W
-        x = x.reshape(B, C, patch_T, pT, patch_H, pH, patch_W, pW)
-        x = x.permute(0, 2, 4, 6, 3, 5, 7, 1).reshape(1, B, N, pT * pH * pW * C)
-        x_dev = bf16_tensor(x, device=self.mesh_device, layout=ttnn.TILE_LAYOUT)
-        return proj(x_dev)
+    def _project(self, x_BCTHW_dev: ttnn.Tensor, proj: WanPatchEmbed) -> ttnn.Tensor:
+        """Patchify + project on device. Mirrors HF ``Conv3d(stride=kernel=patch_size)``.
 
-    def forward(
-        self,
-        motion_latents: torch.Tensor | Iterable[torch.Tensor],
-        *,
-        add_last_motion: int = 2,
-    ) -> tuple[ttnn.Tensor, torch.Tensor]:
+        Reshape+permute into the unfolded ``[1, B, N, pT*pH*pW*C]`` form that
+        :class:`WanPatchEmbed` expects, decomposed into two ≤6D stages because
+        the natural 8D permute exceeds ttnn's supported rank. Spatial/temporal
+        remainders not divisible by the patch size are dropped, same as Conv3d.
+        """
+        pT, pH, pW = proj.patch_size
+        B, C, T, H, W = x_BCTHW_dev.shape
+        T_use, H_use, W_use = (T // pT) * pT, (H // pH) * pH, (W // pW) * pW
+        patch_T, patch_H, patch_W = T_use // pT, H_use // pH, W_use // pW
+
+        x = x_BCTHW_dev
+        if (T_use, H_use, W_use) != (T, H, W):
+            x = ttnn.slice(x, [0, 0, 0, 0, 0], [B, C, T_use, H_use, W_use])
+
+        # Spatial fold: [B, C, T_use, H, W] → [B, T_use, patch_H, patch_W, pH*pW*C]
+        x = ttnn.reshape(x, (B, C, T_use, patch_H, pH, W_use))
+        x = ttnn.permute(x, (0, 2, 3, 4, 5, 1))
+        x = ttnn.reshape(x, (B, T_use, patch_H, pH, patch_W, pW * C))
+        x = ttnn.permute(x, (0, 1, 2, 4, 3, 5))
+        x = ttnn.reshape(x, (B, T_use, patch_H, patch_W, pH * pW * C))
+
+        # Temporal fold: → [1, B, patch_T*patch_H*patch_W, pT*pH*pW*C]
+        x = ttnn.reshape(x, (B, patch_T, pT, patch_H, patch_W, pH * pW * C))
+        x = ttnn.permute(x, (0, 1, 3, 4, 2, 5))
+        x = ttnn.reshape(x, (1, B, patch_T * patch_H * patch_W, pT * pH * pW * C))
+
+        return proj(ttnn.to_layout(x, ttnn.TILE_LAYOUT))
+
+    def forward(self, motion_latents: torch.Tensor) -> ttnn.Tensor:
         """Run the three projections and concatenate.
 
         Args:
-            motion_latents: CPU motion-latent tensor ``[B, C=16, T, H, W]``
-                (or a single-element list of one). For single-clip the
-                contents are typically zero.
-            add_last_motion: production default is ``2``; other values are
-                rejected (not in the HF prod path).
+            motion_latents: ``[B=1, C=16, T, H, W]`` CPU latents. Single-clip
+                production passes a zero tensor with ``T == sum(zip_frame_buckets)``.
 
         Returns:
-            ``(motion_tokens_dev, motion_rope_torch)``:
-                * ``motion_tokens_dev`` — ``[1, B, N_motion, inner_dim]``
-                  ttnn tensor, TP-fractured on D.
-                * ``motion_rope_torch`` — ``[B, N_motion, num_heads,
-                  head_dim/2]`` complex CPU tensor; applied downstream via
-                  the standard rope plumbing.
+            ``[1, B, N_motion, inner_dim]`` motion tokens, TP-fractured on the
+            embed dim.
         """
-        # Production always passes add_last_motion=2; lower values are an
-        # historical legacy of multi-clip / partial-context inference paths
-        # the production pipeline never exercises.
-        if add_last_motion != 2:
-            raise NotImplementedError(f"add_last_motion={add_last_motion} is not in the HF prod path (expected 2)")
-
-        if isinstance(motion_latents, torch.Tensor):
-            motion_latents = [motion_latents]
-        x = motion_latents[0]
-        if x.dim() == 4:
-            # [C, T, H, W] → [1, C, T, H, W]
-            x = x.unsqueeze(0)
-        B, C, T_motion, lat_h, lat_w = x.shape
-        assert B == 1, "FramePackMotionerWan is single-batch in v1"
+        B, C, T_motion, lat_h, lat_w = motion_latents.shape
+        assert B == 1, "FramePackMotionerWan is single-batch"
         assert C == self.in_channels, f"expected {self.in_channels} channels, got {C}"
 
-        # Build padd_lat by concat instead of zero-alloc + slice-overwrite.
-        # In the production multi-clip path, T_motion == total_T == 19, so the
-        # full zero buffer was being allocated and then completely overwritten —
-        # ~7.6 MB of pointless alloc + memset per clip. Concat skips that.
+        # Build padd_lat [B, C, total_T, H, W] on device. Production hits the
+        # ``zero_lead == 0`` fast path (motion latents cover total_T); the other
+        # branches handle short-clip / no-overlap edge cases.
         total_T = sum(self.zip_frame_buckets)
         overlap = min(total_T, T_motion)
         zero_lead = total_T - overlap
-        if zero_lead == 0:
-            padd_lat = x[:, :, -overlap:]
-        elif overlap == 0:
-            padd_lat = torch.zeros(B, C, total_T, lat_h, lat_w, dtype=x.dtype, device=x.device)
-        else:
-            padd_lat = torch.cat(
-                [
-                    torch.zeros(B, C, zero_lead, lat_h, lat_w, dtype=x.dtype, device=x.device),
-                    x[:, :, -overlap:],
-                ],
-                dim=2,
+
+        if overlap > 0:
+            x_used_dev = bf16_tensor(
+                motion_latents[:, :, -overlap:].contiguous(),
+                device=self.mesh_device,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
             )
+        if zero_lead == 0:
+            padd_lat_dev = x_used_dev
+        else:
+            zeros_dev = ttnn.zeros(
+                [B, C, zero_lead, lat_h, lat_w],
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh_device,
+            )
+            padd_lat_dev = zeros_dev if overlap == 0 else ttnn.concat([zeros_dev, x_used_dev], dim=2)
 
-        # Future optimization: replace the host-side `_patchify_for_unfolded_conv`
-        # + `bf16_tensor` upload per bucket with `ttnn.experimental.conv3d` using
-        # stride=kernel=patch_size. That requires a conv3d sweep on the three
-        # motioner shapes ((16, 5120, (1,2,2)), (16, 5120, (2,4,4)),
-        # (16, 5120, (4,8,8))) so they don't hit the `(in_c, 32, 1, 1, 1)`
-        # hardcoded fallback. Tracked under WAN_S2V_PERF_CLEANUP.md item 4.
+        # Reference splits along T as [4x, 2x, post] (reverse of zip_frame_buckets).
+        t_4x, t_2x, _ = list(self.zip_frame_buckets)[::-1]
+        clean_4x = ttnn.slice(padd_lat_dev, [0, 0, 0, 0, 0], [B, C, t_4x, lat_h, lat_w])
+        clean_2x = ttnn.slice(padd_lat_dev, [0, 0, t_4x, 0, 0], [B, C, t_4x + t_2x, lat_h, lat_w])
+        clean_post = ttnn.slice(padd_lat_dev, [0, 0, t_4x + t_2x, 0, 0], [B, C, total_T, lat_h, lat_w])
 
-        # Split the temporal axis as the reference does — bucket order is
-        # [4x, 2x, post] (reverse of self.zip_frame_buckets).
-        clean_4x, clean_2x, clean_post = padd_lat.split(list(self.zip_frame_buckets)[::-1], dim=2)
-
-        # Patchify + on-device matmul for each bucket.
-        post_tokens = self._project(clean_post, self.proj)  # [1, B, N_post, dim]
-        twox_tokens = self._project(clean_2x, self.proj_2x)
-        fourx_tokens = self._project(clean_4x, self.proj_4x)
-
-        return ttnn.concat([post_tokens, twox_tokens, fourx_tokens], dim=2)
+        return ttnn.concat(
+            [
+                self._project(clean_post, self.proj),
+                self._project(clean_2x, self.proj_2x),
+                self._project(clean_4x, self.proj_4x),
+            ],
+            dim=2,
+        )

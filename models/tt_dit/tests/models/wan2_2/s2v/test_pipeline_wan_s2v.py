@@ -23,7 +23,7 @@ from .....utils.test import line_params, ring_params
 # Override with env vars when needed.
 _REF_IMAGE_PATH = os.environ.get("S2V_REF_IMAGE", "./prompt_image.png")
 _AUDIO_PATH = os.environ.get("S2V_AUDIO", "./prompt_audio.wav")
-_PROMPT = "a person is talking"
+_PROMPT = os.environ.get("S2V_PROMPT", "a person is talking")
 _NEGATIVE_PROMPT = (
     # s2v_14B-specific negative prompt from reference wan_s2v_14B.py:55.
     "画面模糊，最差质量，画面模糊，细节模糊不清，情绪激动剧烈，手快速抖动，字幕，丑陋的，残缺的，"

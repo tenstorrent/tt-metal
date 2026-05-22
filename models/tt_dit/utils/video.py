@@ -109,13 +109,15 @@ def merge_video_audio(video_path: str, audio_path: str):
     if not os.path.exists(audio_path):
         raise FileNotFoundError(f"audio file {audio_path} does not exist")
 
+    from imageio_ffmpeg import get_ffmpeg_exe
+
     base, ext = os.path.splitext(video_path)
     temp_output = f"{base}_temp{ext}"
 
     try:
         # create ffmpeg command
         command = [
-            "ffmpeg",
+            get_ffmpeg_exe(),
             "-y",  # overwrite
             "-i",
             video_path,
