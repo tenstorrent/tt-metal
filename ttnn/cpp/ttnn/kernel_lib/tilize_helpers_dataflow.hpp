@@ -69,14 +69,28 @@ enum class TilizeGranularity : uint8_t {
  * @tparam Accessor TensorAccessor type (deduced)
  * @param accessor TensorAccessor for the source tensor (stick-indexed)
  * @param total_num_rows Total number of sticks to read
- * @param row_bytes Actual bytes per stick (may be non-tile-aligned)
+ * @param row_bytes Actual bytes per stick to read (may be non-tile-aligned).
+ *        Combined with byte_offset_within_page this selects a chunk along W:
+ *        each stick contributes `row_bytes` bytes starting at byte
+ *        `byte_offset_within_page` of its source page.
  * @param start_page Starting page/stick index in the accessor (default 0).
  *        For multi-core work distribution, pass the per-core start_row offset
  *        so the accessor reads from the correct tensor slice.
+ * @param byte_offset_within_page Byte offset inside each source page where
+ *        reading begins (default 0). Used for wide-W chunking: wrap this
+ *        helper in a chunk-outer loop and pass
+ *        `byte_offset_within_page = chunk_id * row_bytes` so each call reads a
+ *        different W-chunk of the same set of sticks. CB sizing (per call)
+ *        then scales with `row_bytes` (the chunk width), not the full row,
+ *        bounding L1 footprint regardless of total W.
  */
 template <uint32_t cb_id, TilizeGranularity granularity = TilizeGranularity::TILE, typename Accessor>
 FORCE_INLINE void read_sticks_for_tilize(
-    const Accessor& accessor, uint32_t total_num_rows, uint32_t row_bytes, uint32_t start_page = 0);
+    const Accessor& accessor,
+    uint32_t total_num_rows,
+    uint32_t row_bytes,
+    uint32_t start_page = 0,
+    uint32_t byte_offset_within_page = 0);
 
 /**
  * @brief Write untilized sticks from a CB to DRAM
@@ -99,14 +113,26 @@ FORCE_INLINE void read_sticks_for_tilize(
  * @tparam Accessor TensorAccessor type (deduced)
  * @param accessor TensorAccessor for the destination tensor (stick-indexed)
  * @param total_num_rows Total number of sticks to write
- * @param row_bytes Actual bytes per stick to write (may be non-tile-aligned)
+ * @param row_bytes Actual bytes per stick to write (may be non-tile-aligned).
+ *        Combined with byte_offset_within_page this selects a chunk along W:
+ *        each stick writes `row_bytes` bytes starting at byte
+ *        `byte_offset_within_page` of its destination page.
  * @param start_page Starting page/stick index in the accessor (default 0).
  *        For multi-core work distribution, pass the per-core start_row offset
  *        so the accessor writes to the correct tensor slice.
+ * @param byte_offset_within_page Byte offset inside each destination page
+ *        where writing begins (default 0). Symmetric to the read helper's
+ *        parameter: wrap this helper in a chunk-outer loop and pass
+ *        `byte_offset_within_page = chunk_id * row_bytes` so each call writes
+ *        a different W-chunk of the same set of sticks.
  */
 template <uint32_t cb_id, typename Accessor>
 FORCE_INLINE void write_sticks_after_untilize(
-    const Accessor& accessor, uint32_t total_num_rows, uint32_t row_bytes, uint32_t start_page = 0);
+    const Accessor& accessor,
+    uint32_t total_num_rows,
+    uint32_t row_bytes,
+    uint32_t start_page = 0,
+    uint32_t byte_offset_within_page = 0);
 
 }  // namespace dataflow_kernel_lib
 
