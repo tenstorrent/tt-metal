@@ -23,7 +23,7 @@ from diffusers.pipelines.wan.pipeline_output import WanPipelineOutput
 from diffusers.schedulers import UniPCMultistepScheduler
 from diffusers.video_processor import VideoProcessor
 from loguru import logger
-from PIL import Image, ImageOps
+from PIL import Image
 from transformers import AutoTokenizer, UMT5EncoderModel, Wav2Vec2Model, Wav2Vec2Processor
 
 import ttnn
@@ -810,10 +810,10 @@ class WanPipelineS2V(WanPipeline):
         with _stage("prepare_latents"):
             # 2. Reference image VAE encode (once).
             with _stage("s2v_vae_encode_ref"):
-                # ImageOps.pad letterboxes to (height, width) so arbitrary-aspect
-                # input isn't stretched by VideoProcessor's default resize.
-                image_prompt_padded = ImageOps.pad(image_prompt, (width, height), method=Image.Resampling.LANCZOS)
-                ref_tensor = self.video_processor.preprocess(image_prompt_padded, height=height, width=width).to(
+                # Stretch-resize via VideoProcessor (matches pipeline_wan_i2v).
+                # Aspect-preserving letterbox is a one-line swap — see
+                # pipeline_wan_s2v.md.
+                ref_tensor = self.video_processor.preprocess(image_prompt, height=height, width=width).to(
                     "cpu", dtype=torch.float32
                 )
                 ref_video = ref_tensor.unsqueeze(2)  # [1, 3, 1, H, W]
