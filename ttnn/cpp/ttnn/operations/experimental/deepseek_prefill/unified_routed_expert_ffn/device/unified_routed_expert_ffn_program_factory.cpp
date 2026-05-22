@@ -135,8 +135,12 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // reconfig that the v2 kernel doesn't do). Use bfp8_b for both: 1KB/tile
     // is half the bf16 cost so we fit in L1 with both intermediates and
     // partials sized to the full per-core block.
+    // PACKER_L1_ACC with bf8 partials loses precision rapidly (shared
+    // exponent re-quantization per K-block step). Keep partials in bf16 for
+    // accumulation; intermed stays bf8 for L1 budget.
     const tt::DataFormat intermed_df = tt::DataFormat::Bfp8_b;
-    const tt::DataFormat partials_df = tt::DataFormat::Bfp8_b;
+    const tt::DataFormat partials_gu_df = tt::DataFormat::Float16_b;
+    const tt::DataFormat partials_d_df = tt::DataFormat::Bfp8_b;  // K_down=64 small enough; bf16 doesn't fit L1
 
     const uint32_t x_tile_size = tt::tile_size(x_df);
     const uint32_t gate_tile_size = tt::tile_size(gate_df);
@@ -144,7 +148,8 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const uint32_t down_tile_size = tt::tile_size(down_df);
     const uint32_t out_tile_size = tt::tile_size(out_df);
     const uint32_t intermed_tile_size = tt::tile_size(intermed_df);
-    const uint32_t partials_tile_size = tt::tile_size(partials_df);
+    const uint32_t partials_gu_tile_size = tt::tile_size(partials_gu_df);
+    const uint32_t partials_d_tile_size = tt::tile_size(partials_d_df);
 
     // -------------------------- compute grid ------------------------------
     const CoreRange core_range({0, 0}, {GRID_X - 1, GRID_Y - 1});
@@ -206,23 +211,22 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // must hold all those subblocks = the full block.
     make_cb(
         CB_PARTIALS_GU,
-        partials_df,
+        partials_gu_df,
         /*tiles=*/gu_out_block_num_tiles,
-        partials_tile_size);
+        partials_gu_tile_size);
     make_cb(
         CB_PARTIALS_D,
-        partials_df,
+        partials_d_df,
         /*tiles=*/d_out_block_num_tiles,
-        partials_tile_size);
+        partials_d_tile_size);
     // Output CB: writer drains one subblock at a time.
     make_cb(CB_OUT, out_df, /*tiles=*/d_out_subblock_h * d_out_subblock_w * 4, out_tile_size);
     // cb_in0_down_full: reader pushes per_core_M × in0_block_w_d tiles of activated
-    // (read back from DRAM scratch) once per down K-block. Double-buffered so the
-    // matmul kernel can overlap K-block iterations with reader fetches.
+    // once per down K-block. Single-buffered to save L1.
     make_cb(
         CB_IN0_DOWN_FULL,
         intermed_df,
-        /*tiles=*/d_in0_block_num_tiles * 2,
+        /*tiles=*/d_in0_block_num_tiles,
         intermed_tile_size);
 
     // Scratch CBs for the device-side count lookup. One page each, sized to

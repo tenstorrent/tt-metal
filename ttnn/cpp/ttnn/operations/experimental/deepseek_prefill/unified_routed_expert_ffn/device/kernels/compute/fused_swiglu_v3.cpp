@@ -56,6 +56,11 @@ template <
     bool apply_silu_on_final>
 FORCE_INLINE void matmul_phase_v3(
     uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t partials_cb_id, uint32_t final_cb_id) {
+#ifdef PACKER_L1_ACC
+    // Start each phase with L1_ACC off. We re-enable it after block 0
+    // finishes so blocks 1..N-1 accumulate into the partials L1 slots.
+    PACK((llk_pack_reconfig_l1_acc(0)));
+#endif
     for (uint32_t block = 0; block < num_blocks; ++block) {
         const bool last_out = (block == num_blocks - 1);
 
@@ -68,39 +73,25 @@ FORCE_INLINE void matmul_phase_v3(
             for (uint32_t sb_n = 0; sb_n < in1_num_subblocks; ++sb_n) {
                 tile_regs_acquire();
 
-                // matmul_block: production-style block-granular matmul. For
-                // each inner-dim iteration, matmul_block computes the
-                // out_subblock_h × out_subblock_w output tile block.
-                uint32_t dst_index = 0;
-                uint32_t in0_index = in0_index_subblock_offset;
-                uint32_t in1_index = in1_index_subblock_offset;
-                for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
-                    matmul_block(
-                        in0_cb_id,
-                        in1_cb_id,
-                        in0_index,
-                        in1_index,
-                        dst_index,
-                        /*transpose=*/0,
-                        out_subblock_w,
-                        out_subblock_h,
-                        in0_block_w);
-                    in0_index += 1;
-                    in1_index += in1_per_core_w;
+                // matmul_tiles per-tile pattern (v2-style).
+                int dst_index = 0;
+                int in0_index_h_offset = 0;
+                for (uint32_t h = 0; h < out_subblock_h; ++h) {
+                    for (uint32_t w = 0; w < out_subblock_w; ++w) {
+                        int in1_index_inner_dim_offset = 0;
+                        for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
+                            int in0_index = in0_index_subblock_offset + in0_index_h_offset + inner_dim;
+                            int in1_index = in1_index_subblock_offset + in1_index_inner_dim_offset + w;
+                            matmul_tiles(in0_cb_id, in1_cb_id, in0_index, in1_index, dst_index);
+                            in1_index_inner_dim_offset += in1_per_core_w;
+                        }
+                        ++dst_index;
+                    }
+                    in0_index_h_offset += in0_block_w;
                 }
 
                 tile_regs_commit();
                 tile_regs_wait();
-
-#ifdef PACKER_L1_ACC
-                // Configure packer L1_ACC: OFF on block 0 (overwrite), ON
-                // from block 1 onwards (accumulate).
-                if (block == 0) {
-                    PACK((llk_pack_reconfig_l1_acc(0)));
-                } else if (block == 1) {
-                    PACK((llk_pack_reconfig_l1_acc(1)));
-                }
-#endif
 
                 cb_reserve_back(partials_cb_id, out_subblock_num_tiles);
                 for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
@@ -124,6 +115,13 @@ FORCE_INLINE void matmul_phase_v3(
             }
         }
 
+#ifdef PACKER_L1_ACC
+        // After block 0 finishes, flip L1_ACC on so blocks 1..N-1 accumulate.
+        if (block == 0) {
+            PACK((llk_pack_reconfig_l1_acc(1)));
+        }
+#endif
+
         cb_pop_front(in0_cb_id, in0_block_num_tiles);
         cb_pop_front(in1_cb_id, in1_block_num_tiles);
     }
@@ -134,8 +132,13 @@ FORCE_INLINE void matmul_phase_v3(
 #ifdef PACKER_L1_ACC
     PACK((llk_pack_reconfig_l1_acc(0)));  // future packs (to final_cb) must overwrite
 #endif
-    // Reconfigure SrcA from in0 (matmul) to partials so copy_tile reads partials.
-    copy_tile_to_dst_init_short_with_dt(in0_cb_id, partials_cb_id);
+    // Packer was configured for partials_cb format during matmul. The final
+    // pack lands in final_cb (different format) — reconfigure both packer
+    // data format and SrcA before the copy/pack loop.
+    PACK((pack_reconfig_data_format(final_cb_id)));
+    // matmul puts in1 → SrcA, in0 → SrcB. Reconfigure SrcA from in1 to
+    // partials so copy_tile reads partials.
+    copy_tile_to_dst_init_short_with_dt(in1_cb_id, partials_cb_id);
 
     for (uint32_t sb = 0; sb < (out_block_num_tiles / out_subblock_num_tiles); ++sb) {
         tile_regs_acquire();
@@ -245,8 +248,7 @@ void kernel_main() {
     constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
 
     silu_tile_init_pack();
-    mm_block_init(
-        cb_in0_x, cb_in1_gate, cb_partials_gu, /*transpose=*/0, gu_out_subblock_w, gu_out_subblock_h, g_in0_block_w);
+    mm_init(cb_in0_x, cb_in1_gate, cb_partials_gu);
 
     // Phase 1: gate matmul with silu fused on the final pack into gate_intermed.
     matmul_phase_v3<
@@ -265,8 +267,7 @@ void kernel_main() {
         /*apply_silu_on_final=*/true>(cb_in0_x, cb_in1_gate, cb_partials_gu, cb_gate_intermed);
 
     // Phase 2: up matmul (no activation), output to up_intermed.
-    mm_block_init_short_with_dt(
-        cb_in0_x, cb_in1_up, cb_partials_gu, /*transpose=*/0, gu_out_subblock_w, gu_out_subblock_h, u_in0_block_w);
+    mm_init_short_with_dt(cb_in0_x, cb_in1_up, cb_partials_gu);
     matmul_phase_v3<
         u_in0_block_w,
         u_in0_num_subblocks,
@@ -287,14 +288,7 @@ void kernel_main() {
         cb_gate_intermed, cb_up_intermed, cb_activated);
 
     // Phase 4: down matmul, output to cb_out.
-    mm_block_init(
-        cb_in0_down_full,
-        cb_in1_down,
-        cb_partials_d,
-        /*transpose=*/0,
-        d_out_subblock_w,
-        d_out_subblock_h,
-        d_in0_block_w);
+    mm_init(cb_in0_down_full, cb_in1_down, cb_partials_d);
     matmul_phase_v3<
         d_in0_block_w,
         d_in0_num_subblocks,
