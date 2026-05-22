@@ -22,20 +22,15 @@ from .....parallel.manager import CCLManager
 from .....utils.check import assert_quality
 from .....utils.tensor import from_torch, to_torch
 from .....utils.test import line_params, ring_params
+from .....utils.wan_s2v_checkpoint import find_s2v_snapshot
 
 
-def _bundled_wav2vec2_path() -> Path | None:
-    base = Path.home() / ".cache/huggingface/hub/models--Wan-AI--Wan2.2-S2V-14B/snapshots"
-    if not base.exists():
-        return None
-    snaps = list(base.iterdir())
-    if not snaps:
-        return None
-    candidate = snaps[0] / "wav2vec2-large-xlsr-53-english"
-    return candidate if candidate.exists() else None
+def _bundled_wav2vec2_path() -> Path:
+    """Snapshot-relative path to the wav2vec2-large-xlsr-53 bundled in the S2V repo.
+    Auto-downloads the S2V snapshot on first run.
+    """
+    return find_s2v_snapshot() / "wav2vec2-large-xlsr-53-english"
 
-
-_BUNDLED_PATH = _bundled_wav2vec2_path()
 
 # pos_conv runs ttnn.conv1d which allocates an L1_SMALL halo program.
 _WAV2VEC2_L1_SMALL_SIZE = 32768
@@ -43,10 +38,6 @@ _LINE_PARAMS_W2V = {**line_params, "l1_small_size": _WAV2VEC2_L1_SMALL_SIZE}
 _RING_PARAMS_W2V = {**ring_params, "l1_small_size": _WAV2VEC2_L1_SMALL_SIZE}
 
 
-@pytest.mark.skipif(
-    _BUNDLED_PATH is None,
-    reason="Wan-AI/Wan2.2-S2V-14B bundled wav2vec2 weights not found. Run `hf download Wan-AI/Wan2.2-S2V-14B`.",
-)
 @pytest.mark.parametrize(
     ("mesh_device", "tp_axis", "num_links", "device_params", "topology"),
     [
@@ -69,7 +60,7 @@ def test_wav2vec2_encoder_s2v(
     topology: ttnn.Topology,
     audio_samples: int,
 ) -> None:
-    model_path = str(_BUNDLED_PATH)
+    model_path = str(_bundled_wav2vec2_path())
     logger.info(f"Loading wav2vec2-large-xlsr-53 from bundled S2V path: {model_path}")
 
     hf_model = Wav2Vec2Model.from_pretrained(model_path).eval()
@@ -106,10 +97,6 @@ def test_wav2vec2_encoder_s2v(
     assert_quality(tt_hidden_torch.float(), golden, pcc=0.99)
 
 
-@pytest.mark.skipif(
-    _BUNDLED_PATH is None,
-    reason="Wan-AI/Wan2.2-S2V-14B bundled wav2vec2 weights not found.",
-)
 @pytest.mark.parametrize(
     ("mesh_device", "device_params", "topology"),
     [
@@ -129,7 +116,7 @@ def test_pos_conv_embed_s2v(mesh_device: ttnn.MeshDevice, topology: ttnn.Topolog
     with a random [B=1, T, 768] input and compares its output bit-for-bit
     (within PCC=0.99) against HF's `Wav2Vec2PositionalConvEmbedding` reference.
     """
-    model_path = str(_BUNDLED_PATH)
+    model_path = str(_bundled_wav2vec2_path())
     hf_model = Wav2Vec2Model.from_pretrained(model_path).eval()
     config = Wav2Vec2Config.from_hf(hf_model.config)
 

@@ -544,10 +544,7 @@ def test_wan_s2v_transformer_model(
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
-    try:
-        snapshot = find_s2v_snapshot()
-    except FileNotFoundError:
-        pytest.skip("Wan-AI/Wan2.2-S2V-14B snapshot not found. Run `hf download Wan-AI/Wan2.2-S2V-14B`.")
+    snapshot = find_s2v_snapshot()
 
     cfg = load_s2v_config(snapshot)
     ref_sd = load_s2v_state_dict(snapshot)
@@ -605,10 +602,7 @@ def test_wan_s2v_transformer_inner_step(
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
-    try:
-        snapshot = find_s2v_snapshot()
-    except FileNotFoundError:
-        pytest.skip("Wan-AI/Wan2.2-S2V-14B snapshot not found. Run `hf download Wan-AI/Wan2.2-S2V-14B`.")
+    snapshot = find_s2v_snapshot()
 
     cfg = load_s2v_config(snapshot)
     parallel_config = DiTParallelConfig(

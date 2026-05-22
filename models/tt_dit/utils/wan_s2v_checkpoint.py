@@ -12,16 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
-
-try:
-    from safetensors.torch import load_file as _load_safetensors_file
-except ImportError:  # pragma: no cover - safetensors should be available with diffusers
-    _load_safetensors_file = None
-
-
-# ---------------------------------------------------------------------------
-# Snapshot + state-dict loading
-# ---------------------------------------------------------------------------
+from safetensors.torch import load_file as load_safetensors_file
 
 
 def find_s2v_snapshot(model_id: str = "Wan-AI/Wan2.2-S2V-14B") -> Path:
@@ -44,36 +35,23 @@ def load_s2v_config(snapshot_dir: Path | str) -> dict[str, Any]:
 
 
 def load_s2v_state_dict(snapshot_dir: Path | str) -> dict[str, torch.Tensor]:
-    """Merge the 4 safetensors shards into a single CPU ``state_dict`` (native naming)."""
-    if _load_safetensors_file is None:
-        raise ImportError("safetensors is required to load Wan2.2-S2V-14B weights")
-
+    """Merge the safetensors shards into a single CPU ``state_dict`` (native naming)."""
     snapshot_dir = Path(snapshot_dir)
-    index_path = snapshot_dir / "diffusion_pytorch_model.safetensors.index.json"
-    with index_path.open() as f:
-        index = json.load(f)
+    with (snapshot_dir / "diffusion_pytorch_model.safetensors.index.json").open() as f:
+        weight_map: dict[str, str] = json.load(f)["weight_map"]
 
-    weight_map = index["weight_map"]
-    shard_to_keys: dict[str, list[str]] = {}
-    for key, shard in weight_map.items():
-        shard_to_keys.setdefault(shard, []).append(key)
-
+    # Index → only the keys it says belong to each shard (safetensors files
+    # may carry extras from sharing/dedup).
     merged: dict[str, torch.Tensor] = {}
-    for shard, _keys in sorted(shard_to_keys.items()):
-        shard_path = snapshot_dir / shard
-        shard_dict = _load_safetensors_file(str(shard_path))
-        # Only keep the keys the index says belong to this shard (the
-        # safetensors files may contain extras for sharing/dedup).
-        for k in _keys:
-            merged[k] = shard_dict[k]
+    for shard in sorted(set(weight_map.values())):
+        shard_dict = load_safetensors_file(str(snapshot_dir / shard))
+        for k, s in weight_map.items():
+            if s == shard:
+                merged[k] = shard_dict[k]
 
     if len(merged) != len(weight_map):
-        missing = set(weight_map) - set(merged)
-        raise RuntimeError(
-            f"Loaded {len(merged)} keys but expected {len(weight_map)}; "
-            f"missing {len(missing)} (first few: {sorted(missing)[:5]})"
-        )
-
+        missing = sorted(set(weight_map) - set(merged))
+        raise RuntimeError(f"missing {len(missing)} keys (first few: {missing[:5]})")
     return merged
 
 
