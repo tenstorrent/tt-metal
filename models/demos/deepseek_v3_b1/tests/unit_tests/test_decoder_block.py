@@ -889,7 +889,7 @@ def test_decoder(
         (0, 1),
     ],
 )
-@pytest.mark.requires_grid_size((13, 10))
+# @pytest.mark.requires_grid_size((13, 10))  # disabled for half-DEST debug on 12x10 host
 def test_decoder_mlp(
     bh_2d_mesh_device,
     device_params,

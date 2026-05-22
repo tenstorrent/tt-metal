@@ -3053,8 +3053,10 @@ void kernel_main() {
         // bank. Root cause still open; iter-top re-init papers over it by forcing
         // every iter to run in bank 0.
 #if defined(COMPILE_FOR_TRISC)
-        MATH((llk_math_pack_sync_init<false>()));
-        PACK((llk_pack_dest_init<false, false>(0)));
+        // DISABLED for half-DEST debug: testing whether the iter-PCC alternation
+        // (#43563) is closed by a STALLWAIT in _llk_pack_dest_section_done_ instead.
+        // MATH((llk_math_pack_sync_init<false>()));
+        // PACK((llk_pack_dest_init<false, false>(0)));
 #endif
 #ifdef ENABLE_REDUCE_TO_ONE
 #if defined(COMPILE_FOR_NCRISC)
