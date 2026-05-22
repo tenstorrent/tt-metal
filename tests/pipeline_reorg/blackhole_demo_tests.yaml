@@ -519,6 +519,45 @@
   owner_id: U09ELB03XRU # Stephen Osborne
   team: models
   model-name: wan2.2-t2v-a14b
+
+# ─── z-image-turbo ──────────────────────────────────────────────────────────
+
+- name: z-image-turbo text encoder
+  cmd: |
+    set -e
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    pytest models/demos/z_image_turbo/tests/test_text_encoder.py --timeout=600
+  skus:
+    bh_quietbox_2:
+      timeout: 15
+  owner_id: U088VJ79WDB # Jonathan Su
+  team: models
+  model-name: z-image-turbo
+
+- name: z-image-turbo dit
+  cmd: |
+    set -e
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    pytest models/demos/z_image_turbo/tests/test_dit.py --timeout=600
+  skus:
+    bh_quietbox_2:
+      timeout: 15
+  owner_id: U088VJ79WDB # Jonathan Su
+  team: models
+  model-name: z-image-turbo
+
+- name: z-image-turbo vae
+  cmd: |
+    set -e
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    pytest models/demos/z_image_turbo/tests/test_vae.py --timeout=600
+  skus:
+    bh_quietbox_2:
+      timeout: 15
+  owner_id: U088VJ79WDB # Jonathan Su
+  team: models
+  model-name: z-image-turbo
+
 # ─── Stress tests (DISABLED) ────────────────────────────────────────────────
 #
 # Stress tests are moving to a separate pipeline. The original entries are
