@@ -485,8 +485,7 @@ class WanPipelineS2V(WanPipeline):
                 pass
 
     def _load_s2v_transformer(self, s2v_snapshot: Path) -> None:
-        # Lazy translate-on-cache-miss; warm runs skip the ~20-30 s native-mapper
-        # translation of 1260 params.
+        # Lazy translate-on-cache-miss; warm runs skip the native-mapper translation.
         cache.load_model(
             self.transformer,
             model_name=os.path.basename(self.checkpoint_name),
@@ -849,9 +848,8 @@ class WanPipelineS2V(WanPipeline):
                 )
 
             # 4. Motion state. Clip 0 (drop_first_motion=True) never reads
-            # motion_latents — placeholder zeros skip an 8.6 s VAE encode of
-            # 73 zero pixel frames. videos_last_frames is deferred (the first
-            # slide fully discards any prior zero contribution).
+            # motion_latents — placeholder zeros skip the unused VAE encode.
+            # videos_last_frames is deferred until the first inter-clip slide.
             videos_last_frames: Optional[torch.Tensor] = None
             latent_h = height // self.vae_scale_factor_spatial
             latent_w = width // self.vae_scale_factor_spatial
@@ -908,7 +906,7 @@ class WanPipelineS2V(WanPipeline):
                     image_BCTHW = image_BCTHW[:, :, self._S2V_VAE_CLIP0_TRIM :]
 
                 # Slide videos_last_frames forward only if a next clip will
-                # consume it — skip the final ~6.5 s motion-tail VAE encode.
+                # consume it — the final clip skips the motion-tail VAE encode.
                 if clip_idx + 1 < num_clips:
                     overlap = min(self._MOTION_FRAMES_PIXEL, image_BCTHW.shape[2])
                     if videos_last_frames is None or overlap >= self._MOTION_FRAMES_PIXEL:
