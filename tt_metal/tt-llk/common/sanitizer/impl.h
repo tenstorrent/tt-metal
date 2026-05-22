@@ -10,6 +10,7 @@
 #include <limits>
 
 #include "llk_assert.h"
+#include "sanitizer/assert.h"
 #include "sanitizer/output.h"
 #include "sanitizer/types.h"
 
@@ -209,20 +210,19 @@ static inline void unpack_operand_check_impl(
 {
     if (!thread_silent_get_impl(context))
     {
-        const auto pc = context.current.pc;
+        const UnwindContext current = context.current;
 
-        LLK_SAN_PEDANTIC_PANIC(!state.is_configured, "{:#x} : executing init/execute/uninit before hwconfigure", pc);
-
-        LLK_SAN_ERROR_ASSERT(state.dest_width_32.assert_cond(dest_acc_en), "{:#x} : dest_acc_en doesn't match state.dest_width_32", pc);
-
-        LLK_SAN_ERROR_ASSERT(state.src_a.input_format.assert_cond(src_fmt_A), "{:#x} : src_fmt_A doesn't match state.src_a.input_format", pc);
-        LLK_SAN_ERROR_ASSERT(state.src_b.input_format.assert_cond(src_fmt_B), "{:#x} : src_fmt_B doesn't match state.src_b.input_format", pc);
-        LLK_SAN_ERROR_ASSERT(state.src_a.output_format.assert_cond(dst_fmt_A), "{:#x} : dst_fmt_A doesn't match state.src_a.output_format", pc);
-        LLK_SAN_ERROR_ASSERT(state.src_b.output_format.assert_cond(dst_fmt_B), "{:#x} : dst_fmt_B doesn't match state.src_b.output_format", pc);
-        LLK_SAN_ERROR_ASSERT(state.src_a.face_height.assert_cond(face_height_A), "{:#x} : face_height_A doesn't match state.src_a.face_height", pc);
-        LLK_SAN_ERROR_ASSERT(state.src_b.face_height.assert_cond(face_height_B), "{:#x} : face_height_B doesn't match state.src_b.face_height", pc);
-        LLK_SAN_ERROR_ASSERT(state.src_a.num_faces.assert_cond(num_faces_A), "{:#x} : num_faces_A doesn't match state.src_a.num_faces", pc);
-        LLK_SAN_ERROR_ASSERT(state.src_b.num_faces.assert_cond(num_faces_B), "{:#x} : num_faces_B doesn't match state.src_b.num_faces", pc);
+        operand_assert(state.dest_width_32, dest_acc_en, CTSTR("configured vs provided UNPACK DEST ACCUMULATION are mismatched"), context.configure_a, current);
+        operand_assert(state.src_a.input_format, src_fmt_A, CTSTR("configured vs provided UNPACK A L1 FORMAT are mismatched"), context.configure_a, current);
+        operand_assert(state.src_b.input_format, src_fmt_B, CTSTR("configured vs provided UNPACK B L1 FORMAT are mismatched"), context.configure_b, current);
+        operand_assert(state.src_a.output_format, dst_fmt_A, CTSTR("configured vs provided SRC A FORMAT are mismatched"), context.configure_a, current);
+        operand_assert(state.src_b.output_format, dst_fmt_B, CTSTR("configured vs provided SRC B FORMAT are mismatched"), context.configure_b, current);
+        operand_assert(
+            state.src_b.face_height, face_height_B, CTSTR("configured vs provided UNPACK A L1 FACE HEIGHT are mismatched"), context.configure_b, current);
+        operand_assert(
+            state.src_a.face_height, face_height_A, CTSTR("configured vs provided UNPACK B L1 FACE HEIGHT are mismatched"), context.configure_a, current);
+        operand_assert(state.src_a.num_faces, num_faces_A, CTSTR("configured vs provided UNPACK A L1 NUM FACES are mismatched"), context.configure_a, current);
+        operand_assert(state.src_b.num_faces, num_faces_B, CTSTR("configured vs provided UNPACK B L1 NUM FACES are mismatched"), context.configure_b, current);
     }
 }
 
@@ -232,10 +232,11 @@ static inline void math_operand_check_impl(
 {
     if (!thread_silent_get_impl(context))
     {
-        const auto pc = context.current.pc;
-        LLK_SAN_PEDANTIC_PANIC(!state.is_configured, "{:#x} : executing init/execute/uninit before hwconfigure", pc);
-        LLK_SAN_ERROR_ASSERT(state.src_a.input_format.assert_cond(math_fmt_A), "{:#x} : math_fmt_A doesn't match state.src_a.input_format", pc);
-        LLK_SAN_ERROR_ASSERT(state.src_b.input_format.assert_cond(math_fmt_B), "{:#x} : math_fmt_B doesn't match state.src_b.input_format", pc);
+        const UnwindContext current = context.current;
+        LLK_SAN_PEDANTIC_PANIC(!state.is_configured, "{:#x} : executing init/execute/uninit before hwconfigure", current.pc);
+
+        operand_assert(state.src_a.input_format, math_fmt_A, CTSTR("configured vs provided FPU FORMAT are mismatched"), context.configure_fpu, current);
+        operand_assert(state.src_b.input_format, math_fmt_B, CTSTR("configured vs provided SFPU FORMAT are mismatched"), context.configure_sfpu, current);
     }
 }
 
@@ -254,16 +255,18 @@ static inline void pack_operand_check_impl(
 {
     if (!thread_silent_get_impl(context))
     {
-        const auto pc = context.current.pc;
-        LLK_SAN_PEDANTIC_PANIC(!state.is_configured, "{:#x} : executing init/execute/uninit before hwconfigure", pc);
-        LLK_SAN_ERROR_ASSERT(state.dest_width_32.assert_cond(dest_acc_en), "{:#x} : dest_acc_en doesn't match state.dest_width_32", pc);
-        LLK_SAN_ERROR_ASSERT(state.input_format.assert_cond(src_fmt), "{:#x} : src_fmt doesn't match state.input_format", pc);
-        LLK_SAN_ERROR_ASSERT(state.output_format.assert_cond(dst_fmt), "{:#x} : dst_fmt doesn't match state.output_format", pc);
-        // sstanisic fixme: LLK_SAN_ERROR_ASSERT(state.face_height.assert_cond(face_height), "{:#x} : face_height doesn't match state.face_height", pc);
-        LLK_SAN_ERROR_ASSERT(state.tile_width.assert_cond(tile_width), "{:#x} : tile_width doesn't match state.tile_width", pc);
-        LLK_SAN_ERROR_ASSERT(state.num_faces.assert_cond(num_faces), "{:#x} : num_faces doesn't match state.num_faces", pc);
-        LLK_SAN_ERROR_ASSERT(state.partial_face.assert_cond(partial_face), "{:#x} : partial_face doesn't match state.partial_face", pc);
-        LLK_SAN_ERROR_ASSERT(state.narrow_tile.assert_cond(narrow_tile), "{:#x} : narrow_tile doesn't match state.narrow_tile", pc);
+        const UnwindContext current = context.current;
+        LLK_SAN_PEDANTIC_PANIC(!state.is_configured, "{:#x} : executing init/execute/uninit before hwconfigure", current.pc);
+
+        operand_assert(
+            state.dest_width_32, dest_acc_en, CTSTR("configured vs provided PACK DEST ACCUMULATION are mismatched"), context.configure_pack, current);
+        operand_assert(state.input_format, src_fmt, CTSTR("configured vs provided PACK DEST FORMAT are mismatched"), context.configure_pack, current);
+        operand_assert(state.output_format, dst_fmt, CTSTR("configured vs provided PACK L1 FORMAT are mismatched"), context.configure_pack, current);
+        // sstanisic fixme: face_height check
+        operand_assert(state.tile_width, tile_width, CTSTR("configured vs provided PACK L1 TILE WIDTH are mismatched"), context.configure_pack, current);
+        operand_assert(state.num_faces, num_faces, CTSTR("configured vs provided PACK L1 NUM FACES are mismatched"), context.configure_pack, current);
+        operand_assert(state.partial_face, partial_face, CTSTR("configured vs provided PACK L1 PARTIAL FACE are mismatched"), context.configure_pack, current);
+        operand_assert(state.narrow_tile, narrow_tile, CTSTR("configured vs provided PACK L1 NARROW TILE are mismatched"), context.configure_pack, current);
     }
 }
 
