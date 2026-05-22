@@ -17,6 +17,8 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "ttnn/cpp/ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_inp = tt::CBIndex::c_0;
@@ -65,22 +67,38 @@ void kernel_main() {
         cb_push_back(cb_stats_reduced, stats_tile_stride);
         cb_wait_front(cb_stats_reduced, stats_tile_stride);
 
-        // Compute 1/sqrt(var + eps) into cb_recip_sqrt_var
-        cb_reserve_back(cb_recip_sqrt_var, 1);
-        reconfig_data_format(cb_stats_reduced, cb_eps);
-        pack_reconfig_data_format(cb_recip_sqrt_var);
-
-        add_tiles_init(cb_stats_reduced, cb_eps);
-        rsqrt_tile_init<true>();
-        tile_regs_acquire();
-        tile_regs_wait();
-        // stats_reduced tile 1 holds variance (after combine_welford_partials)
-        add_tiles(cb_stats_reduced, cb_eps, 1, 0, 0);
-        rsqrt_tile<true>(0);
-        pack_tile(0, cb_recip_sqrt_var);
-        tile_regs_commit();
-        tile_regs_release();
-        cb_push_back(cb_recip_sqrt_var, 1);
+        // Compute 1/sqrt(var + eps) into cb_recip_sqrt_var.
+        // Same migration as layernorm_distributed/layernorm_post_allgather_welford.
+        // cb_stats_reduced tile 1 holds variance (after combine_welford_partials).
+        // Reconfig: Input + Output (explicit reconfig_data_format +
+        //   pack_reconfig_data_format + add_tiles_init in original).
+        // Lifecycles: cb_stats_reduced HeldBulk + Scalar + TileBaseCompileTime<1>;
+        //   cb_eps CallerManaged + Scalar; cb_recip_sqrt_var OutStreaming.
+        // rsqrt_tile_init<true> -> Legacy::On.
+        compute_kernel_lib::eltwise_chain(
+            1,
+            compute_kernel_lib::BinaryFpu<
+                cb_stats_reduced,
+                cb_eps,
+                compute_kernel_lib::BinaryFpuOp::Add,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::HeldBulk,
+                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::TileBaseCompileTime<1>,
+                compute_kernel_lib::TileBaseNone>{
+                compute_kernel_lib::TileBaseCompileTime<1>{}, compute_kernel_lib::TileBaseNone{}},
+            compute_kernel_lib::
+                Rsqrt<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Legacy::On, compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::PackTile<
+                cb_recip_sqrt_var,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 
         // Process tiles across width in blocks
         for (uint32_t col_tile = 0; col_tile < Wt; col_tile += block_size) {
