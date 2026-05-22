@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package tt.fabric.proto;
 
-// Physical port / cable type (values aligned with tt::tt_metal::PortType)
+// Physical port / cable type
 enum PortType {
     TRACE = 0;
     QSFP_DD = 1;
