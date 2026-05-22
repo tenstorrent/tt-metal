@@ -4,11 +4,30 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
+
+// Legacy primitive(s) retained (#45003 item 4):
+//   - All fabric APIs (tt::tt_fabric::*, FabricConnectionManager, WorkerToFabricEdmSender /
+//     WorkerToFabricMuxSender, fabric_client_connect/disconnect, build_connection_to_fabric_endpoint,
+//     wait_for_fabric_endpoint_ready, fabric_endpoint_terminate, open_direction_connections_*,
+//     close_direction_connections, fabric_send_chip_*) — fabric has no Device 2.0 equivalent.
+//   - detail:: namespace helpers (dispatch_input_local_device_flushed, dispatch_metadata_local_device,
+//     zero_buffer_async / zero_buffer_barrier, fabric_multicast_bidirectional_*, dispatch_token_*) keep
+//     their internal noc_async_read/write, noc_async_writes_flushed, noc_async_*_barrier,
+//     noc_semaphore_inc on uint64_t addresses — they are parameterised template helpers and remain
+//     fully on the legacy API.
+//   - Kernel-scope noc_async_write_barrier() / noc_async_atomic_barrier() calls paired tightly with
+//     fabric writes / atomic-inc done inside detail:: helpers.
+//   - Kernel-scope noc_async_writes_flushed() paired with detail:: fabric multicast.
+//   - noc_semaphore_wait / noc_semaphore_set on raw uint32_t* addresses derived from
+//     init_semaphore_address and termination_sync_address_arr — Device 2.0 Semaphore<> wrappers
+//     target semaphore-id-derived addresses, not arbitrary L1 addresses.
+//   - noc_semaphore_inc on precomposed uint64_t addresses (termination master signal).
 
 namespace detail {
 
@@ -916,6 +935,14 @@ void kernel_main() {
         return;
     }
 
+    CircularBuffer input_tensor_cb(input_tensor_cb_id);
+    CircularBuffer indices_tensor_cb(indices_tensor_cb_id);
+    CircularBuffer mapping_tensor_cb(mapping_tensor_cb_id);
+    CircularBuffer packet_header_cb(packet_header_cb_id);
+    CircularBuffer send_preparation_buffer_cb(send_preparation_buffer_cb_id);
+    CircularBuffer scores_tensor_cb(scores_tensor_cb_id);
+    CircularBuffer metadata_cb(metadata_buffer_id);
+
 #ifdef USE_MUX
     // ========================================================================
     // MUX PATH: Use WorkerToFabricMuxSender connections via fabric mux
@@ -995,7 +1022,7 @@ void kernel_main() {
     open_direction_connections_async(directions, fabric_connections, rt_args_idx);
 #endif
 
-    uint32_t send_preparation_buffer_address = get_write_ptr(send_preparation_buffer_cb_id);
+    uint32_t send_preparation_buffer_address = send_preparation_buffer_cb.get_write_ptr();
     detail::zero_buffer_async(
         send_preparation_buffer_address, (token_end_idx - token_start_idx) * num_devices * sizeof(uint8_t));
 
@@ -1021,7 +1048,7 @@ void kernel_main() {
     const auto output_scores_addr_gen =
         TensorAccessor(scores_out_args, scores_out_tensor_address, output_scores_page_size);
 
-    uint32_t packet_header_buffer_address = get_read_ptr(packet_header_cb_id);
+    uint32_t packet_header_buffer_address = packet_header_cb.get_read_ptr();
     auto* unicast_packet_header_pos = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address);
     auto* unicast_packet_header_neg =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + sizeof(PACKET_HEADER_TYPE));
@@ -1035,8 +1062,8 @@ void kernel_main() {
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + 5 * sizeof(PACKET_HEADER_TYPE));
     // packet headers at +6 and +7 are currently unused (reserved for future split sends)
 
-    uint32_t base_indices_addr = get_read_ptr(indices_tensor_cb_id);
-    uint32_t base_scores_addr = get_read_ptr(scores_tensor_cb_id);
+    uint32_t base_indices_addr = indices_tensor_cb.get_read_ptr();
+    uint32_t base_scores_addr = scores_tensor_cb.get_read_ptr();
 
     detail::zero_buffer_barrier();
 
@@ -1078,8 +1105,8 @@ void kernel_main() {
 #endif
     bool needs_barrier = false;
     // Based on the selected experts, we dispatch the input tokens to the corresponding devices
-    cb_wait_front(mapping_tensor_cb_id, 1);
-    uint16_t* expert_mapping = (uint16_t*)(get_read_ptr(mapping_tensor_cb_id));
+    mapping_tensor_cb.wait_front(1);
+    uint16_t* expert_mapping = (uint16_t*)(mapping_tensor_cb.get_read_ptr());
     uint8_t* send_preparation_buffer = (uint8_t*)send_preparation_buffer_address;
 
     // ============================================================================
@@ -1111,13 +1138,13 @@ void kernel_main() {
         uint64_t output_token_write_addr = get_noc_addr(global_token, output_addr_gen);
         // All workers read indices (needed for routing decisions)
         // Only primary worker reads scores (only primary sends metadata)
-        cb_wait_front(indices_tensor_cb_id, 1);
+        indices_tensor_cb.wait_front(1);
         if (is_primary_payload_worker) {
-            cb_wait_front(scores_tensor_cb_id, 1);
+            scores_tensor_cb.wait_front(1);
         }
-        cb_wait_front(input_tensor_cb_id, 1);
-        uint32_t input_token_read_addr = get_read_ptr(input_tensor_cb_id);
-        uint16_t* token_indices = (uint16_t*)(get_read_ptr(indices_tensor_cb_id));
+        input_tensor_cb.wait_front(1);
+        uint32_t input_token_read_addr = input_tensor_cb.get_read_ptr();
+        uint16_t* token_indices = (uint16_t*)(indices_tensor_cb.get_read_ptr());
 
         // In payload split mode: reader already reads only this worker's portion into CB
         // In non-split mode: reader reads full page, payload_offset=0
@@ -1248,11 +1275,11 @@ void kernel_main() {
 
         // All workers pop indices (all read them for routing)
         // Only primary pops scores (only primary reads them)
-        cb_pop_front(indices_tensor_cb_id, 1);
+        indices_tensor_cb.pop_front(1);
         if (is_primary_payload_worker) {
-            cb_pop_front(scores_tensor_cb_id, 1);
+            scores_tensor_cb.pop_front(1);
         }
-        cb_pop_front(input_tensor_cb_id, 1);
+        input_tensor_cb.pop_front(1);
     }
     if (needs_barrier) {
         noc_async_write_barrier();
@@ -1296,8 +1323,8 @@ void kernel_main() {
                                                      dispatch_index * metadata_size_per_device +
                                                      token_start_idx * aligned_output_scores_page_size;
 
-        cb_wait_front(metadata_buffer_id, tokens_per_device);
-        uint32_t base_metadata_addr = get_read_ptr(metadata_buffer_id);
+        metadata_cb.wait_front(tokens_per_device);
+        uint32_t base_metadata_addr = metadata_cb.get_read_ptr();
         detail::fabric_multicast_bidirectional_scatter_write_ring_1d_async<
             linearized_mesh_coord,
             mesh_rows,
@@ -1310,7 +1337,7 @@ void kernel_main() {
             base_metadata_addr,
             {noc_core_offset_md_write_addr, noc_core_offset_scores_write_addr},
             {static_cast<uint16_t>(metadata_size_per_core), static_cast<uint16_t>(metadata_size_per_core)});
-        cb_pop_front(metadata_buffer_id, tokens_per_device);
+        metadata_cb.pop_front(tokens_per_device);
         // Use DoubleAntipodalAtomicInc=true to increment semaphore on all devices including twice on the antipodal
         // device
         detail::fabric_multicast_bidirectional_atomic_inc_ring_1d<
@@ -1326,7 +1353,7 @@ void kernel_main() {
             global_noc_semaphore_address);
     }
 
-    cb_pop_front(mapping_tensor_cb_id, mapping_pages);
+    mapping_tensor_cb.pop_front(mapping_pages);
 
 #ifdef USE_MUX
     // MUX teardown for Phase 2: Multiple workers per link share the same mux cores

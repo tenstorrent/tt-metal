@@ -4,11 +4,24 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 
 using namespace ttnn::operations::ccl::common;
 using tt::data_movement::common::tt_memmove;
+
+// Legacy primitive(s) retained (#45003 item 4):
+//   - noc_async_read_page(page_id, accessor, l1_addr) / noc_async_read_barrier — Device 2.0
+//     read overloads that target a TensorAccessor endpoint do not accept a per-page index and an
+//     existing l1 write address as the destination.
+//   - noc_async_read with precomposed uint64_t source addresses (get_noc_addr(i, accessor)
+//     or get_noc_addr(local_l1_addr)) paired with the same barrier.
+//   - noc_semaphore_wait / noc_semaphore_set on raw uint32_t* addresses derived from the
+//     runtime global_semaphore_address — Device 2.0 Semaphore<> wrappers target semaphore-id-
+//     derived addresses, not arbitrary L1 addresses.
+//   - tt_memmove on a raw L1 address — Phase-1 helper (data movement common) keeps the legacy
+//     entry point working as a shim.
 
 void kernel_main() {
     constexpr uint32_t input_tensor_cb_id = get_compile_time_arg_val(0);
@@ -95,28 +108,34 @@ void kernel_main() {
         return;
     }
 
+    CircularBuffer input_cb(input_tensor_cb_id);
+    CircularBuffer indices_cb(indices_tensor_cb_id);
+    CircularBuffer mapping_cb(mapping_tensor_cb_id);
+    CircularBuffer scores_cb(scores_tensor_cb_id);
+    CircularBuffer metadata_cb(metadata_buffer_id);
+
     // Read the expert mapping table - new format: [devices, experts]
     // Each page is one device's view of the mapping. Read only the source device's page.
     // Page index = linearized_mesh_coord (source device index)
     constexpr uint32_t mapping_pages_to_read = 1;
-    cb_reserve_back(mapping_tensor_cb_id, mapping_pages_to_read);
-    uint32_t base_mapping_addr = get_write_ptr(mapping_tensor_cb_id);
+    mapping_cb.reserve_back(mapping_pages_to_read);
+    uint32_t base_mapping_addr = mapping_cb.get_write_ptr();
     noc_async_read_page(linearized_mesh_coord, mapping_addr_gen, base_mapping_addr);
 
     ASSERT(indices_pages == input_pages);
     ASSERT(scores_pages == indices_pages);
     // read the input tokens, selected experts, and scores for each token
-    uint32_t base_indices_addr = get_write_ptr(indices_tensor_cb_id);
-    uint32_t base_scores_addr = get_write_ptr(scores_tensor_cb_id);
+    uint32_t base_indices_addr = indices_cb.get_write_ptr();
+    uint32_t base_scores_addr = scores_cb.get_write_ptr();
     noc_async_read_barrier();
-    cb_push_back(mapping_tensor_cb_id, mapping_pages_to_read);
+    mapping_cb.push_back(mapping_pages_to_read);
 
     for (uint32_t i = token_start_idx; i < token_end_idx; i++) {
-        cb_reserve_back(indices_tensor_cb_id, 1);
-        cb_reserve_back(input_tensor_cb_id, 1);
+        indices_cb.reserve_back(1);
+        input_cb.reserve_back(1);
 
         // All workers read indices (needed for routing decisions)
-        uint32_t l1_write_addr = get_write_ptr(indices_tensor_cb_id);
+        uint32_t l1_write_addr = indices_cb.get_write_ptr();
         noc_async_read_page(i, indices_addr_gen, l1_write_addr);
 
         // manually fill in shared expert IDs to the metadata
@@ -128,8 +147,8 @@ void kernel_main() {
 
         // Only primary worker reads scores (only primary sends metadata)
         if (is_primary_payload_worker) {
-            cb_reserve_back(scores_tensor_cb_id, 1);
-            l1_write_addr = get_write_ptr(scores_tensor_cb_id);
+            scores_cb.reserve_back(1);
+            l1_write_addr = scores_cb.get_write_ptr();
             noc_async_read_page(i, scores_addr_gen, l1_write_addr);
 
             if constexpr (num_shared_experts > 0) {
@@ -144,32 +163,32 @@ void kernel_main() {
         // In non-split mode: payload_offset=0, payload_size=input_page_size (reads full page)
         // In split mode: reads only this worker's portion
         uint64_t input_page_noc_addr = get_noc_addr(i, input_addr_gen);
-        l1_write_addr = get_write_ptr(input_tensor_cb_id);
+        l1_write_addr = input_cb.get_write_ptr();
         noc_async_read(input_page_noc_addr + payload_offset, l1_write_addr, payload_size);
 
         noc_async_read_barrier();
-        cb_push_back(indices_tensor_cb_id, 1);
+        indices_cb.push_back(1);
         if (is_primary_payload_worker) {
-            cb_push_back(scores_tensor_cb_id, 1);
+            scores_cb.push_back(1);
         }
-        cb_push_back(input_tensor_cb_id, 1);
+        input_cb.push_back(1);
     }
 
     // Only primary worker copies indices and scores to metadata buffer (only primary sends metadata)
     if (is_primary_payload_worker) {
-        cb_reserve_back(metadata_buffer_id, tokens_per_device);
-        const uint32_t metadata_buffer_addr = get_write_ptr(metadata_buffer_id);
+        metadata_cb.reserve_back(tokens_per_device);
+        const uint32_t metadata_buffer_addr = metadata_cb.get_write_ptr();
         noc_async_read(
             get_noc_addr(base_indices_addr),
             metadata_buffer_addr,
             (token_end_idx - token_start_idx) * aligned_metadata_page_size);
         noc_async_read(
             get_noc_addr(base_scores_addr),
-            get_write_ptr(metadata_buffer_id) + (token_end_idx - token_start_idx) * aligned_metadata_page_size,
+            metadata_cb.get_write_ptr() + (token_end_idx - token_start_idx) * aligned_metadata_page_size,
             (token_end_idx - token_start_idx) * aligned_output_scores_page_size);
 
         noc_async_read_barrier();
-        cb_push_back(metadata_buffer_id, tokens_per_device);
+        metadata_cb.push_back(tokens_per_device);
 
         // Wait for all other devices to finish dispatching their input tokens and metadata.
         // The writer now writes metadata directly to the sharded output tensor on the drain sync tilizer core,
