@@ -209,7 +209,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     // diagonal-tile CB slot is shared with is_causal — needed whenever either is on.
     const uint32_t ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
     const uint32_t chunk_size_t = q_local_padded_Nt * ring_size;
-    const bool diag_tile_needed = args.is_causal || tensor_args.is_chunked();
+    const bool diag_tile_enabled = args.is_causal || tensor_args.is_chunked();
     // Kernel-level is_causal flag carries the legacy local-frame causal-stamp semantics. Chunked
     // prefill is mathematically causal (args.is_causal=True) but uses absolute-coords stamps every
     // ring iter, so the chunked path supersedes the legacy path — mask the flag off here.
@@ -221,13 +221,13 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const bool global_n_has_padding = (args.logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT)) != 0;
     const bool joint_has_padding = L > 0 && (L % (Sk_chunk_t * tt::constants::TILE_HEIGHT)) != 0;
     const bool needs_lightweight_mask =
-        (local_n_has_padding || global_n_has_padding || joint_has_padding) || diag_tile_needed;
+        (local_n_has_padding || global_n_has_padding || joint_has_padding) || diag_tile_enabled;
 
     // Partial tile support when padding boundary falls inside a tile.
     const uint32_t global_n_partial_col = args.logical_n % tt::constants::TILE_HEIGHT;
     const uint32_t joint_l_partial_col = L % tt::constants::TILE_HEIGHT;
     const uint32_t partial_mask_tiles = (global_n_partial_col != 0 ? 1 : 0) + (joint_l_partial_col != 0 ? 1 : 0);
-    const uint32_t causal_diag_tiles = diag_tile_needed ? 1 : 0;
+    const uint32_t causal_diag_tiles = diag_tile_enabled ? 1 : 0;
     // Single CB holds: 1 neginf tile + optional causal diagonal + up to 2 partial mask tiles
     const uint32_t total_lightweight_mask_tiles = 1 + causal_diag_tiles + partial_mask_tiles;
 
