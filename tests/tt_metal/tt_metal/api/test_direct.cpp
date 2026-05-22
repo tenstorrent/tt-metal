@@ -390,9 +390,7 @@ static bool reader_datacopy_writer_quasar(
 
     experimental::metal2_host_api::KernelSpec reader_spec{
         .unique_id = READER,
-        .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp"},
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
         .num_threads = num_threads,
         .dfb_bindings = {{
             .dfb_spec_name = INPUT_DFB,
@@ -405,15 +403,12 @@ static bool reader_datacopy_writer_quasar(
             {.named_runtime_args = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                .gen2 = experimental::metal2_host_api::DataMovementConfiguration::Gen2{}},
     };
 
     experimental::metal2_host_api::KernelSpec writer_spec{
         .unique_id = WRITER,
-        .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp"},
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
         .num_threads = num_threads,
         .dfb_bindings = {{
             .dfb_spec_name = OUTPUT_DFB,
@@ -426,15 +421,12 @@ static bool reader_datacopy_writer_quasar(
             {.named_runtime_args = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                .gen2 = experimental::metal2_host_api::DataMovementConfiguration::Gen2{}},
     };
 
     experimental::metal2_host_api::KernelSpec compute_spec{
         .unique_id = COMPUTE,
-        .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp"},
+        .source = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
         .num_threads = num_threads,
         .dfb_bindings =
             {{

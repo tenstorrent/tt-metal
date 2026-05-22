@@ -192,9 +192,7 @@ std::pair<distributed::MeshWorkload, std::vector<std::string>> initialize_progra
         kernel_names[k] = "dm_kernel_" + std::to_string(k);
         kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
             .unique_id = kernel_names[k],
-            .source =
-                experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                    "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp"},
+            .source = "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp",
             .num_threads = static_cast<uint8_t>(dm_processors_per_kernel),
             .compiler_options = {.defines = defines_vec},
             .runtime_arguments_schema =
@@ -204,8 +202,7 @@ std::pair<distributed::MeshWorkload, std::vector<std::string>> initialize_progra
                 },
             .config_spec =
                 experimental::metal2_host_api::DataMovementConfiguration{
-                    .gen2_data_movement_config =
-                        experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                    .gen2 = experimental::metal2_host_api::DataMovementConfiguration::Gen2{}},
         });
         wu_kernel_names.push_back(kernel_names[k]);
     }

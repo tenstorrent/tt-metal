@@ -4,12 +4,10 @@
 
 #pragma once
 
-#include <concepts>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
-#include <type_traits>
 #include <unordered_map>
 #include <variant>
 #include <vector>
@@ -73,18 +71,18 @@ struct DataMovementConfiguration {
     // You can provide either a Gen1 config, a Gen2 config, or both.
     // If your host code is intended to be architecture-agnostic, provide both.
 
-    struct Gen1DataMovementConfig {
+    struct Gen1 {
         tt::tt_metal::DataMovementProcessor processor = tt::tt_metal::DataMovementProcessor::RISCV_0;
         tt::tt_metal::NOC noc = tt::tt_metal::NOC::RISCV_0_default;
         tt::tt_metal::NOC_MODE noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC;
     };
-    std::optional<Gen1DataMovementConfig> gen1_data_movement_config = std::nullopt;
+    std::optional<Gen1> gen1 = std::nullopt;
 
-    struct Gen2DataMovementConfig {
+    struct Gen2 {
         // Currently, no configuration is needed for Gen2!
         // The empty struct is still used to express a Gen2 DM kernel.
     };
-    std::optional<Gen2DataMovementConfig> gen2_data_movement_config = std::nullopt;
+    std::optional<Gen2> gen2 = std::nullopt;
 };
 
 // A name identifying a KernelSpec within a ProgramSpec.
@@ -132,7 +130,6 @@ struct KernelSpec {
     // NOTE: The kernel's target node set is a DERIVED property, based on the
     //       WorkUnitSpec(s) that include this kernel.
 
-    // Kernel threading:
     // Number of kernel threads
     int num_threads = 1;
 
@@ -171,11 +168,11 @@ struct KernelSpec {
     // DFB bindings
     // Declares that this kernel requires a DFB resource (declared at the ProgramSpec level)
     // The kernel constructs the accessor via DataflowBufferAccessor(dfb::<local_accessor_name>)
-    enum class DFBEndpointType { PRODUCER, CONSUMER, RELAY };
+    enum class DFBEndpointType { PRODUCER, CONSUMER };
     struct DFBBinding {
         DFBSpecName dfb_spec_name;        // identify the DFB within the ProgramSpec
         std::string local_accessor_name;  // DFB accessor name (used in the kernel source code)
-        DFBEndpointType endpoint_type;    // producer, consumer, or relay
+        DFBEndpointType endpoint_type;    // producer or consumer
         DFBAccessPattern access_pattern = DFBAccessPattern::STRIDED;  // strided, all, or blocked
     };
     std::vector<DFBBinding> dfb_bindings;
@@ -293,5 +290,31 @@ struct KernelSpec {
     };
     std::vector<DFBComputeSelfLoopScope> dfb_compute_self_loop_scopes;
 };
+
+// Convenience factories for DFBBinding. Equivalent to writing a designated-init
+// DFBBinding{...} with endpoint_type set; the access_pattern defaults to STRIDED.
+inline KernelSpec::DFBBinding ProducerOf(
+    DFBSpecName dfb_spec_name,
+    std::string local_accessor_name,
+    DFBAccessPattern access_pattern = DFBAccessPattern::STRIDED) {
+    return KernelSpec::DFBBinding{
+        .dfb_spec_name = std::move(dfb_spec_name),
+        .local_accessor_name = std::move(local_accessor_name),
+        .endpoint_type = KernelSpec::DFBEndpointType::PRODUCER,
+        .access_pattern = access_pattern,
+    };
+}
+
+inline KernelSpec::DFBBinding ConsumerOf(
+    DFBSpecName dfb_spec_name,
+    std::string local_accessor_name,
+    DFBAccessPattern access_pattern = DFBAccessPattern::STRIDED) {
+    return KernelSpec::DFBBinding{
+        .dfb_spec_name = std::move(dfb_spec_name),
+        .local_accessor_name = std::move(local_accessor_name),
+        .endpoint_type = KernelSpec::DFBEndpointType::CONSUMER,
+        .access_pattern = access_pattern,
+    };
+}
 
 }  // namespace tt::tt_metal::experimental::metal2_host_api

@@ -325,10 +325,8 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
 
             if (dfb_binding.endpoint_type == KernelSpec::DFBEndpointType::PRODUCER) {
                 endpoint_info.producers.push_back({&kernel, &dfb_binding});
-            } else if (dfb_binding.endpoint_type == KernelSpec::DFBEndpointType::CONSUMER) {
-                endpoint_info.consumers.push_back({&kernel, &dfb_binding});
             } else {
-                TT_FATAL(false, "RELAY endpoints are only used for remote DFB, which is not supported yet");
+                endpoint_info.consumers.push_back({&kernel, &dfb_binding});
             }
         }
     }
@@ -671,20 +669,19 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
 
             // Both Gen1 and Gen2 configs are optional. But at least one must be specified.
             TT_FATAL(
-                data_movement_config.gen1_data_movement_config.has_value() ||
-                    data_movement_config.gen2_data_movement_config.has_value(),
+                data_movement_config.gen1.has_value() || data_movement_config.gen2.has_value(),
                 "KernelSpec '{}' must specify a DM config for Gen1, Gen2, or both.",
                 kernel.unique_id);
 
             // The config for the current target architecture must be specified.
             if (is_gen2_arch()) {
                 TT_FATAL(
-                    data_movement_config.gen2_data_movement_config.has_value(),
+                    data_movement_config.gen2.has_value(),
                     "KernelSpec '{}' must specify a Gen2 DM config when targeting Quasar.",
                     kernel.unique_id);
             } else if (is_gen1_arch()) {
                 TT_FATAL(
-                    data_movement_config.gen1_data_movement_config.has_value(),
+                    data_movement_config.gen1.has_value(),
                     "KernelSpec '{}' must specify a Gen1 DM config when targeting WH or BH.",
                     kernel.unique_id);
             } else {
@@ -703,7 +700,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 continue;
             }
             const auto& dm_config = std::get<DataMovementConfiguration>(kernel.config_spec);
-            const auto& gen1 = dm_config.gen1_data_movement_config.value();
+            const auto& gen1 = dm_config.gen1.value();
             const NodeRangeSet& nodes = collected.kernel_node_set.at(kernel.unique_id);
             for (const auto& range : nodes.ranges()) {
                 for (const auto& node : range) {
@@ -1662,7 +1659,7 @@ KernelRiscMaskMap SolveGen2KernelRiscMasks(const ProgramSpec& spec, const Collec
     return result;
 }
 
-// Gen1 (WH/BH) processor assignment: just read the explicit processor from Gen1DataMovementConfig
+// Gen1 (WH/BH) processor assignment: just read the explicit processor from Gen1
 // and returns a KernelRiscMaskMap using the Gen1 bit encoding (RISCV_0: bit 0, RISCV_1: bit 1, compute: bit 2).
 KernelRiscMaskMap BuildGen1KernelRiscMasks(const ProgramSpec& spec) {
     static constexpr uint8_t GEN1_COMPUTE_RISC_BIT = 2;
@@ -1671,7 +1668,7 @@ KernelRiscMaskMap BuildGen1KernelRiscMasks(const ProgramSpec& spec) {
     for (const KernelSpec& kernel : spec.kernels) {
         if (kernel.is_dm_kernel()) {
             const auto& dm_config = std::get<DataMovementConfiguration>(kernel.config_spec);
-            const auto& gen1 = dm_config.gen1_data_movement_config.value();
+            const auto& gen1 = dm_config.gen1.value();
             result[&kernel] = static_cast<uint16_t>(1u << static_cast<uint8_t>(gen1.processor));
         } else {
             result[&kernel] = static_cast<uint16_t>(1u << GEN1_COMPUTE_RISC_BIT);
@@ -1936,10 +1933,10 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         .entry_size = dfb_spec->entry_size,
         .num_entries = dfb_spec->num_entries,
         .producer_risc_mask = producer_risc_mask,
-        .num_producers = producer->num_threads,
+        .num_producers = static_cast<uint8_t>(producer->num_threads),
         .pap = producer_access_pattern,
         .consumer_risc_mask = consumer_risc_mask,
-        .num_consumers = consumer->num_threads,
+        .num_consumers = static_cast<uint8_t>(consumer->num_threads),
         .cap = consumer_access_pattern,
         .enable_implicit_sync = !dfb_spec->disable_implicit_sync,
         .data_format = dfb_spec->data_format_metadata.value_or(tt::DataFormat::Invalid),
@@ -1958,9 +1955,9 @@ KernelSource MakeKernelSource(const KernelSpec& kernel_spec) {
     return std::visit(
         [&](const auto& src) -> KernelSource {
             using T = std::decay_t<decltype(src)>;
-            if constexpr (std::is_same_v<T, KernelSpec::SourceFilePath>) {
-                TT_FATAL(!src.path.empty(), "KernelSpec '{}' has empty source file path", kernel_spec.unique_id);
-                return KernelSource(src.path.string(), KernelSource::SourceType::FILE_PATH);
+            if constexpr (std::is_same_v<T, std::filesystem::path>) {
+                TT_FATAL(!src.empty(), "KernelSpec '{}' has empty source file path", kernel_spec.unique_id);
+                return KernelSource(src.string(), KernelSource::SourceType::FILE_PATH);
             } else if constexpr (std::is_same_v<T, KernelSpec::SourceCode>) {
                 TT_FATAL(!src.code.empty(), "KernelSpec '{}' has empty inline source code", kernel_spec.unique_id);
                 return KernelSource(src.code, KernelSource::SourceType::SOURCE_CODE);
@@ -1991,7 +1988,7 @@ std::map<std::string, std::string> to_defines_map(const KernelSpec::CompilerOpti
 DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
     TT_FATAL(kernel_spec.is_dm_kernel(), "Expected a DM kernel");
     const auto& dm_config = std::get<DataMovementConfiguration>(kernel_spec.config_spec);
-    const auto& gen1 = dm_config.gen1_data_movement_config.value();
+    const auto& gen1 = dm_config.gen1.value();
 
     return DataMovementConfig{
         .processor = gen1.processor,
@@ -2079,7 +2076,7 @@ experimental::quasar::QuasarDataMovementConfig MakeQuasarDataMovementConfig(cons
     TT_FATAL(kernel_spec.is_dm_kernel(), "Expected a DM kernel");
 
     return experimental::quasar::QuasarDataMovementConfig{
-        .num_threads_per_cluster = kernel_spec.num_threads,
+        .num_threads_per_cluster = static_cast<uint32_t>(kernel_spec.num_threads),
         .compile_args = {},  // only named_compile_args is used
         .defines = to_defines_map(kernel_spec.compiler_options.defines),
         .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_arg_bindings),
@@ -2102,7 +2099,7 @@ experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
         BuildUnpackToDestModeVector(compute_config.unpack_to_dest_mode, dfb_name_to_id);
 
     return experimental::quasar::QuasarComputeConfig{
-        .num_threads_per_cluster = kernel_spec.num_threads,
+        .num_threads_per_cluster = static_cast<uint32_t>(kernel_spec.num_threads),
         .math_fidelity = compute_config.math_fidelity,
         .fp32_dest_acc_en = compute_config.fp32_dest_acc_en,
         .dst_full_sync_en = compute_config.dst_full_sync_en,
@@ -2177,7 +2174,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
 
     // Step 2a: Build kernel risc masks (arch-specific)
     //  - Gen2: backtracking solver assigns DM cores automatically
-    //  - Gen1: processor is user-specified in Gen1DataMovementConfig
+    //  - Gen1: processor is user-specified in Gen1
     KernelRiscMaskMap kernel_to_risc_mask =
         is_gen2_arch() ? SolveGen2KernelRiscMasks(spec, collected) : BuildGen1KernelRiscMasks(spec);
 
@@ -2187,7 +2184,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
     // time (deliberately not done here).
     //
     // Gen1: the mask is a deterministic function of the user's KernelSpec config_spec (compute
-    //   placement is fixed; DM processor is user-specified via Gen1DataMovementConfig). A
+    //   placement is fixed; DM processor is user-specified via Gen1). A
     //   mismatch is therefore a user error — the user supplied multi-binding KernelSpecs with
     //   incompatible processor placement.
     // Gen2 (Quasar): the mask is solver-assigned. The solver currently doesn't know about
@@ -2237,7 +2234,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
                         "DFB '{}' has multiple {} KernelSpecs ('{}', '{}') with mismatched "
                         "processor placement (risc_mask 0x{:x} vs 0x{:x}). Multi-binding "
                         "requires all same-role kernels to share processor placement (for DM "
-                        "kernels, check Gen1DataMovementConfig::processor; for compute, the "
+                        "kernels, check Gen1::processor; for compute, the "
                         "placement is determined by the KernelSpec's config_spec type).",
                         dfb.unique_id,
                         role,

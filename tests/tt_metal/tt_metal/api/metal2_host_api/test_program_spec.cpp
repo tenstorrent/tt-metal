@@ -105,7 +105,7 @@ TEST_F(ProgramSpecTestQuasar, DuplicateKernelNameFails) {
     // Add a kernel with duplicate name
     auto duplicate_kernel = MakeMinimalDMKernel("dm_kernel");
     DataMovementConfiguration dm_config;
-    dm_config.gen2_data_movement_config = DataMovementConfiguration::Gen2DataMovementConfig{};
+    dm_config.gen2 = DataMovementConfiguration::Gen2{};
     duplicate_kernel.config_spec = dm_config;
     spec.kernels.push_back(duplicate_kernel);
 
@@ -717,10 +717,10 @@ TEST_F(ProgramSpecTestQuasar, DMKernelWithoutGen2ConfigFails) {
     auto kernel = MakeMinimalDMKernel("kernel");
     // Remove the Gen2 config
     auto& dm_config = std::get<DataMovementConfiguration>(kernel.config_spec);
-    dm_config.gen2_data_movement_config = std::nullopt;
+    dm_config.gen2 = std::nullopt;
 
     // Add Gen1 config
-    dm_config.gen1_data_movement_config = DataMovementConfiguration::Gen1DataMovementConfig{
+    dm_config.gen1 = DataMovementConfiguration::Gen1{
         .processor = DataMovementProcessor::RISCV_0,
         .noc = NOC::RISCV_0_default,
         .noc_mode = NOC_MODE::DM_DEDICATED_NOC,
@@ -744,8 +744,8 @@ TEST_F(ProgramSpecTestQuasar, DMKernelWithNoConfigAtAllFails) {
     auto kernel = MakeMinimalDMKernel("kernel");
     // Remove both Gen1 and Gen2 configs
     auto& dm_config = std::get<DataMovementConfiguration>(kernel.config_spec);
-    dm_config.gen1_data_movement_config = std::nullopt;
-    dm_config.gen2_data_movement_config = std::nullopt;
+    dm_config.gen1 = std::nullopt;
+    dm_config.gen2 = std::nullopt;
 
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
@@ -2255,12 +2255,8 @@ static_assert(
 static_assert(
     std::is_aggregate_v<DataMovementConfiguration>,
     "DataMovementConfiguration must remain an aggregate to support designated initializers");
-static_assert(
-    std::is_aggregate_v<DataMovementConfiguration::Gen1DataMovementConfig>,
-    "Gen1DataMovementConfig must remain an aggregate");
-static_assert(
-    std::is_aggregate_v<DataMovementConfiguration::Gen2DataMovementConfig>,
-    "Gen2DataMovementConfig must remain an aggregate");
+static_assert(std::is_aggregate_v<DataMovementConfiguration::Gen1>, "Gen1 must remain an aggregate");
+static_assert(std::is_aggregate_v<DataMovementConfiguration::Gen2>, "Gen2 must remain an aggregate");
 static_assert(
     std::is_aggregate_v<KernelSpec::CompilerOptions>,
     "CompilerOptions must remain an aggregate to support designated initializers");
@@ -2288,7 +2284,7 @@ TEST(AggregateSpecTypes, KernelSpecDesignatedInitializers) {
         .num_threads = 2,
         .config_spec =
             DataMovementConfiguration{
-                .gen2_data_movement_config = DataMovementConfiguration::Gen2DataMovementConfig{},
+                .gen2 = DataMovementConfiguration::Gen2{},
             },
     };
 
@@ -2392,7 +2388,7 @@ TEST(AggregateSpecTypes, KernelSpecNamedRuntimeArgsDesignatedInitializers) {
             },
         .config_spec =
             DataMovementConfiguration{
-                .gen2_data_movement_config = DataMovementConfiguration::Gen2DataMovementConfig{},
+                .gen2 = DataMovementConfiguration::Gen2{},
             },
     };
     EXPECT_EQ(k.runtime_arguments_schema.named_runtime_args.size(), 1u);
@@ -2430,7 +2426,7 @@ TEST(AggregateSpecTypes, ProgramSpecDesignatedInitializers) {
                         },
                     .config_spec =
                         DataMovementConfiguration{
-                            .gen2_data_movement_config = DataMovementConfiguration::Gen2DataMovementConfig{},
+                            .gen2 = DataMovementConfiguration::Gen2{},
                         },
                 },
                 KernelSpec{
@@ -2496,7 +2492,7 @@ TEST(AggregateSpecTypes, NestedStructsDesignatedInitializers) {
     };
     EXPECT_EQ(opts.defines.size(), 2u);
 
-    DataMovementConfiguration::Gen1DataMovementConfig gen1{
+    DataMovementConfiguration::Gen1 gen1{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
         .noc = tt::tt_metal::NOC::RISCV_1_default,
         .noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
@@ -2618,7 +2614,7 @@ TEST_F(ProgramSpecTestGen1, MultiThreadedComputeKernelFails) {
 }
 
 TEST_F(ProgramSpecTestGen1, DMKernelWithGen2ConfigFails) {
-    // On gen1, a DM kernel that only has Gen2DataMovementConfig must be rejected
+    // On gen1, a DM kernel that only has Gen2 must be rejected
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
