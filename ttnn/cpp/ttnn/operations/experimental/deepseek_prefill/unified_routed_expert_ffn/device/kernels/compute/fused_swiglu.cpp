@@ -181,24 +181,11 @@ FORCE_INLINE void matmul_phase(
                     tile_regs_commit();
                     final_out_cb.reserve_back(out_subblock_num_tiles);
 
+                    tile_regs_wait();
                     if constexpr (apply_silu_in_pack) {
-                        // Apply silu(dst[i]) for each tile in the subblock,
-                        // riding the PACK thread so we don't have to copy
-                        // through MATH. This mirrors the pattern in
-                        // apply_activation_from_pack() in bmm_fused_activation.
-                        PACK(TTI_SEMWAIT(
-                            p_stall::STALL_TDMA | p_stall::STALL_CFG,
-                            semaphore::t6_sem(semaphore::MATH_PACK),
-                            p_stall::STALL_ON_ZERO));
-                        PACK(TT_SETC16(
-                            DEST_TARGET_REG_CFG_MATH_Offset_ADDR32,
-                            ckernel::packer::get_packer_dest_offset()));
-                        for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
-                            silu_tile_pack(i);
-                        }
-                        PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
-                    } else {
-                        tile_regs_wait();
+                        // Apply silu in the pack step, riding the helper from
+                        // matmul/device/kernels/compute/bmm_fused_activation.hpp.
+                        apply_activation_from_pack<KernelActivation::SILU>(out_subblock_num_tiles);
                     }
 
                     // Pack subblock to final destination.
