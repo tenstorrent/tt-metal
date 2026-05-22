@@ -15,6 +15,7 @@
 #include "ttnn/global_semaphore.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
 namespace ttnn::operations::experimental::ccl {
@@ -41,7 +42,10 @@ struct LlamaReduceScatterDeviceOperation {
     using tensor_return_value_t = Tensor;
 
     struct LlamaReduceScatterAdd {
-        // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
+        // Legacy Program& builder.  Still used transitionally by op factories
+        // that have not yet migrated; the descriptor variant below is the
+        // preferred path.  Retained as a free declaration so the unmigrated
+        // callers compile while we cut over.
         struct shared_variables_t {
             tt::tt_metal::KernelHandle unary_reader_kernel_id;
             tt::tt_metal::KernelHandle unary_writer_kernel_id;
@@ -51,26 +55,6 @@ struct LlamaReduceScatterDeviceOperation {
             std::vector<tt::tt_metal::CBHandle> cb_handles;
             CoreRangeSet core_range;
         };
-        using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
-
-        static cached_mesh_workload_t create_mesh_workload(
-            const operation_attributes_t& operation_attributes,
-            const ttnn::MeshCoordinateRangeSet& tensor_coords,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static ttnn::device_operation::CachedProgram<shared_variables_t> create_at_helper(
-            const operation_attributes_t& operation_attributes,
-            const ttnn::MeshCoordinate& mesh_coordinate,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-        static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
-            const operation_attributes_t& operation_attributes,
-            const ttnn::MeshCoordinate& mesh_coordinate,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value,
-            tt::tt_metal::Program& program);
-
         static shared_variables_t create_at_program_processing(
             const operation_attributes_t& operation_attributes,
             const ttnn::MeshCoordinate& mesh_coordinate,
@@ -84,11 +68,50 @@ struct LlamaReduceScatterDeviceOperation {
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             LlamaReduceScatterDeviceOperation::tensor_return_value_t& tensor_return_value);
-        static void override_runtime_arguments(
-            cached_mesh_workload_t& cached_workload,
+
+        // ProgramDescriptor variant of create_at_program_processing.  Mirrors
+        // the legacy Program& builder above but constructs the per-coord
+        // ProgramDescriptor in-place (CBs/kernels/semaphores/runtime args
+        // recorded as descriptor pushes) so it can be consumed by Contract-2
+        // factories.  Used by descriptor-based llama_reduce_scatter and
+        // rs_matmul migrations.
+        static tt::tt_metal::ProgramDescriptor create_at_program_processing_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const ttnn::MeshCoordinate& mesh_coordinate,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& signaler);
+
+        // Append-style overload of create_at_program_processing_descriptor.
+        // Instead of returning a fresh ProgramDescriptor, this variant appends
+        // CBs/kernels/semaphores/runtime args onto an existing `desc` that the
+        // caller is composing.  Used by rs_matmul_op (Contract-2), which
+        // builds a single ProgramDescriptor holding both the reduce-scatter
+        // half (this builder) and the matmul half (gather_in0 descriptor
+        // helper) so they can share kernels on overlapping cores.
+        //
+        // Semaphore IDs are allocated via desc.find_available_semaphore_id()
+        // (rather than desc.semaphores.size()) so a local_semaphore allocated
+        // here cannot collide with semaphores the caller already registered on
+        // the same cores (e.g. the signaler's rs_semaphore from
+        // MatmulFusedOpSignaler::init_llama_rs_cores_rs).
+        static void create_at_program_processing_descriptor(
+            tt::tt_metal::ProgramDescriptor& desc,
+            const operation_attributes_t& operation_attributes,
+            const ttnn::MeshCoordinate& mesh_coordinate,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& signaler);
+
+        // Contract-2 (WorkloadDescriptor) factory.  Builds one ProgramDescriptor
+        // per mesh coord via create_at_program_processing_descriptor.  No
+        // workload-scoped semaphores or intermediate Tensors are required
+        // beyond what the caller already provided in operation_attributes.
+        static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
+            tensor_return_value_t& tensor_return_value,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords);
     };
 
     using program_factory_t = std::variant<LlamaReduceScatterAdd>;
