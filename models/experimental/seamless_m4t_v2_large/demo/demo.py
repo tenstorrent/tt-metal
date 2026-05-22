@@ -19,7 +19,7 @@ self-contained — no external audio files needed. Output audio is written next 
 
 Run from repo root:
 
-  python models/experimental/seamless_m4t_v2_large/demo/ttnn_demo.py
+  python models/experimental/seamless_m4t_v2_large/demo/demo.py
 
 Optional: ``SEAMLESS_M4T_V2_WEIGHTS=/path/to/seamless-m4t-v2-large`` if not using the default tree.
 """
@@ -204,9 +204,7 @@ def main() -> None:
     input_ids = text_inputs["input_ids"]
     input_text_attn = text_inputs["attention_mask"]
 
-    # ``prewarm_conv1d_weights`` prepares T2U/vocoder conv weights before speech generate.
-    # ``use_decode_trace`` replays KV decode from Metal trace but recaptures once per decode
-    # position (slow for long ``max_new_tokens``); enable only when benchmarking decode.
+    # Optional KV-decode Metal trace (needs trace_region_size in device params; slow per position).
     use_decode_trace = False
     gen_common = dict(
         max_new_tokens=48,

@@ -84,8 +84,6 @@ class TextDecoderKvDecodeRuntime:
     token_tt: ttnn.Tensor
     pos_tt: ttnn.Tensor
     cur_pos_tt: ttnn.Tensor
-    token_host: ttnn.Tensor
-    pos_host: ttnn.Tensor
     logits_tt: Optional[ttnn.Tensor] = None
     trace_cache_seq_len: Optional[int] = None
     trace_id: Optional[int] = None
@@ -97,9 +95,7 @@ def _subsampled_lens_dev(attention_mask_2d: ttnn.Tensor, kernel_size: int, strid
     Formula: ``floor((real_len + 2 * pad - kernel) / stride) + 1`` with ``pad = kernel // 2``.
     """
     pad = kernel_size // 2
-    # NOTE: ``ttnn.typecast(uint32, bf16)`` is broken (returns 2^31 for value 1, with positions
-    # mid-tile mis-converted). The reliable path is ``uint32 → int32 → bf16``. ``ttnn.sum`` also
-    # needs TILE layout.
+    # Use uint32 → int32 → bf16 (direct uint32→bf16 typecast is incorrect on device).
     tile_u = (
         ttnn.to_layout(attention_mask_2d, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if attention_mask_2d.get_layout() != ttnn.TILE_LAYOUT
@@ -498,8 +494,7 @@ class TTSeamlessM4Tv2Model:
         return enc_out, attn_padded, attn_owned
 
     def _speech_attention_uint_to_conv_bf16(self, mask_2d: ttnn.Tensor) -> ttnn.Tensor:
-        # NOTE: ``ttnn.typecast(uint32, bf16)`` is broken (returns 2^31 for value 1 at most tile
-        # positions). Reliable path is ``uint32 → int32 → bf16`` with TILE layout for both casts.
+        # Use uint32 → int32 → bf16 (direct uint32→bf16 typecast is incorrect on device).
         mask_tile_u = ttnn.to_layout(mask_2d, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         mask_tile_i = ttnn.typecast(mask_tile_u, ttnn.int32)
         ttnn.deallocate(mask_tile_u)
@@ -698,22 +693,12 @@ class TTSeamlessM4Tv2Model:
             return self._kv_decode_rt
         self._release_kv_decode_runtime()
 
-        token_host = ttnn.from_torch(
-            torch.zeros((batch_size, 1), dtype=torch.int32),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
         token_tt = ttnn.from_torch(
             torch.zeros((batch_size, 1), dtype=torch.int32),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        pos_host = ttnn.from_torch(
-            torch.zeros((batch_size, 1), dtype=torch.int32),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
         )
         pos_tt = ttnn.from_torch(
             torch.zeros((batch_size, 1), dtype=torch.int32),
@@ -734,8 +719,6 @@ class TTSeamlessM4Tv2Model:
             token_tt=token_tt,
             pos_tt=pos_tt,
             cur_pos_tt=cur_pos_tt,
-            token_host=token_host,
-            pos_host=pos_host,
         )
         return self._kv_decode_rt
 
@@ -1545,7 +1528,7 @@ class TTSeamlessM4Tv2Model:
         char_ids_tt = _ttnn_ids_from_list([char_ids], self.device)
         t2u_mask_2d = self._cached_t2u_attention_mask(real_dec_len, padded_dec_seq)
         t2u_mask_4d = build_encoder_self_mask_4d(t2u_mask_2d, device=self.device)
-        ttnn.deallocate(t2u_mask_2d)
+        # ``t2u_mask_2d`` is owned by ``_t2u_attn_mask_cache``; do not deallocate here.
 
         t2u_logits_tt, padding_tt = self.t2u.forward(
             dec_hidden_padded,
@@ -1573,17 +1556,13 @@ class TTSeamlessM4Tv2Model:
 
         # T2U logits are sliced to logical ``unit_seq`` (see ``tt_text_to_unit.py`` end of forward),
         # while ``padding_tt`` stays at the tile-padded length. Slice ``padding_tt`` to the logical
-        # ``unit_seq`` so the eq + logical_or below operate on matching shapes.
+        # ``unit_seq`` so padding slice matches T2U logits before host vocoder remap.
         unit_seq = int(t2u_logits_tt.shape[-2])
         if prewarm_speech_convs:
-            # E2E trace recipe: ``t_audio`` matches total unit duration sum (``sum(dur_list)``),
-            # which equals logical ``unit_seq`` for the T2U upsample path.
             self.prewarm_vocoder_conv1d_weights(unit_seq=unit_seq, t_audio=unit_seq, batch=batch_size)
         pad_batch = int(padding_tt.shape[0])
         if int(padding_tt.shape[1]) != unit_seq:
-            padding_logical = ttnn.slice(padding_tt, [0, 0], [pad_batch, unit_seq], (1, 1))
-            ttnn.deallocate(padding_tt)
-            padding_tt = padding_logical
+            padding_tt = ttnn.slice(padding_tt, [0, 0], [pad_batch, unit_seq], (1, 1))
 
         if t2u_logits_tt.get_layout() != ttnn.TILE_LAYOUT:
             t2u_tile = ttnn.to_layout(t2u_logits_tt, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -1602,11 +1581,7 @@ class TTSeamlessM4Tv2Model:
         # Preserve a copy for the ``unit_sequences`` output before vocoder remapping.
         output_unit_ids_tt = ttnn.clone(unit_ids_argmax, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        # HF ``replace_mask = (unit_ids == t2u_eos) | (~padding_mask)`` with ``padding_mask`` = 1
-        # at valid positions (``modeling_seamless_m4t_v2.py`` ~3577). Building that mask on device
-        # with ``ttnn.logical_or`` across TILE bf16 padding vs ROW unit ids has produced wrong
-        # booleans in the middle of the span, spuriously filling ``vocoder_input`` with T2U pads,
-        # shrinking ``(input_ids != pad).sum()`` and thus HiFi-GAN ``t_audio``. Match HF on host.
+        # Unit id remap matches HF ``masked_fill`` + offset; done on host for PCC (device ``where`` diverged).
         if padding_tt.dtype != ttnn.bfloat16:
             pad_bf = ttnn.typecast(padding_tt, ttnn.bfloat16)
             ttnn.deallocate(padding_tt)
@@ -1624,13 +1599,6 @@ class TTSeamlessM4Tv2Model:
             ttnn.deallocate(pad_bf)
             pad_bf = pad_sl
 
-        # HF order (``modeling_seamless_m4t_v2.py`` ~3577-3584), applied on host below:
-        #   1. ``unit_ids = unit_ids.masked_fill(replace_mask, t2u_pad_token_id)``
-        #   2. ``unit_ids = where(unit_ids == t2u_pad_token_id, unit_ids, unit_ids - vocoder_offset)``
-        # ``ttnn.where`` on uint32 TILE (required by the ternary op) does not match PyTorch
-        # ``masked_fill`` / ``where`` for this remapping — it produced bogus indices (e.g. large
-        # ``0xFFFF…`` values) and wrong HiFi-GAN lengths. HF-equivalent remap on host for the
-        # small ``[B, S]`` unit grid (batch 1 in practice), then push back once as ``uint32`` ROW.
         import torch as _torch
 
         unit_host = to_torch_replicated_first_shard(unit_ids_argmax).to(_torch.long)

@@ -1,25 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""TTNN [`SeamlessM4Tv2CodeHifiGan`] — embeddings, duration predictor, HiFi-GAN (inference).
+"""TTNN ``SeamlessM4Tv2CodeHifiGan`` — unit embeddings, duration predictor, and HiFi-GAN vocoder.
 
-Follows Hugging Face layout from ``transformers.models.seamless_m4t_v2.modeling_seamless_m4t_v2``.
-Uses ``ttnn.conv1d`` for Conv1d (same pattern as speech encoder) and ``ttnn.conv_transpose2d``
-with ``H=1`` for ConvTranspose1d (same idea as ``models/demos/vision/segmentation/vanilla_unet``).
-
-All tensor math runs on device (no PyTorch fallback). HiFi-GAN must see the **same**
-temporal length as Hugging Face: every ``conv1d`` / ``conv_transpose`` output length depends on
-``input_length``. Padding or fixing ``t_audio`` to a larger constant changes those lengths end-to-end,
-so the waveform no longer matches HF even after cropping — that is why a **single scalar**
-``t_audio = sum(durations)`` is read once for shape control (``.item()`` on the last cumsum); it is
-not a compute fallback.
-
-  - Duration math (``expm1`` / ``round`` / ``minimum duration 1``) uses TTNN ops.
-  - HF's ``repeat_interleave`` is ``embeddings @ H`` with ``ttnn.cumsum`` + comparisons.
-  - Lang/speaker broadcast uses ``ttnn.repeat`` to that same ``t_audio``.
-  - Output ``lengths`` uses HF conv-length formulas on host (from ``t_audio``), then a small int32 upload.
-  - Duration predictor and resblock ``conv1`` use post-conv fused ReLU / LeakyReLU via ``Conv1dConfig.activation``;
-    pre-conv LeakyReLU (upsampler, resblock input, conv_post) stays as separate ``ttnn.leaky_relu`` to match HF order.
+Matches Hugging Face ``modeling_seamless_m4t_v2`` layout. Conv1d uses ``ttnn.conv1d``; ConvTranspose1d
+uses ``ttnn.conv_transpose2d`` with ``H=1``. Temporal lengths follow HF conv formulas; ``t_audio``
+(one host scalar from duration cumsum) sets the repeat-interleave and HiFi-GAN ``input_length``.
+Output waveform lengths are computed on host from ``t_audio`` and uploaded as int32.
 """
 
 from __future__ import annotations
@@ -572,8 +559,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         log_dur = self._linear(h, dp.proj.weight, dp.proj.bias)  # [B, T_units, 1]
         ttnn.deallocate(h)
         log_dur_2d = ttnn.squeeze(log_dur, -1)  # [B, T_units]
-        # Caller deallocates the returned tensor after ``expm1``; do not ``deallocate(log_dur)`` here
-        # in case ``squeeze`` aliases ``log_dur``.
+        # Caller frees after ``expm1`` (``squeeze`` may alias ``log_dur``).
         return log_dur_2d
 
     def _resblock(self, x_nlc: ttnn.Tensor, rb: Any, *, batch: int, tlen: int, channels: int) -> ttnn.Tensor:
@@ -742,8 +728,6 @@ class TTSeamlessM4Tv2CodeHifiGan:
         # Drop TILE padding on the time / channel axes so ``seq`` matches ``cumsum_*`` and
         # ``use_BEC @ H`` is ``[B,E,T] @ [B,T,t_audio]`` (otherwise last dim can be e.g. 106 vs T=7).
         use_trim = ttnn.slice(use, [0, 0, 0], [batch, seq, e_unit], (1, 1, 1))
-        # Do not deallocate ``use`` here — ``slice`` may alias the parent embedding buffer;
-        # freeing would invalidate ``use_trim`` / ``permute(use)`` / ``matmul`` inputs.
         use = use_trim
         log_dur = self._dur_predictor_dev(use, batch=batch, seq=seq, dp=dp)  # [B, T_units] bf16
 
@@ -763,11 +747,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         ttnn.deallocate(dur_f32)
         ttnn.deallocate(dur_bf)
 
-        # HiFi-GAN ``input_length`` must match HF's ``repeat_interleave`` length: total duration
-        # through the index chosen by ``_get_dur_output_lengths`` — ``cumsum.gather(1, idx)`` where
-        # ``idx = clamp((input_ids != pad).sum(1), 0, T-1)``. Reading ``cumsum[:, -1]`` is wrong on
-        # TILE-padded tensors (the last *storage* column is often padding), which yielded ``t_audio``
-        # near 1 and essentially silent HiFi-GAN output.
+        # ``t_audio`` from HF gather index (not last TILE column, which may be padding).
         cumsum_pre_seq = ttnn.slice(cumsum_inc, [0, 0], [batch, seq], (1, 1))
         cs_t = to_torch_replicated_first_shard(cumsum_pre_seq).float()
         pad_id = int(self.cfg.t2u_pad_token_id)
@@ -777,7 +757,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
             raise RuntimeError(f"Computed t_audio={t_audio}; expected positive duration sum.")
 
         # ---------- expansion via embeddings @ H (device) ----------
-        # H[b, i, j] = 1 iff cumsum_prev[b, i] <= j < cumsum_inc[b, i].
+        # Defer dealloc of views (slice/permute/reshape) until after concat — aliases are common.
         frame_idx = self._cached_frame_idx_f32(t_audio)
         # Reshape for broadcasting: [B, T_units, 1] vs [1, 1, t_audio].
         c_b = ttnn.reshape(cumsum_inc, (batch, seq, 1))
@@ -786,8 +766,6 @@ class TTSeamlessM4Tv2CodeHifiGan:
 
         lower = ttnn.ge(f_b, cp_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         upper = ttnn.lt(f_b, c_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        # Do not deallocate ``c_b`` / ``cp_b`` / ``f_b`` / ``frame_idx`` — reshapes may alias
-        # ``cumsum_*`` or ``frame_idx``; freeing them would corrupt ``cumsum_inc`` / ``cumsum_prev``.
         H_mask = ttnn.logical_and(lower, upper, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(lower)
         ttnn.deallocate(upper)
@@ -796,7 +774,6 @@ class TTSeamlessM4Tv2CodeHifiGan:
 
         # use: [B, T_units, E_unit] -> [B, E_unit, T_units]; expand to [B, E_unit, t_audio].
         use_BEC = ttnn.permute(use, (0, 2, 1))
-        # Do not deallocate ``use`` here — ``permute`` may return a view; wait until after matmul/concat.
         pc_expand = self._matmul_pc(batch * e_unit, seq, t_audio)
         mm_kwargs: dict = dict(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -805,16 +782,12 @@ class TTSeamlessM4Tv2CodeHifiGan:
         if pc_expand is not None:
             mm_kwargs["program_config"] = pc_expand
         expanded_BCT = ttnn.matmul(use_BEC, H, **mm_kwargs)
-        # Matmul may return a tensor that aliases an input buffer; do not free ``use_BEC`` / ``H``
-        # until after ``concat`` has read ``expanded_BCT``.
 
         # ---------- broadcast lang/spk to ``t_audio`` (device) ----------
         lang_dim = int(lang_e.shape[-1])
         spk_dim = int(sp_e.shape[-1])
         lang_BC1 = ttnn.reshape(lang_e, (batch, lang_dim, 1))
         spk_BC1 = ttnn.reshape(sp_e, (batch, spk_dim, 1))
-        # Do not deallocate ``lang_e`` / ``sp_e`` here — ``reshape`` may alias them; freeing would
-        # invalidate ``lang_BC1`` / ``spk_BC1`` before broadcast.
         if t_audio == 1:
             lang_BCT = lang_BC1
             spk_BCT = spk_BC1

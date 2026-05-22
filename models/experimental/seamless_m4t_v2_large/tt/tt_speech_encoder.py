@@ -32,7 +32,7 @@ _PROFILER_LAYER_DRAIN_INTERVAL = 8
 
 
 def _drain_device_profiler(device: ttnn.Device, *, trace_no_profiler: bool) -> None:
-    """Flush profiler markers so Tracy can match host ops without DRAM buffer overflow."""
+    """Flush on-device profiler markers when profiling is enabled."""
     if trace_no_profiler:
         return
     if os.environ.get("TT_METAL_DEVICE_PROFILER") == "1":
@@ -367,12 +367,10 @@ class TTSeamlessM4Tv2SpeechEncoder:
         groups: int,
         use_dw_zero_pad: bool = False,
     ) -> ttnn.Conv1dConfig:
-        """Per-shape ``Conv1dConfig`` tuned from Tracy (exp6).
+        """Per-shape ``Conv1dConfig`` for conformer depthwise and pointwise conv1d.
 
-        Conformer depthwise (k=31, g=1024) uses the 1-D depthwise height-sharded factory.
-        Do not set ``act_block_h_override`` (it interacts badly with depthwise L1). When
-        ``nhw_tiles`` has a large divisor on the compute grid, override NHW sharding to use
-        more cores (approach C — Python-only, no TTNN C++ changes).
+        Depthwise (k=31) uses height-sharded layout. Do not set ``act_block_h_override`` on
+        depthwise paths. When ``nhw_tiles`` divides the compute grid, NHW sharding may use more cores.
         """
         key = (batch, input_length, in_channels, out_channels, kernel_size, groups, use_dw_zero_pad)
         cached = self._conv_config_cache.get(key)
@@ -835,7 +833,6 @@ class TTSeamlessM4Tv2SpeechEncoder:
             .permute(0, 2, 1)
             .contiguous()
         )
-        # Host TILE upload — avoids per-layer ``EmbeddingsDeviceOperation`` + cold tilize gaps in Tracy.
         emb = from_torch_bfloat16_tile(self.device, emb_cpu, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         # Fold scale into the table when non-trivial (stage 7 / stage 8 compatibility).
@@ -1496,10 +1493,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
         self._runtime_warmed.add(key)
 
     def pre_warm(self, batch: int, seq_len: int) -> None:
-        """Pre-populate all shape-dependent device-side caches for ``(batch, seq_len)``.
-
-        Amortises first-pass Tracy gaps (``FillPad`` / ``EmbeddingsDeviceOperation`` / mask tilize)
-        so every conformer layer hits warm caches on the first ``forward`` call.
+        """Pre-populate shape-dependent caches for ``(batch, seq_len)`` before the first forward.
 
         Caches populated:
         * ``_rel_pos_tab_cache``   — ``[S, D, S]`` tables (host embedding + TILE upload)
