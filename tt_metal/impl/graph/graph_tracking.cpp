@@ -170,7 +170,10 @@ void GraphTracker::clear() {
 }
 
 void GraphTracker::clear_hook() {
-    hooked_buffers.clear();
+    {
+        std::lock_guard<std::mutex> lock(hooked_buffers_mutex);
+        hooked_buffers.clear();
+    }
     hook = nullptr;
 }
 

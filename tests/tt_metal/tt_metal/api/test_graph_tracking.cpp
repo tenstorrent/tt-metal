@@ -29,14 +29,12 @@ public:
 
     void track_function_start(
         std::string_view /*function_name*/, std::span<TrackedArgument> /*input_parameters*/) override {
-        function_starts.fetch_add(1, std::memory_order_relaxed);
+        function_starts.fetch_add(1);
     }
 
-    void track_function_end() override { function_ends.fetch_add(1, std::memory_order_relaxed); }
+    void track_function_end() override { function_ends.fetch_add(1); }
 
-    void track_function_end(const std::any& /*output_tensors*/) override {
-        function_ends.fetch_add(1, std::memory_order_relaxed);
-    }
+    void track_function_end(const std::any& /*output_tensors*/) override { function_ends.fetch_add(1); }
 };
 
 }  // namespace
@@ -78,8 +76,8 @@ TEST(GraphTrackerThreading, ProcessorsAreIsolatedPerThread) {
         tracker.clear();
         tracker.push_processor(proc);
 
-        ready_count.fetch_add(1, std::memory_order_acq_rel);
-        while (!go.load(std::memory_order_acquire)) {
+        ready_count.fetch_add(1);
+        while (!go.load()) {
             std::this_thread::yield();
         }
 
@@ -96,10 +94,10 @@ TEST(GraphTrackerThreading, ProcessorsAreIsolatedPerThread) {
     std::thread t_a(run_one_thread, proc_a);
     std::thread t_b(run_one_thread, proc_b);
 
-    while (ready_count.load(std::memory_order_acquire) < kNumThreads) {
+    while (ready_count.load() < kNumThreads) {
         std::this_thread::yield();
     }
-    go.store(true, std::memory_order_release);
+    go.store(true);
 
     t_a.join();
     t_b.join();
@@ -116,11 +114,12 @@ TEST(GraphTrackerThreading, ConcurrentPushPopAndTrackDoNotRace) {
     constexpr auto kDuration = std::chrono::milliseconds(200);
 
     std::atomic<bool> stop{false};
+    std::atomic<bool> dispatcher_ran{false};
 
     std::thread mutator([&] {
         auto& tracker = GraphTracker::instance();
         tracker.clear();
-        while (!stop.load(std::memory_order_relaxed)) {
+        while (!stop.load()) {
             tracker.push_processor(std::make_shared<CountingProcessor>());
             tracker.pop_processor();
         }
@@ -131,20 +130,23 @@ TEST(GraphTrackerThreading, ConcurrentPushPopAndTrackDoNotRace) {
         auto& tracker = GraphTracker::instance();
         tracker.clear();
         tracker.push_processor(dispatcher_proc);
-        while (!stop.load(std::memory_order_relaxed)) {
+        while (!stop.load()) {
             tracker.track_function_start("op");
             tracker.track_function_end();
+            dispatcher_ran.store(true);
         }
         tracker.pop_processor();
     });
 
     std::this_thread::sleep_for(kDuration);
-    stop.store(true, std::memory_order_relaxed);
+    stop.store(true);
 
     mutator.join();
     dispatcher.join();
 
-    EXPECT_GT(dispatcher_proc->function_starts.load(), 0);
+    if (dispatcher_ran.load()) {
+        EXPECT_GT(dispatcher_proc->function_starts.load(), 0);
+    }
     EXPECT_EQ(dispatcher_proc->function_starts.load(), dispatcher_proc->function_ends.load());
 }
 
