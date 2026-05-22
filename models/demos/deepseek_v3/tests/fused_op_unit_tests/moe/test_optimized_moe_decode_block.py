@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import random
 
 import pytest
@@ -552,9 +553,9 @@ def verify_output(
     if not allclose_passed:
         logger.warning(f"FAILED Final Output - Iteration: {iteration} - AllClose: {allclose_output}")
         mask = (tt_output_tensor - output_reference_tensor).abs() > atol_threshold
-        # logger.warning(
-    #             f"Elements out of bounds: {tt_output_tensor[mask]} ref: {output_reference_tensor[mask]} idx: {mask.nonzero(as_tuple=True)}"
-    #         )
+        logger.warning(
+            f"Elements out of bounds: {tt_output_tensor[mask]} ref: {output_reference_tensor[mask]} idx: {mask.nonzero(as_tuple=True)}"
+        )
 
     return pcc_passed and allclose_passed
 

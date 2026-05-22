@@ -39,15 +39,14 @@ from tests.nightly.tg.ccl.moe.test_moe_compute_6U import _swiglu_reference
 faulthandler.enable()
 
 
-# @pytest.fixture(autouse=True)
-# def _hang_watchdog():
-#     # If a test wedges (typically on device teardown after an async failure),
-#     # dump tracebacks and SIGABRT the process instead of hanging indefinitely.
-#     faulthandler.dump_traceback_later(300, exit=True)
-#     try:
-#         yield
-#     finally:
-#         faulthandler.cancel_dump_traceback_later()
+# occasionally running this test hangs due to conflicts with mesh device teardown. Enable this fixture if encountered
+@pytest.fixture(autouse=False)
+def _hang_watchdog():
+    faulthandler.dump_traceback_later(300, exit=True)
+    try:
+        yield
+    finally:
+        faulthandler.cancel_dump_traceback_later()
 
 
 def _print_exception_and_fail(reason: str) -> None:
@@ -101,6 +100,8 @@ def _matmul_golden(
     SILU:   `silu(x @ w0 + b0) * (x @ w1 + b1) @ w2 + b2`
     SWIGLU: `(up + 1) * gate * sigmoid(alpha * gate) @ w2 + b2` with clamping (GPT-OSS),
             where `gate = x @ w0 + b0` and `up = x @ w1 + b1`.
+    GELU:   `gelu(x @ w0 + b0, tanh) * (x @ w1 + b1) @ w2 + b2` (tanh approximation
+            matches the on-device kernel).
 
     Per-expert bias shapes: `b0`/`b1` are `[num_layers, 1, N]`, `b2` is
     `[num_layers, 1, hidden_size]`. `unsqueeze(-2)` broadcasts over the token dim.
@@ -116,6 +117,8 @@ def _matmul_golden(
         intermediate = torch.nn.functional.silu(gate) * up
     elif activation_type == MoEActivationFunction.SWIGLU:
         intermediate = _swiglu_reference(gate, up)
+    elif activation_type == MoEActivationFunction.GELU:
+        intermediate = torch.nn.functional.gelu(gate, approximate="tanh") * up
     else:
         raise ValueError(f"Unsupported activation type: {activation_type}")
 
@@ -289,7 +292,7 @@ def _config_id(path: Path) -> str:
 # known failures
 # Note: it would be better to test all of these and let them fail but some cause hard crashes and derail the test
 SKIP_LIST = [
-    "deepseek_ocr.yaml",
+    "deepseek_ocr.yaml",  # this one is actually unexpected and causes the test to hang (watcher assert)
     "ling_1t.yaml",
     "mistral_large_3.yaml",
     "deepseek_v4_pro.yaml",
