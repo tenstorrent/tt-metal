@@ -86,6 +86,33 @@ class AceStepDemoSession:
         cached = self.cached_preprocess
         return cached is not None and cached.matches(prompt=prompt, duration_sec=duration_sec, seed=seed)
 
+    def should_keep_dit_mesh_open(
+        self,
+        *,
+        run_specs: list,
+        session_pass: int,
+        duration_sec: float,
+        seed: int,
+        force_close: bool = False,
+    ) -> bool:
+        """Keep the DiT mesh open between passes when the next pass can skip preprocess.
+
+        Preprocess needs a separate 1×1 device; the DiT 2×2 mesh must be closed before opening it.
+        When the next pass reuses cached host condition tensors, we can keep pipe/VAE/trace alive
+        and avoid ~2 s ``dit_pipeline_init`` plus trace recapture on the next pass.
+        """
+        if force_close or self.dit_dev is None:
+            return False
+        next_idx = int(session_pass) + 1
+        if next_idx >= len(run_specs):
+            return False
+        next_spec = run_specs[next_idx]
+        return self.can_reuse_preprocess(
+            prompt=str(next_spec.prompt),
+            duration_sec=float(duration_sec),
+            seed=int(seed),
+        )
+
     def store_preprocess(
         self,
         *,
