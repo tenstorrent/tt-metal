@@ -192,18 +192,20 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     make_cb(CB_GATE_INT, intermed_df, /*tiles=*/gu_out_block_num_tiles, intermed_tile_size);
     make_cb(CB_UP_INT, intermed_df, /*tiles=*/gu_out_block_num_tiles, intermed_tile_size);
     make_cb(CB_ACTIVATED, intermed_df, /*tiles=*/gu_out_block_num_tiles, intermed_tile_size);
-    // Partials CBs: subblock-sized (no double-buffer needed — the v2 kernel
-    // pushes one subblock, then pops it immediately on the next K-block's
-    // reload step). The CB just needs to hold ONE subblock at a time.
+    // Partials CBs: sized to the full per-core output block. Within ONE
+    // K-block iteration the kernel pushes (in0_num_subblocks *
+    // in1_num_subblocks) subblocks to partials before any pops happen
+    // (the pops happen on the NEXT K-block iteration's reload). So the CB
+    // must hold all those subblocks = the full block.
     make_cb(
         CB_PARTIALS_GU,
         partials_df,
-        /*tiles=*/gu_out_subblock_h * gu_out_subblock_w,
+        /*tiles=*/gu_out_block_num_tiles,
         partials_tile_size);
     make_cb(
         CB_PARTIALS_D,
         partials_df,
-        /*tiles=*/d_out_subblock_h * d_out_subblock_w,
+        /*tiles=*/d_out_block_num_tiles,
         partials_tile_size);
     // Output CB: writer drains one subblock at a time.
     make_cb(CB_OUT, out_df, /*tiles=*/d_out_subblock_h * d_out_subblock_w * 4, out_tile_size);
