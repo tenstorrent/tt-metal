@@ -414,7 +414,7 @@ def to_torch(
         if (torch_major, torch_minor) < (2, 8):
             raise RuntimeError(
                 f"ttnn.to_torch: converting an FP8_E4M3 tensor requires torch >= 2.8 (dlpack code 10 support); "
-                f"got torch {torch.__version__}. Update your env (tt-metal pins torch==2.11.0 in requirements-dev.txt)."
+                f"got torch {torch.__version__}. Update torch in your environment."
             )
 
     if ttnn.is_tensor_storage_on_device(tensor):
