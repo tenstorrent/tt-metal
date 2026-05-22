@@ -103,9 +103,7 @@ def matmul(
 
     # Compute program cache key
     h = ttnn.MatmulDeviceOperation.compute_program_hash(operation_params, tensor_args)
-    program_cache_key = extend_branch_program_cache_key(
-        int(h) & ((1 << 64) - 1), core_range_set_fusion_key(core_range_set)
-    )
+    program_cache_key = extend_branch_program_cache_key(h, core_range_set_fusion_key(core_range_set))
 
     # Build input dict
     inputs = {"input_a": input_a, "input_b": input_b}
