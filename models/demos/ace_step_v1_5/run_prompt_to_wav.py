@@ -1394,6 +1394,7 @@ def main(
                     print("[condition] backend=ttnn official lyric+timbre+text+context", flush=True)
                 finally:
                     _restore_infer_txt()
+            if not condition_tensors_on_device:
                 demo_session.store_preprocess(
                     prompt=run_prompt,
                     duration_sec=float(args.duration_sec),
@@ -1404,7 +1405,7 @@ def main(
                     ctx_lat=ctx_lat,
                     null_emb=null_emb,
                 )
-            elif host_only_preprocess:
+            elif host_only_preprocess or not args.ttnn_condition_embedding:
                 with perf.timed("handler_preprocess"):
                     enc_hs, enc_mask, ctx_lat, frames, null_emb = handler_prepare_condition_tensors(
                         dit_handler, filtered
