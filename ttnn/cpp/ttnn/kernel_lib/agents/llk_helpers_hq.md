@@ -203,7 +203,23 @@ Only after a green-baseline test exists does the migration proceed to audit (Ste
 
 ### Step 2 — Audit the target kernel
 
-For the kernel being migrated, enumerate:
+The audit is a **whole-file pass**, not a "find the block I want to migrate" pass. The agent that audits ONLY the block they planned to migrate ends up with a kernel that has 1 chain and 6 raw blocks dressed up as "deferred", and no record of whether the other 6 are actually blocked.
+
+**MANDATORY first step** before any per-block analysis:
+
+```
+grep -nE '(add|sub|mul)_tiles|copy_tile|pack_tile|reduce_tile|matmul_tile|mask_tile|abs_tile|exp_tile|recip_tile|sqrt_tile|rsqrt_tile|log_tile|tanh_tile|sigmoid_tile|gelu_tile|relu_tile|cast_tile|typecast_tile|fill_tile|reconfig_data_format|pack_reconfig_data_format|tile_regs_(acquire|release|wait|commit)|acquire_dst|release_dst|unary_bcast|mul_tiles_bcast|add_tiles_bcast|sub_tiles_bcast|init_bcast' <kernel>.cpp
+```
+
+Build a list with one row per identified eltwise-shaped block. Every row must be classified as one of:
+
+- **MIGRATING-NOW** — going into a chain in this commit.
+- **BLOCKED:<gap-id>** — name a specific missing primitive in the helper. Examples of valid forms: "missing op struct `DestReuseBinarySfpu`", "static_assert at `eltwise_chain.inl:361` forbids OutDeferredReserve + BlockIter", "`HeldCumulative` lifecycle has no `is_legal_input_lifecycle_with_base` membership". Examples of INVALID forms (lazy partials): "migratable, deferred", "needs runtime offset" (without checking that `TileBaseRuntime` exists), "complex pattern", "future work".
+- **OOS:<HQ-section>** — out of scope per a specific HQ doc section: "OOS — welford accumulator, HQ §CB Lifecycle Taxonomy (cumulative wait + in-DEST hold)", "OOS — macro-injected SFPU, no chain element wraps preprocessor macros".
+
+Before declaring BLOCKED, the agent MUST verify against the current helper header that the claimed missing primitive is actually missing. `grep` the policy enum, the op-struct list, and the static_asserts. A claim like "BlockIterOffset runtime variant TBD" is invalid if `TileBaseRuntime` already exists in `eltwise_chain.hpp` — that is laziness, not a blocker.
+
+For each row, enumerate:
 
 - **Raw LLK calls it makes** (`*_tile_init`, `*_tile`, `reconfig_data_format*`, `cb_*`, `tile_regs_*`, `pack_tile*`, `matmul_*`, `reduce_*`, etc.). For each, decide: covered by an existing helper API, requires a helper update, or out of scope.
 - **CB lifecycle per operand** — classify each input/output CB as one of:
@@ -223,9 +239,18 @@ For the kernel being migrated, enumerate:
 
 If the audit turns up ANY of these, return to a prior step before writing the migration:
 
-- A needed op struct, API, or fusion point does not exist → Helper Update (conventions §5) or Helper Creation, then resume.
+- A needed op struct, API, or fusion point does not exist → Helper Update (conventions §5) or Helper Creation, then resume. **Adding op structs is NOT a blocker — it's part of the migration scope when small (4 lines via CRTP base).** Only escalate to a separate helper-creation commit when the new primitive needs design (new enum value, new lifecycle, new index mode).
 - A required policy / enum value is missing (e.g. a CB lifecycle the helper does not yet model, a dtype-reconfig mode it does not emit) → Helper Update via pipeline, then resume.
 - The control-flow or LLK pattern is fundamentally unsupported (cumulative waits, deeply interleaved op classes with no fusion point, exotic pack patterns) → leave that block on raw LLK and move on.
+
+**Self-check before declaring a block BLOCKED:**
+
+1. Did I grep the relevant helper header for the primitive I think is missing? (`eltwise_chain.hpp` for chain elements / policies, `eltwise_*.hpp` for op structs.)
+2. Did I check `is_legal_input_lifecycle_with_base` / `is_legal_output_lifecycle_with_base` etc. lists for lifecycle compatibility?
+3. Did I check the static_asserts in `*_chain.inl` for the actual constraint, not the constraint I guessed?
+4. Is the "missing" primitive actually a small CRTP struct I should just add? (If yes — add it, not block.)
+
+If any answer is "no, I assumed", the block is NOT yet BLOCKED — the audit is incomplete.
 
 ### Step 4 — Write the migration
 
@@ -341,17 +366,52 @@ Good indicators that partial migration is worth doing:
 - The migratable stage involves multiple CB / DEST / init lifecycle calls — the helper collapses all of them into one call.
 - The blocker is in a different stage with no data dependency on the migratable stage's output CB.
 
-The pipeline must NOT (a) refuse to land 80% because it isn't 100%, or (b) silently land 80% with no record of what's left. Every partial migration produces a per-kernel block in the commit message / migration log:
+The pipeline must NOT (a) refuse to land 80% because it isn't 100%, or (b) silently land 80% with no record of what's left.
+
+#### PARTIAL commit gate — checklist
+
+Before committing a PARTIAL migration, ALL of the following must be true. If any is false, the migration is NOT yet ready to commit; finish the audit and either migrate the unblocked remainder or fix the bad reason.
+
+- [ ] **Whole-file audit ran** — Step 2's grep enumerated every eltwise-shaped block in the file. Not just the block the agent decided to migrate.
+- [ ] **Every un-migrated block has a row** — MIGRATING-NOW, BLOCKED:<gap>, or OOS:<HQ-section>. No silent rows.
+- [ ] **Every BLOCKED row cites a specific primitive** — a missing op struct name, a missing policy enum value, a static_assert at `<file>:<line>`, OR a documented helper-creation task. **Not** "deferred", "TBD", "complex", "non-trivial", "future work", "needs investigation". Those terms are explicitly banned as blocker reasons.
+- [ ] **Every BLOCKED row was verified** — the agent grepped the helper header to confirm the primitive is actually missing. Claiming a chain element doesn't exist without checking the header is the most common lazy-partial failure mode.
+- [ ] **The "add a small CRTP struct" exit was considered** — if the missing primitive is ~4 lines via an existing CRTP base (UnaryOp / BinaryOpBase / TernaryOpBase), it is part of this migration's scope, NOT a blocker.
+
+Every partial migration produces a per-kernel block in the commit message / migration log:
 
 ```
 kernel: ttnn/.../foo_compute.cpp
-migrated: main loop, post-op chain
+migrated:
+  - block 1 (main loop)          → BinaryFpu(Add) + PackTile
+  - block 3 (post-op chain)      → BinaryFpu(Mul) + Rsqrt + PackTile
 skipped:
-  - prologue scaler init (raw)  — reason: in-DEST hold loop, see eltwise §3.7
-  - mid-loop dtype swap         — reason: helper has no mid-chain reinit policy, GAP-12
+  - block 2 (prologue scaler init)
+      reason: in-DEST hold loop with persistent DEST accumulator across blocks
+      cite: HQ doc §"CB Lifecycle Taxonomy" — cumulative wait pattern, unsupported
+  - block 4 (mid-loop dtype swap)
+      reason: helper has no mid-chain reinit policy
+      cite: gap GAP-12 (see kernel_lib/migration_status.md)
+      resolution: add `MidChainReinit` policy enum + propagate through chain.inl
 ```
 
-The skipped list feeds the per-helper feature gap map directly. No skipped section = no signal that more work exists.
+`reason:` is not enough on its own; every blocked block also needs a `cite:` (HQ section, gap-map id, or `<file>:<line>` static_assert) so a reviewer can independently verify the blocker is real.
+
+The skipped list feeds the per-helper feature gap map directly. No skipped section = no signal that more work exists. **A migration listed as PARTIAL with no skipped block, or with skipped blocks that lack a `cite:`, is rejected at code review.**
+
+#### Banned blocker reasons (lazy partials)
+
+These reasons are not blockers and will be rejected at review:
+
+- "deferred to later pass"
+- "migratable, deferred"
+- "future work"
+- "TBD"
+- "complex"
+- "non-trivial"
+- "needs investigation"
+- "outside scope of this session" (only valid if user explicitly capped scope)
+- Any reason that doesn't name a specific missing helper primitive OR cite an HQ taxonomy section
 
 ### Verifying the Test Exercises the Changed Kernel
 
@@ -373,6 +433,8 @@ Before trusting a passing test:
 - **Hand-coding around a helper gap.** If an op, policy, or fusion point is missing, fix the helper (Helper Update / Helper Creation) — do not inline a workaround in the kernel.
 - **Batching migrations of unrelated kernels in one commit.** One kernel per commit so failures bisect to a single change.
 - **Silently dropping FP32_DEST_ACC-guarded reconfig calls.** Verify the helper emits an equivalent reconfig (or flag the gap and leave the path on raw LLK).
+- **Lazy partials.** Stopping after the first migratable block, then listing the rest as "deferred" / "TBD" / "complex". Every un-migrated block needs either MIGRATING-NOW (do it), BLOCKED:<specific gap> (cite the missing primitive), or OOS:<HQ section> (cite the section). See the [PARTIAL commit gate](#partial-commit-gate--checklist) above. The most common failure mode is claiming a chain element doesn't exist without grepping the helper header first — `TileBaseRuntime` was claimed "TBD" while it already existed at `eltwise_chain.hpp:510`.
+- **Blindly mirroring the reference branch's reconfig flags.** The reference branch (`astancov/eltwise_run7_refined_rebase_v2`) often used `BinaryDataFormatReconfig::InputAndOutput` and `PackTilePolicy::PerTileReserveAndPush` regardless of what the pre-migration kernel did. Re-audit reconfig and reserve/push lifecycle per stage; match the **original** kernel's LLK call pattern, not the reference's translation. Adding `pack_reconfig_data_format` or `cb_reserve_back` calls that weren't in the original is a behavior change, even when functionally a no-op.
 - **Marking a kernel NOT-MIGRATED when only some stages are blocked.** Log as PARTIAL, migrate the clean stages, record the specific blocker per blocked stage.
 - **Assuming the first passing test validates your edit.** Verify the test exercises your exact kernel file — same-named files in other directories can silently shadow the one you changed.
 - **Skipping the dtype matrix.** Re-run `fp32_dest_acc_en ∈ {False, True}` and any mixed-dtype combo the original kernel supported, even if a single bf16 run passes.
