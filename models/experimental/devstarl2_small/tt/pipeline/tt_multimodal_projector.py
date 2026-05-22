@@ -7,12 +7,12 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import pad_by_zero
 from models.experimental.devstarl2_small.devstral_utils.pixtral_seq_chunk import (
     vision_activation_memcfg,
     vision_rms_norm_memcfg,
 )
 from models.experimental.devstarl2_small.tt.tt_patchmerger import TTMistral3PatchMerger
-from models.experimental.devstarl2_small.tt.tt_rmsnorm import RMSNorm
 
 
 class TTMistral3MultiModalProjector(LightweightModule):
@@ -33,15 +33,13 @@ class TTMistral3MultiModalProjector(LightweightModule):
         self.dtype = dtype
 
         norm_dim = state_dict[f"{state_dict_prefix}norm.weight"].numel()
-        self.norm = RMSNorm(
+        self.norm_weight, _ = pad_by_zero(
+            state_dict[f"{state_dict_prefix}norm.weight"],
             device=mesh_device,
-            dim=norm_dim,
-            state_dict=state_dict,
-            weight_key=f"{state_dict_prefix}norm",
-            weight_cache_path=weight_cache_path,
-            weight_dtype=dtype,
-            eps=eps,
+            tt_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            tt_dtype=dtype,
         )
+        self.norm_eps = eps
         self.patch_merger = TTMistral3PatchMerger(
             mesh_device=mesh_device,
             args=args,
@@ -88,7 +86,7 @@ class TTMistral3MultiModalProjector(LightweightModule):
         x = ttnn.reshape(image_features, (1, 1, seq_tokens, image_features.shape[1]))
         if x.memory_config().buffer_type != norm_mem_cfg.buffer_type:
             x = ttnn.to_memory_config(x, norm_mem_cfg)
-        x = self.norm(x, mode="prefill", memory_config=norm_mem_cfg)
+        x = ttnn.rms_norm(x, epsilon=self.norm_eps, weight=self.norm_weight, memory_config=norm_mem_cfg)
         x = ttnn.reshape(x, image_features.shape)
         x = self.patch_merger(x, image_sizes)
         x = ttnn.linear(x, self.linear_1_weight, dtype=self.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)

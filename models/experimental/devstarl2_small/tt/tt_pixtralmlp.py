@@ -50,7 +50,12 @@ class MistralTTVisionMLP(LightweightModule):
             w2_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
         weight_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
-        def as_tensor(torch_2d, dtype, mesh_mapper, memory_config):
+        prefix = state_dict_prefix or ""
+
+        def as_tensor(name, torch_2d, dtype, mesh_mapper, memory_config):
+            cache_name = None
+            if weight_cache_path is not None:
+                cache_name = weight_cache_path / f"{prefix}{name}.weight"
             return ttnn.as_tensor(
                 torch_2d,
                 dtype=dtype,
@@ -58,11 +63,12 @@ class MistralTTVisionMLP(LightweightModule):
                 mesh_mapper=mesh_mapper,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=memory_config,
+                cache_file_name=cache_name,
             )
 
-        self.w1 = as_tensor(get_weight("w1"), dtype, w13_mapper, weight_mem_config)
-        self.w3 = as_tensor(get_weight("w3"), dtype, w13_mapper, weight_mem_config)
-        self.w2 = as_tensor(get_weight("w2"), dtype, w2_mapper, weight_mem_config)
+        self.w1 = as_tensor("w1", get_weight("w1"), dtype, w13_mapper, weight_mem_config)
+        self.w3 = as_tensor("w3", get_weight("w3"), dtype, w13_mapper, weight_mem_config)
+        self.w2 = as_tensor("w2", get_weight("w2"), dtype, w2_mapper, weight_mem_config)
 
         self.compute_kernel_config = args.compute_kernel_config_hifi2
 

@@ -71,7 +71,18 @@ class TtDevstral2SmallModel(LightweightModule):
         )
         if isinstance(text_cfg, Ministral3Config):
             lm_kwargs["ministral_text_config"] = text_cfg
-        self.language_model = TtMinistral3Model(**lm_kwargs)
+        self._lm_kwargs = lm_kwargs
+        self._language_model: TtMinistral3Model | None = None
+
+    @property
+    def language_model(self) -> TtMinistral3Model:
+        if self._language_model is None:
+            self._language_model = TtMinistral3Model(**self._lm_kwargs)
+        return self._language_model
+
+    @language_model.setter
+    def language_model(self, value: TtMinistral3Model) -> None:
+        self._language_model = value
 
     def get_projected_image_features(self, pixel_values, image_sizes, position_ids_tt: ttnn.Tensor) -> ttnn.Tensor:
         """Last vision hidden states through projector; matches HF ``get_image_features`` concatenation."""
