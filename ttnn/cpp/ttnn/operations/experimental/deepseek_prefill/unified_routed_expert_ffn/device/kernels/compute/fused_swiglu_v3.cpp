@@ -56,11 +56,13 @@ template <
     bool apply_silu_on_final>
 FORCE_INLINE void matmul_phase_v3(
     uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t partials_cb_id, uint32_t final_cb_id) {
-    // The packer may be configured for a previous phase's final_cb format
-    // (e.g. phase 2 inherits phase 1's gate_intermed packer config). Reconfig
-    // packer for partials format here. set_packer_config internally also
-    // resets L1_ACC=0, which is what we want for block 0.
+    // Reconfig packer for partials format (previous phase's final_cb format
+    // would otherwise leak). pack_reconfig_data_format (the reconfig variant)
+    // does NOT reset L1_ACC — we do that explicitly below.
     PACK((pack_reconfig_data_format(partials_cb_id)));
+#ifdef PACKER_L1_ACC
+    PACK((llk_pack_reconfig_l1_acc(0)));  // block 0 must overwrite, not accumulate
+#endif
     for (uint32_t block = 0; block < num_blocks; ++block) {
         const bool last_out = (block == num_blocks - 1);
 
@@ -172,9 +174,13 @@ FORCE_INLINE void multiply_phase_v3(uint32_t gate_cb_id, uint32_t up_cb_id, uint
     cb_wait_front(up_cb_id, out_block_num_tiles);
 
     // Reconfigure packer for activated format (may differ from the previous
-    // phase's final_cb). Also resets L1_ACC=0 internally.
+    // phase's final_cb).
     PACK((pack_reconfig_data_format(activated_cb_id)));
-    mul_tiles_init(gate_cb_id, up_cb_id);
+    // CRITICAL: the 2-arg mul_tiles_init defaults acc_to_dest=true (Quasar
+    // compat), which makes mul_tiles do dst[i] += a*b. With stale dst
+    // garbage, 0 * real = 0 added to garbage leaves garbage. Use the 3-arg
+    // form with acc_to_dest=0 so dst[i] = a*b (overwrite).
+    binary_tiles_init<true, EltwiseBinaryType::ELWMUL>(gate_cb_id, up_cb_id, /*acc_to_dest=*/false);
 
     constexpr uint32_t num_subblocks = out_block_num_tiles / out_subblock_num_tiles;
     uint32_t base = 0;
@@ -253,6 +259,20 @@ void kernel_main() {
     silu_tile_init_pack();
     mm_init(cb_in0_x, cb_in1_gate, cb_partials_gu);
 
+    // dst register warmup: at kernel startup the dst register half(s) may
+    // contain stale data from previous device usage. Cycling tile_regs_acquire
+    // / tile_regs_release twice clears both halves via ZEROACC fired inside
+    // _llk_pack_dest_section_done_. Without this the first matmul of phase 1
+    // accumulates onto stale dst, which is the leading hypothesis for the
+    // observed Inf-saturation pattern (6% of tiles non-zero with zero gate
+    // weights).
+    for (uint32_t i = 0; i < 2; ++i) {
+        tile_regs_acquire();
+        tile_regs_commit();
+        tile_regs_wait();
+        tile_regs_release();
+    }
+
     // Phase 1: gate matmul with silu fused on the final pack into gate_intermed.
     matmul_phase_v3<
         g_in0_block_w,
@@ -270,7 +290,10 @@ void kernel_main() {
         /*apply_silu_on_final=*/true>(cb_in0_x, cb_in1_gate, cb_partials_gu, cb_gate_intermed);
 
     // Phase 2: up matmul (no activation), output to up_intermed.
-    mm_init_short_with_dt(cb_in0_x, cb_in1_up, cb_partials_gu);
+    // Use full mm_init to fully reset packer/unpacker/math state — short
+    // variant may leak phase-1 state (e.g. packer config still pointing
+    // at gate_intermed) which corrupts phase 2's pack to partials.
+    mm_init(cb_in0_x, cb_in1_up, cb_partials_gu);
     matmul_phase_v3<
         u_in0_block_w,
         u_in0_num_subblocks,
