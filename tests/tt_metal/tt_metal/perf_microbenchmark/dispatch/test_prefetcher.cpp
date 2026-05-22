@@ -2568,9 +2568,12 @@ class PrefetcherThroughputTestFixture : public BasePrefetcherTestFixture {};
 // The upstream semaphore self-loop (MY_UPSTREAM_CB_SEM_ID == UPSTREAM_CB_SEM_ID on the prefetch_d
 // core, initialized to cmd_cb_pages) pre-signals all pages so the kernel sees them immediately.
 
-// Quasar SD DRAM layout — mirrors WH/BH PCIe hugepage sizes (256 MB issue + 256 MB completion).
-// Completion ends at exactly 1 GB (the bank size), so this is the maximum start that fits.
-static constexpr uint32_t kSdQuasarIssueBase = 0x20000000u;
+// Quasar SD DRAM layout — issue + completion packed into the single 64-MB DRAM-CQ window that
+// bank 0 decodes on this target (bits 0..25; bits 26+ are don't-cares — confirmed by an alias /
+// bit-decode probe during bringup). With SD_HUGEPAGE_ISSUE_BUFFER_SIZE = 32 MB, issue starts at
+// NOC 0x02000000 (physical 0x02000000) and completion at NOC 0x04000000 (aliases to physical
+// 0x00000000), so the two regions occupy disjoint halves of the 64-MB addressable window.
+static constexpr uint32_t kSdQuasarIssueBase = 0x2000000u;
 static constexpr uint32_t kSdQuasarCompletionBase = kSdQuasarIssueBase + Common::SD_HUGEPAGE_ISSUE_BUFFER_SIZE;
 
 template <typename FDFixture>

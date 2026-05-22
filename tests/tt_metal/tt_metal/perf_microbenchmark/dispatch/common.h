@@ -933,11 +933,15 @@ static_assert(SD_PREFETCHER_PAGE_BATCH_SIZE == 1);
 static constexpr uint32_t SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
 static constexpr uint32_t SD_PREFETCH_CMDDAT_PAGE_SIZE = 1u << SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE;
 static constexpr uint32_t SD_PREFETCH_CMDDAT_BLOCKS = DispatchSettings::PREFETCH_D_BUFFER_BLOCKS;
-// Issue + completion must fit in one device's hugepage slot (MAX_DEV_CHANNEL_SIZE = 256 MB);
-// 50/50 split. Production FD splits ~75/25 (issue/completion); SD often needs more completion
-// (host-readback tests), so the even split is a reasonable middle ground.
-static constexpr uint32_t SD_HUGEPAGE_ISSUE_BUFFER_SIZE = DispatchSettings::MAX_DEV_CHANNEL_SIZE / 2;
-static constexpr uint32_t SD_COMPLETION_QUEUE_SIZE = DispatchSettings::MAX_DEV_CHANNEL_SIZE / 2;
+// Issue + completion must fit in one device's hugepage slot (MAX_DEV_CHANNEL_SIZE = 256 MB) on
+// WH/BH. On Quasar the kSdQuasarIssueBase / kSdQuasarCompletionBase pair lives in DRAM bank 0,
+// which on this target only decodes the low 26 address bits (bits 26+ are don't-cares — see the
+// BIT-DECODE probe in test_prefetcher.cpp). Issue + completion together must therefore fit in a
+// single 64-MB addressable window, so each half is capped at 32 MB. Smoke/host tests use ~tens
+// of KB, so 32 MB is plenty; if a future bench needs more it'll have to use a different bank
+// (see Option 2 / DRAM_BACKED_CQ_BANK_ID plumbing).
+static constexpr uint32_t SD_HUGEPAGE_ISSUE_BUFFER_SIZE = DispatchSettings::MAX_DEV_CHANNEL_SIZE / 8;  // 32 MB
+static constexpr uint32_t SD_COMPLETION_QUEUE_SIZE = DispatchSettings::MAX_DEV_CHANNEL_SIZE / 8;       // 32 MB
 static_assert(
     SD_HUGEPAGE_ISSUE_BUFFER_SIZE + SD_COMPLETION_QUEUE_SIZE <= DispatchSettings::MAX_DEV_CHANNEL_SIZE,
     "SD issue + completion exceed per-device hugepage slot");
