@@ -1185,14 +1185,11 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedDirect
         true);
 }
 
-/* ========== MULTICAST WITH SEMAPHORE 2.0 ========== */
+/* ========== MULTICAST WITH SEMAPHORE ========== */
 //
-// Exercises the new Semaphore<>::set_multicast(dst_sem, ...) overload added in
-// noc_semaphore.h. The sender's `valid_sem` and the receivers' `receiver_sem` are
-// distinct semaphore ids — i.e. they live at different L1 offsets. If the API
-// resolved the multicast NoC addr from the sender's L1 offset (the regression we
-// are guarding against), the receivers would never see an increment at
-// `receiver_sem`'s slot and the kernels would deadlock at Finish.
+// Exercises the Semaphore<>::set_multicast(dst_sem, ...) overload.
+// The sender's `valid_sem` and the receivers' `receiver_sem` are
+// distinct semaphore ids — i.e. they live at different L1 offsets.
 //
 
 /* ========== 2x2, non-linked, EXCLUDE_SRC ========== */
