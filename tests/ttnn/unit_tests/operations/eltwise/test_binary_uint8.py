@@ -67,3 +67,31 @@ def test_binary_relational_uint8(a_shape, b_shape, low_a, high_a, low_b, high_b,
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch.uint8)
 
     assert torch.equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize("shape", [torch.Size([1, 2, 32]), torch.Size([2, 64, 64])])
+@pytest.mark.parametrize("scalar", [0, 1, 128, 255])
+@pytest.mark.parametrize(
+    "ttnn_op",
+    [ttnn.lt, ttnn.gt, ttnn.le, ttnn.ge, ttnn.ne, ttnn.eq],
+)
+def test_binary_relational_uint8_tensor_scalar(shape, scalar, ttnn_op, device):
+    if is_blackhole() and os.environ.get("TT_METAL_SIMULATOR"):
+        pytest.skip("Skipping on BH tt-sim: UINT8->UINT16 typecast not supported")
+    num_elements = int(torch.prod(torch.tensor(shape)).item())
+    torch_input = torch.arange(num_elements, dtype=torch.int32).remainder(256).reshape(shape)
+
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    torch_output = golden_function(torch_input, scalar, device=device).to(torch.uint8)
+
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.uint8,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn_op(input_tensor, float(scalar))
+    output_tensor = ttnn.to_torch(output_tensor, dtype=torch.uint8)
+
+    assert torch.equal(output_tensor, torch_output)
