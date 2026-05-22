@@ -13,6 +13,7 @@ from tracy import signpost
 from transformers import AutoConfig
 
 import ttnn
+from models.common.model_capabilities import ModelCapabilitiesMixin
 from models.common.sampling.generator import (
     SamplingGenerator,
     SamplingParams,
@@ -143,7 +144,7 @@ class _MtpDecodeLoopResult(NamedTuple):
     decode_step_user_tokens: List[List[int]]
 
 
-class DeepseekGenerator(WarmupForwardMixin):
+class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
     """
     Simple generator that wires RowBatchedModel + LMHead for decode-only inference.
 

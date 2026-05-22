@@ -9,6 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_wormhole_b0
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator
 from models.demos.deepseek_v3.utils.config_dataclass import KvCacheConfig
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
@@ -45,6 +46,24 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+    @classmethod
+    def get_max_tokens_all_users(
+        cls,
+        model_name: str = "",
+        num_devices: int = 1,
+        tt_data_parallel: int = 1,
+        **kwargs,
+    ) -> int:
+        """Returns config-specific all-user KV-cache token capacity."""
+        if "DeepSeek-R1-0528" in model_name and is_wormhole_b0():
+            return 32_768
+        return super().get_max_tokens_all_users(
+            model_name=model_name,
+            num_devices=num_devices,
+            tt_data_parallel=tt_data_parallel,
+            **kwargs,
+        )
 
     @classmethod
     def initialize_vllm_model(
