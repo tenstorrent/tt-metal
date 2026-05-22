@@ -1289,7 +1289,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             self.model[i].switch_mode(Mode.DECODE)
 
         sampling_on_device = (sampling_params is not None) or defer_device_sampling
-        split_sampling_enabled = bool(self.enable_split_sampling and sampling_on_device)
+        # For deferred sampling we must keep decode forward in logits mode;
+        # sampling runs later in sample_decode_on_device().
+        forward_sampling_on_device = sampling_on_device and not defer_device_sampling
+        split_sampling_enabled = bool(self.enable_split_sampling and forward_sampling_on_device)
         self._set_sampling_trace_mode(split_sampling_enabled)
 
         B = tokens.shape[0]
@@ -1360,7 +1363,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             "tokens": tokens,
             "page_table": page_table,
             "kv_cache": kv_cache,
-            "sampling_on_device": sampling_on_device,
+            "sampling_on_device": forward_sampling_on_device,
         }
 
         if enable_trace:
