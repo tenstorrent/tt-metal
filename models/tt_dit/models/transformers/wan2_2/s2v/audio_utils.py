@@ -531,15 +531,19 @@ class AudioInjector_WAN(Module):
         else:
             self.injector_adain_layers = ModuleList()
 
-        # Per-injector cache of post-projection (k_BHNE, v_BHNE) tensors. The
-        # audio embedding is constant across a clip's diffusion loop, so
-        # ``to_kv`` + ``norm_k`` + head-split produce the same K/V on every
-        # step. Populated lazily; invalidated when the audio changes.
-        self._audio_kv_cache: dict[int, tuple[ttnn.Tensor, ttnn.Tensor]] = {}
+        # Per-injector slot for cached (k_BHNE, v_BHNE). Audio embedding is
+        # constant across a clip's diffusion loop, so ``to_kv`` + ``norm_k`` +
+        # head-split produce the same K/V on every step. The slot is a
+        # caller-owned 2-element list filled lazily by ``WanAttention.forward``
+        # on first call and reused after.
+        self._audio_kv_cache: dict[int, list[ttnn.Tensor]] = {}
+
+    def kv_cache_slot(self, audio_attn_id: int) -> list[ttnn.Tensor]:
+        return self._audio_kv_cache.setdefault(audio_attn_id, [])
 
     def invalidate_audio_kv_cache(self) -> None:
-        for kv in self._audio_kv_cache.values():
-            for t in kv:
+        for slot in self._audio_kv_cache.values():
+            for t in slot:
                 ttnn.deallocate(t)
         self._audio_kv_cache = {}
 

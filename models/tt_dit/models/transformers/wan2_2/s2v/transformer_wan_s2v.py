@@ -378,24 +378,14 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
             normed = block.norm1(spatial_1BND)
 
         mask = self._get_or_build_frame_attn_mask(N)
-        cached_kv = self.audio_injector._audio_kv_cache.get(audio_attn_id)  # noqa: SLF001
-        if cached_kv is None:
-            residual, fresh_kv = self.audio_injector.injector[audio_attn_id](
-                spatial_1BND=normed,
-                prompt_1BLP=self.merged_audio_emb_flat,
-                N=int(spatial_1BND.shape[-2]),
-                cross_attn_mask=mask,
-                return_fresh_kv=True,
-            )
-            self.audio_injector._audio_kv_cache[audio_attn_id] = fresh_kv  # noqa: SLF001
-        else:
-            residual = self.audio_injector.injector[audio_attn_id](
-                spatial_1BND=normed,
-                prompt_1BLP=None,
-                N=int(spatial_1BND.shape[-2]),
-                cross_attn_mask=mask,
-                cached_kv_BHNE=cached_kv,
-            )
+        kv_slot = self.audio_injector.kv_cache_slot(audio_attn_id)
+        residual = self.audio_injector.injector[audio_attn_id](
+            spatial_1BND=normed,
+            prompt_1BLP=self.merged_audio_emb_flat if not kv_slot else None,
+            N=int(spatial_1BND.shape[-2]),
+            cross_attn_mask=mask,
+            kv_cache=kv_slot,
+        )
         # Zero the residual at const + pad rows (const used uniform-0 attention
         # for softmax stability; we don't want that bleeding into the output).
         if self._cached_mask_noisy is not None:
