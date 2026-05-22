@@ -231,13 +231,9 @@ def compute_math_utilization(
         is_causal: Whether causal masking is used.
         arch: Architecture name ("blackhole" or "wormhole_b0").
     """
-    mm_flops = compute_sdpa_flops(local_seqlen, total_seqlen, d_q, d_v, num_heads_per_device, is_causal)
-    return compute_math_util_from_flops(mm_flops, duration_ns, core_count, arch=arch)
-
-
-def compute_math_util_from_flops(mm_flops, duration_ns, core_count, arch="blackhole"):
-    """Math utilization (0-100) from a precomputed FLOP count."""
     constants = ARCH_CONSTANTS[arch]
+    mm_flops = compute_sdpa_flops(local_seqlen, total_seqlen, d_q, d_v, num_heads_per_device, is_causal)
+
     cycles = duration_ns * constants["clock_ghz"]
     theoretical_flops = core_count * cycles * constants["mm_flops_per_cycle_per_core"]
     return (mm_flops / theoretical_flops) * 100 if theoretical_flops > 0 else 0

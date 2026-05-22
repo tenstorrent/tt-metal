@@ -247,7 +247,6 @@ from tests.nightly.sdpa_perf_utils import (
     post_process_ops_log,
     compute_sdpa_flops,
     compute_math_utilization as compute_ring_joint_utilization,
-    compute_math_util_from_flops,
     create_balanced_chunk_order,
     reorder_tensor_chunks,
     reverse_reorder_tensor_chunks,
