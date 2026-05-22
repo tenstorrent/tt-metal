@@ -6,30 +6,19 @@
 
 #include <cstdint>
 
-#include "deepseek_moe_post_combine_tilize_device_operation_types.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 
+#include "deepseek_moe_post_combine_tilize_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::experimental::prim {
 
 struct DeepseekMoEPostCombineTilizeProgramFactory {
-    struct shared_variables_t {
-        uint32_t reader_kernel_id;
-        uint32_t compute_kernel_id;
-        uint32_t writer_kernel_id;
-        tt::tt_metal::CBHandle sharded_output_cb_handle;
-        std::vector<tt::tt_metal::CoreCoord> cores;
-    };
-
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
-        const DeepseekMoEPostCombineTilizeParams& operation_attributes,
-        const DeepseekMoEPostCombineTilizeInputs& tensor_args,
-        ttnn::Tensor& tensor_return_value);
-
-    static void override_runtime_arguments(
-        cached_program_t& cached_program,
+    // Contract (1): per-coord ProgramDescriptor.  The tilize-output CB is
+    // sharded onto the output tensor buffer (bound via .buffer for dynamic CB
+    // address re-application); per-core reader runtime args include the input
+    // buffer address and intra-row / row offsets that vary by shard position.
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
         const DeepseekMoEPostCombineTilizeParams& operation_attributes,
         const DeepseekMoEPostCombineTilizeInputs& tensor_args,
         ttnn::Tensor& tensor_return_value);
