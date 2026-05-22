@@ -34,7 +34,7 @@ constexpr uint32_t CB_PARTIALS_D = tt::CBIndex::c_8;
 constexpr uint32_t CB_OUT = tt::CBIndex::c_9;
 constexpr uint32_t CB_COUNTS_SCRATCH = tt::CBIndex::c_10;
 constexpr uint32_t CB_IDX_SCRATCH = tt::CBIndex::c_11;
-[[maybe_unused]] constexpr uint32_t CB_IN0_DOWN_FULL = tt::CBIndex::c_12;
+constexpr uint32_t CB_IN0_DOWN_FULL = tt::CBIndex::c_12;
 }  // namespace
 
 UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnProgramFactory::create(
@@ -149,6 +149,29 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     auto* idx_buffer = t.global_expert_idx_table.buffer();
     auto* out_buffer = tensor_return_value.buffer();
 
+    // -------------------------- scratch buffer + semaphore ----------------
+    // DRAM scratch holds activated between phases 3 and 4, sized for the full
+    // chunk M × hidden N tile region (same shape as gate output).
+    const uint32_t scratch_num_tiles = chunk_M_tiles * N_gate_tiles_full;
+    const uint32_t scratch_bytes = scratch_num_tiles * tt::tile_size(x_df);
+    tt::tt_metal::InterleavedBufferConfig scratch_cfg{
+        .device = t.x.device(),
+        .size = scratch_bytes,
+        .page_size = tt::tile_size(x_df),
+        .buffer_type = tt::tt_metal::BufferType::DRAM};
+    auto activated_scratch = tt::tt_metal::CreateBuffer(scratch_cfg);
+    auto* scratch_buffer = activated_scratch.get();
+
+    // Global semaphore reserved on every compute core (CreateSemaphore puts
+    // it at the same L1 offset on every core in the range). The writer kernel
+    // NoC-increments the OWNER core's slot; the reader on every core waits on
+    // ITS OWN slot for value == total_cores — that requires each writer to
+    // increment all cores' slots, OR we designate one core as the master and
+    // have only its reader wait. Simpler approach: every writer increments
+    // every reader's slot via NoC mcast.
+    const uint32_t total_cores = GRID_X * GRID_Y;
+    const uint32_t semaphore_addr = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
+
     // -------------------------- circular buffers --------------------------
     // Double-buffered DRAM-streamed inputs.
     auto make_cb = [&](uint32_t cb_idx, tt::DataFormat fmt, uint32_t num_tiles, uint32_t tile_bytes) {
@@ -179,6 +202,14 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         partials_tile_size);
     // Output CB: writer drains one subblock at a time.
     make_cb(CB_OUT, out_df, /*tiles=*/d_out_subblock_h * d_out_subblock_w * 4, out_tile_size);
+    // cb_in0_down_full: reader pushes per_core_M × in0_block_w_d tiles of activated
+    // (read back from DRAM scratch) once per down K-block. Double-buffered so the
+    // matmul kernel can overlap K-block iterations with reader fetches.
+    make_cb(
+        CB_IN0_DOWN_FULL,
+        intermed_df,
+        /*tiles=*/d_in0_block_num_tiles * 2,
+        intermed_tile_size);
 
     // Scratch CBs for the device-side count lookup. One page each, sized to
     // the corresponding tensor's aligned page size so noc_async_read_page
@@ -195,12 +226,15 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, idx_cb_cfg);
 
     // -------------------------- kernel build ------------------------------
-    // Reader compile-time args.
+    // Reader compile-time args. Order must exactly match the layout the reader
+    // kernel reads via get_compile_time_arg_val(idx) and the TensorAccessor
+    // offsets it computes from offset 19 onwards.
     std::vector<uint32_t> reader_ct_args = {
         CB_IN0_X,
         CB_IN1_GATE,
         CB_IN1_UP,
         CB_IN1_DOWN,
+        CB_IN0_DOWN_FULL,
         CB_COUNTS_SCRATCH,
         CB_IDX_SCRATCH,
         op.local_expert_id,
@@ -214,6 +248,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         N_gate_tiles_full,
         N_down_tiles_full,
         M_tiles_full,
+        total_cores,
     };
     tt::tt_metal::TensorAccessorArgs(x_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(gate_buffer).append_to(reader_ct_args);
@@ -221,6 +256,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     tt::tt_metal::TensorAccessorArgs(down_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(counts_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(idx_buffer).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(scratch_buffer).append_to(reader_ct_args);
 
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -229,16 +265,22 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         core_range_set,
         tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
-    // Writer compile-time args.
+    // Writer compile-time args (must match writer's get_compile_time_arg_val order).
     std::vector<uint32_t> writer_ct_args = {
+        CB_ACTIVATED,
         CB_OUT,
         per_core_M,
+        per_core_N_gu,
         per_core_N_d,
+        gu_out_subblock_h,
+        gu_out_subblock_w,
         d_out_subblock_h,
         d_out_subblock_w,
+        N_gate_tiles_full,
         N_down_tiles_full,
     };
     tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(scratch_buffer).append_to(writer_ct_args);
 
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -293,6 +335,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         {"cb_gate_intermed", CB_GATE_INT},
         {"cb_up_intermed", CB_UP_INT},
         {"cb_activated", CB_ACTIVATED},
+        {"cb_in0_down_full", CB_IN0_DOWN_FULL},
         {"cb_mm_partials_gu", CB_PARTIALS_GU},
         {"cb_mm_partials_d", CB_PARTIALS_D},
         {"cb_out", CB_OUT},
@@ -312,40 +355,88 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         });
 
     // -------------------------- per-core runtime args ---------------------
+    // Every writer NoC-increments ALL cores' semaphore slots so every reader
+    // sees value == total_cores once every core has hit its sync point.
+    // Writer therefore needs the NoC (x, y) of every core in the grid.
+    // For v1 we hard-code "increment self only" by using each core's own
+    // coords as the target — this makes the increment effectively local and
+    // we instead spin a per-core counter on the reader. The cross-core gather
+    // is achieved by having the reader poll the counter as it ramps from 0
+    // up to total_cores: each writer increments ITS OWN sem slot, and every
+    // reader on every core polls THEIR OWN slot until it reaches 1, which
+    // means THAT core's writer finished its phase-3 drain. But that only
+    // gives us a per-core barrier, not a global one.
+    //
+    // The correct minimum-overhead pattern for "wait until every core has
+    // finished phase 3" is: each writer NoC-increments a single global
+    // semaphore on a designated owner core; every reader on every core
+    // polls THAT same semaphore via remote NoC reads through
+    // `noc_semaphore_wait_remote` (or equivalent). For simplicity in v1 we
+    // implement that via every writer NoC-incrementing every core's slot
+    // (64 increments per writer = 4096 NoC sem-incs per program; cheap at
+    // ~10ns each).
     std::vector<CoreCoord> cores;
     cores.reserve(GRID_X * GRID_Y);
     for (uint32_t gy = 0; gy < GRID_Y; ++gy) {
         for (uint32_t gx = 0; gx < GRID_X; ++gx) {
-            const CoreCoord core{gx, gy};
-            cores.push_back(core);
-            // mt is the M-row block index for this core within its chunk.
-            // For v1 (single chunk), each row of the grid handles one M-block.
-            const uint32_t my_mt = gy;
-            const uint32_t my_nt_gu = gx;
-            const uint32_t my_nt_d = gx;
-            const uint32_t chunk_start_tile_row = 0;  // single chunk for v1
-
-            tt::tt_metal::SetRuntimeArgs(
-                program,
-                reader_kernel_id,
-                core,
-                {x_buffer->address(),
-                 gate_buffer->address(),
-                 up_buffer->address(),
-                 down_buffer->address(),
-                 counts_buffer->address(),
-                 idx_buffer->address(),
-                 my_mt,
-                 my_nt_gu,
-                 my_nt_d,
-                 chunk_start_tile_row});
-
-            tt::tt_metal::SetRuntimeArgs(
-                program,
-                writer_kernel_id,
-                core,
-                {out_buffer->address(), my_mt, my_nt_d, chunk_start_tile_row});
+            cores.push_back(CoreCoord{gx, gy});
         }
+    }
+
+    // Resolve each core's NoC coords (BH virtual coords) for the writer's
+    // semaphore-target list.
+    auto* device = t.x.device();
+    std::vector<uint32_t> core_noc_coords_flat;
+    core_noc_coords_flat.reserve(cores.size() * 2);
+    for (const auto& core : cores) {
+        const auto virtual_core = device->worker_core_from_logical_core(core);
+        core_noc_coords_flat.push_back(virtual_core.x);
+        core_noc_coords_flat.push_back(virtual_core.y);
+    }
+
+    for (uint32_t idx = 0; idx < cores.size(); ++idx) {
+        const auto& core = cores[idx];
+        const uint32_t gy = idx / GRID_X;
+        const uint32_t gx = idx % GRID_X;
+        const uint32_t my_mt = gy;
+        const uint32_t my_nt_gu = gx;
+        const uint32_t my_nt_d = gx;
+        const uint32_t chunk_start_tile_row = 0;  // single chunk for v1
+
+        std::vector<uint32_t> reader_args = {
+            x_buffer->address(),
+            gate_buffer->address(),
+            up_buffer->address(),
+            down_buffer->address(),
+            counts_buffer->address(),
+            idx_buffer->address(),
+            scratch_buffer->address(),
+            semaphore_addr,
+            my_mt,
+            my_nt_gu,
+            my_nt_d,
+            chunk_start_tile_row};
+        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
+
+        // Writer runtime arg layout matches writer_unified_re.cpp:
+        //   0: output_addr
+        //   1: scratch_addr
+        //   2: sem_addr (local L1 offset)
+        //   3..(3+2*total_cores-1): pairs of (sem_core_x, sem_core_y) for every
+        //                           core whose semaphore slot we'll increment.
+        //   then per-core (mt, nt_gu, nt_d, chunk_start_tile_row).
+        std::vector<uint32_t> writer_args = {
+            out_buffer->address(),
+            scratch_buffer->address(),
+            semaphore_addr,
+            static_cast<uint32_t>(cores.size()),
+        };
+        writer_args.insert(writer_args.end(), core_noc_coords_flat.begin(), core_noc_coords_flat.end());
+        writer_args.push_back(my_mt);
+        writer_args.push_back(my_nt_gu);
+        writer_args.push_back(my_nt_d);
+        writer_args.push_back(chunk_start_tile_row);
+        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_args);
     }
 
     return cached_program_t{
@@ -354,7 +445,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             .reader_kernel_id = reader_kernel_id,
             .writer_kernel_id = writer_kernel_id,
             .compute_kernel_id = compute_kernel_id,
-            .cores = std::move(cores)}};
+            .cores = std::move(cores),
+            .activated_scratch = std::move(activated_scratch),
+            .semaphore_addr = semaphore_addr}};
 }
 
 void UnifiedRoutedExpertFfnProgramFactory::override_runtime_arguments(
@@ -366,6 +459,7 @@ void UnifiedRoutedExpertFfnProgramFactory::override_runtime_arguments(
     const auto reader_id = cached_program.shared_variables.reader_kernel_id;
     const auto writer_id = cached_program.shared_variables.writer_kernel_id;
     const auto& cores = cached_program.shared_variables.cores;
+    const auto* scratch_buf = cached_program.shared_variables.activated_scratch.get();
 
     const uint32_t x_addr = t.x.buffer()->address();
     const uint32_t gate_addr = t.gate_proj.buffer()->address();
@@ -373,6 +467,7 @@ void UnifiedRoutedExpertFfnProgramFactory::override_runtime_arguments(
     const uint32_t down_addr = t.down_proj.buffer()->address();
     const uint32_t counts_addr = t.counts.buffer()->address();
     const uint32_t idx_addr = t.global_expert_idx_table.buffer()->address();
+    const uint32_t scratch_addr = scratch_buf->address();
     const uint32_t out_addr = tensor_return_value.buffer()->address();
 
     for (const auto& core : cores) {
@@ -383,9 +478,11 @@ void UnifiedRoutedExpertFfnProgramFactory::override_runtime_arguments(
         reader_args[3] = down_addr;
         reader_args[4] = counts_addr;
         reader_args[5] = idx_addr;
+        reader_args[6] = scratch_addr;
 
         auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, writer_id, core);
         writer_args[0] = out_addr;
+        writer_args[1] = scratch_addr;
     }
 }
 

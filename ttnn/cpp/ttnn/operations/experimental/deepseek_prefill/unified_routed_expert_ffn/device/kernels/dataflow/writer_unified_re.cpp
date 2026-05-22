@@ -24,13 +24,18 @@ constexpr uint32_t TILE_HEIGHT = 32;
 void kernel_main() {
     const uint32_t output_addr = get_arg_val<uint32_t>(0);
     const uint32_t scratch_addr = get_arg_val<uint32_t>(1);
-    const uint32_t sem_addr = get_arg_val<uint32_t>(2);  // L1 address of the global semaphore
-    const uint32_t sem_core_x = get_arg_val<uint32_t>(3);  // NoC coord of the semaphore-owner core
-    const uint32_t sem_core_y = get_arg_val<uint32_t>(4);
-    const uint32_t my_mt = get_arg_val<uint32_t>(5);
-    const uint32_t my_nt_gu = get_arg_val<uint32_t>(6);
-    const uint32_t my_nt_d = get_arg_val<uint32_t>(7);
-    const uint32_t chunk_start_tile_row = get_arg_val<uint32_t>(8);
+    const uint32_t sem_addr = get_arg_val<uint32_t>(2);  // L1 offset of the semaphore on every core
+    const uint32_t num_sync_cores = get_arg_val<uint32_t>(3);
+    // num_sync_cores pairs of (sem_core_x, sem_core_y) follow at args 4 ..
+    // (4 + 2*num_sync_cores - 1). Each writer NoC-increments every core's
+    // slot so every reader's noc_semaphore_wait(sem == total_cores) finishes
+    // exactly once all writers have hit this point.
+    const uint32_t sync_coords_base = 4;
+    const uint32_t after_coords_base = sync_coords_base + 2 * num_sync_cores;
+    const uint32_t my_mt = get_arg_val<uint32_t>(after_coords_base + 0);
+    const uint32_t my_nt_gu = get_arg_val<uint32_t>(after_coords_base + 1);
+    const uint32_t my_nt_d = get_arg_val<uint32_t>(after_coords_base + 2);
+    const uint32_t chunk_start_tile_row = get_arg_val<uint32_t>(after_coords_base + 3);
 
     constexpr uint32_t cb_activated = get_compile_time_arg_val(0);
     constexpr uint32_t cb_out = get_compile_time_arg_val(1);
@@ -90,12 +95,16 @@ void kernel_main() {
         }
     }
 
-    // ----- Increment global semaphore --------------------------------------
-    // All cores' activated regions are now in scratch DRAM. Bump the
-    // owner core's semaphore by 1 so every reader waiting on "value == total_cores"
-    // gets released once all cores have hit this point.
-    {
-        const uint64_t remote_sem = get_noc_addr(sem_core_x, sem_core_y, sem_addr);
+    // ----- Increment every core's semaphore slot ---------------------------
+    // Each core's slot lives at the same L1 offset on every core because
+    // CreateSemaphore reserved a uniform slot. We broadcast a +1 to every
+    // core; every reader on every core waits until ITS LOCAL slot == total
+    // (= num_sync_cores), at which point we know every writer has finished
+    // the scratch drain.
+    for (uint32_t i = 0; i < num_sync_cores; ++i) {
+        const uint32_t target_x = get_arg_val<uint32_t>(sync_coords_base + 2 * i + 0);
+        const uint32_t target_y = get_arg_val<uint32_t>(sync_coords_base + 2 * i + 1);
+        const uint64_t remote_sem = get_noc_addr(target_x, target_y, sem_addr);
         noc_semaphore_inc(remote_sem, 1);
     }
 

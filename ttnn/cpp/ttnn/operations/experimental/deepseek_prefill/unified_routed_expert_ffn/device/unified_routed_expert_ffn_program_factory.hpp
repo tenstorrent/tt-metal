@@ -17,6 +17,14 @@ struct UnifiedRoutedExpertFfnSharedVariables {
     tt::tt_metal::KernelHandle writer_kernel_id = 0;
     tt::tt_metal::KernelHandle compute_kernel_id = 0;
     std::vector<CoreCoord> cores;
+    // Per-program DRAM scratch buffer that holds the multiply output between
+    // phases 3 and 4 so each core can read its M-rows × all-K columns of
+    // activated for the down matmul. Owned by the program (shared_ptr keeps
+    // it alive for the program's lifetime).
+    std::shared_ptr<tt::tt_metal::Buffer> activated_scratch;
+    // L1 address of the per-program semaphore on every compute core (same
+    // offset on every core because CreateSemaphore reserves a uniform slot).
+    uint32_t semaphore_addr = 0;
 };
 
 struct UnifiedRoutedExpertFfnProgramFactory {
