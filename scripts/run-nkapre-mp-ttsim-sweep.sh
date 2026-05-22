@@ -21,7 +21,8 @@ echo -e "suite\tstatus\texit_code\tduration_sec\tcommand" >>"$SUMMARY"
 export TT_METAL_HOME="$REPO_ROOT"
 export PYTHONPATH="${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}"
 export ARCH_NAME="${ARCH_NAME:-blackhole}"
-export TT_METAL_SLOW_DISPATCH_MODE="${TT_METAL_SLOW_DISPATCH_MODE:-1}"
+# Fast dispatch required by MeshDeviceFixture-based MP suites; fabric ubench still runs under sim.
+export TT_METAL_SLOW_DISPATCH_MODE="${TT_METAL_SLOW_DISPATCH_MODE:-0}"
 export TT_METAL_DISABLE_SFPLOADMACRO=1
 export TT_METAL_DRAM_BACKED_CQ=1
 export TT_METAL_SIMULATOR_CQ_WAIT_CLOCKS=10000
@@ -35,7 +36,7 @@ cp "$CRAQ_SIM/src/_out/release_wh/libttsim.so" "$WH_SIM_DIR/libttsim.so"
 cp "$TT_METAL_HOME/tt_metal/soc_descriptors/wormhole_b0_80_arch.yaml" "$WH_SIM_DIR/soc_descriptor.yaml"
 export TT_METAL_SIMULATOR="$WH_SIM_DIR/libttsim.so"
 export TT_METAL_SIMULATOR_HOME="$WH_SIM_DIR"
-export TT_METAL_MOCK_CLUSTER_DESC_PATH="tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_cluster_desc.yaml"
+export TT_METAL_MOCK_CLUSTER_DESC_PATH="${TT_METAL_MOCK_CLUSTER_DESC_PATH:-tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_cluster_desc.yaml}"
 export ARCH_NAME=wormhole_b0
 
 if [ ! -e "$REPO_ROOT/build" ] || [ -L "$REPO_ROOT/build" ]; then
@@ -77,6 +78,25 @@ run_cmd() {
 if ! command -v tt-run >/dev/null 2>&1; then
     log "ERROR: tt-run not in PATH"
     exit 127
+fi
+
+if [ "${MP_SKIP_ON_SIM:-0}" = "1" ] && [ -n "${TT_METAL_SIMULATOR:-}" ]; then
+    log "SKIP all mp suites: tt-run + ttsim unsupported"
+    for mp_suite in \
+        2.mp/2x2_fabric_ubench \
+        2.mp/multi_host_fabric \
+        2.mp/mesh_socket \
+        2.mp/BigMeshDualRankTest2x4 \
+        2.mp/BigMeshDualRankMeshShapeSweep \
+        2.mp/ttnn_dual_rank_2x2 \
+        2.mp/ttnn_dual_rank_2x4 \
+        2.mp/ttnn_launch_op \
+        2.mp/py_data_parallel \
+        2.mp/py_submesh; do
+        echo -e "${mp_suite}\tSKIP\t0\t0\tttsim skip: tt-run" >>"$SUMMARY"
+    done
+    log "Summary: $SUMMARY"
+    exit 0
 fi
 
 run_cmd "2.mp/2x2_fabric_ubench" \
