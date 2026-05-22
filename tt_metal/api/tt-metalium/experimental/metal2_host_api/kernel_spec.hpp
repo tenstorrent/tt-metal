@@ -4,10 +4,12 @@
 
 #pragma once
 
+#include <concepts>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <variant>
 #include <vector>
@@ -86,11 +88,7 @@ struct DataMovementConfiguration {
 };
 
 // A name identifying a KernelSpec within a ProgramSpec.
-//
-// CONVENTION: define names as `constexpr const char*` constants, e.g.:
-//   constexpr const char* READER_KERNEL = "reader";
-//   KernelSpec{.unique_id = READER_KERNEL, ...};
-// Reusing a single constant helps catch typos and errors at compile time.
+// String literals work directly; misnamed references fail at validation.
 using KernelSpecName = std::string;
 
 // A KernelSpec is a descriptor for a Tenstorrent kernel:
@@ -124,28 +122,26 @@ struct KernelSpec {
     KernelSpecName unique_id;
 
     // Kernel source: either a path to a source file, or the source code itself.
-    // (Force callers to choose explicitly between path and inline code.)
-    struct SourceFilePath {
-        std::filesystem::path path;
-    };
+    // String literals are accepted directly as a file path (the common case);
+    // wrap inline source code with SourceCode{...}.
     struct SourceCode {
         std::string code;
     };
-    std::variant<SourceFilePath, SourceCode> source;
+    std::variant<std::filesystem::path, SourceCode> source;
 
     // NOTE: The kernel's target node set is a DERIVED property, based on the
     //       WorkUnitSpec(s) that include this kernel.
 
     // Kernel threading:
     // Number of kernel threads
-    uint8_t num_threads = 1;
+    int num_threads = 1;
 
     // (Optional) Per-node thread count specification
     // The default threading is num_threads. However, you may override this on a per-node basis.
     // NOTE: This feature is currently unsupported. It's an open question if we EVER want to support it.
     //       Here as a placeholder; specifying it will trigger a runtime error.
     using Nodes = std::variant<NodeCoord, NodeRange, NodeRangeSet>;
-    using NodeSpecificThreadCount = std::pair<Nodes, uint8_t>;  // {node_set, num_threads}
+    using NodeSpecificThreadCount = std::pair<Nodes, int>;  // {node_set, num_threads}
     using NodeSpecificThreadCounts = std::vector<NodeSpecificThreadCount>;
     std::optional<NodeSpecificThreadCounts> node_specific_thread_counts = std::nullopt;
 

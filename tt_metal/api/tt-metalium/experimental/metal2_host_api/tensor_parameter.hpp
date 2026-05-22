@@ -11,11 +11,8 @@
 namespace tt::tt_metal::experimental::metal2_host_api {
 
 // A name identifying a TensorParameter within a ProgramSpec.
-//
-// CONVENTION: define names as `constexpr const char*` constants, e.g.:
-//   constexpr const char* INPUT_TENSOR = "input_tensor";
-//   TensorParameter{.unique_id = INPUT_TENSOR, ...};
-// Reusing a single constant helps catch typos and errors at compile time.
+// String literals work directly; misnamed references fail at validation
+// with a clear error message naming the missing identifier.
 using TensorParameterName = std::string;
 
 // A TensorParameter is used to declare that a Program operates on a MeshTensor
