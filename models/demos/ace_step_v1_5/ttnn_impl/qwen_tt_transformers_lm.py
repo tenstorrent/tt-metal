@@ -64,6 +64,14 @@ consumers (sampling, repetition-penalty, CFG combine) keep working unchanged.
 - Currently fixed to ``batch_size=1`` (matches the bridge's contract).
 - Paged KV is **mandatory** here: ``tt_transformers``' non-paged prefill is not
   covered by upstream tests for Qwen3 and we don't want to silently degrade.
+
+**PCC / accuracy**
+
+``ModelArgs`` loads ``models/tt_transformers/model_params/<HF_MODEL_BASENAME>/accuracy_decoder_config.json``
+when present (see ``acestep-5Hz-lm-1.7B/accuracy_decoder_config.json``). Without it, the generic
+accuracy fallback omits BF16 activations and 28-layer logits PCC vs HF lands near **0.91** on P150.
+With the Qwen2.5-derived config (HiFi4 attention + **BF16 MLP weights** + BF16 activations), prefill
+last-token PCC is typically **~0.984** on the same silicon.
 """
 
 from __future__ import annotations
@@ -75,6 +83,7 @@ from typing import Any, Optional
 import torch
 
 import ttnn
+from models.demos.ace_step_v1_5.ttnn_impl.lm_logits_debug import ace_step_debug_lm_logits_enabled
 from models.tt_transformers.tt.common import (
     PagedAttentionConfig,
     create_tt_model,
@@ -163,12 +172,15 @@ class QwenModelTtTransformers:
                 mesh_device=device,
                 instruct=True,  # ACE-Step LM uses chat-style prompts
                 max_batch_size=1,
-                optimizations=None,  # default = accuracy
+                optimizations=None,  # loads accuracy_decoder_config.json when present
                 max_seq_len=self.max_seq_len,
                 paged_attention_config=self._paged_cfg,
                 dtype=tt_dtype,
                 use_hf_rope=bool(use_hf_rope),
             )
+            # LMHead matmul defaults to HiFi2; nudge to HiFi4 for a small logits PCC gain on Blackhole.
+            if hasattr(self.tt_model, "lm_head") and hasattr(self.model_args, "compute_kernel_config_hifi4"):
+                self.tt_model.lm_head.compute_kernel_config = self.model_args.compute_kernel_config_hifi4
 
         # HF-compatible config view for the LM bridge (`AceStepFiveHzExperimentalTtnnCausalLM`
         # reads ``self.config.vocab_size``).
@@ -293,6 +305,23 @@ class QwenModelTtTransformers:
         # model and matches the canonical sharded-LMHead contract.
         last_token_idx = seq_len - 1
         get_last_token = (last_token_idx // 32) * 32
+        if ace_step_debug_lm_logits_enabled():
+            self._last_debug_params = {
+                "mode": "prefill",
+                "seq_len": seq_len,
+                "prefill_seq_len": prefill_seq_len,
+                "last_token_idx": last_token_idx,
+                "get_last_token": get_last_token,
+                "offset_in_tile": int(last_token_idx % 32),
+                "n_page_blocks": int(n_blocks),
+            }
+            print(
+                f"[ace_step_lm_logits_debug] prefill.qwen_params "
+                f"seq_len={seq_len} padded={prefill_seq_len} "
+                f"last_token_idx={last_token_idx} get_last_token={get_last_token} "
+                f"offset_in_tile={last_token_idx % 32} n_page_blocks={n_blocks}",
+                flush=True,
+            )
 
         logits_tt = self.tt_model.ttnn_prefill_forward(
             prefill_input,
@@ -319,6 +348,17 @@ class QwenModelTtTransformers:
 
     def _decode(self, tokens: torch.Tensor, start_pos: int) -> Any:
         cur = int(start_pos)
+        if ace_step_debug_lm_logits_enabled():
+            self._last_debug_params = {
+                "mode": "decode",
+                "start_pos": cur,
+                "token_id": int(tokens.view(-1)[0].item()),
+            }
+            print(
+                f"[ace_step_lm_logits_debug] decode.qwen_params start_pos={cur} "
+                f"token_id={int(tokens.view(-1)[0].item())}",
+                flush=True,
+            )
         # tt_transformers' decode path expects [B] tokens and a [B] current_pos vector.
         decode_tokens = tokens.view(1).to(torch.int32)
         current_pos = torch.tensor([cur], dtype=torch.int32)
