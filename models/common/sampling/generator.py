@@ -74,15 +74,12 @@ class SamplingGenerator:
         args,
         mesh_device,
         tt_ccl,
-        enable_internal_trace: bool = True,
         cq_id: int = 0,
     ):
         self.mesh_device = mesh_device
         self.cq_id = cq_id
         self.args = args
         self.sub_core_grids = getattr(args, "sub_core_grids", None)
-        self.enable_internal_trace = enable_internal_trace
-
         self.tt_sampling = TTSampling(mesh_device=mesh_device, tt_ccl=tt_ccl, args=args)
         self.tt_penalties = TTPenalties(mesh_device=mesh_device, args=args)
         self._bitmask_packed_width = self.tt_sampling.padded_vocab_size // 32
@@ -398,7 +395,7 @@ class SamplingGenerator:
         penalties_on = self._penalties_active
         log_probs_on = getattr(self, "_log_probs_active", False)
         force_argmax = self.tt_sampling.force_argmax_sampling
-        use_internal_trace = enable_trace and self.enable_internal_trace
+        use_internal_trace = enable_trace
 
         if not use_internal_trace:
             tt_out = self._run_sampling(
