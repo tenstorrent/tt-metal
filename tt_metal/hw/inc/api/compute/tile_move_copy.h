@@ -42,8 +42,11 @@ ALWI void copy_tile_to_dst_init_short(
 #else
     LLK_ASSERT(transpose_within_16x16_face == false, "Transpose within face not supported on Quasar");
     LLK_ASSERT(transpose == 0, "Transpose not supported on Quasar");
-    UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false, DST_ACCUM_MODE>(
-        transpose, transpose_within_16x16_face, cbid)));
+    UNPACK((llk_unpack_A_init<
+            BroadcastType::NONE,
+            false /*acc_to_dest*/,
+            EltwiseBinaryReuseDestType::NONE,
+            false /*unpack_to_dest*/>(transpose, transpose_within_16x16_face, cbid)));
     MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE>(cbid)));
 #endif
 }
@@ -104,8 +107,11 @@ ALWI void copy_tile(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile
     MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
         dst_tile_index, in_cb_id)));
 #else
-    UNPACK(
-        (llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(in_cb_id, in_tile_index)));
+    UNPACK((llk_unpack_A<
+            BroadcastType::NONE,
+            false /*acc_to_dest*/,
+            EltwiseBinaryReuseDestType::NONE,
+            false /*unpack_to_dest*/>(in_cb_id, in_tile_index)));
     MATH((llk_math_eltwise_unary_datacopy(dst_tile_index, in_cb_id)));
 #endif
 }

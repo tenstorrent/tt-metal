@@ -171,8 +171,11 @@ ALWI void pack_untilize_init_skip_remap(uint32_t icb, uint32_t ocb, uint32_t cal
         false, false, icb)));  // init must be after configure
     MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
 #else
-    UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false, DST_ACCUM_MODE>(
-        false, false, icb)));
+    UNPACK((llk_unpack_A_init<
+            BroadcastType::NONE,
+            false /*acc_to_dest*/,
+            EltwiseBinaryReuseDestType::NONE,
+            false /*unpack_to_dest*/>(false /*transpose_of_faces*/, false /*within_face_16x16_transpose*/, icb)));
     MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE>(icb)));
 #endif
     pack_untilize_dest_init<block_ct_dim, full_ct_dim>(ocb);
@@ -216,7 +219,11 @@ ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb,
                 llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
                     c, icb)));
 #else
-            UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(icb, c)));
+            UNPACK((llk_unpack_A<
+                    BroadcastType::NONE,
+                    false /*acc_to_dest*/,
+                    EltwiseBinaryReuseDestType::NONE,
+                    false /*unpack_to_dest*/>(icb, c)));
             MATH((llk_math_eltwise_unary_datacopy(c, icb)));
 #endif
         }

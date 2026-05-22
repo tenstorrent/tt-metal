@@ -24,8 +24,7 @@ template <
     BroadcastType BType = BroadcastType::NONE,
     bool acc_to_dest = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool unpack_to_dest = false,
-    bool IS_32b_DEST_EN = false>
+    bool unpack_to_dest = false>
 inline void llk_unpack_A_init(
     [[maybe_unused]] const std::uint32_t transpose_of_faces = 0,
     [[maybe_unused]] const std::uint32_t within_face_16x16_transpose = 0,
@@ -41,10 +40,13 @@ inline void llk_unpack_A_init(
 
     // For Quasar, the unp_sel field is ignored if binary_reuse_dest != EltwiseBinaryReuseDestType::NONE
     if (transpose_of_faces && within_face_16x16_transpose) { /* TRANSPOSE_EN */
-        _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, true /* TRANSPOSE_EN */, IS_32b_DEST_EN, binary_reuse_dest>(
+        _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, true /* TRANSPOSE_EN */, DST_ACCUM_MODE, binary_reuse_dest>(
             operand_id);
     } else {
-        _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, false /* TRANSPOSE_EN */, IS_32b_DEST_EN, binary_reuse_dest>(
+        LLK_ASSERT(
+            transpose_of_faces == within_face_16x16_transpose,
+            "Quasar unpack unary operand only supports full or no transpose.");
+        _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, false /* TRANSPOSE_EN */, DST_ACCUM_MODE, binary_reuse_dest>(
             operand_id);
     }
 }
@@ -65,8 +67,9 @@ template <
     bool unpack_to_dest = false>
 inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_index) {
     const std::uint32_t operand_id = get_operand_id(operand);
+    const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(operand_id);
     const std::uint32_t l1_tile_index =
-        g_dfb_interface[operand_id].tc_slots[g_dfb_interface[operand_id].tc_idx].rd_entry_idx + tile_index;
+        local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].rd_entry_idx + tile_index;
 
     static_assert(unpack_to_dest == false, "unpack_to_dest is not yet supported on Quasar");
     static_assert(acc_to_dest == false, "acc_to_dest is not yet supported on Quasar");
