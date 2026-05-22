@@ -436,6 +436,11 @@ _DEFAULT_BLOCKINGS = {
     (192, 384, (3, 3, 3)): (64, 128, 1, 8, 4),
     (384, 384, (3, 3, 3)): (96, 96, 1, 8, 4),
     (384, 768, (3, 3, 3)): (96, 96, 1, 8, 4),
+    # S2V wav2vec2 feature extractor: H=W=1, long-T audio convs. C_out_block
+    # divides cleanly into 512; T_out_block capped at 32 to keep CB in L1.
+    (1, 512, (10, 1, 1)): (32, 128, 32, 1, 1),  # layer 0: raw audio → 512
+    (512, 512, (3, 1, 1)): (128, 128, 32, 1, 1),  # layers 1-4: kernel 3
+    (512, 512, (2, 1, 1)): (128, 128, 32, 1, 1),  # layers 5-6: kernel 2
     # S2V MotionEncoder_tc CausalConv1d: kernel-3 temporal convs at
     # WAN 2.2 5120-hidden / 4-token shapes (5120/4=1280, 5120/2=2560).
     (5120, 5120, (3, 1, 1)): (320, 64, 1, 1, 1),
@@ -448,11 +453,6 @@ _DEFAULT_BLOCKINGS = {
     # 1.5 MB L1 cap (kernel=128 → large per-shard weight residency).
     (1024, 1024, (128, 1, 1)): (64, 32, 1, 1, 1),
 }
-
-
-def register_conv3d_configs(configs: dict) -> None:
-    """Register additional conv3d blocking configs from external models."""
-    _DEFAULT_BLOCKINGS.update({(c_in, c_out, _ntuple(ks, 3)): tuple(v) for (c_in, c_out, ks), v in configs.items()})
 
 
 def get_conv3d_config(

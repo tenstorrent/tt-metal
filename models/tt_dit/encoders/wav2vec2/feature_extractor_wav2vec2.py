@@ -9,28 +9,13 @@ import torch
 import ttnn
 
 from ...layers.module import Module, ModuleList, Parameter
-from ...utils.conv3d import aligned_channels, get_conv3d_config, register_conv3d_configs
+from ...utils.conv3d import aligned_channels, get_conv3d_config
 from ...utils.tensor import local_device_to_torch
 from .config_wav2vec2 import Wav2Vec2Config
 
 
 def _conv1d_output_len(in_len: int, kernel: int, stride: int, padding: int = 0) -> int:
     return (in_len + 2 * padding - kernel) // stride + 1
-
-
-# Register blocking configs for the wav2vec2 feature-extractor shapes so
-# `get_conv3d_config` doesn't fall through to the conservative `(in, 32, 1, 1, 1)`
-# default. These shapes have H=W=1 and a very long T (raw audio), the opposite
-# of the VAE's blockings (which assume large H/W). The C_out_block is sized to
-# divide cleanly into 512 (the feature-extractor output width); T_out_block is
-# capped at 32 to keep the program circular buffers within L1.
-register_conv3d_configs(
-    {
-        (1, 512, (10, 1, 1)): (32, 128, 32, 1, 1),  # layer 0: raw audio → 512
-        (512, 512, (3, 1, 1)): (128, 128, 32, 1, 1),  # layers 1-4: kernel 3
-        (512, 512, (2, 1, 1)): (128, 128, 32, 1, 1),  # layers 5-6: kernel 2
-    }
-)
 
 
 class Wav2Vec2ConvLayer(Module):
