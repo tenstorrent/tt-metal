@@ -4,6 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
@@ -62,8 +65,11 @@ void kernel_main() {
     constexpr uint32_t total_senders = num_sender_cores * other_devices;
 
     // Runtime arguments
+    // Legacy primitive retained (#45003 item 4): program factory passes
+    // cross_device_semaphore->address() rather than a semaphore id, so Semaphore<>
+    // can't bind. Keep the raw address handle for downstream noc_semaphore_* calls.
     uint32_t receiver_semaphore_address = get_arg_val<uint32_t>(rt_arg_idx++);
-    uint32_t local_semaphore_address = get_semaphore(get_arg_val<uint32_t>(rt_arg_idx++));
+    Semaphore<> local_sem(get_arg_val<uint32_t>(rt_arg_idx++));
     bool sender_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
     bool worker_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t linear_output_page_start_idx = get_arg_val<uint32_t>(rt_arg_idx++);
@@ -76,10 +82,16 @@ void kernel_main() {
     uint32_t k_base_addr = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t v_base_addr = get_arg_val<uint32_t>(rt_arg_idx++);
 
-    // Bank base addresses (compute once)
-    const uint32_t bank_base_address = get_write_ptr(input_tensor_cb_id);
+    Noc noc_obj;
+    CircularBuffer cb_input_tensor(input_tensor_cb_id);
+    CircularBuffer cb_fabric_sender(fabric_sender_cb_id);
+    CircularBuffer cb_fabric_receiver(fabric_receiver_cb_id);
+    CircularBuffer cb_accumulator(accumulator_cb_id);
 
-    uint32_t sender_read_addr = get_write_ptr(fabric_sender_cb_id);
+    // Bank base addresses (compute once)
+    const uint32_t bank_base_address = cb_input_tensor.get_write_ptr();
+
+    uint32_t sender_read_addr = cb_fabric_sender.get_write_ptr();
 
     if (sender_core) {
         for (uint32_t target_device_id : device_order) {
@@ -106,12 +118,14 @@ void kernel_main() {
                 const uint64_t shard_noc_addr = get_noc_addr(x, y, offset_address);
                 const uint32_t transfer_size = read_size * page_size_bytes;
 
-                cb_reserve_back(fabric_sender_cb_id, num_pages_reserve_push);
+                cb_fabric_sender.reserve_back(num_pages_reserve_push);
+                // Legacy primitive retained (#45003 item 4): precomposed uint64_t shard
+                // noc address; clean mapping to UnicastEndpoint is not worth the churn.
                 noc_async_read(shard_noc_addr, sender_read_addr, transfer_size);
 
                 if (num_pages_reserve_push >= curr_packet_num_pages) {
-                    noc_async_read_barrier();
-                    cb_push_back(fabric_sender_cb_id, num_pages_reserve_push);
+                    noc_obj.async_read_barrier();
+                    cb_fabric_sender.push_back(num_pages_reserve_push);
                     num_pages_reserve_push = 0;
                 }
 
@@ -122,8 +136,8 @@ void kernel_main() {
         }
     } else if (worker_core) {
         // Calculate base addresses once
-        const uint32_t base_input_tensor_addr = get_read_ptr(input_tensor_cb_id);
-        const uint32_t base_receiver_l1_addresses = get_read_ptr(fabric_receiver_cb_id) + chip_id_offset;
+        const uint32_t base_input_tensor_addr = cb_input_tensor.get_read_ptr();
+        const uint32_t base_receiver_l1_addresses = cb_fabric_receiver.get_read_ptr() + chip_id_offset;
 
         for (uint32_t i = 0; i < num_pages_per_packet; i++) {
             const uint32_t rem = linear_input_packet_start_idx + i;
@@ -141,17 +155,19 @@ void kernel_main() {
             const uint64_t output_noc_address = get_noc_addr(core_x, core_y, base_input_tensor_addr + tile_offset);
             const uint32_t receiver_l1_address = base_receiver_l1_addresses + i * page_size_bytes;
 
+            // Legacy primitive retained (#45003 item 4): precomposed uint64_t noc address.
             noc_async_read(output_noc_address, receiver_l1_address, page_size_bytes);
         }
 
+        // Legacy primitive retained (#45003 item 4): see receiver_semaphore_address note.
         noc_semaphore_wait((uint32_t*)receiver_semaphore_address, other_devices);
 
-        noc_async_read_barrier();
-        cb_push_back(fabric_receiver_cb_id, num_pages_per_packet * num_devices);
+        noc_obj.async_read_barrier();
+        cb_fabric_receiver.push_back(num_pages_per_packet * num_devices);
 
         uint32_t head_idx = linear_output_page_start_idx / 2;  // each head has 2 pages/blocks
-        cb_wait_front(accumulator_cb_id, num_pages_per_packet);
-        auto accumulator_l1_addr = get_read_ptr(accumulator_cb_id);
+        cb_accumulator.wait_front(num_pages_per_packet);
+        auto accumulator_l1_addr = cb_accumulator.get_read_ptr();
         if (head_idx < q_heads) {  // write q heads
             for (uint32_t iblock = 1; iblock < num_pages_per_packet;
                  iblock += 2) {  // increment by 2 so that we can handle 1 head each time.
@@ -161,6 +177,7 @@ void kernel_main() {
                         q_output_core_xy[istick][y_index],
                         q_base_addr + head_idx * head_dim_bytes + stick_size_byte);
                     uint32_t l1_read_addr = accumulator_l1_addr + iblock * page_size_bytes + istick * stick_size_byte;
+                    // Legacy primitive retained (#45003 item 4): precomposed uint64_t noc address.
                     noc_async_write(l1_read_addr, noc_address, stick_size_byte);
                 }
                 head_idx++;  // next head as each packet has 2 heads = 4 blocks
@@ -173,6 +190,7 @@ void kernel_main() {
                     k_output_core_xy[istick][y_index],
                     k_base_addr + stick_size_byte);
                 uint32_t l1_read_addr = accumulator_l1_addr + iblock1 * page_size_bytes + istick * stick_size_byte;
+                // Legacy primitive retained (#45003 item 4): precomposed uint64_t noc address.
                 noc_async_write(l1_read_addr, noc_address, stick_size_byte);
             }
 
@@ -182,11 +200,13 @@ void kernel_main() {
                     v_output_core_xy[istick][y_index],
                     v_base_addr + stick_size_byte);
                 uint32_t l1_read_addr = accumulator_l1_addr + iblock2 * page_size_bytes + istick * stick_size_byte;
+                // Legacy primitive retained (#45003 item 4): precomposed uint64_t noc address.
                 noc_async_write(l1_read_addr, noc_address, stick_size_byte);
             }
         }
-        noc_async_write_barrier();
+        noc_obj.async_write_barrier();
     }
-    noc_semaphore_set((uint32_t*)local_semaphore_address, INVALID);
+    local_sem.set(INVALID);
+    // Legacy primitive retained (#45003 item 4): see receiver_semaphore_address note.
     noc_semaphore_set((uint32_t*)receiver_semaphore_address, INVALID);
 }

@@ -4,6 +4,8 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
@@ -71,6 +73,11 @@ void kernel_main() {
     uint32_t k_base_addr = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t v_base_addr = get_arg_val<uint32_t>(rt_arg_idx++);
 
+    Noc noc_obj;
+    CircularBuffer cb_fabric_sender(fabric_sender_cb_id);
+    CircularBuffer cb_packet_header(packet_header_cb_id);
+    CircularBuffer cb_accumulator(accumulator_cb_id);
+
     if (sender_core) {
         auto fabric_connection =
             FabricConnectionManager::build_from_args<FabricConnectionManager::BUILD_AND_OPEN_CONNECTION_START_ONLY>(
@@ -79,8 +86,8 @@ void kernel_main() {
         constexpr uint8_t device_order[other_devices] =
             DEVICE_ORDER;  // this is code gen'd in the program factory using the defines
         constexpr uint8_t packet_worker_cores[num_packet_worker_cores][2] = PACKET_WORKER_CORES;
-        cb_reserve_back(packet_header_cb_id, buffering_factor * num_packet_headers_storable);
-        const auto packet_header_buffer_addr = get_read_ptr(packet_header_cb_id);
+        cb_packet_header.reserve_back(buffering_factor * num_packet_headers_storable);
+        const auto packet_header_buffer_addr = cb_packet_header.get_read_ptr();
         auto* unicast_packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
         auto* sem_inc_packet_header =
             reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr + packet_header_size);
@@ -89,7 +96,8 @@ void kernel_main() {
         sem_inc_packet_header->to_noc_unicast_atomic_inc(
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sem_noc_addr, static_cast<uint32_t>(1)});  // increment 1
 
-        const uint32_t base_receiver_l1_addr = get_read_ptr(fabric_receiver_cb_id);
+        CircularBuffer cb_fabric_receiver(fabric_receiver_cb_id);
+        const uint32_t base_receiver_l1_addr = cb_fabric_receiver.get_read_ptr();
 
         // Precompute the packet offset once
         const uint32_t packet_offset = base_receiver_l1_addr + chip_id_offset;
@@ -129,8 +137,8 @@ void kernel_main() {
                 const uint32_t receiver_core_y = packet_worker_cores[packet][y_index];
                 const uint64_t noc0_dest_noc_addr = get_noc_addr(receiver_core_x, receiver_core_y, packet_offset, 0);
 
-                cb_wait_front(fabric_sender_cb_id, curr_packet_num_pages);
-                const auto sender_l1_addr = get_read_ptr(fabric_sender_cb_id);
+                cb_fabric_sender.wait_front(curr_packet_num_pages);
+                const auto sender_l1_addr = cb_fabric_sender.get_read_ptr();
 
                 const uint64_t sem_noc_addr =
                     get_noc_addr(receiver_core_x, receiver_core_y, receiver_semaphore_address, 0);
@@ -146,7 +154,7 @@ void kernel_main() {
                 fabric_conn.send_payload_flush_blocking_from_address(
                     (uint32_t)unicast_packet_header, packet_header_size);
 
-                cb_pop_front(fabric_sender_cb_id, curr_packet_num_pages);
+                cb_fabric_sender.pop_front(curr_packet_num_pages);
 
                 num_pages_sent += curr_packet_num_pages;
                 packet++;
@@ -162,9 +170,9 @@ void kernel_main() {
         constexpr uint8_t v_output_core_xy[output_cores_per_device][2] = V_OUTPUT_CORE_XY;
 
         uint32_t head_idx = linear_output_page_start_idx / 2;  // each head has 2 pages/blocks
-        cb_wait_front(accumulator_cb_id, num_pages_per_packet);
+        cb_accumulator.wait_front(num_pages_per_packet);
 
-        auto accumulator_l1_addr = get_read_ptr(accumulator_cb_id);
+        auto accumulator_l1_addr = cb_accumulator.get_read_ptr();
         if (head_idx < q_heads) {  // write q heads
             for (uint32_t iblock = 0; iblock < num_pages_per_packet;
                  iblock += 2) {  // increment by 2 so that we can handle 1 head each time.
@@ -174,6 +182,7 @@ void kernel_main() {
                         q_output_core_xy[istick][y_index],
                         q_base_addr + head_idx * head_dim_bytes);
                     uint32_t l1_read_addr = accumulator_l1_addr + iblock * page_size_bytes + istick * stick_size_byte;
+                    // Legacy primitive retained (#45003 item 4): precomposed uint64_t noc address.
                     noc_async_write(l1_read_addr, noc_address, stick_size_byte);
                 }
                 head_idx++;  // next head as each packet has 2 heads = 4 blocks
@@ -184,6 +193,7 @@ void kernel_main() {
                 uint64_t noc_address =
                     get_noc_addr(k_output_core_xy[istick][x_index], k_output_core_xy[istick][y_index], k_base_addr);
                 uint32_t l1_read_addr = accumulator_l1_addr + iblock1 * page_size_bytes + istick * stick_size_byte;
+                // Legacy primitive retained (#45003 item 4): precomposed uint64_t noc address.
                 noc_async_write(l1_read_addr, noc_address, stick_size_byte);
             }
 
@@ -191,9 +201,10 @@ void kernel_main() {
                 uint64_t noc_address =
                     get_noc_addr(v_output_core_xy[istick][x_index], v_output_core_xy[istick][y_index], v_base_addr);
                 uint32_t l1_read_addr = accumulator_l1_addr + iblock2 * page_size_bytes + istick * stick_size_byte;
+                // Legacy primitive retained (#45003 item 4): precomposed uint64_t noc address.
                 noc_async_write(l1_read_addr, noc_address, stick_size_byte);
             }
         }
-        noc_async_write_barrier();
+        noc_obj.async_write_barrier();
     }
 }
