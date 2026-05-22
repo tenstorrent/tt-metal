@@ -37,7 +37,7 @@ def run_perf_depth_anything_v2(expected_inference_time, expected_compile_time, d
     # Run CPU reference
     with torch.no_grad():
         profiler.start(cpu_key)
-        _torch_output = torch_model(pixel_values).predicted_depth
+        torch_model(pixel_values).predicted_depth
         profiler.end(cpu_key)
 
     # Initialize TT model
@@ -49,13 +49,13 @@ def run_perf_depth_anything_v2(expected_inference_time, expected_compile_time, d
     with torch.no_grad():
         # First iteration (includes compile)
         profiler.start(first_key)
-        _tt_output = tt_model(tt_pixel_values)
+        tt_model(tt_pixel_values)
         ttnn.synchronize_device(device)
         profiler.end(first_key)
 
         # Second iteration (inference only)
         profiler.start(second_key)
-        _tt_output = tt_model(tt_pixel_values)
+        tt_model(tt_pixel_values)
         ttnn.synchronize_device(device)
         profiler.end(second_key)
 
