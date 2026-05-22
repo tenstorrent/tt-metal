@@ -86,10 +86,12 @@ The MoE win is dominated by per-expert FFN no longer matmuling the padded
 ~204800-row dispatch slot when only ~500 tokens actually land on each expert.
 
 ### Outstanding
-- Op count still scales with chunks (5 ops per 2k chunk). User wants "almost a single
-  op in tt-perf-report regardless of sequence length". A true single-op custom kernel
-  would require composing 3 matmul-equivalent compute kernels + silu + multiply into
-  one program, which is a substantial kernel-writing effort. Tracked as future work.
+- Op count still scales linearly with sequence length (4 ops per 2k chunk). User
+  wants "almost a single op in tt-perf-report regardless of sequence length". A
+  true single-op custom kernel would require composing 3 matmul-equivalent
+  compute kernels + silu + multiply into one program, which is a substantial
+  kernel-writing effort. Tracked as future work — see Phase B in the original
+  plan.
 
 - [2026-05-22] **Milestone 4**: leverage device-side token-count buffer in
   `tt_routed_expert.forward`. One host-side read of expert_token_counts +
@@ -111,3 +113,29 @@ The MoE win is dominated by per-expert FFN no longer matmuling the padded
   - `test_single_routed_expert.py`: count == num_tokens so the narrow caps to
     the existing buffer size and is a no-op. Adds one ~100us host-device sync
     per forward; device kernel times unchanged (still 528-556us/2k).
+
+## Final summary (state at end of session)
+
+Branch: `kgrujcic/unified_rexpert`. Commits since `main`:
+1. `unified routed expert: chunked BH path + silu fusion + zero-copy narrow`
+2. `unified routed expert: leverage token-count buffer in MoE forward`
+3. `update logbook with final perf numbers`
+4. `fix MoE count-buffer read + round narrow to 2k boundary for JIT-cache hits`
+5. `fuse silu+multiply+reshard into one BinaryNg op`
+6. `update logbook with milestone 5 silu+multiply+reshard fusion details`
+
+Requirements scorecard (from the original spec):
+
+- [x] Faster than main on 4k — **1.58x** (1676 -> 1059 us)
+- [x] Faster on other sizes too — applies to 3.2k/4k/5k/6k/8k/16k/25k
+- [x] Arbitrary sequence lengths up to ~25k — covered, including non-power-of-2
+- [x] PCC ≥ 0.97 across all sizes — observed 0.980 on all 10 tests
+- [x] Leverage token-count buffer — host-side read, ceil-to-2k narrow, skip count==0
+- [x] All existing tests pass — `test_single_routed_expert.py` (10/10),
+      `test_ttnn_moe.py[linear-8, perf-host-64]` (1/1)
+- [~] "Almost a single op in tt-perf-report regardless of sequence length" —
+      reduced from 6 ops/chunk (main fallback) to 4 ops/chunk, but op count
+      still scales with sequence length. Full collapse to ~1 op needs a
+      custom fused compute kernel; left as Phase B follow-up.
+- [~] ~500us/2k device time target — measured 519-560us/2k, within ~6-12% of
+      target on all sizes.
