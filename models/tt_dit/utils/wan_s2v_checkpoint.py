@@ -25,15 +25,15 @@ except ImportError:  # pragma: no cover - safetensors should be available with d
 
 
 def find_s2v_snapshot(model_id: str = "Wan-AI/Wan2.2-S2V-14B") -> Path:
-    """Latest HF cache snapshot for the S2V model (download via ``hf download``)."""
-    cache_root = Path.home() / ".cache" / "huggingface" / "hub"
-    repo_dir = cache_root / f"models--{model_id.replace('/', '--')}" / "snapshots"
-    if not repo_dir.exists():
-        raise FileNotFoundError(f"HF snapshot dir not found: {repo_dir}")
-    snaps = sorted(repo_dir.iterdir())
-    if not snaps:
-        raise FileNotFoundError(f"No snapshots under {repo_dir}")
-    return snaps[-1]
+    """Return the local snapshot for the S2V model, auto-downloading if absent.
+
+    Matches the auto-download behaviour of ``Auto*.from_pretrained`` used for
+    the T2V aux checkpoint. Set ``HF_HUB_OFFLINE=1`` to skip the network call
+    when the snapshot is already cached.
+    """
+    from huggingface_hub import snapshot_download
+
+    return Path(snapshot_download(repo_id=model_id))
 
 
 def load_s2v_config(snapshot_dir: Path | str) -> dict[str, Any]:
