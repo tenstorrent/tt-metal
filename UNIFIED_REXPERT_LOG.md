@@ -265,6 +265,45 @@ factory. Concrete checklist:
    - tt-perf-report shows ONE `UnifiedRoutedExpertFfnDeviceOperation` row
      per call, regardless of chunk count.
 
+### Phase B status at end of session
+
+All op infrastructure is in place:
+- Device op + Python binding (works, builds clean, callable from Python).
+- Program factory allocates: 11 CBs, per-program DRAM scratch buffer,
+  per-core L1 semaphore. Distributes work across an 8x8 grid.
+- Three custom kernels: reader (DRAM tile streaming + count read +
+  scratch read after sync), writer (drain cb_activated to scratch +
+  multicast semaphore increment + drain cb_out to output), and the
+  fused compute kernel.
+
+**Wiring confirmed via empty/diag kernels:** the simplest possible
+pipeline (reader pushes 1 tile to cb_in0_x, compute pops + pushes 1 tile
+to cb_out, writer pops 1 tile) runs end-to-end. The reader's phase 1
+real-data reads also work in isolation. So CBs, runtime args, and
+TensorAccessors are correctly set up.
+
+**Hang reproduces on the compute kernel only.** Tried three different
+compute-kernel patterns, all hang on the routed-expert dims:
+
+1. `fused_swiglu.cpp` — the agent's matmul_block + subblock spill/reload
+   pattern (modeled on bmm_large_block_zm_fused_bias_activation.cpp).
+2. `fused_swiglu_gateonly.cpp` — gate matmul only, drains other phase
+   CBs. Still hangs, so the issue isn't multi-phase synchronization.
+3. `fused_swiglu_v2.cpp` — matmul_tiles per-tile pattern with copy_tile
+   spill/reload (modeled on bmm_large_block_zm.cpp). Still hangs.
+
+The hang occurs INSIDE the matmul phase, somewhere in the
+acquire/matmul/pack/release protocol against our specific CB sizes and
+data formats. Diagnosing further needs device-side DPRINT (set
+`TT_METAL_DPRINT_CORES=0,0` and instrument the kernel with `DPRINT
+<< "phase X"` markers) to localize which acquire / wait_front /
+pack call is wedging.
+
+The production chunked routed_expert_ffn is unaffected by this WIP and
+remains the working solution: 1.58x faster than main on 4k, 4 ops/chunk,
+all 10 test_single_routed_expert tests pass at PCC ~0.98, MoE
+integration test passes.
+
 ## Final summary (state at end of session)
 
 Branch: `kgrujcic/unified_rexpert`. Commits since `main`:
