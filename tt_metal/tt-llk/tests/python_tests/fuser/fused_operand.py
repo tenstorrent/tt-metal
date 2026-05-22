@@ -157,11 +157,15 @@ class Operand:
         tile_elements = self.tile_shape.total_tile_size()
         tile_size = self.data_format.num_bytes_per_tile(tile_elements)
 
-        buffer = tilize_block(
-            self.raw_data,
-            dimensions=self.dimensions,
-            stimuli_format=self.data_format,
-        ).flatten()
+        buffer = (
+            tilize_block(
+                self.raw_data,
+                dimensions=self.dimensions,
+                stimuli_format=self.data_format,
+            ).flatten()
+            if self.is_input()
+            else torch.zeros(self.dimensions).flatten()
+        )
 
         packed_tiles = []
 
@@ -295,6 +299,10 @@ class OperandRegistry:
         """Write all input operands to L1 memory."""
 
         for operand in self.get_all_inputs():
+            for addr, packed_data in operand.pack_for_l1():
+                write_to_device(location, addr, packed_data)
+
+        for operand in self.get_all_outputs():
             for addr, packed_data in operand.pack_for_l1():
                 write_to_device(location, addr, packed_data)
 

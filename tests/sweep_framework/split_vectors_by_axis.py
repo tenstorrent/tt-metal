@@ -10,6 +10,7 @@ _Y9 = re.compile(r"""['"]y['"]\s*:\s*9(?!\d)""")
 _X7 = re.compile(r"""['"]x['"]\s*:\s*7(?!\d)""")
 _GRID_X = re.compile(r"x\s*=\s*(\d+)")
 _GRID_Y = re.compile(r"y\s*=\s*(\d+)")
+_GRID_XY_DASH = re.compile(r"compute_with_storage_grid_size=(\d+)-(\d+)")
 
 
 def _scan_mc(obj, state):
@@ -45,6 +46,18 @@ def _scan_mc(obj, state):
 def _scan_pc(obj, state):
     if obj is None or obj == "__ABSENT__":
         return
+    # Handle dict format: {'compute_with_storage_grid_size': {'x': 8, 'y': 8}, ...}
+    if isinstance(obj, dict):
+        grid = obj.get("compute_with_storage_grid_size")
+        if isinstance(grid, dict):
+            gx = grid.get("x", 0)
+            gy = grid.get("y", 0)
+            if isinstance(gx, (int, float)) and gx >= 8:
+                state["needs_row"] = True
+            if isinstance(gy, (int, float)) and gy >= 10:
+                state["needs_col"] = True
+            return
+    # Handle string/repr format: "compute_with_storage_grid_size=8-8"
     pc_text = ""
     if isinstance(obj, dict):
         pc_text = str(obj.get("value", "")) or str(obj.get("repr", ""))
@@ -52,6 +65,16 @@ def _scan_pc(obj, state):
         pc_text = repr(obj)
     if "compute_with_storage_grid_size" not in pc_text:
         return
+    # Try X-Y dash format first (e.g. "=8-8")
+    dash_m = _GRID_XY_DASH.search(pc_text)
+    if dash_m:
+        gx, gy = int(dash_m.group(1)), int(dash_m.group(2))
+        if gx >= 8:
+            state["needs_row"] = True
+        if gy >= 10:
+            state["needs_col"] = True
+        return
+    # Fallback to x=N, y=N format
     idx = pc_text.find("compute_with_storage_grid_size")
     section = pc_text[idx : idx + 80]
     xm = _GRID_X.search(section)
@@ -66,6 +89,8 @@ def vector_axis(vec):
     state = {"needs_col": False, "needs_row": False}
     for k, v in vec.items():
         if "memory_config" in k:
+            _scan_mc(v, state)
+        elif k.startswith("arg") and isinstance(v, dict) and "shard_spec" in v:
             _scan_mc(v, state)
         if k == "program_config":
             _scan_pc(v, state)

@@ -90,6 +90,15 @@ def run(
     # ttnn.pad(t, padding=padding) (kwarg). The two produce different traces.
     pad_was_positional = False
 
+    # JSON cannot represent inf/-inf; they're stored as huge numbers.
+    _golden_value = value
+    # Detect and convert back to float("inf") / float("-inf").
+    import math
+
+    if isinstance(value, (int, float)) and not math.isinf(value):
+        if abs(value) > 1e38:
+            _golden_value = float("-inf") if value < 0 else float("inf")
+
     if padding is None and arg1 is not None:
         is_nested = isinstance(arg1, list) and arg1 and isinstance(arg1[0], (list, tuple))
         if is_nested:
@@ -129,7 +138,7 @@ def run(
     for i in range(len(padding) - 1, -1, -1):
         for p in padding[i]:
             torch_padding.append(p)
-    torch_output = torch.nn.functional.pad(torch_input, torch_padding, mode="constant", value=value)
+    torch_output = torch.nn.functional.pad(torch_input, torch_padding, mode="constant", value=_golden_value)
 
     if isinstance(padding, list):
         padding = tuple(tuple(p) if isinstance(p, (list, tuple)) else p for p in padding)

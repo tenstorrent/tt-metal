@@ -8,7 +8,7 @@ from typing import Any, Union
 
 import ttnn
 
-optimal_topology = ttnn.Topology.Ring if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.Topology.Linear
+optimal_topology = ttnn.Topology.Ring if (os.getenv("USE_TORUS_MODE", "0") != "0") else ttnn.Topology.Linear
 
 # Union type for all possible program configs used with ttnn.linear
 ProgramConfig = Union[
@@ -224,11 +224,12 @@ class DeepseekMoEReduceScatterConfig(OpConfigBase):
                 f"DeepseekMoEReduceScatterConfig.create_default_input_memory_config: slice_size ({slice_size}) must be divisible by number of op worker cores ({NUM_DECODE_RS_SHARD_CORES})"
             )
         per_core_shard_width = slice_size // NUM_DECODE_RS_SHARD_CORES
+        padded_users = ttnn.core.roundup(users_per_row, ttnn.TILE_SIZE)
 
         return ttnn.MemoryConfig(
             ttnn.BufferType.L1,
             ttnn.NdShardSpec(
-                ttnn.Shape([1, 1, users_per_row, per_core_shard_width]),
+                ttnn.Shape([1, 1, padded_users, per_core_shard_width]),
                 ttnn.CoreRangeSet(
                     [
                         ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 0)),

@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_bernoulli ${LIB_TYPE})
 add_library(TTNN::Ops::Bernoulli ALIAS ttnn_op_bernoulli)
 
@@ -25,9 +27,7 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        bernoulli.cpp
-        device/bernoulli_device_operation.cpp
-        device/bernoulli_program_factory.cpp
+        ${TTNN_OP_BERNOULLI_SRCS}
 )
 
 target_include_directories(ttnn_op_bernoulli PRIVATE ${FixmeOpIncDirs})

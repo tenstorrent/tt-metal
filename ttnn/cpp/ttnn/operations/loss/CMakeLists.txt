@@ -1,10 +1,12 @@
+include(sources.cmake)
+
 add_library(ttnn_op_loss ${LIB_TYPE})
 add_library(TTNN::Ops::Loss ALIAS ttnn_op_loss)
 
 tt_reuse_precompile_headers(ttnn_op_loss TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_loss)
 
-target_sources(ttnn_op_loss PRIVATE loss.cpp)
+target_sources(ttnn_op_loss PRIVATE ${TTNN_OP_LOSS_SRCS})
 
 target_include_directories(ttnn_op_loss PRIVATE ${FixmeOpIncDirs})
 target_link_libraries(

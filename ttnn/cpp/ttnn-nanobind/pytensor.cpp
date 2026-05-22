@@ -738,6 +738,7 @@ void pytensor_module(nb::module_& mod) {
             "deallocate",
             [](Tensor& self, bool force) { self.deallocate(force); },
             nb::arg("force") = false,
+            nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
                 Deallocates all data of a tensor. This either deletes all host data or deallocates tensor data from device memory.
             )doc")
@@ -751,6 +752,7 @@ void pytensor_module(nb::module_& mod) {
             nb::arg("mem_config").noconvert() = nb::none(),
             nb::arg("cq_id") = nb::none(),
             nb::keep_alive<0, 2>(),
+            nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
             Move TT Tensor from host device to TT accelerator device.
 
@@ -827,6 +829,7 @@ void pytensor_module(nb::module_& mod) {
             },
             nb::arg("blocking") = true,
             nb::arg("cq_id") = nb::none(),
+            nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
             Move TT Tensor from TT accelerator device to host device.
 
@@ -841,18 +844,23 @@ void pytensor_module(nb::module_& mod) {
                     self.logical_volume() == 1,
                     "tensor.item() requires tensor to have exactly one element, but got {} elements",
                     self.logical_volume());
-                switch (self.dtype()) {
-                    case DataType::FLOAT32: return nb::cast(self.to_vector<float>()[0]);
-                    case DataType::BFLOAT16: return nb::cast(static_cast<float>(self.to_vector<bfloat16>()[0]));
-                    case DataType::BFLOAT8_B:
-                    case DataType::BFLOAT4_B: return nb::cast(self.to_vector<float>()[0]);
-                    case DataType::INT32: return nb::cast(self.to_vector<int32_t>()[0]);
-                    case DataType::UINT32: return nb::cast(self.to_vector<uint32_t>()[0]);
-                    case DataType::UINT16: return nb::cast(self.to_vector<uint16_t>()[0]);
-                    case DataType::UINT8: return nb::cast(self.to_vector<uint8_t>()[0]);
-                    case DataType::INVALID: TT_THROW("Unsupported DataType");
-                }
-                TT_THROW("Unreachable");
+                auto dtype = self.dtype();
+                auto get_scalar = [&]() -> std::variant<float, int32_t, uint32_t, uint16_t, uint8_t> {
+                    nb::gil_scoped_release release;
+                    switch (dtype) {
+                        case DataType::FLOAT32: return self.to_vector<float>()[0];
+                        case DataType::BFLOAT16: return static_cast<float>(self.to_vector<bfloat16>()[0]);
+                        case DataType::BFLOAT8_B:
+                        case DataType::BFLOAT4_B: return self.to_vector<float>()[0];
+                        case DataType::INT32: return self.to_vector<int32_t>()[0];
+                        case DataType::UINT32: return self.to_vector<uint32_t>()[0];
+                        case DataType::UINT16: return self.to_vector<uint16_t>()[0];
+                        case DataType::UINT8: return self.to_vector<uint8_t>()[0];
+                        case DataType::INVALID: TT_THROW("Unsupported DataType");
+                    }
+                    TT_THROW("Unreachable");
+                };
+                return std::visit([](auto v) -> nb::object { return nb::cast(v); }, get_scalar());
             },
             // nb::rv_policy::copy,
             R"doc(
@@ -877,6 +885,7 @@ void pytensor_module(nb::module_& mod) {
             "to",
             [](const Tensor& self, Layout target_layout) { return ttnn::to_layout(self, target_layout); },
             nb::arg("target_layout").noconvert(),
+            nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
             Convert TT Tensor to provided memory layout. Available layouts conversions are:
 
@@ -1236,7 +1245,10 @@ void pytensor_module(nb::module_& mod) {
             [](const Tensor& self) -> nb::ndarray<nb::pytorch> {
                 using namespace CMAKE_UNIQUE_NAMESPACE;
 
-                auto buffer = convert_to_row_major_host_buffer(self, /*padded_output=*/true);
+                auto buffer = [&] {
+                    nb::gil_scoped_release release;
+                    return convert_to_row_major_host_buffer(self, /*padded_output=*/true);
+                }();
                 return convert_tt_tensor_to_framework_tensor<nb::pytorch>(buffer);
             },
             nb::rv_policy::take_ownership,
@@ -1255,8 +1267,11 @@ void pytensor_module(nb::module_& mod) {
             "to_torch",
             [](const Tensor& self, const ttnn::distributed::MeshToTensor* mesh_composer) -> nb::ndarray<nb::pytorch> {
                 using namespace CMAKE_UNIQUE_NAMESPACE;
-                auto buffer = mesh_composer ? convert_to_row_major_host_buffer(self, *mesh_composer)
-                                            : convert_to_row_major_host_buffer(self, /*padded_output=*/false);
+                auto buffer = [&] {
+                    nb::gil_scoped_release release;
+                    return mesh_composer ? convert_to_row_major_host_buffer(self, *mesh_composer)
+                                         : convert_to_row_major_host_buffer(self, /*padded_output=*/false);
+                }();
                 return convert_tt_tensor_to_framework_tensor<nb::pytorch>(buffer);
             },
             nb::rv_policy::take_ownership,
@@ -1276,8 +1291,11 @@ void pytensor_module(nb::module_& mod) {
             [](const Tensor& self, const ttnn::distributed::MeshToTensor* mesh_composer) -> nb::ndarray<nb::numpy> {
                 using namespace CMAKE_UNIQUE_NAMESPACE;
 
-                auto buffer = mesh_composer ? convert_to_row_major_host_buffer(self, *mesh_composer)
-                                            : convert_to_row_major_host_buffer(self, /*padded_output=*/false);
+                auto buffer = [&] {
+                    nb::gil_scoped_release release;
+                    return mesh_composer ? convert_to_row_major_host_buffer(self, *mesh_composer)
+                                         : convert_to_row_major_host_buffer(self, /*padded_output=*/false);
+                }();
                 return convert_tt_tensor_to_framework_tensor<nb::numpy>(buffer);
             },
             nb::rv_policy::take_ownership,
@@ -1487,6 +1505,7 @@ void pytensor_module(nb::module_& mod) {
             [](Tensor& self, int N, int C, int H, int W) {
                 return ttnn::reshape(self, ttnn::SmallVector<int>{N, C, H, W});
             },
+            nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
                 Reshapes TT tensor
 
@@ -1497,6 +1516,7 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "reshape",
             [](Tensor& self, const ttnn::Shape& shape) -> Tensor { return ttnn::reshape(self, shape); },
+            nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
                 Reshapes TT tensor
 
@@ -1507,6 +1527,7 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "reshape",
             [](Tensor& self, const ttnn::SmallVector<int32_t>& shape) -> Tensor { return ttnn::reshape(self, shape); },
+            nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
                 Reshapes TT tensor
 

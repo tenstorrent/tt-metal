@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_experimental_plusone ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::PlusOne ALIAS ttnn_op_experimental_plusone)
 
@@ -25,9 +27,7 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        device/plusone_device_operation.cpp
-        device/plusone_program_factory.cpp
-        plusone.cpp
+        ${TTNN_OP_EXPERIMENTAL_PLUSONE_SRCS}
 )
 
 target_include_directories(ttnn_op_experimental_plusone PRIVATE ${FixmeOpIncDirs})

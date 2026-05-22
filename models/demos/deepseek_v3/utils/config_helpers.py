@@ -50,7 +50,7 @@ def emit_legacy_saved_weights():
 
 def get_fabric_config():
     return (
-        ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.FabricConfig.FABRIC_1D
+        ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE", "0") != "0") else ttnn.FabricConfig.FABRIC_1D
     )
 
 

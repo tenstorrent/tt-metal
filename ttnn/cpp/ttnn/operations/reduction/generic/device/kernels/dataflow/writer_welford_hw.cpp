@@ -18,9 +18,9 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_combine.h"
 
@@ -55,10 +55,10 @@ void kernel_main() {
     const uint32_t partial_tile_size_bytes = get_tile_size(cb_partial);
     const uint32_t out_tile_size_bytes = get_tile_size(cb_out);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_partial_obj(cb_partial);
-    experimental::CircularBuffer cb_combined_obj(cb_combined);
-    experimental::CircularBuffer cb_out_obj(cb_out);
+    Noc noc;
+    CircularBuffer cb_partial_obj(cb_partial);
+    CircularBuffer cb_combined_obj(cb_combined);
+    CircularBuffer cb_out_obj(cb_out);
 
     const auto tensor_out = TensorAccessor(dst_args, dst_addr);
 
@@ -75,7 +75,7 @@ void kernel_main() {
             for (uint32_t wt = 0; wt < Wt; ++wt) {
                 cb_partial_obj.wait_front(2);
 
-                auto means_addr = get_read_ptr(cb_partial);
+                auto means_addr = cb_partial_obj.get_read_ptr();
                 auto vars_addr = means_addr + partial_tile_size_bytes;
 
                 // cb_partial is Float32: each element is 4 bytes.
@@ -116,7 +116,7 @@ void kernel_main() {
         // and are never read (the output is a single scalar), so stale
         // L1 contents there are harmless.
         cb_combined_obj.reserve_back(1);
-        auto* combined_ptr = reinterpret_cast<float*>(get_write_ptr(cb_combined));
+        auto* combined_ptr = reinterpret_cast<float*>(cb_combined_obj.get_write_ptr());
         for (uint32_t i = 0; i < FACE_W; ++i) {
             combined_ptr[i] = 0.0f;
         }

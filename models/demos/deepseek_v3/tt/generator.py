@@ -13,6 +13,7 @@ from tracy import signpost
 from transformers import AutoConfig
 
 import ttnn
+from models.common.model_capabilities import ModelCapabilitiesMixin
 from models.common.sampling.generator import (
     SamplingGenerator,
     SamplingParams,
@@ -35,6 +36,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     PREFILL_WARMUP_MODE_LINEAR_ADDITIVE,
     PREFILL_WARMUP_MODE_LINEAR_MULTIPLES,
     USERS_PER_ROW,
+    align_prefill_padded_seq_len,
     align_up,
     even_int_div,
     get_min_alignment_value_for_prefill,
@@ -137,7 +139,7 @@ class _MtpDecodeLoopResult(NamedTuple):
     decode_step_user_tokens: List[List[int]]
 
 
-class DeepseekGenerator(WarmupForwardMixin):
+class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
     """
     Simple generator that wires RowBatchedModel + LMHead for decode-only inference.
 
@@ -1347,9 +1349,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         max_len = max(len(t) for t in tokens_list)
         if self.prefill_max_tokens is not None:
             max_len = min(self.prefill_max_tokens, max_len)  # truncate all sequences to the prefill_max_tokens
-        # Round up to nearest multiple of TILE_SIZE.
-        alignment = ttnn.TILE_SIZE
-        max_len = ((max_len + alignment - 1) // alignment) * alignment
+        max_len = align_prefill_padded_seq_len(max_len, self.mesh_device.shape[0])
 
         pad_id = self._get_pad_id()
 
@@ -1871,6 +1871,11 @@ class DeepseekGenerator(WarmupForwardMixin):
             logger.warning(f"Supports 1..{self.batch_size} prompts. Cutton off additional prompts.")
             prompts = prompts[: self.batch_size]
         num_of_prompts = len(prompts)
+        if teacher_forcing is not None and num_of_prompts != teacher_forcing.num_entries:
+            raise ValueError(
+                "Teacher forcing requires one reference entry per prompt. "
+                f"Got prompts={num_of_prompts}, reference_entries={teacher_forcing.num_entries}."
+            )
 
         logger.info("Creating model run configs...")
         profiler.start("preparing_prefill_config")
@@ -2054,6 +2059,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                                 self._sample_on_host(last_token_logits.unsqueeze(0), start_user_idx=user_id).item()
                             )
                         prefill_tokens.append(torch.tensor(pred_token, dtype=torch.int64))
+                    ttnn.synchronize_device(self.mesh_device)
                     self.ccl.reset_sem_counters()
                 if use_mtp_path:
                     assert last_logits is not None
@@ -2127,10 +2133,12 @@ class DeepseekGenerator(WarmupForwardMixin):
                         next_tokens = prefill_tokens
                         positions = lengths.clone()
                 if teacher_forcing is not None:
-                    # Record user-0 prediction for accuracy, but force teacher token for alignment.
-                    tf_idx = int(prompt_user_ids[0].item()) if (prompt_user_ids is not None) else 0
-                    forced0 = teacher_forcing.collect_predicted_tokens(int(next_tokens[tf_idx].item()))
-                    next_tokens[tf_idx] = int(forced0)
+                    for user_idx in range(num_of_prompts):
+                        tf_idx = int(prompt_user_ids[user_idx].item()) if (prompt_user_ids is not None) else user_idx
+                        forced_token = teacher_forcing.collect_predicted_tokens(
+                            int(next_tokens[tf_idx].item()), user_idx=user_idx
+                        )
+                        next_tokens[tf_idx] = int(forced_token)
 
                 # Record token 0
                 for i in range(num_of_prompts):
@@ -2214,9 +2222,14 @@ class DeepseekGenerator(WarmupForwardMixin):
                         else:
                             pred_tokens = self._sample_on_host(decode_logits)
                         if teacher_forcing is not None:
-                            # Record user-0 prediction for accuracy, then force teacher token.
-                            forced = teacher_forcing.collect_predicted_tokens(int(pred_tokens[0].item()))
-                            pred_tokens[0] = int(forced)
+                            for user_idx in range(num_of_prompts):
+                                tf_idx = (
+                                    int(prompt_user_ids[user_idx].item()) if (prompt_user_ids is not None) else user_idx
+                                )
+                                forced_token = teacher_forcing.collect_predicted_tokens(
+                                    int(pred_tokens[tf_idx].item()), user_idx=user_idx
+                                )
+                                pred_tokens[tf_idx] = int(forced_token)
                         next_tokens = pred_tokens
                         positions += 1
 
@@ -2555,6 +2568,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                     ttnn.deallocate(tokens_shifted)
                     self._deallocate_rope_tensors(mtp_rope_tensors)
                     ttnn.deallocate(mtp_logits_tt)
+                    ttnn.synchronize_device(self.mesh_device)
                     self.ccl.reset_sem_counters()
 
             if return_last_hidden:

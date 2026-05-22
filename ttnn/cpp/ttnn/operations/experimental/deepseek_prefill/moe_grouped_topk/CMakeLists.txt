@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_experimental_deepseek_prefill_moe_grouped_topk ${LIB_TYPE})
 add_library(
     TTNN::Ops::Experimental::DeepSeekPrefill::MoeGroupedTopk
@@ -28,9 +30,7 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        device/moe_grouped_topk_device_operation.cpp
-        device/moe_grouped_topk_program_factory.cpp
-        moe_grouped_topk.cpp
+        ${TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_MOE_GROUPED_TOPK_SRCS}
 )
 
 target_include_directories(ttnn_op_experimental_deepseek_prefill_moe_grouped_topk PRIVATE ${FixmeOpIncDirs})

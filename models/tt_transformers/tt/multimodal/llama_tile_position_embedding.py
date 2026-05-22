@@ -9,7 +9,6 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import nearest_32
-from models.tt_transformers.tt.multimodal.tensor_utils import from_torch_host_to_device
 
 
 class TtLlamaTilePositionEmbedding(LightweightModule):
@@ -46,7 +45,7 @@ class TtLlamaTilePositionEmbedding(LightweightModule):
         embedding = state_dict[f"{state_dict_prefix}embedding"]
 
         padded_embeddings, self.ar_mapping = self.generate_padded_embeddings(embedding, num_tiles, width)
-        self.padded_embeddings = from_torch_host_to_device(
+        self.padded_embeddings = ttnn.as_tensor(
             padded_embeddings,
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
@@ -57,7 +56,7 @@ class TtLlamaTilePositionEmbedding(LightweightModule):
 
         if self.gated:
             gate = state_dict[f"{state_dict_prefix}gate"]
-            self.gate = from_torch_host_to_device(
+            self.gate = ttnn.as_tensor(
                 gate,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,

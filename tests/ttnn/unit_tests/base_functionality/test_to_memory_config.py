@@ -8,7 +8,7 @@ import torch
 import ttnn
 import math
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
+from tests.ttnn.utils_for_testing import assert_equal, assert_allclose
 
 pytestmark = pytest.mark.use_module_device
 
@@ -26,6 +26,21 @@ def test_to_memory_config(shape, layout, dtype, device):
 
     input_b = torch.zeros(shape, dtype=torch_dtype)
     input_b = ttnn.from_torch(input_b, dtype, layout=layout, device=device)
+
+    ttnn.to_memory_config(input, input_b.memory_config(), output_tensor=input_b)
+    assert input_b.shape == input.shape
+    assert_equal(ttnn.to_torch(input), ttnn.to_torch(input_b))
+
+
+@pytest.mark.parametrize("shape", [[1, 1, 32, 256], [64, 64], [9, 32, 768], [128]])
+def test_to_memory_config_uint16(shape, device):
+    torch.manual_seed(2005)
+
+    input = torch.randint(1, 100, shape, dtype=torch.int16)
+    input = ttnn.from_torch(input, ttnn.uint16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    input_b = torch.zeros(shape, dtype=torch.int16)
+    input_b = ttnn.from_torch(input_b, ttnn.uint16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
     ttnn.to_memory_config(input, input_b.memory_config(), output_tensor=input_b)
     assert input_b.shape == input.shape
@@ -210,6 +225,29 @@ def test_to_memory_config_width_sharded_unaligned_shard_width(device):
     output_torch = torch.zeros(shape)
     ttnn_input = ttnn.from_torch(input_torch, ttnn.bfloat16, layout=ttnn.Layout.ROW_MAJOR)
     ttnn_output = ttnn.from_torch(output_torch, ttnn.bfloat16, layout=ttnn.Layout.ROW_MAJOR)
+
+    num_cores = 4
+    shard_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))])
+    shard_shape = (64, 25)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    input_tensor = ttnn.to_device(ttnn_input, device, memory_config=mem_config)
+    output_tensor = ttnn.to_device(ttnn_output, device, memory_config=mem_config)
+
+    ttnn.to_memory_config(input_tensor, output_tensor.memory_config(), output_tensor=output_tensor)
+    input_result = ttnn.to_torch(input_tensor)
+    output_result = ttnn.to_torch(output_tensor)
+    assert_equal(input_result, output_result)
+
+
+def test_to_memory_config_width_sharded_unaligned_shard_width_uint16(device):
+    torch.manual_seed(1234)
+    shape = [1, 1, 64, 100]
+    input_torch = torch.randint(0, 100, shape, dtype=torch.int16)
+    output_torch = torch.zeros(shape, dtype=torch.int16)
+    ttnn_input = ttnn.from_torch(input_torch, ttnn.uint16, layout=ttnn.Layout.ROW_MAJOR)
+    ttnn_output = ttnn.from_torch(output_torch, ttnn.uint16, layout=ttnn.Layout.ROW_MAJOR)
 
     num_cores = 4
     shard_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))])
@@ -1058,7 +1096,10 @@ def test_to_memory_config_tilized_interleaved_to_nd_sharded_dtype_conversion(
     check_mem_config(output_tensor, sharded_memory_config, is_nd_sharded=True)
 
     output_torch = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_input, output_torch, pcc=pcc)
+    if input_dtype == ttnn.bfloat8_b or output_dtype == ttnn.bfloat8_b:
+        assert_allclose(torch_input, output_torch, rtol=0.05, atol=0.025)
+    else:
+        assert_equal(torch_input, output_torch)
 
 
 # ---------------------------------------------------------------------------
@@ -1194,7 +1235,10 @@ def test_to_memory_config_tilized_interleaved_to_nd_sharded_dram_dtype_conversio
     check_mem_config(output_tensor, sharded_memory_config, is_nd_sharded=True)
 
     output_torch = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_input, output_torch, pcc=pcc)
+    if input_dtype == ttnn.bfloat8_b or output_dtype == ttnn.bfloat8_b:
+        assert_allclose(torch_input, output_torch, rtol=0.05, atol=0.025)
+    else:
+        assert_equal(torch_input, output_torch)
 
 
 # ---------------------------------------------------------------------------
@@ -2246,7 +2290,10 @@ def test_to_memory_config_tilized_nd_sharded_to_interleaved_dtype_conversion(
     assert not output_tensor.is_sharded(), "Output tensor should be interleaved, not sharded"
     assert output_tensor.dtype == output_dtype, f"Expected dtype {output_dtype}, got {output_tensor.dtype}"
     output_torch = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_input, output_torch, pcc=pcc)
+    if input_dtype == ttnn.bfloat8_b or output_dtype == ttnn.bfloat8_b:
+        assert_allclose(torch_input, output_torch, rtol=0.05, atol=0.025)
+    else:
+        assert_equal(torch_input, output_torch)
 
 
 # ---------------------------------------------------------------------------
@@ -2409,7 +2456,10 @@ def test_to_memory_config_tilized_legacy_2d_sharded_to_interleaved_dtype_convers
     assert not output_tensor.is_sharded(), "Output tensor should be interleaved, not sharded"
     assert output_tensor.dtype == output_dtype, f"Expected dtype {output_dtype}, got {output_tensor.dtype}"
     output_torch = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_input, output_torch, pcc=pcc)
+    if input_dtype == ttnn.bfloat8_b or output_dtype == ttnn.bfloat8_b:
+        assert_allclose(torch_input, output_torch, rtol=0.05, atol=0.025)
+    else:
+        assert_equal(torch_input, output_torch)
 
 
 @pytest.mark.parametrize(
@@ -2574,7 +2624,7 @@ def test_to_memory_config_tile_interleaved_to_width_sharded_bf8(device):
     output_tensor = ttnn.to_memory_config(input_tensor, memory_config=output_mem_config)
 
     output_torch = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_input, output_torch, 0.9999)
+    assert_allclose(torch_input, output_torch, rtol=0.05, atol=0.025)
 
 
 @pytest.mark.parametrize(

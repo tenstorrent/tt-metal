@@ -25,7 +25,8 @@ Run Quasar emulator regression tests defined in a YAML file.
 
 Required environment variables:
   TT_METAL_SIMULATOR_BASE   Base path containing simulator build directories
-                           (e.g. the parent of emu-quasar-1x3/, emu-quasar-2x3/)
+                           (e.g. the parent of emu-quasar-1x3/, emu-quasar-2x3/,
+                           emu-quasar-2x3_DISPATCH/)
                            The script sets TT_METAL_SIMULATOR per test automatically.
                            If TT_METAL_SIMULATOR is already set, the base is
                            derived automatically (one directory up).
@@ -33,14 +34,14 @@ Required environment variables:
   NNG_SOCKET_LOCAL_PORT    NNG local port
 
 Options:
-  --build                 Run build_metal.sh --build-tests before testing
-  --config <1x3|2x3>      Only run tests for the specified configuration
-  --group <name>          Only run tests from the specified test group
-  --tests <path>          Path to YAML test file (default: quasar_regression_tests.yaml)
-  --build-dir <path>      Path to build directory (default: $BUILD_DIR)
-  --log-dir <path>        Save per-test gtest JSON results to this directory
-  --dry-run               Print commands without executing
-  -h, --help              Show this help message
+  --build                          Run build_metal.sh --build-tests before testing
+  --config <1x3|2x3|2x3_DISPATCH>  Only run tests for the specified configuration
+  --group <name>                   Only run tests from the specified test group
+  --tests <path>                   Path to YAML test file (default: quasar_regression_tests.yaml)
+  --build-dir <path>               Path to build directory (default: $BUILD_DIR)
+  --log-dir <path>                 Save per-test gtest JSON results to this directory
+  --dry-run                        Print commands without executing
+  -h, --help                       Show this help message
 EOF
     exit 0
 }
@@ -60,8 +61,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ -n "$FILTER_CONFIG" && "$FILTER_CONFIG" != "1x3" && "$FILTER_CONFIG" != "2x3" ]]; then
-    echo "ERROR: invalid --config value '$FILTER_CONFIG'. Supported: 1x3, 2x3"
+if [[ -n "$FILTER_CONFIG" && "$FILTER_CONFIG" != "1x3" && "$FILTER_CONFIG" != "2x3" && "$FILTER_CONFIG" != "2x3_DISPATCH" ]]; then
+    echo "ERROR: invalid --config value '$FILTER_CONFIG'. Supported: 1x3, 2x3, 2x3_DISPATCH"
     exit 1
 fi
 
@@ -133,7 +134,7 @@ skipped=0
 declare -a results=()
 
 # Load tests from YAML into an array (single-pass read via yq)
-VALID_CONFIGS=("1x3" "2x3")
+VALID_CONFIGS=("1x3" "2x3" "2x3_DISPATCH")
 
 is_valid_config() {
     local cfg="$1"
@@ -145,14 +146,19 @@ is_valid_config() {
 
 SEP=$'\x1f'
 declare -a test_entries=()
-while IFS=$'\t' read -r group filter config envvars; do
+while IFS=$'\t' read -r group filter configs envvars; do
     [[ -z "$group" ]] && continue
-    if ! is_valid_config "$config"; then
-        echo "ERROR: invalid config '$config' for test '$filter' in group '$group'"
-        echo "       Supported configs: ${VALID_CONFIGS[*]}"
-        exit 1
-    fi
-    test_entries+=("${group}${SEP}${filter}${SEP}${config}${SEP}${envvars}")
+    # Split comma-separated configs and create one entry per config
+    IFS=',' read -ra config_list <<< "$configs"
+    for config in "${config_list[@]}"; do
+        config="$(echo "$config" | xargs)"  # trim whitespace
+        if ! is_valid_config "$config"; then
+            echo "ERROR: invalid config '$config' for test '$filter' in group '$group'"
+            echo "       Supported configs: ${VALID_CONFIGS[*]}"
+            exit 1
+        fi
+        test_entries+=("${group}${SEP}${filter}${SEP}${config}${SEP}${envvars}")
+    done
 done < <(yq -r 'to_entries[] | .key as $group | .value[] | [$group, .filter, .config, (.env // {} | to_entries | map(.key + "=" + (.value | tostring)) | join("\u001f"))] | @tsv' "$TESTS_FILE")
 
 total_tests=${#test_entries[@]}
@@ -267,7 +273,8 @@ for entry in "${test_entries[@]}"; do
             if [[ "$line" == *. ]]; then
                 suite="$line"
             else
-                test="$(echo "$line" | xargs)"
+                # Drop gtest's "# GetParam() = ..." suffix from parameterized tests
+                test="$(echo "$line" | sed 's/[[:space:]]*# GetParam().*//' | xargs)"
                 if [[ -n "$full_name" ]]; then
                     full_name="${full_name}__${test}"
                 else

@@ -9,8 +9,6 @@
 
 namespace tt::tt_metal {
 
-MeshTensor::MeshTensor() = default;
-
 MeshTensor::MeshTensor(MeshTensor&& other) noexcept = default;
 
 MeshTensor& MeshTensor::operator=(MeshTensor&& other) noexcept = default;
@@ -21,12 +19,12 @@ MeshTensor::MeshTensor(std::shared_ptr<distributed::MeshBuffer> mesh_buffer, Ten
 MeshTensor::~MeshTensor() = default;
 
 MeshTensorImpl& MeshTensor::impl() {
-    TT_FATAL(impl_ != nullptr, "MeshTensor is in default constructed state.");
+    TT_FATAL(impl_ != nullptr, "MeshTensor is in a moved-from state.");
     return *impl_;
 }
 
 const MeshTensorImpl& MeshTensor::impl() const {
-    TT_FATAL(impl_ != nullptr, "MeshTensor is in default constructed state.");
+    TT_FATAL(impl_ != nullptr, "MeshTensor is in a moved-from state.");
     return *impl_;
 }
 
@@ -36,13 +34,15 @@ std::shared_ptr<distributed::MeshBuffer> MeshTensor::mesh_buffer_invariant_break
     return impl().raw_mesh_buffer();
 }
 
-distributed::MeshDevice& MeshTensor::device() const { return *mesh_buffer().device(); }
+const distributed::MeshDevice& MeshTensor::device() const { return device_mut(); }
 
-bool MeshTensor::is_initialized() const { return impl_ != nullptr; }
+distributed::MeshDevice& MeshTensor::device_mut() const { return *mesh_buffer().device(); }
 
 const TensorSpec& MeshTensor::tensor_spec() const { return impl().spec(); }
 
 const TensorTopology& MeshTensor::tensor_topology() const { return impl().topology(); }
+
+bool MeshTensor::is_valueless_after_move() const { return impl_ == nullptr; }
 
 DeviceAddr MeshTensor::address() const { return mesh_buffer().address(); }
 
@@ -62,7 +62,7 @@ const MemoryConfig& MeshTensor::memory_config() const { return tensor_spec().mem
 
 bool MeshTensor::is_sharded() const { return memory_config().is_sharded(); }
 
-const std::optional<ShardSpec>& MeshTensor::legacy_shard_spec() const { return memory_config().shard_spec(); }
+const std::optional<ShardSpec>& MeshTensor::shard_spec() const { return memory_config().shard_spec(); }
 
 const std::optional<NdShardSpec>& MeshTensor::nd_shard_spec() const { return memory_config().nd_shard_spec(); }
 

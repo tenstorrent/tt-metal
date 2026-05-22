@@ -21,7 +21,7 @@ from helpers.llk_params import (
 )
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator_v2 import generate_stimuli_v2
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
@@ -41,11 +41,17 @@ from helpers.utils import passed_test
     formats=input_output_formats(
         [
             DataFormat.Float16_b,
+            DataFormat.MxFp4,
         ],
     ),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     dest_sync=[DestSync.Full, DestSync.Half],
-    implied_math_format=[ImpliedMathFormat.No],
+    # MX formats require implied_math_format=Yes on Quasar (bypass format inference pipeline).
+    implied_math_format=lambda formats: (
+        [ImpliedMathFormat.No]
+        if not formats.input_format.is_mx_format()
+        else [ImpliedMathFormat.Yes]
+    ),
 )
 def test_semaphore_sync_quasar(
     formats,
@@ -61,7 +67,7 @@ def test_semaphore_sync_quasar(
 
     input_dimensions = [64, 64]
 
-    src_A, tile_cnt, _, _ = generate_stimuli(
+    src_A, tile_cnt, _, _ = generate_stimuli_v2(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -73,7 +79,13 @@ def test_semaphore_sync_quasar(
 
     generate_golden = get_golden_generator(ReduceGapoolGolden)
     golden_tensor = generate_golden(
-        src_A, src_B, formats.output_format, reduce_dim, math_fidelity, tile_cnt
+        src_A,
+        src_B,
+        formats.output_format,
+        reduce_dim,
+        math_fidelity,
+        tile_cnt,
+        input_format=formats.input_format,
     )
 
     configuration = TestConfig(
@@ -105,6 +117,11 @@ def test_semaphore_sync_quasar(
             formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
         ),
         dest_acc=dest_acc,
+        # MX formats require disable_format_inference to match C++ IMPLIED_MATH_FORMAT setting.
+        disable_format_inference=(
+            implied_math_format == ImpliedMathFormat.Yes
+            and formats.input_format.is_mx_format()
+        ),
     )
 
     res_from_L1 = configuration.run().result

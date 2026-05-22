@@ -1,10 +1,12 @@
+include(sources.cmake)
+
 add_library(ttnn_op_eltwise_ternary_backward ${LIB_TYPE})
 add_library(TTNN::Ops::Eltwise::Ternary::Backward ALIAS ttnn_op_eltwise_ternary_backward)
 
 tt_reuse_precompile_headers(ttnn_op_eltwise_ternary_backward TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_eltwise_ternary_backward)
 
-target_sources(ttnn_op_eltwise_ternary_backward PRIVATE ternary_backward.cpp)
+target_sources(ttnn_op_eltwise_ternary_backward PRIVATE ${TTNN_OP_ELTWISE_TERNARY_BACKWARD_SRCS})
 
 target_include_directories(ttnn_op_eltwise_ternary_backward PRIVATE ${FixmeOpIncDirs})
 target_link_libraries(

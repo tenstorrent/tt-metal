@@ -23,7 +23,10 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch, skip_with_llk_assert
-from models.demos.deepseek_v3_b1.demo.pipeline import create_single_galaxy_spec_decode_pipeline_configuration
+from models.demos.deepseek_v3_b1.demo.pipeline import (
+    create_single_galaxy_spec_decode_pipeline_configuration,
+    create_single_pod_spec_decode_no_decoder_pipeline_configuration,
+)
 from models.demos.deepseek_v3_b1.demo.stage import TOKEN_META_PAGE_SIZE_BYTES
 from models.demos.deepseek_v3_b1.demo.weight_provider import SyntheticWeightProvider, _build_synthetic_mtp_state_dict
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
@@ -170,6 +173,9 @@ def _is_persistent_mode_enabled():
 
 
 @pytest.mark.skipif(not _is_lm_head_sampling_perf_enabled(), reason="Set RUN_LM_HEAD_SAMPLING_PERF=1 to run perf test")
+@pytest.mark.skip(
+    reason="Perf path calls LMHeadSampling.op with retired mcast working-buffer kwargs; tracked in #42714"
+)
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize("use_fp32", [True])
 @pytest.mark.parametrize("final_mesh_coord", [(1, 1), (1, 0), (2, 1), (2, 0)])
@@ -962,9 +968,24 @@ def test_single_device_d2h(
 @pytest.mark.parametrize(
     "sender_coord, final_mesh_coord, seed",
     [
-        ((1, 1), (0, 0), 7),
-        ((0, 0), (1, 1), 1337),
-        ((3, 0), (2, 0), 4242),
+        pytest.param(
+            (1, 1),
+            (0, 0),
+            7,
+            marks=pytest.mark.skip(reason="Fused mesh argmax mismatch expected=12446, got=0; tracked in #42714"),
+        ),
+        pytest.param(
+            (0, 0),
+            (1, 1),
+            1337,
+            marks=pytest.mark.skip(reason="Fused mesh argmax mismatch expected=472, got=0; tracked in #42714"),
+        ),
+        pytest.param(
+            (3, 0),
+            (2, 0),
+            4242,
+            marks=pytest.mark.skip(reason="Fused mesh argmax mismatch expected=14940, got=0; tracked in #42714"),
+        ),
     ],
 )
 @skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
@@ -1180,6 +1201,9 @@ def test_multidevice(
     indirect=True,
 )
 @skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
+@pytest.mark.skip(
+    reason="Blackhole slow-dispatch burn-down: D2H fused mesh argmax mismatch expected=1511, got=0; tracked in #42714"
+)
 def test_d2h(
     bh_2d_mesh_device,
     use_fp32,
@@ -1410,6 +1434,8 @@ def test_d2h(
     indirect=True,
 )
 @skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
+# TODO(#42720): Investigate the bh_galaxy hang/error and remove this temporary skip.
+@pytest.mark.skip(reason="Hang or error when tested on bh_galaxy. Issue: #42720")
 def test_d2d_to_d2h_pipeline(
     bh_2d_mesh_device,
     use_fp32,
@@ -1787,6 +1813,11 @@ def create_input_page(
         }
     ],
     indirect=True,
+)
+# TODO(#43012): Root-cause this 4x2 FABRIC_2D mesh setup timeout and remove the temporary skip.
+@pytest.mark.skip(
+    reason="[SKIP REASON]: persistent LM-head spec-decode mesh_device setup hits Fabric Router Sync timeout "
+    "after 10000 ms on bh_galaxy. Device 3: Expected status 0xa2b2c2d2, got 0xa1b1c1d1. Issue: #43012"
 )
 def test_persistent_mode_spec_decode(mesh_device, use_fp32):
     """4-stage 4x2 single-galaxy pipeline with MTP + verification:

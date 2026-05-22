@@ -87,10 +87,12 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
     }
 
     if (operation_attributes.output_mem_config.nd_shard_spec().has_value()) {
-        const auto& output_nd_shard_spec = *operation_attributes.output_mem_config.nd_shard_spec();
+        const auto out_spec = compute_output_specs(operation_attributes, tensor_args);
+        const auto& output_nd_shard_spec = *out_spec.memory_config().nd_shard_spec();
         const auto& output_shard_grid = output_nd_shard_spec.grid;
-        const uint32_t output_tile_height = tensor_args.tensor_spec().tile().get_height();
-        const uint32_t output_tile_width = tensor_args.tensor_spec().tile().get_width();
+        const uint32_t output_tile_height = out_spec.tile().get_height();
+        const uint32_t output_tile_width = out_spec.tile().get_width();
+
         TT_FATAL(
             program_grid.contains(output_shard_grid),
             "Output shard grid {} must be contained in program core grid {}",

@@ -21,7 +21,7 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli_w_tile_dimensions
+from helpers.stimuli_generator_v2 import generate_stimuli_v2
 from helpers.test_config import BootMode, TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
@@ -145,7 +145,7 @@ def test_pack_l1_acc_quasar(
         BlocksCalculationAlgorithm.Standard,
     )
 
-    src_A, _, src_B, _ = generate_stimuli_w_tile_dimensions(
+    src_A, _, src_B, _ = generate_stimuli_v2(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,

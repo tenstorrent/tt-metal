@@ -9,9 +9,12 @@ import numpy as np
 import pytest
 import torch
 from loguru import logger
+from PIL import Image
 
 import ttnn
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
+from models.tt_dit.pipelines.wan.quant_config import QuantConfig, set_quant_config
+from models.tt_dit.tests.dataset_eval.clip_encoder import CLIPEncoder
 
 from ....utils.test import line_params, ring_params
 
@@ -21,19 +24,21 @@ from ....utils.test import line_params, ring_params
     [{"1": True, "0": False}.get(os.environ.get("NO_PROMPT"), False)],
 )
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp, quant_config_name",
     [
-        [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True],
-        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
+        [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True, None],
+        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True, None],
         # BH on 2x4
-        [(2, 4), (2, 4), 1, 0, 2, True, line_params, ttnn.Topology.Linear, False],
+        [(2, 4), (2, 4), 1, 0, 2, True, line_params, ttnn.Topology.Linear, False, None],
         # WH (ring) on 4x8
-        [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
+        [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True, None],
         # BH (linear) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
+        [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False, None],
         # BH (ring) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
-        [(4, 32), (4, 32), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
+        [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False, None],
+        [(4, 32), (4, 32), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False, None],
+        # FSDP on 2x4 with bf8 weights+activations, LoFi linear, bf8 HiFi2 SDPA
+        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True, "all_bf8_lofi"],
     ],
     ids=[
         "2x2sp0tp1",
@@ -43,6 +48,7 @@ from ....utils.test import line_params, ring_params
         "bh_4x8sp1tp0_linear",
         "bh_4x8sp1tp0_ring",
         "bh_4x32sp1tp0",
+        "2x4sp0tp1_bf8_lofi",
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -68,6 +74,7 @@ def test_pipeline_inference(
     width,
     height,
     is_fsdp,
+    quant_config_name,
     no_prompt,
 ):
     parent_mesh = mesh_device
@@ -89,6 +96,10 @@ def test_pipeline_inference(
         width=width,
         num_frames=num_frames,
     )
+
+    if quant_config_name is not None:
+        qc = getattr(QuantConfig, quant_config_name)()
+        set_quant_config(pipeline, qc)
 
     prompt = "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."
 
@@ -137,8 +148,37 @@ def test_pipeline_inference(
         else:
             logger.info(f"Skipping video export on rank {ttnn.distributed_context_get_rank()}")
 
+        return frames
+
+    def check_output_with_clip(prompt, frames, clip_threshold=36.0):
+        if int(ttnn.distributed_context_get_rank()) == 0:
+            # Sample ~8 evenly-spaced frames from the video
+            total_frames = frames.shape[0]
+            indices = np.linspace(0, total_frames - 1, min(8, total_frames), dtype=int)
+            sampled = [frames[i] for i in indices]
+
+            clip_encoder = CLIPEncoder()
+            scores = []
+            for frame_data in sampled:
+                if isinstance(frame_data, torch.Tensor):
+                    frame_data = frame_data.numpy()
+                pil_img = Image.fromarray(frame_data.astype(np.uint8))
+                score = clip_encoder.get_clip_score(prompt, pil_img).item() * 100.0
+                scores.append(score)
+
+            clip_min = min(scores)
+            clip_max = max(scores)
+            clip_mean = sum(scores) / len(scores)
+            logger.info(f"CLIP scores: min={clip_min:.2f}, max={clip_max:.2f}, mean={clip_mean:.2f}")
+
+            assert clip_mean >= clip_threshold, (
+                f"Mean CLIP score {clip_mean:.2f} is below threshold {clip_threshold:.2f}. "
+                f"Per-frame scores: {[f'{s:.2f}' for s in scores]}"
+            )
+
     if no_prompt:
-        run(prompt=prompt, number=0, seed=42)
+        frames = run(prompt=prompt, number=0, seed=42)
+        check_output_with_clip(prompt, frames)
     else:
         for i in itertools.count():
             new_prompt = input("Enter the input prompt, or q to exit: ")
@@ -146,4 +186,5 @@ def test_pipeline_inference(
                 prompt = new_prompt
             if prompt[0] == "q":
                 break
-            run(prompt=prompt, number=i, seed=i)
+            frames = run(prompt=prompt, number=i, seed=i)
+            check_output_with_clip(prompt, frames)

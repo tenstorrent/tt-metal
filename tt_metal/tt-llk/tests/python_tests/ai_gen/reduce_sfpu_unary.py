@@ -35,7 +35,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import input_output_formats
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator_v2 import generate_stimuli_v2
 from helpers.test_config import ProfilerBuild, run_test
 from helpers.tilize_untilize import untilize
 from helpers.utils import passed_test
@@ -147,10 +147,11 @@ def test_reduce_sfpu_unary(config):
 
     # --------------------- Generate input stimuli -------------------------
     input_dimensions = [32, 32]
-    src_A, src_B, tile_cnt = generate_stimuli(
-        fmt.input_format,
-        fmt.input_format,
-        input_dimensions=input_dimensions,
+    src_A, tile_cnt, src_B, _ = generate_stimuli_v2(
+        stimuli_format_A=fmt.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=fmt.input_format,
+        input_dimensions_B=input_dimensions,
     )
 
     # For Reduce-sum we don't need src_B but unpack_AB expects two operands –

@@ -24,11 +24,6 @@
 #include "lltt.h"
 #endif
 
-// compiler hints
-#define LIKELY(condition)   __builtin_expect(static_cast<bool>(condition), 1)
-#define UNLIKELY(condition) __builtin_expect(static_cast<bool>(condition), 0)
-#define UNREACHABLE()       __builtin_unreachable()
-
 #define UNROLL_LOOP(factor) GCC unroll factor
 
 #ifndef EN_DEST_DOUBLE_BUFFERING
@@ -590,9 +585,6 @@ inline void record_kernel_runtime(std::uint64_t kernel_runtime)
     debug_mailbox_base[mailbox_end - 2] = (kernel_runtime >> 32) & 0xffff;
     debug_mailbox_base[mailbox_end - 1] = (kernel_runtime >> 48) & 0xffff;
 }
-
-void debug_dump(const std::uint8_t *data, std::uint32_t byte_size);
-void debug_dump_seek(std::uint8_t offset);
 
 // If the TRACK_x bit is set, then the Tensix hardware will automatically
 // stall TRISC memory accesses and/or Tensix instructions to x in order

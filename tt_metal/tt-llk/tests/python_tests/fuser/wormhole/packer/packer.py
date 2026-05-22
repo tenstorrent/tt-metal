@@ -11,8 +11,7 @@ from fuser.fused_math import ComputeNode
 from fuser.fused_operation import FusedOperation
 from fuser.fused_packer import Packer as BasePacker
 from fuser.fuser_config import GlobalConfig
-from helpers.golden_generators import PackGolden
-from helpers.llk_params import PackerReluType
+from helpers.llk_params import L1Accumulation, PackerReluType
 
 
 class Packer(BasePacker):
@@ -31,11 +30,11 @@ class Packer(BasePacker):
         config: GlobalConfig,
     ) -> torch.Tensor:
         if operation.pack_relu != PackerReluType.NoRelu:
-            intermediate_format = config.sentinel.golden_format.pack_src
-            relu_config = PackGolden.generate_relu_config(
-                operation.pack_relu, operation.relu_threshold, intermediate_format
-            )
-            tensor = PackGolden.apply_relu(tensor, relu_config, intermediate_format)
+            tensor = self._relu_golden(tensor, operation, config)
+
+        if operation.pack_l1_accumulation == L1Accumulation.Yes:
+            tensor = self._l1_acc_golden(tensor, operation, config)
+
         return tensor
 
     def init(
@@ -50,10 +49,10 @@ class Packer(BasePacker):
         num_faces = operation.output.tile_shape.total_num_faces()
         dest_sync = f"DstSync::Sync{operation.dest_sync.name}"
         return (
-            f"    _llk_pack_init_<false, false>(\n"
+            f"    _llk_pack_init_<PackMode::Default, false /* zero_output */>(\n"
             f"        {config.sentinel.pack_dst_format}, {face_r_dim}, {num_faces}\n"
             f"    );\n"
-            f"    _llk_pack_dest_init_<{dest_sync}, {dest_acc}, false>();\n"
+            f"    _llk_pack_dest_init_<{dest_sync}, {dest_acc}, PackMode::Default>();\n"
         )
 
     def pack(
@@ -66,4 +65,4 @@ class Packer(BasePacker):
         dest_acc = config.dest_acc.cpp_enum_value
         dest_sync = f"DstSync::Sync{operation.dest_sync.name}"
         buffer = operation.output.cpp_name
-        return f"_llk_pack_<{dest_sync}, {dest_acc}, false>({block.tile_id_block}, L1_ADDRESS({buffer}[{block.tile_id_global}]));\n"
+        return f"_llk_pack_<{dest_sync}, {dest_acc}, ckernel::PackMode::Default>({block.tile_id_block}, L1_ADDRESS({buffer}[{block.tile_id_global}]));\n"

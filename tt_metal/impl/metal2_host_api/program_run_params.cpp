@@ -210,12 +210,25 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
             kernel_params.named_common_runtime_args.size());
     }
 
-    // Validate that all registered kernels have parameters
+    // Validate that all registered kernels with a non-empty RTA/CRTA schema have parameters.
+    // Kernels whose schema declares no named RTAs, no named CRTAs, no vararg RTAs, and no
+    // vararg CRTAs have nothing to supply per enqueue and do not need a kernel_run_params entry.
     std::vector<KernelSpecName> registered_names = program_impl.get_registered_kernel_names();
     for (const KernelSpecName& name : registered_names) {
+        if (kernels_with_params.contains(name)) {
+            continue;
+        }
+        const KernelRTASchema* schema = program_impl.get_kernel_rta_schema(name);
+        if (schema == nullptr) {
+            continue;
+        }
+        const bool has_anything_to_supply =
+            !schema->named_runtime_args.empty() || !schema->named_common_runtime_args.empty() ||
+            !schema->num_runtime_varargs_per_node.empty() || schema->num_common_runtime_varargs > 0;
         TT_FATAL(
-            kernels_with_params.contains(name),
-            "Kernel '{}' is registered in the Program but has no runtime parameters specified in ProgramRunParams",
+            !has_anything_to_supply,
+            "Kernel '{}' is registered in the Program with a non-empty RTA/CRTA schema but has no "
+            "runtime parameters specified in ProgramRunParams",
             name);
     }
 
@@ -233,10 +246,86 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
     }
 
     // Unlike kernels, DFBs don't require DFBRunParams.
-    // It is only required for DFBs built on borrowed memory. (Which is not yet supported.)
+    // (Borrowed-memory DFBs don't need a DFBRunParams entry either — they identify their backing
+    // MeshTensor by name via DataflowBufferSpec::borrowed_from, and the tensor flows through
+    // tensor_args.)
 
     // Validate tensor runtime parameters (delegated to shared helper).
     ValidateTensorArgs(program, params.tensor_args);
+}
+
+// Attach the actual L1 Buffer to every borrowed-memory DFB, by resolving each DFB's named
+// TensorParameter to the corresponding MeshTensor passed in tensor_args and extracting its
+// MeshBuffer's reference buffer. Under the lockstep mesh allocation invariant, any one of the
+// per-device buffers is a valid representative — same convention used by dynamic CB via
+// `MeshTensor::mesh_buffer().get_reference_buffer()`.
+//
+// How this works:
+//   - The ProgramSpec declares that the DFB borrows from a named TensorParameter.
+//   - At each runtime attach point (this function) we extract the Buffer from the bound
+//     MeshTensor, validate it, and hand it to the device-side DFB.
+//   - Re-entry (a subsequent run-params call with a different MeshTensor) just re-attaches.
+//
+// Pre-condition: ValidateTensorArgs has enforced that every declared TensorParameter
+// has a corresponding TensorArg, so the lookup below cannot miss for any registered binding.
+void AttachBorrowedDFBBuffers(
+    detail::ProgramImpl& program_impl, std::span<const ProgramRunParams::TensorArg> tensor_args) {
+    const auto& borrowed_bindings = program_impl.get_dfb_borrowed_bindings();
+    if (borrowed_bindings.empty()) {
+        return;
+    }
+
+    std::unordered_map<std::string, const MeshTensor*> tensor_by_param;
+    tensor_by_param.reserve(tensor_args.size());
+    for (const auto& tensor_params : tensor_args) {
+        tensor_by_param.emplace(tensor_params.tensor_parameter_name, &tensor_params.tensor.get());
+    }
+
+    for (const auto& [dfb_id, tp_name] : borrowed_bindings) {
+        auto it = tensor_by_param.find(tp_name);
+        TT_FATAL(
+            it != tensor_by_param.end(),
+            "Internal error: DFB id {} borrows from TensorParameter '{}' but no TensorArg supplied it (validation "
+            "should have caught this).",
+            dfb_id,
+            tp_name);
+        const MeshTensor& tensor = *it->second;
+        const tt::tt_metal::Buffer* buffer = tensor.mesh_buffer().get_reference_buffer();
+
+        // Attach-time legality checks (analogous to dynamic CB's
+        // CircularBufferConfig::set_globally_allocated_address_and_total_size validations).
+        //   - L1-residency: only L1 buffers may back a DFB.
+        //   - Sizing: the DFB's total bytes must fit in the buffer's per-bank allocation.
+        // ProgramSpec-time validation already enforced the TensorSpec-level analogs; these
+        // refine the check now that a concrete Buffer is in hand.
+        TT_FATAL(
+            buffer->is_l1(),
+            "Borrowed-memory DFB id {} (from TensorParameter '{}') requires an L1-resident backing memory.",
+            dfb_id,
+            tp_name);
+        auto dfb_impl = program_impl.get_dataflow_buffer(dfb_id);
+        const uint32_t dfb_total_bytes = dfb_impl->config.entry_size * dfb_impl->config.num_entries;
+        TT_FATAL(
+            dfb_total_bytes <= buffer->aligned_size_per_bank(),
+            "Borrowed-memory DFB id {} (from TensorParameter '{}') has total size {} B, which exceeds the borrowed "
+            "Buffer's per-bank size of {} B.",
+            dfb_id,
+            tp_name,
+            dfb_total_bytes,
+            buffer->aligned_size_per_bank());
+
+        // Attach the address to the device-side DFB. Per-enqueue update_program_dispatch_commands
+        // reads from the cache this populates, so no further dispatch-command invalidation is
+        // needed for either first-call or re-entry.
+        const auto address = buffer->address();
+        TT_FATAL(
+            address <= std::numeric_limits<uint32_t>::max(),
+            "Borrowed Buffer base address {} for DFB id {} (TensorParameter '{}') exceeds uint32_t max.",
+            address,
+            dfb_id,
+            tp_name);
+        dfb_impl->set_borrowed_memory_base_addr(static_cast<uint32_t>(address));
+    }
 }
 
 // ============================================================================
@@ -390,8 +479,10 @@ void SetProgramRunParameters(Program& program, const ProgramRunParams& params) {
         }
     }
 
-    // Process DFB runtime parameters
-    // (Not yet supported)
+    // Process DFB runtime parameters:
+    //   - Borrowed-memory DFB backing L1 Buffer*
+    //   - Later, add DFB size overrides (not yet implemented)
+    AttachBorrowedDFBBuffers(program_impl, params.tensor_args);
 }
 
 void UpdateTensorArgs(Program& program, std::span<const ProgramRunParams::TensorArg> tensor_args) {
@@ -450,6 +541,9 @@ void UpdateTensorArgs(Program& program, std::span<const ProgramRunParams::Tensor
             crta.data()[word_index] = addr_it->second;
         }
     }
+
+    // Process DFB runtime parameters to update borrowed-memory DFB backing L1 Buffer*s.
+    AttachBorrowedDFBBuffers(program_impl, tensor_args);
 }
 
 ProgramRunParamsView& GetProgramRunParamsView(Program& program) {

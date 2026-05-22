@@ -34,6 +34,7 @@ void JitCompileServerController::start(std::string address) {
     }
 
     address_ = std::move(address);
+    jit_compile_service_.set_listen_address(address_);
     should_stop_ = false;
     is_running_ = true;
     server_start_finished_ = false;

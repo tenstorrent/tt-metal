@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_experimental_deepseek_prefill_post_combine_reduce ${LIB_TYPE})
 add_library(
     TTNN::Ops::Experimental::DeepSeekPrefill::PostCombineReduce
@@ -28,9 +30,7 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        device/post_combine_reduce_device_operation.cpp
-        device/post_combine_reduce_program_factory.cpp
-        post_combine_reduce.cpp
+        ${TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_POST_COMBINE_REDUCE_SRCS}
 )
 
 target_include_directories(ttnn_op_experimental_deepseek_prefill_post_combine_reduce PRIVATE ${FixmeOpIncDirs})
