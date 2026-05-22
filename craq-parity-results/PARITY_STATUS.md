@@ -25,7 +25,7 @@ Pre-fix baseline sweep (`run-20260521T021753Z/`) hit mass rc=134 heap aborts; ig
 |------|--------|------|------|---------|-------|
 | Full sweep (57 suites) | `run-20260521T030649Z/` | 24 | 24 | 9 | Post-fix scorecard; Section 1 + LLK stale |
 | Section 1 TTNN (HEAD verify) | `section1-by-commit-20260521T195930Z/` + quick | 2/2 targeted | 0 | 0 | mcq + region_write_read **Verified PASS** |
-| Section 2 T3K re-run | `section2-t3k-20260521T181117Z/` (job 11604) | 15 | 4 | 2 | 21/34 done · **Status:** running (00:58:54Z) |
+| Section 2 T3K re-run | `section2-t3k-20260521T181117Z/` (job 11604) | 15 | 4 | 3 | 22/34 done · **Status:** running (01:59:06Z) |
 | Section 2 fabric-only | job 11609 (pending after 11604) | — | — | — | `PARITY_SECTIONS=2.fabric` on HEAD |
 | Section 2 multiprocess | `mp-run-20260521T155410Z/` | 1 | 9 | 0 | `ttnn_launch_op` **Verified PASS** under tt-run+MPI |
 | Section 4 LLK WH | `llk-smoke-20260521T190458Z/` (job 11576) | 2/2 | 0 | 0 | weekly + nightly **Verified PASS** after venv setup |
@@ -79,7 +79,7 @@ Job 11596 (`section1-by-commit-20260521T195930Z/`), quick verify (`ttnn-sec1-qui
 
 **Dir:** `section2-t3k-20260521T181117Z/`
 **Mock:** `t3k_cluster_desc.yaml` (8-chip WH)
-**Started:** 2026-05-21T21:51:47Z · **Status:** running (00:58:54Z)
+**Started:** 2026-05-21T21:51:47Z · **Status:** running (01:59:06Z)
 
 | Suite | Status | Duration | Key error / note |
 |-------|--------|----------|-------------------|
