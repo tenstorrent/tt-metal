@@ -14,16 +14,18 @@
 #include "api/debug/dprint.h"
 #endif
 
-// Push one dummy input stick and one zeroed scalar stick into their CBs.
+// Push in_nblocks_c dummy input pages and one zeroed scalar page into their CBs.
 // Used for height-sharding padding sticks that have no real grid data:
 // the compute kernel always consumes a fixed number of CB entries per core,
 // so we must push placeholder pages to keep reader and compute in sync.
 // The scalar page is zeroed so the interpolation weight is 0, making the
 // padded output harmless (written to the shard but masked by valid_sticks).
-template <uint32_t scalar_cb_index>
+template <uint32_t scalar_cb_index, uint32_t in_nblocks_c>
 ALWI void push_noop_sticks(Noc noc, experimental::CB input_cb, experimental::CB scalar_cb) {
-    input_cb.reserve_back(1);
-    input_cb.push_back(1);
+    for (uint32_t c_i = 0; c_i < in_nblocks_c; ++c_i) {
+        input_cb.reserve_back(1);
+        input_cb.push_back(1);
+    }
 
     scalar_cb.reserve_back(1);
     zero_out_page(noc, scalar_cb);
@@ -76,12 +78,14 @@ void kernel_main() {
     constexpr uint32_t grid_hw = get_compile_time_arg_val(10);
     constexpr uint32_t use_precomputed_grid = get_compile_time_arg_val(11);
     constexpr bool align_corners = get_compile_time_arg_val(12);
-    constexpr uint32_t split_reader = get_compile_time_arg_val(13);
-    constexpr uint32_t reader_id = get_compile_time_arg_val(14);
-    constexpr uint32_t grid_nsticks_per_core = get_compile_time_arg_val(15);
+    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(13);
+    constexpr uint32_t input_chunk_nbytes = get_compile_time_arg_val(14);
+    constexpr uint32_t split_reader = get_compile_time_arg_val(15);
+    constexpr uint32_t reader_id = get_compile_time_arg_val(16);
+    constexpr uint32_t grid_nsticks_per_core = get_compile_time_arg_val(17);
 
     // Input tensor accessor for remote NOC reads (updated for new arg count)
-    constexpr auto input_tensor_args = TensorAccessorArgs<16>();
+    constexpr auto input_tensor_args = TensorAccessorArgs<18>();
     const auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_addr);
 
     // Calculate starting batch from global grid stick position
@@ -145,13 +149,15 @@ void kernel_main() {
                 input_height,
                 input_width,
                 input_stick_nbytes,
+                in_nblocks_c,
+                input_chunk_nbytes,
                 input_cb_index,
                 scalar_cb_index>(
                 noc, input_cb, scalar_cb, grid_stick_ptr, in_grid_row_idx, input_tensor_accessor, batch_offset);
         } else {
             // Padding stick from height-sharding — push zero-weight data to CBs
             // so the compute kernel receives the expected number of items.
-            push_noop_sticks<scalar_cb_index>(noc, input_cb, scalar_cb);
+            push_noop_sticks<scalar_cb_index, in_nblocks_c>(noc, input_cb, scalar_cb);
         }
 
         // Always advance once after processing

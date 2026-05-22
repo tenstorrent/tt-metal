@@ -98,9 +98,25 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
         .buffer = is_sharded ? grid_tensor.buffer() : nullptr,
     });
 
+    // Resolve compute kernel config early: under fp32_dest_acc_en, half-sync DEST holds only 4
+    // fp32 tiles, so each chunk must shrink to <= 4 tiles. The compute kernel reads the same flag
+    // (ct_arg[37]) and recomputes its own MAX_TILES_PER_REDUCTION accordingly.
+    const auto [resolved_math_fidelity, resolved_math_approx, resolved_fp32_acc, resolved_l1_acc, user_dst_full_sync] =
+        ttnn::get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
+    (void)resolved_l1_acc;  // not consumed in this factory
+    const uint32_t effective_max_tiles_per_reduction = resolved_fp32_acc ? 4U : MAX_TILES_PER_REDUCTION;
+
     const uint32_t in_ntiles_c =
         static_cast<uint32_t>(std::ceil(static_cast<float>(input_shape[-1]) / tt::constants::TILE_WIDTH));
-    const uint32_t input_cb_page_size = in_ntiles_c * tt::constants::TILE_HW * input_tensor.element_size();
+    // When in_ntiles_c exceeds effective_max_tiles_per_reduction the channel dimension is processed
+    // in chunks; the input CB only needs to hold one chunk at a time, keeping the per-core L1
+    // footprint bounded regardless of how wide the input stick is.
+    const uint32_t max_tiles_per_iter = std::min<uint32_t>(in_ntiles_c, effective_max_tiles_per_reduction);
+    const uint32_t in_nblocks_c =
+        static_cast<uint32_t>(std::ceil(static_cast<float>(in_ntiles_c) / effective_max_tiles_per_reduction));
+    const uint32_t input_chunk_nbytes =
+        effective_max_tiles_per_reduction * tt::constants::TILE_WIDTH * input_tensor.element_size();
+    const uint32_t input_cb_page_size = max_tiles_per_iter * tt::constants::TILE_HW * input_tensor.element_size();
     const uint32_t input_cb_index_0 = cb_idx++;
     desc.cbs.push_back(CBDescriptor{
         .total_size = BUFFERING_FACTOR * input_cb_page_size,
@@ -176,25 +192,27 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
 
     // Reader compile-time arguments - shared arguments first, then specific ones
     std::vector<uint32_t> reader_compile_time_args = {
-        input_cb_index_0,                             // ct_arg[0]: input_cb_index_0
-        grid_cb_index,                                // ct_arg[1]: grid_cb_index
-        scalar_cb_index_0,                            // ct_arg[2]: scalar_cb_index_0
-        input_stick_size,                             // ct_arg[3]: input_stick_size
-        grid_stick_size_arg,                          // ct_arg[4]: grid_stick_size
-        input_batch,                                  // ct_arg[5]: input_batch
-        input_height,                                 // ct_arg[6]: input_height
-        input_width,                                  // ct_arg[7]: input_width
-        grid_batching_factor,                         // ct_arg[8]: grid_batching_factor (shared)
-        static_cast<uint32_t>(grid_tensor.dtype()),   // ct_arg[9]: grid_dtype (shared)
-        grid_hw,                                      // ct_arg[10]: grid_hw (shared)
-        use_precomputed_grid ? 1U : 0U,               // ct_arg[11]: use_precomputed_grid (shared)
-        operation_attributes.align_corners ? 1U : 0U  // ct_arg[12]: align_corners (shared)
+        input_cb_index_0,                              // ct_arg[0]: input_cb_index_0
+        grid_cb_index,                                 // ct_arg[1]: grid_cb_index
+        scalar_cb_index_0,                             // ct_arg[2]: scalar_cb_index_0
+        input_stick_size,                              // ct_arg[3]: input_stick_size
+        grid_stick_size_arg,                           // ct_arg[4]: grid_stick_size
+        input_batch,                                   // ct_arg[5]: input_batch
+        input_height,                                  // ct_arg[6]: input_height
+        input_width,                                   // ct_arg[7]: input_width
+        grid_batching_factor,                          // ct_arg[8]: grid_batching_factor (shared)
+        static_cast<uint32_t>(grid_tensor.dtype()),    // ct_arg[9]: grid_dtype (shared)
+        grid_hw,                                       // ct_arg[10]: grid_hw (shared)
+        use_precomputed_grid ? 1U : 0U,                // ct_arg[11]: use_precomputed_grid (shared)
+        operation_attributes.align_corners ? 1U : 0U,  // ct_arg[12]: align_corners (shared)
+        in_nblocks_c,                                  // ct_arg[13]: in_nblocks_c (shared)
+        input_chunk_nbytes                             // ct_arg[14]: input_chunk_nbytes (shared)
     };
 
     if (is_sharded) {
-        reader_compile_time_args.push_back(enable_split_reader ? 1U : 0U);  // ct_arg[13]: enable_split_reader
-        reader_compile_time_args.push_back(0U);  // ct_arg[14]: reader_id (will be set later per reader)
-        reader_compile_time_args.push_back(grid_nsticks_per_core);  // ct_arg[15]: grid_nsticks_per_core
+        reader_compile_time_args.push_back(enable_split_reader ? 1U : 0U);  // ct_arg[15]: enable_split_reader
+        reader_compile_time_args.push_back(0U);  // ct_arg[16]: reader_id (will be set later per reader)
+        reader_compile_time_args.push_back(grid_nsticks_per_core);  // ct_arg[17]: grid_nsticks_per_core
     }
 
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
@@ -211,7 +229,7 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
     KernelDescriptor reader1_desc;
     if (is_sharded) {
         auto reader0_compile_time_args = reader_compile_time_args;
-        reader0_compile_time_args[14] = 0;  // ct_arg[14]: reader_id = 0
+        reader0_compile_time_args[16] = 0;  // ct_arg[16]: reader_id = 0
 
         reader0_desc.kernel_source = reader_kernel_path;
         reader0_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
@@ -226,7 +244,7 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
             auto reader1_compile_time_args = reader_compile_time_args;
             reader1_compile_time_args[0] = input_cb_index_1;   // ct_arg[0]: input_cb_index_1
             reader1_compile_time_args[2] = scalar_cb_index_1;  // ct_arg[2]: scalar_cb_index_1
-            reader1_compile_time_args[14] = 1;                 // ct_arg[14]: reader_id = 1
+            reader1_compile_time_args[16] = 1;                 // ct_arg[16]: reader_id = 1
 
             reader1_desc.kernel_source = reader_kernel_path;
             reader1_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
@@ -254,29 +272,6 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
 
     // Compute kernels
     const uint32_t channels_per_shard = input_shape[-1];
-    const uint32_t in_nblocks_c =
-        static_cast<uint32_t>(std::ceil(static_cast<float>(in_ntiles_c) / MAX_TILES_PER_REDUCTION));
-
-    // Resolve compute kernel config up front so we can validate fp32-accumulation requirements
-    // before each compute kernel is created.
-    const auto
-        [resolved_math_fidelity,
-         resolved_math_approx,
-         resolved_fp32_acc,
-         [[maybe_unused]] resolved_l1_acc,
-         user_dst_full_sync] =
-            ttnn::get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
-
-    // pack_untilize_dest addresses DEST tile indices up to max_tiles_per_iter - 1, where
-    // max_tiles_per_iter = min(in_ntiles_c, MAX_TILES_PER_REDUCTION). DEST capacity depends on
-    // (fp32_dest_acc_en, dst_full_sync_en):
-    //   bf16 half-sync = 8 tiles, fp32 half-sync = 4 tiles,
-    //   bf16 full-sync = 16 tiles, fp32 full-sync = 8 tiles.
-    // With fp32 + half-sync, writing tile indices >= 4 silently wraps and corrupts results once
-    // any core processes more than one output stick. Force full-sync when fp32 acc + in_ntiles_c > 4.
-    const uint32_t max_tiles_per_iter = std::min<uint32_t>(in_ntiles_c, MAX_TILES_PER_REDUCTION);
-    const bool require_full_sync_for_fp32 = resolved_fp32_acc && max_tiles_per_iter > 4;
-    const bool resolved_dst_full_sync = user_dst_full_sync || require_full_sync_for_fp32;
 
     auto pool_defines_map = ttnn::operations::pool::get_defines(ttnn::operations::pool::Pool2DType::AVG_POOL2D);
 
@@ -320,6 +315,7 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
             1,                                 // ct_arg[34]: kernel_h (unused by grid_sample)
             1,                                 // ct_arg[35]: kernel_w (unused by grid_sample)
             0,                                 // ct_arg[36]: indexes_32_bit (unused by grid_sample)
+            resolved_fp32_acc ? 1U : 0U,       // ct_arg[37]: force_max_tiles_per_reduction_4
         };
 
         KernelDescriptor compute_desc;
@@ -331,7 +327,7 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
         compute_desc.config = ComputeConfigDescriptor{
             .math_fidelity = resolved_math_fidelity,
             .fp32_dest_acc_en = resolved_fp32_acc,
-            .dst_full_sync_en = resolved_dst_full_sync,
+            .dst_full_sync_en = user_dst_full_sync,
             .math_approx_mode = resolved_math_approx,
         };
         return compute_desc;

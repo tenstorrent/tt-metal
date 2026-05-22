@@ -141,16 +141,6 @@ void GridSampleOperation::validate_on_program_cache_miss(
         tt::constants::TILE_WIDTH,
         input_tensor.padded_shape()[-1],
         input_tensor.padded_shape());
-    const uint32_t max_tiles_per_reduction = 8;
-    TT_FATAL(
-        input_tensor.padded_shape()[-1] <= tt::constants::TILE_WIDTH * max_tiles_per_reduction,
-        "Wide reduction not supported: input tensor width {} exceeds maximum {} (TILE_WIDTH {} * max_tiles {}), padded "
-        "shape: {}",
-        input_tensor.padded_shape()[-1],
-        tt::constants::TILE_WIDTH * max_tiles_per_reduction,
-        tt::constants::TILE_WIDTH,
-        max_tiles_per_reduction,
-        input_tensor.padded_shape());
 }
 
 TensorSpec GridSampleOperation::compute_output_specs(

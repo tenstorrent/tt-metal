@@ -272,3 +272,62 @@ def test_grid_sample_scaling_patterns(device, input_shape, mode, align_corners, 
 
     pcc_passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch, pcc=0.99)
     logger.info(pcc_message)
+
+
+# Channel widths beyond the 256-element single-reduction limit exercise the reader's chunked
+# (wide-reduction) path: 384 = 12 tiles (partial last chunk + tilize_reconfig), 512 = 16 tiles
+# (two full chunks), 1024 = 32 tiles (four full chunks). With fp32_dest_acc_en=True the host
+# additionally clamps the chunk size to 4 tiles so each chunk fits in fp32 half-sync DEST without
+# forcing dst_full_sync_en.
+@pytest.mark.parametrize(
+    "input_shape, grid_shape",
+    [
+        ((1, 384, 16, 16), (1, 12, 12, 2)),
+        ((1, 512, 16, 16), (1, 12, 12, 2)),
+        ((2, 1024, 8, 8), (2, 6, 6, 2)),
+    ],
+)
+@pytest.mark.parametrize("align_corners", [False, True])
+@pytest.mark.parametrize("grid_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True])
+def test_grid_sample_wide_reduction(device, input_shape, grid_shape, align_corners, grid_dtype, fp32_dest_acc_en):
+    """Channel widths > 256 must route through the chunked reader path, including under fp32 acc."""
+    torch.manual_seed(0)
+
+    batch_size, channels, height, width = input_shape
+    torch_input_nhwc = torch.randn((batch_size, height, width, channels), dtype=torch.bfloat16)
+    torch_grid_f32 = torch.rand(grid_shape, dtype=torch.float32) * 2.0 - 1.0
+
+    golden_grid_dtype = torch.float32 if grid_dtype == ttnn.float32 else torch.bfloat16
+    torch_output_nhwc = golden_grid_sample(
+        input_tensor=torch_input_nhwc,
+        grid=torch_grid_f32.to(golden_grid_dtype),
+        mode="bilinear",
+        padding_mode="zeros",
+        align_corners=align_corners,
+    )
+
+    ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    ttnn_grid = ttnn.from_torch(torch_grid_f32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=grid_dtype)
+
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        packer_l1_acc=False,
+        math_approx_mode=False,
+    )
+
+    ttnn_output = ttnn.grid_sample(
+        ttnn_input,
+        ttnn_grid,
+        mode="bilinear",
+        align_corners=align_corners,
+        compute_kernel_config=compute_kernel_config,
+    )
+    ttnn_output_torch = ttnn.to_torch(ttnn_output)
+
+    atol, rtol = (0.02, 1e-2) if grid_dtype == ttnn.float32 else (1.0, 1e-1)
+    assert torch.allclose(
+        torch_output_nhwc, ttnn_output_torch, atol=atol, rtol=rtol
+    ), f"Wide-reduction test failed (atol={atol}, rtol={rtol})"

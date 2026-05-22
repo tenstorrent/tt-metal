@@ -136,14 +136,20 @@ struct GridCoordinateReader {
     }
 };
 
-// Input data reading template - handles both tensor accessor and direct NOC reads
+// Input data reading template - handles both tensor accessor and direct NOC reads.
+// Reads a single chunk slice of the 4 corner sticks for one grid point.
+// - read_bytes: bytes to copy per corner (chunk width)
+// - write_stride: distance between consecutive corners in the destination CB page
+// - src_byte_offset: byte offset within the source stick (= c_i * input_chunk_nbytes)
 template <typename TensorAccessorT>
 ALWI void read_four_corner_inputs(
     Noc noc,
     const TensorAccessorT& input_tensor_accessor,
     uint32_t batch_offset,
     uint32_t input_width,
-    uint32_t input_stick_nbytes,
+    uint32_t read_bytes,
+    uint32_t write_stride,
+    uint32_t src_byte_offset,
     int32_t h0,
     int32_t h1,
     int32_t w0,
@@ -164,41 +170,41 @@ ALWI void read_four_corner_inputs(
         noc.async_read(
             input_tensor_accessor,
             input_cb,
-            input_stick_nbytes,
-            {.page_id = north_west_stick_index},
+            read_bytes,
+            {.page_id = north_west_stick_index, .offset_bytes = src_byte_offset},
             {.offset_bytes = write_offset});
     }
-    write_offset += input_stick_nbytes;
+    write_offset += write_stride;
 
     if (h0_valid && w1_valid) {
         const uint32_t north_east_stick_index = batch_offset + (h0 * input_width) + w1;
         noc.async_read(
             input_tensor_accessor,
             input_cb,
-            input_stick_nbytes,
-            {.page_id = north_east_stick_index},
+            read_bytes,
+            {.page_id = north_east_stick_index, .offset_bytes = src_byte_offset},
             {.offset_bytes = write_offset});
     }
-    write_offset += input_stick_nbytes;
+    write_offset += write_stride;
 
     if (h1_valid && w0_valid) {
         const uint32_t south_west_stick_index = batch_offset + (h1 * input_width) + w0;
         noc.async_read(
             input_tensor_accessor,
             input_cb,
-            input_stick_nbytes,
-            {.page_id = south_west_stick_index},
+            read_bytes,
+            {.page_id = south_west_stick_index, .offset_bytes = src_byte_offset},
             {.offset_bytes = write_offset});
     }
-    write_offset += input_stick_nbytes;
+    write_offset += write_stride;
 
     if (h1_valid && w1_valid) {
         const uint32_t south_east_stick_index = batch_offset + (h1 * input_width) + w1;
         noc.async_read(
             input_tensor_accessor,
             input_cb,
-            input_stick_nbytes,
-            {.page_id = south_east_stick_index},
+            read_bytes,
+            {.page_id = south_east_stick_index, .offset_bytes = src_byte_offset},
             {.offset_bytes = write_offset});
     }
 }
@@ -278,7 +284,13 @@ ALWI void read_four_corner_inputs_with_fill(
     }
 }
 
-// Process single grid point - common logic for both interleaved and sharded
+// Process single grid point - common logic for both interleaved and sharded.
+//
+// When in_nblocks_c > 1 the channel dimension is split into chunks of at most
+// input_chunk_nbytes bytes (= MAX_TILES_PER_REDUCTION * TILE_WIDTH * elem_size). For each chunk we
+// reserve one input CB page, NOC-read the c_i-th slice of all 4 corner sticks, and push that page
+// to the compute kernel, which iterates over the same in_nblocks_c chunks. The scalar (bilinear
+// weights) CB is pushed once per grid point since the weights are shared across chunks.
 template <
     uint32_t grid_dtype,
     bool use_precomputed_grid,
@@ -286,6 +298,8 @@ template <
     uint32_t input_height,
     uint32_t input_width,
     uint32_t input_stick_nbytes,
+    uint32_t in_nblocks_c,
+    uint32_t input_chunk_nbytes,
     uint32_t input_cb_index,
     uint32_t scalar_cb_index,
     typename TensorAccessor,
@@ -361,28 +375,48 @@ ALWI void process_grid_point(
         }
     }
 
-    input_cb.reserve_back(1);
-
-    // Read 4 corner input sticks
-    read_four_corner_inputs(
-        noc,
-        input_tensor_accessor,
-        batch_offset,
-        input_width,
-        input_stick_nbytes,
-        h0,
-        h1,
-        w0,
-        w1,
-        input_height,
-        input_cb);
-
-    // Store bilinear interpolation weights for this grid point
+    // Store bilinear interpolation weights for this grid point. The same weights apply to every
+    // channel chunk, so we push the scalar CB only once.
     scalar_cb.reserve_back(1);
     const uint32_t l1_write_scalar_addr = scalar_cb.get_write_ptr();
     fill_four_val(l1_write_scalar_addr, weight_nw_bf, weight_ne_bf, weight_sw_bf, weight_se_bf);
     scalar_cb.push_back(1);
 
-    noc.async_read_barrier();
-    input_cb.push_back(1);
+    // Iterate over channel chunks. For the common case in_nblocks_c == 1 the loop runs once and the
+    // behavior matches the original non-chunked reader (chunk_bytes == input_stick_nbytes,
+    // src_byte_offset == 0, write_stride == input_stick_nbytes).
+    constexpr uint32_t last_chunk_idx = in_nblocks_c - 1;
+    constexpr uint32_t partial_chunk_nbytes = input_stick_nbytes - last_chunk_idx * input_chunk_nbytes;
+    // tilize_reconfig in the compute kernel switches the unpacker to partial_iter_output_tiles for
+    // the last chunk; when active, the reader must lay sticks tightly (write_stride = read_bytes)
+    // so the unpacker sees them back-to-back instead of MAX_TILES_PER_REDUCTION apart.
+    constexpr bool tilize_reconfig_active = (in_nblocks_c > 1) && (partial_chunk_nbytes != input_chunk_nbytes);
+    constexpr uint32_t base_write_stride = (in_nblocks_c > 1) ? input_chunk_nbytes : input_stick_nbytes;
+
+    for (uint32_t c_i = 0; c_i < in_nblocks_c; ++c_i) {
+        const uint32_t src_byte_offset = c_i * input_chunk_nbytes;
+        const uint32_t chunk_bytes = (c_i == last_chunk_idx) ? partial_chunk_nbytes : input_chunk_nbytes;
+        const uint32_t write_stride =
+            (tilize_reconfig_active && c_i == last_chunk_idx) ? chunk_bytes : base_write_stride;
+
+        input_cb.reserve_back(1);
+
+        read_four_corner_inputs(
+            noc,
+            input_tensor_accessor,
+            batch_offset,
+            input_width,
+            chunk_bytes,
+            write_stride,
+            src_byte_offset,
+            h0,
+            h1,
+            w0,
+            w1,
+            input_height,
+            input_cb);
+
+        noc.async_read_barrier();
+        input_cb.push_back(1);
+    }
 }

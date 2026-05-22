@@ -811,7 +811,8 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
         clear_value_cb_id,                      // 33
         kernel_h,                               // 34
         kernel_w,                               // 35
-        static_cast<uint32_t>(indexes_32_bit)   // 36
+        static_cast<uint32_t>(indexes_32_bit),  // 36
+        0                                       // 37: force_max_tiles_per_reduction_4 (off for pool2d)
     };
 
     // Get device arch for compute kernel config initialization
