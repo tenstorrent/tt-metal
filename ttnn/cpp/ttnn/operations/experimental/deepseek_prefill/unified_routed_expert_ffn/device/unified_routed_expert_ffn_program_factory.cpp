@@ -348,7 +348,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/"
-        "fused_swiglu.cpp",
+        "fused_swiglu_gateonly.cpp",
         core_range_set,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::LoFi,
