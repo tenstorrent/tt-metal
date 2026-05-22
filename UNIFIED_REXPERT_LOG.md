@@ -50,18 +50,30 @@ Notes:
 
 ### Current perf (Blackhole, ds-v3 dims, single expert, single chip)
 
-With `MAX_CHUNK_M_TILES = 64` (2k tokens per chunk; smaller per_core_M = better L1 utilization):
+With `MAX_CHUNK_M_TILES = 64` (2k tokens per chunk) and silu+multiply+reshard
+fused into a single `BinaryNg` op:
 
 | Tokens | Chunks | RE kernel total (μs) | μs/2k | Sub-ops |
 |--------|--------|----------------------|-------|---------|
-|  1024  | 1      |  280                 |  560  | 5       |
-|  2048  | 1      |  528                 |  528  | 5       |
-|  4096  | 2      | 1057                 |  528  | 10      |
-|  8192  | 4      | 2120                 |  530  | 20      |
-| 16384  | 8      | 4240                 |  530  | 40      |
-| 25600  | 12+1   | 6640                 |  519  | 65      |
+|  1024  | 1      |  280                 |  560  | 4       |
+|  2048  | 1      |  529                 |  529  | 4       |
+|  4096  | 2      | 1059                 |  530  |  8      |
+|  8192  | 4      | 2118                 |  530  | 16      |
+| 16384  | 8      | 4236                 |  530  | 32      |
+| 25600  | 12+1   | 6644                 |  519  | 52      |
 
-vs main on 4k: 1676μs → 1057μs (1.59x faster). All sizes within ~6% of the 500μs/2k target.
+vs main on 4k: 1676μs → 1059μs (1.58x faster). All sizes within ~6% of the
+500μs/2k target. Sub-ops per chunk: gate matmul, up matmul, fused silu+multiply
+(writes L1 interleaved), down matmul.
+
+### Milestone 5: silu+multiply+reshard fusion (2026-05-22)
+
+Replaced the chain of (gate-matmul-with-silu, multiply_, to_memory_config) with
+a single ttnn::multiply call that applies silu via lhs_activations and writes
+its output directly to L1 interleaved. Each chunk drops from 5 to 4 ops; total
+device time is unchanged (the fused BinaryNg takes the same ~47us that silu +
+multiply + reshard summed to). For 25k tokens we go from 65 to 52 routed-
+expert ops.
 
 ### MoE integration perf
 
