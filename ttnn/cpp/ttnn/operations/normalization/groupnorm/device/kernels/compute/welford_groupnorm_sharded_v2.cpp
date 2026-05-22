@@ -216,10 +216,12 @@ void kernel_main() {
                 // ops. When welford_fp32_alias is inactive, the alias ids collapse onto cb_in0
                 // (c_0) / cb_in (c_1), neither of which can carry the flag because both also
                 // feed sub_tiles_bcast_scalar in the final-normalization stage (FPU on SrcA);
-                // transpose_wh_tile routes through SrcA in that case and this re-init is a
-                // harmless no-op. LREG4/5 are about to be overwritten by welford_restore_state,
-                // so no need to preserve them.
-                MATH((llk_math_welfords_sfpu_init()));
+                // transpose_wh_tile routes through SrcA without touching the SFPU replay
+                // buffer, so the re-init is gated out to avoid any unintended side effects on
+                // LLK state in that path.
+                if constexpr (welford_fp32_alias) {
+                    MATH((llk_math_welfords_sfpu_init()));
+                }
 
                 uint32_t group_offset = 0;
                 for (uint32_t g = min_group; g < num_groups; ++g) {

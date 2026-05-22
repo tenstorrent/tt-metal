@@ -36,6 +36,10 @@ void kernel_main() {
 #if FUSE_PRE_ADD
     constexpr uint32_t blk = get_compile_time_arg_val(2);
 #endif
+    // True iff the factory configured cb_inp with UnpackToDestFp32, i.e. transpose_wh_tile
+    // below takes the unpack-to-DEST fp32 path that writes SFPU replay slot 0. Used by the
+    // non-FUSE branch to gate the welford state re-establishment after the transpose.
+    constexpr bool welford_unpack_fp32_active = get_compile_time_arg_val(3) != 0;
 
     constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_out = tt::CBIndex::c_14;
@@ -195,12 +199,17 @@ void kernel_main() {
         // welford recurrence. Re-establish welford state after each transpose_wh_tile so
         // welford_update replays welford ops instead of stale transpose-dest ops. LREG4/5 (the
         // running mean / M2 accumulator) survive transpose_dest because it only uses FPU MOVs.
+        // When the unpack-to-DEST fp32 path is inactive (e.g. bf16 input), transpose_wh_tile
+        // routes through SrcA and the SFPU replay buffer is untouched; the re-init pair is
+        // gated out to avoid any unintended side effects on LLK state in that path.
         for (uint32_t wt = 0; wt < (Wt - 1); wt++) {
             cb_wait_front(cb_inp, 1);  // cumulative wait
             transpose_wh_init_short(cb_inp);
             transpose_wh_tile(cb_inp, 0, dst0);
-            welford_reinit(cb_inp);
-            MATH((llk_math_welfords_sfpu_init()));
+            if constexpr (welford_unpack_fp32_active) {
+                welford_reinit(cb_inp);
+                MATH((llk_math_welfords_sfpu_init()));
+            }
             // welford_tile<dst0, dst1, dst2, true, 0>((wt) * 32, W, 0, {});
             welford_update<W>(dst0, start_N, *p_reciprocals);
             start_N += 32;
@@ -209,8 +218,10 @@ void kernel_main() {
         cb_wait_front(cb_inp, 1);  // cumulative wait
         transpose_wh_init_short(cb_inp);
         transpose_wh_tile(cb_inp, 0, dst0);
-        welford_reinit(cb_inp);
-        MATH((llk_math_welfords_sfpu_init()));
+        if constexpr (welford_unpack_fp32_active) {
+            welford_reinit(cb_inp);
+            MATH((llk_math_welfords_sfpu_init()));
+        }
         welford_update_rows<W>(dst0, start_N, 0, last_tile_rows, *p_reciprocals);
         cb_pop_front(cb_inp, 1);
         welford_finalize_to_row<W>(dst1, W - 1, *p_reciprocals);

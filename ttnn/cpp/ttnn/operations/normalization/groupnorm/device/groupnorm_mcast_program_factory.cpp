@@ -674,11 +674,20 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     //     preserve roughly one mantissa-bit step beyond TF32 -- but the accumulated TF32
     //     errors from every earlier SrcA read of cb_x dominate the residual, so the gain
     //     doesn't justify the alias machinery.
-    const bool welford_fp32_alias =
-        use_welford && fp32_dest_acc_en && in_data_format == tt::DataFormat::Float32 && !tilize_in;
+    // welford_unpack_fp32_active is true iff the compute kernel's intake transpose_wh_tile
+    // reads from a CB that carries UnpackToDestFp32, regardless of which CB is used: c_29
+    // in the TILIZE_IN branch (configured below) or the c_19 alias of c_0 in the
+    // non-TILIZE_IN branch (welford_fp32_alias). Both paths route the transpose through
+    // llk_math_transpose_dest and write SFPU replay slot 0, so the kernel's SFPU re-init
+    // after the transpose must fire iff this is true. welford_fp32_alias is the
+    // non-TILIZE_IN sub-case (c_19 alias is only useful when c_0 isn't itself the consumer
+    // of the FP32 transpose, i.e. when tilize_in is false).
+    const bool welford_unpack_fp32_active =
+        use_welford && fp32_dest_acc_en && in_data_format == tt::DataFormat::Float32;
+    const bool welford_fp32_alias = welford_unpack_fp32_active && !tilize_in;
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-    if (use_welford && fp32_dest_acc_en && in_data_format == tt::DataFormat::Float32) {
+    if (welford_unpack_fp32_active) {
         unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_29)] =
             tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
@@ -690,8 +699,12 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     const uint32_t cb_in0_welford_index =
         welford_fp32_alias ? static_cast<uint32_t>(tt::CBIndex::c_19) : static_cast<uint32_t>(tt::CBIndex::c_0);
     mcast_sender_compute_named_compile_time_args["welford_fp32_alias"] = static_cast<uint32_t>(welford_fp32_alias);
+    mcast_sender_compute_named_compile_time_args["welford_unpack_fp32_active"] =
+        static_cast<uint32_t>(welford_unpack_fp32_active);
     mcast_sender_compute_named_compile_time_args["cb_in0_welford"] = cb_in0_welford_index;
     mcast_receiver_compute_named_compile_time_args["welford_fp32_alias"] = static_cast<uint32_t>(welford_fp32_alias);
+    mcast_receiver_compute_named_compile_time_args["welford_unpack_fp32_active"] =
+        static_cast<uint32_t>(welford_unpack_fp32_active);
     mcast_receiver_compute_named_compile_time_args["cb_in0_welford"] = cb_in0_welford_index;
 
     KernelDescriptor compute_sender_desc;

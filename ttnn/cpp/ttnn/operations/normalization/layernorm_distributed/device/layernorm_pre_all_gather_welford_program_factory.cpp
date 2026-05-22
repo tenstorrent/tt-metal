@@ -134,7 +134,14 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherWelfordProgramFactory::crea
     reader_defines["FUSE_PRE_ADD"] = fuse_pre_add ? "1" : "0";
     compute_defines["FUSE_PRE_ADD"] = fuse_pre_add ? "1" : "0";
 
-    std::vector<uint32_t> compute_args = {Wt, W, block_size};
+    // welford_unpack_fp32_active mirrors the factory's UnpackToDestFp32 assignment on c_0 below
+    // (in_data_format == Float32 && fp32_dest_acc_en && !fuse_pre_add). The non-FUSE compute
+    // kernel branch uses this to gate the welford_reinit + llk_math_welfords_sfpu_init pair
+    // after each transpose_wh_tile: needed iff transpose_wh_tile took the UnpackToDest fp32
+    // path (writing SFPU replay slot 0), unneeded when the transpose routes through SrcA.
+    const uint32_t welford_unpack_fp32_active =
+        (in_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en && !fuse_pre_add) ? 1u : 0u;
+    std::vector<uint32_t> compute_args = {Wt, W, block_size, welford_unpack_fp32_active};
 
     const auto* compute_kernel_file =
         "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"

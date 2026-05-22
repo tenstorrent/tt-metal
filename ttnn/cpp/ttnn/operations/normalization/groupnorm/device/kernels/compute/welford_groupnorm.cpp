@@ -128,6 +128,13 @@ void kernel_main() {
     // inactive, cb_in0_welford_id == cb_in0_id and the alias-side wait/pop operations collapse
     // onto cb_in0 (gated by welford_fp32_alias).
     constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
+    // welford_unpack_fp32_active covers both the TILIZE_IN branch (reading c_29 with
+    // UnpackToDestFp32) and the non-TILIZE_IN alias branch (welford_fp32_alias). Both route
+    // transpose_wh_tile through llk_math_transpose_dest, which writes SFPU replay slot 0;
+    // the SFPU re-init after the transpose is gated on this so it fires iff slot 0 was
+    // actually clobbered. For bf16 input, neither CB carries the flag, transpose routes
+    // through SrcA, and the re-init is gated out.
+    constexpr bool welford_unpack_fp32_active = get_named_compile_time_arg_val("welford_unpack_fp32_active") != 0;
     constexpr uint32_t cb_in0_welford_id = get_named_compile_time_arg_val("cb_in0_welford");
     constexpr uint32_t cb_eps_id = tt::CBIndex::c_3;
     constexpr uint32_t cb_gamma_id = tt::CBIndex::c_5;
@@ -310,11 +317,13 @@ void kernel_main() {
                     // -- transpose_wh_tile calls llk_math_transpose_dest, which writes to SFPU
                     // replay buffer slot 0, the same slot welford_init programmed with the
                     // welford recurrence. Without this re-init, welford_update_rows would replay
-                    // stale transpose-dest ops. In the non-TILIZE_IN non-alias case, the unpack
-                    // dst format is not Float32 so transpose_wh_tile routes through SrcA and this
-                    // re-init is a harmless no-op. LREG4/5 are about to be overwritten by
-                    // welford_restore_state below, so no need to preserve them.
-                    MATH((llk_math_welfords_sfpu_init()));
+                    // stale transpose-dest ops. When the unpack-to-DEST fp32 path is inactive
+                    // (e.g. bf16 input), transpose_wh_tile routes through SrcA without touching
+                    // the SFPU replay buffer, so the re-init is gated out to avoid any
+                    // unintended side effects on LLK state in that path.
+                    if constexpr (welford_unpack_fp32_active) {
+                        MATH((llk_math_welfords_sfpu_init()));
+                    }
 
                     uint32_t group_offset = 0;
                     for (uint32_t g = min_group; g < num_groups; ++g) {
