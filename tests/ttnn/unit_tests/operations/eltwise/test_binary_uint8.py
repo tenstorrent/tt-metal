@@ -31,6 +31,7 @@ from models.common.utility_functions import is_blackhole
     [ttnn.ne, ttnn.eq, ttnn.lt, ttnn.gt, ttnn.le, ttnn.ge],
 )
 def test_binary_relational_uint8(a_shape, b_shape, low_a, high_a, low_b, high_b, ttnn_op, device):
+    # TODO: Remove this when uint8 typcast to uint16 support is added to the BH simulator
     if is_blackhole() and os.environ.get("TT_METAL_SIMULATOR"):
         pytest.skip("Skipping on tt-sim in Blackhole/Wormhole B0")
     num_elements = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
@@ -46,8 +47,7 @@ def test_binary_relational_uint8(a_shape, b_shape, low_a, high_a, low_b, high_b,
     torch_input_tensor_b = torch_input_tensor_b[-num_elements:].reshape(b_shape)
 
     golden_function = ttnn.get_golden_function(ttnn_op)
-    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
-
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device).to(torch.uint8)
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
         dtype=ttnn.uint8,
