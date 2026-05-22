@@ -1048,13 +1048,6 @@ tt::tt_metal::DistributedHostBuffer transform_buffers(
     if constexpr (std::is_same_v<SrcType, DstType>) {
         return input_buffer;
     } else if constexpr (std::is_same_v<SrcType, float8_e4m3> || std::is_same_v<DstType, float8_e4m3>) {
-<<<<<<< HEAD
-        // FP8_E4M3 is currently used exclusively by the DeepSeek V3 prefill combine and dispatch
-        // ops (row-major) and consumed bit-for-bit by the Python dlpack path. No host-side
-        // conversion to/from other dtypes is supported. Add it explicitly when a use case appears.
-        TT_THROW("to_dtype: cross-type conversion involving FP8_E4M3 is not supported");
-        return input_buffer;  // unreachable, satisfies return type
-=======
         // FP8_E4M3 only has a direct bridge to/from FLOAT32 (operator float() and the float
         // constructor in float8.hpp). Other dtypes would need a float pivot, which is not wired
         // up yet because the only host-side consumer today is the print path in tensor_impl.cpp,
@@ -1075,7 +1068,6 @@ tt::tt_metal::DistributedHostBuffer transform_buffers(
             TT_THROW("to_dtype: FP8_E4M3 cross-type conversion is only supported to/from FLOAT32");
             return input_buffer;  // unreachable, satisfies return type
         }
->>>>>>> ec0a357f087 (Added printing support and associated tests)
     } else if constexpr (std::is_same_v<DstType, bfloat4_tag> || std::is_same_v<DstType, bfloat8_tag>) {
         auto transform_fn = [&](const tt::tt_metal::HostBuffer& buffer) {
             ttsl::Span<const SrcType> data = buffer.view_as<const SrcType>();
