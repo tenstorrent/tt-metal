@@ -4,6 +4,7 @@
 
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 void kernel_main() {
     // compile-time args
     constexpr uint32_t num_output_tiles = get_compile_time_arg_val(0);
@@ -22,28 +23,88 @@ void kernel_main() {
     binary_op_init_common(cb_in1, cb_in0, cb_out0);
     cb_in1_obj.wait_front(onetile);
     for (uint32_t i = 0; i < num_output_tiles; i++) {
-        tile_regs_acquire();
-        cb_in0_obj.wait_front(onetile);
-        if (ht_need_bcast && wt_need_bcast) {
-            add_bcast_scalar_init_short(cb_in1, cb_in0);
-            add_tiles_bcast_scalar(cb_in1, cb_in0, 0, 0, dst0);
-        } else if (ht_need_bcast) {
-            add_bcast_rows_init_short(cb_in1, cb_in0);
-            add_tiles_bcast_rows(cb_in1, cb_in0, 0, 0, dst0);
-        } else if (wt_need_bcast) {
-            add_bcast_cols_init_short(cb_in1, cb_in0);
-            add_tiles_bcast_cols(cb_in1, cb_in0, 0, 0, dst0);
+        // cb_out0 = add_bcast<dim>(cb_in1, cb_in0)  (or plain copy if no bcast).
+        // Reconfig: original uses *_init_short (NOT _with_dt) and plain pack_tile,
+        // relying on startup binary_op_init_common formats -> None + None.
+        // cb_in1 CallerManaged + Scalar (held outside loop).
+        // cb_in0 Streaming + Scalar. cb_out0 OutStreaming + Scalar.
+        if constexpr (ht_need_bcast && wt_need_bcast) {
+            compute_kernel_lib::eltwise_chain(
+                onetile,
+                compute_kernel_lib::BinaryFpu<
+                    cb_in1,
+                    cb_in0,
+                    compute_kernel_lib::BinaryFpuOp::Add,
+                    compute_kernel_lib::BroadcastDim::Scalar,
+                    compute_kernel_lib::BinaryDataFormatReconfig::None,
+                    compute_kernel_lib::CallerManaged,
+                    compute_kernel_lib::Streaming,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OperandKind::Scalar>{},
+                compute_kernel_lib::PackTile<
+                    cb_out0,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OutStreaming,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::PackTileReconfig::None>{});
+        } else if constexpr (ht_need_bcast) {
+            compute_kernel_lib::eltwise_chain(
+                onetile,
+                compute_kernel_lib::BinaryFpu<
+                    cb_in1,
+                    cb_in0,
+                    compute_kernel_lib::BinaryFpuOp::Add,
+                    compute_kernel_lib::BroadcastDim::Row,
+                    compute_kernel_lib::BinaryDataFormatReconfig::None,
+                    compute_kernel_lib::CallerManaged,
+                    compute_kernel_lib::Streaming,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OperandKind::Scalar>{},
+                compute_kernel_lib::PackTile<
+                    cb_out0,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OutStreaming,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::PackTileReconfig::None>{});
+        } else if constexpr (wt_need_bcast) {
+            compute_kernel_lib::eltwise_chain(
+                onetile,
+                compute_kernel_lib::BinaryFpu<
+                    cb_in1,
+                    cb_in0,
+                    compute_kernel_lib::BinaryFpuOp::Add,
+                    compute_kernel_lib::BroadcastDim::Col,
+                    compute_kernel_lib::BinaryDataFormatReconfig::None,
+                    compute_kernel_lib::CallerManaged,
+                    compute_kernel_lib::Streaming,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OperandKind::Scalar>{},
+                compute_kernel_lib::PackTile<
+                    cb_out0,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OutStreaming,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::PackTileReconfig::None>{});
         } else {
-            copy_tile_to_dst_init_short(cb_in0);
-            copy_tile(cb_in0, 0, dst0);
+            // No bcast: plain copy_tile(cb_in0) -> cb_out0 (cb_in1's zero tile unused).
+            compute_kernel_lib::eltwise_chain(
+                onetile,
+                compute_kernel_lib::CopyTile<
+                    cb_in0,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::Streaming,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::CopyTileReconfig::None>{},
+                compute_kernel_lib::PackTile<
+                    cb_out0,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OutStreaming,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::PackTileReconfig::None>{});
         }
-        tile_regs_commit();
-        cb_out0_obj.reserve_back(onetile);
-        tile_regs_wait();
-        pack_tile(dst0, cb_out0);
-        tile_regs_release();
-        cb_out0_obj.push_back(onetile);
-        cb_in0_obj.pop_front(onetile);
     }
     cb_in1_obj.pop_front(onetile);
 }
