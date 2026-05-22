@@ -588,9 +588,15 @@ jobs:
         if: ${{ inputs.publish-artifact }}
         run: |
           ARTIFACT_PATHS="ttnn/ttnn/*.so build/lib build/programming_examples build/test build/tools runtime tt_metal/pre-compiled"
-          # Tracy capture/csvexport: install(TARGETS ...) -> build/bin (CMAKE_INSTALL_PREFIX=build, see build_metal.sh).
           if [ "${{ inputs.tracy }}" = "true" ]; then
-            ARTIFACT_PATHS="$ARTIFACT_PATHS build/bin"
+            TRACY_CLI_DIR="build/tools/profiler/bin"
+            for tool in tracy-capture tracy-csvexport; do
+              if [ ! -f "${TRACY_CLI_DIR}/${tool}" ]; then
+                echo "ERROR: Missing Tracy CLI ${TRACY_CLI_DIR}/${tool}"
+                echo "Build tracy_profiler_cli_tools before packaging the profiler artifact."
+                exit 1
+              fi
+            done
             WASM_ROOT="build/profiler/build_wasm"
             for wasm_asset in index.html tracy-profiler.js tracy-profiler.wasm favicon.svg; do
               if [ ! -f "${WASM_ROOT}/${wasm_asset}" ]; then
