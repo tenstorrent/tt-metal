@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Mask, Abs
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
@@ -55,40 +56,114 @@ void kernel_main() {
 
     // Compute cb_xpowadd
     for (uint32_t tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
-        // Comput cb_xabs and mask(optional)
-        // |x|
-        tile_regs_acquire();
-        cb_wait_front(cb_x, onetile);  // comes from the reader
-        cb_reserve_back(cb_xabs, onetile);
-
-        copy_tile_init(cb_x);
-        copy_tile(cb_x, 0, dst0);
-
-        if (do_mask_h && need_to_do_mask_h(tile_idx, ht, wt)) {
-            copy_tile_init(cb_mask_h_w);
-            copy_tile(cb_mask_h_w, 0, dst1);
-
-            mask_tile_init();
-            mask_tile(dst0, dst1);
+        // abs(x) with optional H/W masking.
+        // 4-branch runtime dispatch on (mh, mw): copy_x -> [opt mask(0)] ->
+        // [opt mask(1)] -> abs -> pack to cb_xabs.
+        //
+        // Reconfig audit: copy_tile_init reconfigs srca per copy ->
+        //   CopyTileReconfig::Input on each copy. pack_tile (no reconfig) ->
+        //   PackTileReconfig::None.
+        // Lifecycles: cb_x Streaming (chain owns wait+pop); cb_mask_h_w
+        //   CallerManaged + Scalar (waited once outside loop at line 53;
+        //   chain reads at index 0 / index 1 via TileBaseCompileTime<1>);
+        //   cb_xabs OutStreaming.
+        const bool mh = do_mask_h && need_to_do_mask_h(tile_idx, ht, wt);
+        const bool mw = do_mask_w && ((tile_idx + 1) % wt) == 0;
+        if (mh && mw) {
+            compute_kernel_lib::eltwise_chain(
+                onetile,
+                compute_kernel_lib::CopyTile<
+                    cb_x,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::Streaming,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::CopyTileReconfig::Input>{},
+                compute_kernel_lib::CopyTile<
+                    cb_mask_h_w,
+                    compute_kernel_lib::Dst::D1,
+                    compute_kernel_lib::CallerManaged,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::CopyTileReconfig::Input>{},
+                compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
+                compute_kernel_lib::CopyTile<
+                    cb_mask_h_w,
+                    compute_kernel_lib::Dst::D1,
+                    compute_kernel_lib::CallerManaged,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::CopyTileReconfig::Input,
+                    compute_kernel_lib::TileBaseCompileTime<1>>{},
+                compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
+                compute_kernel_lib::Abs<compute_kernel_lib::Dst::D0>{},
+                compute_kernel_lib::PackTile<
+                    cb_xabs,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OutStreaming,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::PackTileReconfig::None>{});
+        } else if (mh) {
+            compute_kernel_lib::eltwise_chain(
+                onetile,
+                compute_kernel_lib::CopyTile<
+                    cb_x,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::Streaming,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::CopyTileReconfig::Input>{},
+                compute_kernel_lib::CopyTile<
+                    cb_mask_h_w,
+                    compute_kernel_lib::Dst::D1,
+                    compute_kernel_lib::CallerManaged,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::CopyTileReconfig::Input>{},
+                compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
+                compute_kernel_lib::Abs<compute_kernel_lib::Dst::D0>{},
+                compute_kernel_lib::PackTile<
+                    cb_xabs,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OutStreaming,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::PackTileReconfig::None>{});
+        } else if (mw) {
+            compute_kernel_lib::eltwise_chain(
+                onetile,
+                compute_kernel_lib::CopyTile<
+                    cb_x,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::Streaming,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::CopyTileReconfig::Input>{},
+                compute_kernel_lib::CopyTile<
+                    cb_mask_h_w,
+                    compute_kernel_lib::Dst::D1,
+                    compute_kernel_lib::CallerManaged,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::CopyTileReconfig::Input,
+                    compute_kernel_lib::TileBaseCompileTime<1>>{},
+                compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
+                compute_kernel_lib::Abs<compute_kernel_lib::Dst::D0>{},
+                compute_kernel_lib::PackTile<
+                    cb_xabs,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OutStreaming,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::PackTileReconfig::None>{});
+        } else {
+            compute_kernel_lib::eltwise_chain(
+                onetile,
+                compute_kernel_lib::CopyTile<
+                    cb_x,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::Streaming,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::CopyTileReconfig::Input>{},
+                compute_kernel_lib::Abs<compute_kernel_lib::Dst::D0>{},
+                compute_kernel_lib::PackTile<
+                    cb_xabs,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OutStreaming,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::PackTileReconfig::None>{});
         }
-
-        if (do_mask_w && ((tile_idx + 1) % wt) == 0) {
-            copy_tile_init(cb_mask_h_w);
-            copy_tile(cb_mask_h_w, 1, dst1);
-
-            mask_tile_init();
-            mask_tile(dst0, dst1);
-        }
-
-        abs_tile_init();
-        abs_tile(dst0);
-        cb_pop_front(cb_x, onetile);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile(dst0, cb_xabs);
-        cb_push_back(cb_xabs, onetile);
-        tile_regs_release();
 
         // |x + decimal|^p
         power_tile_to_cb(cb_xabs, cb_xpow, cb_logx, cb_decimal, cb_exp_lxmd, cb_correct_xpow, p, p_is_negative);
