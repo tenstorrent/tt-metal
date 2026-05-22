@@ -4,12 +4,33 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "matmul_dataflow_common.hpp"
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
+
+// Legacy primitives retained (#45003 item 4):
+//   - in0_valid / in0_receiver / in0_sender raw L1 semaphore pointers participate in a VALID/INVALID
+//     handshake protocol that Semaphore<> wait/up/set wrappers do not model;
+//   - noc_semaphore_inc(in0_sender_semaphore_noc_addr, 1) takes a precomposed uint64_t noc address;
+//   - noc_async_write(in0_start_address, in0_unicast_data_addr, current_block_bytes) writes to a
+//     precomposed uint64_t in0_unicast_data_addr (get_noc_addr of in0_dest_noc_x/y);
+//   - noc_semaphore_set_remote(in0_valid_semaphore_addr, in0_receiver_semaphore_noc_addr) takes the
+//     precomposed receiver noc address;
+//   - out_ready_sem_backward / out_ready_sem_forward raw L1 pointers are passed by raw L1 address into
+//     compute_actual_k_block which polls them with noc_semaphore_wait_min;
+//   - the fabric mux send path (forward_half_block_to_fabric_neighbor, allocate_and_init_packet_headers,
+//     close_mux, parse_mux_connection_args from matmul_dataflow_common.hpp) uses fabric_* primitives
+//     and has no Device 2.0 equivalent;
+//   - read_in0_block_sync / write_block_sync* / read_ternary_blocks_sync helpers in
+//     matmul_dataflow_common.hpp keep cb_id, write_ptr, read_ptr, and noc_async_*_tile/_barrier on
+//     legacy per the header's retention comment;
+//   - the helper noc_async_read_tile + noc_async_read_barrier sequence in the FUSE_BIAS in2 read uses
+//     a raw L1 write_ptr threaded inline and there is no Device 2.0 equivalent.
 
 using ttnn::ccl::Topology;
 
@@ -178,6 +199,13 @@ void kernel_main() {
     constexpr uint32_t cb_id_in2 = tt::CBIndex::c_4;
 #endif
 
+    Noc noc_obj;
+    CircularBuffer cb_in0(cb_id_in0);
+    CircularBuffer cb_out(cb_id_out);
+#ifdef FUSE_BIAS
+    CircularBuffer cb_in2(cb_id_in2);
+#endif
+
 #ifdef READ_FROM_LOCAL_INPUT
 #ifdef FUSE_BIAS
     constexpr auto in3_args = TensorAccessorArgs<in2_args.next_compile_time_args_offset()>();
@@ -283,8 +311,8 @@ void kernel_main() {
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
-                        cb_wait_front(cb_id_out, out_block_num_tiles);
-                        uint32_t out_read_ptr = get_read_ptr(cb_id_out);
+                        cb_out.wait_front(out_block_num_tiles);
+                        uint32_t out_read_ptr = cb_out.get_read_ptr();
 
                         // write_block_sync_split is more generic (support multiple output tensors)
                         // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync should be faster
@@ -309,7 +337,7 @@ void kernel_main() {
                                 defer_write_n_tile,
                                 defer_write_n_tile_end);
                         }
-                        cb_pop_front(cb_id_out, out_block_num_tiles);
+                        cb_out.pop_front(out_block_num_tiles);
                     }
                 }
                 if (reuse_block && k_block_iter == 0) {
@@ -317,9 +345,9 @@ void kernel_main() {
                     reuse_block = false;
                     continue;
                 }
-                cb_reserve_back(cb_id_in0, in0_block_num_tiles);
+                cb_in0.reserve_back(in0_block_num_tiles);
 
-                uint32_t in0_start_address = get_write_ptr(cb_id_in0);
+                uint32_t in0_start_address = cb_in0.get_write_ptr();
 
                 uint32_t k_block_left_tile = 0;
                 uint32_t k_block_right_tile = 0;
@@ -374,7 +402,7 @@ void kernel_main() {
 
                 // Critical to performance for sender to push data to compute before mcasting
                 // This frees sender to start next read earlier
-                cb_push_back(cb_id_in0, in0_block_num_tiles);
+                cb_in0.push_back(in0_block_num_tiles);
                 if (!is_sink_core) {
                     noc_semaphore_wait(in0_sender_semaphore_addr_ptr, 1);
                     noc_semaphore_set(in0_sender_semaphore_addr_ptr, 0);
@@ -388,7 +416,7 @@ void kernel_main() {
                     noc_async_write(in0_start_address, in0_unicast_data_addr, current_block_bytes);
 
 #ifdef ARCH_BLACKHOLE
-                    noc_async_writes_flushed();
+                    noc_obj.async_writes_flushed();
 #endif
 
                     noc_semaphore_set_remote(in0_valid_semaphore_addr, in0_receiver_semaphore_noc_addr);
@@ -446,16 +474,16 @@ void kernel_main() {
             }
 #ifdef FUSE_BIAS
             if constexpr (!is_output_writer) {
-                cb_reserve_back(cb_id_in2, N_block_tiles);
+                cb_in2.reserve_back(N_block_tiles);
 
-                uint32_t l1_write_addr_in2 = get_write_ptr(cb_id_in2);
+                uint32_t l1_write_addr_in2 = cb_in2.get_write_ptr();
                 for (uint32_t n_tile_id = n_tile; n_tile_id < n_tile_end; n_tile_id++) {
                     noc_async_read_tile(n_tile_id, in2_reader, l1_write_addr_in2);
                     l1_write_addr_in2 += in2_tile_size;
                 }
                 noc_async_read_barrier();
 
-                cb_push_back(cb_id_in2, N_block_tiles);
+                cb_in2.push_back(N_block_tiles);
             }
 #endif
 
@@ -522,8 +550,8 @@ void kernel_main() {
         }
     }
 
-    noc_async_write_barrier();
-    noc_async_atomic_barrier();
+    noc_obj.async_write_barrier();
+    noc_obj.async_atomic_barrier();
 
 #ifdef USE_MUX
     if (mux_backward.connection_valid) {
@@ -552,7 +580,7 @@ void kernel_main() {
     }
 #endif
 
-    noc_async_write_barrier();
+    noc_obj.async_write_barrier();
 
     noc_semaphore_set(out_ready_sem_backward_addr_ptr, 0);
     noc_semaphore_set(out_ready_sem_forward_addr_ptr, 0);

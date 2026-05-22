@@ -4,8 +4,24 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "matmul_dataflow_common.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
+
+// Legacy primitives retained (#45003 item 4):
+//   - in1_valid / in1_receiver / in1_sender raw L1 semaphore pointers participate in a VALID/INVALID
+//     handshake protocol (initial *ptr = VALID, noc_semaphore_set with INVALID, noc_semaphore_wait on
+//     VALID) and Semaphore<> wait/up/set wrappers do not model the special-value protocol;
+//   - noc_semaphore_inc(in1_sender_semaphore_noc_addr, 1) takes a precomposed uint64_t noc address;
+//   - noc_async_write(...) writes to a precomposed uint64_t in1_unicast_data_addr built by ORing
+//     a base noc address with a local L1 address;
+//   - noc_semaphore_set_remote(in1_valid_semaphore_addr, in1_receiver_semaphore_noc_addr) takes the
+//     precomposed receiver noc address;
+//   - read_in1_block_sync / write_block_sync* / read_ternary_blocks_sync (matmul_dataflow_common.hpp)
+//     keep cb_id / write_ptr / read_ptr on legacy per the header's retention comment;
+//   - the helper noc_async_read_tile + noc_async_read_barrier sequence in the FUSE_BIAS in2 read uses
+//     a raw L1 write_ptr threaded inline and there is no Device 2.0 equivalent.
 
 void kernel_main() {
     constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
@@ -110,6 +126,13 @@ void kernel_main() {
     constexpr uint32_t cb_id_in2 = tt::CBIndex::c_4;
 #endif
 
+    Noc noc_obj;
+    CircularBuffer cb_in1(cb_id_in1);
+    CircularBuffer cb_out(cb_id_out);
+#ifdef FUSE_BIAS
+    CircularBuffer cb_in2(cb_id_in2);
+#endif
+
     volatile tt_l1_ptr uint32_t* in1_valid_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_valid_semaphore_addr);
     *(in1_valid_semaphore_addr_ptr) = VALID;
@@ -150,8 +173,8 @@ void kernel_main() {
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
-                        cb_wait_front(cb_id_out, out_block_num_tiles);
-                        uint32_t out_read_ptr = get_read_ptr(cb_id_out);
+                        cb_out.wait_front(out_block_num_tiles);
+                        uint32_t out_read_ptr = cb_out.get_read_ptr();
                         // write_block_sync_split is more generic (support multiple output tensors)
                         // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync should be faster
                         if constexpr (N_chunks == 1) {
@@ -175,13 +198,13 @@ void kernel_main() {
                                 defer_write_n_tile,
                                 defer_write_n_tile_end);
                         }
-                        cb_pop_front(cb_id_out, out_block_num_tiles);
+                        cb_out.pop_front(out_block_num_tiles);
                     }
                 }
 
-                cb_reserve_back(cb_id_in1, in1_block_num_tiles);
+                cb_in1.reserve_back(in1_block_num_tiles);
 
-                uint32_t in1_start_address = get_write_ptr(cb_id_in1);
+                uint32_t in1_start_address = cb_in1.get_write_ptr();
                 if constexpr (is_injector_core) {
                     uint32_t k_block_left_tile = 0;
                     uint32_t k_block_right_tile = 0;
@@ -219,7 +242,7 @@ void kernel_main() {
 
                 // Critical to performance for sender to push data to compute before mcasting
                 // This frees sender to start next read earlier
-                cb_push_back(cb_id_in1, in1_block_num_tiles);
+                cb_in1.push_back(in1_block_num_tiles);
 
                 if (!is_sink_core) {
                     noc_semaphore_wait(in1_sender_semaphore_addr_ptr, 1);
@@ -237,7 +260,7 @@ void kernel_main() {
                     }
 
 #ifdef ARCH_BLACKHOLE
-                    noc_async_writes_flushed();
+                    noc_obj.async_writes_flushed();
 #endif
 
                     noc_semaphore_set_remote(in1_valid_semaphore_addr, in1_receiver_semaphore_noc_addr);
@@ -245,16 +268,16 @@ void kernel_main() {
             }
 #ifdef FUSE_BIAS
             if constexpr (!is_output_writer) {
-                cb_reserve_back(cb_id_in2, N_block_tiles);
+                cb_in2.reserve_back(N_block_tiles);
 
-                uint32_t l1_write_addr_in2 = get_write_ptr(cb_id_in2);
+                uint32_t l1_write_addr_in2 = cb_in2.get_write_ptr();
                 for (uint32_t n_tile_id = n_tile; n_tile_id < n_tile_end; n_tile_id++) {
                     noc_async_read_tile(n_tile_id, in2_reader, l1_write_addr_in2);
                     l1_write_addr_in2 += in2_tile_size;
                 }
                 noc_async_read_barrier();
 
-                cb_push_back(cb_id_in2, N_block_tiles);
+                cb_in2.push_back(N_block_tiles);
             }
 #endif
 
@@ -319,6 +342,6 @@ void kernel_main() {
             }
         }
     }
-    noc_async_write_barrier();
-    noc_async_atomic_barrier();
+    noc_obj.async_write_barrier();
+    noc_obj.async_atomic_barrier();
 }

@@ -8,6 +8,18 @@
 #include <utility>
 #include "api/dataflow/dataflow_api.h"
 
+// Legacy primitives retained (#45003 item 4): the templated helpers below stay on the legacy API because
+//   - noc_async_read_tile / noc_async_write_tile have no documented Device 2.0 equivalent that preserves the
+//     per-tile incremental L1 read/write pointer arithmetic used here;
+//   - helpers receive cb_id and raw write_ptr/read_ptr as runtime parameters, so they cannot capture a Noc or
+//     CircularBuffer wrapper without changing their interface;
+//   - fill_zeros_async issues noc_async_read against a precomposed uint64_t (MEM_ZEROS_BASE) noc address;
+//   - the fabric-mux helpers (forward_half_block_to_fabric_neighbor, close_mux, allocate_and_init_packet_headers,
+//     parse_mux_connection_args) interleave fabric_* primitives, raw L1 semaphores, and precomposed noc addresses
+//     that the new wrappers do not model;
+//   - compute_actual_k_block uses noc_semaphore_wait_min on a raw L1 pointer passed in by the caller.
+// The kernels that #include this header migrate their own top-level cb_* / barrier sites to the new API.
+
 namespace detail {
 template <typename... Args, uint32_t... Indexes>
 auto make_tensor_accessor_tuple_impl(

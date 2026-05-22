@@ -13,6 +13,18 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_binary_sfpu.h"
+#include "api/dataflow/circular_buffer.h"
+
+// Legacy primitives retained (#45003 item 4): cb_id values flow through the compute API
+// (mm_init, mm_block_init_short, matmul_block, pack_tile, pack_reconfig_data_format,
+// reconfig_data_format/reconfig_data_format_srca, copy_tile_to_dst_init_short, copy_tile,
+// add_bcast_rows_init_short, add_tiles_bcast, add_tiles_init, add_tiles, mul_tiles_init,
+// mul_tiles_bcast, mul_tiles, mul_bcast_rows_init_short, unary_bcast/unary_bcast_init,
+// mul_binary_tile/mul_binary_tile_init, mul_unary_tile, binop_with_scalar_tile_init) and through
+// the local helpers (copy_block, add_bias_block, add_bias_and_addcmul_block, matmul_blocks) as
+// runtime arguments. CircularBuffer wrappers cannot replace cb_id everywhere because the
+// compute LLK API takes cb_id as a runtime parameter; the cb_reserve_back/wait_front/push_back/
+// pop_front calls here are kept on the legacy API to match.
 
 void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     copy_tile_to_dst_init_short(in_cb);
