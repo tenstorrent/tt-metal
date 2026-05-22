@@ -25,6 +25,8 @@ namespace tt::tt_metal::experimental {
 // String literals work directly; misnamed references fail at validation.
 using KernelSpecName = std::string;
 
+using Nodes = std::variant<NodeCoord, NodeRange, NodeRangeSet>;
+
 // A KernelSpec is a descriptor for a Tenstorrent kernel:
 // A single computational task compiled into one or more executable files that work
 // collaboratively on a single node.
@@ -73,7 +75,6 @@ struct KernelSpec {
     // The default threading is num_threads. However, you may override this on a per-node basis.
     // NOTE: This feature is currently unsupported. It's an open question if we EVER want to support it.
     //       Here as a placeholder; specifying it will trigger a runtime error.
-    using Nodes = std::variant<NodeCoord, NodeRange, NodeRangeSet>;
     using NodeSpecificThreadCount = std::pair<Nodes, int>;  // {node_set, num_threads}
     using NodeSpecificThreadCounts = std::vector<NodeSpecificThreadCount>;
     std::optional<NodeSpecificThreadCounts> node_specific_thread_counts = std::nullopt;
@@ -302,5 +303,25 @@ inline DFBBinding BlockedConsumerOf(
     };
 }
 */
+
+//////////////////////////////////////////////////////////////////////////////
+// Convenience factories for SemaphoreBinding and TensorBinding
+//////////////////////////////////////////////////////////////////////////////
+
+// Creates a SemaphoreBinding (kernel uses a Semaphore declared at ProgramSpec level)
+inline SemaphoreBinding UseSemaphore(SemaphoreSpecName semaphore_spec_name, std::string accessor_name) {
+    return SemaphoreBinding{
+        .semaphore_spec_name = std::move(semaphore_spec_name),
+        .accessor_name = std::move(accessor_name),
+    };
+}
+
+// Creates a TensorBinding (kernel accesses a TensorParameter declared at ProgramSpec level)
+inline TensorBinding UseTensor(TensorParameterName tensor_parameter_name, std::string accessor_name) {
+    return TensorBinding{
+        .tensor_parameter_name = std::move(tensor_parameter_name),
+        .accessor_name = std::move(accessor_name),
+    };
+}
 
 }  // namespace tt::tt_metal::experimental

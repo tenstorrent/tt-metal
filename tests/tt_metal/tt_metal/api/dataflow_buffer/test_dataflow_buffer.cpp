@@ -1021,10 +1021,7 @@ void run_sequential_dfbs_program(
         });
 
         producer_spec.dfb_bindings.push_back(experimental::ProducerOf(dfb_name, "dfb_" + idx));
-        producer_spec.tensor_bindings.push_back(experimental::KernelSpec::TensorBinding{
-            .tensor_parameter_name = in_tensor_name,
-            .accessor_name = "src_" + idx,
-        });
+        producer_spec.tensor_bindings.push_back(UseTensor(in_tensor_name, "src_" + idx));
 
         consumer_spec.dfb_bindings.push_back(experimental::KernelSpec::DFBBinding{
             .dfb_spec_name = dfb_name,
@@ -1032,10 +1029,7 @@ void run_sequential_dfbs_program(
             .endpoint_type = experimental::KernelSpec::DFBEndpointType::CONSUMER,
             .access_pattern = is_all ? experimental::DFBAccessPattern::ALL : experimental::DFBAccessPattern::STRIDED,
         });
-        consumer_spec.tensor_bindings.push_back(experimental::KernelSpec::TensorBinding{
-            .tensor_parameter_name = out_tensor_name,
-            .accessor_name = "dst_" + idx,
-        });
+        consumer_spec.tensor_bindings.push_back(UseTensor(out_tensor_name, "dst_" + idx));
         consumer_spec.compile_time_args.push_back({"entries_per_consumer_" + idx, epc});
         consumer_spec.compile_time_args.push_back({"is_blocked_" + idx, static_cast<uint32_t>(is_all ? 1u : 0u)});
     }

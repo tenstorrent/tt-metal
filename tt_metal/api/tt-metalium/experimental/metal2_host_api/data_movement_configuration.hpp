@@ -30,7 +30,8 @@ struct DataMovementConfiguration {
 
     struct Gen2 {
         // Currently, no configuration is needed for Gen2!
-        // The empty struct is still used to express a Gen2 DM kernel.
+        // The empty struct is here as a placeholder.
+        // (It is NOT required to provide an empty Gen2 config for Gen2 architectures.)
     };
     std::optional<Gen2> gen2 = std::nullopt;
 };

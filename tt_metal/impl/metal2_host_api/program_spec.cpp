@@ -667,24 +667,17 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         if (kernel.is_dm_kernel()) {
             const auto& data_movement_config = std::get<DataMovementConfiguration>(kernel.config_spec);
 
-            // Both Gen1 and Gen2 configs are optional. But at least one must be specified.
-            TT_FATAL(
-                data_movement_config.gen1.has_value() || data_movement_config.gen2.has_value(),
-                "KernelSpec '{}' must specify a DM config for Gen1, Gen2, or both.",
-                kernel.unique_id);
-
-            // The config for the current target architecture must be specified.
-            if (is_gen2_arch()) {
-                TT_FATAL(
-                    data_movement_config.gen2.has_value(),
-                    "KernelSpec '{}' must specify a Gen2 DM config when targeting Quasar.",
-                    kernel.unique_id);
-            } else if (is_gen1_arch()) {
+            // Both Gen1 and Gen2 configs are optional.
+            // - Gen1: required when targeting WH/BH (Gen1 needs explicit processor/NOC).
+            // - Gen2: not required (Gen2 has no required configuration). The Gen2 sub-struct
+            //   may still be set explicitly as documentation of intent, or to specify any
+            //   future Gen2-specific options.
+            if (is_gen1_arch()) {
                 TT_FATAL(
                     data_movement_config.gen1.has_value(),
                     "KernelSpec '{}' must specify a Gen1 DM config when targeting WH or BH.",
                     kernel.unique_id);
-            } else {
+            } else if (!is_gen2_arch()) {
                 TT_FATAL(false, "Unknown architecture");
             }
         }
