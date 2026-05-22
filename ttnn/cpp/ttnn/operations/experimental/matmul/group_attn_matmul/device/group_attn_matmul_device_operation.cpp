@@ -223,10 +223,12 @@ ttsl::hash::hash_t GroupAttnMatmulDeviceOperation::compute_program_hash(
         input_tensor_a.memory_config().memory_layout(),
         input_tensor_a.memory_config().buffer_type(),
         input_tensor_a.dtype(),
+        input_tensor_a.padded_shape(),  // drives CB total_size (Kt, Mt) — must be in hash without #44939
         input_tensor_a.device()->id(),
         input_tensor_b.memory_config().memory_layout(),
         input_tensor_b.memory_config().buffer_type(),
         input_tensor_b.dtype(),
+        input_tensor_b.padded_shape(),  // drives CB total_size (KV_HEADS, Kt)
         input_tensor_b.device()->id());
 }
 
