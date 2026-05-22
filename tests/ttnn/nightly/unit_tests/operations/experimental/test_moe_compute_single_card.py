@@ -80,10 +80,15 @@ def _run_moe_compute_single_card_test(
     dtype,
     activation_type,
     has_bias=False,
+    bh_ring_size=None,
 ):
     """
     Single-card MoE compute test body. cluster_axis is fixed to None
     (no dispatch axis on 1x1 mesh) and compute_only is fixed to True.
+
+    `bh_ring_size`: pinned BH matmul ring size. None defaults to 12. Tests that require
+    a specific N (e.g., GPT-OSS needs N=12 because output_width_shard_dim=3 only divides
+    12) should pass it explicitly to lock the layout.
     """
     # The MoE op uses tilize cores keyed off the per-arch layout table in the program
     # factory's `get_layout()` (see #41827) and matmul cores from
@@ -239,7 +244,9 @@ def _run_moe_compute_single_card_test(
     # CREATE MATMUL INPUT TENSORS
     #########################################
 
-    w0_w1_shard_map, w2_shard_map, dram_core_range_set = get_weight_core_shard_maps(mesh_device, hidden_size, N)
+    w0_w1_shard_map, w2_shard_map, dram_core_range_set = get_weight_core_shard_maps(
+        mesh_device, hidden_size, N, bh_ring_size=bh_ring_size
+    )
 
     torch_w0 = create_torch_w0(num_layers, experts_per_device, hidden_size, N)
     torch_w1 = create_torch_w1(num_layers, experts_per_device, hidden_size, N)
@@ -344,6 +351,7 @@ def _run_moe_compute_single_card_test(
         optional_cross_device_semaphore=None,
         activation_type=activation_type,
         compute_only=True,
+        bh_ring_size=bh_ring_size,
     )
 
     # ===================================================================
@@ -474,6 +482,14 @@ def _run_moe_compute_single_card_test(
 #     of the compute grid (logical y range becomes 0..8 on unharvested WH, 0..7 on a
 #     harvested n150_L), and (6,9)/(5,9) fall out of range. COL-axis matches the 6U
 #     test setup and keeps all 10 functional rows (logical y=0..9) available.
+#
+# bh_ring_size sweep: N=12 always runs (the default on both WH and BH); N=8 and N=16
+# add BH-specific coverage of the kBhMatmulExtras padding paths (N=8: no extras;
+# N=16: full 8 extras). On WH the op only supports N=12, so N=8/16 are skipped there.
+_DS_BH_RING_SIZES = [12]
+_DS_BH_RING_SIZES += [8, 16]  # comment this line to skip N=8 and N=16 sweep
+
+
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -484,9 +500,17 @@ def _run_moe_compute_single_card_test(
     ],
     indirect=True,
 )
+@pytest.mark.parametrize("bh_ring_size", _DS_BH_RING_SIZES)
+@pytest.mark.parametrize("has_bias", [False, True], ids=["no_bias", "with_bias"])
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
-def test_moe_compute_single_card_deepseek(mesh_device, mesh_shape):
-    """compute_only=True on a 1x1 WH mesh, DeepSeek-shaped workload (hidden=7168)."""
+def test_moe_compute_single_card_deepseek(mesh_device, mesh_shape, has_bias, bh_ring_size):
+    """compute_only=True on a 1x1 WH mesh, DeepSeek-shaped workload (hidden=7168).
+
+    Parametrized over has_bias and bh_ring_size. WH always uses N=12 (DRAM banks);
+    N=8/16 only run on BH.
+    """
+    if bh_ring_size != 12 and mesh_device.arch() != ttnn.device.Arch.BLACKHOLE:
+        pytest.skip(f"bh_ring_size={bh_ring_size} is BH-only; WH always uses N=12")
     _run_moe_compute_single_card_test(
         mesh_device=mesh_device,
         mesh_shape=mesh_shape,
@@ -499,39 +523,8 @@ def test_moe_compute_single_card_deepseek(mesh_device, mesh_shape):
         output_width_shard_dim=4,  # DeepSeek hidden=7168 → auto_output_width_shard_dim=4
         dtype=ttnn.bfloat16,
         activation_type=MoEActivationFunction.SILU,
-    )
-
-
-# DS-v3 + bias: same shape class as the baseline test above, with has_bias=True.
-# Provides a controlled bias-only delta — if this regresses while no-bias DS-v3
-# still passes, the failure is bias-specific (b0/b1 K-padding or b2 N-append),
-# not a shape/formula issue.
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "trace_region_size": 500000,
-        }
-    ],
-    indirect=True,
-)
-@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
-def test_moe_compute_single_card_deepseek_with_bias(mesh_device, mesh_shape):
-    """compute_only=True on a 1x1 WH mesh, DeepSeek-shaped workload, has_bias=True."""
-    _run_moe_compute_single_card_test(
-        mesh_device=mesh_device,
-        mesh_shape=mesh_shape,
-        experts_per_device=8,
-        tokens_per_device=32,
-        selected_experts_k=8,
-        N=2048,
-        hidden_size=7168,
-        output_height_shard_dim=4,
-        output_width_shard_dim=4,
-        dtype=ttnn.bfloat16,
-        activation_type=MoEActivationFunction.SILU,
-        has_bias=True,
+        has_bias=has_bias,
+        bh_ring_size=bh_ring_size,
     )
 
 
@@ -546,15 +539,12 @@ def test_moe_compute_single_card_deepseek_with_bias(mesh_device, mesh_shape):
 #      branch with the cb_c2c_ones_tile + bias-row matmul).
 #   4. SWIGLU activation, which PR #43932 was the first to actually exercise (commit 3918012f6e1).
 #
-# Required environment on BH: TT_MOE_BH_N=12.
-# Why: hidden_size=2880 → output_width_shard_dim = auto_output_width_shard_dim(2880) = 3
-# (Ht=90 has no divisor ≤4 except 3). The op validates matmul_num_cores % num_data_parallel_cores
-# == 0 in validate_on_program_cache_miss (moe_compute_device_operation.cpp). On BH the matmul
-# ring is bh_ring_size cores:
-#   N=8:  8 % 3 ≠ 0 → validate REJECTS (correctly — 8-core ring can't split into 3 cols)
-#   N=12: 12 % 3 == 0 → passes validate, then the kernel actually exercises gap (1)
-#   N=16: 16 % 3 ≠ 0 → validate REJECTS (correctly — same reason)
-# On WH the ring is always 12 cores (12 DRAM banks, 1:1), so 12%3==0 and the test passes there too.
+# GPT-OSS requires N=12 on BH because hidden_size=2880 → output_width_shard_dim =
+# auto_output_width_shard_dim(2880) = 3 (Ht=90 has no divisor ≤4 except 3). The op
+# validates matmul_num_cores % output_width_shard_dim == 0; on BH only N=12 satisfies
+# this (8%3≠0, 12%3==0, 16%3≠0). The test pins bh_ring_size=12 explicitly via the op
+# kwarg to lock the layout. WH always has 12 DRAM banks (1:1 with ring), so the same
+# N=12 works there too.
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -569,24 +559,8 @@ def test_moe_compute_single_card_deepseek_with_bias(mesh_device, mesh_shape):
 def test_moe_compute_single_card_gpt_oss(mesh_device, mesh_shape):
     """compute_only=True on a 1x1 WH mesh, GPT-OSS-shaped workload (hidden=N=2880, SWIGLU+bias).
 
-    Conditionally xfails on BH when TT_MOE_BH_N != 12: GPT-OSS forces
-    output_width_shard_dim=3, and the op validates matmul_num_cores % 3 == 0. Only N=12
-    satisfies that on BH. The validate's failure is the correct behavior, not a regression,
-    so xfail keeps CI honest while still surfacing the unsupported (arch, N) combo.
+    bh_ring_size=12 is pinned via the op kwarg to lock the layout for the GPT-OSS shape.
     """
-    # Decide xfail before _run_moe_compute_single_card_test sets up tensors/goldens —
-    # bail out cheaply rather than burning CPU on a setup whose op call we know rejects.
-    if mesh_device.arch() == ttnn.device.Arch.BLACKHOLE:
-        # Fallback "12" mirrors the BH default in _get_bh_ring_size() / resolve_bh_ring_size().
-        bh_n = int(os.environ.get("TT_MOE_BH_N", "12"))
-        if bh_n != 12:
-            pytest.xfail(
-                f"GPT-OSS on BH requires TT_MOE_BH_N=12 (current={bh_n}). hidden_size=2880 "
-                f"forces output_width_shard_dim=3 (auto_output_width_shard_dim) and the op "
-                f"validates matmul_num_cores % 3 == 0 in moe_compute_device_operation.cpp. "
-                f"On BH the matmul ring is bh_ring_size cores: 8%3≠0 and 16%3≠0; only 12%3==0. "
-                f"The BH default is 12; this xfail only fires when an explicit override picks 8 or 16."
-            )
     _run_moe_compute_single_card_test(
         mesh_device=mesh_device,
         mesh_shape=mesh_shape,
@@ -600,6 +574,7 @@ def test_moe_compute_single_card_gpt_oss(mesh_device, mesh_shape):
         dtype=ttnn.bfloat16,
         activation_type=MoEActivationFunction.SWIGLU,
         has_bias=True,
+        bh_ring_size=12,
     )
 
 

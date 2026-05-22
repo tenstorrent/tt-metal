@@ -24,8 +24,9 @@ in ``moe_ring_common.h``.
 
 **Tile-block constants (must match moe_ring_common.h)**
 
-- ``BLOCK_TILES_W = 4``  — tiles per W2 column-block
-- ``BLOCK_TILES_H = 7``  — tiles per DRAM read transaction (height)
+- ``W0_W1_BLOCK_TILES_W = 4``     — W0/W1 read block width in tiles
+- ``W2_TILES_PER_A2A_ITER_W = 4`` — W2 a2a-iter width in tiles
+- ``BLOCK_TILES_H = 7``           — tiles per DRAM read transaction (height)
 
 Other tile counts (W0/W1 shard sizes, W2 groups per core, etc.) are now
 computed from ``hidden_size`` and ``intermediate_size`` via the shard formulas
@@ -76,7 +77,6 @@ See individual function docstrings for argument details and layout invariants.
 from __future__ import annotations
 
 import math
-import os
 from typing import Sequence
 
 import ttnn
@@ -85,10 +85,8 @@ import ttnn
 def _resolve_bh_ring_size(explicit_value=None):
     """BH ring size resolver. Supported: {8, 12, 16}; default 12.
 
-    Resolution order (mirrors C++ resolve_bh_ring_size in moe_compute_program_factory.cpp):
-      1. If `explicit_value` is provided, validate and return it.
-      2. Else if env var TT_MOE_BH_N is set, validate and return it.
-      3. Else return the default (12).
+    Mirrors C++ resolve_bh_ring_size in moe_compute_program_factory.cpp: validate the
+    explicit value if provided, else return the default (12).
 
     Default rationale: N=12 = LCM(3, 4) over the canonical model set (PR #43932's
     MODELS_1x16/1x8 all have output_width_shard_dim ∈ {3, 4}). The op validates
@@ -102,21 +100,11 @@ def _resolve_bh_ring_size(explicit_value=None):
     also pass the same value here, otherwise the prepared weight tensor shape will not
     match the op's expected layout.
 
-    Raises ValueError on an invalid explicit value or env value.
+    Raises ValueError on an invalid explicit value.
     """
-    if explicit_value is not None:
-        if explicit_value not in (8, 12, 16):
-            raise ValueError(f"bh_ring_size={explicit_value} is not supported (must be 8, 12, or 16)")
-        return explicit_value
-    env = os.environ.get("TT_MOE_BH_N")
-    if env is None:
-        return 12
-    try:
-        n = int(env)
-    except ValueError:
-        raise ValueError(f"TT_MOE_BH_N={env!r} is not an integer (must be 8, 12, or 16)")
+    n = 12 if explicit_value is None else explicit_value
     if n not in (8, 12, 16):
-        raise ValueError(f"TT_MOE_BH_N={env} is not supported (must be 8, 12, or 16)")
+        raise ValueError(f"bh_ring_size={n} is not supported (must be 8, 12, or 16)")
     return n
 
 
@@ -355,7 +343,11 @@ def add_shared_expert_weights(
 
 ####################################################################################################
 # Global constants — must be consistent with moe_ring_common.h
-BLOCK_TILES_W = 4
+# W0_W1_BLOCK_TILES_W and W2_TILES_PER_A2A_ITER_W happen to share the same value today
+# but represent distinct kernel quantities (W0/W1 read block width vs W2 a2a iter width).
+# Kept as separate names to mirror the kernel; do not collapse.
+W0_W1_BLOCK_TILES_W = 4  # matches moe_ring_common.h:W0_W1_BLOCK_TILES_W
+W2_TILES_PER_A2A_ITER_W = 4  # matches moe_ring_common.h:W2_TILES_PER_A2A_ITER_W
 BLOCK_TILES_H = 7
 
 # Historical model-specific shard constants — superseded by the generalized
@@ -827,7 +819,7 @@ def get_weight_core_shard_maps(mesh_device, hidden_size: int, intermediate_size:
 
     Ring length:
     - WH: target_ring_size = num_dram_banks = 12 (1:1 ring-to-bank).
-    - BH: target_ring_size = _resolve_bh_ring_size(bh_ring_size) — kwarg > env > default 12.
+    - BH: target_ring_size = _resolve_bh_ring_size(bh_ring_size) — kwarg or default 12.
           When target_ring_size > num_dram_banks (=8), the shard_map has extra entries
           for the synthetic ring positions that the C++ program_factory appends via
           kBhMatmulExtras. The prepare functions emit a matching target_ring_size-slot
@@ -839,8 +831,8 @@ def get_weight_core_shard_maps(mesh_device, hidden_size: int, intermediate_size:
     regardless of target_ring_size.
 
     `bh_ring_size`: if you pass this kwarg to ttnn.experimental.moe_compute, pass the same
-    value here. Leaving it None falls back to env TT_MOE_BH_N then the default — the same
-    behavior as the op's resolver, so a fully-default call site stays consistent.
+    value here. Leaving it None defaults to 12 — the same default as the op's resolver, so
+    a fully-default call site stays consistent.
     """
     in0_core_coords = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(mesh_device, 0)
     n_dram_banks = len(in0_core_coords)
@@ -854,10 +846,10 @@ def get_weight_core_shard_maps(mesh_device, hidden_size: int, intermediate_size:
     Nt = intermediate_size // ttnn.TILE_SIZE
     Ht = hidden_size // ttnn.TILE_SIZE
     # groups_per_core is fixed across ring positions (max W2 tiles owned by any ring slot,
-    # rounded up to BLOCK_TILES_W). Must use target_ring_size so it matches the kernel's
-    # num_a2a_iters * BLOCK_TILES_W / W2_TILES_PER_TXN.
+    # rounded up to W2_TILES_PER_A2A_ITER_W). Must use target_ring_size so it matches the
+    # kernel's num_a2a_iters * W2_TILES_PER_A2A_ITER_W / W2_TILES_PER_TXN.
     max_w2_tiles = (Ht + target_ring_size - 1) // target_ring_size
-    groups_per_core = (max_w2_tiles + BLOCK_TILES_W - 1) // BLOCK_TILES_W
+    groups_per_core = (max_w2_tiles + W2_TILES_PER_A2A_ITER_W - 1) // W2_TILES_PER_A2A_ITER_W
 
     sorted_dram_core_coords = []
     w0_w1_shard_map = []
@@ -874,8 +866,8 @@ def get_weight_core_shard_maps(mesh_device, hidden_size: int, intermediate_size:
         w0_w1_shard_map.append(w0_w1_tiles)
 
         w2_tiles = _w2_shard_tiles(Ht, ring_pos, Nt, target_ring_size)
-        last_group_tiles = w2_tiles - (groups_per_core - 1) * BLOCK_TILES_W
-        last_group_pad_tiles = groups_per_core * BLOCK_TILES_W - w2_tiles
+        last_group_tiles = w2_tiles - (groups_per_core - 1) * W2_TILES_PER_A2A_ITER_W
+        last_group_pad_tiles = groups_per_core * W2_TILES_PER_A2A_ITER_W - w2_tiles
         w2_shard_map_list.append((last_group_tiles, last_group_pad_tiles))
 
     dram_core_coords = [ttnn.CoreCoord(c, 0) for c in sorted_dram_core_coords]
@@ -968,7 +960,7 @@ def get_weight_mem_configs(
             f"(num_cores={num_cores}, groups_per_core={w1_w0_groups_per_core}, K_for_shard={K_for_shard})"
         )
     w0_w1_shard_height = w0_w1_total_rows // num_banks
-    w0_w1_shard_width = BLOCK_TILES_W * ttnn.TILE_SIZE
+    w0_w1_shard_width = W0_W1_BLOCK_TILES_W * ttnn.TILE_SIZE
 
     w0_w1_shard_spec = ttnn.ShardSpec(
         dram_core_range_set, (w0_w1_shard_height, w0_w1_shard_width), ttnn.ShardOrientation.ROW_MAJOR
@@ -984,7 +976,7 @@ def get_weight_mem_configs(
             f"(num_cores={num_cores}, w2_groups_per_core={w2_groups_per_core}, w2_N_total={w2_N_total})"
         )
     w2_shard_height = w2_total_rows // num_banks
-    w2_shard_width = BLOCK_TILES_W * ttnn.TILE_SIZE
+    w2_shard_width = W2_TILES_PER_A2A_ITER_W * ttnn.TILE_SIZE
 
     w2_shard_spec = ttnn.ShardSpec(
         dram_core_range_set, (w2_shard_height, w2_shard_width), ttnn.ShardOrientation.ROW_MAJOR

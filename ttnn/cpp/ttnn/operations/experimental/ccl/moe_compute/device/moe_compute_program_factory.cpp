@@ -9,11 +9,7 @@
 
 #include <algorithm>
 #include <array>
-#include <charconv>
-#include <cstdlib>
-#include <cstring>
 #include <numeric>
-#include <string_view>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -36,10 +32,7 @@
 
 namespace ttnn::experimental::prim {
 
-// BH ring size resolver. Resolution order:
-//   1. If `explicit_value` is provided, validate ({8, 12, 16}) and return it; fatal on invalid.
-//   2. Else if env var TT_MOE_BH_N is set, validate and return it; fatal on invalid.
-//   3. Else return the default (12).
+// BH ring size resolver: validate the explicit value if provided, else return the default (12).
 // Default is 12 because it equals LCM(3, 4) over the canonical model set in PR #43932:
 // every model in MODELS_1x16/1x8 has output_width_shard_dim ∈ {3, 4}, so N=12 satisfies
 // the op-side `matmul_num_cores % output_width_shard_dim == 0` validate for all of them
@@ -48,33 +41,11 @@ namespace ttnn::experimental::prim {
 //
 // The chosen N feeds the templatized MoeRingConfig<Ht, Nt, N, has_bias> in moe_ring_common.h.
 // N=8 maps 1:1 to BH's 8 DRAM banks; N=12/16 use HEIGHT_SHARDED (8 banks) + bank-run reads.
-// Resolved per call (no static cache) so the op kwarg path can pass different N values within
-// a single session and have the program cache distinguish them.
 uint32_t resolve_bh_ring_size(std::optional<uint32_t> explicit_value) {
-    if (explicit_value.has_value()) {
-        const uint32_t n = *explicit_value;
-        TT_FATAL(
-            n == 8 || n == 12 || n == 16, "moe_compute: bh_ring_size={} is not supported (must be 8, 12, or 16)", n);
-        return n;
-    }
-    const char* env = std::getenv("TT_MOE_BH_N");
-    if (env != nullptr) {
-        // Use from_chars so we reject partial parses ("12foo"), leading/trailing garbage,
-        // and non-numeric strings, instead of std::atoi which silently accepts them.
-        const std::string_view sv{env};
-        uint32_t parsed = 0;
-        const auto [end, ec] = std::from_chars(sv.data(), sv.data() + sv.size(), parsed);
-        const bool fully_consumed = (ec == std::errc{}) && (end == sv.data() + sv.size());
-        TT_FATAL(
-            fully_consumed && (parsed == 8u || parsed == 12u || parsed == 16u),
-            "moe_compute: TT_MOE_BH_N={} is not supported (must be exactly 8, 12, or 16)",
-            env);
-        return parsed;
-    }
-    return 12u;  // Default when neither kwarg nor env var is set. See header comment for rationale.
+    const uint32_t n = explicit_value.value_or(12u);
+    TT_FATAL(n == 8 || n == 12 || n == 16, "moe_compute: bh_ring_size={} is not supported (must be 8, 12, or 16)", n);
+    return n;
 }
-
-uint32_t get_bh_ring_size() { return resolve_bh_ring_size(std::nullopt); }
 
 }  // namespace ttnn::experimental::prim
 
@@ -196,13 +167,13 @@ get_cores(
     }
 
     // matmul cores come from the DRAM-bank-to-worker assignment: WH returns 12, BH returns 8.
-    // WH instantiates the N=12 ring; BH instantiates the N=bh_ring_size ring (per-call value,
-    // resolved from op kwarg with TT_MOE_BH_N env fallback; supported {8, 12, 16}).
+    // WH instantiates the N=12 ring; BH instantiates the N=bh_ring_size ring (per-call value
+    // resolved from the op kwarg; supported {8, 12, 16}, default 12).
     //   - N=8 (BH): keep only the 8 DRAM-adjacent cores; weights HEIGHT_SHARDED 1:1 with banks.
     //   - N=12/16 (BH): append extras inside the matmul mcast bbox ({0,0},{7,9}); weights still
     //     HEIGHT_SHARDED with 8 shards, but each ring core's slice spans 1-2 banks → dm0.cpp
     //     walks the slice via the bank-run loop, set_state'ing once per bank crossing.
-    // Issue #41827 PR1 (N=12 baseline) + N=16/N=8 perf experiments.
+    // See #41827.
     auto matmul_cores =
         mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
     if (mesh_device->arch() == tt::ARCH::BLACKHOLE) {
@@ -312,24 +283,28 @@ std::string serialize_physical_core_coords(const std::vector<ttnn::CoreCoord>& c
 
 namespace ttnn::experimental::prim {
 
-// expose a helper function so callers know what cores are available for subsequently running a2a combine
+// expose a helper function so callers know what cores are available for subsequently running a2a combine.
+// Combine cores depend only on the per-arch layout's max_combine_core_range_set + the (token, data)
+// parallel dims — not on hidden_size or bh_ring_size — so derive them directly without calling
+// get_cores(). Layout overlap (tilize/matmul/combine bboxes) is checked in get_cores() at program
+// build time, so callers that subsequently invoke the op still get the assert coverage.
 std::vector<ttnn::CoreCoord> get_moe_combine_cores(
     ttnn::MeshDevice* mesh_device,
     const uint32_t combine_token_parallel_cores,
     const uint32_t combine_data_parallel_cores) {
-    constexpr auto combine_cores_return_index = 8;
-
-    // Use dummy hidden_size since we only need combine cores (which don't depend on hidden_size)
-    // This function is only for getting combine cores, not tilize cores
-    constexpr uint32_t dummy_hidden_size = 7168;  // DeepSeek default
-    const auto get_cores_return = get_cores(
-        mesh_device,
-        combine_token_parallel_cores,
-        combine_data_parallel_cores,
-        dummy_hidden_size,
-        /*bh_ring_size=*/get_bh_ring_size());
-
-    return std::get<combine_cores_return_index>(get_cores_return);
+    const auto& layout = get_layout(mesh_device->arch());
+    const auto combine_core_range_set = select_from_corerangeset(
+        layout.max_combine_core_range_set,
+        /*start_index=*/0,
+        (combine_token_parallel_cores * combine_data_parallel_cores) - 1);
+    auto combine_cores = corerange_to_cores(combine_core_range_set);
+    std::sort(combine_cores.begin(), combine_cores.end(), [](const auto& ca, const auto& cb) {
+        if (ca.x != cb.x) {
+            return ca.x < cb.x;
+        }
+        return ca.y < cb.y;
+    });
+    return combine_cores;
 }
 
 MoEComputeMeshWorkloadFactory::cached_mesh_workload_t MoEComputeMeshWorkloadFactory::create_mesh_workload(

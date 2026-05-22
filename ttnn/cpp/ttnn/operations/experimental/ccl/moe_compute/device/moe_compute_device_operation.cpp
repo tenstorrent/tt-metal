@@ -300,7 +300,7 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
         .optional_output_tensor = std::nullopt,
     };
     const auto output_spec = ttnn::experimental::prim::SelectiveReduceCombineDeviceOperation::compute_output_specs(
-        *args.combine_params, combine_tensor_args);
+        args.combine_params.value(), combine_tensor_args);
 
     return {
         tilize_per_expert_total_tokens_spec,
@@ -417,7 +417,7 @@ std::vector<ttnn::Tensor> moe_compute(
 
     const auto& combine_cores = get_moe_combine_cores(mesh_device, num_token_parallel_cores, num_data_parallel_cores);
 
-    // Resolve BH ring size (WH always uses 12; BH supports {8, 12, 16}, default 12 or env TT_MOE_BH_N).
+    // Resolve BH ring size (WH always uses 12; BH supports {8, 12, 16}, default 12).
     const uint32_t ring_n = (mesh_device->arch() == tt::ARCH::BLACKHOLE)
                                 ? ttnn::experimental::prim::resolve_bh_ring_size(bh_ring_size)
                                 : 12u;

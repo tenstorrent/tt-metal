@@ -10,6 +10,9 @@ import os
 import pytest
 import random
 import torch
+
+torch.set_num_threads(os.cpu_count())
+
 import ttnn
 from ttnn.operations.ccl import MoEActivationFunction
 
