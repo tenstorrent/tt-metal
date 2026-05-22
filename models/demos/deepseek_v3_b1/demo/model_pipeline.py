@@ -57,6 +57,8 @@ class ModelPipeline:
         bspm_dir: Path | None = None,
         bspm_variant: str = "B",
         bspm_budget: float = 3.5,
+        mlp_only: bool = False,
+        sram_moe_only: bool = False,
     ):
         logger.info(
             "Initializing DeepSeek V3 B1 pod pipeline (weights={}, lm_head_fp32={}, lm_head_persistent_mode={}, speculative_decode={})",
@@ -120,7 +122,10 @@ class ModelPipeline:
                     bspm_dir=bspm_dir,
                     bspm_variant=bspm_variant,
                     bspm_budget=bspm_budget,
+                    sram_moe_only=sram_moe_only,
                 )
+                if sram_moe_only:
+                    logger.info("SRAM restricted to MoE layers only — dense MLP stays in DRAM")
             else:
                 provider = CacheWeightProvider(
                     cache_path,
@@ -156,6 +161,7 @@ class ModelPipeline:
             enable_mtp=enable_speculative_decode,
             enable_speculative_decode=enable_speculative_decode,
             num_slots=num_slots,
+            mlp_only=mlp_only,
         )
         if config.num_stages != num_procs:
             raise RuntimeError(f"Pipeline configuration has {config.num_stages} stages but {num_procs} processes")
@@ -516,3 +522,8 @@ class ModelPipeline:
 
     def terminate(self) -> None:
         self.pipeline.terminate()
+
+    def dump_debug_sram_counter(self) -> None:
+        """Read the debug-sram-count L1 buffer on this rank's stage (if enabled).
+        Must be called BEFORE terminate() — device must still be open for L1 readback."""
+        self.pipeline.dump_debug_sram_counter()

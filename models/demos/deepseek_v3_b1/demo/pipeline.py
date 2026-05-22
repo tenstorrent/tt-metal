@@ -208,6 +208,52 @@ def create_single_pod_pipeline_configuration(
     return PipelineConfiguration(stage_factories)
 
 
+def create_single_pod_mlp_only_pipeline_configuration(
+    weight_provider: WeightProvider,
+    *,
+    fp32_dest_acc_en: bool = True,
+    persistent_mode: bool = True,
+    dense_layer_id_override: int | None = None,
+    num_slots: int = 64,
+) -> PipelineConfiguration:
+    """16-stage MLP-only single-pod (base decode topology).
+
+    Mirrors create_single_pod_spec_decode_pipeline_configuration with
+    enable_speculative_decode=False: stage 0 is SpecLMHeadWithEmbeddingStage
+    (embed + LM head fused), stages 1..13 are DenseDecoderStage (dense MLP),
+    stages 14/15 are passthrough. No MoE, no spec, no MTP. Useful for
+    isolating MLP perf and SRAM impact on dense layers.
+    """
+
+    def stage_0(device: ttnn.MeshDevice) -> StageKind:
+        return SpecLMHeadWithEmbeddingStage(
+            embedding_weights=weight_provider.load_embedding(device),
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            persistent_mode=persistent_mode,
+            spec_weights=weight_provider.load_lm_head(device),
+        )
+
+    def _dense_stage(layer_id: int):
+        return lambda d: DenseDecoderStage(
+            weights=weight_provider.load_dense_layer(layer_id=layer_id, device=d),
+            layer_idx=layer_id,
+            num_slots=num_slots,
+        )
+
+    def passthrough_stage(device: ttnn.MeshDevice) -> StageKind:
+        return PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
+
+    dense_id = dense_layer_id_override if dense_layer_id_override is not None else 0
+
+    stage_factories: dict[int, Callable[[ttnn.MeshDevice], StageKind]] = {
+        0: stage_0,
+        **{i: _dense_stage(dense_id) for i in range(1, 14)},
+        14: passthrough_stage,
+        15: passthrough_stage,
+    }
+    return PipelineConfiguration(stage_factories)
+
+
 def create_single_pod_spec_decode_pipeline_configuration(
     weight_provider: WeightProvider,
     *,
@@ -434,8 +480,21 @@ def create_pipeline_configuration_from_num_procs(
     dense_layer_id_override: int | None = None,
     moe_layer_id_override: int | None = None,
     num_slots: int = 64,
+    mlp_only: bool = False,
 ) -> PipelineConfiguration:
     """Pick topology from process count (4 -> single_galaxy, 16 -> single_pod, 64 -> sp4)."""
+    if mlp_only:
+        if num_procs != 16:
+            raise ValueError(f"--mlp-only only supported on single-pod (16 procs), got {num_procs}")
+        if enable_speculative_decode or enable_mtp:
+            raise ValueError("--mlp-only requires --no-enable-speculative-decode and no MTP")
+        return create_single_pod_mlp_only_pipeline_configuration(
+            weight_provider,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            persistent_mode=persistent_mode,
+            dense_layer_id_override=dense_layer_id_override,
+            num_slots=num_slots,
+        )
     if num_procs == 4:
         return create_single_galaxy_pipeline_configuration(
             weight_provider,
@@ -662,4 +721,14 @@ class Pipeline:
         ttnn.distributed_context_barrier()
 
         self._pipeline_block.terminate()
+        logger.info("[teardown] before synchronize_device")
         ttnn.synchronize_device(self._mesh_device)
+        logger.info("[teardown] after synchronize_device")
+
+        # AFTER synchronize_device: kernel is fully exited and L1 writes are flushed.
+        # Safe to read the debug SRAM-count buffer (if enabled).
+        fn = getattr(self._stage_kind, "dump_debug_sram_counter", None)
+        logger.info("[teardown] dump_debug_sram_counter hook: {}", fn is not None)
+        if fn is not None:
+            fn()
+        logger.info("[teardown] done")

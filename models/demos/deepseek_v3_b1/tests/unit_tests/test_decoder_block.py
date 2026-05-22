@@ -980,6 +980,7 @@ def test_decoder(
         gate_indices_tensor=d["ttnn_gate_indices"],
         gate_output_scores_tensor=d["gate_output_scores_tensor"],
         gate_output_indices_tensor=d["gate_output_indices_tensor"],
+        debug_sram_count_tensor=d.get("debug_sram_count_tensor"),
         gate_proj_weights_tensor=d["gate_proj_weights"],
         up_proj_weights_tensor=d["up_proj_weights"],
         down_proj_weights_tensor=d["down_proj_weights"],
@@ -1223,6 +1224,22 @@ def test_decoder(
     if moe_scores is not None:
         logger.info(f"Golden MoE scores: {moe_scores}")
         logger.info(f"Golden MoE indices: {moe_indices}")
+
+    # ========================================================================
+    # Optional debug: dump per-iteration n_sram_active histogram
+    # ========================================================================
+    debug_tensor = d.get("debug_sram_count_tensor")
+    if debug_tensor is not None:
+        ttnn.synchronize_device(submesh)
+        # Each device records its own iterations independently (same workload, same data).
+        # Read just device 0's shard via get_device_tensors.
+        dev0 = ttnn.get_device_tensors(debug_tensor)[0]
+        debug_host = ttnn.to_torch(dev0).to(torch.int64).flatten()
+        nonzero = int((debug_host > 0).sum().item())
+        total = int(debug_host.numel())
+        counts = torch.bincount(debug_host.clamp(max=8), minlength=9).tolist()
+        logger.info(f"[debug-sram-count] device0 nonzero={nonzero}/{total} histogram (n_sram=0..8): {counts}")
+        logger.info(f"[debug-sram-count] device0 iters[0:256]: {debug_host[:256].tolist()}")
 
     # ========================================================================
     # Validate decoder MLA output (full pipeline)

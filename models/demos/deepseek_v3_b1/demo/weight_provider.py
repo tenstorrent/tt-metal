@@ -269,6 +269,7 @@ class CacheWeightProvider:
         bspm_dir: Path | None = None,
         bspm_variant: BspmVariant | str = BspmVariant.B,
         bspm_budget: float = 3.5,
+        sram_moe_only: bool = False,
     ) -> None:
         cache_path = Path(cache_path)
         model_path = Path(model_path)
@@ -286,6 +287,7 @@ class CacheWeightProvider:
         self._bspm_dir = Path(bspm_dir) if bspm_dir is not None else None
         self._bspm_variant = BspmVariant(bspm_variant)
         self._bspm_budget = bspm_budget
+        self._sram_moe_only = sram_moe_only
 
     def _cache_config(self, device: ttnn.MeshDevice) -> CacheConfig:
         context = CacheContext(
@@ -366,6 +368,8 @@ class CacheWeightProvider:
         sram_expert_ids_override: list[int] | None = None,
     ) -> DeepSeekV3DenseLayerWeights:
         # See load_moe_layer for iteration-1 rationale.
+        if self._sram_moe_only and sram_expert_ids_override is None:
+            sram_expert_ids_override = []
         host_weights = prepare_dense_layer_weights(
             device,
             self._state_dict,

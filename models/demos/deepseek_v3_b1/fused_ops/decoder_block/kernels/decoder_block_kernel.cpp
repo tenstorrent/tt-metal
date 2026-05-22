@@ -171,6 +171,21 @@ FORCE_INLINE uint32_t scan_n_sram_active() {
     return n;
 }
 
+// Debug counter: BRISC-only write of n_sram_active (uint8) to an L1 buffer at
+// `debug_l1_addr + iteration`. No-op when debug_l1_addr == 0 (disabled).
+// Cap is `debug_capacity` bytes; later iterations are silently dropped.
+template <uint32_t debug_l1_addr, uint32_t debug_capacity>
+FORCE_INLINE void debug_record_n_sram_active(uint32_t n, uint32_t iteration) {
+#if defined(COMPILE_FOR_BRISC)
+    if constexpr (debug_l1_addr != 0) {
+        if (iteration < debug_capacity) {
+            volatile uint8_t tt_l1_ptr* buf = reinterpret_cast<volatile uint8_t tt_l1_ptr*>(debug_l1_addr);
+            buf[iteration] = static_cast<uint8_t>(n);
+        }
+    }
+#endif
+}
+
 void kernel_main() {
     // ============================================================================
     // NCRISC (Reader + Mcast Receiver) - ReaderConfigDescriptor compiles as NCRISC
@@ -3197,7 +3212,7 @@ void kernel_main() {
         }
     };
 
-    auto moe_body = [&]() __attribute__((always_inline)) {
+    auto moe_body = [&](uint32_t debug_iter) __attribute__((always_inline)) {
         // 0. Residual Mcast: Broadcast input as residual to mcast receiver cores (pop_src=false)
         {
             // DeviceZoneScopedN("RESIDUAL_MCAST"); /* profiling: muted */
@@ -3329,6 +3344,14 @@ void kernel_main() {
                 get_named_compile_time_arg_val("sram_gather_index_l1_addr"),
                 get_named_compile_time_arg_val("sram_gather_num_active_experts"),
                 get_named_compile_time_arg_val("scan_sync_sem_addr")>();
+        }
+
+        // Optional debug: BRISC on sender_core records per-iteration n_sram_active
+        // to an L1 buffer. No-op when debug_sram_count_l1_addr == 0.
+        if constexpr (Core::Shared::is_gated_reduce_core) {
+            debug_record_n_sram_active<
+                get_named_compile_time_arg_val("debug_sram_count_l1_addr"),
+                get_named_compile_time_arg_val("debug_sram_count_capacity")>(n_sram_active, debug_iter);
         }
         if constexpr (
             Core::Shared::is_gated_reduce_core || Core::Shared::is_gate_compute_core ||
@@ -3829,7 +3852,7 @@ void kernel_main() {
         }
         {
             // DeviceZoneScopedN("MOE"); /* profiling: muted */
-            moe_body();
+            moe_body(loop.iteration() - 1);
         }
     }
 

@@ -274,6 +274,11 @@ class _MoeRoutedExpertContext:
     # Per-core sync sem for scan_n_sram_active (sender_scan + receiver_scan).
     scan_sync_sem_addr: int = 0
 
+    # Optional debug counter: BRISC on sender_core records per-iteration n_sram_active
+    # (uint8) to this L1 address. 0 disables. Capacity in bytes (max iterations).
+    debug_sram_count_l1_addr: int = 0
+    debug_sram_count_capacity: int = 0
+
     # Routing setup result dicts
     gate_mm_params: dict = None
     gate_mm_gather_params: dict = None
@@ -1132,6 +1137,8 @@ class MoeRoutedExpertOp:
         gate_indices_tensor=None,
         gate_output_scores_tensor=None,
         gate_output_indices_tensor=None,
+        # Optional debug counter tensor (uint8 L1 buffer; None disables).
+        debug_sram_count_tensor=None,
         # Expert weights (always required)
         gate_proj_weights_tensor=None,
         up_proj_weights_tensor=None,
@@ -1208,6 +1215,20 @@ class MoeRoutedExpertOp:
         down_proj_mcast_receiver_semaphore_addr = sem_addrs[MoeSem.DOWN_PROJ_MCAST_RECEIVER]
         sram_down_mcast_receiver_semaphore_addr = sem_addrs[MoeSem.SRAM_DOWN_MCAST_RECEIVER]
         scan_sync_sem_addr = sem_addrs[MoeSem.SCAN_SYNC]
+
+        # Optional debug counter (per-iter n_sram_active recording).
+        # When debug_sram_count_tensor is None, addr/capacity stay 0 → kernel constexpr no-op.
+        if debug_sram_count_tensor is not None:
+            debug_sram_count_l1_addr = _fused_base_addr(debug_sram_count_tensor)
+            # Capacity in bytes = product of logical shape (uint8 → 1 byte per element).
+            shp = debug_sram_count_tensor.shape
+            cap = 1
+            for d in shp:
+                cap *= int(d)
+            debug_sram_count_capacity = cap
+        else:
+            debug_sram_count_l1_addr = 0
+            debug_sram_count_capacity = 0
 
         # ==================================================================
         # Derive config from shared_residual_mcast_src_tensor (the actual input activation)
@@ -2276,6 +2297,8 @@ class MoeRoutedExpertOp:
             expert_scale_mcast_sender_semaphore_addr=expert_scale_mcast_sender_semaphore_addr,
             expert_scale_mcast_receiver_semaphore_addr=expert_scale_mcast_receiver_semaphore_addr,
             scan_sync_sem_addr=scan_sync_sem_addr,
+            debug_sram_count_l1_addr=debug_sram_count_l1_addr,
+            debug_sram_count_capacity=debug_sram_count_capacity,
             # Routing setup result dicts
             gate_mm_params=gate_mm_params,
             gate_mm_gather_params=gate_mm_gather_params,
@@ -2964,6 +2987,10 @@ class MoeRoutedExpertOp:
             # Used by sync_riscs_enter/exit so only BRISC waits on the index CB and
             # the other 4 RISCs sync via this sem.
             ("scan_sync_sem_addr", ctx.scan_sync_sem_addr),
+            # Optional debug: BRISC on sender_core records n_sram_active (uint8) per
+            # iteration to this L1 address. 0 disables (kernel constexpr no-op).
+            ("debug_sram_count_l1_addr", ctx.debug_sram_count_l1_addr),
+            ("debug_sram_count_capacity", ctx.debug_sram_count_capacity),
         ]
         ncrisc_named_compile_time_args += sram_gather_common
         brisc_named_compile_time_args += sram_gather_common
@@ -6197,6 +6224,7 @@ class MoeOp:
         sram_gate_proj_weights_tensor=None,
         sram_up_proj_weights_tensor=None,
         sram_down_proj_weights_tensor=None,
+        debug_sram_count_tensor=None,
     ):
         """Setup both routed and shared expert contexts, then overlap CBs with SDPA buffers."""
         self.noc_mode = noc_mode
@@ -6253,6 +6281,7 @@ class MoeOp:
             sram_gate_proj_weights_tensor=sram_gate_proj_weights_tensor,
             sram_up_proj_weights_tensor=sram_up_proj_weights_tensor,
             sram_down_proj_weights_tensor=sram_down_proj_weights_tensor,
+            debug_sram_count_tensor=debug_sram_count_tensor,
         )
 
         device_tensor = ttnn.get_device_tensors(shared_residual_mcast_src_tensor)[0]

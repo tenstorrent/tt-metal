@@ -171,6 +171,22 @@ def create_parser() -> argparse.ArgumentParser:
         default=True,
         help="Enable speculative decode; use --no-enable-speculative-decode for base decode",
     )
+    parser.add_argument(
+        "--mlp-only",
+        action="store_true",
+        help=(
+            "MLP-only single-pod pipeline (Embed -> Dense×13 -> LMHead -> Token fwd). "
+            "All 13 transformer stages use dense MLP layer 0. Requires --no-enable-speculative-decode."
+        ),
+    )
+    parser.add_argument(
+        "--sram-moe-only",
+        action="store_true",
+        help=(
+            "When combined with --enable-sram-hot-experts, restrict SRAM to MoE layers only "
+            "(dense MLP layers stay fully in DRAM). Useful for isolating MoE SRAM perf gain."
+        ),
+    )
 
     return parser
 
@@ -203,6 +219,8 @@ def run_demo(
     sram_hot_experts_ceiling: int = 64,
     bspm_dir: Path | None = None,
     bspm_budget: float = 3.5,
+    mlp_only: bool = False,
+    sram_moe_only: bool = False,
 ) -> None:
     """Run the pod pipeline. Requires 4, 16, or 64 distributed processes."""
     configure_runtime_env(enable_sram_hot_experts=enable_sram_hot_experts)
@@ -234,6 +252,8 @@ def run_demo(
             sram_hot_experts_ceiling=sram_hot_experts_ceiling,
             bspm_dir=bspm_dir,
             bspm_budget=bspm_budget,
+            mlp_only=mlp_only,
+            sram_moe_only=sram_moe_only,
         )
 
         my_mesh_id = mesh_device.get_system_mesh_id()
@@ -281,6 +301,9 @@ def run_demo(
         model_pipeline.barrier()
 
         logger.info("Pod pipeline complete - terminating now...")
+        # Debug SRAM-count readback (DEEPSEEK_DEBUG_SRAM_COUNT=1) runs INSIDE
+        # pipeline.terminate(), AFTER its final synchronize_device — at that
+        # point the kernel has fully exited and L1 writes are flushed.
         model_pipeline.terminate()
 
 
@@ -333,6 +356,8 @@ def main(argv: list[str] | None = None) -> int:
         sram_hot_experts_ceiling=args.sram_hot_experts_ceiling,
         bspm_dir=args.bspm_dir,
         bspm_budget=args.bspm_budget,
+        mlp_only=args.mlp_only,
+        sram_moe_only=args.sram_moe_only,
     )
     print(end="", file=sys.stdout, flush=True)
     return 0

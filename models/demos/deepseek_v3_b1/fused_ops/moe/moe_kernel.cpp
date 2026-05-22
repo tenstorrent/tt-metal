@@ -139,6 +139,21 @@ FORCE_INLINE uint32_t scan_n_sram_active() {
     return n;
 }
 
+// Debug counter: BRISC-only write of n_sram_active (uint8) to an L1 buffer at
+// `debug_l1_addr + iteration`. No-op when debug_l1_addr == 0 (disabled).
+// Cap is `debug_capacity` bytes; later iterations are silently dropped.
+template <uint32_t debug_l1_addr, uint32_t debug_capacity>
+FORCE_INLINE void debug_record_n_sram_active(uint32_t n, uint32_t iteration) {
+#if defined(COMPILE_FOR_BRISC)
+    if constexpr (debug_l1_addr != 0) {
+        if (iteration < debug_capacity) {
+            volatile uint8_t tt_l1_ptr* buf = reinterpret_cast<volatile uint8_t tt_l1_ptr*>(debug_l1_addr);
+            buf[iteration] = static_cast<uint8_t>(n);
+        }
+    }
+#endif
+}
+
 void kernel_main() {
 #if defined(RECONFIG_MOE_CBS)
     {
@@ -1727,6 +1742,14 @@ void kernel_main() {
                 get_named_compile_time_arg_val("sram_gather_index_l1_addr"),
                 get_named_compile_time_arg_val("sram_gather_num_active_experts"),
                 get_named_compile_time_arg_val("scan_sync_sem_addr")>();
+        }
+
+        // Optional debug: BRISC on sender_core records per-iteration n_sram_active
+        // to an L1 buffer. No-op when debug_sram_count_l1_addr == 0.
+        if constexpr (Core::Shared::is_gated_reduce_core) {
+            debug_record_n_sram_active<
+                get_named_compile_time_arg_val("debug_sram_count_l1_addr"),
+                get_named_compile_time_arg_val("debug_sram_count_capacity")>(n_sram_active, iteration);
         }
 
         // Derive DRAM-active count on cores that scanned (and therefore have a

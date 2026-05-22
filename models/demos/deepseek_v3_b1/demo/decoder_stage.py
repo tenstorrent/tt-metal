@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import torch
@@ -258,6 +259,28 @@ def create_decoder_block_tensors(
             tile=tile_1x16,
             mesh_mapper=mesh_mapper,
         )
+        # Optional debug: per-iteration n_sram_active recorded by BRISC on sender_core
+        # to an L1 buffer. Enable via DEEPSEEK_DEBUG_SRAM_COUNT=1; default off.
+        debug_sram_count_tensor = None
+        if os.environ.get("DEEPSEEK_DEBUG_SRAM_COUNT") == "1":
+            _DEBUG_CAP = 8192  # bytes; 1 byte per iteration → max 8K iters recorded
+            debug_shard_spec = ttnn.ShardSpec(input_core_grid, (1, _DEBUG_CAP), ttnn.ShardOrientation.ROW_MAJOR)
+            debug_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, debug_shard_spec
+            )
+            debug_sram_count_tensor = ttnn.from_torch(
+                torch.zeros((1, _DEBUG_CAP), dtype=torch.uint8),
+                dtype=ttnn.uint8,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=submesh,
+                memory_config=debug_mem_config,
+                mesh_mapper=mesh_mapper,
+            )
+            logger.info(
+                "DEEPSEEK_DEBUG_SRAM_COUNT=1: sharded {}B L1 buffer on {} for n_sram_active recording",
+                _DEBUG_CAP,
+                input_core,
+            )
         moe_ref_gate_output_scores = None
         moe_ref_gate_output_indices = None
         if validate_debug_tensors:
@@ -699,6 +722,7 @@ def create_decoder_block_tensors(
                 "ttnn_gate_indices": ttnn_gate_indices,
                 "gate_output_scores_tensor": gate_output_scores_tensor,
                 "gate_output_indices_tensor": gate_output_indices_tensor,
+                "debug_sram_count_tensor": debug_sram_count_tensor,
                 "moe_ref_gate_output_scores": moe_ref_gate_output_scores,
                 "moe_ref_gate_output_indices": moe_ref_gate_output_indices,
                 "moe_ref_reduce_intermediate": moe_ref_reduce_intermediate,
@@ -857,6 +881,7 @@ class DecoderStage(StageKind):
             gate_indices_tensor=gate_indices_tensor,
             gate_output_scores_tensor=gate_output_scores_tensor,
             gate_output_indices_tensor=gate_output_indices_tensor,
+            debug_sram_count_tensor=d.get("debug_sram_count_tensor"),
             gate_proj_weights_tensor=d["gate_proj_weights"],
             up_proj_weights_tensor=d["up_proj_weights"],
             down_proj_weights_tensor=d["down_proj_weights"],
@@ -992,6 +1017,42 @@ class DecoderStage(StageKind):
 
     def terminate(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
         self._persistent_loop.terminate()
+
+    def dump_debug_sram_counter(self) -> None:
+        """Read the optional debug-sram-count L1 buffer and log per-iter histogram.
+
+        Must be called BEFORE pipeline terminate() — at that point the kernel is
+        post-inference and the buffer has all its iteration writes, and the device
+        is still active so the to_torch readback can synchronize cleanly.
+        """
+        if not (self._state and "d" in self._state):
+            return
+        dbg = self._state["d"].get("debug_sram_count_tensor")
+        if dbg is None:
+            return
+        try:
+            # Multi-device tensor; each device's shard has its own per-iter record.
+            # Read device 0 (all devices see the same workload sequence).
+            dev0 = ttnn.get_device_tensors(dbg)[0]
+            host = ttnn.to_torch(dev0).to(torch.int64).flatten()
+            nonzero = int((host > 0).sum().item())
+            total = int(host.numel())
+            counts = torch.bincount(host.clamp(max=8), minlength=9).tolist()
+            logger.info(
+                "[debug-sram-count] layer_idx={} device0 nonzero={}/{} histogram (n_sram=0..8): {}",
+                getattr(self, "layer_idx", "?"),
+                nonzero,
+                total,
+                counts,
+            )
+            # Full per-iter trace (first 256 = 67 prefill + 128 decode + headroom)
+            logger.info(
+                "[debug-sram-count] layer_idx={} iters[0:256]: {}",
+                getattr(self, "layer_idx", "?"),
+                host[:256].tolist(),
+            )
+        except Exception as e:
+            logger.warning("[debug-sram-count] readback failed: {}", e)
 
     def get_kv_cache_host(self) -> torch.Tensor | None:
         """Pull this stage's on-device KV cache to host as a single torch tensor.
