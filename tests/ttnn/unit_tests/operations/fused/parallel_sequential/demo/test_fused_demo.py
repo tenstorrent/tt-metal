@@ -726,13 +726,24 @@ class TestPerfDemos:
         # [1024,256] x [256,128] on 1x8 grid
         # M=32 tiles, K=8 tiles, N=4 tiles
         # per_core_M=32/8=4, per_core_N=4, in0_block_w=K/32=8
-        mm_cfg = ttnn.MatmulMultiCoreReuseProgramConfig(
+        # Two separate configs bound to their respective disjoint grids
+        mm_cfg_a = ttnn.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(1, 8),
             in0_block_w=K // 32,
             out_subblock_h=1,
             out_subblock_w=min(N // 32, 4),
             per_core_M=shard_h // 32,
             per_core_N=N // 32,
+            allowed_worker_cores=cores_a,
+        )
+        mm_cfg_b = ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(1, 8),
+            in0_block_w=K // 32,
+            out_subblock_h=1,
+            out_subblock_w=min(N // 32, 4),
+            per_core_M=shard_h // 32,
+            per_core_N=N // 32,
+            allowed_worker_cores=cores_b,
         )
 
         torch_a = torch.randn(1, 1, rows, K, dtype=torch.bfloat16)
@@ -769,7 +780,8 @@ class TestPerfDemos:
             sharded_in_b,
             sharded_out_a,
             sharded_out_b,
-            mm_cfg,
+            mm_cfg_a,
+            mm_cfg_b,
             ta,
             tb,
             tw,
@@ -792,7 +804,8 @@ class TestPerfDemos:
             sharded_in_b,
             sharded_out_a,
             sharded_out_b,
-            mm_cfg,
+            mm_cfg_a,
+            mm_cfg_b,
             ta,
             tb,
             tw,
@@ -813,7 +826,7 @@ class TestPerfDemos:
             la.output_tensors[0],
             tB,
             core_range_set=cores_a,
-            program_config=mm_cfg,
+            program_config=mm_cfg_a,
             compute_kernel_config=COMPUTE_CONFIG,
             output_mem_config=sharded_out_a,
         )
@@ -829,7 +842,7 @@ class TestPerfDemos:
             rb.output_tensors[0],
             tB,
             core_range_set=cores_b,
-            program_config=mm_cfg,
+            program_config=mm_cfg_b,
             compute_kernel_config=COMPUTE_CONFIG,
             output_mem_config=sharded_out_b,
         )
@@ -841,9 +854,9 @@ class TestPerfDemos:
             result_b = ttnn.to_torch(result_b_t)
 
             ua1 = ttnn.layer_norm(ta, weight=tw, bias=tbi, epsilon=1e-5, compute_kernel_config=COMPUTE_CONFIG)
-            ua2 = ttnn.matmul(ua1, tB, program_config=mm_cfg, compute_kernel_config=COMPUTE_CONFIG)
+            ua2 = ttnn.matmul(ua1, tB, program_config=mm_cfg_a, compute_kernel_config=COMPUTE_CONFIG)
             ub1 = ttnn.rms_norm(tb, weight=tw, epsilon=1e-5, compute_kernel_config=COMPUTE_CONFIG)
-            ub2 = ttnn.matmul(ub1, tB, program_config=mm_cfg, compute_kernel_config=COMPUTE_CONFIG)
+            ub2 = ttnn.matmul(ub1, tB, program_config=mm_cfg_b, compute_kernel_config=COMPUTE_CONFIG)
 
             ref_a = ttnn.to_torch(ua2)
             ref_b = ttnn.to_torch(ub2)
@@ -863,9 +876,9 @@ class TestPerfDemos:
 
             # Unfused reference for PCC — interleaved to avoid core mapping constraints
             ua1 = ttnn.layer_norm(ta, weight=tw, bias=tbi, epsilon=1e-5, compute_kernel_config=COMPUTE_CONFIG)
-            ua2 = ttnn.matmul(ua1, tB, program_config=mm_cfg, compute_kernel_config=COMPUTE_CONFIG)
+            ua2 = ttnn.matmul(ua1, tB, program_config=mm_cfg_a, compute_kernel_config=COMPUTE_CONFIG)
             ub1 = ttnn.rms_norm(tb, weight=tw, epsilon=1e-5, compute_kernel_config=COMPUTE_CONFIG)
-            ub2 = ttnn.matmul(ub1, tB, program_config=mm_cfg, compute_kernel_config=COMPUTE_CONFIG)
+            ub2 = ttnn.matmul(ub1, tB, program_config=mm_cfg_b, compute_kernel_config=COMPUTE_CONFIG)
 
             ref_a = ttnn.to_torch(ua2)
             ref_b = ttnn.to_torch(ub2)
@@ -881,9 +894,9 @@ class TestPerfDemos:
 
             # Unfused reference for accuracy check — interleaved to avoid core mapping constraints
             ua1 = ttnn.layer_norm(ta, weight=tw, bias=tbi, epsilon=1e-5, compute_kernel_config=COMPUTE_CONFIG)
-            ua2 = ttnn.matmul(ua1, tB, program_config=mm_cfg, compute_kernel_config=COMPUTE_CONFIG)
+            ua2 = ttnn.matmul(ua1, tB, program_config=mm_cfg_a, compute_kernel_config=COMPUTE_CONFIG)
             ub1 = ttnn.rms_norm(tb, weight=tw, epsilon=1e-5, compute_kernel_config=COMPUTE_CONFIG)
-            ub2 = ttnn.matmul(ub1, tB, program_config=mm_cfg, compute_kernel_config=COMPUTE_CONFIG)
+            ub2 = ttnn.matmul(ub1, tB, program_config=mm_cfg_b, compute_kernel_config=COMPUTE_CONFIG)
 
             ref_a = ttnn.to_torch(ua2)
             ref_b = ttnn.to_torch(ub2)
