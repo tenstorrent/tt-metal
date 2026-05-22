@@ -16,7 +16,16 @@ from .....layers.embeddings import WanPatchEmbed
 from .....layers.module import Module
 from .....parallel.config import DiTParallelConfig
 from .....utils.tensor import bf16_tensor
-from .rope_s2v import rope_params
+
+
+# Vendored from wan/modules/s2v/motioner.py — kept byte-identical to the ref.
+def rope_params(max_seq_len, dim, theta=10000):
+    assert dim % 2 == 0
+    freqs = torch.outer(
+        torch.arange(max_seq_len), 1.0 / torch.pow(theta, torch.arange(0, dim, 2).to(torch.float64).div(dim))
+    )
+    freqs = torch.polar(torch.ones_like(freqs), freqs)
+    return freqs
 
 
 class FramePackMotionerWan(Module):

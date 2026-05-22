@@ -13,7 +13,7 @@ from loguru import logger
 
 import ttnn
 
-from .....models.transformers.wan2_2.s2v.rope_s2v import rope_params
+from .....models.transformers.wan2_2.s2v.motioner import rope_params
 from .....models.transformers.wan2_2.s2v.transformer_wan_s2v import WanS2VTransformer3DModel
 from .....parallel.config import DiTParallelConfig, ParallelFactor
 from .....parallel.manager import CCLManager
