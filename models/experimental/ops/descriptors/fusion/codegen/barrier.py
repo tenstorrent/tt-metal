@@ -564,7 +564,6 @@ def _emit_group_sync_coordinator(dispatch: List[Dict[str, Any]]) -> List[str]:
 def _emit_group_sync_follower(
     dispatch: List[Dict[str, Any]],
     for_compute: bool,
-    risc_type: str,
 ) -> List[str]:
     """Emit ``group::sync()`` function for BRISC or compute.
 
@@ -605,7 +604,6 @@ def _emit_group_sync_follower(
 def _emit_init_coordinator(
     has_compute: bool,
     num_segments: int,
-    op_semaphore_info: Optional[List[Tuple[int, int]]] = None,
     has_writer: bool = True,
 ) -> List[str]:
     """Emit ``init()`` for the coordinator (NCRISC)."""
@@ -628,13 +626,14 @@ def _emit_init_coordinator(
     lines.append("    // Each follower RISC resets its own semaphore in its own init().")
     lines.append("    // Resetting here races with fast compute/BRISC signaling")
     lines.append("    // (e.g. no-op phase 0 where compute signals immediately).")
-    if op_semaphore_info:
-        lines.append("    // Reset op semaphores so phase 0 doesn't see stale values")
-        lines.append("    // from the previous execution's last phase.")
-        for sem_id, initial_value in op_semaphore_info:
-            lines.append(
-                f"    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore({sem_id})) = {initial_value};"
-            )
+    # NOTE: Do NOT reset op semaphores here. The hardware dispatch initializes
+    # semaphores to their initial_value on every enqueue (including cache hits),
+    # and local::sync()'s trailing barrier resets them after the last phase.
+    # Resetting in init() races with receiver cores that call sender_sem.up()
+    # via NOC before this core finishes init() — those signals would be erased,
+    # causing a deadlock when mcast_in0 is the first (phase 0) operation.
+    # The synchronized reset in local::sync() (gated by *reset_done) is
+    # sufficient for all inter-phase transitions.
     for seg_idx in range(num_segments):
         lines.append(f"    group::seg_{seg_idx}::init();")
     lines.append("}")
@@ -796,7 +795,7 @@ def _generate_barrier_namespace(
     if is_coordinator:
         lines.extend(_emit_group_sync_coordinator(dispatch))
     else:
-        lines.extend(_emit_group_sync_follower(dispatch, for_compute=(risc_type == "compute"), risc_type=risc_type))
+        lines.extend(_emit_group_sync_follower(dispatch, for_compute=(risc_type == "compute")))
     lines.append("} // namespace group")
     lines.append("")
 
@@ -809,7 +808,7 @@ def _generate_barrier_namespace(
 
     # init()
     if is_coordinator:
-        lines.extend(_emit_init_coordinator(has_compute, num_segments, op_semaphore_info, has_writer=has_writer))
+        lines.extend(_emit_init_coordinator(has_compute, num_segments, has_writer=has_writer))
     else:
         lines.extend(_emit_init_follower(risc_type, num_segments))
     lines.append("")
