@@ -517,9 +517,15 @@ def _add_shared_experts_to_output_golden(
     return torch_output_golden
 
 
-def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_reference_tensor, atol_threshold=450):
-    PCC_THRESHOLD = 0.988
-
+def verify_output(
+    iteration,
+    mesh_device,
+    mesh_shape,
+    tt_output_tensor,
+    output_reference_tensor,
+    pcc_threshold=0.988,
+    atol_threshold=450,
+):
     # bring to host
     # [1, 1, tokens_per_devices, hidden_size // num_replicated_devices] (per device) -> [1, 1, batch, hidden_size] (global on host)
     tt_output_tensor = ttnn.to_torch(
@@ -533,7 +539,7 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
     tt_output_tensor = tt_output_tensor.reshape(tt_output_tensor.shape[-2], 1, 1, tt_output_tensor.shape[-1])
 
     # check pcc
-    pcc_passed, pcc_output = comp_pcc(tt_output_tensor, output_reference_tensor, pcc=PCC_THRESHOLD)
+    pcc_passed, pcc_output = comp_pcc(tt_output_tensor, output_reference_tensor, pcc=pcc_threshold)
     logger.info(f"Final Output - Iteration: {iteration} - PCC: {pcc_output}")
     if not pcc_passed:
         logger.warning(f"FAILED Final Output - Iteration: {iteration} - PCC: {pcc_output}")
@@ -546,9 +552,9 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
     if not allclose_passed:
         logger.warning(f"FAILED Final Output - Iteration: {iteration} - AllClose: {allclose_output}")
         mask = (tt_output_tensor - output_reference_tensor).abs() > atol_threshold
-        logger.warning(
-            f"Elements out of bounds: {tt_output_tensor[mask]} ref: {output_reference_tensor[mask]} idx: {mask.nonzero(as_tuple=True)}"
-        )
+        # logger.warning(
+    #             f"Elements out of bounds: {tt_output_tensor[mask]} ref: {output_reference_tensor[mask]} idx: {mask.nonzero(as_tuple=True)}"
+    #         )
 
     return pcc_passed and allclose_passed
 
