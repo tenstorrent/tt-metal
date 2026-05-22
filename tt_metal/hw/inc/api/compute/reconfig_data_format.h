@@ -15,6 +15,11 @@ namespace ckernel {
 
 /**
  * Helper function to reconfigure srca and srcb data formats.
+ *
+ * NOTE(ARCH_QUASAR): On Quasar, buffer descriptors are programmed into the unpack MOP at op init.
+ * reconfig_data_format only reprograms THCON data formats (gasket), not the MOP. When operands or
+ * DFB/buffer descriptors change, call the op init again for the new operand pair before the next
+ * unpack operation.
  */
 template <bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
 ALWI void reconfig_data_format(const uint32_t srca_new_operand, const uint32_t srcb_new_operand) {
@@ -28,6 +33,8 @@ ALWI void reconfig_data_format(const uint32_t srca_new_operand, const uint32_t s
 
 /**
  * Helper function to reconfigure srca/srcb data formats, only if they differ from existing formats.
+ *
+ * NOTE(ARCH_QUASAR): See reconfig_data_format(srca_new_operand, srcb_new_operand).
  */
 template <bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
 ALWI void reconfig_data_format(
