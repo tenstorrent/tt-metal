@@ -259,10 +259,8 @@ class ModelOptimizations:
                 settings["OpFidelity"][OpGroup.LI_QKV_PREFILL] = MathFidelitySetting.HIFI2_FP16
             if base_model_name_lower.startswith("phi-1"):
                 logger.info(
-                    f"Model {model_name} uses Phi-1 topology, using BFP8 activations in performance mode and "
-                    "forcing FP16 accumulate in attention prefill QKV Matmul"
+                    f"Model {model_name} uses Phi-1 topology, forcing FP16 accumulate in attention prefill QKV Matmul"
                 )
-                settings["TensorPrecision"][TensorGroup.ACTIVATION] = PrecisionSetting.BFP8
                 settings["OpFidelity"][OpGroup.LI_QKV_PREFILL] = MathFidelitySetting.HIFI2_FP16
             inst = cls(settings)
         inst.__name__ = "performance"
