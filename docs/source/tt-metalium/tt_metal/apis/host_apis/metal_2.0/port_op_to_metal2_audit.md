@@ -67,7 +67,7 @@ Metal 2.0 migration sits at the end of a chain of prior modernizations. Three pr
 - **Standalone prereq** (Check 1 below): `ProgramDescriptor` migration is a substantial, separate body of work with TTNN-infrastructure implications. If unmet, it is its own PR — it does not bundle with the other prereq checks or with the Metal 2.0 port. Record the gap and continue the audit; do not attempt the migration here.
 - **Bundled prereqs** (Checks 2 and 3 below): smaller, mechanical kernel-side work. If unmet, address in a **single bundled prereq PR**, separate from the Metal 2.0 port. Bundle the two together if both are unmet — they're conceptually one body of work (kernel-side modernization). Yellow sub-cases (see Check 3) require user judgment.
 
-**Complete all three checks regardless of individual outcomes, then continue to Step 0.2.** The audit's job is to gather a complete picture of what porting this op will require, including features the op uses that may be blocked on prereq work. Do not exit early on a RED prereq — surface all findings to the report.
+**Complete all three checks regardless of individual outcomes, then continue to Steps 0.2 and 0.3.** The audit's job is to gather a complete picture of what porting this op will require, including features the op uses that may be blocked on prereq work and characteristics that shape the port's scope. Do not exit early on a RED prereq — surface all findings to the report.
 
 **Check 1 (standalone prereq): Op is on the `ProgramDescriptor` API.**
 
@@ -118,11 +118,45 @@ For each entry in [Appendix A: Metal 2.0 feature compatibility](#appendix-a-meta
 
 If the op uses something *not listed* in Appendix A and you are uncertain of its support status, treat as yellow and ask. Do not assume support from API surface.
 
+### Step 0.3 — Port complexity signals
+
+Run this step regardless of Step 0.1 and Step 0.2 outcomes. **Findings here are informational only — none of these signals gates the port.** They quantify scope and surface ops that need extra attention so the human readers (porter, ops lead, runtime team) can plan accordingly. Each check produces a single concise report entry; if the signal doesn't fire, write "none."
+
+**Check A: Variadic kernels.**
+
+Recognition: a kernel reads `num_runtime_varargs > 0` from its `KernelDescriptor`, OR pulls arguments in a counted loop (`for (int i = 0; i < N; ++i) { get_arg_val<uint32_t>(i); ... }`) where `N` is itself runtime-known. Typical in ops with a runtime-variable input count (concat, stack, multi-input reductions).
+
+Report: name the kernel and the recognition site (`file:line`). Note that the Metal 2.0 port will need to either preserve variadic positional-CTA semantics or refactor to front-loaded typed arguments with a CTA-known fixed cap — this is a design call the porter will surface to the user during the port itself.
+
+**Check B: Custom `compute_program_hash`.**
+
+Recognition: the op's device-operation type defines a `compute_program_hash` member or override, replacing the default reflection-based hash.
+
+Report: name the location (`file:line`). Note that custom hashes that omit `TensorSpec` from the key trigger `UpdateTensorArgs` legality failures on fast-path program-cache hits in Metal 2.0; the fix when that surfaces is to revert to the default hash (see the [migration guide's troubleshooting table](metal2_migration_guide.md#cryptic-error--likely-cause)). Verification-time concern, not a port-time blocker.
+
+**Check C: `override_runtime_arguments` complexity.**
+
+Recognition: the op defines an `override_runtime_arguments` method. Inspect it and report:
+
+- Line count.
+- What it touches: RTA values only, CB-size mutations (`UpdateCircularBuffer*`), semaphore mutations, `SetCircularBufferConfig` calls, or `set_address_offset` recomputation.
+- Whether it includes per-shape branching, conditional RTA assembly, or limited state inspection.
+
+Categorize and report a tier:
+
+- **Trivial** — RTA values only, < 30 lines, no per-shape branching. Ports directly into per-execution `ProgramRunParams` build logic.
+- **Moderate** — 30-100 lines, includes per-shape branching or conditional RTA assembly but no CB or semaphore mutation. Substantial but tractable port.
+- **Heavy** — CB sizing mutations, semaphore mutations, `set_address_offset` recomputation, or > 100 lines of dense logic. **Flag with a star** — likely needs design discussion before the Metal 2.0 port.
+
+`override_runtime_arguments` complexity is the best proxy for both `ProgramDescriptor`-lift difficulty (a separate, ongoing migration workstream) and Metal 2.0 `ProgramRunParams`-build complexity, since the same patching logic translates to both. Reporting it here helps both teams scope work.
+
 ### Output: the audit report
 
 The audit produces a written report. Write the report as `METAL2_PREPORT_AUDIT.md` in the op's directory (alongside the program factory `.cpp` files). This file is the audit's deliverable and is committed alongside the port — it sits next to `METAL2_PORT_PLAN.md` and `METAL2_PORT_REPORT.md` (both written by the port recipe), so all generated docs for the port land in one spot.
 
 **Important framing for the human reader.** RED entries gate *this specific port attempt*, but they are **not permanent blockers**. Most RED entries mean "Metal 2.0 hasn't implemented this yet" — the port will become possible once the missing feature lands. A few (today: just `address_offset`) require a runtime-team consultation about a redesigned API. Each Appendix A entry's **Status** field describes the future path. **You must surface that future path explicitly in the report** for every RED row, so the human reader does not misread RED as "this op can never be ported." Reassuring framing matters here — a colleague seeing the report should understand the path forward, not just the gate.
+
+**Specifically for Step 0.1 Check 1 RED (op on imperative `host_api.hpp`):** the `ProgramDescriptor` migration is a separate, ongoing effort driven independently of the Metal 2.0 work. RED on Check 1 is the **expected outcome** for any op still on the legacy imperative API today — it is not an alarm signal. The Metal 2.0 port for this op will be unblocked once its `ProgramDescriptor` migration lands. State this explicitly in the report's "ProgramDescriptor API" section so the reader doesn't misread the RED as "this op is stuck."
 
 **Code-path scope.** Blockers are often confined to specific code paths within an op (e.g., a single factory's `if (use_width_sharding)` branch). When this is the case, **explicitly identify which code paths are clean vs. blocked** in the report, and offer the user the option of a scoped-subset port — e.g., "interleaved-only paths, omitting the sharded path." A partial port that delivers value now may be preferable to waiting for the full upstream gate to clear. The Overall line should reflect this when applicable: `RED at op level; subset <X> is clear` rather than just `RED`.
 
@@ -131,7 +165,7 @@ The audit produces a written report. Write the report as `METAL2_PREPORT_AUDIT.m
 Markdown formatting is required, not optional — the headers, tables, and inline-code spans are what make a sizeable report skim-friendly for a human reviewer. Use:
 
 - H1 for the audit's title.
-- H2 for major sections (Result, Porting prerequisites, Feature compatibility check, Path forward, Questions for the user).
+- H2 for major sections (Result, Porting prerequisites, Feature compatibility check, Port complexity signals, Path forward, Questions for the user).
 - H3 for sub-sections (per-prereq-check headings; per-feature detail sections).
 - **Tables** for the Device 2.0 DM holdover list (when present) and the Feature compatibility check summary. These are non-negotiable — flat bullet lists at this scale lose readability fast.
 - Inline `code formatting` for file paths, function names, type names, identifiers throughout.
@@ -172,7 +206,7 @@ The conclusion appears at the top so a colleague glancing at the report sees the
 
 ### ProgramDescriptor API: **GREEN | RED**
 
-<Findings. For RED, name the imperative-API calls that disqualify and state that the `ProgramDescriptor` migration is a prerequisite to Metal 2.0 porting — a substantial, standalone body of work addressed in its own PR.>
+<Findings. For RED, name the imperative-API calls that disqualify. State that the `ProgramDescriptor` migration is a separate, ongoing effort and that RED here is the expected outcome for legacy ops — not an alarm signal. The Metal 2.0 port for this op will be unblocked once its `ProgramDescriptor` migration lands. Also note the Step 0.3 Check C finding (`override_runtime_arguments` complexity tier) — that's the best proxy for how difficult the `ProgramDescriptor` lift itself will be.>
 
 ### Device 2.0 DM: **GREEN | YELLOW (isolated holdovers) | RED**
 
@@ -216,6 +250,22 @@ For each non-GREEN row, follow up with an H3 detail section. Omit detail section
 - ...
 
 **Expected resolution:** <one-line summary derived from the Appendix A entry's Status field>
+
+## Port complexity signals
+
+Informational findings from Step 0.3. None of these gates the port — they shape planning.
+
+### Variadic kernels
+
+<Affected kernels with file:line, or "none". For each, note that the port will choose between preserving positional-CTA semantics and refactoring to front-loaded typed args.>
+
+### Custom `compute_program_hash`
+
+<Location (file:line), or "none". If present, note the `UpdateTensorArgs` legality risk; resolution if it bites is to revert to the default hash.>
+
+### `override_runtime_arguments` complexity
+
+<Tier: **trivial** / **moderate** / **heavy** (⭐ for heavy). Line count. What it touches (RTAs / CB sizing / semaphores / `set_address_offset`). Per-shape branching presence. For **heavy**, explicitly recommend design discussion before the Metal 2.0 port.>
 
 ## Path forward
 
