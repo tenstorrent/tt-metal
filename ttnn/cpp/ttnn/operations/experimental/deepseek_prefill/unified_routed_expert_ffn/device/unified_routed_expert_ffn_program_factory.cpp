@@ -60,6 +60,12 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const uint32_t chunk_M_tiles = op.chunk_M_tiles;
     const uint32_t per_core_M = chunk_M_tiles / GRID_Y;
     TT_FATAL(per_core_M * GRID_Y == chunk_M_tiles, "chunk_M_tiles ({}) must be divisible by GRID_Y ({})", chunk_M_tiles, GRID_Y);
+    TT_FATAL(
+        M_tiles_full % chunk_M_tiles == 0,
+        "M_tiles_full ({}) must be divisible by chunk_M_tiles ({})",
+        M_tiles_full,
+        chunk_M_tiles);
+    const uint32_t num_chunks = M_tiles_full / chunk_M_tiles;
     TT_FATAL(N_gate_tiles_full % GRID_X == 0, "hidden_tiles ({}) must be divisible by GRID_X ({})", N_gate_tiles_full, GRID_X);
     TT_FATAL(N_down_tiles_full % GRID_X == 0, "emb_tiles ({}) must be divisible by GRID_X ({})", N_down_tiles_full, GRID_X);
 
@@ -184,7 +190,16 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // have only its reader wait. Simpler approach: every writer increments
     // every reader's slot via NoC mcast.
     const uint32_t total_cores = GRID_X * GRID_Y;
+    // ready_sem lives on EVERY core's L1 at the same offset, but is meaningful
+    // only on the controller's L1 — non-controllers atomic-inc the controller's
+    // slot per barrier. Reused for both barrier A and barrier B per chunk with
+    // chunk-indexed targets.
     const uint32_t semaphore_addr = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
+    // done_sem lives on every core's L1. Controller writes the new "done" value
+    // to every core's slot (including its own) once it sees ready_sem reach the
+    // per-barrier target. Reader spins on it with target 2*chunk+1; the next-
+    // chunk phase-3-drain (in writer) spins on it with target 2*chunk+2.
+    const uint32_t done_sem_addr = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
     // Weight-multicast semaphores for in1 (gate/up/down). Pattern: per
     // N-col group (gx fixed, gy=0..GRID_Y-1), one sender at gy=0 reads the
     // weight slice from DRAM and mcasts it to the other GRID_Y-1 cores in
@@ -273,25 +288,10 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // kernel reads via get_compile_time_arg_val(idx) and the TensorAccessor
     // offsets it computes from offset 19 onwards.
     std::vector<uint32_t> reader_ct_args = {
-        CB_IN0_X,
-        CB_IN1_GATE,
-        CB_IN1_UP,
-        CB_IN1_DOWN,
-        CB_IN0_DOWN_FULL,
-        CB_COUNTS_SCRATCH,
-        CB_IDX_SCRATCH,
-        op.local_expert_id,
-        per_core_M,
-        per_core_N_gu,
-        per_core_N_d,
-        K_gate_tiles,
-        K_down_tiles,
-        in0_block_w_gu,
-        in0_block_w_d,
-        N_gate_tiles_full,
-        N_down_tiles_full,
-        M_tiles_full,
-        total_cores,
+        CB_IN0_X,       CB_IN1_GATE,        CB_IN1_UP,     CB_IN1_DOWN,       CB_IN0_DOWN_FULL,  CB_COUNTS_SCRATCH,
+        CB_IDX_SCRATCH, op.local_expert_id, per_core_M,    per_core_N_gu,     per_core_N_d,      K_gate_tiles,
+        K_down_tiles,   in0_block_w_gu,     in0_block_w_d, N_gate_tiles_full, N_down_tiles_full, M_tiles_full,
+        total_cores,    num_chunks,         chunk_M_tiles,
     };
     tt::tt_metal::TensorAccessorArgs(x_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(gate_buffer).append_to(reader_ct_args);
@@ -321,6 +321,8 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         d_out_subblock_w,
         N_gate_tiles_full,
         N_down_tiles_full,
+        num_chunks,
+        chunk_M_tiles,
     };
     tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(writer_ct_args);
     tt::tt_metal::TensorAccessorArgs(scratch_buffer).append_to(writer_ct_args);
@@ -369,6 +371,8 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         d_out_subblock_h,
         d_out_subblock_w,
         d_out_block_num_tiles,
+        // chunk loop control
+        num_chunks,
     };
     std::unordered_map<std::string, uint32_t> compute_named_args = {
         {"cb_in0_x", CB_IN0_X},
@@ -517,6 +521,8 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             in0_mcast_ny_end,                      // 29
             in0_sender_nx,                         // 30
             in0_sender_ny,                         // 31
+            // done_sem id (32) — reader spins on its local slot post-phase-2.
+            done_sem_addr,  // 32
         };
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
 
@@ -532,7 +538,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         //   8: my_mt
         //   9: my_nt_gu
         //  10: my_nt_d
-        //  11: chunk_start_tile_row
+        //  11: chunk_start_tile_row (legacy / unused)
+        //  12: done_sem_addr (controller writes per-barrier; readers/writers wait)
+        //  13+ : per-core NoC coords (interleaved x, y)
         std::vector<uint32_t> writer_args = {
             out_buffer->address(),
             scratch_buffer->address(),
@@ -546,6 +554,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             my_nt_gu,
             my_nt_d,
             chunk_start_tile_row,
+            done_sem_addr,
         };
         // Append the NoC virtual coords of every compute core (interleaved
         // x, y). The controller writer uses this to unicast-set each other

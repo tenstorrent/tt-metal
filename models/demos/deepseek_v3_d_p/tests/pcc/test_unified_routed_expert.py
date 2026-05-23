@@ -30,8 +30,10 @@ COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
     "num_tokens, emb_dim, hidden_dim",
     [
         (2048, 7168, 2048),  # DeepSeek V3 dims, 2K tokens (single chunk)
+        (4096, 7168, 2048),  # 2 chunks
+        (8192, 7168, 2048),  # 4 chunks
     ],
-    ids=["ds-v3-2k"],
+    ids=["ds-v3-2k", "ds-v3-4k", "ds-v3-8k"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params",

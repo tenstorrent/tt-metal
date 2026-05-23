@@ -247,6 +247,10 @@ void kernel_main() {
     constexpr uint32_t d_out_subblock_w = get_compile_time_arg_val(28);
     constexpr uint32_t d_out_subblock_num_tiles = d_out_subblock_h * d_out_subblock_w;
     constexpr uint32_t d_out_block_num_tiles = get_compile_time_arg_val(29);
+    // Multi-chunk: when M_tiles_full > chunk_M_tiles we run all 4 phases
+    // num_chunks times. Reader/writer feed/drain chunk-N+1 while compute is
+    // still on chunk N via the existing CBs.
+    constexpr uint32_t num_chunks = get_compile_time_arg_val(30);
 
     // CBs
     constexpr uint32_t cb_in0_x = get_named_compile_time_arg_val("cb_in0_x");
@@ -262,71 +266,80 @@ void kernel_main() {
     constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
 
     silu_tile_init_pack();
-    mm_block_init(
-        cb_in0_x, cb_in1_gate, cb_partials_gu, /*transpose=*/0, gu_out_subblock_w, gu_out_subblock_h, g_in0_block_w);
 
-    // Phase 1: gate matmul with silu fused on the final pack into gate_intermed.
-    matmul_phase_v3<
-        g_in0_block_w,
-        g_in0_num_subblocks,
-        g_in0_block_num_tiles,
-        g_in0_subblock_num_tiles,
-        g_in1_num_subblocks,
-        g_in1_block_num_tiles,
-        g_in1_per_core_w,
-        g_num_blocks,
-        gu_out_subblock_h,
-        gu_out_subblock_w,
-        gu_out_subblock_num_tiles,
-        gu_out_block_num_tiles,
-        /*apply_silu_on_final=*/true>(cb_in0_x, cb_in1_gate, cb_partials_gu, cb_gate_intermed);
+    for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+        mm_block_init(
+            cb_in0_x,
+            cb_in1_gate,
+            cb_partials_gu,
+            /*transpose=*/0,
+            gu_out_subblock_w,
+            gu_out_subblock_h,
+            g_in0_block_w);
 
-    // Phase 2: up matmul (no activation), output to up_intermed.
-    // Use full mm_init to fully reset packer/unpacker/math state — short
-    // variant may leak phase-1 state (e.g. packer config still pointing
-    // at gate_intermed) which corrupts phase 2's pack to partials.
-    mm_block_init(
-        cb_in0_x, cb_in1_up, cb_partials_gu, /*transpose=*/0, gu_out_subblock_w, gu_out_subblock_h, u_in0_block_w);
-    matmul_phase_v3<
-        u_in0_block_w,
-        u_in0_num_subblocks,
-        u_in0_block_num_tiles,
-        u_in0_subblock_num_tiles,
-        u_in1_num_subblocks,
-        u_in1_block_num_tiles,
-        u_in1_per_core_w,
-        u_num_blocks,
-        gu_out_subblock_h,
-        gu_out_subblock_w,
-        gu_out_subblock_num_tiles,
-        gu_out_block_num_tiles,
-        /*apply_silu_on_final=*/false>(cb_in0_x, cb_in1_up, cb_partials_gu, cb_up_intermed);
+        // Phase 1: gate matmul with silu fused on the final pack into gate_intermed.
+        matmul_phase_v3<
+            g_in0_block_w,
+            g_in0_num_subblocks,
+            g_in0_block_num_tiles,
+            g_in0_subblock_num_tiles,
+            g_in1_num_subblocks,
+            g_in1_block_num_tiles,
+            g_in1_per_core_w,
+            g_num_blocks,
+            gu_out_subblock_h,
+            gu_out_subblock_w,
+            gu_out_subblock_num_tiles,
+            gu_out_block_num_tiles,
+            /*apply_silu_on_final=*/true>(cb_in0_x, cb_in1_gate, cb_partials_gu, cb_gate_intermed);
 
-    // Phase 3: elementwise multiply, output to activated.
-    multiply_phase_v3<gu_out_block_num_tiles, gu_out_subblock_num_tiles>(
-        cb_gate_intermed, cb_up_intermed, cb_activated);
+        // Phase 2: up matmul (no activation), output to up_intermed.
+        // Use full mm_init to fully reset packer/unpacker/math state — short
+        // variant may leak phase-1 state (e.g. packer config still pointing
+        // at gate_intermed) which corrupts phase 2's pack to partials.
+        mm_block_init(
+            cb_in0_x, cb_in1_up, cb_partials_gu, /*transpose=*/0, gu_out_subblock_w, gu_out_subblock_h, u_in0_block_w);
+        matmul_phase_v3<
+            u_in0_block_w,
+            u_in0_num_subblocks,
+            u_in0_block_num_tiles,
+            u_in0_subblock_num_tiles,
+            u_in1_num_subblocks,
+            u_in1_block_num_tiles,
+            u_in1_per_core_w,
+            u_num_blocks,
+            gu_out_subblock_h,
+            gu_out_subblock_w,
+            gu_out_subblock_num_tiles,
+            gu_out_block_num_tiles,
+            /*apply_silu_on_final=*/false>(cb_in0_x, cb_in1_up, cb_partials_gu, cb_up_intermed);
 
-    // Phase 4: down matmul, output to cb_out.
-    mm_block_init(
-        cb_in0_down_full,
-        cb_in1_down,
-        cb_partials_d,
-        /*transpose=*/0,
-        d_out_subblock_w,
-        d_out_subblock_h,
-        d_in0_block_w);
-    matmul_phase_v3<
-        d_in0_block_w,
-        d_in0_num_subblocks,
-        d_in0_block_num_tiles,
-        d_in0_subblock_num_tiles,
-        d_in1_num_subblocks,
-        d_in1_block_num_tiles,
-        d_in1_per_core_w,
-        d_num_blocks,
-        d_out_subblock_h,
-        d_out_subblock_w,
-        d_out_subblock_num_tiles,
-        d_out_block_num_tiles,
-        /*apply_silu_on_final=*/false>(cb_in0_down_full, cb_in1_down, cb_partials_d, cb_out);
+        // Phase 3: elementwise multiply, output to activated.
+        multiply_phase_v3<gu_out_block_num_tiles, gu_out_subblock_num_tiles>(
+            cb_gate_intermed, cb_up_intermed, cb_activated);
+
+        // Phase 4: down matmul, output to cb_out.
+        mm_block_init(
+            cb_in0_down_full,
+            cb_in1_down,
+            cb_partials_d,
+            /*transpose=*/0,
+            d_out_subblock_w,
+            d_out_subblock_h,
+            d_in0_block_w);
+        matmul_phase_v3<
+            d_in0_block_w,
+            d_in0_num_subblocks,
+            d_in0_block_num_tiles,
+            d_in0_subblock_num_tiles,
+            d_in1_num_subblocks,
+            d_in1_block_num_tiles,
+            d_in1_per_core_w,
+            d_num_blocks,
+            d_out_subblock_h,
+            d_out_subblock_w,
+            d_out_subblock_num_tiles,
+            d_out_block_num_tiles,
+            /*apply_silu_on_final=*/false>(cb_in0_down_full, cb_in1_down, cb_partials_d, cb_out);
+    }  // end chunk loop
 }
