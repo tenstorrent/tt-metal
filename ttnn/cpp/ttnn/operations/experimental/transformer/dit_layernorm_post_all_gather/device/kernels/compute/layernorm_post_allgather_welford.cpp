@@ -102,22 +102,32 @@ void kernel_main() {
 
         // Process tiles across width in blocks
         for (uint32_t col_tile = 0; col_tile < Wt; col_tile += block_size) {
-            // 1) x_minus_mean
-            reconfig_data_format(cb_inp, cb_stats_reduced);
-            pack_reconfig_data_format(cb_intermediate);
-            sub_bcast_cols_init_short(cb_inp, cb_stats_reduced);
-            cb_wait_front(cb_inp, block_size);
-            cb_reserve_back(cb_intermediate, block_size);
-            tile_regs_acquire();
-            tile_regs_wait();
-            for (uint32_t i = 0; i < block_size; i++) {
-                sub_tiles_bcast_cols(cb_inp, cb_stats_reduced, i, 0, i);
-                pack_tile(i, cb_intermediate);
-            }
-            tile_regs_commit();
-            tile_regs_release();
-            cb_pop_front(cb_inp, block_size);
-            cb_push_back(cb_intermediate, block_size);
+            // 1) x_minus_mean: cb_intermediate[i] = cb_inp[i] - cb_stats_reduced[0]
+            // (bcast cols).  cb_inp: Bulk + Block (per-block_size wait+pop).
+            // cb_stats_reduced: CallerManaged + Scalar (held by outer per-row scope).
+            // cb_intermediate: OutBulk + Block (per-block_size reserve+push).
+            // Reconfig: explicit reconfig_data_format + sub_bcast_cols_init_short ->
+            // BinaryDataFormatReconfig::Input. pack_reconfig_data_format ->
+            // PackTileReconfig::Output.
+            compute_kernel_lib::eltwise_chain<block_size>(
+                block_size,
+                compute_kernel_lib::BinaryFpu<
+                    cb_inp,
+                    cb_stats_reduced,
+                    compute_kernel_lib::BinaryFpuOp::Sub,
+                    compute_kernel_lib::BroadcastDim::Col,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::Bulk,
+                    compute_kernel_lib::CallerManaged,
+                    compute_kernel_lib::OperandKind::Block,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OperandKind::Scalar>{},
+                compute_kernel_lib::PackTile<
+                    cb_intermediate,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OutBulk,
+                    compute_kernel_lib::OperandKind::Block,
+                    compute_kernel_lib::PackTileReconfig::Output>{});
 
             // 2) normalize: (x-mean) * inv_std
             constexpr uint32_t norm_target_cb = (do_gamma || do_beta) ? cb_intermediate : cb_out;
@@ -173,25 +183,38 @@ void kernel_main() {
             }
 
             // 4) optional beta (only if gamma was provided)
+            // cb_out[i] = cb_intermediate[i] + cb_beta[col_tile + i] (bcast rows).
+            // Different CBs (no in-place). cb_intermediate Bulk + Block. cb_beta
+            // CallerManaged + Block + TileBaseRuntime{col_tile} (cb_beta is held
+            // across the col_tile loop via the cumulative wait_front above).
+            // cb_out OutBulk + Block.
+            // Reconfig: reconfig_data_format + add_bcast_rows_init_short ->
+            // BinaryDataFormatReconfig::Input. pack_reconfig_data_format ->
+            // PackTileReconfig::Output.
             if constexpr (do_beta) {
-                // Input is always in cb_intermediate, output is always cb_out
-                reconfig_data_format(cb_intermediate, cb_beta);
-                pack_reconfig_data_format(cb_out);
-                add_bcast_rows_init_short(cb_intermediate, cb_beta);
-
                 cb_wait_front(cb_beta, col_tile + block_size);
-                cb_wait_front(cb_intermediate, block_size);
-                cb_reserve_back(cb_out, block_size);
-                tile_regs_acquire();
-                tile_regs_wait();
-                for (uint32_t i = 0; i < block_size; i++) {
-                    add_tiles_bcast_rows(cb_intermediate, cb_beta, i, col_tile + i, i);
-                    pack_tile(i, cb_out);
-                }
-                tile_regs_commit();
-                tile_regs_release();
-                cb_pop_front(cb_intermediate, block_size);
-                cb_push_back(cb_out, block_size);
+                compute_kernel_lib::eltwise_chain<block_size>(
+                    block_size,
+                    compute_kernel_lib::BinaryFpu<
+                        cb_intermediate,
+                        cb_beta,
+                        compute_kernel_lib::BinaryFpuOp::Add,
+                        compute_kernel_lib::BroadcastDim::Row,
+                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                        compute_kernel_lib::Bulk,
+                        compute_kernel_lib::CallerManaged,
+                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::TileBaseNone,
+                        compute_kernel_lib::TileBaseRuntime>{
+                        compute_kernel_lib::TileBaseNone{}, compute_kernel_lib::TileBaseRuntime{col_tile}},
+                    compute_kernel_lib::PackTile<
+                        cb_out,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OutBulk,
+                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::PackTileReconfig::Output>{});
             }
         }
 
