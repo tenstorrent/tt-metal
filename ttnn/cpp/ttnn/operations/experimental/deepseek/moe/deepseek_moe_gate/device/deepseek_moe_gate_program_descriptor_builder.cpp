@@ -144,6 +144,7 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
         .compile_time_args = {},
         .named_compile_time_args = std::move(ncrisc_named),
         .defines = {},
+        .runtime_args = {},
         .config =
             DataMovementConfigDescriptor{
                 .processor = DataMovementProcessor::RISCV_1,
@@ -159,6 +160,7 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
         .compile_time_args = {},
         .named_compile_time_args = std::move(brisc_named),
         .defines = {},
+        .runtime_args = {},
         .config =
             DataMovementConfigDescriptor{
                 .processor = DataMovementProcessor::RISCV_0,
@@ -174,6 +176,7 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
         .compile_time_args = {},
         .named_compile_time_args = std::move(trisc_named),
         .defines = {},
+        .runtime_args = {},
         .config = compute_config,
     };
 
