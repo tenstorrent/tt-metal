@@ -49,7 +49,7 @@ You do not skip the audit. You do not pre-load the recipe document. The audit is
 
 ## Feasibility audit
 
-For the op in scope, run through three steps (Step 0.1 prereqs, Step 0.2 feature compatibility, Step 0.3 port complexity signals). Each step's checks have three possible outcomes:
+For the op in scope, run through four steps (Step 0.1 prereqs, Step 0.2 feature compatibility, Step 0.3 port complexity signals, Step 0.4 out-of-directory call surface). Each step's checks have three possible outcomes:
 
 - **Green** — proceed past this check.
 - **Yellow** — requires user judgment (ambiguous signal, or a supported-but-trade-off construct). Ask the user; respect the answer.
@@ -71,14 +71,14 @@ Metal 2.0 migration sits at the end of a chain of prior modernizations. Three pr
 - **Standalone prereq** (Check 1 below): `ProgramDescriptor` migration is a substantial, separate body of work with TTNN-infrastructure implications. If unmet, it is its own PR — it does not bundle with the other prereq checks or with the Metal 2.0 port. Record the gap and continue the audit; do not attempt the migration here.
 - **Bundled prereqs** (Checks 2 and 3 below): smaller, mechanical kernel-side work. If unmet, address in a **single bundled prereq PR**, separate from the Metal 2.0 port. Bundle the two together if both are unmet — they're conceptually one body of work (kernel-side modernization). Yellow sub-cases (see Check 3) require user judgment.
 
-**Complete all three checks regardless of individual outcomes, then continue to Steps 0.2 and 0.3.** The audit's job is to gather a complete picture of what porting this op will require, including features the op uses that may be blocked on prereq work and characteristics that shape the port's scope. Do not exit early on a RED prereq — surface all findings to the report.
+**Complete all three checks regardless of individual outcomes, then continue to Steps 0.2, 0.3, and 0.4.** The audit's job is to gather a complete picture of what porting this op will require, including features the op uses that may be blocked on prereq work, characteristics that shape the port's scope, and downstream dependencies on donor migrations. Do not exit early on a RED prereq — surface all findings to the report.
 
 **Check 1 (standalone prereq): Op is on the `ProgramDescriptor` API.**
 
 Confirm the op's program-factory code populates a `ProgramDescriptor` and uses `KernelDescriptor`, `CBDescriptor`, `SemaphoreDescriptor`, etc. — *not* the older imperative-builder style from `host_api.hpp` (`CreateProgram` / `CreateKernel` / `CreateCircularBuffer` / `SetRuntimeArgs` / etc.).
 
 - **Green**: op uses the `ProgramDescriptor` API.
-- **Red**: op uses the imperative `host_api.hpp` builder API (not `ProgramDescriptor`). Record the prereq gap — `ProgramDescriptor` migration is a **prerequisite to Metal 2.0 porting**, a substantial standalone body of work with TTNN-infrastructure implications, addressed in its own PR. **Do not attempt the migration as part of this audit, do not bundle it with anything, do not propose a partial conversion.** Continue with Checks 2 and 3 and Steps 0.2 and 0.3 — the feature and complexity scans still produce useful findings (some features may need attention regardless of which API the op is currently on; others will only become relevant after the prereq lands).
+- **Red**: op uses the imperative `host_api.hpp` builder API (not `ProgramDescriptor`). Record the prereq gap — `ProgramDescriptor` migration is a **prerequisite to Metal 2.0 porting**, a substantial standalone body of work with TTNN-infrastructure implications, addressed in its own PR. **Do not attempt the migration as part of this audit, do not bundle it with anything, do not propose a partial conversion.** Continue with Checks 2 and 3 and Steps 0.2, 0.3, and 0.4 — the feature, complexity, and call-surface scans still produce useful findings (some features may need attention regardless of which API the op is currently on; others will only become relevant after the prereq lands).
 
 **Check 2 (AI-doable): Device 2.0 Data Movement migration.**
 
@@ -118,7 +118,7 @@ For each entry in [Appendix A: Metal 2.0 feature compatibility](#appendix-a-meta
 
 - **Green**: no entry's recognition signals fire.
 - **Yellow**: either a `DISCOURAGED` entry's signals match, **or** an `UNSUPPORTED` entry's signals match ambiguously (you cannot be sure whether the feature is in use). Ask the user. On override, proceed per the entry's guidance.
-- **Red**: an `UNSUPPORTED` entry's signals match definitively. Report the feature name, the `file:line` where it appears, and the recognition signal that fired. The port is blocked on this finding; continue scanning the remaining Appendix A entries and on to Step 0.3 — complete the full audit even after a RED match.
+- **Red**: an `UNSUPPORTED` entry's signals match definitively. Report the feature name, the `file:line` where it appears, and the recognition signal that fired. The port is blocked on this finding; continue scanning the remaining Appendix A entries and on through Steps 0.3 and 0.4 — complete the full audit even after a RED match.
 
 If the op uses something *not listed* in Appendix A and you are uncertain of its support status, treat as yellow and ask. Do not assume support from API surface.
 
@@ -154,6 +154,47 @@ Categorize and report a tier:
 
 `override_runtime_arguments` complexity is the best proxy for both `ProgramDescriptor`-lift difficulty (a separate, ongoing migration workstream) and Metal 2.0 `ProgramRunParams`-build complexity, since the same patching logic translates to both. Reporting it here helps both teams scope work.
 
+### Step 0.4 — Out-of-directory call surface
+
+Run this step regardless of Step 0.1, 0.2, and 0.3 outcomes. **Findings are informational only — none of these signals gates the port** (with one nuance: pre-Device-2.0 donors create a *scheduling* block, surfaced here for planning). This check is the most substantial in the audit; budget time accordingly.
+
+**Why this check exists.** Op kernels frequently `#include` headers outside their own directory. When a Metal 2.0 port crosses one of these boundaries, the kernel's named tokens (`dfb::name`, `sem::name`, `ta::name`) need to translate into whatever shape the donor's signature expects. Some shapes cross cleanly; others require donor-side conversion work, most commonly because **the donor itself isn't on Device 2.0 yet**.
+
+The Device 2.0 → Metal 2.0 sequencing rule applies: ops must complete Device 2.0 migration before Metal 2.0 can proceed. **A donor consumed by this op that is still on pre-Device-2.0 idioms (`InterleavedAddrGen`, `ShardedAddrGen`, raw sem addresses, `CircularBuffer&`) blocks this op's Metal 2.0 port** until the donor migrates.
+
+**Inventory phase.** For each kernel file in the op, list every `#include` whose resolved path lies outside the op's own directory. Identify the donor class:
+
+1. **`tt_metal/*`** — LLK / HAL / firmware. No concern.
+2. **`ttnn/cpp/ttnn/kernel_lib/`** — official shared kernel library; lib team handles internally.
+3. **`ttnn/cpp/ttnn/kernel/`** (singular) — a second shared-kernel pool. Treat as shared-lib class.
+4. **`ttnn/cpp/ttnn/operations/kernel_helper_functions/`** — small shared utility pool.
+5. **In-family shared** — kernels within the same op family. In-family escapes don't block the port; port the family together.
+6. **Cross-family donor** — kernels in another op family's directory.
+
+**Per-call shape analysis.** For each donor file consumed by the op, identify which public functions the op's kernels actually call, and classify each by the shape of the resource handles in its signature.
+
+| Shape | Status | Notes |
+|---|---|---|
+| `Semaphore` / `Semaphore&` / `const Semaphore&` | ✓ excellent | Device 2.0 native. |
+| `uint32_t sem_id` | ⚠ suboptimal | `sem::name`'s constexpr cast to `uint32_t (sem_id)` handles once landed. Workable today. |
+| `uint32_t sem_addr` (L1) or `uint64_t` NOC-encoded sem | ✗ not OK | No clean Metal-2.0 → donor bridge today. A backdoor could be added. |
+| `TensorAccessor<DSpec>` / ref (Shape 1) | ✓ excellent | Porter constructs `TensorAccessor(ta::name)` and passes. |
+| `TensorAccessorArgs<N>` (Shape 2) | ✗ not OK | Porter can pass `ta::name.args`. Workable, but suboptimal. |
+| Tensor CTA offset as NTTP (Shape 3) | ✗ not OK | No workaround today; would require a one-line `ta::name::cta_offset` add to `TensorAccessorBindingToken`. |
+| Old-style addr-gen — `InterleavedAddrGen`, `ShardedAddrGen`, `InterleavedAddrGenFast`, `InterleavedPow2AddrGen*` (Shape 4) | ⭐ ✗ very not OK | Donor is pre-Device-2.0; donor must migrate before this op can be ported. Also caught by Step 0.1 Check 3 for the op's *own* kernels. |
+| `uint32_t cb_id` | ✓ OK | `dfb::name`'s constexpr cast handles runtime AND template-parameter position. |
+| `CircularBuffer` / `CircularBuffer&` / `const CircularBuffer&` | ⭐ ⚠ flag | Op-by-op porting + DFB-replaces-CB on the consumer side leaves no clean per-op story today. Flag for cross-team discussion. |
+
+One donor file can have multiple functions with different shapes — classify per function.
+
+**Report format.** Three-part structure:
+
+1. **Op-level roll-up** — one-line headline status (`✓ clean` / `⚠ workable` / `⭐ blocked`), plus a tight bullet inventory of the kinds of issues found across all donors.
+2. **Summary table** — one row per (op kernel, donor file) pair across all buckets.
+3. **Per-call detail** — per-function breakdown for donors with ⚠ / ✗ / ⭐ entries. Omitted entirely if all rolls are ✓.
+
+Status roll-up uses ✓ / ⚠ / ✗ / ⭐. The star is reserved for entries that create scheduling blockers — Shape 4 (donor pre-Device-2.0) and `CircularBuffer&` (op-by-op friction). Other ✗/⚠ items are workable today or need donor work, but don't sequence-block.
+
 ### Output: the audit report
 
 The audit produces a written report. Write the report as `METAL2_PREPORT_AUDIT.md` in the op's directory (alongside the program factory `.cpp` files). This file is the audit's deliverable and is committed alongside the port — it sits next to `METAL2_PORT_PLAN.md` and `METAL2_PORT_REPORT.md` (both written by the port recipe), so all generated docs for the port land in one spot.
@@ -169,7 +210,7 @@ The audit produces a written report. Write the report as `METAL2_PREPORT_AUDIT.m
 Markdown formatting is required, not optional — the headers, tables, and inline-code spans are what make a sizeable report skim-friendly for a human reviewer. Use:
 
 - H1 for the audit's title.
-- H2 for major sections (Result, Porting prerequisites, Feature compatibility check, Port complexity signals, Path forward, Questions for the user).
+- H2 for major sections (Result, Porting prerequisites, Feature compatibility check, Port complexity signals, Out-of-directory call surface, Path forward, Questions for the user).
 - H3 for sub-sections (per-prereq-check headings; per-feature detail sections).
 - **Tables** for the Device 2.0 DM holdover list (when present) and the Feature compatibility check summary. These are non-negotiable — flat bullet lists at this scale lose readability fast.
 - Inline `code formatting` for file paths, function names, type names, identifiers throughout.
@@ -270,6 +311,27 @@ Informational findings from Step 0.3. None of these gates the port — they shap
 ### `override_runtime_arguments` complexity
 
 <Tier: **trivial** / **moderate** / **heavy** (⭐ for heavy). Line count. What it touches (RTAs / CB sizing / semaphores / `set_address_offset`). Per-shape branching presence. For **heavy**, explicitly recommend design discussion before the Metal 2.0 port.>
+
+## Out-of-directory call surface
+
+Findings from Step 0.4.
+
+**Op-level roll-up:** <one-line headline: `✓ clean` / `⚠ workable` / `⭐ blocked`> — <one-line elaboration: which donor / which shape is the headline driver, if not clean>.
+
+- <tight bullet inventory of issues found across all donors, e.g. "Shape 4 in 2 CCL donors", "1 sem_addr workaround", "5 ✓ kernel_lib escapes">
+- <one line per category>
+
+### Summary
+
+<Table: one row per (op kernel, donor file) pair, with donor class, function count, and status roll-up per the Step 0.4 schema. Cover all buckets — kernel_lib and in-family escapes belong here too.>
+
+| Op kernel | Donor file | Donor class | Functions consumed | Status roll-up |
+|---|---|---|---|---|
+| ... | ... | ... | ... | ... |
+
+### Per-call detail
+
+<Only when any summary row has ⚠ / ✗ / ⭐. For each such donor: a heading, then a per-function breakdown. Omit this subsection entirely if all rolls are ✓.>
 
 ## Path forward
 
