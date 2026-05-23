@@ -41,12 +41,41 @@ models_not_supported_for_device_sampling = {"Mistral-7B"}
 accuracy_only_host_sampling_models = {"phi-1"}
 
 
-def should_disable_device_sampling(base_model_name: str, optimization_name: str, num_devices: int = 1) -> bool:
+def is_greedy_sampling_request(sampling_params: dict) -> bool:
+    temperature = sampling_params.get("temperature", 0)
+    if isinstance(temperature, list):
+        return all(t == 0 for t in temperature)
+    return temperature == 0
+
+
+def normalize_greedy_sampling_params(sampling_params: dict) -> dict:
+    if not is_greedy_sampling_request(sampling_params):
+        return sampling_params
+
+    normalized = dict(sampling_params)
+    top_k = normalized.get("top_k", 1)
+    top_p = normalized.get("top_p", 1.0)
+    if isinstance(top_k, list):
+        normalized["top_k"] = [1] * len(top_k)
+    else:
+        normalized["top_k"] = 1
+    if isinstance(top_p, list):
+        normalized["top_p"] = [1.0] * len(top_p)
+    else:
+        normalized["top_p"] = 1.0
+    return normalized
+
+
+def should_disable_device_sampling(
+    base_model_name: str, optimization_name: str, sampling_params: dict, num_devices: int = 1
+) -> bool:
     if base_model_name in models_not_supported_for_device_sampling:
         return True
-    return base_model_name in accuracy_only_host_sampling_models and (
-        optimization_name == "accuracy" or num_devices == 1
-    )
+    if base_model_name not in accuracy_only_host_sampling_models:
+        return False
+    if optimization_name == "accuracy":
+        return True
+    return num_devices == 1 and not is_greedy_sampling_request(sampling_params)
 
 
 def get_test_mesh_shape():
@@ -1160,6 +1189,7 @@ def test_demo_text(
             generator.prev_page_table = None
 
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(global_batch_size, -1)
+        sampling_params = normalize_greedy_sampling_params(sampling_params)
         # Use device sampling for all cases when supported (prefill + decode)
         device_sampling_params = (
             SamplingParams(
@@ -1188,6 +1218,7 @@ def test_demo_text(
         if should_disable_device_sampling(
             model_args[0].base_model_name,
             optimization_name,
+            sampling_params,
             num_devices=model_args[0].num_devices,
         ):
             device_sampling_params = None

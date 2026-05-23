@@ -1081,8 +1081,9 @@ class ModelArgs:
                 "num_workers_per_link": 2,
                 "rs_memory_config": ttnn.DRAM_MEMORY_CONFIG,
             }
+            allow_force_argmax = self.base_model_name == "phi-1" and self.optimizations.__name__ == "performance"
             default_sampling_force_argmax = {
-                "allow_force_argmax": False,
+                "allow_force_argmax": allow_force_argmax,
                 "num_links": 1,
                 "chunks_per_sync": 10,
                 "num_workers_per_link": 2,

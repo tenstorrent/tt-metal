@@ -1,6 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-from models.tt_transformers.demo.simple_text_demo import should_disable_device_sampling
+from models.tt_transformers.demo.simple_text_demo import (
+    is_greedy_sampling_request,
+    normalize_greedy_sampling_params,
+    should_disable_device_sampling,
+)
 from models.tt_transformers.tt.model_config import (
     MathFidelitySetting,
     ModelOptimizations,
@@ -27,13 +31,24 @@ def test_phi1_accuracy_uses_bf16_attention_tensors_without_broad_hifi4_override(
 
 
 def test_phi1_uses_host_sampling_only_in_accuracy_mode():
-    assert should_disable_device_sampling("phi-1", "accuracy", num_devices=1)
-    assert should_disable_device_sampling("phi-1", "accuracy", num_devices=2)
-    assert should_disable_device_sampling("phi-1", "performance", num_devices=1)
-    assert not should_disable_device_sampling("phi-1", "performance", num_devices=2)
+    greedy_sampling = {"temperature": 0, "top_p": 0.08, "top_k": 32}
+    non_greedy_sampling = {"temperature": 0.8, "top_p": 0.9, "top_k": 32}
 
-    assert should_disable_device_sampling("Mistral-7B", "accuracy", num_devices=1)
-    assert should_disable_device_sampling("Mistral-7B", "performance", num_devices=2)
+    assert should_disable_device_sampling("phi-1", "accuracy", greedy_sampling, num_devices=1)
+    assert should_disable_device_sampling("phi-1", "accuracy", greedy_sampling, num_devices=2)
+    assert not should_disable_device_sampling("phi-1", "performance", greedy_sampling, num_devices=1)
+    assert not should_disable_device_sampling("phi-1", "performance", greedy_sampling, num_devices=2)
+    assert should_disable_device_sampling("phi-1", "performance", non_greedy_sampling, num_devices=1)
+
+    assert should_disable_device_sampling("Mistral-7B", "accuracy", greedy_sampling, num_devices=1)
+    assert should_disable_device_sampling("Mistral-7B", "performance", greedy_sampling, num_devices=2)
+
+
+def test_greedy_sampling_normalization_matches_host_argmax_semantics():
+    sampling_params = {"temperature": 0, "top_p": 0.08, "top_k": 32}
+
+    assert is_greedy_sampling_request(sampling_params)
+    assert normalize_greedy_sampling_params(sampling_params) == {"temperature": 0, "top_p": 1.0, "top_k": 1}
 
 
 def test_phi1_single_device_lm_head_budget_allows_one_split():
