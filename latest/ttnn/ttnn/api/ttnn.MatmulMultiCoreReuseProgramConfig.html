@@ -154,6 +154,17 @@
 <p>This program config is used for basic multi-core matmul operations that can reuse
 intermediate results across cores for better performance.</p>
 <dl class="py property">
+<dt class="sig sig-object py" id="ttnn.MatmulMultiCoreReuseProgramConfig.allowed_worker_cores">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">allowed_worker_cores</span></span><a class="headerlink" href="#ttnn.MatmulMultiCoreReuseProgramConfig.allowed_worker_cores" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Optional set of worker cores to restrict the matmul computation to.</p>
+<p>When set, overrides <code class="docutils literal notranslate"><span class="pre">compute_with_storage_grid_size</span></code> for determining the active
+compute grid. Accepts a <code class="docutils literal notranslate"><span class="pre">CoreRangeSet</span></code> describing the exact cores to use.</p>
+</dd>
+</dl>
+
+<dl class="py property">
 <dt class="sig sig-object py" id="ttnn.MatmulMultiCoreReuseProgramConfig.compute_with_storage_grid_size">
 <em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">compute_with_storage_grid_size</span></span><a class="headerlink" href="#ttnn.MatmulMultiCoreReuseProgramConfig.compute_with_storage_grid_size" title="Permalink to this definition"></a>
 </dt>
@@ -161,6 +172,7 @@ intermediate results across cores for better performance.</p>
 <p>Grid size for compute cores with storage capability.</p>
 <p>Specifies the 2D grid of cores (x, y) that will be used for computation and have
 access to storage. This determines how the computation is distributed across cores.</p>
+<p><strong>DEPRECATED</strong>: Use <code class="docutils literal notranslate"><span class="pre">allowed_worker_cores</span></code> instead for finer control over the compute grid.</p>
 </dd>
 </dl>
 
