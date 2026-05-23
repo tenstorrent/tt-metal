@@ -1246,7 +1246,7 @@ def main() -> None:
         dit_init_latents_host_f32,
         euler_subtract_v_dt,
         euler_subtract_v_dt_host,
-        fp32_tile_to_row_bf16,
+        fp32_tile_to_bf16_tile_l1,
         precompute_dit_temb_steps,
         prepare_latents_for_ttnn_vae,
         slice_batch_btc,
@@ -1738,7 +1738,7 @@ def main() -> None:
 
                 def _diffusion_iterate(*, step_idx: int, t_curr_f: float, euler_dt: float, log_line: str) -> None:
                     nonlocal xt_tt
-                    xt_row = fp32_tile_to_row_bf16(xt_tt, dram=mem)
+                    xt_row = fp32_tile_to_bf16_tile_l1(xt_tt, dram=mem)
                     if do_cfg:
                         xt_pipe_in = concat_duplicate_batch(xt_row)
                         try:

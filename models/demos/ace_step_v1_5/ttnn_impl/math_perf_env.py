@@ -16,7 +16,22 @@ E2E Tracy ``BinaryNgDeviceOperation (in0:dram_interleaved)`` (~24% device time) 
 **VAE Snake** in FP32 (``BF16→FP32`` typecast, ~784 μs FP32 ``multiply``/``add`` per layer).
 ``TtSnake1d`` now always uses BF16 compute to match conv activations.
 
-DiT linears are often DRAM-bound at HiFi4 without tuning:
+Production DiT defaults (PCC + perf + E2E — no env toggle):
+
+- **LoFi** matmul fidelity via :func:`ace_step_init_dit_linear_compute_kernel_config`
+- **``bfloat8_b``** projection weights via :func:`ace_step_dit_weight_dtype` (conv weights stay BF16)
+- **L1 interleaved** activations via :func:`ace_step_linear_l1_memory_config` / :func:`ace_step_ensure_l1_activation`
+
+Remaining **DRAM ``in0``** buckets in Tracy (``perf_dit_4``) are expected for:
+
+- ``proj_in`` uses **L1 TILE linear** patch embed (not ``conv1d``) to avoid ``Tilize`` / ``Copy`` / im2col DRAM matmul.
+- Denoise feeds **TILE BF16 L1** ``xt``/``ctx`` (not ROW_MAJOR DRAM) so Tracy drops front ``Tilize``/``CopyDevice``.
+- Decoder **matmuls**: LoFi + ``bfloat8_b`` weights + L1 activations; **rms_norm**: LoFi + L1 (not default HiFi4).
+- **SDPA attn masks**: DRAM-only (TTNN requirement).
+- **RoPE / norm / linear weights**: DRAM storage; matmul reads weights from DRAM while ``in0`` activations are L1.
+- Residual **BinaryNg (in0:dram)** (~0.3%): usually scalar-broadcast or slice outputs — call sites use :func:`ace_step_ensure_l1_activation` after ``ace_step_add_one``.
+
+DiT linears are often DRAM-bound at HiFi4 without tuning (reference path only):
 
 - ``256×1024×1024`` — attn ``q_proj`` / ``o_proj``
 - ``256×2048×2048`` — fused attn ``wkv``
@@ -51,6 +66,57 @@ def ace_step_reshape_kwargs(ttnn: Any) -> dict:
 def ace_step_permute_kwargs(ttnn: Any) -> dict:
     """Keyword args for ``ttnn.permute`` to place outputs in L1 when ``L1_MEMORY_CONFIG`` exists."""
     return _l1_memory_kwargs(ttnn)
+
+
+def ace_step_dit_lofi_bfloat8_enabled() -> bool:
+    """DiT production path: LoFi matmul fidelity + ``bfloat8_b`` projection weights (always on)."""
+    return True
+
+
+def ace_step_dit_weight_dtype(ttnn: Any, default_dtype: Any) -> Any:
+    """Weight storage dtype for DiT **linears** (activations stay ``default_dtype``, usually BF16)."""
+    if ace_step_dit_lofi_bfloat8_enabled():
+        return getattr(ttnn, "bfloat8_b", None) or default_dtype
+    return default_dtype
+
+
+def ace_step_dit_conv_weight_dtype(ttnn: Any, default_dtype: Any) -> Any:
+    """Legacy conv weight dtype helper (``proj_in`` is linear TILE now; kept for callers)."""
+    return ace_step_dit_weight_dtype(ttnn, default_dtype)
+
+
+def ace_step_dit_weight_layout(ttnn: Any, weight_dtype: Any, *, default_layout: Any) -> Any:
+    """Layout for weight upload: ``bfloat8_b`` / ``bfloat4_b`` must be TILE (TT_FATAL otherwise)."""
+    bf8 = getattr(ttnn, "bfloat8_b", None)
+    bf4 = getattr(ttnn, "bfloat4_b", None)
+    if weight_dtype in (bf8, bf4):
+        return ttnn.TILE_LAYOUT
+    return default_layout
+
+
+def ace_step_is_tile_layout(ttnn: Any, tensor: Any) -> bool:
+    tile = getattr(ttnn, "TILE_LAYOUT", None)
+    if tile is None or tensor is None:
+        return False
+    layout = getattr(tensor, "layout", None)
+    return layout == tile
+
+
+def ace_step_ensure_tile_layout(ttnn: Any, tensor: Any) -> Any:
+    """Return *tensor* unchanged when already TILE — avoids redundant ``TilizeDeviceOperation``."""
+    if tensor is None or ace_step_is_tile_layout(ttnn, tensor):
+        return tensor
+    return ttnn.to_layout(tensor, ttnn.TILE_LAYOUT)
+
+
+def ace_step_ensure_row_major_layout(ttnn: Any, tensor: Any) -> Any:
+    """Return *tensor* unchanged when already ROW_MAJOR."""
+    if tensor is None:
+        return tensor
+    rm = getattr(ttnn, "ROW_MAJOR_LAYOUT", None)
+    if rm is not None and getattr(tensor, "layout", None) == rm:
+        return tensor
+    return ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
 
 
 def ace_step_dit_linear_perf_enabled() -> bool:
@@ -120,9 +186,20 @@ def ace_step_linear_l1_memory_config(ttnn: Any):
     return getattr(ttnn, "L1_MEMORY_CONFIG", None)
 
 
+def ace_step_dit_weight_memory_config(ttnn: Any):
+    """DRAM interleaved for DiT **weights** (linears, norms, RoPE tables, conv kernels)."""
+    return getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+
+
 def ace_step_dit_linear_l1_memory_config(ttnn: Any):
     """Alias for :func:`ace_step_linear_l1_memory_config`."""
     return ace_step_linear_l1_memory_config(ttnn)
+
+
+def ace_step_sdpa_activation_kwargs(ttnn: Any, l1_mc: Any | None = None) -> dict:
+    """Keyword args for fused SDPA so attention output stays in L1 (mask stays DRAM)."""
+    mc = l1_mc if l1_mc is not None else ace_step_linear_l1_memory_config(ttnn)
+    return {"memory_config": mc} if mc is not None else {}
 
 
 def ace_step_safe_deallocate(ttnn: Any, *tensors: Any) -> None:
@@ -147,11 +224,15 @@ def ace_step_nlp_concat_heads(ttnn: Any, ctx: Any, *, l1_mc: Any | None = None) 
     Converts ``[B, H, S, Dh]`` → ``[B, 1, S, H*Dh]`` in a single device kernel,
     eliminating one permute (~360 μs) and one non-view reshape (~405 μs) per attention block.
 
+    SDPA may leave ``ctx`` in DRAM when ``memory_config`` is omitted; move to L1 first so Tracy
+    does not bucket this op as ``in0:dram_interleaved`` (~10 ms in DiT perf traces).
+
     Falls back to the original permute+reshape path if the op is unavailable.
     """
     experimental = getattr(ttnn, "experimental", None)
     nlp_concat = getattr(experimental, "nlp_concat_heads", None) if experimental is not None else None
     mc = l1_mc if l1_mc is not None else ace_step_linear_l1_memory_config(ttnn)
+    ctx = ace_step_ensure_l1_activation(ttnn, ctx, mc)
     if nlp_concat is not None:
         kw = {"memory_config": mc} if mc is not None else {}
         return nlp_concat(ctx, **kw)
@@ -181,6 +262,33 @@ def ace_step_ensure_l1_activation(ttnn: Any, tensor: Any, l1_mc: Any | None = No
     if mc is None or not hasattr(ttnn, "to_memory_config"):
         return tensor
     return ttnn.to_memory_config(tensor, mc)
+
+
+def ace_step_from_torch_activation(
+    ttnn: Any,
+    tensor: Any,
+    *,
+    device: Any,
+    dtype: Any,
+    layout: Any | None = None,
+    l1_mc: Any | None = None,
+) -> Any:
+    """Upload a host tensor directly into L1 (avoids default DRAM ``from_torch``)."""
+    tile = getattr(ttnn, "TILE_LAYOUT", None)
+    use_layout = layout if layout is not None else tile
+    mc = l1_mc if l1_mc is not None else ace_step_linear_l1_memory_config(ttnn)
+    kw: dict = {"device": device, "dtype": dtype}
+    if use_layout is not None:
+        kw["layout"] = use_layout
+    if mc is not None:
+        kw["memory_config"] = mc
+    return ttnn.from_torch(tensor, **kw)
+
+
+def ace_step_pad_activation_kwargs(ttnn: Any, l1_mc: Any | None = None) -> dict:
+    """``memory_config`` for ``ttnn.pad`` / fill-pad style ops on activations."""
+    mc = l1_mc if l1_mc is not None else ace_step_linear_l1_memory_config(ttnn)
+    return {"memory_config": mc} if mc is not None else {}
 
 
 def ace_step_binary_kwargs(ttnn: Any, l1_mc: Any | None = None) -> dict:
@@ -221,9 +329,51 @@ def ace_step_init_hifi4_linear_compute_kernel_config(device: Any):
     )
 
 
+def ace_step_init_lofi_linear_compute_kernel_config(device: Any):
+    """LoFi linear config for DiT throughput (paired with ``bfloat8_b`` weights)."""
+    import ttnn
+
+    init_ck = getattr(ttnn, "init_device_compute_kernel_config", None)
+    if not callable(init_ck):
+        return None
+    return init_ck(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+
+
 def ace_step_init_dit_linear_compute_kernel_config(device: Any):
-    """HiFi4 linear config for DiT attention and MLP projections (DRAM-bound at seq=256)."""
-    return ace_step_init_hifi4_linear_compute_kernel_config(device)
+    """DiT linear compute kernel: LoFi (production default, matches perf traces)."""
+    return ace_step_init_lofi_linear_compute_kernel_config(device)
+
+
+def ace_step_init_dit_rmsnorm_compute_kernel_config(device: Any):
+    """RMSNorm compute kernel for DiT blocks: LoFi (default TTNN rmsnorm uses HiFi4)."""
+    return ace_step_init_lofi_linear_compute_kernel_config(device)
+
+
+def ace_step_dit_rms_norm_kwargs(ttnn: Any, l1_mc: Any | None = None, *, device: Any = None) -> dict:
+    """``memory_config`` + LoFi ``compute_kernel_config`` for ``ttnn.rms_norm`` (keeps TILE/L1)."""
+    mc = l1_mc if l1_mc is not None else ace_step_linear_l1_memory_config(ttnn)
+    kw: dict = {}
+    if mc is not None:
+        kw["memory_config"] = mc
+    if device is not None:
+        ck = ace_step_init_dit_rmsnorm_compute_kernel_config(device)
+        if ck is not None:
+            kw["compute_kernel_config"] = ck
+    return kw
+
+
+def ace_step_ensure_dit_activation(ttnn: Any, tensor: Any, l1_mc: Any | None = None) -> Any:
+    """TILE layout + L1 interleaved — DiT matmul/binary/rms_norm input contract."""
+    if tensor is None:
+        return tensor
+    t = ace_step_ensure_tile_layout(ttnn, tensor)
+    return ace_step_ensure_l1_activation(ttnn, t, l1_mc)
 
 
 def _mcast_1d_linear_program_config(

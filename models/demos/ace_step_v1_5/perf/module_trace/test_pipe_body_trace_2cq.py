@@ -16,7 +16,7 @@ pattern the Stable Diffusion 1.4 perf test uses with its precomputed ``_tlist``.
 
 This is the natural follow-on to ``test_dit_decoder_core_trace_2cq.py``:
 it stresses the trace at a larger op count (patchify + core + de-patchify) and
-exercises ``ttnn.conv1d`` (patch_embed) and the hand-rolled de-patchify ``ttnn.linear``
+exercises TILE/L1 ``proj_in`` linear (patch_embed) and de-patchify ``ttnn.linear``
 inside ``TtAceStepDiTOutputHead``, which were not in the previous body.
 
 Run:

@@ -37,7 +37,7 @@ Optional: set ``ACE_STEP_TRACY_EACH_DENOISE_STEP=1`` to emit one Tracy signpost 
 Optional: set ``ACE_STEP_USE_TRACE=1`` to wrap the per-step DiT body
 (``pipe.forward_with_temb_tp``) in a captured TTNN trace + 2CQ replay. The wrapping covers
 patch_embed + DiT core + output_head — the steady-state bulk of each Euler step. The pre-DiT
-prep (``fp32_tile_to_row_bf16``, CFG batch-duplicate), the post-DiT CFG split, the
+prep (``fp32_tile_to_bf16_tile_l1``, CFG batch-duplicate), the post-DiT CFG split, the
 APG/ADG guidance, and the Euler subtract stay eager because they depend on per-step Python
 scalars (``t_curr``, ``euler_dt``) that would otherwise be baked into the captured graph. The
 trace is captured once per :class:`AceStepE2EModel` instance after two eager warmup steps in
@@ -77,7 +77,7 @@ from .dit_sampling_ttnn import (
     concat_duplicate_batch,
     euler_subtract_v_dt,
     euler_subtract_v_dt_host,
-    fp32_tile_to_row_bf16,
+    fp32_tile_to_bf16_tile_l1,
     refresh_fp32_tile_from_host,
     slice_batch_btc,
     typecast_bf16_any_to_fp32_tile,
@@ -1019,7 +1019,7 @@ def run_ttnn_denoise_loop(
             progress_fn(step_idx, num_steps, t_curr_f, float(euler_dt))
 
     def _diffusion_iterate(*, step_idx: int, t_curr_f: float, euler_dt: float) -> None:
-        xt_row = fp32_tile_to_row_bf16(xt_tt, dram=mem)
+        xt_row = fp32_tile_to_bf16_tile_l1(xt_tt, dram=mem)
         if use_seq_cfg:
             vpc_rm, vpu_rm = run_mesh_sequential_cfg_forwards(
                 pipe=pipe,
@@ -1072,7 +1072,7 @@ def run_ttnn_denoise_loop(
     def _diffusion_iterate_capture(*, step_idx: int, t_curr_f: float, euler_dt: float) -> None:
         """First-call capture path: clone current inputs into trace_state buffers, capture, use the captured output for this step."""
         assert trace_state is not None
-        xt_row = fp32_tile_to_row_bf16(xt_tt, dram=mem)
+        xt_row = fp32_tile_to_bf16_tile_l1(xt_tt, dram=mem)
         if use_seq_cfg:
             enc_cap = slice_batch_dim0(enc_tt_pipe, 0, 1)
             ctx_cap = slice_batch_dim0(ctx_tt_pipe, 0, 1)
@@ -1158,7 +1158,7 @@ def run_ttnn_denoise_loop(
         if not trace_state.is_ready():
             # Previous step released the trace id before post-DiT eager allocations; re-arm now.
             trace_state.recapture(pipe=pipe, device=device)
-        xt_row = fp32_tile_to_row_bf16(xt_tt, dram=mem)
+        xt_row = fp32_tile_to_bf16_tile_l1(xt_tt, dram=mem)
         if use_seq_cfg:
             xt_pipe_in = xt_row
             enc_cond = slice_batch_dim0(enc_tt_pipe, 0, 1)

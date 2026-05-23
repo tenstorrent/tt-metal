@@ -17,6 +17,8 @@ import os
 
 import pytest
 
+# DiT LoFi + bfloat8_b + L1 activations are the default in ``math_perf_env`` (no env toggle).
+
 _DEFAULT_L1_SMALL = int(os.environ.get("ACE_STEP_L1_SMALL_SIZE", "98304"))
 # 2 CQs enable host->device copy on CQ 1 while the trace runs on CQ 0; the trace+2CQ perf tests
 # need this on by default, while legacy single-CQ runs are preserved with ACE_STEP_NUM_CQS=1.

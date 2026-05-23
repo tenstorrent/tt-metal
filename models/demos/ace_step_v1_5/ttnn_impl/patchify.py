@@ -8,10 +8,16 @@ import numpy as np
 import ttnn
 
 from .math_perf_env import (
+    ace_step_binary_kwargs,
     ace_step_dense_linear_program_config,
+    ace_step_dit_weight_dtype,
+    ace_step_dit_weight_layout,
+    ace_step_dit_weight_memory_config,
     ace_step_ensure_l1_activation,
-    ace_step_init_hifi4_linear_compute_kernel_config,
+    ace_step_ensure_tile_layout,
+    ace_step_init_dit_linear_compute_kernel_config,
     ace_step_linear_l1_memory_config,
+    ace_step_pad_activation_kwargs,
     ace_step_reshape_kwargs,
 )
 
@@ -37,7 +43,7 @@ def _pad_seq_len_to_patch_size(hidden_states: ttnn.Tensor, patch_size: int, *, v
     """
     Pads `hidden_states` along the sequence dimension so its length is divisible by `patch_size`.
 
-    Expected shape: [B, T, C] (row-major).
+    Operates on TILE + L1 tensors to avoid DRAM ``Tilize`` before ``proj_in``.
     """
     if len(hidden_states.shape) != 3:
         raise ValueError(f"Expected hidden_states rank-3 [B, T, C], got shape={hidden_states.shape}")
@@ -48,13 +54,23 @@ def _pad_seq_len_to_patch_size(hidden_states: ttnn.Tensor, patch_size: int, *, v
 
     meta = _patchify_pad_meta(int(hidden_states.shape[1]), patch_size)
     if meta.pad_length == 0:
-        return hidden_states
+        return ace_step_ensure_l1_activation(ttnn, ace_step_ensure_tile_layout(ttnn, hidden_states))
 
-    # ttnn.pad operates on rank-4 tensors with explicit (N, C, H, W) padding tuples.
-    # Treat sequence length as H and channels as W: [B, 1, T, C]
-    hs4 = ttnn.unsqueeze(hidden_states, 1)
-    hs4 = ttnn.pad(hs4, padding=((0, 0), (0, 0), (0, meta.pad_length), (0, 0)), value=value)
-    return ttnn.squeeze(hs4, 1)
+    _l1_mc = ace_step_linear_l1_memory_config(ttnn)
+    x = ace_step_ensure_tile_layout(ttnn, hidden_states)
+    if _l1_mc is not None:
+        x = ace_step_ensure_l1_activation(ttnn, x, _l1_mc)
+    hs4 = ttnn.unsqueeze(x, 1)
+    hs4 = ttnn.pad(
+        hs4,
+        padding=((0, 0), (0, 0), (0, meta.pad_length), (0, 0)),
+        value=value,
+        **ace_step_pad_activation_kwargs(ttnn, _l1_mc),
+    )
+    out = ttnn.squeeze(hs4, 1)
+    if _l1_mc is not None:
+        out = ace_step_ensure_l1_activation(ttnn, out, _l1_mc)
+    return out
 
 
 def _maybe_get_state_dict_key(state_dict: dict, candidates: Tuple[str, ...]) -> str:
@@ -73,33 +89,41 @@ def _to_numpy_host_array(x):
     - Torch tensors (including bfloat16, which cannot be implicitly converted to NumPy)
     """
 
-    # Torch tensors: detach and convert to float32 on CPU before NumPy ops.
-    # Import torch lazily so this file can be imported even in minimal environments.
     try:
         import torch  # type: ignore
 
         if isinstance(x, torch.Tensor):
             return x.detach().to(dtype=torch.float32, device="cpu").numpy()
     except Exception:
-        # If torch isn't installed or something unexpected happens, fall through to numpy conversion attempt.
         pass
 
-    # NumPy arrays / array-likes
     return np.asarray(x)
+
+
+def _proj_in_conv_weight_to_linear(
+    weight_host_np: np.ndarray, *, out_channels: int, in_channels: int, patch_size: int
+) -> np.ndarray:
+    """Map ``Conv1d`` weight ``[O, I, P]`` to linear ``[O, I*P]`` for non-overlapping patch matmul."""
+    if tuple(weight_host_np.shape) != (out_channels, in_channels, patch_size):
+        raise ValueError(
+            f"proj_in weight shape mismatch: got {tuple(weight_host_np.shape)}, "
+            f"expected ({out_channels}, {in_channels}, {patch_size})"
+        )
+    # Feature order is patch_pos * in_channels + channel (see ``reshape`` in ``forward``).
+    w_p_ic = np.transpose(weight_host_np, (0, 2, 1))  # [O, P, I]
+    return np.ascontiguousarray(w_p_ic.reshape(out_channels, patch_size * in_channels))
 
 
 class TtAceStepPatchEmbed1D:
     """
     TTNN equivalent of HF's `proj_in` patch embedding in `AceStepDiTModel`.
 
-    HF reference (conceptually):
-      x: [B, T, C]
-      if T % patch_size != 0: pad T
-      x = x.transpose(1,2)              # [B, C, T]
-      x = Conv1d(C -> inner_dim, k=p, s=p)(x)  # [B, inner_dim, T/p]
-      x = x.transpose(1,2)              # [B, T/p, inner_dim]
+    Uses a fused **linear** on TILE/L1 activations instead of ``ttnn.conv1d`` so Tracy does not
+    pay ``Tilize`` / ``TilizeWithValPadding`` / ``CopyDevice`` / im2col DRAM matmul on every forward
+    (see ``perf_dit_4`` stacked report). Weights stay in DRAM; activations are L1-interleaved.
 
-    TTNN conv1d expects input shaped [B, T, C], so we can call it directly without transposes.
+    HF reference (conceptually):
+      x: [B, T, C] → pad T → group patches → linear(C*p → H) → [B, T/p, H]
     """
 
     def __init__(
@@ -123,16 +147,18 @@ class TtAceStepPatchEmbed1D:
             weights_dtype = getattr(ttnn, "bfloat16", None)
         if activation_dtype is None or weights_dtype is None:
             raise RuntimeError("TTNN build missing bfloat16 dtype; pass activation_dtype/weights_dtype explicitly.")
+        weights_dtype = ace_step_dit_weight_dtype(ttnn, weights_dtype)
 
         self.patch_size = int(getattr(config, "patch_size"))
         self.in_channels = int(getattr(config, "in_channels"))
         self.out_channels = int(getattr(config, "hidden_size"))
         self.expected_input_length = int(expected_input_length) if expected_input_length is not None else None
+        self.in_features = self.in_channels * self.patch_size
 
         weight_key = _maybe_get_state_dict_key(
             state_dict,
             (
-                f"{base_address}.1.weight",  # nn.Sequential(Lambda, Conv1d, Lambda)
+                f"{base_address}.1.weight",
                 f"{base_address}.weight",
             ),
         )
@@ -144,8 +170,8 @@ class TtAceStepPatchEmbed1D:
             ),
         )
 
-        weight_host = state_dict[weight_key]  # [out_channels, in_channels, patch_size]
-        bias_host = state_dict[bias_key]  # [out_channels]
+        weight_host = _to_numpy_host_array(state_dict[weight_key])
+        bias_host = _to_numpy_host_array(state_dict[bias_key])
 
         if weight_host.shape[0] != self.out_channels:
             raise ValueError(
@@ -156,84 +182,38 @@ class TtAceStepPatchEmbed1D:
         if int(weight_host.shape[2]) != self.patch_size:
             raise ValueError(f"Unexpected proj_in kernel_size: got {weight_host.shape[2]}, expected {self.patch_size}")
 
-        # We must avoid conv2d's internal "pull back to host" fallback. That means weights/bias must be
-        # prepared (host-side preprocessing) *before* the first conv invocation, then moved to device once.
-        #
-        # `prepare_conv_weights/prepare_conv_bias` expect HOST tensors and return prepared tensors on DEVICE.
-        weight_host_tt = ttnn.as_tensor(weight_host, dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
-        # Bias for conv1d/conv2d path is expected in NHWC-like rank-4 form [1,1,1,C]
-        bias_host_tt = ttnn.as_tensor(bias_host.reshape(1, 1, 1, -1), dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
-        self._weight_host_tt = weight_host_tt
-        self._bias_host_tt = bias_host_tt
-        self._packed_for: tuple[int, int] | None = None  # (batch_size, padded_input_length)
-
-        self.conv_config = ttnn.Conv1dConfig(
-            weights_dtype=weights_dtype, shard_layout=None, deallocate_activation=False
+        w2d = _proj_in_conv_weight_to_linear(
+            weight_host,
+            out_channels=self.out_channels,
+            in_channels=self.in_channels,
+            patch_size=self.patch_size,
         )
-        self.compute_config = ttnn.init_device_compute_kernel_config(
+        _w_layout = ace_step_dit_weight_layout(ttnn, weights_dtype, default_layout=ttnn.TILE_LAYOUT)
+        _w_mc = ace_step_dit_weight_memory_config(ttnn) or ttnn.DRAM_MEMORY_CONFIG
+        self.weight = ttnn.as_tensor(
+            w2d,
+            dtype=weights_dtype,
+            layout=_w_layout,
+            device=self.device,
+            memory_config=_w_mc,
+        )
+        self.bias = ttnn.as_tensor(
+            bias_host.reshape(1, 1, 1, -1),
+            dtype=activation_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=_w_mc,
+        )
+        self.activation_dtype = activation_dtype
+        self._ck = ace_step_init_dit_linear_compute_kernel_config(device) or ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=math_fidelity,
             math_approx_mode=math_approx_mode,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
-        self.activation_dtype = activation_dtype
-        # Pre-pack conv weights/bias at init when expected_input_length is known.
-        # This keeps the entire forward pass device-pure (no TTNN->host mid-run transfers).
-        #
-        # When expected_input_length is not provided (e.g. unit tests), we lazily pack on first forward
-        # based on runtime input shape and cache the packed weights.
-        self.weight = None
-        self.bias = None
-        if self.expected_input_length is not None:
-            padded_len = int(((self.expected_input_length + self.patch_size - 1) // self.patch_size) * self.patch_size)
-            self._ensure_packed(batch_size=1, padded_input_length=padded_len)
-
-    def _ensure_packed(self, *, batch_size: int, padded_input_length: int) -> None:
-        if self._packed_for == (batch_size, padded_input_length) and self.weight is not None and self.bias is not None:
-            return
-
-        self.weight = ttnn.prepare_conv_weights(
-            weight_tensor=self._weight_host_tt,
-            input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            input_layout=ttnn.ROW_MAJOR_LAYOUT,
-            weights_format="OIHW",
-            in_channels=self.in_channels,
-            out_channels=self.out_channels,
-            batch_size=batch_size,
-            input_height=1,
-            input_width=padded_input_length,
-            kernel_size=(1, self.patch_size),
-            stride=(1, self.patch_size),
-            padding=(0, 0),
-            dilation=(1, 1),
-            has_bias=True,
-            groups=1,
-            device=self.device,
-            input_dtype=self.activation_dtype,
-            conv_config=self.conv_config,
-            compute_config=self.compute_config,
-        )
-        self.bias = ttnn.prepare_conv_bias(
-            bias_tensor=self._bias_host_tt,
-            input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            input_layout=ttnn.ROW_MAJOR_LAYOUT,
-            in_channels=self.in_channels,
-            out_channels=self.out_channels,
-            batch_size=batch_size,
-            input_height=1,
-            input_width=padded_input_length,
-            kernel_size=(1, self.patch_size),
-            stride=(1, self.patch_size),
-            padding=(0, 0),
-            dilation=(1, 1),
-            device=self.device,
-            input_dtype=self.activation_dtype,
-            groups=1,
-            conv_config=self.conv_config,
-            compute_config=self.compute_config,
-        )
-        self._packed_for = (batch_size, padded_input_length)
+        self._l1_mc = ace_step_linear_l1_memory_config(ttnn)
+        self._pc_cache: dict = {}
 
     def forward(self, hidden_states: ttnn.Tensor) -> Tuple[ttnn.Tensor, PatchifyMetadata]:
         if len(hidden_states.shape) != 3:
@@ -246,56 +226,57 @@ class TtAceStepPatchEmbed1D:
         meta = _patchify_pad_meta(int(hidden_states.shape[1]), self.patch_size)
         hidden_states = _pad_seq_len_to_patch_size(hidden_states, self.patch_size, value=0.0)
 
-        batch_size = int(hidden_states.shape[0])
-        input_length = int(hidden_states.shape[1])
+        b = int(hidden_states.shape[0])
+        t = int(hidden_states.shape[1])
+        if t % self.patch_size != 0:
+            raise ValueError(f"Padded sequence length {t} not divisible by patch_size={self.patch_size}")
+        t_p = t // self.patch_size
 
-        self._ensure_packed(batch_size=batch_size, padded_input_length=input_length)
-
-        weight_tensor = self.weight
-        bias_tensor = self.bias
-        if weight_tensor is None or bias_tensor is None:
-            raise RuntimeError("Internal error: conv weights/bias were not packed")
-        if not ttnn.is_tensor_storage_on_device(weight_tensor):
-            raise AssertionError("Expected proj_in weight to be device-resident.")
-        if not ttnn.is_tensor_storage_on_device(bias_tensor):
-            raise AssertionError("Expected proj_in bias to be device-resident.")
-
-        conv_ret = ttnn.conv1d(
-            input_tensor=hidden_states,
-            weight_tensor=weight_tensor,
-            in_channels=self.in_channels,
-            out_channels=self.out_channels,
-            device=self.device,
-            bias_tensor=bias_tensor,
-            kernel_size=self.patch_size,
-            stride=self.patch_size,
-            padding=0,
-            batch_size=batch_size,
-            input_length=input_length,
-            conv_config=self.conv_config,
-            compute_config=self.compute_config,
-            groups=1,
-            return_output_dim=True,
-            return_weights_and_bias=False,
-            dtype=self.activation_dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        if len(conv_ret) != 2:
-            raise RuntimeError(
-                "Unexpected `ttnn.conv1d` return arity. "
-                f"Expected 2 when return_output_dim=True and return_weights_and_bias=False, got {len(conv_ret)}."
-            )
-
-        out, out_length = conv_ret
-
-        # conv1d returns rank-4 [1, B, out_length, out_channels]
         _sr = ace_step_reshape_kwargs(ttnn)
-        out = ttnn.squeeze(out, 0)
-        out = ttnn.reshape(out, (batch_size, out_length, out.shape[-1]), **_sr)
-        _l1_mc = ace_step_linear_l1_memory_config(ttnn)
+        _l1_mc = self._l1_mc
+        x = ace_step_ensure_tile_layout(ttnn, hidden_states)
         if _l1_mc is not None:
-            out = ace_step_ensure_l1_activation(ttnn, out, _l1_mc)
+            x = ace_step_ensure_l1_activation(ttnn, x, _l1_mc)
+
+        # [B, T, C] → [B, T_p, P, C] → [B*T_p, P*C]
+        x = ttnn.reshape(x, (b, t_p, self.patch_size, self.in_channels), **_sr)
+        x = ttnn.reshape(x, (b * t_p, self.in_features), **_sr)
+        if _l1_mc is not None:
+            x = ace_step_ensure_l1_activation(ttnn, x, _l1_mc)
+
+        m = b * t_p
+        _pc = self._pc_cache.get((m, self.in_features, self.out_channels))
+        if _pc is None:
+            _pc = ace_step_dense_linear_program_config(
+                self.device,
+                seq_len=m,
+                in_dim=self.in_features,
+                out_dim=self.out_channels,
+            )
+            if _pc is not None:
+                self._pc_cache[(m, self.in_features, self.out_channels)] = _pc
+
+        _lin_mc = _l1_mc or ttnn.DRAM_MEMORY_CONFIG
+        _lin_kw: dict = {"dtype": self.activation_dtype, "memory_config": _lin_mc}
+        if self._ck is not None:
+            _lin_kw["compute_kernel_config"] = self._ck
+        if _pc is not None:
+            _lin_kw["program_config"] = _pc
+
+        w_tile = ace_step_ensure_tile_layout(ttnn, self.weight)
+        y2d = ttnn.linear(x, w_tile, bias=None, transpose_b=True, **_lin_kw)
+        if int(y2d.shape[-1]) > self.out_channels:
+            y2d = y2d[:, : self.out_channels]
+        if _l1_mc is not None:
+            y2d = ace_step_ensure_l1_activation(ttnn, y2d, _l1_mc)
+
+        out = ttnn.reshape(y2d, (b, t_p, self.out_channels), **_sr)
+        out4 = ttnn.unsqueeze(out, 1)
+        _bkw = ace_step_binary_kwargs(ttnn, _l1_mc)
+        out4 = ttnn.add(out4, self.bias, **_bkw)
+        if _l1_mc is not None:
+            out4 = ace_step_ensure_l1_activation(ttnn, out4, _l1_mc)
+        out = ttnn.squeeze(out4, 1)
         return out, meta
 
     def __call__(self, hidden_states: ttnn.Tensor) -> Tuple[ttnn.Tensor, PatchifyMetadata]:
@@ -334,6 +315,7 @@ class TtAceStepDePatchify1D:
             weights_dtype = getattr(ttnn, "bfloat16", None)
         if activation_dtype is None or weights_dtype is None:
             raise RuntimeError("TTNN build missing bfloat16 dtype; pass activation_dtype/weights_dtype explicitly.")
+        weights_dtype = ace_step_dit_weight_dtype(ttnn, weights_dtype)
 
         self.patch_size = int(getattr(config, "patch_size"))
         self.in_channels = int(getattr(config, "hidden_size"))
@@ -342,7 +324,7 @@ class TtAceStepDePatchify1D:
         weight_key = _maybe_get_state_dict_key(
             state_dict,
             (
-                f"{base_address}.1.weight",  # nn.Sequential(Lambda, ConvTranspose1d, Lambda)
+                f"{base_address}.1.weight",
                 f"{base_address}.weight",
             ),
         )
@@ -354,8 +336,8 @@ class TtAceStepDePatchify1D:
             ),
         )
 
-        weight_host = state_dict[weight_key]  # ConvTranspose1d weight: [in_channels, out_channels, patch_size]
-        bias_host = state_dict[bias_key]  # [out_channels]
+        weight_host = state_dict[weight_key]
+        bias_host = state_dict[bias_key]
 
         if int(weight_host.shape[0]) != self.in_channels:
             raise ValueError(
@@ -368,51 +350,36 @@ class TtAceStepDePatchify1D:
         if int(weight_host.shape[2]) != self.patch_size:
             raise ValueError(f"Unexpected proj_out kernel_size: got {weight_host.shape[2]}, expected {self.patch_size}")
 
-        # Build a linear weight matrix W2d of shape [out_features, in_features] where out_features = out_channels*patch.
-        #
-        # HF uses `ConvTranspose1d(in=inner_dim, out=out_ch, kernel_size=p, stride=p)` on a tensor shaped
-        #   x: [B, inner_dim, T_p]
-        # producing:
-        #   y: [B, out_ch, T_p * p]
-        #
-        # For stride==kernel==p and padding==0, this is a non-overlapping upsample: each input time step contributes
-        # independently to `p` consecutive output samples for *each* output channel.
-        #
-        # If we flatten each input token to length `inner_dim` and want an output token of length `out_ch * p`,
-        # the correct stacked weight rows are:
-        #   row (out_ch * p + i) == convtranspose weight[:, out_ch, i]  (shape [in])
-        # i.e. stack `p` slices of shape [in, out] into [in, out*p] then transpose to [out*p, in].
-        # `torch.nn.ConvTranspose1d` weight layout is [in_channels, out_channels, kernel_size].
-        # For each kernel tap i, the slice `torch_weight[:, :, i]` is [in, out] and maps to a contiguous
-        # block of `out` outputs in the upsampled time axis.
         weight_host_np = _to_numpy_host_array(weight_host)
         bias_host_np = _to_numpy_host_array(bias_host)
 
         w_blocks = []
         for i in range(self.patch_size):
-            w_blocks.append(weight_host_np[:, :, i])  # [in, out]
+            w_blocks.append(weight_host_np[:, :, i])
 
-        w_io_times_p = np.concatenate(w_blocks, axis=1)  # [in, out*p]
-        w2d = np.ascontiguousarray(np.swapaxes(w_io_times_p, 0, 1))  # [out*p, in]
+        w_io_times_p = np.concatenate(w_blocks, axis=1)
+        w2d = np.ascontiguousarray(np.swapaxes(w_io_times_p, 0, 1))
 
-        # Host -> device transfer happens once here (allowed). Keep weights device-resident for all forwards.
+        _w_layout = ace_step_dit_weight_layout(ttnn, weights_dtype, default_layout=ttnn.TILE_LAYOUT)
+        _w_mc = ace_step_dit_weight_memory_config(ttnn) or ttnn.DRAM_MEMORY_CONFIG
         self.weight = ttnn.as_tensor(
             w2d,
             dtype=weights_dtype,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=_w_layout,
             device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=_w_mc,
         )
         self.bias = ttnn.as_tensor(
             bias_host_np.reshape(1, 1, 1, -1),
             dtype=activation_dtype,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=ttnn.TILE_LAYOUT,
             device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=_w_mc,
         )
         self.activation_dtype = activation_dtype
-        self._ck = ace_step_init_hifi4_linear_compute_kernel_config(device)
+        self._ck = ace_step_init_dit_linear_compute_kernel_config(device)
         self._pc_cache: dict = {}
+        self._l1_mc = ace_step_linear_l1_memory_config(ttnn)
 
     def forward(self, hidden_states: ttnn.Tensor, meta: PatchifyMetadata) -> ttnn.Tensor:
         if meta.patch_size != self.patch_size:
@@ -433,44 +400,44 @@ class TtAceStepDePatchify1D:
         b = int(hidden_states.shape[0])
         t_p = int(hidden_states.shape[1])
 
-        # Matmul path requires TILE; reshapes are safest in ROW_MAJOR (tile padding can corrupt naive reshapes).
         m = b * t_p
         n = self.out_channels * self.patch_size
 
         _sr = ace_step_reshape_kwargs(ttnn)
-        x2d = ttnn.reshape(hidden_states, (m, self.in_channels), **_sr)
-        x2d = ttnn.to_layout(x2d, ttnn.TILE_LAYOUT)
+        _l1_mc = self._l1_mc
+        x2d = ace_step_ensure_tile_layout(ttnn, ttnn.reshape(hidden_states, (m, self.in_channels), **_sr))
+        if _l1_mc is not None:
+            x2d = ace_step_ensure_l1_activation(ttnn, x2d, _l1_mc)
 
-        w_tile = ttnn.to_layout(self.weight, ttnn.TILE_LAYOUT)
+        w_tile = ace_step_ensure_tile_layout(ttnn, self.weight)
         _pc = self._pc_cache.get((m, self.in_channels, n))
         if _pc is None:
             _pc = ace_step_dense_linear_program_config(self.device, seq_len=m, in_dim=self.in_channels, out_dim=n)
             if _pc is not None:
                 self._pc_cache[(m, self.in_channels, n)] = _pc
-        _lin_kw: dict = {"dtype": self.activation_dtype, "memory_config": ttnn.DRAM_MEMORY_CONFIG}
+        _lin_mc = _l1_mc or ttnn.DRAM_MEMORY_CONFIG
+        _lin_kw: dict = {"dtype": self.activation_dtype, "memory_config": _lin_mc}
         if self._ck is not None:
             _lin_kw["compute_kernel_config"] = self._ck
         if _pc is not None:
             _lin_kw["program_config"] = _pc
         y2d = ttnn.linear(x2d, w_tile, bias=None, transpose_b=True, **_lin_kw)
-        y2d_rm = ttnn.to_layout(y2d, ttnn.ROW_MAJOR_LAYOUT)
+        if int(y2d.shape[-1]) > n:
+            y2d = y2d[:, :n]
+        if _l1_mc is not None:
+            y2d = ace_step_ensure_l1_activation(ttnn, y2d, _l1_mc)
 
-        # `ttnn.linear` outputs may be padded to tile alignment on the last dim; reshape using the true M/N.
-        if y2d_rm.shape != (m, n):
-            if int(y2d_rm.shape[0]) != m:
-                raise RuntimeError(f"Unexpected linear output rows: got {y2d_rm.shape[0]}, expected {m}")
-            y2d_rm = y2d_rm[:, :n]
+        y = ttnn.reshape(y2d, (b, t_p * self.patch_size, self.out_channels), **_sr)
+        if _l1_mc is not None:
+            y = ace_step_ensure_l1_activation(ttnn, y, _l1_mc)
 
-        # Single reshape RowMajor (m, patch*C) → (B, T_full, C); avoids an extra ReshapeView device op per forward
-        # (same linear memory order as the prior two-step (B,T_p,patch,C)→(B,T,C) sequence).
-        y = ttnn.reshape(y2d_rm, (b, t_p * self.patch_size, self.out_channels), **_sr)
-
-        # Add bias per output channel (broadcast across batch and time)
-        y4 = ttnn.unsqueeze(y, 1)  # [B, 1, T, C]
-        y4 = y4 + self.bias
+        y4 = ttnn.unsqueeze(y, 1)
+        _bkw = ace_step_binary_kwargs(ttnn, _l1_mc)
+        y4 = ttnn.add(y4, self.bias, **_bkw)
+        if _l1_mc is not None:
+            y4 = ace_step_ensure_l1_activation(ttnn, y4, _l1_mc)
         y = ttnn.squeeze(y4, 1)
 
-        # Trim any pad added during patchify
         if meta.pad_length:
             y = y[:, : meta.original_seq_len, :]
         return y
