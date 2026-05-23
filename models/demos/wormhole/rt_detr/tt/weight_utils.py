@@ -27,32 +27,37 @@ def fold_bn_to_conv(conv_w, conv_b, bn_w, bn_b, bn_mean, bn_var, eps=1e-5):
 
 
 def _to_tt(t, device, dtype=ttnn.bfloat16):
-    """Upload to device — used for linear weights and norms only."""
+    """Upload to device with dynamic mesh mapping support."""
+    # If running on a multi-chip mesh, replicate the weights.
+    mesh_mapper = ttnn.ReplicateTensorToMesh(device) if hasattr(device, 'get_num_devices') else None
+    
     return ttnn.from_torch(
         t.contiguous(), dtype=dtype, layout=ttnn.TILE_LAYOUT,
         device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=mesh_mapper
     )
 
 
 def _to_tt_host(t, dtype=ttnn.bfloat16):
-    """Keep on host without layout — ttnn.conv2d handles layout internally."""
+    """Keep on host without layout - ttnn.conv2d handles layout internally."""
     return ttnn.from_torch(t.contiguous(), dtype=dtype)
 
 
 def _conv_params(w, b, device):
-    # both weight and bias stay on host — ttnn.conv2d uploads and formats them internally
+    # both weight and bias stay on host - ttnn.conv2d uploads and formats them internally
     return Params(
         weight=_to_tt_host(w, dtype=ttnn.bfloat16),
         bias=ttnn.from_torch(
             b.reshape(1, 1, 1, -1).contiguous(),
             dtype=ttnn.bfloat16,
-        ),  # no device, no layout — let conv2d handle it
+        ),  
     )
 
 
 def _linear_params(w, b, device):
+    # Use bfloat16 to maintain strict PCC for the classification heads
     return Params(
-        weight=_to_tt(w.T.contiguous(), device, dtype=ttnn.bfloat8_b),
+        weight=_to_tt(w.T.contiguous(), device, dtype=ttnn.bfloat16),
         bias=_to_tt(b.reshape(1, 1, 1, -1), device, dtype=ttnn.bfloat16),
     )
 
@@ -62,7 +67,6 @@ def _norm_params(w, b, device):
         weight=_to_tt(w.reshape(1, 1, 1, -1), device, dtype=ttnn.bfloat16),
         bias=_to_tt(b.reshape(1, 1, 1, -1), device, dtype=ttnn.bfloat16),
     )
-
 
 
 def _fold_conv_norm(sd, conv_key, norm_key, device):
@@ -172,6 +176,7 @@ def get_encoder_parameters(model, device):
         qkv_w = attn.in_proj_weight
         qkv_b = attn.in_proj_bias
 
+        # Split weights so we can feed different inputs to Q/K vs V
         def _split(start, end):
             return _linear_params(qkv_w[start:end, :], qkv_b[start:end], device)
 
@@ -180,9 +185,7 @@ def get_encoder_parameters(model, device):
                 q=_split(0, d),
                 k=_split(d, 2 * d),
                 v=_split(2 * d, 3 * d),
-                out_proj=_linear_params(
-                    attn.out_proj.weight, attn.out_proj.bias, device
-                ),
+                out_proj=_linear_params(attn.out_proj.weight, attn.out_proj.bias, device),
             ),
             linear1=_linear_params(layer.linear1.weight, layer.linear1.bias, device),
             linear2=_linear_params(layer.linear2.weight, layer.linear2.bias, device),
@@ -190,25 +193,10 @@ def get_encoder_parameters(model, device):
             norm2=_norm_params(layer.norm2.weight, layer.norm2.bias, device),
         ))
 
-    lateral_convs = [
-        _fold_conv_norm_enc(sd, f"encoder.lateral_convs.{i}", device)
-        for i in range(2)
-    ]
-
-    fpn_blocks = [
-        _fpn_pan_block_params(sd, f"encoder.fpn_blocks.{i}", device)
-        for i in range(2)
-    ]
-
-    downsample_convs = [
-        _fold_conv_norm_enc(sd, f"encoder.downsample_convs.{i}", device)
-        for i in range(2)
-    ]
-
-    pan_blocks = [
-        _fpn_pan_block_params(sd, f"encoder.pan_blocks.{i}", device)
-        for i in range(2)
-    ]
+    lateral_convs = [_fold_conv_norm_enc(sd, f"encoder.lateral_convs.{i}", device) for i in range(2)]
+    fpn_blocks = [_fpn_pan_block_params(sd, f"encoder.fpn_blocks.{i}", device) for i in range(2)]
+    downsample_convs = [_fold_conv_norm_enc(sd, f"encoder.downsample_convs.{i}", device) for i in range(2)]
+    pan_blocks = [_fpn_pan_block_params(sd, f"encoder.pan_blocks.{i}", device) for i in range(2)]
 
     return Params(
         input_proj=input_proj,
@@ -234,6 +222,8 @@ def get_decoder_parameters(model, device):
 
         layers.append(Params(
             self_attn=Params(
+                # We LEAVE the decoder split. Q/K take `x_pos`, V takes `x_flat`. 
+                # Since they take different inputs, they cannot be perfectly fused into one op.
                 q=_split(0, d),
                 k=_split(d, 2 * d),
                 v=_split(2 * d, 3 * d),

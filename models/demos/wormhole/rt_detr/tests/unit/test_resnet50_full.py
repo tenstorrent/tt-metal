@@ -20,7 +20,7 @@ from tt.resnet_backbone import presnet50
 from tt.weight_utils import get_backbone_parameters
 from models.common.utility_functions import comp_pcc
 
-REF      = Path(__file__).parent.parent / "reference_outputs.pt"
+REF      = Path(__file__).parent.parent.parent / "reference" / "reference_outputs.pt"
 CFG_PATH = REPO_PATH / "configs/rtdetr/rtdetr_r50vd_6x_coco.yml"
 CKPT     = Path(__file__).parent.parent.parent / "weights/rtdetr_r50vd.pth"
 

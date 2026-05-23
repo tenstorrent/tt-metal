@@ -11,10 +11,10 @@ from PIL import Image
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "RT-DETR", "rtdetr_pytorch"))
 from src.core import YAMLConfig
 
-CONFIG_PATH = "RT-DETR/rtdetr_pytorch/configs/rtdetr/rtdetr_r50vd_6x_coco.yml"
-CKPT_PATH   = "weights/rtdetr_r50vd.pth"
-IMG_PATH    = "demo/coco_cats.jpg"
-OUT_PATH    = "reference/reference_outputs.pt"
+config_path = "RT-DETR/rtdetr_pytorch/configs/rtdetr/rtdetr_r50vd_6x_coco.yml"
+ckpt_path   = "weights/rtdetr_r50vd.pth"
+img_path    = "demo/demo_images/sample.jpg"
+out_path    = "reference/reference_outputs.pt"
 
 
 def load_image(path, size=(640, 640)):
@@ -26,8 +26,8 @@ def load_image(path, size=(640, 640)):
 
 def main():
     print("Loading model...")
-    cfg   = YAMLConfig(CONFIG_PATH)
-    ckpt  = torch.load(CKPT_PATH, map_location="cpu")
+    cfg   = YAMLConfig(config_path)
+    ckpt  = torch.load(ckpt_path, map_location="cpu")
     state = ckpt.get("ema", {}).get("module", ckpt.get("model", ckpt))
     cfg.model.load_state_dict(state)
     model = cfg.model.eval()
@@ -144,7 +144,7 @@ def main():
     model.decoder.forward = _patched_rtdetr_dec
 
     # forward 
-    img_tensor, orig_size = load_image(IMG_PATH)
+    img_tensor, orig_size = load_image(img_path)
     saved["backbone_input"] = img_tensor.detach().clone()
 
     print("Running forward pass...")
@@ -174,8 +174,8 @@ def main():
     for h in hooks:
         h.remove()
 
-    print(f"\nSaving to {OUT_PATH}")
-    torch.save(saved, OUT_PATH)
+    print(f"\nSaving to {out_path}")
+    torch.save(saved, out_path)
 
     print("\nSaved keys:")
     for k, v in saved.items():

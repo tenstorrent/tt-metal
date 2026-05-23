@@ -18,7 +18,7 @@ from tt.rtdetr_decoder import run_decoder, decoder_layer
 from models.common.utility_functions import comp_pcc
 
 REF = Path(__file__).parent.parent.parent / "reference/reference_outputs.pt"
-PCC_THRESHOLD = 0.97
+pcc_threshold = 0.97
 
 @pytest.fixture(scope="module")
 def ref():
@@ -111,14 +111,13 @@ class TestDecoder:
         spatial_shapes = torch.tensor([[80, 80], [40, 40], [20, 20]], dtype=torch.long)
         level_start_index = torch.tensor([0, 6400, 8000], dtype=torch.long)
         
-        # FIX: Return pytorch_model instead of torch_decoder
         return pytorch_model, ref_points, spatial_shapes, level_start_index, dec_params
 
     def test_pcc_layer1_output(self, ref, device):
         memory_list, query_tt, query_pos_tt = self._load_inputs(ref, device)
         memory_tt = ttnn.concat(memory_list, dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
         
-        # FIX: Unpack pytorch_model and explicitly get the decoder
+        # Unpack pytorch_model and explicitly get the decoder
         pytorch_model, ref_points, spatial_shapes, level_start_index, dec_params = self._prepare_hybrid_args(device)
         torch_decoder = pytorch_model.decoder 
 
@@ -141,9 +140,9 @@ class TestDecoder:
         out_tt = decoder_layer(query_tt, query_pos_tt, torch_decoder.layers[0], dec_params[0], memory_tt, ref_points, spatial_shapes, device)
         ttnn_out = ttnn.to_torch(out_tt).squeeze(1)
 
-        pcc, msg = comp_pcc(golden_out, ttnn_out, PCC_THRESHOLD)
+        pcc, msg = comp_pcc(golden_out, ttnn_out, pcc_threshold)
         print(f"\n[LAYER 1] PCC: {pcc:.6f}")
-        assert pcc >= PCC_THRESHOLD, f"PCC failed! {pcc:.4f} < {PCC_THRESHOLD} — {msg}"
+        assert pcc >= pcc_threshold, f"PCC failed! {pcc:.4f} < {pcc_threshold} - {msg}"
 
     def test_output_shape(self, ref, device):
         memory_list, query, query_pos = self._load_inputs(ref, device)
@@ -155,14 +154,12 @@ class TestDecoder:
             query, query_pos, pytorch_model, dec_params, memory, ref_points, spatial_shapes, device
         )
         
-        # Now out_tt is a single tensor
         out = ttnn.to_torch(out_tt)
 
         assert out.shape[-1] == 256
         assert out.shape[-2] == 300
 
     def test_layer_by_layer_pcc(self, ref, device):
-        from tt.rtdetr_decoder import debug_decoder_layer_by_layer
 
         memory_list, query_tt, query_pos_tt = self._load_inputs(ref, device)
         memory_tt = ttnn.concat(memory_list, dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -171,13 +168,3 @@ class TestDecoder:
         print(type(pytorch_model))
         print(hasattr(pytorch_model, 'query_pos_head'))
         print(hasattr(pytorch_model.decoder, 'query_pos_head'))
-
-        debug_decoder_layer_by_layer(
-            query_tt,
-            pytorch_model,
-            dec_params,
-            memory_tt,
-            ref_points,
-            spatial_shapes,
-            device,
-        )
