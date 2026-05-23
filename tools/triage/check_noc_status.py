@@ -110,6 +110,18 @@ def check_noc_status(
     log_check_location(location, passed, message)
 
 
+def check_all_nocs(
+    location: OnChipCoordinate,
+    risc_name: str,
+    dispatcher_data: DispatcherData,
+    var_to_reg_map: dict[str, str],
+    elfs_cache: ElfsCache,
+    noc_ids: list[int],
+):
+    for noc_id in noc_ids:
+        check_noc_status(location, risc_name, dispatcher_data, var_to_reg_map, elfs_cache, noc_id)
+
+
 def run(args, context: Context):
     BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
     RISC_CORES_TO_CHECK = ["brisc", "erisc", "erisc0", "erisc1"]
@@ -126,14 +138,13 @@ def run(args, context: Context):
     dispatcher_data = get_dispatcher_data(args, context)
     elfs_cache = get_elfs_cache(args, context)
     run_checks = get_run_checks(args, context)
-    for noc_id in NOC_IDS:
-        run_checks.run_per_core_check(
-            lambda location, risc_name, _noc_id=noc_id: check_noc_status(
-                location, risc_name, dispatcher_data, VAR_TO_REG_MAP, elfs_cache, _noc_id
-            ),
-            block_filter=BLOCK_TYPES_TO_CHECK,
-            core_filter=RISC_CORES_TO_CHECK,
-        )
+    run_checks.run_per_core_check(
+        lambda location, risc_name: check_all_nocs(
+            location, risc_name, dispatcher_data, VAR_TO_REG_MAP, elfs_cache, NOC_IDS
+        ),
+        block_filter=BLOCK_TYPES_TO_CHECK,
+        core_filter=RISC_CORES_TO_CHECK,
+    )
 
 
 if __name__ == "__main__":
