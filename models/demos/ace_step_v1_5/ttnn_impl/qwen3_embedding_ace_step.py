@@ -51,6 +51,9 @@ import torch
 import ttnn
 from models.tt_transformers.tt.common import Mode, PagedAttentionConfig, create_tt_model
 
+from .math_perf_env import ace_step_dit_activation_from_torch, ace_step_qwen3_optimizations
+from .qwen_prefill_l1 import ace_step_apply_qwen_prefill_l1, ace_step_qwen_prefill_l1_op_context
+
 
 @contextmanager
 def _hf_model_env(hf_model_dir: str):
@@ -123,13 +126,13 @@ class AceStepQwen3Encoder:
         tt_dtype = dtype if dtype is not None else ttnn.bfloat8_b
 
         # Stage HF_MODEL so ModelArgs reads our local checkpoint dir, then build the model
-        # exactly the way the canonical Qwen3-Embedding demo does.
+        # with ACE production LoFi + bfloat8_b (not ``accuracy`` HiFi4 prefill).
         with _hf_model_env(self._hf_model_dir):
             self.model_args, self.tt_model, self.tt_kv_cache, self.state_dict = create_tt_model(
                 device,
                 instruct=False,  # embedding model, not chat — matches demo.py's instruct=False
                 max_batch_size=self.max_batch_size,
-                optimizations=None,  # default = accuracy
+                optimizations=ace_step_qwen3_optimizations,
                 max_seq_len=self.max_seq_len,
                 paged_attention_config=self._paged_cfg,
                 dtype=tt_dtype,
@@ -139,12 +142,8 @@ class AceStepQwen3Encoder:
         # HF-compatible config view for callers that read encoder hidden_size etc.
         self.config = self.model_args.hf_config
         self._blocks_per_seq = blocks_per_seq
+        ace_step_apply_qwen_prefill_l1(self.tt_model, self.model_args)
 
-        # Lazy-initialized trace state for :meth:`forward_traced`. The trace captures the
-        # device-only portion (token embedding lookup -> transformer prefill -> final norm)
-        # against persistent input/output buffers; per-call we refresh those buffers via
-        # ``copy_host_to_device_tensor`` on CQ 1 and ``execute_trace`` on CQ 0. None until
-        # the first :meth:`forward_traced` call; freed by :meth:`release_trace`.
         self._trace_id: Optional[Any] = None
         self._persistent_tokens: Optional[ttnn.Tensor] = None
         self._persistent_page_table: Optional[ttnn.Tensor] = None
@@ -169,7 +168,7 @@ class AceStepQwen3Encoder:
                 ``pad_token_id`` (the encoder slices the output back to the real width).
 
         Returns:
-            TTNN tensor of shape ``[B, 1, S, H]`` (TILE layout, ``bfloat16``).
+            TTNN tensor of shape ``[B, 1, S, H]`` (TILE BF16; uploaded to L1 for the condition encoder).
         """
         del attention_mask  # see docstring
 
@@ -213,24 +212,25 @@ class AceStepQwen3Encoder:
             # ``get_last_token=-1`` ⇒ Transformer.forward returns raw post-block hidden
             # states (before final RMSNorm + LMHead). The LMHead is never invoked — this
             # is an encoder, so we skip it entirely.
-            hidden = self.tt_model.ttnn_prefill_forward(
-                prefill_input,
-                rot_mats_global=rot_mats_global,
-                rot_mats_local=rot_mats_local,
-                user_id=0,
-                page_table=page_table_tt,
-                chunk_page_table=None,
-                chunk_start_idx=None,
-                get_last_token=-1,
-                kv_cache=self.tt_kv_cache,
-                batch_size=1,
-            )
+            with ace_step_qwen_prefill_l1_op_context():
+                hidden = self.tt_model.ttnn_prefill_forward(
+                    prefill_input,
+                    rot_mats_global=rot_mats_global,
+                    rot_mats_local=rot_mats_local,
+                    user_id=0,
+                    page_table=page_table_tt,
+                    chunk_page_table=None,
+                    chunk_start_idx=None,
+                    get_last_token=-1,
+                    kv_cache=self.tt_kv_cache,
+                    batch_size=1,
+                )
 
-            # Apply the final ``DistributedNorm`` over the whole sequence. With
-            # ``mode=PREFILL`` and no sharded ``norm_config``, the inner RMSNorm is
-            # shape-agnostic on the sequence axis (unlike the LMHead path which
-            # demands ``shard_height==32``).
-            hidden_normed = self.tt_model.norm(hidden, mode=Mode.PREFILL)
+                # Apply the final ``DistributedNorm`` over the whole sequence. With
+                # ``mode=PREFILL`` and no sharded ``norm_config``, the inner RMSNorm is
+                # shape-agnostic on the sequence axis (unlike the LMHead path which
+                # demands ``shard_height==32``).
+                hidden_normed = self.tt_model.norm(hidden, mode=Mode.PREFILL)
             try:
                 ttnn.deallocate(hidden)
             except Exception:
@@ -247,14 +247,7 @@ class AceStepQwen3Encoder:
             per_user_hs.append(host)
 
         out_torch = torch.cat(per_user_hs, dim=0)  # [B, 1, S, H]
-        out_tt = ttnn.from_torch(
-            out_torch.to(dtype=torch.bfloat16).contiguous(),
-            device=self.device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        return out_tt
+        return ace_step_dit_activation_from_torch(ttnn, out_torch, device=self.device, dtype=ttnn.bfloat16)
 
     def embed_tokens(self, input_ids) -> Any:
         """Embedding lookup only — returns ``[B, S, H]`` device tensor.
@@ -322,7 +315,7 @@ class AceStepQwen3Encoder:
 
         Returns:
             ``ttnn.Tensor`` of shape ``[1, 1, max_seq_len, hidden_size]``
-            (bf16 / TILE / DRAM). **Persistent buffer** — the caller MUST NOT
+            (bf16 / TILE / L1 inside the trace when L1 patches are active). **Persistent buffer** — the caller MUST NOT
             ``ttnn.deallocate`` it. The buffer is overwritten by the next
             :meth:`forward_traced` call, so consumers must finish using the output
             before the next call (this is the same contract as
@@ -387,20 +380,21 @@ class AceStepQwen3Encoder:
         # 2. Warmup (compile) pass — uploads host_payload to throw-away device tensors
         #    so every program-cache entry the trace will reference is already resident.
         device_payload_warm = copy_host_to_device(host_payload, mesh_device=self.device)
-        transformed = self.tt_model.transform_and_embed_prefill_inputs_device(*device_payload_warm)
-        out_warm_hidden = self.tt_model.ttnn_prefill_forward(
-            x=transformed[0],
-            rot_mats_global=self._rot_mats_global,
-            rot_mats_local=self._rot_mats_local,
-            user_id=0,
-            page_table=transformed[1],
-            chunk_page_table=transformed[2],
-            chunk_start_idx=None,
-            get_last_token=-1,
-            kv_cache=self.tt_kv_cache,
-            batch_size=1,
-        )
-        out_warm_normed = self.tt_model.norm(out_warm_hidden, mode=Mode.PREFILL)
+        with ace_step_qwen_prefill_l1_op_context():
+            transformed = self.tt_model.transform_and_embed_prefill_inputs_device(*device_payload_warm)
+            out_warm_hidden = self.tt_model.ttnn_prefill_forward(
+                x=transformed[0],
+                rot_mats_global=self._rot_mats_global,
+                rot_mats_local=self._rot_mats_local,
+                user_id=0,
+                page_table=transformed[1],
+                chunk_page_table=transformed[2],
+                chunk_start_idx=None,
+                get_last_token=-1,
+                kv_cache=self.tt_kv_cache,
+                batch_size=1,
+            )
+            out_warm_normed = self.tt_model.norm(out_warm_hidden, mode=Mode.PREFILL)
         ttnn.synchronize_device(self.device)
         for t in (out_warm_hidden, out_warm_normed):
             try:
@@ -423,24 +417,25 @@ class AceStepQwen3Encoder:
 
         # 4. Capture the trace against the persistent buffers.
         self._trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
-        transformed = self.tt_model.transform_and_embed_prefill_inputs_device(
-            self._persistent_tokens,
-            self._persistent_page_table,
-            self._persistent_chunk_page_table,
-        )
-        hidden = self.tt_model.ttnn_prefill_forward(
-            x=transformed[0],
-            rot_mats_global=self._rot_mats_global,
-            rot_mats_local=self._rot_mats_local,
-            user_id=0,
-            page_table=transformed[1],
-            chunk_page_table=transformed[2],
-            chunk_start_idx=None,
-            get_last_token=-1,
-            kv_cache=self.tt_kv_cache,
-            batch_size=1,
-        )
-        self._persistent_output = self.tt_model.norm(hidden, mode=Mode.PREFILL)
+        with ace_step_qwen_prefill_l1_op_context():
+            transformed = self.tt_model.transform_and_embed_prefill_inputs_device(
+                self._persistent_tokens,
+                self._persistent_page_table,
+                self._persistent_chunk_page_table,
+            )
+            hidden = self.tt_model.ttnn_prefill_forward(
+                x=transformed[0],
+                rot_mats_global=self._rot_mats_global,
+                rot_mats_local=self._rot_mats_local,
+                user_id=0,
+                page_table=transformed[1],
+                chunk_page_table=transformed[2],
+                chunk_start_idx=None,
+                get_last_token=-1,
+                kv_cache=self.tt_kv_cache,
+                batch_size=1,
+            )
+            self._persistent_output = self.tt_model.norm(hidden, mode=Mode.PREFILL)
         ttnn.end_trace_capture(self.device, self._trace_id, cq_id=0)
         ttnn.synchronize_device(self.device)
         try:

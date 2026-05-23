@@ -11,6 +11,9 @@ Prefer the repo Python environment (``./create_venv.sh`` → ``./python_env``):
 
 Conv-heavy TTNN kernels (patchify / Oobleck VAE) rely on adequate ``l1_small_size`` when opening
 device (matches ``ign/ACE_perf``; override via ``ACE_STEP_L1_SMALL_SIZE``).
+
+DiT + Qwen3 + condition encoder PCC / perf / E2E use production defaults from ``ttnn_impl/math_perf_env``
+(LoFi + ``bfloat8_b`` weights, L1 TILE activations) with no ``ACE_STEP_*`` env toggle for those kernels.
 """
 
 from __future__ import annotations

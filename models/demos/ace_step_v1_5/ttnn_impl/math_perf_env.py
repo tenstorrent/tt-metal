@@ -16,13 +16,21 @@ E2E Tracy ``BinaryNgDeviceOperation (in0:dram_interleaved)`` (~24% device time) 
 **VAE Snake** in FP32 (``BF16→FP32`` typecast, ~784 μs FP32 ``multiply``/``add`` per layer).
 ``TtSnake1d`` now always uses BF16 compute to match conv activations.
 
-Production DiT defaults (PCC + perf + E2E — no env toggle):
+Production defaults (PCC + perf + E2E — no env toggle):
 
-- **LoFi** matmul fidelity via :func:`ace_step_init_dit_linear_compute_kernel_config`
-- **``bfloat8_b``** projection weights via :func:`ace_step_dit_weight_dtype` (conv weights stay BF16)
-- **L1 interleaved** activations via :func:`ace_step_linear_l1_memory_config` / :func:`ace_step_ensure_l1_activation`
+- **LoFi** matmul / RMSNorm / SDPA via :func:`ace_step_init_dit_linear_compute_kernel_config`,
+  :func:`ace_step_init_cond_linear_compute_kernel_config`, :func:`ace_step_qwen3_optimizations`
+- **``bfloat8_b``** linear projection weights via :func:`ace_step_linear_weight_dtype`
+  (embedding tables / norm scales / conv kernels stay BF16 unless noted)
+- **L1 interleaved** activations via :func:`ace_step_linear_l1_memory_config` /
+  :func:`ace_step_ensure_l1_activation` / :func:`ace_step_ensure_cond_activation`
 
-Remaining **DRAM ``in0``** buckets in Tracy (``perf_dit_4``) are expected for:
+Remaining **DRAM ``in0``** buckets in Tracy (``perf_dit_4`` / conditioning) may still appear for:
+
+- Qwen **SDPA attn masks**, **KV paged cache** (``PagedFillCache``), and **weight** tensors (DRAM by design)
+- **Embedding lookup** token indices (``EmbeddingsDeviceOperation in0:dram`` — uint32 ids stay DRAM)
+
+Other expected DRAM in DiT/VAE traces:
 
 - ``proj_in`` uses **L1 TILE linear** patch embed (not ``conv1d``) to avoid ``Tilize`` / ``Copy`` / im2col DRAM matmul.
 - Denoise feeds **TILE BF16 L1** ``xt``/``ctx`` (not ROW_MAJOR DRAM) so Tracy drops front ``Tilize``/``CopyDevice``.
@@ -68,16 +76,38 @@ def ace_step_permute_kwargs(ttnn: Any) -> dict:
     return _l1_memory_kwargs(ttnn)
 
 
-def ace_step_dit_lofi_bfloat8_enabled() -> bool:
-    """DiT production path: LoFi matmul fidelity + ``bfloat8_b`` projection weights (always on)."""
+def ace_step_to_layout_kwargs(ttnn: Any, l1_mc: Any | None = None) -> dict:
+    """Keyword args for ``ttnn.to_layout`` so ``Tilize*`` outputs land in L1 (not DRAM)."""
+    mc = l1_mc if l1_mc is not None else ace_step_linear_l1_memory_config(ttnn)
+    return {"memory_config": mc} if mc is not None else {}
+
+
+def ace_step_concat_kwargs(ttnn: Any, l1_mc: Any | None = None) -> dict:
+    """Keyword args for ``ttnn.concat`` on activation tensors."""
+    mc = l1_mc if l1_mc is not None else ace_step_linear_l1_memory_config(ttnn)
+    return {"memory_config": mc} if mc is not None else {}
+
+
+def ace_step_lofi_bfloat8_enabled() -> bool:
+    """ACE-Step production path: LoFi compute + ``bfloat8_b`` linear weights (always on, no env)."""
     return True
 
 
-def ace_step_dit_weight_dtype(ttnn: Any, default_dtype: Any) -> Any:
-    """Weight storage dtype for DiT **linears** (activations stay ``default_dtype``, usually BF16)."""
-    if ace_step_dit_lofi_bfloat8_enabled():
+def ace_step_dit_lofi_bfloat8_enabled() -> bool:
+    """Alias for :func:`ace_step_lofi_bfloat8_enabled` (DiT call sites)."""
+    return ace_step_lofi_bfloat8_enabled()
+
+
+def ace_step_linear_weight_dtype(ttnn: Any, default_dtype: Any) -> Any:
+    """Weight storage dtype for **linear** projections (activations stay ``default_dtype``, usually BF16)."""
+    if ace_step_lofi_bfloat8_enabled():
         return getattr(ttnn, "bfloat8_b", None) or default_dtype
     return default_dtype
+
+
+def ace_step_dit_weight_dtype(ttnn: Any, default_dtype: Any) -> Any:
+    """DiT linear weights — alias for :func:`ace_step_linear_weight_dtype`."""
+    return ace_step_linear_weight_dtype(ttnn, default_dtype)
 
 
 def ace_step_dit_conv_weight_dtype(ttnn: Any, default_dtype: Any) -> Any:
@@ -350,19 +380,80 @@ def ace_step_init_dit_linear_compute_kernel_config(device: Any):
     return ace_step_init_lofi_linear_compute_kernel_config(device)
 
 
+def ace_step_init_cond_linear_compute_kernel_config(device: Any):
+    """Condition encoder / lyric / timbre linears: LoFi (same default as DiT)."""
+    return ace_step_init_lofi_linear_compute_kernel_config(device)
+
+
+def ace_step_init_cond_sdpa_compute_kernel_config(device: Any):
+    """SDPA compute kernel for condition lyric/timbre encoders: LoFi."""
+    return ace_step_init_lofi_linear_compute_kernel_config(device)
+
+
+def ace_step_qwen3_optimizations(model_args: Any):
+    """``tt_transformers`` decoder config for ACE Qwen3 caption encoder: LoFi + ``bfloat8_b`` weights.
+
+    Passed to :func:`models.tt_transformers.tt.common.create_tt_model` as ``optimizations=``.
+    Sets per-op math fidelity and ``bfloat8_b`` projection dtypes (replacing the default
+    ``accuracy`` path that uses HiFi4 on prefill attention). Prefill activations are moved to
+    L1 via :mod:`qwen_prefill_l1` (``ace_step_apply_qwen_prefill_l1``).
+    """
+    from models.tt_transformers.tt.model_config import (
+        DecodersPrecision,
+        MathFidelitySetting,
+        ModelOptimizations,
+        OpGroup,
+        PrecisionSetting,
+        TensorGroup,
+    )
+
+    conf = ModelOptimizations(
+        {
+            "TensorPrecision": {
+                TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
+                TensorGroup.FF2: PrecisionSetting.BFP8,
+                TensorGroup.WQKV: PrecisionSetting.BFP8,
+                TensorGroup.WO: PrecisionSetting.BFP8,
+                TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
+            },
+            "OpFidelity": {
+                OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI,
+                OpGroup.LI_FF2: MathFidelitySetting.LOFI,
+                OpGroup.LI_QKV_DECODE: MathFidelitySetting.LOFI,
+                OpGroup.LI_QKV_PREFILL: MathFidelitySetting.LOFI,
+                OpGroup.SDPA_DECODE: MathFidelitySetting.LOFI,
+                OpGroup.SDPA_PREFILL: MathFidelitySetting.LOFI,
+                OpGroup.LI_O_DECODE: MathFidelitySetting.LOFI,
+                OpGroup.LI_O_PREFILL: MathFidelitySetting.LOFI,
+            },
+        }
+    )
+    return DecodersPrecision(model_args.n_layers, model_args.model_name, decoder_conf=conf)
+
+
 def ace_step_init_dit_rmsnorm_compute_kernel_config(device: Any):
     """RMSNorm compute kernel for DiT blocks: LoFi (default TTNN rmsnorm uses HiFi4)."""
     return ace_step_init_lofi_linear_compute_kernel_config(device)
 
 
+def ace_step_init_cond_rmsnorm_compute_kernel_config(device: Any):
+    """RMSNorm compute kernel for condition encoder blocks: LoFi."""
+    return ace_step_init_lofi_linear_compute_kernel_config(device)
+
+
 def ace_step_dit_rms_norm_kwargs(ttnn: Any, l1_mc: Any | None = None, *, device: Any = None) -> dict:
+    """``memory_config`` + LoFi ``compute_kernel_config`` for DiT ``ttnn.rms_norm``."""
+    return ace_step_cond_rms_norm_kwargs(ttnn, l1_mc, device=device)
+
+
+def ace_step_cond_rms_norm_kwargs(ttnn: Any, l1_mc: Any | None = None, *, device: Any = None) -> dict:
     """``memory_config`` + LoFi ``compute_kernel_config`` for ``ttnn.rms_norm`` (keeps TILE/L1)."""
     mc = l1_mc if l1_mc is not None else ace_step_linear_l1_memory_config(ttnn)
     kw: dict = {}
     if mc is not None:
         kw["memory_config"] = mc
     if device is not None:
-        ck = ace_step_init_dit_rmsnorm_compute_kernel_config(device)
+        ck = ace_step_init_cond_rmsnorm_compute_kernel_config(device)
         if ck is not None:
             kw["compute_kernel_config"] = ck
     return kw
@@ -370,10 +461,46 @@ def ace_step_dit_rms_norm_kwargs(ttnn: Any, l1_mc: Any | None = None, *, device:
 
 def ace_step_ensure_dit_activation(ttnn: Any, tensor: Any, l1_mc: Any | None = None) -> Any:
     """TILE layout + L1 interleaved — DiT matmul/binary/rms_norm input contract."""
+    return ace_step_ensure_cond_activation(ttnn, tensor, l1_mc)
+
+
+def ace_step_ensure_cond_activation(ttnn: Any, tensor: Any, l1_mc: Any | None = None) -> Any:
+    """TILE layout + L1 interleaved — condition encoder matmul/binary/rms_norm contract."""
     if tensor is None:
         return tensor
     t = ace_step_ensure_tile_layout(ttnn, tensor)
     return ace_step_ensure_l1_activation(ttnn, t, l1_mc)
+
+
+def ace_step_dit_activation_from_torch(
+    ttnn: Any,
+    host_tensor: Any,
+    *,
+    device: Any,
+    dtype: Any | None = None,
+) -> Any:
+    """Upload a host tensor as TILE BF16 in L1 — same contract as perf/E2E (no env toggle)."""
+    import numpy as np
+
+    try:
+        import torch
+    except ImportError:
+        torch = None  # type: ignore
+
+    use_dtype = dtype if dtype is not None else getattr(ttnn, "bfloat16", None)
+    if use_dtype is None:
+        raise RuntimeError("bfloat16 required for activations")
+    if torch is not None and isinstance(host_tensor, torch.Tensor):
+        arr = host_tensor.detach().to(dtype=torch.float32, device="cpu").numpy()
+    else:
+        arr = np.asarray(host_tensor, dtype=np.float32)
+    return ace_step_from_torch_activation(
+        ttnn,
+        arr,
+        device=device,
+        dtype=use_dtype,
+        l1_mc=ace_step_linear_l1_memory_config(ttnn),
+    )
 
 
 def _mcast_1d_linear_program_config(
