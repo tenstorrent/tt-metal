@@ -5,16 +5,10 @@
 
 The PCC is computed over the **real (non-pad) token positions only**:
 
-- ACE-Step's :class:`AceStepQwen3Encoder` ignores the ``attention_mask`` argument and
-  relies on the stock ``Attention.forward_prefill`` causal mask (built internally inside
-  ``tt_transformers.tt.attention``).  For right-padded input, causal attention naturally
-  ignores pad tokens for the **real** positions (a real token at index ``i`` only attends
-  to indices ``0..i``, which are all real), so the real-position hidden states are
-  comparable to HF.
-- HF's ``AutoModel`` honours the ``attention_mask`` argument, which causes pad positions
-  to deliberately avoid attending to other pads. Pad-position hidden states therefore
-  legitimately differ between the two paths. Including them in the PCC reduction would
-  be testing an irrelevant difference.
+- Eager :meth:`AceStepQwen3Encoder.forward` delegates to
+  :class:`~models.demos.ace_step_v1_5.ttnn_impl.qwen3_embedding_encoder.TtQwen3EmbeddingEncoder`,
+  which applies the same HF-style causal + key-padding mask as ``AutoModel``.
+- Pad-position hidden states can still differ slightly; PCC is computed on real tokens only.
 
 So we slice both reference and TTNN outputs to the first ``int(attention_mask.sum())``
 positions before PCC.
@@ -22,6 +16,7 @@ positions before PCC.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -30,6 +25,7 @@ import torch
 from transformers import AutoModel, AutoTokenizer
 
 import ttnn
+from models.common.utility_functions import comp_pcc
 from models.demos.ace_step_v1_5.tests._dit_decoder_pcc_common import assert_pcc_print
 from models.demos.ace_step_v1_5.ttnn_impl.qwen3_embedding_ace_step import AceStepQwen3Encoder as TtQwen3EmbeddingEncoder
 
@@ -77,19 +73,29 @@ def test_qwen3_encoder_pcc_vs_torch(device):
     # Free the HF reference model before constructing the TTNN encoder so they don't compete for RAM.
     del ref
 
+    mesh_desc = os.environ.get("TT_MESH_GRAPH_DESC_PATH", "(unset)")
+    print(
+        f"[qwen3_encoder_pcc] TT_MESH_GRAPH_DESC_PATH={mesh_desc} "
+        f"ACE_STEP_QWEN_DEBUG={os.environ.get('ACE_STEP_QWEN_DEBUG', '0')}",
+        flush=True,
+    )
+
     dev = device
     enc = TtQwen3EmbeddingEncoder(
         device=dev,
         hf_model_dir=str(text_dir),
         qwen_safetensors_path=str(text_dir / "model.safetensors"),
     )
+    print(
+        f"[qwen3_encoder_pcc] encoder eager={enc._eager_enc is not None} " f"trace_stack={enc._trace_stack_ready}",
+        flush=True,
+    )
     y_tt = enc.forward(input_ids.numpy().astype(np.uint32), attn.numpy().astype(np.float32))
     y_tt_np = ttnn.to_torch(y_tt).float().numpy()
     # TTNN returns [B, 1, S, H] vs torch [B, S, H] — drop the extra singleton.
     y_tt_np = y_tt_np.reshape(y_ref.shape)
 
-    # Compare only the real (non-pad) positions. Pad-position outputs differ legitimately
-    # because the wrappers handle padding differently (see module docstring).
+    # Compare only the real (non-pad) positions.
     y_ref_real = y_ref[:, :real_len, :]
     y_tt_real = y_tt_np[:, :real_len, :]
     print(
@@ -97,6 +103,12 @@ def test_qwen3_encoder_pcc_vs_torch(device):
         f"H={int(y_ref.shape[-1])} — comparing first {real_len} positions only",
         flush=True,
     )
+    for ti in range(real_len):
+        ok_t, pcc_t = comp_pcc(y_ref_real[:, ti : ti + 1, :], y_tt_real[:, ti : ti + 1, :], pcc=0.99)
+        print(
+            f"[qwen3_encoder_pcc] token[{ti}] pcc={float(pcc_t):.6f} ok={ok_t}",
+            flush=True,
+        )
 
     assert_pcc_print(
         "qwen3_embedding_encoder",

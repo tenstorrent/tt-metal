@@ -318,6 +318,10 @@ class TtAceStepAudioCodeDetokenizer:
         """Trace + 2CQ detokenizer for a fixed ``N = len(code_ids)`` (recapture when N changes)."""
         if not hasattr(ttnn, "begin_trace_capture"):
             return self.forward(code_str)
+        from models.demos.ace_step_v1_5.tt_device import ace_step_device_num_command_queues
+
+        if ace_step_device_num_command_queues(self.device) < 2:
+            return self.forward(code_str)
         code_ids = parse_audio_code_string(code_str)
         if not code_ids:
             return None

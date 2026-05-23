@@ -786,6 +786,7 @@ def main(
 
     from models.demos.ace_step_v1_5.tt_device import (
         ace_step_device_num_chips,
+        ace_step_dit_pipe_batch_size,
         ace_step_log_mesh_quality_hints,
         ace_step_mesh_perf_log_default,
         ace_step_mesh_use_adg,
@@ -794,6 +795,7 @@ def main(
         ace_step_mesh_use_sequential_cfg,
         ace_step_mesh_use_split_ttnn_preprocess,
         ace_step_needs_split_device,
+        ace_step_preprocess_num_command_queues,
         ace_step_resolve_vae_tiling,
         ace_step_synchronize_device,
         ace_step_ttnn_to_torch,
@@ -987,7 +989,7 @@ def main(
             from acestep.handler import AceStepHandler
             from acestep.inference import GenerationConfig, GenerationParams, generate_music
 
-            from models.demos.ace_step_v1_5.ttnn_impl.five_hz_lm import LocalFiveHzLMHandler
+            from models.demos.ace_step_v1_5.torch_ref.five_hz_lm import LocalFiveHzLMHandler
         except ModuleNotFoundError as e:
             raise RuntimeError(
                 "--use-official-lm requires the upstream ACE-Step ``acestep`` package "
@@ -1129,7 +1131,7 @@ def main(
             tt_dev_early = open_preprocess_device(
                 _ttnn_pre_lm,
                 device_id=int(args.device_id),
-                num_command_queues=1,
+                num_command_queues=ace_step_preprocess_num_command_queues(use_trace=bool(args.use_trace)),
             )
         else:
             tt_dev_early = _open_tt_device(
@@ -1267,7 +1269,7 @@ def main(
                 dev = open_preprocess_device(
                     ttnn,
                     device_id=int(args.device_id),
-                    num_command_queues=1,
+                    num_command_queues=ace_step_preprocess_num_command_queues(use_trace=bool(args.use_trace)),
                 )
             else:
                 dev = _open_tt_device(
@@ -1704,7 +1706,7 @@ def main(
 
             patch_sz = int(pipe.patch_embed.config.patch_size)
             patch_seq = (int(frames_i) + patch_sz - 1) // patch_sz
-            pipe_batch = 2 if do_cfg else 1
+            pipe_batch = ace_step_dit_pipe_batch_size(dev, do_cfg=do_cfg)
             if demo_session.trace_state is None:
                 if ace_step_dit_body_trace_safe(batch_size=pipe_batch, patch_seq_len=patch_seq):
                     demo_session.trace_state = _E2EDenoiseTrace(use_full_step=False)

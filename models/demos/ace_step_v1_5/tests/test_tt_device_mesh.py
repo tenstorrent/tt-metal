@@ -119,6 +119,27 @@ def test_sequential_cfg_on_multi_device_only():
     assert not ace_step_mesh_use_sequential_cfg(_FakeMesh(4), do_cfg=False)
 
 
+def test_dit_body_trace_safe_30s_with_sequential_cfg():
+    """P300 mesh uses B=1 sequential CFG; trace must stay enabled at 30 s (fused_M=12, not 24)."""
+    from models.demos.ace_step_v1_5.tt_device import ace_step_dit_pipe_batch_size
+    from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import (
+        ace_step_dit_body_trace_safe,
+        ace_step_dit_fused_m_tiles,
+    )
+
+    patch_sz = 2
+    frames_30s = 750
+    patch_seq = (frames_30s + patch_sz - 1) // patch_sz
+    assert ace_step_mesh_use_sequential_cfg(_FakeMesh(2), do_cfg=True)
+    pipe_batch = ace_step_dit_pipe_batch_size(_FakeMesh(2), do_cfg=True)
+    assert pipe_batch == 1
+    fused_m = ace_step_dit_fused_m_tiles(batch_size=pipe_batch, seq_len=patch_seq)
+    assert fused_m == 12
+    assert ace_step_dit_body_trace_safe(batch_size=pipe_batch, patch_seq_len=patch_seq)
+    # Wrong gate (batched CFG B=2) would falsely disable trace and clear program cache at 30 s.
+    assert not ace_step_dit_body_trace_safe(batch_size=2, patch_seq_len=patch_seq)
+
+
 def test_host_temb_precompute_on_multi_device_only():
     assert not ace_step_mesh_use_host_temb_precompute(_FakeMesh(1))
     assert ace_step_mesh_use_host_temb_precompute(_FakeMesh(4))

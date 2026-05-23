@@ -840,13 +840,15 @@ def run_ttnn_denoise_loop(
 
     frames_i = int(frames)
     c_lat = 64
+    from models.demos.ace_step_v1_5.tt_device import ace_step_dit_pipe_batch_size
+
+    _pipe_batch_for_dram = ace_step_dit_pipe_batch_size(device, do_cfg=bool(do_cfg))
     try:
         from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import ace_step_dit_prefers_dram_activations
 
         _patch_sz = int(getattr(getattr(pipe, "patch_embed", None), "config", None).patch_size)
         _patch_seq = (int(frames_i) + _patch_sz - 1) // _patch_sz
-        _pipe_batch = 2 if bool(do_cfg) else 1
-        if ace_step_dit_prefers_dram_activations(batch_size=_pipe_batch, seq_len=_patch_seq):
+        if ace_step_dit_prefers_dram_activations(batch_size=_pipe_batch_for_dram, seq_len=_patch_seq):
             _clear_pc = getattr(device, "disable_and_clear_program_cache", None)
             if callable(_clear_pc):
                 _clear_pc()
@@ -951,6 +953,7 @@ def run_ttnn_denoise_loop(
 
     from models.demos.ace_step_v1_5.torch_ref._vendored_acestep.acestep.models.common.apg_guidance import MomentumBuffer
     from models.demos.ace_step_v1_5.tt_device import (
+        ace_step_dit_pipe_batch_size,
         ace_step_mesh_use_host_cfg_euler,
         ace_step_mesh_use_host_temb_precompute,
         ace_step_mesh_use_sequential_cfg,
@@ -995,7 +998,7 @@ def run_ttnn_denoise_loop(
     # the lists are owned by the model (precomputed in ``__init__`` for the configured
     # ``(infer_steps, do_cfg)`` shape) — we use them as-is and do not deallocate on exit. Otherwise
     # we precompute on-the-fly and free at end of this call (legacy demo path).
-    pipe_batch = 1 if use_seq_cfg else (2 if do_cfg else 1)
+    pipe_batch = ace_step_dit_pipe_batch_size(device, do_cfg=bool(do_cfg))
     _temb_steps_owned = False
     if temb_per_step is None or tp_per_step is None:
         if ace_step_mesh_use_host_temb_precompute(device):

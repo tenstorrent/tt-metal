@@ -118,6 +118,24 @@ def ace_step_resolve_vae_tiling(
     # decode_tiled requires chunk_size > 2 * overlap (stride > 0).
     while chunk - 2 * overlap <= 0 and overlap > 4:
         overlap //= 2
+    # Multi-device mesh: each overlap-add tile runs a full VAE forward; large chunk windows
+    # (e.g. 48 latents) need ~23 MiB L1 per conv and OOM after many tiles without per-tile free.
+    if on_mesh:
+        max_chunk = int(os.environ.get("ACE_STEP_VAE_MAX_CHUNK_LATENTS", "32"))
+        allow_large = os.environ.get("ACE_STEP_VAE_ALLOW_LARGE_CHUNK", "").lower() in ("1", "true", "yes", "on")
+        if chunk > max_chunk and not allow_large:
+            prev_chunk, prev_overlap = int(chunk), int(overlap)
+            chunk = max_chunk
+            while chunk - 2 * overlap <= 0 and overlap > 4:
+                overlap //= 2
+            if chunk - 2 * overlap <= 0:
+                overlap = max(4, (chunk - 4) // 2)
+            print(
+                f"[ace_step_v1_5] VAE: mesh chunk/overlap {prev_chunk}/{prev_overlap} "
+                f"-> {chunk}/{overlap} (L1-safe; set ACE_STEP_VAE_ALLOW_LARGE_CHUNK=1 to keep "
+                f"{prev_chunk}/{prev_overlap})",
+                flush=True,
+            )
     return chunk, overlap
 
 
@@ -162,6 +180,13 @@ def ace_step_mesh_use_host_latent_sampler(device: Any, *, use_trace: bool) -> bo
 def ace_step_mesh_use_sequential_cfg(device: Any, *, do_cfg: bool) -> bool:
     """Run CFG as two B=1 forwards on multi-device meshes (batch=2 single forward can stall on BH)."""
     return bool(do_cfg) and ace_step_device_num_chips(device) > 1
+
+
+def ace_step_dit_pipe_batch_size(device: Any, *, do_cfg: bool) -> int:
+    """Effective DiT ``fuse_batch`` M for matmul/trace gates (B=1 under mesh sequential CFG)."""
+    if ace_step_mesh_use_sequential_cfg(device, do_cfg=do_cfg):
+        return 1
+    return 2 if bool(do_cfg) else 1
 
 
 def run_mesh_sequential_cfg_forwards(
@@ -211,6 +236,29 @@ def run_mesh_sequential_cfg_forwards(
     return vpc_rm, vpu_rm
 
 
+def ace_step_preprocess_num_command_queues(*, use_trace: bool) -> int:
+    """Command queues for the 1×1 preprocess device (Qwen, detokenizer, optional 5 Hz LM).
+
+    Trace replay overlaps host→device copies on CQ 1 with ``execute_trace`` on CQ 0; opening with
+    a single CQ while ``use_trace`` is enabled triggers ``cq_id 1 is out of range``.
+    """
+    return 2 if bool(use_trace) else 1
+
+
+def ace_step_device_num_command_queues(device: Any) -> int:
+    """Best-effort CQ count for runtime guards (trace helpers fall back to eager when < 2)."""
+    n = getattr(device, "num_command_queues", None)
+    if n is not None:
+        return max(1, int(n))
+    fn = getattr(device, "get_num_command_queues", None)
+    if callable(fn):
+        return max(1, int(fn()))
+    cqs = getattr(device, "mesh_command_queues_", None)
+    if cqs is not None:
+        return max(1, len(cqs))
+    return 1
+
+
 def ace_step_open_kwargs(*, num_command_queues: int = 1) -> dict[str, Any]:
     kw: dict[str, Any] = dict(
         l1_small_size=int(os.environ.get("ACE_STEP_L1_SMALL_SIZE", "98304")),
@@ -227,7 +275,10 @@ def open_preprocess_device(
     device_id: int = 0,
     num_command_queues: int = 1,
 ) -> Any:
-    """Open a 1×1 device for Qwen / 5 Hz LM / detokenizer (never a multi-device mesh)."""
+    """Open a 1×1 device for Qwen / 5 Hz LM / detokenizer (never a multi-device mesh).
+
+    Use :func:`ace_step_preprocess_num_command_queues` when trace replay is enabled.
+    """
     dev = ttnn_mod.open_device(
         device_id=int(device_id),
         **ace_step_open_kwargs(num_command_queues=num_command_queues),

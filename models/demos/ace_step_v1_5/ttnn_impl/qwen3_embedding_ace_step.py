@@ -41,15 +41,28 @@ signature ``(device, hf_model_dir, qwen_safetensors_path)`` and same
 
 from __future__ import annotations
 
+import logging
 import os
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Optional
 
 import numpy as np
 import torch
+from transformers import AutoConfig
 
 import ttnn
 from models.tt_transformers.tt.common import Mode, PagedAttentionConfig, create_tt_model
+
+from .qwen3_embedding_encoder import Qwen3EmbeddingEncoderConfig, TtQwen3EmbeddingEncoder
+from .qwen3_pcc_optimizations import qwen3_encoder_pcc_optimizations
+
+logger = logging.getLogger(__name__)
+
+
+def _qwen_debug(msg: str, *args) -> None:
+    if os.environ.get("ACE_STEP_QWEN_DEBUG", "").lower() in ("1", "true", "yes", "on"):
+        print(f"[AceStepQwen3Encoder] {msg % args if args else msg}", flush=True)
 
 
 @contextmanager
@@ -95,16 +108,15 @@ class AceStepQwen3Encoder:
         page_max_num_blocks: Optional[int] = None,
         dtype=None,
         use_hf_rope: bool = True,
+        optimizations=None,
     ) -> None:
-        # ``qwen_safetensors_path`` is accepted for drop-in compatibility with the deleted
-        # ``TtQwen3EmbeddingEncoder`` constructor but is unused — ``create_tt_model`` loads
-        # weights via ``ModelArgs.load_state_dict`` which reads from ``hf_model_dir`` directly.
-        del qwen_safetensors_path
-
         self.device = device
         self.max_batch_size = int(max_batch_size)
         self.max_seq_len = int(max_seq_len)
         self._hf_model_dir = str(hf_model_dir)
+        self._safetensors = str(qwen_safetensors_path or Path(self._hf_model_dir) / "model.safetensors")
+        self._use_hf_rope = bool(use_hf_rope)
+        self._tt_optimizations = optimizations
 
         # Paged KV config sized to hold ``max_batch_size`` users at ``max_seq_len`` tokens
         # each (same recipe as the demo.py reference for the embedding model). Each user
@@ -120,25 +132,19 @@ class AceStepQwen3Encoder:
             )
         self._paged_cfg = PagedAttentionConfig(block_size=block_size, max_num_blocks=max_blocks)
 
-        tt_dtype = dtype if dtype is not None else ttnn.bfloat8_b
-
-        # Stage HF_MODEL so ModelArgs reads our local checkpoint dir, then build the model
-        # exactly the way the canonical Qwen3-Embedding demo does.
-        with _hf_model_env(self._hf_model_dir):
-            self.model_args, self.tt_model, self.tt_kv_cache, self.state_dict = create_tt_model(
-                device,
-                instruct=False,  # embedding model, not chat — matches demo.py's instruct=False
-                max_batch_size=self.max_batch_size,
-                optimizations=None,  # default = accuracy
-                max_seq_len=self.max_seq_len,
-                paged_attention_config=self._paged_cfg,
-                dtype=tt_dtype,
-                use_hf_rope=bool(use_hf_rope),
-            )
-
-        # HF-compatible config view for callers that read encoder hidden_size etc.
-        self.config = self.model_args.hf_config
+        self._tt_dtype = dtype if dtype is not None else ttnn.bfloat16
+        self.config = AutoConfig.from_pretrained(self._hf_model_dir, local_files_only=True)
         self._blocks_per_seq = blocks_per_seq
+
+        # Eager forward uses ``TtQwen3EmbeddingEncoder`` (HF causal+key-padding mask, bf16
+        # weights) — >=0.99 PCC vs ``AutoModel``.  The ``tt_transformers`` stack is lazy-loaded
+        # only for :meth:`forward_traced` / :meth:`embed_tokens_traced``.
+        self._eager_enc: Optional[TtQwen3EmbeddingEncoder] = None
+        self.model_args = None
+        self.tt_model = None
+        self.tt_kv_cache = None
+        self.state_dict = None
+        self._trace_stack_ready = False
 
         # Lazy-initialized trace state for :meth:`forward_traced`. The trace captures the
         # device-only portion (token embedding lookup -> transformer prefill -> final norm)
@@ -161,6 +167,61 @@ class AceStepQwen3Encoder:
         self._embed_trace_op_event: Any = None
         self._embed_cap_seq: Optional[int] = None
 
+    def _ensure_eager_encoder(self) -> TtQwen3EmbeddingEncoder:
+        if self._eager_enc is None:
+            _qwen_debug(
+                "loading eager encoder path=TtQwen3EmbeddingEncoder safetensors=%s max_seq_len=%d",
+                self._safetensors,
+                self.max_seq_len,
+            )
+            self._eager_enc = TtQwen3EmbeddingEncoder(
+                device=self.device,
+                hf_model_dir=self._hf_model_dir,
+                qwen_safetensors_path=self._safetensors,
+                cfg=Qwen3EmbeddingEncoderConfig(max_seq_len=self.max_seq_len),
+                dtype=ttnn.bfloat16,
+            )
+        return self._eager_enc
+
+    def _ensure_trace_stack(self) -> None:
+        if self._trace_stack_ready:
+            return
+        opts = self._tt_optimizations
+        if opts is None:
+            opts = lambda m: qwen3_encoder_pcc_optimizations(m.n_layers, m.model_name)
+        _qwen_debug("loading tt_transformers trace stack (separate from eager PCC path)")
+        with _hf_model_env(self._hf_model_dir):
+            self.model_args, self.tt_model, self.tt_kv_cache, self.state_dict = create_tt_model(
+                self.device,
+                instruct=False,
+                max_batch_size=self.max_batch_size,
+                optimizations=opts,
+                max_seq_len=self.max_seq_len,
+                paged_attention_config=self._paged_cfg,
+                dtype=self._tt_dtype,
+                use_hf_rope=self._use_hf_rope,
+            )
+        self._trace_stack_ready = True
+
+    @staticmethod
+    def _pad_ids_and_mask(
+        ids_t: torch.Tensor,
+        mask_t: torch.Tensor | None,
+        *,
+        max_seq_len: int,
+        pad_token_id: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        b, s = int(ids_t.shape[0]), int(ids_t.shape[1])
+        if mask_t is None:
+            mask_t = torch.ones((b, s), dtype=torch.float32)
+        if s < max_seq_len:
+            pad_n = max_seq_len - s
+            ids_t = torch.cat([ids_t, torch.full((b, pad_n), pad_token_id, dtype=ids_t.dtype)], dim=-1)
+            mask_t = torch.cat([mask_t, torch.zeros((b, pad_n), dtype=torch.float32)], dim=-1)
+        elif s > max_seq_len:
+            raise ValueError(f"seq_len {s} > max_seq_len {max_seq_len}")
+        return ids_t.numpy().astype(np.uint32), mask_t.numpy().astype(np.float32)
+
     # ------------------------------------------------------------------
     # ACE-Step API surface (drop-in for the deleted TtQwen3EmbeddingEncoder)
     # ------------------------------------------------------------------
@@ -170,98 +231,32 @@ class AceStepQwen3Encoder:
 
         Args:
             input_ids: ``np.ndarray`` (``uint32``) or ``torch.Tensor`` of shape ``[B, S]``.
-            attention_mask: optional ``[B, S]`` mask. Unused by this wrapper: ``input_ids``
-                is right-padded to ``max_seq_len`` and ``Attention.forward_prefill`` builds
-                a strict causal mask internally. Callers are expected to right-pad with
-                ``pad_token_id`` (the encoder slices the output back to the real width).
+            attention_mask: optional ``[B, S]`` mask (1=keep, 0=pad). Honoured on the eager
+                path via ``TtQwen3EmbeddingEncoder`` (HF-compatible causal + key padding).
 
         Returns:
             TTNN tensor of shape ``[B, 1, S, H]`` (TILE layout, ``bfloat16``).
         """
-        del attention_mask  # see docstring
-
         ids_t = _to_torch_int64(input_ids)
         if ids_t.dim() != 2:
             raise ValueError(f"input_ids must be [B, S], got {tuple(ids_t.shape)}")
         b, s = int(ids_t.shape[0]), int(ids_t.shape[1])
         if b > self.max_batch_size:
             raise ValueError(f"batch size {b} > max_batch_size {self.max_batch_size}")
-        if s > self.max_seq_len:
-            raise ValueError(f"seq_len {s} > max_seq_len {self.max_seq_len}")
 
-        # Pad each user's ids to ``max_seq_len`` (Attention.forward_prefill asserts
-        # ``seq_len % 128 == 0``; also keeps the trace-key consistent across calls).
+        mask_t = None
+        if attention_mask is not None:
+            mask_t = torch.as_tensor(attention_mask, dtype=torch.float32)
+            if mask_t.dim() == 1:
+                mask_t = mask_t.unsqueeze(0)
+
+        pad_id = int(getattr(self.config, "pad_token_id", 0) or 0)
+        ids_np, mask_np = self._pad_ids_and_mask(ids_t, mask_t, max_seq_len=self.max_seq_len, pad_token_id=pad_id)
+        _qwen_debug("forward eager B=%d S=%d->%d pad_id=%d", b, s, self.max_seq_len, pad_id)
+        out = self._ensure_eager_encoder().forward(ids_np, mask_np)
         if s < self.max_seq_len:
-            pad = torch.zeros((b, self.max_seq_len - s), dtype=ids_t.dtype)
-            ids_padded = torch.cat([ids_t, pad], dim=-1)
-        else:
-            ids_padded = ids_t
-
-        per_user_hs: list[torch.Tensor] = []
-        for user_idx in range(b):
-            # Per-user page table with disjoint physical blocks (same pattern the
-            # canonical demo.py uses: each batch item gets its own block band so the
-            # paged KV cache doesn't collide between users).
-            page_table = torch.arange(
-                user_idx * self._blocks_per_seq,
-                (user_idx + 1) * self._blocks_per_seq,
-                dtype=torch.int32,
-            ).reshape(1, self._blocks_per_seq)
-
-            ids_user = ids_padded[user_idx : user_idx + 1].contiguous()
-            prep = self.tt_model.prepare_inputs_prefill(
-                ids_user,
-                page_table=page_table,
-                batch_size=1,
-                user_id=0,
-            )
-            prefill_input, rot_mats_global, rot_mats_local, page_table_tt, _ = prep
-
-            # ``get_last_token=-1`` ⇒ Transformer.forward returns raw post-block hidden
-            # states (before final RMSNorm + LMHead). The LMHead is never invoked — this
-            # is an encoder, so we skip it entirely.
-            hidden = self.tt_model.ttnn_prefill_forward(
-                prefill_input,
-                rot_mats_global=rot_mats_global,
-                rot_mats_local=rot_mats_local,
-                user_id=0,
-                page_table=page_table_tt,
-                chunk_page_table=None,
-                chunk_start_idx=None,
-                get_last_token=-1,
-                kv_cache=self.tt_kv_cache,
-                batch_size=1,
-            )
-
-            # Apply the final ``DistributedNorm`` over the whole sequence. With
-            # ``mode=PREFILL`` and no sharded ``norm_config``, the inner RMSNorm is
-            # shape-agnostic on the sequence axis (unlike the LMHead path which
-            # demands ``shard_height==32``).
-            hidden_normed = self.tt_model.norm(hidden, mode=Mode.PREFILL)
-            try:
-                ttnn.deallocate(hidden)
-            except Exception:
-                pass
-
-            host = ttnn.to_torch(hidden_normed).float().contiguous()
-            try:
-                ttnn.deallocate(hidden_normed)
-            except Exception:
-                pass
-            host = host.reshape(1, 1, -1, host.shape[-1])
-            if int(host.shape[2]) > s:
-                host = host[:, :, :s, :]
-            per_user_hs.append(host)
-
-        out_torch = torch.cat(per_user_hs, dim=0)  # [B, 1, S, H]
-        out_tt = ttnn.from_torch(
-            out_torch.to(dtype=torch.bfloat16).contiguous(),
-            device=self.device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        return out_tt
+            out = ttnn.slice(out, (0, 0, 0, 0), (b, 1, s, int(out.shape[-1])))
+        return out
 
     def embed_tokens(self, input_ids) -> Any:
         """Embedding lookup only — returns ``[B, S, H]`` device tensor.
@@ -273,27 +268,13 @@ class AceStepQwen3Encoder:
         ids_t = _to_torch_int64(input_ids)
         if ids_t.dim() != 2:
             raise ValueError(f"input_ids must be [B, S], got {tuple(ids_t.shape)}")
-
-        # ``Transformer.embd`` is the stock ``tt_transformers.tt.embedding.Embedding``
-        # instance built during ``create_tt_model``; its forward expects ``uint32``
-        # ROW_MAJOR ids and returns TILE ``[B, S, H]``.
-        ids_tt = ttnn.from_torch(
-            ids_t.to(torch.int64),
-            device=self.device,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-        h = self.tt_model.embd(ids_tt)
-        try:
-            ttnn.deallocate(ids_tt)
-        except Exception:
-            pass
-        return h
+        return self._ensure_eager_encoder().embed_tokens(ids_t.numpy().astype(np.uint32))
 
     def embed_tokens_traced(self, input_ids, *, max_seq_len: int | None = None) -> Any:
         """Trace + 2CQ embedding lookup for lyric tokens at exact ``[1, S]`` (recapture when S changes)."""
         if not hasattr(ttnn, "begin_trace_capture"):
             return self.embed_tokens(input_ids)
+        self._ensure_trace_stack()
         max_cap = int(max_seq_len or os.environ.get("ACE_STEP_MAX_LYRIC_SEQ", "512"))
         ids_t = _to_torch_int64(input_ids)
         if ids_t.dim() != 2 or int(ids_t.shape[0]) != 1:
@@ -434,7 +415,8 @@ class AceStepQwen3Encoder:
         # Pad to max_seq_len so the trace shape is constant across calls. Matches what
         # tt_transformers' Attention.forward_prefill expects (seq_len % 128 == 0).
         if s < self.max_seq_len:
-            pad = torch.zeros((1, self.max_seq_len - s), dtype=ids_t.dtype)
+            pad_id = int(getattr(self.config, "pad_token_id", 0) or 0)
+            pad = torch.full((1, self.max_seq_len - s), pad_id, dtype=ids_t.dtype)
             ids_padded = torch.cat([ids_t, pad], dim=-1)
         else:
             ids_padded = ids_t
@@ -443,6 +425,7 @@ class AceStepQwen3Encoder:
         # first blocks_per_seq blocks; we only support B=1 here so user_idx=0).
         page_table = torch.arange(0, self._blocks_per_seq, dtype=torch.int32).reshape(1, self._blocks_per_seq)
 
+        self._ensure_trace_stack()
         if self._trace_id is None:
             self._capture_trace(ids_padded, page_table)
         return self._replay_trace(ids_padded, page_table)
