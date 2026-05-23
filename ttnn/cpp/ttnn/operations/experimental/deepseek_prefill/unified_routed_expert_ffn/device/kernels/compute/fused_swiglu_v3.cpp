@@ -35,7 +35,6 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
-
 #include "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_fused_activation.hpp"
 
 namespace {
@@ -173,14 +172,16 @@ FORCE_INLINE void multiply_phase_v3(uint32_t gate_cb_id, uint32_t up_cb_id, uint
     cb_wait_front(gate_cb_id, out_block_num_tiles);
     cb_wait_front(up_cb_id, out_block_num_tiles);
 
-    // Reconfigure packer for activated format (may differ from the previous
-    // phase's final_cb).
+    // Reconfigure packer for activated format and unpacker for both
+    // gate_cb (SrcA) and up_cb (SrcB). After phase 2's second pass the
+    // SrcA was configured for partials_gu but SrcB still points at the
+    // old cb_in0_x (bf8) from matmul — mul_tiles_init's full_init only
+    // reprograms the unpack MOP, not the data formats. Without the
+    // explicit reconfig SrcB reads bf16 up_intermed bytes as bf8 and the
+    // multiply collapses to denormal magnitudes.
     PACK((pack_reconfig_data_format(activated_cb_id)));
-    // CRITICAL: the 2-arg mul_tiles_init defaults acc_to_dest=true (Quasar
-    // compat), which makes mul_tiles do dst[i] += a*b. With stale dst
-    // garbage, 0 * real = 0 added to garbage leaves garbage. Use the 3-arg
-    // form with acc_to_dest=0 so dst[i] = a*b (overwrite).
-    binary_tiles_init<true, EltwiseBinaryType::ELWMUL>(gate_cb_id, up_cb_id, /*acc_to_dest=*/false);
+    reconfig_data_format(gate_cb_id, up_cb_id);
+    mul_tiles_init(gate_cb_id, up_cb_id);
 
     constexpr uint32_t num_subblocks = out_block_num_tiles / out_subblock_num_tiles;
     uint32_t base = 0;
