@@ -1319,6 +1319,9 @@ TEST(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Sp4BhGalaxyMesh
 
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
 
+    if (getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH") == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with tt-run --mock-cluster-rank-binding";
+    }
     tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
 
     PhysicalGroupingDescriptor pgd{std::filesystem::path(pgd_path)};
@@ -1405,6 +1408,9 @@ TEST(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Sp4BhGalaxyQuad
 
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
 
+    if (getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH") == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with tt-run --mock-cluster-rank-binding";
+    }
     tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
     PhysicalGroupingDescriptor pgd{std::filesystem::path(pgd_path)};
 
@@ -1467,6 +1473,9 @@ TEST(PhysicalGroupingDescriptorDualT3kTests, ValidatePreformedGroups_WHt3kGroupi
 
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
 
+    if (getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH") == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with tt-run --mock-cluster-rank-binding";
+    }
     tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
     PhysicalGroupingDescriptor pgd{std::filesystem::path(pgd_path)};
 
@@ -1517,14 +1526,14 @@ TEST(PhysicalGroupingDescriptorDualT3kTests, ValidatePreformedGroups_WHt3kGroupi
 }
 
 TEST(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Triple16x8PsdWithTriple16x8QuadUnknownGroupings) {
-    // FIXME: This test currently fails because placements for multiple groupings are currently not optimized yet, so we
-    // need to skip it for now. This will be fixed in a future commit when needed for more placement optimizations.
-    GTEST_SKIP();
     const std::string pgd_path =
         "tests/tt_metal/tt_fabric/physical_groupings/default_physical_grouping_descriptor.textproto";
 
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
 
+    if (getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH") == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with tt-run --mock-cluster-rank-binding";
+    }
     tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
     PhysicalGroupingDescriptor pgd{std::filesystem::path(pgd_path)};
 
@@ -1568,6 +1577,9 @@ TEST(PhysicalGroupingDescriptorSP4Tests, ValidateGroupingWithPsd_PodAndSuperpodL
 
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
 
+    if (getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH") == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with tt-run --mock-cluster-rank-binding";
+    }
     tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
 
     PhysicalGroupingDescriptor pgd{std::filesystem::path(pgd_path)};
@@ -1609,6 +1621,9 @@ TEST(PhysicalGroupingDescriptorSP4Tests, GetValidGroupingsForMGD_BlitzPipeline2x
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     ASSERT_TRUE(std::filesystem::exists(mgd_path)) << "MGD file not found: " << mgd_path;
 
+    if (getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH") == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with tt-run --mock-cluster-rank-binding";
+    }
     tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
     PhysicalGroupingDescriptor pgd{std::filesystem::path(pgd_path)};
     MeshGraphDescriptor mgd{std::filesystem::path(mgd_path)};
@@ -1678,6 +1693,9 @@ TEST(PhysicalGroupingDescriptorSP4Tests, GetValidGroupingsForMGD_4x4Mesh) {
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     ASSERT_TRUE(std::filesystem::exists(mgd_path)) << "MGD file not found: " << mgd_path;
 
+    if (getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH") == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with tt-run --mock-cluster-rank-binding";
+    }
     tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
     PhysicalGroupingDescriptor pgd{std::filesystem::path(pgd_path)};
     MeshGraphDescriptor mgd{std::filesystem::path(mgd_path)};
@@ -1734,6 +1752,9 @@ TEST(PhysicalGroupingDescriptorSP4Tests, GetValidGroupingsForMGD_2x8Mesh) {
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     ASSERT_TRUE(std::filesystem::exists(mgd_path)) << "MGD file not found: " << mgd_path;
 
+    if (getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH") == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with tt-run --mock-cluster-rank-binding";
+    }
     tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
     PhysicalGroupingDescriptor pgd{std::filesystem::path(pgd_path)};
     MeshGraphDescriptor mgd{std::filesystem::path(mgd_path)};
@@ -1788,6 +1809,9 @@ TEST(PhysicalGroupingDescriptorSP4Tests, GetValidGroupingsForMGD_8x16Mesh) {
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     ASSERT_TRUE(std::filesystem::exists(mgd_path)) << "MGD file not found: " << mgd_path;
 
+    if (getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH") == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with tt-run --mock-cluster-rank-binding";
+    }
     tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
     PhysicalGroupingDescriptor pgd{std::filesystem::path(pgd_path)};
     MeshGraphDescriptor mgd{std::filesystem::path(mgd_path)};
@@ -1835,6 +1859,9 @@ TEST(PhysicalGroupingDescriptorSP4Tests, GetValidGroupingsForMGD_SingleGalaxy4x8
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     ASSERT_TRUE(std::filesystem::exists(mgd_path)) << "MGD file not found: " << mgd_path;
 
+    if (getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH") == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with tt-run --mock-cluster-rank-binding";
+    }
     tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
     PhysicalGroupingDescriptor pgd{std::filesystem::path(pgd_path)};
     MeshGraphDescriptor mgd{std::filesystem::path(mgd_path)};
@@ -1881,6 +1908,9 @@ TEST(PhysicalGroupingDescriptorSP4Tests, GetValidGroupingsForMGD_DualGalaxy8x8) 
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     ASSERT_TRUE(std::filesystem::exists(mgd_path)) << "MGD file not found: " << mgd_path;
 
+    if (getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH") == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with tt-run --mock-cluster-rank-binding";
+    }
     tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
     PhysicalGroupingDescriptor pgd{std::filesystem::path(pgd_path)};
     MeshGraphDescriptor mgd{std::filesystem::path(mgd_path)};
@@ -1932,6 +1962,9 @@ TEST(PhysicalGroupingDescriptorSP4Tests, GetValidGroupingsForMGD_Phase3_HigherLa
     const std::string pgd_path = "tests/tt_metal/tt_fabric/physical_groupings/test_superpod_grouping.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
 
+    if (getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH") == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with tt-run --mock-cluster-rank-binding";
+    }
     tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
     PhysicalGroupingDescriptor pgd{std::filesystem::path(pgd_path)};
 
