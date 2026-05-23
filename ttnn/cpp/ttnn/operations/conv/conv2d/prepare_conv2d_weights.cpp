@@ -831,16 +831,16 @@ static Tensor conv_transpose2d_group_weight_zero_pad_helper(
 
         auto original_weight_strides = compute_strides(original_weight_shape);
         auto output_weight_strides = compute_strides(output_weight_shape);
-        for (int i = 0; i < original_weight_shape[0]; i++) {  // in_channels
+        for (uint32_t i = 0; i < original_weight_shape[0]; i++) {  // in_channels
             // Find which group this input channel belongs to
             auto group_id = i / in_channels_per_group;
 
-            for (int c = 0; c < original_weight_shape[1]; c++) {  // out_channels/groups
+            for (uint32_t c = 0; c < original_weight_shape[1]; c++) {  // out_channels/groups
                 // Calculate the global output channel index
-                int global_out_channel = group_id * out_channels_per_group + c;
+                uint32_t global_out_channel = group_id * out_channels_per_group + c;
 
-                for (int h = 0; h < original_weight_shape[2]; h++) {
-                    for (int w = 0; w < original_weight_shape[3]; w++) {
+                for (uint32_t h = 0; h < original_weight_shape[2]; h++) {
+                    for (uint32_t w = 0; w < original_weight_shape[3]; w++) {
                         // Get value from original weight tensor
                         auto value_flat_input_index = tt::tt_metal::compute_flat_indices(
                             ttnn::SmallVector<uint32_t>{i, c, h, w}, original_weight_strides);
