@@ -20,7 +20,6 @@ struct NlpCreateHeadsFalcon7BDeviceOperation {
     using spec_return_value_t = NlpCreateQkvHeadsFalcon7bResultSpec;
     using tensor_return_value_t = NlpCreateQkvHeadsFalcon7bResult;
     using program_factory_t = std::variant<NlpCreateQkvHeadsFalcon7BProgramFactory>;
-    using shared_variables_t = NlpCreateQkvHeadsFalcon7BProgramFactory::shared_variables_t;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
