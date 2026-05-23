@@ -4856,7 +4856,7 @@ static uint32_t allocate_free_semaphore_id_block(
     const tt::tt_metal::ProgramDescriptor& desc,
     const tt::tt_metal::CoreRangeSet& cores,
     uint32_t count,
-    tt::tt_metal::CoreType core_type = tt::tt_metal::CoreType::WORKER) {
+    tt::CoreType core_type = tt::CoreType::WORKER) {
     std::bitset<kNumSemaphoresPerCore> used;
     for (const auto& sem : desc.semaphores) {
         if (sem.core_type != core_type) {
