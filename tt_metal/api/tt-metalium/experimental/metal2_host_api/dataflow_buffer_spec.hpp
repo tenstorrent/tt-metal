@@ -67,7 +67,8 @@ struct DataflowBufferSpec {
     // Required for DFBs bound to compute kernels; optional for DM-only DFBs
     std::optional<tt::DataFormat> data_format_metadata = std::nullopt;
 
-    // Optional; used to pass tile type info from host to kernel
+    // Required for DFBs bound to compute kernels, when the DFB holds data with
+    // non-default tile geometry (non-32x32); otherwise optional.
     std::optional<tt::tt_metal::Tile> tile_format_metadata = std::nullopt;
 
     //////////////////////////////
