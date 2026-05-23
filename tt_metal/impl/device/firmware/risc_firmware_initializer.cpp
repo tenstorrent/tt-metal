@@ -447,13 +447,14 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
                     n_reset);
             } catch (const std::exception& e) {
                 // Unexpected exception from get_soc_desc or get_virtual_coordinate.
+                // Note: assert_risc_reset_at_core_write_only() swallows flush exceptions
+                // internally and marks relay broken at the UMD level — it never propagates.
+                // This catch handles only unexpected errors from the coord-lookup helpers.
                 log_warning(
                     tt::LogAlways,
-                    "run_launch_phase: FIX VV — deferred Tensix reset failed for device {}: {}. "
-                    "Marking relay broken. (#42429)",
+                    "run_launch_phase: FIX VV — deferred Tensix reset aborted for device {}: {}. (#42429)",
                     device_id,
                     e.what());
-                cluster_.mark_relay_broken(device_id);
             }
         }
 
