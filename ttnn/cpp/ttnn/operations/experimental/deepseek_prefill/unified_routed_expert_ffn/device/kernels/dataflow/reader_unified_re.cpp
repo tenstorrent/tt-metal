@@ -120,15 +120,17 @@ void kernel_main() {
     constexpr uint32_t num_chunks = get_compile_time_arg_val(19);
     constexpr uint32_t chunk_M_tiles = get_compile_time_arg_val(20);
     constexpr uint32_t cb_activated = get_compile_time_arg_val(21);
+    constexpr uint32_t GRID_X_NOC = get_compile_time_arg_val(22);  // M-row mcast group size (11 in v2)
+    constexpr uint32_t K_down_tiles_padded = get_compile_time_arg_val(23);
 
     constexpr uint32_t g_in0_block_num_tiles = per_core_M * in0_block_w_gu;
     constexpr uint32_t g_in1_block_num_tiles = per_core_N_gu * in0_block_w_gu;
     constexpr uint32_t d_in0_block_num_tiles = per_core_M * in0_block_w_d;
     constexpr uint32_t d_in1_block_num_tiles = per_core_N_d * in0_block_w_d;
     constexpr uint32_t num_blocks_gu = K_gate_tiles / in0_block_w_gu;
-    constexpr uint32_t num_blocks_d = K_down_tiles / in0_block_w_d;
+    constexpr uint32_t num_blocks_d = K_down_tiles_padded / in0_block_w_d;
 
-    constexpr uint32_t x_accessor_offset = 22;
+    constexpr uint32_t x_accessor_offset = 24;
     constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
     const auto x_acc = TensorAccessor(x_args, x_addr, get_tile_size(cb_in0_x));
 
@@ -249,15 +251,25 @@ void kernel_main() {
                 noc_semaphore_wait(in1_ready_local, in1_num_receivers);
                 *in1_ready_local = 0;
 
-                // DRAM read the K-block into our local cb_in1_gate.
+                // DRAM read the K-block into our local cb_in1_gate. Cols past
+                // N_gate_tiles_full (phantom cols 64-65 with GRID_X=11 padding)
+                // are zero-filled instead of read — the matmul accumulator
+                // contribution for those cols is 0.
                 uint32_t l1_w = get_write_ptr(cb_in1_gate);
                 const uint32_t block_start = l1_w;
                 for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
                     for (uint32_t n = 0; n < per_core_N_gu; ++n) {
                         const uint32_t row = kb * in0_block_w_gu + k;
                         const uint32_t col = my_nt_gu * per_core_N_gu + n;
-                        const uint32_t tile_idx = row * N_gate_tiles_full + col;
-                        noc_async_read_tile(tile_idx, gate_acc, l1_w);
+                        if (col < N_gate_tiles_full) {
+                            const uint32_t tile_idx = row * N_gate_tiles_full + col;
+                            noc_async_read_tile(tile_idx, gate_acc, l1_w);
+                        } else {
+                            volatile tt_l1_ptr uint64_t* p = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w);
+                            for (uint32_t i = 0; i < gate_tile_bytes / 8; ++i) {
+                                p[i] = 0;
+                            }
+                        }
                         l1_w += gate_tile_bytes;
                     }
                 }
@@ -339,8 +351,15 @@ void kernel_main() {
                     for (uint32_t n = 0; n < per_core_N_gu; ++n) {
                         const uint32_t row = kb * in0_block_w_gu + k;
                         const uint32_t col = my_nt_gu * per_core_N_gu + n;
-                        const uint32_t tile_idx = row * N_gate_tiles_full + col;
-                        noc_async_read_tile(tile_idx, up_acc, l1_w);
+                        if (col < N_gate_tiles_full) {
+                            const uint32_t tile_idx = row * N_gate_tiles_full + col;
+                            noc_async_read_tile(tile_idx, up_acc, l1_w);
+                        } else {
+                            volatile tt_l1_ptr uint64_t* p = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w);
+                            for (uint32_t i = 0; i < up_tile_bytes / 8; ++i) {
+                                p[i] = 0;
+                            }
+                        }
                         l1_w += up_tile_bytes;
                     }
                 }
@@ -380,7 +399,7 @@ void kernel_main() {
         // once: corners are mrow[0] (top-left) and mrow[GRID_X-1] (bottom-right).
         // Sender NoC addr for the per-K-block ready-sem inc is looked up by
         // index kb from the same table.
-        constexpr uint32_t GRID_X_NOC = 8;  // mcast covers all 8 M-row cores incl self
+        // GRID_X_NOC comes from compile-time arg now (= GRID_X in program factory).
         const uint32_t mrow_first_nx = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 0);
         const uint32_t mrow_first_ny = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 1);
         const uint32_t mrow_last_nx = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * (GRID_X_NOC - 1) + 0);
@@ -442,8 +461,15 @@ void kernel_main() {
                     for (uint32_t n = 0; n < per_core_N_d; ++n) {
                         const uint32_t row = kb * in0_block_w_d + k;
                         const uint32_t col = my_nt_d * per_core_N_d + n;
-                        const uint32_t tile_idx = row * N_down_tiles_full + col;
-                        noc_async_read_tile(tile_idx, down_acc, l1_w);
+                        if (row < K_down_tiles && col < N_down_tiles_full) {
+                            const uint32_t tile_idx = row * N_down_tiles_full + col;
+                            noc_async_read_tile(tile_idx, down_acc, l1_w);
+                        } else {
+                            volatile tt_l1_ptr uint64_t* p = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w);
+                            for (uint32_t i = 0; i < down_tile_bytes / 8; ++i) {
+                                p[i] = 0;
+                            }
+                        }
                         l1_w += down_tile_bytes;
                     }
                 }

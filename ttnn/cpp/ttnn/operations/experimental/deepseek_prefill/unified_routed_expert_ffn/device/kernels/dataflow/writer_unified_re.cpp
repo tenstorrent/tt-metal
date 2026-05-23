@@ -58,8 +58,13 @@ void kernel_main() {
                     for (uint32_t j = 0; j < d_out_subblock_w; ++j) {
                         const uint32_t row = row0 + sb_m * d_out_subblock_h + i;
                         const uint32_t col = col0 + sb_n * d_out_subblock_w + j;
-                        const uint32_t tile_idx = row * N_down_tiles_full + col;
-                        noc_async_write_tile(tile_idx, out_acc, l1_read);
+                        // With GRID_X=11 and ceil_div per_core_N_d, the last
+                        // M-row col group covers cols past N_down_tiles_full
+                        // (phantom output). Skip those DRAM writes.
+                        if (col < N_down_tiles_full) {
+                            const uint32_t tile_idx = row * N_down_tiles_full + col;
+                            noc_async_write_tile(tile_idx, out_acc, l1_read);
+                        }
                         l1_read += out_tile_bytes;
                     }
                 }
