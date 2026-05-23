@@ -116,6 +116,11 @@ private:
     // reads for subsequent devices whose MMIO host is already in this set.
     std::unordered_set<tt::ChipId> mmio_dead_peer_devices_;
 
+    // Non-MMIO device IDs for which safe_assert() skipped assert_tensix_workers_impl()
+    // (relay was mid-reboot during reset_cores). FIX VV (#42429) performs the deferred
+    // Tensix worker reset in run_launch_phase() after FIX TV/UU confirm the relay is alive.
+    std::unordered_set<tt::ChipId> deferred_tensix_reset_chips_;
+
     bool initialized_ = false;
 };
 

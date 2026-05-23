@@ -393,6 +393,70 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
             }
         }
 
+        // FIX VV (#42429): Deferred Tensix worker reset.
+        //
+        // Context: safe_assert() in reset_cores() skips assert_tensix_workers_impl() for
+        // non-MMIO devices when the ETH relay was mid-reboot (had_unresponsive_eth_cores &&
+        // is_non_mmio). This avoids 5s × 120-core timeouts on a dead relay. However it
+        // leaves Tensix worker cores carrying stale NOC state from the prior Metal session.
+        //
+        // Symptom (run 26345499861): FIX TV + FIX UU confirmed relay alive at +0.3s.
+        // But write_core_immediate to chip 4 Tensix L1 timed out at +5.3s (then chip 5 at
+        // +10.3s, chip 6 at +15.3s, chip 7 at +20.3s — exactly 5s per device). Root cause:
+        // the Tensix cores' stale NOC in-flight from the previous session blocked new NOC
+        // writes to Tensix L1. The relay bridge ERISC's own NOC was fine (FIX UU self-reads
+        // from ETH core L1 work — same-core loopback); cross-core writes to Tensix L1 hang.
+        //
+        // Fix: after FIX TV/UU confirm relay alive, assert all Tensix worker cores on each
+        // deferred-reset device to reset using write-only variants. Writing to the soft-reset
+        // config register (0xFFB121B0) may use a posted/fire-and-forget NOC virtual channel
+        // distinct from non-posted L1 data writes — empirically likely to land even when
+        // Tensix NOC is stuck. If the flush throws, assert_risc_reset_at_core_write_only()
+        // marks relay broken; all subsequent cores' flushes return immediately via the
+        // relay_broken_ fast-exit. Worst case: 5s overhead per device (same as today),
+        // not 5s × 120 workers.
+        for (tt::ChipId device_id : deferred_tensix_reset_chips_) {
+            if (cluster_.is_relay_broken(device_id)) {
+                log_warning(
+                    tt::LogAlways,
+                    "run_launch_phase: FIX VV — skipping deferred Tensix reset for device {} "
+                    "(relay already broken after FIX TV/UU). (#42429)",
+                    device_id);
+                continue;
+            }
+            try {
+                CoreCoord grid_size = cluster_.get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
+                uint32_t n_reset = 0;
+                for (uint32_t y = 0; y < grid_size.y; y++) {
+                    for (uint32_t x = 0; x < grid_size.x; x++) {
+                        CoreCoord worker_core = cluster_.get_virtual_coordinate_from_logical_coordinates(
+                            device_id, CoreCoord(x, y), CoreType::WORKER);
+                        cluster_.assert_risc_reset_at_core_write_only(
+                            tt_cxy_pair(device_id, worker_core), tt::umd::RiscType::ALL);
+                        ++n_reset;
+                        // assert_risc_reset_at_core_write_only catches flush exceptions
+                        // internally and marks relay broken. If relay broke on this core,
+                        // subsequent iterations' flushes will exit immediately via relay_broken_
+                        // fast-path — no need to check here.
+                    }
+                }
+                log_info(
+                    tt::LogAlways,
+                    "run_launch_phase: FIX VV — deferred Tensix reset done for device {} ({} cores). (#42429)",
+                    device_id,
+                    n_reset);
+            } catch (const std::exception& e) {
+                // Unexpected exception from get_soc_desc or get_virtual_coordinate.
+                log_warning(
+                    tt::LogAlways,
+                    "run_launch_phase: FIX VV — deferred Tensix reset failed for device {}: {}. "
+                    "Marking relay broken. (#42429)",
+                    device_id,
+                    e.what());
+                cluster_.mark_relay_broken(device_id);
+            }
+        }
+
         // ── Pass 2a: initialize non-MMIO devices (relay still alive) ──
         for (tt::ChipId device_id : device_ids) {
             if (mmio_ids_set.count(device_id)) continue;
@@ -2096,7 +2160,17 @@ void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
         }
     };
 
+    // Track non-MMIO devices where Tensix reset is skipped due to dead relay so that
+    // FIX VV in run_launch_phase() can perform the deferred reset once the relay is alive.
+    const bool will_skip_tensix = had_unresponsive_eth_cores && is_non_mmio;
     safe_assert([&] { assert_tensix_workers_impl(device_id); }, "assert_tensix_workers_impl");
+    if (will_skip_tensix) {
+        deferred_tensix_reset_chips_.insert(device_id);
+        log_info(
+            tt::LogAlways,
+            "reset_cores: FIX VV — device {} queued for deferred Tensix worker reset in run_launch_phase(). (#42429)",
+            device_id);
+    }
     safe_assert([&] { assert_dram_cores(device_id); }, "assert_dram_cores");
     if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
         safe_assert([&] { assert_inactive_ethernet_cores(device_id); }, "assert_inactive_ethernet_cores");
