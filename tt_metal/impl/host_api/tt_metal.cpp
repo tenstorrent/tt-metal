@@ -1132,12 +1132,21 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                     log_info(tt::LogMetal, "DFB size: {}", program.impl().get_program_config(index).dfb_size);
                     std::vector<uint8_t> dfb_config_vec(
                         program.impl().get_program_config(index).dfb_size / sizeof(uint8_t));
-                    uint32_t offset = 0;
-                    for (const auto& dfb : dfbs_on_core) {
-                        auto serialized = dfb->serialize_for_core(logical_core);
-                        std::memcpy(dfb_config_vec.data() + offset, serialized.data(), serialized.size());
-                        offset += serialized.size();
+
+                    size_t bytes_written = 0;
+                    if (MetalContext::instance().hal().has_tile_counter_registers()) {
+                        bytes_written = tt::tt_metal::experimental::dfb::detail::serialize_dfb_config_for_core(
+                            logical_core, dfbs_on_core, dfb_config_vec);
+                    } else {
+                        uint32_t offset = 0;
+                        for (const auto& dfb : dfbs_on_core) {
+                            auto serialized = dfb->serialize_for_core(logical_core);
+                            std::memcpy(dfb_config_vec.data() + offset, serialized.data(), serialized.size());
+                            offset += serialized.size();
+                        }
+                        bytes_written = offset;
                     }
+
                     uint64_t addr = kernel_config_base + program.impl().get_program_config(index).dfb_offset;
                     log_info(
                         tt::LogMetal,
@@ -1147,8 +1156,9 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                         addr,
                         kernel_config_base,
                         program.impl().get_program_config(index).dfb_offset,
-                        dfb_config_vec.size());
-                    MetalContext::instance().get_cluster().write_core(device_id, physical_core, dfb_config_vec, addr);
+                        bytes_written);
+                    MetalContext::instance().get_cluster().write_core(
+                        device_id, physical_core, std::span<const uint8_t>(dfb_config_vec.data(), bytes_written), addr);
                 }
             }
             program.impl().init_semaphores(*device, logical_core, index);
