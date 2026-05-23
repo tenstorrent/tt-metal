@@ -58,7 +58,7 @@ TEST_F(MeshDeviceTTSwitchFixture, TestOpenCloseComputeMeshDevice) {
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();
 
-    auto mesh_id_val = 0;
+    uint32_t mesh_id_val = 0;
 
     // Verify this is a compute mesh, not a switch
     tt::tt_fabric::MeshId mesh_id(mesh_id_val);
@@ -144,7 +144,7 @@ TEST_F(MeshDeviceTTSwitchFixture, TestOpenUnitMeshesOnComputeMeshFabricNodes) {
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();
 
-    auto mesh_id_val = 0;
+    uint32_t mesh_id_val = 0;
 
     // Verify this is a compute mesh, not a switch
     tt::tt_fabric::MeshId mesh_id(mesh_id_val);

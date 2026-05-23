@@ -537,7 +537,7 @@ void InterMeshLineMcast(
     uint32_t receiver_rank) {
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
 
-    if (*(distributed_context->rank()) == sender_rank) {
+    if (static_cast<uint32_t>(*(distributed_context->rank())) == sender_rank) {
         run_mcast_sender_step(
             fixture, mcast_sender_node, mcast_start_node, mcast_routing_info, mcast_group_node_ids, receiver_rank);
     } else {

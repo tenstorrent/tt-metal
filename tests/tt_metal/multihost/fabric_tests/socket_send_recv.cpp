@@ -87,7 +87,7 @@ std::vector<SocketTestConfig> generate_socket_test_configs(SystemConfig system_c
         TestVariant::MULTI_CONN_FWD,
         TestVariant::MULTI_CONN_BIDIR};
 
-    for (int config_idx = 0; config_idx < fifo_sizes.size(); ++config_idx) {
+    for (size_t config_idx = 0; config_idx < fifo_sizes.size(); ++config_idx) {
         for (const auto& variant : variants) {
             configs.push_back(
                 {.socket_fifo_size = fifo_sizes[config_idx],
@@ -182,7 +182,7 @@ TEST_F(MeshDeviceNanoExabox2x4Fixture, MultiContextSocketHandshake) {
     auto socket_mem_config = tt_metal::distributed::SocketMemoryConfig(tt_metal::BufferType::L1, 1024);
 
     // Initialize sockets in context0 namespace
-    if (*distributed_ctx0->rank() == recv_rank_ctx0) {
+    if (static_cast<uint32_t>(*distributed_ctx0->rank()) == recv_rank_ctx0) {
         for (const auto& sender_rank : sender_node_ranks_ctx0) {
             tt_metal::distributed::SocketConfig socket_config(
                 {socket_connection},
@@ -206,7 +206,7 @@ TEST_F(MeshDeviceNanoExabox2x4Fixture, MultiContextSocketHandshake) {
     // Initialize sockets in context1 namespace
     if (std::find(ctx1_ranks.begin(), ctx1_ranks.end(), *distributed_ctx0->rank()) != ctx1_ranks.end()) {
         auto distributed_ctx1 = distributed_ctx0->create_sub_context(ctx1_ranks);
-        if (*distributed_ctx1->rank() == recv_rank_ctx1) {
+        if (static_cast<uint32_t>(*distributed_ctx1->rank()) == recv_rank_ctx1) {
             for (const auto& sender_rank : sender_node_ranks_ctx1) {
                 tt_metal::distributed::SocketConfig socket_config(
                     {socket_connection},
