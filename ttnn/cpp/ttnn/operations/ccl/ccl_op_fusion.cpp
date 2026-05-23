@@ -26,7 +26,7 @@ constexpr uint32_t kNumSemaphoresPerCore = 16;
 // on every target core. Using desc.semaphores.size() as the id is incorrect: ids are per-core
 // (0..NUM_SEMAPHORES-1) and may collide across overlapping ranges or exceed the limit.
 uint32_t allocate_free_semaphore_id(
-    const ProgramDescriptor& desc, const CoreRangeSet& range_set, CoreType core_type = CoreType::WORKER) {
+    const ProgramDescriptor& desc, const CoreRangeSet& range_set, tt::CoreType core_type = tt::CoreType::WORKER) {
     std::bitset<kNumSemaphoresPerCore> used;
     for (const auto& sem : desc.semaphores) {
         if (sem.core_type != core_type) {
