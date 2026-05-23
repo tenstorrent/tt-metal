@@ -66,8 +66,8 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const uint32_t per_core_N_gu = N_gate_tiles_full / GRID_X;
     const uint32_t per_core_N_d = N_down_tiles_full / GRID_X;
 
-    const uint32_t in0_block_w_gu = 16;
-    const uint32_t in0_block_w_d = 8;
+    const uint32_t in0_block_w_gu = 8;
+    const uint32_t in0_block_w_d = 4;
     TT_FATAL(
         K_gate_tiles % in0_block_w_gu == 0,
         "K_gate_tiles ({}) must be divisible by in0_block_w_gu ({})",
@@ -135,12 +135,14 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // reconfig that the v2 kernel doesn't do). Use bfp8_b for both: 1KB/tile
     // is half the bf16 cost so we fit in L1 with both intermediates and
     // partials sized to the full per-core block.
-    // PACKER_L1_ACC with bf8 partials loses precision rapidly (shared
-    // exponent re-quantization per K-block step). Keep partials in bf16 for
-    // accumulation; intermed stays bf8 for L1 budget.
-    const tt::DataFormat intermed_df = tt::DataFormat::Bfp8_b;
+    // bfp8_b has a per-face shared exponent; if the packer's first write to a
+    // CB doesn't overwrite the exponent byte (e.g. due to a face/format
+    // mismatch), uninitialized exponent bits can read back as Inf-near values.
+    // Use bf16 intermeds — same dst format means no conversion on pack/unpack
+    // round-trip.
+    const tt::DataFormat intermed_df = tt::DataFormat::Float16_b;
     const tt::DataFormat partials_gu_df = tt::DataFormat::Float16_b;
-    const tt::DataFormat partials_d_df = tt::DataFormat::Bfp8_b;  // K_down=64 small enough; bf16 doesn't fit L1
+    const tt::DataFormat partials_d_df = tt::DataFormat::Float16_b;
 
     const uint32_t x_tile_size = tt::tile_size(x_df);
     const uint32_t gate_tile_size = tt::tile_size(gate_df);
@@ -166,12 +168,15 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // -------------------------- scratch buffer + semaphore ----------------
     // DRAM scratch holds activated between phases 3 and 4, sized for the full
     // chunk M × hidden N tile region (same shape as gate output).
+    // Scratch DRAM must use the intermed format (= cb_activated's format),
+    // NOT x_df. Otherwise tile-size mismatch corrupts DRAM round-trip when
+    // intermeds are wider than the input (bf16 vs bf8).
     const uint32_t scratch_num_tiles = chunk_M_tiles * N_gate_tiles_full;
-    const uint32_t scratch_bytes = scratch_num_tiles * tt::tile_size(x_df);
+    const uint32_t scratch_bytes = scratch_num_tiles * tt::tile_size(intermed_df);
     tt::tt_metal::InterleavedBufferConfig scratch_cfg{
         .device = t.x.device(),
         .size = scratch_bytes,
-        .page_size = tt::tile_size(x_df),
+        .page_size = tt::tile_size(intermed_df),
         .buffer_type = tt::tt_metal::BufferType::DRAM};
     auto activated_scratch = tt::tt_metal::CreateBuffer(scratch_cfg);
     auto* scratch_buffer = activated_scratch.get();
