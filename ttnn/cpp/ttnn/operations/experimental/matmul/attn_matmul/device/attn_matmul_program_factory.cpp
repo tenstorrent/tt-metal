@@ -100,9 +100,10 @@ tt::tt_metal::ProgramDescriptor AttnMatmulProgramFactory::create_descriptor(
     uint32_t dst_addr = dst_buffer->address();
 
     // ---- Circular buffers ----
-    // cb_src0's total_size = Kt * in0_single_tile_size is the legacy override_runtime_arguments
-    // value (the framework's apply_descriptor_runtime_args re-applies this on every cache hit
-    // because Kt depends on the input shape and is kept out of the program hash).
+    // cb_src0's total_size = Kt * in0_single_tile_size depends on the input shape;
+    // padded_shape is folded into compute_program_hash() so each unique Kt keeps
+    // its own cache entry.  CB total_size/page_size are not patched on cache hit
+    // — the cached descriptor already carries the correct values.
     constexpr uint8_t src0_cb_index = tt::CBIndex::c_0;
     desc.cbs.push_back(CBDescriptor{
         .total_size = Kt * in0_single_tile_size,

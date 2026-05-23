@@ -213,9 +213,9 @@ tt::tt_metal::ProgramDescriptor SliceRmProgramFactory::create_descriptor(
     constexpr uint8_t src0_cb_index = 0;
 
     // CB sizing depends on slice_start (via misalignment / unpadded_row_size_bytes).
-    // Kept out of the program hash so a single cached program covers many slice
-    // shapes — the framework's apply_descriptor_runtime_args re-applies these
-    // values on cache hit (PR #44939).
+    // padded_shape is folded into compute_program_hash() so each unique sizing
+    // gets its own cache entry; CB total_size/page_size are not patched on
+    // cache hit — the cached descriptor already carries the correct values.
     const auto [cb_page_size, num_read_per_barrier, misalignment] = ttnn::operations::data_movement::compute_cb_size(
         input, output, args.slice_start, num_sticks_per_core_group_1, num_sticks_per_core_group_2);
 

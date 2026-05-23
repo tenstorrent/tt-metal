@@ -246,11 +246,13 @@ tt::tt_metal::ProgramDescriptor SliceRmShardedProgramFactory::create_descriptor(
     tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    // Sharded CBs: total_size, page_size and the bound buffer all vary with
-    // shard shape / element size across cache hits; framework re-applies them
-    // on cache hit via apply_descriptor_runtime_args (PR #44939).
+    // Sharded CBs: total_size and page_size vary with shard shape / element size,
+    // so padded_shape is folded into compute_program_hash() to keep each unique
+    // sizing in its own cache entry.  On cache hit, the framework copies runtime
+    // args and patches dynamic CB addresses (.buffer is set below); CB sizing
+    // itself is not re-applied — it is carried by the cached descriptor.
     constexpr uint8_t src0_cb_index = 0;
     desc.cbs.push_back(CBDescriptor{
         .total_size = shard_height_padded * stick_size_padded,

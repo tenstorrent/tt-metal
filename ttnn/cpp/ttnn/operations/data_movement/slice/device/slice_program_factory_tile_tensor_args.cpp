@@ -38,10 +38,10 @@ tt::tt_metal::ProgramDescriptor SliceTileTensorArgsProgramFactory::create_descri
     tt::tt_metal::Buffer* end_buffer = end_tensor.buffer();
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
 
-    TT_ASSERT(src_buffer != nullptr, "Input buffer should be allocated on device!");
-    TT_ASSERT(start_buffer != nullptr, "Start buffer should be allocated on device!");
-    TT_ASSERT(end_buffer != nullptr, "End buffer should be allocated on device!");
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(src_buffer != nullptr, "Input buffer should be allocated on device!");
+    TT_FATAL(start_buffer != nullptr, "Start buffer should be allocated on device!");
+    TT_FATAL(end_buffer != nullptr, "End buffer should be allocated on device!");
+    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t single_tile_size = tt::tile_size(cb_data_format);

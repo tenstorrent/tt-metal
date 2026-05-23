@@ -111,69 +111,59 @@ tt::tt_metal::ProgramDescriptor SliceRmStrideProgramFactory::create_descriptor(
     uint32_t row_start_id = 0;
     uint32_t extra_rows_remaining = extra_rows;
 
-    for (uint32_t core_idx = 0; core_idx < all_cores_vec.size(); ++core_idx) {
+    auto* input_buffer = input_tensor.buffer();
+    auto* output_buffer = output.buffer();
+
+    for (const auto& core : all_cores_vec) {
         uint32_t rows_for_this_core = base_rows_per_core;
         if (extra_rows_remaining > 0) {
             rows_for_this_core += 1;
             extra_rows_remaining -= 1;
         }
 
-        std::vector<uint32_t> reader_args;
-        std::vector<uint32_t> writer_args;
-
         if (using_4d_kernels) {
-            reader_args = {
-                input_tensor.buffer()->address(),
-                tensor_rank,
-                input_shape[-1],
-                input_shape[-2],
-                input_shape[-3],
-                input_shape[-4],
-                output_shape[-1],
-                output_shape[-2],
-                output_shape[-3],
-                output_shape[-4],
-                slice_start[-1],
-                slice_end[-1],
-                slice_step[-1],
-                slice_start[-2],
-                slice_end[-2],
-                slice_step[-2],
-                slice_start[-3],
-                slice_end[-3],
-                slice_step[-3],
-                slice_start[-4],
-                slice_end[-4],
-                slice_step[-4],
-                element_size,
-                rows_for_this_core,
-                row_start_id};
+            reader_desc.emplace_runtime_args(
+                core, {input_buffer,    tensor_rank,      input_shape[-1],  input_shape[-2],    input_shape[-3],
+                       input_shape[-4], output_shape[-1], output_shape[-2], output_shape[-3],   output_shape[-4],
+                       slice_start[-1], slice_end[-1],    slice_step[-1],   slice_start[-2],    slice_end[-2],
+                       slice_step[-2],  slice_start[-3],  slice_end[-3],    slice_step[-3],     slice_start[-4],
+                       slice_end[-4],   slice_step[-4],   element_size,     rows_for_this_core, row_start_id});
 
-            writer_args = {
-                output.buffer()->address(),
-                tensor_rank,
-                output_shape[-1],
-                output_shape[-2],
-                output_shape[-3],
-                output_shape[-4],
-                element_size,
-                rows_for_this_core,
-                row_start_id};
+            writer_desc.emplace_runtime_args(
+                core,
+                {output_buffer,
+                 tensor_rank,
+                 output_shape[-1],
+                 output_shape[-2],
+                 output_shape[-3],
+                 output_shape[-4],
+                 element_size,
+                 rows_for_this_core,
+                 row_start_id});
         } else {
-            reader_args = {
-                input_tensor.buffer()->address(), tensor_rank, element_size, rows_for_this_core, row_start_id};
-            reader_args.insert(reader_args.end(), input_shape.cbegin(), input_shape.cend());
-            reader_args.insert(reader_args.end(), output_shape.cbegin(), output_shape.cend());
-            reader_args.insert(reader_args.end(), slice_start.cbegin(), slice_start.cend());
-            reader_args.insert(reader_args.end(), slice_end.cbegin(), slice_end.cend());
-            reader_args.insert(reader_args.end(), slice_step.cbegin(), slice_step.cend());
+            KernelDescriptor::RTArgList reader_args;
+            reader_args.push_back(input_buffer);
+            reader_args.push_back(tensor_rank);
+            reader_args.push_back(element_size);
+            reader_args.push_back(rows_for_this_core);
+            reader_args.push_back(row_start_id);
+            reader_args.append(std::vector<uint32_t>(input_shape.cbegin(), input_shape.cend()));
+            reader_args.append(std::vector<uint32_t>(output_shape.cbegin(), output_shape.cend()));
+            reader_args.append(std::vector<uint32_t>(slice_start.cbegin(), slice_start.cend()));
+            reader_args.append(std::vector<uint32_t>(slice_end.cbegin(), slice_end.cend()));
+            reader_args.append(std::vector<uint32_t>(slice_step.cbegin(), slice_step.cend()));
+            reader_desc.emplace_runtime_args(core, reader_args);
 
-            writer_args = {output.buffer()->address(), tensor_rank, element_size, rows_for_this_core, row_start_id};
-            writer_args.insert(writer_args.end(), output_shape.cbegin(), output_shape.cend());
+            KernelDescriptor::RTArgList writer_args;
+            writer_args.push_back(output_buffer);
+            writer_args.push_back(tensor_rank);
+            writer_args.push_back(element_size);
+            writer_args.push_back(rows_for_this_core);
+            writer_args.push_back(row_start_id);
+            writer_args.append(std::vector<uint32_t>(output_shape.cbegin(), output_shape.cend()));
+            writer_desc.emplace_runtime_args(core, writer_args);
         }
 
-        reader_desc.runtime_args.emplace_back(all_cores_vec[core_idx], std::move(reader_args));
-        writer_desc.runtime_args.emplace_back(all_cores_vec[core_idx], std::move(writer_args));
         row_start_id += rows_for_this_core;
     }
 

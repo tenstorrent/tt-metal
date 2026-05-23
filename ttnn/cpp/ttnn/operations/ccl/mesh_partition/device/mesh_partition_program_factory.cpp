@@ -148,10 +148,12 @@ void MeshPartitionDeviceOperation::MeshPartition::override_runtime_arguments(
         auto [slice_attrs, slice_tensor_args] =
             compute_slice_parameters(operation_attributes, tensor_args, mesh_coordinate);
 
-        // Re-build the descriptor for this coord and let the framework re-apply
-        // its runtime args (and CB total_size / page_size, when they vary) onto
-        // the cached Program — same scheme as the legacy override_runtime_args
-        // path, but driven by ProgramDescriptor (PR #44939).
+        // Re-build the descriptor for this coord and let the framework copy
+        // its per-core / common runtime args (and patch dynamic CB addresses)
+        // onto the cached Program — same scheme as the legacy
+        // override_runtime_args path, but driven by ProgramDescriptor.  CB
+        // total_size/page_size are not re-applied on cache hit, so any sizing
+        // that varies across calls must be folded into compute_program_hash().
         std::visit(
             [&](auto&& program_factory) {
                 using Factory = std::decay_t<decltype(program_factory)>;

@@ -12,9 +12,11 @@ namespace ttnn::prim {
 
 struct SliceRmShardedProgramFactory {
     // Contract (1): per-coord ProgramDescriptor.  Both CBs are sharded
-    // (set_globally_allocated_address bound to input/output buffers); the
-    // framework re-applies CB total_size / page_size and buffer addresses on
-    // cache-hit via apply_descriptor_runtime_args (PR #44939).
+    // (CBDescriptor::buffer bound to input/output buffers); the framework
+    // patches the dynamic CB addresses on cache hit via
+    // apply_descriptor_runtime_args.  CB total_size/page_size are NOT patched
+    // — padded_shape is folded into compute_program_hash() so each unique
+    // sizing gets its own cache entry.
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const SliceParams& args, const SliceInputs& tensor_args, Tensor& output);
 };

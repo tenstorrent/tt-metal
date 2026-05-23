@@ -153,8 +153,9 @@ tt::tt_metal::ProgramDescriptor GroupAttnMatmulProgramFactory::create_descriptor
     });
 
     // ---- Circular buffers (sharded variants use CBDescriptor::buffer so the
-    // framework patches the dynamic address on cache hit; total_size is
-    // re-applied via the framework patch in PR #44939). ----
+    // framework patches the dynamic address on cache hit; CB total_size and
+    // page_size are NOT patched on cache hit — sizing that varies with input
+    // shape is folded into compute_program_hash() via padded_shape). ----
     const bool in0_is_sharded = a.is_sharded();
     const bool in1_is_sharded = b.is_sharded();
     const bool output_is_sharded = output.is_sharded();
