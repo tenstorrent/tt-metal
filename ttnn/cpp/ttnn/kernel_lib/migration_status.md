@@ -144,6 +144,13 @@ the chosen stage. The audit grep is the safety net.
 
 | Kernel | Status | Commit | Notes |
 |---|---|---|---|
+| `copy/typecast/.../eltwise_typecast.cpp` | FULL | `6589d8167d8` | Single CopyTile + Typecast<InDF,OutDF> + PackTile chain. Added `CHAIN_TYPECAST_IN_DF` / `CHAIN_TYPECAST_OUT_DF` numeric defines to typecast (regular + sharded) program factories. 193 PASS + 151 PASS sharded. |
+| `eltwise/unary/.../logsigmoid_kernel.cpp` | FULL | `ef60346171a` | CopyTile(D0 HeldStream) + CopyTile(D1 NoWaitPop) + Negative<D1> + Exp<Fast,Fast,D1> + Logsigmoid<D0,D1,D0> + PackTile. 3 PASS. |
+| `eltwise/unary/.../mish_kernel.cpp` | FULL | `ef406b5ca83` | x * tanh(softplus(x)). 4-way (Fast/Exact × FLOAT/FLOAT32). 3 PASS. |
+| `eltwise/unary/.../logit_kernel.cpp` | FULL | `ef406b5ca83` | log(x/(1-x)). Two-chain: [CopyTile+Clamp]+Pack -> CopyTile+CopyTile+RsubUnary+DivBinary+Log+Pack. 54 PASS. |
+| `eltwise/unary_backward/tanh_bw/.../eltwise_bw_tanh_deriv.cpp` | FULL | `ef60346171a` | grad_out * sech²(input). 45 PASS. |
+| `eltwise/unary_backward/gelu_bw/.../eltwise_bw_gelu_poly.cpp` + experimental sibling | FULL | `ef60346171a` | grad_out * GELU'(input). 33 PASS. |
+| `experimental/dropout/.../dropout_kernel.cpp` | FULL | `6cf9b8a4d11` | dropout_kernel_init(seed) + per-tile CopyTile + Dropout{prob,scale} + PackTile. 2 PASS. |
 | `data_movement/clone/.../compute_kernel.cpp` | FULL | `96c844c6817` | Single CopyTile+PackTile chain over num_tiles. 118 PASS on `test_clone.py`. |
 | `data_movement/sharded/.../eltwise_copy.cpp` | FULL | `3dfd9bb6b07` | Per-tile copy, runtime tile count. Used by interleaved_to_sharded. 208 PASS shared with shared variant. |
 | `ttnn/cpp/ttnn/kernel/compute/eltwise_copy.cpp` | FULL | `3dfd9bb6b07` | Shared compile-time variant. Used by sharded_to_interleaved + untilize_with_unpadding + copy_default_tilized. |
@@ -165,6 +172,19 @@ the chosen stage. The audit grep is the safety net.
   `CHAIN_BCAST_OP` / `CHAIN_BCAST_DIM` defines emitting
   `compute_kernel_lib::BinaryFpuOp::{Add,Sub,Mul}` /
   `compute_kernel_lib::BroadcastDim::{Row,Col,Scalar}` for bcast kernels.
+- `typecast_program_factory` (regular + sharded) (commit `6589d8167d8`) —
+  added `CHAIN_TYPECAST_IN_DF` / `CHAIN_TYPECAST_OUT_DF` numeric defines
+  for the chain Typecast<InDF, OutDF, Slot> element.
+
+### New chain elements added this session
+
+| Element | File | Commit | Notes |
+|---|---|---|---|
+| `TanhDerivative<Approx, Slot>` | `eltwise_activations.hpp` | `ef60346171a` | sech²(x). Removed older non-templated dup from `eltwise_special.hpp` (`d8e38a11652`). |
+| `GeluDerivative<Approx, Slot>` | `eltwise_activations.hpp` | `ef60346171a` | Polynomial-accurate GELU'(x). |
+| `Logsigmoid<In0, In1, Out>` | `eltwise_activations.hpp` | `ef60346171a` | Binary in-DEST: caller pre-loads x and exp(-x). |
+| `Cumsum<Slot>{first}` | `eltwise_math.hpp` | `ef60346171a` | In-DEST columnwise cumsum, runtime `first` flag. |
+| `Dropout<Slot>{prob, scale}` | `eltwise_scalar.hpp` | `6cf9b8a4d11` | init is no-op; caller runs `dropout_kernel_init(seed)` outside chain. |
 
 ## Cross-cutting bug fixes
 
