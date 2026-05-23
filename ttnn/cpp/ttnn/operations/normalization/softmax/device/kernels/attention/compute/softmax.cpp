@@ -299,29 +299,36 @@ void kernel_main() {
 
         cb_recipsumexps_obj.wait_front(1);  // will reuse Wt times for bcast
 
-        reconfig_data_format(cb_exps, cb_recipsumexps);
-        pack_reconfig_data_format(cb_out0);
-        // now cb_sumexps has exp tiles, need to multiply by our DST[2]
-        // by now we already did a cumulative wait for Wt tiles in cb_exps
-        mul_bcast_cols_init_short(cb_exps, cb_recipsumexps);
-        for (uint32_t wt = 0; wt < Wt; wt += ndst) {
-            tile_regs_acquire();
-            cb_out0_obj.reserve_back(ndst);
-            for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
-                // wt+wt8 since we pop Wt after the entire loop
-                mul_tiles_bcast<BroadcastType::COL>(
-                    cb_exps, cb_recipsumexps, wt + wt8, 0, wt8);  // tile *= 1/(sum(exp(x)))
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
-                pack_tile(wt8, cb_out0);
-            }
-            tile_regs_release();
-            cb_out0_obj.push_back(ndst);
-        }
+        // multiply by 1/sum(exp(x)) — bcast COL on the held cb_recipsumexps.
+        // Original cumulative-waited Wt tiles in cb_exps upfront + did 1 final
+        // pop_front(Wt). Chain Streaming + Scalar emits per-tile wait_front(1)
+        // + pop_front(1) — same net effect over Wt iters since reader pushed
+        // all Wt tiles upfront.
+        //
+        // Reconfig: reconfig_data_format(cb_exps, cb_recipsumexps) +
+        // mul_bcast_cols_init_short reconfig srca/srcb -> Input.
+        // pack_reconfig_data_format(cb_out0) -> PackTileReconfig::Output.
+        // cb_recipsumexps held outside (wait/pop bracket the chain) -> CallerManaged.
+        compute_kernel_lib::eltwise_chain(
+            Wt,
+            compute_kernel_lib::BinaryFpu<
+                cb_exps,
+                cb_recipsumexps,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::BroadcastDim::Col,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::Streaming,
+                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar>{},
+            compute_kernel_lib::PackTile<
+                cb_out0,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::PackTileReconfig::Output>{});
         cb_recipsumexps_obj.pop_front(1);
-        cb_exps_obj.pop_front(Wt);
     }  // NCHt loop
     // cb_pop_front(cb_max_scaler, 1); // we don't actually have to do this
     // cb_pop_front(cb_fused_scale, 1); // we don't actually have to do this
