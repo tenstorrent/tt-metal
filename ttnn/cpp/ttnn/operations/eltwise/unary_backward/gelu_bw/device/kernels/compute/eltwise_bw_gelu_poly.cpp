@@ -6,16 +6,10 @@
 // Uses Sollya-derived minimax polynomials for high accuracy (Max ULP = 1)
 
 #include <cstdint>
-#include "api/compute/eltwise_binary.h"
-#include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#include "api/compute/common.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_binary_sfpu.h"
-#include "api/compute/binary_bitwise_sfpu.h"
-#include "api/compute/binary_shift.h"
-#include "api/compute/compute_kernel_api.h"
-#include "api/compute/eltwise_unary/gelu.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_activations.hpp"  // GeluDerivative
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"  // MulBinary
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
@@ -25,36 +19,37 @@ void kernel_main() {
     constexpr auto cb_input = tt::CBIndex::c_1;
     constexpr auto cb_grad_in = tt::CBIndex::c_2;
 
-    unary_op_init_common(cb_grad_out, cb_grad_in);
-    gelu_derivative_tile_init<false>();
-    mul_binary_tile_init();
+    binary_op_init_common(cb_grad_out, cb_input, cb_grad_in);
 
+    // GELU backward: grad_in = grad_out * GELU'(input).
+    //   D0 = grad_out, D1 = input -> GeluDerivative<D1>, MulBinary<D0, D1, D0>.
+    // Original comment notes that GELU derivative uses extra DEST as scratch
+    // during polynomial evaluation, so the multi-tile batching isn't possible
+    // there. The chain's per-tile iteration handles that constraint naturally —
+    // each iteration acquires fresh DEST, runs derivative, and packs result.
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
-        cb_reserve_back(cb_grad_in, per_core_block_size);
-        cb_wait_front(cb_grad_out, per_core_block_size);
-        cb_wait_front(cb_input, per_core_block_size);
-
-        // Per-tile canonical pattern: acquire → compute → commit → wait → pack → release
-        // Multi-tile batching in dest is not possible here because gelu_derivative_tile
-        // uses additional dest registers as scratch during polynomial evaluation.
-        for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            tile_regs_acquire();
-
-            copy_tile(cb_grad_out, i, 0);    // dest[0] = grad_out
-            copy_tile(cb_input, i, 1);       // dest[1] = input
-            gelu_derivative_tile<false>(1);  // dest[1] = GELU'(input)
-            mul_binary_tile(0, 1, 0);        // dest[0] = grad_out * GELU'(input)
-
-            tile_regs_commit();
-            tile_regs_wait();
-
-            pack_tile(0, cb_grad_in);
-
-            tile_regs_release();
-        }
-
-        cb_pop_front(cb_grad_out, per_core_block_size);
-        cb_pop_front(cb_input, per_core_block_size);
-        cb_push_back(cb_grad_in, per_core_block_size);
+        compute_kernel_lib::eltwise_chain(
+            per_core_block_size,
+            compute_kernel_lib::CopyTile<
+                cb_grad_out,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::Streaming,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::CopyTileReconfig::None>{},
+            compute_kernel_lib::CopyTile<
+                cb_input,
+                compute_kernel_lib::Dst::D1,
+                compute_kernel_lib::Streaming,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::CopyTileReconfig::None>{},
+            compute_kernel_lib::GeluDerivative<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D1>{},
+            compute_kernel_lib::
+                MulBinary<compute_kernel_lib::Dst::D0, compute_kernel_lib::Dst::D1, compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::PackTile<
+                cb_grad_in,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::PackTileReconfig::None>{});
     }
 }
