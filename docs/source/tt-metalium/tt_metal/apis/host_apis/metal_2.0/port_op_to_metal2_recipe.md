@@ -19,6 +19,13 @@ The audit cleared the *features* and *prereqs* known at audit time. During the p
 
 In particular: if you find yourself constructing a clever workaround during the port — packing data into varargs to simulate a missing field, threading a buffer address through an RTA because the binding mechanism doesn't fit, hand-rolling a synchronization primitive — **stop**. Whatever you are about to write is almost certainly wrong. Surface the problem; do not paper over it.
 
+**Posture for the bulk-port effort.** This is one of many ports happening in parallel against actively-evolving docs. Read the following before you start; they shape how you should approach the work.
+
+- **Getting stuck and reporting it is success.** The team needs friction signals from each port to improve the recipe / patterns catalog / migration guide. A port that captures a real blocker and stops is more valuable than a port that powers through with workarounds. The deliverable includes `METAL2_PORT_REPORT.md` — that report is part of why you are doing this work, not an afterthought.
+- **Capture friction as you go, not at the end.** Open `METAL2_PORT_REPORT.md` at the start of the port. When something surprises you — a missing doc, an unexpected error, a near-miss — write a one-line note immediately, even rough. A friction note added in the moment is worth more than a polished paragraph reconstructed two hours later. Polish at the end; capture in the moment.
+- **Time budget on stuck points.** If you spend more than ~30 minutes on a single stuck point with no traction, **stop**. Capture what you tried, what failed, and your current hypothesis in `METAL2_PORT_REPORT.md` under "Friction" or "Open items," then move on or surface the question to the invoker. Burning the day powering through a stuck point is not the assignment.
+- **Do not 'fix' the legacy kernel.** If the legacy kernel does something you don't understand or that seems wrong, the legacy kernel is the source of truth for what the op does. Surface kernel-level questions as questions in the report; do not modify the kernel's logic to match what you think Metal 2.0 wants. (Mechanical edits to make the kernel build against Metal 2.0 APIs — named handles, generated headers, etc. — are a different category and are expected.)
+
 **Scope boundary — read carefully.** The porter's writeable surface is the **op's own directory** (the device-op factory, its kernels, its tests, the three `METAL2_*.md` artifacts). Files outside that directory — shared kernel-lib headers under `ttnn/cpp/ttnn/kernel_lib/`, LLKs under `tt_metal/`, framework primitives — are out of scope. The port respects this boundary; it does not propose changes to those files.
 
 **Crossing the boundary in kernel code.** Some kernel call sites in the ported kernels invoke functions whose source lives outside the op directory — kernel-lib helpers (`dataflow_kernel_lib::*`, `compute_kernel_lib::*`), LLKs (`reduce_init`, `pack_tile`, `cb_wait_front`, etc.). These callees take `uint32_t` CB ids today.
@@ -30,6 +37,14 @@ In particular: if you find yourself constructing a clever workaround during the 
 
 - **Cross-op kernel files** — some ops share dataflow kernels that live in another op's directory (e.g., `eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp` reused by many ops). The legacy inventory step flags these; modifying them is porter-touchable with caution per [Caution: Modifying a shared dataflow kernel](metal2_port_patterns.md#caution-modifying-a-shared-dataflow-kernel). These are *peer ops*, not framework callees.
 - **Framework primitives the porter uses directly** — `noc.async_read(...)`, `cb.wait_front(...)` on a `DataflowBuffer` the porter constructs locally from `dfb::name`, the `TensorAccessor(ta::name)` constructor, etc. These are *consumed by* the porter's kernel code (named handles flow in via the documented constructors); they are not handoffs to out-of-op code.
+
+**Scope guardrails — anti-temptations.** Beyond the directory boundary, the port has behavioral guardrails. Each is a known failure mode from prior porting attempts:
+
+- **Do not refactor unrelated code.** If something inside the op directory looks wrong but isn't part of the port, leave it. If you think it's worth a follow-up, note it in `METAL2_PORT_REPORT.md` under "Open items" — do not change it as part of this port.
+- **Port the kernel as-is.** Don't modernize, restructure, or "clean up" the kernel logic. The only kernel changes the port should make are the mechanical translation ones — named handles replacing magic indices, generated headers replacing positional CTAs, `#ifdef` scaffolding for conditional bindings, etc.
+- **Do not delete comments.** If a comment looks stale, you may lightly update it (e.g., swap a variable name to match new naming) or leave a note in the comment marking it possibly stale. If you're unsure, leave the comment in place and flag it in the report. **A previous porter deleted huge blocks of highly relevant comments while adding `#ifdef`s** — do not repeat that. When in doubt, preserve.
+- **Do not work around what feels like a Metal 2.0 bug.** If an API behaves unexpectedly, surface it in the report under "Handoff points." The Metal 2.0 surface is actively maintained; bug reports are the right tier of fix, not in-port workarounds.
+- **Do not fix unrelated bugs.** If you discover something broken elsewhere — in another op, in shared infrastructure, in the docs — note it in the report under "Open items for downstream" and keep moving. Fixing it is out of scope for this port.
 
 **Generated docs in the op directory.** This recipe directs you to write three files into the op's directory, alongside the program factory `.cpp` files:
 
@@ -55,6 +70,55 @@ All three are committed alongside the port.
 
 ---
 
+## Before you begin
+
+### Inputs the invoker should have supplied
+
+Before starting, confirm you have the following. If any is missing or unclear, ask the invoker before proceeding — the invoker can answer in seconds; you will burn substantial time guessing.
+
+- **Legacy op source path** — the directory containing the op's legacy program-factory `.cpp`/`.hpp` files and kernel sources.
+- **Tests directory** — the path under `tests/ttnn/unit_tests/operations/<op-family-slug>/` where the op's pytests live. Note that the directory uses the **op-family slug**, not always the literal op name (e.g., reduction's tests live at `tests/ttnn/unit_tests/operations/reduce/`, not `reduction/`). If the invoker didn't supply this, discover it with `find tests/ttnn -path '*operations*' -name 'test_*.py' | grep -i <op>`.
+- **`METAL2_PREPORT_AUDIT.md`** — present in the op directory with overall GREEN status (precondition above).
+- **(Optional) Reference port** — a recently-completed similar op the invoker recommends studying for shape. The invoker may not always have one; absence is not a blocker.
+
+### Workspace bootstrap
+
+If you have no existing tt-metal checkout, follow [`metal2_workspace_setup.md`](metal2_workspace_setup.md) for the clone / Python-env / build sequence. Key facts captured there that often trip up porters:
+
+- The right build flag for op work is `./build_metal.sh --build-tests`. `--build-metal-tests` alone is **insufficient** — it omits TTNN gtests entirely.
+- `PYTHONPATH` must be `$(pwd)` from inside your clone, not a path copied from someone else's instructions.
+- Iterative rebuilds during the port: `cmake --build build_Release --target ttnncpp unit_tests_ttnn -j 8`.
+
+### Use a subagent for builds and tests
+
+Builds and test runs produce large output that will pollute your working context — `./build_metal.sh` writes thousands of lines, gtest output on a full op test directory is even worse. **Delegate every build and every test run to a subagent.** The subagent runs the command, captures all output to a log file, and returns only a tight summary (exit code + extracted errors + log path). You do the reasoning; the subagent absorbs the noise.
+
+**Subagent prompt template:**
+
+````
+You are a build/test helper for a Metal 2.0 op porter. Run the command below, capture all output to <log_path>, and return ONLY a tight summary.
+
+Command: <command>
+Working directory: <cwd>
+Log path: <log_path>
+
+Return format:
+- Exit code: <code>
+- Status: SUCCESS / FAILURE / TIMEOUT
+- Key errors (if FAILURE): up to 10 lines of compiler or test errors, no boilerplate stack frames unless they show the cause.
+- Log path for deep dive: <log_path>
+
+Do NOT try to fix anything. Do NOT run other commands. Do NOT read unrelated files. Do NOT make recommendations about next steps.
+
+If the build or test hangs (>15 min with no log progress), kill it, return TIMEOUT, and report the last 20 lines logged.
+````
+
+**When to use:** every build, every gtest run, every pytest run. If you are iterating on a single failing test and have already seen the error once, reading the log file directly is fine — but the first invocation of any build or test command should always go through the helper to get a clean error extract.
+
+**Don't use the helper to make decisions.** The helper runs and reports. You read the report and decide what to do next. If you need to investigate a specific error in detail, read the log file the helper points you at.
+
+---
+
 ## Legacy inventory
 
 *This is an observation step. No decisions yet.*
@@ -67,6 +131,7 @@ All three are committed alongside the port.
 **Output**: write the **Legacy Inventory** section of `METAL2_PORT_PLAN.md` to the op's directory. Record:
 
 - **Factory shape**: which `ttnn::device_operation` concept the factory currently satisfies (`ProgramFactoryConcept` / `ProgramDescriptorFactoryConcept`). For each variant (if the device-operation is multi-variant), record separately.
+- **Custom `compute_program_hash`**: does the device-operation define a custom `compute_program_hash` (overriding the default reflection-based hash)? If yes, record file:line. **This matters at verification time:** custom hashes that don't fold `TensorSpec` into the key will trigger `UpdateTensorArgs` legality failures on fast-path cache hits. The fix when that happens is to revert the op to the default hash — see [Verification → Run tests](#run-tests) and the [migration guide's troubleshooting table](metal2_migration_guide.md#cryptic-error--likely-cause).
 - **Kernels**: every `KernelDescriptor` (one row per descriptor):
   - `kernel_source` (file path; flag any path outside the op's own directory — cross-op kernels are a Caution case).
   - `core_ranges` (verbatim).
@@ -195,30 +260,43 @@ If any of these appear in your draft, **stop and report**. The likely cause is a
 
 ### Build
 
-Build the ported op's TTNN target:
+Build the ported op's TTNN target and its test binary via the [build/test helper subagent](#use-a-subagent-for-builds-and-tests):
 
 ```bash
-cmake --build build_Release --target ttnncpp -j 8
+cmake --build build_Release --target ttnncpp unit_tests_ttnn -j 8
 ```
 
-Common build failures and their likely causes:
+(If the op's tests live in a sibling binary — `unit_tests_ttnn_udm`, `unit_tests_ttnn_tensor`, `unit_tests_ttnn_ccl`, etc. — substitute or add it to the target list.)
+
+The helper returns SUCCESS / FAILURE + key errors. On FAILURE, common causes:
 
 - `AllFactoriesValid` `static_assert` fires → a factory satisfies two concepts (likely a stale `cached_program_t` declaration alongside the new `create_program_spec`). Audit for missed deletions in the header.
 - Unresolved symbol for `override_runtime_arguments` → some code path still calls it. Should only happen for the framework adapter, which doesn't for `ProgramSpecFactoryConcept` factories. Re-audit.
 - Error referencing `metal2_artifacts.hpp` (or other framework header) not found → the framework dependency is not on this branch. Stop and report; the framework PR was a precondition for the audit (which should have failed pre-port).
 - `kernel_args_generated.h` mentions a name that doesn't exist → host added a named CTA / RTA without the kernel referencing it (or vice versa). Reconcile.
+- Linker error `undefined reference to 'dfb::...'` inside a kernel TU → the kernel `#include`s the wrong generated header. `dfb::*` lives in `kernel_bindings_generated.h`, `args::*` in `kernel_args_generated.h`. The only `#include` a ported kernel should add is `experimental/kernel_args.h`; the framework injects both generated headers automatically.
 
 ### Run tests
 
-Find and run the op's correctness tests. The audit report names them; if not, the tests typically live under `tests/ttnn/unit_tests/operations/<op_family>/`. Run with `pytest`:
+Run the op's correctness tests via the helper. Use the **tests directory the invoker supplied** in [Before you begin](#before-you-begin). Two layers:
 
 ```bash
-pytest tests/ttnn/unit_tests/operations/<op_family>/ -x -v
+# C++ gtests — fast, fails fast on a broken port
+./build/test/ttnn/unit_tests_ttnn --gtest_filter='*<Op>*'
+
+# Python pytests — broader coverage (dtype/layout sweeps, program-cache behavior)
+pytest <invoker-supplied-tests-dir> -x -v
 ```
+
+Recommended order: gtests first (faster, exercises the C++ op directly), then pytests once gtests are green. If the op has a UDM/specialized variant, its gtests live in a sibling binary (`unit_tests_ttnn_udm`, etc.) — the recipe's worked example in [`metal2_workspace_setup.md`](metal2_workspace_setup.md) shows the pattern.
 
 All tests passing pre-conversion should continue to pass post-conversion. If a previously-passing test now fails, **stop and report** — likely cause is a structural error in the spec that compiled but failed at `MakeProgramFromSpec` validation, or an incorrect tensor-arg / runtime-arg layout.
 
 If compilation passes but the test fails with a `TT_FATAL` from `program_spec.cpp` or `program_run_params.cpp`, the [patterns catalog](metal2_port_patterns.md) has entries for the most common failure modes (DFB binding multiplicity mismatches, missing kernel run-params entries, etc.). Cross-reference the error message against the catalog.
+
+For symptom-organized lookup (errors whose fix isn't obvious from the message text), see the [migration guide's troubleshooting table](metal2_migration_guide.md#cryptic-error--likely-cause).
+
+**Custom `compute_program_hash` failure mode.** If the [legacy inventory](#legacy-inventory) flagged a custom `compute_program_hash`, watch specifically for `UpdateTensorArgs` `TensorSpec` legality failures on the *second and later* test invocations (when the program cache is hot). This is the signature of a custom hash that doesn't fold `TensorSpec` into the key, causing a cache hit on a `ProgramSpec` built for different inputs. **The fix is to revert the op to the default TTNN hash** (remove the custom `compute_program_hash` override). Do not try to patch the custom hash to include `TensorSpec` — that path leads to subtle bugs. Note the revert in `METAL2_PORT_REPORT.md` under "Open items" so the op author can revisit later if they want a corrected custom hash.
 
 ### Anti-pattern self-audit
 
@@ -239,7 +317,9 @@ If any checklist item fails, return to planning / construction to fix. Do not pa
 
 ## Capture the port report
 
-After the port reaches its stopping point — whether that's "all factories ported and tests pass" or "stuck on issue X and cannot proceed" — write `METAL2_PORT_REPORT.md` to the op directory, alongside `METAL2_PREPORT_AUDIT.md` and `METAL2_PORT_PLAN.md`. The report captures what happened during the port: things that need handoff to other teams, things the docs got right, things the docs missed, and things the next porter or doc maintainer should know.
+**Open `METAL2_PORT_REPORT.md` at the start of the port and update as you go** — do not write it retrospectively. Add a one-line note the moment something surprises you, even rough. Polish entries at the end; capture in the moment. A friction note written when it happened is worth more than a paragraph reconstructed two hours later.
+
+The final report is committed when the port reaches its stopping point — whether that's "all factories ported and tests pass" or "stuck on issue X and cannot proceed" — alongside `METAL2_PREPORT_AUDIT.md` and `METAL2_PORT_PLAN.md` in the op directory. The report captures what happened during the port: things that need handoff to other teams, things the docs got right, things the docs missed, and things the next porter or doc maintainer should know.
 
 The report is read by the kernel-lib / API owners (for handoff points), by the doc maintainers (for friction-driven evolution of the audit / recipe / catalog / migration guide), and by future porters of related ops.
 
@@ -306,6 +386,7 @@ Written during the inventory and planning steps; committed alongside the port fo
 ### Factory shape
 - Concept: <ProgramFactoryConcept | ProgramDescriptorFactoryConcept>
 - Variants: <list, or "single">
+- Custom `compute_program_hash`: <yes — file:line | no, uses default reflection-based hash>
 
 > **Multi-variant ops** (e.g., Welford W/H/HW; Reduce W/H/HW): repeat the Kernels / CBs / Semaphores / Tensor accessors / Work split sub-sections **per variant**. Nest the per-variant blocks under a `### Variant: <name>` heading and downshift the per-resource headings to `####`. Cross-op kernels and Flags stay top-level — they typically apply across variants. The single-variant skeleton below is the inner shape of each variant block.
 

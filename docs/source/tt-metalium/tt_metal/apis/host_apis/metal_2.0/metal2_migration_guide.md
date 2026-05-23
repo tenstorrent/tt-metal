@@ -35,6 +35,7 @@ Things to remember:
 7. [TTNN Framework Integration](#ttnn-framework-integration)
 8. [Complete Migration Examples](#complete-migration-examples)
 9. [Troubleshooting](#troubleshooting)
+   - [Cryptic error → likely cause](#cryptic-error--likely-cause)
 
 ---
 
@@ -1159,3 +1160,16 @@ Common pitfalls when migrating from `ProgramDescriptor`:
 - **Compile-time arguments are named only.** Positional CTAs are not part of the Metal 2.0 API; use named CTAs throughout.
 - **Runtime varargs are intended for dynamic-count tails.** `num_runtime_varargs` (and `num_common_runtime_varargs`) is the right fit for kernels that consume a variable number of arguments in a loop — e.g., an N-dimensional shape gated on a CTA-known `rank`. For kernels with a fixed set of individually-known arguments, named RTAs are the recommended form, even when porting from a positional legacy interface.
 - **`ProgramRunParams` requires that every named RTA must be set on every node.** Missing an entry for a node where the kernel runs causes `SetProgramRunParameters` to error. The same applies to varargs. (Note: There is also a power-user `ProgramRunParamsView` API that provides a stateful view into the dispatch buffers; it is not yet supported.)
+
+### Cryptic error → likely cause
+
+When a build error or spec-validator failure doesn't make the fix obvious, search this table for the message text before debugging from scratch. Entries here are cases where the symptom and the fix sit far apart — most other errors are best diagnosed by reading the message directly.
+
+| Symptom (substring to grep for in your output) | Likely cause | Fix |
+|---|---|---|
+| Linker: `undefined reference to 'dfb::...'` (e.g. `dfb::cb_scaled`) inside a kernel TU | Kernel `#include`s the wrong generated header. `dfb::*` lives in `kernel_bindings_generated.h`; `args::*` lives in `kernel_args_generated.h`. | Remove any explicit include of either generated header. The only include a ported kernel adds is `experimental/kernel_args.h` — the framework injects both. |
+| Spec-validator: DataflowBuffer with 0 producers / 0 consumers | Host-side topology mismatch — the DFB was declared but only one end of its pipeline binds it. The other end is bound to a different DFB, missing entirely, or doesn't appear in any kernel's `kernel_bindings`. | Fix on the host: add the missing binding. **Do not** modify the kernel's `wait_front` / `pop_front` calls to mask the imbalance — per-execution DFB state is reinitialized, so a tile produced and never consumed is harmless. |
+| Spec-validator: TensorParameter with 0 TensorBindings | TensorParameter declared but no kernel binds it. | Bind the tensor on the kernel(s) that use it, or remove the parameter. |
+| Spec-validator: `unpack_to_dest_mode` required (or LLK-side dest-accumulator dtype assert) | Compute kernel sets `fp32_dest_acc_en = true` and consumes a `DataType::Float32` DFB, but no `UnpackToDestMode` was set on that consumer binding. | On the consuming `DataflowBufferSpec::kernel_bindings` entry, set `unpack_to_dest_mode = UnpackToDestMode::UnpackToDestFp32`. |
+| Spec-validator: aliased-DFB rule failure (`dfb_node_set` / strict-clique / borrowed-memory consistency) | The set of nodes declared in `aliased_dfbs` violates one of the three legality rules. | The error names which rule fails. Most common case: a node was added on one DFB's alias list but missed on the other(s) — the alias group must be a strict clique. |
+| `UpdateTensorArgs` `TensorSpec` legality check fires — typically on a fast-path program-cache hit | The op defines a custom `compute_program_hash` that doesn't fold `TensorSpec` into the hash key. The program cache reports a hit, but the cached `ProgramSpec` was built for a different `TensorSpec`. Metal 2.0's `UpdateTensorArgs` legality check (intentionally kept on) catches the resulting mismatch. | **Do not** attempt to update the custom hash to include `TensorSpec`. Revert the op to use the default TTNN hash (reflection-based, naturally folds in `TensorSpec`). Note the revert in `METAL2_PORT_REPORT.md` under "Open items" so the op author can decide whether to reintroduce a corrected custom hash later. The unnecessary cache misses incurred by reverting are the right trade-off vs. silently-incorrect cache hits. |
