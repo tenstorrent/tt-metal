@@ -16,15 +16,11 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
-#include <tt-metalium/experimental/tensor/topology/distributed_tensor_configs.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 
+#include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/tensor/tensor.hpp"
-
-namespace ttnn::distributed {
-class TensorToMesh;
-}  // namespace ttnn::distributed
 
 namespace tt::tt_metal::distributed {
 class MeshDevice;
@@ -35,7 +31,8 @@ namespace tt::tt_metal {
 // Persistent host-to-device streaming service backed by a fixed device tensor.
 //
 // At construction the service:
-//   * builds a TensorToMesh mapper from `Config::mapper_config`,
+//   * takes ownership of the caller-provided `Config::mapper` (or synthesises a
+//     replicate-on-every-mesh-dim default if none is supplied),
 //   * runs the mapper once on a zero-filled host tensor with `Config::global_spec`
 //     to obtain both the per-shard TensorSpec and the TensorTopology (which mesh
 //     coords participate and how the placement looks),
@@ -75,10 +72,18 @@ public:
         // only resizes the shape).
         TensorSpec global_spec;
 
-        // How the global tensor is split / replicated across the mesh device.
-        // The per-shard TensorSpec is derived from `global_spec` + this config
-        // by running the mapper once at construction time.
-        distributed::MeshMapperConfig mapper_config;
+        // Pre-built TensorToMesh describing how the global tensor is split /
+        // replicated across the mesh device. Ownership is transferred into the
+        // service at construction time; the per-shard TensorSpec is derived
+        // from `global_spec` + this mapper by running it once on a dummy host
+        // tensor.
+        //
+        // Optional: if left null, defaults to replicate-on-every-mesh-dim,
+        // which is the identity on a 1x1 mesh and "full tensor on every device"
+        // on a larger mesh. Sharded distributions must supply a mapper
+        // explicitly. Construct via
+        // `ttnn::distributed::create_mesh_mapper(mesh_device, mapper_config)`.
+        std::unique_ptr<ttnn::distributed::TensorToMesh> mapper;
 
         // Logical core on every participating mesh coord that hosts the receiver
         // kernel and the device side of the H2D socket. Same coord on every
@@ -109,7 +114,7 @@ public:
     // Distributed host tensor path. `host_tensor` must:
     //   * be a host tensor (storage_type == HOST),
     //   * have `tensor_spec() == get_per_shard_spec()` (already distributed by a
-    //     mapper that matches `Config::mapper_config`),
+    //     mapper equivalent to the one passed via `Config::mapper`),
     //   * have a populated shard at every mesh coord this service covers.
     //
     // Streams the per-coord shards through the sockets verbatim. Returns once

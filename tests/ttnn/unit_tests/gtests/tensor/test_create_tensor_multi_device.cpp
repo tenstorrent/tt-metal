@@ -599,7 +599,7 @@ TEST_F(MultiDeviceTensorCreationTest, H2DStreamService_Replicated_SingleChunk_64
 
     tt::tt_metal::H2DStreamService::Config cfg{
         .global_spec = global_spec,
-        .mapper_config = MeshMapperConfig{.placements = replicate_all},
+        .mapper = create_mesh_mapper(*this->mesh_device_, MeshMapperConfig{.placements = replicate_all}),
         .recv_core = CoreCoord(0, 0),
         .socket_buffer_type = BufferType::L1,
         .fifo_size_bytes = bytes_per_shard,
@@ -607,7 +607,7 @@ TEST_F(MultiDeviceTensorCreationTest, H2DStreamService_Replicated_SingleChunk_64
         .socket_mode = H2DMode::DEVICE_PULL,
     };
 
-    tt::tt_metal::H2DStreamService service(this->mesh_device_, cfg);
+    tt::tt_metal::H2DStreamService service(this->mesh_device_, std::move(cfg));
 
     // For fully-replicated mapping the per-shard spec equals the global spec — assert here
     // so the spec-equality check inside forward_to_tensor(host_tensor) can't possibly fire
@@ -617,8 +617,9 @@ TEST_F(MultiDeviceTensorCreationTest, H2DStreamService_Replicated_SingleChunk_64
     EXPECT_EQ(service.get_sockets().size(), this->mesh_device_->num_devices());
 
     // External mapper instance used only to produce well-formed distributed host tensors.
-    // Same config as the service's internal mapper -> same per-shard spec & topology.
-    auto external_mapper = create_mesh_mapper(*this->mesh_device_, cfg.mapper_config);
+    // Same placements as the one moved into the service -> same per-shard spec & topology.
+    auto external_mapper =
+        create_mesh_mapper(*this->mesh_device_, MeshMapperConfig{.placements = replicate_all});
 
     auto build_host_tensor = [&](uint32_t seed) {
         std::vector<uint32_t> data(global_shape.volume());
@@ -663,7 +664,9 @@ TEST_F(MultiDeviceTensorCreationTest, H2DStreamService_Replicated_SingleChunk_64
     auto host_b = build_host_tensor(/*seed=*/0x12345678u);
 
     service.forward_to_tensor(host_b);
+    std::cout << "Issue Barrier B" << std::endl;
     service.barrier();
+    std::cout << "Barrier B issued" << std::endl;
 
     {
         std::vector<uint32_t> expected_b(global_shape.volume());
@@ -674,10 +677,107 @@ TEST_F(MultiDeviceTensorCreationTest, H2DStreamService_Replicated_SingleChunk_64
             EXPECT_EQ(results[i], expected_b) << "device " << i << " contents after write B";
         }
     }
-
+    std::cout << "Readback B completed" << std::endl;
     // `service` going out of scope exercises the dtor:
     //   barrier() -> signal_termination() -> Finish(mesh CQ).
     // If anything in that sequence deadlocks the test hangs here.
+}
+
+// Mirror of the test above, but driving the service via the raw-bytes path
+// `forward_to_tensor(ttsl::Span<const std::byte>)` instead of a pre-distributed
+// host tensor. The service runs its internal mapper on the borrowed bytes,
+// distributes, and streams; this test validates that whole chain end-to-end.
+//
+// What this validates that the host-tensor test doesn't:
+//   1. make_borrowed_host_tensor wraps the caller's bytes without breaking the
+//      mapper's zero-copy fast path (for replicated ROW_MAJOR data we expect
+//      no host-side normalization copy, only the per-FIFO socket writes).
+//   2. The internal mapper produces a distributed tensor whose per-shard spec
+//      matches `device_tensor_.tensor_spec()` (i.e. the bytes-path spec
+//      assertion never fires).
+//   3. The persistent kernel still loops across multiple bytes-path transfers
+//      (write B is the load-bearing reuse check, same as in the Tensor test).
+TEST_F(MultiDeviceTensorCreationTest, H2DStreamService_Replicated_SingleChunk_64K_Reuse_BytesPath) {
+    const ttnn::Shape global_shape({1, 1, 1, 65536});
+    const auto tensor_layout = TensorLayout(
+        DataType::UINT32,
+        PageConfig(Layout::ROW_MAJOR),
+        MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
+    const auto global_spec = TensorSpec(global_shape, tensor_layout);
+    const auto bytes_per_shard = static_cast<uint32_t>(global_spec.compute_packed_buffer_size_bytes());
+    ASSERT_EQ(bytes_per_shard, 65536u * sizeof(uint32_t));
+
+    ttsl::SmallVector<MeshMapperConfig::Placement> replicate_all(
+        this->mesh_device_->shape().dims(), MeshMapperConfig::Replicate{});
+
+    tt::tt_metal::H2DStreamService::Config cfg{
+        .global_spec = global_spec,
+        .mapper = create_mesh_mapper(*this->mesh_device_, MeshMapperConfig{.placements = replicate_all}),
+        .recv_core = CoreCoord(0, 0),
+        .socket_buffer_type = BufferType::L1,
+        .fifo_size_bytes = bytes_per_shard,
+        .scratch_cb_size_bytes = bytes_per_shard,
+        .socket_mode = H2DMode::DEVICE_PULL,
+    };
+
+    tt::tt_metal::H2DStreamService service(this->mesh_device_, std::move(cfg));
+
+    ASSERT_EQ(service.get_per_shard_spec(), global_spec);
+    ASSERT_NE(service.get_backing_tensor().buffer(), nullptr);
+    EXPECT_EQ(service.get_sockets().size(), this->mesh_device_->num_devices());
+
+    auto readback_per_device = [&]() {
+        auto subs = get_device_tensors(service.get_backing_tensor());
+        EXPECT_EQ(subs.size(), this->mesh_device_->num_devices());
+        std::vector<std::vector<uint32_t>> out;
+        out.reserve(subs.size());
+        for (auto& sub : subs) {
+            out.push_back(sub.to_vector<uint32_t>());
+        }
+        return out;
+    };
+
+    // The caller owns the source bytes; reinterpret as `Span<const std::byte>`.
+    // The service's borrowed wrap doesn't outlive forward_to_tensor, and
+    // H2DSocket::write is synchronous, so this storage lifetime is sufficient.
+    auto as_byte_span = [](const std::vector<uint32_t>& v) {
+        return ttsl::Span<const std::byte>(reinterpret_cast<const std::byte*>(v.data()), v.size() * sizeof(uint32_t));
+    };
+
+    // --- Write A ---------------------------------------------------------------------
+    std::vector<uint32_t> data_a(global_shape.volume());
+    std::iota(data_a.begin(), data_a.end(), 0u);
+
+    service.forward_to_tensor(as_byte_span(data_a));
+    std::cout << "Issue Barrier A (bytes path)" << std::endl;
+    service.barrier();
+    std::cout << "Barrier A issued (bytes path)" << std::endl;
+
+    {
+        auto results = readback_per_device();
+        for (size_t i = 0; i < results.size(); ++i) {
+            ASSERT_EQ(results[i].size(), data_a.size()) << "device " << i << " size after bytes-path write A";
+            EXPECT_EQ(results[i], data_a) << "device " << i << " contents after bytes-path write A";
+        }
+    }
+
+    // --- Write B (reuse check) -------------------------------------------------------
+    std::vector<uint32_t> data_b(global_shape.volume());
+    std::iota(data_b.begin(), data_b.end(), 0x12345678u);
+
+    service.forward_to_tensor(as_byte_span(data_b));
+    std::cout << "Issue Barrier B (bytes path)" << std::endl;
+    service.barrier();
+    std::cout << "Barrier B issued (bytes path)" << std::endl;
+
+    {
+        auto results = readback_per_device();
+        for (size_t i = 0; i < results.size(); ++i) {
+            ASSERT_EQ(results[i].size(), data_b.size()) << "device " << i << " size after bytes-path write B";
+            EXPECT_EQ(results[i], data_b) << "device " << i << " contents after bytes-path write B";
+        }
+    }
+    std::cout << "Readback B completed (bytes path)" << std::endl;
 }
 
 }  // namespace
