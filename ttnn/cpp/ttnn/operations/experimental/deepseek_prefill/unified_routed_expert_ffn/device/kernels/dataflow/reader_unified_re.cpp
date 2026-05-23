@@ -378,8 +378,45 @@ void kernel_main() {
         for (uint32_t kb = 0; kb < num_blocks_d; ++kb) {
             const bool is_act_sender = (my_nt_d == kb);
 
-            cb_reserve_back(cb_in0_down_full, d_in0_block_num_tiles);
+            // Pre-stage in1_down: receivers ack ready early, sender issues
+            // DRAM reads asynchronously so the read traffic overlaps with the
+            // activated L1 mcast that follows. Without this prefetch, in1_down
+            // sender's DRAM read (~30us) and activated mcast (~15us) ran
+            // back-to-back per K-block (11 K-blocks * 30us = 330us serialized
+            // DRAM time). With async reads here, the in1_down read overlaps
+            // the activated mcast NoC writes.
+            cb_reserve_back(cb_in1_down, d_in1_block_num_tiles);
+            uint32_t in1_block_start = 0;
+            if (is_in1_sender) {
+                noc_semaphore_wait(in1_ready_local, in1_num_receivers);
+                *in1_ready_local = 0;
+                uint32_t l1_w = get_write_ptr(cb_in1_down);
+                in1_block_start = l1_w;
+                for (uint32_t k = 0; k < in0_block_w_d; ++k) {
+                    for (uint32_t n = 0; n < per_core_N_d; ++n) {
+                        const uint32_t row = kb * in0_block_w_d + k;
+                        const uint32_t col = my_nt_d * per_core_N_d + n;
+                        if (row < K_down_tiles && col < N_down_tiles_full) {
+                            const uint32_t tile_idx = row * N_down_tiles_full + col;
+                            noc_async_read_tile(tile_idx, down_acc, l1_w);
+                        } else {
+                            volatile tt_l1_ptr uint64_t* p = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w);
+                            for (uint32_t i = 0; i < down_tile_bytes / 8; ++i) {
+                                p[i] = 0;
+                            }
+                        }
+                        l1_w += down_tile_bytes;
+                    }
+                }
+                // DON'T barrier yet — reads continue while we do activated mcast.
+            } else {
+                *in1_valid_local = 0;
+                noc_semaphore_inc(in1_sender_ready_noc, 1);
+                // DON'T wait_valid yet — wait after activated mcast.
+            }
 
+            // Activated L1 mcast (runs concurrently with in1_down DRAM read).
+            cb_reserve_back(cb_in0_down_full, d_in0_block_num_tiles);
             if (is_act_sender) {
                 cb_wait_front(cb_activated, d_in0_block_num_tiles);
                 noc_semaphore_wait(act_ready_local, GRID_X_NOC - 1);
@@ -408,49 +445,22 @@ void kernel_main() {
                 noc_semaphore_inc(sender_ready_noc, 1);
                 noc_semaphore_wait(act_valid_local, ACT_VALID);
             }
-
             cb_push_back(cb_in0_down_full, d_in0_block_num_tiles);
 
-            // in1_down via multicast within N-col group. Note: per_core_N_d is
-            // larger than per_core_N_gu (28 vs 8), so the block is much bigger
-            // — this phase benefits most from mcast.
-            cb_reserve_back(cb_in1_down, d_in1_block_num_tiles);
+            // Finish in1_down: sender barriers on the DRAM reads (which have
+            // been in flight during the activated mcast), then mcasts.
             if (is_in1_sender) {
-                noc_semaphore_wait(in1_ready_local, in1_num_receivers);
-                *in1_ready_local = 0;
-
-                uint32_t l1_w = get_write_ptr(cb_in1_down);
-                const uint32_t block_start = l1_w;
-                for (uint32_t k = 0; k < in0_block_w_d; ++k) {
-                    for (uint32_t n = 0; n < per_core_N_d; ++n) {
-                        const uint32_t row = kb * in0_block_w_d + k;
-                        const uint32_t col = my_nt_d * per_core_N_d + n;
-                        if (row < K_down_tiles && col < N_down_tiles_full) {
-                            const uint32_t tile_idx = row * N_down_tiles_full + col;
-                            noc_async_read_tile(tile_idx, down_acc, l1_w);
-                        } else {
-                            volatile tt_l1_ptr uint64_t* p = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w);
-                            for (uint32_t i = 0; i < down_tile_bytes / 8; ++i) {
-                                p[i] = 0;
-                            }
-                        }
-                        l1_w += down_tile_bytes;
-                    }
-                }
                 noc_async_read_barrier();
-
                 const uint64_t mcast_data_noc = get_noc_multicast_addr(
-                    in1_mcast_nx_start, in1_mcast_ny_start, in1_mcast_nx_end, in1_mcast_ny_end, block_start);
+                    in1_mcast_nx_start, in1_mcast_ny_start, in1_mcast_nx_end, in1_mcast_ny_end, in1_block_start);
                 const uint32_t block_bytes = d_in1_block_num_tiles * down_tile_bytes;
                 noc_async_write_multicast(
-                    block_start, mcast_data_noc, block_bytes, in1_num_receivers, /*linked=*/false);
+                    in1_block_start, mcast_data_noc, block_bytes, in1_num_receivers, /*linked=*/false);
                 noc_async_writes_flushed();
 
                 *in1_valid_local = IN1_VALID;
                 noc_semaphore_set_multicast(in1_valid_sem_addr, in1_mcast_valid_noc, in1_num_receivers);
             } else {
-                *in1_valid_local = 0;
-                noc_semaphore_inc(in1_sender_ready_noc, 1);
                 noc_semaphore_wait(in1_valid_local, IN1_VALID);
             }
             cb_push_back(cb_in1_down, d_in1_block_num_tiles);
