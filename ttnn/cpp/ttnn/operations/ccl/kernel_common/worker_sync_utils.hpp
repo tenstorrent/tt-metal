@@ -5,11 +5,7 @@
 #pragma once
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
-#include "api/dataflow/endpoints.h"
-#include "api/core_local_mem.h"
 #include "api/debug/assert.h"
 #include "api/debug/dprint.h"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
@@ -210,10 +206,6 @@ struct MatmulOpReceiver {
     std::array<uint32_t, num_directions> ring_idxs = {};
     std::array<uint32_t, num_directions> start_page_idxs = {};
     std::array<bool, num_directions> is_clockwise_dirs = {};
-    std::array<volatile tt_l1_ptr uint32_t*, num_directions> signal_op_semaphore_addr_ptrs = {};
-    // Mirrors signal_op_semaphore_addr_ptrs as semaphore ids for the Device 2.0
-    // Semaphore<> API. Both are populated; addr_ptrs preserves the public field
-    // interface for legacy consumers.
     std::array<uint32_t, num_directions> signal_op_semaphore_ids = {};
     uint32_t curr_dir = 0;
     uint32_t curr_transfer_idx = 0;
@@ -241,10 +233,6 @@ struct MatmulOpReceiver {
         if (this->wait_for_op_signal) {
             this->signal_op_semaphore_ids[0] = get_arg_val<uint32_t>(rt_args_idx++);
             this->signal_op_semaphore_ids[1] = get_arg_val<uint32_t>(rt_args_idx++);
-            this->signal_op_semaphore_addr_ptrs[0] =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(this->signal_op_semaphore_ids[0]));
-            this->signal_op_semaphore_addr_ptrs[1] =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(this->signal_op_semaphore_ids[1]));
         }
 
         this->num_tensor_slices = this->num_transfers * this->num_directions;
@@ -342,9 +330,6 @@ struct MatmulOpReceiver {
 };
 
 struct ReduceScatterOpReceiver {
-    volatile tt_l1_ptr uint32_t* signal_op_semaphore_addr_ptr;
-    // Mirrors signal_op_semaphore_addr_ptr as a semaphore id for the
-    // Device 2.0 Semaphore<> API; both are populated.
     uint32_t signal_op_semaphore_id = 0;
 
     bool initialized = false;
@@ -354,8 +339,6 @@ struct ReduceScatterOpReceiver {
     ReduceScatterOpReceiver(uint32_t& rt_args_idx) {
         // Runtime args
         this->signal_op_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
-        this->signal_op_semaphore_addr_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(this->signal_op_semaphore_id));
 
         this->initialized = true;
     }

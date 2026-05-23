@@ -33,7 +33,10 @@ inline void zeroPad(uint32_t cb_output_id) {
     const uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
     uint32_t cb_write_addr = get_write_ptr(cb_output_id);
 
-    // Legacy primitive retained (#45003 item 4): MEM_ZEROS_BASE self-read does not map cleanly to a typed Noc trait.
+    // Legacy primitive retained (#45003 item 4): MEM_ZEROS_BASE self-read has no typed Noc trait
+    // (the local x/y are implicit in get_noc_addr(addr)). Issued on noc_index — same NoC as the
+    // Noc instance used elsewhere in this kernel — so the caller's async_read_barrier() flushes
+    // both these reads and the typed reads.
     for (uint32_t i = 0; i < num_full_reads; ++i) {
         noc_async_read(zeros_noc_addr, cb_write_addr, MEM_ZEROS_SIZE);
         cb_write_addr += MEM_ZEROS_SIZE;

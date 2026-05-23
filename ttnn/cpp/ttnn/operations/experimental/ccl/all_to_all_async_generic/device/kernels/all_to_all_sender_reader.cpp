@@ -48,8 +48,9 @@ void read_data(
             input_page_size / 2,
             {.page_id = tile_id, .offset_bytes = (device_id % 2) * input_page_size / 2},
             {});
-        // Legacy primitive retained (#45003 item 4): MEM_ZEROS_BASE self-read does not map cleanly to a typed Noc
-        // trait.
+        // Legacy primitive retained (#45003 item 4): MEM_ZEROS_BASE self-read has no typed Noc trait
+        // (the local x/y are implicit in get_noc_addr(addr)). Issued on noc_index — same NoC as
+        // noc_obj — so the surrounding noc_obj.async_read_barrier() flushes both transactions.
         uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
         noc_async_read(zeros_noc_addr, l1_write_addr + input_page_size / 2, input_page_size / 2);
         l1_write_addr += input_page_size;
