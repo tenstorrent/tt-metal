@@ -26,6 +26,15 @@ def test_phi1_accuracy_uses_bf16_attention_tensors_without_broad_hifi4_override(
     assert opt.op_fidelity_settings[OpGroup.SDPA_PREFILL] == MathFidelitySetting.HIFI4
 
 
+def test_phi1_performance_uses_bfp8_activations_and_fp16_prefill_qkv():
+    opt = ModelOptimizations.performance("phi-1")
+
+    assert opt.tensor_dtype_settings[TensorGroup.ACTIVATION] == PrecisionSetting.BFP8
+    assert opt.tensor_dtype_settings[TensorGroup.FF1_FF3] == PrecisionSetting.BFP4
+    assert opt.op_fidelity_settings[OpGroup.LI_QKV_PREFILL] == MathFidelitySetting.HIFI2_FP16
+    assert opt.op_fidelity_settings[OpGroup.LI_QKV_DECODE] == MathFidelitySetting.HIFI2
+
+
 def test_phi1_uses_host_sampling_only_in_accuracy_mode():
     assert should_disable_device_sampling("phi-1", "accuracy", num_devices=1)
     assert should_disable_device_sampling("phi-1", "accuracy", num_devices=2)
