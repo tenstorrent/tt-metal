@@ -10,7 +10,7 @@ Reference: ``models.experimental.kokoro.reference.modules.TextEncoder``.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Optional, Sequence
 
 import torch
 import torch.nn as nn
@@ -191,13 +191,19 @@ class TTTextEncoder:
         self,
         input_ids: torch.LongTensor,
         input_lengths: torch.LongTensor,
-        text_mask: torch.Tensor,
+        text_mask: Optional[torch.Tensor] = None,
+        *,
+        mask_keep_float: Optional[torch.Tensor] = None,
     ) -> ttnn.Tensor:
         """
         Args:
             input_ids: ``[B, T]`` token indices (CPU or CUDA tensor; copied to device).
             input_lengths: ``[B]`` valid length per row (CPU long, as in reference).
             text_mask: ``[B, T]`` bool, ``True`` where positions are masked out.
+            mask_keep_float: optional pre-computed ``[B, T, 1]`` float32 keep mask
+                (``1.0`` where real, ``0.0`` where padded). When provided, the mask is
+                uploaded directly with no torch ops inside forward. When ``None``,
+                computed from ``text_mask`` for backward compatibility.
 
         Returns:
             TTNN tensor ``[B, C, T]`` (channels = ``2 * lstm_hidden``), layout TILE.
@@ -215,7 +221,25 @@ class TTTextEncoder:
         x = ttnn.embedding(tt_ids, self.params.embedding_weight, layout=ttnn.TILE_LAYOUT)
         ttnn.deallocate(tt_ids)
 
-        mask_keep = _mask_keep_nlc(text_mask, device=dev)
+        if mask_keep_float is not None:
+            mask_keep = ttnn.from_torch(
+                mask_keep_float,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=dev,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        elif text_mask is not None:
+            mask_keep = _mask_keep_nlc(text_mask, device=dev)
+        else:
+            # Full-length sequence (no padding): keep_mask is all-ones — create on device directly.
+            mask_keep = ttnn.ones(
+                [B, T, 1],
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=dev,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         x = ttnn.multiply(x, mask_keep, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         for blk in self._cnn_blocks:
