@@ -126,23 +126,6 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingSingleCoreProgramFactory::c
         }}},
     });
 
-    const std::vector<uint32_t> writer_kernel_args = {
-        dst_buffer->address(),
-        output_w,
-        padded_W_diff_blocks,
-        output_z,
-        padded_Z_diff_blocks,
-        output_y,
-        padded_Y_diff_blocks,
-        num_leftover_Y,
-        output_x,
-        padded_stick_size,
-        num_blocks_w_input,
-        num_blocks_w_output,
-        num_blocks_w_diff,
-        block_row_size,
-        block_row_leftover_size};
-
     std::vector<uint32_t> reader_compile_time_args;
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
@@ -201,9 +184,24 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingSingleCoreProgramFactory::c
     };
 
     CoreCoord core_0 = corerange_to_cores(core).at(0);
-    reader_desc.runtime_args.emplace_back(
-        core_0, std::vector<uint32_t>{src0_buffer->address(), uint32_t(num_tiles), 0});
-    writer_desc.runtime_args.emplace_back(core_0, writer_kernel_args);
+    reader_desc.emplace_runtime_args(core_0, {src0_buffer, uint32_t(num_tiles), 0u});
+    writer_desc.emplace_runtime_args(
+        core_0,
+        {dst_buffer,
+         output_w,
+         padded_W_diff_blocks,
+         output_z,
+         padded_Z_diff_blocks,
+         output_y,
+         padded_Y_diff_blocks,
+         num_leftover_Y,
+         output_x,
+         padded_stick_size,
+         num_blocks_w_input,
+         num_blocks_w_output,
+         num_blocks_w_diff,
+         block_row_size,
+         block_row_leftover_size});
 
     desc.kernels.push_back(std::move(reader_desc));
     desc.kernels.push_back(std::move(writer_desc));

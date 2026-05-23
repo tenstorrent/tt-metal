@@ -289,20 +289,13 @@ tt::tt_metal::ProgramDescriptor FillPadProgramFactory::create_descriptor(
         clip_to_phase_block(T_right, T_bottom, start_bottom, num_bottom);
         clip_to_phase_block(T_right + T_bottom, T_corner, start_corner, num_corner);
 
-        std::vector<uint32_t> rt_args = {
-            static_cast<uint32_t>(tens_buffer->address()),
-            start_right,
-            num_right,
-            start_bottom,
-            num_bottom,
-            start_corner,
-            num_corner,
-        };
-        reader_desc.runtime_args.emplace_back(core, rt_args);
-        writer_desc.runtime_args.emplace_back(core, std::move(rt_args));
+        reader_desc.emplace_runtime_args(
+            core, {tens_buffer, start_right, num_right, start_bottom, num_bottom, start_corner, num_corner});
+        writer_desc.emplace_runtime_args(
+            core, {tens_buffer, start_right, num_right, start_bottom, num_bottom, start_corner, num_corner});
 
         // Compute RT: per-phase counts; starts are not needed (CBs are FIFO).
-        compute_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{num_right, num_bottom, num_corner});
+        compute_desc.emplace_runtime_args(core, {num_right, num_bottom, num_corner});
 
         work_start = work_end;
     }
@@ -622,12 +615,11 @@ tt::tt_metal::ProgramDescriptor FillPadL1ShardedProgramFactory::create_descripto
     // ---- Per-core runtime args ----
     // RT layout: [0] buf_addr, [1] shard_H_tiles, [2] has_bottom_pad_core, [3] num_work,
     //            [4] local_right_col
-    const uint32_t buf_addr = static_cast<uint32_t>(tens_buffer->address());
-
     for (const auto& ci : active) {
-        std::vector<uint32_t> rt = {buf_addr, ci.shard_H_tiles, ci.has_bottom_pad, ci.num_work, ci.local_right_col};
-        desc.kernels[reader_kernel_idx[ci.has_right_pad]].runtime_args.emplace_back(ci.coord, rt);
-        desc.kernels[writer_kernel_idx[ci.has_right_pad]].runtime_args.emplace_back(ci.coord, std::move(rt));
+        desc.kernels[reader_kernel_idx[ci.has_right_pad]].emplace_runtime_args(
+            ci.coord, {tens_buffer, ci.shard_H_tiles, ci.has_bottom_pad, ci.num_work, ci.local_right_col});
+        desc.kernels[writer_kernel_idx[ci.has_right_pad]].emplace_runtime_args(
+            ci.coord, {tens_buffer, ci.shard_H_tiles, ci.has_bottom_pad, ci.num_work, ci.local_right_col});
 
         // Compute RT: (num_right, num_bottom, num_corner) per the unified phase layout.
         // The sharded reader/writer push tiles in the same order (right, bottom, corner),
@@ -647,8 +639,7 @@ tt::tt_metal::ProgramDescriptor FillPadL1ShardedProgramFactory::create_descripto
         }
         const uint32_t key_H = ci.has_bottom_pad ? ci.shard_H_tiles : pages_per_shard_y;
         const int ck_idx = compute_kernel_idx_map.at({ci.has_right_pad, ci.has_bottom_pad, key_H, ci.local_valid_w});
-        desc.kernels[ck_idx].runtime_args.emplace_back(
-            ci.coord, std::vector<uint32_t>{num_right, num_bottom, num_corner});
+        desc.kernels[ck_idx].emplace_runtime_args(ci.coord, {num_right, num_bottom, num_corner});
     }
 
     return desc;

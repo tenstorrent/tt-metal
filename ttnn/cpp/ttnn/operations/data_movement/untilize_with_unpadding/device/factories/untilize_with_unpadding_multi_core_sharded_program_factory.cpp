@@ -293,19 +293,18 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
                 }
             }
 
-            writer_desc.runtime_args.emplace_back(
+            writer_desc.emplace_runtime_args(
                 core,
-                std::vector<uint32_t>{
-                    dst_buffer->address(),  // dst_addr
-                    num_rows_block,
-                    block_row_size,
-                    std::uint32_t{1},
-                    std::uint32_t{1},
-                    std::uint32_t{1},
-                    row_size_unpadded,
-                    num_rows_unpadded,
-                    block_start_row_id_offset,
-                    block_start_row_offset});
+                {dst_buffer,  // dst_addr
+                 num_rows_block,
+                 block_row_size,
+                 std::uint32_t{1},
+                 std::uint32_t{1},
+                 std::uint32_t{1},
+                 row_size_unpadded,
+                 num_rows_unpadded,
+                 block_start_row_id_offset,
+                 block_start_row_offset});
         }
     }
 

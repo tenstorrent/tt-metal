@@ -108,16 +108,16 @@ tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreRowInvariant::c
     writer_desc.named_compile_time_args = std::move(writer_named_compile_time_args);
     writer_desc.config = WriterConfigDescriptor{};
 
-    std::vector<uint32_t> reader_runtime_args = {src_buffer->address(), 0, 0};
-
     auto input_shape_view = input_tensor.logical_shape().view();
     auto output_strides = detail::get_row_strides(output_tensor.logical_shape());  // in anticipation of RM padding
 
-    std::vector<uint32_t> writer_runtime_args = {dst_buffer->address(), 0, 0};
-    writer_runtime_args.insert(writer_runtime_args.end(), input_shape_view.begin(), input_shape_view.end());
-    writer_runtime_args.insert(
-        writer_runtime_args.end(), operation_attributes.dims.begin(), operation_attributes.dims.end());
-    writer_runtime_args.insert(writer_runtime_args.end(), output_strides.begin(), output_strides.end());
+    // Trailing writer args (everything after dst_addr/start/end) are the same for every core; build once.
+    std::vector<uint32_t> writer_trailing_args;
+    writer_trailing_args.reserve(input_shape_view.size() + operation_attributes.dims.size() + output_strides.size());
+    writer_trailing_args.insert(writer_trailing_args.end(), input_shape_view.begin(), input_shape_view.end());
+    writer_trailing_args.insert(
+        writer_trailing_args.end(), operation_attributes.dims.begin(), operation_attributes.dims.end());
+    writer_trailing_args.insert(writer_trailing_args.end(), output_strides.begin(), output_strides.end());
 
     auto cores = corerange_to_cores(all_cores, std::nullopt);
     uint32_t start_row = 0;
@@ -134,12 +134,14 @@ tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreRowInvariant::c
             num_rows_per_core = 0;
         }
         uint32_t end_row = start_row + num_rows_per_core;
-        reader_runtime_args[1] = start_row;
-        reader_runtime_args[2] = end_row;
-        writer_runtime_args[1] = start_row;
-        writer_runtime_args[2] = end_row;
-        reader_desc.runtime_args.emplace_back(core, reader_runtime_args);
-        writer_desc.runtime_args.emplace_back(core, writer_runtime_args);
+        reader_desc.emplace_runtime_args(core, {src_buffer, start_row, end_row});
+
+        KernelDescriptor::RTArgList writer_args;
+        writer_args.push_back(dst_buffer);
+        writer_args.push_back(start_row);
+        writer_args.push_back(end_row);
+        writer_args.append(writer_trailing_args);
+        writer_desc.emplace_runtime_args(core, writer_args);
         start_row = end_row;
     }
 
@@ -313,19 +315,19 @@ tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreBlockedGeneric:
 
     auto input_shape_view = input_tensor.logical_shape().view();
 
-    std::vector<uint32_t> reader_runtime_args = {src_buffer->address(), 0, 0};
-    reader_runtime_args.insert(reader_runtime_args.end(), input_shape_view.begin(), input_shape_view.end());
-    reader_runtime_args.insert(reader_runtime_args.end(), input_strides.begin(), input_strides.end());
+    // Trailing args (everything after src_addr/start/end) are core-invariant; build once.
+    std::vector<uint32_t> reader_trailing_args;
+    reader_trailing_args.reserve(input_shape_view.size() + input_strides.size());
+    reader_trailing_args.insert(reader_trailing_args.end(), input_shape_view.begin(), input_shape_view.end());
+    reader_trailing_args.insert(reader_trailing_args.end(), input_strides.begin(), input_strides.end());
 
-    std::vector<uint32_t> writer_runtime_args = {dst_buffer->address(), 0, 0};
-
-    writer_runtime_args.insert(writer_runtime_args.end(), input_shape_view.begin(), input_shape_view.end());
-    writer_runtime_args.insert(
-        writer_runtime_args.end(), operation_attributes.dims.begin(), operation_attributes.dims.end());
-    writer_runtime_args.insert(writer_runtime_args.end(), output_strides.begin(), output_strides.end());
+    std::vector<uint32_t> writer_trailing_args;
+    writer_trailing_args.reserve(input_shape_view.size() + operation_attributes.dims.size() + output_strides.size());
+    writer_trailing_args.insert(writer_trailing_args.end(), input_shape_view.begin(), input_shape_view.end());
+    writer_trailing_args.insert(
+        writer_trailing_args.end(), operation_attributes.dims.begin(), operation_attributes.dims.end());
+    writer_trailing_args.insert(writer_trailing_args.end(), output_strides.begin(), output_strides.end());
     auto cores = corerange_to_cores(all_cores, std::nullopt);
-
-    std::vector<uint32_t> compute_runtime_args = {dst_buffer->address(), 0, 0};
 
     uint32_t start_block = 0;
     uint32_t num_blocks_per_core = 0;
@@ -341,15 +343,25 @@ tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreBlockedGeneric:
             // no-op
             num_blocks_per_core = 0;
         }
-        compute_runtime_args[0] = num_blocks_per_core;
         uint32_t end_block = start_block + num_blocks_per_core;
-        reader_runtime_args[1] = start_block;
-        reader_runtime_args[2] = end_block;
-        writer_runtime_args[1] = start_block;
-        writer_runtime_args[2] = end_block;
-        reader_desc.runtime_args.emplace_back(core, reader_runtime_args);
-        writer_desc.runtime_args.emplace_back(core, writer_runtime_args);
-        compute_desc.runtime_args.emplace_back(core, compute_runtime_args);
+
+        KernelDescriptor::RTArgList reader_args;
+        reader_args.push_back(src_buffer);
+        reader_args.push_back(start_block);
+        reader_args.push_back(end_block);
+        reader_args.append(reader_trailing_args);
+        reader_desc.emplace_runtime_args(core, reader_args);
+
+        KernelDescriptor::RTArgList writer_args;
+        writer_args.push_back(dst_buffer);
+        writer_args.push_back(start_block);
+        writer_args.push_back(end_block);
+        writer_args.append(writer_trailing_args);
+        writer_desc.emplace_runtime_args(core, writer_args);
+
+        // Compute only consumes num_blocks_per_core in slot 0; the remaining two
+        // slots are unused/padding (preserve historical layout).
+        compute_desc.emplace_runtime_args(core, {num_blocks_per_core, 0u, 0u});
         start_block = end_block;
     }
 

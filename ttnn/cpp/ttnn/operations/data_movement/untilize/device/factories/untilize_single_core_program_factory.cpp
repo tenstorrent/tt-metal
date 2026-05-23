@@ -182,16 +182,10 @@ tt::tt_metal::ProgramDescriptor UntilizeSingleCoreProgramFactory::create_descrip
 
     // Reader run-time args
     uint32_t start_page_id = 0;
-    reader_desc.runtime_args.emplace_back(
-        CoreCoord{0, 0},
-        std::vector<uint32_t>{
-            src0_buffer->address(),
-            num_tiles,
-            start_page_id,
-        });
+    reader_desc.emplace_runtime_args(CoreCoord{0, 0}, {src0_buffer, num_tiles, start_page_id});
 
     // Writer run-time args
-    writer_desc.runtime_args.emplace_back(CoreCoord{0, 0}, std::vector<uint32_t>{dst_buffer->address()});
+    writer_desc.emplace_runtime_args(CoreCoord{0, 0}, {dst_buffer});
 
     desc.kernels.push_back(std::move(reader_desc));
     desc.kernels.push_back(std::move(writer_desc));

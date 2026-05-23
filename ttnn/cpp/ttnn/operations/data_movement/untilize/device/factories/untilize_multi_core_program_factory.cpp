@@ -326,21 +326,13 @@ tt::tt_metal::ProgramDescriptor UntilizeMultiCoreProgramFactory::create_descript
 
         // Reader run-time args
         uint32_t num_tiles_to_read = num_tiles_per_input_block * num_input_blocks_to_process;
-        std::vector<uint32_t> reader_run_time_args;
         if (use_block_reader) {
-            reader_run_time_args = {
-                src0_buffer->address(),
-                num_input_blocks_to_process,
-            };
+            reader_ref.emplace_runtime_args(core, {src0_buffer, num_input_blocks_to_process});
         } else if (input_is_sharded) {
-            reader_run_time_args = {num_tiles_to_read};
+            reader_ref.emplace_runtime_args(core, {num_tiles_to_read});
         } else {
             // Interleaved input
-            reader_run_time_args = {
-                src0_buffer->address(),
-                num_tiles_to_read,
-                tile_start_index,
-            };
+            reader_ref.emplace_runtime_args(core, {src0_buffer, num_tiles_to_read, tile_start_index});
         }
 
         // Writer run-time args
@@ -348,22 +340,18 @@ tt::tt_metal::ProgramDescriptor UntilizeMultiCoreProgramFactory::create_descript
         uint32_t width_wise_output_block_start_index = input_block_global_col_index / num_cols_per_output_block;
         uint32_t num_cols_already_processed_in_first_output_block =
             input_block_global_col_index % num_cols_per_output_block;
-        std::vector<uint32_t> writer_run_time_args = {
-            dst_buffer->address(),
-            num_input_blocks_to_process,
-            height_wise_input_block_start_index,
-            num_unpadded_cols_per_input_block,
-            width_wise_output_block_start_index,
-            num_cols_already_processed_in_first_output_block};
+        writer_ref.emplace_runtime_args(
+            core,
+            {dst_buffer,
+             num_input_blocks_to_process,
+             height_wise_input_block_start_index,
+             num_unpadded_cols_per_input_block,
+             width_wise_output_block_start_index,
+             num_cols_already_processed_in_first_output_block});
 
         // Compute run-time args
-        std::vector<uint32_t> compute_run_time_args = {num_input_blocks_to_process};
-
-        // Set run-time arg
-        reader_ref.runtime_args.emplace_back(core, std::move(reader_run_time_args));
-        writer_ref.runtime_args.emplace_back(core, std::move(writer_run_time_args));
         if (full_compute_idx >= 0) {
-            desc.kernels[full_compute_idx].runtime_args.emplace_back(core, std::move(compute_run_time_args));
+            desc.kernels[full_compute_idx].emplace_runtime_args(core, {num_input_blocks_to_process});
         }
 
         // Update index of first tile to read
@@ -394,30 +382,22 @@ tt::tt_metal::ProgramDescriptor UntilizeMultiCoreProgramFactory::create_descript
         uint32_t width_wise_output_block_start_index = input_block_global_col_index / num_cols_per_output_block;
         uint32_t num_cols_already_processed_in_first_output_block =
             input_block_global_col_index % num_cols_per_output_block;
-        std::vector<uint32_t> writer_run_time_args = {
-            dst_buffer->address(),
-            num_input_blocks_to_process,
-            height_wise_input_block_start_index,
-            num_unpadded_cols_per_input_block,
-            width_wise_output_block_start_index,
-            num_cols_already_processed_in_first_output_block};
+        writer_ref.emplace_runtime_args(
+            cliff_core,
+            {dst_buffer,
+             num_input_blocks_to_process,
+             height_wise_input_block_start_index,
+             num_unpadded_cols_per_input_block,
+             width_wise_output_block_start_index,
+             num_cols_already_processed_in_first_output_block});
 
         // Reader run-time args (always reading interleaved input as cliff core does not exist for sharded input)
         uint32_t num_tiles_to_read = num_tiles_per_input_block * num_input_blocks_to_process;
-        std::vector<uint32_t> reader_run_time_args = {
-            src0_buffer->address(),
-            num_tiles_to_read,
-            tile_start_index,
-        };
+        reader_ref.emplace_runtime_args(cliff_core, {src0_buffer, num_tiles_to_read, tile_start_index});
 
         // Compute run-time args
-        std::vector<uint32_t> compute_run_time_args = {num_input_blocks_to_process};
-
-        // Set run-time args
-        reader_ref.runtime_args.emplace_back(cliff_core, std::move(reader_run_time_args));
-        writer_ref.runtime_args.emplace_back(cliff_core, std::move(writer_run_time_args));
         if (cliff_compute_idx >= 0) {
-            desc.kernels[cliff_compute_idx].runtime_args.emplace_back(cliff_core, std::move(compute_run_time_args));
+            desc.kernels[cliff_compute_idx].emplace_runtime_args(cliff_core, {num_input_blocks_to_process});
         }
     }
 

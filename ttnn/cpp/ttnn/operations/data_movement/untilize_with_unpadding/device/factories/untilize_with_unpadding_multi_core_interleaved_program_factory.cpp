@@ -181,12 +181,11 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreInterleavedProgram
         const std::vector<BlockRep>& assignment = core_assignments.at(i);
 
         // writer runtime args
-        std::vector<uint32_t> writer_rt_args = {
-            dst_buffer->address(),
-            padded_row_size_bytes,
-            row_start_id,
-            static_cast<unsigned int>(assignment.size()),
-        };
+        KernelDescriptor::RTArgList writer_rt_args;
+        writer_rt_args.push_back(dst_buffer);
+        writer_rt_args.push_back(padded_row_size_bytes);
+        writer_rt_args.push_back(row_start_id);
+        writer_rt_args.push_back(static_cast<uint32_t>(assignment.size()));
 
         uint32_t nblocks_per_core_core = 0;
 
@@ -218,9 +217,8 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreInterleavedProgram
         uint32_t num_tiles_per_core = num_tiles_per_row * nblocks_per_core_core;
 
         // reader runtime args
-        reader_desc.runtime_args.emplace_back(
-            core, std::vector<uint32_t>{src0_buffer->address(), num_tiles_per_core, tile_start_id});
-        writer_desc.runtime_args.emplace_back(core, std::move(writer_rt_args));
+        reader_desc.emplace_runtime_args(core, {src0_buffer, num_tiles_per_core, tile_start_id});
+        writer_desc.emplace_runtime_args(core, writer_rt_args);
 
         tile_start_id += num_tiles_per_core;
     }

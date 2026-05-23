@@ -58,22 +58,20 @@ void emit_runtime_args_wh_tiled(
         uint32_t h = num_tiles_read % Ht;
         uint32_t w = num_tiles_read / Ht % Wt;
 
-        reader_desc.runtime_args.emplace_back(
+        reader_desc.emplace_runtime_args(
             core,
-            std::vector<uint32_t>{
-                input_tensor.buffer()->address(),
-                num_tiles_per_core,
-                tt::round_down(num_tiles_read, HtWt) + (h * Wt) + w,
-                h,
-                w,
-                Ht,
-                Wt,
-                HtWt});
+            {input_tensor.buffer(),
+             num_tiles_per_core,
+             tt::round_down(num_tiles_read, HtWt) + (h * Wt) + w,
+             h,
+             w,
+             Ht,
+             Wt,
+             HtWt});
 
-        compute_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{num_tiles_per_core});
+        compute_desc.emplace_runtime_args(core, {num_tiles_per_core});
 
-        writer_desc.runtime_args.emplace_back(
-            core, std::vector<uint32_t>{output_tensor.buffer()->address(), num_tiles_per_core, num_tiles_read});
+        writer_desc.emplace_runtime_args(core, {output_tensor.buffer(), num_tiles_per_core, num_tiles_read});
 
         num_tiles_read += num_tiles_per_core;
     }
@@ -111,13 +109,11 @@ void emit_runtime_args_wh_rm(
             num_hw_blocks_per_core = 0;
         }
 
-        reader_desc.runtime_args.emplace_back(
-            core, std::vector<uint32_t>{input_tensor.buffer()->address(), num_sticks_read, num_hw_blocks_per_core});
+        reader_desc.emplace_runtime_args(core, {input_tensor.buffer(), num_sticks_read, num_hw_blocks_per_core});
 
-        compute_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{num_hw_blocks_per_core});
+        compute_desc.emplace_runtime_args(core, {num_hw_blocks_per_core});
 
-        writer_desc.runtime_args.emplace_back(
-            core, std::vector<uint32_t>{output_tensor.buffer()->address(), num_sticks_write, num_hw_blocks_per_core});
+        writer_desc.emplace_runtime_args(core, {output_tensor.buffer(), num_sticks_write, num_hw_blocks_per_core});
 
         num_sticks_read += num_hw_blocks_per_core * H;
         num_sticks_write += num_hw_blocks_per_core * W;
