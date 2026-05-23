@@ -78,8 +78,8 @@ surrounding eltwise stages, document blocker):
 | `layernorm/.../layernorm_sharded_welford.cpp` | 8 | Welford + sharded. |
 | `layernorm_distributed/.../layernorm_post_allgather_welford.cpp` | 1 | Welford. |
 | `layernorm_distributed/.../layernorm_pre_allgather_welford.cpp` | 4 | Welford. |
-| `groupnorm/.../welford_groupnorm.cpp` | (not in TSV) | Welford. |
-| `groupnorm/.../welford_groupnorm_sharded_v2.cpp` | (not in TSV) | Welford. |
+| `groupnorm/.../welford_groupnorm.cpp` | (not in TSV) | Welford accumulator + transpose stage are OOS. Per-group rsqrt and trailing single-tile stages (group-accumulate, gamma, beta, final cb_x -> cb_out) migrated in `92a19132dd7` + `20ce6da381c`. |
+| `groupnorm/.../welford_groupnorm_sharded_v2.cpp` | (not in TSV) | Same scope as non-sharded welford_groupnorm. Per-group rsqrt + trailing stages migrated in `66907980ee9` + `20ce6da381c`. |
 | `kernel_util/.../combine_welford.h` | 2 | Welford fused/shared header. |
 
 ### Structural anomaly
