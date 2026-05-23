@@ -245,6 +245,7 @@ tt::tt_metal::ProgramDescriptor DropoutProgramFactory::create_descriptor(
         .reader = create_reader_kernel(all_cores, std::move(reader_compile_args), kReaderKernelPath),
         .writer = create_writer_kernel(all_cores, std::move(writer_compile_args), kWriterKernelPath),
         .compute_group_1 = {},  // initialized below after compute args are built
+        .compute_group_2 = {},  // conditionally set below if core_group_2 is non-empty
     };
 
     // -------------------------------------------------------------------------
