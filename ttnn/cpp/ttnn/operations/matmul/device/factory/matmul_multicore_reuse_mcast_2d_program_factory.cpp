@@ -13,7 +13,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "tt-metalium/buffer_types.hpp"
-#include "impl/buffers/semaphore.hpp"
+// NOTE: tt_metal/impl/buffers/semaphore.hpp is private to tt_metal and not reachable from ttnn.
+// We duplicate the Tensix per-core semaphore-register count locally below as kNumSemaphoresPerCore.
 #include <bitset>
 
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
@@ -36,6 +37,11 @@ namespace ttnn::prim {
 
 namespace reuse_mcast_optimized_helpers {
 
+// Tensix per-core semaphore-register count; mirrors the private NUM_SEMAPHORES constant in
+// tt_metal/impl/buffers/semaphore.hpp (that header isn't part of the public include surface
+// reachable from ttnn).
+constexpr uint32_t kNumSemaphoresPerCore = 16;
+
 // Allocate `count` contiguous free semaphore ids on the given CoreRangeSet against an
 // existing ProgramDescriptor.  Mirrors the legacy CreateSemaphore behaviour (pick first
 // free id whose slot is unused on every requested core), but in a block so callers can
@@ -45,7 +51,7 @@ static uint32_t allocate_free_semaphore_id_block(
     const tt::tt_metal::CoreRangeSet& cores,
     uint32_t count,
     tt::tt_metal::CoreType core_type = tt::tt_metal::CoreType::WORKER) {
-    std::bitset<NUM_SEMAPHORES> used;
+    std::bitset<kNumSemaphoresPerCore> used;
     for (const auto& sem : desc.semaphores) {
         if (sem.core_type != core_type) {
             continue;
@@ -54,7 +60,7 @@ static uint32_t allocate_free_semaphore_id_block(
             used.set(sem.id);
         }
     }
-    for (uint32_t base = 0; base + count <= NUM_SEMAPHORES; ++base) {
+    for (uint32_t base = 0; base + count <= kNumSemaphoresPerCore; ++base) {
         bool block_free = true;
         for (uint32_t i = 0; i < count; ++i) {
             if (used.test(base + i)) {
@@ -70,7 +76,7 @@ static uint32_t allocate_free_semaphore_id_block(
         "No contiguous block of {} free semaphore ids available on the requested core range set "
         "(NUM_SEMAPHORES={}).",
         count,
-        NUM_SEMAPHORES);
+        kNumSemaphoresPerCore);
 }
 
 static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
