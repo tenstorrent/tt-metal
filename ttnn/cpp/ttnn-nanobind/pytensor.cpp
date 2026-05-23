@@ -225,6 +225,7 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
         const auto tt_dtype = tensor_spec.data_type();
         switch (tt_dtype) {
             case DataType::UINT8: return dispatch_to_concrete.template operator()<uint8_t>(buffer);
+            case DataType::FP8_E4M3: TT_THROW("FP8_E4M3 single-device to_torch is not supported");
             case DataType::UINT16: return dispatch_to_concrete.template operator()<uint16_t>(buffer);
             case DataType::INT32: return dispatch_to_concrete.template operator()<int32_t>(buffer);
             case DataType::UINT32: return dispatch_to_concrete.template operator()<uint32_t>(buffer);
@@ -277,6 +278,7 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(
 
     switch (tt_tensor.dtype()) {
         case DataType::UINT8: return dispatch_to_concrete.template operator()<uint8_t>(tt_tensor);
+        case DataType::FP8_E4M3: return dispatch_to_concrete.template operator()<float8_e4m3>(tt_tensor);
         case DataType::UINT16: return dispatch_to_concrete.template operator()<uint16_t>(tt_tensor);
         case DataType::INT32: return dispatch_to_concrete.template operator()<int32_t>(tt_tensor);
         case DataType::UINT32: return dispatch_to_concrete.template operator()<uint32_t>(tt_tensor);
@@ -856,6 +858,7 @@ void pytensor_module(nb::module_& mod) {
                         case DataType::UINT32: return self.to_vector<uint32_t>()[0];
                         case DataType::UINT16: return self.to_vector<uint16_t>()[0];
                         case DataType::UINT8: return self.to_vector<uint8_t>()[0];
+                        case DataType::FP8_E4M3: TT_THROW("FP8_E4M3 item() is not supported");
                         case DataType::INVALID: TT_THROW("Unsupported DataType");
                     }
                     TT_THROW("Unreachable");
@@ -1557,6 +1560,14 @@ void pytensor_module(nb::module_& mod) {
                             std::is_same_v<T, bfloat8_b> || std::is_same_v<T, bfloat4_b> ||
                             std::is_same_v<T, bfloat16>) {
                             return self.to_vector<float>();
+                        } else if constexpr (std::is_same_v<T, float8_e4m3>) {
+                            // to_vector<float>() doesn't yet handle FP8 source (see
+                            // host_tensor_factory.cpp::to_vector_float). Until that gains an
+                            // FP8 case, to_list() on an FP8 tensor isn't wired up. Print path
+                            // (Tensor::__repr__) still works via the to_dtype float pivot in
+                            // ttnn/core/tensor/tensor_impl.cpp.
+                            TT_THROW("Tensor.to_list(): FP8_E4M3 is not supported");
+                            return self.to_vector<float>();  // unreachable, satisfies return type
                         } else {
                             return self.to_vector<T>();
                         }
