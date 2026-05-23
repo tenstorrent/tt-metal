@@ -3,16 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "api/compute/common.h"
-#include "api/compute/eltwise_binary.h"
-#include "api/compute/eltwise_binary_sfpu.h"
-#include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#include "api/compute/eltwise_unary/binop_with_scalar.h"
-#include "api/compute/eltwise_unary/exp.h"
-#include "api/compute/eltwise_unary/log1p.h"
-#include "api/compute/compute_kernel_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"         // Exp, Log1p
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_activations.hpp"  // Tanh
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"  // MulBinary
 #include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
@@ -23,50 +17,142 @@ void kernel_main() {
     constexpr auto cb_input = tt::CBIndex::c_0;
     constexpr auto cb_output = tt::CBIndex::c_2;
 
-    CircularBuffer cb_in(cb_input);
-    CircularBuffer cb_out(cb_output);
+    binary_op_init_common(cb_input, cb_input, cb_output);
 
-    init_sfpu(cb_input, cb_output);
-
-    for (uint32_t i = 0; i < num_tiles; ++i) {
-        cb_in.wait_front(1);
-        cb_out.reserve_back(1);
-        tile_regs_acquire();
-
-        copy_tile_to_dst_init_short(cb_input);
-        copy_tile(cb_input, 0, 0);
-
-        if (use_approx) {
-            exp_tile_init<true>();
-            exp_tile<true>(0);
-            log1p_tile_init<true>();
-            log1p_tile<true>(0);
-        } else {
-            exp_tile_init<false>();
-            exp_tile<false>(0);
-            log1p_tile_init<false>();
-            log1p_tile<false>(0);
-        }
-        tanh_tile_init<false>();
-        tanh_tile<false>(0);
-
+    // Mish: x * tanh(softplus(x)) = x * tanh(log1p(exp(x))).
+    //
+    // FLOAT32 path: two CopyTile (D0 HeldStream + D1 NoWaitPop) + Exp + Log1p +
+    //   Tanh + MulBinary<D0, D1, D0>.
+    //   (Original loaded D0 first, ran SFPU chain on D0, then loaded D1 for mul.
+    //   Chain order is identical effect-wise — D1 load doesn't touch D0.)
+    //
+    // FLOAT path: CopyTile (D0 HeldStream) + Exp + Log1p + Tanh +
+    //   DestReuseBinary<cb_input, Mul, DEST_TO_SRCA>.
+    //   srca = DEST = tanh(softplus(x)), srcb = cb_input,
+    //   result = tanh(softplus(x)) * x.
+    //
+    // use_approx is a runtime arg, so 4-way dispatch on (approx, dtype). The
+    // Exp/Log1p templates use Approx::Fast | Approx::Exact compile-time enum;
+    // Tanh in chain is non-templated (uses non-approx LLK like the original).
+    if (use_approx) {
 #ifdef INP_FLOAT32
-        copy_tile(cb_input, 0, 1);
-        mul_binary_tile_init();
-        mul_binary_tile(0, 1, 0);
+        compute_kernel_lib::eltwise_chain(
+            num_tiles,
+            compute_kernel_lib::CopyTile<
+                cb_input,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::HeldStream,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::CopyTileReconfig::None>{},
+            compute_kernel_lib::
+                Exp<compute_kernel_lib::Approx::Fast, compute_kernel_lib::Approx::Fast, compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::Log1p<compute_kernel_lib::Approx::Fast, compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::Tanh<compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::CopyTile<
+                cb_input,
+                compute_kernel_lib::Dst::D1,
+                compute_kernel_lib::NoWaitPop,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::CopyTileReconfig::None>{},
+            compute_kernel_lib::
+                MulBinary<compute_kernel_lib::Dst::D0, compute_kernel_lib::Dst::D1, compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::PackTile<
+                cb_output,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::PackTileReconfig::None>{});
 #endif
 #ifdef INP_FLOAT
-        binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_input);
-        binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_input, 0, 0);
+        compute_kernel_lib::eltwise_chain(
+            num_tiles,
+            compute_kernel_lib::CopyTile<
+                cb_input,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::HeldStream,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::CopyTileReconfig::None>{},
+            compute_kernel_lib::
+                Exp<compute_kernel_lib::Approx::Fast, compute_kernel_lib::Approx::Fast, compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::Log1p<compute_kernel_lib::Approx::Fast, compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::Tanh<compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::DestReuseBinary<
+                cb_input,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::DestReuseType::DEST_TO_SRCA,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::DestReuseReconfig::Input,
+                compute_kernel_lib::Streaming,
+                compute_kernel_lib::OperandKind::Scalar>{},
+            compute_kernel_lib::PackTile<
+                cb_output,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::PackTileReconfig::None>{});
 #endif
-
-        tile_regs_commit();
-        tile_regs_wait();
-
-        pack_tile(0, cb_output);
-        tile_regs_release();
-
-        cb_in.pop_front(1);
-        cb_out.push_back(1);
+    } else {
+#ifdef INP_FLOAT32
+        compute_kernel_lib::eltwise_chain(
+            num_tiles,
+            compute_kernel_lib::CopyTile<
+                cb_input,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::HeldStream,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::CopyTileReconfig::None>{},
+            compute_kernel_lib::Exp<
+                compute_kernel_lib::Approx::Exact,
+                compute_kernel_lib::Approx::Exact,
+                compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::Log1p<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::Tanh<compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::CopyTile<
+                cb_input,
+                compute_kernel_lib::Dst::D1,
+                compute_kernel_lib::NoWaitPop,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::CopyTileReconfig::None>{},
+            compute_kernel_lib::
+                MulBinary<compute_kernel_lib::Dst::D0, compute_kernel_lib::Dst::D1, compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::PackTile<
+                cb_output,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::PackTileReconfig::None>{});
+#endif
+#ifdef INP_FLOAT
+        compute_kernel_lib::eltwise_chain(
+            num_tiles,
+            compute_kernel_lib::CopyTile<
+                cb_input,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::HeldStream,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::CopyTileReconfig::None>{},
+            compute_kernel_lib::Exp<
+                compute_kernel_lib::Approx::Exact,
+                compute_kernel_lib::Approx::Exact,
+                compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::Log1p<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::Tanh<compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::DestReuseBinary<
+                cb_input,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::DestReuseType::DEST_TO_SRCA,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::DestReuseReconfig::Input,
+                compute_kernel_lib::Streaming,
+                compute_kernel_lib::OperandKind::Scalar>{},
+            compute_kernel_lib::PackTile<
+                cb_output,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::PackTileReconfig::None>{});
+#endif
     }
 }
