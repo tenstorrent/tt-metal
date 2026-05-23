@@ -303,24 +303,4 @@ inline DFBBinding BlockedConsumerOf(
 }
 */
 
-//////////////////////////////////////////////////////////////////////////////
-// Convenience factories for SemaphoreBinding and TensorBinding
-//////////////////////////////////////////////////////////////////////////////
-
-// Creates a SemaphoreBinding (kernel uses a Semaphore declared at ProgramSpec level)
-inline SemaphoreBinding UseSemaphore(SemaphoreSpecName semaphore_spec_name, std::string accessor_name) {
-    return SemaphoreBinding{
-        .semaphore_spec_name = std::move(semaphore_spec_name),
-        .accessor_name = std::move(accessor_name),
-    };
-}
-
-// Creates a TensorBinding (kernel accesses a TensorParameter declared at ProgramSpec level)
-inline TensorBinding UseTensor(TensorParameterName tensor_parameter_name, std::string accessor_name) {
-    return TensorBinding{
-        .tensor_parameter_name = std::move(tensor_parameter_name),
-        .accessor_name = std::move(accessor_name),
-    };
-}
-
 }  // namespace tt::tt_metal::experimental

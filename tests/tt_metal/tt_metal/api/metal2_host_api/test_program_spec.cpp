@@ -895,7 +895,7 @@ TEST_F(ProgramSpecTestQuasar, SemaphoreBoundToComputeKernelFailsOnQuasar) {
 
     // kernels[1] is the compute kernel in MakeMinimalValidProgramSpec
     ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
-    spec.kernels[1].semaphore_bindings = {UseSemaphore("sem_0", "done_flag")};
+    spec.kernels[1].semaphore_bindings = {{"sem_0", "done_flag"}};
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
@@ -949,7 +949,7 @@ TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingDuplicateAccessorFails) {
 
     spec.semaphores = {sem0, sem1};
 
-    spec.kernels[0].semaphore_bindings = {UseSemaphore("sem_0", "same"), UseSemaphore("sem_1", "same")};
+    spec.kernels[0].semaphore_bindings = {{"sem_0", "same"}, {"sem_1", "same"}};
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
@@ -2686,7 +2686,7 @@ TEST_F(ProgramSpecTestGen1, SemaphoreBoundToComputeKernelFailsOnGen1) {
 
     // kernels[1] is the compute kernel in MakeMinimalGen1ValidProgramSpec
     ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
-    spec.kernels[1].semaphore_bindings = {UseSemaphore("sem_0", "done_flag")};
+    spec.kernels[1].semaphore_bindings = {{"sem_0", "done_flag"}};
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
@@ -2705,7 +2705,7 @@ TEST_F(ProgramSpecTestGen1, SemaphoreBoundToDMKernelSucceedsOnGen1) {
 
     // kernels[0] is the DM kernel in MakeMinimalGen1ValidProgramSpec
     ASSERT_TRUE(spec.kernels[0].is_dm_kernel());
-    spec.kernels[0].semaphore_bindings = {UseSemaphore("sem_0", "done_flag")};
+    spec.kernels[0].semaphore_bindings = {{"sem_0", "done_flag"}};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
@@ -2720,7 +2720,7 @@ TEST_F(ProgramSpecTestGen1, SemaphoresWithNonZeroInitialValueSucceedOnGen1) {
     sem.initial_value = 3;
     spec.semaphores = {sem};
 
-    spec.kernels[0].semaphore_bindings = {UseSemaphore("sem_0", "done_flag")};
+    spec.kernels[0].semaphore_bindings = {{"sem_0", "done_flag"}};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
@@ -2840,7 +2840,7 @@ TEST_F(ProgramSpecTestGen1, AccessorNamesAcrossCategoriesAreSeparateNamespaces) 
     sem.unique_id = "sem_0";
     sem.target_nodes = NodeCoord{0, 0};
     spec.semaphores = {sem};
-    spec.kernels[0].semaphore_bindings = {UseSemaphore("sem_0", "input_dfb")};
+    spec.kernels[0].semaphore_bindings = {{"sem_0", "input_dfb"}};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_dfb");
 
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
