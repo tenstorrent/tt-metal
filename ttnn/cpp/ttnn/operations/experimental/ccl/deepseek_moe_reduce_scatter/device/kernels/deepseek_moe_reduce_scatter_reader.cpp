@@ -76,8 +76,10 @@ void kernel_main() {
         uint32_t tiles_to_read = start_tiles_to_read;
         while (tiles_read < tiles_to_read) {
             if (do_reduce) {
-                // Legacy primitive retained (#45003 item 4): program factory passes
-                // op_semaphore.address() rather than a semaphore id, so Semaphore<> can't bind.
+                // Legacy primitive retained (#45003 item 4): op_semaphore is a GlobalSemaphore address
+                // (deepseek_moe_reduce_scatter_program_factory.cpp). GlobalSemaphore exposes only address() —
+                // there is no id(). Semaphore<> binds to per-program ids via get_semaphore<>(id), so it cannot
+                // wrap a GlobalSemaphore. Structural limitation, not a migration backlog item.
                 noc_semaphore_wait_min(
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(op_semaphore), semaphore_target_val + 1);
                 semaphore_target_val++;
@@ -100,6 +102,7 @@ void kernel_main() {
     }
 
     // reset the semaphore
-    // Legacy primitive retained (#45003 item 4): semaphore address-based; see comment above.
+    // Legacy primitive retained (#45003 item 4): op_semaphore is a GlobalSemaphore address (see structural-reason
+    // note above on the wait_min site).
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(op_semaphore), 0);
 }

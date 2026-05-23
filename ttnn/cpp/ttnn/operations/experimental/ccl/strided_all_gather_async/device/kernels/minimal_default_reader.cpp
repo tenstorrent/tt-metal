@@ -143,8 +143,10 @@ void kernel_main() {
                 input_chunk_start_tile = global_tile_index;
                 for (uint32_t chunk_idx = 0; chunk_idx < device_k_block_counts[actual_sender_chip_id]; chunk_idx++) {
                     // Receive the next chunk of data
-                    // Legacy primitive retained (#45003 item 4): out_ready_sem is a raw address
-                    // from semaphore.at(dir).address() in the program factory, not an id.
+                    // Legacy primitive retained (#45003 item 4): out_ready_sem is the address of a GlobalSemaphore
+                    // (std::vector<GlobalSemaphore>& semaphore in strided_all_gather_async_program.cpp).
+                    // GlobalSemaphore exposes only address() — there is no id(). Semaphore<> binds to per-program
+                    // ids via get_semaphore<>(id), so it cannot wrap a GlobalSemaphore. Structural limitation.
                     noc_semaphore_wait_min(
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
                     sem_target++;
@@ -187,7 +189,7 @@ void kernel_main() {
         }
         batch_input_tile_offset += tiles_per_batch;
     }
-    // Legacy primitive retained (#45003 item 4): out_ready_sem is a raw address from
-    // semaphore.at(dir).address() in the program factory, not an id.
+    // Legacy primitive retained (#45003 item 4): out_ready_sem is a GlobalSemaphore address (see structural-
+    // reason note above on the wait_min site).
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
 }

@@ -164,8 +164,10 @@ void kernel_main() {
         fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
     }
-    // Legacy primitive retained (#45003 item 4): out_ready_sem_bank_addr is a raw L1 address
-    // (program factory passes semaphore.address(), not a semaphore id), so Semaphore<> does not apply.
+    // Legacy primitive retained (#45003 item 4): out_ready_sem_bank_addr is the address of a GlobalSemaphore
+    // (operation_attributes.semaphore in all_gather_concat_program_factory.cpp). GlobalSemaphore exposes only
+    // address() — there is no id(). Semaphore<> binds to per-program ids via get_semaphore<>(id), so it cannot
+    // wrap a GlobalSemaphore. Structural limitation, not a migration backlog item.
     // increment locally
     uint64_t out_ready_sem_noc_addr =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
@@ -236,7 +238,8 @@ void kernel_main() {
     }
 
     if (reset_global_semaphore) {
-        // Legacy primitive retained (#45003 item 4): semaphore set on raw L1 address (not a semaphore id).
+        // Legacy primitive retained (#45003 item 4): out_ready_sem_bank_addr is a GlobalSemaphore address (see
+        // structural-reason note above on the inc site).
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr), 0);
     }
 

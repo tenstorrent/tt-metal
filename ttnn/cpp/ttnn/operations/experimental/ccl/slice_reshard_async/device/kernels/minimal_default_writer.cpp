@@ -104,8 +104,10 @@ void kernel_main() {
             }
             noc_obj.async_writes_flushed();
         }
-        // Legacy primitive retained (#45003 item 4): barrier_sem is passed as an absolute L1 address from the program
-        // factory, not a semaphore id; Semaphore<> binds to ids only.
+        // Legacy primitive retained (#45003 item 4): barrier_sem is the address of a GlobalSemaphore
+        // (args.barrier_semaphore in slice_reshard_async_program_factory.cpp). GlobalSemaphore exposes only
+        // address() — there is no id(). Semaphore<> binds to per-program ids via get_semaphore<>(id), so it
+        // cannot wrap a GlobalSemaphore. Structural limitation, not a migration backlog item.
         if (!is_last_chip) {
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 1);
         }

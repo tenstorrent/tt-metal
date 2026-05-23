@@ -116,8 +116,10 @@ void kernel_main() {
         }
     }
 
-    // Legacy primitive retained (#45003 item 4): out_ready_sem is passed as an absolute L1 address from the program
-    // factory (args.final_semaphore.address()), not a semaphore id; Semaphore<> binds to ids only.
+    // Legacy primitive retained (#45003 item 4): out_ready_sem is the address of a GlobalSemaphore
+    // (args.final_semaphore in slice_reshard_async_program_factory.cpp). GlobalSemaphore exposes only address() —
+    // there is no id(). Semaphore<> binds to per-program ids via get_semaphore<>(id), so it cannot wrap a
+    // GlobalSemaphore. Structural limitation, not a migration backlog item.
     if (!is_first_chip) {
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 1);
     }

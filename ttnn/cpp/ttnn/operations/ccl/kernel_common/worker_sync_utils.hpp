@@ -11,10 +11,12 @@
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <array>
 
-// Legacy shim (#45003 item 4): consumes raw L1 addresses and uses legacy
-// noc_semaphore_* primitives. Migration to Semaphore<> requires the semaphore
-// id, which is not on the function's interface — kept as-is until callers
-// migrate, then revisited as part of the helper-shim removal PR.
+// Legacy shim (#45003 item 4): consumes raw L1 addresses and uses legacy noc_semaphore_* primitives.
+// The semaphores in question are local (created via tt_metal::CreateSemaphore), and OpSignaler already does
+// the id→address translation via get_semaphore(id) on the kernel side before calling this helper, so the
+// shim could be migrated to take an id-based interface. Out of scope here: 12 of the 13 caller kernels are
+// still on the legacy data-movement API, so flipping the interface would either break them all at once or
+// require a parallel id-based overload. Revisit as part of the helper-shim removal PR once callers migrate.
 // Called by the master worker to synchronize with the slave workers
 FORCE_INLINE void master_sync_slaves(
 

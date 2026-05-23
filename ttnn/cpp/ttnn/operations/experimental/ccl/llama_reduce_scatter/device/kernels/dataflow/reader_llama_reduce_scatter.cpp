@@ -61,9 +61,11 @@ void kernel_main() {
     constexpr uint32_t total_senders = num_sender_cores * other_devices;
 
     // Runtime arguments
-    // Legacy primitive retained (#45003 item 4): program factory passes
-    // cross_device_semaphore->address() rather than a semaphore id, so Semaphore<>
-    // can't bind. Keep the raw address handle for downstream noc_semaphore_* calls.
+    // Legacy primitive retained (#45003 item 4): cross_device_semaphore is a GlobalSemaphore
+    // (llama_reduce_scatter_program_factory.cpp). GlobalSemaphore exposes only address() — there is no id().
+    // Semaphore<> binds to per-program ids via get_semaphore<>(id), so it cannot wrap a GlobalSemaphore.
+    // Structural limitation, not a migration backlog item. Keep the raw address handle for downstream
+    // noc_semaphore_* calls.
     uint32_t receiver_semaphore_address = get_arg_val<uint32_t>(rt_arg_idx++);
     Semaphore<> local_sem(get_arg_val<uint32_t>(rt_arg_idx++));
     bool sender_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);

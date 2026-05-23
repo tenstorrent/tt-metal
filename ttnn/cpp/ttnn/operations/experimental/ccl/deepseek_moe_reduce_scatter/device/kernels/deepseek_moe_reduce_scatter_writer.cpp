@@ -153,8 +153,10 @@ void kernel_main() {
         page_size * 2);
 
     // execute pre op barrier wait phase
-    // Legacy primitives retained (#45003 item 4): program factory passes
-    // pre_op_barrier_semaphore.address() rather than a semaphore id, so Semaphore<> can't bind.
+    // Legacy primitives retained (#45003 item 4): pre_op_barrier_semaphore is a GlobalSemaphore address
+    // (deepseek_moe_reduce_scatter_program_factory.cpp). GlobalSemaphore exposes only address() — there is no
+    // id(). Semaphore<> binds to per-program ids via get_semaphore<>(id), so it cannot wrap a GlobalSemaphore.
+    // Structural limitation, not a migration backlog item.
     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pre_op_barrier_semaphore), 1);
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pre_op_barrier_semaphore), 0);
 

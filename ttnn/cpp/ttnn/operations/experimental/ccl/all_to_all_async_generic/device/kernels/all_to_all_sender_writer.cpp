@@ -233,8 +233,11 @@ void kernel_main() {
         uint32_t local_init_semaphore_addr_ptr = reinterpret_cast<uint32_t>(global_init_semaphore_addr_ptr);
 
         if (mcast_size > 1) {
-            // Legacy primitives retained (#45003 item 4): mcast semaphore set + companion wait use raw L1 addresses
-            // (program factory passes addresses, not semaphore ids), so Semaphore<> does not apply.
+            // Legacy primitives retained (#45003 item 4): global_init_semaphore_addr is a GlobalSemaphore address
+            // (init_barrier_semaphore in the program factory). GlobalSemaphore exposes only address() — no id().
+            // Semaphore<>::wait cannot wrap it. Additionally, set_multicast_loopback_src writes the destination
+            // semaphore at a different L1 offset than the local source semaphore, which Semaphore<>::set_multicast
+            // does not support (it reuses the sender's L1 offset). Both structural — not migration backlog.
             noc_semaphore_wait(global_init_semaphore_addr_ptr, num_devices - 1);
             noc_semaphore_set_multicast_loopback_src(
                 local_init_semaphore_addr_ptr, local_set_semaphore_noc_addr, mcast_size, false);
@@ -242,7 +245,8 @@ void kernel_main() {
         }
     }
 
-    // Legacy primitives retained (#45003 item 4): semaphore wait/set on raw L1 address (not a semaphore id).
+    // Legacy primitives retained (#45003 item 4): global_init_semaphore is a GlobalSemaphore address (see
+    // structural-reason note above on the mcast site).
     noc_semaphore_wait(global_init_semaphore_addr_ptr, num_devices - 1);
     noc_semaphore_set(global_init_semaphore_addr_ptr, 0);
 
@@ -335,7 +339,10 @@ void kernel_main() {
     noc_obj.async_write_barrier();
     fabric_connection.close();
     if (core_id == 0 && link_id == 0) {
-        // Legacy primitives retained (#45003 item 4): semaphore wait/set on raw L1 address (not a semaphore id).
+        // Legacy primitives retained (#45003 item 4): global_semaphore_addr is a GlobalSemaphore address
+        // (final_barrier_semaphore in the program factory). GlobalSemaphore exposes only address() — no id().
+        // Semaphore<> binds to per-program ids via get_semaphore<>(id), so it cannot wrap a GlobalSemaphore.
+        // Structural limitation, not a migration backlog item.
         noc_semaphore_wait(global_semaphore_addr_ptr, semaphore_expected_value);
         noc_semaphore_set(global_semaphore_addr_ptr, 0);
     }
