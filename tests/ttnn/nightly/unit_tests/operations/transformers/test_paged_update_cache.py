@@ -495,6 +495,60 @@ def test_paged_update_cache_decode(
     )
 
 
+def test_paged_update_cache_skips_negative_page_table_entry(device):
+    torch.manual_seed(0)
+    block_size = 64
+    head_dim = 128
+    max_seq_len = 128
+    num_users = 4
+    num_heads = 8
+    max_num_blocks_per_seq = max_seq_len // block_size
+    max_num_blocks = num_users * max_num_blocks_per_seq
+
+    cache = torch.randn([max_num_blocks, num_heads, block_size, head_dim]).bfloat16().float()
+    cachett = ttnn.Tensor(cache, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+
+    x = torch.randn([1, num_users, num_heads, head_dim]).bfloat16().float()
+    x_pad = torch.nn.functional.pad(x, (0, 0, 0, 32 - num_heads), "constant", 0)
+    xt = ttnn.Tensor(x_pad, ttnn.bfloat16).to(ttnn.TILE_LAYOUT)
+
+    compute_grid_size = device.compute_with_storage_grid_size()
+    shard_grid = ttnn.num_cores_to_corerangeset(num_users, compute_grid_size, True)
+    input_shard_spec = ttnn.ShardSpec(
+        shard_grid,
+        [xt.volume() // xt.padded_shape[-1] // num_users, xt.padded_shape[-1]],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
+    xt = xt.to(device, input_mem_config)
+
+    page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(num_users, max_num_blocks_per_seq)
+    skipped_user = 2
+    update_idxs = torch.tensor([0, 1, block_size, 3], dtype=torch.int32)
+    page_table[skipped_user, update_idxs[skipped_user].item() // block_size] = -1
+
+    page_table_tt = ttnn.Tensor(page_table, ttnn.int32).to(device)
+    update_idxs_tt = ttnn.Tensor(update_idxs, ttnn.int32).to(device)
+
+    cachett = ttnn.experimental.paged_update_cache(
+        cachett, xt, update_idxs_tensor=update_idxs_tt, page_table=page_table_tt
+    )
+    got = cachett.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+
+    expected = cache.clone()
+    for user in range(num_users):
+        block_id = update_idxs[user].item() // block_size
+        physical_block = page_table[user, block_id].item()
+        if physical_block == -1:
+            continue
+        token_offset = update_idxs[user].item() % block_size
+        expected[physical_block, :num_heads, token_offset : token_offset + 1, :] = x[0, user, :, :].unsqueeze(1)
+
+    eq, message = comp_equal(expected, got)
+    logger.info(message)
+    assert eq
+
+
 @pytest.mark.parametrize("block_size", [64, 128], ids=["block64", "block128"])
 @pytest.mark.parametrize("head_dim", [128])
 @pytest.mark.parametrize("max_seq_len", [2048])

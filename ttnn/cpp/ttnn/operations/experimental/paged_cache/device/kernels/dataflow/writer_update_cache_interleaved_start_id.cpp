@@ -5,6 +5,8 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 
+constexpr uint32_t SKIP_PAGE_TABLE_ENTRY = (uint32_t)-1;
+
 void kernel_main() {
     const uint32_t cache_addr = get_arg_val<uint32_t>(0);
     const uint32_t cache_start_id = get_arg_val<uint32_t>(1);
@@ -69,10 +71,14 @@ void kernel_main() {
 
                 const uint32_t virtual_block_id = update_idx / block_size;
                 const uint32_t physical_block_id = page_table_ptr[virtual_block_id];
-                const uint32_t block_start_id = physical_block_id * num_heads * block_size_t * Wt;
-                const uint32_t block_row_tile = (update_idx % block_size) / TILE_HEIGHT;
-                const uint32_t block_offset = block_row_tile * Wt;
-                cache_id = block_start_id + block_offset;
+                if (physical_block_id == SKIP_PAGE_TABLE_ENTRY) {
+                    skip_update = true;
+                } else {
+                    const uint32_t block_start_id = physical_block_id * num_heads * block_size_t * Wt;
+                    const uint32_t block_row_tile = (update_idx % block_size) / TILE_HEIGHT;
+                    const uint32_t block_offset = block_row_tile * Wt;
+                    cache_id = block_start_id + block_offset;
+                }
 
             } else {
                 const uint32_t cache_batch_tile_offset = my_batch_idx * cache_batch_num_tiles;

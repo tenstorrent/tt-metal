@@ -570,6 +570,25 @@ struct KMcastParams {
     volatile tt_l1_ptr uint32_t* mcast_sem_ptr;  // semaphore pointer
 };
 
+constexpr uint32_t SKIP_PAGE_TABLE_ENTRY = (uint32_t)-1;
+
+template <typename PageT, uint32_t num_heads, uint32_t block_size_t, uint32_t Wt>
+uint32_t virtual_seq_tile_id_to_physical_tile_id_or_skip(
+    uint32_t seq_tile_idx, uint32_t cur_head, const volatile tt_l1_ptr PageT* const page_table_ptr) {
+    constexpr uint32_t block_stride = num_heads * block_size_t * Wt;
+    const uint32_t head_offset = cur_head * block_size_t * Wt;
+
+    const uint32_t virtual_block = seq_tile_idx / block_size_t;
+    const PageT physical_block_raw = page_table_ptr[virtual_block];
+    if (physical_block_raw == static_cast<PageT>(-1)) {
+        return SKIP_PAGE_TABLE_ENTRY;
+    }
+
+    const uint32_t block_row_offset = seq_tile_idx % block_size_t;
+    const uint32_t block_offset = block_row_offset * Wt;
+    return static_cast<uint32_t>(physical_block_raw) * block_stride + head_offset + block_offset;
+}
+
 template <
     uint32_t cb_k_in,
     uint32_t DHt,
@@ -602,13 +621,17 @@ uint64_t read_k(
                 uint32_t virtual_k_tile_row_num = k_chunk_start_row_num + row;
                 uint32_t physical_k_tile_id =
                     (is_page_table_sharded)
-                        ? virtual_seq_tile_id_to_physical_tile_id<uint16_t, num_kv_heads, block_size_t, DHt>(
+                        ? virtual_seq_tile_id_to_physical_tile_id_or_skip<uint16_t, num_kv_heads, block_size_t, DHt>(
                               virtual_k_tile_row_num, cur_head, page_table_ptr_u16)
-                        : virtual_seq_tile_id_to_physical_tile_id<uint32_t, num_kv_heads, block_size_t, DHt>(
+                        : virtual_seq_tile_id_to_physical_tile_id_or_skip<uint32_t, num_kv_heads, block_size_t, DHt>(
                               virtual_k_tile_row_num, cur_head, page_table_ptr_u32);
                 for (uint32_t col = 0; col < DHt; ++col) {
-                    noc_async_read_tile(physical_k_tile_id, k_reader, k_write_ptr_col);
-                    physical_k_tile_id += 1;
+                    if (physical_k_tile_id == SKIP_PAGE_TABLE_ENTRY) {
+                        fill_zeros_async(k_write_ptr_col, k_tile_bytes);
+                    } else {
+                        noc_async_read_tile(physical_k_tile_id, k_reader, k_write_ptr_col);
+                        physical_k_tile_id += 1;
+                    }
                     k_write_ptr_col += Sk_chunk_t_dynamic * k_tile_bytes;
                     if (++barrier_count == barrier_threshold) {
                         noc_async_read_barrier();
@@ -658,13 +681,17 @@ uint64_t read_k(
             uint32_t virtual_k_tile_row_num = k_chunk_start_row_num + row;
             uint32_t physical_k_tile_id =
                 (is_page_table_sharded)
-                    ? virtual_seq_tile_id_to_physical_tile_id<uint16_t, num_kv_heads, block_size_t, DHt>(
+                    ? virtual_seq_tile_id_to_physical_tile_id_or_skip<uint16_t, num_kv_heads, block_size_t, DHt>(
                           virtual_k_tile_row_num, cur_head, page_table_ptr_u16)
-                    : virtual_seq_tile_id_to_physical_tile_id<uint32_t, num_kv_heads, block_size_t, DHt>(
+                    : virtual_seq_tile_id_to_physical_tile_id_or_skip<uint32_t, num_kv_heads, block_size_t, DHt>(
                           virtual_k_tile_row_num, cur_head, page_table_ptr_u32);
             for (uint32_t col = 0; col < DHt; ++col) {
-                noc_async_read_tile(physical_k_tile_id, k_reader, k_write_ptr_col);
-                physical_k_tile_id += 1;                               // Go to next tile in row
+                if (physical_k_tile_id == SKIP_PAGE_TABLE_ENTRY) {
+                    fill_zeros_async(k_write_ptr_col, k_tile_bytes);
+                } else {
+                    noc_async_read_tile(physical_k_tile_id, k_reader, k_write_ptr_col);
+                    physical_k_tile_id += 1;  // Go to next tile in row
+                }
                 k_write_ptr_col += Sk_chunk_t_dynamic * k_tile_bytes;  // Go to next column in CB
 
                 if (++barrier_count == barrier_threshold) {
@@ -723,13 +750,17 @@ void read_v(
             // Use vDHt for V tensor's width since V is independent
             uint32_t physical_v_tile_id =
                 (is_page_table_sharded)
-                    ? virtual_seq_tile_id_to_physical_tile_id<uint16_t, num_kv_heads, block_size_t, vDHt>(
+                    ? virtual_seq_tile_id_to_physical_tile_id_or_skip<uint16_t, num_kv_heads, block_size_t, vDHt>(
                           virtual_v_tile_row_num, cur_head, page_table_ptr_u16)
-                    : virtual_seq_tile_id_to_physical_tile_id<uint32_t, num_kv_heads, block_size_t, vDHt>(
+                    : virtual_seq_tile_id_to_physical_tile_id_or_skip<uint32_t, num_kv_heads, block_size_t, vDHt>(
                           virtual_v_tile_row_num, cur_head, page_table_ptr_u32);
             for (uint32_t col = 0; col < vDHt; ++col) {
-                noc_async_read_tile(physical_v_tile_id, v_reader, v_write_ptr);
-                physical_v_tile_id += 1;
+                if (physical_v_tile_id == SKIP_PAGE_TABLE_ENTRY) {
+                    fill_zeros_async(v_write_ptr, v_tile_bytes);
+                } else {
+                    noc_async_read_tile(physical_v_tile_id, v_reader, v_write_ptr);
+                    physical_v_tile_id += 1;
+                }
                 v_write_ptr += v_tile_bytes;
 
                 if (++barrier_count == barrier_threshold) {
