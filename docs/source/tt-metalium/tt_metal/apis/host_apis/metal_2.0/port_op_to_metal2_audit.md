@@ -49,7 +49,7 @@ You do not skip the audit. You do not pre-load the recipe document. The audit is
 
 ## Feasibility audit
 
-For the op in scope, run through four steps (Step 0.1 prereqs, Step 0.2 feature compatibility, Step 0.3 port complexity signals, Step 0.4 out-of-directory call surface). Each step's checks have three possible outcomes:
+For the op in scope, run through five steps (Step 0.1 prereqs, Step 0.2 feature compatibility, Step 0.3 port complexity signals, Step 0.4 out-of-directory call surface, Step 0.5 TensorAccessor bypass). Each step's checks have three possible outcomes:
 
 - **Green** — proceed past this check.
 - **Yellow** — requires user judgment (ambiguous signal, or a supported-but-trade-off construct). Ask the user; respect the answer.
@@ -71,14 +71,14 @@ Metal 2.0 migration sits at the end of a chain of prior modernizations. Three pr
 - **Standalone prereq** (Check 1 below): `ProgramDescriptor` migration is a substantial, separate body of work with TTNN-infrastructure implications. If unmet, it is its own PR — it does not bundle with the other prereq checks or with the Metal 2.0 port. Record the gap and continue the audit; do not attempt the migration here.
 - **Bundled prereqs** (Checks 2 and 3 below): smaller, mechanical kernel-side work. If unmet, address in a **single bundled prereq PR**, separate from the Metal 2.0 port. Bundle the two together if both are unmet — they're conceptually one body of work (kernel-side modernization). Yellow sub-cases (see Check 3) require user judgment.
 
-**Complete all three checks regardless of individual outcomes, then continue to Steps 0.2, 0.3, and 0.4.** The audit's job is to gather a complete picture of what porting this op will require, including features the op uses that may be blocked on prereq work, characteristics that shape the port's scope, and downstream dependencies on donor migrations. Do not exit early on a RED prereq — surface all findings to the report.
+**Complete all three checks regardless of individual outcomes, then continue to Steps 0.2, 0.3, 0.4, and 0.5.** The audit's job is to gather a complete picture of what porting this op will require, including features the op uses that may be blocked on prereq work, characteristics that shape the port's scope, downstream dependencies on donor migrations, and per-binding correctness hazards. Do not exit early on a RED prereq — surface all findings to the report.
 
 **Check 1 (standalone prereq): Op is on the `ProgramDescriptor` API.**
 
 Confirm the op's program-factory code populates a `ProgramDescriptor` and uses `KernelDescriptor`, `CBDescriptor`, `SemaphoreDescriptor`, etc. — *not* the older imperative-builder style from `host_api.hpp` (`CreateProgram` / `CreateKernel` / `CreateCircularBuffer` / `SetRuntimeArgs` / etc.).
 
 - **Green**: op uses the `ProgramDescriptor` API.
-- **Red**: op uses the imperative `host_api.hpp` builder API (not `ProgramDescriptor`). Record the prereq gap — `ProgramDescriptor` migration is a **prerequisite to Metal 2.0 porting**, a substantial standalone body of work with TTNN-infrastructure implications, addressed in its own PR. **Do not attempt the migration as part of this audit, do not bundle it with anything, do not propose a partial conversion.** Continue with Checks 2 and 3 and Steps 0.2, 0.3, and 0.4 — the feature, complexity, and call-surface scans still produce useful findings (some features may need attention regardless of which API the op is currently on; others will only become relevant after the prereq lands).
+- **Red**: op uses the imperative `host_api.hpp` builder API (not `ProgramDescriptor`). Record the prereq gap — `ProgramDescriptor` migration is a **prerequisite to Metal 2.0 porting**, a substantial standalone body of work with TTNN-infrastructure implications, addressed in its own PR. **Do not attempt the migration as part of this audit, do not bundle it with anything, do not propose a partial conversion.** Continue with Checks 2 and 3 and Steps 0.2, 0.3, 0.4, and 0.5 — the feature, complexity, call-surface, and bypass scans still produce useful findings (some features may need attention regardless of which API the op is currently on; others will only become relevant after the prereq lands).
 
 **Check 2 (AI-doable): Device 2.0 Data Movement migration.**
 
@@ -118,7 +118,7 @@ For each entry in [Appendix A: Metal 2.0 feature compatibility](#appendix-a-meta
 
 - **Green**: no entry's recognition signals fire.
 - **Yellow**: either a `DISCOURAGED` entry's signals match, **or** an `UNSUPPORTED` entry's signals match ambiguously (you cannot be sure whether the feature is in use). Ask the user. On override, proceed per the entry's guidance.
-- **Red**: an `UNSUPPORTED` entry's signals match definitively. Report the feature name, the `file:line` where it appears, and the recognition signal that fired. The port is blocked on this finding; continue scanning the remaining Appendix A entries and on through Steps 0.3 and 0.4 — complete the full audit even after a RED match.
+- **Red**: an `UNSUPPORTED` entry's signals match definitively. Report the feature name, the `file:line` where it appears, and the recognition signal that fired. The port is blocked on this finding; continue scanning the remaining Appendix A entries and on through Steps 0.3, 0.4, and 0.5 — complete the full audit even after a RED match.
 
 If the op uses something *not listed* in Appendix A and you are uncertain of its support status, treat as yellow and ask. Do not assume support from API surface.
 
@@ -195,6 +195,56 @@ One donor file can have multiple functions with different shapes — classify pe
 
 Status roll-up uses ✓ / ⚠ / ✗ / ⭐. The star is reserved for entries that create scheduling blockers — Shape 4 (donor pre-Device-2.0) and `CircularBuffer&` (op-by-op friction). Other ✗/⚠ items are workable today or need donor work, but don't sequence-block.
 
+### Step 0.5 — TensorAccessor bypass
+
+Run this step regardless of Step 0.1, 0.2, 0.3, and 0.4 outcomes. **This check identifies per-TensorBinding correctness hazards** — bindings whose host code passes a `Buffer*` base address through a uint32 RTA, then performs address arithmetic on it kernel-side, bypassing the `TensorParameter` / `TensorBinding` mechanism.
+
+**Why this matters.** Pre–Metal 2.0, this pattern was a style concern — *"yuck, we want to get rid of these raw pointers."* Under TTNN's recent fast-path-cache binding-injection changes, the binding channel and the RTA channel can desynchronize on fast-path re-execution (cache hit): the binding sees the new buffer address, but the kernel still reads the stale RTA value. This makes the pattern a **correctness hazard, not a porting nuisance**. A binding with this shape needs to be either re-expressed via `TensorAccessor` or routed through the planned "give me the base pointer" escape-hatch API once it lands.
+
+**Granularity — per-binding, not per-op.** An op may have multiple tensor bindings, some clean (`TensorAccessor` or borrowed-memory CB) and some bypassing. Report per-binding status — a single bypassing binding fires this check even when the op's primary I/O is via `TensorAccessor`.
+
+**Detection — host side.**
+
+- `SetRuntimeArgs` / `SetCommonRuntimeArgs` argument lists containing `buffer->address()`, `->address()`, `(*buffer).address()`.
+- Helper functions that take a `Buffer*` / `Buffer&` and inject its address into an arg vector (via `args.push_back(...)`, in-place vector init, or named accumulator).
+- For each `TensorParameter` the op declares (or would declare in the port), cross-check: does the same buffer also appear in an RTA address argument? If yes, the binding bypasses.
+
+**Detection — kernel side.**
+
+- `get_noc_addr_from_bank_id<bank_type>(bank_id, addr)` where `addr` traces back to a `get_arg_val`. The textbook anti-pattern.
+- `get_noc_addr(x, y, addr)` where `addr` traces back to RTAs.
+- `noc.async_read(addr, ...)` / `noc_async_read(addr, ...)` where `addr` was computed from an RTA-sourced base + offset arithmetic.
+- Variable names that telegraph buffer-address purpose: `src_addr`, `dst_addr`, `remote_addr`, `base_addr`, `input_addr` — when their value comes from `get_arg_val`.
+
+**False-positive guards — do NOT flag.**
+
+- `get_arg_val<uint32_t>` for shape / count / index / control values. Those uint32s aren't addresses.
+- `accessor.get_noc_addr(page_id)` outputs — that's the supported `TensorAccessor` pattern, NOT this check.
+- Host-side `set_globally_allocated_address(buffer)` — the dynamic-CB / borrowed-memory pattern, covered separately by Step 0.2's Dynamic CircularBuffer entry.
+- Kernel reading from a borrowed-memory CB via `cb.get_read_ptr()` — supported alternative; the causal-link gate from Step 0.1 Check 3 applies.
+
+**Distinction from existing checks.**
+
+- **Step 0.1 Check 2 (Device 2.0 DM):** asks whether the op uses modern device-side wrappers. Independent. A kernel can be fully Device 2.0–compliant AND still have a raw-ptr bypass binding.
+- **Step 0.1 Check 3 (TensorAccessor usage):** asks whether `TensorAccessor` is used where it should be. This check is more specific — even when Check 3 is GREEN at the op level, a single bypassing binding fires Step 0.5 RED.
+
+**Report shape — per-binding inventory.**
+
+For each `TensorParameter` the op declares (or would declare in the port), report:
+
+- **clean** — binding uses `TensorAccessor` or borrowed-memory CB end-to-end.
+- **⭐ RED — bypass** — buffer address passed as RTA at `host:file:line`, consumed at `kernel:file:line` by `<call>`. The Metal 2.0 port needs either `TensorAccessor` re-expression or the base-pointer escape-hatch API.
+
+Example:
+
+```
+TensorParameter "input_a":  clean — TensorAccessor.
+TensorParameter "input_b":  ⭐ RED — buffer address as RTA at `host:foo.cpp:120`, consumed at `kernel:bar.cpp:38` by `get_noc_addr_from_bank_id`.
+TensorParameter "output":   clean — borrowed-memory CB (causal-link).
+```
+
+**Op-level roll-up:** `✓ clean` (no bypassing bindings) / `⭐ RED` (one or more bindings bypass).
+
 ### Output: the audit report
 
 The audit produces a written report. Write the report as `METAL2_PREPORT_AUDIT.md` in the op's directory (alongside the program factory `.cpp` files). This file is the audit's deliverable and is committed alongside the port — it sits next to `METAL2_PORT_PLAN.md` and `METAL2_PORT_REPORT.md` (both written by the port recipe), so all generated docs for the port land in one spot.
@@ -210,7 +260,7 @@ The audit produces a written report. Write the report as `METAL2_PREPORT_AUDIT.m
 Markdown formatting is required, not optional — the headers, tables, and inline-code spans are what make a sizeable report skim-friendly for a human reviewer. Use:
 
 - H1 for the audit's title.
-- H2 for major sections (Result, Porting prerequisites, Feature compatibility check, Port complexity signals, Out-of-directory call surface, Path forward, Questions for the user).
+- H2 for major sections (Result, Porting prerequisites, Feature compatibility check, Port complexity signals, Out-of-directory call surface, TensorAccessor bypass, Path forward, Questions for the user).
 - H3 for sub-sections (per-prereq-check headings; per-feature detail sections).
 - **Tables** for the Device 2.0 DM holdover list (when present) and the Feature compatibility check summary. These are non-negotiable — flat bullet lists at this scale lose readability fast.
 - Inline `code formatting` for file paths, function names, type names, identifiers throughout.
@@ -332,6 +382,18 @@ Findings from Step 0.4.
 ### Per-call detail
 
 <Only when any summary row has ⚠ / ✗ / ⭐. For each such donor: a heading, then a per-function breakdown. Omit this subsection entirely if all rolls are ✓.>
+
+## TensorAccessor bypass
+
+Findings from Step 0.5.
+
+**Op-level roll-up:** <`✓ clean` / `⭐ RED`> — <one-line elaboration: count of bypassing bindings, if any>.
+
+### Per-binding inventory
+
+<One bullet per TensorParameter the op declares or would declare in the port:>
+
+- **`<binding_name>`:** clean (mechanism) | ⭐ RED — bypass (host:file:line + kernel:file:line + call)
 
 ## Path forward
 
