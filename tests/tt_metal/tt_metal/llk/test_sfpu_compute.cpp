@@ -271,13 +271,13 @@ bool run_sfpu_all_same_buffer(
         };
 
         experimental::WorkUnitSpec wu{
-            .unique_id = "main",
+            .name = "main",
             .kernels = {READER, WRITER, COMPUTE},
             .target_nodes = node,
         };
 
         experimental::ProgramSpec spec{
-            .program_id = "sfpu_compute",
+            .name = "sfpu_compute",
             .kernels = {reader_spec, writer_spec, compute_spec},
             .dataflow_buffers = {in_dfb_spec, out_dfb_spec},
             .work_units = {wu},

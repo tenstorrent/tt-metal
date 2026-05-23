@@ -660,13 +660,13 @@ static void run_quasar_tilize_untilize_test(
     };
 
     experimental::WorkUnitSpec wu{
-        .unique_id = "main",
+        .name = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = node,
     };
 
     experimental::ProgramSpec spec{
-        .program_id = "quasar_tilize_untilize",
+        .name = "quasar_tilize_untilize",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {input_dfb_spec, output_dfb_spec},
         .work_units = {wu},

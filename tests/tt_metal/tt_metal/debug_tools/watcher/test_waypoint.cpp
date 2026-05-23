@@ -114,12 +114,12 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
             .config_spec = experimental::ComputeConfiguration{},
         };
         experimental::WorkUnitSpec wu{
-            .unique_id = "main",
+            .name = "main",
             .kernels = {DM_KERNEL_NAME, COMPUTE_KERNEL_NAME},
             .target_nodes = experimental::NodeRange{core_range},
         };
         experimental::ProgramSpec spec{
-            .program_id = "watcher_waypoints",
+            .name = "watcher_waypoints",
             .kernels = {dm_spec, compute_spec},
             .work_units = {wu},
         };

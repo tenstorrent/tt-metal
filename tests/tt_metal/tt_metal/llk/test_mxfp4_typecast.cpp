@@ -113,13 +113,13 @@ static vector<uint32_t> run_mxfp4_typecast(
     };
 
     experimental::WorkUnitSpec wu{
-        .unique_id = "main",
+        .name = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = node,
     };
 
     experimental::ProgramSpec spec{
-        .program_id = "mxfp4_typecast",
+        .name = "mxfp4_typecast",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {input_dfb_spec, output_dfb_spec},
         .work_units = {wu},

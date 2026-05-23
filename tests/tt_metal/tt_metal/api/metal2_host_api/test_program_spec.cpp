@@ -150,7 +150,7 @@ TEST_F(ProgramSpecTestQuasar, DuplicateWorkUnitNameFails) {
     NodeCoord node1{1, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     // Two kernels on different nodes
     auto kernel0 = MakeMinimalDMKernel("kernel0");
@@ -171,7 +171,7 @@ TEST_F(ProgramSpecTestQuasar, SharedLocalAccessorNameForDifferentDFBsFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto kernel = MakeMinimalDMKernel("kernel");
     auto dfb0 = MakeMinimalDFB("dfb_0");
@@ -196,7 +196,7 @@ TEST_F(ProgramSpecTestQuasar, DuplicateProducerBindingForSameLocalAccessorNameFa
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto producer_kernel = MakeMinimalDMKernel("producer");
     auto consumer_kernel = MakeMinimalDMKernel("consumer");
@@ -222,7 +222,7 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopWithSharedLocalAccessorNameSucceeds) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     // A kernel that both produces and consumes the same DFB may share a single
     // local_accessor_name across the PRODUCER and CONSUMER bindings.
@@ -257,7 +257,7 @@ TEST_F(ProgramSpecTestQuasar, InvalidLocalAccessorNameFails) {
 
     for (const auto& bad_name : invalid_names) {
         ProgramSpec spec;
-        spec.program_id = "test_program";
+        spec.name = "test_program";
 
         auto kernel = MakeMinimalDMKernel("kernel");
         auto dfb = MakeMinimalDFB("dfb");
@@ -280,7 +280,7 @@ TEST_F(ProgramSpecTestQuasar, KernelReferencesUnknownDFBFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto kernel = MakeMinimalDMKernel("kernel");
     // Bind to a DFB that doesn't exist
@@ -299,7 +299,7 @@ TEST_F(ProgramSpecTestQuasar, DFBWithNoBindingsFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     // Create a kernel with no DFB bindings
     auto kernel = MakeMinimalDMKernel("kernel");
@@ -321,7 +321,7 @@ TEST_F(ProgramSpecTestQuasar, DFBWithOnlyProducerFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto kernel = MakeMinimalDMKernel("kernel");
     auto dfb = MakeMinimalDFB("dfb");
@@ -342,7 +342,7 @@ TEST_F(ProgramSpecTestQuasar, DFBWithOnlyConsumerFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto kernel = MakeMinimalDMKernel("kernel");
     auto dfb = MakeMinimalDFB("dfb");
@@ -363,7 +363,7 @@ TEST_F(ProgramSpecTestQuasar, DFBWithMultipleProducersInSameWorkUnitFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto producer1 = MakeMinimalDMKernel("producer1");
     auto producer2 = MakeMinimalDMKernel("producer2");
@@ -393,7 +393,7 @@ TEST_F(ProgramSpecTestQuasar, DFBWithMultipleConsumersInSameWorkUnitFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto producer = MakeMinimalDMKernel("producer");
     auto consumer1 = MakeMinimalComputeKernel("consumer1");
@@ -422,7 +422,7 @@ TEST_F(ProgramSpecTestQuasar, DFBWithMultipleConsumersInDifferentWorkUnitsSuccee
     NodeCoord node1{1, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto producer = MakeMinimalDMKernel("producer");
     auto consumer1 = MakeMinimalComputeKernel("consumer1");
@@ -451,7 +451,7 @@ TEST_F(ProgramSpecTestQuasar, DFBWithMultipleProducersInDifferentWorkUnitsSuccee
     NodeCoord node1{1, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto producer1 = MakeMinimalDMKernel("producer1");
     auto producer2 = MakeMinimalDMKernel("producer2");
@@ -479,7 +479,7 @@ TEST_F(ProgramSpecTestQuasar, DFBProducerConsumerCoverageMismatchFails) {
     NodeCoord node1{1, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto producer = MakeMinimalDMKernel("producer");
     auto consumer = MakeMinimalComputeKernel("consumer");
@@ -508,7 +508,7 @@ TEST_F(ProgramSpecTestQuasar, DFBMultiBindingAccessPatternMismatchFails) {
     NodeCoord node1{1, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto producer = MakeMinimalDMKernel("producer");
     auto consumer1 = MakeMinimalComputeKernel("consumer1");
@@ -539,7 +539,7 @@ TEST_F(ProgramSpecTestQuasar, DFBMultiBindingNumThreadsMismatchFails) {
     NodeCoord node1{1, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto producer = MakeMinimalDMKernel("producer");
     auto consumer1 = MakeMinimalComputeKernel("consumer1", /*num_threads=*/1);
@@ -570,7 +570,7 @@ TEST_F(ProgramSpecTestQuasar, DFBMultiBindingSelfLoopWithMatchingSidesSucceeds) 
     NodeCoord node1{1, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     // Two self-looping kernels on disjoint WUs. Each binds "dfb" as both producer and
     // consumer; producer set equals consumer set = {self_loop_1, self_loop_2}. At each node,
@@ -605,7 +605,7 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopWithExtraProducerSideKernelFails) {
     NodeCoord node1{1, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     // self_loop_1 binds "dfb" as BOTH producer and consumer (self-loop). On the other WU,
     // an unrelated producer-only kernel is bound, while extra_consumer covers the consume side.
@@ -649,7 +649,7 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopWithExtraProducerSideKernelFails) {
 
 TEST_F(ProgramSpecTestQuasar, EmptyKernelsFails) {
     ProgramSpec spec;
-    spec.program_id = "empty_program";
+    spec.name = "empty_program";
     spec.work_units = std::vector<WorkUnitSpec>{};  // Empty work_units too
 
     EXPECT_THAT(
@@ -662,7 +662,7 @@ TEST_F(ProgramSpecTestQuasar, KernelWithZeroThreadsFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto kernel = MakeMinimalDMKernel("kernel", 0);  // 0 threads!
     spec.kernels = {kernel};
@@ -677,7 +677,7 @@ TEST_F(ProgramSpecTestQuasar, DMKernelExceedingMaxThreadsFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     // Quasar has 8 DM cores per node (we reserve 2 for internal use)
     auto kernel = MakeMinimalDMKernel("kernel", 9);  // Too many threads!
@@ -694,7 +694,7 @@ TEST_F(ProgramSpecTestQuasar, ComputeKernelExceedingMaxThreadsFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     // Quasar has 4 Tensix cores per node
     auto kernel = MakeMinimalComputeKernel("kernel", 5);  // Too many threads!
@@ -711,7 +711,7 @@ TEST_F(ProgramSpecTestQuasar, DMKernelWithoutGen2ConfigFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto kernel = MakeMinimalDMKernel("kernel");
     // Remove the Gen2 config
@@ -738,7 +738,7 @@ TEST_F(ProgramSpecTestQuasar, DMKernelWithNoConfigAtAllFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto kernel = MakeMinimalDMKernel("kernel");
     // Remove both Gen1 and Gen2 configs
@@ -761,7 +761,7 @@ TEST_F(ProgramSpecTestQuasar, RemoteDFBNotYetSupportedAtRuntime) {
     NodeCoord consumer_node{1, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto producer = MakeMinimalDMKernel("producer");
     auto consumer = MakeMinimalDMKernel("consumer");
@@ -797,7 +797,7 @@ inline ProgramSpec MakeBorrowedDFBProgramSpec(
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto producer = MakeMinimalDMKernel("producer");
     auto consumer = MakeMinimalDMKernel("consumer");
@@ -1038,7 +1038,7 @@ TEST_F(ProgramSpecTestQuasar, DFBWithComputeEndpointRequiresDataFormat) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto producer = MakeMinimalDMKernel("producer");
     auto consumer = MakeMinimalComputeKernel("consumer");  // Compute!
@@ -1062,7 +1062,7 @@ TEST_F(ProgramSpecTestQuasar, ComputeConfigUnpackToDestModeReferencesUnboundDFBF
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto producer = MakeMinimalDMKernel("producer");
     auto consumer = MakeMinimalComputeKernel("consumer");
@@ -1164,7 +1164,7 @@ TEST_F(ProgramSpecTestQuasar, FP32ProducerOnlyBindingDoesNotRequireEntry) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto producer_compute = MakeMinimalComputeKernel("producer_compute");
     auto& producer_config = std::get<ComputeConfiguration>(producer_compute.config_spec);
@@ -1191,7 +1191,7 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestFp32OnProducerBindingFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto producer_compute = MakeMinimalComputeKernel("producer_compute");
     auto& producer_config = std::get<ComputeConfiguration>(producer_compute.config_spec);
@@ -1278,7 +1278,7 @@ TEST_F(ProgramSpecTestQuasar, DataFormatNotSupportedOnTargetArchitectureFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto producer = MakeMinimalDMKernel("producer");
     auto consumer = MakeMinimalComputeKernel("consumer");
@@ -1306,7 +1306,7 @@ TEST_F(ProgramSpecTestQuasar, TooManyDFBsFailsValidation) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto producer = MakeMinimalDMKernel("producer");
     auto consumer = MakeMinimalComputeKernel("consumer");
@@ -1336,7 +1336,7 @@ TEST_F(ProgramSpecTestQuasar, TooManyDFBsFailsValidation) {
 
 TEST_F(ProgramSpecTestQuasar, EmptyWorkUnitSpecsFails) {
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto kernel = MakeMinimalDMKernel("kernel");
     spec.kernels = {kernel};
@@ -1352,13 +1352,13 @@ TEST_F(ProgramSpecTestQuasar, WorkUnitSpecWithNoKernelsFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto kernel = MakeMinimalDMKernel("kernel");
     spec.kernels = {kernel};
 
     WorkUnitSpec work_unit;
-    work_unit.unique_id = "work_unit";
+    work_unit.name = "work_unit";
     work_unit.target_nodes = node;
     work_unit.kernels = {};  // No kernels!
     spec.work_units = std::vector<WorkUnitSpec>{work_unit};
@@ -1373,7 +1373,7 @@ TEST_F(ProgramSpecTestQuasar, WorkUnitSpecReferencesUnknownKernelFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto kernel = MakeMinimalDMKernel("real_kernel");
     spec.kernels = {kernel};
@@ -1392,7 +1392,7 @@ TEST_F(ProgramSpecTestQuasar, OverlappingWorkUnitSpecsFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto kernel1 = MakeMinimalDMKernel("kernel1");
     auto kernel2 = MakeMinimalDMKernel("kernel2");
@@ -1411,7 +1411,7 @@ TEST_F(ProgramSpecTestQuasar, KernelNotInAnyWorkUnitSpecFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto kernel1 = MakeMinimalDMKernel("kernel1");
     auto kernel2 = MakeMinimalDMKernel("kernel2");  // Not in any work_unit!
@@ -1429,7 +1429,7 @@ TEST_F(ProgramSpecTestQuasar, WorkUnitExceedsDMCoreBudgetFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     // Create enough DM kernels to exceed the 8 DM core budget
     auto kernel1 = MakeMinimalDMKernel("dm1", 3);
@@ -1449,7 +1449,7 @@ TEST_F(ProgramSpecTestQuasar, WorkUnitExceedsComputeCoreBudgetFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     // Create enough compute kernels to exceed the 4 Tensix core budget (2+4=6).
     // (Legal thread counts on Quasar are 1, 2, 4; 3 is explicitly disallowed.)
@@ -1470,7 +1470,7 @@ TEST_F(ProgramSpecTestQuasar, WorkUnitWithMultipleComputeKernelsFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto compute1 = MakeMinimalComputeKernel("compute1");
     auto compute2 = MakeMinimalComputeKernel("compute2");
@@ -1491,7 +1491,7 @@ TEST_F(ProgramSpecTestQuasar, LocalDFBProducerConsumerWorkUnitMembershipMismatch
     NodeCoord node1{1, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto producer = MakeMinimalDMKernel("producer");
     auto consumer = MakeMinimalDMKernel("consumer");
@@ -1524,7 +1524,7 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelInterScopeFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "self_loop_inter";
+    spec.name = "self_loop_inter";
 
     auto compute = MakeMinimalComputeKernel("compute");
     compute.dfb_compute_self_loop_scopes.push_back(
@@ -1551,7 +1551,7 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopScopeOnDMKernelFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "self_loop_on_dm";
+    spec.name = "self_loop_on_dm";
 
     auto producer = MakeMinimalDMKernel("producer");
     // Misapplied: self-loop scope entries are valid only on compute kernels.
@@ -1576,7 +1576,7 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopScopeReferencingUnknownDFBFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "self_loop_unknown_dfb";
+    spec.name = "self_loop_unknown_dfb";
 
     auto compute = MakeMinimalComputeKernel("compute");
     // Misapplied: there is no DFB named "ghost" in the spec.
@@ -1603,7 +1603,7 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopScopeOnNonSelfLoopedDFBFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "self_loop_not_self_looped";
+    spec.name = "self_loop_not_self_looped";
 
     auto compute = MakeMinimalComputeKernel("compute");
     // Misapplied: the kernel only produces; it does not self-loop the DFB.
@@ -1630,7 +1630,7 @@ TEST_F(ProgramSpecTestQuasar, DuplicateSelfLoopScopeEntriesFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "self_loop_duplicate";
+    spec.name = "self_loop_duplicate";
 
     auto compute = MakeMinimalComputeKernel("compute");
     // Two entries for the same DFB on the same kernel.
@@ -1679,7 +1679,7 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelImplicitIntraSucceeds) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "self_loop_implicit_intra";
+    spec.name = "self_loop_implicit_intra";
 
     auto compute = MakeMinimalComputeKernel("compute");
 
@@ -1705,7 +1705,7 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelExplicitIntraSucceeds) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "self_loop_explicit_intra";
+    spec.name = "self_loop_explicit_intra";
 
     auto compute = MakeMinimalComputeKernel("compute");
     compute.dfb_compute_self_loop_scopes.push_back(
@@ -1730,7 +1730,7 @@ TEST_F(ProgramSpecTestQuasar, DMOnlyProgramSucceeds) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "dm_only_program";
+    spec.name = "dm_only_program";
 
     auto producer = MakeMinimalDMKernel("producer");
     auto consumer = MakeMinimalDMKernel("consumer");
@@ -1752,7 +1752,7 @@ TEST_F(ProgramSpecTestQuasar, MultiNodeProgramSucceeds) {
     NodeRange nodes{{0, 0}, {1, 1}};  // 2x2 grid
 
     ProgramSpec spec;
-    spec.program_id = "multi_node_program";
+    spec.name = "multi_node_program";
 
     auto producer = MakeMinimalDMKernel("producer");
     auto consumer = MakeMinimalDMKernel("consumer");
@@ -1775,7 +1775,7 @@ TEST_F(ProgramSpecTestQuasar, MultipleWorkUnitsOnDifferentNodesSucceeds) {
     NodeRangeSet all_nodes(std::set<NodeRange>{NodeRange{node0, node0}, NodeRange{node1, node1}});
 
     ProgramSpec spec;
-    spec.program_id = "multi_work_unit_program";
+    spec.name = "multi_work_unit_program";
 
     // Kernels span both nodes
     auto kernel = MakeMinimalDMKernel("kernel");
@@ -1793,7 +1793,7 @@ TEST_F(ProgramSpecTestQuasar, MaxDMThreadsSucceeds) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "max_dm_threads";
+    spec.name = "max_dm_threads";
 
     auto producer = MakeMinimalDMKernel("producer", 3);
     auto consumer = MakeMinimalDMKernel("consumer", 3);  // Total: 6
@@ -1815,7 +1815,7 @@ TEST_F(ProgramSpecTestQuasar, MaxComputeThreadsSucceeds) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "max_compute_threads";
+    spec.name = "max_compute_threads";
 
     auto dm = MakeMinimalDMKernel("dm");
     auto compute = MakeMinimalComputeKernel("compute", 4);  // Max threads
@@ -1838,7 +1838,7 @@ TEST_F(ProgramSpecTestQuasar, MultipleDFBsSucceeds) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "multi_dfb_program";
+    spec.name = "multi_dfb_program";
 
     auto producer = MakeMinimalDMKernel("producer");
     auto consumer = MakeMinimalComputeKernel("consumer");
@@ -1897,7 +1897,7 @@ TEST_F(ProgramSpecTestQuasar, VarargPerNodeOverlapFails) {
     NodeRangeSet both{std::vector<NodeRange>{NodeRange{node_a, node_a}, NodeRange{node_b, node_b}}};
 
     ProgramSpec spec;
-    spec.program_id = "vararg_overlap_test";
+    spec.name = "vararg_overlap_test";
     auto kernel = MakeMinimalDMKernel("dm_kernel");
     kernel.runtime_arguments_schema.num_runtime_varargs_per_node =
         NumVarargsPerNode{{both, 3}, {node_a, 3}};  // node_a listed twice
@@ -1918,7 +1918,7 @@ TEST_F(ProgramSpecTestQuasar, NodeRangeSetTargetNodesSucceeds) {
     NodeRangeSet nodes(std::set<NodeRange>{NodeRange{{0, 0}, {0, 1}}, NodeRange{{2, 0}, {2, 1}}});
 
     ProgramSpec spec;
-    spec.program_id = "range_set_program";
+    spec.name = "range_set_program";
 
     auto producer = MakeMinimalDMKernel("producer");
     auto consumer = MakeMinimalDMKernel("consumer");
@@ -1989,7 +1989,7 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestModePlacedAtDfbIdSlot) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto producer = MakeMinimalDMKernel("producer");
     auto consumer = MakeMinimalComputeKernel("consumer");
@@ -2103,7 +2103,7 @@ TEST_F(ProgramSpecTestQuasar, BacktrackingSolverFindsAssignment_RegardlessOfOrde
     auto make_spec =
         [&](const std::string& id, std::vector<KernelSpec> kernels, const std::vector<WorkUnitSpec>& work_units) {
             ProgramSpec spec;
-            spec.program_id = id;
+            spec.name = id;
             spec.kernels = std::move(kernels);
             spec.work_units = work_units;
             return spec;
@@ -2192,7 +2192,7 @@ TEST_F(ProgramSpecTestQuasar, SimplifyingAssumptionViolation_OverlappingMultiNod
     NodeRangeSet nodes_C(std::set<NodeRange>{NodeRange{node_01, node_01}, NodeRange{node_02, node_02}});
 
     ProgramSpec spec;
-    spec.program_id = "triangle_of_doom";
+    spec.name = "triangle_of_doom";
 
     auto kernel_a = MakeMinimalDMKernel("kernel_a", 3);
     auto kernel_b = MakeMinimalDMKernel("kernel_b", 3);
@@ -2337,12 +2337,12 @@ TEST(AggregateSpecTypes, DataflowBufferSpecDesignatedInitializers) {
 TEST(AggregateSpecTypes, WorkUnitSpecDesignatedInitializers) {
     // Demonstrates constructing WorkUnitSpec with designated initializers
     WorkUnitSpec work_unit{
-        .unique_id = "my_work_unit",
+        .name = "my_work_unit",
         .kernels = {"kernel1", "kernel2"},
         .target_nodes = NodeCoord{0, 0},
     };
 
-    EXPECT_EQ(work_unit.unique_id, "my_work_unit");
+    EXPECT_EQ(work_unit.name, "my_work_unit");
     EXPECT_EQ(work_unit.kernels.size(), 2u);
 }
 
@@ -2405,7 +2405,7 @@ TEST(AggregateSpecTypes, SemaphoreSpecDesignatedInitializers) {
 TEST(AggregateSpecTypes, ProgramSpecDesignatedInitializers) {
     // Demonstrates constructing a complete ProgramSpec with designated initializers
     ProgramSpec spec{
-        .program_id = "my_program",
+        .name = "my_program",
         .kernels =
             {
                 KernelSpec{
@@ -2442,14 +2442,14 @@ TEST(AggregateSpecTypes, ProgramSpecDesignatedInitializers) {
         .work_units =
             {
                 WorkUnitSpec{
-                    .unique_id = "work_unit",
+                    .name = "work_unit",
                     .kernels = {"producer", "consumer"},
                     .target_nodes = NodeCoord{0, 0},
                 },
             },
     };
 
-    EXPECT_EQ(spec.program_id, "my_program");
+    EXPECT_EQ(spec.name, "my_program");
     EXPECT_EQ(spec.kernels.size(), 2u);
     EXPECT_EQ(spec.dataflow_buffers.size(), 1u);
     EXPECT_EQ(spec.work_units.size(), 1u);
@@ -2532,7 +2532,7 @@ TEST_F(ProgramSpecTestGen1, DMOnlyProgramSucceeds) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "dm_only_program";
+    spec.name = "dm_only_program";
 
     auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
     auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
@@ -2553,7 +2553,7 @@ TEST_F(ProgramSpecTestGen1, TwoDMKernelsDifferentProcessorsSucceeds) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "two_dm_program";
+    spec.name = "two_dm_program";
 
     auto k0 = MakeMinimalGen1DMKernel("k0", DataMovementProcessor::RISCV_0);
     auto k1 = MakeMinimalGen1DMKernel("k1", DataMovementProcessor::RISCV_1);
@@ -2568,7 +2568,7 @@ TEST_F(ProgramSpecTestGen1, MultiThreadedDMKernelFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto kernel = MakeMinimalGen1DMKernel("dm_kernel");
     kernel.num_threads = 2;
@@ -2585,7 +2585,7 @@ TEST_F(ProgramSpecTestGen1, MultiThreadedComputeKernelFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto kernel = MakeMinimalComputeKernel("compute_kernel");
     kernel.num_threads = 2;
@@ -2603,7 +2603,7 @@ TEST_F(ProgramSpecTestGen1, DMKernelWithGen2ConfigFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     // MakeMinimalDMKernel produces a gen2 (Quasar) DM config
     auto kernel = MakeMinimalDMKernel("dm_kernel");
@@ -2621,7 +2621,7 @@ TEST_F(ProgramSpecTestGen1, ProcessorConflictFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto k0 = MakeMinimalGen1DMKernel("k0", DataMovementProcessor::RISCV_0);
     auto k1 = MakeMinimalGen1DMKernel("k1", DataMovementProcessor::RISCV_0);  // conflict
@@ -2648,7 +2648,7 @@ TEST_F(ProgramSpecTestGen1, KernelTargetsNodeBeyondGridYFails) {
     const NodeCoord oob_node{0, 9};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto kernel = MakeMinimalGen1DMKernel("dm_kernel");
     spec.kernels = {kernel};
@@ -2664,7 +2664,7 @@ TEST_F(ProgramSpecTestGen1, KernelTargetsOutOfBoundsNodeFails) {
     const NodeCoord oob_node{8, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto kernel = MakeMinimalGen1DMKernel("dm_kernel");
     spec.kernels = {kernel};
@@ -2730,7 +2730,7 @@ TEST_F(ProgramSpecTestGen1, DuplicateKernelNameFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto k0 = MakeMinimalGen1DMKernel("dm_kernel", DataMovementProcessor::RISCV_0);
     auto k1 = MakeMinimalGen1DMKernel("dm_kernel", DataMovementProcessor::RISCV_1);  // duplicate name
@@ -2881,7 +2881,7 @@ TEST_F(ProgramSpecTestGen1, TensorAccessorBindingJITSmokeDMKernel) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "ta_smoke_dm";
+    spec.name = "ta_smoke_dm";
 
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
     dm_kernel.source = KernelSpec::SourceCode{R"(
@@ -2955,7 +2955,7 @@ TEST_F(ProgramSpecTestGen1, CompilerIncludePathsForwardedToKernelConfig) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     const std::vector<std::filesystem::path> dm_paths = {"/tmp/dm_first", "/tmp/dm_second"};
     const std::vector<std::filesystem::path> compute_paths = {"/tmp/compute_only"};

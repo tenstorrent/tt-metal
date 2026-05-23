@@ -424,15 +424,6 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
             tensor_parameter.unique_id);
     }
 
-    // Check for duplicate WorkUnitSpec unique_ids
-    {
-        std::unordered_set<WorkUnitSpecName> work_unit_names;
-        for (const auto& work_unit : spec.work_units) {
-            auto [it, inserted] = work_unit_names.insert(work_unit.unique_id);
-            TT_FATAL(inserted, "Duplicate WorkUnitSpec name '{}'", work_unit.unique_id);
-        }
-    }
-
     // Build WorkUnitSpec membership for each kernel, validating references along the way.
     // A kernel may belong to multiple WorkUnitSpecs; its effective target node set is the union.
     for (const auto& work_unit : spec.work_units) {
@@ -440,7 +431,7 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
             TT_FATAL(
                 collected.kernel_by_name.contains(kernel_name),
                 "WorkUnitSpec '{}' references unknown kernel '{}'",
-                work_unit.unique_id,
+                work_unit.name,
                 kernel_name);
             collected.kernel_work_units[kernel_name].push_back(&work_unit);
         }
@@ -543,7 +534,7 @@ void ValidateNodeBounds(const ProgramSpec& spec) {
     };
 
     for (const auto& work_unit : spec.work_units) {
-        check_target_nodes(work_unit.target_nodes, "WorkUnitSpec", work_unit.unique_id);
+        check_target_nodes(work_unit.target_nodes, "WorkUnitSpec", work_unit.name);
     }
     for (const auto& sem : spec.semaphores) {
         check_target_nodes(sem.target_nodes, "SemaphoreSpec", sem.unique_id);
@@ -855,7 +846,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 TT_THROW(
                     "ProgramSpec '{}' has too many DataflowBufferSpecs ({}). The target "
                     "architecture supports up to {}.",
-                    spec.program_id,
+                    spec.name,
                     spec.dataflow_buffers.size(),
                     max_dfbs);
             } else if (is_gen2_arch()) {
@@ -863,7 +854,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     "ProgramSpec '{}' has too many DataflowBufferSpecs ({}). The permitted "
                     "number of DFBs for the target architecture is configuration-dependent, "
                     "but {} is a hard upper limit.",
-                    spec.program_id,
+                    spec.name,
                     spec.dataflow_buffers.size(),
                     max_dfbs);
             } else {
@@ -958,7 +949,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                         "prior {} binding). Same-role bindings must have pairwise-disjoint WorkUnitSpec membership.",
                         dfb.unique_id,
                         role,
-                        wu->unique_id,
+                        wu->name,
                         rec.kernel->unique_id,
                         role);
                 }
@@ -1051,7 +1042,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         spec.remote_dataflow_buffers.empty(),
         "RemoteDataflowBufferSpec is part of the Metal 2.0 API surface but is not yet supported "
         "by the runtime. (ProgramSpec '{}' has {} remote DFB(s).)",
-        spec.program_id,
+        spec.name,
         spec.remote_dataflow_buffers.size());
 
     // Validate borrowed-memory DFBs.
@@ -1304,22 +1295,19 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // WorkUnitSpecs may not overlap in their target nodes
     for (const auto& work_unit : work_units) {
         for (const auto& other_work_unit : work_units) {
-            if (work_unit.unique_id == other_work_unit.unique_id) {
+            if (work_unit.name == other_work_unit.name) {
                 continue;
             }
             if (nodes_intersect(work_unit.target_nodes, other_work_unit.target_nodes)) {
                 TT_FATAL(
-                    false,
-                    "WorkUnitSpecs '{}' and '{}' overlap in target nodes",
-                    work_unit.unique_id,
-                    other_work_unit.unique_id);
+                    false, "WorkUnitSpecs '{}' and '{}' overlap in target nodes", work_unit.name, other_work_unit.name);
             }
         }
     }
 
     // A WorkUnitSpec must have at least one kernel
     for (const auto& work_unit : work_units) {
-        TT_FATAL(!work_unit.kernels.empty(), "WorkUnitSpec '{}' has no kernels", work_unit.unique_id);
+        TT_FATAL(!work_unit.kernels.empty(), "WorkUnitSpec '{}' has no kernels", work_unit.name);
     }
 
     // Does the WorkUnit have enough cores to run all of its kernels?
@@ -1339,13 +1327,13 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             TT_FATAL(
                 compute_engines_needed <= QUASAR_TENSIX_ENGINES_PER_NODE,
                 "WorkUnitSpec '{}' needs {} Tensix engines, but only {} are available",
-                work_unit.unique_id,
+                work_unit.name,
                 compute_engines_needed,
                 QUASAR_TENSIX_ENGINES_PER_NODE);
             TT_FATAL(
                 dm_cores_needed <= QUASAR_USER_DM_CORES_PER_NODE,
                 "WorkUnitSpec '{}' requests {} data movement cores. This exceeds the permitted maximum of {}.",
-                work_unit.unique_id,
+                work_unit.name,
                 dm_cores_needed,
                 QUASAR_USER_DM_CORES_PER_NODE);
         }
@@ -1353,12 +1341,12 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             TT_FATAL(
                 compute_engines_needed <= 1,
                 "WorkUnitSpec '{}' has {} compute kernels. The target architecture supports at most one.",
-                work_unit.unique_id,
+                work_unit.name,
                 compute_engines_needed);
             TT_FATAL(
                 dm_cores_needed <= 2,
                 "WorkUnitSpec '{}' has {} data movement kernels. The target architecture supports at most two.",
-                work_unit.unique_id,
+                work_unit.name,
                 dm_cores_needed);
         }
     }
@@ -1372,7 +1360,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 num_compute_kernels++;
             }
         }
-        TT_FATAL(num_compute_kernels <= 1, "WorkUnitSpec '{}' has more than one compute kernel", work_unit.unique_id);
+        TT_FATAL(num_compute_kernels <= 1, "WorkUnitSpec '{}' has more than one compute kernel", work_unit.name);
     }
 
     // NOTE:
@@ -1420,7 +1408,7 @@ std::pair<DMProcessorMask, DMProcessorMask> ReserveDMProcessors(
     const KernelSpec* kernel_spec,
     std::optional<DMProcessorMask> existing_mask,
     DMProcessorMask cumulative_mask,
-    const WorkUnitSpecName& work_unit_id) {
+    const std::string& work_unit_name) {
     // Was this kernel already assigned a mask from a previous WorkUnitSpec?
     if (existing_mask.has_value()) {
         DMProcessorMask existing = existing_mask.value();
@@ -1434,7 +1422,7 @@ std::pair<DMProcessorMask, DMProcessorMask> ReserveDMProcessors(
             " - A solution exists, but the greedy algorithm failed to find it. \n"
             " - The runtime's \"common DM cores\" assumption has been violated!",
             kernel_spec->unique_id,
-            work_unit_id);
+            work_unit_name);
 
         // Return existing mask and updated cumulative
         return {existing, cumulative_mask | existing};
@@ -1447,7 +1435,7 @@ std::pair<DMProcessorMask, DMProcessorMask> ReserveDMProcessors(
         "Failed to reserve processors for DM kernel '{}' on WorkUnitSpec '{}'. "
         "The \"common DM cores\" assumption has been violated!",
         kernel_spec->unique_id,
-        work_unit_id);
+        work_unit_name);
 
     DMProcessorMask mask = reserved.value();
     return {mask, cumulative_mask | mask};
@@ -2154,7 +2142,7 @@ std::set<experimental::quasar::QuasarComputeProcessor> GetComputeProcessorSet(Co
 // ============================================================================
 
 Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const ProgramSpec& spec, bool skip_validation) {
-    log_debug(tt::LogMetal, "Creating Program from ProgramSpec ({})", spec.program_id);
+    log_debug(tt::LogMetal, "Creating Program from ProgramSpec ({})", spec.name);
 
     // Step 1a: Collect derived data (builds lookup tables, checks structural invariants)
     CollectedSpecData collected = CollectSpecData(spec);

@@ -190,18 +190,19 @@ AliasDFBProgramComponents make_alias_dfb_program_spec(
     };
 
     ProgramSpec spec{
-        .program_id       = "alias_dfb",
-        .kernels          = {producer, consumer},
+        .name = "alias_dfb",
+        .kernels = {producer, consumer},
         .dataflow_buffers = {dfb_a, dfb_b},
-        .tensor_parameters = {
-            {.unique_id = "in_tensor_a",  .spec = in_a.tensor_spec()},
-            {.unique_id = "in_tensor_b",  .spec = in_b.tensor_spec()},
-            {.unique_id = "out_tensor_a", .spec = out_a.tensor_spec()},
-            {.unique_id = "out_tensor_b", .spec = out_b.tensor_spec()},
-        },
+        .tensor_parameters =
+            {
+                {.unique_id = "in_tensor_a", .spec = in_a.tensor_spec()},
+                {.unique_id = "in_tensor_b", .spec = in_b.tensor_spec()},
+                {.unique_id = "out_tensor_a", .spec = out_a.tensor_spec()},
+                {.unique_id = "out_tensor_b", .spec = out_b.tensor_spec()},
+            },
         .work_units = {WorkUnitSpec{
-            .unique_id    = "wu",
-            .kernels      = {"producer", "consumer"},
+            .name = "wu",
+            .kernels = {"producer", "consumer"},
             .target_nodes = node,
         }},
     };
@@ -391,19 +392,20 @@ AliasBorrowedDFBComponents make_alias_borrowed_dfb_program_spec(
     };
 
     ProgramSpec spec{
-        .program_id        = "alias_borrowed_dfb",
-        .kernels           = {producer, consumer},
-        .dataflow_buffers  = {dfb_borrowed, dfb_alias_spec},
-        .tensor_parameters = {
-            {.unique_id = "in_tensor_a",  .spec = in_a.tensor_spec()},
-            {.unique_id = "in_tensor_b",  .spec = in_b.tensor_spec()},
-            {.unique_id = "out_tensor_a", .spec = out_a.tensor_spec()},
-            {.unique_id = "out_tensor_b", .spec = out_b.tensor_spec()},
-            {.unique_id = "ring_tensor",  .spec = ring.tensor_spec()},
-        },
+        .name = "alias_borrowed_dfb",
+        .kernels = {producer, consumer},
+        .dataflow_buffers = {dfb_borrowed, dfb_alias_spec},
+        .tensor_parameters =
+            {
+                {.unique_id = "in_tensor_a", .spec = in_a.tensor_spec()},
+                {.unique_id = "in_tensor_b", .spec = in_b.tensor_spec()},
+                {.unique_id = "out_tensor_a", .spec = out_a.tensor_spec()},
+                {.unique_id = "out_tensor_b", .spec = out_b.tensor_spec()},
+                {.unique_id = "ring_tensor", .spec = ring.tensor_spec()},
+            },
         .work_units = {WorkUnitSpec{
-            .unique_id    = "wu",
-            .kernels      = {"producer", "consumer"},
+            .name = "wu",
+            .kernels = {"producer", "consumer"},
             .target_nodes = node,
         }},
     };

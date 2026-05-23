@@ -102,12 +102,12 @@ void RunOneTest(
         kernel_names.push_back(COMPUTE_NAME);
 
         experimental::WorkUnitSpec wu{
-            .unique_id = "main",
+            .name = "main",
             .kernels = kernel_names,
             .target_nodes = experimental::NodeCoord{coord},
         };
         experimental::ProgramSpec spec{
-            .program_id = "watcher_stack",
+            .name = "watcher_stack",
             .kernels = kernel_specs,
             .work_units = {wu},
         };

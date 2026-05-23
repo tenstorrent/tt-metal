@@ -533,13 +533,13 @@ void run_single_core_reduce_program_quasar(
     };
 
     experimental::WorkUnitSpec wu{
-        .unique_id = "main",
+        .name = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = node,
     };
 
     experimental::ProgramSpec spec{
-        .program_id = "single_core_reduce",
+        .name = "single_core_reduce",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {src0_dfb_spec, src1_dfb_spec, dst_dfb_spec},
         .tensor_parameters =

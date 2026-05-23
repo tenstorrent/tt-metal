@@ -141,7 +141,7 @@ void run_strided_dfb_copy_test(
     const NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "strided_pages_dfb_copy";
+    spec.name = "strided_pages_dfb_copy";
 
     const TensorAccessorArgs input_accessor_args(*input_buffer);
     const TensorAccessorArgs output_accessor_args(*output_buffer);

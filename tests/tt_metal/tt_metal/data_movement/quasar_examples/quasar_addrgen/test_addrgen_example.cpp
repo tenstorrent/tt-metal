@@ -47,13 +47,13 @@ bool run_addrgen_test(
     };
 
     experimental::WorkUnitSpec main_wu{
-        .unique_id = "main",
+        .name = "main",
         .kernels = {DM_KERNEL},
         .target_nodes = node,
     };
 
     experimental::ProgramSpec spec{
-        .program_id = "addrgen",
+        .name = "addrgen",
         .kernels = {dm_kernel_spec},
         .work_units = {main_wu},
     };

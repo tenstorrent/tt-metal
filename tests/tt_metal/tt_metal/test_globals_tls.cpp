@@ -88,14 +88,14 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
     const experimental::NodeCoord node{0, 0};
 
     experimental::WorkUnitSpec main_wu{
-        .unique_id = "main",
+        .name = "main",
         .kernels = {DM_KERNEL_1, DM_KERNEL_2, DM_KERNEL_3},
         .target_nodes = node,
     };
 
     // Total user-DM threads = 3 + 2 + 1 = 6, fitting within the default DM2..DM7 cap.
     experimental::ProgramSpec spec{
-        .program_id = "globals_and_tls",
+        .name = "globals_and_tls",
         .kernels = {k1, k2, k3},
         .work_units = {main_wu},
     };
@@ -313,13 +313,13 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
     };
 
     experimental::WorkUnitSpec main_wu{
-        .unique_id = "main",
+        .name = "main",
         .kernels = {COMPUTE_KERNEL},
         .target_nodes = node,
     };
 
     experimental::ProgramSpec spec{
-        .program_id = "compute_kernel_tls",
+        .name = "compute_kernel_tls",
         .kernels = {compute_kernel_spec},
         .work_units = {main_wu},
     };

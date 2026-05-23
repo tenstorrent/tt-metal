@@ -207,13 +207,13 @@ std::pair<distributed::MeshWorkload, std::vector<std::string>> initialize_progra
     }
 
     experimental::WorkUnitSpec main_wu{
-        .unique_id = "main",
+        .name = "main",
         .kernels = wu_kernel_names,
         .target_nodes = core_range_set,
     };
 
     experimental::ProgramSpec spec{
-        .program_id = "quasar_crta_test",
+        .name = "quasar_crta_test",
         .kernels = kernel_specs,
         .work_units = {main_wu},
     };

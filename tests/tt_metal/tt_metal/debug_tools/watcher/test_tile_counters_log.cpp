@@ -109,13 +109,13 @@ void RunTest(
     };
 
     experimental::WorkUnitSpec wu{
-        .unique_id = "main",
+        .name = "main",
         .kernels = {PRODUCER, CONSUMER},
         .target_nodes = node,
     };
 
     experimental::ProgramSpec spec{
-        .program_id = "tile_counter_log",
+        .name = "tile_counter_log",
         .kernels = {producer_spec, consumer_spec},
         .dataflow_buffers = {dfb_spec},
         .work_units = {wu},

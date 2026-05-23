@@ -249,12 +249,12 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
                 experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
         };
         experimental::WorkUnitSpec wu{
-            .unique_id = "main",
+            .name = "main",
             .kernels = {DM_KERNEL_NAME},
             .target_nodes = experimental::NodeRangeSet{core_range_set},
         };
         experimental::ProgramSpec spec{
-            .program_id = "rta_validation",
+            .name = "rta_validation",
             .kernels = {dm_spec},
             .work_units = {wu},
         };
@@ -410,12 +410,12 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
         }
 
         experimental::WorkUnitSpec wu{
-            .unique_id = "main",
+            .name = "main",
             .kernels = {OOB_KERNEL_NAME},
             .target_nodes = experimental::NodeRangeSet{core_range_set},
         };
         experimental::ProgramSpec spec{
-            .program_id = "rta_oob",
+            .name = "rta_oob",
             .kernels = {kspec},
             .work_units = {wu},
         };
@@ -495,12 +495,12 @@ TEST_F(RTATestFixture, QuasarMultiDMOutOfBoundsArgDetection) {
         .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
     };
     experimental::WorkUnitSpec wu{
-        .unique_id = "main",
+        .name = "main",
         .kernels = {MULTI_DM_KERNEL_NAME},
         .target_nodes = experimental::NodeRangeSet{core_range_set},
     };
     experimental::ProgramSpec spec{
-        .program_id = "multi_dm_oob",
+        .name = "multi_dm_oob",
         .kernels = {dm_spec},
         .work_units = {wu},
     };

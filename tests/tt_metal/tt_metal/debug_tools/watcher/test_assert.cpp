@@ -96,12 +96,12 @@ static void RunTest(
                                     .gen2 = experimental::DataMovementConfiguration::Gen2{}},
                         };
                         experimental::WorkUnitSpec wu{
-                            .unique_id = "main",
+                            .name = "main",
                             .kernels = {ASSERT_KERNEL_NAME},
                             .target_nodes = experimental::NodeCoord{logical_core},
                         };
                         experimental::ProgramSpec spec{
-                            .program_id = "watcher_assert_dm",
+                            .name = "watcher_assert_dm",
                             .kernels = {assert_kernel_spec},
                             .work_units = {wu},
                         };
@@ -129,12 +129,12 @@ static void RunTest(
                             .config_spec = experimental::ComputeConfiguration{},
                         };
                         experimental::WorkUnitSpec wu{
-                            .unique_id = "main",
+                            .name = "main",
                             .kernels = {ASSERT_KERNEL_NAME},
                             .target_nodes = experimental::NodeCoord{logical_core},
                         };
                         experimental::ProgramSpec spec{
-                            .program_id = "watcher_assert_compute",
+                            .name = "watcher_assert_compute",
                             .kernels = {assert_kernel_spec},
                             .work_units = {wu},
                         };

@@ -86,12 +86,12 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
                 experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
         };
         experimental::WorkUnitSpec wu{
-            .unique_id = "main",
+            .name = "main",
             .kernels = {DM_KERNEL_NAME},
             .target_nodes = experimental::NodeRange{CoreRange(xy_start, xy_end)},
         };
         experimental::ProgramSpec spec{
-            .program_id = "watcher_pause",
+            .name = "watcher_pause",
             .kernels = {dm_spec},
             .work_units = {wu},
         };

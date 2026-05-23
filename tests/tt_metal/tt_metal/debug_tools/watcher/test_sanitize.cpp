@@ -248,12 +248,12 @@ void RunTestOnCore(
                     experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
             };
             experimental::WorkUnitSpec wu{
-                .unique_id = "main",
+                .name = "main",
                 .kernels = {DRAM_COPY_KERNEL_NAME},
                 .target_nodes = experimental::NodeCoord{core},
             };
             experimental::ProgramSpec spec{
-                .program_id = "watcher_sanitize",
+                .name = "watcher_sanitize",
                 .kernels = {dm_spec},
                 .work_units = {wu},
             };
