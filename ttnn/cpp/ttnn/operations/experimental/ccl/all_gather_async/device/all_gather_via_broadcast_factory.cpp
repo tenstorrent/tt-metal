@@ -4,6 +4,8 @@
 
 #include "all_gather_via_broadcast_factory.hpp"
 
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 
@@ -301,6 +303,7 @@ tt::tt_metal::WorkloadDescriptor AllGatherViaBroadcastFactory::create_workload_d
     workload_descriptor.semaphores.push_back(init_barrier_semaphore);
     workload_descriptor.semaphores.push_back(final_barrier_semaphore);
 
+    workload_descriptor.programs.reserve(tensor_coords.coords().size());
     for (const auto& coord : tensor_coords.coords()) {
         auto desc = build_descriptor_at(
             operation_attributes,

@@ -6,8 +6,6 @@
 
 #include "all_gather_async_device_operation_types.hpp"
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/workload_descriptor.hpp>
 
 #include "ttnn/device_operation.hpp"

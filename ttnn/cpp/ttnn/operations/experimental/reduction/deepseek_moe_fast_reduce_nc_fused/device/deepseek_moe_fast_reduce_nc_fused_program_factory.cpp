@@ -336,8 +336,13 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+    // NOTE: packer_l1_acc and dst_full_sync_en from get_compute_kernel_config_args are intentionally
+    // not destructured here; the legacy factory did not propagate them either. dst_full_sync_en is
+    // also available on ComputeConfigDescriptor but is left at its default to match prior behavior.
+    const auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, _packer_l1_acc, _dst_full_sync_en] =
         get_compute_kernel_config_args(input_tensor.device()->arch(), operation_attributes.compute_kernel_config);
+    (void)_packer_l1_acc;
+    (void)_dst_full_sync_en;
 
     tt::tt_metal::KernelDescriptor::Defines compute_defines;
     if (fp32_dest_acc_en) {
