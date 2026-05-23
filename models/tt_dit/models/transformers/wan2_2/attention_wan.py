@@ -407,9 +407,8 @@ class WanAttention(Module):
             if kv_cache is not None and not self.is_self:
                 kv_cache[:] = [k_BHNE, v_BHNE]
 
-        # Rope
-
-        # Dispatch on is_self: cached-KV cross-attn has prompt_1BLP=None.
+        # Q/K/V heads are ready. Dispatch on self.is_self rather than
+        # prompt_1BLP because cached-KV cross-attention may omit the prompt.
         if self.is_self:
             # Self attention
             if self.parallel_config.sequence_parallel.factor > 1:

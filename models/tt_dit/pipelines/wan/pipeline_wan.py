@@ -1084,10 +1084,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             else:
                 # Output is (B, C, T, H, W) — trim height and width.
                 video_torch = video_torch[:, :, :, :new_logical_h, :new_logical_w]
-            # Subclass hook (S2V): drops the pixel frames produced by any
-            # latents prepended in ``_postprocess_latents_for_vae`` plus the
-            # remaining VAE-decoder transient frames. Default no-op.
-            video_torch = self._postprocess_video(video_torch, d2h_permute=d2h_permute)
 
             if output_type == "uint8":
                 video = video_torch.numpy()

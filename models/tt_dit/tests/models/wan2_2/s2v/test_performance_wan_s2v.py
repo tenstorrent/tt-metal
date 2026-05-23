@@ -22,7 +22,7 @@ from .....utils.test import line_params, ring_params_8k
 
 _REF_IMAGE_PATH = os.environ.get("S2V_REF_IMAGE", "./prompt_image.png")
 _AUDIO_PATH = os.environ.get("S2V_AUDIO", "./prompt_audio.wav")
-_PROMPT = "a person is talking"
+_PROMPT = os.environ.get("S2V_PROMPT", "a person is talking")
 _NEGATIVE_PROMPT = (
     "画面模糊，最差质量，画面模糊，细节模糊不清，情绪激动剧烈，手快速抖动，字幕，丑陋的，残缺的，"
     "多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，"
