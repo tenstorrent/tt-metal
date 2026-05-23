@@ -7,6 +7,7 @@ from models.tt_transformers.tt.model_config import (
     OpGroup,
     PrecisionSetting,
     TensorGroup,
+    should_use_phi1_single_split_lm_head,
 )
 
 
@@ -33,3 +34,21 @@ def test_phi1_uses_host_sampling_only_in_accuracy_mode():
 
     assert should_disable_device_sampling("Mistral-7B", "accuracy", num_devices=1)
     assert should_disable_device_sampling("Mistral-7B", "performance", num_devices=2)
+
+
+def test_phi1_single_device_lm_head_budget_allows_one_split():
+    assert should_use_phi1_single_split_lm_head(
+        "phi-1",
+        hidden_dim=2048,
+        padded_vocab_size=51200,
+        num_devices=1,
+        num_cores=64,
+    )
+
+    assert not should_use_phi1_single_split_lm_head(
+        "Llama-3.1-8B",
+        hidden_dim=4096,
+        padded_vocab_size=128256,
+        num_devices=4,
+        num_cores=48,
+    )

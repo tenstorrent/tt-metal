@@ -100,6 +100,26 @@ def should_pad_sampling_logits_to_power_of_2(
     return per_device_vocab > 0 and (per_device_vocab & (per_device_vocab - 1)) != 0
 
 
+def should_use_phi1_single_split_lm_head(
+    base_model_name: str, hidden_dim: int, padded_vocab_size: int, num_devices: int, num_cores: int
+) -> bool:
+    """Return True when Phi-1's smaller hidden size can safely keep the LM head to one split per device.
+
+    The generic LM-head width budget was derived from a 4k-dim Llama path that was close to the L1 limit
+    at roughly 668 vocab columns per core. Phi-1 halves the hidden size to 2048, so it can spend some of
+    that saved width budget on more vocab columns and avoid an extra split on single-device runs.
+    """
+    if base_model_name != "phi-1" or num_devices < 1 or num_cores < 1:
+        return False
+
+    size_per_device = padded_vocab_size // num_devices
+    required_columns_per_core = math.ceil(size_per_device / (ttnn.TILE_SIZE * num_cores)) * ttnn.TILE_SIZE
+
+    llama8b_hidden_dim = 4096
+    generic_columns_per_core_budget = 668
+    return hidden_dim * required_columns_per_core <= llama8b_hidden_dim * generic_columns_per_core_budget
+
+
 class MathFidelitySetting(Enum):
     LOFI = "lofi"
     HIFI2 = "hifi2"
@@ -2219,6 +2239,14 @@ class ModelArgs:
                 max_columns_per_device = LLAMA_VOCAB_SIZE // self.num_devices // (NUM_LM_HEAD_COLUMNS * 2)
             else:
                 max_columns_per_device = LLAMA_VOCAB_SIZE // NUM_LM_HEAD_COLUMNS
+        elif prefetcher is None and should_use_phi1_single_split_lm_head(
+            self.base_model_name,
+            self.dim,
+            self.padded_vocab_size,
+            self.num_devices,
+            core_grid.num_cores,
+        ):
+            max_columns_per_device = max(max_columns_per_device, self.padded_vocab_size // self.num_devices)
         if prefetcher is not None:
             return math.ceil(max_columns_per_device / (ttnn.TILE_SIZE * prefetcher.ring_size)) * (
                 ttnn.TILE_SIZE * prefetcher.ring_size
