@@ -698,7 +698,8 @@ static tt::tt_metal::ProgramDescriptor process_agmm_fusion_descriptor(
     uint32_t num_global_cb_receivers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<CoreRangeSet> restricted_cores,
-    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
+    uint32_t base_semaphore_id = 0) {
     using tt::tt_metal::CBDescriptor;
     using tt::tt_metal::CBFormatDescriptor;
     using tt::tt_metal::ComputeConfigDescriptor;
@@ -1880,7 +1881,8 @@ static tt::tt_metal::ProgramDescriptor matmul_multi_core_agmm_fusion_descriptor_
         num_global_cb_receivers,
         sub_device_id,
         std::move(restricted_cores),
-        fused_op_signaler);
+        fused_op_signaler,
+        base_semaphore_id);
 }
 
 void matmul_multi_core_agmm_fusion_helper_descriptor(
