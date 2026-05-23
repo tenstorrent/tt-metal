@@ -22,6 +22,17 @@ from .vae.decoder import TtOobleckDecoder
 _DEFAULT_MIN_DECODER_LATENT_WINDOW = 32
 
 
+def _safe_deallocate(t: Any) -> None:
+    if t is None:
+        return
+    try:
+        import ttnn
+
+        ttnn.deallocate(t)
+    except Exception:
+        pass
+
+
 @dataclass
 class _VaeChunkTraceState:
     trace_id: Any
@@ -380,7 +391,10 @@ class TtOobleckVaeDecoder:
                     win_end = min(latent_frames, win_start + min_win)
 
             latent_chunk = ttnn.slice(latents_btc, (0, win_start, 0), (1, win_end, c_lat))
-            wav = dec(latent_chunk)
+            try:
+                wav = dec(latent_chunk)
+            finally:
+                _safe_deallocate(latent_chunk)
             # Decoder ends with conv2 → often TILE; trim uses ttnn.slice which is not safe on TILE
             # for arbitrary [T_start, T_end) (same 32-tile alignment rules as latents).
             wav = ttnn.to_layout(wav, ttnn.ROW_MAJOR_LAYOUT)
@@ -402,7 +416,11 @@ class TtOobleckVaeDecoder:
             end_i = max(trim_start_i, min(end_i, ta))
 
             audio_core = ttnn.slice(wav, (0, trim_start_i, 0), (b_w, end_i, ca))
+            _safe_deallocate(wav)
             cores.append(audio_core)
+            # Long overlap-add runs (30 s @ 25 Hz ≈ 90+ tiles) fragment L1 unless each tile's
+            # conv activations are freed before the next ``dec()`` repacks weights.
+            ttnn.synchronize_device(dec.device)
 
         if len(cores) == 1:
             merged = cores[0]
