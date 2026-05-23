@@ -45,10 +45,10 @@ def check_binary_integrity(
         f"Firmware ELF file {dispatcher_core_data.firmware_path} does not exist.",
     )
     if os.path.exists(dispatcher_core_data.firmware_path):
-        elf_file = elfs_cache[dispatcher_core_data.firmware_path].elf
+        elf_file = elfs_cache[dispatcher_core_data.firmware_path]
         sections_to_verify = [".text"]
         for section_name in sections_to_verify:
-            section = elf_file.get_section_by_name(section_name)
+            section = elf_file.sections.get(section_name)
             if section is None:
                 log_check_risc(
                     risc_name,
@@ -56,15 +56,21 @@ def check_binary_integrity(
                     False,
                     f"Section {section_name} not found in ELF file {dispatcher_core_data.firmware_path}.",
                 )
+            elif section.address is None:
+                log_check_risc(
+                    risc_name,
+                    location,
+                    False,
+                    f"Section {section_name} doesn't have an address in ELF file {dispatcher_core_data.firmware_path}.",
+                )
             else:
-                address: int = section["sh_addr"]
-                data: bytes = section.data()
-                read_data = l1_mem_access.read(address, len(data))
+                data: bytes = section.data
+                read_data = l1_mem_access.read(section.address, len(data))
                 log_check_risc(
                     risc_name,
                     location,
                     read_data == data,
-                    f"Data mismatch in section {section_name} at address 0x{address:08x} in ELF file {dispatcher_core_data.firmware_path}.",
+                    f"Data mismatch in section {section_name} at address 0x{section.address:08x} in ELF file {dispatcher_core_data.firmware_path}.",
                 )
 
     # Check kernel ELF binary state on the device
@@ -77,10 +83,10 @@ def check_binary_integrity(
         )
 
         if os.path.exists(dispatcher_core_data.kernel_xip_path):
-            elf_file = elfs_cache[dispatcher_core_data.kernel_xip_path].elf
+            elf_file = elfs_cache[dispatcher_core_data.kernel_xip_path]
             sections_to_verify = [".text"]
             for section_name in sections_to_verify:
-                section = elf_file.get_section_by_name(section_name)
+                section = elf_file.sections.get(section_name)
                 if section is None:
                     log_check_risc(
                         risc_name,
@@ -88,8 +94,15 @@ def check_binary_integrity(
                         False,
                         f"Section {section_name} not found in ELF file {dispatcher_core_data.kernel_xip_path}.",
                     )
+                elif dispatcher_core_data.kernel_offset is None:
+                    log_check_risc(
+                        risc_name,
+                        location,
+                        False,
+                        f"Kernel offset not set for ELF file {dispatcher_core_data.kernel_xip_path}.",
+                    )
                 else:
-                    data: bytes = section.data()
+                    data: bytes = section.data
                     address: int = dispatcher_core_data.kernel_offset
                     read_data = l1_mem_access.read(address, len(data))
                     log_check_risc(
