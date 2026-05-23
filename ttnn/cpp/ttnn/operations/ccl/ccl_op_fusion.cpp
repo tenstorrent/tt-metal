@@ -2,14 +2,45 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <bitset>
+
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
+#include "impl/buffers/semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
 using namespace tt::tt_metal;
 
 namespace ttnn::experimental::ccl {
+
+namespace {
+
+// Pick a semaphore ID that is unused on every core in `range_set`, given the SemaphoreDescriptors
+// already appended to `desc.semaphores`. Mirrors ProgramDescriptor::find_available_semaphore_id
+// (which checks a single CoreCoord) but generalizes to a CoreRangeSet so the chosen id is valid
+// on every target core. Using desc.semaphores.size() as the id is incorrect: ids are per-core
+// (0..NUM_SEMAPHORES-1) and may collide across overlapping ranges or exceed the limit.
+uint32_t allocate_free_semaphore_id(
+    const ProgramDescriptor& desc, const CoreRangeSet& range_set, CoreType core_type = CoreType::WORKER) {
+    std::bitset<NUM_SEMAPHORES> used;
+    for (const auto& sem : desc.semaphores) {
+        if (sem.core_type != core_type) {
+            continue;
+        }
+        if (sem.core_ranges.intersects(range_set)) {
+            used.set(sem.id);
+        }
+    }
+    for (uint32_t i = 0; i < NUM_SEMAPHORES; i++) {
+        if (!used.test(i)) {
+            return i;
+        }
+    }
+    TT_THROW("No free semaphore IDs available across the requested core range set");
+}
+
+}  // namespace
 
 void AllGatherFusedOpSignaler::init_fused_op(
     const std::vector<CoreCoord>& fused_op_receiver_cores_noc,
@@ -44,7 +75,8 @@ void AllGatherFusedOpSignaler::init_all_gather(
 
 // ProgramDescriptor overload of init_all_gather: same semantics as the Program& version,
 // but allocates the sync semaphore by appending a SemaphoreDescriptor to desc.semaphores.
-// The semaphore ID is the index of the new entry in desc.semaphores.
+// The semaphore ID is chosen to be free on every all_gather_workers core, matching
+// CreateSemaphore semantics rather than using desc.semaphores.size().
 void AllGatherFusedOpSignaler::init_all_gather(
     ProgramDescriptor& desc,
     const IDevice* device,
@@ -53,7 +85,7 @@ void AllGatherFusedOpSignaler::init_all_gather(
     std::vector<CoreCoord>& all_gather_worker_cores) {
     // Create the sync semaphore for the all gather workers
     if (all_gather_worker_cores.size() > 1) {
-        this->all_gather_worker_sync_semaphore = static_cast<uint32_t>(desc.semaphores.size());
+        this->all_gather_worker_sync_semaphore = allocate_free_semaphore_id(desc, all_gather_workers);
         desc.semaphores.push_back(SemaphoreDescriptor{
             .id = this->all_gather_worker_sync_semaphore,
             .core_ranges = all_gather_workers,
@@ -134,7 +166,8 @@ void StridedAllGatherFusedOpSignaler::init_all_gather(
 
 // ProgramDescriptor overload of init_all_gather: same semantics as the Program& version,
 // but allocates the sync semaphore by appending a SemaphoreDescriptor to desc.semaphores.
-// The semaphore ID is the index of the new entry in desc.semaphores.
+// The semaphore ID is chosen to be free on every all_gather_workers core, matching
+// CreateSemaphore semantics rather than using desc.semaphores.size().
 void StridedAllGatherFusedOpSignaler::init_all_gather(
     ProgramDescriptor& desc,
     const IDevice* device,
@@ -143,7 +176,7 @@ void StridedAllGatherFusedOpSignaler::init_all_gather(
     std::vector<CoreCoord>& all_gather_worker_cores) {
     // Create the sync semaphore for the all gather workers
     if (all_gather_worker_cores.size() > 1) {
-        this->all_gather_worker_sync_semaphore = static_cast<uint32_t>(desc.semaphores.size());
+        this->all_gather_worker_sync_semaphore = allocate_free_semaphore_id(desc, all_gather_workers);
         desc.semaphores.push_back(SemaphoreDescriptor{
             .id = this->all_gather_worker_sync_semaphore,
             .core_ranges = all_gather_workers,
@@ -268,7 +301,7 @@ void ReduceScatterFusedOpSignaler::init_reduce_scatter(
         },
         core_range_to_signal);
     // Create the semaphores
-    const uint32_t sem_id = static_cast<uint32_t>(desc.semaphores.size());
+    const uint32_t sem_id = allocate_free_semaphore_id(desc, signal_cores);
     desc.semaphores.push_back(SemaphoreDescriptor{
         .id = sem_id,
         .core_ranges = signal_cores,
@@ -356,7 +389,7 @@ void StridedReduceScatterFusedOpSignaler::init_strided_reduce_scatter(
         },
         core_range_to_signal);
 
-    this->fused_op_receiver_signal_semaphore = static_cast<uint32_t>(desc.semaphores.size());
+    this->fused_op_receiver_signal_semaphore = allocate_free_semaphore_id(desc, signal_cores);
     desc.semaphores.push_back(SemaphoreDescriptor{
         .id = this->fused_op_receiver_signal_semaphore,
         .core_ranges = signal_cores,
@@ -455,10 +488,11 @@ void MatmulFusedOpSignaler::init_fused_op(
     const std::vector<CoreCoord>& matmul_worker_cores) {
     // Create the sync semaphore for the matmul workers
     if (matmul_worker_cores.size() > 1) {
-        this->matmul_worker_sync_semaphore = static_cast<uint32_t>(desc.semaphores.size());
+        const CoreRangeSet matmul_workers_set(matmul_workers);
+        this->matmul_worker_sync_semaphore = allocate_free_semaphore_id(desc, matmul_workers_set);
         desc.semaphores.push_back(SemaphoreDescriptor{
             .id = this->matmul_worker_sync_semaphore,
-            .core_ranges = CoreRangeSet(matmul_workers),
+            .core_ranges = matmul_workers_set,
             .initial_value = 0,
         });
     }
@@ -562,7 +596,7 @@ void MatmulFusedOpSignaler::init_fused_op(
         core_range_to_signal);
     // Create the semaphores
     auto push_signal_sem = [&]() {
-        const uint32_t sem_id = static_cast<uint32_t>(desc.semaphores.size());
+        const uint32_t sem_id = allocate_free_semaphore_id(desc, signal_cores);
         desc.semaphores.push_back(SemaphoreDescriptor{
             .id = sem_id,
             .core_ranges = signal_cores,
@@ -680,10 +714,11 @@ void MatmulFusedOpSignaler::init_llama_rs_cores_rs(
     this->initialized_llama_reduce_scatter_part1 = true;
     this->rs_cores = rs_cores;
     auto rs_cores_superset = rs_cores.bounding_box();
-    this->rs_semaphore = static_cast<uint32_t>(desc.semaphores.size());
+    const CoreRangeSet rs_cores_superset_set(rs_cores_superset);
+    this->rs_semaphore = allocate_free_semaphore_id(desc, rs_cores_superset_set);
     desc.semaphores.push_back(SemaphoreDescriptor{
         .id = this->rs_semaphore,
-        .core_ranges = CoreRangeSet(rs_cores_superset),
+        .core_ranges = rs_cores_superset_set,
         .initial_value = INVALID,
     });
 }
@@ -701,10 +736,11 @@ void MatmulFusedOpSignaler::init_llama_rs_cores_mm(
     TT_FATAL(cores.size() > privilaged_index, "Privileged index is out of range of the matmul cores");
     this->privilaged_core = cores.at(privilaged_index);
     this->privilaged_core_physical = device->worker_core_from_logical_core(this->privilaged_core);
-    this->matmul_privilaged_semaphore = static_cast<uint32_t>(desc.semaphores.size());
+    const CoreRangeSet privilaged_core_set(CoreRange(this->privilaged_core));
+    this->matmul_privilaged_semaphore = allocate_free_semaphore_id(desc, privilaged_core_set);
     desc.semaphores.push_back(SemaphoreDescriptor{
         .id = this->matmul_privilaged_semaphore,
-        .core_ranges = CoreRangeSet(CoreRange(this->privilaged_core)),
+        .core_ranges = privilaged_core_set,
         .initial_value = 0,
     });
     this->matmul_semaphore_target = cores.size() - 1;
@@ -867,7 +903,7 @@ void MinimalMatmulFusedOpSignaler::init_fused_op(
         core_range_to_signal);
     // Create the semaphores
     for (uint32_t i = 0; i < 3; i++) {
-        const uint32_t sem_id = static_cast<uint32_t>(desc.semaphores.size());
+        const uint32_t sem_id = allocate_free_semaphore_id(desc, signal_cores);
         desc.semaphores.push_back(SemaphoreDescriptor{
             .id = sem_id,
             .core_ranges = signal_cores,
