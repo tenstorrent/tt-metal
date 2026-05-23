@@ -10,13 +10,17 @@
 
 **Audience**: AI agents asked to determine whether a TTNN op can be ported from the **`ProgramDescriptor` API** to the Metal 2.0 host API. Humans looking for a conceptual map of API differences should read [`metal2_migration_guide.md`](metal2_migration_guide.md) instead.
 
-**Scope**: This guide is for porting **TTNN ops that target Gen1 architectures** (Wormhole / WH, Blackhole / BH) from the **`ProgramDescriptor` API** to the Metal 2.0 host API, on the same Gen1 target.
+**Scope**: This guide is for **TTNN ops that target Gen1 architectures** (Wormhole / WH, Blackhole / BH), to assess Metal 2.0 portability and gather findings about what the port will require.
 
-The op being ported **must already be on the `ProgramDescriptor` API** — i.e. its program-factory code populates a `ProgramDescriptor` and uses `KernelDescriptor`, `CBDescriptor`, `SemaphoreDescriptor`, etc. Ops still on the older imperative-builder style from `host_api.hpp` (`CreateProgram` / `CreateKernel` / `CreateCircularBuffer` / `SetRuntimeArgs` / etc.) are **out of scope for this guide**. `ProgramDescriptor` migration is a substantial, separate body of work with TTNN-infrastructure implications; it is a **prerequisite** to Metal 2.0 porting and lives in its own PR. If you encounter this case during an audit, report it as a blocker and stop — do not bundle the prereq work into this audit or the eventual Metal 2.0 port.
+The audit produces useful findings for ops in two states:
+
+- **Already on the `ProgramDescriptor` API.** The audit decides whether the Metal 2.0 port can proceed. GREEN → port can begin (after explicit user go-ahead).
+- **Still on legacy `host_api.hpp` (imperative builder).** The audit produces Step 0.1 Check 1 RED and continues — Steps 0.2 and 0.3 still surface findings that inform what the eventual Metal 2.0 port will need, once the `ProgramDescriptor` migration (a substantial, separate workstream) lands. This is data-gathering for downstream planning, not a port attempt.
+
+In either case, the audit's deliverable is the report. Porting itself happens via the [port recipe](port_op_to_metal2_recipe.md), which is loaded only after the audit clears (GREEN) with explicit user go-ahead.
 
 This guide is **not** for the following adjacent tasks. If your task is one of these, stop and surface the mismatch to the user — do not use this guide:
 
-- **Porting an op that is still on legacy `host_api.hpp`** (i.e. not yet on `ProgramDescriptor`). `ProgramDescriptor` migration is a prerequisite to Metal 2.0 porting and is its own PR. Report and stop.
 - **Porting from Gen1 to Quasar** (different target architecture, different threading model). Out of scope entirely.
 - **Porting legacy Quasar tests** (those built against the temporary `experimental::quasar::CreateKernel` / `experimental::dfb::CreateDataflowBuffer` APIs) to Metal 2.0. A separate guide will cover that case; it is not this guide.
 
@@ -34,7 +38,7 @@ When in doubt about feature support, **ask the user.** Do not infer support from
 
 Porting an op is a workflow split across two documents:
 
-1. **Feasibility audit.** *(This document.)* Decide whether this op can be ported at all. Output: write `METAL2_PREPORT_AUDIT.md` to the op directory, then STOP.
+1. **Feasibility audit.** *(This document.)* Assess this op's Metal 2.0 portability and capture findings — including what work will be required if the port can't proceed yet. Output: write `METAL2_PREPORT_AUDIT.md` to the op directory, then STOP.
 2. **Port recipe** — legacy inventory, spec planning, construction, and verification. Lives in [`port_op_to_metal2_recipe.md`](port_op_to_metal2_recipe.md). Loaded only after the audit clears with explicit user go-ahead.
 
 This audit document covers the feasibility audit only. **Your job in this document is to decide whether the port is feasible — not to perform it.** Producing the audit report and stopping is the complete deliverable. The recipe document is loaded as a separate step, after the user has reviewed your audit and explicitly asked you to proceed.
@@ -45,11 +49,11 @@ You do not skip the audit. You do not pre-load the recipe document. The audit is
 
 ## Feasibility audit
 
-For the op in scope, run through two checks. Each check has three possible outcomes:
+For the op in scope, run through three steps (Step 0.1 prereqs, Step 0.2 feature compatibility, Step 0.3 port complexity signals). Each step's checks have three possible outcomes:
 
 - **Green** — proceed past this check.
 - **Yellow** — requires user judgment (ambiguous signal, or a supported-but-trade-off construct). Ask the user; respect the answer.
-- **Red** — record the reason in the audit report and continue the audit. A RED outcome means the port is blocked on this finding; it does not mean stop auditing. Always complete the remaining checks (and Step 0.2) so the report captures everything the port will eventually need to clear, not just the first blocker.
+- **Red** — record the reason in the audit report and continue the audit. A RED outcome means the port is blocked on this finding; it does not mean stop auditing. Always complete the remaining checks and steps so the report captures everything the port will eventually need to clear, not just the first blocker.
 
 **Scope of the audit.**
 
@@ -74,7 +78,7 @@ Metal 2.0 migration sits at the end of a chain of prior modernizations. Three pr
 Confirm the op's program-factory code populates a `ProgramDescriptor` and uses `KernelDescriptor`, `CBDescriptor`, `SemaphoreDescriptor`, etc. — *not* the older imperative-builder style from `host_api.hpp` (`CreateProgram` / `CreateKernel` / `CreateCircularBuffer` / `SetRuntimeArgs` / etc.).
 
 - **Green**: op uses the `ProgramDescriptor` API.
-- **Red**: op uses the imperative `host_api.hpp` builder API (not `ProgramDescriptor`). Record the prereq gap — `ProgramDescriptor` migration is a **prerequisite to Metal 2.0 porting**, a substantial standalone body of work with TTNN-infrastructure implications, addressed in its own PR. **Do not attempt the migration as part of this audit, do not bundle it with anything, do not propose a partial conversion.** Continue with Checks 2 and 3 and Step 0.2 — the feature scan still produces useful findings (some features may need attention regardless of which API the op is currently on; others will only become relevant after the prereq lands).
+- **Red**: op uses the imperative `host_api.hpp` builder API (not `ProgramDescriptor`). Record the prereq gap — `ProgramDescriptor` migration is a **prerequisite to Metal 2.0 porting**, a substantial standalone body of work with TTNN-infrastructure implications, addressed in its own PR. **Do not attempt the migration as part of this audit, do not bundle it with anything, do not propose a partial conversion.** Continue with Checks 2 and 3 and Steps 0.2 and 0.3 — the feature and complexity scans still produce useful findings (some features may need attention regardless of which API the op is currently on; others will only become relevant after the prereq lands).
 
 **Check 2 (AI-doable): Device 2.0 Data Movement migration.**
 
@@ -114,7 +118,7 @@ For each entry in [Appendix A: Metal 2.0 feature compatibility](#appendix-a-meta
 
 - **Green**: no entry's recognition signals fire.
 - **Yellow**: either a `DISCOURAGED` entry's signals match, **or** an `UNSUPPORTED` entry's signals match ambiguously (you cannot be sure whether the feature is in use). Ask the user. On override, proceed per the entry's guidance.
-- **Red**: an `UNSUPPORTED` entry's signals match definitively. Report the feature name, the `file:line` where it appears, and the recognition signal that fired. Do not proceed.
+- **Red**: an `UNSUPPORTED` entry's signals match definitively. Report the feature name, the `file:line` where it appears, and the recognition signal that fired. The port is blocked on this finding; continue scanning the remaining Appendix A entries and on to Step 0.3 — complete the full audit even after a RED match.
 
 If the op uses something *not listed* in Appendix A and you are uncertain of its support status, treat as yellow and ask. Do not assume support from API surface.
 
