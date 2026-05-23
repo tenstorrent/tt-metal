@@ -28,15 +28,14 @@ namespace tt::tt_metal::experimental {
 // Placement: The WorkUnitSpec defines the node placement of its kernels.
 // (A kernel may be included in multiple WorkUnitSpecs.)
 struct WorkUnitSpec {
-    // Human-readable name surfaced in error messages, logs, and profiling output.
-    // Not a cross-reference — no uniqueness enforcement (though distinct values aid debuggability).
+    // WorkUnitSpec name (used for messaging, logs, etc)
     std::string name;
 
     // The kernels that run on this WorkUnitSpec's nodes.
     std::vector<KernelSpecName> kernels;
 
     // The set of nodes configured by this WorkUnitSpec.
-    std::variant<NodeCoord, NodeRange, NodeRangeSet> target_nodes;
+    Nodes target_nodes;
 };
 
 // A ProgramSpec describes the immutable properties of a Program:
@@ -44,19 +43,21 @@ struct WorkUnitSpec {
 // Analogous to a function's signature and body — declared once, executed many times.
 // (Each time with a new ProgramRunParams configuring the mutable execution parameters.)
 struct ProgramSpec {
-    // Human-readable name surfaced in error messages, logs, and profiling output.
-    // Not a cross-reference — no uniqueness enforcement (though distinct values aid debuggability).
+    // ProgramSpec name (used for messaging, logs, etc)
     std::string name;
 
-    // Kernels, DFBs (local + remote), and semaphores that make up the Program
+    // Kernels that make up the Program
     std::vector<KernelSpec> kernels;
+
+    // Program-scope resources with program-execution lifetime allocation
     std::vector<DataflowBufferSpec> dataflow_buffers;
     std::vector<RemoteDataflowBufferSpec> remote_dataflow_buffers;
     std::vector<SemaphoreSpec> semaphores;
 
     // Tensor parameter declarations
-    // Provides ids and layout specs for tensors the Program's kernels will operate on
-    // (The actual MeshTensors are supplied via ProgramRunParams.)
+    // Describes the tensor memory objects that the Program's kernels will use.
+    // (The actual MeshTensors are user-managed memory resources,
+    // supplied via ProgramRunParams.)
     std::vector<TensorParameter> tensor_parameters;
 
     // WorkUnit specifications:

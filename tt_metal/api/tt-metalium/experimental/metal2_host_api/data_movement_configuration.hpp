@@ -17,9 +17,8 @@ namespace tt::tt_metal::experimental {
 // Data movement hardware resource configuration for DM kernels
 struct DataMovementConfiguration {
     // The DM configuration differs between hardware generations.
-    //  - Gen1 (WH/BH) requires explicit processor/NOC selection.
-    //  - Gen2 (Quasar) has no user-facing configuration yet (placeholder only).
-    // For architecture-agnostic host code, provide both.
+    //  - Gen1 requires explicit processor/NOC selection.
+    //  - Gen2 has no user-facing configuration yet (placeholder only).
 
     struct Gen1 {
         tt::tt_metal::DataMovementProcessor processor = tt::tt_metal::DataMovementProcessor::RISCV_0;

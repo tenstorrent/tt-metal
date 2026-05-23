@@ -127,9 +127,7 @@ inline DataflowBufferSpec MakeMinimalDFB(
 
 // Helper to create a minimal valid WorkUnitSpec
 inline WorkUnitSpec MakeMinimalWorkUnit(
-    const std::string& name,
-    const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes,
-    const std::vector<KernelSpecName>& kernels) {
+    const std::string& name, const Nodes& nodes, const std::vector<KernelSpecName>& kernels) {
     return WorkUnitSpec{
         .name = name,
         .kernels = kernels,

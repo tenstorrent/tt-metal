@@ -23,7 +23,7 @@ struct TensorParameter {
     TensorParameterName unique_id;
 
     // Single-device tensor layout
-    tt::tt_metal::TensorSpec spec;
+    TensorSpec spec;
 };
 
 }  // namespace tt::tt_metal::experimental

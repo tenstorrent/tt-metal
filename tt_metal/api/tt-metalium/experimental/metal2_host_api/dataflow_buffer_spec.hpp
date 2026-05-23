@@ -103,8 +103,9 @@ struct DataflowBufferSpec {
     DFBIdentifiers alias_with;  // empty vector means no aliasing
 
     // Disable implicit sync
-    // Implicit sync is handled via ISR (available on Gen2 only)
+    // Implicit sync is handled via ISR (available on Gen2 DM kernels only)
     // Disabling may be useful in niche cases for fine tuning performance or performance debug.
+    // (TODO: move this option to Gen2 DataMovementConfiguration)
     bool disable_implicit_sync = false;
 };
 

@@ -25,8 +25,6 @@ namespace tt::tt_metal::experimental {
 // String literals work directly; misnamed references fail at validation.
 using KernelSpecName = std::string;
 
-using Nodes = std::variant<NodeCoord, NodeRange, NodeRangeSet>;
-
 // A KernelSpec is a descriptor for a Tenstorrent kernel:
 // A single computational task compiled into one or more executable files that work
 // collaboratively on a single node.
@@ -34,9 +32,9 @@ using Nodes = std::variant<NodeCoord, NodeRange, NodeRangeSet>;
 // The KernelSpec describes the properties of a compute or data movement kernel:
 //  - Source code
 //  - Compiler options for generating the kernel binary/binaries
-//  - Resource bindings (access to DFBs, semaphores, etc.)
+//  - Resource bindings (access to DFBs, semaphores, tensors)
 //  - Kernel argument schema (for arguments specified when the Program is enqueued)
-//  - Kernel argument bindings (for compile-time constant arguments)
+//  - Compile-time kernel arguments (constexpr args specified at Program compile time)
 //  - The configuration of any hardware resources controlled by the kernel
 //
 // Specialization: A single kernel source may be represented by multiple KernelSpecs in
@@ -46,6 +44,7 @@ using Nodes = std::variant<NodeCoord, NodeRange, NodeRangeSet>;
 //
 // Instancing: A KernelSpec is a *per-node template*. At runtime, one independent
 // instance runs on each node where the kernel is placed, with its own runtime arguments.
+// (Compile-time arguments and common runtime arguments are across all instances.)
 //
 // Placement: The nodes the kernel runs on is derived from WorkUnitSpec membership.
 //
