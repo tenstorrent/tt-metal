@@ -82,6 +82,17 @@ struct LlamaReduceScatterDeviceOperation {
             tensor_return_value_t& tensor_return_value,
             const std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& signaler);
 
+        // Append-style overload: writes builder output onto an existing ProgramDescriptor
+        // supplied by the caller, so a single descriptor can hold this reduce-scatter
+        // alongside other builders (e.g. the matmul gather_in0 helper in rs_matmul_op).
+        static void create_at_program_processing_descriptor(
+            tt::tt_metal::ProgramDescriptor& desc,
+            const operation_attributes_t& operation_attributes,
+            const ttnn::MeshCoordinate& mesh_coordinate,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& signaler);
+
         // Contract-2 (WorkloadDescriptor) factory.  Builds one ProgramDescriptor
         // per mesh coord via create_at_program_processing_descriptor.  No
         // workload-scoped semaphores or intermediate Tensors are required
