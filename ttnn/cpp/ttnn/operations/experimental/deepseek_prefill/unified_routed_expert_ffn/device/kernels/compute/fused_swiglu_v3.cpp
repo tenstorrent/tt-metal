@@ -260,20 +260,6 @@ void kernel_main() {
     silu_tile_init_pack();
     mm_init(cb_in0_x, cb_in1_gate, cb_partials_gu);
 
-    // dst register warmup: at kernel startup the dst register half(s) may
-    // contain stale data from previous device usage. Cycling tile_regs_acquire
-    // / tile_regs_release twice clears both halves via ZEROACC fired inside
-    // _llk_pack_dest_section_done_. Without this the first matmul of phase 1
-    // accumulates onto stale dst, which is the leading hypothesis for the
-    // observed Inf-saturation pattern (6% of tiles non-zero with zero gate
-    // weights).
-    for (uint32_t i = 0; i < 2; ++i) {
-        tile_regs_acquire();
-        tile_regs_commit();
-        tile_regs_wait();
-        tile_regs_release();
-    }
-
     // Phase 1: gate matmul with silu fused on the final pack into gate_intermed.
     matmul_phase_v3<
         g_in0_block_w,

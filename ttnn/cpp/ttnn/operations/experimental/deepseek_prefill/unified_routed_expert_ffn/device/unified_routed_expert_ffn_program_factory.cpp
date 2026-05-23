@@ -66,8 +66,8 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const uint32_t per_core_N_gu = N_gate_tiles_full / GRID_X;
     const uint32_t per_core_N_d = N_down_tiles_full / GRID_X;
 
-    const uint32_t in0_block_w_gu = 8;
-    const uint32_t in0_block_w_d = 4;
+    const uint32_t in0_block_w_gu = 16;
+    const uint32_t in0_block_w_d = 8;
     TT_FATAL(
         K_gate_tiles % in0_block_w_gu == 0,
         "K_gate_tiles ({}) must be divisible by in0_block_w_gu ({})",
@@ -135,12 +135,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // reconfig that the v2 kernel doesn't do). Use bfp8_b for both: 1KB/tile
     // is half the bf16 cost so we fit in L1 with both intermediates and
     // partials sized to the full per-core block.
-    // bfp8_b has a per-face shared exponent; if the packer's first write to a
-    // CB doesn't overwrite the exponent byte (e.g. due to a face/format
-    // mismatch), uninitialized exponent bits can read back as Inf-near values.
-    // Use bf16 intermeds — same dst format means no conversion on pack/unpack
-    // round-trip.
-    const tt::DataFormat intermed_df = tt::DataFormat::Float16_b;
+    const tt::DataFormat intermed_df = tt::DataFormat::Bfp8_b;
     const tt::DataFormat partials_gu_df = tt::DataFormat::Float16_b;
     const tt::DataFormat partials_d_df = tt::DataFormat::Float16_b;
 
