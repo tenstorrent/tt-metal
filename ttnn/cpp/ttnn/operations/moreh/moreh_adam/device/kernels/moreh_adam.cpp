@@ -140,18 +140,25 @@ void kernel_main() {
         // denom = sqrt(exp_avg_sq) / sqrt(bias_correction2) + eps;
         // bias_correction2 = 1 - pow(beta2, step);
         // cb_tmp1 = pow(beta2, step);
-        tile_regs_acquire();
-        copy_tile_init_with_dt(cb_scalar_args);
-        copy_tile(cb_scalar_args, beta2_tile, dst0);
-        power_tile_init();
-        power_tile(dst0, step);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        cb_tmp1_obj.reserve_back(onetile);
-        pack_tile_with_dt(dst0, cb_tmp1);
-        cb_tmp1_obj.push_back(onetile);
-        tile_regs_release();
+        // Reconfig: copy_tile_init_with_dt -> Input. pack_tile_with_dt -> Output.
+        // cb_scalar_args CallerManaged + Scalar + TileBaseCompileTime<beta2_tile>.
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::CopyTile<
+                cb_scalar_args,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::CopyTileReconfig::Input,
+                compute_kernel_lib::TileBaseCompileTime<beta2_tile>>{
+                compute_kernel_lib::TileBaseCompileTime<beta2_tile>{}},
+            compute_kernel_lib::Power<compute_kernel_lib::Dst::D0>{step},
+            compute_kernel_lib::PackTile<
+                cb_tmp1,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 
         // cb_tmp1 = 1 / (1 - cb_tmp1)  — same-CB in/out on cb_tmp1.
         // Reconfig audit: `WITH_FP32_DEST_ACC(reconfig_data_format(cb_one, cb_tmp1))`
@@ -212,18 +219,25 @@ void kernel_main() {
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
-        // cb_max_exp_avg_sq_out
-        tile_regs_acquire();
+        // cb_max_exp_avg_sq_out = tmp_cb_max_exp_avg_sq[first_tile]
+        // Reconfig: copy_tile_init_with_dt -> Input. pack_tile_with_dt -> Output.
+        // tmp_cb_max_exp_avg_sq waited here, popped by the next chain that reuses
+        // the same tile -> CallerManaged + Scalar (first_tile == 0 -> default TileBase).
         tmp_cb_max_exp_avg_sq_obj.wait_front(onetile);
-        cb_max_exp_avg_sq_out_obj.reserve_back(onetile);
-        copy_tile_init_with_dt(tmp_cb_max_exp_avg_sq);
-        copy_tile(tmp_cb_max_exp_avg_sq, first_tile, dst0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_max_exp_avg_sq_out);
-        cb_max_exp_avg_sq_out_obj.push_back(onetile);
-        tile_regs_release();
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::CopyTile<
+                tmp_cb_max_exp_avg_sq,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::CopyTileReconfig::Input>{},
+            compute_kernel_lib::PackTile<
+                cb_max_exp_avg_sq_out,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 #endif
 
         // cb_tmp1 = sqrt(exp_avg_sq * cb_tmp1)  — same-CB in/out on cb_tmp1.
@@ -312,18 +326,25 @@ void kernel_main() {
 
         // bias_correction1 = 1 - pow(beta1, step);
         // cb_tmp2 = pow(beta1, step);
-        tile_regs_acquire();
-        cb_tmp2_obj.reserve_back(onetile);
-        copy_tile_init_with_dt(cb_scalar_args);
-        copy_tile(cb_scalar_args, beta1_tile, dst0);
-        power_tile_init();
-        power_tile(dst0, step);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_tmp2);
-        cb_tmp2_obj.push_back(onetile);
-        tile_regs_release();
+        // Reconfig: copy_tile_init_with_dt -> Input. pack_tile_with_dt -> Output.
+        // cb_scalar_args CallerManaged + Scalar + TileBaseCompileTime<beta1_tile>.
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::CopyTile<
+                cb_scalar_args,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::CopyTileReconfig::Input,
+                compute_kernel_lib::TileBaseCompileTime<beta1_tile>>{
+                compute_kernel_lib::TileBaseCompileTime<beta1_tile>{}},
+            compute_kernel_lib::Power<compute_kernel_lib::Dst::D0>{step},
+            compute_kernel_lib::PackTile<
+                cb_tmp2,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 
         // cb_tmp2 = 1 / (1 - cb_tmp2)  — same-CB in/out on cb_tmp2.
         // Reconfig: sub_tiles_init + WITH_FP32_DEST_ACC reconfig -> Input.

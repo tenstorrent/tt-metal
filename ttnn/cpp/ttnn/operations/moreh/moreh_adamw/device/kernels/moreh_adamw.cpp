@@ -117,17 +117,32 @@ void kernel_main() {
 
         ////////////////////////////////////////////////////////////////////////
         // exp_avg_sq = exp_avg_sq * beta2 + grad * grad * (1 - beta2);
-        // cb_tmp1 = (1 - beta2)
-        tile_regs_acquire();
-        cb_tmp1_obj.reserve_back(onetile);
-        sub_tiles_init_with_dt(cb_one, cb_scalar_args);
-        sub_tiles(cb_one, cb_scalar_args, first_tile, beta2_tile, dst0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_tmp1);
-        cb_tmp1_obj.push_back(onetile);
-        tile_regs_release();
+        // cb_tmp1 = cb_one[first_tile] - cb_scalar_args[beta2_tile]
+        // Reconfig: sub_tiles_init_with_dt -> Input. pack_tile_with_dt -> Output.
+        // Both operands held externally -> CallerManaged + Scalar; cb_scalar_args at
+        // beta2_tile -> TileBaseCompileTime<beta2_tile>.
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::BinaryFpu<
+                cb_one,
+                cb_scalar_args,
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::TileBaseNone,
+                compute_kernel_lib::TileBaseCompileTime<beta2_tile>>{
+                compute_kernel_lib::TileBaseNone{}, compute_kernel_lib::TileBaseCompileTime<beta2_tile>{}},
+            compute_kernel_lib::PackTile<
+                cb_tmp1,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 
         // cb_tmp2 = grad * grad
         mul_tiles_to_cb(cb_grad_in, cb_grad_in, cb_tmp2, first_tile, first_tile, /*pop0=*/0, /*pop1=*/0);
@@ -152,19 +167,30 @@ void kernel_main() {
         // bias_correction2 = 1 - pow(beta2, step);
         // cb_beta2_exponent = pow(beta2, step); Calculated from host
 
-        // cb_tmp1 = 1 / (1 - cb_beta2_exponent);
-        tile_regs_acquire();
-        cb_tmp1_obj.reserve_back(onetile);
-        sub_tiles_init_with_dt(cb_one, cb_beta2_exponent);
-        sub_tiles(cb_one, cb_beta2_exponent, first_tile, first_tile, dst0);
-        recip_tile_init();
-        recip_tile(dst0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_tmp1);
-        cb_tmp1_obj.push_back(onetile);
-        tile_regs_release();
+        // cb_tmp1 = 1 / (cb_one[first_tile] - cb_beta2_exponent[first_tile])
+        // Reconfig: sub_tiles_init_with_dt -> Input. pack_tile_with_dt -> Output.
+        // Both operands held externally -> CallerManaged + Scalar (first_tile == 0
+        // -> default TileBase).
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::BinaryFpu<
+                cb_one,
+                cb_beta2_exponent,
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar>{},
+            compute_kernel_lib::Recip<compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::PackTile<
+                cb_tmp1,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 
 #ifdef AMSGRAD
         // tmp_cb_max_exp_avg_sq = max(cb_max_exp_avg_sq_in, tmp_cb_exp_avg_sq)
