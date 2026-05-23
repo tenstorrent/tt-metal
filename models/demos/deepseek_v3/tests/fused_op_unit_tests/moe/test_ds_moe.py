@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import json
@@ -47,7 +47,7 @@ def reference_model(hf_config):
 @pytest.mark.parametrize(
     "device_params",
     [
-        {"fabric_config": get_fabric_config(), "trace_region_size": 2967552},
+        {"fabric_config": get_fabric_config(), "trace_region_size": 0},
     ],
     indirect=True,
 )

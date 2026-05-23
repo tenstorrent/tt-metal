@@ -351,7 +351,7 @@ def _build_mul_inputs(
     [
         {
             "fabric_config": get_fabric_config(),
-            "trace_region_size": 2967552,
+            "trace_region_size": 0,
         }
     ],
     indirect=True,
@@ -467,7 +467,7 @@ def test_ds_mul(
     [
         {
             "fabric_config": get_fabric_config(),
-            "trace_region_size": 2967552,
+            "trace_region_size": 0,
         }
     ],
     indirect=True,

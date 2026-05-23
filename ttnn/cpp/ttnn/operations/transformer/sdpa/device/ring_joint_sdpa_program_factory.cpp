@@ -692,43 +692,43 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     CreateCircularBuffer(program, core_grid, c_in8_config);
 
     // cb_qk_im
-    auto c_intermed0_config = CircularBufferConfig(qk_tiles * im_tile_size, {{tt::CBIndex::c_24, im_df}})
-                                  .set_page_size(tt::CBIndex::c_24, im_tile_size);
+    auto c_intermed0_config = CircularBufferConfig(qk_tiles * im_tile_size, {{tt::CBIndex::c_13, im_df}})
+                                  .set_page_size(tt::CBIndex::c_13, im_tile_size);
     CreateCircularBuffer(program, core_grid, c_intermed0_config);
 
     // cb_out_im
-    auto c_intermed1_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CBIndex::c_25, im_df}})
-                                  .set_page_size(tt::CBIndex::c_25, im_tile_size);
+    auto c_intermed1_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CBIndex::c_14, im_df}})
+                                  .set_page_size(tt::CBIndex::c_14, im_tile_size);
     CreateCircularBuffer(program, core_grid, c_intermed1_config);
 
     // cb_out_accumulate_im
-    auto c_intermed2_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CBIndex::c_26, im_df}})
-                                  .set_page_size(tt::CBIndex::c_26, im_tile_size);
+    auto c_intermed2_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CBIndex::c_15, im_df}})
+                                  .set_page_size(tt::CBIndex::c_15, im_tile_size);
     CreateCircularBuffer(program, core_grid, c_intermed2_config);
 
     // cb_cur_max
-    auto c_intermed3_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_27, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_27, stats_tile_size);
+    auto c_intermed3_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_18, stats_df}})
+                                  .set_page_size(tt::CBIndex::c_18, stats_tile_size);
     CreateCircularBuffer(program, core_grid, c_intermed3_config);
 
     // cb_prev_max
-    auto c_intermed4_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_28, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_28, stats_tile_size);
+    auto c_intermed4_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_19, stats_df}})
+                                  .set_page_size(tt::CBIndex::c_19, stats_tile_size);
     CreateCircularBuffer(program, core_grid, c_intermed4_config);
 
     // cb_cur_sum
-    auto c_intermed5_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_29, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_29, stats_tile_size);
+    auto c_intermed5_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_20, stats_df}})
+                                  .set_page_size(tt::CBIndex::c_20, stats_tile_size);
     CreateCircularBuffer(program, core_grid, c_intermed5_config);
 
     // cb_prev_sum
-    auto c_intermed6_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_30, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_30, stats_tile_size);
+    auto c_intermed6_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_21, stats_df}})
+                                  .set_page_size(tt::CBIndex::c_21, stats_tile_size);
     CreateCircularBuffer(program, core_grid, c_intermed6_config);
 
     // cb_exp_max_diff
-    auto c_intermed7_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_31, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_31, stats_tile_size);
+    auto c_intermed7_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_22, stats_df}})
+                                  .set_page_size(tt::CBIndex::c_22, stats_tile_size);
     CreateCircularBuffer(program, core_grid, c_intermed7_config);
 
     // Output
