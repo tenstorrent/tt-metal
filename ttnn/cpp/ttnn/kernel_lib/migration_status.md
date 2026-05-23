@@ -124,6 +124,58 @@ Before committing each PARTIAL migration:
 Anti-pattern: noting only the blocks I happened to look at while migrating
 the chosen stage. The audit grep is the safety net.
 
+### moreh norm / softmax (continued)
+
+| Kernel | Status | Commit | Notes |
+|---|---|---|---|
+| `moreh_norm/.../moreh_norm_h_kernel.cpp` | FULL | `7743f35794f` | |x| with mask + power + accumulator + final |x|^(1/p). 466 PASS on `test_moreh_norm.py`. |
+| `moreh_norm/.../moreh_norm_w_kernel.cpp` | FULL | `51e435506bd` | W axis variant. |
+| `moreh_norm/.../moreh_norm_other_kernel.cpp` | FULL | `ff98c25acdf` | NC variant (no mask, no intermediate reduce). |
+| `moreh_norm/ord_other/{h,w,nc}/.../moreh_norm_*_kernel.cpp` | FULL | `7e61967482a` | 3-kernel bundle for ord_other variants (IS_ZERO / MINUS_INF / default). Uses UnaryNe / BinaryMax / MaskPosInf. 466 PASS. |
+| `moreh_norm_backward/.../moreh_norm_backward_kernel.cpp` | FULL | `01156fad878` | sign + |x|^(p-1) + 3 Mul stages with 4-branch bcast (compile-time kBcast) + 1/y^p + final mul. 138 PASS. |
+| `moreh_softmax/.../moreh_softmax_h_large.cpp` | PARTIAL | `2ca4acfe930`, `b83db8b05c0` | Per-tile sub+exp(+mask) + accumulator + final 2-chain. Fixed CallerManaged -> HeldStream on cb_max/cb_mask/cb_recipsumexps. 93 PASS. |
+| `moreh_softmax/.../moreh_softmax_w_large.cpp` | PARTIAL | `f0f7da92ea1`, `b83db8b05c0` | Same as h_large with Col bcast. |
+| `moreh_softmax/.../moreh_softmax_c_large.cpp` | FULL | `c2cbd33e580`, `b83db8b05c0` | Max-accumulator + sub+exp + log/recip + final. No bcast (C-dim full tiles). |
+| `moreh_softmax_backward/.../moreh_softmax_backward_h_large.cpp` | PARTIAL | `06a000ab302`, `b83db8b05c0` | LOG: dy accumulate + reduce + per-tile exp+mul+sub. Non-LOG: y*dy accumulate + reduce + sub_bcast+mul(+Negative). |
+| `moreh_softmax_backward/.../moreh_softmax_backward_w_large.cpp` | PARTIAL | `b83db8b05c0` | W variant of h_large backward. |
+| `moreh_softmax_backward/.../moreh_softmax_backward_c_large.cpp` | PARTIAL | `b83db8b05c0` | C variant; no bcast. cb_y Streaming (pops each iter to match original). |
+
+### TTNN core ops (data_movement / reduction / eltwise / experimental)
+
+| Kernel | Status | Commit | Notes |
+|---|---|---|---|
+| `data_movement/clone/.../compute_kernel.cpp` | FULL | `96c844c6817` | Single CopyTile+PackTile chain over num_tiles. 118 PASS on `test_clone.py`. |
+| `data_movement/sharded/.../eltwise_copy.cpp` | FULL | `3dfd9bb6b07` | Per-tile copy, runtime tile count. Used by interleaved_to_sharded. 208 PASS shared with shared variant. |
+| `ttnn/cpp/ttnn/kernel/compute/eltwise_copy.cpp` | FULL | `3dfd9bb6b07` | Shared compile-time variant. Used by sharded_to_interleaved + untilize_with_unpadding + copy_default_tilized. |
+| `eltwise/unary/.../eltwise_identity_kernel.cpp` | FULL | `25e03c15161` | Per-tile copy_tile -> pack_tile chain. 5 PASS on test_fp32_uint32. |
+| `eltwise/unary/.../tanhshrink_kernel.cpp` | FULL | `27bcccc7fea` | x - tanh(x). FLOAT32: two CopyTile + Tanh + SubBinary. FLOAT: CopyTile + Tanh + DestReuseBinary<Sub, DEST_TO_SRCB>. 6 PASS. |
+| `eltwise/unary/.../hardswish_kernel.cpp` | FULL | `e0cb3c1cada` | x * hardsigmoid(x). Same shape as tanhshrink with Hardsigmoid/Mul. 14 PASS. |
+| `data_movement/bcast/.../bcast_h.cpp` | FULL | `65b34f7740f` | Per-tile BinaryFpu<CHAIN_BCAST_OP, Row> + PackTile. Added CHAIN_BCAST_OP / CHAIN_BCAST_DIM defines to `bcast_op_utils::get_defines`. 576 PASS on tt_eager test_bcast.py. |
+| `data_movement/bcast/.../bcast_w.cpp` | FULL | `65b34f7740f` | Col bcast variant. cb_rhs HeldStream + explicit pop per row. |
+| `data_movement/bcast/.../bcast_hw.cpp` | FULL | `65b34f7740f` | Scalar bcast. cb_rhs HeldStream (when BCAST_SCALAR) or Streaming. |
+| `reduction/prod/.../prod_all.cpp` | FULL | `96c844c6817` | 3-stage: seed -> accumulator (mul) -> final copy. `if constexpr (num_tiles == 1)` short-circuit. 4 PASS. |
+| `reduction/prod/.../prod_nc.cpp` | FULL | `96c844c6817` | Per output-tile: seed + middle loop + final. cb_in1 HeldStream (ones scaler). 14 PASS. |
+| `experimental/bcast_to/.../compute_interleaved_{col,row,scalar}_bcast_to.cpp` | FULL | `a1fd70d3e88` | 3-kernel bundle. UnaryBcast<{Col,Row,Scalar}> + PackTile. compute_kernel_hw_startup replaces unary_bcast_init. 24 PASS. |
+
+## Helper-library changes this branch
+
+- `eltwise_chain.inl` — `window_1d<OperandKind>` helper (commit `14a5a61e462`):
+  Bulk+Scalar now emits wait_front(1)/pop_front(1) instead of n_tiles.
+- `bcast_op_utils::get_defines` (commit `65b34f7740f`) — added
+  `CHAIN_BCAST_OP` / `CHAIN_BCAST_DIM` defines emitting
+  `compute_kernel_lib::BinaryFpuOp::{Add,Sub,Mul}` /
+  `compute_kernel_lib::BroadcastDim::{Row,Col,Scalar}` for bcast kernels.
+
+## Cross-cutting bug fixes
+
+- **CallerManaged needs external wait_front** (commit `b83db8b05c0`):
+  `CallerManaged` lifecycle emits no `cb_wait_front` on the chain side. For
+  held CBs without an external wait, the underlying mul/sub LLK reads
+  unsynchronized → reader deadlocks at `cb_reserve_back`. Fixed in 6
+  softmax large kernels (h/w/c large forward + backward) by replacing
+  `CallerManaged` with `HeldStream` (wait per iter, no pop). Memory note:
+  `~/.claude/projects/-localdev-astancov-tt-metal/memory/feedback_callermanaged_needs_external_wait.md`.
+
 ## Next migration targets (this branch)
 
 Pending in TaskList, ordered by simplicity:
