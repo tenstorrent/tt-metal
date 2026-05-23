@@ -141,6 +141,7 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
         .kernel_source = std::string(kDeepseekMoeGateKernelPath),
         .source_type = KernelDescriptor::SourceType::FILE_PATH,
         .core_ranges = all_cores,
+        .compile_time_args = {},
         .named_compile_time_args = std::move(ncrisc_named),
         .config =
             DataMovementConfigDescriptor{
@@ -154,6 +155,7 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
         .kernel_source = std::string(kDeepseekMoeGateKernelPath),
         .source_type = KernelDescriptor::SourceType::FILE_PATH,
         .core_ranges = all_cores,
+        .compile_time_args = {},
         .named_compile_time_args = std::move(brisc_named),
         .config =
             DataMovementConfigDescriptor{
@@ -167,6 +169,7 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
         .kernel_source = std::string(kDeepseekMoeGateKernelPath),
         .source_type = KernelDescriptor::SourceType::FILE_PATH,
         .core_ranges = all_cores,
+        .compile_time_args = {},
         .named_compile_time_args = std::move(trisc_named),
         .config = compute_config,
     };
