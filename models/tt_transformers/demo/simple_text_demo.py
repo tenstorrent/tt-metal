@@ -36,15 +36,17 @@ from models.tt_transformers.tt.prefetcher import is_prefetcher_supported
 models_not_supported_for_device_sampling = {"Mistral-7B"}
 
 # Phi-1 bring-up currently validates decode quality with host-side sampling in
-# accuracy mode. Performance runs should use the model's on-device sampling path
-# so throughput reflects the device decode stack rather than the Python host path.
+# accuracy mode. Multi-device performance runs benefit from the model's on-device
+# sampling path, while the current single-device path regresses throughput.
 accuracy_only_host_sampling_models = {"phi-1"}
 
 
-def should_disable_device_sampling(base_model_name: str, optimization_name: str) -> bool:
+def should_disable_device_sampling(base_model_name: str, optimization_name: str, num_devices: int = 1) -> bool:
     if base_model_name in models_not_supported_for_device_sampling:
         return True
-    return base_model_name in accuracy_only_host_sampling_models and optimization_name == "accuracy"
+    return base_model_name in accuracy_only_host_sampling_models and (
+        optimization_name == "accuracy" or num_devices == 1
+    )
 
 
 def get_test_mesh_shape():
@@ -1183,7 +1185,11 @@ def test_demo_text(
         # Override the sampling params for some models or optimization modes.
         # Issue: https://github.com/tenstorrent/tt-metal/issues/34763
         optimization_name = getattr(model_args[0].optimizations, "__name__", "")
-        if should_disable_device_sampling(model_args[0].base_model_name, optimization_name):
+        if should_disable_device_sampling(
+            model_args[0].base_model_name,
+            optimization_name,
+            num_devices=model_args[0].num_devices,
+        ):
             device_sampling_params = None
 
         if device_sampling_params is None and isinstance(sampling_params["temperature"], List):

@@ -26,8 +26,10 @@ def test_phi1_accuracy_uses_bf16_attention_tensors_without_broad_hifi4_override(
 
 
 def test_phi1_uses_host_sampling_only_in_accuracy_mode():
-    assert should_disable_device_sampling("phi-1", "accuracy")
-    assert not should_disable_device_sampling("phi-1", "performance")
+    assert should_disable_device_sampling("phi-1", "accuracy", num_devices=1)
+    assert should_disable_device_sampling("phi-1", "accuracy", num_devices=2)
+    assert should_disable_device_sampling("phi-1", "performance", num_devices=1)
+    assert not should_disable_device_sampling("phi-1", "performance", num_devices=2)
 
-    assert should_disable_device_sampling("Mistral-7B", "accuracy")
-    assert should_disable_device_sampling("Mistral-7B", "performance")
+    assert should_disable_device_sampling("Mistral-7B", "accuracy", num_devices=1)
+    assert should_disable_device_sampling("Mistral-7B", "performance", num_devices=2)
