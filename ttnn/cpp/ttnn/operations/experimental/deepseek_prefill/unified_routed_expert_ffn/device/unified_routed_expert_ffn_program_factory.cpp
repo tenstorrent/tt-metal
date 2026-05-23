@@ -53,37 +53,52 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const uint32_t K_down_tiles = down_shape[-2] / TILE;         // = hidden / TILE
     const uint32_t N_down_tiles_full = down_shape[-1] / TILE;    // = emb / TILE
 
-    // v1 layout: 8x8 compute grid, per_core_N choices that divide hidden/emb
-    // exactly so we don't need phantom-column padding.
-    constexpr uint32_t GRID_X = 8;
+    // v2 layout: 11x8 = 88 compute cores. N-axis is rounded UP to a multiple
+    // of GRID_X via ceil_div per_core_N. Phantom tiles past the actual tensor
+    // dims (col 64-65 of hidden, col 224-230 of emb) are zero-padded in the
+    // reader (zero-fill L1 instead of DRAM read). Compute runs uniform
+    // per_core_N; writer skips DRAM writes past actual_N. K dim of the down
+    // matmul is also padded to N_gate_padded so the activated L1 mcast (one
+    // sender per K-block, sender = gx == kb) covers exactly per_core_N_gu
+    // cols per step; activated cols past actual_hidden are 0 (gate/up weight
+    // OOB zero-fill propagates through silu and multiply).
+    constexpr uint32_t GRID_X = 11;
     constexpr uint32_t GRID_Y = 8;
     const uint32_t chunk_M_tiles = op.chunk_M_tiles;
     const uint32_t per_core_M = chunk_M_tiles / GRID_Y;
-    TT_FATAL(per_core_M * GRID_Y == chunk_M_tiles, "chunk_M_tiles ({}) must be divisible by GRID_Y ({})", chunk_M_tiles, GRID_Y);
+    TT_FATAL(
+        per_core_M * GRID_Y == chunk_M_tiles,
+        "chunk_M_tiles ({}) must be divisible by GRID_Y ({})",
+        chunk_M_tiles,
+        GRID_Y);
     TT_FATAL(
         M_tiles_full % chunk_M_tiles == 0,
         "M_tiles_full ({}) must be divisible by chunk_M_tiles ({})",
         M_tiles_full,
         chunk_M_tiles);
     const uint32_t num_chunks = M_tiles_full / chunk_M_tiles;
-    TT_FATAL(N_gate_tiles_full % GRID_X == 0, "hidden_tiles ({}) must be divisible by GRID_X ({})", N_gate_tiles_full, GRID_X);
-    TT_FATAL(N_down_tiles_full % GRID_X == 0, "emb_tiles ({}) must be divisible by GRID_X ({})", N_down_tiles_full, GRID_X);
 
-    const uint32_t per_core_N_gu = N_gate_tiles_full / GRID_X;
-    const uint32_t per_core_N_d = N_down_tiles_full / GRID_X;
+    const uint32_t per_core_N_gu = (N_gate_tiles_full + GRID_X - 1) / GRID_X;
+    const uint32_t per_core_N_d = (N_down_tiles_full + GRID_X - 1) / GRID_X;
+    const uint32_t N_gate_tiles_padded = per_core_N_gu * GRID_X;
+    const uint32_t K_down_tiles_padded = N_gate_tiles_padded;  // down K = gate N
 
-    const uint32_t in0_block_w_gu = 8;
-    const uint32_t in0_block_w_d = 8;
+    // With 11x8 = 88 cores, per_core_N_gu (= 6) and per_core_N_d (= 21) are
+    // smaller than in v1 (8x8), freeing ~250KB of L1 per core. Use it to
+    // double in0_block_w_gu, halving the gate / up K-loop iteration count.
+    const uint32_t in0_block_w_gu = 16;
+    const uint32_t in0_block_w_d = per_core_N_gu;
     TT_FATAL(
         K_gate_tiles % in0_block_w_gu == 0,
         "K_gate_tiles ({}) must be divisible by in0_block_w_gu ({})",
         K_gate_tiles,
         in0_block_w_gu);
     TT_FATAL(
-        K_down_tiles % in0_block_w_d == 0,
-        "K_down_tiles ({}) must be divisible by in0_block_w_d ({})",
-        K_down_tiles,
+        K_down_tiles_padded % in0_block_w_d == 0,
+        "K_down_tiles_padded ({}) must be divisible by in0_block_w_d ({})",
+        K_down_tiles_padded,
         in0_block_w_d);
+    (void)K_down_tiles;  // actual K_down; used by reader for OOB; suppress unused warning here
 
     // Subblock dims. With bf16 dst (fp32_dest_acc_en=false), capacity is 8.
     constexpr uint32_t DST_CAPACITY = 8;
@@ -126,7 +141,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const uint32_t d_in0_subblock_num_tiles = d_out_subblock_h * in0_block_w_d;
     const uint32_t d_in1_block_num_tiles = in0_block_w_d * per_core_N_d;
     const uint32_t d_in1_block_w = per_core_N_d;
-    const uint32_t d_num_blocks = K_down_tiles / in0_block_w_d;
+    const uint32_t d_num_blocks = K_down_tiles_padded / in0_block_w_d;
     const uint32_t d_out_block_num_tiles = per_core_M * per_core_N_d;
 
     // -------------------------- data formats / tile sizes -----------------
@@ -272,10 +287,14 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     make_cb(CB_OUT, out_df, /*tiles=*/d_out_subblock_h * d_out_subblock_w * 4, out_tile_size);
     // cb_in0_down_full: reader pushes per_core_M × in0_block_w_d tiles of activated
     // once per down K-block. Single-buffered to save L1.
+    // cb_in0_down_full double-buffered when 88-core L1 budget allows it. Lets
+    // the L1-mcast sender pre-stage K-block kb+1's activated into the next
+    // slot while compute consumes kb. Saves one mcast handshake's worth of
+    // serialization per K-block boundary.
     make_cb(
         CB_IN0_DOWN_FULL,
         intermed_df,
-        /*tiles=*/d_in0_block_num_tiles,
+        /*tiles=*/d_in0_block_num_tiles * 2,
         intermed_tile_size);
 
     // Scratch CBs for the device-side count lookup. One page each, sized to
@@ -318,9 +337,15 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         total_cores,
         num_chunks,
         chunk_M_tiles,
-        // CB_ACTIVATED — consumed by the reader during phase 4 L1 mcast
-        // (sender pops it and broadcasts to all M-row cores' cb_in0_down_full).
+        // CB_ACTIVATED — consumed by the reader during phase 4 L1 mcast.
         CB_ACTIVATED,
+        // GRID_X — replaces the hard-coded 8 in reader's L1 mcast. With
+        // 11-core M-rows we need the mcast num_dests and the NoC-table
+        // endpoint index to track.
+        GRID_X,
+        // K_down_tiles_padded — phase-4 K-loop bound. K dim of down is
+        // padded to N_gate_padded so per-K-block sender = gx == kb holds.
+        K_down_tiles_padded,
     };
     tt::tt_metal::TensorAccessorArgs(x_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(gate_buffer).append_to(reader_ct_args);
