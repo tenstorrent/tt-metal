@@ -154,6 +154,7 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
             },
         .compiler_include_paths = {},
         .buffer_bindings = {},
+        .common_buffer_bindings = {},
     };
 
     KernelDescriptor writer{
@@ -173,6 +174,7 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
             },
         .compiler_include_paths = {},
         .buffer_bindings = {},
+        .common_buffer_bindings = {},
     };
 
     KernelDescriptor compute_k{
@@ -187,6 +189,7 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
         .config = compute_config,
         .compiler_include_paths = {},
         .buffer_bindings = {},
+        .common_buffer_bindings = {},
     };
 
     tt::tt_metal::ProgramDescriptor program_desc;
