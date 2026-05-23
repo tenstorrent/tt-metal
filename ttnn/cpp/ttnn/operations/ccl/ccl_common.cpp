@@ -1917,7 +1917,13 @@ void fabric_mux_connection_rt_args(
     // and parking a SemaphoreDescriptor on the ProgramDescriptor. Returns the new ID.
     auto alloc_sem = [&]() -> uint32_t {
         auto id_opt = desc.find_available_semaphore_id(worker_logical_core, tt::CoreType::WORKER);
-        TT_FATAL(id_opt.has_value(), "No available semaphore ID for fabric mux connection on worker core");
+        TT_FATAL(
+            id_opt.has_value(),
+            "No available semaphore ID for fabric mux connection on worker core (x={}, y={}, core_type=WORKER); "
+            "{} SemaphoreDescriptors already allocated on this ProgramDescriptor.",
+            worker_logical_core.x,
+            worker_logical_core.y,
+            desc.semaphores.size());
         const uint32_t id = id_opt.value();
         desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
             .id = id,
