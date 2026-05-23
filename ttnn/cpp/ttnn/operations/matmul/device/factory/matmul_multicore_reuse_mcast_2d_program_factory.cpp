@@ -13,6 +13,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "tt-metalium/buffer_types.hpp"
+#include "impl/buffers/semaphore.hpp"
+#include <bitset>
 
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
@@ -33,6 +35,43 @@ using tt::tt_metal::ProgramDescriptor;
 namespace ttnn::prim {
 
 namespace reuse_mcast_optimized_helpers {
+
+// Allocate `count` contiguous free semaphore ids on the given CoreRangeSet against an
+// existing ProgramDescriptor.  Mirrors the legacy CreateSemaphore behaviour (pick first
+// free id whose slot is unused on every requested core), but in a block so callers can
+// reserve a stable [base, base+count) range to hand to the matmul helper below.
+static uint32_t allocate_free_semaphore_id_block(
+    const tt::tt_metal::ProgramDescriptor& desc,
+    const tt::tt_metal::CoreRangeSet& cores,
+    uint32_t count,
+    tt::tt_metal::CoreType core_type = tt::tt_metal::CoreType::WORKER) {
+    std::bitset<NUM_SEMAPHORES> used;
+    for (const auto& sem : desc.semaphores) {
+        if (sem.core_type != core_type) {
+            continue;
+        }
+        if (sem.core_ranges.intersects(cores)) {
+            used.set(sem.id);
+        }
+    }
+    for (uint32_t base = 0; base + count <= NUM_SEMAPHORES; ++base) {
+        bool block_free = true;
+        for (uint32_t i = 0; i < count; ++i) {
+            if (used.test(base + i)) {
+                block_free = false;
+                break;
+            }
+        }
+        if (block_free) {
+            return base;
+        }
+    }
+    TT_THROW(
+        "No contiguous block of {} free semaphore ids available on the requested core range set "
+        "(NUM_SEMAPHORES={}).",
+        count,
+        NUM_SEMAPHORES);
+}
 
 static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     tt::tt_metal::IDevice* device,
@@ -76,7 +115,8 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     bool row_broadcast_bias = true,
-    CoreCoord sub_device_start_core = {0, 0}) {
+    CoreCoord sub_device_start_core = {0, 0},
+    uint32_t base_semaphore_id = 0) {
     using namespace tt;
     using tt::tt_metal::TensorMemoryLayout;
 
@@ -315,11 +355,14 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
              (std::size_t)start_core_y + num_cores_with_work_r - 1}};
     }
 
-    // Mcast args — semaphore IDs assigned sequentially (0, 1, 2, 3)
-    uint32_t in0_mcast_sender_semaphore_id = 0;
-    uint32_t in0_mcast_receiver_semaphore_id = 1;
-    uint32_t in1_mcast_sender_semaphore_id = 2;
-    uint32_t in1_mcast_receiver_semaphore_id = 3;
+    // Mcast args — semaphore IDs are caller-allocated so this helper can be appended onto a
+    // fused-op ProgramDescriptor that already has semaphores on the same cores.  Standalone
+    // callers pass base_semaphore_id=0 (default), which preserves the legacy sequential
+    // 0/1/2/3 assignment.
+    uint32_t in0_mcast_sender_semaphore_id = base_semaphore_id;
+    uint32_t in0_mcast_receiver_semaphore_id = base_semaphore_id + 1;
+    uint32_t in1_mcast_sender_semaphore_id = base_semaphore_id + 2;
+    uint32_t in1_mcast_receiver_semaphore_id = base_semaphore_id + 3;
 
     bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
 
@@ -3564,6 +3607,12 @@ void matmul_multi_core_reuse_mcast_2d_optimized_helper_descriptor(
     // sub-device anchoring becomes a requirement.
     CoreCoord sub_device_start_core = {0, 0};
 
+    // Reserve a free 4-id block on the allowed worker cores so that the in0/in1 sender/receiver
+    // semaphores allocated inside the helper don't alias semaphores the caller may have placed on
+    // these same cores (e.g. CCL semaphores in a fused-op descriptor).
+    uint32_t mcast_2d_base_sem_id =
+        reuse_mcast_optimized_helpers::allocate_free_semaphore_id_block(desc, pc.allowed_worker_cores.value(), 4);
+
     ProgramDescriptor produced = reuse_mcast_optimized_helpers::create_program_mcast_in0_in1_descriptor(
         device,
         math_fidelity,
@@ -3606,7 +3655,8 @@ void matmul_multi_core_reuse_mcast_2d_optimized_helper_descriptor(
         untilize_out,
         fused_op_signaler,
         fused_matmul_bias_row_broadcastable(bias),
-        sub_device_start_core);
+        sub_device_start_core,
+        mcast_2d_base_sem_id);
 
     // Append produced kernels / CBs / semaphores onto the caller's descriptor without going through
     // merge_program_descriptors() — that helper TT_FATALs on overlapping kernel core ranges, but

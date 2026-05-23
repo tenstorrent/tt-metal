@@ -13,6 +13,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+#include "impl/buffers/semaphore.hpp"
+#include <bitset>
 
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
@@ -2575,31 +2577,27 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             // Look up bank_id based on core.y and which column group core.x belongs to
             if (core.x <= first_col_max_x) {
                 auto it = worker_y_to_dram_bank_first_col.find(core.y);
-                if (it == worker_y_to_dram_bank_first_col.end()) {
-                    log_info(
-                        tt::LogOp,
-                        "ERROR: Worker core ({}, {}) y={} NOT FOUND in first-col map! Available y values:",
-                        core.x,
-                        core.y,
-                        core.y);
-                    for (const auto& [y, bank] : worker_y_to_dram_bank_first_col) {
-                        log_info(tt::LogOp, "  y={}", y);
-                    }
-                }
+                TT_FATAL(
+                    it != worker_y_to_dram_bank_first_col.end(),
+                    "Worker core ({}, {}) y={} not found in first-col DRAM-bank map (size={}) — dram-sharded "
+                    "in1 mapping is missing this y-coordinate; check that the in1 shard grid covers all "
+                    "matmul worker rows.",
+                    core.x,
+                    core.y,
+                    core.y,
+                    worker_y_to_dram_bank_first_col.size());
                 bank_id = it->second;
             } else {
                 auto it = worker_y_to_dram_bank_second_col.find(core.y);
-                if (it == worker_y_to_dram_bank_second_col.end()) {
-                    log_info(
-                        tt::LogOp,
-                        "ERROR: Worker core ({}, {}) y={} NOT FOUND in second-col map! Available y values:",
-                        core.x,
-                        core.y,
-                        core.y);
-                    for (const auto& [y, bank] : worker_y_to_dram_bank_second_col) {
-                        log_info(tt::LogOp, "  y={}", y);
-                    }
-                }
+                TT_FATAL(
+                    it != worker_y_to_dram_bank_second_col.end(),
+                    "Worker core ({}, {}) y={} not found in second-col DRAM-bank map (size={}) — dram-sharded "
+                    "in1 mapping is missing this y-coordinate; check that the in1 shard grid covers all "
+                    "matmul worker rows.",
+                    core.x,
+                    core.y,
+                    core.y,
+                    worker_y_to_dram_bank_second_col.size());
                 bank_id = it->second;
             }
 
@@ -2960,7 +2958,8 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     bool row_broadcast_bias = true,
-    CoreCoord sub_device_start_core = {0, 0}) {
+    CoreCoord sub_device_start_core = {0, 0},
+    uint32_t base_semaphore_id = 0) {
     using tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids;
 
     // currently only support transpose of the full tile
@@ -3139,9 +3138,12 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
         }
     }
 
-    // Mcast args — semaphore IDs assigned sequentially (0, 1)
-    uint32_t in0_mcast_sender_semaphore_id = 0;
-    uint32_t in0_mcast_receiver_semaphore_id = 1;
+    // Mcast args — semaphore IDs are caller-allocated so this helper can be appended onto a
+    // fused-op ProgramDescriptor that already has semaphores on the same cores.  Standalone
+    // callers pass base_semaphore_id=0 (default), which preserves the legacy sequential 0/1
+    // assignment.
+    uint32_t in0_mcast_sender_semaphore_id = base_semaphore_id;
+    uint32_t in0_mcast_receiver_semaphore_id = base_semaphore_id + 1;
 
     CoreCoord top_left_core = in0_mcast_receiver_cores_bounding_box.start_coord;
     CoreCoord bottom_right_core = in0_mcast_receiver_cores_bounding_box.end_coord;
@@ -4000,7 +4002,8 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
     bool output_is_sharded,
     bool untilize_out,
     bool row_broadcast_bias = true,
-    CoreCoord sub_device_start_core = {0, 0}) {
+    CoreCoord sub_device_start_core = {0, 0},
+    uint32_t base_semaphore_id = 0) {
     // currently only support transpose of the full tile
     bool in0_transpose_tile = in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face();
     bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
@@ -4121,9 +4124,12 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
             receiver_start_core, num_cores - 1, matmul_core_rect, row_major);
     }
 
-    // Mcast args — semaphore IDs assigned sequentially (0, 1)
-    uint32_t in1_mcast_sender_semaphore_id = 0;
-    uint32_t in1_mcast_receiver_semaphore_id = 1;
+    // Mcast args — semaphore IDs are caller-allocated so this helper can be appended onto a
+    // fused-op ProgramDescriptor that already has semaphores on the same cores.  Standalone
+    // callers pass base_semaphore_id=0 (default), which preserves the legacy sequential 0/1
+    // assignment.
+    uint32_t in1_mcast_sender_semaphore_id = base_semaphore_id;
+    uint32_t in1_mcast_receiver_semaphore_id = base_semaphore_id + 1;
 
     CoreCoord top_left_core = in1_mcast_receiver_cores_bounding_box.start_coord;
     CoreCoord bottom_right_core = in1_mcast_receiver_cores_bounding_box.end_coord;
@@ -4836,6 +4842,46 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
 // callers construct an external ProgramDescriptor that already contains CCL kernels
 // on the same cores as the matmul kernels, which is why we cannot route through
 // merge_program_descriptors() (it TT_FATALs on overlapping kernel core ranges).
+// Allocate `count` contiguous free semaphore ids on the given CoreRangeSet against an
+// existing ProgramDescriptor.  Mirrors the legacy CreateSemaphore behaviour (pick first
+// free id whose slot is unused on every requested core), but in a block so callers can
+// reserve a stable [base, base+count) range to hand to the matmul helpers below.
+static uint32_t allocate_free_semaphore_id_block(
+    const tt::tt_metal::ProgramDescriptor& desc,
+    const tt::tt_metal::CoreRangeSet& cores,
+    uint32_t count,
+    tt::tt_metal::CoreType core_type = tt::tt_metal::CoreType::WORKER) {
+    std::bitset<NUM_SEMAPHORES> used;
+    for (const auto& sem : desc.semaphores) {
+        if (sem.core_type != core_type) {
+            continue;
+        }
+        if (sem.core_ranges.intersects(cores)) {
+            used.set(sem.id);
+        }
+    }
+    for (uint32_t base = 0; base + count <= NUM_SEMAPHORES; ++base) {
+        bool block_free = true;
+        for (uint32_t i = 0; i < count; ++i) {
+            if (used.test(base + i)) {
+                block_free = false;
+                break;
+            }
+        }
+        if (block_free) {
+            return base;
+        }
+    }
+    TT_THROW(
+        "No contiguous block of {} free semaphore ids available on the requested core range set "
+        "(NUM_SEMAPHORES={}).",
+        count,
+        NUM_SEMAPHORES);
+}
+
+// Note: the descriptor variant takes an extra trailing parameter (`base_semaphore_id`) that
+// lets the fused-op caller pre-allocate a free semaphore id on `all_cores`.  Defaulted to 0
+// so the standalone-descriptor path continues to work without modification.
 static ProgramDescriptor create_program_gather_in0_descriptor(
     const tt::tt_metal::Tensor& a,
     const std::vector<tt::tt_metal::Tensor>& b_tensors,
@@ -4874,7 +4920,8 @@ static ProgramDescriptor create_program_gather_in0_descriptor(
     uint32_t num_global_cb_receivers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<CoreRangeSet> restricted_cores,
-    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
+    uint32_t base_semaphore_id = 0) {
     const auto& b = b_tensors[0];
     const auto num_output_cb = out_buffers.size();
     const auto batch = b_tensors.size();
@@ -4999,9 +5046,12 @@ static ProgramDescriptor create_program_gather_in0_descriptor(
     tt::tt_metal::TileDescriptor in1_tile_desc{in1_tile};
     tt::tt_metal::TileDescriptor output_tile_desc{output_tile};
 
-    /* semaphores — id is the current size of the semaphores list at push time, matching
-       the sequential id assignment that CreateSemaphore performs on the legacy path. */
-    uint32_t in0_signal_semaphore_id = static_cast<uint32_t>(desc.semaphores.size());
+    /* semaphores — the caller pre-allocates a free semaphore id on `all_cores` and passes it
+       in as base_semaphore_id.  This avoids collisions when this descriptor is appended to a
+       fused-op caller's ProgramDescriptor that already has semaphores on the same cores
+       (CreateSemaphore's legacy behavior was to pick the first free id; we mirror that here
+       at the call site by passing find_available_semaphore_id(...) ⇒ this id). */
+    uint32_t in0_signal_semaphore_id = base_semaphore_id;
     desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
         .id = in0_signal_semaphore_id, .core_ranges = all_cores, .initial_value = INVALID});
 
@@ -5022,6 +5072,23 @@ static ProgramDescriptor create_program_gather_in0_descriptor(
        (CCL) CBs. Layout: in0 at base+0, in1 at base+1, in2 at base+2, sync at base+3,
        sync2 at base+4, then output/interm at base+5 / base+6 (interleaved per output via
        i*2 offset — see comment "5, 7, 9..." below for the legacy index pattern). */
+    // Validate that the fixed-position indices (base..base+6) and the remote CB index
+    // (c_31, used only when a global_cb is supplied) all fit within the CB range and do
+    // not collide. The per-output output/interm pairs start at base+5/base+6 and grow by
+    // i*2; those are validated against c_31 individually below.
+    TT_FATAL(
+        base_cb_index + 6 <= tt::CBIndex::c_31,
+        "matmul gather_in0 descriptor: base_cb_index ({}) + 6 must be <= c_31 ({}); requested base leaves "
+        "insufficient room for the fixed in0/in1/in2/sync/sync2/output/interm CB slots.",
+        base_cb_index,
+        static_cast<uint32_t>(tt::CBIndex::c_31));
+    if (use_global_cb) {
+        TT_FATAL(
+            base_cb_index + 1 != static_cast<uint32_t>(tt::CBIndex::c_31),
+            "matmul gather_in0 descriptor: when global_cb is enabled, the local in1 CB index ({}) must not "
+            "collide with the reserved remote CB index c_31; choose a smaller base_cb_index.",
+            base_cb_index + 1);
+    }
     uint32_t src0_cb_index = base_cb_index;
     {
         CBDescriptor cb_desc;
@@ -5541,31 +5608,27 @@ static ProgramDescriptor create_program_gather_in0_descriptor(
             // Look up bank_id based on core.y and which column group core.x belongs to
             if (core.x <= first_col_max_x) {
                 auto it = worker_y_to_dram_bank_first_col.find(core.y);
-                if (it == worker_y_to_dram_bank_first_col.end()) {
-                    log_info(
-                        tt::LogOp,
-                        "ERROR: Worker core ({}, {}) y={} NOT FOUND in first-col map! Available y values:",
-                        core.x,
-                        core.y,
-                        core.y);
-                    for (const auto& [y, bank] : worker_y_to_dram_bank_first_col) {
-                        log_info(tt::LogOp, "  y={}", y);
-                    }
-                }
+                TT_FATAL(
+                    it != worker_y_to_dram_bank_first_col.end(),
+                    "Worker core ({}, {}) y={} not found in first-col DRAM-bank map (size={}) — dram-sharded "
+                    "in1 mapping is missing this y-coordinate; check that the in1 shard grid covers all "
+                    "matmul worker rows.",
+                    core.x,
+                    core.y,
+                    core.y,
+                    worker_y_to_dram_bank_first_col.size());
                 bank_id = it->second;
             } else {
                 auto it = worker_y_to_dram_bank_second_col.find(core.y);
-                if (it == worker_y_to_dram_bank_second_col.end()) {
-                    log_info(
-                        tt::LogOp,
-                        "ERROR: Worker core ({}, {}) y={} NOT FOUND in second-col map! Available y values:",
-                        core.x,
-                        core.y,
-                        core.y);
-                    for (const auto& [y, bank] : worker_y_to_dram_bank_second_col) {
-                        log_info(tt::LogOp, "  y={}", y);
-                    }
-                }
+                TT_FATAL(
+                    it != worker_y_to_dram_bank_second_col.end(),
+                    "Worker core ({}, {}) y={} not found in second-col DRAM-bank map (size={}) — dram-sharded "
+                    "in1 mapping is missing this y-coordinate; check that the in1 shard grid covers all "
+                    "matmul worker rows.",
+                    core.x,
+                    core.y,
+                    core.y,
+                    worker_y_to_dram_bank_second_col.size());
                 bank_id = it->second;
             }
 
@@ -6554,6 +6617,13 @@ void matmul_multi_core_reuse_mcast_1d_optimized_helper_descriptor(
         for (const auto& output_tensor : output_tensors) {
             out_buffers.push_back(output_tensor.buffer());
         }
+        // Pre-allocate a free semaphore id on the union of the in0 shard grid and the hop cores
+        // — this is the maximal superset of the `all_cores` the gather_in0 helper actually uses
+        // internally.  Required because the caller's `desc` may already have CCL semaphores on
+        // these cores; passing 0 would alias them.
+        CoreRangeSet semaphore_cores = a.shard_spec().value().grid.merge(config.hop_cores);
+        uint32_t gather_in0_base_sem_id =
+            reuse_mcast_1d_optimized_helpers::allocate_free_semaphore_id_block(desc, semaphore_cores, 1);
         produced = reuse_mcast_1d_optimized_helpers::create_program_gather_in0_descriptor(
             a,
             b_tensors,
@@ -6592,8 +6662,14 @@ void matmul_multi_core_reuse_mcast_1d_optimized_helper_descriptor(
             config.num_global_cb_receivers,
             sub_device_id,
             std::move(restricted_cores),
-            fused_op_signaler);
+            fused_op_signaler,
+            gather_in0_base_sem_id);
     } else if (config.mcast_in0) {
+        // Reserve a free 2-id block on the allowed worker cores so that the mcast_in0 helper's
+        // sender/receiver semaphores don't alias semaphores the caller may have already placed
+        // on these cores (e.g. CCL semaphores in a fused-op descriptor).
+        uint32_t mcast_in0_base_sem_id = reuse_mcast_1d_optimized_helpers::allocate_free_semaphore_id_block(
+            desc, config.allowed_worker_cores.value(), 2);
         produced = reuse_mcast_1d_optimized_helpers::create_program_mcast_in0_descriptor(
             a,
             device,
@@ -6638,8 +6714,12 @@ void matmul_multi_core_reuse_mcast_1d_optimized_helper_descriptor(
             untilize_out,
             fused_op_signaler,
             fused_matmul_bias_row_broadcastable(bias),
-            sub_device_start_core);
+            sub_device_start_core,
+            mcast_in0_base_sem_id);
     } else {
+        // Same rationale as the mcast_in0 branch above.
+        uint32_t mcast_in1_base_sem_id = reuse_mcast_1d_optimized_helpers::allocate_free_semaphore_id_block(
+            desc, config.allowed_worker_cores.value(), 2);
         produced = reuse_mcast_1d_optimized_helpers::create_program_mcast_in1_descriptor(
             a,
             device,
@@ -6681,7 +6761,8 @@ void matmul_multi_core_reuse_mcast_1d_optimized_helper_descriptor(
             output.memory_config().is_sharded(),
             untilize_out,
             fused_matmul_bias_row_broadcastable(bias),
-            sub_device_start_core);
+            sub_device_start_core,
+            mcast_in1_base_sem_id);
     }
 
     // Append produced kernels / CBs / semaphores onto the caller's descriptor without going
