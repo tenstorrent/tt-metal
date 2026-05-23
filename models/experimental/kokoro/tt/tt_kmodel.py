@@ -125,6 +125,9 @@ def _build_alignment(pred_dur: torch.LongTensor) -> torch.Tensor:
 
     Returns:
         ``[1, T_tokens, T_aligned]`` float32 one-hot alignment on CPU.
+
+    Note: this runs on CPU because T_aligned = sum(pred_dur) is only known after
+    reading back from device, and TTNN requires static shapes at allocation time.
     """
     T_tokens = int(pred_dur.shape[0])
     T_aligned = int(pred_dur.sum().item())
@@ -166,9 +169,7 @@ class TTKModel:
         use_torch_atan2_fallback: bool = False,
         use_torch_phase_fallback: bool = False,
         use_torch_sinegen_fallback: bool = False,
-        use_torch_linear_fallback: bool = False,
-        use_torch_tanh_fallback: bool = False,
-        use_torch_f0n_conv_fallback: bool = True,
+        use_torch_f0n_conv_fallback: bool = False,
         use_torch_f0_upsamp_fallback: Optional[bool] = None,
         use_fp32_prosody_boundary: bool = True,
     ) -> None:
@@ -182,8 +183,6 @@ class TTKModel:
         self._use_atan2_fallback = use_torch_atan2_fallback
         self._use_phase_fallback = use_torch_phase_fallback
         self._use_sinegen_fallback = use_torch_sinegen_fallback
-        self._use_linear_fallback = use_torch_linear_fallback
-        self._use_tanh_fallback = use_torch_tanh_fallback
         self._use_f0n_conv_fallback = use_torch_f0n_conv_fallback
         self._use_f0_upsamp_fallback = use_torch_f0_upsamp_fallback
         self._use_fp32_prosody_boundary = use_fp32_prosody_boundary
@@ -214,8 +213,6 @@ class TTKModel:
                 use_torch_atan2_fallback=self._use_atan2_fallback,
                 use_torch_phase_fallback=self._use_phase_fallback,
                 use_torch_sinegen_fallback=self._use_sinegen_fallback,
-                use_torch_linear_fallback=self._use_linear_fallback,
-                use_torch_tanh_fallback=self._use_tanh_fallback,
                 use_torch_f0n_conv_fallback=self._use_f0n_conv_fallback,
                 use_torch_f0_upsamp_fallback=self._use_f0_upsamp_fallback,
             )
@@ -246,23 +243,18 @@ class TTKModel:
 
         B, T = input_ids.shape
         input_lengths = torch.full((B,), T, dtype=torch.long)
-        text_mask = torch.arange(T).unsqueeze(0).expand(B, -1).type_as(input_lengths)
-        text_mask = torch.gt(text_mask + 1, input_lengths.unsqueeze(1))
-        attention_mask = (~text_mask).int()
+        lengths_list: list[int] = input_lengths.tolist()
 
         s_pred_cpu = ref_s[:, self.params.style_dim :]
         s_style_cpu = ref_s[:, : self.params.style_dim]
 
         mc = ttnn.DRAM_MEMORY_CONFIG
         ck = self._predictor.compute_kernel_config
-        lengths_list: list[int] = input_lengths.tolist()
 
         ctx = _zero_noise() if deterministic else _noop()
         with ctx:
             audio_tt = self._device_forward(
                 input_ids,
-                attention_mask,
-                text_mask,
                 input_lengths,
                 lengths_list,
                 s_pred_cpu,
@@ -287,8 +279,6 @@ class TTKModel:
     def _device_forward(
         self,
         input_ids: torch.LongTensor,
-        attention_mask: torch.Tensor,
-        text_mask: torch.Tensor,
         input_lengths: torch.LongTensor,
         lengths_list: list,
         s_pred_cpu: torch.Tensor,
@@ -301,9 +291,10 @@ class TTKModel:
     ) -> ttnn.Tensor:
         p = self.params
         dev = self.device
+        B, T = input_ids.shape
 
-        # ------ 1. PL-BERT -----------------------------------------------
-        bert_out = self._bert(input_ids, attention_mask)
+        # ------ 1. PL-BERT (attention_mask=None → all-attend, no torch mask ops) ------
+        bert_out = self._bert(input_ids, attention_mask=None)
 
         # ------ 2. bert_encoder: Linear(hidden_size → hidden_dim) --------
         d_en = ttnn.linear(
@@ -335,13 +326,8 @@ class TTKModel:
         )
 
         # ------ 4. DurationEncoder (P6: wire_dtype keeps concat dtypes unified in fp32) ------
-        keep_mask = ttnn.from_torch(
-            (~text_mask).to(torch.float32).unsqueeze(-1),
-            dtype=prosody_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=dev,
-            memory_config=mc,
-        )
+        # Full-length sequence (no padding): keep_mask is all-ones, created directly on device.
+        keep_mask = ttnn.ones([B, T, 1], dtype=prosody_dtype, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=mc)
         d_nlc = self._predictor._text_encoder.forward(
             d_en_bct=d_en_bct,
             style_bs=s_pred_tt,
@@ -367,10 +353,23 @@ class TTKModel:
         ttnn.deallocate(x_lstm)
 
         # ------ 6. Alignment (host step: read pred_dur, build matrix) -----
-        dur_cpu = ttnn.to_torch(duration).float()
+        # sigmoid → sum → scale → round → clip all run on device.
+        # The single CPU readback is unavoidable: T_aligned = sum(pred_dur) determines
+        # the alignment matrix shape, which TTNN must know before allocating tensors.
+        dur_sig = ttnn.sigmoid(duration, memory_config=mc)
         ttnn.deallocate(duration)
-        dur_sum = torch.sigmoid(dur_cpu).sum(dim=-1) / speed
-        pred_dur = torch.round(dur_sum).clamp(min=1).long().squeeze()
+        dur_sum_tt = ttnn.sum(dur_sig, dim=-1, memory_config=mc)
+        ttnn.deallocate(dur_sig)
+        if speed != 1.0:
+            dur_scaled = ttnn.multiply(dur_sum_tt, 1.0 / speed, memory_config=mc)
+            ttnn.deallocate(dur_sum_tt)
+            dur_sum_tt = dur_scaled
+        dur_rounded_tt = ttnn.round(dur_sum_tt, memory_config=mc)
+        ttnn.deallocate(dur_sum_tt)
+        dur_clipped_tt = ttnn.clip(dur_rounded_tt, min=1.0, memory_config=mc)
+        ttnn.deallocate(dur_rounded_tt)
+        pred_dur = ttnn.to_torch(dur_clipped_tt).long().squeeze()
+        ttnn.deallocate(dur_clipped_tt)
 
         aln_cpu = _build_alignment(pred_dur)
         T_aligned = int(aln_cpu.shape[2])
@@ -407,7 +406,8 @@ class TTKModel:
         ttnn.deallocate(s_pred_tt)
 
         # ------ 9. TextEncoder + asr = t_en @ aln -------------------------
-        t_en_bct = self._text_encoder(input_ids, input_lengths=input_lengths, text_mask=text_mask)
+        # No mask arguments: text encoder creates all-ones keep_mask on device (full-length sequence).
+        t_en_bct = self._text_encoder(input_ids, input_lengths=input_lengths)
 
         asr_bct = ttnn.matmul(t_en_bct, aln_tt, memory_config=mc, compute_kernel_config=ck)
         ttnn.deallocate(t_en_bct)
