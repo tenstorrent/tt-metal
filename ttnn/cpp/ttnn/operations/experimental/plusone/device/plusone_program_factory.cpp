@@ -74,7 +74,7 @@ tt::tt_metal::ProgramDescriptor PlusOneProgramFactory::create_descriptor(
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = ReaderDataMovementConfig{};
+    reader_desc.config = ReaderConfigDescriptor{};
 
     const auto cores = corerange_to_cores(all_cores, num_cores, true);
     reader_desc.runtime_args.reserve(cores.size());
