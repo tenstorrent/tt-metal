@@ -146,6 +146,7 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
         .defines = {},
         .runtime_args = {},
         .common_runtime_args = {},
+        .compiler_include_paths = {},
         .config =
             DataMovementConfigDescriptor{
                 .processor = DataMovementProcessor::RISCV_1,
@@ -163,6 +164,7 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
         .defines = {},
         .runtime_args = {},
         .common_runtime_args = {},
+        .compiler_include_paths = {},
         .config =
             DataMovementConfigDescriptor{
                 .processor = DataMovementProcessor::RISCV_0,
@@ -180,6 +182,7 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
         .defines = {},
         .runtime_args = {},
         .common_runtime_args = {},
+        .compiler_include_paths = {},
         .config = compute_config,
     };
 
