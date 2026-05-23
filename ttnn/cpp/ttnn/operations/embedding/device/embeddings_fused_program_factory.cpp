@@ -225,7 +225,7 @@ tt::tt_metal::ProgramDescriptor EmbeddingsFusedProgramFactory::create_descriptor
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = std::move(embedding_compile_time_args);
     reader_desc.defines = embedding_defines;
-    reader_desc.config = ReaderDataMovementConfig{};
+    reader_desc.config = ReaderConfigDescriptor{};
 
     // Compute kernels: split across the two core groups, each with its own
     // per_core_block_cnt compile-time arg. We must build them as separate
@@ -283,7 +283,7 @@ tt::tt_metal::ProgramDescriptor EmbeddingsFusedProgramFactory::create_descriptor
         w.source_type = KernelDescriptor::SourceType::FILE_PATH;
         w.core_ranges = all_cores;
         w.compile_time_args = std::move(writer_compile_time_args);
-        w.config = WriterDataMovementConfig{};
+        w.config = WriterConfigDescriptor{};
         writer_desc = std::move(w);
     }
 

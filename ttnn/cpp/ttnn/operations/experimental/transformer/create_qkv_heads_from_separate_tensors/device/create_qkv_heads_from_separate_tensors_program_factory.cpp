@@ -80,7 +80,7 @@ tt::tt_metal::ProgramDescriptor CreateQKVHeadsSeparateTensorsProgramFactory::cre
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.defines = std::move(reader_defines);
+    reader_desc.defines = KernelDescriptor::Defines{reader_defines.begin(), reader_defines.end()};
     reader_desc.config = ReaderConfigDescriptor{};
     desc.kernels.push_back(std::move(reader_desc));
 

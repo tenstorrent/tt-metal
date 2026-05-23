@@ -151,7 +151,7 @@ tt::tt_metal::ProgramDescriptor TypecastShardedProgramFactory::create_descriptor
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = ReaderDataMovementConfig{};
+    reader_desc.config = ReaderConfigDescriptor{};
     // Common runtime args: every core gets the same {num_tile_per_core} payload.
     reader_desc.common_runtime_args = {static_cast<uint32_t>(num_tile_per_core)};
 

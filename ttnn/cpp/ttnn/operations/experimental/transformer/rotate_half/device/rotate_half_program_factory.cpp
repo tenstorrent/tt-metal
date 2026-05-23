@@ -129,7 +129,7 @@ tt::tt_metal::ProgramDescriptor RotateHalfProgramFactory::create_descriptor(
     bcast_desc.kernel_source = "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/compute/bcast_hw.cpp";
     bcast_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     bcast_desc.core_ranges = core_set;
-    bcast_desc.defines = std::move(bcast_compute_defines);
+    bcast_desc.defines = KernelDescriptor::Defines{bcast_compute_defines.begin(), bcast_compute_defines.end()};
     bcast_desc.config = ComputeConfigDescriptor{};
     bcast_desc.runtime_args.emplace_back(
         core,

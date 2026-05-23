@@ -204,7 +204,7 @@ tt::tt_metal::ProgramDescriptor EmbeddingsRMProgramFactory::create_descriptor(
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = std::move(embedding_compile_time_args);
     reader_desc.defines = embedding_defines;
-    reader_desc.config = ReaderDataMovementConfig{};
+    reader_desc.config = ReaderConfigDescriptor{};
 
     // Writer
     std::optional<KernelDescriptor> writer_desc;
@@ -224,7 +224,7 @@ tt::tt_metal::ProgramDescriptor EmbeddingsRMProgramFactory::create_descriptor(
             w.source_type = KernelDescriptor::SourceType::FILE_PATH;
             w.core_ranges = all_cores;
             w.compile_time_args = std::move(writer_compile_time_args);
-            w.config = WriterDataMovementConfig{};
+            w.config = WriterConfigDescriptor{};
             writer_desc = std::move(w);
         } else {
             std::vector<uint32_t> writer_compile_time_args = {
@@ -236,7 +236,7 @@ tt::tt_metal::ProgramDescriptor EmbeddingsRMProgramFactory::create_descriptor(
             w.source_type = KernelDescriptor::SourceType::FILE_PATH;
             w.core_ranges = all_cores;
             w.compile_time_args = std::move(writer_compile_time_args);
-            w.config = WriterDataMovementConfig{};
+            w.config = WriterConfigDescriptor{};
             writer_desc = std::move(w);
         }
     }

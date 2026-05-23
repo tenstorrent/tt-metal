@@ -83,7 +83,7 @@ tt::tt_metal::ProgramDescriptor TypecastProgramFactory::create_descriptor(
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = ReaderDataMovementConfig{};
+    reader_desc.config = ReaderConfigDescriptor{};
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =
@@ -91,7 +91,7 @@ tt::tt_metal::ProgramDescriptor TypecastProgramFactory::create_descriptor(
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = all_cores;
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = WriterDataMovementConfig{};
+    writer_desc.config = WriterConfigDescriptor{};
 
     std::vector<uint32_t> compute_kernel_args_group_1 = {
         num_items_per_core_group_1,  // per_core_block_cnt
@@ -263,7 +263,7 @@ tt::tt_metal::ProgramDescriptor TypecastSubgridProgramFactory::create_descriptor
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = ReaderDataMovementConfig{};
+    reader_desc.config = ReaderConfigDescriptor{};
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =
@@ -271,7 +271,7 @@ tt::tt_metal::ProgramDescriptor TypecastSubgridProgramFactory::create_descriptor
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = all_cores;
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = WriterDataMovementConfig{};
+    writer_desc.config = WriterConfigDescriptor{};
 
     uint32_t ntiles_per_core = ntiles / ncores;
     std::vector<uint32_t> compute_kernel_args = {
