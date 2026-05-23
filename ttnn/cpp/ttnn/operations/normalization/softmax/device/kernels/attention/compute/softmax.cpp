@@ -117,26 +117,34 @@ void kernel_main() {
     bool wait_mask = true;
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
 #if FUSED_SCALE_MASK
-        reconfig_data_format(cb_in0, cb_fused_scale);
-        pack_reconfig_data_format(cb_scale_mask);
-        mul_tiles_bcast_scalar_init_short(cb_in0, cb_fused_scale);
-        for (uint32_t wt = 0; wt < Wt; wt += ndst) {
-            // apply fused scale [*= 1/sqrt(...)]
-            tile_regs_acquire();
-            cb_in0_obj.wait_front(ndst);
-            cb_scale_mask_obj.reserve_back(ndst);
-            for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
-                mul_tiles_bcast_scalar(cb_in0, cb_fused_scale, wt8, 0, wt8);  // mul bcast-HW -> DST[wt8]
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
-                pack_tile(wt8, cb_scale_mask);                                // reuse exps buffer
-            }
-            tile_regs_release();
-            cb_scale_mask_obj.push_back(ndst);
-            cb_in0_obj.pop_front(ndst);
-        }
+        // apply fused scale [*= 1/sqrt(...)] — cb_in0 * cb_fused_scale (scalar
+        // bcast) -> cb_scale_mask. Per-ndst DEST batching collapsed to per-tile
+        // streaming via chain: cb_in0 Streaming + Scalar (wait+pop 1 per iter),
+        // cb_fused_scale CallerManaged (held outside via line 112 wait_front(1)),
+        // cb_scale_mask OutStreaming (per-tile reserve+push).
+        //
+        // Reconfig: reconfig_data_format(cb_in0, cb_fused_scale) +
+        // mul_tiles_bcast_scalar_init_short -> BinaryDataFormatReconfig::Input.
+        // pack_reconfig_data_format(cb_scale_mask) -> PackTileReconfig::Output.
+        compute_kernel_lib::eltwise_chain(
+            Wt,
+            compute_kernel_lib::BinaryFpu<
+                cb_in0,
+                cb_fused_scale,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::BroadcastDim::Scalar,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::Streaming,
+                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar>{},
+            compute_kernel_lib::PackTile<
+                cb_scale_mask,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::PackTileReconfig::Output>{});
         reconfig_data_format(cb_scale_mask, cb_fused_attn);
 
 #ifndef NUMERIC_STABLE
@@ -210,35 +218,64 @@ void kernel_main() {
         exp_tile_init<EXP_APPROX>();
 #endif
         if (mask_padded_data) {
-            for (uint32_t wt = 0; wt < Wt; wt += ndst) {
-                tile_regs_acquire();
-                cb_in0_obj.wait_front(ndst);
-                for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
-                    if (wt == (Wt - ndst) && (wt8 == ndst - 1)) {
-                        reconfig_data_format(cb_in0, cb_mask_padded);
-                        add_bcast_rows_init_short(cb_in0, cb_mask_padded);
-                        cb_mask_padded_obj.wait_front(1);
-                        add_tiles_bcast_rows(cb_in0, cb_mask_padded, wt8, 0, wt8);
-                    } else {
-                        copy_tile(cb_in0, wt8, wt8);  // copy from c_in[0] to DST[0]
-                    }
-                }
-                cb_in0_obj.pop_front(ndst);
-
-                cb_x_obj.reserve_back(ndst);
+            // mask_padded path: Wt-1 plain copy(+exp) tiles + 1 last tile with
+            // bcast-rows add of cb_mask_padded(+exp). Split into 2 chains:
+            //   A: Wt-1 iters — CopyTile(cb_in0) + [Exp if !NUMERIC_STABLE] + PackTile(cb_x)
+            //   B: 1 iter — BinaryFpu(cb_in0, cb_mask_padded, Add, Row) +
+            //               [Exp if !NUMERIC_STABLE] + PackTile(cb_x)
+            // cb_mask_padded held outside via wait_front(1); CallerManaged.
+            // cb_in0 Streaming + Scalar (per-tile wait+pop, total Wt).
+            // cb_x OutStreaming.
+            //
+            // Reconfig: copy_tile_init / add_bcast_rows_init_short
+            // reconfig srca/srcb -> Input.
+            cb_mask_padded_obj.wait_front(1);
+            compute_kernel_lib::eltwise_chain(
+                Wt - 1,
+                compute_kernel_lib::CopyTile<
+                    cb_in0,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::Streaming,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::CopyTileReconfig::Input>{},
 #ifndef NUMERIC_STABLE
-                for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
-                    exp_tile<EXP_APPROX>(wt8);  // exp on DST[0]
-                }
+                compute_kernel_lib::Exp<
+                    static_cast<compute_kernel_lib::Approx>(EXP_APPROX),
+                    compute_kernel_lib::Approx::Exact,
+                    compute_kernel_lib::Dst::D0>{},
 #endif
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
-                    pack_tile(wt8, cb_x);  // DST[0]->cb_id[wt]
-                }
-                tile_regs_release();
-                cb_x_obj.push_back(ndst);
-            }
+                compute_kernel_lib::PackTile<
+                    cb_x,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OutStreaming,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::PackTileReconfig::None>{});
+
+            compute_kernel_lib::eltwise_chain(
+                1u,
+                compute_kernel_lib::BinaryFpu<
+                    cb_in0,
+                    cb_mask_padded,
+                    compute_kernel_lib::BinaryFpuOp::Add,
+                    compute_kernel_lib::BroadcastDim::Row,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::Streaming,
+                    compute_kernel_lib::CallerManaged,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OperandKind::Scalar>{},
+#ifndef NUMERIC_STABLE
+                compute_kernel_lib::Exp<
+                    static_cast<compute_kernel_lib::Approx>(EXP_APPROX),
+                    compute_kernel_lib::Approx::Exact,
+                    compute_kernel_lib::Dst::D0>{},
+#endif
+                compute_kernel_lib::PackTile<
+                    cb_x,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OutStreaming,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::PackTileReconfig::None>{});
 
 // add numeric_stable
 // fuse exp with sub tiles
