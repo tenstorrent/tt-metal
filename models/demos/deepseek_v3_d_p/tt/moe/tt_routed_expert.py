@@ -17,7 +17,6 @@ from typing import Optional
 
 import torch
 from loguru import logger
-from tracy import signpost
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -467,59 +466,23 @@ class TtRoutedExpert(LightweightModule):
             logger.warning(f"{dispatched_buffer.dtype=} typecasting to {self.activations_dtype}")
             dispatched_buffer = ttnn.typecast(dispatched_buffer, self.activations_dtype)
 
-        # NO host-side counts/idx read. The unified op's reader/compute/writer
-        # kernels read `expert_token_counts` and `global_expert_idx_table`
-        # directly from device-side L1 via a per-expert TensorAccessor at
-        # kernel startup, then bound their chunk loops to
-        # effective_chunks = ceil_div(count, chunk_M_tiles * 32). The Python
-        # wrapper therefore passes the FULL max-tokens-sized extracted buffer
-        # — no narrowing, no `ttnn.to_torch` sync.
-        tile_h = ttnn.TILE_SIZE
-        # Process each local expert
-        # dispatched_buffer: (experts_per_chip, max_tokens, emb_dim)
-        # We process expert by expert and reassemble
+        # All per-expert work — extract, FFN, insert — runs C++-side inside
+        # ttnn.experimental.deepseek_prefill.unified_routed_expert_moe. The
+        # FFN's reader/compute/writer kernels read the device-resident
+        # `expert_token_counts` and `global_expert_idx_table` to bound their
+        # chunk loops. No host-device sync per forward; no Python per-expert
+        # loop.
+        expert_outputs = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
+            dispatched_buffer,
+            expert_region_offsets,
+            expert_token_counts,
+            self.global_expert_idx_table,
+            self.gate_projs,
+            self.up_projs,
+            self.down_projs,
+            max_dispatched_tokens_per_expert=self.max_tokens,
+            compute_kernel_config=self.compute_kernel_config,
+        )
 
-        expert_outputs = dispatched_buffer
-        for local_expert in range(self.experts_per_chip):
-            signpost(f"Expert {local_expert+1}/{self.experts_per_chip}")
-
-            # Extract tokens for this expert. Returns the full max_tokens-sized
-            # buffer; the unified op kernels read counts on-device and bound
-            # their chunk loops to the actually-occupied chunks, so we do NOT
-            # narrow here (no host-device sync to query the count).
-            tokens = ttnn.experimental.deepseek_prefill.extract(
-                dispatched_buffer,
-                expert_region_offsets,
-                expert_token_counts,
-                self.global_expert_idx_table,
-                local_expert_id=local_expert,
-                max_dispatched_tokens_per_expert=self.max_tokens,
-            )
-
-            # Run FFN
-            output = self._expert_ffn(
-                tokens,
-                self.gate_projs[local_expert],
-                self.up_projs[local_expert],
-                self.down_projs[local_expert],
-                expert_token_counts,
-                local_expert_id=local_expert,
-                out=None,
-            )
-            logger.debug(f"Expert {local_expert}: output shape {output.shape}")
-
-            # Insert this expert's output back into the flat expert_outputs buffer at
-            # the expert's region (determined by expert_region_offsets and expert_token_counts).
-            expert_outputs = ttnn.experimental.deepseek_prefill.insert(
-                expert_outputs,
-                output,
-                expert_region_offsets,
-                expert_token_counts,
-                self.global_expert_idx_table,
-                local_expert_id=local_expert,
-            )
-
-        # Shape: (experts_per_chip, max_tokens, emb_dim)
         logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
-
         return expert_outputs
