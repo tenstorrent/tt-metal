@@ -5,6 +5,9 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include <cstdint>
@@ -34,14 +37,14 @@ constexpr bool fuse_op = get_compile_time_arg_val(10);
 constexpr uint32_t PREFETCH_PACKETS = 4;
 
 // Batch-read tiles into the output CB with DRAM prefetch and FIFO wrapping.
-// get_noc_addr_and_advance is called once per tile-group read; it returns the source
-// NoC address and may perform per-tile side effects (e.g. row-stride tracking).
+// next_page_id is called once per tile-group read; it returns the source TensorAccessor
+// page id and may perform per-tile side effects (e.g. row-stride tracking).
 //
 // Manual ring-buffer wrapping: batched reads may write across the FIFO boundary, which
 // bypasses the CB's normal contiguous-write assumption (see cb_push_back). This is safe because
-// noc_async_read targets raw L1 addresses and cb_push_back is called per-packet
+// reads target raw L1 addresses via CoreLocalMem and cb_push_back is called per-packet
 // (packet_size_in_pages always divides cb_num_pages evenly).
-template <typename AddrFn>
+template <typename Accessor, typename PageIdFn>
 FORCE_INLINE void prefetch_batch_read_tiles(
     const Noc& noc_obj,
     CircularBuffer& cb_output,
@@ -49,7 +52,8 @@ FORCE_INLINE void prefetch_batch_read_tiles(
     uint32_t tiles_to_read,
     uint32_t cb_fifo_limit,
     uint32_t cb_fifo_size,
-    AddrFn&& get_noc_addr_and_advance) {
+    const Accessor& accessor,
+    PageIdFn&& next_page_id) {
     constexpr uint32_t payload_size_bytes = input_tensor_page_size * contig_pages_advanced;
     while (tiles_read < tiles_to_read) {
         uint32_t remaining_tiles = tiles_to_read - tiles_read;
@@ -66,10 +70,12 @@ FORCE_INLINE void prefetch_batch_read_tiles(
                 if (l1_write_addr >= cb_fifo_limit) {
                     l1_write_addr -= cb_fifo_size;
                 }
-                // Legacy primitive retained (#45003 item 4): source is a precomposed uint64_t NoC address from
-                // get_noc_addr_and_advance, and the destination is a raw L1 ring-buffer write pointer that may wrap
-                // outside the CB's normal contiguous-write assumption (see header comment).
-                noc_async_read(get_noc_addr_and_advance(tiles_read), l1_write_addr, input_tensor_page_size);
+                noc_obj.async_read(
+                    accessor,
+                    CoreLocalMem<uint8_t>(l1_write_addr),
+                    input_tensor_page_size,
+                    {.page_id = next_page_id(tiles_read)},
+                    {});
                 l1_write_addr += payload_size_bytes;
                 tiles_read += contig_pages_advanced;
             }
@@ -142,9 +148,14 @@ void kernel_main() {
         uint32_t tiles_to_read = input_tile_id_end[input_idx];
         for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
             prefetch_batch_read_tiles(
-                noc_obj, cb_output, tiles_read, tiles_to_read, cb_fifo_limit, cb_fifo_size, [&](uint32_t tr) {
-                    return input_tensor_addrgens[input_idx].get_noc_addr(output_tile_id_start + tr);
-                });
+                noc_obj,
+                cb_output,
+                tiles_read,
+                tiles_to_read,
+                cb_fifo_limit,
+                cb_fifo_size,
+                input_tensor_addrgens[input_idx],
+                [&](uint32_t tr) { return output_tile_id_start + tr; });
             tiles_read = input_tile_id_start[input_idx];
             tiles_to_read = input_tile_id_end[input_idx];
             output_tile_id_start += input_tensor_Wt[input_idx] * input_tensor_Ht[input_idx];
@@ -236,15 +247,15 @@ void kernel_main() {
                         tiles_to_read,
                         cb_fifo_limit,
                         cb_fifo_size,
+                        output_tensor_addrgens[input_idx],
                         [&](uint32_t /* tiles_read */) {
-                            auto addr = output_tensor_addrgens[input_idx].get_noc_addr(
-                                output_tile_id_start + row_offset + pages_read_in_row);
+                            const uint32_t pid = output_tile_id_start + row_offset + pages_read_in_row;
                             pages_read_in_row++;
                             if (pages_read_in_row >= slice_Wt) {
                                 row_offset += stride_Wt;
                                 pages_read_in_row = 0;
                             }
-                            return addr;
+                            return pid;
                         });
                     pages_read_in_row = input_tile_id_start[input_idx] % input_tensor_Wt[input_idx];
                     row_offset =
