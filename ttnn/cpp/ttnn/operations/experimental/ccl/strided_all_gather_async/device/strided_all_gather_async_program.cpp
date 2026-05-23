@@ -372,15 +372,20 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     uint32_t batch_head_size = input_tensor_shape[0] * input_tensor_shape[1];
 
     uint32_t single_batch_head_num_pages = input_tensor_num_pages / batch_head_size;
-    TT_FATAL(!(input_tensor_shape[3] % TILE_WIDTH), "Input tensor width must be a multiple of TILE_WIDTH");
-    TT_FATAL(!(output_tensor_shape[3] % TILE_WIDTH), "Output tensor width must be a multiple of TILE_WIDTH");
-    uint32_t TILE_WIDTH = 32;
+    TT_FATAL(
+        !(input_tensor_shape[3] % tt::constants::TILE_WIDTH), "Input tensor width must be a multiple of TILE_WIDTH");
+    TT_FATAL(
+        !(output_tensor_shape[3] % tt::constants::TILE_WIDTH), "Output tensor width must be a multiple of TILE_WIDTH");
 
-    uint32_t input_tensor_Wt = input_tensor_shape[3] / TILE_WIDTH;
-    uint32_t input_tensor_Ht = input_tensor_shape[2] / TILE_WIDTH;
+    // Use the canonical tile dims from tt::constants rather than redefining a local TILE_WIDTH
+    // that shadows the namespace constant and (silently) gets used for both width and height
+    // calculations.  TILE_HEIGHT/TILE_WIDTH are both 32 today, but pinning the right dim to the
+    // right axis keeps the intent clear and avoids accidental divergence later.
+    uint32_t input_tensor_Wt = input_tensor_shape[3] / tt::constants::TILE_WIDTH;
+    uint32_t input_tensor_Ht = input_tensor_shape[2] / tt::constants::TILE_HEIGHT;
 
-    uint32_t output_tensor_Wt = output_tensor_shape[3] / TILE_WIDTH;
-    uint32_t output_tensor_Ht = output_tensor_shape[2] / TILE_WIDTH;
+    uint32_t output_tensor_Wt = output_tensor_shape[3] / tt::constants::TILE_WIDTH;
+    uint32_t output_tensor_Ht = output_tensor_shape[2] / tt::constants::TILE_HEIGHT;
 
     uint32_t mm_cores_y_val = mm_cores_y.value_or(0);
     uint32_t mm_block_ht_val = mm_block_ht.value_or(0);
@@ -810,15 +815,20 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     uint32_t batch_head_size = input_tensor_shape[0] * input_tensor_shape[1];
 
     uint32_t single_batch_head_num_pages = input_tensor_num_pages / batch_head_size;
-    TT_FATAL(!(input_tensor_shape[3] % TILE_WIDTH), "Input tensor width must be a multiple of TILE_WIDTH");
-    TT_FATAL(!(output_tensor_shape[3] % TILE_WIDTH), "Output tensor width must be a multiple of TILE_WIDTH");
-    uint32_t TILE_WIDTH = 32;
+    TT_FATAL(
+        !(input_tensor_shape[3] % tt::constants::TILE_WIDTH), "Input tensor width must be a multiple of TILE_WIDTH");
+    TT_FATAL(
+        !(output_tensor_shape[3] % tt::constants::TILE_WIDTH), "Output tensor width must be a multiple of TILE_WIDTH");
 
-    uint32_t input_tensor_Wt = input_tensor_shape[3] / TILE_WIDTH;
-    uint32_t input_tensor_Ht = input_tensor_shape[2] / TILE_WIDTH;
+    // Use the canonical tile dims from tt::constants rather than redefining a local TILE_WIDTH
+    // that shadows the namespace constant and (silently) gets used for both width and height
+    // calculations.  TILE_HEIGHT/TILE_WIDTH are both 32 today, but pinning the right dim to the
+    // right axis keeps the intent clear and avoids accidental divergence later.
+    uint32_t input_tensor_Wt = input_tensor_shape[3] / tt::constants::TILE_WIDTH;
+    uint32_t input_tensor_Ht = input_tensor_shape[2] / tt::constants::TILE_HEIGHT;
 
-    uint32_t output_tensor_Wt = output_tensor_shape[3] / TILE_WIDTH;
-    uint32_t output_tensor_Ht = output_tensor_shape[2] / TILE_WIDTH;
+    uint32_t output_tensor_Wt = output_tensor_shape[3] / tt::constants::TILE_WIDTH;
+    uint32_t output_tensor_Ht = output_tensor_shape[2] / tt::constants::TILE_HEIGHT;
 
     uint32_t mm_cores_y_val = mm_cores_y.value_or(0);
     uint32_t mm_block_ht_val = mm_block_ht.value_or(0);

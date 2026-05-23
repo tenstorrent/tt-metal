@@ -8,6 +8,8 @@
 #include "ttnn/operations/cb_utils.hpp"
 
 #include <algorithm>
+#include <bit>
+#include <cstring>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tuple>
 #include <utility>
@@ -145,7 +147,15 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     auto num_cores = core_grid.size();
 
     bool use_bias = bias_tensor.has_value();
+    // Ternary fusion requires both ternary input tensors AND the scalar — the compute kernel
+    // unconditionally reads the scalar when use_fused_ternary is true, so callers must supply
+    // all three or none.  Surface a missing scalar as a hard error instead of a downstream
+    // bad_optional_access when emplacing the runtime arg.
     bool use_fused_ternary = fused_ternary_input_a.has_value() && fused_ternary_input_b.has_value();
+    TT_FATAL(
+        !use_fused_ternary || fused_ternary_scalar.has_value(),
+        "minimal_matmul: fused ternary requires fused_ternary_scalar to be set when both ternary input "
+        "tensors are provided.");
 
     /**
      * Determine dataformats, compute kernel config
@@ -825,7 +835,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             N_end_tile,
         };
         if (use_fused_ternary) {
-            compute_runtime_args.push_back(*reinterpret_cast<const uint32_t*>(&fused_ternary_scalar.value()));
+            // Encode the float scalar as a u32 runtime arg without violating strict aliasing.
+            compute_runtime_args.push_back(std::bit_cast<uint32_t>(fused_ternary_scalar.value()));
             uint32_t ternary_b_M_tiles = fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
             compute_runtime_args.push_back(ternary_b_M_tiles == 1 ? 1u : 0u);  // broadcast_ternary_b
         }
@@ -896,7 +907,15 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     auto num_cores = core_grid.size();
 
     bool use_bias = bias_tensor.has_value();
+    // Ternary fusion requires both ternary input tensors AND the scalar — the compute kernel
+    // unconditionally reads the scalar when use_fused_ternary is true, so callers must supply
+    // all three or none.  Surface a missing scalar as a hard error instead of a downstream
+    // bad_optional_access when emplacing the runtime arg.
     bool use_fused_ternary = fused_ternary_input_a.has_value() && fused_ternary_input_b.has_value();
+    TT_FATAL(
+        !use_fused_ternary || fused_ternary_scalar.has_value(),
+        "minimal_matmul: fused ternary requires fused_ternary_scalar to be set when both ternary input "
+        "tensors are provided.");
 
     /**
      * Determine dataformats, compute kernel config
@@ -1048,12 +1067,20 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     auto in1_receiver_cores = CoreRange(transpose_core_grid ? core_1_0 : core_0_1, core_endx_endy);
 
     // Allocate the six DM handshake semaphores via SemaphoreDescriptors.
-    // The legacy helper uses CreateSemaphore(program, core_grid, INVALID/VALID);
-    // here we allocate sequential IDs and record them as core-grid-wide SemaphoreDescriptors.
+    // The legacy helper uses CreateSemaphore(program, core_grid, INVALID/VALID), which picks the
+    // first free id whose slot is unused on every requested core; mirror that here by searching
+    // for a free id on a representative core within core_grid_set (and tracking the running set
+    // of just-allocated ids so back-to-back push_sem calls don't collide on the same fresh id).
     constexpr uint32_t INVALID_VAL = static_cast<uint32_t>(INVALID);
     constexpr uint32_t VALID_VAL = static_cast<uint32_t>(VALID);
+    const CoreCoord any_grid_core = *core_grid_set.ranges().cbegin()->begin();
     auto push_sem = [&](uint32_t initial_value) {
-        const uint32_t sem_id = static_cast<uint32_t>(desc.semaphores.size());
+        const auto sem_id_opt = desc.find_available_semaphore_id(any_grid_core, tt::CoreType::WORKER);
+        TT_FATAL(
+            sem_id_opt.has_value(),
+            "minimal_matmul descriptor: no free semaphore id available on core_grid_set; the caller's "
+            "ProgramDescriptor has exhausted the semaphore id space on these cores.");
+        const uint32_t sem_id = sem_id_opt.value();
         desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
             .id = sem_id,
             .core_ranges = core_grid_set,
@@ -1658,7 +1685,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         compute_runtime_args.push_back(N_start_tile);
         compute_runtime_args.push_back(N_end_tile);
         if (use_fused_ternary) {
-            uint32_t scalar_as_uint = *reinterpret_cast<const uint32_t*>(&fused_ternary_scalar.value());
+            // Encode the float scalar as a u32 runtime arg without violating strict aliasing.
+            uint32_t scalar_as_uint = std::bit_cast<uint32_t>(fused_ternary_scalar.value());
             compute_runtime_args.push_back(scalar_as_uint);
             uint32_t ternary_b_M_tiles = fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
             compute_runtime_args.push_back(ternary_b_M_tiles == 1 ? 1u : 0u);  // broadcast_ternary_b

@@ -823,9 +823,11 @@ static tt::tt_metal::ProgramDescriptor process_agmm_fusion_descriptor(
     TileDescriptor in1_tile_desc{in1_tile};
     TileDescriptor output_tile_desc{output_tile};
 
-    /* semaphores — id is the current size of the semaphores list at push time, matching
-       the sequential id assignment that CreateSemaphore performs on the legacy path. */
-    uint32_t in0_signal_semaphore_id = static_cast<uint32_t>(desc.semaphores.size());
+    /* semaphores — the caller pre-allocates a free id on `all_cores` and passes it in as
+       base_semaphore_id.  Mirrors the legacy CreateSemaphore first-free-id behaviour while
+       avoiding aliasing when this descriptor is appended onto a caller's ProgramDescriptor
+       that already has semaphores on the same cores (CCL+matmul fused path). */
+    uint32_t in0_signal_semaphore_id = base_semaphore_id;
     desc.semaphores.push_back(
         SemaphoreDescriptor{.id = in0_signal_semaphore_id, .core_ranges = all_cores, .initial_value = INVALID});
 
@@ -1705,7 +1707,8 @@ static tt::tt_metal::ProgramDescriptor matmul_multi_core_agmm_fusion_descriptor_
     uint32_t num_global_cb_receivers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     uint32_t start_cb_index,
-    std::optional<CoreRangeSet> restricted_cores) {
+    std::optional<CoreRangeSet> restricted_cores,
+    uint32_t base_semaphore_id = 0) {
     // Validate that only GATHER_IN0 is supported
     TT_FATAL(!mcast_in0, "Only GATHER_IN0 is supported. MCAST_IN0 has been removed.");
     TT_FATAL(gather_in0, "Only GATHER_IN0 is supported. This function requires gather_in0=true.");
@@ -1902,6 +1905,20 @@ void matmul_multi_core_agmm_fusion_helper_descriptor(
     TT_FATAL(!config.mcast_in0, "Only GATHER_IN0 is supported. MCAST_IN0 has been removed.");
     TT_FATAL(config.gather_in0, "Only GATHER_IN0 is supported. This function requires gather_in0=true.");
 
+    // Pre-allocate a free semaphore id on `all_cores` (the union of the in0 shard grid and the
+    // hop cores — the cores the agmm helper installs its in0_signal semaphore on).  This avoids
+    // colliding with semaphores the caller may have already placed on the same cores in `desc`
+    // (e.g. CCL semaphores in the all-gather + matmul fused path).
+    const auto& b = b_tensors[0];
+    CoreRangeSet agmm_semaphore_cores = b.shard_spec().value().grid.merge(config.hop_cores);
+    CoreCoord any_sem_core = *agmm_semaphore_cores.ranges().cbegin()->begin();
+    const auto agmm_base_sem_id_opt = desc.find_available_semaphore_id(any_sem_core, tt::CoreType::WORKER);
+    TT_FATAL(
+        agmm_base_sem_id_opt.has_value(),
+        "matmul_multi_core_agmm_fusion_helper_descriptor: no free semaphore id available on the agmm "
+        "worker cores; the caller's ProgramDescriptor has exhausted the semaphore id space on these cores.");
+    uint32_t agmm_base_sem_id = agmm_base_sem_id_opt.value();
+
     tt::tt_metal::ProgramDescriptor produced = matmul_multi_core_agmm_fusion_descriptor_(
         a,
         b_tensors,
@@ -1929,7 +1946,8 @@ void matmul_multi_core_agmm_fusion_helper_descriptor(
         config.num_global_cb_receivers,
         sub_device_id,
         start_cb_index,
-        std::move(restricted_cores));
+        std::move(restricted_cores),
+        agmm_base_sem_id);
 
     // Append produced kernels / CBs / semaphores onto the caller's descriptor without going
     // through merge_program_descriptors() — that helper TT_FATALs on overlapping kernel core

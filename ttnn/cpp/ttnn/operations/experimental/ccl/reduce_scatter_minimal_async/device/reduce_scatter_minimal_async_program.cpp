@@ -2470,14 +2470,14 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     // sender_worker_core_range_set to pick a non-colliding id; the legacy helper's
     // CreateSemaphore returns the same id space, so kernels see the same semaphore-id wire value.
     const CoreCoord any_worker_core = *sender_worker_core_range_set.ranges().cbegin()->begin();
-    const auto fwd_bwd_sem_id_opt = desc.find_available_semaphore_id(any_worker_core, tt::tt_metal::CoreType::WORKER);
+    const auto fwd_bwd_sem_id_opt = desc.find_available_semaphore_id(any_worker_core, tt::CoreType::WORKER);
     TT_FATAL(
         fwd_bwd_sem_id_opt.has_value(),
         "reduce_scatter_minimal_async line descriptor: no available semaphore id on worker cores");
     const uint32_t fwd_bwd_semaphore_address = fwd_bwd_sem_id_opt.value();
     desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
         .id = fwd_bwd_semaphore_address,
-        .core_type = tt::tt_metal::CoreType::WORKER,
+        .core_type = tt::CoreType::WORKER,
         .core_ranges = sender_worker_core_range_set,
         .initial_value = 0,
     });
