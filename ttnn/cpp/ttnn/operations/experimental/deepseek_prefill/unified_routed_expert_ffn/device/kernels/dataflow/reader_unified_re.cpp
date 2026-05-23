@@ -46,6 +46,21 @@ void kernel_main() {
     const uint32_t my_nt_d = get_arg_val<uint32_t>(10);
     const uint32_t chunk_start_tile_row = get_arg_val<uint32_t>(11);
 
+    // Weight-multicast runtime args (indices 12..21).
+    const uint32_t is_in1_sender_u32 = get_arg_val<uint32_t>(12);
+    const bool is_in1_sender = is_in1_sender_u32 != 0;
+    const uint32_t in1_ready_sem_id = get_arg_val<uint32_t>(13);
+    const uint32_t in1_valid_sem_id = get_arg_val<uint32_t>(14);
+    const uint32_t in1_num_receivers = get_arg_val<uint32_t>(15);
+    const uint32_t in1_mcast_nx_start = get_arg_val<uint32_t>(16);
+    const uint32_t in1_mcast_ny_start = get_arg_val<uint32_t>(17);
+    const uint32_t in1_mcast_nx_end = get_arg_val<uint32_t>(18);
+    const uint32_t in1_mcast_ny_end = get_arg_val<uint32_t>(19);
+    const uint32_t in1_sender_nx = get_arg_val<uint32_t>(20);
+    const uint32_t in1_sender_ny = get_arg_val<uint32_t>(21);
+    const uint32_t in1_ready_sem_addr = get_semaphore(in1_ready_sem_id);
+    const uint32_t in1_valid_sem_addr = get_semaphore(in1_valid_sem_id);
+
     // -------------------------- compile-time args -------------------------
     constexpr uint32_t cb_in0_x = get_compile_time_arg_val(0);
     constexpr uint32_t cb_in1_gate = get_compile_time_arg_val(1);
@@ -125,8 +140,25 @@ void kernel_main() {
     const uint32_t down_tile_bytes = get_tile_size(cb_in1_down);
     const uint32_t scratch_tile_bytes = get_tile_size(cb_in0_down_full);
 
+    // Weight-multicast helper. For each in1 K-block:
+    //   * Sender (gy=0): wait for all GRID_Y-1 receivers to inc the local
+    //     ready_sem. Reset ready_sem. Read in1 from DRAM into local cb_in1.
+    //     Multicast the L1 region to receivers. Multicast valid_sem=1.
+    //   * Receiver: reserve cb space. Reset local valid_sem=0. Increment
+    //     sender's ready_sem at sender's NoC coord. Wait local valid_sem=1.
+    //
+    // Both sender and receiver finish with the K-block of in1 in their own
+    // cb_in1 L1, ready for cb_push_back/compute.
+    constexpr uint32_t IN1_VALID = 1;
+    volatile tt_l1_ptr uint32_t* in1_ready_local = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_ready_sem_addr);
+    volatile tt_l1_ptr uint32_t* in1_valid_local = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_valid_sem_addr);
+    const uint64_t in1_sender_ready_noc = get_noc_addr(in1_sender_nx, in1_sender_ny, in1_ready_sem_addr);
+    const uint64_t in1_mcast_valid_noc = get_noc_multicast_addr(
+        in1_mcast_nx_start, in1_mcast_ny_start, in1_mcast_nx_end, in1_mcast_ny_end, in1_valid_sem_addr);
+
     // -------- PHASE 1 — gate matmul feed (push x + gate_proj K-blocks) ----
     for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
+        // x: every core reads its own M slice (no x mcast yet).
         cb_reserve_back(cb_in0_x, g_in0_block_num_tiles);
         uint32_t l1_x = get_write_ptr(cb_in0_x);
         for (uint32_t m = 0; m < per_core_M; ++m) {
@@ -141,22 +173,54 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_in0_x, g_in0_block_num_tiles);
 
+        // in1_gate via multicast within N-col group.
         cb_reserve_back(cb_in1_gate, g_in1_block_num_tiles);
-        uint32_t l1_w = get_write_ptr(cb_in1_gate);
-        for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
-            for (uint32_t n = 0; n < per_core_N_gu; ++n) {
-                const uint32_t row = kb * in0_block_w_gu + k;
-                const uint32_t col = my_nt_gu * per_core_N_gu + n;
-                const uint32_t tile_idx = row * N_gate_tiles_full + col;
-                noc_async_read_tile(tile_idx, gate_acc, l1_w);
-                l1_w += gate_tile_bytes;
+        if (is_in1_sender) {
+            // Wait until all receivers have signalled "ready".
+            noc_semaphore_wait(in1_ready_local, in1_num_receivers);
+            *in1_ready_local = 0;
+
+            // DRAM read the K-block into our local cb_in1_gate.
+            uint32_t l1_w = get_write_ptr(cb_in1_gate);
+            const uint32_t block_start = l1_w;
+            for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
+                for (uint32_t n = 0; n < per_core_N_gu; ++n) {
+                    const uint32_t row = kb * in0_block_w_gu + k;
+                    const uint32_t col = my_nt_gu * per_core_N_gu + n;
+                    const uint32_t tile_idx = row * N_gate_tiles_full + col;
+                    noc_async_read_tile(tile_idx, gate_acc, l1_w);
+                    l1_w += gate_tile_bytes;
+                }
             }
+            noc_async_read_barrier();
+
+            // Multicast block to all receivers' cb_in1_gate L1 (same offset).
+            const uint64_t mcast_data_noc = get_noc_multicast_addr(
+                in1_mcast_nx_start, in1_mcast_ny_start, in1_mcast_nx_end, in1_mcast_ny_end, block_start);
+            const uint32_t block_bytes = g_in1_block_num_tiles * gate_tile_bytes;
+            noc_async_write_multicast(block_start, mcast_data_noc, block_bytes, in1_num_receivers, /*linked=*/false);
+            noc_async_writes_flushed();
+
+            // Multicast valid=1 to receivers.
+            *in1_valid_local = IN1_VALID;
+            noc_semaphore_set_multicast(in1_valid_sem_addr, in1_mcast_valid_noc, in1_num_receivers);
+        } else {
+            // Reset local valid sem before signalling sender.
+            *in1_valid_local = 0;
+
+            // Signal sender we're ready to receive.
+            noc_semaphore_inc(in1_sender_ready_noc, 1);
+
+            // Wait for sender to mcast data + valid signal.
+            noc_semaphore_wait(in1_valid_local, IN1_VALID);
         }
-        noc_async_read_barrier();
         cb_push_back(cb_in1_gate, g_in1_block_num_tiles);
     }
 
-    // -------- PHASE 2 — up matmul feed (re-stream x + up_proj K-blocks) ---
+    // -------- PHASE 2 — up matmul feed (re-stream x + up_proj K-blocks via mcast) ---
+    // up_proj uses the SAME mcast topology as gate_proj (N-col groups).
+    // ready_sem / valid_sem from phase 1 are already at 0 (sender reset
+    // ready, receivers reset valid before sending the last "ready" inc).
     for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
         cb_reserve_back(cb_in0_x, g_in0_block_num_tiles);
         uint32_t l1_x = get_write_ptr(cb_in0_x);
@@ -172,18 +236,38 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_in0_x, g_in0_block_num_tiles);
 
+        // in1_up via multicast within N-col group (same topology as gate).
         cb_reserve_back(cb_in1_up, g_in1_block_num_tiles);
-        uint32_t l1_w = get_write_ptr(cb_in1_up);
-        for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
-            for (uint32_t n = 0; n < per_core_N_gu; ++n) {
-                const uint32_t row = kb * in0_block_w_gu + k;
-                const uint32_t col = my_nt_gu * per_core_N_gu + n;
-                const uint32_t tile_idx = row * N_gate_tiles_full + col;
-                noc_async_read_tile(tile_idx, up_acc, l1_w);
-                l1_w += up_tile_bytes;
+        if (is_in1_sender) {
+            noc_semaphore_wait(in1_ready_local, in1_num_receivers);
+            *in1_ready_local = 0;
+
+            uint32_t l1_w = get_write_ptr(cb_in1_up);
+            const uint32_t block_start = l1_w;
+            for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
+                for (uint32_t n = 0; n < per_core_N_gu; ++n) {
+                    const uint32_t row = kb * in0_block_w_gu + k;
+                    const uint32_t col = my_nt_gu * per_core_N_gu + n;
+                    const uint32_t tile_idx = row * N_gate_tiles_full + col;
+                    noc_async_read_tile(tile_idx, up_acc, l1_w);
+                    l1_w += up_tile_bytes;
+                }
             }
+            noc_async_read_barrier();
+
+            const uint64_t mcast_data_noc = get_noc_multicast_addr(
+                in1_mcast_nx_start, in1_mcast_ny_start, in1_mcast_nx_end, in1_mcast_ny_end, block_start);
+            const uint32_t block_bytes = g_in1_block_num_tiles * up_tile_bytes;
+            noc_async_write_multicast(block_start, mcast_data_noc, block_bytes, in1_num_receivers, /*linked=*/false);
+            noc_async_writes_flushed();
+
+            *in1_valid_local = IN1_VALID;
+            noc_semaphore_set_multicast(in1_valid_sem_addr, in1_mcast_valid_noc, in1_num_receivers);
+        } else {
+            *in1_valid_local = 0;
+            noc_semaphore_inc(in1_sender_ready_noc, 1);
+            noc_semaphore_wait(in1_valid_local, IN1_VALID);
         }
-        noc_async_read_barrier();
         cb_push_back(cb_in1_up, g_in1_block_num_tiles);
     }
 
@@ -210,18 +294,40 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_in0_down_full, d_in0_block_num_tiles);
 
+        // in1_down via multicast within N-col group. Note: per_core_N_d is
+        // larger than per_core_N_gu (28 vs 8), so the block is much bigger
+        // — this phase benefits most from mcast.
         cb_reserve_back(cb_in1_down, d_in1_block_num_tiles);
-        uint32_t l1_w = get_write_ptr(cb_in1_down);
-        for (uint32_t k = 0; k < in0_block_w_d; ++k) {
-            for (uint32_t n = 0; n < per_core_N_d; ++n) {
-                const uint32_t row = kb * in0_block_w_d + k;
-                const uint32_t col = my_nt_d * per_core_N_d + n;
-                const uint32_t tile_idx = row * N_down_tiles_full + col;
-                noc_async_read_tile(tile_idx, down_acc, l1_w);
-                l1_w += down_tile_bytes;
+        if (is_in1_sender) {
+            noc_semaphore_wait(in1_ready_local, in1_num_receivers);
+            *in1_ready_local = 0;
+
+            uint32_t l1_w = get_write_ptr(cb_in1_down);
+            const uint32_t block_start = l1_w;
+            for (uint32_t k = 0; k < in0_block_w_d; ++k) {
+                for (uint32_t n = 0; n < per_core_N_d; ++n) {
+                    const uint32_t row = kb * in0_block_w_d + k;
+                    const uint32_t col = my_nt_d * per_core_N_d + n;
+                    const uint32_t tile_idx = row * N_down_tiles_full + col;
+                    noc_async_read_tile(tile_idx, down_acc, l1_w);
+                    l1_w += down_tile_bytes;
+                }
             }
+            noc_async_read_barrier();
+
+            const uint64_t mcast_data_noc = get_noc_multicast_addr(
+                in1_mcast_nx_start, in1_mcast_ny_start, in1_mcast_nx_end, in1_mcast_ny_end, block_start);
+            const uint32_t block_bytes = d_in1_block_num_tiles * down_tile_bytes;
+            noc_async_write_multicast(block_start, mcast_data_noc, block_bytes, in1_num_receivers, /*linked=*/false);
+            noc_async_writes_flushed();
+
+            *in1_valid_local = IN1_VALID;
+            noc_semaphore_set_multicast(in1_valid_sem_addr, in1_mcast_valid_noc, in1_num_receivers);
+        } else {
+            *in1_valid_local = 0;
+            noc_semaphore_inc(in1_sender_ready_noc, 1);
+            noc_semaphore_wait(in1_valid_local, IN1_VALID);
         }
-        noc_async_read_barrier();
         cb_push_back(cb_in1_down, d_in1_block_num_tiles);
     }
 }
