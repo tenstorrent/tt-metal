@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
@@ -18,6 +19,22 @@
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include <cstdint>
 #include <utility>
+
+// Legacy primitive(s) retained (#45003 item 4):
+//   - Dynamic CB selection (cb_output_id chosen at runtime between cb_reader_output_id and
+//     cb_compute_output_id) — Device 2.0 CircularBuffer wrappers take a constexpr id at construction.
+//   - All fabric_* / tt::tt_fabric::* APIs (fabric_unicast_*, fabric_multicast_*, fabric_client_*,
+//     fabric_endpoint_terminate, build_connection_to_fabric_endpoint, etc.) — no Device 2.0
+//     equivalent; these stay on the existing fabric API per the migration plan.
+//   - noc_semaphore_wait_min / noc_semaphore_wait / noc_semaphore_set on raw uint32_t* L1 ptrs
+//     derived from the runtime barrier_sem / out_ready_sem / termination_sync addresses —
+//     Device 2.0 Semaphore<> wrappers target semaphore-id-derived addresses, not arbitrary L1.
+//   - noc_semaphore_inc on precomposed uint64_t noc addresses (fwd_bwd_sem, termination_sync)
+//     — Device 2.0 Semaphore<>::up targets semaphore-id-derived endpoints.
+//   - noc_async_write paired with noc_async_write_barrier / noc_async_writes_flushed in the
+//     final-reduction output write — Device 2.0 write overloads target TensorAccessor endpoints
+//     rather than precomposed uint64_t addresses obtained via get_noc_addr(tile_id, addrgen).
+//   - sharding_addrgen / worker_routing_utils / worker_sync_utils helpers (#45003 Phase-1 shims).
 
 using address_t = uint32_t;
 using ttnn::ccl::Topology;
@@ -273,6 +290,8 @@ void kernel_main() {
 
     const uint32_t intermediate_full_offset = is_forward ? 0 : input_num_pages;
 
+    CircularBuffer cb_compute_output(cb_compute_output_id);
+
     uint32_t chunk_count = 0;
     for (uint32_t b = 0; b < input_tensor_B; b++) {
         int slice_idx = is_forward ? ring_size - 1 : 0;
@@ -394,8 +413,8 @@ void kernel_main() {
                     uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
                     uint32_t num_pages_to_read = std::min(tiles_remaining_to_read, tile_granularity);
 
-                    cb_wait_front(cb_compute_output_id, tile_granularity);
-                    size_t l1_read_addr = get_read_ptr(cb_compute_output_id);
+                    cb_compute_output.wait_front(tile_granularity);
+                    size_t l1_read_addr = cb_compute_output.get_read_ptr();
                     for (uint32_t j = 0; j < num_pages_to_read; ++j) {
                         uint32_t output_tile_id = output_tile_id_start + tiles_read;
                         uint64_t local_noc_addr = get_noc_addr(output_tile_id, output_addrgen);
@@ -409,7 +428,7 @@ void kernel_main() {
                     } else {
                         noc_async_writes_flushed();
                     }
-                    cb_pop_front(cb_compute_output_id, tile_granularity);
+                    cb_compute_output.pop_front(tile_granularity);
                     if (detail::do_forward_sync(is_forward)) {
                         // Tell local backwards reader that it can proceed
                         uint64_t fwd_bwd_sem_noc_addr =

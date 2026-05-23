@@ -3,12 +3,24 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "tt_metal/tools/profiler/kernel_profiler.hpp"
 #include <cstdint>
 #include <utility>
+
+// Legacy primitive(s) retained (#45003 item 4):
+//   - Dynamic CB selection (cb_in0 chosen at runtime between cb_input_id and cb_reader_output_id) —
+//     Device 2.0 CircularBuffer wrappers take a constexpr id at construction.
+//   - noc_async_read with accessor-derived precomposed uint64_t source addresses paired with
+//     noc_async_read_barrier — Device 2.0 read overloads target TensorAccessor endpoints, not
+//     precomposed addresses with a per-tile l1 destination stride.
+//   - noc_semaphore_wait_min / noc_semaphore_set on raw uint32_t* addresses derived from runtime
+//     out_ready_sem / fwd_bwd_sem_addr — Device 2.0 Semaphore<> wrappers target semaphore-id-derived
+//     addresses, not arbitrary L1 addresses.
+//   - sharding_addrgen / worker_sync_utils / ReduceScatterOpReceiver helpers (#45003 Phase-1 shims).
 
 using address_t = uint32_t;
 
@@ -147,6 +159,8 @@ void kernel_main() {
      */
     const uint32_t intermediate_full_offset = is_forward ? 0 : input_num_pages;
 
+    CircularBuffer cb_intermediate(cb_intermediate_id);
+
     uint32_t chunk_count = 0;
     uint32_t fwd_sync_cnt = 0;
     uint32_t sem_target = 0;
@@ -255,8 +269,8 @@ void kernel_main() {
                         chunk_count++;
 
                         // read the next intermediate slice out of intermediate buffer, and put it in intermediate CB
-                        cb_reserve_back(cb_intermediate_id, tile_granularity);
-                        l1_write_addr = get_write_ptr(cb_intermediate_id);
+                        cb_intermediate.reserve_back(tile_granularity);
+                        l1_write_addr = cb_intermediate.get_write_ptr();
                         for (uint32_t j = 0; j < num_pages_to_read; ++j) {
                             uint32_t tile_id =
                                 intermediate_tile_id_start + intermediate_row_offset + intermediate_pages_read_in_row;
@@ -273,7 +287,7 @@ void kernel_main() {
 
                         noc_async_read_barrier();
                         cb_push_back(cb_in0, tile_granularity);
-                        cb_push_back(cb_intermediate_id, tile_granularity);
+                        cb_intermediate.push_back(tile_granularity);
                     }
                     input_tile_id_start += input_channel_num_pages;
                     intermediate_tile_id_start += input_channel_num_pages;
@@ -387,8 +401,8 @@ void kernel_main() {
                     chunk_count++;
 
                     // read the next intermediate slice out of the intermediate buffer, and put it in intermediate CB
-                    cb_reserve_back(cb_intermediate_id, tile_granularity);
-                    l1_write_addr = get_write_ptr(cb_intermediate_id);
+                    cb_intermediate.reserve_back(tile_granularity);
+                    l1_write_addr = cb_intermediate.get_write_ptr();
                     for (uint32_t j = 0; j < num_pages_to_read; ++j) {
                         uint32_t intermediate_tile_id =
                             intermediate_tile_id_start + intermediate_row_offset + intermediate_pages_read_in_row;
@@ -405,7 +419,7 @@ void kernel_main() {
 
                     noc_async_read_barrier();
                     cb_push_back(cb_in0, tile_granularity);
-                    cb_push_back(cb_intermediate_id, tile_granularity);
+                    cb_intermediate.push_back(tile_granularity);
                 }
                 tile_id_start += channel_num_pages;
                 intermediate_tile_id_start += input_channel_num_pages;

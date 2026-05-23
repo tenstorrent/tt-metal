@@ -3,11 +3,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include <cstdint>
 #include <utility>
+
+// Legacy primitive(s) retained (#45003 item 4):
+//   - Dynamic CB selection (cb_in chosen at runtime between cb_input_id and cb_reader_output_id) —
+//     Device 2.0 CircularBuffer wrappers take a constexpr id at construction.
+//   - noc_async_read with accessor-derived precomposed uint64_t source addresses paired with
+//     noc_async_read_barrier — Device 2.0 read overloads target TensorAccessor endpoints, not
+//     precomposed addresses with a per-tile l1 destination stride.
+//   - noc_semaphore_wait_min / noc_semaphore_set on raw uint32_t* addresses derived from runtime
+//     out_ready_sem / out2_ready_sem addresses — Device 2.0 Semaphore<> wrappers target
+//     semaphore-id-derived addresses, not arbitrary L1 addresses.
+//   - worker_sync_utils / ReduceScatterOpReceiver helpers (#45003 Phase-1 shims).
 
 using address_t = uint32_t;
 using tt::tt_metal::BufferType;
@@ -72,6 +84,9 @@ void kernel_main() {
     if constexpr (fuse_op) {
         matmul_receiver = ReduceScatterOpReceiver(arg_idx);
     }
+
+    CircularBuffer cb_interm(cb_interm_id);
+    CircularBuffer cb_interm2(cb_interm2_id);
 
     uint32_t sem_target = 0;
     uint32_t sem2_target = 0;
@@ -229,11 +244,11 @@ void kernel_main() {
                         uint32_t l1_write_addr = get_write_ptr(cb_in);
                         uint32_t interm_l1_write_addr, interm2_l1_write_addr;
                         if (reduce_interm) {
-                            cb_reserve_back(cb_interm_id, tile_granularity);
-                            interm_l1_write_addr = get_write_ptr(cb_interm_id);
+                            cb_interm.reserve_back(tile_granularity);
+                            interm_l1_write_addr = cb_interm.get_write_ptr();
                             if (reduce_output) {
-                                cb_reserve_back(cb_interm2_id, tile_granularity);
-                                interm2_l1_write_addr = get_write_ptr(cb_interm2_id);
+                                cb_interm2.reserve_back(tile_granularity);
+                                interm2_l1_write_addr = cb_interm2.get_write_ptr();
                             }
                         }
                         for (uint32_t j = 0; j < tiles_to_read; ++j) {
@@ -264,10 +279,10 @@ void kernel_main() {
                         noc_async_read_barrier();
                         cb_push_back(cb_in, tile_granularity);
                         if (reduce_interm) {
-                            cb_push_back(cb_interm_id, tile_granularity);
+                            cb_interm.push_back(tile_granularity);
 
                             if (reduce_output) {
-                                cb_push_back(cb_interm2_id, tile_granularity);
+                                cb_interm2.push_back(tile_granularity);
                             }
                         }
                     }  // if skip or process
