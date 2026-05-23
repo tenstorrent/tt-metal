@@ -366,7 +366,13 @@ class TtRoutedExpert(LightweightModule):
 
         return tt_weight
 
-    _UNIFIED_OP_CHUNK_ROWS = 2048
+    # The unified op picks chunk_M_tiles internally — 64 / 32 / 16 — to divide
+    # x.padded_shape[-2] evenly without padding chunks. Smallest chunk is 16
+    # tiles = 512 rows (per_core_M = 2 across the GRID_Y = 8 axis). For DS-V3
+    # 1k token inputs we now run one 32-tile chunk (vs the previous pad-to-2k
+    # = double the work). For non-512-row-aligned M (1.6k, 3.2k) we still pad
+    # up to the next 512-row boundary — far less wasteful than 2048-row pad.
+    _UNIFIED_OP_M_ALIGNMENT_ROWS = 512
 
     def _expert_ffn(
         self,
@@ -400,14 +406,14 @@ class TtRoutedExpert(LightweightModule):
         Returns:
             Output tensor matching the shape of ``x``.
         """
-        # The unified op processes M_tiles_full in chunks of chunk_M_tiles
-        # (= 64 tiles = 2048 rows). If x's M is not a multiple of 2048, pad
-        # up to the next multiple here and narrow the result back. Padding
-        # rows hold garbage but the multiply-accumulate is correct so the
-        # first `original_M` rows of the output remain valid.
-        chunk_rows = self._UNIFIED_OP_CHUNK_ROWS
+        # The unified op needs M_tiles_full to be a multiple of GRID_Y = 8
+        # tiles = 256 rows so per-core M divides cleanly across the M-axis
+        # of the 8x8 compute grid. The op picks chunk_M_tiles internally
+        # (32 vs 64) to avoid wasted work on cases like 1k or 5k tokens.
+        # Pad only when M is not already a multiple of the alignment.
+        alignment = self._UNIFIED_OP_M_ALIGNMENT_ROWS
         original_m = x.padded_shape[-2]
-        padded_m = ((original_m + chunk_rows - 1) // chunk_rows) * chunk_rows
+        padded_m = ((original_m + alignment - 1) // alignment) * alignment
         if padded_m != original_m:
             x = ttnn.pad(x, [(0, 0)] * (x.padded_shape.rank - 2) + [(0, padded_m - original_m), (0, 0)], value=0)
         y = ttnn.experimental.deepseek_prefill.unified_routed_expert_ffn(
