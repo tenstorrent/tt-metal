@@ -81,6 +81,8 @@ inline void llk_math_hw_configure(const std::uint32_t srca_operand, const std::u
     }
 }
 
+inline void llk_math_reconfig_remap(const bool /*remap_enable*/) {}
+
 /**
  * @brief Sets the dest dvalid for FPU/SFPU
  *
