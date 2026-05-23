@@ -28,7 +28,12 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
         t.x.dtype());
     TT_FATAL(t.x.layout() == tt::tt_metal::Layout::TILE, "x must be TILE layout");
     TT_FATAL(is_dram_interleaved(t.x), "x must be DRAM-interleaved");
-    TT_FATAL(t.x.logical_shape().rank() == 2, "x must be 2D, got rank {}", t.x.logical_shape().rank());
+    TT_FATAL(t.x.logical_shape().rank() >= 2, "x must have rank >= 2, got rank {}", t.x.logical_shape().rank());
+    // For rank > 2, all leading dims must be 1 — we treat x as effectively
+    // (M, K) using padded_shape[-2:].
+    for (int i = 0; i < static_cast<int>(t.x.logical_shape().rank()) - 2; ++i) {
+        TT_FATAL(t.x.logical_shape()[i] == 1, "x leading dim {} must be 1, got {}", i, t.x.logical_shape()[i]);
+    }
 
     const auto& x_shape = t.x.padded_shape();
     const auto& gate_shape = t.gate_proj.padded_shape();

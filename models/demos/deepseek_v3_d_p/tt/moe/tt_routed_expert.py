@@ -366,16 +366,22 @@ class TtRoutedExpert(LightweightModule):
 
         return tt_weight
 
+    _UNIFIED_OP_CHUNK_ROWS = 2048
+
     def _expert_ffn(
         self,
         x: ttnn.Tensor,
         gate_proj: ttnn.Tensor,
         up_proj: ttnn.Tensor,
         down_proj: ttnn.Tensor,
+        expert_token_counts: ttnn.Tensor,
+        local_expert_id: int,
         out: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """
-        Single expert FFN computation.
+        Single expert FFN computation via the fused unified op (1 op per
+        expert in tt-perf-report) when on Blackhole; falls back to the
+        chunked production op otherwise.
 
         Args:
             x: Input tensor. Shape is (1, tokens, emb_dim) for the Blackhole path
@@ -384,6 +390,9 @@ class TtRoutedExpert(LightweightModule):
             gate_proj: Gate projection weight (emb_dim, hidden_dim)
             up_proj: Up projection weight (emb_dim, hidden_dim)
             down_proj: Down projection weight (hidden_dim, emb_dim)
+            expert_token_counts: device-resident UINT32 vector with per-global-expert
+                token counts (only used by the unified op for device-side count read).
+            local_expert_id: index into self.global_expert_idx_table for this expert.
             out: Optional pre-allocated output tensor for in-place matmul result.
                 When provided, the final matmul writes directly into this buffer.
                 When None, a new tensor is allocated for the output.
@@ -391,14 +400,30 @@ class TtRoutedExpert(LightweightModule):
         Returns:
             Output tensor matching the shape of ``x``.
         """
-        return ttnn.experimental.deepseek_prefill.routed_expert_ffn(
+        # The unified op processes M_tiles_full in chunks of chunk_M_tiles
+        # (= 64 tiles = 2048 rows). If x's M is not a multiple of 2048, pad
+        # up to the next multiple here and narrow the result back. Padding
+        # rows hold garbage but the multiply-accumulate is correct so the
+        # first `original_M` rows of the output remain valid.
+        chunk_rows = self._UNIFIED_OP_CHUNK_ROWS
+        original_m = x.padded_shape[-2]
+        padded_m = ((original_m + chunk_rows - 1) // chunk_rows) * chunk_rows
+        if padded_m != original_m:
+            x = ttnn.pad(x, [(0, 0)] * (x.padded_shape.rank - 2) + [(0, padded_m - original_m), (0, 0)], value=0)
+        y = ttnn.experimental.deepseek_prefill.unified_routed_expert_ffn(
             x,
             gate_proj,
             up_proj,
             down_proj,
+            expert_token_counts,
+            self.global_expert_idx_table,
+            local_expert_id=local_expert_id,
             compute_kernel_config=self.compute_kernel_config,
-            output=out,
+            output=None if padded_m != original_m else out,
         )
+        if padded_m != original_m:
+            y = ttnn.narrow(y, y.padded_shape.rank - 2, 0, original_m)
+        return y
 
     def forward(
         self,
@@ -527,6 +552,8 @@ class TtRoutedExpert(LightweightModule):
                 self.gate_projs[local_expert],
                 self.up_projs[local_expert],
                 self.down_projs[local_expert],
+                expert_token_counts,
+                local_expert_id=local_expert,
                 out=None,
             )
             logger.debug(f"Expert {local_expert}: output shape {output.shape}")
