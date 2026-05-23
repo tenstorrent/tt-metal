@@ -297,30 +297,39 @@ void kernel_main() {
                 cb_ex.reserve_back(1);
                 cb_ex.push_back(1);
             }
-            // x - E[x]
-            sub_tiles_bcast_scalar_init_short(cb_x_id, cb_ex_global_id);
-
+            // x - E[x] — same-CB sub_bcast_scalar over block_hw tiles.
+            //
+            // Original used per-subblock acquire/release with index = w
+            // (index_subblock_w_offset stays at 0 — never incremented in this block,
+            // so cb_x reads from front 0..subblock_w-1, pops subblock_w, slides).
+            // Chain emits per-tile wait+pop+pack+push with Streaming + OutStreaming
+            // on cb_x; net effect over block_hw iters is identical (cb_x slid by
+            // block_hw on both ends).
+            //
+            // Reconfig: sub_tiles_bcast_scalar_init_short reconfigs srca/srcb ->
+            // BinaryDataFormatReconfig::Input. Original used plain pack_tile (no
+            // pack_reconfig) -> PackTileReconfig::None.
+            // cb_ex_global is held outside chain via wait_front(1) -> CallerManaged.
             cb_ex_global.wait_front(1);
-            for (uint32_t i = 0; i < block_h; i++) {
-                index_subblock_w_offset = 0;
-                for (uint32_t j = 0; j < num_subblocks_w; j++) {
-                    tile_regs_acquire();
-                    for (uint32_t w = 0; w < subblock_w; w++) {
-                        uint32_t index = w + index_subblock_w_offset;
-                        sub_tiles_bcast_scalar(cb_x_id, cb_ex_global_id, index, 0, w);
-                    }
-                    tile_regs_commit();
-                    cb_x.pop_front(subblock_w);
-                    cb_x.reserve_back(subblock_w);
-                    tile_regs_wait();
-                    for (uint32_t k = 0; k < subblock_w; k++) {
-                        pack_tile(k, cb_x_id);
-                    }
-                    cb_x.push_back(subblock_w);
-                    tile_regs_release();
-                    cb_x.wait_front(block_hw);
-                }
-            }
+            compute_kernel_lib::eltwise_chain(
+                block_hw,
+                compute_kernel_lib::BinaryFpu<
+                    cb_x_id,
+                    cb_ex_global_id,
+                    compute_kernel_lib::BinaryFpuOp::Sub,
+                    compute_kernel_lib::BroadcastDim::Scalar,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::Streaming,
+                    compute_kernel_lib::CallerManaged,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OperandKind::Scalar>{},
+                compute_kernel_lib::PackTile<
+                    cb_x_id,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OutStreaming,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::PackTileReconfig::None>{});
             cb_ex_global.pop_front(1);
 
             reconfig_data_format_srcb(cb_ex_global_id, cb_input_mask_id);
