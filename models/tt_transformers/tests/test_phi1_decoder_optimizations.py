@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
+from models.tt_transformers.demo.simple_text_demo import should_disable_device_sampling
 from models.tt_transformers.tt.model_config import (
     MathFidelitySetting,
     ModelOptimizations,
@@ -22,3 +23,11 @@ def test_phi1_accuracy_uses_bf16_attention_tensors_without_broad_hifi4_override(
     assert opt.op_fidelity_settings[OpGroup.LI_QKV_PREFILL] == MathFidelitySetting.HIFI2_FP16
     assert opt.op_fidelity_settings[OpGroup.SDPA_DECODE] == MathFidelitySetting.HIFI2
     assert opt.op_fidelity_settings[OpGroup.SDPA_PREFILL] == MathFidelitySetting.HIFI4
+
+
+def test_phi1_uses_host_sampling_only_in_accuracy_mode():
+    assert should_disable_device_sampling("phi-1", "accuracy")
+    assert not should_disable_device_sampling("phi-1", "performance")
+
+    assert should_disable_device_sampling("Mistral-7B", "accuracy")
+    assert should_disable_device_sampling("Mistral-7B", "performance")
