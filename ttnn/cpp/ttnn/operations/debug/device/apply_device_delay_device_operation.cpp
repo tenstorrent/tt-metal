@@ -64,7 +64,7 @@ tt::tt_metal::ProgramDescriptor ApplyDeviceDelayDeviceOperation::create_descript
     TT_FATAL(
         mesh_dispatch_coordinate.has_value(),
         "ApplyDeviceDelayDeviceOperation::create_descriptor requires a mesh dispatch coordinate");
-    const ttnn::MeshCoordinate mesh_coordinate = mesh_dispatch_coordinate.value();
+    const ttnn::MeshCoordinate& mesh_coordinate = mesh_dispatch_coordinate.value();
     log_info(tt::LogAlways, "Creating delay program at mesh coordinate: {}", mesh_coordinate);
 
     tt::tt_metal::ProgramDescriptor desc;
