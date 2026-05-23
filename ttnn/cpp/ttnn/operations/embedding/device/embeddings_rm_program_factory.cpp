@@ -244,28 +244,9 @@ tt::tt_metal::ProgramDescriptor EmbeddingsRMProgramFactory::create_descriptor(
     uint32_t input_offset = 0;
 
     auto cores = corerange_to_cores(all_cores, std::nullopt, row_major);
-    std::vector<uint32_t> reader_runtime_args = {
-        (std::uint32_t)a.buffer()->address(),
-        (std::uint32_t)weights.buffer()->address(),
-        (std::uint32_t)0,
-        (std::uint32_t)0,
-        (std::uint32_t)0,
-        (std::uint32_t)0,
-    };
-    if (embeddings_type == EmbeddingsType::PADDED) {
-        reader_runtime_args.push_back(pad_token.value());
-    }
-    std::vector<uint32_t> writer_runtime_args;
-    if (use_chunked) {
-        writer_runtime_args = {
-            (std::uint32_t)output.buffer()->address(), (std::uint32_t)0, (std::uint32_t)0};
-    } else {
-        writer_runtime_args = {
-            (std::uint32_t)output.buffer()->address(),
-            (std::uint32_t)output_page_size,
-            (std::uint32_t)0,
-            (std::uint32_t)0};
-    }
+    auto* a_buffer = a.buffer();
+    auto* weights_buffer = weights.buffer();
+    auto* output_buffer = output.buffer();
 
     reader_desc.runtime_args.reserve(cores.size());
     if (writer_desc.has_value()) {
@@ -279,24 +260,28 @@ tt::tt_metal::ProgramDescriptor EmbeddingsRMProgramFactory::create_descriptor(
 
         // Reader
         {
-            reader_runtime_args[2] = input_offset / num_blocks_per_batch;
-            reader_runtime_args[3] =
-                tt::round_down(input_offset % num_blocks_per_batch, block_height) * input_element_size_bytes;
-            reader_runtime_args[4] = local_num_blocks;
-            reader_runtime_args[5] = input_offset % num_blocks_per_batch % block_height;
-            reader_desc.runtime_args.emplace_back(core, reader_runtime_args);
+            KernelDescriptor::RTArgList reader_args;
+            reader_args.push_back(a_buffer);
+            reader_args.push_back(weights_buffer);
+            reader_args.push_back(input_offset / num_blocks_per_batch);
+            reader_args.push_back(
+                tt::round_down(input_offset % num_blocks_per_batch, block_height) * input_element_size_bytes);
+            reader_args.push_back(local_num_blocks);
+            reader_args.push_back(input_offset % num_blocks_per_batch % block_height);
+            if (embeddings_type == EmbeddingsType::PADDED) {
+                reader_args.push_back(pad_token.value());
+            }
+            reader_desc.emplace_runtime_args(core, reader_args);
         }
 
         // Writer
         if (!output_sharded) {
             if (use_chunked) {
-                writer_runtime_args[1] = local_num_blocks;
-                writer_runtime_args[2] = input_offset;
+                writer_desc->emplace_runtime_args(core, {output_buffer, local_num_blocks, input_offset});
             } else {
-                writer_runtime_args[2] = local_num_blocks;
-                writer_runtime_args[3] = input_offset;
+                writer_desc->emplace_runtime_args(
+                    core, {output_buffer, static_cast<uint32_t>(output_page_size), local_num_blocks, input_offset});
             }
-            writer_desc->runtime_args.emplace_back(core, writer_runtime_args);
         }
 
         input_offset += local_num_blocks;

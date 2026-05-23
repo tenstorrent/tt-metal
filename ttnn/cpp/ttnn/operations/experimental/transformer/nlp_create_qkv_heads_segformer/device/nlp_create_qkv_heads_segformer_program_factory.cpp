@@ -131,25 +131,25 @@ tt::tt_metal::ProgramDescriptor NlpCreateQkvHeadsSegformerProgramFactory::create
             TT_ASSERT(false, "Core not in specified core ranges");
         }
 
-        reader_desc.runtime_args.emplace_back(
+        reader_desc.emplace_runtime_args(
             core,
-            std::vector<uint32_t>{
-                (std::uint32_t)in0_buffer->address(),
-                (std::uint32_t)in1_buffer_addr,
+            {
+                in0_buffer,
+                static_cast<uint32_t>(in1_buffer_addr),
                 num_blocks_per_core,
                 num_blocks_written * per_tensor_tiles,
-                0,
+                static_cast<uint32_t>(0),
             });
 
         uint32_t q_out_h_dim = num_blocks_written % q_out_h_tiles;
         uint32_t q_out_tensor_tile_id =
             (num_blocks_written / q_out_h_tiles * q_out_CHtWt) + (q_out_h_dim * q_out_w_tiles);
 
-        writer_desc.runtime_args.emplace_back(
+        writer_desc.emplace_runtime_args(
             core,
-            std::vector<uint32_t>{
-                (std::uint32_t)q_buffer->address(),  // q_tensor_addr
-                num_blocks_per_core,                 // num_blocks
+            {
+                q_buffer,             // q_tensor_addr
+                num_blocks_per_core,  // num_blocks
                 q_out_h_dim,
                 q_out_tensor_tile_id,
             });

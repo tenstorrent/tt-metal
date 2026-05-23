@@ -193,19 +193,19 @@ tt::tt_metal::ProgramDescriptor NLPConcatHeadsBoltzProgramFactory::create_descri
             uint32_t in0_h_dim = num_blocks_written % in0_h_tiles;
             uint32_t in0_tensor_tile_id = (num_blocks_written / in0_h_tiles * in0_CHtWt) + (in0_h_dim * in0_w_tiles);
 
-            reader_desc.runtime_args.emplace_back(
+            reader_desc.emplace_runtime_args(
                 core,
-                std::vector<uint32_t>{
-                    (std::uint32_t)in0_buffer->address(),
+                {
+                    in0_buffer,
                     num_blocks_per_core,  // num_blocks
                     in0_h_dim,            // in0_h_dim
                     in0_tensor_tile_id,   // in0_tensor_tile_id
                 });
 
-            writer_desc.runtime_args.emplace_back(
+            writer_desc.emplace_runtime_args(
                 core,
-                std::vector<uint32_t>{
-                    (std::uint32_t)out_buffer->address(),  // out_tensor_addr
+                {
+                    out_buffer,  // out_tensor_addr
                     num_blocks_per_core * per_tensor_tiles,
                     num_blocks_written * per_tensor_tiles,
                 });

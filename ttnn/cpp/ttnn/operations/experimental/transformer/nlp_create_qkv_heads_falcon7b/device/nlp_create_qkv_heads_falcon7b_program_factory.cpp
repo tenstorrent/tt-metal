@@ -123,10 +123,10 @@ tt::tt_metal::ProgramDescriptor NlpCreateQkvHeadsFalcon7BProgramFactory::create_
             TT_ASSERT(false, "Core not in specified core ranges");
         }
 
-        reader_desc.runtime_args.emplace_back(
+        reader_desc.emplace_runtime_args(
             core,
-            std::vector<uint32_t>{
-                (std::uint32_t)in0_buffer->address(),
+            {
+                in0_buffer,
                 num_blocks_per_core * per_tensor_tiles,
                 num_blocks_written * per_tensor_tiles,
             });
@@ -135,12 +135,12 @@ tt::tt_metal::ProgramDescriptor NlpCreateQkvHeadsFalcon7BProgramFactory::create_
         uint32_t q_out_tensor_tile_id =
             (num_blocks_written / q_out_h_tiles * q_out_CHtWt) + (q_out_h_dim * q_out_w_tiles);
 
-        writer_desc.runtime_args.emplace_back(
+        writer_desc.emplace_runtime_args(
             core,
-            std::vector<uint32_t>{
-                (std::uint32_t)q_buffer->address(),            // q_tensor_addr
-                (std::uint32_t)k_buffer->address(),            // k_tensor_addr
-                (std::uint32_t)v_buffer->address(),            // v_tensor_addr
+            {
+                q_buffer,                                      // q_tensor_addr
+                k_buffer,                                      // k_tensor_addr
+                v_buffer,                                      // v_tensor_addr
                 num_blocks_per_core,                           // num_blocks
                 q_out_h_dim,                                   // q_out_h_dim
                 q_out_tensor_tile_id,                          // q_out_tensor_tile_id

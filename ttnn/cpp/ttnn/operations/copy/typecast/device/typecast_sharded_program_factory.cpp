@@ -152,8 +152,13 @@ tt::tt_metal::ProgramDescriptor TypecastShardedProgramFactory::create_descriptor
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
     reader_desc.config = ReaderConfigDescriptor{};
-    // Common runtime args: every core gets the same {num_tile_per_core} payload.
-    reader_desc.common_runtime_args = {static_cast<uint32_t>(num_tile_per_core)};
+    // Per-core runtime args: reader_unary_sharded.cpp reads num_tiles_per_core via
+    // get_arg_val<uint32_t>(0) (per-core, not common). Every core gets the same payload.
+    auto reader_cores = corerange_to_cores(all_cores, std::nullopt);
+    reader_desc.runtime_args.reserve(reader_cores.size());
+    for (const auto& core : reader_cores) {
+        reader_desc.emplace_runtime_args(core, {static_cast<uint32_t>(num_tile_per_core)});
+    }
 
     std::vector<uint32_t> compute_kernel_args_group_1 = {
         1,                  // per_core_block_cnt

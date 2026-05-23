@@ -181,20 +181,9 @@ tt::tt_metal::ProgramDescriptor EmbeddingsTilizedIndicesProgramFactory::create_d
     uint32_t weight_offset = 0;
 
     auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, false);
-    std::vector<uint32_t> reader_runtime_args = {
-        (std::uint32_t)a.buffer()->address(),
-        (std::uint32_t)weights.buffer()->address(),
-        (std::uint32_t)0,
-        (std::uint32_t)0,
-        (std::uint32_t)0,
-        (std::uint32_t)0,
-        (std::uint32_t)0,
-    };
-    if (embeddings_type == EmbeddingsType::PADDED) {
-        reader_runtime_args.push_back(pad_token.value());
-    }
-    std::vector<uint32_t> writer_runtime_args = {
-        (std::uint32_t)output.buffer()->address(), (std::uint32_t)output_page_size, (std::uint32_t)0, (std::uint32_t)0};
+    auto* a_buffer = a.buffer();
+    auto* weights_buffer = weights.buffer();
+    auto* output_buffer = output.buffer();
 
     uint32_t row = 0;
     uint32_t tiles_per_tile_row = (num_cols + TILE_HEIGHT - 1) / TILE_HEIGHT;
@@ -216,20 +205,23 @@ tt::tt_metal::ProgramDescriptor EmbeddingsTilizedIndicesProgramFactory::create_d
 
         // Reader
         {
-            reader_runtime_args[2] = curr_tile;
-            reader_runtime_args[3] = face_offset;
-            reader_runtime_args[4] = local_num_blocks;
-            reader_runtime_args[5] = col_offset;
-            reader_runtime_args[6] = (col_offset % FACE_HEIGHT);  // starting col in the face row
-            reader_desc.runtime_args.emplace_back(core, reader_runtime_args);
+            KernelDescriptor::RTArgList reader_args;
+            reader_args.push_back(a_buffer);
+            reader_args.push_back(weights_buffer);
+            reader_args.push_back(curr_tile);
+            reader_args.push_back(face_offset);
+            reader_args.push_back(local_num_blocks);
+            reader_args.push_back(col_offset);
+            reader_args.push_back(static_cast<uint32_t>(col_offset % FACE_HEIGHT));  // starting col in the face row
+            if (embeddings_type == EmbeddingsType::PADDED) {
+                reader_args.push_back(pad_token.value());
+            }
+            reader_desc.emplace_runtime_args(core, reader_args);
         }
 
         // Writer
-        {
-            writer_runtime_args[2] = local_num_blocks;
-            writer_runtime_args[3] = weight_offset;
-            writer_desc.runtime_args.emplace_back(core, writer_runtime_args);
-        }
+        writer_desc.emplace_runtime_args(
+            core, {output_buffer, static_cast<uint32_t>(output_page_size), local_num_blocks, weight_offset});
 
         weight_offset += local_num_blocks;
     }

@@ -119,17 +119,18 @@ tt::tt_metal::ProgramDescriptor ConcatenateHeadsProgramFactory::create_descripto
             CoreCoord core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
             uint32_t in0_tensor_tile_id = (core_idx_x * in0_w_tiles) + (core_idx_y * in0_CHtWt);
 
-            reader_desc.runtime_args.emplace_back(
+            reader_desc.emplace_runtime_args(
                 core,
-                std::vector<uint32_t>{
-                    (std::uint32_t)in0_buffer->address(),  // in0_tensor_addr
-                    in0_tensor_tile_id,                    // in0_tensor_tile_id
+                {
+                    in0_buffer,          // in0_tensor_addr
+                    in0_tensor_tile_id,  // in0_tensor_tile_id
                 });
-            writer_desc.runtime_args.emplace_back(
+            writer_desc.emplace_runtime_args(
                 core,
-                std::vector<uint32_t>{
-                    (std::uint32_t)out_buffer->address(),                      // out_tensor_addr
-                    (core_idx_x + core_idx_y * num_cores_c) * per_core_tiles,  // out_tensor_tile_id
+                {
+                    out_buffer,  // out_tensor_addr
+                    static_cast<uint32_t>(
+                        (core_idx_x + core_idx_y * num_cores_c) * per_core_tiles),  // out_tensor_tile_id
                 });
         }
     }

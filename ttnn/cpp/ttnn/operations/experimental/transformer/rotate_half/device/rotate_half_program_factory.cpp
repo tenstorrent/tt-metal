@@ -105,8 +105,7 @@ tt::tt_metal::ProgramDescriptor RotateHalfProgramFactory::create_descriptor(
     reader_desc.core_ranges = core_set;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
     reader_desc.config = ReaderConfigDescriptor{};
-    reader_desc.runtime_args.emplace_back(
-        core, std::vector<uint32_t>{src_buffer->address(), num_rows, half_row_size, 0});
+    reader_desc.emplace_runtime_args(core, {src_buffer, num_rows, half_row_size, static_cast<uint32_t>(0)});
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =
@@ -116,8 +115,7 @@ tt::tt_metal::ProgramDescriptor RotateHalfProgramFactory::create_descriptor(
     writer_desc.core_ranges = core_set;
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
     writer_desc.config = WriterConfigDescriptor{};
-    writer_desc.runtime_args.emplace_back(
-        core, std::vector<uint32_t>{dst_buffer->address(), num_rows, half_row_size, 0});
+    writer_desc.emplace_runtime_args(core, {dst_buffer, num_rows, half_row_size, static_cast<uint32_t>(0)});
 
     std::map<std::string, std::string> bcast_compute_defines = {
         {"BCAST_OP", "mul_tiles_bcast"},

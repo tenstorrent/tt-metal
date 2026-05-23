@@ -175,20 +175,21 @@ tt::tt_metal::ProgramDescriptor SplitFusedQKVAndSplitHeadsProgramFactory::create
         for (int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             CoreCoord core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
 
-            reader_desc.runtime_args.emplace_back(
+            reader_desc.emplace_runtime_args(
                 core,
-                std::vector<uint32_t>{
-                    (std::uint32_t)in0_buffer->address(),                      // in0_tensor_addr,
-                    (core_idx_x + core_idx_y * num_cores_c) * per_core_tiles,  // in0_tensor_tile_id
+                {
+                    in0_buffer,  // in0_tensor_addr
+                    static_cast<uint32_t>(
+                        (core_idx_x + core_idx_y * num_cores_c) * per_core_tiles),  // in0_tensor_tile_id
                 });
-            writer_desc.runtime_args.emplace_back(
+            writer_desc.emplace_runtime_args(
                 core,
-                std::vector<uint32_t>{
-                    (std::uint32_t)q_buffer->address(),                     // q_tensor_addr
-                    (std::uint32_t)k_buffer->address(),                     // k_tensor_addr
-                    (std::uint32_t)v_buffer->address(),                     // v_tensor_addr
-                    (core_idx_x * out_w_tiles) + (core_idx_y * out_CHtWt),  // out_tensor_tile_id
-                    core_idx_x + (core_idx_y * out_CHtWt),                  // out_tensor_tile_id_with_transpose
+                {
+                    q_buffer,                                                                      // q_tensor_addr
+                    k_buffer,                                                                      // k_tensor_addr
+                    v_buffer,                                                                      // v_tensor_addr
+                    static_cast<uint32_t>((core_idx_x * out_w_tiles) + (core_idx_y * out_CHtWt)),  // out_tensor_tile_id
+                    static_cast<uint32_t>(core_idx_x + (core_idx_y * out_CHtWt)),  // out_tensor_tile_id_with_transpose
                 });
         }
     }

@@ -175,10 +175,8 @@ tt::tt_metal::ProgramDescriptor TypecastProgramFactory::create_descriptor(
             TT_THROW("Core not in specified core ranges");
         }
 
-        reader_desc.runtime_args.emplace_back(
-            core, std::vector<uint32_t>{src_buffer->address(), num_items_per_core, num_items_written});
-        writer_desc.runtime_args.emplace_back(
-            core, std::vector<uint32_t>{dst_buffer->address(), num_items_per_core, num_items_written});
+        reader_desc.emplace_runtime_args(core, {src_buffer, num_items_per_core, num_items_written});
+        writer_desc.emplace_runtime_args(core, {dst_buffer, num_items_per_core, num_items_written});
         num_items_written += num_items_per_core;
     }
 
@@ -318,10 +316,8 @@ tt::tt_metal::ProgramDescriptor TypecastSubgridProgramFactory::create_descriptor
 
     uint32_t tile_start_id = 0;
     for (const auto& core : cores) {
-        reader_desc.runtime_args.emplace_back(
-            core, std::vector<uint32_t>{src_buffer->address(), ntiles_per_core, tile_start_id});
-        writer_desc.runtime_args.emplace_back(
-            core, std::vector<uint32_t>{dst_buffer->address(), ntiles_per_core, tile_start_id});
+        reader_desc.emplace_runtime_args(core, {src_buffer, ntiles_per_core, tile_start_id});
+        writer_desc.emplace_runtime_args(core, {dst_buffer, ntiles_per_core, tile_start_id});
         tile_start_id += ntiles_per_core;
     }
 

@@ -55,7 +55,7 @@ tt::tt_metal::ProgramDescriptor NLPConcatHeadsDecodeProgramFactory::create_descr
         .buffer = output.buffer(),
     });
 
-    uint32_t q_base_addr = input_tensor.buffer()->address();
+    auto* input_buffer = input_tensor.buffer();
 
     // cores to read and write to output
     uint32_t num_cores = q_cores.num_cores();  // number of cores of the output
@@ -111,8 +111,6 @@ tt::tt_metal::ProgramDescriptor NLPConcatHeadsDecodeProgramFactory::create_descr
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
     writer_desc.config = WriterConfigDescriptor{};
 
-    uint32_t q_start_addr = q_base_addr;
-
     reader_desc.runtime_args.reserve(num_cores);
     writer_desc.runtime_args.reserve(num_cores);
     for (uint32_t i = 0; i < num_cores; ++i) {
@@ -128,17 +126,15 @@ tt::tt_metal::ProgramDescriptor NLPConcatHeadsDecodeProgramFactory::create_descr
             head_tile_idx * head_size;
 
         const auto& core = cores[i];
-        std::vector<uint32_t> reader_runtime_args;
-        reader_runtime_args.reserve(2 + in_num_cores_x + in_num_cores_y);
-        reader_runtime_args = {
-            in_tile_offset_by_batch,
-            q_start_addr,
-        };
-        reader_runtime_args.insert(reader_runtime_args.end(), noc_x_coords.begin(), noc_x_coords.end());
-        reader_runtime_args.insert(reader_runtime_args.end(), noc_y_coords.begin(), noc_y_coords.end());
+        KernelDescriptor::RTArgList rt_args;
+        rt_args.reserve(2 + in_num_cores_x + in_num_cores_y);
+        rt_args.push_back(in_tile_offset_by_batch);
+        rt_args.push_back(input_buffer);  // q_start_addr — patched on cache hits via BufferBinding
+        rt_args.append(noc_x_coords);
+        rt_args.append(noc_y_coords);
 
-        reader_desc.runtime_args.emplace_back(core, reader_runtime_args);
-        writer_desc.runtime_args.emplace_back(core, std::move(reader_runtime_args));
+        reader_desc.emplace_runtime_args(core, rt_args);
+        writer_desc.emplace_runtime_args(core, rt_args);
     }
 
     desc.kernels.push_back(std::move(reader_desc));
