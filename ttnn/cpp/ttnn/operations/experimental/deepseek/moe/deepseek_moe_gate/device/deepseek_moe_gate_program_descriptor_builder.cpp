@@ -146,13 +146,14 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
         .defines = {},
         .runtime_args = {},
         .common_runtime_args = {},
-        .compiler_include_paths = {},
         .config =
             DataMovementConfigDescriptor{
                 .processor = DataMovementProcessor::RISCV_1,
                 .noc = NOC::RISCV_0_default,
                 .noc_mode = NOC_MODE::DM_DEDICATED_NOC,
             },
+        .compiler_include_paths = {},
+        .buffer_bindings = {},
     };
 
     KernelDescriptor writer{
@@ -164,13 +165,14 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
         .defines = {},
         .runtime_args = {},
         .common_runtime_args = {},
-        .compiler_include_paths = {},
         .config =
             DataMovementConfigDescriptor{
                 .processor = DataMovementProcessor::RISCV_0,
                 .noc = NOC::RISCV_1_default,
                 .noc_mode = NOC_MODE::DM_DEDICATED_NOC,
             },
+        .compiler_include_paths = {},
+        .buffer_bindings = {},
     };
 
     KernelDescriptor compute_k{
@@ -182,8 +184,9 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
         .defines = {},
         .runtime_args = {},
         .common_runtime_args = {},
-        .compiler_include_paths = {},
         .config = compute_config,
+        .compiler_include_paths = {},
+        .buffer_bindings = {},
     };
 
     tt::tt_metal::ProgramDescriptor program_desc;
