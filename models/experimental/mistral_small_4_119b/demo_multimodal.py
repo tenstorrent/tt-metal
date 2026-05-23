@@ -43,6 +43,8 @@ get one even with a real image).
 from __future__ import annotations
 
 import argparse
+import copy
+import gc
 import sys
 import time
 
@@ -112,6 +114,12 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Use unified single-phase loading: keep vision + text resident together with bfloat8_b vision weights.",
     )
+    p.add_argument(
+        "--backend",
+        choices=("ttnn", "hf", "both"),
+        default="ttnn",
+        help="Generation backend to run. Use 'both' to compare TTNN output against HF Torch output.",
+    )
     return p.parse_args()
 
 
@@ -130,6 +138,68 @@ def _state_dict_prefixes(n_text: int, n_vision: int) -> tuple:
         p.append(vision_layer_state_dict_prefix(i))
     p.append("multi_modal_projector.")
     return tuple(p)
+
+
+def _hf_param_to_sd_key(name: str) -> str:
+    if name.startswith("model.vision_tower."):
+        return name[len("model.") :]
+    if name.startswith("model.multi_modal_projector."):
+        return name[len("model.") :]
+    if name.startswith("model.language_model."):
+        return "language_model.model." + name[len("model.language_model.") :]
+    if name == "lm_head.weight":
+        return "language_model.lm_head.weight"
+    return name
+
+
+def _build_hf_mm_ref(full_config, state_dict: dict, n_text: int, n_vision: int):
+    from accelerate import init_empty_weights
+    from accelerate.utils import set_module_tensor_to_device
+    from transformers.models.mistral3.modeling_mistral3 import Mistral3ForConditionalGeneration
+
+    cfg = copy.deepcopy(full_config)
+    cfg.text_config.num_hidden_layers = n_text
+    cfg.vision_config.num_hidden_layers = n_vision
+    for sub in (cfg.text_config, cfg.vision_config):
+        for attr in ("attn_implementation", "_attn_implementation"):
+            if hasattr(sub, attr):
+                setattr(sub, attr, "eager")
+
+    if n_text >= EXPECTED_NUM_LAYERS and n_vision >= VISION_NUM_LAYERS:
+        logger.info("Enabling activation checkpointing for full-layer HF model (36+24)…")
+        cfg.text_config.gradient_checkpointing = True
+        cfg.vision_config.gradient_checkpointing = True
+
+    with init_empty_weights():
+        model = Mistral3ForConditionalGeneration(cfg)
+
+    missing = []
+    for name, _ in model.named_parameters():
+        sd_key = _hf_param_to_sd_key(name)
+        if sd_key not in state_dict:
+            missing.append(name)
+            continue
+        v = state_dict[sd_key]
+        if v.dtype in (torch.float8_e4m3fn, torch.float8_e5m2):
+            scale_inv = state_dict.get(sd_key + "_scale_inv")
+            if scale_inv is None:
+                scale_inv = state_dict.get(sd_key.replace(".weight", ".weight_scale_inv"))
+            v_cast = v.to(torch.float32)
+            if scale_inv is not None:
+                s = scale_inv.to(torch.float32)
+                while s.dim() < v_cast.dim():
+                    s = s.unsqueeze(-1)
+                v_cast = v_cast * s
+            tensor = v_cast.to(torch.bfloat16)
+            del v_cast
+        else:
+            tensor = v.to(torch.bfloat16)
+        set_module_tensor_to_device(model, name, "cpu", value=tensor)
+        del tensor
+
+    if missing:
+        logger.warning(f"HF model missing keys (first 5): {missing[:5]}")
+    return model.eval()
 
 
 # ── Mesh device open/close ─────────────────────────────────────────────────────
@@ -319,6 +389,50 @@ def generate(
     return tokenizer.decode(generated_ids, skip_special_tokens=True)
 
 
+def generate_hf(
+    full_config,
+    state_dict: dict,
+    tokenizer,
+    pixel_values: torch.Tensor,
+    input_ids: torch.Tensor,
+    prompt: str,
+    max_new_tokens: int,
+    n_text_layers: int,
+    n_vision_layers: int,
+) -> str:
+    logger.info(
+        f"Building HF Torch model (text_layers={n_text_layers}, vision_layers={n_vision_layers}, dtype=bf16 CPU)…"
+    )
+    t0 = time.perf_counter()
+    model = _build_hf_mm_ref(full_config, state_dict, n_text_layers, n_vision_layers)
+    logger.info(f"HF model built in {time.perf_counter() - t0:.1f}s")
+
+    image_sizes = torch.tensor([[pixel_values.shape[-2], pixel_values.shape[-1]]], dtype=torch.long)
+    generated_ids = []
+    cur_input_ids = input_ids
+
+    print(f"\n[HF Torch | {prompt}]\n→ ", end="", flush=True)
+    t0 = time.perf_counter()
+    with torch.inference_mode():
+        for _ in range(max_new_tokens):
+            out = model(pixel_values=pixel_values, input_ids=cur_input_ids, image_sizes=image_sizes)
+            next_id = int(torch.argmax(out.logits[:, -1, :], dim=-1).item())
+            generated_ids.append(next_id)
+            print(tokenizer.decode([next_id], skip_special_tokens=True), end="", flush=True)
+            if tokenizer.eos_token_id is not None and next_id == tokenizer.eos_token_id:
+                break
+            cur_input_ids = torch.cat([cur_input_ids, torch.tensor([[next_id]], dtype=torch.long)], dim=-1)
+    print()
+
+    elapsed = time.perf_counter() - t0
+    if generated_ids:
+        logger.info(f"HF generated {len(generated_ids)} tokens | avg {elapsed * 1000 / len(generated_ids):.0f} ms/tok")
+    text = tokenizer.decode(generated_ids, skip_special_tokens=True)
+    del model
+    gc.collect()
+    return text
+
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 
@@ -371,61 +485,86 @@ def main() -> None:
     logger.info(f"pixel_values: {tuple(pixel_values.shape)} bf16, input_ids: {tuple(input_ids.shape)} long")
     num_image_tokens = int((input_ids[0] == image_token_id).sum().item())
 
-    # Mesh device + orchestrator
-    mesh_device = _open_mesh_device()
-    try:
-        # KV cache must cover the prefill prompt + every decode token.
-        max_seq_len = input_ids.shape[-1] + args.max_new_tokens + 16
+    tt_text = None
+    hf_text = None
 
-        if args.unified:
-            logger.info(
-                f"Building unified orchestrator (text_layers={args.n_text_layers}, "
-                f"vision_layers={args.n_vision_layers}, max_seq_len={max_seq_len}, vision_dtype=bfloat8_b)…"
-            )
-            logger.info(
-                "Unified mode keeps vision + projector + text resident together; "
-                "the first encode_image() call performs the one-time combined load."
-            )
-            model = TtMistral3ForConditionalGenerationUnified(
-                mesh_device=mesh_device,
-                state_dict=state_dict,
-                text_config=text_cfg,
-                image_token_id=image_token_id,
-                num_text_layers=args.n_text_layers,
-                num_vision_layers=args.n_vision_layers,
-                max_seq_len=max_seq_len,
-                vision_dtype=ttnn.bfloat8_b,
-            )
-        else:
-            logger.info(
-                f"Building phase-based orchestrator (text_layers={args.n_text_layers}, "
-                f"vision_layers={args.n_vision_layers}, max_seq_len={max_seq_len})…"
-            )
-            model = TtMistral3ForConditionalGeneration(
-                mesh_device=mesh_device,
-                state_dict=state_dict,
-                text_config=text_cfg,
-                image_token_id=image_token_id,
-                num_text_layers=args.n_text_layers,
-                num_vision_layers=args.n_vision_layers,
-                max_seq_len=max_seq_len,
-            )
+    if args.backend in ("ttnn", "both"):
+        mesh_device = _open_mesh_device()
+        try:
+            # KV cache must cover the prefill prompt + every decode token.
+            max_seq_len = input_ids.shape[-1] + args.max_new_tokens + 16
 
-        with torch.no_grad():
-            generate(
-                model=model,
-                tokenizer=tokenizer,
-                rotary_cls=Mistral4RotaryEmbedding,
-                text_config=text_cfg,
-                pixel_values=pixel_values,
-                input_ids=input_ids,
-                prompt=args.prompt,
-                image_token_id=image_token_id,
-                max_new_tokens=args.max_new_tokens,
-            )
-    finally:
-        ttnn.close_mesh_device(mesh_device)
-        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+            if args.unified:
+                logger.info(
+                    f"Building unified orchestrator (text_layers={args.n_text_layers}, "
+                    f"vision_layers={args.n_vision_layers}, max_seq_len={max_seq_len}, vision_dtype=bfloat8_b)…"
+                )
+                logger.info(
+                    "Unified mode keeps vision + projector + text resident together; "
+                    "the first encode_image() call performs the one-time combined load."
+                )
+                model = TtMistral3ForConditionalGenerationUnified(
+                    mesh_device=mesh_device,
+                    state_dict=state_dict,
+                    text_config=text_cfg,
+                    image_token_id=image_token_id,
+                    num_text_layers=args.n_text_layers,
+                    num_vision_layers=args.n_vision_layers,
+                    max_seq_len=max_seq_len,
+                    vision_dtype=ttnn.bfloat8_b,
+                )
+            else:
+                logger.info(
+                    f"Building phase-based orchestrator (text_layers={args.n_text_layers}, "
+                    f"vision_layers={args.n_vision_layers}, max_seq_len={max_seq_len})…"
+                )
+                model = TtMistral3ForConditionalGeneration(
+                    mesh_device=mesh_device,
+                    state_dict=state_dict,
+                    text_config=text_cfg,
+                    image_token_id=image_token_id,
+                    num_text_layers=args.n_text_layers,
+                    num_vision_layers=args.n_vision_layers,
+                    max_seq_len=max_seq_len,
+                )
+
+            with torch.no_grad():
+                tt_text = generate(
+                    model=model,
+                    tokenizer=tokenizer,
+                    rotary_cls=Mistral4RotaryEmbedding,
+                    text_config=text_cfg,
+                    pixel_values=pixel_values,
+                    input_ids=input_ids,
+                    prompt=args.prompt,
+                    image_token_id=image_token_id,
+                    max_new_tokens=args.max_new_tokens,
+                )
+            del model
+        finally:
+            ttnn.close_mesh_device(mesh_device)
+            ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+        gc.collect()
+
+    if args.backend in ("hf", "both"):
+        hf_text = generate_hf(
+            full_config=cfg,
+            state_dict=state_dict,
+            tokenizer=tokenizer,
+            pixel_values=pixel_values,
+            input_ids=input_ids,
+            prompt=args.prompt,
+            max_new_tokens=args.max_new_tokens,
+            n_text_layers=args.n_text_layers,
+            n_vision_layers=args.n_vision_layers,
+        )
+
+    if args.backend == "both":
+        logger.info("=" * 80)
+        logger.info("Generation comparison")
+        logger.info(f"TTNN: {tt_text!r}")
+        logger.info(f"HF  : {hf_text!r}")
+        logger.info("=" * 80)
 
 
 if __name__ == "__main__":

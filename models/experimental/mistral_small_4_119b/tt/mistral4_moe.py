@@ -728,7 +728,7 @@ class TtMistral4MoELayer(LightweightModule):
                     x,
                     self.expert_gate_up_list[i],
                     compute_kernel_config=self.expert_compute_kernel_config,
-                    dtype=ttnn.bfloat16,
+                    dtype=ttnn.bfloat8_b,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     program_config=gu_pc,
                 )
@@ -746,7 +746,7 @@ class TtMistral4MoELayer(LightweightModule):
                     hidden_i,
                     self.expert_down_list[i],
                     compute_kernel_config=self.expert_compute_kernel_config,
-                    dtype=ttnn.bfloat16,
+                    dtype=ttnn.bfloat8_b,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     program_config=d_pc,
                 )
@@ -785,7 +785,7 @@ class TtMistral4MoELayer(LightweightModule):
                 x_exp,
                 self.expert_gate_up,
                 compute_kernel_config=self.expert_compute_kernel_config,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             ttnn.deallocate(x_exp)
@@ -811,7 +811,7 @@ class TtMistral4MoELayer(LightweightModule):
                 hidden_all,
                 self.expert_down,
                 compute_kernel_config=self.expert_compute_kernel_config,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             ttnn.deallocate(hidden_all)
@@ -879,7 +879,7 @@ class TtMistral4MoELayer(LightweightModule):
                 x,
                 gate_up_w,
                 compute_kernel_config=self.expert_compute_kernel_config,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
                 memory_config=_mem,
             )
             if _own_gu_w:
@@ -909,7 +909,7 @@ class TtMistral4MoELayer(LightweightModule):
                 hidden,
                 down_w,
                 compute_kernel_config=self.expert_compute_kernel_config,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
                 memory_config=_mem,
             )
             ttnn.deallocate(hidden)
@@ -968,7 +968,7 @@ class TtMistral4MoELayer(LightweightModule):
                     x,
                     self.expert_gate_up_list[i],
                     compute_kernel_config=self.expert_compute_kernel_config,
-                    dtype=ttnn.bfloat16,
+                    dtype=ttnn.bfloat8_b,
                     memory_config=_mem,
                     program_config=gu_pc,
                 )
@@ -984,7 +984,7 @@ class TtMistral4MoELayer(LightweightModule):
                     hidden_i,
                     self.expert_down_list[i],
                     compute_kernel_config=self.expert_compute_kernel_config,
-                    dtype=ttnn.bfloat16,
+                    dtype=ttnn.bfloat8_b,
                     memory_config=_mem,
                     program_config=d_pc,
                 )
@@ -1010,7 +1010,7 @@ class TtMistral4MoELayer(LightweightModule):
                 x_exp,
                 self.expert_gate_up,
                 compute_kernel_config=self.expert_compute_kernel_config,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
                 memory_config=_mem,
             )
             ttnn.deallocate(x_exp)
@@ -1026,7 +1026,7 @@ class TtMistral4MoELayer(LightweightModule):
                 hidden_all,
                 self.expert_down,
                 compute_kernel_config=self.expert_compute_kernel_config,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
                 memory_config=_mem,
             )
             ttnn.deallocate(hidden_all)
