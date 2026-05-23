@@ -62,21 +62,25 @@ FORCE_INLINE void matmul_phase_v3(
 #ifdef PACKER_L1_ACC
     PACK((llk_pack_reconfig_l1_acc(0)));  // block 0 must overwrite, not accumulate
 #endif
-    for (uint32_t block = 0; block < num_blocks; ++block) {
-        const bool last_out = (block == num_blocks - 1);
 
+    // Reserve the FULL per-core output block in partials once. Then use
+    // pack_tile's output_tile_index parameter to write each subblock to an
+    // absolute slot WITHIN this reserved region. WrPtr does NOT advance until
+    // the final cb_push_back at the end of the K-loop — so on K-blocks
+    // 1..N-1 the L1_ACC packs land at the SAME L1 addresses as K-block 0's
+    // packs, accumulating physically. Saves the per-K-block pop+repush dance.
+    cb_reserve_back(partials_cb_id, out_block_num_tiles);
+    for (uint32_t block = 0; block < num_blocks; ++block) {
         cb_wait_front(in0_cb_id, in0_block_num_tiles);
         cb_wait_front(in1_cb_id, in1_block_num_tiles);
 
         int in0_index_subblock_offset = 0;
+        uint32_t partials_slot_idx = 0;  // absolute slot within partials_cb's reserved region
         for (uint32_t sb_m = 0; sb_m < in0_num_subblocks; ++sb_m) {
             int in1_index_subblock_offset = 0;
             for (uint32_t sb_n = 0; sb_n < in1_num_subblocks; ++sb_n) {
                 tile_regs_acquire();
 
-                // matmul_block: one call computes the entire out_subblock_h ×
-                // out_subblock_w output block for ONE inner-dim K step. Loop
-                // over in0_block_w K steps to accumulate into dst[0..nt-1].
                 uint32_t dst_index = 0;
                 uint32_t in0_index = in0_index_subblock_offset;
                 uint32_t in1_index = in1_index_subblock_offset;
@@ -98,26 +102,15 @@ FORCE_INLINE void matmul_phase_v3(
                 tile_regs_commit();
                 tile_regs_wait();
 
-                cb_reserve_back(partials_cb_id, out_subblock_num_tiles);
                 for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
-                    pack_tile(i, partials_cb_id);
+                    pack_tile<true>(i, partials_cb_id, partials_slot_idx + i);
                 }
-                cb_push_back(partials_cb_id, out_subblock_num_tiles);
+                partials_slot_idx += out_subblock_num_tiles;
 
                 tile_regs_release();
                 in1_index_subblock_offset += out_subblock_w;
             }
             in0_index_subblock_offset += in0_subblock_num_tiles;
-        }
-
-        // Pop what we just pushed on all but the LAST block. This keeps the
-        // partials CB ring at the same WP=RP modulo so the next K-block's
-        // packer L1_ACC writes hit the same physical L1 slots.
-        if (!last_out) {
-            for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
-                cb_wait_front(partials_cb_id, out_subblock_num_tiles);
-                cb_pop_front(partials_cb_id, out_subblock_num_tiles);
-            }
         }
 
 #ifdef PACKER_L1_ACC
@@ -130,6 +123,8 @@ FORCE_INLINE void matmul_phase_v3(
         cb_pop_front(in0_cb_id, in0_block_num_tiles);
         cb_pop_front(in1_cb_id, in1_block_num_tiles);
     }
+    // Make the accumulated partials visible to the second-pass loop below.
+    cb_push_back(partials_cb_id, out_block_num_tiles);
 
     // After the K-loop: partials_cb_id has out_block_num_tiles tiles holding
     // the final accumulated sum. Move them through dst into final_cb_id,
@@ -209,14 +204,21 @@ FORCE_INLINE void matmul_phase_fused_gu_v3(
     PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
 
-    for (uint32_t block = 0; block < num_blocks; ++block) {
-        const bool last_out = (block == num_blocks - 1);
+    // Reserve both partials CBs once for the full per-core block. pack_tile
+    // with output_tile_index writes to absolute slots; WrPtr doesn't advance
+    // until cb_push_back below. Across K-blocks 1..N-1, L1_ACC packs land
+    // back in the SAME L1 slots — accumulating physically — which is what
+    // we want. No per-K-block pop+repush needed.
+    cb_reserve_back(partials_gu_cb_id, out_block_num_tiles);
+    cb_reserve_back(partials_up_cb_id, out_block_num_tiles);
 
+    for (uint32_t block = 0; block < num_blocks; ++block) {
         cb_wait_front(x_cb_id, in0_block_num_tiles);
         cb_wait_front(gate_cb_id, in1_block_num_tiles);
         cb_wait_front(up_cb_id, in1_block_num_tiles);
 
         int in0_index_subblock_offset = 0;
+        uint32_t partials_slot_idx = 0;
         for (uint32_t sb_m = 0; sb_m < in0_num_subblocks; ++sb_m) {
             int in1_index_subblock_offset = 0;
             for (uint32_t sb_n = 0; sb_n < in1_num_subblocks; ++sb_n) {
@@ -242,11 +244,9 @@ FORCE_INLINE void matmul_phase_fused_gu_v3(
                 }
                 tile_regs_commit();
                 tile_regs_wait();
-                cb_reserve_back(partials_gu_cb_id, out_subblock_num_tiles);
                 for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
-                    pack_tile(i, partials_gu_cb_id);
+                    pack_tile<true>(i, partials_gu_cb_id, partials_slot_idx + i);
                 }
-                cb_push_back(partials_gu_cb_id, out_subblock_num_tiles);
                 tile_regs_release();
 
                 // --- Up matmul: x * up -> partials_up (same x, different in1) ---
@@ -271,28 +271,15 @@ FORCE_INLINE void matmul_phase_fused_gu_v3(
                 }
                 tile_regs_commit();
                 tile_regs_wait();
-                cb_reserve_back(partials_up_cb_id, out_subblock_num_tiles);
                 for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
-                    pack_tile(i, partials_up_cb_id);
+                    pack_tile<true>(i, partials_up_cb_id, partials_slot_idx + i);
                 }
-                cb_push_back(partials_up_cb_id, out_subblock_num_tiles);
                 tile_regs_release();
+                partials_slot_idx += out_subblock_num_tiles;
 
                 in1_index_subblock_offset += out_subblock_w;
             }
             in0_index_subblock_offset += in0_subblock_num_tiles;
-        }
-
-        // Pop the just-pushed tiles on all but the LAST K-block so the
-        // partials CB rings stay at WP=RP modulo, letting the next K-block's
-        // L1_ACC writes hit the same L1 slots.
-        if (!last_out) {
-            for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
-                cb_wait_front(partials_gu_cb_id, out_subblock_num_tiles);
-                cb_pop_front(partials_gu_cb_id, out_subblock_num_tiles);
-                cb_wait_front(partials_up_cb_id, out_subblock_num_tiles);
-                cb_pop_front(partials_up_cb_id, out_subblock_num_tiles);
-            }
         }
 
 #ifdef PACKER_L1_ACC
@@ -305,6 +292,9 @@ FORCE_INLINE void matmul_phase_fused_gu_v3(
         cb_pop_front(gate_cb_id, in1_block_num_tiles);
         cb_pop_front(up_cb_id, in1_block_num_tiles);
     }
+    // Make the accumulated partials visible to the second-pass copy loops.
+    cb_push_back(partials_gu_cb_id, out_block_num_tiles);
+    cb_push_back(partials_up_cb_id, out_block_num_tiles);
 
     // After K-loop: partials_gu holds gate-matmul accumulator,
     // partials_up holds up-matmul accumulator. Copy each to its intermed
