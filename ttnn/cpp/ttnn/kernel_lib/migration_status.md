@@ -108,6 +108,39 @@ operation structs is not a blocker") add the struct before migrating:
 | `DestReuseBinarySfpu` (load CB to D1, run SFPU binary against running D0) | batch_norm_sfpu_kernel, running_statistics_sfpu_kernel | **gap** — not yet added. Blocks ~5 SFPU kernels. |
 | DEST-accumulating BinaryFpu (`add_tiles_init(acc_to_dest=true)`) | `*_pre_allgather_2d.cpp` merge-core | **gap** |
 | BlockIterOffset with runtime offset (`block.to_global(i)`) | layernorm gamma/beta path | partial — chain has `BlockIterOffset` index mode, runtime-offset variant TBD |
+| `TanhDerivative<Approx, Slot>` | tanh_bw | available (added `ef60346171a` in `eltwise_activations.hpp`) |
+| `GeluDerivative<Approx, Slot>` | gelu_bw | available (added `ef60346171a` in `eltwise_activations.hpp`) |
+| `Logsigmoid<In0, In1, Out>` (binary in-DEST 3-arg) | logsigmoid_kernel | available (added `ef60346171a`) |
+| `Cumsum<Slot>{first}` | intimg_compute (still blocked on transpose_wh) | available (added `ef60346171a`) |
+| `Dropout<Slot>{prob, scale}` (init out-of-band: `dropout_kernel_init(seed)`) | experimental/dropout | available (added `6cf9b8a4d11`) |
+| `Typecast<InDF, OutDF, Slot>` + program-factory numeric defines | typecast (both regular + sharded) | available (added `6589d8167d8`) |
+| CallerManaged + OperandKind::Block index cycling within a window without popping | groupnorm.cpp / groupnorm_sharded_v2.cpp mul-by-input_mask blocks | **gap** — tried `chain<subblock_w> + CallerManaged + Block` for cycling; numerically wrong on `test_group_norm_large_ex_external_cb`. Likely need explicit window-rewind semantics or `HeldBulk` + `BlockSize` for the second operand. |
+
+## Patterns left raw — root causes
+
+Remaining truly-blocked patterns from PARTIAL kernels:
+
+1. **Welford accumulator** (layernorm_welford, layernorm_large_tensor_welford, welford_groupnorm[_sharded_v2]) — in-DEST persistent accumulator across blocks combined with `transpose_wh_tile` interleaved with `welford_update` / `welford_finalize_to_row` dual-pack. No chain element wraps `welford_*` LLKs and the chain model assumes per-call DEST acquire/release.
+
+2. **`transpose_wh_tile`** — no chain primitive. Used in welford finalize, ema, rotary single-tile (matmul rotate_half path), permute kernels.
+
+3. **Fused FPU + SFPU + reduce in one DEST acquire window** (layernorm_large_tensor block A — pass-1 variance calc with interleaved sub_bcast/binary_dest_reuse/square_tile/reduce_init+reduce_tile/mul_unary_tile). Chain stages can't interleave with `reduce_tile` inside the same DEST acquire. HQ §"Control-flow shape" calls this OOS.
+
+4. **Macro-injected SFPU activation** (`SFPU_OP_INIT_ACTIVATION` / `SFPU_OP_CHAIN_0` in layernorm.cpp, eltwise_sfpu, where_tss_kernel, eltwise_binary_no_bcast) — chain has no element that wraps a user-defined preprocessor macro that expands to arbitrary SFPU calls.
+
+5. **`chain_llk` DSL** (layernorm_distributed/layernorm_post_allgather.cpp gamma/beta path) — separate chain DSL with its own normed_output_node / gamma_optional_node / beta_optional_node nodes. Migrating to `compute_kernel_lib::eltwise_chain` would mean rewriting the `chain_llk` graph layer.
+
+6. **L1 packer accumulator** (`pack_reconfig_l1_acc(1)` in groupnorm_sharded_v2.cpp `(x-E[x])^2` block, minimal_matmul, deepseek_prefill) — chain doesn't expose L1 acc mode for `PackTile`.
+
+7. **Runtime CB ids in template args** (rotary_embedding_llama_fused_qk q/k branch, MUL_TILES helper in rotary_embedding.cpp) — chain elements require constexpr CB ids; runtime-selected CB ids force a `if constexpr (is_q)` branch that may exceed TRISC2 code size budget.
+
+8. **`matmul_tiles` / `matmul_block`** — used by rotary `rotate_half` and conv3d / minimal_matmul; not in scope for eltwise_chain. Memory note: tile matmul is a bad pattern — only block matmul helpers should be used.
+
+9. **Cumulative wait + tile-indexed access** (moreh_softmax_h.cpp inner exp+mask loop, moreh_softmax_backward_h.cpp tile-indexed mul_bcast_rows + sub) — chain can express via `Bulk + Block + TileBaseRuntime` but the conditional mask-on-last-tile requires splitting into two chains plus careful TileBase math; deferred as low ROI vs the test surface they cover.
+
+10. **`reshuffle_rows_tile`** (embedding_backward) — no chain primitive.
+
+11. **`rand_tile` with runtime seed** (bernoulli, uniform, sampling) — `RandTile<Seed>` chain element has Seed as NTTP; runtime seed forces using `rand_tile_init(seed)` outside chain + struct without init (already handled for Dropout, can replicate).
 
 ## Methodology — per-file audit before commit
 
