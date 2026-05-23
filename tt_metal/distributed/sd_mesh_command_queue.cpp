@@ -119,7 +119,6 @@ void SDMeshCommandQueue::read_shard_from_device(
     const std::optional<BufferRegion>& region,
     std::unordered_map<IDevice*, uint32_t>&,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    std::cout << "Read shard from device" << std::endl;
     if (!mesh_device_->impl().is_local(device_coord)) {
         return;
     }
@@ -137,7 +136,6 @@ void SDMeshCommandQueue::read_shard_from_device(
     }
 
     tt::tt_metal::detail::ReadFromBuffer(*shard_view, static_cast<uint8_t*>(dst));
-    std::cout << "Read shard from device done" << std::endl;
 }
 
 void SDMeshCommandQueue::submit_memcpy_request(

@@ -15,6 +15,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/memory_pin.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
@@ -49,6 +50,54 @@ Tensor make_zero_host_tensor(const TensorSpec& spec) {
         case DataType::BFLOAT8_B:
         case DataType::UINT32:
             return Tensor::from_vector<uint32_t>(std::vector<uint32_t>(bytes / sizeof(uint32_t)), spec);
+        case DataType::INVALID: TT_THROW("H2DStreamService: invalid global_spec data type");
+    }
+    TT_THROW("Unreachable");
+}
+
+// Zero-copy wrap of caller-provided raw bytes into a host Tensor whose spec
+// matches `spec` exactly (ROW_MAJOR + default MemoryConfig only — see caller).
+//
+// Why const_cast: Tensor::from_borrowed_data takes a non-const Span as an API
+// artifact, but the resulting tensor is treated as read-only along the
+// forward_to_tensor pipeline (mapper reads; H2DSocket::write copies out).
+// Why empty MemoryPin: the borrowed tensor never escapes forward_to_tensor's
+// stack frame, and H2DSocket::write is synchronous, so the caller's bytes are
+// guaranteed alive for the whole transit.
+Tensor make_borrowed_host_tensor(ttsl::Span<const std::byte> bytes, const TensorSpec& spec) {
+    auto* raw = const_cast<std::byte*>(bytes.data());
+    const auto& shape = spec.logical_shape();
+    switch (spec.data_type()) {
+        case DataType::BFLOAT16:
+            return Tensor::from_borrowed_data<bfloat16>(
+                ttsl::Span<bfloat16>(reinterpret_cast<bfloat16*>(raw), bytes.size() / sizeof(bfloat16)),
+                shape,
+                MemoryPin{});
+        case DataType::FLOAT32:
+            return Tensor::from_borrowed_data<float>(
+                ttsl::Span<float>(reinterpret_cast<float*>(raw), bytes.size() / sizeof(float)), shape, MemoryPin{});
+        case DataType::INT32:
+            return Tensor::from_borrowed_data<int32_t>(
+                ttsl::Span<int32_t>(reinterpret_cast<int32_t*>(raw), bytes.size() / sizeof(int32_t)),
+                shape,
+                MemoryPin{});
+        case DataType::UINT8:
+            return Tensor::from_borrowed_data<uint8_t>(
+                ttsl::Span<uint8_t>(reinterpret_cast<uint8_t*>(raw), bytes.size() / sizeof(uint8_t)),
+                shape,
+                MemoryPin{});
+        case DataType::UINT16:
+            return Tensor::from_borrowed_data<uint16_t>(
+                ttsl::Span<uint16_t>(reinterpret_cast<uint16_t*>(raw), bytes.size() / sizeof(uint16_t)),
+                shape,
+                MemoryPin{});
+        case DataType::BFLOAT4_B:
+        case DataType::BFLOAT8_B:
+        case DataType::UINT32:
+            return Tensor::from_borrowed_data<uint32_t>(
+                ttsl::Span<uint32_t>(reinterpret_cast<uint32_t*>(raw), bytes.size() / sizeof(uint32_t)),
+                shape,
+                MemoryPin{});
         case DataType::INVALID: TT_THROW("H2DStreamService: invalid global_spec data type");
     }
     TT_THROW("Unreachable");
@@ -156,13 +205,27 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
     TT_FATAL(cfg_.fifo_size_bytes > 0, "H2DStreamService: fifo_size_bytes must be > 0");
     TT_FATAL(cfg_.scratch_cb_size_bytes > 0, "H2DStreamService: scratch_cb_size_bytes must be > 0");
 
-    // --- B2: build mapper, derive per-shard spec & topology in one pass -------
-    // Running the mapper on a zero-filled host tensor gives us both the per-shard
-    // TensorSpec (mapper preserves layout, only resizes the shape) and the
-    // TensorTopology (participating coords + placement). Doing it once and
-    // reusing both outputs avoids a second mapper invocation.
-    mapper_ = ttnn::distributed::create_mesh_mapper(*mesh_device_, cfg_.mapper_config);
-    TT_FATAL(mapper_ != nullptr, "H2DStreamService: create_mesh_mapper returned null");
+    // --- B2: take ownership of the mapper (defaulting to replicate-on-all if
+    //         the caller didn't supply one), then derive per-shard spec &
+    //         topology in one pass --------------------------------------------
+    // If no mapper is provided we default to replicating on every mesh dim.
+    // For a 1x1 mesh this is the identity mapping; for an NxM mesh it puts the
+    // full tensor on every device. Sharded distributions require an explicit
+    // user-supplied mapper because the placement decision is non-default.
+    //
+    // The mapper is normally caller-built (via create_mesh_mapper) so the same
+    // instance can be reused outside this service if desired. Running it once
+    // on a zero-filled host tensor gives us both the per-shard TensorSpec
+    // (mapper preserves layout, only resizes the shape) and the TensorTopology
+    // (participating coords + placement). Doing it once and reusing both
+    // outputs avoids a second mapper invocation.
+    if (cfg_.mapper == nullptr) {
+        ttsl::SmallVector<distributed::MeshMapperConfig::Placement> replicate_all(
+            mesh_device_->shape().dims(), distributed::MeshMapperConfig::Replicate{});
+        cfg_.mapper = ttnn::distributed::create_mesh_mapper(
+            *mesh_device_, distributed::MeshMapperConfig{.placements = std::move(replicate_all)});
+    }
+    mapper_ = std::move(cfg_.mapper);
 
     const auto distributed_dummy = (*mapper_)(make_zero_host_tensor(cfg_.global_spec));
     const auto& per_shard_spec = distributed_dummy.tensor_spec();
@@ -282,8 +345,45 @@ std::vector<distributed::H2DSocket*> H2DStreamService::get_sockets() const {
 }
 
 void H2DStreamService::forward_to_tensor(ttsl::Span<const std::byte> bytes) {
-    (void)bytes;
-    TT_THROW("H2DStreamService::forward_to_tensor(bytes) not implemented yet");
+    // --- S1: validate -----------------------------------------------------------
+    // Bytes must equal the packed size of one full global tensor; partial transfers
+    // aren't supported because the persistent kernel's chunk count is baked into
+    // its CT args.
+    const size_t expected = cfg_.global_spec.compute_packed_buffer_size_bytes();
+    TT_FATAL(
+        bytes.size() == expected,
+        "H2DStreamService::forward_to_tensor: span size {} B does not match global_spec packed size {} B",
+        bytes.size(),
+        expected);
+
+    // ROW_MAJOR + default MemoryConfig is the only combination where the
+    // borrowed-data wrap and the mapper's zero-copy fast path both stay engaged.
+    // Anything else would either (a) trip the spec-mismatch check in the Tensor
+    // overload below because Tensor::from_borrowed_data hardcodes ROW_MAJOR /
+    // default MemoryConfig in its produced spec, or (b) eat a normalization copy
+    // inside the mapper's create_host_buffer_from_span. Defer TILE / sharded-
+    // memory support to a future pass.
+    TT_FATAL(
+        cfg_.global_spec.layout() == Layout::ROW_MAJOR,
+        "H2DStreamService::forward_to_tensor(span): global_spec must be ROW_MAJOR (got {}). "
+        "Use the Tensor overload with a pre-distributed host tensor for other layouts.",
+        cfg_.global_spec.layout());
+
+    // --- S2: wrap bytes as a borrowed host tensor (zero-copy) -------------------
+    Tensor borrowed = make_borrowed_host_tensor(bytes, cfg_.global_spec);
+
+    // --- S3: distribute via the cached mapper -----------------------------------
+    // For Replicate placements this stays zero-copy (mapper emplaces one shared
+    // HostBuffer at every coord). For Shard placements the mapper materializes
+    // per-shard buffers via xtensor chunking — one full input-size copy.
+    Tensor distributed = (*mapper_)(borrowed);
+
+    // --- S4: delegate to the Tensor path ----------------------------------------
+    // The Tensor overload re-asserts that `distributed.tensor_spec()` matches
+    // `device_tensor_.tensor_spec()`; since `distributed` came from the same
+    // mapper that produced the backing tensor's per-shard spec at construction,
+    // this should hold by construction.
+    forward_to_tensor(distributed);
 }
 
 void H2DStreamService::forward_to_tensor(const Tensor& host_tensor) {
