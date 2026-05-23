@@ -6,7 +6,6 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
-#include "impl/buffers/semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
@@ -16,6 +15,11 @@ namespace ttnn::experimental::ccl {
 
 namespace {
 
+// Tensix per-core semaphore-register count. Mirrors the private NUM_SEMAPHORES constant in
+// tt_metal/impl/buffers/semaphore.hpp, duplicated here because that header is not part of
+// the public tt-metalium include set ttnn can reach.
+constexpr uint32_t kNumSemaphoresPerCore = 16;
+
 // Pick a semaphore ID that is unused on every core in `range_set`, given the SemaphoreDescriptors
 // already appended to `desc.semaphores`. Mirrors ProgramDescriptor::find_available_semaphore_id
 // (which checks a single CoreCoord) but generalizes to a CoreRangeSet so the chosen id is valid
@@ -23,7 +27,7 @@ namespace {
 // (0..NUM_SEMAPHORES-1) and may collide across overlapping ranges or exceed the limit.
 uint32_t allocate_free_semaphore_id(
     const ProgramDescriptor& desc, const CoreRangeSet& range_set, CoreType core_type = CoreType::WORKER) {
-    std::bitset<NUM_SEMAPHORES> used;
+    std::bitset<kNumSemaphoresPerCore> used;
     for (const auto& sem : desc.semaphores) {
         if (sem.core_type != core_type) {
             continue;
@@ -32,7 +36,7 @@ uint32_t allocate_free_semaphore_id(
             used.set(sem.id);
         }
     }
-    for (uint32_t i = 0; i < NUM_SEMAPHORES; i++) {
+    for (uint32_t i = 0; i < kNumSemaphoresPerCore; i++) {
         if (!used.test(i)) {
             return i;
         }
