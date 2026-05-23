@@ -107,88 +107,126 @@ inline void _calculate_comp_(const int iterations, std::uint32_t exponent_size_8
 }
 
 template <SfpuType COMP_MODE>
-inline void apply_zero_comp(sfpi::vFloat& v, std::uint32_t exponent_size_8);
+inline void apply_zero_comp(sfpi::vFloat& v);
 
 template <>
-inline void apply_zero_comp<SfpuType::equal_zero>(sfpi::vFloat& v, std::uint32_t exponent_size_8)
+inline void apply_zero_comp<SfpuType::equal_zero>(sfpi::vFloat& v)
 {
-    v_if (_sfpu_is_fp16_zero_(v, exponent_size_8))
+    sfpi::vInt abs_bits = sfpi::reinterpret<sfpi::vInt>(v) & 0x7FFFFFFF;
+    v_if (abs_bits == 0)
     {
-        v = ONE;
+        v = sfpi::vConst1;
     }
     v_else
     {
-        v = ZERO;
+        v = sfpi::vConst0;
     }
     v_endif;
 }
 
 template <>
-inline void apply_zero_comp<SfpuType::not_equal_zero>(sfpi::vFloat& v, std::uint32_t exponent_size_8)
+inline void apply_zero_comp<SfpuType::not_equal_zero>(sfpi::vFloat& v)
 {
-    v_if (_sfpu_is_fp16_zero_(v, exponent_size_8))
+    sfpi::vInt abs_bits = sfpi::reinterpret<sfpi::vInt>(v) & 0x7FFFFFFF;
+    v_if (abs_bits == 0)
     {
-        v = ZERO;
+        v = sfpi::vConst0;
     }
     v_else
     {
-        v = ONE;
+        v = sfpi::vConst1;
     }
     v_endif;
 }
 
 template <>
-inline void apply_zero_comp<SfpuType::less_than_zero>(sfpi::vFloat& v, std::uint32_t /*unused*/)
+inline void apply_zero_comp<SfpuType::less_than_zero>(sfpi::vFloat& v)
 {
-    v_if (v >= ZERO)
+    sfpi::vInt bits     = sfpi::reinterpret<sfpi::vInt>(v);
+    sfpi::vInt abs_bits = bits & 0x7FFFFFFF;
+    sfpi::vInt sign     = bits & 0x80000000;
+    v_if (sign != 0 && abs_bits != 0)
     {
-        v = ZERO;
+        v = sfpi::vConst1;
     }
     v_else
     {
-        v = ONE;
+        v = sfpi::vConst0;
+    }
+    v_endif;
+    sfpi::vInt nan_check = abs_bits - 0x7F800000;
+    v_if (nan_check > 0)
+    {
+        v = sfpi::vConst0;
     }
     v_endif;
 }
 
 template <>
-inline void apply_zero_comp<SfpuType::greater_than_equal_zero>(sfpi::vFloat& v, std::uint32_t /*unused*/)
+inline void apply_zero_comp<SfpuType::greater_than_equal_zero>(sfpi::vFloat& v)
 {
-    v_if (v >= ZERO)
+    sfpi::vInt bits     = sfpi::reinterpret<sfpi::vInt>(v);
+    sfpi::vInt abs_bits = bits & 0x7FFFFFFF;
+    sfpi::vInt sign     = bits & 0x80000000;
+    v_if (sign == 0 || abs_bits == 0)
     {
-        v = ONE;
+        v = sfpi::vConst1;
     }
     v_else
     {
-        v = ZERO;
+        v = sfpi::vConst0;
+    }
+    v_endif;
+    sfpi::vInt nan_check = abs_bits - 0x7F800000;
+    v_if (nan_check > 0)
+    {
+        v = sfpi::vConst0;
     }
     v_endif;
 }
 
 template <>
-inline void apply_zero_comp<SfpuType::greater_than_zero>(sfpi::vFloat& v, std::uint32_t /*unused*/)
+inline void apply_zero_comp<SfpuType::greater_than_zero>(sfpi::vFloat& v)
 {
-    v_if (v > ZERO)
+    sfpi::vInt bits     = sfpi::reinterpret<sfpi::vInt>(v);
+    sfpi::vInt abs_bits = bits & 0x7FFFFFFF;
+    sfpi::vInt sign     = bits & 0x80000000;
+    v_if (sign == 0 && abs_bits != 0)
     {
-        v = ONE;
+        v = sfpi::vConst1;
     }
     v_else
     {
-        v = ZERO;
+        v = sfpi::vConst0;
+    }
+    v_endif;
+    sfpi::vInt nan_check = abs_bits - 0x7F800000;
+    v_if (nan_check > 0)
+    {
+        v = sfpi::vConst0;
     }
     v_endif;
 }
 
 template <>
-inline void apply_zero_comp<SfpuType::less_than_equal_zero>(sfpi::vFloat& v, std::uint32_t /*unused*/)
+inline void apply_zero_comp<SfpuType::less_than_equal_zero>(sfpi::vFloat& v)
 {
-    v_if (v > ZERO)
+    sfpi::vInt bits     = sfpi::reinterpret<sfpi::vInt>(v);
+    sfpi::vInt abs_bits = bits & 0x7FFFFFFF;
+    sfpi::vInt sign     = bits & 0x80000000;
+    v_if (sign != 0 || abs_bits == 0)
     {
-        v = ZERO;
+        v = sfpi::vConst1;
     }
     v_else
     {
-        v = ONE;
+        v = sfpi::vConst0;
+    }
+    v_endif;
+    sfpi::vInt nan_check = abs_bits - 0x7F800000;
+    v_if (nan_check > 0)
+    {
+        v = sfpi::vConst0;
     }
     v_endif;
 }
@@ -199,7 +237,7 @@ inline void _calculate_zero_comp_(std::uint32_t exponent_size_8)
     for (int d = ZERO; d < ITERATIONS; d++)
     {
         sfpi::vFloat v = sfpi::dst_reg[0];
-        apply_zero_comp<COMP_MODE>(v, exponent_size_8);
+        apply_zero_comp<COMP_MODE>(v);
         sfpi::dst_reg[0] = v;
         sfpi::dst_reg++;
     }
