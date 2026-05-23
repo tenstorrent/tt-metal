@@ -29,7 +29,7 @@ ALWI void rpow_tile_init() { MATH((llk_math_eltwise_unary_sfpu_rpow_init<APPROX>
  * | base_val       | The base value to raise to the power of each element in the tile            | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void rpow_tile(uint32_t idst, uint32_t base_val, int vector_mode = (int)VectorMode::RC) {
+ALWI void rpow_tile(uint32_t idst, uint32_t base_val, VectorMode vector_mode = VectorMode::RC) {
     MATH((llk_math_eltwise_unary_sfpu_rpow<APPROX, DST_ACCUM_MODE>(idst, base_val, vector_mode)));
 }
 

@@ -431,7 +431,7 @@ void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
  * Wrapper for fused max-sub-exp-add SFPI kernel.
  * Invokes calculate_fused_max_sub_exp_add_tile via LLK unary SFPU parameters.
  */
-template <bool SDPA_EXP_APPROX_MODE, int vector_mode = (int)VectorMode::C, bool final_norm = false>
+template <bool SDPA_EXP_APPROX_MODE, VectorMode vector_mode = VectorMode::C, bool final_norm = false>
 void fused_max_sub_exp_add_tile(uint32_t idst, int scale_bf16) {
     _llk_math_eltwise_unary_sfpu_params_(
         calculate_fused_max_sub_exp_add_tile<SDPA_EXP_APPROX_MODE, final_norm>, idst, vector_mode, scale_bf16);
@@ -463,7 +463,7 @@ template <
     bool normalize,
     uint32_t block_size,
     uint32_t scale_fp32,
-    int vector_mode = (int)VectorMode::C,
+    VectorMode vector_mode = VectorMode::C,
     bool pop_ms = false,
     bool dense = false>
 ALWI void sdpa_tail_ms_reduce(uint32_t cb_worker_ms, uint32_t cb_prev_ms, uint32_t cb_cur_ms, uint32_t cb_l_for_init) {
@@ -594,7 +594,7 @@ template <
     uint32_t block_size,
     uint32_t num_blocks,
     uint32_t scale_fp32,
-    int vector_mode = (int)VectorMode::C,
+    VectorMode vector_mode = VectorMode::C,
     bool dense = false,
     bool untilize = false>
 ALWI void sdpa_tail(
