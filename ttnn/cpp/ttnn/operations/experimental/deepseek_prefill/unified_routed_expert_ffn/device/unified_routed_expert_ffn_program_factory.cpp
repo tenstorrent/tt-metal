@@ -221,6 +221,15 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // doesn't use this pair.
     const uint32_t in0_ready_sem_addr = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
     const uint32_t in0_valid_sem_addr = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
+    // Activated multicast sems (phase 4): replace the DRAM scratch round-trip
+    // with an L1 NoC mcast. For phase-4 K-block kb, sender = core at
+    // (gx=kb, my_mt). Sender's reader mcasts its cb_activated block to all
+    // 8 M-row cores' cb_in0_down_full (loopback included). Receivers wait on
+    // act_valid_sem; sender waits on act_ready_sem reaching GRID_X-1 incs from
+    // the 7 receivers. Sender position rotates per K-block so each core takes
+    // a turn as sender exactly once per chunk.
+    const uint32_t act_ready_sem_addr = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
+    const uint32_t act_valid_sem_addr = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
 
     // -------------------------- circular buffers --------------------------
     // Double-buffered DRAM-streamed inputs.
@@ -288,10 +297,30 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // kernel reads via get_compile_time_arg_val(idx) and the TensorAccessor
     // offsets it computes from offset 19 onwards.
     std::vector<uint32_t> reader_ct_args = {
-        CB_IN0_X,       CB_IN1_GATE,        CB_IN1_UP,     CB_IN1_DOWN,       CB_IN0_DOWN_FULL,  CB_COUNTS_SCRATCH,
-        CB_IDX_SCRATCH, op.local_expert_id, per_core_M,    per_core_N_gu,     per_core_N_d,      K_gate_tiles,
-        K_down_tiles,   in0_block_w_gu,     in0_block_w_d, N_gate_tiles_full, N_down_tiles_full, M_tiles_full,
-        total_cores,    num_chunks,         chunk_M_tiles,
+        CB_IN0_X,
+        CB_IN1_GATE,
+        CB_IN1_UP,
+        CB_IN1_DOWN,
+        CB_IN0_DOWN_FULL,
+        CB_COUNTS_SCRATCH,
+        CB_IDX_SCRATCH,
+        op.local_expert_id,
+        per_core_M,
+        per_core_N_gu,
+        per_core_N_d,
+        K_gate_tiles,
+        K_down_tiles,
+        in0_block_w_gu,
+        in0_block_w_d,
+        N_gate_tiles_full,
+        N_down_tiles_full,
+        M_tiles_full,
+        total_cores,
+        num_chunks,
+        chunk_M_tiles,
+        // CB_ACTIVATED — consumed by the reader during phase 4 L1 mcast
+        // (sender pops it and broadcasts to all M-row cores' cb_in0_down_full).
+        CB_ACTIVATED,
     };
     tt::tt_metal::TensorAccessorArgs(x_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(gate_buffer).append_to(reader_ct_args);
@@ -521,9 +550,22 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             in0_mcast_ny_end,                      // 29
             in0_sender_nx,                         // 30
             in0_sender_ny,                         // 31
-            // done_sem id (32) — reader spins on its local slot post-phase-2.
+            // done_sem id (32) — kept for now but unused after L1 mcast switch.
             done_sem_addr,  // 32
+            // Activated L1 mcast sems (33, 34) — replace the cross-core
+            // phase-3/4 barrier with per-K-block sender/receiver handshake.
+            act_ready_sem_addr,  // 33
+            act_valid_sem_addr,  // 34
         };
+        // M-row NoC coord table: for our M-row (gy=my_mt), the NoC (x, y) of
+        // each of the 8 cores (gx=0..GRID_X-1). Reader uses this per phase-4
+        // K-block (kb=0..7) to find the sender's NoC addr and to build the
+        // M-row mcast rectangle.
+        for (uint32_t gxi = 0; gxi < GRID_X; ++gxi) {
+            const auto noc = device->worker_core_from_logical_core(CoreCoord{gxi, gy});
+            reader_args.push_back(static_cast<uint32_t>(noc.x));
+            reader_args.push_back(static_cast<uint32_t>(noc.y));
+        }
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
 
         // Writer runtime arg layout matches writer_unified_re.cpp:

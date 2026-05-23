@@ -76,11 +76,25 @@ void kernel_main() {
     const uint32_t in0_ready_sem_addr = get_semaphore(in0_ready_sem_id);
     const uint32_t in0_valid_sem_addr = get_semaphore(in0_valid_sem_id);
 
-    // done_sem: incremented per chunk by the controller's writer once every
-    // core has finished the phase-3 drain. Reader waits on its local slot for
-    // value >= (chunk + 1) before starting phase 4 of that chunk.
+    // done_sem: legacy from the DRAM-scratch barrier — not used after the L1
+    // mcast switch.
     const uint32_t done_sem_id = get_arg_val<uint32_t>(32);
     const uint32_t done_sem_addr = get_semaphore(done_sem_id);
+    (void)done_sem_id;
+    (void)done_sem_addr;
+
+    // Activated L1 mcast sems. Sender (gx == kb at phase-4 K-block kb) waits
+    // on its act_ready_sem for GRID_X - 1 incs from the 7 receivers; then
+    // mcasts cb_activated -> all M-row cores' cb_in0_down_full L1; then
+    // mcasts act_valid_sem to release receivers.
+    const uint32_t act_ready_sem_id = get_arg_val<uint32_t>(33);
+    const uint32_t act_valid_sem_id = get_arg_val<uint32_t>(34);
+    const uint32_t act_ready_sem_addr = get_semaphore(act_ready_sem_id);
+    const uint32_t act_valid_sem_addr = get_semaphore(act_valid_sem_id);
+
+    // M-row NoC coord table: 8 (x, y) pairs at runtime args 35..50. Used to
+    // resolve the sender's NoC addr per phase-4 K-block kb (= gx).
+    constexpr uint32_t M_ROW_NOC_RT_OFFSET = 35;
 
     // -------------------------- compile-time args -------------------------
     constexpr uint32_t cb_in0_x = get_compile_time_arg_val(0);
@@ -105,6 +119,7 @@ void kernel_main() {
     constexpr uint32_t total_cores = get_compile_time_arg_val(18);
     constexpr uint32_t num_chunks = get_compile_time_arg_val(19);
     constexpr uint32_t chunk_M_tiles = get_compile_time_arg_val(20);
+    constexpr uint32_t cb_activated = get_compile_time_arg_val(21);
 
     constexpr uint32_t g_in0_block_num_tiles = per_core_M * in0_block_w_gu;
     constexpr uint32_t g_in1_block_num_tiles = per_core_N_gu * in0_block_w_gu;
@@ -113,7 +128,7 @@ void kernel_main() {
     constexpr uint32_t num_blocks_gu = K_gate_tiles / in0_block_w_gu;
     constexpr uint32_t num_blocks_d = K_down_tiles / in0_block_w_d;
 
-    constexpr uint32_t x_accessor_offset = 21;
+    constexpr uint32_t x_accessor_offset = 22;
     constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
     const auto x_acc = TensorAccessor(x_args, x_addr, get_tile_size(cb_in0_x));
 
@@ -348,32 +363,69 @@ void kernel_main() {
             cb_push_back(cb_in1_up, g_in1_block_num_tiles);
         }
 
-        // Wait for the controller writer to broadcast "phase 3 done" for THIS
-        // chunk. done_sem accumulates monotonically across barriers. The writer
-        // issues two barriers per chunk (A=phase3 done, B=phase4 done) with
-        // done_sem values 2*chunk+1 and 2*chunk+2 respectively. We wait on
-        // barrier A here.
-        {
-            volatile tt_l1_ptr uint32_t* sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(done_sem_addr);
-            noc_semaphore_wait(sem_ptr, 2 * chunk + 1);
-        }
         (void)total_cores;
         (void)sem_addr;
+        (void)scratch_acc;
+        (void)scratch_tile_bytes;
 
-        // -------- PHASE 4 — down matmul feed (activated scratch + down_proj) --
+        // -------- PHASE 4 — down matmul feed via L1 mcast of activated + down weight mcast --
+        //
+        // For each K-block kb (0..num_blocks_d-1=7), exactly one core in this
+        // M-row is the "activated sender": the core at gx == kb. Its
+        // cb_activated holds the per_core_M x per_core_N_gu tiles whose
+        // hidden-column range matches K-block kb. Sender mcasts those tiles
+        // (with loopback to its own L1) to every M-row core's cb_in0_down_full.
+        //
+        // We compute the mcast destination rectangle from the M-row NoC table
+        // once: corners are mrow[0] (top-left) and mrow[GRID_X-1] (bottom-right).
+        // Sender NoC addr for the per-K-block ready-sem inc is looked up by
+        // index kb from the same table.
+        constexpr uint32_t GRID_X_NOC = 8;  // mcast covers all 8 M-row cores incl self
+        const uint32_t mrow_first_nx = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 0);
+        const uint32_t mrow_first_ny = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 1);
+        const uint32_t mrow_last_nx = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * (GRID_X_NOC - 1) + 0);
+        const uint32_t mrow_last_ny = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * (GRID_X_NOC - 1) + 1);
+        constexpr uint32_t ACT_VALID = 1;
+        volatile tt_l1_ptr uint32_t* act_ready_local =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_ready_sem_addr);
+        volatile tt_l1_ptr uint32_t* act_valid_local =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_valid_sem_addr);
+        const uint32_t intermed_tile_bytes = get_tile_size(cb_in0_down_full);
+
         for (uint32_t kb = 0; kb < num_blocks_d; ++kb) {
+            const bool is_act_sender = (my_nt_d == kb);
+
             cb_reserve_back(cb_in0_down_full, d_in0_block_num_tiles);
-            uint32_t l1_a = get_write_ptr(cb_in0_down_full);
-            for (uint32_t m = 0; m < per_core_M; ++m) {
-                for (uint32_t k = 0; k < in0_block_w_d; ++k) {
-                    const uint32_t row = this_core_first_row + m;
-                    const uint32_t col = kb * in0_block_w_d + k;
-                    const uint32_t tile_idx = row * N_gate_tiles_full + col;  // scratch is M_full x N_gate
-                    noc_async_read_tile(tile_idx, scratch_acc, l1_a);
-                    l1_a += scratch_tile_bytes;
-                }
+
+            if (is_act_sender) {
+                cb_wait_front(cb_activated, d_in0_block_num_tiles);
+                noc_semaphore_wait(act_ready_local, GRID_X_NOC - 1);
+                *act_ready_local = 0;
+
+                const uint32_t src_l1 = get_read_ptr(cb_activated);
+                const uint32_t dst_l1 = get_write_ptr(cb_in0_down_full);
+                const uint32_t mcast_bytes = d_in0_block_num_tiles * intermed_tile_bytes;
+                const uint64_t data_mcast_noc =
+                    get_noc_multicast_addr(mrow_first_nx, mrow_first_ny, mrow_last_nx, mrow_last_ny, dst_l1);
+                noc_async_write_multicast_loopback_src(
+                    src_l1, data_mcast_noc, mcast_bytes, GRID_X_NOC, /*linked=*/false);
+                noc_async_writes_flushed();
+
+                *act_valid_local = ACT_VALID;
+                const uint64_t valid_mcast_noc = get_noc_multicast_addr(
+                    mrow_first_nx, mrow_first_ny, mrow_last_nx, mrow_last_ny, act_valid_sem_addr);
+                noc_semaphore_set_multicast_loopback_src(act_valid_sem_addr, valid_mcast_noc, GRID_X_NOC);
+
+                cb_pop_front(cb_activated, d_in0_block_num_tiles);
+            } else {
+                *act_valid_local = 0;
+                const uint32_t sender_nx = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * kb + 0);
+                const uint32_t sender_ny = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * kb + 1);
+                const uint64_t sender_ready_noc = get_noc_addr(sender_nx, sender_ny, act_ready_sem_addr);
+                noc_semaphore_inc(sender_ready_noc, 1);
+                noc_semaphore_wait(act_valid_local, ACT_VALID);
             }
-            noc_async_read_barrier();
+
             cb_push_back(cb_in0_down_full, d_in0_block_num_tiles);
 
             // in1_down via multicast within N-col group. Note: per_core_N_d is
