@@ -245,9 +245,9 @@ void run_alias_dfb_program(
         ProgramRunParams::KernelRunParams{
             .kernel_spec_name = "consumer", .runtime_args = rtas(num_entries_a, num_entries_b)},
     };
-    run_params.tensor_args = {
-        {.tensor_parameter_name = "in_tensor_a",  .tensor = std::cref(in_a)},
-        {.tensor_parameter_name = "in_tensor_b",  .tensor = std::cref(in_b)},
+    run_params.tensor_arguments = {
+        {.tensor_parameter_name = "in_tensor_a", .tensor = std::cref(in_a)},
+        {.tensor_parameter_name = "in_tensor_b", .tensor = std::cref(in_b)},
         {.tensor_parameter_name = "out_tensor_a", .tensor = std::cref(out_a)},
         {.tensor_parameter_name = "out_tensor_b", .tensor = std::cref(out_b)},
     };
@@ -560,12 +560,12 @@ TEST_F(MeshDeviceFixture, AliasDFBBorrowedMemoryAddressEquality) {
         ProgramRunParams::KernelRunParams{.kernel_spec_name = "producer", .runtime_args = rtas()},
         ProgramRunParams::KernelRunParams{.kernel_spec_name = "consumer", .runtime_args = rtas()},
     };
-    run_params.tensor_args = {
-        {.tensor_parameter_name = "in_tensor_a",  .tensor = std::cref(in_a)},
-        {.tensor_parameter_name = "in_tensor_b",  .tensor = std::cref(in_b)},
+    run_params.tensor_arguments = {
+        {.tensor_parameter_name = "in_tensor_a", .tensor = std::cref(in_a)},
+        {.tensor_parameter_name = "in_tensor_b", .tensor = std::cref(in_b)},
         {.tensor_parameter_name = "out_tensor_a", .tensor = std::cref(out_a)},
         {.tensor_parameter_name = "out_tensor_b", .tensor = std::cref(out_b)},
-        {.tensor_parameter_name = "ring_tensor",  .tensor = std::cref(ring)},
+        {.tensor_parameter_name = "ring_tensor", .tensor = std::cref(ring)},
     };
     SetProgramRunParameters(program, run_params);
 
@@ -612,12 +612,12 @@ TEST_F(MeshDeviceFixture, AliasDFBBorrowedMemoryDataFlow1Sx1S) {
         ProgramRunParams::KernelRunParams{.kernel_spec_name = "producer", .runtime_args = rtas()},
         ProgramRunParams::KernelRunParams{.kernel_spec_name = "consumer", .runtime_args = rtas()},
     };
-    run_params.tensor_args = {
-        {.tensor_parameter_name = "in_tensor_a",  .tensor = std::cref(in_a)},
-        {.tensor_parameter_name = "in_tensor_b",  .tensor = std::cref(in_b)},
+    run_params.tensor_arguments = {
+        {.tensor_parameter_name = "in_tensor_a", .tensor = std::cref(in_a)},
+        {.tensor_parameter_name = "in_tensor_b", .tensor = std::cref(in_b)},
         {.tensor_parameter_name = "out_tensor_a", .tensor = std::cref(out_a)},
         {.tensor_parameter_name = "out_tensor_b", .tensor = std::cref(out_b)},
-        {.tensor_parameter_name = "ring_tensor",  .tensor = std::cref(ring)},
+        {.tensor_parameter_name = "ring_tensor", .tensor = std::cref(ring)},
     };
     SetProgramRunParameters(program, run_params);
 

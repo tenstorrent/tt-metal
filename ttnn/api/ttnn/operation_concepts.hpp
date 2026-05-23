@@ -25,10 +25,10 @@ template <typename T>
 concept ProgramFactoryConcept = requires {
     typename T::cached_program_t;
 
-    [](const auto& operation_attributes, const auto& tensor_args, auto& tensor_return_value) {
-        auto cached_program = T::create(operation_attributes, tensor_args, tensor_return_value);
+    [](const auto& operation_attributes, const auto& tensor_arguments, auto& tensor_return_value) {
+        auto cached_program = T::create(operation_attributes, tensor_arguments, tensor_return_value);
 
-        T::override_runtime_arguments(cached_program, operation_attributes, tensor_args, tensor_return_value);
+        T::override_runtime_arguments(cached_program, operation_attributes, tensor_arguments, tensor_return_value);
     };
 };
 
@@ -75,10 +75,10 @@ concept ProgramDescriptorFactoryConcept = (requires { &T::create_descriptor; } |
 // Metal 2.0 factory concept: factories that return ProgramArtifacts (a ProgramSpec +
 // ProgramRunParams) from create_program_spec. The framework adapter stamps a Program
 // from the spec onto each mesh coordinate range on cache miss, and patches TensorArgs
-// via metal2_host_api::UpdateTensorArgs on cache hit.
+// via metal2_host_api::UpdateTensorArguments on cache hit.
 //
-// NOTE: Each TensorArg.tensor in ProgramRunParams MUST reference a MeshTensor reachable
-// from the factory's `tensor_args` / `tensor_return_value` parameters — the adapter
+// NOTE: Each TensorArgument.tensor in ProgramRunParams MUST reference a MeshTensor reachable
+// from the factory's `tensor_arguments` / `tensor_return_value` parameters — the adapter
 // matches by pointer identity. Constructing or copying a MeshTensor and referencing the
 // copy will TT_FATAL at runtime.
 //
@@ -99,9 +99,9 @@ template <typename device_operation_t>
 concept HasComputeOutputSpecs = requires(
     device_operation_t op,
     const typename device_operation_t::operation_attributes_t& operation_attributes,
-    const typename device_operation_t::tensor_args_t& tensor_args) {
+    const typename device_operation_t::tensor_args_t& tensor_arguments) {
     {
-        op.compute_output_specs(operation_attributes, tensor_args)
+        op.compute_output_specs(operation_attributes, tensor_arguments)
     } -> std::same_as<typename device_operation_t::spec_return_value_t>;
 };
 
@@ -110,8 +110,8 @@ concept HasComputeOutputSpecs = requires(
 template <typename device_operation_t>
 concept HasValidateOnProgramCacheHit = requires(
     const typename device_operation_t::operation_attributes_t& attrs,
-    const typename device_operation_t::tensor_args_t& tensor_args) {
-    device_operation_t::validate_on_program_cache_hit(attrs, tensor_args);
+    const typename device_operation_t::tensor_args_t& tensor_arguments) {
+    device_operation_t::validate_on_program_cache_hit(attrs, tensor_arguments);
 };
 
 // Detect if operation provides a custom select_program_factory.
@@ -119,9 +119,9 @@ concept HasValidateOnProgramCacheHit = requires(
 template <typename device_operation_t>
 concept HasSelectProgramFactory = requires(
     const typename device_operation_t::operation_attributes_t& attrs,
-    const typename device_operation_t::tensor_args_t& tensor_args) {
+    const typename device_operation_t::tensor_args_t& tensor_arguments) {
     {
-        device_operation_t::select_program_factory(attrs, tensor_args)
+        device_operation_t::select_program_factory(attrs, tensor_arguments)
     } -> std::same_as<typename device_operation_t::program_factory_t>;
 };
 
@@ -151,12 +151,12 @@ template <typename device_operation_t>
 concept DeviceOperationConcept =
     requires {
         [](const typename device_operation_t::operation_attributes_t& operation_attributes,
-           const typename device_operation_t::tensor_args_t& tensor_args) {
-            device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
+           const typename device_operation_t::tensor_args_t& tensor_arguments) {
+            device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_arguments);
 
             using tensor_return_value_t = typename device_operation_t::tensor_return_value_t;
             static_assert(std::same_as<
-                          decltype(device_operation_t::create_output_tensors(operation_attributes, tensor_args)),
+                          decltype(device_operation_t::create_output_tensors(operation_attributes, tensor_arguments)),
                           tensor_return_value_t>);
         };
     } && HasComputeOutputSpecs<device_operation_t> &&
@@ -168,9 +168,9 @@ concept DeviceOperationWithCustomProgramCacheConcept =
     DeviceOperationConcept<device_operation_t> &&
     requires(
         const typename device_operation_t::operation_attributes_t& operation_attributes,
-        const typename device_operation_t::tensor_args_t& tensor_args) {
+        const typename device_operation_t::tensor_args_t& tensor_arguments) {
         {
-            device_operation_t::compute_program_hash(operation_attributes, tensor_args)
+            device_operation_t::compute_program_hash(operation_attributes, tensor_arguments)
         } -> std::convertible_to<std::uint64_t>;
     };
 
@@ -178,10 +178,10 @@ template <typename device_operation_t>
 concept HasSkipLaunch = requires(
     device_operation_t op,
     const typename device_operation_t::operation_attributes_t& operation_attributes,
-    const typename device_operation_t::tensor_args_t& tensor_args,
+    const typename device_operation_t::tensor_args_t& tensor_arguments,
     const typename device_operation_t::tensor_return_value_t& tensor_return_value) {
     {
-        device_operation_t::skip_launch(operation_attributes, tensor_args, tensor_return_value)
+        device_operation_t::skip_launch(operation_attributes, tensor_arguments, tensor_return_value)
     } -> std::convertible_to<bool>;
 };
 

@@ -40,13 +40,13 @@ void SetProgramRunParameters(Program& program, const ProgramRunParams& params);
 //
 // PRE-CONDITION: SetProgramRunParameters must have been called previously.
 //
-// COMPLETENESS: A TensorArg must be specified for every TensorParameter declared in the
+// COMPLETENESS: A TensorArgument must be specified for every TensorParameter declared in the
 // ProgramSpec, exactly once. The supplied MeshTensor's TensorSpec must match the
 // TensorParameter's declared spec.
 //
 // USE CASE: Program re-enqueue loops where the only per-enqueue ProgramRunParams variation
 // is in the tensor args (i.e. which specific MeshTensors are operated on by the Program).
-void UpdateTensorArgs(Program& program, std::span<const ProgramRunParams::TensorArg> tensor_args);
+void UpdateTensorArguments(Program& program, std::span<const ProgramRunParams::TensorArgument> tensor_arguments);
 
 // Power-user API for updating the mutable parameters of a Program in-place.
 // ProgramRunParamsView is a non-owning view into the Program's command buffers,

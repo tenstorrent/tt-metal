@@ -599,9 +599,9 @@ TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
             .runtime_varargs = {{node, {num_pages}}},
         },
     };
-    params.tensor_args = {
-        ProgramRunParams::TensorArg{.tensor_parameter_name = "input_tensor", .tensor = std::cref(input_tensor)},
-        ProgramRunParams::TensorArg{.tensor_parameter_name = "output_tensor", .tensor = std::cref(output_tensor)},
+    params.tensor_arguments = {
+        ProgramRunParams::TensorArgument{.tensor_parameter_name = "input_tensor", .tensor = std::cref(input_tensor)},
+        ProgramRunParams::TensorArgument{.tensor_parameter_name = "output_tensor", .tensor = std::cref(output_tensor)},
     };
     SetProgramRunParameters(program, params);
 

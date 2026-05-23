@@ -68,7 +68,7 @@ struct ProgramRunParams {
     ////////////////////////////////////////////////////////////////////////
     // Tensor arguments
     ////////////////////////////////////////////////////////////////////////
-    struct TensorArg {
+    struct TensorArgument {
         // Tensor identifier (matches a TensorParameter::unique_id in the ProgramSpec)
         TensorParameterName tensor_parameter_name;
 
@@ -76,9 +76,9 @@ struct ProgramRunParams {
         // (Non-owning reference. Will become MeshTensorView when available; existing callsites won't change.)
         std::reference_wrapper<const MeshTensor> tensor;
     };
-    // A TensorArg must be specified for EVERY TensorParameter declared in the ProgramSpec.
+    // A TensorArgument must be specified for EVERY TensorParameter declared in the ProgramSpec.
     // The argument's TensorSpec must match the TensorParameter's TensorSpec (shape, layout, data type).
-    std::vector<TensorArg> tensor_args;
+    std::vector<TensorArgument> tensor_arguments;
 
     ////////////////////////////////////////////////////////////////////////
     // DFB parameters (optional, advanced use cases)

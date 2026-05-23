@@ -24,33 +24,34 @@ namespace tt::tt_metal::experimental {
 // Type alias for readability
 using KernelRTASchema = detail::ProgramImpl::KernelRTASchema;
 
-// Internal validation function - validates a TensorArg list against the Program's TensorParameters.
-// Shared by SetProgramRunParameters (full path) and UpdateTensorArgs (partial path).
+// Internal validation function - validates a TensorArgument list against the Program's TensorParameters.
+// Shared by SetProgramRunParameters (full path) and UpdateTensorArguments (partial path).
 //   - No duplicate tensor_parameter_name entries
 //   - Every entry references a TensorParameter declared in the ProgramSpec
 //   - The supplied MeshTensor's TensorSpec equals the binding's expected TensorSpec
 //     (full equality is required, for now. This will be loosened to layout-compatible-modulo-shape
 //     in a follow-up PR that adds RuntimeTensorShape as a mutable parameter).
 //   - Every declared TensorParameter must be set
-void ValidateTensorArgs(const Program& program, std::span<const ProgramRunParams::TensorArg> tensor_args) {
+void ValidateTensorArguments(
+    const Program& program, std::span<const ProgramRunParams::TensorArgument> tensor_arguments) {
     const detail::ProgramImpl& program_impl = program.impl();
 
     std::unordered_set<std::string> tensor_parameters_with_params;
-    for (const auto& tensor_params : tensor_args) {
+    for (const auto& tensor_params : tensor_arguments) {
         auto [it, inserted] = tensor_parameters_with_params.insert(tensor_params.tensor_parameter_name);
         TT_FATAL(
             inserted,
-            "Duplicate tensor_parameter_name '{}' in tensor_args. Each TensorParameter must appear at most once.",
+            "Duplicate tensor_parameter_name '{}' in tensor_arguments. Each TensorParameter must appear at most once.",
             tensor_params.tensor_parameter_name);
         const TensorSpec* expected_spec = program_impl.get_tensor_parameter_layout(tensor_params.tensor_parameter_name);
         TT_FATAL(
             expected_spec != nullptr,
-            "TensorArg references unknown TensorParameter '{}'.",
+            "TensorArgument references unknown TensorParameter '{}'.",
             tensor_params.tensor_parameter_name);
         const TensorSpec& runtime_spec = tensor_params.tensor.get().tensor_spec();
         TT_FATAL(
             runtime_spec == *expected_spec,
-            "TensorArg for binding '{}' supplied a MeshTensor whose TensorSpec does not match the binding's "
+            "TensorArgument for binding '{}' supplied a MeshTensor whose TensorSpec does not match the binding's "
             "declared spec. The binding declaration in ProgramSpec is the single source of truth for layout; the "
             "supplied tensor must conform to it.",
             tensor_params.tensor_parameter_name);
@@ -58,7 +59,7 @@ void ValidateTensorArgs(const Program& program, std::span<const ProgramRunParams
     for (const std::string& declared : program_impl.get_registered_tensor_parameter_names()) {
         TT_FATAL(
             tensor_parameters_with_params.contains(declared),
-            "TensorParameter '{}' is declared in the Program but has no TensorArg entry.",
+            "TensorParameter '{}' is declared in the Program but has no TensorArgument entry.",
             declared);
     }
 }
@@ -192,7 +193,7 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
 
         // Validate named CRTAs: every declared name supplied, no extras.
         // The TensorBinding address section lives in its own structurally-separate part of the
-        // kernel's CRTA buffer and is filled from TensorArg at enqueue.
+        // kernel's CRTA buffer and is filled from TensorArgument at enqueue.
         // (This is separate from the schema->named_common_runtime_args.)
         const auto& named_crta_names = schema->named_common_runtime_args;
         for (const auto& name : named_crta_names) {
@@ -248,14 +249,14 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
     // Unlike kernels, DFBs don't require DFBRunParams.
     // (Borrowed-memory DFBs don't need a DFBRunParams entry either — they identify their backing
     // MeshTensor by name via DataflowBufferSpec::borrowed_from, and the tensor flows through
-    // tensor_args.)
+    // tensor_arguments.)
 
     // Validate tensor runtime parameters (delegated to shared helper).
-    ValidateTensorArgs(program, params.tensor_args);
+    ValidateTensorArguments(program, params.tensor_arguments);
 }
 
 // Attach the actual L1 Buffer to every borrowed-memory DFB, by resolving each DFB's named
-// TensorParameter to the corresponding MeshTensor passed in tensor_args and extracting its
+// TensorParameter to the corresponding MeshTensor passed in tensor_arguments and extracting its
 // MeshBuffer's reference buffer. Under the lockstep mesh allocation invariant, any one of the
 // per-device buffers is a valid representative — same convention used by dynamic CB via
 // `MeshTensor::mesh_buffer().get_reference_buffer()`.
@@ -266,18 +267,18 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
 //     MeshTensor, validate it, and hand it to the device-side DFB.
 //   - Re-entry (a subsequent run-params call with a different MeshTensor) just re-attaches.
 //
-// Pre-condition: ValidateTensorArgs has enforced that every declared TensorParameter
-// has a corresponding TensorArg, so the lookup below cannot miss for any registered binding.
+// Pre-condition: ValidateTensorArguments has enforced that every declared TensorParameter
+// has a corresponding TensorArgument, so the lookup below cannot miss for any registered binding.
 void AttachBorrowedDFBBuffers(
-    detail::ProgramImpl& program_impl, std::span<const ProgramRunParams::TensorArg> tensor_args) {
+    detail::ProgramImpl& program_impl, std::span<const ProgramRunParams::TensorArgument> tensor_arguments) {
     const auto& borrowed_bindings = program_impl.get_dfb_borrowed_bindings();
     if (borrowed_bindings.empty()) {
         return;
     }
 
     std::unordered_map<std::string, const MeshTensor*> tensor_by_param;
-    tensor_by_param.reserve(tensor_args.size());
-    for (const auto& tensor_params : tensor_args) {
+    tensor_by_param.reserve(tensor_arguments.size());
+    for (const auto& tensor_params : tensor_arguments) {
         tensor_by_param.emplace(tensor_params.tensor_parameter_name, &tensor_params.tensor.get());
     }
 
@@ -285,7 +286,7 @@ void AttachBorrowedDFBBuffers(
         auto it = tensor_by_param.find(tp_name);
         TT_FATAL(
             it != tensor_by_param.end(),
-            "Internal error: DFB id {} borrows from TensorParameter '{}' but no TensorArg supplied it (validation "
+            "Internal error: DFB id {} borrows from TensorParameter '{}' but no TensorArgument supplied it (validation "
             "should have caught this).",
             dfb_id,
             tp_name);
@@ -329,7 +330,7 @@ void AttachBorrowedDFBBuffers(
 }
 
 // ============================================================================
-// PUBLIC ENTRY POINTS: SetProgramRunParameters + UpdateTensorArgs + GetProgramRunParamsView
+// PUBLIC ENTRY POINTS: SetProgramRunParameters + UpdateTensorArguments + GetProgramRunParamsView
 // ============================================================================
 
 void SetProgramRunParameters(Program& program, const ProgramRunParams& params) {
@@ -340,12 +341,12 @@ void SetProgramRunParameters(Program& program, const ProgramRunParams& params) {
 
     detail::ProgramImpl& program_impl = program.impl();
 
-    // Build a tensor_parameter_name -> base address lookup from the user's TensorArg entries.
+    // Build a tensor_parameter_name -> base address lookup from the user's TensorArgument entries.
     // Used below to fill the kernel's TensorBinding address section from MeshTensor::address().
     // NOTE: We assume lockstep mesh allocation, so a device-independent, single uint32_t per binding.
     std::unordered_map<std::string, uint32_t> ta_binding_addresses;
-    ta_binding_addresses.reserve(params.tensor_args.size());
-    for (const auto& tensor_params : params.tensor_args) {
+    ta_binding_addresses.reserve(params.tensor_arguments.size());
+    for (const auto& tensor_params : params.tensor_arguments) {
         const auto address = tensor_params.tensor.get().address();
         TT_FATAL(
             address <= std::numeric_limits<uint32_t>::max(),
@@ -425,7 +426,7 @@ void SetProgramRunParameters(Program& program, const ProgramRunParams& params) {
 
         // Assemble the kernel's per-enqueue CRTA buffer in three structurally-separate sections:
         //   1. User-named CRTAs, in schema order, sourced from common_runtime_args.
-        //   2. TensorBinding addresses, in binding-handle order, sourced from TensorArg via the
+        //   2. TensorBinding addresses, in binding-handle order, sourced from TensorArgument via the
         //      ta_binding_addresses map. Each handle's addr_crta_offset (computed at spec
         //      resolution as (num_user_crtas + binding_index) * 4) lines up with the slot
         //      position chosen here.
@@ -482,14 +483,14 @@ void SetProgramRunParameters(Program& program, const ProgramRunParams& params) {
     // Process DFB runtime parameters:
     //   - Borrowed-memory DFB backing L1 Buffer*
     //   - Later, add DFB size overrides (not yet implemented)
-    AttachBorrowedDFBBuffers(program_impl, params.tensor_args);
+    AttachBorrowedDFBBuffers(program_impl, params.tensor_arguments);
 }
 
-void UpdateTensorArgs(Program& program, std::span<const ProgramRunParams::TensorArg> tensor_args) {
+void UpdateTensorArguments(Program& program, std::span<const ProgramRunParams::TensorArgument> tensor_arguments) {
     log_debug(tt::LogMetal, "Updating tensor args (partial fast-path)");
 
-    // Validate the TensorArg list (shared with the full-path validator).
-    ValidateTensorArgs(program, tensor_args);
+    // Validate the TensorArgument list (shared with the full-path validator).
+    ValidateTensorArguments(program, tensor_arguments);
 
     detail::ProgramImpl& program_impl = program.impl();
 
@@ -497,8 +498,8 @@ void UpdateTensorArgs(Program& program, std::span<const ProgramRunParams::Tensor
     // As in SetProgramRunParameters, this assumes lockstep mesh allocation:
     // a single device-independent uint32_t address per binding.
     std::unordered_map<std::string, uint32_t> ta_binding_addresses;
-    ta_binding_addresses.reserve(tensor_args.size());
-    for (const auto& tensor_params : tensor_args) {
+    ta_binding_addresses.reserve(tensor_arguments.size());
+    for (const auto& tensor_params : tensor_arguments) {
         const auto address = tensor_params.tensor.get().address();
         TT_FATAL(
             address <= std::numeric_limits<uint32_t>::max(),
@@ -523,7 +524,7 @@ void UpdateTensorArgs(Program& program, std::span<const ProgramRunParams::Tensor
         // populate this kernel's CRTA buffer. Without it, there is no buffer to patch into.
         TT_FATAL(
             !kernel->common_runtime_args().empty(),
-            "UpdateTensorArgs called on Program before SetProgramRunParameters: kernel '{}' has tensor "
+            "UpdateTensorArguments called on Program before SetProgramRunParameters: kernel '{}' has tensor "
             "bindings but its CRTA buffer has not been allocated. Call SetProgramRunParameters at least "
             "once first.",
             kernel_name);
@@ -543,7 +544,7 @@ void UpdateTensorArgs(Program& program, std::span<const ProgramRunParams::Tensor
     }
 
     // Process DFB runtime parameters to update borrowed-memory DFB backing L1 Buffer*s.
-    AttachBorrowedDFBBuffers(program_impl, tensor_args);
+    AttachBorrowedDFBBuffers(program_impl, tensor_arguments);
 }
 
 ProgramRunParamsView& GetProgramRunParamsView(Program& program) {

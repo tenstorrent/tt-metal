@@ -580,7 +580,7 @@ void run_single_core_reduce_program_quasar(
             .kernel_spec_name = COMPUTE,
         },
     };
-    params.tensor_args = {
+    params.tensor_arguments = {
         {.tensor_parameter_name = IN_TENSOR, .tensor = in_tensor},
         {.tensor_parameter_name = OUT_TENSOR, .tensor = out_tensor},
     };

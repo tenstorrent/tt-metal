@@ -1046,7 +1046,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // Validate borrowed-memory DFBs.
     //
     // A borrowed-memory DFB names a TensorParameter via DataflowBufferSpec::borrowed_from. The
-    // backing MeshTensor flows through ProgramRunParams::tensor_args at execution time.
+    // backing MeshTensor flows through ProgramRunParams::tensor_arguments at execution time.
     // We enforce only the safety-relevant checks:
     //  - the named parameter exists
     //  - the TensorSpec places storage in L1,
@@ -1674,7 +1674,7 @@ KernelRiscMaskMap BuildGen1KernelRiscMasks(const ProgramSpec& spec) {
 //    (packed two-per-uint32)
 //
 // All the TensorAccessorArgs data are static (CTAs) for now.
-// The tensor base address is specified per-enqueue, via TensorArg on ProgramRunParams.
+// The tensor base address is specified per-enqueue, via TensorArgument on ProgramRunParams.
 // (See also ResolveTensorBindingsForKernel below).
 std::vector<uint32_t> ResolveTensorParameterStaticCTAs(
     const TensorParameter& tensor_parameter, const distributed::MeshDevice& mesh_device) {
@@ -2234,7 +2234,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
     //     CTA buffer. (Empty in Metal 2.0 today; the binding payload is its first user.)
     //   - Per-enqueue base address flows through a reserved-prefix named CRTA, appended to
     //     the kernel's user-named CRTAs and filled by SetProgramRunParameters from the
-    //     corresponding TensorArg entry.
+    //     corresponding TensorArgument entry.
     std::unordered_map<TensorParameterName, std::vector<uint32_t>> resolved_binding_ctas;
     resolved_binding_ctas.reserve(spec.tensor_parameters.size());
     for (const auto& tensor_parameter : spec.tensor_parameters) {
@@ -2269,7 +2269,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         dfb_name_to_id[dfb_name] = dfb_id;
 
         // Borrowed-memory DFB: record the dfb_id ↔ TensorParameterName binding so that
-        // SetProgramRunParameters / UpdateTensorArgs can resolve and attach the actual L1 Buffer
+        // SetProgramRunParameters / UpdateTensorArguments can resolve and attach the actual L1 Buffer
         // at runtime (analog of dynamic CB's UpdateDynamicCircularBufferAddress).
         if (dfb_spec.borrowed_from.has_value()) {
             program_impl->register_dfb_borrowed_binding(dfb_id, *dfb_spec.borrowed_from);

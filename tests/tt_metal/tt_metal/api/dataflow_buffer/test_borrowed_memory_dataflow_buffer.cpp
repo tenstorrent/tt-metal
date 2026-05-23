@@ -219,11 +219,11 @@ void run_borrowed_memory_dfb_program(
             .runtime_args = {dm_rtas},
         });
     }
-    params.tensor_args.push_back({.tensor_parameter_name = "src_tensor", .tensor = std::cref(src_tensor)});
+    params.tensor_arguments.push_back({.tensor_parameter_name = "src_tensor", .tensor = std::cref(src_tensor)});
     if (!cfg.tensix_consumer) {
-        params.tensor_args.push_back({.tensor_parameter_name = "dst_tensor", .tensor = std::cref(*dst_tensor)});
+        params.tensor_arguments.push_back({.tensor_parameter_name = "dst_tensor", .tensor = std::cref(*dst_tensor)});
     }
-    params.tensor_args.push_back({.tensor_parameter_name = "dfb_ring_tensor", .tensor = std::cref(ring_tensor)});
+    params.tensor_arguments.push_back({.tensor_parameter_name = "dfb_ring_tensor", .tensor = std::cref(ring_tensor)});
     SetProgramRunParameters(program, params);
 
     // -----------------------------------------------------------------------
@@ -247,7 +247,7 @@ void run_borrowed_memory_dfb_program(
     }
 }
 
-// Verifies that UpdateTensorArgs can redirect a borrowed DFB ring to a different
+// Verifies that UpdateTensorArguments can redirect a borrowed DFB ring to a different
 // L1 tensor between runs on the same compiled program.
 void run_update_address_test(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
@@ -345,9 +345,9 @@ void run_update_address_test(
         {.kernel_spec_name = "producer", .runtime_args = {dm_rtas}},
         {.kernel_spec_name = "consumer", .runtime_args = {dm_rtas}},
     };
-    params1.tensor_args = {
-        {.tensor_parameter_name = "src_tensor",      .tensor = std::cref(src_tensor)},
-        {.tensor_parameter_name = "dst_tensor",      .tensor = std::cref(dst_tensor)},
+    params1.tensor_arguments = {
+        {.tensor_parameter_name = "src_tensor", .tensor = std::cref(src_tensor)},
+        {.tensor_parameter_name = "dst_tensor", .tensor = std::cref(dst_tensor)},
         {.tensor_parameter_name = "dfb_ring_tensor", .tensor = std::cref(ring_tensor_a)},
     };
     SetProgramRunParameters(program, params1);
@@ -362,16 +362,18 @@ void run_update_address_test(
         EXPECT_EQ(input_a, output);
     }
 
-    // --- Run 2: ring redirected to ring_tensor_b via UpdateTensorArgs ---
+    // --- Run 2: ring redirected to ring_tensor_b via UpdateTensorArguments ---
     std::vector<uint32_t> input_b(total_words);
     std::iota(input_b.begin(), input_b.end(), total_words);  // distinct from run 1
     detail::WriteToBuffer(*src_tensor.mesh_buffer().get_reference_buffer(), input_b);
 
-    UpdateTensorArgs(program, std::vector<ProgramRunParams::TensorArg>{
-        {.tensor_parameter_name = "src_tensor",      .tensor = std::cref(src_tensor)},
-        {.tensor_parameter_name = "dst_tensor",      .tensor = std::cref(dst_tensor)},
-        {.tensor_parameter_name = "dfb_ring_tensor", .tensor = std::cref(ring_tensor_b)},
-    });
+    UpdateTensorArguments(
+        program,
+        std::vector<ProgramRunParams::TensorArgument>{
+            {.tensor_parameter_name = "src_tensor", .tensor = std::cref(src_tensor)},
+            {.tensor_parameter_name = "dst_tensor", .tensor = std::cref(dst_tensor)},
+            {.tensor_parameter_name = "dfb_ring_tensor", .tensor = std::cref(ring_tensor_b)},
+        });
     detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
 
     EXPECT_EQ(
