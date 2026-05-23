@@ -49,7 +49,7 @@ For the op in scope, run through two checks. Each check has three possible outco
 
 - **Green** — proceed past this check.
 - **Yellow** — requires user judgment (ambiguous signal, or a supported-but-trade-off construct). Ask the user; respect the answer.
-- **Red** — STOP. Record the reason in the audit report.
+- **Red** — record the reason in the audit report and continue the audit. A RED outcome means the port is blocked on this finding; it does not mean stop auditing. Always complete the remaining checks (and Step 0.2) so the report captures everything the port will eventually need to clear, not just the first blocker.
 
 **Scope of the audit.**
 
@@ -64,15 +64,17 @@ A red on any check fails the audit. Do not attempt to port a red op (modulo the 
 
 Metal 2.0 migration sits at the end of a chain of prior modernizations. Three prereqs must be confirmed before porting can begin. They differ in scope:
 
-- **Standalone prereq** (Check 1 below): `ProgramDescriptor` migration is a substantial, separate body of work with TTNN-infrastructure implications. If unmet, it is its own PR — it does not bundle with the other prereq checks or with the Metal 2.0 port. During this audit, report the gap and stop; do not attempt the migration here.
+- **Standalone prereq** (Check 1 below): `ProgramDescriptor` migration is a substantial, separate body of work with TTNN-infrastructure implications. If unmet, it is its own PR — it does not bundle with the other prereq checks or with the Metal 2.0 port. Record the gap and continue the audit; do not attempt the migration here.
 - **Bundled prereqs** (Checks 2 and 3 below): smaller, mechanical kernel-side work. If unmet, address in a **single bundled prereq PR**, separate from the Metal 2.0 port. Bundle the two together if both are unmet — they're conceptually one body of work (kernel-side modernization). Yellow sub-cases (see Check 3) require user judgment.
+
+**Complete all three checks regardless of individual outcomes, then continue to Step 0.2.** The audit's job is to gather a complete picture of what porting this op will require, including features the op uses that may be blocked on prereq work. Do not exit early on a RED prereq — surface all findings to the report.
 
 **Check 1 (standalone prereq): Op is on the `ProgramDescriptor` API.**
 
 Confirm the op's program-factory code populates a `ProgramDescriptor` and uses `KernelDescriptor`, `CBDescriptor`, `SemaphoreDescriptor`, etc. — *not* the older imperative-builder style from `host_api.hpp` (`CreateProgram` / `CreateKernel` / `CreateCircularBuffer` / `SetRuntimeArgs` / etc.).
 
 - **Green**: op uses the `ProgramDescriptor` API.
-- **Red**: op uses the imperative `host_api.hpp` builder API (not `ProgramDescriptor`). STOP. Report to the user that `ProgramDescriptor` migration is a **prerequisite to Metal 2.0 porting** — a substantial, standalone body of work with TTNN-infrastructure implications, addressed in its own PR. The audit's deliverable here is the report identifying the prereq; the prereq work itself is a separate session. **Do not attempt it as part of this audit, do not bundle it with anything, do not propose a partial conversion.**
+- **Red**: op uses the imperative `host_api.hpp` builder API (not `ProgramDescriptor`). Record the prereq gap — `ProgramDescriptor` migration is a **prerequisite to Metal 2.0 porting**, a substantial standalone body of work with TTNN-infrastructure implications, addressed in its own PR. **Do not attempt the migration as part of this audit, do not bundle it with anything, do not propose a partial conversion.** Continue with Checks 2 and 3 and Step 0.2 — the feature scan still produces useful findings (some features may need attention regardless of which API the op is currently on; others will only become relevant after the prereq lands).
 
 **Check 2 (AI-doable): Device 2.0 Data Movement migration.**
 
@@ -95,7 +97,7 @@ Step-ordering tip: if a kernel involves sharded code paths or reads from a CB ra
 **For kernels that pass the causal-link gate** (i.e. the lack of `TensorAccessor` is not downstream of a dynamic CB), classify by one of these three cases:
 
 - **Green — uses `TensorAccessor`** (with `TensorAccessorArgs<N>()` plumbing on the host side and `TensorAccessor(args, addr)` on the device side). Ready for the port.
-- **Red — doesn't use `TensorAccessor`, but the access pattern is page-by-page or otherwise iteratable.** Convert the kernel to use `TensorAccessor` in a separate, prior PR (may bundle with Check 2). Then return to this guide.
+- **Red — doesn't use `TensorAccessor`, but the access pattern is page-by-page or otherwise iteratable.** Record the gap — convert the kernel to use `TensorAccessor` in a separate, prior PR (may bundle with Check 2). Continue the audit; the feature scan still produces useful findings.
 - **Yellow — doesn't use `TensorAccessor`, and the access pattern genuinely cannot be expressed via `TensorAccessor`** (exotic NoC walks; sub-page access; address arithmetic the iterators don't support). Porting is possible without `TensorAccessor` for this kernel, but the user must make an explicit call. Report yellow and surface the following rationale to the user, **verbatim**:
 
   > The use of `TensorAccessor` is an ergonomic choice on Gen1 architectures. It has meaningful performance implications on Gen2 architectures. Ideally, `TensorAccessor` should be updated to support the required iteration pattern; consider filing an issue requesting that support.
@@ -105,6 +107,8 @@ Step-ordering tip: if a kernel involves sharded code paths or reads from a CB ra
 ### Step 0.2 — Feature compatibility check
 
 Some legacy-API features are not yet supported in Metal 2.0. If the op uses any such feature, it cannot be ported until support lands.
+
+**Run Step 0.2 regardless of Step 0.1's outcome.** Each Appendix A entry's recognition signals work against both ProgramDescriptor-form and imperative-`host_api.hpp`-form code — see the per-entry recognition bullets. Even when Step 0.1 RED's the op, Step 0.2 still surfaces which features it uses; that's the data point the human reader needs to plan downstream work.
 
 For each entry in [Appendix A: Metal 2.0 feature compatibility](#appendix-a-metal-20-feature-compatibility), scan the op (host code, kernel code, factory functions, descriptors) using the recognition signals listed for that feature. Each entry declares its tier in the header — `UNSUPPORTED` (red action: refuse and wait for support), `DISCOURAGED` (yellow action: ask the user; respect the override), or `LANDED` (green: feature is supported in Metal 2.0 as of the doc's "Last validated against main" commit; no port gate).
 
@@ -306,7 +310,7 @@ Plain `CircularBuffer`, `CBHandle`, `CBDescriptor`, or `CBFormatDescriptor` *wit
 **Recognition — definitely this feature** (no port gate; use borrowed-memory DFB):
 
 - **Descriptor-API** (the in-scope path): a `CBDescriptor` literal or struct assignment with its `.buffer` field set to a non-null `Buffer*` (any expression that is not statically `nullptr`). The type token does not appear at the assignment site — look for the **field name** `buffer` on a `CBDescriptor`. The companion field `.address_offset` is meaningful only when `.buffer` is set; it is not an independent signal.
-- **Imperative-API** (the op's own program-factory code using these will already be flagged red by Step 0.1 Check 1, but they can also leak in via shared utility code — e.g. `cb_utils.hpp` — that the op calls):
+- **Imperative-API** (an op on the imperative `host_api.hpp` builder API also trips Step 0.1 Check 1 RED; these signals additionally catch usage that leaks in via shared utility code — e.g. `cb_utils.hpp` — that the op calls):
   - `CircularBufferConfig::set_globally_allocated_address(buffer)`
   - `CircularBufferConfig::set_globally_allocated_address_and_total_size(buffer, total_size)`
   - The three-argument constructor `CircularBufferConfig(total_size, data_format_spec, buffer)`
@@ -340,7 +344,7 @@ This rule will most often fire together with the Dynamic CircularBuffer rule abo
 **Recognition — definitely this feature** (refuse and report; flag prominently):
 
 - A `CBDescriptor` literal or struct assignment with `.address_offset` set to a non-zero literal or any expression that is not statically `0`.
-- `CircularBufferConfig::set_address_offset(non_zero)` (imperative API; will already be flagged red by Step 0.1 Check 1, but worth recognizing in shared utility code).
+- `CircularBufferConfig::set_address_offset(non_zero)` (imperative API; an op using it directly also trips Step 0.1 Check 1, but record matches here too — including any leaking in via shared utility code).
 - `UpdateDynamicCircularBufferAddress(program, cb_handle, buffer, offset)` — the four-argument overload — when `offset` is non-zero.
 - Calls to helpers like `cb_descriptor_from_sharded_tensor(cb_index, tensor, address_offset, ...)` in `ttnn/api/ttnn/tensor/tensor_utils.hpp` where the third argument (`address_offset`) is passed a non-zero value.
 
@@ -385,7 +389,7 @@ The term "aliased CB" is descriptive — it does not appear in the legacy API su
   - Single-element (normal): `format_descriptors = {{CBFormatDescriptor{...}}}` → standard `DataflowBufferSpec`.
   - Multi-element (aliased): `format_descriptors = {{CBFormatDescriptor{...}, CBFormatDescriptor{...}}}` (or three+) → one `DataflowBufferSpec` per buffer index, mutually declared via `alias_with`.
   - The differing element is typically `buffer_index` — two distinct indices sharing the same backing storage.
-- **Imperative API** (will already be flagged red by Step 0.1 Check 1 if used in the op's own program-factory; can also leak in via shared utility code):
+- **Imperative API** (an op on the imperative `host_api.hpp` builder API also trips Step 0.1 Check 1 RED; these signals additionally catch usage that leaks in via shared utility code):
   - `CircularBufferConfig(total_size, data_format_spec)` where `data_format_spec` is a `std::map<uint8_t, tt::DataFormat>` with **more than one** key (e.g. `{{idx1, fmt1}, {idx2, fmt2}}`).
   - Two or more `.set_page_size(buffer_index, ...)` calls **with different `buffer_index` values** chained on the same `CircularBufferConfig` instance.
   - Companion signal: `.set_tile_dims(buffer_index, ...)` chained with multiple distinct `buffer_index` values on the same config.
@@ -400,7 +404,7 @@ The term "aliased CB" is descriptive — it does not appear in the legacy API su
 
 **Examples in the wild** (op locations whose port exercises this construct):
 - Descriptor-API form: currently not exercised by any checked-in ttnn op (every `format_descriptors` initializer in current op factories is single-element).
-- Imperative-API form (currently out of scope per Step 0.1 Check 1, but moves into scope as those ops migrate to `ProgramDescriptor`):
+- Imperative-API form (these ops trip Step 0.1 Check 1 RED in addition to this entry — record both):
   - `ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp` (around line 840 — output + interim sharing memory; has the comment "share buffer")
   - `ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp`
   - `ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_program_factory.cpp`
