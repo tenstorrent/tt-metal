@@ -70,7 +70,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
             {
                 .runtime_args = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
             },
-        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+        .config_spec =
+            experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
     };
 
     experimental::KernelSpec dm_transform_spec{
@@ -89,7 +90,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
                 {"buf_a", buf_a_addr},
                 {"buf_b", buf_b_addr},
             },
-        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+        .config_spec =
+            experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
     };
 
     experimental::KernelSpec dm_writer_spec{
@@ -101,7 +103,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
             {
                 .runtime_args = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
             },
-        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+        .config_spec =
+            experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
     };
 
     experimental::WorkUnitSpec main_wu{
@@ -219,7 +222,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
                 {"buf_a", buf_a_addr},
                 {"buf_b", buf_b_addr},
             },
-        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+        .config_spec =
+            experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
     };
 
     experimental::KernelSpec dm_writer_0_spec{
@@ -237,7 +241,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
                 .runtime_args =
                     {"dram_addr", "l1_addr", "num_elements", "dram_bank_id", "remote_noc_x", "remote_noc_y"},
             },
-        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+        .config_spec =
+            experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
     };
 
     experimental::KernelSpec dm_reader_1_spec{
@@ -254,7 +259,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
             {
                 .runtime_args = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
             },
-        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+        .config_spec =
+            experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
     };
 
     experimental::KernelSpec dm_transform_1_spec{
@@ -273,7 +279,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
                 {"buf_a", buf_a_addr},
                 {"buf_b", buf_b_addr},
             },
-        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+        .config_spec =
+            experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
     };
 
     experimental::KernelSpec dm_writer_1_spec{
@@ -285,7 +292,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
             {
                 .runtime_args = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
             },
-        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+        .config_spec =
+            experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
     };
 
     experimental::WorkUnitSpec wu_core_0{

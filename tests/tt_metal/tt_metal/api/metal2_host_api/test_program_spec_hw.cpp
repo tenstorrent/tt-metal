@@ -462,7 +462,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
         .config_spec =
             DataMovementConfiguration{
                 .gen1 =
-                    DataMovementConfiguration::Gen1{
+                    DataMovementConfiguration::Gen1DM{
                         .processor = DataMovementProcessor::RISCV_0,
                     },
             },
@@ -475,7 +475,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
         .config_spec =
             DataMovementConfiguration{
                 .gen1 =
-                    DataMovementConfiguration::Gen1{
+                    DataMovementConfiguration::Gen1DM{
                         .processor = DataMovementProcessor::RISCV_1,
                     },
             },

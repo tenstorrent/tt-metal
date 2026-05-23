@@ -94,7 +94,7 @@ protected:
                         .runtime_args = {"l1_counter_addr", "increment_times"},
                     },
                 .config_spec =
-                    experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+                    experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
             };
 
             experimental::WorkUnitSpec main_wu{

@@ -83,7 +83,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
             .num_threads = static_cast<uint8_t>(kQuasarUserDmCores),
             .runtime_arguments_schema = {.common_runtime_args = {"wait_cycles"}},
             .config_spec =
-                experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+                experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
         };
         experimental::WorkUnitSpec wu{
             .name = "main",

@@ -226,13 +226,13 @@ void run_single_dfb_program(
     // Gen2 (auto-assigned) variants so the same KernelSpec runs on WH/BH and Quasar.
     const experimental::DataMovementConfiguration dm_producer_cfg{
         .gen1 =
-            experimental::DataMovementConfiguration::Gen1{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0},
-        .gen2 = experimental::DataMovementConfiguration::Gen2{},
+            experimental::DataMovementConfiguration::Gen1DM{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0},
+        .gen2 = experimental::DataMovementConfiguration::Gen2DM{},
     };
     const experimental::DataMovementConfiguration dm_consumer_cfg{
         .gen1 =
-            experimental::DataMovementConfiguration::Gen1{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1},
-        .gen2 = experimental::DataMovementConfiguration::Gen2{},
+            experimental::DataMovementConfiguration::Gen1DM{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1},
+        .gen2 = experimental::DataMovementConfiguration::Gen2DM{},
     };
 
     experimental::KernelSpec producer_spec;
@@ -638,7 +638,7 @@ void run_concurrent_dfbs_program(
                     {"chunk_offset", chunk_offset},
                 },
             .config_spec =
-                experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+                experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
         });
         kernel_names.push_back(producer_name);
 
@@ -658,7 +658,7 @@ void run_concurrent_dfbs_program(
                     {"chunk_offset", chunk_offset},
                 },
             .config_spec =
-                experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+                experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
         });
         kernel_names.push_back(consumer_name);
     }
@@ -814,7 +814,7 @@ void run_concurrent_tensix_dm_dfbs_program(
                     {"implicit_sync", static_cast<uint32_t>(dfb_config.enable_implicit_sync ? 1u : 0u)},
                 },
             .config_spec =
-                experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+                experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
         });
         kernel_names.push_back(consumer_name);
     }
@@ -971,7 +971,8 @@ void run_sequential_dfbs_program(
                 {"implicit_sync", static_cast<uint32_t>(configs[0].enable_implicit_sync ? 1u : 0u)},
                 {"num_producers", num_producers},
             },
-        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+        .config_spec =
+            experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
     };
 
     // Consumer kernel: same layout, plus per-DFB entries_per_consumer_<i> /
@@ -986,7 +987,8 @@ void run_sequential_dfbs_program(
                 {"implicit_sync", static_cast<uint32_t>(configs[0].enable_implicit_sync ? 1u : 0u)},
                 {"num_consumers", num_consumers},
             },
-        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+        .config_spec =
+            experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
     };
 
     // Build per-DFB DataflowBufferSpec, TensorParameter, and bindings (dfb_<i> /
@@ -1156,7 +1158,8 @@ void run_in_dfb_out_dfb_program(
                 {"num_producers", dm2tensix_config.num_producers},
             },
         .runtime_arguments_schema = {.runtime_args = {"chunk_offset", "entries_per_core"}},
-        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+        .config_spec =
+            experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
     };
 
     experimental::KernelSpec compute_spec{
@@ -1201,7 +1204,8 @@ void run_in_dfb_out_dfb_program(
                 {"num_consumers", tensix2dm_config.num_consumers},
             },
         .runtime_arguments_schema = {.runtime_args = {"chunk_offset", "entries_per_core"}},
-        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+        .config_spec =
+            experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
     };
 
     experimental::WorkUnitSpec wu{
@@ -1954,7 +1958,8 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
                 {"num_producers", 1u},
             },
         .runtime_arguments_schema = {.runtime_args = {"chunk_offset", "entries_per_core"}},
-        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+        .config_spec =
+            experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
     };
 
     // Combined compute kernel: BLOCKED consumer of remapper DFB ("remapper_in"),

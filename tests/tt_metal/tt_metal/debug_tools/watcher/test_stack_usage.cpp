@@ -85,7 +85,7 @@ void RunOneTest(
                 .num_threads = static_cast<uint8_t>(dms_per_kernel),
                 .compile_time_args = {{"usage", free}},
                 .config_spec =
-                    experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+                    experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
             });
             kernel_names.push_back(name);
         }

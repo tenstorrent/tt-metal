@@ -114,12 +114,12 @@ AliasDFBProgramComponents make_alias_dfb_program_spec(
 
     // DM kernel configs (Gen1 + Gen2 variants so the same spec runs everywhere).
     const DataMovementConfiguration producer_cfg{
-        .gen1 = DataMovementConfiguration::Gen1{.processor = DataMovementProcessor::RISCV_0},
-        .gen2 = DataMovementConfiguration::Gen2{},
+        .gen1 = DataMovementConfiguration::Gen1DM{.processor = DataMovementProcessor::RISCV_0},
+        .gen2 = DataMovementConfiguration::Gen2DM{},
     };
     const DataMovementConfiguration consumer_cfg{
-        .gen1 = DataMovementConfiguration::Gen1{.processor = DataMovementProcessor::RISCV_1},
-        .gen2 = DataMovementConfiguration::Gen2{},
+        .gen1 = DataMovementConfiguration::Gen1DM{.processor = DataMovementProcessor::RISCV_1},
+        .gen2 = DataMovementConfiguration::Gen2DM{},
     };
 
     DataflowBufferSpec dfb_a{
@@ -310,12 +310,12 @@ AliasBorrowedDFBComponents make_alias_borrowed_dfb_program_spec(
         *mesh_device, make_alias_l1_tensor_spec(entry_size, num_entries), TensorTopology{});
 
     const DataMovementConfiguration producer_cfg{
-        .gen1 = DataMovementConfiguration::Gen1{.processor = DataMovementProcessor::RISCV_0},
-        .gen2 = DataMovementConfiguration::Gen2{},
+        .gen1 = DataMovementConfiguration::Gen1DM{.processor = DataMovementProcessor::RISCV_0},
+        .gen2 = DataMovementConfiguration::Gen2DM{},
     };
     const DataMovementConfiguration consumer_cfg{
-        .gen1 = DataMovementConfiguration::Gen1{.processor = DataMovementProcessor::RISCV_1},
-        .gen2 = DataMovementConfiguration::Gen2{},
+        .gen1 = DataMovementConfiguration::Gen1DM{.processor = DataMovementProcessor::RISCV_1},
+        .gen2 = DataMovementConfiguration::Gen2DM{},
     };
 
     // dfb_borrowed: backed by ring_tensor (L1)

@@ -85,7 +85,8 @@ void RunTest(
         .compiler_options = {.defines = {{"DFB_PRODUCER", "1"}}},
         .dfb_bindings = {experimental::ProducerOf(TILE_COUNTER_DFB, "tile_counter_dfb")},
         .compile_time_args = {{"num_entries", NUM_ENTRIES_PER_PRODUCER}},
-        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+        .config_spec =
+            experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
     };
 
     // NEO compute consumer kernel (4 threads = 4 Neo clusters)

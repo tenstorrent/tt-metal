@@ -82,7 +82,7 @@ inline KernelSpec MakeMinimalDMKernel(const std::string& name, uint8_t num_threa
         .num_threads = num_threads,
         .config_spec =
             DataMovementConfiguration{
-                .gen2 = DataMovementConfiguration::Gen2{},
+                .gen2 = DataMovementConfiguration::Gen2DM{},
             },
     };
 }
@@ -98,7 +98,7 @@ inline KernelSpec MakeMinimalGen1DMKernel(
         .config_spec =
             DataMovementConfiguration{
                 .gen1 =
-                    DataMovementConfiguration::Gen1{
+                    DataMovementConfiguration::Gen1DM{
                         .processor = processor,
                     },
             },

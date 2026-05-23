@@ -245,7 +245,7 @@ void RunTestOnCore(
                           "mcast_dst_end_x",
                           "mcast_dst_end_y"}},
                 .config_spec =
-                    experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+                    experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
             };
             experimental::WorkUnitSpec wu{
                 .name = "main",

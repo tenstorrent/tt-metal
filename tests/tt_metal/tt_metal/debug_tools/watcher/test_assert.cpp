@@ -93,7 +93,7 @@ static void RunTest(
                             .runtime_arguments_schema = {.runtime_args = {"a", "b", "assert_type", "hw_assert_cause"}},
                             .config_spec =
                                 experimental::DataMovementConfiguration{
-                                    .gen2 = experimental::DataMovementConfiguration::Gen2{}},
+                                    .gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
                         };
                         experimental::WorkUnitSpec wu{
                             .name = "main",

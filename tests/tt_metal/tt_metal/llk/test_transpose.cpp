@@ -217,7 +217,8 @@ void run_single_core_transpose_quasar(
         .dfb_bindings = {experimental::ProducerOf(INPUT_DFB, "out")},
         .tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}},
         .runtime_arguments_schema = {.runtime_args = {"N", "Ht", "Wt", "HtWt"}},
-        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+        .config_spec =
+            experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
     };
 
     experimental::KernelSpec writer_spec{
@@ -227,7 +228,8 @@ void run_single_core_transpose_quasar(
         .dfb_bindings = {experimental::ConsumerOf(OUTPUT_DFB, "in")},
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
         .runtime_arguments_schema = {.runtime_args = {"num_tiles"}},
-        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+        .config_spec =
+            experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
     };
 
     experimental::KernelSpec::CompilerOptions::Defines compute_defines;

@@ -501,7 +501,8 @@ void run_single_core_reduce_program_quasar(
         .tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}},
         .compile_time_args = reader_cta_bindings,
         .runtime_arguments_schema = {.runtime_args = reader_named_runtime_args},
-        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+        .config_spec =
+            experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
     };
 
     experimental::KernelSpec writer_spec{
@@ -511,7 +512,8 @@ void run_single_core_reduce_program_quasar(
         .dfb_bindings = {experimental::ConsumerOf(DST_DFB, "in")},
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
         .runtime_arguments_schema = {.runtime_args = {"num_tiles"}},
-        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+        .config_spec =
+            experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
     };
 
     experimental::KernelSpec compute_spec{

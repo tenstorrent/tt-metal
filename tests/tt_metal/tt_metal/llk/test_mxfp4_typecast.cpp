@@ -87,7 +87,8 @@ static vector<uint32_t> run_mxfp4_typecast(
         .dfb_bindings = {experimental::ProducerOf(INPUT_DFB, "out")},
         .compile_time_args = {{"use_dfbs", 1}},
         .runtime_arguments_schema = {.runtime_args = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
-        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+        .config_spec =
+            experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
     };
 
     experimental::KernelSpec writer_spec{
@@ -97,7 +98,8 @@ static vector<uint32_t> run_mxfp4_typecast(
         .dfb_bindings = {experimental::ConsumerOf(OUTPUT_DFB, "in")},
         .compile_time_args = {{"use_dfbs", 1}},
         .runtime_arguments_schema = {.runtime_args = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
-        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+        .config_spec =
+            experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
     };
 
     experimental::KernelSpec compute_spec{

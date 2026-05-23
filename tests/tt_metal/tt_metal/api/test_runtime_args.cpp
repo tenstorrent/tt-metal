@@ -201,7 +201,7 @@ std::pair<distributed::MeshWorkload, std::vector<std::string>> initialize_progra
                     .num_common_runtime_varargs = common_rtas ? num_runtime_args : 0,
                 },
             .config_spec =
-                experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+                experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
         });
         wu_kernel_names.push_back(kernel_names[k]);
     }

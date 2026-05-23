@@ -77,7 +77,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
                     .runtime_args = {"signal_address", "dram_dst_address", "dram_dst_bank_id", "l1_result_addr"},
                 },
             .config_spec =
-                experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+                experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
         };
     };
 

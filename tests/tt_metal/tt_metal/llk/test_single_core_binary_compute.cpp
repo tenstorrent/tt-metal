@@ -316,7 +316,8 @@ static bool single_core_binary_quasar(
         .runtime_arguments_schema =
             {.runtime_args =
                  {"src0_addr", "src0_bank_id", "src1_addr", "src1_bank_id", "num_tiles", "src2_addr", "src2_bank_id"}},
-        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+        .config_spec =
+            experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
     };
 
     experimental::KernelSpec writer_spec{
@@ -325,7 +326,8 @@ static bool single_core_binary_quasar(
         .num_threads = 1,
         .dfb_bindings = {experimental::ConsumerOf(OUT_DFB, "in")},
         .runtime_arguments_schema = {.runtime_args = {"dst_addr", "bank_id", "num_tiles"}},
-        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+        .config_spec =
+            experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
     };
 
     experimental::KernelSpec compute_spec{

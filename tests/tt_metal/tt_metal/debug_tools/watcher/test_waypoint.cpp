@@ -104,7 +104,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
             .num_threads = kQuasarUserDmCores,
             .runtime_arguments_schema = {.common_runtime_args = {"sync_flag_addr"}},
             .config_spec =
-                experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+                experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
         };
         experimental::KernelSpec compute_spec{
             .unique_id = COMPUTE_KERNEL_NAME,

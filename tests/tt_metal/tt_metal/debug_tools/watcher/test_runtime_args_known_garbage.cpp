@@ -246,7 +246,7 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
             .runtime_arguments_schema =
                 {.num_runtime_varargs = default_rtas.size(), .num_common_runtime_varargs = default_crtas.size()},
             .config_spec =
-                experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+                experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
         };
         experimental::WorkUnitSpec wu{
             .name = "main",
@@ -394,7 +394,7 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
                 .compile_time_args = {{"dm_id", 0}},
                 .runtime_arguments_schema = schema,
                 .config_spec =
-                    experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+                    experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
             };
         } else if (params.processor_class == HalProcessorClassType::COMPUTE) {
             kspec = experimental::KernelSpec{
@@ -492,7 +492,8 @@ TEST_F(RTATestFixture, QuasarMultiDMOutOfBoundsArgDetection) {
             {.defines = {{"MAX_RTA_IDX", std::to_string(default_rtas.size())}, {"TEST_MULTI_DM_RTA", "1"}}},
         .compile_time_args = {{"num_dms", num_dms_}, {"l1_sync_addr", l1_unreserved_base}},
         .runtime_arguments_schema = {.num_runtime_varargs = default_rtas.size()},
-        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+        .config_spec =
+            experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
     };
     experimental::WorkUnitSpec wu{
         .name = "main",

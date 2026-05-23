@@ -238,7 +238,7 @@ bool run_sfpu_all_same_buffer(
             .dfb_bindings = {experimental::ProducerOf(IN_DFB, "out")},
             .runtime_arguments_schema = {.runtime_args = {"src_addr", "bank_id", "num_tiles"}},
             .config_spec =
-                experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+                experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
         };
 
         experimental::KernelSpec writer_spec{
@@ -248,7 +248,7 @@ bool run_sfpu_all_same_buffer(
             .dfb_bindings = {experimental::ConsumerOf(OUT_DFB, "in")},
             .runtime_arguments_schema = {.runtime_args = {"dst_addr", "bank_id", "num_tiles"}},
             .config_spec =
-                experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+                experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
         };
 
         experimental::KernelSpec::CompilerOptions::Defines compute_defines;

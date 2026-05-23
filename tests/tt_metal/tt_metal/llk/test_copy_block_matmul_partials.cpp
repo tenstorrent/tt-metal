@@ -123,7 +123,8 @@ void run_single_core_copy_block_matmul_partials_quasar(
         .dfb_bindings = {experimental::ProducerOf(SRC0_DFB, "out")},
         .runtime_arguments_schema =
             {.runtime_args = {"src_addr", "src_dram_bank_id", "num_tiles", "ublock_size_tiles", "reader_only"}},
-        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+        .config_spec =
+            experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
     };
 
     experimental::KernelSpec writer_spec{
@@ -133,7 +134,8 @@ void run_single_core_copy_block_matmul_partials_quasar(
         .dfb_bindings = {experimental::ConsumerOf(DST_DFB, "in")},
         .runtime_arguments_schema =
             {.runtime_args = {"dst_addr", "dst_dram_bank_id", "num_tiles", "ublock_size_tiles", "writer_only"}},
-        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+        .config_spec =
+            experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
     };
 
     experimental::KernelSpec::CompilerOptions::Defines compute_defines;

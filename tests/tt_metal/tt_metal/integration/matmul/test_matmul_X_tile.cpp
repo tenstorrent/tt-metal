@@ -273,7 +273,8 @@ static void matmul_tile_quasar(
                   "in0_block_size_bytes",
                   "in1_block_size_bytes",
                   "with_bias"}},
-        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+        .config_spec =
+            experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
     };
 
     experimental::KernelSpec writer_spec{
@@ -282,7 +283,8 @@ static void matmul_tile_quasar(
         .num_threads = 1,
         .dfb_bindings = {experimental::ConsumerOf(DST_DFB, "in")},
         .runtime_arguments_schema = {.runtime_args = {"dst_addr", "bank_id", "num_tiles"}},
-        .config_spec = experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2{}},
+        .config_spec =
+            experimental::DataMovementConfiguration{.gen2 = experimental::DataMovementConfiguration::Gen2DM{}},
     };
 
     // The Quasar matmul_block.cpp kernel uses named CTAs. Map cfg.compute_kernel_args (positional)
