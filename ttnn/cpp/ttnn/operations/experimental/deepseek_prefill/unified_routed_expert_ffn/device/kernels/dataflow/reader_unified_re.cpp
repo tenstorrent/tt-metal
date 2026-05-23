@@ -252,16 +252,21 @@ void kernel_main() {
                 const uint32_t block_bytes = g_in0_block_num_tiles * x_tile_bytes;
                 noc_async_write_multicast(
                     block_start, mcast_data_noc, block_bytes, in0_num_receivers, /*linked=*/false);
-                noc_async_writes_flushed();
 
+                // Sender's own compute can start NOW — the data is already in
+                // the local CB. The mcast only affects receivers. Push first,
+                // THEN flush + set valid sem (which receivers wait on).
+                cb_push_back(cb_in0_x, g_in0_block_num_tiles);
+
+                noc_async_writes_flushed();
                 *in0_valid_local = IN0_VALID;
                 noc_semaphore_set_multicast(in0_valid_sem_addr, in0_mcast_valid_noc, in0_num_receivers);
             } else {
                 *in0_valid_local = 0;
                 noc_semaphore_inc(in0_sender_ready_noc, 1);
                 noc_semaphore_wait(in0_valid_local, IN0_VALID);
+                cb_push_back(cb_in0_x, g_in0_block_num_tiles);
             }
-            cb_push_back(cb_in0_x, g_in0_block_num_tiles);
 
             // in1_gate AND in1_up via a SINGLE mcast handshake. We issue two
             // back-to-back NoC writes (gate L1 region, then up L1 region) but
@@ -326,6 +331,11 @@ void kernel_main() {
                 noc_async_write_multicast(
                     up_block_start, up_mcast_noc, up_block_bytes, in1_num_receivers, /*linked=*/false);
 
+                // Sender's local compute can start as soon as the data is in
+                // its own CB. Mcast only affects receivers.
+                cb_push_back(cb_in1_gate, g_in1_block_num_tiles);
+                cb_push_back(cb_in1_up, g_in1_block_num_tiles);
+
                 noc_async_writes_flushed();
 
                 // ONE valid mcast covers both gate and up data — receivers
@@ -336,9 +346,9 @@ void kernel_main() {
                 *in1_valid_local = 0;
                 noc_semaphore_inc(in1_sender_ready_noc, 1);
                 noc_semaphore_wait(in1_valid_local, IN1_VALID);
+                cb_push_back(cb_in1_gate, g_in1_block_num_tiles);
+                cb_push_back(cb_in1_up, g_in1_block_num_tiles);
             }
-            cb_push_back(cb_in1_gate, g_in1_block_num_tiles);
-            cb_push_back(cb_in1_up, g_in1_block_num_tiles);
         }
 
         (void)total_cores;
