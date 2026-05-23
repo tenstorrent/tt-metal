@@ -199,6 +199,13 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     (void)VALID_SEM;
     const uint32_t in1_ready_sem_addr = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
     const uint32_t in1_valid_sem_addr = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
+    // in0 (x) multicast within M-row groups: sender at (gx=0, gy) reads x
+    // for that M-row, mcasts to (gx=1..GRID_X-1, gy). Used for phases 1 and
+    // 2 (gate and up matmul) where every core in a row needs the same x
+    // slice. Phase 4 uses cb_in0_down_full (sourced from DRAM scratch) so
+    // doesn't use this pair.
+    const uint32_t in0_ready_sem_addr = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
+    const uint32_t in0_valid_sem_addr = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
 
     // -------------------------- circular buffers --------------------------
     // Double-buffered DRAM-streamed inputs.
@@ -461,6 +468,20 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         const uint32_t in1_sender_nx = sender_noc.x;
         const uint32_t in1_sender_ny = sender_noc.y;
 
+        // x (in0) multicast topology: per M-row, sender at gx=0, receivers
+        // at gx=1..GRID_X-1.
+        const bool is_in0_sender = (gx == 0);
+        const auto in0_sender_noc = device->worker_core_from_logical_core(CoreCoord{0, gy});
+        const auto in0_first_recv_noc = device->worker_core_from_logical_core(CoreCoord{1, gy});
+        const auto in0_last_recv_noc = device->worker_core_from_logical_core(CoreCoord{GRID_X - 1, gy});
+        const uint32_t in0_num_receivers = GRID_X - 1;
+        const uint32_t in0_mcast_nx_start = in0_first_recv_noc.x;
+        const uint32_t in0_mcast_ny_start = in0_first_recv_noc.y;
+        const uint32_t in0_mcast_nx_end = in0_last_recv_noc.x;
+        const uint32_t in0_mcast_ny_end = in0_last_recv_noc.y;
+        const uint32_t in0_sender_nx = in0_sender_noc.x;
+        const uint32_t in0_sender_ny = in0_sender_noc.y;
+
         std::vector<uint32_t> reader_args = {
             x_buffer->address(),
             gate_buffer->address(),
@@ -485,6 +506,17 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             in1_mcast_ny_end,                      // 19
             in1_sender_nx,                         // 20
             in1_sender_ny,                         // 21
+            // in0 multicast args (indices 22..31):
+            static_cast<uint32_t>(is_in0_sender),  // 22
+            in0_ready_sem_addr,                    // 23
+            in0_valid_sem_addr,                    // 24
+            in0_num_receivers,                     // 25
+            in0_mcast_nx_start,                    // 26
+            in0_mcast_ny_start,                    // 27
+            in0_mcast_nx_end,                      // 28
+            in0_mcast_ny_end,                      // 29
+            in0_sender_nx,                         // 30
+            in0_sender_ny,                         // 31
         };
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
 
