@@ -229,7 +229,7 @@ void call_unary_sfpu_operation(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             _calculate_exponential_,
-            (APPROX_MODE, false /* scale_en */, ITERATIONS, CLAMP_NEGATIVE),
+            (APPROX_MODE, false /* scale_en */, ITERATIONS, CLAMP_NEGATIVE, DST_ACCUM_MODE),
             dst_index,
             vector_mode,
             p_sfpu::kCONST_1_FP16B /* exp_base_scale_factor */);
