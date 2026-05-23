@@ -25,6 +25,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+import numpy as np
 import torch
 import torch.nn as nn
 
@@ -417,12 +418,22 @@ def _build_matmul_program_configs(
 
 
 def _build_extended_mask(
-    attention_mask: torch.Tensor,
+    attention_mask: torch.Tensor | None,
     *,
+    B: int,
+    T: int,
     device: ttnn.Device,
     dtype=ttnn.bfloat16,
 ) -> ttnn.Tensor:
-    """``[B, T]`` (1=keep, 0=pad) -> additive mask ``[B, 1, 1, T]`` (TILE) with large neg on pad."""
+    """``[B, T]`` (1=keep, 0=pad) -> additive mask ``[B, 1, 1, T]`` (TILE) with large neg on pad.
+
+    When ``attention_mask`` is ``None`` (no padding), returns an all-zeros mask directly
+    on device without any torch ops.
+    """
+    if attention_mask is None:
+        return ttnn.zeros(
+            [B, 1, 1, T], dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
     m = attention_mask.to(torch.float32)
     extended = (1.0 - m).unsqueeze(1).unsqueeze(2) * -1.0e4
     return ttnn.from_torch(
@@ -679,7 +690,7 @@ class TTCustomAlbert:
         token_type_e = ttnn.embedding(tids_tt, self.params.token_type_emb, layout=ttnn.TILE_LAYOUT)
         ttnn.deallocate(tids_tt)
 
-        position_ids = torch.arange(T, dtype=torch.int32).unsqueeze(0).expand(B, T).contiguous()
+        position_ids = torch.from_numpy(np.tile(np.arange(T, dtype=np.int32), (B, 1)))
         pids_tt = ttnn.from_torch(
             position_ids,
             dtype=ttnn.uint32,
@@ -726,10 +737,8 @@ class TTCustomAlbert:
         """
         B, T = input_ids.shape
 
-        if attention_mask is None:
-            attention_mask = torch.ones((B, T), dtype=torch.int32)
         if token_type_ids is None:
-            token_type_ids = torch.zeros((B, T), dtype=torch.long)
+            token_type_ids = torch.from_numpy(np.zeros((B, T), dtype=np.int32))
 
         emb = self._embed(input_ids, token_type_ids)
 
@@ -746,7 +755,8 @@ class TTCustomAlbert:
         )
         ttnn.deallocate(emb)
 
-        ext_mask = _build_extended_mask(attention_mask, device=self.device)
+        # attention_mask=None means full-length (no padding): ext_mask is all-zeros (no-op add).
+        ext_mask = _build_extended_mask(attention_mask, B=B, T=T, device=self.device)
 
         num_layers = self.params.num_hidden_layers
         num_groups = self.params.num_hidden_groups
