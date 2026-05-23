@@ -66,7 +66,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const uint32_t per_core_N_gu = N_gate_tiles_full / GRID_X;
     const uint32_t per_core_N_d = N_down_tiles_full / GRID_X;
 
-    const uint32_t in0_block_w_gu = 16;
+    const uint32_t in0_block_w_gu = 8;
     const uint32_t in0_block_w_d = 8;
     TT_FATAL(
         K_gate_tiles % in0_block_w_gu == 0,
@@ -196,10 +196,14 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     };
 
     // Single-buffered DRAM-streamed inputs (no double-buffer) to fit L1.
-    make_cb(CB_IN0_X, x_df, /*tiles=*/gu_in0_block_num_tiles, x_tile_size);
-    make_cb(CB_IN1_GATE, gate_df, /*tiles=*/gu_in1_block_num_tiles, gate_tile_size);
-    make_cb(CB_IN1_UP, up_df, /*tiles=*/gu_in1_block_num_tiles, up_tile_size);
-    make_cb(CB_IN1_DOWN, down_df, /*tiles=*/d_in1_block_num_tiles, down_tile_size);
+    // Double-buffered input CBs so the reader (NCRISC) can fetch K-block N+1
+    // while compute consumes K-block N. PM FPU util = 0 today says we're
+    // memory-bound; bigger input CBs let the kernel pipeline DRAM I/O with
+    // compute instead of serialising.
+    make_cb(CB_IN0_X, x_df, /*tiles=*/gu_in0_block_num_tiles * 2, x_tile_size);
+    make_cb(CB_IN1_GATE, gate_df, /*tiles=*/gu_in1_block_num_tiles * 2, gate_tile_size);
+    make_cb(CB_IN1_UP, up_df, /*tiles=*/gu_in1_block_num_tiles * 2, up_tile_size);
+    make_cb(CB_IN1_DOWN, down_df, /*tiles=*/d_in1_block_num_tiles * 2, down_tile_size);
     // Intermediate L1 buffers hold one full per-core block each.
     make_cb(CB_GATE_INT, intermed_df, /*tiles=*/gu_out_block_num_tiles, intermed_tile_size);
     make_cb(CB_UP_INT, intermed_df, /*tiles=*/gu_out_block_num_tiles, intermed_tile_size);
