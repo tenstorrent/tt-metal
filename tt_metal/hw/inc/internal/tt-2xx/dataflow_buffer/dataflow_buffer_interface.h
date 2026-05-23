@@ -118,8 +118,9 @@ inline LocalDFBInterface& get_local_dfb_interface(uint32_t logical_dfb_id) {
 #endif
 }
 
-// Holds metadata for transaction ID based ISR handling
-// It is used by the ISR to understand which tile counters need to update which credits (post/ack)
+// Holds metadata for transaction ID based ISR handling.
+// It is used by the ISR to understand which tile counters need to update which credits (post/ack).
+// Padded to 32 bytes so g_txn_dfb_descriptor[trid] compiles to base + (trid << 5) instead of a multiply-by-20.
 struct TxnDFBDescriptor {
     uint8_t num_counters;
     dfb::PackedTileCounter tile_counters[18];
@@ -127,4 +128,6 @@ struct TxnDFBDescriptor {
         uint8_t tiles_to_post;
         uint8_t tiles_to_ack;
     } __attribute__((packed));
+    uint8_t _pad[12];  // pad 20 → 32 bytes
 };
+static_assert(sizeof(TxnDFBDescriptor) == 32, "TxnDFBDescriptor size is incorrect");

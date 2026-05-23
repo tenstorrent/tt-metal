@@ -66,7 +66,7 @@ inline __attribute__((always_inline)) constexpr uint8_t get_counter_id(PackedTil
     | dfb_initializer_per_risc_t | risc 0
     | dfb_initializer_per_risc_t | risc 1
     ...
-    (36 + (62 * 12)) * 16 = 12480 bytes
+    (32 + (64 * 12)) * 16 = 12800 bytes
 */
 struct dfb_txn_id_descriptor_t {
     uint8_t txn_ids[dfb::NUM_TXN_IDS];
@@ -76,8 +76,7 @@ struct dfb_txn_id_descriptor_t {
     uint8_t num_entries_per_txn_id_per_tc;
 } __attribute__((packed));
 
-struct dfb_initializer_t {  // 36 bytes
-    uint32_t logical_id;
+struct dfb_initializer_t {  // 32 bytes
     uint32_t entry_size;
     uint32_t stride_in_entries;
     uint16_t capacity;
@@ -94,9 +93,15 @@ struct dfb_initializer_t {  // 36 bytes
     uint8_t padding[2];
 } __attribute__((packed));
 
-struct dfb_initializer_per_risc_t {  // 62 bytes
-    uint32_t base_addr[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
-    uint32_t limit[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
+// AoS layout: base_addr and limit for the same TC slot are adjacent in memory,
+// improving spatial locality in the TC-init loop that accesses both per iteration.
+struct TCAddressEntry {
+    uint32_t base_addr;
+    uint32_t limit;
+} __attribute__((packed));
+
+struct dfb_initializer_per_risc_t {  // 64 bytes (power-of-2; array index = risc_index << 6)
+    TCAddressEntry tc_addrs[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];  // 48 (was: base_addr[6]+limit[6])
     uint32_t consumer_tcs;  // used to program remapper, for a L:R mapping contains all the TCs on the consumer side
                             // (R). TC can be value between 0 and 31 (5 bits, max of 4 TCs)
     dfb::PackedTileCounter packed_tile_counter[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
@@ -113,6 +118,7 @@ struct dfb_initializer_per_risc_t {  // 62 bytes
     } __attribute__((packed)) flags;
     uint8_t remapper_consumer_ids_mask;  // Bitmask of clientTypes (id_R) for this producer's consumers
     uint8_t producer_client_type;        // clientL for this producer when using remapper
+    uint8_t _pad[2];                     // pad to 64 bytes; per_risc_base[i] = base + (i << 6)
 } __attribute__((packed));
 
 // intra tensix dfb
@@ -128,6 +134,7 @@ struct dfb_initializer_intra_tensix_t {  // 24 bytes
     uint8_t tensix_mask;
 } __attribute__((packed));
 
-static_assert(sizeof(dfb_initializer_t) == 36, "dfb_initializer_t size is incorrect");
-static_assert(sizeof(dfb_initializer_per_risc_t) == 62, "dfb_initializer_per_risc_t size is incorrect");
+static_assert(sizeof(TCAddressEntry) == 8, "TCAddressEntry size is incorrect");
+static_assert(sizeof(dfb_initializer_t) == 32, "dfb_initializer_t size is incorrect");
+static_assert(sizeof(dfb_initializer_per_risc_t) == 64, "dfb_initializer_per_risc_t size is incorrect");
 static_assert(sizeof(dfb_initializer_intra_tensix_t) == 24, "dfb_initializer_intra_tensix_t size is incorrect");

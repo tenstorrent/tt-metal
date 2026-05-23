@@ -393,7 +393,6 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
     data.reserve(serialized_size());
 
     dfb_initializer_t init = {};
-    init.logical_id = this->id;
     init.entry_size = this->entry_size;
     init.stride_in_entries = this->stride_in_entries;
     init.capacity = this->capacity;
@@ -517,11 +516,11 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
         log_debug(tt::LogMetal, "Num tcs to rr: {}", rc->config.num_tcs_to_rr);
         // Copy per-risc arrays
         for (int i = 0; i < rc->config.num_tcs_to_rr; i++) {
-            per_risc.base_addr[i] = rc->config.base_addr[i];
-            per_risc.limit[i] = rc->config.limit[i];
+            per_risc.tc_addrs[i].base_addr = rc->config.base_addr[i];
+            per_risc.tc_addrs[i].limit = rc->config.limit[i];
             per_risc.packed_tile_counter[i] = rc->config.packed_tile_counter[i];
-            log_trace(tt::LogMetal, "Base addr {}: {}", i, static_cast<uint32_t>(per_risc.base_addr[i]));
-            log_trace(tt::LogMetal, "Limit {}: {}", i, static_cast<uint32_t>(per_risc.limit[i]));
+            log_trace(tt::LogMetal, "Base addr {}: {}", i, static_cast<uint32_t>(per_risc.tc_addrs[i].base_addr));
+            log_trace(tt::LogMetal, "Limit {}: {}", i, static_cast<uint32_t>(per_risc.tc_addrs[i].limit));
             log_trace(tt::LogMetal, "Packed tile counter {}: {}", i, (uint32_t)per_risc.packed_tile_counter[i]);
         }
         per_risc.flags.remapper_pair_index = static_cast<uint8_t>(rc->config.remapper_pair_index) & 0x3F;
