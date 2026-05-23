@@ -82,9 +82,12 @@ struct LlamaReduceScatterDeviceOperation {
             tensor_return_value_t& tensor_return_value,
             const std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& signaler);
 
-        // Append-style overload: writes builder output onto an existing ProgramDescriptor
-        // supplied by the caller, so a single descriptor can hold this reduce-scatter
-        // alongside other builders (e.g. the matmul gather_in0 helper in rs_matmul_op).
+        // Append-style ProgramDescriptor overload — writes onto an existing
+        // `desc` supplied by the caller so a single ProgramDescriptor can hold
+        // this reduce-scatter builder alongside other builders (e.g. the
+        // matmul helper in rs_matmul_op).  Semaphore IDs are allocated via
+        // desc.find_available_semaphore_id() to avoid collisions with
+        // semaphores already registered on overlapping cores.
         static void create_at_program_processing_descriptor(
             tt::tt_metal::ProgramDescriptor& desc,
             const operation_attributes_t& operation_attributes,

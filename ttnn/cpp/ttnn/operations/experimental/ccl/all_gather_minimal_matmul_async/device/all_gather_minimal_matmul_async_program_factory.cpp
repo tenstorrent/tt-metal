@@ -6,7 +6,7 @@
 #include "all_gather_minimal_matmul_async_program_factory.hpp"
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/hostdevcommon/common_values.hpp>
+#include "hostdevcommon/common_values.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
