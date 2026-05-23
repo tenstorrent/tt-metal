@@ -2,7 +2,7 @@
 
 > This is the first of two documents covering the Metal 2.0 op port workflow. **This document covers the feasibility audit only — the gate that decides whether a given op can be ported today.** The port recipe (inventory, planning, construction, verification) lives in [`port_op_to_metal2_recipe.md`](port_op_to_metal2_recipe.md) and is loaded only after the audit clears with explicit user go-ahead.
 >
-> **Last validated against main**: commit `ddbdd3c7ba5` (2026-05-20). Appendix A entries reflect Metal 2.0 feature support as of that commit. If you observe a feature in the codebase whose Appendix A status seems stale — particularly an `UNSUPPORTED` entry whose API has clearly landed in the framework headers — see [§Maintenance: keeping Appendix A current](#maintenance-keeping-appendix-a-current) for the override rule.
+> **Last validated against main**: commit `37853c2e411` (2026-05-23). Appendix A entries reflect Metal 2.0 feature support as of that commit. If you observe a feature in the codebase whose Appendix A status seems stale — particularly an `UNSUPPORTED` entry whose API has clearly landed in the framework headers — see [§Maintenance: keeping Appendix A current](#maintenance-keeping-appendix-a-current) for the override rule.
 
 ## Read this first
 
@@ -194,7 +194,7 @@ Every entry from Appendix A appears in this summary table, in the same order as 
 | GlobalCircularBuffer | GREEN | |
 | Dynamic CircularBuffer (CB on borrowed memory) | GREEN | (LANDED in Appendix A; if the op uses this, the port uses `borrowed_from`) |
 | CBDescriptor `address_offset` (non-zero) | RED | see detail below |
-| Aliased Circular Buffers | GREEN | |
+| Aliased Circular Buffers | GREEN | (LANDED in Appendix A; if the op uses this, the port uses `alias_with`) |
 | GlobalSemaphore | GREEN | |
 | Non-zero semaphore initial value | GREEN | |
 | `ArgConfig::Runtime*` tensor-accessor flavors | GREEN | |
@@ -373,15 +373,17 @@ Do not invent a workaround. Do not propose an alternative implementation. Do not
 
 If you find no concrete non-zero usage in the op being ported, this rule is green — that is the expected outcome for most ops today.
 
-### Aliased Circular Buffers (CBs sharing backing memory) — UNSUPPORTED
+### Aliased Circular Buffers (CBs sharing backing memory) — LANDED
 
-**Status**: Not yet supported in Metal 2.0; the equivalent feature is **aliased DFBs**, referenced in `tt_metal/api/tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp` but not yet implemented. The legacy API permits a single CB to back two or more *logically distinct* buffer indices using shared memory — the term "aliased CB" is descriptive (it does **not** appear in the legacy API surface). The legacy expression of this feature is unobvious: it lives in the array-shape of certain `CircularBufferConfig` fields (sized `NUM_CIRCULAR_BUFFERS`, almost always populated with one entry) and in the `SmallVector<CBFormatDescriptor, 1>` shape of `CBDescriptor::format_descriptors`. The signal is the *cardinality* of those collections, not any named field.
+**Status**: Supported in Metal 2.0. The legacy aliased-CB pattern — a single `CBDescriptor` whose `format_descriptors` contains multiple `CBFormatDescriptor` elements (each at a distinct `buffer_index`, sharing backing memory) — translates to Metal 2.0 as **aliased DFBs** via `DataflowBufferSpec::alias_with`. See [`dataflow_buffer_spec.hpp:97-104`](../../../../../../../tt_metal/api/tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp#L97) for the spec field and constraints, and the migration guide's "Aliased DFBs" note in the [DataflowBufferSpec section](metal2_migration_guide.md#dataflowbufferspec) for the porting shape.
 
-**Recognition — definitely this feature** (refuse and report):
+The term "aliased CB" is descriptive — it does not appear in the legacy API surface. The legacy expression of this feature lives in the array-shape of certain `CircularBufferConfig` fields (sized `NUM_CIRCULAR_BUFFERS`, almost always populated with one entry) and in the `SmallVector<CBFormatDescriptor, 1>` shape of `CBDescriptor::format_descriptors`. The signal is the cardinality of those collections, not any named field.
+
+**Recognition — definitely this feature** (no port gate; use aliased DFBs):
 
 - **Descriptor API** (the in-scope path): a `CBDescriptor` whose `format_descriptors` initializer contains **more than one** `CBFormatDescriptor` element. Concretely:
-  - Single-element (normal): `format_descriptors = {{CBFormatDescriptor{...}}}` → green.
-  - Multi-element (aliased): `format_descriptors = {{CBFormatDescriptor{...}, CBFormatDescriptor{...}}}` (or three+) → red.
+  - Single-element (normal): `format_descriptors = {{CBFormatDescriptor{...}}}` → standard `DataflowBufferSpec`.
+  - Multi-element (aliased): `format_descriptors = {{CBFormatDescriptor{...}, CBFormatDescriptor{...}}}` (or three+) → one `DataflowBufferSpec` per buffer index, mutually declared via `alias_with`.
   - The differing element is typically `buffer_index` — two distinct indices sharing the same backing storage.
 - **Imperative API** (will already be flagged red by Step 0.1 Check 1 if used in the op's own program-factory; can also leak in via shared utility code):
   - `CircularBufferConfig(total_size, data_format_spec)` where `data_format_spec` is a `std::map<uint8_t, tt::DataFormat>` with **more than one** key (e.g. `{{idx1, fmt1}, {idx2, fmt2}}`).
@@ -391,25 +393,21 @@ If you find no concrete non-zero usage in the op being ported, this rule is gree
 **Recognition — false-positive guard**:
 
 - A file that creates *many* CBs, each with a single buffer index, is **not** aliased — aliased means a *single* config has multiple indices. Confirm the multiple `set_page_size` calls are on the *same* `CircularBufferConfig` instance, not on different ones.
-- Single-element initializers (`{{CBFormatDescriptor{...}}}` for the descriptor form, single-key `{{idx, fmt}}` map for the imperative form) are the dominant pattern by a wide margin → green for this rule.
+- Single-element initializers (`{{CBFormatDescriptor{...}}}` for the descriptor form, single-key `{{idx, fmt}}` map for the imperative form) are the dominant pattern by a wide margin → standard DFB for this rule.
 - The `CBDescriptor::remote_format_descriptors` field is a *different* concept (relates to remote DFBs, a separate planned feature) and is not covered by this rule. Multi-element values there have a different meaning; do not conflate.
 
-**Action**: STOP. Report to the user that this op uses an aliased CB (multiple logical buffer indices sharing backing memory), which Metal 2.0 does not yet support — the planned "aliased DFBs" feature is referenced in `dataflow_buffer_spec.hpp` but not implemented. Do not invent a workaround; in particular, do **not** "split" the aliased CB into two independent CBs (changes memory footprint and may break the kernel's assumption that the indices share an address).
+**Action**: Proceed with the port. Declare one `DataflowBufferSpec` per buffer index, each with `alias_with` mutually naming the other(s). All aliased DFBs must have the same `num_entries * entry_size` and must be bound to the same kernels. The header docs at `dataflow_buffer_spec.hpp:97-104` capture the legality constraints; the migration guide section linked above shows the porting shape. **Do not** "split" the aliased CB into independent DFBs — that changes the L1 footprint and breaks the kernel's assumption that the indices share an address.
 
-**Examples in the wild** (for ground-truthing your match):
-
-The descriptor form (in-scope) is currently *not exercised* by any checked-in ttnn op — every `format_descriptors` initializer in current op factories is single-element. The descriptor API does support aliased CBs cleanly: the `CircularBufferConfig(const CBDescriptor&)` constructor at `tt_metal/impl/buffers/circular_buffer_config.cpp` iterates all elements of `format_descriptors` and preserves the multi-element semantics end-to-end. So a descriptor-form match is valid usage — just unusual, since no in-tree op has needed it yet. Treat as a red.
-
-The imperative form (currently out of scope per Step 0.1 Check 1, but will move into scope once those ops are migrated to `ProgramDescriptor`) is used in:
-- `ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp` (around line 840 — output + interim sharing memory; has the comment "share buffer")
-- `ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp`
-- `ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_program_factory.cpp`
-- `ttnn/cpp/ttnn/operations/matmul/device/sparse/factory/sparse_matmul_multicore_reuse_mcast_1d_optimized.cpp`
-- `ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/rotary_embedding_program_factory.cpp` (multiple sites — cos/sin interim/sync pairs)
-- `ttnn/cpp/ttnn/operations/kv_cache/device/update_cache_multi_core_program_factory.cpp`
-- `ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/llama_1d_mm_fusion.cpp`
-
-When porting one of these post-Pass-1, expect this rule to fire even though the imperative form was caught upstream.
+**Examples in the wild** (op locations whose port exercises this construct):
+- Descriptor-API form: currently not exercised by any checked-in ttnn op (every `format_descriptors` initializer in current op factories is single-element).
+- Imperative-API form (currently out of scope per Step 0.1 Check 1, but moves into scope as those ops migrate to `ProgramDescriptor`):
+  - `ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp` (around line 840 — output + interim sharing memory; has the comment "share buffer")
+  - `ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp`
+  - `ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_program_factory.cpp`
+  - `ttnn/cpp/ttnn/operations/matmul/device/sparse/factory/sparse_matmul_multicore_reuse_mcast_1d_optimized.cpp`
+  - `ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/rotary_embedding_program_factory.cpp` (multiple sites — cos/sin interim/sync pairs)
+  - `ttnn/cpp/ttnn/operations/kv_cache/device/update_cache_multi_core_program_factory.cpp`
+  - `ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/llama_1d_mm_fusion.cpp`
 
 ### GlobalSemaphore — UNSUPPORTED
 

@@ -20,6 +20,7 @@ Entry shape:
 
 - [Self-loop DFB binding (producer == consumer)](#pattern-self-loop-dfb-binding)
 - [Conditional / optional DFB bindings](#pattern-conditional--optional-dfb-bindings)
+- [Aliased DFBs (legacy aliased CBs)](#pattern-aliased-dfbs-legacy-aliased-cbs)
 - [Pass DFB handles directly to LLKs and kernel-lib helpers](#pattern-pass-dfb-handles-directly-to-llks-and-kernel-lib-helpers)
 - [Multi-variant factories](#pattern-multi-variant-factories)
 - [Unity-build hygiene for anonymous-namespace symbols](#pattern-unity-build-hygiene-for-anonymous-namespace-symbols)
@@ -104,6 +105,38 @@ The `#ifdef` runs at the preprocessor stage, before the C++ compiler sees the co
 **Don't bind unconditionally** as an alternative. Beyond the L1 cost, it fails to compile when the kernel needs to reference the conditionally-used name from a file-scope ternary or similar parse-time-resolves-both-branches context.
 
 **Future direction.** Metal 2.0 work to NTTP-ify all CTAs would let the entire kernel body be template-instantiated on the CTA values, at which point `if constexpr` discarded branches truly skip non-dependent name lookup and the `#ifdef` scaffolding could be retired in favor of `if constexpr (do_scale) { use dfb::name; }`. That work is not currently planned; for Metal 2.0 today, `#ifdef`-gated conditional bindings are the recommended pattern.
+
+---
+
+## Pattern: Aliased DFBs (legacy aliased CBs)
+
+**Category**: Pattern
+
+**Recognition signal**: Legacy code that places two or more `buffer_index` values on the *same* `CBDescriptor` — multi-element `format_descriptors`, multi-key `data_format_spec` map in the imperative form, or repeated `set_page_size` calls with different `buffer_index` arguments on the same `CircularBufferConfig`. The legacy intent is two logically distinct buffers sharing one L1 region. The audit's [Aliased Circular Buffers entry](port_op_to_metal2_audit.md#aliased-circular-buffers-cbs-sharing-backing-memory--landed) catches this in the legacy inventory.
+
+**Decision**: Declare one `DataflowBufferSpec` per legacy `buffer_index`. Set each spec's `alias_with` to mutually reference the others — the alias group must be a *strict clique* (every member names every other member). All members of the alias group share these legality constraints:
+- Same `num_entries * entry_size` (total backing size identical).
+- Bound to the same set of kernels.
+- Borrowed-memory consistency (either all `borrowed_from` matching `TensorParameter`s, or none borrowed).
+
+The validator enforces these as the three legality rules; missing any of them surfaces with a message in the [migration guide's troubleshooting table](metal2_migration_guide.md#cryptic-error--likely-cause). The header at `tt_metal/api/tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp:97-104` is the authoritative source for the field's contract — including the explicit "no clobbering guarantees" note: aliased DFBs share backing memory, and correctness of *which* logical buffer's data is live at any moment is the kernel author's responsibility.
+
+**Correct port**:
+
+```cpp
+// Two indices that legacy shared via a single CBDescriptor become two
+// DFBs with mutual alias_with entries:
+DataflowBufferSpec INTERM0{ .unique_id = INTERM0_ID, .num_entries = N, .entry_size = S,
+                            .alias_with = {OUTPUT_ID} };
+DataflowBufferSpec OUTPUT{  .unique_id = OUTPUT_ID,  .num_entries = N, .entry_size = S,
+                            .alias_with = {INTERM0_ID} };
+```
+
+For larger alias groups (three or more), every member names every other member in its `alias_with` — partial mentions are rejected by the validator.
+
+**Don't split** the aliased CB into independent, non-aliased DFBs. That changes the L1 footprint and breaks any kernel assumption that the indices shared an address.
+
+**See also**: [migration guide — DataflowBufferSpec: Aliased DFBs](metal2_migration_guide.md#dataflowbufferspec); [audit — Aliased Circular Buffers entry](port_op_to_metal2_audit.md#aliased-circular-buffers-cbs-sharing-backing-memory--landed).
 
 ---
 
