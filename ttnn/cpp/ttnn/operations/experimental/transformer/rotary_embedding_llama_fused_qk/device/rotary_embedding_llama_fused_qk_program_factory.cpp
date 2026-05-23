@@ -91,7 +91,7 @@ ProgramDescriptor RotaryEmbeddingLlamaFusedQKProgramFactory::create_descriptor(
     auto* q_dst_buffer = q_output.buffer();
     auto* k_dst_buffer = k_output.buffer();
 
-    uint32_t q_input_cb_index = tt::CBIndex::c_0;
+    constexpr uint8_t q_input_cb_index = tt::CBIndex::c_0;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_q_input_tiles * input_single_tile_size,
         .core_ranges = all_cores_bb,
@@ -103,7 +103,7 @@ ProgramDescriptor RotaryEmbeddingLlamaFusedQKProgramFactory::create_descriptor(
         .buffer = q_src_buffer,
     });
 
-    uint32_t k_input_cb_index = tt::CBIndex::c_1;
+    constexpr uint8_t k_input_cb_index = tt::CBIndex::c_1;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_k_input_tiles * input_single_tile_size,
         .core_ranges = all_cores_bb,
@@ -115,7 +115,7 @@ ProgramDescriptor RotaryEmbeddingLlamaFusedQKProgramFactory::create_descriptor(
         .buffer = k_src_buffer,
     });
 
-    uint32_t cos_cb_index = tt::CBIndex::c_2;
+    constexpr uint8_t cos_cb_index = tt::CBIndex::c_2;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_cos_sin_tiles * cos_single_tile_size,
         .core_ranges = all_cores_bb,
@@ -127,7 +127,7 @@ ProgramDescriptor RotaryEmbeddingLlamaFusedQKProgramFactory::create_descriptor(
         .buffer = cos_buffer,
     });
 
-    uint32_t sin_cb_index = tt::CBIndex::c_3;
+    constexpr uint8_t sin_cb_index = tt::CBIndex::c_3;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_cos_sin_tiles * sin_single_tile_size,
         .core_ranges = all_cores_bb,
@@ -139,7 +139,7 @@ ProgramDescriptor RotaryEmbeddingLlamaFusedQKProgramFactory::create_descriptor(
         .buffer = sin_buffer,
     });
 
-    uint32_t trans_mat_cb_index = tt::CBIndex::c_4;
+    constexpr uint8_t trans_mat_cb_index = tt::CBIndex::c_4;
     // We only take one tile of trans_mat
     uint32_t num_trans_mat_tiles = 1;
     desc.cbs.push_back(CBDescriptor{
@@ -154,7 +154,7 @@ ProgramDescriptor RotaryEmbeddingLlamaFusedQKProgramFactory::create_descriptor(
     });
 
     uint32_t num_interm_tiles = head_dim_t;
-    uint32_t rotated_input_interm_cb_index = tt::CBIndex::c_24;
+    constexpr uint8_t rotated_input_interm_cb_index = tt::CBIndex::c_24;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_interm_tiles * input_single_tile_size,
         .core_ranges = all_cores_bb,
@@ -165,7 +165,7 @@ ProgramDescriptor RotaryEmbeddingLlamaFusedQKProgramFactory::create_descriptor(
         }}},
     });
 
-    uint32_t cos_interm_cb_index = tt::CBIndex::c_25;
+    constexpr uint8_t cos_interm_cb_index = tt::CBIndex::c_25;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_interm_tiles * input_single_tile_size,
         .core_ranges = all_cores_bb,
@@ -176,7 +176,7 @@ ProgramDescriptor RotaryEmbeddingLlamaFusedQKProgramFactory::create_descriptor(
         }}},
     });
 
-    uint32_t sin_interm_cb_index = tt::CBIndex::c_26;
+    constexpr uint8_t sin_interm_cb_index = tt::CBIndex::c_26;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_interm_tiles * input_single_tile_size,
         .core_ranges = all_cores_bb,
@@ -187,7 +187,7 @@ ProgramDescriptor RotaryEmbeddingLlamaFusedQKProgramFactory::create_descriptor(
         }}},
     });
 
-    uint32_t q_output_cb_index = tt::CBIndex::c_16;  // output operands start at index 16
+    constexpr uint8_t q_output_cb_index = tt::CBIndex::c_16;  // output operands start at index 16
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_q_output_tiles * output_single_tile_size,
         .core_ranges = all_cores_bb,
@@ -198,7 +198,7 @@ ProgramDescriptor RotaryEmbeddingLlamaFusedQKProgramFactory::create_descriptor(
         }}},
         .buffer = q_dst_buffer,
     });
-    uint32_t k_output_cb_index = tt::CBIndex::c_17;  // output operands start at index 17
+    constexpr uint8_t k_output_cb_index = tt::CBIndex::c_17;  // output operands start at index 17
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_k_output_tiles * output_single_tile_size,
         .core_ranges = all_cores_bb,

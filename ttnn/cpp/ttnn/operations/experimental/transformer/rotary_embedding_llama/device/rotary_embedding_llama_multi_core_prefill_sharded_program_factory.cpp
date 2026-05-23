@@ -122,7 +122,7 @@ ProgramDescriptor RotaryEmbeddingLlamaMultiCorePrefillSharded::create_descriptor
     auto* trans_mat_buffer = trans_mat.buffer();
     auto* dst_buffer = output.buffer();
 
-    uint32_t input_cb_index = CBIndex::c_0;
+    constexpr uint8_t input_cb_index = CBIndex::c_0;
     desc.cbs.push_back(CBDescriptor{
         .total_size = input_cb_num_tiles * input_single_tile_size,
         .core_ranges = CoreRangeSet(all_cores),
@@ -136,8 +136,8 @@ ProgramDescriptor RotaryEmbeddingLlamaMultiCorePrefillSharded::create_descriptor
     // ------------------------------------------------------------------
     // Cos / Sin CBs — sharded path with optional reload fallback
     // ------------------------------------------------------------------
-    uint32_t cos_cb_index = CBIndex::c_1;
-    uint32_t sin_cb_index = CBIndex::c_2;
+    constexpr uint8_t cos_cb_index = CBIndex::c_1;
+    constexpr uint8_t sin_cb_index = CBIndex::c_2;
     if (cos_sin_sharded) {
         if (cos_sin_sharded_reload) {
             desc.cbs.push_back(CBDescriptor{
@@ -237,7 +237,7 @@ ProgramDescriptor RotaryEmbeddingLlamaMultiCorePrefillSharded::create_descriptor
     // ------------------------------------------------------------------
     // Trans_mat CB — sharded (global CB) or interleaved fallback
     // ------------------------------------------------------------------
-    uint32_t trans_mat_cb_index = CBIndex::c_3;
+    constexpr uint8_t trans_mat_cb_index = CBIndex::c_3;
     // We only take one tile of trans_mat
     uint32_t num_trans_mat_tiles = 1;
     // Globally-allocated CB for trans_mat requires shard grid to cover all active cores.
@@ -288,7 +288,7 @@ ProgramDescriptor RotaryEmbeddingLlamaMultiCorePrefillSharded::create_descriptor
     }
 
     uint32_t num_interm_tiles = head_dim_t;
-    uint32_t rotated_input_interm_cb_index = CBIndex::c_24;
+    constexpr uint8_t rotated_input_interm_cb_index = CBIndex::c_24;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_interm_tiles * input_single_tile_size,
         .core_ranges = CoreRangeSet(all_cores),
@@ -299,7 +299,7 @@ ProgramDescriptor RotaryEmbeddingLlamaMultiCorePrefillSharded::create_descriptor
         }}},
     });
 
-    uint32_t cos_interm_cb_index = CBIndex::c_25;
+    constexpr uint8_t cos_interm_cb_index = CBIndex::c_25;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_interm_tiles * cos_single_tile_size,
         .core_ranges = CoreRangeSet(all_cores),
@@ -310,7 +310,7 @@ ProgramDescriptor RotaryEmbeddingLlamaMultiCorePrefillSharded::create_descriptor
         }}},
     });
 
-    uint32_t sin_interm_cb_index = CBIndex::c_26;
+    constexpr uint8_t sin_interm_cb_index = CBIndex::c_26;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_interm_tiles * sin_single_tile_size,
         .core_ranges = CoreRangeSet(all_cores),
@@ -321,7 +321,7 @@ ProgramDescriptor RotaryEmbeddingLlamaMultiCorePrefillSharded::create_descriptor
         }}},
     });
 
-    uint32_t output_cb_index = CBIndex::c_16;  // output operands start at index 16
+    constexpr uint8_t output_cb_index = CBIndex::c_16;  // output operands start at index 16
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_output_tiles * output_single_tile_size,
         .core_ranges = CoreRangeSet(all_cores),
@@ -332,7 +332,7 @@ ProgramDescriptor RotaryEmbeddingLlamaMultiCorePrefillSharded::create_descriptor
         }}},
     });
 
-    uint32_t zero_cb_index = CBIndex::c_27;
+    constexpr uint8_t zero_cb_index = CBIndex::c_27;
     desc.cbs.push_back(CBDescriptor{
         .total_size = head_dim_t * output_single_tile_size,
         .core_ranges = CoreRangeSet(all_cores),
@@ -429,16 +429,14 @@ ProgramDescriptor RotaryEmbeddingLlamaMultiCorePrefillSharded::create_descriptor
         Overall loop iterations: # total cores
     */
 
-    std::vector<uint32_t> default_reader_args = {
-        src_buffer->address(), cos_buffer->address(), sin_buffer->address(), trans_mat_buffer->address(), 0, 0, 0, 0};
-
-    std::vector<uint32_t> default_writer_args = {dst_buffer->address(), 0, 0, 0, 0};
-
-    std::vector<uint32_t> default_compute_args = {0, 0, 0, 0};
-
-    std::vector<std::vector<uint32_t>> unary_reader_args(cores.size(), default_reader_args);
-    std::vector<std::vector<uint32_t>> unary_writer_args(cores.size(), default_writer_args);
-    std::vector<std::vector<uint32_t>> unary_compute_args(cores.size(), default_compute_args);
+    // Per-core args tracked as {start_batch, end_batch, start_seq, end_seq}.
+    struct CoreArgs {
+        uint32_t start_batch = 0;
+        uint32_t end_batch = 0;
+        uint32_t start_seq = 0;
+        uint32_t end_seq = 0;
+    };
+    std::vector<CoreArgs> per_core_args(cores.size());
 
     for (uint32_t batch_parallel = 0; batch_parallel < batch_parallel_factor; batch_parallel++) {
         for (uint32_t seq_parallel = 0; seq_parallel < seq_parallel_factor; seq_parallel++) {
@@ -462,26 +460,7 @@ ProgramDescriptor RotaryEmbeddingLlamaMultiCorePrefillSharded::create_descriptor
                 start_seq,
                 end_seq);
 
-            // Reader runtime args
-            auto& reader_rt_args = unary_reader_args[core_idx];
-            reader_rt_args[4] = start_batch;
-            reader_rt_args[5] = end_batch;
-            reader_rt_args[6] = start_seq;
-            reader_rt_args[7] = end_seq;
-
-            // Writer runtime args
-            auto& writer_rt_args = unary_writer_args[core_idx];
-            writer_rt_args[1] = start_batch;
-            writer_rt_args[2] = end_batch;
-            writer_rt_args[3] = start_seq;
-            writer_rt_args[4] = end_seq;
-
-            // Compute runtime args
-            auto& compute_rt_args = unary_compute_args[core_idx];
-            compute_rt_args[0] = start_batch;
-            compute_rt_args[1] = end_batch;
-            compute_rt_args[2] = start_seq;
-            compute_rt_args[3] = end_seq;
+            per_core_args[core_idx] = CoreArgs{start_batch, end_batch, start_seq, end_seq};
         }
     }
 
@@ -489,9 +468,13 @@ ProgramDescriptor RotaryEmbeddingLlamaMultiCorePrefillSharded::create_descriptor
     writer_desc.runtime_args.reserve(cores.size());
     compute_desc.runtime_args.reserve(cores.size());
     for (uint32_t i = 0; i < cores.size(); ++i) {
-        reader_desc.runtime_args.emplace_back(cores[i], std::move(unary_reader_args[i]));
-        writer_desc.runtime_args.emplace_back(cores[i], std::move(unary_writer_args[i]));
-        compute_desc.runtime_args.emplace_back(cores[i], std::move(unary_compute_args[i]));
+        const auto& a = per_core_args[i];
+        reader_desc.emplace_runtime_args(
+            cores[i],
+            {src_buffer, cos_buffer, sin_buffer, trans_mat_buffer, a.start_batch, a.end_batch, a.start_seq, a.end_seq});
+        writer_desc.emplace_runtime_args(cores[i], {dst_buffer, a.start_batch, a.end_batch, a.start_seq, a.end_seq});
+        compute_desc.runtime_args.emplace_back(
+            cores[i], std::vector<uint32_t>{a.start_batch, a.end_batch, a.start_seq, a.end_seq});
     }
 
     desc.kernels.push_back(std::move(reader_desc));

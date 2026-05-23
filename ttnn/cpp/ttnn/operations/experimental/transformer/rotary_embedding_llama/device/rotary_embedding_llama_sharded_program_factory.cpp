@@ -75,7 +75,7 @@ ProgramDescriptor RotaryEmbeddingLlamaMultiCoreSharded::create_descriptor(
     auto* trans_mat_buffer = trans_mat.buffer();
     auto* dst_buffer = output.buffer();
 
-    uint32_t input_cb_index = CBIndex::c_0;
+    constexpr uint8_t input_cb_index = CBIndex::c_0;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_input_tiles * input_single_tile_size,
         .core_ranges = CoreRangeSet(all_cores),
@@ -87,7 +87,7 @@ ProgramDescriptor RotaryEmbeddingLlamaMultiCoreSharded::create_descriptor(
         .buffer = src_buffer,
     });
 
-    uint32_t cos_cb_index = CBIndex::c_1;
+    constexpr uint8_t cos_cb_index = CBIndex::c_1;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_cos_sin_tiles * cos_single_tile_size,
         .core_ranges = CoreRangeSet(all_cores),
@@ -99,7 +99,7 @@ ProgramDescriptor RotaryEmbeddingLlamaMultiCoreSharded::create_descriptor(
         .buffer = cos_buffer,
     });
 
-    uint32_t sin_cb_index = CBIndex::c_2;
+    constexpr uint8_t sin_cb_index = CBIndex::c_2;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_cos_sin_tiles * sin_single_tile_size,
         .core_ranges = CoreRangeSet(all_cores),
@@ -111,7 +111,7 @@ ProgramDescriptor RotaryEmbeddingLlamaMultiCoreSharded::create_descriptor(
         .buffer = sin_buffer,
     });
 
-    uint32_t trans_mat_cb_index = CBIndex::c_3;
+    constexpr uint8_t trans_mat_cb_index = CBIndex::c_3;
     // We only take one tile of trans_mat
     uint32_t num_trans_mat_tiles = 1;
     desc.cbs.push_back(CBDescriptor{
@@ -126,7 +126,7 @@ ProgramDescriptor RotaryEmbeddingLlamaMultiCoreSharded::create_descriptor(
     });
 
     uint32_t num_interm_tiles = head_dim_t;
-    uint32_t rotated_input_interm_cb_index = CBIndex::c_24;
+    constexpr uint8_t rotated_input_interm_cb_index = CBIndex::c_24;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_interm_tiles * input_single_tile_size,
         .core_ranges = CoreRangeSet(all_cores),
@@ -137,7 +137,7 @@ ProgramDescriptor RotaryEmbeddingLlamaMultiCoreSharded::create_descriptor(
         }}},
     });
 
-    uint32_t cos_interm_cb_index = CBIndex::c_25;
+    constexpr uint8_t cos_interm_cb_index = CBIndex::c_25;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_interm_tiles * input_single_tile_size,
         .core_ranges = CoreRangeSet(all_cores),
@@ -148,7 +148,7 @@ ProgramDescriptor RotaryEmbeddingLlamaMultiCoreSharded::create_descriptor(
         }}},
     });
 
-    uint32_t sin_interm_cb_index = CBIndex::c_26;
+    constexpr uint8_t sin_interm_cb_index = CBIndex::c_26;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_interm_tiles * input_single_tile_size,
         .core_ranges = CoreRangeSet(all_cores),
@@ -159,7 +159,7 @@ ProgramDescriptor RotaryEmbeddingLlamaMultiCoreSharded::create_descriptor(
         }}},
     });
 
-    uint32_t output_cb_index = CBIndex::c_16;  // output operands start at index 16
+    constexpr uint8_t output_cb_index = CBIndex::c_16;  // output operands start at index 16
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_output_tiles * output_single_tile_size,
         .core_ranges = CoreRangeSet(all_cores),

@@ -90,7 +90,7 @@ ProgramDescriptor create_single_tile_prefill_descriptor(
         num_output_tiles = num_input_tiles;
     }
 
-    uint32_t input_cb_index = tt::CBIndex::c_0;
+    constexpr uint8_t input_cb_index = tt::CBIndex::c_0;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_input_tiles * input_single_tile_size,
         .core_ranges = all_cores,
@@ -102,7 +102,7 @@ ProgramDescriptor create_single_tile_prefill_descriptor(
         .buffer = in_sharded ? input.buffer() : nullptr,
     });
 
-    uint32_t trans_mat_cb_index = tt::CBIndex::c_1;
+    constexpr uint8_t trans_mat_cb_index = tt::CBIndex::c_1;
     desc.cbs.push_back(CBDescriptor{
         .total_size = trans_mat_single_tile_size,
         .core_ranges = all_cores,
@@ -113,7 +113,7 @@ ProgramDescriptor create_single_tile_prefill_descriptor(
         }}},
     });
 
-    uint32_t cos_cb_index = tt::CBIndex::c_2;
+    constexpr uint8_t cos_cb_index = tt::CBIndex::c_2;
     desc.cbs.push_back(CBDescriptor{
         .total_size = cos_single_tile_size,
         .core_ranges = all_cores,
@@ -124,7 +124,7 @@ ProgramDescriptor create_single_tile_prefill_descriptor(
         }}},
     });
 
-    uint32_t sin_cb_index = tt::CBIndex::c_3;
+    constexpr uint8_t sin_cb_index = tt::CBIndex::c_3;
     desc.cbs.push_back(CBDescriptor{
         .total_size = sin_single_tile_size,
         .core_ranges = all_cores,
@@ -136,7 +136,7 @@ ProgramDescriptor create_single_tile_prefill_descriptor(
     });
 
     uint32_t num_interm_tiles = 1;
-    uint32_t rotated_input_interm_cb_index = tt::CBIndex::c_24;
+    constexpr uint8_t rotated_input_interm_cb_index = tt::CBIndex::c_24;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_interm_tiles * input_single_tile_size,
         .core_ranges = all_cores,
@@ -147,7 +147,7 @@ ProgramDescriptor create_single_tile_prefill_descriptor(
         }}},
     });
 
-    uint32_t cos_interm_cb_index = tt::CBIndex::c_25;
+    constexpr uint8_t cos_interm_cb_index = tt::CBIndex::c_25;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_interm_tiles * input_single_tile_size,
         .core_ranges = all_cores,
@@ -158,7 +158,7 @@ ProgramDescriptor create_single_tile_prefill_descriptor(
         }}},
     });
 
-    uint32_t sin_interm_cb_index = tt::CBIndex::c_26;
+    constexpr uint8_t sin_interm_cb_index = tt::CBIndex::c_26;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_interm_tiles * input_single_tile_size,
         .core_ranges = all_cores,
@@ -169,7 +169,7 @@ ProgramDescriptor create_single_tile_prefill_descriptor(
         }}},
     });
 
-    uint32_t output_cb_index = tt::CBIndex::c_16;
+    constexpr uint8_t output_cb_index = tt::CBIndex::c_16;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_output_tiles * output_single_tile_size,
         .core_ranges = all_cores,
@@ -294,30 +294,22 @@ ProgramDescriptor create_single_tile_prefill_descriptor(
         uint32_t num_rows_per_core = i < g1_numcores ? num_rows_per_core_group_1 : num_rows_per_core_group_2;
         uint32_t cos_sin_start_id = num_tiles_written % HtWt;
 
-        std::vector<uint32_t> reader_rt_args;
         if (in_sharded) {
-            reader_rt_args = {
-                cos_buffer->address(),
-                sin_buffer->address(),
-                num_rows_per_core,
-                num_tiles_written / Wt % Ht,
-                cos_sin_start_id,
-            };
+            reader_desc.emplace_runtime_args(
+                core, {cos_buffer, sin_buffer, num_rows_per_core, num_tiles_written / Wt % Ht, cos_sin_start_id});
         } else {
-            reader_rt_args = {
-                src_buffer->address(),
-                cos_buffer->address(),
-                sin_buffer->address(),
-                num_rows_per_core,
-                num_tiles_written,
-                num_tiles_written / Wt % Ht,
-                cos_sin_start_id,
-            };
+            reader_desc.emplace_runtime_args(
+                core,
+                {src_buffer,
+                 cos_buffer,
+                 sin_buffer,
+                 num_rows_per_core,
+                 num_tiles_written,
+                 num_tiles_written / Wt % Ht,
+                 cos_sin_start_id});
         }
-        reader_desc.runtime_args.emplace_back(core, std::move(reader_rt_args));
 
-        writer_desc.runtime_args.emplace_back(
-            core, std::vector<uint32_t>{dst_buffer->address(), num_rows_per_core * Wt, num_tiles_written});
+        writer_desc.emplace_runtime_args(core, {dst_buffer, num_rows_per_core * Wt, num_tiles_written});
         num_tiles_written += num_rows_per_core * Wt;
     }
 
@@ -402,7 +394,7 @@ ProgramDescriptor create_multi_tile_descriptor(
         num_output_tiles = num_input_tiles;
     }
 
-    uint32_t input_cb_index = tt::CBIndex::c_0;
+    constexpr uint8_t input_cb_index = tt::CBIndex::c_0;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_input_tiles * input_single_tile_size,
         .core_ranges = all_cores,
@@ -414,7 +406,7 @@ ProgramDescriptor create_multi_tile_descriptor(
         .buffer = in_sharded ? input.buffer() : nullptr,
     });
 
-    uint32_t rotated_input_cb_index = tt::CBIndex::c_1;
+    constexpr uint8_t rotated_input_cb_index = tt::CBIndex::c_1;
     uint32_t num_rotated_input_tiles = 2 * Wt;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_rotated_input_tiles * input_single_tile_size,
@@ -427,7 +419,7 @@ ProgramDescriptor create_multi_tile_descriptor(
     });
 
     uint32_t num_cos_sin_tiles = 2 * Wt;
-    uint32_t cos_cb_index = tt::CBIndex::c_2;
+    constexpr uint8_t cos_cb_index = tt::CBIndex::c_2;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_cos_sin_tiles * cos_single_tile_size,
         .core_ranges = all_cores,
@@ -438,7 +430,7 @@ ProgramDescriptor create_multi_tile_descriptor(
         }}},
     });
 
-    uint32_t sin_cb_index = tt::CBIndex::c_3;
+    constexpr uint8_t sin_cb_index = tt::CBIndex::c_3;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_cos_sin_tiles * sin_single_tile_size,
         .core_ranges = all_cores,
@@ -449,7 +441,7 @@ ProgramDescriptor create_multi_tile_descriptor(
         }}},
     });
 
-    uint32_t src_scalar_cb_index = tt::CBIndex::c_4;
+    constexpr uint8_t src_scalar_cb_index = tt::CBIndex::c_4;
     uint32_t num_scalar_tiles = 1;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_scalar_tiles * scalar_single_tile_size,
@@ -462,7 +454,7 @@ ProgramDescriptor create_multi_tile_descriptor(
     });
 
     uint32_t num_interm_tiles = 1;
-    uint32_t rotated_input_interm_cb_index = tt::CBIndex::c_24;
+    constexpr uint8_t rotated_input_interm_cb_index = tt::CBIndex::c_24;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_interm_tiles * input_single_tile_size,
         .core_ranges = all_cores,
@@ -473,7 +465,7 @@ ProgramDescriptor create_multi_tile_descriptor(
         }}},
     });
 
-    uint32_t cos_interm_cb_index = tt::CBIndex::c_25;
+    constexpr uint8_t cos_interm_cb_index = tt::CBIndex::c_25;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_interm_tiles * cos_single_tile_size,
         .core_ranges = all_cores,
@@ -484,7 +476,7 @@ ProgramDescriptor create_multi_tile_descriptor(
         }}},
     });
 
-    uint32_t sin_interm_cb_index = tt::CBIndex::c_26;
+    constexpr uint8_t sin_interm_cb_index = tt::CBIndex::c_26;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_interm_tiles * sin_single_tile_size,
         .core_ranges = all_cores,
@@ -495,7 +487,7 @@ ProgramDescriptor create_multi_tile_descriptor(
         }}},
     });
 
-    uint32_t output_cb_index = tt::CBIndex::c_16;
+    constexpr uint8_t output_cb_index = tt::CBIndex::c_16;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_output_tiles * output_single_tile_size,
         .core_ranges = all_cores,
@@ -613,19 +605,17 @@ ProgramDescriptor create_multi_tile_descriptor(
         uint32_t num_rows_per_core = i < g1_numcores ? num_rows_per_core_group_1 : num_rows_per_core_group_2;
         uint32_t cos_sin_start_id = num_tiles_written % HtWt;
 
-        reader_desc.runtime_args.emplace_back(
+        reader_desc.emplace_runtime_args(
             core,
-            std::vector<uint32_t>{
-                src_buffer->address(),
-                cos_buffer->address(),
-                sin_buffer->address(),
-                num_rows_per_core,
-                num_tiles_written,
-                num_tiles_written / Wt % Ht,
-                cos_sin_start_id});
+            {src_buffer,
+             cos_buffer,
+             sin_buffer,
+             num_rows_per_core,
+             num_tiles_written,
+             num_tiles_written / Wt % Ht,
+             cos_sin_start_id});
 
-        writer_desc.runtime_args.emplace_back(
-            core, std::vector<uint32_t>{dst_buffer->address(), num_rows_per_core * Wt, num_tiles_written});
+        writer_desc.emplace_runtime_args(core, {dst_buffer, num_rows_per_core * Wt, num_tiles_written});
         num_tiles_written += num_rows_per_core * Wt;
     }
 
