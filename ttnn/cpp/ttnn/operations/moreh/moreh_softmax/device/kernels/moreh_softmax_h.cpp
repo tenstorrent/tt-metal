@@ -6,6 +6,8 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"  // Exp
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Mask, Negative
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
 
@@ -91,36 +93,73 @@ void kernel_main() {
                 compute_kernel_lib::OperandKind::Block,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
-        // compute exp(x - max(x))
-        cb_exps_obj.reserve_back(Ht);
+        // compute exp(x - max(x)). Original per-tile copy + (Negative if !SOFTMAX)
+        // + Exp + (Mask on last tile) + pack with cb_exps reserve(Ht) upfront and
+        // push(Ht) at end. Split into 2 chains:
+        //   A (Ht-1 iters, non-last): CopyTile(cb_x_m_max @ i) + ... + Exp + Pack
+        //   B (1 iter, last with mask): CopyTile(cb_x_m_max @ Ht-1) + ... + Exp +
+        //                                CopyTile(cb_mask) + Mask + Pack
+        //
+        // cb_x_m_max CallerManaged + Block (held outside; sequential read 0..Ht-1
+        // across iters; TileBaseRuntime(Ht-1) for the last tile).
+        // cb_mask CallerManaged + Scalar (held outside via line 42 wait_front(1)).
+        // cb_exps OutStreaming (per-tile reserve+push replaces upfront reserve+
+        // push; net Ht tiles pushed matches original).
+        //
+        // Reconfig: copy_tile_init_with_dt -> CopyTileReconfig::Input.
+        // pack_tile_with_dt -> PackTileReconfig::Output.
         cb_x_m_max_obj.wait_front(Ht);
-        for (uint32_t h = 0; h < Ht; ++h) {
-            tile_regs_acquire();
-            copy_tile_init_with_dt(cb_x_m_max);
-            copy_tile(cb_x_m_max, h, dst0);
-
+        compute_kernel_lib::eltwise_chain(
+            Ht - 1,
+            compute_kernel_lib::CopyTile<
+                cb_x_m_max,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::CopyTileReconfig::Input>{},
 #ifndef SOFTMAX
-            negative_tile_init();
-            negative_tile(dst0);
+            compute_kernel_lib::Negative<compute_kernel_lib::Dst::D0>{},
 #endif
+            compute_kernel_lib::Exp<
+                compute_kernel_lib::Approx::Exact,
+                compute_kernel_lib::Approx::Exact,
+                compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::PackTile<
+                cb_exps,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 
-            exp_tile_init();
-            exp_tile(dst0);
-
-            if (h == Ht - 1) {
-                copy_tile_init_with_dt(cb_mask);
-                copy_tile(cb_mask, 0, dst1);
-
-                mask_tile_init();
-                mask_tile(dst0, dst1);
-            }
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_exps);
-            tile_regs_release();
-        }
-        cb_exps_obj.push_back(Ht);
+        compute_kernel_lib::eltwise_chain(
+            1u,
+            compute_kernel_lib::CopyTile<
+                cb_x_m_max,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::CopyTileReconfig::Input,
+                compute_kernel_lib::TileBaseRuntime>{compute_kernel_lib::TileBaseRuntime{Ht - 1}},
+#ifndef SOFTMAX
+            compute_kernel_lib::Negative<compute_kernel_lib::Dst::D0>{},
+#endif
+            compute_kernel_lib::Exp<
+                compute_kernel_lib::Approx::Exact,
+                compute_kernel_lib::Approx::Exact,
+                compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::CopyTile<
+                cb_mask,
+                compute_kernel_lib::Dst::D1,
+                compute_kernel_lib::CallerManaged,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::CopyTileReconfig::Input>{},
+            compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::PackTile<
+                cb_exps,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 
 #ifdef LOG
         // log(sum) - pop tiles after reduce
