@@ -317,8 +317,6 @@ class WanPipelineS2V(WanPipeline):
     ):
         device_configs = {}
         if ttnn.device.is_blackhole():
-            # 4×8: sp_factor=8 halves per-device H vs 2×4, giving headroom
-            # for full-T single pass.
             device_configs[(4, 8)] = {
                 "sp_axis": 1,
                 "tp_axis": 0,
@@ -906,12 +904,13 @@ class WanPipelineS2V(WanPipeline):
                 image_prompt=image_prompt, height=height, width=width
             )
             audio_BLNF_full, num_clips = self.prepare_audio_embeds(audio_prompt=audio_prompt, num_clips=num_clips)
-            self._maybe_warm_multi_clip(num_clips=num_clips, height=height, width=width)
             motion_latents_torch = self.prepare_motion_latents(height=height, width=width)
             videos_last_frames: Optional[torch.Tensor] = None
-
             if seed is None:
                 seed = int(torch.seed())
+
+        with self._stage("multi_clip_warmup"):
+            self._maybe_warm_multi_clip(num_clips=num_clips, height=height, width=width)
 
         # Per-clip denoise → decode → (optionally) re-encode last-frames as next clip's motion.
         clip_videos: list[torch.Tensor] = []
@@ -961,7 +960,7 @@ class WanPipelineS2V(WanPipeline):
                     videos_last_frames = self._slide_motion_buffer(
                         videos_last_frames, image_BCTHW, height=height, width=width
                     )
-                    with self._stage(f"s2v_clip_{clip_idx}_vae_encode_motion"):
+                    with self._stage(f"s2v_clip_{clip_idx}_motion_vae_encode"):
                         motion_latents_torch = self._encode_normalized(videos_last_frames)
 
                 clip_videos.append(image_BCTHW)

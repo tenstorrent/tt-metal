@@ -143,9 +143,10 @@ def test_pipeline_performance_s2v(
     total = _dur("run")
     encoder_t = _dur("encoder")
     prepare_latents_t = _dur("prepare_latents")
+    multi_clip_warmup_t = _dur("multi_clip_warmup")
     vae_encode_ref_t = _dur("s2v_vae_encode_ref")
     wav2vec2_t = _dur("s2v_wav2vec2")
-    vae_encode_initial_motion_t = _dur("s2v_vae_encode_motion")
+    motion_vae_encode_initial_t = _dur("s2v_motion_vae_encode")
 
     # Per-clip stages.
     per_clip_total = [_dur(f"s2v_clip_{r}_total") for r in range(num_clips)]
@@ -153,11 +154,11 @@ def test_pipeline_performance_s2v(
     per_clip_prepare_cond_emb = [_dur(f"s2v_clip_{r}_prepare_cond_emb") for r in range(num_clips)]
     per_clip_denoise = [_dur(f"s2v_clip_{r}_denoise") for r in range(num_clips)]
     per_clip_vae_decode = [_dur(f"s2v_clip_{r}_vae_decode") for r in range(num_clips)]
-    per_clip_vae_encode_motion = [_dur(f"s2v_clip_{r}_vae_encode_motion") for r in range(num_clips)]
+    per_clip_motion_vae_encode = [_dur(f"s2v_clip_{r}_motion_vae_encode") for r in range(num_clips)]
 
     sum_denoise = sum(per_clip_denoise)
     sum_vae_decode = sum(per_clip_vae_decode)
-    sum_vae_encode_motion = sum(per_clip_vae_encode_motion)
+    sum_motion_vae_encode = sum(per_clip_motion_vae_encode)
     sum_prep_audio = sum(per_clip_prepare_audio_emb)
     sum_prep_cond = sum(per_clip_prepare_cond_emb)
     total_denoise_steps = max(1, num_clips * num_inference_steps)
@@ -171,16 +172,21 @@ def test_pipeline_performance_s2v(
         ("prepare_latents", prepare_latents_t),
         ("  vae_encode_ref", vae_encode_ref_t),
         ("  wav2vec2", wav2vec2_t),
-        ("  vae_encode_motion0", vae_encode_initial_motion_t),
+        ("  motion_vae_encode0", motion_vae_encode_initial_t),
+        ("prepare_audio_emb (sum)", sum_prep_audio),
+        ("prepare_cond_emb (sum)", sum_prep_cond),
         ("denoise (sum)", sum_denoise),
         ("vae_decode (sum)", sum_vae_decode),
-        ("vae_encode_motion (sum)", sum_vae_encode_motion),
+        ("motion_vae_encode (sum)", sum_motion_vae_encode),
         ("TOTAL", total),
     ]:
         print(f"  {name:30}  {value:8.3f}s")
     print(f"  per-step denoise: {sum_denoise / total_denoise_steps:.3f}s")
     for r in range(num_clips):
         print(
-            f"  clip {r}: total={per_clip_total[r]:.2f}s denoise={per_clip_denoise[r]:.2f}s "
-            f"vae_dec={per_clip_vae_decode[r]:.2f}s"
+            f"  clip {r}: total={per_clip_total[r]:.2f}s "
+            f"prep_audio={per_clip_prepare_audio_emb[r]:.3f}s "
+            f"prep_cond={per_clip_prepare_cond_emb[r]:.3f}s "
+            f"denoise={per_clip_denoise[r]:.2f}s vae_dec={per_clip_vae_decode[r]:.2f}s "
+            f"motion_vae_enc={per_clip_motion_vae_encode[r]:.3f}s"
         )
