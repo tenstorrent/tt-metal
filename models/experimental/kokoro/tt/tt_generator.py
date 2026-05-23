@@ -85,7 +85,7 @@ def _strip_weight_norm(m: nn.Module) -> None:
         pass
 
 
-def _conv1d_to_tt_params(conv: nn.Conv1d, device, *, weights_dtype) -> TTConv1dParams:
+def _conv1d_to_tt_params(conv: nn.Conv1d, *, weights_dtype) -> TTConv1dParams:
     """Upload a ``nn.Conv1d`` (after any ``weight_norm`` is folded) for :func:`tt_conv1d_nlc`."""
     w = conv.weight.detach().cpu().unsqueeze(-1)  # [out, in/g, k] -> [out, in/g, k, 1]
     w_tt = ttnn.from_torch(
@@ -260,7 +260,7 @@ def preprocess_tt_generator(
 
         noise_conv = module.noise_convs[i]
         _strip_weight_norm(noise_conv)  # No-op for plain Conv1d
-        noise_conv_p = _conv1d_to_tt_params(noise_conv, device, weights_dtype=conv_weights_dtype)
+        noise_conv_p = _conv1d_to_tt_params(noise_conv, weights_dtype=conv_weights_dtype)
 
         noise_res_p = preprocess_tt_adain_resblock1(
             module.noise_res[i],
@@ -290,7 +290,7 @@ def preprocess_tt_generator(
 
     conv_post = module.conv_post
     _strip_weight_norm(conv_post)
-    conv_post_p = _conv1d_to_tt_params(conv_post, device, weights_dtype=conv_weights_dtype)
+    conv_post_p = _conv1d_to_tt_params(conv_post, weights_dtype=conv_weights_dtype)
 
     return TTGeneratorParams(
         m_source=m_source,
@@ -341,7 +341,7 @@ def _f0_upsamp_cpu_nlc(
     """``Generator.f0_upsamp`` on CPU, then upload — matches PyTorch ``nn.Upsample(nearest)``.
 
     ``ttnn.repeat_interleave`` on long F0 curves (e.g. ``T_f0=162`` → ``T_har=48600``) can differ by
-    up to ~1 Hz per sample while keeping PCC > 0.99; that drift destroys SineGen phase PCC.
+    up to ~1 Hz per sample; for maximum reference parity use this when ``use_torch_stft_fallback=True``.
     """
     if scale == 1:
         return f0_b_t_1
@@ -392,7 +392,7 @@ class TTGenerator:
         self.device = device
         self.params = params
         if use_torch_f0_upsamp_fallback is None:
-            use_torch_f0_upsamp_fallback = use_torch_sinegen_fallback or use_torch_stft_fallback
+            use_torch_f0_upsamp_fallback = use_torch_stft_fallback
         self._use_torch_f0_upsamp_fallback = use_torch_f0_upsamp_fallback
         # HiFi4 (with fp32_dest_acc_en) measured better than HiFi3 for the STFT precision
         # bottleneck (cos(phase) PCC 0.78 vs 0.77; near-zero sign match 0.70 vs 0.69). Apply the

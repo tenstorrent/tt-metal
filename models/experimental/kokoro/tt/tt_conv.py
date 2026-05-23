@@ -313,6 +313,119 @@ def tt_conv1d_nlc(
     return y
 
 
+def tt_conv1d_stride2_k3_1ch_nlc(
+    *,
+    x_nlc: ttnn.Tensor,
+    params: TTConv1dParams,
+    device,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+) -> ttnn.Tensor:
+    """TT-native Conv1d(1→1, k=3, stride=2, padding=1) via reshape+permute+elementwise.
+
+    Avoids ``ttnn.conv1d`` which produces ~10 Hz interior errors at T_f0~162 on BH due to
+    the broken B*L range (96, 194) — see P1 in DECODE_STACK_NOTES.md.
+
+    Algorithm: zero-pad x by 1 on each side → reshape [B, T+2, 1] to [B, (T+2)/2, 2]
+    (C-order pairs → even/odd channels) → permute(0,2,1) to [B, 2, half] so the even and
+    odd rows are memory-contiguous → slice three kernel-position views s0/s1/s2 → compute
+    w0·s0 + w1·s1 + w2·s2 + b using elementwise ops (no MAC, no BF16 rounding).
+
+    Only valid for in_channels=out_channels=1, kernel_size=3, stride=2, padding=1, dilation=1.
+    """
+    assert params.in_channels == 1 and params.out_channels == 1, "only 1-channel conv"
+    assert params.kernel_size == 3 and params.stride == 2 and params.padding == 1
+    assert getattr(params, "dilation", 1) == 1 and getattr(params, "groups", 1) == 1
+
+    B = int(x_nlc.shape[0])
+    T = int(x_nlc.shape[1])
+    T_out = (T - 1) // 2 + 1  # == (T + 2*1 - 3) // 2 + 1
+
+    dtype = x_nlc.dtype
+
+    # Upload kernel weights [1,1,3,1] → [1,1,3] on device (TILE, broadcast over B and T)
+    w_dev = ttnn.to_device(ttnn.reshape(params.weight, [1, 1, 3]), device, memory_config=memory_config)
+    w_tt = ttnn.to_layout(w_dev, ttnn.TILE_LAYOUT, memory_config=memory_config)
+    ttnn.deallocate(w_dev)
+
+    # Upload bias [1,1,1,1] → [1,1,1] on device if present
+    b_tt: Optional[ttnn.Tensor] = None
+    if params.bias is not None:
+        b_dev = ttnn.to_device(ttnn.reshape(params.bias, [1, 1, 1]), device, memory_config=memory_config)
+        b_tt = ttnn.to_layout(b_dev, ttnn.TILE_LAYOUT, memory_config=memory_config)
+        ttnn.deallocate(b_dev)
+
+    # Step 1: pad [B, T, 1] → [B, T+2, 1]
+    if x_nlc.layout != ttnn.TILE_LAYOUT:
+        x_nlc = ttnn.to_layout(x_nlc, ttnn.TILE_LAYOUT, memory_config=memory_config)
+    z_l = ttnn.zeros([B, 1, 1], dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
+    z_r = ttnn.zeros([B, 1, 1], dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
+    x_padded = ttnn.concat([z_l, x_nlc, z_r], dim=1, memory_config=memory_config)
+    ttnn.deallocate(z_l)
+    ttnn.deallocate(z_r)
+
+    # Ensure T+2 is even for the reshape into (even, odd) pairs
+    T_padded = T + 2
+    if T_padded % 2 != 0:
+        z_x = ttnn.zeros([B, 1, 1], dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
+        x_padded = ttnn.concat([x_padded, z_x], dim=1, memory_config=memory_config)
+        ttnn.deallocate(z_x)
+        T_padded += 1
+    half = T_padded // 2
+
+    # Step 2: reshape [B, T_padded, 1] → [B, half, 2] in ROW_MAJOR (C-order)
+    # After reshape: element [b, j, 0] = x_padded[2j] (even), [b, j, 1] = x_padded[2j+1] (odd)
+    x_rm = ttnn.to_layout(x_padded, ttnn.ROW_MAJOR_LAYOUT, memory_config=memory_config)
+    ttnn.deallocate(x_padded)
+    x_pairs = ttnn.reshape(x_rm, [B, half, 2], memory_config=memory_config)
+    ttnn.deallocate(x_rm)
+
+    # Step 3: permute [B, half, 2] → [B, 2, half] so each "row" is memory-contiguous
+    # Row 0: even positions [x_padded[0], x_padded[2], ..., x_padded[2*(half-1)]]
+    # Row 1: odd  positions [x_padded[1], x_padded[3], ..., x_padded[2*(half-1)+1]]
+    x_pairs_tile = ttnn.to_layout(x_pairs, ttnn.TILE_LAYOUT, memory_config=memory_config)
+    ttnn.deallocate(x_pairs)
+    x_deint = ttnn.permute(x_pairs_tile, (0, 2, 1), memory_config=memory_config)
+    ttnn.deallocate(x_pairs_tile)
+
+    # Step 4: slice three contiguous kernel-position views from [B, 2, half] in ROW_MAJOR
+    # s0: even positions 0, 2, ..., 2*(T_out-1)    → row 0, cols 0..T_out-1
+    # s1: odd  positions 1, 3, ..., 2*(T_out-1)+1  → row 1, cols 0..T_out-1
+    # s2: even positions 2, 4, ..., 2*T_out         → row 0, cols 1..T_out
+    x_deint_rm = ttnn.to_layout(x_deint, ttnn.ROW_MAJOR_LAYOUT, memory_config=memory_config)
+    ttnn.deallocate(x_deint)
+    s0 = ttnn.slice(x_deint_rm, [0, 0, 0], [B, 1, T_out], [1, 1, 1], memory_config=memory_config)
+    s1 = ttnn.slice(x_deint_rm, [0, 1, 0], [B, 2, T_out], [1, 1, 1], memory_config=memory_config)
+    s2 = ttnn.slice(x_deint_rm, [0, 0, 1], [B, 1, T_out + 1], [1, 1, 1], memory_config=memory_config)
+    ttnn.deallocate(x_deint_rm)
+
+    # Step 5: convert each [B, 1, T_out] slice to TILE and reshape to NLC [B, T_out, 1]
+    def _to_nlc(s: ttnn.Tensor) -> ttnn.Tensor:
+        s = ttnn.to_layout(s, ttnn.TILE_LAYOUT, memory_config=memory_config)
+        return ttnn.reshape(s, [B, T_out, 1], memory_config=memory_config)
+
+    s0 = _to_nlc(s0)
+    s1 = _to_nlc(s1)
+    s2 = _to_nlc(s2)
+
+    # Step 6: concat [B,T_out,1] × 3 → [B,T_out,3], broadcast-multiply by weights [1,1,3],
+    # then reduce over channel dim to get [B,T_out,1] = w0·s0 + w1·s1 + w2·s2
+    s_all = ttnn.concat([s0, s1, s2], dim=2, memory_config=memory_config)
+    ttnn.deallocate(s0)
+    ttnn.deallocate(s1)
+    ttnn.deallocate(s2)
+    weighted = ttnn.multiply(s_all, w_tt, memory_config=memory_config)
+    ttnn.deallocate(s_all)
+    ttnn.deallocate(w_tt)
+    y = ttnn.sum(weighted, dim=2, keepdim=True, memory_config=memory_config)
+    ttnn.deallocate(weighted)
+    if b_tt is not None:
+        y_b = ttnn.add(y, b_tt, memory_config=memory_config)
+        ttnn.deallocate(b_tt)
+        ttnn.deallocate(y)
+        y = y_b
+    return y
+
+
 @dataclass(frozen=True)
 class TTConvTranspose1dParams:
     # TTNN conv_transpose2d weights (NHWC op): default ``[in_ch, out_ch/groups, 1, k]`` (``spatial_style="width"``);
