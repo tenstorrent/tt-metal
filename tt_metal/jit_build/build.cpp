@@ -297,10 +297,6 @@ void JitBuildEnv::init(
 
     this->lflags_ = common_flags;
     this->lflags_ += "-Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";
-    if (this->arch_ == tt::ARCH::QUASAR) {
-        // Suppress LTO false positive on the device-print lock's atomic exchange.
-        this->lflags_ += "-Wno-stringop-overflow ";
-    }
 
     // Need to capture more info in build key to prevent stale binaries from being reused.
     tt::StableHasher hasher;
