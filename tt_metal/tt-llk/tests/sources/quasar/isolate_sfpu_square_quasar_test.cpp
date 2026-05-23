@@ -36,6 +36,7 @@ void run_kernel(RUNTIME_PARAMETERS /*params*/)
 
 #include "cfg_defines.h"
 #include "cmath_common.h"
+#include "csfpu_common.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_sfpu_common.h"
 #include "llk_srcs.h"
@@ -44,6 +45,7 @@ void run_kernel(RUNTIME_PARAMETERS /*params*/)
 
 using namespace ckernel;
 using namespace ckernel::math;
+using namespace ckernel::isolate_sfpu;
 using namespace ckernel::sfpu;
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -101,7 +103,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_hw_configure_<p_pacr::PACK1>(td_pack);
 
     // Implied math format disable for SrcS and sfpmem mod selection
-    cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + TRISC_ID] = !IMPLIED_MATH_FORMAT;
+    cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + ckernel::isolate_sfpu::TRISC_ID] = !IMPLIED_MATH_FORMAT;
 
     // -------------------------------------------------------------------------
     // SFPU configuration and execution
@@ -125,8 +127,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (std::uint32_t slice = 0; slice < PARAM_SRCS_SLICE_COUNT; slice++)
         {
             // Passing addresses into calculate_* will land in a follow-up PR handled in https://github.com/tenstorrent/tt-llk/issues/1353.
-            const int load_base_addr  = ckernel::math::SFPU_SRCS_BASE_ADDR;                       // First slice of SrcS
-            const int store_base_addr = ckernel::math::SFPU_SRCS_BASE_ADDR + 2 * PARAM_SRCS_YDIM; // Third slice of SrcS
+            const int load_base_addr  = SFPU_SRCS_BASE_ADDR;                       // First slice of SrcS
+            const int store_base_addr = SFPU_SRCS_BASE_ADDR + 2 * PARAM_SRCS_YDIM; // Third slice of SrcS
 
 #pragma GCC unroll 8
             for (int d = 0; d < num_sfpu_iterations; d++)

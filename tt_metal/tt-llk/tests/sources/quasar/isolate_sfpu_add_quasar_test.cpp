@@ -37,6 +37,7 @@ void run_kernel(RUNTIME_PARAMETERS /*params*/)
 
 #include "cfg_defines.h"
 #include "cmath_common.h"
+#include "csfpu_common.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_sfpu_common.h"
 #include "llk_srcs.h"
@@ -44,6 +45,7 @@ void run_kernel(RUNTIME_PARAMETERS /*params*/)
 
 using namespace ckernel;
 using namespace ckernel::math;
+using namespace ckernel::isolate_sfpu;
 using namespace ckernel::sfpu;
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -116,7 +118,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_hw_configure_<p_pacr::PACK1>(td_pack);
 
     // Implied math format disable for SrcS and sfpmem mod selection
-    cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + TRISC_ID] = !IMPLIED_MATH_FORMAT;
+    cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + ckernel::isolate_sfpu::TRISC_ID] = !IMPLIED_MATH_FORMAT;
 
     // -------------------------------------------------------------------------
     // SFPU configuration and execution
@@ -124,9 +126,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // SrcS slice layout: slice 0 = in0, slice 1 = in1, slice 2 = out.
     // Each slice is PARAM_SRCS_YDIM rows apart in the SFPU address space.
-    const int in0_base = ckernel::math::SFPU_SRCS_BASE_ADDR;
-    const int in1_base = ckernel::math::SFPU_SRCS_BASE_ADDR + PARAM_SRCS_YDIM;
-    const int out_base = ckernel::math::SFPU_SRCS_BASE_ADDR + 2 * PARAM_SRCS_YDIM;
+    const int in0_base = SFPU_SRCS_BASE_ADDR;
+    const int in1_base = SFPU_SRCS_BASE_ADDR + PARAM_SRCS_YDIM;
+    const int out_base = SFPU_SRCS_BASE_ADDR + 2 * PARAM_SRCS_YDIM;
 
     // Load replay buffer
     const int num_sfpu_iterations      = PARAM_SRCS_YDIM >> 1; // Divide by 2 since SFSPU operates on 2 rows at a time
