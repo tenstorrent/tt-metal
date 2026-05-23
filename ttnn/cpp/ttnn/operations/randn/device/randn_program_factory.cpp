@@ -68,7 +68,7 @@ tt::tt_metal::ProgramDescriptor RandnDeviceOperation::ProgramFactory::create_des
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = all_cores;
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = WriterDataMovementConfig{};
+    writer_desc.config = WriterConfigDescriptor{};
 
     KernelDescriptor::Defines compute_defines;
     switch (output_dtype) {

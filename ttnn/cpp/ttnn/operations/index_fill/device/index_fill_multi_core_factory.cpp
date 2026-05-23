@@ -116,7 +116,7 @@ tt::tt_metal::ProgramDescriptor IndexFillOperation::MultiCore::create_descriptor
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = ReaderDataMovementConfig{};
+    reader_desc.config = ReaderConfigDescriptor{};
 
     // Create writer kernel
     std::vector<uint32_t> writer_compile_time_args = {
@@ -132,7 +132,7 @@ tt::tt_metal::ProgramDescriptor IndexFillOperation::MultiCore::create_descriptor
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = all_cores;
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = WriterDataMovementConfig{};
+    writer_desc.config = WriterConfigDescriptor{};
 
     // Set runtime args for each core
     uint32_t start_row_id = 0;

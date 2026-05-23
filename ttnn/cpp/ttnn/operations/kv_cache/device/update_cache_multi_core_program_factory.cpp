@@ -209,7 +209,7 @@ tt::tt_metal::ProgramDescriptor UpdateCacheMultiCoreProgramFactory::create_descr
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
     reader_desc.defines = std::move(reader_kernel_defines);
-    reader_desc.config = ReaderDataMovementConfig{};
+    reader_desc.config = ReaderConfigDescriptor{};
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =
@@ -217,7 +217,7 @@ tt::tt_metal::ProgramDescriptor UpdateCacheMultiCoreProgramFactory::create_descr
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = all_cores;
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = WriterDataMovementConfig{};
+    writer_desc.config = WriterConfigDescriptor{};
 
     std::vector<uint32_t> compute_kernel_args_group_1 = {
         src0_cb_index,
