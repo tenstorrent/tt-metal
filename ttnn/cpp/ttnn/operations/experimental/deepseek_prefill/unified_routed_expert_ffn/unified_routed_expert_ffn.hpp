@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <vector>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -48,8 +49,26 @@ ttnn::Tensor unified_routed_expert_ffn(
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     const std::optional<ttnn::Tensor>& output = std::nullopt);
 
+// MoE-level composite op: takes the dispatched buffer + ALL experts' weights
+// and loops experts_per_chip times INSIDE the op, calling
+//   extract -> unified_routed_expert_ffn -> insert
+// per expert. Python passes everything; no host-side counts/idx read, no
+// per-expert Python loop. The unified FFN reads counts on-device so each
+// expert's work scales to its actual count.
+ttnn::Tensor unified_routed_expert_moe(
+    const ttnn::Tensor& dispatched_buffer,
+    const ttnn::Tensor& expert_region_offsets,
+    const ttnn::Tensor& expert_token_counts,
+    const ttnn::Tensor& global_expert_idx_table,
+    const std::vector<ttnn::Tensor>& gate_projs,
+    const std::vector<ttnn::Tensor>& up_projs,
+    const std::vector<ttnn::Tensor>& down_projs,
+    uint32_t max_dispatched_tokens_per_expert,
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn
 
 namespace ttnn {
 using operations::experimental::deepseek_prefill::unified_routed_expert_ffn::unified_routed_expert_ffn;
+using operations::experimental::deepseek_prefill::unified_routed_expert_ffn::unified_routed_expert_moe;
 }  // namespace ttnn
