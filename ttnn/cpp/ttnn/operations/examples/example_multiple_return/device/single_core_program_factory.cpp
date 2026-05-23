@@ -98,6 +98,9 @@ tt::tt_metal::ProgramDescriptor ExampleMultipleReturnDeviceOperation::SingleCore
         .math_approx_mode = math_approx_mode,
     };
 
+    auto* dst_buffer1 = output_tensor1.has_value() ? output_tensor1.value().buffer() : nullptr;
+    auto* dst_buffer2 = output_tensor2.has_value() ? output_tensor2.value().buffer() : nullptr;
+
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         uint32_t num_tiles_per_core = 0;
@@ -109,18 +112,28 @@ tt::tt_metal::ProgramDescriptor ExampleMultipleReturnDeviceOperation::SingleCore
             TT_ASSERT(false, "Core not in specified core ranges");
         }
 
-        reader_desc.runtime_args.emplace_back(
-            core, std::vector<uint32_t>{src_buffer->address(), num_tiles_per_core, num_tiles_written});
+        reader_desc.emplace_runtime_args(core, {src_buffer, num_tiles_per_core, num_tiles_written});
 
-        auto dst_buffer1_address = output_tensor1.has_value() ? output_tensor1.value().buffer()->address() : 0;
-        auto dst_buffer2_address = output_tensor2.has_value() ? output_tensor2.value().buffer()->address() : 0;
-        writer_desc.runtime_args.emplace_back(
-            core,
-            std::vector<uint32_t>{dst_buffer1_address, dst_buffer2_address, num_tiles_per_core, num_tiles_written});
+        // For optional outputs, push Buffer* when present and uint32_t(0) when absent so
+        // BufferBinding fast-path patching still works for the slot.
+        KernelDescriptor::RTArgList writer_args;
+        if (dst_buffer1 != nullptr) {
+            writer_args.push_back(dst_buffer1);
+        } else {
+            writer_args.push_back(static_cast<uint32_t>(0));
+        }
+        if (dst_buffer2 != nullptr) {
+            writer_args.push_back(dst_buffer2);
+        } else {
+            writer_args.push_back(static_cast<uint32_t>(0));
+        }
+        writer_args.push_back(num_tiles_per_core);
+        writer_args.push_back(num_tiles_written);
+        writer_desc.emplace_runtime_args(core, writer_args);
 
         // Compute kernel RT args (num_tiles_per_core) are set once and never
         // refreshed in override_runtime_arguments — tile counts stay constant.
-        compute_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{num_tiles_per_core});
+        compute_desc.emplace_runtime_args(core, {num_tiles_per_core});
         num_tiles_written += num_tiles_per_core;
     }
 

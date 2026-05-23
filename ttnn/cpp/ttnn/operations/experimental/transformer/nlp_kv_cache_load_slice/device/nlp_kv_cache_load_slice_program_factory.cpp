@@ -18,30 +18,28 @@ using namespace tt::tt_metal;
 
 namespace {
 
-std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_unpad_runtime_args_tile_sharded(
+// Returns per-core (start_id, writer_args) pairs.  The reader uses {src0_buffer, start_id};
+// the buffer pointer is appended by the caller so it can be tracked as a BufferBinding for
+// contract-1 cache-hit patching.
+struct PerCoreSliceArgs {
+    uint32_t reader_start_id;
+    std::vector<uint32_t> writer_args;
+};
+
+std::vector<PerCoreSliceArgs> get_unpad_runtime_args_tile_sharded(
     const Tensor& input_tensor,
     const ttnn::Shape& output_tensor_start,
     uint32_t num_cores_total,
     uint32_t num_tiles_per_core) {
-    auto* input_buffer = input_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
 
-    std::vector<uint32_t> common_reader_kernel_args = {input_buffer->address(), 0};
-
-    std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores_total);
+    std::vector<PerCoreSliceArgs> ret_val(num_cores_total);
 
     uint32_t start_id = ttnn::operations::data_movement::get_tiled_start_offset(input_tensor, output_tensor_start);
     const uint32_t num_tiles_shifted_per_core = input_shape[-2] * input_shape[-1] / TILE_HW;
 
     for (uint32_t i = 0; i < num_cores_total; i++) {
-        // reader and writer kernel args
-        std::vector<uint32_t> reader_kernel_args = common_reader_kernel_args;
-        reader_kernel_args[1] = start_id;
-        std::vector<uint32_t> writer_kernel_args = {
-            num_tiles_per_core,
-        };
-        ret_val[i] = {reader_kernel_args, writer_kernel_args};
-
+        ret_val[i] = {start_id, std::vector<uint32_t>{num_tiles_per_core}};
         start_id += num_tiles_shifted_per_core;
     }
 
@@ -133,13 +131,14 @@ tt::tt_metal::ProgramDescriptor NlpKVCacheLoadSliceProgramFactory::create_descri
 
     auto all_runtime_args =
         get_unpad_runtime_args_tile_sharded(a, output_tensor_start, num_cores_total, num_tiles_per_core);
+    auto* input_buffer = a.buffer();
 
     reader_desc.runtime_args.reserve(num_cores_total);
     writer_desc.runtime_args.reserve(num_cores_total);
     for (uint32_t i = 0; i < num_cores_total; i++) {
         CoreCoord core = {i % num_cores_x, i / num_cores_x};
-        reader_desc.runtime_args.emplace_back(core, std::move(all_runtime_args[i].first));
-        writer_desc.runtime_args.emplace_back(core, std::move(all_runtime_args[i].second));
+        reader_desc.emplace_runtime_args(core, {input_buffer, all_runtime_args[i].reader_start_id});
+        writer_desc.runtime_args.emplace_back(core, std::move(all_runtime_args[i].writer_args));
     }
 
     desc.kernels.push_back(std::move(reader_desc));

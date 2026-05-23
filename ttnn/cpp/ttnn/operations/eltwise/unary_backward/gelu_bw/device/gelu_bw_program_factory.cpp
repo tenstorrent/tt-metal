@@ -39,7 +39,8 @@ tt::tt_metal::ProgramDescriptor GeluBwProgramFactory::create_descriptor(
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles);
 
     uint32_t num_input_tiles = 2;
-    uint32_t src0_cb_index = tt::CBIndex::c_0;
+    // CB indices are constexpr to avoid uint32_t -> uint8_t narrowing into CBFormatDescriptor::buffer_index.
+    constexpr uint8_t src0_cb_index = tt::CBIndex::c_0;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_input_tiles * src0_single_tile_size,
         .core_ranges = all_cores,
@@ -50,7 +51,7 @@ tt::tt_metal::ProgramDescriptor GeluBwProgramFactory::create_descriptor(
         }}},
     });
 
-    uint32_t src1_cb_index = tt::CBIndex::c_1;
+    constexpr uint8_t src1_cb_index = tt::CBIndex::c_1;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_input_tiles * src1_single_tile_size,
         .core_ranges = all_cores,
@@ -62,7 +63,7 @@ tt::tt_metal::ProgramDescriptor GeluBwProgramFactory::create_descriptor(
     });
 
     uint32_t num_output_tiles = 2;
-    uint32_t output_cb_index = tt::CBIndex::c_2;
+    constexpr uint8_t output_cb_index = tt::CBIndex::c_2;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_output_tiles * dst_single_tile_size,
         .core_ranges = all_cores,
@@ -134,21 +135,19 @@ tt::tt_metal::ProgramDescriptor GeluBwProgramFactory::create_descriptor(
             TT_FATAL(false, "Core not in specified core ranges");
         }
 
-        reader_desc.runtime_args.emplace_back(
+        reader_desc.emplace_runtime_args(
             core,
-            std::vector<uint32_t>{
-                src0_buffer->address(),
-                src1_buffer->address(),
-                num_tiles_per_core,
-                num_tiles_written,
-                0,
-                0,
-                num_cores_y});
+            {src0_buffer,
+             src1_buffer,
+             num_tiles_per_core,
+             num_tiles_written,
+             static_cast<uint32_t>(0),
+             static_cast<uint32_t>(0),
+             num_cores_y});
 
-        compute_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{num_tiles_per_core, 1});
+        compute_desc.emplace_runtime_args(core, {num_tiles_per_core, static_cast<uint32_t>(1)});
 
-        writer_desc.runtime_args.emplace_back(
-            core, std::vector<uint32_t>{dst_buffer->address(), num_tiles_per_core, num_tiles_written});
+        writer_desc.emplace_runtime_args(core, {dst_buffer, num_tiles_per_core, num_tiles_written});
         num_tiles_written += num_tiles_per_core;
     }
 

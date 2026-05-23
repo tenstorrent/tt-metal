@@ -100,6 +100,7 @@ tt::tt_metal::ProgramDescriptor RandnDeviceOperation::ProgramFactory::create_des
     writer_desc.runtime_args.reserve(cores.size());
     compute_desc.runtime_args.reserve(cores.size());
 
+    auto* output_buffer = output.buffer();
     uint32_t tile_offset = 0;
     for (auto core : cores) {
         uint32_t units_per_core;
@@ -113,9 +114,8 @@ tt::tt_metal::ProgramDescriptor RandnDeviceOperation::ProgramFactory::create_des
 
         uint32_t seed = get_random_seed(rng);
 
-        compute_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{seed, units_per_core});
-        writer_desc.runtime_args.emplace_back(
-            core, std::vector<uint32_t>{output.buffer()->address(), tile_offset, units_per_core});
+        compute_desc.emplace_runtime_args(core, {seed, units_per_core});
+        writer_desc.emplace_runtime_args(core, {output_buffer, tile_offset, units_per_core});
 
         tile_offset += units_per_core;
     }
