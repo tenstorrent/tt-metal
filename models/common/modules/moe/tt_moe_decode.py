@@ -84,9 +84,127 @@ class _TTMoEDecodeExpertState:
         # TODO eventually support caching and loading weights
         pass
 
-    def _validate():
-        # TODO
-        pass
+    @staticmethod
+    def _validate(
+        torch_w0: "torch.Tensor",
+        torch_w1: "torch.Tensor",
+        torch_w2: "torch.Tensor",
+        mesh_device: ttnn.MeshDevice,
+        mesh_shape: tuple[int, int],
+        cluster_axis: int,
+        has_bias: bool,
+        num_routed_experts: int,
+        expert_mapping: list[int],
+        num_shared_experts: int,
+        shared_expert_ids_to_devices: dict[int, list[int]] | None,
+        shared_id_to_torch_w0: dict[int, "torch.Tensor"] | None,
+        shared_id_to_torch_w1: dict[int, "torch.Tensor"] | None,
+        shared_id_to_torch_w2: dict[int, "torch.Tensor"] | None,
+        torch_b0: "torch.Tensor" | None,
+        torch_b1: "torch.Tensor" | None,
+        torch_b2: "torch.Tensor" | None,
+    ) -> None:
+        """Fail fast on (weights, biases, shared experts) ↔ config mismatch.
+
+        Cross-checks tensor shapes against each other (w0 is the source of truth for
+        `L`, `H`, `N`) and against the config-derived counts. Catches the common
+        misconfigurations that otherwise surface as opaque shape errors deep inside
+        the bf4 preparers or kernels.
+        """
+        # --- mesh / topology sanity ---
+        if cluster_axis not in (0, 1):
+            raise ValueError(f"cluster_axis must be 0 or 1, got {cluster_axis}")
+        num_devices = mesh_device.get_num_devices()
+        if mesh_shape[0] * mesh_shape[1] != num_devices:
+            raise ValueError(
+                f"mesh_shape {mesh_shape} (= {mesh_shape[0] * mesh_shape[1]} devices) does "
+                f"not match mesh_device.get_num_devices() = {num_devices}"
+            )
+        if num_routed_experts % num_devices != 0:
+            raise ValueError(
+                f"num_routed_experts ({num_routed_experts}) must be divisible by num_devices ({num_devices})"
+            )
+
+        # --- routed weight shape cross-checks (w0 is the source of truth for L, H, N) ---
+        if torch_w0.ndim != 4:
+            raise ValueError(f"torch_w0 must be 4D [L, E, H, N], got shape {tuple(torch_w0.shape)}")
+        L, E, H, N = torch_w0.shape
+        if E != num_routed_experts:
+            raise ValueError(f"torch_w0.shape[1] = {E} does not match num_routed_experts ({num_routed_experts})")
+        if tuple(torch_w1.shape) != (L, E, H, N):
+            raise ValueError(f"torch_w1 shape {tuple(torch_w1.shape)} must match torch_w0 shape ({L}, {E}, {H}, {N})")
+        if tuple(torch_w2.shape) != (L, E, N, H):
+            raise ValueError(f"torch_w2 shape {tuple(torch_w2.shape)} must be (L, E, N, H) = ({L}, {E}, {N}, {H})")
+
+        # --- expert_mapping ---
+        if len(expert_mapping) != num_routed_experts:
+            raise ValueError(
+                f"expert_mapping length {len(expert_mapping)} != num_routed_experts ({num_routed_experts})"
+            )
+        bad = [(e, d) for e, d in enumerate(expert_mapping) if not (0 <= d < num_devices)]
+        if bad:
+            raise ValueError(f"expert_mapping has out-of-range device ids (0..{num_devices - 1}): {bad[:5]}")
+
+        # --- bias presence and shapes ---
+        bias_tensors = (torch_b0, torch_b1, torch_b2)
+        any_bias = any(b is not None for b in bias_tensors)
+        all_bias = all(b is not None for b in bias_tensors)
+        if has_bias and not all_bias:
+            missing = [name for name, b in zip(("b0", "b1", "b2"), bias_tensors) if b is None]
+            raise ValueError(f"has_bias=True but {missing} not provided")
+        if not has_bias and any_bias:
+            raise ValueError("has_bias=False but one or more of torch_b0/b1/b2 was provided")
+        if has_bias:
+            if tuple(torch_b0.shape) != (L, E, N) or tuple(torch_b1.shape) != (L, E, N):
+                raise ValueError(
+                    f"b0/b1 must be (L, E, N) = ({L}, {E}, {N}); got "
+                    f"{tuple(torch_b0.shape)} and {tuple(torch_b1.shape)}"
+                )
+            if tuple(torch_b2.shape) != (L, E, H):
+                raise ValueError(f"b2 must be (L, E, H) = ({L}, {E}, {H}); got {tuple(torch_b2.shape)}")
+
+        # --- shared experts ---
+        if num_shared_experts > 0:
+            if shared_expert_ids_to_devices is None:
+                raise ValueError(f"num_shared_experts={num_shared_experts} but shared_expert_ids_to_devices is None")
+            if len(shared_expert_ids_to_devices) != num_shared_experts:
+                raise ValueError(
+                    f"shared_expert_ids_to_devices has {len(shared_expert_ids_to_devices)} entries "
+                    f"but num_shared_experts={num_shared_experts}"
+                )
+            expected_ids = set(range(num_routed_experts, num_routed_experts + num_shared_experts))
+            if set(shared_expert_ids_to_devices.keys()) != expected_ids:
+                raise ValueError(
+                    f"shared expert ids must be contiguous after routed: expected {sorted(expected_ids)}, "
+                    f"got {sorted(shared_expert_ids_to_devices.keys())}"
+                )
+            shared_dicts = (shared_id_to_torch_w0, shared_id_to_torch_w1, shared_id_to_torch_w2)
+            if any(d is None for d in shared_dicts):
+                raise ValueError("num_shared_experts > 0 but shared_id_to_torch_w0/w1/w2 not all provided")
+            for name, d in zip(("w0", "w1", "w2"), shared_dicts):
+                if set(d.keys()) != expected_ids:
+                    raise ValueError(
+                        f"shared_id_to_torch_{name} keys {sorted(d.keys())} != "
+                        f"shared expert ids {sorted(expected_ids)}"
+                    )
+                expected_shape = (L, 1, N, H) if name == "w2" else (L, 1, H, N)
+                for sid, t in d.items():
+                    if tuple(t.shape) != expected_shape:
+                        raise ValueError(
+                            f"shared_id_to_torch_{name}[{sid}] shape {tuple(t.shape)} != expected {expected_shape}"
+                        )
+            if has_bias:
+                # Mirrors the runtime check in __init__; surface it here too so it fails
+                # before any device upload.
+                raise NotImplementedError("bias + shared experts is not yet supported")
+        else:
+            if shared_expert_ids_to_devices:
+                raise ValueError(
+                    f"num_shared_experts=0 but shared_expert_ids_to_devices is non-empty: "
+                    f"{shared_expert_ids_to_devices}"
+                )
+            if any(d is not None for d in (shared_id_to_torch_w0, shared_id_to_torch_w1, shared_id_to_torch_w2)):
+                raise ValueError("num_shared_experts=0 but one or more shared_id_to_torch_w* dicts were provided")
 
     @staticmethod
     def _init_expert_mapping(
@@ -195,6 +313,26 @@ class _TTMoEDecodeExpertState:
         supported because `add_shared_expert_weights` doesn't take a bias dict — would
         need a parallel API.
         """
+        self._validate(
+            torch_w0,
+            torch_w1,
+            torch_w2,
+            mesh_device,
+            mesh_shape,
+            cluster_axis,
+            has_bias,
+            num_routed_experts,
+            expert_mapping,
+            num_shared_experts,
+            shared_expert_ids_to_devices,
+            shared_id_to_torch_w0,
+            shared_id_to_torch_w1,
+            shared_id_to_torch_w2,
+            torch_b0,
+            torch_b1,
+            torch_b2,
+        )
+
         num_routed = torch_w0.shape[1]
         logger.info(
             f"Initializing expert state: routed_experts={num_routed} num_shared={num_shared_experts} "
