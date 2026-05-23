@@ -268,7 +268,6 @@ tt::tt_metal::ProgramDescriptor build_descriptor_at(
     auto input_pages = detail::get_num_pages(input_tensor);
     auto indices_pages = detail::get_num_pages(indices_tensor);
     auto scores_pages = detail::get_num_pages(scores_tensor);
-    auto mapping_pages = detail::get_num_pages(mapping_tensor);
     auto output_pages = detail::get_num_pages(output_tensor);
     auto metadata_pages = detail::get_num_pages(metadata_tensor);
 
