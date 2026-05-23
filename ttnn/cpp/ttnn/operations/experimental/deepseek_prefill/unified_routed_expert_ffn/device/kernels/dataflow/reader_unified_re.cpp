@@ -207,7 +207,9 @@ void kernel_main() {
     for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
         const uint32_t this_core_first_row = chunk * chunk_M_tiles + my_mt * per_core_M;
 
-        // -------- PHASE 1 — gate matmul feed (push x + gate_proj K-blocks) ----
+        // -------- PHASES 1+2 fused — push x ONCE per K-block, then gate then up.
+        // Compute does both matmuls per K-block sharing the same x. This halves
+        // the x DRAM mcast bytes vs sequential phases.
         for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
             // x via multicast in M-row direction.
             cb_reserve_back(cb_in0_x, g_in0_block_num_tiles);
@@ -297,49 +299,11 @@ void kernel_main() {
                 noc_semaphore_wait(in1_valid_local, IN1_VALID);
             }
             cb_push_back(cb_in1_gate, g_in1_block_num_tiles);
-        }
 
-        // -------- PHASE 2 — up matmul feed (re-stream x + up_proj K-blocks via mcast) ---
-        // up_proj uses the SAME mcast topology as gate_proj (N-col groups).
-        // ready_sem / valid_sem from phase 1 are already at 0 (sender reset
-        // ready, receivers reset valid before sending the last "ready" inc).
-        for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
-            // x via multicast in M-row direction (same as phase 1).
-            cb_reserve_back(cb_in0_x, g_in0_block_num_tiles);
-            if (is_in0_sender) {
-                noc_semaphore_wait(in0_ready_local, in0_num_receivers);
-                *in0_ready_local = 0;
-
-                uint32_t l1_x = get_write_ptr(cb_in0_x);
-                const uint32_t block_start = l1_x;
-                for (uint32_t m = 0; m < per_core_M; ++m) {
-                    for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
-                        const uint32_t row = this_core_first_row + m;
-                        const uint32_t col = kb * in0_block_w_gu + k;
-                        const uint32_t tile_idx = row * K_gate_tiles + col;
-                        noc_async_read_tile(tile_idx, x_acc, l1_x);
-                        l1_x += x_tile_bytes;
-                    }
-                }
-                noc_async_read_barrier();
-
-                const uint64_t mcast_data_noc = get_noc_multicast_addr(
-                    in0_mcast_nx_start, in0_mcast_ny_start, in0_mcast_nx_end, in0_mcast_ny_end, block_start);
-                const uint32_t block_bytes = g_in0_block_num_tiles * x_tile_bytes;
-                noc_async_write_multicast(
-                    block_start, mcast_data_noc, block_bytes, in0_num_receivers, /*linked=*/false);
-                noc_async_writes_flushed();
-
-                *in0_valid_local = IN0_VALID;
-                noc_semaphore_set_multicast(in0_valid_sem_addr, in0_mcast_valid_noc, in0_num_receivers);
-            } else {
-                *in0_valid_local = 0;
-                noc_semaphore_inc(in0_sender_ready_noc, 1);
-                noc_semaphore_wait(in0_valid_local, IN0_VALID);
-            }
-            cb_push_back(cb_in0_x, g_in0_block_num_tiles);
-
-            // in1_up via multicast within N-col group (same topology as gate).
+            // in1_up: same mcast topology as gate. Sequenced AFTER gate within
+            // the same K-block iteration so the compute kernel's fused gate+up
+            // matmul finds both gate and up tiles ready before doing its two
+            // matmul passes against the shared x K-block.
             cb_reserve_back(cb_in1_up, g_in1_block_num_tiles);
             if (is_in1_sender) {
                 noc_semaphore_wait(in1_ready_local, in1_num_receivers);

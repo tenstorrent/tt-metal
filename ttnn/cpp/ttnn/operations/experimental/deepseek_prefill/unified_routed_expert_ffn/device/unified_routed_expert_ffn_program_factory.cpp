@@ -35,6 +35,11 @@ constexpr uint32_t CB_OUT = tt::CBIndex::c_9;
 constexpr uint32_t CB_COUNTS_SCRATCH = tt::CBIndex::c_10;
 constexpr uint32_t CB_IDX_SCRATCH = tt::CBIndex::c_11;
 constexpr uint32_t CB_IN0_DOWN_FULL = tt::CBIndex::c_12;
+// Second gate/up matmul partials CB. With the fused gate+up phase, each
+// K-block accumulates simultaneously into partials_gu (gate matmul) and
+// partials_up (up matmul) using the SAME shared x K-block, halving x DRAM
+// reads vs the v1 sequential-phases design.
+constexpr uint32_t CB_PARTIALS_UP = tt::CBIndex::c_13;
 }  // namespace
 
 UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnProgramFactory::create(
@@ -266,7 +271,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     make_cb(CB_IN1_DOWN, down_df, /*tiles=*/d_in1_block_num_tiles * 2, down_tile_size);
     // Intermediate L1 buffers hold one full per-core block each.
     make_cb(CB_GATE_INT, intermed_df, /*tiles=*/gu_out_block_num_tiles, intermed_tile_size);
-    make_cb(CB_UP_INT, intermed_df, /*tiles=*/gu_out_block_num_tiles, intermed_tile_size);
+    // cb_up_intermed removed — multiply reads cb_partials_up directly.
     make_cb(CB_ACTIVATED, intermed_df, /*tiles=*/gu_out_block_num_tiles, intermed_tile_size);
     // Partials CBs: sized to the full per-core output block. Within ONE
     // K-block iteration the kernel pushes (in0_num_subblocks *
@@ -278,6 +283,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         partials_gu_df,
         /*tiles=*/gu_out_block_num_tiles,
         partials_gu_tile_size);
+    // Second gate/up matmul accumulator (cb_partials_up), used by the fused
+    // gate+up phase to share x reads across both matmuls.
+    make_cb(CB_PARTIALS_UP, partials_gu_df, /*tiles=*/gu_out_block_num_tiles, partials_gu_tile_size);
     make_cb(
         CB_PARTIALS_D,
         partials_d_df,
@@ -287,10 +295,8 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     make_cb(CB_OUT, out_df, /*tiles=*/d_out_subblock_h * d_out_subblock_w * 4, out_tile_size);
     // cb_in0_down_full: reader pushes per_core_M × in0_block_w_d tiles of activated
     // once per down K-block. Single-buffered to save L1.
-    // cb_in0_down_full double-buffered when 88-core L1 budget allows it. Lets
-    // the L1-mcast sender pre-stage K-block kb+1's activated into the next
-    // slot while compute consumes kb. Saves one mcast handshake's worth of
-    // serialization per K-block boundary.
+    // cb_in0_down_full double-buffered — fits because we eliminated
+    // cb_up_intermed (multiply reads cb_partials_up directly).
     make_cb(
         CB_IN0_DOWN_FULL,
         intermed_df,
@@ -438,6 +444,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         {"cb_activated", CB_ACTIVATED},
         {"cb_in0_down_full", CB_IN0_DOWN_FULL},
         {"cb_mm_partials_gu", CB_PARTIALS_GU},
+        {"cb_mm_partials_up", CB_PARTIALS_UP},
         {"cb_mm_partials_d", CB_PARTIALS_D},
         {"cb_out", CB_OUT},
     };
