@@ -422,6 +422,8 @@ void kernel_main() {
     // num_chunks times. Reader/writer feed/drain chunk-N+1 while compute is
     // still on chunk N via the existing CBs.
     constexpr uint32_t num_chunks = get_compile_time_arg_val(30);
+    constexpr uint32_t local_expert_id = get_compile_time_arg_val(31);
+    constexpr uint32_t chunk_M_tiles = get_compile_time_arg_val(32);
 
     // CBs
     constexpr uint32_t cb_in0_x = get_named_compile_time_arg_val("cb_in0_x");
@@ -436,10 +438,39 @@ void kernel_main() {
     constexpr uint32_t cb_partials_up = get_named_compile_time_arg_val("cb_mm_partials_up");
     constexpr uint32_t cb_partials_d = get_named_compile_time_arg_val("cb_mm_partials_d");
     constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
+    constexpr uint32_t cb_counts_scratch = get_named_compile_time_arg_val("cb_counts_scratch");
+    constexpr uint32_t cb_idx_scratch = get_named_compile_time_arg_val("cb_idx_scratch");
+
+    // Wait for the reader (BRISC) to push the per-expert counts/idx into
+    // shared L1. UNPACK reads the L1 via LocalCBInterface and broadcasts
+    // count_value to MATH and PACK via the inter-thread mailbox (MATH cannot
+    // access get_local_cb_interface symbols at link time). Production matmul
+    // uses the same UNPACK→mailbox→MATH/PACK pattern (see
+    // circular_buffer.h::read_tile_value).
+    cb_wait_front(cb_counts_scratch, 1);
+    cb_wait_front(cb_idx_scratch, 1);
+    uint32_t count_value = 0;
+    UNPACK(({
+        const uint32_t counts_l1_addr = get_local_cb_interface(cb_counts_scratch).fifo_rd_ptr << 4;
+        const uint32_t idx_l1_addr = get_local_cb_interface(cb_idx_scratch).fifo_rd_ptr << 4;
+        const volatile tt_l1_ptr uint32_t* counts_ptr =
+            reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(counts_l1_addr);
+        const volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(idx_l1_addr);
+        const uint32_t global_expert_id = idx_ptr[local_expert_id];
+        count_value = counts_ptr[global_expert_id];
+        mailbox_write(ckernel::ThreadId::MathThreadId, count_value);
+        mailbox_write(ckernel::ThreadId::PackThreadId, count_value);
+    }));
+    MATH(count_value = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+    PACK(count_value = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+    // count is in TOKEN rows; convert to tile rows (ceil) and then to chunks.
+    const uint32_t count_tiles = (count_value + 31) / 32;
+    const uint32_t effective_chunks_runtime = (count_tiles + chunk_M_tiles - 1) / chunk_M_tiles;
+    const uint32_t effective_chunks = effective_chunks_runtime < num_chunks ? effective_chunks_runtime : num_chunks;
 
     silu_tile_init_pack();
 
-    for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+    for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
         mm_block_init(
             cb_in0_x,
             cb_in1_gate,

@@ -159,17 +159,30 @@ void kernel_main() {
     const auto scratch_acc = TensorAccessor(scratch_args, scratch_addr, get_tile_size(cb_in0_down_full));
 
     // Look up active token count for this expert from device-side buffers.
+    // Reserve+read+push so the compute kernel (TRISC) and writer kernel
+    // (NCRISC) can cb_wait_front on these CBs and read the same L1 data.
+    cb_reserve_back(cb_counts_scratch, 1);
+    cb_reserve_back(cb_idx_scratch, 1);
     const uint32_t counts_l1 = get_write_ptr(cb_counts_scratch);
     const uint32_t idx_l1 = get_write_ptr(cb_idx_scratch);
     noc_async_read_page(0, counts_acc, counts_l1);
     noc_async_read_page(0, idx_acc, idx_l1);
     noc_async_read_barrier();
+    cb_push_back(cb_counts_scratch, 1);
+    cb_push_back(cb_idx_scratch, 1);
 
     const volatile tt_l1_ptr uint32_t* counts_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counts_l1);
     const volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1);
     const uint32_t global_expert_id = idx_ptr[local_expert_id];
     const uint32_t count_value = counts_ptr[global_expert_id];
-    (void)count_value;
+    // count_value is in TOKEN rows. Convert to tile rows (ceil) then to chunks.
+    // For count=0 the loop is empty (no chunks processed). For count > 0 we
+    // process ceil(count_tiles / chunk_M_tiles) chunks; the remaining chunks
+    // (if any) are skipped — no DRAM reads, no mcasts, no compute.
+    const uint32_t count_tiles = (count_value + 31) / 32;
+    const uint32_t effective_chunks_runtime = (count_tiles + chunk_M_tiles - 1) / chunk_M_tiles;
+    // Clamp to compile-time num_chunks just in case (defensive against bad input).
+    const uint32_t effective_chunks = effective_chunks_runtime < num_chunks ? effective_chunks_runtime : num_chunks;
     (void)M_tiles_full;
 
     // Per-chunk M-row base: recomputed inside the chunk loop below.
@@ -204,7 +217,11 @@ void kernel_main() {
     const uint64_t in0_mcast_valid_noc = get_noc_multicast_addr(
         in0_mcast_nx_start, in0_mcast_ny_start, in0_mcast_nx_end, in0_mcast_ny_end, in0_valid_sem_addr);
 
-    for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+    // Bound the chunk loop by effective_chunks (= ceil_div(count, chunk_M_tiles))
+    // so this expert only does work proportional to its actual token count,
+    // not the max-tokens-padded shape of the input. Eliminates the host-side
+    // count read that previously had to narrow the input tensor.
+    for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
         const uint32_t this_core_first_row = chunk * chunk_M_tiles + my_mt * per_core_M;
 
         // -------- PHASES 1+2 fused — push x ONCE per K-block, then gate then up.

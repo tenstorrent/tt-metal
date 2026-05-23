@@ -467,39 +467,13 @@ class TtRoutedExpert(LightweightModule):
             logger.warning(f"{dispatched_buffer.dtype=} typecasting to {self.activations_dtype}")
             dispatched_buffer = ttnn.typecast(dispatched_buffer, self.activations_dtype)
 
-        # Read counts and the local->global expert-id mapping host-side once per
-        # forward so we can size each expert's FFN to its actual count instead
-        # of self.max_tokens. The sync cost is paid once per forward and amortizes
-        # over `experts_per_chip` FFN calls; it is essentially free compared to
-        # the multi-millisecond compute it gates.
-        #
-        # In multi-device mesh setups, each device holds its own per-chip slice
-        # of the counts/idx tensors, so we use a composer that concatenates
-        # along both mesh axes. The resulting host tensors carry per-chip
-        # blocks back-to-back; we then sub-index the block that belongs to this
-        # call's chip. If reading fails for any reason (e.g. a tensor layout we
-        # don't recognize), fall back to processing the full max_tokens — this
-        # preserves correctness while losing the speedup.
-        counts_flat = None
-        global_idx_host_list = None
-        try:
-            if self.num_devices == 1:
-                counts_host = ttnn.to_torch(expert_token_counts)
-                idx_host = ttnn.to_torch(self.global_expert_idx_table)
-            else:
-                # Multi-device mesh: each device has its own slice. Grab the
-                # first device's slice (each device runs the same python loop
-                # with its own data; we just need the local-expert -> global-id
-                # mapping and the counts for THIS device's chip).
-                counts_host = ttnn.to_torch(ttnn.get_device_tensors(expert_token_counts)[0])
-                idx_host = ttnn.to_torch(ttnn.get_device_tensors(self.global_expert_idx_table)[0])
-            counts_flat = counts_host.flatten().tolist()
-            global_idx_host_list = idx_host.flatten().tolist()
-        except Exception as e:
-            logger.warning(f"Failed to read counts host-side ({e}); falling back to max_tokens.")
-            counts_flat = None
-            global_idx_host_list = None
-
+        # NO host-side counts/idx read. The unified op's reader/compute/writer
+        # kernels read `expert_token_counts` and `global_expert_idx_table`
+        # directly from device-side L1 via a per-expert TensorAccessor at
+        # kernel startup, then bound their chunk loops to
+        # effective_chunks = ceil_div(count, chunk_M_tiles * 32). The Python
+        # wrapper therefore passes the FULL max-tokens-sized extracted buffer
+        # — no narrowing, no `ttnn.to_torch` sync.
         tile_h = ttnn.TILE_SIZE
         # Process each local expert
         # dispatched_buffer: (experts_per_chip, max_tokens, emb_dim)
@@ -509,21 +483,10 @@ class TtRoutedExpert(LightweightModule):
         for local_expert in range(self.experts_per_chip):
             signpost(f"Expert {local_expert+1}/{self.experts_per_chip}")
 
-            count = None
-            if counts_flat is not None and global_idx_host_list is not None:
-                if local_expert < len(global_idx_host_list):
-                    global_id = int(global_idx_host_list[local_expert])
-                    if global_id < len(counts_flat):
-                        count = int(counts_flat[global_id])
-
-            if count is not None and count == 0:
-                # Nothing to compute for this expert; skip extract+ffn+insert.
-                logger.debug(f"Expert {local_expert}: count=0, skipping")
-                continue
-
-            # Extract tokens for this expert using the deepseek_prefill extract op,
-            # which uses expert_region_offsets and expert_token_counts to slice out
-            # this expert's valid rows
+            # Extract tokens for this expert. Returns the full max_tokens-sized
+            # buffer; the unified op kernels read counts on-device and bound
+            # their chunk loops to the actually-occupied chunks, so we do NOT
+            # narrow here (no host-device sync to query the count).
             tokens = ttnn.experimental.deepseek_prefill.extract(
                 dispatched_buffer,
                 expert_region_offsets,
@@ -532,25 +495,6 @@ class TtRoutedExpert(LightweightModule):
                 local_expert_id=local_expert,
                 max_dispatched_tokens_per_expert=self.max_tokens,
             )
-            logger.debug(f"Expert {local_expert}: extracted shape {tokens.shape}, count={count}")
-
-            # Narrow to the smallest count-aware row size that still hits a
-            # single cached matmul program. We round count up to a multiple of
-            # `_chunk_rows` (= 2k tokens = 64 tiles, matching the unified BH
-            # path's MAX_CHUNK_M_TILES). All experts and all chunks within an
-            # expert use the same per_core_M, so the per-shape JIT-compiled
-            # matmul kernel is reused across the routed_expert calls in one
-            # forward. Without this rounding, each expert with a different
-            # count produces a different matmul program config, triggering a
-            # cold JIT compile per shape (~100ms each).
-            if count is not None and count > 0:
-                _chunk_rows = 2048
-                active_rows = ((count + _chunk_rows - 1) // _chunk_rows) * _chunk_rows
-                # Don't grow beyond what extract actually populated.
-                active_rows = min(active_rows, tokens.padded_shape[-2])
-                if active_rows < tokens.padded_shape[-2]:
-                    tokens = ttnn.narrow(tokens, 0, 0, active_rows)
-                    logger.debug(f"Expert {local_expert}: narrowed to {tokens.shape}")
 
             # Run FFN
             output = self._expert_ffn(

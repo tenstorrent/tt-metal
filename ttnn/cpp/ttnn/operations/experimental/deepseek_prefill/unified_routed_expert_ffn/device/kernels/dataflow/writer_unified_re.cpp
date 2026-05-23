@@ -36,18 +36,39 @@ void kernel_main() {
     constexpr uint32_t N_down_tiles_full = get_compile_time_arg_val(10);
     constexpr uint32_t num_chunks = get_compile_time_arg_val(11);
     constexpr uint32_t chunk_M_tiles = get_compile_time_arg_val(12);
+    // NEW: device-side count read.
+    constexpr uint32_t cb_counts_scratch = get_compile_time_arg_val(13);
+    constexpr uint32_t cb_idx_scratch = get_compile_time_arg_val(14);
+    constexpr uint32_t local_expert_id = get_compile_time_arg_val(15);
 
     constexpr uint32_t d_out_subblock_num_tiles = d_out_subblock_h * d_out_subblock_w;
     constexpr uint32_t d_in1_num_subblocks_M = per_core_M / d_out_subblock_h;
     constexpr uint32_t d_in1_num_subblocks_N = per_core_N_d / d_out_subblock_w;
 
-    constexpr uint32_t out_accessor_offset = 13;
+    constexpr uint32_t out_accessor_offset = 16;
     constexpr auto out_args = TensorAccessorArgs<out_accessor_offset>();
     const auto out_acc = TensorAccessor(out_args, output_addr, get_tile_size(cb_out));
 
     const uint32_t out_tile_bytes = get_tile_size(cb_out);
 
-    for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+    // Wait for the reader's counts/idx push and compute effective_chunks =
+    // ceil(count / chunk_M_tiles). The writer drains cb_out per chunk;
+    // bounding the loop here is required because the reader and compute
+    // bound theirs too — without this, the writer would wait forever on
+    // cb_out for chunks the compute never pushes.
+    cb_wait_front(cb_counts_scratch, 1);
+    cb_wait_front(cb_idx_scratch, 1);
+    const volatile tt_l1_ptr uint32_t* counts_ptr =
+        reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_counts_scratch));
+    const volatile tt_l1_ptr uint32_t* idx_ptr =
+        reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_idx_scratch));
+    const uint32_t global_expert_id = idx_ptr[local_expert_id];
+    const uint32_t count_value = counts_ptr[global_expert_id];
+    const uint32_t count_tiles = (count_value + 31) / 32;
+    const uint32_t effective_chunks_runtime = (count_tiles + chunk_M_tiles - 1) / chunk_M_tiles;
+    const uint32_t effective_chunks = effective_chunks_runtime < num_chunks ? effective_chunks_runtime : num_chunks;
+
+    for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
         const uint32_t row0 = chunk * chunk_M_tiles + my_mt * per_core_M;
         const uint32_t col0 = my_nt_d * per_core_N_d;
         for (uint32_t sb_m = 0; sb_m < d_in1_num_subblocks_M; ++sb_m) {

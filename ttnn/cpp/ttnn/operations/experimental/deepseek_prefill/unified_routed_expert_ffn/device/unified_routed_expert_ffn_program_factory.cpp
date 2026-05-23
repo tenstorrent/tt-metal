@@ -370,19 +370,25 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
 
     // Writer compile-time args (must match writer's get_compile_time_arg_val order).
     std::vector<uint32_t> writer_ct_args = {
-        CB_ACTIVATED,
-        CB_OUT,
-        per_core_M,
-        per_core_N_gu,
-        per_core_N_d,
-        gu_out_subblock_h,
-        gu_out_subblock_w,
-        d_out_subblock_h,
-        d_out_subblock_w,
-        N_gate_tiles_full,
-        N_down_tiles_full,
-        num_chunks,
-        chunk_M_tiles,
+        CB_ACTIVATED,       // 0
+        CB_OUT,             // 1
+        per_core_M,         // 2
+        per_core_N_gu,      // 3
+        per_core_N_d,       // 4
+        gu_out_subblock_h,  // 5
+        gu_out_subblock_w,  // 6
+        d_out_subblock_h,   // 7
+        d_out_subblock_w,   // 8
+        N_gate_tiles_full,  // 9
+        N_down_tiles_full,  // 10
+        num_chunks,         // 11
+        chunk_M_tiles,      // 12
+        // device-side count read: writer also waits on the reader's push
+        // and bounds its cb_out drain loop by effective_chunks so it does
+        // not wait forever on chunks compute never pushes.
+        CB_COUNTS_SCRATCH,   // 13
+        CB_IDX_SCRATCH,      // 14
+        op.local_expert_id,  // 15
     };
     tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(writer_ct_args);
     tt::tt_metal::TensorAccessorArgs(scratch_buffer).append_to(writer_ct_args);
@@ -433,6 +439,10 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         d_out_block_num_tiles,
         // chunk loop control
         num_chunks,
+        // device-side count read: local_expert_id + chunk_M_tiles (in tiles)
+        // let compute convert count -> effective_chunks and bound the loop.
+        op.local_expert_id,
+        chunk_M_tiles,
     };
     std::unordered_map<std::string, uint32_t> compute_named_args = {
         {"cb_in0_x", CB_IN0_X},
@@ -447,6 +457,10 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         {"cb_mm_partials_up", CB_PARTIALS_UP},
         {"cb_mm_partials_d", CB_PARTIALS_D},
         {"cb_out", CB_OUT},
+        // For device-side count read: compute waits on the reader's push and
+        // bounds its chunk loop by effective_chunks = ceil(count/chunk_M_tiles).
+        {"cb_counts_scratch", CB_COUNTS_SCRATCH},
+        {"cb_idx_scratch", CB_IDX_SCRATCH},
     };
 
     // PACKER_L1_ACC controls cross-K-block accumulation via packer L1 RMW.
