@@ -41,7 +41,7 @@ def _mesh_shape_from_env() -> tuple[int, int]:
         "N300": (1, 2),
         "P150x4": (1, 4),
         "T3K": (1, 8),
-    }.get(os.environ.get("MESH_DEVICE", "P150x4"), (1, 4))
+    }.get(os.environ.get("MESH_DEVICE", "T3K"), (1, 8))
 
 
 @torch.no_grad()
