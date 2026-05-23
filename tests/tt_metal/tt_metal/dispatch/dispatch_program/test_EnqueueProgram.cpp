@@ -70,15 +70,15 @@ struct CBConfig {
 };
 
 struct DummyProgramConfig {
-    CoreRangeSet cr_set = {};
-    CBConfig cb_config = {};
+    CoreRangeSet cr_set = {};               // NOLINT(readability-redundant-member-init)
+    CBConfig cb_config = {};                // NOLINT(readability-redundant-member-init)
     uint32_t num_cbs = 0;
     uint32_t num_sems = 0;
 };
 
 struct DummyProgramMultiCBConfig {
-    CoreRangeSet cr_set = {};
-    std::vector<CBConfig> cb_config_vector = {};
+    CoreRangeSet cr_set = {};               // NOLINT(readability-redundant-member-init)
+    std::vector<CBConfig> cb_config_vector = {};  // NOLINT(readability-redundant-member-init)
     uint32_t num_sems = 0;
 };
 

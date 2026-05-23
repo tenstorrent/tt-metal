@@ -497,7 +497,7 @@ public:
                             collect_tensor_buffers(tensor_args, tensor_return_value, empty_descriptor);
                         auto resolved = tt::tt_metal::resolve_bindings(program, desc, tensor_buffers);
                         mesh_workload.add_program(device_range, std::move(program));
-                        shared_variables[device_range] = shared_variables_t{.resolved_bindings = std::move(resolved)};
+                        shared_variables[device_range] = shared_variables_t{.workload_descriptor = {}, .resolved_bindings = std::move(resolved)};
                     };
 
                 if constexpr (create_descriptor_uses_mesh_dispatch_coordinate()) {

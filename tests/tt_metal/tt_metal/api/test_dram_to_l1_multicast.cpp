@@ -38,8 +38,8 @@ struct DRAMtoL1MulticastConfig {
     std::uint32_t dest_buffer_addr;
     std::uint32_t target_grid_offset;
     std::string kernel_file;
-    CoreCoord exclude_start = {};
-    CoreCoord exclude_direction = {};
+    CoreCoord exclude_start = {};            // NOLINT(readability-redundant-member-init)
+    CoreCoord exclude_direction = {};        // NOLINT(readability-redundant-member-init)
 };
 
 bool dram_to_l1_multicast(

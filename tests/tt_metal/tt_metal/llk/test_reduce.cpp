@@ -62,7 +62,7 @@ enum ReduceDim : uint8_t { H = 0, W = 1, HW = 2 };
 enum ReduceType : uint8_t { SUM = 0, AVG = 1, MAX = 2 };
 struct ReduceConfig {
     tt_metal::Tile tile_shape = tt_metal::Tile({TILE_HEIGHT, TILE_WIDTH});
-    std::vector<uint32_t> shape = {};
+    std::vector<uint32_t> shape = {};           // NOLINT(readability-redundant-member-init)
     ReduceDim reduce_dim = ReduceDim::H;
     ReduceType reduce_type = ReduceType::SUM;
     float data_gen_rand_max = 0.0f;
@@ -72,8 +72,8 @@ struct ReduceConfig {
     float rtol = 0.0f;
     std::function<std::vector<uint16_t>(
         const std::vector<uint16_t>&, const std::vector<uint32_t>&, float, uint8_t, bool)>
-        golden_function = {};
-    std::vector<uint32_t> result_shape = {};
+        golden_function = {};               // NOLINT(readability-redundant-member-init)
+    std::vector<uint32_t> result_shape = {};    // NOLINT(readability-redundant-member-init)
     bool math_only_reduce = false;
     // Whether or not we want the result to be stored in DST in FP32:
     bool fp32_dest_acc_en = false;

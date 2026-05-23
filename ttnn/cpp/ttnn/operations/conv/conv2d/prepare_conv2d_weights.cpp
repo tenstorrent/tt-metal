@@ -239,8 +239,8 @@ Tensor to_weight_special_padding_tile_layout(
                     uint32_t k_end,
                     uint32_t c_start,
                     uint32_t c_end) {
-                    for (auto r = 0; r < w_shape[2]; r++) {
-                        for (auto s = 0; s < w_shape[3]; s++) {
+                    for (uint32_t r = 0; r < w_shape[2]; r++) {
+                        for (uint32_t s = 0; s < w_shape[3]; s++) {
                             for (auto c = c_start; c < c_end; c++) {
                                 for (auto k = k_start; k < k_end; k++) {
                                     auto matrix_idx =
@@ -589,8 +589,8 @@ Tensor to_bias_tile_layout_block_sharded(
                     conv_output_shard_width_padded](const tt::tt_metal::HostBuffer& input_host_buffer) {
         auto input_buffer = tt::tt_metal::host_buffer::get_as<T>(input_host_buffer);
         auto output_buffer = std::vector<T>(output_shape.volume());
-        for (auto oc = 0; oc < num_channel_shards; oc++) {
-            for (auto k_s = 0; k_s < conv_output_shard_width; k_s++) {
+        for (uint32_t oc = 0; oc < num_channel_shards; oc++) {
+            for (uint32_t k_s = 0; k_s < conv_output_shard_width; k_s++) {
                 auto matrix_idx = (oc * conv_output_shard_width_padded) + k_s;
                 auto idx = (oc * conv_output_shard_width) + k_s;
                 output_buffer[matrix_idx] = input_buffer[idx];
@@ -657,19 +657,19 @@ static Tensor conv_group_weight_zero_pad_helper(
         auto original_strides = compute_strides(original_weight_shape);
         auto output_strides = compute_strides(output_weight_shape);
 
-        for (int curr_batch_idx = 0; curr_batch_idx < original_weight_shape[0]; curr_batch_idx++) {
-            int new_batch_idx = curr_batch_idx;
+        for (uint32_t curr_batch_idx = 0; curr_batch_idx < original_weight_shape[0]; curr_batch_idx++) {
+            uint32_t new_batch_idx = curr_batch_idx;
 
             // Find which group_id the filter belongs to - through this, we can compute the offset where the padding
             // should be applied
             auto group_size = original_weight_shape[0] / num_groups;
             auto group_index = curr_batch_idx / group_size;
             auto group_id = std::min(group_index, num_groups - 1);
-            int new_channel_start_idx = group_id * original_weight_shape[1];
+            uint32_t new_channel_start_idx = group_id * original_weight_shape[1];
 
-            for (int j = 0; j < original_weight_shape[1]; j++) {
-                for (int k = 0; k < original_weight_shape[2]; k++) {
-                    for (int m = 0; m < original_weight_shape[3]; m++) {
+            for (uint32_t j = 0; j < original_weight_shape[1]; j++) {
+                for (uint32_t k = 0; k < original_weight_shape[2]; k++) {
+                    for (uint32_t m = 0; m < original_weight_shape[3]; m++) {
                         // Get value from original weight tensor
                         auto value_flat_input_index = tt::tt_metal::compute_flat_indices(
                             ttnn::SmallVector<uint32_t>{curr_batch_idx, j, k, m}, original_strides);
