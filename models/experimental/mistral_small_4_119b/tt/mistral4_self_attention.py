@@ -442,7 +442,7 @@ class TtMistral4Attention(LightweightModule):
         q_latent = ttnn.linear(
             x,
             self.q_a_proj,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self.lofi_compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # [1, 1, seq, Q_LORA_RANK]
@@ -459,7 +459,7 @@ class TtMistral4Attention(LightweightModule):
         q = ttnn.linear(
             q_latent,
             self.q_b_proj,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self.lofi_compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # [1, 1, seq, N_HEADS * HEAD_DIM]
@@ -474,7 +474,7 @@ class TtMistral4Attention(LightweightModule):
         ttnn.deallocate(q)
 
         q_rope_rotated = ttnn.experimental.rotary_embedding_hf(
-            q_rope, cos, sin, is_decode_mode=False, compute_kernel_config=self.compute_kernel_config
+            q_rope, cos, sin, is_decode_mode=False, compute_kernel_config=self.lofi_compute_kernel_config
         )
         ttnn.deallocate(q_rope)
 
@@ -487,7 +487,7 @@ class TtMistral4Attention(LightweightModule):
         kv_combined = ttnn.linear(
             x,
             self.kv_a_proj,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self.lofi_compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # [1, 1, seq, KV_A_PROJ_OUT]
@@ -509,7 +509,7 @@ class TtMistral4Attention(LightweightModule):
         kv = ttnn.linear(
             kv_latent_normed,
             self.kv_b_proj,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self.lofi_compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # [1, 1, seq, KV_B_PROJ_OUT_TOTAL]
@@ -525,7 +525,7 @@ class TtMistral4Attention(LightweightModule):
         ttnn.deallocate(kv)
 
         k_rope_rotated = ttnn.experimental.rotary_embedding_hf(
-            k_rope_raw, cos, sin, is_decode_mode=False, compute_kernel_config=self.compute_kernel_config
+            k_rope_raw, cos, sin, is_decode_mode=False, compute_kernel_config=self.lofi_compute_kernel_config
         )
         # [1, 1, seq, QK_ROPE_HEAD_DIM]
         ttnn.deallocate(k_rope_raw)
@@ -574,7 +574,7 @@ class TtMistral4Attention(LightweightModule):
         out = ttnn.linear(
             attn_flat,
             self.o_proj,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self.lofi_compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # [1, 1, seq, HIDDEN_SIZE]
