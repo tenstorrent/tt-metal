@@ -115,13 +115,15 @@ tt::tt_metal::ProgramDescriptor MaskedBincountProgramFactory::create_descriptor(
     });
 
     // --- Semaphores ---
-    // Semaphore IDs are 0-based, in declaration order.
     const uint32_t init_sem_idx = 0;
     const uint32_t done_sem_idx = 1;
     const uint32_t gather_sem_idx = 2;
-    desc.semaphores.push_back(SemaphoreDescriptor{.core_ranges = all_cores, .initial_value = 0});
-    desc.semaphores.push_back(SemaphoreDescriptor{.core_ranges = all_cores, .initial_value = 0});
-    desc.semaphores.push_back(SemaphoreDescriptor{.core_ranges = all_cores, .initial_value = 0});
+    desc.semaphores.push_back(SemaphoreDescriptor{
+        .id = init_sem_idx, .core_type = tt::CoreType::WORKER, .core_ranges = all_cores, .initial_value = 0});
+    desc.semaphores.push_back(SemaphoreDescriptor{
+        .id = done_sem_idx, .core_type = tt::CoreType::WORKER, .core_ranges = all_cores, .initial_value = 0});
+    desc.semaphores.push_back(SemaphoreDescriptor{
+        .id = gather_sem_idx, .core_type = tt::CoreType::WORKER, .core_ranges = all_cores, .initial_value = 0});
 
     // --- TensorAccessor args (shared by both kernels) ---
     std::vector<uint32_t> accessor_args;

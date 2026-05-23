@@ -173,14 +173,17 @@ tt::tt_metal::ProgramDescriptor MoEGateMMProgramFactory::create_descriptor(
     // Create semaphores to wait for the partial to arrive from the other core.
     // There will be 8 cores, each waiting for partial to come from 4 other cores.
     // The 4 cores will send partial to two cores each.
-    // Semaphore IDs are 0-based, in declaration order.
     const uint32_t partial_semaphore_id = 0;
     const uint32_t raw_scores_semaphore_id = 1;
     desc.semaphores.push_back(SemaphoreDescriptor{
+        .id = partial_semaphore_id,
+        .core_type = tt::CoreType::WORKER,
         .core_ranges = all_cores,
         .initial_value = 0,
     });
     desc.semaphores.push_back(SemaphoreDescriptor{
+        .id = raw_scores_semaphore_id,
+        .core_type = tt::CoreType::WORKER,
         .core_ranges = all_cores,
         .initial_value = 0,
     });
