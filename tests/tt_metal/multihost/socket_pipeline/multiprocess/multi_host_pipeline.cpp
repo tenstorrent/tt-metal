@@ -80,7 +80,7 @@ std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate> get_asic_i
             distributed_context->broadcast(
                 tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&num_entries), sizeof(num_entries)),
                 distributed::multihost::Rank{rank});
-            for (auto i = 0; i < num_entries; i++) {
+            for (std::size_t i = 0; i < num_entries; i++) {
                 tt_metal::AsicID asic_id;
                 distributed::MeshCoordinate mesh_coord = distributed::MeshCoordinate(0, 0);
                 distributed_context->broadcast(
@@ -1065,7 +1065,7 @@ void run_single_galaxy_rate_pipeline(
     };
 
     const bool is_pipeline_start = (my_rank == 0);
-    const bool is_pipeline_end = (my_rank == num_ranks - 1);
+    const bool is_pipeline_end = (static_cast<uint32_t>(my_rank) == num_ranks - 1);
 
     auto my_entry = pipeline_stages[my_rank].entry_node_coord;
     auto my_exit = pipeline_stages[my_rank].exit_node_coord;
