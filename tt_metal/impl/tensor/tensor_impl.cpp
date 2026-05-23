@@ -5,6 +5,7 @@
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/shape2d.hpp>
+#include <tt-metalium/float8.hpp>
 
 #include <tt-metalium/experimental/tensor/impl/tensor_impl.hpp>
 
@@ -43,6 +44,7 @@ HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec) {
         case DataType::BFLOAT16: return HostBuffer(std::vector<bfloat16>(size_bytes / sizeof(bfloat16)));
         case DataType::FLOAT32: return HostBuffer(std::vector<float>(size_bytes / sizeof(float)));
         case DataType::INT32: return HostBuffer(std::vector<int32_t>(size_bytes / sizeof(int32_t)));
+        case DataType::FP8_E4M3: return HostBuffer(std::vector<float8_e4m3>(size_bytes / sizeof(float8_e4m3)));
         case DataType::UINT8: return HostBuffer(std::vector<uint8_t>(size_bytes / sizeof(uint8_t)));
         case DataType::UINT16: return HostBuffer(std::vector<uint16_t>(size_bytes / sizeof(uint16_t)));
         case DataType::BFLOAT4_B:
