@@ -159,13 +159,13 @@ tt::tt_metal::ProgramDescriptor UntilizeMultiCoreProgramFactory::create_descript
             (uint32_t)src0_cb_index,
             (uint32_t)num_tiles_per_input_block,
         };
-        reader_desc.config = ReaderDataMovementConfig{};
+        reader_desc.config = ReaderConfigDescriptor{};
     } else if (input_is_sharded) {
         // Even sharding with pack_untilize: CB is backed by the sharded buffer, reader just pushes
         reader_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp";
         reader_desc.compile_time_args = {(uint32_t)src0_cb_index};
-        reader_desc.config = ReaderDataMovementConfig{};
+        reader_desc.config = ReaderConfigDescriptor{};
     } else {
         // Interleaved input
         reader_desc.kernel_source =
@@ -174,7 +174,7 @@ tt::tt_metal::ProgramDescriptor UntilizeMultiCoreProgramFactory::create_descript
         std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index};
         TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
         reader_desc.compile_time_args = std::move(reader_compile_time_args);
-        reader_desc.config = ReaderDataMovementConfig{};
+        reader_desc.config = ReaderConfigDescriptor{};
     }
 
     // Writer compile-time args
@@ -215,7 +215,7 @@ tt::tt_metal::ProgramDescriptor UntilizeMultiCoreProgramFactory::create_descript
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = compute_core_range;
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = WriterDataMovementConfig{};
+    writer_desc.config = WriterConfigDescriptor{};
 
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);

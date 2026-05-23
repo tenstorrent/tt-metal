@@ -91,7 +91,7 @@ tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreRowInvariant::c
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
     reader_desc.named_compile_time_args = std::move(reader_named_compile_time_args);
-    reader_desc.config = ReaderDataMovementConfig{};
+    reader_desc.config = ReaderConfigDescriptor{};
 
     std::vector<uint32_t> writer_compile_time_args = {};
     KernelDescriptor::NamedCompileTimeArgs writer_named_compile_time_args = {
@@ -106,7 +106,7 @@ tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreRowInvariant::c
     writer_desc.core_ranges = all_cores;
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
     writer_desc.named_compile_time_args = std::move(writer_named_compile_time_args);
-    writer_desc.config = WriterDataMovementConfig{};
+    writer_desc.config = WriterConfigDescriptor{};
 
     std::vector<uint32_t> reader_runtime_args = {src_buffer->address(), 0, 0};
 
@@ -260,7 +260,7 @@ tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreBlockedGeneric:
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
     reader_desc.named_compile_time_args = std::move(reader_named_compile_time_args);
-    reader_desc.config = ReaderDataMovementConfig{};
+    reader_desc.config = ReaderConfigDescriptor{};
 
     std::vector<uint32_t> writer_compile_time_args = {};
 
@@ -291,7 +291,7 @@ tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreBlockedGeneric:
     writer_desc.core_ranges = all_cores;
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
     writer_desc.named_compile_time_args = std::move(writer_named_compile_time_args);
-    writer_desc.config = WriterDataMovementConfig{};
+    writer_desc.config = WriterConfigDescriptor{};
 
     std::vector<uint32_t> compute_kernel_args = {x_block_size, w_block_size};
     KernelDescriptor::NamedCompileTimeArgs compute_named_compile_time_args = {
