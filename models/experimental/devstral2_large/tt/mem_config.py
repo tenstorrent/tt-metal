@@ -35,7 +35,7 @@ def get_compute_kernel_config(mesh_device, *, math_fidelity: ttnn.MathFidelity =
 
 def get_compute_kernel_config_hifi4(mesh_device):
     """HiFi4 kernel config for matmuls quantized to bfloat8_b that need full accuracy."""
-    return get_compute_kernel_config(mesh_device, math_fidelity=ttnn.MathFidelity.HiFi4)
+    return get_compute_kernel_config(mesh_device, math_fidelity=ttnn.MathFidelity.LoFi)
 
 
 @lru_cache(maxsize=4)
