@@ -26,7 +26,7 @@
 
 constexpr uint32_t cb_out0 = tt::CBIndex::c_2;
 constexpr uint32_t cb_scratch = tt::CBIndex::c_4;      // BRISC scratch (zero buf, plan slice, gs slice, rmw_buf)
-constexpr uint32_t cb_w = tt::CBIndex::c_5;            // 32×32 broadcast weight tile pushed to compute
+constexpr uint32_t cb_w = tt::CBIndex::c_5;            // COL-broadcast weight tile pushed to compute
 constexpr uint32_t cb_existing_rm = tt::CBIndex::c_6;  // row-major existing rows from ungrouped
 
 constexpr uint32_t h = get_compile_time_arg_val(0);
@@ -50,6 +50,10 @@ constexpr uint32_t off_page_bytes = decltype(offsets_args)::AlignedPageSize;
 constexpr uint32_t ungrouped_aligned_page = decltype(ungrouped_args)::AlignedPageSize;
 
 constexpr uint32_t SENTINEL = 0xFFFFFFFFU;
+constexpr uint32_t TILE_BYTES = tt::constants::TILE_HW * sizeof(uint16_t);
+constexpr uint32_t FACE_HEIGHT = 16U;
+constexpr uint32_t FACE_WIDTH = 16U;
+constexpr uint32_t FACE_DATUMS = FACE_HEIGHT * FACE_WIDTH;
 
 // Local BRISC<->NCRISC handshake on the same core (no NOC; both RISCs share L1).
 // Pattern: BRISC sets brisc_done = 1, polls brisc_release until 1, resets it.
@@ -166,7 +170,7 @@ void kernel_main() {
             }
 
             // Per chunk:
-            //   1. Build w_tile (32×32 broadcast w[r]) → cb_w
+            //   1. Build COL-broadcast w_tile: only SrcB col 0 is populated → cb_w
             //   2. Read existing rows from ungrouped[plan[r]] into cb_existing_rm
             //   3. cb_wait_front(cb_out0) — compute has already done mul + add + untilize
             //   4. NOC-write cb_out0 rows back to ungrouped[plan[r]]
@@ -180,22 +184,20 @@ void kernel_main() {
                 bool is_last_chunk = (chunk == num_chunks - 1U);
                 uint32_t chunk_bytes = is_last_chunk ? last_chunk_bytes : hidden_chunk_bytes;
 
-                // (1) Build w_tile and push to cb_w.
+                // (1) Build broadcast source tile and push to cb_w. The compute
+                // COL-broadcast path consumes SrcB column 0, so only faces 0 and
+                // 2 need one value per tile row; the rest is zeroed for API
+                // compatibility.
                 cb_reserve_back(cb_w, 1U);
                 {
-                    volatile tt_l1_ptr uint16_t* w_tile =
-                        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_w));
-                    for (uint32_t face = 0; face < 4U; ++face) {
-                        uint32_t face_r_offset = (face / 2U) * 16U;
-                        uint32_t face_base = face * 256U;
-                        for (uint32_t in_r = 0; in_r < 16U; ++in_r) {
-                            uint32_t r = face_r_offset + in_r;
-                            uint16_t w_bf = w_buf[r];
-                            uint32_t row_off = face_base + in_r * 16U;
-                            for (uint32_t in_c = 0; in_c < 16U; ++in_c) {
-                                w_tile[row_off + in_c] = w_bf;
-                            }
-                        }
+                    uint32_t w_tile_addr = get_write_ptr(cb_w);
+                    fill_zeros_async(w_tile_addr, TILE_BYTES);
+                    noc_async_read_barrier();
+                    volatile tt_l1_ptr uint16_t* w_tile = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(w_tile_addr);
+                    for (uint32_t r = 0; r < tt::constants::TILE_HEIGHT; ++r) {
+                        uint32_t face = (r < FACE_HEIGHT) ? 0U : 2U;
+                        uint32_t face_r = r % FACE_HEIGHT;
+                        w_tile[face * FACE_DATUMS + face_r * FACE_WIDTH] = w_buf[r];
                     }
                 }
                 cb_push_back(cb_w, 1U);
@@ -231,12 +233,9 @@ void kernel_main() {
                         if (flat == SENTINEL) {
                             continue;
                         }
-                        volatile tt_l1_ptr uint16_t* tail = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
-                            existing_l1 + r * hidden_chunk_bytes + chunk_bytes);
-                        for (uint32_t i = 0; i < pad_bytes / sizeof(uint16_t); ++i) {
-                            tail[i] = 0U;
-                        }
+                        fill_zeros_async(existing_l1 + r * hidden_chunk_bytes + chunk_bytes, pad_bytes);
                     }
+                    noc_async_read_barrier();
                 }
                 cb_push_back(cb_existing_rm, tt::constants::TILE_HEIGHT);
             };

@@ -150,10 +150,17 @@ void kernel_main() {
             for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
                 cb_reserve_back(cb_src0, tiles_per_chunk);
                 uint32_t dst_l1 = get_write_ptr(cb_src0);
-                uint32_t tile_id_base = tr_global * Wt + chunk * tiles_per_chunk;
+                uint32_t chunk_tile_start = chunk * tiles_per_chunk;
+                uint32_t tile_id_base = tr_global * Wt + chunk_tile_start;
                 for (uint32_t t = 0; t < tiles_per_chunk; ++t) {
-                    uint64_t src_noc = get_noc_addr(tile_id_base + t, expert_out_addrgen);
-                    noc_async_read(src_noc, dst_l1 + t * TILE_BYTES, TILE_BYTES);
+                    uint32_t chunk_tile = chunk_tile_start + t;
+                    uint32_t tile_l1 = dst_l1 + t * TILE_BYTES;
+                    if (chunk_tile < Wt) {
+                        uint64_t src_noc = get_noc_addr(tile_id_base + t, expert_out_addrgen);
+                        noc_async_read(src_noc, tile_l1, TILE_BYTES);
+                    } else {
+                        fill_zeros_async(tile_l1, TILE_BYTES);
+                    }
                 }
                 noc_async_read_barrier();
                 cb_push_back(cb_src0, tiles_per_chunk);

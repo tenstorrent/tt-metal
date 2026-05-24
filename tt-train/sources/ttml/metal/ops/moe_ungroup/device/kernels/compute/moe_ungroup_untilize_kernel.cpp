@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <tt-metalium/constants.hpp>
 
+#include "api/compute/bcast.h"
 #include "api/compute/cb_api.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/pack.h"
@@ -18,7 +19,7 @@
 //
 // Per chunk (one block):
 //   A. tilize cb_existing_rm (row-major, TILE_HEIGHT row-pages) → cb_existing_tile
-//   B. mul cb_src * cb_w in DST, add cb_existing_tile with dest reuse → cb_combined
+//   B. mul cb_src * cb_w COL-broadcast in DST, add cb_existing_tile with dest reuse → cb_combined
 //   C. untilize cb_combined → cb_out0 (row-major)
 
 void kernel_main() {
@@ -53,7 +54,7 @@ void kernel_main() {
             compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(
             tile_row_blocks_per_chunk, tt::constants::TILE_HEIGHT);
 
-        // ---- Phase B: mul cb_src * cb_w, add existing_tile in DST → cb_combined ----
+        // ---- Phase B: mul cb_src * broadcast(cb_w col 0), add existing_tile in DST → cb_combined ----
         cb_wait_front(cb_id_src, tiles_per_chunk);
         cb_wait_front(cb_id_w, 1U);
         cb_wait_front(cb_id_existing_tile, tiles_per_chunk);
@@ -61,8 +62,8 @@ void kernel_main() {
 
         for (uint32_t i = 0; i < tiles_per_chunk; ++i) {
             tile_regs_acquire();
-            mul_tiles_init(cb_id_src, cb_id_w);
-            mul_tiles(cb_id_src, cb_id_w, i, 0U, 0U);
+            mul_bcast_cols_init_short(cb_id_src, cb_id_w);
+            mul_tiles_bcast_cols(cb_id_src, cb_id_w, i, 0U, 0U);
             binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_id_existing_tile);
             binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_id_existing_tile, i, 0U);
             tile_regs_commit();

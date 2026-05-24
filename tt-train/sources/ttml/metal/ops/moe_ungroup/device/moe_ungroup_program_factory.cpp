@@ -4,6 +4,7 @@
 
 #include "moe_ungroup_program_factory.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <map>
 #include <string>
@@ -35,32 +36,21 @@ constexpr uint32_t kCbCtrl = tt::CBIndex::c_10;         // NCRISC->compute: per-
 
 constexpr uint32_t kTargetChunkBytes = 128U * 1024U;
 
-// Pick num_chunks such that:
-//   1. tiles_per_chunk = Wt / num_chunks divides Wt evenly (no last-chunk
-//      remainder — the kernels read/process exactly tiles_per_chunk tiles
-//      per chunk and have no per-chunk variable-size code path).
-//   2. The L1 strip (32 rows × tiles_per_chunk × 64 B) stays under
-//      kTargetChunkBytes when possible.
-// Falls back to the smallest divisor that respects the cap; for prime Wt
-// that may be 1 (single chunk covering all of Wt).
+// Pick the fewest fixed-size chunks whose per-chunk L1 strip stays under the
+// target when possible. The kernels always exchange tiles_per_chunk CB pages;
+// the reader zero-fills padded tile pages in the final chunk when Wt is not an
+// even multiple of tiles_per_chunk.
 uint32_t pick_num_chunks(uint32_t h) {
     // ceil(h / TILE_WIDTH) — last tile may be partial when h isn't tile-aligned.
     const uint32_t Wt = tt::round_up(h, tt::constants::TILE_WIDTH) / tt::constants::TILE_WIDTH;
     if (Wt == 0U) {
         return 1U;
     }
-    const uint32_t tile_row_bytes = 32U * tt::constants::TILE_WIDTH * 2U;  // = 2 KiB per tile-column
+    const uint32_t tile_row_bytes =
+        tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH * 2U;  // = 2 KiB per tile-column
     uint32_t tpc_cap = kTargetChunkBytes / tile_row_bytes;
-    if (tpc_cap == 0U) {
-        tpc_cap = 1U;
-    }
-    // Smallest num_chunks that divides Wt and gives tiles_per_chunk <= cap.
-    for (uint32_t nc = 1U; nc <= Wt; ++nc) {
-        if (Wt % nc == 0U && (Wt / nc) <= tpc_cap) {
-            return nc;
-        }
-    }
-    return Wt;  // worst case: tiles_per_chunk = 1
+    tpc_cap = std::max(tpc_cap, 1U);
+    return (Wt + tpc_cap - 1U) / tpc_cap;
 }
 
 }  // namespace
