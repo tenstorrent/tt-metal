@@ -237,11 +237,27 @@ void kernel_main() {
                 uint32_t l1_x = get_write_ptr(cb_in0_x);
                 const uint32_t block_start = l1_x;
                 for (uint32_t m = 0; m < per_core_M; ++m) {
+                    const uint32_t row = this_core_first_row + m;
+                    // count_tiles is the runtime tile-row count for this expert.
+                    // Rows past it are NOT filled by extract — they hold
+                    // uninitialized DRAM bytes. Reading them would feed garbage
+                    // (potentially NaN/Inf in bf8 representation) into the
+                    // matmul, which propagates through the per-K-block L1_ACC
+                    // accumulation and contaminates the FFN output. Zero-fill
+                    // the L1 region for those rows instead — silu(0) = 0,
+                    // 0 * up = 0, 0 @ W_down = 0 (safe and free of NaN).
+                    const bool row_valid = row < count_tiles;
                     for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
-                        const uint32_t row = this_core_first_row + m;
-                        const uint32_t col = kb * in0_block_w_gu + k;
-                        const uint32_t tile_idx = row * K_gate_tiles + col;
-                        noc_async_read_tile(tile_idx, x_acc, l1_x, /*offset=*/0, /*noc=*/0);
+                        if (row_valid) {
+                            const uint32_t col = kb * in0_block_w_gu + k;
+                            const uint32_t tile_idx = row * K_gate_tiles + col;
+                            noc_async_read_tile(tile_idx, x_acc, l1_x, /*offset=*/0, /*noc=*/0);
+                        } else {
+                            volatile tt_l1_ptr uint64_t* p = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_x);
+                            for (uint32_t i = 0; i < x_tile_bytes / 8; ++i) {
+                                p[i] = 0;
+                            }
+                        }
                         l1_x += x_tile_bytes;
                     }
                 }
