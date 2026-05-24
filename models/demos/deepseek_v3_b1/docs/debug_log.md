@@ -377,7 +377,36 @@ Any deviation (MATH-only, PACK-only, mid-chunk, chunk-end, once-per-flash_mla, a
 
 ---
 
+## Attempt 14 — NOP test: 2c's position with semantic-inert writes
+
+**What.** Same chunk-entry position as Attempt 7, but the two `TT_SETC16` writes replaced with semantic NOPs emitted through the same `ckernel::instrn_buffer[0]` write mechanism that `TT_SETC16` uses internally.
+
+```cpp
+MATH((ckernel::instrn_buffer[0] = TT_OP_NOP));
+PACK((ckernel::instrn_buffer[0] = TT_OP_NOP));
+```
+
+This compiles to the same instruction-stream shape (host CPU writes a 32-bit value into the Tensix instruction buffer for that thread; thread dispatches it) but the dispatched instruction is a NOP, not a CFG write. Same JIT pattern, different semantics.
+
+**Motivation.** Discriminate (A) real CFG-pipe semantic effect vs (B) code-gen / instruction-layout side effect. If iter-PCC shifts ~20× with NOPs, the position itself matters and 2c is a code-gen artifact. If it stays at baseline, the actual `SETC16` writes carry the effect.
+
+**Result.**
+
+| Case | iter=1 PCC | iter=2 PCC |
+|---|---|---|
+| Baseline | 0.9931898601668998 | 0.9934483676630709 |
+| 2c (real `SETC16` writes) | 0.9935941662184071 | 0.9935820920940954 |
+| NOP test | **0.9931898601668998 (baseline)** | **0.9934483676630709 (baseline)** |
+
+**Conclusion.** NOPs at the same position → bit-identical baseline. **Interpretation A is correct: the `SETC16` writes themselves carry the effect, not the code-gen side effect.** 2c is a credible lead — the cross-thread CFG writes really do change HW state in a way that mitigates the bug.
+
+**State.** Reverted.
+
+---
+
 ## Where to go next (handoff)
+
+### What we know
 
 The Method 1 bisect localized the bug to `flash_mla.hpp:747-791`. Patch sweep:
 
@@ -385,36 +414,47 @@ The Method 1 bisect localized the bug to `flash_mla.hpp:747-791`. Patch sweep:
 |---|---|
 | #4 (STALLWAIT before MATH_PACK SEMPOST) | null |
 | 2a (init PACK_SEC1..3 GPRs) | null |
-| **2c (per-chunk MATH+PACK MATH_Offset reset at chunk entry)** | **20× alternation collapse** |
+| **2c (per-chunk MATH+PACK MATH_Offset reset at chunk entry)** | **20× alternation collapse, residual ~1e-5** |
 | 2c-tail (same reset additionally before flash_mla tail) | canceled 2c effect (baseline) |
 | 2c-narrow MATH-only | null |
 | 2c-narrow PACK-only | null |
 | 2c-move pre-MM2 | null |
 | 2c-move chunk-end | null |
 | 2c-move flash_mla-entry (once before chunk loop) | null |
+| NOP test (Attempt 14) | null — confirms 2c is semantic, not code-gen |
 
-The narrow position-sensitivity is striking: changing *any* of (MATH-only / PACK-only / location-within-chunk / once-per-flash_mla / also-at-tail) breaks the effect. The unique working configuration is *cross-thread, per-chunk, at chunk entry, not repeated at tail*.
+The unique working recipe is *cross-thread MATH+PACK pair, per-chunk, at chunk entry (before replay-buf init), NOT also at tail*. Any single variation breaks it. The NOP test confirms it's the real `SETC16` semantics doing the work.
 
-This is suggestive of one of two interpretations:
+### What we don't know
 
-**A — Real CFG-pipe ordering effect.** The pair of writes (MATH then PACK) at chunk entry creates a specific Tensix CFG-pipe state that propagates into the chunk's compute, and breaking that pattern (single thread / different position / extra writes / different frequency) disturbs the pipe in a way that re-exposes the bug.
+- **Why per-chunk frequency matters.** Once-per-flash_mla is null; per-chunk is 20×. The cumulative writes do something the single write can't.
+- **Why both threads are required.** Each thread's `dest_offset_id` is independent and the per-op SDPA helpers already set `MATH_Offset` per dispatch — so a single redundant write per thread shouldn't do anything new, yet only the cross-thread pair works.
+- **Why position-before-replay-buf-init is the unique-good spot.** Pre-MM2, chunk-end, flash_mla-entry are all null. There's something about *writes pre-pending the `_init_sdpa_reduce_max_row_8x32_replay_buffers_` call* in each chunk.
+- **Why adding more (2c-tail) cancels.** If `SETC16` writes are doing semantic good, doubling down should help, not hurt. The cancellation hints at a parity-style effect on some HW counter.
+- **What the residual ~1e-5 gap represents.** Some bank-asymmetric effect persists even with 2c.
 
-**B — Code-generation side effect.** The patch causes the JIT compiler to lay out a specific instruction sequence (or change a register allocation / scheduling choice) that incidentally avoids the bug pattern. Other placements produce different code-gen that doesn't have the side effect. In this case the 20× collapse is not a fix for the underlying bug — it's a different binary that happens to mask the bug.
+### Hypotheses to smoke out the bug in the ~40 lines
 
-To discriminate A vs B:
+The bug zone is `flash_mla.hpp:747-791`: `tile_regs_acquire` → chunk loop (`compute_sdpa_chunk` × N) → tail (`compute_sdpa_recip` or pack-max) → final `pack_block_contiguous(mm2)` loop → `tile_regs_commit/wait/release`. ~40 lines of TRISC1/MATH + TRISC2/PACK activity.
 
-1. **Drop-in no-op test.** Add a TTI_NOP (or empty inline asm) at the chunk-entry position instead of the real `TT_SETC16` pair. If iter PCC still shifts measurably, it's compilation-side-effect (B). If unchanged from baseline, the real `TT_SETC16` writes are doing something semantic (A).
+Hypotheses, roughly cheap → expensive:
 
-2. **Inspect the JIT'd ELF.** Diff `trisc1.elf` / `trisc2.elf` between baseline and Attempt 7 to see whether the surrounding instruction stream changed beyond the inserted `SETC16` instructions. If only the SETC16s are different, interpretation A is more likely.
+1. **The `SETC16` writes are draining a CFG pipe that needs draining per chunk.** Triggers a barrier the existing code lacks. Test: replace the pair with a single `TTI_STALLWAIT(STALL_CFG, THCON)` (or similar) on each thread at the same position. If that also gives ~20× collapse, the effect is the CFG-pipe drain, not the address write — and we can simplify the fix.
 
-3. **Move 2c by ONE instruction.** Try placing the pair AFTER `_init_sdpa_reduce_max_row_8x32_replay_buffers_` instead of before. If still 20× collapse, the "before-replay-buf" placement isn't critical and the effect is more general. If null, the EXACT placement before the replay-buf init is somehow critical (e.g., a CFG-pipe interaction with `lltt::record`).
+2. **`load_replay_buf` records a bank-sensitive `MATH_Offset` snapshot at the time of `lltt::record`.** SFPLOAD instructions in the replay buffer use `Imm10 + MATH_Offset_at_replay_time`, but maybe the recording itself captures something about CFG state. Test: bracket the `_init_sdpa_reduce_max_row_8x32_replay_buffers_` call with `TTI_STALLWAIT` before AND after, on PACK only. See whether that alone reproduces 2c.
 
-Other directions still on the table from earlier:
+3. **Parity in some hidden counter.** 2c writes 16 times per flash_mla (2 threads × 8 chunks). 2c+2c-tail writes 18 times. If a HW counter is sensitive to count-mod-2 or count-mod-some-N, that explains the cancellation. Test: vary the count by adding 1 extra MATH+PACK pair to one specific chunk (say chunk 0 fires the pair twice). If iter-PCC moves toward baseline at every odd extra, parity hypothesis confirmed.
 
-4. **Direct DEST-bank readback microbench** — eliminates / confirms HW silicon asymmetry.
-5. **Single-op skipping inside flash_mla** — bisects further than Method 1 could.
-6. **Profiler / DEST address trace** — captures empirical addresses per iter, diff.
+4. **Reduce to 1 chunk via small `position_id`.** The test currently uses `position_id=8190` → ~8 chunks per device. The parametrize comment-out includes `127`, `511`, `1023`. With `position_id=127` (1 chunk per device), the per-chunk-frequency story collapses. If iter-alternation still appears at 1 chunk, the bug is inside `compute_sdpa_chunk` itself (or its tail). If it disappears at 1 chunk, the bug is cross-chunk state.
 
-The current best lead (Attempt 7) reduces the bug 20× but is fragile (any variation breaks it) and we don't understand the mechanism. Worth one more cheap experiment (drop-in NOP test) to distinguish A from B before committing more time.
+5. **The bug lives in the tail (`compute_sdpa_recip` / final pack), not the chunk loop.** Method 1 only bracketed `:747-791` as a unit — we couldn't bisect inside because nested `tile_regs_acquire/release` would deadlock. But we *can* test by short-circuiting the tail: replace `compute_sdpa_recip` with a hardcoded no-op (or a different code path) only on iter 0, see if iter-PCC alternation moves.
+
+6. **Asymmetric SFPU helper.** Each SDPA SFPU helper (`fast_approx_exp`, `non_approx_exp_mul_prev`, `recip_sum`, `reduce_max_row`, `reduce_sum_row`) does its own `TT_SETC16(MATH_Offset, src + base)`. If one of them has a bug where it reads/writes the wrong DEST tile (e.g., off-by-one), it would be bank-asymmetric. Audit each: print the actual computed `src + base` value vs the intended tile offset, look for a discrepancy.
+
+7. **`init_fast_approx_exp_constants` is called per chunk and writes to LREG[12..14] via SFPCONFIG. If the SFPCONFIG state isn't fully drained / sequenced before the next op, LREG content could carry across chunks.** Test: remove `init_fast_approx_exp_constants` from the chunk and inline the constant loads. Or call it ONCE at flash_mla top instead of per-chunk.
+
+8. **DEST-bank readback microbench.** Skip the whole investigation — write a minimal kernel: FPU + SFPU pass into bank 0, dump to L1, repeat into bank 1, dump. Diff. Confirms / refutes any HW asymmetry.
+
+My pick for next experiment: **hypothesis 4 (small position_id)**. Cheapest information-per-time-spent — single parameter change, no code edits, ~12 min run. Decides whether the bug needs cross-chunk state at all.
 
 ---
