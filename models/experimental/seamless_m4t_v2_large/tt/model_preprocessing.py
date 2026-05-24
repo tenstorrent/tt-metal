@@ -11,7 +11,11 @@ import torch
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight, make_parameter_dict
 
 from models.experimental.seamless_m4t_v2_large.reference.torch_text_decoder import embed_scale_for_config
-from models.experimental.seamless_m4t_v2_large.tt.common import create_dram_sharded_mem_config
+from models.experimental.seamless_m4t_v2_large.tt.common import (
+    TILE,
+    create_dram_sharded_mem_config,
+    dram_shard_core_count,
+)
 
 
 def _conv1d_weight(conv: torch.nn.Conv1d, *, device: ttnn.Device) -> ttnn.Tensor:
@@ -119,11 +123,41 @@ def _linear_pair(
     }
 
 
+def _linear_bias_dram_sharded(
+    bias: torch.Tensor,
+    *,
+    device: ttnn.Device,
+    m: int,
+    n: int,
+) -> ttnn.Tensor:
+    """DRAM width-sharded bias tile for ``MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig``."""
+    dram_cores = dram_shard_core_count(device, n)
+    _, padded_n = create_dram_sharded_mem_config(device, TILE, n)
+    bias_4d = bias.detach().reshape(1, 1, 1, int(bias.numel())).to(torch.bfloat16)
+    bias_4d = torch.nn.functional.pad(bias_4d, (0, padded_n - int(bias.numel())))
+    bias_4d = bias_4d.expand(1, 1, m, padded_n).contiguous()
+    dram_grid = device.dram_grid_size()
+    shard_grid = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_cores - 1, dram_grid.y - 1))}
+    )
+    bias_shard_shape = [TILE, padded_n // dram_cores]
+    bias_shard_spec = ttnn.ShardSpec(shard_grid, bias_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    bias_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, bias_shard_spec)
+    return ttnn.from_torch(
+        bias_4d,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=bias_mem_config,
+    )
+
+
 def _linear_pair_dram_sharded(
     linear: torch.nn.Linear,
     *,
     device: ttnn.Device,
     weight_dtype: ttnn.DataType = ttnn.bfloat16,
+    m: int = 32,
 ) -> dict:
     w_torch = linear.weight.detach().T.contiguous()
     k, n = int(w_torch.shape[0]), int(w_torch.shape[1])
@@ -137,8 +171,8 @@ def _linear_pair_dram_sharded(
         device=device,
         memory_config=mem_config,
     )
-    b = preprocess_linear_bias(linear.bias.detach(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    return {"weight": weight, "bias": ttnn.to_device(b, device)}
+    bias = _linear_bias_dram_sharded(linear.bias.detach(), device=device, m=m, n=padded_n)
+    return {"weight": weight, "bias": bias}
 
 
 def _fused_linear_weight_dram_sharded(
@@ -147,6 +181,7 @@ def _fused_linear_weight_dram_sharded(
     *,
     device: ttnn.Device,
     weight_dtype: ttnn.DataType,
+    m: int = 32,
 ) -> dict:
     w_torch = weight.T.contiguous()
     k, n = int(w_torch.shape[0]), int(w_torch.shape[1])
@@ -160,8 +195,8 @@ def _fused_linear_weight_dram_sharded(
         device=device,
         memory_config=mem_config,
     )
-    b = preprocess_linear_bias(bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    return {"weight": w, "bias": ttnn.to_device(b, device)}
+    b = _linear_bias_dram_sharded(bias, device=device, m=m, n=padded_n)
+    return {"weight": w, "bias": b}
 
 
 def _fused_qkv_pair(
@@ -208,6 +243,7 @@ def _fused_qkv_pair_dram_sharded(
     device: ttnn.Device,
     weight_dtype: ttnn.DataType = ttnn.bfloat16,
     q_scale: float = 1.0,
+    m: int = 32,
 ) -> dict:
     q_w = q_proj.weight.detach()
     q_b = q_proj.bias.detach()
@@ -216,7 +252,7 @@ def _fused_qkv_pair_dram_sharded(
         q_b = (q_b * q_scale).to(q_b.dtype)
     qkv_weight = torch.cat([q_w, k_proj.weight.detach(), v_proj.weight.detach()], dim=0).contiguous()
     qkv_bias = torch.cat([q_b, k_proj.bias.detach(), v_proj.bias.detach()], dim=0).contiguous()
-    return _fused_linear_weight_dram_sharded(qkv_weight, qkv_bias, device=device, weight_dtype=weight_dtype)
+    return _fused_linear_weight_dram_sharded(qkv_weight, qkv_bias, device=device, weight_dtype=weight_dtype, m=m)
 
 
 def _fused_kv_pair(
@@ -348,6 +384,8 @@ def _m4t_encoder_self_attn_ffn_layers(
     ffn_weight_dtype: ttnn.DataType = ttnn.bfloat16,
     attn_weight_dtype: ttnn.DataType = ttnn.bfloat16,
     fuse_qkv: bool = False,
+    dram_width_sharded_weights: bool = False,
+    prefill_token_rows: int = 32,
 ) -> list:
     """Layer parameter dicts shared by text encoder and text-to-unit encoder stacks.
 
@@ -362,26 +400,45 @@ def _m4t_encoder_self_attn_ffn_layers(
     ``ttnn.experimental.nlp_create_qkv_heads`` in the encoder forward) instead
     of separate ``q_proj``/``k_proj``/``v_proj`` entries. ``out_proj`` is
     always exposed as a separate linear pair.
+
+    ``dram_width_sharded_weights=True`` stores linear weights as DRAM width-sharded
+    BFP8 tiles with DRAM-sharded bias for ``MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig``.
+    ``prefill_token_rows`` is the M dimension baked into DRAM-sharded bias tiles.
     """
+    linear_pair = _linear_pair_dram_sharded if dram_width_sharded_weights else _linear_pair
+    fused_qkv_pair = _fused_qkv_pair_dram_sharded if dram_width_sharded_weights else _fused_qkv_pair
+    linear_kwargs = {"m": prefill_token_rows} if dram_width_sharded_weights else {}
+
     layers = []
     for layer in encoder.layers:
         if fuse_qkv:
             self_attn = {
-                "qkv": _fused_qkv_pair(
+                "qkv": fused_qkv_pair(
                     layer.self_attn.q_proj,
                     layer.self_attn.k_proj,
                     layer.self_attn.v_proj,
                     device=device,
                     weight_dtype=attn_weight_dtype,
+                    **linear_kwargs,
                 ),
-                "out_proj": _linear_pair(layer.self_attn.out_proj, device=device, weight_dtype=attn_weight_dtype),
+                "out_proj": linear_pair(
+                    layer.self_attn.out_proj, device=device, weight_dtype=attn_weight_dtype, **linear_kwargs
+                ),
             }
         else:
             self_attn = {
-                "q_proj": _linear_pair(layer.self_attn.q_proj, device=device, weight_dtype=attn_weight_dtype),
-                "k_proj": _linear_pair(layer.self_attn.k_proj, device=device, weight_dtype=attn_weight_dtype),
-                "v_proj": _linear_pair(layer.self_attn.v_proj, device=device, weight_dtype=attn_weight_dtype),
-                "out_proj": _linear_pair(layer.self_attn.out_proj, device=device, weight_dtype=attn_weight_dtype),
+                "q_proj": linear_pair(
+                    layer.self_attn.q_proj, device=device, weight_dtype=attn_weight_dtype, **linear_kwargs
+                ),
+                "k_proj": linear_pair(
+                    layer.self_attn.k_proj, device=device, weight_dtype=attn_weight_dtype, **linear_kwargs
+                ),
+                "v_proj": linear_pair(
+                    layer.self_attn.v_proj, device=device, weight_dtype=attn_weight_dtype, **linear_kwargs
+                ),
+                "out_proj": linear_pair(
+                    layer.self_attn.out_proj, device=device, weight_dtype=attn_weight_dtype, **linear_kwargs
+                ),
             }
 
         layer_dict = {
@@ -395,19 +452,21 @@ def _m4t_encoder_self_attn_ffn_layers(
                 "bias": _ln_to_device(layer.ffn_layer_norm.bias, device=device),
             },
             "ffn": {
-                "fc1": _linear_pair(layer.ffn.fc1, device=device, weight_dtype=ffn_weight_dtype),
-                "fc2": _linear_pair(layer.ffn.fc2, device=device, weight_dtype=ffn_weight_dtype),
+                "fc1": linear_pair(layer.ffn.fc1, device=device, weight_dtype=ffn_weight_dtype, **linear_kwargs),
+                "fc2": linear_pair(layer.ffn.fc2, device=device, weight_dtype=ffn_weight_dtype, **linear_kwargs),
             },
         }
         layers.append(make_parameter_dict(layer_dict))
     return layers
 
 
-def create_text_encoder_parameters(encoder, *, device: ttnn.Device) -> dict:
+def create_text_encoder_parameters(encoder, *, device: ttnn.Device, prefill_token_rows: int = 32) -> dict:
     """
     Convert [`SeamlessM4Tv2Encoder`] weights to TTNN tensors on ``device``.
 
     Token embeddings include ``embed_scale`` (see [`SeamlessM4Tv2ScaledWordEmbedding`]).
+    Linear weights (QKV, out_proj, FFN) use L1 width-sharded activations + DRAM width-sharded
+    BFP8 weights for ``MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig``.
     """
     cfg = encoder.config
     scale = embed_scale_for_config(cfg)
@@ -438,6 +497,8 @@ def create_text_encoder_parameters(encoder, *, device: ttnn.Device) -> dict:
         ffn_weight_dtype=ttnn.bfloat8_b,
         attn_weight_dtype=ttnn.bfloat8_b,
         fuse_qkv=True,
+        dram_width_sharded_weights=True,
+        prefill_token_rows=prefill_token_rows,
     )
 
     out = {

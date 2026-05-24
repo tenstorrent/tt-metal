@@ -40,7 +40,6 @@ from models.experimental.seamless_m4t_v2_large.tt.common import (
     build_cross_attn_mask_4d,
     build_encoder_self_mask_4d,
     core_grid,
-    encoder_self_additive_mask_all_zeros_4d,
     ones_mask,
     pad_input_ids_to,
     pad_mask_to,
@@ -444,15 +443,16 @@ class TTSeamlessM4Tv2Model:
         self,
         input_ids: ttnn.Tensor,
         attention_mask: Optional[ttnn.Tensor],
-    ) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, bool]:
-        """Build text-encoder padded ids, positions, and 4D self mask **once** (outside ``begin_trace_capture``).
+    ) -> Tuple[ttnn.Tensor, ttnn.Tensor, Optional[ttnn.Tensor], ttnn.Tensor, bool]:
+        """Build text-encoder padded ids, positions, and optional 4D self mask **once** (outside ``begin_trace_capture``).
 
         Matches the tensor construction in ``_encode_text`` before ``text_encoder.forward``. Pair with
         ``forward_text_e2e_prefill_trace`` so trace capture avoids ``ttnn.full`` / ``concat`` padding ops.
 
         Returns:
-            ``(ids_padded, position_ids, encoder_self_mask_4d, encoder_attn_2d_padded, attn_owned)`` —
-            same ``attn_owned`` contract as ``_encode_text``.
+            ``(ids_padded, position_ids, encoder_self_mask_4d_or_none, encoder_attn_2d_padded, attn_owned)`` —
+            same ``attn_owned`` contract as ``_encode_text``. When the caller omits ``attention_mask``, no
+            additive SDPA mask is materialized (all positions valid → ``None``).
         """
         batch = int(input_ids.shape[0])
         seq = int(input_ids.shape[1])
@@ -468,7 +468,7 @@ class TTSeamlessM4Tv2Model:
 
         pos_tt = tt_position_ids(ids_padded, self.pad_token_id)
         if attention_mask is None:
-            enc_mask_4d = encoder_self_additive_mask_all_zeros_4d(batch, padded_seq, self.device)
+            enc_mask_4d = None
         else:
             enc_mask_4d = build_encoder_self_mask_4d(attn_padded, device=self.device)
         return ids_padded, pos_tt, enc_mask_4d, attn_padded, attn_owned
@@ -490,7 +490,8 @@ class TTSeamlessM4Tv2Model:
         if ids_padded is not input_ids:
             ttnn.deallocate(ids_padded)
         ttnn.deallocate(pos_tt)
-        ttnn.deallocate(enc_mask_4d)
+        if enc_mask_4d is not None:
+            ttnn.deallocate(enc_mask_4d)
         return enc_out, attn_padded, attn_owned
 
     def _speech_attention_uint_to_conv_bf16(self, mask_2d: ttnn.Tensor) -> ttnn.Tensor:
@@ -1045,7 +1046,7 @@ class TTSeamlessM4Tv2Model:
         self,
         enc_ids_padded: ttnn.Tensor,
         enc_pos: ttnn.Tensor,
-        enc_self_mask_4d: ttnn.Tensor,
+        enc_self_mask_4d: Optional[ttnn.Tensor],
         dec_ids_padded: ttnn.Tensor,
         dec_pos: ttnn.Tensor,
         dec_causal_4d: ttnn.Tensor,
