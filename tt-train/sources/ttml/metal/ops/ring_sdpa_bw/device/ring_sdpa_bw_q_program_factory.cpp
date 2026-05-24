@@ -20,7 +20,7 @@ namespace ttml::metal::ops::ring_sdpa_bw::q {
 
 RingSDPABwQProgramFactory::cached_mesh_workload_t RingSDPABwQProgramFactory::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const ttnn::MeshCoordinateRangeSet& /*tensor_coords*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     namespace sdpa_q = ttml::metal::ops::sdpa_bw::device::q;

@@ -18,7 +18,7 @@ namespace ttml::metal::ops::ring_sdpa_bw::kv {
 
 RingSDPABwKVProgramFactory::cached_mesh_workload_t RingSDPABwKVProgramFactory::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const ttnn::MeshCoordinateRangeSet& /*tensor_coords*/,
     const tensor_args_t& tensor_args,
     std::tuple<ttnn::Tensor, ttnn::Tensor>& tensor_return_value) {
     namespace sdpa_kv = ttml::metal::ops::sdpa_bw::device::kv;

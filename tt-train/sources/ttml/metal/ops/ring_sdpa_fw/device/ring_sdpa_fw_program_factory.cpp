@@ -61,7 +61,7 @@ std::pair<bool, AttentionMaskType> get_device_execution_info(
 
 RingSDPAFwProgramFactory::cached_mesh_workload_t RingSDPAFwProgramFactory::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const ttnn::MeshCoordinateRangeSet& /*tensor_coords*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     namespace sdpa_fw = ttml::metal::ops::sdpa_fw;
