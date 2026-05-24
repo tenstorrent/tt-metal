@@ -273,6 +273,51 @@ def dram_matmul_program_config(
     )
 
 
+def is_l1_width_sharded(tensor: ttnn.Tensor) -> bool:
+    mc = tensor.memory_config()
+    return mc.buffer_type == ttnn.BufferType.L1 and mc.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+
+
+def ensure_l1_width_sharded_activation(device: ttnn.Device, x: ttnn.Tensor, m: int, k: int) -> ttnn.Tensor:
+    """Shard activations for ``MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig`` (in0 L1 width)."""
+    target = dram_linear_input_mem_config(device, m, k)
+    if is_l1_width_sharded(x):
+        mc = x.memory_config()
+        spec = mc.shard_spec
+        if spec is not None and tuple(spec.shape) == tuple(target.shard_spec.shape):
+            return x
+    return ttnn.to_memory_config(x, target)
+
+
+def width_sharded_to_l1_interleaved(x: ttnn.Tensor) -> ttnn.Tensor:
+    """Convert width-sharded L1 matmul output to interleaved L1 (SDPA / residual add)."""
+    if x.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:
+        return x
+    return ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
+
+
+def ensure_interleaved_bsh(
+    x: ttnn.Tensor,
+    *,
+    batch: int,
+    seq: int,
+    channels: int,
+) -> ttnn.Tensor:
+    """Normalize activations to interleaved ``[B, S, C]`` (handles 2-D/4-D tile layouts)."""
+    x = width_sharded_to_l1_interleaved(x)
+    rank = len(x.shape)
+    if rank == 4 and int(x.shape[1]) == 1:
+        x = ttnn.reshape(x, (batch, seq, channels))
+    elif rank == 2:
+        x = ttnn.reshape(x, (batch, seq, channels))
+    elif rank == 3:
+        if int(x.shape[0]) != batch or int(x.shape[1]) != seq or int(x.shape[2]) != channels:
+            x = ttnn.slice(x, [0, 0, 0], [batch, seq, channels], [1, 1, 1])
+    elif rank != 3:
+        raise ValueError(f"Expected rank 2/3/4 for [B,S,C] normalize, got rank {rank} shape {x.shape}")
+    return x
+
+
 def ensure_tile_bf16_sdpa_mask(x: ttnn.Tensor) -> ttnn.Tensor:
     """SDPA requires a TILE bf16 mask; ``expand``/``add`` paths often yield ROW_MAJOR."""
     if x.get_layout() == ttnn.TILE_LAYOUT and x.dtype == ttnn.bfloat16:
@@ -469,7 +514,7 @@ def encoder_self_additive_mask_all_zeros_4d(batch: int, seq: int, device: ttnn.D
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     return ensure_tile_bf16_sdpa_mask(zeros)
 

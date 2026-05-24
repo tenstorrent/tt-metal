@@ -12,8 +12,12 @@ import ttnn
 
 from models.experimental.seamless_m4t_v2_large.tt.common import (
     build_ln_sharded_config,
-    matmul_program_config,
+    dram_linear_input_mem_config,
+    dram_matmul_program_config,
+    ensure_interleaved_bsh,
+    ensure_l1_width_sharded_activation,
     sdpa_program_config,
+    width_sharded_to_l1_interleaved,
 )
 
 
@@ -23,6 +27,9 @@ class TTSeamlessM4Tv2Encoder:
 
     ``forward`` takes tensors already placed on the device. Use
     ``create_text_encoder_parameters`` to build ``parameters`` from the PyTorch encoder.
+
+    Prefill matmuls use L1 width-sharded activations + DRAM width-sharded BFP8 weights
+    (``MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig``).
     """
 
     def __init__(
@@ -70,10 +77,27 @@ class TTSeamlessM4Tv2Encoder:
         # the reduction across grid_x cores -- typically 8 cores at seq=32 --
         # for a ~4-5x per-op speedup.
         self._ln_sharded_cache: dict = {}
-        # Reuse ``SDPAProgramConfig`` per (seq_q, seq_k) across encoder layers.
         self._sdpa_pc_cache: dict = {}
-        # ``MatmulMultiCoreReuseMultiCast1DProgramConfig`` keyed by (token_rows, in_dim, out_dim).
-        self._matmul_pc_cache: dict = {}
+        self._dram_matmul_pc_cache: dict = {}
+        self._width_shard_mem_cache: dict = {}
+
+    def _width_shard_mem_config(self, token_rows: int, channels: int) -> ttnn.MemoryConfig:
+        key = (token_rows, channels)
+        cached = self._width_shard_mem_cache.get(key)
+        if cached is not None:
+            return cached
+        cached = dram_linear_input_mem_config(self.device, token_rows, channels)
+        self._width_shard_mem_cache[key] = cached
+        return cached
+
+    def _to_matmul_width_sharded(self, x: ttnn.Tensor, token_rows: int, channels: int) -> ttnn.Tensor:
+        if len(x.shape) == 3:
+            x = ttnn.reshape(x, (token_rows, channels))
+        return ensure_l1_width_sharded_activation(self.device, x, token_rows, channels)
+
+    @staticmethod
+    def _width_sharded_to_3d(x: ttnn.Tensor, batch: int, seq: int, channels: int) -> ttnn.Tensor:
+        return ensure_interleaved_bsh(x, batch=batch, seq=seq, channels=channels)
 
     def _sdpa_program_config(self, seq_q: int, seq_k: int) -> ttnn.SDPAProgramConfig:
         return sdpa_program_config(self.device, seq_q, seq_k, self._sdpa_pc_cache)
@@ -86,24 +110,78 @@ class TTSeamlessM4Tv2Encoder:
             return int(x.shape[0])
         return int(x.shape[-2])
 
-    def _matmul_pc(
+    def _dram_matmul_pc(
         self,
-        token_rows: int,
-        in_dim: int,
-        out_dim: int,
-    ) -> ttnn.ProgramConfig:
-        key = (token_rows, in_dim, out_dim)
-        cached = self._matmul_pc_cache.get(key)
+        m: int,
+        k: int,
+        n: int,
+        *,
+        fused_activation=None,
+    ) -> ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig:
+        key = (m, k, n, fused_activation)
+        cached = self._dram_matmul_pc_cache.get(key)
         if cached is not None:
             return cached
-        cached = matmul_program_config(
+        cached = dram_matmul_program_config(
             self.device,
-            token_rows=token_rows,
-            in_dim=in_dim,
-            out_dim=out_dim,
+            m,
+            k,
+            n,
+            fused_activation=fused_activation,
         )
-        self._matmul_pc_cache[key] = cached
+        self._dram_matmul_pc_cache[key] = cached
         return cached
+
+    @staticmethod
+    def _bias_token_rows(bias: ttnn.Tensor) -> int:
+        if len(bias.shape) == 4:
+            return int(bias.shape[2])
+        return 32
+
+    @staticmethod
+    def _pad_token_rows(x: ttnn.Tensor, m_actual: int, m_padded: int) -> ttnn.Tensor:
+        if m_actual >= m_padded:
+            return x
+        k = int(x.shape[-1])
+        pad_rows = m_padded - m_actual
+        pad = ttnn.full(
+            [pad_rows, k],
+            0.0,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=x.device(),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        padded = ttnn.concat([x, pad], dim=0, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(pad)
+        return padded
+
+    def _finalize_dram_sharded_linear(
+        self,
+        x: ttnn.Tensor,
+        *,
+        batch: int,
+        seq: int,
+        m_actual: int,
+        out_dim: int,
+    ) -> ttnn.Tensor:
+        x = width_sharded_to_l1_interleaved(x)
+        if len(x.shape) == 4 and int(x.shape[1]) == 1:
+            x = ttnn.reshape(x, (batch, seq, int(x.shape[-1])))
+        if len(x.shape) == 2 and int(x.shape[0]) > m_actual:
+            x = ttnn.slice(x, [0, 0], [m_actual, int(x.shape[-1])], [1, 1])
+        padded_n = int(x.shape[-1])
+        if padded_n > out_dim:
+            if len(x.shape) == 2:
+                x = ttnn.slice(x, [0, 0], [m_actual, out_dim], [1, 1])
+            elif len(x.shape) == 3:
+                x = ttnn.slice(x, [0, 0, 0], [batch, seq, out_dim], [1, 1, 1])
+        if len(x.shape) == 2:
+            return ttnn.reshape(x, (batch, seq, out_dim))
+        if len(x.shape) == 3 and (int(x.shape[0]) != batch or int(x.shape[1]) != seq):
+            x = ttnn.slice(x, [0, 0, 0], [batch, seq, out_dim], [1, 1, 1])
+            return ttnn.reshape(x, (batch, seq, out_dim))
+        return x
 
     def _linear(
         self,
@@ -112,22 +190,71 @@ class TTSeamlessM4Tv2Encoder:
         bias: ttnn.Tensor,
         *,
         activation: Optional[str] = None,
-        program_config: Optional[ttnn.ProgramConfig] = None,
+        logical_out_dim: Optional[int] = None,
+        keep_sharded_output: bool = False,
+        accept_sharded_input: bool = False,
+        batch: Optional[int] = None,
+        seq: Optional[int] = None,
     ) -> ttnn.Tensor:
-        if program_config is None:
-            program_config = self._matmul_pc(
-                self._linear_token_rows(x),
-                int(weight.shape[-2]),
-                int(weight.shape[-1]),
+        k = int(weight.shape[-2])
+        n = int(weight.shape[-1])
+        out_dim = logical_out_dim if logical_out_dim is not None else n
+
+        if (accept_sharded_input or (len(x.shape) == 2 and ttnn.is_sharded(x))) and ttnn.is_sharded(x):
+            if batch is None or seq is None:
+                raise ValueError("batch and seq are required for sharded linear input")
+            x_flat = x
+            m_actual = batch * seq
+            m = self._bias_token_rows(bias)
+            x_sharded = ensure_l1_width_sharded_activation(self.device, x_flat, m, k)
+        elif len(x.shape) == 3:
+            batch = int(x.shape[0])
+            seq = int(x.shape[1])
+            x_flat = ttnn.reshape(x, (batch * seq, k))
+            m_actual = batch * seq
+            x_sharded = None
+        elif len(x.shape) == 2:
+            batch = batch if batch is not None else int(x.shape[0])
+            seq = seq if seq is not None else 1
+            x_flat = x
+            m_actual = int(x.shape[0])
+            x_sharded = None
+        else:
+            batch = batch if batch is not None else 1
+            seq = seq if seq is not None else 1
+            x_flat = x
+            m_actual = self._linear_token_rows(x)
+            x_sharded = None
+
+        m = self._bias_token_rows(bias)
+        if m_actual > m:
+            raise ValueError(
+                f"Text encoder DRAM-sharded linear expects at most {m} token rows, got {m_actual}. "
+                "Recreate parameters with a larger prefill_token_rows."
             )
-        return ttnn.linear(
-            x,
+
+        if x_sharded is None:
+            x_flat = self._pad_token_rows(x_flat, m_actual, m)
+            x_sharded = ensure_l1_width_sharded_activation(self.device, x_flat, m, k)
+        fused_activation = ttnn.UnaryOpType.RELU if activation == "relu" else None
+        out = ttnn.linear(
+            x_sharded,
             weight,
             bias=bias,
-            activation=activation,
-            program_config=program_config,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            program_config=self._dram_matmul_pc(m, k, n, fused_activation=fused_activation),
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             compute_kernel_config=self._linear_ln_compute_cfg,
+        )
+        if x_sharded is not x_flat and x_sharded is not x:
+            ttnn.deallocate(x_sharded)
+        if keep_sharded_output:
+            return out
+        return self._finalize_dram_sharded_linear(
+            out,
+            batch=batch,
+            seq=seq,
+            m_actual=m_actual,
+            out_dim=out_dim,
         )
 
     def _build_ln_sharded_config(self, m_tiles: int, n_tiles: int):
@@ -141,11 +268,16 @@ class TTSeamlessM4Tv2Encoder:
         bias: ttnn.Tensor,
         m_tiles: int,
         n_tiles: int,
+        input_sharded: bool = False,
+        output_sharded: bool = False,
     ) -> ttnn.Tensor:
-        """Width-sharded multicore LN (8 cores at H=1024). Needs one layout round-trip per call."""
+        """Width-sharded multicore LN. Set ``output_sharded=True`` to feed matmul without S2I."""
         sharded_mem_config, sharded_pc = self._build_ln_sharded_config(m_tiles, n_tiles)
 
-        x_sharded = ttnn.to_memory_config(x, sharded_mem_config)
+        if input_sharded and ttnn.is_sharded(x):
+            x_sharded = x
+        else:
+            x_sharded = ttnn.to_memory_config(x, sharded_mem_config)
         normed_sharded = ttnn.layer_norm(
             x_sharded,
             weight=weight,
@@ -155,7 +287,10 @@ class TTSeamlessM4Tv2Encoder:
             program_config=sharded_pc,
             compute_kernel_config=self._layernorm_compute_cfg,
         )
-        ttnn.deallocate(x_sharded)
+        if x_sharded is not x:
+            ttnn.deallocate(x_sharded)
+        if output_sharded:
+            return normed_sharded
         normed = ttnn.sharded_to_interleaved(normed_sharded, ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
         ttnn.deallocate(normed_sharded)
         return normed
@@ -176,13 +311,14 @@ class TTSeamlessM4Tv2Encoder:
     ) -> ttnn.Tensor:
         # Fused QKV projection: one matmul producing
         # ``[B, S, 3 * hidden]`` instead of three separate Q/K/V matmuls.
-        token_m = batch * seq_q
-        pc_qkv = self._matmul_pc(token_m, hidden_size, 3 * hidden_size)
         qkv = self._linear(
             hidden_states,
             attn_module.qkv.weight,
             attn_module.qkv.bias,
-            program_config=pc_qkv,
+            logical_out_dim=3 * hidden_size,
+            accept_sharded_input=ttnn.is_sharded(hidden_states),
+            batch=batch,
+            seq=seq_q,
         )
 
         # ``nlp_create_qkv_heads`` consumes a 4-D ``[B, 1, S, 3*H]`` input and
@@ -200,7 +336,6 @@ class TTSeamlessM4Tv2Encoder:
         )
         ttnn.deallocate(qkv_4d)
 
-        # Scale is folded into SDPA so we drop the explicit ``ttnn.multiply``.
         attn_out = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
@@ -216,20 +351,19 @@ class TTSeamlessM4Tv2Encoder:
         ttnn.deallocate(k)
         ttnn.deallocate(v)
 
-        # ``nlp_concat_heads`` undoes ``nlp_create_qkv_heads``: it merges heads
-        # back into ``[B, 1, S, hidden]``. We then drop the singleton batch-1
-        # axis so the residual ``ttnn.add`` consumes the same 3-D layout as
-        # the rest of the encoder.
         merged_4d = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(attn_out)
         merged = ttnn.reshape(merged_4d, (batch, seq_q, hidden_size))
+        ttnn.deallocate(merged_4d)
 
-        pc_out = self._matmul_pc(token_m, hidden_size, hidden_size)
         proj = self._linear(
             merged,
             attn_module.out_proj.weight,
             attn_module.out_proj.bias,
-            program_config=pc_out,
+            logical_out_dim=hidden_size,
+            keep_sharded_output=True,
+            batch=batch,
+            seq=seq_q,
         )
         ttnn.deallocate(merged)
         return proj
@@ -271,8 +405,9 @@ class TTSeamlessM4Tv2Encoder:
                 position_ids,
                 weight=parameters.embed_positions.weight,
                 layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
-            hidden = ttnn.add(inputs_embeds, pos, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            hidden = ttnn.add(inputs_embeds, pos, memory_config=ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(pos)
         else:
             batch = int(input_ids.shape[0])  # type: ignore[union-attr]
@@ -282,14 +417,16 @@ class TTSeamlessM4Tv2Encoder:
                 input_ids,
                 weight=parameters.embed_tokens.weight,
                 layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
             pos = ttnn.embedding(
                 position_ids,
                 weight=parameters.embed_positions.weight,
                 layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
 
-            hidden = ttnn.add(tok, pos, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            hidden = ttnn.add(tok, pos, memory_config=ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(tok)
             ttnn.deallocate(pos)
 
@@ -297,10 +434,10 @@ class TTSeamlessM4Tv2Encoder:
 
         m_tiles = (batch * seq + 31) // 32
         n_tiles = hidden_size // 32
-        token_m = batch * seq
-        ffn_dim = int(self.parameters.layers[0].ffn.fc1.weight.shape[-1])
-        pc_ffn_fc1 = self._matmul_pc(token_m, hidden_size, ffn_dim)
-        pc_ffn_fc2 = self._matmul_pc(token_m, ffn_dim, hidden_size)
+        ffn_dim = 8 * hidden_size
+        token_rows = batch * seq
+        hidden = self._to_matmul_width_sharded(hidden, token_rows, hidden_size)
+        sharded_hidden_mem = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
 
         for i in range(num_layers):
             layer = parameters.layers[i]
@@ -311,6 +448,8 @@ class TTSeamlessM4Tv2Encoder:
                 bias=layer.self_attn_layer_norm.bias,
                 m_tiles=m_tiles,
                 n_tiles=n_tiles,
+                input_sharded=ttnn.is_sharded(hidden),
+                output_sharded=True,
             )
             attn_out = self._attention(
                 normed,
@@ -325,7 +464,7 @@ class TTSeamlessM4Tv2Encoder:
                 sdpa_cfg=sdpa_self,
             )
             ttnn.deallocate(normed)
-            hidden = ttnn.add(hidden, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            hidden = ttnn.add(hidden, attn_out, memory_config=sharded_hidden_mem)
             ttnn.deallocate(attn_out)
 
             normed = self._layer_norm_sharded(
@@ -334,22 +473,32 @@ class TTSeamlessM4Tv2Encoder:
                 bias=layer.ffn_layer_norm.bias,
                 m_tiles=m_tiles,
                 n_tiles=n_tiles,
+                input_sharded=ttnn.is_sharded(hidden),
+                output_sharded=True,
             )
             ff = self._linear(
                 normed,
                 layer.ffn.fc1.weight,
                 layer.ffn.fc1.bias,
                 activation="relu",
-                program_config=pc_ffn_fc1,
+                logical_out_dim=ffn_dim,
+                keep_sharded_output=True,
+                accept_sharded_input=True,
+                batch=batch,
+                seq=seq,
             )
             ttnn.deallocate(normed)
             ff = self._linear(
                 ff,
                 layer.ffn.fc2.weight,
                 layer.ffn.fc2.bias,
-                program_config=pc_ffn_fc2,
+                logical_out_dim=hidden_size,
+                accept_sharded_input=True,
+                keep_sharded_output=True,
+                batch=batch,
+                seq=seq,
             )
-            hidden = ttnn.add(hidden, ff, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            hidden = ttnn.add(hidden, ff, memory_config=sharded_hidden_mem)
             ttnn.deallocate(ff)
 
         hidden = self._layer_norm_sharded(
@@ -358,5 +507,7 @@ class TTSeamlessM4Tv2Encoder:
             bias=parameters.layer_norm.bias,
             m_tiles=m_tiles,
             n_tiles=n_tiles,
+            input_sharded=True,
+            output_sharded=False,
         )
-        return hidden
+        return self._width_sharded_to_3d(hidden, batch, seq, hidden_size)
