@@ -81,7 +81,7 @@ void MoeGroupDeviceOperation::validate_on_program_cache_miss(
 }
 
 spec_return_value_t MoeGroupDeviceOperation::compute_output_specs(
-    const operation_attributes_t& attrs, const tensor_args_t& args) {
+    const operation_attributes_t& attrs, const tensor_args_t&) {
     auto dram = ttnn::MemoryConfig{ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM};
 
     // grouped: [1, 1, T_cap, H]  TILE  bf16

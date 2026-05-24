@@ -94,7 +94,7 @@ void assign_per_core_runtime_args(
 }
 
 SwigluElemwiseBwProgramFactory::cached_program_t SwigluElemwiseBwProgramFactory::create(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
+    const operation_attributes_t&, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
     const auto& linear1 = tensor_args.linear1;
     const auto& gate = tensor_args.gate;
     const auto& dL_dprod = tensor_args.dL_dprod;

@@ -12,7 +12,7 @@
 namespace ttml::metal::ops::swiglu_elemwise_bw::device {
 
 void SwigluElemwiseBwDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t&, const tensor_args_t& tensor_args) {
     auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
         TT_FATAL(
             tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
@@ -95,7 +95,7 @@ void SwigluElemwiseBwDeviceOperation::validate_on_program_cache_miss(
 }
 
 spec_return_value_t SwigluElemwiseBwDeviceOperation::compute_output_specs(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t&, const tensor_args_t& tensor_args) {
     auto make_spec = [&](const std::optional<ttnn::Tensor>& prealloc) -> ttnn::TensorSpec {
         if (prealloc.has_value()) {
             return prealloc->tensor_spec();

@@ -436,7 +436,7 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
 
 void MoeGroupProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& attrs,
+    const operation_attributes_t&,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& outputs) {
     auto& program = cached_program.program;
