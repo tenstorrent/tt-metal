@@ -68,6 +68,60 @@ def _gather_in0_dram_mm_program_config(
     )
 
 
+def width_sharded_l1_linear_keep_sharded(
+    configuration: Any,
+    x: ttnn.Tensor,
+    weight: ttnn.Tensor,
+    *,
+    m_seq: int,
+    k_dim: int,
+    n_dim: int,
+    fuse_batch: bool,
+    compute_kernel_config: Any,
+    fused_activation: Optional[Any] = None,
+) -> ttnn.Tensor:
+    """Width-sharded L1 linear; returns WIDTH_SHARDED L1 (no untilize→tilize to interleaved)."""
+    if k_dim % TILE != 0 or n_dim % TILE != 0:
+        raise ValueError(
+            f"width_sharded_l1_linear_keep_sharded requires tile-aligned k_dim, n_dim; got k={k_dim} n={n_dim}"
+        )
+
+    grid = configuration.dram_shard_core_grid_for_k_and_n(k_dim, n_dim)
+    num_cores = grid.x * grid.y
+    m_tiles = math.ceil(m_seq / TILE)
+    k_tiles = k_dim // TILE
+    n_tiles = n_dim // TILE
+
+    if k_tiles % num_cores != 0 or n_tiles % num_cores != 0:
+        raise ValueError(
+            f"width_sharded_l1_linear_keep_sharded shard mismatch: m={m_seq} k={k_dim} n={n_dim} cores={num_cores}"
+        )
+
+    in_mem = width_sharded_l1_memcfg(m_tiles, k_tiles, grid.x, grid.y)
+    if not x.is_sharded():
+        x = ttnn.interleaved_to_sharded(x, in_mem)
+
+    prog_cfg = _gather_in0_dram_mm_program_config(
+        grid=grid,
+        m_seq=m_seq,
+        k_dim=k_dim,
+        n_dim=n_dim,
+        fuse_batch=fuse_batch,
+        fused_activation=fused_activation,
+        compute_kernel_config=compute_kernel_config,
+    )
+    out_mem = width_sharded_l1_memcfg(m_tiles, n_tiles, grid.x, grid.y)
+
+    return ttnn.linear(
+        x,
+        weight,
+        dtype=ttnn.bfloat16,
+        memory_config=out_mem,
+        compute_kernel_config=compute_kernel_config,
+        program_config=prog_cfg,
+    )
+
+
 def width_sharded_l1_linear_reuse_multicast(
     configuration: Any,
     x: ttnn.Tensor,
@@ -256,6 +310,7 @@ __all__ = [
     "find_grid_k_n",
     "find_unified_grid_mlp",
     "pad_n_for_dram_align",
+    "width_sharded_l1_linear_keep_sharded",
     "width_sharded_l1_linear_reuse_multicast",
     "width_sharded_l1_memcfg",
 ]

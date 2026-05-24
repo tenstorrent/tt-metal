@@ -8,11 +8,11 @@ import ttnn
 
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import nearest_32
+from models.experimental.devstarl2_small.devstral_utils.vision_ccl import vision_sum_all_reduce
 from models.experimental.devstarl2_small.devstral_utils.pixtral_seq_chunk import (
     pad_seq_to_chunk_multiple,
     pixtral_vision_seq_chunk_len,
     trim_seq_dim2,
-    vision_collective_memcfg,
     vision_rope_memcfg,
 )
 
@@ -210,18 +210,25 @@ class TtMistralImageAttention(LightweightModule):
         out = ttnn.reshape(out, [1, 1, seq_len, -1])
         return trim_seq_dim2(out, original_seq_len)
 
-    def _linear_wo_seq_chunked(self, attn_output_11SH, seq_len: int, max_mm_seq_len: int) -> ttnn.Tensor:
+    def _linear_wo_seq_chunked(
+        self,
+        attn_output_11SH,
+        seq_len: int,
+        max_mm_seq_len: int,
+        output_memory_config=None,
+    ) -> ttnn.Tensor:
         """Output ``wo`` linear with the same chunking."""
         attn_output_11SH, seq_len, original_seq_len = pad_seq_to_chunk_multiple(
             attn_output_11SH, seq_len, max_mm_seq_len
         )
+        wo_mem_cfg = output_memory_config if output_memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
         if seq_len <= max_mm_seq_len:
             out = ttnn.linear(
                 attn_output_11SH,
                 self.wo,
                 compute_kernel_config=self.compute_kernel_config_hifi2,
                 dtype=ttnn.bfloat16,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=wo_mem_cfg,
                 program_config=self.model_config["IMAGE_ATTN_OUT_PROGCFG"](seq_len, seq_len),
             )
             return trim_seq_dim2(out, original_seq_len)
@@ -232,17 +239,19 @@ class TtMistralImageAttention(LightweightModule):
             self.wo,
             compute_kernel_config=self.compute_kernel_config_hifi2,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=wo_mem_cfg,
             program_config=self.model_config["IMAGE_ATTN_OUT_PROGCFG"](seq_len, max_mm_seq_len),
         )
         out = ttnn.reshape(out, [1, 1, seq_len, -1])
         return trim_seq_dim2(out, original_seq_len)
 
     def forward(self, x_11SH, position_embeddings=None):
-        x_11SH = ttnn.to_memory_config(x_11SH, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if x_11SH.memory_config().buffer_type != ttnn.BufferType.DRAM:
+            x_11SH = ttnn.to_memory_config(x_11SH, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         seq_len = int(x_11SH.shape[-2])
         max_mm_seq_len = pixtral_vision_seq_chunk_len(self.configuration)
+        wo_out_mem_cfg = ttnn.DRAM_MEMORY_CONFIG if self.num_devices > 1 else None
 
         xqkv_fused = self._linear_qkv_seq_chunked(x_11SH, seq_len, max_mm_seq_len)
         if seq_len > max_mm_seq_len and seq_len % max_mm_seq_len == 0:
@@ -286,42 +295,28 @@ class TtMistralImageAttention(LightweightModule):
         )
         ttnn.deallocate(attn_output_1QSD)
 
-        output_11SH = self._linear_wo_seq_chunked(attn_output_11SH, seq_len, max_mm_seq_len)
+        output_11SH = self._linear_wo_seq_chunked(
+            attn_output_11SH,
+            seq_len,
+            max_mm_seq_len,
+            output_memory_config=wo_out_mem_cfg,
+        )
         if seq_len > max_mm_seq_len and seq_len % max_mm_seq_len == 0:
-            output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
+            if not (len(output_11SH.shape) == 4 and int(output_11SH.shape[0]) == 1 and int(output_11SH.shape[1]) == 1):
+                output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
         ttnn.deallocate(attn_output_11SH)
 
         if self.num_devices > 1:
-            shard_w = int(output_11SH.shape[-1])
-            ag_mem_cfg = vision_collective_memcfg(seq_len, shard_w)
-            if output_11SH.memory_config().buffer_type != ag_mem_cfg.buffer_type:
-                output_11SH = ttnn.to_memory_config(output_11SH, ag_mem_cfg)
-            cluster_axis = 1
-            dense_out_gathered = ttnn.experimental.all_gather_async(
+            if not (len(output_11SH.shape) == 4 and int(output_11SH.shape[0]) == 1 and int(output_11SH.shape[1]) == 1):
+                output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
+            return vision_sum_all_reduce(
                 output_11SH,
-                persistent_output_buffer=None,
-                dim=1,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
-                num_links=self.tt_ccl.get_num_links(cluster_axis),
-                cluster_axis=cluster_axis,
-                topology=ttnn.Topology.Linear,
-                memory_config=ag_mem_cfg,
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-                chunks_per_sync=40,
-                num_workers_per_link=4,
-                num_buffers_per_channel=4,
+                self.mesh_device,
+                self.tt_ccl,
+                seq_len,
+                self.hidden_size,
+                self.configuration,
             )
-            output_11SH.deallocate(True)
-            dense_out_reduced = ttnn.experimental.fast_reduce_nc(
-                dense_out_gathered,
-                dims=[1],
-                output=None,
-                compute_kernel_config=None,
-                memory_config=ag_mem_cfg,
-            )
-            dense_out_reduced = dense_out_reduced[:, :, : dense_out_gathered.shape[-2], :]
-            ttnn.deallocate(dense_out_gathered)
-            return dense_out_reduced
         return output_11SH
 
 

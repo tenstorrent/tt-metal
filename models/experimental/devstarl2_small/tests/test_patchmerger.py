@@ -150,3 +150,88 @@ def test_mistral3_patch_merger_pcc_devstral_weights(mesh_device, monkeypatch, tr
     logger.info(comp_allclose(ref_f, tt_torch))
     logger.info(f"PCC patch merger: {msg}")
     assert passing, f"PCC below {pcc_required}: {msg}"
+
+
+@torch.no_grad()
+@pytest.mark.models_performance_bare_metal
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
+        )
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30000000, "num_command_queues": 1}],
+    indirect=True,
+)
+def test_mistral3_patch_merger_pcc_large_grid_devstral_weights(mesh_device, monkeypatch, trust_remote_ministral):
+    """1540px-class grid: 110×110 patches → 55×55 merged rows (3025), exercises WS chunking."""
+    monkeypatch.setenv("HF_MODEL", DEVSTRAL_REPO_ID)
+
+    batch_size = 1
+    dtype_tt = ttnn.bfloat16
+    model_args = ModelArgs(
+        mesh_device,
+        max_batch_size=batch_size,
+        max_seq_len=4096,
+        dummy_weights=False,
+        use_hf_rope=True,
+        cache_hf=True,
+    )
+
+    try:
+        meta_state_dict = model_args.load_state_dict()
+    except Exception as exc:
+        pytest.skip(f"Full checkpoint load failed (memory / hub / env): {exc}")
+
+    hf_full = model_args.cached_hf_model
+    hf_pm = hf_full.model.multi_modal_projector.patch_merger
+    prefix = _patch_merger_state_dict_prefix(meta_state_dict)
+
+    patch_size = int(hf_pm.patch_size)
+    spatial_merge = int(hf_pm.spatial_merge_size)
+    hidden_d = int(hf_full.config.vision_config.hidden_size)
+
+    gh, gw = 110, 110
+    h_px, w_px = gh * patch_size, gw * patch_size
+    n_tokens = gh * gw
+
+    torch.manual_seed(1)
+    x_bf16 = torch.randn(n_tokens, hidden_d, dtype=torch.bfloat16)
+    image_sizes = torch.tensor([[h_px, w_px]], dtype=torch.long)
+
+    ref = hf_pm(x_bf16, image_sizes)
+    assert ref.shape == (gh // spatial_merge * gw // spatial_merge, hidden_d)
+
+    tt_pm = TTMistral3PatchMerger(
+        mesh_device,
+        model_args,
+        meta_state_dict,
+        prefix,
+        weight_cache_path=None,
+        dtype=dtype_tt,
+    )
+
+    x_tt = ttnn.from_torch(
+        x_bf16,
+        device=mesh_device,
+        dtype=dtype_tt,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    tt_out = tt_pm(x_tt, image_sizes.tolist())
+    tt_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)).to(torch.float32)
+    while tt_torch.dim() > 2:
+        tt_torch = tt_torch.squeeze(0)
+    tt_torch = tt_torch[: ref.shape[0], : ref.shape[1]]
+
+    pcc_required = 0.99
+    passing, msg = comp_pcc(ref.float(), tt_torch, pcc_required)
+    logger.info(f"PCC patch merger large grid: {msg}")
+    assert passing, f"PCC below {pcc_required}: {msg}"
