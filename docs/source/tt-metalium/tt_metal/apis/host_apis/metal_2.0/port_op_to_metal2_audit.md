@@ -259,7 +259,7 @@ TensorParameter "output":   clean — borrowed-memory CB (causal-link).
 
 ### Output: the audit report
 
-The audit produces a written report. Write the report as `METAL2_PREPORT_AUDIT.md` in the op's directory (alongside the program factory `.cpp` files). This file is the audit's deliverable and is committed alongside the port — it sits next to `METAL2_PORT_PLAN.md` and `METAL2_PORT_REPORT.md` (both written by the port recipe), so all generated docs for the port land in one spot.
+The audit produces a written report. Write the report as `METAL2_PREPORT_AUDIT.md` in the **op's root directory** — one level above `device/`, alongside the op's host-facing `.cpp` / `.hpp` files (e.g. `ttnn/cpp/ttnn/operations/<family>/<op>/METAL2_PREPORT_AUDIT.md`), **not** inside the `device/` subdir even though the program-factory `.cpp` files live there. This file is the audit's deliverable and is committed alongside the port — it sits next to `METAL2_PORT_PLAN.md` and `METAL2_PORT_REPORT.md` (both written by the port recipe), so all generated docs for the port land in one spot.
 
 **Important framing for the human reader.** RED entries gate *this specific port attempt*, but they are **not permanent blockers**. Most RED entries mean "Metal 2.0 hasn't implemented this yet" — the port will become possible once the missing feature lands. A few (today: just `address_offset`) require a runtime-team consultation about a redesigned API. Each Appendix A entry's **Status** field describes the future path. **You must surface that future path explicitly in the report** for every RED row, so the human reader does not misread RED as "this op can never be ported." Reassuring framing matters here — a colleague seeing the report should understand the path forward, not just the gate.
 
@@ -685,25 +685,27 @@ The single-argument form `TensorAccessorArgs(buffer)` (with no second arg, or wi
 - `ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp`
 - `ttnn/cpp/ttnn/operations/eltwise/ternary/device/ternary_program_factory.cpp`
 
-### Per-execution CircularBuffer size updates (UpdateCircularBufferTotalSize, UpdateCircularBufferPageSize) — UNSUPPORTED
+### Per-execution CircularBuffer size updates (UpdateCircularBufferTotalSize, UpdateCircularBufferPageSize, UpdateDynamicCircularBufferAddressAndTotalSize) — UNSUPPORTED
 
-**Status**: Not yet supported in Metal 2.0. The legacy free functions `UpdateCircularBufferTotalSize(program, cb_handle, total_size)` and `UpdateCircularBufferPageSize(program, cb_handle, buffer_index, page_size)` mutate a CB's total size or per-buffer-index page size between Program executions. Metal 2.0 does not yet expose an equivalent — `ProgramRunParams` reserves placeholder fields for per-execution DFB size / entry size, but they are explicitly "not yet supported."
+**Status**: Not yet supported in Metal 2.0. The legacy free functions `UpdateCircularBufferTotalSize(program, cb_handle, total_size)` and `UpdateCircularBufferPageSize(program, cb_handle, buffer_index, page_size)` mutate a CB's total size or per-buffer-index page size between Program executions. The combo function `UpdateDynamicCircularBufferAddressAndTotalSize(program, cb_handle, buffer, total_size)` folds the per-execution total-size mutation onto a dynamic-CB address rebind — the address-rebind part is supported (borrowed-memory DFBs), but the bundled total-size mutation is the same UNSUPPORTED capability. Metal 2.0 does not yet expose an equivalent — `ProgramRunParams` reserves placeholder fields for per-execution DFB size / entry size, but they are explicitly "not yet supported."
 
 **Recognition — definitely this feature** (refuse and report):
 
 - Calls to `UpdateCircularBufferTotalSize(program, cb_handle, total_size)`.
 - Calls to `UpdateCircularBufferPageSize(program, cb_handle, buffer_index, page_size)`.
-- A canonical grep target that catches both: `UpdateCircularBuffer`. (See guard below for one false positive.)
+- Calls to `UpdateDynamicCircularBufferAddressAndTotalSize(program, cb_handle, buffer, total_size)` — the 4-arg "Address And Total Size" combo form. The address-rebind half maps to borrowed-memory DFB (LANDED); the total-size half is the UNSUPPORTED feature this rule catches. Distinguished from `UpdateDynamicCircularBufferAddress` (3-arg, address only — supported) by the `AndTotalSize` suffix in the function name.
+- A canonical grep target that catches all three: `UpdateCircularBuffer`. (See guard below for one false positive.)
 - Typical call site: cached-program override hooks (e.g. `override_runtime_arguments` and similar callbacks), where CB sizing is re-tuned per shape between executions of the same Program.
 
 **Recognition — false-positive guard**:
 
-`UpdateDynamicCircularBufferAddress` is a different function with different semantics — do not refuse based on the `UpdateCircularBuffer` substring matching it. (One of its overloads takes a `GlobalCircularBuffer` and is covered by the GlobalCircularBuffer rule above; the other takes a `Buffer&` and is outside the scope of this rule.)
+`UpdateDynamicCircularBufferAddress` (the **3-arg** form — `(program, cb_handle, buffer)` or `(program, cb_handle, global_cb)`) is a different function with different semantics — do not refuse based on the `UpdateCircularBuffer` substring matching it. The 4-arg form **with an `address_offset` argument** (`UpdateDynamicCircularBufferAddress(program, cb_handle, buffer, offset)`) is covered by the `address_offset` rule above. The 4-arg form with `AndTotalSize` in the name is **caught by this rule**, not exempted.
 
-**Action**: STOP. Report to the user that this op uses `UpdateCircularBufferTotalSize` and/or `UpdateCircularBufferPageSize`, which Metal 2.0 does not yet support. Do not invent a workaround. In particular, do not "fix" this by recreating the Program from scratch on every execution — that defeats the cached-program model the call site is part of and is not what the user wants.
+**Action**: STOP. Report to the user that this op uses one or more of `UpdateCircularBufferTotalSize` / `UpdateCircularBufferPageSize` / `UpdateDynamicCircularBufferAddressAndTotalSize`, which Metal 2.0 does not yet support. Do not invent a workaround. In particular, do not "fix" this by recreating the Program from scratch on every execution — that defeats the cached-program model the call site is part of and is not what the user wants.
 
 **Examples in the wild** (for ground-truthing your match):
 - `ttnn/cpp/ttnn/operations/data_movement/slice/device/slice_program_factory_rm.cpp`
+- `ttnn/cpp/ttnn/operations/data_movement/transpose/device/transpose_wh_sharded_program_factory.cpp` (the `AndTotalSize` 4-arg form)
 - `ttnn/cpp/ttnn/operations/experimental/matmul/attn_matmul/device/attn_matmul_program_factory.cpp`
 - `ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/device/group_attn_matmul_program_factory.cpp`
 - `ttnn/cpp/ttnn/operations/generic/device/generic_op_program_factory.cpp`
