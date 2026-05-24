@@ -127,9 +127,11 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
         .core_ranges = core,
         .compile_time_args = compile_time_args,
         .named_compile_time_args = {},
+        .defines = {},
         .runtime_args = runtime_args_per_cores,
         .common_runtime_args = {},
         .config = tt::tt_metal::ReaderConfigDescriptor{},
+        .compiler_include_paths = {},
     };
 
     ProgramDescriptor program_descriptor = {
@@ -241,9 +243,11 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpUnaryReluSharded) {
         .core_ranges = all_cores,
         .compile_time_args = reader_ct_args,
         .named_compile_time_args = {},
+        .defines = {},
         .runtime_args = reader_rt_args_per_core,
         .common_runtime_args = {},
         .config = tt::tt_metal::ReaderConfigDescriptor{},
+        .compiler_include_paths = {},
     };
     KernelDescriptor compute_kernel_descriptor = {
         .kernel_source = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp",
@@ -254,6 +258,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpUnaryReluSharded) {
         .runtime_args = compute_rt_args_per_core,
         .common_runtime_args = {},
         .config = tt::tt_metal::ComputeConfigDescriptor{},
+        .compiler_include_paths = {},
     };
 
     ProgramDescriptor program_descriptor = {
@@ -404,9 +409,11 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpBinaryEltwiseAdd) {
         .core_ranges = all_cores,
         .compile_time_args = reader_compile_time_args,
         .named_compile_time_args = {},
+        .defines = {},
         .runtime_args = reader_rt_args_per_core,
         .common_runtime_args = {},
         .config = tt::tt_metal::ReaderConfigDescriptor{},
+        .compiler_include_paths = {},
     };
     KernelDescriptor writer_kernel_descriptor = {
         .kernel_source =
@@ -414,9 +421,11 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpBinaryEltwiseAdd) {
         .core_ranges = all_cores,
         .compile_time_args = writer_compile_time_args,
         .named_compile_time_args = {},
+        .defines = {},
         .runtime_args = writer_rt_args_per_core,
         .common_runtime_args = {},
         .config = tt::tt_metal::WriterConfigDescriptor{},
+        .compiler_include_paths = {},
     };
     KernelDescriptor compute_kernel_descriptor = {
         .kernel_source = "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp",
@@ -427,6 +436,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpBinaryEltwiseAdd) {
         .runtime_args = compute_rt_args_per_core,
         .common_runtime_args = {},
         .config = tt::tt_metal::ComputeConfigDescriptor{},
+        .compiler_include_paths = {},
     };
 
     ProgramDescriptor program_descriptor = {
@@ -633,9 +643,11 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
         .core_ranges = all_device_cores_set,
         .compile_time_args = reader_compile_time_args,
         .named_compile_time_args = {{"cb_in0", src0_cb_index}, {"cb_in1", src1_cb_index}},
+        .defines = {},
         .runtime_args = reader_rt_args_per_core,
         .common_runtime_args = {},
         .config = tt::tt_metal::ReaderConfigDescriptor{},
+        .compiler_include_paths = {},
     };
     tt::tt_metal::KernelDescriptor writer_kernel_descriptor = {
         .kernel_source =
@@ -643,9 +655,11 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
         .core_ranges = all_device_cores_set,
         .compile_time_args = writer_compile_time_args,
         .named_compile_time_args = {},
+        .defines = {},
         .runtime_args = writer_rt_args_per_core,
         .common_runtime_args = {},
         .config = tt::tt_metal::WriterConfigDescriptor{},
+        .compiler_include_paths = {},
     };
 
     const KernelDescriptor::CompileTimeArgs compute_ct_args_group_1 = {
@@ -673,6 +687,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
         .runtime_args = {{{}}},
         .common_runtime_args = {},
         .config = tt::tt_metal::ComputeConfigDescriptor{.dst_full_sync_en = true},
+        .compiler_include_paths = {},
     };
     tt::tt_metal::KernelDescriptor compute_kernel_descriptor_2 = {
         .kernel_source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
@@ -683,6 +698,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
         .runtime_args = {{{}}},
         .common_runtime_args = {},
         .config = tt::tt_metal::ComputeConfigDescriptor{.dst_full_sync_en = true},
+        .compiler_include_paths = {},
     };
 
     tt::tt_metal::ProgramDescriptor program_descriptor = {
@@ -775,9 +791,11 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpEltwiseSFPU) {
         .core_ranges = device_cores,
         .compile_time_args = reader_compile_time_args,
         .named_compile_time_args = {},
+        .defines = {},
         .runtime_args = reader_rt_args_per_core,
         .common_runtime_args = {},
         .config = tt::tt_metal::ReaderConfigDescriptor{},
+        .compiler_include_paths = {},
     };
     KernelDescriptor writer_kernel_descriptor = {
         .kernel_source =
@@ -785,9 +803,11 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpEltwiseSFPU) {
         .core_ranges = device_cores,
         .compile_time_args = writer_compile_time_args,
         .named_compile_time_args = {},
+        .defines = {},
         .runtime_args = writer_rt_args_per_core,
         .common_runtime_args = {},
         .config = tt::tt_metal::WriterConfigDescriptor{},
+        .compiler_include_paths = {},
     };
     KernelDescriptor compute_kernel_descriptor = {
         .kernel_source = "tt_metal/kernels/compute/eltwise_sfpu.cpp",
@@ -798,6 +818,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpEltwiseSFPU) {
         .runtime_args = {{{0, 0}, {}}},
         .common_runtime_args = {},
         .config = tt::tt_metal::ComputeConfigDescriptor{},
+        .compiler_include_paths = {},
     };
 
     ProgramDescriptor program_descriptor = {
@@ -864,8 +885,11 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCache) {
                  .core_ranges = device_cores,
                  .compile_time_args = reader_ct_args,
                  .named_compile_time_args = {},
+                 .defines = {},
                  .runtime_args = {{{0, 0}, {device_input_tensor_1.buffer()->address(), num_tiles, 0u}}},
+                 .common_runtime_args = {},
                  .config = tt::tt_metal::ReaderConfigDescriptor{},
+                 .compiler_include_paths = {},
              },
              {
                  .kernel_source = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
@@ -873,8 +897,11 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCache) {
                  .core_ranges = device_cores,
                  .compile_time_args = writer_ct_args,
                  .named_compile_time_args = {},
+                 .defines = {},
                  .runtime_args = {{{0, 0}, {device_output_tensor_1.buffer()->address(), num_tiles, 0u}}},
+                 .common_runtime_args = {},
                  .config = tt::tt_metal::WriterConfigDescriptor{},
+                 .compiler_include_paths = {},
              },
              {
                  .kernel_source = "tt_metal/kernels/compute/eltwise_sfpu.cpp",
@@ -883,7 +910,9 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCache) {
                  .named_compile_time_args = {},
                  .defines = sfpu_defines,
                  .runtime_args = {{{0, 0}, {}}},
+                 .common_runtime_args = {},
                  .config = tt::tt_metal::ComputeConfigDescriptor{},
+                 .compiler_include_paths = {},
              }},
         .semaphores = {},
         .cbs = {input_cb_descriptor, output_cb_descriptor},
@@ -988,9 +1017,11 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCacheCommonRuntimeArgs) {
                  .core_ranges = device_cores,
                  .compile_time_args = reader_ct_args,
                  .named_compile_time_args = {},
+                 .defines = {},
                  .runtime_args = {{{0, 0}, {device_input_tensor_1.buffer()->address(), num_tiles, 0u}}},
                  .common_runtime_args = {device_input_tensor_1.buffer()->address(), num_tiles, 0u},
                  .config = tt::tt_metal::ReaderConfigDescriptor{},
+                 .compiler_include_paths = {},
              },
              {
                  .kernel_source = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
@@ -998,9 +1029,11 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCacheCommonRuntimeArgs) {
                  .core_ranges = device_cores,
                  .compile_time_args = writer_ct_args,
                  .named_compile_time_args = {},
+                 .defines = {},
                  .runtime_args = {{{0, 0}, {device_output_tensor_1.buffer()->address(), num_tiles, 0u}}},
                  .common_runtime_args = {device_output_tensor_1.buffer()->address(), num_tiles, 0u},
                  .config = tt::tt_metal::WriterConfigDescriptor{},
+                 .compiler_include_paths = {},
              },
              {
                  .kernel_source = "tt_metal/kernels/compute/eltwise_sfpu.cpp",
@@ -1009,7 +1042,9 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCacheCommonRuntimeArgs) {
                  .named_compile_time_args = {},
                  .defines = sfpu_defines,
                  .runtime_args = {{{0, 0}, {}}},
+                 .common_runtime_args = {},
                  .config = tt::tt_metal::ComputeConfigDescriptor{},
+                 .compiler_include_paths = {},
              }},
         .semaphores = {},
         .cbs = {input_cb_descriptor, output_cb_descriptor},
@@ -1473,8 +1508,11 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
             .core_ranges = worker_cores,
             .compile_time_args = reader_ct_args,
             .named_compile_time_args = {},
+            .defines = {},
             .runtime_args = {{worker_fwd_core, fwd_reader_rt}, {worker_bwd_core, bwd_reader_rt}},
+            .common_runtime_args = {},
             .config = tt::tt_metal::ReaderConfigDescriptor{},
+            .compiler_include_paths = {},
         });
 
         program_desc.kernels.push_back({
@@ -1485,7 +1523,9 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
             .named_compile_time_args = {},
             .defines = {{"USE_WORKER_MUX", "1"}},
             .runtime_args = {{worker_fwd_core, fwd_writer_rt}, {worker_bwd_core, bwd_writer_rt}},
+            .common_runtime_args = {},
             .config = tt::tt_metal::WriterConfigDescriptor{},
+            .compiler_include_paths = {},
         });
 
         if (has_forward) {
@@ -1494,11 +1534,14 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
                 .core_ranges = mux_fwd_core_set,
                 .compile_time_args = mux_ct_args,
                 .named_compile_time_args = {},
+                .defines = {},
                 .runtime_args = {{mux_fwd_core, fwd_mux_rt}},
+                .common_runtime_args = {},
                 .config =
                     tt::tt_metal::DataMovementConfigDescriptor{
                         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
                         .noc = tt::tt_metal::NOC::RISCV_0_default},
+                .compiler_include_paths = {},
             });
         }
         if (has_backward) {
@@ -1507,11 +1550,14 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
                 .core_ranges = mux_bwd_core_set,
                 .compile_time_args = mux_ct_args,
                 .named_compile_time_args = {},
+                .defines = {},
                 .runtime_args = {{mux_bwd_core, bwd_mux_rt}},
+                .common_runtime_args = {},
                 .config =
                     tt::tt_metal::DataMovementConfigDescriptor{
                         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
                         .noc = tt::tt_metal::NOC::RISCV_0_default},
+                .compiler_include_paths = {},
             });
         }
 
@@ -1591,9 +1637,11 @@ TEST_F(Fabric1DFixtureGeneric, TestLinearFabricUnicastNocUnicastWrite) {
         .core_ranges = {sender_logical_core},
         .compile_time_args = compile_time_args,
         .named_compile_time_args = {},
+        .defines = {},
         .runtime_args = {},  // Will be set after append call
         .common_runtime_args = {},
         .config = tt::tt_metal::DataMovementConfigDescriptor{},
+        .compiler_include_paths = {},
     };
 
     // Create program descriptor so append_routing_plane_connection_manager_rt_args can add semaphores and defines
@@ -1632,9 +1680,11 @@ TEST_F(Fabric1DFixtureGeneric, TestLinearFabricUnicastNocUnicastWrite) {
         .core_ranges = {receiver_logical_core},
         .compile_time_args = compile_time_args,
         .named_compile_time_args = {},
+        .defines = {},
         .runtime_args = {{receiver_logical_core, receiver_runtime_args}},
         .common_runtime_args = {},
         .config = tt::tt_metal::DataMovementConfigDescriptor{},
+        .compiler_include_paths = {},
     };
 
     receiver_program_descriptor = {
