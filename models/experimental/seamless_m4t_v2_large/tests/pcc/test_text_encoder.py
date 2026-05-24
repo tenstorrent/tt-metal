@@ -13,7 +13,6 @@ from models.experimental.seamless_m4t_v2_large.reference.torch_text_encoder impo
 )
 from models.experimental.seamless_m4t_v2_large.scripts.download_weights import ensure_seamless_m4t_v2_large_weights
 from models.experimental.seamless_m4t_v2_large.tt.common import to_torch_replicated_first_shard
-from models.experimental.seamless_m4t_v2_large.tt.common import encoder_self_additive_mask_all_zeros_4d
 from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import (
     MESH_DEVICE_PARAMETRIZE_TEXT,
     from_torch_uint32_rm,
@@ -69,13 +68,10 @@ def _run_text_encoder_pcc(device) -> None:
 
     input_ids_tt = from_torch_uint32_rm(device, input_ids)
     position_ids_tt = from_torch_uint32_rm(device, position_ids)
-    # All-ones ``attn_mask`` → additive mask is all zeros. Build TILE on device (same as E2E
-    # ``encoder_self_additive_mask_all_zeros_4d``) instead of ``from_torch_bfloat16_tile``, which
-    # leaves ROW_MAJOR per mesh chip and emits one ``TilizeDeviceOperation`` per device.
+    # All-ones ``attn_mask`` → no additive SDPA mask needed (same as E2E when ``attention_mask`` is omitted).
     assert attn_mask.min() == 1, "PCC test uses a fully valid attention mask"
-    bidir_tt = encoder_self_additive_mask_all_zeros_4d(batch, seq, device)
 
-    out_tt = tt_enc.forward(input_ids_tt, position_ids_tt, bidir_tt)
+    out_tt = tt_enc.forward(input_ids_tt, position_ids_tt, attention_mask=None)
     tt_cpu = (
         to_torch_replicated_first_shard(out_tt).to(torch.bfloat16).reshape(batch, seq, cfg.hidden_size).contiguous()
     )
