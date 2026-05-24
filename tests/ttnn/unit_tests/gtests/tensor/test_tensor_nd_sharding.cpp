@@ -430,7 +430,7 @@ TEST_F(NDShardingSqueezeRankStressTests, TestSqueezeRankStress) {
                 return;
             }
 
-            for (int val = 1; val <= upper_shape[current_shape.size()]; val++) {
+            for (uint32_t val = 1; val <= upper_shape[current_shape.size()]; val++) {
                 current_shape.push_back(val);
                 iterate_shapes_impl(upper_shape, current_shape, callback);
                 current_shape.pop_back();
@@ -1030,6 +1030,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     .cores_with_data = CoreRangeSet(CoreRange({0, 0}, {1, 1})),
                     .cores_in_group_1 = CoreRangeSet(CoreRange({0, 0}, {1, 1})),
+                    .cores_in_group_2 = {},
                     .num_shards_per_core_in_group_1 = 2,
                 },
         },
@@ -1043,6 +1044,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     .cores_with_data = CoreRangeSet(CoreRange({0, 0}, {1, 1})),
                     .cores_in_group_1 = CoreRangeSet(CoreRange({0, 0}, {1, 1})),
+                    .cores_in_group_2 = {},
                     .num_shards_per_core_in_group_1 = 2,
                 },
         },
@@ -1064,6 +1066,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     .cores_with_data = CoreRangeSet(CoreRange({0, 0})),
                     .cores_in_group_1 = CoreRangeSet(CoreRange({0, 0})),
+                    .cores_in_group_2 = {},
                     .num_shards_per_core_in_group_1 = 1,
                 },
         },
@@ -1077,6 +1080,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     .cores_with_data = CoreRangeSet(CoreRange({0, 0}, {1, 0})),
                     .cores_in_group_1 = CoreRangeSet(CoreRange({0, 0}, {1, 0})),
+                    .cores_in_group_2 = {},
                     .num_shards_per_core_in_group_1 = 1,
                 },
         },
@@ -1092,6 +1096,7 @@ INSTANTIATE_TEST_SUITE_P(
                         CoreRange({0, 0}, {1, 0}), CoreRange({0, 1})}),
                     .cores_in_group_1 = CoreRangeSet(std::vector<CoreRange>{
                         CoreRange({0, 0}, {1, 0}), CoreRange({0, 1})}),
+                    .cores_in_group_2 = {},
                     .num_shards_per_core_in_group_1 = 1,
                 },
         },
@@ -1105,6 +1110,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     .cores_with_data = CoreRangeSet(CoreRange({0, 0}, {1, 1})),
                     .cores_in_group_1 = CoreRangeSet(CoreRange({0, 0}, {1, 1})),
+                    .cores_in_group_2 = {},
                     .num_shards_per_core_in_group_1 = 1,
                 },
         },
@@ -1285,6 +1291,7 @@ INSTANTIATE_TEST_SUITE_P(
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({5, 3, 4 * 32, 4 * 32}),
             .layout = Layout::TILE,
+            .tile = {},
             .method = ShardingTensorSpecMethod::ShardedAcrossDims,
             .dims = {-1},
             .expected_shard_shape = Shape({5, 3, 4 * 32, 32}),
@@ -1292,6 +1299,7 @@ INSTANTIATE_TEST_SUITE_P(
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({5, 3, 4 * 32, 4 * 32}),
             .layout = Layout::TILE,
+            .tile = {},
             .method = ShardingTensorSpecMethod::ShardedAcrossDims,
             .dims = {-2},
             .expected_shard_shape = Shape({5, 3, 32, 4 * 32}),
@@ -1299,6 +1307,7 @@ INSTANTIATE_TEST_SUITE_P(
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({5, 3, 4 * 32, 4 * 32}),
             .layout = Layout::TILE,
+            .tile = {},
             .method = ShardingTensorSpecMethod::ShardedAcrossDims,
             .dims = {-1, -2},
             .expected_shard_shape = Shape({5, 3, 32, 32}),
@@ -1330,6 +1339,7 @@ INSTANTIATE_TEST_SUITE_P(
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({5, 3, 4 * 32, 4 * 32}),
             .layout = Layout::TILE,
+            .tile = {},
             .method = ShardingTensorSpecMethod::ShardedAcrossDims,
             .dims = {0},
             .expected_shard_shape = Shape({1, 3, 4 * 32, 4 * 32}),
@@ -1337,6 +1347,7 @@ INSTANTIATE_TEST_SUITE_P(
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({5, 3, 4 * 32, 4 * 32}),
             .layout = Layout::TILE,
+            .tile = {},
             .method = ShardingTensorSpecMethod::ShardedAcrossDims,
             .dims = {0, 1},
             .expected_shard_shape = Shape({1, 1, 4 * 32, 4 * 32}),
@@ -1344,6 +1355,7 @@ INSTANTIATE_TEST_SUITE_P(
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({1, 1, 1, 1}),
             .layout = Layout::ROW_MAJOR,
+            .tile = {},
             .method = ShardingTensorSpecMethod::ShardedAcrossDims,
             .dims = {0},
             .expected_shard_shape = Shape({1, 1, 1, 16}),
@@ -1351,6 +1363,7 @@ INSTANTIATE_TEST_SUITE_P(
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({5, 3, 8, 32}),
             .layout = Layout::ROW_MAJOR,
+            .tile = {},
             .method = ShardingTensorSpecMethod::ShardedAcrossDims,
             .dims = {-1},
             .expected_shard_shape = Shape({5, 3, 8, 16}),
@@ -1358,6 +1371,7 @@ INSTANTIATE_TEST_SUITE_P(
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({5, 3, 8, 32}),
             .layout = Layout::ROW_MAJOR,
+            .tile = {},
             .method = ShardingTensorSpecMethod::ShardedAcrossDims,
             .dims = {-2},
             .expected_shard_shape = Shape({5, 3, 1, 32}),
@@ -1365,6 +1379,7 @@ INSTANTIATE_TEST_SUITE_P(
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({5, 3, 8, 32}),
             .layout = Layout::ROW_MAJOR,
+            .tile = {},
             .method = ShardingTensorSpecMethod::ShardedAcrossDims,
             .dims = {-1, -2},
             .expected_shard_shape = Shape({5, 3, 1, 16}),
@@ -1372,6 +1387,7 @@ INSTANTIATE_TEST_SUITE_P(
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({5, 3, 8, 32}),
             .layout = Layout::ROW_MAJOR,
+            .tile = {},
             .method = ShardingTensorSpecMethod::ShardedAcrossDims,
             .dims = {0},
             .expected_shard_shape = Shape({1, 3, 8, 32}),
@@ -1379,6 +1395,7 @@ INSTANTIATE_TEST_SUITE_P(
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({5, 3, 8, 32}),
             .layout = Layout::ROW_MAJOR,
+            .tile = {},
             .method = ShardingTensorSpecMethod::ShardedAcrossDims,
             .dims = {0, 1},
             .expected_shard_shape = Shape({1, 1, 8, 32}),
@@ -1386,6 +1403,7 @@ INSTANTIATE_TEST_SUITE_P(
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({5, 3, 4 * 32, 4 * 32}),
             .layout = Layout::TILE,
+            .tile = {},
             .method = ShardingTensorSpecMethod::ShardedAcrossDimsExcept,
             .dims = {-1},
             .expected_shard_shape = Shape({1, 1, 32, 4 * 32}),
@@ -1393,6 +1411,7 @@ INSTANTIATE_TEST_SUITE_P(
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({5, 3, 4 * 32, 4 * 32}),
             .layout = Layout::TILE,
+            .tile = {},
             .method = ShardingTensorSpecMethod::ShardedAcrossDimsExcept,
             .dims = {-2},
             .expected_shard_shape = Shape({1, 1, 4 * 32, 32}),
@@ -1400,6 +1419,7 @@ INSTANTIATE_TEST_SUITE_P(
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({5, 3, 4 * 32, 4 * 32}),
             .layout = Layout::TILE,
+            .tile = {},
             .method = ShardingTensorSpecMethod::ShardedAcrossDimsExcept,
             .dims = {-1, -2},
             .expected_shard_shape = Shape({1, 1, 4 * 32, 4 * 32}),
@@ -1407,6 +1427,7 @@ INSTANTIATE_TEST_SUITE_P(
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({5, 3, 4 * 32, 4 * 32}),
             .layout = Layout::TILE,
+            .tile = {},
             .method = ShardingTensorSpecMethod::ShardedAcrossDimsExcept,
             .dims = {0},
             .expected_shard_shape = Shape({5, 1, 32, 32}),
@@ -1414,6 +1435,7 @@ INSTANTIATE_TEST_SUITE_P(
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({5, 3, 4 * 32, 4 * 32}),
             .layout = Layout::TILE,
+            .tile = {},
             .method = ShardingTensorSpecMethod::ShardedAcrossDimsExcept,
             .dims = {0, 1},
             .expected_shard_shape = Shape({5, 3, 32, 32}),
@@ -1421,6 +1443,7 @@ INSTANTIATE_TEST_SUITE_P(
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({1, 1, 1, 1}),
             .layout = Layout::ROW_MAJOR,
+            .tile = {},
             .method = ShardingTensorSpecMethod::ShardedAcrossDimsExcept,
             .dims = {0},
             .expected_shard_shape = Shape({1, 1, 1, 16}),
@@ -1428,6 +1451,7 @@ INSTANTIATE_TEST_SUITE_P(
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({5, 3, 8, 32}),
             .layout = Layout::ROW_MAJOR,
+            .tile = {},
             .method = ShardingTensorSpecMethod::ShardedAcrossDimsExcept,
             .dims = {-1},
             .expected_shard_shape = Shape({1, 1, 1, 32}),
@@ -1435,6 +1459,7 @@ INSTANTIATE_TEST_SUITE_P(
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({5, 3, 8, 32}),
             .layout = Layout::ROW_MAJOR,
+            .tile = {},
             .method = ShardingTensorSpecMethod::ShardedAcrossDimsExcept,
             .dims = {-2},
             .expected_shard_shape = Shape({1, 1, 8, 16}),
@@ -1442,6 +1467,7 @@ INSTANTIATE_TEST_SUITE_P(
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({5, 3, 8, 32}),
             .layout = Layout::ROW_MAJOR,
+            .tile = {},
             .method = ShardingTensorSpecMethod::ShardedAcrossDimsExcept,
             .dims = {-1, -2},
             .expected_shard_shape = Shape({1, 1, 8, 32}),
@@ -1449,6 +1475,7 @@ INSTANTIATE_TEST_SUITE_P(
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({5, 3, 8, 32}),
             .layout = Layout::ROW_MAJOR,
+            .tile = {},
             .method = ShardingTensorSpecMethod::ShardedAcrossDimsExcept,
             .dims = {0},
             .expected_shard_shape = Shape({5, 1, 1, 16}),
@@ -1456,6 +1483,7 @@ INSTANTIATE_TEST_SUITE_P(
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({5, 3, 8, 32}),
             .layout = Layout::ROW_MAJOR,
+            .tile = {},
             .method = ShardingTensorSpecMethod::ShardedAcrossDimsExcept,
             .dims = {0, 1},
             .expected_shard_shape = Shape({5, 3, 1, 16}),
@@ -1463,132 +1491,176 @@ INSTANTIATE_TEST_SUITE_P(
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({4 * 32, 4 * 32}),
             .layout = Layout::TILE,
+            .tile = {},
             .method = ShardingTensorSpecMethod::BlockSharded,
+            .dims = {},
             .expected_shard_shape = Shape({32, 32}),
         },
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({8 * 32, 4 * 32}),
             .layout = Layout::TILE,
+            .tile = {},
             .method = ShardingTensorSpecMethod::BlockSharded,
+            .dims = {},
             .expected_shard_shape = Shape({2 * 32, 32}),
         },
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({4 * 32, 8 * 32}),
             .layout = Layout::TILE,
+            .tile = {},
             .method = ShardingTensorSpecMethod::BlockSharded,
+            .dims = {},
             .expected_shard_shape = Shape({32, 2 * 32}),
         },
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({8 * 32, 8 * 32}),
             .layout = Layout::TILE,
+            .tile = {},
             .method = ShardingTensorSpecMethod::BlockSharded,
+            .dims = {},
             .expected_shard_shape = Shape({2 * 32, 2 * 32}),
         },
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({500, 500}),
             .layout = Layout::TILE,
+            .tile = {},
             .method = ShardingTensorSpecMethod::BlockSharded,
+            .dims = {},
             .expected_shard_shape = Shape({4 * 32, 4 * 32}),
         },
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({4, 5, 30, 500}),
             .layout = Layout::TILE,
+            .tile = {},
             .method = ShardingTensorSpecMethod::BlockSharded,
+            .dims = {},
             .expected_shard_shape = Shape({5 * 32, 4 * 32}),
         },
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({1, 1}),
             .layout = Layout::ROW_MAJOR,
+            .tile = {},
             .method = ShardingTensorSpecMethod::BlockSharded,
+            .dims = {},
             .expected_shard_shape = Shape({1, 16}),
         },
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({800, 1200}),
             .layout = Layout::ROW_MAJOR,
+            .tile = {},
             .method = ShardingTensorSpecMethod::BlockSharded,
+            .dims = {},
             .expected_shard_shape = Shape({200, 304}),
         },
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({333, 555}),
             .layout = Layout::ROW_MAJOR,
+            .tile = {},
             .method = ShardingTensorSpecMethod::BlockSharded,
+            .dims = {},
             .expected_shard_shape = Shape({84, 144}),
         },
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({2, 3, 333, 555}),
             .layout = Layout::ROW_MAJOR,
+            .tile = {},
             .method = ShardingTensorSpecMethod::BlockSharded,
+            .dims = {},
             .expected_shard_shape = Shape({500, 144}),
         },
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({32 * 32, 128}),
             .layout = Layout::TILE,
+            .tile = {},
             .method = ShardingTensorSpecMethod::HeightSharded,
+            .dims = {},
             .expected_shard_shape = Shape({2 * 32, 128}),
         },
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({37 * 32, 128}),
             .layout = Layout::TILE,
+            .tile = {},
             .method = ShardingTensorSpecMethod::HeightSharded,
+            .dims = {},
             .expected_shard_shape = Shape({3 * 32, 128}),
         },
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({5, 37 * 32, 128}),
             .layout = Layout::TILE,
+            .tile = {},
             .method = ShardingTensorSpecMethod::HeightSharded,
+            .dims = {},
             .expected_shard_shape = Shape({12 * 32, 128}),
         },
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({160, 17}),
             .layout = Layout::ROW_MAJOR,
+            .tile = {},
             .method = ShardingTensorSpecMethod::HeightSharded,
+            .dims = {},
             .expected_shard_shape = Shape({10, 17}),
         },
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({167, 17}),
             .layout = Layout::ROW_MAJOR,
+            .tile = {},
             .method = ShardingTensorSpecMethod::HeightSharded,
+            .dims = {},
             .expected_shard_shape = Shape({11, 17}),
         },
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({5, 167, 17}),
             .layout = Layout::ROW_MAJOR,
+            .tile = {},
             .method = ShardingTensorSpecMethod::HeightSharded,
+            .dims = {},
             .expected_shard_shape = Shape({53, 17}),
         },
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({128, 32 * 32}),
             .layout = Layout::TILE,
+            .tile = {},
             .method = ShardingTensorSpecMethod::WidthSharded,
+            .dims = {},
             .expected_shard_shape = Shape({128, 2 * 32}),
         },
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({128, 37 * 32}),
             .layout = Layout::TILE,
+            .tile = {},
             .method = ShardingTensorSpecMethod::WidthSharded,
+            .dims = {},
             .expected_shard_shape = Shape({128, 3 * 32}),
         },
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({5, 128, 37 * 32}),
             .layout = Layout::TILE,
+            .tile = {},
             .method = ShardingTensorSpecMethod::WidthSharded,
+            .dims = {},
             .expected_shard_shape = Shape({5 * 128, 3 * 32}),
         },
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({17, 160}),
             .layout = Layout::ROW_MAJOR,
+            .tile = {},
             .method = ShardingTensorSpecMethod::WidthSharded,
+            .dims = {},
             .expected_shard_shape = Shape({17, 10}),
         },
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({17, 167}),
             .layout = Layout::ROW_MAJOR,
+            .tile = {},
             .method = ShardingTensorSpecMethod::WidthSharded,
+            .dims = {},
             .expected_shard_shape = Shape({17, 11}),
         },
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({5, 17, 167}),
             .layout = Layout::ROW_MAJOR,
+            .tile = {},
             .method = ShardingTensorSpecMethod::WidthSharded,
+            .dims = {},
             .expected_shard_shape = Shape({5 * 17, 11}),
         }));

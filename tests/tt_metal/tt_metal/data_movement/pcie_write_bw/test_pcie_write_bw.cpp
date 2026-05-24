@@ -157,7 +157,7 @@ TEST_F(GenericMeshDeviceFixture, PCIeHostWriteBandwidthSweep) {
         auto buffer = distributed::MeshBuffer::create(
             distributed::ReplicatedBufferConfig{.size = buf_size},
             distributed::DeviceLocalBufferConfig{
-                .page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = false},
+                .page_size = page_size, .buffer_type = BufferType::DRAM, .sharding_args = {}, .bottom_up = false},
             mesh_device.get());
 
         vector<uint32_t> src(buf_size / sizeof(uint32_t), 0xDEADBEEF);

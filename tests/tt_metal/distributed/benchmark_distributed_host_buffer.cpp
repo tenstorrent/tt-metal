@@ -19,7 +19,7 @@ DistributedHostBuffer create_distributed_host_buffer(int num_shards) {
     auto buffer = DistributedHostBuffer::create(distributed::MeshShape(num_shards));
     std::vector<int> data(kShardSize);
     std::iota(data.begin(), data.end(), 0);
-    for (size_t i = 0; i < num_shards; ++i) {
+    for (int i = 0; i < num_shards; ++i) {
         buffer.emplace_shard(distributed::MeshCoordinate(i), [&data]() { return HostBuffer(data); });
     }
 

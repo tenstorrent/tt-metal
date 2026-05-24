@@ -197,7 +197,7 @@ bool run_dm_neighbour(const shared_ptr<distributed::MeshDevice>& mesh_device, co
         uint32_t key = (static_cast<uint32_t>(worker_cores[i].x) << 16) | static_cast<uint32_t>(worker_cores[i].y);
         uint32_t dram_bank_id = core_dram_map.at(key);
         IndexRange cur_indices = dram_index_map.at(dram_bank_id);
-        for (int j = cur_indices.start; j < cur_indices.end; j++) {
+        for (uint32_t j = cur_indices.start; j < cur_indices.end; j++) {
             packed_output.push_back(packed_golden[j]);
         }
 
