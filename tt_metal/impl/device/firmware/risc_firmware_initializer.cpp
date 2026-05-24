@@ -341,6 +341,135 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
             }
         }
 
+        // FIX NN (#42429): Detect and force-reset MMIO relay ETH channels with stuck
+        // wr_req != wr_resp counters.
+        //
+        // Root cause of run 26353523346 failure (FIX MM):
+        //   FIX TV confirmed all MMIO ETH heartbeats = 0xABCDxxxx in 0ms. This means the
+        //   relay ERISCs were NOT reset in Pass 1 — they were already at base firmware from
+        //   the prior session. However, a relay ERISC carries persistent wr_req/wr_resp
+        //   transaction counters in its L1. If the prior session was killed (SIGKILL) after
+        //   a non-posted write to a non-MMIO Tensix target, the ACK never arrived (Tensix
+        //   was reset mid-write). The counter delta is permanent: subsequent writes increment
+        //   wr_req and get their own ACKs, but wr_resp can never catch up.
+        //   wait_for_non_mmio_flush() (Step 2: wait for wr_req == wr_resp) permanently
+        //   blocks → 5s timeout × (non-MMIO device count) timeout cascade.
+        //
+        //   The relay ERISC is "alive" per heartbeat but "permanently broken" for flushed
+        //   writes. FIX VV doesn't help (deferred_tensix_reset_chips_ is empty — relay was
+        //   responsive in Pass 1). FIX KL (NOC1) doesn't help — the issue is the counter
+        //   delta, not which NOC is used for new writes.
+        //
+        // Fix: for each MMIO ETH relay channel, read wr_req and wr_resp via PCIe (safe —
+        //   MMIO device, no relay needed). If wr_req != wr_resp, the channel has a stuck
+        //   counter from a prior session. Force-reset via PCIe (assert + deassert risc
+        //   reset), then re-poll heartbeat until 0xABCDxxxx. ERISC firmware restarts with
+        //   clean counters: wr_req = wr_resp = 0.
+        //
+        // Placement: after FIX TV (MMIO ETH confirmed at base firmware) so counter reads
+        //   are valid. Before FIX UU (non-MMIO bridge probe) so relay is clean before any
+        //   non-MMIO traffic is routed.
+        if (hal_.get_eth_fw_is_cooperative() && get_control_plane_) {
+            const uint32_t hb_addr_nn = hal_.get_eth_fw_mailbox_val(FWMailboxMsg::HEARTBEAT);
+            for (const tt::ChipId mmio_id : mmio_ids_set) {
+                // Get request_cmd_queue_base for this arch from the MMIO device's TTDevice.
+                // For MMIO devices, get_tt_device() returns the PCIe-resident TTDevice.
+                tt::umd::TTDevice* tt_dev = cluster_.get_driver()->get_tt_device(mmio_id);
+                if (!tt_dev) continue;
+                const auto eth_params =
+                    tt_dev->get_architecture_implementation()->get_eth_interface_params();
+                if (eth_params.request_cmd_queue_base == 0u) continue;
+
+                for (const auto& logical_core :
+                     this->get_control_plane_().get_active_ethernet_cores(mmio_id)) {
+                    CoreCoord virt = cluster_.get_virtual_coordinate_from_logical_coordinates(
+                        mmio_id, logical_core, CoreType::ETH);
+                    const tt_cxy_pair target(mmio_id, virt);
+
+                    // Read wr_req (offset 0) and wr_resp (offset 4) via PCIe.
+                    uint32_t wr_req = 0, wr_resp = 0;
+                    try {
+                        cluster_.read_reg(&wr_req, target,
+                            static_cast<uint64_t>(eth_params.request_cmd_queue_base));
+                        cluster_.read_reg(&wr_resp, target,
+                            static_cast<uint64_t>(eth_params.request_cmd_queue_base) + 4u);
+                    } catch (...) {
+                        continue;  // PCIe error reading counters — skip
+                    }
+
+                    if (wr_req == wr_resp) continue;  // counters balanced — no stuck state
+
+                    // Stuck wr_req != wr_resp: prior session left a permanent delta.
+                    // Force-reset to restart ERISC firmware with clean counters.
+                    log_warning(
+                        tt::LogAlways,
+                        "run_launch_phase: FIX NN — MMIO device {} ETH core {} has stuck relay "
+                        "counters (wr_req=0x{:x} wr_resp=0x{:x}). Force-resetting. (#42429)",
+                        mmio_id,
+                        virt.str(),
+                        wr_req,
+                        wr_resp);
+                    try {
+                        cluster_.assert_risc_reset_at_core(target, tt::umd::RiscType::ALL);
+                        cluster_.deassert_risc_reset_at_core(
+                            target, tt::umd::RiscType::ALL, /*staggered_start=*/false);
+                    } catch (...) {
+                        log_warning(
+                            tt::LogAlways,
+                            "run_launch_phase: FIX NN — reset failed for MMIO device {} ETH "
+                            "core {}. (#42429)",
+                            mmio_id,
+                            virt.str());
+                        continue;
+                    }
+
+                    // Re-poll for 0xABCDxxxx heartbeat before FIX UU routes non-MMIO traffic.
+                    if (hb_addr_nn == 0u) continue;
+                    constexpr int kNnResetPollMs = 3000;
+                    const auto nn_start = std::chrono::steady_clock::now();
+                    bool back_up = false;
+                    while (!back_up) {
+                        uint32_t hb_val = 0;
+                        try {
+                            cluster_.read_reg(&hb_val, target, hb_addr_nn);
+                        } catch (...) {
+                            break;
+                        }
+                        if ((hb_val >> 16) == 0xABCDu) {
+                            back_up = true;
+                            break;
+                        }
+                        const auto nn_elapsed_ms =
+                            std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - nn_start)
+                                .count();
+                        if (nn_elapsed_ms >= kNnResetPollMs) {
+                            log_warning(
+                                tt::LogAlways,
+                                "run_launch_phase: FIX NN — MMIO device {} ETH core {} did not "
+                                "confirm base firmware after reset ({}ms timeout). (#42429)",
+                                mmio_id,
+                                virt.str(),
+                                nn_elapsed_ms);
+                            break;
+                        }
+                        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    }
+                    if (back_up) {
+                        log_info(
+                            tt::LogAlways,
+                            "run_launch_phase: FIX NN — MMIO device {} ETH core {} back at base "
+                            "firmware after counter reset ({}ms). (#42429)",
+                            mmio_id,
+                            virt.str(),
+                            std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - nn_start)
+                                .count());
+                    }
+                }
+            }
+        }
+
         // FIX UU (#42429): Probe non-MMIO ETH relay bridges before Pass 2a.
         //
         // Root cause of run 26117958073 failure:
@@ -468,9 +597,14 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
         // previous session's dispatch firmware on all Tensix BRISCs during the 100ms window.
         // That firmware uses BOTH NOC0 and NOC1; Phase 3 re-assert cut those runs mid-write,
         // leaving NOC1 stuck in addition to NOC0. FIX KL (NOC1) then also failed because
-        // FIX WW itself had just dirtied NOC1. Root cause of Pass 2a failures is only NOC0
-        // stuck from prior SIGKILL (relay uses DEFAULT_NOC=NOC0 for data writes). NOC1
-        // is clean after SIGKILL; FIX KL (below) bypasses the stuck NOC0 via NOC1. (#42429)
+        // FIX WW itself had just dirtied NOC1. (#42429)
+        //
+        // Root cause of Pass 2a failures (revised after run 26353523346):
+        //   The relay ERISC may have stuck wr_req != wr_resp from a prior session's in-flight
+        //   non-posted write (target Tensix reset, ACK never returned). The ERISC is at base
+        //   firmware (FIX TV confirms 0xABCDxxxx) but carries the permanent counter delta.
+        //   wait_for_non_mmio_flush() polls wr_req == wr_resp → permanent 5s timeout.
+        //   FIX NN (above) detects and clears this by force-resetting stuck MMIO ETH channels.
 
         // ── Pass 2a: initialize non-MMIO devices (relay still alive) ──
         // GAP-L2 (#42429): Log Pass 2a entry for post-mortem phase boundary visibility.
