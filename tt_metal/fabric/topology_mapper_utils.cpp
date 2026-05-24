@@ -581,7 +581,7 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     std::unordered_map<tt::tt_metal::AsicID, std::uint32_t> asic_to_dense_index;
     {
         const auto& flat_nodes = flat_graph.get_nodes();
-        asic_to_dense_index.reserve(flat_nodes.size() * 2);
+        asic_to_dense_index.reserve(flat_nodes.size());
         for (std::uint32_t i = 0; i < flat_nodes.size(); ++i) {
             asic_to_dense_index.emplace(flat_nodes[i], i);
         }
@@ -622,12 +622,40 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     // -------------------------------------------------------------------------
     std::unordered_map<std::string, PhysicalMultiMeshGraph> mesh_physical_graphs;
     std::unordered_map<MeshId, std::vector<std::unordered_set<tt::tt_metal::AsicID>>> placed_groupings_by_mesh_id;
+    // Pre-computed chip bitmask for every placement group, keyed by mesh shape
+    // name. group_bits_by_name[name][i] = the asic_word_count-word bitset for
+    // the i-th candidate placement for that shape. Built once here so that
+    // compute_solution_bitset (called once per SAT solution) is a simple
+    // word-OR loop instead of a per-chip hash lookup.
+    std::unordered_map<std::string, std::vector<std::vector<std::uint64_t>>> group_bits_by_name;
 
     for (const auto& [mesh_name, groupings] : valid_groupings_map.at("MESH")) {
         const auto placed_groupings =
             physical_grouping_descriptor.find_all_in_psd(groupings, physical_system_descriptor);
 
         mesh_physical_graphs[mesh_name] = build_hierarchical_from_flat_graph(flat_graph, placed_groupings);
+
+        // Pre-compute one bitmask per candidate placement for this shape.
+        auto& gbits = group_bits_by_name[mesh_name];
+        gbits.reserve(placed_groupings.size());
+        for (const auto& asic_set : placed_groupings) {
+            std::vector<std::uint64_t> word_vec(asic_word_count, 0);
+            for (const auto& asic : asic_set) {
+                auto di = asic_to_dense_index.find(asic);
+                TT_FATAL(
+                    di != asic_to_dense_index.end(),
+                    "ASIC from placement not found in PSD flat graph (dense index)");
+                const std::uint32_t idx = di->second;
+                TT_FATAL(
+                    (idx >> 6) < asic_word_count,
+                    "Dense ASIC index {} out of range for bitset of {} words ({} ASICs total)",
+                    idx,
+                    asic_word_count,
+                    cluster_asic_count);
+                word_vec[idx >> 6] |= (std::uint64_t{1} << (idx & 63));
+            }
+            gbits.push_back(std::move(word_vec));
+        }
 
         // Record placed_groupings under every MGD mesh instance for this
         // descriptor so later phases can look them up by logical MeshId.
@@ -774,14 +802,27 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
         mesh_enum_states.emplace(mesh_name, std::move(state));
     }
 
-    // Sort the shape names so the round-robin visit order is deterministic
-    // across runs, regardless of the order the map was built.
+    // Order shapes so the most constrained (fewest available placements) is
+    // tried first. This fail-first heuristic prunes dead-end branches earlier
+    // in the DFS and typically reduces combinations tested significantly.
+    // Ties are broken lexicographically for determinism.
     std::vector<std::string> mesh_order;
     mesh_order.reserve(mesh_enum_states.size());
     for (const auto& [name, _state] : mesh_enum_states) {
         mesh_order.push_back(name);
     }
-    std::sort(mesh_order.begin(), mesh_order.end());
+    std::sort(mesh_order.begin(), mesh_order.end(), [&](const std::string& a, const std::string& b) {
+        const auto a_it = mesh_physical_graphs.find(a);
+        const auto b_it = mesh_physical_graphs.find(b);
+        const std::size_t a_count =
+            (a_it != mesh_physical_graphs.end()) ? a_it->second.mesh_level_graph_.get_nodes().size() : 0;
+        const std::size_t b_count =
+            (b_it != mesh_physical_graphs.end()) ? b_it->second.mesh_level_graph_.get_nodes().size() : 0;
+        if (a_count != b_count) {
+            return a_count < b_count;  // fewer placements = more constrained = first
+        }
+        return a < b;
+    });
 
     const std::size_t n_meshes = mesh_order.size();
 
@@ -826,32 +867,21 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
         }
     };
 
-    // Build the chip bitmask for one solver solution.
-    // For each (logical mesh → physical mesh) pair in the solution, find the
-    // chip set for that physical placement and set the corresponding bits.
+    // Build the chip bitmask for one solver solution by OR-ing together the
+    // pre-computed per-group bitsets. No hash lookups in this hot path.
     auto compute_solution_bitset = [&](const std::string& mesh_name,
                                        const MappingResult<MeshId, MeshId>& solution) {
         std::vector<std::uint64_t> bits(asic_word_count, 0);
-        const auto& placed_groupings =
-            placed_groupings_by_mesh_id.at(anchor_mesh_id.at(mesh_name));
+        const auto& group_bits = group_bits_by_name.at(mesh_name);
         for (const auto& [logical_mesh_id, physical_mesh_id] : solution.target_to_global) {
             TT_FATAL(
-                physical_mesh_id.get() < placed_groupings.size(),
-                "Physical mesh index {} out of range for placed_groupings (logical MeshId {})",
+                physical_mesh_id.get() < group_bits.size(),
+                "Physical mesh index {} out of range for group_bits (logical MeshId {})",
                 physical_mesh_id.get(),
                 logical_mesh_id.get());
-            for (const auto& asic : placed_groupings[physical_mesh_id.get()]) {
-                auto di = asic_to_dense_index.find(asic);
-                TT_FATAL(
-                    di != asic_to_dense_index.end(), "ASIC from placement not found in PSD flat graph (dense index)");
-                const std::uint32_t idx = di->second;
-                TT_FATAL(
-                    (idx >> 6) < asic_word_count,
-                    "Dense ASIC index {} out of range for bitset of {} words ({} ASICs total)",
-                    idx,
-                    asic_word_count,
-                    cluster_asic_count);
-                bits[idx >> 6] |= (std::uint64_t{1} << (idx & 63));
+            const auto& gbits = group_bits[physical_mesh_id.get()];
+            for (std::size_t w = 0; w < asic_word_count; ++w) {
+                bits[w] |= gbits[w];
             }
         }
         return bits;
@@ -943,22 +973,27 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
         decltype(bitset_disjoint)& is_disjoint;
         decltype(mark_used)& mark_used_fn;
         decltype(unmark)& unmark_fn;
+        // frontier_reachable_from[d] = true if any depth >= d has a solution
+        // with index target_idx (i.e., can still satisfy the new-this-round
+        // rule). Computed once before each search call and used to prune
+        // interior subtrees that can never satisfy the frontier.
+        std::vector<bool> frontier_reachable_from;
         std::chrono::seconds progress_interval{10};
 
         // Returns true (and fills chosen_index[depth..n_meshes)) when it finds
         // a conflict-free assignment that satisfies the new-this-round rule.
         bool run(std::size_t depth, bool frontier_satisfied) {
+            // Interior pruning: if no depth from here to the leaf can provide
+            // the required new-this-round solution, skip this whole subtree.
+            if (!frontier_satisfied && !frontier_reachable_from[depth]) {
+                return false;
+            }
+
             const MeshEnumState& s = *states[depth];
             const std::vector<std::size_t>& order = try_order_per_depth[depth];
             const bool is_leaf = (depth + 1 == n_meshes);
 
             if (is_leaf) {
-                // Quick exit: if no cached solution can satisfy the "new this
-                // round" rule and no earlier depth has already done so, this
-                // whole subtree was already covered in a prior round.
-                if (!frontier_satisfied && target_idx >= s.solutions.size()) {
-                    return false;
-                }
                 for (std::size_t si : order) {
                     if (si >= round) {
                         continue;
@@ -1080,25 +1115,44 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
         }
 
         // -- Build the per-shape candidate order for this round ---------------
-        // Sort the cached placements for each shape so the ones that assign
-        // more meshes are tried first. This tends to find a valid assignment
-        // sooner and prunes dead-end branches earlier. Ties keep arrival order
-        // (smaller index first) so the result is deterministic.
+        // Candidates are ordered by descending embedding size (more meshes
+        // placed first), ties broken by ascending arrival index. Instead of
+        // a full re-sort each round, we insert the single new element (if any)
+        // into its correct position in the already-sorted vector — O(k) scan
+        // rather than O(k log k) sort over the same data.
         for (std::size_t d = 0; d < n_meshes; ++d) {
             const MeshEnumState& s = *mesh_state_ptrs[d];
             const std::size_t hi = std::min<std::size_t>(s.solutions.size(), round);
             std::vector<std::size_t>& order = try_order_per_depth[d];
-            order.resize(hi);
-            std::iota(order.begin(), order.end(), std::size_t{0});
-            std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
-                if (s.embedding_sizes[a] != s.embedding_sizes[b]) {
-                    return s.embedding_sizes[a] > s.embedding_sizes[b];
-                }
-                return a < b;
-            });
+
+            if (hi <= order.size()) {
+                continue;  // no new solution this round for this shape
+            }
+            // Exactly one new solution was added: index `hi - 1`.
+            const std::size_t new_idx = hi - 1;
+            const std::size_t new_size = s.embedding_sizes[new_idx];
+
+            // Find insertion point: after all candidates with a strictly
+            // larger embedding size. Among equals, new_idx is largest so it
+            // goes last (preserving ascending-index tie-breaking).
+            auto pos = order.begin();
+            while (pos != order.end() && s.embedding_sizes[*pos] > new_size) {
+                ++pos;
+            }
+            order.insert(pos, new_idx);
         }
 
         // -- Packing search ---------------------------------------------------
+        // Pre-compute frontier_reachable_from[d]: true if any depth >= d has
+        // at least one solution with index target_idx (= round - 1). This
+        // suffix array lets DisjointPackingSearch prune entire subtrees that
+        // can never satisfy the new-this-round frontier rule.
+        std::vector<bool> frontier_reachable(n_meshes + 1, false);
+        for (std::size_t d = n_meshes; d-- > 0;) {
+            const bool this_depth_can_hit = (mesh_state_ptrs[d]->solutions.size() > round - 1);
+            frontier_reachable[d] = this_depth_can_hit || frontier_reachable[d + 1];
+        }
+
         std::fill(occupied_asics.begin(), occupied_asics.end(), 0);
         const std::size_t combos_before = combinations_tested;
         DisjointPackingSearch search{
@@ -1115,7 +1169,8 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
             search_start_time,
             bitset_disjoint,
             mark_used,
-            unmark};
+            unmark,
+            std::move(frontier_reachable)};
         found_disjoint_combination = search.run(0, /*frontier_satisfied=*/false);
         log_debug(
             tt::LogFabric,
@@ -1171,7 +1226,7 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     MeshId max_logical{0};
     for (std::size_t j = 0; j < n_meshes; ++j) {
         for (const auto& [logical_mesh_id, _phys] :
-             mesh_enum_states.at(mesh_order[j]).solutions.at(chosen_index[j]).target_to_global) {
+             mesh_state_ptrs[j]->solutions[chosen_index[j]].target_to_global) {
             if (logical_mesh_id.get() > max_logical.get()) {
                 max_logical = logical_mesh_id;
             }
@@ -1181,8 +1236,7 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     std::vector<std::unordered_set<tt::tt_metal::AsicID>> combined_mesh_groupings(max_logical.get() + 1);
     for (std::size_t j = 0; j < n_meshes; ++j) {
         const std::string& mesh_name = mesh_order[j];
-        const MappingResult<MeshId, MeshId>& picked =
-            mesh_enum_states.at(mesh_name).solutions.at(chosen_index[j]);
+        const MappingResult<MeshId, MeshId>& picked = mesh_state_ptrs[j]->solutions[chosen_index[j]];
         TT_FATAL(!picked.target_to_global.empty(), "Empty mesh-level mapping for mesh descriptor '{}'", mesh_name);
         const auto& groupings = placed_groupings_by_mesh_id.at(anchor_mesh_id.at(mesh_name));
         for (const auto& [logical_mesh_id, physical_mesh_id] : picked.target_to_global) {
