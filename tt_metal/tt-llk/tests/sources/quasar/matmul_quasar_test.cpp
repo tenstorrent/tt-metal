@@ -34,7 +34,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Setup sync for unpack
     set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
-    set_ttsync_enables<TRACK_ALL>(ckernel::unpack::TRISC_ID);
+    set_ttsync_enables<TRACK_ALL>(ckernel::trisc::TRISC_ID);
     // src A input configuration
     tdma_descriptor_t tdma_desc_src_a;
     tdma_desc_src_a.buf_desc.f.l1_addr_16B  = L1_ADDRESS(params.buffer_A[0]);

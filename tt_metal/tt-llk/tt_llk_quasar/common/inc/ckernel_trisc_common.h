@@ -15,8 +15,22 @@
 #include "llk_defs.h"
 #include "tensix_types.h"
 
+// COMPILE_FOR_TRISC is the build-system-provided integer identifying which
+// physical compute processor this translation unit is compiled for. Every
+// kernel build (LLK tests, metal compute API, sim, ...) should set it.
+#ifndef COMPILE_FOR_TRISC
+#error "COMPILE_FOR_TRISC must be defined by the kernel build (TRISC role = COMPILE_FOR_TRISC % 4: 0=unpack, 1=math, 2=pack, 3=isolate_sfpu)"
+#endif
+
 namespace ckernel::trisc
 {
+// Canonical TRISC role for the current translation unit, derived from
+// COMPILE_FOR_TRISC. Values: 0 = unpack, 1 = math, 2 = pack,
+// 3 = isolate_sfpu. The %4 collapses Quasar's multi-NEO encoding
+// (NEO_<n>_COMPUTE_<m> = 4*n + m) and is a no-op on layouts that already
+// emit the role directly (Wormhole/Blackhole give 0..2).
+constexpr static std::uint32_t TRISC_ID = COMPILE_FOR_TRISC % 4;
+
 // Num of words in buffer descriptor struct
 constexpr static std::uint32_t BD_NUM_WORDS = 3;
 
@@ -182,6 +196,45 @@ inline void _set_dest_section_base_(const std::uint32_t base_addr)
 inline std::uint32_t _get_dest_buffer_base_()
 {
     return dest_register_offset;
+}
+
+/**
+ * @brief Sets destination register base address depending on tile idx for the
+ * TRISC this translation unit is compiled for. The TRISC role is taken from
+ * ckernel::trisc::TRISC_ID; consumers no longer need to pass it.
+ * @tparam TILE_SHAPE: Tile shape, used to compute the per-tile stride.
+ * @param tile_index: Tile index in the dest reg
+ * 16bit dest reg data format -> tile_idx = 0 - 7
+ * 32bit dest reg data format -> tile_idx = 0 - 3
+ */
+template <DstTileShape TILE_SHAPE>
+inline void _set_dst_write_addr_(const std::uint32_t tile_index)
+{
+    // The dest address stride is encoded as log2(rows occupied by one tile):
+    // 32x32 -> 64 rows -> shift 6, 32x16 -> 32 rows -> shift 5,
+    // and smaller tile shapes use the minimum 16-row dest stride -> shift 4.
+    const std::uint32_t tile_shape_idx = (TILE_SHAPE == DstTileShape::Tile32x32) ? 6 : ((TILE_SHAPE == DstTileShape::Tile32x16) ? 5 : 4);
+    const std::uint32_t dst_index      = (tile_index << tile_shape_idx) + _get_dest_buffer_base_();
+    _set_dest_section_base_<TRISC_ID>(dst_index);
+}
+
+/**
+ * @brief Sets destination register base address depending on tile idx and the
+ * number of rows per tile for the TRISC this translation unit is compiled for
+ * (TRISC role taken from ckernel::trisc::TRISC_ID).
+ * @param num_rows_per_tile: Number of rows per tile, used to compute the per-tile stride. Must be a power of two.
+ * @param tile_index: Tile index in the dest reg.
+ */
+inline void _set_dst_write_addr_by_rows_(const std::uint32_t num_rows_per_tile, const std::uint32_t tile_index)
+{
+    const std::uint32_t tile_shape_idx = (num_rows_per_tile == 64u)   ? 6u
+                                         : (num_rows_per_tile == 32u) ? 5u
+                                         : (num_rows_per_tile == 16u) ? 4u
+                                         : (num_rows_per_tile == 8u)  ? 3u
+                                         : (num_rows_per_tile == 4u)  ? 2u
+                                                                      : 1u;
+    const std::uint32_t dst_index = (tile_index << tile_shape_idx) + _get_dest_buffer_base_();
+    _set_dest_section_base_<TRISC_ID>(dst_index);
 }
 
 inline constexpr static std::uint32_t masked_data_format(std::uint32_t data_format)
