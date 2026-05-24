@@ -12,7 +12,7 @@
 namespace ttml::metal::ops::cross_entropy_fw::device {
 
 void CrossEntropyForwardDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    [[maybe_unused]] const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto check_tensor = [](const ttnn::Tensor& tensor,
                            const std::string& name,
                            const tt::tt_metal::Layout required_layout,
@@ -61,7 +61,7 @@ void CrossEntropyForwardDeviceOperation::validate_on_program_cache_miss(
 }
 
 CrossEntropyForwardDeviceOperation::spec_return_value_t CrossEntropyForwardDeviceOperation::compute_output_specs(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    [[maybe_unused]] const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
     }

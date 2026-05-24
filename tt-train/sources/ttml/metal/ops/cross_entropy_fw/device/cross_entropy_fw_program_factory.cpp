@@ -125,7 +125,7 @@ void assign_per_core_runtime_args(
 }
 
 CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
+    [[maybe_unused]] const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     // -------------------------------------------------------------------------
@@ -379,7 +379,7 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
 
 void CrossEntropyForwardProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    [[maybe_unused]] const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     auto& program = cached_program.program;
