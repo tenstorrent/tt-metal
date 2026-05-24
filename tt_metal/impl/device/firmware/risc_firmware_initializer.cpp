@@ -39,6 +39,7 @@
 #include "tt_align.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/noc_id.hpp>
 
 namespace tt::tt_metal {
 
@@ -612,6 +613,14 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
             // 5s UMD timeout from 4 sequential 5s timeouts (20s total).
             const auto pass2a_dev_start = std::chrono::steady_clock::now();
             try {
+                // FIX KL (#42429): non-MMIO Tensix NOC0 NIU-SLV has stale in-flight
+                // NOC transactions from the previous session's ungraceful teardown
+                // (SIGKILL during dispatch ERISC loop). New NOC0 non-posted (data VC)
+                // writes to Tensix L1 timeout (5s each) waiting for NIU-SLV ACK that
+                // never comes. NOC1 router/NIU-SLV is independent and unaffected.
+                // Use NOC1 proactively for all non-MMIO firmware writes — eliminates
+                // the 4 × 5s = 20s timeout cascade that FIX WW failed to prevent.
+                tt::umd::NocIdSwitcher noc1_guard(tt::umd::NocId::NOC1);
                 initialize_and_launch_firmware(device_id);
                 const auto pass2a_dev_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now() - pass2a_dev_start).count();
