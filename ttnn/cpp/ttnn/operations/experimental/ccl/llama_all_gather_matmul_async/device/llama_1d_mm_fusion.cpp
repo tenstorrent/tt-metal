@@ -5,6 +5,7 @@
 #include "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/llama_1d_mm_fusion.hpp"
 
 #include <algorithm>
+#include <bitset>
 #include <utility>
 
 #include "hostdevcommon/common_values.hpp"
@@ -1910,16 +1911,36 @@ void matmul_multi_core_agmm_fusion_helper_descriptor(
     // Pre-allocate a free semaphore id on `all_cores` (the union of the in0 shard grid and the
     // hop cores — the cores the agmm helper installs its in0_signal semaphore on).  This avoids
     // colliding with semaphores the caller may have already placed on the same cores in `desc`
-    // (e.g. CCL semaphores in the all-gather + matmul fused path).
+    // (e.g. CCL semaphores in the all-gather + matmul fused path).  We can't use
+    // ProgramDescriptor::find_available_semaphore_id directly here because it only inspects a
+    // single CoreCoord — a semaphore living on some other core in agmm_semaphore_cores would
+    // be invisible to it.  Instead, union the ids used by every existing semaphore that
+    // intersects agmm_semaphore_cores and pick the lowest free id.
+    // Tensix per-core semaphore-register count; mirrors the private NUM_SEMAPHORES constant in
+    // tt_metal/impl/buffers/semaphore.hpp (that header isn't reachable from ttnn).
+    constexpr uint32_t kNumSemaphoresPerCore = 16;
     const auto& b = b_tensors[0];
     CoreRangeSet agmm_semaphore_cores = b.shard_spec().value().grid.merge(config.hop_cores);
-    CoreCoord any_sem_core = *agmm_semaphore_cores.ranges().cbegin()->begin();
-    const auto agmm_base_sem_id_opt = desc.find_available_semaphore_id(any_sem_core, tt::CoreType::WORKER);
+    std::bitset<kNumSemaphoresPerCore> used_ids;
+    for (const auto& sem : desc.semaphores) {
+        if (sem.core_type != tt::CoreType::WORKER) {
+            continue;
+        }
+        if (sem.core_ranges.intersects(agmm_semaphore_cores)) {
+            used_ids.set(sem.id);
+        }
+    }
+    uint32_t agmm_base_sem_id = kNumSemaphoresPerCore;
+    for (uint32_t i = 0; i < kNumSemaphoresPerCore; ++i) {
+        if (!used_ids.test(i)) {
+            agmm_base_sem_id = i;
+            break;
+        }
+    }
     TT_FATAL(
-        agmm_base_sem_id_opt.has_value(),
+        agmm_base_sem_id < kNumSemaphoresPerCore,
         "matmul_multi_core_agmm_fusion_helper_descriptor: no free semaphore id available on the agmm "
         "worker cores; the caller's ProgramDescriptor has exhausted the semaphore id space on these cores.");
-    uint32_t agmm_base_sem_id = agmm_base_sem_id_opt.value();
 
     tt::tt_metal::ProgramDescriptor produced = matmul_multi_core_agmm_fusion_descriptor_(
         a,

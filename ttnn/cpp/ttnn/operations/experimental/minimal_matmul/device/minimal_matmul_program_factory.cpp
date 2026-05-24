@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <bitset>
 #include <cstring>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tuple>
@@ -1068,19 +1069,38 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
 
     // Allocate the six DM handshake semaphores via SemaphoreDescriptors.
     // The legacy helper uses CreateSemaphore(program, core_grid, INVALID/VALID), which picks the
-    // first free id whose slot is unused on every requested core; mirror that here by searching
-    // for a free id on a representative core within core_grid_set (and tracking the running set
-    // of just-allocated ids so back-to-back push_sem calls don't collide on the same fresh id).
+    // first free id whose slot is unused on every requested core; mirror that here by tracking
+    // semaphore ids already used on ANY core in core_grid_set (not just on a representative
+    // core — find_available_semaphore_id only checks one core, which would miss collisions on
+    // other cores in the range and is what an earlier version of this lambda did incorrectly).
+    // Tensix per-core semaphore-register count; mirrors the private NUM_SEMAPHORES constant in
+    // tt_metal/impl/buffers/semaphore.hpp (that header isn't reachable from ttnn).
+    constexpr uint32_t kNumSemaphoresPerCore = 16;
     constexpr uint32_t INVALID_VAL = static_cast<uint32_t>(INVALID);
     constexpr uint32_t VALID_VAL = static_cast<uint32_t>(VALID);
-    const CoreCoord any_grid_core = *core_grid_set.ranges().cbegin()->begin();
     auto push_sem = [&](uint32_t initial_value) {
-        const auto sem_id_opt = desc.find_available_semaphore_id(any_grid_core, tt::CoreType::WORKER);
+        // Recompute the used-id set on every call so freshly-pushed ids (which live on
+        // core_grid_set themselves) are accounted for.
+        std::bitset<kNumSemaphoresPerCore> used;
+        for (const auto& sem : desc.semaphores) {
+            if (sem.core_type != tt::CoreType::WORKER) {
+                continue;
+            }
+            if (sem.core_ranges.intersects(core_grid_set)) {
+                used.set(sem.id);
+            }
+        }
+        uint32_t sem_id = kNumSemaphoresPerCore;
+        for (uint32_t i = 0; i < kNumSemaphoresPerCore; ++i) {
+            if (!used.test(i)) {
+                sem_id = i;
+                break;
+            }
+        }
         TT_FATAL(
-            sem_id_opt.has_value(),
+            sem_id < kNumSemaphoresPerCore,
             "minimal_matmul descriptor: no free semaphore id available on core_grid_set; the caller's "
             "ProgramDescriptor has exhausted the semaphore id space on these cores.");
-        const uint32_t sem_id = sem_id_opt.value();
         desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
             .id = sem_id,
             .core_ranges = core_grid_set,
