@@ -42,7 +42,7 @@ void SequentialScheduler::step() {
     m_current_step_in_scheduler += 1;
     m_last_lr = current_scheduler->get_last_lr();
 
-    if (m_current_step_in_scheduler >= current_sched_steps) {
+    if (static_cast<size_t>(m_current_step_in_scheduler) >= current_sched_steps) {
         m_current_scheduler_index += 1;
         m_current_step_in_scheduler = 0;
     }

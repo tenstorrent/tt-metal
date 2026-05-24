@@ -213,21 +213,21 @@ void AutoContext::initialize_parallelism_context(const DistributedConfig& config
     m_parallelism_context = std::make_unique<ParallelismContext>(get_device(), config);
 }
 
-const uint32_t ParallelismContext::get_ddp_size() const {
+uint32_t ParallelismContext::get_ddp_size() const {
     if (!m_ddp_axis.has_value()) {
         return 1U;
     }
     return m_num_ddp_devices;
 }
 
-const uint32_t ParallelismContext::get_cp_size() const {
+uint32_t ParallelismContext::get_cp_size() const {
     if (!m_cp_axis.has_value()) {
         return 1U;
     }
     return m_num_cp_devices;
 }
 
-const uint32_t ParallelismContext::get_tp_size() const {
+uint32_t ParallelismContext::get_tp_size() const {
     if (!m_tp_axis.has_value()) {
         return 1U;
     }
