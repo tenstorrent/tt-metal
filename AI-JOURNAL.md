@@ -5563,8 +5563,8 @@ Run 26346338585 failed at build: `Cluster` has no public `mark_relay_broken()` m
 
 ## FIX WW v2 — Batched deassert+sleep+assert (2026-05-24)
 
-**Commit**: TBD
-**CI Run**: TBD
+**Commit**: 298e265db2d
+**CI Run**: 26349411494
 
 ### Root Cause Analysis (Run 26347965355)
 
@@ -5601,3 +5601,160 @@ This eliminates a second 5s hang per non-MMIO device that was occurring after FI
 ### Files changed
 - `tt_metal/impl/device/firmware/risc_firmware_initializer.cpp`: FIX WW split into 3 phases + FIX IK DRAM write-only
 
+
+---
+
+## AUDIT ROUND 9 — Testing & Logging Gap Analysis (2026-05-24)
+
+### 1. Current Race Condition Hypothesis
+
+The AllGather hang on T3K stems from a **relay-path timing window** during the ERISC firmware lifecycle. The core sequence is:
+
+1. `reset_cores()` (Pass 1) asserts RISC reset on all devices, killing any running ERISC relay firmware.
+2. FIX TV polls MMIO ETH heartbeat (confirms TX-side relay alive).
+3. FIX UU probes non-MMIO relay bridge (confirms RX-side alive).
+4. FIX VV deferred Tensix reset + FIX WW NOC recovery (drain stuck NIU-SLV state).
+5. Pass 2a writes firmware to non-MMIO devices (routes through relay).
+6. Pass 2b writes firmware to MMIO devices (may overwrite fw_launch_addr, killing relay).
+
+**Primary race window**: Between FIX UU confirming "relay alive" and Pass 2a completing all writes, the relay bridge ERISC can die (e.g., UMD base firmware watchdog timeout, unexpected ETH link event). There is no mid-Pass-2a health check — a relay death mid-write silently corrupts non-MMIO L1, causing AllGather to hang later.
+
+**Secondary race window**: In `quiesce_and_restart_fabric_workers()`, Phase 2.5 (ERISC termination) drains in-flight ETH packets, then Phase 3 overwrites ERISC L1 with new firmware. If Phase 2.5 fails to fully terminate a channel (e.g., MUX packet still in flight), Phase 3 L1 writes corrupt the still-running firmware's .text segment. The `handshake_bypass` flag (STRATEGY7) and `boot_fence` (FIX S8) mitigate this, but no test validates the full Phase 2.5 → Phase 3 transition under packet pressure.
+
+**Tertiary race**: `initialize_and_launch_firmware()` has no per-device elapsed timer. A single non-MMIO device timing out at 5s (UMD hard timeout) is indistinguishable from all 4 non-MMIO devices timing out sequentially (20s total). GAP-R20 captures the outer total but not per-device breakdown.
+
+### 2. Testing Gaps
+
+**GAP-T1: No test for Pass 2a mid-relay failure.** No existing test verifies that a relay bridge dying *during* Pass 2a firmware writes is detected and handled gracefully. FIX BX catches the exception, but the test matrix never exercises this path.
+
+**GAP-T2: No test for FIX TV → FIX UU → Pass 2a ordering enforcement.** The two-pass launch (FIX XX) relies on code ordering, not an explicit barrier. No test validates that reordering these calls causes a detectable failure.
+
+**GAP-T3: No test for quiesce Phase 2.5 → Phase 3 transition under load.** The test_gap*.cpp files test degraded-cluster scenarios but not the specific race where an ERISC channel fails to terminate in Phase 2.5, leaving orphaned packets that corrupt Phase 3 L1 writes.
+
+**GAP-T4: No test for FW_READY gate (FIX SA-A) timeout recovery.** When ERISC fails to write 0xFEED1AB5, the channel is marked dead. No test validates that (a) the timeout fires correctly, (b) the dead-channel marking propagates to subsequent phases, and (c) AllGather gracefully degrades.
+
+**GAP-T5: No test for handshake_bypass readback mismatch (FIX NO).** STRATEGY7 writes handshake_bypass=1 to ERISC L1 and reads it back. A mismatch indicates the relay path corrupted the write. No test exercises this detection path.
+
+**GAP-T6: No per-device Pass 2a/2b elapsed timing.** `initialize_and_launch_firmware()` has no per-device timer. When Pass 2a takes 20s (4 × 5s timeouts), post-mortem cannot determine which device(s) timed out.
+
+### 3. Logging Gaps
+
+**GAP-L1: Pass 2a/2b per-device elapsed timer missing.** `initialize_and_launch_firmware()` at line 3006 has no `steady_clock` timing wrapper. Adding one would let post-mortem distinguish "one device timed out" from "all devices timed out sequentially."
+
+**GAP-L2: No log at Pass 2a/2b loop entry.** There is no log line when Pass 2a begins iterating over non-MMIO devices, making it impossible to determine in logs where FIX TV/UU/VV/WW ended and Pass 2a started.
+
+**GAP-L3: No log at Pass 2b entry.** Same issue — no log line marks the transition from Pass 2a to Pass 2b.
+
+**GAP-L4: FIX WW Phase 2 (100ms sleep) has no log.** The 100ms sleep between deassert and re-assert phases is silent. A log line would confirm timing in post-mortem.
+
+### 4. Analyze Script Gaps
+
+**GAP-S1: FIX NZ not counted.** The script greps for FIX NZ in the TIMELINE section but does not have a dedicated counter variable in the COUNTERS section. Adding `FIX_NZ_FIRES` would track how often non-MMIO devices are skipped in Pass 2a due to broken relay.
+
+**GAP-S2: FIX BX not counted.** Same — FIX BX (relay failure mid-initialize_and_launch_firmware) appears in TIMELINE but has no dedicated counter.
+
+**GAP-S3: No Pass 2a/2b per-device timing extraction.** Once GAP-L1 logging is added, the script should extract per-device elapsed times and flag outliers (>5s = UMD timeout).
+
+**GAP-S4: FIX WW phase timing not extracted.** The script counts FIX WW events but does not extract the 100ms sleep phase timing or the deassert/assert durations.
+
+### 5. Prioritized Top-3 Action Items (1-2 hours each)
+
+**Action 1 (GAP-L1 + GAP-L2 + GAP-L3 + GAP-L4): Add per-device elapsed timers and phase boundary logs to run_launch_phase.**
+- Wrap each `initialize_and_launch_firmware()` call in Pass 2a/2b with `steady_clock` timer.
+- Add log lines at Pass 2a entry, Pass 2b entry, and FIX WW Phase 2 sleep.
+- Safe: pure diagnostic logging, no behavior change.
+
+**Action 2 (GAP-S1 + GAP-S2 + GAP-S3): Update analyze_fabric_hang_log.sh counters.**
+- Add FIX_NZ_FIRES, FIX_BX_FIRES counters.
+- Add per-device Pass 2a/2b elapsed extraction (once Action 1 logs are available).
+- Add summary lines for new counters.
+
+**Action 3 (GAP-T6 + GAP-T1): Add a targeted test for Pass 2a per-device timing visibility.**
+- This is a test_gap-style gtest that runs a normal fabric init, captures logs, and validates that per-device timing lines appear for every non-MMIO device.
+- Additionally validates that FIX NZ / FIX BX log lines appear when expected (i.e., when relay is marked broken before Pass 2a).
+
+
+## 2026-05-24T04:10 UTC — FIX KL dispatched, run in_progress
+
+Run 26351279481 in_progress on commit 69d4dc1df38 (FIX KL).
+
+FIX KL change: wrap `initialize_and_launch_firmware(device_id)` in Pass 2a of
+`run_launch_phase` with `tt::umd::NocIdSwitcher(NocId::NOC1)`. Added include
+`<umd/device/types/noc_id.hpp>`.
+
+Code analysis confirms NOC1 path is sound:
+- `write_to_non_mmio` line 527: `new_cmd->flags |= (is_selected_noc1() ? 1 : 0) << REMOTE_CMD_NOC_BIT` — NOC bit set for ALL relay commands (unicast + multicast)
+- `noc_multicast_write` at tt_device.cpp:499: calls `get_selected_noc_id()` — TLS propagation confirmed for multicast too
+- `l1_barrier` at line 3188: goes through relay on non-MMIO, will use NOC1 — consistent with all prior NOC1 writes
+
+Neil flagged: "comments/error messages may contain errors, contracts may be violated, hardware issues are emergent from our changes." Watching for:
+1. New failure mode (not the 4×5s timeout) = contract violation in FIX KL
+2. Same failure = FIX KL ineffective, need to investigate in-branch root cause
+
+Deadline: 10:43 UTC (~6.5h remaining).
+
+## FIX MM — Remove FIX WW (2026-05-24)
+
+**Root cause of FIX KL failure identified.**
+
+FIX WW was *creating* the NOC1 stuck state that FIX KL tried to bypass:
+
+1. Prior session SIGKILL → relay ERISC leaves in-flight NOC0 write to Tensix L1 unACKed
+   - Relay uses `DEFAULT_NOC = NOC0` for all data writes
+   - NOC1 is untouched → **NOC1 is clean after SIGKILL**
+
+2. FIX WW deasserts all 64 Tensix BRISCs → they run the *previous session's dispatch firmware*
+   - That firmware uses BOTH NOC0 and NOC1 (Wormhole dispatch is multi-NOC)
+   - Phase 3 re-assert cuts those runs mid-write
+   - **NOC1 is now stuck** from BRISCs killed mid-NOC1-write
+
+3. FIX KL switches to NOC1 → also fails because FIX WW dirtied NOC1
+
+**Fix:** Remove FIX WW code (lines 467-602 original). Keep FIX KL (NOC1).
+Without FIX WW, only NOC0 is stuck (from prior SIGKILL). NOC1 is clean → FIX KL succeeds.
+
+Key evidence:
+- `DEFAULT_NOC = 0 = NOC0` in `noc_id.hpp`
+- `is_selected_noc1()` false by default → relay uses NOC0
+- Both NOC0 and NOC1 fail only AFTER FIX WW was introduced
+- FIX KL hypothesis was correct — just broken by FIX WW running first
+
+## Iteration check — 2026-05-24 ~07:10 UTC
+Run 26353523346 (FIX MM, commit a3617426c09) in_progress. Waiting.
+
+## FIX MM RESULT + Root Cause Revision (2026-05-24 ~08:30 UTC)
+
+**FIX MM FAILED.** Run 26353523346 — same 4×5s timeout cascade for chips 4-7.
+
+### Revised Root Cause
+
+FIX KL (NOC1) analysis was WRONG. The real issue is not which NOC new writes use.
+It's that **wr_req != wr_resp on the relay ERISC** from a prior session.
+
+Evidence from logs:
+- FIX TV: "confirmed base firmware heartbeat in 0ms" — relay ERISCs were NOT reset in Pass 1
+- This means `erisc_app_still_running()` returned false AND heartbeat = 0xABCDxxxx — so
+  `reset_cores()` correctly skipped force-reset (they're at base firmware). BUT their
+  `wr_req`/`wr_resp` transaction counters in L1 are from the prior session.
+- Prior session was SIGKILL'd mid non-posted write to non-MMIO Tensix. Tensix reset, ACK never returned.
+- `wr_req > wr_resp` by old_stuck_delta (permanent — can never close).
+- `wait_for_non_mmio_flush()` Step 2 polls `wr_req == wr_resp` → permanent timeout.
+- FIX KL (NOC1) doesn't help: new writes get ACKed fine on either NOC, but old delta persists.
+
+### FIX NN — Detect and reset MMIO ETH channels with stuck counters
+
+Inserted in `run_launch_phase()` between FIX TV and FIX UU (risc_firmware_initializer.cpp ~line 343).
+
+For each MMIO ETH channel:
+1. Read `wr_req` (at `request_cmd_queue_base + 0`) via PCIe
+2. Read `wr_resp` (at `request_cmd_queue_base + 4`) via PCIe
+3. If `wr_req != wr_resp`: force-reset the channel (assert + deassert), re-poll heartbeat
+4. After reset, ERISC firmware restarts with clean counters (wr_req = wr_resp = 0)
+
+Also removed FIX KL (NOC1 switcher) — it was addressing a misdiagnosed cause.
+Wait — actually let me check if FIX KL was also removed or kept...
+
+**Note**: FIX NN doesn't change FIX KL. FIX KL switching to NOC1 for non-MMIO init is harmless
+but unnecessary if FIX NN clears the stuck counters. Left in place — can be cleaned later.
+
+CI run: TBD (commit not yet pushed).
