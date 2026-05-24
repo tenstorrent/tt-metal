@@ -456,15 +456,47 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
                         std::this_thread::sleep_for(std::chrono::milliseconds(10));
                     }
                     if (back_up) {
-                        log_info(
-                            tt::LogAlways,
-                            "run_launch_phase: FIX NN — MMIO device {} ETH core {} back at base "
-                            "firmware after counter reset ({}ms). (#42429)",
-                            mmio_id,
-                            virt.str(),
+                        // Post-reset counter verification: confirm wr_req == wr_resp after
+                        // ERISC reboot. If still mismatched, the reset did not clear counters.
+                        uint32_t post_wr_req = 0, post_wr_resp = 0;
+                        bool counters_verified = false;
+                        try {
+                            cluster_.read_reg(&post_wr_req, target,
+                                static_cast<uint64_t>(eth_params.request_cmd_queue_base));
+                            cluster_.read_reg(&post_wr_resp, target,
+                                static_cast<uint64_t>(eth_params.request_cmd_queue_base) + 4u);
+                            counters_verified = (post_wr_req == post_wr_resp);
+                        } catch (...) {
+                            // PCIe read failed — can't verify, log warning below
+                        }
+                        const auto nn_recovery_ms =
                             std::chrono::duration_cast<std::chrono::milliseconds>(
                                 std::chrono::steady_clock::now() - nn_start)
-                                .count());
+                                .count();
+                        if (counters_verified) {
+                            log_info(
+                                tt::LogAlways,
+                                "run_launch_phase: FIX NN — MMIO device {} ETH core {} back at base "
+                                "firmware after counter reset ({}ms). Post-reset wr_req=0x{:x} "
+                                "wr_resp=0x{:x} (balanced). (#42429)",
+                                mmio_id,
+                                virt.str(),
+                                nn_recovery_ms,
+                                post_wr_req,
+                                post_wr_resp);
+                        } else {
+                            log_warning(
+                                tt::LogAlways,
+                                "run_launch_phase: FIX NN — MMIO device {} ETH core {} back at base "
+                                "firmware after counter reset ({}ms) but counters STILL MISMATCHED: "
+                                "post_wr_req=0x{:x} post_wr_resp=0x{:x}. Relay flush will likely "
+                                "timeout. (#42429)",
+                                mmio_id,
+                                virt.str(),
+                                nn_recovery_ms,
+                                post_wr_req,
+                                post_wr_resp);
+                        }
                     }
                 }
             }
