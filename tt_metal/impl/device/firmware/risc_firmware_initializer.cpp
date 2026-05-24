@@ -464,142 +464,13 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
             }
         }
 
-        // FIX WW (#42429): Tensix NOC data-VC recovery via batched deassert → sleep → assert.
-        //
-        // Problem (run 26346717092): initialize_and_launch_firmware() timed out on
-        // write_core_immediate() to Tensix L1 even when had_unresponsive_eth_cores=false
-        // (reset_cores() ran assert_tensix_workers_impl() for all 80 workers already).
-        //
-        // Root cause: RISC soft-reset (writing to 0xFFB121B0) resets RISC processors but
-        // does NOT clear the Tensix NOC NIU-SLV state. When a previous Metal session left
-        // in-flight NOC writes to Tensix L1 that never received ACKs (e.g. BRISC was
-        // killed mid-NOC-write by soft-reset), the NIU-SLV carries that stuck backpressure
-        // state into the new session. The bridge ERISC (chip N, post-FIX-AD restart) then
-        // issues a fresh NON-POSTED NOC write to Tensix L1, waits for an ACK that never
-        // comes, and wait_for_non_mmio_flush Loop 2 (resp_count != txn_count) times out.
-        //
-        // Key observation: writes to 0xFFBxxxxx (config register space) go through a
-        // separate NOC virtual channel (config/posted VC) that does NOT require an ACK from
-        // Tensix NIU-SLV. This is confirmed by assert_tensix_workers_impl() succeeding for
-        // all 80 workers (both the READ from 0xFFB121B0 and the WRITE back) while the
-        // subsequent L1 data write fails.
-        //
-        // Fix: for every non-MMIO device, deassert ALL Tensix RISC resets first (all BRISCs
-        // start running in parallel), then sleep 100ms (giving all BRISCs significant
-        // parallel execution time to drain their NIU-SLV state), then re-assert ALL resets.
-        //
-        // Prior implementation (run 26347965355) interleaved deassert+assert per-core, giving
-        // each BRISC only the ERISC-forwarding latency (~few µs) between deassert and
-        // re-assert — far too brief. deassert_risc_reset_at_core_write_only() calls
-        // wait_for_non_mmio_flush() after each write, so the "deassert" for core N is
-        // confirmed landed before we move to core N+1. By separating the deassert loop from
-        // the assert loop with a 100ms sleep, all BRISCs execute in PARALLEL for ≥100ms,
-        // which is enough time for noc_init() and any pending NIU-SLV state to drain.
-        //
-        // Applies to ALL non-MMIO devices, not just deferred ones (FIX VV), because the
-        // stuck NIU-SLV affects every device that has previous-session NOC residue,
-        // regardless of whether ETH was unresponsive during reset_cores().
-        for (tt::ChipId device_id : device_ids) {
-            if (mmio_ids_set.count(device_id)) continue;
-            if (cluster_.is_relay_broken(device_id)) {
-                log_warning(
-                    tt::LogAlways,
-                    "run_launch_phase: FIX WW — skipping Tensix NOC recovery deassert for device {} "
-                    "(relay already broken after FIX TV/UU). (#42429)",
-                    device_id);
-                continue;
-            }
-            try {
-                CoreCoord grid_size = cluster_.get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
-                uint32_t n_deasserted = 0;
-                // Phase 1: deassert ALL cores. Each call flushes (confirms BRISC running)
-                // before advancing to the next core. After this loop, all BRISCs on this
-                // device are executing in parallel.
-                for (uint32_t y = 0; y < grid_size.y; y++) {
-                    for (uint32_t x = 0; x < grid_size.x; x++) {
-                        CoreCoord worker_core = cluster_.get_virtual_coordinate_from_logical_coordinates(
-                            device_id, CoreCoord(x, y), CoreType::WORKER);
-                        tt_cxy_pair core(device_id, worker_core);
-                        // deassert_risc_reset_at_core_write_only writes 0 to 0xFFB121B0
-                        // (config space, posted NOC) and calls wait_for_non_mmio_flush.
-                        // On flush failure it marks relay broken; subsequent iterations
-                        // exit immediately via the relay_broken_ fast-path in UMD.
-                        cluster_.deassert_risc_reset_at_core_write_only(core);
-                        ++n_deasserted;
-                    }
-                }
-                log_info(
-                    tt::LogAlways,
-                    "run_launch_phase: FIX WW — deasserted {} cores on device {}; "
-                    "sleeping 100ms for parallel BRISC NIU-SLV drain. (#42429)",
-                    n_deasserted,
-                    device_id);
-            } catch (const std::exception& e) {
-                log_warning(
-                    tt::LogAlways,
-                    "run_launch_phase: FIX WW — deassert phase aborted for device {}: {}. (#42429)",
-                    device_id,
-                    e.what());
-            }
-        }
-
-        // Phase 2: sleep 100ms so all BRISCs across all devices drain NIU-SLV in parallel.
-        // GAP-L4 (#42429): Log FIX WW Phase 2 boundary for post-mortem timing visibility.
-        // GAP-L5 (#42429): Elapsed timer around sleep — OS scheduler jitter on CI runners
-        // can cause the 100ms sleep to actually take 500ms+, which shifts Phase 3 timing.
-        log_info(
-            tt::LogAlways,
-            "run_launch_phase: FIX WW Phase 2 — sleeping 100ms for NIU-SLV drain. (#42429)");
-        {
-            const auto sleep_start = std::chrono::steady_clock::now();
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            const auto sleep_actual_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - sleep_start).count();
-            log_info(
-                tt::LogAlways,
-                "run_launch_phase: FIX WW Phase 2 — actual sleep {}ms (requested 100ms). (#42429)",
-                sleep_actual_ms);
-        }
-
-        // Phase 3: re-assert all cores.
-        for (tt::ChipId device_id : device_ids) {
-            if (mmio_ids_set.count(device_id)) continue;
-            if (cluster_.is_relay_broken(device_id)) {
-                log_warning(
-                    tt::LogAlways,
-                    "run_launch_phase: FIX WW — skipping Tensix NOC recovery assert for device {} "
-                    "(relay broken during deassert phase). (#42429)",
-                    device_id);
-                continue;
-            }
-            try {
-                CoreCoord grid_size = cluster_.get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
-                uint32_t n_asserted = 0;
-                for (uint32_t y = 0; y < grid_size.y; y++) {
-                    for (uint32_t x = 0; x < grid_size.x; x++) {
-                        CoreCoord worker_core = cluster_.get_virtual_coordinate_from_logical_coordinates(
-                            device_id, CoreCoord(x, y), CoreType::WORKER);
-                        tt_cxy_pair core(device_id, worker_core);
-                        // Re-assert: returns Tensix to clean RISC-reset state ready for
-                        // firmware load. Also a config-space posted NOC write.
-                        cluster_.assert_risc_reset_at_core_write_only(
-                            core, tt::umd::RiscType::ALL);
-                        ++n_asserted;
-                    }
-                }
-                log_info(
-                    tt::LogAlways,
-                    "run_launch_phase: FIX WW — re-asserted {} cores on device {}. (#42429)",
-                    n_asserted,
-                    device_id);
-            } catch (const std::exception& e) {
-                log_warning(
-                    tt::LogAlways,
-                    "run_launch_phase: FIX WW — assert phase aborted for device {}: {}. (#42429)",
-                    device_id,
-                    e.what());
-            }
-        }
+        // FIX WW (#42429): REMOVED — was counterproductive. Deassert/100ms/re-assert ran the
+        // previous session's dispatch firmware on all Tensix BRISCs during the 100ms window.
+        // That firmware uses BOTH NOC0 and NOC1; Phase 3 re-assert cut those runs mid-write,
+        // leaving NOC1 stuck in addition to NOC0. FIX KL (NOC1) then also failed because
+        // FIX WW itself had just dirtied NOC1. Root cause of Pass 2a failures is only NOC0
+        // stuck from prior SIGKILL (relay uses DEFAULT_NOC=NOC0 for data writes). NOC1
+        // is clean after SIGKILL; FIX KL (below) bypasses the stuck NOC0 via NOC1. (#42429)
 
         // ── Pass 2a: initialize non-MMIO devices (relay still alive) ──
         // GAP-L2 (#42429): Log Pass 2a entry for post-mortem phase boundary visibility.
@@ -624,13 +495,15 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
             // 5s UMD timeout from 4 sequential 5s timeouts (20s total).
             const auto pass2a_dev_start = std::chrono::steady_clock::now();
             try {
-                // FIX KL (#42429): non-MMIO Tensix NOC0 NIU-SLV has stale in-flight
-                // NOC transactions from the previous session's ungraceful teardown
-                // (SIGKILL during dispatch ERISC loop). New NOC0 non-posted (data VC)
-                // writes to Tensix L1 timeout (5s each) waiting for NIU-SLV ACK that
-                // never comes. NOC1 router/NIU-SLV is independent and unaffected.
-                // Use NOC1 proactively for all non-MMIO firmware writes — eliminates
-                // the 4 × 5s = 20s timeout cascade that FIX WW failed to prevent.
+                // FIX KL (#42429): After a prior session's SIGKILL, the relay ERISC
+                // leaves an in-flight NOC0 non-posted write to Tensix L1 unacknowledged.
+                // The relay uses DEFAULT_NOC=NOC0 for all data writes; NOC1 is untouched
+                // by normal operation and therefore clean after SIGKILL. Switching to
+                // NOC1 for all non-MMIO firmware writes bypasses the stuck NOC0 path.
+                // NOTE: FIX WW (deassert/100ms/re-assert) was removed because it ran
+                // old dispatch firmware during its 100ms window, which issued NOC1 writes
+                // that were then cut off by Phase 3 re-assert — dirtying NOC1 and causing
+                // FIX KL to also fail. Without FIX WW, NOC1 remains clean. (#42429)
                 log_info(
                     tt::LogAlways,
                     "run_launch_phase: FIX KL — switching to NOC1 for non-MMIO device {} "
