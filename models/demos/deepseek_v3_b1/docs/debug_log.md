@@ -458,3 +458,74 @@ Hypotheses, roughly cheap → expensive:
 My pick for next experiment: **hypothesis 4 (small position_id)**. Cheapest information-per-time-spent — single parameter change, no code edits, ~12 min run. Decides whether the bug needs cross-chunk state at all.
 
 ---
+
+## Attempt 15 — Hypothesis 4: small `position_id` (1 chunk vs 64 chunks)
+
+**What.** Enable the previously-commented `position_id=127` in the test parametrize at `test_decoder_block.py:866`, in addition to the standard `position_id=8190`. Run both with `num_internal_iterations ∈ {1, 2}` — gives 4 PCCs total in one run.
+
+At `k_chunk_size=128`, `position_id=127` → `(127+1)/128 = 1` total k chunk across all SP devices (vs `(8190+1)/128 = 64` for the standard config). With only 1 chunk, the `compute_sdpa_chunk` body runs exactly once per `flash_mla` invocation; no cross-chunk state can build up.
+
+**Motivation.** If iter-alternation still manifests at `position_id=127`, the bug is intrinsic to a single chunk's compute. If it disappears, the bug requires cross-chunk accumulation — which immediately constrains the candidate to either (a) the MM2 P·V DEST accumulator, (b) the LReg carry of max/sum across `non_approx_exp_mul_prev` calls, or (c) some other cross-chunk state.
+
+**Result.**
+
+| `position_id` | iter=1 PCC | iter=2 PCC | gap |
+|---|---|---|---|
+| **127** (1 chunk total) | **0.9901647631143314** | **0.9901647631143314** | **0 (bit-identical)** |
+| 8190 (64 chunks, the standard config) | 0.9931898601668998 | 0.9934483676630709 | +2.6e-4 |
+
+**Conclusion.** At 1 chunk the iter-alternation **completely disappears** — both iters produce bit-identical output. At 64 chunks the alternation is present at its known +2.6e-4 magnitude.
+
+This is the strongest localization signal so far. **The bug is a cross-chunk accumulating effect**, not intrinsic to a single chunk's body. Rules out:
+
+- All single-chunk intra-op bugs (any SFPU helper / MM1 / MM2 / max-reduce / sum-reduce in isolation).
+- The post-chunk tail (recip + final pack) running once per flash_mla — would manifest at 1 chunk.
+- The pre-SDPA stack / post-SDPA / matmul4/5 / moe_body — these run once per iter regardless of chunk count.
+
+Rules in:
+- Something that *accumulates across chunks within one `flash_mla` call*. There are two structural candidates:
+  - **MM2 P·V accumulator in DEST.** Each chunk's `sdpa_custom_mm_reuse_dest_srcb_block` reads mm1 via MOVD2B and accumulates into `mm2_dst_offset`. The DEST values at `mm2_dst_offset` carry from chunk i to chunk i+1.
+  - **LReg-carry across chunks.** `non_approx_exp_mul_prev` (chunks 1+) reads `LREG0/2` (curr-sum) and `LREG1/3` (prev-max) directly without a SETC16 setup — they're expected to hold values from the previous chunk's reduce_sum / reduce_max.
+
+This also makes 2c's positional sensitivity click into focus: the cross-thread SETC16 pair at chunk *entry* (per chunk) is correcting whatever cross-chunk state is drifting. The 2c-tail cancellation may be because the same writes at tail are corrupting one of these accumulators on the way out.
+
+**State.** Test parametrize edit left in place (both `127` and `8190` enabled) — gives free comparison data for future runs at low marginal cost (the 127 case adds ~5 min to a 12-min run).
+
+---
+
+## Updated handoff
+
+### What we know
+
+The bug:
+- Localized to `flash_mla.hpp:747-791` (Method 1).
+- Requires multiple chunks (Attempt 15) — gone at 1 chunk, present at 64.
+- Carried by real semantic `SETC16` writes, not code-gen (Attempt 14).
+- Single best partial fix (Attempt 7, "2c"): cross-thread MATH+PACK MATH_Offset reset per chunk at chunk entry. Collapses gap 20×; residual ~1e-5.
+- Highly position-sensitive: any of 2c-narrow / 2c-move / 2c-tail breaks it.
+
+### Two main remaining suspect mechanisms
+
+**S1 — MM2 P·V accumulator drift.** Across chunks the mm2 DEST tiles accumulate ε errors that have bank-asymmetric magnitude. Plausible because MM2 reads mm1 through SRCB via MOVD2B, and the MOVD2B+MVMUL sequence may have bank-asymmetric numerical rounding.
+
+**S2 — LReg-carry across chunks.** `non_approx_exp_mul_prev` reads LREG0/2/1/3 without re-setting MATH_Offset for the read — they're expected to hold prev-sum and prev-max. If these LRegs are bank-asymmetrically corrupted across chunks (perhaps because `_calculate_sdpa_reduce_*_row_8x32_` writes them via SFPLOAD from a bank-dependent DEST address), the chunk-1+ correction picks up a slightly wrong prev-value.
+
+Both are consistent with 2c's "per-chunk reset at chunk entry" recipe doing something useful: it touches CFG state right where the accumulating drift gets used.
+
+### Cheap-to-expensive next experiments
+
+1. **Sweep `position_id` to characterize alternation vs chunk count.** Enable `position_id=255, 511, 1023, 2047, 4095` etc. Tells us whether the gap grows linearly, saturates, or has a knee. ~12 min per point or one big run.
+
+2. **Hard-clear LReg state between chunks.** Insert SFPLOADI zero into LREG0/1/2/3 at chunk entry (PACK side). If iter-alternation goes to zero at multi-chunk, S2 confirmed.
+
+3. **Hard-reset mm2 DEST tiles between chunks.** Insert ZEROACC on the mm2 region at chunk entry; this breaks the accumulator semantics so PCC will tank — but if the *alternation* gap collapses, S1 confirmed (even if PCC drops a lot).
+
+4. **Audit `_llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_` for bank-dependence.** The MOVD2B in MM2 reads DEST via MATH_Offset captured at function entry. Per-tile reads use ADDR_MOD with constant increments. Look for any cross-bank pointer leak.
+
+5. **Audit `_calculate_sdpa_reduce_*_row_8x32_`.** These set MATH_Offset and SFPLOAD into LREGs. Look for off-by-one or partial-row issues that would only differ between banks.
+
+6. **Profiler / DEST address trace.** Lower-priority now that we have specific suspects.
+
+My pick: **(1) `position_id` sweep**. Confirms the cross-chunk-accumulation mechanic and gives us a quantitative knob — knowing how the gap grows with chunk count lets us write much cheaper iteration cycles.
+
+---

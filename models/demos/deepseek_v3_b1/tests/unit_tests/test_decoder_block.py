@@ -863,7 +863,7 @@ def test_decoder(
     "position_id",
     [
         # 0,
-        # 127,
+        127,  # enabled for #43563 hypothesis 4: small position_id → fewer chunks
         # pytest.param(511, marks=pytest.mark.skip_post_commit),
         # pytest.param(1023, marks=pytest.mark.skip_post_commit),
         # pytest.param(11664, marks=pytest.mark.skip_post_commit),  # (3,3,3,2 + partial): partial into dev3 (if SP = 4)
