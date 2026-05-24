@@ -56,7 +56,7 @@ struct Conv2dConfig {
     // if override_sharding_config is true, reshard_if_not_optimal should not be set to true
     bool override_sharding_config = false;
 
-    std::optional<tt::tt_metal::TensorMemoryLayout> shard_layout;
+    std::optional<tt::tt_metal::TensorMemoryLayout> shard_layout = std::nullopt;
 
     // used only if override_sharding_config or override_output_sharding_config is true
     std::optional<CoreRangeSet> core_grid = std::nullopt;

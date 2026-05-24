@@ -199,7 +199,8 @@ auto query_op_constraints(Op op, tt::tt_metal::distributed::MeshDevice* device, 
     return ConstraintQueryResponse{
         ExecutionStatus::Success,
         {cb_peak_size_per_core, l1_buffers_peak_per_core, peak_memory_usage_per_core, l1_output_buffer_per_core},
-        std::make_optional(std::move(output_specs))};
+        std::make_optional(std::move(output_specs)),
+        /* error_message= */ std::nullopt};
 }
 
 }  // namespace ttnn::graph
