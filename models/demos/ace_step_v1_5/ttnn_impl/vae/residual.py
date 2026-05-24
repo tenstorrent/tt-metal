@@ -110,5 +110,5 @@ class TtOobleckResidualUnit:
             if pad > 0:
                 x = x[:, pad : pad + y_T, :]
 
-        # Both branches are ROW_MAJOR [B,T,C] after snake/conv; elementwise add needs no TILE rank-4 path.
+        # Both branches are ROW_MAJOR [B,T,C] in DRAM after snake / k>7 conv; 1×1 conv2 may be L1.
         return ttnn.add(x, y)

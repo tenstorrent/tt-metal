@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from .math_perf_env import ace_step_concat_kwargs
 from .vae.decoder import TtOobleckDecoder
 
 # TTNN conv_transpose2d width-sharded kernels assert on activation×weight geometry; very short
@@ -187,8 +188,9 @@ class TtOobleckVaeDecoder:
                 dtype=latents_btc.dtype,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=latents_btc.device(),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            latents_btc = ttnn.concat([latents_btc, pad_zeros], dim=1)
+            latents_btc = ttnn.concat([latents_btc, pad_zeros], dim=1, **ace_step_concat_kwargs(ttnn))
             latent_frames = int(latents_btc.shape[1])
 
         chunk_size = int(chunk_size)
@@ -258,5 +260,9 @@ class TtOobleckVaeDecoder:
         if len(cores) == 1:
             merged = cores[0]
         else:
-            merged = ttnn.concat(cores, dim=1) if hasattr(ttnn, "concat") else ttnn.concatenate(cores, dim=1)
+            merged = (
+                ttnn.concat(cores, dim=1, **ace_step_concat_kwargs(ttnn))
+                if hasattr(ttnn, "concat")
+                else ttnn.concatenate(cores, dim=1, **ace_step_concat_kwargs(ttnn))
+            )
         return _crop_audio_tail(merged, initial_pad_lat)

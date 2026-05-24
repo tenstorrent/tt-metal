@@ -46,8 +46,19 @@ DiT linears are often DRAM-bound at HiFi4 without tuning (reference path only):
 - ``256×3072×3072`` — MLP ``gate_proj`` / ``up_proj`` / ``down_proj``
 
 VAE decode exposes large-M matmuls inside ``conv1d`` / ``conv_transpose2d`` im2col (e.g.
-``1920×512×512``, ``30720×128×128``, ``61440×128×128``). VAE conv uses **DRAM** activations
-(``act_block_h_override=32``); L1 conv inputs clash with circular buffers on Blackhole.
+``1920×512×512``, ``30720×128×128``, ``61440×128×128``). Production VAE uses **LoFi** conv
+compute + **BF16** everywhere.
+
+Memory policy (VAE):
+
+- **L1 interleaved** on ``1×1`` conv + conv-transpose activations and outputs.
+- **Snake eltwise chain** (multiply, sin, square, multiply, add + Tilize/Untilize) runs in L1
+  (params in L1, intermediates in L1) — eliminates ~5 DRAM round-trips per call vs the
+  original all-DRAM path.  Snake **output** is staged back to DRAM inside ``TtSnake1d``
+  before returning so the caller always receives a DRAM tensor.
+- **k>1 ``conv1d`` input/output** stays in DRAM (static CB region extends to ~180 KiB on
+  Blackhole — any live L1 activation in that band fails program validation at compile time;
+  k>1 output also exceeds per-bank L1 budget).
 
 Condition encoder linears (lyric/timbre, ``hidden_size=2048``) are often DRAM-bound:
 
@@ -162,6 +173,43 @@ def ace_step_cond_linear_perf_enabled() -> bool:
 def ace_step_vae_conv_perf_enabled() -> bool:
     """Deprecated: VAE conv perf path is always enabled. Kept for call-site compatibility."""
     return True
+
+
+def ace_step_init_vae_conv_compute_kernel_config(device: Any):
+    """LoFi compute kernel for Oobleck VAE ``conv1d`` / ``conv_transpose2d`` im2col matmuls."""
+    return ace_step_init_lofi_linear_compute_kernel_config(device)
+
+
+def ace_step_vae_activation_memory_config(ttnn: Any):
+    """L1 interleaved activations for VAE Snake / ``1×1`` conv / conv-transpose glue ops."""
+    return ace_step_linear_l1_memory_config(ttnn)
+
+
+def ace_step_vae_conv1d_memory_config(ttnn: Any, *, kernel_size: int):
+    """Memory config for ``TtConv1d``: L1 for ``kernel_size==1``, DRAM for ``k>1``.
+
+    Wide ``k>1`` conv programs allocate multi-MB L1 output tensors (``conv2d_L1``) that exceed
+    per-bank budget on Blackhole when activations are forced into L1 interleaved.
+    """
+    if int(kernel_size) == 1:
+        return ace_step_vae_activation_memory_config(ttnn)
+    return getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+
+
+def ace_step_vae_typecast_kwargs(ttnn: Any, l1_mc: Any | None = None) -> dict:
+    """``memory_config`` for VAE ``typecast`` (latent FP32 → BF16)."""
+    mc = l1_mc if l1_mc is not None else ace_step_vae_activation_memory_config(ttnn)
+    return {"memory_config": mc} if mc is not None else {}
+
+
+def ace_step_vae_eltwise_kwargs(ttnn: Any, *, device: Any = None, l1_mc: Any | None = None) -> dict:
+    """Keyword args for VAE Snake ``multiply`` / ``add`` — L1 output only.
+
+    ``ttnn.multiply`` / ``ttnn.add`` accept ``memory_config`` but not ``compute_kernel_config`` or
+    ``fast_and_approximate_mode`` on all builds. LoFi fidelity is applied on conv im2col matmuls.
+    """
+    _ = device
+    return ace_step_binary_kwargs(ttnn, l1_mc)
 
 
 def ace_step_vae_large_m_matmul_program_config(

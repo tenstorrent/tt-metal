@@ -22,7 +22,12 @@ from __future__ import annotations
 import numpy as np
 
 from .._ttnn import get_ttnn
-from ..math_perf_env import ace_step_linear_l1_memory_config, ace_step_reshape_kwargs
+from ..math_perf_env import (
+    ace_step_init_vae_conv_compute_kernel_config,
+    ace_step_reshape_kwargs,
+    ace_step_vae_activation_memory_config,
+    ace_step_vae_conv1d_memory_config,
+)
 
 
 def _require_ttnn():
@@ -79,15 +84,9 @@ class TtConv1d:
         self.weights_dtype = weights_dtype or getattr(ttnn, "bfloat16", None)
         if self.activation_dtype is None or self.weights_dtype is None:
             raise RuntimeError("TTNN build missing bfloat16; supply activation_dtype/weights_dtype")
-        if math_fidelity is None:
-            math_fidelity = ttnn.MathFidelity.HiFi2
-
         self._vae_conv_perf = True
-        # Only kernel_size==1 convs (residual 1×1 projections) safely fit in L1 on Blackhole.
-        # Any kernel_size > 1 conv overflows the static CB region regardless of dilation:
-        # L1 buffer @ 139072 vs CB end @ 139328 (256-byte clash at act_block_h_override=32).
-        # Larger kernels need bigger CBs that push the activation buffer into the CB region.
-        self._l1_mem = ace_step_linear_l1_memory_config(ttnn) if (self.kernel_size == 1) else None
+        # L1 only for 1×1 projections; k>1 uses DRAM (L1 output OOM + static-CB clash on Blackhole).
+        self._l1_mem = ace_step_vae_conv1d_memory_config(ttnn, kernel_size=self.kernel_size)
 
         w = _to_float32_numpy(weight_host)
         if w.ndim != 3 or w.shape[0] != self.out_channels or w.shape[1] != self.in_channels:
@@ -118,13 +117,7 @@ class TtConv1d:
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
         )
-        self.compute_config = ttnn.init_device_compute_kernel_config(
-            device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=True,
-        )
+        self.compute_config = ace_step_init_vae_conv_compute_kernel_config(device)
         self._packed_for: tuple[int, int] | None = None
         self._weight_dev = None
         self._bias_dev = None
@@ -142,10 +135,7 @@ class TtConv1d:
         return ttnn.DRAM_MEMORY_CONFIG
 
     def _maybe_l1(self, x):
-        # Always move to the target memory so L1 Snake outputs are explicitly placed in DRAM
-        # for k>1 convs. Leaving the tensor as-is is fragile: L1 allocator fragmentation can
-        # place a Snake output inside the static CB region of the conv program, causing a
-        # "L1 buffer clashes with CB" crash (e.g. L1 buffer @ 133120 vs CB end @ 139328).
+        # Place activations in the conv program's expected buffer (L1 for 1×1, DRAM for k>1).
         target = self._l1_mem if self._l1_mem is not None else self.ttnn.DRAM_MEMORY_CONFIG
         return self.ttnn.to_memory_config(x, target)
 
@@ -280,12 +270,8 @@ class TtConvTranspose1d:
         self.weights_dtype = weights_dtype or getattr(ttnn, "bfloat16", None)
         if self.activation_dtype is None or self.weights_dtype is None:
             raise RuntimeError("TTNN build missing bfloat16; supply activation_dtype/weights_dtype")
-        if math_fidelity is None:
-            math_fidelity = ttnn.MathFidelity.HiFi2
-
         self._vae_conv_perf = True
-        # conv_transpose has no dilation → smaller CB requirement → L1 interleaved is safe on Blackhole.
-        self._l1_mem = ace_step_linear_l1_memory_config(ttnn)
+        self._l1_mem = ace_step_vae_activation_memory_config(ttnn)
 
         w = _to_float32_numpy(weight_host)
         if w.ndim != 3 or w.shape[0] != self.in_channels or w.shape[1] != self.out_channels:
@@ -316,13 +302,7 @@ class TtConvTranspose1d:
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
         )
-        self.compute_config = ttnn.init_device_compute_kernel_config(
-            device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=True,
-        )
+        self.compute_config = ace_step_init_vae_conv_compute_kernel_config(device)
         self._weight_dev = self._weight_host_tt
         self._bias_dev = self._bias_host_tt
         self._uploaded = False
