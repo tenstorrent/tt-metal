@@ -6,6 +6,16 @@
 
 **Audience**: AI agents asked to perform the actual Metal 2.0 port of a TTNN op, *after* the feasibility audit has cleared with GREEN status and the user has explicitly approved proceeding.
 
+**If you're new to this stack — quick orientation:**
+
+- **Tenstorrent accelerators** come in two architectural generations. **Gen1** is the shipping silicon today: `WH` = Wormhole, `BH` = Blackhole. **Gen2** is in development: `Quasar` (and siblings). The ops you'll port target Gen1, but Metal 2.0 is designed to serve both — the same API targets both architectures.
+- **TTNN** is the high-level neural-network library for Tenstorrent accelerators. Ops live in `ttnn/cpp/ttnn/operations/<family>/<op>/`. A typical op has a device-operation class on the host side and one or more program factories that build what runs on the accelerator.
+- **Metal 2.0** is the new **host API** — what the program factory uses to declare kernels, buffers, semaphores, and bindings. It also introduces **DFB** (Dataflow Buffer) at the spec layer, replacing the legacy **CB** (CircularBuffer); the two are essentially synonyms on Gen1, but DFB's semantics diverge meaningfully on Gen2.
+- **Device 2.0** is a *separate, earlier* overhaul of the **kernel-side** data-movement APIs (safer, more object-oriented wrappers — `experimental::Noc`, kernel-side `CircularBuffer` wrappers, etc.). It's a **bundled prereq** to Metal 2.0 — the audit checks that ops are already on it — not part of Metal 2.0 itself.
+- **Common acronyms you'll see throughout:** `CB` = CircularBuffer; `DFB` = DataflowBuffer (see above); `RTA` = runtime args; `CTA` = compile-time args; `TA` = TensorAccessor; `LLK` = Low-Level Kernel (the framework-provided kernel-side primitives); `NoC` = Network-on-Chip (the on-die fabric).
+
+For the conceptual map of how Metal 2.0 abstractions fit together — `ProgramSpec`, `KernelSpec`, `TensorParameter` / `TensorBinding`, `DataflowBufferSpec`, the spec/run-params split — see [`metal2_migration_guide.md`](metal2_migration_guide.md). The recipe below assumes you've at least skimmed it.
+
 **Precondition — non-negotiable**: You may only invoke this document if:
 
 1. The audit in [`port_op_to_metal2_audit.md`](port_op_to_metal2_audit.md) was performed for this op and produced an **overall GREEN** result (or a YELLOW with all questions resolved by the user in favor of proceeding).
@@ -18,6 +28,14 @@ If either condition is unmet, stop. Return to the audit document. Do not improvi
 The audit cleared the *features* and *prereqs* known at audit time. During the port you may discover something the audit missed — a feature gate that didn't fire, a kernel pattern that doesn't translate cleanly, an interaction the audit didn't anticipate. When that happens, the correct response is the same as in the audit: **stop and report**. Do not improvise around it.
 
 In particular: if you find yourself constructing a clever workaround during the port — packing data into varargs to simulate a missing field, threading a buffer address through an RTA because the binding mechanism doesn't fit, hand-rolling a synchronization primitive — **stop**. Whatever you are about to write is almost certainly wrong. Surface the problem; do not paper over it.
+
+**Why this migration matters.** Metal 2.0 is a substantial overhaul of the host API for programming Tenstorrent hardware. The recipe assumes you hold this motivation in mind — it shapes the judgment calls the recipe itself can't fully specify, and it's why the work is worth doing.
+
+The legacy host API hurt the project for years in concrete, structural ways. Positional `uint32_t` kernel arguments hide the meaning of every slot; the compiler can't catch a mismatch. Magic CB indices propagate through CTA lists with no compiler-checked connection back to the CB they reference. Raw pointers flow through the host interface straight into device kernels with no safeties, surfacing as hard-to-debug device hangs when they go wrong. And because the legacy API doesn't tell the framework which kernel uses which CB or in what role, the framework can't catch your mistakes at spec-construction time — they surface at runtime as hangs or wrong numerics. Every legacy idiom you'll replace in this port — magic CB indices, positional CTAs, buffer-address RTAs, host-side `TensorAccessorArgs` plumbing — is an instance of one of those problems. **Metal 2.0's typed binding model is the fix:** bindings the compiler checks, a host that knows the device topology (so the spec validator catches mistakes before launch), and a binding mechanism that carries the meaning the legacy `uint32_t` channel couldn't.
+
+**Your port is one link in a chain.** Metal 2.0 is pulling adjacent migrations through with it under a Gen2-customer-driven schedule: Device 2.0 and TensorAccessor adoption are bundled prereqs the audit gates on, and TTNN's ProgramDescriptor migration — a parallel TTNN-side effort, coupled to Metal 2.0 by design — is racing to finish under the same pressure. The API you're learning here is the same API that will target Gen2 (Quasar) hardware; there aren't two APIs to learn. Landing your port unblocks the next op, which unblocks its consumers, which unblock framework features the runtime team has planned. The cumulative effect, once the push lands, is a meaningfully cleaner way to specify what runs on a Tenstorrent accelerator.
+
+**The "why" as a judgment heuristic.** When the recipe doesn't quite fit your op and you're tempted to improvise: the test is whether what you're about to do preserves typed bindings, the host-aware binding model, and the spec/run-params separation that the verification step audits. If yes, you're probably on a supported path. If no — if you're packing data into varargs, threading a buffer address through an RTA, or hand-rolling a synchronization primitive — you're recreating the legacy problems Metal 2.0 was built to fix. Stop and ask.
 
 **Posture for the bulk-port effort.** This is one of many ports happening in parallel against actively-evolving docs. Read the following before you start; they shape how you should approach the work.
 
