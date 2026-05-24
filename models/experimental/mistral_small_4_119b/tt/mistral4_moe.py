@@ -782,26 +782,35 @@ class TtMistral4MoELayer(LightweightModule):
             )
             if x_exp.layout != ttnn.TILE_LAYOUT:
                 x_exp = ttnn.to_layout(x_exp, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+            # Create L1 sharded memory config for gate_up matmul output
+            # Shape: [experts_per_device, 1, seq_len, 2*I]
+            core_grid = self.mesh_device.compute_with_storage_grid_size()
+            gate_up_shape = (self.experts_per_device, 1, seq_len, 2 * I)
+            l1_sharded_mem = ttnn.create_sharded_memory_config(
+                gate_up_shape, core_grid, ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.ROW_MAJOR
+            )
+
             gate_up_all = ttnn.matmul(
                 x_exp,
                 self.expert_gate_up,
                 compute_kernel_config=self.expert_compute_kernel_config,
                 dtype=ttnn.bfloat8_b,
-                memory_config=_mem,
+                memory_config=l1_sharded_mem,  # L1 SHARDED: distribute across device cores on L1
             )
             ttnn.deallocate(x_exp)
-            # SliceDeviceOperation optimized: use L1_INTERLEAVED for intermediate tensors
+            # SliceDeviceOperation optimized: use L1_SHARDED for better bandwidth
             gate_all = ttnn.slice(
                 gate_up_all,
                 [0, 0, 0, 0],
                 [self.experts_per_device, 1, seq_len, I],
-                memory_config=ttnn.L1_INTERLEAVED_MEMORY_CONFIG,
+                memory_config=_mem,
             )
             up_all = ttnn.slice(
                 gate_up_all,
                 [0, 0, 0, I],
                 [self.experts_per_device, 1, seq_len, 2 * I],
-                memory_config=ttnn.L1_INTERLEAVED_MEMORY_CONFIG,
+                memory_config=_mem,
             )
             ttnn.deallocate(gate_up_all)
             gate_silu = ttnn.silu(gate_all, memory_config=_mem)
