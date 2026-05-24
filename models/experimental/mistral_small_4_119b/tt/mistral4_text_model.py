@@ -365,6 +365,43 @@ class TtMistral4TextModel:
         ttnn.deallocate(x)
         return logits_tt
 
+    def prefill_device_last_token_logits(self, input_ids_tt: ttnn.Tensor, seq_len: int) -> ttnn.Tensor:
+        """
+        Device-only prefill that returns LM-head logits for the final position only.
+
+        This still runs the full decoder stack and fills KV caches for all
+        prefill positions, but slices ``x[:, :, seq_len - 1:seq_len, :]`` before
+        the final norm + LM head. Generation only needs this last-position
+        distribution, so this avoids the full ``seq_len × vocab`` LM-head matmul.
+        """
+        cos_tt, sin_tt = self._rope_slice(0, seq_len)
+
+        x = ttnn.embedding(
+            input_ids_tt,
+            self.embed_weight,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        x = ttnn.reshape(x, [1, 1, seq_len, HIDDEN_SIZE])
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+
+        for layer, kv_cache in zip(self.decoder_layers, self.kv_caches):
+            x = layer.forward_with_cache(x, cos_tt, sin_tt, kv_cache)
+
+        x_last = ttnn.slice(x, [0, 0, seq_len - 1, 0], [1, 1, seq_len, HIDDEN_SIZE])
+        ttnn.deallocate(x)
+
+        x_last = _rms_norm(x_last, self.final_norm_w, self.compute_kernel_config)
+        logits_tt = ttnn.linear(
+            x_last,
+            self.lm_head_weight,
+            compute_kernel_config=self.lm_head_compute_kernel_config,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(x_last)
+        return logits_tt
+
     def _decode_upload_step_state(self, input_id: torch.Tensor, current_pos: int) -> None:
         """Update pre-allocated input_id and cur_pos device tensors in-place.
 
