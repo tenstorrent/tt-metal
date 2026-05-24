@@ -120,6 +120,14 @@ from tests.ttnn.utils_for_testing import comp_pcc
     ],
     indirect=["mesh_device", "device_params"],
 )
+@pytest.mark.parametrize(
+    "num_iterations",
+    [
+        pytest.param(1, id="iter1"),
+        pytest.param(3, id="iter3"),
+        pytest.param(5, id="iter5"),
+    ],
+)
 def test_ttnn_moe(
     mesh_device,
     device_params,
@@ -133,6 +141,7 @@ def test_ttnn_moe(
     num_links,
     topology,
     gate_fallback_mode,
+    num_iterations,
 ):
     """
     Test TtMoe PCC against TorchMoe reference.
@@ -272,14 +281,17 @@ def test_ttnn_moe(
 
     # currently cannot use ttnn.empty on x; because indices become ND beyond max dispatch token limit.
     x = torch.randn(dispatch_group_size, seq_len_per_chip, emb_dim, dtype=torch.bfloat16)
-    tt_x = ttnn.from_torch(
-        x,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(0, -1)),
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        dtype=ttnn.bfloat16,
-    )
     profiler.end("input_creation")
+
+    # TtMoe.forward deallocates its input (tt_moe.py:522), so tt_x must be re-uploaded each iter.
+    def upload_tt_x():
+        return ttnn.from_torch(
+            x,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(0, -1)),
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+        )
 
     # ========================================
     # Step 3: Run TorchMoe reference with intermediates
@@ -344,10 +356,23 @@ def test_ttnn_moe(
     profiler.end("tt_moe_creation")
 
     profiler.start("tt_forward")
-    logger.debug("Running TtMoe forward pass...")
+    logger.debug(f"Running TtMoe forward pass ({num_iterations} iterations)...")
 
-    tt_output, tt_intermediates = tt_moe(tt_x, return_intermediates=True)
-    ttnn.synchronize_device(mesh_device)
+    tt_output = None
+    tt_intermediates = None
+    for iter_idx in range(num_iterations):
+        tt_x = upload_tt_x()
+        is_last = iter_idx == num_iterations - 1
+        capture_intermediates = is_last and run_pcc_check
+        iter_label = f"tt_forward_iter{iter_idx}"
+        signpost(header=f"{iter_label}_START")
+        profiler.start(iter_label)
+        tt_output, tt_intermediates = tt_moe(tt_x, return_intermediates=capture_intermediates)
+        ttnn.synchronize_device(mesh_device)
+        profiler.end(iter_label)
+        signpost(header=f"{iter_label}_END")
+        logger.debug(f"  iter {iter_idx}: {profiler.get(iter_label) * 1000:.2f} ms")
+
     profiler.end("tt_forward")
 
     # Early return when run_pcc_check=False (profiling mode)
