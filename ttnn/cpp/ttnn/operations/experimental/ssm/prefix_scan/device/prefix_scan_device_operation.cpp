@@ -5,6 +5,7 @@
 #include "prefix_scan_device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
+#include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
