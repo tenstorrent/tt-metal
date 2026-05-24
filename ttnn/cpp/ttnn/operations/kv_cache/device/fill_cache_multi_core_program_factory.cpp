@@ -145,10 +145,10 @@ tt::tt_metal::ProgramDescriptor FillCacheMultiCoreProgramFactory::create_descrip
             num_blocks_per_core = num_blocks_per_core_group_2;
         }
 
-        reader_desc.runtime_args.emplace_back(
+        reader_desc.emplace_runtime_args(
             core,
-            std::vector<uint32_t>{
-                src_buffer->address(),
+            {
+                src_buffer,
                 num_blocks_per_core * Wt,
                 num_blocks_written * Wt,
             });
@@ -157,10 +157,10 @@ tt::tt_metal::ProgramDescriptor FillCacheMultiCoreProgramFactory::create_descrip
                                         + (num_blocks_written / input_Ht * cache_HtWt)  // cache head offset
                                         + ((num_blocks_written % input_Ht) * Wt);       // seq_len offset
 
-        writer_desc.runtime_args.emplace_back(
+        writer_desc.emplace_runtime_args(
             core,
-            std::vector<uint32_t>{
-                dst_buffer->address(),
+            {
+                dst_buffer,
                 num_blocks_per_core * Wt,
                 cache_start_id,
             });

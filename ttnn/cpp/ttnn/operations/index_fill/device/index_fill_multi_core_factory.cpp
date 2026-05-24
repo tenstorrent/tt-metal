@@ -149,21 +149,21 @@ tt::tt_metal::ProgramDescriptor IndexFillOperation::MultiCore::create_descriptor
             TT_FATAL(false, "Core not in specified core ranges");
         }
 
-        reader_desc.runtime_args.emplace_back(
+        reader_desc.emplace_runtime_args(
             core,
-            std::vector<uint32_t>{
-                input.buffer()->address(),         // input tensor address
-                index.buffer()->address(),         // index tensor address
+            {
+                input.buffer(),                    // input tensor address
+                index.buffer(),                    // index tensor address
                 start_row_id,                      // start row
                 start_row_id + num_rows_per_core,  // end row
                 num_rows_in_dim,                   // num rows in dim
                 input_shape[dim]                   // dim size
             });
 
-        writer_desc.runtime_args.emplace_back(
+        writer_desc.emplace_runtime_args(
             core,
-            std::vector<uint32_t>{
-                output.buffer()->address(),        // output tensor address
+            {
+                output.buffer(),                   // output tensor address
                 start_row_id,                      // start row
                 start_row_id + num_rows_per_core,  // end row
                 num_rows_in_dim,                   // num rows in dim
