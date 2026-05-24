@@ -231,7 +231,7 @@ TEST_P(MeshDeviceNanoExabox2x4SendRecvFixture, MultiSendRecvAsync) {
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     auto rank = *(distributed_context->rank());
     for (uint32_t i = 0; i < 10; i++) {
-        for (uint32_t r = 0; r < *(distributed_context->size()); r++) {
+        for (int r = 0; r < *(distributed_context->size()); r++) {
             if (r == *receiver_rank) {
                 continue;
             }
