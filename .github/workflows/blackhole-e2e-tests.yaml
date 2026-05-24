@@ -32,6 +32,16 @@ on:
         options:
           - all
           - deepseek
+      test-selection:
+        description: 'Select e2e tests to run: all tests, all SDPA tests, or one test id'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - sdpa
+          - bh-sdpa-nightly-integration
+          - bh-ring-sdpa-perf
       build-type:
         required: false
         type: choice
@@ -60,6 +70,11 @@ on:
         type: string
         default: 'all'
         description: "Select model to test (filters rows by model-name; untagged rows always run)"
+      test-selection:
+        required: false
+        type: string
+        default: 'all'
+        description: "Select all tests, the sdpa tag group, or one test id from tests/pipeline_reorg/blackhole_e2e_tests.yaml"
       platform:
         required: false
         type: string
@@ -132,3 +147,4 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ matrix.test-group.sku }}
       model: ${{ inputs.model || 'all' }}
+      test-selection: ${{ inputs.test-selection || 'all' }}
