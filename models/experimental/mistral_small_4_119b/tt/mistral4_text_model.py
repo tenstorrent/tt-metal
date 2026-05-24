@@ -233,8 +233,8 @@ class TtMistral4TextModel:
             x,
             self.lm_head_weight,
             compute_kernel_config=self.lm_head_compute_kernel_config,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat8_b,  # Precision reduction: BF16 → BF8 (reduces bandwidth)
+            memory_config=ttnn.L1_MEMORY_CONFIG,  # L1: avoid DRAM bottleneck + no interleave overhead
         )
         ttnn.deallocate(x)
         # lm_head_weight is column-sharded across devices (dim=1 of [hidden, vocab]).
@@ -359,8 +359,8 @@ class TtMistral4TextModel:
             x,
             self.lm_head_weight,
             compute_kernel_config=self.lm_head_compute_kernel_config,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat8_b,  # Precision reduction: BF16 → BF8 (reduces bandwidth)
+            memory_config=ttnn.L1_MEMORY_CONFIG,  # L1: avoid DRAM bottleneck + no interleave overhead
         )
         ttnn.deallocate(x)
         return logits_tt
