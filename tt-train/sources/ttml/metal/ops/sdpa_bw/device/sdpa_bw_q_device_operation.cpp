@@ -137,7 +137,7 @@ void SDPABackwardQDeviceOperation::validate_on_program_cache_miss(
 }
 
 SDPABackwardQDeviceOperation::spec_return_value_t SDPABackwardQDeviceOperation::compute_output_specs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     // grad_query spec
     ttnn::TensorSpec grad_query_spec =
         tensor_args.preallocated_grad_query.has_value()

@@ -650,7 +650,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
 
 void SDPABackwardQProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const q::operation_attributes_t& args,
+    const q::operation_attributes_t& /*args*/,
     const q::tensor_args_t& tensor_args,
     q::tensor_return_value_t& tensor_return_value) {
     // This updates buffer addresses and other runtime parameters

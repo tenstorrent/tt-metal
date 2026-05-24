@@ -630,7 +630,7 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
 
 void SDPABackwardKVProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const kv::operation_attributes_t& operation_attributes,
+    const kv::operation_attributes_t& /*operation_attributes*/,
     const kv::tensor_args_t& tensor_args,
     kv::tensor_return_value_t& tensor_return_value) {
     auto& shared_vars = cached_program.shared_variables;

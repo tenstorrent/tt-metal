@@ -145,7 +145,7 @@ void SDPABackwardKVDeviceOperation::validate_on_program_cache_miss(
 }
 
 SDPABackwardKVDeviceOperation::spec_return_value_t SDPABackwardKVDeviceOperation::compute_output_specs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     // Handle grad_key spec
     ttnn::TensorSpec grad_key_spec =
         tensor_args.preallocated_grad_key.has_value()
