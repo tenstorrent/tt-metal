@@ -20,6 +20,7 @@
 #include <cstdlib>
 #include <random>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
@@ -121,7 +122,7 @@ std::vector<uint32_t> pack_under_env(
     PackFn&& pack_fn, const char* threads_env, const char* simd_env, tt::stl::Span<const T> input) {
     ScopedEnv t("TT_BFP_HOST_TILIZER_THREADS", threads_env);
     ScopedEnv s("TT_BFP_HOST_TILIZER_DISABLE_SIMD", simd_env);
-    return pack_fn(input);
+    return std::forward<PackFn>(pack_fn)(input);
 }
 
 // Compare two packed vectors element by element, reporting the first

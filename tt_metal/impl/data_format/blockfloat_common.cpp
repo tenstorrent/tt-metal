@@ -704,9 +704,7 @@ inline void pack_one_tile(
                             }
                             exp = static_cast<uint32_t>(se);
                         }
-                        if (exp > max_exp) {
-                            max_exp = exp;
-                        }
+                        max_exp = std::max(exp, max_exp);
                     }
                     const uint8_t shared_exp = static_cast<uint8_t>(max_exp);
                     exp_buf[exp_idx++] = shared_exp;
