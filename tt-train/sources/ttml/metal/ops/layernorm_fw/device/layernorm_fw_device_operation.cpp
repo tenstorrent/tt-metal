@@ -12,7 +12,7 @@
 namespace ttml::metal::ops::layernorm_fw::device {
 
 void LayerNormForwardDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
         TT_FATAL(
             tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,

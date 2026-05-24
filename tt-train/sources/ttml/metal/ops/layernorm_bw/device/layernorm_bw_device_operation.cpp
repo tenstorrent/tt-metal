@@ -12,7 +12,7 @@
 namespace ttml::metal::ops::layernorm_bw::device {
 
 void LayerNormBackwardDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
         TT_FATAL(
             tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
@@ -74,7 +74,7 @@ void LayerNormBackwardDeviceOperation::validate_on_program_cache_miss(
 }
 
 spec_return_value_t LayerNormBackwardDeviceOperation::compute_output_specs(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     spec_return_value_t output_specs;
     output_specs.reserve(3U);
 
@@ -143,7 +143,7 @@ tensor_return_value_t LayerNormBackwardDeviceOperation::create_output_tensors(
 }
 
 ttsl::hash::hash_t LayerNormBackwardDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     const auto& input_logical_shape = input_tensor.logical_shape();
     tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<LayerNormBackwardDeviceOperation>(
