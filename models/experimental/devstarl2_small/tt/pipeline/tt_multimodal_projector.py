@@ -32,7 +32,6 @@ class TTMistral3MultiModalProjector(LightweightModule):
         self.state_dict_prefix = state_dict_prefix
         self.dtype = dtype
 
-        norm_dim = state_dict[f"{state_dict_prefix}norm.weight"].numel()
         self.norm_weight, _ = pad_by_zero(
             state_dict[f"{state_dict_prefix}norm.weight"],
             device=mesh_device,
@@ -66,19 +65,6 @@ class TTMistral3MultiModalProjector(LightweightModule):
         self.linear_2_weight = as_linear_weight(
             "linear_2", ttnn.ShardTensorToMesh(mesh_device, dim=-1), cache_suffix=".sharded_dim_-1"
         )
-        # Small grids: fast mcast_in0 path; large images: auto matmul (see tt_patchmerger).
-        self._linear_2_small_m_per_core_tiles = 8
-        self.linear_2_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(11, 10),
-            in0_block_w=32,
-            out_subblock_h=8,
-            out_subblock_w=1,
-            per_core_M=self._linear_2_small_m_per_core_tiles,
-            per_core_N=1,
-            fuse_batch=False,
-            fused_activation=None,
-            mcast_in0=True,
-        )
 
     def forward(self, image_features: ttnn.Tensor, image_sizes) -> ttnn.Tensor:
         seq_tokens = int(image_features.shape[0])
@@ -96,15 +82,12 @@ class TTMistral3MultiModalProjector(LightweightModule):
             x = ttnn.to_memory_config(x, act_mem_cfg)
         x = ttnn.gelu(x, memory_config=act_mem_cfg)
         x = ttnn.typecast(x, ttnn.bfloat8_b, memory_config=act_mem_cfg)
-        m_tiles = (m_rows + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
-        use_small_config = m_tiles <= self._linear_2_small_m_per_core_tiles
-        linear_kwargs = dict(
+        x = ttnn.linear(
+            x,
+            self.linear_2_weight,
             dtype=ttnn.bfloat8_b,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        if use_small_config:
-            linear_kwargs["program_config"] = self.linear_2_program_config
-        x = ttnn.linear(x, self.linear_2_weight, **linear_kwargs)
         return x
 
 
