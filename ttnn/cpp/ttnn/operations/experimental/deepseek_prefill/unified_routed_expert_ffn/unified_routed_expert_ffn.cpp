@@ -24,25 +24,38 @@ ttnn::Tensor unified_routed_expert_ffn(
     uint32_t local_expert_id,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& output) {
-    // Block-sharded path: delegate to production's routed_expert_ffn which
-    // does the 4-op chain (gate matmul -> block-sharded L1, up matmul ->
-    // block-sharded L1, silu * up -> L1 interleaved, down matmul) plus
-    // chunked-M handling for M_tiles > 64. Matches production perf (529 μs
-    // for 2k summed across the 4 inner ops on DS-V3 dims).
-    //
-    // The counts / global_expert_idx_table / local_expert_id args are unused
-    // on this path — they were the device-side count-skipping interface for
-    // the custom Program path (now defunct). All M tokens are processed.
-    (void)counts;
-    (void)global_expert_idx_table;
-    (void)local_expert_id;
-    return ttnn::routed_expert_ffn(
+    // Single-op fused routed-expert FFN. One device Program runs gate matmul,
+    // up matmul, silu, multiply, down matmul as four phases inside the same
+    // kernel. The kernel reads counts[global_expert_idx_table[local_expert_id]]
+    // device-side at entry and bounds its chunk loop to
+    // ceil(count / chunk_M_tiles) — chunks past the actual token count are
+    // skipped entirely (no matmul, no mcast). All MANDATORY (per user):
+    // device-side count sparsity, no host-side count read, no op2op gap from
+    // per-chunk dispatch.
+    constexpr uint32_t kGridY = 8;
+    constexpr uint32_t kMinChunkMTiles = 16;  // per_core_M >= 2
+    constexpr uint32_t kMaxChunkMTiles = 64;  // per_core_M <= 8 (L1 cap)
+    const uint32_t M_tiles_full = x.padded_shape()[-2] / 32;
+    uint32_t chunk_M_tiles = kMinChunkMTiles;
+    for (uint32_t cand = kMaxChunkMTiles; cand >= kMinChunkMTiles; cand -= kGridY) {
+        if (M_tiles_full % cand == 0) {
+            chunk_M_tiles = cand;
+            break;
+        }
+    }
+
+    return ttnn::prim::unified_routed_expert_ffn(
         x,
         gate_proj,
         up_proj,
         down_proj,
-        compute_kernel_config,
-        output.has_value() ? std::optional<ttnn::Tensor>(*output) : std::nullopt);
+        counts,
+        global_expert_idx_table,
+        local_expert_id,
+        chunk_M_tiles,
+        compute_kernel_config.has_value() ? std::optional<ttnn::DeviceComputeKernelConfig>(*compute_kernel_config)
+                                          : std::nullopt,
+        output);
 }
 
 ttnn::Tensor unified_routed_expert_moe(
