@@ -50,8 +50,8 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
             gamma = torch.rand(test_shape[3]) * 2 - 1
             beta = torch.rand(test_shape[3]) * 2.0 - 1.1
 
-        gamma_t = pad_by_zero(gamma, device, in0_mem_config, gamma_dtype)[0]
-        beta_t = pad_by_zero(beta, device, in0_mem_config, gamma_dtype)[0]
+        gamma_t = torch2tt_tensor(gamma, device, tt_memory_config=in0_mem_config, tt_dtype=gamma_dtype)
+        beta_t = torch2tt_tensor(beta, device, tt_memory_config=in0_mem_config, tt_dtype=gamma_dtype)
 
         compute_kernel_config = ttnn.init_device_compute_kernel_config(
             device.arch(),

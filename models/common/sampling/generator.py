@@ -273,6 +273,7 @@ class SamplingGenerator:
         logits: ttnn.Tensor,
         *,
         tt_out_tok: Optional[ttnn.Tensor] = None,
+        skip_precompile: bool = False,
     ) -> ttnn.Tensor:
         """
         Capture a trace of the sampling pipeline for the given configuration.
@@ -283,14 +284,15 @@ class SamplingGenerator:
 
         key, slot = self._trace_slot(penalties_on, log_probs_on, force_argmax)
 
-        logger.debug(
-            f"Pre-compiling sampling path before trace capture (penalties={penalties_on},log_probs_on={log_probs_on},force_argmax={force_argmax})"
-        )
-        self._run_sampling(
-            logits,
-            penalties_on=penalties_on,
-            tt_out_tok=tt_out_tok,
-        )
+        if not skip_precompile:
+            logger.debug(
+                f"Pre-compiling sampling path before trace capture (penalties={penalties_on},log_probs_on={log_probs_on},force_argmax={force_argmax})"
+            )
+            self._run_sampling(
+                logits,
+                penalties_on=penalties_on,
+                tt_out_tok=tt_out_tok,
+            )
 
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
         sampled = self._run_sampling(
@@ -332,6 +334,7 @@ class SamplingGenerator:
         *,
         enable_trace: bool = True,
         tt_out_tok: Optional[ttnn.Tensor] = None,
+        skip_precompile: bool = False,
     ) -> ttnn.Tensor:
         """
         Convenience wrapper that either runs the sampling module directly or
@@ -355,6 +358,7 @@ class SamplingGenerator:
                 return self.capture_trace(
                     logits,
                     tt_out_tok=tt_out_tok,
+                    skip_precompile=skip_precompile,
                 )
 
             self._validate_trace_inputs(slot, logits, tt_out_tok)
