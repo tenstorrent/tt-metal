@@ -276,27 +276,145 @@ So 2c's mechanism is more subtle than "stale MATH_Offset at chunk entry." It's m
 
 ---
 
+## Attempt 9 — 2c-narrow MATH-only: chunk-entry MATH side only
+
+**What.** Same as Attempt 7 but PACK-side `TT_SETC16` removed; only MATH-side fires at chunk entry.
+
+**Motivation.** Isolate which CFG pipe carries the 2c effect — TRISC1 (MATH) only?
+
+**Result.**
+
+| Case | iter=1 PCC | iter=2 PCC |
+|---|---|---|
+| Baseline | 0.9931898601668998 | 0.9934483676630709 |
+| 2c-narrow MATH-only | **0.9931898601668998 (baseline)** | **0.9934483676630709 (baseline)** |
+
+**Conclusion.** Null. MATH side alone is insufficient.
+
+**State.** Reverted.
+
+---
+
+## Attempt 10 — 2c-narrow PACK-only: chunk-entry PACK side only
+
+**What.** Same as Attempt 7 but MATH-side `TT_SETC16` removed; only PACK-side fires at chunk entry.
+
+**Motivation.** Isolate which CFG pipe carries the 2c effect — TRISC2 (PACK) only?
+
+**Result.**
+
+| Case | iter=1 PCC | iter=2 PCC |
+|---|---|---|
+| Baseline | 0.9931898601668998 | 0.9934483676630709 |
+| 2c-narrow PACK-only | **0.9931898601668998 (baseline)** | **0.9934483676630709 (baseline)** |
+
+**Conclusion.** Also null. Combined with MATH-only being null, **2c requires BOTH MATH and PACK writes together** — it's a cross-thread CFG-pipe interaction, not a single-thread effect.
+
+**State.** Reverted.
+
+---
+
+## Attempt 11 — 2c-move pre-MM2: MATH+PACK pair just before `sdpa_custom_mm_reuse_dest_srcb_block`
+
+**What.** Keep both MATH and PACK `TT_SETC16` writes, but move them from chunk entry (top of `compute_sdpa_chunk`) to right before MM2 (line 313 in `sdpa.h`).
+
+**Motivation.** MM2 is the DEST-via-SRCB op — the most direct suspect for bank-asymmetric reads. If the pair only matters because of MM2, moving it right next to MM2 should preserve the 20× collapse.
+
+**Result.**
+
+| Case | iter=1 PCC | iter=2 PCC |
+|---|---|---|
+| Baseline | 0.9931898601668998 | 0.9934483676630709 |
+| 2c-move pre-MM2 | **0.9931898601668998 (baseline)** | **0.9934483676630709 (baseline)** |
+
+**Conclusion.** Null. Position before MM2 (mid-chunk, after MM1 + max-reduce + sub + exp) gives no effect. So MM2 itself is not what benefits from the cross-thread CFG writes.
+
+**State.** Reverted.
+
+---
+
+## Attempt 12 — 2c-move chunk-end: MATH+PACK pair at end of `compute_sdpa_chunk`
+
+**What.** Move the pair from chunk entry to chunk exit (after `cb_pop_front(cb_k, ...)`, before the closing brace of `compute_sdpa_chunk`).
+
+**Motivation.** Functionally adjacent to "chunk entry of next chunk" — only difference is the very first chunk (no preceding chunk-end) and the very last chunk (chunk-end fires but no following chunk). Tests whether per-chunk-frequency matters or specifically chunk-entry-of-chunk-0.
+
+**Result.**
+
+| Case | iter=1 PCC | iter=2 PCC |
+|---|---|---|
+| Baseline | 0.9931898601668998 | 0.9934483676630709 |
+| 2c-move chunk-end | **0.9931898601668998 (baseline)** | **0.9934483676630709 (baseline)** |
+
+**Conclusion.** Null. So the difference between "chunk-entry-of-chunk-i" and "chunk-end-of-chunk-(i-1)" matters — the pair must fire BEFORE chunk 0's first work, not after the last chunk's last work. Either the placement before chunk 0 is unique, or there's an inter-chunk subtlety that only the literal "chunk-entry" position satisfies.
+
+**State.** Reverted.
+
+---
+
+## Attempt 13 — 2c-move flash_mla-entry: MATH+PACK pair ONCE before chunk loop
+
+**What.** Single MATH+PACK reset placed in `flash_mla.hpp` at line ~746, right before `tile_regs_acquire` and the chunk loop. Fires once per flash_mla call (not per chunk).
+
+**Motivation.** If "before chunk 0" is the magic, then doing it ONCE in that position should work. If null, then per-chunk frequency is essential.
+
+**Result.**
+
+| Case | iter=1 PCC | iter=2 PCC |
+|---|---|---|
+| Baseline | 0.9931898601668998 | 0.9934483676630709 |
+| 2c-move flash_mla-entry | **0.9931898601668998 (baseline)** | **0.9934483676630709 (baseline)** |
+
+**Conclusion.** Null. So neither "before chunk 0 only" nor "before each chunk anywhere in compute_sdpa_chunk" is sufficient on its own. The unique-working recipe is:
+- **Both** MATH and PACK `TT_SETC16` writes,
+- Fired **every chunk**,
+- Placed **at the very top of `compute_sdpa_chunk`** (immediately before `_init_sdpa_reduce_max_row_8x32_replay_buffers_`),
+- **Not** also repeated at the tail.
+
+Any deviation (MATH-only, PACK-only, mid-chunk, chunk-end, once-per-flash_mla, also-at-tail) gives baseline.
+
+**State.** Reverted.
+
+---
+
 ## Where to go next (handoff)
 
-The Method 1 bisect localized the bug to `flash_mla.hpp:747-791` (chunk loop + tail + final pack). Four candidate-driven patches were tested:
+The Method 1 bisect localized the bug to `flash_mla.hpp:747-791`. Patch sweep:
 
-- Patch #4 (timing fence on ZEROACC→MATH_PACK SEMPOST): null.
-- Patch 2a (init PACK_SEC1..3 GPRs): null.
-- Patch 2c (explicit MATH/PACK MATH_Offset reset per chunk): **non-null — collapses the alternation gap ~20×, residual ~1e-5**.
-- Patch 2c + 2c-tail (same reset added before the post-chunk tail): **canceled 2c's effect, reverted to baseline**.
+| Patch | Result |
+|---|---|
+| #4 (STALLWAIT before MATH_PACK SEMPOST) | null |
+| 2a (init PACK_SEC1..3 GPRs) | null |
+| **2c (per-chunk MATH+PACK MATH_Offset reset at chunk entry)** | **20× alternation collapse** |
+| 2c-tail (same reset additionally before flash_mla tail) | canceled 2c effect (baseline) |
+| 2c-narrow MATH-only | null |
+| 2c-narrow PACK-only | null |
+| 2c-move pre-MM2 | null |
+| 2c-move chunk-end | null |
+| 2c-move flash_mla-entry (once before chunk loop) | null |
 
-The cancellation under 2c+2c-tail is the most surprising result. It rules out "MATH_Offset cleanliness" as the mechanism for 2c — if a known-good state at chunk entry is the fix, applying the same state at chunk exit can't possibly hurt. So 2c is correcting something via a *side effect* of the writes (CFG-pipe timing? a write-coalescing pattern that only works when present once per chunk?), not via the values themselves.
+The narrow position-sensitivity is striking: changing *any* of (MATH-only / PACK-only / location-within-chunk / once-per-flash_mla / also-at-tail) breaks the effect. The unique working configuration is *cross-thread, per-chunk, at chunk entry, not repeated at tail*.
 
-Recommended next moves in priority order:
+This is suggestive of one of two interpretations:
 
-1. **2c-narrow:** isolate MATH-only vs PACK-only halves of 2c. If only one side carries the effect, that pins the relevant CFG-pipe. ~25 min total.
+**A — Real CFG-pipe ordering effect.** The pair of writes (MATH then PACK) at chunk entry creates a specific Tensix CFG-pipe state that propagates into the chunk's compute, and breaking that pattern (single thread / different position / extra writes / different frequency) disturbs the pipe in a way that re-exposes the bug.
 
-2. **Vary 2c position.** Move the same `MATH+PACK SETC16` pair to *one* fixed location within `compute_sdpa_chunk` (top, just before MM1, just before reduce_max, etc.) and see which placement preserves the ~20× collapse. Locates the specific op whose CFG-pipe interaction matters.
+**B — Code-generation side effect.** The patch causes the JIT compiler to lay out a specific instruction sequence (or change a register allocation / scheduling choice) that incidentally avoids the bug pattern. Other placements produce different code-gen that doesn't have the side effect. In this case the 20× collapse is not a fix for the underlying bug — it's a different binary that happens to mask the bug.
 
-3. **Direct DEST-bank readback microbench.** Hand-write a minimal kernel: full FPU + SFPU pass into bank 0, snapshot DEST→L1, repeat into bank 1 (force via `_llk_pack_dest_init_(1)`), snapshot DEST→L1. Diff the L1 dumps. Eliminates / confirms bank-half-specific HW silicon behaviour.
+To discriminate A vs B:
 
-4. **Single-op skipping inside flash_mla.** Conditionally skip the `compute_sdpa_recip` path / the final `pack_block_contiguous(mm2)` loop / each SFPU phase in iter-0 only, observe which removal makes iter-0 PCC swap.
+1. **Drop-in no-op test.** Add a TTI_NOP (or empty inline asm) at the chunk-entry position instead of the real `TT_SETC16` pair. If iter PCC still shifts measurably, it's compilation-side-effect (B). If unchanged from baseline, the real `TT_SETC16` writes are doing something semantic (A).
 
-5. **Profiler / DEST address trace.** If tools allow it, capture the actual physical DEST address every PACK / MOVD2B / SFPLOAD references throughout one iter-0 and one iter-1, diff them. Any address that's iter-1-only different beyond the documented bank offset is a candidate.
+2. **Inspect the JIT'd ELF.** Diff `trisc1.elf` / `trisc2.elf` between baseline and Attempt 7 to see whether the surrounding instruction stream changed beyond the inserted `SETC16` instructions. If only the SETC16s are different, interpretation A is more likely.
+
+3. **Move 2c by ONE instruction.** Try placing the pair AFTER `_init_sdpa_reduce_max_row_8x32_replay_buffers_` instead of before. If still 20× collapse, the "before-replay-buf" placement isn't critical and the effect is more general. If null, the EXACT placement before the replay-buf init is somehow critical (e.g., a CFG-pipe interaction with `lltt::record`).
+
+Other directions still on the table from earlier:
+
+4. **Direct DEST-bank readback microbench** — eliminates / confirms HW silicon asymmetry.
+5. **Single-op skipping inside flash_mla** — bisects further than Method 1 could.
+6. **Profiler / DEST address trace** — captures empirical addresses per iter, diff.
+
+The current best lead (Attempt 7) reduces the bug 20× but is fragile (any variation breaks it) and we don't understand the mechanism. Worth one more cheap experiment (drop-in NOP test) to distinguish A from B before committing more time.
 
 ---
