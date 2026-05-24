@@ -39,7 +39,7 @@ void initialize_weights_tensor_parallel(PipelineParallelLlama& model) {
 
 void PipelineParallelConfig::verify() const {
     auto total_blocks = std::accumulate(
-        blocks_per_rank.begin(), blocks_per_rank.end(), 0, [](int sum, const auto& pair) { return sum + pair.second; });
+        blocks_per_rank.begin(), blocks_per_rank.end(), 0U, [](uint32_t sum, const auto& pair) { return sum + pair.second; });
     if (num_blocks != total_blocks) {
         throw std::runtime_error("Number of blocks must match number of blocks per rank.");
     }
