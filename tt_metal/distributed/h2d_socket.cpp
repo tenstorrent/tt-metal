@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
+#include <tt-metalium/internal/service/service_core_manager.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "tt_metal/distributed/named_shm.hpp"
 #include "tt_metal/distributed/hd_socket_connector_state.hpp"
@@ -118,10 +119,62 @@ void H2DSocket::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_devic
     MeshBufferConfig config_mesh_buffer_specs = ReplicatedBufferConfig{
         .size = config_buffer_size,
     };
-    config_buffer_ = MeshBuffer::create(config_mesh_buffer_specs, config_buffer_specs, mesh_device.get());
+
+    // If `recv_core_` lives on a claimed service core, the worker-grid BankManager
+    // can't reach its L1. Detect that here and allocate from the service-core's
+    // per-core allocator instead; pass the resulting address through to
+    // MeshBuffer::create as an explicit-address view. Cleanup in the dtor.
+    std::optional<DeviceAddr> preallocated_addr;
+    auto& svc = tt::tt_metal::internal::ServiceCoreManager::get();
+    auto* recv_device = mesh_device->get_device(recv_core_.device_coord);
+    if (svc.claimed_cores(recv_device->id()).count(recv_core_.core_coord) > 0) {
+        svc_config_l1_addr_ = svc.allocate_l1(recv_device, recv_core_.core_coord, config_buffer_size);
+        preallocated_addr = svc_config_l1_addr_;
+    }
+
+    config_buffer_ =
+        MeshBuffer::create(config_mesh_buffer_specs, config_buffer_specs, mesh_device.get(), preallocated_addr);
 }
 
 void H2DSocket::init_data_buffer(const std::shared_ptr<MeshDevice>& mesh_device, uint32_t pcie_alignment) {
+    if (h2d_mode_ != H2DMode::HOST_PUSH) {
+        // DEVICE_PULL: data FIFO lives in pinned host memory; no device-side L1
+        // allocation needed.
+        write_ptr_ = 0;
+        return;
+    }
+
+    // Service-core path: if recv_core is a claimed service core, allocate from
+    // its per-core service allocator. Mirror the BankManager path's alignment
+    // trick — request `fifo_size_ + pcie_alignment` bytes (headroom) and let
+    // `aligned_data_buf_start_` be the aligned-up offset inside the allocation.
+    // This frees the service allocator from a PCIe-alignment guarantee on the
+    // returned base address.
+    auto& svc = tt::tt_metal::internal::ServiceCoreManager::get();
+    auto* recv_device = mesh_device->get_device(recv_core_.device_coord);
+    if (svc.claimed_cores(recv_device->id()).count(recv_core_.core_coord) > 0) {
+        const uint64_t alloc_size = fifo_size_ + pcie_alignment;
+        DeviceAddr raw_addr = svc.allocate_l1(recv_device, recv_core_.core_coord, alloc_size);
+        svc_data_l1_addr_ = raw_addr;
+
+        auto shard_params = ShardSpecBuffer(
+            CoreRangeSet(recv_core_.core_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+        DeviceLocalBufferConfig data_buffer_specs = {
+            .page_size = static_cast<uint32_t>(alloc_size),
+            .buffer_type = buffer_type_,
+            .sharding_args = BufferShardingArgs(shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
+            .bottom_up = std::nullopt,
+            .sub_device_id = std::nullopt,
+        };
+        MeshBufferConfig data_mesh_buffer_specs = ReplicatedBufferConfig{.size = alloc_size};
+        data_buffer_ = MeshBuffer::create(
+            data_mesh_buffer_specs, data_buffer_specs, mesh_device.get(), std::make_optional<DeviceAddr>(raw_addr));
+        aligned_data_buf_start_ = tt::align(raw_addr, pcie_alignment);
+        write_ptr_ = 0;
+        return;
+    }
+
+    // Worker-grid path (unchanged).
     auto num_data_cores = mesh_device->num_worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0});
     auto shard_grid = mesh_device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0});
 
@@ -140,10 +193,8 @@ void H2DSocket::init_data_buffer(const std::shared_ptr<MeshDevice>& mesh_device,
     MeshBufferConfig data_mesh_buffer_specs = ReplicatedBufferConfig{
         .size = total_data_buffer_size,
     };
-    if (h2d_mode_ == H2DMode::HOST_PUSH) {
-        data_buffer_ = MeshBuffer::create(data_mesh_buffer_specs, data_buffer_specs, mesh_device.get());
-        aligned_data_buf_start_ = tt::align(data_buffer_->address(), pcie_alignment);
-    }
+    data_buffer_ = MeshBuffer::create(data_mesh_buffer_specs, data_buffer_specs, mesh_device.get());
+    aligned_data_buf_start_ = tt::align(data_buffer_->address(), pcie_alignment);
     write_ptr_ = 0;
 }
 
@@ -277,6 +328,28 @@ H2DSocket::~H2DSocket() noexcept {
         log_warning(LogMetal, "H2DSocket destructor: barrier failed with exception: {}", e.what());
     } catch (...) {
         log_warning(LogMetal, "H2DSocket destructor: barrier failed with unknown exception");
+    }
+    // Release service-core L1 allocations made in init_config_buffer / init_data_buffer.
+    // Order: drop the MeshBuffer views before deallocating the underlying L1 region so
+    // there's no Buffer outliving its memory. Wrapped in try/catch to avoid throwing
+    // from a noexcept dtor if the mesh_device has already been torn down.
+    if (svc_config_l1_addr_.has_value() || svc_data_l1_addr_.has_value()) {
+        try {
+            config_buffer_.reset();
+            data_buffer_.reset();
+            auto& svc = tt::tt_metal::internal::ServiceCoreManager::get();
+            auto* recv_device = mesh_device_->get_device(recv_core_.device_coord);
+            if (svc_config_l1_addr_.has_value()) {
+                svc.deallocate_l1(recv_device, recv_core_.core_coord, svc_config_l1_addr_.value());
+            }
+            if (svc_data_l1_addr_.has_value()) {
+                svc.deallocate_l1(recv_device, recv_core_.core_coord, svc_data_l1_addr_.value());
+            }
+        } catch (const std::exception& e) {
+            log_warning(LogMetal, "H2DSocket destructor: service-core L1 release failed: {}", e.what());
+        } catch (...) {
+            log_warning(LogMetal, "H2DSocket destructor: service-core L1 release failed with unknown exception");
+        }
     }
     // Mark a clean shutdown so the next connector sees clean_shutdown=1. A process
     // that exits without running this destructor (crash, _exit, kill) leaves the
