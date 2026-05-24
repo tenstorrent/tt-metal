@@ -20,6 +20,8 @@ require_bh_glx_compute
 export TT_METAL_HOME="$REPO"
 export BUILD_DIR="${REPO}/build_Debug"
 export CRAQ_SIM="${CRAQ_SIM:-/data/rsong/craq-sim}"
+# auto: use ttsimd when CRAQ_SIM ships ttsimd + libttsim_rpc.so; 0 forces in-process libttsim.so
+export TTSIM_USE_DAEMON="${TTSIM_USE_DAEMON:-auto}"
 unset TT_METAL_SIMULATOR_HOME TT_METAL_SIMULATOR TT_METAL_MOCK_CLUSTER_DESC_PATH
 STAMP="${RESULTS_STAMP:-$(date -u +%Y%m%dT%H%M%SZ)}"
 export RESULTS_DIR="${RESULTS_DIR:-${REPO}/craq-parity-results/mp-run-${STAMP}}"
