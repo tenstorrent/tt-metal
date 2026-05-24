@@ -445,6 +445,7 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
                     .grid = CoreRangeSet(CoreRange({4, 4}, {5, 5})),
                     .orientation = ShardOrientation::ROW_MAJOR,
                 },
+        .crta_config = {},
         },
         InputOutputBufferParams{
             .tensor_shape = tt::tt_metal::Shape{18, 128, 64},
@@ -466,6 +467,7 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
                     .grid = CoreRangeSet(CoreRange({0, 0}, {5, 5})),
                     .orientation = ShardOrientation::COL_MAJOR,
                 },
+        .crta_config = {},
         },
         InputOutputBufferParams{
             .tensor_shape = tt::tt_metal::Shape{2, 3, 256},
@@ -486,6 +488,7 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
                     .grid = CoreRangeSet(CoreRange({0, 0}, {2, 2})),
                     .orientation = ShardOrientation::COL_MAJOR,
                 },
+        .crta_config = {},
         },
         InputOutputBufferParams{
             .tensor_shape = tt::tt_metal::Shape{3, 2, 2, 3, 4},
@@ -506,6 +509,7 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
                     .grid = CoreRangeSet(CoreRange({0, 0}, {1, 1})),
                     .orientation = ShardOrientation::ROW_MAJOR,
                 },
+        .crta_config = {},
         },
         InputOutputBufferParams{
             .tensor_shape = tt::tt_metal::Shape{5, 2, 2, 64, 96},
@@ -527,6 +531,7 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
                     .grid = CoreRangeSet(CoreRange({0, 0}, {3, 3})),
                     .orientation = ShardOrientation::ROW_MAJOR,
                 },
+        .crta_config = {},
         },
         InputOutputBufferParams{
             .tensor_shape = tt::tt_metal::Shape{64, 64},
@@ -547,6 +552,7 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
                     .grid = CoreRangeSet(CoreRange({4, 4}, {5, 5})),
                     .orientation = ShardOrientation::ROW_MAJOR,
                 },
+        .crta_config = {},
         },
         InputOutputBufferParams{
             .tensor_shape = tt::tt_metal::Shape{4, 64, 96},
@@ -567,6 +573,7 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
                     .grid = CoreRangeSet(CoreRange({4, 4}, {5, 5})),
                     .orientation = ShardOrientation::ROW_MAJOR,
                 },
+        .crta_config = {},
         },
         InputOutputBufferParams{
             .tensor_shape = tt::tt_metal::Shape{18, 128, 64},
@@ -588,6 +595,7 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
                     .grid = CoreRangeSet(CoreRange({0, 0}, {0, 0})),
                     .orientation = ShardOrientation::COL_MAJOR,
                 },
+        .crta_config = {},
         },
         InputOutputBufferParams{
             .tensor_shape = tt::tt_metal::Shape{2, 3, 256},
@@ -608,6 +616,7 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
                     .grid = CoreRangeSet(CoreRange({0, 0}, {0, 0})),
                     .orientation = ShardOrientation::COL_MAJOR,
                 },
+        .crta_config = {},
         }};
 
     std::vector<InputOutputBufferParams> test_params;
@@ -754,18 +763,21 @@ INSTANTIATE_TEST_SUITE_P(
             .layout = Layout::TILE,
             .dtype = DataType::UINT8,
             .buffer_type = BufferType::L1,
+        .input_shard_spec = std::nullopt,
         },
         CopyParams{
             .tensor_shape = tt::tt_metal::Shape{96, 64},
             .layout = Layout::ROW_MAJOR,
             .dtype = DataType::UINT16,
             .buffer_type = BufferType::L1,
+        .input_shard_spec = std::nullopt,
         },
         CopyParams{
             .tensor_shape = tt::tt_metal::Shape{128, 96},
             .layout = Layout::TILE,
             .dtype = DataType::BFLOAT16,
             .buffer_type = BufferType::L1,
+        .input_shard_spec = std::nullopt,
         },
 
         // 2D cases - DRAM buffer type
@@ -774,18 +786,21 @@ INSTANTIATE_TEST_SUITE_P(
             .layout = Layout::TILE,
             .dtype = DataType::UINT8,
             .buffer_type = BufferType::DRAM,
+        .input_shard_spec = std::nullopt,
         },
         CopyParams{
             .tensor_shape = tt::tt_metal::Shape{96, 64},
             .layout = Layout::ROW_MAJOR,
             .dtype = DataType::UINT16,
             .buffer_type = BufferType::DRAM,
+        .input_shard_spec = std::nullopt,
         },
         CopyParams{
             .tensor_shape = tt::tt_metal::Shape{128, 96},
             .layout = Layout::TILE,
             .dtype = DataType::BFLOAT16,
             .buffer_type = BufferType::DRAM,
+        .input_shard_spec = std::nullopt,
         },
 
         // 3D cases - L1 buffer type
@@ -794,12 +809,14 @@ INSTANTIATE_TEST_SUITE_P(
             .layout = Layout::TILE,
             .dtype = DataType::BFLOAT16,
             .buffer_type = BufferType::L1,
+        .input_shard_spec = std::nullopt,
         },
         CopyParams{
             .tensor_shape = tt::tt_metal::Shape{12, 96, 32},
             .layout = Layout::ROW_MAJOR,
             .dtype = DataType::UINT8,
             .buffer_type = BufferType::L1,
+        .input_shard_spec = std::nullopt,
         },
 
         // 3D cases - DRAM buffer type
@@ -808,12 +825,14 @@ INSTANTIATE_TEST_SUITE_P(
             .layout = Layout::TILE,
             .dtype = DataType::BFLOAT16,
             .buffer_type = BufferType::DRAM,
+        .input_shard_spec = std::nullopt,
         },
         CopyParams{
             .tensor_shape = tt::tt_metal::Shape{12, 96, 32},
             .layout = Layout::ROW_MAJOR,
             .dtype = DataType::UINT8,
             .buffer_type = BufferType::DRAM,
+        .input_shard_spec = std::nullopt,
         },
 
         // 4D cases - L1 buffer type

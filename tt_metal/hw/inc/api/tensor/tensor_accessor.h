@@ -113,7 +113,7 @@ public:
     }
 
     FORCE_INLINE
-    const uint32_t get_aligned_page_size() const { return aligned_page_size; }
+    uint32_t get_aligned_page_size() const { return aligned_page_size; }
 
     // NOC APIs
     FORCE_INLINE
@@ -383,7 +383,7 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
         aligned_page_size(page_size_in) {}
 
     FORCE_INLINE
-    const uint32_t get_aligned_page_size() const { return aligned_page_size; }
+    uint32_t get_aligned_page_size() const { return aligned_page_size; }
 
     // Locality APIs
     FORCE_INLINE
