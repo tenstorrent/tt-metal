@@ -290,6 +290,10 @@ void compute_sdpa_chunk(
         tensix_sync();
     }
     PACK((t6_semaphore_get<p_stall::WAIT_SFPU>(semaphore::FPU_SFPU)));
+    // Re-record the shared SFPU replay slot for sum now that max has retired (#43549):
+    // doing it here (rather than just before the reduce_sum zone) gives the in-frontend
+    // record ~hundreds of PACK cycles to retire during bcast_sub / bcast_mul / fast_approx_exp / mm2.
+    PACK((ckernel::sfpu::_init_sdpa_reduce_sum_row_8x32_replay_buffers_()));
     // Bcast Sub (FPU)
     // Wait for SFPU to finish (sem is 0)
     sdpa_sub_bcast_col_srca_srcb_reuse_tiles_init<chunk_size>(cb_q);  // For tile shape
@@ -364,7 +368,6 @@ void compute_sdpa_chunk(
         tensix_sync();
     }
     // Reduce Sum (SFPU)
-    PACK((ckernel::sfpu::_init_sdpa_reduce_sum_row_8x32_replay_buffers_()));
     tensix_sync();
     {
         DeviceZoneScopedN("reduce_sum");
