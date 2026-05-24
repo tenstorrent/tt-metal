@@ -64,11 +64,11 @@ For the op in scope, run through five steps (Step 0.1 prereqs, Step 0.2 feature 
 
 Gating semantics across the five steps:
 
-- **Steps 0.1 and 0.2** produce port-gating RED findings — an UNSUPPORTED feature or unmet prereq blocks this op's Metal 2.0 port until the missing piece lands.
-- **Step 0.5** RED is a port-time work item, not a wait-for-framework gate (see Step 0.5's own framing). The bypass must be addressed during the port, typically via `TensorAccessor` re-expression.
+- **Step 0.1 Check 1 (ProgramDescriptor API), Step 0.1 Check 2 (Device 2.0 DM), Step 0.2 (feature compatibility)** produce port-gating RED findings — an UNSUPPORTED feature or unmet prereq blocks this op's Metal 2.0 port until the missing piece lands.
+- **Step 0.1 Check 3 (TensorAccessor usage) and Step 0.5 (TensorAccessor bypass)** produce YELLOW findings — port-time work items, not port blockers. With the `TensorAccessor` base-pointer accessor (currently in PR review) providing a sanctioned bridge for genuinely-exotic cases, every TensorAccessor concern has a port-time resolution path. The two checks roll up to a single TensorAccessor-concerns bullet in the Result section when both fire (see Output section).
 - **Steps 0.3 and 0.4** are informational only — they shape planning but do not produce port-gating findings.
 
-Do not attempt to port an op with Step 0.1 or 0.2 RED (modulo the scoped-subset case described in the report-output section).
+Do not attempt to port an op with Step 0.1 Check 1, Check 2, or Step 0.2 RED (modulo the scoped-subset case described in the report-output section). Step 0.1 Check 3 YELLOW and Step 0.5 YELLOW do not gate the port — they describe port-time work.
 
 ### Step 0.1 — Porting prerequisites
 
@@ -107,12 +107,12 @@ Step-ordering tip: if a kernel involves sharded code paths or reads from a CB ra
 **For kernels that pass the causal-link gate** (i.e. the lack of `TensorAccessor` is not downstream of a dynamic CB), classify by one of these three cases:
 
 - **Green — uses `TensorAccessor`** (with `TensorAccessorArgs<N>()` plumbing on the host side and `TensorAccessor(args, addr)` on the device side). Ready for the port.
-- **Red — doesn't use `TensorAccessor`, but the access pattern is page-by-page or otherwise iteratable.** Record the gap — convert the kernel to use `TensorAccessor` in a separate, prior PR (may bundle with Check 2). Continue the audit; the feature scan still produces useful findings.
-- **Yellow — doesn't use `TensorAccessor`, and the access pattern genuinely cannot be expressed via `TensorAccessor`** (exotic NoC walks; sub-page access; address arithmetic the iterators don't support). Porting is possible without `TensorAccessor` for this kernel, but the user must make an explicit call. Report yellow and surface the following rationale to the user, **verbatim**:
+- **Yellow (convertible)** — doesn't use `TensorAccessor`, but the access pattern is page-by-page or otherwise iteratable. Port-time work item: convert the kernel to `TensorAccessor` during the Metal 2.0 port (or, if the porter prefers, in a separate kernel-modernization PR ahead of the port — may bundle with Check 2 if both fire). No user judgment required for this sub-case; the resolution path is clear. Continue the audit.
+- **Yellow (exotic)** — doesn't use `TensorAccessor`, and the access pattern genuinely cannot be expressed via `TensorAccessor` (exotic NoC walks; sub-page access; address arithmetic the iterators don't support). Port-time work item via the `TensorAccessor` base-pointer accessor (currently in PR review) — the porter binds the tensor, constructs the accessor, calls it for the base pointer, and proceeds with the existing kernel-side address arithmetic. User judgment required to confirm the "genuinely exotic" classification — see below. Report yellow and surface the following rationale to the user, **verbatim**:
 
   > The use of `TensorAccessor` is an ergonomic choice on Gen1 architectures. It has meaningful performance implications on Gen2 architectures. Ideally, `TensorAccessor` should be updated to support the required iteration pattern; consider filing an issue requesting that support.
 
-  **Do not self-classify into this bucket.** AI agents tend to misclassify the previous case (kernel laziness or pre-`TensorAccessor` cruft) as this one. Always confirm with the user before treating a kernel as genuinely exotic — assume the previous case until the user confirms otherwise. On user override (proceed without `TensorAccessor`), the kernel will need a bridge from the typed-binding channel to a raw base pointer during the port. The sanctioned bridge is the `TensorAccessor` base-pointer accessor, currently in PR review. Once it lands, treat its use as a documented escape hatch rather than a workaround — and see [Step 0.5](#step-05--tensoraccessor-bypass) for why a buffer-address RTA is *not* an acceptable substitute.
+  **Do not self-classify into the (exotic) bucket.** AI agents tend to misclassify the (convertible) case (kernel laziness or pre-`TensorAccessor` cruft) as this one. Always confirm with the user before treating a kernel as genuinely exotic — assume (convertible) until the user confirms otherwise. On user override (proceed without `TensorAccessor` re-expression), the kernel uses the base-pointer accessor as a documented bridge rather than a workaround. See [Step 0.5](#step-05--tensoraccessor-bypass) for why a buffer-address RTA is *not* an acceptable substitute for the accessor bridge.
 
 ### Step 0.2 — Feature compatibility check
 
@@ -203,11 +203,11 @@ Status roll-up uses ✓ / ⚠ / ✗ / ⭐. The star is reserved for entries that
 
 ### Step 0.5 — TensorAccessor bypass
 
-Run this step regardless of Step 0.1, 0.2, 0.3, and 0.4 outcomes. **This check identifies per-TensorBinding correctness hazards** — bindings whose host code passes a `Buffer*` base address through a uint32 RTA, then performs address arithmetic on it kernel-side, bypassing the `TensorParameter` / `TensorBinding` mechanism.
+Run this step regardless of Step 0.1, 0.2, 0.3, and 0.4 outcomes. **This check identifies per-TensorBinding correctness hazards** — bindings whose host code passes a `Buffer*` base address through a uint32 RTA, then performs address arithmetic on it kernel-side, bypassing the `TensorParameter` / `TensorBinding` mechanism. **Outcome is YELLOW (port-time work), not RED (port blocker)** — the resolution paths below are all addressable during the port itself.
 
-**Why this matters.** Under TTNN's recent fast-path-cache binding-injection model, the framework patches the typed-binding channel on cache hit but leaves RTAs untouched. A buffer base address routed through an RTA stays at whatever value the cache-populating call wrote — so on subsequent cache hits with new tensor storage of the same shape, the kernel reads from the original buffer instead of the new one. No assertion fires, no error surfaces; just wrong numerics, only on cache hits with non-identical storage. Pre–Metal 2.0 this was a style concern (*"yuck, raw pointers"*) because the cache-hit path didn't yet care which slots were tensor addresses; the fast-path change escalated the same pattern from yuck-but-correct to silently wrong.
+**Why this matters.** Under TTNN's recent fast-path-cache binding-injection model, the framework patches the typed-binding channel on cache hit but leaves RTAs untouched. A buffer base address routed through an RTA stays at whatever value the cache-populating call wrote — so on subsequent cache hits with new tensor storage of the same shape, the kernel reads from the original buffer instead of the new one. No assertion fires, no error surfaces; just wrong numerics, only on cache hits with non-identical storage. Pre–Metal 2.0 this was a style concern (*"yuck, raw pointers"*) because the cache-hit path didn't yet care which slots were tensor addresses; the fast-path change escalated the same pattern from yuck-but-correct to silently wrong. The port must address it; that's the substance of the YELLOW.
 
-**The fix is in scope of the port, not a wait-for-framework gate.** The standard resolution is to re-express the bypassing binding via `TensorAccessor` during the port itself — port-time work that the porter will handle as part of the migration. For genuinely-exotic access patterns where `TensorAccessor` can't express the pattern (caught upstream by [Step 0.1 Check 3 YELLOW](#step-01--porting-prerequisites)), a `TensorAccessor` base-pointer accessor is currently in PR review and provides the sanctioned bridge once it lands.
+**Resolution paths (all port-time, none wait-for-framework).** The standard resolution is to re-express the bypassing binding via `TensorAccessor` during the port itself. For genuinely-exotic access patterns where `TensorAccessor` can't express the pattern (caught upstream by [Step 0.1 Check 3 (exotic)](#step-01--porting-prerequisites)), the `TensorAccessor` base-pointer accessor (currently in PR review) provides a sanctioned bridge — the porter binds the tensor, constructs the `TensorAccessor`, calls the accessor to pull out the base pointer, and proceeds with the existing kernel-side address arithmetic. Inelegant but acceptable, and the binding-injection infra still sees the binding flow through the typed channel.
 
 **Granularity — per-binding, not per-op.** An op may have multiple tensor bindings, some clean (`TensorAccessor` or borrowed-memory CB) and some bypassing. Report per-binding status — a single bypassing binding fires this check even when the op's primary I/O is via `TensorAccessor`.
 
@@ -238,24 +238,24 @@ For each `TensorParameter` the op declares (or would declare in the port), cross
 **Distinction from existing checks.**
 
 - **Step 0.1 Check 2 (Device 2.0 DM):** asks whether the op uses modern device-side wrappers. Independent. A kernel can be fully Device 2.0–compliant AND still have a raw-ptr bypass binding.
-- **Step 0.1 Check 3 (TensorAccessor usage):** asks whether `TensorAccessor` is used where it should be. This check is more specific — even when Check 3 is GREEN at the op level, a single bypassing binding fires Step 0.5 RED.
+- **Step 0.1 Check 3 (TensorAccessor usage):** asks whether `TensorAccessor` is used where it should be (op-level). Step 0.5 is more specific — even when Check 3 is GREEN at the op level, a single bypassing binding fires Step 0.5 YELLOW. Conversely, when Check 3 itself is YELLOW (kernel-wide TensorAccessor absence), Step 0.5 will flag every binding as bypass; in the report, the two findings roll up to a single TensorAccessor-concerns bullet (see Output section).
 
 **Report shape — per-binding inventory.**
 
 For each `TensorParameter` the op declares (or would declare in the port), report:
 
 - **clean** — binding uses `TensorAccessor` or borrowed-memory CB end-to-end.
-- **⭐ RED — bypass** — buffer address passed as RTA at `host:file:line`, consumed at `kernel:file:line` by `<call>`. Resolution: the port will re-express this binding via `TensorAccessor` (the standard case) or, when the access pattern is genuinely exotic, route it through the `TensorAccessor` base-pointer accessor (currently in PR review).
+- **⚠ YELLOW — bypass** — buffer address passed as RTA at `host:file:line`, consumed at `kernel:file:line` by `<call>`. Resolution: the port will re-express this binding via `TensorAccessor` (the standard case) or, when the access pattern is genuinely exotic, route it through the `TensorAccessor` base-pointer accessor (currently in PR review).
 
 Example:
 
 ```
 TensorParameter "input_a":  clean — TensorAccessor.
-TensorParameter "input_b":  ⭐ RED — buffer address as RTA at `host:foo.cpp:120`, consumed at `kernel:bar.cpp:38` by `get_noc_addr_from_bank_id`.
+TensorParameter "input_b":  ⚠ YELLOW — buffer address as RTA at `host:foo.cpp:120`, consumed at `kernel:bar.cpp:38` by `get_noc_addr_from_bank_id`.
 TensorParameter "output":   clean — borrowed-memory CB (causal-link).
 ```
 
-**Op-level roll-up:** `✓ clean` (no bypassing bindings) / `⭐ RED` (one or more bindings bypass).
+**Op-level roll-up:** `✓ clean` (no bypassing bindings) / `⚠ YELLOW` (one or more bindings bypass).
 
 ### Output: the audit report
 
@@ -301,6 +301,8 @@ The conclusion appears at the top so a colleague glancing at the report sees the
 - For **YELLOW**: state the count of open questions and reference the Questions for the user section.
 - For **GREEN**: note that handoff to the recipe doc is appropriate after explicit user go-ahead.
 
+**TensorAccessor rollup rule.** When Step 0.1 Check 3 and Step 0.5 both fire (the common case — a kernel without `TensorAccessor` has all its bindings as bypass), merge them into a **single TensorAccessor-concerns bullet** in this Result section. The body sections (`TensorAccessor usage` and `TensorAccessor bypass`) still produce separate detail per check, but the Result-level rollup is one line — both findings describe port-time work on the same kernel surface, so two bullets inflate the apparent severity.
+
 ### Clean subset (omit unless RED with localized blockers)
 
 <List the parts of the op that are clean and could be ported as a scoped subset; list the parts that would be left on the legacy API.>
@@ -326,9 +328,9 @@ The conclusion appears at the top so a colleague glancing at the report sees the
 
 <Default recommendation: port-time cleanup unless the user requests a separate prereq PR.>
 
-### TensorAccessor usage: **GREEN | YELLOW | RED**
+### TensorAccessor usage: **GREEN | YELLOW**
 
-<Findings. For in-scope-subset cases, say so explicitly. Include the causal-link note when applicable.>
+<Findings. For YELLOW, distinguish (convertible) vs (exotic) sub-cases per Step 0.1 Check 3. For in-scope-subset cases, say so explicitly. Include the causal-link note when applicable.>
 
 ## Feature compatibility check
 
@@ -337,12 +339,12 @@ Every entry from Appendix A appears in this summary table, in the same order as 
 | Feature | Status | Notes |
 |---|---|---|
 | GlobalCircularBuffer | GREEN | |
-| Dynamic CircularBuffer (CB on borrowed memory) | GREEN | (LANDED in Appendix A; if the op uses this, the port uses `borrowed_from`) |
+| Dynamic CircularBuffer (CB on borrowed memory) | GREEN | (if the op uses this, the port uses `borrowed_from`) |
 | CBDescriptor `address_offset` (non-zero) | RED | see detail below |
-| Aliased Circular Buffers | GREEN | (LANDED in Appendix A; if the op uses this, the port uses `alias_with`) |
+| Aliased Circular Buffers | GREEN | (if the op uses this, the port uses `alias_with`) |
 | GlobalSemaphore | GREEN | |
 | Non-zero semaphore initial value | GREEN | |
-| `ArgConfig::Runtime*` tensor-accessor flavors | GREEN | |
+| Dynamic TensorAccessor (`ArgConfig::Runtime*`) | GREEN | |
 | `UpdateCircularBuffer*` | GREEN | |
 
 For each non-GREEN row, follow up with an H3 detail section. Omit detail sections for GREEN rows.
@@ -399,13 +401,13 @@ Findings from Step 0.4.
 
 Findings from Step 0.5.
 
-**Op-level roll-up:** <`✓ clean` / `⭐ RED`> — <one-line elaboration: count of bypassing bindings, if any>.
+**Op-level roll-up:** <`✓ clean` / `⚠ YELLOW`> — <one-line elaboration: count of bypassing bindings, if any>.
 
 ### Per-binding inventory
 
 <One bullet per TensorParameter the op declares or would declare in the port:>
 
-- **`<binding_name>`:** clean (mechanism) | ⭐ RED — bypass (host:file:line + kernel:file:line + call)
+- **`<binding_name>`:** clean (mechanism) | ⚠ YELLOW — bypass (host:file:line + kernel:file:line + call)
 
 ## Path forward
 
@@ -653,7 +655,7 @@ Plain `Semaphore` / `CreateSemaphore(program, core_spec, initial_value)` is the 
 - `ttnn/cpp/ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/selective_reduce_combine_program_factory.cpp` (literal `1`)
 - `ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/moe_gpt_program_factory.cpp` (`INVALID` / `INVALID_SEM` sentinels)
 
-### Runtime tensor-accessor flavors (RuntimeTensorShape, RuntimeRank, RuntimeNumBanks, RuntimeShardShape, RuntimeBankCoords) — UNSUPPORTED
+### Dynamic TensorAccessor (`ArgConfig::Runtime*` flavors: RuntimeTensorShape, RuntimeRank, RuntimeNumBanks, RuntimeShardShape, RuntimeBankCoords) — UNSUPPORTED
 
 **Status**: Not yet supported in Metal 2.0. The legacy `TensorAccessorArgs(buffer, ArgConfig::Runtime*)` family lets the host defer parts of the tensor accessor's metadata (shape, rank, bank info) to runtime, threading them through positional CTAs. Metal 2.0 has no positional-CTA mechanism, so this plumbing has no equivalent yet.
 
