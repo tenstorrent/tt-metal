@@ -312,11 +312,25 @@ void overwrite_compute_kernel_name_and_defines(
     }
 }
 
+// Returns true on the (arch, broadcast, dtype) tuple that hangs the LLK
+// `unary_bcast` path on Blackhole: COL bcast + BFLOAT16 input + fp32_dest_acc_en.
+bool hits_bh_col_bcast_bf16_to_fp32_hang(
+    SubtileBroadcastType subtile_broadcast_type, DataType a_dtype, DataType b_dtype, bool fp32_dest_acc_en) {
+    const bool is_col_bcast =
+        subtile_broadcast_type == SubtileBroadcastType::COL_A || subtile_broadcast_type == SubtileBroadcastType::COL_B;
+    const bool has_bf16_input = a_dtype == DataType::BFLOAT16 || b_dtype == DataType::BFLOAT16;
+    return tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && is_col_bcast && fp32_dest_acc_en && has_bf16_input;
+}
+
 bool is_llk_bcast(
     const SubtileBroadcastType subtile_broadcast_type,
     const DataType a_dtype,
     const DataType b_dtype,
-    [[maybe_unused]] const DataType c_dtype) {
+    const bool fp32_dest_acc_en) {
+    if (hits_bh_col_bcast_bf16_to_fp32_hang(subtile_broadcast_type, a_dtype, b_dtype, fp32_dest_acc_en)) {
+        return false;
+    }
+
     auto all_match = [&](DataType dt) { return a_dtype == dt && b_dtype == dt; };
 
     if (subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
@@ -731,8 +745,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     compute_kernel_defines["BCAST_INPUT"] = kernel_config.bcast_input_str();
 
     bool use_llk_bcast =
-        !inputs_row_major &&
-        CMAKE_UNIQUE_NAMESPACE::is_llk_bcast(operation_attributes.subtile_broadcast_type, a_dtype, b_dtype, c_dtype);
+        !inputs_row_major && CMAKE_UNIQUE_NAMESPACE::is_llk_bcast(
+                                 operation_attributes.subtile_broadcast_type, a_dtype, b_dtype, fp32_dest_acc_en);
 
     // The B2D broadcast path for BFP formats introduces rounding that EXP/EXP2
     // amplifies beyond acceptable tolerance.

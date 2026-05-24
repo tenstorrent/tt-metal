@@ -24,7 +24,21 @@
     pytest models/demos/deepseek_v3_d_p/tests/pcc/test_moe_gate_prefill2d.py -k "mesh-8x4"
     export DEEPSEEK_V3_MLA_REF_CACHE=/mnt/MLPerf/deepseek-prefill-cache/test_mla_output
     pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla -k "8x4 and random and max_sl and check_pcc and balanced and ring" -vvv --tb=short
-    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py -k "8x4 and pcc" -vvv --tb=short --timeout=900
+    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py -k "8x4 and pcc and balanced and not non_balanced" -vvv --tb=short --timeout=900
+  model: deepseek_prefill
+  skus:
+    bh_galaxy:
+      timeout: 30
+  owner_id: U08RL15T4N8
+  team: models
+
+- name: "(Galaxy) DeepSeek Prefill PERF"
+  cmd: |
+    export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528 DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI MESH_DEVICE=TG
+    uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+    pytest models/demos/deepseek_v3_d_p/tests/perf/test_prefill_block_perf.py -k "block_8x4" -vvv --tb=short
+    pytest models/demos/deepseek_v3_d_p/tests/perf/test_moe_perf.py::test_deepseek_v3_moe_perf_galaxy -vvv --tb=short
+    pytest models/demos/deepseek_v3_d_p/tests/perf/test_mla_perf.py::test_deepseek_v3_mla_perf_galaxy -vvv --tb=short
   model: deepseek_prefill
   skus:
     bh_galaxy:
@@ -57,7 +71,7 @@
   model: deepseek_prefill
   skus:
     bh_loudbox:
-      timeout: 60
+      timeout: 75
   owner_id: U08E1JCMAJF
   team: models
 

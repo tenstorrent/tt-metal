@@ -119,7 +119,7 @@ _MODELS_1x16 = [
 
 _MODELS_1x8 = [
     MoEModelConfig("deepseek_ocr", N=896,  hidden_size=1280, selected_experts_k=6),
-    MoEModelConfig("gemma_4_26b",  N=704,  hidden_size=2816, selected_experts_k=8),
+    MoEModelConfig("gemma_4_26b",  N=704,  hidden_size=2816, selected_experts_k=8, activation_types=(MoEActivationFunction.GELU,)),
     MoEModelConfig("gpt_oss",      N=2880, hidden_size=2880, selected_experts_k=4, experts_per_device_values=(4,), has_bias_values=(True,), test_modes=("perf", "correctness"), activation_types=(MoEActivationFunction.SWIGLU,)),
 ]
 # fmt: on
@@ -446,6 +446,7 @@ PCC_THRESHOLD_MATMUL_WITH_BIAS = 0.98799
 ATOL_THRESHOLD = 700
 SWIGLU_PCC_THRESHOLD = 0.984
 SILU_PCC_THRESHOLD = 0.986
+GELU_PCC_THRESHOLD = 0.986
 
 
 def _get_base_pcc_threshold(activation_type, has_bias):
@@ -455,8 +456,10 @@ def _get_base_pcc_threshold(activation_type, has_bias):
     act_threshold = None
     if activation_type == MoEActivationFunction.SWIGLU:
         act_threshold = SWIGLU_PCC_THRESHOLD
-    elif activation_type == MoEActivationFunction.SILU:  # SILU
+    elif activation_type == MoEActivationFunction.SILU:
         act_threshold = SILU_PCC_THRESHOLD
+    elif activation_type == MoEActivationFunction.GELU:
+        act_threshold = GELU_PCC_THRESHOLD
     else:
         raise TypeError("Invalid Activation type")
 
@@ -1087,6 +1090,9 @@ def compute_matmul_golden(
         torch_intermediate_ref = torch_silu_output_ref * torch_w1_output_ref  # (L, E, T, N)
     elif activation_type == MoEActivationFunction.SWIGLU:
         torch_intermediate_ref = _swiglu_reference(torch_w0_output_ref, torch_w1_output_ref)  # (L, E, T, N)
+    elif activation_type == MoEActivationFunction.GELU:
+        torch_gelu_output_ref = torch.nn.functional.gelu(torch_w0_output_ref, approximate="tanh")
+        torch_intermediate_ref = torch_gelu_output_ref * torch_w1_output_ref  # (L, E, T, N)
     else:
         raise ValueError(f"Unsupported activation type: {activation_type}")
 

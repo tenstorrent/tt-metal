@@ -14,7 +14,7 @@ from helpers.llk_params import (
 )
 from helpers.param_config import InputOutputFormat
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
@@ -55,14 +55,18 @@ def _run_sfpu_binary_quasar(
 
     input_dimensions = [num_tiles_needed * 32, 32]
 
+    if data_format.is_integer():
+        iinfo = torch.iinfo(format_dict[data_format])
+        spec = StimuliSpec.uniform(low=float(iinfo.min), high=float(iinfo.max - 1))
+    else:
+        spec = StimuliSpec.uniform(low=-1.0, high=1.0)
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=data_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=data_format,
-        negative_values=True,
         input_dimensions_B=input_dimensions,
-        sfpu=False,
-        full_2sc_int_range=True,
+        spec_A=spec,
+        spec_B=spec,
     )
 
     if clamp_inputs is not None:

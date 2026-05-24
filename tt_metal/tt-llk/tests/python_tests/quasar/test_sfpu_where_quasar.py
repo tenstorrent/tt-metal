@@ -201,7 +201,6 @@ def test_sfpu_where_quasar(formats_dest_acc_implied_test_case_input_dims):
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
-        sfpu=True,
     )
     torch.manual_seed(43)
     src_true_raw, _, _, _ = generate_stimuli(
@@ -209,7 +208,6 @@ def test_sfpu_where_quasar(formats_dest_acc_implied_test_case_input_dims):
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
-        sfpu=True,
     )
     torch.manual_seed(44)
     src_false_raw, _, _, _ = generate_stimuli(
@@ -217,7 +215,6 @@ def test_sfpu_where_quasar(formats_dest_acc_implied_test_case_input_dims):
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
-        sfpu=True,
     )
 
     condition = _build_condition_for_test_case(
