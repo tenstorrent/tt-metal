@@ -150,7 +150,8 @@ public:
         return get_shard_noc_addr(shard_id, offset, noc);
     }
 
-    // Returns the bank base address of this tensor (raw pointer)
+    // Returns the bank-relative base address (offset) used by this accessor.
+    // (For L1-sharded tensors, this is the local L1 base address of the shard region.)
     FORCE_INLINE
     constexpr uint32_t get_bank_base_address() const { return bank_base_address; }
 
@@ -422,7 +423,8 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
         return false;
     }
 
-    // Returns the bank base address of this tensor (raw pointer)
+    // Returns the bank-relative base address (offset) used by this accessor.
+    // (For L1-sharded tensors, this is the local L1 base address of the shard region.)
     FORCE_INLINE
     constexpr uint32_t get_bank_base_address() const { return this->bank_base_address; }
 

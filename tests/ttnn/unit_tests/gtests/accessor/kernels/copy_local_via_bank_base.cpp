@@ -19,11 +19,11 @@ void kernel_main() {
         TensorAccessorArgs<args_src.next_compile_time_args_offset(), args_src.next_common_runtime_args_offset()>();
 
     // In Metal 2.0, this would just be TensorAccessor(ta::my_accessor_name)
-    // The raw bank base address would not be available in scope.
+    // The bank base address would not be available in scope.
     auto tensor_accessor_src = TensorAccessor(args_src, input_base_address);
     auto tensor_accessor_dst = TensorAccessor(args_dst, output_base_address);
 
-    // If you needed the raw pointer, you could pull it out of the TensorAccessor:
+    // If you needed the pointer, you could pull it out of the TensorAccessor:
     const uint32_t src_l1 = tensor_accessor_src.get_bank_base_address();
     const uint32_t dst_l1 = tensor_accessor_dst.get_bank_base_address();
     const uint32_t shard_size_bytes =
