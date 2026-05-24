@@ -60,9 +60,15 @@ For the op in scope, run through five steps (Step 0.1 prereqs, Step 0.2 feature 
 - **Follow kernel references, not directory boundaries.** Audit every kernel referenced by any `KernelDescriptor::kernel_source` in the op's program factories — cross-op kernels living in adjacent directories (e.g. `eltwise/`, `data_movement/`, `kernels/dataflow/`) are in scope when the op uses them.
 - **Unreferenced kernel files in the op's directory are out of scope.** If the op's directory contains kernel files that no factory references (dead code, tests, work-in-progress), do not audit their contents. If their presence could confuse a reader of the report, mention them in the identifying section as unreferenced; otherwise ignore them.
 - **Multiple device-operations in one op directory.** If the directory contains more than one `DeviceOperation` type sharing factories or kernels (e.g. `ReduceDeviceOperation` plus `WelfordReduceDeviceOperation`), audit them together and produce a single combined report. If the device-operations are independent, audit each separately. Ask the user if unsure whether to bundle.
-- **`RuntimeArgsDescriptor` and runtime-arg setup are not audit signals.** RTAs translate directly to `KernelSpec::runtime_arguments_schema` and `ProgramRunParams`; treat them as routine port work, not gates. In particular, **buffer-address RTAs in an otherwise-clean `ProgramDescriptor` op are normal here** — the `tensor.buffer()->address()` pattern in an RTA, paired with the corresponding `get_arg_val<uint32_t>(0)` on the kernel side, is the standard `ProgramDescriptor`-era idiom that the Metal 2.0 tensor-binding mechanism subsumes during the port. Do not flag this as an audit issue. (The recipe doc's anti-pattern against buffer-address RTAs applies *after* the binding mechanism is in scope; it is not an audit gate.)
+- **Routine runtime-arg setup is not a general audit signal — Step 0.5 handles the one specific case.** Most RTAs translate directly to `KernelSpec::runtime_arguments_schema` and `ProgramRunParams`; treat them as routine port work, not gates. The historical `tensor.buffer()->address()`-as-RTA pattern is the one exception: pre–Metal 2.0 it was style-yuck-but-correct, but under TTNN's recent fast-path-cache binding-injection changes it is now a per-binding correctness hazard. Step 0.5 catches and reports buffer-address RTAs specifically; routine runtime-arg setup outside that pattern remains non-signal.
 
-A red on any check fails the audit. Do not attempt to port a red op (modulo the scoped-subset case described in the report-output section).
+Gating semantics across the five steps:
+
+- **Steps 0.1 and 0.2** produce port-gating RED findings — an UNSUPPORTED feature or unmet prereq blocks this op's Metal 2.0 port until the missing piece lands.
+- **Step 0.5** RED is a port-time work item, not a wait-for-framework gate (see Step 0.5's own framing). The bypass must be addressed during the port, typically via `TensorAccessor` re-expression.
+- **Steps 0.3 and 0.4** are informational only — they shape planning but do not produce port-gating findings.
+
+Do not attempt to port an op with Step 0.1 or 0.2 RED (modulo the scoped-subset case described in the report-output section).
 
 ### Step 0.1 — Porting prerequisites
 
@@ -106,7 +112,7 @@ Step-ordering tip: if a kernel involves sharded code paths or reads from a CB ra
 
   > The use of `TensorAccessor` is an ergonomic choice on Gen1 architectures. It has meaningful performance implications on Gen2 architectures. Ideally, `TensorAccessor` should be updated to support the required iteration pattern; consider filing an issue requesting that support.
 
-  **Do not self-classify into this bucket.** AI agents tend to misclassify the previous case (kernel laziness or pre-`TensorAccessor` cruft) as this one. Always confirm with the user before treating a kernel as genuinely exotic — assume the previous case until the user confirms otherwise. On user override (proceed without `TensorAccessor`), the kernel will need a buffer-address RTA threaded through during the port; treat this as the documented escape hatch rather than a workaround.
+  **Do not self-classify into this bucket.** AI agents tend to misclassify the previous case (kernel laziness or pre-`TensorAccessor` cruft) as this one. Always confirm with the user before treating a kernel as genuinely exotic — assume the previous case until the user confirms otherwise. On user override (proceed without `TensorAccessor`), the kernel will need a bridge from the typed-binding channel to a raw base pointer during the port. The sanctioned bridge is the `TensorAccessor` base-pointer accessor, currently in PR review. Once it lands, treat its use as a documented escape hatch rather than a workaround — and see [Step 0.5](#step-05--tensoraccessor-bypass) for why a buffer-address RTA is *not* an acceptable substitute.
 
 ### Step 0.2 — Feature compatibility check
 
@@ -199,15 +205,21 @@ Status roll-up uses ✓ / ⚠ / ✗ / ⭐. The star is reserved for entries that
 
 Run this step regardless of Step 0.1, 0.2, 0.3, and 0.4 outcomes. **This check identifies per-TensorBinding correctness hazards** — bindings whose host code passes a `Buffer*` base address through a uint32 RTA, then performs address arithmetic on it kernel-side, bypassing the `TensorParameter` / `TensorBinding` mechanism.
 
-**Why this matters.** Pre–Metal 2.0, this pattern was a style concern — *"yuck, we want to get rid of these raw pointers."* Under TTNN's recent fast-path-cache binding-injection changes, the binding channel and the RTA channel can desynchronize on fast-path re-execution (cache hit): the binding sees the new buffer address, but the kernel still reads the stale RTA value. This makes the pattern a **correctness hazard, not a porting nuisance**. A binding with this shape needs to be either re-expressed via `TensorAccessor` or routed through the planned "give me the base pointer" escape-hatch API once it lands.
+**Why this matters.** Under TTNN's recent fast-path-cache binding-injection model, the framework patches the typed-binding channel on cache hit but leaves RTAs untouched. A buffer base address routed through an RTA stays at whatever value the cache-populating call wrote — so on subsequent cache hits with new tensor storage of the same shape, the kernel reads from the original buffer instead of the new one. No assertion fires, no error surfaces; just wrong numerics, only on cache hits with non-identical storage. Pre–Metal 2.0 this was a style concern (*"yuck, raw pointers"*) because the cache-hit path didn't yet care which slots were tensor addresses; the fast-path change escalated the same pattern from yuck-but-correct to silently wrong.
+
+**The fix is in scope of the port, not a wait-for-framework gate.** The standard resolution is to re-express the bypassing binding via `TensorAccessor` during the port itself — port-time work that the porter will handle as part of the migration. For genuinely-exotic access patterns where `TensorAccessor` can't express the pattern (caught upstream by [Step 0.1 Check 3 YELLOW](#step-01--porting-prerequisites)), a `TensorAccessor` base-pointer accessor is currently in PR review and provides the sanctioned bridge once it lands.
 
 **Granularity — per-binding, not per-op.** An op may have multiple tensor bindings, some clean (`TensorAccessor` or borrowed-memory CB) and some bypassing. Report per-binding status — a single bypassing binding fires this check even when the op's primary I/O is via `TensorAccessor`.
 
 **Detection — host side.**
 
-- `SetRuntimeArgs` / `SetCommonRuntimeArgs` argument lists containing `buffer->address()`, `->address()`, `(*buffer).address()`.
-- Helper functions that take a `Buffer*` / `Buffer&` and inject its address into an arg vector (via `args.push_back(...)`, in-place vector init, or named accumulator).
-- For each `TensorParameter` the op declares (or would declare in the port), cross-check: does the same buffer also appear in an RTA address argument? If yes, the binding bypasses.
+Any site where `buffer->address()` (or `->address()` / `(*buffer).address()` / `tensor.buffer()->address()`) flows into a runtime-args context. Common shapes:
+
+- **Descriptor form** (the in-scope case for `ProgramDescriptor`-API ops): `KernelDescriptor::runtime_args` or `runtime_common_args` initializers containing the address expression directly. E.g. `kd.runtime_args = {{core_coord, {input_buffer->address(), num_pages}}};`.
+- **Imperative form** (only appears in Step 0.1 Check 1 RED ops, but record matches since the eventual port will still need to address them): `SetRuntimeArgs` / `SetCommonRuntimeArgs` argument lists containing the address expression.
+- **Helper-function form**: a function takes a `Buffer*` / `Buffer&` and injects its address into an arg vector (via `args.push_back(...)`, in-place vector init, or a named accumulator). Often the helper hides the bypass — read its body.
+
+For each `TensorParameter` the op declares (or would declare in the port), cross-check: does the same buffer also appear in an RTA address argument? If yes, the binding bypasses.
 
 **Detection — kernel side.**
 
@@ -233,7 +245,7 @@ Run this step regardless of Step 0.1, 0.2, 0.3, and 0.4 outcomes. **This check i
 For each `TensorParameter` the op declares (or would declare in the port), report:
 
 - **clean** — binding uses `TensorAccessor` or borrowed-memory CB end-to-end.
-- **⭐ RED — bypass** — buffer address passed as RTA at `host:file:line`, consumed at `kernel:file:line` by `<call>`. The Metal 2.0 port needs either `TensorAccessor` re-expression or the base-pointer escape-hatch API.
+- **⭐ RED — bypass** — buffer address passed as RTA at `host:file:line`, consumed at `kernel:file:line` by `<call>`. Resolution: the port will re-express this binding via `TensorAccessor` (the standard case) or, when the access pattern is genuinely exotic, route it through the `TensorAccessor` base-pointer accessor (currently in PR review).
 
 Example:
 
