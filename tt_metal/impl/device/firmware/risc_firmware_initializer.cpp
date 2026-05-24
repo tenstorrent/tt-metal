@@ -200,36 +200,31 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
 
         const auto mmio_ids_set = cluster_.mmio_chip_ids();
 
-        // FIX XX (#42429): Two-pass launch to eliminate cooperative-ETH relay race.
+        // FIX OP (#42429): Sequential non-MMIO-first initialization.
         //
-        // Root cause of flaky "Timeout waiting for Ethernet core service remote IO request"
-        // (CI run 26108653976, device_4 core 21-16, 5 s silence at 16:40:37→16:40:42):
-        //   The old single loop processed each device as: reset_cores(N) → init_firmware(N).
-        //   When N == MMIO device_0, initialize_and_launch_firmware wrote fw_launch_addr_value
-        //   to device_0's cooperative ETH relay channel (the one bridging to device_4).
-        //   The cooperative UMD base firmware on that channel asynchronously detected the
-        //   non-zero fw_launch_addr and jumped to Metal firmware — killing the UMD relay.
-        //   The next loop iteration then called reset_cores(device_4), which called
-        //   erisc_app_still_running() → read_non_mmio() through the now-dead relay → 5 s timeout.
+        // History: FIX XX introduced a two-pass approach to fix the cooperative-ETH relay
+        // race (CI run 26108653976): Pass 1 reset_cores(ALL), Pass 2a init(non-MMIO),
+        // Pass 2b init(MMIO). The original race: processing MMIO first wrote fw_launch_addr
+        // to the relay ETH channel → relay jumped to Metal firmware → subsequent non-MMIO
+        // reset_cores() calls through dead relay timed out.
         //
-        // Fix: split into two passes so reset_cores(all) completes while the relay is
-        // guaranteed alive (no fw_launch_addr written yet), then initialize firmware with
-        // non-MMIO devices processed before MMIO (relay alive for non-MMIO init writes;
-        // MMIO init kills the relay last, when no remaining reset_cores calls need it).
-
-        // ── Pass 1: reset all cores (relay guaranteed alive, no fw_launch_addr written yet) ──
-        const auto pass1_start = std::chrono::steady_clock::now();
-        for (tt::ChipId device_id : device_ids) {
-            ClearNocData(descriptor_->env_impl(), device_id);
-            reset_cores(device_id);
-        }
-        const auto pass1_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - pass1_start).count();
-        log_info(
-            tt::LogAlways,
-            "run_launch_phase: Pass 1 complete — reset_cores on {} device(s) in {}ms. (#42429)",
-            device_ids.size(),
-            pass1_ms);
+        // FIX XX's two-pass approach introduced a new failure (CI run 26371980231):
+        //   The gap between Pass 1 (reset_cores ALL) and Pass 2a (init non-MMIO) allowed
+        //   the Tensix NOC on non-MMIO devices to enter a state where relay writes to
+        //   Tensix L1 (non-posted, ACK-required) permanently timed out. Pass 1 completed
+        //   in 11ms for 8 devices — soft-reset config register writes appear fire-and-forget.
+        //   Middleware confirmed relay alive (FIX TV: 0ms, FIX UU: 0ms). But Pass 2a's
+        //   first L1 write immediately timed out at 5013ms per device (×4 = 20s).
+        //   Neil's observation: "The way the code is treating the non-MMIO devices seem
+        //   to be the problem." The two-pass gap IS the problem.
+        //
+        // Fix: sequential non-MMIO-first — each non-MMIO device gets reset_cores +
+        //   initialize_and_launch_firmware immediately together (no gap for NOC to go stale),
+        //   then MMIO devices last (fw_launch_addr kills relay, but no more non-MMIO needed).
+        //   Eliminates both the original relay-kill race and the two-pass NOC gap.
+        //
+        // FIX TV and FIX NN are retained as pre-flight guards before non-MMIO relay writes.
+        // FIX UU and FIX VV are removed — they were workarounds for the two-pass gap.
 
         // FIX TV (#42429): Wait for MMIO ETH channels to confirm base-UMD firmware before
         // Pass 2a writes any non-MMIO firmware (relay path goes through MMIO ETH channels).
@@ -514,252 +509,99 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
             }
         }
 
-        // FIX UU (#42429): Probe non-MMIO ETH relay bridges before Pass 2a.
-        //
-        // Root cause of run 26117958073 failure:
-        //   Pass 1 force-resets stale non-MMIO ETH cores (detected via FIX ZA heartbeat
-        //   check or Metal exit-signal timeout). The relay BRIDGE core on the non-MMIO
-        //   device (the ETH core that forwards relay commands from the MMIO device) may be
-        //   one of those force-reset cores. After force-reset, the bridge reboots to UMD
-        //   base firmware — a process that takes ~1-2 seconds. If Pass 2a writes start
-        //   before the bridge reboot completes, the UMD relay times out (5s) per device.
-        //
-        // FIX TV (above) confirms MMIO ETH channels (relay TX side) are ready. But that
-        // is only HALF the relay: the non-MMIO bridge ETH core (relay RX side) is the
-        // other half. FIX TV cannot see the non-MMIO bridge state.
-        //
-        // Fix: for each non-MMIO device, attempt a relay read from any ETH core. If the
-        // bridge core is mid-reboot, this read blocks until the bridge comes back up (or
-        // the UMD 5s hard timeout fires). A successful read proves the relay bridge is
-        // servicing requests and Pass 2a writes will succeed. A failure causes FIX YA
-        // (inside read_core) to mark relay_broken_chips_, which FIX NZ will skip in Pass
-        // 2a — avoiding further 5s stalls.
-        //
-        // Overhead in the common case (no force-resets in Pass 1): each relay read returns
-        // in <1ms (bridge already running UMD base). Total probe cost is negligible.
-        if (hal_.get_eth_fw_is_cooperative() && get_control_plane_) {
-            for (tt::ChipId device_id : device_ids) {
-                if (mmio_ids_set.count(device_id)) continue;    // MMIO handled by FIX TV
-                if (cluster_.is_relay_broken(device_id)) continue;  // already known-broken
-                const auto& eth_cores =
-                    this->get_control_plane_().get_active_ethernet_cores(device_id);
-                if (eth_cores.empty()) continue;
-                // Probe the first active ETH core. A successful relay read (any location)
-                // proves the relay bridge is alive; a throw causes FIX YA to mark broken.
-                const auto& logical_core = *eth_cores.begin();
-                CoreCoord virt = cluster_.get_virtual_coordinate_from_logical_coordinates(
-                    device_id, logical_core, CoreType::ETH);
-                const uint32_t hb_addr = hal_.get_eth_fw_mailbox_val(FWMailboxMsg::HEARTBEAT);
-                if (hb_addr == 0u) continue;  // arch doesn't wire heartbeat — skip
-                try {
-                    auto hb_data = cluster_.read_core(device_id, virt, hb_addr, sizeof(uint32_t));
-                    log_info(
-                        tt::LogAlways,
-                        "run_launch_phase: FIX UU — device {} relay bridge ready "
-                        "(heartbeat=0x{:08x}). (#42429)",
-                        device_id,
-                        hb_data[0]);
-                } catch (const std::exception& e) {
-                    // FIX YA (inside read_core) already marked relay_broken_chips_.
-                    // FIX NZ will skip initialize_and_launch_firmware for this device.
-                    log_warning(
-                        tt::LogAlways,
-                        "run_launch_phase: FIX UU — device {} relay bridge read failed: {}. "
-                        "Pass 2a will be skipped for this device. (#42429)",
-                        device_id,
-                        e.what());
-                }
-            }
-        }
-
-        // FIX VV (#42429): Deferred Tensix worker reset.
-        //
-        // Context: safe_assert() in reset_cores() skips assert_tensix_workers_impl() for
-        // non-MMIO devices when the ETH relay was mid-reboot (had_unresponsive_eth_cores &&
-        // is_non_mmio). This avoids 5s × 120-core timeouts on a dead relay. However it
-        // leaves Tensix worker cores carrying stale NOC state from the prior Metal session.
-        //
-        // Symptom (run 26345499861): FIX TV + FIX UU confirmed relay alive at +0.3s.
-        // But write_core_immediate to chip 4 Tensix L1 timed out at +5.3s (then chip 5 at
-        // +10.3s, chip 6 at +15.3s, chip 7 at +20.3s — exactly 5s per device). Root cause:
-        // the Tensix cores' stale NOC in-flight from the previous session blocked new NOC
-        // writes to Tensix L1. The relay bridge ERISC's own NOC was fine (FIX UU self-reads
-        // from ETH core L1 work — same-core loopback); cross-core writes to Tensix L1 hang.
-        //
-        // Fix: after FIX TV/UU confirm relay alive, assert all Tensix worker cores on each
-        // deferred-reset device to reset using write-only variants. Writing to the soft-reset
-        // config register (0xFFB121B0) may use a posted/fire-and-forget NOC virtual channel
-        // distinct from non-posted L1 data writes — empirically likely to land even when
-        // Tensix NOC is stuck. If the flush throws, assert_risc_reset_at_core_write_only()
-        // marks relay broken; all subsequent cores' flushes return immediately via the
-        // relay_broken_ fast-exit. Worst case: 5s overhead per device (same as today),
-        // not 5s × 120 workers.
-        for (tt::ChipId device_id : deferred_tensix_reset_chips_) {
-            if (cluster_.is_relay_broken(device_id)) {
-                log_warning(
-                    tt::LogAlways,
-                    "run_launch_phase: FIX VV — skipping deferred Tensix reset for device {} "
-                    "(relay already broken after FIX TV/UU). (#42429)",
-                    device_id);
-                continue;
-            }
-            try {
-                CoreCoord grid_size = cluster_.get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
-                uint32_t n_reset = 0;
-                for (uint32_t y = 0; y < grid_size.y; y++) {
-                    for (uint32_t x = 0; x < grid_size.x; x++) {
-                        CoreCoord worker_core = cluster_.get_virtual_coordinate_from_logical_coordinates(
-                            device_id, CoreCoord(x, y), CoreType::WORKER);
-                        cluster_.assert_risc_reset_at_core_write_only(
-                            tt_cxy_pair(device_id, worker_core), tt::umd::RiscType::ALL);
-                        ++n_reset;
-                        // assert_risc_reset_at_core_write_only catches flush exceptions
-                        // internally and marks relay broken. If relay broke on this core,
-                        // subsequent iterations' flushes will exit immediately via relay_broken_
-                        // fast-path — no need to check here.
-                    }
-                }
-                log_info(
-                    tt::LogAlways,
-                    "run_launch_phase: FIX VV — deferred Tensix reset done for device {} ({} cores). (#42429)",
-                    device_id,
-                    n_reset);
-            } catch (const std::exception& e) {
-                // Unexpected exception from get_soc_desc or get_virtual_coordinate.
-                // Note: assert_risc_reset_at_core_write_only() swallows flush exceptions
-                // internally and marks relay broken at the UMD level — it never propagates.
-                // This catch handles only unexpected errors from the coord-lookup helpers.
-                log_warning(
-                    tt::LogAlways,
-                    "run_launch_phase: FIX VV — deferred Tensix reset aborted for device {}: {}. (#42429)",
-                    device_id,
-                    e.what());
-            }
-        }
-
-        // FIX WW (#42429): REMOVED — was counterproductive. Deassert/100ms/re-assert ran the
-        // previous session's dispatch firmware on all Tensix BRISCs during the 100ms window.
-        // That firmware uses BOTH NOC0 and NOC1; Phase 3 re-assert cut those runs mid-write,
-        // leaving NOC1 stuck in addition to NOC0. FIX KL (NOC1) then also failed because
-        // FIX WW itself had just dirtied NOC1. (#42429)
-        //
-        // Root cause of Pass 2a failures (revised after run 26353523346):
-        //   The relay ERISC may have stuck wr_req != wr_resp from a prior session's in-flight
-        //   non-posted write (target Tensix reset, ACK never returned). The ERISC is at base
-        //   firmware (FIX TV confirms 0xABCDxxxx) but carries the permanent counter delta.
-        //   wait_for_non_mmio_flush() polls wr_req == wr_resp → permanent 5s timeout.
-        //   FIX NN (above) detects and clears this by force-resetting stuck MMIO ETH channels.
-
-        // GAP-R21 (#42429): Log middleware elapsed (FIX TV/NN/UU/VV combined).
+        // GAP-R21 (#42429): FIX TV/NN preparation complete (relay guards before non-MMIO writes).
         const auto middleware_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - middleware_start).count();
         log_info(
             tt::LogAlways,
-            "run_launch_phase: middleware complete (FIX TV/NN/UU/VV) — {}ms. (#42429)",
+            "run_launch_phase: FIX TV/NN preparation complete — {}ms. (#42429)",
             middleware_ms);
 
-        // ── Pass 2a: initialize non-MMIO devices (relay still alive) ──
-        // GAP-L2 (#42429): Log Pass 2a entry for post-mortem phase boundary visibility.
-        const auto pass2a_start = std::chrono::steady_clock::now();
-        log_info(
-            tt::LogAlways,
-            "run_launch_phase: Pass 2a — beginning non-MMIO firmware init ({} device(s)). (#42429)",
-            device_ids.size());
+        // ── Non-MMIO: reset + init immediately together (relay alive, fw_launch_addr not yet written) ──
+        const auto pass_non_mmio_start = std::chrono::steady_clock::now();
+        int pass_non_mmio_count = 0;
         for (tt::ChipId device_id : device_ids) {
             if (mmio_ids_set.count(device_id)) continue;
-            // FIX NZ (#42429): skip if relay is already broken (detected during Pass 1 reset_cores).
+            ++pass_non_mmio_count;
+            ClearNocData(descriptor_->env_impl(), device_id);
+            reset_cores(device_id);
             if (cluster_.is_relay_broken(device_id)) {
                 log_warning(
                     tt::LogAlways,
-                    "run_launch_phase: FIX NZ — skipping initialize_and_launch_firmware for "
-                    "non-MMIO device {} (relay broken). Firmware will be loaded on next clean init. (#42429)",
+                    "run_launch_phase: FIX OP — skipping initialize_and_launch_firmware for "
+                    "non-MMIO device {} (relay broken after reset_cores). (#42429)",
                     device_id);
                 continue;
             }
-            // FIX BX (#42429): belt-and-suspenders — catch relay failures that arise during
-            // initialize_and_launch_firmware itself (FIX BW marks relay_broken and re-throws).
-            // GAP-L1 (#42429): Per-device elapsed timer for post-mortem — distinguishes single
-            // 5s UMD timeout from 4 sequential 5s timeouts (20s total).
-            const auto pass2a_dev_start = std::chrono::steady_clock::now();
+            const auto dev_start = std::chrono::steady_clock::now();
             try {
                 initialize_and_launch_firmware(device_id);
-                const auto pass2a_dev_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now() - pass2a_dev_start).count();
+                const auto dev_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - dev_start).count();
                 log_info(
                     tt::LogAlways,
-                    "run_launch_phase: Pass 2a — device {} initialize_and_launch_firmware "
-                    "complete in {}ms. (#42429)",
+                    "run_launch_phase: FIX OP — non-MMIO device {} init complete in {}ms. (#42429)",
                     device_id,
-                    pass2a_dev_ms);
+                    dev_ms);
             } catch (const std::exception& e) {
-                const auto pass2a_dev_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now() - pass2a_dev_start).count();
+                const auto dev_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - dev_start).count();
                 log_warning(
                     tt::LogAlways,
-                    "run_launch_phase: FIX BX — initialize_and_launch_firmware threw for "
-                    "non-MMIO device {} after {}ms: {}. "
-                    "Skipping. (#42429)",
+                    "run_launch_phase: FIX OP — initialize_and_launch_firmware threw for "
+                    "non-MMIO device {} after {}ms: {}. Skipping. (#42429)",
                     device_id,
-                    pass2a_dev_ms,
+                    dev_ms,
                     e.what());
             }
         }
-
-        // GAP-R21 (#42429): Pass 2a elapsed summary.
-        const auto pass2a_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - pass2a_start).count();
+        const auto pass_non_mmio_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - pass_non_mmio_start).count();
         log_info(
             tt::LogAlways,
-            "run_launch_phase: Pass 2a complete — non-MMIO firmware init in {}ms. (#42429)",
-            pass2a_ms);
+            "run_launch_phase: FIX OP — non-MMIO pass complete ({} device(s)) in {}ms. (#42429)",
+            pass_non_mmio_count,
+            pass_non_mmio_ms);
 
-        // ── Pass 2b: initialize MMIO devices (may write fw_launch_addr → kills relay) ──
-        // All non-MMIO reset_cores and init_firmware calls are done; relay death is now safe.
-        // GAP-L3 (#42429): Log Pass 2b entry for post-mortem phase boundary visibility.
-        const auto pass2b_start = std::chrono::steady_clock::now();
-        log_info(
-            tt::LogAlways,
-            "run_launch_phase: Pass 2b — beginning MMIO firmware init. (#42429)");
+        // ── MMIO: reset + init last (writes fw_launch_addr → kills relay, no more non-MMIO needed) ──
+        const auto pass_mmio_start = std::chrono::steady_clock::now();
+        int pass_mmio_count = 0;
         for (tt::ChipId device_id : device_ids) {
             if (!mmio_ids_set.count(device_id)) continue;
-            // GAP-L1 (#42429): Per-device elapsed timer (matches Pass 2a pattern).
-            const auto pass2b_dev_start = std::chrono::steady_clock::now();
-            // GAP-R22 (#42429): Pass 2b exception handling — matches Pass 2a pattern.
-            // Without this, a single MMIO device failure (e.g. PCIe error on device 1)
-            // crashes the entire run_launch_phase, preventing devices 2 and 3 from
-            // initializing. With try/catch, remaining MMIO devices still get firmware.
+            ++pass_mmio_count;
+            ClearNocData(descriptor_->env_impl(), device_id);
+            reset_cores(device_id);
+            const auto dev_start = std::chrono::steady_clock::now();
             try {
                 initialize_and_launch_firmware(device_id);
-                const auto pass2b_dev_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now() - pass2b_dev_start).count();
+                const auto dev_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - dev_start).count();
                 log_info(
                     tt::LogAlways,
-                    "run_launch_phase: Pass 2b — device {} initialize_and_launch_firmware "
-                    "complete in {}ms. (#42429)",
+                    "run_launch_phase: FIX OP — MMIO device {} init complete in {}ms. (#42429)",
                     device_id,
-                    pass2b_dev_ms);
+                    dev_ms);
             } catch (const std::exception& e) {
-                const auto pass2b_dev_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now() - pass2b_dev_start).count();
+                const auto dev_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - dev_start).count();
                 log_warning(
                     tt::LogAlways,
-                    "run_launch_phase: GAP-R22 — initialize_and_launch_firmware threw for "
-                    "MMIO device {} after {}ms: {}. Continuing with remaining devices. (#42429)",
+                    "run_launch_phase: FIX OP — initialize_and_launch_firmware threw for "
+                    "MMIO device {} after {}ms: {}. Continuing. (#42429)",
                     device_id,
-                    pass2b_dev_ms,
+                    dev_ms,
                     e.what());
             }
         }
-        // GAP-R21 (#42429): Pass 2b elapsed summary.
-        const auto pass2b_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - pass2b_start).count();
+        const auto pass_mmio_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - pass_mmio_start).count();
         log_info(
             tt::LogAlways,
-            "run_launch_phase: Pass 2b complete — MMIO firmware init in {}ms. (#42429)",
-            pass2b_ms);
+            "run_launch_phase: FIX OP — MMIO pass complete ({} device(s)) in {}ms. (#42429)",
+            pass_mmio_count,
+            pass_mmio_ms);
 
-        // GAP-R20 (#42429): Total elapsed timer for run_launch_phase.
-        // GAP-R21 (#42429): Per-pass breakdown for post-mortem attribution.
+        // GAP-R20 (#42429): Total elapsed summary.
         const auto launch_phase_elapsed_ms =
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - launch_phase_start)
@@ -767,13 +609,12 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
         log_info(
             tt::LogAlways,
             "run_launch_phase: complete — total_elapsed={}ms, {} device(s), "
-            "pass1={}ms middleware={}ms pass2a={}ms pass2b={}ms. (#42429)",
+            "fix_tv_nn={}ms non_mmio={}ms mmio={}ms. (#42429)",
             launch_phase_elapsed_ms,
             device_ids.size(),
-            pass1_ms,
             middleware_ms,
-            pass2a_ms,
-            pass2b_ms);
+            pass_non_mmio_ms,
+            pass_mmio_ms);
     }
     initialized_ = true;
 }
