@@ -117,7 +117,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
             boost::asio::post(pool, [&, dev_idx, promise]() mutable {
                 // Generate input data for each device
                 auto host_data = std::shared_ptr<bfloat16[]>(new bfloat16[num_elems]);
-                for (int j = 0; j < num_elems; j++) {
+                for (uint64_t j = 0; j < num_elems; j++) {
                     host_data[j] = bfloat16(static_cast<float>(dev_idx));
                 }
 
@@ -164,12 +164,12 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
         auto gathered_tensors = output_tensors;
 
         log_info(LogTest, "Enqueue dummy ops");
-        for (int dev_idx = 0; dev_idx < devices.size(); dev_idx++) {
+        for (size_t dev_idx = 0; dev_idx < devices.size(); dev_idx++) {
             auto promise = std::make_shared<std::promise<void>>();
             futures.push_back(promise->get_future());
             boost::asio::post(pool, [&, dev_idx, promise]() mutable {
                 auto dummy_data = std::shared_ptr<bfloat16[]>(new bfloat16[num_elems]);
-                for (int j = 0; j < num_elems; j++) {
+                for (uint64_t j = 0; j < num_elems; j++) {
                     dummy_data[j] = bfloat16(static_cast<float>(dev_idx));
                 }
                 auto& single_mesh = single_meshes[dev_idx];
@@ -196,7 +196,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
                 auto output_data = std::shared_ptr<bfloat16[]>(new bfloat16[device_tensor.physical_volume()]);
                 ttnn::read_buffer(QueueId(op_cq_id), device_tensor, {output_data});
 
-                for (int j = 0; j < device_tensor.physical_volume(); j++) {
+                for (uint64_t j = 0; j < device_tensor.physical_volume(); j++) {
                     int base = j / num_elems;  // dev_idx
                     ASSERT_EQ(static_cast<float>(output_data[j]), (-1.0 * base * 32.0 + 128));
                 }
@@ -279,7 +279,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
             boost::asio::post(pool, [&, dev_idx, promise]() mutable {
                 // Generate input data for each device
                 auto host_data = std::shared_ptr<bfloat16[]>(new bfloat16[num_elems]);
-                for (int j = 0; j < num_elems; j++) {
+                for (uint64_t j = 0; j < num_elems; j++) {
                     host_data[j] = bfloat16(static_cast<float>(dev_idx));
                 }
 
@@ -343,7 +343,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
                 ttnn::queue_synchronize(single_mesh->mesh_command_queue(ccl_cq_id.get()));
 
                 auto dummy_data = std::shared_ptr<bfloat16[]>(new bfloat16[num_elems]);
-                for (int j = 0; j < num_elems; j++) {
+                for (uint64_t j = 0; j < num_elems; j++) {
                     dummy_data[j] = bfloat16(static_cast<float>(dev_idx));
                 }
                 Tensor dummy_tensor = tt::tt_metal::create_device_tensor(tensor_spec, single_mesh.get());
@@ -389,7 +389,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
                 auto output_data = std::shared_ptr<bfloat16[]>(new bfloat16[device_tensor.physical_volume()]);
                 ttnn::read_buffer(op_cq_id, device_tensor, {output_data});
 
-                for (int j = 0; j < device_tensor.physical_volume(); j++) {
+                for (uint64_t j = 0; j < device_tensor.physical_volume(); j++) {
                     int base = j / num_elems;  // dev_idx
                     ASSERT_EQ(static_cast<float>(output_data[j]), (-1.0 * base * 32.0 + 128));
                 }
@@ -473,7 +473,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
             boost::asio::post(pool, [&, dev_idx, promise]() mutable {
                 // Generate input data for each device
                 auto host_data = std::shared_ptr<bfloat16[]>(new bfloat16[num_elems]);
-                for (int j = 0; j < num_elems; j++) {
+                for (uint64_t j = 0; j < num_elems; j++) {
                     host_data[j] = bfloat16(static_cast<float>(dev_idx));
                 }
 
@@ -535,7 +535,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
                 auto& single_mesh = single_meshes[dev_idx];
 
                 auto dummy_data = std::shared_ptr<bfloat16[]>(new bfloat16[num_elems]);
-                for (int j = 0; j < num_elems; j++) {
+                for (uint64_t j = 0; j < num_elems; j++) {
                     dummy_data[j] = bfloat16(static_cast<float>(dev_idx));
                 }
                 Tensor dummy_tensor = tt::tt_metal::create_device_tensor(tensor_spec, single_mesh.get());
@@ -581,7 +581,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
                 auto output_data = std::shared_ptr<bfloat16[]>(new bfloat16[device_tensor.physical_volume()]);
                 ttnn::read_buffer(mem_cq_id, device_tensor, {output_data});
 
-                for (int j = 0; j < device_tensor.physical_volume(); j++) {
+                for (uint64_t j = 0; j < device_tensor.physical_volume(); j++) {
                     int base = j / num_elems;  // dev_idx
                     ASSERT_EQ(static_cast<float>(output_data[j]), (-1.0 * base * 32.0 + 128));
                 }

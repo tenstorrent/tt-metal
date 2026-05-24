@@ -116,7 +116,7 @@ int main(int argc, char** argv) {
         tt_metal::Program program = tt_metal::Program();
         uint32_t single_tile_size = 2 * 1024;
 
-        for (int core_group_idx = 0; core_group_idx < num_core_groups; ++core_group_idx) {
+        for (uint32_t core_group_idx = 0; core_group_idx < num_core_groups; ++core_group_idx) {
             CoreCoord start_core = {0, (num_cores_r / num_core_groups) * core_group_idx};
             CoreCoord end_core = {
                 (std::size_t)num_cores_c - 1,
@@ -133,8 +133,8 @@ int main(int argc, char** argv) {
                 end_core.x,
                 end_core.y);
 
-            for (int i = start_core.y; i <= end_core.y; i++) {
-                for (int j = start_core.x; j <= end_core.x; j++) {
+            for (size_t i = start_core.y; i <= end_core.y; i++) {
+                for (size_t j = start_core.x; j <= end_core.x; j++) {
                     CoreCoord core = {(std::size_t)j, (std::size_t)i};
                     uint32_t cb_index = 0;
                     uint32_t cb_tiles = 8;
@@ -179,8 +179,8 @@ int main(int argc, char** argv) {
                 group_of_cores,
                 tt_metal::ComputeConfig{.compile_args = compute_compile_args});
 
-            for (int i = start_core.y; i <= end_core.y; i++) {
-                for (int j = start_core.x; j <= end_core.x; j++) {
+            for (size_t i = start_core.y; i <= end_core.y; i++) {
+                for (size_t j = start_core.x; j <= end_core.x; j++) {
                     CoreCoord core = {(std::size_t)j, (std::size_t)i};
                     int core_index = (i * num_cores_c) + j;
 
@@ -225,7 +225,7 @@ int main(int argc, char** argv) {
     auto avg_elapsed_us = calculate_average(elapsed_us);
     if (pass && !bypass_check) {
         // goal is under 10us
-        long target_us = 10;
+        unsigned long target_us = 10;
 
         if (avg_elapsed_us > target_us) {
             pass = false;

@@ -132,7 +132,7 @@ void create_and_run_row_pipeline(
     // create kernels
     vector<tt_metal::KernelHandle> receiver_kernels;
     vector<tt_metal::KernelHandle> sender_kernels;
-    for (int core_id = 0; core_id < num_cores; core_id++) {
+    for (uint32_t core_id = 0; core_id < num_cores; core_id++) {
         std::string receiver_kernel_name;
         if (core_id == 0) {
             receiver_kernel_name = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_first_stage.cpp";
@@ -187,7 +187,7 @@ void create_and_run_row_pipeline(
         sems.at(core).push_back(l1_valid_value_semaphore_id);
     }
 
-    for (int core_id = 0; core_id < num_cores; core_id++) {
+    for (uint32_t core_id = 0; core_id < num_cores; core_id++) {
         // TODO(agrebenisan):  Once semaphores are properly allocated at 16B-aligned addresses, then
         // will make proper sems. For now, using the original code.
         CoreCoord core = cores[core_id];

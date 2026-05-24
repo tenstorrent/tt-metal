@@ -275,7 +275,7 @@ int main(int argc, char** argv) {
         }
     } else {
         std::vector<std::string> operators;
-        for (uint32_t idx = 1; idx < argc; idx++) {
+        for (uint32_t idx = 1; idx < static_cast<uint32_t>(argc); idx++) {
             if (strstr(argv[idx], "-tile-factor")) {
                 idx++;
                 arg_tile_factor = atoi(argv[idx]);

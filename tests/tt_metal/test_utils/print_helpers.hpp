@@ -10,7 +10,7 @@ namespace tt::test_utils {
 /// @param const std::vector<T>& vec
 template <typename T>
 void print_vector(const std::vector<T>& vec) {
-    for (int i = 0; i < vec.size(); i++) {
+    for (size_t i = 0; i < vec.size(); i++) {
         std::cout << vec.at(i) << ", ";
     }
     std::cout << std::endl;
@@ -20,7 +20,7 @@ void print_vector(const std::vector<T>& vec) {
 /// @param const std::vector<T>& vec
 template <typename T>
 void print_vector_fixed_numel_per_row(const std::vector<T>& vec, const unsigned int numel_per_row) {
-    for (int i = 0; i < vec.size(); i++) {
+    for (size_t i = 0; i < vec.size(); i++) {
         if ((i % numel_per_row) == 0) {
             std::cout << std::endl;
         }

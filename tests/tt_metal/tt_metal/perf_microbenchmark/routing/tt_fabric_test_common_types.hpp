@@ -141,18 +141,18 @@ enum class ChannelTrimmingMode { NONE, CAPTURE, REPLAY };
 
 struct TestFabricSetup {
     tt::tt_fabric::Topology topology{0};
-    std::optional<tt_fabric::FabricTensixConfig> fabric_tensix_config;
-    std::optional<tt_fabric::FabricReliabilityMode> fabric_reliability_mode;
+    std::optional<tt_fabric::FabricTensixConfig> fabric_tensix_config = std::nullopt;
+    std::optional<tt_fabric::FabricReliabilityMode> fabric_reliability_mode = std::nullopt;
     uint32_t num_links{};
-    std::optional<std::string> torus_config;  // For Torus topology: "X", "Y", or "XY"
-    std::optional<uint32_t> max_packet_size;  // Custom max packet size for router
+    std::optional<std::string> torus_config = std::nullopt;  // For Torus topology: "X", "Y", or "XY"
+    std::optional<uint32_t> max_packet_size = std::nullopt;  // Custom max packet size for router
     bool enable_channel_trimming = false;     // When true, test is expanded into CAPTURE + REPLAY phases
     bool use_vc2 = false;                     // When true, use private VC2 connection API instead of public API
 };
 
 struct HighLevelPatternConfig {
     std::string type;
-    std::optional<uint32_t> iterations;
+    std::optional<uint32_t> iterations = std::nullopt;
     bool is_sequential = false;
 };
 
@@ -212,10 +212,10 @@ struct TestConfig {
 // Latency test results structure (parallel to bandwidth results)
 struct LatencyResults {
     std::string test_name;
-    uint32_t num_samples;
-    uint32_t message_size_bytes;
-    std::vector<uint64_t> latencies_cycles;  // raw cycle counts
-    std::vector<double> latencies_ns;        // converted to ns
+    uint32_t num_samples = 0;
+    uint32_t message_size_bytes = 0;
+    std::vector<uint64_t> latencies_cycles = {};  // raw cycle counts
+    std::vector<double> latencies_ns = {};        // converted to ns
     uint64_t min_latency_cycles;
     uint64_t max_latency_cycles;
     double avg_latency_ns;
@@ -281,7 +281,7 @@ struct CoreAllocationConfig {
 struct AllocatorPolicies {
     CoreAllocationConfig sender_config;
     CoreAllocationConfig receiver_config;
-    uint32_t default_payload_chunk_size;
+    uint32_t default_payload_chunk_size = 0;
 
     AllocatorPolicies(
         std::optional<CoreAllocationConfig> sender_config = std::nullopt,

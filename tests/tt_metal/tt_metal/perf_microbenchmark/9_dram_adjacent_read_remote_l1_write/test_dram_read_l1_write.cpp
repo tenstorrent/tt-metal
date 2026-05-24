@@ -191,14 +191,14 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
             .compile_args = writer_compile_time_args});
 
     std::vector<uint32_t> bank_ids;
-    for (int i = 0; i < all_dram_reader_cores_ordered.size(); i++) {
+    for (size_t i = 0; i < all_dram_reader_cores_ordered.size(); i++) {
         auto core = all_dram_reader_cores_ordered[i];
         uint32_t bank_id = i + bank_start_id;
         uint32_t vc = bank_id & 0x1;
 
         bank_ids.push_back(bank_id);
 
-        for (int j = 0; j < i; ++j) {
+        for (size_t j = 0; j < i; ++j) {
             auto core_ = all_dram_reader_cores_ordered[j];
 
             if (core_.y == core.y and ((bank_id & 0x1) == (bank_ids[j] & 0x1))) {  // same vc and same row

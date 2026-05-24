@@ -170,14 +170,14 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
             .compile_args = compile_time_args});
 
     std::vector<uint32_t> bank_ids;
-    for (int i = 0; i < all_cores_list.size(); i++) {
+    for (size_t i = 0; i < all_cores_list.size(); i++) {
         auto core = all_cores_list[i];
         uint32_t bank_id = i + bank_start_id;
         uint32_t vc = bank_id & 0x3;
 
         bank_ids.push_back(bank_id);
 
-        for (int j = 0; j < i; ++j) {
+        for (size_t j = 0; j < i; ++j) {
             auto core_ = all_cores_list[j];
 
             if (core_.y == core.y and ((bank_id & 0x3) == (bank_ids[j] & 0x3))) {  // same vc and same row

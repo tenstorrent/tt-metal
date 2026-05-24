@@ -255,7 +255,7 @@ bool single_core_reconfig(
     std::vector<float> golden1(input1.size());
     // This vector will hold packed fp16_b/fp32 result:
     std::vector<uint32_t> packed_golden0(input1.size());
-    for (auto i = 0; i < temp_golden.size(); i++) {
+    for (size_t i = 0; i < temp_golden.size(); i++) {
         // Do temp = SrcA + SrcB:
         temp_golden[i] = static_cast<float>(input1[i]) + static_cast<float>(bfloat16(input0[i]));
         // Do temp + DST, store in out0 vector depending on fp32_dest_acc_en:

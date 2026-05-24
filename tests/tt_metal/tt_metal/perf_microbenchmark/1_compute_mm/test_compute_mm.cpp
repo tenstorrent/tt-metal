@@ -1259,10 +1259,10 @@ tt_metal::Program create_program(
     uint32_t last_block_padded_block_tiles_h_skip =
         (per_core_Mt / out_subblock_h - last_block_num_nonzero_subblocks_h) * (per_core_Nt * out_subblock_h);
 
-    for (int output_idx_y = 0; output_idx_y < core_range.y; output_idx_y++) {
-        for (int output_idx_x = 0; output_idx_x < core_range.x; output_idx_x++) {
-            int core_idx_x = output_idx_x;
-            int core_idx_y = output_idx_y;
+    for (uint32_t output_idx_y = 0; output_idx_y < core_range.y; output_idx_y++) {
+        for (uint32_t output_idx_x = 0; output_idx_x < core_range.x; output_idx_x++) {
+            size_t core_idx_x = output_idx_x;
+            size_t core_idx_y = output_idx_y;
             CoreCoord core = {(std::size_t)core_idx_x, (std::size_t)core_idx_y};
             auto phy_core = device->worker_core_from_logical_core(core);
 
@@ -1433,7 +1433,7 @@ void prepare_inputs(
     uint32_t last_block_h = Mt % per_core_Mt == 0 ? per_core_Mt : Mt % per_core_Mt;
     uint32_t last_block_w = Nt % per_core_Nt == 0 ? per_core_Nt : Nt % per_core_Nt;
 
-    for (int r = 0; r < num_cores_y; r++) {
+    for (uint32_t r = 0; r < num_cores_y; r++) {
         int num_r = (r == num_cores_y - 1) ? (last_block_h) : (per_core_Mt);
 
         std::vector<float> in0_slice = get_row_slice(in0_vec, r * per_core_Mt * 32, num_r * 32, Mt * 32, Kt * 32);
@@ -1447,7 +1447,7 @@ void prepare_inputs(
         auto untilize_vec = untilize_swizzled(unpack_vec, num_r * 32, in0_block_w * 32);
         in0_bfp8_unpack_slice.push_back(untilize_vec);
 
-        for (int c = 0; c < num_cores_x; c++) {
+        for (uint32_t c = 0; c < num_cores_x; c++) {
             int num_c = (c == num_cores_x - 1) ? (last_block_w) : (per_core_Nt);
 
             std::vector<float> in1_block_slice(in0_block_w * num_c * 1024, (float)0);
@@ -1593,8 +1593,8 @@ bool validation(
     uint32_t last_block_w = Nt % per_core_Nt == 0 ? per_core_Nt : Nt % per_core_Nt;
     uint32_t diff_count = 0;
 
-    for (int r = 0; r < num_cores_y; ++r) {
-        for (int c = 0; c < num_cores_x; ++c) {
+    for (uint32_t r = 0; r < num_cores_y; ++r) {
+        for (uint32_t c = 0; c < num_cores_x; ++c) {
             CoreCoord core = {(size_t)c, (size_t)r};
             std::vector<uint32_t> result_vec;
             uint32_t num_r = (r == num_cores_y - 1) ? (last_block_h) : (per_core_Mt);
@@ -1608,7 +1608,7 @@ bool validation(
             uint32_t num_patterns = ((num_c - 1) / in0_block_w) + 1;
             uint32_t last_remain_c = num_c % in0_block_w == 0 ? in0_block_w : num_c % in0_block_w;
 
-            for (int32_t i = 0; i < num_patterns; ++i) {
+            for (uint32_t i = 0; i < num_patterns; ++i) {
                 auto pattern_w = (i == num_patterns - 1) ? (last_remain_c) : (in0_block_w);
                 auto result_slice =
                     get_col_slice(result_untilized, i * in0_block_w * 32, pattern_w * 32, num_r * 32, num_c * 32);
@@ -1620,7 +1620,7 @@ bool validation(
                 if (result_slice.size() != in0_block_slice.size()) {
                     pass = false;
                 }
-                for (int j = 0; j < result_slice.size(); ++j) {
+                for (size_t j = 0; j < result_slice.size(); ++j) {
                     float a = result_slice.at(i);
                     float b = in0_block_slice.at(i);
                     if (a != b) {

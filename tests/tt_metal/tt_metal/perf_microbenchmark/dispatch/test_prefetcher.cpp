@@ -1169,7 +1169,7 @@ protected:
             dispatch_buffer_page_size_ - ((host_data.data.size() * sizeof(uint32_t)) % dispatch_buffer_page_size_);
         pad = pad % dispatch_buffer_page_size_;
 
-        for (int i = 0; i < pad / sizeof(uint32_t); i++) {
+        for (int i = 0; i < (int)(static_cast<unsigned>(pad) / sizeof(uint32_t)); i++) {
             device_data.push_one(device_data.get_host_core(), 0, HOST_DATA_DIRTY_PATTERN);
         }
     }

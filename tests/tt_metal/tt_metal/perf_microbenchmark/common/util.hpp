@@ -41,7 +41,7 @@ inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::IDevice* device, co
     auto num_processors = hal.get_num_risc_processors(tt::tt_metal::HalProgrammableCoreType::TENSIX);
     std::vector<uint64_t> print_buffer_addrs;
     print_buffer_addrs.reserve(num_processors);
-    for (int i = 0; i < num_processors; i++) {
+    for (uint32_t i = 0; i < num_processors; i++) {
         print_buffer_addrs.push_back(dprint_msg_addr + i * sizeof(DebugPrintMemLayout));
     }
     for (const auto& worker_core : worker_cores_used_in_program) {
@@ -60,7 +60,7 @@ inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::IDevice* device, co
 
             uint32_t step = (end_index - MARKER_DATA_START) / TIMER_DATA_UINT32_SIZE;
             uint32_t timer_id = 1;
-            for (int i = MARKER_DATA_START; i < end_index; i += TIMER_DATA_UINT32_SIZE, timer_id++) {
+            for (uint32_t i = static_cast<uint32_t>(MARKER_DATA_START); i < end_index; i += TIMER_DATA_UINT32_SIZE, timer_id++) {
                 if (i + TIMER_VAL_H < profile_buffer.size()) {
                     uint64_t cycle =
                         ((static_cast<uint64_t>(profile_buffer[i + TIMER_VAL_H]) << 32) |

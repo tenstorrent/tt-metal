@@ -24,10 +24,10 @@ void BM_host_bfloat8_conversion(benchmark::State& state) {
     const auto tensor_shape = ttnn::Shape{state.range(0), constants::TILE_HEIGHT, constants::TILE_WIDTH};
 
     std::vector<Tensor> tensors;
-    for (int i = 0; i < device->num_devices(); i++) {
+    for (size_t i = 0; i < device->num_devices(); i++) {
         std::vector<bfloat16> host_data;
         host_data.reserve(tensor_shape.volume());
-        for (int j = 0; j < tensor_shape.volume(); j++) {
+        for (uint64_t j = 0; j < tensor_shape.volume(); j++) {
             host_data.push_back(bfloat16(j));
         }
         tensors.push_back(Tensor::from_vector(

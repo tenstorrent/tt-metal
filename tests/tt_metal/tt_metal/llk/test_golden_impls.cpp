@@ -41,7 +41,7 @@ std::vector<uint32_t> gold_standard_untilize(const std::vector<uint32_t>& src_ve
 
         // Iterate over tile columns 32 times (naive, but simple for validation)
         uint32_t num_iterations = (config.num_faces > 2) ? 2 : 1;
-        for (int x = 0; x < num_iterations; x++) {
+        for (uint32_t x = 0; x < num_iterations; x++) {
             for (int i = 0; i < config.face_r_dim; i++) {  // num rows in a face
                 for (int j = 0; j < num_tile_cols; j++) {  // num columns top two faces
                     // Left face row copy
@@ -125,13 +125,13 @@ std::vector<uint16_t> gold_transpose_wh(const std::vector<uint16_t>& src_vec, co
     TensAddr addrt(shapeT);
 
     vector<uint16_t> transposed(src_vec.size());
-    for (int n = 0; n < shape[0]; n++) {
-        for (int c = 0; c < shape[1]; c++) {
-            for (int h = 0; h < shape[2]; h++) {
-                for (int w = 0; w < shape[3]; w++) {
+    for (uint32_t n = 0; n < shape[0]; n++) {
+        for (uint32_t c = 0; c < shape[1]; c++) {
+            for (uint32_t h = 0; h < shape[2]; h++) {
+                for (uint32_t w = 0; w < shape[3]; w++) {
                     auto toffs = addrt.offs(n, c, w, h);
                     auto offs = addr.offs(n, c, h, w);
-                    TT_FATAL(toffs < transposed.size() && offs < src_vec.size(), "Error");
+                    TT_FATAL(static_cast<size_t>(toffs) < transposed.size() && static_cast<size_t>(offs) < src_vec.size(), "Error");
                     transposed[toffs] = src_vec[offs];
                 }
             }
@@ -160,12 +160,12 @@ std::vector<uint16_t> gold_reduce_h(
 
     vector<uint16_t> reduced(addr_dst.numel());
     std::fill(reduced.begin(), reduced.end(), 0);
-    for (int n = 0; n < shape[0]; n++) {
-        for (int c = 0; c < shape[1]; c++) {
-            for (int w = 0; w < shape[3]; w++) {
+    for (uint32_t n = 0; n < shape[0]; n++) {
+        for (uint32_t c = 0; c < shape[1]; c++) {
+            for (uint32_t w = 0; w < shape[3]; w++) {
                 // red_type : {SUM, AVG, MAX}; i.e. {0, 1, 2};
                 float sum = (red_type == 2) ? -std::numeric_limits<float>::max() : 0.0f;
-                for (int h = 0; h < shape[2]; h++) {
+                for (uint32_t h = 0; h < shape[2]; h++) {
                     auto offs = addr.offs(n, c, h, w);
                     if (red_type == 2) {
                         sum = fmaxf(static_cast<float>(std::bit_cast<bfloat16>(src_vec[offs])), sum);
@@ -193,12 +193,12 @@ std::vector<uint16_t> gold_reduce_w(
 
     vector<uint16_t> reduced(addr_dst.numel());
     std::fill(reduced.begin(), reduced.end(), 0);
-    for (int n = 0; n < shape[0]; n++) {
-        for (int c = 0; c < shape[1]; c++) {
-            for (int h = 0; h < shape[2]; h++) {
+    for (uint32_t n = 0; n < shape[0]; n++) {
+        for (uint32_t c = 0; c < shape[1]; c++) {
+            for (uint32_t h = 0; h < shape[2]; h++) {
                 // red_type : {SUM, AVG, MAX}; i.e. {0, 1, 2};
                 float sum = (red_type == 2) ? -std::numeric_limits<float>::max() : 0.0f;
-                for (int w = 0; w < shape[3]; w++) {
+                for (uint32_t w = 0; w < shape[3]; w++) {
                     auto offs = addr.offs(n, c, h, w);
                     if (red_type == 2) {
                         sum = fmaxf(static_cast<float>(std::bit_cast<bfloat16>(src_vec[offs])), sum);
@@ -230,12 +230,12 @@ std::vector<uint16_t> gold_reduce_hw(
 
     vector<uint16_t> reduced(addr_dst.numel());
     std::fill(reduced.begin(), reduced.end(), 0);
-    for (int n = 0; n < shape[0]; n++) {
-        for (int c = 0; c < shape[1]; c++) {
+    for (uint32_t n = 0; n < shape[0]; n++) {
+        for (uint32_t c = 0; c < shape[1]; c++) {
             // red_type : {SUM, AVG, MAX}; i.e. {0, 1, 2};
             float sum = (red_type == 2) ? -std::numeric_limits<float>::max() : 0.0f;
-            for (int h = 0; h < shape[2]; h++) {
-                for (int w = 0; w < shape[3]; w++) {
+            for (uint32_t h = 0; h < shape[2]; h++) {
+                for (uint32_t w = 0; w < shape[3]; w++) {
                     auto offs = addr.offs(n, c, h, w);
                     if (red_type == 2) {
                         sum = fmaxf(static_cast<float>(std::bit_cast<bfloat16>(src_vec[offs])), sum);

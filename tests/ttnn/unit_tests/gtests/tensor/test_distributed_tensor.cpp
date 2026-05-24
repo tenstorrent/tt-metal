@@ -118,7 +118,7 @@ TEST_F(TensorDistribution2x4Test, Shard1DFewerShardsThanDevices) {
 
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
     EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices() - 1);
-    for (int i = 0; i < device_tensors.size(); i++) {
+    for (size_t i = 0; i < device_tensors.size(); i++) {
         EXPECT_THAT(device_tensors[i].to_vector<float>(), ElementsAre(i * 1.F, i * 2.F, i * 3.F));
     }
 
@@ -151,7 +151,7 @@ TEST_F(TensorDistribution2x4Test, Shard1DNegativeDim) {
 
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
     EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
-    for (int i = 0; i < device_tensors.size(); i++) {
+    for (size_t i = 0; i < device_tensors.size(); i++) {
         EXPECT_THAT(device_tensors[i].to_vector<float>(), ElementsAre(i));
     }
 }
@@ -181,7 +181,7 @@ TEST_F(TensorDistribution2x4Test, Shard1D) {
 
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
     EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
-    for (int i = 0; i < device_tensors.size(); i++) {
+    for (size_t i = 0; i < device_tensors.size(); i++) {
         EXPECT_THAT(device_tensors[i].to_vector<float>(), ElementsAre(i * 1.F, i * 2.F, i * 3.F));
     }
 
@@ -285,7 +285,7 @@ TEST_P(TensorDistribution2x4Test2D, ReplicateDim) {
 
     std::vector<float> test_data;
     {
-        int i = 0;
+        size_t i = 0;
         for (; i < num_cols; i++) {
             test_data.push_back(0);
         }
@@ -315,7 +315,7 @@ TEST_P(TensorDistribution2x4Test2D, ReplicateDim) {
     EXPECT_EQ(device_tensors.size(), num_devices);
 
     {
-        int i = 0;
+        size_t i = 0;
         for (; i < num_cols; i++) {
             EXPECT_THAT(device_tensors[i].to_vector<float>(), Each(FloatEq(0.0f)));
         }
@@ -353,7 +353,7 @@ TEST_P(TensorDistribution2x4Test2D, ShardDims) {
 
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
     EXPECT_EQ(device_tensors.size(), num_devices);
-    for (int i = 0; i < device_tensors.size(); i++) {
+    for (size_t i = 0; i < device_tensors.size(); i++) {
         EXPECT_THAT(device_tensors[i].to_vector<float>(), ElementsAre(i * 1.F, i * 2.F, i * 3.F));
     }
 
@@ -447,7 +447,7 @@ TEST_F(TensorDistribution2x4Test, NdMapperShard3D) {
 
     std::vector<float> test_data;
     test_data.reserve(4 * kNumRows * kNumCols * 7);
-    for (int i = 0; i < 4 * kNumRows * kNumCols * 7; ++i) {
+    for (size_t i = 0; i < 4 * kNumRows * kNumCols * 7; ++i) {
         test_data.push_back(static_cast<float>(i));
     }
     Tensor input_tensor = Tensor::from_vector(

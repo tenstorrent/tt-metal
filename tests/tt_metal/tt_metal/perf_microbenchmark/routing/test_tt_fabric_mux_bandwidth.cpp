@@ -389,8 +389,8 @@ int main(int argc, char** argv) {
 
     std::vector<CoreCoord> worker_logical_cores;
     auto grid_size = mesh_device->compute_with_storage_grid_size();
-    for (auto i = 0; i < grid_size.x; i++) {
-        for (auto j = 0; j < grid_size.y; j++) {
+    for (size_t i = 0; i < grid_size.x; i++) {
+        for (size_t j = 0; j < grid_size.y; j++) {
             worker_logical_cores.push_back(CoreCoord({i, j}));
         }
     }
@@ -453,7 +453,7 @@ int main(int argc, char** argv) {
         default_receiver_virtual_core.x, default_receiver_virtual_core.y);
 
     auto full_size_channel_worker_offset = worker_cores_offset;
-    for (auto i = 0; i < test_params.num_full_size_channels; i++) {
+    for (size_t i = 0; i < test_params.num_full_size_channels; i++) {
         CoreCoord logical_core = worker_logical_cores[full_size_channel_worker_offset + i];
         WorkerTestConfig worker_test_config = {
             .memory_map = &worker_memory_map,
@@ -470,7 +470,7 @@ int main(int argc, char** argv) {
     }
 
     auto header_only_channel_worker_offset = worker_cores_offset + test_params.num_full_size_channels;
-    for (auto i = 0; i < test_params.num_header_only_channels; i++) {
+    for (size_t i = 0; i < test_params.num_header_only_channels; i++) {
         CoreCoord logical_core = worker_logical_cores[header_only_channel_worker_offset + i];
         WorkerTestConfig worker_test_config = {
             .memory_map = &worker_memory_map,

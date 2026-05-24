@@ -39,7 +39,7 @@ bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const D
     auto& cq = mesh_device->mesh_command_queue();
     auto* device = mesh_device->get_devices()[0];
 
-    for (int k = 0; k < test_config.dest_core_set.size(); k++) {
+    for (size_t k = 0; k < test_config.dest_core_set.size(); k++) {
         // Kernels
         auto receiver_kernel = CreateKernel(
             program,

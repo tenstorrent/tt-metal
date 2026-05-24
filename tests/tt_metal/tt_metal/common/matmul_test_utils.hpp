@@ -70,7 +70,7 @@ inline void print_faces(std::vector<bfloat16> data, const std::string& name) {
 
     int tile_index = 0;
     int face_index = 0;
-    for (int i = 0; i < data.size(); i++) {
+    for (size_t i = 0; i < data.size(); i++) {
         if (i % 256 == 0) {
             std::cout << "Tile " << tile_index / 4 << std::endl;
             std::cout << "Face = " << face_index << std::endl;

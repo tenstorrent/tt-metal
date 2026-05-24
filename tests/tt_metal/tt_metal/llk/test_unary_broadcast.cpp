@@ -133,7 +133,7 @@ std::vector<uint32_t> get_tilized_packed_golden_broadcast(
         } else if (T_out == tt::DataFormat::Bfp8_b) {
             std::vector<float> tempfp32v;
             tempfp32v.resize(vBroadcast.size());
-            for (int i = 0; i < vBroadcast.size(); i++) {
+            for (size_t i = 0; i < vBroadcast.size(); i++) {
                 tempfp32v[i] = static_cast<float>(vBroadcast[i]);
             }
             tilized_packed_res = pack_as_bfp8_tiles(tt::stl::make_const_span(tempfp32v), true, false);
@@ -144,7 +144,7 @@ std::vector<uint32_t> get_tilized_packed_golden_broadcast(
         if (T_out == tt::DataFormat::Float16_b) {
             std::vector<bfloat16> tempfp16bv;
             tempfp16bv.resize(vBroadcast.size());
-            for (int i = 0; i < vBroadcast.size(); i++) {
+            for (size_t i = 0; i < vBroadcast.size(); i++) {
                 tempfp16bv[i] = vBroadcast[i];
             }
             auto packed_vec = pack_vector<uint32_t, bfloat16>(tempfp16bv);
@@ -175,7 +175,7 @@ bool check_is_close(std::vector<uint32_t>& packed_golden, std::vector<uint32_t>&
                 gold_refloat.size(),
                 res_refloat.size());
         }
-        for (int i = 0; i < gold_refloat.size(); i++) {
+        for (size_t i = 0; i < gold_refloat.size(); i++) {
             if (std::fabs(gold_refloat[i] - res_refloat[i]) > atol) {
                 TT_THROW("Mismatch  A={} B={} atol={}", gold_refloat[i], res_refloat[i], atol);
                 result = false;

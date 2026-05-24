@@ -396,7 +396,7 @@ int main(int argc, char** argv) {
                 uint32_t val_to_write = data_written_bytes;
                 if (simulate_write_ptr_update) {
                     uint32_t num_write_ptr_updates = write_size_bytes / (32 * 1024);
-                    for (int i = 0; i < num_write_ptr_updates; i++) {
+                    for (uint32_t i = 0; i < num_write_ptr_updates; i++) {
                         tt::tt_metal::MetalContext::instance().get_cluster().write_reg(
                             &val_to_write, tt_cxy_pair(device->get_devices()[0]->id(), physical_core), reg_addr);
                         reg_addr += sizeof(uint32_t);

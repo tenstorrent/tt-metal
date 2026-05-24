@@ -217,7 +217,7 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
             CreateSemaphore(program, cr_set, j + 1);
             if (!active_eth_cores.empty()) {
                 auto active_eth_core = active_eth_cores.begin();
-                for (int k = 0; k < max_eth_cores && active_eth_core != active_eth_cores.end();
+                for (uint32_t k = 0; k < max_eth_cores && active_eth_core != active_eth_cores.end();
                      ++i, ++active_eth_core) {
                     CreateSemaphore(program, *active_eth_core, j + 1, CoreType::ETH);
                 }
@@ -397,7 +397,7 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
         }
         if (!active_eth_cores.empty()) {
             auto active_eth_core = active_eth_cores.begin();
-            for (int k = 0; k < max_eth_cores && active_eth_core != active_eth_cores.end(); ++i, ++active_eth_core) {
+            for (uint32_t k = 0; k < max_eth_cores && active_eth_core != active_eth_cores.end(); ++i, ++active_eth_core) {
                 auto dummy_erisc_kernel = CreateKernel(
                     program,
                     "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",

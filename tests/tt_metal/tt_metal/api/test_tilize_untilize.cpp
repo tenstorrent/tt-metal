@@ -35,10 +35,10 @@ std::vector<T> untilize_nchw(
 
     result.resize(H * W);
     uint64_t linear = 0;
-    for (auto hs = 0; hs < H; hs += tile_H) {           // iterate over h with stride 32
-        for (auto ws = 0; ws < W; ws += tile_W) {       // iterate over w with stride 32
-            for (auto ht = 0; ht < tile_H; ht++) {      // hs + ht = h
-                for (auto wt = 0; wt < tile_W; wt++) {  // ws + wt = w
+    for (uint32_t hs = 0; hs < H; hs += tile_H) {           // iterate over h with stride 32
+        for (uint32_t ws = 0; ws < W; ws += tile_W) {       // iterate over w with stride 32
+            for (uint32_t ht = 0; ht < tile_H; ht++) {      // hs + ht = h
+                for (uint32_t wt = 0; wt < tile_W; wt++) {  // ws + wt = w
                     T val = in[linear];
                     auto w = wt + ws;
                     auto h = ht + hs;
@@ -72,10 +72,10 @@ std::vector<T> tilize_nchw(
 
     tilized_result.resize(H * W);
     uint64_t out_index = 0;
-    for (auto hs = 0; hs < H; hs += tile_H) {
-        for (auto ws = 0; ws < W; ws += tile_W) {
-            for (auto ht = 0; ht < tile_H; ht++) {
-                for (auto wt = 0; wt < tile_W; wt++) {
+    for (uint32_t hs = 0; hs < H; hs += tile_H) {
+        for (uint32_t ws = 0; ws < W; ws += tile_W) {
+            for (uint32_t ht = 0; ht < tile_H; ht++) {
+                for (uint32_t wt = 0; wt < tile_W; wt++) {
                     auto w = wt + ws;
                     auto h = ht + hs;
                     auto in_offs = w + (h * W);
@@ -110,17 +110,17 @@ std::vector<T> convert_to_tile_layout(
     auto tile_HW = tile_H * tile_W;
     auto face_HW = face_H * face_W;
     TT_FATAL(data.size() % tile_HW == 0, "data size must be divisible by tile_HW");
-    int num_tiles = data.size() / tile_HW;
-    for (int tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
+    uint32_t num_tiles = static_cast<uint32_t>(data.size() / tile_HW);
+    for (uint32_t tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
         std::vector<T> top_left;
         std::vector<T> top_right;
         std::vector<T> bottom_left;
         std::vector<T> bottom_right;
 
         if (transpose_face) {
-            for (int col = 0; col < tile_W; col++) {
-                int index = (tile_idx * tile_HW) + col;
-                for (int row = 0; row < tile_H; row++) {
+            for (uint32_t col = 0; col < tile_W; col++) {
+                uint32_t index = (tile_idx * tile_HW) + col;
+                for (uint32_t row = 0; row < tile_H; row++) {
                     if (row < face_H and col < face_W) {
                         top_left.push_back(data[index]);
                     } else if (row < face_H and col >= face_W) {
@@ -136,9 +136,9 @@ std::vector<T> convert_to_tile_layout(
                 }
             }
         } else {
-            int index = tile_idx * tile_HW;
-            for (int row = 0; row < tile_H; row++) {
-                for (int col = 0; col < tile_W; col++) {
+            uint32_t index = tile_idx * tile_HW;
+            for (uint32_t row = 0; row < tile_H; row++) {
+                for (uint32_t col = 0; col < tile_W; col++) {
                     if (row < face_H and col < face_W) {
                         top_left.push_back(data[index]);
                     } else if (row < face_H and col >= face_W) {
@@ -197,37 +197,37 @@ std::vector<T> convert_to_flat_layout(
     auto num_faces_col = tile_W / face_W;
     auto num_faces_row = tile_H / face_H;
     TT_FATAL(data.size() % tile_HW == 0, "data size must be divisible by tile_HW");
-    int num_tiles = data.size() / tile_HW;
-    for (int tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
-        int tile_start = tile_idx * tile_HW;
+    uint32_t num_tiles = static_cast<uint32_t>(data.size() / tile_HW);
+    for (uint32_t tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
+        uint32_t tile_start = tile_idx * tile_HW;
 
         if (transpose_face) {
             if (num_faces_row >= 1 && num_faces_col <= 1) {  // 32x16
-                for (int face_y = 0; face_y < num_faces_row; face_y++) {
-                    int start = tile_start + (face_y * (face_H * tile_W));
-                    for (int col = 0; col < face_W; col++) {
-                        for (int row = 0; row < face_H; row++) {
+                for (uint32_t face_y = 0; face_y < num_faces_row; face_y++) {
+                    uint32_t start = tile_start + (face_y * (face_H * tile_W));
+                    for (uint32_t col = 0; col < face_W; col++) {
+                        for (uint32_t row = 0; row < face_H; row++) {
                             result.push_back(data[start + col + (row * face_W)]);
                         }
                     }
                 }
             } else if (num_faces_row <= 1 && num_faces_col >= 1) {  // 16x32
-                for (int col = 0; col < face_W; col++) {
-                    int start = tile_start + col;
-                    for (int face_x = 0; face_x < num_faces_col; face_x++) {
-                        int offset = face_x * face_HW;
-                        for (int row = 0; row < face_H; row++) {
+                for (uint32_t col = 0; col < face_W; col++) {
+                    uint32_t start = tile_start + col;
+                    for (uint32_t face_x = 0; face_x < num_faces_col; face_x++) {
+                        uint32_t offset = face_x * face_HW;
+                        for (uint32_t row = 0; row < face_H; row++) {
                             result.push_back(data[start + offset + (row * face_W)]);
                         }
                     }
                 }
             } else {
-                for (int face_x = 0; face_x < num_faces_col; face_x++) {
-                    for (int col = 0; col < face_W; col++) {
-                        int start = tile_start + (face_x * face_HW) + col;
-                        for (int face_y = 0; face_y < num_faces_row; face_y++) {
-                            int offset = face_y * (face_H * tile_W);
-                            for (int row = 0; row < face_H; row++) {
+                for (uint32_t face_x = 0; face_x < num_faces_col; face_x++) {
+                    for (uint32_t col = 0; col < face_W; col++) {
+                        uint32_t start = tile_start + (face_x * face_HW) + col;
+                        for (uint32_t face_y = 0; face_y < num_faces_row; face_y++) {
+                            uint32_t offset = face_y * (face_H * tile_W);
+                            for (uint32_t row = 0; row < face_H; row++) {
                                 result.push_back(data[start + offset + (row * face_W)]);
                             }
                         }
@@ -235,12 +235,12 @@ std::vector<T> convert_to_flat_layout(
                 }
             }
         } else {
-            for (int face_y = 0; face_y < num_faces_row; face_y++) {
-                for (int row = 0; row < face_H; row++) {
-                    int start = tile_start + (face_y * (face_H * tile_W)) + (row * face_W);
-                    for (int face_x = 0; face_x < num_faces_col; face_x++) {
-                        int offset = face_x * face_HW;
-                        for (int col = offset; col < offset + face_W; col++) {
+            for (uint32_t face_y = 0; face_y < num_faces_row; face_y++) {
+                for (uint32_t row = 0; row < face_H; row++) {
+                    uint32_t start = tile_start + (face_y * (face_H * tile_W)) + (row * face_W);
+                    for (uint32_t face_x = 0; face_x < num_faces_col; face_x++) {
+                        uint32_t offset = face_x * face_HW;
+                        for (uint32_t col = offset; col < offset + face_W; col++) {
                             result.push_back(data[start + col]);
                         }
                     }

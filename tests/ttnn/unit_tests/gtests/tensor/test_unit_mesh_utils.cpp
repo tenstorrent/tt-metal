@@ -39,7 +39,7 @@ TEST_F(UnitMeshUtils2x4Test, AggregateAndDisaggregate) {
         auto buffer = tt::tt_metal::distributed::MeshBuffer::create(
             tt::tt_metal::distributed::ReplicatedBufferConfig{.size = 16 << 10},
             tt::tt_metal::distributed::DeviceLocalBufferConfig{
-                .page_size = 1024, .buffer_type = tt::tt_metal::BufferType::DRAM},
+                .page_size = 1024, .buffer_type = tt::tt_metal::BufferType::DRAM, .sharding_args = {}, .bottom_up = {}},
             mesh_device_.get());
         EXPECT_TRUE(buffer->is_allocated());
         return buffer->address();
@@ -131,7 +131,7 @@ TEST_F(UnitMeshUtils2x4Test, AggregateMismatchedTensorSpecs) {
 
     std::vector<Tensor> tensors;
     tensors.reserve(unit_meshes.size());
-    for (int i = 0; i < unit_meshes.size(); i++) {
+    for (size_t i = 0; i < unit_meshes.size(); i++) {
         if (i % 2 == 0) {
             tensors.push_back(create_device_tensor(
                 tt::tt_metal::TensorSpec(

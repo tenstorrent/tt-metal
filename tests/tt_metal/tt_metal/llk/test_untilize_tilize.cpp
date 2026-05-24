@@ -81,12 +81,12 @@ struct TestConfig {
     // controlled with this flag:
     bool fp32_dest_acc_en = false;
     bool fast_tilize = false;
-    uint32_t input_single_tile_size;
-    uint32_t output_single_tile_size;
+    uint32_t input_single_tile_size = 0;
+    uint32_t output_single_tile_size = 0;
     // Block height in tiles:
-    uint32_t num_tiles_r;
+    uint32_t num_tiles_r = 0;
     // Block width in tiles:
-    uint32_t num_tiles_c;
+    uint32_t num_tiles_c = 0;
     uint32_t num_faces_per_tile = 4;
     // Face height in datums:
     uint32_t face_r_dim = 16;
@@ -329,7 +329,7 @@ void run_single_core_tilize_program(
         vector<bfloat16> golden_unpacked = unpack_vector<bfloat16, uint32_t>(golden);
         // Increasing the size since from BFP16 two times, since storing is in FP32
         golden.resize(golden.size() * 2);
-        for (auto i = 0; i < golden_unpacked.size(); i++) {
+        for (size_t i = 0; i < golden_unpacked.size(); i++) {
             // Cast float32 to "packed "uint32 golden vector if fp32_dest_acc_en:
             golden[i] = std::bit_cast<uint32_t>(static_cast<float>(golden_unpacked[i]));
         }
@@ -799,7 +799,7 @@ static void run_quasar_tilize_untilize_test(
         // For Float32 input: golden is already 32-bit, no expansion needed
         vector<bfloat16> golden_unpacked = unpack_vector<bfloat16, uint32_t>(golden);
         golden.resize(golden.size() * 2);
-        for (auto i = 0; i < golden_unpacked.size(); i++) {
+        for (size_t i = 0; i < golden_unpacked.size(); i++) {
             golden[i] = std::bit_cast<uint32_t>(static_cast<float>(golden_unpacked[i]));
         }
     }

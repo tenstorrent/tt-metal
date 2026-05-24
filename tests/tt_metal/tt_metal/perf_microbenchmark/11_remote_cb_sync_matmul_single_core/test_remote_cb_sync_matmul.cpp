@@ -493,7 +493,7 @@ bool validation_bfp8_b(
         }
     }
 
-    for (int i = 0; i < result_untilized.size(); ++i) {
+    for (size_t i = 0; i < result_untilized.size(); ++i) {
         result_vec[i] = result_untilized[i];
     }
 
@@ -545,7 +545,7 @@ bool validation_fp16(
         }
     }
 
-    for (int i = 0; i < result_untilized.size(); ++i) {
+    for (size_t i = 0; i < result_untilized.size(); ++i) {
         result_vec[i] = to_float(static_cast<bfloat16>(result_untilized[i]));
     }
 

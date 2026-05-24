@@ -375,7 +375,7 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordinat
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
-    for (int i = 0; i < sub_device_managers.size(); ++i) {
+    for (size_t i = 0; i < sub_device_managers.size(); ++i) {
         mesh_device->load_sub_device_manager(sub_device_managers[i]);
         const auto sub_device_cores = mesh_device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{i});
 

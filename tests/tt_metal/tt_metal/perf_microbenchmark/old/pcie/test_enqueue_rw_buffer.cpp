@@ -92,7 +92,7 @@ int main(int argc, char** argv) {
             auto end = std::chrono::steady_clock::now();
             auto elapsed_sum = end - begin;
 
-            for (int i = 0; i < iter; i++) {
+            for (uint32_t i = 0; i < iter; i++) {
                 begin = std::chrono::steady_clock::now();
                 distributed::WriteShard(cq, buffer, src_vec, distributed::MeshCoordinate(0, 0));
                 distributed::Finish(cq);
@@ -116,7 +116,7 @@ int main(int argc, char** argv) {
             auto end = std::chrono::steady_clock::now();
             auto elapsed_sum = end - begin;
 
-            for (int i = 0; i < iter; i++) {
+            for (uint32_t i = 0; i < iter; i++) {
                 begin = std::chrono::steady_clock::now();
                 distributed::ReadShard(cq, result_vec, buffer, distributed::MeshCoordinate(0, 0));
                 end = std::chrono::steady_clock::now();

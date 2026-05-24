@@ -175,7 +175,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceLoop
     uint32_t num_loops = 10;
     vector<vector<uint32_t>> trace_outputs;
 
-    for (auto i = 0; i < num_loops; i++) {
+    for (uint32_t i = 0; i < num_loops; i++) {
         trace_outputs.push_back({});
         trace_outputs[i].resize(input_data.size());
     }
@@ -186,7 +186,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceLoop
     // Trace mode execution
     distributed::MeshTraceId trace_id;
     bool trace_captured = false;
-    for (auto i = 0; i < num_loops; i++) {
+    for (uint32_t i = 0; i < num_loops; i++) {
         distributed::EnqueueWriteMeshBuffer(data_movement_queue, input, input_data, true);
 
         if (not trace_captured) {
@@ -239,7 +239,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceBenc
     uint32_t num_loops = 10;
     vector<vector<uint32_t>> trace_outputs;
 
-    for (auto i = 0; i < num_loops; i++) {
+    for (uint32_t i = 0; i < num_loops; i++) {
         trace_outputs.push_back({});
         trace_outputs[i].resize(input_data.size());
     }
@@ -259,7 +259,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceBenc
 
     for (bool blocking : blocking_flags) {
         std::string mode = blocking ? "Eager-B" : "Eager-NB";
-        for (auto i = 0; i < num_loops; i++) {
+        for (uint32_t i = 0; i < num_loops; i++) {
             tt::ScopedTimer timer(mode + " loop " + std::to_string(i));
             distributed::EnqueueWriteMeshBuffer(mesh_command_queue, input, input_data, blocking);
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, blocking);
@@ -279,7 +279,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceBenc
     this->device_->end_mesh_trace(mesh_command_queue.id(), tid);
 
     // Trace mode execution
-    for (auto i = 0; i < num_loops; i++) {
+    for (uint32_t i = 0; i < num_loops; i++) {
         tt::ScopedTimer timer("Trace loop " + std::to_string(i));
         distributed::EnqueueWriteMeshBuffer(mesh_command_queue, input, input_data, kNonBlocking);
         this->device_->replay_mesh_trace(mesh_command_queue.id(), tid, kNonBlocking);
@@ -289,7 +289,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceBenc
     distributed::Finish(mesh_command_queue);
 
     // Expect same output across all loops
-    for (auto i = 0; i < num_loops; i++) {
+    for (uint32_t i = 0; i < num_loops; i++) {
         EXPECT_TRUE(trace_outputs[i] == trace_outputs[0]);
     }
     this->device_->release_mesh_trace(tid);
@@ -487,7 +487,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueTwoProgramTrace) {
     uint32_t num_loops = parse_env<int>("TT_METAL_TRACE_LOOPS", 5);
     vector<vector<uint32_t>> trace_outputs;
 
-    for (auto i = 0; i < num_loops; i++) {
+    for (uint32_t i = 0; i < num_loops; i++) {
         trace_outputs.push_back({});
         trace_outputs[i].resize(input_data.size());
     }
@@ -508,7 +508,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueTwoProgramTrace) {
 
     for (bool blocking : blocking_flags) {
         std::string mode = blocking ? "Eager-B" : "Eager-NB";
-        for (auto i = 0; i < num_loops; i++) {
+        for (uint32_t i = 0; i < num_loops; i++) {
             ScopedTimer timer(mode + " loop " + std::to_string(i));
             distributed::EnqueueWriteMeshBuffer(mesh_command_queue, input, input_data, blocking);
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload0, blocking);
@@ -530,7 +530,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueTwoProgramTrace) {
     mesh_device->end_mesh_trace(mesh_command_queue.id(), tid);
 
     // Trace mode execution
-    for (auto i = 0; i < num_loops; i++) {
+    for (uint32_t i = 0; i < num_loops; i++) {
         ScopedTimer timer("Trace loop " + std::to_string(i));
         distributed::EnqueueWriteMeshBuffer(mesh_command_queue, input, input_data, kNonBlocking);
         mesh_device->replay_mesh_trace(mesh_command_queue.id(), tid, kNonBlocking);
@@ -541,7 +541,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueTwoProgramTrace) {
     mesh_device->release_mesh_trace(tid);
 
     // Expect same output across all loops
-    for (auto i = 0; i < num_loops; i++) {
+    for (uint32_t i = 0; i < num_loops; i++) {
         EXPECT_TRUE(trace_outputs[i] == trace_outputs[0]);
     }
 }
@@ -567,7 +567,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueMultiProgramTraceBenchmark) {
 
     // Create mesh workload with multiple programs
     vector<distributed::MeshWorkload> workloads;
-    for (int i = 0; i < num_programs; i++) {
+    for (uint32_t i = 0; i < num_programs; i++) {
         interm_buffers.push_back(distributed::MeshBuffer::create(replicated_config, device_config, mesh_device.get()));
         distributed::MeshWorkload workload;
         Program program;
@@ -624,7 +624,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueMultiProgramTraceBenchmark) {
     mesh_device->end_mesh_trace(mesh_command_queue.id(), tid);
 
     // Trace mode execution
-    for (auto i = 0; i < num_loops; i++) {
+    for (uint32_t i = 0; i < num_loops; i++) {
         ScopedTimer timer("Trace loop " + std::to_string(i));
         distributed::EnqueueWriteMeshBuffer(mesh_command_queue, input, input_data, kNonBlocking);
         mesh_device->replay_mesh_trace(mesh_command_queue.id(), tid, kNonBlocking);

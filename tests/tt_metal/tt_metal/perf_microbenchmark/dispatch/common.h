@@ -164,7 +164,7 @@ inline DeviceData::DeviceData(
 
     // Always populate DRAM
     auto num_banks = device->allocator()->get_num_banks(BufferType::DRAM);
-    for (int bank_id = 0; bank_id < num_banks; bank_id++) {
+    for (uint32_t bank_id = 0; bank_id < num_banks; bank_id++) {
         auto dram_channel = device->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
         CoreCoord phys_core = device->logical_core_from_dram_channel(dram_channel);
         int32_t bank_offset = device->allocator()->get_bank_offset(BufferType::DRAM, bank_id);
@@ -179,7 +179,7 @@ inline DeviceData::DeviceData(
     // TODO: make banked L1 tests play nicely w/ non-banked L1 tests
     if (is_banked) {
         num_banks = device->allocator()->get_num_banks(BufferType::L1);
-        for (int bank_id = 0; bank_id < num_banks; bank_id++) {
+        for (uint32_t bank_id = 0; bank_id < num_banks; bank_id++) {
             CoreCoord core = device->allocator()->get_logical_core_from_bank_id(bank_id);
             CoreCoord phys_core = device->worker_core_from_logical_core(core);
             int32_t bank_offset = device->allocator()->get_bank_offset(BufferType::L1, bank_id);
@@ -212,7 +212,7 @@ inline DeviceData::DeviceData(
 inline void DeviceData::prepopulate_dram(distributed::MeshDevice::IDevice* device, uint32_t size_words) {
     uint32_t num_dram_banks = device->allocator()->get_num_banks(BufferType::DRAM);
 
-    for (int bank_id = 0; bank_id < num_dram_banks; bank_id++) {
+    for (uint32_t bank_id = 0; bank_id < num_dram_banks; bank_id++) {
         [[maybe_unused]] auto offset = device->allocator()->get_bank_offset(BufferType::DRAM, bank_id);
         auto dram_channel = device->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
         auto bank_core = device->logical_core_from_dram_channel(dram_channel);
@@ -428,7 +428,7 @@ inline bool DeviceData::validate_one_core(
         phys_core.str(),
         result_addr);
 
-    for (int i = 0; i < size_bytes / sizeof(uint32_t); i++) {
+    for (size_t i = 0; i < size_bytes / sizeof(uint32_t); i++) {
         int index = start_index + i;
         if (!dev_valid[index]) {
             continue;

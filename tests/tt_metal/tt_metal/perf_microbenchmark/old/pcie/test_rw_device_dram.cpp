@@ -77,7 +77,7 @@ int main(int argc, char** argv) {
             auto end = std::chrono::steady_clock::now();
             auto elapsed_sum = end - begin;
 
-            for (int i = 0; i < iter; i++) {
+            for (uint32_t i = 0; i < iter; i++) {
                 begin = std::chrono::steady_clock::now();
                 pass &= tt_metal::detail::WriteToDeviceDRAMChannel(
                     device->get_devices()[0], dram_channel, dram_addr, src_vec);
@@ -96,7 +96,7 @@ int main(int argc, char** argv) {
             auto end = std::chrono::steady_clock::now();
             auto elapsed_sum = end - begin;
 
-            for (int i = 0; i < iter; i++) {
+            for (uint32_t i = 0; i < iter; i++) {
                 begin = std::chrono::steady_clock::now();
                 tt_metal::detail::ReadFromDeviceDRAMChannel(
                     device->get_devices()[0], dram_channel, dram_addr, buffer_size, result_vec);

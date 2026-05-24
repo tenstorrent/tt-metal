@@ -231,13 +231,13 @@ const std::vector<uint32_t> field_values_pack_config_wormhole = {
 
 // Configuration for Data Flow Test involving Reader, Datacopy, and Writer
 struct ConfigRegPrintTestConfig {
-    CoreCoord core;
-    std::string write_kernel;
-    std::string print_kernel;
-    int num_of_registers;
-    std::vector<std::string> field_names;
-    std::vector<uint32_t> field_values;
-    uint32_t register_name;
+    CoreCoord core = {};                           // NOLINT(readability-redundant-member-init)
+    std::string write_kernel = {};                 // NOLINT(readability-redundant-member-init)
+    std::string print_kernel = {};                 // NOLINT(readability-redundant-member-init)
+    int num_of_registers = 0;
+    std::vector<std::string> field_names = {};     // NOLINT(readability-redundant-member-init)
+    std::vector<uint32_t> field_values = {};       // NOLINT(readability-redundant-member-init)
+    uint32_t register_name = 0;
 };
 
 // DEVICE_PRINTs data format as string given an uint
