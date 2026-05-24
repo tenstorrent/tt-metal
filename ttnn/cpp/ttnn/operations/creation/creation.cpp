@@ -201,6 +201,10 @@ Tensor full_impl(
             }
             return output;
         }
+        case DataType::FP8_E4M3:
+            TT_THROW(
+                "full/zeros/ones: FP8_E4M3 is an output-only dtype, used exclusively by the DeepSeek V3 "
+                "prefill combine and dispatch ops; host-side construction via fill is not supported.");
         default: TT_THROW("Unsupported DataType!");
     }
 }
@@ -404,6 +408,10 @@ Tensor arange(
         case DataType::UINT16: return concrete_arange.template operator()<uint16_t>();
         case DataType::UINT32: return concrete_arange.template operator()<uint32_t>();
         case DataType::INT32: return concrete_arange.template operator()<int32_t>();
+        case DataType::FP8_E4M3:
+            TT_THROW(
+                "arange: FP8_E4M3 is an output-only dtype, used exclusively by the DeepSeek V3 "
+                "prefill combine and dispatch ops; host-side construction via arange is not supported.");
         default: TT_THROW("Unsupported dtype");
     }
 }

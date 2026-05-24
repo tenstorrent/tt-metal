@@ -118,10 +118,13 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPostAllGatherProgramFactory::create_
     log_debug(tt::LogOp, "rope_cos_data_format: {}", rope_cos_data_format);
     log_debug(tt::LogOp, "rope_sin_data_format: {}", rope_sin_data_format);
 
-    const uint32_t weight_addr = has_weight ? weight_tensor.value().buffer()->address() : 0u;
-    const uint32_t transformation_mat_addr = fuse_rope ? transformation_mat.value().buffer()->address() : 0u;
-    const uint32_t rope_cos_addr = fuse_rope ? rope_cos.value().buffer()->address() : 0u;
-    const uint32_t rope_sin_addr = fuse_rope ? rope_sin.value().buffer()->address() : 0u;
+    // Optional tensor buffers passed as Buffer* so the framework patches their
+    // addresses on cache hits (BufferBinding). Plain uint32_t goes stale when
+    // the allocator moves the buffer on a subsequent dispatch (cf. #44565).
+    Buffer* const weight_buffer = has_weight ? weight_tensor.value().buffer() : nullptr;
+    Buffer* const transformation_mat_buffer = fuse_rope ? transformation_mat.value().buffer() : nullptr;
+    Buffer* const rope_cos_buffer = fuse_rope ? rope_cos.value().buffer() : nullptr;
+    Buffer* const rope_sin_buffer = fuse_rope ? rope_sin.value().buffer() : nullptr;
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -297,10 +300,10 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPostAllGatherProgramFactory::create_
             core,
             {input_tensor.buffer(),
              stats_tensor.buffer(),
-             weight_addr,
-             transformation_mat_addr,
-             rope_cos_addr,
-             rope_sin_addr,
+             weight_buffer,
+             transformation_mat_buffer,
+             rope_cos_buffer,
+             rope_sin_buffer,
              tile_row_start,
              tile_row_end});
 
