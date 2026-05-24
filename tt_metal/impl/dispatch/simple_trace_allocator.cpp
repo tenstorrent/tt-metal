@@ -85,9 +85,9 @@ std::pair<std::optional<uint32_t>, std::optional<uint32_t>> SimpleTraceAllocator
                 max_stall_history_size > desired_write_ahead,
                 "max_history_size must be greater than desired_write_ahead");
             int region_idx_diff = trace_idx - *region_sync_idx;
-            if (region_idx_diff < desired_write_ahead) {
+            if (region_idx_diff < static_cast<int>(desired_write_ahead)) {
                 // Stall badness is exponential.
-                cost += stall_badness * (1 << (desired_write_ahead - region_idx_diff));
+                cost += stall_badness * (1 << (static_cast<int>(desired_write_ahead) - region_idx_diff));
             }
         }
         if (cost < best_cost) {
@@ -318,9 +318,9 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
 
             TT_ASSERT(rta_addr.has_value(), "Failed to allocate non-binary region");
             node.dispatch_metadata.nonbinary_kernel_config_addrs[index] = {
-                .addr = *rta_addr + ringbuffer_starts_[index]};
+                .addr = *rta_addr + ringbuffer_starts_[index], .size = 0, .sync_count = 0};
             node.dispatch_metadata.binary_kernel_config_addrs[index] = {
-                .addr = binary_addr + ringbuffer_starts_[index]};
+                .addr = binary_addr + ringbuffer_starts_[index], .size = 0, .sync_count = 0};
         }
 
         node.dispatch_metadata.send_binary = !all_binaries_cached;

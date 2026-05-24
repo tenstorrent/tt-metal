@@ -726,6 +726,8 @@ detail::KernelMeta Kernel::meta(IDevice* device) const {
                       : std::string_view{this->kernel_src_.source_},
         .processor_class = get_kernel_processor_class(),
         .programmable_core_type = get_kernel_programmable_core_type(),
+        .math_fidelity = std::nullopt,
+        .binary_meta = {},
     };
 
     if (get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {

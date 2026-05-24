@@ -116,12 +116,12 @@ std::vector<float> unpack_bfp8_tiles_into_float_vec(
     uint32_t fp32_element_index = 0;
     std::vector<float> float_vec;
     float_vec.resize(num_tiles * num_float_in_tile);
-    for (int tile_index = 0; tile_index < num_tiles; ++tile_index) {
-        for (int tr = 0; tr < subtiles_in_tile_row; ++tr) {
-            for (int tc = 0; tc < subtiles_in_tile_col; ++tc) {
-                for (int i = 0; i < subtile_rows; ++i) {
+    for (int tile_index = 0; tile_index < static_cast<int>(num_tiles); ++tile_index) {
+        for (int tr = 0; tr < static_cast<int>(subtiles_in_tile_row); ++tr) {
+            for (int tc = 0; tc < static_cast<int>(subtiles_in_tile_col); ++tc) {
+                for (int i = 0; i < static_cast<int>(subtile_rows); ++i) {
                     subtile_r = tr * face_H + i;
-                    for (int j = 0; j < subtile_cols; j += 8) {
+                    for (int j = 0; j < static_cast<int>(subtile_cols); j += 8) {
                         subtile_c = tc * face_W + j;
                         data_index =
                             (tr * (subtiles_in_tile_col * face_HW / 4) + tc * (face_HW / 4) + i * (face_W / 4) +

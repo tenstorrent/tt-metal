@@ -170,7 +170,7 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         FabricRoutingFields2D fabric_routing_fields_2d;
     } data{};
 
-    KernelProfilerNocEventMetadata() : data{.raw_event = {NocEventType::UNDEF}} {}
+    KernelProfilerNocEventMetadata() : data{.raw_event = {NocEventType::UNDEF, 0}} {}
 
     // for deserialization on host side
     explicit KernelProfilerNocEventMetadata(const uint64_t raw_data) {

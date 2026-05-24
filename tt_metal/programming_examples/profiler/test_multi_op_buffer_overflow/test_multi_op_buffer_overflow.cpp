@@ -19,7 +19,7 @@ void RunCustomCycle(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const CoreCoord end_core = {compute_with_storage_size.x - 1, compute_with_storage_size.y - 1};
     const CoreRange all_cores(start_core, end_core);
 
-    for (uint32_t i = 0; i < num_ops; ++i) {
+    for (int i = 0; i < num_ops; ++i) {
         // Mesh workload + device range span the mesh; program encapsulates kernels
         distributed::MeshWorkload workload;
         const distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());

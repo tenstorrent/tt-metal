@@ -154,6 +154,7 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
             DeviceLocalBufferConfig device_local_kernel_bin_buf_config = {
                 .page_size = HostMemDeviceCommand::PROGRAM_PAGE_SIZE,
                 .buffer_type = BufferType::DRAM,
+                .sharding_args = {},
                 .bottom_up = false,
             };
             ReplicatedBufferConfig global_kernel_bin_buf_config = {

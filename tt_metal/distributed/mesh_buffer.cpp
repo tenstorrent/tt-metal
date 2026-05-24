@@ -395,6 +395,7 @@ AnyBuffer AnyBuffer::create(const tt::tt_metal::ShardedBufferConfig& config, std
         .page_size = config.page_size,
         .buffer_type = config.buffer_type,
         .sharding_args = BufferShardingArgs(config.shard_parameters, config.buffer_layout),
+        .bottom_up = std::nullopt,
     };
     return MeshBuffer::create(mesh_config, local_config, mesh_device, address);
 }
@@ -414,6 +415,8 @@ AnyBuffer AnyBuffer::create(const tt::tt_metal::InterleavedBufferConfig& config,
     DeviceLocalBufferConfig local_config{
         .page_size = config.page_size,
         .buffer_type = config.buffer_type,
+        .sharding_args = {},
+        .bottom_up = std::nullopt,
     };
     return MeshBuffer::create(mesh_config, local_config, mesh_device, address);
 }

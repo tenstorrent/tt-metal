@@ -391,6 +391,8 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
     if (this->target_type_ == TargetDevice::Silicon) {
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .num_host_mem_ch_per_mmio_device = std::nullopt,  // Automatically determine number of host mem channels.
+            .sdesc_path = {},
+            .target_devices = {},
         });
     } else if (this->target_type_ == TargetDevice::Simulator) {
         const std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_, rtoptions_);
@@ -401,6 +403,7 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
                 .chip_type = tt::umd::ChipType::SIMULATION,
                 .num_host_mem_ch_per_mmio_device = 1,
                 .sdesc_path = sdesc_path,
+                .target_devices = {},
                 .cluster_descriptor = mock_cluster_desc.get(),
                 .simulator_directory = rtoptions_.get_simulator_path(),
             });
@@ -408,6 +411,7 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
             device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
                 .chip_type = tt::umd::ChipType::SIMULATION,
                 .num_host_mem_ch_per_mmio_device = 1,
+                .sdesc_path = {},
                 .target_devices = {0},
                 .simulator_directory = rtoptions_.get_simulator_path(),
             });
@@ -421,6 +425,7 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .chip_type = tt::umd::ChipType::MOCK,
             .sdesc_path = sdesc_path,
+            .target_devices = {},
             .cluster_descriptor = mock_cluster_desc.get(),
         });
     } else if (this->target_type_ == TargetDevice::Emule) {
@@ -431,6 +436,7 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .chip_type = tt::umd::ChipType::SWEMULE,
             .sdesc_path = sdesc_path,
+            .target_devices = {},
             .cluster_descriptor = mock_cluster_desc.get(),
         });
 #else
