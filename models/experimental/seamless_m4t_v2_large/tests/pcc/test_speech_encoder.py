@@ -3,6 +3,7 @@
 
 import pytest
 import torch
+import ttnn
 from loguru import logger
 
 from tests.ttnn.utils_for_testing import check_with_pcc
@@ -65,8 +66,8 @@ def _run_speech_encoder_pcc(device) -> None:
         matmul_token_rows=64,
     )
 
-    tt_x = from_torch_bfloat16_tile(device, input_features)
-    m1 = from_torch_bfloat16_tile(device, attention_mask)
+    tt_x = from_torch_bfloat16_tile(device, input_features, memory_config=ttnn.L1_MEMORY_CONFIG)
+    m1 = from_torch_bfloat16_tile(device, attention_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     tt_out = tt_model(tt_x, conv_attention_mask_1d=m1)
     tt_cpu = to_torch_replicated_first_shard(tt_out).to(torch.bfloat16)

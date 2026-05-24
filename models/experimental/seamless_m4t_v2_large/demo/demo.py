@@ -86,7 +86,7 @@ def torch_feats_to_ttnn(device: ttnn.Device, t: torch.Tensor) -> ttnn.Tensor:
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
 
