@@ -218,10 +218,18 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
         // MMIO init kills the relay last, when no remaining reset_cores calls need it).
 
         // ── Pass 1: reset all cores (relay guaranteed alive, no fw_launch_addr written yet) ──
+        const auto pass1_start = std::chrono::steady_clock::now();
         for (tt::ChipId device_id : device_ids) {
             ClearNocData(descriptor_->env_impl(), device_id);
             reset_cores(device_id);
         }
+        const auto pass1_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - pass1_start).count();
+        log_info(
+            tt::LogAlways,
+            "run_launch_phase: Pass 1 complete — reset_cores on {} device(s) in {}ms. (#42429)",
+            device_ids.size(),
+            pass1_ms);
 
         // FIX TV (#42429): Wait for MMIO ETH channels to confirm base-UMD firmware before
         // Pass 2a writes any non-MMIO firmware (relay path goes through MMIO ETH channels).
@@ -242,6 +250,10 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
         // after Pass 2b.  Pass 2a writes to non-MMIO devices route through MMIO ETH relay
         // channels.  If those channels are still mid-reboot when Pass 2a begins, the relay
         // writes time out exactly as terminate_stale_erisc_routers does.  Confirming MMIO
+        // GAP-R21 (#42429): Middleware timing — FIX TV/NN/UU/VV combined elapsed.
+        // Post-mortem: if middleware_ms >> pass1_ms, relay recovery dominated init time.
+        const auto middleware_start = std::chrono::steady_clock::now();
+
         // ETH readiness here ensures the relay is fully servicing before any non-MMIO I/O.
         if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC) &&
             hal_.get_eth_fw_is_cooperative() && get_control_plane_) {
@@ -638,8 +650,17 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
         //   wait_for_non_mmio_flush() polls wr_req == wr_resp → permanent 5s timeout.
         //   FIX NN (above) detects and clears this by force-resetting stuck MMIO ETH channels.
 
+        // GAP-R21 (#42429): Log middleware elapsed (FIX TV/NN/UU/VV combined).
+        const auto middleware_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - middleware_start).count();
+        log_info(
+            tt::LogAlways,
+            "run_launch_phase: middleware complete (FIX TV/NN/UU/VV) — {}ms. (#42429)",
+            middleware_ms);
+
         // ── Pass 2a: initialize non-MMIO devices (relay still alive) ──
         // GAP-L2 (#42429): Log Pass 2a entry for post-mortem phase boundary visibility.
+        const auto pass2a_start = std::chrono::steady_clock::now();
         log_info(
             tt::LogAlways,
             "run_launch_phase: Pass 2a — beginning non-MMIO firmware init ({} device(s)). (#42429)",
@@ -699,9 +720,18 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
             }
         }
 
+        // GAP-R21 (#42429): Pass 2a elapsed summary.
+        const auto pass2a_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - pass2a_start).count();
+        log_info(
+            tt::LogAlways,
+            "run_launch_phase: Pass 2a complete — non-MMIO firmware init in {}ms. (#42429)",
+            pass2a_ms);
+
         // ── Pass 2b: initialize MMIO devices (may write fw_launch_addr → kills relay) ──
         // All non-MMIO reset_cores and init_firmware calls are done; relay death is now safe.
         // GAP-L3 (#42429): Log Pass 2b entry for post-mortem phase boundary visibility.
+        const auto pass2b_start = std::chrono::steady_clock::now();
         log_info(
             tt::LogAlways,
             "run_launch_phase: Pass 2b — beginning MMIO firmware init. (#42429)");
@@ -709,27 +739,56 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
             if (!mmio_ids_set.count(device_id)) continue;
             // GAP-L1 (#42429): Per-device elapsed timer (matches Pass 2a pattern).
             const auto pass2b_dev_start = std::chrono::steady_clock::now();
-            initialize_and_launch_firmware(device_id);
-            const auto pass2b_dev_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - pass2b_dev_start).count();
-            log_info(
-                tt::LogAlways,
-                "run_launch_phase: Pass 2b — device {} initialize_and_launch_firmware "
-                "complete in {}ms. (#42429)",
-                device_id,
-                pass2b_dev_ms);
+            // GAP-R22 (#42429): Pass 2b exception handling — matches Pass 2a pattern.
+            // Without this, a single MMIO device failure (e.g. PCIe error on device 1)
+            // crashes the entire run_launch_phase, preventing devices 2 and 3 from
+            // initializing. With try/catch, remaining MMIO devices still get firmware.
+            try {
+                initialize_and_launch_firmware(device_id);
+                const auto pass2b_dev_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - pass2b_dev_start).count();
+                log_info(
+                    tt::LogAlways,
+                    "run_launch_phase: Pass 2b — device {} initialize_and_launch_firmware "
+                    "complete in {}ms. (#42429)",
+                    device_id,
+                    pass2b_dev_ms);
+            } catch (const std::exception& e) {
+                const auto pass2b_dev_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - pass2b_dev_start).count();
+                log_warning(
+                    tt::LogAlways,
+                    "run_launch_phase: GAP-R22 — initialize_and_launch_firmware threw for "
+                    "MMIO device {} after {}ms: {}. Continuing with remaining devices. (#42429)",
+                    device_id,
+                    pass2b_dev_ms,
+                    e.what());
+            }
         }
+        // GAP-R21 (#42429): Pass 2b elapsed summary.
+        const auto pass2b_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - pass2b_start).count();
+        log_info(
+            tt::LogAlways,
+            "run_launch_phase: Pass 2b complete — MMIO firmware init in {}ms. (#42429)",
+            pass2b_ms);
 
         // GAP-R20 (#42429): Total elapsed timer for run_launch_phase.
+        // GAP-R21 (#42429): Per-pass breakdown for post-mortem attribution.
         const auto launch_phase_elapsed_ms =
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - launch_phase_start)
                 .count();
         log_info(
             tt::LogAlways,
-            "run_launch_phase: complete — total_elapsed={}ms, {} device(s). (#42429)",
+            "run_launch_phase: complete — total_elapsed={}ms, {} device(s), "
+            "pass1={}ms middleware={}ms pass2a={}ms pass2b={}ms. (#42429)",
             launch_phase_elapsed_ms,
-            device_ids.size());
+            device_ids.size(),
+            pass1_ms,
+            middleware_ms,
+            pass2a_ms,
+            pass2b_ms);
     }
     initialized_ = true;
 }
