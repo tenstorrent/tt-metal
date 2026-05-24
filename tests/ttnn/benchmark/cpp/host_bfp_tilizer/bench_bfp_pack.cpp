@@ -121,7 +121,7 @@ template <typename T>
 void Bench_Bfp8b(benchmark::State& state, const char* threads, const char* disable_simd) {
     const auto num_tiles = static_cast<uint32_t>(state.range(0));
     const auto& src = GetInput<T>();
-    const auto input = tt::stl::make_const_span(src.data(), num_tiles * FLOATS_PER_TILE);
+    const tt::stl::Span<const T> input(src.data(), num_tiles * FLOATS_PER_TILE);
 
     state.PauseTiming();
     ScopedEnv t("TT_BFP_HOST_TILIZER_THREADS", threads);
@@ -140,7 +140,7 @@ template <typename T>
 void Bench_Bfp4b(benchmark::State& state, const char* threads, const char* disable_simd) {
     const auto num_tiles = static_cast<uint32_t>(state.range(0));
     const auto& src = GetInput<T>();
-    const auto input = tt::stl::make_const_span(src.data(), num_tiles * FLOATS_PER_TILE);
+    const tt::stl::Span<const T> input(src.data(), num_tiles * FLOATS_PER_TILE);
 
     state.PauseTiming();
     ScopedEnv t("TT_BFP_HOST_TILIZER_THREADS", threads);
