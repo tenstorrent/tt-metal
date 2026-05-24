@@ -206,7 +206,7 @@ class Devstral2Args:
     # ---- Activation memory (avoid DRAM ↔ L1 tilize round-trips) ----
 
     def get_activation_mem_config(self, mode: str, mesh_device) -> ttnn.MemoryConfig:
-        """L1 interleaved for prefill; width-sharded L1 for decode (see ``mem_config``)."""
+        """Prefill: L1 interleaved (DRAM on BH). Decode: L1 width-sharded (see ``mem_config``)."""
         from models.experimental.devstral2_large.tt.mem_config import get_activation_mem_config
 
         return get_activation_mem_config(self, mode, mesh_device)

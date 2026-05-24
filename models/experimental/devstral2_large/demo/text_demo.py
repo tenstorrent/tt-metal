@@ -20,7 +20,7 @@ follows the standard pattern: iteration 0 is an untraced compile pass, iteration
 1 captures the trace bound to persistent ``(token, current_pos)`` device buffers,
 and every subsequent iteration only does a host→device copy + ``execute_trace``.
 
-Usage (pytest, single Quietbox / 1x4 mesh by default)::
+Usage (pytest, single Loudbox / 1x8 mesh by default)::
 
     pytest models/experimental/devstral2_large/demo/text_demo.py
 

@@ -10,10 +10,10 @@ Matches ``Ministral3RMSNorm``::
     return weight * x * rsqrt(variance + eps)
 
 Weight is replicated across the mesh. RMS is computed per-token, so the op is local — no
-collective is needed even under TP (each device has the same full hidden dim of the activation
-after we all-gather post-projection, OR each device holds a width shard but RMS itself reduces
-along that last dim; in this rewrite we keep activations replicated across TP for norm ops to
-keep the path simple and numerically identical to the HF reference).
+collective is needed even under TP.
+
+Prefill and decode use **width-sharded** RMSNorm on a 32-core grid (hidden=12288); activations
+stay DRAM/L1 interleaved outside the norm (see ``get_activation_mem_config``).
 """
 
 from __future__ import annotations
@@ -23,7 +23,13 @@ from typing import Optional
 import torch
 import ttnn
 
-from models.experimental.devstral2_large.tt.mem_config import get_compute_kernel_config
+from models.experimental.devstral2_large.tt.mem_config import (
+    get_decode_width_sharded_activation_mem_config,
+    get_decode_width_sharded_norm_program_config,
+    get_prefill_width_sharded_activation_mem_config,
+    get_prefill_width_sharded_norm_program_config,
+    get_sharded_norm_compute_kernel_config,
+)
 from models.experimental.devstral2_large.tt.model_args import (
     DEVSTRAL2_LARGE_L1_SMALL_SIZE,
     Devstral2Args,
@@ -62,17 +68,14 @@ def _load_weight(
     )
 
 
-class TtRMSNorm:
-    """Devstral-2 RMSNorm. Replicated weight, ``ttnn.rms_norm`` on the host activation layout.
+def _ensure_memory_config(x: ttnn.Tensor, memory_config: ttnn.MemoryConfig) -> ttnn.Tensor:
+    if x.memory_config() == memory_config:
+        return x
+    return ttnn.to_memory_config(x, memory_config)
 
-    Args:
-        args: :class:`Devstral2Args`.
-        mesh_device: Open mesh device.
-        state_dict: HF (or HF-shaped) state dict.
-        weight_key: Fully-qualified key into ``state_dict`` (e.g. ``"model.layers.0.input_layernorm.weight"``
-            or ``"model.norm.weight"``).
-        dtype: Weight dtype on device. Defaults to ``args.weight_dtype``.
-    """
+
+class TtRMSNorm:
+    """Devstral-2 RMSNorm with width-sharded prefill/decode kernels."""
 
     def __init__(
         self,
@@ -96,17 +99,61 @@ class TtRMSNorm:
             dtype or args.weight_dtype,
             weight_cache_path=cache_path,
         )
-        self._compute_kernel_config = get_compute_kernel_config(mesh_device)
+        self._decode_sharded_mem_config = get_decode_width_sharded_activation_mem_config(args.hidden_size)
+        self._decode_sharded_program_config = get_decode_width_sharded_norm_program_config(args.hidden_size)
+        self._sharded_compute_kernel_config = get_sharded_norm_compute_kernel_config(mesh_device)
 
-    def __call__(self, x: ttnn.Tensor, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor:
+    def __call__(
+        self,
+        x: ttnn.Tensor,
+        memory_config: Optional[ttnn.MemoryConfig] = None,
+        *,
+        mode: str = "prefill",
+    ) -> ttnn.Tensor:
+        if mode == "decode":
+            return self._forward_decode(x, memory_config=memory_config)
+        return self._forward_prefill(x, memory_config=memory_config)
+
+    def _forward_decode(self, x: ttnn.Tensor, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor:
+        """Width-sharded norm kernel; activations stay L1 interleaved outside this op."""
         out_mem = memory_config if memory_config is not None else ttnn.L1_MEMORY_CONFIG
-        return ttnn.rms_norm(
+        x = _ensure_memory_config(x, self._decode_sharded_mem_config)
+        out = ttnn.rms_norm(
             x,
             epsilon=self.eps,
             weight=self.weight,
-            memory_config=out_mem,
-            compute_kernel_config=self._compute_kernel_config,
+            program_config=self._decode_sharded_program_config,
+            memory_config=self._decode_sharded_mem_config,
+            compute_kernel_config=self._sharded_compute_kernel_config,
         )
+        if out_mem != self._decode_sharded_mem_config:
+            out = ttnn.to_memory_config(out, out_mem)
+        return out
 
-    def forward(self, x: ttnn.Tensor, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor:
-        return self(x, memory_config=memory_config)
+    def _forward_prefill(self, x: ttnn.Tensor, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor:
+        """Width-sharded norm for prefill sequence length; output matches ``memory_config`` (DRAM on BH)."""
+        out_mem = memory_config if memory_config is not None else ttnn.L1_MEMORY_CONFIG
+        seq_len = max(1, int(x.shape[-2]))
+        sharded_mem = get_prefill_width_sharded_activation_mem_config(seq_len, self.args.hidden_size)
+        program_config = get_prefill_width_sharded_norm_program_config(seq_len, self.args.hidden_size)
+        x = _ensure_memory_config(x, sharded_mem)
+        out = ttnn.rms_norm(
+            x,
+            epsilon=self.eps,
+            weight=self.weight,
+            program_config=program_config,
+            memory_config=sharded_mem,
+            compute_kernel_config=self._sharded_compute_kernel_config,
+        )
+        if out_mem != sharded_mem:
+            out = ttnn.to_memory_config(out, out_mem)
+        return out
+
+    def forward(
+        self,
+        x: ttnn.Tensor,
+        memory_config: Optional[ttnn.MemoryConfig] = None,
+        *,
+        mode: str = "prefill",
+    ) -> ttnn.Tensor:
+        return self(x, memory_config=memory_config, mode=mode)

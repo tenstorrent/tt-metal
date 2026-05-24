@@ -23,6 +23,7 @@ from typing import Optional
 
 import ttnn
 
+from models.experimental.devstral2_large.tt.mem_config import pad_to_tile
 from models.experimental.devstral2_large.tt.model_args import Devstral2Args
 from models.experimental.devstral2_large.tt.tt_ministral3_decoder_layer import TtDecoderLayer
 from models.experimental.devstral2_large.tt.tt_ministral_rotary_emb import TtRotaryEmbedding
@@ -124,13 +125,15 @@ class TtMinistral3Model:
         hidden_size = self.args.hidden_size
         if mode == "decode":
             batch_size = int(input_ids.shape[0])
+            tile_h = pad_to_tile(batch_size)
             logical = (1, 1, batch_size, hidden_size)
+            padded = (1, 1, tile_h, hidden_size)
             if len(hidden_states.shape) == 4:
-                tile_h = int(hidden_states.shape[-2])
-                if tile_h == batch_size:
+                existing_tile_h = int(hidden_states.shape[-2])
+                if existing_tile_h == tile_h:
                     return ttnn.reshape(hidden_states, logical)
-                return ttnn.reshape(hidden_states, logical, (1, 1, tile_h, hidden_size))
-            return ttnn.reshape(hidden_states, logical)
+                return ttnn.reshape(hidden_states, logical, padded)
+            return ttnn.reshape(hidden_states, logical, padded)
         seq_len = int(input_ids.shape[-1])
         return ttnn.reshape(hidden_states, (1, 1, seq_len, hidden_size))
 
@@ -154,7 +157,7 @@ class TtMinistral3Model:
                 current_pos=current_pos,
                 user_id=user_id,
             )
-        return self.norm(hidden_states, memory_config=act_mem)
+        return self.norm(hidden_states, memory_config=act_mem, mode=mode)
 
     def forward(self, *args, **kwargs):
         return self(*args, **kwargs)
