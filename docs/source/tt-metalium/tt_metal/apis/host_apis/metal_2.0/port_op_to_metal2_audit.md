@@ -34,6 +34,16 @@ If you find yourself constructing a clever workaround for something that "doesn'
 
 When in doubt about feature support, **ask the user.** Do not infer support from API surface — the absence of a compile error does not mean the construct is supported.
 
+**What happens to your report.** Each audit report becomes a direct input to a downstream effort — not just an entry in a tracking spreadsheet:
+
+- A **RED** report feeds the **prereq-migration efforts**. The `ProgramDescriptor` migration team and the Device 2.0 migration team consume RED audits to scope and sequence the work that unblocks the Metal 2.0 port. A RED isn't a dead end — it's evidence routed to the team that resolves the gap.
+- A **GREEN** report feeds the **Metal 2.0 port recipe** at [`port_op_to_metal2_recipe.md`](port_op_to_metal2_recipe.md). The porter loads the audit as context when performing the port itself.
+- A **YELLOW** report is **genuinely ambiguous** and is evaluated case-by-case with the user to decide which downstream path the op takes.
+
+Your tier assignment, your subset suggestions, and the specificity of your finding details all carry weight in these downstream uses. Too-conservative RED misroutes work to a prereq team that doesn't need it; too-lenient GREEN sends a port attempt into a fail. The single strongest thing you can do is **be specific**: name files and lines; quote the construct you saw; describe what triggered the rule. Vague findings are the hardest to use downstream.
+
+**About this recipe.** This recipe is the product of iteration — earlier auditors' observations have already shaped it, and yours can too. If during your audit a step feels unclear, a rule contradicts itself, the recipe doesn't anticipate a case you're hitting, or guidance conflicts with what you observe in the code, **write it down in the audit report's "Recipe notes" section** rather than silently picking an interpretation. Treat the recipe as your guide, not your shackle. The recipe maintainer reads every report; the friction you log makes the next auditor's job easier.
+
 ## Workflow at a glance
 
 Porting an op is a workflow split across two documents:
@@ -157,6 +167,8 @@ Categorize and report a tier:
 - **Trivial** — RTA values only, < 30 lines, no per-shape branching. Ports directly into per-execution `ProgramRunParams` build logic.
 - **Moderate** — 30-100 lines, includes per-shape branching or conditional RTA assembly but no CB or semaphore mutation. Substantial but tractable port.
 - **Heavy** — CB sizing mutations, semaphore mutations, `set_address_offset` recomputation, or > 100 lines of dense logic. **Flag with a star** — likely needs design discussion before the Metal 2.0 port.
+
+Line counts are heuristic anchors, not strict cutoffs — a 35-line method that's purely RTA values is closer to trivial; a 25-line method with three nested per-shape branches is closer to moderate. Use judgment near the boundaries, and if the case is genuinely ambiguous, name it as such in the report.
 
 `override_runtime_arguments` complexity is the best proxy for both `ProgramDescriptor`-lift difficulty (a separate, ongoing migration workstream) and Metal 2.0 `ProgramRunParams`-build complexity, since the same patching logic translates to both. Reporting it here helps both teams scope work.
 
@@ -420,6 +432,10 @@ Findings from Step 0.5.
 1. **<short title>:** <question, with the `file:line` context that prompted it>
 2. **<short title>:** <next question>
 3. ...
+
+## Recipe notes
+
+<Optional. Surface observations about *this audit recipe itself* — friction you encountered as the auditor, not findings about the op. Examples: a step felt unclear or contradictory; a recognition rule fired on a construct that turned out to be a false positive (name which guard should cover it); the recipe didn't anticipate a case you hit; guidance conflicted with what you observed in the code; a tier boundary forced a judgment call the recipe didn't acknowledge. Be concrete — cite the section, quote the line that confused you. The recipe maintainer reads these; this is how the recipe improves. If you didn't hit any friction, omit the section entirely.>
 ````
 
 For UNSUPPORTED feature-detail sections, the **Expected resolution** is usually a short paraphrase of the entry's Status field — e.g., "not yet supported in Metal 2.0; port will be possible once GlobalCircularBuffer support lands on `KernelSpec` / `DataflowBufferSpec`." For the `address_offset` entry specifically, the expected resolution is the runtime-team-consultation message; surface that verbatim per the entry's Action field.
