@@ -26,7 +26,7 @@ constexpr auto kComputeKernelPath =
 // CB indices (must match the kernels' constexpr declarations)
 constexpr uint32_t kCbSrc0 = tt::CBIndex::c_0;
 constexpr uint32_t kCbOut = tt::CBIndex::c_2;
-constexpr uint32_t kCbZero = tt::CBIndex::c_3;          // reader's zero/offsets scratch
+constexpr uint32_t kCbReaderScratch = tt::CBIndex::c_3;  // reader offsets + per-expert caches
 constexpr uint32_t kCbScratch = tt::CBIndex::c_4;       // writer's scratch (zero buf, plan, md, sc, w, rmw)
 constexpr uint32_t kCbW = tt::CBIndex::c_5;             // weight tile (32×32 broadcast w[r])
 constexpr uint32_t kCbExistingRm = tt::CBIndex::c_6;    // row-major existing rows from ungrouped (writer fills)
@@ -104,14 +104,15 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
     create_circular_buffer(
         program, worker_all, kCbOut, tt::DataFormat::Float16_b, bf16_tile_bytes, 2U * tiles_per_chunk);
 
-    // cb_zero: reader scratch holding offsets DMA + per-expert caches:
+    // cb_reader_scratch: reader scratch holding offsets DMA + per-expert caches:
     //   offsets_l1 (e_local+1) u32  +  tr_start_per_expert e_local u32
     //                              +  my_real_count_per_expert e_local u32
     // Backing the caches in L1 keeps NCRISC stack usage bounded for large
     // e_local (e.g. 300+) where stack arrays would otherwise overflow.
     const uint32_t kL1_ALIGN = tt::tt_metal::hal::get_l1_alignment();
-    const uint32_t cb_zero_bytes = tt::round_up((3U * e_local + 1U) * sizeof(uint32_t), kL1_ALIGN);
-    create_circular_buffer_bytes(program, worker_all, kCbZero, tt::DataFormat::UInt32, cb_zero_bytes);
+    const uint32_t cb_reader_scratch_bytes = tt::round_up((3U * e_local + 1U) * sizeof(uint32_t), kL1_ALIGN);
+    create_circular_buffer_bytes(
+        program, worker_all, kCbReaderScratch, tt::DataFormat::UInt32, cb_reader_scratch_bytes);
 
     // cb_w: 32×32 broadcast weight tile (TILE bf16). BRISC writer builds this
     // each chunk where w_tile[r,c] = bf16(w[r]); compute multiplies cb_src0
@@ -258,8 +259,8 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
     }
 
     // -------------------------------------------------------------------------
-    // Compute kernel — tilizes existing rows, does scaled accumulation with DST
-    // reuse, then untilizes to row-major output for the BRISC writer.
+    // Compute kernel — tilizes existing rows, does broadcast-scaled accumulation
+    // in DST (mul + add), then untilizes the combined rows for BRISC writeback.
     // -------------------------------------------------------------------------
     [[maybe_unused]] auto compute_g1 = create_compute_kernel(
         program,
