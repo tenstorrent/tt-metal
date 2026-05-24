@@ -6,8 +6,6 @@
 
 #include "device/unified_routed_expert_ffn_device_operation.hpp"
 #include "tt-metalium/math.hpp"
-#include "ttnn/operations/data_movement/pad/pad.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/extract/extract.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/insert/insert.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn.hpp"
@@ -32,15 +30,33 @@ ttnn::Tensor unified_routed_expert_ffn(
     // skipped entirely (no matmul, no mcast). All MANDATORY (per user):
     // device-side count sparsity, no host-side count read, no op2op gap from
     // per-chunk dispatch.
+    //
+    // chunk_M_tiles: any value in {16, 24, 32, 40, 48, 56, 64} (per_core_M =
+    // chunk_M_tiles / GRID_Y, must be >= 2 and <= 8). M_tiles_full does NOT
+    // need to be a multiple of chunk_M_tiles — the kernel runs
+    // ceil(M_tiles_full / chunk_M_tiles) chunks, reader zero-fills L1 rows
+    // past M_tiles_full in the last chunk, writer skips OOB output writes.
+    // This removes the previous host-side pad/slice round-trip.
+    //
+    // Picker minimizes last-chunk waste (chunk_M_tiles - M_tiles_full %
+    // chunk_M_tiles, or 0 if cleanly divides). On tie, prefer larger
+    // chunk_M_tiles for fewer chunk-loop iterations and less per-chunk
+    // overhead. For DS-V3 dims this picks 64 for clean cases (2k, 4k, 8k,
+    // 16k), 40 for 25k, 56 for 1.6k / 12345-token cases — minimizing the
+    // number of zero-padded tile rows the last chunk has to process.
     constexpr uint32_t kGridY = 8;
     constexpr uint32_t kMinChunkMTiles = 16;  // per_core_M >= 2
     constexpr uint32_t kMaxChunkMTiles = 64;  // per_core_M <= 8 (L1 cap)
     const uint32_t M_tiles_full = x.padded_shape()[-2] / 32;
     uint32_t chunk_M_tiles = kMinChunkMTiles;
-    for (uint32_t cand = kMaxChunkMTiles; cand >= kMinChunkMTiles; cand -= kGridY) {
-        if (M_tiles_full % cand == 0) {
+    uint32_t best_waste = kMaxChunkMTiles + 1;  // initial worst-case
+    for (uint32_t cand = kMinChunkMTiles; cand <= kMaxChunkMTiles; cand += kGridY) {
+        const uint32_t rem = M_tiles_full % cand;
+        const uint32_t waste = (rem == 0) ? 0 : (cand - rem);
+        // `<=` so on tie we keep updating, ending with the LARGEST cand.
+        if (waste <= best_waste) {
+            best_waste = waste;
             chunk_M_tiles = cand;
-            break;
         }
     }
 
@@ -88,19 +104,12 @@ ttnn::Tensor unified_routed_expert_moe(
     //      narrow.
     //   3. insert the FFN output back into the expert_outputs buffer at this
     //      expert's region.
-    // The unified FFN's chunk loop uses chunk_M_tiles in {16, 24, 32, 40, 48,
-    // 56, 64} (per_core_M >= 2 across the 8-row grid). For M_tiles_full to
-    // divide some chunk_M_tiles >= 16, the input must have M_tiles_full % 16
-    // == 0 (i.e. M rows must be a multiple of 16*TILE_H = 512). When the
-    // dispatched buffer size isn't already aligned (e.g. 1600/3200 rows), pad
-    // the extracted tokens up to the next 512-row boundary and slice back
-    // after the FFN. The on-device count-bounded chunk loop ensures the
-    // padded chunks do no real work.
-    constexpr uint32_t kRowsAlignment = 512;  // 16 tiles * 32 rows/tile
-    const uint32_t padded_rows =
-        ((max_dispatched_tokens_per_expert + kRowsAlignment - 1) / kRowsAlignment) * kRowsAlignment;
-    const bool needs_pad = (padded_rows != max_dispatched_tokens_per_expert);
-
+    // No host-side pad/slice. The unified FFN kernel handles arbitrary
+    // M_tiles_full — chunk_M_tiles is picked to minimize last-chunk waste,
+    // and the kernel's reader zero-fills L1 for tile rows past
+    // min(count_tiles, M_tiles_full), writer skips OOB output writes. So the
+    // extracted tokens flow straight into the FFN with no extra allocation
+    // or copy, and the FFN output goes straight into insert.
     auto expert_outputs = dispatched_buffer;
     for (uint32_t local_expert = 0; local_expert < experts_per_chip; ++local_expert) {
         auto tokens = ttnn::extract(
@@ -110,15 +119,6 @@ ttnn::Tensor unified_routed_expert_moe(
             global_expert_idx_table,
             local_expert,
             max_dispatched_tokens_per_expert);
-
-        if (needs_pad) {
-            tokens = ttnn::pad(
-                tokens,
-                ttnn::SmallVector<operations::data_movement::PadSpecDim>{
-                    {0, padded_rows - max_dispatched_tokens_per_expert}, {0, 0}},
-                /*value=*/0.0f,
-                /*use_multicore=*/true);
-        }
 
         auto ffn_out = unified_routed_expert_ffn(
             tokens,
@@ -130,14 +130,6 @@ ttnn::Tensor unified_routed_expert_moe(
             local_expert,
             compute_kernel_config,
             std::nullopt);
-
-        if (needs_pad) {
-            const ttnn::SmallVector<uint32_t> begins{0, 0};
-            const ttnn::SmallVector<uint32_t> ends{
-                max_dispatched_tokens_per_expert, static_cast<uint32_t>(ffn_out.padded_shape()[-1])};
-            const ttnn::SmallVector<uint32_t> step{1, 1};
-            ffn_out = ttnn::slice(ffn_out, begins, ends, step);
-        }
 
         expert_outputs = ttnn::insert(
             expert_outputs, ffn_out, expert_region_offsets, expert_token_counts, global_expert_idx_table, local_expert);

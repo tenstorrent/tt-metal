@@ -76,12 +76,12 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         "chunk_M_tiles ({}) must be divisible by GRID_Y ({})",
         chunk_M_tiles,
         GRID_Y);
-    TT_FATAL(
-        M_tiles_full % chunk_M_tiles == 0,
-        "M_tiles_full ({}) must be divisible by chunk_M_tiles ({})",
-        M_tiles_full,
-        chunk_M_tiles);
-    const uint32_t num_chunks = M_tiles_full / chunk_M_tiles;
+    // M_tiles_full is NOT required to divide chunk_M_tiles. The kernel runs
+    // ceil(M_tiles_full / chunk_M_tiles) chunks; the reader zero-fills L1
+    // rows past min(count_tiles, M_tiles_full) in the last chunk; the writer
+    // skips OOB writes for output rows >= M_tiles_full. Avoids the host-side
+    // pad/slice round-trip in the composite for non-aligned M.
+    const uint32_t num_chunks = (M_tiles_full + chunk_M_tiles - 1) / chunk_M_tiles;
 
     const uint32_t per_core_N_gu = (N_gate_tiles_full + GRID_X - 1) / GRID_X;
     const uint32_t per_core_N_d = (N_down_tiles_full + GRID_X - 1) / GRID_X;
@@ -389,6 +389,11 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         CB_COUNTS_SCRATCH,   // 13
         CB_IDX_SCRATCH,      // 14
         op.local_expert_id,  // 15
+        // M_tiles_full: needed for the writer to skip OOB output writes when
+        // M_tiles_full doesn't divide chunk_M_tiles. The last chunk runs
+        // chunk_M_tiles rows per core, of which only those < M_tiles_full
+        // correspond to real output rows in the tensor.
+        M_tiles_full,  // 16
     };
     tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(writer_ct_args);
     tt::tt_metal::TensorAccessorArgs(scratch_buffer).append_to(writer_ct_args);
