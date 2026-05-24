@@ -523,33 +523,36 @@ PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
 // ============================================================================
 // build_physical_multi_mesh_adjacency_graph
 //
-// Maps a heterogeneous MeshGraphDescriptor (MGD) onto a real physical system
-// (PSD) and returns a PhysicalMultiMeshGraph with both ASIC-level and
-// mesh-level adjacency populated.
+// Given a description of the logical mesh topology (MGD) and the real hardware
+// layout (PSD), figure out which physical chips should be assigned to each
+// logical mesh and return the result as a PhysicalMultiMeshGraph.
 //
-// HIGH-LEVEL ALGORITHM (multi-mesh case):
+// OVERVIEW (when there are multiple different mesh shapes):
 //
-//   For each distinct mesh descriptor name (e.g. "prefill", "decode"):
-//     1. Ask the PGD to enumerate all valid ASIC groupings for that shape on
-//        this PSD  (find_all_in_psd).
-//     2. Build a physical mesh-level adjacency graph from those groupings.
-//     3. Stage a lazy SAT session that will enumerate mesh-level embeddings
-//        (logical → physical placement) one at a time on demand.
+//   For each distinct mesh shape (e.g. "prefill", "decode"):
+//     1. Ask the grouping descriptor (PGD) where that shape actually fits on
+//        the real hardware — this gives a list of candidate chip placements.
+//     2. Build a graph showing how those candidate placements connect to each
+//        other at the mesh level.
+//     3. Set up a solver that can lazily enumerate valid ways to assign logical
+//        meshes to physical placements, one solution at a time.
 //
-//   Diagonal round-robin search:
+//   Round-by-round search for a conflict-free assignment:
 //     Round k (k = 1, 2, ...):
-//       a. Pull one new SAT solution from each non-exhausted mesh (grow each
-//          cache to size k).
-//       b. Run a DFS over the Cartesian product of cached solutions, checking
-//          ASIC-level disjointness with word-aligned 64-bit bitsets.
-//          "New" combinations — those that include at least one solution with
-//          raw cache index k-1 — are tested for the first time this round;
-//          earlier combinations were already covered, so each is visited once.
-//       c. If a fully-disjoint assignment is found, assemble the final result.
-//     Terminates when a solution is found or all caches are exhausted.
+//       a. Ask each mesh's solver for one more candidate placement (so each
+//          mesh now has k options cached).
+//       b. Walk every combination of one option per mesh and check that no two
+//          options claim the same physical chip. Chips are tracked with
+//          compact 64-bit bitmasks so the check is very fast.
+//          Only combinations that use at least one option that is new this
+//          round are tested — combinations made entirely of older options were
+//          already checked in a previous round.
+//       c. If a fully conflict-free assignment is found, build and return the
+//          final graph.
+//     Stops when a solution is found or all solvers run out of options.
 //
-//   FAST PATH: if the MGD contains only one distinct mesh shape, the PGD
-//   placement is returned directly without any SAT enumeration.
+//   FAST PATH: if all meshes have the same shape (e.g. every galaxy is a
+//   4×8 tile), the PGD result is returned directly with no solver needed.
 // ============================================================================
 PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
@@ -558,18 +561,19 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     using namespace ::tt::tt_fabric;
 
     // -------------------------------------------------------------------------
-    // Phase 1: Build the flat ASIC adjacency graph and a dense 0..N-1 index.
+    // Phase 1: Build a complete chip-level connection graph and assign each
+    // chip a compact integer ID.
     //
-    // The flat graph is shared across three later uses:
-    //   - find_all_in_psd (placement enumeration)
-    //   - compute_bitset_for_solution (ASIC→dense-index lookup)
-    //   - build_hierarchical_from_flat_graph (final result assembly)
-    // Building it once avoids an O(|PSD|) pass for each use.
+    // The connection graph lists every Ethernet link between chips across the
+    // whole cluster. It is built once here and reused in three later steps:
+    //   - Finding which chip groups can satisfy a requested mesh shape
+    //   - Converting chip sets to bitmasks for fast overlap detection
+    //   - Assembling the final result graph
     //
-    // The dense index maps each AsicID to a contiguous integer so that ASIC
-    // sets can be represented as word-aligned uint64_t bitsets.  One word holds
-    // 64 ASICs; disjointness/union/subtract over the full cluster is a tight
-    // word loop regardless of how the AsicIDs are laid out.
+    // The compact integer IDs let us represent any set of chips as a small
+    // array of 64-bit words (one bit per chip). Checking whether two chip sets
+    // overlap then becomes a fast word-by-word AND loop instead of a slower
+    // hash-set intersection.
     // -------------------------------------------------------------------------
     log_info(tt::LogFabric, "Building flat adjacency map from PSD");
     AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(build_flat_adjacency_map_from_psd(physical_system_descriptor));
@@ -583,16 +587,16 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
         }
     }
     const std::uint32_t cluster_asic_count = static_cast<std::uint32_t>(flat_graph.get_nodes().size());
-    // Number of 64-bit words needed to hold one bit per ASIC in this cluster.
+    // How many 64-bit words are needed so we have one bit per chip.
     const std::size_t asic_word_count = (static_cast<std::size_t>(cluster_asic_count) + 63u) / 64u;
 
     // -------------------------------------------------------------------------
-    // Phase 2: Ask PGD to enumerate valid physical groupings for every mesh
-    // descriptor name in the MGD.
+    // Phase 2: Ask the grouping descriptor (PGD) which chip groups on the real
+    // hardware can satisfy each mesh shape requested by the logical descriptor.
     //
-    // get_valid_groupings_for_mgd returns a map keyed by granularity string
-    // (e.g. "MESH", "CHIP").  We only consume "MESH" here: each value is a
-    // map from mesh descriptor name → list of candidate ASIC groupings.
+    // The result is a nested map. We only look at the "MESH" granularity here:
+    // for each mesh shape name (e.g. "prefill"), we get a list of candidate
+    // chip groups that have the right topology to host that shape.
     // -------------------------------------------------------------------------
     log_info(tt::LogFabric, "Getting valid groupings map from MGD and PGD");
     auto valid_groupings_map =
@@ -605,15 +609,16 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
         "Internal error: Physical grouping descriptor was not able to find mesh groupings");
 
     // -------------------------------------------------------------------------
-    // Phase 3: For each mesh descriptor name, find every valid PSD placement
-    // and build a per-descriptor physical mesh-level adjacency graph.
+    // Phase 3: For each mesh shape, locate every valid placement on the real
+    // hardware and build a connection graph for those placements.
     //
-    // placed_groupings[i]  = set of AsicIDs that make up the i-th candidate
-    //                         placement for this descriptor shape.
-    // mesh_physical_graphs = descriptor name → PhysicalMultiMeshGraph built
-    //                         from all its placements.
-    // placed_groupings_by_mesh_id = MGD instance local_id → placed_groupings
-    //                               vector (used later to resolve logical→ASIC).
+    // placed_groupings[i]       = the set of physical chips that make up the
+    //                             i-th candidate placement for this shape.
+    // mesh_physical_graphs      = shape name → connection graph built from all
+    //                             of its candidate placements.
+    // placed_groupings_by_mesh_id = logical mesh ID → the same candidate list,
+    //                             indexed so later phases can look them up by
+    //                             the mesh ID used in the logical descriptor.
     // -------------------------------------------------------------------------
     std::unordered_map<std::string, PhysicalMultiMeshGraph> mesh_physical_graphs;
     std::unordered_map<MeshId, std::vector<std::unordered_set<tt::tt_metal::AsicID>>> placed_groupings_by_mesh_id;
@@ -636,11 +641,12 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     }
 
     // -------------------------------------------------------------------------
-    // Phase 4: Fast path — single mesh descriptor shape.
+    // Phase 4: Fast path — only one mesh shape used.
     //
-    // When the MGD uses only one distinct mesh shape (e.g. all 16 galaxies are
-    // the same 4×8 topology), the PGD placement already covers the whole
-    // system.  Skip SAT enumeration and return the pre-built graph directly.
+    // If the whole logical descriptor uses a single mesh shape (e.g. every
+    // galaxy is the same 4×8 tile), the grouping descriptor's placements
+    // already cover the entire system. We can skip the solver entirely and
+    // return the pre-built graph right away.
     // -------------------------------------------------------------------------
     const auto& mesh_shape_entries = valid_groupings_map.at("MESH");
     if (mesh_shape_entries.size() == 1) {
@@ -658,23 +664,25 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     }
 
     // -------------------------------------------------------------------------
-    // Phase 5: Set up lazy SAT enumeration state for each mesh descriptor.
+    // Phase 5: Set up the incremental solver state for each mesh shape.
     //
-    // MeshEnumState holds everything needed to drive one descriptor's
-    // incremental SAT session and cache its results:
-    //   logical_graph   — pattern graph (mesh instances from the MGD subgraph,
-    //                     or the full PSD coarse graph when there is only one
-    //                     descriptor shape so every placement can be matched).
-    //   physical_graph  — PSD-derived mesh-level adjacency for this descriptor.
-    //   session         — incremental SAT state; carries hard constraints across
-    //                     calls so they are encoded only once.
-    //   excluded        — solutions returned so far, fed back to block repeats.
-    //   solutions       — cached MappingResult objects in pull order.
-    //   solution_bits   — parallel ASIC bitset for each cached solution; used
-    //                     by the packing search for O(words) disjointness tests.
-    //   embedding_sizes — parallel target_to_global.size(); used to sort
-    //                     try_order so larger placements are tried first.
-    //   exhausted       — true once the SAT session reports no further results.
+    // MeshEnumState bundles everything needed to drive one shape's solver and
+    // remember what it has found so far:
+    //   logical_graph   — the pattern we want to place: either the mesh
+    //                     instances from the logical descriptor, or the full
+    //                     physical coarse topology when only one shape exists
+    //                     and all placements need to be assigned.
+    //   physical_graph  — the hardware mesh-level connectivity for this shape.
+    //   session         — the incremental solver; it keeps prior constraints in
+    //                     memory so each call only adds new work.
+    //   excluded        — solutions already returned; fed back to the solver so
+    //                     it doesn't repeat them.
+    //   solutions       — all solutions found so far, in the order returned.
+    //   solution_bits   — a chip bitmask for each solution; used for fast
+    //                     overlap checks in the packing search below.
+    //   embedding_sizes — how many meshes each solution places; used to try
+    //                     larger placements first (better pruning).
+    //   exhausted       — set to true once the solver finds no more options.
     // -------------------------------------------------------------------------
     struct MeshEnumState {
         AdjacencyGraph<MeshId> logical_graph;
@@ -688,15 +696,15 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
         bool exhausted = false;
     };
 
-    // Extract MGD intermesh edges once; reused when building per-descriptor
-    // logical graphs below.
+    // Read the inter-mesh connections from the logical descriptor once here;
+    // they are reused when building the pattern graph for each mesh shape.
     const auto [mgd_intermesh_mesh_level, mgd_intermesh_ports] =
         get_requested_intermesh_from_mgd(mesh_graph_descriptor);
     (void)mgd_intermesh_ports;
 
-    // Count how many distinct descriptor names actually have a PSD-derived
-    // physical graph.  Used below to decide whether to expand the MGD logical
-    // pattern to the full PSD coarse topology.
+    // Count how many mesh shapes actually have a hardware-derived placement
+    // graph. Used below to decide whether to expand the pattern to cover the
+    // full physical topology.
     std::size_t descriptor_names_with_psd = 0;
     for (const auto& mn : mesh_graph_descriptor.get_all_mesh_names()) {
         if (mesh_physical_graphs.contains(mn)) {
@@ -705,11 +713,10 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     }
 
     std::unordered_map<std::string, MeshEnumState> mesh_enum_states;
-    // anchor_mesh_id[name] = the first MGD instance local_id for 'name'.
-    // placed_groupings rows are indexed by physical_mesh_id within the
-    // descriptor; after logical-pattern expansion the MeshIds may not all be
-    // registered in placed_groupings_by_mesh_id, so we always resolve through
-    // this anchor instance.
+    // anchor_mesh_id[name] = the first logical mesh ID for this shape name.
+    // After pattern expansion the logical IDs in a solution may not match any
+    // entry in placed_groupings_by_mesh_id, so we always look up chip groups
+    // via this anchor ID instead.
     std::unordered_map<std::string, MeshId> anchor_mesh_id;
 
     for (const auto& mesh_name : mesh_graph_descriptor.get_all_mesh_names()) {
@@ -723,28 +730,28 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
         }
         const AdjacencyGraph<MeshId>& physical_mesh_level = physical_it->second.mesh_level_graph_;
 
-        // Build the MGD mesh-level subgraph for this descriptor: nodes are the
-        // MGD instance local_ids for this name; edges are FABRIC inter-mesh
-        // connections between those instances.
+        // Build the subset of the logical descriptor's mesh-level graph that
+        // belongs to this shape: nodes are the logical mesh IDs for this
+        // shape name, edges are FABRIC inter-mesh connections among them.
         AdjacencyGraph<MeshId> mgd_mesh_level_graph = build_mgd_mesh_level_subgraph_for_mesh_descriptor_name(
             mesh_graph_descriptor, mesh_name, mgd_intermesh_mesh_level);
 
-        // Pattern expansion: when there is only one distinct descriptor shape,
-        // the MGD often declares a single top-level instance while find_all_in_psd
-        // exposes many disjoint placements (e.g. one "galaxy" instance but 16
-        // physical galaxies).  In that case, replace the tiny MGD subgraph with
-        // the full PSD-derived coarse topology so the solver can assign a
-        // physical placement to every mesh node.
-        // This expansion is intentionally disabled for the multi-shape case:
-        // each descriptor's dense ASIC set would span the full PSD, making
-        // pairwise-disjoint packing across shapes impossible.
+        // Pattern expansion: when the logical descriptor declares fewer
+        // instances than the hardware has placements (e.g. one "galaxy" entry
+        // but 16 physical galaxies), widen the pattern to match the hardware
+        // topology so the solver can assign every physical placement.
+        // This widening is only safe when there is a single shape; with
+        // multiple shapes each shape's chip set would cover the whole system,
+        // making conflict-free assignment impossible.
         const bool expand_to_psd_coarse =
             descriptor_names_with_psd == 1 &&
             mgd_mesh_level_graph.get_nodes().size() < physical_mesh_level.get_nodes().size();
         AdjacencyGraph<MeshId> logical_mesh_level_graph =
             expand_to_psd_coarse ? physical_mesh_level : mgd_mesh_level_graph;
 
-        // Record the anchor instance (first MGD Mesh node for this name).
+        // Record the first logical mesh ID for this shape as its anchor.
+        // Used later to look up the chip-group list for any solution the
+        // solver produces.
         MeshId anchor_id{0};
         bool found_mesh_instance = false;
         for (::tt::tt_fabric::GlobalNodeId gid : mesh_graph_descriptor.instances_by_name(mesh_name)) {
@@ -759,16 +766,16 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
         TT_FATAL(found_mesh_instance, "No mesh instances for descriptor '{}' in MGD", mesh_name);
         anchor_mesh_id[mesh_name] = anchor_id;
 
-        // Stage the enumeration state.  No solver work happens here; the first
-        // solution is pulled lazily in Phase 6 when round 1 begins.
+        // Register the solver state for this shape. No solver work runs yet;
+        // the first solution is pulled lazily when round 1 starts in Phase 6.
         MeshEnumState state;
         state.logical_graph = std::move(logical_mesh_level_graph);
         state.physical_graph = physical_mesh_level;
         mesh_enum_states.emplace(mesh_name, std::move(state));
     }
 
-    // Stable sorted order over descriptor names that have SAT state.
-    // Deterministic ordering is required for the diagonal round-robin invariant.
+    // Sort the shape names so the round-robin visit order is deterministic
+    // across runs, regardless of the order the map was built.
     std::vector<std::string> mesh_order;
     mesh_order.reserve(mesh_enum_states.size());
     for (const auto& [name, _state] : mesh_enum_states) {
@@ -779,19 +786,20 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     const std::size_t n_meshes = mesh_order.size();
 
     // -------------------------------------------------------------------------
-    // Phase 6: Diagonal round-robin search for a pairwise-disjoint assignment.
+    // Phase 6: Round-by-round search for a conflict-free chip assignment.
     //
-    // WORD-ALIGNED BITSET OPERATIONS
-    // Each cached solution stores a full-cluster ASIC bitset as a
-    // vector<uint64_t> of length asic_word_count.  Three operations are needed:
+    // BITMASK HELPERS
+    // Each cached solution carries a bitmask with one bit per chip in the
+    // cluster. Three helpers operate on these bitmasks word by word:
     //
-    //   disjoint(a, b)      — true iff no ASIC bit is set in both a and b.
-    //   mark_used(dst, src) — dst |= src  (claim ASICs for this descriptor).
-    //   unmark(dst, src)    — dst &= ~src (backtrack: release ASICs).
+    //   bitset_disjoint(a, b) — true if a and b share no chip (no bit set in
+    //                           both), i.e. the two placements don't overlap.
+    //   mark_used(dst, src)   — dst |= src  (mark src's chips as taken).
+    //   unmark(dst, src)      — dst &= ~src (release src's chips on backtrack).
     //
-    // All three are tight word-by-word loops; the compiler typically vectorises
-    // them.  This keeps the per-combination cost proportional to cluster size
-    // rather than to the number of ASICs per mesh.
+    // These are tight 64-bit word loops that the compiler can auto-vectorise.
+    // The cost per combination is proportional to cluster size in words, not
+    // to the number of chips per mesh.
     // -------------------------------------------------------------------------
     std::vector<std::uint64_t> occupied_asics(asic_word_count, 0);
 
@@ -818,10 +826,9 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
         }
     };
 
-    // Compute the full-cluster ASIC bitset for one mesh-level solution.
-    // For each (logical_mesh_id → physical_mesh_id) pair in the solution,
-    // look up the ASIC set for that physical placement and set the
-    // corresponding bits in the result vector.
+    // Build the chip bitmask for one solver solution.
+    // For each (logical mesh → physical mesh) pair in the solution, find the
+    // chip set for that physical placement and set the corresponding bits.
     auto compute_solution_bitset = [&](const std::string& mesh_name,
                                        const MappingResult<MeshId, MeshId>& solution) {
         std::vector<std::uint64_t> bits(asic_word_count, 0);
@@ -850,11 +857,10 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
         return bits;
     };
 
-    // Pull the next mesh-level solution from a descriptor's incremental SAT
-    // session, cache it, and return true.  Returns false (and sets exhausted)
-    // when the solver reports no further distinct embeddings.
-    // A warning is emitted when a single SAT call takes more than 2 s so slow
-    // solver invocations are visible in logs separate from the packing search.
+    // Ask a shape's solver for the next distinct placement, cache the result,
+    // and return true. Returns false (and marks the shape exhausted) when the
+    // solver has no more options. Logs a note if a single solver call takes
+    // more than 2 s so slow calls are visible in the logs.
     constexpr std::chrono::milliseconds kSlowSatThreshold{2000};
     auto pull_next_solution = [&](const std::string& mesh_name) -> bool {
         MeshEnumState& s = mesh_enum_states.at(mesh_name);
@@ -900,20 +906,20 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     };
 
     // -----------------------------------------------------------------------
-    // DisjointPackingSearch — recursive DFS over the Cartesian product of
-    // per-descriptor solution caches.
+    // DisjointPackingSearch — depth-first search over all combinations of one
+    // placement per mesh shape.
     //
-    // At each depth level the DFS iterates the solutions for one descriptor in
-    // try_order (largest embedding first).  It skips any candidate whose ASIC
-    // bitset overlaps the bits already claimed by earlier depths.
+    // At each level of the recursion we try every cached placement for one
+    // shape (largest first), skip any that overlap chips already claimed by
+    // earlier levels, and recurse deeper if it fits.
     //
-    // Visit-once (frontier) invariant: in round k we only test combinations
-    // that contain at least one solution with raw cache index == k-1 (the new
-    // solutions added this round).  Combinations whose maximum raw index is
-    // smaller than k-1 were tested in an earlier round.  This is enforced by
-    // passing the "frontier index" target_idx = k-1 through the recursion and
-    // at the leaf only accepting combinations where frontier_used is true or
-    // the leaf's chosen index equals target_idx.
+    // "Test each combination only once" rule: in round k we only check
+    // combinations that include at least one placement that is new this round
+    // (cache index k-1). Any combination made entirely of older placements was
+    // already checked in a previous round. This is enforced by carrying a
+    // flag (frontier_satisfied) through the recursion; at the leaf level we
+    // only accept a candidate if the flag is already set or the candidate
+    // itself is the new one.
     // -----------------------------------------------------------------------
     std::vector<MeshEnumState*> mesh_state_ptrs(n_meshes, nullptr);
     for (std::size_t d = 0; d < n_meshes; ++d) {
@@ -939,17 +945,17 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
         decltype(unmark)& unmark_fn;
         std::chrono::seconds progress_interval{10};
 
-        // Returns true and fills chosen_index[depth..n_meshes) when a
-        // pairwise-disjoint combination is found that satisfies the frontier.
+        // Returns true (and fills chosen_index[depth..n_meshes)) when it finds
+        // a conflict-free assignment that satisfies the new-this-round rule.
         bool run(std::size_t depth, bool frontier_satisfied) {
             const MeshEnumState& s = *states[depth];
             const std::vector<std::size_t>& order = try_order_per_depth[depth];
             const bool is_leaf = (depth + 1 == n_meshes);
 
             if (is_leaf) {
-                // Early exit: if the frontier index is not reachable at this
-                // leaf (no cached solution with index target_idx) and no prior
-                // depth has already satisfied it, this whole subtree is stale.
+                // Quick exit: if no cached solution can satisfy the "new this
+                // round" rule and no earlier depth has already done so, this
+                // whole subtree was already covered in a prior round.
                 if (!frontier_satisfied && target_idx >= s.solutions.size()) {
                     return false;
                 }
@@ -957,13 +963,13 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
                     if (si >= round) {
                         continue;
                     }
-                    // Enforce visit-once: the leaf must use target_idx unless
-                    // the frontier was already satisfied by an earlier depth.
+                    // Only accept this leaf if the "new this round" rule is
+                    // already satisfied, or if this candidate is itself new.
                     if (!frontier_satisfied && si != target_idx) {
                         continue;
                     }
                     ++combinations_tested;
-                    // Periodic heartbeat so a long-running search isn't silent.
+                    // Log progress periodically so a long search isn't silent.
                     if ((combinations_tested & timer_check_mask) == 0) {
                         const auto now = std::chrono::steady_clock::now();
                         if (now - last_progress_log_time >= progress_interval) {
@@ -987,8 +993,8 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
                 return false;
             }
 
-            // Interior depth: try each candidate, claim its ASICs, recurse,
-            // release ASICs on backtrack.
+            // Interior level: try each candidate, claim its chips, recurse
+            // into the next level, and release the chips if we backtrack.
             for (std::size_t si : order) {
                 if (si >= round) {
                     continue;
@@ -1009,7 +1015,8 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     };
 
     // -----------------------------------------------------------------------
-    // Main round-robin loop.
+    // Main loop: keep growing each shape's solution cache by one per round,
+    // then search for a conflict-free assignment among all cached options.
     // -----------------------------------------------------------------------
     bool found_disjoint_combination = false;
     constexpr std::size_t kProgressCheckMask = 4095;  // sample timer every 4096 leaf tests
@@ -1021,10 +1028,9 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     constexpr std::chrono::seconds kRoundLogInterval{10};
 
     for (std::size_t round = 1; n_meshes != 0 && !found_disjoint_combination; ++round) {
-        // -- Pull phase: grow each descriptor's cache by one solution ---------
-        // Each non-exhausted descriptor's SAT session advances by one step.
-        // The timing is logged separately so SAT enumeration time is
-        // distinguishable from packing-search time in the logs.
+        // -- Pull phase: ask each shape's solver for one more placement -------
+        // Each shape that still has options advances by one step. Timing is
+        // logged separately so solver time is visible apart from search time.
         const auto t_pull = std::chrono::steady_clock::now();
         bool any_progress = false;
         for (std::size_t d = 0; d < n_meshes; ++d) {
@@ -1058,9 +1064,9 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
         }
 
         // -- Termination check ------------------------------------------------
-        // If no descriptor has reached cache size `round`, every combination
-        // in the Cartesian product of all caches has already been tested by
-        // the previous round's frontier.  There is nothing new to explore.
+        // If no shape's cache grew to size `round` this iteration, every
+        // possible combination was already covered by an earlier round.
+        // There is nothing new to try, so we can stop.
         bool any_can_hit_frontier = false;
         for (std::size_t d = 0; d < n_meshes; ++d) {
             if (mesh_state_ptrs[d]->solutions.size() >= round) {
@@ -1073,12 +1079,11 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
             break;
         }
 
-        // -- Build try_order for this round -----------------------------------
-        // For each descriptor, sort solution indices [0, min(cache_size, round))
-        // by descending embedding size (more meshes placed first).  This greedy
-        // ordering finds feasible packings earlier and prunes more branches.
-        // Ties are broken by raw arrival order (smaller index first) for
-        // determinism.
+        // -- Build the per-shape candidate order for this round ---------------
+        // Sort the cached placements for each shape so the ones that assign
+        // more meshes are tried first. This tends to find a valid assignment
+        // sooner and prunes dead-end branches earlier. Ties keep arrival order
+        // (smaller index first) so the result is deterministic.
         for (std::size_t d = 0; d < n_meshes; ++d) {
             const MeshEnumState& s = *mesh_state_ptrs[d];
             const std::size_t hi = std::min<std::size_t>(s.solutions.size(), round);
@@ -1129,18 +1134,16 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
         found_disjoint_combination);
 
     // -------------------------------------------------------------------------
-    // Phase 7: Assemble the final PhysicalMultiMeshGraph from chosen placements.
+    // Phase 7: Build the final result graph from the winning placements.
     //
-    // For each descriptor, chosen_index[d] identifies which cached solution was
-    // selected.  The solution's target_to_global map gives logical_mesh_id →
-    // physical_mesh_id.  Look up the ASIC set for each physical placement and
-    // insert it into combined_mesh_groupings at the logical index.
+    // For each shape, chosen_index[d] identifies which cached solution won.
+    // That solution maps logical mesh IDs to physical mesh IDs. We look up the
+    // chip set for each physical placement and store it at the logical mesh
+    // index in combined_mesh_groupings.
     //
-    // Logical MeshId collisions across descriptors are safe: the ASIC bitset
-    // disjointness check above guarantees that no two descriptors' chosen
-    // placements share any ASIC, so even if two descriptors happen to use the
-    // same logical MeshId the resulting ASIC sets are disjoint and the union
-    // is correct.
+    // It is safe if two shapes use the same logical MeshId because the bitmask
+    // check above already guarantees their chip sets are disjoint. The union
+    // written at that index is therefore correct.
     // -------------------------------------------------------------------------
     if (!found_disjoint_combination) {
         std::string solution_counts;
@@ -1163,7 +1166,8 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
             solution_counts);
     }
 
-    // Determine how many logical MeshId slots are needed.
+    // Find the highest logical mesh ID across all winning solutions so we know
+    // how large to make the combined groupings vector.
     MeshId max_logical{0};
     for (std::size_t j = 0; j < n_meshes; ++j) {
         for (const auto& [logical_mesh_id, _phys] :
