@@ -183,7 +183,23 @@ void kernel_main() {
     const uint32_t effective_chunks_runtime = (count_tiles + chunk_M_tiles - 1) / chunk_M_tiles;
     // Clamp to compile-time num_chunks just in case (defensive against bad input).
     const uint32_t effective_chunks = effective_chunks_runtime < num_chunks ? effective_chunks_runtime : num_chunks;
-    (void)M_tiles_full;
+
+    // Per-chunk pre-zero bookkeeping. For each chunk we decide whether
+    // THIS core (as in0 sender) needs to zero its cb_in0_x slots before
+    // starting the K-loop: it does iff some of the chunk's per_core_M rows
+    // are past min(count_tiles, M_tiles_full). The K-loop then SKIPS writes
+    // for invalid rows; the pre-zero ensures the slot's invalid-row L1
+    // regions are zero across all K-blocks (the K-loop only overwrites
+    // valid rows). One pre-zero per chunk replaces the prior per-K-block
+    // memset (~14× savings on RISC-V CPU stores).
+    //
+    // Need to re-pre-zero per chunk because: the L1 carries content from
+    // the previous chunk's K-blocks. Multi-chunk cases (e.g. 3.2k with
+    // chunk_M=56 num_chunks=2: chunk 0 all-valid, chunk 1 has invalid
+    // rows) would otherwise leave chunk 1's invalid rows holding chunk 0's
+    // real data — matmul wastes cycles on the garbage even if writer
+    // skips the OOB output writes downstream.
+    const uint32_t M_bound = (count_tiles < M_tiles_full) ? count_tiles : M_tiles_full;
 
     // Per-chunk M-row base: recomputed inside the chunk loop below.
     (void)chunk_start_tile_row;  // legacy runtime arg, base is now derived per chunk
@@ -224,6 +240,25 @@ void kernel_main() {
     for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
         const uint32_t this_core_first_row = chunk * chunk_M_tiles + my_mt * per_core_M;
 
+        // Pre-zero both DB slots of cb_in0_x for this chunk IFF this core
+        // (as in0 sender) has any M-rows past M_bound. The K-loop below
+        // overwrites valid rows but skips writes for invalid rows — those
+        // rows must already be zero in L1 to avoid feeding garbage (or
+        // leftover chunk-N-1 real data) into the matmul. Fires only on
+        // tail chunks of non-aligned M.
+        if (is_in0_sender) {
+            const uint32_t this_core_last_row = this_core_first_row + per_core_M;
+            if (this_core_last_row > M_bound) {
+                const uint32_t slot_size_bytes = g_in0_block_num_tiles * get_tile_size(cb_in0_x);
+                const uint32_t total_bytes = 2 * slot_size_bytes;
+                uint64_t* __restrict__ p = reinterpret_cast<uint64_t*>(get_write_ptr(cb_in0_x));
+                const size_t n = total_bytes / sizeof(uint64_t);
+                for (size_t i = 0; i < n; ++i) {
+                    p[i] = 0;
+                }
+            }
+        }
+
         // -------- PHASES 1+2 fused — push x ONCE per K-block, then gate then up.
         // Compute does both matmuls per K-block sharing the same x. This halves
         // the x DRAM mcast bytes vs sequential phases.
@@ -246,19 +281,23 @@ void kernel_main() {
                     // accumulation and contaminates the FFN output. Zero-fill
                     // the L1 region for those rows instead — silu(0) = 0,
                     // 0 * up = 0, 0 @ W_down = 0 (safe and free of NaN).
+                    // Invalid rows (past count_tiles): skip the DRAM read.
+                    // The pre-zero at kernel start filled both DB slots'
+                    // invalid-row L1 regions with zeros, and the K-loop never
+                    // writes to those rows again, so the slot stays zero
+                    // across all K-blocks (slot 0 used by K-blocks 0, 2, 4...;
+                    // slot 1 by K-blocks 1, 3, 5...).
                     const bool row_valid = row < count_tiles;
-                    for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
-                        if (row_valid) {
+                    if (row_valid) {
+                        for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
                             const uint32_t col = kb * in0_block_w_gu + k;
                             const uint32_t tile_idx = row * K_gate_tiles + col;
                             noc_async_read_tile(tile_idx, x_acc, l1_x, /*offset=*/0, /*noc=*/0);
-                        } else {
-                            volatile tt_l1_ptr uint64_t* p = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_x);
-                            for (uint32_t i = 0; i < x_tile_bytes / 8; ++i) {
-                                p[i] = 0;
-                            }
+                            l1_x += x_tile_bytes;
                         }
-                        l1_x += x_tile_bytes;
+                    } else {
+                        // Pre-zero already covered these L1 bytes. Just advance.
+                        l1_x += in0_block_w_gu * x_tile_bytes;
                     }
                 }
                 noc_async_read_barrier(/*noc=*/0);

@@ -49,11 +49,10 @@ ttnn::Tensor unified_routed_expert_ffn(
     constexpr uint32_t kMaxChunkMTiles = 64;  // per_core_M <= 8 (L1 cap)
     const uint32_t M_tiles_full = x.padded_shape()[-2] / 32;
     uint32_t chunk_M_tiles = kMinChunkMTiles;
-    uint32_t best_waste = kMaxChunkMTiles + 1;  // initial worst-case
+    uint32_t best_waste = kMaxChunkMTiles + 1;
     for (uint32_t cand = kMinChunkMTiles; cand <= kMaxChunkMTiles; cand += kGridY) {
         const uint32_t rem = M_tiles_full % cand;
         const uint32_t waste = (rem == 0) ? 0 : (cand - rem);
-        // `<=` so on tie we keep updating, ending with the LARGEST cand.
         if (waste <= best_waste) {
             best_waste = waste;
             chunk_M_tiles = cand;
