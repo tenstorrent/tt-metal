@@ -1,0 +1,224 @@
+2026-05-24 15:36:01.124 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/root/.cache/ttnn,model_cache_path=/root/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.6.0 -- /opt/venv/bin/python
+cachedir: .pytest_cache
+rootdir: /root/tt-metal
+configfile: pytest.ini
+plugins: anyio-4.13.0
+collecting ... collected 20 items
+
+tests/unit/test_attention.py::TestMultiheadAttention::test_self_attention_pcc 
+self_attention PCC: 1.000000
+PASSED
+tests/unit/test_attention.py::TestMultiheadAttention::test_decoder_self_attention_pcc 
+decoder self-attention shape: (1, 300, 256) - correct
+PASSED
+tests/unit/test_attention.py::TestMultiheadAttention::test_self_attention_is_deterministic 
+determinism max |diff|: 0.00e+00
+PASSED
+tests/unit/test_decoder.py::TestDecoder::test_pcc_layer1_output 2026-05-24 15:36:05.954 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.ETH
+2026-05-24 15:36:05.955 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.ROW
+
+[LAYER 1] PCC: 1.000000
+PASSED
+tests/unit/test_decoder.py::TestDecoder::test_output_shape PASSED
+tests/unit/test_decoder.py::TestDecoder::test_layer_by_layer_pcc PASSED
+tests/unit/test_encoder_stack.py::TestEncoderStack::test_aifi_no_pos_embed 2026-05-24 15:36:07.973 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.ETH
+2026-05-24 15:36:07.973 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.ROW
+Load PResNet50 state_dict
+
+AIFI (no pos_embed) PCC: 1.000000
+PASSED
+tests/unit/test_encoder_stack.py::TestEncoderStack::test_aifi_with_pos_embed 
+AIFI (with pos_embed) PCC: 1.000000
+PASSED
+tests/unit/test_encoder_stack.py::TestEncoderStack::test_aifi_pos_embed_affects_output 
+pos_embed effect max |diff|: 2.109375
+PASSED
+tests/unit/test_hybrid_encoder.py::test_hybrid_encoder_p3_pcc 2026-05-24 15:36:10.252 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.ETH
+2026-05-24 15:36:10.252 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.ROW
+Load PResNet50 state_dict
+
+[setup] Running PyTorch reference encoder...
+[setup] Loading tensors to TT device...
+[setup] Running TTNN hybrid_encoder...
+[setup] Done.
+
+
+Encoder P3 (80x80) PCC: 0.9968143466810655
+PASSED
+tests/unit/test_hybrid_encoder.py::test_hybrid_encoder_p4_pcc 
+Encoder P4 (40x40) PCC: 0.9920263424194481
+PASSED
+tests/unit/test_hybrid_encoder.py::test_hybrid_encoder_p5_pcc 
+Encoder P5 (20x20) PCC: 0.9894247955518263
+PASSED
+tests/unit/test_postprocessor.py::TestPostProcessor::test_postprocessor_logic 2026-05-24 15:36:13.360 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.ETH
+2026-05-24 15:36:13.361 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.ROW
+
+[Batch 0 Scores] PCC: 1.000000
+[Batch 0 Boxes]  PCC: 1.000000
+PASSED
+tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_pcc_s3 Load PResNet50 state_dict
+backbone.conv1.conv1_1.conv.weight
+backbone.conv1.conv1_1.norm.weight
+backbone.conv1.conv1_1.norm.bias
+backbone.conv1.conv1_1.norm.running_mean
+backbone.conv1.conv1_1.norm.running_var
+backbone.conv1.conv1_2.conv.weight
+backbone.conv1.conv1_2.norm.weight
+backbone.conv1.conv1_2.norm.bias
+backbone.conv1.conv1_2.norm.running_mean
+backbone.conv1.conv1_2.norm.running_var
+backbone.conv1.conv1_3.conv.weight
+backbone.conv1.conv1_3.norm.weight
+backbone.conv1.conv1_3.norm.bias
+backbone.conv1.conv1_3.norm.running_mean
+backbone.conv1.conv1_3.norm.running_var
+backbone.res_layers.0.blocks.0.branch2a.conv.weight
+backbone.res_layers.0.blocks.0.branch2a.norm.weight
+backbone.res_layers.0.blocks.0.branch2a.norm.bias
+backbone.res_layers.0.blocks.0.branch2a.norm.running_mean
+backbone.res_layers.0.blocks.0.branch2a.norm.running_var
+backbone.res_layers.0.blocks.0.branch2b.conv.weight
+backbone.res_layers.0.blocks.0.branch2b.norm.weight
+backbone.res_layers.0.blocks.0.branch2b.norm.bias
+backbone.res_layers.0.blocks.0.branch2b.norm.running_mean
+backbone.res_layers.0.blocks.0.branch2b.norm.running_var
+backbone.res_layers.0.blocks.0.branch2c.conv.weight
+backbone.res_layers.0.blocks.0.branch2c.norm.weight
+backbone.res_layers.0.blocks.0.branch2c.norm.bias
+backbone.res_layers.0.blocks.0.branch2c.norm.running_mean
+backbone.res_layers.0.blocks.0.branch2c.norm.running_var
+
+ref  s3: shape=(1, 512, 80, 80) min=0.000 max=5.246 mean=0.109
+ttnn s3: shape=(1, 512, 80, 80)     min=0.000     max=5.219     mean=0.111
+backbone s3 PCC: 0.9949336763801433
+PASSED
+tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_pcc_s4 
+backbone s4 PCC: 0.9886890402502247
+PASSED
+tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_pcc_s5 
+backbone s5 PCC: 0.9724896010863008
+PASSED
+tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_stage0_pcc Load PResNet50 state_dict
+
+ref  stage0: shape=(1, 256, 160, 160) min=0.000 max=5.508 mean=0.183
+ttnn stage0: shape=(1, 256, 160, 160) min=0.000 max=5.500 mean=0.184
+Max difference:  0.415373
+Mean difference: 0.012558
+99% of errors are under: 0.094366
+stage0 PCC: 0.9962439579272073
+PASSED
+tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_stage1_pcc Load PResNet50 state_dict
+
+ref  s1: min=0.000 max=5.246 mean=0.109
+ttnn s1: min=0.000 max=5.219 mean=0.111
+stage1 PCC: 0.9949336763801433
+PASSED
+tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_stage2_pcc Load PResNet50 state_dict
+
+ref  s2: min=0.000 max=4.443 mean=0.050
+ttnn s2: min=0.000 max=4.688 mean=0.050
+stage2 PCC: 0.9886890402502247
+PASSED
+tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_stage3_pcc Load PResNet50 state_dict
+
+ref  s3: min=0.000 max=2.694 mean=0.018
+ttnn s3: min=0.000 max=2.719 mean=0.018
+stage3 PCC: 0.9724896010863008
+PASSED
+
+=============================== warnings summary ===============================
+../../../../../../opt/venv/lib/python3.10/site-packages/_pytest/config/__init__.py:1434
+  /opt/venv/lib/python3.10/site-packages/_pytest/config/__init__.py:1434: PytestConfigWarning: Unknown config option: timeout
+  
+    self._warn_or_fail_if_strict(f"Unknown config option: {key}\n")
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /root/tt-metal/models/demos/wormhole/rt_detr/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+73.84s call     models/demos/wormhole/rt_detr/tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_pcc_s3
+2.31s setup    models/demos/wormhole/rt_detr/tests/unit/test_hybrid_encoder.py::test_hybrid_encoder_p3_pcc
+1.91s call     models/demos/wormhole/rt_detr/tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_stage0_pcc
+1.34s setup    models/demos/wormhole/rt_detr/tests/unit/test_encoder_stack.py::TestEncoderStack::test_aifi_no_pos_embed
+1.11s call     models/demos/wormhole/rt_detr/tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_stage2_pcc
+1.10s setup    models/demos/wormhole/rt_detr/tests/unit/test_attention.py::TestMultiheadAttention::test_self_attention_pcc
+1.09s call     models/demos/wormhole/rt_detr/tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_stage3_pcc
+0.99s call     models/demos/wormhole/rt_detr/tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_stage1_pcc
+0.98s setup    models/demos/wormhole/rt_detr/tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_pcc_s3
+0.40s setup    models/demos/wormhole/rt_detr/tests/unit/test_decoder.py::TestDecoder::test_pcc_layer1_output
+0.39s setup    models/demos/wormhole/rt_detr/tests/unit/test_postprocessor.py::TestPostProcessor::test_postprocessor_logic
+0.37s setup    models/demos/wormhole/rt_detr/tests/unit/test_encoder_stack.py::TestEncoderStack::test_aifi_pos_embed_affects_output
+0.37s setup    models/demos/wormhole/rt_detr/tests/unit/test_encoder_stack.py::TestEncoderStack::test_aifi_with_pos_embed
+0.36s call     models/demos/wormhole/rt_detr/tests/unit/test_decoder.py::TestDecoder::test_layer_by_layer_pcc
+0.36s setup    models/demos/wormhole/rt_detr/tests/unit/test_hybrid_encoder.py::test_hybrid_encoder_p4_pcc
+0.35s call     models/demos/wormhole/rt_detr/tests/unit/test_decoder.py::TestDecoder::test_output_shape
+0.34s setup    models/demos/wormhole/rt_detr/tests/unit/test_hybrid_encoder.py::test_hybrid_encoder_p5_pcc
+0.33s setup    models/demos/wormhole/rt_detr/tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_pcc_s4
+0.31s call     models/demos/wormhole/rt_detr/tests/unit/test_decoder.py::TestDecoder::test_pcc_layer1_output
+0.30s setup    models/demos/wormhole/rt_detr/tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_stage3_pcc
+0.30s setup    models/demos/wormhole/rt_detr/tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_stage2_pcc
+0.30s setup    models/demos/wormhole/rt_detr/tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_stage0_pcc
+0.30s setup    models/demos/wormhole/rt_detr/tests/unit/test_decoder.py::TestDecoder::test_output_shape
+0.30s setup    models/demos/wormhole/rt_detr/tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_pcc_s5
+0.29s setup    models/demos/wormhole/rt_detr/tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_stage1_pcc
+0.29s setup    models/demos/wormhole/rt_detr/tests/unit/test_attention.py::TestMultiheadAttention::test_self_attention_is_deterministic
+0.29s setup    models/demos/wormhole/rt_detr/tests/unit/test_decoder.py::TestDecoder::test_layer_by_layer_pcc
+0.28s setup    models/demos/wormhole/rt_detr/tests/unit/test_attention.py::TestMultiheadAttention::test_decoder_self_attention_pcc
+0.19s call     models/demos/wormhole/rt_detr/tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_pcc_s4
+0.14s call     models/demos/wormhole/rt_detr/tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_pcc_s5
+0.13s teardown models/demos/wormhole/rt_detr/tests/unit/test_attention.py::TestMultiheadAttention::test_self_attention_is_deterministic
+0.13s teardown models/demos/wormhole/rt_detr/tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_stage3_pcc
+0.12s call     models/demos/wormhole/rt_detr/tests/unit/test_encoder_stack.py::TestEncoderStack::test_aifi_no_pos_embed
+0.10s call     models/demos/wormhole/rt_detr/tests/unit/test_attention.py::TestMultiheadAttention::test_self_attention_pcc
+0.05s call     models/demos/wormhole/rt_detr/tests/unit/test_hybrid_encoder.py::test_hybrid_encoder_p3_pcc
+0.05s call     models/demos/wormhole/rt_detr/tests/unit/test_attention.py::TestMultiheadAttention::test_decoder_self_attention_pcc
+0.04s call     models/demos/wormhole/rt_detr/tests/unit/test_encoder_stack.py::TestEncoderStack::test_aifi_with_pos_embed
+0.04s call     models/demos/wormhole/rt_detr/tests/unit/test_encoder_stack.py::TestEncoderStack::test_aifi_pos_embed_affects_output
+0.02s call     models/demos/wormhole/rt_detr/tests/unit/test_attention.py::TestMultiheadAttention::test_self_attention_is_deterministic
+0.02s call     models/demos/wormhole/rt_detr/tests/unit/test_hybrid_encoder.py::test_hybrid_encoder_p4_pcc
+0.02s teardown models/demos/wormhole/rt_detr/tests/unit/test_hybrid_encoder.py::test_hybrid_encoder_p5_pcc
+0.01s call     models/demos/wormhole/rt_detr/tests/unit/test_postprocessor.py::TestPostProcessor::test_postprocessor_logic
+0.01s call     models/demos/wormhole/rt_detr/tests/unit/test_hybrid_encoder.py::test_hybrid_encoder_p5_pcc
+0.01s teardown models/demos/wormhole/rt_detr/tests/unit/test_encoder_stack.py::TestEncoderStack::test_aifi_pos_embed_affects_output
+0.00s teardown models/demos/wormhole/rt_detr/tests/unit/test_postprocessor.py::TestPostProcessor::test_postprocessor_logic
+0.00s teardown models/demos/wormhole/rt_detr/tests/unit/test_decoder.py::TestDecoder::test_layer_by_layer_pcc
+0.00s teardown models/demos/wormhole/rt_detr/tests/unit/test_encoder_stack.py::TestEncoderStack::test_aifi_no_pos_embed
+0.00s teardown models/demos/wormhole/rt_detr/tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_pcc_s4
+0.00s teardown models/demos/wormhole/rt_detr/tests/unit/test_encoder_stack.py::TestEncoderStack::test_aifi_with_pos_embed
+0.00s teardown models/demos/wormhole/rt_detr/tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_stage2_pcc
+0.00s teardown models/demos/wormhole/rt_detr/tests/unit/test_decoder.py::TestDecoder::test_output_shape
+0.00s teardown models/demos/wormhole/rt_detr/tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_pcc_s5
+0.00s teardown models/demos/wormhole/rt_detr/tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_stage0_pcc
+0.00s teardown models/demos/wormhole/rt_detr/tests/unit/test_decoder.py::TestDecoder::test_pcc_layer1_output
+0.00s teardown models/demos/wormhole/rt_detr/tests/unit/test_attention.py::TestMultiheadAttention::test_decoder_self_attention_pcc
+0.00s teardown models/demos/wormhole/rt_detr/tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_stage1_pcc
+0.00s teardown models/demos/wormhole/rt_detr/tests/unit/test_hybrid_encoder.py::test_hybrid_encoder_p4_pcc
+0.00s teardown models/demos/wormhole/rt_detr/tests/unit/test_attention.py::TestMultiheadAttention::test_self_attention_pcc
+0.00s teardown models/demos/wormhole/rt_detr/tests/unit/test_hybrid_encoder.py::test_hybrid_encoder_p3_pcc
+0.00s teardown models/demos/wormhole/rt_detr/tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_pcc_s3
+=========================== short test summary info ============================
+PASSED tests/unit/test_attention.py::TestMultiheadAttention::test_self_attention_pcc
+PASSED tests/unit/test_attention.py::TestMultiheadAttention::test_decoder_self_attention_pcc
+PASSED tests/unit/test_attention.py::TestMultiheadAttention::test_self_attention_is_deterministic
+PASSED tests/unit/test_decoder.py::TestDecoder::test_pcc_layer1_output
+PASSED tests/unit/test_decoder.py::TestDecoder::test_output_shape
+PASSED tests/unit/test_decoder.py::TestDecoder::test_layer_by_layer_pcc
+PASSED tests/unit/test_encoder_stack.py::TestEncoderStack::test_aifi_no_pos_embed
+PASSED tests/unit/test_encoder_stack.py::TestEncoderStack::test_aifi_with_pos_embed
+PASSED tests/unit/test_encoder_stack.py::TestEncoderStack::test_aifi_pos_embed_affects_output
+PASSED tests/unit/test_hybrid_encoder.py::test_hybrid_encoder_p3_pcc
+PASSED tests/unit/test_hybrid_encoder.py::test_hybrid_encoder_p4_pcc
+PASSED tests/unit/test_hybrid_encoder.py::test_hybrid_encoder_p5_pcc
+PASSED tests/unit/test_postprocessor.py::TestPostProcessor::test_postprocessor_logic
+PASSED tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_pcc_s3
+PASSED tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_pcc_s4
+PASSED tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_pcc_s5
+PASSED tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_stage0_pcc
+PASSED tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_stage1_pcc
+PASSED tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_stage2_pcc
+PASSED tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_stage3_pcc
+=================== 20 passed, 1 warning in 93.21s (0:01:33) ===================

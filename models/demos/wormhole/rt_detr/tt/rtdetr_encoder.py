@@ -4,7 +4,6 @@
 
 import ttnn
 
-# Force maximum math fidelity and full FP32 accumulation to eliminate rounding drift
 _precision_config = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi4, 
     math_approx_mode=True,
@@ -18,7 +17,7 @@ def _layer_norm(x, norm_params, eps=1e-5):
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
-def encoder_layer(x, p, device, num_heads=8, pos_embed=None):
+def encoder_layer(x, p, device, num_heads=8, pos_embed=None, attn_mask=None):
     residual = x
     
     shape = x.shape
@@ -44,7 +43,7 @@ def encoder_layer(x, p, device, num_heads=8, pos_embed=None):
     v = ttnn.transpose(ttnn.reshape(v, (b, seq_len, num_heads, head_dim)), 1, 2)
 
     attn = ttnn.transformer.scaled_dot_product_attention(
-        q, k, v, is_causal=False, memory_config=ttnn.L1_MEMORY_CONFIG
+        q, k, v, attn_mask=attn_mask, is_causal=False, memory_config=ttnn.L1_MEMORY_CONFIG
     )
 
     ttnn.deallocate(q)
@@ -77,7 +76,7 @@ def encoder_layer(x, p, device, num_heads=8, pos_embed=None):
 
     return x
 
-def run_aifi(x, layer_params, device, pos_embed=None):
+def run_aifi(x, layer_params, device, pos_embed=None, attn_mask=None):
     for p in layer_params:
-        x = encoder_layer(x, p, device, pos_embed=pos_embed)
+        x = encoder_layer(x, p, device, pos_embed=pos_embed, attn_mask=attn_mask)
     return x

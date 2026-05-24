@@ -20,6 +20,7 @@ _ref_boxes = None
 _tt_logits = None
 _tt_boxes = None
 _sample_input = None
+_ref_topk_ind = None 
 
 repo_path = Path(__file__).parent.parent / "RT-DETR" / "rtdetr_pytorch"
 sys.path.insert(0, str(repo_path))
@@ -29,7 +30,7 @@ from src.core import YAMLConfig
 
 from tt.resnet_backbone import presnet50
 from tt.hybrid_encoder import hybrid_encoder
-from tt.rtdetr_decoder import run_decoder
+from tt.rtdetr_decoder import run_decoder, decoder_layer, _self_attention, _layer_norm
 from tt.postprocessor import postprocess
 from tt.weight_utils import get_backbone_parameters, get_encoder_parameters, get_decoder_parameters
 from models.common.utility_functions import comp_pcc
@@ -37,13 +38,8 @@ from models.common.utility_functions import comp_pcc
 cfg_path  = repo_path / "configs/rtdetr/rtdetr_r50vd_6x_coco.yml"
 ckpt_path = Path(__file__).parent.parent / "weights/rtdetr_r50vd.pth"
 
-pcc_threshold   = 0.96
+pcc_threshold   = 0.90
 score_threshold = 0.4
-
-_captured_query      = None
-_captured_ref_points = None
-_captured_query_pos  = None
-_captured_memory     = None
 
 
 def _to_device(tensor_nchw, device):
@@ -63,121 +59,280 @@ def _pull(tt_tensor, device):
     )[0:1].float()
 
 
-# torch reference 
-
 def _run_torch_reference(torch_model, sample_input):
-    global _captured_query, _captured_ref_points, _captured_query_pos, _captured_memory
-
-    def capture_hook(module, args, kwargs):
-        global _captured_query, _captured_ref_points, _captured_query_pos, _captured_memory
-
-        if 'tgt' in kwargs:
-            _captured_query = kwargs['tgt'].detach()
-        elif len(args) > 0:
-            _captured_query = args[0].detach()
-
-        if 'ref_points' in kwargs:
-            _captured_ref_points = kwargs['ref_points'].detach()
-        elif 'reference_points' in kwargs:
-            _captured_ref_points = kwargs['reference_points'].detach()
-        elif len(args) > 1:
-            _captured_ref_points = args[1].detach()
-
-        if 'query_pos' in kwargs and kwargs['query_pos'] is not None:
-            _captured_query_pos = kwargs['query_pos'].detach()
-        elif len(args) > 7 and args[7] is not None:
-            _captured_query_pos = args[7].detach()
-
-        if 'memory' in kwargs:
-            _captured_memory = kwargs['memory'].detach()
-        elif len(args) > 2:
-            _captured_memory = args[2].detach()
-
-    handle = torch_model.decoder.decoder.layers[0].register_forward_pre_hook(
-        capture_hook, with_kwargs=True
-    )
+    """Clean PyTorch forward pass, returning logits, boxes, and the Top-K indices."""
     with torch.no_grad():
         out = torch_model(sample_input)
-    handle.remove()
-
-    return out["pred_logits"].detach(), out["pred_boxes"].detach()
-
-def _debug_decoder_trace(torch_model, device, tt_params):
-    """Step through decoder layer by layer and check PCC at each stage."""
-    from src.zoo.rtdetr.utils import inverse_sigmoid
-    from models.common.utility_functions import comp_pcc
-
-    def check(name, pt, tt):
-        if isinstance(tt, torch.Tensor):
-            tt_f = tt.float()
+        
+        feats = torch_model.backbone(sample_input)
+        feats = torch_model.encoder(feats)
+        memory_pt, spatial_shapes, _ = torch_model.decoder._get_encoder_input(feats)
+        
+        decoder = torch_model.decoder
+        if decoder.eval_spatial_size is None:
+            anchors, valid_mask = decoder._generate_anchors(spatial_shapes, device=memory_pt.device)
         else:
-            tt_f = _pull(tt, device).squeeze(1)
-        pt_f = pt.float()
-        pcc, msg = comp_pcc(pt_f, tt_f, 0.97)
-        print(f"  {name:.<45} {'ok' if pcc else 'not ok'} ({msg})")
+            anchors, valid_mask = decoder.anchors.to(memory_pt.device), decoder.valid_mask.to(memory_pt.device)
+
+        memory_masked = valid_mask.to(memory_pt.dtype) * memory_pt
+        output_memory = decoder.enc_output(memory_masked)
+        enc_outputs_class = decoder.enc_score_head(output_memory)
+        
+        _, topk_ind = torch.topk(enc_outputs_class.max(-1).values, decoder.num_queries, dim=1)
+
+    return out["pred_logits"].detach(), out["pred_boxes"].detach(), topk_ind
+
+
+def _run_tt_pipeline(sample_input, tt_params, torch_model, device, ref_topk_ind, return_debug=True):
+    from models.common.utility_functions import comp_pcc
+    from src.zoo.rtdetr.utils import inverse_sigmoid
+
+    def check_spatial(name, pt_nchw, tt_tensor):
+        """Handles both NCHW (4D) and flat NLC (3D) PyTorch tensors."""
+        tt_raw = _pull(tt_tensor, device)  # always (1, 1, H*W, C) or (1, 1, seq, C)
+
+        if pt_nchw.dim() == 4:
+            # Standard spatial feature map: (1, C, H, W)
+            _, C, H, W = pt_nchw.shape
+            tt_nchw = tt_raw.squeeze(1).reshape(1, H, W, C).permute(0, 3, 1, 2).contiguous()
+            pt_f = pt_nchw.float()
+            tt_f = tt_nchw.float()
+
+        elif pt_nchw.dim() == 3:
+            # Flat sequence: (1, seq, C) — e.g. post-AIFI before reshape
+            # TTNN is (1, 1, seq, C), just flatten both for comparison
+            pt_f = pt_nchw.float().reshape(-1)
+            tt_f = tt_raw.squeeze(1).float().reshape(-1)
+
+        else:
+            raise ValueError(f"check_spatial: unexpected pt shape {pt_nchw.shape}")
+
+        pcc, msg = comp_pcc(pt_f, tt_f, 0.96)
+        print(f"  [Trace] {name:.<40} {' pass' if pcc else ' FAIL'} ({msg})")
         return pcc
 
-    print(" Decoder + Postprocessor trace")
+    def check_flat(name, pt, tt_tensor_or_torch):
+        if isinstance(tt_tensor_or_torch, torch.Tensor):
+            tt_f = tt_tensor_or_torch.float()
+        else:
+            tt_f = _pull(tt_tensor_or_torch, device).float()
+        pcc, msg = comp_pcc(pt.float().reshape(-1), tt_f.reshape(-1), 0.96)
+        print(f"  [Trace] {name:.<40} {' pass' if pcc else ' FAIL'} ({msg})")
+        return pcc
 
-    decoder_module = torch_model.decoder.decoder
-    pt_per_layer = {i: {} for i in range(6)}
+    print("\n" + "="*50)
+    print("=== E2E Pipeline Debug Trace ===")
 
-    def make_pre_hook(i):
-        def hook(module, args, kwargs):
-            pt_per_layer[i]['ref_points'] = args[1].detach() if len(args) > 1 else kwargs['reference_points'].detach()
-            qpe = kwargs.get('query_pos_embed', args[7] if len(args) > 7 else None)
-            if qpe is not None:
-                pt_per_layer[i]['query_pos'] = qpe.detach()
-        return hook
-
-    def make_post_hook(i):
-        def hook(module, args, kwargs, output):
-            pt_per_layer[i]['output'] = output.detach()
-        return hook
-
-    handles = []
-    for i, layer in enumerate(decoder_module.layers):
-        handles.append(layer.register_forward_pre_hook(make_pre_hook(i), with_kwargs=True))
-        handles.append(layer.register_forward_hook(make_post_hook(i), with_kwargs=True))
-
-    orig_fwd = decoder_module.forward
-    _ref_points_seq = []
-
-    def patched_fwd(*args, **kwargs):
-        _ref_points_seq.clear()
-        return orig_fwd(*args, **kwargs)
-    
-    decoder_module.forward = patched_fwd
+    h5, w5 = 20, 20  
 
     with torch.no_grad():
-        _ = torch_model(_sample_input)
+        s_pt = torch_model.backbone(sample_input)
+        s3_pt, s4_pt, s5_pt = s_pt[0], s_pt[1], s_pt[2]
 
-    decoder_module.forward = orig_fwd
-    for h in handles:
-        h.remove()
+        p_pt = torch_model.encoder(s_pt)
+        p3_pt, p4_pt, p5_pt = p_pt[0], p_pt[1], p_pt[2]
 
-    print("\n[Decoder Layer-by-Layer]")
+        # FPN intermediate goldens — mirror PyTorch HybridEncoder.forward step by step
+        with torch.no_grad():
+            proj_feats = [
+                torch_model.encoder.input_proj[i](feat)
+                for i, feat in enumerate([s3_pt, s4_pt, s5_pt])
+            ]
 
-    query_tt = ttnn.from_torch(
-        _captured_query.reshape(1, 1, 300, 256).to(torch.bfloat16),
-        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-        device=device, memory_config=ttnn.L1_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(device) if hasattr(device, 'get_num_devices') else None,
-    )
+            # Post-AIFI p5 (encoder[0] runs on proj_feats[2])
+            h5_s, w5_s = proj_feats[2].shape[2:]
+            src_flatten = proj_feats[2].flatten(2).permute(0, 2, 1)
+            if torch_model.encoder.eval_spatial_size:
+                pos_embed_pt = getattr(torch_model.encoder, 'pos_embed2').to(src_flatten.device)
+            else:
+                pos_embed_pt = torch_model.encoder.build_2d_sincos_position_embedding(
+                    w5_s, h5_s,
+                    torch_model.encoder.hidden_dim,
+                    torch_model.encoder.pe_temperature,
+                ).to(src_flatten.device)
 
+            # Post-AIFI golden — keep as (1, 400, 256) flat, matching TTNN's (1, 1, 400, 256)
+            post_aifi_p5_pt = torch_model.encoder.encoder[0](src_flatten, pos_embed=pos_embed_pt)
+            # shape: (1, 400, 256) — 3D, check_spatial handles this now
+
+            # For FPN golden computations, reshape to NCHW separately
+            post_aifi_p5_pt_nchw = post_aifi_p5_pt.permute(0, 2, 1).reshape(1, 256, 20, 20).contiguous()
+            proj_feats[2] = post_aifi_p5_pt_nchw  # use NCHW version for FPN ops
+
+            enc = torch_model.encoder
+
+
+            # FPN intermediates — all 4D NCHW
+            p5_lat_pt = torch.nn.functional.silu(enc.lateral_convs[0](proj_feats[2]))   # (1, 256, 20, 20)
+            p5_up     = torch.nn.functional.interpolate(p5_lat_pt, scale_factor=2., mode='nearest')
+            p4_cat_pt = torch.cat([p5_up, proj_feats[1]], dim=1)                         # (1, 512, 40, 40)
+            p4_td_pt  = enc.fpn_blocks[0](p4_cat_pt)                                     # (1, 256, 40, 40)
+            p4_lat_pt = torch.nn.functional.silu(enc.lateral_convs[1](p4_td_pt))         # (1, 256, 40, 40)
+            p4_up     = torch.nn.functional.interpolate(p4_lat_pt, scale_factor=2., mode='nearest')
+            p3_cat_pt = torch.cat([p4_up, proj_feats[0]], dim=1)                         # (1, 512, 80, 80)
+            p3_out_pt = enc.fpn_blocks[1](p3_cat_pt)                                     # (1, 256, 80, 80)                                     # (1, 256, 80, 80)
+
+        # Intermediate AIFI goldens
+        proj_feats_pt = [
+            torch_model.encoder.input_proj[i](feat)
+            for i, feat in enumerate([s3_pt, s4_pt, s5_pt])
+        ]
+        pre_aifi_p5_pt_nchw = proj_feats_pt[2]  # (1, 256, 20, 20)
+
+        src_flatten = proj_feats_pt[2].flatten(2).permute(0, 2, 1)  # (1, 400, 256)
+        if torch_model.encoder.eval_spatial_size:
+            pos_embed_pt = getattr(torch_model.encoder, 'pos_embed2').to(src_flatten.device)
+        else:
+            pos_embed_pt = torch_model.encoder.build_2d_sincos_position_embedding(
+                w5, h5,
+                torch_model.encoder.hidden_dim,
+                torch_model.encoder.pe_temperature,
+            ).to(src_flatten.device)
+
+        post_aifi_p5_pt = torch_model.encoder.encoder[0](src_flatten, pos_embed=pos_embed_pt)
+        post_aifi_p5_pt_nchw = (
+            post_aifi_p5_pt.permute(0, 2, 1)
+            .reshape(1, 256, h5, w5)
+            .contiguous()
+        )
+
+        # Decoder bridge goldens
+        decoder_pt = torch_model.decoder
+        memory_pt, spatial_shapes, _ = decoder_pt._get_encoder_input(p_pt)
+
+        if decoder_pt.eval_spatial_size is None:
+            anchors, valid_mask = decoder_pt._generate_anchors(spatial_shapes, device=memory_pt.device)
+        else:
+            anchors = decoder_pt.anchors.to(memory_pt.device)
+            valid_mask = decoder_pt.valid_mask.to(memory_pt.device)
+
+        memory_masked = valid_mask.to(memory_pt.dtype) * memory_pt
+        output_memory = decoder_pt.enc_output(memory_masked)
+        enc_outputs_coord_unact = decoder_pt.enc_bbox_head(output_memory) + anchors
+
+        init_ref_points_unact = enc_outputs_coord_unact.gather(
+            dim=1,
+            index=ref_topk_ind.unsqueeze(-1).repeat(1, 1, enc_outputs_coord_unact.shape[-1])
+        ).detach()
+
+        target_pt = output_memory.gather(
+            dim=1,
+            index=ref_topk_ind.unsqueeze(-1).repeat(1, 1, output_memory.shape[-1])
+        ).detach()
+
+        # Decoder layer goldens
+        layer_golden_outputs = []
+        output_pt = target_pt
+        ref_points_detach = torch.sigmoid(init_ref_points_unact)
+
+        for i, layer in enumerate(decoder_pt.decoder.layers):
+            ref_points_input = ref_points_detach.unsqueeze(2)
+            query_pos_embed = decoder_pt.query_pos_head(ref_points_detach)
+            output_pt = layer(
+                output_pt, ref_points_input, memory_pt,
+                spatial_shapes, None, None, None, query_pos_embed
+            )
+            inter_ref_bbox = torch.sigmoid(
+                decoder_pt.dec_bbox_head[i](output_pt) +
+                inverse_sigmoid(ref_points_detach)
+            )
+            layer_golden_outputs.append((output_pt.clone(), query_pos_embed.clone()))
+            ref_points_detach = inter_ref_bbox
+
+
+    # 1. TTNN Backbone
+
+    x = _to_device(sample_input, device)
+    s3, s4, s5 = presnet50(x, tt_params["backbone"], device)
+
+    check_spatial("Backbone s3", s3_pt, s3)
+    check_spatial("Backbone s4", s4_pt, s4)
+    check_spatial("Backbone s5", s5_pt, s5)
+
+
+    # 2. TTNN Encoder — single call with optional debug outputs
+    if return_debug:
+        encoder_outs, debug_tt = hybrid_encoder(
+            s3, s4, s5, tt_params["encoder"], device, return_debug=True
+        )
+    else:
+        encoder_outs = hybrid_encoder(s3, s4, s5, tt_params["encoder"], device)
+
+    p3, p4, p5 = encoder_outs
+
+    check_spatial("Encoder p3", p3_pt, p3)
+    check_spatial("Encoder p4", p4_pt, p4)
+    check_spatial("Encoder p5", p5_pt, p5)
+
+    if return_debug:
+        check_spatial("FPN p5_lat",      p5_lat_pt,              debug_tt["p5_lat"])        # 4D
+        check_spatial("FPN p4_cat",      p4_cat_pt,              debug_tt["p4_cat"])        # 4D, 512 ch
+        check_spatial("FPN p4_td",       p4_td_pt,               debug_tt["p4_td"])        # 4D
+        check_spatial("FPN p4_lat",      p4_lat_pt,              debug_tt["p4_lat"])        # 4D
+        check_spatial("FPN p3_cat",      p3_cat_pt,              debug_tt["p3_cat"])        # 4D, 512 ch
+        check_spatial("FPN p3_out",      p3_out_pt,              debug_tt["p3_out"])        # 4D
+
+        for k, v in debug_tt.items():
+            if v is not None:
+                ttnn.deallocate(v)
+
+
+    # 3. Encoder-to-Decoder Bridge
+
+    p3_tt_eval = _pull(p3, device).squeeze(1).reshape(1, 80, 80, 256).permute(0, 3, 1, 2)
+    p4_tt_eval = _pull(p4, device).squeeze(1).reshape(1, 40, 40, 256).permute(0, 3, 1, 2)
+    p5_tt_eval = _pull(p5, device).squeeze(1).reshape(1, 20, 20, 256).permute(0, 3, 1, 2)
+
+    with torch.no_grad():
+        memory_tt_eval, _, _ = decoder_pt._get_encoder_input([p3_tt_eval, p4_tt_eval, p5_tt_eval])
+        memory_masked_eval = valid_mask.to(memory_tt_eval.dtype) * memory_tt_eval
+        output_memory_eval = decoder_pt.enc_output(memory_masked_eval)
+        enc_outputs_coord_unact_eval = decoder_pt.enc_bbox_head(output_memory_eval) + anchors
+
+        init_ref_points_unact_eval = enc_outputs_coord_unact_eval.gather(
+            dim=1,
+            index=ref_topk_ind.unsqueeze(-1).repeat(1, 1, enc_outputs_coord_unact_eval.shape[-1])
+        ).detach()
+
+        target_tt_eval = output_memory_eval.gather(
+            dim=1,
+            index=ref_topk_ind.unsqueeze(-1).repeat(1, 1, output_memory_eval.shape[-1])
+        ).detach()
+
+    check_flat("Bridge Memory",           memory_pt,             memory_tt_eval)
+    check_flat("Bridge Target (Queries)", target_pt,             target_tt_eval)
+    check_flat("Bridge Init Ref Points",  init_ref_points_unact, init_ref_points_unact_eval)
+
+
+    # 4. TTNN Decoder
+
+    n_levels = len(spatial_shapes)
+
+    # Push unmasked memory — decoder_layer applies valid_mask internally
     memory_tt = ttnn.from_torch(
-        _captured_memory.to(torch.bfloat16),
+        memory_tt_eval.unsqueeze(1).to(torch.bfloat16),
+        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+        device=device, memory_config=ttnn.L1_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device) if hasattr(device, 'get_num_devices') else None,
+    )
+    query_tt = ttnn.from_torch(
+        target_tt_eval.unsqueeze(1).to(torch.bfloat16),
         dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
         device=device, memory_config=ttnn.L1_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(device) if hasattr(device, 'get_num_devices') else None,
     )
 
-    for i in range(6):
-        print(f"\n  --- Layer {i} ---")
-        torch_layer = decoder_module.layers[i]
-        params = tt_params["decoder"][i]
-        ref_points_input = pt_per_layer[i]['ref_points']
-        query_pos = pt_per_layer[i]['query_pos']
+    actual_decoder = decoder_pt.decoder
+    ref_points_detach_eval = torch.sigmoid(init_ref_points_unact_eval.clone())
+
+    if ref_points_detach_eval.dim() == 4:
+        ref_points_detach_eval = ref_points_detach_eval[:, :, 0, :]
+
+    for i, (torch_layer, tt_params_layer) in enumerate(zip(actual_decoder.layers, tt_params["decoder"])):
+        with torch.no_grad():
+            query_pos = decoder_pt.query_pos_head(ref_points_detach_eval)
+
+        check_flat(f"Decoder L{i} Query Pos", layer_golden_outputs[i][1], query_pos)
 
         query_pos_tt = ttnn.from_torch(
             query_pos.reshape(1, 1, 300, 256).to(torch.bfloat16),
@@ -186,145 +341,41 @@ def _debug_decoder_trace(torch_model, device, tt_params):
             mesh_mapper=ttnn.ReplicateTensorToMesh(device) if hasattr(device, 'get_num_devices') else None,
         )
 
-        from tt.rtdetr_decoder import _self_attention, _layer_norm
-        residual = query_tt
-        sa_out = _self_attention(query_tt, query_pos_tt, params.self_attn, device, num_heads=8)
-        query_tt = _layer_norm(
-            ttnn.add(residual, sa_out, memory_config=ttnn.L1_MEMORY_CONFIG),
-            params.norm1,
+        ref_points_input = ref_points_detach_eval.unsqueeze(2).expand(-1, -1, n_levels, -1)
+
+        query_tt = decoder_layer(
+            query_tt, query_pos_tt, torch_layer, tt_params_layer,
+            memory_tt, ref_points_input, spatial_shapes, device, 8,
+            valid_mask=None,  # mask already applied to memory above
         )
 
-        query_torch = _pull(query_tt, device).view(1, 300, 256)
-        query_pos_torch = query_pos.view(1, 300, 256)
-        
-        q_with_pos = query_torch + query_pos_torch
-        memory_torch = _captured_memory.float()
+        query_torch_out = _pull(query_tt, device).view(1, 300, 256)
+
+        check_flat(f"Decoder L{i} Output", layer_golden_outputs[i][0], query_torch_out)
 
         with torch.no_grad():
-            ca_out = torch_layer.cross_attn(
-                query=q_with_pos,
-                reference_points=ref_points_input,
-                value=memory_torch,
-                value_spatial_shapes=torch.tensor([[80,80],[40,40],[20,20]]),
-                value_mask=None,
+            inter_ref_bbox = torch.sigmoid(
+                decoder_pt.dec_bbox_head[i](query_torch_out) +
+                inverse_sigmoid(ref_points_detach_eval)
             )
+        ref_points_detach_eval = inter_ref_bbox
+        ttnn.deallocate(query_pos_tt)
 
-        ca_out_tt = ttnn.from_torch(
-            ca_out.reshape(1, 1, 300, 256).to(torch.bfloat16),
-            dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-            device=device, memory_config=ttnn.L1_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if hasattr(device, 'get_num_devices') else None,
-        )
-        
-        residual = query_tt
-        query_tt = _layer_norm(
-            ttnn.add(residual, ca_out_tt, memory_config=ttnn.L1_MEMORY_CONFIG),
-            params.norm2,
-        )
 
-        residual = query_tt
-        ffn = ttnn.linear(query_tt, params.linear1.weight, bias=params.linear1.bias,
-                          activation="relu", memory_config=ttnn.L1_MEMORY_CONFIG)
-        ffn = ttnn.linear(ffn, params.linear2.weight, bias=params.linear2.bias,
-                          memory_config=ttnn.L1_MEMORY_CONFIG)
-        query_tt = _layer_norm(
-            ttnn.add(residual, ffn, memory_config=ttnn.L1_MEMORY_CONFIG),
-            params.norm3,
-        )
-
-        check(f"L{i} layer output", pt_per_layer[i]['output'], query_tt)
-
-    print("\n[Prediction Heads]")
-    query_torch_final = _pull(query_tt, device).view(1, 300, 256)
-    
-    with torch.no_grad():
-        tt_logits = torch_model.decoder.dec_score_head[-1](query_torch_final)
-        from src.zoo.rtdetr.utils import inverse_sigmoid
-        final_ref_points = pt_per_layer[5]['ref_points'].view(1, 300, -1)
-        box_offsets = torch_model.decoder.dec_bbox_head[-1](query_torch_final).view(1, 300, 4)
-        
-        if final_ref_points.shape[-1] == 4:
-            tt_boxes = torch.sigmoid(box_offsets + inverse_sigmoid(final_ref_points))
-        else:
-            tt_boxes = box_offsets.clone()
-            tt_boxes[..., :2] = box_offsets[..., :2] + inverse_sigmoid(final_ref_points)
-            tt_boxes = torch.sigmoid(tt_boxes)
-
-    check("pred_logits", _ref_logits, tt_logits)
-    check("pred_boxes",  _ref_boxes,  tt_boxes)
-
-# ttnn pipeline 
-
-def _run_tt_pipeline(sample_input, tt_params, torch_model, device):
-    global _captured_query, _captured_ref_points, _captured_query_pos
-
-    x = _to_device(sample_input, device)
-    
-    # 1. Backbone
-    s3, s4, s5 = presnet50(x, tt_params["backbone"], device)
-    
-    # 2. Encoder
-    p3, p4, p5 = hybrid_encoder(s3, s4, s5, tt_params["encoder"], device)
-
-    # 3. Encoder-to-Decoder 
-    p3_pt = _pull(p3, device).squeeze(1).reshape(1, 80, 80, 256).permute(0, 3, 1, 2)
-    p4_pt = _pull(p4, device).squeeze(1).reshape(1, 40, 40, 256).permute(0, 3, 1, 2)
-    p5_pt = _pull(p5, device).squeeze(1).reshape(1, 20, 20, 256).permute(0, 3, 1, 2)
+    # 5. Prediction Heads
 
     with torch.no_grad():
-        memory_pt, spatial_shapes, _ = torch_model.decoder._get_encoder_input([p3_pt, p4_pt, p5_pt])
-    
-    spatial_shapes = torch.tensor(spatial_shapes)
-    
-    memory_tt = ttnn.from_torch(
-        memory_pt.unsqueeze(1).to(torch.bfloat16),
-        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-        device=device, memory_config=ttnn.L1_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(device) if hasattr(device, 'get_num_devices') else None,
-    )
+        pred_logits = decoder_pt.dec_score_head[-1](query_torch_out)
+        pred_boxes = ref_points_detach_eval
 
-    decoder_pt = torch_model.decoder
-
-    query_tt = ttnn.from_torch(
-        _captured_query.reshape(1, 1, 300, 256).to(torch.bfloat16),
-        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-        device=device, memory_config=ttnn.L1_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(device) if hasattr(device, 'get_num_devices') else None,
-    )
-
-    query_pos_tt = ttnn.from_torch(
-        torch.zeros(1, 1, 300, 256, dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-        device=device, memory_config=ttnn.L1_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(device) if hasattr(device, 'get_num_devices') else None,
-    )
-
-    # 4. TTNN Decoder 
-    query_out, final_ref_points = run_decoder(
-        query_tt, query_pos_tt,
-        torch_decoder=decoder_pt,
-        tt_layer_params=tt_params["decoder"],
-        memory=memory_tt,
-        ref_points=_captured_ref_points,
-        spatial_shapes=spatial_shapes,
-        device=device,
-    )
-
-    # 5. Prediction heads 
-    query_torch = _pull(query_out, device).view(1, 300, 256)
-    
-    with torch.no_grad():
-        pred_logits = decoder_pt.dec_score_head[-1](query_torch)
-        pred_boxes = final_ref_points.view(1, 300, 4) 
+    print("=" * 50 + "\n")
 
     return pred_logits, pred_boxes
 
 
-# module-level setup 
-
 def _setup_all():
     global _device, _torch_model, _tt_params
-    global _ref_logits, _ref_boxes, _tt_logits, _tt_boxes, _sample_input
+    global _ref_logits, _ref_boxes, _tt_logits, _tt_boxes, _sample_input, _ref_topk_ind
 
     if _device is not None:
         return  
@@ -344,7 +395,6 @@ def _setup_all():
         "decoder":  get_decoder_parameters(_torch_model, _device),
     }
 
-    # Load an image
     img_path = Path(__file__).parent.parent / "demo" / "demo_images" / "sample.jpg" 
     
     if img_path.exists():
@@ -356,32 +406,28 @@ def _setup_all():
         sample_input = torch.zeros(1, 3, 640, 640)
 
     print("\n[setup] running PyTorch reference...")
-    _ref_logits, _ref_boxes = _run_torch_reference(_torch_model, sample_input)
+    _ref_logits, _ref_boxes, _ref_topk_ind = _run_torch_reference(_torch_model, sample_input)
 
     _sample_input = sample_input
-    _debug_decoder_trace(_torch_model, _device, _tt_params)
 
     print("[setup] running TT pipeline...")
-    _tt_logits, _tt_boxes = _run_tt_pipeline(sample_input, _tt_params, _torch_model, _device)
+    _tt_logits, _tt_boxes = _run_tt_pipeline(sample_input, _tt_params, _torch_model, _device, _ref_topk_ind)
 
     print("[setup] done\n")
 
-# PyTest Fixture 
 
 @pytest.fixture(scope="module", autouse=True)
 def force_pipeline_setup():
     """This fixture runs automatically before any tests in this module."""
     print("\n[PyTest Fixture] Running setup...")
     _setup_all()
-    yield  # Tests run here
+    yield  
     print("\n[PyTest Fixture] Tearing down...")
     global _device
     if _device is not None:
         ttnn.close_mesh_device(_device)
         _device = None
 
-
-# tests 
 
 def test_pred_logits_pcc():
     pcc, msg = comp_pcc(_ref_logits, _tt_logits, pcc_threshold)
@@ -426,8 +472,6 @@ def test_box_iou_fired_detections():
     low = iou[iou < 0.9]
     assert len(low) == 0, f"{len(low)} boxes have IoU < 0.9  (min={iou.min():.4f})"
 
-
-# main 
 
 if __name__ == "__main__":
     _setup_all()

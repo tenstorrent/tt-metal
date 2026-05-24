@@ -1,0 +1,123 @@
+2026-05-24 15:32:55.793 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/root/.cache/ttnn,model_cache_path=/root/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.6.0 -- /opt/venv/bin/python
+cachedir: .pytest_cache
+rootdir: /root/tt-metal
+configfile: pytest.ini
+plugins: anyio-4.13.0
+collecting ... collected 4 items
+
+tests/test_end_to_end_pcc.py::test_pred_logits_pcc 2026-05-24 15:32:58.632 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.ETH
+2026-05-24 15:32:58.633 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.ROW
+
+[PyTest Fixture] Running setup...
+Load PResNet50 state_dict
+backbone.conv1.conv1_1.conv.weight
+backbone.conv1.conv1_1.norm.weight
+backbone.conv1.conv1_1.norm.bias
+backbone.conv1.conv1_1.norm.running_mean
+backbone.conv1.conv1_1.norm.running_var
+backbone.conv1.conv1_2.conv.weight
+backbone.conv1.conv1_2.norm.weight
+backbone.conv1.conv1_2.norm.bias
+backbone.conv1.conv1_2.norm.running_mean
+backbone.conv1.conv1_2.norm.running_var
+backbone.conv1.conv1_3.conv.weight
+backbone.conv1.conv1_3.norm.weight
+backbone.conv1.conv1_3.norm.bias
+backbone.conv1.conv1_3.norm.running_mean
+backbone.conv1.conv1_3.norm.running_var
+backbone.res_layers.0.blocks.0.branch2a.conv.weight
+backbone.res_layers.0.blocks.0.branch2a.norm.weight
+backbone.res_layers.0.blocks.0.branch2a.norm.bias
+backbone.res_layers.0.blocks.0.branch2a.norm.running_mean
+backbone.res_layers.0.blocks.0.branch2a.norm.running_var
+backbone.res_layers.0.blocks.0.branch2b.conv.weight
+backbone.res_layers.0.blocks.0.branch2b.norm.weight
+backbone.res_layers.0.blocks.0.branch2b.norm.bias
+backbone.res_layers.0.blocks.0.branch2b.norm.running_mean
+backbone.res_layers.0.blocks.0.branch2b.norm.running_var
+backbone.res_layers.0.blocks.0.branch2c.conv.weight
+backbone.res_layers.0.blocks.0.branch2c.norm.weight
+backbone.res_layers.0.blocks.0.branch2c.norm.bias
+backbone.res_layers.0.blocks.0.branch2c.norm.running_mean
+backbone.res_layers.0.blocks.0.branch2c.norm.running_var
+
+[setup] Loading real image from /root/tt-metal/models/demos/wormhole/rt_detr/demo/demo_images/sample.jpg
+
+[setup] running PyTorch reference...
+[setup] running TT pipeline...
+
+==================================================
+=== E2E Pipeline Debug Trace ===
+  [Trace] Backbone s3.............................  pass (0.9939448095597743)
+  [Trace] Backbone s4.............................  pass (0.9868793297242657)
+  [Trace] Backbone s5.............................  pass (0.9704025847095633)
+  [Trace] Encoder p3..............................  pass (0.9907057895013605)
+  [Trace] Encoder p4..............................  pass (0.9898670138660262)
+  [Trace] Encoder p5..............................  pass (0.9910888488401085)
+  [Trace] FPN p5_lat..............................  pass (0.9662106896341764)
+  [Trace] FPN p4_cat..............................  pass (0.9775317385002281)
+  [Trace] FPN p4_td...............................  pass (0.973071042173331)
+  [Trace] FPN p4_lat..............................  pass (0.9627951623877766)
+  [Trace] FPN p3_cat..............................  pass (0.9743110797149795)
+  [Trace] FPN p3_out..............................  pass (0.9677637311439364)
+  [Trace] Bridge Memory...........................  pass (0.9950294613361093)
+  [Trace] Bridge Target (Queries).................  pass (0.9957601129936389)
+  [Trace] Bridge Init Ref Points..................  pass (0.9846750379236494)
+  [Trace] Decoder L0 Query Pos....................  pass (0.999520230582722)
+  [Trace] Decoder L0 Output.......................  pass (0.988802374359349)
+  [Trace] Decoder L1 Query Pos....................  pass (0.9993507458804173)
+  [Trace] Decoder L1 Output.......................  pass (0.9805195047064154)
+  [Trace] Decoder L2 Query Pos....................  pass (0.9991022746128092)
+  [Trace] Decoder L2 Output.......................  pass (0.9706900868568245)
+  [Trace] Decoder L3 Query Pos....................  pass (0.9985225878341903)
+  [Trace] Decoder L3 Output.......................  pass (0.9657118554786726)
+  [Trace] Decoder L4 Query Pos....................  pass (0.9957802234525376)
+  [Trace] Decoder L4 Output.......................  pass (0.9646499481598622)
+  [Trace] Decoder L5 Query Pos....................  pass (0.99585338758352)
+  [Trace] Decoder L5 Output.......................  pass (0.9800631146550481)
+==================================================
+
+[setup] done
+
+
+pred_logits PCC: 0.9209392794110263
+PASSED
+tests/test_end_to_end_pcc.py::test_pred_boxes_pcc 
+pred_boxes PCC: 0.9668538109774556
+PASSED
+tests/test_end_to_end_pcc.py::test_top5_labels_and_scores PASSED
+tests/test_end_to_end_pcc.py::test_box_iou_fired_detections PASSED
+[PyTest Fixture] Tearing down...
+
+
+=============================== warnings summary ===============================
+../../../../../../opt/venv/lib/python3.10/site-packages/_pytest/config/__init__.py:1434
+  /opt/venv/lib/python3.10/site-packages/_pytest/config/__init__.py:1434: PytestConfigWarning: Unknown config option: timeout
+  
+    self._warn_or_fail_if_strict(f"Unknown config option: {key}\n")
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /root/tt-metal/models/demos/wormhole/rt_detr/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+10.06s setup    models/demos/wormhole/rt_detr/tests/test_end_to_end_pcc.py::test_pred_logits_pcc
+0.35s setup    models/demos/wormhole/rt_detr/tests/test_end_to_end_pcc.py::test_top5_labels_and_scores
+0.35s setup    models/demos/wormhole/rt_detr/tests/test_end_to_end_pcc.py::test_box_iou_fired_detections
+0.35s setup    models/demos/wormhole/rt_detr/tests/test_end_to_end_pcc.py::test_pred_boxes_pcc
+0.00s call     models/demos/wormhole/rt_detr/tests/test_end_to_end_pcc.py::test_pred_logits_pcc
+0.00s teardown models/demos/wormhole/rt_detr/tests/test_end_to_end_pcc.py::test_box_iou_fired_detections
+0.00s call     models/demos/wormhole/rt_detr/tests/test_end_to_end_pcc.py::test_pred_boxes_pcc
+0.00s call     models/demos/wormhole/rt_detr/tests/test_end_to_end_pcc.py::test_box_iou_fired_detections
+0.00s call     models/demos/wormhole/rt_detr/tests/test_end_to_end_pcc.py::test_top5_labels_and_scores
+0.00s teardown models/demos/wormhole/rt_detr/tests/test_end_to_end_pcc.py::test_top5_labels_and_scores
+0.00s teardown models/demos/wormhole/rt_detr/tests/test_end_to_end_pcc.py::test_pred_boxes_pcc
+0.00s teardown models/demos/wormhole/rt_detr/tests/test_end_to_end_pcc.py::test_pred_logits_pcc
+=========================== short test summary info ============================
+PASSED tests/test_end_to_end_pcc.py::test_pred_logits_pcc
+PASSED tests/test_end_to_end_pcc.py::test_pred_boxes_pcc
+PASSED tests/test_end_to_end_pcc.py::test_top5_labels_and_scores
+PASSED tests/test_end_to_end_pcc.py::test_box_iou_fired_detections
+======================== 4 passed, 1 warning in 12.29s =========================
