@@ -20,19 +20,19 @@ MorehSumOperation::program_factory_t MorehSumOperation::select_program_factory(
     const auto input_rank = tensor_args.input.logical_shape().rank();
 
     if (tensor_args.input.dtype() == DataType::INT32) {
-        if (operation_attributes.dim == input_rank - 1) {
+        if (operation_attributes.dim == static_cast<int64_t>(input_rank) - 1) {
             return MorehSumWIntFactory{};
         }
-        if (operation_attributes.dim == input_rank - 2) {
+        if (operation_attributes.dim == static_cast<int64_t>(input_rank) - 2) {
             return MorehSumHIntFactory{};
         }
         return MorehSumNCIntFactory{};
     }
 
-    if (operation_attributes.dim == input_rank - 1) {
+    if (operation_attributes.dim == static_cast<int64_t>(input_rank) - 1) {
         return MorehSumWFactory{};
     }
-    if (operation_attributes.dim == input_rank - 2) {
+    if (operation_attributes.dim == static_cast<int64_t>(input_rank) - 2) {
         return MorehSumHFactory{};
     }
     return MorehSumNCFactory{};
@@ -71,7 +71,7 @@ MorehSumOperation::spec_return_value_t MorehSumOperation::compute_output_specs(
         input_shape = input_shape.to_rank(2);
     }
     const auto input_rank = input_shape.rank();
-    const bool is_tile_dim = (operation_attributes.dim == input_rank - 1 || operation_attributes.dim == input_rank - 2);
+    const bool is_tile_dim = (operation_attributes.dim == static_cast<int64_t>(input_rank) - 1 || operation_attributes.dim == static_cast<int64_t>(input_rank) - 2);
     log_debug(
         tt::LogOp,
         "{}:{} dim {}, keepdim {}",
@@ -89,7 +89,7 @@ MorehSumOperation::spec_return_value_t MorehSumOperation::compute_output_specs(
 
         // e.g. (2, 64, 64) with dim 1 to be (2, 1[32], 64)
         // e.g. (2, 64, 64) with dim 0 to be (64, 64)
-        for (int i = 0; i < input_rank; ++i) {
+        for (int i = 0; i < static_cast<int>(input_rank); ++i) {
             bool is_reduced_dim = (i == operation_attributes.dim);
             if (is_reduced_dim && !is_tile_dim) {
                 continue;

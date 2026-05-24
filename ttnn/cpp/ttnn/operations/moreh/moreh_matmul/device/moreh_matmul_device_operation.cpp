@@ -45,7 +45,7 @@ void MorehMatmulOperation::validate_inputs(
     ttnn::SmallVector<uint32_t> other_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     get_tensor_dim(input_dim, input_shape);
     get_tensor_dim(other_dim, other_shape);
-    for (auto i = 2; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
+    for (size_t i = 2; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
         if (input_dim[i] != other_dim[i]) {
             TT_FATAL(
                 input_dim[i] == 1 || other_dim[i] == 1,
@@ -67,7 +67,7 @@ void MorehMatmulOperation::validate_inputs(
         ttnn::SmallVector<uint32_t> output_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
         get_tensor_dim(output_dim, output_shape);
 
-        for (auto i = 2; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
+        for (size_t i = 2; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
             TT_FATAL(
                 std::max(input_dim[i], other_dim[i]) == output_dim[i],
                 "{}th max(input_dim[i], other_dim[i]) {} must be the same as output_dim[i] {}",

@@ -50,7 +50,7 @@ std::vector<ttnn::TensorSpec> reduce_to_root_tensor_spec(
         topology,
         input_mux_cores,
         {input_tensor_l.tensor_spec(), input_tensor_s.tensor_spec(), input_tensor_m.tensor_spec()}};
-    ReduceToRootOp::tensor_args_t tensors{input_tensor_l, input_tensor_s, input_tensor_m, std::nullopt};
+    ReduceToRootOp::tensor_args_t tensors{input_tensor_l, input_tensor_s, input_tensor_m, std::nullopt, std::nullopt, std::nullopt, std::nullopt};
 
     return ReduceToRootOp::compute_output_specs(attrs, tensors).at(0);
 }

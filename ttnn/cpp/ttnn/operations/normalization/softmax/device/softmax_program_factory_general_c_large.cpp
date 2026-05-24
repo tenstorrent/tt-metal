@@ -146,7 +146,7 @@ tt::tt_metal::ProgramDescriptor SoftmaxDeviceOperation::SoftmaxProgramFactoryGen
     writer_desc.config = WriterConfigDescriptor{};
 
     auto outer_stride = Ht * Wt;
-    for (int i = dim; i < shape.rank() - 2; i++) {
+    for (int i = dim; i < static_cast<int>(shape.rank()) - 2; i++) {
         outer_stride *= shape[i];
     }
     const auto dim_size = shape[dim];

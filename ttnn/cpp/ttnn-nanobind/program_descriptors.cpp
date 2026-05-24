@@ -612,6 +612,7 @@ void py_module_types(nb::module_& mod) {
                     .math_fidelity = math_fidelity,
                     .fp32_dest_acc_en = fp32_dest_acc_en,
                     .dst_full_sync_en = dst_full_sync_en,
+                    .unpack_to_dest_mode = {},
                     .bfp8_pack_precise = bfp8_pack_precise,
                     .math_approx_mode = math_approx_mode};
             },

@@ -137,6 +137,7 @@ Tensor halo(
             .transpose_mcast = transpose_mcast,
             .max_out_nsticks_per_core = max_out_nsticks_per_core,
             .in_nsticks_per_core = in_nsticks_per_core,
+            .output_memory_config = {},
             .is_out_tiled = is_out_tiled,
             .config_tensors_in_dram = config_tensors_in_dram,
             .compute_kernel_config = compute_kernel_config},
