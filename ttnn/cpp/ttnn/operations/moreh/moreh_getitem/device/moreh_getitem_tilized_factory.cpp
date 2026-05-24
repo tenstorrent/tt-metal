@@ -57,7 +57,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
     new_input_shape.fill(1);
     new_input_padded_shape.fill(1);
     auto input_dim_offset = 5 - input_shape.rank();
-    for (auto index = 0; index < input_shape.rank(); index++) {
+    for (size_t index = 0; index < input_shape.rank(); index++) {
         new_input_shape[index + input_dim_offset] = input_shape_without_padding[index];
         new_input_padded_shape[index + input_dim_offset] = input_shape[index];
     }
@@ -65,7 +65,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
     new_output_shape.fill(1);
     new_output_padded_shape.fill(1);
     auto output_dim_offset = 5 - input_shape.rank();
-    for (auto index = 0; index < output_shape.rank(); index++) {
+    for (size_t index = 0; index < output_shape.rank(); index++) {
         new_output_shape[index + output_dim_offset] = output_shape_without_padding[index];
         new_output_padded_shape[index + output_dim_offset] = output_shape[index];
     }

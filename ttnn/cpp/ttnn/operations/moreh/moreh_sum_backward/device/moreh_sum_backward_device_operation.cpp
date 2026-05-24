@@ -35,7 +35,7 @@ void MorehSumBackwardOperation::validate_inputs(
 
     // validate output_grad shape
     if (keepdim) {
-        for (int i = 0; i < input_rank; ++i) {
+        for (int i = 0; i < static_cast<int>(input_rank); ++i) {
             TT_FATAL(
                 input_shape_wo_padding[i] >= output_grad_shape_wo_padding[i],
                 "Input shape without padding[{}] ({}) must be >= output grad shape without padding[{}] ({})",
@@ -48,14 +48,14 @@ void MorehSumBackwardOperation::validate_inputs(
         std::vector<uint32_t> expected_output_grad_shape;
         std::vector<uint32_t> reduced_dims(input_rank, 0);
         for (auto dim : dims) {
-            TT_FATAL(dim < input_rank, "dim {} < input_rank {}", dim, input_rank);
+            TT_FATAL(static_cast<size_t>(dim) < input_rank, "dim {} < input_rank {}", dim, input_rank);
             reduced_dims[dim] = 1;
         }
 
         TT_FATAL(input_rank >= 2, "at least input_rank {} >= 2", input_rank);
-        for (int i = 0; i < input_rank; ++i) {
+        for (int i = 0; i < static_cast<int>(input_rank); ++i) {
             log_debug(tt::LogOp, "reduced_dims[{}] = {}", i, reduced_dims[i]);
-            bool is_tile_dim = (i == input_rank - 1 || i == input_rank - 2);
+            bool is_tile_dim = (i == static_cast<int>(input_rank) - 1 || i == static_cast<int>(input_rank) - 2);
             // batch dims
             if (reduced_dims[i] && !is_tile_dim) {
                 continue;
@@ -71,7 +71,7 @@ void MorehSumBackwardOperation::validate_inputs(
         uint32_t expected_rank = expected_output_grad_shape.size();
         uint32_t rank = output_grad_shape_wo_padding.rank();
         TT_FATAL(expected_rank == rank, "expected_rank {} == rank {}", expected_rank, rank);
-        for (int i = 0; i < rank; ++i) {
+        for (uint32_t i = 0; i < rank; ++i) {
             TT_FATAL(
                 expected_output_grad_shape[i] >= output_grad_shape_wo_padding[i],
                 "Expected output grad shape[{}] ({}) must be >= output grad shape without padding[{}] ({})",

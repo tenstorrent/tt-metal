@@ -77,7 +77,7 @@ ttnn::Tensor slice_write(
         auto input_cores = shard_spec.grid;
 
     } else {
-        for (int i = 0; i < input.logical_shape().rank(); i++) {
+        for (size_t i = 0; i < input.logical_shape().rank(); i++) {
             TT_FATAL(
                 actual_shape[i] == input.logical_shape()[i],
                 "Size of the slice being written {} should match the size of the input tensor {} at dim {}. Got {}, "

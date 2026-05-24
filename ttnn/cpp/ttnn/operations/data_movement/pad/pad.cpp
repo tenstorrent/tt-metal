@@ -170,7 +170,7 @@ ttnn::Tensor pad_impl(
     }
     const int original_rank = input_tensor.logical_shape().rank();
 
-    TT_FATAL(padding.size() == original_rank, "ttnn.pad: padding must be the same length as the input tensor rank");
+    TT_FATAL(padding.size() == static_cast<size_t>(original_rank), "ttnn.pad: padding must be the same length as the input tensor rank");
 
     // Unsqueeze Tensor to 4D if it is not already
     ttnn::Tensor input_tensor_4D;

@@ -27,7 +27,7 @@ Tensor preprocess_input_tensor(
         int32_t final_cum_axis = cum_axis;
         if (input_rank < FOUR_DIMENSIONS) {
             ttnn::SmallVector<uint32_t> new_dims = {};
-            for (int32_t i = input_rank; i < FOUR_DIMENSIONS; ++i) {
+            for (int32_t i = static_cast<int32_t>(input_rank); i < static_cast<int32_t>(FOUR_DIMENSIONS); ++i) {
                 new_dims.push_back(1);
             }
             new_dims.insert(new_dims.end(), input_shape.cbegin(), input_shape.cend());
@@ -62,9 +62,9 @@ Tensor postprocess_output_tensor(
     const int32_t& original_rank) {
     Tensor processed_tensor = output_tensor;
 
-    if (original_rank - dim < FOUR_DIMENSIONS) {
+    if (original_rank - dim < static_cast<int32_t>(FOUR_DIMENSIONS)) {
         processed_tensor = ttnn::permute(processed_tensor, permutation, processed_tensor.memory_config());
-        if (original_rank < FOUR_DIMENSIONS) {
+        if (original_rank < static_cast<int32_t>(FOUR_DIMENSIONS)) {
             processed_tensor = ttnn::reshape(processed_tensor, original_shape);
         }
     }

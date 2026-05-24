@@ -18,7 +18,7 @@ using namespace tt::tt_metal;
 
 void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& shape) {
     const auto rank = shape.rank();
-    for (auto i = 0; i < rank; ++i) {
+    for (size_t i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
 
         // last 2-dim
@@ -39,7 +39,7 @@ ttnn::Shape get_output_grad_shape(
     auto shape = input_grad.logical_shape();
     auto rank = shape.rank();
     for (auto dim : dims) {
-        TT_FATAL(dim < rank, "dim {} < rank {}", dim, rank);
+        TT_FATAL(static_cast<size_t>(dim) < rank, "dim {} < rank {}", dim, rank);
         shape[dim] = 1;
     }
 
@@ -88,7 +88,7 @@ ProgramDescriptor MorehMeanBackwardOperation::create_descriptor(
     get_tensor_dim(output_grad_dim, output_grad_shape);
 
     ttnn::SmallVector<uint32_t> need_bcast_dim(input_grad_rank, 0);
-    for (auto i = 0; i < input_grad_rank; ++i) {
+    for (uint32_t i = 0; i < input_grad_rank; ++i) {
         auto idx = input_grad_rank - 1 - i;
         need_bcast_dim[i] = (output_grad_shape[idx] != input_grad_shape[idx]);
     }

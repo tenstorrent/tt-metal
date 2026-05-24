@@ -75,12 +75,12 @@ Tensor untilize_with_unpadding(
     ttnn::Shape output_end;
     const auto& input_shape = input_tensor.logical_shape();
     if (input_shape.rank() > 4) {
-        for (auto index = 0; index < input_shape.rank(); ++index) {
+        for (size_t index = 0; index < input_shape.rank(); ++index) {
             output_end_vector.push_back(input_shape[index] - 1);
         }
         output_end = squeeze_vector_shape(ttnn::Shape(std::move(output_end_vector)));
     } else {
-        for (auto index = 0; index < input_tensor.logical_shape().rank(); ++index) {
+        for (size_t index = 0; index < input_tensor.logical_shape().rank(); ++index) {
             output_end_vector.push_back(output_tensor_end[index]);
         }
         output_end = ttnn::Shape(std::move(output_end_vector));

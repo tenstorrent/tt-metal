@@ -48,11 +48,11 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
     new_output_shape.fill(1);
 
     auto input_dim_offset = 5 - input_shape.rank();
-    for (auto index = 0; index < input_shape.rank(); index++) {
+    for (size_t index = 0; index < input_shape.rank(); index++) {
         new_input_shape[index + input_dim_offset] = input_shape[index];
     }
     auto output_dim_offset = 5 - output_shape.rank();
-    for (auto index = 0; index < output_shape.rank(); index++) {
+    for (size_t index = 0; index < output_shape.rank(); index++) {
         new_output_shape[index + output_dim_offset] = output_shape[index];
     }
     ttnn::Shape input_5d_shape(new_input_shape);

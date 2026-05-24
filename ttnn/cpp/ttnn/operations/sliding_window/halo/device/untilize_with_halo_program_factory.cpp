@@ -259,7 +259,7 @@ UntilizeWithHaloProgramFactory::cached_program_t UntilizeWithHaloProgramFactory:
                 .math_approx_mode = math_approx_mode,
                 .compile_args = compute_ct_args});
 
-        for (int core_id = 0; core_id < cores.size(); core_id++) {
+        for (size_t core_id = 0; core_id < cores.size(); core_id++) {
             SetRuntimeArgs(program, untilize_kernel_id, cores[core_id], {number_of_blocks_per_core[core_id]});
         }
     }

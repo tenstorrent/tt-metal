@@ -16,10 +16,10 @@ ttnn::SmallVector<uint32_t> create_repetition_vector(const ttnn::Tensor& tensor,
     const auto source_rank = tensor_shape.rank();
     const auto new_rank = shape.size();
     TT_FATAL(source_rank <= new_rank, "Only size 1 dimensions can be expanded in the output shape");
-    for (auto index = 0; index < new_rank; ++index) {
+    for (size_t index = 0; index < new_rank; ++index) {
         if (index >= source_rank) {
             expansion_vector[index] = shape[index];
-        } else if ((shape[index] == -1) || (shape[index] == tensor_shape[index])) {
+        } else if ((shape[index] == -1) || (shape[index] == static_cast<int>(tensor_shape[index]))) {
             expansion_vector[index] = 1;
         } else {
             TT_FATAL(tensor_shape[index] == 1, "Only size 1 dimensions can be expanded in the output shape");

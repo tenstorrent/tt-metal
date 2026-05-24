@@ -239,8 +239,8 @@ Tensor to_weight_special_padding_tile_layout(
                     uint32_t k_end,
                     uint32_t c_start,
                     uint32_t c_end) {
-                    for (auto r = 0; r < w_shape[2]; r++) {
-                        for (auto s = 0; s < w_shape[3]; s++) {
+                    for (uint32_t r = 0; r < w_shape[2]; r++) {
+                        for (uint32_t s = 0; s < w_shape[3]; s++) {
                             for (auto c = c_start; c < c_end; c++) {
                                 for (auto k = k_start; k < k_end; k++) {
                                     auto matrix_idx =
@@ -298,8 +298,8 @@ Tensor to_weight_interleaved_mm_layout(const Tensor& conv_weight_tensor, DataTyp
                 uint32_t co_end,
                 uint32_t ci_start,
                 uint32_t ci_end) {
-                for (auto kh = 0; kh < w_shape[2]; kh++) {
-                    for (auto kw = 0; kw < w_shape[3]; kw++) {
+                for (uint32_t kh = 0; kh < w_shape[2]; kh++) {
+                    for (uint32_t kw = 0; kw < w_shape[3]; kw++) {
                         for (auto ci = ci_start; ci < ci_end; ci++) {
                             for (auto co = co_start; co < co_end; co++) {
                                 // Input index: [Co, Ci, Kh, Kw]
@@ -362,8 +362,8 @@ Tensor to_weight_tile_layout(
                 uint32_t out_end,
                 uint32_t in_start,
                 uint32_t in_end) {
-                for (auto r = 0; r < w_shape[2]; r++) {
-                    for (auto s = 0; s < w_shape[3]; s++) {
+                for (uint32_t r = 0; r < w_shape[2]; r++) {
+                    for (uint32_t s = 0; s < w_shape[3]; s++) {
                         for (auto c = in_start; c < in_end; c++) {
                             for (auto k = out_start; k < out_end; k++) {
                                 auto matrix_idx = k + (c * weight_matrix_cols) + (s * w_shape[1] * weight_matrix_cols) +
@@ -589,8 +589,8 @@ Tensor to_bias_tile_layout_block_sharded(
                     conv_output_shard_width_padded](const tt::tt_metal::HostBuffer& input_host_buffer) {
         auto input_buffer = tt::tt_metal::host_buffer::get_as<T>(input_host_buffer);
         auto output_buffer = std::vector<T>(output_shape.volume());
-        for (auto oc = 0; oc < num_channel_shards; oc++) {
-            for (auto k_s = 0; k_s < conv_output_shard_width; k_s++) {
+        for (uint32_t oc = 0; oc < num_channel_shards; oc++) {
+            for (uint32_t k_s = 0; k_s < conv_output_shard_width; k_s++) {
                 auto matrix_idx = (oc * conv_output_shard_width_padded) + k_s;
                 auto idx = (oc * conv_output_shard_width) + k_s;
                 output_buffer[matrix_idx] = input_buffer[idx];
@@ -657,19 +657,19 @@ static Tensor conv_group_weight_zero_pad_helper(
         auto original_strides = compute_strides(original_weight_shape);
         auto output_strides = compute_strides(output_weight_shape);
 
-        for (int curr_batch_idx = 0; curr_batch_idx < original_weight_shape[0]; curr_batch_idx++) {
-            int new_batch_idx = curr_batch_idx;
+        for (uint32_t curr_batch_idx = 0; curr_batch_idx < original_weight_shape[0]; curr_batch_idx++) {
+            uint32_t new_batch_idx = curr_batch_idx;
 
             // Find which group_id the filter belongs to - through this, we can compute the offset where the padding
             // should be applied
             auto group_size = original_weight_shape[0] / num_groups;
             auto group_index = curr_batch_idx / group_size;
             auto group_id = std::min(group_index, num_groups - 1);
-            int new_channel_start_idx = group_id * original_weight_shape[1];
+            uint32_t new_channel_start_idx = group_id * original_weight_shape[1];
 
-            for (int j = 0; j < original_weight_shape[1]; j++) {
-                for (int k = 0; k < original_weight_shape[2]; k++) {
-                    for (int m = 0; m < original_weight_shape[3]; m++) {
+            for (uint32_t j = 0; j < original_weight_shape[1]; j++) {
+                for (uint32_t k = 0; k < original_weight_shape[2]; k++) {
+                    for (uint32_t m = 0; m < original_weight_shape[3]; m++) {
                         // Get value from original weight tensor
                         auto value_flat_input_index = tt::tt_metal::compute_flat_indices(
                             ttnn::SmallVector<uint32_t>{curr_batch_idx, j, k, m}, original_strides);
@@ -831,16 +831,16 @@ static Tensor conv_transpose2d_group_weight_zero_pad_helper(
 
         auto original_weight_strides = compute_strides(original_weight_shape);
         auto output_weight_strides = compute_strides(output_weight_shape);
-        for (int i = 0; i < original_weight_shape[0]; i++) {  // in_channels
+        for (uint32_t i = 0; i < original_weight_shape[0]; i++) {  // in_channels
             // Find which group this input channel belongs to
             auto group_id = i / in_channels_per_group;
 
-            for (int c = 0; c < original_weight_shape[1]; c++) {  // out_channels/groups
+            for (uint32_t c = 0; c < original_weight_shape[1]; c++) {  // out_channels/groups
                 // Calculate the global output channel index
-                int global_out_channel = group_id * out_channels_per_group + c;
+                uint32_t global_out_channel = group_id * out_channels_per_group + c;
 
-                for (int h = 0; h < original_weight_shape[2]; h++) {
-                    for (int w = 0; w < original_weight_shape[3]; w++) {
+                for (uint32_t h = 0; h < original_weight_shape[2]; h++) {
+                    for (uint32_t w = 0; w < original_weight_shape[3]; w++) {
                         // Get value from original weight tensor
                         auto value_flat_input_index = tt::tt_metal::compute_flat_indices(
                             ttnn::SmallVector<uint32_t>{i, c, h, w}, original_weight_strides);
@@ -994,8 +994,8 @@ static Tensor to_folded_weight_layout(const Tensor& conv_weight_tensor, std::arr
                         uint32_t in_end) {
                         for (auto oc = out_start; oc < out_end; oc++) {
                             for (auto ic = in_start; ic < in_end; ic++) {
-                                for (auto kh = 0; kh < kernel_h; kh++) {
-                                    for (auto kw = 0; kw < kernel_w; kw++) {
+                                for (uint32_t kh = 0; kh < kernel_h; kh++) {
+                                    for (uint32_t kw = 0; kw < kernel_w; kw++) {
                                         uint32_t src_idx =
                                             ((((oc * in_channels + ic) * kernel_h) + kh) * kernel_w) + kw;
 

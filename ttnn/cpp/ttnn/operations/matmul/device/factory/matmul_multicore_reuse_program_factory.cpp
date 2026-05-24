@@ -218,10 +218,10 @@ ProgramDescriptor MatmulMultiCoreReuseProgramFactory::create_descriptor(
 
     // Per-core runtime args for reader and writer
     uint32_t num_blocks_read = 0;
-    for (int output_idx_y = 0; output_idx_y < num_blocks_y; output_idx_y++) {
-        for (int output_idx_x = 0; output_idx_x < num_blocks_x; output_idx_x++) {
-            int core_idx_x = num_blocks_read % num_cores_x;
-            int core_idx_y = num_blocks_read / num_cores_x;
+    for (uint32_t output_idx_y = 0; output_idx_y < num_blocks_y; output_idx_y++) {
+        for (uint32_t output_idx_x = 0; output_idx_x < num_blocks_x; output_idx_x++) {
+            uint32_t core_idx_x = num_blocks_read % num_cores_x;
+            uint32_t core_idx_y = num_blocks_read / num_cores_x;
             CoreCoord core = {(std::size_t)core_idx_x, (std::size_t)core_idx_y};
 
             // Write runtime args to device

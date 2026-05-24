@@ -80,7 +80,7 @@ void log_external_operation(const operation::ExternalOperation& operation, const
     }
 
     log_debug(tt::LogOp, "Input std::vector<Tensor>:");
-    for (auto index = 0; index < input_tensors.size(); index++) {
+    for (size_t index = 0; index < input_tensors.size(); index++) {
         [[maybe_unused]] const auto& tensor = input_tensors[index];
         log_debug(tt::LogOp, "\t{}: {}", index, tensor);
     }
@@ -1647,6 +1647,7 @@ void pytensor_module(nb::module_& mod) {
                     .page_size = tensor_spec.compute_page_size_bytes(),
                     .buffer_type = mem_config.buffer_type(),
                     .sharding_args = tensor_spec.compute_buffer_sharding_args(),
+                    .bottom_up = std::nullopt,
                 },
                 mesh_device,
                 coord);

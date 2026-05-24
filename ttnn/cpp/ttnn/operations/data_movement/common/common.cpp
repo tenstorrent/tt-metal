@@ -536,7 +536,7 @@ ttnn::Shape pad_to_tile_shape(const ttnn::Shape& unpadded_shape) {
     TT_ASSERT(rank >= 1, "rank of shape to pad to tile shape must be at least 1.");
     SmallVector<uint32_t> padded_shape_vec(rank);
 
-    for (auto i = 0; i < rank; ++i) {
+    for (size_t i = 0; i < rank; ++i) {
         padded_shape_vec[i] = unpadded_shape[i];
     }
     if (rank >= 1) {
@@ -618,7 +618,7 @@ ttnn::MemoryConfig create_sharded_memory_config(
         computed_shard_shape = shard_shape.value();
     } else {
         uint32_t batch_size = 1;
-        for (int i = 0; i < rank - 2; i++) {
+        for (int i = 0; i < static_cast<int>(rank) - 2; i++) {
             batch_size *= logical_shape[i];
         }
 

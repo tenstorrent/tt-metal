@@ -490,14 +490,14 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     constexpr uint32_t TILE_SIZE = 32;
     // Only check tile alignment for the dimension being all-gathered
     uint32_t rank = input_tensor_shape.rank();
-    if (dim == rank - 1) {
+    if (dim == static_cast<int32_t>(rank) - 1) {
         TT_FATAL(
             !(input_tensor_shape[-1] % TILE_SIZE),
             "Input tensor width must be tile-aligned when all-gathering along width");
         TT_FATAL(
             !(output_tensor_shape[-1] % TILE_SIZE),
             "Output tensor width must be tile-aligned when all-gathering along width");
-    } else if (dim == rank - 2) {
+    } else if (dim == static_cast<int32_t>(rank) - 2) {
         TT_FATAL(
             !(input_tensor_shape[-2] % TILE_SIZE),
             "Input tensor height must be tile-aligned when all-gathering along height");

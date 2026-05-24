@@ -33,7 +33,7 @@ ttsl::SmallVector<int> normalize_dims(const ttsl::SmallVector<int>& dims, size_t
         std::all_of(
             normalized_dims.begin(),
             normalized_dims.end(),
-            [tensor_dims](int dim) { return dim >= 0 && dim < tensor_dims; }),
+            [tensor_dims](int dim) { return dim >= 0 && static_cast<size_t>(dim) < tensor_dims; }),
         "Invalid dimension index; got dims: {}, tensor dimension: {}",
         dims,
         tensor_dims);
@@ -217,7 +217,7 @@ XtensorAdapter<typename Expression::value_type> concat_ndim(
         xt::dynamic_view(result.expr(), indices) = expr;
 
         for (int i = static_cast<int>(dims.size()) - 1; i >= 0; --i) {
-            if (++current_indices[i] < num_chunks[i]) {
+            if (++current_indices[i] < static_cast<size_t>(num_chunks[i])) {
                 break;
             }
             current_indices[i] = 0;
