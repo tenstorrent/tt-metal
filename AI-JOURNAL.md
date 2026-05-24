@@ -1,5 +1,217 @@
 
 ---
+## 2026-05-19 — Testing Gaps Audit Round 8: Quiesce Path Readback and Exception Safety
+
+### Audit Scope
+
+Systematic review of the quiesce lifecycle (Phase 2.5 → Phase 3 → Phase 5) focusing on:
+handshake_bypass readback verification gaps across all three ETH launch paths, exception
+safety of L1 barrier calls, and diagnostic data capture at failure points. Cross-referenced
+all `WriteToDeviceL1` calls in quiesce paths against corresponding readback verification.
+
+### Files Reviewed
+
+- `tt_metal/impl/device/device.cpp` — quiesce_and_restart_fabric_workers(), launch_eth_cores_for_quiesce()
+- `tt_metal/fabric/fabric_init.cpp` — configure_fabric_cores()
+- `scripts/analyze_fabric_hang_log.sh` — counter coverage for new patterns
+- `tt_metal/hw/firmware/src/tt-1xx/active_erisc.cc` — firmware boot fence + session_id handling
+- `tt_metal/hw/inc/hostdev/fabric_boot_fence.h` — shared host/firmware constants
+
+### Gaps Found and Fixed
+
+**GAP-R15 (HIGH): Phase 3 inline quiesce handshake_bypass has no readback verification**
+- Problem: `handshake_bypass=1` write at ~line 2776 (inline Phase 3 path, non-force-reset
+  channels) had no readback. The force-reset Pass-0 path (GAP-R10) already verified, and
+  the configure_fabric SA path (FIX NO) already verified — but the normal quiesce Phase 3
+  was the ONLY path without readback. A silently dropped write means the fabric kernel
+  starts with `bypass=0` and attempts full ETH DMA handshake on every quiesce cycle,
+  reintroducing the STARTED→STARTED deadlock class.
+- Fix: Added ReadFromDeviceL1 readback with warning on mismatch, mirroring GAP-R10 pattern.
+- Pattern: `GAP-R15 (#42429): Phase 3 handshake_bypass readback MISMATCH`
+
+**GAP-R16 (HIGH): Deferred quiesce Phase 3 handshake_bypass has no readback verification**
+- Problem: `launch_eth_cores_for_quiesce()` has the same handshake_bypass write (~line 3493)
+  but also lacked readback. This path is WORSE than GAP-R15 because it serves non-MMIO
+  devices where the write goes through the UMD relay — dropped writes are MORE likely due
+  to relay congestion during quiesce.
+- Fix: Added ReadFromDeviceL1 readback with warning on mismatch.
+- Pattern: `GAP-R16 (#42429): deferred Phase 3 handshake_bypass readback MISMATCH`
+
+**GAP-R17 (MEDIUM): Phase 2.5 force-reset failure has no edm_status capture**
+- Problem: When `assert_risc_reset_at_core` fails in the Phase 2.5 force-reset path, the
+  catch block logged the exception message but NOT the ERISC's current edm_status. Cannot
+  distinguish "channel truly unreachable" (PCIe fail) from "ERISC in unexpected state."
+- Fix: Added best-effort edm_status read in the catch block, reported as `last_edm_status`.
+- Pattern: `GAP-R17 (#42429):`
+
+**GAP-R18 (MEDIUM): Phase 3 newly-dead channels lack per-channel edm_status**
+- Problem: When configure_fabric_cores returns newly_dead_channels during quiesce Phase 3,
+  the log reported channel numbers but not the edm_status of each dead channel. Post-mortem
+  could not distinguish "unreachable" (0xDEADDEAD) from "ERISC in unexpected state."
+- Fix: Added per-channel ReadFromDeviceL1 to capture edm_status for each newly-dead channel.
+- Pattern: `GAP-R18 (#42429)`
+
+**GAP-R19 (HIGH): Quiesce Phase 3 l1_barrier has no exception handling**
+- Problem: The `l1_barrier()` call at line ~2190 (quiesce Phase 3, after
+  ConfigureDeviceWithProgram) had no try/catch. `l1_barrier` calls `l1_membar` which
+  calls `wait_for_non_mmio_flush` — if the relay ERISC is unresponsive, this throws.
+  Unlike `configure_fabric()` which skips l1_barrier when dead channels are present,
+  the quiesce path had no protection — an unhandled exception crashed the entire quiesce
+  instead of degrading gracefully.
+- Fix: Wrapped l1_barrier in try/catch with warning log, proceeding with launch messages
+  despite potential L1 write ordering issue (best effort > crash).
+- Pattern: `GAP-R19 (#42429):`
+
+### Other Audit Results (No Gaps Found)
+
+- **configure_fabric SA path**: All 7 steps have readback verification (FIX GI, FIX NO,
+  FIX SA-GV). No gaps.
+- **Pass-0 force-reset V11-QS89 path**: All S7/S8/S9 writes have GAP-R10 readback. No gaps.
+- **Phase 2.5 TERMINATE signal write**: Fire-and-forget is intentional — we poll for
+  TERMINATED state immediately after, which implicitly verifies the write took effect.
+- **Phase 1 MUX IMMEDIATELY_TERMINATE**: Same as Phase 2.5 — poll-after-write pattern.
+- **Firmware (active_erisc.cc)**: FW_READY, boot_fence, session_id handling all correct.
+  No new firmware-side gaps found.
+
+### Analyze Script Updates
+
+Added 5 new counter extractions + 5 interpretation blocks for GAP-R15..R19.
+Each counter triggers explanation of the failure mode and what to investigate.
+
+### Commits
+
+- `a0701d1e6d0` — GAP-R15/R16/R17/R18/R19: device.cpp diagnostic logging
+- `dd0199cbf6a` — Analyze script: GAP-R15..R19 counters and reporting
+
+### Files Modified
+
+- `tt_metal/impl/device/device.cpp` — GAP-R15 (1 site), GAP-R16 (1 site), GAP-R17 (1 site),
+  GAP-R18 (1 site), GAP-R19 (1 site)
+- `scripts/analyze_fabric_hang_log.sh` — 5 new counters, 5 interpretation blocks
+
+### What to Watch in Next CI Run
+
+1. **GAP-R15/R16 > 0**: handshake_bypass write dropped — ERISC will attempt full ETH
+   handshake, likely causing STARTED→STARTED deadlock. Check if it's relay congestion
+   (non-MMIO, GAP-R16) or PCIe contention (MMIO, GAP-R15).
+2. **GAP-R17 > 0**: Phase 2.5 force-reset failed AND edm_status captured. Check the
+   edm_status: 0xDEADDEAD = PCIe read also failed (hardware issue), other values =
+   ERISC in unexpected state (code bug).
+3. **GAP-R19 > 0**: l1_barrier exception during quiesce. L1 writes from
+   ConfigureDeviceWithProgram may not be flushed — launch messages could race with
+   firmware binary writes. If AllGather hangs follow GAP-R19, consider adding explicit
+   l1_barrier per-channel or splitting the barrier across MMIO/non-MMIO paths.
+
+---
+## 2026-05-19 — Testing Gaps Audit Round 7: Post-Degraded Runner Recovery Diagnostics
+
+### Audit Scope
+
+Comprehensive audit of testing gaps focusing on: post-degraded-runner recovery,
+session_id tracking, ERISC state machine transitions, and test-level failure attribution.
+Files reviewed: AI-JOURNAL.md, device.cpp, fabric_init.cpp, run_t3000_unit_tests.sh,
+analyze_fabric_hang_log.sh.
+
+### Gaps Identified and Fixed
+
+**GAP-R9** (device.cpp): Phase 3 ETH relaunch in the inline quiesce path had no
+per-channel timing. Added elapsed timer around write_launch_msg_to_core so CI logs
+show how long each channel's pre_read+gate+launch takes. Pattern: `GAP-R9 (#42429)`.
+
+**GAP-R10** (device.cpp): V11-QS89 quiesce force-reset path (S7 handshake_bypass,
+S8 boot_fence, S9 session_id) had no readback verification — unlike the SA path in
+configure_fabric(). Added try/catch ReadFromDeviceL1 after each write with warning
+on mismatch. Pattern: `GAP-R10 ... READBACK MISMATCH`.
+
+**GAP-R11** (device.cpp): FIX SA Strategy A summary log lacked aggregate failure data.
+Added SA-A FW_READY timeout count and session_id to the completion log. Pattern:
+`FIX SA (#42429): Strategy A complete ... N SA-A FW_READY timeouts`.
+
+**GAP-R12** (run_t3000_unit_tests.sh): record_test() had no test name context —
+impossible to determine which test triggered a hardware reset from post-mortem logs.
+Added `_LAST_TEST_NAME` variable tracking to every test invocation in both function
+copies (run_t3000_ttnn_tests and run_t3000_racecondition_hunt_tests). All 3 batches
+and all GAP regression pytest tests covered. Pattern: `[GAP-R12] record_test: rc=N test=NAME`.
+
+**GAP-R13** (device.cpp): Phase 2.5 summary only reported force_reset_count. Extended
+with per-outcome breakdown: clean_skip (already TERMINATED), term_ok (acknowledged
+TERMINATE signal), force_reset (timed out), relay_skip (relay path broken). Pattern:
+`Phase 2.5 summary: active=N clean_skip=N term_ok=N force_reset=N relay_skip=N`.
+
+**GAP-R14** (device.cpp): session_id and degradation flags were not logged at quiesce
+entry when the ifdef gate was disabled. Added unconditional log at the top of
+quiesce_and_restart_fabric_workers. Pattern: `GAP-R14 (#42429)`.
+
+### Analyze Script Updates
+
+Updated analyze_fabric_hang_log.sh with counter extraction and reporting for all 6 new
+patterns. Also updated GAP-R8 pattern matching to support both old (force_reset_count=)
+and new (force_reset=) GAP-R13 format.
+
+### Commits
+
+- `3a181bb9ee2` — GAP-R9/R10/R11/R14: device.cpp diagnostic logging
+- `fad4a16661e` — GAP-R12: _LAST_TEST_NAME tracking in test runner
+- `6055b60e2bf` — GAP-R13: Phase 2.5 per-outcome breakdown
+- `ef7ca2af5c6` — Analyze script: GAP-R9..R14 patterns
+
+---
+## 2026-05-18 — Testing Gaps Audit Round 6: V11-QS89 Quiesce Boot Sequence Coverage
+
+### Audit Scope
+
+Systematic review of all FIX tags in device.cpp, fabric_init.cpp, and firmware sources
+against analyze_fabric_hang_log.sh coverage. Inspected 30+ catch(...) blocks for silent
+exception swallowing. Cross-referenced code-emitted log patterns vs script counters.
+
+### Gaps Found
+
+**GAP-V1 (MEDIUM): FIX V11-QS89 FW_READY timeout has no fw_ready snapshot**
+- Problem: Two V11-QS89 FW_READY timeout sites in quiesce_and_restart_fabric_workers()
+  (inline ETH loop at line ~2406 and deferred dispatch path at line ~3033) logged "ERISC
+  did not signal FW_READY within Nms" but never reported the actual fw_ready value.
+  Same blind spot that FIX QQ fixed for FIX SA-A in configure_fabric().
+- Impact: Post-mortem of quiesce-restart FW_READY timeouts cannot distinguish dormant
+  (0xD0DEAD09), stuck-in-ROM (0x00000000), or PCIe failure (0xDEADDEAD).
+- Fix: FIX QQ-V — added best-effort read with try/catch, mirroring FIX QQ pattern.
+
+**GAP-V2 (MEDIUM): FIX V11-QS89 and FIX V11-QS7 absent from analyze script**
+- Problem: The quiesce-restart per-channel boot sequence emits 18+ log lines covering
+  FW_READY polling, handshake_bypass, boot_fence, session_id, UMD canary — all completely
+  invisible to analyze_fabric_hang_log.sh. No counters, no interpretation.
+- Impact: CI failures during quiesce restart would show zero V11 signals in post-mortem.
+- Fix: Added 12 new counters + interpretation block + timeline grep patterns.
+
+### Other Audit Results (No Gaps Found)
+
+- **catch(...) blocks**: All 30+ catch blocks in device.cpp and 5 in fabric_init.cpp
+  properly log warnings with device/channel context. No silent exception swallowing.
+- **FIX SENDGO, FIX DQ, FIX DZ3, FIX PQ**: Code comments only, no log output — no
+  analyze script coverage needed.
+- **FIX S7-MOVE**: Logs under "STRATEGY7" which is already in the analyze script.
+- **|| true patterns**: Only in test scripts (run_t3000_unit_tests.sh), not in C++ code.
+  Test script || true usage is intentional for crash-resilient warm-up sequences.
+
+### Commits
+
+- `4c9fa6483de` — FIX QQ-V: fw_ready timeout snapshot for V11-QS89 (device.cpp)
+- `7e0af71124a` — GAP-V2: analyze script counters for V11-QS89/QS7 (analyze_fabric_hang_log.sh)
+
+### Files Modified
+
+- `tt_metal/impl/device/device.cpp` — FIX QQ-V (2 sites)
+- `scripts/analyze_fabric_hang_log.sh` — 12 new counters, interpretation block, timeline patterns
+
+### What to Watch in Next CI Run
+
+1. FIX_V11_QS89_FW_READY_TIMEOUT — if > 0, check FIX_QQV breakdown:
+   - 0xD0DEAD09 = session_id problem during quiesce
+   - 0x00000000 = ERISC stuck in ROM after quiesce deassert
+   - 0xDEADDEAD = PCIe read failed
+2. FIX_V11_QS89_CANARY_TIMEOUT — ERISC booted but dispatch loop not reached
+3. FIX_V11_QS89_FW_READY_MAX_MS — if >> 50ms, link training delay after quiesce
+
+---
 ## 2026-05-18 — Testing Gaps Audit Round 5: Elapsed Timers and Phase 2.5 Summary
 
 ### Scope
@@ -5266,3 +5478,126 @@ Alternative: continue dispatching CI — may land on a healthy runner in the poo
 
 None. The failure is hardware degradation, not a code bug. FIX LM exit-1
 behavior is correct — it correctly detects and reports the degraded topology.
+
+## Strategy Task 3 Analysis — 2026-05-19 02:33 UTC
+
+**All 5 proposed strategies already implemented** — they target the ETH handshake
+which is bypassed by STRATEGY7. Zero marginal value.
+
+### Critical Gap Discovered (Opus Analysis)
+
+`tt_metal/fabric/hw/inc/tt_fabric_utils.h:78` — `#ifndef ARCH_WORMHOLE` guard
+disables termination signal escape hatch in `wait_for_notification()`:
+
+```cpp
+while (*poll_addr != value
+#ifndef ARCH_WORMHOLE
+       && !got_immediate_termination_signal<RISC_CPU_DATA_CACHE_ENABLED>(termination_signal_ptr)
+#endif
+) {
+```
+
+On WH/T3K hardware, every ring sync hang = infinite loop. No recovery path exists.
+This affects ALL calls to wait_for_notification() in ring sync + LOCAL_HANDSHAKE_COMPLETE.
+
+### New Strategies
+
+**Strategy C (IMMEDIATE — 10 LOC):**
+Enable WH termination signal OR add cycle-counter timeout to wait_for_notification().
+Converts all irrecoverable ring sync hangs to recoverable timeouts.
+Action: investigate WHY #ifndef ARCH_WORMHOLE exists (HW unreliable? L1 address conflict?).
+
+**Strategy B (THIS WEEK — ~300 LOC, mostly deletion):**
+Host-Sequenced Barrier — eliminate all firmware-to-firmware ring sync.
+Host writes READY_FOR_TRAFFIC to each ERISC directly after all reach STARTED.
+Preserves simultaneity guarantee. Supersedes all prior incremental patches.
+
+Full report: /workspace/group/ci_loop/strategy_20260519_0233.txt
+
+## FIX V11-WH-TERM — 2026-05-19
+
+Commit: 25b9530e0d0
+
+Removed `#ifndef ARCH_WORMHOLE` guards from:
+- `tt_fabric_utils.h:wait_for_notification` — termination signal now fires on WH too
+- `fabric_router_eth_handshake.hpp:fabric_symmetric_handshake` — both spin loop and post-loop send
+
+Investigation finding: the guard was added in PR #38166 (commit 4a651fc) as a conservative default — PR only CI'd on BH. `got_immediate_termination_signal` is arch-agnostic (`exit_erisc_kernel` in dev_msgs.h, `GET_MAILBOX_ADDRESS_DEV` macros). Safe to enable on WH.
+
+Effect: All four `wait_for_notification` call sites in fabric_erisc_router.cpp (ring sync, READY_FOR_TRAFFIC, tensix sync) are now bounded on WH. Irrecoverable hangs converted to recoverable. No more host reboots.
+
+## 2026-05-24 Task 1 Loop — Iteration 1
+- CI run 26345499861 dispatched at 22:42 UTC on commit 6b558e9a (FIX ZA correction + FIX UU)
+- Run still in_progress at first check. Waiting.
+
+---
+
+## FIX VV — Deferred Tensix Worker Reset (2026-05-23)
+
+**Commit**: 16ecef946a1
+**CI Run**: 26346338585
+
+### Root cause (confirmed from run 26345499861)
+`safe_assert()` in `reset_cores()` skips `assert_tensix_workers_impl()` for non-MMIO devices when `had_unresponsive_eth_cores=true` (relay mid-reboot). This leaves Tensix worker cores with stale NOC state from the prior Metal session.
+
+FIX TV + FIX UU confirmed relay alive at +0.3s, but `write_core_immediate` to chip 4 Tensix L1 timed out at +5.3s (chips 5/6/7 each +5s). The stale NOC in-flight blocked new L1 data writes. The relay bridge's own-L1 loopback reads (FIX UU) were unaffected because same-core NOC requires no cross-core traversal.
+
+### Fix
+- Added `deferred_tensix_reset_chips_` (unordered_set) to `RiscFirmwareInitializer`.
+- `reset_cores()`: when `will_skip_tensix = had_unresponsive_eth_cores && is_non_mmio`, insert device into set after `safe_assert`.
+- `run_launch_phase()`: after FIX UU block, iterate `deferred_tensix_reset_chips_` and call `assert_risc_reset_at_core_write_only()` per Tensix worker core using write-only variant (posted NOC to 0xFFB121B0 config reg, distinct from non-posted L1 data writes).
+- Fault tolerance: first flush exception marks relay broken; subsequent cores' flushes return immediately via `relay_broken_` fast-path. Worst case: 5s per device (same as today).
+
+### Files changed
+- `tt_metal/impl/device/firmware/risc_firmware_initializer.hpp`: +5 lines (member decl + comment)
+- `tt_metal/impl/device/firmware/risc_firmware_initializer.cpp`: +74 lines (FIX VV block + deferred tracking in safe_assert)
+
+## FIX VV compile fix (2026-05-23)
+
+**Commit**: 38ac86ce414
+**CI Run**: 26346717092
+
+Run 26346338585 failed at build: `Cluster` has no public `mark_relay_broken()` method — only `is_relay_broken()` and `clear_relay_broken()`. The `relay_broken_chips_` set is private and populated only from within `Cluster` member functions.
+
+`assert_risc_reset_at_core_write_only()` already catches flush exceptions internally and calls `this->driver_->mark_relay_broken()` (UMD level). The FIX VV outer catch block only fires for unexpected errors from `get_soc_desc`/coord lookup. Removed the invalid `cluster_.mark_relay_broken(device_id)` call.
+
+## FIX WW v2 — Batched deassert+sleep+assert (2026-05-24)
+
+**Commit**: TBD
+**CI Run**: TBD
+
+### Root Cause Analysis (Run 26347965355)
+
+FIX WW v1 (run 26346717092 analysis) failed: all 4 non-MMIO devices still timeout at `write_core_immediate`/`write_core` to Tensix L1.
+
+Key discovery: `deassert_risc_reset_at_core_write_only()` calls `wait_for_non_mmio_flush()` after each write. This means the per-core loop in FIX WW v1 was:
+
+```
+For each core:
+  write deassert → flush → [BRISC starts]
+  write assert   → flush → [BRISC stops]
+```
+
+The BRISC execution window was NOT 60µs as assumed — it was the ERISC-forwarding latency between the confirmed-deassert and the queued-assert write (~few µs). Far too brief to drain NIU-SLV state.
+
+`noc_init()` in Wormhole firmware DOES NOT call `noc_clear_outstanding_req_cnt()` — it only sets up master-side command buffer register defaults. So BRISC running briefly does NOT clear NIU-SLV state.
+
+### Fix (FIX WW v2)
+
+Separate the 64-core deassert loop from the 64-core assert loop with a 100ms sleep:
+
+1. **Phase 1**: Deassert ALL Tensix cores across all non-MMIO devices (each deassert call flushes to confirm BRISC is running before moving to next core)
+2. **Phase 2**: `sleep_for(100ms)` — all BRISCs across all devices run in PARALLEL for ≥100ms
+3. **Phase 3**: Assert ALL Tensix cores
+
+For chips 4,5,6,7 (non-MMIO), all 64 BRISCs per chip execute for ≥100ms in parallel, which should be sufficient to drain any pending NIU-SLV state.
+
+### Fix IK — DRAM assert_risc_reset write-only
+
+Also changed `initialize_firmware(DRAM)` to use `assert_risc_reset_at_core_write_only` instead of `assert_risc_reset_at_core`. The non-write-only version calls `read_from_device` (going through ERISC for non-MMIO), which can timeout if DRAM NIU-SLV is also stuck. Since we unconditionally want BRISC in reset for initialization, no read-modify-write is needed.
+
+This eliminates a second 5s hang per non-MMIO device that was occurring after FIX NX swallowed the first `write_core` timeout and execution continued to DRAM core initialization.
+
+### Files changed
+- `tt_metal/impl/device/firmware/risc_firmware_initializer.cpp`: FIX WW split into 3 phases + FIX IK DRAM write-only
+

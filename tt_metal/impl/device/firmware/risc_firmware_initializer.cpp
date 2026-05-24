@@ -463,7 +463,7 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
             }
         }
 
-        // FIX WW (#42429): Tensix NOC data-VC recovery via deassert+re-assert cycle.
+        // FIX WW (#42429): Tensix NOC data-VC recovery via batched deassert → sleep → assert.
         //
         // Problem (run 26346717092): initialize_and_launch_firmware() timed out on
         // write_core_immediate() to Tensix L1 even when had_unresponsive_eth_cores=false
@@ -483,15 +483,17 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
         // all 80 workers (both the READ from 0xFFB121B0 and the WRITE back) while the
         // subsequent L1 data write fails.
         //
-        // Fix: for every non-MMIO device, deassert Tensix RISC reset (write 0 to
-        // 0xFFB121B0, clears ALL soft-reset bits) then immediately re-assert it (write
-        // RISC reset bits). Both writes go to 0xFFBxxxxx config space — POSTED NOC, no
-        // ACK from Tensix needed — and succeed even when data-VC is stuck.
+        // Fix: for every non-MMIO device, deassert ALL Tensix RISC resets first (all BRISCs
+        // start running in parallel), then sleep 100ms (giving all BRISCs significant
+        // parallel execution time to drain their NIU-SLV state), then re-assert ALL resets.
         //
-        // The brief window where RISC reset is deasserted (write-0 landed, re-assert not
-        // yet) allows BRISC to start executing. This execution cycle clears any pending
-        // NIU-SLV NOC state and restores credit flow, making the NIU-SLV receptive to
-        // the new NON-POSTED L1 writes from initialize_and_launch_firmware().
+        // Prior implementation (run 26347965355) interleaved deassert+assert per-core, giving
+        // each BRISC only the ERISC-forwarding latency (~few µs) between deassert and
+        // re-assert — far too brief. deassert_risc_reset_at_core_write_only() calls
+        // wait_for_non_mmio_flush() after each write, so the "deassert" for core N is
+        // confirmed landed before we move to core N+1. By separating the deassert loop from
+        // the assert loop with a 100ms sleep, all BRISCs execute in PARALLEL for ≥100ms,
+        // which is enough time for noc_init() and any pending NIU-SLV state to drain.
         //
         // Applies to ALL non-MMIO devices, not just deferred ones (FIX VV), because the
         // stuck NIU-SLV affects every device that has previous-session NOC residue,
@@ -501,46 +503,83 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
             if (cluster_.is_relay_broken(device_id)) {
                 log_warning(
                     tt::LogAlways,
-                    "run_launch_phase: FIX WW — skipping Tensix NOC recovery cycle for device {} "
+                    "run_launch_phase: FIX WW — skipping Tensix NOC recovery deassert for device {} "
                     "(relay already broken after FIX TV/UU). (#42429)",
                     device_id);
                 continue;
             }
             try {
                 CoreCoord grid_size = cluster_.get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
-                uint32_t n_cycled = 0;
+                uint32_t n_deasserted = 0;
+                // Phase 1: deassert ALL cores. Each call flushes (confirms BRISC running)
+                // before advancing to the next core. After this loop, all BRISCs on this
+                // device are executing in parallel.
                 for (uint32_t y = 0; y < grid_size.y; y++) {
                     for (uint32_t x = 0; x < grid_size.x; x++) {
                         CoreCoord worker_core = cluster_.get_virtual_coordinate_from_logical_coordinates(
                             device_id, CoreCoord(x, y), CoreType::WORKER);
                         tt_cxy_pair core(device_id, worker_core);
-                        // Deassert: clears all soft-reset bits (including RISC bits),
-                        // allowing BRISC to briefly execute and drain stuck NIU-SLV state.
                         // deassert_risc_reset_at_core_write_only writes 0 to 0xFFB121B0
                         // (config space, posted NOC) and calls wait_for_non_mmio_flush.
                         // On flush failure it marks relay broken; subsequent iterations
                         // exit immediately via the relay_broken_ fast-path in UMD.
                         cluster_.deassert_risc_reset_at_core_write_only(core);
-                        // Re-assert: returns Tensix to clean RISC-reset state ready for
-                        // firmware load. Also a config-space posted NOC write.
-                        cluster_.assert_risc_reset_at_core_write_only(
-                            core, tt::umd::RiscType::ALL);
-                        ++n_cycled;
+                        ++n_deasserted;
                     }
                 }
                 log_info(
                     tt::LogAlways,
-                    "run_launch_phase: FIX WW — Tensix NOC recovery cycle done for device {} "
-                    "({} cores). (#42429)",
-                    device_id,
-                    n_cycled);
+                    "run_launch_phase: FIX WW — deasserted {} cores on device {}; "
+                    "sleeping 100ms for parallel BRISC NIU-SLV drain. (#42429)",
+                    n_deasserted,
+                    device_id);
             } catch (const std::exception& e) {
-                // Unexpected exception from coord-lookup helpers.
-                // flush timeouts are swallowed by deassert/assert_risc_reset_at_core_write_only()
-                // internally and cause relay_broken_ to be set — they never propagate here.
                 log_warning(
                     tt::LogAlways,
-                    "run_launch_phase: FIX WW — Tensix NOC recovery aborted for device {}: {}. (#42429)",
+                    "run_launch_phase: FIX WW — deassert phase aborted for device {}: {}. (#42429)",
+                    device_id,
+                    e.what());
+            }
+        }
+
+        // Phase 2: sleep 100ms so all BRISCs across all devices drain NIU-SLV in parallel.
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+        // Phase 3: re-assert all cores.
+        for (tt::ChipId device_id : device_ids) {
+            if (mmio_ids_set.count(device_id)) continue;
+            if (cluster_.is_relay_broken(device_id)) {
+                log_warning(
+                    tt::LogAlways,
+                    "run_launch_phase: FIX WW — skipping Tensix NOC recovery assert for device {} "
+                    "(relay broken during deassert phase). (#42429)",
+                    device_id);
+                continue;
+            }
+            try {
+                CoreCoord grid_size = cluster_.get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
+                uint32_t n_asserted = 0;
+                for (uint32_t y = 0; y < grid_size.y; y++) {
+                    for (uint32_t x = 0; x < grid_size.x; x++) {
+                        CoreCoord worker_core = cluster_.get_virtual_coordinate_from_logical_coordinates(
+                            device_id, CoreCoord(x, y), CoreType::WORKER);
+                        tt_cxy_pair core(device_id, worker_core);
+                        // Re-assert: returns Tensix to clean RISC-reset state ready for
+                        // firmware load. Also a config-space posted NOC write.
+                        cluster_.assert_risc_reset_at_core_write_only(
+                            core, tt::umd::RiscType::ALL);
+                        ++n_asserted;
+                    }
+                }
+                log_info(
+                    tt::LogAlways,
+                    "run_launch_phase: FIX WW — re-asserted {} cores on device {}. (#42429)",
+                    n_asserted,
+                    device_id);
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogAlways,
+                    "run_launch_phase: FIX WW — assert phase aborted for device {}: {}. (#42429)",
                     device_id,
                     e.what());
             }
@@ -2915,7 +2954,10 @@ void RiscFirmwareInitializer::initialize_firmware(
             break;
         }
         case HalProgrammableCoreType::DRAM: {
-            cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::BRISC);
+            // FIX IK (#42429): use write_only variant to avoid NIU-SLV read timeout for
+            // non-MMIO DRAM cores when relay is in a degraded state. For initialization
+            // we unconditionally want BRISC in reset; no need to read-modify-write.
+            cluster_.assert_risc_reset_at_core_write_only(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::BRISC);
             if (not rtoptions_.get_skip_loading_fw()) {
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
                     auto num_build_states = hal_.get_processor_types_count(core_type_idx, processor_class);
