@@ -520,6 +520,8 @@ def test_all_broadcast_sharded_2x4(
     output_shard_grid,
     tensor_mem_layout,
 ):
+    if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat16:
+        pytest.skip("Disabled by issue #45107")
     if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
         pytest.skip("bfloat8_b not supported for row-major")
 
