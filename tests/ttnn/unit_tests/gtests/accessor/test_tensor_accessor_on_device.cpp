@@ -841,12 +841,14 @@ INSTANTIATE_TEST_SUITE_P(
             .layout = Layout::ROW_MAJOR,
             .dtype = DataType::BFLOAT16,
             .buffer_type = BufferType::L1,
+        .input_shard_spec = std::nullopt,
         },
         CopyParams{
             .tensor_shape = tt::tt_metal::Shape{256, 64},
             .layout = Layout::ROW_MAJOR,
             .dtype = DataType::UINT8,
             .buffer_type = BufferType::L1,
+        .input_shard_spec = std::nullopt,
         },
 
         // 4D cases - DRAM buffer type
@@ -855,12 +857,14 @@ INSTANTIATE_TEST_SUITE_P(
             .layout = Layout::ROW_MAJOR,
             .dtype = DataType::BFLOAT16,
             .buffer_type = BufferType::DRAM,
+        .input_shard_spec = std::nullopt,
         },
         CopyParams{
             .tensor_shape = tt::tt_metal::Shape{256, 64},
             .layout = Layout::ROW_MAJOR,
             .dtype = DataType::UINT8,
             .buffer_type = BufferType::DRAM,
+        .input_shard_spec = std::nullopt,
         },
 
         // Higher dimensional cases - L1 buffer type
@@ -869,12 +873,14 @@ INSTANTIATE_TEST_SUITE_P(
             .layout = Layout::TILE,
             .dtype = DataType::BFLOAT16,
             .buffer_type = BufferType::L1,
+        .input_shard_spec = std::nullopt,
         },
         CopyParams{
             .tensor_shape = tt::tt_metal::Shape{3, 2, 2, 3, 4},
             .layout = Layout::ROW_MAJOR,
             .dtype = DataType::BFLOAT16,
             .buffer_type = BufferType::L1,
+        .input_shard_spec = std::nullopt,
         },
 
         // Higher dimensional cases - DRAM buffer type
@@ -883,12 +889,14 @@ INSTANTIATE_TEST_SUITE_P(
             .layout = Layout::TILE,
             .dtype = DataType::BFLOAT16,
             .buffer_type = BufferType::DRAM,
+        .input_shard_spec = std::nullopt,
         },
         CopyParams{
             .tensor_shape = tt::tt_metal::Shape{3, 2, 2, 3, 4},
             .layout = Layout::ROW_MAJOR,
             .dtype = DataType::BFLOAT16,
             .buffer_type = BufferType::DRAM,
+        .input_shard_spec = std::nullopt,
         },
     }));
 
