@@ -224,9 +224,42 @@ def matmul_program_config(
     )
 
 
+def speech_encoder_matmul_program_config(
+    device: ttnn.Device,
+    *,
+    token_rows: int,
+    in_dim: int,
+    out_dim: int,
+) -> ttnn.ProgramConfig:
+    """Speech encoder prefill matmul PCs — tuned for M≤128, K=1024 FFN/conv pointwise shapes."""
+    if token_rows <= MATMUL_1D_SEQ_THRESHOLD and in_dim == 1024 and out_dim in (1024, 2048, 4096, 3072):
+        m_tiles = max(1, (token_rows + TILE - 1) // TILE)
+        n_tiles = max(1, (out_dim + TILE - 1) // TILE)
+        k_tiles = in_dim // TILE
+        grid_x, grid_y = _pick_matmul_1d_grid(device, n_tiles=n_tiles)
+        num_cores = grid_x * grid_y
+        per_core_m = m_tiles
+        per_core_n = max(1, (n_tiles + num_cores - 1) // num_cores)
+        in0_block_w = 8 if k_tiles % 8 == 0 else 4
+        out_subblock_w = _pick_matmul_out_subblock_w(per_core_n)
+        out_subblock_h = _largest_divisor_at_most(per_core_m, max(1, 4 // out_subblock_w))
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
+            in0_block_w=in0_block_w,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            per_core_M=per_core_m,
+            per_core_N=per_core_n,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+    return matmul_program_config(device, token_rows=token_rows, in_dim=in_dim, out_dim=out_dim)
+
+
 def create_dram_sharded_mem_config(device: ttnn.Device, k: int, n: int) -> Tuple[ttnn.MemoryConfig, int]:
     """WIDTH-sharded DRAM config for linear weight ``[k, n]`` (``n`` may be padded)."""
-    dram_cores = dram_shard_core_count(device, n)
+    dram_cores = dram_matmul_shard_cores(device, k, n)
     assert device.dram_grid_size().y == 1, "DRAM sharding assumes dram grid y == 1"
     padded_n = math.ceil(n / (TILE * dram_cores)) * (TILE * dram_cores)
     dram_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_cores - 1, 0))})
@@ -244,8 +277,29 @@ def dram_shard_core_count(device: ttnn.Device, n: int) -> int:
     return determine_num_dram_shard_cores(n, int(device.dram_grid_size().x))
 
 
-def dram_linear_input_mem_config(device: ttnn.Device, m: int, k: int) -> ttnn.MemoryConfig:
-    dram_cores = dram_shard_core_count(device, k)
+def dram_matmul_shard_cores(device: ttnn.Device, k: int, n: int) -> int:
+    """Largest DRAM core count valid for both in0 (K) and in1 (N) width shards."""
+    max_dram = int(device.dram_grid_size().x)
+    padded_n = math.ceil(n / (TILE * max_dram)) * (TILE * max_dram)
+    for num_cores in range(max_dram, 0, -1):
+        if padded_n % num_cores != 0:
+            continue
+        if (padded_n // num_cores) % TILE != 0:
+            continue
+        if k % (TILE * num_cores) != 0:
+            continue
+        return num_cores
+    raise ValueError(
+        f"Cannot DRAM width-shard matmul k={k}, n={n} on grid x={max_dram} "
+        f"(need k % (32*cores)==0 and padded_n/cores tile-aligned)"
+    )
+
+
+def dram_linear_input_mem_config(device: ttnn.Device, m: int, k: int, n: int) -> ttnn.MemoryConfig:
+    """L1 WIDTH-sharded activation layout for ``MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig``."""
+    dram_cores = dram_matmul_shard_cores(device, k, n)
+    if m > TILE:
+        raise ValueError(f"dram_linear_input_mem_config expects m<={TILE}, got m={m} (chunk matmul instead)")
     return ttnn.create_sharded_memory_config(
         (m, k // dram_cores),
         core_grid=ttnn.CoreGrid(x=dram_cores, y=1),
@@ -263,8 +317,7 @@ def dram_matmul_program_config(
     *,
     fused_activation=None,
 ) -> ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig:
-    dram_cores = dram_shard_core_count(device, n)
-    assert k % (TILE * dram_cores) == 0, f"k={k} must divide tile_size * dram_cores ({TILE * dram_cores})"
+    dram_cores = dram_matmul_shard_cores(device, k, n)
     return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
         in0_block_w=find_largest_divisor(k // (TILE * dram_cores)),
         per_core_M=max(1, math.ceil(m / TILE)),
@@ -278,9 +331,9 @@ def is_l1_width_sharded(tensor: ttnn.Tensor) -> bool:
     return mc.buffer_type == ttnn.BufferType.L1 and mc.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
 
 
-def ensure_l1_width_sharded_activation(device: ttnn.Device, x: ttnn.Tensor, m: int, k: int) -> ttnn.Tensor:
+def ensure_l1_width_sharded_activation(device: ttnn.Device, x: ttnn.Tensor, m: int, k: int, n: int) -> ttnn.Tensor:
     """Shard activations for ``MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig`` (in0 L1 width)."""
-    target = dram_linear_input_mem_config(device, m, k)
+    target = dram_linear_input_mem_config(device, m, k, n)
     if is_l1_width_sharded(x):
         mc = x.memory_config()
         spec = mc.shard_spec

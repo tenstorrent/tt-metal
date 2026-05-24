@@ -383,6 +383,7 @@ class TTSeamlessM4Tv2Model:
             layer_norm_eps=layer_norm_eps,
             speech_encoder_chunk_size=speech_encoder_chunk_size,
             speech_encoder_left_chunk_num=speech_encoder_left_chunk_num,
+            matmul_token_rows=64,
         )
         self.t2u = TTSeamlessM4Tv2TextToUnitForConditionalGeneration(
             device,
