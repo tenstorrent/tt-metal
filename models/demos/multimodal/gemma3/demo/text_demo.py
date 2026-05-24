@@ -115,7 +115,12 @@ def create_tt_model(
     if num_layers is not None:
         tt_model_args.n_layers = num_layers
 
-    if paged_attention_config and tt_model_args.base_model_name in ["gemma-3-4b", "gemma-3-27b"]:
+    if paged_attention_config and tt_model_args.base_model_name in [
+        "gemma-3-4b",
+        "gemma-3-27b",
+        "medgemma-4b",
+        "medgemma-27b",
+    ]:
         # Paged decode tuning improves text generation quality without affecting non-paged multimodal vision demos.
         tt_model_args.force_fixed_decode_k_chunk = True
         if getattr(tt_model_args.optimizations, "__name__", None) == "performance":
