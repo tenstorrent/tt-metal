@@ -150,6 +150,10 @@ public:
         return get_shard_noc_addr(shard_id, offset, noc);
     }
 
+    // Returns the bank base address of this tensor (raw pointer)
+    FORCE_INLINE
+    constexpr uint32_t get_bank_base_address() const { return bank_base_address; }
+
     // Helpers
     struct PageMapping {
         size_t bank_id;
@@ -417,6 +421,10 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
             "TensorAccessor::is_local_shard is not supported by the interleaved tensor accessor");
         return false;
     }
+
+    // Returns the bank base address of this tensor (raw pointer)
+    FORCE_INLINE
+    constexpr uint32_t get_bank_base_address() const { return this->bank_base_address; }
 
     // Returns a proxy for shard pages iterator
     tensor_accessor::ShardPages<TensorAccessor> shard_pages(
