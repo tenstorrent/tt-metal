@@ -84,7 +84,7 @@ void RemoteOptimizer::receive_weights() {
 }
 
 void RemoteOptimizer::set_lr(float lr) {
-    // No-op: learning rate is managed by the remote optimizer
+    (void)lr;  // No-op: learning rate is managed by the remote optimizer
 }
 
 float RemoteOptimizer::get_lr() const {
