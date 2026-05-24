@@ -40,12 +40,18 @@ void kernel_main() {
     constexpr uint32_t cb_counts_scratch = get_compile_time_arg_val(13);
     constexpr uint32_t cb_idx_scratch = get_compile_time_arg_val(14);
     constexpr uint32_t local_expert_id = get_compile_time_arg_val(15);
+    // M_tiles_full: total tile-row count of the output tensor. When the
+    // kernel runs more chunks than strictly needed (because
+    // M_tiles_full % chunk_M_tiles != 0), the last chunk has writer
+    // destinations past M_tiles_full — we skip those writes here so we
+    // don't OOB-write the output buffer.
+    constexpr uint32_t M_tiles_full = get_compile_time_arg_val(16);
 
     constexpr uint32_t d_out_subblock_num_tiles = d_out_subblock_h * d_out_subblock_w;
     constexpr uint32_t d_in1_num_subblocks_M = per_core_M / d_out_subblock_h;
     constexpr uint32_t d_in1_num_subblocks_N = per_core_N_d / d_out_subblock_w;
 
-    constexpr uint32_t out_accessor_offset = 16;
+    constexpr uint32_t out_accessor_offset = 17;
     constexpr auto out_args = TensorAccessorArgs<out_accessor_offset>();
     const auto out_acc = TensorAccessor(out_args, output_addr, get_tile_size(cb_out));
 
@@ -79,10 +85,15 @@ void kernel_main() {
                     for (uint32_t j = 0; j < d_out_subblock_w; ++j) {
                         const uint32_t row = row0 + sb_m * d_out_subblock_h + i;
                         const uint32_t col = col0 + sb_n * d_out_subblock_w + j;
-                        // With GRID_X=11 and ceil_div per_core_N_d, the last
-                        // M-row col group covers cols past N_down_tiles_full
-                        // (phantom output). Skip those DRAM writes.
-                        if (col < N_down_tiles_full) {
+                        // Skip OOB writes:
+                        //   * col >= N_down_tiles_full: GRID_X=11 ceil_div
+                        //     produces phantom output cols past actual N.
+                        //   * row >= M_tiles_full: ceil_div of M produces a
+                        //     last-chunk tail past actual M when M_tiles_full
+                        //     doesn't divide chunk_M_tiles. The matmul still
+                        //     runs on those rows (reader zero-fills input),
+                        //     but the output isn't part of the result tensor.
+                        if (col < N_down_tiles_full && row < M_tiles_full) {
                             const uint32_t tile_idx = row * N_down_tiles_full + col;
                             noc_async_write_tile(tile_idx, out_acc, l1_read);
                         }
