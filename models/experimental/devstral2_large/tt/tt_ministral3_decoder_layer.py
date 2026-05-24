@@ -91,7 +91,7 @@ class TtDecoderLayer:
 
         # Attention sub-block.
         residual = x
-        h = self.input_layernorm(x, memory_config=act_mem)
+        h = self.input_layernorm(x, memory_config=act_mem, mode=mode)
         h = self.self_attn(
             h,
             mode=mode,
@@ -104,7 +104,7 @@ class TtDecoderLayer:
 
         # MLP sub-block.
         residual = h
-        h2 = self.post_attention_layernorm(h, memory_config=act_mem)
+        h2 = self.post_attention_layernorm(h, memory_config=act_mem, mode=mode)
         h2 = self.mlp(h2, mode=mode)
         out = ttnn.add(h2, residual, memory_config=act_mem)
         ttnn.deallocate(residual)

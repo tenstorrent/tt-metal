@@ -90,14 +90,49 @@ def get_sdpa_decode_output_mem_config(args: Devstral2Args, batch_size: int) -> t
     )
 
 
-def get_decode_residual_mem_config(args: Devstral2Args, mesh_device) -> ttnn.MemoryConfig:
-    """Width-sharded L1 residual layout for single-token decode (matches tt_transformers decode)."""
-    if args.num_devices <= 1:
-        return ttnn.L1_MEMORY_CONFIG
-    grid = ttnn.CoreGrid(y=4, x=4)
-    shard_width = args.hidden_size // grid.num_cores
+def pad_to_tile(dim: int) -> int:
+    tile = ttnn.TILE_SIZE
+    if dim % tile == 0:
+        return dim
+    return ((dim + tile - 1) // tile) * tile
+
+
+def _fused_activation_param(activation: Optional[str]):
+    """Map linear ``activation`` strings to ``UnaryWithParam`` for matmul program configs."""
+    if activation is None:
+        return None
+    if activation == "silu":
+        return ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)
+    raise ValueError(f"Unsupported fused activation for matmul program config: {activation!r}")
+
+
+def _largest_divisor_at_most(n: int, cap: int) -> int:
+    cap = max(1, cap)
+    for d in range(min(cap, n), 0, -1):
+        if n % d == 0:
+            return d
+    return 1
+
+
+def _pick_width_shard_grid(hidden: int) -> ttnn.CoreGrid:
+    """32-core width grid for hidden=12288 (profiler: fastest RMSNorm on BH)."""
+    hidden_padded = pad_to_tile(hidden)
+    for grid_y, grid_x in ((4, 8), (8, 4), (2, 8), (4, 4)):
+        num_cores = grid_y * grid_x
+        shard_w = hidden_padded // num_cores
+        if hidden_padded % num_cores == 0 and shard_w % ttnn.TILE_SIZE == 0:
+            return ttnn.CoreGrid(y=grid_y, x=grid_x)
+    return ttnn.CoreGrid(y=4, x=4)
+
+
+@lru_cache(maxsize=8)
+def get_decode_width_sharded_activation_mem_config(hidden_size: int) -> ttnn.MemoryConfig:
+    """L1 WIDTH-sharded activations for decode (``M`` padded to one tile row, hidden split)."""
+    hidden_padded = pad_to_tile(hidden_size)
+    grid = _pick_width_shard_grid(hidden_padded)
+    shard_w = hidden_padded // grid.num_cores
     return ttnn.create_sharded_memory_config(
-        (ttnn.TILE_SIZE, shard_width),
+        (ttnn.TILE_SIZE, shard_w),
         grid,
         ttnn.ShardStrategy.WIDTH,
         ttnn.ShardOrientation.ROW_MAJOR,
@@ -105,23 +140,94 @@ def get_decode_residual_mem_config(args: Devstral2Args, mesh_device) -> ttnn.Mem
     )
 
 
+def _width_sharded_norm_program_config(
+    *,
+    seq_len: int,
+    hidden_size: int,
+) -> ttnn.LayerNormShardedMultiCoreProgramConfig:
+    """Shared width-sharded ``LayerNormShardedMultiCoreProgramConfig`` (see ``layernorm_unit_test``)."""
+    m_padded = pad_to_tile(seq_len)
+    hidden_padded = pad_to_tile(hidden_size)
+    grid = _pick_width_shard_grid(hidden_padded)
+    shard_w = hidden_padded // grid.num_cores
+    block_h = m_padded // ttnn.TILE_SIZE
+    block_w = shard_w // ttnn.TILE_SIZE
+    subblock_w = _largest_divisor_at_most(block_w, 4)
+    return ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=[grid.x, grid.y],
+        subblock_w=subblock_w,
+        block_h=block_h,
+        block_w=block_w,
+        inplace=False,
+    )
+
+
+@lru_cache(maxsize=8)
+def get_decode_width_sharded_norm_program_config(hidden_size: int) -> ttnn.LayerNormShardedMultiCoreProgramConfig:
+    """``LayerNormShardedMultiCoreProgramConfig`` for decode RMSNorm (``block_h=1`` tile row)."""
+    return _width_sharded_norm_program_config(seq_len=ttnn.TILE_SIZE, hidden_size=hidden_size)
+
+
+@lru_cache(maxsize=32)
+def get_prefill_width_sharded_activation_mem_config(seq_len: int, hidden_size: int) -> ttnn.MemoryConfig:
+    """L1 WIDTH-sharded activations for prefill RMSNorm (``M`` and hidden split across cores)."""
+    m_padded = pad_to_tile(seq_len)
+    hidden_padded = pad_to_tile(hidden_size)
+    grid = _pick_width_shard_grid(hidden_padded)
+    shard_w = hidden_padded // grid.num_cores
+    return ttnn.create_sharded_memory_config(
+        (m_padded, shard_w),
+        grid,
+        ttnn.ShardStrategy.WIDTH,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+
+@lru_cache(maxsize=32)
+def get_prefill_width_sharded_norm_program_config(
+    seq_len: int, hidden_size: int
+) -> ttnn.LayerNormShardedMultiCoreProgramConfig:
+    """Width-sharded norm program config for prefill (e.g. ``M=128`` → ``block_h=4``)."""
+    return _width_sharded_norm_program_config(seq_len=seq_len, hidden_size=hidden_size)
+
+
+def get_sharded_norm_compute_kernel_config(mesh_device) -> ttnn.DeviceComputeKernelConfig:
+    """HiFi2 + fp32 dest acc, ``packer_l1_acc=False`` for sharded norm L1 CB budget on BH."""
+    cfg = dict(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    if is_blackhole_mesh(mesh_device):
+        return ttnn.types.BlackholeComputeKernelConfig(**cfg)
+    return ttnn.WormholeComputeKernelConfig(**cfg)
+
+
+def get_decode_residual_mem_config(args: Devstral2Args, mesh_device) -> ttnn.MemoryConfig:
+    """Width-sharded L1 residual layout for decode (alias of decode activation layout)."""
+    _ = mesh_device
+    return get_decode_width_sharded_activation_mem_config(args.hidden_size)
+
+
 def get_activation_mem_config(args: Devstral2Args, mode: str, mesh_device) -> ttnn.MemoryConfig:
-    """L1 interleaved for prefill and decode.
+    """Activation memory layout by mode.
 
-    Width-sharded decode residuals match tt_transformers but conflict with our
-    height-sharded Q/K/V heads (fused cache update needs non-overlapping shard grids).
+    Decode matmuls use L1 interleaved; width-sharded layout is scoped to RMSNorm only
+    (see ``TtRMSNorm`` / ``layernorm_unit_test``). MLP intermediates (K=3584) cannot share
+    the hidden width shard (K=12288).
 
-    On Blackhole, long prefill sequences (≥1024 tokens) cause intermediate L1 interleaved
-    tensors to land at addresses that overlap with the statically-allocated circular buffer
-    region of large matmul programs (CB ends ~1.15 MB, buffer lands ~735 KB). Routing prefill
-    activations through DRAM on BH eliminates this clash at the cost of slightly lower prefill
-    bandwidth; decode stays in L1 for performance.
+    Prefill stays L1 interleaved (or DRAM on BH for long sequences).
 
     ``Devstral2Args.prefill_activations_dram`` forces DRAM prefill on any mesh (e.g. agent demo).
     """
+    if mode == "decode":
+        _ = args
+        return ttnn.L1_MEMORY_CONFIG
     if mode == "prefill" and (args.prefill_activations_dram or is_blackhole_mesh(mesh_device)):
         return ttnn.DRAM_MEMORY_CONFIG
-    _ = mode
+    _ = mesh_device
     return ttnn.L1_MEMORY_CONFIG
 
 
@@ -149,17 +255,8 @@ def get_dram_sharded_matmul_program_config(
         in0_block_w=in0_block_w,
         per_core_M=max(1, math.ceil(m / ttnn.TILE_SIZE)),
         per_core_N=max(1, math.ceil(n / (ttnn.TILE_SIZE * num_cores))),
-        fused_activation=fused_activation,
+        fused_activation=_fused_activation_param(fused_activation),
     )
-
-
-def _largest_divisor_at_most(n: int, cap: int) -> int:
-    """Largest ``d`` such that ``n % d == 0`` and ``1 ≤ d ≤ cap``."""
-    cap = max(1, cap)
-    for d in range(min(cap, n), 0, -1):
-        if n % d == 0:
-            return d
-    return 1
 
 
 def _pick_1d_grid(mesh_device, *, n_tiles: int) -> tuple[int, int]:
@@ -250,7 +347,55 @@ def get_matmul_1d_program_config(
         per_core_M=per_core_M,
         per_core_N=per_core_N,
         fuse_batch=True,
-        fused_activation=fused_activation,
+        fused_activation=_fused_activation_param(fused_activation),
+        mcast_in0=True,
+    )
+
+
+def get_matmul_1d_width_sharded_in0_program_config(
+    args: Devstral2Args,
+    mesh_device,
+    *,
+    m: int,
+    k: int,
+    n: int,
+    fused_activation: Optional[str] = None,
+) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
+    """1D-on-N matmul when decode activations are L1 WIDTH-sharded (same grid as RMSNorm).
+
+      ``in0_block_w`` must divide **per-core** K tiles (``k_tiles / width_cores``), not total
+    ``k_tiles`` — see ``matmul_device_operation.cpp`` and ``matmul_unit_test/configs.py``.
+    """
+    _ = args
+    m_tiles = max(1, math.ceil(m / ttnn.TILE_SIZE))
+    k_tiles = max(1, math.ceil(k / ttnn.TILE_SIZE))
+    n_tiles = max(1, math.ceil(n / ttnn.TILE_SIZE))
+    width_grid = _pick_width_shard_grid(k)
+    num_width_cores = width_grid.num_cores
+    if k_tiles % num_width_cores != 0:
+        raise ValueError(f"K={k} tiles ({k_tiles}) not divisible by width cores ({num_width_cores})")
+    per_shard_k_tiles = k_tiles // num_width_cores
+    per_core_M = m_tiles
+    grid_x, grid_y = _pick_1d_grid(mesh_device, n_tiles=n_tiles)
+    num_cores = grid_x * grid_y
+    per_core_N = max(1, math.ceil(n_tiles / num_cores))
+    cap = min(
+        8,
+        max(1, 64 // per_core_M),
+        max(1, 128 // per_core_N),
+    )
+    in0_block_w = _largest_divisor_at_most(per_shard_k_tiles, cap)
+    out_subblock_w = _largest_divisor_at_most(per_core_N, 4)
+    out_subblock_h = _largest_divisor_at_most(per_core_M, max(1, 4 // out_subblock_w))
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        fuse_batch=True,
+        fused_activation=_fused_activation_param(fused_activation),
         mcast_in0=True,
     )
 
@@ -264,6 +409,7 @@ def get_linear_program_config(
     seq_len: int = 1,
     k: Optional[int] = None,
     n: Optional[int] = None,
+    fused_activation: Optional[str] = None,
 ) -> Optional[ttnn.ProgramConfig]:
     """Return a matmul program config. ``k``/``n`` should be supplied by the caller
     (``weight.shape[-2]`` / ``weight.shape[-1]``). Returns ``None`` if shape info is missing
@@ -276,9 +422,9 @@ def get_linear_program_config(
     than 1D-on-N's ``Nt=56`` cores for the fused QKV. DRAM-sharded only wins when
     ``Nt <= num_dram_banks``.
     """
-    _ = (mode, kind)
+    _ = kind
     if k is None or n is None:
         return None
     s = max(1, int(seq_len))
     m = max(ttnn.TILE_SIZE, math.ceil(s / ttnn.TILE_SIZE) * ttnn.TILE_SIZE)
-    return get_matmul_1d_program_config(args, mesh_device, m=m, k=k, n=n)
+    return get_matmul_1d_program_config(args, mesh_device, m=m, k=k, n=n, fused_activation=fused_activation)
