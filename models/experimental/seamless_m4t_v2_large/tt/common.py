@@ -231,8 +231,10 @@ def speech_encoder_matmul_program_config(
     in_dim: int,
     out_dim: int,
 ) -> ttnn.ProgramConfig:
-    """Speech encoder prefill matmul PCs — tuned for M≤128, K=1024 FFN/conv pointwise shapes."""
-    if token_rows <= MATMUL_1D_SEQ_THRESHOLD and in_dim == 1024 and out_dim in (1024, 2048, 4096, 3072):
+    """Speech encoder prefill matmul PCs — tuned 1D multicast for hot conformer shapes."""
+    if token_rows <= MATMUL_1D_SEQ_THRESHOLD and (
+        (in_dim == 1024 and out_dim in (1024, 2048, 4096, 3072)) or (in_dim == 4096 and out_dim == 1024)
+    ):
         m_tiles = max(1, (token_rows + TILE - 1) // TILE)
         n_tiles = max(1, (out_dim + TILE - 1) // TILE)
         k_tiles = in_dim // TILE
