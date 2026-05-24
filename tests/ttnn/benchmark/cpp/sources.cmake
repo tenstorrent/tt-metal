@@ -3,6 +3,7 @@
 
 set(BENCHMARK_SRCS
     "host_tilizer_untilizer/tilizer_untilizer.cpp"
+    "host_bfp_tilizer/bench_bfp_pack.cpp"
     "padding/pad_rm.cpp"
     "operations/ternary/benchmark_where.cpp"
     "benchmark_host_alloc_on_tensor_readback.cpp"
