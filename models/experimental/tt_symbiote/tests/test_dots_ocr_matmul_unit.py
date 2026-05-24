@@ -10,6 +10,9 @@ Scenarios
 1c. all four shapes — in0=L1 interleaved, in1/out=DRAM interleaved (``test_matmul_l1_dram_dram_interleaved``)
 2a. in0=L1 interleaved,  in1=DRAM interleaved, out=L1 interleaved
 2b. in0=L1 sharded (height / width / block), in1=DRAM interleaved, out=L1 interleaved
+2b-o. o_proj / mlp_fc1 (32c/64c) / mlp_fc2 (64c only) — L1 height-sharded in0 + DRAM out
+     (``test_matmul_o_proj_l1_hs_dram_out``, ``test_matmul_mlp_fc1_l1_hs_dram_out``,
+      ``test_matmul_mlp_fc2_l1_hs_dram_out``)
 2c. in0=L1 interleaved,  in1=DRAM interleaved, explicit per-core-M/N grid variants
 2d. in0=L1 width sharded, in1=DRAM sharded (height / width / block), out=L1 width sharded
     (``test_matmul_l1_ws_dram_in1_sharded_l1_ws_out``)
@@ -49,6 +52,10 @@ Run one vision_qkv config at a time (use ``-s`` to see program-config prints)::
     pytest models/experimental/tt_symbiote/tests/test_dots_ocr_matmul_unit.py \
         -k "test_matmul_dram_in0_dram_in1_l1_out and vision_qkv" -s
 
+    # Scenario 1d — DRAM/DRAM/L1 with explicit ibw=2/3/4 (8×8 pcM=48 pcN=18)
+    pytest models/experimental/tt_symbiote/tests/test_dots_ocr_matmul_unit.py \
+        -k "test_matmul_dram_dram_l1_explicit_ibw and vision_qkv" -s
+
     # Scenario 1b — all shapes: DRAM in0 / DRAM in1 / DRAM out (all interleaved)
     pytest models/experimental/tt_symbiote/tests/test_dots_ocr_matmul_unit.py \
         -k "test_matmul_dram_all_interleaved" -s
@@ -68,6 +75,14 @@ Run one vision_qkv config at a time (use ``-s`` to see program-config prints)::
     # Scenario 2b — one shard variant (pick hs_8c, hs_32c, ws_4c, bs_6x8, ...)
     pytest models/experimental/tt_symbiote/tests/test_dots_ocr_matmul_unit.py \
         -k "test_matmul_l1_in0_sharded and vision_qkv and hs_8c" -s
+
+    # Scenario 2b-o — o_proj / mlp_fc1 L1 hs32/64c in0 + DRAM out
+    pytest models/experimental/tt_symbiote/tests/test_dots_ocr_matmul_unit.py \
+        -k "test_matmul_o_proj_l1_hs_dram_out" -s
+    pytest models/experimental/tt_symbiote/tests/test_dots_ocr_matmul_unit.py \
+        -k "test_matmul_mlp_fc1_l1_hs_dram_out" -s
+    pytest models/experimental/tt_symbiote/tests/test_dots_ocr_matmul_unit.py \
+        -k "test_matmul_mlp_fc2_l1_hs_dram_out" -s
 
     # Scenario 2c — one explicit grid (pick gx6_gy6, gx8_gy8, ...)
     pytest models/experimental/tt_symbiote/tests/test_dots_ocr_matmul_unit.py \
@@ -649,6 +664,109 @@ def _build_explicit_program_config(
 
 
 # ---------------------------------------------------------------------------
+# Program config for DRAM/DRAM/L1 with explicit in0_block_w (8×8, pcM=48, pcN=18)
+# ---------------------------------------------------------------------------
+
+_DRAM_DRAM_L1_IBW_GRID = (8, 8)
+_DRAM_DRAM_L1_IBW_PER_CORE_M = 48
+_DRAM_DRAM_L1_IBW_PER_CORE_N = 18
+_DRAM_DRAM_L1_IBW_MAX_OUT_BLOCK_H = 6  # L1-out headroom (see test_vision_qkv_matmul_tracy)
+
+
+def _build_dram_dram_l1_ibw_program_config(
+    in0_block_w: int,
+    m: int,
+    k: int,
+    n: int,
+    *,
+    grid_x: int = _DRAM_DRAM_L1_IBW_GRID[0],
+    grid_y: int = _DRAM_DRAM_L1_IBW_GRID[1],
+    max_out_block_h: int | None = _DRAM_DRAM_L1_IBW_MAX_OUT_BLOCK_H,
+) -> Optional[ttnn.MatmulMultiCoreReuseMultiCastProgramConfig]:
+    """8×8 2D-mcast config matching dram_dram_l1_production layout with explicit ibw.
+
+    Uses the same per_core_M/N as production vision QKV (48/18) and caps
+    ``out_block_h`` so matmul CBs leave room for the large L1 interleaved output.
+    """
+    if m % _TILE != 0 or k % _TILE != 0 or n % _TILE != 0:
+        return None
+
+    m_tiles = m // _TILE
+    k_tiles = k // _TILE
+    n_tiles = n // _TILE
+
+    if m_tiles % grid_y != 0:
+        return None
+    per_core_m = m_tiles // grid_y
+    per_core_n = (n_tiles + grid_x - 1) // grid_x
+
+    if per_core_m != _DRAM_DRAM_L1_IBW_PER_CORE_M or per_core_n != _DRAM_DRAM_L1_IBW_PER_CORE_N:
+        return None
+    if per_core_n > 24 or per_core_m > 64:
+        return None
+    if in0_block_w < 1 or k_tiles % in0_block_w != 0:
+        return None
+
+    dst_tiles_budget = 8
+    candidate_out_block_h = [16, 12, 8, 6, 4, 3, 2, 1]
+    if max_out_block_h is not None:
+        candidate_out_block_h = [h for h in candidate_out_block_h if h <= max_out_block_h]
+
+    best_area = 0
+    best_out_block_h = 1
+    best_subblock_h = 1
+    best_subblock_w = 1
+    for ob_h in candidate_out_block_h:
+        if ob_h > per_core_m or per_core_m % ob_h != 0:
+            continue
+
+        approx_interm_kb = (ob_h * per_core_n * 2048) // 1024
+        approx_in0_kb = (ob_h * in0_block_w * 2 * 2048) // 1024
+        if approx_interm_kb + approx_in0_kb > 1024:
+            continue
+
+        cand_area = 0
+        cand_h = 1
+        cand_w = 1
+        for h in range(min(ob_h, dst_tiles_budget), 0, -1):
+            if ob_h % h != 0:
+                continue
+            for w in range(min(per_core_n, dst_tiles_budget // h), 0, -1):
+                if per_core_n % w != 0:
+                    continue
+                area = h * w
+                if area > cand_area:
+                    cand_area = area
+                    cand_h = h
+                    cand_w = w
+                    break
+
+        if (cand_area > best_area) or (cand_area == best_area and ob_h > best_out_block_h):
+            best_area = cand_area
+            best_out_block_h = ob_h
+            best_subblock_h = cand_h
+            best_subblock_w = cand_w
+
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(grid_x, grid_y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=best_subblock_h,
+        out_subblock_w=best_subblock_w,
+        out_block_h=best_out_block_h,
+        out_block_w=per_core_n,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=False,
+    )
+
+
+_DRAM_DRAM_L1_IBW_PARAMS = (2, 3, 4)
+_DRAM_DRAM_L1_IBW_IDS = [f"ibw{ibw}" for ibw in _DRAM_DRAM_L1_IBW_PARAMS]
+
+
+# ---------------------------------------------------------------------------
 # Core runner
 # ---------------------------------------------------------------------------
 
@@ -831,6 +949,53 @@ def test_matmul_dram_in0_dram_in1_l1_out(device, shape: _Shape):
     if status == "KERNEL_FAIL":
         pytest.skip(f"{shape.name}: kernel not supported with this config — KERNEL_FAIL")
     assert status == "PASS", f"{shape.name}: expected PASS, got {status}"
+
+
+@pytest.mark.parametrize("device_params", [{"num_command_queues": 1}], indirect=True)
+@pytest.mark.parametrize("in0_block_w", _DRAM_DRAM_L1_IBW_PARAMS, ids=_DRAM_DRAM_L1_IBW_IDS)
+@pytest.mark.parametrize("shape", _SHAPES, ids=_SHAPE_IDS)
+def test_matmul_dram_dram_l1_explicit_ibw(device, shape: _Shape, in0_block_w: int):
+    """DRAM in0 / DRAM in1 / L1 out with explicit 8×8 pcM=48 pcN=18 and fixed in0_block_w.
+
+    Sweeps ibw=2/3/4 (12/16/24 K iterations for K=1536) to compare L1 CB footprint vs
+    production ibw=8 while keeping the same memory layout as ``dram_dram_l1_production``.
+    """
+    prog_cfg = _build_dram_dram_l1_ibw_program_config(in0_block_w, shape.m, shape.k, shape.n)
+    if prog_cfg is None:
+        pytest.skip(
+            f"{shape.name}: shape does not match 8×8 pcM={_DRAM_DRAM_L1_IBW_PER_CORE_M} "
+            f"pcN={_DRAM_DRAM_L1_IBW_PER_CORE_N} or ibw={in0_block_w} does not divide K tiles"
+        )
+
+    compute_cfg = _vision_matmul_compute_config(device, math_fidelity=ttnn.MathFidelity.LoFi)
+    config_name = (
+        f"l1_grid_{_DRAM_DRAM_L1_IBW_GRID[0]}x{_DRAM_DRAM_L1_IBW_GRID[1]}"
+        f"_pcM{_DRAM_DRAM_L1_IBW_PER_CORE_M}_pcN{_DRAM_DRAM_L1_IBW_PER_CORE_N}_ibw{in0_block_w}"
+    )
+    in0_mem = ttnn.DRAM_MEMORY_CONFIG
+    in1_mem = ttnn.DRAM_MEMORY_CONFIG
+    out_mem = ttnn.L1_MEMORY_CONFIG
+    _print_program_config(shape, config_name, prog_cfg, in0_mem=in0_mem, in1_mem=in1_mem, out_mem=out_mem)
+
+    status, device_time_us = _run_matmul(
+        device,
+        shape,
+        in0_mem=in0_mem,
+        in1_mem=in1_mem,
+        out_mem=out_mem,
+        prog_cfg=prog_cfg,
+        compute_cfg=compute_cfg,
+        config_name=config_name,
+        in0_desc="DRAM Interleaved",
+        in1_desc="DRAM Interleaved",
+        out_desc="L1 Interleaved",
+        in0_in_dram=True,
+        out_in_dram=False,
+    )
+    if status == "KERNEL_FAIL":
+        pytest.skip(f"{shape.name} ibw={in0_block_w}: kernel not supported — KERNEL_FAIL")
+    assert status == "PASS", f"{shape.name} ibw={in0_block_w}: expected PASS, got {status}"
+    assert device_time_us is not None and device_time_us > 0
 
 
 # ---------------------------------------------------------------------------
@@ -1078,6 +1243,114 @@ def test_matmul_l1_in0_sharded(device, shape: _Shape, shard_param):
     assert status in {"PASS", "KERNEL_FAIL", "ALLOC_FAIL"}, f"{shape.name} {config_name}: unexpected status {status}"
     if status == "PASS":
         assert device_time_us is not None and device_time_us > 0
+
+
+# ---------------------------------------------------------------------------
+# Scenario 2b-o: L1 height-sharded in0 + DRAM interleaved out
+# ---------------------------------------------------------------------------
+#
+# o_proj: ``l1_hs_{32,64}c_auto`` (2b) PASSes with L1 out (~2189 / ~868 μs). DRAM
+# out avoids the per-core L1 output stripe.
+#
+# mlp_fc1: N=4224 is not divisible by 8×32=256, so ``l1_hs_{32,64}c_auto`` with
+# L1 interleaved out hits KERNEL_FAIL. DRAM out bypasses that tiling constraint
+# (only dram_dram_dram_production and l1_dram_dram pass in the original sweep).
+#
+# mlp_fc2: ``l1_hs_64c_auto`` (~5.2 ms) already PASSes with L1 out; DRAM out
+# drops the ~288 KB/core interleaved out stripe. Only 64c — hs_32c OOMs on in0
+# (full K=4224 in each core’s shard ≈ 3.2 MB >> 1.5 MB L1).
+
+_L1_HS_DRAM_OUT_CORES = (32, 64)
+_L1_HS_DRAM_OUT_IDS = tuple(f"hs_{n}c" for n in _L1_HS_DRAM_OUT_CORES)
+_O_PROJ_SHAPE = next(s for s in _SHAPES if s.name == "o_proj")
+_MLP_FC1_SHAPE = next(s for s in _SHAPES if s.name == "mlp_fc1")
+_MLP_FC2_SHAPE = next(s for s in _SHAPES if s.name == "mlp_fc2")
+
+
+def _run_l1_hs_dram_out_matmul(device, shape: _Shape, num_cores: int) -> None:
+    """in0=L1 height-sharded, in1=DRAM, out=DRAM (TTNN auto program config)."""
+    shard_h, shard_w = shape.m // num_cores, shape.k
+    in0_desc = f"L1 Height Sharded ({num_cores}c)"
+    config_name = f"l1_hs_{num_cores}c_dram_out"
+    cores_hint = num_cores
+    grid_hint = _grid_str_from_cores(num_cores)
+
+    if not _l1_shard_fits(shard_h, shard_w, shape.in0_dtype):
+        _skip_oom(
+            shape,
+            config_name,
+            in0_desc,
+            "DRAM Interleaved",
+            "DRAM Interleaved",
+            cores_hint,
+            grid_hint,
+            shard_h,
+            shard_w,
+        )
+
+    try:
+        in0_mem = _height_shard_mem(shape.m, shape.k, num_cores=num_cores)
+    except (ValueError, AssertionError) as exc:
+        pytest.skip(f"SPEC_ERROR — {exc}")
+
+    compute_cfg = _vision_matmul_compute_config(device, math_fidelity=ttnn.MathFidelity.LoFi)
+    prog_cfg = None
+    in1_mem = ttnn.DRAM_MEMORY_CONFIG
+    out_mem = ttnn.DRAM_MEMORY_CONFIG
+    _print_program_config(
+        shape,
+        config_name,
+        prog_cfg,
+        in0_mem=in0_mem,
+        in1_mem=in1_mem,
+        out_mem=out_mem,
+        core_grid=grid_hint,
+        compute_cores=cores_hint,
+    )
+
+    status, device_time_us = _run_matmul(
+        device,
+        shape,
+        in0_mem=in0_mem,
+        in1_mem=in1_mem,
+        out_mem=out_mem,
+        prog_cfg=prog_cfg,
+        compute_cfg=compute_cfg,
+        config_name=config_name,
+        in0_desc=in0_desc,
+        in1_desc="DRAM Interleaved",
+        out_desc="DRAM Interleaved",
+        cores_override=cores_hint,
+        grid_override=grid_hint,
+        in0_in_dram=False,
+        in1_in_dram=True,
+        out_in_dram=True,
+    )
+
+    if status == "KERNEL_FAIL":
+        pytest.skip(f"{shape.name} {config_name}: kernel not supported — KERNEL_FAIL")
+    assert status == "PASS", f"{shape.name} {config_name}: expected PASS, got {status}"
+    assert device_time_us is not None and device_time_us > 0
+
+
+@pytest.mark.parametrize("device_params", [{"num_command_queues": 1}], indirect=True)
+@pytest.mark.parametrize("num_cores", _L1_HS_DRAM_OUT_CORES, ids=_L1_HS_DRAM_OUT_IDS)
+def test_matmul_o_proj_l1_hs_dram_out(device, num_cores: int):
+    """o_proj — L1 height-sharded in0 (32c/64c), DRAM out."""
+    _run_l1_hs_dram_out_matmul(device, _O_PROJ_SHAPE, num_cores)
+
+
+@pytest.mark.parametrize("device_params", [{"num_command_queues": 1}], indirect=True)
+@pytest.mark.parametrize("num_cores", _L1_HS_DRAM_OUT_CORES, ids=_L1_HS_DRAM_OUT_IDS)
+def test_matmul_mlp_fc1_l1_hs_dram_out(device, num_cores: int):
+    """mlp_fc1 — L1 height-sharded in0 (32c/64c), DRAM out (N=4224 L1-out tiling bypass)."""
+    _run_l1_hs_dram_out_matmul(device, _MLP_FC1_SHAPE, num_cores)
+
+
+@pytest.mark.parametrize("device_params", [{"num_command_queues": 1}], indirect=True)
+def test_matmul_mlp_fc2_l1_hs_dram_out(device):
+    """mlp_fc2 — L1 height-sharded 64c in0, DRAM out (hs64c+L1 already passes)."""
+    _run_l1_hs_dram_out_matmul(device, _MLP_FC2_SHAPE, 64)
 
 
 # ---------------------------------------------------------------------------
