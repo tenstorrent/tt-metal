@@ -21,8 +21,8 @@ constexpr uint32_t MATMUL_2D_TEST_ID_OFFSET = 200;
 
 struct MatmulTestConfig {
     uint32_t test_id = 0;
-    CoreCoord start_logical_core;
-    CoreCoord end_logical_core;
+    CoreCoord start_logical_core = {};
+    CoreCoord end_logical_core = {};
     uint32_t num_subblocks_r_dim = 2;
     uint32_t num_subblocks_c_dim = 2;
     uint32_t num_subblocks_k_dim = 1;
@@ -33,12 +33,12 @@ struct MatmulTestConfig {
     DataFormat l1_data_format = DataFormat::Float16_b;
     uint32_t dram_bank_id = 0;
 
-    std::vector<uint32_t> num_subblocks_r_dim_sweep;
-    std::vector<uint32_t> num_subblocks_c_dim_sweep;
-    std::vector<uint32_t> num_subblocks_k_dim_sweep;
-    std::vector<uint32_t> subblock_r_dim_sweep;
-    std::vector<uint32_t> subblock_c_dim_sweep;
-    std::vector<uint32_t> subblock_k_dim_sweep;
+    std::vector<uint32_t> num_subblocks_r_dim_sweep = {};
+    std::vector<uint32_t> num_subblocks_c_dim_sweep = {};
+    std::vector<uint32_t> num_subblocks_k_dim_sweep = {};
+    std::vector<uint32_t> subblock_r_dim_sweep = {};
+    std::vector<uint32_t> subblock_c_dim_sweep = {};
+    std::vector<uint32_t> subblock_k_dim_sweep = {};
 };
 
 // Hardcoded test configurations shared by all matmul test variants.

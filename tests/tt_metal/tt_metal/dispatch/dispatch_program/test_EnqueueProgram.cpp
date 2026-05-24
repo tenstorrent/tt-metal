@@ -63,23 +63,23 @@ namespace tt::tt_metal {
 using std::vector;
 
 struct CBConfig {
-    uint32_t cb_id;
-    uint32_t num_pages;
-    uint32_t page_size;
-    tt::DataFormat data_format;
+    uint32_t cb_id = 0;
+    uint32_t num_pages = 0;
+    uint32_t page_size = 0;
+    tt::DataFormat data_format = tt::DataFormat::Float16_b;
 };
 
 struct DummyProgramConfig {
-    CoreRangeSet cr_set;
-    CBConfig cb_config;
-    uint32_t num_cbs;
-    uint32_t num_sems;
+    CoreRangeSet cr_set = {};               // NOLINT(readability-redundant-member-init)
+    CBConfig cb_config = {};                // NOLINT(readability-redundant-member-init)
+    uint32_t num_cbs = 0;
+    uint32_t num_sems = 0;
 };
 
 struct DummyProgramMultiCBConfig {
-    CoreRangeSet cr_set;
-    std::vector<CBConfig> cb_config_vector;
-    uint32_t num_sems;
+    CoreRangeSet cr_set = {};               // NOLINT(readability-redundant-member-init)
+    std::vector<CBConfig> cb_config_vector = {};  // NOLINT(readability-redundant-member-init)
+    uint32_t num_sems = 0;
 };
 
 struct IncrementKernelsSet {

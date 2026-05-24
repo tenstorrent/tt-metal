@@ -16,10 +16,10 @@ using FlowUid = uint32_t;
 
 struct FlowDescriptor {
     FabricNodeId src_node_id;
-    CoreCoord src_logical_core;
+    CoreCoord src_logical_core = {};
 
-    std::vector<FabricNodeId> dst_node_ids;
-    CoreCoord dst_logical_core;
+    std::vector<FabricNodeId> dst_node_ids = {};
+    CoreCoord dst_logical_core = {};
 
     uint32_t link_id = 0;
     uint8_t vc_id = 0;
@@ -183,7 +183,7 @@ struct NocUnicastWriteAtomicIncFields {
 
     template <bool IS_SOURCE>
     std::vector<uint32_t> get_args() const {
-        std::vector<uint32_t> args;
+        std::vector<uint32_t> args = {};
         const auto write_args = write_fields.get_args<IS_SOURCE>();
         const auto atomic_inc_args = atomic_inc_fields.get_args<IS_SOURCE>();
         args.insert(args.end(), write_args.begin(), write_args.end());
@@ -220,7 +220,7 @@ struct NocUnicastScatterWriteFields {
             }
         }
 
-        std::vector<uint32_t> args;
+        std::vector<uint32_t> args = {};
         args.push_back(payload_size_bytes);
         args.push_back(chunk_count);
         for (uint32_t i = 0; i < chunk_count; i++) {
@@ -346,7 +346,7 @@ struct TestTrafficReceiverConfig {
 };
 
 inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_config) const {
-    std::vector<uint32_t> args;
+    std::vector<uint32_t> args = {};
     args.reserve(20);  // Reserve a reasonable upper bound to avoid reallocations
 
     if (!is_sync_config) {
@@ -485,7 +485,7 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
 }
 
 inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
-    std::vector<uint32_t> args;
+    std::vector<uint32_t> args = {};
     args.reserve(10);  // Reserve a reasonable upper bound to avoid reallocations
 
     const auto metadata =
