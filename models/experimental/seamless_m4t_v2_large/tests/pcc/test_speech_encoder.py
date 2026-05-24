@@ -62,6 +62,7 @@ def _run_speech_encoder_pcc(device) -> None:
         layer_norm_eps=cfg.layer_norm_eps,
         speech_encoder_chunk_size=cfg.speech_encoder_chunk_size,
         speech_encoder_left_chunk_num=cfg.speech_encoder_left_chunk_num,
+        matmul_token_rows=64,
     )
 
     tt_x = from_torch_bfloat16_tile(device, input_features)
