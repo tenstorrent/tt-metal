@@ -20,6 +20,7 @@ from models.experimental.seamless_m4t_v2_large.tt.common import (
     pick_largest_height_shard_nhw_cores,
     speech_encoder_matmul_program_config,
     to_torch_replicated_first_shard,
+    width_sharded_to_l1_interleaved,
 )
 from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import from_torch_bfloat16_tile
 
@@ -256,9 +257,9 @@ class TTSeamlessM4Tv2SpeechEncoder:
         self._matmul_pc_cache[key] = cached
         return cached
 
-    def _pointwise_conv_matmul_pc(self, token_rows: int, in_dim: int, out_dim: int):
-        """Tuned 1D multicast matmul PC for conformer pc1/pc2 (K=1024 pointwise linears)."""
-        key = ("pointwise", token_rows, in_dim, out_dim)
+    def _tuned_matmul_pc(self, token_rows: int, in_dim: int, out_dim: int):
+        """Tuned 1D multicast matmul PC for hot speech-encoder shapes (pc1/pc2, FFN)."""
+        key = ("tuned", token_rows, in_dim, out_dim)
         cached = self._matmul_pc_cache.get(key)
         if cached is not None:
             return cached
@@ -270,6 +271,9 @@ class TTSeamlessM4Tv2SpeechEncoder:
         )
         self._matmul_pc_cache[key] = cached
         return cached
+
+    def _pointwise_conv_matmul_pc(self, token_rows: int, in_dim: int, out_dim: int):
+        return self._tuned_matmul_pc(token_rows, in_dim, out_dim)
 
     def _sdpa_program_config(self, seq_q: int, seq_k: int) -> ttnn.SDPAProgramConfig:
         key = (seq_q, seq_k)
@@ -296,14 +300,19 @@ class TTSeamlessM4Tv2SpeechEncoder:
         *,
         program_config=None,
         activation: Optional[str] = None,
+        accept_sharded_input: bool = False,
+        batch: Optional[int] = None,
+        seq: Optional[int] = None,
     ) -> ttnn.Tensor:
+        if accept_sharded_input and ttnn.is_sharded(x):
+            x = width_sharded_to_l1_interleaved(x)
         if program_config is None:
             program_config = self._matmul_program_config(
                 self._linear_token_rows(x),
                 int(weight.shape[-2]),
                 int(weight.shape[-1]),
             )
-        return ttnn.linear(
+        out = ttnn.linear(
             x,
             weight,
             bias=bias,
@@ -312,6 +321,15 @@ class TTSeamlessM4Tv2SpeechEncoder:
             memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self._linear_compute_cfg,
         )
+        if batch is None and len(x.shape) == 3:
+            batch = int(x.shape[0])
+            seq = int(x.shape[1])
+        if batch is not None and seq is not None:
+            if len(out.shape) == 4 and int(out.shape[1]) == 1:
+                out = ttnn.reshape(out, (batch, seq, int(out.shape[-1])))
+            elif len(out.shape) == 2:
+                out = ttnn.reshape(out, (batch, seq, int(out.shape[-1])))
+        return out
 
     def _layer_norm(
         self,
@@ -878,13 +896,19 @@ class TTSeamlessM4Tv2SpeechEncoder:
         num_heads: int,
         seq_len: int,
         memory_config: ttnn.MemoryConfig,
+        compute_kernel_config: ttnn.DeviceComputeKernelConfig,
     ) -> ttnn.Tensor:
-        """``einsum('bhld,lrd->bhlr', q, pos)`` via ``bmm`` over query positions (no 5-D broadcast)."""
+        """``einsum('bhld,lrd->bhlr', q, pos)`` via batched matmul over query positions."""
         head_dim = int(q.shape[-1])
         q_bh = ttnn.reshape(q, (batch * num_heads, seq_len, head_dim))
         q_sid = ttnn.permute(q_bh, (1, 0, 2), memory_config=memory_config)
         ttnn.deallocate(q_bh)
-        rel_sid = ttnn.operations.moreh.bmm(q_sid, pos_bmm, memory_config=memory_config)
+        rel_sid = ttnn.matmul(
+            q_sid,
+            pos_bmm,
+            memory_config=memory_config,
+            compute_kernel_config=compute_kernel_config,
+        )
         ttnn.deallocate(q_sid)
         rel_bh = ttnn.permute(rel_sid, (1, 0, 2), memory_config=memory_config)
         ttnn.deallocate(rel_sid)
@@ -969,6 +993,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
                 num_heads=num_heads,
                 seq_len=seq_len,
                 memory_config=scores_mc,
+                compute_kernel_config=self._linear_compute_cfg,
             )
             ttnn.deallocate(q)
             scores = ttnn.add(scores, rel_logits, memory_config=scores_mc)
@@ -1019,27 +1044,46 @@ class TTSeamlessM4Tv2SpeechEncoder:
         ttnn.deallocate(a)
         return out
 
-    def _conformer_ffn(self, x: ttnn.Tensor, ffn: Any, *, token_rows: int) -> ttnn.Tensor:
+    def _conformer_ffn(
+        self,
+        x: ttnn.Tensor,
+        ffn: Any,
+        *,
+        batch: int,
+        seq_len: int,
+        accept_sharded_input: bool = False,
+    ) -> ttnn.Tensor:
+        token_rows = batch * seq_len
         hdim = self.hidden_size
         ff_dim = self.speech_encoder_intermediate_size
-        pc1 = self._matmul_program_config(token_rows, hdim, ff_dim)
-        pc2 = self._matmul_program_config(token_rows, ff_dim, hdim)
+        pc1 = self._tuned_matmul_pc(token_rows, hdim, ff_dim)
+        pc2 = self._tuned_matmul_pc(token_rows, ff_dim, hdim)
         h = self._linear(
             x,
             ffn.intermediate_dense.weight,
             ffn.intermediate_dense.bias,
             program_config=pc1,
             activation="silu",
+            accept_sharded_input=accept_sharded_input,
+            batch=batch,
+            seq=seq_len,
         )
-        out = self._linear(h, ffn.output_dense.weight, ffn.output_dense.bias, program_config=pc2)
+        out = self._linear(
+            h,
+            ffn.output_dense.weight,
+            ffn.output_dense.bias,
+            program_config=pc2,
+            batch=batch,
+            seq=seq_len,
+        )
         ttnn.deallocate(h)
         return out
 
     def _relu_ffn(self, x: ttnn.Tensor, ffn: Any, *, token_rows: int) -> ttnn.Tensor:
         hdim = self.hidden_size
         ff_dim = self.speech_encoder_intermediate_size
-        pc1 = self._matmul_program_config(token_rows, hdim, ff_dim)
-        pc2 = self._matmul_program_config(token_rows, ff_dim, hdim)
+        pc1 = self._tuned_matmul_pc(token_rows, hdim, ff_dim)
+        pc2 = self._tuned_matmul_pc(token_rows, ff_dim, hdim)
         h = self._linear(
             x,
             ffn.intermediate_dense.weight,
@@ -1299,8 +1343,15 @@ class TTSeamlessM4Tv2SpeechEncoder:
             batch=batch,
             seq_len=seq_len,
             input_sharded=input_sharded,
+            output_sharded=True,
         )
-        ff = self._conformer_ffn(h, layer.ffn1, token_rows=token_m)
+        ff = self._conformer_ffn(
+            h,
+            layer.ffn1,
+            batch=batch,
+            seq_len=seq_len,
+            accept_sharded_input=True,
+        )
         ttnn.deallocate(h)
         # Stage 13a: 0.5 scale folded into output_dense weights at preprocessing time.
         hidden = ttnn.add(res, ff, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -1351,8 +1402,15 @@ class TTSeamlessM4Tv2SpeechEncoder:
             eps=self.layer_norm_eps,
             batch=batch,
             seq_len=seq_len,
+            output_sharded=True,
         )
-        ff2 = self._conformer_ffn(h, layer.ffn2, token_rows=token_m)
+        ff2 = self._conformer_ffn(
+            h,
+            layer.ffn2,
+            batch=batch,
+            seq_len=seq_len,
+            accept_sharded_input=True,
+        )
         ttnn.deallocate(h)
         # Stage 13a: 0.5 scale folded into output_dense weights at preprocessing time.
         hidden = ttnn.add(res, ff2, memory_config=ttnn.L1_MEMORY_CONFIG)
