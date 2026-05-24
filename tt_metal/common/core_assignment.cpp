@@ -72,10 +72,10 @@ std::vector<CoreCoord> reassign_dram_interface_cores_for_wormhole(
     // Track the shuffled indices
     std::vector<int> indices_g1_realloc(dram_interface_workers_g1.size());
     std::vector<int> indices_g2_realloc(dram_interface_workers_g2.size());
-    for (int new_index = 0; new_index < indices_g1.size(); ++new_index) {
+    for (std::size_t new_index = 0; new_index < indices_g1.size(); ++new_index) {
         indices_g1_realloc[indices_g1[new_index]] = new_index;
     }
-    for (int new_index = 0; new_index < indices_g2.size(); ++new_index) {
+    for (std::size_t new_index = 0; new_index < indices_g2.size(); ++new_index) {
         indices_g2_realloc[indices_g2[new_index]] = new_index;
     }
     // Extract worker y coordinates per group
@@ -171,7 +171,7 @@ std::vector<CoreCoord> get_optimal_dram_to_physical_worker_assignment(
     uint32_t min_worker_y_physical = std::numeric_limits<uint32_t>::max();
     // For WH, rows are harvested. Track them here.
     if (arch == ARCH::WORMHOLE_B0) {
-        for (int y_coord = 0; y_coord < full_grid_size_y; ++y_coord) {
+        for (uint32_t y_coord = 0; y_coord < full_grid_size_y; ++y_coord) {
             if (std::find(worker_phy_y.begin(), worker_phy_y.end(), y_coord) == worker_phy_y.end()) {
                 non_worker_rows.push_back(y_coord);
             }
@@ -187,7 +187,7 @@ std::vector<CoreCoord> get_optimal_dram_to_physical_worker_assignment(
     TT_ASSERT(
         arch == ARCH::WORMHOLE_B0 or arch == ARCH::BLACKHOLE,
         "Only Wormhole and Blackhole are supported to get optimal worker placement for interfacing with DRAM");
-    for (int i = 0; i < num_dram_banks; ++i) {
+    for (uint32_t i = 0; i < num_dram_banks; ++i) {
         auto dram_core = dram_phy_coords[i];
         uint32_t dram_core_y;
         if (arch == ARCH::BLACKHOLE) {
@@ -208,7 +208,7 @@ std::vector<CoreCoord> get_optimal_dram_to_physical_worker_assignment(
     if (arch == ARCH::BLACKHOLE) {
         // Reassign worker cores based on harvesting for BH.
         // Need to account for column harvesting here.
-        for (int x_coord = 0; x_coord < full_grid_size_x; ++x_coord) {
+        for (uint32_t x_coord = 0; x_coord < full_grid_size_x; ++x_coord) {
             if (std::find(worker_phy_x.begin(), worker_phy_x.end(), x_coord) == worker_phy_x.end()) {
                 non_worker_cols.push_back(x_coord);
             }

@@ -42,7 +42,7 @@ bool balanced_physical_device_numa(ContextId context_id) {
                 MetalContext::instance(context_id).get_cluster().get_numa_node_for_device(device_id);
             numa_nodes_for_cluster.insert(numa_node_for_device);
         }
-        return numa_nodes_for_cluster.size() == num_nodes;
+        return static_cast<int>(numa_nodes_for_cluster.size()) == num_nodes;
     }
     return false;
 }
@@ -118,7 +118,7 @@ public:
     TaskQueue() {
         // Initialize ring buffer for traversal. Each node points to the subsequent node, except for the last one,
         // which points to the head.
-        for (int node_idx = 0; node_idx < ring_buffer_size_; node_idx++) {
+        for (uint32_t node_idx = 0; node_idx < ring_buffer_size_; node_idx++) {
             (node_idx < ring_buffer_size_ - 1) ? ring_buffer_[node_idx].next = (&ring_buffer_[node_idx + 1])
                                                : ring_buffer_[node_idx].next = &(ring_buffer_[0]);
         }

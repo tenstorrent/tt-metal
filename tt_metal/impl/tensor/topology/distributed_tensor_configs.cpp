@@ -20,7 +20,7 @@ std::ostream& operator<<(std::ostream& os, const MeshMapperConfig::Placement& pl
 std::ostream& operator<<(std::ostream& os, const MeshMapperConfig& config) {
     os << "MeshMapperConfig(";
     os << "placements: [";
-    for (int i = 0; i < config.placements.size(); ++i) {
+    for (size_t i = 0; i < config.placements.size(); ++i) {
         if (i > 0) {
             os << ", ";
         }
@@ -48,7 +48,7 @@ bool operator==(const MeshMapperConfig::Placement& lhs, const MeshMapperConfig::
 std::ostream& operator<<(std::ostream& os, const MeshComposerConfig& config) {
     os << "MeshComposerConfig(";
     os << "dims: [";
-    for (int i = 0; i < config.dims.size(); ++i) {
+    for (size_t i = 0; i < config.dims.size(); ++i) {
         if (i > 0) {
             os << ", ";
         }

@@ -290,7 +290,7 @@ std::vector<uint32_t> MeshWorkloadImpl::get_program_config_sizes() {
     std::vector<uint32_t> global_program_config_sizes;
     for (auto& program_on_grid : programs_) {
         if (!global_program_config_sizes.empty()) {
-            for (int i = 0; i < global_program_config_sizes.size(); i++) {
+            for (size_t i = 0; i < global_program_config_sizes.size(); i++) {
                 TT_FATAL(
                     global_program_config_sizes[i] == program_on_grid.second.impl().get_program_config_sizes()[i],
                     "Expected config sizes to be identical across all programs in a MeshWorkload.");

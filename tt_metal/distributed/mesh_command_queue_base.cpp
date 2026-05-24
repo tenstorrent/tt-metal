@@ -77,7 +77,7 @@ void MeshCommandQueueBase::write_sharded_buffer(const MeshBuffer& buffer, const 
                 }
             } else if (height_replicated or width_replicated) {
                 if (buffer.global_shard_spec().shard_orientation == ShardOrientation::ROW_MAJOR) {
-                    for (auto replicated_device_y = 0; replicated_device_y < num_devices_y; replicated_device_y++) {
+                    for (uint32_t replicated_device_y = 0; replicated_device_y < num_devices_y; replicated_device_y++) {
                         this->write_shard_to_device(
                             buffer,
                             MeshCoordinate(replicated_device_y, device_x),
@@ -86,7 +86,7 @@ void MeshCommandQueueBase::write_sharded_buffer(const MeshBuffer& buffer, const 
                     }
                     device_x++;
                 } else {
-                    for (auto replicated_device_x = 0; replicated_device_x < num_devices_x; replicated_device_x++) {
+                    for (uint32_t replicated_device_x = 0; replicated_device_x < num_devices_x; replicated_device_x++) {
                         this->write_shard_to_device(
                             buffer,
                             MeshCoordinate(device_y, replicated_device_x),

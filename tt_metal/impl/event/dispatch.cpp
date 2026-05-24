@@ -119,7 +119,7 @@ void issue_record_event_commands(
     std::vector<CQDispatchWritePackedUnicastSubCmd> unicast_sub_cmds(num_command_queues);
     std::vector<std::pair<const void*, uint32_t>> event_payloads(num_command_queues);
 
-    for (auto cq_id = 0; cq_id < num_command_queues; cq_id++) {
+    for (uint32_t cq_id = 0; cq_id < num_command_queues; cq_id++) {
         tt_cxy_pair dispatch_location = MetalContext::instance().get_dispatch_query_manager().get_dispatch_core(cq_id);
         CoreCoord dispatch_virtual_core = device->virtual_core_from_logical_core(dispatch_location, dispatch_core_type);
         unicast_sub_cmds[cq_id] = CQDispatchWritePackedUnicastSubCmd{

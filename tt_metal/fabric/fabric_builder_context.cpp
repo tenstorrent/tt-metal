@@ -157,7 +157,7 @@ FabricEriscDatamoverConfig& FabricBuilderContext::get_fabric_router_config(
 }
 
 void FabricBuilderContext::set_num_fabric_initialized_routers(ChipId chip_id, size_t num_routers) {
-    TT_FATAL(chip_id < num_devices_, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices_);
+    TT_FATAL(static_cast<size_t>(chip_id) < num_devices_, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices_);
     TT_FATAL(
         num_initialized_routers_[chip_id] == UNINITIALIZED_ROUTERS,
         "Error, tried to set num initialized routers again for device {}",
@@ -166,7 +166,7 @@ void FabricBuilderContext::set_num_fabric_initialized_routers(ChipId chip_id, si
 }
 
 uint32_t FabricBuilderContext::get_num_fabric_initialized_routers(ChipId chip_id) const {
-    TT_FATAL(chip_id < num_devices_, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices_);
+    TT_FATAL(static_cast<size_t>(chip_id) < num_devices_, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices_);
     TT_FATAL(
         num_initialized_routers_[chip_id] != UNINITIALIZED_ROUTERS,
         "Error, querying num initialized routers for an unknown device {}",
@@ -175,7 +175,7 @@ uint32_t FabricBuilderContext::get_num_fabric_initialized_routers(ChipId chip_id
 }
 
 void FabricBuilderContext::set_fabric_master_router_chan(ChipId chip_id, chan_id_t chan_id) {
-    TT_FATAL(chip_id < num_devices_, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices_);
+    TT_FATAL(static_cast<size_t>(chip_id) < num_devices_, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices_);
     TT_FATAL(
         master_router_chans_[chip_id] == UNINITIALIZED_MASTER_ROUTER_CHAN,
         "Error, tried to set master router channel again for the same device {}",
@@ -184,7 +184,7 @@ void FabricBuilderContext::set_fabric_master_router_chan(ChipId chip_id, chan_id
 }
 
 chan_id_t FabricBuilderContext::get_fabric_master_router_chan(ChipId chip_id) const {
-    TT_FATAL(chip_id < num_devices_, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices_);
+    TT_FATAL(static_cast<size_t>(chip_id) < num_devices_, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices_);
     TT_FATAL(
         master_router_chans_[chip_id] != UNINITIALIZED_MASTER_ROUTER_CHAN,
         "Error, querying master router channel for an unknown device {}",

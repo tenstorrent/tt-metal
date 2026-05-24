@@ -246,7 +246,7 @@ AllocatorConfig L1BankingAllocator::generate_config(
         "Reserved size must be aligned to L1 allocator alignment {}",
         config.l1_alignment);
     // Initialize dram_offsets from soc_descriptor
-    for (auto channel = 0; channel < soc_desc.get_num_dram_views(); channel++) {
+    for (size_t channel = 0; channel < soc_desc.get_num_dram_views(); channel++) {
         config.dram_bank_offsets.push_back(soc_desc.get_address_offset(channel));
     }
     // Initialize core_type_from_noc_coord_table table

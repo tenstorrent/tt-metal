@@ -592,7 +592,7 @@ void Cluster::generate_virtual_to_umd_coord_mapping() {
             }
 
             for (uint32_t noc = 0; noc < this->num_nocs_; noc++) {
-                for (auto dram_channel = 0; dram_channel < this->get_soc_desc(chip_id).get_num_dram_views();
+                for (size_t dram_channel = 0; dram_channel < this->get_soc_desc(chip_id).get_num_dram_views();
                      dram_channel++) {
                     auto worker_dram_ep =
                         this->get_soc_desc(chip_id).get_preferred_worker_core_for_dram_view(dram_channel, noc);
@@ -755,7 +755,7 @@ void Cluster::write_dram_vec(
     const void* mem_ptr, uint32_t sz_in_bytes, ChipId device_id, int dram_view, uint64_t addr) const {
     const metal_SocDescriptor& desc_to_use = get_soc_desc(device_id);
     TT_FATAL(
-        dram_view < desc_to_use.get_num_dram_views(),
+        static_cast<size_t>(dram_view) < desc_to_use.get_num_dram_views(),
         "Bounds-Error -- dram_view={} is outside of num_dram_views={}",
         dram_view,
         desc_to_use.get_num_dram_views());
@@ -769,7 +769,7 @@ void Cluster::write_dram_vec(
 void Cluster::read_dram_vec(void* mem_ptr, uint32_t sz_in_bytes, ChipId device_id, int dram_view, uint64_t addr) const {
     const metal_SocDescriptor& desc_to_use = get_soc_desc(device_id);
     TT_FATAL(
-        dram_view < desc_to_use.get_num_dram_views(),
+        static_cast<size_t>(dram_view) < desc_to_use.get_num_dram_views(),
         "Bounds-Error -- dram_view={} is outside of num_dram_views={}",
         dram_view,
         desc_to_use.get_num_dram_views());
@@ -1022,7 +1022,7 @@ std::optional<tt::umd::semver_t> Cluster::get_ethernet_firmware_version() const 
 void Cluster::dram_barrier(ChipId chip_id) const {
     TT_ASSERT(this->hal_ != nullptr, "Hal is not set. Need to call set_hal() first.");
     std::unordered_set<uint32_t> dram_channels;
-    for (uint32_t channel = 0; channel < this->get_soc_desc(chip_id).get_num_dram_channels(); channel++) {
+    for (uint32_t channel = 0; channel < static_cast<uint32_t>(this->get_soc_desc(chip_id).get_num_dram_channels()); channel++) {
         dram_channels.insert(channel);
     }
     this->driver_->dram_membar(chip_id, dram_channels);

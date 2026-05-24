@@ -1294,7 +1294,7 @@ KernelHandle CreateEthernetKernel(
     }
 
     TT_FATAL(
-        ttsl::as_underlying_type<DataMovementProcessor>(config.processor) <
+        static_cast<uint32_t>(ttsl::as_underlying_type<DataMovementProcessor>(config.processor)) <
             MetalContext::instance().hal().get_num_risc_processors(eth_core_type),
         "EthernetKernel creation failure: {} kernel cannot target processor {} because Ethernet core only has {} "
         "processors. "

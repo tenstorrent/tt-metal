@@ -245,7 +245,7 @@ int main(int argc, char** argv) {
     for ([[maybe_unused]] auto& core : cores) {
         const auto core_offset = core_idx * element_per_core;
         fmt::print("Core {}:\n", core_idx);
-        for (int index = 0; index < print_per_core; index++) {
+        for (size_t index = 0; index < print_per_core; index++) {
             const auto i = core_offset + index;
             fmt::print(
                 "index {}: {} + {} = {}\n",

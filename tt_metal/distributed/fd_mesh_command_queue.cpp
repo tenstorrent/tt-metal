@@ -863,7 +863,7 @@ void FDMeshCommandQueue::copy_buffer_data_to_user_space(MeshBufferReadDescriptor
         uint16_t channel =
             tt::tt_metal::MetalContext::instance(cid).get_cluster().get_assigned_channel_for_device(device->id());
 
-        for (int i = 0; i < num_reads; i++) {
+        for (uint32_t i = 0; i < num_reads; i++) {
             buffer_dispatch::copy_completion_queue_data_into_user_space(
                 std::get<ReadBufferDescriptor>(*(read_descriptor_queue.pop())),
                 mmio_device_id,
@@ -1091,7 +1091,7 @@ static VecIt remove_by_index(VecIt begin, VecIt end, IndexIt index_begin, IndexI
         if (index_begin == index_end) {
             return false;
         }
-        if (*index_begin == (&value - &*begin)) {
+        if (*index_begin == static_cast<size_t>(&value - &*begin)) {
             ++index_begin;
             return true;
         }
@@ -1161,7 +1161,7 @@ void FDMeshCommandQueue::record_end() {
     command_sequence.add_prefetch_exec_buf_end();
 
     exec_buf_end.reserve(command_sequence.size_bytes() / sizeof(uint32_t));
-    for (int i = 0; i < command_sequence.size_bytes() / sizeof(uint32_t); i++) {
+    for (size_t i = 0; i < command_sequence.size_bytes() / sizeof(uint32_t); i++) {
         exec_buf_end.push_back(static_cast<uint32_t*>(command_sequence.data())[i]);
     }
     size_t max_trace_size = 0;

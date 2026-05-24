@@ -2842,7 +2842,8 @@ TraceNode create_trace_node(ProgramImpl& program, IDevice* device, uint32_t num_
         num_workers,
         std::move(rta_data),
         std::move(all_cb_configs_payloads),
-        std::move(all_dfb_configs_payloads)};
+        std::move(all_dfb_configs_payloads),
+        {}};
 }
 
 KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle) {
@@ -2904,7 +2905,7 @@ void reset_worker_dispatch_state_on_device(
 
     tt::tt_metal::DeviceCommandCalculator calculator;
     if (reset_launch_msg_state) {
-        for (int i = 0; i < num_sub_devices; ++i) {
+        for (uint32_t i = 0; i < num_sub_devices; ++i) {
             calculator.add_dispatch_go_signal_mcast();
         }
         if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
