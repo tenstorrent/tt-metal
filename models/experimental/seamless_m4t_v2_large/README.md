@@ -181,15 +181,15 @@ End-to-end pipeline throughput from `tests/perf/test_e2e_perf_2cq.py`. Each test
 
 ### P150 — `MeshShape(1, 1)`, batch size 1
 
-Measured on a single Blackhole P150 (`1x1` pytest parametrization). The `forward()` columns list the `_EXPECTED_E2E_THROUGHPUT_FPS` floors enforced by `test_seamless_m4t_v2_large_e2e_perf_2cq` (non-traced) and `test_seamless_m4t_v2_large_e2e_perf_2cq_trace` (traced); traced tests use the same thresholds (reported as “≥” when the run exceeds the floor). The `generate()` column lists the loose `_EXPECTED_GENERATE_E2E_THROUGHPUT_FPS` lower bounds from `test_seamless_m4t_v2_large_e2e_perf_2cq_generate` (`max_new_tokens=48`).
+Measured on a single Blackhole P150 (`1x1` pytest parametrization, 2026-05-24). Each cell is **FPS** logged by the test (`batch_size / inference_time_avg`).
 
 | Task | `forward()` non-traced | `forward()` traced | `generate()` non-traced |
 |------|------------------------:|-------------------:|------------------------:|
-| T2TT | 12.67 |  54.94 | 0.5 |
-| S2TT |  6.47 |  22.92 | 0.5 |
-| T2ST | 12.95 |  29.61 | 0.25 |
-| S2ST |  6.56 |  16.73 | 0.25 |
-| ASR  |  6.43 |  22.25 | 0.5 |
+| T2TT | 11.05 | 86.40 | 0.60 |
+| S2TT |  6.27 | 44.13 | 1.21 |
+| T2ST | 12.20 | 40.83 | 0.41 |
+| S2ST |  6.51 | 28.28 | 0.61 |
+| ASR  |  5.74 | 44.21 | 1.26 |
 
 ### BH QB — `MeshShape(1, 4)`, replicated batch-1 (`batch_size` metric = 4)
 
@@ -222,11 +222,11 @@ pytest models/experimental/seamless_m4t_v2_large/tests/perf/test_seamless_device
 
 | Task | Device kernel samples/s | Avg kernel duration (ms) |
 |------|------------------------:|-------------------------:|
-| T2TT | 63.06 | 15.86 |
-| S2TT | 33.94 | 29.47 |
-| T2ST | 31.29 | 31.96 |
-| S2ST | 21.94 | 45.58 |
-| ASR  | 33.95 | 29.45 |
+| T2TT | 97.76 | 10.23 |
+| S2TT | 46.75 | 21.39 |
+| T2ST | 43.81 | 22.83 |
+| S2ST | 29.42 | 33.99 |
+| ASR  | 46.72 | 21.40 |
 
 #### BH QB — `MeshShape(1, 4)`, replicated batch-1
 
