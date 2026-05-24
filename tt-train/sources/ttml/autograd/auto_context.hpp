@@ -44,17 +44,17 @@ public:
     }
 
     // Size queries (computed from mesh_device->shape())
-    [[nodiscard]] const uint32_t get_ddp_size() const;
-    [[nodiscard]] const uint32_t get_tp_size() const;
-    [[nodiscard]] const uint32_t get_cp_size() const;
+    [[nodiscard]] uint32_t get_ddp_size() const;
+    [[nodiscard]] uint32_t get_tp_size() const;
+    [[nodiscard]] uint32_t get_cp_size() const;
 
-    [[nodiscard]] const bool is_tp_enabled() const {
+    [[nodiscard]] bool is_tp_enabled() const {
         return m_tp_axis.has_value();
     }
-    [[nodiscard]] const bool is_ddp_enabled() const {
+    [[nodiscard]] bool is_ddp_enabled() const {
         return m_ddp_axis.has_value();
     }
-    [[nodiscard]] const bool is_cp_enabled() const {
+    [[nodiscard]] bool is_cp_enabled() const {
         return m_cp_axis.has_value();
     }
 

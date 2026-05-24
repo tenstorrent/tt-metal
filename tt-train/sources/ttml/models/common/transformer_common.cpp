@@ -116,7 +116,7 @@ KvCache::KvCache(const KvCacheConfig& config) :
     KvCache(config.num_layers, config.batch_size, config.num_groups, config.max_seq_len, config.head_dim) {
 }
 
-const uint32_t KvCache::update_prefill(
+uint32_t KvCache::update_prefill(
     const tt::tt_metal::Tensor& key_tensor,
     const tt::tt_metal::Tensor& value_tensor,
     tt::tt_metal::Tensor& k_cache,
@@ -143,7 +143,7 @@ const uint32_t KvCache::update_prefill(
     return new_tokens;
 }
 
-const uint32_t KvCache::update_decode(
+uint32_t KvCache::update_decode(
     const tt::tt_metal::Tensor& key_tensor,
     const tt::tt_metal::Tensor& value_tensor,
     tt::tt_metal::Tensor& k_cache,
@@ -171,7 +171,7 @@ const uint32_t KvCache::update_decode(
     return cache_position + new_tokens;
 }
 
-const uint32_t KvCache::update(
+uint32_t KvCache::update(
     const uint32_t layer_idx,
     const tt::tt_metal::Tensor& key_states,
     const tt::tt_metal::Tensor& value_states,

@@ -46,7 +46,7 @@ float NoOp::get_lr() const {
     return 0.0f;
 }
 
-void NoOp::set_lr(float lr) {
+void NoOp::set_lr([[maybe_unused]] float lr) {
 }
 
 }  // namespace ttml::optimizers

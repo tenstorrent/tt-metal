@@ -129,7 +129,7 @@ public:
         const uint32_t max_seq_len,
         const uint32_t head_dim);
 
-    const uint32_t update(
+    uint32_t update(
         const uint32_t layer_idx,
         const tt::tt_metal::Tensor& key_states,
         const tt::tt_metal::Tensor& value_states,
@@ -168,7 +168,7 @@ public:
      *
      * @return uint32_t Current position in cache
      */
-    [[nodiscard]] const uint32_t get_cache_position() const {
+    [[nodiscard]] uint32_t get_cache_position() const {
         return m_cache_position;
     }
 
@@ -192,7 +192,7 @@ public:
      *
      * @return uint32_t Number of layers
      */
-    [[nodiscard]] const uint32_t num_layers() const {
+    [[nodiscard]] uint32_t num_layers() const {
         return static_cast<uint32_t>(m_kv_cache.size());
     }
 
@@ -213,7 +213,7 @@ private:
     /**
      * @brief Update cache for prefill mode (writes entire sequence starting at position 0)
      */
-    const uint32_t update_prefill(
+    uint32_t update_prefill(
         const tt::tt_metal::Tensor& key_tensor,
         const tt::tt_metal::Tensor& value_tensor,
         tt::tt_metal::Tensor& k_cache,
@@ -223,7 +223,7 @@ private:
     /**
      * @brief Update cache for decode mode (writes single token at cache_position)
      */
-    const uint32_t update_decode(
+    uint32_t update_decode(
         const tt::tt_metal::Tensor& key_tensor,
         const tt::tt_metal::Tensor& value_tensor,
         tt::tt_metal::Tensor& k_cache,

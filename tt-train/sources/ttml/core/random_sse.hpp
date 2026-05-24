@@ -167,7 +167,7 @@ public:
     // Single random uint32 from buffered values
     [[nodiscard]]
     result_type operator()() noexcept {
-        thread_local int idx = 0;
+        thread_local size_t idx = 0;
         thread_local uint32_t buffer[simd_float_batch_size];
         thread_local AesRng* last_rng = nullptr;
         thread_local bool first_use = true;

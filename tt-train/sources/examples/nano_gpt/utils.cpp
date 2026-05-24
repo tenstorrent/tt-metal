@@ -77,7 +77,7 @@ float GradientAccumulator::average_loss() const {
 
 std::unique_ptr<ttml::schedulers::LRSchedulerBase> create_idendity_scheduler(
     ttml::optimizers::OptimizerBase *optimizer, [[maybe_unused]] size_t total_steps) {
-    return std::make_unique<ttml::schedulers::LambdaScheduler>(optimizer, [](int epoch) { return 1.0F; });
+    return std::make_unique<ttml::schedulers::LambdaScheduler>(optimizer, []([[maybe_unused]] int epoch) { return 1.0F; });
 }
 
 std::unique_ptr<ttml::schedulers::LRSchedulerBase> create_warmup_with_linear_scheduler(

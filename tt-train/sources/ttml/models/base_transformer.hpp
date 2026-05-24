@@ -9,7 +9,7 @@ class BaseTransformer : public ttml::modules::ModuleBase {
 public:
     virtual ~BaseTransformer() = default;
 
-    virtual void load_from_safetensors(const std::filesystem::path& model_path) {
+    virtual void load_from_safetensors([[maybe_unused]] const std::filesystem::path& model_path) {
     }
 };
 }  // namespace ttml::models
