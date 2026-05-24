@@ -81,19 +81,21 @@ class TTSeamlessM4Tv2Encoder:
         self._dram_matmul_pc_cache: dict = {}
         self._width_shard_mem_cache: dict = {}
 
-    def _width_shard_mem_config(self, token_rows: int, channels: int) -> ttnn.MemoryConfig:
-        key = (token_rows, channels)
+    def _width_shard_mem_config(self, token_rows: int, channels: int, out_channels: int) -> ttnn.MemoryConfig:
+        key = (token_rows, channels, out_channels)
         cached = self._width_shard_mem_cache.get(key)
         if cached is not None:
             return cached
-        cached = dram_linear_input_mem_config(self.device, token_rows, channels)
+        cached = dram_linear_input_mem_config(self.device, token_rows, channels, out_channels)
         self._width_shard_mem_cache[key] = cached
         return cached
 
-    def _to_matmul_width_sharded(self, x: ttnn.Tensor, token_rows: int, channels: int) -> ttnn.Tensor:
+    def _to_matmul_width_sharded(
+        self, x: ttnn.Tensor, token_rows: int, channels: int, out_channels: int
+    ) -> ttnn.Tensor:
         if len(x.shape) == 3:
             x = ttnn.reshape(x, (token_rows, channels))
-        return ensure_l1_width_sharded_activation(self.device, x, token_rows, channels)
+        return ensure_l1_width_sharded_activation(self.device, x, token_rows, channels, out_channels)
 
     @staticmethod
     def _width_sharded_to_3d(x: ttnn.Tensor, batch: int, seq: int, channels: int) -> ttnn.Tensor:
@@ -206,7 +208,7 @@ class TTSeamlessM4Tv2Encoder:
             x_flat = x
             m_actual = batch * seq
             m = self._bias_token_rows(bias)
-            x_sharded = ensure_l1_width_sharded_activation(self.device, x_flat, m, k)
+            x_sharded = ensure_l1_width_sharded_activation(self.device, x_flat, m, k, n)
         elif len(x.shape) == 3:
             batch = int(x.shape[0])
             seq = int(x.shape[1])
@@ -235,7 +237,7 @@ class TTSeamlessM4Tv2Encoder:
 
         if x_sharded is None:
             x_flat = self._pad_token_rows(x_flat, m_actual, m)
-            x_sharded = ensure_l1_width_sharded_activation(self.device, x_flat, m, k)
+            x_sharded = ensure_l1_width_sharded_activation(self.device, x_flat, m, k, n)
         fused_activation = ttnn.UnaryOpType.RELU if activation == "relu" else None
         out = ttnn.linear(
             x_sharded,
@@ -436,7 +438,8 @@ class TTSeamlessM4Tv2Encoder:
         n_tiles = hidden_size // 32
         ffn_dim = 8 * hidden_size
         token_rows = batch * seq
-        hidden = self._to_matmul_width_sharded(hidden, token_rows, hidden_size)
+        qkv_n = int(parameters.layers[0].self_attn.qkv.weight.shape[-1])
+        hidden = self._to_matmul_width_sharded(hidden, token_rows, hidden_size, qkv_n)
         sharded_hidden_mem = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
 
         for i in range(num_layers):
