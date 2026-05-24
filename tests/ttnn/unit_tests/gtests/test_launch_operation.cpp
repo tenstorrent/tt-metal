@@ -29,7 +29,7 @@ using ::ttnn::device_operation::mesh_device_operation_utils::filter_tensor_shard
 
 // Returns a dummy device tensor with `num_device_shards` populated.
 Tensor make_tensor_with_num_shards(int num_device_shards, MeshDevice* mesh_device, int shard_dim = 0) {
-    TT_FATAL(num_device_shards > 0 && num_device_shards <= mesh_device->num_devices(), "Invalid number of shards");
+    TT_FATAL(num_device_shards > 0 && static_cast<size_t>(num_device_shards) <= mesh_device->num_devices(), "Invalid number of shards");
 
     const auto global_shape = ttnn::Shape{num_device_shards, 1, 32, 32};
     auto buffer = std::make_shared<std::vector<float>>(global_shape.volume());
@@ -74,10 +74,10 @@ struct NewInfraProgramFactory {
     }
 
     static void override_runtime_arguments(
-        cached_program_t& cached_program,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value) {}
+        cached_program_t& /*cached_program*/,
+        const operation_attributes_t& /*operation_attributes*/,
+        const tensor_args_t& /*tensor_args*/,
+        tensor_return_value_t& /*tensor_return_value*/) {}
 };
 
 // New-infra style program factory that uses the "create_at" method (heterogeneous dispatch)
@@ -96,10 +96,10 @@ struct NewInfraWorkloadFactory {
     }
 
     static void override_runtime_arguments(
-        cached_mesh_workload_t& cached_program,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value) {}
+        cached_mesh_workload_t& /*cached_program*/,
+        const operation_attributes_t& /*operation_attributes*/,
+        const tensor_args_t& /*tensor_args*/,
+        tensor_return_value_t& /*tensor_return_value*/) {}
 };
 
 static_assert(ttnn::device_operation::MeshWorkloadFactoryConcept<NewInfraWorkloadFactory>);

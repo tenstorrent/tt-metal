@@ -149,7 +149,7 @@ auto query_op_runtime(Op op, MeshDevice* device, Args&&... args) {
     try {
         auto trace_id = capture_op_trace(op, device, std::forward<Args>(args)...);
         auto runtime = execute_time_and_release_trace(trace_id, device);
-        return RuntimeQueryResponse{ExecutionStatus::Success, runtime};
+        return RuntimeQueryResponse{ExecutionStatus::Success, runtime, std::nullopt};
 
     } catch (const std::exception& e) {
         log_debug(tt::LogOp, "op_runtime - error: {}", e.what());
