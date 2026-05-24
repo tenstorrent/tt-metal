@@ -9,7 +9,6 @@
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/matmul/device/matmul_1d_type.hpp"
 #include <tt-metalium/program_descriptors.hpp>
-#include <hostdevcommon/kernel_structs.h>
 
 namespace ttnn::prim {
 
@@ -113,7 +112,10 @@ void matmul_multi_core_reuse_mcast_1d_optimized_helper_descriptor(
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    uint32_t start_cb_index = tt::CBIndex::c_0,
+    // Default 0 mirrors tt::CBIndex::c_0; kept as a plain uint32_t to avoid pulling
+    // <hostdevcommon/kernel_structs.h> into this widely-included public header. A
+    // static_assert in the .cpp confirms the equivalence.
+    uint32_t start_cb_index = 0,
     std::optional<CoreRangeSet> restricted_cores = std::nullopt);
 
 namespace reuse_mcast_1d_optimized_helpers {

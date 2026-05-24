@@ -6496,6 +6496,12 @@ void matmul_multi_core_reuse_mcast_1d_optimized_helper_descriptor(
     using namespace tt;
     using namespace operations::matmul::utilities;
 
+    // The header declares start_cb_index with a plain uint32_t default of 0 to avoid pulling
+    // <hostdevcommon/kernel_structs.h> into a widely-included public header. Validate that
+    // the legacy spelling tt::CBIndex::c_0 still corresponds to 0 so existing callers that
+    // relied on the named default get the same behaviour.
+    static_assert(static_cast<uint32_t>(tt::CBIndex::c_0) == 0, "tt::CBIndex::c_0 must be 0");
+
     auto config = std::get<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config);
 
     // The gather_in0 path is the one used by the CCL+matmul fused callers
