@@ -216,6 +216,7 @@ If the legacy code has no multi-`KernelDescriptor` work split, this section read
 For each legacy RTA or CTA that should *not* survive the port, list it with the replacement primitive:
 
 - **Buffer-address RTAs** (`tensor.buffer()` / `tensor.buffer()->address()` in legacy RTA values; `get_arg_val<uint32_t>(N)` in kernel passed to `TensorAccessor`): replaced by `TensorBinding`. List each kernel's affected RTA slot.
+  - *Exotic-case exception.* If the audit flagged a binding as Step 0.5 YELLOW **and** its access pattern is confirmed exotic (Step 0.1 Check 3 user override — *not* auditor self-classification), the binding becomes a `TensorBinding` *plus* a kernel-side `TensorAccessor(ta::name).get_bank_base_address()` call (landed 2026-05-24 via PR #45091). The base pointer feeds the existing kernel-side address arithmetic; the binding still flows through the typed channel. Inelegant but acceptable — this is the *sanctioned* bridge, not a workaround. List each affected binding here for traceability.
 - **Magic CB indices in CTAs**: replaced by `DFBBinding`. List each kernel's affected CTA slot.
 - **`TensorAccessorArgs` plumbing**: replaced by the binding mechanism end-to-end. List each `TensorAccessorArgs(buffer).append_to(cta)` site and its kernel-side `TensorAccessorArgs<N>()` / `next_compile_time_args_offset()` chain.
 - **Semaphore-ID RTAs**: replaced by `SemaphoreBinding`. List each kernel's affected RTA slot.
@@ -269,6 +270,8 @@ After all resources are built, assemble the `ProgramSpec` (collecting `kernels`,
 - Modify a kernel's `wait_front` / `pop_front` calls to "balance" a DFB's producer / consumer topology. The host-side spec validator's "every DFB needs ≥1 PRODUCER and ≥1 CONSUMER" check is satisfied by adjusting the *binding* declaration on the host (declare the conditional-side endpoint unconditionally), not by adding consumes/produces inside the kernel. Per-execution DFB state is reinitialized, so a tile produced and never consumed is harmless across enqueues.
 
 If any of these appear in your draft, **stop and report**. The likely cause is a structural decision during planning that should be revisited.
+
+**Exception — exotic-case bindings.** If the audit flagged a `TensorParameter` as Step 0.5 YELLOW *and* its access pattern is confirmed exotic (Step 0.1 Check 3 user override), the sanctioned bridge is `TensorAccessor::get_bank_base_address` (landed 2026-05-24 via PR #45091) — see [Plan the Spec → Dropped Plumbing](#dropped-plumbing). The binding still flows through the typed channel; only the *base pointer* is extracted via the accessor, not the address threaded through an RTA. This is the one carve-out from the "buffer address through an RTA" stop signal above.
 
 ---
 
