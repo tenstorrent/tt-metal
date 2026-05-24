@@ -49,7 +49,7 @@ TensorPtr create_causal_mask(
 }
 
 // Sample next token using greedy decoding (argmax)
-const uint32_t sample_token(const TensorPtr& logits, const int position) {
+uint32_t sample_token(const TensorPtr& logits, const int position) {
     if (position == 0) {
         throw std::invalid_argument("position must be at least 1");
     }
@@ -86,7 +86,7 @@ void run_inference_with_kv_cache(
     std::shared_ptr<ttml::models::llama::Llama>& model,
     const std::vector<uint32_t>& prompt_tokens,
     const InferenceConfig& inference_config,
-    const uint32_t vocab_size,
+    [[maybe_unused]] const uint32_t vocab_size,
     const uint32_t max_seq_len,
     const ttml::models::llama::LlamaConfig& llama_config,
     ttnn::distributed::MeshDevice* device) {
@@ -189,7 +189,7 @@ void run_inference_no_cache(
     std::shared_ptr<ttml::models::llama::Llama>& model,
     const std::vector<uint32_t>& prompt_tokens,
     const InferenceConfig& inference_config,
-    const uint32_t vocab_size,
+    [[maybe_unused]] const uint32_t vocab_size,
     const uint32_t max_seq_len,
     ttnn::distributed::MeshDevice* device) {
     fmt::print("\n{}\n", std::string(80, '='));

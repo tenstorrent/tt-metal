@@ -102,7 +102,7 @@ std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const Trainin
     }
 
     auto create_dataset =
-        [](const auto &data_source, const auto seq_len, const auto &tokenizer_type, auto &train_config) {
+        [](const auto &data_source, const auto seq_len, const auto &tokenizer_type, [[maybe_unused]] auto &train_config) {
             if (tokenizer_type == "char") {
                 auto [dataset, tokenizer] =
                     ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
