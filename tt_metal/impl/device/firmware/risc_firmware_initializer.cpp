@@ -545,10 +545,21 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
 
         // Phase 2: sleep 100ms so all BRISCs across all devices drain NIU-SLV in parallel.
         // GAP-L4 (#42429): Log FIX WW Phase 2 boundary for post-mortem timing visibility.
+        // GAP-L5 (#42429): Elapsed timer around sleep — OS scheduler jitter on CI runners
+        // can cause the 100ms sleep to actually take 500ms+, which shifts Phase 3 timing.
         log_info(
             tt::LogAlways,
             "run_launch_phase: FIX WW Phase 2 — sleeping 100ms for NIU-SLV drain. (#42429)");
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        {
+            const auto sleep_start = std::chrono::steady_clock::now();
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            const auto sleep_actual_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - sleep_start).count();
+            log_info(
+                tt::LogAlways,
+                "run_launch_phase: FIX WW Phase 2 — actual sleep {}ms (requested 100ms). (#42429)",
+                sleep_actual_ms);
+        }
 
         // Phase 3: re-assert all cores.
         for (tt::ChipId device_id : device_ids) {
@@ -620,6 +631,11 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
                 // never comes. NOC1 router/NIU-SLV is independent and unaffected.
                 // Use NOC1 proactively for all non-MMIO firmware writes — eliminates
                 // the 4 × 5s = 20s timeout cascade that FIX WW failed to prevent.
+                log_info(
+                    tt::LogAlways,
+                    "run_launch_phase: FIX KL — switching to NOC1 for non-MMIO device {} "
+                    "firmware init (bypass stuck NOC0 NIU-SLV). (#42429)",
+                    device_id);
                 tt::umd::NocIdSwitcher noc1_guard(tt::umd::NocId::NOC1);
                 initialize_and_launch_firmware(device_id);
                 const auto pass2a_dev_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -627,7 +643,7 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
                 log_info(
                     tt::LogAlways,
                     "run_launch_phase: Pass 2a — device {} initialize_and_launch_firmware "
-                    "complete in {}ms. (#42429)",
+                    "complete in {}ms (via NOC1, FIX KL). (#42429)",
                     device_id,
                     pass2a_dev_ms);
             } catch (const std::exception& e) {

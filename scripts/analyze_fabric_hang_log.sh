@@ -1153,12 +1153,17 @@ FIX_VV_DONE=$(grep -cE 'FIX VV.*deferred Tensix reset done' "$CLEAN" 2>/dev/null
 FIX_VV_SKIP=$(grep -cE 'FIX VV.*skipping deferred Tensix reset' "$CLEAN" 2>/dev/null; :)
 FIX_VV_ABORT=$(grep -cE 'FIX VV.*deferred Tensix reset aborted' "$CLEAN" 2>/dev/null; :)
 # FIX WW (#42429): Tensix NOC data-VC recovery via deassert+re-assert cycle before Pass 2a.
-# Success: "FIX WW — Tensix NOC recovery cycle done for device N (M cores)"
-# Skipped: "FIX WW — skipping Tensix NOC recovery cycle for device N (relay already broken)"
-# Aborted: "FIX WW — Tensix NOC recovery aborted for device N: ..."
-FIX_WW_DONE=$(grep -cE 'FIX WW.*Tensix NOC recovery cycle done' "$CLEAN" 2>/dev/null; :)
+# Actual log patterns (v2 — batched deassert/sleep/assert):
+#   Deassert done: "FIX WW — deasserted N cores on device M; sleeping 100ms ..."
+#   Assert done:   "FIX WW — re-asserted N cores on device M."
+#   Skipped:       "FIX WW — skipping Tensix NOC recovery deassert for device N ..."
+#                  "FIX WW — skipping Tensix NOC recovery assert for device N ..."
+#   Aborted:       "FIX WW — deassert phase aborted for device N: ..."
+#                  "FIX WW — assert phase aborted for device N: ..."
+FIX_WW_DEASSERT_DONE=$(grep -cE 'FIX WW.*deasserted [0-9]+ cores on device' "$CLEAN" 2>/dev/null; :)
+FIX_WW_ASSERT_DONE=$(grep -cE 'FIX WW.*re-asserted [0-9]+ cores on device' "$CLEAN" 2>/dev/null; :)
 FIX_WW_SKIP=$(grep -cE 'FIX WW.*skipping Tensix NOC recovery' "$CLEAN" 2>/dev/null; :)
-FIX_WW_ABORT=$(grep -cE 'FIX WW.*Tensix NOC recovery aborted' "$CLEAN" 2>/dev/null; :)
+FIX_WW_ABORT=$(grep -cE 'FIX WW.*(deassert|assert) phase aborted' "$CLEAN" 2>/dev/null; :)
 # run_launch_phase elapsed timer (GAP-R20).
 # Log: "run_launch_phase: complete — total_elapsed=NNNms"
 GAP_R20_FIRES=$(grep -cE 'run_launch_phase: complete.*total_elapsed=' "$CLEAN" 2>/dev/null; :)
@@ -1179,6 +1184,9 @@ PASS2B_DEV_COUNT=$(grep -cE 'Pass 2b.*device [0-9]+ initialize_and_launch_firmwa
 # GAP-S4 (#42429): FIX WW Phase 2 sleep boundary log.
 # Log: "FIX WW Phase 2 — sleeping 100ms for NIU-SLV drain"
 FIX_WW_PHASE2_FIRES=$(grep -cE 'FIX WW Phase 2.*sleeping 100ms' "$CLEAN" 2>/dev/null; :)
+# GAP-L5 (#42429): FIX WW Phase 2 actual sleep duration — detect OS scheduler jitter.
+# Log: "FIX WW Phase 2 — actual sleep NNNms (requested 100ms)"
+FIX_WW_PHASE2_ACTUAL_MS=$(grep -oP 'FIX WW Phase 2.*actual sleep \K[0-9]+' "$CLEAN" 2>/dev/null | sort -rn | head -1)
 # FIX PF (#42429): UMD base fw heartbeat detected at Metal exit — skip writing Metal exit signal.
 # Fires in risc_firmware_initializer.cpp when BRISC is still running base-UMD fw at process shutdown.
 # Clears stale fw_launch_addr to unblock next session.  Distinct from FIX PA (which fires during init).
@@ -1220,6 +1228,9 @@ FIX_IJ_DEFERRED=$(grep -cE 'FIX IJ deferred-quiesce.*restored fw_launch_addr' "$
 FIX_IJ_MISMATCH=$(grep -cE 'FIX IJ.*readback MISMATCH' "$CLEAN" 2>/dev/null; :)
 # FIX KL (#42429): MMIO base-UMD FIX EE path restore.
 FIX_KL_FIRES=$(grep -cE 'FIX IJ EE.*FIX KL path' "$CLEAN" 2>/dev/null; :)
+# FIX KL (#42429): NOC1 switch for non-MMIO Pass 2a firmware init.
+# Log: "FIX KL — switching to NOC1 for non-MMIO device N firmware init"
+FIX_KL_NOC1_FIRES=$(grep -cE 'FIX KL.*switching to NOC1' "$CLEAN" 2>/dev/null; :)
 # FIX GJ (#42429): dispatch eligibility summary in device_manager.cpp.
 FIX_GJ_FULL=$(grep -cE 'FIX GJ.*all.*devices eligible' "$CLEAN" 2>/dev/null; :)
 FIX_GJ_PARTIAL=$(grep -cE 'FIX GJ.*dispatch init.*skipped' "$CLEAN" 2>/dev/null; :)
@@ -1870,12 +1881,15 @@ if [ "${FIX_VV_DONE:-0}" -gt 0 ] || [ "${FIX_VV_SKIP:-0}" -gt 0 ] || [ "${FIX_VV
         echo "     WARNING: FIX VV abort(s) — coord lookup failed for some devices. Check SoC descriptor."
     fi
 fi
-if [ "${FIX_WW_DONE:-0}" -gt 0 ] || [ "${FIX_WW_SKIP:-0}" -gt 0 ] || [ "${FIX_WW_ABORT:-0}" -gt 0 ]; then
-    echo "  => [FIX WW] Tensix NOC recovery: ${FIX_WW_DONE:-0} done, ${FIX_WW_SKIP:-0} skipped (relay broken), ${FIX_WW_ABORT:-0} aborted."
+if [ "${FIX_WW_DEASSERT_DONE:-0}" -gt 0 ] || [ "${FIX_WW_ASSERT_DONE:-0}" -gt 0 ] || [ "${FIX_WW_SKIP:-0}" -gt 0 ] || [ "${FIX_WW_ABORT:-0}" -gt 0 ]; then
+    echo "  => [FIX WW] Tensix NOC recovery: deassert=${FIX_WW_DEASSERT_DONE:-0}, re-assert=${FIX_WW_ASSERT_DONE:-0}, skip=${FIX_WW_SKIP:-0}, abort=${FIX_WW_ABORT:-0}."
     echo "     FIX WW deasserts+re-asserts all Tensix cores to drain stuck NIU-SLV NOC state."
     echo "     Without FIX WW: write_core_immediate to Tensix L1 times out (5s per device) even with live relay."
     if [ "${FIX_WW_SKIP:-0}" -gt 0 ]; then
         echo "     Non-MMIO devices with relay already broken were skipped (expected when FIX UU failed)."
+    fi
+    if [ "${FIX_WW_DEASSERT_DONE:-0}" -gt 0 ] && [ "${FIX_WW_ASSERT_DONE:-0}" -eq 0 ]; then
+        echo "     WARNING: deassert done but no re-assert — BRISCs left running from prior session."
     fi
 fi
 if [ "${FIX_NZ_FIRES:-0}" -gt 0 ]; then
@@ -1888,6 +1902,12 @@ if [ "${FIX_BX_FIRES:-0}" -gt 0 ]; then
 fi
 if [ "${FIX_WW_PHASE2_FIRES:-0}" -gt 0 ]; then
     echo "  => [FIX WW Phase 2] NIU-SLV drain sleep executed ${FIX_WW_PHASE2_FIRES} time(s)."
+    if [ -n "${FIX_WW_PHASE2_ACTUAL_MS}" ]; then
+        echo "     Actual sleep: ${FIX_WW_PHASE2_ACTUAL_MS}ms (requested 100ms)."
+        if [ "${FIX_WW_PHASE2_ACTUAL_MS}" -gt 500 ]; then
+            echo "     WARNING: OS scheduler jitter > 5x requested — CI runner under heavy load."
+        fi
+    fi
 fi
 if [ "${PASS2A_DEV_COUNT:-0}" -gt 0 ]; then
     echo "  => [Pass 2a per-device] ${PASS2A_DEV_COUNT} non-MMIO device(s) initialized, max elapsed: ${PASS2A_DEV_MAX_MS:-?}ms."
@@ -2350,7 +2370,12 @@ echo "  FIX_BY_FIRES:              ${FIX_BY_FIRES:-0}  (quiesce probe detected d
 echo "  FIX_XX_FIRES:              ${FIX_XX_FIRES:-0}  (deassert guard — prevented deassert on non-asserted channel)"
 echo "  FIX_NZ_FIRES:              ${FIX_NZ_FIRES:-0}  (Pass 2a skipped non-MMIO device — relay broken before init)"
 echo "  FIX_BX_FIRES:              ${FIX_BX_FIRES:-0}  (Pass 2a caught relay failure mid-init — partial L1 corruption risk)"
-echo "  FIX_WW_PHASE2_FIRES:       ${FIX_WW_PHASE2_FIRES:-0}  (FIX WW Phase 2 NIU-SLV drain sleep executed)"
+echo "  FIX_WW_DEASSERT_DONE:      ${FIX_WW_DEASSERT_DONE:-0}  (FIX WW deassert phase completed — cores running)"
+echo "  FIX_WW_ASSERT_DONE:       ${FIX_WW_ASSERT_DONE:-0}  (FIX WW re-assert phase completed — cores halted)"
+echo "  FIX_WW_SKIP:              ${FIX_WW_SKIP:-0}  (FIX WW skipped — relay already broken)"
+echo "  FIX_WW_ABORT:             ${FIX_WW_ABORT:-0}  (FIX WW phase aborted — exception during deassert/assert)"
+echo "  FIX_WW_PHASE2_FIRES:      ${FIX_WW_PHASE2_FIRES:-0}  (FIX WW Phase 2 NIU-SLV drain sleep executed)"
+echo "  FIX_WW_PHASE2_ACTUAL_MS:  ${FIX_WW_PHASE2_ACTUAL_MS:-n/a}ms  (FIX WW Phase 2 actual sleep — jitter check)"
 echo "  PASS2A_DEV_COUNT:          ${PASS2A_DEV_COUNT:-0}  (non-MMIO devices initialized in Pass 2a)"
 echo "  PASS2A_DEV_MAX_MS:         ${PASS2A_DEV_MAX_MS:-n/a}ms  (longest Pass 2a per-device elapsed)"
 echo "  PASS2B_DEV_COUNT:          ${PASS2B_DEV_COUNT:-0}  (MMIO devices initialized in Pass 2b)"
@@ -2377,6 +2402,7 @@ echo "  FIX_IJ_QUIESCE:            ${FIX_IJ_QUIESCE:-0}  (FIX IJ quiesce path re
 echo "  FIX_IJ_DEFERRED:           ${FIX_IJ_DEFERRED:-0}  (FIX IJ deferred-quiesce restores)"
 echo "  FIX_IJ_MISMATCH:           ${FIX_IJ_MISMATCH:-0}  (*** FIX IJ readback MISMATCH ***)"
 echo "  FIX_KL_FIRES:              ${FIX_KL_FIRES:-0}  (FIX KL — MMIO base-UMD FIX EE path restore)"
+echo "  FIX_KL_NOC1_FIRES:         ${FIX_KL_NOC1_FIRES:-0}  (FIX KL — NOC1 switch for non-MMIO Pass 2a)"
 echo "  FIX_GI_MISMATCH:           ${FIX_GI_MISMATCH:-0}  (*** readback MISMATCH on fw_launch_addr write ***)"
 echo "  FIX_GI_VERIFY:             ${FIX_GI_VERIFY:-0}  (fw_launch_addr readback verified OK)"
 echo "  FIX_GJ_FULL:               ${FIX_GJ_FULL:-0}  (dispatch init: all devices eligible)"
@@ -2637,6 +2663,13 @@ fi
 if [ "${FIX_KL_FIRES:-0}" -gt 0 ]; then
     echo "  => [FIX KL] ${FIX_KL_FIRES} MMIO base-UMD channels restored via FIX EE path."
     echo "     These channels took soft-reset (FIX S9) but were not in skip_soft_reset_channels."
+fi
+if [ "${FIX_KL_NOC1_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX KL NOC1] ${FIX_KL_NOC1_FIRES} non-MMIO device(s) used NOC1 for firmware init (Pass 2a)."
+    echo "     NOC1 bypasses stuck Tensix NOC0 NIU-SLV from prior SIGKILL session."
+    if [ "${PASS2A_DEV_MAX_MS:-0}" -gt 5000 ]; then
+        echo "     WARNING: Pass 2a > 5s despite NOC1 — possible NOC1 NIU-SLV issue too (new failure class)."
+    fi
 fi
 if [ "${FIX_GJ_PARTIAL:-0}" -gt 0 ]; then
     echo "  => [FIX GJ] Dispatch init had skipped devices (${FIX_GJ_PARTIAL} partial-eligibility event(s))."
