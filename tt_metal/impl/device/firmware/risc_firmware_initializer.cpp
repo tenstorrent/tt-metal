@@ -543,6 +543,10 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
         }
 
         // Phase 2: sleep 100ms so all BRISCs across all devices drain NIU-SLV in parallel.
+        // GAP-L4 (#42429): Log FIX WW Phase 2 boundary for post-mortem timing visibility.
+        log_info(
+            tt::LogAlways,
+            "run_launch_phase: FIX WW Phase 2 — sleeping 100ms for NIU-SLV drain. (#42429)");
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
         // Phase 3: re-assert all cores.
@@ -586,6 +590,11 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
         }
 
         // ── Pass 2a: initialize non-MMIO devices (relay still alive) ──
+        // GAP-L2 (#42429): Log Pass 2a entry for post-mortem phase boundary visibility.
+        log_info(
+            tt::LogAlways,
+            "run_launch_phase: Pass 2a — beginning non-MMIO firmware init ({} device(s)). (#42429)",
+            device_ids.size());
         for (tt::ChipId device_id : device_ids) {
             if (mmio_ids_set.count(device_id)) continue;
             // FIX NZ (#42429): skip if relay is already broken (detected during Pass 1 reset_cores).
@@ -599,24 +608,52 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
             }
             // FIX BX (#42429): belt-and-suspenders — catch relay failures that arise during
             // initialize_and_launch_firmware itself (FIX BW marks relay_broken and re-throws).
+            // GAP-L1 (#42429): Per-device elapsed timer for post-mortem — distinguishes single
+            // 5s UMD timeout from 4 sequential 5s timeouts (20s total).
+            const auto pass2a_dev_start = std::chrono::steady_clock::now();
             try {
                 initialize_and_launch_firmware(device_id);
+                const auto pass2a_dev_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - pass2a_dev_start).count();
+                log_info(
+                    tt::LogAlways,
+                    "run_launch_phase: Pass 2a — device {} initialize_and_launch_firmware "
+                    "complete in {}ms. (#42429)",
+                    device_id,
+                    pass2a_dev_ms);
             } catch (const std::exception& e) {
+                const auto pass2a_dev_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - pass2a_dev_start).count();
                 log_warning(
                     tt::LogAlways,
                     "run_launch_phase: FIX BX — initialize_and_launch_firmware threw for "
-                    "non-MMIO device {} (relay likely broken mid-init): {}. "
+                    "non-MMIO device {} after {}ms (relay likely broken mid-init): {}. "
                     "Skipping — fabric init will handle on next session. (#42429)",
                     device_id,
+                    pass2a_dev_ms,
                     e.what());
             }
         }
 
         // ── Pass 2b: initialize MMIO devices (may write fw_launch_addr → kills relay) ──
         // All non-MMIO reset_cores and init_firmware calls are done; relay death is now safe.
+        // GAP-L3 (#42429): Log Pass 2b entry for post-mortem phase boundary visibility.
+        log_info(
+            tt::LogAlways,
+            "run_launch_phase: Pass 2b — beginning MMIO firmware init. (#42429)");
         for (tt::ChipId device_id : device_ids) {
             if (!mmio_ids_set.count(device_id)) continue;
+            // GAP-L1 (#42429): Per-device elapsed timer (matches Pass 2a pattern).
+            const auto pass2b_dev_start = std::chrono::steady_clock::now();
             initialize_and_launch_firmware(device_id);
+            const auto pass2b_dev_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - pass2b_dev_start).count();
+            log_info(
+                tt::LogAlways,
+                "run_launch_phase: Pass 2b — device {} initialize_and_launch_firmware "
+                "complete in {}ms. (#42429)",
+                device_id,
+                pass2b_dev_ms);
         }
 
         // GAP-R20 (#42429): Total elapsed timer for run_launch_phase.

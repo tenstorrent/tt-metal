@@ -1163,6 +1163,22 @@ FIX_WW_ABORT=$(grep -cE 'FIX WW.*Tensix NOC recovery aborted' "$CLEAN" 2>/dev/nu
 # Log: "run_launch_phase: complete — total_elapsed=NNNms"
 GAP_R20_FIRES=$(grep -cE 'run_launch_phase: complete.*total_elapsed=' "$CLEAN" 2>/dev/null; :)
 GAP_R20_MAX_MS=$(grep -oP 'run_launch_phase: complete.*total_elapsed=\K[0-9]+' "$CLEAN" 2>/dev/null | sort -rn | head -1)
+# GAP-S1 (#42429): FIX NZ — non-MMIO device skipped in Pass 2a due to broken relay.
+# Log: "FIX NZ — skipping initialize_and_launch_firmware for non-MMIO device N (relay broken)"
+FIX_NZ_FIRES=$(grep -cE 'FIX NZ.*skipping initialize_and_launch_firmware' "$CLEAN" 2>/dev/null; :)
+# GAP-S2 (#42429): FIX BX — relay broke mid-Pass-2a during initialize_and_launch_firmware.
+# Log: "FIX BX — initialize_and_launch_firmware threw for non-MMIO device N"
+FIX_BX_FIRES=$(grep -cE 'FIX BX.*initialize_and_launch_firmware threw' "$CLEAN" 2>/dev/null; :)
+# GAP-S3 (#42429): Pass 2a/2b per-device elapsed — extract per-device timings and find outliers.
+# Log: "Pass 2a — device N initialize_and_launch_firmware complete in NNNms"
+# Log: "Pass 2b — device N initialize_and_launch_firmware complete in NNNms"
+PASS2A_DEV_MAX_MS=$(grep -oP 'Pass 2a.*device [0-9]+ initialize_and_launch_firmware complete in \K[0-9]+' "$CLEAN" 2>/dev/null | sort -rn | head -1)
+PASS2A_DEV_COUNT=$(grep -cE 'Pass 2a.*device [0-9]+ initialize_and_launch_firmware complete' "$CLEAN" 2>/dev/null; :)
+PASS2B_DEV_MAX_MS=$(grep -oP 'Pass 2b.*device [0-9]+ initialize_and_launch_firmware complete in \K[0-9]+' "$CLEAN" 2>/dev/null | sort -rn | head -1)
+PASS2B_DEV_COUNT=$(grep -cE 'Pass 2b.*device [0-9]+ initialize_and_launch_firmware complete' "$CLEAN" 2>/dev/null; :)
+# GAP-S4 (#42429): FIX WW Phase 2 sleep boundary log.
+# Log: "FIX WW Phase 2 — sleeping 100ms for NIU-SLV drain"
+FIX_WW_PHASE2_FIRES=$(grep -cE 'FIX WW Phase 2.*sleeping 100ms' "$CLEAN" 2>/dev/null; :)
 # FIX PF (#42429): UMD base fw heartbeat detected at Metal exit — skip writing Metal exit signal.
 # Fires in risc_firmware_initializer.cpp when BRISC is still running base-UMD fw at process shutdown.
 # Clears stale fw_launch_addr to unblock next session.  Distinct from FIX PA (which fires during init).
@@ -1862,6 +1878,26 @@ if [ "${FIX_WW_DONE:-0}" -gt 0 ] || [ "${FIX_WW_SKIP:-0}" -gt 0 ] || [ "${FIX_WW
         echo "     Non-MMIO devices with relay already broken were skipped (expected when FIX UU failed)."
     fi
 fi
+if [ "${FIX_NZ_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX NZ] Pass 2a skipped ${FIX_NZ_FIRES} non-MMIO device(s) due to broken relay."
+    echo "     These devices had relay_broken set before Pass 2a — firmware not loaded."
+fi
+if [ "${FIX_BX_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX BX] Pass 2a caught ${FIX_BX_FIRES} relay failure(s) mid-initialize_and_launch_firmware."
+    echo "     WARNING: relay died DURING firmware write — partial L1 corruption possible."
+fi
+if [ "${FIX_WW_PHASE2_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX WW Phase 2] NIU-SLV drain sleep executed ${FIX_WW_PHASE2_FIRES} time(s)."
+fi
+if [ "${PASS2A_DEV_COUNT:-0}" -gt 0 ]; then
+    echo "  => [Pass 2a per-device] ${PASS2A_DEV_COUNT} non-MMIO device(s) initialized, max elapsed: ${PASS2A_DEV_MAX_MS:-?}ms."
+    if [ "${PASS2A_DEV_MAX_MS:-0}" -gt 5000 ]; then
+        echo "     WARNING: Pass 2a device elapsed > 5s — likely UMD timeout on at least one non-MMIO device."
+    fi
+fi
+if [ "${PASS2B_DEV_COUNT:-0}" -gt 0 ]; then
+    echo "  => [Pass 2b per-device] ${PASS2B_DEV_COUNT} MMIO device(s) initialized, max elapsed: ${PASS2B_DEV_MAX_MS:-?}ms."
+fi
 if [ "${GAP_R20_FIRES:-0}" -gt 0 ]; then
     echo "  => [GAP-R20] run_launch_phase total elapsed: max ${GAP_R20_MAX_MS:-?}ms across ${GAP_R20_FIRES} device set(s)."
     echo "     Includes: Pass 1 (reset_cores), FIX TV/UU/VV/WW, Pass 2a (non-MMIO init), Pass 2b (MMIO init)."
@@ -2312,6 +2348,13 @@ echo "  FIX_BH_FIRES:              ${FIX_BH_FIRES:-0}  (ERISC ROM boot timeout a
 echo "  FIX_XZ_FIRES:              ${FIX_XZ_FIRES:-0}  (heartbeat poll after teardown force-reset — ERISC restart wait)"
 echo "  FIX_BY_FIRES:              ${FIX_BY_FIRES:-0}  (quiesce probe detected degraded fabric — test skipped)"
 echo "  FIX_XX_FIRES:              ${FIX_XX_FIRES:-0}  (deassert guard — prevented deassert on non-asserted channel)"
+echo "  FIX_NZ_FIRES:              ${FIX_NZ_FIRES:-0}  (Pass 2a skipped non-MMIO device — relay broken before init)"
+echo "  FIX_BX_FIRES:              ${FIX_BX_FIRES:-0}  (Pass 2a caught relay failure mid-init — partial L1 corruption risk)"
+echo "  FIX_WW_PHASE2_FIRES:       ${FIX_WW_PHASE2_FIRES:-0}  (FIX WW Phase 2 NIU-SLV drain sleep executed)"
+echo "  PASS2A_DEV_COUNT:          ${PASS2A_DEV_COUNT:-0}  (non-MMIO devices initialized in Pass 2a)"
+echo "  PASS2A_DEV_MAX_MS:         ${PASS2A_DEV_MAX_MS:-n/a}ms  (longest Pass 2a per-device elapsed)"
+echo "  PASS2B_DEV_COUNT:          ${PASS2B_DEV_COUNT:-0}  (MMIO devices initialized in Pass 2b)"
+echo "  PASS2B_DEV_MAX_MS:         ${PASS2B_DEV_MAX_MS:-n/a}ms  (longest Pass 2b per-device elapsed)"
 echo "  GAP_A_FIRES:               ${GAP_A_FIRES:-0}  (extended FIX Z guard — read_completion_queue_event rejected degraded non-MMIO)"
 echo "  GAP_B_FIRES:               ${GAP_B_FIRES:-0}  (FIX PD catch logged MMIO PCIe write failure — was silently swallowed)"
 echo "  GAP_C_FIRES:               ${GAP_C_FIRES:-0}  (copy_buffer_data relay guard — buffer read rejected on degraded non-MMIO)"
