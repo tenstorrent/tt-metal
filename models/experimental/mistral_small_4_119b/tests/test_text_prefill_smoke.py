@@ -50,6 +50,7 @@ pytest.importorskip("transformers")
 pytest.importorskip("transformers.models.mistral4.modeling_mistral4", reason="Mistral4 required")
 
 _N_LAYERS = int(os.environ.get("MISTRAL4_PREFILL_N_LAYERS", "2"))
+_LAST_TOKEN_ONLY = os.environ.get("MISTRAL4_PREFILL_LAST_TOKEN_ONLY", "0") == "1"
 
 
 def _state_dict_prefixes(n_layers: int) -> tuple:
@@ -115,6 +116,7 @@ def test_mistral_small_4_prefill_smoke(reset_seeds, mesh_device):
 
     seq_len = input_ids.shape[1]
     logger.info(f"Prompt: {prompt!r}  →  {seq_len} tokens")
+    logger.info(f"Last-token-only logits mode: {_LAST_TOKEN_ONLY}")
 
     logger.info(f"Building TtMistral4TextModel ({_N_LAYERS} layers)...")
     _log_mem("before model construction")
@@ -163,7 +165,10 @@ def test_mistral_small_4_prefill_smoke(reset_seeds, mesh_device):
     # The next call (under the signpost) is what Tracy will profile.
     logger.info("Compile pass for prefill_device...")
     t_compile = time.perf_counter()
-    _logits_compile = model.prefill_device(input_ids_tt, seq_len)
+    if _LAST_TOKEN_ONLY:
+        _logits_compile = model.prefill_device_last_token_logits(input_ids_tt, seq_len)
+    else:
+        _logits_compile = model.prefill_device(input_ids_tt, seq_len)
     ttnn.synchronize_device(mesh_device)
     t_compile = time.perf_counter() - t_compile
     ttnn.deallocate(_logits_compile)
@@ -175,7 +180,10 @@ def test_mistral_small_4_prefill_smoke(reset_seeds, mesh_device):
     signpost("Performance pass")
     logger.info("Measured prefill pass...")
     t_measured = time.perf_counter()
-    logits_tt = model.prefill_device(input_ids_tt, seq_len)
+    if _LAST_TOKEN_ONLY:
+        logits_tt = model.prefill_device_last_token_logits(input_ids_tt, seq_len)
+    else:
+        logits_tt = model.prefill_device(input_ids_tt, seq_len)
     ttnn.synchronize_device(mesh_device)
     t_measured = time.perf_counter() - t_measured
     logger.info(f"Measured prefill wall-clock: {t_measured*1e3:.2f} ms")
@@ -190,11 +198,12 @@ def test_mistral_small_4_prefill_smoke(reset_seeds, mesh_device):
     ttnn.deallocate(logits_tt)
     ttnn.deallocate(input_ids_tt)
 
+    expected_seq = 1 if _LAST_TOKEN_ONLY else seq_len
     assert logits.shape == (
         1,
-        seq_len,
+        expected_seq,
         EXPECTED_VOCAB_SIZE,
-    ), f"Expected logits shape (1, {seq_len}, {EXPECTED_VOCAB_SIZE}), got {tuple(logits.shape)}"
+    ), f"Expected logits shape (1, {expected_seq}, {EXPECTED_VOCAB_SIZE}), got {tuple(logits.shape)}"
     top_token = logits[0, -1].argmax().item()
     logger.info(f"Top predicted token id at last position: {top_token}")
     logger.info(f"PASSED — model constructed and prefill completed for {_N_LAYERS} layers")

@@ -373,7 +373,7 @@ class TtMistral4MoELayer(LightweightModule):
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
-            packer_l1_acc=True,
+            packer_l1_acc=False,  # Optimize for P150: disable L1 packing overhead
         )
         # LoFi is safe for bf4 expert weights: quantization error (~0.0625) dominates
         # HiFi2's extra FPU precision, so halving FPU cycles has no meaningful PCC cost.
@@ -382,7 +382,7 @@ class TtMistral4MoELayer(LightweightModule):
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
-            packer_l1_acc=True,
+            packer_l1_acc=False,  # Optimize for P150: disable L1 packing overhead
         )
 
         mlp_prefix = layer_prefix + "mlp."
@@ -729,7 +729,7 @@ class TtMistral4MoELayer(LightweightModule):
                     self.expert_gate_up_list[i],
                     compute_kernel_config=self.expert_compute_kernel_config,
                     dtype=ttnn.bfloat8_b,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    memory_config=_mem,  # Optimize for P150: use L1 instead of DRAM
                     program_config=gu_pc,
                 )
                 gate_i = ttnn.slice(gate_up_i, [0, 0, 0, 0], [1, 1, seq_len, I], memory_config=_mem)
@@ -747,7 +747,7 @@ class TtMistral4MoELayer(LightweightModule):
                     self.expert_down_list[i],
                     compute_kernel_config=self.expert_compute_kernel_config,
                     dtype=ttnn.bfloat8_b,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    memory_config=_mem,  # Optimize for P150: use L1 instead of DRAM
                     program_config=d_pc,
                 )
                 ttnn.deallocate(hidden_i)
@@ -776,6 +776,7 @@ class TtMistral4MoELayer(LightweightModule):
             partial = partial_dram
         else:
             # ── Batched expert matmul (non-Blackhole) ──────────────────────
+            _mem = ttnn.L1_MEMORY_CONFIG
             x_exp = ttnn.repeat(
                 x, ttnn.Shape([self.experts_per_device, 1, 1, 1]), memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
@@ -786,25 +787,26 @@ class TtMistral4MoELayer(LightweightModule):
                 self.expert_gate_up,
                 compute_kernel_config=self.expert_compute_kernel_config,
                 dtype=ttnn.bfloat8_b,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=_mem,
             )
             ttnn.deallocate(x_exp)
+            # SliceDeviceOperation optimized: use L1_INTERLEAVED for intermediate tensors
             gate_all = ttnn.slice(
                 gate_up_all,
                 [0, 0, 0, 0],
                 [self.experts_per_device, 1, seq_len, I],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=ttnn.L1_INTERLEAVED_MEMORY_CONFIG,
             )
             up_all = ttnn.slice(
                 gate_up_all,
                 [0, 0, 0, I],
                 [self.experts_per_device, 1, seq_len, 2 * I],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=ttnn.L1_INTERLEAVED_MEMORY_CONFIG,
             )
             ttnn.deallocate(gate_up_all)
-            gate_silu = ttnn.silu(gate_all, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            gate_silu = ttnn.silu(gate_all, memory_config=_mem)
             ttnn.deallocate(gate_all)
-            hidden_all = ttnn.multiply(gate_silu, up_all, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            hidden_all = ttnn.multiply(gate_silu, up_all, memory_config=_mem)
             ttnn.deallocate(gate_silu)
             ttnn.deallocate(up_all)
             expert_out_all = ttnn.matmul(
@@ -812,17 +814,21 @@ class TtMistral4MoELayer(LightweightModule):
                 self.expert_down,
                 compute_kernel_config=self.expert_compute_kernel_config,
                 dtype=ttnn.bfloat8_b,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=_mem,
             )
             ttnn.deallocate(hidden_all)
             routing_t = ttnn.permute(routing_weights, [3, 0, 2, 1])
             ttnn.deallocate(routing_weights)
-            weighted_all = ttnn.multiply(expert_out_all, routing_t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            weighted_all = ttnn.multiply(expert_out_all, routing_t, memory_config=_mem)
             ttnn.deallocate(expert_out_all)
             ttnn.deallocate(routing_t)
-            partial = ttnn.sum(weighted_all, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            partial = ttnn.sum(weighted_all, dim=0, memory_config=_mem)
             ttnn.deallocate(weighted_all)
             partial = ttnn.reshape(partial, [1, 1, seq_len, HIDDEN_SIZE])
+            # all_reduce_sum expects DRAM input
+            partial_dram = ttnn.to_memory_config(partial, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(partial)
+            partial = partial_dram
 
         # ── All-reduce routed expert outputs across devices ─────────────────
         routed_out = _all_reduce_sum(partial, self.mesh_device, self.num_devices)
