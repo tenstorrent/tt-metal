@@ -682,28 +682,13 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
             // 5s UMD timeout from 4 sequential 5s timeouts (20s total).
             const auto pass2a_dev_start = std::chrono::steady_clock::now();
             try {
-                // FIX KL (#42429): After a prior session's SIGKILL, the relay ERISC
-                // leaves an in-flight NOC0 non-posted write to Tensix L1 unacknowledged.
-                // The relay uses DEFAULT_NOC=NOC0 for all data writes; NOC1 is untouched
-                // by normal operation and therefore clean after SIGKILL. Switching to
-                // NOC1 for all non-MMIO firmware writes bypasses the stuck NOC0 path.
-                // NOTE: FIX WW (deassert/100ms/re-assert) was removed because it ran
-                // old dispatch firmware during its 100ms window, which issued NOC1 writes
-                // that were then cut off by Phase 3 re-assert — dirtying NOC1 and causing
-                // FIX KL to also fail. Without FIX WW, NOC1 remains clean. (#42429)
-                log_info(
-                    tt::LogAlways,
-                    "run_launch_phase: FIX KL — switching to NOC1 for non-MMIO device {} "
-                    "firmware init (bypass stuck NOC0 NIU-SLV). (#42429)",
-                    device_id);
-                tt::umd::NocIdSwitcher noc1_guard(tt::umd::NocId::NOC1);
                 initialize_and_launch_firmware(device_id);
                 const auto pass2a_dev_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now() - pass2a_dev_start).count();
                 log_info(
                     tt::LogAlways,
                     "run_launch_phase: Pass 2a — device {} initialize_and_launch_firmware "
-                    "complete in {}ms (via NOC1, FIX KL). (#42429)",
+                    "complete in {}ms. (#42429)",
                     device_id,
                     pass2a_dev_ms);
             } catch (const std::exception& e) {
@@ -712,8 +697,8 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
                 log_warning(
                     tt::LogAlways,
                     "run_launch_phase: FIX BX — initialize_and_launch_firmware threw for "
-                    "non-MMIO device {} after {}ms (relay likely broken mid-init): {}. "
-                    "Skipping — fabric init will handle on next session. (#42429)",
+                    "non-MMIO device {} after {}ms: {}. "
+                    "Skipping. (#42429)",
                     device_id,
                     pass2a_dev_ms,
                     e.what());
