@@ -192,6 +192,11 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
     if (!cluster_.is_mock_or_emulated()) {
         terminate_active_ethernet_cores_on_all_chips();
 
+        // GAP-R20 (#42429): Total elapsed timer for run_launch_phase.
+        // Captures Pass 1 (reset_cores), FIX TV/UU/VV/WW, Pass 2a (non-MMIO), Pass 2b (MMIO).
+        // Post-mortem: if > 30s, likely relay timeouts in Pass 2a or FIX VV/WW failures.
+        const auto launch_phase_start = std::chrono::steady_clock::now();
+
         const auto mmio_ids_set = cluster_.mmio_chip_ids();
 
         // FIX XX (#42429): Two-pass launch to eliminate cooperative-ETH relay race.
@@ -575,6 +580,16 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
             initialize_and_launch_firmware(device_id);
         }
 
+        // GAP-R20 (#42429): Total elapsed timer for run_launch_phase.
+        const auto launch_phase_elapsed_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - launch_phase_start)
+                .count();
+        log_info(
+            tt::LogAlways,
+            "run_launch_phase: complete — total_elapsed={}ms, {} device(s). (#42429)",
+            launch_phase_elapsed_ms,
+            device_ids.size());
     }
     initialized_ = true;
 }
