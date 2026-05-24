@@ -430,7 +430,7 @@ TEST_F(NDShardingSqueezeRankStressTests, TestSqueezeRankStress) {
                 return;
             }
 
-            for (int val = 1; val <= upper_shape[current_shape.size()]; val++) {
+            for (uint32_t val = 1; val <= upper_shape[current_shape.size()]; val++) {
                 current_shape.push_back(val);
                 iterate_shapes_impl(upper_shape, current_shape, callback);
                 current_shape.pop_back();
@@ -1030,6 +1030,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     .cores_with_data = CoreRangeSet(CoreRange({0, 0}, {1, 1})),
                     .cores_in_group_1 = CoreRangeSet(CoreRange({0, 0}, {1, 1})),
+                    .cores_in_group_2 = {},
                     .num_shards_per_core_in_group_1 = 2,
                 },
         },
@@ -1043,6 +1044,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     .cores_with_data = CoreRangeSet(CoreRange({0, 0}, {1, 1})),
                     .cores_in_group_1 = CoreRangeSet(CoreRange({0, 0}, {1, 1})),
+                    .cores_in_group_2 = {},
                     .num_shards_per_core_in_group_1 = 2,
                 },
         },
@@ -1064,6 +1066,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     .cores_with_data = CoreRangeSet(CoreRange({0, 0})),
                     .cores_in_group_1 = CoreRangeSet(CoreRange({0, 0})),
+                    .cores_in_group_2 = {},
                     .num_shards_per_core_in_group_1 = 1,
                 },
         },
@@ -1077,6 +1080,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     .cores_with_data = CoreRangeSet(CoreRange({0, 0}, {1, 0})),
                     .cores_in_group_1 = CoreRangeSet(CoreRange({0, 0}, {1, 0})),
+                    .cores_in_group_2 = {},
                     .num_shards_per_core_in_group_1 = 1,
                 },
         },
@@ -1092,6 +1096,7 @@ INSTANTIATE_TEST_SUITE_P(
                         CoreRange({0, 0}, {1, 0}), CoreRange({0, 1})}),
                     .cores_in_group_1 = CoreRangeSet(std::vector<CoreRange>{
                         CoreRange({0, 0}, {1, 0}), CoreRange({0, 1})}),
+                    .cores_in_group_2 = {},
                     .num_shards_per_core_in_group_1 = 1,
                 },
         },
@@ -1105,6 +1110,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     .cores_with_data = CoreRangeSet(CoreRange({0, 0}, {1, 1})),
                     .cores_in_group_1 = CoreRangeSet(CoreRange({0, 0}, {1, 1})),
+                    .cores_in_group_2 = {},
                     .num_shards_per_core_in_group_1 = 1,
                 },
         },
@@ -1285,6 +1291,7 @@ INSTANTIATE_TEST_SUITE_P(
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({5, 3, 4 * 32, 4 * 32}),
             .layout = Layout::TILE,
+            .tile = {},
             .method = ShardingTensorSpecMethod::ShardedAcrossDims,
             .dims = {-1},
             .expected_shard_shape = Shape({5, 3, 4 * 32, 32}),
@@ -1292,6 +1299,7 @@ INSTANTIATE_TEST_SUITE_P(
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({5, 3, 4 * 32, 4 * 32}),
             .layout = Layout::TILE,
+            .tile = {},
             .method = ShardingTensorSpecMethod::ShardedAcrossDims,
             .dims = {-2},
             .expected_shard_shape = Shape({5, 3, 32, 4 * 32}),
@@ -1299,6 +1307,7 @@ INSTANTIATE_TEST_SUITE_P(
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({5, 3, 4 * 32, 4 * 32}),
             .layout = Layout::TILE,
+            .tile = {},
             .method = ShardingTensorSpecMethod::ShardedAcrossDims,
             .dims = {-1, -2},
             .expected_shard_shape = Shape({5, 3, 32, 32}),
@@ -1330,6 +1339,7 @@ INSTANTIATE_TEST_SUITE_P(
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({5, 3, 4 * 32, 4 * 32}),
             .layout = Layout::TILE,
+            .tile = {},
             .method = ShardingTensorSpecMethod::ShardedAcrossDims,
             .dims = {0},
             .expected_shard_shape = Shape({1, 3, 4 * 32, 4 * 32}),
@@ -1337,6 +1347,7 @@ INSTANTIATE_TEST_SUITE_P(
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({5, 3, 4 * 32, 4 * 32}),
             .layout = Layout::TILE,
+            .tile = {},
             .method = ShardingTensorSpecMethod::ShardedAcrossDims,
             .dims = {0, 1},
             .expected_shard_shape = Shape({1, 1, 4 * 32, 4 * 32}),
@@ -1344,6 +1355,7 @@ INSTANTIATE_TEST_SUITE_P(
         NDShardingTensorSpecParams{
             .tensor_shape = Shape({1, 1, 1, 1}),
             .layout = Layout::ROW_MAJOR,
+            .tile = {},
             .method = ShardingTensorSpecMethod::ShardedAcrossDims,
             .dims = {0},
             .expected_shard_shape = Shape({1, 1, 1, 16}),

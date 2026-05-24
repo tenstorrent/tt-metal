@@ -433,30 +433,35 @@ INSTANTIATE_TEST_SUITE_P(
         Tile2DInterleavedAlignmentTestParams{
             .shape = Shape{30, 60},
             .padded_shape = Shape{32, 64},
+            .tile = {},
             .expected_alignment = tt::tt_metal::Alignment({32, 32}),
         },
         // Rank-3: only H/W differ from logical; same rule.
         Tile2DInterleavedAlignmentTestParams{
             .shape = Shape{1, 30, 60},
             .padded_shape = Shape{1, 32, 64},
+            .tile = {},
             .expected_alignment = tt::tt_metal::Alignment({32, 32}),
         },
         // Width overpadded beyond minimum for logical width -> keep legacy padded width in alignment.
         Tile2DInterleavedAlignmentTestParams{
             .shape = Shape{30, 60},
             .padded_shape = Shape{32, 96},
+            .tile = {},
             .expected_alignment = tt::tt_metal::Alignment({32, 96}),
         },
         // Height overpadded (e.g. 30 -> 64) -> keep that edge; width still uses tile when not overpadded.
         Tile2DInterleavedAlignmentTestParams{
             .shape = Shape{30, 60},
             .padded_shape = Shape{64, 64},
+            .tile = {},
             .expected_alignment = tt::tt_metal::Alignment({64, 32}),
         },
         // Both H/W overpadded beyond minimum tile padding -> keep both legacy padded edges.
         Tile2DInterleavedAlignmentTestParams{
             .shape = Shape{30, 60},
             .padded_shape = Shape{64, 96},
+            .tile = {},
             .expected_alignment = tt::tt_metal::Alignment({64, 96}),
         },
         // Custom tile: minimum tile padding should use the custom tile H/W, not the legacy padded H/W.
