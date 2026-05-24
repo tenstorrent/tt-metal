@@ -87,9 +87,11 @@ class ModelArgs(TTModelArgs):
                 logger.info(f"[Gemma3] Resolved HF model '{hf_model}' to snapshot: {snapshot}")
                 os.environ["HF_MODEL"] = str(snapshot)
         self._enable_program_trace = enable_program_trace
-        # Trace path needs fixed k_chunk and flags before super().__init__: base __init__ may consult attention config.
+        # All Gemma3 decode paths need a fixed k_chunk: sliding_window=1024 must be evenly
+        # divisible by k_chunk; auto-select (k_chunk=0) can pick values that violate this.
+        # Must be set before super().__init__() because base __init__ may consult attention config.
+        self.force_fixed_decode_k_chunk = True
         if enable_program_trace:
-            self.force_fixed_decode_k_chunk = True
             self._gemma3_sdpa_decode_k_chunk_override = _GEMMA3_SDPA_DECODE_K_CHUNK_PROGRAM_TRACE
 
         super().__init__(
