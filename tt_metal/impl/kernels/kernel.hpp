@@ -98,13 +98,19 @@ using SemaphoreLocalAccessorHandleMap = std::unordered_map<std::string, uint16_t
 // Metal 2.0: per-kernel resolved TensorBinding.
 // Carries the offsets the kernel-side codegen needs to emit a token, plus the program-level
 // TensorParameter name so SetProgramRunParameters can fill the binding's base-address slot
-// from the corresponding TensorArg at enqueue time.
+// (and any runtime accessor fields) from the corresponding TensorArg at enqueue time.
 struct TensorBindingHandle {
     std::string accessor_name;          // user-facing identifier (kernel symbol in `ta::`)
     std::string tensor_parameter_name;  // refers back to the program-level TensorParameter
     uint32_t cta_offset;                // first word index of this binding's payload in the kernel's compile-time args
     uint32_t addr_crta_offset;  // byte offset of this binding's base-address slot within the kernel's CRTA buffer
                                 // (binding addresses live in their own section appended after user-named CRTAs)
+    // Count of runtime accessor field words that immediately follow the address slot
+    // in this binding's CRTA section. Non-zero only when the TensorParameter has
+    // dynamic_tensor_shape=true and is sharded: the runtime tensor's shape-in-pages
+    // is written here at enqueue time. The first runtime field word lives at byte
+    // offset addr_crta_offset + sizeof(uint32_t).
+    uint32_t num_runtime_field_crta_words = 0;
 };
 
 class Kernel : public JitBuildSettings {
@@ -167,9 +173,11 @@ public:
         std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const override;
     void process_semaphore_local_accessor_handles(
         std::function<void(const std::string& accessor_name, uint16_t semaphore_id)>) const override;
-    void process_tensor_binding_handles(
-        std::function<void(const std::string& accessor_name, uint32_t cta_offset, uint32_t addr_crta_offset)>)
-        const override;
+    void process_tensor_binding_handles(std::function<void(
+                                            const std::string& accessor_name,
+                                            uint32_t cta_offset,
+                                            uint32_t addr_crta_offset,
+                                            uint32_t num_runtime_field_crta_words)>) const override;
     const std::vector<TensorBindingHandle>& tensor_binding_handles() const { return tensor_binding_handles_; }
     const std::vector<std::string>& get_named_runtime_args() const override { return named_runtime_args_; }
     const std::vector<std::string>& get_named_common_runtime_args() const override {

@@ -48,9 +48,16 @@ public:
     //    positional compile-time-args buffer
     //  - addr_crta_offset: byte offset of the implicit base-address CRTA within the kernel's
     //    common-runtime-args section
+    //  - num_runtime_field_crta_words: number of CRTA words that immediately follow the address
+    //    slot for runtime accessor fields (currently: shape, for sharded TensorParameters with
+    //    dynamic_tensor_shape=true). The binding occupies (1 + num_runtime_field_crta_words)
+    //    CRTA words in total.
     // (The tensor_parameter_name is also part of TensorBindingHandle, but we don't need it for codegen.)
-    virtual void process_tensor_binding_handles(
-        std::function<void(const std::string& accessor_name, uint32_t cta_offset, uint32_t addr_crta_offset)>) const {}
+    virtual void process_tensor_binding_handles(std::function<void(
+                                                    const std::string& accessor_name,
+                                                    uint32_t cta_offset,
+                                                    uint32_t addr_crta_offset,
+                                                    uint32_t num_runtime_field_crta_words)>) const {}
 
     // Named RTA/CRTA schema (Metal 2.0 APIs).
     // The order of names determines the byte offset of each arg within the named-args

@@ -56,6 +56,7 @@ using test_helpers::MakeMinimalGen1ValidProgramSpec;
 using test_helpers::MakeMinimalTensorParameter;
 using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::MakeMinimalWorkUnit;
+using test_helpers::MakeShardedTensorParameter;
 using test_helpers::ScopedSlowDispatchOverride;
 
 // Shorthand for the per-node-override vararg type (needed at call sites because
@@ -1533,6 +1534,196 @@ TEST_F(ProgramRunParamsTestGen1, UpdateTensorArgs_PatchesAllKernelsBoundToSameTe
     EXPECT_EQ(
         ReadBindingAddressFromCRTA(program, "compute_kernel", "shared_tensor"),
         static_cast<uint32_t>(tensor2.address()));
+}
+
+// ============================================================================
+// SECTION: Dynamic Tensor Shape Run-Params Tests (Gen1 / WH)
+// ============================================================================
+// Exercises the dynamic_tensor_shape opt-in on TensorParameter:
+//   - validation: tensor_layout must still match exactly; logical_shape may vary per-dim
+//     but rank must be preserved.
+//   - CRTA contents: for sharded TPs, the runtime tensor's shape-in-pages is written into
+//     CRTAs immediately after the binding's address slot, on both SetProgramRunParameters
+//     and UpdateTensorArgs.
+
+TEST_F(ProgramRunParamsTestGen1, DynamicTensorShape_InterleavedAcceptsDifferentShape) {
+    // Declared shape {1, 32}; runtime tensor with shape {1, 64} is accepted because
+    // dynamic_tensor_shape is set and everything else matches.
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    auto binding = MakeMinimalTensorParameter("input_tensor");  // shape {1, 32}
+    binding.dynamic_tensor_shape = true;
+    spec.tensor_parameters = {binding};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    // Different shape, same layout.
+    auto wrong_spec_layout = binding.spec.tensor_layout();
+    auto larger_spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 64}, wrong_spec_layout);
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, larger_spec, TensorTopology{});
+
+    auto params = MakeRunParamsForMinimalSpec(node, {}, {});
+    params.tensor_args = {
+        ProgramRunParams::TensorArg{.tensor_parameter_name = "input_tensor", .tensor = std::cref(tensor)},
+    };
+    EXPECT_NO_THROW(SetProgramRunParameters(program, params));
+}
+
+TEST_F(ProgramRunParamsTestGen1, DynamicTensorShape_DTypeMismatchStillFails) {
+    // dynamic_tensor_shape loosens shape only — dtype (part of tensor_layout) must still match.
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    auto binding = MakeMinimalTensorParameter("input_tensor");  // BFLOAT16
+    binding.dynamic_tensor_shape = true;
+    spec.tensor_parameters = {binding};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    // Different dtype (UINT32 instead of BFLOAT16).
+    auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR);
+    auto memory_config =
+        tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
+    auto wrong_layout = tt::tt_metal::TensorLayout(tt::tt_metal::DataType::UINT32, page_config, memory_config);
+    auto wrong_spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 32}, wrong_layout);
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, wrong_spec, TensorTopology{});
+
+    auto params = MakeRunParamsForMinimalSpec(node, {}, {});
+    params.tensor_args = {
+        ProgramRunParams::TensorArg{.tensor_parameter_name = "input_tensor", .tensor = std::cref(tensor)},
+    };
+    EXPECT_THAT(
+        [&] { SetProgramRunParameters(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("tensor_layout does not match the binding's declared layout")));
+}
+
+TEST_F(ProgramRunParamsTestGen1, DynamicTensorShape_RankMismatchFails) {
+    // dynamic_tensor_shape lets per-dim shape values vary, but the rank must remain constant.
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    auto binding = MakeMinimalTensorParameter("input_tensor");  // rank-2 shape {1, 32}
+    binding.dynamic_tensor_shape = true;
+    spec.tensor_parameters = {binding};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    // Rank-3 tensor with same layout.
+    auto wrong_spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 1, 32}, binding.spec.tensor_layout());
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, wrong_spec, TensorTopology{});
+
+    auto params = MakeRunParamsForMinimalSpec(node, {}, {});
+    params.tensor_args = {
+        ProgramRunParams::TensorArg{.tensor_parameter_name = "input_tensor", .tensor = std::cref(tensor)},
+    };
+    EXPECT_THAT(
+        [&] { SetProgramRunParameters(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("logical_shape rank (3) differs from the declared rank (2)")));
+}
+
+// Read the runtime field CRTA words (immediately after the address slot) for a tensor binding.
+// Returns the [rank] shape words in declaration order.
+inline std::vector<uint32_t> ReadBindingShapeFromCRTA(
+    const Program& program, const KernelSpecName& kernel_name, const std::string& tensor_parameter_name) {
+    auto kernel = program.impl().get_kernel_by_spec_name(kernel_name);
+    for (const auto& handle : kernel->tensor_binding_handles()) {
+        if (handle.tensor_parameter_name == tensor_parameter_name) {
+            const uint32_t base_word = handle.addr_crta_offset / sizeof(uint32_t);
+            const auto* data = kernel->common_runtime_args_data().data();
+            std::vector<uint32_t> shape;
+            shape.reserve(handle.num_runtime_field_crta_words);
+            for (uint32_t i = 0; i < handle.num_runtime_field_crta_words; ++i) {
+                shape.push_back(data[base_word + 1u + i]);
+            }
+            return shape;
+        }
+    }
+    ADD_FAILURE() << "No binding handle for '" << tensor_parameter_name << "' on kernel '" << kernel_name << "'";
+    return {};
+}
+
+// Compute the expected tensor_shape_in_pages from a TensorSpec via its BufferDistributionSpec.
+// This is the source of truth for what gets written into the runtime field CRTA section.
+inline std::vector<uint32_t> ExpectedShapeInPagesFromSpec(const tt::tt_metal::TensorSpec& spec) {
+    const auto bds = spec.compute_buffer_sharding_args().buffer_distribution_spec();
+    if (!bds.has_value()) {
+        ADD_FAILURE() << "TensorSpec has no BufferDistributionSpec; expected sharded";
+        return {};
+    }
+    const auto& shape = bds->tensor_shape_in_pages();
+    std::vector<uint32_t> out;
+    out.reserve(shape.rank());
+    for (size_t i = 0; i < shape.rank(); ++i) {
+        out.push_back(static_cast<uint32_t>(shape[i]));
+    }
+    return out;
+}
+
+TEST_F(ProgramRunParamsTestGen1, DynamicTensorShape_ShardedSetWritesShapeIntoCRTAs) {
+    // Sharded + dynamic_tensor_shape: SetProgramRunParameters must write the actual runtime
+    // tensor's tensor_shape_in_pages into the CRTA section that follows the binding's address.
+    // Layout: HEIGHT_SHARDED with shard_shape {32, 32} on 2 cores → 2 shards along height.
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    auto binding =
+        MakeShardedTensorParameter("input_tensor", tt::tt_metal::Shape{1, 1, 64, 32}, {32, 32}, /*num_cores=*/2);
+    binding.dynamic_tensor_shape = true;
+    spec.tensor_parameters = {binding};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, binding.spec, TensorTopology{});
+    auto params = MakeRunParamsForMinimalSpec(node, {}, {});
+    params.tensor_args = {
+        ProgramRunParams::TensorArg{.tensor_parameter_name = "input_tensor", .tensor = std::cref(tensor)},
+    };
+    SetProgramRunParameters(program, params);
+
+    // BDS flattens shape per its sharding scheme; derive expected value from BDS directly
+    // (source of truth — same path the runtime uses to populate the CRTA slots).
+    EXPECT_EQ(
+        ReadBindingShapeFromCRTA(program, "dm_kernel", "input_tensor"), ExpectedShapeInPagesFromSpec(binding.spec));
+}
+
+TEST_F(ProgramRunParamsTestGen1, DynamicTensorShape_ShardedUpdateRefreshesShape) {
+    // Sharded + dynamic_tensor_shape: UpdateTensorArgs must refresh BOTH the address slot and
+    // the runtime shape slots when bound to a tensor of different shape (but same layout).
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    auto binding =
+        MakeShardedTensorParameter("input_tensor", tt::tt_metal::Shape{1, 1, 64, 32}, {32, 32}, /*num_cores=*/2);
+    binding.dynamic_tensor_shape = true;
+    spec.tensor_parameters = {binding};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    // First Set: tensor of declared shape (2 shards along height).
+    MeshTensor tensor1 = MeshTensor::allocate_on_device(*mesh_device_, binding.spec, TensorTopology{});
+    auto params = MakeRunParamsForMinimalSpec(node, {}, {});
+    params.tensor_args = {
+        ProgramRunParams::TensorArg{.tensor_parameter_name = "input_tensor", .tensor = std::cref(tensor1)},
+    };
+    SetProgramRunParameters(program, params);
+    ASSERT_EQ(
+        ReadBindingShapeFromCRTA(program, "dm_kernel", "input_tensor"), ExpectedShapeInPagesFromSpec(binding.spec));
+
+    // Second Update: smaller-shape tensor (1 shard along height). Same shard_spec, fewer shards.
+    auto smaller_spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 1, 32, 32}, binding.spec.tensor_layout());
+    MeshTensor tensor2 = MeshTensor::allocate_on_device(*mesh_device_, smaller_spec, TensorTopology{});
+    std::vector<ProgramRunParams::TensorArg> tensor_args{
+        ProgramRunParams::TensorArg{.tensor_parameter_name = "input_tensor", .tensor = std::cref(tensor2)},
+    };
+    EXPECT_NO_THROW(UpdateTensorArgs(program, tensor_args));
+
+    EXPECT_EQ(
+        ReadBindingAddressFromCRTA(program, "dm_kernel", "input_tensor"), static_cast<uint32_t>(tensor2.address()));
+    EXPECT_EQ(
+        ReadBindingShapeFromCRTA(program, "dm_kernel", "input_tensor"), ExpectedShapeInPagesFromSpec(smaller_spec));
 }
 
 }  // namespace
