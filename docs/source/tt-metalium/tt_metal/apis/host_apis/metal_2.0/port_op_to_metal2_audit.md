@@ -10,6 +10,17 @@
 
 **Audience**: AI agents asked to determine whether a TTNN op can be ported from the **`ProgramDescriptor` API** to the Metal 2.0 host API. Humans looking for a conceptual map of API differences should read [`metal2_migration_guide.md`](metal2_migration_guide.md) instead.
 
+**If you're new to this stack — quick orientation:**
+
+- **Tenstorrent accelerators** come in two architectural generations. **Gen1** is the shipping silicon today: `WH` = Wormhole, `BH` = Blackhole. **Gen2** is in development: `Quasar` (and siblings). This audit covers Gen1 ops; Metal 2.0 is designed to serve both architectures.
+- **TTNN** is the high-level neural-network library for Tenstorrent accelerators. Ops live in `ttnn/cpp/ttnn/operations/<family>/<op>/`. A typical op has a device-operation class on the host side and one or more program factories that build what runs on the accelerator.
+- **Metal 2.0** is the new **host API** — what the program factory uses to declare kernels, buffers, semaphores, and bindings. It also introduces **DFB** (Dataflow Buffer) at the spec layer, replacing the legacy **CB** (CircularBuffer); the two are essentially synonyms on Gen1, but DFB's semantics diverge meaningfully on Gen2.
+- **Device 2.0** is a *separate, earlier* overhaul of the **kernel-side** data-movement APIs (safer, more object-oriented wrappers — `experimental::Noc`, kernel-side `CircularBuffer` wrappers, etc.). [Step 0.1 Check 2](#step-01--porting-prerequisites) gates on Device 2.0 migration as a bundled prereq to Metal 2.0 — but Device 2.0 is *not* part of Metal 2.0 itself.
+- **`ProgramDescriptor` API** is a TTNN-side framework that ops must migrate to before a Metal 2.0 port becomes possible. [Step 0.1 Check 1](#step-01--porting-prerequisites) gates on it.
+- **Common acronyms you'll see throughout:** `CB` = CircularBuffer; `DFB` = DataflowBuffer (see above); `RTA` = runtime args; `CTA` = compile-time args; `TA` = TensorAccessor; `LLK` = Low-Level Kernel (the framework-provided kernel-side primitives); `NoC` = Network-on-Chip (the on-die fabric).
+
+For the conceptual map of how Metal 2.0 abstractions fit together — `ProgramSpec`, `KernelSpec`, `TensorParameter` / `TensorBinding`, `DataflowBufferSpec`, the spec/run-params split — see [`metal2_migration_guide.md`](metal2_migration_guide.md).
+
 **Scope**: This guide is for **TTNN ops that target Gen1 architectures** (Wormhole / WH, Blackhole / BH), to assess Metal 2.0 portability and gather findings about what the port will require.
 
 The audit produces useful findings for ops in two states:
