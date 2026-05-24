@@ -111,17 +111,17 @@ void ModuleBase::train() {
 void ModuleBase::eval() {
     set_run_mode(RunMode::EVAL);
 }
-autograd::TensorPtr ModuleBase::operator()(const autograd::TensorPtr& tensor) {
+autograd::TensorPtr ModuleBase::operator()(const autograd::TensorPtr& /*tensor*/) {
     throw std::logic_error("ModuleBase::operator()(const autograd::TensorPtr& tensor) is Not implemented");
 }
-autograd::TensorPtr ModuleBase::operator()(const autograd::TensorPtr& tensor, const autograd::TensorPtr& other) {
+autograd::TensorPtr ModuleBase::operator()(const autograd::TensorPtr& /*tensor*/, const autograd::TensorPtr& /*other*/) {
     throw std::logic_error(
         "ModuleBase::operator()(const autograd::TensorPtr& tensor, const autograd::TensorPtr& other) is Not "
         "implemented");
 }
 
 autograd::TensorPtr ModuleBase::operator()(
-    const autograd::TensorPtr& tensor, const std::optional<autograd::TensorPtr>& other) {
+    const autograd::TensorPtr& /*tensor*/, const std::optional<autograd::TensorPtr>& /*other*/) {
     throw std::logic_error(
         "ModuleBase::operator()(const autograd::TensorPtr& tensor, const std::optional<autograd::TensorPtr>& other) "
         "is Not implemented");
