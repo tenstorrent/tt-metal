@@ -2,14 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// To use device print in an LLK test, build with -DDEBUG_PRINT_ENABLED
-// by setting device_print_build=DevicePrintBuild.Yes in TestConfig.
-// All print calls compile to nothing when the macro is not set.
+// To use device print in an LLK test, run pytest with --logging-level=debug
+// (or trace); that flips -DDEBUG_PRINT_ENABLED on for every variant. All print
+// calls compile to nothing when the macro is not set.
 
 // PROCESSOR_INDEX, LLK_DEVICE_PRINT_BUFFER_BASE, LLK_RUNTIME_ARGS_START
 // and DPRINT_BUFFER_SIZE are passed in by test_config.py at build time;
 // see RISC_INFO, DEVICE_PRINT_BUFFER_BASE, DEVICE_PRINT_RUNTIME_ARGS_START
-// and DEVICE_PRINT_PER_THREAD_SIZE.
+// and DEVICE_PRINT_PER_THREAD_SIZE in test_config.py.
 
 // Disabled under COVERAGE: coverage linker scripts grow TRISC sections
 // way past the device print buffer slot, so they can't share L1.

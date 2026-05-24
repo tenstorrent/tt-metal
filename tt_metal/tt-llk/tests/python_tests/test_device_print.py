@@ -1,23 +1,29 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 from helpers.chip_architecture import ChipArchitecture
-from helpers.device_print import run_with_device_print
 from helpers.format_config import DataFormat
 from helpers.param_config import input_output_formats
-from helpers.test_config import DevicePrintBuild, TestConfig
+from helpers.test_config import TestConfig
+
+
+# We force device print to be enabled during this test,
+# and turn it back off when it completes.
+@pytest.fixture(scope="module", autouse=True)
+def _force_device_print_enabled():
+    prev = TestConfig.DEVICE_PRINT_ENABLED
+    TestConfig.DEVICE_PRINT_ENABLED = True
+    yield
+    TestConfig.DEVICE_PRINT_ENABLED = prev
 
 
 def test_device_print():
     formats = input_output_formats([DataFormat.Int32])[0]
 
-    configuration = TestConfig(
-        "sources/device_print_test.cpp",
-        formats,
-        device_print_build=DevicePrintBuild.Yes,
-    )
-
-    _, lines = run_with_device_print(configuration)
+    configuration = TestConfig("sources/device_print_test.cpp", formats)
+    outcome = configuration.run()
+    lines = outcome.device_print_lines
 
     full = "".join(lines)
     assert full, "No device print output received"

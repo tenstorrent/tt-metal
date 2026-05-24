@@ -9,7 +9,7 @@ import struct
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from enum import Enum
 from hashlib import sha256
 from pathlib import Path
@@ -93,11 +93,6 @@ class CoverageBuild(Enum):
     No = "false"
 
 
-class DevicePrintBuild(Enum):
-    Yes = "true"
-    No = "false"
-
-
 class BuildMode(Enum):
     DEFAULT = 0  # compile + execute
     PRODUCE = 1  # compile only
@@ -113,6 +108,9 @@ class StimuliMode(Enum):
 @dataclass
 class TestOutcome:
     result: Any = None
+    # Lines emitted by DEVICE_PRINT() during this run.
+    # Empty if it's disabled.
+    device_print_lines: list = field(default_factory=list)
 
 
 class TestConfig:
@@ -251,6 +249,7 @@ class TestConfig:
     )
     PROCESSOR_COUNT: ClassVar[int] = 0
     DEVICE_PRINT_BUFFER_SIZE: ClassVar[int] = 0
+    DEVICE_PRINT_ENABLED: ClassVar[bool] = False
 
     # Single source of truth that maps component, risc_id and display name.
     # Passed to dprint.h through -DPROCESSOR_INDEX at build time, and
@@ -537,7 +536,6 @@ class TestConfig:
         variant_stimuli: StimuliConfig = None,
         boot_mode: BootMode = BootMode.DEFAULT,
         profiler_build: ProfilerBuild = ProfilerBuild.No,
-        device_print_build: DevicePrintBuild = DevicePrintBuild.No,
         L1_to_L1_iterations: int = 1,
         unpack_to_dest: bool = False,
         unpack_to_srcs: bool = False,
@@ -556,25 +554,6 @@ class TestConfig:
                 "test_name argument needs to be passed in order to resolve which C++ file is compiled"
             )
 
-        if (
-            device_print_build == DevicePrintBuild.Yes
-            and self.coverage_build == CoverageBuild.Yes
-        ):
-            raise RuntimeError(
-                "device_print_build=Yes is not supported under coverage builds: "
-                "the coverage linker scripts grow TRISC sections past the device "
-                "print buffer slot. Disable coverage or device print."
-            )
-
-        if (
-            device_print_build == DevicePrintBuild.Yes
-            and TestConfig.PROCESSOR_COUNT == 0
-        ):
-            raise RuntimeError(
-                "TestConfig.setup_arch() must be called before constructing a "
-                "TestConfig with device_print_build=Yes; PROCESSOR_COUNT is 0."
-            )
-
         self._prepared = False
 
         if TestConfig.SPEED_OF_LIGHT:
@@ -588,7 +567,6 @@ class TestConfig:
         self.variant_stimuli = variant_stimuli
         self.boot_mode = boot_mode
         self.profiler_build = profiler_build
-        self.device_print_build = device_print_build
         self.L1_to_L1_iterations = L1_to_L1_iterations
         self.unpack_to_dest = unpack_to_dest
         self.unpack_to_srcs = unpack_to_srcs
@@ -871,7 +849,7 @@ class TestConfig:
         if self.profiler_build == ProfilerBuild.Yes:
             OPTIONS_COMPILE += "-DLLK_PROFILER "
 
-        if self.device_print_build == DevicePrintBuild.Yes:
+        if TestConfig.DEVICE_PRINT_ENABLED:
             OPTIONS_COMPILE += "-DDEBUG_PRINT_ENABLED "
 
         if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1":
@@ -1201,7 +1179,7 @@ class TestConfig:
                 )
                 trisc_define = "ISOLATE_SFPU" if name == "sfpu" else name.upper()
                 device_print_flags = ""
-                if self.device_print_build == DevicePrintBuild.Yes:
+                if TestConfig.DEVICE_PRINT_ENABLED:
                     risc_id, _ = TestConfig.RISC_INFO[name]
                     device_print_flags = (
                         f"-DLLK_DEVICE_PRINT_BUFFER_BASE={TestConfig.DEVICE_PRINT_BUFFER_BASE:#x} "
@@ -1297,7 +1275,7 @@ class TestConfig:
 
         # Zero the device print buffer header before each kernel run so the
         # first DEVICE_PRINT() observes wpos=rpos=0 and a free lock.
-        if self.device_print_build == DevicePrintBuild.Yes:
+        if TestConfig.DEVICE_PRINT_ENABLED:
             write_words_to_device(
                 TestConfig.TENSIX_LOCATION,
                 TestConfig.DEVICE_PRINT_BUFFER_BASE,
@@ -1502,8 +1480,34 @@ class TestConfig:
 
             self.variant_stimuli.write(TestConfig.TENSIX_LOCATION)
 
+        # When device print is enabled, build a parser,
+        # collect into dprint_lines, and return in TestOutcome.
+        dprint_parser = None
+        dprint_lines: list[str] = []
+        wrapped_poll_callback = poll_callback
+        if TestConfig.DEVICE_PRINT_ENABLED:
+            from .device_print import make_device_print_parser
+
+            dprint_parser = make_device_print_parser(self)
+
+            def _drain():
+                batch = dprint_parser.poll(TestConfig.TENSIX_LOCATION)
+                dprint_lines.extend(batch)
+                for line in batch:
+                    logger.debug(line)
+                if poll_callback is not None:
+                    poll_callback()
+
+            wrapped_poll_callback = _drain
+
         self.run_elf_files()
-        self.wait_for_tensix_operations_finished(poll_callback=poll_callback)
+        self.wait_for_tensix_operations_finished(poll_callback=wrapped_poll_callback)
+
+        if dprint_parser is not None:
+            final = dprint_parser.final_drain(TestConfig.TENSIX_LOCATION)
+            dprint_lines.extend(final)
+            for line in final:
+                logger.debug(line)
 
         if self.coverage_build == CoverageBuild.Yes:
             self.read_coverage_data_from_device()
@@ -1514,6 +1518,7 @@ class TestConfig:
                 if self.variant_stimuli
                 else None
             ),
+            device_print_lines=dprint_lines,
         )
 
 

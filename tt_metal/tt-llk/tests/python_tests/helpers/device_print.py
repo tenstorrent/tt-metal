@@ -676,30 +676,3 @@ def make_device_print_parser(configuration) -> DevicePrintParser:
         TestConfig.DEVICE_PRINT_BUFFER_SIZE,
         TestConfig.PROCESSOR_COUNT,
     )
-
-
-def run_with_device_print(configuration):
-    """Run a test variant with device print output.
-
-    Returns: (TestOutcome, list[str]), where the list contains all dprint lines.
-    """
-    from helpers.test_config import TestConfig
-
-    configuration.prepare()  # ELFs must exist before the parser reads them
-    parser = make_device_print_parser(configuration)
-    all_lines: list[str] = []
-
-    def _drain():
-        batch = parser.poll(TestConfig.TENSIX_LOCATION)
-        all_lines.extend(batch)
-        for line in batch:
-            logger.debug(line)
-
-    outcome = configuration.run(poll_callback=_drain)
-
-    final = parser.final_drain(TestConfig.TENSIX_LOCATION)
-    all_lines.extend(final)
-    for line in final:
-        logger.debug(line)
-
-    return outcome, all_lines

@@ -2,14 +2,9 @@
 
 `DEVICE_PRINT` is a formatted printing facility that lets LLK code efficiently emit logs that the Python test harness picks up and renders.
 
-It is a direct port from Metal (see
-[tt_metal/hw/inc/api/debug/device_print.h](../../hw/inc/api/debug/device_print.h)
-and [tt_metal/impl/debug/dprint_parser.cpp](../../impl/debug/dprint_parser.cpp))
-adapted to LLK infra. The device-side header is reused through a thin wrapper, and the host-side parser is rewritten in Python on top of `tt-exalens`.
-
 ## Quick start
 
-Kernel side:
+Add a print in your kernel:
 
 ```cpp
 #include "dprint.h"
@@ -21,46 +16,15 @@ void run_kernel(RUNTIME_PARAMETERS)
 }
 ```
 
-Python side:
+Run pytest at `--logging-level=debug` (or `trace`):
 
-```python
-from helpers.device_print import run_with_device_print
-from helpers.test_config import DevicePrintBuild, TestConfig
-
-config = TestConfig(
-    "sources/my_test.cpp",
-    formats,
-    device_print_build=DevicePrintBuild.Yes,  # opts the variant into dprint
-)
-outcome, lines = run_with_device_print(config)
-assert "test: i32=-1 hex=deadbeef" in "".join(lines)
+```bash
+pytest --logging-level=debug ./python_tests/test_foo.py
 ```
 
-Each line is printed at the `DEBUG` level, so pass `--logging-level=debug` to `pytest`. Your prints will be saved in `test_run.log`.
+That's it. At debug/trace logging, every test compiles with device print enabled and lines stream into the pytest log at `DEBUG` level. They're visible in the terminal and are written to `test_run.log`.
 
-You can take a look at the dprint test for a full example:
-- [sources/device_print_test.cpp](sources/device_print_test.cpp)
-- [python_tests/test_device_print.py](python_tests/test_device_print.py)
-
-## How it works
-
-```
-              kernel                           host
-   ┌─────────────────────────┐       ┌─────────────────────────┐
-   │ DEVICE_PRINT(fmt, ...)  │       │  run_with_device_       │
-   │   ├─ stamp format str   │       │  print(config)          │
-   │   │  into .device_      │       │   ├─ poll ring buffer   │
-   │   │  print_strings      │       │   ├─ resolve strings    │
-   │   ├─ stamp info record  │       │   │  via ELF section    │
-   │   │  into ...info       │  <-   │   ├─ unpack args        │
-   │   └─ write header+args  │ poll  │   │  in size-desc order │
-   │      to buffer in L1.   │  ->   │   └─ render + log       │
-   └─────────────────────────┘       └─────────────────────────┘
-```
-
-There's a shared ring buffer on the device. Every call writes a 4-byte header followed by the packed argument bytes. The format string itself is never copied. It lives in a non-loaded ELF section that the host accesses.
-
-When the buffer fills, the kernel sets a stall flag and waits for the host to drain it before continuing.
+At any coarser level (INFO and up, which is the default), every `DEVICE_PRINT(...)` call compiles to nothing. Coverage builds also force it off, because the coverage linker scripts currently grow TRISC sections past the device print buffer slot.
 
 ## Public API
 
@@ -69,15 +33,9 @@ Defined in [helpers/include/dprint.h](helpers/include/dprint.h):
 - `DEVICE_PRINT(fmt, ...)`: Emit a record. Uses fmtlib-style placeholders.
 - `CTSTR(literal)`: Save a string literal into the ELF and pass it as an argument. Use this for all string literals (except the format strings themselves).
 
-One might also notice the macros `DEVICE_PRINT_INITIALIZE_LOCK()` and `DEVICE_PRINT_KERNEL_FINISHED()` in the Metal device print header. Don't call these from LLK; test infra does the job of both.
-
-When `device_print_build=DevicePrintBuild.No` (default), or under `COVERAGE`, `DEVICE_PRINT` invocations expand to nothing. It is currently not supported to use device print in coverage builds.
-
-Make sure to call `TestConfig.setup_arch()` before constructing a config with `device_print_build=Yes`.
-
 ## Format specifiers
 
-`DEVICE_PRINT` uses libfmt syntax. Common forms in the test suite:
+`DEVICE_PRINT` uses fmtlib syntax. Common forms:
 
 | Spec | Meaning | Example |
 |------|---------|---------|
@@ -105,21 +63,29 @@ DEVICE_PRINT("p={:#}\n", Perm::R | Perm::W);    // p=Perm::R | Perm::W
 DEVICE_PRINT("p={}\n",  static_cast<Perm>(24)); // p=(Perm)24    (unknown bits)
 ```
 
-## What was ported
+## Tests that assert on prints
 
-| Component | Source of truth | LLK equivalent |
-|-----------|-----------------|----------------|
-| Kernel-side macros, packing, buffer writer | [api/debug/device_print.h](../../hw/inc/api/debug/device_print.h) | Reused as-is, save for some `#ifdef`s; wrapped by [helpers/include/dprint.h](helpers/include/dprint.h) |
-| Host parser (C++) | [impl/debug/dprint_parser.cpp](../../impl/debug/dprint_parser.cpp) | Rewritten in Python: [helpers/device_print.py](python_tests/helpers/device_print.py) |
-| Per-RISC `PROCESSOR_INDEX`, buffer base, buffer size | Metal constants | Passed via `-D` from [test_config.py](python_tests/helpers/test_config.py); single source of truth is `TestConfig.RISC_INFO` |
-| `.device_print_strings{,_info}` sections | Metal linker scripts | [helpers/ld/sections.ld](helpers/ld/sections.ld) (named high VMAs at the top) |
+`TestConfig.run()` returns a `TestOutcome` whose `device_print_lines` field holds every line emitted by `DEVICE_PRINT()` during that run, in order. When device print isn't on for the session the list is empty.
 
-Note that our port will be further simplified somewhat when the now-deprecated `DEBUG_PRINT` gets deleted from Metal.
+```python
+def test_my_kernel():
+    outcome = TestConfig("sources/my_kernel_test.cpp", formats).run()
+    assert "expected output" in "".join(outcome.device_print_lines)
+```
 
-## Files of interest
+### Self-enabling a test in CI
 
-- [helpers/include/dprint.h](helpers/include/dprint.h): kernel-side wrapper
-- [python_tests/helpers/device_print.py](python_tests/helpers/device_print.py): parser, `run_with_device_print`
-- [python_tests/helpers/test_config.py](python_tests/helpers/test_config.py): `DevicePrintBuild`, `RISC_INFO`, `-D` injection
-- [helpers/ld/sections.ld](helpers/ld/sections.ld): string tables
-- [sources/device_print_test.cpp](sources/device_print_test.cpp) + [python_tests/test_device_print.py](python_tests/test_device_print.py): complete example
+CI runs the LLK suite at `LOGURU_LEVEL=INFO`, which leaves `TestConfig.DEVICE_PRINT_ENABLED = False`. A test that just asserts on `outcome.device_print_lines` would see an empty list by default.
+
+`test_device_print.py` works around this with a module-scoped autouse fixture that forces `TestConfig.DEVICE_PRINT_ENABLED = True` for the duration of the module and restores it on teardown:
+
+```python
+@pytest.fixture(scope="module", autouse=True)
+def _force_device_print_enabled():
+    prev = TestConfig.DEVICE_PRINT_ENABLED
+    TestConfig.DEVICE_PRINT_ENABLED = True
+    yield
+    TestConfig.DEVICE_PRINT_ENABLED = prev
+```
+
+Use this same pattern for any other test that asserts on device print output.
