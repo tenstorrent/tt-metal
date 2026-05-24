@@ -207,44 +207,96 @@ PACK((TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_pac
 
 **Motivation.** Note that the doc's literal "reset UNPACK DEST mirror" framing for 2c is misleading: UNPACK does not touch DEST. The MM2 op (`sdpa_custom_mm_reuse_dest_srcb_block`) reads DEST through SRCB via MOVD2B on the *MATH* side (`llk_math_sdpa_custom_mm_reuse_dest_srcb.h:119-145`), and that path is bank-aware via `get_dest_buffer_base()` captured at line 119. So the literal 2c is already correct. Adjacent test: force a known-good `MATH_Offset` on both threads at chunk entry, mirroring the explicit `matmul.hpp:167` idiom for TRISC2 alignment. If any consumer were operating from a stale `MATH_Offset` at chunk entry (despite the per-op `TT_SETC16` calls in the SDPA helpers), this would patch over it.
 
-**Result.**
+**Result.** First patch with a measurable effect — not a null.
 
-| Case | iter=1 PCC | iter=2 PCC |
-|---|---|---|
-| Baseline | 0.9931898601668998 | 0.9934483676630709 |
-| Patch 2c (MATH+PACK MATH_Offset reset per chunk) | **0.9931898601668998 (bit-identical baseline)** | **0.9934483676630709 (bit-identical baseline)** |
+| Case | iter=1 PCC | iter=2 PCC | iter alternation gap |
+|---|---|---|---|
+| Baseline | 0.9931898601668998 | 0.9934483676630709 | +2.6e-4 |
+| Patch 2c (MATH+PACK MATH_Offset reset per chunk) | **0.9935941662184071** | **0.9935820920940954** | **−1.2e-5** |
 
-**Conclusion.** Null effect. Combined with the closer reading of the LLK code:
-- The SDPA SFPU helpers all do `TT_SETC16(MATH_Offset, src + get_dest_buffer_base())` per-dispatch using their thread's own `dest_offset_id` — already correct.
-- MM2 (`_llk_math_sdpa_custom_mm_reuse_dest_srcb_`) captures `dest_buffer_base = get_dest_buffer_base()` at function entry and uses it for both the MOVD2B src and the MVMUL dst — already correct.
-- MM1 (`_llk_math_sdpa_custom_mm_`) goes through `_llk_math_sdpa_custom_mm_mask_dest_` which sets MATH_Offset to `dst_index + get_dest_buffer_base()` — already correct.
+Both PCCs shifted upward (+4.0e-4 on iter=1, +1.3e-4 on iter=2). The iter-alternation gap collapsed from +2.6e-4 to −1.2e-5 — roughly **20× smaller**, and the sign actually flipped (iter=2 is now marginally *below* iter=1 instead of above). JIT cache hit rate was 0.9% (essentially cold rebuild), so the patch absolutely went through.
 
-→ `MATH_Offset` is consistently bank-aware across all major SDPA ops. The bug is **not** in MATH_Offset management. Combined with Patch #4 (timing fence) and Patch 2a (PACK_SEC GPRs 1..3) being null, three of the four "open candidates" from `half-dest-conversation-summary.md` §4 are now eliminated:
+**Conclusion.** 2c is the first patch that meaningfully attacks the bug. The iter-alternation is dramatically reduced but not eliminated. Two things this tells us:
+
+1. **A non-trivial component of the iter-divergence does live in chunk-entry MATH_Offset state** — even though the per-op SDPA helpers each set `MATH_Offset = src + get_dest_buffer_base()` before their dispatch, the redundant pre-chunk reset is still doing something. Most likely candidates for *why* a redundant set helps: it provides a synchronization point on the CFG pipe before the per-op SETC16s land, OR there's a HW ordering effect between the per-op writes and immediately-following SFPU reads that benefits from an extra "settled" write earlier.
+
+2. **A residual asymmetry of ~1e-5 remains** — much smaller than baseline, but still non-zero and sign-flipped. So 2c is not a complete fix; some bank-asymmetric state survives even with both per-chunk MATH_Offsets pinned.
+
+Combined with Patch #4 (timing fence) and Patch 2a (PACK_SEC GPRs 1..3) being null:
 - ❌ in-flight ZEROACC race
 - ❌ stale PACK_SEC1..3 GPR contents
-- ❌ MATH_Offset asymmetry across threads/ops
+- ⚠️ **MATH_Offset chunk-entry state — partially the culprit; redundant per-chunk reset halves the bug**
 
-What's left from the open list:
-- DEST replay-buffer instruction encoding leak (unlikely per code review; replay buffers are re-recorded per chunk and overwrite each other).
-- Semaphore handshake race leaving stale `MATH_Offset` from a previous tail's `sdpa_tail_l_block` packing (would need explicit instrumentation to test).
-- **Bank-half-specific HW silicon behaviour** (e.g. SerDes / shuffle pattern, or some DEST-half address calculation that's not symmetric). Worth eliminating via direct read-back of bank-0 vs bank-1 contents after identical FPU writes.
+**Next steps.** With the localization down to chunk-entry CFG-pipe state, two reasonable follow-ups:
+
+- **2c-narrow:** find out which one of the two `TT_SETC16` calls (MATH or PACK) carries the effect. Run with just the MATH-side call, then just the PACK-side. Tells us which thread's chunk-entry MATH_Offset matters.
+- **2c-deeper:** investigate the residual ~1e-5 gap. Candidates: tail path (`compute_sdpa_recip` + final `pack_block_contiguous(mm2)`, which is after the chunk loop and doesn't get the per-chunk reset), or per-chunk state in `init_fast_approx_exp_constants` (SFPCONFIG writes to LREG[12,13,14] inside each chunk), or replay-buffer interactions.
 
 **State.** Reverted.
 
 ---
 
+## Attempt 8 — Patch 2c + 2c-tail combined: same MATH+PACK MATH_Offset reset before the post-chunk-loop tail
+
+**What.** Keep Attempt 7's per-chunk reset in `compute_sdpa_chunk`, and additionally inject the same MATH+PACK `TT_SETC16` pair in `flash_mla.hpp` right before the post-chunk tail (immediately before line 775 — the `if (!sdpa_output_is_final)` branch and the final `pack_block_contiguous(mm2)` loop).
+
+```cpp
+// In flash_mla.hpp, just before the tail at line ~775:
+MATH((TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::get_dest_buffer_base())));
+PACK((TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset())));
+```
+
+**Motivation.** The 2c chunk-entry reset collapses the iter-PCC gap ~20× but leaves a residual ~1e-5. The tail (recip + final pack of mm2, OR the tree-reduce-worker pack of max) runs *after* the chunk loop and never sees the per-chunk reset. If the residual asymmetry lives in chunk-exit / tail state, this extra reset should close the gap.
+
+**Result.** Direct opposite of expected — both PCCs revert to **bit-identical baseline**:
+
+| Case | iter=1 PCC | iter=2 PCC | gap |
+|---|---|---|---|
+| Baseline | 0.9931898601668998 | 0.9934483676630709 | +2.6e-4 |
+| 2c alone (Attempt 7) | 0.9935941662184071 | 0.9935820920940954 | −1.2e-5 |
+| **2c + 2c-tail** | **0.9931898601668998** | **0.9934483676630709** | **+2.6e-4 (=baseline)** |
+
+JIT cache hit rate 0.9% — both patches genuinely compiled in. Adding 2c-tail completely **canceled** the 2c effect.
+
+**Conclusion.** This is a counterintuitive but informative null. Two takeaways:
+
+1. **2c's benefit is not from "putting `MATH_Offset` in a known-good state at chunk entry"** — if it were, adding the *same* known-good state at one more location (chunk exit) couldn't possibly hurt. The fact that it does hurt rules that interpretation out.
+
+2. **The effect of 2c depends on inter-flash_mla state propagation.** The pre-tail reset changes the state that `flash_mla` leaves on TRISC1/TRISC2 at exit (specifically, the `MATH_Offset` registers and any associated CFG-pipe ordering). That exit state propagates into the *next* flash_mla invocation's starting state — apparently in a way that exactly cancels whatever 2c-at-chunk-entry was correcting. Result: baseline.
+
+So 2c's mechanism is more subtle than "stale MATH_Offset at chunk entry." It's more like: the previous flash_mla leaves a specific MATH_Offset value behind, the next flash_mla's compute_sdpa_chunk inherits that as the starting MATH_Offset, and the chunk-entry reset overrides it with `get_dest_buffer_base()` *which happens to be the same value most SFPU helpers would set anyway*. Yet this re-write is doing something — possibly a CFG-pipe synchronization side effect, or a hidden interaction with how the per-op `TT_SETC16` calls are pipelined / committed.
+
+**Next steps.** The 2c result is genuine but the mechanism is unclear; 2c-tail rules out "simple staleness". To make progress:
+
+- **2c-narrow** (still planned): isolate MATH-only vs PACK-only side of 2c. If only one side carries the effect, we'd know whether it's a TRISC1 or TRISC2 CFG-pipe phenomenon. ~25 min total.
+- **Inspect chunk-exit MATH_Offset state.** Add a single `MATH((TT_SETC16))` *only at chunk entry* (no PACK side), see if the asymmetric effect persists. Then try only the PACK side. Compare to 2c.
+- **Capture which DEST tile is responsible.** Instrument the SDPA helpers to dump (via DPRINT / device_zone telemetry) which physical DEST index gets touched in iter-0 vs iter-1, look for a divergence beyond the bank-base offset.
+
+**State.** Reverted (both 2c and 2c-tail patches gone).
+
+---
+
 ## Where to go next (handoff)
 
-The Method 1 bisect localized the bug to `flash_mla.hpp:747-791` (chunk loop + tail + final pack) — ~40 lines of TRISC2/SFPU + TRISC1/FPU activity. Three candidate-driven patches (#4, 2a, 2c) covering the three most plausible mechanisms (timing race, stale PACK_SEC GPRs, stale MATH_Offset) all came back **null**. Method 1 cannot bisect inside the existing `tile_regs_acquire/release` block without risk of deadlock.
+The Method 1 bisect localized the bug to `flash_mla.hpp:747-791` (chunk loop + tail + final pack). Four candidate-driven patches were tested:
 
-Recommended next moves:
+- Patch #4 (timing fence on ZEROACC→MATH_PACK SEMPOST): null.
+- Patch 2a (init PACK_SEC1..3 GPRs): null.
+- Patch 2c (explicit MATH/PACK MATH_Offset reset per chunk): **non-null — collapses the alternation gap ~20×, residual ~1e-5**.
+- Patch 2c + 2c-tail (same reset added before the post-chunk tail): **canceled 2c's effect, reverted to baseline**.
 
-1. **Direct DEST-bank readback experiment.** Hand-write a minimal kernel: do one full FPU + SFPU pass into bank 0, snapshot DEST→L1, repeat into bank 1 (force via `_llk_pack_dest_init_(1)`), snapshot DEST→L1. Diff the L1 dumps. If different, HW silicon asymmetry. If identical, bug is in some higher-level state.
+The cancellation under 2c+2c-tail is the most surprising result. It rules out "MATH_Offset cleanliness" as the mechanism for 2c — if a known-good state at chunk entry is the fix, applying the same state at chunk exit can't possibly hurt. So 2c is correcting something via a *side effect* of the writes (CFG-pipe timing? a write-coalescing pattern that only works when present once per chunk?), not via the values themselves.
 
-2. **Single-op skipping inside flash_mla.** Conditionally skip the `compute_sdpa_recip` path / the final `pack_block_contiguous(mm2)` loop / each SFPU phase in iter-0 only, observe which removal makes iter-0 PCC swap. Each run is ~12 min cold-JIT, but each gives a clean signal about one specific consumer.
+Recommended next moves in priority order:
 
-3. **Surgical equivalents to Austin's fix.** Try replacing the iter-top double reset with a *single* `select_packer_dest_registers<SyncHalf>()` on PACK and a *single* `dest_section_flip` on MATH — explicitly test whether re-writing PACK_SEC0 (the active reg) alone, with no other SW reset, is sufficient. The ablation table previously tried "HW-only" without the SW reset and it failed; this variant decouples PACK_SEC0 from PACK_SEC1..3 and from `dest_offset_id`.
+1. **2c-narrow:** isolate MATH-only vs PACK-only halves of 2c. If only one side carries the effect, that pins the relevant CFG-pipe. ~25 min total.
 
-4. **Profiler / DEST address trace.** If tools allow it, capture the actual physical DEST address every PACK / MOVD2B / SFPLOAD references throughout one iter-0 and one iter-1, diff them. Any address that's iter-1-only different beyond the documented bank offset is a candidate.
+2. **Vary 2c position.** Move the same `MATH+PACK SETC16` pair to *one* fixed location within `compute_sdpa_chunk` (top, just before MM1, just before reduce_max, etc.) and see which placement preserves the ~20× collapse. Locates the specific op whose CFG-pipe interaction matters.
+
+3. **Direct DEST-bank readback microbench.** Hand-write a minimal kernel: full FPU + SFPU pass into bank 0, snapshot DEST→L1, repeat into bank 1 (force via `_llk_pack_dest_init_(1)`), snapshot DEST→L1. Diff the L1 dumps. Eliminates / confirms bank-half-specific HW silicon behaviour.
+
+4. **Single-op skipping inside flash_mla.** Conditionally skip the `compute_sdpa_recip` path / the final `pack_block_contiguous(mm2)` loop / each SFPU phase in iter-0 only, observe which removal makes iter-0 PCC swap.
+
+5. **Profiler / DEST address trace.** If tools allow it, capture the actual physical DEST address every PACK / MOVD2B / SFPLOAD references throughout one iter-0 and one iter-1, diff them. Any address that's iter-1-only different beyond the documented bank offset is a candidate.
 
 ---
