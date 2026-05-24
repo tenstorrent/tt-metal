@@ -303,7 +303,13 @@ FORCE_INLINE void matmul_phase_fused_gu_v3(
     PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
 
-    // Gate partials → gate_intermed (with silu).
+    // Gate partials → gate_intermed (silu applied via MATH-thread SFPU on dst,
+    // NOT packer-fused). Per subblock:
+    //   * copy partials_gu → dst (UNPACK reads bf16, MATH stores in dst regs).
+    //   * silu_tile on each dst tile — runs on the MATH thread's SFPU,
+    //     overlapping with the next subblock's UNPACK rather than gating the
+    //     pack pipeline as apply_activation_from_pack would.
+    //   * pack dst → gate_intermed without per-tile SFPU.
     PACK((pack_reconfig_data_format(gate_intermed_cb_id)));
     // SrcA was last configured for the up matmul's in1 (up_cb_id). Switch
     // to partials_gu so copy_tile reads the accumulator.
@@ -315,8 +321,12 @@ FORCE_INLINE void matmul_phase_fused_gu_v3(
             copy_tile(partials_gu_cb_id, i, i);
         }
         cb_pop_front(partials_gu_cb_id, out_subblock_num_tiles);
+        // MATH-thread SFPU pass: apply silu to each dst tile before pack.
+        for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
+            silu_tile(i);
+        }
         tile_regs_commit();
-        apply_activation_from_pack<KernelActivation::SILU>(out_subblock_num_tiles);
+        tile_regs_wait();
         cb_reserve_back(gate_intermed_cb_id, out_subblock_num_tiles);
         for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
             pack_tile(i, gate_intermed_cb_id);
@@ -458,7 +468,14 @@ void kernel_main() {
     const uint32_t effective_chunks_runtime = (count_tiles + chunk_M_tiles - 1) / chunk_M_tiles;
     const uint32_t effective_chunks = effective_chunks_runtime < num_chunks ? effective_chunks_runtime : num_chunks;
 
-    silu_tile_init_pack();
+    // SiLU is now applied as a MATH-thread SFPU pass on dst (silu_tile)
+    // between copy_tile and pack_tile — not packer-fused via
+    // apply_activation_from_pack. Empirically the packer-fused variant
+    // serialises the pack pipeline against the SFPU, slowing down the
+    // gate-intermed write. silu_tile_init() configures the MATH-side SFPU
+    // for silu; the pack then runs plain (no per-tile SFPU on the pack
+    // thread). Same total compute, better pipelining.
+    silu_tile_init();
 
     for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
         mm_block_init(
