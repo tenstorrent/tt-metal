@@ -85,18 +85,19 @@ For the op in scope, run through five steps (Step 0.1 prereqs, Step 0.2 feature 
 
 Gating semantics across the five steps:
 
-- **Step 0.1 Check 1 (ProgramDescriptor API), Step 0.1 Check 2 (Device 2.0 DM), Step 0.2 (feature compatibility)** produce port-gating RED findings — an UNSUPPORTED feature or unmet prereq blocks this op's Metal 2.0 port until the missing piece lands.
+- **Step 0.1 Check 1 (ProgramDescriptor API) and Step 0.2 (feature compatibility)** produce port-gating RED findings — an unmet prereq or UNSUPPORTED feature blocks this op's Metal 2.0 port until the missing piece lands.
 - **Step 0.1 Check 3 (TensorAccessor usage) and Step 0.5 (TensorAccessor bypass)** produce YELLOW findings — port-time work items, not port blockers. With `TensorAccessor::get_bank_base_address` (landed 2026-05-24 via PR #45091) providing a sanctioned bridge for genuinely-exotic cases, every TensorAccessor concern has a port-time resolution path. The two checks roll up to a single TensorAccessor-concerns bullet in the Result section when both fire (see Output section).
-- **Steps 0.3 and 0.4** are informational only — they shape planning but do not produce port-gating findings.
+- **Step 0.1 Check 2 (Device 2.0 DM), Steps 0.3, and Step 0.4** are informational only. Check 2 in particular captures NoC-API-style cleanup (`Noc` wrapper coverage, method-form CB ops) that is **orthogonal to the Metal 2.0 binding-token mechanism** — binding-mechanism issues are caught by Check 3 and by Step 0.4's ⭐ markers, not by Check 2. **Check 2 status — YELLOW or RED — must not propagate to the Result-section Overall tier**; surface findings in side-issues as informational ("op-team cleanup pending").
 
-Do not attempt to port an op with Step 0.1 Check 1, Check 2, or Step 0.2 RED (modulo the scoped-subset case described in the report-output section). Step 0.1 Check 3 YELLOW and Step 0.5 YELLOW do not gate the port — they describe port-time work.
+Do not attempt to port an op with Step 0.1 Check 1 or Step 0.2 RED (modulo the scoped-subset case described in the report-output section). Step 0.1 Check 2 (YELLOW or RED), Step 0.1 Check 3 YELLOW, and Step 0.5 YELLOW do not gate the port — they describe op-team-owned cleanup or port-time work respectively.
 
 ### Step 0.1 — Porting prerequisites
 
-Metal 2.0 migration sits at the end of a chain of prior modernizations. Three prereqs must be confirmed before porting can begin. They differ in scope:
+Metal 2.0 migration sits at the end of a chain of prior modernizations. The three Step 0.1 checks confirm three distinct kinds of state — only one is a hard prereq to the Metal 2.0 port:
 
-- **Standalone prereq** (Check 1 below): `ProgramDescriptor` migration is a substantial, separate body of work with TTNN-infrastructure implications. If unmet, it is its own PR — it does not bundle with the other prereq checks or with the Metal 2.0 port. Record the gap and continue the audit; do not attempt the migration here.
-- **Bundled prereqs** (Checks 2 and 3 below): smaller, mechanical kernel-side work. If unmet, address in a **single bundled prereq PR**, separate from the Metal 2.0 port. Bundle the two together if both are unmet — they're conceptually one body of work (kernel-side modernization). Yellow sub-cases (see Check 3) require user judgment.
+- **Standalone hard prereq** (Check 1 below): `ProgramDescriptor` migration is the only Step 0.1 check that gates the Metal 2.0 port. Substantial, separate body of work with TTNN-infrastructure implications. If unmet, it is its own PR — it does not bundle with the Metal 2.0 port. Record the gap and continue the audit; do not attempt the migration here.
+- **Port-time work item** (Check 3 below): TensorAccessor adoption. YELLOW findings are resolved during the port itself (convertible → re-express; exotic → use `TensorAccessor::get_bank_base_address`). Not a hard prereq; surfaces here for scope planning.
+- **Op-team-owned cleanup** (Check 2 below): Device 2.0 DM kernel-side cleanup. **Not a Metal 2.0 prereq** — captures NoC-API-style work orthogonal to the binding-token mechanism. The audit surfaces Check 2 findings as informational; they do **not** gate Overall Status.
 
 **Complete all three checks regardless of individual outcomes, then continue to Steps 0.2, 0.3, 0.4, and 0.5.** The audit's job is to gather a complete picture of what porting this op will require, including features the op uses that may be blocked on prereq work, characteristics that shape the port's scope, downstream dependencies on donor migrations, and per-binding correctness hazards. Do not exit early on a RED prereq — surface all findings to the report.
 
@@ -115,7 +116,9 @@ Confirm all kernel-side data-movement code in this op is Device 2.0 compliant. S
 - **Yellow — substantively compliant with isolated legacy holdovers.** Kernel uses `experimental::Noc`, `experimental::CircularBuffer`, etc. for the bulk of operations and has a small number of isolated legacy holdovers from the **CB-index-keyed free-function family**: free functions taking a `uint32_t` CB index where the corresponding Device-2.0 wrapper object is already in scope at the call site. The family includes (non-exhaustively) `get_read_ptr(cb_id)`, `get_write_ptr(cb_id)`, `get_tile_size(cb_id)`, and similar `cb_*` helpers in the same shape. The defining characteristic is the *shape* — single CB-index argument, wrapper already in scope — not the specific function name; if you encounter a free function in that shape, treat it as a holdover.
 
   Each holdover is a 1-line mechanical replacement (e.g. `get_read_ptr(cb_id)` → `cb_obj.get_read_ptr()`). Report yellow with `file:line` for each holdover and ask the user how to handle them. The yellow tier applies when the holdovers are isolated within a kernel that otherwise consistently uses the wrappers; absolute count is a heuristic, not a rule. **Default recommendation: fold into the Metal 2.0 port as port-time cleanup** rather than spinning a separate prereq PR — the change is trivial and decoupling adds churn.
-- **Red**: kernels broadly use legacy Device 1.0 idioms (raw `noc_async_read`, manual CB index management, etc.). The Device 2.0 migration is a separate, prior body of work; do not bundle it with the Metal 2.0 port. May bundle with Check 3 in one prereq PR.
+- **Red**: kernels broadly use legacy Device 1.0 idioms (raw `noc_async_read`, manual CB index management, etc.). Report as **op-team-owned cleanup scheduled separately from the Metal 2.0 port** — *not* as a Metal 2.0 port blocker. The op may still be Metal 2.0-portable today if Check 1, Check 3, Step 0.2, Step 0.4 ⭐, and Step 0.5 all clear.
+
+**Important — Check 2 status is informational only.** Per the May 2026 Device 2.0 ownership policy, Check 2 captures NoC-API-style kernel-side cleanup (`Noc` wrapper coverage, method-form CB ops, free-function CB helpers) that is **orthogonal to the Metal 2.0 binding-token mechanism** — binding-mechanism prereqs are caught by Check 3 and by Step 0.4's ⭐ markers, not by Check 2. **Check 2 status — YELLOW or RED — must not propagate to the Result-section Overall tier.** Surface findings in side-issues as informational ("op-team cleanup pending"); the headline tier is driven by Check 1, Check 3, Step 0.2, Step 0.4 ⭐, and Step 0.5.
 
 **Check 3 (AI-doable): TensorAccessor in use for every tensor read.**
 
@@ -185,7 +188,7 @@ Line counts are heuristic anchors, not strict cutoffs — a 35-line method that'
 
 ### Step 0.4 — Out-of-directory call surface
 
-Run this step regardless of Step 0.1, 0.2, and 0.3 outcomes. **Findings are informational only — none of these signals gates the port** (with one nuance: pre-Device-2.0 donors create a *scheduling* block, surfaced here for planning). This check is the most substantial in the audit; budget time accordingly.
+Run this step regardless of Step 0.1, 0.2, and 0.3 outcomes. **Findings are informational only — none of these signals gates the port** (with one nuance: pre-Device-2.0 donors create a *scheduling* block, surfaced here for planning). This check is the most substantial in the audit; budget time accordingly. This step covers **two distinct escape types**: *function-call escape* (the kernel `#include`s and calls another op's helper function) and *file-path kernel instantiation* (the program factory `CreateKernel`s a kernel `.cpp` owned by another op). The bulk of this step's machinery addresses function-call escape; file-path escape is surfaced separately at the end as a coupling signal.
 
 **Why this check exists.** Op kernels frequently `#include` headers outside their own directory. When a Metal 2.0 port crosses one of these boundaries, the kernel's named tokens (`dfb::name`, `sem::name`, `ta::name`) need to translate into whatever shape the donor's signature expects. Some shapes cross cleanly; others require donor-side conversion work, most commonly because **the donor itself isn't on Device 2.0 yet**.
 
@@ -223,6 +226,14 @@ One donor file can have multiple functions with different shapes — classify pe
 3. **Per-call detail** — per-function breakdown for donors with ⚠ / ✗ / ⭐ entries. Omitted entirely if all rolls are ✓.
 
 Status roll-up uses ✓ / ⚠ / ✗ / ⭐. The star is reserved for entries that create scheduling blockers — Shape 4 (donor pre-Device-2.0) and `CircularBuffer&` (op-by-op friction). Other ✗/⚠ items are workable today or need donor work, but don't sequence-block.
+
+**Borrowed kernel files (file-path kernel instantiation).** Separate from the function-call escapes inventoried above: list every kernel `.cpp` file the op's program factory `CreateKernel`s whose source path lies outside the op's own directory. For each, record:
+
+- The kernel file's path.
+- The owning op family (donor).
+- Whether the file is also `CreateKernel`'d by other ops (broadly-shared dataflow kernel) or appears to be a one-off borrow.
+
+This signal **does not gate the port** — the borrowed kernel works today. The coupling is about *future modification*: if the donor op modifies its kernel during its own Metal 2.0 port, the borrowing op's instantiation site may break or need to follow. Report this so porters and planners can see where multi-op coordination might be needed. Surface it in the audit even when the function-call escape roll-up is `✓ clean` — file-path escape is independent.
 
 ### Step 0.5 — TensorAccessor bypass
 
@@ -349,7 +360,7 @@ The conclusion appears at the top so a colleague glancing at the report sees the
 | `<path>` | `<n>` | `<call>` | `<wrapper>` |
 | ... | ... | ... | ... |
 
-<Default recommendation: port-time cleanup unless the user requests a separate prereq PR.>
+<Default recommendation: port-time cleanup unless the user requests a separate prereq PR. **Check 2 status — YELLOW or RED — is informational only and must not propagate to the Result-section Overall tier**; surface findings here under "op-team cleanup pending.">
 
 ### TensorAccessor usage: **GREEN | YELLOW**
 
@@ -419,6 +430,18 @@ Findings from Step 0.4.
 ### Per-call detail
 
 <Only when any summary row has ⚠ / ✗ / ⭐. For each such donor: a heading, then a per-function breakdown. Omit this subsection entirely if all rolls are ✓.>
+
+### Borrowed kernel files
+
+<Informational signal — does **not** gate the port; flags cross-op coupling for porting coordination. List every kernel `.cpp` file the op's program factory instantiates whose source path lies outside the op's own directory. Surface this section even when the function-call escape roll-up is `✓ clean`.>
+
+| Kernel file path | Owning op family | Also borrowed by |
+|---|---|---|
+| ... | ... | ... |
+
+<Note that "Also borrowed by" can be "broadly-shared" if the file is consumed by many ops, "this op only" for one-off borrows, or a specific donor-list when known.>
+
+(or "none — no file-path escapes")
 
 ## TensorAccessor bypass
 
