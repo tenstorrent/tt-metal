@@ -81,7 +81,7 @@ void assign_per_core_runtime_args(
 }
 
 ProfilerNoopProgramFactory::cached_program_t ProfilerNoopProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
+    [[maybe_unused]] const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     // -------------------------------------------------------------------------
@@ -197,7 +197,7 @@ ProfilerNoopProgramFactory::cached_program_t ProfilerNoopProgramFactory::create(
 
 void ProfilerNoopProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    [[maybe_unused]] const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     auto& program = cached_program.program;

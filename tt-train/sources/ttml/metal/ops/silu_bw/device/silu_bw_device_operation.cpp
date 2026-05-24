@@ -12,7 +12,7 @@
 namespace ttml::metal::ops::silu_bw::device {
 
 void SiLUBackwardDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    [[maybe_unused]] const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
         TT_FATAL(
             tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
@@ -57,7 +57,7 @@ void SiLUBackwardDeviceOperation::validate_on_program_cache_miss(
 }
 
 spec_return_value_t SiLUBackwardDeviceOperation::compute_output_specs(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    [[maybe_unused]] const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     spec_return_value_t output_specs;
     output_specs.reserve(2U);
 
