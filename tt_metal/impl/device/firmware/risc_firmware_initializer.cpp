@@ -603,10 +603,17 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
                                             device_id, CoreCoord(0, 0), CoreType::WORKER);
                                     const uint64_t probe_addr = hal_.get_dev_addr(
                                         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::CORE_INFO);
-                                    const uint32_t dummy = 0u;
+                                    // Use 8 bytes (> DATA_WORD_SIZE=4) to force BLOCK MODE
+                                    // (cmd_data_block path) in write_to_non_mmio. A 4-byte probe
+                                    // uses WORD MODE (data inline in command) which succeeds before
+                                    // the relay ERISC's L1-buffer/NOC-DMA path is ready — false
+                                    // positive. BLOCK MODE matches initialize_and_launch_firmware's
+                                    // core_info writes and ensures we probe the full relay path.
+                                    // (#42429 FIX ST v2)
+                                    const uint32_t dummy[2] = {0u, 0u};
                                     try {
                                         cluster_.write_core_immediate(
-                                            &dummy, sizeof(dummy),
+                                            dummy, sizeof(dummy),
                                             {static_cast<size_t>(device_id), probe_tensix_virt},
                                             probe_addr);
                                         write_probe_ok = true;
