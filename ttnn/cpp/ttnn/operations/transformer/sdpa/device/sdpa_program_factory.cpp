@@ -318,13 +318,10 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     auto* v_buffer = input_tensor_v.buffer();
     auto* mask_buffer = attn_mask.has_value() ? attn_mask.value().buffer() : nullptr;
     auto* attention_sink_buffer = attention_sink.has_value() ? attention_sink.value().buffer() : nullptr;
-    // page_table and chunk_start_idx must be BufferBindings (not raw address writes); otherwise
-    // their addresses go stale on program-cache hits — same pattern as moreh_adamw's
-    // max_exp_avg_sq bug.
+    // page_table and chunk_start_idx must be BufferBindings (not raw address writes);
+    // otherwise their addresses go stale on descriptor cache hits.
     auto* page_table_buffer = is_chunked ? page_table.value().buffer() : nullptr;
-    auto* chunk_start_idx_buffer = operation_attributes.chunk_start_idx_tensor.has_value()
-                                       ? operation_attributes.chunk_start_idx_tensor.value().buffer()
-                                       : nullptr;
+    auto* chunk_start_idx_buffer = flexible_chunked ? tensor_args.chunk_start_idx_tensor.value().buffer() : nullptr;
 
     auto* out0_buffer = output_tensor.buffer();
 
@@ -518,7 +515,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     TensorAccessorArgs(page_table.has_value() ? page_table->buffer() : nullptr).append_to(reader_compile_time_args);
     TensorAccessorArgs(attention_sink.has_value() ? attention_sink->buffer() : nullptr)
         .append_to(reader_compile_time_args);
-    TensorAccessorArgs(flexible_chunked ? operation_attributes.chunk_start_idx_tensor.value().buffer() : nullptr)
+    TensorAccessorArgs(flexible_chunked ? tensor_args.chunk_start_idx_tensor.value().buffer() : nullptr)
         .append_to(reader_compile_time_args);
 
     // Set up semaphore IDs for KV chain forwarding (non-causal only).
