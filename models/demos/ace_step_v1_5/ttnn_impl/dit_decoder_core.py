@@ -118,15 +118,21 @@ from .math_perf_env import (
     ace_step_dit_mlp_down_proj_linear_program_config,
     ace_step_dit_mlp_gate_up_linear_program_config,
     ace_step_dit_prefers_dram_activations,
+    ace_step_dit_rms_norm_kwargs,
+    ace_step_dit_weight_dtype,
     ace_step_eltwise_l1_memory_config,
+    ace_step_ensure_dit_activation,
     ace_step_ensure_dram_activation,
     ace_step_ensure_l1_activation,
+    ace_step_ensure_tile_layout,
+    ace_step_from_torch_activation,
     ace_step_init_dit_linear_compute_kernel_config,
     ace_step_linear_kwargs_memory_config,
     ace_step_matmul_activation,
     ace_step_nlp_concat_heads,
     ace_step_permute_kwargs,
     ace_step_reshape_kwargs,
+    ace_step_sdpa_activation_kwargs,
     ace_step_sdpa_mask_memory_config,
 )
 
@@ -257,12 +263,13 @@ class TtTimestepEmbedding:
         self.wt, self.bt = as_w("time_proj"), as_b("time_proj")
 
         self._linear_out_l1 = linear_output_l1_memory_config
+        _t_freq_mc = linear_output_l1_memory_config or mem
         self.t_freq_table = ttnn.as_tensor(
             emb.reshape(self.num_steps, 1, 1, self.in_channels),
             device=mesh_device,
             dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=mem,
+            memory_config=_t_freq_mc,
             mesh_mapper=mapper,
         )
 
@@ -293,6 +300,9 @@ class TtTimestepEmbedding:
         tp = ttnn.reshape(tp, (1, 6, 1, d), **_sr)
         tp = ttnn.reshape(tp, (1, 6, d), **_sr)
         temb = ttnn.reshape(temb, (1, d), **_sr)
+        if _l1 is not None:
+            temb = ace_step_ensure_l1_activation(ttnn, temb, _l1)
+            tp = ace_step_ensure_l1_activation(ttnn, tp, _l1)
         return temb, tp
 
     def from_timestep_value(self, timestep: float):
@@ -306,9 +316,16 @@ class TtTimestepEmbedding:
         return the same device tensors and do not re-upload sin/cos.
         """
         ttnn = self.ttnn
+        _l1 = self._linear_out_l1 or getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
         key = float(timestep)
         cached = self._value_cache.get(key)
         if cached is not None:
+            if _l1 is not None:
+                temb_c, tp_c = cached
+                return (
+                    ace_step_ensure_l1_activation(ttnn, temb_c, _l1),
+                    ace_step_ensure_l1_activation(ttnn, tp_c, _l1),
+                )
             return cached
 
         try:
@@ -325,8 +342,14 @@ class TtTimestepEmbedding:
         emb = emb.reshape(1, 1, 1, self.in_channels)
 
         # Upload and run the same MLP projection as the lookup-table path.
-        _l1 = self._linear_out_l1 or getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
-        t_freq = ttnn.from_torch(emb, device=self.mesh_device, dtype=self.dtype, layout=ttnn.TILE_LAYOUT)
+        t_freq = ace_step_from_torch_activation(
+            ttnn,
+            emb,
+            device=self.mesh_device,
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            l1_mc=_l1,
+        )
         temb = ttnn.linear(t_freq, self.w1, bias=self.b1, transpose_b=True, memory_config=_l1)
         temb = ttnn.silu(temb, memory_config=_l1) if hasattr(ttnn, "silu") else ttnn.gelu(temb, memory_config=_l1)
         temb = ttnn.linear(temb, self.w2, bias=self.b2, transpose_b=True, memory_config=_l1)
@@ -343,6 +366,9 @@ class TtTimestepEmbedding:
                 ttnn.deallocate(t_freq)
             except Exception:
                 pass
+        if _l1 is not None:
+            temb = ace_step_ensure_l1_activation(ttnn, temb, _l1)
+            tp = ace_step_ensure_l1_activation(ttnn, tp, _l1)
         self._value_cache[key] = (temb, tp)
         return temb, tp
 
@@ -601,11 +627,13 @@ class TtAceStepAttentionSDPA:
         mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
         mapper = ace_step_dit_weight_mesh_mapper(mesh_device)
 
+        w_dtype = ace_step_dit_weight_dtype(ttnn, self.dtype)
+
         def as_w(suffix: str):
             return ttnn.as_tensor(
                 _maybe_get(state_dict, f"{base_address}.{suffix}.weight"),
                 device=mesh_device,
-                dtype=self.dtype,
+                dtype=w_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=mem,
                 mesh_mapper=mapper,
@@ -620,7 +648,7 @@ class TtAceStepAttentionSDPA:
             return ttnn.as_tensor(
                 b.reshape(1, 1, 1, -1),
                 device=mesh_device,
-                dtype=self.dtype,
+                dtype=w_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=mem,
                 mesh_mapper=mapper,
@@ -635,7 +663,7 @@ class TtAceStepAttentionSDPA:
         self.wkv = ttnn.as_tensor(
             wkv_host,
             device=mesh_device,
-            dtype=self.dtype,
+            dtype=w_dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=mem,
             mesh_mapper=mapper,
@@ -650,7 +678,7 @@ class TtAceStepAttentionSDPA:
             self.bkv = ttnn.as_tensor(
                 bkv_host,
                 device=mesh_device,
-                dtype=self.dtype,
+                dtype=w_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=mem,
                 mesh_mapper=mapper,
@@ -777,7 +805,7 @@ class TtAceStepAttentionSDPA:
         return kw
 
     def _wkv_linear_kwargs(self, *, batch_size: int, seq_len: int, in_dim: int) -> dict:
-        """HiFi2 + L1 + wide-N program config for fused ``wkv`` (256×2048×2048 family)."""
+        """LoFi + L1 + wide-N program config for fused ``wkv`` (256×2048×2048 family)."""
         kw: dict = {}
         if self._linear_ck is not None:
             kw["compute_kernel_config"] = self._linear_ck
@@ -818,7 +846,7 @@ class TtAceStepAttentionSDPA:
         _dram_mc = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
         _qk_mc = _dram_mc if use_dram_activations else (self._linear_out_l1 or _dram_mc)
         _concat_mc = _dram_mc if use_dram_activations else ace_step_eltwise_l1_memory_config(ttnn)
-        x = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)  # [B,1,S,D]
+        x = ace_step_ensure_tile_layout(ttnn, hidden_states)  # [B,1,S,D]
         b_x = int(x.shape[0])
         s_q = int(x.shape[2])
         d_in = int(x.shape[-1])
@@ -835,7 +863,7 @@ class TtAceStepAttentionSDPA:
             x_kv = ace_step_matmul_activation(ttnn, x, lin_kv, l1_fn=self._l1_activation, dram_mc=_dram_mc)
             kv = ttnn.linear(x_kv, self.wkv, bias=self.bkv, transpose_b=True, **lin_kv)
         else:
-            enc = ttnn.to_layout(encoder_hidden_states, ttnn.TILE_LAYOUT)
+            enc = ace_step_ensure_tile_layout(ttnn, encoder_hidden_states)
             b_enc = int(enc.shape[0])
             s_enc = int(enc.shape[2])
             d_enc = int(enc.shape[-1])
@@ -863,6 +891,8 @@ class TtAceStepAttentionSDPA:
         ), f"KV shape mismatch: last dim {int(kv.shape[3])} != 2*kv_dim={2 * kv_dim}"
         k = ttnn.slice(kv, (0, 0, 0, 0), (B, 1, int(kv.shape[2]), kv_dim))
         v = ttnn.slice(kv, (0, 0, 0, kv_dim), (B, 1, int(kv.shape[2]), 2 * kv_dim))
+        k = self._l1_activation(k)
+        v = self._l1_activation(v)
         if hasattr(ttnn, "deallocate"):
             try:
                 ttnn.deallocate(kv)
@@ -896,11 +926,14 @@ class TtAceStepAttentionSDPA:
                 return ttnn.slice(x, (0, 0, 0, 0), (int(x.shape[0]), int(x.shape[1]), target_s, int(x.shape[3])))
 
             pad = target_s - logical_s
-            x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-            x_rm = ttnn.pad(x_rm, padding=((0, 0), (0, 0), (0, pad), (0, 0)), value=0.0)
-            # `pad` may only update storage padding. Reshape makes the new sequence length logical too.
-            x_rm = ttnn.reshape(x_rm, (int(x.shape[0]), int(x.shape[1]), target_s, int(x.shape[3])), **_sr)
-            return ttnn.to_layout(x_rm, ttnn.TILE_LAYOUT)
+            _pad_mc = self._act_l1 or getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+            _pad_kw = {"memory_config": _pad_mc} if _pad_mc is not None else {}
+            return ttnn.pad(
+                x,
+                padding=((0, 0), (0, 0), (0, pad), (0, 0)),
+                value=0.0,
+                **_pad_kw,
+            )
 
         def _pad_seq_dim2_bh_sd(x, target_s: int):
             """Pad/slice sequence dim (index 2) for tensors shaped [B, H, S, Dh]."""
@@ -910,10 +943,14 @@ class TtAceStepAttentionSDPA:
             if s0 > target_s:
                 return ttnn.slice(x, (0, 0, 0, 0), (b0, h0, target_s, d0))
             pad = target_s - s0
-            x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-            x_rm = ttnn.pad(x_rm, padding=((0, 0), (0, 0), (0, pad), (0, 0)), value=0.0)
-            x_rm = ttnn.reshape(x_rm, (b0, h0, target_s, d0), **_sr)
-            return ttnn.to_layout(x_rm, ttnn.TILE_LAYOUT)
+            _pad_mc = self._act_l1 or getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+            _pad_kw = {"memory_config": _pad_mc} if _pad_mc is not None else {}
+            return ttnn.pad(
+                x,
+                padding=((0, 0), (0, 0), (0, pad), (0, 0)),
+                value=0.0,
+                **_pad_kw,
+            )
 
         is_self_attn = encoder_hidden_states is None
 
@@ -968,8 +1005,14 @@ class TtAceStepAttentionSDPA:
                     for _ in range(int(rep)):
                         ks.append(k_h)
                         vs.append(v_h)
-                k = ttnn.concat(ks, dim=1) if hasattr(ttnn, "concat") else ttnn.concatenate(ks, dim=1)
-                v = ttnn.concat(vs, dim=1) if hasattr(ttnn, "concat") else ttnn.concatenate(vs, dim=1)
+                _concat_mc = self._act_l1
+                _ckw = {"memory_config": _concat_mc} if _concat_mc is not None else {}
+                k = ttnn.concat(ks, dim=1, **_ckw) if hasattr(ttnn, "concat") else ttnn.concatenate(ks, dim=1, **_ckw)
+                v = ttnn.concat(vs, dim=1, **_ckw) if hasattr(ttnn, "concat") else ttnn.concatenate(vs, dim=1, **_ckw)
+
+        q = self._l1_activation(q)
+        k = self._l1_activation(k)
+        v = self._l1_activation(v)
 
         # Cross-attn: **do not** tile-pad K/V before head-dim RMSNorm. HF norms the true encoder
         # length (e.g. 258); padding to 288 first corrupts K statistics and attention. Self-attn:
@@ -1003,8 +1046,9 @@ class TtAceStepAttentionSDPA:
                 pass
 
         # Head-dim RMSNorm on q and k — L1 on short clips; DRAM on long clips (SDPA-safe).
-        q = ttnn.rms_norm(q, weight=self.q_norm_w, epsilon=self.eps, memory_config=_qk_mc)
-        k = ttnn.rms_norm(k, weight=self.k_norm_w, epsilon=self.eps, memory_config=_qk_mc)
+        _rms_kw = ace_step_dit_rms_norm_kwargs(ttnn, _qk_mc, device=self.mesh_device)
+        q = ttnn.rms_norm(q, weight=self.q_norm_w, epsilon=self.eps, **_rms_kw)
+        k = ttnn.rms_norm(k, weight=self.k_norm_w, epsilon=self.eps, **_rms_kw)
         if debug is not None and debug.get("enabled", False):
             debug[f"{debug_prefix}q_norm"] = q
             debug[f"{debug_prefix}k_norm"] = k
@@ -1023,6 +1067,8 @@ class TtAceStepAttentionSDPA:
                 )
             q = self._rotary(q)
             k = self._rotary(k)
+            q = self._l1_activation(q)
+            k = self._l1_activation(k)
             # RoPE may return Q/K with tile-padded sequence length (e.g. 64) while V stayed at the
             # logical S (63). Slice Q/K back to `S` (query length from the linear) so SDPA sees
             # matching Q/K/V lengths and matches HF/torch_ref.
@@ -1033,6 +1079,9 @@ class TtAceStepAttentionSDPA:
                     k = ttnn.slice(k, (0, 0, 0, 0), (B, H, S, Dh))
                 if int(v.shape[2]) > S:
                     v = ttnn.slice(v, (0, 0, 0, 0), (B, H, S, Dh))
+                q = self._l1_activation(q)
+                k = self._l1_activation(k)
+                v = self._l1_activation(v)
             if _trace:
                 _ace_step_log_ttnn_tensor(f"{debug_prefix}q_after_rope", q, ttnn=ttnn)
                 _ace_step_log_ttnn_tensor(f"{debug_prefix}k_after_rope", k, ttnn=ttnn)
@@ -1054,6 +1103,8 @@ class TtAceStepAttentionSDPA:
             if tgt_k > W:
                 k = _pad_seq_dim2_bh_sd(k, tgt_k)
                 v = _pad_seq_dim2_bh_sd(v, tgt_k)
+                k = self._l1_activation(k)
+                v = self._l1_activation(v)
                 W = tgt_k
             if W > s_enc_log:
                 pad_m = self._get_cross_tail_mask(batch=B, s_q0=S_q0, w=W, s_enc_log=s_enc_log)
@@ -1076,6 +1127,9 @@ class TtAceStepAttentionSDPA:
                 q = _pad_seq_dim2_bh_sd(q, target_sdpa)
                 k = _pad_seq_dim2_bh_sd(k, target_sdpa)
                 v = _pad_seq_dim2_bh_sd(v, target_sdpa)
+                q = self._l1_activation(q)
+                k = self._l1_activation(k)
+                v = self._l1_activation(v)
                 # Additive mask (0 keep, -1e9 on invalid keys); SDPA adds this to QK (see ttnn sdpa.cpp).
                 # Match Q/K/V dtype so SDPA uniform-dataformat paths accept the mask tensor.
                 pad_m = self._get_self_pad_mask(batch=B, target_sdpa=target_sdpa, s_rope=S_rope)
@@ -1107,6 +1161,7 @@ class TtAceStepAttentionSDPA:
             sdpa_kwargs = dict(attn_mask=sdpa_attn_mask, is_causal=is_causal, scale=self.scale)
             if sliding_window_size is not None:
                 sdpa_kwargs["sliding_window_size"] = int(sliding_window_size)
+            sdpa_kwargs.update(ace_step_sdpa_activation_kwargs(ttnn, self._act_l1))
             ctx = self._sdpa(q, k, v, **sdpa_kwargs)
         if _trace:
             _ace_step_log_ttnn_tensor(f"{debug_prefix}ctx_after_sdpa_BHSD", ctx, ttnn=ttnn)
@@ -1123,13 +1178,14 @@ class TtAceStepAttentionSDPA:
         ctx = ace_step_nlp_concat_heads(ttnn, ctx, l1_mc=_concat_mc)
         if S_ctx != S:
             ctx = ttnn.slice(ctx, (0, 0, 0, 0), (B, 1, S, H * Dh))
+        if not use_dram_activations:
+            ctx = self._l1_activation(ctx)
         lin_o = self._linear_kwargs(
             batch_size=B,
             seq_len=S,
             in_dim=H * Dh,
             out_dim=self.d_model,
         )
-        _dram_mc = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
         ctx_o = ace_step_matmul_activation(ttnn, ctx, lin_o, l1_fn=self._l1_activation, dram_mc=_dram_mc)
         out = ttnn.linear(ctx_o, self.wo, bias=self.bo, transpose_b=True, **lin_o)
         if _trace:
@@ -1166,12 +1222,13 @@ class TtQwen3MLP:
 
         mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
         mapper = ace_step_dit_weight_mesh_mapper(mesh_device)
+        w_dtype = ace_step_dit_weight_dtype(ttnn, self.dtype)
 
         def as_w(name: str):
             return ttnn.as_tensor(
                 _maybe_get(state_dict, f"{base_address}.{name}.weight"),
                 device=mesh_device,
-                dtype=self.dtype,
+                dtype=w_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=mem,
                 mesh_mapper=mapper,
@@ -1196,7 +1253,7 @@ class TtQwen3MLP:
         return self.ttnn.to_memory_config(t, self._act_l1)
 
     def _gate_up_linear_kwargs(self, *, batch_size: int, seq_len: int) -> dict:
-        """HiFi2 + L1 + wide-N program config for ``gate_proj`` / ``up_proj`` (256×3072×3072)."""
+        """LoFi + L1 + wide-N program config for ``gate_proj`` / ``up_proj`` (256×3072×3072)."""
         kw: dict = {}
         if self._linear_ck is not None:
             kw["compute_kernel_config"] = self._linear_ck
@@ -1219,7 +1276,7 @@ class TtQwen3MLP:
         return kw
 
     def _down_linear_kwargs(self, *, batch_size: int, seq_len: int) -> dict:
-        """HiFi2 + L1 + 1D-mcast program config for ``down_proj`` (intermediate→hidden)."""
+        """LoFi + L1 + 1D-mcast program config for ``down_proj`` (intermediate→hidden)."""
         kw: dict = {}
         if self._linear_ck is not None:
             kw["compute_kernel_config"] = self._linear_ck
@@ -1243,7 +1300,7 @@ class TtQwen3MLP:
 
     def __call__(self, x, *, debug: Optional[dict] = None, debug_prefix: str = ""):
         ttnn = self.ttnn
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        x = ace_step_ensure_tile_layout(ttnn, x)
         b_x = int(x.shape[0])
         s = int(x.shape[2])
         _dram_mc = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
@@ -1273,7 +1330,6 @@ class TtQwen3MLP:
         if _use_l1:
             h = self._l1_activation(h)
         lin_down = self._down_linear_kwargs(batch_size=b_x, seq_len=s)
-        _use_l1_down = "program_config" in lin_down
         h_lin = ace_step_matmul_activation(ttnn, h, lin_down, l1_fn=self._l1_activation, dram_mc=_dram_mc)
         out = ttnn.linear(h_lin, self.w_down, bias=None, transpose_b=True, **lin_down)
         if debug is not None and debug.get("enabled", False):
@@ -1421,7 +1477,8 @@ class TtAceStepDiTLayer:
             encoder_hidden_states: [B, 1, S_enc, D]
         """
         ttnn = self.ttnn
-        hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
+        hidden_states = ace_step_ensure_tile_layout(ttnn, hidden_states)
+        encoder_hidden_states = ace_step_ensure_tile_layout(ttnn, encoder_hidden_states)
         b = int(hidden_states.shape[0])
         _sr = ace_step_reshape_kwargs(ttnn)
 
@@ -1441,7 +1498,12 @@ class TtAceStepDiTLayer:
             def _l1_act(t):
                 return ace_step_ensure_l1_activation(ttnn, t, _el_mc)
 
-        temb = ttnn.to_layout(timestep_proj_b6d, ttnn.TILE_LAYOUT)
+        hidden_states = _l1_act(hidden_states)
+        if len(encoder_hidden_states.shape) == 3:
+            encoder_hidden_states = ttnn.unsqueeze(encoder_hidden_states, 1)
+        encoder_hidden_states = _l1_act(encoder_hidden_states)
+
+        temb = ace_step_ensure_tile_layout(ttnn, timestep_proj_b6d)
         temb = _l1_act(temb)
         if tuple(temb.shape) != (b, 6, int(hidden_states.shape[-1])):
             raise ValueError(f"Expected timestep_proj [B,6,D], got {tuple(temb.shape)}")
@@ -1449,7 +1511,7 @@ class TtAceStepDiTLayer:
         # (scale_shift_table + temb) -> chunk 6 along dim=1 => each [B,1,D]
         # Commutative add; put timestep activation first so Tracy tags ``in0`` as the activation buffer
         # (and after L1 placement above both operands can be L1-interleaved).
-        sst = ttnn.add(temb, self.scale_shift_table, **_bin_kw)
+        sst = _l1_act(ttnn.add(temb, self.scale_shift_table, **_bin_kw))
         d = int(hidden_states.shape[-1])
 
         def chunk(i: int):
@@ -1468,19 +1530,19 @@ class TtAceStepDiTLayer:
         if debug is not None and debug.get("enabled", False):
             debug[f"{core_pfx}c_gate"] = c_gate
 
-        hidden_states = _l1_act(hidden_states)
+        _rms_kw = ace_step_dit_rms_norm_kwargs(ttnn, _el_mc, device=self.mesh_device)
 
         # Self-attn AdaLN: norm(x) * (1+scale) + shift
         x_norm = ttnn.rms_norm(
             hidden_states,
             weight=self.self_norm_w,
             epsilon=self.eps,
-            memory_config=_el_mc,
+            **_rms_kw,
         )
         x_norm = _l1_act(x_norm)
-        one_plus = ace_step_add_one(ttnn, scale_msa, **_bin_kw)
-        x_scaled = ttnn.multiply(x_norm, one_plus, **_bin_kw)
-        h = ttnn.add(x_scaled, shift_msa, **_bin_kw)
+        one_plus = _l1_act(ace_step_add_one(ttnn, scale_msa, **_bin_kw))
+        x_scaled = _l1_act(ttnn.multiply(x_norm, one_plus, **_bin_kw))
+        h = _l1_act(ttnn.add(x_scaled, shift_msa, **_bin_kw))
         if debug is not None and debug.get("enabled", False):
             debug[f"{core_pfx}adaln_self_in"] = h
 
@@ -1496,19 +1558,19 @@ class TtAceStepDiTLayer:
             use_dram_activations=use_dram_activations,
         )
         attn_out = _l1_act(attn_out)
-        gated = ttnn.multiply(attn_out, gate_msa, **_bin_kw)
-        hidden_states = ttnn.add(_l1_act(hidden_states), gated, **_bin_kw)
+        gated = _l1_act(ttnn.multiply(attn_out, gate_msa, **_bin_kw))
+        hidden_states = _l1_act(ttnn.add(_l1_act(hidden_states), gated, **_bin_kw))
         if debug is not None and debug.get("enabled", False):
             debug[f"{core_pfx}after_self"] = hidden_states
 
         # Cross-attn
-        hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
         x2 = ttnn.rms_norm(
-            hidden_states,
+            _l1_act(hidden_states),
             weight=self.cross_norm_w,
             epsilon=self.eps,
-            memory_config=_el_mc,
+            **_rms_kw,
         )
+        x2 = _l1_act(x2)
         cross_dbg_pfx = f"{core_pfx}cross." if (debug is not None and debug.get("enabled", False)) else ""
         ca = self.cross_attn(
             x2,
@@ -1520,41 +1582,40 @@ class TtAceStepDiTLayer:
             use_dram_activations=use_dram_activations,
         )
         ca = _l1_act(ca)
-        hidden_states = ttnn.add(_l1_act(hidden_states), ca, **_bin_kw)
+        hidden_states = _l1_act(ttnn.add(_l1_act(hidden_states), ca, **_bin_kw))
         if debug is not None and debug.get("enabled", False):
             debug[f"{core_pfx}cross.attn_out"] = ca
             debug[f"{core_pfx}after_cross"] = hidden_states
 
         # MLP AdaLN + gated residual
-        hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
         x3 = ttnn.rms_norm(
             hidden_states,
             weight=self.mlp_norm_w,
             epsilon=self.eps,
-            memory_config=_el_mc,
+            **_rms_kw,
         )
         if debug is not None and debug.get("enabled", False):
             debug[f"{core_pfx}mlp_norm_out"] = x3
         x3 = _l1_act(x3)
-        one_plus2 = ace_step_add_one(ttnn, c_scale, **_bin_kw)
-        x3_scaled = ttnn.multiply(x3, one_plus2, **_bin_kw)
-        h3 = ttnn.add(x3_scaled, c_shift, **_bin_kw)
-        h3 = _l1_act(h3)
+        one_plus2 = _l1_act(ace_step_add_one(ttnn, c_scale, **_bin_kw))
+        x3_scaled = _l1_act(ttnn.multiply(x3, one_plus2, **_bin_kw))
+        h3 = _l1_act(ttnn.add(x3_scaled, c_shift, **_bin_kw))
         if debug is not None and debug.get("enabled", False):
             debug[f"{core_pfx}mlp_in"] = h3
         mlp_pfx = f"{core_pfx}mlp." if (debug is not None and debug.get("enabled", False)) else ""
-        ff = self.mlp(
-            h3,
-            debug=debug if (debug is not None and debug.get("enabled", False)) else None,
-            debug_prefix=mlp_pfx,
+        ff = _l1_act(
+            self.mlp(
+                h3,
+                debug=debug if (debug is not None and debug.get("enabled", False)) else None,
+                debug_prefix=mlp_pfx,
+            )
         )
         if debug is not None and debug.get("enabled", False):
             debug[f"{core_pfx}mlp_out"] = ff
-        ff = _l1_act(ff)
-        ff = ttnn.multiply(ff, c_gate, **_bin_kw)
+        ff = _l1_act(ttnn.multiply(ff, c_gate, **_bin_kw))
         if debug is not None and debug.get("enabled", False):
             debug[f"{core_pfx}mlp_out_gated"] = ff
-        hidden_states = ttnn.add(_l1_act(hidden_states), ff, **_bin_kw)
+        hidden_states = _l1_act(ttnn.add(_l1_act(hidden_states), ff, **_bin_kw))
         if debug is not None and debug.get("enabled", False):
             debug[f"{core_pfx}block_out"] = hidden_states
         return hidden_states
@@ -1584,10 +1645,11 @@ class TtAceStepDiTCore:
         mapper = ace_step_dit_weight_mesh_mapper(mesh_device)
 
         print("[ace_step_v1_5] DiT core: condition embedder …", flush=True)
+        _w_dtype = ace_step_dit_weight_dtype(ttnn, self.dtype)
         self.cond_w = ttnn.as_tensor(
             _maybe_get(state_dict, "condition_embedder.weight"),
             device=mesh_device,
-            dtype=self.dtype,
+            dtype=_w_dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=mem,
             mesh_mapper=mapper,
@@ -1595,7 +1657,7 @@ class TtAceStepDiTCore:
         self.cond_b = ttnn.as_tensor(
             _maybe_get(state_dict, "condition_embedder.bias").reshape(1, 1, 1, -1),
             device=mesh_device,
-            dtype=self.dtype,
+            dtype=_w_dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=mem,
             mesh_mapper=mapper,
@@ -1659,11 +1721,11 @@ class TtAceStepDiTCore:
         debug: Optional[dict] = None,
     ):
         ttnn = self.ttnn
-        # encoder_hidden_states: [B, S_enc, cond_dim] row-major -> [B,1,S_enc,D]
-        enc = ttnn.to_layout(encoder_hidden_states, ttnn.ROW_MAJOR_LAYOUT)
-        enc = ttnn.unsqueeze(enc, 1)
-        enc = ttnn.to_layout(enc, ttnn.TILE_LAYOUT)
+        # encoder_hidden_states: [B, S_enc, D] or [B, 1, S_enc, D] -> [B, 1, S_enc, D] TILE (no ROW_MAJOR hop).
         l1_mc = ace_step_dit_linear_l1_memory_config(ttnn)
+        enc = ace_step_ensure_dit_activation(ttnn, encoder_hidden_states, l1_mc)
+        if len(enc.shape) == 3:
+            enc = ttnn.unsqueeze(enc, 1)
         # Build program_config for condition_embedder (e.g. 256×2048→1024).
         # Do not pass L1 ``memory_config`` into ``linear`` here: bias broadcast validation fails
         # on small test shapes (e.g. ``[1,1,4,128]`` @ ``[256,128]`` + ``[1,1,1,256]`` bias).
@@ -1688,15 +1750,17 @@ class TtAceStepDiTCore:
             _ce_kw["compute_kernel_config"] = self._linear_ck
         if _ce_pc is not None:
             _ce_kw["program_config"] = _ce_pc
+        if l1_mc is not None:
+            _ce_kw["memory_config"] = l1_mc
         enc = ttnn.linear(enc, self.cond_w, bias=self.cond_b, transpose_b=True, **_ce_kw)
         if l1_mc is not None:
             enc = ace_step_ensure_l1_activation(ttnn, enc, l1_mc)
         if debug is not None and debug.get("enabled", False):
             debug["core.enc_conditioned"] = enc
 
-        x = ttnn.to_layout(hidden_states_patches, ttnn.ROW_MAJOR_LAYOUT)
-        x = ttnn.unsqueeze(x, 1)  # [B,1,S,D]
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        x = ace_step_ensure_dit_activation(ttnn, hidden_states_patches, l1_mc)
+        if len(x.shape) == 3:
+            x = ttnn.unsqueeze(x, 1)  # [B,1,S,D]
         _dram_mc = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
         _use_dram_act = ace_step_dit_prefers_dram_activations(
             batch_size=int(x.shape[0]),
@@ -1706,7 +1770,6 @@ class TtAceStepDiTCore:
             x = ace_step_ensure_dram_activation(ttnn, x, _dram_mc)
             enc = ace_step_ensure_dram_activation(ttnn, enc, _dram_mc)
         elif l1_mc is not None:
-            x = ace_step_ensure_l1_activation(ttnn, x, l1_mc)
             enc = ace_step_ensure_l1_activation(ttnn, enc, l1_mc)
         if debug is not None and debug.get("enabled", False):
             debug["core.x_patches_in"] = x
