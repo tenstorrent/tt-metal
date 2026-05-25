@@ -12,6 +12,44 @@ Only re-run jobs that were failing before the change.
 For each pipeline branch, do not run full workflow verification by default.
 Run only the previously failing jobs unless there is a reason to re-expand scope.
 
+## Session Start Rebase + Revalidation (Mandatory)
+
+At the beginning of each active session for a pipeline branch:
+
+1. Rebase the working branch onto the latest `main`.
+2. Re-check the latest completed run(s) on `main` for that pipeline.
+3. Confirm each test currently disabled by the branch still fails deterministically on `main`.
+
+If any test no longer fails on latest `main`:
+
+- Remove its skip/disable from the branch.
+- Keep only disables for tests that are still deterministically failing.
+- Continue the targeted verification loop with the reduced disable set.
+
+Rationale: PRs may remain open for days, and we must avoid disabling tests that have already been fixed and are now passing.
+
+## Build Reuse Requirement (No Rebuilds)
+
+For this project, verification runs must reuse existing build artifacts.
+Do not run fresh build steps for targeted verification.
+
+Before dispatching a verification run:
+
+1. Modify the pipeline workflow file being dispatched so `workflow_dispatch` can accept an artifact-source run ID (for example, `use-artifacts-from-run`).
+2. Thread that input into the workflow's `build-artifact` call so it is passed to `.github/workflows/build-artifact.yaml`.
+3. Confirm the called workflow supports artifact reuse and skips build when the run ID is set.
+4. Dispatch the verification run with that run ID so build artifacts are downloaded instead of rebuilt.
+
+Run ID selection rules:
+
+- Prefer a successful recent `Merge Gate` run.
+- The source run should match the same build intent (platform/build-type/LTO/tracy expectations).
+- The source run must contain the required build outputs (build tarball and wheel when needed by the pipeline).
+- Prefer a source run on the same commit, or the nearest compatible commit prior to the disable-only changes.
+
+If no compatible artifact-source run is available, do not dispatch a rebuild run.
+First find another compatible source run or update the plan/branch flow to obtain one.
+
 ## In-Scope vs Out-of-Scope Failures
 
 This effort is only for deterministic runtime/code failures.
