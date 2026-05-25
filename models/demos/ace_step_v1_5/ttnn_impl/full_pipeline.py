@@ -25,6 +25,8 @@ from .dit_decoder_core import AceStepDecoderConfigTTNN, TtAceStepDiTCore, TtTime
 from .math_perf_env import (
     ace_step_dit_linear_l1_memory_config,
     ace_step_dit_prefers_dram_activations,
+    ace_step_dit_weight_dtype,
+    ace_step_ensure_dit_activation,
     ace_step_ensure_l1_activation,
     ace_step_sdpa_mask_memory_config,
 )
@@ -35,6 +37,13 @@ from .safetensors_loader import load_safetensors_state_dict
 if TYPE_CHECKING:  # pragma: no cover
     import numpy as np
     import torch
+
+
+def _ace_step_concat_activations(tensors, *, dim: int):
+    """Concatenate latents with L1 output for TILE ``proj_in`` linear patch embed."""
+    mc = ace_step_dit_linear_l1_memory_config(ttnn)
+    ckw = {"memory_config": mc} if mc is not None else {}
+    return _ttnn_concat_fn(tensors, dim=dim, **ckw)
 
 
 @dataclass(frozen=True)
@@ -89,7 +98,7 @@ class AceStepV15TTNNPipeline:
         if activation_dtype is None or weights_dtype is None:
             raise RuntimeError("TTNN build missing bfloat16 dtype; pass activation_dtype/weights_dtype explicitly.")
         self.activation_dtype = activation_dtype
-        self.weights_dtype = weights_dtype
+        self.weights_dtype = ace_step_dit_weight_dtype(ttnn, weights_dtype)
 
         # Load weights on host, then transfer once per weight tensor during module init.
         sd = load_safetensors_state_dict(checkpoint_safetensors_path, prefix=decoder_prefix).tensors
@@ -375,7 +384,9 @@ class AceStepV15TTNNPipeline:
         Returns:
             ``None`` when every encoder key is valid (no mask tensor needed).
         """
-        hidden_states_btC = _ttnn_concat_fn([context_latents_bt128, xt_bt64], dim=-1)
+        hidden_states_btC = _ace_step_concat_activations([context_latents_bt128, xt_bt64], dim=-1)
+        _hs_l1 = ace_step_dit_linear_l1_memory_config(ttnn)
+        hidden_states_btC = ace_step_ensure_dit_activation(ttnn, hidden_states_btC, _hs_l1)
 
         patches, _meta = self.patch_embed.forward(hidden_states_btC)
         b = int(hidden_states_btC.shape[0])
@@ -453,6 +464,11 @@ class AceStepV15TTNNPipeline:
             )
         temb_r, tp_r = self.time_embed_r.from_timestep_value(delta_tr)
         _ts_mc = ace_step_dit_linear_l1_memory_config(ttnn) or getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+        if _ts_mc is not None:
+            temb_t = ace_step_ensure_l1_activation(ttnn, temb_t, _ts_mc)
+            tp_t = ace_step_ensure_l1_activation(ttnn, tp_t, _ts_mc)
+            temb_r = ace_step_ensure_l1_activation(ttnn, temb_r, _ts_mc)
+            tp_r = ace_step_ensure_l1_activation(ttnn, tp_r, _ts_mc)
         temb = ttnn.add(temb_t, temb_r, memory_config=_ts_mc)  # [1, D]
         timestep_proj = ttnn.add(tp_t, tp_r, memory_config=_ts_mc)  # [1, 6, D]
         if _ts_mc is not None:
@@ -520,7 +536,9 @@ class AceStepV15TTNNPipeline:
             )
 
         if hidden_states_btC is None:
-            hidden_states_btC = _ttnn_concat_fn([context_latents_bt128, xt_bt64], dim=-1)
+            hidden_states_btC = _ace_step_concat_activations([context_latents_bt128, xt_bt64], dim=-1)
+            _hs_l1 = ace_step_dit_linear_l1_memory_config(ttnn)
+            hidden_states_btC = ace_step_ensure_dit_activation(ttnn, hidden_states_btC, _hs_l1)
 
         if debug:
             try:

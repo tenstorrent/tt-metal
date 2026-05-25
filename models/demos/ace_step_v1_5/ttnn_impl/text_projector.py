@@ -15,19 +15,28 @@ import numpy as np
 
 import ttnn
 
-from .math_perf_env import ace_step_reshape_kwargs
+from .math_perf_env import (
+    ace_step_dense_linear_program_config,
+    ace_step_ensure_l1_activation,
+    ace_step_ensure_tile_layout,
+    ace_step_linear_l1_memory_config,
+    ace_step_linear_weight_dtype,
+    ace_step_reshape_kwargs,
+)
 
 WEIGHT_KEY = "encoder.text_projector.weight"
 
 
 def load_text_projector_weight_numpy(checkpoint_path: str, *, weight_key: str = WEIGHT_KEY) -> np.ndarray:
     """Load only the projector row from ``model.safetensors`` into float32 host numpy."""
-    from models.demos.ace_step_v1_5.weight_cache import _tensor_to_f32_numpy, get_torch_state_dict
+    import torch
+    from safetensors import safe_open
 
-    sd = get_torch_state_dict(str(checkpoint_path), component="safetensors-checkpoint")
-    if weight_key not in sd:
-        raise KeyError(f"{weight_key} not found in {checkpoint_path}")
-    return _tensor_to_f32_numpy(sd[weight_key])
+    with safe_open(checkpoint_path, framework="pt", device="cpu") as sf:
+        if weight_key not in sf.keys():
+            raise KeyError(f"{weight_key} not found in {checkpoint_path}")
+        w = sf.get_tensor(weight_key)
+        return w.detach().to(torch.float32).cpu().numpy()
 
 
 class TtAceStepTextProjector:
@@ -44,10 +53,13 @@ class TtAceStepTextProjector:
         weight_f32_numpy: np.ndarray,
         weights_dtype=None,
         weight_memory_config=None,
+        linear_compute_kernel_config=None,
+        activation_l1_memory_config=None,
     ) -> None:
-        weights_dtype = weights_dtype or getattr(ttnn, "bfloat16", None)
-        if weights_dtype is None:
+        _default = getattr(ttnn, "bfloat16", None)
+        if _default is None:
             raise RuntimeError("TTNN build missing bfloat16; pass weights_dtype explicitly.")
+        weights_dtype = ace_step_linear_weight_dtype(ttnn, weights_dtype or _default)
 
         w = np.asarray(weight_f32_numpy, dtype=np.float32)
         if w.ndim != 2:
@@ -56,6 +68,8 @@ class TtAceStepTextProjector:
         self.d_dec = int(w.shape[0])
         self.d_text = int(w.shape[1])
         self.device = device
+        self._linear_ck = linear_compute_kernel_config
+        self._act_l1 = activation_l1_memory_config or ace_step_linear_l1_memory_config(ttnn)
         self.weight_tt = ttnn.as_tensor(
             w,
             device=device,
@@ -63,6 +77,23 @@ class TtAceStepTextProjector:
             layout=ttnn.TILE_LAYOUT,
             memory_config=weight_memory_config,
         )
+
+    def _linear_kwargs(self, *, batch_size: int, seq_len: int) -> dict:
+        kw: dict = {}
+        if self._linear_ck is not None:
+            kw["compute_kernel_config"] = self._linear_ck
+        pc = ace_step_dense_linear_program_config(
+            self.device,
+            seq_len=int(seq_len),
+            in_dim=self.d_text,
+            out_dim=self.d_dec,
+            batch_size=int(batch_size),
+        )
+        if pc is not None:
+            kw["program_config"] = pc
+        if self._act_l1 is not None:
+            kw["memory_config"] = self._act_l1
+        return kw
 
     def forward(self, text_hidden_f32_numpy: np.ndarray, *, activation_dtype):
         """Host float32 ``[B, S, D_text]`` → device-encoded states for ``AceStepV15TTNNPipeline``.
@@ -84,8 +115,10 @@ class TtAceStepTextProjector:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=mem,
         )
-        xh = ttnn.to_layout(xh, ttnn.TILE_LAYOUT)
-        out = ttnn.linear(xh, self.weight_tt, bias=None, transpose_b=True)
+        xh = ace_step_ensure_tile_layout(ttnn, xh)
+        xh = ace_step_ensure_l1_activation(ttnn, xh, self._act_l1)
+        lin_kw = self._linear_kwargs(batch_size=int(xh.shape[0]), seq_len=int(xh.shape[1]))
+        out = ttnn.linear(xh, self.weight_tt, bias=None, transpose_b=True, **lin_kw)
         try:
             ttnn.deallocate(xh)
         except Exception:
@@ -93,7 +126,7 @@ class TtAceStepTextProjector:
         return out
 
     def forward_from_hidden(self, hidden_b1sh: ttnn.Tensor, *, activation_dtype) -> ttnn.Tensor:
-        """``hidden_b1sh`` ``[B,1,S,D_text]`` → ``[B,1,S,D_dec]`` (ROW-major activations). ``activation_dtype`` reserved."""
+        """``hidden_b1sh`` ``[B,1,S,D_text]`` → ``[B,1,S,D_dec]`` TILE L1 (production default)."""
         _ = activation_dtype
         b, _one, s, d = (
             int(hidden_b1sh.shape[0]),
@@ -103,10 +136,11 @@ class TtAceStepTextProjector:
         )
         if d != self.d_text:
             raise ValueError(f"Expected D_text={self.d_text}, got {d}")
-        x = ttnn.to_layout(hidden_b1sh, ttnn.ROW_MAJOR_LAYOUT)
+        x = ace_step_ensure_tile_layout(ttnn, hidden_b1sh)
+        x = ace_step_ensure_l1_activation(ttnn, x, self._act_l1)
         _sr = ace_step_reshape_kwargs(ttnn)
         x = ttnn.reshape(x, (b, s, self.d_text), **_sr)
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        out = ttnn.linear(x, self.weight_tt, bias=None, transpose_b=True)
+        lin_kw = self._linear_kwargs(batch_size=b, seq_len=s)
+        out = ttnn.linear(x, self.weight_tt, bias=None, transpose_b=True, **lin_kw)
         # Keep TILE: ``condition_encoder`` and ``ttnn.concat`` require TILE on all operands.
         return out

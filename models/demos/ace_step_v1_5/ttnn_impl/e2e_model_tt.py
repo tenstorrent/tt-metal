@@ -78,6 +78,7 @@ from .dit_sampling_ttnn import (
     concat_duplicate_batch,
     euler_subtract_v_dt,
     euler_subtract_v_dt_host,
+    fp32_tile_to_bf16_tile_l1,
     fp32_tile_to_row_bf16,
     refresh_fp32_tile_from_host,
     slice_batch_btc,
@@ -907,7 +908,7 @@ def run_ttnn_denoise_loop(
         and prebuilt
     ):
         assert ctx_tt_pipe is not None and enc_tt_pipe is not None
-        xt_row = fp32_tile_to_row_bf16(xt_tt, dram=mem)
+        xt_row = fp32_tile_to_bf16_tile_l1(xt_tt, dram=mem)
         if do_cfg:
             xt_for_mask = concat_duplicate_batch(xt_row)
             try:
@@ -1285,7 +1286,7 @@ def run_ttnn_denoise_loop(
             progress_fn(step_idx, num_steps, t_curr_f, float(euler_dt))
 
     def _diffusion_iterate(*, step_idx: int, t_curr_f: float, euler_dt: float) -> None:
-        xt_row = fp32_tile_to_row_bf16(xt_tt, dram=mem)
+        xt_row = fp32_tile_to_bf16_tile_l1(xt_tt, dram=mem)
         if use_seq_cfg:
             vpc_rm, vpu_rm = run_mesh_sequential_cfg_forwards(
                 pipe=pipe,
@@ -1363,7 +1364,7 @@ def run_ttnn_denoise_loop(
                 progress_fn(step_idx, num_steps, t_curr_f, float(euler_dt))
             return
 
-        xt_row = fp32_tile_to_row_bf16(xt_tt, dram=mem)
+        xt_row = fp32_tile_to_bf16_tile_l1(xt_tt, dram=mem)
         if use_seq_cfg:
             enc_cap = slice_batch_dim0(enc_tt_pipe, 0, 1)
             ctx_cap = slice_batch_dim0(ctx_tt_pipe, 0, 1)
@@ -1467,7 +1468,7 @@ def run_ttnn_denoise_loop(
                 progress_fn(step_idx, num_steps, t_curr_f, float(euler_dt))
             return
 
-        xt_row = fp32_tile_to_row_bf16(xt_tt, dram=mem)
+        xt_row = fp32_tile_to_bf16_tile_l1(xt_tt, dram=mem)
         if use_seq_cfg:
             xt_pipe_in = xt_row
             enc_cond = slice_batch_dim0(enc_tt_pipe, 0, 1)
@@ -1955,7 +1956,7 @@ class AceStepE2EModel:
                 "use_adg": bool(self.config.use_adg),
                 "do_cfg": bool(do_cfg),
                 "seed": int(self.config.seed),
-                "use_trace": _e2e_trace_enabled(),
+                "use_trace": bool(self._use_trace),
             },
         )
 
