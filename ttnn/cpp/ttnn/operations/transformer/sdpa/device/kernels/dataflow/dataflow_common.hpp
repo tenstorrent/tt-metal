@@ -128,7 +128,7 @@ uint32_t read_chunk_with_padding(
     for (uint32_t row = 0; row < src_rows; ++row) {
         uint32_t write_ptr = base_write_ptr + row * outer_ptr_stride;
         for (uint32_t col = 0; col < src_cols; ++col) {
-            noc_async_read_tile(start_tile_id, reader, write_ptr);
+            noc_async_read_page(start_tile_id, reader, write_ptr);
             start_tile_id += 1;
             write_ptr += inner_ptr_stride;
 
@@ -185,7 +185,7 @@ FORCE_INLINE void read_q_subblock(
 
         if (row < src_rows) {
             for (uint32_t col = 0; col < src_cols; ++col) {
-                noc_async_read_tile(start_tile_id++, reader, write_ptr);
+                noc_async_read_page(start_tile_id++, reader, write_ptr);
                 write_ptr += tile_bytes;
                 if (++barrier_count == barrier_threshold) {
                     noc_async_read_barrier();
@@ -239,7 +239,7 @@ void read_paged_chunk_with_padding(
             virtual_row_num, cur_head, page_table_ptr);
 
         for (uint32_t col = 0; col < src_cols; ++col) {
-            noc_async_read_tile(physical_tile_id, reader, write_ptr);
+            noc_async_read_page(physical_tile_id, reader, write_ptr);
             physical_tile_id += 1;
             write_ptr += inner_ptr_stride;
 
@@ -893,7 +893,7 @@ void generate_noncausal_padded_mask(uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, ui
     cb_push_back(cb_mask_in, mask_size_tiles);
 }
 
-// Issue noc_async_read_tile for a (num_rows × cols) tile block. tile_id starts at base_tile_id,
+// Issue noc_async_read_page for a (num_rows × cols) tile block. tile_id starts at base_tile_id,
 // advances by ++ per col and by row_stride per row (i.e., tile_id += row_stride - cols after each
 // inner col loop). dst starts at dst_addr + dst_row_origin * outer_stride, advances by
 // inner_stride per col and outer_stride per row. No barrier — caller must noc_async_read_barrier().
@@ -915,7 +915,7 @@ inline void issue_block_reads(
     for (uint32_t r = 0; r < num_rows; ++r) {
         uint32_t dst = dst_addr + (dst_row_origin + r) * outer_stride;
         for (uint32_t col = 0; col < cols; ++col) {
-            noc_async_read_tile(tile_id, reader, dst);
+            noc_async_read_page(tile_id, reader, dst);
             ++tile_id;
             dst += inner_stride;
             if (barrier_threshold > 0 && ++barrier_count == barrier_threshold) {
@@ -953,7 +953,7 @@ inline void zero_fill_block(
     }
 }
 
-// Issue noc_async_write_tile for a (num_rows × cols) tile block. Same tile_id/src arithmetic
+// Issue noc_async_write_page for a (num_rows × cols) tile block. Same tile_id/src arithmetic
 // as issue_block_reads (with src instead of dst). No barrier — caller must noc_async_write_barrier().
 template <typename WriterType>
 inline void issue_block_writes(
@@ -970,7 +970,7 @@ inline void issue_block_writes(
     for (uint32_t r = 0; r < num_rows; ++r) {
         uint32_t src = src_addr + (src_row_origin + r) * outer_stride;
         for (uint32_t col = 0; col < cols; ++col) {
-            noc_async_write_tile(tile_id, writer, src);
+            noc_async_write_page(tile_id, writer, src);
             ++tile_id;
             src += inner_stride;
         }
@@ -1303,7 +1303,7 @@ void write_block(
     uint32_t l1_read_addr = get_read_ptr(cb_out);
     for (uint32_t row = 0; row < rows; ++row) {
         for (uint32_t col = 0; col < cols; ++col) {
-            noc_async_write_tile(tile_id, out_writer, l1_read_addr);
+            noc_async_write_page(tile_id, out_writer, l1_read_addr);
             ++tile_id;
             l1_read_addr += tile_bytes;
 
@@ -1351,7 +1351,7 @@ void write_block_row_grouped(
             const uint32_t row = rg * sbh + r;
             if (row < write_rows) {
                 for (uint32_t col = 0; col < cols; ++col) {
-                    noc_async_write_tile(tile_id, out_writer, l1_read_addr + col * tile_bytes);
+                    noc_async_write_page(tile_id, out_writer, l1_read_addr + col * tile_bytes);
                     ++tile_id;
                     if (++barrier_count == barrier_threshold) {
                         noc_async_write_flushed_with_trid(default_trid);
