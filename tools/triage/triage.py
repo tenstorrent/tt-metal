@@ -69,7 +69,6 @@ except ImportError as e:
 # Import necessary libraries
 import importlib.metadata as importlib_metadata
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn, TimeRemainingColumn, BarColumn, TextColumn
 import sys
 from ttexalens.context import Context
 from ttexalens.device import Device
@@ -138,24 +137,22 @@ def get_verbose_level() -> int:
 
 # Purposely uninitialized global console object to ensure proper initialization only once later
 console: Console = None  # type: ignore[assignment]
-progress_disabled: bool = False
 
 
 def init_console_and_verbosity(args: ScriptArguments) -> None:
     global console
-    global progress_disabled
 
     if console is not None:
         return
 
     disable_colors = bool(args["--disable-colors"]) or bool(args["--llm-output"])
-    # When redirecting to file, use a larger width to avoid wrapping.
-    # When in a terminal, let Rich auto-detect the terminal width.
-    width = None if sys.stdout.isatty() and _verbose_level == 0 else 10000
-    console = Console(theme=utils.create_console_theme(disable_colors), highlight=False, width=width)
 
-    pg = get_process_group()
-    progress_disabled = pg.is_multi or bool(args["--disable-progress"]) or bool(args["--llm-output"])
+    import shutil
+
+    term_cols = shutil.get_terminal_size(fallback=(0, 0)).columns
+    is_usable_tty = sys.stdout.isatty() and term_cols > 0
+    width = None if is_usable_tty and _verbose_level == 0 else 10000
+    console = Console(theme=utils.create_console_theme(disable_colors), highlight=False, width=width)
 
     # Set verbose level from -v count (controls which columns are displayed)
     verbose_level = args["-v"] or 0
@@ -168,22 +165,6 @@ def init_console_and_verbosity(args: ScriptArguments) -> None:
     except:
         utils.WARN("Verbosity level must be an integer. Falling back to default value.")
     utils.VERBOSE(f"Verbosity level: {utils.Verbosity.get().name} ({utils.Verbosity.get().value})")
-
-
-def create_progress() -> Progress:
-    global console
-    global progress_disabled
-
-    return Progress(
-        SpinnerColumn(),
-        TimeElapsedColumn(),
-        BarColumn(),
-        TimeRemainingColumn(),
-        TextColumn("[progress.tasks]{task.completed}/{task.total}[/] [progress.description]{task.description}[/]"),
-        console=console,
-        transient=True,
-        disable=progress_disabled,
-    )
 
 
 def process_arguments(args: ScriptArguments) -> None:
@@ -357,6 +338,24 @@ def get_output_serializer() -> Any:
 def set_output_serializer(serializer: Any) -> None:
     global _output_serializer
     _output_serializer = serializer
+
+
+_progress_reporter: Any = None
+
+
+def get_progress_reporter() -> Any:
+    """Return the active progress reporter. Runners install one in their
+    `__init__`; expect this to be set by the time any script runs."""
+    if _progress_reporter is None:
+        from progress import NullProgressReporter
+
+        return NullProgressReporter()
+    return _progress_reporter
+
+
+def set_progress_reporter(reporter: Any) -> None:
+    global _progress_reporter
+    _progress_reporter = reporter
 
 
 def init_output_serializer(args: ScriptArguments) -> None:
@@ -585,15 +584,24 @@ def run_script(
             _enforce_dependencies(args)
             context = _init_ttexalens(args)
 
-        runner = create_runner(args, context, pg, target_paths={script_path})
+        # Programmatic callers (return_result=True) get the stashed result and
+        # don't want inline output; install Null serializer + reporter to suppress.
+        progress_reporter: Any = None
+        if return_result:
+            from progress import NullProgressReporter
+            from serializers import NullSerializer
+
+            set_output_serializer(NullSerializer())
+            progress_reporter = NullProgressReporter()
+        else:
+            init_output_serializer(args)
+
+        runner = create_runner(args, context, pg, target_paths={script_path}, progress_reporter=progress_reporter)
         runner.run_all(script_queue)
         runner.finalize()
 
         if return_result:
             return runner.last_result
-
-        init_output_serializer(args)
-        runner.render_last_result()
     except BaseException:
         # Programmatic callers expect to see the exception; only firewall when we own the exit.
         if not force_exit:
@@ -604,6 +612,14 @@ def run_script(
         get_output_serializer().close()
         pg.shutdown()
         os._exit(0)
+
+
+def _resolve_script_path(application_path: str, name: str) -> str:
+    """Turn a `--run` value (bare name, .py, relative, or absolute) into an absolute path."""
+    path = name if name.endswith(".py") else name + ".py"
+    if not os.path.isabs(path):
+        path = os.path.join(application_path, path)
+    return os.path.abspath(path)
 
 
 def _build_triage_summary(script_queue: list[TriageScript]) -> str:
@@ -631,31 +647,27 @@ def main():
             sys.modules[my_name] = sys.modules["__main__"]
 
         orchestrator = ScriptOrchestrator(application_path)
-        scripts, script_queue = orchestrator.queue_for_full_triage()
+        scripts, full_queue = orchestrator.queue_for_full_triage()
 
         args = parse_arguments(scripts)
         init_output_serializer(args)
         _enforce_dependencies(args)
         context = _init_ttexalens(args)
 
-        with create_progress() as progress:
-            scripts_task = progress.add_task("Script execution", total=len(script_queue))
+        if args["--run"] is not None and (len(args["--run"]) != 1 or args["--run"][0] != "all"):
+            target_paths: set[str] | None = {_resolve_script_path(application_path, name) for name in args["--run"]}
+            scripts, script_queue = orchestrator.queue_for_targets(target_paths)
+        else:
+            target_paths = None
+            script_queue = full_queue
 
-            if args["--run"] is not None and (len(args["--run"]) != 1 or args["--run"][0] != "all"):
-                progress.update(scripts_task, total=len(args["--run"]))
-                for script_name in args["--run"]:
-                    progress.update(scripts_task, description=f"Running {script_name}")
-                    run_script(script_name, args, context)
-                    progress.advance(scripts_task)
-            else:
-                triage_init_end = time()
-                if args["--print-script-times"]:
-                    utils.INFO(f"Triage initialization time: {triage_init_end - triage_start:.2f}s")
-                runner = create_runner(args, context, process_group, progress=progress, progress_task=scripts_task)
-                runner.run_all(script_queue)
-                runner.finalize()
-                runner.print_totals(triage_init_end - triage_start)
-            progress.remove_task(scripts_task)
+        triage_init_end = time()
+        if args["--print-script-times"]:
+            utils.INFO(f"Triage initialization time: {triage_init_end - triage_start:.2f}s")
+        runner = create_runner(args, context, process_group, target_paths=target_paths)
+        runner.run_all(script_queue)
+        runner.finalize()
+        runner.print_totals(triage_init_end - triage_start)
 
         if process_group.is_root:
             triage_summary_path = args["--triage-summary-path"]

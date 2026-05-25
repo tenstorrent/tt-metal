@@ -49,6 +49,25 @@ class ScriptOrchestrator:
         scripts = self._load_with_deps(script_path)
         return scripts, self._resolve_order(scripts)
 
+    def queue_for_targets(self, script_paths: set[str]) -> tuple[dict[str, TriageScript], list[TriageScript]]:
+        """Multi-target queue: load transitive deps of every target into one
+        merged dict, wire deps once, then topo-sort. Useful for `--run x y`."""
+        scripts: dict[str, TriageScript] = {}
+        loading: list[str] = list(script_paths)
+        while loading:
+            path = loading.pop(0)
+            if path in scripts:
+                continue
+            script = TriageScript.load(path)
+            scripts[path] = script
+            loading.extend(script.config.depends)
+        # Wire transitive deps onto each script's `.depends` list.
+        for script in scripts.values():
+            for dep in script.config.depends:
+                assert dep in scripts, f"Dependency {dep} for script {script.name} not found."
+                script.depends.append(scripts[dep])
+        return scripts, self._resolve_order(scripts)
+
     @staticmethod
     def _wire_deps(scripts: dict[str, TriageScript]) -> None:
         for script in scripts.values():

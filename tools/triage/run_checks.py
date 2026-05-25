@@ -42,8 +42,8 @@ from triage import (
     run_script,
     log_warning_device,
     log_warning_risc,
-    create_progress,
     log_check,
+    get_progress_reporter,
 )
 from triage_session import get_triage_session
 from ttexalens.context import Context
@@ -284,48 +284,46 @@ class RunChecks:
     ) -> list[PerDeviceCheckResult] | None:
         """Run a check function on each device, collecting results."""
         result: list[PerDeviceCheckResult] = []
-        with create_progress() as progress:
-            device_task = progress.add_task(
-                "Processing devices", total=len(self.devices), visible=len(self.devices) > 1
-            )
-            try:
-                for device in self.devices:
-                    # Skipping broken devices
-                    if self._session.is_device_broken(device):
-                        continue
-                    try:
-                        check_result = check(device)
-                    except TimeoutDeviceRegisterError as e:
-                        self._session.add_broken_device(device)
-                        if print_broken_devices:
-                            log_warning_device(
-                                device, f"Triage broke device with: {e}. This device will be skipped from now on."
-                            )
-                        if device.is_local:
-                            # We are classifying remote devices as broken since we cannot access them if their local device is broken
-                            for remote_device in device.remote_devices:
-                                # Broken remote devices will inherit the error from the local device
-                                self._session.add_broken_device(remote_device)
-                                if print_broken_devices:
-                                    log_warning_device(
-                                        remote_device,
-                                        f"Will be skipped from now on due to its local device (device {device.id}) being broken.",
-                                    )
-                        continue
-                    except Exception as e:
-                        log_warning_device(device, f"Skipping: {str(e)}")
-                        continue
-                    # Use the common result collection helper
-                    self._collect_results(
-                        result,
-                        check_result,
-                        PerDeviceCheckResult,
-                        device_description=DeviceDescription(device, self._use_unique_id),
-                    )
-                    progress.advance(device_task)
-                return result if len(result) > 0 else None
-            finally:
-                progress.remove_task(device_task)
+        with get_progress_reporter().session(len(self.devices)) as devices_session:
+            devices_session.describe("Processing devices")
+            for device in self.devices:
+                # Skipping broken devices
+                if self._session.is_device_broken(device):
+                    devices_session.advance()
+                    continue
+                try:
+                    check_result = check(device)
+                except TimeoutDeviceRegisterError as e:
+                    self._session.add_broken_device(device)
+                    if print_broken_devices:
+                        log_warning_device(
+                            device, f"Triage broke device with: {e}. This device will be skipped from now on."
+                        )
+                    if device.is_local:
+                        # We are classifying remote devices as broken since we cannot access them if their local device is broken
+                        for remote_device in device.remote_devices:
+                            # Broken remote devices will inherit the error from the local device
+                            self._session.add_broken_device(remote_device)
+                            if print_broken_devices:
+                                log_warning_device(
+                                    remote_device,
+                                    f"Will be skipped from now on due to its local device (device {device.id}) being broken.",
+                                )
+                    devices_session.advance()
+                    continue
+                except Exception as e:
+                    log_warning_device(device, f"Skipping: {str(e)}")
+                    devices_session.advance()
+                    continue
+                # Use the common result collection helper
+                self._collect_results(
+                    result,
+                    check_result,
+                    PerDeviceCheckResult,
+                    device_description=DeviceDescription(device, self._use_unique_id),
+                )
+                devices_session.advance()
+        return result if len(result) > 0 else None
 
     def run_per_block_check(
         self, check: Callable[[OnChipCoordinate], object], block_filter: list[str] | str | None = None
@@ -338,28 +336,22 @@ class RunChecks:
         def per_device_blocks_check(device: Device) -> list[PerBlockCheckResult] | None:
             """Check all block locations for a single device."""
             result: list[PerBlockCheckResult] = []
-            with create_progress() as progress:
-                progress_count = 0
-                for block_type in block_types_to_check:
-                    for location in self.block_locations[device][block_type]:
-                        progress_count += 1
-                device_task = progress.add_task(f"Processing NOC locations", total=progress_count)
-                try:
-                    for block_type in block_types_to_check:
-                        for location in self.block_locations[device][block_type]:
-                            check_result = check(location)
-                            progress.advance(device_task)
-                            # Use the common result collection helper
-                            self._collect_results(
-                                result,
-                                check_result,
-                                PerBlockCheckResult,
-                                device_description=DeviceDescription(device, self._use_unique_id),
-                                location=location,
-                            )
-                    return result if len(result) > 0 else None
-                finally:
-                    progress.remove_task(device_task)
+            locations = [
+                location for block_type in block_types_to_check for location in self.block_locations[device][block_type]
+            ]
+            with get_progress_reporter().session(len(locations)) as loc_session:
+                loc_session.describe("Processing NOC locations")
+                for location in locations:
+                    check_result = check(location)
+                    loc_session.advance()
+                    self._collect_results(
+                        result,
+                        check_result,
+                        PerBlockCheckResult,
+                        device_description=DeviceDescription(device, self._use_unique_id),
+                        location=location,
+                    )
+            return result if len(result) > 0 else None
 
         # Reuse the device iteration from run_per_device_check
         return self.run_per_device_check(per_device_blocks_check)

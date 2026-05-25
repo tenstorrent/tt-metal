@@ -18,8 +18,7 @@ from typing import Any
 
 import utils
 from aggregator import MergedResult, Sentinel, merged_to_renderable
-from rich.progress import Progress
-from triage_script import ScriptArguments, TriageScript, TTTriageError, default_serializer
+from triage_script import ScriptArguments, TriageScript, default_serializer
 from ttexalens.context import Context
 
 
@@ -53,14 +52,16 @@ def create_runner(
     process_group: Any,
     *,
     target_paths: set[str] | None = None,
-    progress: Any = None,
-    progress_task: Any = None,
+    progress_reporter: Any = None,
 ) -> "ScriptRunner":
-    """Pick the runner that fits the process group. `progress` / `progress_task`
-    are only consumed by `LocalScriptRunner`."""
+    """Pick the runner that fits the process group. Each runner owns its own
+    progress display via the active `ProgressReporter`. Pass `progress_reporter`
+    to override the default (e.g. force Null for programmatic callers)."""
     if process_group.is_multi:
-        return MPIScriptRunner(args, context, process_group, target_paths=target_paths)
-    return LocalScriptRunner(args, context, target_paths=target_paths, progress=progress, progress_task=progress_task)
+        return MPIScriptRunner(
+            args, context, process_group, target_paths=target_paths, progress_reporter=progress_reporter
+        )
+    return LocalScriptRunner(args, context, target_paths=target_paths, progress_reporter=progress_reporter)
 
 
 class ScriptRunner(ABC):
@@ -76,9 +77,6 @@ class ScriptRunner(ABC):
     def process_script(self, script: TriageScript) -> None:
         ...
 
-    def render_last_result(self) -> None:
-        """Render whatever single-target mode stashed. Default no-op."""
-
     def finalize(self) -> None:
         """End-of-run hook (e.g., MPI barrier). Default no-op."""
 
@@ -89,8 +87,9 @@ class ScriptRunner(ABC):
 class LocalScriptRunner(ScriptRunner):
     """Single-process runner.
 
-    `target_paths=None`     -> full-triage: render every non-data-provider script inline.
-    `target_paths={paths}`  -> single-target: run silently, stash target result for `render_last_result()`.
+    `target_paths=None`     -> render every non-data-provider script inline.
+    `target_paths={paths}`  -> render only the scripts in `target_paths`; deps
+                                run silently. Data-provider deps stay silent.
     """
 
     def __init__(
@@ -98,84 +97,91 @@ class LocalScriptRunner(ScriptRunner):
         args: ScriptArguments,
         context: Context,
         *,
-        progress: Progress | None = None,
-        progress_task: Any = None,
         target_paths: set[str] | None = None,
+        progress_reporter: Any = None,
     ):
         super().__init__(args, context)
-        self._progress = progress
-        self._progress_task = progress_task
         self._target_paths = target_paths
         self._print_times = bool(args["--print-script-times"])
         self.script_seconds = 0.0
         self.serialization_seconds = 0.0
         self.last_result: Any = None
         self.last_target_script: TriageScript | None = None
+        self._session: Any = None  # active ProgressSession during run_all
+        self._reporter = progress_reporter if progress_reporter is not None else self._default_reporter()
+        from triage import set_progress_reporter
+
+        set_progress_reporter(self._reporter)
+
+    def _default_reporter(self) -> Any:
+        from progress import NullProgressReporter, RichProgressReporter
+        from triage import console
+
+        if bool(self.args["--disable-progress"]) or bool(self.args["--llm-output"]):
+            return NullProgressReporter()
+        return RichProgressReporter(console)
+
+    def run_all(self, script_queue: list[TriageScript]) -> None:
+        with self._reporter.session(len(script_queue)) as session:
+            self._session = session
+            try:
+                super().run_all(script_queue)
+            finally:
+                self._session = None
 
     def process_script(self, script: TriageScript) -> None:
-        if self._progress is not None and self._progress_task is not None:
-            self._progress.update(self._progress_task, description=f"Running {script.name}")
+        if self._session is not None:
+            self._session.describe(f"Running {script.name}")
         try:
-            if self._target_paths is not None:
-                self._process_target(script)
-            else:
-                self._process_full(script)
-        finally:
-            if self._progress is not None and self._progress_task is not None:
-                self._progress.advance(self._progress_task)
+            if any(dep.failed for dep in script.depends):
+                script.failed = True
+                script.failure_message = "Cannot run script due to failed dependencies."
+                # If the user explicitly asked for this script via --run / direct invocation,
+                # surface the failure inline. In full mode, stay silent — the dep's failure
+                # already printed its own message.
+                if self._target_paths is not None and script.path in self._target_paths:
+                    self.last_target_script = script
+                    self.last_result = None
+                    from triage import serialize_result
 
-    def _process_target(self, script: TriageScript) -> None:
-        # Target mode mirrors run_script's old loop: raise loudly on any failure.
-        if any(dep.failed for dep in script.depends):
-            raise TTTriageError(f"{script.name}: Cannot run script due to failed dependencies.")
-        start = time()
-        result = script.run(args=self.args, context=self.context, log_error=False)
-        self.script_seconds += time() - start
-        if script.config.data_provider and result is None:
-            raise TTTriageError(f"{script.name}: Data provider script did not return any data.")
-        if script.path in self._target_paths and not script.config.data_provider:
-            self.last_target_script = script
+                    serialize_result(script, None)
+                return
+            start = time()
+            result = script.run(args=self.args, context=self.context)
+            elapsed = time() - start
+            self.script_seconds += elapsed
+            exec_str = f" [{elapsed:.2f}s]" if self._print_times else ""
+
+            if script.config.data_provider:
+                # In target mode, data-providers are silent deps. In full mode, log activity.
+                if self._target_paths is None:
+                    if result is None:
+                        print()
+                        utils.INFO(f"{script.name}{exec_str}:")
+                        if script.failure_message is not None:
+                            utils.ERROR(f"  Data provider script failed: {script.failure_message}")
+                        else:
+                            utils.ERROR(f"  Data provider script did not return any data.")
+                    elif exec_str:
+                        print()
+                        utils.INFO(f"{script.name}{exec_str}:")
+                        utils.INFO("  pass")
+                return
+
+            if self._target_paths is not None and script.path not in self._target_paths:
+                # Off-target dependency — ran silently, no render.
+                return
+
             self.last_result = result
+            self.last_target_script = script
+            ser_start = time()
+            from triage import serialize_result  # lazy: triage imports this module
 
-    def _process_full(self, script: TriageScript) -> None:
-        if any(dep.failed for dep in script.depends):
-            # Silent skip — the root-cause failure already printed its own message.
-            script.failed = True
-            script.failure_message = "Cannot run script due to failed dependencies."
-            return
-        start = time()
-        result = script.run(args=self.args, context=self.context)
-        elapsed = time() - start
-        self.script_seconds += elapsed
-        exec_str = f" [{elapsed:.2f}s]" if self._print_times else ""
-
-        if script.config.data_provider:
-            if result is None:
-                print()
-                utils.INFO(f"{script.name}{exec_str}:")
-                if script.failure_message is not None:
-                    utils.ERROR(f"  Data provider script failed: {script.failure_message}")
-                else:
-                    utils.ERROR(f"  Data provider script did not return any data.")
-            elif exec_str:
-                print()
-                utils.INFO(f"{script.name}{exec_str}:")
-                utils.INFO("  pass")
-            return
-
-        self.last_result = result
-        ser_start = time()
-        from triage import serialize_result  # lazy: triage imports this module
-
-        serialize_result(script, result, exec_str)
-        self.serialization_seconds += time() - ser_start
-
-    def render_last_result(self) -> None:
-        if self.last_target_script is None:
-            return
-        from triage import serialize_result
-
-        serialize_result(self.last_target_script, self.last_result)
+            serialize_result(script, result, exec_str)
+            self.serialization_seconds += time() - ser_start
+        finally:
+            if self._session is not None:
+                self._session.advance()
 
     def print_totals(self, init_seconds: float) -> None:
         if not self._print_times:
@@ -187,10 +193,9 @@ class LocalScriptRunner(ScriptRunner):
 
 
 class MPIScriptRunner(ScriptRunner):
-    """Every rank runs its queue independently.
-    Non-root `isend`s a payload tagged by script index; root `recv`s per-script
-    payloads from all ranks, merges, and renders + emits a status line.
-    `finalize()` Waitalls outstanding sends (non-root) and Barriers."""
+    """Every rank runs its queue independently. Non-root `send`s a payload
+    tagged by script index; root `recv`s per-script payloads, merges, renders
+    + emits a status line."""
 
     def __init__(
         self,
@@ -200,18 +205,26 @@ class MPIScriptRunner(ScriptRunner):
         *,
         timeout_seconds: int = DEFAULT_SCRIPT_TIMEOUT_SECONDS,
         target_paths: set[str] | None = None,
+        progress_reporter: Any = None,
     ):
         super().__init__(args, context)
         self._pg = process_group
         self._comm = process_group.comm
         self._timeout = timeout_seconds
         self._target_paths = target_paths
-        self._requests: list[Any] = []  # non-root: outstanding isends
         self._idx = 0
         self._total = 0
-        # Root-only stash for single-target mode.
         self.last_target_script: TriageScript | None = None
         self.last_result: Any = None
+        # MPI progress is intentionally not implemented yet — follow-up PR.
+        if progress_reporter is None:
+            from progress import NullProgressReporter
+
+            progress_reporter = NullProgressReporter()
+        self._reporter = progress_reporter
+        from triage import set_progress_reporter
+
+        set_progress_reporter(progress_reporter)
 
     def run_all(self, script_queue: list[TriageScript]) -> None:
         self._total = len(script_queue)
@@ -220,9 +233,8 @@ class MPIScriptRunner(ScriptRunner):
             self.process_script(script)
 
     def process_script(self, script: TriageScript) -> None:
-        # Every rank runs its own copy. Skip decisions below are config-driven
-        # (data_provider, target filter), so all ranks take the same path — no
-        # stalled root recv waiting on payloads that ranks decided not to send.
+        # All ranks take the same skip path (config-driven), so root's per-script
+        # recv always has a matching non-root send.
         result, elapsed, early_sentinel = self._run_with_timeout(script)
 
         if script.config.data_provider:
@@ -238,24 +250,11 @@ class MPIScriptRunner(ScriptRunner):
 
         if self._pg.is_root:
             parts = self._collect_parts(payload)
-            self._render_or_stash(script, parts, elapsed)
+            self._render(script, parts, elapsed)
         else:
-            req = self._comm.isend(payload, dest=0, tag=self._idx)
-            self._requests.append(req)
-
-    def render_last_result(self) -> None:
-        if not self._pg.is_root or self.last_target_script is None:
-            return
-        self._render_inline(self.last_target_script, self.last_result)
+            self._comm.send(payload, dest=0, tag=self._idx)
 
     def finalize(self) -> None:
-        if not self._pg.is_root:
-            # Block until every isend has been picked up by root before barrier/exit.
-            from mpi4py import MPI
-
-            if self._requests:
-                MPI.Request.Waitall(self._requests)
-                self._requests.clear()
         self._pg.barrier()
 
     def _run_with_timeout(self, script: TriageScript) -> tuple[Any, float, Sentinel | None]:
@@ -366,7 +365,7 @@ class MPIScriptRunner(ScriptRunner):
             parts[status.Get_source()] = received
         return parts
 
-    def _render_or_stash(self, script: TriageScript, parts: list[Any], own_elapsed: float) -> None:
+    def _render(self, script: TriageScript, parts: list[Any], own_elapsed: float) -> None:
         self._print_script_summary(script, parts, own_elapsed)
         if not any(p is not None and not isinstance(p, Sentinel) for p in parts):
             sentinels = [p for p in parts if isinstance(p, Sentinel)]
@@ -377,10 +376,8 @@ class MPIScriptRunner(ScriptRunner):
             except Exception:
                 utils.ERROR(f"  {script.name}: merge raised on rank 0:\n{traceback.format_exc()}")
                 return
-        if self._target_paths is not None:
-            self.last_target_script = script
-            self.last_result = merged
-            return
+        self.last_target_script = script
+        self.last_result = merged
         self._render_inline(script, merged)
 
     def _render_inline(self, script: TriageScript, merged: Any) -> None:
