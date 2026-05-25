@@ -18,6 +18,7 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
+#include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_workload.hpp>
@@ -99,6 +100,20 @@ public:
         uint32_t fifo_size_bytes = 0;
         uint32_t scratch_cb_size_bytes = 0;
         distributed::H2DMode socket_mode = distributed::H2DMode::DEVICE_PULL;
+
+        // Optional worker-core sync handshake. When set, after each transfer
+        // the persistent receiver kernel:
+        //   1. Multicasts a `noc_semaphore_inc_multicast` (inc=1, num_dests =
+        //      number of cores in `worker_cores`) to a GlobalSemaphore on
+        //      `worker_cores` (workers poll their local copy).
+        //   2. Waits for every worker to ack consumption via an atomic-inc to
+        //      a per-coord L1 counter on the service core, then proceeds to
+        //      drain the next transfer.
+        // The CoreRange must be uniform across every participating device
+        // (same logical cores, same NoC layout). When unset, the kernel
+        // bypasses the sync block entirely via a `worker_sync_enabled = 0`
+        // compile-time arg — no host-side allocations either.
+        std::optional<CoreRange> worker_cores;
     };
 
     H2DStreamService(const std::shared_ptr<distributed::MeshDevice>& mesh_device, Config cfg);
@@ -140,6 +155,30 @@ public:
 
     std::vector<distributed::H2DSocket*> get_sockets() const;
 
+    // ===== Worker-sync handshake accessors =====
+    // Only meaningful when `Config::worker_cores` was set. Both address getters
+    // TT_FATAL if worker-sync wasn't enabled at construction.
+
+    // L1 address of the data-ready GlobalSemaphore on every worker core in
+    // Config::worker_cores. Same value across (device, worker core) by
+    // mesh-wide GlobalSemaphore construction. Workers poll their local copy
+    // here; the persistent service kernel multicasts atomic-inc to it after
+    // each transfer.
+    DeviceAddr get_data_ready_sem_addr() const;
+
+    // L1 address of the consumed-counter on this coord's service core.
+    // Workers send NoC atomic-incs here (one per consumed iteration); the
+    // persistent kernel polls it locally to know when all workers have
+    // acknowledged the iteration. Per-coord because each device's service
+    // core is independent (possibly different cores per coord).
+    DeviceAddr get_consumed_counter_addr(const distributed::MeshCoordinate& coord) const;
+
+    // Logical CoreCoord of the service core on this coord's device. Combine
+    // with `get_consumed_counter_addr` to build the NoC destination workers
+    // atomic-inc into; the caller converts logical -> physical via the mesh
+    // device's `worker_core_from_logical_core` at workload setup time.
+    CoreCoord get_service_core(const distributed::MeshCoordinate& coord) const;
+
 private:
     // Flip the termination semaphore from 0 to 1, kicking every persistent
     // receiver kernel out of its socket-wait poll loop on the next iteration.
@@ -169,6 +208,24 @@ private:
     // need here (per-coord service cores can differ across devices, so we
     // can't use a single mesh-wide semaphore).
     std::map<distributed::MeshCoordinate, DeviceAddr> termination_addrs_;
+
+    // Optional worker-sync state. All populated together; all empty when
+    // `cfg_.worker_cores` is unset.
+    //
+    // * `data_ready_sem_` — single mesh-wide GlobalSemaphore on the worker
+    //   CoreRangeSet derived from cfg_.worker_cores. Lives on the worker grid
+    //   (BankManager-backed); same L1 address on every (device, worker core).
+    //   The service kernel multicasts an atomic-inc each iteration; workers
+    //   poll their local copy.
+    // * `consumed_addrs_` — per-coord L1 word on the service core (allocated
+    //   via ServiceCoreManager::allocate_l1, zero-init via WriteToDeviceL1).
+    //   Each worker NoC-atomic-incs this once per consumed iteration; the
+    //   service kernel polls it locally. Deallocated in the dtor.
+    // * `num_workers_` — count of cores in cfg_.worker_cores. Uniform across
+    //   the mesh by design (asserted).
+    std::optional<GlobalSemaphore> data_ready_sem_;
+    std::map<distributed::MeshCoordinate, DeviceAddr> consumed_addrs_;
+    uint32_t num_workers_ = 0;
 
     // Persistent receiver workload — built and enqueued once in the ctor,
     // drained in the dtor after termination is signalled.

@@ -38,7 +38,17 @@ constexpr uint32_t output_tensor_addr = get_compile_time_arg_val(4);
 constexpr uint32_t output_tensor_page_size = get_compile_time_arg_val(5);
 constexpr uint32_t pages_per_chunk = get_compile_time_arg_val(6);
 constexpr uint32_t scratch_buffer_cb_index = get_compile_time_arg_val(7);
-constexpr auto output_tensor_accessor_args = TensorAccessorArgs<8>();
+// Worker-sync block (indices 8..15). Unused when worker_sync_enabled == 0;
+// step 4 wires up the actual multicast + consumed-counter polling.
+constexpr uint32_t worker_sync_enabled = get_compile_time_arg_val(8);
+constexpr uint32_t data_ready_sem_addr = get_compile_time_arg_val(9);
+constexpr uint32_t consumed_counter_addr = get_compile_time_arg_val(10);
+constexpr uint32_t worker_mcast_noc_x_start = get_compile_time_arg_val(11);
+constexpr uint32_t worker_mcast_noc_y_start = get_compile_time_arg_val(12);
+constexpr uint32_t worker_mcast_noc_x_end = get_compile_time_arg_val(13);
+constexpr uint32_t worker_mcast_noc_y_end = get_compile_time_arg_val(14);
+constexpr uint32_t num_workers = get_compile_time_arg_val(15);
+constexpr auto output_tensor_accessor_args = TensorAccessorArgs<16>();
 
 // H2D: read one socket page from PCIe host RAM into L1 in NOC_MAX_BURST_SIZE chunks.
 // Caller must call noc_async_read_barrier() after this returns.
@@ -71,6 +81,22 @@ void kernel_main() {
 
     volatile tt_l1_ptr uint32_t* termination_semaphore =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_semaphore_addr);
+
+    // Worker-sync state. Allocated unconditionally to keep the kernel-main body
+    // readable; the `if constexpr` gates make the compiler dead-code-eliminate
+    // everything when `worker_sync_enabled == 0`.
+    uint64_t worker_mcast_addr = 0;
+    volatile tt_l1_ptr uint32_t* consumed_ptr = nullptr;
+    uint32_t last_consumed = 0;  // counter snapshot at the start of each iteration
+    if constexpr (worker_sync_enabled) {
+        worker_mcast_addr = get_noc_multicast_addr(
+            worker_mcast_noc_x_start,
+            worker_mcast_noc_y_start,
+            worker_mcast_noc_x_end,
+            worker_mcast_noc_y_end,
+            data_ready_sem_addr);
+        consumed_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(consumed_counter_addr);
+    }
 
     bool terminated = false;
     DPRINT << "Number of socket pages: " << num_socket_pages << ENDL();
@@ -119,8 +145,48 @@ void kernel_main() {
             update_socket_config(receiver_socket);
         }
 
-        // Per-transfer durability barrier. Reached even on mid-transfer termination so any
-        // in-flight writes still land before the kernel exits.
-        noc_async_write_barrier();
+        // Termination short-circuit: if the inner loop exited via
+        // socket_wait_for_pages_with_termination (no transfer actually
+        // completed), skip the worker-sync block entirely. Without this,
+        // the kernel would multicast data_ready to workers and then poll
+        // the consumed counter for acks that will never come (workers
+        // aren't running during teardown), hanging wait_done in the dtor.
+        // Contract preserved: every multicast still corresponds to exactly
+        // one completed transfer.
+        if (terminated) {
+            break;
+        }
+
+        // Optional worker-sync handshake. Compile-time-gated: when disabled,
+        // the entire block is removed by the compiler.
+        if constexpr (worker_sync_enabled) {
+            // Contract: every transfer that completes the inner loop above gets
+            // a matching worker ack. The only termination point in this kernel
+            // is the `socket_wait_for_pages_with_termination` poll at the start
+            // of the next transfer — we don't poll termination inside the sync.
+            //
+            // 1. Multicast atomic-inc of the data_ready semaphore to every
+            //    worker core. Each worker observes (cur - last_seen) >= 1 on
+            //    its local copy and proceeds to consume the new tensor.
+            noc_semaphore_inc_multicast(worker_mcast_addr, /*incr=*/1, /*num_dests=*/num_workers);
+
+            // 2. Wait for EXACTLY num_workers more increments on the consumed
+            //    counter since the previous iteration. Unsigned modulo subtraction
+            //    stays correct after the counter wraps at uint32 (workers don't
+            //    get >2^31 iterations ahead of the service). Exact equality
+            //    enforces the 1-ack-per-transfer protocol — anything else is a
+            //    contract violation.
+            while (true) {
+                invalidate_l1_cache();
+                const uint32_t cur = *consumed_ptr;
+                if ((cur - last_consumed) == num_workers) {
+                    last_consumed = cur;
+                    break;
+                }
+            }
+        }
     }
+
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();
 }
