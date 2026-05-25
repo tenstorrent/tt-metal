@@ -9,6 +9,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/experimental/pack_block.h"
+#include "api/compute/debug/cb_hash.h"  // PATCH (#43563 debug): CB-hash debug LLK
 #include "../../../../kernel_includes/tt_metal/include/compute_kernel_api/custom_pack_untilize.h"
 #include "../../../../kernel_includes/tt_metal/include/compute_kernel_api/sdpa_custom_mm.h"
 #include "../../../../kernel_includes/tt_metal/include/compute_kernel_api/sdpa_custom_mm_reuse_dest_srcb.h"
@@ -265,6 +266,9 @@ void compute_sdpa_chunk(
     PACK((ckernel::sfpu::_init_sdpa_reduce_max_row_8x32_replay_buffers_()));
     sdpa_custom_mm_block_init_short<transpose_k, mm_pack_init>(cb_q, cb_k, cb_out, chunk_size);
     cb_wait_front(cb_k, num_tiles_k * chunk_size);
+    // PATCH (#43563 debug): hash cb_k per chunk. Compare iter-0 vs iter-1 to
+    // see whether K input data differs between iters (due to iter-0's KV write).
+    hash_cb(cb_k, num_tiles_k * chunk_size, 0x20);
     // Q @ K (FPU)
     // Make sure SFPU of previous chunk is done (sem is zero)
     MATH((t6_semaphore_wait_on_max<p_stall::STALL_MATH>(semaphore::FPU_SFPU)));

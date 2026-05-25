@@ -863,11 +863,10 @@ def test_decoder(
     "position_id",
     [
         # 0,
-        127,  # enabled for #43563 hypothesis 4: small position_id → fewer chunks
-        # pytest.param(511, marks=pytest.mark.skip_post_commit),
-        # pytest.param(1023, marks=pytest.mark.skip_post_commit),
+        # 127, # disabled for hash-debug run (no alternation at 1 chunk)
+        511,  # focus for #43563 hash-debug: 4 chunks total, alternation present
         # pytest.param(11664, marks=pytest.mark.skip_post_commit),  # (3,3,3,2 + partial): partial into dev3 (if SP = 4)
-        8190,
+        # 8190,  # disabled for hash-debug run (64 chunks → too much DPRINT output)
     ],
 )
 @pytest.mark.parametrize(
@@ -882,7 +881,7 @@ def test_decoder(
     indirect=True,
 )
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
-@pytest.mark.parametrize("num_internal_iterations", [1, 2])
+@pytest.mark.parametrize("num_internal_iterations", [2])  # #43563 hash-debug: only need 2-iter case
 @pytest.mark.parametrize(
     "slot_id, num_slots",
     [

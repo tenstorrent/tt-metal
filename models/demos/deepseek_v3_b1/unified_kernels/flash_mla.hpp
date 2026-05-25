@@ -742,6 +742,10 @@ struct FlashMLADecode {
                 cb_wait_front(cb_mask, 1);
             }
             cb_wait_front(cb_q_in, q_chunk_tiles);
+            // PATCH (#43563 debug): hash cb_q_in once per flash_mla call.
+            // Compare iter-0 vs iter-1 outputs — if identical, Q is the same;
+            // divergence must be downstream (in flash_mla / K cache / etc).
+            hash_cb(cb_q_in, q_chunk_tiles, 0x10);
             cb_reserve_back(sdpa_output_cb, vDHt);
             cb_reserve_back(sdpa_ms_cb, Sq_chunk_t);
             tile_regs_acquire();

@@ -529,3 +529,202 @@ Both are consistent with 2c's "per-chunk reset at chunk entry" recipe doing some
 My pick: **(1) `position_id` sweep**. Confirms the cross-chunk-accumulation mechanic and gives us a quantitative knob — knowing how the gap grows with chunk count lets us write much cheaper iteration cycles.
 
 ---
+
+## Attempt 16 — `position_id` sweep (chunk-count scan)
+
+**What.** Enable `position_id ∈ {127, 511, 1023, 8190}` in the parametrize. With `k_chunk_size=128` this gives 1, 4, 8, 64 total k chunks respectively. Each is run for `num_internal_iterations ∈ {1, 2}` → 8 PCC values.
+
+**Motivation.** Characterize how the iter-PCC gap grows with chunk count. Three plausible shapes:
+- **Linear growth:** the bug accumulates ε per chunk → drift visible at all multi-chunk counts, larger at 64 than at 4.
+- **Saturation:** the bug fires once on the first cross-chunk transition and stays → gap ~constant beyond a small chunk count.
+- **Step at a specific chunk count:** the bug needs a specific chunk-count threshold.
+
+**Result.**
+
+| `position_id` | total k chunks | iter=1 PCC | iter=2 PCC | gap (iter2−iter1) |
+|---|---|---|---|---|
+| 127 | 1 | 0.9901647631143314 | 0.9901647631143314 | **0** |
+| 511 | 4 | 0.9914568554511025 | 0.9916859209677518 | +2.29e-4 |
+| 1023 | 8 | 0.9926787610146476 | 0.9928732147523281 | +1.94e-4 |
+| 8190 | 64 | 0.9931898601668998 | 0.9934483676630709 | +2.59e-4 |
+
+**Conclusion.** The gap **does not scale with chunk count** — it saturates at ~2-3e-4 from 4 chunks onward, and 8 chunks (1.94e-4) is even slightly smaller than 4 chunks (2.29e-4), so the "linear accumulation" hypothesis is dead.
+
+The gap appears once a second chunk runs, then plateaus. **The bug fires once, on the first cross-chunk handoff (chunk-0 → chunk-1)**, and the resulting error remains stable through subsequent chunks.
+
+What changes structurally between chunk 0 and chunk 1:
+
+- Chunk 0 sets `first_chunk = true`. Chunks 1+ set `first_chunk = false`.
+- The `first_chunk = false` branch in `compute_sdpa_chunk` (sdpa.h:282-299) gates `non_approx_exp_mul_prev` + bcast-mul of mm2 by `corr_exp`. This is exactly the LReg-carry path.
+- `non_approx_exp_mul_prev` reads LREG0/2 (curr_max from current chunk's reduce_max) and LREG1/3 (which should hold prev_max from chunk 0's reduce_max). The reduce_max replay buffer's LREG layout is: LREG0/2 = running pool result, LREG1/3 = freshly loaded scratch from DEST. After chunk 0's reduce_max returns, LREG0/2 = chunk-0-max and LREG1/3 = some leftover scratch tile.
+- When `non_approx_exp_mul_prev` reads LREG1/3 as "prev_max" in chunk 1, it's actually reading **the last DEST tile loaded by chunk 0's reduce_max replay** — *not* chunk-0's max value.
+
+That's bizarre — either the code has a latent bug in how it conventions LRegs for prev_max, OR I'm mis-reading the LReg lifecycle. Either way the most direct test is now experiment 2 from the previous handoff: **hard-clear LRegs between chunks** and see whether the iter-alternation collapses. If it does, S2 (LReg-carry) is confirmed and the fix is to explicitly re-stage prev-max from a DEST tile rather than relying on register persistence.
+
+**State.** Sweep parametrize edits left in place — gives free comparison data for future runs.
+
+---
+
+## Updated handoff (post-sweep)
+
+The bug fires on the **chunk-0 → chunk-1 transition**, specifically in code that's gated by `first_chunk = false`:
+
+```cpp
+// sdpa.h:282-299 (only runs for chunks 1+)
+PACK((non_approx_exp_mul_prev<...>(sum_dst_offset, corr_exp_dst_offset)));
+PACK((t6_semaphore_post<p_stall::WAIT_SFPU>(SFPU_FPU)));
+sdpa_mul_bcast_col_srca_srcb_reuse_tiles_init<num_tiles_v>(cb_q);
+MATH((t6_semaphore_wait_on_zero<p_stall::STALL_MATH>(SFPU_FPU)));
+sdpa_bcast_col_srca_srcb_reuse_preamble(corr_exp_dst_offset);
+sdpa_mul_bcast_col_srca_srcb_reuse_tiles<num_tiles_v, true>(mm2_dst_offset);
+MATH((t6_semaphore_post<p_stall::MATH>(semaphore::FPU_SFPU)));
+MATH((t6_semaphore_get<p_stall::NONE>(SFPU_FPU)));
+```
+
+`non_approx_exp_mul_prev` is the function that does the heavy lifting — reads LRegs (LReg1/3 = prev_max, LReg0/2 = curr_max), computes `corr = exp((prev_max-curr_max)*scale) - 1`, writes to `corr_exp_dst_offset`, then multiplies prev-sum by `exp(...)` and writes back to sum-dst.
+
+After this runs, the FPU does a bcast-mul: `mm2 *= corr_exp` (rescale the running V-accumulator with the correction factor).
+
+**Hypothesis (refined):** the LReg state that `non_approx_exp_mul_prev` reads as "prev_max" in LREG1/3 is bank-asymmetric — either because the LReg state from chunk 0's reduce_max ended up differently depending on which bank chunk 0 wrote to, or because the read itself is somehow bank-dependent (which shouldn't be possible for plain LReg reads, but maybe SFPU has some bank-shadow).
+
+**Next:** experiment 2 — hard-clear LRegs LREG0/1/2/3 to 0 between chunks. If iter-alternation goes to zero (or close), S2 confirmed. If unchanged, the bug is in something other than LReg-carry on that transition.
+
+---
+
+## Attempt 17 — LReg-zero at chunk entry (S2 disconfirmation)
+
+**What.** Two variants tried:
+- (v1) `PACK((sfpi::l_reg[sfpi::LRegs::LRegX] = sfpi::vFloat(0.0f)));` for X ∈ {0,1,2,3}
+- (v2) `PACK((TT_SFPLOADI(X, 0xA, 0)));` + `PACK((TT_SFPLOADI(X, 0x8, 0)));` for X ∈ {0,1,2,3}
+
+Both placed at the very top of `compute_sdpa_chunk` (same position as 2c was at).
+
+**Motivation.** Disrupt the LReg-carry path. If the bug is in `non_approx_exp_mul_prev` reading bank-asymmetric leftover LReg state, zeroing should kill the alternation (PCC will tank but the diagnostic still works).
+
+**Result.**
+
+| Variant | iter=1 (pos=127) | iter=2 (pos=127) | iter=1 (pos=8190) | iter=2 (pos=8190) |
+|---|---|---|---|---|
+| Baseline | 0.99016476 | 0.99016476 | 0.99318986 | 0.99344836 |
+| v1 (sfpi) | 0.99016476 | 0.99016476 | 0.99318986 | 0.99344836 |
+| v2 (TT_SFPLOADI) | 0.99016476 | 0.99016476 | 0.99318986 | 0.99344836 |
+
+**Both variants are bit-identical to baseline.** PCC didn't even tank, which means the zeroed LRegs *don't affect* the downstream compute.
+
+**Conclusion (much more informative than predicted by the original hypothesis).** Reading `_calculate_sdpa_reduce_max_row_8x32_` (`ckernel_sfpu_sdpa_reduce_row.h:172-194`) reveals the actual cross-chunk mechanism:
+
+```cpp
+// Inside _calculate_sdpa_reduce_max_row_8x32_, after computing this chunk's max into LREG0/2:
+TT_SETC16(MATH_Offset, dst_index + get_dest_buffer_base());   // point at max_dst_offset
+TTI_SETRWC(...);
+
+if (prev_max) {                                                // for chunks 1+
+    TTI_SFPLOAD(LREG1, ..., 0);                                // load prev cumulative max top from DEST[max_dst]
+    reduce_lregs_instr<MAX, LREG0, LREG1>();                   // LREG0 = max(this_chunk, prev_cum)
+    TTI_SFPLOAD(LREG3, ..., 4);                                // load prev cumulative max bottom
+    reduce_lregs_instr<MAX, LREG2, LREG3>();
+    TTI_SFPLOAD(LREG1, ..., 0);                                // RE-cache for non_approx_exp_mul_prev
+    TTI_SFPLOAD(LREG3, ..., 4);
+}
+TTI_SFPSTORE(LREG0, ..., 0);                                   // store new cumulative max
+TTI_SFPSTORE(LREG2, ..., 4);
+```
+
+So the "LReg carry" is a misframing. **The actual cross-chunk state lives in the DEST tile at `max_dst_offset`** (and analogously `sum_dst_offset`):
+- Each chunk's reduce_max stores cumulative max to DEST via SFPSTORE.
+- Each chunk 1+'s reduce_max reads prev cumulative max from DEST via SFPLOAD, combines with this chunk's max, and re-caches it into LREG1/3 so that `non_approx_exp_mul_prev` can read it from LRegs.
+
+The LRegs that `non_approx_exp_mul_prev` reads as "prev_max" are RE-LOADED from DEST inside reduce_max (lines 186-187 of the LLK). My initial LReg-zeroing was wiped by these SFPLOADs before `non_approx_exp_mul_prev` ever ran. That's why PCC was unchanged.
+
+**The bug is in DEST-tile-carry across chunks**, not LReg-carry. The candidate tiles:
+- `max_dst_offset` — cumulative running max, read/written by reduce_max
+- `sum_dst_offset` — cumulative running sum (analogous mechanism in reduce_sum)
+- `mm2_dst_offset` — running P·V accumulator, read via MOVD2B / written by MVMUL in MM2 across chunks
+
+For the alternation to fire on chunk-0→chunk-1, the candidate tile must be (a) written by chunk 0, (b) read in a bank-asymmetric way by chunk 1's `!first_chunk` path. All three tiles qualify.
+
+**State.** Reverted.
+
+---
+
+## Updated handoff (post-LReg)
+
+The bug is **cross-chunk DEST-tile-carry**, not LReg-carry. The carried state lives at three DEST tile offsets:
+- `max_dst_offset` (read in reduce_max prev_max branch + via re-cached LREG1/3 in `non_approx_exp_mul_prev`)
+- `sum_dst_offset` (read in reduce_sum prev_sum branch + indirectly via `non_approx_exp_mul_prev`'s sum_dst write)
+- `mm2_dst_offset` (P·V accumulator across chunks, read via MOVD2B in MM2)
+
+The bug fires once at chunk-0→chunk-1 transition. Either:
+- One specific DEST tile is read in a bank-asymmetric way on chunk-1, OR
+- The DEST WRITE at chunk-0's end is bank-asymmetric in a way that leaves the tile slightly different depending on bank.
+
+### Cheap next experiments
+
+1. **Localize the tile.** Overwrite `max_dst_offset` (or `sum_dst_offset`, or `mm2_dst_offset`) with a fixed value via SFPSTORE between chunks — i.e., insert a per-chunk re-write that doesn't depend on prior chunk's state. If iter-alternation goes to zero for ONE of these tiles, that's the bug-carrier. PCC will tank but the diagnostic is clean.
+
+2. **Vary which 2c offset is touched.** Currently 2c sets `MATH_Offset = bank_base` (= offset 0 within DEST half). Try `MATH_Offset = max_dst_offset + bank_base`, then `sum_dst_offset + bank_base`, then `mm2_dst_offset + bank_base`. If any specific tile's offset reproduces the 20× collapse, that's the bug-affected tile.
+
+3. **Compare DEST `max_dst_offset` contents bank-0 vs bank-1.** Hand-write a TRISC pack that dumps `max_dst_offset` to L1 after every chunk, for both iter=0 and iter=1. Diff the L1 contents — if they differ beyond the documented bank offset, we've directly observed the asymmetric tile.
+
+My pick: **(2) sweep 2c's address**. Cheapest — one-line edit per run, gives a clean signal about which tile (if any) the bug latches onto.
+
+---
+
+## Attempt 18 — CB-hash debug: input identity check
+
+**What.** Pulled in the `hash_cb(cb_id, num_tiles, label)` debug LLK from [PR #43041](https://github.com/tenstorrent/tt-metal/pull/43041) (FNV-1a checksum over a CB's L1 bytes, emitted via DPRINT; runs scalar on UNPACK, touches no Tensix state). Added three files: `tt_metal/hw/inc/api/compute/debug/cb_hash.h`, `tt_metal/hw/ckernels/blackhole/metal/llk_api/debug/llk_hash_cb_api.h`, and the wormhole counterpart. Enabled via `("DEBUG_CB_HASH", "1")` in `decoder_block/op.py` defines.
+
+Hash call sites:
+- `flash_mla.hpp:746` (once per flash_mla call, after `cb_wait_front(cb_q_in, q_chunk_tiles)`): `hash_cb(cb_q_in, q_chunk_tiles, 0x10)` — label 0x10 = "Q".
+- `sdpa.h:269` (once per `compute_sdpa_chunk`, after `cb_wait_front(cb_k, ...)`): `hash_cb(cb_k, num_tiles_k * chunk_size, 0x20)` — label 0x20 = "K".
+
+Run config: `position_id=511` (4 chunks total — alternation present at +2.29e-4, small enough output to read), `num_internal_iterations=[2]` only (need iter-0 vs iter-1 within one launch).
+
+**Motivation.** Determine whether the iter-1 divergence is from changed input data (KV-cache write contamination across iters) or from bank-asymmetric compute on identical inputs.
+
+**Result.**
+
+PCC: 0.9916859209677518 (matches the baseline iter-2 value at position_id=511 — bug still firing with `DEBUG_CB_HASH` instrumentation in place, as expected).
+
+Hash distribution across all 256 emitted hashes (2 active devices × 16 cores × 2 iters × 4 chunks per core, simplified):
+
+| Label | Distinct hash values | Each value's occurrence count |
+|---|---|---|
+| 0x10 (Q) | 10+ distinct (per-head Q tile content varies by core) | 4 or 8 times each (even — iter-0 + iter-1 contribute equally) |
+| 0x20 (K) | 4 distinct | 32 times each (16 cores × 2 iters — even split) |
+
+Every unique hash value's occurrence count is **even**, confirming that **the iter-0 and iter-1 runs see bit-identical input data**. Spot-check on core (x=0,y=0) confirms iter-0 and iter-1 produce exactly the same `0x10` and `0x20` hashes.
+
+**Conclusion.** This decisively rules out the "iter-0's KV-cache write contaminated iter-1's input" hypothesis. **Inputs are deterministic across iters.** The iter-1 PCC divergence comes entirely from flash_mla's compute being bank-asymmetric (iter-0 starts at bank 0; iter-1 inherits bank 1; same code, different bank, different numerical output).
+
+This nails the bug location to **bank-asymmetric numerical compute inside the `flash_mla.hpp:747-791` block**, with no contribution from upstream input shaping.
+
+**State.** Hash infrastructure files added permanently. Hash call sites + DEBUG_CB_HASH define are left in tree (toggleable via `op.py` define line). Test parametrize narrowed to `position_id=511` only for hash-debug iteration speed.
+
+---
+
+## Updated handoff (post-hash)
+
+The bug is bank-asymmetric numerical compute inside `flash_mla.hpp:747-791`:
+- Confirmed: inputs (Q, K via cb_q_in/cb_k_in) identical between iter-0 and iter-1 (Attempt 18).
+- Confirmed: bug fires on chunk-0 → chunk-1 transition (Attempt 15-16, gap saturates by 4 chunks).
+- Confirmed: 2c (cross-thread MATH+PACK `MATH_Offset` reset per chunk at chunk entry) collapses gap ~20× via real semantic CFG writes (Attempt 7, Attempt 14 NOP control).
+- Confirmed: the cross-chunk state lives in DEST tiles `max_dst_offset`, `sum_dst_offset`, `mm2_dst_offset` (Attempt 17 reveals LReg-carry is misframed — the real mechanism is SFPSTORE/SFPLOAD round-trips through DEST).
+
+What remains: **which specific bank-asymmetric op produces the numerical difference**.
+
+### Concrete next experiments
+
+1. **Hash sdpa output CB.** Add `hash_cb(sdpa_output_cb, vDHt, 0x30)` right after the final `pack_block_contiguous(mm2_dst_tile_offset, sdpa_output_cb, ...)` in flash_mla (line 783-787 area, after the inner loop). The output CB is the LAST thing flash_mla writes; comparing iter-0 vs iter-1 hashes on the SAME core directly measures flash_mla's bank-asymmetric output divergence.
+
+2. **Hash sdpa_ms_cb.** Same idea for the max+sum tile output. May or may not be written in the test path.
+
+3. **Pack-DEST-and-hash inside chunk loop.** Insert temporary `pack_block_contiguous(max_dst_tile_offset, debug_cb, 1)` (or analogous for sum/mm2) right after the SFPSTORE in reduce_max/reduce_sum and right after MM2's accumulator update. Hash the debug_cb. This reveals which DEST tile diverges first.
+
+4. **Direct chunk-content comparison via PACK → L1 dump.** Same as (3) but write to a known L1 region per chunk, then dump from host.
+
+5. **2c-address sweep** (from earlier handoff): vary which DEST offset the `MATH_Offset` is set to in 2c. If pointing at max_dst_offset (vs sum_dst_offset vs mm2_dst_offset vs base) discriminates, that's a strong localization signal.
+
+My pick: **(1) hash sdpa_output_cb at end of flash_mla**. Smallest patch, direct measurement of flash_mla's output divergence. If iter-0 and iter-1 emit DIFFERENT output hashes (which they must, since downstream PCC differs), we confirm the divergence point is inside `:747-791`. Then move to (3) to bisect within the block.
+
+---
