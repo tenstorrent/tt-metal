@@ -159,4 +159,72 @@ NOINLINE NOCLONE void operation_argument_assert(
     DEVICE_PRINT("└─────────────────────────────\n");
 }
 
+static inline ct_string fsm_state_name(const FsmState state)
+{
+    switch (state)
+    {
+        case FsmState::INITIAL:
+            return CTSTR("INITIAL");
+        case FsmState::CONFIGURED:
+            return CTSTR("CONFIGURED");
+        case FsmState::INITIALIZED:
+            return CTSTR("INITIALIZED");
+        case FsmState::EXECUTED:
+            return CTSTR("EXECUTED");
+        case FsmState::UNINITIALIZED:
+            return CTSTR("UNINITIALIZED");
+        case FsmState::RECONFIGURED:
+            return CTSTR("RECONFIGURED");
+    }
+    __builtin_unreachable();
+}
+
+NOINLINE NOCLONE void _print_fsm_transition(const FsmState current_state, const FsmState next_state, const ct_string allowed)
+{
+    DEVICE_PRINT(
+        "│\r"
+        "│  ┌[ State machine ]─\r"
+        "│  ├── Current state ───── {}\r"
+        "│  ├── Attempted transition ─ {}\r"
+        "│  └── Allowed transitions  ─ [{}]\r",
+        fsm_state_name(current_state),
+        fsm_state_name(next_state),
+        allowed);
+}
+
+NOINLINE NOCLONE void fsm_assert(
+    bool success,
+    ct_string message,
+    FsmState transition_from,
+    FsmState transition_to,
+    ct_string transition_allowed,
+    const UnwindContext update,
+    const UnwindContext current)
+{
+    if (success)
+    {
+        return;
+    }
+
+    DEVICE_PRINT(
+        "┌─[ llk::san ]─[ error ]──────\r"
+        "│  {}\r",
+        message);
+
+    _print_full_kernel();
+    _print_fsm_transition(transition_from, transition_to, transition_allowed);
+
+    DEVICE_PRINT(
+        "│\r"
+        "│  ┌[ Last successful transition ]─\r");
+    _print_compute_info(update);
+
+    DEVICE_PRINT(
+        "│\r"
+        "│  ┌[ Violating transition ]─\r");
+    _print_compute_info(current);
+
+    DEVICE_PRINT("└─────────────────────────────\n");
+}
+
 }; // namespace llk::san
