@@ -145,7 +145,6 @@ jobs:
       ignore-commits: ${{ inputs.ignore-commits || needs.release-precheck.outputs.default-ignore-commits }}
       dry-run: ${{ inputs.dry-run || false }}
 
-
   build-test-publish:
     needs: [create-tag, release-precheck]
     uses: ./.github/workflows/release-build-test-publish.yaml
