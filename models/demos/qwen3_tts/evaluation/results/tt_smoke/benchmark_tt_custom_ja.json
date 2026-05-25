@@ -1,0 +1,26 @@
+{
+  "overall": {
+    "num_samples": 5,
+    "total_audio_duration": 5.04,
+    "total_elapsed": 15.854111671447754,
+    "mean_rtf": 3.1703208999501333,
+    "mean_cer": 0.0,
+    "mean_utmos": null,
+    "mean_pesq": null
+  },
+  "by_category": {
+    "short": {
+      "num_samples": 5,
+      "mean_rtf": 3.1703208999501333,
+      "mean_duration": 1.008,
+      "mean_cer": 0.0,
+      "mean_utmos": null
+    }
+  },
+  "config": {
+    "model": "Qwen3-TTS-12Hz-1.7B-Base",
+    "backend": "tt",
+    "dataset": "custom_ja",
+    "num_samples": 5
+  }
+}

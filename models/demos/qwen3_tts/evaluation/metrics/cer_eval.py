@@ -60,7 +60,7 @@ def compute_cer_batch(results, asr_config):
     import whisper
 
     model_name = asr_config.get("asr_model", "openai/whisper-large-v3")
-    whisper_size = model_name.split("-")[-1] if "whisper" in model_name else "large"
+    whisper_size = model_name.split("whisper-")[-1] if "whisper-" in model_name else "large"
     model = whisper.load_model(whisper_size)
 
     cer_scores = {}

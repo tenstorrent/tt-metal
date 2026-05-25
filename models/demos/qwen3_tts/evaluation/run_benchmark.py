@@ -143,6 +143,7 @@ def generate_all_tt(generator, samples, gen_config, language="japanese"):
             temperature=gen_config.get("temperature", 0.9),
             top_k=gen_config.get("top_k", 50),
             top_p=gen_config.get("top_p", 1.0),
+            repetition_penalty=gen_config.get("repetition_penalty", 1.05),
         )
         elapsed = time.time() - t0
 
@@ -317,7 +318,10 @@ def main():
                 else ttnn.DispatchCoreType.WORKER
             ),
         )
-        ttnn.enable_program_cache(mesh_device)
+        try:
+            mesh_device.enable_program_cache()
+        except AttributeError:
+            ttnn.enable_program_cache(mesh_device)
 
         print("Building TTS generator on TT device...")
         generator = TTSGenerator.build(

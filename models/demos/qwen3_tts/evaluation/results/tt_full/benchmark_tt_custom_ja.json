@@ -1,0 +1,68 @@
+{
+  "overall": {
+    "num_samples": 100,
+    "total_audio_duration": 555.5999999999997,
+    "total_elapsed": 1776.2036085128784,
+    "mean_rtf": 3.1643368818795863,
+    "mean_cer": 0.06314834646970702,
+    "mean_utmos": 3.982396845817566,
+    "mean_pesq": null
+  },
+  "by_category": {
+    "short": {
+      "num_samples": 20,
+      "mean_rtf": 3.0818731546819302,
+      "mean_duration": 1.096,
+      "mean_cer": 0.03666666666666667,
+      "mean_utmos": 3.8394539833068846
+    },
+    "medium": {
+      "num_samples": 30,
+      "mean_rtf": 3.17871370708891,
+      "mean_duration": 4.861333333333334,
+      "mean_cer": 0.02619112667499764,
+      "mean_utmos": 4.090266076723735
+    },
+    "long": {
+      "num_samples": 10,
+      "mean_rtf": 3.237586054409345,
+      "mean_duration": 19.720000000000002,
+      "mean_cer": 0.023964617414925983,
+      "mean_utmos": 4.129786252975464
+    },
+    "numbers": {
+      "num_samples": 10,
+      "mean_rtf": 3.2076410050340156,
+      "mean_duration": 5.087999999999999,
+      "mean_cer": 0.36503040628326666,
+      "mean_utmos": 4.125914764404297
+    },
+    "mixed_language": {
+      "num_samples": 10,
+      "mean_rtf": 3.167383776858187,
+      "mean_duration": 4.536,
+      "mean_cer": 0.049215686274509805,
+      "mean_utmos": 3.9179442882537843
+    },
+    "emotion": {
+      "num_samples": 10,
+      "mean_rtf": 3.162680471676341,
+      "mean_duration": 4.464,
+      "mean_cer": 0.032275132275132276,
+      "mean_utmos": 3.856636714935303
+    },
+    "keigo": {
+      "num_samples": 10,
+      "mean_rtf": 3.1681900801873857,
+      "mean_duration": 4.976,
+      "mean_cer": 0.00909090909090909,
+      "mean_utmos": 3.843980240821838
+    }
+  },
+  "config": {
+    "model": "Qwen3-TTS-12Hz-1.7B-Base",
+    "backend": "tt",
+    "dataset": "custom_ja",
+    "num_samples": 100
+  }
+}
