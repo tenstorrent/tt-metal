@@ -194,12 +194,16 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     auto* out_buffer = tensor_return_value.buffer();
 
     // -------------------------- scratch buffer + semaphore ----------------
-    // DRAM scratch holds activated between phases 3 and 4, sized for the full
-    // chunk M × hidden N tile region (same shape as gate output).
-    // Scratch DRAM must use the intermed format (= cb_activated's format),
-    // NOT x_df. Otherwise tile-size mismatch corrupts DRAM round-trip when
-    // intermeds are wider than the input (bf16 vs bf8).
-    const uint32_t scratch_num_tiles = chunk_M_tiles * N_gate_tiles_full;
+    // LEGACY DRAM scratch — used by the previous DRAM-round-trip activated
+    // path. The current L1-mcast activated path doesn't touch this buffer;
+    // both reader and writer kernels declare the accessor but
+    // `(void)scratch_acc` it. The buffer is kept as a 1-tile placeholder
+    // (~1KB DRAM) so the TensorAccessorArgs CT-arg layout in both kernels
+    // stays compatible with the existing slot order. Without shrinking,
+    // each cached program (one per local_expert_id × layer) would hold a
+    // ~1.15MB DRAM buffer it never reads, multiplying across the full
+    // DS-V3 prefill to ~184MB of leaked DRAM.
+    const uint32_t scratch_num_tiles = 1;
     const uint32_t scratch_bytes = scratch_num_tiles * tt::tile_size(intermed_df);
     tt::tt_metal::InterleavedBufferConfig scratch_cfg{
         .device = t.x.device(),
